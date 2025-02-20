@@ -10,6 +10,13 @@ from ironic.utils import FPSCounter
 from geom import Transform3D
 from simulator.mujoco.scene.transforms import MujocoSceneTransform, load_model_from_spec_file
 
+STATE_SPECS = [
+    mujoco.mjtState.mjSTATE_FULLPHYSICS,
+    mujoco.mjtState.mjSTATE_USER,
+    mujoco.mjtState.mjSTATE_INTEGRATION,
+    mujoco.mjtState.mjSTATE_WARMSTART,
+]
+
 
 def xmat_to_quat(xmat):
     site_quat = np.empty(4)
@@ -142,6 +149,20 @@ class MujocoSimulator:
     def step(self):
         mujoco.mj_step(self.model, self.data)
         self.simulation_fps_counter.tick()
+
+    def save_state(self):
+        data = {}
+
+        for spec in STATE_SPECS:
+            size = mujoco.mj_stateSize(self.model, spec)
+            data[spec.name] = np.empty(size, np.float64)
+            mujoco.mj_getState(self.model, self.data, data[spec.name], spec)
+
+        return data
+
+    def load_state(self, data: Dict[str, np.ndarray]):
+        for spec in STATE_SPECS:
+            mujoco.mj_setState(self.model, self.data, data[spec.name], spec)
 
     def reset(self, keyframe: str = "home"):
         """
