@@ -5,8 +5,7 @@ from tqdm import tqdm
 import hydra
 import torch
 
-from simulator.mujoco.environment import MujocoRenderer
-from simulator.mujoco.sim import MujocoSimulator
+from simulator.mujoco.sim import create_from_config
 from tools.dataset_dumper import SerialDumper
 
 
@@ -14,16 +13,12 @@ def process_episode(episode_path, cfg, output_dir):
     data = torch.load(episode_path)
     n_frames = len(data['image_timestamp'])
 
-    loaders = hydra.utils.instantiate(cfg.hardware.mujoco_loaders)
-    model_path = Path(episode_path).parent / data['relative_mujoco_model_path']
-    simulator = MujocoSimulator.load_from_xml_path(model_path, loaders, simulation_rate=1 / cfg.hardware.mujoco.simulation_hz)
-    renderer = MujocoRenderer(
-        simulator,
-        cfg.hardware.mujoco.camera_names,
-        (cfg.hardware.mujoco.camera_width, cfg.hardware.mujoco.camera_height),
-    )
+    cfg.hardware.mujoco.model_path = data['mujoco_model_path']
+    simulator, renderer, _ = create_from_config(cfg.hardware)
 
-    simulator.reset(data['keyframe'])
+    simulator.reset()
+    simulator.load_state(data)
+
     renderer.initialize()
     dataset_writer = SerialDumper(output_dir, video_fps=cfg.hardware.mujoco.observation_hz)
 
@@ -37,7 +32,7 @@ def process_episode(episode_path, cfg, output_dir):
 
     while event_idx < n_frames:
         if data['image_timestamp'][event_idx] <= simulator.ts_ns:
-            simulator.set_actuator_values(data['robot_joints'][event_idx])
+            simulator.set_actuator_values(data['actuator_values'][event_idx])
             simulator.set_grip(data['target_grip'][event_idx])
             event_idx += 1
             tqdm_iter.update(1)

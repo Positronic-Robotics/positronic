@@ -11,6 +11,3 @@ sound:
 video_fps: ${hardware.camera.fps}
 data_output_dir: null
 rerun: False
-
-hardware:
-  data_output_dir: ${data_output_dir}

@@ -3,7 +3,7 @@ from omegaconf import DictConfig
 import rerun as rr
 from tqdm import tqdm
 
-from simulator.mujoco.sim import InverseKinematics, MujocoRenderer, MujocoSimulator
+from simulator.mujoco.sim import create_from_config
 from inference.state import StateEncoder
 from inference.policy import get_policy
 from inference.inference import rerun_log_action, rerun_log_observation
@@ -19,22 +19,13 @@ def main(cfg: DictConfig):
         elif cfg.rerun is not None:
             rr.save(cfg.rerun)
 
-    # Initialize MuJoCo environment
-    loaders = hydra.utils.instantiate(cfg.hardware.mujoco_loaders)
-    simulator = MujocoSimulator.load_from_xml_path(cfg.hardware.mujoco.model_path, loaders, simulation_rate=1/cfg.hardware.mujoco.simulation_hz)
-
-    ik = InverseKinematics(simulator)
-    renderer = MujocoRenderer(
-        simulator,
-        cfg.hardware.mujoco.camera_names,
-        (cfg.hardware.mujoco.camera_width, cfg.hardware.mujoco.camera_height),
-    )
+    simulator, renderer, ik = create_from_config(cfg.hardware)
 
     # Initialize renderer
     renderer.initialize()
 
     # Reset simulator to initial state
-    simulator.reset('home_0')
+    simulator.reset()
 
     # Initialize policy and encoders
     policy = get_policy(cfg.inference.checkpoint_path, cfg.get('policy_args', {}))

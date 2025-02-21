@@ -109,6 +109,8 @@ class SerialDumper:
         if metadata is not None:
             for k in metadata.keys():
                 assert k not in self.data, f"Metadata key {k} intersects with data key."
+                if isinstance(metadata[k], np.ndarray):
+                    metadata[k] = torch.from_numpy(metadata[k])
 
             self.data.update(metadata)
 
@@ -138,6 +140,10 @@ class DatasetDumper(ir.ControlSystem):
     async def on_start_episode(self, message: ir.Message):
         self.tracked = True
         self.episode_start = message.timestamp
+        self.additional_metadata = {
+            **self.additional_metadata,
+            **(message.data or {}),
+        }
         self.dumper.start_episode()
         print(f"Episode {self.dumper.episode_count} started")
 

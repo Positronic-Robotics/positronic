@@ -155,29 +155,13 @@ def robot_setup(cfg: DictConfig):  # noqa: C901  Function is too complex
         from simulator.mujoco.sim import MujocoSimulator, MujocoRenderer, InverseKinematics
         from simulator.mujoco.environment import MujocoSimulatorCS
 
-        if cfg.mujoco.model_path is None:
-            from simulator.mujoco.scene.utils import generate_scene_in_separate_process
-            cfg.mujoco.model_path = generate_scene_in_separate_process(cfg.data_output_dir)
-
-        loaders = hydra.utils.instantiate(cfg.mujoco_loaders)
-
-        simulator = MujocoSimulator.load_from_xml_path(model_path=cfg.mujoco.model_path,
-                                                       loaders=loaders,
-                                                       simulation_rate=1 / cfg.mujoco.simulation_hz)
-        renderer = MujocoRenderer(simulator,
-                                  camera_names=cfg.mujoco.camera_names,
-                                  render_resolution=(cfg.mujoco.camera_width, cfg.mujoco.camera_height))
-        inverse_kinematics = InverseKinematics(simulator)
-
-        simulator.reset('home_0')
+        simulator_factory = lambda: create_from_config(cfg)
 
         # Create MujocoSimulatorCS
         simulator_cs = MujocoSimulatorCS(
-            simulator=simulator,
+            simulator_factory=simulator_factory,
             simulation_rate=1 / cfg.mujoco.simulation_hz,
             render_rate=1 / cfg.mujoco.observation_hz,
-            renderer=renderer,
-            inverse_kinematics=inverse_kinematics,
         )
         components.append(simulator_cs)
 
@@ -187,7 +171,8 @@ def robot_setup(cfg: DictConfig):  # noqa: C901  Function is too complex
         inputs['reset'] = (simulator_cs, 'reset')
 
         outputs['robot_position'] = simulator_cs.outs.robot_position
-        outputs['joint_positions'] = simulator_cs.outs.actuator_values
+        outputs['actuator_values'] = simulator_cs.outs.actuator_values
+        outputs['joint_positions'] = simulator_cs.outs.joints
         outputs['ext_force_base'] = simulator_cs.outs.ext_force_base
         outputs['ext_force_ee'] = simulator_cs.outs.ext_force_ee
         outputs['grip'] = simulator_cs.outs.grip

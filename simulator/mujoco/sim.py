@@ -1,10 +1,12 @@
 import abc
 from typing import Dict, Optional, Sequence, Tuple
 
+import hydra
 import mujoco
 import numpy as np
 from dm_control import mujoco as dm_mujoco
 from dm_control.utils import inverse_kinematics as ik
+from omegaconf import DictConfig
 
 from ironic.utils import FPSCounter
 from geom import Transform3D
@@ -93,6 +95,8 @@ class MujocoSimulator:
             data: mujoco.MjData,
             simulation_rate: float = 1 / 500,
             model_suffix: str = '',
+            initial_ctrl: Optional[np.ndarray] = None,
+            warmup_steps: int = 1000,
     ):
         super().__init__()
         self.model = model
@@ -101,8 +105,10 @@ class MujocoSimulator:
         self.simulation_fps_counter = FPSCounter('Simulation')
         self._initial_position = None
         self.model_suffix = model_suffix
+        self.initial_ctrl = initial_ctrl
         self.joint_names = [self.name(f'joint{i}') for i in range(1, 8)]
         self.joint_qpos_ids = [model.joint(joint).qposadr.item() for joint in self.joint_names]
+        self.warmup_steps = warmup_steps
 
     def name(self, name: str):
         return f'{name}{self.model_suffix}'
@@ -150,7 +156,15 @@ class MujocoSimulator:
         mujoco.mj_step(self.model, self.data)
         self.simulation_fps_counter.tick()
 
-    def save_state(self):
+    def save_state(self) -> Dict[str, np.ndarray]:
+        """
+        Saves full state of the simulator.
+
+        This state could be used to restore the exact state of the simulator.
+
+        Returns:
+            data: A dictionary containing the full state of the simulator.
+        """
         data = {}
 
         for spec in STATE_SPECS:
@@ -160,19 +174,32 @@ class MujocoSimulator:
 
         return data
 
-    def load_state(self, data: Dict[str, np.ndarray]):
-        for spec in STATE_SPECS:
-            mujoco.mj_setState(self.model, self.data, data[spec.name], spec)
-
-    def reset(self, keyframe: str = "home"):
+    def load_state(self, state: Dict[str, np.ndarray], reset_time: bool = True):
         """
-        Reset the simulator to the given keyframe.
+        Restores the state of the simulator.
+
+        If reset_time is True, the time will be reset to 0. It will not affect simulation since
+        physics is time-invariant. (https://mujoco.readthedocs.io/en/stable/computation/index.html#full-physics-state)
+
+        Args:
+            state: (Dict[str, np.ndarray]) The state to load.
+            reset_time: (bool) If True, the time will be reset to 0.
         """
         mujoco.mj_resetData(self.model, self.data)
-        frame = self.model.keyframe(keyframe)
-        self.data.qpos = frame.qpos
-        self.data.ctrl = frame.ctrl
-        mujoco.mj_forward(self.model, self.data)
+        for spec in STATE_SPECS:
+            mujoco.mj_setState(self.model, self.data, np.array(state[spec.name]), spec)
+
+        if reset_time:
+            self.data.time = 0
+
+    def reset(self):
+        """
+        Reset the simulator to the initial position.
+        """
+        mujoco.mj_resetData(self.model, self.data)
+        if self.initial_ctrl is not None:
+            self.data.ctrl = self.initial_ctrl
+        mujoco.mj_step(self.model, self.data, self.warmup_steps)
         self._initial_position = self.robot_position
 
     def set_actuator_values(self, actuator_values: np.ndarray):
@@ -189,6 +216,9 @@ class MujocoSimulator:
 
         if 'model_suffix' in metadata:
             kwargs['model_suffix'] = metadata['model_suffix']
+
+        if 'initial_ctrl' in metadata:
+            kwargs['initial_ctrl'] = [float(x) for x in metadata['initial_ctrl'].split(',')]
 
         return MujocoSimulator(model, data, **kwargs)
 
@@ -247,6 +277,7 @@ class MujocoRenderer:
         """
         Initialize the renderer. This must be called before calling render().
         """
+        assert self.renderer is None, "Renderer already initialized."
         # in case we have other code which works with OpenGL, we need to initialize the renderer in a separate thread to avoid conflicts
         self.renderer = mujoco.Renderer(self.simulator.model, height=self.render_resolution[1], width=self.render_resolution[0])
 
@@ -257,4 +288,25 @@ class MujocoRenderer:
         return images
 
     def close(self):
-        self.renderer.close()
+        if self.renderer is not None:
+            self.renderer.close()
+
+
+def create_from_config(cfg: DictConfig) -> Tuple[MujocoSimulator, MujocoRenderer, InverseKinematics]:
+    loaders = hydra.utils.instantiate(cfg.mujoco_loaders)
+
+    simulator = MujocoSimulator.load_from_xml_path(
+        model_path=cfg.mujoco.model_path,
+        loaders=loaders,
+        simulation_rate=1 / cfg.mujoco.simulation_hz
+    )
+    renderer = MujocoRenderer(
+        simulator,
+        camera_names=cfg.mujoco.camera_names,
+        render_resolution=(cfg.mujoco.camera_width, cfg.mujoco.camera_height)
+    )
+    inverse_kinematics = InverseKinematics(simulator)
+
+    simulator.reset()
+
+    return simulator, renderer, inverse_kinematics

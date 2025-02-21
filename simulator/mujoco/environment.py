@@ -1,4 +1,5 @@
-from typing import Optional, Sequence
+import asyncio
+from typing import Callable, Optional, Sequence, Tuple
 
 from drivers.roboarm import RobotStatus
 from ironic.utils import Throttler
@@ -23,29 +24,34 @@ from simulator.mujoco.sim import CompositeMujocoMetricCalculator, InverseKinemat
 class MujocoSimulatorCS(ir.ControlSystem):
     def __init__(
             self,
-            simulator: MujocoSimulator,
+            simulator_factory: Callable[[], Tuple[MujocoSimulator, MujocoRenderer, InverseKinematics]],
             simulation_rate: float = 1 / 500,
             render_rate: float = 1 / 60,
-            renderer: Optional[MujocoRenderer] = None,
-            inverse_kinematics: Optional[InverseKinematics] = None,
             metric_calculators: Optional[Sequence[MujocoMetricCalculator]] = None,
     ):
         super().__init__()
-        self.simulator = simulator
+        self.simulator_factory = simulator_factory
+        self.simulator = None
+        self._renderer = None
+        self.inverse_kinematics = None
         self.do_simulation = Throttler(every_sec=simulation_rate)
         self.simulation_rate = simulation_rate
         self.pending_actions = []
-
-        self.renderer = renderer
-
-        if renderer is not None:
-            self.do_render = Throttler(every_sec=render_rate)
-        else:
-            self.do_render = lambda: False
-
-        self.inverse_kinematics = inverse_kinematics
+        self.do_render = Throttler(every_sec=render_rate)
         self.metric_calculator = CompositeMujocoMetricCalculator(metric_calculators or [])
-        self._keyframe_idx = -1
+
+        self.resetting = False
+
+    @property
+    def renderer(self) -> MujocoRenderer:
+        return self._renderer
+
+    @renderer.setter
+    def renderer(self, value):
+        if self._renderer is not None:
+            self._renderer.close()
+        print('setting renderer')
+        self._renderer = value
 
     @ir.out_property
     async def robot_position(self):
@@ -83,9 +89,7 @@ class MujocoSimulatorCS(ir.ControlSystem):
 
     @ir.out_property
     async def episode_metadata(self):
-        return ir.Message({
-            'keyframe': f"home_{self._keyframe_idx}",
-        }, self.ts)
+        return ir.Message(self.simulator.save_state(), self.ts)
 
     @property
     def ts(self) -> int:
@@ -101,12 +105,15 @@ class MujocoSimulatorCS(ir.ControlSystem):
             await self.outs.images.write(ir.Message(images, self.ts))
 
     async def _init_position(self):
-        await self.outs.robot_status.write(ir.Message(RobotStatus.RESETTING, self.ts))
-        self._keyframe_idx += 1
-        self._keyframe_idx %= self.simulator.model.nkey
-        self.simulator.reset(f"home_{self._keyframe_idx}")
+        await self.outs.robot_status.write(ir.Message(RobotStatus.RESETTING, 0))
+        self.resetting = True
+        self.simulator, self.renderer, self.inverse_kinematics = self.simulator_factory()
+        self.simulator.reset()
         self.metric_calculator.reset()
+        self.renderer.initialize()
+
         await self.outs.robot_status.write(ir.Message(RobotStatus.AVAILABLE, self.ts))
+        self.resetting = False
 
     def _init_renderer(self):
         if self.renderer is not None:
@@ -133,7 +140,6 @@ class MujocoSimulatorCS(ir.ControlSystem):
 
     async def setup(self):
         await self._init_position()
-        self._init_renderer()
 
     async def step(self):
         for _ in range(self.do_simulation()):

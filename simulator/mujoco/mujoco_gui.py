@@ -1,54 +1,20 @@
 import asyncio
-import glob
-import os
-import multiprocessing
-from pathlib import Path
 import threading
 
 from dataclasses import dataclass
 from typing import Sequence
-import hydra
 import numpy as np
-from omegaconf import DictConfig
 import dearpygui.dearpygui as dpg
 
 from drivers.roboarm import RobotStatus
 import ironic as ir
 from geom import Transform3D
 from ironic.utils import FPSCounter
-from simulator.mujoco.environment import MujocoSimulatorCS, InverseKinematics
-from simulator.mujoco import metric_calculators
-from simulator.mujoco.sim import MujocoRenderer, MujocoSimulator
-from tools.dataset_dumper import DatasetDumper
 
 
 def _set_image_uint8_to_float32(target, source):
     target[:] = source
     target[:] /= 255
-
-
-def gen_fn(model_path):
-    # TODO: robosuite's OpenGL is conflicting with dearpygui's OpenGL, so we need to run this in a separate process
-    from simulator.mujoco.scene.scene_builder import construct_scene
-    construct_scene(model_path)
-
-
-def generate_scene(output_dir: str):
-    assert output_dir is not None, "data_output_dir must be specified to build the scene"
-
-    scene_dir = os.path.join(output_dir, "scenes")
-    os.makedirs(scene_dir, exist_ok=True)
-
-    next_scene_idx = len(glob.glob(f"{scene_dir}/*.xml"))
-    new_model_path = os.path.join(scene_dir, f"scene_{next_scene_idx:04d}.xml")
-
-    print(f"Building scene to {new_model_path}")
-
-    process = multiprocessing.Process(target=gen_fn, args=(new_model_path, ))
-    process.start()
-    process.join()
-
-    return new_model_path
 
 
 @dataclass
@@ -196,7 +162,7 @@ class DearpyguiUi(ir.ControlSystem):
 
     def move(self):
         time_since_last_move = ir.system_clock() - self.last_move_ts if self.last_move_ts is not None else 0
-        time_since_last_move /= 10**9
+        time_since_last_move /= 10 ** 9
 
         for key, vector in self.movement_vectors.items():
             if self.move_key_states.get(key, False):
@@ -341,137 +307,3 @@ class DearpyguiUi(ir.ControlSystem):
 
         await self.update()
         return ir.State.ALIVE if self.ui_thread.is_alive() else ir.State.FINISHED
-
-
-async def _main(cfg: DictConfig):
-    width = cfg.mujoco.camera_width
-    height = cfg.mujoco.camera_height
-
-    if cfg.mujoco.model_path is None:
-        cfg.mujoco.model_path = generate_scene(cfg.data_output_dir)
-
-    loaders = hydra.utils.instantiate(cfg.mujoco.loaders)
-    simulator = MujocoSimulator.load_from_xml_path(cfg.mujoco.model_path,
-                                                   simulation_rate=1 / cfg.mujoco.simulation_hz,
-                                                   loaders=loaders)
-    renderer = MujocoRenderer(
-        simulator,
-        render_resolution=(width, height),
-        camera_names=cfg.mujoco.camera_names,
-    )
-    inverse_kinematics = InverseKinematics(simulator)
-
-    metrics = [
-        metric_calculators.ObjectMovedCalculator(
-            model=simulator.model,
-            data=simulator.data,
-            object_name='box_1_main',
-            threshold=0.01,
-        ),
-        metric_calculators.ObjectDistanceCalculator(
-            model=simulator.model,
-            data=simulator.data,
-            object_1='box_0_main',
-            object_2='box_1_main',
-        ),
-        metric_calculators.ObjectLiftedTimeCalculator(
-            model=simulator.model,
-            data=simulator.data,
-            object_name='box_1_main',
-            threshold=0.01,
-        ),
-        metric_calculators.ObjectsStackedCalculator(
-            model=simulator.model,
-            data=simulator.data,
-            object_1='box_0_main',
-            object_2='box_1_main',
-            velocity_threshold=0.01,
-        ),
-    ]
-
-    # systems
-    simulator = MujocoSimulatorCS(
-        simulator=simulator,
-        simulation_rate=1 / cfg.mujoco.simulation_hz,
-        render_rate=1 / cfg.mujoco.observation_hz,
-        renderer=renderer,
-        inverse_kinematics=inverse_kinematics,
-        metric_calculators=metrics,
-    )
-
-    window = DearpyguiUi(cfg.mujoco.camera_names)
-
-    systems = [
-        simulator.bind(
-            gripper_target_grasp=window.outs.gripper_target_grasp,
-            robot_target_position=window.outs.robot_target_position,
-            reset=window.outs.reset,
-        ),
-        window.bind(
-            images=simulator.outs.images,
-            robot_position=simulator.outs.robot_position,
-            robot_grip=simulator.outs.grip,
-            actuator_values=simulator.outs.actuator_values,
-            metrics=simulator.outs.metrics,
-        ),
-    ]
-
-    if cfg.data_output_dir is not None:
-
-        def get_translation(position):
-            return position.translation
-
-        def get_quaternion(position):
-            return position.quaternion
-
-        def discard_images(images):
-            # The idea is just to pass the pulse of images, not the data
-            return {}
-
-        properties_to_dump = ir.utils.properties_dict(
-            robot_joints=simulator.outs.joints,
-            robot_position_translation=ir.utils.map_property(get_translation, simulator.outs.robot_position),
-            robot_position_quaternion=ir.utils.map_property(get_quaternion, simulator.outs.robot_position),
-            ext_force_ee=simulator.outs.ext_force_ee,
-            ext_force_base=simulator.outs.ext_force_base,
-            grip=simulator.outs.grip,
-            actuator_values=simulator.outs.actuator_values,
-        )
-
-        model_path = Path(cfg.mujoco.model_path)
-        data_output_dir = Path(cfg.data_output_dir)
-        assert data_output_dir in model_path.parents, (
-            f"Mujoco model {model_path}"
-            f" must be in the data output directory {data_output_dir} for transferability")
-
-        relative_data_output_dir = model_path.relative_to(data_output_dir)
-
-        episode_metadata = {
-            'mujoco_model_path': cfg.mujoco.model_path,
-            'relative_mujoco_model_path': str(relative_data_output_dir),
-            'simulation_hz': cfg.mujoco.simulation_hz,
-        }
-
-        data_dumper = DatasetDumper(cfg.data_output_dir, additional_metadata=episode_metadata)
-        systems.append(
-            data_dumper.bind(
-                image=ir.utils.map_port(discard_images, simulator.outs.images),
-                target_grip=window.outs.gripper_target_grasp,
-                target_robot_position=window.outs.robot_target_position,
-                start_episode=window.outs.start_recording,
-                end_episode=window.outs.stop_recording,
-                robot_data=properties_to_dump,
-            ))
-
-    composed = ir.compose(*systems)
-
-    await ir.utils.run_gracefully(composed)
-
-
-@hydra.main(version_base=None, config_path="../../configs", config_name="mujoco_gui")
-def main(cfg: DictConfig):
-    asyncio.run(_main(cfg))
-
-
-if __name__ == "__main__":
-    main()
