@@ -23,10 +23,7 @@ def main(cfg: DictConfig):
 
     # Initialize renderer
     renderer.initialize()
-
-    # Reset simulator to initial state
-    simulator.reset()
-
+    reference_pose = simulator.robot_position
     # Initialize policy and encoders
     policy = get_policy(cfg.inference.checkpoint_path, cfg.get('policy_args', {}))
     policy.to(cfg.inference.device)
@@ -60,10 +57,16 @@ def main(cfg: DictConfig):
             obs = state_encoder.encode(images, inputs)
             for key in obs:
                 obs[key] = obs[key].to(cfg.inference.device)
-
+            if len(policy._action_queue) == 0:
+                reference_pose = simulator.robot_position
+            inputs['robot_position_translation'] = reference_pose.translation
+            inputs['robot_position_quaternion'] = reference_pose.quaternion
             # Get policy action
             action = policy.select_action(obs).squeeze(0).cpu().numpy()
             action_dict = action_decoder.decode(action, inputs)
+
+            if len(policy._action_queue) != 0:
+                reference_pose = action_dict['target_robot_position']
 
             if cfg.inference.rerun:
                 rerun_log_observation(simulator.ts_sec, obs)

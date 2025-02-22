@@ -200,6 +200,7 @@ class MujocoSimulator:
         if self.initial_ctrl is not None:
             self.data.ctrl = self.initial_ctrl
         mujoco.mj_step(self.model, self.data, self.warmup_steps)
+        self.data.time = 0
         self._initial_position = self.robot_position
 
     def set_actuator_values(self, actuator_values: np.ndarray):
