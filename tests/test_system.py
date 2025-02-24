@@ -216,3 +216,18 @@ async def test_last_value_in_control_system():
     config_msg = await target.ins.config()
     assert config_msg.data == "processed_test_data"
     assert config_msg.timestamp == 300
+
+
+def test_output_mappings():
+    """Test that output_mappings contains both output ports and properties."""
+    system = MockSystem()
+
+    mappings = system.output_mappings
+
+    # Check that both the output port and property are present
+    assert 'processed' in mappings
+    assert 'status' in mappings
+
+    # Verify types
+    assert isinstance(mappings['processed'], OutputPort)
+    assert callable(mappings['status'])

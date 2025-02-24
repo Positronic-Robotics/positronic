@@ -9,7 +9,7 @@ def add_image_mapping(mapping: Dict[str, str], camera: ir.ControlSystem):
     def map_images(frame):
         return {new_k: frame[k] for k, new_k in mapping.items()}
 
-    map_system = ir.utils.MapControlSystem(map_images)
+    map_system = ir.utils.MapPortCS(map_images)
     map_system.bind(input=camera.outs.frame)
     return ir.compose(camera, map_system, outputs={'frame': map_system.outs.output})
 

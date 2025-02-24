@@ -22,7 +22,8 @@ logging.basicConfig(level=logging.INFO,
                       "start_recording",
                       "stop_recording",
                       "reset"
-                  ])
+                  ],
+                  output_props=["metadata"])
 class TeleopSystem(ir.ControlSystem):
     def __init__(self, operator_position: str = 'back'):
         super().__init__()
@@ -67,6 +68,10 @@ class TeleopSystem(ir.ControlSystem):
             }
 
             self.button_handler.update_buttons(but)
+
+    @ir.out_property
+    async def metadata(self):
+        return {}
 
     @ir.on_message("teleop_transform")
     async def handle_teleop_transform(self, message: ir.Message):

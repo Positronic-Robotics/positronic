@@ -5,7 +5,7 @@ import geom
 
 @ir.ironic_system(
     input_ports=['tracker_position', 'target_grip'],
-    output_props=['ee_position', 'grip'],
+    output_props=['ee_position', 'grip', 'metadata'],
 )
 class UmiCS(ir.ControlSystem):
     def __init__(self):
@@ -21,6 +21,10 @@ class UmiCS(ir.ControlSystem):
     @ir.out_property
     async def grip(self):
         return ir.Message(data=self.target_grip, timestamp=ir.system_clock())
+
+    @ir.out_property
+    async def metadata(self):
+        return ir.Message(data={})
 
     @ir.on_message('tracker_position')
     async def on_tracker_position(self, message: ir.Message):

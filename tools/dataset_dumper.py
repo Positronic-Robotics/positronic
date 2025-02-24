@@ -2,6 +2,7 @@ from collections import defaultdict
 import os
 from io import BytesIO
 
+import geom
 import numpy as np
 import torch
 import imageio
@@ -109,7 +110,7 @@ class SerialDumper:
 
 @ir.ironic_system(
     input_ports=['image', 'start_episode', 'end_episode', 'target_grip', 'target_robot_position'],
-    input_props=['robot_data'])
+    input_props=['robot_data', 'env_metadata', 'ui_metadata'])
 class DatasetDumper(ir.ControlSystem):
     def __init__(self, directory: str, additional_metadata: dict = None, video_fps: int | None = None):
         super().__init__()
@@ -139,6 +140,8 @@ class DatasetDumper(ir.ControlSystem):
             "episode_start": self.episode_start,
             **self.additional_metadata,
             **(message.data or {}),
+            **(await self.ins.env_metadata().data),
+            **(await self.ins.ui_metadata().data),
         }
         self.dumper.end_episode(metadata=metadata)
         print(f"Episode {self.dumper.episode_count} ended")
@@ -151,6 +154,13 @@ class DatasetDumper(ir.ControlSystem):
     async def on_target_robot_position(self, message: ir.Message):
         self.target_robot_position = message.data
 
+    def _encode_value(self, ep_dict, key, value):
+        if isinstance(value, geom.Transform3D):
+            ep_dict[f'{key}_quaternion'] = value.quaternion.copy()
+            ep_dict[f'{key}_translation'] = value.translation.copy()
+        else:
+            ep_dict[key] = value
+
     @ir.on_message('image')
     async def on_image(self, image_message: ir.Message):
         if not self.tracked:
@@ -161,16 +171,17 @@ class DatasetDumper(ir.ControlSystem):
             return
 
         ep_dict = {}
+        # TODO: This should be configured somehow
         ep_dict['target_grip'] = self.target_grip
         ep_dict['target_robot_position_translation'] = self.target_robot_position.translation.copy()
         ep_dict['target_robot_position_quaternion'] = self.target_robot_position.quaternion.copy()
 
-        robot_message = await self.ins.robot_data()
-        for name, value in robot_message.data.items():
-            ep_dict[name] = value
+        env_state_data = await self.ins.robot_data()
+        for name, value in env_state_data.data.items():
+            self._encode_value(ep_dict, name, value)
 
         ep_dict['image_timestamp'] = image_message.timestamp
-        ep_dict['robot_timestamp'] = robot_message.timestamp
+        ep_dict['robot_timestamp'] = env_state_data.timestamp
         ep_dict['target_timestamp'] = self.target_ts
 
         self.dumper.write(data=ep_dict, video_frames=image_message.data)

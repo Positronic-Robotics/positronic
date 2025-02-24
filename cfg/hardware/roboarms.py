@@ -41,3 +41,5 @@ roboarm_store(franka(ip="172.168.0.2",
                       cartesian_mode="POSITRONIC"),
     name="franka"
 )
+
+roboarm_store.add_to_hydra_store()

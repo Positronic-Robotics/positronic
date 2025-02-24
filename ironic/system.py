@@ -7,7 +7,7 @@ import warnings
 from dataclasses import dataclass
 from enum import Enum
 from types import SimpleNamespace
-from typing import Any, Awaitable, Callable, List, Optional
+from typing import Any, Awaitable, Callable, Dict, List, Optional, Union
 
 
 # Object that represents no value
@@ -271,6 +271,17 @@ class ControlSystem:
 
         self._setup_done = False
 
+    @property
+    def output_mappings(self) -> Dict[str, Union[OutputPort, Callable[[Any], Any]]]:
+        """
+        Get a dictionary of output mappings for the control system. Useful with compose(), when
+        the outputs of composed systems equal to the outputs of one of the sub-systems.
+
+        Returns:
+            A dictionary of output mappings
+        """
+        return vars(self.outs)
+
     def is_bound(self, input_name: str) -> bool:
         """
         Check if the input has been bound to an output.
@@ -300,6 +311,8 @@ class ControlSystem:
                 if name in self._message_handlers:  # Otherwise we just ignore that input
                     setattr(self.ins, name, incoming_output.subscribe(self._message_handlers[name]))
             elif name in self._input_props:
+                if not inspect.iscoroutinefunction(incoming_output):
+                    raise ValueError(f"{name} must be bound to a property (async function), got {type(incoming_output)}")
                 setattr(self.ins, name, incoming_output)  # Property is just a callback, so assignment is enough
             else:
                 raise ValueError(f"Unknown input: {name}. Inputs of {self.__class__.__name__}: {self._input_ports}")

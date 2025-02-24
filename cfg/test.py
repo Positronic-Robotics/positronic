@@ -27,12 +27,11 @@ store(
     builds(
         main,
         populate_full_signature=True,
-        hydra_defaults=["_self_", {"camera": "video0"}]
+        hydra_defaults=["_self_", {"hardware/cameras@camera": "umi_merged"}]
     ),
     name="camera_test"
 )
 
 if __name__ == "__main__":
-    cfg.hardware.camera.cam_store.add_to_hydra_store()
     store.add_to_hydra_store()
     zen(main).hydra_main(config_name="camera_test", version_base="1.1", config_path=".")

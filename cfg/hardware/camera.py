@@ -12,7 +12,7 @@ def _add_image_mapping(mapping: Optional[Dict[str, str]], camera: ir.ControlSyst
     def map_images(frame):
         return {new_k: frame[k] for k, new_k in mapping.items()}
 
-    map_system = ir.utils.MapControlSystem(map_images)
+    map_system = ir.utils.MapPortCS(map_images)
     map_system.bind(input=camera.outs.frame)
     return ir.compose(camera, map_system, outputs={'frame': map_system.outs.output})
 
@@ -85,5 +85,7 @@ cam_store(stereolabs_camera(fps=30, view='SIDE_BY_SIDE', resolution='VGA', depth
 arducam_video2 = linux_camera(device_path="/dev/video2")  # Yes, it is on video2
 cam_store(
     merge_camera(cameras={'first': arducam_video0, 'second': arducam_video2}, fps=30),
-    name='umi_merged'
+    name='merged'
 )
+
+cam_store.add_to_hydra_store()

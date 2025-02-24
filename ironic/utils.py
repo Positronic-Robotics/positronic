@@ -204,9 +204,26 @@ def map_property(function: Callable[[Any], Any], property: Callable[[], Message]
 
     return mapped_property
 
+@ironic_system(input_props=['input'], output_props=['output'])
+class MapPropertyCS(ControlSystem):
+    """A control system that maps the data of an input property to an output property using a transform function.
+
+    In most cases, you should prefer using `map_property` over this class, as it provides a simpler
+    interface for mapping properties. But when you want to input the mapped property in composition, you
+    will have to use this class.
+    """
+    def __init__(self, transform: Callable[[Any], Any]):
+        super().__init__()
+        self._transform = transform
+
+    @out_property
+    async def output(self):
+        data = await self.ins.input()
+        return Message(data=self._transform(data.data), timestamp=data.timestamp)
+
 
 @ironic_system(input_ports=['input'], output_ports=['output'])
-class MapControlSystem(ControlSystem):
+class MapPortCS(ControlSystem):
     """A control system that maps the data of an input port to an output port using a transform function.
 
     In most cases, you should prefer using `map_port` over this class, as it provides a simpler

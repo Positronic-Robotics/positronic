@@ -35,7 +35,7 @@ def setup_interface(cfg: DictConfig):
         )
 
         if cfg.get('stream_to_webxr'):
-            get_frame_for_webxr = ir.utils.MapControlSystem(lambda frame: frame[cfg.stream_to_webxr])
+            get_frame_for_webxr = ir.utils.MapPortCS(lambda frame: frame[cfg.stream_to_webxr])
             components.append(get_frame_for_webxr)
             inputs['images'] = (get_frame_for_webxr, 'input')
             webxr.bind(

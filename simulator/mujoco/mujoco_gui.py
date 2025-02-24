@@ -70,6 +70,7 @@ class DesiredAction:
         "start_recording",
         "stop_recording",
     ],
+    output_props=["metadata"]
 )
 class DearpyguiUi(ir.ControlSystem):
     speed_meters_per_second = 0.1
@@ -184,6 +185,10 @@ class DearpyguiUi(ir.ControlSystem):
             orientation=pos_msg.data.quaternion.copy(),
             grip=grip_msg.data
         )
+
+    @ir.out_property
+    async def metadata(self):
+        return ir.Message({})
 
     async def _stop_recording(self):
         if self.recording:
