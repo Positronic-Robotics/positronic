@@ -2,31 +2,36 @@ name: Run unit tests
 
 on:
   push:
-    branches: [ "main" ]
+    branches:
+      - main
   pull_request:
-    branches: [ "main" ]
+    branches:
+      - main
 
 jobs:
   build:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: conda-incubator/setup-miniconda@v3
+        with:
+          activate-environment: positronic
+          use-only-tar-bz2: true
       - name: Cache conda
         uses: actions/cache@v3
         env:
           # Increase this value to reset cache if environment.yaml has not changed
           CACHE_NUMBER: 0
         with:
-          path: ~/conda_pkgs_dir
+          path: ${{ env.CONDA }}/envs
           key:
-            ${{ runner.os }}-conda-${{ env.CACHE_NUMBER }}-${{
-            hashFiles('environment.yaml') }}
-      - uses: conda-incubator/setup-miniconda@v3
-        with:
-          activate-environment: positronic
-          environment-file: environment.yaml
-          use-only-tar-bz2: true
+            conda-${{ runner.os }}--${{ runner.arch }}--${{
+            hashFiles('environment.yaml') }}-${{ env.CACHE_NUMBER }}
+        id: cache
+      - name: Install dependencies
+        run: conda env update -n positronic -f environment.yaml
+        if: steps.cache.outputs.cache-hit != 'true'
       - name: Run tests
         shell: bash -l {0}
         run: |
-          pytest
+          conda run -n positronic pytest
