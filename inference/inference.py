@@ -32,8 +32,11 @@ def rerun_log_observation(ts, obs):
 
 def rerun_log_action(ts, action):
     rr.set_time_seconds('time', ts)
-    for i, action in enumerate(action):
-        rr.log(f"action/{i}", rr.Scalar(action))
+    for i, v in enumerate(action['target_robot_position'].translation):
+        rr.log(f"action/translation_{i}", rr.Scalar(v))
+    for i, v in enumerate(action['target_robot_position'].quaternion):
+        rr.log(f"action/quaternion_{i}", rr.Scalar(v))
+    rr.log(f"action/grip", rr.Scalar(action['target_grip']))
 
 
 

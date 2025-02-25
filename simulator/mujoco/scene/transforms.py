@@ -100,10 +100,14 @@ class SetBodyPosition(MujocoSceneTransform):
             quaternion: Tuple[float, float, float, float] | None = None,
             random_position: Tuple[Tuple[float, float, float], Tuple[float, float, float]] | None = None,
             random_euler: Tuple[Tuple[float, float, float], Tuple[float, float, float]] | None = None,
+            seed: int | None = None,
         ):
         self.body_name = body_name
         assert (position is None) ^ (random_position is None), "One of position or random_position must be provided"
         assert (quaternion is None) or (random_euler is None), "At most one of quaternion or random_euler must be provided"
+
+        if seed is not None:
+            np.random.seed(seed)
 
         if position is not None:
             self.position = position

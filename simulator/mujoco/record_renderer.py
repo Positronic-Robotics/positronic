@@ -1,9 +1,9 @@
 import os
-from pathlib import Path
 
 from tqdm import tqdm
 import hydra
 import torch
+import geom
 
 from simulator.mujoco.sim import create_from_config
 from tools.dataset_dumper import SerialDumper
@@ -14,7 +14,7 @@ def process_episode(episode_path, cfg, output_dir):
     n_frames = len(data['image_timestamp'])
 
     cfg.hardware.mujoco.model_path = data['mujoco_model_path']
-    simulator, renderer, _ = create_from_config(cfg.hardware)
+    simulator, renderer, ik = create_from_config(cfg.hardware)
 
     simulator.reset()
     simulator.load_state(data)
@@ -32,7 +32,19 @@ def process_episode(episode_path, cfg, output_dir):
 
     while event_idx < n_frames:
         if data['image_timestamp'][event_idx] <= simulator.ts_ns:
-            simulator.set_actuator_values(data['actuator_values'][event_idx])
+            if cfg.use_ik:
+                t = geom.Transform3D(
+                    translation=data['target_robot_position_translation'][event_idx],
+                    quaternion=data['target_robot_position_quaternion'][event_idx]
+                )
+                try:
+                    t = ik.recalculate_ik(t)
+                except Exception as e:
+                    print(f"IK failed for {event_idx}")
+                    return
+                simulator.set_actuator_values(t)
+            else:
+                simulator.set_actuator_values(data['actuator_values'][event_idx])
             simulator.set_grip(data['target_grip'][event_idx])
             event_idx += 1
             tqdm_iter.update(1)

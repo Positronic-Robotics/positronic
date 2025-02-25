@@ -6,6 +6,8 @@ image_name_mapping:
   front: handcam_front
   back: handcam_back
 
+use_ik: false
+
 input_dir: null
 data_output_dir: null
 

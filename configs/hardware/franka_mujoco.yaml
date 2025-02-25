@@ -5,7 +5,7 @@ defaults:
 type: mujoco
 
 mujoco:
-  model_path: null
+  model_path: assets/mujoco/franka_table.xml
   camera_names: ['handcam_back', 'handcam_front', 'front_view', 'back_view']
   camera_width: 1280
   camera_height: 720
