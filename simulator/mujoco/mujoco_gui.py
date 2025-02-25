@@ -62,8 +62,6 @@ class DesiredAction:
     input_ports=["images", "robot_status"],
     input_props=["robot_position", "actuator_values", "robot_grip", "metrics"],
     output_ports=[
-        "start_tracking",
-        "stop_tracking",
         "gripper_target_grasp",
         "robot_target_position",
         "reset",
@@ -188,7 +186,7 @@ class DearpyguiUi(ir.ControlSystem):
 
     @ir.out_property
     async def metadata(self):
-        return ir.Message({})
+        return ir.Message({'ui': 'dearpygui'})
 
     async def _stop_recording(self):
         if self.recording:
@@ -460,8 +458,8 @@ async def _main(cfg: DictConfig):
                 image=ir.utils.map_port(discard_images, simulator.outs.images),
                 target_grip=window.outs.gripper_target_grasp,
                 target_robot_position=window.outs.robot_target_position,
-                start_episode=window.outs.start_tracking,
-                end_episode=window.outs.stop_tracking,
+                start_episode=window.outs.start_recording,
+                end_episode=window.outs.stop_recording,
                 robot_data=properties_to_dump,
             )
         )

@@ -140,8 +140,8 @@ class DatasetDumper(ir.ControlSystem):
             "episode_start": self.episode_start,
             **self.additional_metadata,
             **(message.data or {}),
-            **(await self.ins.env_metadata().data),
-            **(await self.ins.ui_metadata().data),
+            **(await self.ins.env_metadata()).data,
+            **(await self.ins.ui_metadata()).data,
         }
         self.dumper.end_episode(metadata=metadata)
         print(f"Episode {self.dumper.episode_count} ended")

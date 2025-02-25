@@ -15,7 +15,9 @@ physical_env = builds(_physical_env, populate_full_signature=True)
 
 def _state_mapping(env: ir.ControlSystem):
     robot_properties = {}
-    for name, mapping in env.output_mappings:
+    for name, mapping in env.output_mappings.items():
+        if name == 'metadata':
+            continue
         if ir.is_property(mapping):
             robot_properties[name] = mapping
 

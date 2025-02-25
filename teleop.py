@@ -69,7 +69,7 @@ class TeleopSystem(ir.ControlSystem):
 
     @ir.out_property
     async def metadata(self):
-        return {}
+        return ir.Message({'ui': 'teleop'})
 
     @ir.on_message("teleop_transform")
     async def handle_teleop_transform(self, message: ir.Message):

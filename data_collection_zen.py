@@ -75,7 +75,7 @@ store = ZenStore()
 store(
     make_config(
         hydra_defaults=["_self_", {"ui": "teleop"}, {"env": "umi"},
-                        {"hardware/sound@sound": "data_collection"}],
+                        {"hardware/sound@sound": "full"}],
         env=None,
         ui=None,
         sound=None,
