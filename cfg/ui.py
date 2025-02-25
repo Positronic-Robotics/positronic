@@ -50,7 +50,7 @@ def _spacemouse(translation_speed: float = 0.0005,
                 rotation_speed: float = 0.001,
                 translation_dead_zone: float = 0.8,
                 rotation_dead_zone: float = 0.7):
-    from spacemouse import SpacemouseCS
+    from drivers.spacemouse import SpacemouseCS
     smouse = SpacemouseCS(translation_speed, rotation_speed, translation_dead_zone, rotation_dead_zone)
     inputs = {'robot_position': (smouse, 'robot_position'),
               'robot_grip': None,

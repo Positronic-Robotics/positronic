@@ -112,7 +112,7 @@ def setup_interface(cfg: DictConfig):
 
         return ir.compose(*components, inputs=inputs, outputs=outputs), {}
     elif cfg.type == 'spacemouse':
-        from spacemouse import SpacemouseCS
+        from drivers.spacemouse import SpacemouseCS
 
         components, inputs, outputs = [], {}, {}
 
