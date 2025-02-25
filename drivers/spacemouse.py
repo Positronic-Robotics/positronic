@@ -14,8 +14,6 @@ from geom import Quaternion, Transform3D
                   output_ports=[
                       "robot_target_position",
                       "gripper_target_grasp",
-                      "start_tracking",
-                      "stop_tracking",
                       "start_recording",
                       "stop_recording",
                       "reset"
@@ -58,7 +56,7 @@ class SpacemouseCS(ir.ControlSystem):
         self.buttons = [bool(state.buttons[0]), bool(state.buttons[1])]
 
         if pressed[0]:
-            await self._switch_tracking(ir.system_clock())
+            await self._switch_tracking()
 
         if self.is_tracking:
             if self.initial_position is None:
@@ -90,16 +88,14 @@ class SpacemouseCS(ir.ControlSystem):
         return [not self.buttons[0] and bool(state.buttons[0]), not self.buttons[1] and bool(state.buttons[1])]
 
 
-    async def _switch_tracking(self, timestamp: int):
+    async def _switch_tracking(self):
         # TODO: This resembles the teleop system, maybe we should make a generic system for this
         if self.is_tracking:
             logging.info('Stopped tracking')
             self.is_tracking = False
-            await self.outs.stop_tracking.write(ir.Message(None, timestamp))
         else:
             logging.info('Started tracking')
             self.is_tracking = True
-            await self.outs.start_tracking.write(ir.Message(None, timestamp))
 
 
     def _read_spacemouse(self):

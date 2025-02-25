@@ -7,20 +7,7 @@ import ironic as ir
 
 def _webxr(port: int):
     from webxr import WebXR
-
     return WebXR(port=port)
-    components = [webxr]
-    inputs, outputs = {}, {'transform': webxr.outs.transform, 'buttons': webxr.outs.buttons}
-
-    if stream:
-        get_frame_for_webxr = ir.utils.MapPortCS(lambda frame: frame[stream])
-        components.append(get_frame_for_webxr)
-        inputs['images'] = (get_frame_for_webxr, 'input')
-        webxr.bind(frame=get_frame_for_webxr.outs.output)
-    else:
-        inputs['images'] = None
-
-    return ir.compose(*components, inputs=inputs, outputs=outputs)
 
 
 def _teleop(webxr: ir.ControlSystem, operator_position: str, stream_to_webxr: Optional[str] = None, pos_transform: str = 'teleop'):
@@ -81,6 +68,20 @@ def _teleop_ui(tracking: ir.ControlSystem, extra_ui_camera_names: Optional[List[
 def _dearpygui_ui(camera_names: List[str]):
     from simulator.mujoco.mujoco_gui import DearpyguiUi
     return DearpyguiUi(camera_names)
+
+
+def _stub_ui():
+    @ir.ironic_system(input_props=["robot_position"],
+                      output_props=["robot_target_position",
+                                    "gripper_target_grasp",
+                                    "start_recording",
+                                    "stop_recording",
+                                    "reset"])
+    class StubUi(ir.ControlSystem):
+        async def step(self):
+            pass
+
+    return StubUi()
 
 
 webxr = builds(_webxr, populate_full_signature=True)

@@ -50,8 +50,6 @@ def setup_interface(cfg: DictConfig):
 
         outputs['robot_target_position'] = teleop.outs.robot_target_position
         outputs['gripper_target_grasp'] = teleop.outs.gripper_target_grasp
-        outputs['start_tracking'] = teleop.outs.start_tracking
-        outputs['stop_tracking'] = teleop.outs.stop_tracking
         outputs['start_recording'] = teleop.outs.start_recording
         outputs['stop_recording'] = teleop.outs.stop_recording
         outputs['reset'] = teleop.outs.reset
@@ -104,8 +102,6 @@ def setup_interface(cfg: DictConfig):
 
         outputs['robot_target_position'] = ir.utils.map_port(adjust_rotations, teleop.outs.robot_target_position)
         outputs['gripper_target_grasp'] = teleop.outs.gripper_target_grasp
-        outputs['start_tracking'] = teleop.outs.start_tracking
-        outputs['stop_tracking'] = teleop.outs.stop_tracking
         outputs['start_recording'] = teleop.outs.start_recording
         outputs['stop_recording'] = teleop.outs.stop_recording
         outputs['reset'] = teleop.outs.reset
@@ -126,8 +122,6 @@ def setup_interface(cfg: DictConfig):
 
         outputs['robot_target_position'] = spacemouse.outs.robot_target_position
         outputs['gripper_target_grasp'] = spacemouse.outs.gripper_target_grasp
-        outputs['start_tracking'] = spacemouse.outs.start_tracking
-        outputs['stop_tracking'] = spacemouse.outs.stop_tracking
         outputs['start_recording'] = spacemouse.outs.start_recording
         outputs['stop_recording'] = spacemouse.outs.stop_recording
         outputs['reset'] = spacemouse.outs.reset

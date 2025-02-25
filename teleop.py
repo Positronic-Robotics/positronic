@@ -17,8 +17,6 @@ logging.basicConfig(level=logging.INFO,
                   output_ports=[
                       "robot_target_position",
                       "gripper_target_grasp",
-                      "start_tracking",
-                      "stop_tracking",
                       "start_recording",
                       "stop_recording",
                       "reset"
@@ -122,11 +120,9 @@ class TeleopSystem(ir.ControlSystem):
         if self.is_tracking:
             logging.info('Stopped tracking')
             self.is_tracking = False
-            await self.outs.stop_tracking.write(ir.Message(None, timestamp))
         else:
             logging.info('Started tracking')
             self.is_tracking = True
-            await self.outs.start_tracking.write(ir.Message(None, timestamp))
 
     async def _switch_recording(self, timestamp: int):
         if self.is_recording:
