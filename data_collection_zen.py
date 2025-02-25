@@ -83,7 +83,6 @@ store(
                            populate_full_signature=True,
                            video_fps=30,
                            ),
-        # data_output_dir=builds(Path, populate_full_signature=True),
         rerun=False,
     ),
     name="data_collection"

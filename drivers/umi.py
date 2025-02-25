@@ -24,7 +24,7 @@ class UmiCS(ir.ControlSystem):
 
     @ir.out_property
     async def metadata(self):
-        return ir.Message(data={})
+        return ir.Message(data={'source': 'umi'})
 
     @ir.on_message('tracker_position')
     async def on_tracker_position(self, message: ir.Message):
