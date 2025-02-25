@@ -50,7 +50,7 @@ from typing import Callable, Dict, List, Sequence, Set, Tuple, Optional, Union, 
 from types import SimpleNamespace
 import inspect
 
-from .system import ControlSystem, OutputPort, ironic_system, State
+from .system import ControlSystem, OutputPort, ironic_system, State, is_port, is_property
 
 
 def get_parent_system(obj: Any) -> Optional[ControlSystem]:
@@ -136,9 +136,8 @@ class ComposedSystem(ControlSystem):
         if outputs:
             for name, out in outputs.items():
                 # Validate output type
-                if not (isinstance(out, OutputPort) or inspect.iscoroutinefunction(out)):
-                    raise CompositionError(
-                        f"Output '{name}' must be either an OutputPort or an async function, got {type(out)}")
+                if not (is_port(out) or is_property(out)):
+                    raise CompositionError(f"Output '{name}' must be either an OutputPort or an async function, got {type(out)}")
 
                 parent_system = get_parent_system(out)
                 if parent_system is not None and parent_system not in components_set:

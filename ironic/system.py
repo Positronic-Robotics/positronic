@@ -112,9 +112,7 @@ def out_property(method: Callable[..., Awaitable[Message]]) -> Callable[..., Awa
         ValueError: If the decorated method is not async
     """
     if not inspect.iscoroutinefunction(method):
-        raise ValueError(
-            f"Output property '{method.__name__}' must be an async method"
-        )
+        raise ValueError(f"Output property '{method.__name__}' must be an async method")
 
     async def wrapper(*args, **kwargs) -> Message:
         return await method(*args, **kwargs)
@@ -313,7 +311,7 @@ class ControlSystem:
                 if name in self._message_handlers:  # Otherwise we just ignore that input
                     setattr(self.ins, name, incoming_output.subscribe(self._message_handlers[name]))
             elif name in self._input_props:
-                if not inspect.iscoroutinefunction(incoming_output):
+                if not is_property(incoming_output):
                     raise ValueError(f"{name} must be bound to a property (async function), got {type(incoming_output)}")
                 setattr(self.ins, name, incoming_output)  # Property is just a callback, so assignment is enough
             else:
@@ -349,3 +347,13 @@ class ControlSystem:
                   or State.FINISHED to signal completion.
         """
         return State.ALIVE
+
+
+def is_port(obj: Any) -> bool:
+    """Check if the object is an output port."""
+    return isinstance(obj, OutputPort)
+
+
+def is_property(obj: Any) -> bool:
+    """Check if the object is an output property."""
+    return inspect.iscoroutinefunction(obj)

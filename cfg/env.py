@@ -13,15 +13,16 @@ def _physical_env(roboarm: ir.ControlSystem, camera: ir.ControlSystem):
 
 physical_env = builds(_physical_env, populate_full_signature=True)
 
-def _state_mapping(env: ir.ControlSystem, state_mappings: Dict[str, str]):
+def _state_mapping(env: ir.ControlSystem):
     robot_properties = {}
-    for stored_name, property_name in state_mappings.items():
-        robot_properties[stored_name] = getattr(env.outs, property_name)
+    for name, mapping in env.output_mappings:
+        if ir.is_property(mapping):
+            robot_properties[name] = mapping
 
     return ir.extend(env, {'state': ir.utils.properties_dict(**robot_properties)})
 
 
-def _umi_env(camera: Optional[ir.ControlSystem] = None, state_mappings: Optional[Dict[str, str]] = None):
+def _umi_env(camera: Optional[ir.ControlSystem] = None):
     from drivers.umi import UmiCS
     umi = UmiCS()
     components = [umi]
@@ -45,33 +46,12 @@ def _umi_env(camera: Optional[ir.ControlSystem] = None, state_mappings: Optional
                     'metadata': umi.outs.metadata})
 
     res = ir.compose(*components, inputs=inputs, outputs=outputs)
-
-    if state_mappings is not None:
-        res = _state_mapping(res, state_mappings)
+    res = _state_mapping(res)
     return res
-
-
-sm_store = store(group="env/state_mappings")
-sm_store({
-    'robot_position': 'robot_position',
-    # 'robot_position_translation': 'robot_position_translation',
-    # 'robot_position_quaternion': 'robot_position_quaternion'
-}, name="umi")
-sm_store({
-    'robot_joints': 'joint_positions',
-    'ext_force_ee': 'ext_force_ee',
-    'ext_force_base': 'ext_force_base',
-    'robot_position_translation': 'robot_position_translation',
-    'robot_position_quaternion': 'robot_position_quaternion',
-    'grip': 'grip'
-}, name="franka")
-sm_store.add_to_hydra_store()
-
 
 umi_env = builds(_umi_env, populate_full_signature=True,
                 hydra_defaults=["_self_",
-                                {"/hardware/cameras@camera": "merged"},
-                                {"state_mappings": "umi"}])
+                                {"/hardware/cameras@camera": "merged"}])
 
 env_store = store(group="env")
 env_store(umi_env(), name="umi")
