@@ -21,8 +21,9 @@ jobs:
       run: |
         python -m pip install --upgrade pip
         python -m pip install black==25.1
-    - name: Check code style for changed files
+    - name: Run Flake8 linter
       run: |
+        # Only check Python files that have changed
         if [ "${{ github.event_name }}" == "pull_request" ]; then
           # For PRs, get the base commit from the PR event
           BASE_SHA=${{ github.event.pull_request.base.sha }}
@@ -35,9 +36,8 @@ jobs:
         CHANGED_FILES=$(git diff --name-only --diff-filter=d $BASE_SHA ${{ github.sha }})
         CHANGED_PY_FILES=$(echo "$CHANGED_FILES" | grep -E "\.py$" || true)
 
-        # Run black on changed files if any exist
         if [ -n "$CHANGED_PY_FILES" ]; then
-          echo "$CHANGED_PY_FILES" | xargs black --check --diff --skip-string-normalization --line-length 120
+          echo "$CHANGED_PY_FILES" | xargs flake8
         else
           echo "No Python files changed"
         fi

@@ -1,0 +1,14 @@
+[flake8]
+max-line-length = 120
+# Ignores E203 (whitespace before ':') and W503 (line break before binary operator)
+extend-ignore = E203, W503
+exclude =
+    .git,
+    __pycache__,
+    build,
+    dist,
+    *.egg-info
+per-file-ignores =
+    # Allow unused imports in __init__.py files
+    __init__.py: F401
+max-complexity = 10
