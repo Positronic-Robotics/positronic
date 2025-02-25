@@ -23,9 +23,7 @@ dependencies:
   - opencv
   - pymodbus
   - pytorch
-  - pytorch3d
   - requests
-  - rerun-sdk
   - scipy
   - uvicorn[standard]
   - pip
@@ -41,7 +39,6 @@ dependencies:
     - numpy-quaternion
     - pytest
     - pytest-asyncio
-    - robosuite
     - websockets
     - yappi
     - dm_control
@@ -50,4 +47,5 @@ dependencies:
     - linuxpy
     - imageio
     - hydra-zen
+    - rerun-sdk
 # python /usr/local/zed/get_python_api.py

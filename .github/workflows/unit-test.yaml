@@ -14,22 +14,19 @@ jobs:
       - name: Cache conda
         uses: actions/cache@v3
         env:
-          # Increase this value to reset cache if etc/example-environment.yml has not changed
+          # Increase this value to reset cache if environment.yaml has not changed
           CACHE_NUMBER: 0
         with:
           path: ~/conda_pkgs_dir
           key:
             ${{ runner.os }}-conda-${{ env.CACHE_NUMBER }}-${{
-            hashFiles('environment.yml') }}
+            hashFiles('environment.yaml') }}
       - uses: conda-incubator/setup-miniconda@v3
         with:
-          channel-priority: strict
-          environment-file: environment.yml
+          activate-environment: positronic
+          environment-file: environment.yaml
           use-only-tar-bz2: true
-      - name: Install dependencies from environment.yml
-        run: |
-          conda env create -f environment.yml --name positronic
-          conda activate positronic
       - name: Run tests
+        shell: bash -l {0}
         run: |
           pytest
