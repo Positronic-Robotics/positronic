@@ -1,10 +1,19 @@
 import pytest
-from ironic import ControlSystem, Message, ironic_system, on_message, out_property, OutputPort, NoValue
+from ironic import (
+    ControlSystem,
+    Message,
+    ironic_system,
+    on_message,
+    out_property,
+    OutputPort,
+    NoValue,
+)
 from ironic.utils import last_value
 
 
 class MockSystemBase(ControlSystem):
     """Base class for mock systems used in testing"""
+
     def __init__(self):
         super().__init__()
         self.received_messages = []
@@ -15,17 +24,16 @@ class MockSystemBase(ControlSystem):
     input_ports=['sensor'],
     output_ports=['processed'],
     input_props=['config'],
-    output_props=['status']
+    output_props=['status'],
 )
 class MockSystem(MockSystemBase):
     @on_message('sensor')
     async def handle_sensor(self, message: Message):
         self.received_messages.append(message)
         # Echo message to processed output with timestamp
-        await self.outs.processed.write(Message(
-            data=f"processed_{message.data}",
-            timestamp=message.timestamp
-        ))
+        await self.outs.processed.write(
+            Message(data=f"processed_{message.data}", timestamp=message.timestamp)
+        )
 
     @out_property
     async def status(self):
@@ -34,15 +42,13 @@ class MockSystem(MockSystemBase):
 
 class PropertySystemBase(ControlSystem):
     """Base class for property-based mock systems"""
+
     def __init__(self):
         super().__init__()
         self._multiplier = 1
 
 
-@ironic_system(
-    input_props=['multiplier'],
-    output_props=['value']
-)
+@ironic_system(input_props=['multiplier'], output_props=['value'])
 class PropertySystem(PropertySystemBase):
     @out_property
     async def value(self):
@@ -61,6 +67,7 @@ async def test_output_port_subscription():
     # Subscribe to the output port with an async lambda
     async def handler(msg):
         received_messages.append(msg)
+
     system.outs.processed.subscribe(handler)
 
     # Send a message through input port handler
