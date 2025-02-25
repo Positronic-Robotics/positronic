@@ -481,3 +481,18 @@ async def test_multiple_input_mappings():
     # Both processors should have received the same data
     assert processor1.received == [0, 1, 2]
     assert processor2.received == [0, 1, 2]
+
+@pytest.mark.asyncio
+async def test_none_not_allowed_as_output():
+    """Test that None is not allowed as an output in composition"""
+    source = DataSource()
+    processor = Processor()
+
+    with pytest.raises(CompositionError, match="Output 'result' must be either an OutputPort or an async function, got <class 'NoneType'>"):
+        compose(
+            source,
+            processor,
+            outputs={
+                'result': None
+            }
+        )

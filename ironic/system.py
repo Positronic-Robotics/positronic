@@ -46,15 +46,11 @@ class OutputPort:
     def __init__(self, name: str, parent_system: Optional["ControlSystem"] = None):
         self._name = name
         self._handlers = []
-        self._logging = False
         self._parent_system = parent_system
 
     @property
     def parent_system(self):
         return self._parent_system
-
-    def enable_logging(self):
-        self._logging = True
 
     def subscribe(self, handler):
         """Subscribe a handler to this port. Handler must be an async function."""
@@ -71,14 +67,20 @@ class OutputPort:
         """
         # We use asyncio.gather and sacrifice reproducibility of results.
         # If you want reproducibility, run handlers sequentially.
-        if self._logging:
-            print(f"Writing to {self._name}: {message.data}")
         await asyncio.gather(*[handler(message) for handler in self._handlers])
 
-    @property
-    def name(self):
-        return self._name
+class StubOutputPort(OutputPort):
+    """
+    A stub output port that does nothing. Useful for ir.compose() when you don't
+    want to have an output port in the composition, but don't have a real output for it.
+    """
+    def __init__(self):
+        super().__init__("stub", None)
 
+    async def write(self, message: Message):
+        pass
+
+OutputPort.Stub = StubOutputPort
 
 def _validate_pythonic_name(name: str, context: str) -> None:
     """

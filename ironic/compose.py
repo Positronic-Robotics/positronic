@@ -22,7 +22,8 @@ Example usage:
         outputs={'result': (processor, 'processed')}
     )
 
-    # Mappings can include None to skip certain ports:
+    # Input mappings can include None to skip certain ports or properties
+    # Output mappings can include special ir.OutputPort.Stub() to skip certain ports:
     system = compose(
         components=[processor, sink],
         inputs={
@@ -30,8 +31,8 @@ Example usage:
             'optional_input': None  # This input will be skipped during binding
         },
         outputs={
-            'result': (processor, 'processed'),
-            'optional_output': None  # This output will be skipped during connection
+            'result': processor.outs.processed,
+            'optional_output': ir.OutputPort.Stub()  # This output will be skipped during connection
         }
     )
 
@@ -47,6 +48,7 @@ Example usage:
 import asyncio
 from typing import Callable, Dict, List, Sequence, Set, Tuple, Optional, Union, Any
 from types import SimpleNamespace
+import inspect
 
 from .system import ControlSystem, OutputPort, ironic_system, State
 
@@ -133,8 +135,12 @@ class ComposedSystem(ControlSystem):
 
         if outputs:
             for name, out in outputs.items():
-                parent_system = get_parent_system(out)
+                # Validate output type
+                if not (isinstance(out, OutputPort) or inspect.iscoroutinefunction(out)):
+                    raise CompositionError(
+                        f"Output '{name}' must be either an OutputPort or an async function, got {type(out)}")
 
+                parent_system = get_parent_system(out)
                 if parent_system is not None and parent_system not in components_set:
                     raise CompositionError(f"Output mappings reference components not in composition. Output: '{name}'. Parent system: {parent_system}")
 

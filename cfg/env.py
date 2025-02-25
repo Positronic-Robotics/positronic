@@ -25,7 +25,7 @@ def _umi_env(camera: Optional[ir.ControlSystem] = None, state_mappings: Optional
     from drivers.umi import UmiCS
     umi = UmiCS()
     components = [umi]
-    outputs = {'frame': None}
+    outputs = {'frame': ir.OutputPort.Stub()}
 
     if camera is not None:
         components.append(camera)
@@ -40,7 +40,7 @@ def _umi_env(camera: Optional[ir.ControlSystem] = None, state_mappings: Optional
 
     outputs.update({'robot_position': umi.outs.ee_position,
                     'grip': umi.outs.grip,
-                    'robot_status': None,
+                    'robot_status': ir.OutputPort.Stub(),
                     'ext_force_ee': fake_ext_force_ee,
                     'metadata': umi.outs.metadata})
 
