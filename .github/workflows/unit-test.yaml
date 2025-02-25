@@ -23,14 +23,13 @@ jobs:
             hashFiles('environment.yml') }}
       - uses: conda-incubator/setup-miniconda@v3
         with:
-          activate-environment: positronic
           channel-priority: strict
           environment-file: environment.yml
           use-only-tar-bz2: true
       - name: Install dependencies from environment.yml
         run: |
-          conda env update -f environment.yml
+          conda env create -f environment.yml --name positronic
+          conda activate positronic
       - name: Run tests
         run: |
           pytest
-
