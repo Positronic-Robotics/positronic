@@ -37,7 +37,7 @@ jobs:
 
         # Run black on changed files if any exist
         if [ -n "$CHANGED_PY_FILES" ]; then
-          echo "$CHANGED_PY_FILES" | xargs black --check --diff --skip-string-normalization
+          echo "$CHANGED_PY_FILES" | xargs black --check --diff --skip-string-normalization --line-length 120
         else
           echo "No Python files changed"
         fi
