@@ -78,16 +78,14 @@ opencv_camera = builds(_opencv_camera, populate_full_signature=True)
 
 arducam_video0 = linux_camera(device_path="/dev/video0")
 
-cam_store = store(group="hardware/cameras")
-cam_store(arducam_video0, name='arducam')
-cam_store(luxonis_camera(fps=60), name='luxonis')
-cam_store(realsense_camera(resolution=(640, 480), fps=30, enable_color=True, enable_depth=False, enable_infrared=False),
-          name='realsense')
-cam_store(stereolabs_camera(fps=30, view='SIDE_BY_SIDE', resolution='VGA', depth_mode='NONE', depth_mask=False),
-          name='sl_vga')
-cam_store(opencv_camera(camera_id=0, resolution=(640, 480), fps=30), name='opencv')
+store = store(group="hardware/cameras")
+store(arducam_video0, name='arducam')
+store(luxonis_camera(fps=60), name='luxonis')
+store(realsense_camera(resolution=(640, 480), fps=30, enable_color=True, enable_depth=False, enable_infrared=False),
+      name='realsense')
+store(stereolabs_camera(fps=30, view='SIDE_BY_SIDE', resolution='VGA', depth_mode='NONE', depth_mask=False),
+      name='sl_vga')
+store(opencv_camera(camera_id=0, resolution=(640, 480), fps=30), name='opencv')
 
 arducam_video2 = linux_camera(device_path="/dev/video2")  # Yes, it is on video2
-cam_store(merge_camera(cameras={'first': arducam_video0, 'second': arducam_video2}, fps=30), name='merged')
-
-cam_store.add_to_hydra_store()
+store(merge_camera(cameras={'first': arducam_video0, 'second': arducam_video2}, fps=30), name='merged')

@@ -38,14 +38,12 @@ def _sound_system(force_feedback_volume: Optional[float] = None,
 
 sound_system = builds(_sound_system, populate_full_signature=True)
 
-sound_store = store(group="hardware/sound")
-sound_store(sound_system(force_feedback_volume=0.1,
-                         start_recording_wav_path="assets/sounds/recording-has-started.wav",
-                         stop_recording_wav_path="assets/sounds/recording-has-stopped.wav"),
-            name="full")
-sound_store(sound_system(force_feedback_volume=0,
-                         start_recording_wav_path="assets/sounds/recording-has-started.wav",
-                         stop_recording_wav_path="assets/sounds/recording-has-stopped.wav"),
-            name="start_stop")
-
-sound_store.add_to_hydra_store()
+store = store(group="hardware/sound")
+store(sound_system(force_feedback_volume=0.1,
+                   start_recording_wav_path="assets/sounds/recording-has-started.wav",
+                   stop_recording_wav_path="assets/sounds/recording-has-stopped.wav"),
+      name="full")
+store(sound_system(force_feedback_volume=0,
+                   start_recording_wav_path="assets/sounds/recording-has-started.wav",
+                   stop_recording_wav_path="assets/sounds/recording-has-stopped.wav"),
+      name="start_stop")

@@ -140,13 +140,11 @@ teleop_ui = builds(_teleop_ui, populate_full_signature=True)
 spacemouse = builds(_spacemouse, populate_full_signature=True)
 dearpygui_ui = builds(_dearpygui_ui, populate_full_signature=True)
 
-ui_store = store(group="ui")
-ui_store(teleop(webxr(port=5005), operator_position='back', stream_to_webxr='image'), name='teleop')
-ui_store(teleop_ui(teleop(webxr(port=5005), operator_position='back'),
-                   extra_ui_camera_names=['handcam_back', 'handcam_front', 'front_view', 'back_view']),
-         name='teleop_gui')
+store = store(group="ui")
+store(teleop(webxr(port=5005), operator_position='back', stream_to_webxr='image'), name='teleop')
+store(teleop_ui(teleop(webxr(port=5005), operator_position='back'),
+                extra_ui_camera_names=['handcam_back', 'handcam_front', 'front_view', 'back_view']),
+      name='teleop_gui')
 
-ui_store(builds(_stub_ui, populate_full_signature=True), name='stub')
-ui_store(dearpygui_ui(camera_names=['handcam_left', 'handcam_right']), name='gui')
-
-ui_store.add_to_hydra_store()
+store(builds(_stub_ui, populate_full_signature=True), name='stub')
+store(dearpygui_ui(camera_names=['handcam_left', 'handcam_right']), name='gui')

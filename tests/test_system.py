@@ -218,7 +218,7 @@ async def test_last_value_in_control_system():
     assert config_msg.timestamp == 300
 
 
-def test_output_mappings():
+def test_output_mappings_contains_ports_and_properties():
     """Test that output_mappings contains both output ports and properties."""
     system = MockSystem()
 

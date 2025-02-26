@@ -37,7 +37,7 @@ jobs:
         CHANGED_PY_FILES=$(echo "$CHANGED_FILES" | grep -E "\.py$" || true)
 
         if [ -n "$CHANGED_PY_FILES" ]; then
-          echo "$CHANGED_PY_FILES" | xargs flake8
+          echo "$CHANGED_PY_FILES" | xargs flake8 --show-source
         else
           echo "No Python files changed"
         fi

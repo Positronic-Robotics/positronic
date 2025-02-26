@@ -1,11 +1,13 @@
 # Configuration for the robotics environment
 from typing import Optional
 
-from hydra_zen import builds, store
 import numpy as np
+from hydra_zen import builds, store
 
-import cfg.hardware.camera  # noqa: F401, W0611 We need this to have configurations registered
+import cfg.hardware.camera
 import ironic as ir
+
+cfg.hardware.camera.store.add_to_hydra_store()
 
 
 def _physical_env(_roboarm: ir.ControlSystem, _camera: ir.ControlSystem):
@@ -60,7 +62,5 @@ umi_env = builds(_umi_env,
                      "/hardware/cameras@camera": "merged"
                  }])
 
-env_store = store(group="env")
-env_store(umi_env(), name="umi")
-
-env_store.add_to_hydra_store()
+store = store(group="env")
+store(umi_env(), name="umi")

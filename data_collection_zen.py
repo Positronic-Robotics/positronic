@@ -4,9 +4,9 @@ from typing import Dict, Optional
 
 from hydra_zen import builds, zen, ZenStore, make_config
 
-import cfg.env  # noqa: F401
-import cfg.ui  # noqa: F401
-import cfg.hardware.sound  # noqa: F401
+import cfg.env
+import cfg.ui
+import cfg.hardware.sound
 
 import ironic as ir
 from tools.dataset_dumper import DatasetDumper
@@ -84,6 +84,10 @@ store(make_config(
     rerun=False,
 ), name="data_collection")
 
+
 if __name__ == "__main__":
+    cfg.env.store.add_to_hydra_store()
+    cfg.ui.store.add_to_hydra_store()
+    cfg.hardware.sound.store.add_to_hydra_store()
     store.add_to_hydra_store()
     zen(main).hydra_main(config_name="data_collection", config_path=None, version_base="1.2")
