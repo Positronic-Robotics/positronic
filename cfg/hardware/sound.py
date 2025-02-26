@@ -37,7 +37,7 @@ def _sound_system(force_feedback_volume: Optional[float] = None,
     return ir.compose(*components, inputs=inputs, outputs=sound_system.output_mappings)
 
 
-sound_system = builds(_sound_system, populate_full_signature=True)
+sound_system = builds(_sound_system)
 
 sound_store = store(group="hardware/sound")
 
@@ -50,4 +50,3 @@ start_stop = sound_system(force_feedback_volume=0,
                          start_recording_wav_path="assets/sounds/recording-has-started.wav",
                          stop_recording_wav_path="assets/sounds/recording-has-stopped.wav")
 sound_store(start_stop, name="start_stop")
-

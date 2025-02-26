@@ -14,7 +14,7 @@ def _physical_env(_roboarm: ir.ControlSystem, _camera: ir.ControlSystem):
     pass
 
 
-physical_env = builds(_physical_env, populate_full_signature=True)
+physical_env = builds(_physical_env)
 
 
 def _state_mapping(env: ir.ControlSystem):
@@ -56,11 +56,7 @@ def _umi_env(camera: Optional[ir.ControlSystem] = None):
     return res
 
 
-umi_env = builds(
-    _umi_env,
-    camera=cfg.hardware.camera.merged,
-    populate_full_signature=True
-)
+umi_env = builds(_umi_env, camera=cfg.hardware.camera.merged)
 
 store = store(group="env")
 umi_env = store(umi_env(), name="umi")

@@ -69,12 +69,12 @@ def _opencv_camera(camera_id: int = 0, resolution: Tuple[int, int] = (640, 480),
     return OpenCVCameraCS(OpenCVCamera(camera_id, resolution, fps))
 
 
-linux_camera = builds(_linux_camera, populate_full_signature=True)
-luxonis_camera = builds(_luxonis_camera, populate_full_signature=True)
-realsense_camera = builds(_realsense_camera, populate_full_signature=True)
-stereolabs_camera = builds(_stereolabs_camera, populate_full_signature=True)
-merge_camera = builds(merge_on_pulse, populate_full_signature=True)
-opencv_camera = builds(_opencv_camera, populate_full_signature=True)
+linux_camera = builds(_linux_camera)
+luxonis_camera = builds(_luxonis_camera)
+realsense_camera = builds(_realsense_camera)
+stereolabs_camera = builds(_stereolabs_camera)
+merge_camera = builds(merge_on_pulse)
+opencv_camera = builds(_opencv_camera)
 
 arducam_video0 = linux_camera(device_path="/dev/video0")
 

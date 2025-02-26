@@ -80,7 +80,7 @@ store(make_config(
     env=cfg.env.umi_env,
     ui=cfg.ui.teleop,
     sound=cfg.hardware.sound.full,
-    data_dumper=builds(_dataset_dumper, populate_full_signature=True, video_fps=30),
+    data_dumper=builds(_dataset_dumper, video_fps=30),
     rerun=False,
 ), name="data_collection")
 

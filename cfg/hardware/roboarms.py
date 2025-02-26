@@ -18,7 +18,7 @@ def _franka(ip: str,
                   cartesian_mode)
 
 
-franka = builds(_franka, populate_full_signature=True)
+franka = builds(_franka)
 
 roboarm_store = store(group="hardware/roboarms")
 

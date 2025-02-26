@@ -54,6 +54,8 @@ def builds(*args, **kwargs):
     """
     Builds wrapper that is used to enable automatic defaults configuration.
 
+    Also changes default value for populate_full_signature to True.
+
     Example:
         >>> def combine_systems(env, ui):
         >>>     ...
@@ -68,6 +70,9 @@ def builds(*args, **kwargs):
     """
     assert 'hydra_defaults' not in kwargs, "hydra_defaults will be set automatically"
     hydra_defaults = ['_self_']
+
+    if 'populate_full_signature' not in kwargs:
+        kwargs['populate_full_signature'] = True
 
     for k, v in kwargs.items():
         if hasattr(v, '__store_name__'):
