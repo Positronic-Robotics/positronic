@@ -15,7 +15,7 @@ def _merge_frames(cam2frame_dicts: Dict[str, Dict[str, Any]]) -> Dict[str, Any]:
     """
     result = {}
     for cam_key, frame_dict in cam2frame_dicts.items():
-        if frame_dict == ir.NoValue:
+        if frame_dict is ir.NoValue:
             return ir.NoValue
         result.update({f'{cam_key}.{im_key}': image for im_key, image in frame_dict.items()})
     return result

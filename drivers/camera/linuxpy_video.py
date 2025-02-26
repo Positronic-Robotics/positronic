@@ -62,20 +62,48 @@ class LinuxPyCamera(ir.ControlSystem):
         self._stopped = asyncio.Event()
         self._codec_contexts = {}
 
+    async def _frame_generator(self) -> AsyncIterator[dict]:
+        """Generate processed frames from the camera"""
+        while not self._stopped.is_set():
+            try:
+                frame = await anext(self._aiter)
+                data = np.frombuffer(frame.data, dtype=np.uint8)
+
+                match frame.pixel_format:
+                    case PixelFormat.YUYV:
+                        data = data.reshape((frame.height, frame.width, 2))
+                        rgb_data = cv2.cvtColor(data, cv2.COLOR_YUV2RGB_YUYV)
+                        yield {'image': rgb_data}
+                    case PixelFormat.UYVY:
+                        data = data.reshape((frame.height, frame.width, 2))
+                        rgb_data = cv2.cvtColor(data, cv2.COLOR_YUV2RGB_UYVY)
+                        yield {'image': rgb_data}
+                    case _ if frame.pixel_format in self._codec_mapping:
+                        codec_name = self._codec_mapping[frame.pixel_format]
+                        codec_ctx = self._get_codec_context(codec_name)
+                        packets = codec_ctx.parse(data)
+                        for packet in packets:
+                            frames = codec_ctx.decode(packet)
+                            for frame in frames:
+                                yield {'image': frame.to_ndarray(format='bgr24')}
+                    case _:
+                        # Assume 3 bytes per pixel (RGB/BGR)
+                        rgb_data = data.reshape((frame.height, frame.width, 3))
+                        yield {'image': rgb_data}
+            except StopAsyncIteration:
+                break
+
     async def _frame_reader(self):
-        """Background coroutine that reads frames and puts them in the queue"""
+        """Background coroutine that reads processed frames and manages the queue"""
         try:
-            while not self._stopped.is_set():
-                try:
-                    frame = await anext(self._aiter)
-                    if self._frame_queue.full():
-                        try:
-                            self._frame_queue.get_nowait()
-                        except asyncio.QueueEmpty:
-                            pass
-                    await self._frame_queue.put(frame)
-                except StopAsyncIteration:
-                    break
+            async for frame in self._frame_generator():
+                assert frame is not None
+                if self._frame_queue.full():
+                    try:
+                        self._frame_queue.get_nowait()
+                    except asyncio.QueueEmpty:
+                        pass
+                await self._frame_queue.put(frame)
         except Exception:
             raise
         finally:
@@ -120,7 +148,7 @@ class LinuxPyCamera(ir.ControlSystem):
         try:
             frame = self._frame_queue.get_nowait()
             self._fps_counter.tick()
-            await self.outs.frame.write(ir.Message(data=self._process_frame(frame)))
+            await self.outs.frame.write(ir.Message(data=frame))
         except asyncio.QueueEmpty:
             pass
         return ir.State.ALIVE
@@ -130,32 +158,6 @@ class LinuxPyCamera(ir.ControlSystem):
         if codec_name not in self._codec_contexts:
             self._codec_contexts[codec_name] = av.CodecContext.create(codec_name, 'r')
         return self._codec_contexts[codec_name]
-
-    def _process_frame(self, frame: Frame) -> dict:
-        """Process raw frame into output format"""
-        data = np.frombuffer(frame.data, dtype=np.uint8)
-
-        match frame.pixel_format:
-            case PixelFormat.YUYV:
-                data = data.reshape((frame.height, frame.width, 2))
-                data = cv2.cvtColor(data, cv2.COLOR_YUV2RGB_YUYV)
-            case PixelFormat.UYVY:
-                data = data.reshape((frame.height, frame.width, 2))
-                data = cv2.cvtColor(data, cv2.COLOR_YUV2RGB_UYVY)
-            case _ if frame.pixel_format in self._codec_mapping:
-                codec_name = self._codec_mapping[frame.pixel_format]
-                codec_ctx = self._get_codec_context(codec_name)
-                packets = codec_ctx.parse(data)
-                for packet in packets:
-                    frames = codec_ctx.decode(packet)
-                    if frames:
-                        return {'image': frames[-1].to_ndarray(format='bgr24')}
-                return {'image': None}
-            case _:
-                # Assume 3 bytes per pixel (RGB/BGR)
-                data = data.reshape((frame.height, frame.width, 3))
-
-        return {'image': data}
 
 
 if __name__ == "__main__":

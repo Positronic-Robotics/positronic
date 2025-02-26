@@ -138,3 +138,52 @@ async def test_merge_on_camera_duplicate_name():
 
     with pytest.raises(AssertionError):
         merge_on_camera(("cam1", main_cam), extension_cameras)
+
+
+@pytest.mark.asyncio
+async def test_merge_novalue():
+    """Test that merge returns NoValue if any camera returns NoValue"""
+    # Create mock cameras
+    cam1 = MockCamera("cam1")
+    cam2 = MockCamera("cam2")
+    cameras = {"cam1": cam1, "cam2": cam2}
+
+    # Create merged camera system
+    merged = merge_on_pulse(cameras, fps=10)
+    await merged.setup()
+
+    # Create frame receiver
+    received_frames = []
+    async def frame_handler(message):
+        received_frames.append(message.data)
+    merged.outs.frame.subscribe(frame_handler)
+
+    # Emit a normal frame from cam1 and NoValue from cam2
+    frame1 = {"image": np.zeros((10, 10, 3))}
+    await cam1.emit_frame(frame1)
+    await cam2.emit_frame(ir.NoValue)
+
+    # Run for enough time to ensure multiple pulses
+    for _ in range(3):
+        await merged.step()
+        await asyncio.sleep(0.2)  # Wait longer than pulse period (0.1s)
+
+    # Should not have received any frames since one camera returned NoValue
+    assert len(received_frames) == 0
+
+    # Now emit valid frames from both cameras
+    frame2 = {"image": np.ones((10, 10, 3))}
+    await cam1.emit_frame(frame1)
+    await cam2.emit_frame(frame2)
+
+    # Run for enough time to get at least one frame
+    received_frames.clear()
+    for _ in range(3):
+        await merged.step()
+        await asyncio.sleep(0.2)
+
+    # Should have received at least one merged frame
+    assert len(received_frames) >= 1
+    merged_frame = received_frames[0]  # Check first frame
+    assert "cam1.image" in merged_frame
+    assert "cam2.image" in merged_frame
