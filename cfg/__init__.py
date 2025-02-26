@@ -1,7 +1,7 @@
 from hydra_zen import ZenStore, make_config as hz_make_config, builds as hz_builds
 
 
-class ZenZenStore(ZenStore):
+class IronicZenStore(ZenStore):
     def __init__(self, *args, **kwargs):
         """
         ZenStore wrapper that is used to enable automatic defaults configuration.
@@ -22,8 +22,10 @@ def make_config(*args, **kwargs):
     make_config wrapper that is used to enable automatic defaults configuration.
 
     Example:
-        >>> cfg.env.umi_env = cfg.env.store(cfg.env.umi_env(), name="umi")
-        >>> cfg.ui.teleop_ui = cfg.ui.store(cfg.ui.teleop_ui(cfg.ui.teleop), name="teleop_ui")
+        >>> env_store = cfg.store(group="env")
+        >>> cfg.env.umi_env = env_store(cfg.env.umi_env(), name="umi")
+        >>> ui_store = cfg.store(group="ui")
+        >>> cfg.ui.teleop_ui = ui_store(cfg.ui.teleop_ui(cfg.ui.teleop), name="teleop_ui")
 
         >>> hydra_zen.make_config(
         >>>     env=cfg.env.umi_env,
@@ -63,7 +65,8 @@ def builds(*args, **kwargs):
         >>>     combine_systems,
         >>>     env=cfg.env.umi_env,
         >>>     ui=cfg.ui.teleop_ui,
-        >>>     hydra_defaults=["_self_", {"env": "umi"}, {"ui": "teleop_ui"}]
+        >>>     hydra_defaults=["_self_", {"env": "umi"}, {"ui": "teleop_ui"}],
+        >>>     populate_full_signature=True,
         >>> )
         >>> # Equivalent to:
         >>> cfg.combined_system = cfg.builds(combine_systems, env=cfg.env.umi_env, ui=cfg.ui.teleop_ui)
@@ -88,7 +91,7 @@ def builds(*args, **kwargs):
     return res
 
 
-store: ZenZenStore = ZenZenStore(
+store: IronicZenStore = IronicZenStore(
     name="zen_store",
     deferred_to_config=True,
     deferred_hydra_store=True,
