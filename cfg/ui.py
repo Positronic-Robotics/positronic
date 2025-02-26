@@ -10,24 +10,25 @@ import numpy as np
 
 import geom
 import ironic as ir
+
+
 def _webxr(port: int):
     from webxr import WebXR
     return WebXR(port=port)
 
 
-def _teleop(webxr: ir.ControlSystem, operator_position: str, stream_to_webxr: Optional[str] = None, pos_transform: str = 'teleop'):
+def _teleop(webxr: ir.ControlSystem,
+            operator_position: str,
+            stream_to_webxr: Optional[str] = None,
+            pos_transform: str = 'teleop'):
     from teleop import TeleopSystem
     # TODO: Support Andrei's transformation (aka 'pos_transform')
     teleop = TeleopSystem(operator_position=operator_position)
     components = [webxr, teleop]
 
-    teleop.bind(teleop_transform=webxr.outs.transform,
-                teleop_buttons=webxr.outs.buttons)
+    teleop.bind(teleop_transform=webxr.outs.transform, teleop_buttons=webxr.outs.buttons)
 
-    inputs = {'robot_position': (teleop, 'robot_position'),
-              'images': None,
-              'robot_grip': None,
-              'robot_status': None}
+    inputs = {'robot_position': (teleop, 'robot_position'), 'images': None, 'robot_grip': None, 'robot_status': None}
 
     if stream_to_webxr:
         get_frame_for_webxr = ir.utils.MapPortCS(lambda frame: frame[stream_to_webxr])
@@ -44,10 +45,7 @@ def _spacemouse(translation_speed: float = 0.0005,
                 rotation_dead_zone: float = 0.7):
     from drivers.spacemouse import SpacemouseCS
     smouse = SpacemouseCS(translation_speed, rotation_speed, translation_dead_zone, rotation_dead_zone)
-    inputs = {'robot_position': (smouse, 'robot_position'),
-              'robot_grip': None,
-              'images': None,
-              'robot_status': None}
+    inputs = {'robot_position': (smouse, 'robot_position'), 'robot_grip': None, 'images': None, 'robot_status': None}
     outputs = smouse.output_mappings
     outputs['metadata'] = None
 
@@ -60,10 +58,12 @@ def _teleop_ui(tracking: ir.ControlSystem, extra_ui_camera_names: Optional[List[
         gui = DearpyguiUi(extra_ui_camera_names)
         components = [tracking, gui]
 
-        inputs = {'robot_position': [(tracking, 'robot_position'), (gui, 'robot_position')],
-                  'images': (gui, 'images'),
-                  'robot_grip': (gui, 'robot_grip'),
-                  'robot_status': (gui, 'robot_status')}
+        inputs = {
+            'robot_position': [(tracking, 'robot_position'), (gui, 'robot_position')],
+            'images': (gui, 'images'),
+            'robot_grip': (gui, 'robot_grip'),
+            'robot_status': (gui, 'robot_status')
+        }
         outputs = tracking.output_mappings
         return ir.compose(*components, inputs=inputs, outputs=outputs)
 
@@ -76,18 +76,15 @@ def _dearpygui_ui(camera_names: List[str]):
 
 
 def _stub_ui():
-    @ir.ironic_system(input_props=["robot_position"],
-                      output_ports=[
-                          "robot_target_position",
-                          "gripper_target_grasp",
-                          "start_recording",
-                          "stop_recording",
-                          "reset"
-                      ],
-                      output_props=["metadata"])
+
+    @ir.ironic_system(
+        input_props=["robot_position"],
+        output_ports=["robot_target_position", "gripper_target_grasp", "start_recording", "stop_recording", "reset"],
+        output_props=["metadata"])
     class StubUi(ir.ControlSystem):
         """A stub UI that replays a pre-recorded trajectory.
         Used for testing and debugging purposes."""
+
         def __init__(self):
             super().__init__()
             self.events = deque()
@@ -103,8 +100,7 @@ def _stub_ui():
             quaternion = self.start_pos.quaternion
             await asyncio.gather(
                 self.outs.robot_target_position.write(ir.Message(geom.Transform3D(translation, quaternion))),
-                self.outs.gripper_target_grasp.write(ir.Message(0.0))
-            )
+                self.outs.gripper_target_grasp.write(ir.Message(0.0)))
 
         async def _stop_recording(self, _):
             await self.outs.stop_recording.write(ir.Message(None))
@@ -133,10 +129,7 @@ def _stub_ui():
             return ir.Message({'ui': 'stub'})
 
     res = StubUi()
-    inputs = {'robot_position': (res, 'robot_position'),
-              'images': None,
-              'robot_grip': None,
-              'robot_status': None}
+    inputs = {'robot_position': (res, 'robot_position'), 'images': None, 'robot_grip': None, 'robot_status': None}
 
     return ir.compose(res, inputs=inputs, outputs=res.output_mappings)
 
@@ -147,12 +140,11 @@ teleop_ui = builds(_teleop_ui, populate_full_signature=True)
 spacemouse = builds(_spacemouse, populate_full_signature=True)
 dearpygui_ui = builds(_dearpygui_ui, populate_full_signature=True)
 
-
 ui_store = store(group="ui")
 ui_store(teleop(webxr(port=5005), operator_position='back', stream_to_webxr='image'), name='teleop')
 ui_store(teleop_ui(teleop(webxr(port=5005), operator_position='back'),
-                extra_ui_camera_names=['handcam_back', 'handcam_front', 'front_view', 'back_view']),
-      name='teleop_gui')
+                   extra_ui_camera_names=['handcam_back', 'handcam_front', 'front_view', 'back_view']),
+         name='teleop_gui')
 
 ui_store(builds(_stub_ui, populate_full_signature=True), name='stub')
 ui_store(dearpygui_ui(camera_names=['handcam_left', 'handcam_right']), name='gui')

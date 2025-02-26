@@ -13,8 +13,7 @@ from drivers import from_config
 from ironic.compose import extend
 from tools.dataset_dumper import DatasetDumper
 
-logging.basicConfig(level=logging.INFO,
-                    handlers=[logging.StreamHandler()])
+logging.basicConfig(level=logging.INFO, handlers=[logging.StreamHandler()])
 
 
 def setup_interface(cfg: DictConfig):
@@ -38,9 +37,7 @@ def setup_interface(cfg: DictConfig):
             get_frame_for_webxr = ir.utils.MapPortCS(lambda frame: frame[cfg.stream_to_webxr])
             components.append(get_frame_for_webxr)
             inputs['images'] = (get_frame_for_webxr, 'input')
-            webxr.bind(
-                frame=get_frame_for_webxr.outs.output,
-            )
+            webxr.bind(frame=get_frame_for_webxr.outs.output, )
         else:
             inputs['images'] = None
 
@@ -90,10 +87,7 @@ def setup_interface(cfg: DictConfig):
 
             new_quat = geom.Quaternion.from_euler(new_euler)
 
-            return geom.Transform3D(
-                translation=transform.translation,
-                quaternion=new_quat
-            )
+            return geom.Transform3D(translation=transform.translation, quaternion=new_quat)
 
         inputs['robot_position'] = [(teleop, 'robot_position'), (gui, 'robot_position')]
         inputs['robot_grip'] = (gui, 'robot_grip')
@@ -131,7 +125,7 @@ def setup_interface(cfg: DictConfig):
         raise ValueError(f"Invalid control type: {cfg.type}")
 
 
-async def main_async(cfg: DictConfig):
+async def main_async(cfg: DictConfig):  # noqa: C901  Function is too complex
     metadata = {}
     control, md = setup_interface(cfg.control_ui)
     metadata.update(md)
@@ -139,10 +133,13 @@ async def main_async(cfg: DictConfig):
     hardware, md = from_config.robot_setup(cfg.hardware)
     metadata.update(md)
 
-    hardware = extend(hardware, {
-        'robot_position_translation': ir.utils.map_property(lambda t: t.translation.copy(), hardware.outs.robot_position),
-        'robot_position_quaternion': ir.utils.map_property(lambda t: t.quaternion.copy(), hardware.outs.robot_position),
-    })
+    hardware = extend(
+        hardware, {
+            'robot_position_translation':
+            ir.utils.map_property(lambda t: t.translation.copy(), hardware.outs.robot_position),
+            'robot_position_quaternion':
+            ir.utils.map_property(lambda t: t.quaternion.copy(), hardware.outs.robot_position),
+        })
 
     control.bind(
         robot_grip=hardware.outs.grip,
@@ -180,21 +177,18 @@ async def main_async(cfg: DictConfig):
         sound_system = SoundSystem(master_volume=force_feedback_volume)
 
         if force_feedback_volume > 0:
+
             def force_to_level(force: np.ndarray) -> float:
                 # TODO: figure out if L2 norm is better
                 return np.abs(force).max()
 
-            sound_system.bind(
-                level=ir.utils.map_property(force_to_level, hardware.outs.ext_force_ee),
-            )
+            sound_system.bind(level=ir.utils.map_property(force_to_level, hardware.outs.ext_force_ee), )
 
         if cfg.sound.get('record_notifications'):
-            sound_system.bind(
-                wav_path=ir.utils.map_port(lambda _: 'assets/sounds/recording-has-started.wav', control.outs.start_recording)
-            )
-            sound_system.bind(
-                wav_path=ir.utils.map_port(lambda _: 'assets/sounds/recording-has-stopped.wav', control.outs.stop_recording)
-            )
+            sound_system.bind(wav_path=ir.utils.map_port(lambda _: 'assets/sounds/recording-has-started.wav',
+                                                         control.outs.start_recording))
+            sound_system.bind(wav_path=ir.utils.map_port(lambda _: 'assets/sounds/recording-has-stopped.wav',
+                                                         control.outs.stop_recording))
 
         components.append(sound_system)
 
@@ -210,12 +204,15 @@ async def main_async(cfg: DictConfig):
         if 'mujoco_model_path' in metadata:
             model_path = Path(metadata['mujoco_model_path'])
             data_output_dir = Path(cfg.data_output_dir)
-            assert data_output_dir in model_path.parents, f"Mujoco model {model_path} must be in the data output directory {data_output_dir} for transferability"
+            assert data_output_dir in model_path.parents, (
+                f"Mujoco model {model_path} must be in the data output directory {data_output_dir} for transferability"
+            )
             metadata['relative_mujoco_model_path'] = str(model_path.relative_to(data_output_dir))
 
         data_dumper = DatasetDumper(cfg.data_output_dir, additional_metadata=metadata, video_fps=cfg.get('video_fps'))
 
         if hasattr(hardware.outs, 'episode_metadata'):
+
             async def send_episode_metadata(_: ir.Message):
                 episode_metadata = (await hardware.outs.episode_metadata()).data
 
@@ -234,15 +231,16 @@ async def main_async(cfg: DictConfig):
                 start_episode=control.outs.start_recording,
                 end_episode=stop_recording,
                 robot_data=properties_to_dump,
-            )
-        )
+            ))
     # Run the system
     system = ir.compose(*components)
     await ir.utils.run_gracefully(system)
 
+
 @hydra.main(version_base=None, config_path="configs", config_name="data_collection")
 def main(cfg: DictConfig):
     asyncio.run(main_async(cfg))
+
 
 if __name__ == "__main__":
     main()

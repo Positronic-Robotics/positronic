@@ -1,5 +1,4 @@
 import logging
-import time
 from typing import List
 import threading
 
@@ -10,21 +9,17 @@ import ironic as ir
 from geom import Quaternion, Transform3D
 
 
-@ir.ironic_system(input_props=["robot_position"],
-                  output_ports=[
-                      "robot_target_position",
-                      "gripper_target_grasp",
-                      "start_recording",
-                      "stop_recording",
-                      "reset"
-                  ])
+@ir.ironic_system(
+    input_props=["robot_position"],
+    output_ports=["robot_target_position", "gripper_target_grasp", "start_recording", "stop_recording", "reset"])
 class SpacemouseCS(ir.ControlSystem):
+
     def __init__(
-            self,
-            translation_speed: float = 0.0005,
-            rotation_speed: float = 0.001,
-            translation_dead_zone: float = 0.8,
-            rotation_dead_zone: float = 0.7,
+        self,
+        translation_speed: float = 0.0005,
+        rotation_speed: float = 0.001,
+        translation_dead_zone: float = 0.8,
+        rotation_dead_zone: float = 0.7,
     ):
         super().__init__()
         self.translation_speed = translation_speed
@@ -71,22 +66,18 @@ class SpacemouseCS(ir.ControlSystem):
 
             self.teleop_delta = Transform3D(
                 self.teleop_delta.translation + xyz * self.translation_speed,
-                self.teleop_delta.quaternion * Quaternion.from_euler(rpy * self.rotation_speed)
-            )
+                self.teleop_delta.quaternion * Quaternion.from_euler(rpy * self.rotation_speed))
 
-            new_position = Transform3D(
-                self.teleop_delta.translation + self.initial_position.translation,
-                self.initial_position.quaternion * self.teleop_delta.quaternion
-            )
+            new_position = Transform3D(self.teleop_delta.translation + self.initial_position.translation,
+                                       self.initial_position.quaternion * self.teleop_delta.quaternion)
 
             await self.outs.gripper_target_grasp.write(ir.Message(1.0 - state.buttons[1], ir.system_clock()))
             await self.outs.robot_target_position.write(ir.Message(new_position, ir.system_clock()))
 
         return ir.State.ALIVE
 
-    def _get_pressed_buttons(self, state: pyspacemouse.SpaceNavigator ) -> List[bool]:
+    def _get_pressed_buttons(self, state: pyspacemouse.SpaceNavigator) -> List[bool]:
         return [not self.buttons[0] and bool(state.buttons[0]), not self.buttons[1] and bool(state.buttons[1])]
-
 
     async def _switch_tracking(self):
         # TODO: This resembles the teleop system, maybe we should make a generic system for this
@@ -96,7 +87,6 @@ class SpacemouseCS(ir.ControlSystem):
         else:
             logging.info('Started tracking')
             self.is_tracking = True
-
 
     def _read_spacemouse(self):
         while not self.stop_event.is_set():

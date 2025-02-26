@@ -5,6 +5,7 @@ from hydra_zen import builds, store
 
 import ironic as ir
 
+
 def _add_image_mapping(mapping: Optional[Dict[str, str]], camera: ir.ControlSystem):
     if mapping is None:
         return camera
@@ -18,18 +19,17 @@ def _add_image_mapping(mapping: Optional[Dict[str, str]], camera: ir.ControlSyst
 
 
 def _linux_camera(device_path: str,
-                 width: int = 640,
-                 height: int = 480,
-                 fps: int = 30,
-                 pixel_format: str = "MJPG",
-                 image_mapping: Optional[Dict[str, str]] = None):
+                  width: int = 640,
+                  height: int = 480,
+                  fps: int = 30,
+                  pixel_format: str = "MJPG",
+                  image_mapping: Optional[Dict[str, str]] = None):
     from drivers.camera.linuxpy_video import LinuxPyCamera
     camera = LinuxPyCamera(device_path, width, height, fps, pixel_format)
     return _add_image_mapping(image_mapping, camera)
 
 
-def _luxonis_camera(fps: int = 60,
-                    image_mapping: Optional[Dict[str, str]] = None):
+def _luxonis_camera(fps: int = 60, image_mapping: Optional[Dict[str, str]] = None):
     from drivers.camera.luxonis import LuxonisCamera
     return _add_image_mapping(image_mapping, LuxonisCamera(fps))
 
@@ -41,9 +41,8 @@ def _realsense_camera(resolution: Tuple[int, int] = (640, 480),
                       enable_infrared: bool = True,
                       image_mapping: Optional[Dict[str, str]] = None):
     from drivers.camera.realsense import RealsenseCamera
-    return _add_image_mapping(
-        image_mapping,
-        RealsenseCamera(resolution, fps, enable_color, enable_depth, enable_infrared))
+    return _add_image_mapping(image_mapping,
+                              RealsenseCamera(resolution, fps, enable_color, enable_depth, enable_infrared))
 
 
 def _stereolabs_camera(fps: int,
@@ -65,9 +64,7 @@ def _stereolabs_camera(fps: int,
     return _add_image_mapping(image_mapping, camera)
 
 
-def _opencv_camera(camera_id: int = 0,
-                   resolution: Tuple[int, int] = (640, 480),
-                   fps: int = 30):
+def _opencv_camera(camera_id: int = 0, resolution: Tuple[int, int] = (640, 480), fps: int = 30):
     from drivers.camera.opencv import OpenCVCameraCS, OpenCVCamera
     return OpenCVCameraCS(OpenCVCamera(camera_id, resolution, fps))
 
@@ -91,9 +88,6 @@ cam_store(stereolabs_camera(fps=30, view='SIDE_BY_SIDE', resolution='VGA', depth
 cam_store(opencv_camera(camera_id=0, resolution=(640, 480), fps=30), name='opencv')
 
 arducam_video2 = linux_camera(device_path="/dev/video2")  # Yes, it is on video2
-cam_store(
-    merge_camera(cameras={'first': arducam_video0, 'second': arducam_video2}, fps=30),
-    name='merged'
-)
+cam_store(merge_camera(cameras={'first': arducam_video0, 'second': arducam_video2}, fps=30), name='merged')
 
 cam_store.add_to_hydra_store()

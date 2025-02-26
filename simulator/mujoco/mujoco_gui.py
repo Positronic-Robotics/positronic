@@ -26,6 +26,7 @@ def _set_image_uint8_to_float32(target, source):
     target[:] = source
     target[:] /= 255
 
+
 def gen_fn(model_path):
     # TODO: robosuite's OpenGL is conflicting with dearpygui's OpenGL, so we need to run this in a separate process
     from simulator.mujoco.scene.scene_builder import construct_scene
@@ -43,7 +44,7 @@ def generate_scene(output_dir: str):
 
     print(f"Building scene to {new_model_path}")
 
-    process = multiprocessing.Process(target=gen_fn, args=(new_model_path,))
+    process = multiprocessing.Process(target=gen_fn, args=(new_model_path, ))
     process.start()
     process.join()
 
@@ -57,19 +58,16 @@ class DesiredAction:
     grip: float
 
 
-
-@ir.ironic_system(
-    input_ports=["images", "robot_status"],
-    input_props=["robot_position", "actuator_values", "robot_grip", "metrics"],
-    output_ports=[
-        "gripper_target_grasp",
-        "robot_target_position",
-        "reset",
-        "start_recording",
-        "stop_recording",
-    ],
-    output_props=["metadata"]
-)
+@ir.ironic_system(input_ports=["images", "robot_status"],
+                  input_props=["robot_position", "actuator_values", "robot_grip", "metrics"],
+                  output_ports=[
+                      "gripper_target_grasp",
+                      "robot_target_position",
+                      "reset",
+                      "start_recording",
+                      "stop_recording",
+                  ],
+                  output_props=["metadata"])
 class DearpyguiUi(ir.ControlSystem):
     speed_meters_per_second = 0.1
     movement_vectors = {
@@ -135,16 +133,15 @@ class DearpyguiUi(ir.ControlSystem):
 
         _, _, robot_position = await asyncio.gather(
             self.outs.gripper_target_grasp.write(ir.Message(self.desired_action.grip)),
-            self.outs.robot_target_position.write(ir.Message(target_pos.copy())),
-            self.ins.robot_position()
-        )
+            self.outs.robot_target_position.write(ir.Message(target_pos.copy())), self.ins.robot_position())
 
-        dpg.set_value("robot_position", f"Robot Translation: {robot_position.data.translation}\n"
-                                    f"Robot Quaternion: {robot_position.data.quaternion}")
-        dpg.set_value("target",
-                        f"Target Position: {self.desired_action.position}\n"
-                        f"Target Quat: {self.desired_action.orientation}\n"
-                        f"Target Grip: {self.desired_action.grip}")
+        dpg.set_value(
+            "robot_position", f"Robot Translation: {robot_position.data.translation}\n"
+            f"Robot Quaternion: {robot_position.data.quaternion}")
+        dpg.set_value(
+            "target", f"Target Position: {self.desired_action.position}\n"
+            f"Target Quat: {self.desired_action.orientation}\n"
+            f"Target Grip: {self.desired_action.grip}")
 
         if self.is_bound('actuator_values'):
             actuator_values = await self.ins.actuator_values()
@@ -156,7 +153,6 @@ class DearpyguiUi(ir.ControlSystem):
 
             formatted_metrics = ", ".join(f"{k}: {v:.4f}" for k, v in metrics.data.items())
             dpg.set_value("metrics", f"Metrics: {formatted_metrics}")
-
 
     def key_down(self, sender, app_data):
         key = app_data[0]
@@ -178,11 +174,9 @@ class DearpyguiUi(ir.ControlSystem):
 
     async def _reset_desired_action(self):
         pos_msg, grip_msg = await asyncio.gather(self.ins.robot_position(), self.ins.robot_grip())
-        self.desired_action = DesiredAction(
-            position=pos_msg.data.translation.copy(),
-            orientation=pos_msg.data.quaternion.copy(),
-            grip=grip_msg.data
-        )
+        self.desired_action = DesiredAction(position=pos_msg.data.translation.copy(),
+                                            orientation=pos_msg.data.quaternion.copy(),
+                                            grip=grip_msg.data)
 
     @ir.out_property
     async def metadata(self):
@@ -202,7 +196,7 @@ class DearpyguiUi(ir.ControlSystem):
 
     def move(self):
         time_since_last_move = ir.system_clock() - self.last_move_ts if self.last_move_ts is not None else 0
-        time_since_last_move /= 10 ** 9
+        time_since_last_move /= 10**9
 
         for key, vector in self.movement_vectors.items():
             if self.move_key_states.get(key, False):
@@ -246,7 +240,6 @@ class DearpyguiUi(ir.ControlSystem):
         dpg.set_item_width("image_grid", width)
         dpg.set_item_height("image_grid", height)
 
-
     @ir.on_message('images')
     async def on_images(self, message: ir.Message):
         images = message.data
@@ -256,11 +249,13 @@ class DearpyguiUi(ir.ControlSystem):
             self.height = images[self.camera_names[0]].shape[0]
 
             self.raw_textures = {
-                cam_name: np.ones((self.height, self.width, 4), dtype=np.float32) for cam_name in self.camera_names
+                cam_name: np.ones((self.height, self.width, 4), dtype=np.float32)
+                for cam_name in self.camera_names
             }
 
             self.second_buffer = {
-                cam_name: np.zeros((self.height, self.width, 3), dtype=np.float32) for cam_name in self.camera_names
+                cam_name: np.zeros((self.height, self.width, 3), dtype=np.float32)
+                for cam_name in self.camera_names
             }
 
         with self.swap_buffer_lock:
@@ -283,7 +278,11 @@ class DearpyguiUi(ir.ControlSystem):
         dpg.create_context()
         with dpg.texture_registry():
             for cam_name in self.camera_names:
-                dpg.add_raw_texture(width=self.width, height=self.height, tag=cam_name, format=dpg.mvFormat_Float_rgba, default_value=self.raw_textures[cam_name])
+                dpg.add_raw_texture(width=self.width,
+                                    height=self.height,
+                                    tag=cam_name,
+                                    format=dpg.mvFormat_Float_rgba,
+                                    default_value=self.raw_textures[cam_name])
 
         with dpg.window(tag="image_grid", label="Cameras", no_scrollbar=True, no_scroll_with_mouse=True):
             self._configure_image_grid()
@@ -312,9 +311,7 @@ class DearpyguiUi(ir.ControlSystem):
 
         dpg.bind_item_handler_registry("image_grid", "adjust_images")
 
-        dpg.create_viewport(
-            title='Custom Title', width=800, height=600
-        )
+        dpg.create_viewport(title='Custom Title', width=800, height=600)
         dpg.set_viewport_resize_callback(callback=self._viewport_resize)
         dpg.setup_dearpygui()
         dpg.show_viewport(maximized=True)
@@ -353,9 +350,10 @@ async def _main(cfg: DictConfig):
     if cfg.mujoco.model_path is None:
         cfg.mujoco.model_path = generate_scene(cfg.data_output_dir)
 
-
     loaders = hydra.utils.instantiate(cfg.mujoco.loaders)
-    simulator = MujocoSimulator.load_from_xml_path(cfg.mujoco.model_path, simulation_rate=1 / cfg.mujoco.simulation_hz, loaders=loaders)
+    simulator = MujocoSimulator.load_from_xml_path(cfg.mujoco.model_path,
+                                                   simulation_rate=1 / cfg.mujoco.simulation_hz,
+                                                   loaders=loaders)
     renderer = MujocoRenderer(
         simulator,
         render_resolution=(width, height),
@@ -442,7 +440,9 @@ async def _main(cfg: DictConfig):
 
         model_path = Path(cfg.mujoco.model_path)
         data_output_dir = Path(cfg.data_output_dir)
-        assert data_output_dir in model_path.parents, f"Mujoco model {model_path} must be in the data output directory {data_output_dir} for transferability"
+        assert data_output_dir in model_path.parents, (
+            f"Mujoco model {model_path}"
+            f" must be in the data output directory {data_output_dir} for transferability")
 
         relative_data_output_dir = model_path.relative_to(data_output_dir)
 
@@ -461,8 +461,7 @@ async def _main(cfg: DictConfig):
                 start_episode=window.outs.start_recording,
                 end_episode=window.outs.stop_recording,
                 robot_data=properties_to_dump,
-            )
-        )
+            ))
 
     composed = ir.compose(*systems)
 
@@ -472,6 +471,7 @@ async def _main(cfg: DictConfig):
 @hydra.main(version_base=None, config_path="../../configs", config_name="mujoco_gui")
 def main(cfg: DictConfig):
     asyncio.run(_main(cfg))
+
 
 if __name__ == "__main__":
     main()

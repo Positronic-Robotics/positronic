@@ -1,13 +1,13 @@
-import numpy as np
-
 import ironic as ir
 import geom
+
 
 @ir.ironic_system(
     input_ports=['tracker_position', 'target_grip'],
     output_props=['ee_position', 'grip', 'metadata'],
 )
 class UmiCS(ir.ControlSystem):
+
     def __init__(self):
         super().__init__()
         self.tracker_position = geom.Transform3D()

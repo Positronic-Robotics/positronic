@@ -7,22 +7,16 @@ import ironic as ir
 from geom import Quaternion, Transform3D
 from tools.buttons import ButtonHandler
 
-logging.basicConfig(level=logging.INFO,
-                    handlers=[logging.StreamHandler(),
-                              logging.FileHandler("teleop.log", mode="w")])
+logging.basicConfig(level=logging.INFO, handlers=[logging.StreamHandler(), logging.FileHandler("teleop.log", mode="w")])
 
 
-@ir.ironic_system(input_ports=["teleop_transform", "teleop_buttons"],
-                  input_props=["robot_position"],
-                  output_ports=[
-                      "robot_target_position",
-                      "gripper_target_grasp",
-                      "start_recording",
-                      "stop_recording",
-                      "reset"
-                  ],
-                  output_props=["metadata"])
+@ir.ironic_system(
+    input_ports=["teleop_transform", "teleop_buttons"],
+    input_props=["robot_position"],
+    output_ports=["robot_target_position", "gripper_target_grasp", "start_recording", "stop_recording", "reset"],
+    output_props=["metadata"])
 class TeleopSystem(ir.ControlSystem):
+
     def __init__(self, operator_position: str = 'back'):
         super().__init__()
         self.teleop_t = None
@@ -40,7 +34,7 @@ class TeleopSystem(ir.ControlSystem):
         # Don't ask my why these transformations, I just got them
         # Rotate quat 90 degrees around Y axis
         res_quat = quat
-        rotation_y_90 = Quaternion(np.cos(-np.pi/4), 0, np.sin(-np.pi/4), 0)
+        rotation_y_90 = Quaternion(np.cos(-np.pi / 4), 0, np.sin(-np.pi / 4), 0)
         res_quat = rotation_y_90 * quat
 
         if self.operator_position == 'back':
@@ -54,16 +48,9 @@ class TeleopSystem(ir.ControlSystem):
 
         return Transform3D(pos, res_quat)
 
-
     def _parse_buttons(self, value: List[float]):
         if len(value) > 6:
-            but = {
-                'A': value[4],
-                'B': value[5],
-                'trigger': value[0],
-                'thumb': value[1],
-                'stick': value[3]
-            }
+            but = {'A': value[4], 'B': value[5], 'trigger': value[0], 'thumb': value[1], 'stick': value[3]}
 
             self.button_handler.update_buttons(but)
 
@@ -77,10 +64,8 @@ class TeleopSystem(ir.ControlSystem):
         self.fps.tick()
 
         if self.is_tracking and self.offset is not None:
-            target = Transform3D(
-                self.teleop_t.translation + self.offset.translation,
-                self.teleop_t.quaternion * self.offset.quaternion
-            )
+            target = Transform3D(self.teleop_t.translation + self.offset.translation,
+                                 self.teleop_t.quaternion * self.offset.quaternion)
             await self.outs.robot_target_position.write(ir.Message(target, message.timestamp))
 
     @ir.on_message("teleop_buttons")
@@ -113,10 +98,8 @@ class TeleopSystem(ir.ControlSystem):
         # Note that translation and rotation offsets are independent
         if self.teleop_t is not None:
             robot_t = (await self.ins.robot_position()).data
-            self.offset = Transform3D(
-                -self.teleop_t.translation + robot_t.translation,
-                self.teleop_t.quaternion.inv * robot_t.quaternion
-            )
+            self.offset = Transform3D(-self.teleop_t.translation + robot_t.translation,
+                                      self.teleop_t.quaternion.inv * robot_t.quaternion)
         if self.is_tracking:
             logging.info('Stopped tracking')
             self.is_tracking = False
@@ -133,4 +116,3 @@ class TeleopSystem(ir.ControlSystem):
             logging.info('Started recording')
             self.is_recording = True
             await self.outs.start_recording.write(ir.Message(None, timestamp))
-

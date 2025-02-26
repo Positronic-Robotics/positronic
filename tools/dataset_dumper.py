@@ -11,6 +11,7 @@ import ironic as ir
 
 
 class SerialDumper:
+
     def __init__(self, directory: str, video_fps: int | None = None):
         """
         Dumps serial data to a directory as torch tensors.
@@ -61,11 +62,13 @@ class SerialDumper:
         for k, v in data.items():
             if isinstance(v, np.ndarray):
                 if len(self.data[k]) > 0:
-                    assert self.data[k][-1].ctypes.data != v.ctypes.data, f"Appending the same np.ndarray to {k}. Make a copy of the array."
+                    assert self.data[k][-1].ctypes.data != v.ctypes.data, (
+                        f"Appending the same np.ndarray to {k}. Make a copy of the array.")
                 self.data[k].append(v)
             elif isinstance(v, torch.Tensor):
                 if len(self.data[k]) > 0:
-                    assert self.data[k][-1].data_ptr() != v.data_ptr(), f"Appending the same torch.tensor to {k}. Make a copy of the tensor."
+                    assert self.data[k][-1].data_ptr() != v.data_ptr(), (
+                        f"Appending the same torch.tensor to {k}. Make a copy of the tensor.")
                 self.data[k].append(v)
             elif isinstance(v, list):
                 self.data[k].append(v.copy())
@@ -87,7 +90,9 @@ class SerialDumper:
                 tensor_key = k
             else:
                 # TODO: It's currently assumed, but in the future we might want to support different length tensors.
-                assert len(self.data[k]) == n_frames, f"All tensors must have the same length. Got {len(self.data[k])} and {n_frames} for {k} and {tensor_key}."
+                assert len(self.data[k]) == n_frames, (
+                    "All tensors must have the same length. "
+                    f"Got {len(self.data[k])} and {n_frames} for {k} and {tensor_key}.")
 
         for k, v in self.video_buffers.items():
             self.video_writers[k].close()
@@ -108,10 +113,10 @@ class SerialDumper:
         print(f"Episode {self.episode_count} saved to {fname} with {n_frames} frames")
 
 
-@ir.ironic_system(
-    input_ports=['image', 'start_episode', 'end_episode', 'target_grip', 'target_robot_position'],
-    input_props=['robot_data', 'env_metadata', 'ui_metadata'])
+@ir.ironic_system(input_ports=['image', 'start_episode', 'end_episode', 'target_grip', 'target_robot_position'],
+                  input_props=['robot_data', 'env_metadata', 'ui_metadata'])
 class DatasetDumper(ir.ControlSystem):
+
     def __init__(self, directory: str, additional_metadata: dict = None, video_fps: int | None = None):
         super().__init__()
         self.dumper = SerialDumper(directory, video_fps)

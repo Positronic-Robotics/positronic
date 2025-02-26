@@ -5,13 +5,16 @@ from omegaconf import DictConfig
 
 import ironic as ir
 
+
 def add_image_mapping(mapping: Dict[str, str], camera: ir.ControlSystem):
+
     def map_images(frame):
         return {new_k: frame[k] for k, new_k in mapping.items()}
 
     map_system = ir.utils.MapPortCS(map_images)
     map_system.bind(input=camera.outs.frame)
     return ir.compose(camera, map_system, outputs={'frame': map_system.outs.output})
+
 
 def sl_camera(cfg: DictConfig):
     from drivers.camera.sl import SLCamera
@@ -40,13 +43,14 @@ def sl_camera(cfg: DictConfig):
 def realsense_camera(cfg: DictConfig):
     from drivers.camera.realsense import RealsenseCamera, RealsenseCameraCS
 
-    camera = RealsenseCameraCS(RealsenseCamera(
-        resolution=cfg.resolution,
-        fps=cfg.fps,
-        enable_color=cfg.enable_color,
-        enable_depth=cfg.enable_depth,
-        enable_infrared=cfg.enable_infrared,
-    ))
+    camera = RealsenseCameraCS(
+        RealsenseCamera(
+            resolution=cfg.resolution,
+            fps=cfg.fps,
+            enable_color=cfg.enable_color,
+            enable_depth=cfg.enable_depth,
+            enable_infrared=cfg.enable_infrared,
+        ))
 
     if 'image_mapping' in cfg:
         return add_image_mapping(cfg.image_mapping, camera)
@@ -95,7 +99,7 @@ def get_camera(cfg: DictConfig):
             raise ValueError(f"Invalid camera type: {cfg.type}")
 
 
-def robot_setup(cfg: DictConfig):
+def robot_setup(cfg: DictConfig):  # noqa: C901  Function is too complex
     """Setup and returns control system with robot and camera(s).
     inputs:
         target_position: Target position for the robot
@@ -157,16 +161,12 @@ def robot_setup(cfg: DictConfig):
 
         loaders = hydra.utils.instantiate(cfg.mujoco_loaders)
 
-        simulator = MujocoSimulator.load_from_xml_path(
-            model_path=cfg.mujoco.model_path,
-            loaders=loaders,
-            simulation_rate=1 / cfg.mujoco.simulation_hz
-        )
-        renderer = MujocoRenderer(
-            simulator,
-            camera_names=cfg.mujoco.camera_names,
-            render_resolution=(cfg.mujoco.camera_width, cfg.mujoco.camera_height)
-        )
+        simulator = MujocoSimulator.load_from_xml_path(model_path=cfg.mujoco.model_path,
+                                                       loaders=loaders,
+                                                       simulation_rate=1 / cfg.mujoco.simulation_hz)
+        renderer = MujocoRenderer(simulator,
+                                  camera_names=cfg.mujoco.camera_names,
+                                  render_resolution=(cfg.mujoco.camera_width, cfg.mujoco.camera_height))
         inverse_kinematics = InverseKinematics(simulator)
 
         simulator.reset('home_0')

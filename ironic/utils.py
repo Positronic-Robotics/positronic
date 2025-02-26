@@ -1,10 +1,11 @@
 import asyncio
-from collections import deque, namedtuple
+from collections import namedtuple
 import time
 import signal
 from typing import Any, Callable, Optional
 
-from ironic.system import ControlSystem, Message, OutputPort, State, ironic_system, on_message, out_property, out_property, system_clock, NoValue
+from ironic.system import (ControlSystem, Message, OutputPort, State, ironic_system, on_message, out_property,
+                           system_clock, NoValue)
 
 Change = namedtuple('Change', ['prev', 'current'])
 
@@ -42,6 +43,7 @@ class PropertyChangeDetector:
         change = await detector.get_change()  # Change(prev=20.5, current=21.0)
         ```
     """
+
     def __init__(self, input_prop: Callable[[], Message]):
         self.input_prop = input_prop
         self.last_input = None
@@ -92,6 +94,7 @@ class PropertyChangeDetectorSystem(ControlSystem):
         await run_gracefully(detector_system, temperature_sensor)
         ```
     """
+
     def __init__(self):
         super().__init__()
         self._detector = PropertyChangeDetector()
@@ -112,6 +115,7 @@ class FPSCounter:
         prefix (str): Prefix string to use in FPS report messages
         report_every_sec (float): How often to report FPS, in seconds (default: 10.0)
     """
+
     def __init__(self, prefix: str, report_every_sec: float = 10.0):
         self.prefix = prefix
         self.report_every_sec = report_every_sec
@@ -155,6 +159,7 @@ async def run_gracefully(system: ControlSystem, extra_cleanup_fn: Optional[Calla
         ```
     """
     shutdown_event = asyncio.Event()
+
     def signal_handler(signal, frame):
         print("Program interrupted by user, exiting...")
         shutdown_event.set()
@@ -197,12 +202,14 @@ def map_property(function: Callable[[Any], Any], property: Callable[[], Message]
         )
         ```
     """
+
     @out_property
     async def mapped_property():
         original_message = await property()
         return Message(data=function(original_message.data), timestamp=original_message.timestamp)
 
     return mapped_property
+
 
 @ironic_system(input_props=['input'], output_props=['output'])
 class MapPropertyCS(ControlSystem):
@@ -212,6 +219,7 @@ class MapPropertyCS(ControlSystem):
     interface for mapping properties. But when you want to input the mapped property in composition, you
     will have to use this class.
     """
+
     def __init__(self, transform: Callable[[Any], Any]):
         super().__init__()
         self._transform = transform
@@ -233,6 +241,7 @@ class MapPortCS(ControlSystem):
     Args:
         transform: A function that transforms the data from one format to another
     """
+
     def __init__(self, transform: Callable[[Any], Any]):
         super().__init__()
         self._transform = transform
@@ -314,6 +323,7 @@ def properties_dict(**properties):
         If the timestamps of the input messages span more than 100ms, a warning will be
         printed since this may indicate synchronization issues between properties.
     """
+
     async def result():
         # Gather all property values concurrently
 
@@ -328,10 +338,7 @@ def properties_dict(**properties):
         messages = await asyncio.gather(*(try_prop_fn(name, prop_fn) for name, prop_fn in properties.items()))
 
         # Build the dictionaries
-        prop_values = {
-            name: messages[i].data
-            for i, name in enumerate(properties.keys())
-        }
+        prop_values = {name: messages[i].data for i, name in enumerate(properties.keys())}
         timestamps = [msg.timestamp for msg in messages]
 
         # Warn if time range is too large
@@ -358,16 +365,21 @@ def fps_counter(prefix: str, report_every_sec: float = 10.0):
         >>> def render(self):
         >>>     pass
     """
+
     def decorator(fn):
         fps_counter = FPSCounter(prefix, report_every_sec)
+
         def wrapper(*args, **kwargs):
             fps_counter.tick()
             return fn(*args, **kwargs)
+
         return wrapper
+
     return decorator
 
 
 class Throttler:
+
     def __init__(self, every_sec: float):
         """
         A callable that returns the number of times the function should be called since the last check.
@@ -393,7 +405,6 @@ class Throttler:
             self.last_time_checked = current_time
 
         return num_calls
-
 
     def time_fn(self) -> float:
         return time.time()
@@ -450,6 +461,7 @@ class Pulse(ControlSystem):
     Args:
         frequency_hz: Target frequency of pulses
     """
+
     def __init__(self, frequency_hz: float):
         super().__init__()
         self._period = 1.0 / frequency_hz

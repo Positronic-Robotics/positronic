@@ -9,7 +9,6 @@ from enum import Enum
 from types import SimpleNamespace
 from typing import Any, Awaitable, Callable, Dict, List, Optional, Union
 
-
 # Object that represents no value
 # It is used to make a distinction between a value that is not set and a value that is set to None
 NoValue = object()
@@ -43,6 +42,7 @@ def system_clock() -> int:
 
 
 class OutputPort:
+
     def __init__(self, name: str, parent_system: Optional["ControlSystem"] = None):
         self._name = name
         self._handlers = []
@@ -69,18 +69,22 @@ class OutputPort:
         # If you want reproducibility, run handlers sequentially.
         await asyncio.gather(*[handler(message) for handler in self._handlers])
 
+
 class StubOutputPort(OutputPort):
     """
     A stub output port that does nothing. Useful for ir.compose() when you don't
     want to have an output port in the composition, but don't have a real output for it.
     """
+
     def __init__(self):
         super().__init__("stub", None)
 
     async def write(self, message: Message):
         pass
 
+
 OutputPort.Stub = StubOutputPort
+
 
 def _validate_pythonic_name(name: str, context: str) -> None:
     """
@@ -89,10 +93,8 @@ def _validate_pythonic_name(name: str, context: str) -> None:
     """
     pattern = re.compile(r'^[a-zA-Z][a-zA-Z0-9_]*$')
     if not pattern.match(name):
-        raise ValueError(
-            f"Invalid {context} name '{name}'. Names must start with a letter "
-            "and contain only letters, numbers, and underscores"
-        )
+        raise ValueError(f"Invalid {context} name '{name}'. Names must start with a letter "
+                         "and contain only letters, numbers, and underscores")
 
 
 def out_property(method: Callable[..., Awaitable[Message]]) -> Callable[..., Awaitable[Message]]:
@@ -136,28 +138,31 @@ def on_message(name: str):
     Raises:
         ValueError: If the decorated method is not async
     """
+
     def decorator(method):
         if not inspect.iscoroutinefunction(method):
-            raise ValueError(
-                f"Message handler '{method.__name__}' for port '{name}' must be an async function"
-            )
+            raise ValueError(f"Message handler '{method.__name__}' for port '{name}' must be an async function")
 
         # Store the port name this method handles
         method.__is_message_handler__ = True
         method.__input_port_name__ = name
         return method
+
     return decorator
 
 
-def ironic_system(*, input_ports: List[str] = None, output_ports: List[str] = None,
-                   input_props: List[str] = None, output_props: List[str] = None):
+def ironic_system(*,  # noqa: C901  Function is too complex
+                  input_ports: List[str] = None,
+                  output_ports: List[str] = None,
+                  input_props: List[str] = None,
+                  output_props: List[str] = None):
     """
     Class decorator for defining ironic system interfaces.
     """
-    if input_ports is None: input_ports = []
-    if output_ports is None: output_ports = []
-    if input_props is None: input_props = []
-    if output_props is None: output_props = []
+    input_ports = input_ports or []
+    output_ports = output_ports or []
+    input_props = input_props or []
+    output_props = output_props or []
 
     # Validate naming conventions
     for port in input_ports:
@@ -191,48 +196,39 @@ def ironic_system(*, input_ports: List[str] = None, output_ports: List[str] = No
         if input_output_conflicts:
             warnings.warn(
                 f"Names used as both input and output: {input_output_conflicts} in class {cls.__name__}. "
-                "This might make the system harder to understand.",
-                UserWarning
-            )
+                "This might make the system harder to understand.", UserWarning)
 
         # Verify output properties
         defined_props = {
             method.__output_property_name__
-            for method in cls.__dict__.values()
-            if hasattr(method, '__is_output_property__')
+            for method in cls.__dict__.values() if hasattr(method, '__is_output_property__')
         }
 
         # Check for properties not declared in output_props
         undeclared_props = defined_props - set(output_props)
         if undeclared_props:
-            raise ValueError(
-                f"Output properties {undeclared_props} in class {cls.__name__} "
-                "are not listed in output_props of @ironic_system"
-            )
+            raise ValueError(f"Output properties {undeclared_props} in class {cls.__name__} "
+                             "are not listed in output_props of @ironic_system")
 
         # Check for missing properties
         missing_props = set(output_props) - defined_props
         if missing_props:
-            raise ValueError(
-                f"Output properties {missing_props} are not defined in class {cls.__name__}"
-            )
+            raise ValueError(f"Output properties {missing_props} are not defined in class {cls.__name__}")
 
         # Verify message handlers (but don't store them in class)
         handlers = {
             method.__input_port_name__: method
-            for method in cls.__dict__.values()
-            if hasattr(method, '__is_message_handler__')
+            for method in cls.__dict__.values() if hasattr(method, '__is_message_handler__')
         }
 
         # Check for duplicate handlers
         duplicate_handlers = [x for x in handlers.keys() if list(handlers.keys()).count(x) > 1]
         if duplicate_handlers:
-            raise ValueError(
-                f"Multiple handlers defined for input ports {set(duplicate_handlers)} "
-                f"in class {cls.__name__}"
-            )
+            raise ValueError(f"Multiple handlers defined for input ports {set(duplicate_handlers)} "
+                             f"in class {cls.__name__}")
 
         return cls
+
     return decorator
 
 
@@ -253,16 +249,15 @@ class ControlSystem:
     Binding must be done before calling setup(), as control system can start writing to output ports
     in setup().
     """
+
     def __init__(self):
         self._message_handlers = {
             method.__input_port_name__: getattr(self, name)  # Get bound methods instead of functions
-            for name, method in self.__class__.__dict__.items()
-            if hasattr(method, '__is_message_handler__')
+            for name, method in self.__class__.__dict__.items() if hasattr(method, '__is_message_handler__')
         }
         self._output_props = {
             method.__output_property_name__: getattr(self, method.__output_property_name__)
-            for method in self.__class__.__dict__.values()
-            if hasattr(method, '__is_output_property__')
+            for method in self.__class__.__dict__.values() if hasattr(method, '__is_output_property__')
         }
         outs = {port: OutputPort(port, self) for port in self._output_ports}
         outs.update(self._output_props)
@@ -312,7 +307,8 @@ class ControlSystem:
                     setattr(self.ins, name, incoming_output.subscribe(self._message_handlers[name]))
             elif name in self._input_props:
                 if not is_property(incoming_output):
-                    raise ValueError(f"{name} must be bound to a property (async function), got {type(incoming_output)}")
+                    raise ValueError(
+                        f"{name} must be bound to a property (async function), got {type(incoming_output)}")
                 setattr(self.ins, name, incoming_output)  # Property is just a callback, so assignment is enough
             else:
                 raise ValueError(f"Unknown input: {name}. Inputs of {self.__class__.__name__}: {self._input_ports}")
