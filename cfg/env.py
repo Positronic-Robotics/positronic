@@ -2,8 +2,8 @@
 from typing import Optional
 
 import numpy as np
-from hydra_zen import builds, store
 
+from cfg import store, builds
 import cfg.hardware.camera
 import ironic as ir
 
@@ -56,11 +56,11 @@ def _umi_env(camera: Optional[ir.ControlSystem] = None):
     return res
 
 
-umi_env = builds(_umi_env,
-                 populate_full_signature=True,
-                 hydra_defaults=["_self_", {
-                     "/hardware/cameras@camera": "merged"
-                 }])
+umi_env = builds(
+    _umi_env,
+    camera=cfg.hardware.camera.merged,
+    populate_full_signature=True
+)
 
 store = store(group="env")
-store(umi_env(), name="umi")
+umi_env = store(umi_env(), name="umi")

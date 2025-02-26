@@ -1,7 +1,8 @@
 from typing import Optional
 
-from hydra_zen import builds, store
 import numpy as np
+
+from cfg import store, builds
 
 import ironic as ir
 
@@ -38,12 +39,15 @@ def _sound_system(force_feedback_volume: Optional[float] = None,
 
 sound_system = builds(_sound_system, populate_full_signature=True)
 
-store = store(group="hardware/sound")
-store(sound_system(force_feedback_volume=0.1,
-                   start_recording_wav_path="assets/sounds/recording-has-started.wav",
-                   stop_recording_wav_path="assets/sounds/recording-has-stopped.wav"),
-      name="full")
-store(sound_system(force_feedback_volume=0,
-                   start_recording_wav_path="assets/sounds/recording-has-started.wav",
-                   stop_recording_wav_path="assets/sounds/recording-has-stopped.wav"),
-      name="start_stop")
+sound_store = store(group="hardware/sound")
+
+full = sound_system(force_feedback_volume=0.1,
+                    start_recording_wav_path="assets/sounds/recording-has-started.wav",
+                    stop_recording_wav_path="assets/sounds/recording-has-stopped.wav")
+sound_store(full, name="full")
+
+start_stop = sound_system(force_feedback_volume=0,
+                         start_recording_wav_path="assets/sounds/recording-has-started.wav",
+                         stop_recording_wav_path="assets/sounds/recording-has-stopped.wav")
+sound_store(start_stop, name="start_stop")
+

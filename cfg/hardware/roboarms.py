@@ -1,6 +1,6 @@
 from typing import List, Optional
-from hydra_zen import builds, store
 
+from cfg import store, builds
 
 def _franka(ip: str,
             relative_dynamics_factor: float = 0.2,

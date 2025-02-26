@@ -5,7 +5,7 @@ from collections import deque
 import time
 from typing import List, Optional
 
-from hydra_zen import builds, store
+from cfg import store, builds
 import numpy as np
 
 import geom
@@ -135,16 +135,20 @@ def _stub_ui():
 
 
 webxr = builds(_webxr, populate_full_signature=True)
-teleop = builds(_teleop, populate_full_signature=True)
+teleop_system = builds(_teleop, populate_full_signature=True)
 teleop_ui = builds(_teleop_ui, populate_full_signature=True)
 spacemouse = builds(_spacemouse, populate_full_signature=True)
 dearpygui_ui = builds(_dearpygui_ui, populate_full_signature=True)
 
-store = store(group="ui")
-store(teleop(webxr(port=5005), operator_position='back', stream_to_webxr='image'), name='teleop')
-store(teleop_ui(teleop(webxr(port=5005), operator_position='back'),
-                extra_ui_camera_names=['handcam_back', 'handcam_front', 'front_view', 'back_view']),
-      name='teleop_gui')
+ui_store = store(group="ui")
+teleop = teleop_system(webxr(port=5005), operator_position='back', stream_to_webxr='image')
+teleop = ui_store(teleop, name='teleop')
 
-store(builds(_stub_ui, populate_full_signature=True), name='stub')
-store(dearpygui_ui(camera_names=['handcam_left', 'handcam_right']), name='gui')
+teleop_ui = teleop_ui(teleop, extra_ui_camera_names=['handcam_back', 'handcam_front', 'front_view', 'back_view'])
+teleop_ui = ui_store(teleop_ui, name='teleop_gui')
+
+stub_ui = builds(_stub_ui, populate_full_signature=True)
+stub_ui = ui_store(stub_ui, name='stub')
+
+gui_ui = dearpygui_ui(camera_names=['handcam_left', 'handcam_right'])
+gui_ui = ui_store(gui_ui, name='gui')
