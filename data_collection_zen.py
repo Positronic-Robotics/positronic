@@ -1,19 +1,17 @@
 import asyncio
 import logging
-from pathlib import Path
 from typing import Dict, Optional
 
 from hydra_zen import builds, zen, ZenStore, make_config
 
-import cfg.env
-import cfg.ui
-import cfg.hardware.sound
+import cfg.env  # noqa: F401
+import cfg.ui  # noqa: F401
+import cfg.hardware.sound  # noqa: F401
 
 import ironic as ir
 from tools.dataset_dumper import DatasetDumper
 
-logging.basicConfig(level=logging.INFO,
-                    handlers=[logging.StreamHandler()])
+logging.basicConfig(level=logging.INFO, handlers=[logging.StreamHandler()])
 
 
 def _dataset_dumper(out_dir: str, video_fps: int, metadata: Dict[str, str] = {}):
@@ -21,8 +19,12 @@ def _dataset_dumper(out_dir: str, video_fps: int, metadata: Dict[str, str] = {})
     return DatasetDumper(out_dir, additional_metadata=metadata, video_fps=video_fps)
 
 
-def main(ui: ir.ControlSystem, env: ir.ControlSystem, data_dumper: ir.ControlSystem,
-         rerun: bool = False, sound: Optional[ir.ControlSystem] = None):
+def main(ui: ir.ControlSystem,
+         env: ir.ControlSystem,
+         data_dumper: ir.ControlSystem,
+         rerun: bool = False,
+         sound: Optional[ir.ControlSystem] = None):
+
     async def _main():
         ui.bind(
             robot_grip=env.outs.grip,
@@ -61,9 +63,10 @@ def main(ui: ir.ControlSystem, env: ir.ControlSystem, data_dumper: ir.ControlSys
             components.append(visualizer)
 
         if sound is not None:
-            components.append(sound.bind(force=env.outs.ext_force_ee,
-                                         start_recording=ui.outs.start_recording,
-                                         stop_recording=ui.outs.stop_recording))
+            components.append(
+                sound.bind(force=env.outs.ext_force_ee,
+                           start_recording=ui.outs.start_recording,
+                           stop_recording=ui.outs.stop_recording))
 
         system = ir.compose(*components)
         await ir.utils.run_gracefully(system)
@@ -72,21 +75,14 @@ def main(ui: ir.ControlSystem, env: ir.ControlSystem, data_dumper: ir.ControlSys
 
 
 store = ZenStore()
-store(
-    make_config(
-        hydra_defaults=["_self_", {"ui": "teleop"}, {"env": "umi"},
-                        {"hardware/sound@sound": "full"}],
-        env=None,
-        ui=None,
-        sound=None,
-        data_dumper=builds(_dataset_dumper,
-                           populate_full_signature=True,
-                           video_fps=30,
-                           ),
-        rerun=False,
-    ),
-    name="data_collection"
-)
+store(make_config(
+    hydra_defaults=["_self_", {"ui": "teleop"}, {"env": "umi"}, {"hardware/sound@sound": "full"}],
+    env=None,
+    ui=None,
+    sound=None,
+    data_dumper=builds(_dataset_dumper, populate_full_signature=True, video_fps=30),
+    rerun=False,
+), name="data_collection")
 
 if __name__ == "__main__":
     store.add_to_hydra_store()
