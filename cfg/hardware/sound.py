@@ -41,12 +41,16 @@ sound_system = builds(_sound_system)
 
 sound_store = store(group="hardware/sound")
 
-full = sound_system(force_feedback_volume=0.1,
-                    start_recording_wav_path="assets/sounds/recording-has-started.wav",
-                    stop_recording_wav_path="assets/sounds/recording-has-stopped.wav")
-sound_store(full, name="full")
+full = sound_system(
+    force_feedback_volume=0.1,
+    start_recording_wav_path="assets/sounds/recording-has-started.wav",
+    stop_recording_wav_path="assets/sounds/recording-has-stopped.wav"
+)
+full = sound_store(full, name="full")
 
-start_stop = sound_system(force_feedback_volume=0,
-                         start_recording_wav_path="assets/sounds/recording-has-started.wav",
-                         stop_recording_wav_path="assets/sounds/recording-has-stopped.wav")
-sound_store(start_stop, name="start_stop")
+start_stop = sound_system(
+    force_feedback_volume=0,
+    start_recording_wav_path="assets/sounds/recording-has-started.wav",
+    stop_recording_wav_path="assets/sounds/recording-has-stopped.wav"
+)
+start_stop = sound_store(start_stop, name="start_stop")

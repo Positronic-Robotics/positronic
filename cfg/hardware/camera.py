@@ -86,7 +86,13 @@ arducam = cam_store(arducam, name='arducam')
 luxonis = luxonis_camera(fps=60)
 luxonis = cam_store(luxonis, name='luxonis')
 
-realsense = realsense_camera(resolution=(640, 480), fps=30, enable_color=True, enable_depth=False, enable_infrared=False)
+realsense = realsense_camera(
+    resolution=(640, 480),
+    fps=30,
+    enable_color=True,
+    enable_depth=False,
+    enable_infrared=False
+)
 realsense = cam_store(realsense, name='realsense')
 
 sl_vga = stereolabs_camera(fps=30, view='SIDE_BY_SIDE', resolution='VGA', depth_mode='NONE', depth_mask=False)

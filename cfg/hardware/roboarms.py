@@ -2,6 +2,7 @@ from typing import List, Optional
 
 from cfg import store, builds
 
+
 def _franka(ip: str,
             relative_dynamics_factor: float = 0.2,
             gripper_speed: float = 0.02,
