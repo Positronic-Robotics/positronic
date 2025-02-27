@@ -5,6 +5,8 @@ from omegaconf import DictConfig
 
 import ironic as ir
 
+from simulator.mujoco.sim import create_from_config
+
 
 def add_image_mapping(mapping: Dict[str, str], camera: ir.ControlSystem):
 

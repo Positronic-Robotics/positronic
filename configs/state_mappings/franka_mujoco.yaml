@@ -1,0 +1,8 @@
+# mapping of hardware properties to be dumped
+robot_joints: joint_positions
+ext_force_ee: ext_force_ee
+ext_force_base: ext_force_base
+robot_position_translation: robot_position_translation
+robot_position_quaternion: robot_position_quaternion
+grip: grip
+actuator_values: actuator_values
