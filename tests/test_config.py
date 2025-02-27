@@ -13,6 +13,12 @@ class Camera:
         self.name = name
 
 
+class MultiEnv:
+    def __init__(self, env1: Env, env2: Env):
+        self.env1 = env1
+        self.env2 = env2
+
+
 def add(a, b):
     return a + b
 
@@ -78,3 +84,24 @@ def test_instantiate_class_required_args_provided_with_path_to_class():
     assert isinstance(env_obj, Env)
     assert isinstance(env_obj.camera, Camera)
     assert env_obj.camera.name == "Static Camera"
+
+
+def test_instantiate_set_leaf_value_level2():
+    luxonis_camera_cfg = Config(Camera, name="Luxonis")
+    env1_cfg = Config(Env, camera=luxonis_camera_cfg)
+
+    env2_cfg = Config(Env)
+
+    multi_env_cfg = Config(MultiEnv, env1=env1_cfg, env2=env2_cfg)
+
+    new_camera_cfg = Config(Camera, name="New Camera")
+
+    env_obj = multi_env_cfg.instantiate(overrides={"env1.camera": new_camera_cfg})
+
+    assert isinstance(env_obj, MultiEnv)
+    assert isinstance(env_obj.env1, Env)
+    assert isinstance(env_obj.env1.camera, Camera)
+    assert env_obj.env1.camera.name == "New Camera"
+    assert isinstance(env_obj.env2, Env)
+    assert isinstance(env_obj.env2.camera, Camera)
+    assert env_obj.env2.camera.name == "Luxonis"
