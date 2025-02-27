@@ -84,6 +84,7 @@ def builds(*args, **kwargs):
             else:
                 hydra_defaults.append({f"/{v.__store_name__}": v.__varname__})
             kwargs[k] = None
+
     if len(hydra_defaults) > 1:
         kwargs['hydra_defaults'] = hydra_defaults
 

@@ -1,6 +1,7 @@
 # Configuration for the robotics environment
 from typing import Optional
 
+from hydra_zen import to_yaml
 import numpy as np
 
 from cfg import store, builds
@@ -56,7 +57,7 @@ def _umi_env(camera: Optional[ir.ControlSystem] = None):
     return res
 
 
-umi_env = builds(_umi_env, camera=cfg.hardware.camera.merged)
+umi = builds(_umi_env, camera=cfg.hardware.camera.merged)
 
 store = store(group="env")
-umi_env = store(umi_env(), name="umi")
+umi = store(umi, name="umi")

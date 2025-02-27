@@ -3,7 +3,7 @@ import logging
 from typing import Dict, Optional
 
 from cfg import builds, make_config
-from hydra_zen import zen, ZenStore
+from hydra_zen import to_yaml, zen, ZenStore
 
 import cfg.env
 import cfg.ui
@@ -76,11 +76,14 @@ def main(ui: ir.ControlSystem,
 
 
 store = ZenStore()
-store(make_config(
-    env=cfg.env.umi_env,
+
+dataset_dumper = builds(_dataset_dumper, video_fps=30)
+
+mk_cfg = store(make_config(
+    env=cfg.env.umi,
     ui=cfg.ui.teleop,
     sound=cfg.hardware.sound.full,
-    data_dumper=builds(_dataset_dumper, video_fps=30),
+    data_dumper=dataset_dumper,
     rerun=False,
 ), name="data_collection")
 
@@ -90,4 +93,5 @@ if __name__ == "__main__":
     cfg.ui.store.add_to_hydra_store()
     cfg.hardware.sound.store.add_to_hydra_store()
     store.add_to_hydra_store()
+    print(to_yaml(cfg.env.umi))
     zen(main).hydra_main(config_name="data_collection", config_path=None, version_base="1.2")
