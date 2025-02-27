@@ -60,7 +60,7 @@ def test_instantiate_class_nested_object_overriden_with_config():
 
     env_cfg = Config(Env, camera=opencv_camera_cfg)
 
-    env_obj = env_cfg.instantiate(overrides={"camera": luxonis_camera_cfg})
+    env_obj = env_cfg.override({"camera": luxonis_camera_cfg}).instantiate()
 
     assert isinstance(env_obj, Env)
     assert isinstance(env_obj.camera, Camera)
@@ -70,7 +70,7 @@ def test_instantiate_class_nested_object_overriden_with_config():
 def test_instantiate_class_required_args_provided_with_kwargs_override():
     uncomplete_camera_cfg = Config(Camera)
 
-    camera_obj = uncomplete_camera_cfg.instantiate(overrides={"name": "OpenCV"})
+    camera_obj = uncomplete_camera_cfg.override({"name": "OpenCV"}).instantiate()
 
     assert isinstance(camera_obj, Camera)
     assert camera_obj.name == "OpenCV"
@@ -79,7 +79,7 @@ def test_instantiate_class_required_args_provided_with_kwargs_override():
 def test_instantiate_class_required_args_provided_with_path_to_class():
     uncomplete_env_cfg = Config(Env)
 
-    env_obj = uncomplete_env_cfg.instantiate(overrides={"camera": "*tests.test_config.static_object"})
+    env_obj = uncomplete_env_cfg.override({"camera": "*tests.test_config.static_object"}).instantiate()
 
     assert isinstance(env_obj, Env)
     assert isinstance(env_obj.camera, Camera)
@@ -96,12 +96,13 @@ def test_instantiate_set_leaf_value_level2():
 
     new_camera_cfg = Config(Camera, name="New Camera")
 
-    env_obj = multi_env_cfg.instantiate(overrides={"env1.camera": new_camera_cfg})
+    full_cfg = multi_env_cfg.override({"env2.camera": new_camera_cfg})
+    env_obj = full_cfg.instantiate()
 
     assert isinstance(env_obj, MultiEnv)
     assert isinstance(env_obj.env1, Env)
     assert isinstance(env_obj.env1.camera, Camera)
-    assert env_obj.env1.camera.name == "New Camera"
+    assert env_obj.env1.camera.name == "Luxonis"
     assert isinstance(env_obj.env2, Env)
     assert isinstance(env_obj.env2.camera, Camera)
-    assert env_obj.env2.camera.name == "Luxonis"
+    assert env_obj.env2.camera.name == "New Camera"

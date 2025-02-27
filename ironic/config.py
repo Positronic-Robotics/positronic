@@ -14,6 +14,7 @@ def _extend_path(path, key):
     else:
         return key
 
+
 def _to_dict(obj):
     if isinstance(obj, Config):
         return obj.to_dict()
@@ -34,7 +35,7 @@ def _import_object_from_path(path):
     Raises:
         ImportError: If the module or object cannot be imported
     """
-    if not path.startswith('*'):
+    if not isinstance(path, str) or not path.startswith('*'):
         return path
 
     # Remove the leading '*'
@@ -58,51 +59,57 @@ class Config:
         self.args = args
         self.kwargs = kwargs
 
-    def instantiate(self, overrides=None, __path: str = ""):
-        if overrides is None:
-            overrides = {}
+    def override(self, overrides) -> 'Config':
+        cfg = self
+        for key, value in overrides.items():
+            cfg = cfg._override_single(key, value)
+        return cfg
 
-        # Create a copy of overrides to avoid modifying the original
-        overrides_copy = overrides.copy()
+    def _update_flat(self, key, value):
+        if isinstance(value, str) and value.startswith('*'):
+            value = _import_object_from_path(value)
 
-        # Process any string paths in overrides
-        for key, value in overrides_copy.items():
-            if isinstance(value, str) and value.startswith('*'):
-                overrides_copy[key] = _import_object_from_path(value)
+        if key[0] in '1234567890':
+            self.args[int(key)] = value
+        else:
+            self.kwargs[key] = value
 
-        args = []
-        for i, arg in enumerate(self.args):
-            next_path = _extend_path(__path, str(i))
-            if next_path in overrides_copy:
-                arg = overrides_copy.pop(next_path)
-                # Process string paths in args
-                if isinstance(arg, str) and arg.startswith('*'):
-                    arg = _import_object_from_path(arg)
-            if isinstance(arg, Config):
-                arg = arg.instantiate(overrides_copy, next_path)
-            args.append(arg)
+    def _get_value(self, key):
+        if key[0] in '1234567890':
+            return self.args[int(key)]
+        else:
+            return self.kwargs[key]
 
-        kwargs = {}
-        for key, value in self.kwargs.items():
-            next_path = _extend_path(__path, key)
-            if next_path in overrides_copy:
-                value = overrides_copy.pop(next_path)
-                # Process string paths in kwargs
-                if isinstance(value, str) and value.startswith('*'):
-                    value = _import_object_from_path(value)
-            if isinstance(value, Config):
-                value = value.instantiate(overrides_copy, next_path)
-            kwargs[key] = value
 
-        for key, value in list(overrides_copy.items()):
-            if __path == "" and "." not in key:
-                # Process string paths in top-level overrides
-                if isinstance(value, str) and value.startswith('*'):
-                    value = _import_object_from_path(value)
-                kwargs[key] = value
-                overrides_copy.pop(key)
+    def _override_single(self, key, value):
+        if isinstance(value, str) and value.startswith('*'):
+            value = _import_object_from_path(value)
 
-        return self.target(*args, **kwargs)
+        key_parts = key.split('.')
+
+        current_obj = self
+
+        for part in key_parts[:-1]:
+            current_obj = current_obj._get_value(part)
+
+        current_obj._update_flat(key_parts[-1], value)
+
+        return Config(self.target, *self.args, **self.kwargs)
+
+    def instantiate(self):
+        # Instantiate any Config objects in args
+        instantiated_args = [
+            arg.instantiate() if isinstance(arg, Config) else arg
+            for arg in self.args
+        ]
+
+        # Instantiate any Config objects in kwargs
+        instantiated_kwargs = {
+            key: value.instantiate() if isinstance(value, Config) else value
+            for key, value in self.kwargs.items()
+        }
+
+        return self.target(*instantiated_args, **instantiated_kwargs)
 
     def to_dict(self):
         res = {}
