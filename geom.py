@@ -204,7 +204,7 @@ class Quaternion(np.ndarray):
         """
         Create a quaternion from a rotation matrix.
         """
-        m = np.array(matrix, dtype=np.float64, copy=False)[:3, :3]
+        m = np.asarray(matrix, dtype=np.float64)[:3, :3]
         t = np.trace(m)
         if t > 0.0:
             s = np.sqrt(t + 1.0)
