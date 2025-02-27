@@ -3,8 +3,8 @@ from dataclasses import dataclass
 from typing import Optional, Sequence, Tuple
 
 import gymnasium as gym
-import numpy as np
 import matplotlib.pyplot as plt
+import numpy as np
 
 
 @dataclass
@@ -64,16 +64,14 @@ class RoboticArmEnv(gym.Env):
         self.action_space = gym.spaces.Box(
             low=np.array([-4.0 * np.pi, -4.0 * np.pi]),  # 4 full rotations
             high=np.array([4.0 * np.pi, 4.0 * np.pi]),
-            dtype=np.float32
-        )
+            dtype=np.float32)
 
         # Observation space: current state and target deltas
         self.steps_ahead = steps_ahead
         self.observation_space = gym.spaces.Box(
             low=np.array([-100.0 * np.pi] * 2 + [-10.0] * (4 + 2 * steps_ahead)),  # angles + other states
             high=np.array([100.0 * np.pi] * 2 + [10.0] * (4 + 2 * steps_ahead)),
-            dtype=np.float32
-        )
+            dtype=np.float32)
         self.trajectory: deque = deque()
         self.state: Optional[RobotState] = None
         self.target_pos: Optional[np.ndarray] = None
@@ -92,11 +90,7 @@ class RoboticArmEnv(gym.Env):
         super().reset(seed=seed)
 
         # Initialize state
-        self.state = RobotState(
-            thetas=np.zeros(2),
-            omegas=np.zeros(2),
-            ee_pos=self._forward_kinematics(np.zeros(2))
-        )
+        self.state = RobotState(thetas=np.zeros(2), omegas=np.zeros(2), ee_pos=self._forward_kinematics(np.zeros(2)))
 
         # Initialize target as first trajectory point
         self.target_pos = self.trajectory[0]
@@ -127,9 +121,9 @@ class RoboticArmEnv(gym.Env):
     def _get_obs(self) -> np.ndarray:
         # Get current state including joint angles and velocities
         current_state = np.array([
-            *self.state.ee_pos,          # end effector position (2)
-            *self.state.thetas,          # joint angles (2)
-            *self.state.omegas           # joint velocities (2)
+            *self.state.ee_pos,  # end effector position (2)
+            *self.state.thetas,  # joint angles (2)
+            *self.state.omegas  # joint velocities (2)
         ])
 
         # Get position errors for upcoming trajectory points
@@ -168,11 +162,7 @@ class RoboticArmEnv(gym.Env):
         # Update end effector position
         new_ee_pos = self._forward_kinematics(new_thetas)
 
-        return RobotState(
-            thetas=new_thetas,
-            omegas=new_omegas,
-            ee_pos=new_ee_pos
-        )
+        return RobotState(thetas=new_thetas, omegas=new_omegas, ee_pos=new_ee_pos)
 
     def render(self):
         """Render the environment using matplotlib"""
@@ -191,30 +181,23 @@ class RoboticArmEnv(gym.Env):
         if len(self.trajectory) > 0:
             trajectory_points = list(self.trajectory)
             trajectory_points = np.array(trajectory_points)
-            self.ax.plot(trajectory_points[:, 0], trajectory_points[:, 1],
-                        'gray', alpha=0.5, linewidth=2)
+            self.ax.plot(trajectory_points[:, 0], trajectory_points[:, 1], 'gray', alpha=0.5, linewidth=2)
 
         # Draw robot arm
         # Base joint
         base_pos = np.array([0., 0.])
 
         # First link
-        joint_pos = self.L[0] * np.array([
-            np.cos(self.state.thetas[0]),
-            np.sin(self.state.thetas[0])
-        ])
+        joint_pos = self.L[0] * np.array([np.cos(self.state.thetas[0]), np.sin(self.state.thetas[0])])
 
         # Second link
-        ee_pos = joint_pos + self.L[1] * np.array([
-            np.cos(self.state.thetas[0] + self.state.thetas[1]),
-            np.sin(self.state.thetas[0] + self.state.thetas[1])
-        ])
+        ee_pos = joint_pos + self.L[1] * np.array(
+            [np.cos(self.state.thetas[0] + self.state.thetas[1]),
+             np.sin(self.state.thetas[0] + self.state.thetas[1])])
 
         # Draw links
-        self.ax.plot([base_pos[0], joint_pos[0]], [base_pos[1], joint_pos[1]],
-                     'b-', linewidth=3, label='Link 1')
-        self.ax.plot([joint_pos[0], ee_pos[0]], [joint_pos[1], ee_pos[1]],
-                     'b-', linewidth=3, label='Link 2')
+        self.ax.plot([base_pos[0], joint_pos[0]], [base_pos[1], joint_pos[1]], 'b-', linewidth=3, label='Link 1')
+        self.ax.plot([joint_pos[0], ee_pos[0]], [joint_pos[1], ee_pos[1]], 'b-', linewidth=3, label='Link 2')
 
         # Draw joints
         self.ax.plot(base_pos[0], base_pos[1], 'ko', markersize=8)
@@ -232,7 +215,7 @@ class RoboticArmEnv(gym.Env):
         self.fig.canvas.draw()
         # Convert canvas to image
         img = np.frombuffer(self.fig.canvas.tostring_rgb(), dtype=np.uint8)
-        img = img.reshape(self.fig.canvas.get_width_height()[::-1] + (3,))
+        img = img.reshape(self.fig.canvas.get_width_height()[::-1] + (3, ))
 
         return img
 
@@ -243,14 +226,14 @@ class RoboticArmEnv(gym.Env):
             del self.fig
             del self.ax
 
+
 def generate_smooth_trajectories(
-    start_positions: np.ndarray,  # Shape: (N, 2)
-    end_positions: np.ndarray,    # Shape: (N, 2)
-    duration_sec: float,
-    dt: float = 0.01,
-    noise_std: float = 0.01,
-    curviness: float = 1.0
-) -> list[list[tuple[float, float]]]:
+        start_positions: np.ndarray,  # Shape: (N, 2)
+        end_positions: np.ndarray,  # Shape: (N, 2)
+        duration_sec: float,
+        dt: float = 0.01,
+        noise_std: float = 0.01,
+        curviness: float = 1.0) -> list[list[tuple[float, float]]]:
     """Generate multiple smooth, human-like curved trajectories between points.
 
     Args:
@@ -294,11 +277,8 @@ def generate_smooth_trajectories(
     end_expanded = end_positions[np.newaxis, :, :]  # Shape: (1, N, 2)
 
     # Generate positions using vectorized Bézier formula
-    positions = (
-        (1 - tau_expanded)**2 * start_expanded +
-        2 * (1 - tau_expanded) * tau_expanded * control_expanded +
-        tau_expanded**2 * end_expanded
-    )  # Shape: (T, N, 2)
+    positions = ((1 - tau_expanded)**2 * start_expanded + 2 * (1 - tau_expanded) * tau_expanded * control_expanded +
+                 tau_expanded**2 * end_expanded)  # Shape: (T, N, 2)
 
     # Add human-like variations
     variation_weight = 4 * tau * (1 - tau)  # Shape: (T,)
@@ -308,10 +288,7 @@ def generate_smooth_trajectories(
     # Convert to list of trajectories with absolute positions
     trajectories = []
     for i in range(num_trajectories):
-        trajectory = [
-            (x, y)
-            for (x, y) in positions[:, i]
-        ]
+        trajectory = [(x, y) for (x, y) in positions[:, i]]
         trajectories.append(trajectory)
 
     return trajectories
@@ -319,10 +296,8 @@ def generate_smooth_trajectories(
 
 class RandomTrajectoryEnv(gym.Wrapper):
     """Wrapper that generates random trajectories on reset"""
-    def __init__(self,
-                 env: RoboticArmEnv,
-                 min_duration: float = 1.0,
-                 max_duration: float = 3.0):
+
+    def __init__(self, env: RoboticArmEnv, min_duration: float = 1.0, max_duration: float = 3.0):
         super().__init__(env)
         self.min_duration = min_duration
         self.max_duration = max_duration
@@ -331,23 +306,18 @@ class RandomTrajectoryEnv(gym.Wrapper):
     def reset(self, seed: Optional[int] = None, options: Optional[dict] = None) -> Tuple[np.ndarray, dict]:
         # Generate random start and end positions
         start_pos = self.env._forward_kinematics(np.zeros(2))  # Start from initial position
-        end_pos = np.array([
-            np.random.uniform(-1.5, 1.5),
-            np.random.uniform(-1.5, 1.5)
-        ])
+        end_pos = np.array([np.random.uniform(-1.5, 1.5), np.random.uniform(-1.5, 1.5)])
 
         # Random duration
         duration = np.random.uniform(self.min_duration, self.max_duration)
 
         # Generate trajectory
-        trajectories = generate_smooth_trajectories(
-            start_positions=start_pos.reshape(1, 2),
-            end_positions=end_pos.reshape(1, 2),
-            duration_sec=duration,
-            dt=self.dt,
-            noise_std=0.01,
-            curviness=0.5
-        )
+        trajectories = generate_smooth_trajectories(start_positions=start_pos.reshape(1, 2),
+                                                    end_positions=end_pos.reshape(1, 2),
+                                                    duration_sec=duration,
+                                                    dt=self.dt,
+                                                    noise_std=0.01,
+                                                    curviness=0.5)
 
         # Clear existing trajectory and add new one
         self.env.trajectory.clear()

@@ -1,18 +1,15 @@
-from copy import deepcopy
-
 import numpy as np
 from stable_baselines3 import PPO
 from stable_baselines3.common.callbacks import BaseCallback, CheckpointCallback
-from stable_baselines3.common.evaluation import evaluate_policy
 from stable_baselines3.common.logger import Video
-from stable_baselines3.common.vec_env import DummyVecEnv, VecNormalize
+from stable_baselines3.common.vec_env import DummyVecEnv
 
 from experiments.rl_ik.env import (RandomTrajectoryEnv, RoboticArmEnv,
                                    generate_smooth_trajectories)
-from experiments.rl_ik.viz import render_frames
 
 
 class EvalVideoCallback(BaseCallback):
+
     def __init__(self, eval_env, train_env, check_freq: int = 100, n_eval_episodes: int = 5, verbose=1):
         super().__init__(verbose)
         self.check_freq = check_freq
@@ -21,11 +18,12 @@ class EvalVideoCallback(BaseCallback):
         self.n_eval_episodes = n_eval_episodes
 
         # Generate single fixed trajectory for video
-        self.eval_trajectory = generate_smooth_trajectories(
-            start_positions=np.array([[0.0, 0.0]]), end_positions=np.array([[2.0, 1.0]]),
-            duration_sec=3.0, dt=self.eval_env.dt,
-            noise_std=0.0, curviness=0.5
-        )[0]
+        self.eval_trajectory = generate_smooth_trajectories(start_positions=np.array([[0.0, 0.0]]),
+                                                            end_positions=np.array([[2.0, 1.0]]),
+                                                            duration_sec=3.0,
+                                                            dt=self.eval_env.dt,
+                                                            noise_std=0.0,
+                                                            curviness=0.5)[0]
 
     def _on_step(self) -> bool:
         if self.n_calls % self.check_freq == 0:
@@ -60,7 +58,7 @@ class EvalVideoCallback(BaseCallback):
 
             # Log results
             self.logger.record("eval/mean_reward_per_step", mean_reward)
-            self.logger.record("eval/video", Video(frames, fps=1/self.eval_env.dt), exclude=("stdout", "json", "csv"))
+            self.logger.record("eval/video", Video(frames, fps=1 / self.eval_env.dt), exclude=("stdout", "json", "csv"))
             self.logger.dump(self.n_calls)
 
         return True
@@ -90,6 +88,7 @@ class EvalVideoCallback(BaseCallback):
 
 
 def train(continue_training: bool = False):
+
     def make_env():
         return RandomTrajectoryEnv(RoboticArmEnv(steps_ahead=5))
 
@@ -104,9 +103,18 @@ def train(continue_training: bool = False):
     if continue_training:
         model = PPO.load("model_checkpoints/final_model", env=train_env)
     else:
-        model = PPO("MlpPolicy", train_env, verbose=1, tensorboard_log="./tensorboard_logs/",
-                    learning_rate=1e-4, n_steps=2048 * 4, batch_size=64 * 4, n_epochs=4,
-                    gamma=0.98, gae_lambda=0.9, clip_range=0.1, normalize_advantage=True,
+        model = PPO("MlpPolicy",
+                    train_env,
+                    verbose=1,
+                    tensorboard_log="./tensorboard_logs/",
+                    learning_rate=1e-4,
+                    n_steps=2048 * 4,
+                    batch_size=64 * 4,
+                    n_epochs=4,
+                    gamma=0.98,
+                    gae_lambda=0.9,
+                    clip_range=0.1,
+                    normalize_advantage=True,
                     policy_kwargs=dict(net_arch=dict(pi=[64, 64], vf=[64, 64])),
                     ent_coef=0.01)
 
@@ -119,6 +127,7 @@ def train(continue_training: bool = False):
     model.learn(total_timesteps=5_000_000, callback=callbacks, progress_bar=True)
     model.save("model_checkpoints/final_model")
     return model
+
 
 if __name__ == "__main__":
     train(continue_training=True)

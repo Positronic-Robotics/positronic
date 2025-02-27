@@ -1,17 +1,18 @@
-import numpy as np
-import matplotlib
-matplotlib.use('agg')  # Use agg backend for offscreen rendering
-import matplotlib.pyplot as plt
 from typing import Callable
 
+import matplotlib
+import numpy as np
 
-def render_frames(
-    env,
-    policy: Callable[[np.ndarray], np.ndarray],
-    width: int = 640,
-    height: int = 480,
-    show_trajectory: bool = True
-) -> np.ndarray:
+matplotlib.use('agg')  # Use agg backend for offscreen rendering
+
+import matplotlib.pyplot as plt  # noqa: E402
+
+
+def render_frames(env,
+                  policy: Callable[[np.ndarray], np.ndarray],
+                  width: int = 640,
+                  height: int = 480,
+                  show_trajectory: bool = True) -> np.ndarray:
     """Render frames of the robotic arm following a trajectory.
 
     Args:
@@ -28,7 +29,7 @@ def render_frames(
 
     # Create figure with white background
     dpi = 100
-    figsize = (width/dpi, height/dpi)
+    figsize = (width / dpi, height / dpi)
     fig = plt.figure(figsize=figsize, dpi=dpi, facecolor='white')
     ax = fig.add_subplot(111)
 
@@ -54,18 +55,16 @@ def render_frames(
                 trajectory_points = [target_pos]
                 trajectory_points.extend(env.unwrapped.trajectory)
                 trajectory_points = np.array(trajectory_points)
-                ax.plot(trajectory_points[:, 0], trajectory_points[:, 1],
-                       'gray', alpha=0.5, linewidth=2)
+                ax.plot(trajectory_points[:, 0], trajectory_points[:, 1], 'gray', alpha=0.5, linewidth=2)
 
         # Draw robot arm
         # Base joint
         base_pos = np.array([0., 0.])
 
         # First link
-        joint_pos = env.unwrapped.L[0] * np.array([
-            np.cos(env.unwrapped.state.thetas[0]),
-            np.sin(env.unwrapped.state.thetas[0])
-        ])
+        joint_pos = env.unwrapped.L[0] * np.array(
+            [np.cos(env.unwrapped.state.thetas[0]),
+             np.sin(env.unwrapped.state.thetas[0])])
 
         # Second link
         ee_pos = joint_pos + env.unwrapped.L[1] * np.array([
@@ -74,10 +73,8 @@ def render_frames(
         ])
 
         # Draw links
-        ax.plot([base_pos[0], joint_pos[0]], [base_pos[1], joint_pos[1]],
-                'b-', linewidth=3, label='Link 1')
-        ax.plot([joint_pos[0], ee_pos[0]], [joint_pos[1], ee_pos[1]],
-                'b-', linewidth=3, label='Link 2')
+        ax.plot([base_pos[0], joint_pos[0]], [base_pos[1], joint_pos[1]], 'b-', linewidth=3, label='Link 1')
+        ax.plot([joint_pos[0], ee_pos[0]], [joint_pos[1], ee_pos[1]], 'b-', linewidth=3, label='Link 2')
 
         # Draw joints
         ax.plot(base_pos[0], base_pos[1], 'ko', markersize=8)
@@ -94,7 +91,7 @@ def render_frames(
         # Draw the canvas and get the RGB data directly
         fig.canvas.draw()
         data = np.frombuffer(fig.canvas.tostring_rgb(), dtype=np.uint8)
-        data = data.reshape(fig.canvas.get_width_height()[::-1] + (3,))
+        data = data.reshape(fig.canvas.get_width_height()[::-1] + (3, ))
 
         frames.append(data)
 
