@@ -1,11 +1,8 @@
 from typing import Dict
 
-import hydra
 from omegaconf import DictConfig
 
 import ironic as ir
-
-from simulator.mujoco.sim import create_from_config
 
 
 def add_image_mapping(mapping: Dict[str, str], camera: ir.ControlSystem):
@@ -154,10 +151,11 @@ def robot_setup(cfg: DictConfig):  # noqa: C901  Function is too complex
             outputs['frame'] = None
         return ir.compose(*components, inputs=inputs, outputs=outputs), {}
     elif cfg.type == 'mujoco':
-        from simulator.mujoco.sim import MujocoSimulator, MujocoRenderer, InverseKinematics
         from simulator.mujoco.environment import MujocoSimulatorCS
+        from simulator.mujoco.sim import create_from_config
 
-        simulator_factory = lambda: create_from_config(cfg)
+        def simulator_factory():
+            return create_from_config(cfg)
 
         # Create MujocoSimulatorCS
         simulator_cs = MujocoSimulatorCS(

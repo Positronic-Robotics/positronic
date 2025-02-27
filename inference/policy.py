@@ -4,7 +4,6 @@ from typing import Dict, Optional
 import yaml
 
 
-
 def get_config(checkpoint_path: str):
     with open(os.path.join(checkpoint_path, 'config.yaml'), 'r') as f:
         return yaml.safe_load(f)
@@ -22,7 +21,7 @@ def _get_policy_config(checkpoint_path: str, policy_name: str, policy_args: Dict
 
         if policy_args.get('n_action_steps'):
             policy.config.n_action_steps = policy_args['n_action_steps']
-            
+
     elif policy_name == 'diffusion':
         from lerobot.common.policies.diffusion.modeling_diffusion import DiffusionPolicy
         policy = DiffusionPolicy.from_pretrained(checkpoint_path)

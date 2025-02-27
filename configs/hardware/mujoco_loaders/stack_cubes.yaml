@@ -23,7 +23,6 @@
 - _target_: simulator.mujoco.scene.transforms.SetBodyPosition
   body_name: box_0_body
   random_position: [[0.31, -0.28, 0.31], [0.69, 0.28, 0.31]]
-  #seed: 10
 
 - _target_: simulator.mujoco.scene.transforms.AddBox
   name: box_1
@@ -35,4 +34,3 @@
 - _target_: simulator.mujoco.scene.transforms.SetBodyPosition
   body_name: box_1_body
   random_position: [[0.31, -0.28, 0.31], [0.69, 0.28, 0.31]]
- # seed: 9

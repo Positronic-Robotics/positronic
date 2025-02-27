@@ -32,19 +32,21 @@ def process_episode(episode_path, cfg, output_dir):
 
     while event_idx < n_frames:
         if data['image_timestamp'][event_idx] <= simulator.ts_ns:
+
             if cfg.use_ik:
-                t = geom.Transform3D(
+                target_robot_position = geom.Transform3D(
                     translation=data['target_robot_position_translation'][event_idx],
                     quaternion=data['target_robot_position_quaternion'][event_idx]
                 )
                 try:
-                    t = ik.recalculate_ik(t)
-                except Exception as e:
+                    actuator_values = ik.recalculate_ik(target_robot_position)
+                except Exception:
                     print(f"IK failed for {event_idx}")
                     return
-                simulator.set_actuator_values(t)
             else:
-                simulator.set_actuator_values(data['actuator_values'][event_idx])
+                actuator_values = data['actuator_values'][event_idx]
+
+            simulator.set_actuator_values(actuator_values)
             simulator.set_grip(data['target_grip'][event_idx])
             event_idx += 1
             tqdm_iter.update(1)
@@ -58,8 +60,11 @@ def process_episode(episode_path, cfg, output_dir):
 
             actual_event_idx = max(0, event_idx - 1)
 
+            target_robot_position_q = data['target_robot_position_quaternion'][actual_event_idx].clone()
+            target_robot_position_t = data['target_robot_position_translation'][actual_event_idx].clone()
+
             dataset_writer.write(
-                data = {
+                data={
                     'actuator_values': simulator.actuator_values,
                     'grip': simulator.grip,
                     'robot_position_translation': simulator.robot_position.translation.copy(),
@@ -68,17 +73,17 @@ def process_episode(episode_path, cfg, output_dir):
                     'ext_force_base': simulator.ext_force_base.copy(),
                     'robot_joints': simulator.joints.copy(),
                     'target_grip': data['target_grip'][actual_event_idx].clone(),
-                    'target_robot_position_quaternion': data['target_robot_position_quaternion'][actual_event_idx].clone(),
-                    'target_robot_position_translation': data['target_robot_position_translation'][actual_event_idx].clone(),
+                    'target_robot_position_quaternion': target_robot_position_q,
+                    'target_robot_position_translation': target_robot_position_t,
                     'image_timestamp': simulator.ts_ns,
                     'robot_timestamp': simulator.ts_ns,
                     'target_timestamp': simulator.ts_ns,
                 },
                 video_frames={
-                    f'image.{mapped_name}': images[orig_name] for mapped_name, orig_name in cfg.image_name_mapping.items()
+                    f'image.{mapped_name}': images[orig_name]
+                    for mapped_name, orig_name in cfg.image_name_mapping.items()
                 },
             )
-
 
     tqdm_iter.close()
     dataset_writer.end_episode()

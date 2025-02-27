@@ -10,11 +10,10 @@ from .state import StateEncoder
 from .policy import get_policy
 
 
-
 def rerun_log_observation(ts, obs):
     rr.set_time_seconds('time', ts)
 
-    def log_image(name, tensor, compress = True):
+    def log_image(name, tensor, compress: bool = True):
         tensor = tensor.squeeze(0)
         tensor = (tensor * 255).type(torch.uint8)
         tensor = tensor.permute(1, 2, 0).cpu().numpy()
@@ -30,14 +29,11 @@ def rerun_log_observation(ts, obs):
     for i, state in enumerate(obs['observation.state'].squeeze(0)):
         rr.log(f"observation/state/{i}", rr.Scalar(state.item()))
 
+
 def rerun_log_action(ts, action):
     rr.set_time_seconds('time', ts)
-    for i, v in enumerate(action['target_robot_position'].translation):
-        rr.log(f"action/translation_{i}", rr.Scalar(v))
-    for i, v in enumerate(action['target_robot_position'].quaternion):
-        rr.log(f"action/quaternion_{i}", rr.Scalar(v))
-    rr.log(f"action/grip", rr.Scalar(action['target_grip']))
-
+    for i, action in enumerate(action):
+        rr.log(f"action/{i}", rr.Scalar(action))
 
 
 @ir.ironic_system(

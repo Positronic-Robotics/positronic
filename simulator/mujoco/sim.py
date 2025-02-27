@@ -211,7 +211,11 @@ class MujocoSimulator:
         self.data.actuator(self.name('actuator8')).ctrl = grip
 
     @staticmethod
-    def load_from_xml_path(model_path: str, loaders: Sequence[MujocoSceneTransform] = (), **kwargs) -> 'MujocoSimulator':
+    def load_from_xml_path(
+            model_path: str,
+            loaders: Sequence[MujocoSceneTransform] = (),
+            **kwargs,
+    ) -> 'MujocoSimulator':
         model, metadata = load_model_from_spec_file(model_path, loaders)
         data = mujoco.MjData(model)
 
@@ -279,8 +283,13 @@ class MujocoRenderer:
         Initialize the renderer. This must be called before calling render().
         """
         assert self.renderer is None, "Renderer already initialized."
-        # in case we have other code which works with OpenGL, we need to initialize the renderer in a separate thread to avoid conflicts
-        self.renderer = mujoco.Renderer(self.simulator.model, height=self.render_resolution[1], width=self.render_resolution[0])
+        # in case we have other code which works with OpenGL,
+        # we need to initialize the renderer in a separate thread to avoid conflicts
+        self.renderer = mujoco.Renderer(
+            self.simulator.model,
+            height=self.render_resolution[1],
+            width=self.render_resolution[0],
+        )
 
     def render(self) -> Dict[str, np.ndarray]:
         assert self.renderer is not None, "You must call initialize() before calling render()"

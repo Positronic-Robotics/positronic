@@ -12,6 +12,10 @@ import robosuite.models
 import robosuite.models.arenas
 
 RANGE_OR_VALUE = Union[float, Tuple[float, float]]
+ASSET_DIR_MESSAGE = """
+!!! This spec should be loaded with asset dict.
+See simulator.mujoco.transforms.load_model_from_spec !!!
+"""
 
 
 def random_range(value: RANGE_OR_VALUE) -> float:
@@ -117,7 +121,6 @@ def generate_scene(
     origin_site = world_spec.worldbody.add_site(name="origin", pos=[0, 0, 0])
     origin_site.attach_body(panda_spec.worldbody, '', '_ph')  # suffix is required by .attach()
 
-
     # Configure visual settings
     g = getattr(world_spec.visual, "global")
     g.azimuth = 120
@@ -126,8 +129,8 @@ def generate_scene(
     g.offheight = 1080
 
     if portable:
-        world_spec.meshdir = "!!! This spec should be loaded with asset dict. See simulator.mujoco.transforms.load_model_from_spec !!!"
-        world_spec.texturedir = "!!! This spec should be loaded with asset dict. See simulator.mujoco.transforms.load_model_from_spec !!!"
+        world_spec.meshdir = ASSET_DIR_MESSAGE
+        world_spec.texturedir = ASSET_DIR_MESSAGE
 
         world_spec.assets = asset_dict
     else:

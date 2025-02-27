@@ -28,6 +28,7 @@ class AddCameras(MujocoSceneTransform):
 
         return spec
 
+
 class RecolorObject(MujocoSceneTransform):
     def __init__(self, object_name: str, color: list) -> None:
         super().__init__()
@@ -42,6 +43,7 @@ class RecolorObject(MujocoSceneTransform):
 
         return spec
 
+
 class AddBox(MujocoSceneTransform):
     def __init__(
             self,
@@ -52,7 +54,7 @@ class AddBox(MujocoSceneTransform):
             density: float = 2500,
             rgba: Tuple[float, float, float, float] = (0.5, 0, 0, 1),
             freejoint: bool = False,
-        ):
+    ):
         self.body_name = f"{name}_body"
         self.geom_name = f"{name}_geom"
         self.size = size
@@ -63,7 +65,7 @@ class AddBox(MujocoSceneTransform):
         self.freejoint = freejoint
 
     def apply(self, spec: mujoco.MjSpec) -> mujoco.MjSpec:
-        body_dict ={
+        body_dict = {
             'name': self.body_name,
             'pos': self.pos,
         }
@@ -72,22 +74,17 @@ class AddBox(MujocoSceneTransform):
 
         body = spec.worldbody.add_body(**body_dict)
 
-        body.add_geom(name=self.geom_name, size=self.size, density=self.density, rgba=self.rgba, type=mujoco.mjtGeom.mjGEOM_BOX)
+        body.add_geom(
+            name=self.geom_name,
+            size=self.size,
+            density=self.density,
+            rgba=self.rgba,
+            type=mujoco.mjtGeom.mjGEOM_BOX,
+        )
 
         if self.freejoint:
             body.add_freejoint()
 
-        return spec
-
-
-class SetDefaultActuatorValues(MujocoSceneTransform):
-    def __init__(self, actuator_values: Dict[str, float]):
-        self.actuator_values = actuator_values
-
-    def apply(self, spec: mujoco.MjSpec) -> mujoco.MjSpec:
-        for actuator in spec.actuator:
-            if actuator.name in self.actuator_values:
-                actuator.default = self.actuator_values[actuator.name]
         return spec
 
 
@@ -101,10 +98,11 @@ class SetBodyPosition(MujocoSceneTransform):
             random_position: Tuple[Tuple[float, float, float], Tuple[float, float, float]] | None = None,
             random_euler: Tuple[Tuple[float, float, float], Tuple[float, float, float]] | None = None,
             seed: int | None = None,
-        ):
+    ):
         self.body_name = body_name
         assert (position is None) ^ (random_position is None), "One of position or random_position must be provided"
-        assert (quaternion is None) or (random_euler is None), "At most one of quaternion or random_euler must be provided"
+        assert (quaternion is None) or (random_euler is None), \
+            "At most one of quaternion or random_euler must be provided"
 
         if seed is not None:
             np.random.seed(seed)
@@ -131,14 +129,20 @@ class SetBodyPosition(MujocoSceneTransform):
         return spec
 
 
-def load_model_from_spec_file(xml_path: str, loaders: Sequence[MujocoSceneTransform] = ()) -> Tuple[mujoco.MjModel, Dict[str, str]]:
+def load_model_from_spec_file(
+        xml_path: str,
+        loaders: Sequence[MujocoSceneTransform] = (),
+) -> Tuple[mujoco.MjModel, Dict[str, str]]:
     spec, metadata = load_spec_from_file(xml_path, loaders)
     model = spec.compile()
 
     return model, metadata
 
 
-def load_spec_from_file(xml_path: str, loaders: Sequence[MujocoSceneTransform] = ()) -> Tuple[mujoco.MjSpec, Dict[str, str]]:
+def load_spec_from_file(
+        xml_path: str,
+        loaders: Sequence[MujocoSceneTransform] = (),
+) -> Tuple[mujoco.MjSpec, Dict[str, str]]:
     with open(xml_path, 'r') as f:
         xml_string = f.read()
 

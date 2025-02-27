@@ -9,9 +9,8 @@ from inference.policy import get_policy
 from inference.inference import rerun_log_action, rerun_log_observation
 
 
-
 @hydra.main(version_base=None, config_path="configs", config_name="sync_policy_runner")
-def main(cfg: DictConfig):
+def main(cfg: DictConfig):  # noqa: C901  Function is too complex
     if cfg.rerun:
         rr.init("inference", spawn=False)
         if ':' in cfg.rerun:
@@ -23,7 +22,9 @@ def main(cfg: DictConfig):
 
     # Initialize renderer
     renderer.initialize()
-    reference_pose = None # simulator.robot_position
+    reference_pose = None
+    target_pos = None
+
     # Initialize policy and encoders
     policy = get_policy(cfg.inference.checkpoint_path, cfg.get('policy_args', {}))
     policy.to(cfg.inference.device)
@@ -70,9 +71,6 @@ def main(cfg: DictConfig):
             action = policy.select_action(obs).squeeze(0).cpu().numpy()
             action_dict = action_decoder.decode(action, inputs)
 
-            # if len(policy._action_queue) != 0:
-            #     reference_pose = action_dict['target_robot_position']
-
             if cfg.inference.rerun:
                 rerun_log_observation(simulator.ts_sec, obs)
                 rerun_log_action(simulator.ts_sec, action_dict)
@@ -85,7 +83,6 @@ def main(cfg: DictConfig):
 
             if 'target_grip' in action_dict:
                 simulator.set_grip(action_dict['target_grip'])
-
 
     if cfg.rerun:
         rr.disconnect()
