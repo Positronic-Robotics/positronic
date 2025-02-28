@@ -1,6 +1,6 @@
 import pytest
 
-from ironic.config import Config
+from ironic.config import Config, config
 
 
 class Env:
@@ -30,67 +30,67 @@ def apply(func, a, b):
 static_object = Camera(name="Static Camera")
 
 
-def test_build_class_object_basic_created():
+def test_instantiate_class_object_basic_created():
     camera_cfg = Config(Camera, name="OpenCV")
 
-    camera_obj = camera_cfg.build()
+    camera_obj = camera_cfg.instantiate()
 
     assert isinstance(camera_obj, Camera)
     assert camera_obj.name == "OpenCV"
 
 
-def test_build_class_object_with_function_created():
+def test_instantiate_class_object_with_function_created():
     add_cfg = Config(add, a=1, b=2)
 
-    add_obj = add_cfg.build()
+    add_obj = add_cfg.instantiate()
 
     assert add_obj == 3
 
 
-def test_build_class_object_nested_created():
+def test_instantiate_class_object_nested_created():
     camera_cfg = Config(Camera, name="OpenCV")
     env_cfg = Config(Env, camera=camera_cfg)
 
-    env_obj = env_cfg.build()
+    env_obj = env_cfg.instantiate()
 
     assert isinstance(env_obj, Env)
     assert isinstance(env_obj.camera, Camera)
     assert env_obj.camera.name == "OpenCV"
 
 
-def test_build_class_nested_object_overriden_with_config_created():
+def test_instantiate_class_nested_object_overriden_with_config_created():
     opencv_camera_cfg = Config(Camera, name="OpenCV")
     luxonis_camera_cfg = Config(Camera, name="Luxonis")
 
     env_cfg = Config(Env, camera=opencv_camera_cfg)
 
-    env_obj = env_cfg.override(camera=luxonis_camera_cfg).build()
+    env_obj = env_cfg.override(camera=luxonis_camera_cfg).instantiate()
 
     assert isinstance(env_obj, Env)
     assert isinstance(env_obj.camera, Camera)
     assert env_obj.camera.name == "Luxonis"
 
 
-def test_build_class_required_args_provided_with_kwargs_override_created():
+def test_instantiate_class_required_args_provided_with_kwargs_override_created():
     incomplete_camera_cfg = Config(Camera)
 
-    camera_obj = incomplete_camera_cfg.override(name="OpenCV").build()
+    camera_obj = incomplete_camera_cfg.override(name="OpenCV").instantiate()
 
     assert isinstance(camera_obj, Camera)
     assert camera_obj.name == "OpenCV"
 
 
-def test_build_class_required_args_provided_with_path_to_class_created():
+def test_instantiate_class_required_args_provided_with_path_to_class_created():
     incomplete_env_cfg = Config(Env)
 
-    env_obj = incomplete_env_cfg.override(camera="@tests.test_config.static_object").build()
+    env_obj = incomplete_env_cfg.override(camera="@tests.test_config.static_object").instantiate()
 
     assert isinstance(env_obj, Env)
     assert isinstance(env_obj.camera, Camera)
     assert env_obj.camera.name == "Static Camera"
 
 
-def test_build_set_leaf_value_level2_created():
+def test_instantiate_set_leaf_value_level2_created():
     luxonis_camera_cfg = Config(Camera, name="Luxonis")
     env1_cfg = Config(Env, camera=luxonis_camera_cfg)
 
@@ -101,7 +101,7 @@ def test_build_set_leaf_value_level2_created():
     new_camera_cfg = Config(Camera, name="New Camera")
 
     full_cfg = multi_env_cfg.override(env2=Config(Env, camera=new_camera_cfg))
-    env_obj = full_cfg.build()
+    env_obj = full_cfg.instantiate()
 
     assert isinstance(env_obj, MultiEnv)
     assert isinstance(env_obj.env1, Env)
@@ -159,7 +159,6 @@ def test_config_to_dict_kwargs_and_args_produces_correct_dict():
     assert cfg.to_dict() == {"target": add, "args": [1], "kwargs": {"b": 2}}
 
 
-
 def test_config_to_dict_nested_produces_correct_dict():
     cfg = Config(
         MultiEnv,
@@ -212,28 +211,43 @@ target: !!python/name:tests.test_config.apply ''
     assert str(cfg) == expected_str
 
 
-def test_build_not_complete_config_raises_error():
+def test_instantiate_not_complete_config_raises_error():
     cfg = Config(Camera)
 
     with pytest.raises(
         TypeError,
         match="missing 1 required positional argument: 'name'"
     ):
-        cfg.build()
+        cfg.instantiate()
 
 
 def test_config_as_decorator_acts_as_config_class():
-
-    @Config
+    @config
     def sum(a, b):
         return a + b
 
-    assert sum.override(a=1, b=2).build() == 3
+    assert sum.override(a=1, b=2).instantiate() == 3
 
 
 def test_config_as_decorator_default_args_are_passed_to_target():
-    @Config
+    @config
     def sum(a=1, b=2):
         return a + b
 
-    assert sum.build() == 3
+    assert sum.instantiate() == 3
+
+
+def test_config_as_decorator_override_values_and_instantiate_works():
+    @config(a=1, b=2)
+    def sum(a, b):
+        return a + b
+
+    assert sum.override_and_instantiate() == 3
+
+
+def test_override_and_instantiate_works_with_flat_configs():
+    @config(a=1, b=2)
+    def sum(a, b):
+        return a + b
+
+    assert sum.override_and_instantiate() == 3

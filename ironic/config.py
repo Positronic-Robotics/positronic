@@ -1,11 +1,10 @@
 import yaml
 import importlib.util
-from typing import Any, Dict
-
-import fire
+from typing import Any, Callable, Dict
 
 
 INSTANTIATE_PREFIX = '@'
+
 
 def _to_dict(obj):
     if isinstance(obj, Config):
@@ -78,12 +77,21 @@ class Config:
         self.kwargs = kwargs
 
     def override(self, **overrides) -> 'Config':
-        cfg = self
-        for key, value in overrides.items():
-            cfg = cfg._override_single(key, value)
-        return cfg
+        overriden_cfg = self.copy()
 
-    def _update_flat(self, key, value):
+        for key, value in overrides.items():
+            key_list = key.split('.')
+
+            current_obj = overriden_cfg
+
+            for key in key_list[:-1]:
+                current_obj = current_obj._get_value(key)
+
+            current_obj._set_value(key_list[-1], value)
+
+        return overriden_cfg
+
+    def _set_value(self, key, value):
         value = _resolve_value(value)
 
         if key[0].isdigit():
@@ -97,30 +105,16 @@ class Config:
         else:
             return self.kwargs[key]
 
-
-    def _override_single(self, key, value):
-        key_parts = key.split('.')
-
-        overriden_cfg = self.copy()
-        current_obj = overriden_cfg
-
-        for part in key_parts[:-1]:
-            current_obj = current_obj._get_value(part)
-
-        current_obj._update_flat(key_parts[-1], value)
-
-        return overriden_cfg
-
-    def build(self):
+    def instantiate(self):
         # Instantiate any Config objects in args
         instantiated_args = [
-            arg.build() if isinstance(arg, Config) else arg
+            arg.instantiate() if isinstance(arg, Config) else arg
             for arg in self.args
         ]
 
         # Instantiate any Config objects in kwargs
         instantiated_kwargs = {
-            key: value.build() if isinstance(value, Config) else value
+            key: value.instantiate() if isinstance(value, Config) else value
             for key, value in self.kwargs.items()
         }
 
@@ -141,7 +135,7 @@ class Config:
     def __str__(self):
         return yaml.dump(self.to_dict(), default_flow_style=False)
 
-    def copy(self):
+    def copy(self) -> 'Config':
         """
         Recursively copy config signatures.
         """
@@ -158,8 +152,61 @@ class Config:
 
         return Config(self.target, *new_args, **new_kwargs)
 
-    def run_cli(self):
-        # TODO: figure out how to use args
-        kwargs = fire.Fire(lambda **kwargs: kwargs)
+    def override_and_instantiate(self, **kwargs):
+        """
+        Override the config with the given kwargs and instantiate the config.
 
-        return self.override(kwargs).build()
+        Useful for creating a function for a CLI.
+
+        Args:
+            **kwargs: Keyword arguments to override the config.
+
+        Returns:
+            The instantiated config.
+
+        Example:
+            >>> import fire
+            >>> @config
+            >>> def sum(a, b):
+            >>>     return a + b
+            >>> option1 = sum.override(a=1).override_and_instantiate
+            >>> option2 = sum.override(b=2).override_and_instantiate
+            >>> fire.Fire()
+            >>> # Shell call: python script.py option1 --b 5
+            >>> # Shell call: python script.py option2 --a 5
+        """
+        return self.override(**kwargs).instantiate()
+
+
+def config(target: Callable | None = None, *args, **kwargs):
+    """
+    Decorator to create a Config object.
+
+    Args:
+        target: The target object to be configured.
+        *args: Positional arguments to be passed to the target object.
+        **kwargs: Keyword arguments to be passed to the target object.
+
+    Returns:
+        The Config object.
+
+    Example:
+        >>> @config(a=1, b=2)
+        >>> def sum(a, b):
+        >>>     return a + b
+        >>> res = sum.instantiate()
+        >>> assert res == 3
+
+        >>> @config
+        >>> def sum(a, b):
+        >>>     return a + b
+        >>> res = sum.override(a=1, b=2).instantiate()
+        >>> assert res == 3
+    """
+
+    if target is None:
+        def _config_decorator(target):
+            return Config(target, *args, **kwargs)
+        return _config_decorator
+    else:
+        return Config(target)
