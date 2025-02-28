@@ -75,65 +75,6 @@ def _dearpygui_ui(camera_names: List[str]):
     return DearpyguiUi(camera_names)
 
 
-def _stub_ui():
-
-    @ir.ironic_system(
-        input_props=["robot_position"],
-        output_ports=["robot_target_position", "gripper_target_grasp", "start_recording", "stop_recording", "reset"],
-        output_props=["metadata"])
-    class StubUi(ir.ControlSystem):
-        """A stub UI that replays a pre-recorded trajectory.
-        Used for testing and debugging purposes."""
-
-        def __init__(self):
-            super().__init__()
-            self.events = deque()
-            self.start_pos = None
-            self.start_time = None
-
-        async def _start_recording(self, _):
-            self.start_pos = (await self.ins.robot_position()).data
-            await self.outs.start_recording.write(ir.Message(None))
-
-        async def _send_target(self, time_sec):
-            translation = self.start_pos.translation + np.array([0, 0.1, 0.1]) * np.sin(time_sec * (2 * np.pi) / 3)
-            quaternion = self.start_pos.quaternion
-            await asyncio.gather(
-                self.outs.robot_target_position.write(ir.Message(geom.Transform3D(translation, quaternion))),
-                self.outs.gripper_target_grasp.write(ir.Message(0.0)))
-
-        async def _stop_recording(self, _):
-            await self.outs.stop_recording.write(ir.Message(None))
-
-        async def setup(self):
-            time_sec = 0.1
-            self.events.append((time_sec, self._start_recording))
-            while time_sec < 5:
-                self.events.append((time_sec, self._send_target))
-                time_sec += 0.1
-            self.events.append((time_sec, self._stop_recording))
-
-            self.start_time = time.monotonic()
-
-        async def step(self):
-            current_time = time.monotonic() - self.start_time
-
-            while self.events and self.events[0][0] < current_time:
-                time_sec, callback = self.events.popleft()
-                await callback(time_sec)
-
-            return ir.State.FINISHED if not self.events else ir.State.ALIVE
-
-        @ir.out_property
-        async def metadata(self):
-            return ir.Message({'ui': 'stub'})
-
-    res = StubUi()
-    inputs = {'robot_position': (res, 'robot_position'), 'images': None, 'robot_grip': None, 'robot_status': None}
-
-    return ir.compose(res, inputs=inputs, outputs=res.output_mappings)
-
-
 webxr = builds(_webxr)
 teleop_system = builds(_teleop)
 teleop_ui = builds(_teleop_ui)
@@ -147,9 +88,6 @@ teleop = ui_store(teleop, name='teleop')
 
 teleop_gui = teleop_ui(teleop, extra_ui_camera_names=['handcam_back', 'handcam_front', 'front_view', 'back_view'])
 teleop_gui = ui_store(teleop_gui, name='teleop_gui')
-
-stub = builds(_stub_ui)
-stub = ui_store(stub, name='stub')
 
 gui = dearpygui_ui(camera_names=['handcam_left', 'handcam_right'])
 gui = ui_store(gui, name='gui')
