@@ -65,7 +65,7 @@ class Config:
             AssertionError: If the target is not callable.
 
         Example:
-            >>> @Config
+            >>> @ir.Config
             >>> def sum(a, b):
             >>>     return a + b
             >>> res = sum.override(a=1, b=2).build()
@@ -166,7 +166,7 @@ class Config:
 
         Example:
             >>> import fire
-            >>> @config
+            >>> @ir.config
             >>> def sum(a, b):
             >>>     return a + b
             >>> option1 = sum.override(a=1).override_and_instantiate
@@ -191,13 +191,13 @@ def config(target: Callable | None = None, *args, **kwargs):
         The Config object.
 
     Example:
-        >>> @config(a=1, b=2)
+        >>> @ir.config(a=1, b=2)
         >>> def sum(a, b):
         >>>     return a + b
         >>> res = sum.instantiate()
         >>> assert res == 3
 
-        >>> @config
+        >>> @ir.config
         >>> def sum(a, b):
         >>>     return a + b
         >>> res = sum.override(a=1, b=2).instantiate()

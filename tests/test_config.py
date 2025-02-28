@@ -1,6 +1,6 @@
 import pytest
 
-from ironic import Config, config
+import ironic as ir
 
 
 class Env:
@@ -31,7 +31,7 @@ static_object = Camera(name="Static Camera")
 
 
 def test_instantiate_class_object_basic_created():
-    camera_cfg = Config(Camera, name="OpenCV")
+    camera_cfg = ir.Config(Camera, name="OpenCV")
 
     camera_obj = camera_cfg.instantiate()
 
@@ -40,7 +40,7 @@ def test_instantiate_class_object_basic_created():
 
 
 def test_instantiate_class_object_with_function_created():
-    add_cfg = Config(add, a=1, b=2)
+    add_cfg = ir.Config(add, a=1, b=2)
 
     add_obj = add_cfg.instantiate()
 
@@ -48,8 +48,8 @@ def test_instantiate_class_object_with_function_created():
 
 
 def test_instantiate_class_object_nested_created():
-    camera_cfg = Config(Camera, name="OpenCV")
-    env_cfg = Config(Env, camera=camera_cfg)
+    camera_cfg = ir.Config(Camera, name="OpenCV")
+    env_cfg = ir.Config(Env, camera=camera_cfg)
 
     env_obj = env_cfg.instantiate()
 
@@ -59,10 +59,10 @@ def test_instantiate_class_object_nested_created():
 
 
 def test_instantiate_class_nested_object_overriden_with_config_created():
-    opencv_camera_cfg = Config(Camera, name="OpenCV")
-    luxonis_camera_cfg = Config(Camera, name="Luxonis")
+    opencv_camera_cfg = ir.Config(Camera, name="OpenCV")
+    luxonis_camera_cfg = ir.Config(Camera, name="Luxonis")
 
-    env_cfg = Config(Env, camera=opencv_camera_cfg)
+    env_cfg = ir.Config(Env, camera=opencv_camera_cfg)
 
     env_obj = env_cfg.override(camera=luxonis_camera_cfg).instantiate()
 
@@ -72,7 +72,7 @@ def test_instantiate_class_nested_object_overriden_with_config_created():
 
 
 def test_instantiate_class_required_args_provided_with_kwargs_override_created():
-    incomplete_camera_cfg = Config(Camera)
+    incomplete_camera_cfg = ir.Config(Camera)
 
     camera_obj = incomplete_camera_cfg.override(name="OpenCV").instantiate()
 
@@ -81,7 +81,7 @@ def test_instantiate_class_required_args_provided_with_kwargs_override_created()
 
 
 def test_instantiate_class_required_args_provided_with_path_to_class_created():
-    incomplete_env_cfg = Config(Env)
+    incomplete_env_cfg = ir.Config(Env)
 
     env_obj = incomplete_env_cfg.override(camera="@tests.test_config.static_object").instantiate()
 
@@ -91,16 +91,16 @@ def test_instantiate_class_required_args_provided_with_path_to_class_created():
 
 
 def test_instantiate_set_leaf_value_level2_created():
-    luxonis_camera_cfg = Config(Camera, name="Luxonis")
-    env1_cfg = Config(Env, camera=luxonis_camera_cfg)
+    luxonis_camera_cfg = ir.Config(Camera, name="Luxonis")
+    env1_cfg = ir.Config(Env, camera=luxonis_camera_cfg)
 
-    env2_cfg = Config(Env)
+    env2_cfg = ir.Config(Env)
 
-    multi_env_cfg = Config(MultiEnv, env1=env1_cfg, env2=env2_cfg)
+    multi_env_cfg = ir.Config(MultiEnv, env1=env1_cfg, env2=env2_cfg)
 
-    new_camera_cfg = Config(Camera, name="New Camera")
+    new_camera_cfg = ir.Config(Camera, name="New Camera")
 
-    full_cfg = multi_env_cfg.override(env2=Config(Env, camera=new_camera_cfg))
+    full_cfg = multi_env_cfg.override(env2=ir.Config(Env, camera=new_camera_cfg))
     env_obj = full_cfg.instantiate()
 
     assert isinstance(env_obj, MultiEnv)
@@ -113,7 +113,7 @@ def test_instantiate_set_leaf_value_level2_created():
 
 
 def test_override_basic_keeps_original_config():
-    cfg = Config(Camera, name="OpenCV")
+    cfg = ir.Config(Camera, name="OpenCV")
 
     cfg.override(name="New Camera")
 
@@ -121,19 +121,19 @@ def test_override_basic_keeps_original_config():
 
 
 def test_override_nested_keeps_original_config():
-    cfg = Config(
+    cfg = ir.Config(
         MultiEnv,
-        env1=Config(
+        env1=ir.Config(
             Env,
-            camera=Config(Camera, name="OpenCV")
+            camera=ir.Config(Camera, name="OpenCV")
         ),
-        env2=Config(
+        env2=ir.Config(
             Env,
-            camera=Config(Camera, name="Luxonis")
+            camera=ir.Config(Camera, name="Luxonis")
         )
     )
 
-    cfg.override(env2=Config(Env, camera=Config(Camera, name="New Camera")))
+    cfg.override(env2=ir.Config(Env, camera=ir.Config(Camera, name="New Camera")))
 
     assert cfg.kwargs["env2"].kwargs["camera"].kwargs["name"] == "Luxonis"
 
@@ -143,27 +143,27 @@ def test_config_non_callable_target_raises_error():
     non_callable = object()
 
     with pytest.raises(AssertionError):
-        Config(non_callable)
+        ir.Config(non_callable)
 
 
 def test_config_to_dict_kwargs_only_produces_correct_dict():
-    cfg = Config(Camera, name="OpenCV")
+    cfg = ir.Config(Camera, name="OpenCV")
 
     assert cfg.to_dict() == {"target": Camera, "kwargs": {"name": "OpenCV"}}
 
 
 def test_config_to_dict_kwargs_and_args_produces_correct_dict():
     # TODO: Maybe it will be better to convert args to kwargs?
-    cfg = Config(add, 1, b=2)
+    cfg = ir.Config(add, 1, b=2)
 
     assert cfg.to_dict() == {"target": add, "args": [1], "kwargs": {"b": 2}}
 
 
 def test_config_to_dict_nested_produces_correct_dict():
-    cfg = Config(
+    cfg = ir.Config(
         MultiEnv,
-        env1=Config(Env, camera=Config(Camera, name="OpenCV")),
-        env2=Config(Env, camera=Config(Camera, name="Luxonis"))
+        env1=ir.Config(Env, camera=ir.Config(Camera, name="OpenCV")),
+        env2=ir.Config(Env, camera=ir.Config(Camera, name="Luxonis"))
     )
 
     expected_dict = {
@@ -194,7 +194,7 @@ def test_config_to_dict_nested_produces_correct_dict():
 
 
 def test_config_str_nested_produces_correct_str():
-    cfg = Config(apply, func=Config(add, 1, b=2), a=3, b=4)
+    cfg = ir.Config(apply, func=ir.Config(add, 1, b=2), a=3, b=4)
 
     expected_str = """kwargs:
   a: 3
@@ -212,7 +212,7 @@ target: !!python/name:tests.test_config.apply ''
 
 
 def test_instantiate_not_complete_config_raises_error():
-    cfg = Config(Camera)
+    cfg = ir.Config(Camera)
 
     with pytest.raises(
         TypeError,
@@ -222,7 +222,7 @@ def test_instantiate_not_complete_config_raises_error():
 
 
 def test_config_as_decorator_acts_as_config_class():
-    @config
+    @ir.config
     def sum(a, b):
         return a + b
 
@@ -230,7 +230,7 @@ def test_config_as_decorator_acts_as_config_class():
 
 
 def test_config_as_decorator_default_args_are_passed_to_target():
-    @config
+    @ir.config
     def sum(a=1, b=2):
         return a + b
 
@@ -238,7 +238,7 @@ def test_config_as_decorator_default_args_are_passed_to_target():
 
 
 def test_config_as_decorator_override_values_and_instantiate_works():
-    @config(a=1, b=2)
+    @ir.config(a=1, b=2)
     def sum(a, b):
         return a + b
 
@@ -246,7 +246,7 @@ def test_config_as_decorator_override_values_and_instantiate_works():
 
 
 def test_override_and_instantiate_works_with_flat_configs():
-    @config(a=1, b=2)
+    @ir.config(a=1, b=2)
     def sum(a, b):
         return a + b
 
