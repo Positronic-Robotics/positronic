@@ -29,7 +29,7 @@ static_object = Camera(name="Static Camera")
 def test_instantiate_class_object_basic():
     camera_cfg = Config(Camera, name="OpenCV")
 
-    camera_obj = camera_cfg.instantiate()
+    camera_obj = camera_cfg.build()
 
     assert isinstance(camera_obj, Camera)
     assert camera_obj.name == "OpenCV"
@@ -38,7 +38,7 @@ def test_instantiate_class_object_basic():
 def test_instantiate_class_object_with_function():
     add_cfg = Config(add, a=1, b=2)
 
-    add_obj = add_cfg.instantiate()
+    add_obj = add_cfg.build()
 
     assert add_obj == 3
 
@@ -47,7 +47,7 @@ def test_instantiate_class_object_nested():
     camera_cfg = Config(Camera, name="OpenCV")
     env_cfg = Config(Env, camera=camera_cfg)
 
-    env_obj = env_cfg.instantiate()
+    env_obj = env_cfg.build()
 
     assert isinstance(env_obj, Env)
     assert isinstance(env_obj.camera, Camera)
@@ -60,7 +60,7 @@ def test_instantiate_class_nested_object_overriden_with_config():
 
     env_cfg = Config(Env, camera=opencv_camera_cfg)
 
-    env_obj = env_cfg.override({"camera": luxonis_camera_cfg}).instantiate()
+    env_obj = env_cfg.override({"camera": luxonis_camera_cfg}).build()
 
     assert isinstance(env_obj, Env)
     assert isinstance(env_obj.camera, Camera)
@@ -70,7 +70,7 @@ def test_instantiate_class_nested_object_overriden_with_config():
 def test_instantiate_class_required_args_provided_with_kwargs_override():
     uncomplete_camera_cfg = Config(Camera)
 
-    camera_obj = uncomplete_camera_cfg.override({"name": "OpenCV"}).instantiate()
+    camera_obj = uncomplete_camera_cfg.override({"name": "OpenCV"}).build()
 
     assert isinstance(camera_obj, Camera)
     assert camera_obj.name == "OpenCV"
@@ -79,7 +79,7 @@ def test_instantiate_class_required_args_provided_with_kwargs_override():
 def test_instantiate_class_required_args_provided_with_path_to_class():
     uncomplete_env_cfg = Config(Env)
 
-    env_obj = uncomplete_env_cfg.override({"camera": "*tests.test_config.static_object"}).instantiate()
+    env_obj = uncomplete_env_cfg.override({"camera": "*tests.test_config.static_object"}).build()
 
     assert isinstance(env_obj, Env)
     assert isinstance(env_obj.camera, Camera)
@@ -97,7 +97,7 @@ def test_instantiate_set_leaf_value_level2():
     new_camera_cfg = Config(Camera, name="New Camera")
 
     full_cfg = multi_env_cfg.override({"env2.camera": new_camera_cfg})
-    env_obj = full_cfg.instantiate()
+    env_obj = full_cfg.build()
 
     assert isinstance(env_obj, MultiEnv)
     assert isinstance(env_obj.env1, Env)

@@ -1,19 +1,11 @@
 import json
 import importlib.util
-import sys
+
 
 def custom_encoder(obj):
     if isinstance(obj, Config):
         return obj.to_dict()
     return str(obj)
-
-
-def _extend_path(path, key):
-    if path:
-        return path + "." + key
-    else:
-        return key
-
 
 def _to_dict(obj):
     if isinstance(obj, Config):
@@ -42,9 +34,8 @@ def _import_object_from_path(path):
     path = path[1:]
 
     # Split the path to get the module path and object name
-    module_parts = path.split('.')
-    object_path = module_parts.pop()
-    module_path = '.'.join(module_parts)
+    *module_path, object_path = path.split('.')
+    module_path = '.'.join(module_path)
 
     # Import the module
     module = importlib.import_module(module_path)
@@ -69,13 +60,13 @@ class Config:
         if isinstance(value, str) and value.startswith('*'):
             value = _import_object_from_path(value)
 
-        if key[0] in '1234567890':
+        if key[0].isdigit():
             self.args[int(key)] = value
         else:
             self.kwargs[key] = value
 
     def _get_value(self, key):
-        if key[0] in '1234567890':
+        if key[0].isdigit():
             return self.args[int(key)]
         else:
             return self.kwargs[key]
@@ -96,16 +87,16 @@ class Config:
 
         return Config(self.target, *self.args, **self.kwargs)
 
-    def instantiate(self):
+    def build(self):
         # Instantiate any Config objects in args
         instantiated_args = [
-            arg.instantiate() if isinstance(arg, Config) else arg
+            arg.build() if isinstance(arg, Config) else arg
             for arg in self.args
         ]
 
         # Instantiate any Config objects in kwargs
         instantiated_kwargs = {
-            key: value.instantiate() if isinstance(value, Config) else value
+            key: value.build() if isinstance(value, Config) else value
             for key, value in self.kwargs.items()
         }
 
