@@ -92,21 +92,17 @@ def train(continue_training: bool = False):
     def make_env():
         return RandomTrajectoryEnv(RoboticArmEnv(steps_ahead=5))
 
-    # train_env = make_env()
     eval_env = make_env()
     train_env = DummyVecEnv([make_env])
-    # eval_env = DummyVecEnv([make_env])
-    # train_env = VecNormalize(train_env, norm_obs=True, norm_reward=True)
-    # eval_env = VecNormalize(eval_env, norm_obs=True, norm_reward=True, training=False)
 
     # Initialize PPO agent
     if continue_training:
-        model = PPO.load("model_checkpoints/final_model", env=train_env)
+        model = PPO.load("../model_checkpoints/final_model", env=train_env)
     else:
         model = PPO("MlpPolicy",
                     train_env,
                     verbose=1,
-                    tensorboard_log="./tensorboard_logs/",
+                    tensorboard_log="../tensorboard_logs/",
                     learning_rate=1e-4,
                     n_steps=2048 * 4,
                     batch_size=64 * 4,
@@ -121,11 +117,11 @@ def train(continue_training: bool = False):
     # Setup callbacks and train
     callbacks = [
         EvalVideoCallback(eval_env, train_env, check_freq=500, n_eval_episodes=500),
-        CheckpointCallback(save_freq=10000, save_path="./model_checkpoints/", name_prefix="rl_model")
+        CheckpointCallback(save_freq=10000, save_path="../model_checkpoints/", name_prefix="rl_model")
     ]
 
     model.learn(total_timesteps=5_000_000, callback=callbacks, progress_bar=True)
-    model.save("model_checkpoints/final_model")
+    model.save("../model_checkpoints/final_model")
     return model
 
 

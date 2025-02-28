@@ -3,8 +3,8 @@ from dataclasses import dataclass
 from typing import Optional, Sequence, Tuple
 
 import gymnasium as gym
-import matplotlib.pyplot as plt
 import numpy as np
+import cv2  # Replace matplotlib with OpenCV
 
 
 @dataclass
@@ -75,6 +75,13 @@ class RoboticArmEnv(gym.Env):
         self.trajectory: deque = deque()
         self.state: Optional[RobotState] = None
         self.target_pos: Optional[np.ndarray] = None
+
+        # OpenCV rendering parameters
+        self.img_width = 600
+        self.img_height = 600
+        self.scale_factor = 100  # Scale factor to convert from simulation to pixel coordinates
+        self.center_x = self.img_width // 2
+        self.center_y = self.img_height // 2
 
     def push_trajectory(self, point: Tuple[float, float]):
         """Push new trajectory point (x, y) to the end"""
@@ -164,67 +171,67 @@ class RoboticArmEnv(gym.Env):
 
         return RobotState(thetas=new_thetas, omegas=new_omegas, ee_pos=new_ee_pos)
 
-    def render(self):
-        """Render the environment using matplotlib"""
-        if not hasattr(self, 'fig'):
-            # Create figure with white background
-            self.fig = plt.figure(figsize=(6, 6), facecolor='white')
-            self.ax = self.fig.add_subplot(111)
+    def _sim_to_pixel(self, x, y):
+        """Convert simulation coordinates to pixel coordinates"""
+        px = int(self.center_x + x * self.scale_factor)
+        py = int(self.center_y - y * self.scale_factor)  # Flip y-axis (positive y is up in sim, down in image)
+        return px, py
 
-        self.ax.clear()
-        self.ax.set_xlim(-3, 3)
-        self.ax.set_ylim(-3, 3)
-        self.ax.set_aspect('equal')
-        self.ax.set_facecolor('white')
+    def render(self):
+        """Render the environment using OpenCV"""
+        # Create a white background image
+        img = np.ones((self.img_height, self.img_width, 3), dtype=np.uint8) * 255
+
+        # Draw coordinate grid (optional)
+        cv2.line(img, (0, self.center_y), (self.img_width, self.center_y), (200, 200, 200), 1)
+        cv2.line(img, (self.center_x, 0), (self.center_x, self.img_height), (200, 200, 200), 1)
 
         # Draw future trajectory points
         if len(self.trajectory) > 0:
             trajectory_points = list(self.trajectory)
-            trajectory_points = np.array(trajectory_points)
-            self.ax.plot(trajectory_points[:, 0], trajectory_points[:, 1], 'gray', alpha=0.5, linewidth=2)
+            prev_point = None
+            for point in trajectory_points:
+                px, py = self._sim_to_pixel(point[0], point[1])
+                cv2.circle(img, (px, py), 2, (150, 150, 150), -1)
+                if prev_point is not None:
+                    prev_px, prev_py = self._sim_to_pixel(prev_point[0], prev_point[1])
+                    cv2.line(img, (prev_px, prev_py), (px, py), (150, 150, 150), 1)
+                prev_point = point
 
         # Draw robot arm
         # Base joint
         base_pos = np.array([0., 0.])
+        base_px, base_py = self._sim_to_pixel(base_pos[0], base_pos[1])
 
         # First link
         joint_pos = self.L[0] * np.array([np.cos(self.state.thetas[0]), np.sin(self.state.thetas[0])])
+        joint_px, joint_py = self._sim_to_pixel(joint_pos[0], joint_pos[1])
 
         # Second link
         ee_pos = joint_pos + self.L[1] * np.array(
             [np.cos(self.state.thetas[0] + self.state.thetas[1]),
              np.sin(self.state.thetas[0] + self.state.thetas[1])])
+        ee_px, ee_py = self._sim_to_pixel(ee_pos[0], ee_pos[1])
 
         # Draw links
-        self.ax.plot([base_pos[0], joint_pos[0]], [base_pos[1], joint_pos[1]], 'b-', linewidth=3, label='Link 1')
-        self.ax.plot([joint_pos[0], ee_pos[0]], [joint_pos[1], ee_pos[1]], 'b-', linewidth=3, label='Link 2')
+        cv2.line(img, (base_px, base_py), (joint_px, joint_py), (0, 0, 255), 3)  # First link (blue)
+        cv2.line(img, (joint_px, joint_py), (ee_px, ee_py), (0, 0, 255), 3)      # Second link (blue)
 
         # Draw joints
-        self.ax.plot(base_pos[0], base_pos[1], 'ko', markersize=8)
-        self.ax.plot(joint_pos[0], joint_pos[1], 'ko', markersize=8)
-        self.ax.plot(ee_pos[0], ee_pos[1], 'ko', markersize=8)
+        cv2.circle(img, (base_px, base_py), 8, (0, 0, 0), -1)  # Base joint (black)
+        cv2.circle(img, (joint_px, joint_py), 8, (0, 0, 0), -1)  # Middle joint (black)
+        cv2.circle(img, (ee_px, ee_py), 8, (0, 0, 0), -1)  # End effector (black)
 
         # Draw current target
         if self.target_pos is not None:
-            self.ax.plot(self.target_pos[0], self.target_pos[1], 'ro', markersize=8)
-
-        # Remove axes for cleaner visualization
-        self.ax.set_xticks([])
-        self.ax.set_yticks([])
-
-        self.fig.canvas.draw()
-        # Convert canvas to image
-        img = np.frombuffer(self.fig.canvas.tostring_rgb(), dtype=np.uint8)
-        img = img.reshape(self.fig.canvas.get_width_height()[::-1] + (3, ))
+            target_px, target_py = self._sim_to_pixel(self.target_pos[0], self.target_pos[1])
+            cv2.circle(img, (target_px, target_py), 8, (0, 0, 255), -1)  # Target (red)
 
         return img
 
     def close(self):
-        """Clean up matplotlib resources"""
-        if hasattr(self, 'fig'):
-            plt.close(self.fig)
-            del self.fig
-            del self.ax
+        """Clean up resources"""
+        cv2.destroyAllWindows()
 
 
 def generate_smooth_trajectories(

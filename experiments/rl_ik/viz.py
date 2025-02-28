@@ -1,11 +1,7 @@
 from typing import Callable
 
-import matplotlib
 import numpy as np
-
-matplotlib.use('agg')  # Use agg backend for offscreen rendering
-
-import matplotlib.pyplot as plt  # noqa: E402
+import cv2
 
 
 def render_frames(env,
@@ -27,77 +23,38 @@ def render_frames(env,
     """
     frames = []
 
-    # Create figure with white background
-    dpi = 100
-    figsize = (width / dpi, height / dpi)
-    fig = plt.figure(figsize=figsize, dpi=dpi, facecolor='white')
-    ax = fig.add_subplot(111)
+    # Store original dimensions to restore later
+    original_width = env.unwrapped.img_width
+    original_height = env.unwrapped.img_height
+
+    # Set dimensions for rendering
+    env.unwrapped.img_width = width
+    env.unwrapped.img_height = height
+    env.unwrapped.center_x = width // 2
+    env.unwrapped.center_y = height // 2
+    env.unwrapped.scale_factor = min(width, height) / 6  # Scale to fit in view
 
     # Reset environment
     obs, _ = env.reset()
 
-    # Set fixed plot limits to prevent auto-scaling
-    ax.set_xlim(-3, 3)
-    ax.set_ylim(-3, 3)
-
     done = False
     while not done:
-        ax.clear()
-        ax.set_xlim(-3, 3)
-        ax.set_ylim(-3, 3)
-        ax.set_aspect('equal')
-        ax.set_facecolor('white')
+        # Render the current state using env.render()
+        frame = env.render()
 
-        # Draw trajectory if enabled
-        if show_trajectory:
-            target_pos = env.unwrapped.target_pos
-            if len(env.unwrapped.trajectory) > 0:
-                trajectory_points = [target_pos]
-                trajectory_points.extend(env.unwrapped.trajectory)
-                trajectory_points = np.array(trajectory_points)
-                ax.plot(trajectory_points[:, 0], trajectory_points[:, 1], 'gray', alpha=0.5, linewidth=2)
-
-        # Draw robot arm
-        # Base joint
-        base_pos = np.array([0., 0.])
-
-        # First link
-        joint_pos = env.unwrapped.L[0] * np.array(
-            [np.cos(env.unwrapped.state.thetas[0]),
-             np.sin(env.unwrapped.state.thetas[0])])
-
-        # Second link
-        ee_pos = joint_pos + env.unwrapped.L[1] * np.array([
-            np.cos(env.unwrapped.state.thetas[0] + env.unwrapped.state.thetas[1]),
-            np.sin(env.unwrapped.state.thetas[0] + env.unwrapped.state.thetas[1])
-        ])
-
-        # Draw links
-        ax.plot([base_pos[0], joint_pos[0]], [base_pos[1], joint_pos[1]], 'b-', linewidth=3, label='Link 1')
-        ax.plot([joint_pos[0], ee_pos[0]], [joint_pos[1], ee_pos[1]], 'b-', linewidth=3, label='Link 2')
-
-        # Draw joints
-        ax.plot(base_pos[0], base_pos[1], 'ko', markersize=8)
-        ax.plot(joint_pos[0], joint_pos[1], 'ko', markersize=8)
-        ax.plot(ee_pos[0], ee_pos[1], 'ko', markersize=8)
-
-        # Draw target
-        ax.plot(env.unwrapped.target_pos[0], env.unwrapped.target_pos[1], 'ro', markersize=8)
-
-        # Remove axes for cleaner visualization
-        ax.set_xticks([])
-        ax.set_yticks([])
-
-        # Draw the canvas and get the RGB data directly
-        fig.canvas.draw()
-        data = np.frombuffer(fig.canvas.tostring_rgb(), dtype=np.uint8)
-        data = data.reshape(fig.canvas.get_width_height()[::-1] + (3, ))
-
-        frames.append(data)
+        # OpenCV uses BGR format, convert to RGB for consistency
+        frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        frames.append(frame_rgb)
 
         # Step environment
         action = policy(obs)
         obs, _, done, _, _ = env.step(action)
 
-    plt.close(fig)
+    # Restore original dimensions
+    env.unwrapped.img_width = original_width
+    env.unwrapped.img_height = original_height
+    env.unwrapped.center_x = original_width // 2
+    env.unwrapped.center_y = original_height // 2
+    env.unwrapped.scale_factor = min(original_width, original_height) / 6
+
     return np.array(frames)
