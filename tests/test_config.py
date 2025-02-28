@@ -1,6 +1,6 @@
 import pytest
 
-from ironic.config import Config, config
+from ironic import Config, config
 
 
 class Env:
