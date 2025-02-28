@@ -5,22 +5,23 @@ from collections import deque
 import time
 from typing import List, Optional
 
-from cfg import store, builds
 import numpy as np
 
 import geom
 import ironic as ir
 
 
-def _webxr(port: int):
+@ir.config(port=5005)
+def webxr(port: int):
     from webxr import WebXR
     return WebXR(port=port)
 
 
-def _teleop(webxr: ir.ControlSystem,
-            operator_position: str,
-            stream_to_webxr: Optional[str] = None,
-            pos_transform: str = 'teleop'):
+@ir.config(webxr=webxr, operator_position='back', stream_to_webxr='image', pos_transform='teleop')
+def teleop(webxr: ir.ControlSystem,
+           operator_position: str,
+           stream_to_webxr: Optional[str] = None,
+           pos_transform: str = 'teleop'):
     from teleop import TeleopSystem
     # TODO: Support Andrei's transformation (aka 'pos_transform')
     teleop = TeleopSystem(operator_position=operator_position)
@@ -39,10 +40,11 @@ def _teleop(webxr: ir.ControlSystem,
     return ir.compose(*components, inputs=inputs, outputs=teleop.output_mappings)
 
 
-def _spacemouse(translation_speed: float = 0.0005,
-                rotation_speed: float = 0.001,
-                translation_dead_zone: float = 0.8,
-                rotation_dead_zone: float = 0.7):
+@ir.config
+def spacemouse(translation_speed: float = 0.0005,
+               rotation_speed: float = 0.001,
+               translation_dead_zone: float = 0.8,
+               rotation_dead_zone: float = 0.7):
     from drivers.spacemouse import SpacemouseCS
     smouse = SpacemouseCS(translation_speed, rotation_speed, translation_dead_zone, rotation_dead_zone)
     inputs = {'robot_position': (smouse, 'robot_position'), 'robot_grip': None, 'images': None, 'robot_status': None}
@@ -52,7 +54,8 @@ def _spacemouse(translation_speed: float = 0.0005,
     return ir.compose([smouse], inputs=inputs, outputs=outputs)
 
 
-def _teleop_ui(tracking: ir.ControlSystem, extra_ui_camera_names: Optional[List[str]] = None):
+@ir.config(tracking=teleop, extra_ui_camera_names=['handcam_back', 'handcam_front', 'front_view', 'back_view'])
+def teleop_with_ui(tracking: ir.ControlSystem, extra_ui_camera_names: Optional[List[str]] = None):
     if extra_ui_camera_names:
         from simulator.mujoco.mujoco_gui import DearpyguiUi
         gui = DearpyguiUi(extra_ui_camera_names)
@@ -70,12 +73,14 @@ def _teleop_ui(tracking: ir.ControlSystem, extra_ui_camera_names: Optional[List[
     return tracking
 
 
-def _dearpygui_ui(camera_names: List[str]):
+@ir.config(camera_names=['handcam_left', 'handcam_right'])
+def dearpygui_ui(camera_names: List[str]):
     from simulator.mujoco.mujoco_gui import DearpyguiUi
     return DearpyguiUi(camera_names)
 
 
-def _stub_ui():
+@ir.config
+def stub():
 
     @ir.ironic_system(
         input_props=["robot_position"],
@@ -132,24 +137,3 @@ def _stub_ui():
     inputs = {'robot_position': (res, 'robot_position'), 'images': None, 'robot_grip': None, 'robot_status': None}
 
     return ir.compose(res, inputs=inputs, outputs=res.output_mappings)
-
-
-webxr = builds(_webxr)
-teleop_system = builds(_teleop)
-teleop_ui = builds(_teleop_ui)
-spacemouse = builds(_spacemouse)
-dearpygui_ui = builds(_dearpygui_ui)
-
-ui_store = store(group="ui")
-
-teleop = teleop_system(webxr(port=5005), operator_position='back', stream_to_webxr='image')
-teleop = ui_store(teleop, name='teleop')
-
-teleop_gui = teleop_ui(teleop, extra_ui_camera_names=['handcam_back', 'handcam_front', 'front_view', 'back_view'])
-teleop_gui = ui_store(teleop_gui, name='teleop_gui')
-
-stub = builds(_stub_ui)
-stub = ui_store(stub, name='stub')
-
-gui = dearpygui_ui(camera_names=['handcam_left', 'handcam_right'])
-gui = ui_store(gui, name='gui')

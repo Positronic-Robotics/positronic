@@ -2,8 +2,7 @@ import asyncio
 import logging
 from typing import Dict, Optional
 
-from cfg import builds, make_config
-from hydra_zen import zen, ZenStore
+import fire
 
 import cfg.env
 import cfg.ui
@@ -15,9 +14,10 @@ from tools.dataset_dumper import DatasetDumper
 logging.basicConfig(level=logging.INFO, handlers=[logging.StreamHandler()])
 
 
-def _dataset_dumper(out_dir: str, video_fps: int, metadata: Dict[str, str] = {}):
+@ir.config
+def dataset_dumper(out_dir: str, video_fps: int, metadata: Dict[str, str] = {}, codec: str = 'libx264'):
     # TODO(aluzan): 'relative_mujoco_model_path' to be added to metadata
-    return DatasetDumper(out_dir, additional_metadata=metadata, video_fps=video_fps)
+    return DatasetDumper(out_dir, additional_metadata=metadata, video_fps=video_fps, codec=codec)
 
 
 def main(ui: ir.ControlSystem,
@@ -75,19 +75,25 @@ def main(ui: ir.ControlSystem,
     asyncio.run(_main())
 
 
-store = ZenStore()
-store(make_config(
-    env=cfg.env.umi_env,
+main = ir.Config(
+    main,
+    env=cfg.env.umi,
     ui=cfg.ui.teleop,
-    sound=cfg.hardware.sound.full,
-    data_dumper=builds(_dataset_dumper, video_fps=30),
+    sound=cfg.hardware.sound.start_stop,
+    data_dumper=dataset_dumper.override(video_fps=30, codec='libx264'),
     rerun=False,
-), name="data_collection")
+)
+
+
+# TODO: Think through how we can make it a handy standard function and move it to ironic/config.py
+def custom_main(**kwargs):
+    if 'help' in kwargs:
+        del kwargs['help']
+        config = main.override(**kwargs)
+        print(config)
+        return
+    main.override_and_instantiate(**kwargs)
 
 
 if __name__ == "__main__":
-    cfg.env.store.add_to_hydra_store()
-    cfg.ui.store.add_to_hydra_store()
-    cfg.hardware.sound.store.add_to_hydra_store()
-    store.add_to_hydra_store()
-    zen(main).hydra_main(config_name="data_collection", config_path=None, version_base="1.2")
+    fire.Fire(custom_main)

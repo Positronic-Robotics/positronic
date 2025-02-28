@@ -9,6 +9,10 @@ INSTANTIATE_PREFIX = '@'
 def _to_dict(obj):
     if isinstance(obj, Config):
         return obj.to_dict()
+    elif isinstance(obj, dict):
+        return {k: _to_dict(v) for k, v in obj.items()}
+    elif isinstance(obj, list):
+        return [_to_dict(v) for v in obj]
     else:
         return obj
 
@@ -106,16 +110,22 @@ class Config:
             return self.kwargs[key]
 
     def instantiate(self):
-        # Instantiate any Config objects in args
-        instantiated_args = [
-            arg.instantiate() if isinstance(arg, Config) else arg
-            for arg in self.args
-        ]
+        def _instantiate_value(value):
+            if isinstance(value, Config):
+                return value.instantiate()
+            elif isinstance(value, (list, tuple)):
+                return type(value)(_instantiate_value(item) for item in value)
+            elif isinstance(value, dict):
+                return {k: _instantiate_value(v) for k, v in value.items()}
+            else:
+                return value
 
-        # Instantiate any Config objects in kwargs
+        # Recursively instantiate any Config objects in args
+        instantiated_args = [_instantiate_value(arg) for arg in self.args]
+
+        # Recursively instantiate any Config objects in kwargs
         instantiated_kwargs = {
-            key: value.instantiate() if isinstance(value, Config) else value
-            for key, value in self.kwargs.items()
+            key: _instantiate_value(value) for key, value in self.kwargs.items()
         }
 
         return self.target(*instantiated_args, **instantiated_kwargs)
@@ -123,17 +133,17 @@ class Config:
     def to_dict(self) -> Dict[str, Any]:
         res = {}
 
-        res["target"] = self.target
+        res["target"] = f'{INSTANTIATE_PREFIX}{self.target.__module__}.{self.target.__name__}'
         args = [_to_dict(arg) for arg in self.args]
         if len(args) > 0:
-            res["args"] = args
+            res["*args"] = args
         kwargs = {key: _to_dict(value) for key, value in self.kwargs.items()}
         if len(kwargs) > 0:
-            res["kwargs"] = kwargs
+            res.update(kwargs)
         return res
 
     def __str__(self):
-        return yaml.dump(self.to_dict(), default_flow_style=False)
+        return yaml.dump(self.to_dict(), default_flow_style=False, sort_keys=False)
 
     def copy(self) -> 'Config':
         """

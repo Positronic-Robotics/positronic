@@ -2,8 +2,6 @@ from typing import Optional
 
 import numpy as np
 
-from cfg import store, builds
-
 import ironic as ir
 
 
@@ -37,20 +35,9 @@ def _sound_system(force_feedback_volume: Optional[float] = None,
     return ir.compose(*components, inputs=inputs, outputs=sound_system.output_mappings)
 
 
-sound_system = builds(_sound_system)
+full = ir.Config(_sound_system,
+                 force_feedback_volume=0.1,
+                 start_recording_wav_path="assets/sounds/recording-has-started.wav",
+                 stop_recording_wav_path="assets/sounds/recording-has-stopped.wav")
 
-sound_store = store(group="hardware/sound")
-
-full = sound_system(
-    force_feedback_volume=0.1,
-    start_recording_wav_path="assets/sounds/recording-has-started.wav",
-    stop_recording_wav_path="assets/sounds/recording-has-stopped.wav"
-)
-full = sound_store(full, name="full")
-
-start_stop = sound_system(
-    force_feedback_volume=0,
-    start_recording_wav_path="assets/sounds/recording-has-started.wav",
-    stop_recording_wav_path="assets/sounds/recording-has-stopped.wav"
-)
-start_stop = sound_store(start_stop, name="start_stop")
+start_stop = full.override(force_feedback_volume=0)

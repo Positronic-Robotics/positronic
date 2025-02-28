@@ -149,14 +149,22 @@ def test_config_non_callable_target_raises_error():
 def test_config_to_dict_kwargs_only_produces_correct_dict():
     cfg = ir.Config(Camera, name="OpenCV")
 
-    assert cfg.to_dict() == {"target": Camera, "kwargs": {"name": "OpenCV"}}
+    expected = {
+        "target": f"@{Camera.__module__}.{Camera.__name__}",
+        "name": "OpenCV"
+    }
+    assert cfg.to_dict() == expected
 
 
 def test_config_to_dict_kwargs_and_args_produces_correct_dict():
-    # TODO: Maybe it will be better to convert args to kwargs?
     cfg = ir.Config(add, 1, b=2)
 
-    assert cfg.to_dict() == {"target": add, "args": [1], "kwargs": {"b": 2}}
+    expected = {
+        "target": f"@{add.__module__}.{add.__name__}",
+        "*args": [1],
+        "b": 2
+    }
+    assert cfg.to_dict() == expected
 
 
 def test_config_to_dict_nested_produces_correct_dict():
@@ -167,25 +175,19 @@ def test_config_to_dict_nested_produces_correct_dict():
     )
 
     expected_dict = {
-        "target": MultiEnv,
-        "kwargs": {
-            "env1": {
-                "target": Env,
-                "kwargs": {
-                    "camera": {
-                        "target": Camera,
-                        "kwargs": {"name": "OpenCV"}
-                    }
-                }
-            },
-            "env2": {
-                "target": Env,
-                "kwargs": {
-                    "camera": {
-                        "target": Camera,
-                        "kwargs": {"name": "Luxonis"}
-                    }
-                }
+        "target": f"@{MultiEnv.__module__}.{MultiEnv.__name__}",
+        "env1": {
+            "target": f"@{Env.__module__}.{Env.__name__}",
+            "camera": {
+                "target": f"@{Camera.__module__}.{Camera.__name__}",
+                "name": "OpenCV"
+            }
+        },
+        "env2": {
+            "target": f"@{Env.__module__}.{Env.__name__}",
+            "camera": {
+                "target": f"@{Camera.__module__}.{Camera.__name__}",
+                "name": "Luxonis"
             }
         }
     }
@@ -196,16 +198,15 @@ def test_config_to_dict_nested_produces_correct_dict():
 def test_config_str_nested_produces_correct_str():
     cfg = ir.Config(apply, func=ir.Config(add, 1, b=2), a=3, b=4)
 
-    expected_str = """kwargs:
-  a: 3
-  b: 4
-  func:
-    args:
-    - 1
-    kwargs:
-      b: 2
-    target: !!python/name:tests.test_config.add ''
-target: !!python/name:tests.test_config.apply ''
+    # The exact format that matches the actual output from Config.__str__
+    expected_str = f"""target: '@{apply.__module__}.{apply.__name__}'
+func:
+  target: '@{add.__module__}.{add.__name__}'
+  '*args':
+  - 1
+  b: 2
+a: 3
+b: 4
 """
 
     assert str(cfg) == expected_str
@@ -251,3 +252,64 @@ def test_override_and_instantiate_works_with_flat_configs():
         return a + b
 
     assert sum.override_and_instantiate() == 3
+
+
+def test_nested_instantiation():
+    # Define some simple callables for testing
+    def add(a, b):
+        return a + b
+
+    def multiply(a, b):
+        return a * b
+
+    def process_list(items):
+        return sum(items)
+
+    def process_dict(data):
+        return sum(data.values())
+
+    # Create nested configs in args
+    nested_in_list = ir.Config(process_list, [
+        ir.Config(add, 1, 2),  # This will be 3
+        ir.Config(multiply, 2, 3),  # This will be 6
+        5
+    ])
+
+    # Create nested configs in kwargs
+    nested_in_dict = ir.Config(process_dict, {
+        'x': ir.Config(add, 1, 2),  # This will be 3
+        'y': ir.Config(multiply, 2, 3),  # This will be 6
+        'z': 5
+    })
+
+    # Create multi-level nesting
+    deeply_nested = ir.Config(
+        add,
+        ir.Config(multiply, 2, 3),  # This will be 6
+        ir.Config(process_dict, {
+            'a': ir.Config(add, 1, 2),  # This will be 3
+            'b': 4
+        })  # This will be 7
+    )  # Final result should be 13
+
+    # Test nested configs in lists
+    assert nested_in_list.instantiate() == 14  # 3 + 6 + 5 = 14
+
+    # Test nested configs in dictionaries
+    assert nested_in_dict.instantiate() == 14  # 3 + 6 + 5 = 14
+
+    # Test deeply nested configs
+    assert deeply_nested.instantiate() == 13  # 6 + 7 = 13
+
+    # Test with decorator syntax and nesting
+    @ir.config
+    def complex_operation(a, items, data):
+        return a + sum(items) + sum(data.values())
+
+    result = complex_operation.override(
+        a=1,
+        items=[ir.Config(add, 1, 2), ir.Config(multiply, 2, 3)],
+        data={'x': ir.Config(add, 1, 2), 'y': 5}
+    ).instantiate()
+
+    assert result == 18  # 1 + (3 + 6) + (3 + 5) = 18

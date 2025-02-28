@@ -3,18 +3,8 @@ from typing import Optional
 
 import numpy as np
 
-from cfg import store, builds
 import cfg.hardware.camera
 import ironic as ir
-
-cfg.hardware.camera.store.add_to_hydra_store()
-
-
-def _physical_env(_roboarm: ir.ControlSystem, _camera: ir.ControlSystem):
-    pass
-
-
-physical_env = builds(_physical_env)
 
 
 def _state_mapping(env: ir.ControlSystem):
@@ -28,7 +18,8 @@ def _state_mapping(env: ir.ControlSystem):
     return ir.extend(env, {'state': ir.utils.properties_dict(**robot_properties)})
 
 
-def _umi_env(camera: Optional[ir.ControlSystem] = None):
+@ir.config(camera=cfg.hardware.camera.merged)
+def umi(camera: Optional[ir.ControlSystem] = None):
     from drivers.umi import UmiCS  # noqa: CO415
     umi = UmiCS()
     components = [umi]
@@ -54,9 +45,3 @@ def _umi_env(camera: Optional[ir.ControlSystem] = None):
     res = ir.compose(*components, inputs=inputs, outputs=outputs)
     res = _state_mapping(res)
     return res
-
-
-umi_env = builds(_umi_env, camera=cfg.hardware.camera.merged)
-
-store = store(group="env")
-umi_env = store(umi_env(), name="umi")

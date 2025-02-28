@@ -12,7 +12,7 @@ import ironic as ir
 
 class SerialDumper:
 
-    def __init__(self, directory: str, video_fps: int | None = None):
+    def __init__(self, directory: str, video_fps: int | None = None, codec: str = 'libx264'):
         """
         Dumps serial data to a directory as torch tensors.
 
@@ -28,6 +28,7 @@ class SerialDumper:
         """
         self.directory = directory
         self.video_fps = video_fps
+        self.codec = codec
         os.makedirs(self.directory, exist_ok=True)
         self.data = defaultdict(list)
         self.video_buffers = {}
@@ -52,10 +53,13 @@ class SerialDumper:
         data = data or {}
 
         for k, v in video_frames.items():
+            # import pdb; pdb.set_trace()
             assert self.video_fps is not None, "Video fps is not set. Please set it using the constructor."
             if k not in self.video_buffers:
                 self.video_buffers[k] = BytesIO()
-                self.video_writers[k] = imageio.get_writer(self.video_buffers[k], format='mp4', fps=self.video_fps)
+                self.video_writers[k] = imageio.get_writer(self.video_buffers[k],
+                                                           fps=self.video_fps,
+                                                           format='mp4', codec=self.codec, is_batch=False)
 
             self.video_writers[k].append_data(v)
 
@@ -117,9 +121,10 @@ class SerialDumper:
                   input_props=['robot_data', 'env_metadata', 'ui_metadata'])
 class DatasetDumper(ir.ControlSystem):
 
-    def __init__(self, directory: str, additional_metadata: dict = None, video_fps: int | None = None):
+    def __init__(self, directory: str, additional_metadata: dict = None, video_fps: int | None = None,
+                 codec: str = 'libx264'):
         super().__init__()
-        self.dumper = SerialDumper(directory, video_fps)
+        self.dumper = SerialDumper(directory, video_fps, codec)
         self.additional_metadata = additional_metadata or {}
 
         self.tracked = False
