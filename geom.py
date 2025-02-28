@@ -44,7 +44,6 @@ class RotationRepresentation(Enum):
 
         return np.prod(shape)
 
-
     def __eq__(self, other: Any) -> bool:
         if isinstance(other, RotationRepresentation):
             return super().__eq__(other)
@@ -148,6 +147,7 @@ class Transform3D:
 
     def copy(self):
         return Transform3D(self.translation.copy(), self.quaternion.copy())
+
 
 class Quaternion(np.ndarray):
     def __new__(cls, w=1.0, x=0.0, y=0.0, z=0.0, dtype=np.float64):
@@ -396,6 +396,7 @@ def degrees_to_radians(degrees):
     Convert degrees to radians.
     """
     return degrees * np.pi / 180.0
+
 
 def radians_to_degrees(radians):
     """
