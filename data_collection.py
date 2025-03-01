@@ -86,14 +86,14 @@ def setup_interface(cfg: DictConfig):
             """
             Adjust the rotations of the transform by swapping roll and yaw angles.
             """
-            euler = transform.quaternion.as_euler
+            euler = transform.rotation.as_euler
 
             # empirically found transformation that works
             new_euler = [-euler[2], np.pi + euler[1], euler[0]]
 
-            new_quat = geom.Rotation.from_euler(new_euler)
+            new_rot = geom.Rotation.from_euler(new_euler)
 
-            return geom.Transform3D(translation=transform.translation, quaternion=new_quat)
+            return geom.Transform3D(translation=transform.translation, rotation=new_rot)
 
         inputs['robot_position'] = [(teleop, 'robot_position'), (gui, 'robot_position')]
         inputs['robot_grip'] = (gui, 'robot_grip')

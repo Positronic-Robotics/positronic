@@ -16,7 +16,7 @@ class TestTransform3D(unittest.TestCase):
         matrix = np.array([[1, 0, 0, 1], [0, 0, -1, 2], [0, 1, 0, 3], [0, 0, 0, 1]])
         transform = Transform3D.from_matrix(matrix)
         np.testing.assert_array_almost_equal(transform.translation, [1, 2, 3])
-        np.testing.assert_array_almost_equal(transform.quaternion, [0.7071, 0.7071, 0, 0], decimal=4)
+        np.testing.assert_array_almost_equal(transform.rotation.as_quat, [0.7071, 0.7071, 0, 0], decimal=4)
 
     def test_mul(self):
         translation1 = np.array([1, 2, 3])
@@ -31,7 +31,7 @@ class TestTransform3D(unittest.TestCase):
         expected_translation = np.array([5, -4, 8])
         expected_quaternion = Rotation(0.5, 0.5, 0.5, 0.5)  # Combined rotation
         np.testing.assert_array_almost_equal(result.translation, expected_translation, decimal=4)
-        np.testing.assert_array_almost_equal(result.quaternion, expected_quaternion, decimal=4)
+        np.testing.assert_array_almost_equal(result.rotation.as_quat, expected_quaternion.as_quat, decimal=4)
 
     def test_call(self):
         translation = np.array([1, 2, 3])

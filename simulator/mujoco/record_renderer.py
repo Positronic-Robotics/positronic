@@ -68,7 +68,7 @@ def process_episode(episode_path, cfg, output_dir):
                     'actuator_values': simulator.actuator_values,
                     'grip': simulator.grip,
                     'robot_position_translation': simulator.robot_position.translation.copy(),
-                    'robot_position_quaternion': simulator.robot_position.quaternion.copy(),
+                    'robot_position_rotation': simulator.robot_position.rotation.as_quat.copy(),
                     'ext_force_ee': simulator.ext_force_ee.copy(),
                     'ext_force_base': simulator.ext_force_base.copy(),
                     'robot_joints': simulator.joints.copy(),

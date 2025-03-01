@@ -6,17 +6,17 @@ import numpy as np
 
 # y = R * x + t
 class Transform3D:
-    __slots__ = ('translation', 'quaternion')
+    __slots__ = ('translation', 'rotation')
 
-    def __init__(self, translation=None, quaternion=None):
+    def __init__(self, translation=None, rotation=None):
         if translation is None:
             translation = np.zeros(3)
-        if quaternion is None:
-            quaternion = Rotation(1, 0, 0, 0)
-        elif not isinstance(quaternion, Rotation):
-            quaternion = Rotation(*quaternion)
+        if rotation is None:
+            rotation = Rotation(1, 0, 0, 0)
+        elif not isinstance(rotation, Rotation):
+            rotation = Rotation(*rotation)
         self.translation = translation
-        self.quaternion = quaternion
+        self.rotation = rotation
 
     @property
     def as_matrix(self):
@@ -24,7 +24,7 @@ class Transform3D:
         Convert the transformation to a 4x4 matrix.
         """
         t = self.translation
-        q = self.quaternion
+        q = self.rotation
 
         # Create 4x4 transformation matrix
         matrix = np.eye(4)
@@ -62,7 +62,7 @@ class Transform3D:
         Compute the inverse of the transformation.
         """
         # Inverse of the rotation
-        inv_quaternion = self.quaternion.inv
+        inv_quaternion = self.rotation.inv
 
         # Inverse of the translation
         inv_translation = -inv_quaternion(self.translation)
@@ -75,7 +75,7 @@ class Transform3D:
         """
         if not isinstance(other, Transform3D):
             raise TypeError("Multiplicand must be an instance of Transform3D")
-        return Transform3D(self.translation + self.quaternion(other.translation), self.quaternion * other.quaternion)
+        return Transform3D(self.translation + self.rotation(other.translation), self.rotation * other.rotation)
 
     def __call__(self, vector):
         """
@@ -83,20 +83,20 @@ class Transform3D:
         """
         if len(vector) != 3:
             raise ValueError("Input vector must be of length 3")
-        return self.quaternion(vector) + self.translation
+        return self.rotation(vector) + self.translation
 
     def __repr__(self):
         translation_str = np.array2string(self.translation, precision=3)
-        quaternion_str = np.array2string(self.quaternion, precision=3)
+        quaternion_str = np.array2string(self.rotation, precision=3)
         return f"Transform3D(t={translation_str}, q={quaternion_str})"
 
     def __str__(self):
         translation_str = np.array2string(self.translation, precision=3)
-        quaternion_str = np.array2string(self.quaternion, precision=3)
+        quaternion_str = np.array2string(self.rotation, precision=3)
         return f"Translation: {translation_str}, Quaternion: {quaternion_str}"
 
     def copy(self):
-        return Transform3D(self.translation.copy(), self.quaternion.copy())
+        return Transform3D(self.translation.copy(), self.rotation.copy())
 
 
 class Rotation(np.ndarray):

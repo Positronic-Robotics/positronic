@@ -14,7 +14,8 @@ logging.basicConfig(level=logging.INFO, handlers=[logging.StreamHandler(), loggi
 def front_position() -> Callable[[Transform3D], Transform3D]:
     def _parse_front_position(value: Transform3D) -> Transform3D:
         pos = np.array([value.translation[2], value.translation[0], value.translation[1]])
-        quat = Rotation(value.quaternion[0], -value.quaternion[3], -value.quaternion[1], -value.quaternion[2])
+        quat = value.rotation.as_quat
+        quat = Rotation.from_quat([quat[0], -quat[3], -quat[1], -quat[2]])
 
         # Don't ask my why these transformations, I just got them
         # Rotate quat 90 degrees around Y axis
@@ -27,7 +28,8 @@ def front_position() -> Callable[[Transform3D], Transform3D]:
 def back_position() -> Callable[[Transform3D], Transform3D]:
     def _parse_back_position(value: Transform3D) -> Transform3D:
         pos = np.array([-value.translation[2], -value.translation[0], value.translation[1]])
-        quat = Rotation(value.quaternion[0], value.quaternion[3], value.quaternion[1], value.quaternion[2])
+        quat = value.rotation.as_quat
+        quat = Rotation.from_quat([quat[0], quat[3], quat[1], quat[2]])
 
         res_quat = quat
         rotation_y_90 = Rotation(np.cos(-np.pi / 4), 0, np.sin(-np.pi / 4), 0)
@@ -72,7 +74,7 @@ class TeleopSystem(ir.ControlSystem):
 
         if self.is_tracking and self.offset is not None:
             target = Transform3D(self.teleop_t.translation + self.offset.translation,
-                                 self.teleop_t.quaternion * self.offset.quaternion)
+                                 self.teleop_t.rotation * self.offset.rotation)
             await self.outs.robot_target_position.write(ir.Message(target, message.timestamp))
 
     @ir.on_message("teleop_buttons")
@@ -106,7 +108,7 @@ class TeleopSystem(ir.ControlSystem):
         if self.teleop_t is not None:
             robot_t = (await self.ins.robot_position()).data
             self.offset = Transform3D(-self.teleop_t.translation + robot_t.translation,
-                                      self.teleop_t.quaternion.inv * robot_t.quaternion)
+                                      self.teleop_t.rotation.inv * robot_t.rotation)
         if self.is_tracking:
             logging.info('Stopped tracking')
             self.is_tracking = False

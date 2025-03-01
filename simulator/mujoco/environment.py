@@ -1,16 +1,12 @@
 from typing import Callable, Optional, Sequence, Tuple
 
-from drivers.roboarm import RobotStatus
-from ironic.utils import Throttler
 import ironic as ir
+from drivers.roboarm import RobotStatus
 from geom import Transform3D
-from simulator.mujoco.sim import (
-    CompositeMujocoMetricCalculator,
-    InverseKinematics,
-    MujocoMetricCalculator,
-    MujocoRenderer,
-    MujocoSimulator,
-)
+from ironic.utils import Throttler
+from simulator.mujoco.sim import (CompositeMujocoMetricCalculator,
+                                  InverseKinematics, MujocoMetricCalculator,
+                                  MujocoRenderer, MujocoSimulator)
 
 
 @ir.ironic_system(
@@ -63,7 +59,7 @@ class MujocoSimulatorCS(ir.ControlSystem):
         return ir.Message(
             Transform3D(
                 translation=self.simulator.robot_position.translation,
-                quaternion=self.simulator.robot_position.quaternion
+                rotation=self.simulator.robot_position.rotation
             ),
             self.ts
         )

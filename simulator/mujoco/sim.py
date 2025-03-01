@@ -9,7 +9,7 @@ from dm_control.utils import inverse_kinematics as ik
 from omegaconf import DictConfig
 
 from ironic.utils import FPSCounter
-from geom import Transform3D
+from geom import Rotation, Transform3D
 from simulator.mujoco.scene.transforms import MujocoSceneTransform, load_model_from_spec_file
 
 STATE_SPECS = [
@@ -27,11 +27,12 @@ def xmat_to_quat(xmat):
 
 
 class MujocoMetricCalculator(abc.ABC):
+
     def __init__(
-            self,
-            model: mujoco.MjModel,
-            data: mujoco.MjData,
-            grace_time: Optional[float] = 0.2,
+        self,
+        model: mujoco.MjModel,
+        data: mujoco.MjData,
+        grace_time: Optional[float] = 0.2,
     ):
         self.model = model
         self.data = data
@@ -61,6 +62,7 @@ class MujocoMetricCalculator(abc.ABC):
 
 
 class CompositeMujocoMetricCalculator(MujocoMetricCalculator):
+
     def __init__(self, metric_calculators: Sequence[MujocoMetricCalculator]):
         model = metric_calculators[0].model if len(metric_calculators) > 0 else None
         data = metric_calculators[0].data if len(metric_calculators) > 0 else None
@@ -89,6 +91,7 @@ class CompositeMujocoMetricCalculator(MujocoMetricCalculator):
 
 
 class MujocoSimulator:
+
     def __init__(
             self,
             model: mujoco.MjModel,
@@ -115,10 +118,9 @@ class MujocoSimulator:
 
     @property
     def robot_position(self):
-        return Transform3D(
-            translation=self.data.site(self.name('end_effector')).xpos.copy(),
-            quaternion=xmat_to_quat(self.data.site(self.name('end_effector')).xmat.copy())
-        )
+        return Transform3D(translation=self.data.site(self.name('end_effector')).xpos.copy(),
+                           rotation=Rotation.from_quat(
+                               xmat_to_quat(self.data.site(self.name('end_effector')).xmat.copy())))
 
     @property
     def grip(self):
@@ -211,11 +213,8 @@ class MujocoSimulator:
         self.data.actuator(self.name('actuator8')).ctrl = grip
 
     @staticmethod
-    def load_from_xml_path(
-            model_path: str,
-            loaders: Sequence[MujocoSceneTransform] = (),
-            **kwargs,
-    ) -> 'MujocoSimulator':
+    def load_from_xml_path(model_path: str, loaders: Sequence[MujocoSceneTransform] = (),
+                           **kwargs) -> 'MujocoSimulator':
         model, metadata = load_model_from_spec_file(model_path, loaders)
         data = mujoco.MjData(model)
 
@@ -229,6 +228,7 @@ class MujocoSimulator:
 
 
 class InverseKinematics:
+
     def __init__(self, simulator: MujocoSimulator):
         super().__init__()
         self.simulator = simulator
@@ -242,7 +242,7 @@ class InverseKinematics:
             physics=self.physics,
             site_name=self.simulator.name('end_effector'),
             target_pos=target_robot_position.translation,
-            target_quat=target_robot_position.quaternion,
+            target_quat=target_robot_position.rotation.as_quat,
             joint_names=self.simulator.joint_names,
             rot_weight=0.5,
         )
@@ -254,6 +254,7 @@ class InverseKinematics:
 
 
 class MujocoRenderer:
+
     def __init__(
             self,
             simulator: MujocoSimulator,

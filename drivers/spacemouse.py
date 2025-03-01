@@ -66,10 +66,10 @@ class SpacemouseCS(ir.ControlSystem):
 
             self.teleop_delta = Transform3D(
                 self.teleop_delta.translation + xyz * self.translation_speed,
-                self.teleop_delta.quaternion * Rotation.from_euler(rpy * self.rotation_speed))
+                self.teleop_delta.rotation * Rotation.from_euler(rpy * self.rotation_speed))
 
             new_position = Transform3D(self.teleop_delta.translation + self.initial_position.translation,
-                                       self.initial_position.quaternion * self.teleop_delta.quaternion)
+                                       self.initial_position.rotation * self.teleop_delta.rotation)
 
             await self.outs.gripper_target_grasp.write(ir.Message(1.0 - state.buttons[1], ir.system_clock()))
             await self.outs.robot_target_position.write(ir.Message(new_position, ir.system_clock()))

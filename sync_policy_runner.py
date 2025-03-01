@@ -48,7 +48,7 @@ def main(cfg: DictConfig):  # noqa: C901  Function is too complex
             # Encode state
             inputs = {
                 'robot_position_translation': simulator.robot_position.translation,
-                'robot_position_quaternion': simulator.robot_position.quaternion,
+                'robot_position_rotation': simulator.robot_position.rotation.as_quat,
                 'robot_joints': simulator.joints,
                 'ext_force_ee': simulator.ext_force_ee,
                 'ext_force_base': simulator.ext_force_base,

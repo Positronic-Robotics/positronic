@@ -177,7 +177,7 @@ class DatasetDumper(ir.ControlSystem):
 
     def _encode_value(self, ep_dict, key, value):
         if isinstance(value, geom.Transform3D):
-            ep_dict[f'{key}_quaternion'] = value.quaternion.copy()
+            ep_dict[f'{key}_quaternion'] = value.rotation.as_quat.copy()
             ep_dict[f'{key}_translation'] = value.translation.copy()
         else:
             ep_dict[key] = value

@@ -35,12 +35,12 @@ class AbsolutePositionAction:
 
     def decode(self, action_vector, inputs):
         rotation = action_vector[:self.rotation_size].reshape(self.rotation_shape)
-        q = geom.Rotation.create_from(rotation, self.rotation_representation)
+        rot = geom.Rotation.create_from(rotation, self.rotation_representation)
 
         outputs = {
             'target_robot_position': geom.Transform3D(
                 translation=action_vector[self.rotation_size:self.rotation_size + 3],
-                quaternion=q
+                rotation=rot
             ),
             'target_grip': action_vector[self.rotation_size + 3]
         }
@@ -82,15 +82,15 @@ class RelativeTargetPositionAction:
         q_diff = geom.Rotation.create_from(rotation, self.rotation_representation)
         tr_diff = action_vector[self.rotation_size:self.rotation_size + 3]
 
-        q_mul = geom.Rotation.from_quat(inputs['robot_position_quaternion']) * q_diff
-        q_mul = geom.Rotation.from_quat(geom.normalise_quat(q_mul.as_quat))
+        rot_mul = geom.Rotation.from_quat(inputs['robot_position_quaternion']) * q_diff
+        rot_mul = geom.Rotation.from_quat(geom.normalise_quat(rot_mul.as_quat))
 
         tr_add = inputs['robot_position_translation'] + tr_diff
 
         outputs = {
             'target_robot_position': geom.Transform3D(
                 translation=tr_add,
-                quaternion=q_mul
+                rotation=rot_mul
             ),
             'target_grip': action_vector[self.rotation_size + 3]
         }
@@ -160,7 +160,7 @@ class RelativeRobotPositionAction:
         outputs = {
             'target_robot_position': geom.Transform3D(
                 translation=tr_add,
-                quaternion=q_mul
+                rotation=rot_mul
             ),
             'target_grip': action_vector[self.rotation_size + 3]
         }
