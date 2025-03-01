@@ -10,6 +10,7 @@ from drivers.camera.merge import merge_on_pulse, merge_on_camera
 @ir.ironic_system(output_ports=['frame'])
 class MockCamera(ir.ControlSystem):
     """Mock camera that emits frames on demand"""
+
     def __init__(self, name: str):
         super().__init__()
         self.name = name
@@ -37,8 +38,10 @@ async def test_merge_on_pulse():
 
     # Create frame receiver
     received_frames = []
+
     async def frame_handler(message):
         received_frames.append(message.data)
+
     merged.outs.frame.subscribe(frame_handler)
 
     # Run system for a few steps to allow pulse generation
@@ -80,8 +83,10 @@ async def test_merge_on_camera():
 
     # Create frame receiver
     received_frames = []
+
     async def frame_handler(message):
         received_frames.append(message.data)
+
     merged.outs.frame.subscribe(frame_handler)
 
     # Emit test frames
@@ -116,8 +121,10 @@ async def test_merge_missing_frame():
     await merged.setup()
 
     received_frames = []
+
     async def frame_handler(message):
         received_frames.append(message.data)
+
     merged.outs.frame.subscribe(frame_handler)
 
     # Only emit frame from main camera
@@ -154,8 +161,10 @@ async def test_merge_novalue():
 
     # Create frame receiver
     received_frames = []
+
     async def frame_handler(message):
         received_frames.append(message.data)
+
     merged.outs.frame.subscribe(frame_handler)
 
     # Emit a normal frame from cam1 and NoValue from cam2

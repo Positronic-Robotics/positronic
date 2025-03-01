@@ -1,6 +1,6 @@
-import asyncio
-from typing import Any, Dict, List, Tuple, Union
+from typing import Any, Dict, Tuple
 import ironic as ir
+
 
 def _merge_frames(cam2frame_dicts: Dict[str, Dict[str, Any]]) -> Dict[str, Any]:
     """Merge multiple camera frames into a single dictionary.
@@ -56,7 +56,8 @@ def merge_on_pulse(cameras: Dict[str, ir.ControlSystem], fps: float) -> ir.Contr
     return ir.compose(*cameras.values(), pulse, outputs={'frame': ir.utils.map_port(merge_frames, pulse.outs.pulse)})
 
 
-def merge_on_camera(main_camera: Tuple[str, ir.ControlSystem], extension_cameras: Dict[str, ir.ControlSystem]) -> ir.ControlSystem:
+def merge_on_camera(main_camera: Tuple[str, ir.ControlSystem],
+                    extension_cameras: Dict[str, ir.ControlSystem]) -> ir.ControlSystem:
     """Merge multiple cameras into a single virtual camera system, triggered by a main camera.
 
     Combines frames from multiple cameras into a single output frame, triggered by the main camera.
@@ -94,4 +95,5 @@ def merge_on_camera(main_camera: Tuple[str, ir.ControlSystem], extension_cameras
         cam2frame_dicts[name] = main_camera_frame
         return _merge_frames(cam2frame_dicts)
 
-    return ir.compose(*extension_cameras.values(), camera, outputs={'frame': ir.utils.map_port(merge_frames, camera.outs.frame)})
+    return ir.compose(*extension_cameras.values(), camera,
+                      outputs={'frame': ir.utils.map_port(merge_frames, camera.outs.frame)})

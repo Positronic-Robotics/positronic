@@ -9,15 +9,16 @@ from enum import Enum
 from types import SimpleNamespace
 from typing import Any, Awaitable, Callable, Dict, List, Optional, Union
 
+
 # Object that represents no value
 # It is used to make a distinction between a value that is not set and a value that is set to None
-
 class NoValue:
     def __str__(self):
         return "ironic.NoValue"
 
     def __repr__(self):
         return "ironic.NoValue"
+
 
 NoValue = NoValue()
 
