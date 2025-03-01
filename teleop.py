@@ -1,5 +1,5 @@
 import logging
-from typing import List
+from typing import Callable, List
 
 import numpy as np
 
@@ -10,6 +10,33 @@ from tools.buttons import ButtonHandler
 logging.basicConfig(level=logging.INFO, handlers=[logging.StreamHandler(), logging.FileHandler("teleop.log", mode="w")])
 
 
+@ir.config
+def front_position() -> Callable[[Transform3D], Transform3D]:
+    def _parse_front_position(value: Transform3D) -> Transform3D:
+        pos = np.array([value.translation[2], value.translation[0], value.translation[1]])
+        quat = Rotation(value.quaternion[0], -value.quaternion[3], -value.quaternion[1], -value.quaternion[2])
+
+        # Don't ask my why these transformations, I just got them
+        # Rotate quat 90 degrees around Y axis
+        rotation_y_90 = Rotation(np.cos(np.pi / 4), 0, np.sin(np.pi / 4), 0)
+        return Transform3D(pos, quat * rotation_y_90)
+    return _parse_front_position
+
+
+@ir.config
+def back_position() -> Callable[[Transform3D], Transform3D]:
+    def _parse_back_position(value: Transform3D) -> Transform3D:
+        pos = np.array([-value.translation[2], -value.translation[0], value.translation[1]])
+        quat = Rotation(value.quaternion[0], value.quaternion[3], value.quaternion[1], value.quaternion[2])
+
+        res_quat = quat
+        rotation_y_90 = Rotation(np.cos(-np.pi / 4), 0, np.sin(-np.pi / 4), 0)
+        res_quat = rotation_y_90 * quat
+        res_quat = Rotation(res_quat[0], -res_quat[1], res_quat[2], res_quat[3])
+        return Transform3D(pos, res_quat)
+    return _parse_back_position
+
+
 @ir.ironic_system(
     input_ports=["teleop_transform", "teleop_buttons"],
     input_props=["robot_position"],
@@ -17,7 +44,7 @@ logging.basicConfig(level=logging.INFO, handlers=[logging.StreamHandler(), loggi
     output_props=["metadata"])
 class TeleopSystem(ir.ControlSystem):
 
-    def __init__(self, operator_position: str = 'back'):
+    def __init__(self, pos_parser: Callable[[Transform3D], Transform3D], operator_position: str = 'back'):
         super().__init__()
         self.teleop_t = None
         self.offset = None
@@ -25,28 +52,8 @@ class TeleopSystem(ir.ControlSystem):
         self.is_tracking = False
         self.is_recording = False
         self.button_handler = ButtonHandler()
+        self.pos_parser = pos_parser
         self.fps = ir.utils.FPSCounter("Teleop")
-
-    def _parse_position(self, value: Transform3D) -> Transform3D:
-        pos = np.array([value.translation[2], value.translation[0], value.translation[1]])
-        quat = Rotation(value.quaternion[0], value.quaternion[3], value.quaternion[1], value.quaternion[2])
-
-        # Don't ask my why these transformations, I just got them
-        # Rotate quat 90 degrees around Y axis
-        res_quat = quat
-        rotation_y_90 = Rotation(np.cos(-np.pi / 4), 0, np.sin(-np.pi / 4), 0)
-        res_quat = rotation_y_90 * quat
-
-        if self.operator_position == 'back':
-            pos[0] *= -1
-            pos[1] *= -1
-            res_quat = Rotation(res_quat[0], -res_quat[1], res_quat[2], res_quat[3])
-        elif self.operator_position == 'front':
-            res_quat = Rotation(-res_quat[0], res_quat[1], res_quat[2], res_quat[3])
-        else:
-            raise ValueError(f"Invalid operator position: {self.operator_position}")
-
-        return Transform3D(pos, res_quat)
 
     def _parse_buttons(self, value: List[float]):
         if len(value) > 6:
@@ -60,7 +67,7 @@ class TeleopSystem(ir.ControlSystem):
 
     @ir.on_message("teleop_transform")
     async def handle_teleop_transform(self, message: ir.Message):
-        self.teleop_t = self._parse_position(message.data)
+        self.teleop_t = self.pos_parser(message.data)
         self.fps.tick()
 
         if self.is_tracking and self.offset is not None:

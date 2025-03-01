@@ -18,13 +18,20 @@ logging.basicConfig(level=logging.INFO, handlers=[logging.StreamHandler()])
 def setup_interface(cfg: DictConfig):
     if cfg.type == 'teleop':
         from webxr import WebXR
-        from teleop import TeleopSystem
+        from teleop import TeleopSystem, front_position, back_position
 
         components, inputs, outputs = [], {}, {}
         webxr = WebXR(port=cfg.webxr.port)
         components.append(webxr)
 
-        teleop = TeleopSystem(operator_position=cfg.operator_position)
+        if cfg.operator_position == 'front':
+            pos_parser = front_position.instantiate()
+        elif cfg.operator_position == 'back':
+            pos_parser = back_position.instantiate()
+        else:
+            raise ValueError(f"Invalid operator position: {cfg.operator_position}")
+
+        teleop = TeleopSystem(pos_parser=pos_parser, operator_position=cfg.operator_position)
         components.append(teleop)
 
         teleop.bind(

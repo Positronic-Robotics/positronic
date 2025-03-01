@@ -9,6 +9,7 @@ import numpy as np
 
 import geom
 import ironic as ir
+import teleop
 
 
 @ir.config(port=5005)
@@ -17,11 +18,12 @@ def webxr(port: int):
     return WebXR(port=port)
 
 
-@ir.config(webxr=webxr, operator_position='back', stream_to_webxr='image')
-def teleop(webxr: ir.ControlSystem, operator_position: str, stream_to_webxr: Optional[str]):
-    from teleop import TeleopSystem
-    # TODO: Support Andrei's transformation (aka 'pos_transform')
-    teleop = TeleopSystem(operator_position=operator_position)
+@ir.config(webxr=webxr, operator_position=teleop.front_position, stream_to_webxr='image', pos_transform='teleop')
+def teleop(webxr: ir.ControlSystem,
+           operator_position: str,
+           stream_to_webxr: Optional[str] = None,
+           pos_transform: str = 'teleop'):
+    teleop = teleop.TeleopSystem(operator_position=operator_position)
     components = [webxr, teleop]
 
     teleop.bind(teleop_transform=webxr.outs.transform, teleop_buttons=webxr.outs.buttons)
