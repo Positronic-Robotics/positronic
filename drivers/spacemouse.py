@@ -6,7 +6,7 @@ import numpy as np
 import pyspacemouse
 
 import ironic as ir
-from geom import Quaternion, Transform3D
+from geom import Rotation, Transform3D
 
 
 @ir.ironic_system(
@@ -66,7 +66,7 @@ class SpacemouseCS(ir.ControlSystem):
 
             self.teleop_delta = Transform3D(
                 self.teleop_delta.translation + xyz * self.translation_speed,
-                self.teleop_delta.quaternion * Quaternion.from_euler(rpy * self.rotation_speed))
+                self.teleop_delta.quaternion * Rotation.from_euler(rpy * self.rotation_speed))
 
             new_position = Transform3D(self.teleop_delta.translation + self.initial_position.translation,
                                        self.initial_position.quaternion * self.teleop_delta.quaternion)

@@ -84,7 +84,7 @@ def setup_interface(cfg: DictConfig):
             # empirically found transformation that works
             new_euler = [-euler[2], np.pi + euler[1], euler[0]]
 
-            new_quat = geom.Quaternion.from_euler(new_euler)
+            new_quat = geom.Rotation.from_euler(new_euler)
 
             return geom.Transform3D(translation=transform.translation, quaternion=new_quat)
 

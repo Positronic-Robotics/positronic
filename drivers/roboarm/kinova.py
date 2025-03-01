@@ -1,3 +1,5 @@
+# flake8: noqa
+
 # Not that this is not actually working.
 # The main problem that I was not able to solve is forward kinematics that aligned
 # with inverse kinematics.
@@ -42,27 +44,27 @@ from kortex_api.autogen.messages import Session_pb2
 
 from control import ControlSystem, World, control_system
 from control.utils import control_system_fn
-from geom import Quaternion, Transform3D, degrees_to_radians, radians_to_degrees
+from geom import Rotation, Transform3D, degrees_to_radians, radians_to_degrees
 
 logger = logging.getLogger(__name__)
 
 _KINOVA_CHAIN = [
     Transform3D([-7.732256199233234e-05, 0.0004820869071409106, 0.1384558230638504],
-                Quaternion(0.9999598860740662, -0.0014847038546577096, -0.0004586570430546999, 0.008817019872367382)),
+                Rotation(0.9999598860740662, -0.0014847038546577096, -0.0004586570430546999, 0.008817019872367382)),
     Transform3D([-0.0020223343744874, -0.11016443371772766, 0.14530658721923828],
-                Quaternion(0.7064821720123291, -0.7075875997543335, 0.014157610014081001, -0.0015306948916986585)),
+                Rotation(0.7064821720123291, -0.7075875997543335, 0.014157610014081001, -0.0015306948916986585)),
     Transform3D([-0.012653934769332409, -0.6051681637763977, 0.0995088443160057],
-                Quaternion(0.7058353424072266, -0.7080992460250854, 0.019063977524638176, 0.005337915848940611)),
+                Rotation(0.7058353424072266, -0.7080992460250854, 0.019063977524638176, 0.005337915848940611)),
     Transform3D([0.00476058479398489, 0.14438331127166748, 0.18294934928417206],
-                Quaternion(0.70661860704422, 0.7065088152885437, -0.03622652217745781, 0.014936398714780807)),
+                Rotation(0.70661860704422, 0.7065088152885437, -0.03622652217745781, 0.014936398714780807)),
     Transform3D([-0.031046129763126373, -0.4425973892211914, 0.13292159140110016],
-                Quaternion(0.7047972083091736, -0.7014123201370239, 0.09579798579216003, 0.045874472707509995)),
+                Rotation(0.7047972083091736, -0.7014123201370239, 0.09579798579216003, 0.045874472707509995)),
     Transform3D([0.028989970684051514, 0.12411590665578842, 0.129145547747612],
-                Quaternion(0.703943133354187, 0.6839388608932495, -0.1895177811384201, 0.027831479907035828)),
+                Rotation(0.703943133354187, 0.6839388608932495, -0.1895177811384201, 0.027831479907035828)),
     Transform3D([-0.051960721611976624, -0.15933051705360413, 0.0792686715722084],
-                Quaternion(0.9999746084213257, 0.0043069422245025635, -0.0023099626414477825, 0.005186134018003941)),
+                Rotation(0.9999746084213257, 0.0043069422245025635, -0.0023099626414477825, 0.005186134018003941)),
     Transform3D([0.00040886219358071685, -0.000173802807694301, 0.04850476235151291],
-                Quaternion(0.9999657869338989, 0.0035003339871764183, -0.0015276813646778464, 0.007339356932789087)),
+                Rotation(0.9999657869338989, 0.0035003339871764183, -0.0015276813646778464, 0.007339356932789087)),
 ]
 
 _KINOVA_MATRICES = np.array([t.as_matrix for t in _KINOVA_CHAIN])
@@ -77,18 +79,17 @@ def _forward_kinematics_matrix(joints):
         T_joint = _KINOVA_MATRICES[i]
         if i < 7:
             theta = joints[i]
-            R_joint = np.array([
-                [np.cos(theta), -np.sin(theta), 0, 0],
-                [np.sin(theta),  np.cos(theta), 0, 0],
-                [0,              0,             1, 0],
-                [0,              0,             0, 1]
-            ])
+            R_joint = np.array([[np.cos(theta), -np.sin(theta), 0, 0], [np.sin(theta),
+                                                                        np.cos(theta), 0, 0], [0, 0, 1, 0],
+                                [0, 0, 0, 1]])
             T_joint = T_joint @ R_joint
         result_matrix = result_matrix @ T_joint
     return result_matrix
 
+
 def _forward_kinematics(joints):
     return Transform3D.from_matrix(_forward_kinematics_matrix(joints))
+
 
 def _inverse_kinematics(target, initial_position=None):
     if initial_position is None:
@@ -108,21 +109,27 @@ def _inverse_kinematics(target, initial_position=None):
     result = least_squares(objective_function, initial_position, bounds=(-180, 180))
     return result.x
 
+
 def _normalise_angles(target, base, period=360):
     res = target - base
     res[res > period / 2] -= period
     res[res < -period / 2] += period
     return base + res
 
+
 def _feedback_to_joints(feedback: BaseCyclic_pb2.Feedback):
     return np.array([a.position for a in feedback.actuators])
 
+
 def _feedback_to_pos(feedback: BaseCyclic_pb2.Feedback):
-    return Transform3D(np.array([feedback.base.tool_pose_x, feedback.base.tool_pose_y, feedback.base.tool_pose_z]),
-                        Quaternion.from_euler([feedback.base.tool_pose_theta_x, feedback.base.tool_pose_theta_y, feedback.base.tool_pose_theta_z]))
+    return Transform3D(
+        np.array([feedback.base.tool_pose_x, feedback.base.tool_pose_y, feedback.base.tool_pose_z]),
+        Rotation.from_euler(
+            [feedback.base.tool_pose_theta_x, feedback.base.tool_pose_theta_y, feedback.base.tool_pose_theta_z]))
 
 
 class KinovaController:
+
     def __init__(self, ip: str):
         self.stop_event = threading.Event()
         self.target_joints = None
@@ -170,15 +177,16 @@ class KinovaController:
         router = RouterClient(transport, RouterClient.basicErrorCallback)
         transport.connect('192.168.1.10', 10000)
 
-        session_info = Session_pb2.CreateSessionInfo(username="admin", password="admin",
-                                                        session_inactivity_timeout=1000 * 1000,
-                                                        connection_inactivity_timeout=1000 * 1000)
+        session_info = Session_pb2.CreateSessionInfo(username="admin",
+                                                     password="admin",
+                                                     session_inactivity_timeout=1000 * 1000,
+                                                     connection_inactivity_timeout=1000 * 1000)
 
         sessionManager = SessionManager(router)
         sessionManager.CreateSession(session_info)
 
         self.base = BaseClient(router)
-        self.base.SetServoingMode(Base_pb2.ServoingModeInformation(servoing_mode = Base_pb2.SINGLE_LEVEL_SERVOING))
+        self.base.SetServoingMode(Base_pb2.ServoingModeInformation(servoing_mode=Base_pb2.SINGLE_LEVEL_SERVOING))
         self.base.ClearFaults()
 
         udp_transport = UDPTransport()
@@ -190,10 +198,8 @@ class KinovaController:
         base_cyclic = BaseCyclicClient(upd_router)
         # endregion
         # region home position
-        action_list = self.base.ReadAllActions(
-            Base_pb2.RequestedActionType(action_type = Base_pb2.REACH_JOINT_ANGLES))
-        action_handle = [a.handle for a in action_list.action_list
-                        if a.name == "Home"][0]
+        action_list = self.base.ReadAllActions(Base_pb2.RequestedActionType(action_type=Base_pb2.REACH_JOINT_ANGLES))
+        action_handle = [a.handle for a in action_list.action_list if a.name == "Home"][0]
 
         def check(n, e):
             if n.action_event in [Base_pb2.ACTION_END, Base_pb2.ACTION_ABORT]:
@@ -210,7 +216,7 @@ class KinovaController:
         self.base.Unsubscribe(notification_handle)
         # endregion
 
-        control = ruckig.RuckigNoThrow(7, 1 / 1000)   # 1000 Hz
+        control = ruckig.RuckigNoThrow(7, 1 / 1000)  # 1000 Hz
         inp_ctrl = ruckig.InputParameter(7)
 
         inp_ctrl.target_velocity = [0.0] * 7
@@ -324,7 +330,6 @@ class KinovaController:
 #             controller.stop_event.set()
 #             control_thread.join()
 
-
 # def _main():
 #     world = MainThreadWorld()
 
@@ -355,7 +360,6 @@ class KinovaController:
 #     kinova.ins.target_position = manager.outs.target_pos
 
 #     world.run()
-
 
 if __name__ == "__main__":
     _main()
