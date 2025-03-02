@@ -86,10 +86,7 @@ def setup_interface(cfg: DictConfig):
 
             new_quat = geom.Quaternion.from_euler(new_euler)
 
-            return geom.Transform3D(
-                translation=transform.translation,
-                quaternion=new_quat
-            )
+            return geom.Transform3D(translation=transform.translation, quaternion=new_quat)
 
         inputs['robot_position'] = [(teleop, 'robot_position'), (gui, 'robot_position')]
         inputs['robot_grip'] = (gui, 'robot_grip')

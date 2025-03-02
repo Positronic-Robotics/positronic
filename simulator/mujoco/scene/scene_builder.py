@@ -16,6 +16,7 @@ ASSET_DIR_MESSAGE = """
 !!! This spec should be loaded with asset dict.
 See simulator.mujoco.transforms.load_model_from_spec !!!
 """
+INITIAL_CTRL = [0.3314, -0.4919, -0.5844, -2.0910, -0.2424, 1.7946, 0.6114, 0.0000]
 
 
 def random_range(value: RANGE_OR_VALUE) -> float:
@@ -138,7 +139,7 @@ def generate_scene(
 
     # Using custom texts to store metadata about the model
     world_spec.add_text(name='model_suffix', data='_ph')
-    world_spec.add_text(name='initial_ctrl', data='0.3314,-0.4919,-0.5844,-2.0910,-0.2424,1.7946,0.6114,0.0000')
+    world_spec.add_text(name='initial_ctrl', data=','.join([str(x) for x in INITIAL_CTRL]))
 
     return world_spec, asset_dict
 
