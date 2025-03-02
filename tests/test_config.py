@@ -150,7 +150,7 @@ def test_config_to_dict_kwargs_only_produces_correct_dict():
     cfg = ir.Config(Camera, name="OpenCV")
 
     expected = {
-        "target": f"@{Camera.__module__}.{Camera.__name__}",
+        "@target": f"@{Camera.__module__}.{Camera.__name__}",
         "name": "OpenCV"
     }
     assert cfg.to_dict() == expected
@@ -160,7 +160,7 @@ def test_config_to_dict_kwargs_and_args_produces_correct_dict():
     cfg = ir.Config(add, 1, b=2)
 
     expected = {
-        "target": f"@{add.__module__}.{add.__name__}",
+        "@target": f"@{add.__module__}.{add.__name__}",
         "*args": [1],
         "b": 2
     }
@@ -175,18 +175,18 @@ def test_config_to_dict_nested_produces_correct_dict():
     )
 
     expected_dict = {
-        "target": f"@{MultiEnv.__module__}.{MultiEnv.__name__}",
+        "@target": f"@{MultiEnv.__module__}.{MultiEnv.__name__}",
         "env1": {
-            "target": f"@{Env.__module__}.{Env.__name__}",
+            "@target": f"@{Env.__module__}.{Env.__name__}",
             "camera": {
-                "target": f"@{Camera.__module__}.{Camera.__name__}",
+                "@target": f"@{Camera.__module__}.{Camera.__name__}",
                 "name": "OpenCV"
             }
         },
         "env2": {
-            "target": f"@{Env.__module__}.{Env.__name__}",
+            "@target": f"@{Env.__module__}.{Env.__name__}",
             "camera": {
-                "target": f"@{Camera.__module__}.{Camera.__name__}",
+                "@target": f"@{Camera.__module__}.{Camera.__name__}",
                 "name": "Luxonis"
             }
         }
@@ -199,9 +199,9 @@ def test_config_str_nested_produces_correct_str():
     cfg = ir.Config(apply, func=ir.Config(add, 1, b=2), a=3, b=4)
 
     # The exact format that matches the actual output from Config.__str__
-    expected_str = f"""target: '@{apply.__module__}.{apply.__name__}'
+    expected_str = f"""'@target': '@{apply.__module__}.{apply.__name__}'
 func:
-  target: '@{add.__module__}.{add.__name__}'
+  '@target': '@{add.__module__}.{add.__name__}'
   '*args':
   - 1
   b: 2
@@ -254,7 +254,7 @@ def test_override_and_instantiate_works_with_flat_configs():
     assert sum.override_and_instantiate() == 3
 
 
-def test_nested_instantiation():
+def test_instantiate_with_lists_and_dicts():
     # Define some simple callables for testing
     def add(a, b):
         return a + b

@@ -133,7 +133,7 @@ class Config:
     def to_dict(self) -> Dict[str, Any]:
         res = {}
 
-        res["target"] = f'{INSTANTIATE_PREFIX}{self.target.__module__}.{self.target.__name__}'
+        res["@target"] = f'{INSTANTIATE_PREFIX}{self.target.__module__}.{self.target.__name__}'
         args = [_to_dict(arg) for arg in self.args]
         if len(args) > 0:
             res["*args"] = args

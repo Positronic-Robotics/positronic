@@ -17,7 +17,7 @@ class NoValue:
         return "ironic.NoValue"
 
     def __repr__(self):
-        return "ironic.NoValue"
+        return str(self)
 
 
 NoValue = NoValue()
