@@ -117,7 +117,7 @@ def run_server(data_queue, frame_queue, port, ssl_keyfile, ssl_certfile):  # noq
     server.run()
 
 
-@ir.ironic_system(input_ports=["frame"], output_ports=["transform", "buttons"])
+@ir.ironic_system(input_ports=["frame"], output_ports=["transforms", "buttons"])
 class WebXR(ir.ControlSystem):
     def __init__(self, port: int, ssl_keyfile: str = "key.pem", ssl_certfile: str = "cert.pem"):
         super().__init__()
@@ -160,18 +160,38 @@ class WebXR(ir.ControlSystem):
 
     async def step(self):
         data = None
+        # Process all available data, keeping only the most recent
         while not self.data_queue.empty():
             data, timestamp = self.data_queue.get()
 
         if data is None:
             return ir.State.ALIVE
 
-        pos = np.array(data['position'])
-        quat = np.array(data['orientation'])
-        transform = Transform3D(pos, quat)
-        write_ops = [self.outs.transform.write(ir.Message(transform, timestamp))]
-        write_ops.append(self.outs.buttons.write(ir.Message(data['buttons'], timestamp)))
-        await asyncio.gather(*write_ops)
+        transforms_data = {'left': None, 'right': None}
+        buttons_data = {'left': None, 'right': None}
 
+        # print(data)
+
+        if data['controllers']['right'] is not None:
+            pos = np.array(data['controllers']['right']['position'])
+            quat = np.array(data['controllers']['right']['orientation'])
+            buttons = np.array(data['controllers']['right']['buttons'])
+            transform = Transform3D(pos, quat)
+            transforms_data['right'] = transform
+            buttons_data['right'] = buttons
+
+        if data['controllers']['left'] is not None:
+            pos = np.array(data['controllers']['left']['position'])
+            quat = np.array(data['controllers']['left']['orientation'])
+            buttons = np.array(data['controllers']['left']['buttons'])
+            transform = Transform3D(pos, quat)
+            transforms_data['left'] = transform
+            buttons_data['left'] = buttons
+
+        if transforms_data['left'] is not None or transforms_data['right'] is not None:
+            await asyncio.gather(
+                self.outs.transforms.write(ir.Message(transforms_data, timestamp)),
+                self.outs.buttons.write(ir.Message(buttons_data, timestamp))
+            )
         self.fps.tick()
         return ir.State.ALIVE

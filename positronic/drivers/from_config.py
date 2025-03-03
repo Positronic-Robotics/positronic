@@ -195,7 +195,7 @@ def robot_setup(cfg: DictConfig):  # noqa: C901  Function is too complex
         else:
             outputs['frame'] = None
 
-        inputs['target_position'] = (umi, 'tracker_position')
+        inputs['target_position'] = (umi, 'tracker_positions')
         inputs['target_grip'] = (umi, 'target_grip')
         inputs['reset'] = None
 

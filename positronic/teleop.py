@@ -40,14 +40,14 @@ def back_position_parser(value: Transform3D) -> Transform3D:
     output_props=["metadata"])
 class TeleopSystem(ir.ControlSystem):
 
-    def __init__(self, pos_parser: Callable[[Transform3D], Transform3D]):
+    def __init__(self, operator_position: str = 'back'):
         super().__init__()
         self.teleop_t = None
         self.offset = None
+        self.operator_position = operator_position
         self.is_tracking = False
         self.is_recording = False
         self.button_handler = ButtonHandler()
-        self.pos_parser = pos_parser
         self.fps = ir.utils.FPSCounter("Teleop")
 
     def _parse_buttons(self, value: List[float]):
@@ -102,6 +102,82 @@ class TeleopSystem(ir.ControlSystem):
             robot_t = (await self.ins.robot_position()).data
             self.offset = Transform3D(-self.teleop_t.translation + robot_t.translation,
                                       self.teleop_t.rotation.inv * robot_t.rotation)
+
+
+
+
+@ir.ironic_system(input_ports=["teleop_transforms", "teleop_buttons"],
+                  output_ports=[
+                      "controller_positions",
+                      "gripper_target_grasp",
+                      "start_recording",
+                      "stop_recording",
+                      "reset"
+                  ],
+                  output_props=["metadata"])
+class PlainTeleopSystem(ir.ControlSystem):
+    # TODO: figure out better name
+    def __init__(self):
+        super().__init__()
+        self.is_tracking = False
+        self.is_recording = False
+        self.button_handler = ButtonHandler()
+        self.fps = ir.utils.FPSCounter("Teleop")
+
+    def _parse_position(self, value: Transform3D) -> Transform3D:
+        pos = np.array([value.translation[2], value.translation[0], value.translation[1]])
+        quat = Rotation(value.rotation[0], value.rotation[3], value.rotation[1], value.rotation[2])
+
+        return Transform3D(pos, quat)
+
+
+    def _parse_buttons(self, value: List[float]):
+        if len(value) > 6:
+            but = {'A': value[4], 'B': value[5], 'trigger': value[0], 'thumb': value[1], 'stick': value[3]}
+            self.button_handler.update_buttons(but)
+            
+    @ir.on_message("teleop_transforms")
+    async def handle_teleop_transforms(self, message: ir.Message):
+        self.fps.tick()
+
+        data = {
+            'left': self._parse_position(message.data['left']),
+            'right': self._parse_position(message.data['right'])
+        }
+
+        await self.outs.controller_positions.write(ir.Message(data, message.timestamp))
+
+    @ir.on_message("teleop_buttons")
+    async def handle_teleop_buttons(self, message: ir.Message):
+        self._parse_buttons(message.data)
+
+        track_but = self.button_handler.is_pressed('A')
+        record_but = self.button_handler.is_pressed('B')
+        reset_but = self.button_handler.is_pressed('stick')
+
+        grasp_but = self.button_handler.get_value('trigger')
+
+        if self.is_tracking:
+            await self.outs.gripper_target_grasp.write(ir.Message(grasp_but, message.timestamp))
+
+        if track_but:
+            await self._switch_tracking(message.timestamp)
+
+        if record_but:
+            await self._switch_recording(message.timestamp)
+
+        if reset_but:
+            await self.outs.reset.write(ir.Message(None, message.timestamp))
+            if self.is_tracking:
+                await self._switch_tracking(message.timestamp)
+            if self.is_recording:
+                await self._switch_recording(message.timestamp)
+
+    @ir.out_property
+    async def metadata(self):
+        return ir.Message({'ui': 'teleop'})
+
+    async def _switch_tracking(self, timestamp: int):
         if self.is_tracking:
             logging.info('Stopped tracking')
             self.is_tracking = False

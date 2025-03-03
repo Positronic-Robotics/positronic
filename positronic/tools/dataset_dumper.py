@@ -87,7 +87,11 @@ class SerialDumper:
         n_frames, tensor_key = None, None
 
         for k, v in self.data.items():
-            self.data[k] = torch.from_numpy(np.array(v))
+            try:
+                self.data[k] = torch.from_numpy(np.array(v))
+            except Exception as e:
+                print(f"Error converting {k} to torch tensor: {e}")
+                ra
 
             if n_frames is None:
                 n_frames = len(self.data[k])

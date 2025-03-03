@@ -41,7 +41,7 @@ def main(ui: ir.ControlSystem,
         data_dumper.bind(
             image=env.outs.frame,
             target_grip=ui.outs.gripper_target_grasp,
-            target_robot_position=ui.outs.robot_target_position,
+            target_robot_position=ir.utils.map_port(lambda x: x['right'], ui.outs.robot_target_position),
             start_episode=ui.outs.start_recording,
             end_episode=ui.outs.stop_recording,
             robot_data=env.outs.state,

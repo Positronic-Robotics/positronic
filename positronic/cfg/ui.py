@@ -75,6 +75,26 @@ def dearpygui_ui(camera_names: List[str]):
     return DearpyguiUi(camera_names)
 
 
+@ir.config(webxr=webxr)
+def plain_teleop(webxr: ir.ControlSystem):
+    from teleop import PlainTeleopSystem
+    teleop = PlainTeleopSystem()
+    teleop.bind(
+        teleop_transforms=webxr.outs.transforms,
+        teleop_buttons=ir.utils.map_port(lambda x: x['right'], webxr.outs.buttons),
+    )
+    inputs = {'robot_position': None, 'images': None, 'robot_grip': None, 'robot_status': None}
+    outputs = {
+        'robot_target_position': teleop.outs.controller_positions,
+        'gripper_target_grasp': teleop.outs.gripper_target_grasp,
+        'start_recording': teleop.outs.start_recording,
+        'stop_recording': teleop.outs.stop_recording,
+        'reset': teleop.outs.reset,
+        'metadata': teleop.outs.metadata
+    }
+    components = [teleop, webxr]
+    return ir.compose(*components, inputs=inputs, outputs=outputs)
+
 @ir.config
 def stub():
 
