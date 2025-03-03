@@ -17,11 +17,8 @@ def webxr(port: int):
     return WebXR(port=port)
 
 
-@ir.config(webxr=webxr, operator_position='back', stream_to_webxr='image', pos_transform='teleop')
-def teleop(webxr: ir.ControlSystem,
-           operator_position: str,
-           stream_to_webxr: Optional[str] = None,
-           pos_transform: str = 'teleop'):
+@ir.config(webxr=webxr, operator_position='back', stream_to_webxr='image')
+def teleop(webxr: ir.ControlSystem, operator_position: str, stream_to_webxr: Optional[str]):
     from teleop import TeleopSystem
     # TODO: Support Andrei's transformation (aka 'pos_transform')
     teleop = TeleopSystem(operator_position=operator_position)
@@ -40,11 +37,9 @@ def teleop(webxr: ir.ControlSystem,
     return ir.compose(*components, inputs=inputs, outputs=teleop.output_mappings)
 
 
-@ir.config
-def spacemouse(translation_speed: float = 0.0005,
-               rotation_speed: float = 0.001,
-               translation_dead_zone: float = 0.8,
-               rotation_dead_zone: float = 0.7):
+@ir.config(translation_speed=0.0005, rotation_speed=0.001, translation_dead_zone=0.8, rotation_dead_zone=0.7)
+def spacemouse(translation_speed: float, rotation_speed: float, translation_dead_zone: float,
+               rotation_dead_zone: float):
     from drivers.spacemouse import SpacemouseCS
     smouse = SpacemouseCS(translation_speed, rotation_speed, translation_dead_zone, rotation_dead_zone)
     inputs = {'robot_position': (smouse, 'robot_position'), 'robot_grip': None, 'images': None, 'robot_status': None}
@@ -55,7 +50,7 @@ def spacemouse(translation_speed: float = 0.0005,
 
 
 @ir.config(tracking=teleop, extra_ui_camera_names=['handcam_back', 'handcam_front', 'front_view', 'back_view'])
-def teleop_with_ui(tracking: ir.ControlSystem, extra_ui_camera_names: Optional[List[str]] = None):
+def teleop_with_ui(tracking: ir.ControlSystem, extra_ui_camera_names: Optional[List[str]]):
     if extra_ui_camera_names:
         from simulator.mujoco.mujoco_gui import DearpyguiUi
         gui = DearpyguiUi(extra_ui_camera_names)

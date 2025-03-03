@@ -16,45 +16,43 @@ def _add_image_mapping(mapping: Optional[Dict[str, str]], camera: ir.ControlSyst
     return ir.compose(camera, map_system, outputs={'frame': map_system.outs.output})
 
 
-@ir.config
-def linux(device_path: str,
-          width: int = 640,
-          height: int = 480,
-          fps: int = 30,
-          pixel_format: str = "MJPG",
-          image_mapping: Optional[Dict[str, str]] = None):
+@ir.config(width=640, height=480, fps=30, pixel_format="MJPG", image_mapping=None)
+def linux(device_path: str, width: int, height: int, fps: int, pixel_format: str, image_mapping: Optional[Dict[str,
+                                                                                                               str]]):
     from drivers.camera.linuxpy_video import LinuxPyCamera
     camera = LinuxPyCamera(device_path, width, height, fps, pixel_format)
     return _add_image_mapping(image_mapping, camera)
 
 
 @ir.config(fps=60)
-def luxonis(fps: int = 60, image_mapping: Optional[Dict[str, str]] = None):
+def luxonis(fps: int, image_mapping: Optional[Dict[str, str]] = None):
     from drivers.camera.luxonis import LuxonisCamera
     return _add_image_mapping(image_mapping, LuxonisCamera(fps))
 
 
-@ir.config(resolution=(640, 480), fps=30, enable_color=True, enable_depth=False, enable_infrared=False)
-def realsense(resolution: Tuple[int, int],
-              fps: int,
-              enable_color: bool,
-              enable_depth: bool,
-              enable_infrared: bool,
-              image_mapping: Optional[Dict[str, str]] = None):
+@ir.config(resolution=(640, 480),
+           fps=30,
+           enable_color=True,
+           enable_depth=False,
+           enable_infrared=False,
+           image_mapping=None)
+def realsense(resolution: Tuple[int, int], fps: int, enable_color: bool, enable_depth: bool, enable_infrared: bool,
+              image_mapping: Optional[Dict[str, str]]):
     from drivers.camera.realsense import RealsenseCamera
     return _add_image_mapping(image_mapping,
                               RealsenseCamera(resolution, fps, enable_color, enable_depth, enable_infrared))
 
 
-@ir.config
-def stereolabs(fps: int,
-               view: str = "LEFT",
-               resolution: str = "AUTO",
-               depth_mode: str = "NONE",
-               max_depth: float = 10,
-               coordinate_units: str = "METER",
-               depth_mask: bool = False,
-               image_mapping: Optional[Dict[str, str]] = None):
+@ir.config(fps=30,
+           view="LEFT",
+           resolution="AUTO",
+           depth_mode="NONE",
+           depth_mask=False,
+           max_depth=10,
+           coordinate_units="METER",
+           image_mapping=None)
+def stereolabs(fps: int, view: str, resolution: str, depth_mode: str, max_depth: float, coordinate_units: str,
+               depth_mask: bool, image_mapping: Optional[Dict[str, str]]):
     from drivers.camera.sl import SLCamera
     import pyzed.sl as sl
 
@@ -66,10 +64,10 @@ def stereolabs(fps: int,
     return _add_image_mapping(image_mapping, camera)
 
 
-@ir.config
-def opencv(camera_id: int = 0, resolution: Tuple[int, int] = (640, 480), fps: int = 30):
+@ir.config(camera_id=0, resolution=(640, 480), fps=30, image_mapping=None)
+def opencv(camera_id: int, resolution: Tuple[int, int], fps: int, image_mapping: Optional[Dict[str, str]]):
     from drivers.camera.opencv import OpenCVCameraCS, OpenCVCamera
-    return OpenCVCameraCS(OpenCVCamera(camera_id, resolution, fps))
+    return _add_image_mapping(image_mapping, OpenCVCameraCS(OpenCVCamera(camera_id, resolution, fps)))
 
 
 sl_vga = stereolabs.override(fps=30, view='SIDE_BY_SIDE', resolution='VGA', depth_mode='NONE', depth_mask=False)
