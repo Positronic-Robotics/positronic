@@ -68,7 +68,10 @@ class RelativeTargetPositionAction:
             mtx = _convert_quat_to_tensor(q_relative, self.rotation_representation)
             mtxs[i] = mtx.flatten()
 
-        translation_diff = episode_data['target_robot_position_translation'] - episode_data['robot_position_translation']
+        translation_diff = (
+            episode_data['target_robot_position_translation']
+            - episode_data['robot_position_translation']
+        )
 
         grips = episode_data['target_grip']
         if grips.ndim == 1:
