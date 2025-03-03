@@ -156,7 +156,7 @@ async def test_merge_one_novalue_input_returns_novalue():
     cameras = {"cam1": cam1, "cam2": cam2}
 
     # Create merged camera system
-    merged = merge_on_pulse(cameras, fps=20)
+    merged = merge_on_pulse(cameras, fps=500)
     await merged.setup()
 
     # Create frame receiver
@@ -175,7 +175,7 @@ async def test_merge_one_novalue_input_returns_novalue():
     # Run for enough time to ensure multiple pulses
     for _ in range(3):
         await merged.step()
-        await asyncio.sleep(0.1)  # Wait longer than pulse period (0.05s)
+        await asyncio.sleep(0.004)  # Wait longer than pulse period (0.002s)
 
     # Should not have received any frames since one camera returned NoValue
     assert len(received_frames) == 0
@@ -189,7 +189,7 @@ async def test_merge_one_novalue_input_returns_novalue():
     received_frames.clear()
     for _ in range(3):
         await merged.step()
-        await asyncio.sleep(0.1)
+        await asyncio.sleep(0.004)
 
     # Should have received at least one merged frame
     assert len(received_frames) >= 1

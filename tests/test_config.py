@@ -153,7 +153,7 @@ def test_config_to_dict_kwargs_only_produces_correct_dict():
         "@target": f"@{Camera.__module__}.{Camera.__name__}",
         "name": "OpenCV"
     }
-    assert cfg.to_dict() == expected
+    assert cfg._to_dict() == expected
 
 
 def test_config_to_dict_kwargs_and_args_produces_correct_dict():
@@ -164,7 +164,7 @@ def test_config_to_dict_kwargs_and_args_produces_correct_dict():
         "*args": [1],
         "b": 2
     }
-    assert cfg.to_dict() == expected
+    assert cfg._to_dict() == expected
 
 
 def test_config_to_dict_nested_produces_correct_dict():
@@ -192,7 +192,7 @@ def test_config_to_dict_nested_produces_correct_dict():
         }
     }
 
-    assert cfg.to_dict() == expected_dict
+    assert cfg._to_dict() == expected_dict
 
 
 def test_config_str_nested_produces_correct_str():

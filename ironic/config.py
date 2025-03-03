@@ -8,7 +8,7 @@ INSTANTIATE_PREFIX = '@'
 
 def _to_dict(obj):
     if isinstance(obj, Config):
-        return obj.to_dict()
+        return obj._to_dict()
     elif isinstance(obj, dict):
         return {k: _to_dict(v) for k, v in obj.items()}
     elif isinstance(obj, list):
@@ -130,7 +130,7 @@ class Config:
 
         return self.target(*instantiated_args, **instantiated_kwargs)
 
-    def to_dict(self) -> Dict[str, Any]:
+    def _to_dict(self) -> Dict[str, Any]:
         res = {}
 
         res["@target"] = f'{INSTANTIATE_PREFIX}{self.target.__module__}.{self.target.__name__}'
@@ -143,7 +143,7 @@ class Config:
         return res
 
     def __str__(self):
-        return yaml.dump(self.to_dict(), default_flow_style=False, sort_keys=False)
+        return yaml.dump(self._to_dict(), default_flow_style=False, sort_keys=False)
 
     def copy(self) -> 'Config':
         """
