@@ -478,3 +478,21 @@ class Pulse(ControlSystem):
             self._next_pulse_time += self._period
 
         return State.ALIVE
+
+
+def print_port(port: OutputPort, message_prefix: str = '') -> OutputPort:
+    """
+    A utility function that prints messages from a output port, keeping the original message.
+
+    Args:
+        port: (OutputPort) The output port to print messages from
+        message_prefix: (str) A prefix to add to the printed message
+
+    Returns:
+        (OutputPort) Mapped output port that prints messages.
+    """
+    def _print_and_return(message: Message):
+        print(f'{message_prefix}: {message}')
+        return message
+
+    return map_port(_print_and_return, port)

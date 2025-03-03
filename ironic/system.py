@@ -51,6 +51,7 @@ def system_clock() -> int:
 
 
 class OutputPort:
+    Stub: "StubOutputPort"
 
     def __init__(self, name: str, parent_system: Optional["ControlSystem"] = None):
         self._name = name

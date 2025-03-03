@@ -16,7 +16,6 @@ logging.basicConfig(level=logging.INFO, handlers=[logging.StreamHandler()])
 
 @ir.config
 def dataset_dumper(out_dir: str, video_fps: int, metadata: Dict[str, str] = {}, codec: str = 'libx264'):
-    # TODO(aluzan): 'relative_mujoco_model_path' to be added to metadata
     return DatasetDumper(out_dir, additional_metadata=metadata, video_fps=video_fps, codec=codec)
 
 
