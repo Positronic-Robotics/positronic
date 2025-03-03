@@ -22,8 +22,7 @@ def main(cfg: DictConfig):  # noqa: C901  Function is too complex
 
     # Initialize renderer
     renderer.initialize()
-    reference_pose = None
-    target_pos = None
+    reference_pose = simulator.robot_position
 
     # Initialize policy and encoders
     policy = get_policy(cfg.inference.checkpoint_path, cfg.get('policy_args', {}))
@@ -53,30 +52,29 @@ def main(cfg: DictConfig):  # noqa: C901  Function is too complex
                 'robot_joints': simulator.joints,
                 'ext_force_ee': simulator.ext_force_ee,
                 'ext_force_base': simulator.ext_force_base,
-                'grip': simulator.grip
+                'grip': simulator.grip,
+                # TODO: following will be gone if we add support for state/action history
+                'reference_robot_position_translation': reference_pose.translation,
+                'reference_robot_position_quaternion': reference_pose.quaternion
             }
             obs = state_encoder.encode(images, inputs)
             for key in obs:
                 obs[key] = obs[key].to(cfg.inference.device)
 
-            if len(policy._action_queue) == 0:
-                if reference_pose is None:
-                    reference_pose = simulator.robot_position
-                else:
-                    reference_pose = target_pos
-
-            inputs['robot_position_translation'] = reference_pose.translation
-            inputs['robot_position_quaternion'] = reference_pose.quaternion
             # Get policy action
             action = policy.select_action(obs).squeeze(0).cpu().numpy()
             action_dict = action_decoder.decode(action, inputs)
 
             if cfg.inference.rerun:
                 rerun_log_observation(simulator.ts_sec, obs)
-                rerun_log_action(simulator.ts_sec, action_dict)
+                rerun_log_action(simulator.ts_sec, action)
 
             # Apply actions
             target_pos = action_dict['target_robot_position']
+
+            if policy.chunk_start():
+                reference_pose = target_pos
+
             joint_positions = ik.recalculate_ik(target_pos)
             if joint_positions is not None:
                 simulator.set_actuator_values(joint_positions)
