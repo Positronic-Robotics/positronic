@@ -113,15 +113,35 @@ class Config:
         else:
             return self.kwargs[key]
 
-    def instantiate(self, __path: str = ''):
+    def instantiate(self) -> Any:
+        """
+        Instatiate the target function with the given arguments and keyword arguments.
+
+        Returns:
+            The instantiated target function.
+        """
+        return self._instantiate_internal()
+
+    def _instantiate_internal(self, path: str = ''):
+        """
+        Instatiate the target function with the given arguments and keyword arguments.
+
+        Args:
+            path (str): The path to the current key. Used for error reporting.
+
+        Returns:
+            The instantiated target function.
+
+        Raises:
+        """
         def _instantiate_value(value, key, path):
             try:
                 if isinstance(value, Config):
-                    return value.instantiate(path + f'{key}.')
+                    return value._instantiate_internal(path + f'{key}.')
                 elif isinstance(value, (list, tuple)):
-                    return type(value)(_instantiate_value(item, key, path) for item in value)
+                    return type(value)(_instantiate_value(item, f'{key}[{i}]', path) for i, item in enumerate(value))
                 elif isinstance(value, dict):
-                    return {k: _instantiate_value(v, key, path) for k, v in value.items()}
+                    return {k: _instantiate_value(v, f'{key}["{k}"]', path) for k, v in value.items()}
                 else:
                     return value
             except Exception as e:
@@ -131,11 +151,11 @@ class Config:
                     raise ConfigError(f'Error instantiating "{path + key}": {e}') from e
 
         # Recursively instantiate any Config objects in args
-        instantiated_args = [_instantiate_value(arg, key, __path) for key, arg in enumerate(self.args)]
+        instantiated_args = [_instantiate_value(arg, key, path) for key, arg in enumerate(self.args)]
 
         # Recursively instantiate any Config objects in kwargs
         instantiated_kwargs = {
-            key: _instantiate_value(value, key, __path) for key, value in self.kwargs.items()
+            key: _instantiate_value(value, key, path) for key, value in self.kwargs.items()
         }
 
         return self.target(*instantiated_args, **instantiated_kwargs)

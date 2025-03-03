@@ -353,3 +353,43 @@ def test_instantiate_exception_during_instantiation_has_correct_path_with_nested
         cfg.instantiate()
 
     assert str(e.value) == 'Error instantiating "lvl1_arg.lvl2_arg": Bad function'
+
+
+def test_instantiate_exception_during_instantiation_has_correct_path_with_list():
+    def func(list_arg):
+        return list_arg[0]
+
+    @ir.config
+    def goob_obj():
+        return 1
+
+    @ir.config
+    def bad_obj():
+        raise ValueError("Bad object")
+
+    cfg = ir.Config(func, list_arg=[goob_obj, bad_obj])
+
+    with pytest.raises(ir.ConfigError) as e:
+        cfg.instantiate()
+
+    assert str(e.value) == 'Error instantiating "list_arg[1]": Bad object'
+
+
+def test_instantiate_exception_during_instantiation_has_correct_path_with_dict():
+    def func(dict_arg):
+        return dict_arg['key']
+
+    @ir.config
+    def goob_obj():
+        return 1
+
+    @ir.config
+    def bad_obj():
+        raise ValueError("Bad object")
+
+    cfg = ir.Config(func, dict_arg={'key': goob_obj, 'bad_key': bad_obj})
+
+    with pytest.raises(ir.ConfigError) as e:
+        cfg.instantiate()
+
+    assert str(e.value) == 'Error instantiating "dict_arg[\"bad_key\"]": Bad object'
