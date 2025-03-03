@@ -6,6 +6,10 @@ from typing import Any, Callable, Dict
 INSTANTIATE_PREFIX = '@'
 
 
+class ConfigError(Exception):
+    pass
+
+
 def _to_dict(obj):
     if isinstance(obj, Config):
         return obj._to_dict()
@@ -109,23 +113,29 @@ class Config:
         else:
             return self.kwargs[key]
 
-    def instantiate(self):
-        def _instantiate_value(value):
-            if isinstance(value, Config):
-                return value.instantiate()
-            elif isinstance(value, (list, tuple)):
-                return type(value)(_instantiate_value(item) for item in value)
-            elif isinstance(value, dict):
-                return {k: _instantiate_value(v) for k, v in value.items()}
-            else:
-                return value
+    def instantiate(self, __path: str = ''):
+        def _instantiate_value(value, key, path):
+            try:
+                if isinstance(value, Config):
+                    return value.instantiate(path + f'{key}.')
+                elif isinstance(value, (list, tuple)):
+                    return type(value)(_instantiate_value(item, key, path) for item in value)
+                elif isinstance(value, dict):
+                    return {k: _instantiate_value(v, key, path) for k, v in value.items()}
+                else:
+                    return value
+            except Exception as e:
+                if isinstance(e, ConfigError):
+                    raise e
+                else:
+                    raise ConfigError(f'Error instantiating "{path + key}": {e}') from e
 
         # Recursively instantiate any Config objects in args
-        instantiated_args = [_instantiate_value(arg) for arg in self.args]
+        instantiated_args = [_instantiate_value(arg, key, __path) for key, arg in enumerate(self.args)]
 
         # Recursively instantiate any Config objects in kwargs
         instantiated_kwargs = {
-            key: _instantiate_value(value) for key, value in self.kwargs.items()
+            key: _instantiate_value(value, key, __path) for key, value in self.kwargs.items()
         }
 
         return self.target(*instantiated_args, **instantiated_kwargs)

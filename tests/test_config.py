@@ -313,3 +313,43 @@ def test_instantiate_with_lists_and_dicts():
     ).instantiate()
 
     assert result == 18  # 1 + (3 + 6) + (3 + 5) = 18
+
+
+def test_instantiate_exception_during_instantiation_has_correct_path():
+
+    def func(a, b):
+        return a + b
+
+    def bad_function(a, b):
+        raise ValueError("Bad function")
+
+    cfg = ir.Config(func, a=ir.Config(bad_function, a=1, b=2), b=3)
+
+    with pytest.raises(ir.ConfigError) as e:
+        cfg.instantiate()
+
+    assert str(e.value) == 'Error instantiating "a": Bad function'
+
+
+def test_instantiate_exception_during_instantiation_has_correct_path_with_nested_configs():
+    def lvl1_function(lvl1arg):
+        return lvl1arg
+
+    def lvl2_function(lvl2arg):
+        return lvl2arg
+
+    def bad_function(a, b):
+        raise ValueError("Bad function")
+
+    cfg = ir.Config(
+        lvl1_function,
+        lvl1_arg=ir.Config(
+            lvl2_function,
+            lvl2_arg=ir.Config(bad_function, a=1, b=2),
+        ),
+    )
+
+    with pytest.raises(ir.ConfigError) as e:
+        cfg.instantiate()
+
+    assert str(e.value) == 'Error instantiating "lvl1_arg.lvl2_arg": Bad function'
