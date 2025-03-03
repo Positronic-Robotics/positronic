@@ -24,8 +24,8 @@ def linux(device_path: str, width: int, height: int, fps: int, pixel_format: str
     return _add_image_mapping(image_mapping, camera)
 
 
-@ir.config(fps=60)
-def luxonis(fps: int, image_mapping: Optional[Dict[str, str]] = None):
+@ir.config(fps=60, image_mapping=None)
+def luxonis(fps: int, image_mapping: Optional[Dict[str, str]]):
     from drivers.camera.luxonis import LuxonisCamera
     return _add_image_mapping(image_mapping, LuxonisCamera(fps))
 
