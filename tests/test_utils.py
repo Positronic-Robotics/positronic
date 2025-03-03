@@ -14,6 +14,7 @@ async def test_map_port_basic_transform():
 
     # Track received values
     received_values = []
+
     async def collector(message):
         received_values.append(message.data)
 
@@ -25,12 +26,14 @@ async def test_map_port_basic_transform():
 
     assert received_values == [10, 20]
 
+
 @pytest.mark.asyncio
 async def test_map_port_preserves_timestamp():
     original_port = ir.OutputPort("test_port")
     mapped = ir.utils.map_port(lambda x: x * 2, original_port)
 
     received_messages = []
+
     async def collector(message):
         received_messages.append(message)
 
@@ -42,9 +45,11 @@ async def test_map_port_preserves_timestamp():
     assert len(received_messages) == 1
     assert received_messages[0].timestamp == test_timestamp
 
+
 @pytest.mark.asyncio
 async def test_map_port_filters_no_value():
     original_port = ir.OutputPort("test_port")
+
     def transform(x):
         if x < 0:
             return ir.NoValue
@@ -53,6 +58,7 @@ async def test_map_port_filters_no_value():
     mapped = ir.utils.map_port(transform, original_port)
 
     received_values = []
+
     async def collector(message):
         received_values.append(message.data)
 
@@ -65,6 +71,7 @@ async def test_map_port_filters_no_value():
 
     assert received_values == [10, 6]
 
+
 @pytest.mark.asyncio
 async def test_map_port_async_transform():
     original_port = ir.OutputPort("test_port")
@@ -76,6 +83,7 @@ async def test_map_port_async_transform():
     mapped = ir.utils.map_port(async_double, original_port)
 
     received_values = []
+
     async def collector(message):
         received_values.append(message.data)
 
@@ -86,6 +94,7 @@ async def test_map_port_async_transform():
     await original_port.write(ir.Message(10, timestamp=2000))
 
     assert received_values == [10, 20]
+
 
 @pytest.mark.asyncio
 async def test_map_port_async_filter():
@@ -100,6 +109,7 @@ async def test_map_port_async_filter():
     mapped = ir.utils.map_port(async_filter, original_port)
 
     received_values = []
+
     async def collector(message):
         received_values.append(message.data)
 
@@ -111,6 +121,7 @@ async def test_map_port_async_filter():
     await original_port.write(ir.Message(3, timestamp=3000))  # Should be mapped
 
     assert received_values == [10, 6]
+
 
 @pytest.mark.asyncio
 async def test_print_port(capfd):
