@@ -72,6 +72,7 @@ def main(cfg: DictConfig):  # noqa: C901  Function is too complex
             # Apply actions
             target_pos = action_dict['target_robot_position']
 
+            # TODO: (aluzan) this is the most definitely will go to inference next PR
             if policy.chunk_start():
                 reference_pose = target_pos
 
