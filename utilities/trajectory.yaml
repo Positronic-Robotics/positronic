@@ -5,14 +5,14 @@ targets:
   # - ik:
   #     translation: [0.6, 0, 0.08]
   #     quaternion: [1, 0, 0, 0]
-  - impedance:
-      translation: [0.65, 0, 0.05]
-      quaternion: [1, 0, 0, 0]
-      duration: 5.0
-      stiffness:
-        translational: 1000
-        rotational: 30
-
+  # - impedance:
+  #     translation: [0.65, 0, 0.05]
+  #     quaternion: [1, 0, 0, 0]
+  #     duration: 5.0
+  #     stiffness:
+  #       translational: 1000
+  #       rotational: 30
+  
   # - translation: [0.5, 0.0, 0.6]
   #   quaternion: [1, 0, 0, 0]
   # - translation: [0.3, -0.1, 0.6]
