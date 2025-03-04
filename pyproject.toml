@@ -44,9 +44,3 @@ testpaths = [
     "*/tests",
 ]
 python_files = ["test_*.py", "*_test.py"]
-
-[tool.uv]
-environments = [
-    "sys_platform == 'darwin'",
-    "sys_platform == 'linux'",
-]
