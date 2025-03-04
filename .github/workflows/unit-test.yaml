@@ -33,5 +33,7 @@ jobs:
         if: steps.cache.outputs.cache-hit != 'true'
       - name: Run tests
         shell: bash -l {0}
+        env:
+          PYTHONPATH: ${{ env.PYTHONPATH }}:$PWD
         run: |
           conda run -n positronic pytest

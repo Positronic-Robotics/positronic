@@ -7,7 +7,7 @@ from typing import Callable, List, Optional
 
 import numpy as np
 
-import geom as geom
+import geom
 import ironic as ir
 from positronic.teleop import TeleopSystem, front_position_parser
 
