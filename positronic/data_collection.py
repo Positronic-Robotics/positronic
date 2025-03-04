@@ -8,17 +8,17 @@ from omegaconf import DictConfig
 
 import geom
 import ironic as ir
-from drivers import from_config
+from positronic.drivers import from_config
 from ironic.compose import extend
-from tools.dataset_dumper import DatasetDumper
+from positronic.tools.dataset_dumper import DatasetDumper
 
 logging.basicConfig(level=logging.INFO, handlers=[logging.StreamHandler()])
 
 
 def setup_interface(cfg: DictConfig):
     if cfg.type == 'teleop':
-        from webxr import WebXR
-        from teleop import TeleopSystem, front_position, back_position
+        from positronic.webxr import WebXR
+        from positronic.teleop import TeleopSystem, front_position, back_position
 
         components, inputs, outputs = [], {}, {}
         webxr = WebXR(port=cfg.webxr.port)
@@ -65,8 +65,8 @@ def setup_interface(cfg: DictConfig):
         # TODO: refactor this in a way which allows to use multiple control interfaces at once
         # i. e. teleop_gui = inputs from teleop + outputs to gui
         from simulator.mujoco.mujoco_gui import DearpyguiUi
-        from teleop import TeleopSystem
-        from webxr import WebXR
+        from positronic.teleop import TeleopSystem
+        from positronic.webxr import WebXR
 
         components, inputs, outputs = [], {}, {}
 

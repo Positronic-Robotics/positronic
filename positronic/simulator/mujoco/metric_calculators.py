@@ -2,7 +2,7 @@ from typing import Dict
 import mujoco
 import numpy as np
 
-from simulator.mujoco.sim import MujocoMetricCalculator
+from positronic.simulator.mujoco.sim import MujocoMetricCalculator
 
 
 class ObjectMovedCalculator(MujocoMetricCalculator):

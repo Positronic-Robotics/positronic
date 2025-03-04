@@ -13,7 +13,7 @@ from ironic import ir
 def franka_default(ip: str, relative_dynamics_factor: float, gripper_speed: float, realtime_config: str,
                    collision_behavior: Optional[List[List[float]]], home_joints_config: Optional[List[float]],
                    cartesian_mode: str):
-    from drivers.roboarm.franka import Franka, CartesianMode
+    from positronic.drivers.roboarm.franka import Franka, CartesianMode
     from franky import RealtimeConfig
 
     realtime_config = getattr(RealtimeConfig, realtime_config)

@@ -1,5 +1,5 @@
 from typing import Dict, Optional, Tuple
-from drivers.camera.merge import merge_on_pulse
+from positronic.drivers.camera.merge import merge_on_pulse
 
 import ironic as ir
 

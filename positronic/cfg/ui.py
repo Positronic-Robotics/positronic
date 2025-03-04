@@ -7,14 +7,14 @@ from typing import Callable, List, Optional
 
 import numpy as np
 
-import geom
+import geom as geom
 import ironic as ir
-from teleop import TeleopSystem, front_position_parser
+from positronic.teleop import TeleopSystem, front_position_parser
 
 
 @ir.config(port=5005)
 def webxr(port: int):
-    from webxr import WebXR
+    from positronic.webxr import WebXR
     return WebXR(port=port)
 
 
@@ -41,7 +41,7 @@ def teleop(webxr: ir.ControlSystem,
 @ir.config(translation_speed=0.0005, rotation_speed=0.001, translation_dead_zone=0.8, rotation_dead_zone=0.7)
 def spacemouse(translation_speed: float, rotation_speed: float, translation_dead_zone: float,
                rotation_dead_zone: float):
-    from drivers.spacemouse import SpacemouseCS
+    from positronic.drivers.spacemouse import SpacemouseCS
     smouse = SpacemouseCS(translation_speed, rotation_speed, translation_dead_zone, rotation_dead_zone)
     inputs = {'robot_position': (smouse, 'robot_position'), 'robot_grip': None, 'images': None, 'robot_status': None}
     outputs = smouse.output_mappings
@@ -53,7 +53,7 @@ def spacemouse(translation_speed: float, rotation_speed: float, translation_dead
 @ir.config(tracking=teleop, extra_ui_camera_names=['handcam_back', 'handcam_front', 'front_view', 'back_view'])
 def teleop_with_ui(tracking: ir.ControlSystem, extra_ui_camera_names: Optional[List[str]]):
     if extra_ui_camera_names:
-        from simulator.mujoco.mujoco_gui import DearpyguiUi
+        from positronic.simulator.mujoco.mujoco_gui import DearpyguiUi
         gui = DearpyguiUi(extra_ui_camera_names)
         components = [tracking, gui]
 
@@ -71,7 +71,7 @@ def teleop_with_ui(tracking: ir.ControlSystem, extra_ui_camera_names: Optional[L
 
 @ir.config(camera_names=['handcam_left', 'handcam_right'])
 def dearpygui_ui(camera_names: List[str]):
-    from simulator.mujoco.mujoco_gui import DearpyguiUi
+    from positronic.simulator.mujoco.mujoco_gui import DearpyguiUi
     return DearpyguiUi(camera_names)
 
 

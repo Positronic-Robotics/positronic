@@ -6,7 +6,7 @@ from typing import Sequence
 import numpy as np
 import dearpygui.dearpygui as dpg
 
-from drivers.roboarm import RobotStatus
+from positronic.drivers.roboarm import RobotStatus
 import ironic as ir
 from geom import Transform3D
 from ironic.utils import FPSCounter

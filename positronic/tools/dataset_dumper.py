@@ -2,11 +2,11 @@ from collections import defaultdict
 import os
 from io import BytesIO
 
-import geom
 import numpy as np
 import torch
 import imageio
 
+import geom
 import ironic as ir
 
 

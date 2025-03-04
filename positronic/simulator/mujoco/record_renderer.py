@@ -3,10 +3,11 @@ import os
 from tqdm import tqdm
 import hydra
 import torch
+
 import geom
 
-from simulator.mujoco.sim import create_from_config
-from tools.dataset_dumper import SerialDumper
+from positronic.simulator.mujoco.sim import create_from_config
+from positronic.tools.dataset_dumper import SerialDumper
 
 
 def process_episode(episode_path, cfg, output_dir):

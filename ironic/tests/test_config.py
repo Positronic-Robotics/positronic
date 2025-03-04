@@ -83,7 +83,7 @@ def test_instantiate_class_required_args_provided_with_kwargs_override_created()
 def test_instantiate_class_required_args_provided_with_path_to_class_created():
     incomplete_env_cfg = ir.Config(Env)
 
-    env_obj = incomplete_env_cfg.override(camera="@tests.test_config.static_object").instantiate()
+    env_obj = incomplete_env_cfg.override(camera="@ironic.tests.test_config.static_object").instantiate()
 
     assert isinstance(env_obj, Env)
     assert isinstance(env_obj.camera, Camera)

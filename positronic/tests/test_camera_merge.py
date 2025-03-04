@@ -4,7 +4,7 @@ import numpy as np
 import pytest
 
 import ironic as ir
-from drivers.camera.merge import merge_on_pulse, merge_on_camera
+from positronic.drivers.camera.merge import merge_on_pulse, merge_on_camera
 
 
 @ir.ironic_system(output_ports=['frame'])

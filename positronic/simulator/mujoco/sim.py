@@ -10,7 +10,7 @@ from omegaconf import DictConfig
 
 from ironic.utils import FPSCounter
 from geom import Rotation, Transform3D
-from simulator.mujoco.scene.transforms import MujocoSceneTransform, load_model_from_spec_file
+from positronic.simulator.mujoco.scene.transforms import MujocoSceneTransform, load_model_from_spec_file
 
 STATE_SPECS = [
     mujoco.mjtState.mjSTATE_FULLPHYSICS,

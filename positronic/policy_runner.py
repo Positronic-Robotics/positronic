@@ -6,11 +6,11 @@ import hydra
 from omegaconf import DictConfig
 import rerun as rr
 
-import drivers
+import positronic.drivers as drivers
 import ironic as ir
-from drivers.roboarm.franka import Franka
-from drivers.gripper.dh import DHGripper
-from inference import Inference
+from positronic.drivers.roboarm.franka import Franka
+from positronic.drivers.gripper.dh import DHGripper
+from positronic.inference import Inference
 
 logging.basicConfig(level=logging.INFO,
                     handlers=[logging.StreamHandler(),
