@@ -3,12 +3,12 @@ from collections import deque
 from enum import Enum
 import threading
 import time
-from typing import Optional
 
 import franky
 import ironic as ir
 from .status import RobotStatus
-from geom import Transform3D
+from geom import Rotation, Transform3D
+
 
 class CartesianMode(Enum):
     LIBFRANKA = "libfranka"
@@ -16,15 +16,19 @@ class CartesianMode(Enum):
 
 
 # TODO: Extract gripper into a separate control system
-@ir.ironic_system(
-    input_ports=['target_position', 'target_grip', 'reset'],
-    output_ports=['status'],
-    output_props=['position', 'grip', 'joint_positions', 'ext_force_base', 'ext_force_ee']
-)
+@ir.ironic_system(input_ports=['target_position', 'target_grip', 'reset'],
+                  output_ports=['status'],
+                  output_props=['position', 'grip', 'joint_positions', 'ext_force_base', 'ext_force_ee'])
 class Franka(ir.ControlSystem):
-    def __init__(self, ip: str, relative_dynamics_factor: float = 0.2, gripper_speed: float = 0.02,
-                 realtime_config: franky.RealtimeConfig = franky.RealtimeConfig.Ignore, collision_behavior = None,
-                 home_joints_config=None, cartesian_mode: CartesianMode = CartesianMode.LIBFRANKA):
+
+    def __init__(self,
+                 ip: str,
+                 relative_dynamics_factor: float = 0.2,
+                 gripper_speed: float = 0.02,
+                 realtime_config: franky.RealtimeConfig = franky.RealtimeConfig.Ignore,
+                 collision_behavior=None,
+                 home_joints_config=None,
+                 cartesian_mode: CartesianMode = CartesianMode.LIBFRANKA):
         super().__init__()
         self.robot = franky.Robot(ip, realtime_config=realtime_config)
         self._set_default_behavior()
@@ -85,8 +89,8 @@ class Franka(ir.ControlSystem):
 
     def _submit_motion(self, motion: franky.Motion, asynchronous: bool = True):
         # There's only one async motion at a time in the queue, and any number of blocking motions
-        # If motion is async, we delete existing async motion (keeping blocking motions), and put the new in the end of the queue
-        # If motion is not async, we just add it to the end
+        # If motion is async, we delete existing async motion (keeping blocking motions),
+        # and put the new in the end of the queue. If motion is not async, we just add it to the end
         with self._command_mutex:
             if asynchronous:
                 self._command_queue = deque([(m, a) for m, a in self._command_queue if not a])
@@ -96,7 +100,7 @@ class Franka(ir.ControlSystem):
 
     @ir.on_message('target_position')
     async def handle_target_position(self, message: ir.Message):
-        pos = franky.Affine(translation=message.data.translation, quaternion=message.data.quaternion)
+        pos = franky.Affine(translation=message.data.translation, quaternion=message.data.rotation.as_quat)
         motion = None
         if self.cartesian_mode == CartesianMode.LIBFRANKA:
             motion = franky.CartesianMotion(pos, franky.ReferenceType.Absolute)
@@ -125,7 +129,9 @@ class Franka(ir.ControlSystem):
             # Signal we're starting the reset
             self._main_loop.call_soon_threadsafe(lambda: start_reset_future.set_result(True))
 
-            self.robot.join_motion(timeout=0.1)  # we need to set timeout here because with return_when_finished=False, the last motion never finishes
+            self.robot.join_motion(
+                timeout=0.1
+            )  # we need to set timeout here because with return_when_finished=False, the last motion never finishes
             motion = franky.JointWaypointMotion([franky.JointWaypoint(self.home_joints_config)])
             self.robot.move(motion, asynchronous=False)
             if self.gripper:
@@ -156,10 +162,7 @@ class Franka(ir.ControlSystem):
         else:
             if message.data > 0.66:
                 try:
-                    self.gripper.grasp(
-                        0.0, self.gripper_speed, 20.0,
-                        epsilon_outer=1.0 * self.gripper.max_width
-                    )
+                    self.gripper.grasp(0.0, self.gripper_speed, 20.0, epsilon_outer=1.0 * self.gripper.max_width)
                     self._gripper_grasped = True
                 except franky.CommandException as e:
                     print(f"Grasping failed: {e}")
@@ -168,7 +171,7 @@ class Franka(ir.ControlSystem):
     async def position(self):
         """End effector position in robot base coordinate frame."""
         pos = self.robot.current_pose.end_effector_pose
-        return ir.Message(data=Transform3D(pos.translation, pos.quaternion))
+        return ir.Message(data=Transform3D(pos.translation, Rotation.from_quat(pos.quaternion)))
 
     @ir.out_property
     async def joint_positions(self):
@@ -176,24 +179,15 @@ class Franka(ir.ControlSystem):
 
     @ir.out_property
     async def grip(self):
-        return ir.Message(
-            data=self._gripper_grasped if self.gripper else 0.0,
-            timestamp=ir.system_clock()
-        )
+        return ir.Message(data=self._gripper_grasped if self.gripper else 0.0, timestamp=ir.system_clock())
 
     @ir.out_property
     async def ext_force_base(self):
-        return ir.Message(
-            data=self.robot.state.O_F_ext_hat_K,
-            timestamp=ir.system_clock()
-        )
+        return ir.Message(data=self.robot.state.O_F_ext_hat_K, timestamp=ir.system_clock())
 
     @ir.out_property
     async def ext_force_ee(self):
-        return ir.Message(
-            data=self.robot.state.K_F_ext_hat_K,
-            timestamp=ir.system_clock()
-        )
+        return ir.Message(data=self.robot.state.K_F_ext_hat_K, timestamp=ir.system_clock())
 
     async def step(self) -> ir.State:
         return await super().step()
@@ -229,11 +223,11 @@ if __name__ == "__main__":
         current_pos = (await franka.position()).data
 
         # Move in a small circle
-        for t in np.linspace(0, 2*np.pi, 50):
+        for t in np.linspace(0, 2 * np.pi, 50):
             tr = np.array(current_pos.translation)
             tr[0] += np.cos(t) * 0.1
             tr[1] += np.sin(t) * 0.1
-            new_pos = Transform3D(tr, current_pos.quaternion)
+            new_pos = Transform3D(tr, current_pos.rotation)
 
             await target_port.write(ir.Message(data=new_pos))
             await asyncio.sleep(0.1)

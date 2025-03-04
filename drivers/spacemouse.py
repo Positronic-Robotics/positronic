@@ -56,7 +56,7 @@ class SpacemouseCS(ir.ControlSystem):
         if self.is_tracking:
             if self.initial_position is None:
                 robot_t = (await self.ins.robot_position()).data
-                self.initial_position = Transform3D(robot_t.translation, robot_t.quaternion)
+                self.initial_position = robot_t.copy()
 
             xyz = np.array([state.x, state.y, state.z])
             xyz[np.abs(xyz) < self.translation_dead_zone] = 0

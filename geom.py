@@ -52,9 +52,9 @@ class Transform3D:
         R = matrix[:3, :3]
 
         # Convert rotation matrix to quaternion
-        quaternion = Rotation.from_rotation_matrix(R)
+        rotation = Rotation.from_rotation_matrix(R)
 
-        return Transform3D(translation, quaternion)
+        return Transform3D(translation, rotation)
 
     @property
     def inv(self):
@@ -62,12 +62,12 @@ class Transform3D:
         Compute the inverse of the transformation.
         """
         # Inverse of the rotation
-        inv_quaternion = self.rotation.inv
+        inv_rotation = self.rotation.inv
 
         # Inverse of the translation
-        inv_translation = -inv_quaternion(self.translation)
+        inv_translation = -inv_rotation(self.translation)
 
-        return Transform3D(inv_translation, inv_quaternion)
+        return Transform3D(inv_translation, inv_rotation)
 
     def __mul__(self, other):
         """
@@ -87,12 +87,12 @@ class Transform3D:
 
     def __repr__(self):
         translation_str = np.array2string(self.translation, precision=3)
-        quaternion_str = np.array2string(self.rotation, precision=3)
+        quaternion_str = np.array2string(self.rotation.as_quat, precision=3)
         return f"Transform3D(t={translation_str}, q={quaternion_str})"
 
     def __str__(self):
         translation_str = np.array2string(self.translation, precision=3)
-        quaternion_str = np.array2string(self.rotation, precision=3)
+        quaternion_str = np.array2string(self.rotation.as_quat, precision=3)
         return f"Translation: {translation_str}, Quaternion: {quaternion_str}"
 
     def copy(self):
@@ -194,14 +194,14 @@ class Rotation(np.ndarray):
     @classmethod
     def from_quat(cls, quat: np.ndarray) -> 'Rotation':
         """
-        Create a quaternion from a 4-element numpy array.
+        Create a rotation from a 4-element numpy array.
         """
         return cls(*quat)
 
     @classmethod
     def from_rotation_matrix(cls, matrix):
         """
-        Create a quaternion from a rotation matrix.
+        Create a rotation from a rotation matrix.
         """
         m = np.asarray(matrix, dtype=np.float64)[:3, :3]
         t = np.trace(m)
@@ -240,7 +240,7 @@ class Rotation(np.ndarray):
     @classmethod
     def from_euler(cls, euler):
         """
-        Convert euler angles in radians to a quaternion.
+        Create a rotation from euler angles in radians.
         """
         roll, pitch, yaw = euler
         cy = np.cos(yaw * 0.5)
@@ -260,13 +260,13 @@ class Rotation(np.ndarray):
     @classmethod
     def from_rotvec(cls, rotvec: np.ndarray) -> 'Rotation':
         """
-        Convert a rotation vector to a quaternion.
+        Create rotation from a rotation vector.
 
         Args:
             rotvec: (numpy.ndarray) 3D rotation vector representing axis-angle rotation
 
         Returns:
-            Quaternion object representing the same rotation
+            Rotation object representing the same rotation
         """
         angle = np.linalg.norm(rotvec)
         if angle < 1e-10:  # Handle small angles to avoid division by zero
@@ -321,7 +321,7 @@ class Rotation(np.ndarray):
     @property
     def as_rotation_matrix(self):
         """
-        Convert the quaternion to a rotation matrix.
+        Represent the rotation as a rotation matrix.
         """
         w, x, y, z = self
         return np.array([[1 - 2 * (y**2 + z**2), 2 * (x * y - z * w), 2 * (x * z + y * w)],
@@ -331,7 +331,7 @@ class Rotation(np.ndarray):
     @property
     def as_rotvec(self) -> np.ndarray:
         """
-        Convert rotation to rotation vector representation.
+        Represent the rotation as a rotation vector.
 
         Returns:
             numpy.ndarray: 3D rotation vector representing axis-angle rotation. The direction
@@ -349,7 +349,7 @@ class Rotation(np.ndarray):
     @property
     def as_euler(self) -> np.ndarray:
         """
-        Convert a quaternion to euler angles in radians.
+        Convert a rotation to euler angles in radians.
         """
         # Roll (x-axis rotation)
         sinr_cosp = 2 * (self[0] * self[1] + self[2] * self[3])
@@ -380,14 +380,14 @@ class Rotation(np.ndarray):
     @property
     def angle(self):
         """
-        Compute the angle of the quaternion in radians.
+        Compute the angle of the rotation in radians.
         """
         return 2 * np.arccos(self[0])
 
 
 def normalise_quat(q: np.ndarray) -> np.ndarray:
     """
-    Normalise a quaternion, expressed as a 4-element numpy array.
+    Normalise a rotation, expressed as a 4-element numpy array.
     """
     return q / np.linalg.norm(q)
 

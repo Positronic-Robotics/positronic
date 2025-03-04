@@ -118,7 +118,7 @@ class SetBodyPosition(MujocoSceneTransform):
             self.quaternion = quaternion
         else:
             euler = np.random.uniform(random_euler[0], random_euler[1])
-            self.quaternion = geom.Quaternion.from_euler(euler).to(geom.RotationRepresentation.QUAT)
+            self.quaternion = geom.Rotation.from_euler(euler).as_quat
 
     def apply(self, spec: mujoco.MjSpec) -> mujoco.MjSpec:
         bodies = [g for g in spec.bodies if g.name == self.body_name]

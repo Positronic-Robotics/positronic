@@ -10,33 +10,27 @@ from tools.buttons import ButtonHandler
 logging.basicConfig(level=logging.INFO, handlers=[logging.StreamHandler(), logging.FileHandler("teleop.log", mode="w")])
 
 
-@ir.config
-def front_position() -> Callable[[Transform3D], Transform3D]:
-    def _parse_front_position(value: Transform3D) -> Transform3D:
-        pos = np.array([value.translation[2], value.translation[0], value.translation[1]])
-        quat = value.rotation.as_quat
-        quat = Rotation.from_quat([quat[0], -quat[3], -quat[1], -quat[2]])
+def front_position_parser(value: Transform3D) -> Transform3D:
+    pos = np.array([value.translation[2], value.translation[0], value.translation[1]])
+    quat = value.rotation.as_quat
+    quat = Rotation.from_quat([quat[0], -quat[3], -quat[1], -quat[2]])
 
-        # Don't ask my why these transformations, I just got them
-        # Rotate quat 90 degrees around Y axis
-        rotation_y_90 = Rotation(np.cos(np.pi / 4), 0, np.sin(np.pi / 4), 0)
-        return Transform3D(pos, quat * rotation_y_90)
-    return _parse_front_position
+    # Don't ask my why these transformations, I just got them
+    # Rotate quat 90 degrees around Y axis
+    rotation_y_90 = Rotation(np.cos(np.pi / 4), 0, np.sin(np.pi / 4), 0)
+    return Transform3D(pos, quat * rotation_y_90)
 
 
-@ir.config
-def back_position() -> Callable[[Transform3D], Transform3D]:
-    def _parse_back_position(value: Transform3D) -> Transform3D:
-        pos = np.array([-value.translation[2], -value.translation[0], value.translation[1]])
-        quat = value.rotation.as_quat
-        quat = Rotation.from_quat([quat[0], quat[3], quat[1], quat[2]])
+def back_position_parser(value: Transform3D) -> Transform3D:
+    pos = np.array([-value.translation[2], -value.translation[0], value.translation[1]])
+    quat = value.rotation.as_quat
+    quat = Rotation.from_quat([quat[0], quat[3], quat[1], quat[2]])
 
-        res_quat = quat
-        rotation_y_90 = Rotation(np.cos(-np.pi / 4), 0, np.sin(-np.pi / 4), 0)
-        res_quat = rotation_y_90 * quat
-        res_quat = Rotation(res_quat[0], -res_quat[1], res_quat[2], res_quat[3])
-        return Transform3D(pos, res_quat)
-    return _parse_back_position
+    res_quat = quat
+    rotation_y_90 = Rotation(np.cos(-np.pi / 4), 0, np.sin(-np.pi / 4), 0)
+    res_quat = rotation_y_90 * quat
+    res_quat = Rotation(res_quat[0], -res_quat[1], res_quat[2], res_quat[3])
+    return Transform3D(pos, res_quat)
 
 
 @ir.ironic_system(
@@ -46,11 +40,10 @@ def back_position() -> Callable[[Transform3D], Transform3D]:
     output_props=["metadata"])
 class TeleopSystem(ir.ControlSystem):
 
-    def __init__(self, pos_parser: Callable[[Transform3D], Transform3D], operator_position: str = 'back'):
+    def __init__(self, pos_parser: Callable[[Transform3D], Transform3D]):
         super().__init__()
         self.teleop_t = None
         self.offset = None
-        self.operator_position = operator_position
         self.is_tracking = False
         self.is_recording = False
         self.button_handler = ButtonHandler()

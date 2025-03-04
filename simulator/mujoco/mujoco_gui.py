@@ -103,7 +103,7 @@ class DearpyguiUi(ir.ControlSystem):
 
         dpg.set_value(
             "robot_position", f"Robot Translation: {robot_position.data.translation}\n"
-            f"Robot Quaternion: {robot_position.data.quaternion}")
+            f"Robot Quaternion: {robot_position.data.rotation.as_quat}")
         dpg.set_value(
             "target", f"Target Position: {self.desired_action.position}\n"
             f"Target Quat: {self.desired_action.orientation}\n"
@@ -141,7 +141,7 @@ class DearpyguiUi(ir.ControlSystem):
     async def _reset_desired_action(self):
         pos_msg, grip_msg = await asyncio.gather(self.ins.robot_position(), self.ins.robot_grip())
         self.desired_action = DesiredAction(position=pos_msg.data.translation.copy(),
-                                            orientation=pos_msg.data.quaternion.copy(),
+                                            orientation=pos_msg.data.rotation.as_quat.copy(),
                                             grip=grip_msg.data)
 
     @ir.out_property

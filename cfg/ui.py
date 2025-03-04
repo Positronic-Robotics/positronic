@@ -3,13 +3,13 @@
 import asyncio
 from collections import deque
 import time
-from typing import List, Optional
+from typing import Callable, List, Optional
 
 import numpy as np
 
 import geom
 import ironic as ir
-import teleop
+from teleop import TeleopSystem, front_position_parser
 
 
 @ir.config(port=5005)
@@ -18,17 +18,16 @@ def webxr(port: int):
     return WebXR(port=port)
 
 
-@ir.config(webxr=webxr, operator_position=teleop.front_position, stream_to_webxr='image', pos_transform='teleop')
+@ir.config(webxr=webxr, operator_position=front_position_parser, stream_to_webxr='image')
 def teleop(webxr: ir.ControlSystem,
-           operator_position: str,
-           stream_to_webxr: Optional[str] = None,
-           pos_transform: str = 'teleop'):
-    teleop = teleop.TeleopSystem(operator_position=operator_position)
-    components = [webxr, teleop]
+           position_parser: Callable[[geom.Transform3D], geom.Transform3D],
+           stream_to_webxr: Optional[str] = None):
+    teleop_cs = TeleopSystem(pos_parser=position_parser)
+    components = [webxr, teleop_cs]
 
-    teleop.bind(teleop_transform=webxr.outs.transform, teleop_buttons=webxr.outs.buttons)
+    teleop_cs.bind(teleop_transform=webxr.outs.transform, teleop_buttons=webxr.outs.buttons)
 
-    inputs = {'robot_position': (teleop, 'robot_position'), 'images': None, 'robot_grip': None, 'robot_status': None}
+    inputs = {'robot_position': (teleop_cs, 'robot_position'), 'images': None, 'robot_grip': None, 'robot_status': None}
 
     if stream_to_webxr:
         get_frame_for_webxr = ir.utils.MapPortCS(lambda frame: frame[stream_to_webxr])
@@ -36,7 +35,7 @@ def teleop(webxr: ir.ControlSystem,
         inputs['images'] = (get_frame_for_webxr, 'input')
         webxr.bind(frame=get_frame_for_webxr.outs.output)
 
-    return ir.compose(*components, inputs=inputs, outputs=teleop.output_mappings)
+    return ir.compose(*components, inputs=inputs, outputs=teleop_cs.output_mappings)
 
 
 @ir.config(translation_speed=0.0005, rotation_speed=0.001, translation_dead_zone=0.8, rotation_dead_zone=0.7)
@@ -99,9 +98,9 @@ def stub():
 
         async def _send_target(self, time_sec):
             translation = self.start_pos.translation + np.array([0, 0.1, 0.1]) * np.sin(time_sec * (2 * np.pi) / 3)
-            quaternion = self.start_pos.quaternion
+            rotation = self.start_pos.rotation
             await asyncio.gather(
-                self.outs.robot_target_position.write(ir.Message(geom.Transform3D(translation, quaternion))),
+                self.outs.robot_target_position.write(ir.Message(geom.Transform3D(translation, rotation))),
                 self.outs.gripper_target_grasp.write(ir.Message(0.0)))
 
         async def _stop_recording(self, _):

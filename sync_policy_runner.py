@@ -55,7 +55,7 @@ def main(cfg: DictConfig):  # noqa: C901  Function is too complex
                 'grip': simulator.grip,
                 # TODO: following will be gone if we add support for state/action history
                 'reference_robot_position_translation': reference_pose.translation,
-                'reference_robot_position_quaternion': reference_pose.quaternion
+                'reference_robot_position_quaternion': reference_pose.rotation.as_quat
             }
             obs = state_encoder.encode(images, inputs)
             for key in obs:

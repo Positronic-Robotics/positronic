@@ -16,9 +16,11 @@ logging.basicConfig(level=logging.INFO,
                     handlers=[logging.StreamHandler(),
                               logging.FileHandler("policy_runner.log", mode="w")])
 
+
 # TODO: Extract to a proper control system that outputs pressed keys
 @ir.ironic_system(output_ports=["start_policy", "stop_policy"])
 class PolicyRunnerSystem(ir.ControlSystem):
+
     def __init__(self):
         super().__init__()
         self.policy_running = False
@@ -63,9 +65,11 @@ class PolicyRunnerSystem(ir.ControlSystem):
         await super().cleanup()
         print('Policy runner stopped')
 
+
 @hydra.main(version_base=None, config_path="configs", config_name="policy_runner")
 def main(cfg: DictConfig):
     asyncio.run(async_main(cfg))
+
 
 async def async_main(cfg: DictConfig):
     if cfg.rerun:
@@ -88,11 +92,10 @@ async def async_main(cfg: DictConfig):
     properties_to_dump = ir.utils.properties_dict(
         robot_joints=franka.outs.joint_positions,
         robot_position_translation=ir.utils.map_property(lambda t: t.translation, franka.outs.position),
-        robot_position_quaternion=ir.utils.map_property(lambda t: t.quaternion, franka.outs.position),
+        robot_position_quaternion=ir.utils.map_property(lambda t: t.rotation.as_quat, franka.outs.position),
         ext_force_ee=franka.outs.ext_force_ee,
         ext_force_base=franka.outs.ext_force_base,
-        grip=gripper.outs.grip if gripper else None
-    )
+        grip=gripper.outs.grip if gripper else None)
 
     inference.bind(
         frame=cam.outs.frame,
@@ -101,13 +104,7 @@ async def async_main(cfg: DictConfig):
         stop=policy_runner.outs.stop_policy,
     )
 
-    system = ir.compose(
-        policy_runner,
-        franka,
-        cam,
-        inference,
-        gripper
-    )
+    system = ir.compose(policy_runner, franka, cam, inference, gripper)
 
     def rerun_cleanup():
         if cfg.rerun:

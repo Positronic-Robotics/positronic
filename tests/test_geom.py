@@ -7,8 +7,8 @@ class TestTransform3D(unittest.TestCase):
 
     def test_as_matrix(self):
         translation = np.array([1, 2, 3])
-        quaternion = Rotation(0.7071, 0.7071, 0, 0)  # 90 degrees rotation around x-axis
-        transform = Transform3D(translation, quaternion)
+        rotation = Rotation(0.7071, 0.7071, 0, 0)  # 90 degrees rotation around x-axis
+        transform = Transform3D(translation, rotation)
         expected_matrix = np.array([[1, 0, 0, 1], [0, 0, -1, 2], [0, 1, 0, 3], [0, 0, 0, 1]])
         np.testing.assert_array_almost_equal(transform.as_matrix, expected_matrix, decimal=4)
 
@@ -20,30 +20,30 @@ class TestTransform3D(unittest.TestCase):
 
     def test_mul(self):
         translation1 = np.array([1, 2, 3])
-        quaternion1 = Rotation(0.7071, 0.7071, 0, 0)  # 90 degrees rotation around x-axis
-        transform1 = Transform3D(translation1, quaternion1)
+        rotation1 = Rotation(0.7071, 0.7071, 0, 0)  # 90 degrees rotation around x-axis
+        transform1 = Transform3D(translation1, rotation1)
 
         translation2 = np.array([4, 5, 6])
-        quaternion2 = Rotation(0.7071, 0, 0.7071, 0)  # 90 degrees rotation around y-axis
-        transform2 = Transform3D(translation2, quaternion2)
+        rotation2 = Rotation(0.7071, 0, 0.7071, 0)  # 90 degrees rotation around y-axis
+        transform2 = Transform3D(translation2, rotation2)
 
         result = transform1 * transform2
         expected_translation = np.array([5, -4, 8])
-        expected_quaternion = Rotation(0.5, 0.5, 0.5, 0.5)  # Combined rotation
+        expected_rotation = Rotation(0.5, 0.5, 0.5, 0.5)  # Combined rotation
         np.testing.assert_array_almost_equal(result.translation, expected_translation, decimal=4)
-        np.testing.assert_array_almost_equal(result.rotation.as_quat, expected_quaternion.as_quat, decimal=4)
+        np.testing.assert_array_almost_equal(result.rotation.as_quat, expected_rotation.as_quat, decimal=4)
 
     def test_call(self):
         translation = np.array([1, 2, 3])
-        quaternion = Rotation(0.7071, 0.7071, 0, 0)  # 90 degrees rotation around x-axis
-        transform = Transform3D(translation, quaternion)
+        rotation = Rotation(0.7071, 0.7071, 0, 0)  # 90 degrees rotation around x-axis
+        transform = Transform3D(translation, rotation)
         vector = np.array([1, 1, 1])
         result = transform(vector)
         expected_result = np.array([2, 1, 4])
         np.testing.assert_array_almost_equal(result, expected_result, decimal=4)
 
 
-class TestQuaternion(unittest.TestCase):
+class TestRotation(unittest.TestCase):
 
     def test_mul(self):
         q1 = Rotation(0.7071, 0.7071, 0, 0)  # 90 degrees rotation around x-axis
@@ -88,20 +88,20 @@ class TestQuaternion(unittest.TestCase):
         expected_result = np.array([np.pi / 2, 0, 0])
         np.testing.assert_array_almost_equal(euler, expected_result, decimal=4)
 
-    def test_from_rotvec_zero_rotation_returns_identity_quaternion(self):
+    def test_from_rotvec_zero_rotation_returns_identity_rotation(self):
         rotvec = np.array([0.0, 0.0, 0.0])
         q = Rotation.from_rotvec(rotvec)
         expected_result = Rotation(1.0, 0.0, 0.0, 0.0)
         np.testing.assert_array_almost_equal(q, expected_result)
 
-    def test_from_rotvec_x_axis_90_degrees_returns_correct_quaternion(self):
+    def test_from_rotvec_x_axis_90_degrees_returns_correct_rotation(self):
         rotvec = np.array([np.pi / 2, 0.0, 0.0])  # 90 degrees around x-axis
         q = Rotation.from_rotvec(rotvec)
         expected_result = Rotation(0.7071, 0.7071, 0.0, 0.0)
         np.testing.assert_array_almost_equal(q, expected_result, decimal=4)
 
-    def test_as_rotvec_zero_quaternion_returns_zero_vector(self):
-        q = Rotation(1.0, 0.0, 0.0, 0.0)  # Identity quaternion
+    def test_as_rotvec_zero_rotation_returns_zero_vector(self):
+        q = Rotation(1.0, 0.0, 0.0, 0.0)  # Identity rotation
         rotvec = q.as_rotvec
         expected_result = np.array([0.0, 0.0, 0.0])
         np.testing.assert_array_almost_equal(rotvec, expected_result)

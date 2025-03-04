@@ -5,6 +5,7 @@ from typing import Dict, Tuple
 import ironic as ir
 import cv2
 
+
 def _wxyz_to_xyzw(wxyz: np.ndarray) -> np.ndarray:
     return np.array([wxyz[1], wxyz[2], wxyz[3], wxyz[0]])
 
@@ -15,6 +16,7 @@ def _depth_image_to_uint8(depth_image: np.ndarray, depth_range_m: Tuple[float, f
     depth_image = np.clip(depth_image, 0.0, 1.0)
     depth_image = (depth_image * 255).astype(np.uint8)
     return depth_image
+
 
 def _add_crosshair_to_image(image: np.ndarray) -> np.ndarray:
     image = image.copy()
@@ -38,11 +40,7 @@ def _add_crosshair_to_image(image: np.ndarray) -> np.ndarray:
 class RerunVisualiser(ir.ControlSystem):
     """Control system for visualizing data streams using rerun."""
 
-    def __init__(
-            self,
-            port: int = 9876,
-            depth_image_range_m: Tuple[float, float] = (0.15, 3.0)
-        ) -> None:
+    def __init__(self, port: int = 9876, depth_image_range_m: Tuple[float, float] = (0.15, 3.0)) -> None:
         super().__init__()
         self.depth_image_range_m = depth_image_range_m
         self.recording_id = 0
@@ -95,12 +93,7 @@ class RerunVisualiser(ir.ControlSystem):
         rr.log("forces/base/z", rr.Scalar(base_force[2]))
 
         robot_position = (await self.ins.robot_position()).data
-        rr_robot_position = rr.Transform3D(
-            translation=robot_position.translation.copy(),
-            rotation=rr.Quaternion(xyzw=_wxyz_to_xyzw(robot_position.quaternion))
-        )
+        rr_robot_position = rr.Transform3D(translation=robot_position.translation.copy(),
+                                           rotation=rr.Quaternion(xyzw=_wxyz_to_xyzw(robot_position.rotation.as_quat)))
         rr.log("robot/position", rr_robot_position)
-        rr.log("robot/ee_force", rr.Arrows3D(
-            origins=robot_position.translation.copy(),
-            vectors=ee_force[:3].copy()
-        ))
+        rr.log("robot/ee_force", rr.Arrows3D(origins=robot_position.translation.copy(), vectors=ee_force[:3].copy()))
