@@ -1,0 +1,42 @@
+[project]
+name = "positronic"
+version = "0.1.0"
+description = "Positronic robotics project"
+requires-python = "~=3.11"
+dependencies = [
+    "numpy",
+    "opencv-python",
+    "pymodbus",
+    "torch",
+    "requests",
+    "scipy",
+    "uvicorn[standard]",
+    "pyaudio",
+    "click",
+    "cmake-build-extension",
+    "dearpygui",
+    "fire",
+    "hydra-colorlog",
+    "hydra-core",
+    "numpy-quaternion",
+    "pytest",
+    "pytest-asyncio",
+    "websockets",
+    "yappi",
+    "dm_control",
+    "pyspacemouse",
+    "pyturbojpeg @ git+https://github.com/lilohuang/PyTurboJPEG.git@v1.7.8",
+    "linuxpy",
+    "imageio",
+    "hydra-zen",
+    "rerun-sdk",
+    "matplotlib",
+    "av",
+    "jupyter"
+]
+
+[tool.pytest.ini_options]
+testpaths = [
+    "*/tests",
+]
+python_files = ["test_*.py", "*_test.py"]

@@ -13,27 +13,18 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: conda-incubator/setup-miniconda@v3
+      - name: Enable caching
+        uses: astral-sh/setup-uv@v5
         with:
-          activate-environment: positronic
-          use-only-tar-bz2: true
-      - name: Cache conda
-        uses: actions/cache@v3
-        env:
-          # Increase this value to reset cache if environment.yaml has not changed
-          CACHE_NUMBER: 0
-        with:
-          path: ${{ env.CONDA }}/envs
-          key:
-            conda-${{ runner.os }}--${{ runner.arch }}--${{
-            hashFiles('environment.yaml') }}-${{ env.CACHE_NUMBER }}
-        id: cache
+          enable-cache: true
+
+      - name: Set up Python
+        run: uv python install
+
       - name: Install dependencies
-        run: conda env update -n positronic -f environment.yaml
-        if: steps.cache.outputs.cache-hit != 'true'
+        run: uv sync
+
       - name: Run tests
-        shell: bash -l {0}
-        env:
-          PYTHONPATH: ${{ env.PYTHONPATH }}:$PWD
-        run: |
-          conda run -n positronic pytest
+        #env:
+        #  PYTHONPATH: ${{ env.PYTHONPATH }}:$PWD
+        run: uv run pytest
