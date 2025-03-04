@@ -24,8 +24,8 @@ ENV UV_LINK_MODE=copy
 RUN uv venv --python 3.11
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv pip install -r requirements-all.txt
-RUN . .venv/bin/activate
 
 WORKDIR /positronic
+
 # Default command
 CMD ["bash"]
