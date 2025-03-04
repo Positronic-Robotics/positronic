@@ -4,7 +4,7 @@ version = "0.1.0"
 description = "Positronic robotics project"
 requires-python = "~=3.11"
 dependencies = [
-    "numpy>=2.0",
+    "numpy",
     "opencv-python",
     "torch",
     "requests",
@@ -16,7 +16,7 @@ dependencies = [
     "fire",
     "hydra-colorlog",
     "hydra-core",
-    "numpy-quaternion",
+    "numpy-quaternion>=2024.0",
     "pytest",
     "pytest-asyncio",
     "websockets",
@@ -30,7 +30,7 @@ dependencies = [
     "rerun-sdk",
     "matplotlib",
     "av",
-    "jupyter"
+    "jupyter",
 ]
 
 [project.optional-dependencies]
@@ -44,3 +44,9 @@ testpaths = [
     "*/tests",
 ]
 python_files = ["test_*.py", "*_test.py"]
+
+[tool.uv]
+environments = [
+    "sys_platform == 'darwin'",
+    "sys_platform == 'linux'",
+]
