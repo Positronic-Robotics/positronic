@@ -6,12 +6,10 @@ requires-python = "~=3.11"
 dependencies = [
     "numpy",
     "opencv-python",
-    "pymodbus",
     "torch",
     "requests",
     "scipy",
     "uvicorn[standard]",
-    "pyaudio",
     "click",
     "cmake-build-extension",
     "dearpygui",
@@ -33,6 +31,12 @@ dependencies = [
     "matplotlib",
     "av",
     "jupyter"
+]
+
+[project.optional-dependencies]
+hardware = [
+    "pyaudio",
+    "pymodbus"
 ]
 
 [tool.pytest.ini_options]

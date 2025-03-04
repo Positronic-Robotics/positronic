@@ -2034,8 +2034,6 @@ dependencies = [
     { name = "numpy" },
     { name = "numpy-quaternion" },
     { name = "opencv-python" },
-    { name = "pyaudio" },
-    { name = "pymodbus" },
     { name = "pyspacemouse" },
     { name = "pytest" },
     { name = "pytest-asyncio" },
@@ -2047,6 +2045,12 @@ dependencies = [
     { name = "uvicorn", extra = ["standard"] },
     { name = "websockets" },
     { name = "yappi" },
+]
+
+[package.optional-dependencies]
+hardware = [
+    { name = "pyaudio" },
+    { name = "pymodbus" },
 ]
 
 [package.metadata]
@@ -2067,8 +2071,8 @@ requires-dist = [
     { name = "numpy" },
     { name = "numpy-quaternion" },
     { name = "opencv-python" },
-    { name = "pyaudio" },
-    { name = "pymodbus" },
+    { name = "pyaudio", marker = "extra == 'hardware'" },
+    { name = "pymodbus", marker = "extra == 'hardware'" },
     { name = "pyspacemouse" },
     { name = "pytest" },
     { name = "pytest-asyncio" },
