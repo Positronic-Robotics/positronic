@@ -25,6 +25,6 @@ jobs:
         run: uv pip install -r requirements.txt
 
       - name: Run tests
-        #env:
-        #  PYTHONPATH: ${{ env.PYTHONPATH }}:$PWD
-        run: uv run pytest
+        env:
+         PYTHONPATH: ${{ env.PYTHONPATH }}:$PWD
+        run: pytest
