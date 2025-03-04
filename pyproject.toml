@@ -4,7 +4,7 @@ version = "0.1.0"
 description = "Positronic robotics project"
 requires-python = "~=3.11"
 dependencies = [
-    "numpy",
+    "numpy>=2.0",
     "opencv-python",
     "torch",
     "requests",

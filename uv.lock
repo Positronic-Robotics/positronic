@@ -2068,7 +2068,7 @@ requires-dist = [
     { name = "jupyter" },
     { name = "linuxpy" },
     { name = "matplotlib" },
-    { name = "numpy" },
+    { name = "numpy", specifier = ">=2.0" },
     { name = "numpy-quaternion" },
     { name = "opencv-python" },
     { name = "pyaudio", marker = "extra == 'hardware'" },
