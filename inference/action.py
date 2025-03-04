@@ -152,8 +152,8 @@ class RelativeRobotPositionAction:
         q_diff = geom.Rotation.create_from(rotation, self.rotation_representation)
         tr_diff = action_vector[self.rotation_size:self.rotation_size + 3]
 
-        q_mul = geom.Rotation.from_quat(inputs['reference_robot_position_quaternion']) * q_diff
-        q_mul = geom.Rotation.from_quat(geom.normalise_quat(q_mul.as_quat))
+        rot_mul = geom.Rotation.from_quat(inputs['reference_robot_position_quaternion']) * q_diff
+        rot_mul = geom.Rotation.from_quat(geom.normalise_quat(rot_mul.as_quat))
 
         tr_add = inputs['reference_robot_position_translation'] + tr_diff
 
