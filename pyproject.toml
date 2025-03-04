@@ -26,17 +26,19 @@ dependencies = [
     "pyturbojpeg @ git+https://github.com/lilohuang/PyTurboJPEG.git@v1.7.8",
     "linuxpy",
     "imageio",
-    "hydra-zen",
     "rerun-sdk",
     "matplotlib",
     "av",
-    "jupyter",
 ]
 
 [project.optional-dependencies]
 hardware = [
     "pyaudio",
     "pymodbus"
+]
+dev = [
+    "jupyter",
+    "ipython"
 ]
 
 [tool.pytest.ini_options]

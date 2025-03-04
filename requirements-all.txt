@@ -129,9 +129,6 @@ hydra-core==1.3.2
     # via
     #   positronic (pyproject.toml)
     #   hydra-colorlog
-    #   hydra-zen
-hydra-zen==0.13.0
-    # via positronic (pyproject.toml)
 idna==3.10
     # via
     #   anyio
@@ -151,6 +148,7 @@ ipykernel==6.29.5
     #   jupyterlab
 ipython==9.0.1
     # via
+    #   positronic (pyproject.toml)
     #   ipykernel
     #   ipywidgets
     #   jupyter-console
@@ -330,9 +328,7 @@ nvidia-nvjitlink-cu12==12.4.127
 nvidia-nvtx-cu12==12.4.127
     # via torch
 omegaconf==2.3.0
-    # via
-    #   hydra-core
-    #   hydra-zen
+    # via hydra-core
 opencv-python==4.11.0.86
     # via positronic (pyproject.toml)
 overrides==7.7.0
@@ -530,7 +526,6 @@ typing-extensions==4.12.2
     #   anyio
     #   beautifulsoup4
     #   etils
-    #   hydra-zen
     #   ipython
     #   linuxpy
     #   referencing

@@ -12,43 +12,17 @@ antlr4-python3-runtime==4.9.3
     #   hydra-core
     #   omegaconf
 anyio==4.8.0
-    # via
-    #   httpx
-    #   jupyter-server
-    #   watchfiles
-argon2-cffi==23.1.0
-    # via jupyter-server
-argon2-cffi-bindings==21.2.0
-    # via argon2-cffi
-arrow==1.3.0
-    # via isoduration
-asttokens==3.0.0
-    # via stack-data
-async-lru==2.0.4
-    # via jupyterlab
+    # via watchfiles
 attrs==25.1.0
     # via
     #   dm-tree
-    #   jsonschema
-    #   referencing
     #   rerun-sdk
 av==14.2.0
     # via positronic (pyproject.toml)
-babel==2.17.0
-    # via jupyterlab-server
-beautifulsoup4==4.13.3
-    # via nbconvert
-bleach==6.2.0
-    # via nbconvert
 certifi==2025.1.31
-    # via
-    #   httpcore
-    #   httpx
-    #   requests
+    # via requests
 cffi==1.17.1
-    # via
-    #   argon2-cffi-bindings
-    #   easyhid
+    # via easyhid
 charset-normalizer==3.4.1
     # via requests
 click==8.1.8
@@ -61,22 +35,12 @@ cmake-build-extension==0.6.1
     # via positronic (pyproject.toml)
 colorlog==6.9.0
     # via hydra-colorlog
-comm==0.2.2
-    # via
-    #   ipykernel
-    #   ipywidgets
 contourpy==1.3.1
     # via matplotlib
 cycler==0.12.1
     # via matplotlib
 dearpygui==2.0.0
     # via positronic (pyproject.toml)
-debugpy==1.8.12
-    # via ipykernel
-decorator==5.2.1
-    # via ipython
-defusedxml==0.7.1
-    # via nbconvert
 dm-control==1.0.27
     # via positronic (pyproject.toml)
 dm-env==1.6
@@ -89,18 +53,12 @@ easyhid==0.0.10
     # via pyspacemouse
 etils==1.12.0
     # via mujoco
-executing==2.2.0
-    # via stack-data
-fastjsonschema==2.21.1
-    # via nbformat
 filelock==3.17.0
     # via torch
 fire==0.7.0
     # via positronic (pyproject.toml)
 fonttools==4.56.0
     # via matplotlib
-fqdn==1.5.1
-    # via jsonschema
 fsspec==2025.2.0
     # via
     #   etils
@@ -114,29 +72,18 @@ glfw==2.8.0
     #   dm-control
     #   mujoco
 h11==0.14.0
-    # via
-    #   httpcore
-    #   uvicorn
-httpcore==1.0.7
-    # via httpx
+    # via uvicorn
 httptools==0.6.4
     # via uvicorn
-httpx==0.28.1
-    # via jupyterlab
 hydra-colorlog==1.2.0
     # via positronic (pyproject.toml)
 hydra-core==1.3.2
     # via
     #   positronic (pyproject.toml)
     #   hydra-colorlog
-    #   hydra-zen
-hydra-zen==0.13.0
-    # via positronic (pyproject.toml)
 idna==3.10
     # via
     #   anyio
-    #   httpx
-    #   jsonschema
     #   requests
 imageio==2.37.0
     # via positronic (pyproject.toml)
@@ -144,87 +91,8 @@ importlib-resources==6.5.2
     # via etils
 iniconfig==2.0.0
     # via pytest
-ipykernel==6.29.5
-    # via
-    #   jupyter
-    #   jupyter-console
-    #   jupyterlab
-ipython==9.0.1
-    # via
-    #   ipykernel
-    #   ipywidgets
-    #   jupyter-console
-ipython-pygments-lexers==1.1.1
-    # via ipython
-ipywidgets==8.1.5
-    # via jupyter
-isoduration==20.11.0
-    # via jsonschema
-jedi==0.19.2
-    # via ipython
 jinja2==3.1.5
-    # via
-    #   jupyter-server
-    #   jupyterlab
-    #   jupyterlab-server
-    #   nbconvert
-    #   torch
-json5==0.10.0
-    # via jupyterlab-server
-jsonpointer==3.0.0
-    # via jsonschema
-jsonschema==4.23.0
-    # via
-    #   jupyter-events
-    #   jupyterlab-server
-    #   nbformat
-jsonschema-specifications==2024.10.1
-    # via jsonschema
-jupyter==1.1.1
-    # via positronic (pyproject.toml)
-jupyter-client==8.6.3
-    # via
-    #   ipykernel
-    #   jupyter-console
-    #   jupyter-server
-    #   nbclient
-jupyter-console==6.6.3
-    # via jupyter
-jupyter-core==5.7.2
-    # via
-    #   ipykernel
-    #   jupyter-client
-    #   jupyter-console
-    #   jupyter-server
-    #   jupyterlab
-    #   nbclient
-    #   nbconvert
-    #   nbformat
-jupyter-events==0.12.0
-    # via jupyter-server
-jupyter-lsp==2.2.5
-    # via jupyterlab
-jupyter-server==2.15.0
-    # via
-    #   jupyter-lsp
-    #   jupyterlab
-    #   jupyterlab-server
-    #   notebook
-    #   notebook-shim
-jupyter-server-terminals==0.5.3
-    # via jupyter-server
-jupyterlab==4.3.5
-    # via
-    #   jupyter
-    #   notebook
-jupyterlab-pygments==0.3.0
-    # via nbconvert
-jupyterlab-server==2.27.3
-    # via
-    #   jupyterlab
-    #   notebook
-jupyterlab-widgets==3.0.13
-    # via ipywidgets
+    # via torch
 kiwisolver==1.4.8
     # via matplotlib
 labmaze==1.0.6
@@ -236,44 +104,17 @@ llvmlite==0.44.0
 lxml==5.3.1
     # via dm-control
 markupsafe==3.0.2
-    # via
-    #   jinja2
-    #   nbconvert
+    # via jinja2
 matplotlib==3.10.1
     # via positronic (pyproject.toml)
-matplotlib-inline==0.1.7
-    # via
-    #   ipykernel
-    #   ipython
-mistune==3.1.2
-    # via nbconvert
 mpmath==1.3.0
     # via sympy
 mujoco==3.3.0
     # via dm-control
-nbclient==0.10.2
-    # via nbconvert
-nbconvert==7.16.6
-    # via
-    #   jupyter
-    #   jupyter-server
-nbformat==5.10.4
-    # via
-    #   jupyter-server
-    #   nbclient
-    #   nbconvert
-nest-asyncio==1.6.0
-    # via ipykernel
 networkx==3.4.2
     # via torch
 ninja==1.11.1.3
     # via cmake-build-extension
-notebook==7.3.2
-    # via jupyter
-notebook-shim==0.2.4
-    # via
-    #   jupyterlab
-    #   notebook
 numba==0.61.0
     # via numpy-quaternion
 numpy==2.1.3
@@ -330,66 +171,28 @@ nvidia-nvjitlink-cu12==12.4.127
 nvidia-nvtx-cu12==12.4.127
     # via torch
 omegaconf==2.3.0
-    # via
-    #   hydra-core
-    #   hydra-zen
+    # via hydra-core
 opencv-python==4.11.0.86
     # via positronic (pyproject.toml)
-overrides==7.7.0
-    # via jupyter-server
 packaging==24.2
     # via
     #   hydra-core
-    #   ipykernel
-    #   jupyter-events
-    #   jupyter-server
-    #   jupyterlab
-    #   jupyterlab-server
     #   matplotlib
-    #   nbconvert
     #   pytest
     #   setuptools-scm
-pandocfilters==1.5.1
-    # via nbconvert
-parso==0.8.4
-    # via jedi
-pexpect==4.9.0
-    # via ipython
 pillow==11.1.0
     # via
     #   imageio
     #   matplotlib
     #   rerun-sdk
-platformdirs==4.3.6
-    # via jupyter-core
 pluggy==1.5.0
     # via pytest
-prometheus-client==0.21.1
-    # via jupyter-server
-prompt-toolkit==3.0.50
-    # via
-    #   ipython
-    #   jupyter-console
 protobuf==5.29.3
     # via dm-control
-psutil==7.0.0
-    # via ipykernel
-ptyprocess==0.7.0
-    # via
-    #   pexpect
-    #   terminado
-pure-eval==0.2.3
-    # via stack-data
 pyarrow==19.0.1
     # via rerun-sdk
 pycparser==2.22
     # via cffi
-pygments==2.19.1
-    # via
-    #   ipython
-    #   ipython-pygments-lexers
-    #   jupyter-console
-    #   nbconvert
 pyopengl==3.1.9
     # via
     #   dm-control
@@ -407,133 +210,56 @@ pytest==8.3.5
 pytest-asyncio==0.25.3
     # via positronic (pyproject.toml)
 python-dateutil==2.9.0.post0
-    # via
-    #   arrow
-    #   jupyter-client
-    #   matplotlib
+    # via matplotlib
 python-dotenv==1.0.1
     # via uvicorn
-python-json-logger==3.2.1
-    # via jupyter-events
 pyturbojpeg @ git+https://github.com/lilohuang/PyTurboJPEG.git@87bdba487a6198afd6d4c3cbfb2b544c59f7ea8f
     # via positronic (pyproject.toml)
 pyyaml==6.0.2
     # via
-    #   jupyter-events
     #   omegaconf
     #   uvicorn
-pyzmq==26.2.1
-    # via
-    #   ipykernel
-    #   jupyter-client
-    #   jupyter-console
-    #   jupyter-server
-referencing==0.36.2
-    # via
-    #   jsonschema
-    #   jsonschema-specifications
-    #   jupyter-events
 requests==2.32.3
     # via
     #   positronic (pyproject.toml)
     #   dm-control
-    #   jupyterlab-server
 rerun-sdk==0.22.1
     # via positronic (pyproject.toml)
-rfc3339-validator==0.1.4
-    # via
-    #   jsonschema
-    #   jupyter-events
-rfc3986-validator==0.1.1
-    # via
-    #   jsonschema
-    #   jupyter-events
-rpds-py==0.23.1
-    # via
-    #   jsonschema
-    #   referencing
 scipy==1.15.2
     # via
     #   positronic (pyproject.toml)
     #   dm-control
     #   numpy-quaternion
-send2trash==1.8.3
-    # via jupyter-server
 setuptools==75.8.2
     # via
     #   dm-control
-    #   jupyterlab
     #   labmaze
     #   setuptools-scm
 setuptools-scm==8.2.0
     # via cmake-build-extension
 six==1.17.0
-    # via
-    #   python-dateutil
-    #   rfc3339-validator
+    # via python-dateutil
 smmap==5.0.2
     # via gitdb
 sniffio==1.3.1
     # via anyio
-soupsieve==2.6
-    # via beautifulsoup4
-stack-data==0.6.3
-    # via ipython
 sympy==1.13.1
     # via torch
 termcolor==2.5.0
     # via fire
-terminado==0.18.1
-    # via
-    #   jupyter-server
-    #   jupyter-server-terminals
-tinycss2==1.4.0
-    # via bleach
 torch==2.6.0
     # via positronic (pyproject.toml)
-tornado==6.4.2
-    # via
-    #   ipykernel
-    #   jupyter-client
-    #   jupyter-server
-    #   jupyterlab
-    #   notebook
-    #   terminado
 tqdm==4.67.1
     # via dm-control
-traitlets==5.14.3
-    # via
-    #   comm
-    #   ipykernel
-    #   ipython
-    #   ipywidgets
-    #   jupyter-client
-    #   jupyter-console
-    #   jupyter-core
-    #   jupyter-events
-    #   jupyter-server
-    #   jupyterlab
-    #   matplotlib-inline
-    #   nbclient
-    #   nbconvert
-    #   nbformat
 triton==3.2.0
     # via torch
-types-python-dateutil==2.9.0.20241206
-    # via arrow
 typing-extensions==4.12.2
     # via
     #   anyio
-    #   beautifulsoup4
     #   etils
-    #   hydra-zen
-    #   ipython
     #   linuxpy
-    #   referencing
     #   rerun-sdk
     #   torch
-uri-template==1.3.0
-    # via jsonschema
 urllib3==2.3.0
     # via requests
 uvicorn==0.34.0
@@ -542,22 +268,10 @@ uvloop==0.21.0
     # via uvicorn
 watchfiles==1.0.4
     # via uvicorn
-wcwidth==0.2.13
-    # via prompt-toolkit
-webcolors==24.11.1
-    # via jsonschema
-webencodings==0.5.1
-    # via
-    #   bleach
-    #   tinycss2
-websocket-client==1.8.0
-    # via jupyter-server
 websockets==15.0
     # via
     #   positronic (pyproject.toml)
     #   uvicorn
-widgetsnbextension==4.0.13
-    # via ipywidgets
 wrapt==1.17.2
     # via dm-tree
 yappi==1.6.10

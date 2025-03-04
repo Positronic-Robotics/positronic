@@ -16,19 +16,16 @@ RUN apt-get update && apt-get install -y \
 
 
 # Copy project files
-COPY requirements.txt .
+COPY requirements-all.txt .
 COPY pyproject.toml .
-COPY uv.lock .
 
 ENV UV_LINK_MODE=copy
 
 RUN uv venv --python 3.11
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv pip install -r requirements-all.txt
+RUN . .venv/bin/activate
 
-# Set environment variables
-ENV PYTHONUNBUFFERED=1
-ENV PYTHONDONTWRITEBYTECODE=1
-WORKDIR /
+WORKDIR /positronic
 # Default command
 CMD ["bash"]
