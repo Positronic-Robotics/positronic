@@ -27,4 +27,4 @@ jobs:
       - name: Run tests
         env:
          PYTHONPATH: ${{ env.PYTHONPATH }}:$PWD
-        run: pytest
+        run: uv run pytest
