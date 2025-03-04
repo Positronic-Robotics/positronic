@@ -77,7 +77,14 @@ class ObjectLiftedTimeCalculator(MujocoMetricCalculator):
 
 
 class ObjectsStackedCalculator(MujocoMetricCalculator):
-    def __init__(self, model: mujoco.MjModel, data: mujoco.MjData, object_1: str, object_2: str, velocity_threshold: float):
+    def __init__(
+            self,
+            model: mujoco.MjModel,
+            data: mujoco.MjData,
+            object_1: str,
+            object_2: str,
+            velocity_threshold: float,
+    ):
         super().__init__(model, data, grace_time=None)
         self.object_1 = object_1
         self.object_2 = object_2
@@ -105,7 +112,8 @@ class ObjectsStackedCalculator(MujocoMetricCalculator):
 
         not_moving = vel1 < self.velocity_threshold and vel2 < self.velocity_threshold
 
-        close_enough = np.linalg.norm(self.data.body(self.object_1).xpos - self.data.body(self.object_2).xpos) < (obj1_size + obj2_size)
+        distance = np.linalg.norm(self.data.body(self.object_1).xpos - self.data.body(self.object_2).xpos)
+        close_enough = distance < (obj1_size + obj2_size)
 
         self.stacked = not_moving and close_enough
 

@@ -2,7 +2,9 @@ from ctypes import c_uint16
 import time
 
 import pymodbus.client as ModbusClient
+
 import ironic as ir
+
 
 # TODO: Migrate to async modbus
 @ir.ironic_system(

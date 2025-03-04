@@ -32,8 +32,8 @@ class SoundSystem(ir.ControlSystem):
             output_device_index: The index of the output device to use.
         """
         super().__init__()
-        assert sample_rate == 44100, f"Only 44100Hz sample rate is currently supported"
-        assert master_volume >= 0.0 and master_volume <= 1.0, f"Master volume must be between 0 and 1"
+        assert sample_rate == 44100, "Only 44100Hz sample rate is currently supported"
+        assert master_volume >= 0.0 and master_volume <= 1.0, "Master volume must be between 0 and 1"
 
         self.sample_rate = sample_rate
         self.enable_threshold = enable_threshold
@@ -98,8 +98,8 @@ class SoundSystem(ir.ControlSystem):
             while len(self.sounds_to_play) > 0:
                 name = self.sounds_to_play.pop()
                 audio_files[file_idx] = wave.open(name, 'rb')
-                assert audio_files[file_idx].getframerate() == 44100, f"Only 44100Hz wav files are currently supported"
-                assert audio_files[file_idx].getsampwidth() == 2, f"Only 16-bit wav files are currently supported"
+                assert audio_files[file_idx].getframerate() == 44100, "Only 44100Hz wav files are currently supported"
+                assert audio_files[file_idx].getsampwidth() == 2, "Only 16-bit wav files are currently supported"
                 file_idx += 1
 
             chunk_size = stream.get_write_available()

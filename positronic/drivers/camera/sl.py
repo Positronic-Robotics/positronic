@@ -3,7 +3,6 @@
 from queue import Full, Empty
 import multiprocessing as mp
 from multiprocessing import Queue
-import asyncio
 
 import numpy as np
 import pyzed.sl as sl
@@ -13,13 +12,29 @@ import ironic as ir
 
 @ir.ironic_system(output_ports=['frame'])
 class SLCamera(ir.ControlSystem):
-    def __init__(self, fps=30,
-                 view=sl.VIEW.LEFT,
-                 resolution=sl.RESOLUTION.AUTO,
-                 depth_mode=sl.DEPTH_MODE.NONE,
-                 coordinate_units=sl.UNIT.METER,
-                 max_depth=10,  # Depth NaNs and +Inf will be set to this distance. -Inf will be set to 0. All values above this will be set to max_depth.
-                 depth_mask=False):  # If True, will also generate image with 0 set to NaNs pixels, and 1 set to valid pixels
+    def __init__(
+            self,
+            fps: int = 30,
+            view: sl.VIEW = sl.VIEW.LEFT,
+            resolution: sl.RESOLUTION = sl.RESOLUTION.AUTO,
+            depth_mode: sl.DEPTH_MODE = sl.DEPTH_MODE.NONE,
+            coordinate_units: sl.UNIT = sl.UNIT.METER,
+            max_depth: float = 10,
+            depth_mask: bool = False
+    ):
+        """
+        StereoLabs camera driver.
+
+        Args:
+            fps: (int) Frames per second
+            view: (sl.VIEW) View to use
+            resolution: (sl.RESOLUTION) Resolution to use
+            depth_mode: (sl.DEPTH_MODE) Depth mode to use
+            coordinate_units: (sl.UNIT) Coordinate units to use
+            max_depth: (float) Maximum depth to use. Depth NaNs and +Inf will be set to this distance.
+                        -Inf will be set to 0. All values above this will be set to max_depth.
+            depth_mask: (bool) If True, will also generate image with 0 set to NaNs pixels, and 1 set to valid pixels
+        """
         super().__init__()
         self.init_params = sl.InitParameters()
         self.init_params.camera_resolution = resolution
@@ -56,7 +71,7 @@ class SLCamera(ir.ControlSystem):
             await asyncio.sleep(0)
         return ir.State.ALIVE
 
-    def _camera_process(self, queue: Queue):
+    def _camera_process(self, queue: Queue):  # noqa: C901  Function is too complex
         zed = sl.Camera()
         zed.open(self.init_params)
         SUCCESS = sl.ERROR_CODE.SUCCESS

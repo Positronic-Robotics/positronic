@@ -17,7 +17,7 @@ from ironic.utils import FPSCounter
 from geom import Transform3D
 
 
-def run_server(data_queue, frame_queue, port, ssl_keyfile, ssl_certfile):
+def run_server(data_queue, frame_queue, port, ssl_keyfile, ssl_certfile):  # noqa: C901  Function is too complex
     app = FastAPI()
 
     async def get_latest_frame():
@@ -77,34 +77,42 @@ def run_server(data_queue, frame_queue, port, ssl_keyfile, ssl_certfile):
         finally:
             print("WebSocket connection closed")
 
-    config = uvicorn.Config(app, host="0.0.0.0", port=port,
-                            ssl_keyfile=ssl_keyfile, ssl_certfile=ssl_certfile,
-                            log_config={'version': 1, 'disable_existing_loggers': False,
-                            'handlers': {
-                                'file': {
-                                    'class': 'logging.FileHandler',
-                                    'formatter': 'default',
-                                    'filename': 'webxr.log',
-                                    'mode': 'w',
-                                },
-                                'console': {
-                                    'class': 'logging.FileHandler',
-                                    'formatter': 'default',
-                                    'filename': 'webxr.log',
-                                    'mode': 'w',
-                                }},
-                            'loggers': {
-                                '': {
-                                    'handlers': ['file'],
-                                    'level': 'INFO',
-                                }
-                            },
-                            'formatters': {
-                                'default': {
-                                    'format': '%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-                                }
-                            }},
-                )
+    config = uvicorn.Config(
+        app,
+        host="0.0.0.0",
+        port=port,
+        ssl_keyfile=ssl_keyfile,
+        ssl_certfile=ssl_certfile,
+        log_config={
+            'version': 1,
+            'disable_existing_loggers': False,
+            'handlers': {
+                'file': {
+                    'class': 'logging.FileHandler',
+                    'formatter': 'default',
+                    'filename': 'webxr.log',
+                    'mode': 'w',
+                },
+                'console': {
+                    'class': 'logging.FileHandler',
+                    'formatter': 'default',
+                    'filename': 'webxr.log',
+                    'mode': 'w',
+                }
+            },
+            'loggers': {
+                '': {
+                    'handlers': ['file'],
+                    'level': 'INFO',
+                }
+            },
+            'formatters': {
+                'default': {
+                    'format': '%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+                }
+            }
+        },
+    )
     server = uvicorn.Server(config)
     server.run()
 

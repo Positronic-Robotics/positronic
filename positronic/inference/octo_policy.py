@@ -1,7 +1,6 @@
 from collections import deque
 from typing import Dict, Optional
 
-import numpy as np
 import torch
 # TODO(vertix): Once it is working, update environment.yaml
 from octo.model.octo_model import OctoModel

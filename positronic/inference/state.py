@@ -12,11 +12,13 @@ class ImageEncodingConfig:
     output_key: Optional[str] = None  # If not None, the encoding will have different key
     resize: Optional[List[int]] = None
 
+
 @dataclass
 class StateEncodingConfig:
     state_output_key: str
     images: List[ImageEncodingConfig] = field(default_factory=list)
     state: List[str] = field(default_factory=list)
+
 
 ConfigStore.instance().store(name="state", node=StateEncodingConfig)
 
@@ -37,8 +39,11 @@ class StateEncoder:
             output_key = cfg.output_key if cfg.output_key is not None else cfg.key
             obs[output_key] = image.permute(0, 1, 3, 2)  # BCWH -> BCHW
 
-        obs[self.cfg.state_output_key] = torch.cat([episode_data[k].unsqueeze(1) if episode_data[k].dim() == 1 else episode_data[k]
-                                                    for k in self.cfg.state], dim=1)
+        obs[self.cfg.state_output_key] = torch.cat(
+            [episode_data[k].unsqueeze(1) if episode_data[k].dim() == 1 else episode_data[k]
+             for k in self.cfg.state],
+            dim=1
+        )
         return obs
 
     def encode(self, images, inputs):
@@ -58,5 +63,7 @@ class StateEncoder:
                 tensor = tensor.unsqueeze(0)
             data[key] = tensor
 
-        obs[self.cfg.state_output_key] = torch.cat([data[k] for k in self.cfg.state], dim=0).unsqueeze(0).type(torch.float32)
+        obs[self.cfg.state_output_key] = torch.cat(
+            [data[k] for k in self.cfg.state], dim=0
+        ).unsqueeze(0).type(torch.float32)
         return obs

@@ -62,7 +62,7 @@ def start_from_zero(timestamp: torch.Tensor):
 
 
 @hydra.main(version_base=None, config_path="../configs", config_name="to_lerobot")
-def convert_to_lerobot_dataset(cfg: DictConfig):
+def convert_to_lerobot_dataset(cfg: DictConfig):  # noqa: C901  Function is too complex
     input_dir = Path(cfg.input_dir)
     output_dir = Path(cfg.output_dir)
     fps = cfg.dataset.fps
@@ -122,7 +122,9 @@ def convert_to_lerobot_dataset(cfg: DictConfig):
             for file in temp_dir.glob("*.png"):
                 file.unlink()
             temp_dir.rmdir()
-            ep_dict[f"observation.images.{side}"] = [{"path": f"videos/{video_filename}", "timestamp": i / fps} for i in range(len(images))]
+            ep_dict[f"observation.images.{side}"] = [
+                {"path": f"videos/{video_filename}", "timestamp": i / fps} for i in range(len(images))
+            ]
 
         num_frames = len(episode_data['image_timestamp'])
         ep_dict['observation.state'] = obs['observation.state']

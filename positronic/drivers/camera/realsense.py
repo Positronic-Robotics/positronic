@@ -22,15 +22,16 @@ class RealsenseCamera:
         self.enable_depth = enable_depth
         self.enable_infrared = enable_infrared
 
-
     def setup(self):
+        width, height = self.resolution
         if self.enable_color:
-            self.config.enable_stream(rs.stream.color, self.resolution[0], self.resolution[1], rs.format.rgb8, self.fps)
+            self.config.enable_stream(
+                rs.stream.color, width, height, rs.format.rgb8, self.fps)
         if self.enable_depth:
-            self.config.enable_stream(rs.stream.depth, self.resolution[0], self.resolution[1], rs.format.z16, self.fps)
+            self.config.enable_stream(rs.stream.depth, width, height, rs.format.z16, self.fps)
         if self.enable_infrared:
-            self.config.enable_stream(rs.stream.infrared, 1, self.resolution[0], self.resolution[1], rs.format.y8, self.fps)
-            self.config.enable_stream(rs.stream.infrared, 2, self.resolution[0], self.resolution[1], rs.format.y8, self.fps)
+            self.config.enable_stream(rs.stream.infrared, 1, width, height, rs.format.y8, self.fps)
+            self.config.enable_stream(rs.stream.infrared, 2, width, height, rs.format.y8, self.fps)
 
         self.pipeline = rs.pipeline()
         self.pipeline.start(self.config)
