@@ -1,6 +1,7 @@
 import franky
 import hydra
 from omegaconf import DictConfig
+import geom
 
 @hydra.main(version_base=None, config_path=".", config_name="trajectory")
 def main(cfg: DictConfig):
@@ -21,9 +22,16 @@ def main(cfg: DictConfig):
 
     waypoints = []
     last_q = robot.state.q
+    print(cfg.targets)
     for target in cfg.targets:
-        if "joints" in target:
+        if target is None:
+            continue
+        elif "joints" in target:
             robot.move(franky.JointMotion(target.joints))
+        elif 'relative' in target:
+            pos = geom.Transform3D(translation=target.relative.translation, quaternion=target.relative.quaternion)
+            pos = franky.Affine(translation=pos.translation, quaternion=pos.quaternion)
+            robot.move(franky.CartesianMotion(pos, reference_type=franky.ReferenceType.Relative))
         elif "ik" in target:
             pos = franky.Affine(translation=target.ik.translation, quaternion=target.ik.quaternion)
             q = robot.inverse_kinematics(pos, last_q)
