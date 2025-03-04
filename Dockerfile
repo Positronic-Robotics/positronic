@@ -1,4 +1,4 @@
-FROM python:3.11-slim-bullseye
+FROM nvidia/cuda:12.4.1-cudnn-runtime-ubuntu22.04
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
 
 # Install system dependencies
@@ -22,8 +22,9 @@ COPY uv.lock .
 
 ENV UV_LINK_MODE=copy
 
+RUN uv venv --python 3.11
 RUN --mount=type=cache,target=/root/.cache/uv \
-    uv sync
+    uv pip install -r requirements-all.txt
 
 # Set environment variables
 ENV PYTHONUNBUFFERED=1
