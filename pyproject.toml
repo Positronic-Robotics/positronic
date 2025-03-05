@@ -22,9 +22,8 @@ dependencies = [
     "websockets",
     "yappi",
     "dm_control",
-    "pyspacemouse",
+    "mujoco",
     "pyturbojpeg @ git+https://github.com/lilohuang/PyTurboJPEG.git@v1.7.8",
-    "linuxpy",
     "imageio",
     "rerun-sdk",
     "matplotlib",
@@ -35,7 +34,9 @@ dependencies = [
 [project.optional-dependencies]
 hardware = [
     "pyaudio",
-    "pymodbus"
+    "pymodbus",
+    "pyspacemouse",
+    "linuxpy",
 ]
 dev = [
     "jupyter",

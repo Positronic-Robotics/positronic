@@ -21,6 +21,7 @@ RUN apt-get update && apt-get install -y \
     google-perftools \
     libgoogle-perftools-dev \
     libturbojpeg \
+    python3-xlib \
     && rm -rf /var/lib/apt/lists/*
 
 ENV UV_LINK_MODE=copy
@@ -46,7 +47,6 @@ ENV LD_LIBRARY_PATH=/usr/local/lib:$LD_LIBRARY_PATH
 # allow to use ssh to clone franky
 RUN mkdir -p -m 0700 ~/.ssh && ssh-keyscan github.com >> ~/.ssh/known_hosts
 
-
 # install franky
 RUN --mount=type=ssh \
     git clone --branch version-0.9.1 --recursive --recurse-submodules git@github.com:Positronic-Robotics/franky.git
@@ -56,15 +56,11 @@ RUN uv pip install pybind11[global]==2.13.6 setuptools
 RUN uv pip install franky/ --no-build-isolation
 
 # Copy project files
-COPY requirements-all.txt .
+COPY requirements-hardware.txt .
 COPY pyproject.toml .
 
-
-RUN apt update && apt install -y python3-xlib
 RUN --mount=type=cache,target=/root/.cache/uv \
-    uv pip install -r requirements-all.txt
-
-RUN apt update && apt install -y
+    uv pip install -r requirements-hardware.txt
 
 WORKDIR /positronic
 
