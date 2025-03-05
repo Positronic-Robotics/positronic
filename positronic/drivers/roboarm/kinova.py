@@ -1,5 +1,10 @@
 # flake8: noqa
 
+# In order to use Kinova API, you need to install the Kinova Kortex
+# Go to https://artifactory.kinovaapps.com/ui/native/generic-public/kortex/API/2.7.0/
+# Download the wheel file and install it using pip install kortex_api-2.7.0-py3-none-any.whl
+
+
 # Not that this is not actually working.
 # The main problem that I was not able to solve is forward kinematics that aligned
 # with inverse kinematics.
