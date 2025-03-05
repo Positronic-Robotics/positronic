@@ -1,0 +1,98 @@
+import pytest
+import numpy as np
+
+import geom
+from positronic.tools.registration import AbsoluteTrajectory, RelativeTrajectory
+
+
+T = geom.Transform3D
+R = geom.Rotation
+
+# rotation around z-axis by 90 degrees clockwise
+around_z_90 = R.from_rotation_matrix([
+    [0, -1, 0],
+    [1, 0, 0],
+    [0, 0, 1]
+])
+
+around_z_270 = R.from_rotation_matrix([
+    [0, 1, 0],
+    [-1, 0, 0],
+    [0, 0, 1]
+])
+
+
+@pytest.fixture
+def absolute_trajectory():
+    absolute_positions = [
+        T(),
+        T([1, 0, 0]),
+        T([1, 0, 0], around_z_90),
+        T([1, 1, 0], around_z_90),
+        T([1, 1, 1], around_z_90),
+        T([0, 1, 1], around_z_90),
+    ]
+    return AbsoluteTrajectory(absolute_positions)
+
+@pytest.fixture
+def absolute_trajectory_with_start_position():
+    absolute_positions = [
+        T(translation=np.array([1, 2, 3]), rotation=around_z_270),
+        T(translation=np.array([1, 1, 3]), rotation=around_z_270),
+        T(translation=np.array([1, 1, 3])),
+        T(translation=np.array([2, 1, 3])),
+        T(translation=np.array([2, 1, 4])),
+        T(translation=np.array([2, 2, 4])),
+    ]
+    return AbsoluteTrajectory(absolute_positions)
+
+@pytest.fixture
+def relative_trajectory():
+    relative_positions = [
+        T([1, 0, 0]),
+        T(rotation=around_z_90),
+        T([1, 0, 0]),
+        T([0, 0, 1]),
+        T([0, 1, 0])
+    ]
+    return RelativeTrajectory(relative_positions)
+
+
+@pytest.fixture
+def start_position():
+    """Fixture providing a start position for testing."""
+    return geom.Transform3D(
+        translation=np.array([1.0, 2.0, 3.0]),
+        rotation=around_z_270
+    )
+
+
+def test_absolute_to_relative_conversion(absolute_trajectory, relative_trajectory):
+    converted_relative_trajectory = absolute_trajectory.to_relative()
+
+    assert len(converted_relative_trajectory) == len(relative_trajectory)
+
+    for expected, actual in zip(relative_trajectory, converted_relative_trajectory):
+        assert np.allclose(expected.as_matrix, actual.as_matrix)
+
+
+def test_relative_to_absolute_conversion(absolute_trajectory, relative_trajectory):
+    converted_absolute_trajectory = relative_trajectory.to_absolute(absolute_trajectory[0])
+
+    assert len(converted_absolute_trajectory) == len(absolute_trajectory)
+
+    for expected, actual in zip(absolute_trajectory, converted_absolute_trajectory):
+        assert np.allclose(expected.as_matrix, actual.as_matrix)
+
+
+def test_relative_to_absolute_conversion_with_start_position(
+        absolute_trajectory_with_start_position,
+        relative_trajectory,
+        start_position
+):
+    converted_absolute = relative_trajectory.to_absolute(start_position)
+
+    assert len(converted_absolute) == len(absolute_trajectory_with_start_position)
+
+    for expected, actual in zip(absolute_trajectory_with_start_position, converted_absolute):
+        assert np.allclose(expected.as_matrix, actual.as_matrix)
