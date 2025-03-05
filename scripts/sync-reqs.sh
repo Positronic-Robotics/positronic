@@ -1,0 +1,2 @@
+uv pip compile pyproject.toml -o requirements.txt
+uv pip compile pyproject.toml -o requirements-all.txt --all-extras

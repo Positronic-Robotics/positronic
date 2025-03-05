@@ -20,14 +20,12 @@ RUN apt-get update && apt-get install -y \
     robotpkg-py310-pinocchio \
     google-perftools \
     libgoogle-perftools-dev \
+    libturbojpeg \
     && rm -rf /var/lib/apt/lists/*
 
-
-# Copy project files
-COPY requirements-all.txt .
-COPY pyproject.toml .
-
 ENV UV_LINK_MODE=copy
+
+RUN uv venv --python 3.11
 
 # activate venv to be used in docker run
 ENV VIRTUAL_ENV=/.venv/
@@ -49,19 +47,28 @@ ENV LD_LIBRARY_PATH=/usr/local/lib:$LD_LIBRARY_PATH
 RUN mkdir -p -m 0700 ~/.ssh && ssh-keyscan github.com >> ~/.ssh/known_hosts
 
 
-RUN uv venv --python 3.11
-RUN --mount=type=cache,target=/root/.cache/uv \
-    uv pip install -r requirements-all.txt
-
 # install franky
 RUN --mount=type=ssh \
     git clone --branch version-0.9.1 --recursive --recurse-submodules git@github.com:Positronic-Robotics/franky.git
 
 # TODO: improve franky installation to properly include pybind11
-RUN uv pip install pybind11[global]==2.13.6
+RUN uv pip install pybind11[global]==2.13.6 setuptools
 RUN uv pip install franky/ --no-build-isolation
 
+# Copy project files
+COPY requirements-all.txt .
+COPY pyproject.toml .
+
+
+RUN apt update && apt install -y python3-xlib
+RUN --mount=type=cache,target=/root/.cache/uv \
+    uv pip install -r requirements-all.txt
+
+RUN apt update && apt install -y
+
 WORKDIR /positronic
+
+ENV PYTHONPATH=/positronic:$PYTHONPATH
 
 # Default command
 CMD ["bash"]

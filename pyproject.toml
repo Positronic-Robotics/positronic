@@ -5,7 +5,7 @@ description = "Positronic robotics project"
 requires-python = "~=3.11"
 dependencies = [
     "numpy",
-    "opencv-python",
+    "opencv-python-headless",
     "torch",
     "requests",
     "scipy",
@@ -29,6 +29,7 @@ dependencies = [
     "rerun-sdk",
     "matplotlib",
     "av",
+    "fastapi",
 ]
 
 [project.optional-dependencies]
@@ -38,7 +39,8 @@ hardware = [
 ]
 dev = [
     "jupyter",
-    "ipython"
+    "ipython",
+    "opencv-python"
 ]
 
 [tool.pytest.ini_options]

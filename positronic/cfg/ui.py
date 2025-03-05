@@ -20,9 +20,9 @@ def webxr(port: int):
 
 @ir.config(webxr=webxr, operator_position=front_position_parser, stream_to_webxr='image')
 def teleop(webxr: ir.ControlSystem,
-           position_parser: Callable[[geom.Transform3D], geom.Transform3D],
+           operator_position: Callable[[geom.Transform3D], geom.Transform3D],
            stream_to_webxr: Optional[str] = None):
-    teleop_cs = TeleopSystem(pos_parser=position_parser)
+    teleop_cs = TeleopSystem(pos_parser=operator_position)
     components = [webxr, teleop_cs]
 
     teleop_cs.bind(teleop_transform=webxr.outs.transform, teleop_buttons=webxr.outs.buttons)
