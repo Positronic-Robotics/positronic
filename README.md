@@ -8,7 +8,12 @@ Main repository for the Positronic project.
 ```bash
 git clone git@github.com:Positronic-Robotics/positronic.git
 cd positronic
-./scripts/docker/build.sh
+./docker/build.sh
+```
+
+Verify your installation via
+```bash
+./docker/run.sh pytest
 ```
 
 ### Local
