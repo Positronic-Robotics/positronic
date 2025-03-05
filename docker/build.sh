@@ -1,1 +1,1 @@
-docker build -t positronic/positronic --file docker/Dockerfile .
+docker build -t positronic/positronic --file docker/Dockerfile --ssh default .

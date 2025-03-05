@@ -18,6 +18,8 @@ RUN apt-get update && apt-get install -y \
     python3-dev \
     libeigen3-dev \
     robotpkg-py310-pinocchio \
+    google-perftools \
+    libgoogle-perftools-dev \
     && rm -rf /var/lib/apt/lists/*
 
 
@@ -26,13 +28,10 @@ COPY requirements-all.txt .
 COPY pyproject.toml .
 
 ENV UV_LINK_MODE=copy
+
+# activate venv to be used in docker run
 ENV VIRTUAL_ENV=/.venv/
 ENV PATH=/$VIRTUAL_ENV/bin:$PATH
-
-RUN uv venv --python 3.11
-RUN --mount=type=cache,target=/root/.cache/uv \
-    uv pip install -r requirements-all.txt
-
 
 # Pinocchio ENV setup
 ENV PATH=/opt/openrobots/bin:$PATH
@@ -46,11 +45,20 @@ RUN git clone --single-branch --recurse-submodules --branch 0.13.4 https://githu
 RUN mkdir libfranka/build && cd libfranka/build && cmake -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTS=OFF .. && cmake --build . && cmake --install .
 ENV LD_LIBRARY_PATH=/usr/local/lib:$LD_LIBRARY_PATH
 
+# allow to use ssh to clone franky
+RUN mkdir -p -m 0700 ~/.ssh && ssh-keyscan github.com >> ~/.ssh/known_hosts
+
+
+RUN uv venv --python 3.11
+RUN --mount=type=cache,target=/root/.cache/uv \
+    uv pip install -r requirements-all.txt
 
 # install franky
-RUN git clone --branch v0.9.1 https://github.com/TimSchneider42/franky.git
-RUN cd franky && git submodule update --init --recursive
-RUN uv pip install pybind11[global]
+RUN --mount=type=ssh \
+    git clone --branch version-0.9.1 --recursive --recurse-submodules git@github.com:Positronic-Robotics/franky.git
+
+# TODO: improve franky installation to properly include pybind11
+RUN uv pip install pybind11[global]==2.13.6
 RUN uv pip install franky/ --no-build-isolation
 
 WORKDIR /positronic
