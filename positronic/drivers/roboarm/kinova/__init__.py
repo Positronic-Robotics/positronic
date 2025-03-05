@@ -6,6 +6,7 @@ import math
 import threading
 import time
 
+import mujoco
 import numpy as np
 import pinocchio as pin
 from ruckig import InputParameter, OutputParameter, Result, Ruckig
@@ -21,6 +22,8 @@ from kortex_api.SessionManager import SessionManager
 from kortex_api.TCPTransport import TCPTransport
 from kortex_api.UDPTransport import UDPTransport
 
+import geom
+
 _TCP_PORT = 10000
 _UDP_PORT = 10001
 
@@ -33,12 +36,11 @@ K_r_inv = np.linalg.inv(K_r)
 K_r_K_l = K_r @ K_l
 _DT = 0.001
 
+_DAMPING_COEFF = 1e-12
+_MAX_ANGLE_CHANGE = np.deg2rad(45)
 
-def _wrap_joint_angle(q):
-    return q + np.mod(q + np.pi, 2 * np.pi) - np.pi
 
-
-def _wrap_joint_angle_nearest(q, q_base):
+def _wrap_joint_angle(q, q_base):
     return q_base + np.mod(q - q_base + np.pi, 2 * np.pi) - np.pi
 
 
@@ -74,6 +76,81 @@ class DeviceConnection:
             router_options.timeout_ms = 1000
             self.session_manager.CloseSession(router_options)
         self.transport.disconnect()
+
+
+class Solver:
+
+    def __init__(self, ee_offset=0.0):
+        self.model = mujoco.MjModel.from_xml_path('positronic/drivers/roboarm/kinova/gen3.xml')
+        self.data = mujoco.MjData(self.model)
+        self.model.body_gravcomp[:] = 1.0
+
+        # Cache references
+        self.qpos0 = self.model.key('retract').qpos  # TODO: Is it good for IK null space?
+        self.site_id = self.model.site('pinch_site').id
+        self.site_pos = self.data.site(self.site_id).xpos
+        self.site_mat = self.data.site(self.site_id).xmat
+
+        # Add end effector offset for gripper
+        # 0.061525 comes from the Kinova URDF
+        self.model.site(self.site_id).pos = np.array([0.0, 0.0, -0.061525 - ee_offset])
+
+        # Preallocate arrays
+        self.err = np.empty(6)
+        self.err_pos, self.err_rot = self.err[:3], self.err[3:]
+        self.site_quat = np.empty(4)
+        self.site_quat_inv = np.empty(4)
+        self.err_quat = np.empty(4)
+        self.jac = np.empty((6, self.model.nv))
+        self.jac_pos, self.jac_rot = self.jac[:3], self.jac[3:]
+        self.damping = _DAMPING_COEFF * np.eye(6)
+        self.eye = np.eye(self.model.nv)
+
+    def forward(self, qpos):
+        self.data.qpos = qpos
+        mujoco.mj_kinematics(self.model, self.data)
+        mujoco.mj_comPos(self.model, self.data)
+
+        pos = self.data.site(self.site_id).xpos.copy()
+        mat = self.data.site(self.site_id).xmat.copy()
+        quat = np.empty(4)
+        mujoco.mju_mat2Quat(quat, mat)
+        return geom.Transform3D(pos, geom.Rotation.from_quat(quat))
+
+    def inverse(self, pos: geom.Transform3D, qpos0: np.ndarray, max_iters: int = 20, err_thresh: float = 1e-4):
+        self.data.qpos = qpos0
+
+        for _ in range(max_iters):
+            mujoco.mj_kinematics(self.model, self.data)
+            mujoco.mj_comPos(self.model, self.data)
+
+            # Translational error
+            self.err_pos[:] = pos.translation - self.site_pos
+
+            # Rotational error
+            mujoco.mju_mat2Quat(self.site_quat, self.site_mat)
+            mujoco.mju_negQuat(self.site_quat_inv, self.site_quat)
+            mujoco.mju_mulQuat(self.err_quat, pos.rotation.as_quat, self.site_quat_inv)
+            mujoco.mju_quat2Vel(self.err_rot, self.err_quat, 1.0)
+
+            if np.linalg.norm(self.err) < err_thresh:
+                break
+
+            mujoco.mj_jacSite(self.model, self.data, self.jac_pos, self.jac_rot, self.site_id)
+            update = self.jac.T @ np.linalg.solve(self.jac @ self.jac.T + self.damping, self.err)
+            qpos0_err = _wrap_joint_angle(self.qpos0, self.data.qpos)
+            update += (self.eye -
+                       (self.jac.T @ np.linalg.pinv(self.jac @ self.jac.T + self.damping)) @ self.jac) @ qpos0_err
+
+            # Enforce max angle change
+            update_max = np.abs(update).max()
+            if update_max > _MAX_ANGLE_CHANGE:
+                update *= _MAX_ANGLE_CHANGE / update_max
+
+            # Apply update
+            mujoco.mj_integratePos(self.model, self.data.qpos, update, 1.0)
+
+        return self.data.qpos.copy()
 
 
 class JointCompliantController:
@@ -130,12 +207,12 @@ class JointCompliantController:
             self.otg_inp.target_velocity = np.zeros(self.actuator_count)
             self.otg_res = Result.Finished
 
-        self.q_s = _wrap_joint_angle_nearest(q, self.q_s)
+        self.q_s = _wrap_joint_angle(q, self.q_s)
         dq_s = dq.copy()  # TODO: It seems that we don't need copy here
         tau_s_f = self.tau_filter.filter(tau)
 
         if self.target_qpos is not None:
-            qpos = _wrap_joint_angle_nearest(self.target_qpos, self.q_s)
+            qpos = _wrap_joint_angle(self.target_qpos, self.q_s)
             self.otg_inp.target_position = qpos
             self.otg_res = Result.Working
 
@@ -309,13 +386,7 @@ class KinovaController:
             base_command.actuators[i].position = base_feedback.actuators[i].position
             base_command.actuators[i].current_motor = base_feedback.actuators[i].current_motor
 
-        print('Initial current command:')
-        print(', '.join(f'{base_command.actuators[i].current_motor: .5f}' for i in range(self.actuator_count)))
-
-        # Set arm to low-level servoing mode
         self.base.SetServoingMode(Base_pb2.ServoingModeInformation(servoing_mode=Base_pb2.LOW_LEVEL_SERVOING))
-
-        # Send first frame and update robot state
         base_feedback = self.base_cyclic.Refresh(base_command, 0, self.send_options)
 
         # Set actuators to current control mode
@@ -327,6 +398,8 @@ class KinovaController:
         with self.joint_controller_mutex:
             self.joint_controller = JointCompliantController(self.actuator_count)
             self.joint_controller.compute_torque(*self._update_state(base_feedback))
+
+        solver = Solver()
 
         last_ts = time.monotonic()
         count = 0
@@ -343,10 +416,15 @@ class KinovaController:
                 current_command = np.divide(torque_command, self.torque_constant)
                 np.clip(current_command, self.current_limit_min, self.current_limit_max, out=current_command)
                 if count % 20 == 0:
-                    cur_cmd = ', '.join(f'{c: .5f}' for c in current_command)
-                    q_s = ', '.join(f'{q: .3f}' for q in self.joint_controller.q_s)
-                    q_t = ', '.join(f'{q: .3f}' for q in self.joint_controller.q_d)
-                    print(f'{cur_cmd}|{q_s}|{q_t}')
+                    fk = solver.forward(self.joint_controller.q_s)
+                    # cur_cmd = ','.join(f'{c: .4f}' for c in current_command)
+                    # q_s = ','.join(f'{q: .2f}' for q in self.joint_controller.q_s)
+                    # q_t = ','.join(f'{q: .2f}' for q in self.joint_controller.q_d)
+                    fk_pos = ','.join(f'{p: .2f}' for p in fk.translation)
+                    fk_quat = ','.join(f'{q: .2f}' for q in fk.rotation.as_quat)
+
+                    print(f'{fk_pos}|{fk_quat}')
+                    # print(f'{cur_cmd}|{q_s}|{q_t}|{fk_pos}|{fk_quat}')
 
                 # Increment frame ID to ensure actuators can reject out-of-order frames
                 base_command.frame_id = (base_command.frame_id + 1) % 65536
@@ -360,7 +438,7 @@ class KinovaController:
                 base_feedback = self.base_cyclic.Refresh(base_command, 0, self.send_options)
                 count += 1
 
-                # if count > 100000:
+                # if count > 1000:
                 #     break
 
         # Set actuators back to position control mode
@@ -386,21 +464,3 @@ class KinovaController:
             if self.joint_controller is None:
                 return
             self.joint_controller.set_target_qpos(qpos)
-
-
-if __name__ == '__main__':
-    arm = KinovaController('192.168.1.10')
-    # arm._execute_reference_action('Retract')
-    arm.home()
-    with arm:
-        time.sleep(0.5)
-        q_retract = np.array([0.0, -0.34906585, 3.14159265, -2.54818071, 0.0, -0.87266463, 1.57079633])
-        arm.set_target_qpos(q_retract)
-        while True:
-            try:
-                time.sleep(1)
-            except KeyboardInterrupt:
-                arm.stop_event.set()
-                break
-
-    print('Done')
