@@ -42,8 +42,6 @@ class AbsoluteTrajectory:
 
     def distance_closest_positions(self, other: 'AbsoluteTrajectory') -> float:
         distances = np.zeros((len(self), len(other)))
-        # self_mtxs = np.array([p.as_matrix for p in self.absolute_positions])
-        # other_mtxs = np.array([p.as_matrix for p in other.absolute_positions])
 
         self_tr = np.array([p.translation for p in self.absolute_positions])
         other_tr = np.array([p.translation for p in other.absolute_positions])
@@ -180,14 +178,8 @@ def batch_registration(trajectories: List[AbsoluteTrajectory], target: AbsoluteT
         start_position = reg_transform * target[0]
         target_registered = target.to_relative().to_absolute(start_position=start_position)
 
-        # relative_trajectories = [trajectory.to_relative() for trajectory in trajectories]
-        # relative_target = target.to_relative()
-
-        # rot_dists = [relative_trajectory.rotation_distances(relative_target) for relative_trajectory in relative_trajectories]
         dists = [trajectory.distance_closest_positions(target_registered) for trajectory in trajectories]
 
-        # match should be trajectory-wise
-        # sums = [rot_dist + dist[:-1, :-1] for rot_dist, dist in zip(rot_dists, dists)]
         sums = dists
         mins_1 = [np.min(sum, axis=1).mean() for sum in sums]
         mins_2 = [np.min(sum, axis=0).mean() for sum in sums]
@@ -237,7 +229,8 @@ def grid_search_rotation(
         roll_range=(-np.pi, np.pi),
         pitch_range=(-np.pi, np.pi),
         yaw_range=(-np.pi, np.pi),
-        steps=8):
+        steps=8
+):
     # Create separate ranges for each angle
     roll_angles = np.linspace(roll_range[0], roll_range[1], steps)
     pitch_angles = np.linspace(pitch_range[0], pitch_range[1], steps)
@@ -269,28 +262,39 @@ def grid_search_rotation(
         if error < best_error:
             best_error = error
             best_transform = transform
+    return best_transform, best_error
 
-    return best_transform
 
-
-def h_grid_search_rotation(trajectories: List[AbsoluteTrajectory], target: AbsoluteTrajectory, iters=20):
+def h_grid_search_rotation(trajectories: List[AbsoluteTrajectory], target: AbsoluteTrajectory, iters=20, traj_subsample=1.0):
     ranges = [(-np.pi, np.pi), (-np.pi, np.pi), (-np.pi, np.pi)]
 
     radius = 2 * np.pi
+    tr_sub = []
 
+    for trajectory in trajectories:
+        idxs = np.linspace(0, len(trajectory) - 1, int(len(trajectory) * traj_subsample), dtype=int)
+        tr_sub.append(AbsoluteTrajectory([trajectory.absolute_positions[i] for i in idxs]))
+
+    best_transform = None
+    best_error = float('inf')
     for i in range(iters):
-        t = grid_search_rotation(
-            trajectories,
+        t, error = grid_search_rotation(
+            tr_sub,
             target,
             roll_range=ranges[0],
             pitch_range=ranges[1],
             yaw_range=ranges[2],
             steps=6
         )
-        roll, pitch, yaw = t.rotation.as_euler
+        print(error)
+        if error < best_error:
+            best_error = error
+            best_transform = t
+
+        roll, pitch, yaw = best_transform.rotation.as_euler
         radius *= 0.5
         ranges[0] = (roll - radius, roll + radius)
         ranges[1] = (pitch - radius, pitch + radius)
         ranges[2] = (yaw - radius, yaw + radius)
 
-    return t
+    return best_transform

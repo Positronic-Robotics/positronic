@@ -11,7 +11,7 @@ import geom
 from positronic.tools.registration import AbsoluteTrajectory, RelativeTrajectory, batch_registration, grid_search_rotation, h_grid_search_rotation, pca_registration, register_trajectories
 
 
-def split(xyz, k: int = 40):
+def split(xyz, k: int = 20):
     a = []
 
     xyz = np.array(xyz)
@@ -52,6 +52,15 @@ WAYPOINTS = RelativeTrajectory([
 ]).to_absolute()
 
 
+def polt_trajectory(trajectory: AbsoluteTrajectory, name: str, color: List[int] = [255, 0, 0, 255]):
+    points = []
+    for idx, pos in enumerate(trajectory):
+        rr.set_time_sequence("trajectory", idx)
+        points.append(pos.translation)
+
+    rr.log(f"trajectory/{name}", rr.Points3D(positions=np.array(points), radii=np.array([0.005]), colors=np.array([color])))
+
+
 def apply_trajectory(file, registration_transform: geom.Transform3D = None):
     data = torch.load(file)
 
@@ -84,52 +93,44 @@ def umi_relative(left_position: AbsoluteTrajectory, right_position: AbsoluteTraj
     relative_gripper_transform = left_position[0].inv * right_position[0]
 
     result = []
-    for i in range(len(right_position)):
-        if i == 0:
-            # First position is identity
-            result.append(geom.Transform3D())
-            continue
-
+    for i in range(1, len(right_position)):
         # Calculate relative transformation between consecutive right positions
         right_delta = right_position[i-1].inv * right_position[i]
 
         # Apply the relative transformation to the gripper frame
         transform = relative_gripper_transform.inv * right_delta * relative_gripper_transform
 
-        result.append(result[-1] * transform)
+        result.append(transform)
 
-    return AbsoluteTrajectory(result)
+    return RelativeTrajectory(result)
+
+def get_umi_trajectory(file: str):
+    data = torch.load(file)
+
+    right_position = AbsoluteTrajectory([
+        geom.Transform3D(translation=t.numpy(), rotation=r.numpy())
+        for t, r in zip(data['umi_right_translation'][50:], data['umi_right_quaternion'][50:])
+    ])
+
+    left_position = AbsoluteTrajectory([
+        geom.Transform3D(translation=t.numpy(), rotation=r.numpy())
+        for t, r in zip(data['umi_left_translation'][50:], data['umi_left_quaternion'][50:])
+    ])
+
+    umi_relative_trajectory = umi_relative(left_position, right_position)
+
+    return umi_relative_trajectory
+
 
 def plot_trajectories(trajectory_dir: str, registration_transform: geom.Transform3D = None):
     rr.init("trajectory", spawn=True)
     registration_transform = registration_transform or geom.Transform3D()
     waypoints_trajectory = WAYPOINTS
-    points = []
-    for idx, pos in enumerate(waypoints_trajectory):
-        # Create transform from the relative transform data
-        rr.set_time_sequence("trajectory", idx)
-        points.append(pos.translation)
-        # rr.log(f"trajectory/target", rr.Transform3D(
-        #     translation=pos.translation,
-        #     quaternion=pos.rotation.as_quat,
-        #     axis_length=0.05
-        # ))
-    rr.log(f"trajectory/target", rr.Points3D(
-        positions=np.array(points),
-        radii=np.array([0.005]),
-        colors=np.array([[255, 0, 0, 255]])
-    ))
+    polt_trajectory(waypoints_trajectory, "target", color=[255, 0, 0, 255])
 
     trajectories = []
     for i, file in enumerate(sorted(glob.glob(os.path.join(trajectory_dir, '*.pt')))):
-        if i == 1:
-            continue  # bad sample
         data = torch.load(file)
-
-        umi_trajectory = RelativeTrajectory([
-            geom.Transform3D(translation=t.numpy(), rotation=r.numpy())
-            for t, r in zip(data['robot_position_translation'], data['robot_position_quaternion'])
-        ]).to_absolute()
 
         right_position = AbsoluteTrajectory([
             geom.Transform3D(translation=t.numpy(), rotation=r.numpy())
@@ -145,40 +146,20 @@ def plot_trajectories(trajectory_dir: str, registration_transform: geom.Transfor
 
         trajectories.append(umi_relative_trajectory)
 
-    # registration_transform = grid_search_rotation(trajectories[0], waypoints_trajectory)
-    registration_transform = h_grid_search_rotation(trajectories, waypoints_trajectory)
-    # registration_transform = batch_registration(trajectories, waypoints_trajectory)
-    # registration_transform = pca_registration(trajectories[0], waypoints_trajectory)
-    # print(registration_transform)
-    # registration_transform = geom.Transform3D(
-    #     translation=trajectories[0].mean_translation() - waypoints_trajectory.mean_translation(),
-    #     rotation=geom.Rotation.from_quat(np.array([1.0, 0.0, 0.0, 0.0]))
-    #   )
+    # registration_transform = h_grid_search_rotation(trajectories, waypoints_trajectory, traj_subsample=0.2)
+    registration_transform = geom.Transform3D(rotation=geom.Rotation.from_euler([1.36897958, -0.73992762, 1.39720004]))
 
-    print(waypoints_trajectory.mean_translation())
-    print(trajectories[0].mean_translation())
+    print(registration_transform.rotation.as_euler)
+
+
 
     for i, umi_trajectory in enumerate(trajectories):
-        start = registration_transform.inv * umi_trajectory[0]
+        # start = registration_transform.inv * umi_trajectory[0]
         # start = umi_trajectory[0]
-        registered_trajectory = umi_trajectory.to_relative().to_absolute(start_position=start)
+        robot_relative = RelativeTrajectory([registration_transform.inv * pos * registration_transform for pos in umi_trajectory])
+        registered_trajectory = robot_relative.to_absolute()
 
-        points = []
-        for idx, pos in enumerate(registered_trajectory):
-            # Create transform from the relative transform data
-            rr.set_time_sequence("trajectory", idx)
-            points.append(pos.translation)
-            # rr.log(f"trajectory/{i}umi", rr.Transform3D(
-            #     translation=pos.translation,
-            #     quaternion=pos.rotation.as_quat,
-            #     axis_length=0.05
-            # ))
-
-        rr.log(f"trajectory/{i}umi", rr.Points3D(
-            positions=np.array(points),
-            radii=np.array([0.005]),
-            colors=np.array([[0, 255, 0, 255]])
-        ))
+        polt_trajectory(registered_trajectory, f"{i}umi", color=[0, 255, 0, 255])
 
 if __name__ == "__main__":
     fire.Fire(plot_trajectories)

@@ -46,7 +46,17 @@ def main(cfg: DictConfig):
                 kwargs['translational_stiffness'] = target.impedance.stiffness.translational
                 kwargs['rotational_stiffness'] = target.impedance.stiffness.rotational
             robot.move(franky.CartesianImpedanceMotion(pos, duration=target.impedance.duration, return_when_finished=False, finish_wait_factor=10, **kwargs))
+        elif "file" in target:
+            from adhoc.validate_trajectory import get_umi_trajectory
+            umi_relative_trajectory = get_umi_trajectory(target.file)
+            registration_transform = geom.Transform3D(rotation=geom.Rotation.from_euler([1.36897958, -0.73992762, 1.39720004]))
 
+            for pos in umi_relative_trajectory:
+                pos = registration_transform.inv * pos * registration_transform
+                q = pos.rotation.as_quat
+                q = [q[1], q[2], q[3], q[0]]
+                pos = franky.Affine(translation=pos.translation, quaternion=q)
+                robot.move(franky.CartesianMotion(pos, reference_type=franky.ReferenceType.Relative))
     print(robot.current_pose.end_effector_pose)
 
 

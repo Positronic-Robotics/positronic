@@ -6,6 +6,7 @@ targets:
   #     translation: [-0.15, 0.0, 0.0]
   #     quaternion: [0, 0, 0, 1]
   # START
+  - file: /home/aluzan/dev/positronic/callibraton-4/014.pt
   - relative:
       translation: [0.0, 0.0, 0.2]
       quaternion: [0, 0, 0, 1]
