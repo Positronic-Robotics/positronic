@@ -39,6 +39,8 @@ _DT = 0.001
 _DAMPING_COEFF = 1e-12
 _MAX_ANGLE_CHANGE = np.deg2rad(45)
 
+_Q_RETRACT = np.array([0.0, -0.34906585, 3.14159265, -2.54818071, 0.0, -0.87266463, 1.57079633])
+
 
 def _wrap_joint_angle(q, q_base):
     return q_base + np.mod(q - q_base + np.pi, 2 * np.pi) - np.pi
@@ -138,7 +140,7 @@ class Solver:
 
             mujoco.mj_jacSite(self.model, self.data, self.jac_pos, self.jac_rot, self.site_id)
             update = self.jac.T @ np.linalg.solve(self.jac @ self.jac.T + self.damping, self.err)
-            qpos0_err = _wrap_joint_angle(self.qpos0, self.data.qpos)
+            qpos0_err = np.mod(self.qpos0 - self.data.qpos + np.pi, 2 * np.pi) - np.pi
             update += (self.eye -
                        (self.jac.T @ np.linalg.pinv(self.jac @ self.jac.T + self.damping)) @ self.jac) @ qpos0_err
 
@@ -181,10 +183,19 @@ class JointCompliantController:
         self.otg_out = None
         self.otg_res = None
 
+        self.solver = Solver()
         self.target_qpos = None
 
     def set_target_qpos(self, qpos):
         self.target_qpos = qpos
+
+    def set_target_pose(self, pose):
+        pose_str = ','.join(f'{p: .2f}' for p in pose.translation) + '|' + ','.join(f'{q: .2f}' for q in pose.rotation.as_quat)
+        print(f'Setting target pose: {pose_str}')
+        pose = self.solver.inverse(pose, self.q_s)
+        pose_str = ','.join(f'{p: .4f}' for p in pose)
+        print(f'Inverse kinematics: {pose_str}')
+        self.target_qpos = pose
 
     def compute_torque(self, q, dq, tau, g):
         if self.q_s is None:
@@ -199,8 +210,9 @@ class JointCompliantController:
             self.otg = Ruckig(self.actuator_count, _DT)
             self.otg_inp = InputParameter(self.actuator_count)
             self.otg_out = OutputParameter(self.actuator_count)
-            self.otg_inp.max_velocity = 4 * [math.radians(80)] + 3 * [math.radians(140)]
-            self.otg_inp.max_acceleration = 4 * [math.radians(240)] + 3 * [math.radians(450)]
+            coeff = 0.5
+            self.otg_inp.max_velocity = 4 * [math.radians(80 * coeff)] + 3 * [math.radians(140 * coeff)]
+            self.otg_inp.max_acceleration = 4 * [math.radians(240 * coeff)] + 3 * [math.radians(450 * coeff)]
             self.otg_inp.current_position = q.copy()
             self.otg_inp.current_velocity = dq.copy()
             self.otg_inp.target_position = q.copy()
@@ -399,8 +411,6 @@ class KinovaController:
             self.joint_controller = JointCompliantController(self.actuator_count)
             self.joint_controller.compute_torque(*self._update_state(base_feedback))
 
-        solver = Solver()
-
         last_ts = time.monotonic()
         count = 0
         while not self.stop_event.is_set():
@@ -415,16 +425,16 @@ class KinovaController:
                     torque_command = self.joint_controller.compute_torque(*self._update_state(base_feedback))
                 current_command = np.divide(torque_command, self.torque_constant)
                 np.clip(current_command, self.current_limit_min, self.current_limit_max, out=current_command)
-                if count % 20 == 0:
-                    fk = solver.forward(self.joint_controller.q_s)
-                    # cur_cmd = ','.join(f'{c: .4f}' for c in current_command)
-                    # q_s = ','.join(f'{q: .2f}' for q in self.joint_controller.q_s)
-                    # q_t = ','.join(f'{q: .2f}' for q in self.joint_controller.q_d)
-                    fk_pos = ','.join(f'{p: .2f}' for p in fk.translation)
-                    fk_quat = ','.join(f'{q: .2f}' for q in fk.rotation.as_quat)
+                # if count % 20 == 0:
+                #     fk = self.joint_controller.solver.forward(self.joint_controller.q_s)
+                #     # cur_cmd = ','.join(f'{c: .4f}' for c in current_command)
+                #     # q_s = ','.join(f'{q: .2f}' for q in self.joint_controller.q_s)
+                #     # q_t = ','.join(f'{q: .2f}' for q in self.joint_controller.q_d)
+                #     fk_pos = ','.join(f'{p: .2f}' for p in fk.translation)
+                #     fk_quat = ','.join(f'{q: .2f}' for q in fk.rotation.as_quat)
 
-                    print(f'{fk_pos}|{fk_quat}')
-                    # print(f'{cur_cmd}|{q_s}|{q_t}|{fk_pos}|{fk_quat}')
+                #     print(f'{fk_pos}|{fk_quat}')
+                #     # print(f'{cur_cmd}|{q_s}|{q_t}|{fk_pos}|{fk_quat}')
 
                 # Increment frame ID to ensure actuators can reject out-of-order frames
                 base_command.frame_id = (base_command.frame_id + 1) % 65536
@@ -452,6 +462,9 @@ class KinovaController:
         base_servo_mode.servoing_mode = Base_pb2.SINGLE_LEVEL_SERVOING
         self.base.SetServoingMode(base_servo_mode)
 
+    def reset(self):
+        self.set_target_qpos(_Q_RETRACT)
+
     @property
     def current_qpos(self):
         with self.joint_controller_mutex:
@@ -459,8 +472,21 @@ class KinovaController:
                 return None
             return self.joint_controller.q_s
 
+    @property
+    def current_pose(self):
+        with self.joint_controller_mutex:
+            if self.joint_controller is None:
+                return None
+            return self.joint_controller.solver.forward(self.joint_controller.q_s)
+
     def set_target_qpos(self, qpos):
         with self.joint_controller_mutex:
             if self.joint_controller is None:
                 return
             self.joint_controller.set_target_qpos(qpos)
+
+    def set_target_pose(self, pose):
+        with self.joint_controller_mutex:
+            if self.joint_controller is None:
+                return
+            self.joint_controller.set_target_pose(pose)
