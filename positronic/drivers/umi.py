@@ -6,7 +6,15 @@ import geom
 
 @ir.ironic_system(
     input_ports=['tracker_position', 'target_grip'],
-    output_props=['ee_position', 'grip', 'metadata'],
+    output_props=[
+        'ee_position',
+        'grip',
+        'metadata',
+        'umi_left_quaternion',
+        'umi_left_translation',
+        'umi_right_quaternion',
+        'umi_right_translation',
+    ],
 )
 class UmiCS(ir.ControlSystem):
 
@@ -32,6 +40,22 @@ class UmiCS(ir.ControlSystem):
         relative_gripper_transform = self.relative_gripper_transform.inv * (self.prev_tracker_positions['right'].inv * self.tracker_positions['right']) * self.relative_gripper_transform
 
         return ir.Message(data=relative_gripper_transform, timestamp=ir.system_clock())
+
+    @ir.out_property
+    async def umi_left_quaternion(self):
+        return ir.Message(data=self.tracker_positions['left'].rotation.as_quat.copy(), timestamp=ir.system_clock())
+
+    @ir.out_property
+    async def umi_left_translation(self):
+        return ir.Message(data=self.tracker_positions['left'].translation.copy(), timestamp=ir.system_clock())
+
+    @ir.out_property
+    async def umi_right_quaternion(self):
+        return ir.Message(data=self.tracker_positions['right'].rotation.as_quat.copy(), timestamp=ir.system_clock())
+
+    @ir.out_property
+    async def umi_right_translation(self):
+        return ir.Message(data=self.tracker_positions['right'].translation.copy(), timestamp=ir.system_clock())
 
     @ir.out_property
     async def grip(self):

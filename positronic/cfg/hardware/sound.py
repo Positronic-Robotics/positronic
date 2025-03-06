@@ -37,7 +37,7 @@ def _sound_system(force_feedback_volume: Optional[float] = None,
 
 full = ir.Config(_sound_system,
                  force_feedback_volume=0.1,
-                 start_recording_wav_path="assets/sounds/recording-has-started.wav",
-                 stop_recording_wav_path="assets/sounds/recording-has-stopped.wav")
+                 start_recording_wav_path="positronic/assets/sounds/recording-has-started.wav",
+                 stop_recording_wav_path="positronic/assets/sounds/recording-has-stopped.wav")
 
 start_stop = full.override(force_feedback_volume=0)

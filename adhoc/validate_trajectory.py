@@ -8,49 +8,48 @@ import numpy as np
 import rerun as rr
 
 import geom
+from positronic.tools.registration import AbsoluteTrajectory, RelativeTrajectory, batch_registration, grid_search_rotation, h_grid_search_rotation, pca_registration, register_trajectories
 
-WAYPOINTS = [
-    # Y axis movement
-    *[geom.Transform3D(translation=[0.0, y, 0.0])
-      for y in np.arange(0.0, 0.2, 0.01)] +
-    [geom.Transform3D(translation=[0.0, y, 0.0])
-      for y in np.arange(0.2, -0.2, -0.01)] +
-    [geom.Transform3D(translation=[0.0, y, 0.0])
-      for y in np.arange(-0.2, 0.0, 0.01)] +
-    # X axis movement
-    [geom.Transform3D(translation=[x, 0.0, 0.0])
-      for x in np.arange(0.0, -0.15, -0.01)] +
-    [geom.Transform3D(translation=[x, 0.0, 0.0])
-      for x in np.arange(-0.15, 0.15, 0.01)] +
-    [geom.Transform3D(translation=[x, 0.0, 0.0])
-      for x in np.arange(0.15, 0.0, -0.01)] +
-    # Z axis movement
-    [geom.Transform3D(translation=[0.0, 0.0, z])
-      for z in np.arange(0.0, 0.05, 0.01)] +
-    [geom.Transform3D(translation=[0.0, 0.0, z])
-      for z in np.arange(0.05, -0.05, -0.01)] +
-    [geom.Transform3D(translation=[0.0, 0.0, z])
-      for z in np.arange(-0.05, 0.0, 0.01)],
-]
 
-def pca(points: List[geom.Transform3D]):
-    # Convert points to numpy array of translations
-    points_array = np.array([p.translation for p in points])
+def split(xyz, k: int = 40):
+    a = []
 
-    # Center the points by subtracting mean
-    mean = np.mean(points_array, axis=0)
-    centered = points_array - mean
+    xyz = np.array(xyz)
 
-    # Perform SVD
-    U, S, Vh = np.linalg.svd(centered)
+    for i in range(k):
+        a.append(geom.Transform3D(translation=xyz / k))
 
-    # Principal components are the right singular vectors (rows of Vh)
-    principal_components = Vh
+    return a
 
-    # Explained variance ratio
-    explained_variance = S**2 / np.sum(S**2)
+WAYPOINTS = RelativeTrajectory([
+    # Initial joint configuration is handled separately
+    *split([0.0, 0.0, 0.2]),
+    # YX plane triangle 0.2 side
+    *split([0.0, 0.2, 0.0]),
+    *split([-0.2, 0.0, 0.0]),
+    *split([0.2, -0.2, 0.0]),
 
-    return principal_components, explained_variance, mean
+    # XY plane square 0.15 side
+    *split([-0.15, 0.0, 0.0]),
+    *split([0.0, -0.15, 0.0]),
+    *split([0.15, 0.0, 0.0]),
+    *split([0.0, 0.15, 0.0]),
+
+    # XZ plane square 0.1 side
+    *split([-0.1, 0.0, 0.0]),
+    *split([0.0, 0.0, -0.1]),
+    *split([0.1, 0.0, 0.0]),
+    *split([0.0, 0.0, 0.1]),
+
+    # Not parallel hourglass
+    *split([-0.05, -0.05, -0.05]),
+    *split([0.0, 0.0, 0.05]),
+    *split([-0.05, -0.05, -0.05]),
+    *split([0.0, 0.0, 0.05]),
+    *split([0.1, 0.1, 0.0]),
+    # return to start
+    *split([0.0, 0.0, -0.2]),
+]).to_absolute()
 
 
 def apply_trajectory(file, registration_transform: geom.Transform3D = None):
@@ -60,53 +59,126 @@ def apply_trajectory(file, registration_transform: geom.Transform3D = None):
     res = [geom.Transform3D()]
 
     for idx, (trans, rot) in enumerate(zip(data['robot_position_translation'], data['robot_position_quaternion'])):
-        diff = geom.Transform3D(translation=trans.numpy(), quaternion=rot.numpy())
+        diff = geom.Transform3D(translation=trans.numpy(), rotation=rot.numpy())
 
         res.append(res[-1] * (registration_transform.inv * diff * registration_transform))
 
     return res
 
+def umi_relative(left_position: AbsoluteTrajectory, right_position: AbsoluteTrajectory):
+    """
+    Calculate the relative transformation between left and right positions.
+    Similar to ee_position in UmiCS class.
 
-def register_trajectories(dir: str, waypoints: List[geom.Transform3D] = WAYPOINTS):
-    target = [geom.Transform3D()]
+    Args:
+        left_position: Trajectory of left tracker positions
+        right_position: Trajectory of right tracker positions
 
-    for w in waypoints:
-        target.append(target[-1] * w)
+    Returns:
+        AbsoluteTrajectory: Relative transformation trajectory
+    """
+    if len(left_position) == 0 or len(right_position) == 0:
+        return AbsoluteTrajectory([])
 
-    waypoints_pca = pca(target)
+    # Calculate initial relative gripper transform
+    relative_gripper_transform = left_position[0].inv * right_position[0]
 
-    trajs = []
-    for file in glob.glob(os.path.join(dir, '*.pt')):
-        trajs.extend(apply_trajectory(file))
+    result = []
+    for i in range(len(right_position)):
+        if i == 0:
+            # First position is identity
+            result.append(geom.Transform3D())
+            continue
 
-    trajs_pca = pca(trajs)
+        # Calculate relative transformation between consecutive right positions
+        right_delta = right_position[i-1].inv * right_position[i]
 
-    w_rotation = geom.Quaternion.from_rotation_matrix(waypoints_pca[0])
-    t_rotation = geom.Quaternion.from_rotation_matrix(trajs_pca[0])
+        # Apply the relative transformation to the gripper frame
+        transform = relative_gripper_transform.inv * right_delta * relative_gripper_transform
 
-    reg_transform = geom.Transform3D(translation=np.zeros(3), quaternion=t_rotation * w_rotation.inv)
+        result.append(result[-1] * transform)
 
-    return reg_transform
+    return AbsoluteTrajectory(result)
 
 def plot_trajectories(trajectory_dir: str, registration_transform: geom.Transform3D = None):
     rr.init("trajectory", spawn=True)
     registration_transform = registration_transform or geom.Transform3D()
+    waypoints_trajectory = WAYPOINTS
+    points = []
+    for idx, pos in enumerate(waypoints_trajectory):
+        # Create transform from the relative transform data
+        rr.set_time_sequence("trajectory", idx)
+        points.append(pos.translation)
+        # rr.log(f"trajectory/target", rr.Transform3D(
+        #     translation=pos.translation,
+        #     quaternion=pos.rotation.as_quat,
+        #     axis_length=0.05
+        # ))
+    rr.log(f"trajectory/target", rr.Points3D(
+        positions=np.array(points),
+        radii=np.array([0.005]),
+        colors=np.array([[255, 0, 0, 255]])
+    ))
 
-    for i, file in enumerate(glob.glob(os.path.join(trajectory_dir, '*.pt'))):
+    trajectories = []
+    for i, file in enumerate(sorted(glob.glob(os.path.join(trajectory_dir, '*.pt')))):
+        if i == 1:
+            continue  # bad sample
         data = torch.load(file)
 
-        position = geom.Transform3D()
+        umi_trajectory = RelativeTrajectory([
+            geom.Transform3D(translation=t.numpy(), rotation=r.numpy())
+            for t, r in zip(data['robot_position_translation'], data['robot_position_quaternion'])
+        ]).to_absolute()
 
-        for idx, (trans, rot) in enumerate(zip(data['robot_position_translation'], data['robot_position_quaternion'])):
+        right_position = AbsoluteTrajectory([
+            geom.Transform3D(translation=t.numpy(), rotation=r.numpy())
+            for t, r in zip(data['umi_right_translation'][50:], data['umi_right_quaternion'][50:])
+        ])
+
+        left_position = AbsoluteTrajectory([
+            geom.Transform3D(translation=t.numpy(), rotation=r.numpy())
+            for t, r in zip(data['umi_left_translation'][50:], data['umi_left_quaternion'][50:])
+        ])
+
+        umi_relative_trajectory = umi_relative(left_position, right_position)
+
+        trajectories.append(umi_relative_trajectory)
+
+    # registration_transform = grid_search_rotation(trajectories[0], waypoints_trajectory)
+    registration_transform = h_grid_search_rotation(trajectories, waypoints_trajectory)
+    # registration_transform = batch_registration(trajectories, waypoints_trajectory)
+    # registration_transform = pca_registration(trajectories[0], waypoints_trajectory)
+    # print(registration_transform)
+    # registration_transform = geom.Transform3D(
+    #     translation=trajectories[0].mean_translation() - waypoints_trajectory.mean_translation(),
+    #     rotation=geom.Rotation.from_quat(np.array([1.0, 0.0, 0.0, 0.0]))
+    #   )
+
+    print(waypoints_trajectory.mean_translation())
+    print(trajectories[0].mean_translation())
+
+    for i, umi_trajectory in enumerate(trajectories):
+        start = registration_transform.inv * umi_trajectory[0]
+        # start = umi_trajectory[0]
+        registered_trajectory = umi_trajectory.to_relative().to_absolute(start_position=start)
+
+        points = []
+        for idx, pos in enumerate(registered_trajectory):
             # Create transform from the relative transform data
-            diff = geom.Transform3D(translation=trans.numpy(), quaternion=rot.numpy())
-
-            position = position *  diff
-
-            pout = registration_transform.inv * position * registration_transform
             rr.set_time_sequence("trajectory", idx)
-            rr.log(f"trajectory/{i}", rr.Transform3D(translation=pout.translation, quaternion=pout.quaternion))
+            points.append(pos.translation)
+            # rr.log(f"trajectory/{i}umi", rr.Transform3D(
+            #     translation=pos.translation,
+            #     quaternion=pos.rotation.as_quat,
+            #     axis_length=0.05
+            # ))
 
+        rr.log(f"trajectory/{i}umi", rr.Points3D(
+            positions=np.array(points),
+            radii=np.array([0.005]),
+            colors=np.array([[0, 255, 0, 255]])
+        ))
 
 if __name__ == "__main__":
     fire.Fire(plot_trajectories)

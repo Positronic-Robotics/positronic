@@ -4,12 +4,12 @@ from typing import Dict, Optional
 
 import fire
 
-import cfg.env
-import cfg.ui
-import cfg.hardware.sound
+import positronic.cfg.env
+import positronic.cfg.ui
+import positronic.cfg.hardware.sound
 
 import ironic as ir
-from tools.dataset_dumper import DatasetDumper
+from positronic.tools.dataset_dumper import DatasetDumper
 
 logging.basicConfig(level=logging.INFO, handlers=[logging.StreamHandler()])
 
@@ -51,7 +51,7 @@ def main(ui: ir.ControlSystem,
 
         components = [ui, env]
         if rerun:
-            from tools.rerun_vis import RerunVisualiser
+            from positronic.tools.rerun_vis import RerunVisualiser
             visualizer = RerunVisualiser()
             visualizer.bind(
                 frame=env.outs.frame,
@@ -76,9 +76,9 @@ def main(ui: ir.ControlSystem,
 
 main = ir.Config(
     main,
-    env=cfg.env.umi,
-    ui=cfg.ui.teleop,
-    sound=cfg.hardware.sound.start_stop,
+    env=positronic.cfg.env.umi,
+    ui=positronic.cfg.ui.teleop,
+    sound=positronic.cfg.hardware.sound.start_stop,
     data_dumper=dataset_dumper.override(video_fps=30, codec='libx264'),
     rerun=False,
 )

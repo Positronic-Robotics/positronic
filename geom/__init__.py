@@ -384,6 +384,30 @@ class Rotation(np.ndarray):
         """
         return 2 * np.arccos(self[0])
 
+    def angle_distance(self, other: 'Rotation') -> float:
+        """
+        Compute the geodesic distance between two rotations.
+
+        The geodesic distance is the magnitude of the minimal rotation that transforms
+        one rotation to another, expressed in radians.
+
+        Parameters
+        ----------
+        other : Rotation
+            The rotation to compute distance to
+
+        Returns
+        -------
+        float
+            The geodesic distance in radians
+        """
+        # Compute the inner product of the quaternions
+        inner_product = np.abs(np.sum(self.as_quat * other.as_quat))
+        # Clamp to [-1, 1] to handle numerical errors
+        inner_product = np.clip(inner_product, -1.0, 1.0)
+        # The geodesic distance is 2 * arccos of the inner product
+        return 2.0 * np.arccos(inner_product)
+
 
 def normalise_quat(q: np.ndarray) -> np.ndarray:
     """

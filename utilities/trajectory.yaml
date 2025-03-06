@@ -6,26 +6,64 @@ targets:
   #     translation: [-0.15, 0.0, 0.0]
   #     quaternion: [0, 0, 0, 1]
   # START
-  # Y
+  - relative:
+      translation: [0.0, 0.0, 0.2]
+      quaternion: [0, 0, 0, 1]
+  # YX plane trianle 0.2 side
   - relative:
       translation: [0.0, 0.2, 0.0]
       quaternion: [0, 0, 0, 1]
   - relative:
-      translation: [0.0, -0.2, 0.0]
+      translation: [-0.2, 0.0, 0.0]
       quaternion: [0, 0, 0, 1]
-  # X
+  - relative:
+      translation: [0.2, -0.2, 0.0]
+      quaternion: [0, 0, 0, 1]
+  # XY plane square 0.15 side
   - relative:
       translation: [-0.15, 0.0, 0.0]
       quaternion: [0, 0, 0, 1]
   - relative:
+      translation: [0.0, -0.15, 0.0]
+      quaternion: [0, 0, 0, 1]
+  - relative:
       translation: [0.15, 0.0, 0.0]
       quaternion: [0, 0, 0, 1]
-  # Z
+  - relative:
+      translation: [0.0, 0.15, 0.0]
+      quaternion: [0, 0, 0, 1]
+  # XZ plane square 0.1 side
+  - relative:
+      translation: [-0.1, 0.0, 0.0]
+      quaternion: [0, 0, 0, 1]
+  - relative:
+      translation: [0.0, 0.0, -0.1]
+      quaternion: [0, 0, 0, 1]
+  - relative:
+      translation: [0.1, 0.0, 0.0]
+      quaternion: [0, 0, 0, 1]
+  - relative:
+      translation: [0.0, 0.0, 0.1]
+      quaternion: [0, 0, 0, 1]
+  # not parallel hourglass
+  - relative:
+      translation: [-0.05, -0.05, -0.05]
+      quaternion: [0, 0, 0, 1]
+  - relative:
+      translation: [0.0, -0.0, 0.05]
+      quaternion: [0, 0, 0, 1]
+  - relative:
+      translation: [-0.05, -0.05, -0.05]
+      quaternion: [0, 0, 0, 1]
   - relative:
       translation: [0.0, 0.0, 0.05]
       quaternion: [0, 0, 0, 1]
   - relative:
-      translation: [0.0, 0.0, -0.05]
+      translation: [0.1, 0.1, 0.0]
+      quaternion: [0, 0, 0, 1]
+  # return to start
+  - relative:
+      translation: [0.0, 0.0, -0.2]
       quaternion: [0, 0, 0, 1]
   #- relative:
   #     translation: [0.0, 0.0, 0.0]

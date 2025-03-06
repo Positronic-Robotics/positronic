@@ -32,19 +32,19 @@ def run_server(data_queue, frame_queue, port, ssl_keyfile, ssl_certfile):  # noq
 
     @app.get("/")
     async def root():
-        return FileResponse("assets/webxr/index.html")
+        return FileResponse("positronic/assets/webxr/index.html")
 
     @app.get("/three.min.js")
     async def three_min():
-        return FileResponse("assets/webxr/three.min.js")
+        return FileResponse("positronic/assets/webxr/three.min.js")
 
     @app.get("/webxr-button.js")
     async def webxr_button():
-        return FileResponse("assets/webxr/webxr-button.js")
+        return FileResponse("positronic/assets/webxr/webxr-button.js")
 
     @app.get("/video-player.js")
     async def video_player():
-        return FileResponse("assets/webxr/video-player.js")
+        return FileResponse("positronic/assets/webxr/video-player.js")
 
     @app.websocket("/video")
     async def video_stream(websocket: WebSocket):

@@ -39,7 +39,11 @@ def umi(camera: Optional[ir.ControlSystem] = None):
         'grip': umi.outs.grip,
         'robot_status': ir.OutputPort.Stub(),
         'ext_force_ee': fake_ext_force_ee,
-        'metadata': umi.outs.metadata
+        'metadata': umi.outs.metadata,
+        'umi_left_quaternion': umi.outs.umi_left_quaternion,
+        'umi_left_translation': umi.outs.umi_left_translation,
+        'umi_right_quaternion': umi.outs.umi_right_quaternion,
+        'umi_right_translation': umi.outs.umi_right_translation,
     })
 
     res = ir.compose(*components, inputs=inputs, outputs=outputs)

@@ -199,7 +199,7 @@ class DatasetDumper(ir.ControlSystem):
         # TODO: This should be configured somehow
         ep_dict['target_grip'] = self.target_grip
         ep_dict['target_robot_position_translation'] = self.target_robot_position.translation.copy()
-        ep_dict['target_robot_position_quaternion'] = self.target_robot_position.quaternion.copy()
+        ep_dict['target_robot_position_quaternion'] = self.target_robot_position.rotation.as_quat.copy()
 
         env_state_data = await self.ins.robot_data()
         for name, value in env_state_data.data.items():

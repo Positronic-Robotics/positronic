@@ -29,11 +29,12 @@ def main(cfg: DictConfig):
         elif "joints" in target:
             robot.move(franky.JointMotion(target.joints))
         elif 'relative' in target:
-            pos = geom.Transform3D(translation=target.relative.translation, quaternion=target.relative.quaternion)
-            pos = franky.Affine(translation=pos.translation, quaternion=pos.quaternion)
+            pos = geom.Transform3D(translation=target.relative.translation, rotation=geom.Rotation.from_quat(target.relative.quaternion))
+            pos = franky.Affine(translation=pos.translation, quaternion=pos.rotation.as_quat)
+            print(f"Doing: {target.relative}")
             robot.move(franky.CartesianMotion(pos, reference_type=franky.ReferenceType.Relative))
         elif "ik" in target:
-            pos = franky.Affine(translation=target.ik.translation, quaternion=target.ik.quaternion)
+            pos = franky.Affine(translation=target.ik.translation, rotation=geom.Rotation.from_quat(target.ik.quaternion))
             q = robot.inverse_kinematics(pos, last_q)
             robot.move(franky.JointMotion(q))
             last_q = q
