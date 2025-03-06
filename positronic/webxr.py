@@ -188,7 +188,7 @@ class WebXR(ir.ControlSystem):
             transforms_data['left'] = transform
             buttons_data['left'] = buttons
 
-        if transforms_data['left'] is not None or transforms_data['right'] is not None:
+        if transforms_data['left'] is not None and transforms_data['right'] is not None:
             await asyncio.gather(
                 self.outs.transforms.write(ir.Message(transforms_data, timestamp)),
                 self.outs.buttons.write(ir.Message(buttons_data, timestamp))

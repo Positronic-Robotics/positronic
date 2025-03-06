@@ -67,6 +67,9 @@ class UmiCS(ir.ControlSystem):
 
     @ir.on_message('tracker_position')
     async def on_tracker_positions(self, message: ir.Message):
+        if message.data['left'] is None or message.data['right'] is None:
+            return
+        
         if self.tracker_positions['left'] is None or self.tracker_positions['right'] is None:
             self.tracker_positions = message.data
         else:

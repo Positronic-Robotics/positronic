@@ -1,12 +1,12 @@
-_target_: inference.StateEncodingConfig
+_target_: positronic.inference.StateEncodingConfig
 state_output_key: observation.state
 images:
-  - key: image.front
+  - key: first.image
     output_key: observation.images.front
     resize:
       - 352
       - 192
-  - key: image.back
+  - key: second.image
     output_key: observation.images.back
     resize:
       - 352

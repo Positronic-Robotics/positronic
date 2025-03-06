@@ -18,8 +18,7 @@ from lerobot.common.datasets.video_utils import encode_video_frames
 from lerobot.scripts.push_dataset_to_hub import save_meta_data
 from lerobot.common.datasets.compute_stats import compute_stats
 
-from inference import StateEncoder
-
+from positronic.inference import StateEncoder
 
 def _decode_video_from_array(array: torch.Tensor) -> torch.Tensor:
     """
@@ -61,7 +60,7 @@ def start_from_zero(timestamp: torch.Tensor):
     return timestamp - timestamp[0]
 
 
-@hydra.main(version_base=None, config_path="../configs", config_name="to_lerobot")
+@hydra.main(version_base=None, config_path="../../configs", config_name="to_lerobot")
 def convert_to_lerobot_dataset(cfg: DictConfig):  # noqa: C901  Function is too complex
     input_dir = Path(cfg.input_dir)
     output_dir = Path(cfg.output_dir)
@@ -86,7 +85,7 @@ def convert_to_lerobot_dataset(cfg: DictConfig):  # noqa: C901  Function is too 
 
         for key in episode_data.keys():
             # TODO: come up with a better way to determine if the data is a video
-            if key.startswith('image.') and len(episode_data[key].shape) == 1:
+            if (key.startswith('image.') or key.endswith('.image')) and len(episode_data[key].shape) == 1:
                 episode_data[key] = _decode_video_from_array(episode_data[key])
 
         ep_dict = {}

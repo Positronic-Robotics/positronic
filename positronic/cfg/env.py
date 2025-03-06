@@ -3,7 +3,7 @@ from typing import Optional
 
 import numpy as np
 
-import cfg.hardware.camera
+import positronic.cfg.hardware.camera
 import ironic as ir
 
 
@@ -18,7 +18,7 @@ def _state_mapping(env: ir.ControlSystem):
     return ir.extend(env, {'state': ir.utils.properties_dict(**robot_properties)})
 
 
-@ir.config(camera=cfg.hardware.camera.merged)
+@ir.config(camera=positronic.cfg.hardware.camera.merged)
 def umi(camera: Optional[ir.ControlSystem] = None):
     from drivers.umi import UmiCS  # noqa: CO415
     umi = UmiCS()

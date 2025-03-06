@@ -1,0 +1,4 @@
+type: plain_teleop
+
+webxr:
+  port: 5005

@@ -162,14 +162,23 @@ class LinuxPyCamera(ir.ControlSystem):
 
 if __name__ == "__main__":
     import asyncio
-    from tools.video import VideoDumper
+    from positronic.tools.video import VideoDumper
+    from positronic.tools.rerun_vis import RerunVisualiser
+    from positronic.drivers.camera.merge import merge_on_camera
 
     async def _main():
-        camera = LinuxPyCamera('/dev/video0')
+        camera = LinuxPyCamera('/dev/video6')
+        camera2 = LinuxPyCamera('/dev/video0')
+
+        merged = merge_on_camera(("main", camera), {"ext": camera2})
+
         system = ir.compose(
-            camera,
-            VideoDumper("video.mp4", 30, codec='libx264').bind(
-                image=ir.utils.map_port(lambda x: x['image'], camera.outs.frame)
+            merged,
+            # VideoDumper("video.mp4", 30, codec='libx264').bind(
+            #     image=ir.utils.map_port(lambda x: x['image'], merged.outs.frame)
+            # ),
+            RerunVisualiser().bind(
+                frame=merged.outs.frame
             )
         )
 

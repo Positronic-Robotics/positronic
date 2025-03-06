@@ -1,6 +1,6 @@
 defaults:
-  - state: tqg_352x192
-  - action: absolute
+  - state: ee
+  - action: umi
   - _self_
 
 input_dir: _dataset/
@@ -10,6 +10,6 @@ timestamp_units: 'ns'
 start_from_zero: true
 
 dataset:
-  fps: 60
+  fps: 30
   video: true
   run_compute_stats: true

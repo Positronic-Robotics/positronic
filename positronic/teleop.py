@@ -135,14 +135,14 @@ class PlainTeleopSystem(ir.ControlSystem):
         if len(value) > 6:
             but = {'A': value[4], 'B': value[5], 'trigger': value[0], 'thumb': value[1], 'stick': value[3]}
             self.button_handler.update_buttons(but)
-            
+
     @ir.on_message("teleop_transforms")
     async def handle_teleop_transforms(self, message: ir.Message):
         self.fps.tick()
 
         data = {
-            'left': self._parse_position(message.data['left']),
-            'right': self._parse_position(message.data['right'])
+            'left': self._parse_position(message.data['left']) if message.data['left'] is not None else None,
+            'right': self._parse_position(message.data['right']) if message.data['right'] is not None else None
         }
 
         await self.outs.controller_positions.write(ir.Message(data, message.timestamp))

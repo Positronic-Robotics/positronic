@@ -1,0 +1,7 @@
+_target_: positronic.inference.action.UMIRelativeRobotPositionAction
+rotation_representation: rotvec
+offset: 1
+registration_transform:
+  _target_: positronic.tools.registration.geom.Transform3D
+  translation: [0.0, 0.0, 0.0]
+  rotation: [0.4060779 , 0.63157042, 0.16462402, 0.63962369]
