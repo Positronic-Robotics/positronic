@@ -51,12 +51,16 @@ def main(cfg: DictConfig):
             umi_relative_trajectory = get_umi_trajectory(target.file)
             registration_transform = geom.Transform3D(rotation=geom.Rotation.from_euler([1.36897958, -0.73992762, 1.39720004]))
 
+            waypoints = []
             for pos in umi_relative_trajectory:
                 pos = registration_transform.inv * pos * registration_transform
                 q = pos.rotation.as_quat
                 q = [q[1], q[2], q[3], q[0]]
                 pos = franky.Affine(translation=pos.translation, quaternion=q)
-                robot.move(franky.CartesianMotion(pos, reference_type=franky.ReferenceType.Relative))
+                pos = franky.CartesianWaypoint(pos, reference_type=franky.ReferenceType.Relative)
+                waypoints.append(pos)
+
+            robot.move(franky.CartesianWaypointMotion(waypoints, ))
     print(robot.current_pose.end_effector_pose)
 
 
