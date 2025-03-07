@@ -195,7 +195,7 @@ class JointCompliantController:
     def set_target_pose(self, pose):
         # pose_str = ','.join(f'{p: .2f}' for p in pose.translation) + '|' + ','.join(f'{q: .2f}' for q in pose.rotation.as_quat)
         # print(f'Setting target pose: {pose_str}')
-        pose = self.solver.inverse(pose, self.q_s)
+        pose = self.solver.inverse(pose, self.q_s or np.zeros(self.actuator_count))
         # pose_str = ','.join(f'{p: .4f}' for p in pose)
         # print(f'Inverse kinematics: {pose_str}')
         self.target_qpos = pose
@@ -311,8 +311,13 @@ class KinovaController(ir.ControlSystem):
 
     async def setup(self):
         self._main_loop = asyncio.get_running_loop()
+
+        with self.joint_controller_mutex:
+            self.joint_controller = JointCompliantController(self.actuator_count)
+
         self.control_thread = threading.Thread(target=self.control_thread_loop)
         self.control_thread.start()
+
         await self.outs.status.write(ir.Message(RobotStatus.AVAILABLE, ir.system_clock()))
 
     async def cleanup(self):
@@ -417,7 +422,6 @@ class KinovaController(ir.ControlSystem):
             self.actuator_config.SetControlMode(control_mode_message, device_id)
 
         with self.joint_controller_mutex:
-            self.joint_controller = JointCompliantController(self.actuator_count)
             self.joint_controller.compute_torque(*self._update_state(base_feedback))
 
         last_ts = time.monotonic()

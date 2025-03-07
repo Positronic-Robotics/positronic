@@ -97,7 +97,7 @@ def dearpygui_ui(camera_names: List[str]):
 
 
 @ir.config
-def stub():
+def stub(time_len_sec: float = 5.0):
 
     @ir.ironic_system(
         input_props=["robot_position"],
@@ -107,11 +107,12 @@ def stub():
         """A stub UI that replays a pre-recorded trajectory.
         Used for testing and debugging purposes."""
 
-        def __init__(self):
+        def __init__(self, time_len_sec: float = 5.0):
             super().__init__()
             self.events = deque()
             self.start_pos = None
             self.start_time = None
+            self.time_len_sec = time_len_sec
 
         async def _start_recording(self, _):
             self.start_pos = (await self.ins.robot_position()).data
@@ -130,7 +131,7 @@ def stub():
         async def setup(self):
             time_sec = 0.1
             self.events.append((time_sec, self._start_recording))
-            while time_sec < 5:
+            while time_sec < self.time_len_sec:
                 self.events.append((time_sec, self._send_target))
                 time_sec += 0.1
             self.events.append((time_sec, self._stop_recording))
