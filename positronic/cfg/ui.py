@@ -66,9 +66,9 @@ def spacemouse(translation_speed: float, rotation_speed: float, translation_dead
     smouse = SpacemouseCS(translation_speed, rotation_speed, translation_dead_zone, rotation_dead_zone)
     inputs = {'robot_position': (smouse, 'robot_position'), 'robot_grip': None, 'images': None, 'robot_status': None}
     outputs = smouse.output_mappings
-    outputs['metadata'] = None
+    outputs['metadata'] = ir.utils.const_property({'ui': 'spacemouse'})
 
-    return ir.compose([smouse], inputs=inputs, outputs=outputs)
+    return ir.compose(smouse, inputs=inputs, outputs=outputs)
 
 
 @ir.config(tracking=teleop, extra_ui_camera_names=['handcam_back', 'handcam_front', 'front_view', 'back_view'])
@@ -118,7 +118,7 @@ def stub():
             await self.outs.start_recording.write(ir.Message(None))
 
         async def _send_target(self, time_sec):
-            translation = self.start_pos.translation + np.array([0, 0.1, 0.1]) * np.sin(time_sec * (2 * np.pi) / 3)
+            translation = self.start_pos.translation + np.array([0, 0.1, 0.1]) * np.sin(time_sec * (2 * np.pi) / 10)
             rotation = self.start_pos.rotation
             await asyncio.gather(
                 self.outs.robot_target_position.write(ir.Message(geom.Transform3D(translation, rotation))),

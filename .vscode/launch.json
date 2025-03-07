@@ -5,10 +5,15 @@
     "version": "0.2.0",
     "configurations": [
         {
-            "name": "hardware.sl_camera module",
+            "name": "Data Collection",
             "type": "python",
             "request": "launch",
-            "module": "hardware.sl_camera",
+            "module": "positronic.data_collection_zen",
+            "args": [
+                "--ui=@positronic.cfg.ui.spacemouse",
+                "--env=@positronic.cfg.env.roboarm",
+                "--env.arm=@positronic.cfg.hardware.roboarms.kinova",
+            ],
             "justMyCode": true
         },
         {

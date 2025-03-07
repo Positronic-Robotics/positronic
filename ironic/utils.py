@@ -496,3 +496,15 @@ def print_port(port: OutputPort, message_prefix: str = '') -> OutputPort:
         return message
 
     return map_port(_print_and_return, port)
+
+
+def const_property(value: Any):
+    """Creates a property that returns a constant value.
+
+    This utility function creates a property that returns a constant value.
+    """
+    @out_property
+    async def property():
+        return Message(value)
+
+    return property

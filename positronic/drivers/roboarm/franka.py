@@ -18,7 +18,7 @@ class CartesianMode(Enum):
 # TODO: Extract gripper into a separate control system
 @ir.ironic_system(input_ports=['target_position', 'target_grip', 'reset'],
                   output_ports=['status'],
-                  output_props=['position', 'grip', 'joint_positions', 'ext_force_base', 'ext_force_ee'])
+                  output_props=['position', 'grip', 'joint_positions', 'ext_force_base', 'ext_force_ee', 'metadata'])
 class Franka(ir.ControlSystem):
 
     def __init__(self,
@@ -180,6 +180,10 @@ class Franka(ir.ControlSystem):
     @ir.out_property
     async def grip(self):
         return ir.Message(data=self._gripper_grasped if self.gripper else 0.0, timestamp=ir.system_clock())
+
+    @ir.out_property
+    async def metadata(self):
+        return ir.Message({'env.arm': 'franka'})
 
     @ir.out_property
     async def ext_force_base(self):

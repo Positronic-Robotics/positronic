@@ -5,6 +5,7 @@
 import math
 import threading
 import time
+import asyncio
 
 import mujoco
 import numpy as np
@@ -23,6 +24,8 @@ from kortex_api.TCPTransport import TCPTransport
 from kortex_api.UDPTransport import UDPTransport
 
 import geom
+import ironic as ir
+from ..status import RobotStatus
 
 _TCP_PORT = 10000
 _UDP_PORT = 10001
@@ -190,11 +193,11 @@ class JointCompliantController:
         self.target_qpos = qpos
 
     def set_target_pose(self, pose):
-        pose_str = ','.join(f'{p: .2f}' for p in pose.translation) + '|' + ','.join(f'{q: .2f}' for q in pose.rotation.as_quat)
-        print(f'Setting target pose: {pose_str}')
+        # pose_str = ','.join(f'{p: .2f}' for p in pose.translation) + '|' + ','.join(f'{q: .2f}' for q in pose.rotation.as_quat)
+        # print(f'Setting target pose: {pose_str}')
         pose = self.solver.inverse(pose, self.q_s)
-        pose_str = ','.join(f'{p: .4f}' for p in pose)
-        print(f'Inverse kinematics: {pose_str}')
+        # pose_str = ','.join(f'{p: .4f}' for p in pose)
+        # print(f'Inverse kinematics: {pose_str}')
         self.target_qpos = pose
 
     def compute_torque(self, q, dq, tau, g):
@@ -248,9 +251,13 @@ class JointCompliantController:
         return tau_task + tau_f
 
 
-class KinovaController:
+@ir.ironic_system(input_ports=['target_position', 'reset', 'target_grip'],
+                  output_ports=['status'],
+                  output_props=['position', 'joint_positions', 'grip', 'metadata'])
+class KinovaController(ir.ControlSystem):
 
     def __init__(self, ip):
+        super().__init__()
         self.tcp_connection = DeviceConnection(ip, _TCP_PORT, TCPTransport())
         self.udp_connection = DeviceConnection(ip, _UDP_PORT, UDPTransport())
 
@@ -300,17 +307,19 @@ class KinovaController:
         self.stop_event = threading.Event()
         self.joint_controller = None
         self.joint_controller_mutex = threading.Lock()
+        self._main_loop = None
 
-    def __enter__(self):
-        print('Creating control thread')
+    async def setup(self):
+        self._main_loop = asyncio.get_running_loop()
         self.control_thread = threading.Thread(target=self.control_thread_loop)
         self.control_thread.start()
-        return self
+        await self.outs.status.write(ir.Message(RobotStatus.AVAILABLE, ir.system_clock()))
 
-    def __exit__(self, *_):
-        print('Shutting down control thread')
+    async def cleanup(self):
+        print('Shutting down Kinova control thread')
         self.stop_event.set()
-        self.control_thread.join()
+        if self.control_thread and self.control_thread.is_alive():
+            self.control_thread.join()
 
         self.tcp_connection.__exit__()
         self.udp_connection.__exit__()
@@ -346,8 +355,8 @@ class KinovaController:
 
             return check
 
-        notification_handle = self.base.OnNotificationActionTopic(check_for_end_or_abort(end_or_abort_event),
-                                                                  Base_pb2.NotificationOptions())
+        notification_handle = self.base.OnNotificationActionTopic(
+            check_for_end_or_abort(end_or_abort_event), Base_pb2.NotificationOptions())
         self.base.ExecuteActionFromReference(action_handle)
         end_or_abort_event.wait(20)
         self.base.Unsubscribe(notification_handle)
@@ -387,7 +396,7 @@ class KinovaController:
         return q, dq, tau, gravity
 
     def control_thread_loop(self):
-        print('Starting control thread')
+        print('Starting Kinova control thread')
         base_command = BaseCyclic_pb2.Command()
         for _ in range(self.actuator_count):
             base_command.actuators.add()
@@ -462,22 +471,77 @@ class KinovaController:
         base_servo_mode.servoing_mode = Base_pb2.SINGLE_LEVEL_SERVOING
         self.base.SetServoingMode(base_servo_mode)
 
-    def reset(self):
-        self.set_target_qpos(_Q_RETRACT)
+    @ir.on_message('reset')
+    async def handle_reset(self, message: ir.Message):
+        """Commands the robot to move to the home position."""
+        start_reset_future = self._main_loop.create_future()
+        reset_done_future = self._main_loop.create_future()
 
-    @property
-    def current_qpos(self):
+        def _internal_reset():
+            # Signal we're starting the reset
+            self._main_loop.call_soon_threadsafe(lambda: start_reset_future.set_result(True))
+
+            self.set_target_qpos(_Q_RETRACT)
+
+            # Wait for the robot to reach the target position
+            # In a real implementation, you might want to check if the robot has reached the target
+            time.sleep(5.0)
+
+            self._main_loop.call_soon_threadsafe(lambda: reset_done_future.set_result(True))
+
+        async def handle_status_transitions():
+            await start_reset_future
+            await self.outs.status.write(ir.Message(RobotStatus.RESETTING, ir.system_clock()))
+
+            await reset_done_future
+            await self.outs.status.write(ir.Message(RobotStatus.AVAILABLE, ir.system_clock()))
+
+        self._main_loop.create_task(handle_status_transitions())
+        threading.Thread(target=_internal_reset, daemon=True).start()
+
+    @ir.on_message('target_position')
+    async def handle_target_position(self, message: ir.Message):
+        """Handles a target position message."""
+        # Extract the target position from the message
+        target_pose = message.data
+
+        # Set the target pose in the joint controller
+        with self.joint_controller_mutex:
+            if self.joint_controller is not None:
+                self.joint_controller.set_target_pose(target_pose)
+
+    @ir.out_property
+    async def position(self):
+        """End effector position in robot base coordinate frame."""
         with self.joint_controller_mutex:
             if self.joint_controller is None:
-                return None
-            return self.joint_controller.q_s
+                return ir.Message(ir.NoValue)
 
-    @property
-    def current_pose(self):
+            return ir.Message(self.joint_controller.solver.forward(self.joint_controller.q_s))
+
+    @ir.on_message('target_grip')
+    async def handle_target_grip(self, _message: ir.Message):
+        pass
+
+    @ir.out_property
+    async def grip(self):
+        return ir.Message(0.0)
+
+    @ir.out_property
+    async def metadata(self):
+        return ir.Message({'env.arm': 'kinova'})
+
+    @ir.out_property
+    async def joint_positions(self):
+        """Current joint positions."""
         with self.joint_controller_mutex:
             if self.joint_controller is None:
-                return None
-            return self.joint_controller.solver.forward(self.joint_controller.q_s)
+                return ir.Message(ir.NoValue)
+
+            return ir.Message(self.joint_controller.q_s)
+
+    async def step(self) -> ir.State:
+        return await super().step()
 
     def set_target_qpos(self, qpos):
         with self.joint_controller_mutex:

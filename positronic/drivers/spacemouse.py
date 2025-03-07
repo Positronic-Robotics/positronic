@@ -1,4 +1,5 @@
 import logging
+import time
 from typing import List
 import threading
 
@@ -94,6 +95,7 @@ class SpacemouseCS(ir.ControlSystem):
             self.fps.tick()
             with self.state_lock:
                 self.latest_data = state
+            time.sleep(0.1)
         pyspacemouse.close()
 
     async def cleanup(self):

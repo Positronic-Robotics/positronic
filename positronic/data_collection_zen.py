@@ -28,9 +28,9 @@ async def _main(
 ):
     ui.bind(
         robot_grip=env.outs.grip,
-        robot_position=env.outs.robot_position,
+        robot_position=env.outs.position,
         images=env.outs.frame,
-        robot_status=env.outs.robot_status,
+        robot_status=env.outs.status,
     )
     env.bind(
         target_position=ui.outs.robot_target_position,
