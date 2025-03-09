@@ -1,16 +1,14 @@
 import asyncio
+import functools
 import logging
 import sys
 
-import hydra
-from omegaconf import DictConfig
 import rerun as rr
+import fire
 
-import positronic.drivers as drivers
+import positronic.cfg.env
+import positronic.cfg.inference.inference
 import ironic as ir
-from positronic.drivers.roboarm.franka import Franka
-from positronic.drivers.gripper.dh import DHGripper
-from positronic.inference import Inference
 
 logging.basicConfig(level=logging.INFO,
                     handlers=[logging.StreamHandler(),
@@ -66,52 +64,62 @@ class PolicyRunnerSystem(ir.ControlSystem):
         print('Policy runner stopped')
 
 
-@hydra.main(version_base=None, config_path="configs", config_name="policy_runner")
-def main(cfg: DictConfig):
-    asyncio.run(async_main(cfg))
+@ir.config(
+    env=positronic.cfg.env.franka,
+    inference=positronic.cfg.inference.inference.umi_inference,
+    rerun=None
+)
+async def async_main(
+        env: ir.ControlSystem,
+        inference: ir.ControlSystem,
+        rerun: str | None = None
+):
+    if rerun:
+        rr.init("inference", spawn=True)
+        # if ':' in rerun:
+        #     rr.connect(rerun)
+        # elif rerun is not None:
+        #     rr.save(rerun)
 
-
-async def async_main(cfg: DictConfig):
-    if cfg.rerun:
-        rr.init("inference", spawn=False)
-        if ':' in cfg.rerun:
-            rr.connect(cfg.rerun)
-        elif cfg.rerun is not None:
-            rr.save(cfg.rerun)
-
-    franka = Franka(cfg.franka.ip, cfg.franka.relative_dynamics_factor, cfg.franka.gripper_force)
     policy_runner = PolicyRunnerSystem()
-    cam = drivers.from_config.sl_camera(cfg.camera)
 
-    inference = Inference(cfg.inference)
-    gripper = DHGripper("/dev/ttyUSB0")
-
-    franka.bind(target_position=inference.outs.target_robot_position)
-    gripper.bind(grip=inference.outs.target_grip)
+    env.bind(
+        target_position=inference.outs.target_robot_position,
+        target_grip=inference.outs.target_grip
+    )
 
     properties_to_dump = ir.utils.properties_dict(
-        robot_joints=franka.outs.joint_positions,
-        robot_position_translation=ir.utils.map_property(lambda t: t.translation, franka.outs.position),
-        robot_position_quaternion=ir.utils.map_property(lambda t: t.rotation.as_quat, franka.outs.position),
-        ext_force_ee=franka.outs.ext_force_ee,
-        ext_force_base=franka.outs.ext_force_base,
-        grip=gripper.outs.grip if gripper else None)
+        robot_joints=env.outs.joint_positions,
+        robot_position_translation=ir.utils.map_property(lambda t: t.translation, env.outs.position),
+        robot_position_quaternion=ir.utils.map_property(lambda t: t.rotation.as_quat, env.outs.position),
+        ext_force_ee=env.outs.ext_force_ee,
+        ext_force_base=env.outs.ext_force_base,
+        grip=env.outs.grip)
 
     inference.bind(
-        frame=cam.outs.frame,
+        frame=env.outs.frame,
         robot_data=properties_to_dump,
         start=policy_runner.outs.start_policy,
         stop=policy_runner.outs.stop_policy,
     )
 
-    system = ir.compose(policy_runner, franka, cam, inference, gripper)
+    system = ir.compose(policy_runner, env, inference)
 
     def rerun_cleanup():
-        if cfg.rerun:
+        if rerun:
             rr.disconnect()
 
     await ir.utils.run_gracefully(system, extra_cleanup_fn=rerun_cleanup)
 
 
+def main(*args, **kwargs):
+    # Instead of instantiating the configuration outside the event loop
+    # we'll pass the args/kwargs to a new function that will handle the instantiation
+    asyncio.run(run_with_config(*args, **kwargs))
+
+async def run_with_config(*args, **kwargs):
+    # Now we instantiate the configuration inside the running event loop
+    await async_main.override_and_instantiate(*args, **kwargs)
+
 if __name__ == "__main__":
-    main()
+    fire.Fire(main)

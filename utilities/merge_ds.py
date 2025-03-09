@@ -3,7 +3,7 @@ import os
 import glob
 import fire
 
-
+# TODO: fix relative paths
 def merge_ds(target_dir, *directories):
     """
     Merge first dataset into second dataset.

@@ -31,8 +31,34 @@ def main(cfg: DictConfig):
         elif 'relative' in target:
             pos = geom.Transform3D(translation=target.relative.translation, rotation=geom.Rotation.from_quat(target.relative.quaternion))
             pos = franky.Affine(translation=pos.translation, quaternion=pos.rotation.as_quat)
-            print(f"Doing: {target.relative}")
+            print("Current pose", robot.current_pose.end_effector_pose)
             robot.move(franky.CartesianMotion(pos, reference_type=franky.ReferenceType.Relative))
+        elif 'absrel' in target:
+            q = target.absrel.quaternion
+            rel_transform = geom.Transform3D(
+                translation=target.absrel.translation,
+                rotation=geom.Rotation.from_quat_xyzw(q)
+            )
+
+            current_pose = robot.current_pose.end_effector_pose
+            print("Current pose", current_pose.quaternion)
+            current_transform = geom.Transform3D(
+                translation=current_pose.translation,
+                rotation=geom.Rotation.from_quat_xyzw(current_pose.quaternion)
+            )
+
+            combined_transform = current_transform * rel_transform
+
+            # Convert to franky.Affine format
+            pos = franky.Affine(
+                translation=combined_transform.translation,
+                quaternion=combined_transform.rotation.as_quat_xyzw
+            )
+
+
+            # Use ReferenceType.Absolute with the current pose as the frame
+            # This will mimic ReferenceType.Relative behavior
+            robot.move(franky.CartesianMotion(pos, reference_type=franky.ReferenceType.Absolute))
         elif "ik" in target:
             pos = franky.Affine(translation=target.ik.translation, rotation=geom.Rotation.from_quat(target.ik.quaternion))
             q = robot.inverse_kinematics(pos, last_q)
@@ -62,6 +88,7 @@ def main(cfg: DictConfig):
 
             robot.move(franky.CartesianWaypointMotion(waypoints, ))
     print(robot.current_pose.end_effector_pose)
+    print(robot.current_joint_state.position)
 
 
 if __name__ == "__main__":

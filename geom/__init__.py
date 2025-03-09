@@ -93,7 +93,7 @@ class Transform3D:
     def __str__(self):
         translation_str = np.array2string(np.asarray(self.translation), precision=3)
         quaternion_str = np.array2string(np.asarray(self.rotation.as_quat), precision=3)
-        return f"Translation: {translation_str}, Quaternion: {quaternion_str}"
+        return f"(t: {translation_str}, q: {quaternion_str})"
 
     def copy(self):
         return Transform3D(self.translation.copy(), self.rotation.copy())
@@ -197,6 +197,13 @@ class Rotation(np.ndarray):
         Create a rotation from a 4-element numpy array.
         """
         return cls(*quat)
+
+    @classmethod
+    def from_quat_xyzw(cls, quat: np.ndarray) -> 'Rotation':
+        """
+        Create a rotation from a 4-element numpy array.
+        """
+        return cls(quat[3], quat[0], quat[1], quat[2])
 
     @classmethod
     def from_rotation_matrix(cls, matrix):
@@ -376,6 +383,13 @@ class Rotation(np.ndarray):
         Convert the rotation to a quaternion.
         """
         return np.asarray(self)
+
+    @property
+    def as_quat_xyzw(self) -> np.ndarray:
+        """
+        Convert the rotation to a quaternion in the order (x, y, z, w).
+        """
+        return np.asarray([self[1], self[2], self[3], self[0]])
 
     @property
     def angle(self):

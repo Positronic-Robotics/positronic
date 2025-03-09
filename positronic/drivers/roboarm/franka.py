@@ -5,6 +5,7 @@ import threading
 import time
 
 import franky
+import geom
 import ironic as ir
 from .status import RobotStatus
 from geom import Rotation, Transform3D
@@ -39,8 +40,10 @@ class Franka(ir.ControlSystem):
         # self.robot.set_cartesian_impedance([150, 150, 150, 300, 300, 300])
 
         self.home_joints_config = home_joints_config or [0.0, -0.31, 0.0, -1.53, 0.0, 1.522, 0.785]
+        # self.home_joints_config = [-0.00485582, -0.64545132,  0.00633443, -1.91874464, -0.00588651,  2.31487911,  0.78129702]
         self.cartesian_mode = cartesian_mode
         self.last_q = None
+        self.motion_counter = 0
 
         self._command_queue = deque()
         self._command_mutex = threading.Lock()
@@ -73,6 +76,7 @@ class Franka(ir.ControlSystem):
 
     def _motion_thread(self):
         fps = ir.utils.FPSCounter("Franka motion")
+        motion_executed = 0
 
         while not self._motion_exit_event.is_set():
             motion = None
@@ -82,6 +86,8 @@ class Franka(ir.ControlSystem):
 
             if motion:
                 motion()
+                motion_executed += 1
+                print(f"Motion executed: {motion_executed}")
                 fps.tick()
             else:
                 time.sleep(0.01)  # Avoid busy-waiting
@@ -96,11 +102,17 @@ class Franka(ir.ControlSystem):
                 self._command_queue = deque([(m, a) for m, a in self._command_queue if not a])
                 self._command_queue.append((motion, asynchronous))
             else:
+                self.motion_counter += 1
+                print(f"Motion submitted: {self.motion_counter}")
                 self._command_queue.append((motion, asynchronous))
 
     @ir.on_message('target_position')
     async def handle_target_position(self, message: ir.Message):
-        pos = franky.Affine(translation=message.data.translation, quaternion=message.data.rotation.as_quat)
+        if len(self._command_queue) > 0:
+            return
+
+        # pos = franky.Affine(translation=message.data.translation, quaternion=message.data.rotation.as_quat)
+        pos = franky.Affine(translation=message.data.translation, quaternion=message.data.rotation.as_quat_xyzw)
         motion = None
         if self.cartesian_mode == CartesianMode.LIBFRANKA:
             motion = franky.CartesianMotion(pos, franky.ReferenceType.Absolute)
@@ -108,7 +120,7 @@ class Franka(ir.ControlSystem):
             if self.last_q is None:
                 self.last_q = self.robot.current_joint_state.position
             self.last_q = self.robot.inverse_kinematics(pos, self.last_q)
-            motion = franky.JointMotion(self.last_q, return_when_finished=False)
+            motion = franky.JointMotion(self.last_q, return_when_finished=True)
 
         def internal_motion():
             try:
@@ -171,7 +183,7 @@ class Franka(ir.ControlSystem):
     async def position(self):
         """End effector position in robot base coordinate frame."""
         pos = self.robot.current_pose.end_effector_pose
-        return ir.Message(data=Transform3D(pos.translation, Rotation.from_quat(pos.quaternion)))
+        return ir.Message(data=Transform3D(pos.translation, Rotation.from_quat_xyzw(pos.quaternion)))
 
     @ir.out_property
     async def joint_positions(self):

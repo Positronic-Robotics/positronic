@@ -1,5 +1,6 @@
-import torch
+import abc
 
+import torch
 import geom
 
 
@@ -9,7 +10,17 @@ def _convert_quat_to_tensor(q: geom.Rotation, representation: geom.Rotation.Repr
     return torch.from_numpy(array).flatten()
 
 
-class AbsolutePositionAction:
+class ActionDecoder(abc.ABC):
+    @abc.abstractmethod
+    def encode_episode(self, episode_data):
+        pass
+
+    @abc.abstractmethod
+    def decode(self, action_vector, inputs):
+        pass
+
+
+class AbsolutePositionAction(ActionDecoder):
     def __init__(self, rotation_representation: geom.Rotation.Representation | str = geom.Rotation.Representation.QUAT):
         rotation_representation = geom.Rotation.Representation(rotation_representation)
 
@@ -47,7 +58,7 @@ class AbsolutePositionAction:
         return outputs
 
 
-class RelativeTargetPositionAction:
+class RelativeTargetPositionAction(ActionDecoder):
     def __init__(self, rotation_representation: geom.Rotation.Representation | str = geom.Rotation.Representation.QUAT):
         rotation_representation = geom.Rotation.Representation(rotation_representation)
 
@@ -97,7 +108,7 @@ class RelativeTargetPositionAction:
         return outputs
 
 
-class RelativeRobotPositionAction:
+class RelativeRobotPositionAction(ActionDecoder):
     def __init__(
             self,
             offset: int,
@@ -171,7 +182,7 @@ from adhoc.validate_trajectory import umi_relative
 from positronic.tools.registration import AbsoluteTrajectory, RelativeTrajectory
 
 
-class UMIRelativeRobotPositionAction:
+class UMIRelativeRobotPositionAction(ActionDecoder):
     def __init__(
             self,
             offset: int,
@@ -196,6 +207,11 @@ class UMIRelativeRobotPositionAction:
         self.rotation_size = rotation_representation.size
         self.rotation_shape = rotation_representation.shape
         self.registration_transform = registration_transform
+        self.base_ee_pose = geom.Transform3D(
+            translation=[0.441147, -0.00327101, 0.797503],
+            rotation=geom.Rotation.from_quat([0.966373, -0.00267326, 0.257121, -0.00223433])
+        )
+        self.previous_pose = None
 
     def _prepare(self, episode_data):
         left_trajectory = AbsoluteTrajectory([
@@ -238,20 +254,42 @@ class UMIRelativeRobotPositionAction:
         return torch.cat([rotations, translation_diff, grips], dim=1)
 
     def decode(self, action_vector, inputs):
+        print("===================== STEP ========================")
+        print()
         rotation = action_vector[:self.rotation_size].reshape(self.rotation_shape)
         q_diff = geom.Rotation.create_from(rotation, self.rotation_representation)
         tr_diff = action_vector[self.rotation_size:self.rotation_size + 3]
 
-        rot_mul = geom.Rotation.from_quat(inputs['reference_robot_position_quaternion']) * q_diff
-        rot_mul = geom.Rotation.from_quat(geom.normalise_quat(rot_mul.as_quat))
+        diff_pose = geom.Transform3D(translation=tr_diff, rotation=q_diff)
 
-        tr_add = inputs['reference_robot_position_translation'] + tr_diff
+        reference_pose = geom.Transform3D(
+            inputs['reference_robot_position_translation'],
+            geom.Rotation.from_quat(inputs['reference_robot_position_quaternion'])
+        )
 
+        # if self.previous_pose is not None:
+        #     print("Diff",self.previous_pose, diff_pose)
+        #     n_diff_pose = self.previous_pose.inv * diff_pose
+        #     self.previous_pose = diff_pose
+        #     diff_pose = n_diff_pose
+        # else:
+        #     self.previous_pose = diff_pose
+
+        # new_pose = reference_pose * (reference_pose.inv * diff_pose * reference_pose).inv
+
+        print("Reference pose", reference_pose)
+        print("Diff pose", diff_pose)
+        new_pose = reference_pose * diff_pose
+        # self.previous_pose = diff_pose
+        # rot_mul = geom.Rotation.from_quat(geom.normalise_quat(new_pose.rotation.as_quat))
+        # tr_add = new_pose.translation - tr_diff
+        # print("Reference pose", reference_pose)
+        # print("Diff pose", diff_pose)
+        # print("New pose", new_pose)
+
+        # diff_pose = geom.Transform3D()
         outputs = {
-            'target_robot_position': geom.Transform3D(
-                translation=tr_add,
-                rotation=rot_mul
-            ),
+            'target_robot_position': new_pose,
             'target_grip': action_vector[self.rotation_size + 3]
         }
         return outputs

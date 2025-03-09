@@ -1,6 +1,6 @@
 from typing import List, Optional
 
-from ironic import ir
+import ironic as ir
 
 
 @ir.config(ip="172.168.0.2",
@@ -33,4 +33,4 @@ franka_ik = franka_default.override(ip="172.168.0.2",
                                                         [100.0, 100.0, 100.0, 100.0, 100.0, 100.0],
                                                         [100.0, 100.0, 100.0, 100.0, 100.0, 100.0],
                                                         [100.0, 100.0, 100.0, 100.0, 100.0, 100.0]],
-                                    cartesian_mode="POSITRONIC")
+                                    cartesian_mode="LIBFRANKA")

@@ -18,7 +18,10 @@ from lerobot.common.datasets.video_utils import encode_video_frames
 from lerobot.scripts.push_dataset_to_hub import save_meta_data
 from lerobot.common.datasets.compute_stats import compute_stats
 
+import geom
 from positronic.inference import StateEncoder
+from positronic.cfg.inference.state import end_effector
+from positronic.cfg.inference.action import umi_relative
 
 def _decode_video_from_array(array: torch.Tensor) -> torch.Tensor:
     """
@@ -77,8 +80,11 @@ def convert_to_lerobot_dataset(cfg: DictConfig):  # noqa: C901  Function is too 
 
     all_episodes_data = []
 
-    state_enc = StateEncoder(cfg.state)
-    action_dec = hydra.utils.instantiate(cfg.action)
+    state_enc = end_effector.instantiate()
+    action_dec = umi_relative.override(registration_transform=geom.Transform3D(
+        translation=np.array([0.0, 0.0, 0.0]),
+        rotation=geom.Rotation.from_quat([0.4060779 , 0.63157042, 0.16462402, 0.63962369])
+    )).instantiate()
 
     for episode_idx, episode_file in enumerate(tqdm.tqdm(episode_files, desc="Processing episodes")):
         episode_data = torch.load(episode_file)

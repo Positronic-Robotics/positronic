@@ -1,7 +1,39 @@
 import os
+import time
 from typing import Dict, Optional
 
 import yaml
+import torch
+
+from lerobot.common.datasets.relative_position import delta_position_to_relative
+
+class PlaybackPolicy:
+    def __init__(self, path: str, relative: bool = False):
+        s = torch.load(path)
+        self.action = s['action']
+        if relative:
+            print("Converting to relative")
+            self.action = delta_position_to_relative(self.action)
+        self.current_step = 0
+
+
+    def select_action(self, state: Dict):
+        if len(self.action) <= self.current_step:
+            return torch.zeros(1, 7)
+        action = self.action[self.current_step]
+        self.current_step += 1
+
+        print(f"Action sent: {self.current_step}")
+        return action
+
+    def to(self, device: torch.device):
+        pass
+
+    def reset(self):
+        self.current_step = 0
+
+    def chunk_start(self):
+        return False
 
 
 def get_config(checkpoint_path: str):

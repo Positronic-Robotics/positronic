@@ -1,6 +1,6 @@
 defaults:
-  - state: tqg_352x192
-  - action: absolute
+  - state: ee
+  - action: umi
   - camera: sl_vga15
   - _self_
 
