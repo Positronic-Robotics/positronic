@@ -180,13 +180,17 @@ class JointCompliantController:
         self.tau_filter = None
 
         self.actuator_count = actuator_count
-        self.last_command_time = None
         self.otg = None
         self.otg_inp = None
         self.otg_out = None
         self.otg_res = None
 
         self.target_qpos = None
+
+        # Initialize pinocchio model and data
+        self.model = pin.buildModelFromUrdf('positronic/drivers/roboarm/kinova/model.urdf')
+        self.data = self.model.createData()
+        self._q_pin = np.zeros(11)
 
     def set_target_qpos(self, qpos):
         self.target_qpos = qpos
@@ -195,7 +199,16 @@ class JointCompliantController:
     def finished(self):
         return self.otg_res == Result.Finished
 
-    def compute_torque(self, q, dq, tau, g):
+    def compute_torque(self, q, dq, tau):
+        q_pin = self._q_pin # Reuse pre-allocated q_pin
+        q_pin[0], q_pin[1], q_pin[2] = math.cos(q[0]), math.sin(q[0]), q[1]
+        q_pin[3], q_pin[4], q_pin[5] = math.cos(q[2]), math.sin(q[2]), q[3]
+        q_pin[6], q_pin[7], q_pin[8] = math.cos(q[4]), math.sin(q[4]), q[5]
+        q_pin[9], q_pin[10] = math.cos(q[6]), math.sin(q[6])
+
+        gravity = pin.computeGeneralizedGravity(self.model, self.data, q_pin)
+
+        # Initialize controller state if needed
         if self.q_s is None:
             self.q_s = q.copy()
             self.q_d = q.copy()
@@ -204,7 +217,6 @@ class JointCompliantController:
             self.dq_n = dq.copy()
             self.tau_filter = JointCompliantController.LowPassFilter(0.01, tau.copy())
 
-            self.last_command_time = time.monotonic()
             self.otg = Ruckig(self.actuator_count, _DT)
             self.otg_inp = InputParameter(self.actuator_count)
             self.otg_out = OutputParameter(self.actuator_count)
@@ -234,7 +246,7 @@ class JointCompliantController:
             self.q_d[:] = self.otg_out.new_position
             self.dq_d[:] = self.otg_out.new_velocity
 
-        tau_task = -K_p @ (self.q_n - self.q_d) - K_d @ (self.dq_n - self.dq_d) + g
+        tau_task = -K_p @ (self.q_n - self.q_d) - K_d @ (self.dq_n - self.dq_d) + gravity
 
         # Nominal motor plant
         ddq_n = K_r_inv @ (tau_task - tau_s_f)
@@ -267,44 +279,39 @@ class CommandQueue:
         return False
 
 
-class KinovaController:
+class KinovaAPI:
     def __init__(self, ip):
+        self.ip = ip
         self.tcp_connection = DeviceConnection(ip, _TCP_PORT, TCPTransport())
         self.udp_connection = DeviceConnection(ip, _UDP_PORT, UDPTransport())
-        self.base, self.base_cyclic = None, None
-        self.actuator_config, self.control_config = None, None
-        self.actuator_count, self.actuator_device_ids = None, None
-        self.send_options = None
 
-        # Note: Torque commands are converted to current commands since
-        # Kinova's torque controller is unable to achieve commanded torques.
-        # See relevant GitHub issue: https://github.com/Kinovarobotics/kortex/issues/38
-        self.torque_constant = np.array([11.0, 11.0, 11.0, 11.0, 7.6, 7.6, 7.6])
+        self.base = None
+        self.base_cyclic = None
+        self.actuator_config = None
+        self.actuator_count = None
+        self.actuator_device_ids = None
+
         self.current_limit_max = np.array([10.0, 10.0, 10.0, 10.0, 6.0, 6.0, 6.0])
         self.current_limit_min = -self.current_limit_max
 
-        self.model = pin.buildModelFromUrdf('positronic/drivers/roboarm/kinova/model.urdf')
-        self.data = self.model.createData()
-
-        self.control_thread = None
-        self.stop_event = threading.Event()
-        self.command_queue = CommandQueue()
-        self.joint_controller = None
+        self.base_feedback, self.base_command, self.current_command = None, None, None
 
     def __enter__(self):
-        self.base = BaseClient(self.tcp_connection.__enter__())
-        self.base_cyclic = BaseCyclicClient(self.udp_connection.__enter__())
-
+        tcp_router = self.tcp_connection.__enter__()
+        udp_router = self.udp_connection.__enter__()
+        self.base = BaseClient(tcp_router)
+        self.base_cyclic = BaseCyclicClient(udp_router)
         self.actuator_config = ActuatorConfigClient(self.base.router)
         self.actuator_count = self.base.GetActuatorCount().count
-        self.control_config = ControlConfigClient(self.base.router)
-        device_manager = DeviceManagerClient(self.base.router)
-        device_handles = device_manager.ReadAllDevices()
+
+        self.device_manager = DeviceManagerClient(self.base.router)
+        device_handles = self.device_manager.ReadAllDevices()
         self.actuator_device_ids = [
             handle.device_identifier for handle in device_handles.device_handle
             if handle.device_type in [Common_pb2.BIG_ACTUATOR, Common_pb2.SMALL_ACTUATOR]
         ]
 
+        # Configure communication
         self.send_options = RouterClientSendOptions()
         self.send_options.timeout_ms = 30
 
@@ -324,59 +331,7 @@ class KinovaController:
             while self.base.GetArmState().active_state != Base_pb2.ARMSTATE_SERVOING_READY:
                 time.sleep(0.1)
 
-        self._q = np.zeros(self.actuator_count)
-        self._dq = np.zeros(self.actuator_count)
-        self._tau = np.zeros(self.actuator_count)
-        self._q_pin = np.zeros(11)
-
-        self.joint_controller = JointCompliantController(self.actuator_count)
-        self.control_thread = threading.Thread(target=self._control_loop)
-        self.control_thread.start()
-
-        return self
-
-    def __exit__(self, *_):
-        self.stop_event.set()
-        if self.control_thread and self.control_thread.is_alive():
-            self.control_thread.join()
-
-        self.tcp_connection.__exit__()
-        self.udp_connection.__exit__()
-
-    def _update_state(self, base_feedback):
-        q, dq, tau = self._q, self._dq, self._tau  # Reuse pre-allocated arrays
-
-        for i in range(self.actuator_count):
-            q[i] = base_feedback.actuators[i].position
-            dq[i] = base_feedback.actuators[i].velocity
-            tau[i] = base_feedback.actuators[i].torque
-
-        np.deg2rad(q, out=q)
-        np.deg2rad(dq, out=dq)
-        np.negative(tau, out=tau)  # Raw torque readings are negative relative to actuator direction
-
-        q_pin = self._q_pin # Reuse pre-allocated q_pin
-        q_pin[0], q_pin[1], q_pin[2] = math.cos(q[0]), math.sin(q[0]), q[1]
-        q_pin[3], q_pin[4], q_pin[5] = math.cos(q[2]), math.sin(q[2]), q[3]
-        q_pin[6], q_pin[7], q_pin[8] = math.cos(q[4]), math.sin(q[4]), q[5]
-        q_pin[9], q_pin[10] = math.cos(q[6]), math.sin(q[6])
-
-        gravity = pin.computeGeneralizedGravity(self.model, self.data, q_pin)
-        return q, dq, tau, gravity
-
-    def _apply_current_command(self, base_command, base_feedback, current_command):
-        # Increment frame ID to ensure actuators can reject out-of-order frames
-        np.clip(current_command, self.current_limit_min, self.current_limit_max, out=current_command)
-        base_command.frame_id = (base_command.frame_id + 1) % 65536
-        for i in range(self.actuator_count):
-            base_command.actuators[i].current_motor = current_command[i]
-            base_command.actuators[i].position = base_feedback.actuators[i].position
-            base_command.actuators[i].command_id = base_command.frame_id
-
-        return self.base_cyclic.Refresh(base_command, 0, self.send_options)
-
-    def _control_loop(self):
-        print('Starting Kinova control thread')
+        # Initialize control loop
         self.base.SetServoingMode(Base_pb2.ServoingModeInformation(servoing_mode=Base_pb2.LOW_LEVEL_SERVOING))
         # Set actuators to current control mode
         control_mode_message = ActuatorConfig_pb2.ControlModeInformation()
@@ -384,50 +339,16 @@ class KinovaController:
         for device_id in self.actuator_device_ids:
             self.actuator_config.SetControlMode(control_mode_message, device_id)
 
-        base_feedback = self.base_cyclic.RefreshFeedback()
-        base_command = BaseCyclic_pb2.Command()
-        current_command = np.zeros(self.actuator_count)
+        self.base_feedback = self.base_cyclic.RefreshFeedback()
+        self.base_command = BaseCyclic_pb2.Command()
+        self.current_command = np.zeros(self.actuator_count)
         for i in range(self.actuator_count):
-            base_command.actuators.add(flags = ActuatorCyclic_pb2.SERVO_ENABLE)
-            current_command[i] = base_feedback.actuators[i].current_motor
+            self.base_command.actuators.add(flags = ActuatorCyclic_pb2.SERVO_ENABLE)
+            self.current_command[i] = self.base_feedback.actuators[i].current_motor
 
-        fps = ir.utils.FPSCounter('Kinova')
-        last_ts, count = time.monotonic(), 0
+        return self
 
-        queue, joint_controller = self.command_queue, self.joint_controller  # Avoid dictionary lookups in hot loop
-        base_feedback = self._apply_current_command(base_command, base_feedback, current_command)  # Warm up
-        joint_controller.compute_torque(*self._update_state(base_feedback))
-
-        while not self.stop_event.is_set():
-            now_ts = time.monotonic()
-            step_time = now_ts - last_ts
-            if step_time > 0.005:  # 5 ms
-                print(f'Warning: Step time {1000 * step_time:.3f} ms')
-
-            if True or step_time >= 0.0005:  # TODO: Do we really need this check?
-                last_ts = now_ts
-
-                if queue.has_new_target():
-                    queue.consume_target(joint_controller)
-
-                torque_command = joint_controller.compute_torque(*self._update_state(base_feedback))
-                queue.current_q_s, queue.is_updated = joint_controller.q_s.copy(), True
-                current_command = np.divide(torque_command, self.torque_constant)
-                base_feedback = self._apply_current_command(base_command, base_feedback, current_command)
-                fps.tick()
-                count += 1
-
-        # TODO: Stop movement gracefully
-        start_ts = time.monotonic()
-        while not joint_controller.finished and time.monotonic() - start_ts < 5.0:
-            torque_command = joint_controller.compute_torque(*self._update_state(base_feedback))
-            queue.current_q_s, queue.is_updated = joint_controller.q_s.copy(), True
-            current_command = np.divide(torque_command, self.torque_constant)
-            base_feedback = self._apply_current_command(base_command, base_feedback, current_command)
-            fps.tick()
-
-        print(f'Finished in {time.monotonic() - start_ts:.3f} s')
-
+    def __exit__(self, *_):
         control_mode_message = ActuatorConfig_pb2.ControlModeInformation()
         control_mode_message.control_mode = ActuatorConfig_pb2.ControlMode.Value('POSITION')
         for device_id in self.actuator_device_ids:
@@ -437,6 +358,98 @@ class KinovaController:
         base_servo_mode = Base_pb2.ServoingModeInformation()
         base_servo_mode.servoing_mode = Base_pb2.SINGLE_LEVEL_SERVOING
         self.base.SetServoingMode(base_servo_mode)
+
+        self.tcp_connection.__exit__()
+        self.udp_connection.__exit__()
+
+    def apply_current_command(self, current_command):
+        np.clip(current_command, self.current_limit_min, self.current_limit_max, out=current_command)
+        # Increment frame ID to ensure actuators can reject out-of-order frames
+        self.base_command.frame_id = (self.base_command.frame_id + 1) % 65536
+        for i in range(self.actuator_count):
+            self.base_command.actuators[i].current_motor = current_command[i]
+            self.base_command.actuators[i].position = self.base_feedback.actuators[i].position
+            self.base_command.actuators[i].command_id = self.base_command.frame_id
+
+        self.base_feedback = self.base_cyclic.Refresh(self.base_command, 0, self.send_options)
+
+        q, dq, tau = np.zeros(self.actuator_count), np.zeros(self.actuator_count), np.zeros(self.actuator_count)
+
+        for i in range(self.actuator_count):
+            q[i] = self.base_feedback.actuators[i].position
+            dq[i] = self.base_feedback.actuators[i].velocity
+            tau[i] = self.base_feedback.actuators[i].torque
+
+        np.deg2rad(q, out=q)
+        np.deg2rad(dq, out=dq)
+        np.negative(tau, out=tau)  # Raw torque readings are negative relative to actuator direction
+
+        return q, dq, tau
+
+
+class KinovaController:
+    def __init__(self, ip):
+        self.ip = ip
+        self.control_thread = None
+        self.stop_event = threading.Event()
+        self.command_queue = CommandQueue()
+        self.joint_controller = None
+
+    def __enter__(self):
+        self.control_thread = threading.Thread(target=self._control_loop)
+        self.control_thread.start()
+        return self
+
+    def __exit__(self, *_):
+        self.stop_event.set()
+        if self.control_thread and self.control_thread.is_alive():
+            self.control_thread.join()
+
+    def _control_loop(self):
+        print('Starting Kinova control thread')
+
+        # Note: Torque commands are converted to current commands since
+        # Kinova's torque controller is unable to achieve commanded torques.
+        # See relevant GitHub issue: https://github.com/Kinovarobotics/kortex/issues/38
+        torque_constant = np.array([11.0, 11.0, 11.0, 11.0, 7.6, 7.6, 7.6])
+
+        with KinovaAPI(self.ip) as api:
+            fps = ir.utils.FPSCounter('Kinova')
+            last_ts = time.monotonic()
+
+            joint_controller = JointCompliantController(api.actuator_count)
+            queue = self.command_queue  # Avoid dictionary lookups in hot loop
+            q, dq, tau = api.apply_current_command(api.current_command)  # Warm up
+            joint_controller.compute_torque(q, dq, tau)
+
+            while not self.stop_event.is_set():
+                now_ts = time.monotonic()
+                step_time = now_ts - last_ts
+                if step_time > 0.005:  # 5 ms
+                    print(f'Warning: Step time {1000 * step_time:.3f} ms')
+
+                if True or step_time >= 0.0005:  # TODO: Do we really need this check?
+                    last_ts = now_ts
+
+                    if queue.has_new_target():
+                        queue.consume_target(joint_controller)
+
+                    torque_command = joint_controller.compute_torque(q, dq, tau)
+                    queue.current_q_s, queue.is_updated = joint_controller.q_s.copy(), True
+                    current_command = np.divide(torque_command, torque_constant)
+                    q, dq, tau = api.apply_current_command(current_command)
+                    fps.tick()
+
+            # TODO: Stop movement gracefully
+            start_ts = time.monotonic()
+            while not joint_controller.finished and time.monotonic() - start_ts < 5.0:
+                torque_command = joint_controller.compute_torque(q, dq, tau)
+                queue.current_q_s, queue.is_updated = joint_controller.q_s.copy(), True
+                current_command = np.divide(torque_command, torque_constant)
+                q, dq, tau = api.apply_current_command(current_command)
+                fps.tick()
+
+            print(f'Finished in {time.monotonic() - start_ts:.3f} s')
 
     @property
     def joints(self):

@@ -28,7 +28,7 @@ async def async_main():
         t = 0.0
         while t < 5.0:
             t = time.monotonic() - start
-            delta = np.array([0, np.cos(2 * np.pi * t / PERIOD), np.sin(2 * np.pi * t / PERIOD)])
+            delta = np.array([np.cos(2 * np.pi * t / PERIOD), np.sin(2 * np.pi * t / PERIOD), 0])
             pos = geom.Transform3D(pos.translation + D * delta, pos.rotation)
             await asyncio.gather(target_port.write(ir.Message(pos)), asyncio.sleep(0.1))
 
