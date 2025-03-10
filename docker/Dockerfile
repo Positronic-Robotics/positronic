@@ -22,7 +22,7 @@ RUN apt-get update && apt-get install -y \
     libgoogle-perftools-dev \
     libturbojpeg \
     python3-xlib \
-    && rm -rf /var/lib/apt/lists/*
+    libhidapi-dev  # Spacemouse
 
 ENV UV_LINK_MODE=copy
 
