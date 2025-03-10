@@ -1,7 +1,8 @@
 import logging
 import time
 from typing import List
-import threading
+import multiprocessing as mp
+from multiprocessing import shared_memory
 
 import numpy as np
 import pyspacemouse
@@ -28,10 +29,15 @@ class SpacemouseCS(ir.ControlSystem):
         self.rotation_speed = rotation_speed
         self.rotation_dead_zone = rotation_dead_zone
 
-        self.thread = threading.Thread(target=self._read_spacemouse, daemon=True)
-        self.state_lock = threading.Lock()
-        self.stop_event = threading.Event()
-        self.latest_data = None
+        # Create shared memory for spacemouse state
+        # Format: [x, y, z, roll, pitch, yaw, button1, button2]
+        self.shm = shared_memory.SharedMemory(create=True, size=8 * 8)  # 8 floats, 8 bytes each
+        self.shared_array = np.ndarray((8,), dtype=np.float64, buffer=self.shm.buf)
+        self.shared_array[:] = 0  # Initialize with zeros
+
+        # Create a process instead of a thread
+        self.stop_event = mp.Event()
+        self.process = mp.Process(target=self._read_spacemouse, args=(self.shm.name, self.stop_event), daemon=True)
 
         self.teleop_delta = Transform3D()
         self.initial_position = None
@@ -42,17 +48,33 @@ class SpacemouseCS(ir.ControlSystem):
         self.fps = ir.utils.FPSCounter("Spacemouse")
 
     async def setup(self):
-        pyspacemouse.open()
-        self.thread.start()
+        self.process.start()
 
     async def step(self):
-        with self.state_lock:
-            state = self.latest_data
+        # Read from shared memory
+        state_array = np.copy(self.shared_array)
+
+        # Convert shared memory data to a state-like object
+        class StateProxy:
+            def __init__(self, data):
+                self.x = data[0]
+                self.y = data[1]
+                self.z = data[2]
+                self.roll = data[3]
+                self.pitch = data[4]
+                self.yaw = data[5]
+                self.buttons = [bool(data[6]), bool(data[7])]
+
+        state = StateProxy(state_array)
+
         pressed = self._get_pressed_buttons(state)
         self.buttons = [bool(state.buttons[0]), bool(state.buttons[1])]
 
         if pressed[0]:
             await self._switch_tracking()
+
+        if pressed[1]:
+            await self.outs.reset.write(ir.Message(True))
 
         if self.is_tracking:
             if self.initial_position is None:
@@ -89,15 +111,45 @@ class SpacemouseCS(ir.ControlSystem):
             logging.info('Started tracking')
             self.is_tracking = True
 
-    def _read_spacemouse(self):
-        while not self.stop_event.is_set():
-            state = pyspacemouse.read()
-            self.fps.tick()
-            with self.state_lock:
-                self.latest_data = state
-            time.sleep(0.1)
-        pyspacemouse.close()
+    @staticmethod
+    def _read_spacemouse(shm_name, stop_event):
+        # Open the spacemouse in this process
+        pyspacemouse.open()
+
+        # Connect to the shared memory
+        shm = shared_memory.SharedMemory(name=shm_name)
+        shared_array = np.ndarray((8,), dtype=np.float64, buffer=shm.buf)
+
+        fps_counter = ir.utils.FPSCounter("Spacemouse")
+
+        try:
+            while not stop_event.is_set():
+                state = pyspacemouse.read()
+                fps_counter.tick()
+
+                if state is not None:
+                    # Update shared memory with new state
+                    shared_array[0] = state.x
+                    shared_array[1] = state.y
+                    shared_array[2] = state.z
+                    shared_array[3] = state.roll
+                    shared_array[4] = state.pitch
+                    shared_array[5] = state.yaw
+                    shared_array[6] = float(state.buttons[0])
+                    shared_array[7] = float(state.buttons[1])
+
+                time.sleep(0.01)
+        finally:
+            pyspacemouse.close()
+            shm.close()
 
     async def cleanup(self):
-        self.stop_event.set()
-        self.thread.join()
+        if self.process.is_alive():
+            self.stop_event.set()
+            self.process.join(timeout=2)
+            if self.process.is_alive():
+                self.process.terminate()
+
+        # Clean up shared memory
+        self.shm.close()
+        self.shm.unlink()

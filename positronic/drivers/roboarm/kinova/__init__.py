@@ -195,7 +195,7 @@ class JointCompliantController:
     def set_target_pose(self, pose):
         # pose_str = ','.join(f'{p: .2f}' for p in pose.translation) + '|' + ','.join(f'{q: .2f}' for q in pose.rotation.as_quat)
         # print(f'Setting target pose: {pose_str}')
-        pose = self.solver.inverse(pose, self.q_s or np.zeros(self.actuator_count))
+        pose = self.solver.inverse(pose, self.q_s if self.q_s is not None else np.zeros(self.actuator_count))
         # pose_str = ','.join(f'{p: .4f}' for p in pose)
         # print(f'Inverse kinematics: {pose_str}')
         self.target_qpos = pose
@@ -251,6 +251,38 @@ class JointCompliantController:
         return tau_task + tau_f
 
 
+class CommandQueue:
+    def __init__(self):
+        self.target_qpos = None
+        self.target_pose = None
+        # For reading state without locking
+        self.current_q_s = None
+        self.current_pose = None
+        self.is_updated = False
+
+    def set_target_qpos(self, qpos):
+        self.target_qpos = qpos
+        self.target_pose = None  # Clear any pending pose target
+
+    def set_target_pose(self, pose):
+        self.target_pose = pose
+        self.target_qpos = None  # Clear any pending qpos target
+
+    def has_new_target(self):
+        return self.target_qpos is not None or self.target_pose is not None
+
+    def consume_target(self, joint_controller):
+        if self.target_pose is not None:
+            joint_controller.set_target_pose(self.target_pose)
+            self.target_pose = None
+            return True
+        elif self.target_qpos is not None:
+            joint_controller.set_target_qpos(self.target_qpos)
+            self.target_qpos = None
+            return True
+        return False
+
+
 @ir.ironic_system(input_ports=['target_position', 'reset', 'target_grip'],
                   output_ports=['status'],
                   output_props=['position', 'joint_positions', 'grip', 'metadata'])
@@ -273,7 +305,7 @@ class KinovaController(ir.ControlSystem):
             if handle.device_type in [Common_pb2.BIG_ACTUATOR, Common_pb2.SMALL_ACTUATOR]
         ]
         self.send_options = RouterClientSendOptions()
-        self.send_options.timeout_ms = 3
+        self.send_options.timeout_ms = 30
 
         # Make sure actuators are in position mode
         control_mode_message = ActuatorConfig_pb2.ControlModeInformation()
@@ -300,25 +332,25 @@ class KinovaController(ir.ControlSystem):
 
         self.model = pin.buildModelFromUrdf('positronic/drivers/roboarm/kinova/model.urdf')
         self.data = self.model.createData()
-        self.q_pin = np.zeros(self.model.nq)
+        self._q = np.zeros(self.actuator_count)
+        self._dq = np.zeros(self.actuator_count)
+        self._tau = np.zeros(self.actuator_count)
+        self._q_pin = np.zeros(11)
         self.tool_frame_id = self.model.getFrameId('tool_frame')
 
         self.control_thread = None
         self.stop_event = threading.Event()
+        self.command_queue = CommandQueue()
         self.joint_controller = None
-        self.joint_controller_mutex = threading.Lock()
         self._main_loop = None
+        self.current_command = np.zeros(self.actuator_count)
 
     async def setup(self):
         self._main_loop = asyncio.get_running_loop()
 
-        with self.joint_controller_mutex:
-            self.joint_controller = JointCompliantController(self.actuator_count)
-
+        self.joint_controller = JointCompliantController(self.actuator_count)
         self.control_thread = threading.Thread(target=self.control_thread_loop)
         self.control_thread.start()
-
-        await self.outs.status.write(ir.Message(RobotStatus.AVAILABLE, ir.system_clock()))
 
     async def cleanup(self):
         print('Shutting down Kinova control thread')
@@ -370,9 +402,11 @@ class KinovaController(ir.ControlSystem):
         self._execute_reference_action('Home')
 
     def _update_state(self, base_feedback):
-        q = np.zeros(self.actuator_count)
-        dq = np.zeros(self.actuator_count)
-        tau = np.zeros(self.actuator_count)
+        # Reuse pre-allocated arrays
+        q = self._q
+        dq = self._dq
+        tau = self._tau
+
         for i in range(self.actuator_count):
             q[i] = base_feedback.actuators[i].position
             dq[i] = base_feedback.actuators[i].velocity
@@ -382,20 +416,12 @@ class KinovaController(ir.ControlSystem):
         np.deg2rad(dq, out=dq)
         np.negative(tau, out=tau)  # Raw torque readings are negative relative to actuator direction
 
-        # Pinocchio joint configuration
-        q_pin = np.array([
-            math.cos(q[0]),
-            math.sin(q[0]),
-            q[1],
-            math.cos(q[2]),
-            math.sin(q[2]),
-            q[3],
-            math.cos(q[4]),
-            math.sin(q[4]),
-            q[5],
-            math.cos(q[6]),
-            math.sin(q[6]),
-        ])
+
+        q_pin = self._q_pin # Reuse pre-allocated q_pin
+        q_pin[0], q_pin[1], q_pin[2] = math.cos(q[0]), math.sin(q[0]), q[1]
+        q_pin[3], q_pin[4], q_pin[5] = math.cos(q[2]), math.sin(q[2]), q[3]
+        q_pin[6], q_pin[7], q_pin[8] = math.cos(q[4]), math.sin(q[4]), q[5]
+        q_pin[9], q_pin[10] = math.cos(q[6]), math.sin(q[6])
 
         gravity = pin.computeGeneralizedGravity(self.model, self.data, q_pin)
         return q, dq, tau, gravity
@@ -421,44 +447,47 @@ class KinovaController(ir.ControlSystem):
         for device_id in self.actuator_device_ids:
             self.actuator_config.SetControlMode(control_mode_message, device_id)
 
-        with self.joint_controller_mutex:
-            self.joint_controller.compute_torque(*self._update_state(base_feedback))
-
         last_ts = time.monotonic()
         count = 0
+
+        queue = self.command_queue  # Local reference to avoid dictionary lookups in hot loop
+        joint_controller = self.joint_controller
+        joint_controller.compute_torque(*self._update_state(base_feedback))
+
+        fps = ir.utils.FPSCounter('Kinova')
+
         while not self.stop_event.is_set():
             now_ts = time.monotonic()
             step_time = now_ts - last_ts
-            if step_time > 0.004:  # 4 ms
+            if step_time > 0.005:  # 5 ms
                 print(f'Warning: Step time {1000 * step_time:.3f} ms')
 
-            if step_time >= 0.0005:  # TODO: Do we really need this check?
+            if True or step_time >= 0.0005:  # TODO: Do we really need this check?
                 last_ts = now_ts
-                with self.joint_controller_mutex:
-                    torque_command = self.joint_controller.compute_torque(*self._update_state(base_feedback))
-                current_command = np.divide(torque_command, self.torque_constant)
-                np.clip(current_command, self.current_limit_min, self.current_limit_max, out=current_command)
-                # if count % 20 == 0:
-                #     fk = self.joint_controller.solver.forward(self.joint_controller.q_s)
-                #     # cur_cmd = ','.join(f'{c: .4f}' for c in current_command)
-                #     # q_s = ','.join(f'{q: .2f}' for q in self.joint_controller.q_s)
-                #     # q_t = ','.join(f'{q: .2f}' for q in self.joint_controller.q_d)
-                #     fk_pos = ','.join(f'{p: .2f}' for p in fk.translation)
-                #     fk_quat = ','.join(f'{q: .2f}' for q in fk.rotation.as_quat)
 
-                #     print(f'{fk_pos}|{fk_quat}')
-                #     # print(f'{cur_cmd}|{q_s}|{q_t}|{fk_pos}|{fk_quat}')
+                if queue.has_new_target():
+                    queue.consume_target(joint_controller)
+
+                torque_command = joint_controller.compute_torque(*self._update_state(base_feedback))
+
+                # Update shared state for reader threads
+                queue.current_q_s = joint_controller.q_s.copy()
+                queue.current_pose = joint_controller.solver.forward(joint_controller.q_s)
+                queue.is_updated = True
+
+                self.current_command = np.divide(torque_command, self.torque_constant)
+                np.clip(self.current_command, self.current_limit_min, self.current_limit_max, out=self.current_command)
 
                 # Increment frame ID to ensure actuators can reject out-of-order frames
                 base_command.frame_id = (base_command.frame_id + 1) % 65536
 
                 for i in range(self.actuator_count):
-                    base_command.actuators[i].current_motor = current_command[i]
-                    # base_command.actuators[i].current_motor = base_feedback.actuators[i].current_motor
+                    base_command.actuators[i].current_motor = self.current_command[i]
                     base_command.actuators[i].position = base_feedback.actuators[i].position
                     base_command.actuators[i].command_id = base_command.frame_id
 
                 base_feedback = self.base_cyclic.Refresh(base_command, 0, self.send_options)
+                fps.tick()
                 count += 1
 
                 # if count > 1000:
@@ -476,7 +505,7 @@ class KinovaController(ir.ControlSystem):
         self.base.SetServoingMode(base_servo_mode)
 
     @ir.on_message('reset')
-    async def handle_reset(self, message: ir.Message):
+    async def handle_reset(self, _message: ir.Message):
         """Commands the robot to move to the home position."""
         start_reset_future = self._main_loop.create_future()
         reset_done_future = self._main_loop.create_future()
@@ -484,7 +513,6 @@ class KinovaController(ir.ControlSystem):
         def _internal_reset():
             # Signal we're starting the reset
             self._main_loop.call_soon_threadsafe(lambda: start_reset_future.set_result(True))
-
             self.set_target_qpos(_Q_RETRACT)
 
             # Wait for the robot to reach the target position
@@ -506,22 +534,15 @@ class KinovaController(ir.ControlSystem):
     @ir.on_message('target_position')
     async def handle_target_position(self, message: ir.Message):
         """Handles a target position message."""
-        # Extract the target position from the message
-        target_pose = message.data
-
-        # Set the target pose in the joint controller
-        with self.joint_controller_mutex:
-            if self.joint_controller is not None:
-                self.joint_controller.set_target_pose(target_pose)
+        self.command_queue.target_pose = message.data
+        self.command_queue.has_new_pose = True
 
     @ir.out_property
     async def position(self):
         """End effector position in robot base coordinate frame."""
-        with self.joint_controller_mutex:
-            if self.joint_controller is None:
-                return ir.Message(ir.NoValue)
-
-            return ir.Message(self.joint_controller.solver.forward(self.joint_controller.q_s))
+        if not self.command_queue.is_updated:
+            return ir.Message(ir.NoValue)
+        return ir.Message(self.command_queue.current_pose)
 
     @ir.on_message('target_grip')
     async def handle_target_grip(self, _message: ir.Message):
@@ -538,23 +559,15 @@ class KinovaController(ir.ControlSystem):
     @ir.out_property
     async def joint_positions(self):
         """Current joint positions."""
-        with self.joint_controller_mutex:
-            if self.joint_controller is None:
-                return ir.Message(ir.NoValue)
-
-            return ir.Message(self.joint_controller.q_s)
+        if not self.command_queue.is_updated:
+            return ir.Message(ir.NoValue)
+        return ir.Message(self.command_queue.current_q_s)
 
     async def step(self) -> ir.State:
         return await super().step()
 
     def set_target_qpos(self, qpos):
-        with self.joint_controller_mutex:
-            if self.joint_controller is None:
-                return
-            self.joint_controller.set_target_qpos(qpos)
+        self.command_queue.set_target_qpos(qpos)
 
     def set_target_pose(self, pose):
-        with self.joint_controller_mutex:
-            if self.joint_controller is None:
-                return
-            self.joint_controller.set_target_pose(pose)
+        self.command_queue.set_target_pose(pose)
