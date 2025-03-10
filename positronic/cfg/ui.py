@@ -9,8 +9,8 @@ import numpy as np
 
 import geom
 import ironic as ir
-from positronic.teleop import TeleopSystem, front_position_parser
-
+from positronic.teleop import TeleopSystem
+import positronic.teleop
 
 @ir.config(port=5005)
 def webxr(port: int):
@@ -18,7 +18,7 @@ def webxr(port: int):
     return WebXR(port=port)
 
 
-@ir.config(webxr=webxr, operator_position=front_position_parser, stream_to_webxr='image')
+@ir.config(webxr=webxr, operator_position=positronic.teleop.front_position_franka_parser, stream_to_webxr='first.image')
 def teleop(webxr: ir.ControlSystem,
            operator_position: Callable[[geom.Transform3D], geom.Transform3D],
            stream_to_webxr: Optional[str] = None):

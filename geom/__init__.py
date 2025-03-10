@@ -15,7 +15,7 @@ class Transform3D:
             rotation = Rotation(1, 0, 0, 0)
         elif not isinstance(rotation, Rotation):
             rotation = Rotation(*rotation)
-        self.translation = translation
+        self.translation = np.asarray(translation)
         self.rotation = rotation
 
     @property
@@ -112,6 +112,7 @@ class Rotation(np.ndarray):
 
     class Representation(Enum):
         QUAT = 'quat'
+        QUAT_XYZW = 'quat_xyzw'
         EULER = 'euler'
         ROTATION_MATRIX = 'rotation_matrix'
         ROTVEC = 'rotvec'
@@ -119,6 +120,8 @@ class Rotation(np.ndarray):
         def from_value(self, value: Any) -> 'Rotation':
             if self == Rotation.Representation.QUAT:
                 return Rotation.from_quat(value)
+            elif self == Rotation.Representation.QUAT_XYZW:
+                return Rotation.from_quat_xyzw(value)
             elif self == Rotation.Representation.EULER:
                 return Rotation.from_euler(value)
             elif self == Rotation.Representation.ROTATION_MATRIX:
@@ -131,6 +134,8 @@ class Rotation(np.ndarray):
         @property
         def shape(self) -> int | tuple[int, int]:
             if self == Rotation.Representation.QUAT:
+                return 4
+            elif self == Rotation.Representation.QUAT_XYZW:
                 return 4
             elif self == Rotation.Representation.EULER:
                 return 3
@@ -194,9 +199,28 @@ class Rotation(np.ndarray):
     @classmethod
     def from_quat(cls, quat: np.ndarray) -> 'Rotation':
         """
-        Create a rotation from a 4-element numpy array.
+        Create a rotation from a 4-element numpy array. The order of the elements is (w, x, y, z).
+
+        Args:
+            quat: (numpy.ndarray) numpy array with w, x, y, z elements.
+
+        Returns:
+            Rotation object.
         """
         return cls(*quat)
+
+    @classmethod
+    def from_quat_xyzw(cls, quat: np.ndarray) -> 'Rotation':
+        """
+        Create a rotation from a 4-element numpy array. The order of the elements is (x, y, z, w).
+
+        Args:
+            quat: (numpy.ndarray) numpy array with x, y, z, w elements.
+
+        Returns:
+            Rotation object.
+        """
+        return cls(quat[3], quat[0], quat[1], quat[2])
 
     @classmethod
     def from_rotation_matrix(cls, matrix):
@@ -308,7 +332,9 @@ class Rotation(np.ndarray):
             (np.ndarray) The converted rotation representation.
         """
         if representation == Rotation.Representation.QUAT:
-            return np.asarray(self)
+            return self.as_quat
+        elif representation == Rotation.Representation.QUAT_XYZW:
+            return self.as_quat_xyzw
         elif representation == Rotation.Representation.EULER:
             return self.as_euler
         elif representation == Rotation.Representation.ROTATION_MATRIX:
@@ -376,6 +402,13 @@ class Rotation(np.ndarray):
         Convert the rotation to a quaternion.
         """
         return np.asarray(self)
+
+    @property
+    def as_quat_xyzw(self) -> np.ndarray:
+        """
+        Convert the rotation to a quaternion in the order (x, y, z, w).
+        """
+        return np.asarray([self[1], self[2], self[3], self[0]])
 
     @property
     def angle(self):

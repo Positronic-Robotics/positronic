@@ -1,6 +1,6 @@
 from typing import List, Optional
 
-from ironic import ir
+import ironic as ir
 
 
 @ir.config(ip="172.168.0.2",

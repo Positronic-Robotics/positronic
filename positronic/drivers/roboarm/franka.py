@@ -100,7 +100,7 @@ class Franka(ir.ControlSystem):
 
     @ir.on_message('target_position')
     async def handle_target_position(self, message: ir.Message):
-        pos = franky.Affine(translation=message.data.translation, quaternion=message.data.rotation.as_quat)
+        pos = franky.Affine(translation=message.data.translation, quaternion=message.data.rotation.as_quat_xyzw)
         motion = None
         if self.cartesian_mode == CartesianMode.LIBFRANKA:
             motion = franky.CartesianMotion(pos, franky.ReferenceType.Absolute)
@@ -171,7 +171,7 @@ class Franka(ir.ControlSystem):
     async def position(self):
         """End effector position in robot base coordinate frame."""
         pos = self.robot.current_pose.end_effector_pose
-        return ir.Message(data=Transform3D(pos.translation, Rotation.from_quat(pos.quaternion)))
+        return ir.Message(data=Transform3D(pos.translation, Rotation.from_quat_xyzw(pos.quaternion)))
 
     @ir.out_property
     async def joint_positions(self):
