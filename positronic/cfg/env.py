@@ -85,4 +85,3 @@ def franka(
     res = ir.compose(*components, inputs=inputs, outputs=outputs)
     res = _state_mapping(res)
     return res
-

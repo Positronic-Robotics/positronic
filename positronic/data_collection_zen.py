@@ -19,11 +19,13 @@ def dataset_dumper(out_dir: str, video_fps: int, metadata: Dict[str, str] = {}, 
     return DatasetDumper(out_dir, additional_metadata=metadata, video_fps=video_fps, codec=codec)
 
 
-async def _main(ui: ir.ControlSystem,
-         env: ir.ControlSystem,
-         data_dumper: ir.ControlSystem,
-         rerun: bool = False,
-         sound: Optional[ir.ControlSystem] = None):
+async def _main(
+        ui: ir.ControlSystem,
+        env: ir.ControlSystem,
+        data_dumper: ir.ControlSystem,
+        rerun: bool = False,
+        sound: Optional[ir.ControlSystem] = None
+):
     ui.bind(
         robot_grip=env.outs.grip,
         robot_position=env.outs.robot_position,
@@ -62,9 +64,12 @@ async def _main(ui: ir.ControlSystem,
 
     if sound is not None:
         components.append(
-            sound.bind(force=env.outs.ext_force_ee,
-                        start_recording=ui.outs.start_recording,
-                        stop_recording=ui.outs.stop_recording))
+            sound.bind(
+                force=env.outs.ext_force_ee,
+                start_recording=ui.outs.start_recording,
+                stop_recording=ui.outs.stop_recording
+            )
+        )
 
     system = ir.compose(*components)
     await ir.utils.run_gracefully(system)

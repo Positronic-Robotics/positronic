@@ -1,8 +1,6 @@
 import logging
 from typing import Callable, List
 
-import numpy as np
-
 import ironic as ir
 import geom
 from positronic.tools.buttons import ButtonHandler
@@ -53,7 +51,6 @@ def back_position_franka_parser(teleop_transform: geom.Transform3D) -> geom.Tran
     return geom.Transform3D(translation, rotation)
 
 
-
 @ir.ironic_system(
     input_ports=["teleop_transform", "teleop_buttons"],
     input_props=["robot_position"],
@@ -87,8 +84,10 @@ class TeleopSystem(ir.ControlSystem):
         self.fps.tick()
 
         if self.is_tracking and self.offset is not None:
-            target = geom.Transform3D(self.teleop_t.translation + self.offset.translation,
-                                 self.teleop_t.rotation * self.offset.rotation)
+            target = geom.Transform3D(
+                self.teleop_t.translation + self.offset.translation,
+                self.teleop_t.rotation * self.offset.rotation
+            )
             await self.outs.robot_target_position.write(ir.Message(target, message.timestamp))
 
     @ir.on_message("teleop_buttons")
@@ -121,8 +120,10 @@ class TeleopSystem(ir.ControlSystem):
         # Note that translation and rotation offsets are independent
         if self.teleop_t is not None:
             robot_t = (await self.ins.robot_position()).data
-            self.offset = geom.Transform3D(-self.teleop_t.translation + robot_t.translation,
-                                      self.teleop_t.rotation.inv * robot_t.rotation)
+            self.offset = geom.Transform3D(
+                -self.teleop_t.translation + robot_t.translation,
+                self.teleop_t.rotation.inv * robot_t.rotation
+            )
         if self.is_tracking:
             logging.info('Stopped tracking')
             self.is_tracking = False
