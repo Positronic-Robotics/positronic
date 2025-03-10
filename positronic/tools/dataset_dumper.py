@@ -87,7 +87,11 @@ class SerialDumper:
         n_frames, tensor_key = None, None
 
         for k, v in self.data.items():
-            self.data[k] = torch.from_numpy(np.array(v))
+            try:
+                self.data[k] = torch.from_numpy(np.array(v))
+            except Exception as e:
+                print(f"Error converting {k} to torch tensor: {e}")
+                raise e
 
             if n_frames is None:
                 n_frames = len(self.data[k])
@@ -195,7 +199,7 @@ class DatasetDumper(ir.ControlSystem):
         # TODO: This should be configured somehow
         ep_dict['target_grip'] = self.target_grip
         ep_dict['target_robot_position_translation'] = self.target_robot_position.translation.copy()
-        ep_dict['target_robot_position_quaternion'] = self.target_robot_position.quaternion.copy()
+        ep_dict['target_robot_position_quaternion'] = self.target_robot_position.rotation.as_quat.copy()
 
         env_state_data = await self.ins.robot_data()
         for name, value in env_state_data.data.items():
