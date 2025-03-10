@@ -29,6 +29,7 @@ dependencies = [
     "matplotlib",
     "av",
     "fastapi",
+    "ruckig",
 ]
 
 [project.optional-dependencies]
@@ -37,6 +38,7 @@ hardware = [
     "pymodbus",
     "pyspacemouse",
     "linuxpy",
+    "pin",  # For Kinova
 ]
 dev = [
     "jupyter",

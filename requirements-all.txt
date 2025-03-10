@@ -62,6 +62,38 @@ cmake==3.31.6
     # via cmake-build-extension
 cmake-build-extension==0.6.1
     # via positronic (pyproject.toml)
+cmeel==0.57.1
+    # via
+    #   cmeel-assimp
+    #   cmeel-boost
+    #   cmeel-console-bridge
+    #   cmeel-octomap
+    #   cmeel-qhull
+    #   cmeel-tinyxml
+    #   cmeel-urdfdom
+    #   cmeel-zlib
+    #   eigenpy
+    #   hpp-fcl
+    #   pin
+cmeel-assimp==5.4.3.1
+    # via hpp-fcl
+cmeel-boost==1.83.0
+    # via
+    #   eigenpy
+    #   hpp-fcl
+    #   pin
+cmeel-console-bridge==1.0.2.2
+    # via cmeel-urdfdom
+cmeel-octomap==1.10.0
+    # via hpp-fcl
+cmeel-qhull==8.0.2.1
+    # via hpp-fcl
+cmeel-tinyxml==2.6.2.3
+    # via cmeel-urdfdom
+cmeel-urdfdom==3.1.1.1
+    # via pin
+cmeel-zlib==1.3.1
+    # via cmeel-assimp
 colorlog==6.9.0
     # via hydra-colorlog
 comm==0.2.2
@@ -90,6 +122,8 @@ dm-tree==0.1.9
     #   dm-env
 easyhid==0.0.10
     # via pyspacemouse
+eigenpy==3.5.1
+    # via hpp-fcl
 etils==1.12.0
     # via mujoco
 executing==2.2.0
@@ -122,6 +156,8 @@ h11==0.14.0
     # via
     #   httpcore
     #   uvicorn
+hpp-fcl==2.4.4
+    # via pin
 httpcore==1.0.7
     # via httpx
 httptools==0.6.4
@@ -281,9 +317,10 @@ notebook-shim==0.2.4
     #   notebook
 numba==0.61.0
     # via numpy-quaternion
-numpy==2.1.3
+numpy==1.26.4
     # via
     #   positronic (pyproject.toml)
+    #   cmeel-boost
     #   contourpy
     #   dm-control
     #   dm-env
@@ -366,6 +403,8 @@ pillow==11.1.0
     #   imageio
     #   matplotlib
     #   rerun-sdk
+pin==2.7.0
+    # via positronic (pyproject.toml)
 platformdirs==4.3.6
     # via jupyter-core
 pluggy==1.5.0
@@ -466,6 +505,8 @@ rpds-py==0.23.1
     # via
     #   jsonschema
     #   referencing
+ruckig==0.14.0
+    # via positronic (pyproject.toml)
 scipy==1.15.2
     # via
     #   positronic (pyproject.toml)
@@ -479,6 +520,7 @@ setuptools==75.8.2
     #   jupyterlab
     #   labmaze
     #   setuptools-scm
+    #   torch
 setuptools-scm==8.2.0
     # via cmake-build-extension
 six==1.17.0
@@ -543,8 +585,6 @@ typing-extensions==4.12.2
     #   beautifulsoup4
     #   etils
     #   fastapi
-    #   ipython
-    #   linuxpy
     #   pydantic
     #   pydantic-core
     #   referencing

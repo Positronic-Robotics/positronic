@@ -227,6 +227,8 @@ requests==2.32.3
     #   dm-control
 rerun-sdk==0.22.1
     # via positronic (pyproject.toml)
+ruckig==0.14.0
+    # via positronic (pyproject.toml)
 scipy==1.15.2
     # via
     #   positronic (pyproject.toml)
@@ -237,6 +239,7 @@ setuptools==75.8.2
     #   dm-control
     #   labmaze
     #   setuptools-scm
+    #   torch
 setuptools-scm==8.2.0
     # via cmake-build-extension
 six==1.17.0

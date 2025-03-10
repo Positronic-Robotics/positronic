@@ -61,6 +61,9 @@ COPY pyproject.toml .
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv pip install -r requirements-hardware.txt
 
+COPY third_party/kortex_api-2.7.0.post5-py3-none-any.whl .
+RUN uv pip install kortex_api-2.7.0.post5-py3-none-any.whl
+
 WORKDIR /positronic
 
 ENV PYTHONPATH=/positronic:$PYTHONPATH
