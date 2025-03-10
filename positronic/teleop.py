@@ -1,5 +1,5 @@
 import logging
-from typing import Callable, List
+from typing import List
 
 import ironic as ir
 import geom
@@ -8,47 +8,10 @@ from positronic.tools.buttons import ButtonHandler
 logging.basicConfig(level=logging.INFO, handlers=[logging.StreamHandler(), logging.FileHandler("teleop.log", mode="w")])
 
 
-def front_position_franka_parser(teleop_transform: geom.Transform3D) -> geom.Transform3D:
-    """
-    This function maps the teleop transform to the franka robot frame, when operator is facing the robot
-    from the front.
-
-    It achieves this by permuting the axes xyz -> zxy.
-
-    Args:
-        teleop_transform: (geom.Transform3D) The input transform to be parsed.
-
-    Returns:
-        franka_transform: (geom.Transform3D) The transformed transform.
-    """
-    translation = teleop_transform.translation[[2, 0, 1]]
-    # Apply rotation to map rotation around z -> y, x -> z, y -> x
-    axis_permutation = geom.Rotation(0.5, 0.5, 0.5, 0.5)
-
-    rotation = axis_permutation * teleop_transform.rotation * axis_permutation.inv
-    return geom.Transform3D(translation, rotation)
-
-
-def back_position_franka_parser(teleop_transform: geom.Transform3D) -> geom.Transform3D:
-    """
-    This function maps the teleop transform to the franka robot frame, when operator is facing the robot
-    from the back.
-
-    The same as front_position_franka_parser, but with additional X and Y axis flips.
-
-    Args:
-        teleop_transform: (geom.Transform3D) The input transform to be parsed.
-
-    Returns:
-        franka_transform: (geom.Transform3D) The transformed transform.
-    """
-    front_pos = front_position_franka_parser(teleop_transform)
-    translation = front_pos.translation * [-1, -1, 1]
-
-    flip_xy_rotation = geom.Rotation(0, 0, 0, 1)
-    rotation = flip_xy_rotation * front_pos.rotation * flip_xy_rotation.inv
-
-    return geom.Transform3D(translation, rotation)
+# map xyz -> zxy
+FRANKA_FRONT_TRANSFORM = geom.Transform3D(rotation=geom.Rotation.from_quat([0.5, 0.5, 0.5, 0.5]))
+# map xyz -> zxy + flip x and y
+FRANKA_BACK_TRANSFORM = geom.Transform3D(rotation=geom.Rotation.from_quat([-0.5, -0.5, 0.5, 0.5]))
 
 
 @ir.ironic_system(
@@ -57,15 +20,22 @@ def back_position_franka_parser(teleop_transform: geom.Transform3D) -> geom.Tran
     output_ports=["robot_target_position", "gripper_target_grasp", "start_recording", "stop_recording", "reset"],
     output_props=["metadata"])
 class TeleopSystem(ir.ControlSystem):
+    def __init__(self, position_transform: geom.Transform3D):
+        """
+        System for teleoperating the robot.
 
-    def __init__(self, pos_parser: Callable[[geom.Transform3D], geom.Transform3D]):
+        Maps raw teleop transform and buttons to robot commands.
+
+        Args:
+            position_transform: (geom.Transform3D) The transform to change the coordinate frame of the teleop transform.
+        """
         super().__init__()
         self.teleop_t = None
         self.offset = None
         self.is_tracking = False
         self.is_recording = False
         self.button_handler = ButtonHandler()
-        self.pos_parser = pos_parser
+        self.position_transform = position_transform
         self.fps = ir.utils.FPSCounter("Teleop")
 
     def _parse_buttons(self, value: List[float]):
@@ -80,7 +50,7 @@ class TeleopSystem(ir.ControlSystem):
 
     @ir.on_message("teleop_transform")
     async def handle_teleop_transform(self, message: ir.Message):
-        self.teleop_t = self.pos_parser(message.data)
+        self.teleop_t = self.position_transform * message.data * self.position_transform.inv
         self.fps.tick()
 
         if self.is_tracking and self.offset is not None:

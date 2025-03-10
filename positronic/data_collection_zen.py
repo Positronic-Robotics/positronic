@@ -75,10 +75,6 @@ async def _main(
     await ir.utils.run_gracefully(system)
 
 
-async def async_main(**kwargs):
-    await main.override_and_instantiate(**kwargs)
-
-
 main = ir.Config(
     _main,
     env=positronic.cfg.env.umi,
@@ -87,6 +83,10 @@ main = ir.Config(
     data_dumper=dataset_dumper.override(video_fps=30, codec='libx264'),
     rerun=False,
 )
+
+
+async def async_main(**kwargs):
+    await main.override_and_instantiate(**kwargs)
 
 
 # TODO: Think through how we can make it a handy standard function and move it to ironic/config.py

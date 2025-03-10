@@ -3,13 +3,12 @@
 import asyncio
 from collections import deque
 import time
-from typing import Callable, List, Optional
+from typing import List, Optional
 
 import numpy as np
 
 import geom
 import ironic as ir
-from positronic.teleop import TeleopSystem
 import positronic.teleop
 
 
@@ -19,11 +18,11 @@ def webxr(port: int):
     return WebXR(port=port)
 
 
-@ir.config(webxr=webxr, operator_position=positronic.teleop.front_position_franka_parser, stream_to_webxr='first.image')
+@ir.config(webxr=webxr, operator_position=positronic.teleop.FRANKA_FRONT_TRANSFORM, stream_to_webxr='first.image')
 def teleop(webxr: ir.ControlSystem,
-           operator_position: Callable[[geom.Transform3D], geom.Transform3D],
+           operator_position: geom.Transform3D,
            stream_to_webxr: Optional[str] = None):
-    teleop_cs = TeleopSystem(pos_parser=operator_position)
+    teleop_cs = positronic.teleop.TeleopSystem(operator_position)
     components = [webxr, teleop_cs]
 
     teleop_cs.bind(teleop_transform=webxr.outs.transform, teleop_buttons=webxr.outs.buttons)
