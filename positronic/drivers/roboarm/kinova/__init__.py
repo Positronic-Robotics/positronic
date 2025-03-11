@@ -28,9 +28,9 @@ from ruckig import InputParameter, OutputParameter, Result, Ruckig
 from kortex_api.autogen.client_stubs.ActuatorConfigClientRpc import ActuatorConfigClient
 from kortex_api.autogen.client_stubs.BaseClientRpc import BaseClient
 from kortex_api.autogen.client_stubs.BaseCyclicClientRpc import BaseCyclicClient
-from kortex_api.autogen.client_stubs.ControlConfigClientRpc import ControlConfigClient
 from kortex_api.autogen.client_stubs.DeviceManagerClientRpc import DeviceManagerClient
-from kortex_api.autogen.messages import ActuatorCyclic_pb2, ActuatorConfig_pb2, Base_pb2, BaseCyclic_pb2, Common_pb2, ControlConfig_pb2, Session_pb2
+from kortex_api.autogen.messages import (ActuatorCyclic_pb2, ActuatorConfig_pb2, Base_pb2, BaseCyclic_pb2, Common_pb2,
+                                         Session_pb2)
 from kortex_api.RouterClient import RouterClient, RouterClientSendOptions
 from kortex_api.SessionManager import SessionManager
 from kortex_api.TCPTransport import TCPTransport
@@ -375,7 +375,7 @@ class KinovaAPI:
         self.actuator_count = self.base.GetActuatorCount().count
 
         device_manager = DeviceManagerClient(self.base.router)
-        device_handles = self.device_manager.ReadAllDevices()
+        device_handles = device_manager.ReadAllDevices()
         self.actuator_device_ids = [
             handle.device_identifier for handle in device_handles.device_handle
             if handle.device_type in [Common_pb2.BIG_ACTUATOR, Common_pb2.SMALL_ACTUATOR]
