@@ -290,7 +290,7 @@ def compose(*components: ControlSystem,
         outputs=outputs)
 
 
-def extend(system: ControlSystem, outputs: Dict[str, OutputPort | Callable]) -> ComposedSystem:
+def extend(system: ControlSystem, **outputs: OutputPort | Callable) -> ComposedSystem:
     """
     Extend a control system with additional outputs.
 
@@ -300,7 +300,7 @@ def extend(system: ControlSystem, outputs: Dict[str, OutputPort | Callable]) -> 
 
     Args:
         system: The control system to extend
-        outputs: Dictionary mapping additional output names to output ports or properties
+        **outputs: Additional output names and ports or properties to add
 
     Returns:
         A new composed control system instance that includes both the original system

@@ -265,7 +265,7 @@ async def test_extend_system_appends_output():
     """Test extending a control system with additional outputs"""
     source = DataSource()
 
-    source = extend(source, {'counter_squared': ir.utils.map_property(lambda x: x**2, source.outs.counter)})
+    source = extend(source, counter_squared=ir.utils.map_property(lambda x: x**2, source.outs.counter))
 
     await source.setup()
     value = await source.outs.counter_squared()
@@ -302,7 +302,7 @@ async def test_extend_composed_system_appends_output():
                        })
 
     extended = extend(composed,
-                      {'counter_squared': ir.utils.map_property(lambda x: x**2, composed.outs.counter_accumulated)})
+                      counter_squared=ir.utils.map_property(lambda x: x**2, composed.outs.counter_accumulated))
 
     await extended.setup()
 
@@ -332,7 +332,7 @@ async def test_extend_composed_system_appends_output():
 @pytest.mark.asyncio
 async def test_extend_with_map_port_with_the_same_name_replaces_existing_output_port():
     source = DataSource()
-    extended = extend(source, {'data': ir.utils.map_port(lambda x: x ** 2, source.outs.data)})
+    extended = extend(source, data=ir.utils.map_port(lambda x: x ** 2, source.outs.data))
 
     received = []
 
@@ -369,12 +369,11 @@ async def test_extend_composed_system_inputs_could_be_bound_after_extension():
                        })
 
     extended = extend(composed,
-                      {'counter_squared': ir.utils.map_property(lambda x: x**2, composed.outs.counter_accumulated)})
+                      counter_squared=ir.utils.map_property(lambda x: x**2, composed.outs.counter_accumulated))
 
     source_with_extended = compose(source,
                                    extended.bind(data=source.outs.data, counter=source.outs.counter),
                                    outputs={'counter_squared': extended.outs.counter_squared})
-
     await source_with_extended.setup()
 
     await source_with_extended.step()

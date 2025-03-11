@@ -24,10 +24,9 @@ def webxr(port: int, require_left: bool, require_right: bool):
         return data
 
     webxr = WebXR(port=port)
-    webxr = ir.extend(webxr, {
-        'transforms': ir.utils.map_port(_filter_none, webxr.outs.transforms),
-        'buttons': ir.utils.map_port(_filter_none, webxr.outs.buttons),
-    })
+    webxr = ir.extend(webxr,
+                      controller_positions=ir.utils.map_port(_filter_none, webxr.outs.controller_positions),
+                      buttons=ir.utils.map_port(_filter_none, webxr.outs.buttons))
 
     return webxr
 
@@ -45,7 +44,7 @@ def teleop(webxr: ir.ControlSystem,
     components = [webxr, teleop_cs]
 
     teleop_cs.bind(
-        teleop_transform=ir.utils.map_port(lambda x: x['right'], webxr.outs.transforms),
+        teleop_transform=ir.utils.map_port(lambda x: x['right'], webxr.outs.controller_positions),
         teleop_buttons=ir.utils.map_port(lambda x: x['right'], webxr.outs.buttons),
     )
 

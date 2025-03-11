@@ -117,7 +117,7 @@ def run_server(data_queue, frame_queue, port, ssl_keyfile, ssl_certfile):  # noq
     server.run()
 
 
-@ir.ironic_system(input_ports=["frame"], output_ports=["transforms", "buttons"])
+@ir.ironic_system(input_ports=["frame"], output_ports=["controller_positions", "buttons"])
 class WebXR(ir.ControlSystem):
     def __init__(self, port: int, ssl_keyfile: str = "key.pem", ssl_certfile: str = "cert.pem"):
         super().__init__()
@@ -166,30 +166,28 @@ class WebXR(ir.ControlSystem):
         if data is None:
             return ir.State.ALIVE
 
-        transforms_data = {'left': None, 'right': None}
-        buttons_data = {'left': None, 'right': None}
+        controller_positions = {'left': None, 'right': None}
+        buttons = {'left': None, 'right': None}
 
         if data['controllers']['right'] is not None:
-            pos = np.array(data['controllers']['right']['position'])
-            quat = np.array(data['controllers']['right']['orientation'])
-            buttons = np.array(data['controllers']['right']['buttons'])
-            transform = Transform3D(pos, quat)
-            transforms_data['right'] = transform
-            buttons_data['right'] = buttons
+            controller_positions['right'], buttons['right'] = self._parse_controller_data(data['controllers']['right'])
 
         if data['controllers']['left'] is not None:
-            pos = np.array(data['controllers']['left']['position'])
-            quat = np.array(data['controllers']['left']['orientation'])
-            buttons = np.array(data['controllers']['left']['buttons'])
-            transform = Transform3D(pos, quat)
-            transforms_data['left'] = transform
-            buttons_data['left'] = buttons
+            controller_positions['left'], buttons['left'] = self._parse_controller_data(data['controllers']['left'])
 
-        if transforms_data['left'] is not None or transforms_data['right'] is not None:
+        if controller_positions['left'] is not None or controller_positions['right'] is not None:
             await asyncio.gather(
-                self.outs.transforms.write(ir.Message(transforms_data, timestamp)),
-                self.outs.buttons.write(ir.Message(buttons_data, timestamp))
+                self.outs.controller_positions.write(ir.Message(controller_positions, timestamp)),
+                self.outs.buttons.write(ir.Message(buttons, timestamp))
             )
 
         self.fps.tick()
         return ir.State.ALIVE
+
+    def _parse_controller_data(self, data: dict):
+        translation = np.array(data['position'])
+        rotation = np.array(data['orientation'])
+        buttons = np.array(data['buttons'])
+
+        controller_position = Transform3D(translation, rotation)
+        return controller_position, buttons

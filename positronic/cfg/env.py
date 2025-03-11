@@ -16,7 +16,7 @@ def _state_mapping(env: ir.ControlSystem):
         if ir.is_property(mapping):
             robot_properties[name] = mapping
 
-    return ir.extend(env, {'state': ir.utils.properties_dict(**robot_properties)})
+    return ir.extend(env, state=ir.utils.properties_dict(**robot_properties))
 
 
 @ir.config(camera=positronic.cfg.hardware.camera.merged)

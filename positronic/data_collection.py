@@ -35,7 +35,7 @@ def setup_interface(cfg: DictConfig):
         components.append(teleop)
 
         teleop.bind(
-            teleop_transform=webxr.outs.transform,
+            teleop_transform=webxr.outs.controller_positions,
             teleop_buttons=webxr.outs.buttons,
         )
 
@@ -78,7 +78,7 @@ def setup_interface(cfg: DictConfig):
         components.append(gui)
 
         teleop.bind(
-            teleop_transform=webxr.outs.transform,
+            teleop_transform=webxr.outs.controller_positions,
             teleop_buttons=webxr.outs.buttons,
         )
 
@@ -140,12 +140,10 @@ async def main_async(cfg: DictConfig):  # noqa: C901  Function is too complex
     metadata.update(md)
 
     hardware = extend(
-        hardware, {
-            'robot_position_translation':
-            ir.utils.map_property(lambda t: t.translation.copy(), hardware.outs.robot_position),
-            'robot_position_quaternion':
-            ir.utils.map_property(lambda t: t.quaternion.copy(), hardware.outs.robot_position),
-        })
+        hardware,
+        robot_position_translation=ir.utils.map_property(lambda t: t.translation.copy(), hardware.outs.robot_position),
+        robot_position_quaternion=ir.utils.map_property(lambda t: t.quaternion.copy(), hardware.outs.robot_position),
+    )
 
     control.bind(
         robot_grip=hardware.outs.grip,
