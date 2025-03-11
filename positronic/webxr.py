@@ -169,11 +169,9 @@ class WebXR(ir.ControlSystem):
         controller_positions = {'left': None, 'right': None}
         buttons = {'left': None, 'right': None}
 
-        if data['controllers']['right'] is not None:
-            controller_positions['right'], buttons['right'] = self._parse_controller_data(data['controllers']['right'])
-
-        if data['controllers']['left'] is not None:
-            controller_positions['left'], buttons['left'] = self._parse_controller_data(data['controllers']['left'])
+        for side in ['right', 'left']:
+            if data['controllers'][side] is not None:
+                controller_positions[side], buttons[side] = self._parse_controller_data(data['controllers'][side])
 
         if controller_positions['left'] is not None or controller_positions['right'] is not None:
             await asyncio.gather(

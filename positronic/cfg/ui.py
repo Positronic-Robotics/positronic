@@ -16,7 +16,7 @@ import positronic.teleop
 def webxr(port: int, require_left: bool, require_right: bool):
     from positronic.webxr import WebXR
 
-    async def _filter_none(data: dict):
+    def _filter_none(data: dict):
         if require_left and data['left'] is None:
             return ir.NoValue
         if require_right and data['right'] is None:
