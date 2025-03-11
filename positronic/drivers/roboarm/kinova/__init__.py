@@ -1,3 +1,13 @@
+# This file contains code derived from tidybot2, which is:
+# Copyright (c) 2024 Jimmy Wu
+# Released under MIT License (https://github.com/jimmyyhwu/tidybot2/blob/main/LICENSE)
+#
+# All modifications and additions are:
+# Copyright (c) 2025 Positronic Robotics Inc.
+# All rights reserved.
+# This code may not be used, copied, modified, merged, published, distributed,
+# sublicensed, and/or sold without explicit permission from the copyright holder.
+
 # In order to use Kinova API, you need to install the Kinova Kortex
 # Go to https://artifactory.kinovaapps.com/ui/native/generic-public/kortex/API/2.7.0/
 # Download the wheel file and install it using pip install kortex_api-2.7.0-py3-none-any.whl
@@ -53,6 +63,7 @@ def _wrap_joint_angle(q, q_base):
 
 
 class DeviceConnection:
+    """Manages TCP/UDP connections to a Kinova device."""
 
     def __init__(self,
                  ip_address: str,
@@ -87,6 +98,7 @@ class DeviceConnection:
 
 
 class Solver:
+    """Solves forward and inverse kinematics for the Kinova arm."""
 
     def __init__(self, ee_offset=0.0):
         self.model = mujoco.MjModel.from_xml_path('positronic/drivers/roboarm/kinova/gen3.xml')
@@ -162,8 +174,10 @@ class Solver:
 
 
 class JointCompliantController:
+    """Implements compliant joint control for the Kinova arm."""
 
     class LowPassFilter:
+        """Simple low-pass filter implementation."""
 
         def __init__(self, alpha, initial_value):
             assert 0 < alpha <= 1, 'Alpha must be between 0 and 1'
@@ -203,7 +217,7 @@ class JointCompliantController:
         return self.otg_res == Result.Finished
 
     def compute_torque(self, q, dq, tau):
-        q_pin = self._q_pin # Reuse pre-allocated q_pin
+        q_pin = self._q_pin  # Reuse pre-allocated q_pin
         q_pin[0], q_pin[1], q_pin[2] = math.cos(q[0]), math.sin(q[0]), q[1]
         q_pin[3], q_pin[4], q_pin[5] = math.cos(q[2]), math.sin(q[2]), q[3]
         q_pin[6], q_pin[7], q_pin[8] = math.cos(q[4]), math.sin(q[4]), q[5]
@@ -262,6 +276,8 @@ class JointCompliantController:
 
 
 class CommandQueue:
+    """Manages command queuing between processes for the Kinova arm."""
+
     def __init__(self):
         self.target_qpos = None
         self.has_target = mp.Value('b', False)
@@ -273,14 +289,15 @@ class CommandQueue:
 
         # Create shared memory for target and current joint positions
         if self.shared_target is None:
-            self.shared_target = shared_memory.SharedMemory(create=True, size=self.actuator_count * 4)  # 4 bytes per float32
+            self.shared_target = shared_memory.SharedMemory(create=True,
+                                                            size=self.actuator_count * 4)  # 4 bytes per float32
         if self.shared_current is None:
             self.shared_current = shared_memory.SharedMemory(create=True, size=self.actuator_count * 4)
 
         # Initialize with zeros
-        target_array = np.ndarray((self.actuator_count,), dtype=np.float32, buffer=self.shared_target.buf)
+        target_array = np.ndarray((self.actuator_count, ), dtype=np.float32, buffer=self.shared_target.buf)
         target_array[:] = 0
-        current_array = np.ndarray((self.actuator_count,), dtype=np.float32, buffer=self.shared_current.buf)
+        current_array = np.ndarray((self.actuator_count, ), dtype=np.float32, buffer=self.shared_current.buf)
         current_array[:] = 0
 
     def cleanup(self):
@@ -296,7 +313,7 @@ class CommandQueue:
 
     def set_target_qpos(self, qpos):
         # Copy the target to shared memory
-        target_array = np.ndarray((self.actuator_count,), dtype=np.float32, buffer=self.shared_target.buf)
+        target_array = np.ndarray((self.actuator_count, ), dtype=np.float32, buffer=self.shared_target.buf)
         target_array[:] = qpos
         with self.has_target.get_lock():
             self.has_target.value = True
@@ -308,7 +325,7 @@ class CommandQueue:
     def consume_target(self, joint_controller):
         if self.has_new_target():
             # Get target from shared memory
-            target_array = np.ndarray((self.actuator_count,), dtype=np.float32, buffer=self.shared_target.buf)
+            target_array = np.ndarray((self.actuator_count, ), dtype=np.float32, buffer=self.shared_target.buf)
             joint_controller.set_target_qpos(target_array.copy())
             with self.has_target.get_lock():
                 self.has_target.value = False
@@ -318,7 +335,7 @@ class CommandQueue:
     def update_current_position(self, q_s):
         if self.shared_current is not None:
             # Copy current position to shared memory
-            current_array = np.ndarray((self.actuator_count,), dtype=np.float32, buffer=self.shared_current.buf)
+            current_array = np.ndarray((self.actuator_count, ), dtype=np.float32, buffer=self.shared_current.buf)
             current_array[:] = q_s
             with self.is_updated.get_lock():
                 self.is_updated.value = True
@@ -326,11 +343,13 @@ class CommandQueue:
     @property
     def current_position(self):
         if self.shared_current is not None:
-            return np.ndarray((self.actuator_count,), dtype=np.float32, buffer=self.shared_current.buf).copy()
+            return np.ndarray((self.actuator_count, ), dtype=np.float32, buffer=self.shared_current.buf).copy()
         return None
 
 
 class KinovaAPI:
+    """Low-level interface to the Kinova arm hardware."""
+
     def __init__(self, ip):
         self.ip = ip
         self.tcp_connection = DeviceConnection(ip, _TCP_PORT, TCPTransport())
@@ -355,7 +374,7 @@ class KinovaAPI:
         self.actuator_config = ActuatorConfigClient(self.base.router)
         self.actuator_count = self.base.GetActuatorCount().count
 
-        self.device_manager = DeviceManagerClient(self.base.router)
+        device_manager = DeviceManagerClient(self.base.router)
         device_handles = self.device_manager.ReadAllDevices()
         self.actuator_device_ids = [
             handle.device_identifier for handle in device_handles.device_handle
@@ -394,7 +413,7 @@ class KinovaAPI:
         self.base_command = BaseCyclic_pb2.Command()
         self.current_command = np.zeros(self.actuator_count)
         for i in range(self.actuator_count):
-            self.base_command.actuators.add(flags = ActuatorCyclic_pb2.SERVO_ENABLE)
+            self.base_command.actuators.add(flags=ActuatorCyclic_pb2.SERVO_ENABLE)
             self.current_command[i] = self.base_feedback.actuators[i].current_motor
 
         return self
@@ -434,11 +453,12 @@ class KinovaAPI:
         np.deg2rad(q, out=q)
         np.deg2rad(dq, out=dq)
         np.negative(tau, out=tau)  # Raw torque readings are negative relative to actuator direction
-
         return q, dq, tau
 
 
 class KinovaController:
+    """High-level controller interface for the Kinova arm."""
+
     def __init__(self, ip):
         self.ip = ip
         self.control_process = None
@@ -528,6 +548,7 @@ class KinovaController:
                   output_ports=['status'],
                   output_props=['position', 'joint_positions', 'grip', 'metadata'])
 class Kinova(ir.ControlSystem):
+    """Main control system interface for the Kinova arm."""
 
     def __init__(self, ip):
         super().__init__()
