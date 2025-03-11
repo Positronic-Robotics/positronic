@@ -106,26 +106,35 @@
         }
 
         function updateInputSources(session, frame, refSpace) {
+          let controllers = {
+            left: null,
+            right: null
+          };
+
           for (let inputSource of session.inputSources) {
-            let targetRayPose = frame.getPose(inputSource.targetRaySpace, refSpace);
-            if (targetRayPose && inputSource.gripSpace && inputSource.handedness === 'right') {
+            if (inputSource.gripSpace && (inputSource.handedness === 'left' || inputSource.handedness === 'right')) {
               let gripPose = frame.getPose(inputSource.gripSpace, refSpace);
               if (gripPose) {
                 let pos = gripPose.transform.position;
                 let orient = gripPose.transform.orientation;
-                let buttons = inputSource.gamepad.buttons.map(button => button.value);
-                sendTrackingData(pos, orient, buttons);
+                let buttons = inputSource.gamepad ? inputSource.gamepad.buttons.map(button => button.value) : [];
+
+                controllers[inputSource.handedness] = {
+                  position: [pos.x, pos.y, pos.z],
+                  orientation: [orient.w, orient.x, orient.y, orient.z],
+                  buttons: buttons
+                };
               }
             }
           }
+
+          sendTrackingData(controllers);
         }
 
-        function sendTrackingData(pos, orient, buttons) {
+        function sendTrackingData(controllers) {
           if (websocket && websocket.readyState === WebSocket.OPEN) {
             let data = {
-              position: [pos.x, pos.y, pos.z],
-              orientation: [orient.w, orient.x, orient.y, orient.z],
-              buttons: buttons,
+              controllers: controllers,
               timestamp: Date.now()
             };
             websocket.send(JSON.stringify(data));

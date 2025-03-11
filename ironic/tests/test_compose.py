@@ -330,6 +330,27 @@ async def test_extend_composed_system_appends_output():
 
 
 @pytest.mark.asyncio
+async def test_extend_with_map_port_with_the_same_name_replaces_existing_output_port():
+    source = DataSource()
+    extended = extend(source, {'data': ir.utils.map_port(lambda x: x ** 2, source.outs.data)})
+
+    received = []
+
+    async def handler(message: ir.Message):
+        received.append(message.data)
+
+    extended.outs.data.subscribe(handler)
+
+    await extended.setup()
+
+    await extended.step()
+    await extended.step()
+    await extended.step()
+    await extended.step()
+    assert received == [0, 1, 4, 9]
+
+
+@pytest.mark.asyncio
 async def test_extend_composed_system_inputs_could_be_bound_after_extension():
     """Test extending a composed system with additional outputs"""
     source = DataSource()

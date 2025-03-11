@@ -13,19 +13,41 @@ import positronic.teleop
 
 
 @ir.config(port=5005)
-def webxr(port: int):
+def webxr(port: int, require_left: bool, require_right: bool):
     from positronic.webxr import WebXR
-    return WebXR(port=port)
+
+    async def _filter_none(data: dict):
+        if require_left and data['left'] is None:
+            return ir.NoValue
+        if require_right and data['right'] is None:
+            return ir.NoValue
+        return data
+
+    webxr = WebXR(port=port)
+    webxr = ir.extend(webxr, {
+        'transforms': ir.utils.map_port(_filter_none, webxr.outs.transforms),
+        'buttons': ir.utils.map_port(_filter_none, webxr.outs.buttons),
+    })
+
+    return webxr
 
 
-@ir.config(webxr=webxr, operator_position=positronic.teleop.FRANKA_FRONT_TRANSFORM, stream_to_webxr='first.image')
+webxr_both = webxr.override(require_left=True, require_right=True)
+webxr_left = webxr.override(require_left=True, require_right=False)
+webxr_right = webxr.override(require_left=False, require_right=True)
+
+
+@ir.config(webxr=webxr_right, operator_position=positronic.teleop.FRANKA_FRONT_TRANSFORM, stream_to_webxr='first.image')
 def teleop(webxr: ir.ControlSystem,
            operator_position: geom.Transform3D,
            stream_to_webxr: Optional[str] = None):
     teleop_cs = positronic.teleop.TeleopSystem(operator_position)
     components = [webxr, teleop_cs]
 
-    teleop_cs.bind(teleop_transform=webxr.outs.transform, teleop_buttons=webxr.outs.buttons)
+    teleop_cs.bind(
+        teleop_transform=ir.utils.map_port(lambda x: x['right'], webxr.outs.transforms),
+        teleop_buttons=ir.utils.map_port(lambda x: x['right'], webxr.outs.buttons),
+    )
 
     inputs = {'robot_position': (teleop_cs, 'robot_position'), 'images': None, 'robot_grip': None, 'robot_status': None}
 
