@@ -279,93 +279,6 @@ class JointCompliantController:
         return tau_task + tau_f
 
 
-class CommandQueue:
-    """Manages command queuing between processes for the Kinova arm."""
-
-    class Priority(Enum):
-        BLOCKING = 'blocking'
-        NON_BLOCKING = 'non-blocking'
-
-    def __init__(self):
-        self.target_qpos = None
-        self.has_target = mp.Value('b', False)
-        self.current_q_s = None
-        self.is_updated = mp.Value('b', False)
-        self.shared_target = None
-        self.shared_current = None
-        self.actuator_count = 7  # Default for Kinova Gen3
-
-        # Create shared memory for target and current joint positions
-        if self.shared_target is None:
-            self.shared_target = shared_memory.SharedMemory(create=True, size=self.actuator_count * 4)
-        if self.shared_current is None:
-            self.shared_current = shared_memory.SharedMemory(create=True, size=self.actuator_count * 4)
-
-        # Initialize with zeros
-        target_array = np.ndarray((self.actuator_count, ), dtype=np.float32, buffer=self.shared_target.buf)
-        target_array[:] = 0
-        current_array = np.ndarray((self.actuator_count, ), dtype=np.float32, buffer=self.shared_current.buf)
-        current_array[:] = 0
-
-        self.blocking_commands = deque()
-        self.non_blocking_commands = deque()
-
-    def cleanup(self):
-        # TODO: Signal that all the remaining commands are aborted
-        # Clean up shared memory
-        if self.shared_target is not None:
-            self.shared_target.close()
-            self.shared_target.unlink()
-            self.shared_target = None
-        if self.shared_current is not None:
-            self.shared_current.close()
-            self.shared_current.unlink()
-            self.shared_current = None
-
-    def set_target_qpos(self, qpos, priority, future):
-        if priority == CommandQueue.Priority.BLOCKING:
-            self.blocking_commands.append((qpos, future))
-        elif priority == CommandQueue.Priority.NON_BLOCKING:
-            self.non_blocking_commands.append((qpos, future))
-
-        # Copy the target to shared memory
-        target_array = np.ndarray((self.actuator_count, ), dtype=np.float32, buffer=self.shared_target.buf)
-        target_array[:] = qpos
-        with self.has_target.get_lock():
-            self.has_target.value = True
-
-    def has_new_target(self):
-        with self.has_target.get_lock():
-            return self.has_target.value
-
-    def consume_target(self, joint_controller):
-        # Temporary:
-        self.blocking_commands.clear()
-        self.non_blocking_commands.clear()
-        if self.has_new_target():
-            # Get target from shared memory
-            target_array = np.ndarray((self.actuator_count, ), dtype=np.float32, buffer=self.shared_target.buf)
-            joint_controller.set_target_qpos(target_array.copy())
-            with self.has_target.get_lock():
-                self.has_target.value = False
-            return True
-        return False
-
-    def update_current_position(self, q_s):
-        if self.shared_current is not None:
-            # Copy current position to shared memory
-            current_array = np.ndarray((self.actuator_count, ), dtype=np.float32, buffer=self.shared_current.buf)
-            current_array[:] = q_s
-            with self.is_updated.get_lock():
-                self.is_updated.value = True
-
-    @property
-    def current_position(self):
-        if self.shared_current is not None:
-            return np.ndarray((self.actuator_count, ), dtype=np.float32, buffer=self.shared_current.buf).copy()
-        return None
-
-
 class KinovaAPI:
     """Low-level interface to the Kinova arm hardware."""
 
@@ -476,81 +389,9 @@ class KinovaAPI:
         return q, dq, tau
 
 
-class KinovaController:
-    """High-level controller interface for the Kinova arm."""
-
-    def __init__(self, ip, relative_dynamics_factor=0.5):
-        self.ip = ip
-        self.control_process = None
-        self.stop_event = mp.Event()
-        self.command_queue = CommandQueue()
-        self.joint_controller = None
-        self.relative_dynamics_factor = relative_dynamics_factor
-
-    def __enter__(self):
-        self.control_process = mp.Process(target=self._control_loop)
-        self.control_process.start()
-        return self
-
-    def __exit__(self, *_):
-        self.stop_event.set()
-        if self.control_process and self.control_process.is_alive():
-            self.control_process.join(timeout=5.0)
-            if self.control_process.is_alive():
-                self.control_process.terminate()
-        self.command_queue.cleanup()
-
-    def _control_loop(self):
-        try:
-            # Set realtime scheduling priority
-            os.sched_setscheduler(0, os.SCHED_FIFO, os.sched_param(os.sched_get_priority_max(os.SCHED_FIFO)))
-            print("Successfully set realtime scheduling priority")
-        except (OSError, PermissionError) as e:
-            print(f"Warning: Could not set realtime scheduling priority: {e}")
-            print("Run `sudo setcap 'cap_sys_nice=eip' $(which python3)` to enable this")
-            print("Control loop will run with normal scheduling")
-
-        # Note: Torque commands are converted to current commands since
-        # Kinova's torque controller is unable to achieve commanded torques.
-        # See relevant GitHub issue: https://github.com/Kinovarobotics/kortex/issues/38
-        torque_constant = np.array([11.0, 11.0, 11.0, 11.0, 7.6, 7.6, 7.6])
-
-        with KinovaAPI(self.ip) as api:
-            fps = ir.utils.FPSCounter('Kinova')
-            last_ts = time.monotonic()
-
-            joint_controller = JointCompliantController(api.actuator_count, self.relative_dynamics_factor)
-            current_command = np.zeros(api.actuator_count, dtype=np.float32)
-            q, dq, tau = api.apply_current_command(None)  # Warm up
-            joint_controller.compute_torque(q, dq, tau)
-
-            while not self.stop_event.is_set() or not joint_controller.finished:
-                now_ts = time.monotonic()
-                step_time = now_ts - last_ts
-                if step_time > 0.005:  # 5 ms
-                    print(f'Warning: Step time {1000 * step_time:.3f} ms')
-
-                last_ts = now_ts
-
-                # Don't consume target if we're stopping, so as soon as we reach the target the loop stops
-                if self.command_queue.has_new_target() and not self.stop_event.is_set():
-                    self.command_queue.consume_target(joint_controller)
-
-                torque_command = joint_controller.compute_torque(q, dq, tau)
-                self.command_queue.update_current_position(joint_controller.q_s)
-                np.divide(torque_command, torque_constant, out=current_command)
-                q, dq, tau = api.apply_current_command(current_command)
-                fps.tick()
-
-    @property
-    def joints(self):
-        return self.command_queue.current_position
-
-    async def set_joints(self, joints, priority):
-        future = asyncio.get_running_loop().create_future()
-        self.command_queue.set_target_qpos(joints, priority, future)
-        return True  # Should be `return await future`
-
+class Priority(Enum):
+    BLOCKING = 'blocking'
+    NON_BLOCKING = 'non-blocking'
 
 
 @ir.ironic_system(input_ports=['target_position', 'reset', 'target_grip'],
@@ -562,37 +403,60 @@ class Kinova(ir.ControlSystem):
     def __init__(self, ip, relative_dynamics_factor=0.5):
         super().__init__()
         self._main_loop = None
-        self.kinova_controller = KinovaController(ip, relative_dynamics_factor=relative_dynamics_factor)
         self.solver = KinematicsSolver()
+
+        self.ip = ip
+        self.control_process = None
+        self.stop_event = mp.Event()
+        self.joint_controller = None
+        self.relative_dynamics_factor = relative_dynamics_factor
+
+        self.command_queue = mp.Queue()
+        self.shared_current = shared_memory.SharedMemory(create=True, size=7 * 4)
 
     async def setup(self):
         self._main_loop = asyncio.get_running_loop()
-        self.kinova_controller.__enter__()
+
+        self.control_process = mp.Process(target=self._control_loop, args=(self.command_queue,))
+        self.control_process.start()
+
+        # Wait for the control process to initialize
+        # self.last_joints = self.parent_conn.recv()
 
     async def cleanup(self):
-        self.kinova_controller.__exit__()
+        self.stop_event.set()
+        if self.control_process and self.control_process.is_alive():
+            self.control_process.join(timeout=5.0)
+            if self.control_process.is_alive():
+                self.control_process.terminate()
+
+        self.shared_current.close()
+        self.shared_current.unlink()
+        self.shared_current = None
 
     @ir.on_message('reset')
     async def handle_reset(self, _message: ir.Message):
         """Commands the robot to move to the home position."""
-        async def handle_status_transitions():
-            await self.outs.status.write(ir.Message(RobotStatus.RESETTING, ir.system_clock()))
-            await self.kinova_controller.set_joints(_Q_RETRACT, priority=CommandQueue.Priority.BLOCKING)
-            await asyncio.sleep(3.0)
-            await self.outs.status.write(ir.Message(RobotStatus.AVAILABLE, ir.system_clock()))
+        print('Resetting...')
+        self.command_queue.put(_Q_RETRACT)  # CommandQueue.Priority.BLOCKING
 
-        self._main_loop.create_task(handle_status_transitions())
+        # async def handle_status_transitions():
+        #     await self.outs.status.write(ir.Message(RobotStatus.RESETTING, ir.system_clock()))
+        #     await asyncio.sleep(3.0)
+        #     await self.outs.status.write(ir.Message(RobotStatus.AVAILABLE, ir.system_clock()))
+
+        # self._main_loop.create_task(handle_status_transitions())
 
     @ir.on_message('target_position')
     async def handle_target_position(self, message: ir.Message):
         """Handles a target position message."""
-        qpos = self.solver.inverse(message.data, self.kinova_controller.joints)
-        await self.kinova_controller.set_joints(qpos, CommandQueue.Priority.NON_BLOCKING)
+        qpos = self.solver.inverse(message.data, self._q)
+        self.command_queue.put(qpos)  # CommandQueue.Priority.NON_BLOCKING)
 
     @ir.out_property
     async def position(self):
         """End effector position in robot base coordinate frame."""
-        return ir.Message(self.solver.forward(self.kinova_controller.joints))
+        return ir.Message(self.solver.forward(self._q))
 
     @ir.on_message('target_grip')
     async def handle_target_grip(self, _message: ir.Message):
@@ -609,4 +473,58 @@ class Kinova(ir.ControlSystem):
     @ir.out_property
     async def joint_positions(self):
         """Current joint positions."""
-        return ir.Message(self.kinova_controller.joints)
+        return ir.Message(self._q)
+
+    @property
+    def _q(self):
+        return np.ndarray((7, ), dtype=np.float32, buffer=self.shared_current.buf).copy()
+
+    async def step(self):
+        while self.parent_conn.poll():
+            self.last_joints = self.parent_conn.recv()
+        return ir.State.ALIVE
+
+    def _control_loop(self, command_queue):
+        try:
+            # Set realtime scheduling priority
+            os.sched_setscheduler(0, os.SCHED_FIFO, os.sched_param(os.sched_get_priority_max(os.SCHED_FIFO)))
+            print("Successfully set realtime scheduling priority")
+        except (OSError, PermissionError) as e:
+            print(f"Warning: Could not set realtime scheduling priority: {e}")
+            print("Run `sudo setcap 'cap_sys_nice=eip' $(which python3)` to enable this")
+            print("Control loop will run with normal scheduling")
+
+        # Note: Torque commands are converted to current commands since
+        # Kinova's torque controller is unable to achieve commanded torques.
+        # See relevant GitHub issue: https://github.com/Kinovarobotics/kortex/issues/38
+        torque_constant = np.array([11.0, 11.0, 11.0, 11.0, 7.6, 7.6, 7.6])
+        current_array = np.ndarray((7, ), dtype=np.float32, buffer=self.shared_current.buf)
+
+        with KinovaAPI(self.ip) as api:
+            fps = ir.utils.FPSCounter('Kinova', report_every_sec=3.0)
+            last_ts = time.monotonic()
+
+            joint_controller = JointCompliantController(api.actuator_count, self.relative_dynamics_factor)
+            current_command = np.zeros(api.actuator_count, dtype=np.float32)
+            q, dq, tau = api.apply_current_command(None)  # Warm up
+            joint_controller.compute_torque(q, dq, tau)
+            # child_conn.send(joint_controller.q_s)
+
+            while not self.stop_event.is_set() or not joint_controller.finished:
+                now_ts = time.monotonic()
+                step_time = now_ts - last_ts
+                if step_time > 0.005:  # 5 ms
+                    print(f'Warning: Step time {1000 * step_time:.3f} ms')
+
+                last_ts = now_ts
+
+                # Don't consume target if we're stopping, so as soon as we reach the target the loop stops
+                while not command_queue.empty() and not self.stop_event.is_set():
+                    qpos = command_queue.get()
+                    joint_controller.set_target_qpos(qpos)
+
+                torque_command = joint_controller.compute_torque(q, dq, tau)
+                current_array[:] = joint_controller.q_s
+                np.divide(torque_command, torque_constant, out=current_command)
+                q, dq, tau = api.apply_current_command(current_command)
+                fps.tick()
