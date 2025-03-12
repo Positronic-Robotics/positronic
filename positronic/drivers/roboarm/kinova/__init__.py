@@ -40,7 +40,7 @@ from kortex_api.UDPTransport import UDPTransport
 
 import geom
 import ironic as ir
-from ..status import RobotStatus
+from positronic.drivers.roboarm.status import RobotStatus
 
 _TCP_PORT = 10000
 _UDP_PORT = 10001
@@ -240,10 +240,10 @@ class JointCompliantController:
             self.otg = Ruckig(self.actuator_count, _DT)
             self.otg_inp = InputParameter(self.actuator_count)
             self.otg_out = OutputParameter(self.actuator_count)
-            self.otg_inp.max_velocity = 4 * [math.radians(80 * self.relative_dynamics_factor)] + \
-                                         3 * [math.radians(140 * self.relative_dynamics_factor)]
-            self.otg_inp.max_acceleration = 4 * [math.radians(240 * self.relative_dynamics_factor)] + \
-                                            3 * [math.radians(450 * self.relative_dynamics_factor)]
+            self.otg_inp.max_velocity = (4 * [math.radians(80 * self.relative_dynamics_factor)] +
+                                         3 * [math.radians(140 * self.relative_dynamics_factor)])
+            self.otg_inp.max_acceleration = (4 * [math.radians(240 * self.relative_dynamics_factor)] +
+                                             3 * [math.radians(450 * self.relative_dynamics_factor)])
             self.otg_inp.current_position = q.copy()
             self.otg_inp.current_velocity = dq.copy()
             self.otg_inp.target_position = q.copy()

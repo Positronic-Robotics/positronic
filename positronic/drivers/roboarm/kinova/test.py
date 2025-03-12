@@ -1,9 +1,5 @@
 import asyncio
-import time
 
-import numpy as np
-
-import geom
 from positronic.cfg.ui import stub
 from positronic.drivers.roboarm.kinova import Kinova
 import ironic as ir

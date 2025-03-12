@@ -3,7 +3,7 @@
 import asyncio
 from collections import deque
 import time
-from typing import List, Optional
+from typing import List
 
 import numpy as np
 
@@ -37,9 +37,7 @@ webxr_right = webxr.override(require_left=False, require_right=True)
 
 
 @ir.config(webxr=webxr_right, operator_position=positronic.teleop.FRANKA_FRONT_TRANSFORM, stream_to_webxr='first.image')
-def teleop(webxr: ir.ControlSystem,
-           operator_position: geom.Transform3D,
-           stream_to_webxr: Optional[str] = None):
+def teleop(webxr: ir.ControlSystem, operator_position: geom.Transform3D, stream_to_webxr: str | None = None):
     teleop_cs = positronic.teleop.TeleopSystem(operator_position)
     components = [webxr, teleop_cs]
 
@@ -72,7 +70,7 @@ def spacemouse(translation_speed: float, rotation_speed: float, translation_dead
 
 
 @ir.config(tracking=teleop, extra_ui_camera_names=['handcam_back', 'handcam_front', 'front_view', 'back_view'])
-def teleop_with_ui(tracking: ir.ControlSystem, extra_ui_camera_names: Optional[List[str]]):
+def teleop_with_ui(tracking: ir.ControlSystem, extra_ui_camera_names: List[str] | None):
     if extra_ui_camera_names:
         from positronic.simulator.mujoco.mujoco_gui import DearpyguiUi
         gui = DearpyguiUi(extra_ui_camera_names)
@@ -96,8 +94,8 @@ def dearpygui_ui(camera_names: List[str]):
     return DearpyguiUi(camera_names)
 
 
-@ir.config
-def stub(time_len_sec: float = 5.0):
+@ir.config(time_len_sec=5.0)
+def stub(time_len_sec: float):  # noqa: C901  Function is too complex
 
     @ir.ironic_system(
         input_props=["robot_position"],
