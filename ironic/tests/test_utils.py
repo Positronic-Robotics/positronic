@@ -139,3 +139,29 @@ async def test_print_port(capfd):
     out, err = capfd.readouterr()
     assert out == 'test_port: first msg\ntest_port: second msg\n'
     assert err == ''
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("test_value", [
+    42,  # simple integer
+    {"key": "value"},  # dictionary
+    [1, 2, 3],  # list
+    (4, 5, 6),  # tuple
+    "test string",  # string
+    None,  # None
+    {"complex": [1, 2, 3], "nested": {"data": True}},  # nested structure
+])
+async def test_const_property(test_value):
+    prop = ir.utils.const_property(test_value)
+
+    # Test multiple calls to ensure consistency
+    message1 = await prop()
+    message2 = await prop()
+
+    # Verify the data is correct
+    assert message1.data == test_value
+    assert message2.data == test_value
+
+    # Verify we get Message instances
+    assert isinstance(message1, ir.Message)
+    assert isinstance(message2, ir.Message)

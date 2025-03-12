@@ -36,7 +36,7 @@ franka_ik = franka_default.override(ip="172.168.0.2",
                                     cartesian_mode="POSITRONIC")
 
 
-@ir.config(ip="192.168.1.10")
-def kinova(ip: str):
+@ir.config(ip="192.168.1.10", relative_dynamics_factor=0.5)
+def kinova(ip: str, relative_dynamics_factor: float ):
     from positronic.drivers.roboarm.kinova import Kinova
-    return Kinova(ip)
+    return Kinova(ip, relative_dynamics_factor)

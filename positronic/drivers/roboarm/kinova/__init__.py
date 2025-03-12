@@ -12,6 +12,8 @@
 # Go to https://artifactory.kinovaapps.com/ui/native/generic-public/kortex/API/2.7.0/
 # Download the wheel file and install it using pip install kortex_api-2.7.0-py3-none-any.whl
 
+from collections import deque
+from enum import Enum
 import math
 import threading
 import time
@@ -97,7 +99,7 @@ class DeviceConnection:
         self.transport.disconnect()
 
 
-class Solver:
+class KinematicsSolver:
     """Solves forward and inverse kinematics for the Kinova arm."""
 
     def __init__(self, ee_offset=0.0):
@@ -188,7 +190,7 @@ class JointCompliantController:
             self.y = self.alpha * x + (1 - self.alpha) * self.y
             return self.y
 
-    def __init__(self, actuator_count):
+    def __init__(self, actuator_count, relative_dynamics_factor=0.5):
         self.q_s = None
         self.q_d = None
         self.dq_d = None
@@ -201,6 +203,7 @@ class JointCompliantController:
         self.otg_inp = None
         self.otg_out = None
         self.otg_res = None
+        self.relative_dynamics_factor = relative_dynamics_factor
 
         self.target_qpos = None
 
@@ -237,9 +240,10 @@ class JointCompliantController:
             self.otg = Ruckig(self.actuator_count, _DT)
             self.otg_inp = InputParameter(self.actuator_count)
             self.otg_out = OutputParameter(self.actuator_count)
-            coeff = 0.5
-            self.otg_inp.max_velocity = 4 * [math.radians(80 * coeff)] + 3 * [math.radians(140 * coeff)]
-            self.otg_inp.max_acceleration = 4 * [math.radians(240 * coeff)] + 3 * [math.radians(450 * coeff)]
+            self.otg_inp.max_velocity = 4 * [math.radians(80 * self.relative_dynamics_factor)] + \
+                                         3 * [math.radians(140 * self.relative_dynamics_factor)]
+            self.otg_inp.max_acceleration = 4 * [math.radians(240 * self.relative_dynamics_factor)] + \
+                                            3 * [math.radians(450 * self.relative_dynamics_factor)]
             self.otg_inp.current_position = q.copy()
             self.otg_inp.current_velocity = dq.copy()
             self.otg_inp.target_position = q.copy()
@@ -278,6 +282,10 @@ class JointCompliantController:
 class CommandQueue:
     """Manages command queuing between processes for the Kinova arm."""
 
+    class Priority(Enum):
+        BLOCKING = 'blocking'
+        NON_BLOCKING = 'non-blocking'
+
     def __init__(self):
         self.target_qpos = None
         self.has_target = mp.Value('b', False)
@@ -289,8 +297,7 @@ class CommandQueue:
 
         # Create shared memory for target and current joint positions
         if self.shared_target is None:
-            self.shared_target = shared_memory.SharedMemory(create=True,
-                                                            size=self.actuator_count * 4)  # 4 bytes per float32
+            self.shared_target = shared_memory.SharedMemory(create=True, size=self.actuator_count * 4)
         if self.shared_current is None:
             self.shared_current = shared_memory.SharedMemory(create=True, size=self.actuator_count * 4)
 
@@ -300,7 +307,11 @@ class CommandQueue:
         current_array = np.ndarray((self.actuator_count, ), dtype=np.float32, buffer=self.shared_current.buf)
         current_array[:] = 0
 
+        self.blocking_commands = deque()
+        self.non_blocking_commands = deque()
+
     def cleanup(self):
+        # TODO: Signal that all the remaining commands are aborted
         # Clean up shared memory
         if self.shared_target is not None:
             self.shared_target.close()
@@ -311,7 +322,12 @@ class CommandQueue:
             self.shared_current.unlink()
             self.shared_current = None
 
-    def set_target_qpos(self, qpos):
+    def set_target_qpos(self, qpos, priority, future):
+        if priority == CommandQueue.Priority.BLOCKING:
+            self.blocking_commands.append((qpos, future))
+        elif priority == CommandQueue.Priority.NON_BLOCKING:
+            self.non_blocking_commands.append((qpos, future))
+
         # Copy the target to shared memory
         target_array = np.ndarray((self.actuator_count, ), dtype=np.float32, buffer=self.shared_target.buf)
         target_array[:] = qpos
@@ -323,6 +339,9 @@ class CommandQueue:
             return self.has_target.value
 
     def consume_target(self, joint_controller):
+        # Temporary:
+        self.blocking_commands.clear()
+        self.non_blocking_commands.clear()
         if self.has_new_target():
             # Get target from shared memory
             target_array = np.ndarray((self.actuator_count, ), dtype=np.float32, buffer=self.shared_target.buf)
@@ -364,7 +383,7 @@ class KinovaAPI:
         self.current_limit_max = np.array([10.0, 10.0, 10.0, 10.0, 6.0, 6.0, 6.0])
         self.current_limit_min = -self.current_limit_max
 
-        self.base_feedback, self.base_command, self.current_command = None, None, None
+        self.base_feedback, self.base_command = None, None
 
     def __enter__(self):
         tcp_router = self.tcp_connection.__enter__()
@@ -411,10 +430,8 @@ class KinovaAPI:
 
         self.base_feedback = self.base_cyclic.RefreshFeedback()
         self.base_command = BaseCyclic_pb2.Command()
-        self.current_command = np.zeros(self.actuator_count)
         for i in range(self.actuator_count):
             self.base_command.actuators.add(flags=ActuatorCyclic_pb2.SERVO_ENABLE)
-            self.current_command[i] = self.base_feedback.actuators[i].current_motor
 
         return self
 
@@ -433,11 +450,14 @@ class KinovaAPI:
         self.udp_connection.__exit__()
 
     def apply_current_command(self, current_command):
-        np.clip(current_command, self.current_limit_min, self.current_limit_max, out=current_command)
+        if current_command is not None:
+            np.clip(current_command, self.current_limit_min, self.current_limit_max, out=current_command)
+
         # Increment frame ID to ensure actuators can reject out-of-order frames
         self.base_command.frame_id = (self.base_command.frame_id + 1) % 65536
         for i in range(self.actuator_count):
-            self.base_command.actuators[i].current_motor = current_command[i]
+            self.base_command.actuators[i].current_motor = (current_command[i] if current_command is not None else
+                                                            self.base_feedback.actuators[i].current_motor)
             self.base_command.actuators[i].position = self.base_feedback.actuators[i].position
             self.base_command.actuators[i].command_id = self.base_command.frame_id
 
@@ -459,12 +479,13 @@ class KinovaAPI:
 class KinovaController:
     """High-level controller interface for the Kinova arm."""
 
-    def __init__(self, ip):
+    def __init__(self, ip, relative_dynamics_factor=0.5):
         self.ip = ip
         self.control_process = None
         self.stop_event = mp.Event()
         self.command_queue = CommandQueue()
         self.joint_controller = None
+        self.relative_dynamics_factor = relative_dynamics_factor
 
     def __enter__(self):
         self.control_process = mp.Process(target=self._control_loop)
@@ -480,15 +501,13 @@ class KinovaController:
         self.command_queue.cleanup()
 
     def _control_loop(self):
-        print('Starting Kinova control process')
-
         try:
             # Set realtime scheduling priority
-            # Run `sudo setcap 'cap_sys_nice=eip' $(which python3)` to enable this
             os.sched_setscheduler(0, os.SCHED_FIFO, os.sched_param(os.sched_get_priority_max(os.SCHED_FIFO)))
             print("Successfully set realtime scheduling priority")
         except (OSError, PermissionError) as e:
             print(f"Warning: Could not set realtime scheduling priority: {e}")
+            print("Run `sudo setcap 'cap_sys_nice=eip' $(which python3)` to enable this")
             print("Control loop will run with normal scheduling")
 
         # Note: Torque commands are converted to current commands since
@@ -500,48 +519,38 @@ class KinovaController:
             fps = ir.utils.FPSCounter('Kinova')
             last_ts = time.monotonic()
 
-            joint_controller = JointCompliantController(api.actuator_count)
-            queue = self.command_queue  # Avoid dictionary lookups in hot loop
-
-            q, dq, tau = api.apply_current_command(api.current_command)  # Warm up
+            joint_controller = JointCompliantController(api.actuator_count, self.relative_dynamics_factor)
+            current_command = np.zeros(api.actuator_count, dtype=np.float32)
+            q, dq, tau = api.apply_current_command(None)  # Warm up
             joint_controller.compute_torque(q, dq, tau)
 
-            while not self.stop_event.is_set():
+            while not self.stop_event.is_set() or not joint_controller.finished:
                 now_ts = time.monotonic()
                 step_time = now_ts - last_ts
                 if step_time > 0.005:  # 5 ms
                     print(f'Warning: Step time {1000 * step_time:.3f} ms')
 
-                if True or step_time >= 0.0005:  # TODO: Do we really need this check?
-                    last_ts = now_ts
+                last_ts = now_ts
 
-                    if queue.has_new_target():
-                        queue.consume_target(joint_controller)
+                # Don't consume target if we're stopping, so as soon as we reach the target the loop stops
+                if self.command_queue.has_new_target() and not self.stop_event.is_set():
+                    self.command_queue.consume_target(joint_controller)
 
-                    torque_command = joint_controller.compute_torque(q, dq, tau)
-                    queue.update_current_position(joint_controller.q_s.copy())
-                    current_command = np.divide(torque_command, torque_constant)
-                    q, dq, tau = api.apply_current_command(current_command)
-                    fps.tick()
-
-            # Graceful shutdown
-            print("Starting graceful shutdown of control process")
-            start_ts = time.monotonic()
-            while not joint_controller.finished and time.monotonic() - start_ts < 5.0:
                 torque_command = joint_controller.compute_torque(q, dq, tau)
-                queue.update_current_position(joint_controller.q_s.copy())
-                current_command = np.divide(torque_command, torque_constant)
+                self.command_queue.update_current_position(joint_controller.q_s)
+                np.divide(torque_command, torque_constant, out=current_command)
                 q, dq, tau = api.apply_current_command(current_command)
                 fps.tick()
-
-        print(f'Finished in {time.monotonic() - start_ts:.3f} s')
 
     @property
     def joints(self):
         return self.command_queue.current_position
 
-    def set_joints(self, joints):
-        self.command_queue.set_target_qpos(joints)
+    async def set_joints(self, joints, priority):
+        future = asyncio.get_running_loop().create_future()
+        self.command_queue.set_target_qpos(joints, priority, future)
+        return True  # Should be `return await future`
+
 
 
 @ir.ironic_system(input_ports=['target_position', 'reset', 'target_grip'],
@@ -550,11 +559,11 @@ class KinovaController:
 class Kinova(ir.ControlSystem):
     """Main control system interface for the Kinova arm."""
 
-    def __init__(self, ip):
+    def __init__(self, ip, relative_dynamics_factor=0.5):
         super().__init__()
         self._main_loop = None
-        self.kinova_controller = KinovaController(ip)
-        self.solver = Solver()
+        self.kinova_controller = KinovaController(ip, relative_dynamics_factor=relative_dynamics_factor)
+        self.solver = KinematicsSolver()
 
     async def setup(self):
         self._main_loop = asyncio.get_running_loop()
@@ -566,32 +575,19 @@ class Kinova(ir.ControlSystem):
     @ir.on_message('reset')
     async def handle_reset(self, _message: ir.Message):
         """Commands the robot to move to the home position."""
-        start_reset_future = self._main_loop.create_future()
-        reset_done_future = self._main_loop.create_future()
-
-        def _internal_reset():
-            # Signal we're starting the reset
-            self._main_loop.call_soon_threadsafe(lambda: start_reset_future.set_result(True))
-            self.kinova_controller.set_joints(_Q_RETRACT)
-
-            time.sleep(5.0)  # TODO: Organise proper waiting inside the controller
-            self._main_loop.call_soon_threadsafe(lambda: reset_done_future.set_result(True))
-
         async def handle_status_transitions():
-            await start_reset_future
             await self.outs.status.write(ir.Message(RobotStatus.RESETTING, ir.system_clock()))
-
-            await reset_done_future
+            await self.kinova_controller.set_joints(_Q_RETRACT, priority=CommandQueue.Priority.BLOCKING)
+            await asyncio.sleep(3.0)
             await self.outs.status.write(ir.Message(RobotStatus.AVAILABLE, ir.system_clock()))
 
         self._main_loop.create_task(handle_status_transitions())
-        threading.Thread(target=_internal_reset, daemon=True).start()
 
     @ir.on_message('target_position')
     async def handle_target_position(self, message: ir.Message):
         """Handles a target position message."""
         qpos = self.solver.inverse(message.data, self.kinova_controller.joints)
-        self.kinova_controller.set_joints(qpos)
+        await self.kinova_controller.set_joints(qpos, CommandQueue.Priority.NON_BLOCKING)
 
     @ir.out_property
     async def position(self):
@@ -614,6 +610,3 @@ class Kinova(ir.ControlSystem):
     async def joint_positions(self):
         """Current joint positions."""
         return ir.Message(self.kinova_controller.joints)
-
-    async def step(self) -> ir.State:
-        return await super().step()

@@ -20,11 +20,11 @@ def _state_mapping(env: ir.ControlSystem):
 
 
 @ir.config(camera=None)
-def roboarm(arm: ir.ControlSystem, camera: Optional[ir.ControlSystem]):
+def roboarm(arm: ir.ControlSystem, camera: ir.ControlSystem | None = None):
     components = [arm]
     inputs = {'target_position': (arm, 'target_position'), 'reset': (arm, 'reset'), 'target_grip': (arm, 'target_grip')}
 
-    outputs = arm.output_mappings | {'frame': ir.OutputPort.Stub()}
+    outputs = {**arm.output_mappings, 'frame': ir.OutputPort.Stub()}
     if camera is not None:
         components.append(camera)
         outputs['frame'] = camera.outs.frame
