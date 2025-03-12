@@ -119,7 +119,9 @@ def stub(time_len_sec: float = 5.0):
             await self.outs.start_recording.write(ir.Message(None))
 
         async def _send_target(self, time_sec):
-            translation = self.start_pos.translation + np.array([0, 0.1, 0.1]) * np.sin(time_sec * (2 * np.pi) / 10)
+            w = time_sec * (2 * np.pi) / 10
+            delta = np.array([0, np.sin(w), np.cos(w)])
+            translation = self.start_pos.translation + delta * 0.1
             rotation = self.start_pos.rotation
             await asyncio.gather(
                 self.outs.robot_target_position.write(ir.Message(geom.Transform3D(translation, rotation))),
@@ -128,13 +130,23 @@ def stub(time_len_sec: float = 5.0):
         async def _stop_recording(self, _):
             await self.outs.stop_recording.write(ir.Message(None))
 
+        async def _reset(self, _):
+            await self.outs.reset.write(ir.Message(None))
+
         async def setup(self):
-            time_sec = 0.1
+            self.events.append((0.0, self._reset))
+            time_sec = 3.0
             self.events.append((time_sec, self._start_recording))
             while time_sec < self.time_len_sec:
                 self.events.append((time_sec, self._send_target))
                 time_sec += 0.1
             self.events.append((time_sec, self._stop_recording))
+
+            time_sec += 0.5
+            self.events.append((time_sec, self._reset))
+
+            time_sec += 2
+            self.events.append((time_sec, None))  # Wait for reset to finish
 
             self.start_time = time.monotonic()
 
@@ -143,7 +155,8 @@ def stub(time_len_sec: float = 5.0):
 
             while self.events and self.events[0][0] < current_time:
                 time_sec, callback = self.events.popleft()
-                await callback(time_sec)
+                if callback is not None:
+                    await callback(time_sec)
 
             return ir.State.FINISHED if not self.events else ir.State.ALIVE
 

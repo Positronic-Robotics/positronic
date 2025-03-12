@@ -389,16 +389,20 @@ class KinovaAPI:
         return q, dq, tau
 
 
-class Priority(Enum):
-    BLOCKING = 'blocking'
-    NON_BLOCKING = 'non-blocking'
-
-
 @ir.ironic_system(input_ports=['target_position', 'reset', 'target_grip'],
                   output_ports=['status'],
                   output_props=['position', 'joint_positions', 'grip', 'metadata'])
 class Kinova(ir.ControlSystem):
     """Main control system interface for the Kinova arm."""
+
+    class Priority(Enum):
+        BLOCKING = 'blocking'
+        NON_BLOCKING = 'non-blocking'
+
+    class Status(Enum):
+        RUNNING = 'running'
+        FINISHED = 'finished'
+        ABORTED = 'aborted'
 
     def __init__(self, ip, relative_dynamics_factor=0.5):
         super().__init__()
@@ -413,15 +417,15 @@ class Kinova(ir.ControlSystem):
 
         self.command_queue = mp.Queue()
         self.shared_current = shared_memory.SharedMemory(create=True, size=7 * 4)
+        self.command_finished = mp.Value('b', False)
+
+        self.blocking_queue = deque()
+        self.non_blocking_command = None
+        self.running_command = None
 
     async def setup(self):
-        self._main_loop = asyncio.get_running_loop()
-
-        self.control_process = mp.Process(target=self._control_loop, args=(self.command_queue,))
+        self.control_process = mp.Process(target=self._control_loop, args=(self.command_queue, ))
         self.control_process.start()
-
-        # Wait for the control process to initialize
-        # self.last_joints = self.parent_conn.recv()
 
     async def cleanup(self):
         self.stop_event.set()
@@ -437,21 +441,21 @@ class Kinova(ir.ControlSystem):
     @ir.on_message('reset')
     async def handle_reset(self, _message: ir.Message):
         """Commands the robot to move to the home position."""
-        print('Resetting...')
-        self.command_queue.put(_Q_RETRACT)  # CommandQueue.Priority.BLOCKING
+        reset_future = asyncio.get_running_loop().create_future()
+        self._submit_command(_Q_RETRACT, self.Priority.BLOCKING, reset_future)
 
-        # async def handle_status_transitions():
-        #     await self.outs.status.write(ir.Message(RobotStatus.RESETTING, ir.system_clock()))
-        #     await asyncio.sleep(3.0)
-        #     await self.outs.status.write(ir.Message(RobotStatus.AVAILABLE, ir.system_clock()))
+        async def handle_status_transitions():
+            await self.outs.status.write(ir.Message(RobotStatus.RESETTING, ir.system_clock()))
+            await reset_future
+            await self.outs.status.write(ir.Message(RobotStatus.AVAILABLE, ir.system_clock()))
 
-        # self._main_loop.create_task(handle_status_transitions())
+        asyncio.get_running_loop().create_task(handle_status_transitions())
 
     @ir.on_message('target_position')
     async def handle_target_position(self, message: ir.Message):
         """Handles a target position message."""
         qpos = self.solver.inverse(message.data, self._q)
-        self.command_queue.put(qpos)  # CommandQueue.Priority.NON_BLOCKING)
+        self._submit_command(qpos, self.Priority.NON_BLOCKING, None)
 
     @ir.out_property
     async def position(self):
@@ -480,9 +484,45 @@ class Kinova(ir.ControlSystem):
         return np.ndarray((7, ), dtype=np.float32, buffer=self.shared_current.buf).copy()
 
     async def step(self):
-        while self.parent_conn.poll():
-            self.last_joints = self.parent_conn.recv()
+        finished = False
+        with self.command_finished.get_lock():
+            if self.command_finished.value and self.running_command is not None:
+                finished = True
+                self.command_finished.value = False
+
+        if finished:
+            future = self.running_command[2]
+            if future is not None:
+                future.set_result(Kinova.Status.FINISHED)  # TODO: Better status
+            self.running_command = None
+
+        has_new_commands = len(self.blocking_queue) > 0 or self.non_blocking_command is not None
+        if self.running_command is not None:
+            _, priority, running_future = self.running_command
+            if priority == self.Priority.NON_BLOCKING and has_new_commands:
+                if running_future is not None:
+                    running_future.set_result(Kinova.Status.ABORTED)
+                self.running_command = None
+
+        if self.running_command is None and has_new_commands:
+            if self.blocking_queue:
+                qpos, future = self.blocking_queue.popleft()
+                self.running_command = qpos, self.Priority.BLOCKING, future
+                self.command_queue.put(qpos)
+            elif self.non_blocking_command is not None:
+                qpos, future = self.non_blocking_command
+                self.non_blocking_command = None
+                self.running_command = qpos, self.Priority.NON_BLOCKING, future
+                self.command_queue.put(qpos)
+
         return ir.State.ALIVE
+
+    def _submit_command(self, qpos, priority, future):
+        self.non_blocking_command = None
+        if priority == self.Priority.BLOCKING:
+            self.blocking_queue.append((qpos, future))
+        else:
+            self.non_blocking_command = (qpos, future)
 
     def _control_loop(self, command_queue):
         try:
@@ -502,20 +542,19 @@ class Kinova(ir.ControlSystem):
 
         with KinovaAPI(self.ip) as api:
             fps = ir.utils.FPSCounter('Kinova', report_every_sec=3.0)
-            last_ts = time.monotonic()
 
             joint_controller = JointCompliantController(api.actuator_count, self.relative_dynamics_factor)
             current_command = np.zeros(api.actuator_count, dtype=np.float32)
+
+            last_ts = time.monotonic()
             q, dq, tau = api.apply_current_command(None)  # Warm up
             joint_controller.compute_torque(q, dq, tau)
-            # child_conn.send(joint_controller.q_s)
 
             while not self.stop_event.is_set() or not joint_controller.finished:
                 now_ts = time.monotonic()
                 step_time = now_ts - last_ts
                 if step_time > 0.005:  # 5 ms
                     print(f'Warning: Step time {1000 * step_time:.3f} ms')
-
                 last_ts = now_ts
 
                 # Don't consume target if we're stopping, so as soon as we reach the target the loop stops
@@ -527,4 +566,9 @@ class Kinova(ir.ControlSystem):
                 current_array[:] = joint_controller.q_s
                 np.divide(torque_command, torque_constant, out=current_command)
                 q, dq, tau = api.apply_current_command(current_command)
+
+                if joint_controller.finished:
+                    with self.command_finished.get_lock():
+                        self.command_finished.value = True
+
                 fps.tick()
