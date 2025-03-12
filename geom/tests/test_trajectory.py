@@ -31,6 +31,7 @@ def absolute_trajectory():
     ]
     return AbsoluteTrajectory(absolute_positions)
 
+
 @pytest.fixture
 def absolute_trajectory_with_start_position():
     absolute_positions = [
@@ -42,6 +43,7 @@ def absolute_trajectory_with_start_position():
         geom.Transform3D(translation=np.array([2, 2, 4])),
     ]
     return AbsoluteTrajectory(absolute_positions)
+
 
 @pytest.fixture
 def relative_trajectory():
@@ -110,4 +112,3 @@ def test_cycle_consistency_twice_produces_original_trajectory(absolute_trajector
 
     for expected, actual in zip(absolute_trajectory, restored):
         np.testing.assert_allclose(expected.as_matrix, actual.as_matrix, atol=1e-6)
-

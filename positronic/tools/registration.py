@@ -16,11 +16,20 @@ from positronic.policy_runner import PolicyRunnerSystem
 
 def _polt_trajectory(trajectory: AbsoluteTrajectory, name: str, color: List[int] = [255, 0, 0, 255]):
     points = []
+
     for idx, pos in enumerate(trajectory):
         rr.set_time_sequence("trajectory", idx)
         points.append(pos.translation)
 
-    rr.log(f"trajectory/{name}", rr.Points3D(positions=np.array(points), radii=np.array([0.005]), colors=np.array([color])))
+    rr.log(
+        f"trajectory/{name}",
+        rr.Points3D(
+            positions=np.array(points),
+            radii=np.array([0.005]),
+            colors=np.array([color]),
+        ),
+    )
+
 
 # Arbitrary trajectory for registration
 WAYPOINTS = RelativeTrajectory([
@@ -81,6 +90,7 @@ def umi_relative(left_position: AbsoluteTrajectory, right_position: AbsoluteTraj
         result.append(transform)
 
     return RelativeTrajectory(result)
+
 
 @ir.ironic_system(
     input_ports=['start', 'webxr_position'],
@@ -251,8 +261,10 @@ async def perform_registration(
 async def main():
     await perform_registration.override_and_instantiate()
 
+
 def sync_main():
     asyncio.run(main())
+
 
 if __name__ == "__main__":
     fire.Fire(sync_main)

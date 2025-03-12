@@ -1,6 +1,10 @@
 import ironic as ir
 import geom
 
+# registration transform for the last gripper
+# TODO: remove in the next PR
+GRIPPER_REGISTRATION = geom.Rotation.from_quat([-0.08239932, -0.30107228, -0.51230549,  0.80006807])
+
 
 @ir.ironic_system(
     input_ports=['tracker_position', 'target_grip'],
@@ -15,9 +19,6 @@ class UmiCS(ir.ControlSystem):
 
     @ir.out_property
     async def ee_position(self):
-        # registration transform for the last gripper
-        # TODO: remove in the next PR
-        reg = geom.Rotation.from_quat([-0.08239932, -0.30107228, -0.51230549,  0.80006807])
         # TODO: here we will put registered robot position
         return ir.Message(data=self.tracker_position, timestamp=ir.system_clock())
 
