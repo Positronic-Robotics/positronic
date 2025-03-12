@@ -135,7 +135,7 @@ class WebXR(ir.ControlSystem):
         """Start the WebXR server process"""
         self.server_process = multiprocessing.Process(
             target=run_server,
-            args=(self.data_queue, self.frame_queue, self.port, self.ssl_keyfile, self.ssl_certfile)
+            args=(self.data_queue, self.frame_queue, self.port, self.ssl_keyfile, self.ssl_certfile),
         )
         self.server_process.start()
 

@@ -14,7 +14,7 @@ import positronic.cfg.hardware.roboarms
 from positronic.policy_runner import PolicyRunnerSystem
 
 
-def polt_trajectory(trajectory: AbsoluteTrajectory, name: str, color: List[int] = [255, 0, 0, 255]):
+def _polt_trajectory(trajectory: AbsoluteTrajectory, name: str, color: List[int] = [255, 0, 0, 255]):
     points = []
     for idx, pos in enumerate(trajectory):
         rr.set_time_sequence("trajectory", idx)
@@ -22,46 +22,35 @@ def polt_trajectory(trajectory: AbsoluteTrajectory, name: str, color: List[int] 
 
     rr.log(f"trajectory/{name}", rr.Points3D(positions=np.array(points), radii=np.array([0.005]), colors=np.array([color])))
 
-
-def interpol(xyz, k: int = 100):
-    a = []
-
-    xyz = np.array(xyz)
-
-    for _ in range(k):
-        a.append(geom.Transform3D(translation=xyz / k))
-
-    return a
-
-
+# Arbitrary trajectory for registration
 WAYPOINTS = RelativeTrajectory([
     # Initial joint configuration is handled separately
-    *interpol([0.0, 0.0, 0.2]),
+    geom.Transform3D(translation=[0.0, 0.0, 0.2]),
     # YX plane triangle 0.2 side
-    *interpol([0.0, 0.2, 0.0]),
-    *interpol([-0.2, 0.0, 0.0]),
-    *interpol([0.2, -0.2, 0.0]),
+    geom.Transform3D(translation=[0.0, 0.2, 0.0]),
+    geom.Transform3D(translation=[-0.2, 0.0, 0.0]),
+    geom.Transform3D(translation=[0.2, -0.2, 0.0]),
 
     # XY plane square 0.15 side
-    *interpol([-0.15, 0.0, 0.0]),
-    *interpol([0.0, -0.15, 0.0]),
-    *interpol([0.15, 0.0, 0.0]),
-    *interpol([0.0, 0.15, 0.0]),
+    geom.Transform3D(translation=[-0.15, 0.0, 0.0]),
+    geom.Transform3D(translation=[0.0, -0.15, 0.0]),
+    geom.Transform3D(translation=[0.15, 0.0, 0.0]),
+    geom.Transform3D(translation=[0.0, 0.15, 0.0]),
 
     # XZ plane square 0.1 side
-    *interpol([-0.1, 0.0, 0.0]),
-    *interpol([0.0, 0.0, -0.1]),
-    *interpol([0.1, 0.0, 0.0]),
-    *interpol([0.0, 0.0, 0.1]),
+    geom.Transform3D(translation=[-0.1, 0.0, 0.0]),
+    geom.Transform3D(translation=[0.0, 0.0, -0.1]),
+    geom.Transform3D(translation=[0.1, 0.0, 0.0]),
+    geom.Transform3D(translation=[0.0, 0.0, 0.1]),
 
     # Not parallel hourglass
-    *interpol([-0.05, -0.05, -0.05]),
-    *interpol([0.0, 0.0, 0.05]),
-    *interpol([-0.05, -0.05, -0.05]),
-    *interpol([0.0, 0.0, 0.05]),
-    *interpol([0.1, 0.1, 0.0]),
+    geom.Transform3D(translation=[-0.05, -0.05, -0.05]),
+    geom.Transform3D(translation=[0.0, 0.0, 0.05]),
+    geom.Transform3D(translation=[-0.05, -0.05, -0.05]),
+    geom.Transform3D(translation=[0.0, 0.0, 0.05]),
+    geom.Transform3D(translation=[0.1, 0.1, 0.0]),
     # return to start
-    *interpol([0.0, 0.0, -0.2]),
+    geom.Transform3D(translation=[0.0, 0.0, -0.2]),
 ])
 
 
@@ -84,7 +73,7 @@ def umi_relative(left_position: AbsoluteTrajectory, right_position: AbsoluteTraj
     result = []
     for i in range(1, len(right_position)):
         # Calculate relative transformation between consecutive right positions
-        right_delta = right_position[i-1].inv * right_position[i]
+        right_delta = right_position[i - 1].inv * right_position[i]
 
         # Apply the relative transformation to the gripper frame
         transform = relative_gripper_transform.inv * right_delta * relative_gripper_transform
@@ -94,8 +83,8 @@ def umi_relative(left_position: AbsoluteTrajectory, right_position: AbsoluteTraj
     return RelativeTrajectory(result)
 
 @ir.ironic_system(
-    input_ports=['start'],
-    input_props=['webxr_position', 'robot_ee_position'],
+    input_ports=['start', 'webxr_position'],
+    input_props=['robot_ee_position'],
     output_ports=['target_robot_position'],
 )
 class RegistrationSystem(ir.ControlSystem):
@@ -106,43 +95,58 @@ class RegistrationSystem(ir.ControlSystem):
         self.index = 0
         self.data = []
         self.started = False
+        self.step_throttler = ir.utils.Throttler(2)
+        self.fps_counter = ir.utils.FPSCounter("Registration")
 
     @ir.on_message('start')
     async def start(self, message: ir.Message):
         self.started = True
 
+    @ir.on_message('webxr_position')
+    async def webxr_position(self, message: ir.Message):
+        if not self.started:
+            return
+
+        assert message is not ir.NoValue
+        assert isinstance(message.data['left'], geom.Transform3D)
+        assert isinstance(message.data['right'], geom.Transform3D)
+
+        robot_position = (await self.ins.robot_ee_position()).data
+        assert robot_position is not ir.NoValue
+
+        self.data.append({
+            'left_gripper': message.data['left'],
+            'right_gripper': message.data['right'],
+            'robot_position': robot_position,
+        })
+
+        print(len(self.data))
+
     async def step(self):
         if not self.started:
             return ir.State.ALIVE
+
+        self.fps_counter.tick()
 
         if self.absolute_trajectory is None:
             robot_position = (await self.ins.robot_ee_position()).data
             self.absolute_trajectory = self.relative_trajectory.to_absolute(robot_position)
 
-        await self.outs.target_robot_position.write(ir.Message(data=self.absolute_trajectory[self.index]))
-        await asyncio.sleep(0.01)
-
-        umi_position = (await self.ins.webxr_position()).data
-        robot_position = (await self.ins.robot_ee_position()).data
-
-        assert umi_position is not ir.NoValue
-        assert robot_position is not ir.NoValue
-        assert isinstance(umi_position['left'], geom.Transform3D)
-        assert isinstance(umi_position['right'], geom.Transform3D)
-
-        self.data.append({
-            'left_gripper': umi_position['left'],
-            'right_gripper': umi_position['right'],
-            'robot_position': robot_position,
-        })
-
-        self.index += 1
+        await self._next_robot_position()
 
         if self.index >= len(self.absolute_trajectory):
-            self.P = self._perform_umi_registration()
+            self.started = False
+            self.registration_transform = self._perform_umi_registration()
             return ir.State.FINISHED
 
         return ir.State.ALIVE
+
+    async def _next_robot_position(self):
+        if self.step_throttler():
+            await self.outs.target_robot_position.write(ir.Message(data=self.absolute_trajectory[self.index]))
+            self.index += 1
+        else:
+            await asyncio.sleep(0.01)
 
     def _perform_umi_registration(self):
         """
@@ -168,22 +172,46 @@ class RegistrationSystem(ir.ControlSystem):
         left_trajectory = AbsoluteTrajectory([d['left_gripper'] for d in self.data])
         right_trajectory = AbsoluteTrajectory([d['right_gripper'] for d in self.data])
 
-        polt_trajectory(robot_trajectory, "target", color=[255, 0, 0, 255])
+        _polt_trajectory(robot_trajectory, "target", color=[255, 0, 0, 255])
 
         umi_relative_trajectory = umi_relative(left_trajectory, right_trajectory).to_absolute()
 
         translations = np.array([A.translation for A in umi_relative_trajectory])
         translations_target = np.array([A.translation for A in robot_trajectory])
 
-        P, _ = orthogonal_procrustes(translations, translations_target)
+        registration_mtx, _ = orthogonal_procrustes(translations, translations_target)
+        registration_rotation = geom.Rotation.from_rotation_matrix(registration_mtx)
 
-        transform = geom.Transform3D(rotation=geom.Rotation.from_rotation_matrix(P))
+        if np.linalg.det(registration_mtx) < 0:
+            print("Registration matrix is not a rotation matrix")
 
-        registered_trajectory = RelativeTrajectory([transform.inv * A * transform for A in umi_relative_trajectory.to_relative()]).to_absolute()
-        polt_trajectory(registered_trajectory, "registered", color=[0, 255, 0, 255])
+        transform = geom.Transform3D(rotation=registration_rotation)
 
-        return P
+        registered_trajectory = RelativeTrajectory([
+            transform.inv * x * transform for x in umi_relative_trajectory.to_relative()
+        ]).to_absolute()
 
+        _polt_trajectory(registered_trajectory, "registered", color=[0, 255, 0, 255])
+
+        print(f"Registration rotation QUAT: {transform.rotation.as_quat}")
+        self._log_tracking_error(robot_trajectory, registered_trajectory)
+
+        return transform
+
+    def _log_tracking_error(
+            self,
+            robot_trajectory: AbsoluteTrajectory,
+            registered_trajectory: AbsoluteTrajectory,
+    ):
+        robot_pos = np.array([x.translation for x in robot_trajectory])
+        registered_pos = np.array([x.translation for x in registered_trajectory])
+
+        error = np.linalg.norm(robot_pos - registered_pos, axis=1)
+        print("=" * 100)
+        print(f"Max Tracking error: {np.max(error)}")
+        print(f"Mean Tracking error: {np.mean(error)}")
+        for percentile in [10, 20, 30, 40, 50, 60, 70, 80, 90]:
+            print(f"{percentile}th percentile Tracking error: {np.percentile(error, percentile)}")
 
 
 @ir.config(webxr=positronic.cfg.ui.webxr_both, robot_arm=positronic.cfg.hardware.roboarms.franka_ik)
@@ -204,13 +232,12 @@ async def perform_registration(
     policy_runner = PolicyRunnerSystem()
     registration = RegistrationSystem(WAYPOINTS)
 
-
     composed = ir.compose(
         webxr,
         policy_runner,
         robot_arm.bind(target_position=registration.outs.target_robot_position),
         registration.bind(
-            webxr_position=ir.utils.last_value(webxr.outs.controller_positions),
+            webxr_position=webxr.outs.controller_positions,
             robot_ee_position=robot_arm.outs.position,
             start=policy_runner.outs.start_policy,
         ),
@@ -219,7 +246,6 @@ async def perform_registration(
     print("Press S after you attach the UMI gripper to the robot...")
 
     await ir.utils.run_gracefully(composed)
-
 
 
 async def main():
