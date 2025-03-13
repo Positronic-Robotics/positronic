@@ -2,7 +2,7 @@ import asyncio
 from collections import namedtuple
 import time
 import signal
-from typing import Any, Callable, Optional
+from typing import Any, Callable
 
 from ironic.system import (ControlSystem, Message, OutputPort, State, ironic_system, on_message, out_property,
                            system_clock, NoValue)
@@ -139,8 +139,8 @@ class FPSCounter:
 
 async def run_gracefully(
         system: ControlSystem,
-        extra_cleanup_fn: Optional[Callable[[], None]] = None,
-        after_setup_fn: Optional[Callable[[], None]] = None,
+        after_setup_fn: Callable[[], None] | None = None,
+        after_cleanup_fn: Callable[[], None] | None = None,
 ):
     """Runs a control system with graceful shutdown handling.
 
@@ -181,8 +181,8 @@ async def run_gracefully(
     finally:
         await system.cleanup()
         print('System cleanup finished')
-        if extra_cleanup_fn:
-            extra_cleanup_fn()
+        if after_cleanup_fn:
+            after_cleanup_fn()
             print('Extra cleanup finished')
 
 
