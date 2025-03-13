@@ -102,6 +102,13 @@ class Config:
     def _set_value(self, key, value):
         value = _resolve_value(value)
 
+        if self._has_value(key):
+            old_value = self._get_value(key)
+
+            if isinstance(old_value, Option):
+                old_value.default(value)
+                return
+
         if key[0].isdigit():
             self.args[int(key)] = value
         else:
@@ -112,6 +119,12 @@ class Config:
             return self.args[int(key)]
         else:
             return self.kwargs[key]
+
+    def _has_value(self, key):
+        if key[0].isdigit():
+            return int(key) < len(self.args)
+        else:
+            return key in self.kwargs
 
     def instantiate(self) -> Any:
         """
@@ -138,6 +151,8 @@ class Config:
             try:
                 if isinstance(value, Config):
                     return value._instantiate_internal(path + f'{key}.')
+                elif isinstance(value, Option):
+                    return _instantiate_value(value(), f"{key}.Option({value.value})", path)
                 elif isinstance(value, (list, tuple)):
                     return type(value)(_instantiate_value(item, f'{key}[{i}]', path) for i, item in enumerate(value))
                 elif isinstance(value, dict):
@@ -250,3 +265,19 @@ def config(target: Callable | None = None, *args, **kwargs):
         return _config_decorator
     else:
         return Config(target)
+
+
+class Option:
+    def __init__(self, **options: Dict[Any, Any]):
+        self.options = options
+        self.value = None
+
+    def default(self, default_value: Any):
+        assert default_value in self.options, f"Default value {default_value} not in options {self.options}"
+        self.value = default_value
+        return self
+
+    def __call__(self) -> Any:
+        if self.value is None:
+            raise ValueError(f"Option has not been set.")
+        return self.options[self.value]

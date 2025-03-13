@@ -393,3 +393,57 @@ def test_instantiate_exception_during_instantiation_has_correct_path_with_dict()
         cfg.instantiate()
 
     assert str(e.value) == 'Error instantiating "dict_arg[\"bad_key\"]": Bad object'
+
+
+def test_option_override_produces_associated_value():
+    def func(option_arg: str):
+        return option_arg
+
+    cfg = ir.Config(func, option_arg=ir.Option(a="option1", b="option2"))
+
+    assert cfg.override(option_arg="a").instantiate() == "option1"
+
+
+def test_option_default_produces_associated_value():
+    def func(option_arg: str):
+        return option_arg
+
+    cfg = ir.Config(func, option_arg=ir.Option(a="option1", b="option2").default("b"))
+
+    assert cfg.instantiate() == "option2"
+
+
+def test_option_with_nested_configs_produces_associated_value():
+    def nested_func(option_arg: str):
+        return option_arg
+
+    def func(option_func):
+        return option_func
+
+    cfg = ir.Config(
+        func,
+        option_func=ir.Option(
+            a=ir.Config(nested_func, option_arg="option1"),
+            b=ir.Config(nested_func, option_arg="option2")
+        )
+    )
+
+    assert cfg.override(option_func="a").instantiate() == "option1"
+
+def test_option_with_nested_option_produces_associated_value():
+    def func(a):
+        return a
+
+    cfg = ir.Config(
+        func,
+        a=ir.Option(
+            a=ir.Option(a=1, b=2),
+            b=ir.Option(a=3, b=4)
+        )
+    )
+
+    override_kwargs = {
+        "a.a": "a"
+    }
+
+    assert cfg.override(**override_kwargs).instantiate() == 1
