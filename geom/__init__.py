@@ -4,8 +4,15 @@ from typing import Any
 import numpy as np
 
 
+class Transform3DMeta(type):
+    @property
+    def identity(cls):
+        return cls(translation=np.zeros(3), rotation=Rotation.identity)
+
+
 # y = R * x + t
-class Transform3D:
+class Transform3D(metaclass=Transform3DMeta):
+    identity: 'Transform3D'
     __slots__ = ('translation', 'rotation')
 
     def __init__(self, translation=None, rotation=None):
@@ -99,7 +106,13 @@ class Transform3D:
         return Transform3D(self.translation.copy(), self.rotation.copy())
 
 
-class Rotation(np.ndarray):
+class RotationMeta(type):
+    @property
+    def identity(cls):
+        return cls.from_quat(np.array([1, 0, 0, 0]))
+
+
+class Rotation(np.ndarray, metaclass=RotationMeta):
     """Class that represents a rotation in 3D space.
 
     The rotation is stored as a quaternion in the order (w, x, y, z), but users should not rely on this.

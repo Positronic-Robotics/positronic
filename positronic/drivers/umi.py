@@ -3,7 +3,7 @@ import geom
 
 # registration transform for the last gripper
 # TODO: remove in the next PR
-GRIPPER_REGISTRATION = geom.Rotation.from_quat([-0.08239932, -0.30107228, -0.51230549,  0.80006807])
+GRIPPER_REGISTRATION = geom.Rotation.from_quat([-0.08998721, -0.29523472, -0.51761315,  0.79800714])
 
 
 @ir.ironic_system(

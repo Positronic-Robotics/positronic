@@ -26,10 +26,7 @@ class RelativeTrajectory(list):
     def __repr__(self):
         return "RelativeTrajectory" + super().__repr__()
 
-    def to_absolute(self, start_position: Optional[geom.Transform3D] = None) -> AbsoluteTrajectory:
-        if start_position is None:
-            start_position = geom.Transform3D()
-
+    def to_absolute(self, start_position: Optional[geom.Transform3D]) -> AbsoluteTrajectory:
         absolute_positions = AbsoluteTrajectory([start_position])
 
         for pos in self:

@@ -11,10 +11,9 @@ import rerun as rr
 
 import positronic.cfg.ui
 import positronic.cfg.hardware.roboarms
-from positronic.policy_runner import PolicyRunnerSystem
 
 
-def _polt_trajectory(trajectory: AbsoluteTrajectory, name: str, color: List[int] = [255, 0, 0, 255]):
+def _plot_trajectory(trajectory: AbsoluteTrajectory, name: str, color: List[int] = [255, 0, 0, 255]):
     points = []
 
     for idx, pos in enumerate(trajectory):
@@ -63,26 +62,26 @@ WAYPOINTS = RelativeTrajectory([
 ])
 
 
-def umi_relative(left_position: AbsoluteTrajectory, right_position: AbsoluteTrajectory):
+def umi_relative(left_trajectory: AbsoluteTrajectory, right_trajectory: AbsoluteTrajectory):
     """
-    Calculate the relative transformation between left and right positions.
-    Similar to ee_position in UmiCS class.
+    Calculate the relative trajectory of the grippers in a frame that doesn't depend on the global reference frame.
+
     Args:
-        left_position: Trajectory of left tracker positions
-        right_position: Trajectory of right tracker positions
+        left_trajectory: Trajectory of left tracker positions
+        right_trajectory: Trajectory of right tracker positions
     Returns:
         AbsoluteTrajectory: Relative transformation trajectory
     """
-    if len(left_position) == 0 or len(right_position) == 0:
-        return AbsoluteTrajectory([])
+    assert len(left_trajectory) == len(right_trajectory)
+    assert len(left_trajectory) > 0
 
     # Calculate initial relative gripper transform
-    relative_gripper_transform = left_position[0].inv * right_position[0]
+    relative_gripper_transform = left_trajectory[0].inv * right_trajectory[0]
 
     result = []
-    for i in range(1, len(right_position)):
+    for i in range(1, len(right_trajectory)):
         # Calculate relative transformation between consecutive right positions
-        right_delta = right_position[i - 1].inv * right_position[i]
+        right_delta = right_trajectory[i - 1].inv * right_trajectory[i]
 
         # Apply the relative transformation to the gripper frame
         transform = relative_gripper_transform.inv * right_delta * relative_gripper_transform
@@ -93,7 +92,7 @@ def umi_relative(left_position: AbsoluteTrajectory, right_position: AbsoluteTraj
 
 
 @ir.ironic_system(
-    input_ports=['start', 'webxr_position'],
+    input_ports=['webxr_position'],
     input_props=['robot_ee_position'],
     output_ports=['target_robot_position'],
 )
@@ -104,24 +103,17 @@ class RegistrationSystem(ir.ControlSystem):
         self.absolute_trajectory = None
         self.index = 0
         self.data = []
-        self.started = False
         self.step_throttler = ir.utils.Throttler(2)
         self.fps_counter = ir.utils.FPSCounter("Registration")
 
-    @ir.on_message('start')
-    async def start(self, message: ir.Message):
-        self.started = True
-
     @ir.on_message('webxr_position')
     async def webxr_position(self, message: ir.Message):
-        if not self.started:
-            return
-
         assert message is not ir.NoValue
         assert isinstance(message.data['left'], geom.Transform3D)
         assert isinstance(message.data['right'], geom.Transform3D)
 
         robot_position = (await self.ins.robot_ee_position()).data
+
         assert robot_position is not ir.NoValue
 
         self.data.append({
@@ -130,12 +122,7 @@ class RegistrationSystem(ir.ControlSystem):
             'robot_position': robot_position,
         })
 
-        print(len(self.data))
-
     async def step(self):
-        if not self.started:
-            return ir.State.ALIVE
-
         self.fps_counter.tick()
 
         if self.absolute_trajectory is None:
@@ -145,18 +132,16 @@ class RegistrationSystem(ir.ControlSystem):
         await self._next_robot_position()
 
         if self.index >= len(self.absolute_trajectory):
-            self.started = False
             self.registration_transform = self._perform_umi_registration()
             return ir.State.FINISHED
 
         return ir.State.ALIVE
 
     async def _next_robot_position(self):
+        # TODO: we need to add an ability for a robot to execute synchronous commands
         if self.step_throttler():
             await self.outs.target_robot_position.write(ir.Message(data=self.absolute_trajectory[self.index]))
             self.index += 1
-        else:
-            await asyncio.sleep(0.01)
 
     def _perform_umi_registration(self):
         """
@@ -170,24 +155,21 @@ class RegistrationSystem(ir.ControlSystem):
         if not self.data:
             raise ValueError("No data collected for registration")
 
-        import pickle
-
-        with open("data.pkl", "wb") as f:
-            pickle.dump(self.data, f)
-
         rr.init("registration", spawn=True)
 
-        robot_trajectory = AbsoluteTrajectory([d['robot_position'] for d in self.data]).to_relative().to_absolute()
+        robot_trajectory = AbsoluteTrajectory([d['robot_position'] for d in self.data])
+        # make it start from the origin
+        robot_trajectory = robot_trajectory.to_relative().to_absolute(geom.Transform3D.identity)
 
         left_trajectory = AbsoluteTrajectory([d['left_gripper'] for d in self.data])
         right_trajectory = AbsoluteTrajectory([d['right_gripper'] for d in self.data])
 
-        _polt_trajectory(robot_trajectory, "target", color=[255, 0, 0, 255])
+        _plot_trajectory(robot_trajectory, "target", color=[255, 0, 0, 255])
 
-        umi_relative_trajectory = umi_relative(left_trajectory, right_trajectory).to_absolute()
+        umi_trajectory = umi_relative(left_trajectory, right_trajectory).to_absolute(geom.Transform3D.identity)
 
-        translations = np.array([A.translation for A in umi_relative_trajectory])
-        translations_target = np.array([A.translation for A in robot_trajectory])
+        translations = np.array([x.translation for x in umi_trajectory])
+        translations_target = np.array([x.translation for x in robot_trajectory])
 
         registration_mtx, _ = orthogonal_procrustes(translations, translations_target)
         registration_rotation = geom.Rotation.from_rotation_matrix(registration_mtx)
@@ -198,10 +180,10 @@ class RegistrationSystem(ir.ControlSystem):
         transform = geom.Transform3D(rotation=registration_rotation)
 
         registered_trajectory = RelativeTrajectory([
-            transform.inv * x * transform for x in umi_relative_trajectory.to_relative()
-        ]).to_absolute()
+            transform.inv * x * transform for x in umi_trajectory.to_relative()
+        ]).to_absolute(geom.Transform3D.identity)
 
-        _polt_trajectory(registered_trajectory, "registered", color=[0, 255, 0, 255])
+        _plot_trajectory(registered_trajectory, "registered", color=[0, 255, 0, 255])
 
         print(f"Registration rotation QUAT: {transform.rotation.as_quat}")
         self._log_tracking_error(robot_trajectory, registered_trajectory)
@@ -239,31 +221,30 @@ async def perform_registration(
     4. Press S button on keyboard and stay near the robot
     """
 
-    policy_runner = PolicyRunnerSystem()
     registration = RegistrationSystem(WAYPOINTS)
 
     composed = ir.compose(
         webxr,
-        policy_runner,
         robot_arm.bind(target_position=registration.outs.target_robot_position),
         registration.bind(
             webxr_position=webxr.outs.controller_positions,
             robot_ee_position=robot_arm.outs.position,
-            start=policy_runner.outs.start_policy,
         ),
     )
 
-    print("Press S after you attach the UMI gripper to the robot...")
+    def _ask_input_to_start():
+        print("Press Enter after you attach the UMI gripper to the robot...")
+        input()
 
-    await ir.utils.run_gracefully(composed)
-
-
-async def main():
-    await perform_registration.override_and_instantiate()
+    await ir.utils.run_gracefully(composed, after_setup_fn=_ask_input_to_start)
 
 
-def sync_main():
-    asyncio.run(main())
+async def main(**kwargs):
+    await perform_registration.override_and_instantiate(**kwargs)
+
+
+def sync_main(**kwargs):
+    asyncio.run(main(**kwargs))
 
 
 if __name__ == "__main__":
