@@ -37,7 +37,8 @@ webxr_right = webxr.override(require_left=False, require_right=True)
 
 
 @ir.config(webxr=webxr_right, operator_position=positronic.teleop.FRANKA_FRONT_TRANSFORM, stream_to_webxr='first.image')
-def teleop(webxr: ir.ControlSystem, operator_position: geom.Transform3D, stream_to_webxr: str | None = None):
+def teleop(
+    webxr: ir.ControlSystem, operator_position: geom.Transform3D, stream_to_webxr: str | None = None):
     teleop_cs = positronic.teleop.TeleopSystem(operator_position)
     components = [webxr, teleop_cs]
 
@@ -55,6 +56,26 @@ def teleop(webxr: ir.ControlSystem, operator_position: geom.Transform3D, stream_
         webxr.bind(frame=get_frame_for_webxr.outs.output)
 
     return ir.compose(*components, inputs=inputs, outputs=teleop_cs.output_mappings)
+
+
+@ir.config(webxr=webxr_both)
+def teleop_umi(
+    webxr: ir.ControlSystem):
+    teleop_cs = positronic.teleop.TeleopButtons()
+    components = [webxr, teleop_cs]
+
+    teleop_cs.bind(
+        teleop_buttons=ir.utils.map_port(lambda x: x['right'], webxr.outs.buttons),
+    )
+
+    inputs = {'robot_position': None, 'images': None, 'robot_grip': None, 'robot_status': None}
+
+    outputs = {
+        **teleop_cs.output_mappings,
+        'robot_target_position': webxr.outs.controller_positions,
+    }
+
+    return ir.compose(*components, inputs=inputs, outputs=outputs)
 
 
 @ir.config(translation_speed=0.0005, rotation_speed=0.001, translation_dead_zone=0.8, rotation_dead_zone=0.7)

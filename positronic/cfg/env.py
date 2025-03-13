@@ -55,9 +55,13 @@ def umi(camera: Optional[ir.ControlSystem] = None):
         'position': umi.outs.ee_position,
         'grip': umi.outs.grip,
         'status': ir.OutputPort.Stub(),
-        'ext_force_ee': ir.utils.const_property(np.zeros(3)),
-        'ext_force_base': ir.utils.const_property(np.zeros(3)),
-        'metadata': umi.outs.metadata
+        'ext_force_ee': ir.utils.const_property([0, 0, 0]),  # np.zeros won't work with dataset dumper
+        'ext_force_base': ir.utils.const_property([0, 0, 0]),
+        'metadata': umi.outs.metadata,
+        'umi_left_quaternion': umi.outs.umi_left_quaternion,
+        'umi_left_translation': umi.outs.umi_left_translation,
+        'umi_right_quaternion': umi.outs.umi_right_quaternion,
+        'umi_right_translation': umi.outs.umi_right_translation,
     })
 
     res = ir.compose(*components, inputs=inputs, outputs=outputs)
