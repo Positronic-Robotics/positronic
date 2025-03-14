@@ -124,6 +124,26 @@ async def test_map_port_async_filter():
 
 
 @pytest.mark.asyncio
+async def test_map_port_two_mappings_same_port():
+    original_port = ir.OutputPort("test_port")
+
+    mapped1 = ir.utils.map_port(lambda x: x * 2, original_port)
+    mapped2 = ir.utils.map_port(lambda x: x * 3, original_port)
+
+    received_values = []
+
+    async def collector(message):
+        received_values.append(message.data)
+
+    mapped1.subscribe(collector)
+    mapped2.subscribe(collector)
+
+    await original_port.write(ir.Message(5, timestamp=1000))
+
+    assert received_values == [10, 15]
+
+
+@pytest.mark.asyncio
 async def test_print_port(capfd):
     original_port = ir.OutputPort("test_port")
     print_port = ir.utils.print_port(original_port, "test_port")

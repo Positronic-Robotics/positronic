@@ -112,10 +112,8 @@ class TeleopSystem(ir.ControlSystem):
             await self.outs.start_recording.write(ir.Message(None, timestamp))
 
 
-@ir.ironic_system(input_ports=["teleop_transforms", "teleop_buttons"],
+@ir.ironic_system(input_ports=["teleop_buttons"],
                   output_ports=[
-                      "controller_positions",
-                      "gripper_target_grasp",
                       "start_recording",
                       "stop_recording",
                       "reset"
@@ -142,11 +140,6 @@ class TeleopButtons(ir.ControlSystem):
         track_but = self.button_handler.is_pressed('A')
         record_but = self.button_handler.is_pressed('B')
         reset_but = self.button_handler.is_pressed('stick')
-
-        grasp_but = self.button_handler.get_value('trigger')
-
-        if self.is_tracking:
-            await self.outs.gripper_target_grasp.write(ir.Message(grasp_but, message.timestamp))
 
         if track_but:
             await self._switch_tracking(message.timestamp)

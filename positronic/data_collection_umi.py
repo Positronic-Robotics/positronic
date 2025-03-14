@@ -23,25 +23,23 @@ async def _main(
         ui: ir.ControlSystem,
         env: ir.ControlSystem,
         data_dumper: ir.ControlSystem,
-        rerun: bool = False,
         sound: Optional[ir.ControlSystem] = None
 ):
     ui.bind(
-        robot_grip=env.outs.grip,
-        robot_position=env.outs.position,
         images=env.outs.frame,
-        robot_status=env.outs.status,
     )
     env.bind(
-        target_position=ui.outs.robot_target_position,
-        target_grip=ui.outs.gripper_target_grasp,
-        reset=ui.outs.reset,
+        target_position=ui.outs.controller_positions,
     )
+
+    def const_grip(_):
+        return 0
 
     data_dumper.bind(
         image=env.outs.frame,
-        target_grip=ui.outs.gripper_target_grasp,
-        target_robot_position=ui.outs.robot_target_position,
+        # TODO: make dataset dumper more generic
+        target_robot_position=ir.utils.map_port(lambda x: x['right'], ui.outs.controller_positions),
+        target_grip=ir.utils.map_port(const_grip, ui.outs.controller_positions),
         start_episode=ui.outs.start_recording,
         end_episode=ui.outs.stop_recording,
         robot_data=env.outs.state,
@@ -50,22 +48,10 @@ async def _main(
     )
 
     components = [ui, env]
-    if rerun:
-        from positronic.tools.rerun_vis import RerunVisualiser
-        visualizer = RerunVisualiser()
-        visualizer.bind(
-            frame=env.outs.frame,
-            new_recording=ui.outs.start_recording,
-            ext_force_ee=env.outs.ext_force_ee,
-            ext_force_base=env.outs.ext_force_base,
-            robot_position=env.outs.robot_position,
-        )
-        components.append(visualizer)
 
     if sound is not None:
         components.append(
             sound.bind(
-                force=env.outs.ext_force_ee,
                 start_recording=ui.outs.start_recording,
                 stop_recording=ui.outs.stop_recording
             )
@@ -78,10 +64,9 @@ async def _main(
 main = ir.Config(
     _main,
     env=positronic.cfg.env.umi,
-    ui=positronic.cfg.ui.teleop,
+    ui=positronic.cfg.ui.teleop_umi,
     sound=positronic.cfg.hardware.sound.start_stop,
     data_dumper=dataset_dumper.override(video_fps=30, codec='libx264'),
-    rerun=False,
 )
 
 

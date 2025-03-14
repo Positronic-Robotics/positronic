@@ -70,8 +70,11 @@ def run_server(data_queue, frame_queue, port, ssl_keyfile, ssl_certfile):  # noq
             fps = FPSCounter("Websocket")
             while True:
                 data = await websocket.receive_json()
-                if data_queue.qsize() > 0:
-                    data_queue.get()
+                try:
+                    # remove old data from queue if there is any
+                    data_queue.get(block=False)
+                except multiprocessing.queues.Empty:
+                    pass
                 data_queue.put((data, ir.system_clock()))
                 fps.tick()
         except Exception as e:

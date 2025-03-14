@@ -1,8 +1,6 @@
-# Configuration for the robotics environment
-from typing import Optional
-
 import numpy as np
 
+import geom
 import positronic.cfg.hardware.camera
 import positronic.cfg.hardware.roboarms
 import ironic as ir
@@ -38,31 +36,29 @@ def roboarm(arm: ir.ControlSystem, camera: ir.ControlSystem | None = None):
     return _state_mapping(ir.compose(*components, inputs=inputs, outputs=outputs))
 
 
-@ir.config(camera=positronic.cfg.hardware.camera.merged)
-def umi(camera: Optional[ir.ControlSystem] = None):
-    from positronic.drivers.umi import UmiCS  # noqa: CO415
-    umi = UmiCS()
-    components = [umi]
-    outputs = {'frame': ir.OutputPort.Stub()}
+GRIPPER_REGISTRATION = geom.Transform3D(
+    rotation=geom.Rotation.from_quat([-0.08998721, -0.29523472, -0.51761315,  0.79800714]),
+)
 
-    if camera is not None:
-        components.append(camera)
-        outputs['frame'] = camera.outs.frame
 
-    inputs = {'target_position': (umi, 'tracker_position'), 'target_grip': (umi, 'target_grip'), 'reset': None}
+@ir.config(
+    camera=positronic.cfg.hardware.camera.merged,
+    registration_transform=GRIPPER_REGISTRATION,
+)
+def umi(camera: ir.ControlSystem, registration_transform: geom.Transform3D):
+    from positronic.drivers.umi import UmiCS
+    umi = UmiCS(registration_transform)
+    components = [umi, camera]
 
-    outputs.update({
-        'position': umi.outs.ee_position,
-        'grip': umi.outs.grip,
+    inputs = {'target_position': (umi, 'tracker_position')}
+
+    outputs = {
+        'frame': camera.outs.frame,
         'status': ir.OutputPort.Stub(),
-        'ext_force_ee': ir.utils.const_property([0, 0, 0]),  # np.zeros won't work with dataset dumper
-        'ext_force_base': ir.utils.const_property([0, 0, 0]),
         'metadata': umi.outs.metadata,
-        'umi_left_quaternion': umi.outs.umi_left_quaternion,
-        'umi_left_translation': umi.outs.umi_left_translation,
-        'umi_right_quaternion': umi.outs.umi_right_quaternion,
-        'umi_right_translation': umi.outs.umi_right_translation,
-    })
+        'umi_left': umi.outs.umi_left,
+        'umi_right': umi.outs.umi_right,
+    }
 
     res = ir.compose(*components, inputs=inputs, outputs=outputs)
     res = _state_mapping(res)
@@ -94,10 +90,10 @@ def franka(
     }
 
     outputs.update({
-        'robot_position': roboarm.outs.position,
+        'position': roboarm.outs.position,
         'joint_positions': roboarm.outs.joint_positions,
         'grip': roboarm.outs.grip,
-        'robot_status': ir.OutputPort.Stub(),
+        'status': ir.OutputPort.Stub(),
         'ext_force_ee': roboarm.outs.ext_force_ee,
         'ext_force_base': roboarm.outs.ext_force_base,
         'metadata': metadata,

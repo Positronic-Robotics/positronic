@@ -168,7 +168,11 @@ class DatasetDumper(ir.ControlSystem):
         if self.is_bound('ui_metadata'):
             metadata.update(**(await self.ins.ui_metadata()).data)
 
-        self.dumper.end_episode(metadata=metadata)
+        metadata_encoded = {}
+        for k, v in metadata.items():
+            self._encode_value(metadata_encoded, k, v)
+
+        self.dumper.end_episode(metadata=metadata_encoded)
         print(f"Episode {self.dumper.episode_count} ended")
 
     @ir.on_message('target_grip')
