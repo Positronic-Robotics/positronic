@@ -58,8 +58,7 @@ def teleop(webxr: ir.ControlSystem, operator_position: geom.Transform3D, stream_
 
 
 @ir.config(webxr=webxr_both)
-def teleop_umi(
-    webxr: ir.ControlSystem):
+def teleop_umi(webxr: ir.ControlSystem, stream_to_webxr: str | None = None):
     teleop_cs = positronic.teleop.TeleopButtons()
     components = [webxr, teleop_cs]
 
@@ -68,6 +67,12 @@ def teleop_umi(
     )
 
     inputs = {'images': None}
+
+    if stream_to_webxr:
+        get_frame_for_webxr = ir.utils.MapPortCS(lambda frame: frame[stream_to_webxr])
+        components.append(get_frame_for_webxr)
+        inputs['images'] = (get_frame_for_webxr, 'input')
+        webxr.bind(frame=get_frame_for_webxr.outs.output)
 
     outputs = {
         **teleop_cs.output_mappings,
