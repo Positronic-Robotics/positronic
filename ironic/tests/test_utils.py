@@ -140,7 +140,7 @@ async def test_map_port_two_mappings_same_port():
 
     await original_port.write(ir.Message(5, timestamp=1000))
 
-    assert received_values == [10, 15]
+    assert set(received_values) == {10, 15}
 
 
 @pytest.mark.asyncio

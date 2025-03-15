@@ -1,13 +1,11 @@
-from typing import Optional
-
 import numpy as np
 
 import ironic as ir
 
 
-def _sound_system(force_feedback_volume: Optional[float] = None,
-                  start_recording_wav_path: Optional[str] = None,
-                  stop_recording_wav_path: Optional[str] = None):
+def _sound_system(force_feedback_volume: float | None,
+                  start_recording_wav_path: str | None,
+                  stop_recording_wav_path: str | None):
     from positronic.drivers.sound import SoundSystem
 
     sound_system = SoundSystem(master_volume=force_feedback_volume or 0)
@@ -37,6 +35,7 @@ def _sound_system(force_feedback_volume: Optional[float] = None,
 
 start_stop = ir.Config(
     _sound_system,
+    force_feedback_volume=None,
     start_recording_wav_path="positronic/assets/sounds/recording-has-started.wav",
     stop_recording_wav_path="positronic/assets/sounds/recording-has-stopped.wav"
 )
