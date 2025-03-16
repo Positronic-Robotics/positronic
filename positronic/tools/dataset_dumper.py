@@ -4,7 +4,7 @@ from io import BytesIO
 
 import numpy as np
 import torch
-import imageio
+import imageio.v2 as imageio
 
 import geom
 import ironic as ir
@@ -12,12 +12,17 @@ import ironic as ir
 
 class SerialDumper:
 
-    def __init__(self, directory: str, video_fps: int | None = None, codec: str = 'libx264'):
+    def __init__(self, directory: str, video_fps: int | None = None, codec: str = 'libx264',
+                 video_quality: int = 18, video_pixel_format: str = 'yuv444p'):
         """
         Dumps serial data to a directory as torch tensors.
 
         Args:
             directory: Directory to save the data to. Episodes will be named sequentially.
+            video_fps: Frames per second for video recording
+            codec: Video codec to use (e.g., 'libx264', 'libx265')
+            video_quality: Quality setting for video (1-10, higher is better)
+            video_pixel_format: Pixel format for video (e.g., 'yuv420p', 'yuv444p')
 
         Example:
             >>> dumper = SerialDumper("data")
@@ -29,6 +34,8 @@ class SerialDumper:
         self.directory = directory
         self.video_fps = video_fps
         self.codec = codec
+        self.video_quality = video_quality
+        self.video_pixel_format = video_pixel_format
         os.makedirs(self.directory, exist_ok=True)
         self.data = defaultdict(list)
         self.video_buffers = {}
@@ -59,7 +66,13 @@ class SerialDumper:
                 self.video_buffers[k] = BytesIO()
                 self.video_writers[k] = imageio.get_writer(self.video_buffers[k],
                                                            fps=self.video_fps,
-                                                           format='mp4', codec=self.codec, is_batch=False)
+                                                           format='mp4', codec=self.codec,
+                                                           ffmpeg_params=[
+                                                            #    '-crf', str(self.video_quality),
+                                                               '-vf', 'scale=1280:720',
+                                                            #    '-preset', 'slow',
+                                                            #    '-pix_fmt', self.video_pixel_format,
+                                                           ])
 
             self.video_writers[k].append_data(v)
 
