@@ -1,6 +1,6 @@
 import asyncio
 import logging
-from typing import Dict, Optional
+from typing import Dict
 
 import fire
 
@@ -23,7 +23,7 @@ async def _main(
         ui: ir.ControlSystem,
         env: ir.ControlSystem,
         data_dumper: ir.ControlSystem,
-        sound: Optional[ir.ControlSystem] = None
+        sound: ir.ControlSystem | None = None
 ):
     ui.bind(
         images=env.outs.frame,
