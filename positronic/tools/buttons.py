@@ -48,7 +48,7 @@ class ButtonHandler:
         for button_name, current_value in button_states.items():
             self.update_button(button_name, current_value)
 
-    def is_pressed(self, button_name: str, threshold: float = 0.5) -> bool:
+    def is_pressed(self, button_name: str, threshold: float = 0.6) -> bool:
         """
         Returns True if button was just pressed (transition from below to above threshold)
 
@@ -64,7 +64,7 @@ class ButtonHandler:
         return (self._prev_states[button_name] < threshold and
                 self._button_states[button_name] >= threshold)
 
-    def is_released(self, button_name: str, threshold: float = 0.5) -> bool:
+    def is_released(self, button_name: str, threshold: float = 0.4) -> bool:
         """
         Returns True if button was just released (transition from above to below threshold)
 

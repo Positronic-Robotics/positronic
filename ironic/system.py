@@ -324,6 +324,7 @@ class ControlSystem:
                 raise ValueError(f"Unknown input: {name}. Inputs of {self.__class__.__name__}: {self._input_ports}")
         return self
 
+    # TODO: Make setup returning State, so that if setup fails, we don't start the system.
     async def setup(self):
         """Setup the control system."""
         self._setup_done = True
