@@ -1,4 +1,5 @@
 import logging
+import os
 from pathlib import Path
 from io import BytesIO
 
@@ -6,9 +7,8 @@ import cv2
 import torch
 import tqdm
 import numpy as np
-import hydra
-from omegaconf import DictConfig
 import imageio
+import fire
 
 from lerobot.common.datasets.lerobot_dataset import CODEBASE_VERSION, LeRobotDataset
 from lerobot.common.datasets.push_dataset_to_hub.aloha_hdf5_format import to_hf_dataset
@@ -18,7 +18,11 @@ from lerobot.common.datasets.video_utils import encode_video_frames
 from lerobot.scripts.push_dataset_to_hub import save_meta_data
 from lerobot.common.datasets.compute_stats import compute_stats
 
-from inference import StateEncoder
+import ironic as ir
+import positronic.cfg.inference.action
+import positronic.cfg.inference.state
+from positronic.inference.action import ActionDecoder
+from positronic.inference.state import StateEncoder
 
 
 def _decode_video_from_array(array: torch.Tensor) -> torch.Tensor:
@@ -41,7 +45,15 @@ def _decode_video_from_array(array: torch.Tensor) -> torch.Tensor:
             with imageio.get_reader(buffer, format='mp4') as reader:
                 return torch.from_numpy(np.stack([frame for frame in reader]))
         except Exception as e:
-            raise ValueError(f"Failed to decode video data: {str(e)}")
+            try:
+                print("Failed to decode video data. Trying to read from file.")
+                with open('tmp.mp4', 'wb') as f:
+                    f.write(array.numpy().tobytes())
+                return torch.from_numpy(np.stack(imageio.mimread('tmp.mp4')))
+            except Exception as e:
+                raise ValueError(f"Failed to decode video data: {str(e)}")
+            finally:
+                os.remove('tmp.mp4')
 
 
 def convert_to_seconds(timestamp_units: str, timestamp: torch.Tensor):
@@ -57,17 +69,33 @@ def convert_to_seconds(timestamp_units: str, timestamp: torch.Tensor):
         raise ValueError(f"Unknown timestamp units: {timestamp_units}")
 
 
-def start_from_zero(timestamp: torch.Tensor):
+def _start_from_zero(timestamp: torch.Tensor):
     return timestamp - timestamp[0]
 
 
-@hydra.main(version_base=None, config_path="../configs", config_name="to_lerobot")
-def convert_to_lerobot_dataset(cfg: DictConfig):  # noqa: C901  Function is too complex
-    input_dir = Path(cfg.input_dir)
-    output_dir = Path(cfg.output_dir)
-    fps = cfg.dataset.fps
-    video = cfg.dataset.video
-    run_compute_stats = cfg.dataset.run_compute_stats
+@ir.config(
+    fps=30,
+    video=True,
+    run_compute_stats=True,
+    start_from_zero=True,
+    timestamp_units='ns',
+    state_encoder=positronic.cfg.inference.state.end_effector,
+    action_encoder=positronic.cfg.inference.action.umi_relative,
+)
+def convert_to_lerobot_dataset(
+    input_dir: str,
+    output_dir: str,
+    fps: int,
+    video: bool,
+    run_compute_stats: bool,
+    start_from_zero: bool,
+    timestamp_units: str,
+    state_encoder: StateEncoder,
+    action_encoder: ActionDecoder,
+):  # noqa: C901  Function is too complex
+    input_dir = Path(input_dir)
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
 
     output_dir.mkdir(parents=True, exist_ok=True)
     (output_dir / "videos").mkdir(exist_ok=True)
@@ -78,19 +106,16 @@ def convert_to_lerobot_dataset(cfg: DictConfig):  # noqa: C901  Function is too 
 
     all_episodes_data = []
 
-    state_enc = StateEncoder(cfg.state)
-    action_dec = hydra.utils.instantiate(cfg.action)
-
     for episode_idx, episode_file in enumerate(tqdm.tqdm(episode_files, desc="Processing episodes")):
         episode_data = torch.load(episode_file)
 
         for key in episode_data.keys():
-            # TODO: come up with a better way to determine if the data is a video
-            if key.startswith('image.') and len(episode_data[key].shape) == 1:
+            # TODO: come up with a better way to determine if the data is a video (X2 !!!)
+            if key.startswith('image.') or key.endswith('.image') and len(episode_data[key].shape) == 1:
                 episode_data[key] = _decode_video_from_array(episode_data[key])
 
         ep_dict = {}
-        obs = state_enc.encode_episode(episode_data)
+        obs = state_encoder.encode_episode(episode_data)
 
         # Process images
         for key in obs:
@@ -130,16 +155,16 @@ def convert_to_lerobot_dataset(cfg: DictConfig):  # noqa: C901  Function is too 
         ep_dict['observation.state'] = obs['observation.state']
 
         # Concatenate all the data as specified in the config
-        ep_dict['action'] = action_dec.encode_episode(episode_data)
+        ep_dict['action'] = action_encoder.encode_episode(episode_data)
 
         ep_dict["episode_index"] = torch.tensor([episode_idx] * num_frames)
         ep_dict["frame_index"] = torch.arange(0, num_frames, 1)
         timestamp = episode_data['image_timestamp'].clone()
 
-        if cfg.start_from_zero:
-            timestamp = start_from_zero(timestamp)
+        if start_from_zero:
+            timestamp = _start_from_zero(timestamp)
 
-        ep_dict["timestamp"] = convert_to_seconds(cfg.timestamp_units, timestamp)
+        ep_dict["timestamp"] = convert_to_seconds(timestamp_units, timestamp)
 
         done = torch.zeros(num_frames, dtype=torch.bool)
         # done[-1] = True
@@ -193,8 +218,8 @@ def convert_to_lerobot_dataset(cfg: DictConfig):  # noqa: C901  Function is too 
     save_meta_data(info, stats, episode_data_index, meta_data_dir)
 
     print(f"Dataset converted and saved to {output_dir}")
-    return lerobot_dataset
+
 
 
 if __name__ == "__main__":
-    convert_to_lerobot_dataset()
+    fire.Fire(convert_to_lerobot_dataset.override_and_instantiate)

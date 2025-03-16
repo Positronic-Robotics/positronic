@@ -2,6 +2,7 @@
 
 import asyncio
 from typing import AsyncIterator, Optional
+import logging
 
 import cv2
 from linuxpy.video.device import Device, Frame, PixelFormat
@@ -25,7 +26,9 @@ class LinuxPyCamera(ir.ControlSystem):
     _frame_queue: asyncio.Queue
     _reader_task: Optional[asyncio.Task] = None
     _stopped: asyncio.Event
+    _error: Optional[Exception] = None
     _codec_contexts: dict[str, av.CodecContext]
+    _logger: logging.Logger
     _codec_mapping = {
         PixelFormat.H264: 'h264',
         PixelFormat.HEVC: 'hevc',
@@ -60,7 +63,9 @@ class LinuxPyCamera(ir.ControlSystem):
         self._frame_queue = asyncio.Queue(maxsize=1)
         self._reader_task = None
         self._stopped = asyncio.Event()
+        self._error = None
         self._codec_contexts = {}
+        self._logger = logging.getLogger(f"{self.__class__.__name__}_{device_path}")
 
     async def _frame_generator(self) -> AsyncIterator[dict]:
         """Generate processed frames from the camera"""
@@ -85,7 +90,7 @@ class LinuxPyCamera(ir.ControlSystem):
                         for packet in packets:
                             frames = codec_ctx.decode(packet)
                             for frame in frames:
-                                yield {'image': frame.to_ndarray(format='bgr24')}
+                                yield {'image': frame.to_ndarray(format='rgb24')}
                     case _:
                         # Assume 3 bytes per pixel (RGB/BGR)
                         rgb_data = data.reshape((frame.height, frame.width, 3))
@@ -104,24 +109,33 @@ class LinuxPyCamera(ir.ControlSystem):
                     except asyncio.QueueEmpty:
                         pass
                 await self._frame_queue.put(frame)
-        except Exception:
+        except Exception as e:
+            self._error = e
+            self._logger.error(f"Camera error: {e}")
             raise
         finally:
             self._stopped.set()
 
     async def setup(self):
         """Set up the camera device and configure format"""
-        self._device = Device(self.device_path)
-        self._device.open()
+        try:
+            self._device = Device(self.device_path)
+            self._device.open()
 
-        self._device.set_format(self._device.info.buffers[0],
-                                self.width, self.height, self.pixel_format)
+            self._device.set_format(self._device.info.buffers[0],
+                                    self.width, self.height, self.pixel_format)
 
-        self._device.set_fps(self._device.info.buffers[0], self.fps)
-        self._aiter = aiter(self._device)
+            self._device.set_fps(self._device.info.buffers[0], self.fps)
+            self._aiter = aiter(self._device)
 
-        self._stopped.clear()
-        self._reader_task = asyncio.create_task(self._frame_reader())
+            self._stopped.clear()
+            self._error = None
+            self._reader_task = asyncio.create_task(self._frame_reader())
+        except OSError as e:
+            self._error = e
+            self._stopped.set()
+            self._logger.error(f"Failed to setup camera {self.device_path}: {e}")
+            raise
 
     async def cleanup(self):
         """Clean up camera resources"""
@@ -143,6 +157,9 @@ class LinuxPyCamera(ir.ControlSystem):
 
     async def step(self):
         if self._stopped.is_set():
+            if self._error:
+                self._logger.error(f"Camera {self.device_path} failed: {self._error}")
+                raise self._error
             return ir.State.FINISHED
 
         try:
@@ -162,17 +179,34 @@ class LinuxPyCamera(ir.ControlSystem):
 
 if __name__ == "__main__":
     import asyncio
-    from tools.video import VideoDumper
+    from positronic.tools.video import VideoDumper
+    from positronic.tools.rerun_vis import RerunVisualiser
+    from positronic.drivers.camera.merge import merge_on_camera
 
     async def _main():
-        camera = LinuxPyCamera('/dev/video0')
+        camera = LinuxPyCamera(
+            '/dev/v4l/by-id/usb-Arducam_Technology_Co.__Ltd._USB_2.0_Camera_SN0001-video-index0',
+            width=1920,
+            height=1080,
+            pixel_format="MJPG"
+        )
+        camera2 = LinuxPyCamera(
+            '/dev/v4l/by-id/usb-Arducam_Technology_Co.__Ltd._Arducam_USB_Camera_UC684-video-index0',
+            width=1920,
+            height=1080,
+            pixel_format="MJPG")
+
+        merged = merge_on_camera(("main", camera), {"ext": camera2})
+
         system = ir.compose(
-            camera,
-            VideoDumper("video.mp4", 30, codec='libx264').bind(
-                image=ir.utils.map_port(lambda x: x['image'], camera.outs.frame)
+            merged,
+            # VideoDumper("video.mp4", 30, codec='libx264').bind(
+            #     image=ir.utils.map_port(lambda x: x['image'], merged.outs.frame)
+            # ),
+            RerunVisualiser().bind(
+                frame=merged.outs.frame
             )
         )
 
         await ir.utils.run_gracefully(system)
-
     asyncio.run(_main())

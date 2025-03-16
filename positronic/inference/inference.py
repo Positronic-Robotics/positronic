@@ -1,17 +1,16 @@
 import asyncio
 
-import hydra
-from omegaconf import DictConfig
 import torch
 import rerun as rr
 
+import geom
 import ironic as ir
+from positronic.inference.action import ActionDecoder
 from .state import StateEncoder
-from .policy import get_policy
 
 
 def rerun_log_observation(ts, obs):
-    rr.set_time_seconds('time', ts)
+    rr.set_time_nanos('time', nanos=ts)
 
     def log_image(name, tensor, compress: bool = True):
         tensor = tensor.squeeze(0)
@@ -31,7 +30,7 @@ def rerun_log_observation(ts, obs):
 
 
 def rerun_log_action(ts, action):
-    rr.set_time_seconds('time', ts)
+    rr.set_time_nanos('time', nanos=ts)
     for i, action in enumerate(action):
         rr.log(f"action/{i}", rr.Scalar(action))
 
@@ -42,21 +41,29 @@ def rerun_log_action(ts, action):
     output_ports=['target_robot_position', 'target_grip']
 )
 class Inference(ir.ControlSystem):
-    def __init__(self, cfg: DictConfig):
+    def __init__(
+            self,
+            state_encoder: StateEncoder,
+            policy: ir.ControlSystem,
+            action_decoder: ActionDecoder,
+            rerun: bool = False,
+            device: str = 'cuda'
+    ):
         super().__init__()
 
-        self.policy_factory = lambda: get_policy(cfg.checkpoint_path, cfg.get('policy_args', {}))
-        self.cfg = cfg
-        self.state_encoder = StateEncoder(hydra.utils.instantiate(cfg.state))
-        self.action_decoder = hydra.utils.instantiate(cfg.action)
-        self.policy = None
+        self.policy = policy
+        self.state_encoder = state_encoder
+        self.action_decoder = action_decoder
         self.running = False
+        self.rerun = rerun
+        self.device = device
         self.fps = ir.utils.FPSCounter("Inference")
 
     async def setup(self):
         """Initialize the policy"""
-        self.policy = self.policy_factory()
-        self.policy.to(self.cfg.device)
+        self.policy.to(self.device)
+        self.reference_pose = None
+
 
     @ir.on_message("start")
     async def handle_start(self, message: ir.Message):
@@ -79,13 +86,29 @@ class Inference(ir.ControlSystem):
 
         robot_data = (await self.ins.robot_data()).data
         obs = self.state_encoder.encode(message.data, robot_data)
+
+        if self.reference_pose is None:
+            self.reference_pose = geom.Transform3D(
+                robot_data['robot_position_translation'],
+                geom.Rotation.from_quat(robot_data['robot_position_quaternion'])
+            )
+
+        robot_data['reference_robot_position_translation'] = self.reference_pose.translation
+        robot_data['reference_robot_position_quaternion'] = self.reference_pose.rotation.as_quat
+
         for key in obs:
-            obs[key] = obs[key].to(self.cfg.device)
+            obs[key] = obs[key].to(self.device)
 
         action = self.policy.select_action(obs).squeeze(0).cpu().numpy()
         action_dict = self.action_decoder.decode(action, robot_data)
 
-        if self.cfg.rerun:
+        if self.policy.chunk_start():
+            self.reference_pose = geom.Transform3D(
+                robot_data['robot_position_translation'],
+                geom.Rotation.from_quat(robot_data['robot_position_quaternion'])
+            )
+
+        if self.rerun:
             rerun_log_observation(message.timestamp, obs)
             rerun_log_action(message.timestamp, action)
 
