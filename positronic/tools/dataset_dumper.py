@@ -70,7 +70,7 @@ class SerialDumper:
                                                            ffmpeg_params=[
                                                             #    '-crf', str(self.video_quality),
                                                                '-vf', 'scale=1280:720',
-                                                            #    '-preset', 'slow',
+                                                               '-preset', 'veryfast',
                                                             #    '-pix_fmt', self.video_pixel_format,
                                                            ])
 
