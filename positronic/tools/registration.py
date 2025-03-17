@@ -33,7 +33,7 @@ def _plot_trajectory(trajectory: AbsoluteTrajectory, name: str, color: List[int]
 # Arbitrary trajectory for registration
 WAYPOINTS = RelativeTrajectory([
     # Initial joint configuration is handled separately
-    geom.Transform3D(translation=[0.0, 0.0, 0.2]),
+    geom.Transform3D(translation=[0.0, 0.0, 0.3]),
     # YX plane triangle 0.2 side
     geom.Transform3D(translation=[0.0, 0.2, 0.0]),
     geom.Transform3D(translation=[-0.2, 0.0, 0.0]),
