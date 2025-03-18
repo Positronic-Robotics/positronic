@@ -1,6 +1,4 @@
-import torch
 import ironic as ir
-from positronic.inference.policy import PlaybackPolicy
 
 
 def _get_act_policy(checkpoint_path: str, use_temporal_ensembler: bool = False, n_action_steps: int | None = None):
@@ -31,9 +29,4 @@ act = ir.Config(
 
 diffusion = ir.Config(
     _get_diffusion_policy,
-)
-
-
-playback = ir.Config(
-    PlaybackPolicy,
 )

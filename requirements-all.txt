@@ -7,6 +7,14 @@ absl-py==2.1.0
     #   dm-tree
     #   labmaze
     #   mujoco
+aiohappyeyeballs==2.6.1
+    # via aiohttp
+aiohttp==3.11.14
+    # via
+    #   datasets
+    #   fsspec
+aiosignal==1.3.2
+    # via aiohttp
 annotated-types==0.7.0
     # via pydantic
 antlr4-python3-runtime==4.9.3
@@ -31,6 +39,7 @@ async-lru==2.0.4
     # via jupyterlab
 attrs==25.1.0
     # via
+    #   aiohttp
     #   dm-tree
     #   jsonschema
     #   referencing
@@ -104,6 +113,8 @@ contourpy==1.3.1
     # via matplotlib
 cycler==0.12.1
     # via matplotlib
+datasets==3.4.0
+    # via positronic (pyproject.toml)
 dearpygui==2.0.0
     # via positronic (pyproject.toml)
 debugpy==1.8.13
@@ -112,6 +123,12 @@ decorator==5.2.1
     # via ipython
 defusedxml==0.7.1
     # via nbconvert
+diffusers==0.32.2
+    # via positronic (pyproject.toml)
+dill==0.3.8
+    # via
+    #   datasets
+    #   multiprocess
 dm-control==1.0.27
     # via positronic (pyproject.toml)
 dm-env==1.6
@@ -124,6 +141,8 @@ easyhid==0.0.10
     # via pyspacemouse
 eigenpy==3.5.1
     # via hpp-fcl
+einops==0.8.1
+    # via positronic (pyproject.toml)
 etils==1.12.0
     # via mujoco
 executing==2.2.0
@@ -133,16 +152,26 @@ fastapi==0.115.11
 fastjsonschema==2.21.1
     # via nbformat
 filelock==3.17.0
-    # via torch
+    # via
+    #   datasets
+    #   diffusers
+    #   huggingface-hub
+    #   torch
 fire==0.7.0
     # via positronic (pyproject.toml)
 fonttools==4.56.0
     # via matplotlib
 fqdn==1.5.1
     # via jsonschema
-fsspec==2025.2.0
+frozenlist==1.5.0
     # via
+    #   aiohttp
+    #   aiosignal
+fsspec==2024.12.0
+    # via
+    #   datasets
     #   etils
+    #   huggingface-hub
     #   torch
 gitdb==4.0.12
     # via gitpython
@@ -156,6 +185,8 @@ h11==0.14.0
     # via
     #   httpcore
     #   uvicorn
+h5py==3.13.0
+    # via positronic (pyproject.toml)
 hpp-fcl==2.4.4
     # via pin
 httpcore==1.0.7
@@ -164,6 +195,11 @@ httptools==0.6.4
     # via uvicorn
 httpx==0.28.1
     # via jupyterlab
+huggingface-hub==0.29.3
+    # via
+    #   positronic (pyproject.toml)
+    #   datasets
+    #   diffusers
 hydra-colorlog==1.2.0
     # via positronic (pyproject.toml)
 hydra-core==1.3.2
@@ -176,8 +212,11 @@ idna==3.10
     #   httpx
     #   jsonschema
     #   requests
+    #   yarl
 imageio==2.37.0
     # via positronic (pyproject.toml)
+importlib-metadata==8.6.1
+    # via diffusers
 importlib-resources==6.5.2
     # via etils
 iniconfig==2.0.0
@@ -292,6 +331,12 @@ mujoco==3.3.0
     # via
     #   positronic (pyproject.toml)
     #   dm-control
+multidict==6.1.0
+    # via
+    #   aiohttp
+    #   yarl
+multiprocess==0.70.16
+    # via datasets
 nbclient==0.10.2
     # via nbconvert
 nbconvert==7.16.6
@@ -322,9 +367,12 @@ numpy==1.26.4
     #   positronic (pyproject.toml)
     #   cmeel-boost
     #   contourpy
+    #   datasets
+    #   diffusers
     #   dm-control
     #   dm-env
     #   dm-tree
+    #   h5py
     #   imageio
     #   labmaze
     #   matplotlib
@@ -333,9 +381,11 @@ numpy==1.26.4
     #   numpy-quaternion
     #   opencv-python
     #   opencv-python-headless
+    #   pandas
     #   pyturbojpeg
     #   rerun-sdk
     #   scipy
+    #   torchvision
 numpy-quaternion==2024.0.7
     # via positronic (pyproject.toml)
 nvidia-cublas-cu12==12.4.5.8
@@ -382,6 +432,8 @@ overrides==7.7.0
     # via jupyter-server
 packaging==24.2
     # via
+    #   datasets
+    #   huggingface-hub
     #   hydra-core
     #   ipykernel
     #   jupyter-events
@@ -392,6 +444,8 @@ packaging==24.2
     #   nbconvert
     #   pytest
     #   setuptools-scm
+pandas==2.2.3
+    # via datasets
 pandocfilters==1.5.1
     # via nbconvert
 parso==0.8.4
@@ -400,9 +454,11 @@ pexpect==4.9.0
     # via ipython
 pillow==11.1.0
     # via
+    #   diffusers
     #   imageio
     #   matplotlib
     #   rerun-sdk
+    #   torchvision
 pin==2.7.0
     # via positronic (pyproject.toml)
 platformdirs==4.3.6
@@ -415,6 +471,10 @@ prompt-toolkit==3.0.50
     # via
     #   ipython
     #   jupyter-console
+propcache==0.3.0
+    # via
+    #   aiohttp
+    #   yarl
 protobuf==5.29.3
     # via dm-control
 psutil==7.0.0
@@ -426,7 +486,9 @@ ptyprocess==0.7.0
 pure-eval==0.2.3
     # via stack-data
 pyarrow==19.0.1
-    # via rerun-sdk
+    # via
+    #   datasets
+    #   rerun-sdk
 pyaudio==0.2.14
     # via positronic (pyproject.toml)
 pycparser==2.22
@@ -464,14 +526,19 @@ python-dateutil==2.9.0.post0
     #   arrow
     #   jupyter-client
     #   matplotlib
+    #   pandas
 python-dotenv==1.0.1
     # via uvicorn
 python-json-logger==3.2.1
     # via jupyter-events
 pyturbojpeg @ git+https://github.com/lilohuang/PyTurboJPEG.git@87bdba487a6198afd6d4c3cbfb2b544c59f7ea8f
     # via positronic (pyproject.toml)
+pytz==2025.1
+    # via pandas
 pyyaml==6.0.2
     # via
+    #   datasets
+    #   huggingface-hub
     #   jupyter-events
     #   omegaconf
     #   uvicorn
@@ -486,10 +553,15 @@ referencing==0.36.2
     #   jsonschema
     #   jsonschema-specifications
     #   jupyter-events
+regex==2024.11.6
+    # via diffusers
 requests==2.32.3
     # via
     #   positronic (pyproject.toml)
+    #   datasets
+    #   diffusers
     #   dm-control
+    #   huggingface-hub
     #   jupyterlab-server
 rerun-sdk==0.22.1
     # via positronic (pyproject.toml)
@@ -507,6 +579,8 @@ rpds-py==0.23.1
     #   referencing
 ruckig==0.14.0
     # via positronic (pyproject.toml)
+safetensors==0.5.3
+    # via diffusers
 scipy==1.15.2
     # via
     #   positronic (pyproject.toml)
@@ -520,7 +594,6 @@ setuptools==75.8.2
     #   jupyterlab
     #   labmaze
     #   setuptools-scm
-    #   torch
 setuptools-scm==8.2.0
     # via cmake-build-extension
 six==1.17.0
@@ -548,6 +621,10 @@ terminado==0.18.1
 tinycss2==1.4.0
     # via bleach
 torch==2.6.0
+    # via
+    #   positronic (pyproject.toml)
+    #   torchvision
+torchvision==0.21.0
     # via positronic (pyproject.toml)
 tornado==6.4.2
     # via
@@ -558,7 +635,10 @@ tornado==6.4.2
     #   notebook
     #   terminado
 tqdm==4.67.1
-    # via dm-control
+    # via
+    #   datasets
+    #   dm-control
+    #   huggingface-hub
 traitlets==5.14.3
     # via
     #   comm
@@ -585,11 +665,16 @@ typing-extensions==4.12.2
     #   beautifulsoup4
     #   etils
     #   fastapi
+    #   huggingface-hub
+    #   ipython
+    #   linuxpy
     #   pydantic
     #   pydantic-core
     #   referencing
     #   rerun-sdk
     #   torch
+tzdata==2025.1
+    # via pandas
 uri-template==1.3.0
     # via jsonschema
 urllib3==2.3.0
@@ -618,7 +703,13 @@ widgetsnbextension==4.0.13
     # via ipywidgets
 wrapt==1.17.2
     # via dm-tree
+xxhash==3.5.0
+    # via datasets
 yappi==1.6.10
     # via positronic (pyproject.toml)
+yarl==1.18.3
+    # via aiohttp
 zipp==3.21.0
-    # via etils
+    # via
+    #   etils
+    #   importlib-metadata

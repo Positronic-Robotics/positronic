@@ -292,7 +292,6 @@ setuptools==75.8.2
     #   dm-control
     #   labmaze
     #   setuptools-scm
-    #   torch
 setuptools-scm==8.2.0
     # via cmake-build-extension
 six==1.17.0
@@ -318,6 +317,7 @@ typing-extensions==4.12.2
     #   anyio
     #   etils
     #   fastapi
+    #   linuxpy
     #   pydantic
     #   pydantic-core
     #   rerun-sdk

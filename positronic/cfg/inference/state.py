@@ -7,17 +7,17 @@ end_effector= ir.Config(
     state_output_key='observation.state',
     images=[
         ImageEncodingConfig(
-            key='first.image',
-            output_key='observation.images.front',
+            key='left.image',
+            output_key='observation.images.left',
             resize=[352, 192]
         ),
         ImageEncodingConfig(
-            key='second.image',
-            output_key='observation.images.back',
+            key='right.image',
+            output_key='observation.images.right',
             resize=[352, 192]
         ),
     ],
     state=[
-        'target_grip',  # fake grip
+        'grip',  # fake grip
     ]
 )

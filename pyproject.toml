@@ -45,6 +45,14 @@ dev = [
     "ipython",
     "opencv-python"
 ]
+lerobot = [
+    "einops>=0.8.0",
+    "datasets>=2.19.0",
+    "torchvision>=0.17.1",
+    "diffusers>=0.27.2",
+    "h5py>=3.10.0",
+    "huggingface-hub>=0.25.0",
+]
 
 [tool.pytest.ini_options]
 testpaths = [
