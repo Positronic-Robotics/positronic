@@ -236,7 +236,7 @@ class Vehicle:
         disable_motors = True
         last_command_time = time.time()
         last_step_time = time.time()
-        while self.control_loop_running:
+        while self.control_loop_running.is_set():
             # Maintain the desired control frequency
             while time.time() - last_step_time < CONTROL_PERIOD:
                 time.sleep(0.0001)
@@ -257,7 +257,6 @@ class Vehicle:
 
             # Check for new command
             if not self.command_queue.empty():
-                print(f'Command queue size: {self.command_queue.qsize()}')
                 command = self.command_queue.get()
                 last_command_time = time.time()
                 target = command['target']
@@ -332,9 +331,7 @@ class Vehicle:
             # vehicle.redis_client.set(f'dx', f'{vehicle.dx[0]} {vehicle.dx[1]} {vehicle.dx[2]}')
 
     def _enqueue_command(self, command_type, target, frame=None):
-        if self.command_queue.full():
-            print('Warning: Command queue is full. Is control loop running?')
-        else:
+        if not self.command_queue.full():
             command = {'type': command_type, 'target': target}
             if frame is not None:
                 command['frame'] = FrameType(frame)

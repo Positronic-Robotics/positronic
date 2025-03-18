@@ -48,6 +48,3 @@ class Tidybot(ir.ControlSystem):
     async def velocity(self):
         return ir.Message(self.vehicle.dx) if self.vehicle else ir.NoValue
 
-    async def step(self):
-        r, _ = await asyncio.gather(super().step(), asyncio.sleep(0.005))
-        return r
