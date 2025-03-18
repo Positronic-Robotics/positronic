@@ -64,9 +64,9 @@ class TeleopSystem(ir.ControlSystem):
     async def handle_teleop_buttons(self, message: ir.Message):
         self._parse_buttons(message.data)
 
-        track_but = self.button_handler.is_pressed('A')
-        record_but = self.button_handler.is_pressed('B')
-        reset_but = self.button_handler.is_pressed('stick')
+        track_but = self.button_handler.just_pressed('A')
+        record_but = self.button_handler.just_pressed('B')
+        reset_but = self.button_handler.just_pressed('stick')
 
         grasp_but = self.button_handler.get_value('trigger')
 
@@ -137,9 +137,9 @@ class TeleopButtons(ir.ControlSystem):
     async def handle_teleop_buttons(self, message: ir.Message):
         self._parse_buttons(message.data)
 
-        track_but = self.button_handler.is_pressed('A')
-        record_but = self.button_handler.is_pressed('B')
-        reset_but = self.button_handler.is_pressed('stick')
+        track_but = self.button_handler.just_pressed('A')
+        record_but = self.button_handler.just_pressed('B')
+        reset_but = self.button_handler.just_pressed('stick')
 
         if track_but:
             await self._switch_tracking(message.timestamp)

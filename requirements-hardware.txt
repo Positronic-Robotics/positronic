@@ -225,6 +225,8 @@ packaging==24.2
     #   matplotlib
     #   pytest
     #   setuptools-scm
+phoenix6==24.3.0
+    # via positronic (pyproject.toml)
 pillow==11.1.0
     # via
     #   imageio
@@ -246,6 +248,8 @@ pydantic==2.10.6
     # via fastapi
 pydantic-core==2.27.2
     # via pydantic
+pygame==2.5.2
+    # via positronic (pyproject.toml)
 pymodbus==3.8.6
     # via positronic (pyproject.toml)
 pyopengl==3.1.9
@@ -291,6 +295,7 @@ setuptools==75.8.2
     # via
     #   dm-control
     #   labmaze
+    #   phoenix6
     #   setuptools-scm
     #   torch
 setuptools-scm==8.2.0
@@ -307,6 +312,8 @@ sympy==1.13.1
     # via torch
 termcolor==2.5.0
     # via fire
+threadpoolctl==3.5.0
+    # via positronic (pyproject.toml)
 torch==2.6.0
     # via positronic (pyproject.toml)
 tqdm==4.67.1

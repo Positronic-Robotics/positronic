@@ -38,7 +38,11 @@ hardware = [
     "pymodbus",
     "pyspacemouse",
     "linuxpy",
-    "pin",  # For Kinova
+    "pin",  # For Kinova and Tidybot2
+    # Tidybot2
+    "threadpoolctl==3.5.0",
+    "phoenix6==24.3.0",
+    "pygame==2.5.2",
 ]
 dev = [
     "jupyter",

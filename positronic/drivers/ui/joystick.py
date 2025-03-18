@@ -32,12 +32,13 @@ def apply_deadzone(arr, deadzone_size=0.05):
 class JoystickCS(ir.ControlSystem):
     """A joystick control system."""
 
-    def __init__(self, joystick_id=0, deadzone_size=0.05, button_mapping=LOGITECH_F710_BUTTON_MAPPING):
+    def __init__(self, joystick_id=0, fps=200, deadzone_size=0.05, button_mapping=LOGITECH_F710_BUTTON_MAPPING):
         """
         Initialize the joystick control system.
 
         Args:
             joystick_id (int): ID of the joystick to use (default: 0)
+            fps (int): How many times per second to read the joystick (default: 200)
             deadzone_size (float): Size of the deadzone to apply to axis values (default: 0.05)
             button_mapping (dict): Mapping of button indices to names for ButtonHandler
                                    If None, will use default numeric indices as names
@@ -48,6 +49,13 @@ class JoystickCS(ir.ControlSystem):
         self.button_mapping = button_mapping
         self.joystick = None
         self.button_handler = ButtonHandler()
+        self.fps = ir.utils.FPSCounter('JoystickCS', 5)
+
+        def cb():
+            self.fps.tick()
+            pygame.event.pump()
+
+        self.pygame_pump = ir.utils.ThrottledCallback(cb, fps)
 
     async def setup(self):
         """Initialize pygame and the joystick."""
@@ -68,8 +76,10 @@ class JoystickCS(ir.ControlSystem):
     async def step(self):
         """Read joystick state and update button handler."""
         if self.joystick is None:
+            logging.error("Joystick not initialized")
             return ir.State.FINISHED
-        pygame.event.pump()
+
+        self.pygame_pump()
         return ir.State.ALIVE
 
     async def cleanup(self):

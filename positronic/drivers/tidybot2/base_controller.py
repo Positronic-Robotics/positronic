@@ -54,9 +54,9 @@ import phoenix6
 from phoenix6 import configs, controls, hardware
 from ruckig import InputParameter, OutputParameter, Result, Ruckig, ControlInterface
 from threadpoolctl import threadpool_limits
-from constants import h_x, h_y, ENCODER_MAGNET_OFFSETS
-from constants import POLICY_CONTROL_PERIOD
-from utils import create_pid_file
+from positronic.drivers.tidybot2.constants import h_x, h_y, ENCODER_MAGNET_OFFSETS
+from positronic.drivers.tidybot2.constants import POLICY_CONTROL_PERIOD
+from positronic.drivers.tidybot2.utils import create_pid_file
 
 # Vehicle
 CONTROL_FREQ = 250                   # 250 Hz
@@ -313,6 +313,9 @@ class Vehicle:
             os.sched_setscheduler(0, os.SCHED_FIFO, os.sched_param(os.sched_get_priority_max(os.SCHED_FIFO)))
         except PermissionError:
             print('Failed to set real-time scheduling policy, please edit /etc/security/limits.d/99-realtime.conf')
+            raise
+
+        print('>>>>>>> Control loop started <<<<<<')
 
         disable_motors = True
         last_command_time = time.time()
@@ -340,6 +343,7 @@ class Vehicle:
 
             # Check for new command
             if not self.command_queue.empty():
+                # print(f'Command queue size: {self.command_queue.qsize()}')
                 command = self.command_queue.get()
                 last_command_time = time.time()
                 target = command['target']

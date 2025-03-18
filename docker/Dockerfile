@@ -34,9 +34,9 @@ ENV PATH=/$VIRTUAL_ENV/bin:$PATH
 
 # Pinocchio ENV setup
 ENV PATH=/opt/openrobots/bin:$PATH
-ENV PKG_CONFIG_PATH=/opt/openrobots/lib/pkgconfig:$PKG_CONFIG_PATH
+ENV PKG_CONFIG_PATH=/opt/openrobots/lib/pkgconfig
 ENV LD_LIBRARY_PATH=/opt/openrobots/lib:$LD_LIBRARY_PATH
-ENV CMAKE_PREFIX_PATH=/opt/openrobots:$CMAKE_PREFIX_PATH
+ENV CMAKE_PREFIX_PATH=/opt/openrobots
 
 # Install libfranka
 RUN git clone --single-branch --recurse-submodules --branch 0.13.4 https://github.com/frankaemika/libfranka
@@ -66,7 +66,7 @@ RUN uv pip install kortex_api-2.7.0.post5-py3-none-any.whl
 
 WORKDIR /positronic
 
-ENV PYTHONPATH=/positronic:$PYTHONPATH
+ENV PYTHONPATH=/positronic
 
 # Default command
 CMD ["bash"]

@@ -1,3 +1,4 @@
+import asyncio
 import ironic as ir
 from positronic.drivers.tidybot2.base_controller import Vehicle
 
@@ -46,3 +47,7 @@ class Tidybot(ir.ControlSystem):
     @ir.out_property
     async def velocity(self):
         return ir.Message(self.vehicle.dx) if self.vehicle else ir.NoValue
+
+    async def step(self):
+        r, _ = await asyncio.gather(super().step(), asyncio.sleep(0.005))
+        return r

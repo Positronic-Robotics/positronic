@@ -418,6 +418,23 @@ class Throttler:
         return time.time()
 
 
+class ThrottledCallback:
+    def __init__(self, callback: Callable[[], None], frequency_hz: float):
+        self.callback = callback
+        self.every_sec = 1.0 / frequency_hz
+        self.last_time_called = None
+
+    def __call__(self):
+        if self.last_time_called is None:
+            self.last_time_called = time.monotonic()
+            return
+
+        now = time.monotonic()
+        if now - self.last_time_called >= self.every_sec:
+            self.last_time_called = now
+            self.callback()
+
+
 def last_value(port: OutputPort, initial_value: Any = NoValue) -> Callable[[], Message]:
     """Creates a property that returns the last value received from an output port.
 

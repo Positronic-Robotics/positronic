@@ -398,6 +398,8 @@ parso==0.8.4
     # via jedi
 pexpect==4.9.0
     # via ipython
+phoenix6==24.3.0
+    # via positronic (pyproject.toml)
 pillow==11.1.0
     # via
     #   imageio
@@ -435,6 +437,8 @@ pydantic==2.10.6
     # via fastapi
 pydantic-core==2.27.2
     # via pydantic
+pygame==2.5.2
+    # via positronic (pyproject.toml)
 pygments==2.19.1
     # via
     #   ipython
@@ -519,6 +523,7 @@ setuptools==75.8.2
     #   dm-control
     #   jupyterlab
     #   labmaze
+    #   phoenix6
     #   setuptools-scm
     #   torch
 setuptools-scm==8.2.0
@@ -545,6 +550,8 @@ terminado==0.18.1
     # via
     #   jupyter-server
     #   jupyter-server-terminals
+threadpoolctl==3.5.0
+    # via positronic (pyproject.toml)
 tinycss2==1.4.0
     # via bleach
 torch==2.6.0
