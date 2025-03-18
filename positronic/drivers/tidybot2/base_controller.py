@@ -20,7 +20,6 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
-
 # Author: Jimmy Wu
 # Date: October 2024
 #
@@ -42,6 +41,7 @@
 
 # Tell Phoenix 6 to use hardware instead of simulation
 import os
+
 os.environ['CTR_TARGET'] = 'Hardware'  # pylint: disable=wrong-import-position
 
 import math
@@ -49,33 +49,36 @@ import queue
 import threading
 import time
 from enum import Enum
+
 import numpy as np
 import phoenix6
 from phoenix6 import configs, controls, hardware
-from ruckig import InputParameter, OutputParameter, Result, Ruckig, ControlInterface
+from ruckig import (ControlInterface, InputParameter, OutputParameter, Result, Ruckig)
 from threadpoolctl import threadpool_limits
-from positronic.drivers.tidybot2.constants import h_x, h_y, ENCODER_MAGNET_OFFSETS
-from positronic.drivers.tidybot2.constants import POLICY_CONTROL_PERIOD
+
+from positronic.drivers.tidybot2.constants import (ENCODER_MAGNET_OFFSETS, POLICY_CONTROL_PERIOD, h_x, h_y)
 from positronic.drivers.tidybot2.utils import create_pid_file
 
 # Vehicle
-CONTROL_FREQ = 250                   # 250 Hz
+CONTROL_FREQ = 250  # 250 Hz
 CONTROL_PERIOD = 1.0 / CONTROL_FREQ  # 4 ms
 NUM_CASTERS = 4
 
 # Caster
-b_x = -0.014008                  # Caster offset (m)
-b_y = -0.003753                  # Lateral caster offset (m)
-r = 0.0508                       # Wheel radius (m)
+b_x = -0.014008  # Caster offset (m)
+b_y = -0.003753  # Lateral caster offset (m)
+r = 0.0508  # Wheel radius (m)
 N_s = 32.0 / 15.0 * 60.0 / 10.0  # Steer gear ratio
-N_r1 = 50.0 / 14.0               # Drive gear ratio (1st stage)
-N_r2 = 19.0 / 25.0               # Drive gear ratio (2nd stage)
-N_w = 45.0 / 15.0                # Wheel gear ratio
+N_r1 = 50.0 / 14.0  # Drive gear ratio (1st stage)
+N_r2 = 19.0 / 25.0  # Drive gear ratio (2nd stage)
+N_w = 45.0 / 15.0  # Wheel gear ratio
 N_r1_r2_w = N_r1 * N_r2 * N_w
 N_s_r2_w = N_s * N_r2 * N_w
 TWO_PI = 2 * math.pi
 
+
 class Motor:
+
     def __init__(self, num):
         self.num = num
         self.is_steer = num % 2 != 0  # Odd num motors are steer motors
@@ -129,7 +132,9 @@ class Motor:
     def set_neutral(self):
         self.fx.set_control(self.neutral_request)
 
+
 class Caster:
+
     def __init__(self, num):
         self.num = num
         self.steer_motor = Motor(2 * self.num - 1)
@@ -177,16 +182,20 @@ class Caster:
         self.steer_motor.set_neutral()
         self.drive_motor.set_neutral()
 
+
 class CommandType(Enum):
     POSITION = 'position'
     VELOCITY = 'velocity'
+
 
 # Currently only used for velocity commands
 class FrameType(Enum):
     GLOBAL = 'global'
     LOCAL = 'local'
 
+
 class Vehicle:
+
     def __init__(self, max_vel=(0.5, 0.5, 1.57), max_accel=(0.25, 0.25, 0.79)):
         self.max_vel = np.array(max_vel)
         self.max_accel = np.array(max_accel)
@@ -255,8 +264,8 @@ class Vehicle:
 
         # Joint positions and velocities
         for i, caster in enumerate(self.casters):
-            self.q[2*i : 2*i + 2] = caster.get_positions()
-            self.dq[2*i : 2*i + 2] = caster.get_velocities()
+            self.q[2 * i:2 * i + 2] = caster.get_positions()
+            self.dq[2 * i:2 * i + 2] = caster.get_velocities()
 
         q_steer = self.q[::2]
         s = np.sin(q_steer)
@@ -265,33 +274,30 @@ class Vehicle:
         # C matrix
         self.C_steer[:, 0] = s / b_x
         self.C_steer[:, 1] = -c / b_x
-        self.C_steer[:, 2] = (-h_x*c - h_y*s) / b_x - 1.0
-        self.C_drive[:, 0] = c/r - b_y*s / (b_x*r)
-        self.C_drive[:, 1] = s/r + b_y*c / (b_x*r)
-        self.C_drive[:, 2] = (h_x*s - h_y*c) / r + b_y * (h_x*c + h_y*s) / (b_x*r)
+        self.C_steer[:, 2] = (-h_x * c - h_y * s) / b_x - 1.0
+        self.C_drive[:, 0] = c / r - b_y * s / (b_x * r)
+        self.C_drive[:, 1] = s / r + b_y * c / (b_x * r)
+        self.C_drive[:, 2] = (h_x * s - h_y * c) / r + b_y * (h_x * c + h_y * s) / (b_x * r)
 
         # C_p matrix
-        self.C_p_steer[:, 2] = -b_x*s - b_y*c - h_y
-        self.C_p_drive[:, 2] = b_x*c - b_y*s + h_x
+        self.C_p_steer[:, 2] = -b_x * s - b_y * c - h_y
+        self.C_p_drive[:, 2] = b_x * c - b_y * s + h_x
 
         # C_qp^# matrix
-        self.CpT_Cqinv_steer[0] = b_x*s + b_y*c
-        self.CpT_Cqinv_steer[1] = -b_x*c + b_y*s
-        self.CpT_Cqinv_steer[2] = b_x * (-h_x*c - h_y*s - b_x) + b_y * (h_x*s - h_y*c - b_y)
+        self.CpT_Cqinv_steer[0] = b_x * s + b_y * c
+        self.CpT_Cqinv_steer[1] = -b_x * c + b_y * s
+        self.CpT_Cqinv_steer[2] = b_x * (-h_x * c - h_y * s - b_x) + b_y * (h_x * s - h_y * c - b_y)
         self.CpT_Cqinv_drive[0] = r * c
         self.CpT_Cqinv_drive[1] = r * s
-        self.CpT_Cqinv_drive[2] = r * (h_x*s - h_y*c - b_y)
+        self.CpT_Cqinv_drive[2] = r * (h_x * s - h_y * c - b_y)
         with threadpool_limits(limits=1, user_api='blas'):  # Prevent excessive CPU usage
             self.C_pinv = np.linalg.solve(self.C_p.T @ self.C_p, self.CpT_Cqinv)
 
         # Odometry
         dx_local = self.C_pinv @ self.dq
         theta_avg = self.x[2] + 0.5 * dx_local[2] * CONTROL_PERIOD
-        R = np.array([
-            [math.cos(theta_avg), -math.sin(theta_avg), 0.0],
-            [math.sin(theta_avg), math.cos(theta_avg), 0.0],
-            [0.0, 0.0, 1.0]
-        ])
+        R = np.array([[math.cos(theta_avg), -math.sin(theta_avg), 0.0], [math.sin(theta_avg),
+                                                                         math.cos(theta_avg), 0.0], [0.0, 0.0, 1.0]])
         self.dx = R @ dx_local
         self.x += self.dx * CONTROL_PERIOD
 
@@ -335,11 +341,8 @@ class Vehicle:
 
             # Global to local frame conversion
             theta = self.x[2]
-            R = np.array([
-                [math.cos(theta), math.sin(theta), 0.0],
-                [-math.sin(theta), math.cos(theta), 0.0],
-                [0.0, 0.0, 1.0]
-            ])
+            R = np.array([[math.cos(theta), math.sin(theta), 0.0], [-math.sin(theta),
+                                                                    math.cos(theta), 0.0], [0.0, 0.0, 1.0]])
 
             # Check for new command
             if not self.command_queue.empty():
@@ -404,7 +407,7 @@ class Vehicle:
 
                 # Send motor velocity commands
                 for i in range(NUM_CASTERS):
-                    self.casters[i].set_velocities(dq_d[2*i], dq_d[2*i + 1])
+                    self.casters[i].set_velocities(dq_d[2 * i], dq_d[2 * i + 1])
 
             # Debugging
             # self.data.append({
@@ -441,6 +444,7 @@ class Vehicle:
             curr_position = caster.cancoder.get_absolute_position().value
             offsets.append(f'{round(4096 * (curr_offset - curr_position))}.0 / 4096')
         print(f'ENCODER_MAGNET_OFFSETS = [{", ".join(offsets)}]')
+
 
 if __name__ == '__main__':
     vehicle = Vehicle(max_vel=(0.25, 0.25, 0.79))
