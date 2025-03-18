@@ -42,22 +42,21 @@
 # Tell Phoenix 6 to use hardware instead of simulation
 import os
 
-os.environ['CTR_TARGET'] = 'Hardware'  # pylint: disable=wrong-import-position
-
 import math
 import multiprocessing as mp
 import time
 from enum import Enum
 
 import numpy as np
-import phoenix6
-from phoenix6 import configs, controls, hardware
-from ruckig import (ControlInterface, InputParameter, OutputParameter, Result,
-                    Ruckig)
-from threadpoolctl import threadpool_limits
+os.environ['CTR_TARGET'] = 'Hardware'
+import phoenix6  # noqa: E402
+from phoenix6 import configs, controls, hardware  # noqa: E402
+from ruckig import (ControlInterface, InputParameter, OutputParameter, Result,  # noqa: E402
+                    Ruckig)  # noqa: E402
+from threadpoolctl import threadpool_limits  # noqa: E402
 
-from positronic.drivers.tidybot2.constants import POLICY_CONTROL_PERIOD, h_x, h_y
-from positronic.drivers.tidybot2.utils import create_pid_file
+from positronic.drivers.tidybot2.constants import POLICY_CONTROL_PERIOD, h_x, h_y  # noqa: E402
+from positronic.drivers.tidybot2.utils import create_pid_file  # noqa: E402
 
 # Vehicle
 CONTROL_FREQ = 250  # 250 Hz
@@ -108,7 +107,8 @@ class Motor:
         fx_cfg.slot0.k_d = 0.1 if self.is_steer else 0.0  # Set k_d for steer to prevent caster flutter
 
         # Current limits (hard floor with no incline)
-        # IMPORTANT: These values limit the force that the base can generate. Proceed very carefully if modifying these values.
+        # IMPORTANT: These values limit the force that the base can generate.
+        # Proceed very carefully if modifying these values.
         torque_current_limit = 40 if self.is_steer else 10  # 40 A for steer, 10 A for drive
         fx_cfg.torque_current.peak_forward_torque_current = torque_current_limit
         fx_cfg.torque_current.peak_reverse_torque_current = -torque_current_limit
@@ -221,7 +221,7 @@ class Vehicle:
             self.control_loop_process.join()
         self.control_loop_process = None
 
-    def control_loop(self, max_vel, max_accel, encoder_magnet_offsets):
+    def control_loop(self, max_vel, max_accel, encoder_magnet_offsets):  # noqa: C901  Function is too complex
         # Set real-time scheduling policy
         try:
             os.sched_setscheduler(0, os.SCHED_FIFO, os.sched_param(os.sched_get_priority_max(os.SCHED_FIFO)))

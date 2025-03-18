@@ -24,6 +24,7 @@ import atexit
 import os
 from pathlib import Path
 
+
 def create_pid_file(name):
     # Check if PID file already exists
     pid_file_path = Path(f'/tmp/{name}.pid')
@@ -50,6 +51,7 @@ def create_pid_file(name):
 
     # Register cleanup function to remove PID file upon exit
     atexit.register(remove_pid_file, pid_file_path)
+
 
 def remove_pid_file(pid_file_path):
     # Remove PID file if it corresponds to the current process
