@@ -119,6 +119,12 @@ def dearpygui_ui(camera_names: List[str]):
     return DearpyguiUi(camera_names)
 
 
+@ir.config(joystick_id=0, fps=200, deadzone_size=0.1)
+def gamepad(joystick_id, fps, deadzone_size):
+    from positronic.drivers.ui.gamepad import GamepadCS
+    return GamepadCS(joystick_id=joystick_id, fps=fps, deadzone_size=deadzone_size)
+
+
 @ir.config(time_len_sec=5.0)
 def stub(time_len_sec: float):  # noqa: C901  Function is too complex
 

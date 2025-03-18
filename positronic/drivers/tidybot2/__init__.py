@@ -8,15 +8,18 @@ from positronic.drivers.tidybot2.base_controller import Vehicle
 class Tidybot(ir.ControlSystem):
     """Main control system interface for the Tidybot mobile base."""
 
-    def __init__(self, max_vel=(0.5, 0.5, 1.57), max_accel=(0.25, 0.25, 0.79)):
+    def __init__(self, encoder_magnet_offsets, max_vel=(0.5, 0.5, 1.57), max_accel=(0.25, 0.25, 0.79)):
         super().__init__()
         self.vehicle = None
         self.max_vel = max_vel
         self.max_accel = max_accel
+        self.encoder_magnet_offsets = encoder_magnet_offsets
 
     async def setup(self):
         """Initialize the vehicle controller."""
-        self.vehicle = Vehicle(max_vel=self.max_vel, max_accel=self.max_accel)
+        self.vehicle = Vehicle(encoder_magnet_offsets=self.encoder_magnet_offsets,
+                               max_vel=self.max_vel,
+                               max_accel=self.max_accel)
         self.vehicle.start_control()
 
     async def cleanup(self):
@@ -47,4 +50,3 @@ class Tidybot(ir.ControlSystem):
     @ir.out_property
     async def velocity(self):
         return ir.Message(self.vehicle.dx) if self.vehicle else ir.NoValue
-

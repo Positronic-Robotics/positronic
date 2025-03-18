@@ -419,18 +419,19 @@ class Throttler:
 
 
 class ThrottledCallback:
+    """A callable that executes a callback function at a specified frequency.
+
+    The callback will only be executed if enough time has elapsed since the last call,
+    based on the provided frequency in Hz.
+    """
     def __init__(self, callback: Callable[[], None], frequency_hz: float):
         self.callback = callback
         self.every_sec = 1.0 / frequency_hz
         self.last_time_called = None
 
     def __call__(self):
-        if self.last_time_called is None:
-            self.last_time_called = time.monotonic()
-            return
-
         now = time.monotonic()
-        if now - self.last_time_called >= self.every_sec:
+        if self.last_time_called is None or now - self.last_time_called >= self.every_sec:
             self.last_time_called = now
             self.callback()
 

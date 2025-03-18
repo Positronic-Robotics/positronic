@@ -56,9 +56,7 @@ from ruckig import (ControlInterface, InputParameter, OutputParameter, Result,
                     Ruckig)
 from threadpoolctl import threadpool_limits
 
-from positronic.drivers.tidybot2.constants import (ENCODER_MAGNET_OFFSETS,
-                                                   POLICY_CONTROL_PERIOD, h_x,
-                                                   h_y)
+from positronic.drivers.tidybot2.constants import POLICY_CONTROL_PERIOD, h_x, h_y
 from positronic.drivers.tidybot2.utils import create_pid_file
 
 # Vehicle
@@ -137,7 +135,7 @@ class Motor:
 
 class Caster:
 
-    def __init__(self, num):
+    def __init__(self, num, magnet_offset):
         self.num = num
         self.steer_motor = Motor(2 * self.num - 1)
         self.drive_motor = Motor(2 * self.num)
@@ -151,7 +149,7 @@ class Caster:
         self.status_signals.extend([self.steer_position_signal, self.steer_velocity_signal])
 
         # Encoder magnet offset
-        self.cancoder_cfg.magnet_sensor.magnet_offset = ENCODER_MAGNET_OFFSETS[self.num - 1]
+        self.cancoder_cfg.magnet_sensor.magnet_offset = magnet_offset
         self.cancoder.configurator.apply(self.cancoder_cfg)
 
     def get_steer_position(self):
@@ -199,12 +197,13 @@ class FrameType(Enum):
 class Vehicle:
     """Vehicle class that can be used to control the mobile base."""
 
-    def __init__(self, max_vel=(0.5, 0.5, 1.57), max_accel=(0.25, 0.25, 0.79)):
+    def __init__(self, encoder_magnet_offsets, max_vel=(0.5, 0.5, 1.57), max_accel=(0.25, 0.25, 0.79)):
         max_vel = np.array(max_vel)
         max_accel = np.array(max_accel)
 
         self.command_queue = mp.Queue(1)
-        self.control_loop_process = mp.Process(target=self.control_loop, args=(max_vel, max_accel), daemon=True)
+        self.control_loop_process = mp.Process(target=self.control_loop,
+                                               args=(max_vel, max_accel, encoder_magnet_offsets))
         self.control_loop_running = mp.Event()
 
     def start_control(self):
@@ -222,7 +221,7 @@ class Vehicle:
             self.control_loop_process.join()
         self.control_loop_process = None
 
-    def control_loop(self, max_vel, max_accel):
+    def control_loop(self, max_vel, max_accel, encoder_magnet_offsets):
         # Set real-time scheduling policy
         try:
             os.sched_setscheduler(0, os.SCHED_FIFO, os.sched_param(os.sched_get_priority_max(os.SCHED_FIFO)))
@@ -230,7 +229,7 @@ class Vehicle:
             print('Failed to set real-time scheduling policy, please edit /etc/security/limits.d/99-realtime.conf')
             raise
 
-        vehicle = InternalVehicle(max_vel, max_accel)
+        vehicle = InternalVehicle(max_vel, max_accel, encoder_magnet_offsets)
         print('>>>>>>> Control loop started <<<<<<')
 
         disable_motors = True
@@ -347,7 +346,7 @@ class Vehicle:
 class InternalVehicle:
     """Stripped down version of Vehicle from Tidybot2, that can be used inside control loop."""
 
-    def __init__(self, max_vel, max_accel):
+    def __init__(self, max_vel, max_accel, encoder_magnet_offsets):
         self.max_vel = np.array(max_vel)
         self.max_accel = np.array(max_accel)
 
@@ -355,7 +354,7 @@ class InternalVehicle:
         create_pid_file('tidybot2-base-controller')
 
         # Initialize casters
-        self.casters = [Caster(num) for num in range(1, NUM_CASTERS + 1)]
+        self.casters = [Caster(num + 1, encoder_magnet_offsets[num]) for num in range(NUM_CASTERS)]
 
         # CAN bus update frequency
         self.status_signals = [signal for caster in self.casters for signal in caster.status_signals]

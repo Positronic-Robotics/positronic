@@ -36,7 +36,6 @@ curl -LsSf https://astral.sh/uv/install.sh | sh
 ```
 
 Now you are ready to build our Docker.
-
-
-`scripts/sync-reqs.sh`
-
+```bash
+docker/build.sh
+```

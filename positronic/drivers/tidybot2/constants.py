@@ -29,8 +29,8 @@ import numpy as np
 h_x, h_y = 0.190150 * np.array([1.0, 1.0, -1.0, -1.0]), 0.170150 * np.array([-1.0, 1.0, 1.0, -1.0])  # Kinova / Franka
 # h_x, h_y = 0.140150 * np.array([1.0, 1.0, -1.0, -1.0]), 0.120150 * np.array([-1.0, 1.0, 1.0, -1.0])  # ARX5
 
-# Encoder magnet offsets
-ENCODER_MAGNET_OFFSETS = [-1675.0 / 4096, -1483.0 / 4096, 1055.0 / 4096, 438.0 / 4096]
+# Encoder magnet offsets, tuned for our specific robot
+# ENCODER_MAGNET_OFFSETS = [-1675.0 / 4096, -1483.0 / 4096, 1055.0 / 4096, 438.0 / 4096]
 
 ################################################################################
 # Teleop and imitation learning

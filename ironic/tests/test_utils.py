@@ -185,3 +185,37 @@ async def test_const_property(test_value):
     # Verify we get Message instances
     assert isinstance(message1, ir.Message)
     assert isinstance(message2, ir.Message)
+
+
+@pytest.mark.asyncio
+async def test_throttled_callback():
+    # Track number of times callback is called
+    call_count = 0
+
+    def increment_counter():
+        nonlocal call_count
+        call_count += 1
+
+    # Create throttled callback with 10Hz frequency (every 0.1 seconds)
+    throttled = ir.utils.ThrottledCallback(increment_counter, frequency_hz=10)
+
+    # First call should execute immediately
+    throttled()
+    assert call_count == 1
+
+    # Calling again immediately should not execute
+    throttled()
+    throttled()
+    assert call_count == 1
+
+    # Wait longer than the throttle period
+    await asyncio.sleep(0.15)  # Wait 150ms
+
+    # This call should execute
+    throttled()
+    assert call_count == 2
+
+    # Immediate calls should still be throttled
+    throttled()
+    throttled()
+    assert call_count == 2

@@ -29,12 +29,12 @@ def apply_deadzone(arr, deadzone_size=0.05):
 
 
 @ir.ironic_system(output_props=["buttons", "axis"])
-class JoystickCS(ir.ControlSystem):
+class GamepadCS(ir.ControlSystem):
     """A joystick control system."""
 
     def __init__(self, joystick_id=0, fps=200, deadzone_size=0.05, button_mapping=LOGITECH_F710_BUTTON_MAPPING):
         """
-        Initialize the joystick control system.
+        Initialize the gamepad control system.
 
         Args:
             joystick_id (int): ID of the joystick to use (default: 0)
@@ -49,13 +49,7 @@ class JoystickCS(ir.ControlSystem):
         self.button_mapping = button_mapping
         self.joystick = None
         self.button_handler = ButtonHandler()
-        self.fps = ir.utils.FPSCounter('JoystickCS', 5)
-
-        def cb():
-            self.fps.tick()
-            pygame.event.pump()
-
-        self.pygame_pump = ir.utils.ThrottledCallback(cb, fps)
+        self.pygame_pump = ir.utils.ThrottledCallback(pygame.event.pump, fps)
 
     async def setup(self):
         """Initialize pygame and the joystick."""

@@ -1,21 +1,24 @@
+# Script for teleoperating the Tidybot using a joystick.
+
 import asyncio
 import logging
-import numpy as np
+
 import fire
+import numpy as np
 
 import ironic as ir
-from positronic.drivers.tidybot2 import Tidybot
-from positronic.drivers.ui.joystick import JoystickCS
+import positronic.cfg.hardware.tidybot
+import positronic.cfg.ui
 
 logging.basicConfig(level=logging.INFO, handlers=[logging.StreamHandler()])
 
 
 @ir.ironic_system(
-    input_props=["joystick_axis", "joystick_buttons"],
+    input_props=["gamepad_axis", "gamepad_buttons"],
     output_ports=["target_velocity_local", "target_velocity_global", "start_control", "stop_control"],
 )
 class TidybotTeleop(ir.ControlSystem):
-    """Control system for teleoperating the Tidybot using a joystick."""
+    """Control system for teleoperating the Tidybot using a gamepad."""
 
     def __init__(self, max_vel=(1.0, 1.0, 3.14)):
         """
@@ -29,7 +32,7 @@ class TidybotTeleop(ir.ControlSystem):
         self.vehicle_started = False
 
     async def step(self):
-        button_handler = (await self.ins.joystick_buttons()).data
+        button_handler = (await self.ins.gamepad_buttons()).data
 
         if button_handler.is_pressed("Back") and self.vehicle_started:
             logging.info("Stopping Tidybot control")
@@ -44,7 +47,7 @@ class TidybotTeleop(ir.ControlSystem):
             update_port = self.outs.target_velocity_global
 
         if update_port is not None:
-            axis = await self.ins.joystick_axis()
+            axis = await self.ins.gamepad_axis()
             axis_values = axis.data
             if len(axis_values) < 4:
                 logging.error("Expected 4 axis values, got %d, terminating teleop", len(axis_values))
@@ -61,34 +64,22 @@ class TidybotTeleop(ir.ControlSystem):
         return ir.State.ALIVE
 
 
-@ir.config(joystick_id=0, fps=200, deadzone_size=0.1)
-def joystick(joystick_id, fps, deadzone_size):
-    return JoystickCS(joystick_id=joystick_id, fps=fps, deadzone_size=deadzone_size)
+teleop = ir.Config(TidybotTeleop, max_vel=(1.0, 1.0, 3.14))
 
 
-@ir.config(max_vel=(1.0, 1.0, 3.14), max_accel=(0.5, 0.5, 2.36))
-def tidybot(max_vel, max_accel):
-    return Tidybot(max_vel=max_vel, max_accel=max_accel)
-
-
-@ir.config(max_vel=(1.0, 1.0, 3.14))
-def teleop(max_vel):
-    return TidybotTeleop(max_vel=max_vel)
-
-
-async def _main(joystick: ir.ControlSystem, tidybot: ir.ControlSystem, teleop: ir.ControlSystem):
-    teleop.bind(joystick_axis=joystick.outs.axis, joystick_buttons=joystick.outs.buttons)
+async def _main(gamepad: ir.ControlSystem, tidybot: ir.ControlSystem, teleop: ir.ControlSystem):
+    teleop.bind(gamepad_axis=gamepad.outs.axis, gamepad_buttons=gamepad.outs.buttons)
     tidybot.bind(target_velocity_local=teleop.outs.target_velocity_local,
-                 target_velocity_global=teleop.outs.target_velocity_global,
-                #  start_control=teleop.outs.start_control,
-                #  stop_control=teleop.outs.stop_control
-                 )
+                 target_velocity_global=teleop.outs.target_velocity_global)
 
-    system = ir.compose(joystick, teleop, tidybot)
+    system = ir.compose(gamepad, teleop, tidybot)
     await ir.utils.run_gracefully(system)
 
 
-main = ir.Config(_main, joystick=joystick, tidybot=tidybot, teleop=teleop)
+main = ir.Config(_main,
+                 gamepad=positronic.cfg.ui.gamepad,
+                 tidybot=positronic.cfg.hardware.tidybot.vehicle0,
+                 teleop=teleop)
 
 
 async def async_main(**kwargs):
