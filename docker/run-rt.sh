@@ -10,4 +10,4 @@ docker run --shm-size 128G --rm \
     --ulimit memlock=-1 \
     -e DISPLAY=$DISPLAY \
     -it positronic/positronic \
-    chrt -f 99 "$@"
+    "$@"
