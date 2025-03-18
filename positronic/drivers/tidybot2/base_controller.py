@@ -45,18 +45,20 @@ import os
 os.environ['CTR_TARGET'] = 'Hardware'  # pylint: disable=wrong-import-position
 
 import math
-import queue
-import threading
+import multiprocessing as mp
 import time
 from enum import Enum
 
 import numpy as np
 import phoenix6
 from phoenix6 import configs, controls, hardware
-from ruckig import (ControlInterface, InputParameter, OutputParameter, Result, Ruckig)
+from ruckig import (ControlInterface, InputParameter, OutputParameter, Result,
+                    Ruckig)
 from threadpoolctl import threadpool_limits
 
-from positronic.drivers.tidybot2.constants import (ENCODER_MAGNET_OFFSETS, POLICY_CONTROL_PERIOD, h_x, h_y)
+from positronic.drivers.tidybot2.constants import (ENCODER_MAGNET_OFFSETS,
+                                                   POLICY_CONTROL_PERIOD, h_x,
+                                                   h_y)
 from positronic.drivers.tidybot2.utils import create_pid_file
 
 # Vehicle
@@ -195,8 +197,160 @@ class FrameType(Enum):
 
 
 class Vehicle:
+    """Vehicle class that can be used to control the mobile base."""
 
     def __init__(self, max_vel=(0.5, 0.5, 1.57), max_accel=(0.25, 0.25, 0.79)):
+        max_vel = np.array(max_vel)
+        max_accel = np.array(max_accel)
+
+        self.command_queue = mp.Queue(1)
+        self.control_loop_process = mp.Process(target=self.control_loop, args=(max_vel, max_accel), daemon=True)
+        self.control_loop_running = mp.Event()
+
+    def start_control(self):
+        if self.control_loop_process is None:
+            print('To initiate a new control loop, please create a new instance of Vehicle.')
+            return
+        self.control_loop_running.set()
+        self.control_loop_process.start()
+
+    def stop_control(self):
+        self.control_loop_running.clear()
+        self.control_loop_process.join(timeout=5)
+        if self.control_loop_process.is_alive():
+            self.control_loop_process.terminate()
+            self.control_loop_process.join()
+        self.control_loop_process = None
+
+    def control_loop(self, max_vel, max_accel):
+        # Set real-time scheduling policy
+        try:
+            os.sched_setscheduler(0, os.SCHED_FIFO, os.sched_param(os.sched_get_priority_max(os.SCHED_FIFO)))
+        except PermissionError:
+            print('Failed to set real-time scheduling policy, please edit /etc/security/limits.d/99-realtime.conf')
+            raise
+
+        vehicle = InternalVehicle(max_vel, max_accel)
+        print('>>>>>>> Control loop started <<<<<<')
+
+        disable_motors = True
+        last_command_time = time.time()
+        last_step_time = time.time()
+        while self.control_loop_running:
+            # Maintain the desired control frequency
+            while time.time() - last_step_time < CONTROL_PERIOD:
+                time.sleep(0.0001)
+            curr_time = time.time()
+            step_time = curr_time - last_step_time
+            last_step_time = curr_time
+            if step_time > 0.005:  # 5 ms
+                print(f'Warning: Step time {1000 * step_time:.3f} ms in {self.__class__.__name__} control_loop')
+
+            # Update state
+            vehicle.update_state()
+
+            # Global to local frame conversion
+            theta = vehicle.x[2]
+            R = np.array([[math.cos(theta), math.sin(theta), 0.0],
+                          [-math.sin(theta), math.cos(theta), 0.0],
+                          [0.0, 0.0, 1.0]])
+
+            # Check for new command
+            if not self.command_queue.empty():
+                print(f'Command queue size: {self.command_queue.qsize()}')
+                command = self.command_queue.get()
+                last_command_time = time.time()
+                target = command['target']
+
+                # Velocity command
+                if command['type'] == CommandType.VELOCITY:
+                    if command['frame'] == FrameType.LOCAL:
+                        target = R.T @ target
+                    vehicle.otg_inp.control_interface = ControlInterface.Velocity
+                    vehicle.otg_inp.target_velocity = np.clip(target, -max_vel, max_vel)
+
+                # Position command
+                elif command['type'] == CommandType.POSITION:
+                    vehicle.otg_inp.control_interface = ControlInterface.Position
+                    vehicle.otg_inp.target_position = target
+                    vehicle.otg_inp.target_velocity = np.zeros_like(vehicle.dx)
+
+                vehicle.otg_res = Result.Working
+                disable_motors = False
+
+            # Maintain current pose if command stream is disrupted
+            if time.time() - last_command_time > 2.5 * POLICY_CONTROL_PERIOD:
+                vehicle.otg_inp.target_position = vehicle.otg_out.new_position
+                vehicle.otg_inp.target_velocity = np.zeros_like(vehicle.dx)
+                vehicle.otg_inp.current_velocity = vehicle.dx  # Set this to prevent lurch when command stream resumes
+                vehicle.otg_res = Result.Working
+                disable_motors = True
+
+            # Slow down base during caster flip
+            # Note: At low speeds, this section can be disabled for smoother movement
+            if np.max(np.abs(vehicle.dq[::2])) > 12.56:  # Steer joint speed > 720 deg/s
+                if vehicle.otg_inp.control_interface == ControlInterface.Position:
+                    vehicle.otg_inp.target_position = vehicle.otg_out.new_position
+                elif vehicle.otg_inp.control_interface == ControlInterface.Velocity:
+                    vehicle.otg_inp.target_velocity = np.zeros_like(vehicle.dx)
+
+            # Update OTG
+            if vehicle.otg_res == Result.Working:
+                vehicle.otg_inp.current_position = vehicle.x
+                vehicle.otg_res = vehicle.otg.update(vehicle.otg_inp, vehicle.otg_out)
+                vehicle.otg_out.pass_to_input(vehicle.otg_inp)
+
+            if disable_motors:
+                # Send motor neutral commands
+                for i in range(NUM_CASTERS):
+                    vehicle.casters[i].set_neutral()
+
+            else:
+                # Send enable signal to devices
+                phoenix6.unmanaged.feed_enable(0.1)
+
+                # Operational space velocity
+                dx_d = vehicle.otg_out.new_velocity
+                dx_d_local = R @ dx_d
+
+                # Joint velocities
+                dq_d = vehicle.C @ dx_d_local
+
+                # Send motor velocity commands
+                for i in range(NUM_CASTERS):
+                    vehicle.casters[i].set_velocities(dq_d[2 * i], dq_d[2 * i + 1])
+
+            # Debugging
+            # vehicle.data.append({
+            #     'timestamp': time.time(),
+            #     'q': vehicle.q.tolist(),
+            #     'dq': vehicle.dq.tolist(),
+            #     'x': vehicle.x.tolist(),
+            #     'dx': vehicle.dx.tolist(),
+            # })
+            # vehicle.redis_client.set(f'x', f'{vehicle.x[0]} {vehicle.x[1]} {vehicle.x[2]}')
+            # vehicle.redis_client.set(f'dx', f'{vehicle.dx[0]} {vehicle.dx[1]} {vehicle.dx[2]}')
+
+    def _enqueue_command(self, command_type, target, frame=None):
+        if self.command_queue.full():
+            print('Warning: Command queue is full. Is control loop running?')
+        else:
+            command = {'type': command_type, 'target': target}
+            if frame is not None:
+                command['frame'] = FrameType(frame)
+            self.command_queue.put(command, block=False)
+
+    def set_target_velocity(self, velocity, frame='global'):
+        self._enqueue_command(CommandType.VELOCITY, velocity, frame)
+
+    def set_target_position(self, position):
+        self._enqueue_command(CommandType.POSITION, position)
+
+
+class InternalVehicle:
+    """Stripped down version of Vehicle from Tidybot2, that can be used inside control loop."""
+
+    def __init__(self, max_vel, max_accel):
         self.max_vel = np.array(max_vel)
         self.max_accel = np.array(max_accel)
 
@@ -248,16 +402,6 @@ class Vehicle:
         self.otg_inp.max_velocity = self.max_vel
         self.otg_inp.max_acceleration = self.max_accel
 
-        # Control loop
-        self.command_queue = queue.Queue(1)
-        self.control_loop_thread = threading.Thread(target=self.control_loop, daemon=True)
-        self.control_loop_running = False
-
-        # Debugging
-        # self.data = []
-        # import redis
-        # self.redis_client = redis.Redis()
-
     def update_state(self):
         # Update all status signals (sensor values)
         phoenix6.BaseStatusSignal.refresh_all(self.status_signals)  # Note: Signal latency is roughly 4 ms
@@ -301,140 +445,7 @@ class Vehicle:
         self.dx = R @ dx_local
         self.x += self.dx * CONTROL_PERIOD
 
-    def start_control(self):
-        if self.control_loop_thread is None:
-            print('To initiate a new control loop, please create a new instance of Vehicle.')
-            return
-        self.control_loop_running = True
-        self.control_loop_thread.start()
-
-    def stop_control(self):
-        self.control_loop_running = False
-        self.control_loop_thread.join()
-        self.control_loop_thread = None
-
-    def control_loop(self):
-        # Set real-time scheduling policy
-        try:
-            os.sched_setscheduler(0, os.SCHED_FIFO, os.sched_param(os.sched_get_priority_max(os.SCHED_FIFO)))
-        except PermissionError:
-            print('Failed to set real-time scheduling policy, please edit /etc/security/limits.d/99-realtime.conf')
-            raise
-
-        print('>>>>>>> Control loop started <<<<<<')
-
-        disable_motors = True
-        last_command_time = time.time()
-        last_step_time = time.time()
-        while self.control_loop_running:
-            # Maintain the desired control frequency
-            while time.time() - last_step_time < CONTROL_PERIOD:
-                time.sleep(0.0001)
-            curr_time = time.time()
-            step_time = curr_time - last_step_time
-            last_step_time = curr_time
-            if step_time > 0.005:  # 5 ms
-                print(f'Warning: Step time {1000 * step_time:.3f} ms in {self.__class__.__name__} control_loop')
-
-            # Update state
-            self.update_state()
-
-            # Global to local frame conversion
-            theta = self.x[2]
-            R = np.array([[math.cos(theta), math.sin(theta), 0.0], [-math.sin(theta),
-                                                                    math.cos(theta), 0.0], [0.0, 0.0, 1.0]])
-
-            # Check for new command
-            if not self.command_queue.empty():
-                # print(f'Command queue size: {self.command_queue.qsize()}')
-                command = self.command_queue.get()
-                last_command_time = time.time()
-                target = command['target']
-
-                # Velocity command
-                if command['type'] == CommandType.VELOCITY:
-                    if command['frame'] == FrameType.LOCAL:
-                        target = R.T @ target
-                    self.otg_inp.control_interface = ControlInterface.Velocity
-                    self.otg_inp.target_velocity = np.clip(target, -self.max_vel, self.max_vel)
-
-                # Position command
-                elif command['type'] == CommandType.POSITION:
-                    self.otg_inp.control_interface = ControlInterface.Position
-                    self.otg_inp.target_position = target
-                    self.otg_inp.target_velocity = np.zeros_like(self.dx)
-
-                self.otg_res = Result.Working
-                disable_motors = False
-
-            # Maintain current pose if command stream is disrupted
-            if time.time() - last_command_time > 2.5 * POLICY_CONTROL_PERIOD:
-                self.otg_inp.target_position = self.otg_out.new_position
-                self.otg_inp.target_velocity = np.zeros_like(self.dx)
-                self.otg_inp.current_velocity = self.dx  # Set this to prevent lurch when command stream resumes
-                self.otg_res = Result.Working
-                disable_motors = True
-
-            # Slow down base during caster flip
-            # Note: At low speeds, this section can be disabled for smoother movement
-            if np.max(np.abs(self.dq[::2])) > 12.56:  # Steer joint speed > 720 deg/s
-                if self.otg_inp.control_interface == ControlInterface.Position:
-                    self.otg_inp.target_position = self.otg_out.new_position
-                elif self.otg_inp.control_interface == ControlInterface.Velocity:
-                    self.otg_inp.target_velocity = np.zeros_like(self.dx)
-
-            # Update OTG
-            if self.otg_res == Result.Working:
-                self.otg_inp.current_position = self.x
-                self.otg_res = self.otg.update(self.otg_inp, self.otg_out)
-                self.otg_out.pass_to_input(self.otg_inp)
-
-            if disable_motors:
-                # Send motor neutral commands
-                for i in range(NUM_CASTERS):
-                    self.casters[i].set_neutral()
-
-            else:
-                # Send enable signal to devices
-                phoenix6.unmanaged.feed_enable(0.1)
-
-                # Operational space velocity
-                dx_d = self.otg_out.new_velocity
-                dx_d_local = R @ dx_d
-
-                # Joint velocities
-                dq_d = self.C @ dx_d_local
-
-                # Send motor velocity commands
-                for i in range(NUM_CASTERS):
-                    self.casters[i].set_velocities(dq_d[2 * i], dq_d[2 * i + 1])
-
-            # Debugging
-            # self.data.append({
-            #     'timestamp': time.time(),
-            #     'q': self.q.tolist(),
-            #     'dq': self.dq.tolist(),
-            #     'x': self.x.tolist(),
-            #     'dx': self.dx.tolist(),
-            # })
-            # self.redis_client.set(f'x', f'{self.x[0]} {self.x[1]} {self.x[2]}')
-            # self.redis_client.set(f'dx', f'{self.dx[0]} {self.dx[1]} {self.dx[2]}')
-
-    def _enqueue_command(self, command_type, target, frame=None):
-        if self.command_queue.full():
-            print('Warning: Command queue is full. Is control loop running?')
-        else:
-            command = {'type': command_type, 'target': target}
-            if frame is not None:
-                command['frame'] = FrameType(frame)
-            self.command_queue.put(command, block=False)
-
-    def set_target_velocity(self, velocity, frame='global'):
-        self._enqueue_command(CommandType.VELOCITY, velocity, frame)
-
-    def set_target_position(self, position):
-        self._enqueue_command(CommandType.POSITION, position)
-
+    # TODO: Make this available to the Vehicle class
     def get_encoder_offsets(self):
         offsets = []
         for caster in self.casters:
@@ -444,23 +455,3 @@ class Vehicle:
             curr_position = caster.cancoder.get_absolute_position().value
             offsets.append(f'{round(4096 * (curr_offset - curr_position))}.0 / 4096')
         print(f'ENCODER_MAGNET_OFFSETS = [{", ".join(offsets)}]')
-
-
-if __name__ == '__main__':
-    vehicle = Vehicle(max_vel=(0.25, 0.25, 0.79))
-    # vehicle.get_encoder_offsets(); exit()
-    vehicle.start_control()
-    try:
-        for _ in range(50):
-            vehicle.set_target_velocity(np.array([0.0, 0.0, 0.39]))
-            # vehicle.set_target_velocity(np.array([0.25, 0.0, 0.0]))
-            # vehicle.set_target_position(np.array([0.5, 0.0, 0.0]))
-            print(f'Vehicle - x: {vehicle.x} dx: {vehicle.dx}')
-            time.sleep(POLICY_CONTROL_PERIOD)  # Note: Not precise
-    finally:
-        vehicle.stop_control()
-        # import pickle
-        # output_path = 'controller-states.pkl'
-        # with open(output_path, 'wb') as f:
-        #     pickle.dump(vehicle.data, f)
-        # print(f'Data saved to {output_path}')
