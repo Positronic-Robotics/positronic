@@ -43,6 +43,7 @@ hardware = [
     "threadpoolctl==3.5.0",
     "phoenix6==24.3.0",
     "pygame==2.5.2",
+    "pyserial", # For DH gripper
 ]
 dev = [
     "jupyter",

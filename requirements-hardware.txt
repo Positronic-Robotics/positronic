@@ -260,6 +260,8 @@ pyparsing==3.2.1
     # via
     #   dm-control
     #   matplotlib
+pyserial==3.5
+    # via positronic (pyproject.toml)
 pyspacemouse==1.1.4
     # via positronic (pyproject.toml)
 pytest==8.3.5

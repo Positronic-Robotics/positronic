@@ -24,10 +24,10 @@ class DHGripper(ir.ControlSystem):
         )
 
     def _state_g(self):
-        return self.client.read_holding_registers(0x200, 1, slave=1).registers[0]
+        return self.client.read_holding_registers(0x200, count=1, slave=1).registers[0]
 
     def _state_r(self):
-        return self.client.read_holding_registers(0x20A, 1, slave=1).registers[0]
+        return self.client.read_holding_registers(0x20A, count=1, slave=1).registers[0]
 
     async def setup(self):
         if self._state_g() != 1 or self._state_r() != 1:
@@ -57,7 +57,7 @@ class DHGripper(ir.ControlSystem):
 
     @ir.out_property
     async def grip(self):
-        response = self.client.read_holding_registers(0x202, 1, slave=1)
+        response = self.client.read_holding_registers(0x202, count=1, slave=1)
         if response.isError():
             raise Exception(f"Error reading gripper position: {response}")
         position = 1 - response.registers[0] / 1000
