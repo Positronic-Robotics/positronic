@@ -3,6 +3,7 @@ import logging
 from typing import Dict
 
 import fire
+import numpy as np
 
 import positronic.cfg.env
 import positronic.cfg.ui
@@ -44,13 +45,25 @@ async def _main(
         ui_metadata=ui.outs.metadata,
     )
 
+    def get_level(controller_positions):
+        left_position = controller_positions['left'].translation
+        right_position = controller_positions['right'].translation
+
+        if left_position is None or right_position is None or left_position is ir.NoValue or right_position is ir.NoValue:
+            return 0
+
+        distance = np.linalg.norm(np.array(left_position) - np.array(right_position))
+        error = np.abs(distance - 0.105)
+        return error
+
     components = [ui, env]
 
     if sound is not None:
         components.append(
             sound.bind(
                 start_recording=ui.outs.start_recording,
-                stop_recording=ui.outs.stop_recording
+                stop_recording=ui.outs.stop_recording,
+                force=ir.utils.last_value(ir.utils.map_port(get_level, ui.outs.controller_positions), initial_value=0)
             )
         )
 
@@ -62,7 +75,7 @@ main = ir.Config(
     _main,
     env=positronic.cfg.env.umi,
     ui=positronic.cfg.ui.teleop_umi,
-    sound=positronic.cfg.hardware.sound.start_stop,
+    sound=positronic.cfg.hardware.sound.tracking_error,
     data_dumper=dataset_dumper.override(video_fps=30, codec='libx264'),
 )
 

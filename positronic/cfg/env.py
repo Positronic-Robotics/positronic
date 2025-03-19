@@ -37,7 +37,7 @@ def roboarm(arm: ir.ControlSystem, camera: ir.ControlSystem | None = None):
 
 
 GRIPPER_REGISTRATION = geom.Transform3D(
-    rotation=geom.Rotation.from_quat([0.7092178, 0.66922305, 0.14912859, 0.16404657]),
+    rotation=geom.Rotation.from_quat([0.88092353, 0.45079771, 0.11161464, -0.09108971]),
 )
 
 

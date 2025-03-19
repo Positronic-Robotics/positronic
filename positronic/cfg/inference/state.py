@@ -18,6 +18,6 @@ end_effector= ir.Config(
         ),
     ],
     state=[
-        'grip',  # fake grip
+        'target_grip',  # fake grip
     ]
 )
