@@ -49,6 +49,7 @@ class GamepadCS(ir.ControlSystem):
         self.button_mapping = button_mapping
         self.joystick = None
         self.button_handler = ButtonHandler()
+        # TODO: pygame.event.pump must be called once per step, that means several CS that use pygame won't work.
         self.pygame_pump = ir.utils.ThrottledCallback(pygame.event.pump, fps)
 
     async def setup(self):

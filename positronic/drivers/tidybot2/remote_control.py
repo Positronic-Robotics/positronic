@@ -1,4 +1,4 @@
-# Script for teleoperating the Tidybot using a joystick.
+# Script for teleoperating the Tidybot using a gamepad.
 
 import asyncio
 import logging
@@ -50,7 +50,7 @@ class TidybotTeleop(ir.ControlSystem):
             axis = await self.ins.gamepad_axis()
             axis_values = axis.data
             if len(axis_values) < 4:
-                logging.error("Expected 4 axis values, got %d, terminating teleop", len(axis_values))
+                logging.error(f"Expected 4 axis values, got {len(axis_values)}, terminating teleop")
                 return ir.State.FINISHED
 
             x = -axis_values[1]  # Left analog stick forward/backward

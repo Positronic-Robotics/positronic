@@ -426,13 +426,10 @@ class ThrottledCallback:
     """
     def __init__(self, callback: Callable[[], None], frequency_hz: float):
         self.callback = callback
-        self.every_sec = 1.0 / frequency_hz
-        self.last_time_called = None
+        self.throttler = Throttler(1.0 / frequency_hz)
 
     def __call__(self):
-        now = time.monotonic()
-        if self.last_time_called is None or now - self.last_time_called >= self.every_sec:
-            self.last_time_called = now
+        for _ in range(self.throttler()):
             self.callback()
 
 
