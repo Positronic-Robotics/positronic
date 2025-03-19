@@ -28,6 +28,10 @@
         let websocket = null;
         let scene, camera, renderer;
         let videoPlayer = null;
+        let controllerAxes = {
+          left: null,
+          right: null
+        };
 
         function initXR() {
           xrButton = new WebXRButton({
@@ -66,6 +70,64 @@
           // Add some ambient light to make sure objects are visible
           const ambientLight = new THREE.AmbientLight(0xffffff, 1.0);
           scene.add(ambientLight);
+
+          // Initialize controller axes visualizations
+          initControllerAxes();
+        }
+
+        function initControllerAxes() {
+          // Create axis visualizers for both controllers
+          ['left', 'right'].forEach(hand => {
+            const axesGroup = new THREE.Group();
+            axesGroup.visible = false;
+
+            // Create axis lines - X (red), Y (green), Z (blue)
+            const axisLength = 0.1; // 10cm axes
+
+            // X axis (red)
+            const xGeometry = new THREE.BufferGeometry().setFromPoints([
+              new THREE.Vector3(0, 0, 0),
+              new THREE.Vector3(axisLength, 0, 0)
+            ]);
+            const xLine = new THREE.Line(
+              xGeometry,
+              new THREE.LineBasicMaterial({ color: 0xff0000, linewidth: 3 })
+            );
+
+            // Y axis (green)
+            const yGeometry = new THREE.BufferGeometry().setFromPoints([
+              new THREE.Vector3(0, 0, 0),
+              new THREE.Vector3(0, axisLength, 0)
+            ]);
+            const yLine = new THREE.Line(
+              yGeometry,
+              new THREE.LineBasicMaterial({ color: 0x00ff00, linewidth: 3 })
+            );
+
+            // Z axis (blue)
+            const zGeometry = new THREE.BufferGeometry().setFromPoints([
+              new THREE.Vector3(0, 0, 0),
+              new THREE.Vector3(0, 0, axisLength)
+            ]);
+            const zLine = new THREE.Line(
+              zGeometry,
+              new THREE.LineBasicMaterial({ color: 0x0000ff, linewidth: 3 })
+            );
+
+            axesGroup.add(xLine);
+            axesGroup.add(yLine);
+            axesGroup.add(zLine);
+
+            // Add a small sphere to represent the controller position
+            const sphere = new THREE.Mesh(
+              new THREE.SphereGeometry(0.02, 16, 16),
+              new THREE.MeshBasicMaterial({ color: hand === 'left' ? 0x8888ff : 0xff8888 })
+            );
+            axesGroup.add(sphere);
+
+            scene.add(axesGroup);
+            controllerAxes[hand] = axesGroup;
+          });
         }
 
         function onRequestSession() {
@@ -124,7 +186,26 @@
                   orientation: [orient.w, orient.x, orient.y, orient.z],
                   buttons: buttons
                 };
+
+                // Update controller axis visualization
+                if (controllerAxes[inputSource.handedness]) {
+                  const axesGroup = controllerAxes[inputSource.handedness];
+                  axesGroup.visible = true;
+
+                  // Set position - add helmet Y coordinate to controller Y
+                  axesGroup.position.set(pos.x, pos.y + 1.1, pos.z);
+
+                  // Set orientation using quaternion
+                  axesGroup.quaternion.set(orient.x, orient.y, orient.z, orient.w);
+                }
               }
+            }
+          }
+
+          // Hide axes for controllers that aren't active
+          for (let hand of ['left', 'right']) {
+            if (!controllers[hand] && controllerAxes[hand]) {
+              controllerAxes[hand].visible = false;
             }
           }
 

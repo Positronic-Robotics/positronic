@@ -103,6 +103,7 @@ def convert_to_lerobot_dataset(
 
     # Process each episode file
     episode_files = sorted([f for f in input_dir.glob('*.pt')])
+    total_length = 0
 
     all_episodes_data = []
 
@@ -165,6 +166,7 @@ def convert_to_lerobot_dataset(
             timestamp = _start_from_zero(timestamp)
 
         ep_dict["timestamp"] = convert_to_seconds(timestamp_units, timestamp)
+        total_length += ep_dict["timestamp"][-1] - ep_dict["timestamp"][0]
 
         done = torch.zeros(num_frames, dtype=torch.bool)
         # done[-1] = True
@@ -218,7 +220,7 @@ def convert_to_lerobot_dataset(
     save_meta_data(info, stats, episode_data_index, meta_data_dir)
 
     print(f"Dataset converted and saved to {output_dir}")
-
+    print(f"Total length of the dataset: {total_length} seconds")
 
 
 if __name__ == "__main__":

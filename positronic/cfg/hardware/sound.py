@@ -3,12 +3,20 @@ import numpy as np
 import ironic as ir
 
 
-def _sound_system(force_feedback_volume: float | None,
-                  start_recording_wav_path: str | None,
-                  stop_recording_wav_path: str | None):
+def _sound_system(
+        force_feedback_volume: float | None,
+        start_recording_wav_path: str | None,
+        stop_recording_wav_path: str | None,
+        enable_threshold: float | None,
+        raise_octave_each: float | None,
+):
     from positronic.drivers.sound import SoundSystem
 
-    sound_system = SoundSystem(master_volume=force_feedback_volume or 0)
+    sound_system = SoundSystem(
+        master_volume=force_feedback_volume or 0,
+        enable_threshold=enable_threshold,
+        raise_octave_each=raise_octave_each,
+    )
     components = [sound_system]
     inputs = {'force': None, 'start_recording': None, 'stop_recording': None}
 
@@ -40,4 +48,6 @@ start_stop = ir.Config(
     stop_recording_wav_path="positronic/assets/sounds/recording-has-stopped.wav"
 )
 
-full = start_stop.override(force_feedback_volume=0.1)
+force_feedback = start_stop.override(force_feedback_volume=0.1, enable_threshold=10, raise_octave_each=8)
+
+tracking_error = start_stop.override(force_feedback_volume=0.02, enable_threshold=0.01, raise_octave_each=0.1)

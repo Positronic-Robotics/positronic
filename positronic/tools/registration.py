@@ -78,17 +78,20 @@ def umi_relative(left_trajectory: AbsoluteTrajectory, right_trajectory: Absolute
     # Calculate initial relative gripper transform
     relative_gripper_transform = left_trajectory[0].inv * right_trajectory[0]
 
-    result = []
+    right = []
+    left = []
     for i in range(1, len(right_trajectory)):
         # Calculate relative transformation between consecutive right positions
         right_delta = right_trajectory[i - 1].inv * right_trajectory[i]
+        left_delta = left_trajectory[i - 1].inv * left_trajectory[i]
 
         # Apply the relative transformation to the gripper frame
-        transform = relative_gripper_transform.inv * right_delta * relative_gripper_transform
+        right_transform = relative_gripper_transform.inv * right_delta * relative_gripper_transform
+        left_transform = left_delta
+        right.append(right_transform)
+        left.append(left_transform)
 
-        result.append(transform)
-
-    return RelativeTrajectory(result)
+    return RelativeTrajectory(right)
 
 
 @ir.ironic_system(
