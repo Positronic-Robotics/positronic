@@ -116,7 +116,8 @@ class TeleopSystem(ir.ControlSystem):
                   output_ports=[
                       "start_recording",
                       "stop_recording",
-                      "reset"
+                      "reset",
+                      "target_grip"
                   ],
                   output_props=["metadata"])
 class TeleopButtons(ir.ControlSystem):
@@ -140,6 +141,7 @@ class TeleopButtons(ir.ControlSystem):
         track_but = self.button_handler.is_pressed('A')
         record_but = self.button_handler.is_pressed('B')
         reset_but = self.button_handler.is_pressed('stick')
+        grip_but = self.button_handler.get_value('trigger')
 
         if track_but:
             await self._switch_tracking(message.timestamp)
@@ -153,6 +155,9 @@ class TeleopButtons(ir.ControlSystem):
                 await self._switch_tracking(message.timestamp)
             if self.is_recording:
                 await self._switch_recording(message.timestamp)
+                
+        if self.is_tracking:
+            await self.outs.target_grip.write(ir.Message(grip_but, message.timestamp))
 
     @ir.out_property
     async def metadata(self):
