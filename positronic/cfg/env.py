@@ -3,6 +3,7 @@ import numpy as np
 import geom
 import positronic.cfg.hardware.camera
 import positronic.cfg.hardware.roboarms
+import positronic.cfg.hardware.gripper
 import ironic as ir
 
 
@@ -44,13 +45,17 @@ GRIPPER_REGISTRATION = geom.Transform3D(
 @ir.config(
     camera=positronic.cfg.hardware.camera.merged,
     registration_transform=GRIPPER_REGISTRATION,
+    gripper=None,
 )
-def umi(camera: ir.ControlSystem, registration_transform: geom.Transform3D):
+def umi(camera: ir.ControlSystem, registration_transform: geom.Transform3D, gripper: ir.ControlSystem | None):
     from positronic.drivers.umi import UmiCS
     umi = UmiCS(registration_transform)
     components = [umi, camera]
 
-    inputs = {'target_position': (umi, 'tracker_position')}
+    inputs = {'target_position': (umi, 'tracker_position'), 'target_grip': None}
+    if gripper is not None:
+        components.append(gripper)
+        inputs['target_grip'] = (gripper, 'target_grip')
 
     outputs = {
         'frame': camera.outs.frame,
@@ -58,11 +63,15 @@ def umi(camera: ir.ControlSystem, registration_transform: geom.Transform3D):
         'metadata': umi.outs.metadata,
         'umi_left': umi.outs.umi_left,
         'umi_right': umi.outs.umi_right,
+        'grip': gripper.outs.grip if gripper is not None else ir.OutputPort.Stub(),
     }
 
     res = ir.compose(*components, inputs=inputs, outputs=outputs)
     res = _state_mapping(res)
     return res
+
+
+umi_gripper = umi.override(gripper=positronic.cfg.hardware.gripper.dh)
 
 
 @ir.config(

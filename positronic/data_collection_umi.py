@@ -31,13 +31,14 @@ async def _main(
     )
     env.bind(
         target_position=ui.outs.controller_positions,
+        target_grip=ui.outs.target_grip,
     )
 
     data_dumper.bind(
         image=env.outs.frame,
         # TODO: make dataset dumper more generic
         target_robot_position=ir.utils.map_port(lambda x: x['right'], ui.outs.controller_positions),
-        target_grip=ir.utils.map_port(lambda _: 0, ui.outs.controller_positions),
+        target_grip=ui.outs.target_grip,
         start_episode=ui.outs.start_recording,
         end_episode=ui.outs.stop_recording,
         robot_data=env.outs.state,
