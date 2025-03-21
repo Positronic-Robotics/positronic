@@ -155,9 +155,8 @@ class TeleopButtons(ir.ControlSystem):
                 await self._switch_tracking(message.timestamp)
             if self.is_recording:
                 await self._switch_recording(message.timestamp)
-                
-        if self.is_tracking:
-            await self.outs.target_grip.write(ir.Message(grip_but, message.timestamp))
+
+        await self.outs.target_grip.write(ir.Message(grip_but, message.timestamp))
 
     @ir.out_property
     async def metadata(self):
