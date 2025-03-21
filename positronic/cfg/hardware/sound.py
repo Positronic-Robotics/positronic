@@ -50,4 +50,4 @@ start_stop = ir.Config(
 
 force_feedback = start_stop.override(force_feedback_volume=0.1, enable_threshold=10, raise_octave_each=8)
 
-tracking_error = start_stop.override(force_feedback_volume=0.02, enable_threshold=0.01, raise_octave_each=0.1)
+tracking_error = start_stop.override(force_feedback_volume=0.2, enable_threshold=0.01, raise_octave_each=0.1)
