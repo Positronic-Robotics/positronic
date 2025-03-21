@@ -69,6 +69,7 @@ async def _main(
         )
 
     system = ir.compose(*components)
+
     await ir.utils.run_gracefully(system)
 
 
