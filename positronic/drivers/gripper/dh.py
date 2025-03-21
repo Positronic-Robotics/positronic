@@ -54,6 +54,7 @@ def _gripper_process(
 
     client.close()
 
+
 # TODO: Migrate to async modbus
 @ir.ironic_system(
     input_ports=['target_grip', 'force', 'speed'],
