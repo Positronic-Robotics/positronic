@@ -1,10 +1,58 @@
 from ctypes import c_uint16
 import time
+import multiprocessing as mp
 
 import pymodbus.client as ModbusClient
 
 import ironic as ir
 
+
+def _gripper_process(
+        port: str,
+        target_grip: mp.Value,
+        current_grip: mp.Value,
+        force: mp.Value,
+        speed: mp.Value,
+        running: mp.Value
+):
+    client = ModbusClient.ModbusSerialClient(
+        port=port,
+        baudrate=115200,
+        bytesize=8,
+        parity="N",
+        stopbits=1,
+    )
+    client.connect()
+
+    def _state_g():
+        return client.read_holding_registers(0x200, count=1, slave=1).registers[0]
+
+    def _state_r():
+        return client.read_holding_registers(0x20A, count=1, slave=1).registers[0]
+
+    # Initial setup
+    if _state_g() != 1 or _state_r() != 1:
+        client.write_register(0x100, 0xa5, slave=1)
+        while _state_g() != 1 and _state_r() != 1:
+            time.sleep(0.1)
+
+    # Set initial values
+    client.write_register(0x101, c_uint16(100).value, slave=1)  # force
+    client.write_register(0x104, c_uint16(100).value, slave=1)  # speed
+    width = round((1 - 0) * 1000)  # fully open
+    client.write_register(0x103, c_uint16(width).value, slave=1)
+    time.sleep(0.5)
+
+    while running.value:
+        # Update gripper based on shared values
+        width = round((1 - max(0, min(target_grip.value, 1))) * 1000)
+        client.write_register(0x103, c_uint16(width).value, slave=1)
+        client.write_register(0x101, c_uint16(force.value).value, slave=1)
+        client.write_register(0x104, c_uint16(speed.value).value, slave=1)
+        current_grip.value = 1 - client.read_holding_registers(0x202, count=1, slave=1).registers[0] / 1000
+        time.sleep(0.001)  # Small delay to prevent busy-waiting
+
+    client.close()
 
 # TODO: Migrate to async modbus
 @ir.ironic_system(
@@ -14,54 +62,39 @@ import ironic as ir
 class DHGripper(ir.ControlSystem):
     def __init__(self, port: str):
         super().__init__()
-        # TODO: Rewrite to use AsyncModbusSerialClient
-        self.client = ModbusClient.ModbusSerialClient(
-            port=port,
-            baudrate=115200,
-            bytesize=8,
-            parity="N",
-            stopbits=1,
+        self.running = mp.Value('b', True)
+        self.target_grip = mp.Value('f', 0)
+        self.current_grip = mp.Value('f', 0)
+        self.force = mp.Value('i', 100)
+        self.speed = mp.Value('i', 100)
+        self.process = mp.Process(
+            target=_gripper_process,
+            args=(port, self.target_grip, self.current_grip, self.force, self.speed, self.running)
         )
 
-    def _state_g(self):
-        return self.client.read_holding_registers(0x200, count=1, slave=1).registers[0]
-
-    def _state_r(self):
-        return self.client.read_holding_registers(0x20A, count=1, slave=1).registers[0]
-
     async def setup(self):
-        if self._state_g() != 1 or self._state_r() != 1:
-            self.client.write_register(0x100, 0xa5, slave=1)
-            while self._state_g() != 1 and self._state_r() != 1:
-                time.sleep(0.1)
-
-        # Set initial values
-        await self.handle_force(ir.Message(data=100))  # Set to maximum force
-        await self.handle_speed(ir.Message(data=100))  # Set to maximum speed
-        await self.handle_target_grip(ir.Message(data=0))     # Open gripper
-        time.sleep(0.5)
+        self.process.start()
 
     @ir.on_message('target_grip')
     async def handle_target_grip(self, message: ir.Message):
         """Message data should be in range [0, 1]. 0 means fully open, 1 means fully closed."""
-        width = round((1 - max(0, min(message.data, 1))) * 1000)
-        self.client.write_register(0x103, c_uint16(width).value, slave=1)
+        self.target_grip.value = message.data
 
     @ir.on_message('force')
     async def handle_force(self, message: ir.Message):
-        self.client.write_register(0x101, c_uint16(message.data).value, slave=1)
+        self.force.value = message.data
 
     @ir.on_message('speed')
     async def handle_speed(self, message: ir.Message):
-        self.client.write_register(0x104, c_uint16(message.data).value, slave=1)
+        self.speed.value = message.data
 
     @ir.out_property
     async def grip(self):
-        response = self.client.read_holding_registers(0x202, count=1, slave=1)
-        if response.isError():
-            raise Exception(f"Error reading gripper position: {response}")
-        position = 1 - response.registers[0] / 1000
-        return ir.Message(data=position)
+        return ir.Message(data=self.current_grip.value)
+
+    async def cleanup(self):
+        self.running.value = False
+        self.process.join()
 
 
 if __name__ == "__main__":
@@ -82,5 +115,7 @@ if __name__ == "__main__":
             await asyncio.sleep(0.25)
             msg = await gripper.grip()
             print(f"Real grip position: {msg.data}")
+
+        await gripper.cleanup()
 
     asyncio.run(_main())
