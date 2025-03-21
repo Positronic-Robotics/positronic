@@ -50,7 +50,7 @@ def _gripper_process(
         client.write_register(0x101, c_uint16(force.value).value, slave=1)
         client.write_register(0x104, c_uint16(speed.value).value, slave=1)
         current_grip.value = 1 - client.read_holding_registers(0x202, count=1, slave=1).registers[0] / 1000
-        time.sleep(0.01)  # Small delay to prevent busy-waiting
+        time.sleep(0.001)  # Small delay to prevent busy-waiting
 
     client.close()
 
