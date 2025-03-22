@@ -10,6 +10,7 @@ class ImageEncodingConfig:
     key: str = "image"
     output_key: Optional[str] = None  # If not None, the encoding will have different key
     resize: Optional[List[int]] = None
+    offset: Optional[int] = None
 
 
 @dataclass
@@ -33,6 +34,8 @@ class StateEncoder:
             image = image.permute(0, 3, 2, 1)  # BHWC -> BCWH
             if cfg.resize is not None:
                 image = F.interpolate(image, size=tuple(cfg.resize), mode='nearest')
+            if cfg.offset is not None:
+                image = torch.cat([torch.zeros_like(image[:cfg.offset]), image[:-cfg.offset]], dim=0)
 
             output_key = cfg.output_key if cfg.output_key is not None else cfg.key
             obs[output_key] = image.permute(0, 1, 3, 2)  # BCWH -> BCHW
