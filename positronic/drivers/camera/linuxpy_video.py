@@ -3,6 +3,9 @@
 import asyncio
 from typing import AsyncIterator, Optional
 import logging
+import multiprocessing as mp
+from multiprocessing.synchronize import Event as MPEvent
+from queue import Empty as QueueEmpty
 
 import cv2
 from linuxpy.video.device import Device, Frame, PixelFormat
@@ -23,9 +26,9 @@ class LinuxPyCamera(ir.ControlSystem):
     _device: Optional[Device] = None
     _aiter: Optional[AsyncIterator[Frame]] = None
     _fps_counter: ir.utils.FPSCounter
-    _frame_queue: asyncio.Queue
-    _reader_task: Optional[asyncio.Task] = None
-    _stopped: asyncio.Event
+    _frame_queue: mp.Queue
+    _reader_process: Optional[mp.Process] = None
+    _stopped: MPEvent
     _error: Optional[Exception] = None
     _codec_contexts: dict[str, av.CodecContext]
     _logger: logging.Logger
@@ -60,79 +63,96 @@ class LinuxPyCamera(ir.ControlSystem):
         self.pixel_format = pixel_format
 
         self._fps_counter = ir.utils.FPSCounter(f"Camera {self.device_path}")
-        self._frame_queue = asyncio.Queue(maxsize=1)
-        self._reader_task = None
-        self._stopped = asyncio.Event()
+        self._frame_queue = mp.Queue(maxsize=1)
+        self._reader_process = None
+        self._stopped = mp.Event()
         self._error = None
         self._codec_contexts = {}
         self._logger = logging.getLogger(f"{self.__class__.__name__}_{device_path}")
 
-    async def _frame_generator(self) -> AsyncIterator[dict]:
-        """Generate processed frames from the camera"""
-        while not self._stopped.is_set():
-            try:
-                frame = await anext(self._aiter)
-                data = np.frombuffer(frame.data, dtype=np.uint8)
+        # Start the processing in a separate process
+        self._reader_process = mp.Process(
+            target=self._frame_process,
+            args=(self.device_path, self.width, self.height, self.fps,
+                    self.pixel_format, self._frame_queue, self._stopped),
+            daemon=True
+        )
 
-                match frame.pixel_format:
-                    case PixelFormat.YUYV:
-                        data = data.reshape((frame.height, frame.width, 2))
-                        rgb_data = cv2.cvtColor(data, cv2.COLOR_YUV2RGB_YUYV)
-                        yield {'image': rgb_data}
-                    case PixelFormat.UYVY:
-                        data = data.reshape((frame.height, frame.width, 2))
-                        rgb_data = cv2.cvtColor(data, cv2.COLOR_YUV2RGB_UYVY)
-                        yield {'image': rgb_data}
-                    case _ if frame.pixel_format in self._codec_mapping:
-                        codec_name = self._codec_mapping[frame.pixel_format]
-                        codec_ctx = self._get_codec_context(codec_name)
-                        packets = codec_ctx.parse(data)
-                        for packet in packets:
-                            frames = codec_ctx.decode(packet)
-                            for frame in frames:
-                                yield {'image': frame.to_ndarray(format='rgb24')}
-                    case _:
-                        # Assume 3 bytes per pixel (RGB/BGR)
-                        rgb_data = data.reshape((frame.height, frame.width, 3))
-                        yield {'image': rgb_data}
-            except StopAsyncIteration:
+    @staticmethod
+    def _frame_process(device_path: str, width: int, height: int, fps: int,
+                       pixel_format: str, frame_queue: mp.Queue, stopped: MPEvent):
+        """Process frames from the camera in a separate process"""
+        codec_mapping = {
+            PixelFormat.H264: 'h264',
+            PixelFormat.HEVC: 'hevc',
+            PixelFormat.VP8: 'vp8',
+            PixelFormat.VP9: 'vp9',
+            PixelFormat.MPEG4: 'mpeg4',
+            PixelFormat.MJPEG: 'mjpeg',
+        }
+        codec_contexts = {}
+
+        def get_codec_context(codec_name: str) -> av.CodecContext:
+            """Lazily initialize and return codec context for given codec"""
+            if codec_name not in codec_contexts:
+                codec_contexts[codec_name] = av.CodecContext.create(codec_name, 'r')
+            return codec_contexts[codec_name]
+
+        device = Device(device_path)
+        device.open()
+
+        device.set_format(device.info.buffers[0], width, height, pixel_format)
+        device.set_fps(device.info.buffers[0], fps)
+
+        for frame in device:
+            if stopped.is_set():
                 break
 
-    async def _frame_reader(self):
-        """Background coroutine that reads processed frames and manages the queue"""
-        try:
-            async for frame in self._frame_generator():
-                assert frame is not None
-                if self._frame_queue.full():
-                    try:
-                        self._frame_queue.get_nowait()
-                    except asyncio.QueueEmpty:
-                        pass
-                await self._frame_queue.put(frame)
-        except Exception as e:
-            self._error = e
-            self._logger.error(f"Camera error: {e}")
-            raise
-        finally:
-            self._stopped.set()
+            data = np.frombuffer(frame.data, dtype=np.uint8)
+            result = None
+
+            match frame.pixel_format:
+                case PixelFormat.YUYV:
+                    data = data.reshape((frame.height, frame.width, 2))
+                    result = {'image': cv2.cvtColor(data, cv2.COLOR_YUV2RGB_YUYV)}
+                case PixelFormat.UYVY:
+                    data = data.reshape((frame.height, frame.width, 2))
+                    result = {'image': cv2.cvtColor(data, cv2.COLOR_YUV2RGB_UYVY)}
+                case _ if frame.pixel_format in codec_mapping:
+                    codec_name = codec_mapping[frame.pixel_format]
+                    codec_ctx = get_codec_context(codec_name)
+                    packets = codec_ctx.parse(data)
+                    for packet in packets:
+                        frames = codec_ctx.decode(packet)
+                        if len(frames) == 1:
+                            result = {'image': frames[0].to_ndarray(format='rgb24')}
+                        else:
+                            for i, decoded_frame in enumerate(frames):
+                                result[f'image_{i}'] = decoded_frame.to_ndarray(format='rgb24')
+                case _:
+                    # Assume 3 bytes per pixel (RGB/BGR)
+                    rgb_data = data.reshape((frame.height, frame.width, 3))
+                    result = {'image': rgb_data}
+
+            if result is not None:
+                # Clear queue if it's full
+                try:
+                    frame_queue.get_nowait()
+                except QueueEmpty:
+                    pass
+                frame_queue.put(result)
+
+        device.close()
+        stopped.set()
+
 
     async def setup(self):
-        """Set up the camera device and configure format"""
+        """Set up the camera device and start the frame processing"""
         try:
-            self._device = Device(self.device_path)
-            self._device.open()
-
-            self._device.set_format(self._device.info.buffers[0],
-                                    self.width, self.height, self.pixel_format)
-
-            self._device.set_fps(self._device.info.buffers[0], self.fps)
-            self._aiter = aiter(self._device)
-
             self._stopped.clear()
-            self._error = None
-            self._reader_task = asyncio.create_task(self._frame_reader())
-        except OSError as e:
-            self._error = e
+
+            self._reader_process.start()
+        except Exception as e:
             self._stopped.set()
             self._logger.error(f"Failed to setup camera {self.device_path}: {e}")
             raise
@@ -140,33 +160,22 @@ class LinuxPyCamera(ir.ControlSystem):
     async def cleanup(self):
         """Clean up camera resources"""
         self._stopped.set()
-        if self._reader_task:
-            self._reader_task.cancel()
-            try:
-                await self._reader_task
-            except asyncio.CancelledError:
-                pass
-            self._reader_task = None
 
-        if self._device:
-            if self._aiter:
-                await self._aiter.aclose()
-                self._aiter = None
-            self._device.close()
-            self._device = None
+        if self._reader_process and self._reader_process.is_alive():
+            self._reader_process.join(timeout=1.0)
+            if self._reader_process.is_alive():
+                self._reader_process.terminate()
+            self._reader_process = None
 
     async def step(self):
-        if self._stopped.is_set():
-            if self._error:
-                self._logger.error(f"Camera {self.device_path} failed: {self._error}")
-                raise self._error
+        if self._stopped.is_set() or (self._reader_process and not self._reader_process.is_alive()):
             return ir.State.FINISHED
 
         try:
             frame = self._frame_queue.get_nowait()
             self._fps_counter.tick()
             await self.outs.frame.write(ir.Message(data=frame))
-        except asyncio.QueueEmpty:
+        except QueueEmpty:
             pass
         return ir.State.ALIVE
 
@@ -185,7 +194,7 @@ if __name__ == "__main__":
 
     async def _main():
         camera = LinuxPyCamera(
-            '/dev/v4l/by-path/pci-0000:00:14.0-usb-0:2:1.0-video-index0',
+            '/dev/v4l/by-path/pci-0000:00:14.0-usb-0:5:1.0-video-index0',
             width=1920,
             height=1080,
             pixel_format="MJPG"

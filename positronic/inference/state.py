@@ -1,3 +1,4 @@
+from collections import deque
 from dataclasses import dataclass, field
 from typing import List, Optional
 
@@ -25,6 +26,9 @@ class StateEncoder:
         self.state_output_key = state_output_key
         self.images = images
         self.state = state
+        self.frame_queues = {}
+        for cfg in images:
+            self.frame_queues[cfg.key] = deque(maxlen=cfg.offset)
 
     def encode_episode(self, episode_data):
         """Encodes data for training (i.e. to_lerobot.py). Every episode is a dict of tensors."""
@@ -51,9 +55,14 @@ class StateEncoder:
         """Encodes data for inference."""
         obs = {}
         for cfg in self.images:
-            image = torch.tensor(images[cfg.key], dtype=torch.float32).permute(2, 1, 0).unsqueeze(0) / 255
-            if cfg.resize is not None:
-                image = F.interpolate(image, size=tuple(cfg.resize), mode='nearest')
+            if cfg.offset is not None:
+                image = self._get_from_frame_queue(cfg)
+            else:
+                image = torch.tensor(images[cfg.key]).permute(2, 1, 0).unsqueeze(0)
+                if cfg.resize is not None:
+                    image = F.interpolate(image, size=tuple(cfg.resize), mode='nearest')
+                image = image.float() / 255
+                self.frame_queues[cfg.key].append(image)
             output_key = cfg.output_key if cfg.output_key is not None else cfg.key
             obs[output_key] = image.permute(0, 1, 3, 2)
 
@@ -68,3 +77,9 @@ class StateEncoder:
             [data[k] for k in self.state], dim=0
         ).unsqueeze(0).type(torch.float32)
         return obs
+
+    def _get_from_frame_queue(self, cfg: ImageEncodingConfig):
+        if cfg.key in self.frame_queues and len(self.frame_queues[cfg.key]) == cfg.offset:
+            return self.frame_queues[cfg.key][0]
+        else:
+            return torch.zeros(1, 3, *cfg.resize, dtype=torch.float32)
