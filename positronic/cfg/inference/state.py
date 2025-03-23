@@ -18,7 +18,7 @@ end_effector= ir.Config(
         ),
     ],
     state=[
-        'target_grip',  # fake grip
+        'grip',  # fake grip
     ]
 )
 
@@ -51,6 +51,6 @@ end_effector_mem15 = ir.Config(
         ),
     ],
     state=[
-        'target_grip',  # fake grip
+        'grip',  # fake grip
     ]
 )

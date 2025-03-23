@@ -71,6 +71,15 @@ def opencv(camera_id: int, resolution: Tuple[int, int], fps: int, image_mapping:
 
 
 sl_vga = stereolabs.override(fps=30, view='SIDE_BY_SIDE', resolution='VGA', depth_mode='NONE', depth_mask=False)
-arducam_left = linux.override(device_path="/dev/v4l/by-path/pci-0000:00:14.0-usb-0:2:1.0-video-index0")
-arducam_right = linux.override(device_path="/dev/v4l/by-path/pci-0000:00:14.0-usb-0:6:1.0-video-index0")
+arducam_left = linux.override(device_path="/dev/v4l/by-id/usb-Arducam_Technology_Co.__Ltd._USB_2.0_Camera_SN0001-video-index0")
+arducam_right = linux.override(device_path="/dev/v4l/by-id/usb-Arducam_Technology_Co.__Ltd._Arducam_USB_Camera_UC684-video-index0")
 merged = ir.Config(merge_on_pulse, cameras={'left': arducam_left, 'right': arducam_right}, fps=30)
+
+arducam_left_inference = linux.override(
+    device_path="/dev/v4l/by-id/usb-Arducam_Technology_Co.__Ltd._USB_2.0_Camera_SN0001-video-index0",
+)
+arducam_right_inference = linux.override(
+    device_path="/dev/v4l/by-id/usb-Arducam_Technology_Co.__Ltd._Arducam_USB_Camera_UC684-video-index0",
+
+    height=192)
+merged_inference = ir.Config(merge_on_pulse, cameras={'left': arducam_left_inference, 'right': arducam_right_inference}, fps=30)

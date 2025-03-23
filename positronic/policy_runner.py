@@ -75,7 +75,7 @@ async def async_main(
         rerun: str | None = None
 ):
     if rerun:
-        rr.init("inference", spawn=True)
+        rr.init("inference2", spawn=True)
         # if ':' in rerun:
         #     rr.connect(rerun)
         # elif rerun is not None:
