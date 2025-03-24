@@ -5,6 +5,7 @@ import positronic.cfg.hardware.camera
 import positronic.cfg.hardware.roboarms
 import positronic.cfg.hardware.gripper
 import ironic as ir
+from positronic.drivers.gripper.dh import DHGripper
 
 
 def _state_mapping(env: ir.ControlSystem):
@@ -20,10 +21,14 @@ def _state_mapping(env: ir.ControlSystem):
 
 @ir.config(camera=None)
 def roboarm(arm: ir.ControlSystem, camera: ir.ControlSystem | None = None):
-    components = [arm]
-    inputs = {'target_position': (arm, 'target_position'), 'reset': (arm, 'reset'), 'target_grip': (arm, 'target_grip')}
+    from positronic.drivers.gripper.dh import DHGripper
+    gripper = DHGripper(port='/dev/ttyUSB0')
+    components = [arm, gripper]
 
-    outputs = {**arm.output_mappings, 'frame': ir.OutputPort.Stub()}
+    inputs = {'target_position': (arm, 'target_position'), 'reset': (arm, 'reset'), 'target_grip': (gripper, 'target_grip')}
+
+    outputs = {**arm.output_mappings, 'frame': ir.OutputPort.Stub(), 'grip': gripper.outs.grip}
+
     if camera is not None:
         components.append(camera)
         outputs['frame'] = camera.outs.frame
@@ -92,9 +97,12 @@ def franka(
     async def metadata():
         return ir.Message(data={'source': 'franka'})
 
+    gripper = DHGripper(port="/dev/ttyUSB0")
+    components.append(gripper)
+
     inputs = {
         'target_position': (roboarm, 'target_position'),
-        'target_grip': (roboarm, 'target_grip'),
+        'target_grip': (gripper, 'target_grip'),
         'reset': (roboarm, 'reset')
     }
 

@@ -39,6 +39,7 @@ hardware = [
     "pyspacemouse",
     "linuxpy",
     "pin",  # For Kinova
+    "pyserial",
 ]
 dev = [
     "jupyter",

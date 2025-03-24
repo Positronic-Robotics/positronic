@@ -75,7 +75,7 @@ async def _main(
 
 main = ir.Config(
     _main,
-    env=positronic.cfg.env.umi,
+    env=positronic.cfg.env.umi_gripper,
     ui=positronic.cfg.ui.teleop_umi,
     sound=positronic.cfg.hardware.sound.tracking_error,
     data_dumper=dataset_dumper.override(video_fps=30, codec='libx264'),

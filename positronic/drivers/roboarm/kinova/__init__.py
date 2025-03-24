@@ -16,7 +16,7 @@ import ironic as ir
 from positronic.drivers.roboarm.kinova.base import KinovaAPI, KinematicsSolver, JointCompliantController
 from positronic.drivers.roboarm.status import RobotStatus
 
-_Q_RETRACT = np.array([0.0, -0.34906585, 3.14159265, -2, 0.0, -1.42, 1.57079633])
+_Q_RETRACT = np.array([0.0, -0.34906585, 3.14159265, -2, 0.0, 0, 1.57079633])
 
 
 @ir.ironic_system(input_ports=['target_position', 'reset', 'target_grip'],
