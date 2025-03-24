@@ -67,6 +67,6 @@ RUN uv pip install kortex_api-2.7.0.post5-py3-none-any.whl
 WORKDIR /positronic
 
 ENV PYTHONPATH=/positronic
-
+ENV PYTHONPATH=/lerobot:$PYTHONPATH
 # Default command
 CMD ["bash"]
