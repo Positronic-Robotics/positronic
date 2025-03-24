@@ -194,7 +194,7 @@ if __name__ == "__main__":
 
     async def _main():
         camera = LinuxPyCamera(
-            '/dev/v4l/by-path/pci-0000:00:14.0-usb-0:5:1.0-video-index0',
+            '/dev/v4l/by-path/pci-0000:00:14.0-usb-0:2:1.0-video-index0',
             width=1920,
             height=1080,
             pixel_format="MJPG"
