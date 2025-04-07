@@ -29,7 +29,7 @@ def _decode_video_from_array(array: torch.Tensor) -> torch.Tensor:
         try:
             with imageio.get_reader(buffer, format='mp4') as reader:
                 return torch.from_numpy(np.stack([frame for frame in reader]))
-        except Exception as e:
+        except Exception:
             try:
                 print("Failed to decode video data. Trying to read from file.")
                 with open('tmp.mp4', 'wb') as f:
@@ -39,6 +39,7 @@ def _decode_video_from_array(array: torch.Tensor) -> torch.Tensor:
                 raise ValueError(f"Failed to decode video data: {str(e)}")
             finally:
                 os.remove('tmp.mp4')
+
 
 def get_consistent_samples(
         ds: Dict[str, Any],

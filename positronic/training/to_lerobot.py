@@ -44,7 +44,7 @@ def _decode_video_from_array(array: torch.Tensor) -> torch.Tensor:
         try:
             with imageio.get_reader(buffer, format='mp4') as reader:
                 return torch.from_numpy(np.stack([frame for frame in reader]))
-        except Exception as e:
+        except Exception:
             try:
                 print("Failed to decode video data. Trying to read from file.")
                 with open('tmp.mp4', 'wb') as f:
@@ -82,7 +82,7 @@ def _start_from_zero(timestamp: torch.Tensor):
     state_encoder=positronic.cfg.inference.state.end_effector,
     action_encoder=positronic.cfg.inference.action.umi_relative,
 )
-def convert_to_lerobot_dataset(
+def convert_to_lerobot_dataset(  # noqa: C901  Function is too complex
     input_dir: str,
     output_dir: str,
     fps: int,
@@ -92,7 +92,7 @@ def convert_to_lerobot_dataset(
     timestamp_units: str,
     state_encoder: StateEncoder,
     action_encoder: ActionDecoder,
-):  # noqa: C901  Function is too complex
+):
     input_dir = Path(input_dir)
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)

@@ -1,7 +1,5 @@
 import asyncio
-from collections import deque
 
-import numpy as np
 import torch
 import rerun as rr
 
@@ -65,7 +63,6 @@ class Inference(ir.ControlSystem):
         """Initialize the policy"""
         self.policy.to(self.device)
         self.reference_pose = None
-
 
     @ir.on_message("start")
     async def handle_start(self, message: ir.Message):

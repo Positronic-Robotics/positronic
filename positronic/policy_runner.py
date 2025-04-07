@@ -1,5 +1,4 @@
 import asyncio
-import functools
 import logging
 import sys
 
@@ -113,13 +112,12 @@ async def async_main(
 
 
 def main(*args, **kwargs):
-    # Instead of instantiating the configuration outside the event loop
-    # we'll pass the args/kwargs to a new function that will handle the instantiation
     asyncio.run(run_with_config(*args, **kwargs))
 
+
 async def run_with_config(*args, **kwargs):
-    # Now we instantiate the configuration inside the running event loop
     await async_main.override_and_instantiate(*args, **kwargs)
+
 
 if __name__ == "__main__":
     fire.Fire(main)

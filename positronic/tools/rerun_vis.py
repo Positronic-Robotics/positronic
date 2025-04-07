@@ -78,13 +78,6 @@ class RerunVisualiser(ir.ControlSystem):
         if 'infrared_2' in frames:
             rr.log("camera/infrared_2", rr.Image(frames['infrared_2']).compress())
 
-        if self.is_bound('ext_force_ee'):
-            ee_force = np.array((await self.ins.ext_force_ee()).data)
-            rr.log("forces/end_effector/x", rr.Scalar(ee_force[0]))
-            rr.log("forces/end_effector/y", rr.Scalar(ee_force[1]))
-            rr.log("forces/end_effector/z", rr.Scalar(ee_force[2]))
-            rr.log("robot/ee_force", rr.Arrows3D(origins=robot_position.translation.copy(), vectors=ee_force[:3].copy()))
-
         if self.is_bound('ext_force_base'):
 
             base_force = (await self.ins.ext_force_base()).data
@@ -97,3 +90,13 @@ class RerunVisualiser(ir.ControlSystem):
             rr_robot_position = rr.Transform3D(translation=robot_position.translation.copy(),
                                                rotation=rr.Quaternion(xyzw=robot_position.rotation.as_quat_xyzw))
             rr.log("robot/position", rr_robot_position)
+
+            if self.is_bound('ext_force_ee'):
+                ee_force = np.array((await self.ins.ext_force_ee()).data)
+                rr.log("forces/end_effector/x", rr.Scalar(ee_force[0]))
+                rr.log("forces/end_effector/y", rr.Scalar(ee_force[1]))
+                rr.log("forces/end_effector/z", rr.Scalar(ee_force[2]))
+                rr.log("robot/ee_force", rr.Arrows3D(
+                    origins=robot_position.translation.copy(),
+                    vectors=ee_force[:3].copy())
+                )

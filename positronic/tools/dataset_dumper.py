@@ -12,8 +12,13 @@ import ironic as ir
 
 class SerialDumper:
 
-    def __init__(self, directory: str, video_fps: int | None = None, codec: str = 'libx264',
-                 video_quality: int = 18, video_pixel_format: str = 'yuv444p'):
+    def __init__(
+            self,
+            directory: str,
+            video_fps: int | None = None,
+            codec: str = 'libx264',
+            video_pixel_format: str = 'yuv444p'
+    ):
         """
         Dumps serial data to a directory as torch tensors.
 
@@ -34,7 +39,6 @@ class SerialDumper:
         self.directory = directory
         self.video_fps = video_fps
         self.codec = codec
-        self.video_quality = video_quality
         self.video_pixel_format = video_pixel_format
         os.makedirs(self.directory, exist_ok=True)
         self.data = defaultdict(list)
@@ -66,12 +70,11 @@ class SerialDumper:
                 self.video_buffers[k] = BytesIO()
                 self.video_writers[k] = imageio.get_writer(self.video_buffers[k],
                                                            fps=self.video_fps,
-                                                           format='mp4', codec=self.codec,
+                                                           format='mp4',
+                                                           codec=self.codec,
                                                            ffmpeg_params=[
-                                                            #    '-crf', str(self.video_quality),
                                                                '-vf', 'scale=1280:720',
                                                                '-preset', 'veryfast',
-                                                            #    '-pix_fmt', self.video_pixel_format,
                                                            ])
 
             self.video_writers[k].append_data(v)

@@ -12,7 +12,6 @@ def _convert_quat_to_tensor(q: geom.Rotation, representation: geom.Rotation.Repr
     return torch.from_numpy(array).flatten()
 
 
-
 class ActionDecoder(abc.ABC):
     @abc.abstractmethod
     def encode_episode(self, episode_data):
@@ -215,7 +214,6 @@ class UMIRelativeRobotPositionAction(ActionDecoder):
         ])
 
         return umi_relative(left_trajectory, right_trajectory)
-
 
     def encode_episode(self, episode_data):
         n_samples = len(episode_data['target_grip'])
