@@ -194,13 +194,13 @@ if __name__ == "__main__":
 
     async def _main():
         camera = LinuxPyCamera(
-            '/dev/v4l/by-path/pci-0000:00:14.0-usb-0:2:1.0-video-index0',
+            '/dev/v4l/by-id/usb-Arducam_Technology_Co.__Ltd._Arducam_UC684_UC684LEFT-video-index0',
             width=1920,
             height=1080,
             pixel_format="MJPG"
         )
         camera2 = LinuxPyCamera(
-            '/dev/v4l/by-path/pci-0000:00:14.0-usb-0:6:1.0-video-index0',
+            '/dev/v4l/by-id/usb-Arducam_Technology_Co.__Ltd._Arducam_UC684_UC684RIGHT-video-index0',
             width=1920,
             height=1080,
             pixel_format="MJPG")

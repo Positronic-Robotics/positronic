@@ -89,6 +89,8 @@ idna==3.10
     #   requests
 imageio==2.37.0
     # via positronic (pyproject.toml)
+imageio-ffmpeg==0.6.0
+    # via imageio
 importlib-resources==6.5.2
     # via etils
 iniconfig==2.0.0
@@ -191,6 +193,8 @@ pluggy==1.5.0
     # via pytest
 protobuf==5.29.3
     # via dm-control
+psutil==7.0.0
+    # via imageio
 pyarrow==19.0.1
     # via rerun-sdk
 pydantic==2.10.6

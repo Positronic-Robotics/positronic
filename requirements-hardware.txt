@@ -166,6 +166,8 @@ idna==3.10
     #   yarl
 imageio==2.37.0
     # via positronic (pyproject.toml)
+imageio-ffmpeg==0.6.0
+    # via imageio
 importlib-metadata==8.6.1
     # via diffusers
 importlib-resources==6.5.2
@@ -298,6 +300,8 @@ propcache==0.3.1
     #   yarl
 protobuf==6.30.0
     # via dm-control
+psutil==7.0.0
+    # via imageio
 pyarrow==19.0.1
     # via
     #   datasets

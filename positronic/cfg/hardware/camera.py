@@ -71,10 +71,9 @@ def opencv(camera_id: int, resolution: Tuple[int, int], fps: int, image_mapping:
 
 
 sl_vga = stereolabs.override(fps=30, view='SIDE_BY_SIDE', resolution='VGA', depth_mode='NONE', depth_mask=False)
-# arducam_left = linux.override(device_path="/dev/v4l/by-path/pci-0000:00:14.0-usb-0:2:1.0-video-index0")
-# arducam_right = linux.override(device_path="/dev/v4l/by-path/pci-0000:00:14.0-usb-0:6:1.0-video-index0")
 
-arducam_left = linux.override(device_path="/dev/video4")
-arducam_right = linux.override(device_path="/dev/video0")
+# You can change arducam id via https://docs.arducam.com/UVC-Camera/Serial-Number-Tool-Guide/
+arducam_left = linux.override(device_path="/dev/v4l/by-id/usb-Arducam_Technology_Co.__Ltd._Arducam_UC684_UC684LEFT-video-index0")
+arducam_right = linux.override(device_path="/dev/v4l/by-id/usb-Arducam_Technology_Co.__Ltd._Arducam_UC684_UC684RIGHT-video-index0")
 
 merged = ir.Config(merge_on_pulse, cameras={'left': arducam_left, 'right': arducam_right}, fps=30)
