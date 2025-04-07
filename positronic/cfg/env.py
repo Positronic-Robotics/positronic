@@ -25,7 +25,11 @@ def roboarm(arm: ir.ControlSystem, camera: ir.ControlSystem | None = None):
     gripper = DHGripper(port='/dev/ttyUSB0')
     components = [arm, gripper]
 
-    inputs = {'target_position': (arm, 'target_position'), 'reset': (arm, 'reset'), 'target_grip': (gripper, 'target_grip')}
+    inputs = {
+        'target_position': (arm, 'target_position'),
+        'reset': (arm, 'reset'),
+        'target_grip': (gripper, 'target_grip'),
+    }
 
     outputs = {**arm.output_mappings, 'frame': ir.OutputPort.Stub(), 'grip': gripper.outs.grip}
 

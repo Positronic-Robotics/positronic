@@ -24,7 +24,8 @@ async def _main(
         ui: ir.ControlSystem,
         env: ir.ControlSystem,
         data_dumper: ir.ControlSystem,
-        sound: ir.ControlSystem | None = None
+        sound: ir.ControlSystem | None,
+        controller_distance: float
 ):
     ui.bind(
         images=env.outs.frame,
@@ -50,11 +51,14 @@ async def _main(
         left_position = controller_positions['left'].translation
         right_position = controller_positions['right'].translation
 
-        if left_position is None or right_position is None or left_position is ir.NoValue or right_position is ir.NoValue:
+        if (
+            left_position is None or right_position is None or
+            left_position is ir.NoValue or right_position is ir.NoValue
+        ):
             return 0
 
         distance = np.linalg.norm(np.array(left_position) - np.array(right_position))
-        error = np.abs(distance - 0.105)
+        error = np.abs(distance - controller_distance)
         return error
 
     components = [ui, env]
@@ -79,6 +83,7 @@ main = ir.Config(
     ui=positronic.cfg.ui.teleop_umi,
     sound=positronic.cfg.hardware.sound.tracking_error,
     data_dumper=dataset_dumper.override(video_fps=30, codec='libx264'),
+    controller_distance=0.105,
 )
 
 

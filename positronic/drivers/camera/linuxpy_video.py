@@ -41,11 +41,14 @@ class LinuxPyCamera(ir.ControlSystem):
         PixelFormat.MJPEG: 'mjpeg',
     }
 
-    def __init__(self, device_path: str,
-                 width: int = 640,
-                 height: int = 480,
-                 fps: int = 30,
-                 pixel_format: str = "MJPG"):
+    def __init__(
+        self,
+        device_path: str,
+        width: int = 640,
+        height: int = 480,
+        fps: int = 30,
+        pixel_format: str = "MJPG"
+    ):
         """Video4Linux camera that uses linuxpy library
 
         Args:
@@ -73,8 +76,15 @@ class LinuxPyCamera(ir.ControlSystem):
         # Start the processing in a separate process
         self._reader_process = mp.Process(
             target=self._frame_process,
-            args=(self.device_path, self.width, self.height, self.fps,
-                    self.pixel_format, self._frame_queue, self._stopped),
+            args=(
+                self.device_path,
+                self.width,
+                self.height,
+                self.fps,
+                self.pixel_format,
+                self._frame_queue,
+                self._stopped
+            ),
             daemon=True
         )
 
@@ -145,7 +155,6 @@ class LinuxPyCamera(ir.ControlSystem):
         device.close()
         stopped.set()
 
-
     async def setup(self):
         """Set up the camera device and start the frame processing"""
         try:
@@ -187,8 +196,6 @@ class LinuxPyCamera(ir.ControlSystem):
 
 
 if __name__ == "__main__":
-    import asyncio
-    from positronic.tools.video import VideoDumper
     from positronic.tools.rerun_vis import RerunVisualiser
     from positronic.drivers.camera.merge import merge_on_camera
 
@@ -209,9 +216,6 @@ if __name__ == "__main__":
 
         system = ir.compose(
             merged,
-            # VideoDumper("video.mp4", 30, codec='libx264').bind(
-            #     image=ir.utils.map_port(lambda x: x['image'], merged.outs.frame)
-            # ),
             RerunVisualiser().bind(
                 frame=merged.outs.frame
             )

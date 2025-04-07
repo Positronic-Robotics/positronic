@@ -1,8 +1,9 @@
 import ironic as ir
 
-from positronic.inference.state import StateEncoder, ImageEncodingConfig, StateEncodingConfig
+from positronic.inference.state import StateEncoder, ImageEncodingConfig
 
-end_effector= ir.Config(
+
+end_effector = ir.Config(
     StateEncoder,
     state_output_key='observation.state',
     images=[

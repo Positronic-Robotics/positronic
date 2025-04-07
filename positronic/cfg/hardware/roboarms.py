@@ -41,7 +41,6 @@ def kinova(ip: str, relative_dynamics_factor: float):
     from positronic.drivers.roboarm.kinova import Kinova
     kinova = Kinova(ip, relative_dynamics_factor)
 
-
     kinova = ir.extend(kinova, **{
         'ext_force_ee': ir.utils.const_property([0, 0, 0]),
         'ext_force_base': ir.utils.const_property([0, 0, 0]),
