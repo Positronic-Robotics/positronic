@@ -24,7 +24,11 @@ class AddCameras(MujocoSceneTransform):
         model_suffix = metadata.get('model_suffix')
 
         for camera_name, camera_cfg in self.additional_cameras.items():
-            spec.worldbody.add_camera(name=f"{camera_name}{model_suffix}", pos=camera_cfg.pos, xyaxes=camera_cfg.xyaxes)
+            spec.worldbody.add_camera(
+                name=f"{camera_name}{model_suffix}",
+                pos=camera_cfg['pos'],
+                xyaxes=camera_cfg['xyaxes']
+            )
 
         return spec
 

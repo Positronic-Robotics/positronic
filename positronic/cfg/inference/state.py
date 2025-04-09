@@ -55,3 +55,24 @@ end_effector_mem15 = ir.Config(
         'grip',  # fake grip
     ]
 )
+
+
+end_effector_back_front = ir.Config(
+    StateEncoder,
+    state_output_key='observation.state',
+    images=[
+        ImageEncodingConfig(
+            key='image.back',
+            output_key='observation.images.back',
+            resize=[352, 192]
+        ),
+        ImageEncodingConfig(
+            key='image.front',
+            output_key='observation.images.front',
+            resize=[352, 192]
+        ),
+    ],
+    state=[
+        'grip',  # fake grip
+    ]
+)

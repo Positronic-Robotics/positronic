@@ -5,7 +5,6 @@ import positronic.cfg.hardware.camera
 import positronic.cfg.hardware.roboarms
 import positronic.cfg.hardware.gripper
 import ironic as ir
-from positronic.drivers.gripper.dh import DHGripper
 
 
 def _state_mapping(env: ir.ControlSystem):
@@ -91,6 +90,8 @@ def franka(
     roboarm: ir.ControlSystem,
     camera: ir.ControlSystem | None = None,
 ):
+    from positronic.drivers.gripper.dh import DHGripper
+
     components = [roboarm]
     outputs = {'frame': ir.OutputPort.Stub()}
 

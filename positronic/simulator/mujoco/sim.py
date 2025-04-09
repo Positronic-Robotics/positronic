@@ -1,12 +1,10 @@
 import abc
 from typing import Dict, Optional, Sequence, Tuple
 
-import hydra
 import mujoco
 import numpy as np
 from dm_control import mujoco as dm_mujoco
 from dm_control.utils import inverse_kinematics as ik
-from omegaconf import DictConfig
 
 from ironic.utils import FPSCounter
 from geom import Rotation, Transform3D
@@ -303,21 +301,39 @@ class MujocoRenderer:
             self.renderer.close()
 
 
-def create_from_config(cfg: DictConfig) -> Tuple[MujocoSimulator, MujocoRenderer, InverseKinematics]:
-    loaders = hydra.utils.instantiate(cfg.mujoco_loaders)
+class MujocoSimulatorEnv:
+    def __init__(
+            self,
+            simulator: MujocoSimulator,
+            renderer: MujocoRenderer,
+            inverse_kinematics: InverseKinematics,
+    ) -> None:
+        self.simulator = simulator
+        self.renderer = renderer
+        self.inverse_kinematics = inverse_kinematics
+
+
+def create_from_config(
+        mujoco_model_path: str,
+        simulation_hz: float,
+        camera_names: Sequence[str],
+        camera_width: int,
+        camera_height: int,
+        loaders: Sequence[MujocoSceneTransform] = ()
+) -> MujocoSimulatorEnv:
 
     simulator = MujocoSimulator.load_from_xml_path(
-        model_path=cfg.mujoco.model_path,
+        model_path=mujoco_model_path,
         loaders=loaders,
-        simulation_rate=1 / cfg.mujoco.simulation_hz
+        simulation_rate=1 / simulation_hz
     )
     renderer = MujocoRenderer(
         simulator,
-        camera_names=cfg.mujoco.camera_names,
-        render_resolution=(cfg.mujoco.camera_width, cfg.mujoco.camera_height)
+        camera_names=camera_names,
+        render_resolution=(camera_width, camera_height)
     )
     inverse_kinematics = InverseKinematics(simulator)
 
     simulator.reset()
 
-    return simulator, renderer, inverse_kinematics
+    return MujocoSimulatorEnv(simulator, renderer, inverse_kinematics)

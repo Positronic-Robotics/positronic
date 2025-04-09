@@ -1,49 +1,63 @@
-import hydra
-from omegaconf import DictConfig
+from typing import Dict
+import fire
 import rerun as rr
 from tqdm import tqdm
 
-from simulator.mujoco.sim import create_from_config
-from inference.state import StateEncoder
-from inference.policy import get_policy
-from inference.inference import rerun_log_action, rerun_log_observation
+from positronic.inference.action import ActionDecoder
+from positronic.simulator.mujoco.sim import MujocoSimulatorEnv
+from positronic.inference.state import StateEncoder
+from positronic.inference.inference import rerun_log_action, rerun_log_observation
+
+import ironic as ir
+import positronic.cfg.inference.state
+import positronic.cfg.inference.action
+import positronic.cfg.inference.policy
+import positronic.cfg.simulator
 
 
-@hydra.main(version_base=None, config_path="configs", config_name="sync_policy_runner")
-def main(cfg: DictConfig):  # noqa: C901  Function is too complex
-    if cfg.rerun:
+image_mapping = {
+    'back': 'handcam_back',
+    'front': 'handcam_front',
+}
+
+
+
+def run_policy_in_simulator(
+        env: MujocoSimulatorEnv,
+        state_encoder: StateEncoder,
+        action_decoder: ActionDecoder,
+        policy,
+        rerun_path: str,
+        inference_time_sec: float,
+        observation_hz: float,
+        image_name_mapping: Dict[str, str],
+        device: str,
+):  # noqa: C901  Function is too complex
+    if rerun_path:
         rr.init("inference", spawn=False)
-        if ':' in cfg.rerun:
-            rr.connect(cfg.rerun)
-        elif cfg.rerun is not None:
-            rr.save(cfg.rerun)
+        rr.save(rerun_path)
 
-    simulator, renderer, ik = create_from_config(cfg.hardware)
+    policy = policy.to(device)
 
+    simulator, renderer, ik = env.simulator, env.renderer, env.inverse_kinematics
     # Initialize renderer
     renderer.initialize()
     reference_pose = simulator.robot_position
 
-    # Initialize policy and encoders
-    policy = get_policy(cfg.inference.checkpoint_path, cfg.get('policy_args', {}))
-    policy.to(cfg.inference.device)
-    state_encoder = StateEncoder(hydra.utils.instantiate(cfg.inference.state))
-    action_decoder = hydra.utils.instantiate(cfg.inference.action)
-
-    steps = cfg.inference.inference_time_sec * cfg.hardware.mujoco.simulation_hz
+    steps = int(inference_time_sec * (1 / simulator.model.opt.timestep))
     frame_count = 0
 
     for i in tqdm(range(steps)):
         simulator.step()
 
         # Get observations
-        if simulator.ts_sec >= frame_count / cfg.hardware.mujoco.observation_hz:
+        if simulator.ts_sec >= frame_count / observation_hz:
             frame_count += 1
             rr.set_time_seconds('time', simulator.ts_sec)
             images = renderer.render()
 
-            if cfg.image_name_mapping:
-                images = {f"image.{k}": images[v] for k, v in cfg.image_name_mapping.items()}
+            if image_name_mapping:
+                images = {f"image.{k}": images[v] for k, v in image_name_mapping.items()}
 
             # Encode state
             inputs = {
@@ -59,15 +73,15 @@ def main(cfg: DictConfig):  # noqa: C901  Function is too complex
             }
             obs = state_encoder.encode(images, inputs)
             for key in obs:
-                obs[key] = obs[key].to(cfg.inference.device)
+                obs[key] = obs[key].to(device)
 
             # Get policy action
             action = policy.select_action(obs).squeeze(0).cpu().numpy()
             action_dict = action_decoder.decode(action, inputs)
 
-            if cfg.inference.rerun:
-                rerun_log_observation(simulator.ts_sec, obs)
-                rerun_log_action(simulator.ts_sec, action)
+            if rerun_path:
+                rerun_log_observation(simulator.ts_ns, obs)
+                rerun_log_action(simulator.ts_ns, action)
 
             # Apply actions
             target_pos = action_dict['target_robot_position']
@@ -83,10 +97,24 @@ def main(cfg: DictConfig):  # noqa: C901  Function is too complex
             if 'target_grip' in action_dict:
                 simulator.set_grip(action_dict['target_grip'])
 
-    if cfg.rerun:
+    if rerun_path:
         rr.disconnect()
     renderer.close()
 
 
+run = ir.Config(
+    run_policy_in_simulator,
+    env=positronic.cfg.simulator.simulator,
+    state_encoder=positronic.cfg.inference.state.end_effector_back_front,
+    action_decoder=positronic.cfg.inference.action.umi_relative,
+    policy=positronic.cfg.inference.policy.act,
+    rerun_path="rerun.rrd",
+    inference_time_sec=10,
+    observation_hz=60,
+    image_name_mapping=image_mapping,
+    device="cuda",
+)
+
+
 if __name__ == "__main__":
-    main()
+    fire.Fire(run.override_and_instantiate)
