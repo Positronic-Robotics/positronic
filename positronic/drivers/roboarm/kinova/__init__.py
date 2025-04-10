@@ -56,6 +56,7 @@ class Kinova(ir.ControlSystem):
     async def setup(self):
         self.control_process = mp.Process(target=self._control_loop, args=(self.command_queue, ))
         self.control_process.start()
+        # Set roboarm in initial position
         await self.handle_reset(None)
         await self.step()
 

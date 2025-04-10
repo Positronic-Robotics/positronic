@@ -2,6 +2,7 @@ import logging
 import os
 from pathlib import Path
 from io import BytesIO
+import tempfile
 
 import cv2
 import torch
@@ -47,13 +48,11 @@ def _decode_video_from_array(array: torch.Tensor) -> torch.Tensor:
         except Exception:
             try:
                 print("Failed to decode video data. Trying to read from file.")
-                with open('tmp.mp4', 'wb') as f:
-                    f.write(array.numpy().tobytes())
-                return torch.from_numpy(np.stack(imageio.mimread('tmp.mp4')))
+                with tempfile.NamedTemporaryFile(suffix='.mp4') as tmp_file:
+                    tmp_file.write(array.numpy().tobytes())
+                    return torch.from_numpy(np.stack(imageio.mimread(tmp_file.name)))
             except Exception as e:
                 raise ValueError(f"Failed to decode video data: {str(e)}")
-            finally:
-                os.remove('tmp.mp4')
 
 
 def convert_to_seconds(timestamp_units: str, timestamp: torch.Tensor):

@@ -120,6 +120,14 @@ def slice_sample(sample, consistent_intervals):
 
 
 def filter_samples(path: str, target_path: str, min_interval_length: int = 30):
+    """
+    Filter the dataset to remove samples with non-consistent controller positions.
+
+    Args:
+        path: (str) Path to the dataset.
+        target_path: (str) Path to save the filtered dataset.
+        min_interval_length: (int) Minimum length of the interval to be considered.
+    """
     target_path = Path(target_path)
     target_path.mkdir(parents=True, exist_ok=True)
 

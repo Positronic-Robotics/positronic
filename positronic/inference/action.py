@@ -14,11 +14,30 @@ def _convert_quat_to_tensor(q: geom.Rotation, representation: geom.Rotation.Repr
 
 class ActionDecoder(abc.ABC):
     @abc.abstractmethod
-    def encode_episode(self, episode_data):
+    def encode_episode(self, episode_data: dict[str, torch.Tensor]) -> torch.Tensor:
+        """
+        Encode the episode data into a tensor. Used for creating the dataset for training.
+
+        Args:
+            episode_data: (dict[str, torch.Tensor]) Data of the entire episode.
+
+        Returns:
+            (torch.Tensor) The encoded episode data.
+        """
         pass
 
     @abc.abstractmethod
-    def decode(self, action_vector, inputs):
+    def decode(self, action_vector: torch.Tensor, inputs: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
+        """
+        Decode the action vector into a dictionary of tensors. Used for inference.
+
+        Args:
+            action_vector: (torch.Tensor) Action vector to decode.
+            inputs: (dict[str, torch.Tensor]) Additional inputs with things like current state.
+
+        Returns:
+            (dict[str, torch.Tensor]) The decoded action.
+        """
         pass
 
 
@@ -30,7 +49,7 @@ class AbsolutePositionAction(ActionDecoder):
         self.rotation_size = rotation_representation.size
         self.rotation_shape = rotation_representation.shape
 
-    def encode_episode(self, episode_data):
+    def encode_episode(self, episode_data: dict[str, torch.Tensor]) -> torch.Tensor:
         rotations = torch.zeros(len(episode_data['target_robot_position_quaternion']), self.rotation_size)
 
         # TODO: make this vectorized
@@ -46,7 +65,7 @@ class AbsolutePositionAction(ActionDecoder):
 
         return torch.cat([rotations, translations, grips], dim=1)
 
-    def decode(self, action_vector, inputs):
+    def decode(self, action_vector: torch.Tensor, inputs: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
         rotation = action_vector[:self.rotation_size].reshape(self.rotation_shape)
         rot = geom.Rotation.create_from(rotation, self.rotation_representation)
 
@@ -68,7 +87,7 @@ class RelativeTargetPositionAction(ActionDecoder):
         self.rotation_size = rotation_representation.size
         self.rotation_shape = rotation_representation.shape
 
-    def encode_episode(self, episode_data):
+    def encode_episode(self, episode_data: dict[str, torch.Tensor]) -> torch.Tensor:
         mtxs = torch.zeros(len(episode_data['target_robot_position_quaternion']), self.rotation_size)
 
         # TODO: make this vectorized
@@ -90,7 +109,7 @@ class RelativeTargetPositionAction(ActionDecoder):
 
         return torch.cat([mtxs, translation_diff, grips], dim=1)
 
-    def decode(self, action_vector, inputs):
+    def decode(self, action_vector: torch.Tensor, inputs: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
         rotation = action_vector[:self.rotation_size].reshape(self.rotation_shape)
         q_diff = geom.Rotation.create_from(rotation, self.rotation_representation)
         tr_diff = action_vector[self.rotation_size:self.rotation_size + 3]
@@ -120,8 +139,8 @@ class RelativeRobotPositionAction(ActionDecoder):
         Action that represents the relative position between the current robot position and the robot position
         after `offset` timesteps.
 
-        Target_position_i = Pose_i ^ -1 * Pose_i+offset
-        Target_grip_i = Grip_i+offset
+        Target_position_i = Pose_i ^ -1 * Pose_{i+offset}
+        Target_grip_i = Grip_{i+offset}
 
         Args:
             offset: (int) The number of timesteps to look ahead.
@@ -134,7 +153,7 @@ class RelativeRobotPositionAction(ActionDecoder):
         self.rotation_size = rotation_representation.size
         self.rotation_shape = rotation_representation.shape
 
-    def encode_episode(self, episode_data):
+    def encode_episode(self, episode_data: dict[str, torch.Tensor]) -> torch.Tensor:
         rotations = torch.zeros(len(episode_data['robot_position_quaternion']), self.rotation_size)
         translation_diff = -episode_data['robot_position_translation'].clone()
         grips = torch.zeros_like(episode_data['grip'])
@@ -160,7 +179,7 @@ class RelativeRobotPositionAction(ActionDecoder):
 
         return torch.cat([rotations, translation_diff, grips], dim=1)
 
-    def decode(self, action_vector, inputs):
+    def decode(self, action_vector: torch.Tensor, inputs: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
         rotation = action_vector[:self.rotation_size].reshape(self.rotation_shape)
         q_diff = geom.Rotation.create_from(rotation, self.rotation_representation)
         tr_diff = action_vector[self.rotation_size:self.rotation_size + 3]
@@ -189,8 +208,8 @@ class UMIRelativeRobotPositionAction(ActionDecoder):
         """
         Action that represents the relative position between the current robot position and the robot position
         after `offset` timesteps.
-        Target_position_i = Pose_i ^ -1 * Pose_i+offset
-        Target_grip_i = Grip_i+offset
+        Target_position_i = Pose_i ^ -1 * Pose_{i+offset}
+        Target_grip_i = Grip_{i+offset}
         Args:
             offset: (int) The number of timesteps to look ahead.
             rotation_representation: (Rotation.Representation | str) The representation of the rotation.
@@ -215,7 +234,7 @@ class UMIRelativeRobotPositionAction(ActionDecoder):
 
         return umi_relative(left_trajectory, right_trajectory)
 
-    def encode_episode(self, episode_data):
+    def encode_episode(self, episode_data: dict[str, torch.Tensor]) -> torch.Tensor:
         n_samples = len(episode_data['target_grip'])
         rotations = torch.zeros(n_samples, self.rotation_size)
         translation_diff = torch.zeros(n_samples, 3)
@@ -246,7 +265,7 @@ class UMIRelativeRobotPositionAction(ActionDecoder):
 
         return torch.cat([rotations, translation_diff, grips], dim=1)
 
-    def decode(self, action_vector, inputs):
+    def decode(self, action_vector: torch.Tensor, inputs: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
         rotation = action_vector[:self.rotation_size].reshape(self.rotation_shape)
         q_diff = geom.Rotation.create_from(rotation, self.rotation_representation)
         tr_diff = action_vector[self.rotation_size:self.rotation_size + 3]

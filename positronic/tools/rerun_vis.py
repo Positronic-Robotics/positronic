@@ -44,7 +44,7 @@ class RerunVisualiser(ir.ControlSystem):
 
     async def setup(self):
         """Initialize rerun recording."""
-        self.application_id = "Data Collection2"
+        self.application_id = "Data Collection"
         rr.init(self.application_id, recording_id=self.recording_id)
         rr.spawn(memory_limit="50%", port=self.port)
         await self.on_new_recording(ir.Message(data=None))
