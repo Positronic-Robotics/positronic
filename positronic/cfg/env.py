@@ -90,6 +90,7 @@ def franka(
     roboarm: ir.ControlSystem,
     camera: ir.ControlSystem | None = None,
 ):
+    # TODO: we should get rid of this in favor of roboarm env
     from positronic.drivers.gripper.dh import DHGripper
 
     components = [roboarm]
