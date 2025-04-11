@@ -7,6 +7,7 @@ from positronic.simulator.mujoco.sim import create_from_config
 def _list(*args):
     return list(args)
 
+
 stack_cubes_loaders = ir.Config(
     _list,
     ir.Config(AddCameras, additional_cameras={

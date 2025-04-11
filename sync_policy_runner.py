@@ -21,8 +21,7 @@ image_mapping = {
 }
 
 
-
-def run_policy_in_simulator(
+def run_policy_in_simulator(  # noqa: C901  Function is too complex
         env: MujocoSimulatorEnv,
         state_encoder: StateEncoder,
         action_decoder: ActionDecoder,
@@ -32,7 +31,7 @@ def run_policy_in_simulator(
         observation_hz: float,
         image_name_mapping: Dict[str, str],
         device: str,
-):  # noqa: C901  Function is too complex
+):
     if rerun_path:
         rr.init("inference", spawn=False)
         rr.save(rerun_path)
