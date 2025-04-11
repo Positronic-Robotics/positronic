@@ -27,7 +27,7 @@ stack_cubes_loaders = ir.Config(
             'xyaxes': [-0.544, -0.839, -0.000, 0.242, -0.157, 0.958]
         },
     }),
-    ir.Config(AddBox, name='box_0', size=[0.025, 0.025, 0.025], pos=[0.4, 0.0, 0.31], rgba=[1, 0, 0, 1], freejoint=True),
+    ir.Config(AddBox, name='box_0', size=[0.02, 0.02, 0.01], pos=[0.0, 0.0, 0.01], rgba=[1, 0, 0, 1], freejoint=True),
     ir.Config(SetBodyPosition, body_name='box_0_body', random_position=[[0.31, -0.28, 0.31], [0.69, 0.28, 0.31]]),
     ir.Config(AddBox, name='box_1', size=[0.02, 0.02, 0.01], pos=[0.0, 0.0, 0.01], rgba=[0, 1, 0, 1], freejoint=True),
     ir.Config(SetBodyPosition, body_name='box_1_body', random_position=[[0.31, -0.28, 0.31], [0.69, 0.28, 0.31]]),

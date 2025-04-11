@@ -106,7 +106,7 @@ run = ir.Config(
     run_policy_in_simulator,
     env=positronic.cfg.simulator.simulator,
     state_encoder=positronic.cfg.inference.state.end_effector_back_front,
-    action_decoder=positronic.cfg.inference.action.umi_relative,
+    action_decoder=positronic.cfg.inference.action.relative_robot_position,
     policy=positronic.cfg.inference.policy.act,
     rerun_path="rerun.rrd",
     inference_time_sec=10,
