@@ -276,6 +276,21 @@ def config(target: Callable | None = None, *args, **kwargs):
 
 class Option:
     def __init__(self, **options: Dict[Any, Any]):
+        """
+        Option object, which allows to set predefined options for config values.
+
+        Useful for creating shortcuts for a CLI.
+
+        Args:
+            **options: Dictionary of options.
+
+        Example:
+            >>> def func(arg):
+            >>>     print("Received arg:", arg)
+            >>> config = ir.Config(func, arg=ir.Option(a="option1", b="option2"))
+            >>> config.override(arg="a").instantiate()
+            Received arg: option1
+        """
         self.options = options
         self.value = None
 
@@ -287,7 +302,7 @@ class Option:
 
     def __call__(self) -> Any:
         if self.value is None:
-            raise ConfigError(f"Option has not been set.")
+            raise ConfigError(f"Option has not been set. Available options: {self.options}")
         return self.options[self.value]
 
     def __str__(self):
