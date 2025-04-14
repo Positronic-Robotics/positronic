@@ -430,20 +430,124 @@ def test_option_with_nested_configs_produces_associated_value():
 
     assert cfg.override(option_func="a").instantiate() == "option1"
 
+
 def test_option_with_nested_option_produces_associated_value():
-    def func(a):
-        return a
+    def func(camera):
+        return camera
+
+    @ir.config(
+        resolution=ir.Option(
+            hd="1080p",
+            sd="720p"
+        )
+    )
+    def camera1(resolution: str):
+        return resolution
+
+    @ir.config(
+        resolution=ir.Option(
+            hd="1080p",
+            sd="720p"
+        )
+    )
+    def camera2(resolution: str):
+        return resolution
 
     cfg = ir.Config(
         func,
-        a=ir.Option(
-            a=ir.Option(a=1, b=2),
-            b=ir.Option(a=3, b=4)
+        camera=ir.Option(
+            camera1=camera1,
+            camera2=camera2
         )
     )
 
     override_kwargs = {
-        "a.a": "a"
+        "camera": "camera1",
+        "camera.resolution": "hd"
     }
 
-    assert cfg.override(**override_kwargs).instantiate() == 1
+    assert cfg.override(**override_kwargs).instantiate() == "1080p"
+
+
+def test_option_override_value_inside_option_without_choosing_option_produces_error():
+    def func(camera):
+        return camera
+
+    @ir.config(
+        resolution=ir.Option(
+            hd="1080p",
+            sd="720p"
+        )
+    )
+    def camera1(resolution: str):
+        return resolution
+
+    @ir.config(
+        resolution=ir.Option(
+            hd="1080p",
+            sd="720p"
+        )
+    )
+    def camera2(resolution: str):
+        return resolution
+
+    cfg = ir.Config(
+        func,
+        camera=ir.Option(
+            camera1=camera1,
+            camera2=camera2
+        )
+    )
+
+    override_kwargs = {
+        "camera.resolution": "hd"
+    }
+
+    with pytest.raises(ir.ConfigError):
+        cfg.override(**override_kwargs).instantiate()
+
+
+def test_option_override_value_inside_option_with_default_value_substitute_default_value():
+    def func(camera):
+        return camera
+
+    @ir.config(
+        resolution=ir.Option(
+            hd="1080p",
+            sd="720p"
+        )
+    )
+    def camera1(resolution: str):
+        return resolution
+
+    @ir.config(
+        resolution=ir.Option(
+            hd="1080p",
+            sd="720p"
+        )
+    )
+    def camera2(resolution: str):
+        return resolution
+
+    cfg = ir.Config(
+        func,
+        camera=ir.Option(
+            camera1=camera1,
+            camera2=camera2
+        ).default("camera1")
+    )
+
+    override_kwargs = {
+        "camera.resolution": "sd"
+    }
+
+    assert cfg.override(**override_kwargs).instantiate() == "720p"
+
+
+def test_option_default_not_affect_original_option():
+    option = ir.Option(a="option1", b="option2")
+
+    option_with_default = option.default("a")
+
+    assert option.value is None
+    assert option_with_default.value == "a"

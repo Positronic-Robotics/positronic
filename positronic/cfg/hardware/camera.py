@@ -80,3 +80,12 @@ arducam_right = linux.override(
     device_path="/dev/v4l/by-id/usb-Arducam_Technology_Co.__Ltd._Arducam_UC684_UC684RIGHT-video-index0"
 )
 merged = ir.Config(merge_on_pulse, cameras={'left': arducam_left, 'right': arducam_right}, fps=30)
+
+
+camera_options = ir.Option(
+    realsense=realsense,
+    stereolabs=stereolabs,
+    opencv=opencv,
+    luxonis=luxonis,
+    merged=merged
+)

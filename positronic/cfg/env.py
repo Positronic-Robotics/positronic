@@ -83,8 +83,8 @@ umi_gripper = umi.override(gripper=positronic.cfg.hardware.gripper.dh)
 
 
 @ir.config(
-    roboarm=positronic.cfg.hardware.roboarms.franka_ik,
-    camera=positronic.cfg.hardware.camera.merged,
+    roboarm=positronic.cfg.hardware.roboarms.roboarm_options.default("franka"),
+    camera=positronic.cfg.hardware.camera.camera_options.default("merged"),
 )
 def franka(
     roboarm: ir.ControlSystem,

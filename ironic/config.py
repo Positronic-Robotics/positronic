@@ -92,8 +92,16 @@ class Config:
 
             current_obj = overriden_cfg
 
-            for key in key_list[:-1]:
-                current_obj = current_obj._get_value(key)
+            for key_part in key_list[:-1]:
+                current_obj = current_obj._get_value(key_part)
+
+            if isinstance(current_obj, Option):
+                if current_obj.value is None:
+                    raise ConfigError(
+                        f'Error overriding "{key}": Cannot override value inside Option before selecting an option.'
+                    )
+                # if the option has a default value, substitute it
+                current_obj = current_obj()
 
             current_obj._set_value(key_list[-1], value)
 
@@ -106,8 +114,7 @@ class Config:
             old_value = self._get_value(key)
 
             if isinstance(old_value, Option):
-                old_value.default(value)
-                return
+                value = old_value.default(value)()
 
         if key[0].isdigit():
             self.args[int(key)] = value
@@ -274,10 +281,20 @@ class Option:
 
     def default(self, default_value: Any):
         assert default_value in self.options, f"Default value {default_value} not in options {self.options}"
-        self.value = default_value
-        return self
+        new_option = Option(**self.options)
+        new_option.value = default_value
+        return new_option
 
     def __call__(self) -> Any:
         if self.value is None:
-            raise ValueError(f"Option has not been set.")
+            raise ConfigError(f"Option has not been set.")
         return self.options[self.value]
+
+    def __str__(self):
+        s = f'Option({self.options})'
+        if self.value is not None:
+            s += f'={self.value}'
+        return s
+
+    def __repr__(self):
+        return self.__str__()

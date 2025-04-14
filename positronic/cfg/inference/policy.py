@@ -30,3 +30,8 @@ act = ir.Config(
 diffusion = ir.Config(
     _get_diffusion_policy,
 )
+
+policy_options = ir.Option(
+    act=act,
+    diffusion=diffusion
+)

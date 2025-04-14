@@ -9,7 +9,7 @@ from positronic.inference.inference import Inference
 umi_inference = ir.Config(
     Inference,
     state_encoder=positronic.cfg.inference.state.end_effector,
-    policy=positronic.cfg.inference.policy.act,
+    policy=positronic.cfg.inference.policy.policy_options.default("act"),
     action_decoder=positronic.cfg.inference.action.umi_relative,
     rerun=True,
     device='cuda'

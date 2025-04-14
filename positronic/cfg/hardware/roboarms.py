@@ -46,3 +46,9 @@ def kinova(ip: str, relative_dynamics_factor: float):
         'ext_force_base': ir.utils.const_property([0, 0, 0]),
     })
     return kinova
+
+
+roboarm_options = ir.Option(
+    franka=franka_ik,
+    kinova=kinova
+)
