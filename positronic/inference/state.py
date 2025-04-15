@@ -42,7 +42,7 @@ class StateEncoder:
                 image = torch.cat([torch.zeros_like(image[:cfg.offset]), image[:-cfg.offset]], dim=0)
 
             output_key = cfg.output_key if cfg.output_key is not None else cfg.key
-            obs[output_key] = image.permute(0, 1, 3, 2)  # BCWH -> BCHW
+            obs[output_key] = image.permute(0, 3, 2, 1)  # BCWH -> BCHW
 
         obs[self.state_output_key] = torch.cat(
             [episode_data[k].unsqueeze(1) if episode_data[k].dim() == 1 else episode_data[k]
@@ -83,3 +83,20 @@ class StateEncoder:
             return self.frame_queues[cfg.key][0]
         else:
             return torch.zeros(1, 3, *cfg.resize, dtype=torch.float32)
+
+
+    def get_features(self):
+        features = {}
+        for cfg in self.images:
+            features[cfg.output_key] = {
+                "dtype": "video",
+                "shape": (*cfg.resize[::-1], 3),
+                "names": ["height", "width", "channel"],
+            }
+
+        features[self.state_output_key] = {
+            "dtype": "float64",
+            "shape": (len(self.state),),
+            "names": self.state,
+        }
+        return features

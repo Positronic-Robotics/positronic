@@ -40,14 +40,40 @@ class ActionDecoder(abc.ABC):
         """
         pass
 
+    @abc.abstractmethod
+    def get_features(self) -> dict[str, dict]:
+        """
+        Get the features of the action.
+        """
+        pass
 
-class AbsolutePositionAction(ActionDecoder):
+
+class RotationTranslationGripAction(ActionDecoder, abc.ABC):
     def __init__(self, rotation_representation: geom.Rotation.Representation | str = geom.Rotation.Representation.QUAT):
         rotation_representation = geom.Rotation.Representation(rotation_representation)
 
         self.rotation_representation = rotation_representation
         self.rotation_size = rotation_representation.size
         self.rotation_shape = rotation_representation.shape
+
+    def get_features(self):
+        return {
+            'action': {
+                'dtype': 'float64',
+                'shape': (self.rotation_size + 4,),
+                'names': [
+                    *[f'rotation_{i}' for i in range(self.rotation_size)],
+                    'translation_x',
+                    'translation_y',
+                    'translation_z',
+                    'grip',
+                ]
+            },
+        }
+
+class AbsolutePositionAction(RotationTranslationGripAction):
+    def __init__(self, rotation_representation: geom.Rotation.Representation | str = geom.Rotation.Representation.QUAT):
+        super().__init__(rotation_representation)
 
     def encode_episode(self, episode_data: dict[str, torch.Tensor]) -> torch.Tensor:
         rotations = torch.zeros(len(episode_data['target_robot_position_quaternion']), self.rotation_size)
@@ -79,13 +105,9 @@ class AbsolutePositionAction(ActionDecoder):
         return outputs
 
 
-class RelativeTargetPositionAction(ActionDecoder):
+class RelativeTargetPositionAction(RotationTranslationGripAction):
     def __init__(self, rotation_representation: geom.Rotation.Representation | str = geom.Rotation.Representation.QUAT):
-        rotation_representation = geom.Rotation.Representation(rotation_representation)
-
-        self.rotation_representation = rotation_representation
-        self.rotation_size = rotation_representation.size
-        self.rotation_shape = rotation_representation.shape
+        super().__init__(rotation_representation)
 
     def encode_episode(self, episode_data: dict[str, torch.Tensor]) -> torch.Tensor:
         mtxs = torch.zeros(len(episode_data['target_robot_position_quaternion']), self.rotation_size)
@@ -129,7 +151,7 @@ class RelativeTargetPositionAction(ActionDecoder):
         return outputs
 
 
-class RelativeRobotPositionAction(ActionDecoder):
+class RelativeRobotPositionAction(RotationTranslationGripAction):
     def __init__(
             self,
             offset: int,
@@ -146,12 +168,9 @@ class RelativeRobotPositionAction(ActionDecoder):
             offset: (int) The number of timesteps to look ahead.
             rotation_representation: (Rotation.Representation | str) The representation of the rotation.
         """
-        rotation_representation = geom.Rotation.Representation(rotation_representation)
+        super().__init__(rotation_representation)
 
         self.offset = offset
-        self.rotation_representation = rotation_representation
-        self.rotation_size = rotation_representation.size
-        self.rotation_shape = rotation_representation.shape
 
     def encode_episode(self, episode_data: dict[str, torch.Tensor]) -> torch.Tensor:
         rotations = torch.zeros(len(episode_data['robot_position_quaternion']), self.rotation_size)
@@ -164,8 +183,8 @@ class RelativeRobotPositionAction(ActionDecoder):
                 rotations[i] = _convert_quat_to_tensor(geom.Rotation(1, 0, 0, 0), self.rotation_representation)
                 translation_diff[i] = torch.zeros(3)
                 continue
-            q_current = geom.Rotation.from_quat(*q_current)
-            q_target = geom.Rotation.from_quat(*episode_data['robot_position_quaternion'][i + self.offset])
+            q_current = geom.Rotation.from_quat(q_current)
+            q_target = geom.Rotation.from_quat(episode_data['robot_position_quaternion'][i + self.offset])
             q_relative = q_current.inv * q_target
             q_relative = geom.Rotation.from_quat(geom.normalise_quat(q_relative.as_quat))
 
@@ -199,7 +218,7 @@ class RelativeRobotPositionAction(ActionDecoder):
         return outputs
 
 
-class UMIRelativeRobotPositionAction(ActionDecoder):
+class UMIRelativeRobotPositionAction(RotationTranslationGripAction):
     def __init__(
             self,
             offset: int,
@@ -214,12 +233,9 @@ class UMIRelativeRobotPositionAction(ActionDecoder):
             offset: (int) The number of timesteps to look ahead.
             rotation_representation: (Rotation.Representation | str) The representation of the rotation.
         """
-        rotation_representation = geom.Rotation.Representation(rotation_representation)
+        super().__init__(rotation_representation)
 
         self.offset = offset
-        self.rotation_representation = rotation_representation
-        self.rotation_size = rotation_representation.size
-        self.rotation_shape = rotation_representation.shape
 
     def _prepare(self, episode_data):
         left_trajectory = geom.trajectory.AbsoluteTrajectory([

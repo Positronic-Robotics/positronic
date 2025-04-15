@@ -1,22 +1,14 @@
-import logging
 from pathlib import Path
 from io import BytesIO
 import tempfile
 
-import cv2
 import torch
 import tqdm
 import numpy as np
 import imageio
 import fire
 
-from lerobot.common.datasets.lerobot_dataset import CODEBASE_VERSION, LeRobotDataset
-from lerobot.common.datasets.push_dataset_to_hub.aloha_hdf5_format import to_hf_dataset
-from lerobot.common.datasets.push_dataset_to_hub.utils import concatenate_episodes, get_default_encoding
-from lerobot.common.datasets.utils import calculate_episode_data_index
-from lerobot.common.datasets.video_utils import encode_video_frames
-from lerobot.scripts.push_dataset_to_hub import save_meta_data
-from lerobot.common.datasets.compute_stats import compute_stats
+from lerobot.common.datasets.lerobot_dataset import LeRobotDataset
 
 import ironic as ir
 import positronic.cfg.inference.action
@@ -71,39 +63,91 @@ def _start_from_zero(timestamp: torch.Tensor):
     return timestamp - timestamp[0]
 
 
+def process_timestamps(
+    timestamps: torch.Tensor,
+    start_from_zero: bool,
+    timestamp_units: str,
+    synchronize_with_fps: int | None = None,
+) -> torch.Tensor:
+    """
+    Process timestamps to be in seconds and optionally synchronize them with the FPS.
+
+    Args:
+        timestamps (torch.Tensor): Timestamps to process.
+        start_from_zero (bool): If True, start episode at zero timestamp.
+        timestamp_units (str): Units of the timestamps.
+        synchronize_with_fps (int | None): Synchronize the timestamps with the given frame rate.
+
+    Returns:
+        torch.Tensor: Processed timestamps in seconds.
+    """
+    if start_from_zero:
+        timestamps = _start_from_zero(timestamps)
+
+    if synchronize_with_fps is not None:
+        # TODO: will linear resampling be better?
+        timestamps_seconds = timestamps[0] + torch.arange(0, len(timestamps), 1) / synchronize_with_fps
+    else:
+        timestamps_seconds = convert_to_seconds(timestamp_units, timestamps)
+
+    return timestamps_seconds.unsqueeze(-1)
+
+
+@ir.config()
+def features():
+    return {
+    #    "timestamp": {
+    #         "dtype": "float64",
+    #         "shape": (1,),
+    #         "names": None
+    #     },
+    }
+
 @ir.config(
     fps=30,
     video=True,
-    run_compute_stats=True,
     start_from_zero=True,
     timestamp_units='ns',
+    synchronize_timestamps=True,
     state_encoder=positronic.cfg.inference.state.end_effector,
     action_encoder=positronic.cfg.inference.action.umi_relative,
+    features=features,
+    task="pick plate from the table and place it into the dishwasher",
 )
 def convert_to_lerobot_dataset(  # noqa: C901  Function is too complex
     input_dir: str,
     output_dir: str,
     fps: int,
     video: bool,
-    run_compute_stats: bool,
     start_from_zero: bool,
     timestamp_units: str,
+    synchronize_timestamps: bool,
     state_encoder: StateEncoder,
     action_encoder: ActionDecoder,
+    features: dict,
+    task: str,
 ):
     input_dir = Path(input_dir)
     output_dir = Path(output_dir)
-    output_dir.mkdir(parents=True, exist_ok=True)
 
-    output_dir.mkdir(parents=True, exist_ok=True)
-    (output_dir / "videos").mkdir(exist_ok=True)
-    (output_dir / "episodes").mkdir(exist_ok=True)
+    features = {
+        **state_encoder.get_features(),
+        **action_encoder.get_features(),
+        **features,
+    }
+
+    dataset = LeRobotDataset.create(
+        repo_id=output_dir.name,
+        fps=fps,
+        root=output_dir.parent,
+        use_videos=video,
+        features=features,
+        image_writer_threads=32,
+    )
 
     # Process each episode file
     episode_files = sorted([f for f in input_dir.glob('*.pt')])
     total_length = 0
-
-    all_episodes_data = []
 
     for episode_idx, episode_file in enumerate(tqdm.tqdm(episode_files, desc="Processing episodes")):
         episode_data = torch.load(episode_file)
@@ -113,109 +157,66 @@ def convert_to_lerobot_dataset(  # noqa: C901  Function is too complex
             if key.startswith('image.') or key.endswith('.image') and len(episode_data[key].shape) == 1:
                 episode_data[key] = _decode_video_from_array(episode_data[key])
 
-        ep_dict = {}
+
         obs = state_encoder.encode_episode(episode_data)
-
-        # Process images
-        for key in obs:
-            if not key.startswith('observation.images.'):
-                continue
-
-            side = key.split('.')[-1]
-            images = obs[key].numpy()
-
-            video_filename = f"episode_{episode_idx:04d}_{side}.mp4"
-            video_path = output_dir / "videos" / video_filename
-
-            # Save frames as temporary PNG files
-            temp_dir = output_dir / "temp_frames" / f"episode_{episode_idx:04d}_{side}"
-            temp_dir.mkdir(parents=True, exist_ok=True)
-            for i, img in enumerate(tqdm.tqdm(images, desc=f"Saving frames for {side}")):
-                img_path = temp_dir / f"frame_{i:06d}.png"
-                if img.shape[0] == 3:  # If RGB image in CHW format
-                    img = np.transpose(img, (1, 2, 0))  # CHW to HWC
-                    img = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
-                elif img.shape[0] == 1:  # If depth image in CHW format
-                    img = np.transpose(img, (1, 2, 0))  # CHW to HWC
-                else:
-                    raise ValueError(f"Unexpected image shape: {img.shape}")
-                cv2.imwrite(str(img_path), img)
-
-            encode_video_frames(temp_dir, video_path, fps, overwrite=True)  # Encode video using ffmpeg
-
-            for file in temp_dir.glob("*.png"):
-                file.unlink()
-            temp_dir.rmdir()
-            ep_dict[f"observation.images.{side}"] = [
-                {"path": f"videos/{video_filename}", "timestamp": i / fps} for i in range(len(images))
-            ]
-
         num_frames = len(episode_data['image_timestamp'])
-        ep_dict['observation.state'] = obs['observation.state']
+        ep_dict = {**obs}
 
         # Concatenate all the data as specified in the config
         ep_dict['action'] = action_encoder.encode_episode(episode_data)
 
-        ep_dict["episode_index"] = torch.tensor([episode_idx] * num_frames)
-        ep_dict["frame_index"] = torch.arange(0, num_frames, 1)
-        timestamp = episode_data['image_timestamp'].clone()
+        timestamps = process_timestamps(
+            episode_data['image_timestamp'],
+            start_from_zero=start_from_zero,
+            timestamp_units=timestamp_units,
+            synchronize_with_fps=fps if synchronize_timestamps else None,
+        )
+        total_length += timestamps[-1] - timestamps[0]
 
-        if start_from_zero:
-            timestamp = _start_from_zero(timestamp)
+        for i in range(num_frames):
+            frame = {"task": task}
+            for key in ep_dict.keys():
+                frame[key] = ep_dict[key][i]
+            dataset.add_frame(frame)
 
-        ep_dict["timestamp"] = convert_to_seconds(timestamp_units, timestamp)
-        total_length += ep_dict["timestamp"][-1] - ep_dict["timestamp"][0]
+        dataset.save_episode()
+        dataset.encode_episode_videos(episode_idx)
 
-        done = torch.zeros(num_frames, dtype=torch.bool)
-        # done[-1] = True
-        ep_dict["next.done"] = done
 
-        all_episodes_data.append(ep_dict)
+    # # Create HuggingFace dataset
+    # episode_data_index = calculate_episode_data_index(hf_dataset)
 
-        # Save individual episode
-        ep_path = output_dir / "episodes" / f"episode_{episode_idx}.pth"
-        torch.save(ep_dict, ep_path)
+    # info = {
+    #     "codebase_version": CODEBASE_VERSION,
+    #     "fps": fps,
+    #     "video": video,
+    # }
+    # if video:
+    #     info["encoding"] = get_default_encoding()
 
-    # Concatenate all episodes
-    data_dict = concatenate_episodes(all_episodes_data)
-    total_frames = data_dict["frame_index"].shape[0]
-    data_dict["index"] = torch.arange(0, total_frames, 1)
+    # # Create LeRobotDataset
+    # lerobot_dataset = LeRobotDataset.from_preloaded(
+    #     repo_id="local/dataset",
+    #     hf_dataset=hf_dataset,
+    #     episode_data_index=episode_data_index,
+    #     info=info,
+    #     videos_dir=output_dir / "videos",
+    # )
 
-    # Create HuggingFace dataset
-    hf_dataset = to_hf_dataset(data_dict, video)
-    episode_data_index = calculate_episode_data_index(hf_dataset)
+    # if run_compute_stats:
+    #     logging.info("Computing dataset statistics")
+    #     stats = compute_stats(lerobot_dataset, batch_size=4, max_num_samples=10_000)
+    #     lerobot_dataset.stats = stats
+    # else:
+    #     stats = {}
+    #     logging.info("Skipping computation of the dataset statistics")
 
-    info = {
-        "codebase_version": CODEBASE_VERSION,
-        "fps": fps,
-        "video": video,
-    }
-    if video:
-        info["encoding"] = get_default_encoding()
+    # # Save dataset components
+    # hf_dataset = hf_dataset.with_format(None)  # to remove transforms that can't be saved
+    # hf_dataset.save_to_disk(str(output_dir / "train"))
 
-    # Create LeRobotDataset
-    lerobot_dataset = LeRobotDataset.from_preloaded(
-        repo_id="local/dataset",
-        hf_dataset=hf_dataset,
-        episode_data_index=episode_data_index,
-        info=info,
-        videos_dir=output_dir / "videos",
-    )
-
-    if run_compute_stats:
-        logging.info("Computing dataset statistics")
-        stats = compute_stats(lerobot_dataset, batch_size=4, max_num_samples=10_000)
-        lerobot_dataset.stats = stats
-    else:
-        stats = {}
-        logging.info("Skipping computation of the dataset statistics")
-
-    # Save dataset components
-    hf_dataset = hf_dataset.with_format(None)  # to remove transforms that can't be saved
-    hf_dataset.save_to_disk(str(output_dir / "train"))
-
-    meta_data_dir = output_dir / "meta_data"
-    save_meta_data(info, stats, episode_data_index, meta_data_dir)
+    # meta_data_dir = output_dir / "meta_data"
+    # save_meta_data(info, stats, episode_data_index, meta_data_dir)
 
     print(f"Dataset converted and saved to {output_dir}")
     print(f"Total length of the dataset: {total_length} seconds")
