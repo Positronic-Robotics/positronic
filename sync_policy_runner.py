@@ -31,6 +31,7 @@ def run_policy_in_simulator(  # noqa: C901  Function is too complex
         observation_hz: float,
         image_name_mapping: Dict[str, str],
         device: str,
+        task: str | None,
 ):
     if rerun_path:
         rr.init("inference", spawn=False)
@@ -74,6 +75,9 @@ def run_policy_in_simulator(  # noqa: C901  Function is too complex
             for key in obs:
                 obs[key] = obs[key].to(device)
 
+            if task is not None:
+                obs['task'] = task
+
             # Get policy action
             action = policy.select_action(obs).squeeze(0).cpu().numpy()
             action_dict = action_decoder.decode(action, inputs)
@@ -112,6 +116,7 @@ run = ir.Config(
     observation_hz=60,
     image_name_mapping=image_mapping,
     device="cuda",
+    task=None,
 )
 
 

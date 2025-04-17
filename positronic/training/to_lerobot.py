@@ -139,7 +139,7 @@ def convert_to_lerobot_dataset(  # noqa: C901  Function is too complex
     dataset = LeRobotDataset.create(
         repo_id=output_dir.name,
         fps=fps,
-        root=output_dir.parent,
+        root=output_dir,
         use_videos=video,
         features=features,
         image_writer_threads=32,

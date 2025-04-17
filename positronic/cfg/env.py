@@ -115,7 +115,7 @@ def franka(
     outputs.update({
         'position': roboarm.outs.position,
         'joint_positions': roboarm.outs.joint_positions,
-        'grip': roboarm.outs.grip,
+        'grip': gripper.outs.grip,
         'status': ir.OutputPort.Stub(),
         'ext_force_ee': roboarm.outs.ext_force_ee,
         'ext_force_base': roboarm.outs.ext_force_base,
