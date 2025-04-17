@@ -74,7 +74,7 @@ class DHGripper(ir.ControlSystem):
         )
 
     async def setup(self):
-        self.process.start()
+        self.sync_setup()
 
     @ir.on_message('target_grip')
     async def handle_target_grip(self, message: ir.Message):
@@ -94,6 +94,18 @@ class DHGripper(ir.ControlSystem):
         return ir.Message(data=self.current_grip.value)
 
     async def cleanup(self):
+        self.sync_cleanup()
+
+    def set_grip(self, grip: float):
+        self.target_grip.value = grip
+
+    def get_grip(self):
+        return self.current_grip.value
+
+    def sync_setup(self):
+        self.process.start()
+
+    def sync_cleanup(self):
         self.running.value = False
         self.process.join()
 

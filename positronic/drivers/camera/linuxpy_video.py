@@ -156,25 +156,10 @@ class LinuxPyCamera(ir.ControlSystem):
         stopped.set()
 
     async def setup(self):
-        """Set up the camera device and start the frame processing"""
-        try:
-            self._stopped.clear()
-
-            self._reader_process.start()
-        except Exception as e:
-            self._stopped.set()
-            self._logger.error(f"Failed to setup camera {self.device_path}: {e}")
-            raise
+        self.sync_setup()
 
     async def cleanup(self):
-        """Clean up camera resources"""
-        self._stopped.set()
-
-        if self._reader_process and self._reader_process.is_alive():
-            self._reader_process.join(timeout=1.0)
-            if self._reader_process.is_alive():
-                self._reader_process.terminate()
-            self._reader_process = None
+        self.sync_cleanup()
 
     async def step(self):
         if self._stopped.is_set() or (self._reader_process and not self._reader_process.is_alive()):
@@ -194,6 +179,30 @@ class LinuxPyCamera(ir.ControlSystem):
             self._codec_contexts[codec_name] = av.CodecContext.create(codec_name, 'r')
         return self._codec_contexts[codec_name]
 
+    def get_frame(self):
+        """Get the latest frame from the camera"""
+        return self._frame_queue.get()
+
+    def sync_setup(self):
+        """Set up the camera device and start the frame processing"""
+        try:
+            self._stopped.clear()
+
+            self._reader_process.start()
+        except Exception as e:
+            self._stopped.set()
+            self._logger.error(f"Failed to setup camera {self.device_path}: {e}")
+            raise
+
+    def sync_cleanup(self):
+        """Clean up camera resources"""
+        self._stopped.set()
+
+        if self._reader_process and self._reader_process.is_alive():
+            self._reader_process.join(timeout=1.0)
+            if self._reader_process.is_alive():
+                self._reader_process.terminate()
+            self._reader_process = None
 
 if __name__ == "__main__":
     from positronic.tools.rerun_vis import RerunVisualiser
