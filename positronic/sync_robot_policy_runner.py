@@ -28,8 +28,8 @@ def get_state(
         reference_pose,
 ):
     images = {
-        'left': left_camera.get_frame(),
-        'right': right_camera.get_frame(),
+        'left.image': left_camera.get_frame()['image'],
+        'right.image': right_camera.get_frame()['image'],
     }
 
     inputs = {
@@ -64,8 +64,8 @@ def run_policy_in_simulator(  # noqa: C901  Function is too complex
     gripper.sync_setup()
     left_camera.sync_setup()
     right_camera.sync_setup()
+    env.setup()
 
-    reference_pose = env.get_position()
 
     while True:
         cmd = input("Enter a command: ")
@@ -73,13 +73,17 @@ def run_policy_in_simulator(  # noqa: C901  Function is too complex
             break
         elif cmd == "reset":
             env.reset_position()
+            env.wait_finish()
+            reference_pose = env.get_position()
+        elif cmd == "stat":
+            print("joints: ", env.get_joint_positions())
+            print("position: ", env.get_position())
         elif cmd.startswith("e"):
             n_steps = int(cmd.split(' ')[1])
             for _ in range(n_steps):
                 current_time = time.monotonic_ns()
 
                 # Get observations
-                frame_count += 1
                 rr.set_time_seconds('time', current_time)
                 images, inputs = get_state(env, gripper, left_camera, right_camera, reference_pose)
                 obs = state_encoder.encode(images, inputs)
@@ -88,7 +92,7 @@ def run_policy_in_simulator(  # noqa: C901  Function is too complex
 
                 if task is not None:
                     obs['task'] = task
-
+                print(inputs)
                 # Get policy action
                 action = policy.select_action(obs).squeeze(0).cpu().numpy()
                 action_dict = action_decoder.decode(action, inputs)
@@ -101,12 +105,15 @@ def run_policy_in_simulator(  # noqa: C901  Function is too complex
                 target_pos = action_dict['target_robot_position']
 
                 # TODO: (aluzan) this is the most definitely will go to inference next PR
-                if policy.chunk_start():
-                    reference_pose = target_pos
 
+                print(action_dict['target_robot_position'])
                 env.execute_cartesian_command(action_dict['target_robot_position'])
                 gripper.set_grip(action_dict['target_grip'])
 
+                if policy.chunk_start():
+                    # env.wait_finish()
+                    # reference_pose = env.get_position()
+                    reference_pose = target_pos
     if rerun_path:
         rr.disconnect()
     gripper.sync_cleanup()
@@ -114,13 +121,13 @@ def run_policy_in_simulator(  # noqa: C901  Function is too complex
 
 kinova_sync = ir.Config(
     KinovaSync,
-    ip="192.168.1.100",
-    relative_dynamics_factor=0.5,
+    ip="192.168.1.10",
+    relative_dynamics_factor=0.2,
 )
 
 gripper = ir.Config(
     DHGripper,
-    ip="/dev/ttyUSB0",
+    port="/dev/ttyUSB0",
 )
 
 
@@ -130,8 +137,8 @@ run = ir.Config(
     gripper=gripper,
     left_camera=positronic.cfg.hardware.camera.arducam_left,
     right_camera=positronic.cfg.hardware.camera.arducam_right,
-    state_encoder=positronic.cfg.inference.state.end_effector_back_front,
-    action_decoder=positronic.cfg.inference.action.relative_robot_position,
+    state_encoder=positronic.cfg.inference.state.end_effector,
+    action_decoder=positronic.cfg.inference.action.umi_relative,
     policy=positronic.cfg.inference.policy.act,
     rerun_path="rerun.rrd",
     device="cuda",

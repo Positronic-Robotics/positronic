@@ -16,7 +16,7 @@ import ironic as ir
 from positronic.drivers.roboarm.kinova.base import KinovaAPI, KinematicsSolver, JointCompliantController
 from positronic.drivers.roboarm.status import RobotStatus
 
-_Q_RETRACT = np.array([0.0, -0.34906585, 3.14159265, -2, 0.0, 0, 1.57079633])
+_Q_RETRACT = np.array([-1.5, -0.34906585, 3.14159265, -2, 0.0, 0, 1.57079633])
 
 
 @ir.ironic_system(input_ports=['target_position', 'reset', 'target_grip'],
@@ -277,21 +277,25 @@ class KinovaSync:
             self._control_process.join(timeout=5.0)
 
     def execute_joint_command(self, qpos: np.ndarray):
-        while True:
-            with self.command_finished.get_lock():
-                if self.command_finished.value:
-                    break
-            time.sleep(0.001)
+        self.wait_finish()
 
         with self.command_finished.get_lock():
             self.command_finished.value = False
 
         self.command_queue.put(qpos)
 
+    def wait_finish(self):
+        while True:
+            with self.command_finished.get_lock():
+                if self.command_finished.value:
+                    break
+            time.sleep(0.001)
+
     def execute_cartesian_command(self, position: np.ndarray):
         self.execute_joint_command(self.solver.inverse(position, self._q))
 
     def reset_position(self):
+        print('resetting')
         self.execute_joint_command(_Q_RETRACT)
 
     def get_position(self):
@@ -299,3 +303,7 @@ class KinovaSync:
 
     def get_joint_positions(self):
         return self._q
+
+    @property
+    def _q(self):
+        return np.ndarray((7, ), dtype=np.float32, buffer=self.shared_current.buf).copy()
