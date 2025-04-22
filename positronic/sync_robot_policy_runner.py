@@ -3,6 +3,7 @@ from typing import Dict
 import fire
 import rerun as rr
 from tqdm import tqdm
+import numpy as np
 
 import positronic.cfg.hardware
 import positronic.cfg.hardware.camera
@@ -78,6 +79,12 @@ def run_policy_in_simulator(  # noqa: C901  Function is too complex
         elif cmd == "stat":
             print("joints: ", env.get_joint_positions())
             print("position: ", env.get_position())
+        elif cmd.startswith("joints"):
+            joints = cmd.split(' ')[1:]
+            cmd = list(map(float, joints))
+            env.execute_joint_command(np.array(cmd))
+            reference_pose = env.get_position()
+
         elif cmd.startswith("e"):
             n_steps = int(cmd.split(' ')[1])
             for _ in range(n_steps):
@@ -92,7 +99,7 @@ def run_policy_in_simulator(  # noqa: C901  Function is too complex
 
                 if task is not None:
                     obs['task'] = task
-                print(inputs)
+                # print(inputs)
                 # Get policy action
                 action = policy.select_action(obs).squeeze(0).cpu().numpy()
                 action_dict = action_decoder.decode(action, inputs)
@@ -105,10 +112,11 @@ def run_policy_in_simulator(  # noqa: C901  Function is too complex
                 target_pos = action_dict['target_robot_position']
 
                 # TODO: (aluzan) this is the most definitely will go to inference next PR
+                target_grip = 1.0 if action_dict['target_grip'] > 0.5 else 0.0
 
-                print(action_dict['target_robot_position'])
+                # print(action_dict['target_robot_position'])
                 env.execute_cartesian_command(action_dict['target_robot_position'])
-                gripper.set_grip(action_dict['target_grip'])
+                gripper.set_grip(target_grip)
 
                 if policy.chunk_start():
                     # env.wait_finish()
@@ -117,12 +125,13 @@ def run_policy_in_simulator(  # noqa: C901  Function is too complex
     if rerun_path:
         rr.disconnect()
     gripper.sync_cleanup()
+    env.cleanup()
 
 
 kinova_sync = ir.Config(
     KinovaSync,
     ip="192.168.1.10",
-    relative_dynamics_factor=0.2,
+    relative_dynamics_factor=0.4,
 )
 
 gripper = ir.Config(

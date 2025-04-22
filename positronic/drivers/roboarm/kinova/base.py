@@ -94,6 +94,7 @@ class KinematicsSolver:
 
         # Cache references
         self.qpos0 = self.model.key('retract').qpos  # TODO: Is it good for IK null space?
+        # self.qpos0[:] = 0.0
         self.site_id = self.model.site('pinch_site').id
         self.site_pos = self.data.site(self.site_id).xpos
         self.site_mat = self.data.site(self.site_id).xmat
@@ -146,9 +147,14 @@ class KinematicsSolver:
             mujoco.mj_jacSite(self.model, self.data, self.jac_pos, self.jac_rot, self.site_id)
             update = self.jac.T @ np.linalg.solve(self.jac @ self.jac.T + self.damping, self.err)
             qpos0_err = np.mod(self.qpos0 - self.data.qpos + np.pi, 2 * np.pi) - np.pi
-            update += (self.eye -
-                       (self.jac.T @ np.linalg.pinv(self.jac @ self.jac.T + self.damping)) @ self.jac) @ qpos0_err
+            reg = ((self.eye -
+                       (self.jac.T @ np.linalg.pinv(self.jac @ self.jac.T + self.damping)) @ self.jac) @ qpos0_err)
 
+            reg[:3] *= 0.0
+            reg[4:] *= 0.0
+
+
+            update += reg * 2.0
             # Enforce max angle change
             update_max = np.abs(update).max()
             if update_max > _MAX_ANGLE_CHANGE:
