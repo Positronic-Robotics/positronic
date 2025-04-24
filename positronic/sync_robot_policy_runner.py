@@ -115,7 +115,20 @@ def run_policy_in_simulator(  # noqa: C901  Function is too complex
                 target_grip = 1.0 if action_dict['target_grip'] > 0.5 else 0.0
 
                 # print(action_dict['target_robot_position'])
-                env.execute_cartesian_command(action_dict['target_robot_position'])
+                current_joints = env.get_joint_positions()
+                joints = env.solver.inverse(action_dict['target_robot_position'], current_joints)
+                # joints[3] = max(joints[3], 3.7)
+                for i, joint in enumerate(joints):
+                    rr.log(f"target_joints/{i}", rr.Scalar(joint))
+                for i, joint in enumerate(current_joints):
+                    rr.log(f"current_joints/{i}", rr.Scalar(joint))
+
+                for i, tr in enumerate(action_dict['target_robot_position'].translation):
+                    rr.log(f"target_position/translation/{i}", rr.Scalar(tr))
+                for i, rot in enumerate(action_dict['target_robot_position'].rotation.as_quat):
+                    rr.log(f"target_position/quat/{i}", rr.Scalar(rot))
+
+                env.execute_joint_command(joints)
                 gripper.set_grip(target_grip)
 
                 if policy.chunk_start():
@@ -131,7 +144,7 @@ def run_policy_in_simulator(  # noqa: C901  Function is too complex
 kinova_sync = ir.Config(
     KinovaSync,
     ip="192.168.1.10",
-    relative_dynamics_factor=0.4,
+    relative_dynamics_factor=0.2,
 )
 
 gripper = ir.Config(

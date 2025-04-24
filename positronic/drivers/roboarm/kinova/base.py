@@ -94,7 +94,8 @@ class KinematicsSolver:
 
         # Cache references
         self.qpos0 = self.model.key('retract').qpos  # TODO: Is it good for IK null space?
-        # self.qpos0[:] = 0.0
+        #self.qpos0[:] = np.array([-0.7, -0, 0.5, -1.5, 0.0, -0.5, 1.57079633])
+        self.qpos0[:] = 0.0
         self.site_id = self.model.site('pinch_site').id
         self.site_pos = self.data.site(self.site_id).xpos
         self.site_mat = self.data.site(self.site_id).xmat
@@ -125,10 +126,10 @@ class KinematicsSolver:
         mujoco.mju_mat2Quat(quat, mat)
         return geom.Transform3D(pos, geom.Rotation.from_quat(quat))
 
-    def inverse(self, pos: geom.Transform3D, qpos0: np.ndarray, max_iters: int = 20, err_thresh: float = 1e-4):
+    def inverse(self, pos: geom.Transform3D, qpos0: np.ndarray, max_iters: int = 40, err_thresh: float = 1e-5):
         self.data.qpos = qpos0
 
-        for _ in range(max_iters):
+        for iter in range(max_iters):
             mujoco.mj_kinematics(self.model, self.data)
             mujoco.mj_comPos(self.model, self.data)
 
@@ -147,21 +148,26 @@ class KinematicsSolver:
             mujoco.mj_jacSite(self.model, self.data, self.jac_pos, self.jac_rot, self.site_id)
             update = self.jac.T @ np.linalg.solve(self.jac @ self.jac.T + self.damping, self.err)
             qpos0_err = np.mod(self.qpos0 - self.data.qpos + np.pi, 2 * np.pi) - np.pi
-            reg = ((self.eye -
+            # qpos0_err[:3] = 0.0
+            # qpos0_err[4:] = 0.0
+            # qpos0_err *= 130.0
+            update += ((self.eye -
                        (self.jac.T @ np.linalg.pinv(self.jac @ self.jac.T + self.damping)) @ self.jac) @ qpos0_err)
 
-            reg[:3] *= 0.0
-            reg[4:] *= 0.0
-
-
-            update += reg * 2.0
             # Enforce max angle change
             update_max = np.abs(update).max()
             if update_max > _MAX_ANGLE_CHANGE:
+                print(f'update_max: {update_max}')
                 update *= _MAX_ANGLE_CHANGE / update_max
 
             # Apply update
             mujoco.mj_integratePos(self.model, self.data.qpos, update, 1.0)
+        else:
+            print(f'IK max iter. err: {np.linalg.norm(self.err)}')
+
+        import rerun as rr
+        rr.log('ik_iter', rr.Scalar(iter))
+        rr.log('ik_err', rr.Scalar(np.linalg.norm(self.err)))
 
         return self.data.qpos.copy()
 
