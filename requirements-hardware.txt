@@ -29,6 +29,7 @@ attrs==25.1.0
     # via
     #   aiohttp
     #   dm-tree
+    #   jsonlines
     #   rerun-sdk
 av==14.2.0
     # via positronic (pyproject.toml)
@@ -102,6 +103,8 @@ dm-tree==0.1.9
     # via
     #   dm-control
     #   dm-env
+draccus==0.11.5
+    # via positronic (pyproject.toml)
 easyhid==0.0.10
     # via pyspacemouse
 eigenpy==3.5.1
@@ -176,6 +179,8 @@ iniconfig==2.0.0
     # via pytest
 jinja2==3.1.5
     # via torch
+jsonlines==4.0.0
+    # via positronic (pyproject.toml)
 kiwisolver==1.4.8
     # via matplotlib
 labmaze==1.0.6
@@ -190,6 +195,8 @@ markupsafe==3.0.2
     # via jinja2
 matplotlib==3.10.1
     # via positronic (pyproject.toml)
+mergedeep==1.3.4
+    # via draccus
 mpmath==1.3.0
     # via sympy
 mujoco==3.3.0
@@ -202,6 +209,8 @@ multidict==6.2.0
     #   yarl
 multiprocess==0.70.16
     # via datasets
+mypy-extensions==1.1.0
+    # via typing-inspect
 networkx==3.4.2
     # via torch
 ninja==1.11.1.3
@@ -349,9 +358,13 @@ pytz==2025.2
 pyyaml==6.0.2
     # via
     #   datasets
+    #   draccus
     #   huggingface-hub
     #   omegaconf
+    #   pyyaml-include
     #   uvicorn
+pyyaml-include==1.4.1
+    # via draccus
 regex==2024.11.6
     # via diffusers
 requests==2.32.3
@@ -394,6 +407,8 @@ termcolor==2.5.0
     # via fire
 threadpoolctl==3.5.0
     # via positronic (pyproject.toml)
+toml==0.10.2
+    # via draccus
 torch==2.6.0
     # via
     #   positronic (pyproject.toml)
@@ -418,6 +433,9 @@ typing-extensions==4.12.2
     #   pydantic-core
     #   rerun-sdk
     #   torch
+    #   typing-inspect
+typing-inspect==0.9.0
+    # via draccus
 tzdata==2025.2
     # via pandas
 urllib3==2.3.0

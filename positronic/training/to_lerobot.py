@@ -114,7 +114,6 @@ def append_data_to_dataset(
     action_encoder: ActionDecoder,
     task: str,
 ):
-
     # Process each episode file
     episode_files = sorted([f for f in input_dir.glob('*.pt')])
     total_length = 0
@@ -126,7 +125,6 @@ def append_data_to_dataset(
             # TODO: come up with a better way to determine if the data is a video (X2 !!!)
             if key.startswith('image.') or key.endswith('.image') and len(episode_data[key].shape) == 1:
                 episode_data[key] = _decode_video_from_array(episode_data[key])
-
 
         obs = state_encoder.encode_episode(episode_data)
         num_frames = len(episode_data['image_timestamp'])
@@ -205,6 +203,7 @@ def convert_to_lerobot_dataset(  # noqa: C901  Function is too complex
         task=task,
     )
     print(f"Dataset converted and saved to {output_dir}")
+
 
 @ir.config(
     fps=30,

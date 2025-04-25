@@ -71,6 +71,7 @@ class RotationTranslationGripAction(ActionDecoder, abc.ABC):
             },
         }
 
+
 class AbsolutePositionAction(RotationTranslationGripAction):
     def __init__(self, rotation_representation: geom.Rotation.Representation | str = geom.Rotation.Representation.QUAT):
         super().__init__(rotation_representation)

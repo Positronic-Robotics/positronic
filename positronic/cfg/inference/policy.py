@@ -27,25 +27,14 @@ def _get_pi0_policy(checkpoint_path: str):
     policy = PI0Policy.from_pretrained(checkpoint_path)
     return policy
 
+
 def _get_pi0_fast_policy(checkpoint_path: str):
     from lerobot.common.policies.pi0fast.modeling_pi0fast import PI0FASTPolicy
     policy = PI0FASTPolicy.from_pretrained(checkpoint_path)
     return policy
 
 
-act = ir.Config(
-    _get_act_policy,
-    use_temporal_ensembler=False
-)
-
-diffusion = ir.Config(
-    _get_diffusion_policy,
-)
-
-pi0 = ir.Config(
-    _get_pi0_policy,
-)
-
-pi0_fast = ir.Config(
-    _get_pi0_fast_policy,
-)
+act = ir.Config(_get_act_policy, use_temporal_ensembler=False)
+diffusion = ir.Config(_get_diffusion_policy)
+pi0 = ir.Config(_get_pi0_policy)
+pi0_fast = ir.Config(_get_pi0_fast_policy)

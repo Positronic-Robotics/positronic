@@ -84,7 +84,6 @@ class StateEncoder:
         else:
             return torch.zeros(1, 3, *cfg.resize, dtype=torch.float32)
 
-
     def get_features(self):
         features = {}
         for cfg in self.images:

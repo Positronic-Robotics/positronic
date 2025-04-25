@@ -41,6 +41,7 @@ attrs==25.1.0
     # via
     #   aiohttp
     #   dm-tree
+    #   jsonlines
     #   jsonschema
     #   referencing
     #   rerun-sdk
@@ -137,6 +138,8 @@ dm-tree==0.1.9
     # via
     #   dm-control
     #   dm-env
+draccus==0.11.5
+    # via positronic (pyproject.toml)
 easyhid==0.0.10
     # via pyspacemouse
 eigenpy==3.5.1
@@ -251,6 +254,8 @@ jinja2==3.1.5
     #   torch
 json5==0.10.0
     # via jupyterlab-server
+jsonlines==4.0.0
+    # via positronic (pyproject.toml)
 jsonpointer==3.0.0
     # via jsonschema
 jsonschema==4.23.0
@@ -325,6 +330,8 @@ matplotlib-inline==0.1.7
     # via
     #   ipykernel
     #   ipython
+mergedeep==1.3.4
+    # via draccus
 mistune==3.1.2
     # via nbconvert
 mpmath==1.3.0
@@ -339,6 +346,8 @@ multidict==6.1.0
     #   yarl
 multiprocess==0.70.16
     # via datasets
+mypy-extensions==1.1.0
+    # via typing-inspect
 nbclient==0.10.2
     # via nbconvert
 nbconvert==7.16.6
@@ -548,10 +557,14 @@ pytz==2025.1
 pyyaml==6.0.2
     # via
     #   datasets
+    #   draccus
     #   huggingface-hub
     #   jupyter-events
     #   omegaconf
+    #   pyyaml-include
     #   uvicorn
+pyyaml-include==1.4.1
+    # via draccus
 pyzmq==26.2.1
     # via
     #   ipykernel
@@ -633,6 +646,8 @@ threadpoolctl==3.5.0
     # via positronic (pyproject.toml)
 tinycss2==1.4.0
     # via bleach
+toml==0.10.2
+    # via draccus
 torch==2.6.0
     # via
     #   positronic (pyproject.toml)
@@ -686,6 +701,9 @@ typing-extensions==4.12.2
     #   referencing
     #   rerun-sdk
     #   torch
+    #   typing-inspect
+typing-inspect==0.9.0
+    # via draccus
 tzdata==2025.1
     # via pandas
 uri-template==1.3.0

@@ -57,6 +57,8 @@ lerobot = [
     "diffusers>=0.27.2",
     "h5py>=3.10.0",
     "huggingface-hub>=0.25.0",
+    "draccus>=0.10.0",
+    "jsonlines>=4.0.0",
 ]
 
 [tool.pytest.ini_options]
