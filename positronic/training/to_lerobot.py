@@ -154,16 +154,6 @@ def append_data_to_dataset(
     print(f"Total length of the dataset: {seconds_to_str(total_length)}")
 
 
-@ir.config()
-def features():
-    return {
-    #    "timestamp": {
-    #         "dtype": "float64",
-    #         "shape": (1,),
-    #         "names": None
-    #     },
-    }
-
 @ir.config(
     fps=30,
     video=True,
@@ -172,7 +162,6 @@ def features():
     synchronize_timestamps=True,
     state_encoder=positronic.cfg.inference.state.end_effector,
     action_encoder=positronic.cfg.inference.action.umi_relative,
-    features=features,
     task="pick plate from the table and place it into the dishwasher",
 )
 def convert_to_lerobot_dataset(  # noqa: C901  Function is too complex
@@ -185,7 +174,6 @@ def convert_to_lerobot_dataset(  # noqa: C901  Function is too complex
     synchronize_timestamps: bool,
     state_encoder: StateEncoder,
     action_encoder: ActionDecoder,
-    features: dict,
     task: str,
 ):
     input_dir = Path(input_dir)
@@ -194,7 +182,6 @@ def convert_to_lerobot_dataset(  # noqa: C901  Function is too complex
     features = {
         **state_encoder.get_features(),
         **action_encoder.get_features(),
-        **features,
     }
 
     dataset = LeRobotDataset.create(
