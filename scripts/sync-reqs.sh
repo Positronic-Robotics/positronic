@@ -1,5 +1,11 @@
 #!/bin/bash
-
+#
+# Sync requirements with pyproject.toml
+#
+# Usage: ./sync-reqs.sh [-U]
+#
+# -U: Additionaly upgrade all packages to the latest version.
+#
 UPGRADE_FLAG=""
 if [[ "$1" == "-U" ]]; then
   UPGRADE_FLAG="-U"

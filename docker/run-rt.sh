@@ -14,7 +14,6 @@ xhost + local:docker
 # Run with real-time scheduling priority
 docker run ${GPU_FLAGS} --shm-size 128G --rm \
     --volume $PWD:/positronic \
-    --volume $PWD/../lerobot:/lerobot \
     --volume /dev/v4l/:/dev/v4l/ \
     --volume $PWD/.cache:/root/.cache/ \
     --network=host \

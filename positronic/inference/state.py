@@ -42,7 +42,7 @@ class StateEncoder:
                 image = torch.cat([torch.zeros_like(image[:cfg.offset]), image[:-cfg.offset]], dim=0)
 
             output_key = cfg.output_key if cfg.output_key is not None else cfg.key
-            obs[output_key] = image.permute(0, 3, 2, 1)  # BCWH -> BCHW
+            obs[output_key] = image.permute(0, 3, 2, 1)  # BCWH -> BHWC
 
         obs[self.state_output_key] = torch.cat(
             [episode_data[k].unsqueeze(1) if episode_data[k].dim() == 1 else episode_data[k]

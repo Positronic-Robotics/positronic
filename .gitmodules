@@ -1,0 +1,3 @@
+[submodule "lerobot"]
+	path = lerobot
+	url = git@github.com:Positronic-Robotics/lerobot.git
