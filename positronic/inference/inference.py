@@ -10,7 +10,7 @@ from .state import StateEncoder
 
 
 def rerun_log_observation(ts, obs):
-    rr.set_time_nanos('time', nanos=ts)
+    rr.set_time_seconds('time', ts)
 
     def log_image(name, tensor, compress: bool = True):
         tensor = tensor.squeeze(0)
@@ -30,7 +30,7 @@ def rerun_log_observation(ts, obs):
 
 
 def rerun_log_action(ts, action):
-    rr.set_time_nanos('time', nanos=ts)
+    rr.set_time_seconds('time', ts)
     for i, action in enumerate(action):
         rr.log(f"action/{i}", rr.Scalar(action))
 

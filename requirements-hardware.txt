@@ -83,6 +83,8 @@ colorlog==6.9.0
     # via hydra-colorlog
 contourpy==1.3.1
     # via matplotlib
+cvxopt==1.3.2
+    # via positronic (pyproject.toml)
 cycler==0.12.1
     # via matplotlib
 datasets==3.4.1
@@ -374,7 +376,7 @@ requests==2.32.3
     #   diffusers
     #   dm-control
     #   huggingface-hub
-rerun-sdk==0.22.1
+rerun-sdk==0.23.1
     # via positronic (pyproject.toml)
 ruckig==0.14.0
     # via positronic (pyproject.toml)

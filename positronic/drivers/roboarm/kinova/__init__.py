@@ -293,7 +293,7 @@ class KinovaSync:
         self.command_queue.put(qpos)
 
     def wait_finish(self):
-        time.sleep(0.1)
+        time.sleep(0.2)
         while True:
             with self.command_finished.get_lock():
                 if self.command_finished.value:

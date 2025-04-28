@@ -25,11 +25,12 @@ dependencies = [
     "mujoco",
     "pyturbojpeg @ git+https://github.com/lilohuang/PyTurboJPEG.git@v1.7.8",
     "imageio[ffmpeg]",
-    "rerun-sdk",
+    "rerun-sdk>=0.23",
     "matplotlib",
     "av",
     "fastapi",
     "ruckig",
+    "cvxopt",
 ]
 
 [project.optional-dependencies]

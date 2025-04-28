@@ -88,7 +88,7 @@ def run_policy_in_simulator(  # noqa: C901  Function is too complex
         elif cmd.startswith("e"):
             n_steps = int(cmd.split(' ')[1])
             for _ in range(n_steps):
-                current_time = time.monotonic_ns()
+                current_time = time.monotonic()
 
                 # Get observations
                 rr.set_time_seconds('time', current_time)
