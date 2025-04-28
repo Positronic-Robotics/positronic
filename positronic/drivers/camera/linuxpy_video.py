@@ -204,6 +204,7 @@ class LinuxPyCamera(ir.ControlSystem):
                 self._reader_process.terminate()
             self._reader_process = None
 
+
 if __name__ == "__main__":
     from positronic.tools.rerun_vis import RerunVisualiser
     from positronic.drivers.camera.merge import merge_on_camera

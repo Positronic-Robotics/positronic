@@ -243,37 +243,28 @@ class KinovaSync:
             last_ts = time.monotonic()
             q, dq, tau = api.apply_current_command(None)  # Warm up
             joint_controller.compute_torque(q, dq, tau)
-            with open('current_command.bin', 'wb') as logs:
-                while not self.stop_event.is_set() or not joint_controller.finished:
-                    now_ts = time.monotonic()
-                    step_time = now_ts - last_ts
-                    if step_time > 0.005:  # 5 ms
-                        print(f'Warning: Step time {1000 * step_time:.3f} ms')
-                    last_ts = now_ts
+            while not self.stop_event.is_set() or not joint_controller.finished:
+                now_ts = time.monotonic()
+                step_time = now_ts - last_ts
+                if step_time > 0.005:  # 5 ms
+                    print(f'Warning: Step time {1000 * step_time:.3f} ms')
+                last_ts = now_ts
 
-                    # Don't consume target if we're stopping, so as soon as we reach the target the loop stops
-                    while not command_queue.empty() and not self.stop_event.is_set():
-                        qpos = command_queue.get()
-                        joint_controller.set_target_qpos(qpos)
+                # Don't consume target if we're stopping, so as soon as we reach the target the loop stops
+                while not command_queue.empty() and not self.stop_event.is_set():
+                    qpos = command_queue.get()
+                    joint_controller.set_target_qpos(qpos)
 
-                    torque_command = joint_controller.compute_torque(q, dq, tau)
-                    current_array[:] = joint_controller.q_s
-                    np.divide(torque_command, torque_constant, out=current_command)
-                    q, dq, tau = api.apply_current_command(current_command)
+                torque_command = joint_controller.compute_torque(q, dq, tau)
+                current_array[:] = joint_controller.q_s
+                np.divide(torque_command, torque_constant, out=current_command)
+                q, dq, tau = api.apply_current_command(current_command)
 
-                    # Write binary data: timestamp + qpos (7) + torque_command (7) + q (7) + dq (7) + tau (7)
-                    # logs.write(np.array([now_ts], dtype=np.float64).tobytes())
-                    # logs.write(qpos.tobytes())
-                    # logs.write(torque_command.tobytes())
-                    # logs.write(q.tobytes())
-                    # logs.write(dq.tobytes())
-                    # logs.write(tau.tobytes())
+                if joint_controller.finished:
+                    with self.command_finished.get_lock():
+                        self.command_finished.value = True
 
-                    if joint_controller.finished:
-                        with self.command_finished.get_lock():
-                            self.command_finished.value = True
-
-                    fps.tick()
+                fps.tick()
 
     def setup(self):
         self._control_process = mp.Process(target=self._control_loop, args=(self.command_queue, ))
@@ -293,7 +284,7 @@ class KinovaSync:
         self.command_queue.put(qpos)
 
     def wait_finish(self):
-        time.sleep(0.2)
+        time.sleep(0.2)  # TODO: figure out why adding it here improves policy accuracy
         while True:
             with self.command_finished.get_lock():
                 if self.command_finished.value:

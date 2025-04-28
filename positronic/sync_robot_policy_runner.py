@@ -43,6 +43,7 @@ def get_state(
 
     return images, inputs
 
+
 def run_policy_in_simulator(  # noqa: C901  Function is too complex
         env: KinovaSync,
         gripper: DHGripper,
@@ -53,7 +54,6 @@ def run_policy_in_simulator(  # noqa: C901  Function is too complex
         policy,
         rerun_path: str,
         device: str,
-        task: str | None,
 ):
     if rerun_path:
         rr.init("inference", spawn=False)
@@ -85,39 +85,31 @@ def run_policy_in_simulator(  # noqa: C901  Function is too complex
             n_steps = int(cmd.split(' ')[1])
             for _ in range(n_steps):
                 current_time = time.monotonic()
-
-                # Get observations
                 rr.set_time('time', duration=current_time)
+
                 images, inputs = get_state(env, gripper, left_camera, right_camera, reference_pose)
                 obs = state_encoder.encode(images, inputs)
                 for key in obs:
                     obs[key] = obs[key].to(device)
 
-                if task is not None:
-                    obs['task'] = task
-
-                # Get policy action
                 action = policy.select_action(obs).squeeze(0).cpu().numpy()
                 action_dict = action_decoder.decode(action, inputs)
 
-                # Apply actions
                 target_pos = action_dict['target_robot_position']
-
-                # TODO: (aluzan) this is the most definitely will go to inference next PR
                 target_grip = 1.0 if action_dict['target_grip'] > 0.5 else 0.0
 
                 current_joints = env.get_joint_positions()
-                joints = env.solver.inverse(action_dict['target_robot_position'], current_joints)
+                joints = env.solver.inverse(target_pos, current_joints)
 
                 if rerun_path:
                     rerun_log_observation(current_time, obs)
                     rerun_log_action(current_time, action)
 
-                    rr.log(f"target_joints", rr.Scalars(joints))
-                    rr.log(f"current_joints", rr.Scalars(current_joints))
+                    rr.log("target_joints", rr.Scalars(joints))
+                    rr.log("current_joints", rr.Scalars(current_joints))
 
-                    rr.log(f"target_position/translation", rr.Scalars(action_dict['target_robot_position'].translation))
-                    rr.log(f"target_position/quat", rr.Scalars(action_dict['target_robot_position'].rotation.as_quat))
+                    rr.log("target_position/translation", rr.Scalars(target_pos.translation))
+                    rr.log("target_position/quat", rr.Scalars(target_pos.rotation.as_quat))
 
                 env.execute_joint_command(joints)
                 gripper.set_grip(target_grip)
@@ -156,7 +148,6 @@ run = ir.Config(
     policy=positronic.cfg.inference.policy.act,
     rerun_path="rerun.rrd",
     device="cuda",
-    task=None,
 )
 
 
