@@ -1,8 +1,6 @@
 import time
-from typing import Dict
 import fire
 import rerun as rr
-from tqdm import tqdm
 import numpy as np
 
 import positronic.cfg.hardware
@@ -67,7 +65,6 @@ def run_policy_in_simulator(  # noqa: C901  Function is too complex
     right_camera.sync_setup()
     env.setup()
 
-
     while True:
         cmd = input("Enter a command: ")
         if cmd == "q":
@@ -84,14 +81,13 @@ def run_policy_in_simulator(  # noqa: C901  Function is too complex
             cmd = list(map(float, joints))
             env.execute_joint_command(np.array(cmd))
             reference_pose = env.get_position()
-
         elif cmd.startswith("e"):
             n_steps = int(cmd.split(' ')[1])
             for _ in range(n_steps):
                 current_time = time.monotonic()
 
                 # Get observations
-                rr.set_time_seconds('time', current_time)
+                rr.set_time('time', duration=current_time)
                 images, inputs = get_state(env, gripper, left_camera, right_camera, reference_pose)
                 obs = state_encoder.encode(images, inputs)
                 for key in obs:
@@ -99,14 +95,10 @@ def run_policy_in_simulator(  # noqa: C901  Function is too complex
 
                 if task is not None:
                     obs['task'] = task
-                # print(inputs)
+
                 # Get policy action
                 action = policy.select_action(obs).squeeze(0).cpu().numpy()
                 action_dict = action_decoder.decode(action, inputs)
-
-                if rerun_path:
-                    rerun_log_observation(current_time, obs)
-                    rerun_log_action(current_time, action)
 
                 # Apply actions
                 target_pos = action_dict['target_robot_position']
@@ -114,24 +106,24 @@ def run_policy_in_simulator(  # noqa: C901  Function is too complex
                 # TODO: (aluzan) this is the most definitely will go to inference next PR
                 target_grip = 1.0 if action_dict['target_grip'] > 0.5 else 0.0
 
-                # print(action_dict['target_robot_position'])
                 current_joints = env.get_joint_positions()
                 joints = env.solver.inverse(action_dict['target_robot_position'], current_joints)
-                # joints[3] = max(joints[3], 3.7)
-                for i, joint in enumerate(joints):
-                    rr.log(f"target_joints/{i}", rr.Scalar(joint))
-                for i, joint in enumerate(current_joints):
-                    rr.log(f"current_joints/{i}", rr.Scalar(joint))
 
-                for i, tr in enumerate(action_dict['target_robot_position'].translation):
-                    rr.log(f"target_position/translation/{i}", rr.Scalar(tr))
-                for i, rot in enumerate(action_dict['target_robot_position'].rotation.as_quat):
-                    rr.log(f"target_position/quat/{i}", rr.Scalar(rot))
+                if rerun_path:
+                    rerun_log_observation(current_time, obs)
+                    rerun_log_action(current_time, action)
+
+                    rr.log(f"target_joints", rr.Scalars(joints))
+                    rr.log(f"current_joints", rr.Scalars(current_joints))
+
+                    rr.log(f"target_position/translation", rr.Scalars(action_dict['target_robot_position'].translation))
+                    rr.log(f"target_position/quat", rr.Scalars(action_dict['target_robot_position'].rotation.as_quat))
 
                 env.execute_joint_command(joints)
                 gripper.set_grip(target_grip)
 
                 if policy.chunk_start():
+                    # TODO: figure out if we need to ever refresh robot position
                     # env.wait_finish()
                     # reference_pose = env.get_position()
                     reference_pose = target_pos

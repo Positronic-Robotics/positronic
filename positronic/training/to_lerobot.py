@@ -118,8 +118,6 @@ def append_data_to_dataset(
     episode_files = sorted([f for f in input_dir.glob('*.pt')])
     total_length = 0
 
-    all_episodes_data = []
-
     for episode_idx, episode_file in enumerate(tqdm.tqdm(episode_files, desc="Processing episodes")):
         episode_data = torch.load(episode_file)
 

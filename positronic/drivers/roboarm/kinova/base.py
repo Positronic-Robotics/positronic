@@ -15,6 +15,7 @@ import mujoco
 import numpy as np
 import pinocchio as pin
 from ruckig import InputParameter, OutputParameter, Result, Ruckig
+import rerun as rr
 
 from kortex_api.autogen.client_stubs.ActuatorConfigClientRpc import ActuatorConfigClient
 from kortex_api.autogen.client_stubs.BaseClientRpc import BaseClient
@@ -26,9 +27,8 @@ from kortex_api.RouterClient import RouterClient, RouterClientSendOptions
 from kortex_api.SessionManager import SessionManager
 from kortex_api.TCPTransport import TCPTransport
 from kortex_api.UDPTransport import UDPTransport
-from cvxopt import matrix, solvers
+
 import geom
-import rerun as rr
 
 _TCP_PORT = 10000
 _UDP_PORT = 10001
@@ -95,7 +95,6 @@ class KinematicsSolver:
 
         # Cache references
         self.qpos0 = self.model.key('retract').qpos  # TODO: Is it good for IK null space?
-        #self.qpos0[:] = np.array([-0.7, -0, 0.5, -1.5, 0.0, -0.5, 1.57079633])
         self.qpos0[:] = 0.0
         self.site_id = self.model.site('pinch_site').id
         self.site_pos = self.data.site(self.site_id).xpos
@@ -116,10 +115,6 @@ class KinematicsSolver:
         self.damping = _DAMPING_COEFF * np.eye(6)
         self.eye = np.eye(self.model.nv)
 
-        limits = self.model.jnt_range[:self.model.nq]
-        self.joint_limits_lower, self.joint_limits_upper = limits[:, 0], limits[:, 1]
-        self.joint_limits_lower = np.where(self.joint_limits_lower == 0, -100 * np.pi, self.joint_limits_lower)
-        self.joint_limits_upper = np.where(self.joint_limits_upper == 0, 100 * np.pi, self.joint_limits_upper)
     def forward(self, qpos):
         self.data.qpos = qpos
         mujoco.mj_kinematics(self.model, self.data)
@@ -153,16 +148,12 @@ class KinematicsSolver:
             mujoco.mj_jacSite(self.model, self.data, self.jac_pos, self.jac_rot, self.site_id)
             update = self.jac.T @ np.linalg.solve(self.jac @ self.jac.T + self.damping, self.err)
             qpos0_err = np.mod(self.qpos0 - self.data.qpos + np.pi, 2 * np.pi) - np.pi
-            # qpos0_err[:3] = 0.0
-            # qpos0_err[4:] = 0.0
-            # qpos0_err *= 130.0
-            update += ((self.eye -
-                       (self.jac.T @ np.linalg.pinv(self.jac @ self.jac.T + self.damping)) @ self.jac) @ qpos0_err)
+            update += (self.eye -
+                       (self.jac.T @ np.linalg.pinv(self.jac @ self.jac.T + self.damping)) @ self.jac) @ qpos0_err
 
             # Enforce max angle change
             update_max = np.abs(update).max()
             if update_max > _MAX_ANGLE_CHANGE:
-                # print(f'update_max: {update_max}')
                 update *= _MAX_ANGLE_CHANGE / update_max
 
             # Apply update
@@ -170,94 +161,11 @@ class KinematicsSolver:
         else:
             print(f'IK max iter. err: {np.linalg.norm(self.err)}')
 
-        rr.log('ik_iter', rr.Scalar(iter))
-        rr.log('ik_err', rr.Scalar(np.linalg.norm(self.err)))
+        rr.log('ik_iter', rr.Scalars(iter))
+        rr.log('ik_err', rr.Scalars(np.linalg.norm(self.err)))
 
         return self.data.qpos.copy()
 
-    def inverse_limits(self, pos: geom.Transform3D, qpos0: np.ndarray, max_iters: int = 20, err_thresh: float = 1e-4):
-        solvers.options['show_progress'] = False
-
-        self.data.qpos = qpos0
-
-        iter = 0
-        for i in range(max_iters):
-            mujoco.mj_kinematics(self.model, self.data)
-            mujoco.mj_comPos(self.model, self.data)
-
-            # Translational error
-            self.err_pos[:] = pos.translation - self.site_pos
-
-            # Rotational error
-            mujoco.mju_mat2Quat(self.site_quat, self.site_mat)
-            mujoco.mju_negQuat(self.site_quat_inv, self.site_quat)
-            mujoco.mju_mulQuat(self.err_quat, pos.rotation.as_quat, self.site_quat_inv)
-            mujoco.mju_quat2Vel(self.err_rot, self.err_quat, 1.0)
-
-            if np.linalg.norm(self.err) < err_thresh:
-                break
-
-            # Get Jacobian
-            mujoco.mj_jacSite(self.model, self.data, self.jac_pos, self.jac_rot, self.site_id)
-
-            # Setup QP problem
-            # min_x (1/2) x^T P x + q^T x
-            # s.t. G x <= h
-            #      A x = b
-
-            # Objective: min ||J·Δq - e||² + α||Δq - (q₀ - q)||²
-            # where α is a small weight for the null space objective
-            alpha = 1e-9
-            n = self.model.nv
-
-            # P = J^T J + α I
-            P = self.jac.T @ self.jac + alpha * np.eye(n)
-            P = matrix(P)
-
-            # q = -J^T e - α (q₀ - q)
-            qpos0_err = np.mod(self.qpos0 - self.data.qpos + np.pi, 2 * np.pi) - np.pi
-            q = -self.jac.T @ self.err - alpha * qpos0_err
-            q = matrix(q)
-
-            # Joint limit constraints: lb - q <= Δq <= ub - q
-            # Rewrite as:
-            # Δq <= ub - q
-            # -Δq <= q - lb
-
-            # G = [I; -I]
-            G = np.vstack([np.eye(n), -np.eye(n)])
-            G = matrix(G)
-
-            # h = [ub - q; q - lb]
-            h_upper = self.joint_limits_upper - self.data.qpos
-            h_lower = self.data.qpos - self.joint_limits_lower
-            h = np.concatenate([h_upper, h_lower])
-            h = matrix(h)
-
-            # No equality constraints
-            A = matrix(0.0, (0, n))
-            b = matrix(0.0, (0, 1))
-
-            solution = solvers.qp(P, q, G, h, A, b)
-            update = np.array(solution['x']).flatten()
-            # else:
-            #     # If QP fails, use a small damped least squares step as fallback
-            #     damping = _DAMPING_COEFF * 10 * np.eye(6)
-            #     update = self.jac.T @ np.linalg.solve(self.jac @ self.jac.T + damping, self.err)
-            #     update_max = np.abs(update).max()
-            #     if update_max > _MAX_ANGLE_CHANGE * 0.5:
-            #         update *= (_MAX_ANGLE_CHANGE * 0.5) / update_max
-
-            mujoco.mj_integratePos(self.model, self.data.qpos, update, 1.0)
-
-            iter += 1
-
-        rr.log('ik/iter', rr.Scalars(iter))
-        rr.log('ik/err', rr.Scalars(np.linalg.norm(self.err)))
-        rr.log('ik/err/pos', rr.Scalars(np.linalg.norm(self.err_pos)))
-        rr.log('ik/err/rot', rr.Scalars(np.linalg.norm(self.err_rot)))
-        print(pos, self.data.qpos)
-        return self.data.qpos.copy()
 
 class JointCompliantController:
     """Implements compliant joint control for the Kinova arm."""

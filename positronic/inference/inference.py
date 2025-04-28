@@ -10,7 +10,7 @@ from .state import StateEncoder
 
 
 def rerun_log_observation(ts, obs):
-    rr.set_time_seconds('time', ts)
+    rr.set_time('time', duration=ts)
 
     def log_image(name, tensor, compress: bool = True):
         tensor = tensor.squeeze(0)
@@ -30,9 +30,9 @@ def rerun_log_observation(ts, obs):
 
 
 def rerun_log_action(ts, action):
-    rr.set_time_seconds('time', ts)
+    rr.set_time('time', duration=ts)
     for i, action in enumerate(action):
-        rr.log(f"action/{i}", rr.Scalar(action))
+        rr.log(f"action/{i}", rr.Scalars(action))
 
 
 @ir.ironic_system(
