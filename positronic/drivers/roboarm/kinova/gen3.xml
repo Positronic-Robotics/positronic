@@ -1,6 +1,7 @@
 <mujoco model="gen3">
   <compiler angle="radian" meshdir="gen3"/>
 
+  <!-- <option integrator="RK4"/> -->
   <option integrator="implicitfast"/>
 
   <default>
@@ -11,10 +12,12 @@
       <geom type="mesh" group="3"/>
     </default>
     <default class="large_actuator">
-      <position kp="2000" kv="100" forcerange="-105 105"/>
+      <!-- <position kp="2000" kv="100" forcerange="-105 105"/> -->
+      <motor ctrllimited="true" ctrlrange="-105 105"/>
     </default>
     <default class="small_actuator">
-      <position kp="500" kv="50" forcerange="-52 52"/>
+      <!-- <position kp="500" kv="50" forcerange="-52 52"/> -->
+      <motor ctrllimited="true" ctrlrange="-52 52"/>
     </default>
     <site size="0.001" rgba="0.5 0.5 0.5 0.3" group="4"/>
   </default>
@@ -89,16 +92,18 @@
         </body>
       </body>
     </body>
+    <camera name="viewer" pos="0.911 -0.900 1.586" xyaxes="0.693 0.721 0.000 -0.440 0.423 0.792"/>
+    <light pos="0 0 1.5" dir="0 0 -1" directional="true"/>
   </worldbody>
 
   <actuator>
-    <position class="large_actuator" name="joint_1" joint="joint_1"/>
-    <position class="large_actuator" name="joint_2" joint="joint_2" ctrlrange="-2.2497294058206907 2.2497294058206907"/>
-    <position class="large_actuator" name="joint_3" joint="joint_3"/>
-    <position class="large_actuator" name="joint_4" joint="joint_4" ctrlrange="-2.5795966344476193 2.5795966344476193"/>
-    <position class="small_actuator" name="joint_5" joint="joint_5"/>
-    <position class="small_actuator" name="joint_6" joint="joint_6" ctrlrange="-2.0996310901491784 2.0996310901491784"/>
-    <position class="small_actuator" name="joint_7" joint="joint_7"/>
+    <motor class="large_actuator" name="joint_1" joint="joint_1"/>
+    <motor class="large_actuator" name="joint_2" joint="joint_2"/>
+    <motor class="large_actuator" name="joint_3" joint="joint_3"/>
+    <motor class="large_actuator" name="joint_4" joint="joint_4"/>
+    <motor class="small_actuator" name="joint_5" joint="joint_5"/>
+    <motor class="small_actuator" name="joint_6" joint="joint_6"/>
+    <motor class="small_actuator" name="joint_7" joint="joint_7"/>
   </actuator>
 
   <keyframe>
@@ -107,4 +112,5 @@
     <key name="retract" qpos="0 -0.34906585 3.14159265 -2.54818071 0 -0.87266463 1.57079633"
       ctrl="0 -0.34906585 3.14159265 -2.54818071 0 -0.87266463 1.57079633"/>
   </keyframe>
+  <option timestep="0.001"/>
 </mujoco>

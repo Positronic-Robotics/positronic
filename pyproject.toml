@@ -47,7 +47,8 @@ hardware = [
 dev = [
     "jupyter",
     "ipython",
-    "opencv-python"
+    "opencv-python",
+    "rerun-sdk[notebook]",
 ]
 lerobot = [
     "einops>=0.8.0",

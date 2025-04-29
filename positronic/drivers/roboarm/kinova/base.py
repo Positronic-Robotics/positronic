@@ -15,6 +15,7 @@ import mujoco
 import numpy as np
 import pinocchio as pin
 from ruckig import InputParameter, OutputParameter, Result, Ruckig
+from cvxopt import matrix, solvers
 import rerun as rr
 
 from kortex_api.autogen.client_stubs.ActuatorConfigClientRpc import ActuatorConfigClient
@@ -115,6 +116,26 @@ class KinematicsSolver:
         self.damping = _DAMPING_COEFF * np.eye(6)
         self.eye = np.eye(self.model.nv)
 
+        self.joint_limits_lower = np.array([
+            -np.pi,       # joint_1: continuous
+            -2.24,        # joint_2: revolute with limits
+            -np.pi,       # joint_3: continuous
+            -2.57,        # joint_4: revolute with limits
+            -np.pi,       # joint_5: continuous
+            -2.09,        # joint_6: revolute with limits
+            -np.pi        # joint_7: continuous
+        ])
+
+        self.joint_limits_upper = np.array([
+            np.pi,        # joint_1: continuous
+            2.24,         # joint_2: revolute with limits
+            np.pi,        # joint_3: continuous
+            2.57,         # joint_4: revolute with limits
+            np.pi,        # joint_5: continuous
+            2.09,         # joint_6: revolute with limits
+            np.pi         # joint_7: continuous
+        ])
+
     def forward(self, qpos):
         self.data.qpos = qpos
         mujoco.mj_kinematics(self.model, self.data)
@@ -158,6 +179,109 @@ class KinematicsSolver:
 
             # Apply update
             mujoco.mj_integratePos(self.model, self.data.qpos, update, 1.0)
+
+        return self.data.qpos.copy()
+
+    def inverse_limits(self, pos: geom.Transform3D, qpos0: np.ndarray, max_iters: int = 20, err_thresh: float = 1e-4):
+        """Inverse kinematics with joint limits using quadratic programming.
+
+        Args:
+            pos: Target end effector pose
+            qpos0: Initial joint configuration
+            max_iters: Maximum number of iterations
+            err_thresh: Error threshold for convergence
+
+        Returns:
+            Joint configuration that achieves the target pose while respecting joint limits
+        """
+        # Silence cvxopt output
+        solvers.options['show_progress'] = False
+
+        self.data.qpos = qpos0
+
+        for i in range(max_iters):
+            mujoco.mj_kinematics(self.model, self.data)
+            mujoco.mj_comPos(self.model, self.data)
+
+            # Translational error
+            self.err_pos[:] = pos.translation - self.site_pos
+
+            # Rotational error
+            mujoco.mju_mat2Quat(self.site_quat, self.site_mat)
+            mujoco.mju_negQuat(self.site_quat_inv, self.site_quat)
+            mujoco.mju_mulQuat(self.err_quat, pos.rotation.as_quat, self.site_quat_inv)
+            mujoco.mju_quat2Vel(self.err_rot, self.err_quat, 1.0)
+
+            if np.linalg.norm(self.err) < err_thresh:
+                break
+
+            # Get Jacobian
+            mujoco.mj_jacSite(self.model, self.data, self.jac_pos, self.jac_rot, self.site_id)
+
+            # Setup QP problem
+            # min_x (1/2) x^T P x + q^T x
+            # s.t. G x <= h
+            #      A x = b
+
+            # Objective: min ||J·Δq - e||² + α||Δq - (q₀ - q)||²
+            # where α is a small weight for the null space objective
+            alpha = 1e-6
+            n = self.model.nv
+
+            # P = J^T J + α I
+            P = self.jac.T @ self.jac + alpha * np.eye(n)
+            P = matrix(P)
+
+            # q = -J^T e - α (q₀ - q)
+            qpos0_err = np.mod(self.qpos0 - self.data.qpos + np.pi, 2 * np.pi) - np.pi
+            q = -self.jac.T @ self.err - alpha * qpos0_err
+            q = matrix(q)
+
+            # Joint limit constraints: lb - q <= Δq <= ub - q
+            # Rewrite as:
+            # Δq <= ub - q
+            # -Δq <= q - lb
+
+            # G = [I; -I]
+            G = np.vstack([np.eye(n), -np.eye(n)])
+            G = matrix(G)
+
+            # h = [ub - q; q - lb]
+            h_upper = self.joint_limits_upper - self.data.qpos
+            h_lower = self.data.qpos - self.joint_limits_lower
+            h = np.concatenate([h_upper, h_lower])
+
+            # Apply max angle change constraint
+            mask = h > _MAX_ANGLE_CHANGE
+            h[mask] = _MAX_ANGLE_CHANGE
+            h = matrix(h)
+
+            # No equality constraints
+            A = matrix(0.0, (0, n))
+            b = matrix(0.0, (0, 1))
+
+            try:
+                solution = solvers.qp(P, q, G, h, A, b)
+
+                if solution['status'] == 'optimal':
+                    update = np.array(solution['x']).flatten()
+                else:
+                    # If QP fails, use a small damped least squares step as fallback
+                    damping = _DAMPING_COEFF * 10 * np.eye(6)
+                    update = self.jac.T @ np.linalg.solve(self.jac @ self.jac.T + damping, self.err)
+                    update_max = np.abs(update).max()
+                    if update_max > _MAX_ANGLE_CHANGE * 0.5:
+                        update *= (_MAX_ANGLE_CHANGE * 0.5) / update_max
+
+                mujoco.mj_integratePos(self.model, self.data.qpos, update, 1.0)
+            except Exception:
+                # Safe fallback in case of numerical issues
+                damping = _DAMPING_COEFF * 10 * np.eye(6)
+                update = self.jac.T @ np.linalg.solve(self.jac @ self.jac.T + damping, self.err)
+                update_max = np.abs(update).max()
+                if update_max > _MAX_ANGLE_CHANGE * 0.5:
+                    update *= (_MAX_ANGLE_CHANGE * 0.5) / update_max
+                mujoco.mj_integratePos(self.model, self.data.qpos, update, 1.0)
         else:
             print(f'IK max iter. err: {np.linalg.norm(self.err)}')
 
