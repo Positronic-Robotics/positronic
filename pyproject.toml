@@ -14,8 +14,6 @@ dependencies = [
     "cmake-build-extension",
     "dearpygui",
     "fire",
-    "hydra-colorlog",
-    "hydra-core",
     "numpy-quaternion>=2024.0",
     "pytest",
     "pytest-asyncio",

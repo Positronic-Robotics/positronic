@@ -9,10 +9,6 @@ absl-py==2.1.0
     #   mujoco
 annotated-types==0.7.0
     # via pydantic
-antlr4-python3-runtime==4.9.3
-    # via
-    #   hydra-core
-    #   omegaconf
 anyio==4.8.0
     # via
     #   starlette
@@ -35,8 +31,6 @@ cmake==3.31.6
     # via cmake-build-extension
 cmake-build-extension==0.6.1
     # via positronic (pyproject.toml)
-colorlog==6.9.0
-    # via hydra-colorlog
 contourpy==1.3.1
     # via matplotlib
 cvxopt==1.3.2
@@ -79,12 +73,6 @@ h11==0.14.0
     # via uvicorn
 httptools==0.6.4
     # via uvicorn
-hydra-colorlog==1.2.0
-    # via positronic (pyproject.toml)
-hydra-core==1.3.2
-    # via
-    #   positronic (pyproject.toml)
-    #   hydra-colorlog
 idna==3.10
     # via
     #   anyio
@@ -176,13 +164,10 @@ nvidia-nvjitlink-cu12==12.4.127
     #   torch
 nvidia-nvtx-cu12==12.4.127
     # via torch
-omegaconf==2.3.0
-    # via hydra-core
 opencv-python-headless==4.11.0.86
     # via positronic (pyproject.toml)
 packaging==24.2
     # via
-    #   hydra-core
     #   matplotlib
     #   pytest
     #   setuptools-scm
@@ -224,9 +209,7 @@ python-dotenv==1.0.1
 pyturbojpeg @ git+https://github.com/lilohuang/PyTurboJPEG.git@87bdba487a6198afd6d4c3cbfb2b544c59f7ea8f
     # via positronic (pyproject.toml)
 pyyaml==6.0.2
-    # via
-    #   omegaconf
-    #   uvicorn
+    # via uvicorn
 requests==2.32.3
     # via
     #   positronic (pyproject.toml)

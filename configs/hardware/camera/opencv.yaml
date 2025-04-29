@@ -1,4 +1,0 @@
-type: opencv
-camera_id: 0
-resolution: [640, 480]
-fps: 30

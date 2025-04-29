@@ -10,3 +10,6 @@ outputs/
 hardware/franka_control/build/
 hardware/franka_control/*.so
 hardware/franka_control/franka_control.egg-info/
+.cache/
+.ipynb_checkpoints/
+*.rrd

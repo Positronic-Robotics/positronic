@@ -1,9 +1,0 @@
-type: teleop_gui
-
-webxr:
-  port: 5005
-
-mujoco:
-  camera_names: ['handcam_back', 'handcam_front', 'front_view', 'back_view']
-
-operator_position: back

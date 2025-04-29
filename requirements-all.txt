@@ -17,10 +17,6 @@ aiosignal==1.3.2
     # via aiohttp
 annotated-types==0.7.0
     # via pydantic
-antlr4-python3-runtime==4.9.3
-    # via
-    #   hydra-core
-    #   omegaconf
 anyio==4.8.0
     # via
     #   httpx
@@ -104,8 +100,6 @@ cmeel-urdfdom==3.1.1.1
     # via pin
 cmeel-zlib==1.3.1
     # via cmeel-assimp
-colorlog==6.9.0
-    # via hydra-colorlog
 comm==0.2.2
     # via
     #   ipykernel
@@ -205,12 +199,6 @@ huggingface-hub==0.29.3
     #   positronic (pyproject.toml)
     #   datasets
     #   diffusers
-hydra-colorlog==1.2.0
-    # via positronic (pyproject.toml)
-hydra-core==1.3.2
-    # via
-    #   positronic (pyproject.toml)
-    #   hydra-colorlog
 idna==3.10
     # via
     #   anyio
@@ -435,8 +423,6 @@ nvidia-nvjitlink-cu12==12.4.127
     #   torch
 nvidia-nvtx-cu12==12.4.127
     # via torch
-omegaconf==2.3.0
-    # via hydra-core
 opencv-python==4.11.0.86
     # via positronic (pyproject.toml)
 opencv-python-headless==4.11.0.86
@@ -447,7 +433,6 @@ packaging==24.2
     # via
     #   datasets
     #   huggingface-hub
-    #   hydra-core
     #   ipykernel
     #   jupyter-events
     #   jupyter-server
@@ -562,7 +547,6 @@ pyyaml==6.0.2
     #   draccus
     #   huggingface-hub
     #   jupyter-events
-    #   omegaconf
     #   pyyaml-include
     #   uvicorn
 pyyaml-include==1.4.1

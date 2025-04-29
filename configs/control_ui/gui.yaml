@@ -1,7 +1,0 @@
-type: gui
-
-mujoco:
-
-  camera_width: 352
-  camera_height: 192
-  camera_names: ['handcam_left', 'handcam_right']

@@ -1,8 +1,0 @@
-type: spacemouse
-
-spacemouse:
-  translation_speed: 0.0005
-  translation_dead_zone: 0.8
-
-  rotation_speed: 0.001
-  rotation_dead_zone: 0.7

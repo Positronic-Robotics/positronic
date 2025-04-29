@@ -1,6 +1,0 @@
-defaults:
-  - mujoco: franka.yaml
-  - _self_
-
-data_output_dir: null
-

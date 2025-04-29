@@ -1,6 +1,0 @@
-type: realsense
-fps: 30
-resolution: [640, 480]
-enable_color: true
-enable_depth: false
-enable_infrared: false
