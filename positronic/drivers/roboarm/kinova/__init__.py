@@ -13,7 +13,8 @@ import os
 import numpy as np
 
 import ironic as ir
-from positronic.drivers.roboarm.kinova.base import KinovaAPI, KinematicsSolver, JointCompliantController
+from positronic.drivers.roboarm.kinova.api import KinovaAPI
+from positronic.drivers.roboarm.kinova.base import KinematicsSolver, JointCompliantController
 from positronic.drivers.roboarm.status import RobotStatus
 
 _Q_RETRACT = np.array([0.0, -0, 0.5, -1.5, 0.0, -0.5, 1.57079633])

@@ -76,15 +76,13 @@
             "justMyCode": true
         },
         {
-            "name": "Python: Run Policy Runner",
+            "name": "Kinematics Debug",
             "type": "python",
             "request": "launch",
-            "module": "policy_runner",
+            "module": "positronic.tools.kinematics_debug",
             "args": [
-                "inference.checkpoint_path=../lerobot/outputs/train/act_minmax/checkpoints/last/pretrained_model/",
-                "state=baseline",
-                // "inference.checkpoint_path=/home/timofey/robots/lerobot/outputs/train/positronic_with_eval_v0/checkpoints/last/pretrained_model/"
-                // "--inference.checkpoint_path=../`lerobot/outputs/train/act_minmax/checkpoints/last/pretrained_model/"
+                "--input_filename=/Users/vertix/Downloads/twist-ik.rrd",
+                "--rerun=kinematics.rrd",
             ],
             "console": "integratedTerminal",
             "justMyCode": false

@@ -9,30 +9,14 @@
 # sublicensed, and/or sold without explicit permission from the copyright holder.
 
 import math
-import time
 
 import mujoco
 import numpy as np
 import pinocchio as pin
 from ruckig import InputParameter, OutputParameter, Result, Ruckig
 from cvxopt import matrix, solvers
-import rerun as rr
-
-from kortex_api.autogen.client_stubs.ActuatorConfigClientRpc import ActuatorConfigClient
-from kortex_api.autogen.client_stubs.BaseClientRpc import BaseClient
-from kortex_api.autogen.client_stubs.BaseCyclicClientRpc import BaseCyclicClient
-from kortex_api.autogen.client_stubs.DeviceManagerClientRpc import DeviceManagerClient
-from kortex_api.autogen.messages import (ActuatorCyclic_pb2, ActuatorConfig_pb2, Base_pb2, BaseCyclic_pb2, Common_pb2,
-                                         Session_pb2)
-from kortex_api.RouterClient import RouterClient, RouterClientSendOptions
-from kortex_api.SessionManager import SessionManager
-from kortex_api.TCPTransport import TCPTransport
-from kortex_api.UDPTransport import UDPTransport
 
 import geom
-
-_TCP_PORT = 10000
-_UDP_PORT = 10001
 
 K_r = np.diag([0.3, 0.3, 0.3, 0.3, 0.18, 0.18, 0.18])
 K_l = np.diag([75.0, 75.0, 75.0, 75.0, 40.0, 40.0, 40.0])
@@ -47,43 +31,8 @@ _DAMPING_COEFF = 1e-12
 _MAX_ANGLE_CHANGE = np.deg2rad(45)
 
 
-def _wrap_joint_angle(q, q_base):
+def wrap_joint_angle(q, q_base):
     return q_base + np.mod(q - q_base + np.pi, 2 * np.pi) - np.pi
-
-
-class DeviceConnection:
-    """Manages TCP/UDP connections to a Kinova device."""
-
-    def __init__(self,
-                 ip_address: str,
-                 port: int,
-                 transport: TCPTransport | UDPTransport,
-                 credentials: tuple[str, str] = ('admin', 'admin')):
-        self.ip_address = ip_address
-        self.port = port
-        self.credentials = credentials
-        self.session_manager = None
-        self.transport = transport
-        self.router = RouterClient(self.transport, RouterClient.basicErrorCallback)
-
-    def __enter__(self):
-        self.transport.connect(self.ip_address, self.port)
-        if self.credentials[0] != '':
-            session_info = Session_pb2.CreateSessionInfo()
-            session_info.username = self.credentials[0]
-            session_info.password = self.credentials[1]
-            session_info.session_inactivity_timeout = 10000  # (milliseconds)
-            session_info.connection_inactivity_timeout = 2000  # (milliseconds)
-            self.session_manager = SessionManager(self.router)
-            self.session_manager.CreateSession(session_info)
-        return self.router
-
-    def __exit__(self, *_):
-        if self.session_manager is not None:
-            router_options = RouterClientSendOptions()
-            router_options.timeout_ms = 1000
-            self.session_manager.CloseSession(router_options)
-        self.transport.disconnect()
 
 
 class KinematicsSolver:
@@ -182,23 +131,17 @@ class KinematicsSolver:
 
         return self.data.qpos.copy()
 
-    def inverse_limits(self, pos: geom.Transform3D, qpos0: np.ndarray, max_iters: int = 20, err_thresh: float = 1e-4):
-        """Inverse kinematics with joint limits using quadratic programming.
-
-        Args:
-            pos: Target end effector pose
-            qpos0: Initial joint configuration
-            max_iters: Maximum number of iterations
-            err_thresh: Error threshold for convergence
-
-        Returns:
-            Joint configuration that achieves the target pose while respecting joint limits
-        """
-        # Silence cvxopt output
+    def inverse_limits(self,
+                       pos: geom.Transform3D,
+                       qpos0: np.ndarray,
+                       max_iters: int = 20,
+                       err_thresh: float = 1e-4,
+                       clamp=False,
+                       debug=False):
         solvers.options['show_progress'] = False
+        self.data.qpos = wrap_joint_angle(qpos0, np.zeros(7)) if clamp else qpos0
 
-        self.data.qpos = qpos0
-
+        iter = 0
         for i in range(max_iters):
             mujoco.mj_kinematics(self.model, self.data)
             mujoco.mj_comPos(self.model, self.data)
@@ -225,7 +168,7 @@ class KinematicsSolver:
 
             # Objective: min ||J·Δq - e||² + α||Δq - (q₀ - q)||²
             # where α is a small weight for the null space objective
-            alpha = 1e-6
+            alpha = 1e-9
             n = self.model.nv
 
             # P = J^T J + α I
@@ -250,44 +193,33 @@ class KinematicsSolver:
             h_upper = self.joint_limits_upper - self.data.qpos
             h_lower = self.data.qpos - self.joint_limits_lower
             h = np.concatenate([h_upper, h_lower])
-
-            # Apply max angle change constraint
-            mask = h > _MAX_ANGLE_CHANGE
-            h[mask] = _MAX_ANGLE_CHANGE
             h = matrix(h)
 
             # No equality constraints
             A = matrix(0.0, (0, n))
             b = matrix(0.0, (0, 1))
 
-            try:
-                solution = solvers.qp(P, q, G, h, A, b)
+            solution = solvers.qp(P, q, G, h, A, b)
+            update = np.array(solution['x']).flatten()
+            # else:
+            #     # If QP fails, use a small damped least squares step as fallback
+            #     damping = _DAMPING_COEFF * 10 * np.eye(6)
+            #     update = self.jac.T @ np.linalg.solve(self.jac @ self.jac.T + damping, self.err)
+            #     update_max = np.abs(update).max()
+            #     if update_max > _MAX_ANGLE_CHANGE * 0.5:
+            #         update *= (_MAX_ANGLE_CHANGE * 0.5) / update_max
 
-                if solution['status'] == 'optimal':
-                    update = np.array(solution['x']).flatten()
-                else:
-                    # If QP fails, use a small damped least squares step as fallback
-                    damping = _DAMPING_COEFF * 10 * np.eye(6)
-                    update = self.jac.T @ np.linalg.solve(self.jac @ self.jac.T + damping, self.err)
-                    update_max = np.abs(update).max()
-                    if update_max > _MAX_ANGLE_CHANGE * 0.5:
-                        update *= (_MAX_ANGLE_CHANGE * 0.5) / update_max
+            mujoco.mj_integratePos(self.model, self.data.qpos, update, 1.0)
+            self.data.qpos = wrap_joint_angle(self.data.qpos, np.zeros(7)) if clamp else self.data.qpos
 
-                mujoco.mj_integratePos(self.model, self.data.qpos, update, 1.0)
-            except Exception:
-                # Safe fallback in case of numerical issues
-                damping = _DAMPING_COEFF * 10 * np.eye(6)
-                update = self.jac.T @ np.linalg.solve(self.jac @ self.jac.T + damping, self.err)
-                update_max = np.abs(update).max()
-                if update_max > _MAX_ANGLE_CHANGE * 0.5:
-                    update *= (_MAX_ANGLE_CHANGE * 0.5) / update_max
-                mujoco.mj_integratePos(self.model, self.data.qpos, update, 1.0)
-        else:
-            print(f'IK max iter. err: {np.linalg.norm(self.err)}')
+            iter += 1
 
-        rr.log('ik_iter', rr.Scalars(iter))
-        rr.log('ik_err', rr.Scalars(np.linalg.norm(self.err)))
-
+        if debug:
+            import rerun as rr
+            rr.log('ik/iter', rr.Scalars(iter))
+            rr.log('ik/err', rr.Scalars(np.linalg.norm(self.err) ** 2))
+            rr.log('ik/err/pos', rr.Scalars(np.linalg.norm(self.err_pos) ** 2))
+            rr.log('ik/err/rot', rr.Scalars(np.linalg.norm(self.err_rot) ** 2))
         return self.data.qpos.copy()
 
 
@@ -335,14 +267,16 @@ class JointCompliantController:
     def finished(self):
         return self.otg_res == Result.Finished
 
-    def compute_torque(self, q, dq, tau):
+    def gravity(self, q):
         q_pin = self._q_pin  # Reuse pre-allocated q_pin
         q_pin[0], q_pin[1], q_pin[2] = math.cos(q[0]), math.sin(q[0]), q[1]
         q_pin[3], q_pin[4], q_pin[5] = math.cos(q[2]), math.sin(q[2]), q[3]
         q_pin[6], q_pin[7], q_pin[8] = math.cos(q[4]), math.sin(q[4]), q[5]
         q_pin[9], q_pin[10] = math.cos(q[6]), math.sin(q[6])
+        return pin.computeGeneralizedGravity(self.model, self.data, q_pin)
 
-        gravity = pin.computeGeneralizedGravity(self.model, self.data, q_pin)
+    def compute_torque(self, q, dq, tau):
+        gravity = self.gravity(q)
 
         # Initialize controller state if needed
         if self.q_s is None:
@@ -366,12 +300,12 @@ class JointCompliantController:
             self.otg_inp.target_velocity = np.zeros(self.actuator_count)
             self.otg_res = Result.Finished
 
-        self.q_s = _wrap_joint_angle(q, self.q_s)
+        self.q_s = wrap_joint_angle(q, self.q_s)
         dq_s = dq.copy()  # TODO: It seems that we don't need copy here
         tau_s_f = self.tau_filter.filter(tau)
 
         if self.target_qpos is not None:
-            qpos = _wrap_joint_angle(self.target_qpos, self.q_s)
+            qpos = wrap_joint_angle(self.target_qpos, self.q_s)
             self.otg_inp.target_position = qpos
             self.otg_res = Result.Working
 
@@ -393,113 +327,3 @@ class JointCompliantController:
         tau_f = K_r_K_l @ ((self.dq_n - dq_s) + K_lp @ (self.q_n - self.q_s))  # Nominal friction
 
         return tau_task + tau_f
-
-
-class KinovaAPI:
-    """Low-level interface to the Kinova arm hardware."""
-
-    def __init__(self, ip):
-        self.ip = ip
-        self.tcp_connection = DeviceConnection(ip, _TCP_PORT, TCPTransport())
-        self.udp_connection = DeviceConnection(ip, _UDP_PORT, UDPTransport())
-
-        self.base = None
-        self.base_cyclic = None
-        self.actuator_config = None
-        self.actuator_count = None
-        self.actuator_device_ids = None
-
-        self.current_limit_max = np.array([10.0, 10.0, 10.0, 10.0, 6.0, 6.0, 6.0])
-        self.current_limit_min = -self.current_limit_max
-
-        self.base_feedback, self.base_command = None, None
-
-    def __enter__(self):
-        tcp_router = self.tcp_connection.__enter__()
-        udp_router = self.udp_connection.__enter__()
-        self.base = BaseClient(tcp_router)
-        self.base_cyclic = BaseCyclicClient(udp_router)
-        self.actuator_config = ActuatorConfigClient(self.base.router)
-        self.actuator_count = self.base.GetActuatorCount().count
-
-        device_manager = DeviceManagerClient(self.base.router)
-        device_handles = device_manager.ReadAllDevices()
-        self.actuator_device_ids = [
-            handle.device_identifier for handle in device_handles.device_handle
-            if handle.device_type in [Common_pb2.BIG_ACTUATOR, Common_pb2.SMALL_ACTUATOR]
-        ]
-
-        # Configure communication
-        self.send_options = RouterClientSendOptions()
-        self.send_options.timeout_ms = 30
-
-        # Make sure actuators are in position mode
-        control_mode_message = ActuatorConfig_pb2.ControlModeInformation()
-        control_mode_message.control_mode = ActuatorConfig_pb2.ControlMode.Value('POSITION')
-        for device_id in self.actuator_device_ids:
-            self.actuator_config.SetControlMode(control_mode_message, device_id)
-
-        # Make sure arm is in high-level servoing mode
-        base_servo_mode = Base_pb2.ServoingModeInformation()
-        base_servo_mode.servoing_mode = Base_pb2.SINGLE_LEVEL_SERVOING
-        self.base.SetServoingMode(base_servo_mode)
-
-        if self.base.GetArmState().active_state == Base_pb2.ARMSTATE_IN_FAULT:
-            self.base.ClearFaults()
-            while self.base.GetArmState().active_state != Base_pb2.ARMSTATE_SERVOING_READY:
-                time.sleep(0.1)
-
-        # Initialize control loop
-        self.base.SetServoingMode(Base_pb2.ServoingModeInformation(servoing_mode=Base_pb2.LOW_LEVEL_SERVOING))
-        # Set actuators to current control mode
-        control_mode_message = ActuatorConfig_pb2.ControlModeInformation()
-        control_mode_message.control_mode = ActuatorConfig_pb2.ControlMode.Value('CURRENT')
-        for device_id in self.actuator_device_ids:
-            self.actuator_config.SetControlMode(control_mode_message, device_id)
-
-        self.base_feedback = self.base_cyclic.RefreshFeedback()
-        self.base_command = BaseCyclic_pb2.Command()
-        for i in range(self.actuator_count):
-            self.base_command.actuators.add(flags=ActuatorCyclic_pb2.SERVO_ENABLE)
-
-        return self
-
-    def __exit__(self, *_):
-        control_mode_message = ActuatorConfig_pb2.ControlModeInformation()
-        control_mode_message.control_mode = ActuatorConfig_pb2.ControlMode.Value('POSITION')
-        for device_id in self.actuator_device_ids:
-            self.actuator_config.SetControlMode(control_mode_message, device_id)
-
-        # Set arm back to high-level servoing mode
-        base_servo_mode = Base_pb2.ServoingModeInformation()
-        base_servo_mode.servoing_mode = Base_pb2.SINGLE_LEVEL_SERVOING
-        self.base.SetServoingMode(base_servo_mode)
-
-        self.tcp_connection.__exit__()
-        self.udp_connection.__exit__()
-
-    def apply_current_command(self, current_command):
-        if current_command is not None:
-            np.clip(current_command, self.current_limit_min, self.current_limit_max, out=current_command)
-
-        # Increment frame ID to ensure actuators can reject out-of-order frames
-        self.base_command.frame_id = (self.base_command.frame_id + 1) % 65536
-        for i in range(self.actuator_count):
-            self.base_command.actuators[i].current_motor = (current_command[i] if current_command is not None else
-                                                            self.base_feedback.actuators[i].current_motor)
-            self.base_command.actuators[i].position = self.base_feedback.actuators[i].position
-            self.base_command.actuators[i].command_id = self.base_command.frame_id
-
-        self.base_feedback = self.base_cyclic.Refresh(self.base_command, 0, self.send_options)
-
-        q, dq, tau = np.zeros(self.actuator_count), np.zeros(self.actuator_count), np.zeros(self.actuator_count)
-
-        for i in range(self.actuator_count):
-            q[i] = self.base_feedback.actuators[i].position
-            dq[i] = self.base_feedback.actuators[i].velocity
-            tau[i] = self.base_feedback.actuators[i].torque
-
-        np.deg2rad(q, out=q)
-        np.deg2rad(dq, out=dq)
-        np.negative(tau, out=tau)  # Raw torque readings are negative relative to actuator direction
-        return q, dq, tau

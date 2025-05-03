@@ -1,7 +1,6 @@
 <mujoco model="gen3">
   <compiler angle="radian" meshdir="gen3"/>
 
-  <!-- <option integrator="RK4"/> -->
   <option integrator="implicitfast"/>
 
   <default>
