@@ -65,25 +65,21 @@ class KinematicsSolver:
         self.damping = _DAMPING_COEFF * np.eye(6)
         self.eye = np.eye(self.model.nv)
 
-        self.joint_limits_lower = np.array([
-            -np.pi,       # joint_1: continuous
-            -2.24,        # joint_2: revolute with limits
-            -np.pi,       # joint_3: continuous
-            -2.57,        # joint_4: revolute with limits
-            -np.pi,       # joint_5: continuous
-            -2.09,        # joint_6: revolute with limits
-            -np.pi        # joint_7: continuous
-        ])
+        self.joint_limits_idx = []
+        self.joint_limits_lower = []
+        self.joint_limits_upper = []
+        for i, row in enumerate(self.model.jnt_range):
+            if not (row[0] == row[1] == 0):
+                self.joint_limits_idx.append(i)
+                self.joint_limits_lower.append(row[0])
+                self.joint_limits_upper.append(row[1])
 
-        self.joint_limits_upper = np.array([
-            np.pi,        # joint_1: continuous
-            2.24,         # joint_2: revolute with limits
-            np.pi,        # joint_3: continuous
-            2.57,         # joint_4: revolute with limits
-            np.pi,        # joint_5: continuous
-            2.09,         # joint_6: revolute with limits
-            np.pi         # joint_7: continuous
-        ])
+        self.joint_limits_idx = np.array(self.joint_limits_idx)
+        self.joint_limits_lower = np.array(self.joint_limits_lower)
+        self.joint_limits_upper = np.array(self.joint_limits_upper)
+        self.G = np.vstack([np.eye(self.model.nv)[self.joint_limits_idx],
+                            -np.eye(self.model.nv)[self.joint_limits_idx]])
+        self.G = matrix(self.G)
 
     def forward(self, qpos):
         self.data.qpos = qpos
@@ -135,11 +131,12 @@ class KinematicsSolver:
                        pos: geom.Transform3D,
                        qpos0: np.ndarray,
                        max_iters: int = 20,
-                       err_thresh: float = 1e-4,
-                       clamp=False,
+                       err_thresh: float = 1e-3,
+                       clamp=True,
                        debug=False):
         solvers.options['show_progress'] = False
-        self.data.qpos = wrap_joint_angle(qpos0, np.zeros(7)) if clamp else qpos0
+        qpos0 = wrap_joint_angle(qpos0, np.zeros(7)) if clamp else qpos0
+        self.data.qpos = qpos0
 
         iter = 0
         for i in range(max_iters):
@@ -168,7 +165,7 @@ class KinematicsSolver:
 
             # Objective: min ||J·Δq - e||² + α||Δq - (q₀ - q)||²
             # where α is a small weight for the null space objective
-            alpha = 1e-9
+            alpha = 1e-5
             n = self.model.nv
 
             # P = J^T J + α I
@@ -185,13 +182,9 @@ class KinematicsSolver:
             # Δq <= ub - q
             # -Δq <= q - lb
 
-            # G = [I; -I]
-            G = np.vstack([np.eye(n), -np.eye(n)])
-            G = matrix(G)
-
             # h = [ub - q; q - lb]
-            h_upper = self.joint_limits_upper - self.data.qpos
-            h_lower = self.data.qpos - self.joint_limits_lower
+            h_upper = self.joint_limits_upper - self.data.qpos[self.joint_limits_idx]
+            h_lower = self.data.qpos[self.joint_limits_idx] - self.joint_limits_lower
             h = np.concatenate([h_upper, h_lower])
             h = matrix(h)
 
@@ -199,15 +192,8 @@ class KinematicsSolver:
             A = matrix(0.0, (0, n))
             b = matrix(0.0, (0, 1))
 
-            solution = solvers.qp(P, q, G, h, A, b)
+            solution = solvers.qp(P, q, self.G, h, A, b)
             update = np.array(solution['x']).flatten()
-            # else:
-            #     # If QP fails, use a small damped least squares step as fallback
-            #     damping = _DAMPING_COEFF * 10 * np.eye(6)
-            #     update = self.jac.T @ np.linalg.solve(self.jac @ self.jac.T + damping, self.err)
-            #     update_max = np.abs(update).max()
-            #     if update_max > _MAX_ANGLE_CHANGE * 0.5:
-            #         update *= (_MAX_ANGLE_CHANGE * 0.5) / update_max
 
             mujoco.mj_integratePos(self.model, self.data.qpos, update, 1.0)
             self.data.qpos = wrap_joint_angle(self.data.qpos, np.zeros(7)) if clamp else self.data.qpos
@@ -217,9 +203,10 @@ class KinematicsSolver:
         if debug:
             import rerun as rr
             rr.log('ik/iter', rr.Scalars(iter))
-            rr.log('ik/err', rr.Scalars(np.linalg.norm(self.err) ** 2))
-            rr.log('ik/err/pos', rr.Scalars(np.linalg.norm(self.err_pos) ** 2))
-            rr.log('ik/err/rot', rr.Scalars(np.linalg.norm(self.err_rot) ** 2))
+            rr.log('ik/err', rr.Scalars(np.linalg.norm(self.err)))
+            rr.log('ik/err/pos', rr.Scalars(np.linalg.norm(self.err_pos)))
+            rr.log('ik/err/rot', rr.Scalars(np.linalg.norm(self.err_rot)))
+            rr.log('ik/update', rr.Scalars(self.data.qpos - qpos0))
         return self.data.qpos.copy()
 
 

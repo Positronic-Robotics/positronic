@@ -62,7 +62,7 @@ def debug_kinematics(input_filename, rerun):
             rr.log('pos/target', rr.Points3D(np.array([p[0] for _, p in pos[:next_command + 1]])))
             # q_ik = solver.inverse(pos[next_command][1], q, max_iters=10000)
             cmd = pos[next_command][1]
-            q_ik = solver.inverse_limits(Transform3D(*cmd), q, max_iters=100, clamp=True)
+            q_ik = solver.inverse_limits(Transform3D(*cmd), q, max_iters=300, clamp=True, debug=True)
             rr.log('ik/qpos', rr.Scalars(q_ik))
             rr.log('pos/cur_target', rr.Points3D(cmd[0], colors=[255, 255, 255]))
             controller.set_target_qpos(q_ik)
