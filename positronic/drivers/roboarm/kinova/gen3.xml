@@ -2,6 +2,7 @@
   <compiler angle="radian" meshdir="gen3"/>
 
   <option integrator="implicitfast"/>
+  <option timestep="0.001"/>
 
   <default>
     <default class="visual">
@@ -11,11 +12,9 @@
       <geom type="mesh" group="3"/>
     </default>
     <default class="large_actuator">
-      <!-- <position kp="2000" kv="100" forcerange="-105 105"/> -->
-      <motor ctrllimited="true" ctrlrange="-105 105"/>
+      <motor ctrllimited="true" ctrlrange="-105 105"/>    
     </default>
     <default class="small_actuator">
-      <!-- <position kp="500" kv="50" forcerange="-52 52"/> -->
       <motor ctrllimited="true" ctrlrange="-52 52"/>
     </default>
     <site size="0.001" rgba="0.5 0.5 0.5 0.3" group="4"/>
@@ -111,5 +110,4 @@
     <key name="retract" qpos="0 -0.34906585 3.14159265 -2.54818071 0 -0.87266463 1.57079633"
       ctrl="0 -0.34906585 3.14159265 -2.54818071 0 -0.87266463 1.57079633"/>
   </keyframe>
-  <option timestep="0.001"/>
 </mujoco>

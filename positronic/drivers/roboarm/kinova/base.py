@@ -44,7 +44,7 @@ class KinematicsSolver:
         self.model.body_gravcomp[:] = 1.0
 
         # Cache references
-        self.qpos0 = self.model.key('retract').qpos  # TODO: Is it good for IK null space?
+        self.qpos0 = np.zeros(self.model.nq)
         self.qpos0[:] = 0.0
         self.site_id = self.model.site('pinch_site').id
         self.site_pos = self.data.site(self.site_id).xpos
