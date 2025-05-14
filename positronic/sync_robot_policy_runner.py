@@ -96,7 +96,7 @@ def run_policy_in_simulator(  # noqa: C901  Function is too complex
                 action_dict = action_decoder.decode(action, inputs)
 
                 target_pos = action_dict['target_robot_position']
-                target_grip = 1.0 if action_dict['target_grip'] > 0.5 else 0.0
+                target_grip = action_dict['target_grip']
 
                 current_joints = env.get_joint_positions()
                 joints = env.solver.inverse(target_pos, current_joints)

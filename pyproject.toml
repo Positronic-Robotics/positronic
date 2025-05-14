@@ -59,6 +59,7 @@ lerobot = [
     "huggingface-hub>=0.25.0",
     "draccus>=0.10.0",
     "jsonlines>=4.0.0",
+    "timm"
 ]
 
 [tool.pytest.ini_options]

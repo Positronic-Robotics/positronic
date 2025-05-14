@@ -45,8 +45,9 @@ def roboarm(arm: ir.ControlSystem, camera: ir.ControlSystem | None = None):
     return _state_mapping(ir.compose(*components, inputs=inputs, outputs=outputs))
 
 
+# The latest registration transform for the gripper
 GRIPPER_REGISTRATION = geom.Transform3D(
-    rotation=geom.Rotation.from_quat([0.88092353, 0.45079771, 0.11161464, -0.09108971]),
+    rotation=geom.Rotation.from_quat([0.50978154, -0.17411152, 0.7952959, -0.27805105]),
 )
 
 

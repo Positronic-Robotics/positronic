@@ -9,6 +9,7 @@ def _sound_system(
         stop_recording_wav_path: str | None,
         enable_threshold: float | None,
         raise_octave_each: float | None,
+        device_id: int | None,
 ):
     from positronic.drivers.sound import SoundSystem
 
@@ -16,6 +17,7 @@ def _sound_system(
         master_volume=force_feedback_volume or 0,
         enable_threshold=enable_threshold,
         raise_octave_each=raise_octave_each,
+        output_device_index=device_id,
     )
     components = [sound_system]
     inputs = {'force': None, 'start_recording': None, 'stop_recording': None}

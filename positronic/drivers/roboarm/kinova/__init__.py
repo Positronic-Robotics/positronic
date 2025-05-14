@@ -12,6 +12,7 @@ import os
 
 import numpy as np
 
+import geom
 import ironic as ir
 from positronic.drivers.roboarm.kinova.api import KinovaAPI
 from positronic.drivers.roboarm.kinova.base import KinematicsSolver, JointCompliantController
@@ -285,14 +286,13 @@ class KinovaSync:
         self.command_queue.put(qpos)
 
     def wait_finish(self):
-        time.sleep(0.2)  # TODO: figure out why adding it here improves policy accuracy
         while True:
             with self.command_finished.get_lock():
                 if self.command_finished.value:
                     break
             time.sleep(0.001)
 
-    def execute_cartesian_command(self, position: np.ndarray):
+    def execute_cartesian_command(self, position: geom.Transform3D):
         self.execute_joint_command(self.solver.inverse(position, self._q))
 
     def reset_position(self):

@@ -45,7 +45,6 @@ class KinematicsSolver:
 
         # Cache references
         self.qpos0 = np.zeros(self.model.nq)
-        self.qpos0[:] = 0.0
         self.site_id = self.model.site('pinch_site').id
         self.site_pos = self.data.site(self.site_id).xpos
         self.site_mat = self.data.site(self.site_id).xmat
