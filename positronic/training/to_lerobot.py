@@ -103,13 +103,37 @@ def seconds_to_str(seconds: torch.Tensor) -> str:
         return f"{seconds / 3600:.2f}h"
 
 
+class EpisodeDictDataset(torch.utils.data.Dataset):
+    """
+    This dataset is used to load the episode data from the file and encode it into a dictionary.
+    """
+    def __init__(self, episode_files: list[Path], state_encoder: StateEncoder, action_encoder: ActionDecoder):
+        self.episode_files = episode_files
+        self.state_encoder = state_encoder
+        self.action_encoder = action_encoder
+
+    def __len__(self):
+        return len(self.episode_files)
+
+    def __getitem__(self, idx: int) -> dict:
+        episode_file = self.episode_files[idx]
+        episode_data = torch.load(episode_file)
+        for key in episode_data.keys():
+            # TODO: come up with a better way to determine if the data is a video (X2 !!!)
+            if key.startswith('image.') or key.endswith('.image') and len(episode_data[key].shape) == 1:
+                episode_data[key] = _decode_video_from_array(episode_data[key])
+        obs = self.state_encoder.encode_episode(episode_data)
+        ep_dict = {**obs}
+
+        # Concatenate all the data as specified in the config
+        ep_dict['action'] = self.action_encoder.encode_episode(episode_data)
+
+        return ep_dict
+
+
 def append_data_to_dataset(
     dataset: LeRobotDataset,
     input_dir: Path,
-    fps: int,
-    start_from_zero: bool,
-    timestamp_units: str,
-    synchronize_timestamps: bool,
     state_encoder: StateEncoder,
     action_encoder: ActionDecoder,
     task: str,
@@ -118,28 +142,17 @@ def append_data_to_dataset(
     episode_files = sorted([f for f in input_dir.glob('*.pt')])
     total_length = 0
 
-    for episode_idx, episode_file in enumerate(tqdm.tqdm(episode_files, desc="Processing episodes")):
-        episode_data = torch.load(episode_file)
+    episode_dataset = EpisodeDictDataset(episode_files, state_encoder, action_encoder)
+    dataloader = torch.utils.data.DataLoader(
+        episode_dataset,
+        batch_size=1,
+        shuffle=False,
+        num_workers=8,
+    )
 
-        for key in episode_data.keys():
-            # TODO: come up with a better way to determine if the data is a video (X2 !!!)
-            if key.startswith('image.') or key.endswith('.image') and len(episode_data[key].shape) == 1:
-                episode_data[key] = _decode_video_from_array(episode_data[key])
-
-        obs = state_encoder.encode_episode(episode_data)
-        num_frames = len(episode_data['image_timestamp'])
-        ep_dict = {**obs}
-
-        # Concatenate all the data as specified in the config
-        ep_dict['action'] = action_encoder.encode_episode(episode_data)
-
-        timestamps = process_timestamps(
-            episode_data['image_timestamp'],
-            start_from_zero=start_from_zero,
-            timestamp_units=timestamp_units,
-            synchronize_with_fps=fps if synchronize_timestamps else None,
-        )
-        total_length += timestamps[-1] - timestamps[0]
+    for episode_idx, ep_dict in enumerate(tqdm.tqdm(dataloader, desc="Processing episodes")):
+        num_frames = len(ep_dict['action'].shape[0])
+        total_length += num_frames * 1 / dataset.fps
 
         for i in range(num_frames):
             frame = {"task": task}
@@ -155,9 +168,6 @@ def append_data_to_dataset(
 @ir.config(
     fps=30,
     video=True,
-    start_from_zero=True,
-    timestamp_units='ns',
-    synchronize_timestamps=True,
     state_encoder=positronic.cfg.inference.state.end_effector,
     action_encoder=positronic.cfg.inference.action.umi_relative,
     task="pick plate from the table and place it into the dishwasher",
@@ -167,9 +177,6 @@ def convert_to_lerobot_dataset(  # noqa: C901  Function is too complex
     output_dir: str,
     fps: int,
     video: bool,
-    start_from_zero: bool,
-    timestamp_units: str,
-    synchronize_timestamps: bool,
     state_encoder: StateEncoder,
     action_encoder: ActionDecoder,
     task: str,
@@ -194,10 +201,6 @@ def convert_to_lerobot_dataset(  # noqa: C901  Function is too complex
     append_data_to_dataset(
         dataset=dataset,
         input_dir=input_dir,
-        fps=fps,
-        start_from_zero=start_from_zero,
-        timestamp_units=timestamp_units,
-        synchronize_timestamps=synchronize_timestamps,
         state_encoder=state_encoder,
         action_encoder=action_encoder,
         task=task,
@@ -206,10 +209,6 @@ def convert_to_lerobot_dataset(  # noqa: C901  Function is too complex
 
 
 @ir.config(
-    fps=30,
-    start_from_zero=True,
-    timestamp_units='ns',
-    synchronize_timestamps=True,
     state_encoder=positronic.cfg.inference.state.end_effector,
     action_encoder=positronic.cfg.inference.action.umi_relative,
     task="pick plate from the table and place it into the dishwasher",
@@ -217,10 +216,6 @@ def convert_to_lerobot_dataset(  # noqa: C901  Function is too complex
 def append_data_to_lerobot_dataset(  # noqa: C901  Function is too complex
     dataset_dir: str,
     input_dir: Path,
-    fps: int,
-    start_from_zero: bool,
-    timestamp_units: str,
-    synchronize_timestamps: bool,
     state_encoder: StateEncoder,
     action_encoder: ActionDecoder,
     task: str,
@@ -233,10 +228,6 @@ def append_data_to_lerobot_dataset(  # noqa: C901  Function is too complex
     append_data_to_dataset(
         dataset=dataset,
         input_dir=Path(input_dir),
-        fps=fps,
-        start_from_zero=start_from_zero,
-        timestamp_units=timestamp_units,
-        synchronize_timestamps=synchronize_timestamps,
         state_encoder=state_encoder,
         action_encoder=action_encoder,
         task=task,
