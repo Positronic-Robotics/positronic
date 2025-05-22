@@ -188,6 +188,9 @@ class Kinova(ir.ControlSystem):
             while not self.stop_event.is_set() or not joint_controller.finished:
                 now_ts = time.monotonic()
                 step_time = now_ts - last_ts
+                if step_time < 0.001:
+                    # Busy wait to prevent loop from running faster than 1 kHz
+                    continue
                 if step_time > 0.005:  # 5 ms
                     print(f'Warning: Step time {1000 * step_time:.3f} ms')
                 last_ts = now_ts
@@ -248,6 +251,9 @@ class KinovaSync:
             while not self.stop_event.is_set() or not joint_controller.finished:
                 now_ts = time.monotonic()
                 step_time = now_ts - last_ts
+                if step_time < 0.001:
+                    # Busy wait to prevent loop from running faster than 1 kHz
+                    continue
                 if step_time > 0.005:  # 5 ms
                     print(f'Warning: Step time {1000 * step_time:.3f} ms')
                 last_ts = now_ts

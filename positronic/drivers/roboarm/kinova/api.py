@@ -107,6 +107,13 @@ class KinovaAPI:
             while self.base.GetArmState().active_state != Base_pb2.ARMSTATE_SERVOING_READY:
                 time.sleep(0.1)
 
+        self.base_feedback = self.base_cyclic.RefreshFeedback()
+        self.base_command = BaseCyclic_pb2.Command()
+        for i in range(self.actuator_count):
+            self.base_command.actuators.add(flags=ActuatorCyclic_pb2.SERVO_ENABLE)
+
+        self.apply_current_command(None)
+
         # Initialize control loop
         self.base.SetServoingMode(Base_pb2.ServoingModeInformation(servoing_mode=Base_pb2.LOW_LEVEL_SERVOING))
         # Set actuators to current control mode
@@ -114,11 +121,6 @@ class KinovaAPI:
         control_mode_message.control_mode = ActuatorConfig_pb2.ControlMode.Value('CURRENT')
         for device_id in self.actuator_device_ids:
             self.actuator_config.SetControlMode(control_mode_message, device_id)
-
-        self.base_feedback = self.base_cyclic.RefreshFeedback()
-        self.base_command = BaseCyclic_pb2.Command()
-        for i in range(self.actuator_count):
-            self.base_command.actuators.add(flags=ActuatorCyclic_pb2.SERVO_ENABLE)
 
         return self
 

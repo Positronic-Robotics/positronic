@@ -118,7 +118,14 @@ It removes the gripper, as we have the different one.
     <child link="end_effector_link"/>
     <axis xyz="0 0 0"/>
   </joint>
-  <link name="tool_frame"/>
+  <link name="tool_frame">
+    <inertial>
+      <!-- Approximate values for our current gripper. TODO: Get actual values -->
+      <origin rpy="0 0 0" xyz="0 0 0.0475"/>
+      <mass value="0.74"/>
+      <inertia ixx="0.001" ixy="0" ixz="0" iyy="0.001" iyz="0" izz="0.001"/>
+    </inertial>
+  </link>
   <joint name="tool_frame_joint" type="fixed">
     <origin rpy="0 0 0" xyz="0 0 0.120"/>
     <parent link="end_effector_link"/>
@@ -126,4 +133,3 @@ It removes the gripper, as we have the different one.
     <axis xyz="0 0 0"/>
   </joint>
 </robot>
-
