@@ -59,40 +59,6 @@ def convert_to_seconds(timestamp_units: str, timestamp: torch.Tensor):
         raise ValueError(f"Unknown timestamp units: {timestamp_units}")
 
 
-def _start_from_zero(timestamp: torch.Tensor):
-    return timestamp - timestamp[0]
-
-
-def process_timestamps(
-    timestamps: torch.Tensor,
-    start_from_zero: bool,
-    timestamp_units: str,
-    synchronize_with_fps: int | None = None,
-) -> torch.Tensor:
-    """
-    Process timestamps to be in seconds and optionally synchronize them with the FPS.
-
-    Args:
-        timestamps (torch.Tensor): Timestamps to process.
-        start_from_zero (bool): If True, start episode at zero timestamp.
-        timestamp_units (str): Units of the timestamps.
-        synchronize_with_fps (int | None): Synchronize the timestamps with the given frame rate.
-
-    Returns:
-        torch.Tensor: Processed timestamps in seconds.
-    """
-    if start_from_zero:
-        timestamps = _start_from_zero(timestamps)
-
-    if synchronize_with_fps is not None:
-        # TODO: will linear resampling be better?
-        timestamps_seconds = timestamps[0] + torch.arange(0, len(timestamps), 1) / synchronize_with_fps
-    else:
-        timestamps_seconds = convert_to_seconds(timestamp_units, timestamps)
-
-    return timestamps_seconds.unsqueeze(-1)
-
-
 def seconds_to_str(seconds: float) -> str:
     if seconds < 60:
         return f"{seconds:.2f}s"
