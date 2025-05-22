@@ -166,7 +166,7 @@ class Rotation(np.ndarray, metaclass=RotationMeta):
             if isinstance(shape, int):
                 return shape
 
-            return np.prod(shape)
+            return int(np.prod(shape))
 
         def __eq__(self, other: Any) -> bool:
             if isinstance(other, Rotation.Representation):

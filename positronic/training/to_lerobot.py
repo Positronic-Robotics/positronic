@@ -93,8 +93,7 @@ def process_timestamps(
     return timestamps_seconds.unsqueeze(-1)
 
 
-def seconds_to_str(seconds: torch.Tensor) -> str:
-    seconds = seconds.item()
+def seconds_to_str(seconds: float) -> str:
     if seconds < 60:
         return f"{seconds:.2f}s"
     elif seconds < 3600:
@@ -137,7 +136,9 @@ def append_data_to_dataset(
     state_encoder: StateEncoder,
     action_encoder: ActionDecoder,
     task: str,
+    num_workers: int = 16,
 ):
+    dataset.start_image_writer(num_processes=num_workers)
     # Process each episode file
     episode_files = sorted([f for f in input_dir.glob('*.pt')])
     total_length = 0
@@ -147,11 +148,12 @@ def append_data_to_dataset(
         episode_dataset,
         batch_size=1,
         shuffle=False,
-        num_workers=8,
+        num_workers=num_workers,
+        collate_fn=lambda x: x[0],
     )
 
     for episode_idx, ep_dict in enumerate(tqdm.tqdm(dataloader, desc="Processing episodes")):
-        num_frames = len(ep_dict['action'].shape[0])
+        num_frames = len(ep_dict['action'])
         total_length += num_frames * 1 / dataset.fps
 
         for i in range(num_frames):
