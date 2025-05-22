@@ -140,7 +140,7 @@ def append_data_to_dataset(
     action_encoder=positronic.cfg.inference.action.umi_relative,
     task="pick plate from the table and place it into the dishwasher",
 )
-def convert_to_lerobot_dataset(  # noqa: C901  Function is too complex
+def convert_to_lerobot_dataset(
     input_dir: str,
     output_dir: str,
     fps: int,
@@ -181,7 +181,7 @@ def convert_to_lerobot_dataset(  # noqa: C901  Function is too complex
     action_encoder=positronic.cfg.inference.action.umi_relative,
     task="pick plate from the table and place it into the dishwasher",
 )
-def append_data_to_lerobot_dataset(  # noqa: C901  Function is too complex
+def append_data_to_lerobot_dataset(
     dataset_dir: str,
     input_dir: Path,
     state_encoder: StateEncoder,
