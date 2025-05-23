@@ -393,3 +393,21 @@ def test_instantiate_exception_during_instantiation_has_correct_path_with_dict()
         cfg.instantiate()
 
     assert str(e.value) == 'Error instantiating "dict_arg[\"bad_key\"]": Bad object'
+
+
+def test_instantiate_override_with_complex_path_to_object_works():
+    @ir.config
+    def true_if_math_module(obj):
+        import math
+
+        return obj is math
+
+    assert true_if_math_module.override(obj="@math").instantiate()
+
+
+def test_instantiate_override_with_path_to_module_works():
+    @ir.config
+    def return_true(obj):
+        return True
+
+    assert return_true.override(obj="@http.HTTPStatus.OK").instantiate()

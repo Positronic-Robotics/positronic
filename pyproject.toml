@@ -64,6 +64,8 @@ lerobot = [
 
 [tool.pytest.ini_options]
 testpaths = [
-    "*/tests",
+    "geom/tests",
+    "positronic/tests",
+    "ironic/tests",
 ]
 python_files = ["test_*.py", "*_test.py"]

@@ -1,6 +1,7 @@
+from collections import deque
 import yaml
 import importlib.util
-from typing import Any, Callable, Dict
+from typing import Any, Callable, Dict, Tuple
 
 
 INSTANTIATE_PREFIX = '@'
@@ -21,6 +22,29 @@ def _to_dict(obj):
         return obj
 
 
+def _determine_module_by_path(path: str) -> Tuple[str, str]:
+    module_path = path.split('.')
+    object_path = deque([])
+
+    while len(module_path) > 0:
+        try:
+            possible_module_path = '.'.join(module_path)
+            importlib.import_module(possible_module_path)
+            return possible_module_path, '.'.join(object_path)
+        except ModuleNotFoundError:
+            object_path.appendleft(module_path.pop())
+
+    raise ImportError(f"Module not found for path: {path}")
+
+
+def _get_object_from_path(module: Any, object_path: str) -> Any:
+    x = module
+    if object_path:
+        for part in object_path.split('.'):
+            x = getattr(x, part)
+    return x
+
+
 def _import_object_from_path(path: str) -> Any:
     """
     Import an object from a string path starting with '@'.
@@ -39,15 +63,12 @@ def _import_object_from_path(path: str) -> Any:
     # Remove the leading '@'
     path = path[len(INSTANTIATE_PREFIX):]
 
-    # Split the path to get the module path and object name
-    *module_path, object_path = path.split('.')
-    module_path = '.'.join(module_path)
+    module_path, object_path = _determine_module_by_path(path)
 
     # Import the module
     module = importlib.import_module(module_path)
-
-    # Get the object
-    return getattr(module, object_path)
+    obj = _get_object_from_path(module, object_path)
+    return obj
 
 
 def _resolve_value(value: Any) -> Any:
