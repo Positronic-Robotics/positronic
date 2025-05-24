@@ -152,6 +152,7 @@ huggingface-hub==0.29.3
     #   positronic (pyproject.toml)
     #   datasets
     #   diffusers
+    #   timm
 idna==3.10
     # via
     #   anyio
@@ -344,10 +345,12 @@ pytz==2025.2
     # via pandas
 pyyaml==6.0.2
     # via
+    #   positronic (pyproject.toml)
     #   datasets
     #   draccus
     #   huggingface-hub
     #   pyyaml-include
+    #   timm
     #   uvicorn
 pyyaml-include==1.4.1
     # via draccus
@@ -365,7 +368,9 @@ rerun-sdk==0.23.1
 ruckig==0.14.0
     # via positronic (pyproject.toml)
 safetensors==0.5.3
-    # via diffusers
+    # via
+    #   diffusers
+    #   timm
 scipy==1.15.2
     # via
     #   positronic (pyproject.toml)
@@ -393,14 +398,19 @@ termcolor==2.5.0
     # via fire
 threadpoolctl==3.5.0
     # via positronic (pyproject.toml)
+timm==1.0.15
+    # via positronic (pyproject.toml)
 toml==0.10.2
     # via draccus
 torch==2.6.0
     # via
     #   positronic (pyproject.toml)
+    #   timm
     #   torchvision
 torchvision==0.21.0
-    # via positronic (pyproject.toml)
+    # via
+    #   positronic (pyproject.toml)
+    #   timm
 tqdm==4.67.1
     # via
     #   datasets

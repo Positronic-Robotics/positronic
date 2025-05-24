@@ -209,7 +209,9 @@ python-dotenv==1.0.1
 pyturbojpeg @ git+https://github.com/lilohuang/PyTurboJPEG.git@87bdba487a6198afd6d4c3cbfb2b544c59f7ea8f
     # via positronic (pyproject.toml)
 pyyaml==6.0.2
-    # via uvicorn
+    # via
+    #   positronic (pyproject.toml)
+    #   uvicorn
 requests==2.32.3
     # via
     #   positronic (pyproject.toml)
