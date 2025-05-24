@@ -1,7 +1,7 @@
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from time import time
-from typing import Any
+from typing import Any, Union
 
 
 def system_clock() -> int:
@@ -56,7 +56,7 @@ class Channel(ABC):
         pass
 
     @abstractmethod
-    def read(self) -> Message | NoValue:
+    def read(self) -> Union[Message, NoValue]:
         """Must return NoValue when there is nothing to read."""
         pass
 
