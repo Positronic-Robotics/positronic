@@ -29,6 +29,7 @@ dependencies = [
     "fastapi",
     "ruckig",
     "cvxopt",
+    "pyyaml"
 ]
 
 [project.optional-dependencies]
@@ -49,6 +50,8 @@ dev = [
     "ipython",
     "opencv-python",
     "rerun-sdk[notebook]",
+    "flake8",
+    "yaml"
 ]
 lerobot = [
     "einops>=0.8.0",
