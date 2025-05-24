@@ -1,6 +1,6 @@
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from time import time
+import time
 from typing import Any, Union
 
 
@@ -52,7 +52,7 @@ class Channel(ABC):
 
     @abstractmethod
     def write(self, message: Message):
-        """Write new value into channel. Must be non-blocking."""
+        """Write new value into channel. Implementations must be non-blocking."""
         pass
 
     @abstractmethod
@@ -77,7 +77,7 @@ class LastValueChannel(Channel):
 
     def read(self):
         value = self.base.read()
-        while value is not NoValue:
+        if value is not NoValue:
             self.last_value = value
         return self.last_value
 
@@ -91,7 +91,7 @@ class DuplicateChannel(Channel):
 
     def write(self, message):
         for c in self.channels:
-            c.write()
+            c.write(message)
 
     def read(self):
         raise ValueError('Duplicate Channel is write only')
