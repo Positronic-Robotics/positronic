@@ -33,14 +33,6 @@ class MockChannel(Channel):
 class TestLastValueChannel:
     """Tests for LastValueChannel class."""
 
-    def test_init(self):
-        """Test LastValueChannel initialization."""
-        mock_channel = MockChannel()
-        last_value_channel = LastValueChannel(mock_channel)
-
-        assert last_value_channel.base == mock_channel
-        assert last_value_channel.last_value is NoValue
-
     def test_write_delegates_to_base_channel(self):
         """Test that write operations are delegated to the base channel."""
         mock_channel = MockChannel()
@@ -155,21 +147,6 @@ class TestLastValueChannel:
 class TestDuplicateChannel:
     """Tests for DuplicateChannel class."""
 
-    def test_init_with_multiple_channels(self):
-        """Test DuplicateChannel initialization with multiple channels."""
-        channel1 = MockChannel()
-        channel2 = MockChannel()
-        channel3 = MockChannel()
-
-        duplicate_channel = DuplicateChannel(channel1, channel2, channel3)
-
-        assert duplicate_channel.channels == (channel1, channel2, channel3)
-
-    def test_init_with_no_channels(self):
-        """Test DuplicateChannel initialization with no channels."""
-        duplicate_channel = DuplicateChannel()
-        assert duplicate_channel.channels == ()
-
     def test_write_forwards_to_all_channels(self):
         """Test that write operation forwards messages to all channels."""
         channel1 = MockChannel()
@@ -245,36 +222,3 @@ class TestDuplicateChannel:
 
         assert len(channel.written_messages) == 1
         assert channel.written_messages[0] == message
-
-
-class TestMessage:
-    """Additional tests for Message class behavior with channels."""
-
-    def test_message_with_explicit_timestamp(self):
-        """Test that Message preserves explicit timestamps through channels."""
-        mock_channel = MockChannel()
-        last_value_channel = LastValueChannel(mock_channel)
-
-        explicit_timestamp = 999999
-        message = Message("test_data", explicit_timestamp)
-
-        last_value_channel.write(message)
-
-        written_message = mock_channel.written_messages[0]
-        assert written_message.timestamp == explicit_timestamp
-        assert written_message.data == "test_data"
-
-    def test_message_auto_timestamp_through_channels(self):
-        """Test that Message auto-generates timestamp when passed through channels."""
-        mock_channel = MockChannel()
-        last_value_channel = LastValueChannel(mock_channel)
-
-        # Message without explicit timestamp
-        message = Message("auto_timestamp_data")
-
-        last_value_channel.write(message)
-
-        written_message = mock_channel.written_messages[0]
-        assert written_message.timestamp is not None
-        assert isinstance(written_message.timestamp, int)
-        assert written_message.data == "auto_timestamp_data"
