@@ -411,3 +411,38 @@ def test_instantiate_override_with_path_to_module_works():
         return True
 
     assert return_true.override(obj="@http.HTTPStatus.OK").instantiate()
+
+
+def test_override_with_single_colon_relative_path():
+    camera_cfg = ir.Config(Camera, name="OpenCV")
+    env_cfg = ir.Config(Env, camera=camera_cfg)
+
+    env_obj = env_cfg.override(camera=":static_object").instantiate()
+
+    assert env_obj.camera is static_object
+
+
+def test_override_with_multiple_colons_relative_path():
+    from ironic.tests.support_package.subpkg.a import A
+    from ironic.tests.support_package.b import B
+
+    env_cfg = ir.Config(Env, camera=ir.Config(A))
+
+    env_obj = env_cfg.override(camera=":::b.B").instantiate()
+
+    assert env_obj.camera is B
+
+
+def test_override_with_colon_and_string_default():
+    env_cfg = ir.Config(Env, camera="@ironic.tests.test_config.Camera")
+
+    env_obj = env_cfg.override(camera=":static_object").instantiate()
+
+    assert env_obj.camera is static_object
+
+
+def test_override_with_colon_without_default_raises():
+    env_cfg = ir.Config(Env, camera=None)
+
+    with pytest.raises(ValueError):
+        env_cfg.override(camera=":static_object")

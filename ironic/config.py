@@ -71,9 +71,57 @@ def _import_object_from_path(path: str) -> Any:
     return obj
 
 
-def _resolve_value(value: Any) -> Any:
-    if isinstance(value, str) and value.startswith(INSTANTIATE_PREFIX):
-        return _import_object_from_path(value)
+def _resolve_value(value: Any, default: Any | None = None) -> Any:
+    """Resolve special strings to actual Python objects.
+
+    Supports two prefixes:
+
+    - ``@`` - absolute import path of the object to instantiate
+    - ``:`` - path relative to the current default value
+
+    The ``default`` argument is used when ``value`` starts with ``:``.
+    It should either be a :class:`Config` object, a string starting with
+    ``@`` or any object that has ``__module__`` and ``__name__``
+    attributes.  ``:`` can be repeated multiple times to walk up the
+    module hierarchy of the default.
+    """
+
+    if isinstance(value, str):
+        if value.startswith(INSTANTIATE_PREFIX):
+            return _import_object_from_path(value)
+        if value.startswith(":"):
+            if default is None:
+                raise ValueError("Relative import used with no default value")
+
+            if isinstance(default, Config):
+                base_path = f"{default.target.__module__}.{default.target.__name__}"
+            elif isinstance(default, str):
+                base_path = default.lstrip(INSTANTIATE_PREFIX)
+            elif hasattr(default, "__module__") and hasattr(default, "__name__"):
+                base_path = f"{default.__module__}.{default.__name__}"
+            else:
+                raise ValueError(
+                    "Default value must be Config, import string or an object with __module__ and __name__"
+                )
+
+            parts = base_path.split(".")
+
+            colon_count = len(value) - len(value.lstrip(":"))
+            if colon_count > len(parts):
+                raise ValueError("Too many ':' prefixes for the default path")
+
+            base_parts = parts[: len(parts) - colon_count]
+            remainder = value[colon_count:]
+
+            if remainder.startswith("."):
+                new_path = "".join([".".join(base_parts), remainder]) if base_parts else remainder[1:]
+            elif remainder:
+                new_path = ".".join(base_parts + [remainder]) if base_parts else remainder
+            else:
+                new_path = ".".join(base_parts)
+
+            return _import_object_from_path(f"{INSTANTIATE_PREFIX}{new_path}")
+
     return value
 
 
@@ -121,7 +169,12 @@ class Config:
         return overriden_cfg
 
     def _set_value(self, key, value):
-        value = _resolve_value(value)
+        try:
+            default = self._get_value(key)
+        except Exception:
+            default = None
+
+        value = _resolve_value(value, default)
 
         if key[0].isdigit():
             self.args[int(key)] = value
