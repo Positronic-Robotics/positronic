@@ -1,10 +1,49 @@
 from collections import deque
-import yaml
 import importlib.util
+from types import SimpleNamespace
 from typing import Any, Callable, Dict, Tuple
+
+try:  # Prefer real PyYAML if available
+    import yaml  # type: ignore
+except Exception:  # pragma: no cover - fallback for environments without PyYAML
+    def _dump(data, default_flow_style=False, sort_keys=False):
+        """Minimal YAML dump for testing purposes."""
+
+        def needs_quotes(obj: str) -> bool:
+            special = any(ch in obj for ch in "@:*{}[]")
+            return special or obj != obj.strip() or obj == ""
+
+        def format_scalar(val):
+            if isinstance(val, str):
+                return f"'{val}'" if needs_quotes(val) else val
+            return str(val)
+
+        def dump_obj(obj, indent=0):
+            lines = []
+            prefix = "  " * indent
+            if isinstance(obj, dict):
+                for k, v in obj.items():
+                    key = f"'{k}'" if needs_quotes(k) else k
+                    if isinstance(v, dict):
+                        lines.append(f"{prefix}{key}:")
+                        lines.extend(dump_obj(v, indent + 1))
+                    elif isinstance(v, list):
+                        lines.append(f"{prefix}{key}:")
+                        for item in v:
+                            lines.append(f"{'  '*indent}- {format_scalar(item)}")
+                    else:
+                        lines.append(f"{prefix}{key}: {format_scalar(v)}")
+            else:
+                lines.append(prefix + format_scalar(obj))
+            return lines
+
+        return "\n".join(dump_obj(data)) + "\n"
+
+    yaml = SimpleNamespace(dump=_dump)
 
 
 INSTANTIATE_PREFIX = '@'
+RELATIVE_PREFIX = ':'
 
 
 class ConfigError(Exception):
@@ -71,9 +110,63 @@ def _import_object_from_path(path: str) -> Any:
     return obj
 
 
-def _resolve_value(value: Any) -> Any:
-    if isinstance(value, str) and value.startswith(INSTANTIATE_PREFIX):
-        return _import_object_from_path(value)
+def _resolve_value(value: Any, default: Any | None = None) -> Any:
+    """Resolve special strings to actual Python objects.
+
+    Supports two prefixes:
+
+    - ``@`` - absolute import path of the object to instantiate
+    - ``:`` - path relative to the current default value
+
+    The ``default`` argument is used when ``value`` starts with ``:``.
+    It should either be a :class:`Config` object, a string starting with
+    ``@`` or any object that has ``__module__`` and ``__name__``
+    attributes.  ``:`` can be repeated multiple times to walk up the
+    module hierarchy of the default.
+    """
+
+    if isinstance(value, str):
+        if value.startswith(INSTANTIATE_PREFIX):
+            return _import_object_from_path(value)
+        if value.startswith(RELATIVE_PREFIX):
+            if default is None:
+                raise ValueError("Relative import used with no default value")
+
+            if isinstance(default, Config):
+                base_path = f"{default.target.__module__}.{default.target.__name__}"
+            elif isinstance(default, str):
+                base_path = default.lstrip(INSTANTIATE_PREFIX)
+            elif hasattr(default, "__module__") and hasattr(default, "__name__"):
+                base_path = f"{default.__module__}.{default.__name__}"
+            else:
+                raise ValueError(
+                    "Default value must be Config, import string or an object with __module__ and __name__"
+                )
+
+            parts = base_path.split(".")
+
+            # Number of ':' characters tells how many levels to go up
+            colon_count = len(value) - len(value.lstrip(RELATIVE_PREFIX))
+            if colon_count > len(parts):
+                raise ValueError("Too many ':' prefixes for the default path")
+
+            base_parts = parts[: len(parts) - colon_count]
+            remainder = value[colon_count:]
+
+            # When ``value`` is simply ``:`` or ``::``, the remainder will be
+            # empty and we return the parent object directly.  If ``remainder``
+            # starts with a dot, it's a relative module path (``:.sub``).  Any
+            # other value appends a new module/component name to the resolved
+            # parent path.
+            if remainder.startswith("."):
+                new_path = "".join([".".join(base_parts), remainder]) if base_parts else remainder[1:]
+            elif remainder:
+                new_path = ".".join(base_parts + [remainder]) if base_parts else remainder
+            else:
+                new_path = ".".join(base_parts)
+
+            return _import_object_from_path(f"{INSTANTIATE_PREFIX}{new_path}")
+
     return value
 
 
@@ -121,7 +214,12 @@ class Config:
         return overriden_cfg
 
     def _set_value(self, key, value):
-        value = _resolve_value(value)
+        try:
+            default = self._get_value(key)
+        except Exception:
+            default = None
+
+        value = _resolve_value(value, default)
 
         if key[0].isdigit():
             self.args[int(key)] = value
