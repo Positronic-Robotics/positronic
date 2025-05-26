@@ -36,28 +36,18 @@ def opencv_camera(camera_id: int = 0, resolution: Tuple[int, int] = (640, 480), 
 
 
 if __name__ == "__main__":
-    import multiprocessing as mp
     import sys
     import time
-
     import av
 
-    codec = 'libx264'
-    fps = 30
-    filename = sys.argv[1]
+    def main_loop(stopped, frames):
+        codec, fps, filename = 'libx264', 30, sys.argv[1]
 
-    container = av.open(filename, mode='w', format='mp4')
-    stream = container.add_stream(codec, rate=fps)
-    stream.pix_fmt = 'yuv420p'
-    stream.options = {'crf': '27', 'g': '2', 'preset': 'ultrafast', 'tune': 'zerolatency'}
-
-    stopped = mp.Event()
-    frames = ir.mp.QueueChannel()
-    opencv_process = mp.Process(target=opencv_camera(0, (640, 480), fps=30), args=(stopped, frames))
-    opencv_process.start()
-
-    try:
-        while True:
+        container = av.open(filename, mode='w', format='mp4')
+        stream = container.add_stream(codec, rate=fps)
+        stream.pix_fmt = 'yuv420p'
+        stream.options = {'crf': '27', 'g': '2', 'preset': 'ultrafast', 'tune': 'zerolatency'}
+        while not stopped.is_set():
             message = frames.read()
             if message is ir.NoValue:
                 time.sleep(0.03)
@@ -70,6 +60,9 @@ if __name__ == "__main__":
             frame = av.VideoFrame.from_ndarray(message.data['frame'], format='rgb24')
             packet = stream.encode(frame)
             container.mux(packet)
-    except KeyboardInterrupt:
-        stopped.set()
-        opencv_process.join(timeout=10)
+        container.close()
+
+    frames = ir.mp.QueueChannel()
+    world = ir.mp.MPWorld()
+    world.add_background_loop(opencv_camera(0, (640, 480), fps=30), frames)
+    world.run(main_loop, frames)
