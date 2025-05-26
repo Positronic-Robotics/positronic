@@ -71,6 +71,55 @@ def _import_object_from_path(path: str) -> Any:
     return obj
 
 
+def _get_base_path_from_default(default: Any) -> str:
+    """Extract base path from different types of default values."""
+    if isinstance(default, Config):
+        return f"{default.target.__module__}.{default.target.__name__}"
+    elif isinstance(default, str):
+        return default.lstrip(INSTANTIATE_PREFIX)
+    elif hasattr(default, "__module__") and hasattr(default, "__name__"):
+        return f"{default.__module__}.{default.__name__}"
+    else:
+        raise ValueError(
+            "Default value must be Config, import string or an object with __module__ and __name__"
+        )
+
+
+def _construct_relative_path(value: str, base_path: str) -> str:
+    """Construct a new path from a relative import value and base path."""
+    parts = base_path.split(".")
+
+    colon_count = len(value) - len(value.lstrip(":"))
+    if colon_count > len(parts):
+        raise ValueError("Too many ':' prefixes for the default path")
+
+    base_parts = parts[: len(parts) - colon_count]
+    remainder = value[colon_count:]
+
+    # Handle different remainder formats:
+    # - If remainder starts with ".", it's a relative module path (e.g., ".submodule")
+    # - If remainder exists but doesn't start with ".", it's a direct module/object name
+    # - If remainder is empty, we use just the base parts
+    if remainder.startswith("."):
+        new_path = "".join([".".join(base_parts), remainder]) if base_parts else remainder[1:]
+    elif remainder:
+        new_path = ".".join(base_parts + [remainder]) if base_parts else remainder
+    else:
+        new_path = ".".join(base_parts)
+
+    return new_path
+
+
+def _resolve_relative_import(value: str, default: Any) -> Any:
+    """Resolve a relative import path (starting with ':')."""
+    if default is None:
+        raise ValueError("Relative import used with no default value")
+
+    base_path = _get_base_path_from_default(default)
+    new_path = _construct_relative_path(value, base_path)
+    return _import_object_from_path(f"{INSTANTIATE_PREFIX}{new_path}")
+
+
 def _resolve_value(value: Any, default: Any | None = None) -> Any:
     """Resolve special strings to actual Python objects.
 
@@ -85,42 +134,11 @@ def _resolve_value(value: Any, default: Any | None = None) -> Any:
     attributes.  ``:`` can be repeated multiple times to walk up the
     module hierarchy of the default.
     """
-
     if isinstance(value, str):
         if value.startswith(INSTANTIATE_PREFIX):
             return _import_object_from_path(value)
         if value.startswith(":"):
-            if default is None:
-                raise ValueError("Relative import used with no default value")
-
-            if isinstance(default, Config):
-                base_path = f"{default.target.__module__}.{default.target.__name__}"
-            elif isinstance(default, str):
-                base_path = default.lstrip(INSTANTIATE_PREFIX)
-            elif hasattr(default, "__module__") and hasattr(default, "__name__"):
-                base_path = f"{default.__module__}.{default.__name__}"
-            else:
-                raise ValueError(
-                    "Default value must be Config, import string or an object with __module__ and __name__"
-                )
-
-            parts = base_path.split(".")
-
-            colon_count = len(value) - len(value.lstrip(":"))
-            if colon_count > len(parts):
-                raise ValueError("Too many ':' prefixes for the default path")
-
-            base_parts = parts[: len(parts) - colon_count]
-            remainder = value[colon_count:]
-
-            if remainder.startswith("."):
-                new_path = "".join([".".join(base_parts), remainder]) if base_parts else remainder[1:]
-            elif remainder:
-                new_path = ".".join(base_parts + [remainder]) if base_parts else remainder
-            else:
-                new_path = ".".join(base_parts)
-
-            return _import_object_from_path(f"{INSTANTIATE_PREFIX}{new_path}")
+            return _resolve_relative_import(value, default)
 
     return value
 
