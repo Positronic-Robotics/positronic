@@ -1,4 +1,5 @@
 from collections import deque
+import posixpath
 import yaml
 import importlib.util
 from typing import Any, Callable, Dict, Tuple
@@ -79,35 +80,20 @@ def _get_base_path_from_default(default: Any) -> str:
         return default.lstrip(INSTANTIATE_PREFIX)
     elif hasattr(default, "__module__") and hasattr(default, "__name__"):
         return f"{default.__module__}.{default.__name__}"
+    elif hasattr(default, "__class__") and hasattr(default, "name"):  # Handle Enum values
+        return f"{default.__class__.__module__}.{default.__class__.__name__}.{default.name}"
     else:
         raise ValueError(
-            "Default value must be Config, import string or an object with __module__ and __name__"
+            "Default value must be Config, import string, an object with __module__ and __name__, or an Enum value"
         )
 
 
-def _construct_relative_path(value: str, base_path: str) -> str:
-    """Construct a new path from a relative import value and base path."""
-    parts = base_path.split(".")
-
-    colon_count = len(value) - len(value.lstrip(":"))
-    if colon_count > len(parts):
-        raise ValueError("Too many ':' prefixes for the default path")
-
-    base_parts = parts[: len(parts) - colon_count]
-    remainder = value[colon_count:]
-
-    # Handle different remainder formats:
-    # - If remainder starts with ".", it's a relative module path (e.g., ".submodule")
-    # - If remainder exists but doesn't start with ".", it's a direct module/object name
-    # - If remainder is empty, we use just the base parts
-    if remainder.startswith("."):
-        new_path = "".join([".".join(base_parts), remainder]) if base_parts else remainder[1:]
-    elif remainder:
-        new_path = ".".join(base_parts + [remainder]) if base_parts else remainder
-    else:
-        new_path = ".".join(base_parts)
-
-    return new_path
+def _construct_relative_path(value: str, base_path: str):
+    path = base_path + value
+    unix_like_path = path.replace('.', '/').replace(':', '/../')
+    unix_like_norm_path = posixpath.normpath(unix_like_path)
+    module_path = unix_like_norm_path.replace('/', '.')
+    return module_path
 
 
 def _resolve_relative_import(value: str, default: Any) -> Any:
@@ -187,11 +173,7 @@ class Config:
         return overriden_cfg
 
     def _set_value(self, key, value):
-        try:
-            default = self._get_value(key)
-        except Exception:
-            default = None
-
+        default = self._get_value(key, None)
         value = _resolve_value(value, default)
 
         if key[0].isdigit():
@@ -199,11 +181,15 @@ class Config:
         else:
             self.kwargs[key] = value
 
-    def _get_value(self, key):
+    def _get_value(self, key, default=None):
         if key[0].isdigit():
-            return self.args[int(key)]
+            index = int(key)
+            if index < len(self.args):
+                return self.args[index]
+            else:
+                return default
         else:
-            return self.kwargs[key]
+            return self.kwargs.get(key, default)
 
     def instantiate(self) -> Any:
         """

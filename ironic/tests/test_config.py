@@ -446,3 +446,40 @@ def test_override_with_colon_without_default_raises():
 
     with pytest.raises(ValueError):
         env_cfg.override(camera=":static_object")
+
+
+def test_relative_import_with_enum_default():
+    """Test that relative imports work when the default is an Enum value."""
+    import http
+
+    def process_enum(enum_val):
+        return enum_val.value
+
+    # Set up a config with an enum default
+    cfg = ir.Config(process_enum, enum_val=http.HTTPStatus.OK)
+
+    # Override with a relative import (this should work after the fix)
+    result_cfg = cfg.override(enum_val=":NOT_FOUND")
+    result = result_cfg.instantiate()
+
+    assert result == 404
+
+
+def test_relative_import_with_nested_enum_default():
+    """Test that relative imports work when the default is a nested Enum value.
+
+    Example: geom.Rotation.Representation.ROTVEC
+    """
+    import http
+
+    def process_nested_enum(enum_val):
+        return enum_val.name
+
+    # Set up a config with a nested enum default (HTTPStatus is nested in http module)
+    cfg = ir.Config(process_nested_enum, enum_val=http.HTTPStatus.OK)
+
+    # Override with a relative import (this should work after the fix)
+    result_cfg = cfg.override(enum_val=":BAD_REQUEST")
+    result = result_cfg.instantiate()
+
+    assert result == "BAD_REQUEST"
