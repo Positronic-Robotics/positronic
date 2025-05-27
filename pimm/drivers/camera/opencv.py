@@ -28,7 +28,7 @@ def _opencv_internal(camera_id: int, resolution: Tuple[int, int], fps: int, stop
 
         fps_counter.tick()
         # Use system time for timestamp since OpenCV doesn't provide frame timestamps
-        frames.write(ir.Message(data={'frame': frame}, timestamp=system_clock()))
+        frames.write(ir.Message(data={'frame': frame}, ts=system_clock()))
 
 
 def opencv_camera(camera_id: int = 0, resolution: Tuple[int, int] = (640, 480), fps: int = 30):
@@ -47,12 +47,14 @@ if __name__ == "__main__":
         stream = container.add_stream(codec, rate=fps)
         stream.pix_fmt = 'yuv420p'
         stream.options = {'crf': '27', 'g': '2', 'preset': 'ultrafast', 'tune': 'zerolatency'}
+        last_ts = None
         while not stopped.is_set():
-            message = frames.read()
-            if message is ir.NoValue:
+            message = frames.value()
+            if message is ir.NoValue or last_ts == message.ts:
                 time.sleep(0.03)
                 continue
 
+            last_ts = message.ts
             if stream.width is None:  # First frame
                 stream.width = message.data['frame'].shape[1]
                 stream.height = message.data['frame'].shape[0]

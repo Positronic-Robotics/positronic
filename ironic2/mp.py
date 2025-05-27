@@ -1,38 +1,42 @@
 """Implementation of multiprocessing channels."""
 
 import multiprocessing as mp
+from queue import Empty, Full
 import signal
 import sys
 from multiprocessing import Queue
 from typing import Callable, List
 
-from ironic2.channel import Channel, LastValueChannel, Message, NoValue
+from ironic2.channel import Channel, Message, NoValue
 
 
 class QueueChannel(Channel):
-    """Channel implementation using multiprocessing Queue."""
+    """Multiprocessing lossy Queue."""
 
     def __init__(self, max_size: int = 1):
         """Initialize queue channel with maximum size."""
         super().__init__()
-        self.queue = Queue(max_size)
+        self._queue = Queue(max_size)
+        self._last_value = NoValue
 
-    def write(self, message: Message):
+    def write(self, message: Message) -> bool:
         """Write message to queue. Drops oldest message if queue is full."""
-        if self.queue.full():
-            self.queue.get()
-        self.queue.put(message)
+        if self._queue.full():
+            self._queue.get_nowait()
+        try:
+            self._queue.put_nowait(message)
+        except Full:
+            return False
+        return True
 
-    def read(self):
+    def value(self):
+        # NOTE: Should we just make it __call__???
         """Read message from queue. Returns NoValue if queue is empty."""
-        if self.queue.empty():
-            return NoValue
-        return self.queue.get()
-
-
-def last_value_queue_channel(max_size: int = 1):
-    """Create a LastValueChannel wrapping a QueueChannel."""
-    return LastValueChannel(QueueChannel(max_size))
+        try:
+            self._last_value = self._queue.get_nowait()
+        except Empty:
+            pass
+        return self._last_value
 
 
 def _background_process_wrapper(control_loop: Callable, stopped: mp.Event, *channels):
@@ -73,11 +77,9 @@ class MPWorld:
         Returns:
             mp.Process: The created process object (not yet started)
         """
-        process = mp.Process(
-            target=_background_process_wrapper,
-            args=(control_loop, self.stopped, *channels),
-            daemon=True
-        )
+        process = mp.Process(target=_background_process_wrapper,
+                             args=(control_loop, self.stopped, *channels),
+                             daemon=True)
         self.background_loops.append(process)
         return process
 
@@ -93,6 +95,7 @@ class MPWorld:
             main_loop: A callable that takes (stopped_event, *channels) as arguments
             *channels: Variable number of Channel objects to pass to the main loop
         """
+
         # Set up signal handler for graceful shutdown
         def signal_handler(signum, frame):
             print("\nProgram interrupted by user, stopping...")

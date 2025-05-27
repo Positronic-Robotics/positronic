@@ -1,7 +1,7 @@
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 import time
-from typing import Any, Union
+from typing import Any
 
 
 def system_clock() -> int:
@@ -11,7 +11,7 @@ def system_clock() -> int:
 
 # Object that represents no value
 # It is used to make a distinction between a value that is not set and a value that is set to None
-class NoValue:
+class NoValueType:
 
     def __str__(self):
         return "ironic.NoValue"
@@ -20,7 +20,7 @@ class NoValue:
         return str(self)
 
 
-NoValue = NoValue()
+NoValue = NoValueType()
 
 
 @dataclass
@@ -33,11 +33,11 @@ class Message:
     If no timestamp is provided, the current system time is used.
     """
     data: Any
-    timestamp: int = None
+    ts: int = None
 
     def __post_init__(self):
-        if self.timestamp is None:
-            self.timestamp = system_clock()
+        if self.ts is None:
+            self.ts = system_clock()
 
 
 class Channel(ABC):
@@ -47,51 +47,25 @@ class Channel(ABC):
     Implementations can drop values, transform them, do anything they want. It's up to the one who construct the whole
     system to decide which particular implementations to use.
 
-    Please note that write and read may be read from different processes.
+    Please note that write and read may be called from different processes.
     """
 
     @abstractmethod
-    def write(self, message: Message):
-        """Write new value into channel. Implementations must be non-blocking."""
+    def write(self, message: Message) -> bool:
+        """Write new value into channel. Implementations must be non-blocking.
+
+        Returns False if the value was not written. Lossy implementations may return True even in this case.
+        """
         pass
 
     @abstractmethod
-    def read(self) -> Union[Message, NoValue]:
-        """Must return NoValue when there is nothing to read."""
+    def value(self) -> Message | NoValueType:
+        """The current value in the channel. Returns NoValue only if nothing was written yet.
+
+        Does not have to be the same as the last value written.
+        """
+        # There are two use cases, either I want to read just the last value, or I want to read "next" value.
         pass
 
 
-# TODO: define EventLike type
-
-
-class LastValueChannel(Channel):
-    """Wrapper around Channel that keeps last value."""
-
-    def __init__(self, base_channel):
-        super().__init__()
-        self.base = base_channel
-        self.last_value = NoValue
-
-    def write(self, message):
-        return self.base.write(message)
-
-    def read(self):
-        value = self.base.read()
-        if value is not NoValue:
-            self.last_value = value
-        return self.last_value
-
-
-class DuplicateChannel(Channel):
-    """The channel that forwards data into multiple channels."""
-
-    def __init__(self, *channels):
-        super().__init__()
-        self.channels = channels
-
-    def write(self, message):
-        for c in self.channels:
-            c.write(message)
-
-    def read(self):
-        raise ValueError('Duplicate Channel is write only')
+# TODO: Should we define EventLike type?
