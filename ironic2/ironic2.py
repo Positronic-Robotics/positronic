@@ -59,6 +59,13 @@ def signal_is_true(signal: SignalReader) -> bool:
     return value is not NoValue and value.data is True
 
 
+def signal_value(signal: SignalReader, default: Any) -> Any:
+    value = signal.value()
+    if value is NoValue:
+        return default
+    return value.data
+
+
 class CommunicationProvider(ABC):
     @abstractmethod
     def emitter(self, name: str, **kwargs: Dict[str, Any]) -> SignalEmitter:
