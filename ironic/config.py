@@ -173,7 +173,7 @@ class Config:
         return overriden_cfg
 
     def _set_value(self, key, value):
-        default = self._get_value(key, None)
+        default = self._get_value(key) if self._has_value(key) else None
         value = _resolve_value(value, default)
 
         if key[0].isdigit():
@@ -181,15 +181,17 @@ class Config:
         else:
             self.kwargs[key] = value
 
-    def _get_value(self, key, default=None):
+    def _get_value(self, key):
         if key[0].isdigit():
-            index = int(key)
-            if index < len(self.args):
-                return self.args[index]
-            else:
-                return default
+            return self.args[int(key)]
         else:
-            return self.kwargs.get(key, default)
+            return self.kwargs.get(key)
+
+    def _has_value(self, key):
+        if key[0].isdigit():
+            return int(key) < len(self.args)
+        else:
+            return key in self.kwargs
 
     def instantiate(self) -> Any:
         """
