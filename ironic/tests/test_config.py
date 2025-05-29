@@ -411,3 +411,13 @@ def test_instantiate_override_with_path_to_module_works():
         return True
 
     assert return_true.override(obj="@http.HTTPStatus.OK").instantiate()
+
+
+def test_override_with_wrong_key_raises_error():
+    def func(a):
+        return a
+
+    cfg = ir.Config(func, a=1)
+
+    with pytest.raises(Exception):
+        cfg.override(b=1)
