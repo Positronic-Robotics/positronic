@@ -6,6 +6,7 @@ import signal
 import sys
 from multiprocessing import Queue
 from queue import Empty, Full
+import traceback
 from types import SimpleNamespace
 from typing import Callable
 
@@ -19,6 +20,7 @@ class _EventReader(SignalReader):
         self._event = event
 
     def value(self) -> Message | NoValueType:
+        print('+' if self._event.is_set() else '-', end='', flush=True)
         return Message(data=self._event.is_set(), ts=system_clock())
 
 
@@ -96,8 +98,14 @@ def _bg_wrapper(run_func: Callable, stop_event: mp.Event, name: str):
     except KeyboardInterrupt:
         # Silently handle KeyboardInterrupt in background processes
         pass
-    except Exception as e:
-        logging.error(f"Error in control system {name}:\n{e}")
+    except Exception:
+        # Print to stderr for immediate visibility
+        print(f"\n{'='*60}", file=sys.stderr)
+        print(f"ERROR in background process '{name}':", file=sys.stderr)
+        print(f"{'='*60}", file=sys.stderr)
+        print(traceback.format_exc(), file=sys.stderr)
+        print(f"{'='*60}\n", file=sys.stderr)
+        logging.error(f"Error in control system {name}:\n{traceback.format_exc()}")
         stop_event.set()
 
 
@@ -123,6 +131,7 @@ class MPWorld:
         def signal_handler(_signum, _frame):
             print("\nProgram interrupted by user, stopping...")
             self.stopped.set()
+            print("Stopping background processes...")
             for process in self.background_processes:
                 process.join(timeout=3)
             sys.exit(0)
