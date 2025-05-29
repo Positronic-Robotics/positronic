@@ -10,7 +10,7 @@ import traceback
 from types import SimpleNamespace
 from typing import Callable
 
-from ironic2.channel import (CommunicationProvider, Message, NoValue, NoValueType, SignalEmitter, SignalReader,
+from ironic2.ironic2 import (CommunicationProvider, Message, NoValue, NoValueType, SignalEmitter, SignalReader,
                              system_clock)
 
 
@@ -20,7 +20,6 @@ class _EventReader(SignalReader):
         self._event = event
 
     def value(self) -> Message | NoValueType:
-        print('+' if self._event.is_set() else '-', end='', flush=True)
         return Message(data=self._event.is_set(), ts=system_clock())
 
 

@@ -1,4 +1,4 @@
-from .channel import (Message, NoValue, CommunicationProvider, ControlSystem, SignalEmitter, SignalReader, system_clock,
+from .ironic2 import (Message, NoValue, CommunicationProvider, ControlSystem, SignalEmitter, SignalReader, system_clock,
                       signal_is_true)
 from . import mp
 
