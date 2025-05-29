@@ -1,117 +1,141 @@
 """Implementation of multiprocessing channels."""
 
+import logging
 import multiprocessing as mp
-from queue import Empty, Full
 import signal
 import sys
 from multiprocessing import Queue
-from typing import Callable, List
+from queue import Empty, Full
+from types import SimpleNamespace
+from typing import Callable
 
-from ironic2.channel import Channel, Message, NoValue
+from ironic2.channel import (CommunicationProvider, Message, NoValue, NoValueType, SignalEmitter, SignalReader,
+                             system_clock)
 
 
-class QueueChannel(Channel):
-    """Multiprocessing lossy Queue."""
+class _EventReader(SignalReader):
+
+    def __init__(self, event: mp.Event):
+        self._event = event
+
+    def value(self) -> Message | NoValueType:
+        return Message(data=self._event.is_set(), ts=system_clock())
+
+
+class _Queue:
+
+    class Emitter(SignalEmitter):
+
+        def __init__(self, queue: '_Queue'):
+            self._queue = queue
+
+        def emit(self, message: Message) -> bool:
+            if self._queue._queue.full():
+                self._queue._queue.get_nowait()
+            try:
+                self._queue._queue.put_nowait(message)
+                return True
+            except Full:
+                return False
+
+    class Reader(SignalReader):
+
+        def __init__(self, queue: '_Queue'):
+            self._queue = queue
+            self._last_value = NoValue
+
+        def value(self) -> Message | NoValueType:
+            try:
+                self._last_value = self._queue._queue.get_nowait()
+            except Empty:
+                pass
+            return self._last_value
 
     def __init__(self, max_size: int = 1):
-        """Initialize queue channel with maximum size."""
-        super().__init__()
         self._queue = Queue(max_size)
-        self._last_value = NoValue
 
-    def write(self, message: Message) -> bool:
-        """Write message to queue. Drops oldest message if queue is full."""
-        if self._queue.full():
-            self._queue.get_nowait()
-        try:
-            self._queue.put_nowait(message)
-        except Full:
-            return False
-        return True
+    def new_emitter(self) -> Emitter:
+        return _Queue.Emitter(self)
 
-    def value(self):
-        # NOTE: Should we just make it __call__???
-        """Read message from queue. Returns NoValue if queue is empty."""
-        try:
-            self._last_value = self._queue.get_nowait()
-        except Empty:
-            pass
-        return self._last_value
+    def new_reader(self) -> Reader:
+        return _Queue.Reader(self)
 
 
-def _background_process_wrapper(control_loop: Callable, stopped: mp.Event, *channels):
-    """Module-level wrapper function that can be pickled for multiprocessing."""
+class _Provider(CommunicationProvider):
+
+    def __init__(self, stop_event: mp.Event):
+        self.interface = SimpleNamespace()
+        self.stop_event = stop_event
+
+    def emitter(self, name: str, **kwargs) -> SignalEmitter:
+        if kwargs:
+            logging.warning(f"Ignoring kwargs for {name}: {kwargs}")
+
+        q = _Queue()
+        setattr(self.interface, name, q.new_reader())
+        return q.new_emitter()
+
+    def reader(self, name: str, **kwargs) -> SignalReader:
+        if kwargs:
+            logging.warning(f"Ignoring kwargs for {name}: {kwargs}")
+
+        q = _Queue()
+        setattr(self.interface, name, q.new_reader())
+        return q.new_reader()
+
+    def should_stop(self) -> SignalReader:
+        return _EventReader(self.stop_event)
+
+    def interface(self) -> SimpleNamespace:
+        return self.interface
+
+
+def _bg_wrapper(run_func: Callable, stop_event: mp.Event, name: str):
     try:
-        control_loop(stopped, *channels)
+        run_func()
     except KeyboardInterrupt:
         # Silently handle KeyboardInterrupt in background processes
         pass
     except Exception as e:
-        print(f"Error in control loop: {e}")
-        stopped.set()
+        logging.error(f"Error in control system {name}:\n{e}")
+        stop_event.set()
 
 
 class MPWorld:
-    """
-    A multiprocessing "World" that manages background processes and provides graceful shutdown.
-
-    This class allows you to run multiple background loops in separate processes while
-    coordinating their execution and ensuring clean shutdown when the main process exits.
-    """
-
-    stopped: mp.Event
-    background_loops: List[mp.Process]
 
     def __init__(self):
         self.stopped = mp.Event()
-        self.background_loops = []
+        self.background_processes = []
 
-    def add_background_loop(self, control_loop: Callable, *channels: List[Channel]):
-        """
-        Add a background loop to be executed in a separate process.
+    def new_provider(self) -> _Provider:
+        return _Provider(self.stopped)
 
-        Args:
-            control_loop: A callable that takes (stopped_event, *channels) as arguments
-            *channels: Variable number of Channel objects to pass to the control loop
+    def add_background_control_system(self, control_system, *args, **kwargs) -> SimpleNamespace:
+        provider = self.new_provider()
+        cs = control_system(provider, *args, **kwargs)
 
-        Returns:
-            mp.Process: The created process object (not yet started)
-        """
-        process = mp.Process(target=_background_process_wrapper,
-                             args=(control_loop, self.stopped, *channels),
-                             daemon=True)
-        self.background_loops.append(process)
-        return process
+        self.background_processes.append(
+            mp.Process(target=_bg_wrapper, args=(cs.run, self.stopped, control_system.__name__), daemon=True))
+        return provider.interface
 
-    def run(self, main_loop, *channels: List[Channel]):
-        """
-        Start all background processes and run the main loop.
+    def run(self, main_loop):
 
-        This method sets up signal handlers for graceful shutdown, starts all
-        background processes, and then runs the main loop. It ensures proper
-        cleanup of all processes when the main loop exits or is interrupted.
-
-        Args:
-            main_loop: A callable that takes (stopped_event, *channels) as arguments
-            *channels: Variable number of Channel objects to pass to the main loop
-        """
-
-        # Set up signal handler for graceful shutdown
-        def signal_handler(signum, frame):
+        def signal_handler(_signum, _frame):
             print("\nProgram interrupted by user, stopping...")
             self.stopped.set()
+            for process in self.background_processes:
+                process.join(timeout=3)
             sys.exit(0)
 
         signal.signal(signal.SIGINT, signal_handler)
 
-        for process in self.background_loops:
+        for process in self.background_processes:
             process.start()
-
         try:
-            main_loop(self.stopped, *channels)
+            main_loop(_EventReader(self.stopped))
         except KeyboardInterrupt:
             print("\nProgram interrupted by user, stopping...")
         finally:
             self.stopped.set()
-            for process in self.background_loops:
+            for process in self.background_processes:
                 process.join(timeout=3)
