@@ -22,6 +22,8 @@ class NoValueType:
 
 NoValue = NoValueType()
 
+NoValueException = Exception("NoValue")
+
 
 @dataclass
 class Message:
@@ -63,10 +65,17 @@ class NoOpReader(SignalReader):
         return NoValue
 
 
-def signal_value(signal: SignalReader, default: Any) -> Any:
+def is_true(signal: SignalReader) -> bool:
     value = signal.value()
     if value is NoValue:
-        return default
+        return False
+    return value.data is True
+
+
+def signal_value(signal: SignalReader) -> Any:
+    value = signal.value()
+    if value is NoValue:
+        raise NoValueException
     return value.data
 
 

@@ -41,7 +41,7 @@ class LinuxVideo:
         device.set_fps(device.info.buffers[0], self.fps)
 
         for frame in device:
-            if ir.signal_value(should_stop, False):
+            if ir.is_true(should_stop):
                 break
 
             data = np.frombuffer(frame.data, dtype=np.uint8)

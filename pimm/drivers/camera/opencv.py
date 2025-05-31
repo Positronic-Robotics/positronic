@@ -26,7 +26,7 @@ class OpenCVCamera:
 
         fps_counter = FPSCounter('OpenCV Camera')
 
-        while not ir.signal_value(should_stop, False):
+        while not ir.is_true(should_stop):
             ret, frame = cap.read()
             if not ret:
                 raise RuntimeError("Failed to grab frame")
@@ -59,7 +59,7 @@ if __name__ == "__main__":
             stream.options = {'crf': '27', 'g': '2', 'preset': 'ultrafast', 'tune': 'zerolatency'}
 
             last_ts = None
-            while not ir.signal_value(should_stop, False):
+            while not ir.is_true(should_stop):
                 message = self.frame.value()
                 if message is ir.NoValue or last_ts == message.ts:
                     time.sleep(0.5 / self.fps)

@@ -45,16 +45,20 @@ class DHGripper:
         client.write_register(0x103, c_uint16(width).value, slave=1)
         time.sleep(0.5)
 
-        while ir.signal_value(should_stop, False):
+        while not ir.is_true(should_stop):
             # Update gripper based on shared values
-            target_grip = ir.signal_value(self.target_grip, 0)
-            width = round((1 - max(0, min(target_grip, 1))) * 1000)
-            client.write_register(0x103, c_uint16(width).value, slave=1)
-            client.write_register(0x101, c_uint16(ir.signal_value(self.force, 100)).value, slave=1)
-            client.write_register(0x104, c_uint16(ir.signal_value(self.speed, 100)).value, slave=1)
+            try:
+                target_grip = ir.signal_value(self.target_grip)
+                width = round((1 - max(0, min(target_grip, 1))) * 1000)
+                client.write_register(0x103, c_uint16(width).value, slave=1)
+                client.write_register(0x101, c_uint16(ir.signal_value(self.force)).value, slave=1)
+                client.write_register(0x104, c_uint16(ir.signal_value(self.speed)).value, slave=1)
 
-            current_grip = 1 - client.read_holding_registers(0x202, count=1, slave=1).registers[0] / 1000
-            self.grip.emit(ir.Message(current_grip))
+                current_grip = 1 - client.read_holding_registers(0x202, count=1, slave=1).registers[0] / 1000
+                self.grip.emit(ir.Message(current_grip))
+            except ir.NoValueException:
+                pass
+
             time.sleep(0.001)  # Small delay to prevent busy-waiting
 
         client.close()
@@ -79,6 +83,6 @@ if __name__ == "__main__":
         for width in (np.sin(np.linspace(0, 10 * np.pi, 60)) + 1):
             target_grip.emit(ir.Message(data=width))
             time.sleep(0.25)
-            print(f"Real grip position: {ir.signal_value(grip, 0)}")
+            print(f"Real grip position: {ir.signal_value(grip)}")
 
     world.run(main_loop)
