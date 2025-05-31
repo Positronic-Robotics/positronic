@@ -4,14 +4,11 @@ import logging
 import multiprocessing as mp
 import signal
 import sys
-from multiprocessing import Queue
 from queue import Empty, Full
 import traceback
-from types import SimpleNamespace
-from typing import Callable
+from typing import Callable, List, Tuple
 
-from ironic2.ironic2 import (CommunicationProvider, Message, NoValue, NoValueType, SignalEmitter, SignalReader,
-                             system_clock)
+from ironic2.ironic2 import (Message, NoValue, NoValueType, SignalEmitter, SignalReader, system_clock)
 
 
 class _EventReader(SignalReader):
@@ -23,77 +20,38 @@ class _EventReader(SignalReader):
         return Message(data=self._event.is_set(), ts=system_clock())
 
 
-class _Queue:
+class QueueEmitter(SignalEmitter):
 
-    class Emitter(SignalEmitter):
+    def __init__(self, queue: mp.Queue):
+        self._queue = queue
 
-        def __init__(self, queue: '_Queue'):
-            self._queue = queue
-
-        def emit(self, message: Message) -> bool:
-            if self._queue._queue.full():
-                self._queue._queue.get_nowait()
-            try:
-                self._queue._queue.put_nowait(message)
-                return True
-            except Full:
-                return False
-
-    class Reader(SignalReader):
-
-        def __init__(self, queue: '_Queue'):
-            self._queue = queue
-            self._last_value = NoValue
-
-        def value(self) -> Message | NoValueType:
-            try:
-                self._last_value = self._queue._queue.get_nowait()
-            except Empty:
-                pass
-            return self._last_value
-
-    def __init__(self, max_size: int = 1):
-        self._queue = Queue(max_size)
-
-    def new_emitter(self) -> Emitter:
-        return _Queue.Emitter(self)
-
-    def new_reader(self) -> Reader:
-        return _Queue.Reader(self)
+    def emit(self, message: Message) -> bool:
+        if self._queue.full():
+            self._queue.get_nowait()
+        try:
+            self._queue.put_nowait(message)
+            return True
+        except Full:
+            return False
 
 
-class _Provider(CommunicationProvider):
+class QueueReader(SignalReader):
 
-    def __init__(self, stop_event: mp.Event):
-        self.interface = SimpleNamespace()
-        self.stop_event = stop_event
+    def __init__(self, queue: mp.Queue):
+        self._queue = queue
+        self._last_value = NoValue
 
-    def emitter(self, name: str, **kwargs) -> SignalEmitter:
-        if kwargs:
-            logging.warning(f"Ignoring kwargs for {name}: {kwargs}")
-
-        q = _Queue()
-        setattr(self.interface, name, q.new_reader())
-        return q.new_emitter()
-
-    def reader(self, name: str, **kwargs) -> SignalReader:
-        if kwargs:
-            logging.warning(f"Ignoring kwargs for {name}: {kwargs}")
-
-        q = _Queue()
-        setattr(self.interface, name, q.new_reader())
-        return q.new_reader()
-
-    def should_stop(self) -> SignalReader:
-        return _EventReader(self.stop_event)
-
-    def interface(self) -> SimpleNamespace:
-        return self.interface
+    def value(self) -> Message | NoValueType:
+        try:
+            self._last_value = self._queue.get_nowait()
+        except Empty:
+            pass
+        return self._last_value
 
 
-def _bg_wrapper(run_func: Callable, stop_event: mp.Event, name: str):
+def _bg_wrapper(run_func: Callable, should_stop: mp.Event, name: str):
     try:
-        run_func()
+        run_func(_EventReader(should_stop))
     except KeyboardInterrupt:
         # Silently handle KeyboardInterrupt in background processes
         pass
@@ -105,31 +63,24 @@ def _bg_wrapper(run_func: Callable, stop_event: mp.Event, name: str):
         print(traceback.format_exc(), file=sys.stderr)
         print(f"{'='*60}\n", file=sys.stderr)
         logging.error(f"Error in control system {name}:\n{traceback.format_exc()}")
-        stop_event.set()
+        should_stop.set()
 
 
 class MPWorld:
 
     def __init__(self):
-        self.stopped = mp.Event()
+        self._should_stop = mp.Event()
         self.background_processes = []
 
-    def new_provider(self) -> _Provider:
-        return _Provider(self.stopped)
+    def pipe(self) -> Tuple[SignalEmitter, SignalReader]:
+        q = mp.Queue()
+        return QueueEmitter(q), QueueReader(q)
 
-    def add_background_control_system(self, control_system, *args, **kwargs) -> SimpleNamespace:
-        provider = self.new_provider()
-        cs = control_system(provider, *args, **kwargs)
-
-        self.background_processes.append(
-            mp.Process(target=_bg_wrapper, args=(cs.run, self.stopped, control_system.__name__), daemon=True))
-        return provider.interface
-
-    def run(self, main_loop):
+    def run(self, main_loop: Callable, *background_loops: List[Callable]):
 
         def signal_handler(_signum, _frame):
             print("\nProgram interrupted by user, stopping...")
-            self.stopped.set()
+            self._should_stop.set()
             print("Stopping background processes...")
             for process in self.background_processes:
                 process.join(timeout=3)
@@ -137,13 +88,16 @@ class MPWorld:
 
         signal.signal(signal.SIGINT, signal_handler)
 
-        for process in self.background_processes:
-            process.start()
+        bg_processes: List[mp.Process] = []
+        for bg_loop in background_loops:
+            p = mp.Process(target=_bg_wrapper, args=(bg_loop, self._should_stop, bg_loop.__name__), daemon=True)
+            p.start()
+            bg_processes.append(p)
         try:
-            main_loop(_EventReader(self.stopped))
+            main_loop(_EventReader(self._should_stop))
         except KeyboardInterrupt:
             print("\nProgram interrupted by user, stopping...")
         finally:
-            self.stopped.set()
-            for process in self.background_processes:
+            self._should_stop.set()
+            for process in bg_processes:
                 process.join(timeout=3)

@@ -6,19 +6,18 @@ from linuxpy.video.device import Device, PixelFormat
 import ironic2 as ir
 
 
-class LinuxVideo(ir.ControlSystem):
+class LinuxVideo:
 
-    def __init__(self, comms: ir.CommunicationProvider, device_path: str, width: int, height: int, fps: int,
-                 pixel_format: str):
+    frame: ir.SignalEmitter = ir.NoOpEmitter()
+
+    def __init__(self, device_path: str, width: int, height: int, fps: int, pixel_format: str):
         self.device_path = device_path
         self.width = width
         self.height = height
         self.fps = fps
         self.pixel_format = pixel_format
-        self.frame = comms.emitter('frame')
-        self.should_stop = comms.should_stop()
 
-    def run(self):
+    def run(self, should_stop: ir.SignalReader):
         codec_mapping = {
             PixelFormat.H264: 'h264',
             PixelFormat.HEVC: 'hevc',
@@ -42,7 +41,7 @@ class LinuxVideo(ir.ControlSystem):
         device.set_fps(device.info.buffers[0], self.fps)
 
         for frame in device:
-            if ir.signal_is_true(self.should_stop):
+            if ir.signal_value(should_stop, False):
                 break
 
             data = np.frombuffer(frame.data, dtype=np.uint8)
@@ -72,6 +71,6 @@ class LinuxVideo(ir.ControlSystem):
                     result = {'image': rgb_data}
 
             if result is not None:
-                frames.write(result)
+                self.frame.emit(ir.Message(result))
 
         device.close()

@@ -1,8 +1,7 @@
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 import time
-from types import SimpleNamespace
-from typing import Any, Dict
+from typing import Any, Callable
 
 
 def system_clock() -> int:
@@ -47,6 +46,11 @@ class SignalEmitter(ABC):
         pass
 
 
+class NoOpEmitter(SignalEmitter):
+    def emit(self, message: Message) -> bool:
+        return True
+
+
 class SignalReader(ABC):
     @abstractmethod
     def value(self) -> Message | NoValueType:
@@ -54,9 +58,9 @@ class SignalReader(ABC):
         pass
 
 
-def signal_is_true(signal: SignalReader) -> bool:
-    value = signal.value()
-    return value is not NoValue and value.data is True
+class NoOpReader(SignalReader):
+    def value(self) -> Message | NoValueType:
+        return NoValue
 
 
 def signal_value(signal: SignalReader, default: Any) -> Any:
@@ -66,28 +70,4 @@ def signal_value(signal: SignalReader, default: Any) -> Any:
     return value.data
 
 
-class CommunicationProvider(ABC):
-    @abstractmethod
-    def emitter(self, name: str, **kwargs: Dict[str, Any]) -> SignalEmitter:
-        pass
-
-    @abstractmethod
-    def reader(self, name: str, **kwargs: Dict[str, Any]) -> SignalReader:
-        pass
-
-    @abstractmethod
-    def should_stop(self) -> SignalReader:
-        pass
-
-    @abstractmethod
-    def interface(self) -> SimpleNamespace:
-        pass
-
-
-class ControlSystem(ABC):
-    def __init__(self, comms: CommunicationProvider):
-        pass
-
-    @abstractmethod
-    def run(self):
-        pass
+ControlSystem = Callable[[SignalReader], None]

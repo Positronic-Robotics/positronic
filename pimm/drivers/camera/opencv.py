@@ -6,17 +6,16 @@ import ironic2 as ir
 from ironic.utils import FPSCounter
 
 
-class OpenCVCamera(ir.ControlSystem):
+class OpenCVCamera:
 
-    def __init__(self, comms: ir.CommunicationProvider, camera_id: int, resolution: Tuple[int, int], fps: int):
+    frame: ir.SignalEmitter = ir.NoOpEmitter()
+
+    def __init__(self, camera_id: int, resolution: Tuple[int, int], fps: int):
         self.camera_id = camera_id
         self.resolution = resolution
         self.fps = fps
 
-        self.frame = comms.emitter('frame')
-        self.should_stop = comms.should_stop()
-
-    def run(self):
+    def run(self, should_stop: ir.SignalReader):
         cap = cv2.VideoCapture(self.camera_id)
         cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.resolution[0])
         cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.resolution[1])
@@ -27,7 +26,7 @@ class OpenCVCamera(ir.ControlSystem):
 
         fps_counter = FPSCounter('OpenCV Camera')
 
-        while not ir.signal_is_true(self.should_stop):
+        while not ir.signal_value(should_stop, False):
             ret, frame = cap.read()
             if not ret:
                 raise RuntimeError("Failed to grab frame")
@@ -44,31 +43,40 @@ if __name__ == "__main__":
     import time
     import av
 
+    # We could this implement as a plain function
+    class VideoWriter:
+        frame: ir.SignalReader = ir.NoOpReader()
+
+        def __init__(self, filename: str, fps: int, codec: str = 'libx264'):
+            self.filename = filename
+            self.fps = fps
+            self.codec = codec
+
+        def run(self, should_stop: ir.SignalReader):
+            container = av.open(self.filename, mode='w', format='mp4')
+            stream = container.add_stream(self.codec, rate=self.fps)
+            stream.pix_fmt = 'yuv420p'
+            stream.options = {'crf': '27', 'g': '2', 'preset': 'ultrafast', 'tune': 'zerolatency'}
+
+            last_ts = None
+            while not ir.signal_value(should_stop, False):
+                message = self.frame.value()
+                if message is ir.NoValue or last_ts == message.ts:
+                    time.sleep(0.5 / self.fps)
+                    continue
+                last_ts = message.ts
+
+                frame = av.VideoFrame.from_ndarray(message.data['frame'], format='rgb24')
+                packet = stream.encode(frame)
+                container.mux(packet)
+
+            container.close()
+
     world = ir.mp.MPWorld()
-    camera_interface = world.add_background_control_system(OpenCVCamera, 0, (640, 480), fps=30)
 
-    def main_loop(should_stop: ir.SignalReader):
-        codec, fps, filename = 'libx264', 30, sys.argv[1]
+    camera = OpenCVCamera(0, (640, 480), fps=30)
+    writer = VideoWriter(sys.argv[1], 30)
 
-        container = av.open(filename, mode='w', format='mp4')
-        stream = container.add_stream(codec, rate=fps)
-        stream.pix_fmt = 'yuv420p'
-        stream.options = {'crf': '27', 'g': '2', 'preset': 'ultrafast', 'tune': 'zerolatency'}
-        last_ts = None
-        while not ir.signal_is_true(should_stop):
-            message = camera_interface.frame.value()
-            if message is ir.NoValue or last_ts == message.ts:
-                time.sleep(0.03)
-                continue
+    camera.frame, writer.frame = world.pipe()
 
-            last_ts = message.ts
-            if stream.width is None:  # First frame
-                stream.width = message.data['frame'].shape[1]
-                stream.height = message.data['frame'].shape[0]
-
-            frame = av.VideoFrame.from_ndarray(message.data['frame'], format='rgb24')
-            packet = stream.encode(frame)
-            container.mux(packet)
-        container.close()
-
-    world.run(main_loop)
+    world.run(writer.run, camera.run)

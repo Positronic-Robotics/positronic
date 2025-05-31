@@ -6,17 +6,17 @@ import pymodbus.client as ModbusClient
 import ironic2 as ir
 
 
-class DHGripper(ir.ControlSystem):
-    def __init__(self, comms: ir.CommunicationProvider, port: str):
+class DHGripper:
+
+    grip: ir.SignalEmitter = ir.NoOpEmitter()
+    target_grip: ir.SignalReader = ir.NoOpReader()
+    force: ir.SignalReader = ir.NoOpReader()
+    speed: ir.SignalReader = ir.NoOpReader()
+
+    def __init__(self, port: str):
         self.port = port
-        self.target_grip = comms.reader('target_grip')
-        self.force = comms.reader('force')
-        self.speed = comms.reader('speed')
-        self.grip = comms.emitter('grip')
 
-        self.should_stop = comms.should_stop()
-
-    def run(self):
+    def run(self, should_stop: ir.SignalReader):
         client = ModbusClient.ModbusSerialClient(
             port=self.port,
             baudrate=115200,
@@ -45,7 +45,7 @@ class DHGripper(ir.ControlSystem):
         client.write_register(0x103, c_uint16(width).value, slave=1)
         time.sleep(0.5)
 
-        while ir.signal_is_true(self.should_stop):
+        while ir.signal_value(should_stop, False):
             # Update gripper based on shared values
             target_grip = ir.signal_value(self.target_grip, 0)
             width = round((1 - max(0, min(target_grip, 1))) * 1000)
@@ -64,15 +64,21 @@ if __name__ == "__main__":
     import numpy as np
 
     world = ir.mp.MPWorld()
-    gripper = world.add_background_control_system(DHGripper, "/dev/ttyUSB0")
+
+    gripper = DHGripper("/dev/ttyUSB0")
+
+    speed, gripper.speed = world.pipe()
+    force, gripper.force = world.pipe()
+    target_grip, gripper.target_grip = world.pipe()
+    gripper.grip, grip = world.pipe()
 
     def main_loop(should_stop: ir.SignalReader):
-        gripper.speed.emit(ir.Message(data=20))
-        gripper.force.emit(ir.Message(data=100))
+        speed.emit(ir.Message(data=20))
+        force.emit(ir.Message(data=100))
 
         for width in (np.sin(np.linspace(0, 10 * np.pi, 60)) + 1):
-            gripper.target_grip.emit(ir.Message(data=width))
+            target_grip.emit(ir.Message(data=width))
             time.sleep(0.25)
-            print(f"Real grip position: {ir.signal_value(gripper.grip, 0)}")
+            print(f"Real grip position: {ir.signal_value(grip, 0)}")
 
     world.run(main_loop)

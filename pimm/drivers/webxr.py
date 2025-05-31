@@ -19,10 +19,13 @@ def _parse_controller_data(self, data: dict):
     return controller_position, buttons
 
 
-class WebXR(ir.ControlSystem):
+class WebXR:
+
+    frame: ir.SignalReader = ir.NoOpReader()
+    controller_positions: ir.SignalEmitter = ir.NoOpEmitter()
+    buttons: ir.SignalEmitter = ir.NoOpEmitter()
 
     def __init__(self,
-                 comms: ir.CommunicationProvider,
                  port: int,
                  ssl_keyfile: str = "key.pem",
                  ssl_certfile: str = "cert.pem"):
@@ -30,11 +33,7 @@ class WebXR(ir.ControlSystem):
         self.ssl_keyfile = ssl_keyfile
         self.ssl_certfile = ssl_certfile
 
-        self.frame = comms.reader('frame')
-        self.controller_positions = comms.emitter('controller_positions')
-        self.buttons = comms.emitter('buttons')
-
-    def run(self):  # noqa: C901  Function is too complex
+    def run(self, _should_stop: ir.SignalReader):  # noqa: C901  Function is too complex
         app = FastAPI()
 
         async def get_latest_frame_b64():
