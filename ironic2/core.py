@@ -22,7 +22,8 @@ class NoValueType:
 
 NoValue = NoValueType()
 
-NoValueException = Exception("NoValue")
+class NoValueException(Exception):
+    pass
 
 
 @dataclass
@@ -58,6 +59,10 @@ class SignalReader(ABC):
     def value(self) -> Message | NoValueType:
         """Returns next message, otherwise last value. NoValue if nothing was read yet."""
         pass
+
+
+class SharedSignal(SignalReader, SignalEmitter, ABC):
+    pass
 
 
 class NoOpReader(SignalReader):
