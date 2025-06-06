@@ -6,6 +6,7 @@ import fire
 import ironic as ir1
 import ironic2 as ir
 from ironic.utils import FPSCounter
+from pimm.drivers.sound import SoundSystem
 from pimm.drivers.camera.linux_video import LinuxVideo
 from pimm.drivers.gripper.dh import DHGripper
 from pimm.drivers.webxr import WebXR
@@ -15,6 +16,7 @@ from positronic.tools.dataset_dumper import SerialDumper
 import positronic.cfg2.hardware.gripper
 import positronic.cfg2.webxr
 import positronic.cfg2.hardware.camera
+import positronic.cfg2.sound
 
 
 def _parse_buttons(buttons: ir.Message | ir.NoValueType, button_handler: ButtonHandler):
@@ -34,13 +36,18 @@ def _parse_buttons(buttons: ir.Message | ir.NoValueType, button_handler: ButtonH
 
 def main(gripper: DHGripper | None,
          webxr: WebXR,
+         sound: SoundSystem | None,
          cameras: Dict[str, LinuxVideo],
          output_dir: str = "data_collection_umi",
          fps: int = 30,
          stream_video_to_webxr: str | None = None,
          ):
+
+    # TODO: this function modifies outer objects with pipes
+
     world = ir.mp.MPWorld()
 
+    # Declare pipes
     frame_readers = {}
     for camera_name, camera in cameras.items():
         camera.frame, frame_reader = world.pipe()
@@ -60,8 +67,16 @@ def main(gripper: DHGripper | None,
     bg_loops = [webxr.run]
     bg_loops.extend([camera.run for camera in cameras.values()])
 
+    if sound is not None:
+        wav_path_emitter, sound.wav_path = world.pipe()
+    else:
+        wav_path_emitter = ir.NoOpEmitter()
+
     if gripper is not None:
         bg_loops.append(gripper.run)
+
+    if sound is not None:
+        bg_loops.append(sound.run)
 
     world.run(*bg_loops)
 
@@ -69,6 +84,7 @@ def main(gripper: DHGripper | None,
     dumper = SerialDumper(output_dir, video_fps=fps)
     button_handler = ButtonHandler()
 
+    # TODO: should we support multiple .run() with single system object?
     frame_readers = {name: ir.ValueUpdated(reader) for name, reader in frame_readers.items()}
 
     meta = {}
@@ -85,10 +101,12 @@ def main(gripper: DHGripper | None,
                     meta['episode_start'] = ir.system_clock()
                     dumper.start_episode()
                     print(f"Episode {dumper.episode_count} started")
+                    wav_path_emitter.emit(ir.Message("positronic/assets/sounds/recording-has-started.wav"))
                 else:
                     dumper.end_episode(meta)
                     meta = {}
                     print(f"Episode {dumper.episode_count} ended")
+                    wav_path_emitter.emit(ir.Message("positronic/assets/sounds/recording-has-stopped.wav"))
             # TODO: Support aborting current episode.
 
             frame_messages = {name: reader.value() for name, reader in frame_readers.items()}
@@ -136,6 +154,7 @@ main = ir1.Config(
     main,
     gripper=positronic.cfg2.hardware.gripper.dh_gripper,
     webxr=positronic.cfg2.webxr.webxr,
+    sound=positronic.cfg2.sound.sound,
     cameras=ir1.Config(
         dict,
         left=positronic.cfg2.hardware.camera.arducam_left,

@@ -19,7 +19,7 @@ class NoValueType:
     def __repr__(self):
         return str(self)
 
-
+# TODO: NoValue has different interface than Message. Should we unify them?
 NoValue = NoValueType()
 
 class NoValueException(Exception):
@@ -77,10 +77,13 @@ def is_true(signal: SignalReader) -> bool:
     return value.data is True
 
 
-def signal_value(signal: SignalReader) -> Any:
+def signal_value(signal: SignalReader, default: Any = NoValue) -> Any:
     value = signal.value()
     if value is NoValue:
-        raise NoValueException
+        if default is NoValue:
+            raise NoValueException
+        return default
+
     return value.data
 
 
