@@ -108,9 +108,9 @@ class WebXR:
                         controller_positions, buttons = _parse_controller_data(data)
                         ts = ir.system_clock()
                         if controller_positions['left'] is not None or controller_positions['right'] is not None:
-                            self.controller_positions.emit(ir.Message(controller_positions, ts))
+                            self.controller_positions.emit(controller_positions, ts)
                         if buttons['left'] is not None or buttons['right'] is not None:
-                            self.buttons.emit(ir.Message(buttons, ts))
+                            self.buttons.emit(buttons, ts)
                         fps.tick()
                     except Exception as e:
                         print(f"Error processing WebSocket message: {e}")
@@ -155,13 +155,14 @@ class WebXR:
             },
         )
         server = uvicorn.Server(config)
-        self.server_thread = threading.Thread(target=server.run, daemon=True)
-        self.server_thread.start()
-        print("WebXR server thread started")
+        server.run()
+        # self.server_thread = threading.Thread(target=server.run, daemon=True)
+        # self.server_thread.start()
+        # print("WebXR server thread started")
 
-        while not should_stop.value().data:
-            time.sleep(0.1)
+        # while not should_stop.value().data:
+        #     time.sleep(0.1)
 
-        server.should_exit = True
-        self.server_thread.join()
-        print("WebXR server thread joined")
+        # server.should_exit = True
+        # self.server_thread.join()
+        # print("WebXR server thread joined")

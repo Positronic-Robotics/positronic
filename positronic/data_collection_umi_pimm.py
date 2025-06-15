@@ -94,12 +94,12 @@ def main(gripper: DHGripper | None,  # noqa: C901  Function is too complex
                         meta['episode_start'] = ir.system_clock()
                         dumper.start_episode()
                         print(f"Episode {dumper.episode_count} started")
-                        wav_path_emitter.emit(ir.Message(start_wav_path))
+                        wav_path_emitter.emit(start_wav_path)
                     else:
                         dumper.end_episode(meta)
                         meta = {}
                         print(f"Episode {dumper.episode_count} ended")
-                        wav_path_emitter.emit(ir.Message(end_wav_path))
+                        wav_path_emitter.emit(end_wav_path)
                 # TODO: Support aborting current episode.
 
                 frame_messages = {name: reader.value() for name, reader in frame_readers.items()}
@@ -108,16 +108,16 @@ def main(gripper: DHGripper | None,  # noqa: C901  Function is too complex
                     for frame, is_updated in frame_messages.values()
                 )
 
+                target_grip = button_handler.get_value('right_trigger')
+                target_grip_emitter.emit(target_grip)
+
                 if not tracked or not any_frame_updated:
                     time.sleep(0.001)
                     continue
 
                 frame_messages = {name: frame for name, (frame, _) in frame_messages.items()}
-
                 right_controller_position = ir.signal_value(controller_positions_reader)['right']
                 left_controller_position = ir.signal_value(controller_positions_reader)['left']
-                target_grip = button_handler.get_value('right_trigger')
-                target_grip_emitter.emit(ir.Message(target_grip, ir.system_clock()))
 
                 ep_dict = {
                     'target_grip': target_grip,
@@ -140,7 +140,12 @@ def main(gripper: DHGripper | None,  # noqa: C901  Function is too complex
                 time.sleep(0.001)
                 continue
 
-    world.run(_main_loop)
+    try:
+        _main_loop(ir.world.EventReader(world._stop_event))
+    finally:
+        world.stop()
+
+    # world.run(_main_loop)
 
 
 main = ir1.Config(

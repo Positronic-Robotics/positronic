@@ -71,6 +71,6 @@ class LinuxVideo:
                     result = {'image': rgb_data}
 
             if result is not None:
-                self.frame.emit(ir.Message(result))
+                self.frame.emit(result)
 
         device.close()

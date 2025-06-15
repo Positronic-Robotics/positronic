@@ -55,7 +55,7 @@ class DHGripper:
                 client.write_register(0x104, c_uint16(ir.signal_value(self.speed)).value, slave=1)
 
                 current_grip = 1 - client.read_holding_registers(0x202, count=1, slave=1).registers[0] / 1000
-                self.grip.emit(ir.Message(current_grip))
+                self.grip.emit(current_grip)
             except ir.NoValueException:
                 pass
 
@@ -77,11 +77,11 @@ if __name__ == "__main__":
     gripper.grip, grip = world.pipe()
 
     def main_loop(should_stop: ir.SignalReader):
-        speed.emit(ir.Message(data=20))
-        force.emit(ir.Message(data=100))
+        speed.emit(20)
+        force.emit(100)
 
         for width in (np.sin(np.linspace(0, 10 * np.pi, 60)) + 1):
-            target_grip.emit(ir.Message(data=width))
+            target_grip.emit(width)
             time.sleep(0.25)
             print(f"Real grip position: {ir.signal_value(grip)}")
 

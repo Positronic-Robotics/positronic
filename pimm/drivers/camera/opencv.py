@@ -35,7 +35,7 @@ class OpenCVCamera:
 
             fps_counter.tick()
             # Use system time for timestamp since OpenCV doesn't provide frame timestamps
-            self.frame.emit(ir.Message(data={'frame': frame}, ts=ir.system_clock()))
+            self.frame.emit({'frame': frame})
 
 
 if __name__ == "__main__":
