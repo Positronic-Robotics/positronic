@@ -19,8 +19,10 @@ class NoValueType:
     def __repr__(self):
         return str(self)
 
+
 # TODO: NoValue has different interface than Message. Should we unify them?
 NoValue = NoValueType()
+
 
 class NoValueException(Exception):
     pass
@@ -44,28 +46,30 @@ class Message:
 
 
 class SignalEmitter(ABC):
+    """Write a signal value. All implementations must be non-blocking."""
+
     @abstractmethod
     def emit(self, message: Message) -> bool:
         pass
 
 
 class NoOpEmitter(SignalEmitter):
+
     def emit(self, message: Message) -> bool:
         return True
 
 
 class SignalReader(ABC):
+    """Read a signal value. All implementations must be non-blocking."""
+
     @abstractmethod
     def value(self) -> Message | NoValueType:
         """Returns next message, otherwise last value. NoValue if nothing was read yet."""
         pass
 
 
-class SharedSignal(SignalReader, SignalEmitter, ABC):
-    pass
-
-
 class NoOpReader(SignalReader):
+
     def value(self) -> Message | NoValueType:
         return NoValue
 

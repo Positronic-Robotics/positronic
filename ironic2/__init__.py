@@ -1,11 +1,23 @@
 from . import mp
-from .core import (ControlSystem, Message, NoOpEmitter, NoOpReader, NoValue,
-                      NoValueType, SignalEmitter, SignalReader, signal_value,
-                      system_clock, NoValueException, is_true, SharedSignal)
+from .core import (ControlSystem, Message, NoOpEmitter, NoOpReader, NoValue, NoValueType, SignalEmitter, SignalReader,
+                   signal_value, system_clock, NoValueException, is_true)
 from .utils import Printer, map, ValueUpdated
 
 __all__ = [
-    'Message', 'NoValue', 'ControlSystem', 'SignalEmitter', 'SignalReader', 'mp', 'system_clock', 'signal_value',
-    'NoOpEmitter', 'NoOpReader', 'NoValueType', 'NoValueException', 'is_true', 'Printer', 'map', 'ValueUpdated',
-    'SharedSignal',
+    'Message',
+    'NoValue',
+    'ControlSystem',
+    'SignalEmitter',
+    'SignalReader',
+    'mp',
+    'system_clock',
+    'signal_value',
+    'NoOpEmitter',
+    'NoOpReader',
+    'NoValueType',
+    'NoValueException',
+    'is_true',
+    'Printer',
+    'map',
+    'ValueUpdated',
 ]

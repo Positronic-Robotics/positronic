@@ -43,7 +43,8 @@ if __name__ == "__main__":
     import time
     import av
 
-    # We could this implement as a plain function
+    # We could implement this as a plain function
+    # TODO: Extract this into utilities
     class VideoWriter:
         frame: ir.SignalReader = ir.NoOpReader()
 
@@ -72,11 +73,11 @@ if __name__ == "__main__":
 
             container.close()
 
-    world = ir.mp.MPWorld()
+    world = ir.world.World()
 
     camera = OpenCVCamera(0, (640, 480), fps=30)
     writer = VideoWriter(sys.argv[1], 30)
 
     camera.frame, writer.frame = world.pipe()
-
-    world.run(writer.run, camera.run)
+    world.start(camera.run)
+    world.run(writer.run)

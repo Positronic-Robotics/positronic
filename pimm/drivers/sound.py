@@ -1,3 +1,4 @@
+from typing import Tuple
 import wave
 import pyaudio
 import numpy as np
@@ -6,8 +7,8 @@ import ironic2 as ir
 
 
 class SoundSystem:
-    level: ir.SignalReader
-    wav_path: ir.SignalReader
+    level: ir.SignalReader = ir.NoOpReader()
+    wav_path: ir.SignalReader = ir.NoOpReader()
 
     def __init__(
             self,
@@ -39,23 +40,17 @@ class SoundSystem:
         self.enable_master_volume = master_volume
         self.output_device_index = output_device_index
 
-        self.frequency = self.base_frequency
-        self.master_volume = master_volume
         self.active = True
-
         self.current_phase = 0.0
 
-        self.level = ir.NoOpReader()
-        self.wav_path = ir.NoOpReader()
-
-    def _level_to_frequency(self, level: float):
+    def _level_to_frequency(self, level: float) -> Tuple[float, float]:
         if level < self.enable_threshold:
-            self.master_volume = 0.0
+            return 0.0, self.base_frequency
         else:
-            self.master_volume = self.enable_master_volume
             level = level - self.enable_threshold
             octave = level / self.raise_octave_each
-            self.frequency = self.base_frequency * (2 ** octave)
+            frequency = self.base_frequency * (2 ** octave)
+            return self.enable_master_volume, frequency
 
     def run(self, should_stop: ir.SignalReader):
         p = pyaudio.PyAudio()
@@ -70,7 +65,6 @@ class SoundSystem:
         audio_files = {}
         file_idx = 0
 
-        # TODO: should we support multiple .run() with single system object?
         self.wav_path = ir.ValueUpdated(self.wav_path)
 
         while not ir.is_true(should_stop):
@@ -88,13 +82,10 @@ class SoundSystem:
                 continue
 
             level = ir.signal_value(self.level, 0.0)
-            self._level_to_frequency(level)
+            master_volume, frequency = self._level_to_frequency(level)
 
             # Generate tone chunk
-            if self.master_volume > 0.0:
-                next_chunk = self.sound_fn(chunk_size)
-            else:
-                next_chunk = np.zeros(chunk_size, dtype=np.float32)
+            next_chunk = self.sound_fn(chunk_size, master_volume, frequency)
 
             # Read audio files and mix them with the tone chunk
             finished_files = []
@@ -117,7 +108,7 @@ class SoundSystem:
 
             stream.write(next_chunk.tobytes())
 
-    def sound_fn(self, size: int) -> np.ndarray:
+    def sound_fn(self, size: int, master_volume: float, frequency: float) -> np.ndarray:
         """
         This function generates a sine wave at the current frequency.
 
@@ -129,17 +120,18 @@ class SoundSystem:
         Returns:
             A numpy array containing the generated wave.
         """
-        fr = self.frequency
+        if master_volume <= 0.0:
+            return np.zeros(size, dtype=np.float32)
 
         # Generate new wave starting from the current phase
         t = np.arange(size, dtype=np.float32)
-        new_phase = self.current_phase + (np.pi * 2 * fr / self.sample_rate * t)
+        new_phase = self.current_phase + (np.pi * 2 * frequency / self.sample_rate * t)
         wave = np.sin(new_phase)
 
         # Update phase for next chunk (keep it wrapped between 0 and 2π)
-        self.current_phase = (new_phase[-1] + np.pi * 2 * fr / self.sample_rate) % (2 * np.pi)
+        self.current_phase = np.mod(new_phase[-1] + np.pi * 2 * frequency / self.sample_rate, 2 * np.pi)
 
         # Apply master volume
-        wave *= self.master_volume
+        wave *= master_volume
 
         return wave

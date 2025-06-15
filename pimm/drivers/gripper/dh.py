@@ -67,7 +67,7 @@ class DHGripper:
 if __name__ == "__main__":
     import numpy as np
 
-    world = ir.mp.MPWorld()
+    world = ir.world.World()
 
     gripper = DHGripper("/dev/ttyUSB0")
 
@@ -85,4 +85,5 @@ if __name__ == "__main__":
             time.sleep(0.25)
             print(f"Real grip position: {ir.signal_value(grip)}")
 
+    world.start(gripper.run)
     world.run(main_loop)

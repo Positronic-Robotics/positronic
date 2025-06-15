@@ -1,21 +1,10 @@
-import time
-from typing import Callable, Any, Dict, Literal, Sequence, Tuple
+from typing import Callable, Any, Tuple
 
 from ironic2 import NoValueType, SignalReader, SignalEmitter, NoValue, Message
 
 
-class Printer:
-    def __init__(self, **pipes: SignalReader):
-        self.pipes = pipes
+class MapSignalReader(SignalReader):
 
-    def run(self, should_stop: SignalReader, sleep_time: float = 0.01):
-        while not should_stop.value().data:
-            for pipe_name, pipe in self.pipes.items():
-                print(f"{pipe_name}: {pipe.value()}")
-            time.sleep(sleep_time)
-
-
-class LambdaSignalReader(SignalReader):
     def __init__(self, reader: SignalReader, func: Callable[[Any], Any]):
         self.reader = reader
         self.func = func
@@ -27,7 +16,8 @@ class LambdaSignalReader(SignalReader):
         return Message(self.func(orig_message.data), orig_message.ts)
 
 
-class LambdaSignalEmitter(SignalEmitter):
+class MapSignalEmitter(SignalEmitter):
+
     def __init__(self, emitter: SignalEmitter, func: Callable[[Any], Any]):
         self.emitter = emitter
         self.func = func
@@ -38,14 +28,15 @@ class LambdaSignalEmitter(SignalEmitter):
 
 def map(reader: SignalReader | SignalEmitter, func: Callable[[Any], Any]) -> SignalReader | SignalEmitter:
     if isinstance(reader, SignalReader):
-        return LambdaSignalReader(reader, func)
+        return MapSignalReader(reader, func)
     elif isinstance(reader, SignalEmitter):
-        return LambdaSignalEmitter(reader, func)
+        return MapSignalEmitter(reader, func)
     else:
         raise ValueError(f"Invalid reader type: {type(reader)}")
 
 
 class ValueUpdated(SignalReader):
+
     def __init__(self, reader: SignalReader):
         self.reader = reader
         self.last_ts = 0
@@ -54,7 +45,7 @@ class ValueUpdated(SignalReader):
         orig_message = self.reader.value()
 
         if orig_message is NoValue:
-            return NoValue, False  # TODO: should we return False or True?
+            return NoValue, False
 
         is_updated = orig_message.ts != self.last_ts
         self.last_ts = orig_message.ts

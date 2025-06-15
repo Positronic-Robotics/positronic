@@ -34,7 +34,7 @@ def _parse_buttons(buttons: ir.Message | ir.NoValueType, button_handler: ButtonH
         button_handler.update_buttons(mapping)
 
 
-def main(gripper: DHGripper | None,
+def main(gripper: DHGripper | None,  # noqa: C901  Function is too complex
          webxr: WebXR,
          sound: SoundSystem | None,
          cameras: Dict[str, LinuxVideo],
@@ -45,13 +45,13 @@ def main(gripper: DHGripper | None,
 
     # TODO: this function modifies outer objects with pipes
 
-    world = ir.mp.MPWorld()
+    world = ir.world.World()
 
     # Declare pipes
     frame_readers = {}
     for camera_name, camera in cameras.items():
         camera.frame, frame_reader = world.pipe()
-        frame_readers[camera_name] = frame_reader
+        frame_readers[camera_name] = ir.ValueUpdated(frame_reader)
 
     webxr.controller_positions, controller_positions_reader = world.pipe()
     webxr.buttons, buttons_reader = world.pipe()
@@ -59,95 +59,88 @@ def main(gripper: DHGripper | None,
         raise NotImplementedError("TODO: fix video streaming to webxr, since it's currently lagging")
         webxr.frame = ir.map(frame_readers[stream_video_to_webxr], lambda x: x['image'])
 
+    world.start(webxr.run, *[camera.run for camera in cameras.values()])
+
     if gripper is not None:
         target_grip_emitter, gripper.target_grip = world.pipe()
+        world.start(gripper.run)
     else:
         target_grip_emitter = ir.NoOpEmitter()
 
-    bg_loops = [webxr.run]
-    bg_loops.extend([camera.run for camera in cameras.values()])
-
     if sound is not None:
         wav_path_emitter, sound.wav_path = world.pipe()
+        world.start(sound.run)
     else:
         wav_path_emitter = ir.NoOpEmitter()
 
-    if gripper is not None:
-        bg_loops.append(gripper.run)
+    def _main_loop(should_stop: ir.SignalReader):
+        tracked = False
+        dumper = SerialDumper(output_dir, video_fps=fps)
+        button_handler = ButtonHandler()
 
-    if sound is not None:
-        bg_loops.append(sound.run)
+        meta = {}
+        start_wav_path = "positronic/assets/sounds/recording-has-started.wav"
+        end_wav_path = "positronic/assets/sounds/recording-has-stopped.wav"
 
-    world.run(*bg_loops)
+        fps_counter = FPSCounter("Data Collection")
 
-    tracked = False
-    dumper = SerialDumper(output_dir, video_fps=fps)
-    button_handler = ButtonHandler()
+        while not ir.is_true(should_stop):
+            try:
+                buttons = ir.signal_value(buttons_reader)
+                _parse_buttons(buttons, button_handler)
+                if button_handler.just_pressed('right_B'):
+                    tracked = not tracked
+                    if tracked:
+                        meta['episode_start'] = ir.system_clock()
+                        dumper.start_episode()
+                        print(f"Episode {dumper.episode_count} started")
+                        wav_path_emitter.emit(ir.Message(start_wav_path))
+                    else:
+                        dumper.end_episode(meta)
+                        meta = {}
+                        print(f"Episode {dumper.episode_count} ended")
+                        wav_path_emitter.emit(ir.Message(end_wav_path))
+                # TODO: Support aborting current episode.
 
-    # TODO: should we support multiple .run() with single system object?
-    frame_readers = {name: ir.ValueUpdated(reader) for name, reader in frame_readers.items()}
+                frame_messages = {name: reader.value() for name, reader in frame_readers.items()}
+                any_frame_updated = any(
+                    is_updated and frame is not ir.NoValue
+                    for frame, is_updated in frame_messages.values()
+                )
 
-    meta = {}
+                if not tracked or not any_frame_updated:
+                    time.sleep(0.001)
+                    continue
 
-    fps_counter = FPSCounter("Data Collection")
+                frame_messages = {name: frame for name, (frame, _) in frame_messages.items()}
 
-    while not world.should_stop:
-        try:
-            buttons = ir.signal_value(buttons_reader)
-            _parse_buttons(buttons, button_handler)
-            if button_handler.just_pressed('right_B'):
-                tracked = not tracked
-                if tracked:
-                    meta['episode_start'] = ir.system_clock()
-                    dumper.start_episode()
-                    print(f"Episode {dumper.episode_count} started")
-                    wav_path_emitter.emit(ir.Message("positronic/assets/sounds/recording-has-started.wav"))
-                else:
-                    dumper.end_episode(meta)
-                    meta = {}
-                    print(f"Episode {dumper.episode_count} ended")
-                    wav_path_emitter.emit(ir.Message("positronic/assets/sounds/recording-has-stopped.wav"))
-            # TODO: Support aborting current episode.
+                right_controller_position = ir.signal_value(controller_positions_reader)['right']
+                left_controller_position = ir.signal_value(controller_positions_reader)['left']
+                target_grip = button_handler.get_value('right_trigger')
+                target_grip_emitter.emit(ir.Message(target_grip, ir.system_clock()))
 
-            frame_messages = {name: reader.value() for name, reader in frame_readers.items()}
-            any_frame_updated = any(
-                is_updated and frame is not ir.NoValue
-                for frame, is_updated in frame_messages.values()
-            )
+                ep_dict = {
+                    'target_grip': target_grip,
+                    'target_robot_position_translation': right_controller_position.translation.copy(),
+                    'target_robot_position_quaternion': right_controller_position.rotation.as_quat.copy(),
+                    'umi_right_translation': right_controller_position.translation.copy(),
+                    'umi_right_quaternion': right_controller_position.rotation.as_quat.copy(),
+                    'umi_left_translation': left_controller_position.translation.copy(),
+                    'umi_left_quaternion': left_controller_position.rotation.as_quat.copy(),
+                    **{f'{name}_timestamp': frame.ts for name, frame in frame_messages.items()},
+                }
 
-            if not tracked or not any_frame_updated:
+                dumper.write(
+                    data=ep_dict,
+                    video_frames={name: frame.data['image'] for name, frame in frame_messages.items()}
+                )
+                fps_counter.tick()
+
+            except ir.NoValueException:
                 time.sleep(0.001)
                 continue
 
-            frame_messages = {name: frame for name, (frame, _) in frame_messages.items()}
-
-            right_controller_position = ir.signal_value(controller_positions_reader)['right']
-            left_controller_position = ir.signal_value(controller_positions_reader)['left']
-            target_grip = button_handler.get_value('right_trigger')
-            target_grip_emitter.emit(ir.Message(target_grip, ir.system_clock()))
-
-            ep_dict = {
-                'target_grip': target_grip,
-                'target_robot_position_translation': right_controller_position.translation.copy(),
-                'target_robot_position_quaternion': right_controller_position.rotation.as_quat.copy(),
-                'umi_right_translation': right_controller_position.translation.copy(),
-                'umi_right_quaternion': right_controller_position.rotation.as_quat.copy(),
-                'umi_left_translation': left_controller_position.translation.copy(),
-                'umi_left_quaternion': left_controller_position.rotation.as_quat.copy(),
-                **{f'{name}_timestamp': frame.ts for name, frame in frame_messages.items()},
-            }
-
-            dumper.write(
-                data=ep_dict,
-                video_frames={name: frame.data['image'] for name, frame in frame_messages.items()}
-            )
-            fps_counter.tick()
-
-        except ir.NoValueException:
-            time.sleep(0.001)
-            continue
-
-    world.stop()
+    world.run(_main_loop)
 
 
 main = ir1.Config(
