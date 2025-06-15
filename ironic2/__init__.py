@@ -1,7 +1,8 @@
 from . import mp
 from .core import (ControlSystem, Message, NoOpEmitter, NoOpReader, NoValue, NoValueType, SignalEmitter, SignalReader,
                    signal_value, system_clock, NoValueException, is_true)
-from .utils import Printer, map, ValueUpdated
+from .utils import map, ValueUpdated
+from .world import World
 
 __all__ = [
     'Message',
@@ -17,7 +18,7 @@ __all__ = [
     'NoValueType',
     'NoValueException',
     'is_true',
-    'Printer',
     'map',
     'ValueUpdated',
+    'World',
 ]

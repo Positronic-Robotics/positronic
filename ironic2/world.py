@@ -6,7 +6,7 @@ import signal
 import sys
 from queue import Empty, Full
 import traceback
-from typing import Callable, List, Tuple
+from typing import Any, Callable, List, Tuple
 
 from .core import Message, NoValue, NoValueType, SignalEmitter, SignalReader, system_clock
 
@@ -16,11 +16,11 @@ class QueueEmitter(SignalEmitter):
     def __init__(self, queue: mp.Queue):
         self._queue = queue
 
-    def emit(self, message: Message) -> bool:
+    def emit(self, data: Any, ts: int | None = None) -> bool:
         if self._queue.full():
             self._queue.get_nowait()
         try:
-            self._queue.put_nowait(message)
+            self._queue.put_nowait(Message(data, ts))
             return True
         except Full:
             return False

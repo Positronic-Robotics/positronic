@@ -49,13 +49,14 @@ class SignalEmitter(ABC):
     """Write a signal value. All implementations must be non-blocking."""
 
     @abstractmethod
-    def emit(self, message: Message) -> bool:
+    def emit(self, data: Any, ts: int | None = None) -> bool:
+        """Emit a message with the given data and timestamp. Returns True if successful."""
         pass
 
 
 class NoOpEmitter(SignalEmitter):
 
-    def emit(self, message: Message) -> bool:
+    def emit(self, data: Any, ts: int | None = None) -> bool:
         return True
 
 

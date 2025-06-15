@@ -22,8 +22,8 @@ class MapSignalEmitter(SignalEmitter):
         self.emitter = emitter
         self.func = func
 
-    def emit(self, message: Message):
-        self.emitter.emit(Message(self.func(message.data), message.ts))
+    def emit(self, data: Any, ts: int | None = None) -> bool:
+        return self.emitter.emit(self.func(data), ts)
 
 
 def map(reader: SignalReader | SignalEmitter, func: Callable[[Any], Any]) -> SignalReader | SignalEmitter:

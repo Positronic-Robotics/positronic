@@ -67,7 +67,7 @@ class DHGripper:
 if __name__ == "__main__":
     import numpy as np
 
-    world = ir.world.World()
+    world = ir.World()
 
     gripper = DHGripper("/dev/ttyUSB0")
 
