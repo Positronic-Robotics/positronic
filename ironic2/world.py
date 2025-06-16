@@ -75,6 +75,7 @@ class World:
         # processes are still running
         self._stop_event = mp.Event()
         self.background_processes = []
+        self._manager = mp.Manager()
 
     def __enter__(self):
         return self
@@ -98,9 +99,7 @@ class World:
             process.close()
 
     def pipe(self, maxsize: int = 0) -> Tuple[SignalEmitter, SignalReader]:
-        q = mp.Queue(maxsize=maxsize)
-        q.cancel_join_thread()
-        self._queues.append(q)  # Track queue for cleanup
+        q = self._manager.Queue(maxsize=maxsize)
         return QueueEmitter(q), QueueReader(q)
 
     def start(self, *background_loops: List[Callable]):
