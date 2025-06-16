@@ -2,6 +2,7 @@ import pytest
 import multiprocessing as mp
 from queue import Empty, Full
 from unittest.mock import Mock, patch
+import time
 
 from ironic2.core import Message, NoValue
 from ironic2.world import (QueueEmitter, QueueReader, EventReader, World)
@@ -196,6 +197,83 @@ class TestWorld:
         result = reader.value()
         assert isinstance(result, Message)
         assert result.data == "test_message"
+
+    def test_world_context_manager_enter(self):
+        """Test that World.__enter__ returns self."""
+        world = World()
+        with world as w:
+            assert w is world
+
+    def test_world_context_manager_should_stop(self):
+        """Test that should_stop becomes True after exiting context."""
+        world = World()
+
+        # Initially should_stop is False
+        assert world.should_stop is False
+
+        # Use as context manager
+        with world:
+            assert world.should_stop is False
+
+        # After exiting context, should_stop should be True
+        assert world.should_stop is True
+
+    def test_world_context_manager_stops_background_processes(self):
+        """Test that background processes are stopped when exiting context."""
+        def dummy_process(stop_signal):
+            """A simple background process that runs until stopped."""
+            while not stop_signal.value().data:
+                time.sleep(0.01)
+
+        world = World()
+
+        with world:
+            # Start a background process
+            world.start(dummy_process)
+
+            # Verify process is running
+            assert len(world.background_processes) == 1
+            assert world.background_processes[0].is_alive()
+
+            # should_stop should still be False while in context
+            assert world.should_stop is False
+
+        # After exiting context, should_stop should be True
+        assert world.should_stop is True
+
+        # Background processes should be terminated and cleaned up
+        # We can't check is_alive() after exit because processes are closed
+        assert len(world.background_processes) == 1
+
+    def test_world_context_manager_with_exception(self):
+        """Test that background processes are stopped even when exception occurs."""
+        def dummy_process(stop_signal):
+            """A simple background process that runs until stopped."""
+            while not stop_signal.value().data:
+                time.sleep(0.01)
+
+        world = World()
+
+        try:
+            with world:
+                # Start a background process
+                world.start(dummy_process)
+
+                # Verify process is running
+                assert len(world.background_processes) == 1
+                assert world.background_processes[0].is_alive()
+
+                # Raise an exception to test cleanup
+                raise ValueError("Test exception")
+        except ValueError:
+            pass  # Expected exception
+
+        # After exiting context (even with exception), should_stop should be True
+        assert world.should_stop is True
+
+        # Background processes should be terminated and cleaned up
+        # We can't check is_alive() after exit because processes are closed
+        assert len(world.background_processes) == 1
 
 
 # Integration tests
