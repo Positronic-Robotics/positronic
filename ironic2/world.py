@@ -2,7 +2,6 @@
 
 import logging
 import multiprocessing as mp
-import signal
 import sys
 from queue import Empty, Full
 import time
@@ -93,7 +92,7 @@ class World:
                 process.terminate()
                 process.join(timeout=2)  # Give it a moment to terminate
                 if process.is_alive():
-                    print(f'Process {process.name} (pid {process.pid}) still alive after terminate, killing...', flush=True)
+                    print(f'Process {process.name} (pid {process.pid}) still alive, killing...', flush=True)
                     process.kill()
             print(f'Process {process.name} (pid {process.pid}) finished', flush=True)
             process.close()

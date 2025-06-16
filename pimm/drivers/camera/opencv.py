@@ -80,4 +80,3 @@ if __name__ == "__main__":
         camera.frame, writer.frame = world.pipe()
         world.start(camera.run)
         writer.run()
-
