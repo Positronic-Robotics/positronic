@@ -19,7 +19,7 @@ import positronic.cfg2.hardware.camera
 import positronic.cfg2.sound
 
 
-def _parse_buttons(buttons: ir.Message | ir.NoValueType, button_handler: ButtonHandler):
+def _parse_buttons(buttons: ir.Message | None, button_handler: ButtonHandler):
     for side in ['left', 'right']:
         if buttons[side] is None:
             continue
@@ -101,7 +101,7 @@ def main(gripper: DHGripper | None,  # noqa: C901  Function is too complex
 
                 frame_messages = {name: reader.value() for name, reader in frame_readers.items()}
                 any_frame_updated = any(
-                    is_updated and frame is not ir.NoValue
+                    is_updated and frame is not None
                     for frame, is_updated in frame_messages.values()
                 )
 

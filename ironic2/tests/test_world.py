@@ -4,7 +4,7 @@ from queue import Empty, Full
 from unittest.mock import Mock, patch
 import time
 
-from ironic2.core import Message, NoValue
+from ironic2.core import Message
 from ironic2.world import (QueueEmitter, QueueReader, EventReader, World)
 
 
@@ -77,12 +77,12 @@ class TestQueueReader:
     """Test the QueueReader class."""
 
     def test_queue_reader_initial_state(self):
-        """Test that QueueReader initially returns NoValue."""
+        """Test that QueueReader initially returns None."""
         queue = mp.Queue()
         reader = QueueReader(queue)
 
         result = reader.value()
-        assert result is NoValue
+        assert result is None
 
     def test_queue_reader_reads_message(self):
         """Test reading a message from the queue."""
@@ -187,8 +187,8 @@ class TestWorld:
         world = World()
         emitter, reader = world.pipe()
 
-        # Initially reader should return NoValue
-        assert reader.value() is NoValue
+        # Initially reader should return None
+        assert reader.value() is None
 
         # Emit a message
         emitter.emit("test_message")

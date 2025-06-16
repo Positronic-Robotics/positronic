@@ -62,7 +62,7 @@ if __name__ == "__main__":
             last_ts = None
             while not ir.is_true(should_stop):
                 message = self.frame.value()
-                if message is ir.NoValue or last_ts == message.ts:
+                if message is None or last_ts == message.ts:
                     time.sleep(0.5 / self.fps)
                     continue
                 last_ts = message.ts

@@ -80,7 +80,7 @@ class WebXR:
 
                     msg = self.frame.value()
 
-                    if msg is ir.NoValue:
+                    if msg is None:
                         continue
 
                     if last_sent_ts is not None and last_sent_ts == msg.ts:

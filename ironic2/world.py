@@ -8,7 +8,7 @@ import time
 import traceback
 from typing import Any, Callable, List, Tuple
 
-from .core import Message, NoValue, NoValueType, SignalEmitter, SignalReader, system_clock
+from .core import Message, SignalEmitter, SignalReader, system_clock
 
 
 class QueueEmitter(SignalEmitter):
@@ -18,7 +18,10 @@ class QueueEmitter(SignalEmitter):
 
     def emit(self, data: Any, ts: int | None = None) -> bool:
         if self._queue.full():
-            self._queue.get_nowait()
+            try:
+                self._queue.get_nowait()
+            except Empty:
+                pass  # Queue was not actually full
         try:
             self._queue.put_nowait(Message(data, ts))
             return True
@@ -30,9 +33,9 @@ class QueueReader(SignalReader):
 
     def __init__(self, queue: mp.Queue):
         self._queue = queue
-        self._last_value = NoValue
+        self._last_value = None
 
-    def value(self) -> Message | NoValueType:
+    def value(self) -> Message | None:
         try:
             self._last_value = self._queue.get_nowait()
         except Empty:
@@ -45,7 +48,7 @@ class EventReader(SignalReader):
     def __init__(self, event: mp.Event):
         self._event = event
 
-    def value(self) -> Message | NoValueType:
+    def value(self) -> Message | None:
         return Message(data=self._event.is_set(), ts=system_clock())
 
 

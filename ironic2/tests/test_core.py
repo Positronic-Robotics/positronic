@@ -2,7 +2,7 @@ from unittest.mock import Mock
 
 import pytest
 
-from ironic2.core import (Message, NoValue, NoValueException, SignalReader,
+from ironic2.core import (Message, NoValueException, SignalReader,
                           is_true, signal_value)
 
 
@@ -26,9 +26,9 @@ class TestIsTrue:
         assert result is False
 
     def test_is_true_with_no_value_signal(self):
-        """Test is_true with a signal containing NoValue."""
+        """Test is_true with a signal containing None."""
         mock_reader = Mock(spec=SignalReader)
-        mock_reader.value.return_value = NoValue
+        mock_reader.value.return_value = None
 
         result = is_true(mock_reader)
         assert result is False
@@ -63,17 +63,17 @@ class TestSignalValue:
         assert result == test_data
 
     def test_signal_value_with_no_value_and_no_default(self):
-        """Test signal_value with NoValue and no default raises exception."""
+        """Test signal_value with None and no default raises exception."""
         mock_reader = Mock(spec=SignalReader)
-        mock_reader.value.return_value = NoValue
+        mock_reader.value.return_value = None
 
         with pytest.raises(NoValueException):
             signal_value(mock_reader)
 
     def test_signal_value_with_no_value_and_default(self):
-        """Test signal_value with NoValue and default returns default."""
+        """Test signal_value with None and default returns default."""
         mock_reader = Mock(spec=SignalReader)
-        mock_reader.value.return_value = NoValue
+        mock_reader.value.return_value = None
         default_value = "default"
 
         result = signal_value(mock_reader, default=default_value)
@@ -99,7 +99,7 @@ class TestSignalValue:
     def test_signal_value_with_none_as_default(self):
         """Test signal_value with None as explicit default."""
         mock_reader = Mock(spec=SignalReader)
-        mock_reader.value.return_value = NoValue
+        mock_reader.value.return_value = None
 
         result = signal_value(mock_reader, default=None)
         assert result is None
