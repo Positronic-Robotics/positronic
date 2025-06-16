@@ -75,7 +75,7 @@ class WebXR:
             try:
                 fps = FPSCounter("Video Stream")
                 last_sent_ts = None
-                while True:
+                while not ir.is_true(should_stop):
                     await asyncio.sleep(1 / 60)
 
                     msg = self.frame.value()
@@ -102,9 +102,10 @@ class WebXR:
             print("WebSocket connection accepted")
             try:
                 fps = FPSCounter("Websocket")
-                while True:
+                while not ir.is_true(should_stop):
                     try:
-                        data = await websocket.receive_json()
+                        # Use asyncio.wait_for with timeout to avoid blocking indefinitely
+                        data = await asyncio.wait_for(websocket.receive_json(), timeout=1)
                         controller_positions, buttons = _parse_controller_data(data)
                         ts = ir.system_clock()
                         if controller_positions['left'] is not None or controller_positions['right'] is not None:
@@ -112,6 +113,9 @@ class WebXR:
                         if buttons['left'] is not None or buttons['right'] is not None:
                             self.buttons.emit(buttons, ts)
                         fps.tick()
+                    except asyncio.TimeoutError:
+                        # Timeout is normal, just continue to check should_stop
+                        continue
                     except Exception as e:
                         print(f"Error processing WebSocket message: {e}")
                         break
@@ -155,14 +159,11 @@ class WebXR:
             },
         )
         server = uvicorn.Server(config)
-        server.run()
-        # self.server_thread = threading.Thread(target=server.run, daemon=True)
-        # self.server_thread.start()
-        # print("WebXR server thread started")
+        self.server_thread = threading.Thread(target=server.run, daemon=True)
+        self.server_thread.start()
 
-        # while not should_stop.value().data:
-        #     time.sleep(0.1)
+        while not ir.is_true(should_stop):
+            time.sleep(0.1)
 
-        # server.should_exit = True
-        # self.server_thread.join()
-        # print("WebXR server thread joined")
+        server.should_exit = True
+        self.server_thread.join()

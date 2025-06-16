@@ -67,23 +67,24 @@ class DHGripper:
 if __name__ == "__main__":
     import numpy as np
 
-    world = ir.World()
+    with ir.World() as world:
+        gripper = DHGripper("/dev/ttyUSB0")
 
-    gripper = DHGripper("/dev/ttyUSB0")
+        speed, gripper.speed = world.pipe()
+        force, gripper.force = world.pipe()
+        target_grip, gripper.target_grip = world.pipe()
+        gripper.grip, grip = world.pipe()
 
-    speed, gripper.speed = world.pipe()
-    force, gripper.force = world.pipe()
-    target_grip, gripper.target_grip = world.pipe()
-    gripper.grip, grip = world.pipe()
+        world.start(gripper.run)
 
-    def main_loop(should_stop: ir.SignalReader):
+        print("Setting gripper to 20% speed and 100% force", flush=True)
         speed.emit(20)
         force.emit(100)
 
         for width in (np.sin(np.linspace(0, 10 * np.pi, 60)) + 1):
             target_grip.emit(width)
-            time.sleep(0.25)
-            print(f"Real grip position: {ir.signal_value(grip)}")
-
-    world.start(gripper.run)
-    world.run(main_loop)
+            time.sleep(0.5)
+            try:
+                print(f"Real grip position: {ir.signal_value(grip)}")
+            except ir.NoValueException:
+                pass

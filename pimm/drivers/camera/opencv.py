@@ -73,11 +73,11 @@ if __name__ == "__main__":
 
             container.close()
 
-    world = ir.World()
+    with ir.World() as world:
+        camera = OpenCVCamera(0, (640, 480), fps=30)
+        writer = VideoWriter(sys.argv[1], 30)
 
-    camera = OpenCVCamera(0, (640, 480), fps=30)
-    writer = VideoWriter(sys.argv[1], 30)
+        camera.frame, writer.frame = world.pipe()
+        world.start(camera.run)
+        writer.run()
 
-    camera.frame, writer.frame = world.pipe()
-    world.start(camera.run)
-    world.run(writer.run)

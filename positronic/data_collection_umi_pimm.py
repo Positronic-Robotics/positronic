@@ -45,35 +45,33 @@ def main(gripper: DHGripper | None,  # noqa: C901  Function is too complex
 
     # TODO: this function modifies outer objects with pipes
 
-    world = ir.world.World()
+    with ir.World() as world:
+        # Declare pipes
+        frame_readers = {}
+        for camera_name, camera in cameras.items():
+            camera.frame, frame_reader = world.pipe()
+            frame_readers[camera_name] = ir.ValueUpdated(frame_reader)
 
-    # Declare pipes
-    frame_readers = {}
-    for camera_name, camera in cameras.items():
-        camera.frame, frame_reader = world.pipe()
-        frame_readers[camera_name] = ir.ValueUpdated(frame_reader)
+        webxr.controller_positions, controller_positions_reader = world.pipe()
+        webxr.buttons, buttons_reader = world.pipe()
+        if stream_video_to_webxr is not None:
+            raise NotImplementedError("TODO: fix video streaming to webxr, since it's currently lagging")
+            webxr.frame = ir.map(frame_readers[stream_video_to_webxr], lambda x: x['image'])
 
-    webxr.controller_positions, controller_positions_reader = world.pipe()
-    webxr.buttons, buttons_reader = world.pipe()
-    if stream_video_to_webxr is not None:
-        raise NotImplementedError("TODO: fix video streaming to webxr, since it's currently lagging")
-        webxr.frame = ir.map(frame_readers[stream_video_to_webxr], lambda x: x['image'])
+        world.start(webxr.run, *[camera.run for camera in cameras.values()])
 
-    world.start(webxr.run, *[camera.run for camera in cameras.values()])
+        if gripper is not None:
+            target_grip_emitter, gripper.target_grip = world.pipe()
+            world.start(gripper.run)
+        else:
+            target_grip_emitter = ir.NoOpEmitter()
 
-    if gripper is not None:
-        target_grip_emitter, gripper.target_grip = world.pipe()
-        world.start(gripper.run)
-    else:
-        target_grip_emitter = ir.NoOpEmitter()
+        if sound is not None:
+            wav_path_emitter, sound.wav_path = world.pipe()
+            world.start(sound.run)
+        else:
+            wav_path_emitter = ir.NoOpEmitter()
 
-    if sound is not None:
-        wav_path_emitter, sound.wav_path = world.pipe()
-        world.start(sound.run)
-    else:
-        wav_path_emitter = ir.NoOpEmitter()
-
-    def _main_loop(should_stop: ir.SignalReader):
         tracked = False
         dumper = SerialDumper(output_dir, video_fps=fps)
         button_handler = ButtonHandler()
@@ -83,8 +81,7 @@ def main(gripper: DHGripper | None,  # noqa: C901  Function is too complex
         end_wav_path = "positronic/assets/sounds/recording-has-stopped.wav"
 
         fps_counter = FPSCounter("Data Collection")
-
-        while not ir.is_true(should_stop):
+        while not world.should_stop:
             try:
                 buttons = ir.signal_value(buttons_reader)
                 _parse_buttons(buttons, button_handler)
@@ -139,13 +136,6 @@ def main(gripper: DHGripper | None,  # noqa: C901  Function is too complex
             except ir.NoValueException:
                 time.sleep(0.001)
                 continue
-
-    try:
-        _main_loop(ir.world.EventReader(world._stop_event))
-    finally:
-        world.stop()
-
-    # world.run(_main_loop)
 
 
 main = ir1.Config(

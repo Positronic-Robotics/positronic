@@ -5,6 +5,7 @@ import multiprocessing as mp
 import signal
 import sys
 from queue import Empty, Full
+import time
 import traceback
 from typing import Any, Callable, List, Tuple
 
@@ -75,45 +76,44 @@ class World:
         self._stop_event = mp.Event()
         self.background_processes = []
 
-    def pipe(self) -> Tuple[SignalEmitter, SignalReader]:
-        q = mp.Queue()
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        print("Stopping background processes...", flush=True)
+        self._stop_event.set()
+        time.sleep(0.1)
+
+        print(f"Waiting for {len(self.background_processes)} background processes to terminate...", flush=True)
+        for process in self.background_processes:
+            process.join(timeout=3)
+            if process.is_alive():
+                print(f'Process {process.name} (pid {process.pid}) did not respond, terminating...', flush=True)
+                process.terminate()
+                process.join(timeout=2)  # Give it a moment to terminate
+                if process.is_alive():
+                    print(f'Process {process.name} (pid {process.pid}) still alive after terminate, killing...', flush=True)
+                    process.kill()
+            print(f'Process {process.name} (pid {process.pid}) finished', flush=True)
+            process.close()
+
+    def pipe(self, maxsize: int = 0) -> Tuple[SignalEmitter, SignalReader]:
+        q = mp.Queue(maxsize=maxsize)
+        q.cancel_join_thread()
+        self._queues.append(q)  # Track queue for cleanup
         return QueueEmitter(q), QueueReader(q)
 
     def start(self, *background_loops: List[Callable]):
         """Starts background control loops. Can be called multiple times for different control loops."""
-        bg_processes: List[mp.Process] = []
         for bg_loop in background_loops:
-            name = getattr(bg_loop, '__name__', 'anonymous')
-            p = mp.Process(target=_bg_wrapper, args=(bg_loop, self._stop_event, name), daemon=True)
+            if hasattr(bg_loop, '__self__'):
+                name = f"{bg_loop.__self__.__class__.__name__}.{bg_loop.__name__}"
+            else:
+                name = getattr(bg_loop, '__name__', 'anonymous')
+            p = mp.Process(target=_bg_wrapper, args=(bg_loop, self._stop_event, name), daemon=True, name=name)
             p.start()
-            bg_processes.append(p)
-
-    def run(self, main_loop: Callable):
-        """Optional utility function to run the main loop and handle Ctrl+C nicely.
-           You must start background control loops that you depend on before calling this method.
-        """
-
-        def signal_handler(_signum, _frame):
-            print("\nProgram interrupted by user, stopping...")
-            self._stop_event.set()
-            print("Stopping background processes...")
-            for process in self.background_processes:
-                process.join(timeout=3)
-            sys.exit(0)
-
-        signal.signal(signal.SIGINT, signal_handler)
-
-        try:
-            main_loop(EventReader(self._stop_event))
-        except KeyboardInterrupt:
-            pass
-        finally:
-            self.stop()
-
-    def stop(self):
-        self._stop_event.set()
-        for process in self.background_processes:
-            process.join(timeout=3)
+            self.background_processes.append(p)
+            print(f"Started background process {name} (pid {p.pid})", flush=True)
 
     @property
     def should_stop(self) -> bool:
