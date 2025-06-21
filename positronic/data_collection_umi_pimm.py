@@ -50,7 +50,7 @@ def main(gripper: DHGripper | None,  # noqa: C901  Function is too complex
         frame_readers = {}
         for camera_name, camera in cameras.items():
             camera.frame, frame_reader = world.pipe()
-            frame_readers[camera_name] = ir.ValueUpdated(frame_reader)
+            frame_readers[camera_name] = ir.ValueUpdated(frame_reader, None)
 
         webxr.controller_positions, controller_positions_reader = world.pipe()
         webxr.buttons, buttons_reader = world.pipe()
@@ -99,7 +99,7 @@ def main(gripper: DHGripper | None,  # noqa: C901  Function is too complex
                         wav_path_emitter.emit(end_wav_path)
                 # TODO: Support aborting current episode.
 
-                frame_messages = {name: reader.value() for name, reader in frame_readers.items()}
+                frame_messages = {name: ir.signal_value(reader) for name, reader in frame_readers.items()}
                 any_frame_updated = any(
                     is_updated and frame is not None
                     for frame, is_updated in frame_messages.values()
