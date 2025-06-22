@@ -40,7 +40,9 @@ class TestValueUpdated:
         value_updated = ValueUpdated(mock_reader, default_value=def_value)
         result = value_updated.value()
 
-        assert result == (def_value, False)
+        assert result is not None
+        assert result.data == (def_value, False)
+        assert result.ts == 0  # default_ts
 
     def test_same_timestamp_returns_not_updated(self):
         """Test that reading the same timestamp returns updated=False."""
@@ -109,7 +111,9 @@ class TestValueUpdated:
         value_updated = ValueUpdated(mock_reader, default_value=None)
         result = value_updated.value()
 
-        assert result == (None, False)
+        assert result is not None
+        assert result.data == (None, False)
+        assert result.ts == 0  # default_ts
 
     def test_message_timestamp_is_preserved(self):
         """Test that the original message timestamp is preserved in the returned message."""

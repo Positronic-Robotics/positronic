@@ -1,4 +1,4 @@
-from typing import Callable, Any, Tuple
+from typing import Callable, Any
 
 from ironic2 import SignalReader, SignalEmitter, Message
 
@@ -41,21 +41,21 @@ _NO_DEFAULT_SENTINEL = object()
 class ValueUpdated(SignalReader):
     """Wrapper around reader to signal whether the value we read is 'new'."""
 
-    def __init__(self, reader: SignalReader, default_value=_NO_DEFAULT_SENTINEL):
+    def __init__(self, reader: SignalReader, default_value=_NO_DEFAULT_SENTINEL, default_ts=0):
         """By default, if original reader returns None, we return None.
         If default_value is overriden, we will return (default_value, False) Message instead."""
         self.reader = reader
-        self.last_ts = 0
+        self.last_ts = default_ts
         self._default_value = default_value
 
-    def value(self) -> Tuple[Message | None, bool]:
+    def value(self) -> Message | None:
         orig_message = self.reader.value()
 
         if orig_message is None:
             if self._default_value == _NO_DEFAULT_SENTINEL:
                 return None
             else:
-                return self._default_value, False
+                return Message((self._default_value, False), self.last_ts)
 
         is_updated = orig_message.ts != self.last_ts
         self.last_ts = orig_message.ts
