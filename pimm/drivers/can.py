@@ -1,3 +1,4 @@
+import math
 import struct
 import time
 from abc import ABC, abstractmethod
@@ -21,6 +22,20 @@ class CommandType(Enum):
 class Command:
     type: CommandType
     value: np.array  # Value
+
+    @staticmethod
+    def position(value) -> 'Command':
+        if isinstance(value, (int, float)):
+            return Command(CommandType.POSITION, np.array([value]))
+        else:
+            return Command(CommandType.POSITION, np.array(value))
+
+    @staticmethod
+    def velocity(value) -> 'Command':
+        if isinstance(value, (int, float)):
+            return Command(CommandType.VELOCITY, np.array([value]))
+        else:
+            return Command(CommandType.VELOCITY, np.array(value))
 
 
 @ABC
@@ -86,7 +101,8 @@ class KTechMGMotorDriver(MotorDriver):
             case CommandType.POSITION:
                 for i, value in enumerate(cmd.value):
                     max_speed = int(self._specs[i].max_speed * self._specs[i].gear_ratio)
-                    data = struct.pack('<HHi', 0xA4, max_speed, int(value * self._specs[i].gear_ratio * 100))
+                    data = struct.pack('<HHi', 0xA4, max_speed,
+                                       int(math.degrees(value) * self._specs[i].gear_ratio * 100))
                     yield can.Message(arbitration_id=self._start_can_id + i, data=data, is_extended_id=False)
             case CommandType.TORQUE:
                 raise NotImplementedError('Torque control is not implemented yet for K-Tech motors')
@@ -99,7 +115,7 @@ class KTechMGMotorDriver(MotorDriver):
 
 class CanBusDriver:
     commands = ir.SignalReader()  # Assume the data is Command
-    state_sink = ir.SignalEmitter()  # The data is np.array of shape 3xN, where N is number of motors
+    state_writer = ir.SignalEmitter()  # The data is np.array of shape 3xN, where N is number of motors
 
     def __init__(self, bus_channel: str, num_motors: int, driver: MotorDriver, ping_every_sec: float) -> None:
         self._bus_channel = bus_channel
@@ -122,7 +138,7 @@ class CanBusDriver:
                         state_updated = True
 
                     if state_updated:
-                        self.state_sink.emit(state[1:], np.max(state[0]))
+                        self.state_writer.emit(state[1:], np.max(state[0]))
 
                     cmd, cmd_updated = ir.signal_value(commands, (None, False))
                     if cmd_updated:
@@ -135,6 +151,30 @@ class CanBusDriver:
                     else:
                         time.sleep(0.5 / 1000)  # We try to run 1kHz
             finally:
-                cmd = Command(CommandType.VELOCITY, np.zeros(self._num_motors))
+                cmd = Command.velocity(np.zeros(self._num_motors))
                 for msg in self._driver.encode(cmd):
                     bus.send(msg)
+                time.sleep(0.5)
+
+
+if __name__ == "__main__":
+    spec = KTechMGMotorDriver.MotorSpec(gear_ratio=3.6, max_speed=360 * 2)
+    can_driver = CanBusDriver('can0', num_motors=1, driver=KTechMGMotorDriver([spec]), ping_every_sec=1 / 200)
+
+    with ir.World() as world:
+        command_writer, can_driver.commands = world.pipe()
+        # TODO: Should be shared memory for performance
+        can_driver.state_writer, state_reader = world.pipe()
+
+        commands = [(0, Command.position(0)), (30., Command.position(2 * np.pi))]
+
+        world.start(can_driver.run)
+        i, start = 0, time.monotonic()
+        while i < len(commands):
+            t, cmd = commands[i]
+            if time.monotonic() - start > t:
+                i += 1
+                command_writer.emit(cmd)
+            else:
+                # TODO: Probably should output the state
+                time.sleep(0.01)
