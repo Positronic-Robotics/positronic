@@ -1,8 +1,9 @@
+import struct
 import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from enum import Enum
-from typing import Generator
+from typing import Generator, List
 
 import can
 import numpy as np
@@ -11,20 +12,15 @@ import ironic2 as ir
 
 
 class CommandType(Enum):
-    TORQUE = 'torque'
-    VELOCITY = 'vel'
-    POSITION = 'pos'
+    TORQUE = 0
+    VELOCITY = 1
+    POSITION = 2
 
 
 @dataclass
 class Command:
     type: CommandType
     value: np.array  # Value
-
-
-class MotorState:
-    # Configuration (constant data)
-    arbitration_id: int  # Id on Can BUS
 
 
 @ABC
@@ -34,14 +30,8 @@ class MotorDriver:
     # drivers on one bus. In this case the higher-level logic must be able to route incoming
     # messages to particular driver.
 
-    def __init__(self, state: np.array) -> None:
-        """Constructor
-
-        """
-        self._state = state
-
     @abstractmethod
-    def decode(self, msg: can.Message, state: np.array):
+    def decode(self, msg: can.Message, state: np.array) -> None:
         """Implementations must know how to map arbitration_id to motor index.
 
            Args:
@@ -56,13 +46,55 @@ class MotorDriver:
         pass
 
     @abstractmethod
-    def encode(self, cmd) -> Generator[can.Message]:
+    def encode(self, cmd: Command) -> Generator[can.Message]:
         pass
 
     @abstractmethod
     def ping(self) -> Generator[can.Message]:
         "Message to send to motor if there were no commands for some time"
         pass
+
+
+class KTechMGMotorDriver(MotorDriver):
+
+    @dataclass
+    class MotorSpec:
+        gear_ratio: float
+        max_speed: float  # TODO: I still don't fully understand the dimension of this
+
+    def __init__(self, motors: List[MotorSpec], start_can_id: int = 0x140):
+        self._start_can_id = start_can_id
+        self._num_motors = len(motors)
+        self._specs = motors
+
+    def decode(self, msg: can.Message, state: np.array) -> None:
+        i = msg.arbitration_id - msg.arbitration_id
+        if 0 <= i < self._num_motors:
+            _, _, torque, vel, pos = struct.unpack('<bbhhH', msg.data)
+            # TODO: Figure out the actual coeffcients
+            state[0, i] = msg.timestamp
+            state[1, i] = pos
+            state[2, i] = vel
+            state[3, i] = torque / 2048 * 33
+
+    def encode(self, cmd: Command) -> Generator[can.Message]:
+        match cmd.type:
+            case CommandType.VELOCITY:
+                for i, value in enumerate(cmd.value):
+                    data = struct.pack('<Ii', 0xA2, int(value * self._specs[i] * 100))
+                    yield can.Message(arbitration_id=self._start_can_id + i, data=data, is_extended_id=False)
+            case CommandType.POSITION:
+                for i, value in enumerate(cmd.value):
+                    max_speed = int(self._specs[i].max_speed * self._specs[i].gear_ratio)
+                    data = struct.pack('<HHi', 0xA4, max_speed, int(value * self._specs[i].gear_ratio * 100))
+                    yield can.Message(arbitration_id=self._start_can_id + i, data=data, is_extended_id=False)
+            case CommandType.TORQUE:
+                raise NotImplementedError('Torque control is not implemented yet for K-Tech motors')
+
+    def ping(self) -> Generator[can.Message]:
+        data = struct.pack('<II', 0x9C, 0x00)
+        for i in range(self._num_motors):
+            yield can.Message(arbitration_id=self._start_can_id + i, data=data, is_extended_id=False)
 
 
 class CanBusDriver:
