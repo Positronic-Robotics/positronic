@@ -35,27 +35,19 @@ def map(reader: SignalReader | SignalEmitter, func: Callable[[Any], Any]) -> Sig
         raise ValueError(f"Invalid reader type: {type(reader)}")
 
 
-_NO_DEFAULT_SENTINEL = object()
-
-
 class ValueUpdated(SignalReader):
     """Wrapper around reader to signal whether the value we read is 'new'."""
 
-    def __init__(self, reader: SignalReader, default_value=_NO_DEFAULT_SENTINEL, default_ts=0):
-        """By default, if original reader returns None, we return None.
-        If default_value is overriden, we will return (default_value, False) Message instead."""
+    def __init__(self, reader: SignalReader):
+        """By default, if original reader returns None, we return None."""
         self.reader = reader
-        self.last_ts = default_ts
-        self._default_value = default_value
+        self.last_ts = None
 
     def value(self) -> Message | None:
         orig_message = self.reader.value()
 
         if orig_message is None:
-            if self._default_value == _NO_DEFAULT_SENTINEL:
-                return None
-            else:
-                return Message((self._default_value, False), self.last_ts)
+            return None
 
         is_updated = orig_message.ts != self.last_ts
         self.last_ts = orig_message.ts

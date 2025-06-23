@@ -22,7 +22,7 @@ class TestValueUpdated:
         assert result.ts == 123
 
     def test_first_read_with_none_returns_none(self):
-        """Test that first read with None returns None (no default value)."""
+        """Test that first read with None returns None."""
         mock_reader = Mock(spec=SignalReader)
         mock_reader.value.return_value = None
 
@@ -30,19 +30,6 @@ class TestValueUpdated:
         result = value_updated.value()
 
         assert result is None
-
-    def test_first_read_with_none_and_default_returns_default_not_updated(self):
-        """Test that first read with None and default value returns default with updated=False."""
-        mock_reader = Mock(spec=SignalReader)
-        mock_reader.value.return_value = None
-        def_value = "default"
-
-        value_updated = ValueUpdated(mock_reader, default_value=def_value)
-        result = value_updated.value()
-
-        assert result is not None
-        assert result.data == (def_value, False)
-        assert result.ts == 0  # default_ts
 
     def test_same_timestamp_returns_not_updated(self):
         """Test that reading the same timestamp returns updated=False."""
@@ -102,18 +89,6 @@ class TestValueUpdated:
         mock_reader.value.return_value = Message(data="data2", ts=200)
         result4 = value_updated.value()
         assert result4.data[1] is True  # First time seeing ts=200
-
-    def test_none_as_explicit_default_value(self):
-        """Test that None can be used as an explicit default value."""
-        mock_reader = Mock(spec=SignalReader)
-        mock_reader.value.return_value = None
-
-        value_updated = ValueUpdated(mock_reader, default_value=None)
-        result = value_updated.value()
-
-        assert result is not None
-        assert result.data == (None, False)
-        assert result.ts == 0  # default_ts
 
     def test_message_timestamp_is_preserved(self):
         """Test that the original message timestamp is preserved in the returned message."""

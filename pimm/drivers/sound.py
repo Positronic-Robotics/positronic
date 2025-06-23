@@ -65,11 +65,11 @@ class SoundSystem:
         audio_files = {}
         file_idx = 0
 
-        self.wav_path = ir.ValueUpdated(self.wav_path, None)
+        self.wav_path = ir.ValueUpdated(self.wav_path)
 
         while not ir.is_true(should_stop):
             # Load new files
-            wav_path, is_updated = ir.signal_value(self.wav_path)
+            wav_path, is_updated = ir.signal_value(self.wav_path, (None, False))
             if is_updated:
                 print(f"Playing {wav_path.data}")
                 audio_files[file_idx] = wave.open(wav_path.data, 'rb')
