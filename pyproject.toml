@@ -44,6 +44,7 @@ hardware = [
     "phoenix6==24.3.0",
     "pygame==2.5.2",
     "pyserial", # For DH gripper
+    "python-can",
 ]
 dev = [
     "jupyter",
