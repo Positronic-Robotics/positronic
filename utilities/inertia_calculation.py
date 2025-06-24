@@ -87,24 +87,20 @@ def calculate_center_of_mass(masses, positions):
     center_of_mass = sum(weighted_positions) / total_mass
     return center_of_mass, total_mass
 
-def calculate_composite_inertia():
+def calculate_composite_inertia(
+        link_mass=0.01,  # 10g
+        link_length=0.1,  # 10cm
+        link_width=0.02,  # 2cm
+        link_height=0.01,  # 1cm
+        motor_mass=1.0,  # 1kg
+        motor_radius=0.05,  # 5cm
+        motor_height=0.05,  # 5cm
+):
     """
     Calculate composite inertia for rectangular link + cylindrical motor.
     Includes center of mass calculations.
     """
     print("=== Composite Inertia Calculation ===\n")
-
-    # Component properties (you'll need to specify actual dimensions)
-    # Rectangular link
-    link_mass = 0.01  # 10g
-    link_length = 0.1  # Example: 10cm
-    link_width = 0.02   # Example: 2cm
-    link_height = 0.01  # Example: 1cm
-
-    # Cylindrical motor
-    motor_mass = 1.0   # 1kg
-    motor_radius = 0.05  # Example: 5cm radius
-    motor_height = 0.05  # Example: 5cm height
 
     print(f"Rectangular Link: {link_mass}kg, {link_length}×{link_width}×{link_height}m")
     print(f"Cylindrical Motor: {motor_mass}kg, r={motor_radius}m, h={motor_height}m\n")
@@ -192,44 +188,9 @@ def calculate_composite_inertia():
         'I_composite_motor': I_composite_motor
     }
 
-def visualize_center_of_mass_calculation():
-    """
-    Show step-by-step center of mass calculation with example.
-    """
-    print("\n" + "="*60)
-    print("CENTER OF MASS CALCULATION EXAMPLE:")
-    print("="*60)
-
-    # Example values
-    m1, m2 = 1.0, 0.01  # Motor: 1kg, Link: 10g
-    pos1 = np.array([0, 0, 0])      # Motor at origin
-    pos2 = np.array([0, 0, 0.03])   # Link 3cm away
-
-    print(f"Component 1 (Motor): mass = {m1}kg, position = {pos1}")
-    print(f"Component 2 (Link):  mass = {m2}kg, position = {pos2}")
-
-    # Manual calculation
-    total_mass = m1 + m2
-    com_manual = (m1 * pos1 + m2 * pos2) / total_mass
-
-    print(f"\nManual calculation:")
-    print(f"Total mass = {m1} + {m2} = {total_mass}kg")
-    print(f"COM = ({m1} × {pos1} + {m2} × {pos2}) / {total_mass}")
-    print(f"COM = ({m1 * pos1} + {m2 * pos2}) / {total_mass}")
-    print(f"COM = {m1 * pos1 + m2 * pos2} / {total_mass}")
-    print(f"COM = {com_manual}")
-
-    # Using function
-    com_func, total_func = calculate_center_of_mass([m1, m2], [pos1, pos2])
-    print(f"\nUsing function: COM = {com_func}, Total mass = {total_func}kg")
-
-    print(f"\nNote: The center of mass is very close to the motor center")
-    print(f"because the motor is much heavier than the link (1kg vs 10g)")
 
 if __name__ == "__main__":
     results = calculate_composite_inertia()
-
-    visualize_center_of_mass_calculation()
 
     print("\n" + "="*60)
     print("INSTRUCTIONS:")

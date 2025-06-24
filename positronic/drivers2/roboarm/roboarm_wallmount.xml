@@ -18,7 +18,7 @@
   </default>
 
   <worldbody>
-    <body name="link1">
+    <body name="link1" quat="0 0.707107 0 0.707107">
       <inertial pos="0 0 0" quat="0 0.707107 0 0.707107" mass="1.01" diaginertia="0.001259 0.000851 0.000843"/>
       <joint name="joint_1" pos="0 0 0" axis="0 0 1"/>
       <site name="joint_1_site" pos="0 0 0"/>
