@@ -4,7 +4,7 @@ import mujoco as mj
 import ironic as ir
 import numpy as np
 
-from positronic.drivers2.roboarm.generate_urdf import create_6dof_arm
+from pimm.drivers.roboarm.generate_urdf import create_6dof_arm
 
 
 def convert_urdf_to_mujoco(
@@ -111,7 +111,7 @@ def _add_sensors(spec: mj.MjSpec) -> None:
         link_lengths=ir.Config(lambda *args: list(args), 0.05, 0.05, 0.2, 0.05, 0.2),
         motor_masses=ir.Config(lambda *args: list(args), 1.0, 1.0, 1.0, 1.0, 1.0, 1.0),
         motor_limits=ir.Config(lambda *args: list(args), 30.0, 30.0, 30.0, 30.0, 30.0, 30.0),
-        motor_radii=ir.Config(lambda *args: list(args), np.pi / 2, -np.pi / 2, np.pi / 2, -np.pi / 2, np.pi / 2),
+        joint_rotations=ir.Config(lambda *args: list(args), np.pi / 2, -np.pi / 2, np.pi / 2, -np.pi / 2, np.pi / 2),
         link_density=0.2,
         payload_mass=2.0,
         kp=100.0,
@@ -124,7 +124,7 @@ def main(
         link_lengths: Sequence[float],
         motor_masses: Sequence[float],
         motor_limits: Sequence[float],
-        motor_radii: Sequence[float],
+        joint_rotations: Sequence[float],
         link_density: float,
         payload_mass: float,
         kp: float,
@@ -135,7 +135,7 @@ def main(
             link_lengths=link_lengths,
             motor_masses=motor_masses,
             motor_limits=motor_limits,
-            motor_radii=motor_radii,
+            joint_rotations=joint_rotations,
             link_density=link_density,
             payload_mass=payload_mass,
         )

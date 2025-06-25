@@ -299,7 +299,7 @@ def create_6dof_arm(
         link_lengths: Sequence[float] = (0.05, 0.05, 0.2, 0.05, 0.2),
         motor_masses: Sequence[float] = (1.0, 1.0, 1.0, 1.0, 1.0, 1.0),
         motor_limits: Sequence[float] = (30.0, 30.0, 30.0, 30.0, 30.0, 30.0),
-        motor_radii: Sequence[float] = (np.pi / 2, -np.pi / 2, np.pi / 2, -np.pi / 2, np.pi / 2),
+        joint_rotations: Sequence[float] = (np.pi / 2, -np.pi / 2, np.pi / 2, -np.pi / 2, np.pi / 2),
         link_density: float = 0.2,
         payload_mass: float = 2.0,
 ) -> str:
@@ -316,7 +316,7 @@ def create_6dof_arm(
         str: Generated URDF as XML string
     """
 
-    assert len(link_lengths) + 1 == len(motor_masses) == len(motor_limits) == len(motor_radii) + 1
+    assert len(link_lengths) + 1 == len(motor_masses) == len(motor_limits) == len(joint_rotations) + 1
 
     motor_params = [
         MotorParameters(radius=0.05, height=0.05, mass=motor_masses[i], effort_limit=motor_limits[i])
@@ -340,7 +340,7 @@ def create_6dof_arm(
             JointConfiguration(
                 name=f"joint_{len(joint_configs) + 1}",
                 origin_xyz=(0, 0, link_lengths[i] + motor_params[i].height / 2 + motor_params[i].radius),
-                origin_rpy=(motor_radii[i], 0, 0),
+                origin_rpy=(joint_rotations[i], 0, 0),
                 effort_limit=motor_params[i + 1].effort_limit
             )
         )
