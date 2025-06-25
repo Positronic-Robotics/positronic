@@ -30,6 +30,7 @@ class Command:
     value: np.array
 
 
+# TODO: Add forces when we are ready
 class State:
     _values: np.array
 
@@ -56,9 +57,9 @@ class State:
         self._values[14] = 0
 
 
-class Franka:
-    commands = ir.SignalReader()
-    state = ir.SignalEmitter()
+class Robot:
+    commands: ir.SignalReader = ir.NoOpReader()
+    state: ir.SignalEmitter = ir.NoOpEmitter()
 
     def __init__(self, ip: str, relative_dynamics_factor=0.2, cartesian_mode=CartesianMode.LIBFRANKA) -> None:
         self._ip = ip
@@ -86,7 +87,7 @@ class Franka:
 
     def run(self, should_stop: ir.SignalReader) -> None:
         robot = franky.Robot(self._ip, realtime_config=franky.RealtimeConfig.Ignore)
-        Franka._init_robot(robot, self._relative_dynamics_factor)
+        Robot._init_robot(robot, self._relative_dynamics_factor)
 
         home_joints_config = [0.0, -0.31, 0.0, -1.53, 0.0, 1.522, 0.785]  # TODO: Allow customisation
 
@@ -101,6 +102,7 @@ class Franka:
             # xyzw to wxyz
             robot_state._values[3] = pos.quaternion[3]
             robot_state._values[4:7] = pos.quaternion[:3]
+            robot_state._values[7:14] = robot.current_joint_state.position
 
             return robot_state
 
