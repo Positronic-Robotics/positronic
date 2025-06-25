@@ -9,14 +9,74 @@ including link dimensions, motor specifications, and joint configurations.
 import numpy as np
 import xml.etree.ElementTree as ET
 from xml.dom import minidom
-from typing import List, Dict, Tuple, Optional
+from typing import List, Sequence, Tuple, Optional
 from dataclasses import dataclass
-import sys
-import os
 
-# Add utilities to path for inertia calculations
-sys.path.append(os.path.join(os.path.dirname(__file__), '..', '..', '..', 'utilities'))
-from inertia_calculation import cylindrical_inertia, parallel_axis_theorem, calculate_center_of_mass
+
+def calculate_center_of_mass(masses, positions):
+    """
+    Calculate center of mass for multiple components.
+
+    Args:
+        masses: (list) List of masses for each component
+        positions: (list) List of position vectors for each component's center of mass
+
+    Returns:
+        numpy.ndarray: Center of mass position vector
+    """
+    total_mass = sum(masses)
+    weighted_positions = [m * np.array(pos) for m, pos in zip(masses, positions)]
+    center_of_mass = sum(weighted_positions) / total_mass
+    return center_of_mass, total_mass
+
+
+def cylindrical_inertia(mass, radius, height):
+    """
+    Calculate inertia matrix for cylinder about its center of mass.
+    Assumes z-axis is along the cylinder axis.
+
+    Args:
+        mass: (float) Mass in kg
+        radius: (float) Radius in meters
+        height: (float) Height in meters
+
+    Returns:
+        numpy.ndarray: 3x3 inertia matrix
+    """
+    Ixx = Iyy = (1/12) * mass * (3 * radius**2 + height**2)
+    Izz = (1/2) * mass * radius**2
+
+    return np.array([
+        [Ixx, 0, 0],
+        [0, Iyy, 0],
+        [0, 0, Izz]
+    ])
+
+def parallel_axis_theorem(I_cm, mass, displacement):
+    """
+    Apply parallel axis theorem to translate inertia matrix.
+
+    Args:
+        I_cm: (numpy.ndarray) Inertia matrix about center of mass
+        mass: (float) Mass in kg
+        displacement: (numpy.ndarray) Displacement vector [x, y, z]
+
+    Returns:
+        numpy.ndarray: Translated inertia matrix
+    """
+    d = np.array(displacement)
+    d_squared = np.dot(d, d)
+
+    # Outer product matrix
+    d_outer = np.outer(d, d)
+
+    # Identity matrix
+    I = np.eye(3)
+
+    # Parallel axis theorem: I_new = I_cm + m * (d²*I - d⊗d)
+    I_translated = I_cm + mass * (d_squared * I - d_outer)
+
+    return I_translated
 
 
 @dataclass
@@ -33,6 +93,7 @@ class MotorParameters:
     radius: float  # Radius of the motor cylinder (m)
     height: float  # Height of the motor cylinder (m)
     mass: float   # Mass of the motor (kg)
+    effort_limit: float = 100.0
 
 
 @dataclass
@@ -235,41 +296,57 @@ class URDFGenerator:
         return reparsed.toprettyxml(indent="  ")
 
 
-def create_default_6dof_arm() -> str:
+def create_6dof_arm(
+        link_lengths: Sequence[float] = (0.05, 0.05, 0.2, 0.05, 0.2, 0.05),
+        motor_masses: Sequence[float] = (1.0, 1.0, 1.0, 1.0, 1.0, 1.0),
+        motor_limits: Sequence[float] = (30.0, 30.0, 30.0, 30.0, 30.0, 30.0),
+        link_density: float = 0.2,
+        payload_mass: float = 2.0,
+) -> str:
     """
     Create a default 6-DOF robotic arm configuration.
+
+    Args:
+        link_lengths: (Sequence[float]) Lengths of the links
+        motor_masses: (Sequence[float]) Masses of the motors
+        motor_limits: (Sequence[float]) Limits of the motors
+        link_density: (float) Density of the links in terms of kg/m of length, since radius is fixed
 
     Returns:
         str: Generated URDF as XML string
     """
-    # Motor parameters (all identical for simplicity)
+
+    assert len(link_lengths) == len(motor_masses) == len(motor_limits)
+
     motor_params = [
-        MotorParameters(radius=0.05, height=0.05, mass=1.01),
-        MotorParameters(radius=0.05, height=0.05, mass=1.01),
-        MotorParameters(radius=0.05, height=0.05, mass=1.01),
-        MotorParameters(radius=0.05, height=0.05, mass=1.01),
-        MotorParameters(radius=0.05, height=0.05, mass=1.01),
-        MotorParameters(radius=0.05, height=0.05, mass=1.01),
+        MotorParameters(radius=0.05, height=0.05, mass=motor_masses[i], effort_limit=motor_limits[i])
+        for i in range(len(motor_masses))
     ]
 
-    # Link parameters (5 links for 6-DOF arm)
-    link_params = [
-        LinkParameters(length=0.1, radius=0.025, mass=0.01),   # Link 1
-        LinkParameters(length=0.2, radius=0.025, mass=0.01),   # Link 2 (longer)
-        LinkParameters(length=0.1, radius=0.025, mass=0.01),   # Link 3
-        LinkParameters(length=0.2, radius=0.025, mass=0.01),   # Link 4 (longer)
-        LinkParameters(length=0.1, radius=0.025, mass=0.01),   # Link 5
-    ]
+    # simulate payload by adding it's mass to the last motor
+    motor_params[-1].mass += payload_mass
 
-    # Joint configurations with alternating orientations
-    joint_configs = [
-        JointConfiguration(name="joint_1", origin_xyz=(0, 0, 0), origin_rpy=(0, 0, 0)),
-        JointConfiguration(name="joint_2", origin_xyz=(0, 0, 0.1), origin_rpy=(1.5708, 0, 0)),
-        JointConfiguration(name="joint_3", origin_xyz=(0, 0, 0.1), origin_rpy=(-1.5708, 0, 0)),
-        JointConfiguration(name="joint_4", origin_xyz=(0, 0, 0.25), origin_rpy=(1.5708, 0, 0)),
-        JointConfiguration(name="joint_5", origin_xyz=(0, 0, 0.1), origin_rpy=(-1.5708, 0, 0)),
-        JointConfiguration(name="joint_6", origin_xyz=(0, 0, 0.25), origin_rpy=(1.5708, 0, 0)),
-    ]
+    angles = [np.pi / 2, -np.pi / 2, np.pi / 2, -np.pi / 2, np.pi / 2]
+    links_angles = [(length, angle) for length, angle in zip(link_lengths, angles)]
 
+    link_params = []
+    joint_configs = [JointConfiguration(
+        name='joint_1',
+        origin_xyz=(0, 0, 0),
+        origin_rpy=(0, 0, 0),
+        effort_limit=motor_params[0].effort_limit
+    )]
+
+    for i in range(len(links_angles)):
+        length, angle = links_angles[i]
+        link_params.append(LinkParameters(length=length, radius=0.025, mass=link_density * length))
+        joint_configs.append(
+            JointConfiguration(
+                name=f"joint_{len(joint_configs) + 1}",
+                origin_xyz=(0, 0, length + motor_params[i].height / 2 + motor_params[i].radius),
+                origin_rpy=(angle, 0, 0),
+                effort_limit=motor_params[i + 1].effort_limit
+            )
+        )
     generator = URDFGenerator()
     return generator.generate_serial_arm(motor_params, link_params, joint_configs)

@@ -154,7 +154,7 @@ class Config:
         """
         assert callable(target), f"Target must be callable, got object of type {type(target)}."
         self.target = target
-        self.args = args
+        self.args = list(args)  # TODO: cover argument override with tests
         self.kwargs = kwargs
 
     def override(self, **overrides) -> 'Config':

@@ -1,6 +1,11 @@
+from typing import Sequence
+import fire
 import mujoco as mj
+import ironic as ir
 
-def convert_urdf_to_mujoco(urdf_path: str) -> mj.MjModel:
+from positronic.drivers2.roboarm.generate_urdf import create_6dof_arm
+
+def convert_urdf_to_mujoco(urdf_path: str, wall_mounted: bool = False) -> mj.MjModel:
     """
     Convert a URDF file to a Mujoco model.
 
@@ -18,22 +23,24 @@ def convert_urdf_to_mujoco(urdf_path: str) -> mj.MjModel:
     _add_sensors(spec)
     spec.option.integrator = mj.mjtIntegrator.mjINT_IMPLICITFAST
 
+    if wall_mounted:
+        spec.body('link1').quat = [0, 0.707107, 0, 0.707107]
+
     return spec
 
 
 def _add_actuators(spec: mj.MjSpec) -> None:
     """Add position actuators for each joint."""
     for joint in spec.joints:
-        if joint.type != mj.mjtJoint.mjJNT_FREE:  # Skip free joints
-            actuator = spec.add_actuator()
-            actuator.name = f"actuator_{joint.name.split('_')[1]}"
-            actuator.trntype = mj.mjtTrn.mjTRN_JOINT
-            actuator.gainprm = [1000.0, 0, 0, 0, 0, 0, 0, 0, 0, 0]  # kp
-            actuator.biasprm = [0, -1000.0, -100.0, 0, 0, 0, 0, 0, 0, 0]  # kv
-            actuator.target = joint.name
-            actuator.biastype = mj.mjtBias.mjBIAS_AFFINE
-            actuator.forcerange = [-100, 100]
-            actuator.ctrlrange = [-3.1416, 3.1416]  # Full rotation for base
+        actuator = spec.add_actuator()
+        actuator.name = f"actuator_{joint.name.split('_')[1]}"
+        actuator.trntype = mj.mjtTrn.mjTRN_JOINT
+        actuator.gainprm = [1000.0, 0, 0, 0, 0, 0, 0, 0, 0, 0]  # kp
+        actuator.biasprm = [0, -1000.0, -100.0, 0, 0, 0, 0, 0, 0, 0]  # kv
+        actuator.target = joint.name
+        actuator.biastype = mj.mjtBias.mjBIAS_AFFINE
+        actuator.forcerange = [-100, 100]
+        actuator.ctrlrange = [-3.1416, 3.1416]
 
 
 
@@ -55,14 +62,18 @@ def _add_sites(spec: mj.MjSpec) -> None:
             break
 
 
-def _add_visuals(spec: mj.MjSpec, motor_size: float = 0.05) -> None:
+def _add_visuals(
+        spec: mj.MjSpec,
+        motor_height: float = 0.05,
+        motor_radius: float = 0.05,
+        link_radius: float = 0.025) -> None:
     """Add visual geometry to bodies."""
     for body in spec.bodies:
         if body.name and "link" in body.name:
-
-            motor_geom = body.add_geom(
+            half_height = motor_height / 2  # Cylinder is defined by half-height and radius in mujoco
+            body.add_geom(
                 type=mj.mjtGeom.mjGEOM_CYLINDER,
-                size=[motor_size, 0.025, 0],
+                size=[motor_radius, half_height, 0],
                 pos=[0.0, 0.0, 0.0],
                 rgba=[1.0, 1.0, 1.0, 1.0],
                 density=0,
@@ -72,13 +83,11 @@ def _add_visuals(spec: mj.MjSpec, motor_size: float = 0.05) -> None:
                 continue
 
             offset = body.bodies[0].pos
-            link_size = max(offset[2] - motor_size, 0.05)
-            print('link_size', link_size)
-            print('adding visual for', body.name)
-            link_geom = body.add_geom(
+            link_size = offset[2] - half_height - motor_radius
+            body.add_geom(
                 type=mj.mjtGeom.mjGEOM_CYLINDER,
-                size=[0.025, link_size / 2, 0],
-                pos=[0.0, 0.0, link_size / 2],
+                size=[link_radius, link_size / 2, 0],
+                pos=[0.0, 0.0, link_size / 2 + half_height],
                 rgba=[1.0, 0.0, 1.0, 1.0],
                 density=0,
             )
@@ -94,3 +103,43 @@ def _add_sensors(spec: mj.MjSpec) -> None:
             sensor.type = mj.mjtSensor.mjSENS_TORQUE
             sensor.objname = site.name
             sensor.objtype = mj.mjtObj.mjOBJ_SITE
+
+@ir.config(
+        wall_mounted=False,
+        urdf_path='robot_urdf.xml',
+        # TODO: wrap lists in ir.config
+        link_lengths=ir.Config(lambda *args: list(args), 0.05, 0.05, 0.2, 0.05, 0.2, 0.05),
+        motor_masses=ir.Config(lambda *args: list(args), 1.0, 1.0, 1.0, 1.0, 1.0, 1.0),
+        motor_limits=ir.Config(lambda *args: list(args), 30.0, 30.0, 30.0, 30.0, 30.0, 30.0),
+        link_density=0.2,
+        payload_mass=2.0,
+)
+def main(
+        target_path: str,
+        wall_mounted: bool,
+        urdf_path: str,
+        link_lengths: Sequence[float],
+        motor_masses: Sequence[float],
+        motor_limits: Sequence[float],
+        link_density: float,
+        payload_mass: float,
+        ):
+
+    with open(urdf_path, 'w') as f:
+        xml = create_6dof_arm(
+            link_lengths=link_lengths,
+            motor_masses=motor_masses,
+            motor_limits=motor_limits,
+            link_density=link_density,
+            payload_mass=payload_mass,
+        )
+        f.write(xml)
+
+    spec = convert_urdf_to_mujoco(urdf_path, wall_mounted=wall_mounted)
+    spec.compile()
+    with open(target_path, 'w') as f:
+        f.write(spec.to_xml())
+
+
+if __name__ == "__main__":
+    fire.Fire(main.override_and_instantiate)
