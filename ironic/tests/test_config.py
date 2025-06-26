@@ -483,3 +483,55 @@ def test_relative_import_with_nested_enum_default():
     result = result_cfg.instantiate()
 
     assert result == "BAD_REQUEST"
+
+
+def test_config_with_list_arg_could_be_overridden():
+    @ir.config(a=["a", "b", "c"])
+    def join(a):
+        return "".join(a)
+
+    assert join.override(**{"a.0": "X"}).instantiate() == "Xbc"
+
+
+def test_config_with_list_as_arg_preserve_list_type():
+    @ir.config(a=[1, 2, 3])
+    def return_arg(a):
+        return a
+
+    assert isinstance(return_arg.override(**{"a.0": 100}).instantiate(), list)
+
+
+def test_config_with_list_arg_with_nested_config_could_be_overridden():
+    @ir.config(value=1)
+    def obj1(value):
+        return value
+
+    @ir.config(value=2)
+    def obj2(value):
+        return value
+
+    @ir.config(arg=[obj1, obj2])
+    def return_list(arg):
+        return arg
+
+    assert return_list.override(**{"arg.0.value": 100}).instantiate() == [100, 2]
+
+
+def test_config_with_tuple_arg_with_nested_config_could_be_overridden():
+    @ir.config(value=1)
+    def obj1(value):
+        return value
+
+    @ir.config(value=2)
+    def obj2(value):
+        return value
+
+    @ir.config(arg=(obj1, obj2))
+    def return_tuple(arg):
+        return arg
+
+    assert return_tuple.override(**{"arg.0.value": 100}).instantiate() == (100, 2)
+
+
+if __name__ == "__main__":
+    pytest.main()

@@ -129,6 +129,28 @@ def _resolve_value(value: Any, default: Any | None = None) -> Any:
     return value
 
 
+def _get_value(obj, key):
+    if isinstance(obj, Config):
+        return obj._get_value(key)
+    elif isinstance(obj, list):
+        return obj[int(key)]
+    elif isinstance(obj, tuple):
+        return obj[int(key)]
+    else:
+        raise ConfigError(f"Cannot get value of {obj} with key {key}")
+
+
+def _set_value(obj, key, value):
+    if isinstance(obj, Config):
+        obj._set_value(key, value)
+    elif isinstance(obj, list):
+        obj[int(key)] = value
+    elif isinstance(obj, tuple):
+        raise NotImplementedError("Overriding tuple values is not implemented")
+    else:
+        raise ConfigError(f"Cannot set value of {obj} with key {key}")
+
+
 class Config:
     def __init__(self, target, *args, **kwargs):
         """
@@ -146,10 +168,15 @@ class Config:
             AssertionError: If the target is not callable.
 
         Example:
-            >>> @ir.Config
+            >>> @ir.config
             >>> def sum(a, b):
             >>>     return a + b
-            >>> res = sum.override(a=1, b=2).build()
+            >>> res = sum.override(a=1, b=2).instantiate()
+            >>> assert res == 3
+
+            >>> def sum(a, b):
+            >>>     return a + b
+            >>> res = ir.Config(sum, a=1, b=2).instantiate()
             >>> assert res == 3
         """
         assert callable(target), f"Target must be callable, got object of type {type(target)}."
@@ -166,9 +193,9 @@ class Config:
             current_obj = overriden_cfg
 
             for key in key_list[:-1]:
-                current_obj = current_obj._get_value(key)
+                current_obj = _get_value(current_obj, key)
 
-            current_obj._set_value(key_list[-1], value)
+            _set_value(current_obj, key_list[-1], value)
 
         return overriden_cfg
 
@@ -199,6 +226,9 @@ class Config:
 
         Returns:
             The instantiated target function.
+
+        Raises:
+            ConfigError: If the target function cannot be instantiated.
         """
         return self._instantiate_internal()
 
@@ -228,7 +258,7 @@ class Config:
                 if isinstance(e, ConfigError):
                     raise e
                 else:
-                    raise ConfigError(f'Error instantiating "{path + key}": {e}') from e
+                    raise ConfigError(f'Error instantiating "{path}{key}": {e}') from e
 
         # Recursively instantiate any Config objects in args
         instantiated_args = [_instantiate_value(arg, key, path) for key, arg in enumerate(self.args)]
@@ -298,13 +328,12 @@ class Config:
         return self.override(**kwargs).instantiate()
 
 
-def config(target: Callable | None = None, *args, **kwargs):
+def config(target: Callable | None = None, **kwargs):
     """
     Decorator to create a Config object.
 
     Args:
         target: The target object to be configured.
-        *args: Positional arguments to be passed to the target object.
         **kwargs: Keyword arguments to be passed to the target object.
 
     Returns:
@@ -326,7 +355,7 @@ def config(target: Callable | None = None, *args, **kwargs):
 
     if target is None:
         def _config_decorator(target):
-            return Config(target, *args, **kwargs)
+            return Config(target, **kwargs)
         return _config_decorator
     else:
         return Config(target)

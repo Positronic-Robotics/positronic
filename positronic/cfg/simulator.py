@@ -4,12 +4,7 @@ from positronic.simulator.mujoco.scene.transforms import AddBox, AddCameras, Set
 from positronic.simulator.mujoco.sim import create_from_config
 
 
-def _list(*args):
-    return list(args)
-
-
-stack_cubes_loaders = ir.Config(
-    _list,
+stack_cubes_loaders = [
     ir.Config(AddCameras, additional_cameras={
         'side_view': {
             'pos': [1.235, -0.839, 1.092],
@@ -32,7 +27,7 @@ stack_cubes_loaders = ir.Config(
     ir.Config(SetBodyPosition, body_name='box_0_body', random_position=[[0.31, -0.28, 0.31], [0.69, 0.28, 0.31]]),
     ir.Config(AddBox, name='box_1', size=[0.02, 0.02, 0.01], pos=[0.0, 0.0, 0.01], rgba=[0, 1, 0, 1], freejoint=True),
     ir.Config(SetBodyPosition, body_name='box_1_body', random_position=[[0.31, -0.28, 0.31], [0.69, 0.28, 0.31]]),
-)
+]
 
 
 simulator = ir.Config(

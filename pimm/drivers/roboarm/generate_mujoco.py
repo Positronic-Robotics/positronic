@@ -107,11 +107,10 @@ def _add_sensors(spec: mj.MjSpec) -> None:
 @ir.config(
         wall_mounted=False,
         urdf_path='robot_urdf.xml',
-        # TODO: wrap lists in ir.config
-        link_lengths=ir.Config(lambda *args: list(args), 0.05, 0.05, 0.2, 0.05, 0.2),
-        motor_masses=ir.Config(lambda *args: list(args), 1.0, 1.0, 1.0, 1.0, 1.0, 1.0),
-        motor_limits=ir.Config(lambda *args: list(args), 30.0, 30.0, 30.0, 30.0, 30.0, 30.0),
-        joint_rotations=ir.Config(lambda *args: list(args), np.pi / 2, -np.pi / 2, np.pi / 2, -np.pi / 2, np.pi / 2),
+        link_lengths=[0.05, 0.05, 0.2, 0.05, 0.2],
+        motor_masses=[1.0, 1.0, 1.0, 1.0, 1.0, 1.0],
+        motor_limits=[30.0, 30.0, 30.0, 30.0, 30.0, 30.0],
+        joint_rotations=[np.pi / 2, -np.pi / 2, np.pi / 2, -np.pi / 2, np.pi / 2],
         link_density=0.2,
         payload_mass=2.0,
         kp=100.0,
