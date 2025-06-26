@@ -202,8 +202,7 @@ def test_config_str_nested_produces_correct_str():
     expected_str = f"""'@target': '@{apply.__module__}.{apply.__name__}'
 func:
   '@target': '@{add.__module__}.{add.__name__}'
-  '*args':
-  - 1
+  '*args': [1]
   b: 2
 a: 3
 b: 4

@@ -1,5 +1,4 @@
 from typing import Sequence
-import fire
 import mujoco as mj
 import ironic as ir
 import numpy as np

@@ -392,4 +392,4 @@ def run_config(config: Config):
             print("Config:")
             print(str(config))
 
-    fire.Fire(RunAndHelp)
+    fire.Fire(RunAndHelp())

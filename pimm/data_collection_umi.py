@@ -1,8 +1,6 @@
 import time
 from typing import Dict
 
-import fire
-
 import ironic as ir1
 import ironic2 as ir
 from ironic.utils import FPSCounter
