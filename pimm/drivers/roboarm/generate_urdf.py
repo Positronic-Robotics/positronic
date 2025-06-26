@@ -295,7 +295,7 @@ class URDFGenerator:
         return reparsed.toprettyxml(indent="  ")
 
 
-def create_6dof_arm(
+def create_arm(
         link_lengths: Sequence[float] = (0.05, 0.05, 0.2, 0.05, 0.2),
         motor_masses: Sequence[float] = (1.0, 1.0, 1.0, 1.0, 1.0, 1.0),
         motor_limits: Sequence[float] = (30.0, 30.0, 30.0, 30.0, 30.0, 30.0),
@@ -304,13 +304,15 @@ def create_6dof_arm(
         payload_mass: float = 2.0,
 ) -> str:
     """
-    Create a default 6-DOF robotic arm configuration.
+    Create a robotic arm configuration.
 
     Args:
         link_lengths: (Sequence[float]) Lengths of the links
         motor_masses: (Sequence[float]) Masses of the motors
         motor_limits: (Sequence[float]) Limits of the motors
+        joint_rotations: (Sequence[float]) Rotations of the joints in the frame of the previous links
         link_density: (float) Density of the links in terms of kg/m of length, since radius is fixed
+        payload_mass: (float) Mass of the payload to be added to the last motor
 
     Returns:
         str: Generated URDF as XML string

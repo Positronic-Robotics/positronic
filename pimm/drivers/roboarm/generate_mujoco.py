@@ -4,7 +4,7 @@ import mujoco as mj
 import ironic as ir
 import numpy as np
 
-from pimm.drivers.roboarm.generate_urdf import create_6dof_arm
+from pimm.drivers.roboarm.generate_urdf import create_arm
 
 
 def convert_urdf_to_mujoco(
@@ -131,7 +131,7 @@ def main(
         kv: float,
 ):
     with open(urdf_path, 'w') as f:
-        xml = create_6dof_arm(
+        xml = create_arm(
             link_lengths=link_lengths,
             motor_masses=motor_masses,
             motor_limits=motor_limits,
