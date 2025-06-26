@@ -287,7 +287,7 @@ class Config:
         return res
 
     def __str__(self):
-        return yaml.dump(self._to_dict(), default_flow_style=False, sort_keys=False)
+        return yaml.dump(self._to_dict(), default_flow_style=None, sort_keys=False, width=140)
 
     def copy(self) -> 'Config':
         """
@@ -363,3 +363,33 @@ def config(target: Callable | None = None, **kwargs):
         return _config_decorator
     else:
         return Config(target)
+
+
+def run_config(config: Config):
+    """
+    Run a config object as a CLI.
+
+    Args:
+        config: The config object to run.
+
+    Example:
+        >>> def sum(a, b):
+        >>>     return a + b
+        >>> ir.run(sum)
+        >>> # Shell call: python script.py --a 1 --b 2
+        >>> # Shell call: python script.py help
+    """
+    import fire
+
+    class RunAndHelp:
+        def __call__(self, **kwargs):
+            return config.override_and_instantiate(**kwargs)
+
+        def help(self):
+            if hasattr(config.target, '__doc__') and config.target.__doc__:
+                print(config.target.__doc__)
+            print('=' * 140)
+            print("Config:")
+            print(str(config))
+
+    fire.Fire(RunAndHelp)

@@ -147,4 +147,4 @@ def main(
 
 
 if __name__ == "__main__":
-    fire.Fire(main.override_and_instantiate)
+    ir.run_config(main)

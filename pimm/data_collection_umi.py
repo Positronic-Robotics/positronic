@@ -152,4 +152,4 @@ main = ir1.Config(
 )
 
 if __name__ == "__main__":
-    fire.Fire(main.override_and_instantiate)
+    ir1.run_config(main)
