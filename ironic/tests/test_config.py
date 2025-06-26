@@ -533,5 +533,29 @@ def test_config_with_tuple_arg_with_nested_config_could_be_overridden():
     assert return_tuple.override(**{"arg.0.value": 100}).instantiate() == (100, 2)
 
 
+def test_config_with_dict_arg_could_be_overridden():
+    @ir.config(arg={"a": 1, "b": 2})
+    def return_dict(arg):
+        return arg
+
+    assert return_dict.override(**{"arg.a": 100}).instantiate() == {"a": 100, "b": 2}
+
+
+def test_config_with_dict_arg_with_nested_config_could_be_overridden():
+    @ir.config(value=1)
+    def obj1(value):
+        return value
+
+    @ir.config(value=2)
+    def obj2(value):
+        return value
+
+    @ir.config(arg={"a": obj1, "b": obj2})
+    def return_dict(arg):
+        return arg
+
+    assert return_dict.override(**{"arg.a.value": 100}).instantiate() == {"a": 100, "b": 2}
+
+
 if __name__ == "__main__":
     pytest.main()

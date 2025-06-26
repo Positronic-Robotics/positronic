@@ -136,6 +136,8 @@ def _get_value(obj, key):
         return obj[int(key)]
     elif isinstance(obj, tuple):
         return obj[int(key)]
+    elif isinstance(obj, dict):
+        return obj[key]
     else:
         raise ConfigError(f"Cannot get value of {obj} with key {key}")
 
@@ -147,6 +149,8 @@ def _set_value(obj, key, value):
         obj[int(key)] = value
     elif isinstance(obj, tuple):
         raise NotImplementedError("Overriding tuple values is not implemented")
+    elif isinstance(obj, dict):
+        obj[key] = value
     else:
         raise ConfigError(f"Cannot set value of {obj} with key {key}")
 
