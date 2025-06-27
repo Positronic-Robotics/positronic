@@ -65,16 +65,15 @@ class SoundSystem:
         audio_files = {}
         file_idx = 0
 
-        wav_path = ir.DefaultSignalReader(ir.ValueUpdated(self.wav_path), (None, False))
-        level = ir.DefaultSignalReader(ir.ValueUpdated(self.level), 0.0)
+        wav_path = ir.DefaultReader(ir.ValueUpdated(self.wav_path), (None, False))
+        level = ir.DefaultReader(ir.ValueUpdated(self.level), 0.0)
 
         while not ir.is_true(should_stop):
             # Load new files
-            wav_path, is_updated = self.wav_path.value
-
+            path, is_updated = wav_path.value
             if is_updated:
-                print(f"Playing {wav_path.data}")
-                audio_files[file_idx] = wave.open(wav_path.data, 'rb')
+                print(f"Playing {path}")
+                audio_files[file_idx] = wave.open(path, 'rb')
                 assert audio_files[file_idx].getframerate() == 44100, "Only 44100Hz wav files are currently supported"
                 assert audio_files[file_idx].getsampwidth() == 2, "Only 16-bit wav files are currently supported"
                 file_idx += 1

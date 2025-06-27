@@ -48,7 +48,7 @@ def main(gripper: DHGripper | None,  # noqa: C901  Function is too complex
         frame_readers = {}
         for camera_name, camera in cameras.items():
             camera.frame, frame_reader = world.pipe()
-            frame_readers[camera_name] = ir.ValueUpdated(frame_reader)
+            frame_readers[camera_name] = ir.ValueUpdated(ir.DefaultReader(frame_reader, None))
 
         webxr.controller_positions, controller_positions_reader = world.pipe()
         webxr.buttons, buttons_reader = world.pipe()
@@ -97,11 +97,11 @@ def main(gripper: DHGripper | None,  # noqa: C901  Function is too complex
                 # TODO: Support aborting current episode.
 
                 frame_messages = {
-                    name: reader.value() or ir.Message((None, False))
+                    name: reader.read()
                     for name, reader in frame_readers.items()
                 }
-                any_frame_updated = any(is_updated and frame is not None
-                                        for frame, is_updated in frame_messages.values())
+                any_frame_updated = any(msg.data[1] and msg.data[0] is not None
+                                        for msg in frame_messages.values())
 
                 target_grip = button_handler.get_value('right_trigger')
                 target_grip_emitter.emit(target_grip)
@@ -110,7 +110,7 @@ def main(gripper: DHGripper | None,  # noqa: C901  Function is too complex
                     time.sleep(0.001)
                     continue
 
-                frame_messages = {name: frame for name, (frame, _) in frame_messages.items()}
+                frame_messages = {name: ir.Message(msg.data[0], msg.ts) for name, msg in frame_messages.items()}
                 controller_positions = controller_positions_reader.value
                 right_controller_position = controller_positions['right']
                 left_controller_position = controller_positions['left']

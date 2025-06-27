@@ -39,9 +39,9 @@ class DHGripper:
                 time.sleep(0.1)
 
         # Set initial values
-        force = ir.DefaultSignalReader(self.force, 100)
-        speed = ir.DefaultSignalReader(self.speed, 100)
-        target_grip = ir.DefaultSignalReader(self.target_grip, 0)
+        force = ir.DefaultReader(self.force, 100)
+        speed = ir.DefaultReader(self.speed, 100)
+        target_grip = ir.DefaultReader(self.target_grip, 0)
 
         while not ir.is_true(should_stop):
             # Update gripper based on shared values

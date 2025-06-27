@@ -55,16 +55,15 @@ class ValueUpdated(SignalReader):
         return Message((orig_message.data, is_updated), self.last_ts)
 
 
-class DefaultSignalReader(SignalReader):
+class DefaultReader(SignalReader):
     """Signal reader that returns a default value if no value is available."""
 
     def __init__(self, reader: SignalReader, default: Any, default_ts: int = 0):
         self.reader = reader
-        self.default = default
-        self.default_ts = default_ts
+        self.default_msg = Message(default, default_ts)
 
     def read(self) -> Message | None:
         msg = self.reader.read()
         if msg is None:
-            return Message(self.default, self.default_ts)
+            return self.default_msg
         return msg
