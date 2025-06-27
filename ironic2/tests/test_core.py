@@ -1,6 +1,6 @@
 from unittest.mock import Mock
 
-from ironic2.core import (Message, SignalReader, is_true)
+from ironic2.core import Message, SignalReader, is_true
 
 
 class TestIsTrue:
