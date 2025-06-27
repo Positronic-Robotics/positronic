@@ -65,11 +65,13 @@ class SoundSystem:
         audio_files = {}
         file_idx = 0
 
-        self.wav_path = ir.ValueUpdated(self.wav_path)
+        wav_path = ir.DefaultSignalReader(ir.ValueUpdated(self.wav_path), (None, False))
+        level = ir.DefaultSignalReader(ir.ValueUpdated(self.level), 0.0)
 
         while not ir.is_true(should_stop):
             # Load new files
-            wav_path, is_updated = ir.signal_value(self.wav_path, (None, False))
+            wav_path, is_updated = self.wav_path.value
+
             if is_updated:
                 print(f"Playing {wav_path.data}")
                 audio_files[file_idx] = wave.open(wav_path.data, 'rb')
@@ -81,8 +83,7 @@ class SoundSystem:
             if chunk_size == 0:
                 continue
 
-            level = ir.signal_value(self.level, 0.0)
-            master_volume, frequency = self._level_to_frequency(level)
+            master_volume, frequency = self._level_to_frequency(level.value)
 
             # Generate tone chunk
             next_chunk = self.sound_fn(chunk_size, master_volume, frequency)

@@ -39,20 +39,17 @@ class DHGripper:
                 time.sleep(0.1)
 
         # Set initial values
-        client.write_register(0x101, c_uint16(100).value, slave=1)  # force
-        client.write_register(0x104, c_uint16(100).value, slave=1)  # speed
-        width = round((1 - 0) * 1000)  # fully open
-        client.write_register(0x103, c_uint16(width).value, slave=1)
-        time.sleep(0.5)
+        force = ir.DefaultSignalReader(self.force, 100)
+        speed = ir.DefaultSignalReader(self.speed, 100)
+        target_grip = ir.DefaultSignalReader(self.target_grip, 0)
 
         while not ir.is_true(should_stop):
             # Update gripper based on shared values
             try:
-                target_grip = ir.signal_value(self.target_grip)
-                width = round((1 - max(0, min(target_grip, 1))) * 1000)
+                width = round((1 - max(0, min(target_grip.value, 1))) * 1000)
                 client.write_register(0x103, c_uint16(width).value, slave=1)
-                client.write_register(0x101, c_uint16(ir.signal_value(self.force)).value, slave=1)
-                client.write_register(0x104, c_uint16(ir.signal_value(self.speed)).value, slave=1)
+                client.write_register(0x101, c_uint16(force.value).value, slave=1)
+                client.write_register(0x104, c_uint16(speed.value).value, slave=1)
 
                 current_grip = 1 - client.read_holding_registers(0x202, count=1, slave=1).registers[0] / 1000
                 self.grip.emit(current_grip)
@@ -85,6 +82,6 @@ if __name__ == "__main__":
             target_grip.emit(width)
             time.sleep(0.5)
             try:
-                print(f"Real grip position: {ir.signal_value(grip)}")
+                print(f"Real grip position: {grip.value}")
             except ir.NoValueException:
                 pass

@@ -81,8 +81,7 @@ def main(gripper: DHGripper | None,  # noqa: C901  Function is too complex
         fps_counter = FPSCounter("Data Collection")
         while not world.should_stop:
             try:
-                buttons = ir.signal_value(buttons_reader)
-                _parse_buttons(buttons, button_handler)
+                _parse_buttons(buttons_reader.value, button_handler)
                 if button_handler.just_pressed('right_B'):
                     tracked = not tracked
                     if tracked:
@@ -112,8 +111,9 @@ def main(gripper: DHGripper | None,  # noqa: C901  Function is too complex
                     continue
 
                 frame_messages = {name: frame for name, (frame, _) in frame_messages.items()}
-                right_controller_position = ir.signal_value(controller_positions_reader)['right']
-                left_controller_position = ir.signal_value(controller_positions_reader)['left']
+                controller_positions = controller_positions_reader.value
+                right_controller_position = controller_positions['right']
+                left_controller_position = controller_positions['left']
 
                 ep_dict = {
                     'target_grip': target_grip,

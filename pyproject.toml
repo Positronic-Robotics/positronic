@@ -69,5 +69,6 @@ testpaths = [
     "geom/tests",
     "positronic/tests",
     "ironic/tests",
+    "ironic2/tests",
 ]
 python_files = ["test_*.py", "*_test.py"]

@@ -17,16 +17,17 @@ class QueueEmitter(SignalEmitter):
         self._queue = queue
 
     def emit(self, data: Any, ts: int | None = None) -> bool:
-        if self._queue.full():
-            try:
-                self._queue.get_nowait()
-            except Empty:
-                pass  # Queue was not actually full
         try:
             self._queue.put_nowait(Message(data, ts))
             return True
         except Full:
-            return False
+            # Queue is full, try to remove old message and try again
+            try:
+                self._queue.get_nowait()
+                self._queue.put_nowait(Message(data, ts))
+                return True
+            except (Empty, Full):
+                return False
 
 
 class QueueReader(SignalReader):
@@ -35,7 +36,7 @@ class QueueReader(SignalReader):
         self._queue = queue
         self._last_value = None
 
-    def value(self) -> Message | None:
+    def read(self) -> Message | None:
         try:
             self._last_value = self._queue.get_nowait()
         except Empty:
@@ -48,7 +49,7 @@ class EventReader(SignalReader):
     def __init__(self, event: mp.Event):
         self._event = event
 
-    def value(self) -> Message | None:
+    def read(self) -> Message | None:
         return Message(data=self._event.is_set(), ts=system_clock())
 
 

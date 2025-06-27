@@ -78,7 +78,7 @@ class WebXR:
                 while not ir.is_true(should_stop):
                     await asyncio.sleep(1 / 60)
 
-                    msg = self.frame.value()
+                    msg = self.frame.read()
 
                     if msg is None:
                         continue

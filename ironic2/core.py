@@ -1,7 +1,7 @@
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 import time
-from typing import Any, Callable
+from typing import Any, Callable, final
 
 # Internal sentinel object to distinguish between no default and explicit None default
 _RAISE_EXCEPTION_SENTINEL = object()
@@ -52,32 +52,31 @@ class SignalReader(ABC):
     """Read a signal value. All implementations must be non-blocking."""
 
     @abstractmethod
-    def value(self) -> Message | None:
+    def read(self) -> Message | None:
         """Returns next message, otherwise last value. None if nothing was read yet."""
         pass
+
+    @final
+    @property
+    def value(self) -> Any:
+        """Returns the current value of the signal."""
+        msg = self.read()
+        if msg is None:
+            raise NoValueException
+        return msg.data
 
 
 class NoOpReader(SignalReader):
 
-    def value(self) -> Message | None:
+    def read(self) -> Message | None:
         return None
 
 
 def is_true(signal: SignalReader) -> bool:
-    value = signal.value()
+    value = signal.read()
     if value is None:
         return False
     return value.data is True
-
-
-def signal_value(signal: SignalReader, default: Any = _RAISE_EXCEPTION_SENTINEL) -> Any:
-    value = signal.value()
-    if value is None:
-        if default is _RAISE_EXCEPTION_SENTINEL:
-            raise NoValueException
-        return default
-
-    return value.data
 
 
 ControlSystem = Callable[[SignalReader], None]
