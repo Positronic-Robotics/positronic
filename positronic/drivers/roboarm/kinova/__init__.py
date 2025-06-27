@@ -14,7 +14,7 @@ import numpy as np
 
 import geom
 import ironic as ir
-from positronic.drivers.roboarm.kinova.api import KinovaAPI
+# from positronic.drivers.roboarm.kinova.api import KinovaAPI
 from positronic.drivers.roboarm.kinova.base import KinematicsSolver, JointCompliantController
 from positronic.drivers.roboarm.status import RobotStatus
 

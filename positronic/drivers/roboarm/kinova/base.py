@@ -38,14 +38,14 @@ def wrap_joint_angle(q, q_base):
 class KinematicsSolver:
     """Solves forward and inverse kinematics for the Kinova arm."""
 
-    def __init__(self, ee_offset=0.0):
-        self.model = mujoco.MjModel.from_xml_path('positronic/drivers/roboarm/kinova/gen3.xml')
+    def __init__(self, path: str = 'positronic/drivers/roboarm/kinova/gen3.xml', ee_offset=0.0):
+        self.model = mujoco.MjModel.from_xml_path(path)
         self.data = mujoco.MjData(self.model)
         self.model.body_gravcomp[:] = 1.0
 
         # Cache references
         self.qpos0 = np.zeros(self.model.nq)
-        self.site_id = self.model.site('pinch_site').id
+        self.site_id = self.model.site('end_effector').id
         self.site_pos = self.data.site(self.site_id).xpos
         self.site_mat = self.data.site(self.site_id).xmat
 
@@ -68,6 +68,7 @@ class KinematicsSolver:
         self.joint_limits_lower = []
         self.joint_limits_upper = []
         for i, row in enumerate(self.model.jnt_range):
+            print(row)
             if not (row[0] == row[1] == 0):
                 self.joint_limits_idx.append(i)
                 self.joint_limits_lower.append(row[0])
@@ -224,7 +225,7 @@ class JointCompliantController:
             self.y = self.alpha * x + (1 - self.alpha) * self.y
             return self.y
 
-    def __init__(self, actuator_count, relative_dynamics_factor=0.5):
+    def __init__(self, actuator_count, path: str = 'positronic/drivers/roboarm/kinova/model.urdf', relative_dynamics_factor=0.5):
         self.q_s = None
         self.q_d = None
         self.dq_d = None
@@ -242,9 +243,9 @@ class JointCompliantController:
         self.target_qpos = None
 
         # Initialize pinocchio model and data
-        self.model = pin.buildModelFromUrdf('positronic/drivers/roboarm/kinova/model.urdf')
+        self.model = pin.buildModelFromUrdf(path)
         self.data = self.model.createData()
-        self._q_pin = np.zeros(11)
+        self._q_pin = np.zeros(self.model.nq)
 
     def set_target_qpos(self, qpos):
         self.target_qpos = qpos
@@ -255,10 +256,17 @@ class JointCompliantController:
 
     def gravity(self, q):
         q_pin = self._q_pin  # Reuse pre-allocated q_pin
-        q_pin[0], q_pin[1], q_pin[2] = math.cos(q[0]), math.sin(q[0]), q[1]
-        q_pin[3], q_pin[4], q_pin[5] = math.cos(q[2]), math.sin(q[2]), q[3]
-        q_pin[6], q_pin[7], q_pin[8] = math.cos(q[4]), math.sin(q[4]), q[5]
-        q_pin[9], q_pin[10] = math.cos(q[6]), math.sin(q[6])
+        q_pin_idx = 0
+        q_idx = 0
+        for joint in self.model.joints[1:]:  # skip base joint
+            if joint.nq == 1:
+                q_pin[q_pin_idx] = q[q_idx]
+                q_pin_idx += 1
+                q_idx += 1
+            elif joint.nq == 2:
+                q_pin[q_pin_idx], q_pin[q_pin_idx + 1] = math.cos(q[q_idx]), math.sin(q[q_idx])
+                q_pin_idx += 2
+                q_idx += 1
         return pin.computeGeneralizedGravity(self.model, self.data, q_pin)
 
     def compute_torque(self, q, dq, tau):

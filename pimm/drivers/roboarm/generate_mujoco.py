@@ -11,6 +11,8 @@ def convert_urdf_to_mujoco(
         wall_mounted: bool = False,
         kp: float = 1000.0,
         kv: float = 100.0,
+        add_camera: bool = True,
+        actuator_type: str = 'position'
 ) -> mj.MjModel:
     """
     Convert a URDF file to a Mujoco model.
@@ -23,10 +25,12 @@ def convert_urdf_to_mujoco(
     """
     spec = mj.MjSpec.from_file(urdf_path)
 
-    _add_actuators(spec, kp, kv)
+    _add_actuators(spec, kp, kv, actuator_type)
     _add_sites(spec)
     _add_geoms(spec)
     _add_sensors(spec)
+    if add_camera:
+        _add_camera(spec)
     spec.option.integrator = mj.mjtIntegrator.mjINT_IMPLICITFAST
 
     if wall_mounted:
@@ -35,18 +39,29 @@ def convert_urdf_to_mujoco(
     return spec
 
 
-def _add_actuators(spec: mj.MjSpec, kp: float, kv: float) -> None:
+def _add_actuators(spec: mj.MjSpec, kp: float, kv: float, actuator_type: str) -> None:
     """Add position actuators for each joint."""
     for joint in spec.joints:
-        actuator = spec.add_actuator()
-        actuator.name = f"actuator_{joint.name.split('_')[1]}"
-        actuator.trntype = mj.mjtTrn.mjTRN_JOINT
-        actuator.gainprm = [kp, 0, 0, 0, 0, 0, 0, 0, 0, 0]  # kp
-        actuator.biasprm = [0, -kp, -kv, 0, 0, 0, 0, 0, 0, 0]  # kv
-        actuator.target = joint.name
-        actuator.biastype = mj.mjtBias.mjBIAS_AFFINE
-        actuator.forcerange = [-100, 100]
-        actuator.ctrlrange = [-3.1416, 3.1416]
+        if actuator_type == 'position':
+            actuator = spec.add_actuator()
+            actuator.name = f"actuator_{joint.name.split('_')[1]}"
+            actuator.trntype = mj.mjtTrn.mjTRN_JOINT
+            actuator.gainprm = [kp, 0, 0, 0, 0, 0, 0, 0, 0, 0]  # kp
+            actuator.biasprm = [0, -kp, -kv, 0, 0, 0, 0, 0, 0, 0]  # kv
+            actuator.target = joint.name
+            actuator.biastype = mj.mjtBias.mjBIAS_AFFINE
+            actuator.forcerange = joint.actfrcrange
+            actuator.ctrlrange = [-np.pi, np.pi]
+        elif actuator_type == 'torque':
+            actuator = spec.add_actuator()
+            actuator.name = f"actuator_{joint.name.split('_')[1]}"
+            actuator.trntype = mj.mjtTrn.mjTRN_JOINT
+            actuator.gainprm = [1, 0, 0, 0, 0, 0, 0, 0, 0, 0]  # kp
+            actuator.biasprm = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0]  # kv
+            actuator.biastype = mj.mjtBias.mjBIAS_NONE
+            actuator.gaintype = mj.mjtGain.mjGAIN_FIXED
+            actuator.target = joint.name
+            actuator.ctrlrange = [-100, 100]
 
 
 def _add_sites(spec: mj.MjSpec) -> None:
@@ -56,7 +71,7 @@ def _add_sites(spec: mj.MjSpec) -> None:
         site.pos = [0.0, 0.0, 0.0]
 
     for body in spec.bodies:
-        if body.name == "link6":
+        if body.name == "link7":
             end_site = body.add_site()
             end_site.name = "end_effector"
             end_site.pos = [0.0, 0.0, 0.0]
@@ -103,17 +118,25 @@ def _add_sensors(spec: mj.MjSpec) -> None:
             sensor.objtype = mj.mjtObj.mjOBJ_SITE
 
 
+def _add_camera(spec: mj.MjSpec) -> None:
+    spec.worldbody.add_camera(
+        name="viewer",
+        pos=[1.235, -0.839, 1.092],
+        xyaxes=[0.712, 0.702, -0.000, -0.420, 0.425, 0.802]
+    )
+
 @ir.config(
         wall_mounted=False,
         urdf_path='robot_urdf.xml',
-        link_lengths=[0.05, 0.05, 0.2, 0.05, 0.2],
-        motor_masses=[1.0, 1.0, 1.0, 1.0, 1.0, 1.0],
-        motor_limits=[30.0, 30.0, 30.0, 30.0, 30.0, 30.0],
-        joint_rotations=[np.pi / 2, -np.pi / 2, np.pi / 2, -np.pi / 2, np.pi / 2],
+        link_lengths=[0.05, 0.05, 0.2, 0.05, 0.2, 0.05],
+        motor_masses=[1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0],
+        motor_limits=[30.0, 30.0, 30.0, 30.0, 30.0, 30.0, 30.0],
+        joint_rotations=[np.pi / 2, -np.pi / 2, np.pi / 2, -np.pi / 2, np.pi / 2, -np.pi / 2],
         link_density=0.2,
         payload_mass=2.0,
         kp=100.0,
         kv=10.0,
+        actuator_type='position',
 )
 def main(
         target_path: str,
@@ -127,6 +150,7 @@ def main(
         payload_mass: float,
         kp: float,
         kv: float,
+        actuator_type: str,
 ):
     with open(urdf_path, 'w') as f:
         xml = create_arm(
@@ -139,7 +163,7 @@ def main(
         )
         f.write(xml)
 
-    spec = convert_urdf_to_mujoco(urdf_path, wall_mounted=wall_mounted, kp=kp, kv=kv)
+    spec = convert_urdf_to_mujoco(urdf_path, wall_mounted=wall_mounted, kp=kp, kv=kv, actuator_type=actuator_type)
     spec.compile()
     with open(target_path, 'w') as f:
         f.write(spec.to_xml())

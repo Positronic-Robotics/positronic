@@ -40,6 +40,8 @@ class JointConfiguration:
     origin_rpy: Tuple[float, float, float] = (0, 0, 0)
     effort_limit: float = 100.0
     velocity_limit: float = 1.0
+    lower_limit: float = -np.pi
+    upper_limit: float = np.pi
 
 
 def calculate_center_of_mass(masses, positions):
@@ -241,7 +243,12 @@ class URDFGenerator:
 
         # Limits
         ET.SubElement(
-            joint_elem, "limit", effort=f"{joint_config.effort_limit}", velocity=f"{joint_config.velocity_limit}"
+            joint_elem,
+            "limit",
+            effort=f"{joint_config.effort_limit}",
+            velocity=f"{joint_config.velocity_limit}",
+            lower=f"{joint_config.lower_limit}",
+            upper=f"{joint_config.upper_limit}"
         )
 
     def generate_serial_arm(
@@ -296,10 +303,10 @@ class URDFGenerator:
 
 
 def create_arm(
-        link_lengths: Sequence[float] = (0.05, 0.05, 0.2, 0.05, 0.2),
-        motor_masses: Sequence[float] = (1.0, 1.0, 1.0, 1.0, 1.0, 1.0),
-        motor_limits: Sequence[float] = (30.0, 30.0, 30.0, 30.0, 30.0, 30.0),
-        joint_rotations: Sequence[float] = (np.pi / 2, -np.pi / 2, np.pi / 2, -np.pi / 2, np.pi / 2),
+        link_lengths: Sequence[float] = (0.05, 0.05, 0.2, 0.05, 0.2, 0.05),
+        motor_masses: Sequence[float] = (1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0),
+        motor_limits: Sequence[float] = (30.0, 30.0, 30.0, 30.0, 30.0, 30.0, 30.0),
+        joint_rotations: Sequence[float] = (np.pi / 2, -np.pi / 2, np.pi / 2, -np.pi / 2, np.pi / 2, -np.pi / 2),
         link_density: float = 0.2,
         payload_mass: float = 2.0,
 ) -> str:
