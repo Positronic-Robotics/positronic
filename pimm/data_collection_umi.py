@@ -13,10 +13,10 @@ from pimm.drivers.webxr import WebXR
 from positronic.tools.buttons import ButtonHandler
 from positronic.tools.dataset_dumper import SerialDumper
 
-import positronic.cfg2.hardware.gripper
-import positronic.cfg2.webxr
-import positronic.cfg2.hardware.camera
-import positronic.cfg2.sound
+import pimm.cfg.hardware.gripper
+import pimm.cfg.webxr
+import pimm.cfg.hardware.camera
+import pimm.cfg.sound
 
 
 def _parse_buttons(buttons: ir.Message | None, button_handler: ButtonHandler):
@@ -141,13 +141,13 @@ def main(gripper: DHGripper | None,  # noqa: C901  Function is too complex
 
 main = ir1.Config(
     main,
-    gripper=positronic.cfg2.hardware.gripper.dh_gripper,
-    webxr=positronic.cfg2.webxr.webxr,
-    sound=positronic.cfg2.sound.sound,
+    gripper=pimm.cfg.hardware.gripper.dh_gripper,
+    webxr=pimm.cfg.webxr.webxr,
+    sound=pimm.cfg.sound.sound,
     cameras=ir1.Config(
         dict,
-        left=positronic.cfg2.hardware.camera.arducam_left,
-        right=positronic.cfg2.hardware.camera.arducam_right,
+        left=pimm.cfg.hardware.camera.arducam_left,
+        right=pimm.cfg.hardware.camera.arducam_right,
     ),
 )
 
