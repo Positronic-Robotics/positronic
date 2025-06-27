@@ -556,5 +556,71 @@ def test_config_with_dict_arg_with_nested_config_could_be_overridden():
     assert return_dict.override(**{"arg.a.value": 100}).instantiate() == {"a": 100, "b": 2}
 
 
+def test_required_args_with_no_default_values_returns_all_args():
+    @ir.config
+    def func(a, b):
+        return a + b
+
+    assert func.get_required_args() == ["a", "b"]
+
+
+def test_required_args_with_default_value_in_function():
+    @ir.config
+    def func(a, b=1):
+        return a + b
+
+    assert func.get_required_args() == ["a"]
+
+
+def test_required_args_with_default_value_in_config():
+    @ir.config(b=1)
+    def func(a, b):
+        return a + b
+
+    assert func.get_required_args() == ["a"]
+
+
+def test_required_args_with_default_value_in_config_and_function_returns_all_args():
+    @ir.config(a=1)
+    def func(a, b=1):
+        return a + b
+
+    assert func.get_required_args() == []
+
+
+def test_required_args_with_args_returns_necessary_args():
+    def func(a, b, c):
+        return a + b + c
+
+    func = ir.Config(func, 1, 2)
+
+    assert func.get_required_args() == ["c"]
+
+
+def test_required_args_with_args_and_keyword_only_args_returns_necessary_args():
+    def func(a, b, *, c):
+        return a + b + c
+
+    func = ir.Config(func, 1, 2)
+
+    assert func.get_required_args() == ["c"]
+
+
+def test_required_args_with_args_not_required():
+    @ir.config
+    def func(*args_name):
+        return sum(args_name)
+
+    assert func.get_required_args() == []
+
+
+def test_required_args_with_kwargs_not_required():
+    @ir.config
+    def func(**kwargs_name):
+        return sum(kwargs_name.values())
+
+    assert func.get_required_args() == []
+
+
 if __name__ == "__main__":
     pytest.main()

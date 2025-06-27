@@ -150,4 +150,4 @@ main = ir1.Config(
 )
 
 if __name__ == "__main__":
-    ir1.run_config(main)
+    ir1.cli(main)

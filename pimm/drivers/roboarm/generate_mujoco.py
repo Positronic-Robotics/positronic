@@ -146,4 +146,4 @@ def main(
 
 
 if __name__ == "__main__":
-    ir.run_config(main)
+    ir.cli(main)
