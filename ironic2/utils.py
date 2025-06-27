@@ -54,6 +54,18 @@ class ValueUpdated(SignalReader):
 
         return Message((orig_message.data, is_updated), self.last_ts)
 
+    def updated_values(self):
+        """Utility method to work with updates nicely.
+        Example:
+        ```
+            for value in my_signal.updated_values():
+                print(f"This only runs if the value was updated: {value}")
+        ```
+        """
+        msg = self.read()
+        if msg is not None and msg.data[1]:
+            yield msg.data[0]
+
 
 class DefaultReader(SignalReader):
     """Signal reader that returns a default value if no value is available."""

@@ -39,17 +39,22 @@ class DHGripper:
                 time.sleep(0.1)
 
         # Set initial values
-        force = ir.DefaultReader(self.force, 100)
-        speed = ir.DefaultReader(self.speed, 100)
-        target_grip = ir.DefaultReader(self.target_grip, 0)
+        force = ir.ValueUpdated(ir.DefaultReader(self.force, 100))
+        speed = ir.ValueUpdated(ir.DefaultReader(self.speed, 100))
+        target_grip = ir.ValueUpdated(ir.DefaultReader(self.target_grip, 0))
 
         while not ir.is_true(should_stop):
             # Update gripper based on shared values
             try:
-                width = round((1 - max(0, min(target_grip.value, 1))) * 1000)
-                client.write_register(0x103, c_uint16(width).value, slave=1)
-                client.write_register(0x101, c_uint16(force.value).value, slave=1)
-                client.write_register(0x104, c_uint16(speed.value).value, slave=1)
+                for target_grip_value in target_grip.updated_values():
+                    width = round((1 - max(0, min(target_grip_value, 1))) * 1000)
+                    client.write_register(0x103, c_uint16(width).value, slave=1)
+
+                for force_value in force.updated_values():
+                    client.write_register(0x101, c_uint16(force_value).value, slave=1)
+
+                for speed_value in speed.updated_values():
+                    client.write_register(0x104, c_uint16(speed_value).value, slave=1)
 
                 current_grip = 1 - client.read_holding_registers(0x202, count=1, slave=1).registers[0] / 1000
                 self.grip.emit(current_grip)
