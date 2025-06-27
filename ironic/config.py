@@ -332,32 +332,33 @@ class Config:
         """
         return self.override(**kwargs).instantiate()
 
-    def get_required_args(self) -> List[str]:
-        """
-        Get the list of required arguments to instantiate the target callable.
 
-        Returns:
-            List of required argument names (excluding those with default values and those that are already set).
-        """
-        sig = inspect.signature(self.target)
-        required_args = []
+def get_required_args(config: Config) -> List[str]:
+    """
+    Get the list of required arguments to instantiate the target callable.
 
-        for i, (name, param) in enumerate(sig.parameters.items()):
-            if param.default != inspect.Parameter.empty:
-                continue
-            if param.name in self.kwargs:
-                continue
-            if i < len(self.args):
-                continue
-            if param.kind == inspect.Parameter.VAR_POSITIONAL:
-                # var positional args are not required
-                continue
-            if param.kind == inspect.Parameter.VAR_KEYWORD:
-                # var keyword args are not required
-                continue
+    Returns:
+        List of required argument names (excluding those with default values and those that are already set).
+    """
+    sig = inspect.signature(config.target)
+    required_args = []
 
-            required_args.append(name)
-        return required_args
+    for i, (name, param) in enumerate(sig.parameters.items()):
+        if param.default != inspect.Parameter.empty:
+            continue
+        if param.name in config.kwargs:
+            continue
+        if i < len(config.args):
+            continue
+        if param.kind == inspect.Parameter.VAR_POSITIONAL:
+            # var positional args are not required
+            continue
+        if param.kind == inspect.Parameter.VAR_KEYWORD:
+            # var keyword args are not required
+            continue
+
+        required_args.append(name)
+    return required_args
 
 
 def config(target: Callable | None = None, **kwargs):
@@ -419,7 +420,7 @@ def cli(config: Config):
                 print('=' * 140)
 
             print("Config:")
-            for arg in config.get_required_args():
+            for arg in get_required_args(config):
                 print(f"{arg}: <REQUIRED>")
             print()
             print(str(config))
