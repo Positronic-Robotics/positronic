@@ -1,7 +1,7 @@
 from unittest.mock import Mock
 
 from ironic2.core import Message, SignalReader
-from ironic2.utils import ValueUpdated
+from ironic2.utils import ValueUpdated, DefaultReader
 
 
 class TestValueUpdated:
@@ -102,3 +102,35 @@ class TestValueUpdated:
 
         result = value_updated.read()
         assert result.ts == original_ts
+
+
+class TestDefaultReader:
+    """Test the DefaultReader class."""
+
+    def test_returns_reader_message_when_available(self):
+        """Test that original reader's message is returned when available."""
+        mock_reader = Mock(spec=SignalReader)
+        test_data = "actual_data"
+        test_ts = 123
+        mock_reader.read.return_value = Message(data=test_data, ts=test_ts)
+
+        default_reader = DefaultReader(mock_reader, "default_data", 456)
+        result = default_reader.read()
+
+        assert result is not None
+        assert result.data == test_data
+        assert result.ts == test_ts
+
+    def test_returns_default_when_reader_returns_none(self):
+        """Test that default message is returned when reader returns None."""
+        mock_reader = Mock(spec=SignalReader)
+        mock_reader.read.return_value = None
+
+        default_data = "default_value"
+        default_ts = 789
+        default_reader = DefaultReader(mock_reader, default_data, default_ts)
+        result = default_reader.read()
+
+        assert result is not None
+        assert result.data == default_data
+        assert result.ts == default_ts
