@@ -93,13 +93,13 @@ class Transform3D(metaclass=Transform3DMeta):
         return self.rotation(vector) + self.translation
 
     def __repr__(self):
-        translation_str = np.array2string(self.translation, precision=3)
-        quaternion_str = np.array2string(self.rotation.as_quat, precision=3)
+        translation_str = np.array2string(self.translation, precision=3, suppress_small=True)
+        quaternion_str = np.array2string(self.rotation.as_quat, precision=3, suppress_small=True)
         return f"Transform3D(t={translation_str}, q={quaternion_str})"
 
     def __str__(self):
-        translation_str = np.array2string(self.translation, precision=3)
-        quaternion_str = np.array2string(self.rotation.as_quat, precision=3)
+        translation_str = np.array2string(self.translation, precision=3, suppress_small=True)
+        quaternion_str = np.array2string(self.rotation.as_quat, precision=3, suppress_small=True)
         return f"Translation: {translation_str}, Quaternion: {quaternion_str}"
 
     def copy(self):

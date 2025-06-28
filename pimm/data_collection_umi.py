@@ -18,7 +18,6 @@ import pimm.cfg.webxr
 import pimm.cfg.hardware.camera
 import pimm.cfg.sound
 
-
 def _parse_buttons(buttons: ir.Message | None, button_handler: ButtonHandler):
     for side in ['left', 'right']:
         if buttons[side] is None:
@@ -147,7 +146,9 @@ def main(robot_arm: Any | None,  # noqa: C901  Function is too complex
             frame_readers[camera_name] = ir.ValueUpdated(ir.DefaultReader(frame_reader, None))
 
         webxr.controller_positions, controller_positions_reader = world.pipe()
+        controller_positions_reader = ir.ValueUpdated(controller_positions_reader)
         webxr.buttons, buttons_reader = world.pipe()
+
         if stream_video_to_webxr is not None:
             raise NotImplementedError("TODO: fix video streaming to webxr, since it's currently lagging")
             webxr.frame = ir.map(frame_readers[stream_video_to_webxr], lambda x: x['image'])
@@ -156,8 +157,8 @@ def main(robot_arm: Any | None,  # noqa: C901  Function is too complex
 
         robot_state, robot_commands = ir.NoOpReader(), ir.NoOpEmitter()
         if robot_arm is not None:
-            robot_arm.state, robot_state = world.pipe()  # TODO: Shared variable
-            robot_commands, robot_arm.commands = world.pipe()
+            robot_arm.state, robot_state = world.pipe(1)  # TODO: Shared variable
+            robot_commands, robot_arm.commands = world.pipe(1)
             world.start(robot_arm.run)
 
         target_grip_emitter = ir.NoOpEmitter()
@@ -179,10 +180,6 @@ def main(robot_arm: Any | None,  # noqa: C901  Function is too complex
         while not world.should_stop:
             try:
                 _parse_buttons(buttons_reader.value, button_handler)
-                controller_positions = controller_positions_reader.value
-                right_controller_pos = controller_positions['right']
-                left_controller_pos = controller_positions['left']
-
                 if button_handler.just_pressed('right_B'):
                     recorder.turn_off() if recorder.on else recorder.turn_on()
                 elif button_handler.just_pressed('right_A'):
@@ -196,9 +193,11 @@ def main(robot_arm: Any | None,  # noqa: C901  Function is too complex
                 target_grip = button_handler.get_value('right_trigger')
                 target_grip_emitter.emit(target_grip)
 
-                target_robot_pos = tracker.update(right_controller_pos)
-                if tracker.on:
-                    print(".", end="", flush=True)
+                controller_positions, controller_positions_updated = controller_positions_reader.value
+                target_robot_pos = tracker.update(controller_positions['right'])
+                # Don't spam the robot with commands.
+                # TODO: Alternatively, robot can have some cool-down period before taking another command.
+                if tracker.on and controller_positions_updated:
                     robot_commands.emit(franka.Command.move_to(target_robot_pos))
 
                 frame_messages = {name: reader.read() for name, reader in frame_readers.items()}
@@ -217,12 +216,12 @@ def main(robot_arm: Any | None,  # noqa: C901  Function is too complex
                     'target_robot_position_quaternion': target_robot_pos.rotation.as_quat.copy(),
                     **{f'{name}_timestamp': frame.ts for name, frame in frame_messages.items()},
                 }
-                if right_controller_pos is not None:
-                    ep_dict['right_controller_translation'] = right_controller_pos.translation.copy()
-                    ep_dict['right_controller_quaternion'] = right_controller_pos.rotation.as_quat.copy()
-                if left_controller_pos is not None:
-                    ep_dict['left_controller_translation'] = left_controller_pos.translation.copy()
-                    ep_dict['left_controller_quaternion'] = left_controller_pos.rotation.as_quat.copy()
+                if controller_positions['right'] is not None:
+                    ep_dict['right_controller_translation'] = controller_positions['right'].translation.copy()
+                    ep_dict['right_controller_quaternion'] = controller_positions['right'].rotation.as_quat.copy()
+                if controller_positions['left'] is not None:
+                    ep_dict['left_controller_translation'] = controller_positions['left'].translation.copy()
+                    ep_dict['left_controller_quaternion'] = controller_positions['left'].rotation.as_quat.copy()
 
                 recorder.update(data=ep_dict,
                                 video_frames={name: frame.data['image'] for name, frame in frame_messages.items()})
