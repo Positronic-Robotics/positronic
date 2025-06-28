@@ -1,5 +1,6 @@
 from dataclasses import dataclass
 from enum import Enum
+import time
 
 import franky
 import numpy as np
@@ -28,6 +29,14 @@ class CartesianMode(Enum):
 class Command:
     type: CommandType
     value: np.array
+
+    @staticmethod
+    def move_to(pos: geom.Transform3D):
+        return Command(CommandType.MOVE, np.concatenate([pos.translation, pos.rotation.as_quat]))
+
+    @staticmethod
+    def reset():
+        return Command(CommandType.RESET, np.zeros(7))
 
 
 # TODO: Add forces when we are ready
@@ -69,15 +78,22 @@ class Robot:
     @staticmethod
     def _init_robot(robot, rel_dynamics_factor: float):
         robot.set_joint_impedance([150, 150, 150, 125, 125, 250, 250])
+
+        coeff = 2.0
+        torque_threshold_acceleration = np.array([20.0, 20.0, 20.0, 20.0, 20.0, 20.0, 20.0])
+        torque_threshold_nominal = np.array([10.0, 10.0, 10.0, 10.0, 10.0, 10.0, 10.0])
+        force_threshold_acceleration = np.array([10.0, 10.0, 10.0, 10.0, 10.0, 10.0])
+        force_threshold_nominal = np.array([10.0, 10.0, 10.0, 10.0, 10.0, 10.0])
+
         robot.set_collision_behavior(
-            lower_torque_threshold_acceleration=[20.0, 20.0, 20.0, 20.0, 20.0, 20.0, 20.0],
-            upper_torque_threshold_acceleration=[20.0, 20.0, 20.0, 20.0, 20.0, 20.0, 20.0],
-            lower_torque_threshold_nominal=[10.0, 10.0, 10.0, 10.0, 10.0, 10.0, 10.0],
-            upper_torque_threshold_nominal=[20.0, 20.0, 20.0, 20.0, 20.0, 20.0, 20.0],
-            lower_force_threshold_acceleration=[10.0, 10.0, 10.0, 10.0, 10.0, 10.0],
-            upper_force_threshold_acceleration=[10.0, 10.0, 10.0, 10.0, 10.0, 10.0],
-            lower_force_threshold_nominal=[10.0, 10.0, 10.0, 10.0, 10.0, 10.0],
-            upper_force_threshold_nominal=[20.0, 20.0, 20.0, 20.0, 20.0, 20.0],
+            lower_torque_threshold_acceleration=(coeff * torque_threshold_acceleration).tolist(),
+            upper_torque_threshold_acceleration=(coeff * torque_threshold_acceleration).tolist(),
+            lower_torque_threshold_nominal=(coeff * torque_threshold_nominal).tolist(),
+            upper_torque_threshold_nominal=(coeff * torque_threshold_nominal * 2).tolist(),
+            lower_force_threshold_acceleration=(coeff * force_threshold_acceleration).tolist(),
+            upper_force_threshold_acceleration=(coeff * force_threshold_acceleration).tolist(),
+            lower_force_threshold_nominal=(coeff * force_threshold_nominal).tolist(),
+            upper_force_threshold_nominal=(coeff * force_threshold_nominal * 2).tolist(),
         )
 
         robot.set_joint_impedance([3000, 3000, 3000, 2500, 2500, 2000, 2000])
@@ -88,10 +104,12 @@ class Robot:
     def run(self, should_stop: ir.SignalReader) -> None:
         robot = franky.Robot(self._ip, realtime_config=franky.RealtimeConfig.Ignore)
         Robot._init_robot(robot, self._relative_dynamics_factor)
+        robot.recover_from_errors()
 
-        home_joints_config = [0.0, -0.31, 0.0, -1.53, 0.0, 1.522, 0.785]  # TODO: Allow customisation
+        home_joints_config = [0.0, -0.31, 0.0, -1.65, 0.0, 1.522, 0.0]  # TODO: Allow customisation
+        # 0.785
 
-        commands = ir.ValueUpdated(self.commands)
+        commands = ir.DefaultReader(ir.ValueUpdated(self.commands), (None, False))
         robot_state = State()
         last_q = None
         rate_limiter = RateLimiter(hz=500)
@@ -119,8 +137,8 @@ class Robot:
 
         reset()
 
-        while not ir.signal_value(should_stop):
-            command, updated = ir.signal_value(commands, (None, False))
+        while not should_stop.value:
+            command, updated = commands.value
             if updated:
                 if command.type == CommandType.RESET:
                     reset()
@@ -145,3 +163,38 @@ class Robot:
 
             rate_limiter.wait()
             self.state.emit(encode_state_data())
+
+
+if __name__ == "__main__":
+    with ir.World() as world:
+        robot = Robot("172.168.0.2", relative_dynamics_factor=0.2, cartesian_mode=CartesianMode.LIBFRANKA)
+        commands, robot.commands = world.pipe()
+        robot.state, state = world.pipe()
+        world.start(robot.run)
+
+        trajectory = [([0.03, 0.03, 0.03], 0.0),
+                      ([-0.03, 0.03, 0.03], 2.0),
+                      ([-0.03, -0.03, 0.03], 4.0),
+                      ([-0.03, -0.03, -0.03], 6.0),
+                      ([0.03, -0.03, -0.03], 8.0),
+                      ([0.03, 0.03, -0.03], 10.0),
+                      ([0.03, 0.03, 0.03], 12.0),
+                      ]
+
+        while not world.should_stop and (state.read() is None or state.value.status == RobotStatus.RESETTING):
+            time.sleep(0.01)
+
+        origin = state.value.position
+        print(f"Origin: {origin}")
+
+        start, i = time.monotonic(), 0
+        while i < len(trajectory) and not world.should_stop:
+            pos, duration = trajectory[i]
+            if time.monotonic() > start + duration:
+                print(f"Moving to {pos + origin.translation}")
+                commands.emit(Command.move_to(geom.Transform3D(pos + origin.translation, origin.rotation)))
+                i += 1
+            else:
+                time.sleep(0.01)
+
+        print("Finishing")

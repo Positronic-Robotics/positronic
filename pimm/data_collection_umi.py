@@ -1,9 +1,11 @@
 import time
-from typing import Dict
+from typing import Any, Dict
 
+import geom
 import ironic as ir1
 import ironic2 as ir
 from ironic.utils import FPSCounter
+from pimm.drivers.roboarm import franka
 from pimm.drivers.sound import SoundSystem
 from pimm.drivers.camera.linux_video import LinuxVideo
 from pimm.drivers.gripper.dh import DHGripper
@@ -32,20 +34,114 @@ def _parse_buttons(buttons: ir.Message | None, button_handler: ButtonHandler):
         button_handler.update_buttons(mapping)
 
 
-def main(gripper: DHGripper | None,  # noqa: C901  Function is too complex
+class _Tracker:
+    on = False
+    _offset = geom.Transform3D()
+    _teleop_t = geom.Transform3D()
+
+    def __init__(self, operator_position: geom.Transform3D | None):
+        self._operator_position = operator_position
+        self.on = self.umi_mode
+
+    @property
+    def umi_mode(self):
+        return self._operator_position is None
+
+    def turn_on(self, robot_pos: geom.Transform3D):
+        if self.umi_mode:
+            print("Ignoring tracking on/off in UMI mode")
+            return
+
+        self.on = True
+        print("Starting tracking")
+        self._offset = geom.Transform3D(
+            -self._teleop_t.translation + robot_pos.translation,
+            self._teleop_t.rotation.inv * robot_pos.rotation,
+        )
+
+    def turn_off(self):
+        if self.umi_mode:
+            print("Ignoring tracking on/off in UMI mode")
+            return
+        self.on = False
+        print("Stopped tracking")
+
+    def update(self, tracker_pos: geom.Transform3D):
+        if self.umi_mode:
+            return tracker_pos
+
+        self._teleop_t = self._operator_position * tracker_pos * self._operator_position.inv
+        return geom.Transform3D(
+            self._teleop_t.translation + self._offset.translation,
+            self._teleop_t.rotation * self._offset.rotation
+        )
+
+
+# TODO: Support aborting current episode.
+class _Recorder:
+    def __init__(self, dumper: SerialDumper | None, sound_emitter: ir.SignalEmitter):
+        self.on = False
+        self._dumper = dumper
+        self._sound_emitter = sound_emitter
+        self._start_wav_path = "positronic/assets/sounds/recording-has-started.wav"
+        self._end_wav_path = "positronic/assets/sounds/recording-has-stopped.wav"
+        self._meta = {}
+
+    def turn_on(self):
+        if self._dumper is None:
+            print("No dumper, ignoring 'start recording' command")
+            return
+
+        if not self.on:
+            self._meta['episode_start'] = ir.system_clock()
+            if self._dumper is not None:
+                self._dumper.start_episode()
+                print(f"Episode {self._dumper.episode_count} started")
+                self._sound_emitter.emit(self._start_wav_path)
+            self.on = True
+        else:
+            print("Already recording, ignoring 'start recording' command")
+
+    def turn_off(self):
+        if self._dumper is None:
+            print("No dumper, ignoring 'stop recording' command")
+            return
+
+        if self.on:
+            self._dumper.end_episode(self._meta)
+            print(f"Episode {self._dumper.episode_count} ended")
+            self._sound_emitter.emit(self._end_wav_path)
+            self.on = False
+        else:
+            print("Not recording, ignoring turn_off")
+
+    def update(self, data: dict, video_frames: dict):
+        if not self.on:
+            return
+
+        if self._dumper is not None:
+            self._dumper.write(data=data, video_frames=video_frames)
+
+# map xyz -> zxy
+FRANKA_FRONT_TRANSFORM = geom.Transform3D(rotation=geom.Rotation.from_quat([0.5, 0.5, 0.5, 0.5]))
+# map xyz -> zxy + flip x and y
+FRANKA_BACK_TRANSFORM = geom.Transform3D(rotation=geom.Rotation.from_quat([-0.5, -0.5, 0.5, 0.5]))
+
+
+def main(robot_arm: Any | None,  # noqa: C901  Function is too complex
+         gripper: DHGripper | None,
          webxr: WebXR,
          sound: SoundSystem | None,
-         cameras: Dict[str, LinuxVideo],
-         output_dir: str = "data_collection_umi",
+         cameras: Dict[str, LinuxVideo] | None,
+         output_dir: str | None = None,
          fps: int = 30,
          stream_video_to_webxr: str | None = None,
+         operator_position: geom.Transform3D = FRANKA_FRONT_TRANSFORM,
          ):
 
-    # TODO: this function modifies outer objects with pipes
-
     with ir.World() as world:
-        # Declare pipes
         frame_readers = {}
+        cameras = cameras or {}
         for camera_name, camera in cameras.items():
             camera.frame, frame_reader = world.pipe()
             frame_readers[camera_name] = ir.ValueUpdated(ir.DefaultReader(frame_reader, None))
@@ -58,79 +154,78 @@ def main(gripper: DHGripper | None,  # noqa: C901  Function is too complex
 
         world.start(webxr.run, *[camera.run for camera in cameras.values()])
 
+        robot_state, robot_commands = ir.NoOpReader(), ir.NoOpEmitter()
+        if robot_arm is not None:
+            robot_arm.state, robot_state = world.pipe()  # TODO: Shared variable
+            robot_commands, robot_arm.commands = world.pipe()
+            world.start(robot_arm.run)
+
+        target_grip_emitter = ir.NoOpEmitter()
         if gripper is not None:
             target_grip_emitter, gripper.target_grip = world.pipe()
             world.start(gripper.run)
-        else:
-            target_grip_emitter = ir.NoOpEmitter()
 
+        sound_emitter = ir.NoOpEmitter()
         if sound is not None:
-            wav_path_emitter, sound.wav_path = world.pipe()
+            sound_emitter, sound.wav_path = world.pipe()
             world.start(sound.run)
-        else:
-            wav_path_emitter = ir.NoOpEmitter()
 
-        tracked = False
-        dumper = SerialDumper(output_dir, video_fps=fps)
+        tracker = _Tracker(operator_position if robot_arm is not None else None)
+        recorder = _Recorder(
+            SerialDumper(output_dir, video_fps=fps) if output_dir is not None else None, sound_emitter)
         button_handler = ButtonHandler()
-
-        meta = {}
-        start_wav_path = "positronic/assets/sounds/recording-has-started.wav"
-        end_wav_path = "positronic/assets/sounds/recording-has-stopped.wav"
 
         fps_counter = FPSCounter("Data Collection")
         while not world.should_stop:
             try:
                 _parse_buttons(buttons_reader.value, button_handler)
-                if button_handler.just_pressed('right_B'):
-                    tracked = not tracked
-                    if tracked:
-                        meta['episode_start'] = ir.system_clock()
-                        dumper.start_episode()
-                        print(f"Episode {dumper.episode_count} started")
-                        wav_path_emitter.emit(start_wav_path)
-                    else:
-                        dumper.end_episode(meta)
-                        meta = {}
-                        print(f"Episode {dumper.episode_count} ended")
-                        wav_path_emitter.emit(end_wav_path)
-                # TODO: Support aborting current episode.
+                controller_positions = controller_positions_reader.value
+                right_controller_pos = controller_positions['right']
+                left_controller_pos = controller_positions['left']
 
-                frame_messages = {
-                    name: reader.read()
-                    for name, reader in frame_readers.items()
-                }
-                any_frame_updated = any(msg.data[1] and msg.data[0] is not None
-                                        for msg in frame_messages.values())
+                if button_handler.just_pressed('right_B'):
+                    recorder.turn_off() if recorder.on else recorder.turn_on()
+                elif button_handler.just_pressed('right_A'):
+                    tracker.turn_off() if tracker.on else tracker.turn_on(robot_state.value.position)
+                elif button_handler.just_pressed('right_stick') and not tracker.umi_mode:
+                    print("Resetting robot")
+                    recorder.turn_off()
+                    tracker.turn_off()
+                    robot_commands.emit(franka.Command.reset())
 
                 target_grip = button_handler.get_value('right_trigger')
                 target_grip_emitter.emit(target_grip)
 
-                if not tracked or not any_frame_updated:
+                target_robot_pos = tracker.update(right_controller_pos)
+                if tracker.on:
+                    print(".", end="", flush=True)
+                    robot_commands.emit(franka.Command.move_to(target_robot_pos))
+
+                frame_messages = {name: reader.read() for name, reader in frame_readers.items()}
+                any_frame_updated = any(msg.data[1] and msg.data[0] is not None for msg in frame_messages.values())
+
+                fps_counter.tick()
+                if not recorder.on or not any_frame_updated:
                     time.sleep(0.001)
                     continue
 
                 frame_messages = {name: ir.Message(msg.data[0], msg.ts) for name, msg in frame_messages.items()}
-                controller_positions = controller_positions_reader.value
-                right_controller_position = controller_positions['right']
-                left_controller_position = controller_positions['left']
 
                 ep_dict = {
                     'target_grip': target_grip,
-                    'target_robot_position_translation': right_controller_position.translation.copy(),
-                    'target_robot_position_quaternion': right_controller_position.rotation.as_quat.copy(),
-                    'umi_right_translation': right_controller_position.translation.copy(),
-                    'umi_right_quaternion': right_controller_position.rotation.as_quat.copy(),
-                    'umi_left_translation': left_controller_position.translation.copy(),
-                    'umi_left_quaternion': left_controller_position.rotation.as_quat.copy(),
+                    'target_robot_position_translation': target_robot_pos.translation.copy(),
+                    'target_robot_position_quaternion': target_robot_pos.rotation.as_quat.copy(),
                     **{f'{name}_timestamp': frame.ts for name, frame in frame_messages.items()},
                 }
+                if right_controller_pos is not None:
+                    ep_dict['right_controller_translation'] = right_controller_pos.translation.copy()
+                    ep_dict['right_controller_quaternion'] = right_controller_pos.rotation.as_quat.copy()
+                if left_controller_pos is not None:
+                    ep_dict['left_controller_translation'] = left_controller_pos.translation.copy()
+                    ep_dict['left_controller_quaternion'] = left_controller_pos.rotation.as_quat.copy()
 
-                dumper.write(
-                    data=ep_dict,
-                    video_frames={name: frame.data['image'] for name, frame in frame_messages.items()}
-                )
-                fps_counter.tick()
+                recorder.update(data=ep_dict,
+                                video_frames={name: frame.data['image'] for name, frame in frame_messages.items()})
 
             except ir.NoValueException:
                 time.sleep(0.001)
@@ -139,6 +234,7 @@ def main(gripper: DHGripper | None,  # noqa: C901  Function is too complex
 
 main = ir1.Config(
     main,
+    robot_arm=None,
     gripper=pimm.cfg.hardware.gripper.dh_gripper,
     webxr=pimm.cfg.webxr.webxr,
     sound=pimm.cfg.sound.sound,
@@ -147,6 +243,7 @@ main = ir1.Config(
         left=pimm.cfg.hardware.camera.arducam_left,
         right=pimm.cfg.hardware.camera.arducam_right,
     ),
+    operator_position=FRANKA_FRONT_TRANSFORM,
 )
 
 if __name__ == "__main__":

@@ -1,8 +1,7 @@
 import ironic as ir
 
-from pimm.drivers.gripper.dh import DHGripper
 
-dh_gripper = ir.Config(
-    DHGripper,
-    port="/dev/ttyUSB0",
-)
+@ir.config(port="/dev/ttyUSB0")
+def dh_gripper(port: str):
+    from pimm.drivers.gripper.dh import DHGripper  # noqa: F401
+    return DHGripper(port=port)
