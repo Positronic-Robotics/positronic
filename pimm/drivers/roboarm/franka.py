@@ -1,6 +1,5 @@
-from dataclasses import dataclass
-from enum import Enum
 import time
+from enum import Enum
 
 import franky
 import numpy as np
@@ -9,15 +8,7 @@ import geom
 import ironic2 as ir
 from ironic.utils import RateLimiter
 
-
-class CommandType(Enum):
-    RESET = 0
-    MOVE = 1
-
-
-class RobotStatus(Enum):
-    AVAILABLE = 0
-    RESETTING = 1
+from . import Command, CommandType, RobotStatus, State
 
 
 class CartesianMode(Enum):
@@ -25,55 +16,22 @@ class CartesianMode(Enum):
     POSITRONIC = "positronic"
 
 
-@dataclass
-class Command:
-    type: CommandType
-    value: np.array
-
-    @staticmethod
-    def move_to(pos: geom.Transform3D):
-        return Command(CommandType.MOVE, np.concatenate([pos.translation, pos.rotation.as_quat]))
-
-    @staticmethod
-    def reset():
-        return Command(CommandType.RESET, np.zeros(7))
-
-
-# TODO: Add forces when we are ready
-class State:
-    _values: np.array
-
-    def __init__(self):
-        POSITION_DIM, JOINTS_DIM, STATUS_DIM = 7, 7, 1
-        self._values = np.zeros(POSITION_DIM + JOINTS_DIM + STATUS_DIM)
-
-    @property
-    def position(self) -> geom.Transform3D:
-        return geom.Transform3D(self._values[:3], geom.Rotation.from_quat(self._values[3:7]))
-
-    @property
-    def joints(self) -> np.array:
-        return self._values[7:14]
-
-    @property
-    def status(self) -> RobotStatus:
-        return RobotStatus.AVAILABLE if self._values[14] == 0 else RobotStatus.RESETTING
-
-    def _start_reset(self):
-        self._values[14] = 1
-
-    def _finish_reset(self):
-        self._values[14] = 0
-
-
 class Robot:
     commands: ir.SignalReader = ir.NoOpReader()
     state: ir.SignalEmitter = ir.NoOpEmitter()
 
-    def __init__(self, ip: str, relative_dynamics_factor=0.2, cartesian_mode=CartesianMode.LIBFRANKA) -> None:
+    def __init__(self, ip: str, relative_dynamics_factor=0.2, cartesian_mode=CartesianMode.LIBFRANKA,
+                 home_joints: list[float] = [0.0, -0.31, 0.0, -1.65, 0.0, 1.522, 0.0]) -> None:
+        """
+        :param ip: IP address of the robot.
+        :param relative_dynamics_factor: Relative dynamics factor in [0, 1]. Smaller values are more conservative.
+        :param cartesian_mode: LIBFRANKA uses franky's inverse kinematics, POSITRONIC is our own.
+        :param home_joints: Joints of "reset" position.
+        """
         self._ip = ip
         self._relative_dynamics_factor = relative_dynamics_factor
         self._cartesian_mode = cartesian_mode
+        self._home_joints = home_joints
 
     @staticmethod
     def _init_robot(robot, rel_dynamics_factor: float):
@@ -106,9 +64,6 @@ class Robot:
         Robot._init_robot(robot, self._relative_dynamics_factor)
         robot.recover_from_errors()
 
-        home_joints_config = [0.0, -0.31, 0.0, -1.65, 0.0, 1.522, 0.0]  # TODO: Allow customisation
-        # 0.785
-
         commands = ir.DefaultReader(ir.ValueUpdated(self.commands), (None, False))
         robot_state = State()
         last_q = None
@@ -125,7 +80,7 @@ class Robot:
             return robot_state
 
         # Reset robot
-        reset_motion = franky.JointWaypointMotion([franky.JointWaypoint(home_joints_config)])
+        reset_motion = franky.JointWaypointMotion([franky.JointWaypoint(self._home_joints)])
 
         def reset():
             robot_state._start_reset()
@@ -140,12 +95,16 @@ class Robot:
         while not should_stop.value:
             command, updated = commands.value
             if updated:
-                if command.type == CommandType.RESET:
-                    reset()
-                    continue
-
-                q_xyzw = np.array([command.value[4], command.value[5], command.value[6], command.value[3]])
-                pos = franky.Affine(translation=command.value[:3], quaternion=q_xyzw)
+                match command.type:
+                    case CommandType.RESET:
+                        reset()
+                        continue
+                    case CommandType.CARTESIAN_MOVE:
+                        q_xyzw = np.array([command.value[4], command.value[5], command.value[6], command.value[3]])
+                        pos = franky.Affine(translation=command.value[:3], quaternion=q_xyzw)
+                    case _:
+                        # TODO: Should we raise or just ignore?
+                        raise ValueError(f"Unsupported command type: {command.type}")
 
                 if self._cartesian_mode == CartesianMode.LIBFRANKA:
                     motion = franky.CartesianMotion(pos, franky.ReferenceType.Absolute)

@@ -1,7 +1,13 @@
 import ironic as ir
 
 
-@ir.config(ip="172.168.0.2", relative_dynamics_factor=0.2, cartesian_mode="positronic")
-def franka(ip: str, relative_dynamics_factor: float, cartesian_mode: str):
+@ir.config(ip="172.168.0.2",
+           relative_dynamics_factor=0.2,
+           cartesian_mode="positronic",
+           home_joints=[0.0, -0.31, 0.0, -1.65, 0.0, 1.522, 0.0])
+def franka(ip: str, relative_dynamics_factor: float, cartesian_mode: str, home_joints: list[float]):
     from pimm.drivers.roboarm.franka import Robot  # noqa: F401
-    return Robot(ip=ip, relative_dynamics_factor=relative_dynamics_factor, cartesian_mode=cartesian_mode)
+    return Robot(ip=ip,
+                 relative_dynamics_factor=relative_dynamics_factor,
+                 cartesian_mode=cartesian_mode,
+                 home_joints=home_joints)

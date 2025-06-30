@@ -5,7 +5,7 @@ import geom
 import ironic as ir1
 import ironic2 as ir
 from ironic.utils import FPSCounter
-from pimm.drivers.roboarm import franka
+from pimm.drivers import roboarm
 from pimm.drivers.sound import SoundSystem
 from pimm.drivers.camera.linux_video import LinuxVideo
 from pimm.drivers.gripper.dh import DHGripper
@@ -17,6 +17,7 @@ import pimm.cfg.hardware.gripper
 import pimm.cfg.webxr
 import pimm.cfg.hardware.camera
 import pimm.cfg.sound
+
 
 def _parse_buttons(buttons: ir.Message | None, button_handler: ButtonHandler):
     for side in ['left', 'right']:
@@ -121,6 +122,7 @@ class _Recorder:
         if self._dumper is not None:
             self._dumper.write(data=data, video_frames=video_frames)
 
+
 # map xyz -> zxy
 FRANKA_FRONT_TRANSFORM = geom.Transform3D(rotation=geom.Rotation.from_quat([0.5, 0.5, 0.5, 0.5]))
 # map xyz -> zxy + flip x and y
@@ -188,7 +190,7 @@ def main(robot_arm: Any | None,  # noqa: C901  Function is too complex
                     print("Resetting robot")
                     recorder.turn_off()
                     tracker.turn_off()
-                    robot_commands.emit(franka.Command.reset())
+                    robot_commands.emit(roboarm.Command.reset())
 
                 target_grip = button_handler.get_value('right_trigger')
                 target_grip_emitter.emit(target_grip)
@@ -196,9 +198,10 @@ def main(robot_arm: Any | None,  # noqa: C901  Function is too complex
                 controller_positions, controller_positions_updated = controller_positions_reader.value
                 target_robot_pos = tracker.update(controller_positions['right'])
                 # Don't spam the robot with commands.
-                # TODO: Alternatively, robot can have some cool-down period before taking another command.
+                # TODO: Alternatively, robot can check the equality of the current and new commands,
+                # but not sure which option is better.
                 if tracker.on and controller_positions_updated:
-                    robot_commands.emit(franka.Command.move_to(target_robot_pos))
+                    robot_commands.emit(roboarm.Command.move_to(target_robot_pos))
 
                 frame_messages = {name: reader.read() for name, reader in frame_readers.items()}
                 any_frame_updated = any(msg.data[1] and msg.data[0] is not None for msg in frame_messages.values())

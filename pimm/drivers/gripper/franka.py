@@ -1,8 +1,10 @@
 import time
-import franky
-import ironic2 as ir
 
+import franky
+
+import ironic2 as ir
 from ironic.utils import RateLimiter
+
 
 class Gripper:
     grip: ir.SignalEmitter = ir.NoOpEmitter()
@@ -11,13 +13,21 @@ class Gripper:
     speed: ir.SignalReader = ir.NoOpReader()
 
     def __init__(self, ip: str, close_threshold: float = 0.6, open_threshold: float = 0.4):
+        """
+        Franka's gripper does not allow to rewrite the executing command with the newer one,
+        hence it is currently sequential. To avoid weird behavior, we support only two states –
+        fully open and fully closed.
+
+        :param ip: IP address of the robot (and gripper).
+        :param close_threshold: If `target_grip` is less than this value, the gripper will close.
+        :param open_threshold: If `target_grip` is greater than this value, the gripper will open.
+        """
         assert 0 < open_threshold < close_threshold < 1
         self._ip = ip
         self._close_threshold = close_threshold
         self._open_threshold = open_threshold
 
     def run(self, should_stop: ir.SignalReader) -> None:
-        print(f"Connecting to gripper at {self._ip}")
         gripper = franky.Gripper(self._ip)
         print(f"Connected to gripper at {self._ip}, homing...")
         gripper.homing()
@@ -27,19 +37,13 @@ class Gripper:
         force = ir.DefaultReader(self.force, 5.0)  # N
         speed = ir.DefaultReader(self.speed, 0.05)  # m/s
 
-        j = 0
         while not should_stop.value:
             try:
                 target_grip = self.target_grip.value
-                j += 1
-                if j % 30 == 0:
-                    print(f"Target grip received: {target_grip}")
                 if is_open and target_grip > self._close_threshold:
-                    print(f"Closing gripper to {target_grip}")
                     gripper.grasp_async(width=0, speed=speed.value, force=force.value)
                     is_open = False
                 elif not is_open and target_grip < self._open_threshold:
-                    print(f"Opening gripper to {target_grip}")
                     gripper.open_async(speed=speed.value)
                     is_open = True
             except ir.NoValueException:
@@ -68,11 +72,9 @@ if __name__ == "__main__":
             else:
                 time.sleep(0.01)
 
-            # rate_limiter.wait()
             if j % 100 == 0:
                 print(f"Actual grip: {actual_grip.read()}")
             j += 1
 
         time.sleep(3)
         print("Finishing")
-
