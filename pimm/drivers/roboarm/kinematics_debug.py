@@ -1,5 +1,4 @@
 from typing import List
-import fire
 import mujoco
 import numpy as np
 import rerun as rr
@@ -51,7 +50,7 @@ def debug_kinematics(urdf_path: str, mujoco_model_path: str, rerun: str, traject
 
     q_start = np.array([0.1, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0])
 
-    solver = KinematicsSolver(mujoco_model_path)
+    solver = KinematicsSolver(mujoco_model_path, site_name='end_effector')
     controller = JointCompliantController(7, path=urdf_path, relative_dynamics_factor=1.0)
     model = solver.model
     data = mujoco.MjData(model)

@@ -7,7 +7,7 @@ import positronic.cfg.hardware
 import positronic.cfg.hardware.camera
 from positronic.drivers.camera.linuxpy_video import LinuxPyCamera
 from positronic.drivers.gripper.dh import DHGripper
-from positronic.drivers.roboarm.kinova import KinovaSync
+from positronic.drivers.roboarm.kinova.control_system import KinovaSync
 from positronic.inference.action import ActionDecoder
 from positronic.inference.state import StateEncoder
 from positronic.inference.inference import rerun_log_action, rerun_log_observation

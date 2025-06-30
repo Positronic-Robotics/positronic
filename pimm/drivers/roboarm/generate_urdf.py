@@ -304,16 +304,8 @@ class URDFGenerator:
 
 
 def create_arm(
+        motors: Sequence[MotorParameters],
         link_lengths: Sequence[float] = (0.05, 0.05, 0.2, 0.05, 0.2, 0.05),
-        motors: Sequence[MotorParameters] = (
-            MotorParameters(radius=0.05, height=0.05, mass=1.0, effort_limit=30.0),
-            MotorParameters(radius=0.05, height=0.05, mass=1.0, effort_limit=30.0),
-            MotorParameters(radius=0.05, height=0.05, mass=1.0, effort_limit=30.0),
-            MotorParameters(radius=0.05, height=0.05, mass=1.0, effort_limit=30.0),
-            MotorParameters(radius=0.05, height=0.05, mass=1.0, effort_limit=30.0),
-            MotorParameters(radius=0.05, height=0.05, mass=1.0, effort_limit=30.0),
-            MotorParameters(radius=0.05, height=0.05, mass=1.0, effort_limit=30.0),
-        ),
         joint_rotations: Sequence[float] = (np.pi / 2, -np.pi / 2, np.pi / 2, -np.pi / 2, np.pi / 2, -np.pi / 2),
         link_density: float = 0.2,
         payload_mass: float = 2.0,

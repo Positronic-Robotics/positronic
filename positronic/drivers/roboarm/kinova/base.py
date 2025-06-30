@@ -38,14 +38,14 @@ def wrap_joint_angle(q, q_base):
 class KinematicsSolver:
     """Solves forward and inverse kinematics for the Kinova arm."""
 
-    def __init__(self, path: str = 'positronic/drivers/roboarm/kinova/gen3.xml', ee_offset=0.0):
+    def __init__(self, path: str = 'positronic/drivers/roboarm/kinova/gen3.xml', ee_offset=0.0, site_name='pinch_site'):
         self.model = mujoco.MjModel.from_xml_path(path)
         self.data = mujoco.MjData(self.model)
         self.model.body_gravcomp[:] = 1.0
 
         # Cache references
         self.qpos0 = np.zeros(self.model.nq)
-        self.site_id = self.model.site('end_effector').id
+        self.site_id = self.model.site(site_name).id
         self.site_pos = self.data.site(self.site_id).xpos
         self.site_mat = self.data.site(self.site_id).xmat
 
