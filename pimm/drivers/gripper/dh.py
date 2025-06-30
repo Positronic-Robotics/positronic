@@ -38,10 +38,10 @@ class DHGripper:
             while _state_g() != 1 and _state_r() != 1:
                 time.sleep(0.1)
 
-        # Set initial values
+        target_grip = ir.DefaultReader(self.target_grip, 0)
+        # TODO: We must translate these to physical units (N and m/s)
         force = ir.DefaultReader(self.force, 100)
         speed = ir.DefaultReader(self.speed, 100)
-        target_grip = ir.DefaultReader(self.target_grip, 0)
 
         while not ir.is_true(should_stop):
             # Update gripper based on shared values

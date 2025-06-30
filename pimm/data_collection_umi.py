@@ -163,7 +163,7 @@ def main(robot_arm: Any | None,  # noqa: C901  Function is too complex
 
         target_grip_emitter = ir.NoOpEmitter()
         if gripper is not None:
-            target_grip_emitter, gripper.target_grip = world.pipe()
+            target_grip_emitter, gripper.target_grip = world.pipe(1)
             world.start(gripper.run)
 
         sound_emitter = ir.NoOpEmitter()
