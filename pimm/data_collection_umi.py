@@ -47,7 +47,7 @@ def main(gripper: DHGripper | None,  # noqa: C901  Function is too complex
         # Declare pipes
         frame_readers = {}
         for camera_name, camera in cameras.items():
-            camera.frame, frame_reader = world.pipe()
+            camera.frame, frame_reader = world.fixed_size_pipe()
             frame_readers[camera_name] = ir.ValueUpdated(ir.DefaultReader(frame_reader, None))
 
         webxr.controller_positions, controller_positions_reader = world.pipe()

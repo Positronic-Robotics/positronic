@@ -2,11 +2,15 @@
 
 import logging
 import multiprocessing as mp
+import multiprocessing.shared_memory
+import multiprocessing.managers
 import sys
 from queue import Empty, Full
 import time
 import traceback
 from typing import Any, Callable, List, Tuple
+
+import numpy as np
 
 from .core import Message, SignalEmitter, SignalReader, system_clock
 
@@ -44,6 +48,42 @@ class QueueReader(SignalReader):
         return self._last_value
 
 
+class SharedMemoryEmitter(SignalEmitter):
+    def __init__(self, shared_memory_manager: mp.managers.SharedMemoryManager, lock: mp.Lock):
+        self._shared_memory_manager = shared_memory_manager
+        self._shared_memory = None
+        self._shared_memory_buffer = None
+        self._ts = None
+        self._lock = lock
+
+    def emit(self, data: Any, ts: int | None = None) -> bool:
+        with self._lock:
+            if self._shared_memory is None:
+                assert isinstance(data, np.ndarray), "Only numpy arrays could be emitted to shared memory"
+                self._shared_memory = self._shared_memory_manager.SharedMemory(size=data.nbytes)
+                self._shared_memory_buffer = np.ndarray(data.shape, dtype=data.dtype, buffer=self._shared_memory.buf)
+            self._shared_memory_buffer[:] = data
+            self._ts = ts
+        return True
+
+
+class SharedMemoryReader(SignalReader):
+    def __init__(self, emitter: SharedMemoryEmitter, lock: mp.Lock):
+        self._emitter = emitter
+        self._lock = lock
+        self._last_ts = None
+        self._last_value = None
+
+    def read(self) -> Message | None:
+        with self._lock:
+            if self._emitter._shared_memory_buffer is None:
+                return None
+            if self._last_ts != self._emitter._ts:            
+                self._last_value = self._emitter._shared_memory_buffer.copy()
+                self._last_ts = self._emitter._ts
+        return Message(data=self._last_value, ts=self._last_ts)
+
+
 class EventReader(SignalReader):
 
     def __init__(self, event: mp.Event):
@@ -79,8 +119,10 @@ class World:
         self._stop_event = mp.Event()
         self.background_processes = []
         self._manager = mp.Manager()
+        self._shared_memory_manager = mp.managers.SharedMemoryManager()
 
     def __enter__(self):
+        self._shared_memory_manager.start()
         return self
 
     def __exit__(self, exc_type, exc_value, traceback):
@@ -104,6 +146,12 @@ class World:
     def pipe(self, maxsize: int = 0) -> Tuple[SignalEmitter, SignalReader]:
         q = self._manager.Queue(maxsize=maxsize)
         return QueueEmitter(q), QueueReader(q)
+    
+    def fixed_size_pipe(self):
+        lock = self._manager.Lock()
+        emitter = SharedMemoryEmitter(self._shared_memory_manager, lock)
+        reader = SharedMemoryReader(emitter, lock)
+        return emitter, reader
 
     def start(self, *background_loops: List[Callable]):
         """Starts background control loops. Can be called multiple times for different control loops."""

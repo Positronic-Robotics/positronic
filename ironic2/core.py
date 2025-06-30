@@ -3,9 +3,6 @@ from dataclasses import dataclass
 import time
 from typing import Any, Callable, final
 
-# Internal sentinel object to distinguish between no default and explicit None default
-_RAISE_EXCEPTION_SENTINEL = object()
-
 
 def system_clock() -> int:
     """Get current timestamp in nanoseconds."""
