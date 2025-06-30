@@ -127,6 +127,7 @@ def _add_camera(spec: mj.MjSpec) -> None:
         xyaxes=[0.712, 0.702, -0.000, -0.420, 0.425, 0.802]
     )
 
+
 @ir.config(
         wall_mounted=False,
         urdf_path='robot_urdf.xml',

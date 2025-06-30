@@ -224,7 +224,14 @@ class JointCompliantController:
             self.y = self.alpha * x + (1 - self.alpha) * self.y
             return self.y
 
-    def __init__(self, actuator_count, path: str = 'positronic/drivers/roboarm/kinova/model.urdf', relative_dynamics_factor=0.5):
+    def __init__(
+            self,
+            actuator_count,
+            path: str = 'positronic/drivers/roboarm/kinova/model.urdf',
+            relative_dynamics_factor=0.5,
+            max_velocity=(1.396, 1.396, 1.396, 1.396, 2.443, 2.443, 2.443),
+            max_acceleration=(4.188, 4.188, 4.188, 4.188, 7.853, 7.853, 7.853),
+    ):
         self.q_s = None
         self.q_d = None
         self.dq_d = None
@@ -243,8 +250,11 @@ class JointCompliantController:
 
         # Initialize pinocchio model and data
         self.model = pin.buildModelFromUrdf(path)
+        self.joint_nq = [joint.nq for joint in self.model.joints]
         self.data = self.model.createData()
         self._q_pin = np.zeros(self.model.nq)
+        self.max_velocity = np.array(max_velocity) * self.relative_dynamics_factor
+        self.max_acceleration = np.array(max_acceleration) * self.relative_dynamics_factor
 
     def set_target_qpos(self, qpos):
         self.target_qpos = qpos
@@ -257,12 +267,12 @@ class JointCompliantController:
         q_pin = self._q_pin  # Reuse pre-allocated q_pin
         q_pin_idx = 0
         q_idx = 0
-        for joint in self.model.joints[1:]:  # skip base joint
-            if joint.nq == 1:
+        for joint_nq in self.joint_nq[1:]:  # skip base joint
+            if joint_nq == 1:
                 q_pin[q_pin_idx] = q[q_idx]
                 q_pin_idx += 1
                 q_idx += 1
-            elif joint.nq == 2:
+            elif joint_nq == 2:
                 q_pin[q_pin_idx], q_pin[q_pin_idx + 1] = math.cos(q[q_idx]), math.sin(q[q_idx])
                 q_pin_idx += 2
                 q_idx += 1
@@ -283,12 +293,8 @@ class JointCompliantController:
             self.otg = Ruckig(self.actuator_count, _DT)
             self.otg_inp = InputParameter(self.actuator_count)
             self.otg_out = OutputParameter(self.actuator_count)
-            # TODO: These are the default values for the Kinova arm.
-            # We should make these configurable.
-            self.otg_inp.max_velocity = (4 * [math.radians(80 * self.relative_dynamics_factor)] +
-                                         3 * [math.radians(140 * self.relative_dynamics_factor)])
-            self.otg_inp.max_acceleration = (4 * [math.radians(240 * self.relative_dynamics_factor)] +
-                                             3 * [math.radians(450 * self.relative_dynamics_factor)])
+            self.otg_inp.max_velocity = self.max_velocity
+            self.otg_inp.max_acceleration = self.max_acceleration
             self.otg_inp.current_position = q.copy()
             self.otg_inp.current_velocity = dq.copy()
             self.otg_inp.target_position = q.copy()

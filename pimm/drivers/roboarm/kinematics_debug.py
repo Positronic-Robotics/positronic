@@ -39,9 +39,11 @@ def random_6dof_on_sphere(radius: float = 0.5) -> np.ndarray:
 
     return ([x, y, z], [qw, qx, qy, qz])
 
+
 trajectory = [
     [i * 5000.0, random_6dof_on_sphere()] for i in range(100)
 ]
+
 
 def debug_kinematics(urdf_path: str, mujoco_model_path: str, rerun: str, trajectory: List[List[float]]):
     rr.init('notebook_zero')
