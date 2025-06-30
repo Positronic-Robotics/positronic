@@ -7,6 +7,7 @@ from typing import Any, Callable, Dict, Tuple, List
 
 
 INSTANTIATE_PREFIX = '@'
+RELATIVE_PATH_PREFIX = ':'
 
 
 class ConfigError(Exception):
@@ -91,7 +92,7 @@ def _get_base_path_from_default(default: Any) -> str:
 
 def _construct_relative_path(value: str, base_path: str):
     path = base_path + value
-    unix_like_path = path.replace('.', '/').replace(':', '/../')
+    unix_like_path = path.replace('.', '/').replace(RELATIVE_PATH_PREFIX, '/../')
     unix_like_norm_path = posixpath.normpath(unix_like_path)
     module_path = unix_like_norm_path.replace('/', '.')
     return module_path
@@ -124,7 +125,7 @@ def _resolve_value(value: Any, default: Any | None = None) -> Any:
     if isinstance(value, str):
         if value.startswith(INSTANTIATE_PREFIX):
             return _import_object_from_path(value)
-        if value.startswith(":"):
+        if value.startswith(RELATIVE_PATH_PREFIX):
             return _resolve_relative_import(value, default)
 
     return value
