@@ -68,7 +68,6 @@ class KinematicsSolver:
         self.joint_limits_lower = []
         self.joint_limits_upper = []
         for i, row in enumerate(self.model.jnt_range):
-            print(row)
             if not (row[0] == row[1] == 0):
                 self.joint_limits_idx.append(i)
                 self.joint_limits_lower.append(row[0])

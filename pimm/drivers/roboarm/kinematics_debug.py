@@ -2,6 +2,7 @@ from typing import List
 import mujoco
 import numpy as np
 import rerun as rr
+import tqdm
 
 import ironic as ir
 from geom import Transform3D
@@ -73,7 +74,10 @@ def debug_kinematics(urdf_path: str, mujoco_model_path: str, rerun: str, traject
     rr.log('ik/updates/main', rr.SeriesPoints(markers="cross", marker_sizes=1.0))
     rr.log('ik/updates/null', rr.SeriesPoints(markers="cross", marker_sizes=1.0))
 
+    p_bar = tqdm.tqdm(total=min(trajectory[-1][0] / 1000, 600))
+
     while data.time < 600 and next_command < len(trajectory):
+        p_bar.update(model.opt.timestep)
         tau = controller.compute_torque(q, dq, tau)
         data.ctrl[:] = tau_filter.filter(tau)
         mujoco.mj_step(model, data)
