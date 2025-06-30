@@ -9,25 +9,50 @@ from geom import Transform3D
 from positronic.drivers.roboarm.kinova.base import JointCompliantController, KinematicsSolver, wrap_joint_angle
 
 
+def random_6dof_on_sphere(radius: float = 0.5) -> np.ndarray:
+    """
+    Generate a random 6DOF pose (translation + quaternion) on a sphere surface.
+
+    Args:
+        radius: (float) Radius of the sphere to sample from
+
+    Returns:
+        np.ndarray: 7-element array [x, y, z, qw, qx, qy, qz] representing pose
+    """
+    # Generate random translation on sphere surface
+    # Use spherical coordinates to ensure uniform distribution on surface
+    theta = np.random.uniform(0, 2 * np.pi)  # Azimuthal angle
+    phi = np.arccos(2 * np.random.random() - 1)  # Polar angle
+
+    x = radius * np.sin(phi) * np.cos(theta)
+    y = radius * np.sin(phi) * np.sin(theta)
+    z = radius * np.cos(phi)
+    z = np.abs(z)
+
+    # Generate random quaternion (uniformly distributed on unit sphere)
+    u1, u2, u3 = np.random.random(3)
+
+    qw = np.sqrt(1 - u1) * np.sin(2 * np.pi * u2)
+    qx = np.sqrt(1 - u1) * np.cos(2 * np.pi * u2)
+    qy = np.sqrt(u1) * np.sin(2 * np.pi * u3)
+    qz = np.sqrt(u1) * np.cos(2 * np.pi * u3)
+
+    return ([x, y, z], [qw, qx, qy, qz])
+
 trajectory = [
-    [0.0, ([0, 0.5, 0.5], [1, 0, 0, 0])],
-    [1000.0, ([0, 0.4, 0.5], [1, 0, 0, 0])],
-    [3000.0, ([0, 0.4, 0.6], [1, 0, 0, 0])],
-    [5000.0, ([0, 0.0, 0.6], [1, 0, 0, 0])],
-    [10000.0, ([0, 0.0, 0.6], [1, 0, 0, 0])],
+    [i * 5000.0, random_6dof_on_sphere()] for i in range(100)
 ]
 
 def debug_kinematics(urdf_path: str, mujoco_model_path: str, rerun: str, trajectory: List[List[float]]):
     rr.init('notebook_zero')
     rr.save(rerun)
 
+    taus = []
+
     q_start = np.array([0.1, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0])
 
-    torque_constant = np.array([11.0, 11.0, 11.0, 11.0, 7.6, 7.6, 7.6])
-    current_limit_max = np.array([10.0, 10.0, 10.0, 10.0, 6.0, 6.0, 6.0])
-    tau_limit = torque_constant * current_limit_max
-
-    solver, controller = KinematicsSolver(mujoco_model_path), JointCompliantController(7, path=urdf_path)
+    solver = KinematicsSolver(mujoco_model_path)
+    controller = JointCompliantController(7, path=urdf_path, relative_dynamics_factor=1.0)
     model = solver.model
     data = mujoco.MjData(model)
 
@@ -49,20 +74,22 @@ def debug_kinematics(urdf_path: str, mujoco_model_path: str, rerun: str, traject
     rr.log('ik/updates/main', rr.SeriesPoints(markers="cross", marker_sizes=1.0))
     rr.log('ik/updates/null', rr.SeriesPoints(markers="cross", marker_sizes=1.0))
 
-    while data.time < 60 and next_command < len(trajectory):
+    while data.time < 600 and next_command < len(trajectory):
         tau = controller.compute_torque(q, dq, tau)
-        np.clip(tau, -tau_limit, tau_limit, out=tau)
         data.ctrl[:] = tau_filter.filter(tau)
         mujoco.mj_step(model, data)
-        print('step', data.ctrl)
         q, dq, tau = data.qpos, data.qvel, data.ctrl
         rr.set_time('sim_time', duration=data.time)
+        ee_pose = solver.forward(q)
+        rr.log('pos/ee', rr.Points3D(ee_pose.translation, colors=[255, 255, 255]))
+        taus.append(tau.copy())
 
         if start_time + data.time * 10**3 > trajectory[next_command][0]:
             rr.log('pos/target', rr.Points3D(np.array([p[0] for _, p in trajectory[:next_command + 1]])))
             # q_ik = solver.inverse(pos[next_command][1], q, max_iters=10000)
             cmd = trajectory[next_command][1]
-            q_ik = solver.inverse_limits(Transform3D(translation=cmd[0], rotation=cmd[1]), q, max_iters=300, clamp=True, debug=True)
+            q_ik = solver.inverse(
+                Transform3D(translation=cmd[0], rotation=cmd[1]), q, max_iters=300)
             rr.log('ik/qpos', rr.Scalars(q_ik))
             rr.log('pos/cur_target', rr.Points3D(cmd[0], colors=[255, 255, 255]))
             controller.set_target_qpos(q_ik)
@@ -75,6 +102,12 @@ def debug_kinematics(urdf_path: str, mujoco_model_path: str, rerun: str, traject
             renderer.update_scene(data, camera='viewer')
             rr.log('render', rr.Image(renderer.render()).compress())
         step += 1
+
+    taus = np.array(taus)
+
+    print("Max/min tau:")
+    for i, (max_tau, min_tau) in enumerate(zip(np.max(taus, axis=0), np.min(taus, axis=0))):
+        print(f"Joint {i}: [{min_tau:.2f}, {max_tau:.2f}]")
 
 
 main = ir.Config(debug_kinematics, trajectory=trajectory)

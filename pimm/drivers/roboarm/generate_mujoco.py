@@ -3,7 +3,9 @@ import mujoco as mj
 import ironic as ir
 import numpy as np
 
-from pimm.drivers.roboarm.generate_urdf import create_arm
+from pimm.drivers.roboarm.generate_urdf import create_arm, MotorParameters
+
+import pimm.cfg.hardware.roboarm.motors
 
 
 def convert_urdf_to_mujoco(
@@ -129,8 +131,15 @@ def _add_camera(spec: mj.MjSpec) -> None:
         wall_mounted=False,
         urdf_path='robot_urdf.xml',
         link_lengths=[0.05, 0.05, 0.2, 0.05, 0.2, 0.05],
-        motor_masses=[1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0],
-        motor_limits=[30.0, 30.0, 30.0, 30.0, 30.0, 30.0, 30.0],
+        motors=[
+            pimm.cfg.hardware.roboarm.motors.my_actuator_rmd_x10_p35_100,
+            pimm.cfg.hardware.roboarm.motors.my_actuator_rmd_x10_p35_100,
+            pimm.cfg.hardware.roboarm.motors.my_actuator_rmd_x6_v3,
+            pimm.cfg.hardware.roboarm.motors.my_actuator_rmd_x6_v3,
+            pimm.cfg.hardware.roboarm.motors.my_actuator_rmd_x6_v3,
+            pimm.cfg.hardware.roboarm.motors.my_actuator_rmd_x6_v3,
+            pimm.cfg.hardware.roboarm.motors.my_actuator_rmd_x6_v3,
+        ],
         joint_rotations=[np.pi / 2, -np.pi / 2, np.pi / 2, -np.pi / 2, np.pi / 2, -np.pi / 2],
         link_density=0.2,
         payload_mass=2.0,
@@ -143,8 +152,7 @@ def main(
         wall_mounted: bool,
         urdf_path: str,
         link_lengths: Sequence[float],
-        motor_masses: Sequence[float],
-        motor_limits: Sequence[float],
+        motors: Sequence[MotorParameters],
         joint_rotations: Sequence[float],
         link_density: float,
         payload_mass: float,
@@ -155,8 +163,7 @@ def main(
     with open(urdf_path, 'w') as f:
         xml = create_arm(
             link_lengths=link_lengths,
-            motor_masses=motor_masses,
-            motor_limits=motor_limits,
+            motors=motors,
             joint_rotations=joint_rotations,
             link_density=link_density,
             payload_mass=payload_mass,

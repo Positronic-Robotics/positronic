@@ -284,6 +284,8 @@ class JointCompliantController:
             self.otg = Ruckig(self.actuator_count, _DT)
             self.otg_inp = InputParameter(self.actuator_count)
             self.otg_out = OutputParameter(self.actuator_count)
+            # TODO: These are the default values for the Kinova arm.
+            # We should make these configurable.
             self.otg_inp.max_velocity = (4 * [math.radians(80 * self.relative_dynamics_factor)] +
                                          3 * [math.radians(140 * self.relative_dynamics_factor)])
             self.otg_inp.max_acceleration = (4 * [math.radians(240 * self.relative_dynamics_factor)] +
