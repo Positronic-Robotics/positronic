@@ -622,5 +622,50 @@ def test_required_args_with_kwargs_not_required():
     assert ir.get_required_args(func) == []
 
 
+def test_override_existing_list_arg_raises_index_error():
+    @ir.config(a=[1, 2, 3])
+    def func(a):
+        return a
+
+    with pytest.raises(IndexError):
+        func.override(**{"a.4": 4})
+
+
+def test_override_non_existing_list_arg_raises_config_error():
+    @ir.config(a=[1, 2, 3])
+    def func(a):
+        return a
+
+    with pytest.raises(ir.ConfigError, match="Argument 'b' not found in config"):
+        func.override(**{"b.0": 4})
+
+
+def test_override_kwargs_function_with_new_argument_returns_expected_dict():
+    @ir.config
+    def func(**kwargs):
+        return kwargs
+
+    res = func.override(a=4).instantiate()
+
+    assert res == {"a": 4}
+
+
+def test_override_non_existing_nested_argument_raises_config_error():
+    @ir.config(a=1)
+    def obj1(a):
+        return a
+
+    @ir.config(b=obj1)
+    def obj2(b):
+        return b
+
+    @ir.config(arg=obj2)
+    def composite_obj(arg):
+        return arg
+
+    with pytest.raises(ir.ConfigError, match="Argument 'arg.a' not found in config"):
+        composite_obj.override(**{"arg.a.b": 4}).instantiate()
+
+
 if __name__ == "__main__":
     pytest.main()

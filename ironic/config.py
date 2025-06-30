@@ -197,8 +197,11 @@ class Config:
 
             current_obj = overriden_cfg
 
-            for key in key_list[:-1]:
+            for i, key in enumerate(key_list[:-1]):
                 current_obj = _get_value(current_obj, key)
+                if current_obj is None:
+                    path_to_not_found_arg = '.'.join(key_list[:i + 1])
+                    raise ConfigError(f"Argument '{path_to_not_found_arg}' not found in config")
 
             _set_value(current_obj, key_list[-1], value)
 
@@ -414,17 +417,18 @@ def cli(config: Config):
     assert 'help' not in config.kwargs, "Config contains 'help' argument. This is reserved for the help flag."
 
     def _run_and_help(help: bool = False, **kwargs):
+        overriden_config = config.override(**kwargs)
         if help:
-            if hasattr(config.target, '__doc__') and config.target.__doc__:
-                print(config.target.__doc__)
+            if hasattr(overriden_config.target, '__doc__') and overriden_config.target.__doc__:
+                print(overriden_config.target.__doc__)
                 print('=' * 140)
 
             print("Config:")
-            for arg in get_required_args(config):
+            for arg in get_required_args(overriden_config):
                 print(f"{arg}: <REQUIRED>")
             print()
-            print(str(config))
+            print(str(overriden_config))
         else:
-            return config.override_and_instantiate(**kwargs)
+            return overriden_config.instantiate()
 
     fire.Fire(_run_and_help)
