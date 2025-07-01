@@ -2,6 +2,8 @@
 
 import logging
 import multiprocessing as mp
+import multiprocessing.shared_memory
+import multiprocessing.managers
 import sys
 from queue import Empty, Full
 import time
@@ -16,7 +18,7 @@ class QueueEmitter(SignalEmitter):
     def __init__(self, queue: mp.Queue):
         self._queue = queue
 
-    def emit(self, data: Any, ts: int | None = None) -> bool:
+    def emit(self, data: Any, ts: int = 0) -> bool:
         try:
             self._queue.put_nowait(Message(data, ts))
             return True
@@ -42,6 +44,61 @@ class QueueReader(SignalReader):
         except Empty:
             pass
         return self._last_value
+
+
+class SMCompliant:
+    @classmethod
+    def buf_size(cls) -> int:
+        return 0
+
+    def bind_to_buffer(self, buffer: memoryview, lock: mp.Lock) -> None:
+        raise NotImplementedError()
+
+    def bind_from_buffer(self, buffer: memoryview, lock: mp.Lock) -> None:
+        raise NotImplementedError()
+
+
+class SMEmitter(SignalEmitter):
+    def __init__(self, sm_name: str, ts_value: mp.Value, lock: mp.Lock):
+        self._sm = None
+        self._sm_name = sm_name
+        self._lock = lock
+        self._ts_value = ts_value
+        self._last_value = None
+
+    def emit(self, data: SMCompliant, ts: int = 0) -> bool:
+        ts = ts or system_clock()
+
+        if self._sm is None:
+            self._sm = mp.SharedMemory(name=self._sm_name, create=True, size=self.buf_size())
+            self.bind_to_buffer(self._sm.buf, self._lock)
+
+        if self._last_value is None:
+            self._last_value = data
+        else:
+            assert data == self._last_value, "SMEmitter can only emit the same object multiple times"
+
+        with self._lock:
+            self._ts_value.value = ts
+        return True
+
+
+class SMReader(SignalReader):
+    def __init__(self, sm_name: str, ts_value: mp.Value, lock: mp.Lock):
+        self._sm = None
+        self._sm_name = sm_name
+        self._ts_value = ts_value
+        self._lock = lock
+
+    def read(self) -> Message | None:
+        if self._sm is None:
+            self._sm = mp.SharedMemory(name=self._sm_name, create=False)
+            self.bind_from_buffer(self._sm.buf, self._lock)
+
+        with self._lock:
+            if self._ts_value.value == 0:
+                return None
+            return Message(data=self._last_value, ts=self._ts_value.value)
 
 
 class EventReader(SignalReader):
