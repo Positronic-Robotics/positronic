@@ -75,7 +75,7 @@ class SignalReader(ABC):
         """Returns the current value of the signal."""
         msg = self.read()
         if msg is None:
-            raise NoValueException
+            raise NoValueException()
         return msg.data
 
 
