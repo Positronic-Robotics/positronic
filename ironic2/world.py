@@ -52,7 +52,7 @@ class SharedMemoryEmitter(SignalEmitter):
     def __init__(self, shared_memory_manager: mp.managers.SharedMemoryManager, lock: mp.Lock):
         self._shared_memory_manager = shared_memory_manager
         self._shared_memory = None
-        self._shared_memory_buffer = None
+        self._shared_memory_array = None
         self._ts = None
         self._lock = lock
 
@@ -61,8 +61,8 @@ class SharedMemoryEmitter(SignalEmitter):
             if self._shared_memory is None:
                 assert isinstance(data, np.ndarray), "Only numpy arrays could be emitted to shared memory"
                 self._shared_memory = self._shared_memory_manager.SharedMemory(size=data.nbytes)
-                self._shared_memory_buffer = np.ndarray(data.shape, dtype=data.dtype, buffer=self._shared_memory.buf)
-            self._shared_memory_buffer[:] = data
+                self._shared_memory_array = np.ndarray(data.shape, dtype=data.dtype, buffer=self._shared_memory.buf)
+            self._shared_memory_array[:] = data
             self._ts = ts
         return True
 
@@ -71,17 +71,21 @@ class SharedMemoryReader(SignalReader):
     def __init__(self, emitter: SharedMemoryEmitter, lock: mp.Lock):
         self._emitter = emitter
         self._lock = lock
-        self._last_ts = None
-        self._last_value = None
+        self._non_writable_array = None
 
     def read(self) -> Message | None:
         with self._lock:
-            if self._emitter._shared_memory_buffer is None:
+            if self._emitter._shared_memory_array is None:
                 return None
-            if self._last_ts != self._emitter._ts:            
-                self._last_value = self._emitter._shared_memory_buffer.copy()
-                self._last_ts = self._emitter._ts
-        return Message(data=self._last_value, ts=self._last_ts)
+            if self._non_writable_array is None:
+                self._non_writable_array = np.ndarray(
+                    shape=self._emitter._shared_memory_array.shape,
+                    dtype=self._emitter._shared_memory_array.dtype,
+                    buffer=self._emitter._shared_memory_array.data,
+                )
+                self._non_writable_array.flags.writeable = False
+
+        return Message(data=self._non_writable_array, ts=self._emitter._ts)
 
 
 class EventReader(SignalReader):
