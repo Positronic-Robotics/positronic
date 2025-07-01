@@ -47,58 +47,71 @@ class QueueReader(SignalReader):
 
 
 class SMCompliant:
+
     @classmethod
     def buf_size(cls) -> int:
         return 0
 
-    def bind_to_buffer(self, buffer: memoryview, lock: mp.Lock) -> None:
+    def bind_to_buffer(self, buffer: Any, lock: mp.Lock) -> None:
         raise NotImplementedError()
 
-    def bind_from_buffer(self, buffer: memoryview, lock: mp.Lock) -> None:
+    @classmethod
+    def create_from_memoryview(cls, buffer: memoryview, lock: mp.Lock) -> None:
         raise NotImplementedError()
 
 
-class SMEmitter(SignalEmitter):
-    def __init__(self, sm_name: str, ts_value: mp.Value, lock: mp.Lock):
-        self._sm = None
-        self._sm_name = sm_name
+class ZeroCopySMEmitter(SignalEmitter):
+
+    def __init__(self, data_type: type[SMCompliant], sm: mp.shared_memory.SharedMemory,
+                 ts_value: mp.Value, lock: mp.Lock):
+        self._sm = sm
         self._lock = lock
         self._ts_value = ts_value
-        self._last_value = None
+        self._out_data = None
+        self._data_type = data_type
 
     def emit(self, data: SMCompliant, ts: int = 0) -> bool:
+        assert isinstance(data, self._data_type), f"Data type mismatch: {type(data)} != {self._data_type}"
         ts = ts or system_clock()
 
-        if self._sm is None:
-            self._sm = mp.SharedMemory(name=self._sm_name, create=True, size=self.buf_size())
-            self.bind_to_buffer(self._sm.buf, self._lock)
-
-        if self._last_value is None:
-            self._last_value = data
+        if self._out_data is None:
+            data.bind_to_buffer(self._sm.buf, self._lock)
+            self._out_data = data
         else:
-            assert data == self._last_value, "SMEmitter can only emit the same object multiple times"
+            assert data is self._out_data, "SMEmitter can only emit the same object multiple times"
 
         with self._lock:
             self._ts_value.value = ts
         return True
 
+    def close(self):
+        """Release references to shared memory to allow proper cleanup."""
+        if self._out_data is not None:
+            self._out_data._buffer = None
+            self._out_data = None
 
-class SMReader(SignalReader):
-    def __init__(self, sm_name: str, ts_value: mp.Value, lock: mp.Lock):
-        self._sm = None
-        self._sm_name = sm_name
+
+class ZeroCopySMReader(SignalReader):
+
+    def __init__(self, data_type: type[SMCompliant], sm: mp.shared_memory.SharedMemory,
+                 ts_value: mp.Value, lock: mp.Lock):
+        self._sm = sm
         self._ts_value = ts_value
         self._lock = lock
+        self._data_type = data_type
+        self._out_value = self._data_type.create_from_memoryview(sm.buf.toreadonly(), lock)
 
     def read(self) -> Message | None:
-        if self._sm is None:
-            self._sm = mp.SharedMemory(name=self._sm_name, create=False)
-            self.bind_from_buffer(self._sm.buf, self._lock)
-
         with self._lock:
             if self._ts_value.value == 0:
                 return None
-            return Message(data=self._last_value, ts=self._ts_value.value)
+            return Message(data=self._out_value, ts=self._ts_value.value)
+
+    def close(self):
+        """Release references to shared memory to allow proper cleanup."""
+        if self._out_value is not None:
+            self._out_value._buffer = None
+            self._out_value = None
 
 
 class EventReader(SignalReader):
@@ -136,6 +149,8 @@ class World:
         self._stop_event = mp.Event()
         self.background_processes = []
         self._manager = mp.Manager()
+        self._shared_memories = []
+        self._sm_emitters_readers = []
 
     def __enter__(self):
         return self
@@ -158,9 +173,43 @@ class World:
             print(f'Process {process.name} (pid {process.pid}) finished', flush=True)
             process.close()
 
+        for emitter, reader in self._sm_emitters_readers:
+            emitter.close()
+            reader.close()
+
+        for sm in self._shared_memories:
+            sm.close()
+            sm.unlink()
+
     def pipe(self, maxsize: int = 0) -> Tuple[SignalEmitter, SignalReader]:
+        """Create a queue-based communication channel between processes.
+
+        Args:
+            maxsize: Maximum queue size (0 for unlimited)
+
+        Returns:
+            Tuple of (emitter, reader) for inter-process communication
+        """
         q = self._manager.Queue(maxsize=maxsize)
         return QueueEmitter(q), QueueReader(q)
+
+    def zero_copy_sm(self, data_type: type[SMCompliant]) -> Tuple[SignalEmitter, SignalReader]:
+        """Create a zero-copy shared memory channel for efficient data sharing.
+
+        Args:
+            data_type: SMCompliant type that defines the shared data structure
+
+        Returns:
+            Tuple of (emitter, reader) for zero-copy inter-process communication
+        """
+        sm = multiprocessing.shared_memory.SharedMemory(create=True, size=data_type.buf_size())
+        self._shared_memories.append(sm)
+        ts_value = self._manager.Value('Q', 0)
+        lock = self._manager.Lock()
+        emitter = ZeroCopySMEmitter(data_type, sm, ts_value, lock)
+        reader = ZeroCopySMReader(data_type, sm, ts_value, lock)
+        self._sm_emitters_readers.append((emitter, reader))
+        return (emitter, reader)
 
     def start(self, *background_loops: List[Callable]):
         """Starts background control loops. Can be called multiple times for different control loops."""
