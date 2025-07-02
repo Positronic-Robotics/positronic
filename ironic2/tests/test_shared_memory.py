@@ -98,6 +98,12 @@ class SMCompliantTestData(SMCompliant):
             return False
         return (np.array_equal(self._xy, other._xy) and np.array_equal(self._image, other._image))
 
+    def copy(self) -> 'SMCompliantTestData':
+        """Create a copy of the instance."""
+        result = SMCompliantTestData(self.x, self.y, self._image_shape)
+        result.image[:] = self._image
+        return result
+
 
 class TestZeroCopySMAPI:
     """Test the public API for zero-copy shared memory communication."""

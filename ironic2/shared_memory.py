@@ -43,6 +43,13 @@ class SMCompliant:
         """Protects access to the shared memory. Use it when reading or writing data from the instance."""
         raise NotImplementedError()
 
+    def copy(self) -> 'SMCompliant':
+        """Create a copy of the instance. This is used to create a new instance of the same type.
+        The copy must be independent of the original instance, so that the original instance can be modified
+        without affecting the copy.
+        """
+        raise NotImplementedError()
+
 
 class ZeroCopySMEmitter(SignalEmitter):
 
