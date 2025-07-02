@@ -76,9 +76,13 @@ class KinematicsSolver:
         self.joint_limits_idx = np.array(self.joint_limits_idx)
         self.joint_limits_lower = np.array(self.joint_limits_lower)
         self.joint_limits_upper = np.array(self.joint_limits_upper)
-        self.G = np.vstack([np.eye(self.model.nv)[self.joint_limits_idx],
-                            -np.eye(self.model.nv)[self.joint_limits_idx]])
-        self.G = matrix(self.G)
+
+        if len(self.joint_limits_idx) > 0:
+            self.G = np.vstack([np.eye(self.model.nv)[self.joint_limits_idx],
+                                -np.eye(self.model.nv)[self.joint_limits_idx]])
+            self.G = matrix(self.G)
+        else:
+            self.G = None
 
     def forward(self, qpos):
         self.data.qpos = qpos
@@ -133,6 +137,7 @@ class KinematicsSolver:
                        err_thresh: float = 1e-3,
                        clamp=True,
                        debug=False):
+        assert self.G is not None, "Joint limits are not set"
         solvers.options['show_progress'] = False
         qpos0 = wrap_joint_angle(qpos0, np.zeros(7)) if clamp else qpos0
         self.data.qpos = qpos0
@@ -268,11 +273,11 @@ class JointCompliantController:
         q_pin_idx = 0
         q_idx = 0
         for joint_nq in self.joint_nq[1:]:  # skip base joint
-            if joint_nq == 1:
+            if joint_nq == 1:  # revolute joint
                 q_pin[q_pin_idx] = q[q_idx]
                 q_pin_idx += 1
                 q_idx += 1
-            elif joint_nq == 2:
+            elif joint_nq == 2:  # continuous joint
                 q_pin[q_pin_idx], q_pin[q_pin_idx + 1] = math.cos(q[q_idx]), math.sin(q[q_idx])
                 q_pin_idx += 2
                 q_idx += 1

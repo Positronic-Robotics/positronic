@@ -13,7 +13,6 @@ def convert_urdf_to_mujoco(
         wall_mounted: bool = False,
         kp: float = 1000.0,
         kv: float = 100.0,
-        add_camera: bool = True,
         actuator_type: str = 'position'
 ) -> mj.MjModel:
     """
@@ -31,8 +30,7 @@ def convert_urdf_to_mujoco(
     _add_sites(spec)
     _add_geoms(spec)
     _add_sensors(spec)
-    if add_camera:
-        _add_camera(spec)
+    _add_camera(spec)
     spec.option.integrator = mj.mjtIntegrator.mjINT_IMPLICITFAST
 
     if wall_mounted:
@@ -63,7 +61,7 @@ def _add_actuators(spec: mj.MjSpec, kp: float, kv: float, actuator_type: str) ->
             actuator.biastype = mj.mjtBias.mjBIAS_NONE
             actuator.gaintype = mj.mjtGain.mjGAIN_FIXED
             actuator.target = joint.name
-            actuator.ctrlrange = [-100, 100]
+            actuator.ctrlrange = joint.actfrcrange
 
 
 def _add_sites(spec: mj.MjSpec) -> None:
@@ -72,12 +70,13 @@ def _add_sites(spec: mj.MjSpec) -> None:
         site.name = f"{joint.name}_site"
         site.pos = [0.0, 0.0, 0.0]
 
-    for body in spec.bodies:
-        if body.name == "link7":
-            end_site = body.add_site()
-            end_site.name = "end_effector"
-            end_site.pos = [0.0, 0.0, 0.0]
-            break
+    # find the last link
+    link_numbers = [int(body.name.replace("link", "")) for body in spec.bodies if "link" in body.name]
+    max_link = max(link_numbers)
+
+    end_site = spec.body(f"link{max_link}").add_site()
+    end_site.name = "end_effector"
+    end_site.pos = [0.0, 0.0, 0.0]
 
 
 def _add_geoms(

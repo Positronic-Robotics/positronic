@@ -27,22 +27,20 @@ class MotorParameters:
     radius: float  # Radius of the motor cylinder (m)
     height: float  # Height of the motor cylinder (m)
     mass: float   # Mass of the motor (kg)
-    effort_limit: float = 100.0
-    velocity_limit: float = 2.0
+    effort_limit: float = 100.0  # Nm
+    velocity_limit: float = 2.0  # rad/s
 
 
 @dataclass
 class JointConfiguration:
     """Configuration for a single joint."""
     name: str
-    joint_type: str = "continuous"
+    joint_type: str = "revolute"
     axis: Tuple[float, float, float] = (0, 0, 1)
     origin_xyz: Tuple[float, float, float] = (0, 0, 0)
     origin_rpy: Tuple[float, float, float] = (0, 0, 0)
     effort_limit: float = 100.0
     velocity_limit: float = 2.0
-    lower_limit: float = -10000 * np.pi
-    upper_limit: float = 10000 * np.pi
 
 
 def calculate_center_of_mass(masses, positions):
@@ -248,8 +246,6 @@ class URDFGenerator:
             "limit",
             effort=f"{joint_config.effort_limit}",
             velocity=f"{joint_config.velocity_limit}",
-            lower=f"{joint_config.lower_limit}",
-            upper=f"{joint_config.upper_limit}"
         )
 
     def generate_serial_arm(

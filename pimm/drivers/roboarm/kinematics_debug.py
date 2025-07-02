@@ -1,4 +1,4 @@
-from typing import List
+from typing import List, Tuple
 import mujoco
 import numpy as np
 import rerun as rr
@@ -9,7 +9,7 @@ from geom import Transform3D
 from positronic.drivers.roboarm.kinova.base import JointCompliantController, KinematicsSolver, wrap_joint_angle
 
 
-def random_6dof_on_sphere(radius: float = 0.5) -> np.ndarray:
+def random_6dof_on_sphere(radius: float = 0.5) -> Tuple[List[float], List[float]]:
     """
     Generate a random 6DOF pose (translation + quaternion) on a sphere surface.
 
@@ -19,24 +19,18 @@ def random_6dof_on_sphere(radius: float = 0.5) -> np.ndarray:
     Returns:
         np.ndarray: 7-element array [x, y, z, qw, qx, qy, qz] representing pose
     """
-    # Generate random translation on sphere surface
-    # Use spherical coordinates to ensure uniform distribution on surface
-    theta = np.random.uniform(0, 2 * np.pi)  # Azimuthal angle
-    phi = np.arccos(2 * np.random.random() - 1)  # Polar angle
+    x, y, z = np.random.normal(0, 1, 3)
+    norm = np.linalg.norm([x, y, z]) / radius
+    x, y, z = x / norm, y / norm, z / norm
 
-    x = radius * np.sin(phi) * np.cos(theta)
-    y = radius * np.sin(phi) * np.sin(theta)
-    z = radius * np.cos(phi)
+    # make it half-sphere
     z = np.abs(z)
 
-    # Generate random quaternion (uniformly distributed on unit sphere)
     u1, u2, u3 = np.random.random(3)
-
     qw = np.sqrt(1 - u1) * np.sin(2 * np.pi * u2)
     qx = np.sqrt(1 - u1) * np.cos(2 * np.pi * u2)
     qy = np.sqrt(u1) * np.sin(2 * np.pi * u3)
     qz = np.sqrt(u1) * np.cos(2 * np.pi * u3)
-
     return ([x, y, z], [qw, qx, qy, qz])
 
 
@@ -46,11 +40,12 @@ trajectory = [
 
 
 def debug_kinematics(urdf_path: str, mujoco_model_path: str, rerun: str, trajectory: List[List[float]]):
-    rr.init('notebook_zero')
+    rr.init('debug_kinematics')
     rr.save(rerun)
 
     taus = []
 
+    # non-zero for a warm start
     q_start = np.array([0.1, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0])
 
     solver = KinematicsSolver(mujoco_model_path, site_name='end_effector')
@@ -91,7 +86,6 @@ def debug_kinematics(urdf_path: str, mujoco_model_path: str, rerun: str, traject
 
         if start_time + data.time * 10**3 > trajectory[next_command][0]:
             rr.log('pos/target', rr.Points3D(np.array([p[0] for _, p in trajectory[:next_command + 1]])))
-            # q_ik = solver.inverse(pos[next_command][1], q, max_iters=10000)
             cmd = trajectory[next_command][1]
             q_ik = solver.inverse(
                 Transform3D(translation=cmd[0], rotation=cmd[1]), q, max_iters=300)
