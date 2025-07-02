@@ -26,11 +26,10 @@ def random_6dof_on_sphere(radius: float = 0.5) -> Tuple[List[float], List[float]
     # make it half-sphere
     z = np.abs(z)
 
-    u1, u2, u3 = np.random.random(3)
-    qw = np.sqrt(1 - u1) * np.sin(2 * np.pi * u2)
-    qx = np.sqrt(1 - u1) * np.cos(2 * np.pi * u2)
-    qy = np.sqrt(u1) * np.sin(2 * np.pi * u3)
-    qz = np.sqrt(u1) * np.cos(2 * np.pi * u3)
+    qw, qx, qy, qz = np.random.normal(0, 1, 4)
+    norm = np.linalg.norm([qw, qx, qy, qz])
+    qw, qx, qy, qz = qw / norm, qx / norm, qy / norm, qz / norm
+
     return ([x, y, z], [qw, qx, qy, qz])
 
 
