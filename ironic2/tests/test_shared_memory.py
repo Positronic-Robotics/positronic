@@ -1,6 +1,6 @@
 import pytest
 import multiprocessing as mp
-import struct
+import numpy as np
 
 from ironic2.core import Message
 from ironic2.world import SMCompliant, ZeroCopySMEmitter, ZeroCopySMReader, World
@@ -9,23 +9,35 @@ from ironic2.world import SMCompliant, ZeroCopySMEmitter, ZeroCopySMReader, Worl
 class SMCompliantTestData(SMCompliant):
     """Test implementation of SMCompliant for testing purposes."""
 
-    def __init__(self, x: float = 0.0, y: float = 0.0):
+    def __init__(self, x: float = 0.0, y: float = 0.0, image_shape: tuple = (10, 10, 3)):
         self._buffer = None
         self._lock = None
-        self._x = x
-        self._y = y
+        self._xy = np.array([x, y], dtype=np.float32)
+        self._image_shape = np.array(image_shape, dtype=np.int32)
+        self._image = np.zeros(image_shape, dtype=np.uint8)
 
-    @classmethod
-    def buf_size(cls) -> int:
-        # Two floats = 4 bytes each = 8 bytes total
-        return 8
+    def buf_size(self) -> int:
+        return self._xy.nbytes + self._image_shape.nbytes + self._image.nbytes
 
-    def bind_to_buffer(self, buffer: memoryview, lock: mp.Lock) -> None:
+    def bind_to_buffer(self, buffer: bytes, lock: mp.Lock) -> None:
         """Bind this object to a shared memory buffer."""
         self._buffer = buffer
         self._lock = lock
-        # Write current values to buffer
-        struct.pack_into('ff', buffer, 0, self._x, self._y)
+
+        offset = 0
+        new_xy = np.frombuffer(buffer[offset:offset + 2 * 4], dtype=np.float32).reshape(2)
+        new_xy[:] = self._xy
+        self._xy = new_xy
+        offset += 2 * 4
+
+        new_image_shape = np.frombuffer(buffer[offset:offset + 3 * 4], dtype=np.int32).reshape(3)
+        new_image_shape[:] = self._image_shape
+        self._image_shape = new_image_shape
+        offset += 3 * 4
+
+        new_image = np.frombuffer(buffer[offset:offset + self._image.nbytes], dtype=np.uint8).reshape(self._image_shape)
+        new_image[:] = self._image
+        self._image = new_image
 
     @classmethod
     def create_from_memoryview(cls, buffer: memoryview, lock: mp.Lock):
@@ -33,40 +45,58 @@ class SMCompliantTestData(SMCompliant):
         instance = cls()
         instance._buffer = buffer
         instance._lock = lock
+
+        offset = 0
+        instance._xy = np.frombuffer(buffer[:2 * 4], dtype=np.float32).reshape(2)
+        offset += 2 * 4
+        image_shape = np.frombuffer(buffer[offset:offset + 3 * 4], dtype=np.int32).reshape(3)
+        offset += 3 * 4
+        image_size = np.prod(image_shape, dtype=int)
+        image = np.frombuffer(buffer[offset:offset + image_size], dtype=np.uint8).reshape(image_shape)
+
+        instance._image_shape = image_shape
+        instance._image = image
         return instance
+
+    def close(self):
+        """Release buffer references to allow proper cleanup."""
+        self._xy = None
+        self._image_shape = None
+        self._image = None
+
+        self._buffer.release()
+        self._buffer = None
 
     @property
     def x(self) -> float:
-        if self._buffer is not None:
-            with self._lock:
-                return struct.unpack_from('f', self._buffer, 0)[0]
-        return self._x
+        return self._xy[0]
 
     @x.setter
     def x(self, value: float):
-        self._x = value
-        if self._buffer is not None:
-            with self._lock:
-                struct.pack_into('f', self._buffer, 0, value)
+        self._xy[0] = value
 
     @property
     def y(self) -> float:
-        if self._buffer is not None:
-            with self._lock:
-                return struct.unpack_from('f', self._buffer, 4)[0]
-        return self._y
+        return self._xy[1]
 
     @y.setter
     def y(self, value: float):
-        self._y = value
-        if self._buffer is not None:
-            with self._lock:
-                struct.pack_into('f', self._buffer, 4, value)
+        self._xy[1] = value
+
+    @property
+    def image(self) -> np.ndarray:
+        return self._image
+
+    @image.setter
+    def image(self, value: np.ndarray):
+        assert value.shape == tuple(self._image_shape), \
+            f"Image shape mismatch: expected {self._image_shape}, got {value.shape}"
+        self._image[:] = value
 
     def __eq__(self, other):
         if not isinstance(other, SMCompliantTestData):
             return False
-        return abs(self.x - other.x) < 1e-6 and abs(self.y - other.y) < 1e-6
+        return (np.array_equal(self._xy, other._xy) and np.array_equal(self._image, other._image))
 
 
 class TestZeroCopySMAPI:
@@ -126,6 +156,21 @@ class TestZeroCopySMAPI:
             with pytest.raises(AssertionError, match="SMEmitter can only emit the same object multiple times"):
                 emitter.emit(data2)
 
+    def test_buffer_size_validation(self):
+        """Test that emitter validates buffer size consistency."""
+        with World() as world:
+            emitter, _ = world.zero_copy_sm(SMCompliantTestData)
+
+            # First data with small image
+            data1 = SMCompliantTestData(1.0, 2.0, image_shape=(5, 5, 3))
+            result1 = emitter.emit(data1)
+            assert result1 is True
+
+            # Try to emit data with different buffer size (should fail)
+            data2 = SMCompliantTestData(3.0, 4.0, image_shape=(10, 10, 3))  # Different size
+            with pytest.raises(AssertionError, match="Buffer size mismatch"):
+                emitter.emit(data2)
+
     def test_data_updates_reflect_in_shared_memory(self):
         """Test that updates to the data object are reflected in shared memory."""
         with World() as world:
@@ -150,6 +195,33 @@ class TestZeroCopySMAPI:
             assert message.data.x == 3.0
             assert message.data.y == 4.0
             assert message.ts == 200
+
+    def test_numpy_array_zero_copy(self):
+        """Test that numpy arrays are properly shared with zero-copy."""
+        with World() as world:
+            emitter, reader = world.zero_copy_sm(SMCompliantTestData)
+
+            # Create data with a specific image
+            data = SMCompliantTestData(1.0, 2.0, image_shape=(4, 4, 3))
+            test_image = np.random.randint(0, 255, (4, 4, 3), dtype=np.uint8)
+            data.image = test_image
+
+            # Emit data
+            emitter.emit(data, ts=123)
+
+            # Read data and verify image is the same
+            message = reader.read()
+            assert message is not None
+            received_image = message.data.image
+            assert np.array_equal(received_image, test_image)
+
+            # Modify the original image and check that the reader sees the change
+            # This is a not recommended behaviour, as we expect the emitters to write again
+            # but this is the only way to test zero-copy behaviour.
+            new_image = np.random.randint(0, 255, (4, 4, 3), dtype=np.uint8)
+            data.image = new_image
+            assert np.array_equal(received_image, new_image)
+            received_image = None  # To clean up the references
 
     def test_reader_returns_none_when_no_data_written(self):
         """Test that reader returns None when no data has been written."""
