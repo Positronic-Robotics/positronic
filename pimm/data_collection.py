@@ -190,18 +190,15 @@ def main(robot_arm: Any | None,  # noqa: C901  Function is too complex
                     print("Resetting robot")
                     recorder.turn_off()
                     tracker.turn_off()
-                    robot_commands.emit(roboarm.Command.reset())
+                    robot_commands.emit(roboarm.command.Reset())
 
                 target_grip = button_handler.get_value('right_trigger')
                 target_grip_emitter.emit(target_grip)
 
                 controller_positions, controller_positions_updated = controller_positions_reader.value
                 target_robot_pos = tracker.update(controller_positions['right'])
-                # Don't spam the robot with commands.
-                # TODO: Alternatively, robot can check the equality of the current and new commands,
-                # but not sure which option is better.
-                if tracker.on and controller_positions_updated:
-                    robot_commands.emit(roboarm.Command.move_to(target_robot_pos))
+                if tracker.on and controller_positions_updated:  # Don't spam the robot with commands.
+                    robot_commands.emit(roboarm.command.CartesianMove(target_robot_pos))
 
                 frame_messages = {name: reader.read() for name, reader in frame_readers.items()}
                 any_frame_updated = any(msg.data[1] and msg.data[0] is not None for msg in frame_messages.values())

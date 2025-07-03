@@ -440,10 +440,7 @@ class RateLimiter:
         """
         One of every_sec or hz must be provided.
         """
-        if every_sec is None and hz is None:
-            raise ValueError("One of every_sec or hz must be provided")
-        if every_sec is not None and hz is not None:
-            raise ValueError("Only one of every_sec or hz can be provided")
+        assert (every_sec is None) ^ (hz is None), "Exactly one of every_sec or hz must be provided"
         self._last_time = None
         self.interval = every_sec if every_sec is not None else 1.0 / hz
 

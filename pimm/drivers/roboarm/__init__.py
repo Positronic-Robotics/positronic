@@ -6,41 +6,10 @@ import numpy as np
 import geom
 
 
-class CommandType(Enum):
-    """
-    Different types of commands that can be sent to the robot.
-    Robot implementation can choose to ignore some of them.
-    """
-    RESET = 0
-    CARTESIAN_MOVE = 1
-
-
 class RobotStatus(Enum):
     """Different statuses that the robot can be in."""
     AVAILABLE = 0
     RESETTING = 1
-
-
-@dataclass
-class Command:
-    """Command to be sent to the robot. Robot implementation may support only some of the types."""
-    type: CommandType
-    # For performance reasons, commands are packed into a single array.
-    # All implementations must rely on the same interpretation of the array.
-    # RESET:
-    #   The values are ignored.
-    # CARTESIAN_MOVE:
-    #   value[0:3] - xyz translation
-    #   value[3:7] - quaternion in wxyz format
-    value: np.array
-
-    @staticmethod
-    def move_to(pos: geom.Transform3D):
-        return Command(CommandType.CARTESIAN_MOVE, np.concatenate([pos.translation, pos.rotation.as_quat]))
-
-    @staticmethod
-    def reset():
-        return Command(CommandType.RESET, np.zeros(7))
 
 
 # TODO: Add forces when we are ready

@@ -8,7 +8,7 @@ import geom
 import ironic2 as ir
 from ironic.utils import RateLimiter
 
-from . import Command, CommandType, RobotStatus, State
+from . import RobotStatus, State, command
 
 
 class CartesianMode(Enum):
@@ -20,7 +20,10 @@ class Robot:
     commands: ir.SignalReader = ir.NoOpReader()
     state: ir.SignalEmitter = ir.NoOpEmitter()
 
-    def __init__(self, ip: str, relative_dynamics_factor=0.2, cartesian_mode=CartesianMode.LIBFRANKA,
+    def __init__(self,
+                 ip: str,
+                 relative_dynamics_factor=0.2,
+                 cartesian_mode=CartesianMode.LIBFRANKA,
                  home_joints: list[float] = [0.0, -0.31, 0.0, -1.65, 0.0, 1.522, 0.0]) -> None:
         """
         :param ip: IP address of the robot.
@@ -93,18 +96,14 @@ class Robot:
         reset()
 
         while not should_stop.value:
-            command, updated = commands.value
+            cmd, updated = commands.value
             if updated:
-                match command.type:
-                    case CommandType.RESET:
+                match cmd:
+                    case command.Reset():
                         reset()
                         continue
-                    case CommandType.CARTESIAN_MOVE:
-                        q_xyzw = np.array([command.value[4], command.value[5], command.value[6], command.value[3]])
-                        pos = franky.Affine(translation=command.value[:3], quaternion=q_xyzw)
-                    case _:
-                        # TODO: Should we raise or just ignore?
-                        raise ValueError(f"Unsupported command type: {command.type}")
+                    case command.CartesianMove(pose):
+                        pos = franky.Affine(translation=pose.translation, quaternion=pose.rotation.as_quat_xyzw())
 
                 if self._cartesian_mode == CartesianMode.LIBFRANKA:
                     motion = franky.CartesianMotion(pos, franky.ReferenceType.Absolute)
@@ -131,14 +130,15 @@ if __name__ == "__main__":
         robot.state, state = world.pipe()
         world.start(robot.run)
 
-        trajectory = [([0.03, 0.03, 0.03], 0.0),
-                      ([-0.03, 0.03, 0.03], 2.0),
-                      ([-0.03, -0.03, 0.03], 4.0),
-                      ([-0.03, -0.03, -0.03], 6.0),
-                      ([0.03, -0.03, -0.03], 8.0),
-                      ([0.03, 0.03, -0.03], 10.0),
-                      ([0.03, 0.03, 0.03], 12.0),
-                      ]
+        trajectory = [
+            ([0.03, 0.03, 0.03], 0.0),
+            ([-0.03, 0.03, 0.03], 2.0),
+            ([-0.03, -0.03, 0.03], 4.0),
+            ([-0.03, -0.03, -0.03], 6.0),
+            ([0.03, -0.03, -0.03], 8.0),
+            ([0.03, 0.03, -0.03], 10.0),
+            ([0.03, 0.03, 0.03], 12.0),
+        ]
 
         while not world.should_stop and (state.read() is None or state.value.status == RobotStatus.RESETTING):
             time.sleep(0.01)
@@ -151,7 +151,7 @@ if __name__ == "__main__":
             pos, duration = trajectory[i]
             if time.monotonic() > start + duration:
                 print(f"Moving to {pos + origin.translation}")
-                commands.emit(Command.move_to(geom.Transform3D(pos + origin.translation, origin.rotation)))
+                commands.emit(command.CartesianMove(geom.Transform3D(pos + origin.translation, origin.rotation)))
                 i += 1
             else:
                 time.sleep(0.01)
