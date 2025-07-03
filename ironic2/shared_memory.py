@@ -77,6 +77,8 @@ class NumpySMAdapter(SMCompliant):
     CODE_TO_DTYPE = {v: k for k, v in DTYPE_TO_CODE.items()}
 
     def __init__(self, array: np.ndarray):
+        if not array.flags.c_contiguous:
+            raise ValueError("Array must be C-contiguous. Use np.ascontiguousarray() to make it contiguous.")
         self._array = array
 
     @property
@@ -97,6 +99,10 @@ class NumpySMAdapter(SMCompliant):
 
     def move_to_buffer(self, buffer: memoryview | bytes | bytearray) -> None:
         """Bind numpy array to shared memory buffer."""
+        # Ensure array is still contiguous
+        if not self._array.flags.c_contiguous:
+            raise ValueError("Array must be C-contiguous. Use np.ascontiguousarray() to make it contiguous.")
+
         # Ensure buffer is writable
         if isinstance(buffer, bytes):
             raise ValueError("Buffer must be writable")

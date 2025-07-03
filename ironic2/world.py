@@ -137,7 +137,7 @@ class World:
         emitter = ZeroCopySMEmitter(data_type, self._manager, self._sm_manager)
         reader = ZeroCopySMReader(emitter)
         self._sm_emitters_readers.append((emitter, reader))
-        return (emitter, reader)
+        return emitter, reader
 
     def start(self, *background_loops: List[Callable]):
         """Starts background control loops. Can be called multiple times for different control loops."""

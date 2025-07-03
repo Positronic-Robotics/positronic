@@ -59,6 +59,52 @@ class TestNumpySMAdapter:
         with pytest.raises(ValueError, match="Buffer must be writable"):
             adapter.move_to_buffer(buffer)
 
+    def test_non_contiguous_array_raises_error(self):
+        """Test that non-contiguous arrays raise errors."""
+        # Create a non-contiguous array (transposed view)
+        original_array = np.array([[1, 2, 3], [4, 5, 6]], dtype=np.float32)
+        transposed_array = original_array.T  # This creates a non-contiguous view
+
+        # Verify the array is indeed non-contiguous
+        assert not transposed_array.flags.c_contiguous
+
+        # Should raise ValueError when creating adapter
+        with pytest.raises(ValueError, match="Array must be C-contiguous"):
+            NumpySMAdapter(transposed_array)
+
+    def test_non_contiguous_array_with_ascontiguousarray_works(self):
+        """Test that non-contiguous arrays work when made contiguous."""
+        # Create a non-contiguous array (transposed view)
+        original_array = np.array([[1, 2, 3], [4, 5, 6]], dtype=np.float32)
+        transposed_array = original_array.T  # This creates a non-contiguous view
+
+        # Make it contiguous
+        contiguous_array = np.ascontiguousarray(transposed_array)
+
+        # Should work fine now
+        adapter = NumpySMAdapter(contiguous_array)
+        assert adapter.array.flags.c_contiguous
+
+        # Test serialization/deserialization roundtrip
+        buffer = bytearray(adapter.buf_size())
+        adapter.move_to_buffer(buffer)
+
+        new_adapter = NumpySMAdapter.create_from_memoryview(buffer)
+        assert np.array_equal(new_adapter.array, contiguous_array)
+
+    def test_strided_array_raises_error(self):
+        """Test that strided arrays raise errors."""
+        # Create a strided array using slicing
+        original_array = np.array([1, 2, 3, 4, 5, 6, 7, 8], dtype=np.int32)
+        strided_array = original_array[::2]  # Take every other element
+
+        # Verify the array is indeed non-contiguous
+        assert not strided_array.flags.c_contiguous
+
+        # Should raise ValueError when creating adapter
+        with pytest.raises(ValueError, match="Array must be C-contiguous"):
+            NumpySMAdapter(strided_array)
+
 
 class TestZeroCopySMAPI:
     """Test the public API for zero-copy shared memory communication."""
