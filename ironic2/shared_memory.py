@@ -50,18 +50,27 @@ class SMCompliant(ABC):
 
 
 class NumpySMAdapter(SMCompliant):
-    """SMAdapter implementation for numpy arrays with support for limited dtypes."""
+    """SMAdapter implementation for numpy arrays with support for all numeric dtypes."""
 
     # Mapping of numpy dtypes to codes
     DTYPE_TO_CODE = {
+        # Unsigned integers
         np.uint8: 0,
-        np.int8: 1,
-        np.uint16: 2,
-        np.int16: 3,
-        np.uint32: 4,
-        np.int32: 5,
-        np.float16: 6,
-        np.float32: 7,
+        np.uint16: 1,
+        np.uint32: 2,
+        np.uint64: 3,
+        # Signed integers
+        np.int8: 4,
+        np.int16: 5,
+        np.int32: 6,
+        np.int64: 7,
+        # Floating point
+        np.float16: 8,
+        np.float32: 9,
+        np.float64: 10,
+        # Complex floating point
+        np.complex64: 11,
+        np.complex128: 12,
     }
 
     # Reverse mapping

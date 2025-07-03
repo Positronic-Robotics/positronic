@@ -11,7 +11,8 @@ class TestNumpySMAdapter:
 
     def test_unsupported_dtype_raises_error(self):
         """Test that unsupported dtypes raise errors."""
-        array = np.array([1.0, 2.0, 3.0], dtype=np.float64)  # Not supported
+        # Test with a truly unsupported dtype (object dtype)
+        array = np.array([1.0, 2.0, 3.0], dtype=object)  # Not supported
         adapter = NumpySMAdapter(array)
 
         buffer_size = adapter.buf_size()
@@ -300,10 +301,23 @@ class TestZeroCopySMAPI:
     def test_different_array_shapes_and_dtypes(self):
         """Test various array shapes and dtypes work correctly."""
         test_cases = [
+            # Unsigned integers
             (np.array([1, 2, 3], dtype=np.uint8), "1D uint8"),
-            (np.array([[1, 2], [3, 4]], dtype=np.int32), "2D int32"),
-            (np.array([[[1, 2], [3, 4]], [[5, 6], [7, 8]]], dtype=np.float16), "3D float16"),
+            (np.array([[1, 2], [3, 4]], dtype=np.uint16), "2D uint16"),
+            (np.array([42], dtype=np.uint32), "scalar-like uint32"),
+            (np.array([100], dtype=np.uint64), "scalar-like uint64"),
+            # Signed integers
             (np.array([42], dtype=np.int8), "scalar-like int8"),
+            (np.array([1, 2, 3], dtype=np.int16), "1D int16"),
+            (np.array([[1, 2], [3, 4]], dtype=np.int32), "2D int32"),
+            (np.array([100], dtype=np.int64), "scalar-like int64"),
+            # Floating point
+            (np.array([[[1, 2], [3, 4]], [[5, 6], [7, 8]]], dtype=np.float16), "3D float16"),
+            (np.array([3.14, 2.71], dtype=np.float32), "1D float32"),
+            (np.array([[1.0, 2.0], [3.0, 4.0]], dtype=np.float64), "2D float64"),
+            # Complex floating point
+            (np.array([1+2j, 3+4j], dtype=np.complex64), "1D complex64"),
+            (np.array([[1+2j, 3+4j], [5+6j, 7+8j]], dtype=np.complex128), "2D complex128"),
         ]
 
         for test_array, description in test_cases:
