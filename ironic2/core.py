@@ -1,7 +1,8 @@
 from abc import ABC, abstractmethod
+from contextlib import nullcontext
 from dataclasses import dataclass
 import time
-from typing import Any, Callable, final
+from typing import Any, Callable, ContextManager, final
 
 # Internal sentinel object to distinguish between no default and explicit None default
 _RAISE_EXCEPTION_SENTINEL = object()
@@ -40,6 +41,18 @@ class SignalEmitter(ABC):
     def emit(self, data: Any, ts: int = 0) -> bool:
         """Emit a message with the given data and timestamp. Returns True if successful."""
         pass
+
+    def zc_lock(self) -> ContextManager[None]:
+        """Some emitter/reader pairs can implement zero-copy operations.
+        Zero-copy means that writing and reading code work with the physically same memory.
+        You want to avoid reading simultaneously with writing, as the data will appear to be corrupted.
+
+        This method returns a context manager that writing code should enter before modifying the data.
+        If reader code respects the similar lock, you won't have data races.
+
+        If emitter/reader pair does not support zero-copy, this is a harmless no-op.
+        """
+        return nullcontext()
 
 
 class NoOpEmitter(SignalEmitter):

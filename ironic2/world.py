@@ -135,7 +135,7 @@ class World:
             Tuple of (emitter, reader) for zero-copy inter-process communication
         """
         emitter = ZeroCopySMEmitter(data_type, self._manager, self._sm_manager)
-        reader = ZeroCopySMReader(emitter, data_type)
+        reader = ZeroCopySMReader(emitter)
         self._sm_emitters_readers.append((emitter, reader))
         return (emitter, reader)
 

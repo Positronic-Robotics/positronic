@@ -1,80 +1,182 @@
 import multiprocessing as mp
-import multiprocessing.managers
+import struct
+from abc import ABC, abstractmethod
+from typing import Any, ContextManager, Self
 
+import numpy as np
 
 from ironic2.core import Message, SignalEmitter, SignalReader, system_clock
 
+# Requirements:
+# - Writer does not know which communication channel is used
+# - Shared memory is zero-copy, i.e. both reader and writer point to the same memory
+# - Numpy Array must be passed as easily as possible
 
-class SMCompliant:
+
+class SMCompliant(ABC):
     def buf_size(self) -> int:
-        """Return the buffer size needed for this instance."""
+        """Return the buffer size needed for `data`."""
         return 0
 
-    def bind_to_buffer(self, buffer: bytes, lock: mp.Lock) -> None:
-        """Bind the instance to a memory buffer. This method is called at most once per instance.
+    @abstractmethod
+    def move_to_buffer(self, buffer: memoryview | bytes | bytearray) -> None:
+        """Bind the instance to a memory buffer (kinda zero-copy serialization).
+        This method is called at most once per `data` instance.
         After the call, all the data must be stored within the buffer and all 'updates' to
         the data must be done through the buffer.
 
-        To some extent can be thought as a serialization method.
-
         Args:
+            data: The data to bind to the buffer.
             buffer: The memory buffer to bind to.
-            lock: The lock to use to protect access to the shared memory.
         """
-        raise NotImplementedError()
+        pass
 
     @classmethod
-    def create_from_memoryview(cls, buffer: memoryview, lock: mp.Lock) -> None:
-        """Given a memoryview and a lock, create an instance of the class from the memoryview. Can be thought
-        as a deserialization method.
+    @abstractmethod
+    def create_from_memoryview(cls, buffer: memoryview | bytes) -> Self:
+        """Given a memoryview, create an instance of the class from the memoryview (kinda zero-copy deserialization).
 
         Args:
-            buffer: The memory buffer to create the instance from.
-            lock: The lock to use to protect access to the shared memory.
+            buffer: The memory buffer to create the instance from. Can be a memoryview, bytes, or bytearray.
+
+        Returns:
+            The 'deserialized' data mapped to the buffer.
         """
-        raise NotImplementedError()
+        pass
 
     def close(self):
         """Release the resources used by the instance (usually shared memory)"""
         pass
 
-    @property
-    def lock(self) -> mp.Lock:
-        """Protects access to the shared memory. Use it when reading or writing data from the instance."""
-        raise NotImplementedError()
 
-    def copy(self) -> 'SMCompliant':
-        """Create a copy of the instance. This is used to create a new instance of the same type.
-        The copy must be independent of the original instance, so that the original instance can be modified
-        without affecting the copy.
-        """
-        raise NotImplementedError()
+class NumpySMAdapter(SMCompliant):
+    """SMAdapter implementation for numpy arrays with support for limited dtypes."""
+
+    # Mapping of numpy dtypes to codes
+    DTYPE_TO_CODE = {
+        np.uint8: 0,
+        np.int8: 1,
+        np.uint16: 2,
+        np.int16: 3,
+        np.uint32: 4,
+        np.int32: 5,
+        np.float16: 6,
+        np.float32: 7,
+    }
+
+    # Reverse mapping
+    CODE_TO_DTYPE = {v: k for k, v in DTYPE_TO_CODE.items()}
+
+    def __init__(self, array: np.ndarray):
+        self._array = array
+
+    @property
+    def array(self) -> np.ndarray:
+        return self._array
+
+    def buf_size(self) -> int:
+        """Calculate buffer size needed for numpy array."""
+        # Buffer layout:
+        # 1 byte: dtype code
+        # 1 byte: number of dimensions
+        # 4 bytes per dimension: dimension sizes (uint32)
+        # remaining bytes: array data
+
+        header_size = 1 + 1 + (4 * self._array.ndim)  # dtype + ndim + shape
+        data_size = self._array.nbytes
+        return header_size + data_size
+
+    def move_to_buffer(self, buffer: memoryview | bytes | bytearray) -> None:
+        """Bind numpy array to shared memory buffer."""
+        # Ensure buffer is writable
+        if isinstance(buffer, bytes):
+            raise ValueError("Buffer must be writable")
+
+        if not isinstance(buffer, memoryview):  # Convert to memoryview for easier manipulation
+            buffer = memoryview(buffer)
+
+        if buffer.readonly:
+            raise ValueError("Buffer must be writable")
+
+        offset = 0
+
+        dtype_code = self.DTYPE_TO_CODE[self._array.dtype.type]
+        buffer[offset] = dtype_code
+        offset += 1
+
+        buffer[offset] = self._array.ndim
+        offset += 1
+
+        for dim_size in self._array.shape:
+            struct.pack_into('<I', buffer, offset, dim_size)  # little-endian uint32
+            offset += 4
+
+        data_buffer = buffer[offset:offset + self._array.nbytes]
+        data_buffer[:] = self._array.tobytes()
+
+        # Now the array is bound to the buffer - use exact size
+        data_slice = buffer[offset:offset + self._array.nbytes]
+        self._array = np.frombuffer(data_slice, dtype=self._array.dtype).reshape(self._array.shape)
+
+    @classmethod
+    def create_from_memoryview(cls, buffer: memoryview | bytes) -> Self:
+        """Create numpy array from shared memory buffer."""
+        if isinstance(buffer, bytes):
+            buffer = memoryview(buffer)
+
+        offset = 0
+
+        # Read dtype code (1 byte)
+        dtype_code = buffer[offset]
+        if dtype_code not in cls.CODE_TO_DTYPE:
+            raise ValueError(f"Invalid dtype code: {dtype_code}")
+        dtype = cls.CODE_TO_DTYPE[dtype_code]
+        offset += 1
+
+        # Read number of dimensions (1 byte)
+        ndim = buffer[offset]
+        offset += 1
+
+        # Read shape (4 bytes per dimension)
+        shape = []
+        for _ in range(ndim):
+            dim_size = struct.unpack_from('<I', buffer, offset)[0]  # little-endian uint32
+            shape.append(dim_size)
+            offset += 4
+        shape = tuple(shape)
+
+        # Create array from remaining buffer data
+        array_size = np.prod(shape, dtype=int) * np.dtype(dtype).itemsize
+        data_buffer = buffer[offset:offset + array_size]
+        array = np.frombuffer(data_buffer, dtype=dtype).reshape(shape)
+
+        return cls(array)
+
+    def close(self):
+        self._array = None
 
 
 class ZeroCopySMEmitter(SignalEmitter):
 
     def __init__(self, data_type: type[SMCompliant], manager: mp.Manager, sm_manager: mp.managers.SharedMemoryManager):
         self._data_type = data_type
-        self._manager = manager
         self._sm = None
-        self._lock = None
-        self._ts_value = None
+        self._lock = manager.Lock()
+        self._ts_value = manager.Value('Q', 0)
         self._out_data = None
         self._expected_buf_size = None
         self._sm_manager = sm_manager
 
-    def emit(self, data: SMCompliant, ts: int = 0) -> bool:
-        assert isinstance(data, self._data_type), f"Data type mismatch: {type(data)} != {self._data_type}"
+    def emit(self, data: Any, ts: int = 0) -> bool:
         ts = ts or system_clock()
+        assert isinstance(data, self._data_type), f"Data type mismatch: {type(data)} != {self._data_type}"
 
         buf_size = data.buf_size()
 
         if self._sm is None:  # First emit - create shared memory with the size from this instance
             self._expected_buf_size = buf_size
             self._sm = self._sm_manager.SharedMemory(size=buf_size)
-            self._ts_value = self._manager.Value('Q', 0)
-            self._lock = self._manager.Lock()
-            data.bind_to_buffer(self._sm.buf, self._lock)
+            data.move_to_buffer(self._sm.buf)
             self._out_data = data
         else:  # Subsequent emits - validate buffer size matches
             assert buf_size == self._expected_buf_size, \
@@ -89,62 +191,42 @@ class ZeroCopySMEmitter(SignalEmitter):
     def close(self):
         """Release references to shared memory to allow proper cleanup."""
         if self._out_data is not None:
-            if hasattr(self._out_data, 'close'):
-                self._out_data.close()
+            self._out_data.close()
             self._out_data = None
 
-        # Clear other references to help with cleanup
-        self._ts_value = None
-        self._lock = None
-        # Note: Don't close self._sm here as it's managed by World.__exit__
-
-    @property
-    def shared_memory(self) -> mp.shared_memory.SharedMemory:
-        """Get the shared memory object (only available after first emit)."""
-        return self._sm
-
-    @property
-    def ts_value(self) -> mp.Value:
-        """Get the timestamp value (only available after first emit)."""
-        return self._ts_value
-
-    @property
-    def lock(self) -> mp.Lock:
-        """Get the lock (only available after first emit)."""
+    def zc_lock(self) -> ContextManager[None]:
         return self._lock
 
 
 class ZeroCopySMReader(SignalReader):
 
-    def __init__(self, emitter: ZeroCopySMEmitter, data_type: type[SMCompliant]):
+    def __init__(self, emitter: ZeroCopySMEmitter):
         self._emitter = emitter
-        self._data_type = data_type
         self._out_value = None
         self._readonly_buffer = None
 
     def read(self) -> Message | None:
-        if self._emitter.shared_memory is None:
+        if self._emitter._sm is None:
             return None
 
         if self._out_value is None:
-            self._readonly_buffer = self._emitter.shared_memory.buf.toreadonly()
-            self._out_value = self._data_type.create_from_memoryview(
-                self._readonly_buffer,
-                self._emitter.lock
-            )
-            self._ts_value = self._emitter.ts_value
+            self._readonly_buffer = self._emitter._sm.buf.toreadonly()
+            self._out_value = self._emitter._data_type.create_from_memoryview(self._readonly_buffer)
 
-        with self._emitter.lock:
-            if self._emitter.ts_value.value == 0:
+        with self._emitter._lock:
+            if self._emitter._ts_value.value == 0:
                 return None
-            return Message(data=self._out_value, ts=self._emitter.ts_value.value)
+            return Message(data=self._out_value, ts=self._emitter._ts_value.value)
 
     def close(self):
         """Release references to shared memory to allow proper cleanup."""
         if self._out_value is not None:
-            if hasattr(self._out_value, 'close'):
-                self._out_value.close()
+            self._out_value.close()
             self._out_value = None
+
         if self._readonly_buffer is not None:
             self._readonly_buffer.release()
             self._readonly_buffer = None
+
+    def zc_lock(self) -> ContextManager[None]:
+        return self._emitter.zc_lock()

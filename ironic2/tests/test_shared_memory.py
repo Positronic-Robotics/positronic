@@ -1,108 +1,62 @@
 import pytest
-import multiprocessing as mp
 import numpy as np
 
 from ironic2.core import Message
-from ironic2.world import SMCompliant, ZeroCopySMEmitter, ZeroCopySMReader, World
+from ironic2.shared_memory import NumpySMAdapter
+from ironic2.world import ZeroCopySMEmitter, ZeroCopySMReader, World
 
 
-class SMCompliantTestData(SMCompliant):
-    """Test implementation of SMCompliant for testing purposes."""
+class TestNumpySMAdapter:
+    """Test the NumpySMAdapter implementation."""
 
-    def __init__(self, x: float = 0.0, y: float = 0.0, image_shape: tuple = (10, 10, 3)):
-        self._buffer = None
-        self._lock = None
-        self._xy = np.array([x, y], dtype=np.float32)
-        self._image_shape = np.array(image_shape, dtype=np.int32)
-        self._image = np.zeros(image_shape, dtype=np.uint8)
+    def test_unsupported_dtype_raises_error(self):
+        """Test that unsupported dtypes raise errors."""
+        array = np.array([1.0, 2.0, 3.0], dtype=np.float64)  # Not supported
+        adapter = NumpySMAdapter(array)
 
-    def buf_size(self) -> int:
-        return self._xy.nbytes + self._image_shape.nbytes + self._image.nbytes
+        buffer_size = adapter.buf_size()
+        buffer = bytearray(buffer_size)
 
-    def bind_to_buffer(self, buffer: bytes, lock: mp.Lock) -> None:
-        """Bind this object to a shared memory buffer."""
-        self._buffer = buffer
-        self._lock = lock
+        with pytest.raises(KeyError):
+            adapter.move_to_buffer(buffer)
 
-        offset = 0
-        new_xy = np.frombuffer(buffer[offset:offset + 2 * 4], dtype=np.float32).reshape(2)
-        new_xy[:] = self._xy
-        self._xy = new_xy
-        offset += 2 * 4
+    def test_move_to_buffer_and_create_from_memoryview(self):
+        """Test serialization and deserialization roundtrip."""
+        original_array = np.array([[1, 2, 3], [4, 5, 6]], dtype=np.float32)
+        adapter = NumpySMAdapter(original_array)
 
-        new_image_shape = np.frombuffer(buffer[offset:offset + 3 * 4], dtype=np.int32).reshape(3)
-        new_image_shape[:] = self._image_shape
-        self._image_shape = new_image_shape
-        offset += 3 * 4
+        buffer = bytearray(adapter.buf_size())
+        adapter.move_to_buffer(buffer)
 
-        new_image = np.frombuffer(buffer[offset:offset + self._image.nbytes], dtype=np.uint8).reshape(self._image_shape)
-        new_image[:] = self._image
-        self._image = new_image
+        new_adapter = NumpySMAdapter.create_from_memoryview(buffer)
 
-    @classmethod
-    def create_from_memoryview(cls, buffer: memoryview, lock: mp.Lock):
-        """Create an instance from a shared memory buffer."""
-        instance = cls()
-        instance._buffer = buffer
-        instance._lock = lock
+        # Verify arrays are equal
+        assert new_adapter.array.shape == original_array.shape
+        assert new_adapter.array.dtype == original_array.dtype
+        assert np.array_equal(new_adapter.array, original_array)
 
-        offset = 0
-        instance._xy = np.frombuffer(buffer[:2 * 4], dtype=np.float32).reshape(2)
-        offset += 2 * 4
-        image_shape = np.frombuffer(buffer[offset:offset + 3 * 4], dtype=np.int32).reshape(3)
-        offset += 3 * 4
-        image_size = np.prod(image_shape, dtype=int)
-        image = np.frombuffer(buffer[offset:offset + image_size], dtype=np.uint8).reshape(image_shape)
+    def test_zero_copy_behavior(self):
+        """Test that changes to buffer reflect in array."""
+        array = np.array([1, 2, 3], dtype=np.int32)
+        adapter = NumpySMAdapter(array)
 
-        instance._image_shape = image_shape
-        instance._image = image
-        return instance
+        buffer = bytearray(adapter.buf_size())
+        adapter.move_to_buffer(buffer)
 
-    def close(self):
-        """Release buffer references to allow proper cleanup."""
-        self._xy = None
-        self._image_shape = None
-        self._image = None
+        adapter.array[0] = 99
 
-        self._buffer.release()
-        self._buffer = None
+        new_adapter = NumpySMAdapter.create_from_memoryview(buffer)
+        assert new_adapter.array[0] == 99
 
-    @property
-    def x(self) -> float:
-        return self._xy[0]
+    def test_readonly_buffer_error(self):
+        """Test that readonly buffer raises error in move_to_buffer."""
+        array = np.array([1, 2, 3], dtype=np.uint8)
+        adapter = NumpySMAdapter(array)
 
-    @x.setter
-    def x(self, value: float):
-        self._xy[0] = value
+        buffer = bytes(adapter.buf_size())  # readonly bytes
 
-    @property
-    def y(self) -> float:
-        return self._xy[1]
-
-    @y.setter
-    def y(self, value: float):
-        self._xy[1] = value
-
-    @property
-    def image(self) -> np.ndarray:
-        return self._image
-
-    @image.setter
-    def image(self, value: np.ndarray):
-        assert value.shape == tuple(self._image_shape), \
-            f"Image shape mismatch: expected {self._image_shape}, got {value.shape}"
-        self._image[:] = value
-
-    def __eq__(self, other):
-        if not isinstance(other, SMCompliantTestData):
-            return False
-        return (np.array_equal(self._xy, other._xy) and np.array_equal(self._image, other._image))
-
-    def copy(self) -> 'SMCompliantTestData':
-        """Create a copy of the instance."""
-        result = SMCompliantTestData(self.x, self.y, self._image_shape)
-        result.image[:] = self._image
-        return result
+        with pytest.raises(ValueError, match="Buffer must be writable"):
+            adapter.move_to_buffer(buffer)
 
 
 class TestZeroCopySMAPI:
@@ -111,7 +65,7 @@ class TestZeroCopySMAPI:
     def test_world_creates_zero_copy_sm_pair(self):
         """Test that World.zero_copy_sm creates a working emitter/reader pair."""
         with World() as world:
-            emitter, reader = world.zero_copy_sm(SMCompliantTestData)
+            emitter, reader = world.zero_copy_sm(NumpySMAdapter)
 
             assert isinstance(emitter, ZeroCopySMEmitter)
             assert isinstance(reader, ZeroCopySMReader)
@@ -119,13 +73,14 @@ class TestZeroCopySMAPI:
     def test_emitter_reader_basic_communication(self):
         """Test basic communication between emitter and reader."""
         with World() as world:
-            emitter, reader = world.zero_copy_sm(SMCompliantTestData)
+            emitter, reader = world.zero_copy_sm(NumpySMAdapter)
 
             # Initially reader should return None (no data)
             assert reader.read() is None
 
             # Emit data
-            data = SMCompliantTestData(3.14, 2.71)
+            array = np.array([3.14, 2.71], dtype=np.float32)
+            data = NumpySMAdapter(array)
             result = emitter.emit(data, ts=12345)
             assert result is True
 
@@ -134,14 +89,13 @@ class TestZeroCopySMAPI:
             assert message is not None
             assert isinstance(message, Message)
             assert message.ts == 12345
-            assert isinstance(message.data, SMCompliantTestData)
-            assert abs(message.data.x - 3.14) < 1e-6
-            assert abs(message.data.y - 2.71) < 1e-6
+            assert isinstance(message.data, NumpySMAdapter)
+            assert np.allclose(message.data.array, [3.14, 2.71])
 
     def test_emitter_rejects_wrong_data_type(self):
         """Test that emitter rejects data of wrong type."""
         with World() as world:
-            emitter, _ = world.zero_copy_sm(SMCompliantTestData)
+            emitter, _ = world.zero_copy_sm(NumpySMAdapter)
 
             with pytest.raises(AssertionError, match="Data type mismatch"):
                 emitter.emit("wrong_type")
@@ -149,10 +103,12 @@ class TestZeroCopySMAPI:
     def test_emitter_requires_same_object_instance(self):
         """Test that emitter can only emit the same object instance multiple times."""
         with World() as world:
-            emitter, _ = world.zero_copy_sm(SMCompliantTestData)
+            emitter, _ = world.zero_copy_sm(NumpySMAdapter)
 
-            data1 = SMCompliantTestData(1.0, 2.0)
-            data2 = SMCompliantTestData(1.0, 2.0)  # Same values but different object
+            array1 = np.array([1.0, 2.0], dtype=np.float32)
+            data1 = NumpySMAdapter(array1)
+            array2 = np.array([1.0, 2.0], dtype=np.float32)  # Same values but different object
+            data2 = NumpySMAdapter(array2)
 
             # First emit should succeed
             result1 = emitter.emit(data1)
@@ -165,74 +121,75 @@ class TestZeroCopySMAPI:
     def test_buffer_size_validation(self):
         """Test that emitter validates buffer size consistency."""
         with World() as world:
-            emitter, _ = world.zero_copy_sm(SMCompliantTestData)
+            emitter, _ = world.zero_copy_sm(NumpySMAdapter)
 
-            # First data with small image
-            data1 = SMCompliantTestData(1.0, 2.0, image_shape=(5, 5, 3))
+            # First data with small array
+            array1 = np.array([[1, 2], [3, 4]], dtype=np.uint8)
+            data1 = NumpySMAdapter(array1)
             result1 = emitter.emit(data1)
             assert result1 is True
 
             # Try to emit data with different buffer size (should fail)
-            data2 = SMCompliantTestData(3.0, 4.0, image_shape=(10, 10, 3))  # Different size
+            array2 = np.array([[[1, 2], [3, 4]], [[5, 6], [7, 8]]], dtype=np.uint8)  # Different size
+            data2 = NumpySMAdapter(array2)
             with pytest.raises(AssertionError, match="Buffer size mismatch"):
                 emitter.emit(data2)
 
     def test_data_updates_reflect_in_shared_memory(self):
         """Test that updates to the data object are reflected in shared memory."""
         with World() as world:
-            emitter, reader = world.zero_copy_sm(SMCompliantTestData)
+            emitter, reader = world.zero_copy_sm(NumpySMAdapter)
 
-            data = SMCompliantTestData(1.0, 2.0)
+            array = np.array([1.0, 2.0], dtype=np.float32)
+            data = NumpySMAdapter(array)
 
             # Initial emit
             emitter.emit(data, ts=100)
             message = reader.read()
-            assert message.data.x == 1.0
-            assert message.data.y == 2.0
+            assert np.allclose(message.data.array, [1.0, 2.0])
             assert message.ts == 100
 
             # Modify data and emit again
-            data.x = 3.0
-            data.y = 4.0
+            data.array[0] = 3.0
+            data.array[1] = 4.0
             emitter.emit(data, ts=200)
 
             # Reader should see updated values
             message = reader.read()
-            assert message.data.x == 3.0
-            assert message.data.y == 4.0
+            assert np.allclose(message.data.array, [3.0, 4.0])
             assert message.ts == 200
 
     def test_numpy_array_zero_copy(self):
         """Test that numpy arrays are properly shared with zero-copy."""
         with World() as world:
-            emitter, reader = world.zero_copy_sm(SMCompliantTestData)
+            emitter, reader = world.zero_copy_sm(NumpySMAdapter)
 
             # Create data with a specific image
-            data = SMCompliantTestData(1.0, 2.0, image_shape=(4, 4, 3))
-            test_image = np.random.randint(0, 255, (4, 4, 3), dtype=np.uint8)
-            data.image = test_image
+            test_array = np.random.randint(0, 255, (4, 4, 3), dtype=np.uint8)
+            data = NumpySMAdapter(test_array.copy())
 
             # Emit data
             emitter.emit(data, ts=123)
 
-            # Read data and verify image is the same
+            # Read data and verify array is the same
             message = reader.read()
             assert message is not None
-            received_image = message.data.image
-            assert np.array_equal(received_image, test_image)
+            received_array = message.data.array
+            assert np.array_equal(received_array, test_array)
 
-            # Modify the original image and check that the reader sees the change
+            # Modify the original array and check that the reader sees the change
             # This is a not recommended behaviour, as we expect the emitters to write again
             # but this is the only way to test zero-copy behaviour.
-            new_image = np.random.randint(0, 255, (4, 4, 3), dtype=np.uint8)
-            data.image = new_image
-            assert np.array_equal(received_image, new_image)
-            received_image = None  # To clean up the references
+            new_values = np.random.randint(0, 255, (4, 4, 3), dtype=np.uint8)
+            data.array[:] = new_values
+            assert np.array_equal(received_array, new_values)
+
+            received_array = None  # Clean up references to prevent shared memory warning
 
     def test_reader_returns_none_when_no_data_written(self):
         """Test that reader returns None when no data has been written."""
         with World() as world:
-            _, reader = world.zero_copy_sm(SMCompliantTestData)
+            _, reader = world.zero_copy_sm(NumpySMAdapter)
 
             # Reader should return None when no data has been emitted
             result = reader.read()
@@ -241,17 +198,17 @@ class TestZeroCopySMAPI:
     def test_multiple_readers_see_same_data(self):
         """Test that multiple readers can access the same shared memory."""
         with World() as world:
-            emitter, reader1 = world.zero_copy_sm(SMCompliantTestData)
-            _, reader2 = world.zero_copy_sm(SMCompliantTestData)
+            emitter, reader1 = world.zero_copy_sm(NumpySMAdapter)
+            _, reader2 = world.zero_copy_sm(NumpySMAdapter)
 
             # Note: This creates separate shared memory instances, so let's test
             # that each pair works independently
-            data = SMCompliantTestData(1.0, 2.0)
+            array = np.array([1.0, 2.0], dtype=np.float32)
+            data = NumpySMAdapter(array)
 
             emitter.emit(data, ts=111)
             message1 = reader1.read()
-            assert message1.data.x == 1.0
-            assert message1.data.y == 2.0
+            assert np.allclose(message1.data.array, [1.0, 2.0])
             assert message1.ts == 111
 
             # reader2 should return None since it's a different shared memory
@@ -261,9 +218,10 @@ class TestZeroCopySMAPI:
     def test_data_persistence_across_multiple_reads(self):
         """Test that data persists across multiple read operations."""
         with World() as world:
-            emitter, reader = world.zero_copy_sm(SMCompliantTestData)
+            emitter, reader = world.zero_copy_sm(NumpySMAdapter)
 
-            data = SMCompliantTestData(5.5, 6.6)
+            array = np.array([5.5, 6.6], dtype=np.float32)
+            data = NumpySMAdapter(array)
             emitter.emit(data, ts=333)
 
             # Multiple reads should return the same data
@@ -272,17 +230,17 @@ class TestZeroCopySMAPI:
             message3 = reader.read()
 
             assert message1.ts == message2.ts == message3.ts == 333
-            assert (abs(message1.data.x - 5.5) < 1e-6 and abs(message2.data.x - 5.5) < 1e-6
-                    and abs(message3.data.x - 5.5) < 1e-6)
-            assert (abs(message1.data.y - 6.6) < 1e-6 and abs(message2.data.y - 6.6) < 1e-6
-                    and abs(message3.data.y - 6.6) < 1e-6)
+            assert np.allclose(message1.data.array, [5.5, 6.6])
+            assert np.allclose(message2.data.array, [5.5, 6.6])
+            assert np.allclose(message3.data.array, [5.5, 6.6])
 
     def test_zero_timestamp_means_no_data(self):
         """Test that zero timestamp is treated as no data available."""
         with World() as world:
-            emitter, reader = world.zero_copy_sm(SMCompliantTestData)
+            emitter, reader = world.zero_copy_sm(NumpySMAdapter)
 
-            data = SMCompliantTestData(1.0, 1.0)
+            array = np.array([1.0, 1.0], dtype=np.float32)
+            data = NumpySMAdapter(array)
 
             # Emit with timestamp 0 (should be auto-generated to non-zero)
             result = emitter.emit(data, ts=0)
@@ -295,36 +253,36 @@ class TestZeroCopySMAPI:
     def test_shared_memory_survives_data_modifications(self):
         """Test that shared memory correctly reflects live data modifications."""
         with World() as world:
-            emitter, reader = world.zero_copy_sm(SMCompliantTestData)
+            emitter, reader = world.zero_copy_sm(NumpySMAdapter)
 
-            data = SMCompliantTestData(10.0, 20.0)
+            array = np.array([10.0, 20.0], dtype=np.float32)
+            data = NumpySMAdapter(array)
             emitter.emit(data, ts=500)
 
             # Verify initial values
             message = reader.read()
-            assert message.data.x == 10.0
-            assert message.data.y == 20.0
+            assert np.allclose(message.data.array, [10.0, 20.0])
 
             # Modify the original data object
-            data.x = 100.0
-            data.y = 200.0
+            data.array[0] = 100.0
+            data.array[1] = 200.0
 
             # Re-emit to update timestamp
             emitter.emit(data, ts=600)
 
             # Reader should see the updated values
             message = reader.read()
-            assert message.data.x == 100.0
-            assert message.data.y == 200.0
+            assert np.allclose(message.data.array, [100.0, 200.0])
             assert message.ts == 600
 
     def test_reader_data_is_readonly(self):
         """Test that data read from shared memory cannot be modified."""
         with World() as world:
-            emitter, reader = world.zero_copy_sm(SMCompliantTestData)
+            emitter, reader = world.zero_copy_sm(NumpySMAdapter)
 
             # Emit some data
-            data = SMCompliantTestData(5.0, 10.0)
+            array = np.array([5.0, 10.0], dtype=np.float32)
+            data = NumpySMAdapter(array)
             emitter.emit(data, ts=123)
 
             # Read the data
@@ -334,7 +292,29 @@ class TestZeroCopySMAPI:
 
             # Attempting to modify the read data should raise an exception
             with pytest.raises((TypeError, ValueError)):
-                read_data.x = 999.0
+                read_data.array[0] = 999.0
 
             with pytest.raises((TypeError, ValueError)):
-                read_data.y = 999.0
+                read_data.array[1] = 999.0
+
+    def test_different_array_shapes_and_dtypes(self):
+        """Test various array shapes and dtypes work correctly."""
+        test_cases = [
+            (np.array([1, 2, 3], dtype=np.uint8), "1D uint8"),
+            (np.array([[1, 2], [3, 4]], dtype=np.int32), "2D int32"),
+            (np.array([[[1, 2], [3, 4]], [[5, 6], [7, 8]]], dtype=np.float16), "3D float16"),
+            (np.array([42], dtype=np.int8), "scalar-like int8"),
+        ]
+
+        for test_array, description in test_cases:
+            with World() as world:
+                emitter, reader = world.zero_copy_sm(NumpySMAdapter)
+
+                data = NumpySMAdapter(test_array)
+                emitter.emit(data, ts=1000)
+
+                message = reader.read()
+                assert message is not None, f"Failed for {description}"
+                assert message.data.array.shape == test_array.shape, f"Shape mismatch for {description}"
+                assert message.data.array.dtype == test_array.dtype, f"Dtype mismatch for {description}"
+                assert np.array_equal(message.data.array, test_array), f"Data mismatch for {description}"
