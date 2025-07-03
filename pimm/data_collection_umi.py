@@ -1,4 +1,5 @@
 import asyncio
+import heapq
 from typing import Dict
 
 import mujoco
@@ -159,13 +160,25 @@ class MuJoCoClock(ir.Clock):
         self.mujoco_model = mujoco_model
         self.mujoco_data = mujoco_data
         self.realtime = realtime
+        self._sleeping = []  # (wake_at, asyncio.Event)
 
     def now(self) -> float:
         return self.mujoco_data.time
 
-    async def sleep(self, seconds: float):
-        # TODO: Correct
-        await asyncio.sleep(seconds)
+    async def sleep(self, seconds: float) -> None:
+        """Coroutine seen by user tasks: park until virtual time advances."""
+        wake_at = self.now() + seconds
+        evt = asyncio.Event()
+        heapq.heappush(self._sleeping, (wake_at, evt))
+        await evt.wait()                     # suspend here
+
+    def step(self, dt: float) -> None:
+        """Advance the virtual clock and wake any tasks now due."""
+        mujoco.mj_step(self.mujoco_model, self.mujoco_data, dt)  # TODO: Make real dt
+        while self._sleeping and self._sleeping[0][0] <= self.now():
+            _, evt = heapq.heappop(self._sleeping)
+            evt.set()
+        # TODO: If realtime, then sleep to keep up with simulation
 
     @property
     def is_realtime(self) -> bool:
@@ -184,11 +197,12 @@ class SimCamera:
         self.height = height
         self.fps = fps
 
-    async def run(self, should_stop: ir.SignalReader, clock: ir.Clock):
+    def run(self, should_stop: ir.SignalReader, clock: ir.Clock):
         while not should_stop.value:
             # TODO: Real render
             self.frame.emit({'image': self.mujoco_data.camera_image(self.camera_name)}, ts=clock.now())
-            await clock.sleep(1 / self.fps)  # TODO: Correct
+            # await clock.sleep(1 / self.fps)  # TODO: Correct
+            yield 1 / self.fps
 
 
 class SimRobot:
@@ -200,12 +214,13 @@ class SimRobot:
         self.mujoco_data = mujoco_data
         self.hz = hz
 
-    async def run(self, should_stop: ir.SignalReader, clock: ir.Clock):
+    def run(self, should_stop: ir.SignalReader, clock: ir.Clock):
         while not should_stop.value:
             self.mujoco_data.ctrl = self.commands.value
             self.robot_state.emit(self.mujoco_data.qpos.copy(), ts=clock.now())
 
-            await clock.sleep(1 / self.hz)
+            yield 1 / self.hz
+            # await clock.sleep(1 / self.hz)
 
 
 def main_sim(mujoco_model: mujoco.MjModel, mujoco_data: mujoco.MjData, output_dir: str, fps: int):
@@ -225,10 +240,8 @@ def main_sim(mujoco_model: mujoco.MjModel, mujoco_data: mujoco.MjData, output_di
         # sim_camera2, ui.camera = world.pipe()
         # camera.frame = CombinedEmitter(sim_camera1, sim_camera2)
 
-        asyncio.run(
-            asyncio.gather(*[camera.run(world.should_stop, world.clock) for camera in cameras.values()],
-                           robot.run(world.should_stop, world.clock),
-                           data_collection.run(world.should_stop, world.clock)))
+        # Blocking call
+        world.run(*[camera.run for camera in cameras.values()], robot.run, data_collection.run)
 
 
 main = ir1.Config(

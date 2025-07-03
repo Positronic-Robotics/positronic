@@ -78,7 +78,7 @@ def _bg_wrapper(run_func: Callable, stop_event: mp.Event, name: str, clock: Cloc
 
 
 class World:
-    """Utility class to bind and run control loops."""
+    """Responsible for creating communication channels and running control loops."""
 
     def __init__(self, clock: Clock):
         # TODO: stop_signal should be a shared variable, since we should be able to track if background
@@ -126,6 +126,35 @@ class World:
             p.start()
             self.background_processes.append(p)
             print(f"Started background process {name} (pid {p.pid})", flush=True)
+
+    def run(self, *control_loops: List[Callable]):
+        should_stop = EventReader(self._stop_event, self._clock)
+        if len(control_loops) == 1 and not asyncio.iscoroutinefunction(control_loops[0]):
+            control_loops[0](should_stop, self._clock)
+        else:
+            _generators = [loop(should_stop, self._clock) for loop in control_loops]
+            for g in _generators:
+                try:
+                    unused_sleep_time = next(g)  # noqa: F841
+                except StopIteration:
+                    pass
+
+            # TODO: Propagate should_stop if one fails
+
+            coros = [loop(should_stop, self._clock) for loop in control_loops]
+            tasks = [asyncio.create_task(c) for c in coros]
+
+            async def _internal_run():
+                # TODO: Propagate should_stop if one fails
+                while any(not t.done() for t in tasks):
+                    physics_dt = 1 / 240.
+                    self._clock.step(physics_dt)  # fast-forwards virtual time
+                    await asyncio.sleep(0)  # yield control to awakened tasks
+
+                # propagate exceptions if any
+                await asyncio.gather(*tasks)
+
+            asyncio.run(_internal_run())
 
     @property
     def should_stop(self) -> bool:
