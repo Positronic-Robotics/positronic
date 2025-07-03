@@ -177,12 +177,12 @@ class ZeroCopySMEmitter(SignalEmitter):
         self._data_type = data_type
         self._sm = None
         self._lock = manager.Lock()
-        self._ts_value = manager.Value('Q', 0)
+        self._ts_value = manager.Value('Q', -1)
         self._out_data = None
         self._expected_buf_size = None
         self._sm_manager = sm_manager
 
-    def emit(self, data: Any, ts: int = 0) -> bool:
+    def emit(self, data: Any, ts: int = -1) -> bool:
         ts = ts or system_clock()
         assert isinstance(data, self._data_type), f"Data type mismatch: {type(data)} != {self._data_type}"
 
@@ -229,7 +229,7 @@ class ZeroCopySMReader(SignalReader):
             self._out_value = self._emitter._data_type.create_from_memoryview(self._readonly_buffer)
 
         with self._emitter._lock:
-            if self._emitter._ts_value.value == 0:
+            if self._emitter._ts_value.value == -1:
                 return None
             return Message(data=self._out_value, ts=self._emitter._ts_value.value)
 

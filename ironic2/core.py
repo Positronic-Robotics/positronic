@@ -27,10 +27,10 @@ class Message:
     If no timestamp is provided, the current system time is used.
     """
     data: Any
-    ts: int = 0  # 0 means no value
+    ts: int = -1  # -1 means no value
 
     def __post_init__(self):
-        if self.ts == 0:
+        if self.ts == -1:
             self.ts = system_clock()
 
 
@@ -38,7 +38,7 @@ class SignalEmitter(ABC):
     """Write a signal value. All implementations must be non-blocking."""
 
     @abstractmethod
-    def emit(self, data: Any, ts: int = 0) -> bool:
+    def emit(self, data: Any, ts: int = -1) -> bool:
         """Emit a message with the given data and timestamp. Returns True if successful."""
         pass
 
@@ -57,7 +57,7 @@ class SignalEmitter(ABC):
 
 class NoOpEmitter(SignalEmitter):
 
-    def emit(self, data: Any, ts: int = 0) -> bool:
+    def emit(self, data: Any, ts: int = -1) -> bool:
         return True
 
 

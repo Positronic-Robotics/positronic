@@ -19,7 +19,7 @@ class QueueEmitter(SignalEmitter):
     def __init__(self, queue: mp.Queue):
         self._queue = queue
 
-    def emit(self, data: Any, ts: int = 0) -> bool:
+    def emit(self, data: Any, ts: int = -1) -> bool:
         try:
             self._queue.put_nowait(Message(data, ts))
             return True
