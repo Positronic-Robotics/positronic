@@ -1,22 +1,25 @@
 """Implementation of multiprocessing channels."""
 
+import asyncio
 import logging
 import multiprocessing as mp
 import sys
-from queue import Empty, Full
-import time
 import traceback
+from queue import Empty, Full
 from typing import Any, Callable, List, Tuple
 
-from .core import Message, SignalEmitter, SignalReader, system_clock
+from .core import Clock, Message, SignalEmitter, SignalReader
 
 
 class QueueEmitter(SignalEmitter):
 
-    def __init__(self, queue: mp.Queue):
+    def __init__(self, queue: mp.Queue, clock: Clock):
         self._queue = queue
+        self._clock = clock
 
     def emit(self, data: Any, ts: int | None = None) -> bool:
+        if ts is None:
+            ts = self._clock.now_ns()
         try:
             self._queue.put_nowait(Message(data, ts))
             return True
@@ -46,16 +49,20 @@ class QueueReader(SignalReader):
 
 class EventReader(SignalReader):
 
-    def __init__(self, event: mp.Event):
+    def __init__(self, event: mp.Event, clock: Clock):
         self._event = event
+        self._clock = clock
 
     def read(self) -> Message | None:
-        return Message(data=self._event.is_set(), ts=system_clock())
+        return Message(data=self._event.is_set(), ts=self._clock.now_ns())
 
 
-def _bg_wrapper(run_func: Callable, stop_event: mp.Event, name: str):
+def _bg_wrapper(run_func: Callable, stop_event: mp.Event, name: str, clock: Clock):
     try:
-        run_func(EventReader(stop_event))
+        if asyncio.iscoroutinefunction(run_func):
+            asyncio.run(run_func(EventReader(stop_event, clock), clock))
+        else:
+            run_func(EventReader(stop_event, clock), clock)
     except KeyboardInterrupt:
         # Silently handle KeyboardInterrupt in background processes
         pass
@@ -73,12 +80,13 @@ def _bg_wrapper(run_func: Callable, stop_event: mp.Event, name: str):
 class World:
     """Utility class to bind and run control loops."""
 
-    def __init__(self):
+    def __init__(self, clock: Clock):
         # TODO: stop_signal should be a shared variable, since we should be able to track if background
         # processes are still running
         self._stop_event = mp.Event()
         self.background_processes = []
         self._manager = mp.Manager()
+        self._clock = clock
 
     def __enter__(self):
         return self
@@ -86,7 +94,6 @@ class World:
     def __exit__(self, exc_type, exc_value, traceback):
         print("Stopping background processes...", flush=True)
         self._stop_event.set()
-        time.sleep(0.1)
 
         print(f"Waiting for {len(self.background_processes)} background processes to terminate...", flush=True)
         for process in self.background_processes:
@@ -103,7 +110,7 @@ class World:
 
     def pipe(self, maxsize: int = 0) -> Tuple[SignalEmitter, SignalReader]:
         q = self._manager.Queue(maxsize=maxsize)
-        return QueueEmitter(q), QueueReader(q)
+        return QueueEmitter(q, self._clock), QueueReader(q)
 
     def start(self, *background_loops: List[Callable]):
         """Starts background control loops. Can be called multiple times for different control loops."""
@@ -112,7 +119,10 @@ class World:
                 name = f"{bg_loop.__self__.__class__.__name__}.{bg_loop.__name__}"
             else:
                 name = getattr(bg_loop, '__name__', 'anonymous')
-            p = mp.Process(target=_bg_wrapper, args=(bg_loop, self._stop_event, name), daemon=True, name=name)
+            p = mp.Process(target=_bg_wrapper,
+                           args=(bg_loop, self._stop_event, name, self._clock),
+                           daemon=True,
+                           name=name)
             p.start()
             self.background_processes.append(p)
             print(f"Started background process {name} (pid {p.pid})", flush=True)

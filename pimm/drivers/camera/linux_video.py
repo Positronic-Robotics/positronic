@@ -17,7 +17,8 @@ class LinuxVideo:
         self.fps = fps
         self.pixel_format = pixel_format
 
-    def run(self, should_stop: ir.SignalReader):
+    def run(self, should_stop: ir.SignalReader, clock: ir.Clock):
+        assert clock.is_realtime, "Linux video works only with real clock"
         codec_mapping = {
             PixelFormat.H264: 'h264',
             PixelFormat.HEVC: 'hevc',
@@ -71,6 +72,6 @@ class LinuxVideo:
                     result = {'image': rgb_data}
 
             if result is not None:
-                self.frame.emit(result)
+                self.frame.emit(result, ts=clock.now_ns())
 
         device.close()

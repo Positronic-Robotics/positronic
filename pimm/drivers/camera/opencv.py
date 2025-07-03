@@ -15,7 +15,9 @@ class OpenCVCamera:
         self.resolution = resolution
         self.fps = fps
 
-    def run(self, should_stop: ir.SignalReader):
+    def run(self, should_stop: ir.SignalReader, clock: ir.Clock):
+        assert clock.is_realtime, "OpenCV camera works only with real clock"
+
         cap = cv2.VideoCapture(self.camera_id)
         cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.resolution[0])
         cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.resolution[1])
@@ -35,12 +37,11 @@ class OpenCVCamera:
 
             fps_counter.tick()
             # Use system time for timestamp since OpenCV doesn't provide frame timestamps
-            self.frame.emit({'frame': frame})
+            self.frame.emit({'frame': frame}, ts=clock.now_ns())
 
 
 if __name__ == "__main__":
     import sys
-    import time
     import av
 
     # We could implement this as a plain function
@@ -53,7 +54,7 @@ if __name__ == "__main__":
             self.fps = fps
             self.codec = codec
 
-        def run(self, should_stop: ir.SignalReader):
+        async def run(self, should_stop: ir.SignalReader, clock: ir.Clock):
             container = av.open(self.filename, mode='w', format='mp4')
             stream = container.add_stream(self.codec, rate=self.fps)
             stream.pix_fmt = 'yuv420p'
@@ -61,9 +62,10 @@ if __name__ == "__main__":
 
             last_ts = None
             while not ir.is_true(should_stop):
+                # Ideally we would love the reader to be async, but it's not.
                 message = self.frame.read()
                 if message is None or last_ts == message.ts:
-                    time.sleep(0.5 / self.fps)
+                    await clock.sleep(0.5 / self.fps)
                     continue
                 last_ts = message.ts
 

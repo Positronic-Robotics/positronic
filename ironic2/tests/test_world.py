@@ -2,16 +2,15 @@ import pytest
 import multiprocessing as mp
 from queue import Empty, Full
 from unittest.mock import Mock, patch
-import time
 
-from ironic2.core import Message
+from ironic2.core import Clock, Message, RealClock, SignalReader
 from ironic2.world import (QueueEmitter, QueueReader, EventReader, World)
 
 
-def dummy_process(stop_signal):
+async def dummy_process(should_stop: SignalReader, clock: Clock):
     """A simple background process that runs until stopped."""
-    while not stop_signal.read().data:
-        time.sleep(0.01)
+    while not should_stop.value:
+        await clock.sleep(0.01)
 
 
 class TestQueueEmitter:
@@ -20,7 +19,7 @@ class TestQueueEmitter:
     def test_queue_emitter_emit_success(self):
         """Test successful emission to queue."""
         queue = mp.Manager().Queue()
-        emitter = QueueEmitter(queue)
+        emitter = QueueEmitter(queue, clock=RealClock())
 
         result = emitter.emit("test_data")
         assert result is True
@@ -34,7 +33,7 @@ class TestQueueEmitter:
     def test_queue_emitter_emit_with_timestamp(self):
         """Test emission with explicit timestamp."""
         queue = mp.Manager().Queue()
-        emitter = QueueEmitter(queue)
+        emitter = QueueEmitter(queue, clock=RealClock())
         timestamp = 1234567890
 
         result = emitter.emit("test_data", ts=timestamp)
@@ -47,7 +46,7 @@ class TestQueueEmitter:
     def test_queue_emitter_full_queue_removes_old_message(self):
         """Test that full queue removes old message before adding new one."""
         queue = mp.Manager().Queue(maxsize=1)
-        emitter = QueueEmitter(queue)
+        emitter = QueueEmitter(queue, clock=RealClock())
 
         # Fill the queue
         emitter.emit("old_data")
@@ -72,7 +71,7 @@ class TestQueueEmitter:
         mock_queue.get_nowait.side_effect = Full()  # get also fails (queue behavior)
         mock_queue_class.return_value = mock_queue
 
-        emitter = QueueEmitter(mock_queue)
+        emitter = QueueEmitter(mock_queue, clock=RealClock())
         result = emitter.emit("test_data")
 
         assert result is False
@@ -85,7 +84,7 @@ class TestQueueReader:
     def test_queue_reader_initial_state(self):
         """Test that QueueReader initially returns None."""
         queue = mp.Manager().Queue()
-        reader = QueueReader(queue)
+        reader = QueueReader(queue, clock=RealClock())
 
         result = reader.read()
         assert result is None
@@ -94,7 +93,7 @@ class TestQueueReader:
         """Test reading a message from the queue."""
         manager = mp.Manager()
         queue = manager.Queue()
-        reader = QueueReader(queue)
+        reader = QueueReader(queue, clock=RealClock())
 
         # Put a message in the queue
         test_message = Message("test_data", 123)
@@ -109,7 +108,7 @@ class TestQueueReader:
         """Test that reader returns last value when queue is empty."""
         manager = mp.Manager()
         queue = manager.Queue()
-        reader = QueueReader(queue)
+        reader = QueueReader(queue, clock=RealClock())
 
         # Put and read a message
         test_message = Message("test_data", 123)
@@ -125,7 +124,7 @@ class TestQueueReader:
         """Test that reader updates with new messages."""
         manager = mp.Manager()
         queue = manager.Queue()
-        reader = QueueReader(queue)
+        reader = QueueReader(queue, clock=RealClock())
 
         # Put first message
         message1 = Message("data1", 100)
@@ -150,7 +149,7 @@ class TestEventReader:
     def test_event_reader_unset_event(self):
         """Test reading from an unset event."""
         event = mp.Event()
-        reader = EventReader(event)
+        reader = EventReader(event, clock=RealClock())
 
         result = reader.read()
         assert isinstance(result, Message)
@@ -161,7 +160,7 @@ class TestEventReader:
         """Test reading from a set event."""
         event = mp.Event()
         event.set()
-        reader = EventReader(event)
+        reader = EventReader(event, clock=RealClock())
 
         result = reader.read()
         assert isinstance(result, Message)
@@ -173,7 +172,7 @@ class TestEventReader:
         """Test that EventReader uses system_clock for timestamps."""
         mock_system_clock.return_value = 987654321
         event = mp.Event()
-        reader = EventReader(event)
+        reader = EventReader(event, clock=RealClock())
 
         result = reader.read()
         assert result.ts == 987654321
@@ -185,7 +184,7 @@ class TestWorld:
 
     def test_world_pipe_creation(self):
         """Test that World.pipe creates emitter and reader pair."""
-        world = World()
+        world = World(clock=RealClock())
         emitter, reader = world.pipe()
 
         assert isinstance(emitter, QueueEmitter)
@@ -193,7 +192,7 @@ class TestWorld:
 
     def test_world_pipe_communication(self):
         """Test that pipe emitter and reader can communicate."""
-        world = World()
+        world = World(clock=RealClock())
         emitter, reader = world.pipe()
 
         # Initially reader should return None
@@ -209,13 +208,13 @@ class TestWorld:
 
     def test_world_context_manager_enter(self):
         """Test that World.__enter__ returns self."""
-        world = World()
+        world = World(clock=RealClock())
         with world as w:
             assert w is world
 
     def test_world_context_manager_should_stop(self):
         """Test that should_stop becomes True after exiting context."""
-        world = World()
+        world = World(clock=RealClock())
 
         # Initially should_stop is False
         assert world.should_stop is False
@@ -229,7 +228,7 @@ class TestWorld:
 
     def test_world_context_manager_stops_background_processes(self):
         """Test that background processes are stopped when exiting context."""
-        world = World()
+        world = World(clock=RealClock())
 
         with world:
             # Start a background process
@@ -251,7 +250,7 @@ class TestWorld:
 
     def test_world_context_manager_with_exception(self):
         """Test that background processes are stopped even when exception occurs."""
-        world = World()
+        world = World(clock=RealClock())
 
         try:
             with world:
@@ -281,7 +280,7 @@ class TestIntegration:
 
     def test_full_pipeline(self):
         """Test a complete pipeline with World, emitters, and readers."""
-        world = World()
+        world = World(clock=RealClock())
 
         # Create communication channels
         emitter1, reader1 = world.pipe()
@@ -300,7 +299,7 @@ class TestIntegration:
     def test_event_reader_integration(self):
         """Test EventReader with actual multiprocessing Event."""
         event = mp.Event()
-        reader = EventReader(event)
+        reader = EventReader(event, clock=RealClock())
 
         # Initially event is not set
         result = reader.read()

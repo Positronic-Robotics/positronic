@@ -1,4 +1,5 @@
 from abc import ABC, abstractmethod
+import asyncio
 from dataclasses import dataclass
 import time
 from typing import Any, Callable, final
@@ -7,9 +8,35 @@ from typing import Any, Callable, final
 _RAISE_EXCEPTION_SENTINEL = object()
 
 
-def system_clock() -> int:
-    """Get current timestamp in nanoseconds."""
-    return time.monotonic_ns()
+class Clock(ABC):
+    @abstractmethod
+    def now(self) -> float:
+        pass
+
+    @final
+    def now_ns(self) -> int:
+        return int(self.now() * 1e9)
+
+    @abstractmethod
+    async def sleep(self, duration: float) -> None:
+        pass
+
+    @property
+    @abstractmethod
+    def is_realtime(self) -> bool:
+        pass
+
+
+class RealClock(Clock):
+    def now(self) -> float:
+        return time.monotonic()
+
+    async def sleep(self, duration: float) -> None:
+        await asyncio.sleep(duration)
+
+    @property
+    def is_realtime(self) -> bool:
+        return True
 
 
 class NoValueException(Exception):
@@ -30,7 +57,7 @@ class Message:
 
     def __post_init__(self):
         if self.ts is None:
-            self.ts = system_clock()
+            raise ValueError("Timestamp is required")
 
 
 class SignalEmitter(ABC):
@@ -79,4 +106,4 @@ def is_true(signal: SignalReader) -> bool:
     return value.data is True
 
 
-ControlSystem = Callable[[SignalReader], None]
+ControlSystem = Callable[[SignalReader, Clock], None]
