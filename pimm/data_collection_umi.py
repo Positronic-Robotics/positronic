@@ -1,6 +1,8 @@
 import asyncio
 from typing import Dict
 
+import mujoco
+
 import ironic as ir1
 import ironic2 as ir
 from ironic.utils import FPSCounter
@@ -70,12 +72,8 @@ class DataCollection:
                         self.wav_path_emitter.emit(end_wav_path)
                 # TODO: Support aborting current episode.
 
-                frame_messages = {
-                    name: reader.read()
-                    for name, reader in self.frame_readers.items()
-                }
-                any_frame_updated = any(msg.data[1] and msg.data[0] is not None
-                                        for msg in frame_messages.values())
+                frame_messages = {name: reader.read() for name, reader in self.frame_readers.items()}
+                any_frame_updated = any(msg.data[1] and msg.data[0] is not None for msg in frame_messages.values())
 
                 target_grip = button_handler.get_value('right_trigger')
                 self.target_grip_emitter.emit(target_grip)
@@ -97,13 +95,17 @@ class DataCollection:
                     'umi_right_quaternion': right_controller_position.rotation.as_quat.copy(),
                     'umi_left_translation': left_controller_position.translation.copy(),
                     'umi_left_quaternion': left_controller_position.rotation.as_quat.copy(),
-                    **{f'{name}_timestamp': frame.ts for name, frame in frame_messages.items()},
+                    **{
+                        f'{name}_timestamp': frame.ts
+                        for name, frame in frame_messages.items()
+                    },
                 }
 
-                dumper.write(
-                    data=ep_dict,
-                    video_frames={name: frame.data['image'] for name, frame in frame_messages.items()}
-                )
+                dumper.write(data=ep_dict,
+                             video_frames={
+                                 name: frame.data['image']
+                                 for name, frame in frame_messages.items()
+                             })
                 fps_counter.tick()
 
             except ir.NoValueException:
@@ -111,14 +113,15 @@ class DataCollection:
                 continue
 
 
-def main(gripper: DHGripper | None,  # noqa: C901  Function is too complex
-         webxr: WebXR,
-         sound: SoundSystem | None,
-         cameras: Dict[str, LinuxVideo],
-         output_dir: str = "data_collection_umi",
-         fps: int = 30,
-         stream_video_to_webxr: str | None = None,
-         ):
+def main(
+    gripper: DHGripper | None,  # noqa: C901  Function is too complex
+    webxr: WebXR,
+    sound: SoundSystem | None,
+    cameras: Dict[str, LinuxVideo],
+    output_dir: str = "data_collection_umi",
+    fps: int = 30,
+    stream_video_to_webxr: str | None = None,
+):
 
     # TODO: this function modifies outer objects with pipes
 
@@ -148,6 +151,84 @@ def main(gripper: DHGripper | None,  # noqa: C901  Function is too complex
             world.start(sound.run)
 
         asyncio.run(data_collection.run(world.should_stop, world.clock))
+
+
+class MuJoCoClock(ir.Clock):
+
+    def __init__(self, mujoco_model: mujoco.MjModel, mujoco_data: mujoco.MjData, realtime=False):
+        self.mujoco_model = mujoco_model
+        self.mujoco_data = mujoco_data
+        self.realtime = realtime
+
+    def now(self) -> float:
+        return self.mujoco_data.time
+
+    async def sleep(self, seconds: float):
+        # TODO: Correct
+        await asyncio.sleep(seconds)
+
+    @property
+    def is_realtime(self) -> bool:
+        return self.realtime
+
+
+class SimCamera:
+    frame: ir.SignalEmitter = ir.NoOpEmitter()
+
+    def __init__(self, mujoco_model: mujoco.MjModel, mujoco_data: mujoco.MjData, camera_name: str, width: int,
+                 height: int, fps: int):
+        self.mujoco_model = mujoco_model
+        self.mujoco_data = mujoco_data
+        self.camera_name = camera_name
+        self.width = width
+        self.height = height
+        self.fps = fps
+
+    async def run(self, should_stop: ir.SignalReader, clock: ir.Clock):
+        while not should_stop.value:
+            # TODO: Real render
+            self.frame.emit({'image': self.mujoco_data.camera_image(self.camera_name)}, ts=clock.now())
+            await clock.sleep(1 / self.fps)  # TODO: Correct
+
+
+class SimRobot:
+    robot_state: ir.SignalEmitter = ir.NoOpEmitter()
+    commands: ir.SignalReader = ir.NoOpReader()
+
+    def __init__(self, mujoco_model: mujoco.MjModel, mujoco_data: mujoco.MjData, hz: int = 100):
+        self.mujoco_model = mujoco_model
+        self.mujoco_data = mujoco_data
+        self.hz = hz
+
+    async def run(self, should_stop: ir.SignalReader, clock: ir.Clock):
+        while not should_stop.value:
+            self.mujoco_data.ctrl = self.commands.value
+            self.robot_state.emit(self.mujoco_data.qpos.copy(), ts=clock.now())
+
+            await clock.sleep(1 / self.hz)
+
+
+def main_sim(mujoco_model: mujoco.MjModel, mujoco_data: mujoco.MjData, output_dir: str, fps: int):
+    clock = MuJoCoClock(mujoco_model, mujoco_data)
+    with ir.World(clock=clock) as world:
+        data_collection = DataCollection(output_dir, fps)
+        cameras = {name: SimCamera(mujoco_model, mujoco_data, name, 1280, 720, fps) for name in ['left', 'right']}
+        for camera_name, camera in cameras.items():
+            camera.frame, frame_reader = world.pipe()
+            data_collection.frame_readers[camera_name] = ir.ValueUpdated(ir.DefaultReader(frame_reader, None))
+
+        robot = SimRobot(mujoco_model, mujoco_data)
+        data_collection.commands, robot.commands = world.pipe()  # Must be usual deque
+        robot.state, data_collection.robot_state = world.pipe()  # Must be usual deque
+
+        # sim_camera1, data_collection.camera = world.deque()
+        # sim_camera2, ui.camera = world.pipe()
+        # camera.frame = CombinedEmitter(sim_camera1, sim_camera2)
+
+        asyncio.run(
+            asyncio.gather(*[camera.run(world.should_stop, world.clock) for camera in cameras.values()],
+                           robot.run(world.should_stop, world.clock),
+                           data_collection.run(world.should_stop, world.clock)))
 
 
 main = ir1.Config(
