@@ -11,7 +11,7 @@ import traceback
 from typing import Any, Callable, List, Tuple
 
 from .core import Message, SignalEmitter, SignalReader, system_clock
-from .shared_memory import SMCompliant, ZeroCopySMEmitter, ZeroCopySMReader
+from .shared_memory import ZeroCopySMEmitter, ZeroCopySMReader
 
 
 class QueueEmitter(SignalEmitter):
@@ -125,7 +125,7 @@ class World:
         q = self._manager.Queue(maxsize=maxsize)
         return QueueEmitter(q), QueueReader(q)
 
-    def zero_copy_sm(self, data_type: type[SMCompliant]) -> Tuple[SignalEmitter, SignalReader]:
+    def zero_copy_sm(self) -> Tuple[SignalEmitter, SignalReader]:
         """Create a zero-copy shared memory channel for efficient data sharing.
 
         Args:
@@ -134,7 +134,7 @@ class World:
         Returns:
             Tuple of (emitter, reader) for zero-copy inter-process communication
         """
-        emitter = ZeroCopySMEmitter(data_type, self._manager, self._sm_manager)
+        emitter = ZeroCopySMEmitter(self._manager, self._sm_manager)
         reader = ZeroCopySMReader(emitter)
         self._sm_emitters_readers.append((emitter, reader))
         return emitter, reader

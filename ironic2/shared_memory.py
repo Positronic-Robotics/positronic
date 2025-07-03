@@ -173,8 +173,8 @@ class NumpySMAdapter(SMCompliant):
 
 class ZeroCopySMEmitter(SignalEmitter):
 
-    def __init__(self, data_type: type[SMCompliant], manager: mp.Manager, sm_manager: mp.managers.SharedMemoryManager):
-        self._data_type = data_type
+    def __init__(self, manager: mp.Manager, sm_manager: mp.managers.SharedMemoryManager):
+        self._data_type: type[SMCompliant] | None = None
         self._sm = None
         self._lock = manager.Lock()
         self._ts_value = manager.Value('Q', -1)
@@ -184,7 +184,11 @@ class ZeroCopySMEmitter(SignalEmitter):
 
     def emit(self, data: Any, ts: int = -1) -> bool:
         ts = ts or system_clock()
-        assert isinstance(data, self._data_type), f"Data type mismatch: {type(data)} != {self._data_type}"
+        if self._data_type is None:
+            self._data_type = type(data)
+            assert issubclass(self._data_type, SMCompliant), f"Data type {self._data_type} is not SMCompliant"
+        else:
+            assert isinstance(data, self._data_type), f"Data type mismatch: {type(data)} != {self._data_type}"
 
         buf_size = data.buf_size()
 

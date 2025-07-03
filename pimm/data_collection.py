@@ -159,7 +159,7 @@ def main(robot_arm: Any | None,  # noqa: C901  Function is too complex
 
         robot_state, robot_commands = ir.NoOpReader(), ir.NoOpEmitter()
         if robot_arm is not None:
-            robot_arm.state, robot_state = world.pipe(1)  # TODO: Shared variable
+            robot_arm.state, robot_state = world.zero_copy_sm()
             robot_commands, robot_arm.commands = world.pipe(1)
             world.start(robot_arm.run)
 

@@ -11,6 +11,43 @@ from ironic.utils import RateLimiter
 from . import RobotStatus, State, command
 
 
+class FrankaState(State, ir.shared_memory.NumpySMAdapter):
+
+    def __init__(self):
+        # q, dq, ee_pose, status
+        super().__init__(np.zeros(7 + 7 + 7 + 1, dtype=np.float32))
+
+    @property
+    def q(self) -> np.array:
+        return self._values[:7]
+
+    @property
+    def dq(self) -> np.array:
+        return self._values[7:14]
+
+    @property
+    def ee_pose(self) -> geom.Transform3D:
+        return geom.Transform3D(self._values[14:14 + 3], self._values[14 + 3:14 + 7])
+
+    @property
+    def status(self) -> RobotStatus:
+        return RobotStatus(int(self._values[14 + 7]))
+
+    def _start_reset(self):
+        self._values[14 + 7] = RobotStatus.RESETTING.value
+
+    def _finish_reset(self):
+        self._values[14 + 7] = RobotStatus.AVAILABLE.value
+
+    def encode(self, q, dq, ee_pose):
+        self._values[:7] = q
+        self._values[7:14] = dq
+        self._values[14:14 + 3] = ee_pose.translation
+        q_wxyz = np.concatenate([ee_pose.quaternion[3:], ee_pose.quaternion[:3]])
+        self._values[14 + 3:14 + 7] = q_wxyz
+        self._values[14 + 7] = RobotStatus.AVAILABLE.value
+
+
 class CartesianMode(Enum):
     LIBFRANKA = "libfranka"
     POSITRONIC = "positronic"
@@ -68,19 +105,9 @@ class Robot:
         robot.recover_from_errors()
 
         commands = ir.DefaultReader(ir.ValueUpdated(self.commands), (None, False))
-        robot_state = State()
+        robot_state = FrankaState()
         last_q = None
         rate_limiter = RateLimiter(hz=500)
-
-        def encode_state_data():
-            pos = robot.current_pose.end_effector_pose
-            robot_state._values[:3] = pos.translation
-            # xyzw to wxyz
-            robot_state._values[3] = pos.quaternion[3]
-            robot_state._values[4:7] = pos.quaternion[:3]
-            robot_state._values[7:14] = robot.current_joint_state.position
-
-            return robot_state
 
         # Reset robot
         reset_motion = franky.JointWaypointMotion([franky.JointWaypoint(self._home_joints)])
@@ -91,7 +118,7 @@ class Robot:
             robot.join_motion(timeout=0.1)
             robot.move(reset_motion, asynchronous=False)
             robot_state._finish_reset()
-            self.state.emit(encode_state_data())
+            self.state.emit(robot_state)
 
         reset()
 
@@ -120,7 +147,9 @@ class Robot:
                     print(f"Motion failed for {pos}: {e}")
 
             rate_limiter.wait()
-            self.state.emit(encode_state_data())
+            js = robot.current_joint_state
+            robot_state.encode(js.position, js.velocity, robot.current_pose.end_effector_pose)
+            self.state.emit(robot_state)
 
 
 if __name__ == "__main__":
