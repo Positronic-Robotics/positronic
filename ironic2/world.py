@@ -4,15 +4,20 @@ import logging
 import multiprocessing as mp
 import multiprocessing.shared_memory
 import multiprocessing.managers
+import heapq
 import sys
 from queue import Empty, Full
 import time
 import traceback
-from typing import Any, Callable, List, Tuple
+from typing import Any, Callable, Generator, Tuple, Iterator
 
-from .core import Message, SignalEmitter, SignalReader, system_clock
+from .core import Message, SignalEmitter, SignalReader, system_clock, Clock, RealClock
 from .shared_memory import ZeroCopySMEmitter, ZeroCopySMReader
 
+# TODO: fix typing
+RUNNABLE_TYPE = (
+    Callable[[SignalReader], Iterator[float | None]] | Callable[[SignalReader], Generator[float | None, None, None]]
+)
 
 class QueueEmitter(SignalEmitter):
 
@@ -58,7 +63,9 @@ class EventReader(SignalReader):
 
 def _bg_wrapper(run_func: Callable, stop_event: mp.Event, name: str):
     try:
-        run_func(EventReader(stop_event))
+        for time_to_sleep in run_func(EventReader(stop_event)):
+            if time_to_sleep is not None:
+                time.sleep(time_to_sleep)
     except KeyboardInterrupt:
         # Silently handle KeyboardInterrupt in background processes
         pass
@@ -139,7 +146,7 @@ class World:
         self._sm_emitters_readers.append((emitter, reader))
         return emitter, reader
 
-    def start(self, *background_loops: List[Callable]):
+    def run_background(self, *background_loops: Callable):
         """Starts background control loops. Can be called multiple times for different control loops."""
         for bg_loop in background_loops:
             if hasattr(bg_loop, '__self__'):
@@ -150,6 +157,62 @@ class World:
             p.start()
             self.background_processes.append(p)
             print(f"Started background process {name} (pid {p.pid})", flush=True)
+
+    def compose_runs(
+        self,
+        *loops: RUNNABLE_TYPE,
+        clock: Clock = RealClock(),
+    ) -> Generator[float | None, None, None]:
+        """Compose multiple control loops into a single generator that yields sleep times.
+
+        Args:
+            *loops: Variable number of control loop functions that take a SignalReader and return an Iterator
+            clock: Clock instance for timing, defaults to RealClock()
+
+        Returns:
+            Generator that yields sleep times between loop executions
+        """
+        step_generators = [iter(loop(EventReader(self._stop_event))) for loop in loops]
+        start_time = clock.now_ns()
+        generators_heap = [(start_time, gen_idx) for gen_idx in range(len(step_generators))]
+        heapq.heapify(generators_heap)
+
+        while True:
+            time = clock.now_ns()
+            generator_idxs = []
+            # Pop all generators that are ready to execute, and schedule them for the next execution
+            # this guarantees at least some progress for all generators, even if some of them are busy-waiting
+            while generators_heap and generators_heap[0][0] <= time:
+                _, i = heapq.heappop(generators_heap)
+                generator_idxs.append(i)
+
+            for i in generator_idxs:
+                try:
+                    time_to_sleep = next(step_generators[i]) or 0
+                    next_execution_time = clock.now_ns() + int(time_to_sleep * 1e9)
+                    heapq.heappush(generators_heap, (next_execution_time, i))
+                except StopIteration:
+                    break
+            next_task_time = generators_heap[0][0] if generators_heap else 0
+            time_to_sleep = max(next_task_time - clock.now_ns(), 0)
+
+            yield time_to_sleep
+
+    def run_sync(
+        self,
+        *loops: RUNNABLE_TYPE,
+        clock: Clock = RealClock(),
+    ) -> None:
+        """Run multiple control loops synchronously.
+
+        Args:
+            *loops: Variable number of control loop functions that take a SignalReader and return an Iterator
+            clock: Clock instance for timing, defaults to RealClock()
+        """
+        for time_to_sleep in self.compose_runs(*loops, clock=clock):
+            if time_to_sleep is not None and time_to_sleep > 0:
+                clock.sleep(time_to_sleep)
+                # TODO: do we need to yield here? Do we need to combine runs with multiple clocks?
 
     @property
     def should_stop(self) -> bool:

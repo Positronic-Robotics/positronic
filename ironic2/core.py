@@ -34,6 +34,30 @@ class Message:
             self.ts = system_clock()
 
 
+class Clock(ABC):
+    @abstractmethod
+    def now(self) -> float:
+        pass
+
+    def now_ns(self) -> int:
+        return int(self.now() * 1e9)
+
+    @abstractmethod
+    def sleep(self, duration: float) -> None:
+        pass
+
+
+class RealClock(Clock):
+    def now(self) -> float:
+        return time.monotonic()
+
+    def now_ns(self) -> int:
+        return time.monotonic_ns()
+
+    def sleep(self, duration: float) -> None:
+        time.sleep(duration)
+
+
 class SignalEmitter(ABC):
     """Write a signal value. All implementations must be non-blocking."""
 

@@ -36,7 +36,7 @@ class OpenCVCamera:
             fps_counter.tick()
             # Use system time for timestamp since OpenCV doesn't provide frame timestamps
             self.frame.emit({'frame': frame})
-
+            yield
 
 if __name__ == "__main__":
     import sys
@@ -63,13 +63,14 @@ if __name__ == "__main__":
             while not ir.is_true(should_stop):
                 message = self.frame.read()
                 if message is None or last_ts == message.ts:
-                    time.sleep(0.5 / self.fps)
+                    yield 0.5 / self.fps
                     continue
                 last_ts = message.ts
 
                 frame = av.VideoFrame.from_ndarray(message.data['frame'], format='rgb24')
                 packet = stream.encode(frame)
                 container.mux(packet)
+                yield
 
             container.close()
 
@@ -78,5 +79,9 @@ if __name__ == "__main__":
         writer = VideoWriter(sys.argv[1], 30)
 
         camera.frame, writer.frame = world.pipe()
-        world.start(camera.run)
-        writer.run()
+        i = 0
+        start = world._clock.now()
+        
+        for _ in world.run_sync(camera.run, writer.run):
+            if world._clock.now() > start + 10:
+                break

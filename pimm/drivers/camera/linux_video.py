@@ -37,6 +37,8 @@ class LinuxVideo:
         device = Device(self.device_path)
         device.open()
 
+        assert device.info is not None, "Device info is not available"
+
         device.set_format(device.info.buffers[0], self.width, self.height, self.pixel_format)
         device.set_fps(device.info.buffers[0], self.fps)
 
@@ -72,5 +74,7 @@ class LinuxVideo:
 
             if result is not None:
                 self.frame.emit(result)
+
+            yield
 
         device.close()

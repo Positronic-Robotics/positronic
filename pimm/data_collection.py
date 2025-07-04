@@ -1,5 +1,5 @@
 import time
-from typing import Any, Dict
+from typing import Any, Dict, Sequence
 
 import geom
 import ironic as ir1
@@ -10,6 +10,8 @@ from pimm.drivers.sound import SoundSystem
 from pimm.drivers.camera.linux_video import LinuxVideo
 from pimm.drivers.gripper.dh import DHGripper
 from pimm.drivers.webxr import WebXR
+from pimm.simulator.mujoco.sim import MujocoCamera, MujocoFranka, MujocoGripper, MujocoSim
+from positronic.simulator.mujoco.scene.transforms import MujocoSceneTransform
 from positronic.tools.buttons import ButtonHandler
 from positronic.tools.dataset_dumper import SerialDumper
 
@@ -129,84 +131,62 @@ FRANKA_FRONT_TRANSFORM = geom.Transform3D(rotation=geom.Rotation.from_quat([0.5,
 FRANKA_BACK_TRANSFORM = geom.Transform3D(rotation=geom.Rotation.from_quat([-0.5, -0.5, 0.5, 0.5]))
 
 
-def main(robot_arm: Any | None,  # noqa: C901  Function is too complex
-         gripper: DHGripper | None,
-         webxr: WebXR,
-         sound: SoundSystem | None,
-         cameras: Dict[str, LinuxVideo] | None,
-         output_dir: str | None = None,
-         fps: int = 30,
-         stream_video_to_webxr: str | None = None,
-         operator_position: geom.Transform3D = FRANKA_FRONT_TRANSFORM,
-         ):
+class DataCollection:
+    def __init__(
+        self,
+        output_dir: str,
+        video_fps: int,
+        buttons_reader: ir.SignalReader,
+        sound_emitter: ir.SignalEmitter,
+        robot_commands: ir.SignalEmitter,
+        target_grip_emitter: ir.SignalEmitter,
+        controller_positions_reader: ir.SignalReader,
+        robot_state: ir.SignalReader,
+        frame_readers: Dict[str, ir.ValueUpdated],
+        operator_position: geom.Transform3D | None,
 
-    with ir.World() as world:
-        frame_readers = {}
-        cameras = cameras or {}
-        for camera_name, camera in cameras.items():
-            camera.frame, frame_reader = world.pipe()
-            frame_readers[camera_name] = ir.ValueUpdated(ir.DefaultReader(frame_reader, None))
+    ):
+        self.button_handler = ButtonHandler()
+        self.fps_counter = FPSCounter("Data Collection")
+        self.tracker = _Tracker(operator_position)
+        self.recorder = _Recorder(
+                SerialDumper(output_dir, video_fps=video_fps) if output_dir is not None else None, sound_emitter)
+        self.buttons_reader = buttons_reader
+        self.controller_positions_reader = controller_positions_reader
+        self.robot_state = robot_state
+        self.frame_readers = frame_readers
+        self.target_grip_emitter = target_grip_emitter
+        self.robot_commands = robot_commands
 
-        webxr.controller_positions, controller_positions_reader = world.pipe()
-        controller_positions_reader = ir.ValueUpdated(controller_positions_reader)
-        webxr.buttons, buttons_reader = world.pipe()
 
-        if stream_video_to_webxr is not None:
-            raise NotImplementedError("TODO: fix video streaming to webxr, since it's currently lagging")
-            webxr.frame = ir.map(frame_readers[stream_video_to_webxr], lambda x: x['image'])
-
-        world.start(webxr.run, *[camera.run for camera in cameras.values()])
-
-        robot_state, robot_commands = ir.NoOpReader(), ir.NoOpEmitter()
-        if robot_arm is not None:
-            robot_arm.state, robot_state = world.zero_copy_sm()
-            robot_commands, robot_arm.commands = world.pipe(1)
-            world.start(robot_arm.run)
-
-        target_grip_emitter = ir.NoOpEmitter()
-        if gripper is not None:
-            target_grip_emitter, gripper.target_grip = world.pipe(1)
-            world.start(gripper.run)
-
-        sound_emitter = ir.NoOpEmitter()
-        if sound is not None:
-            sound_emitter, sound.wav_path = world.pipe()
-            world.start(sound.run)
-
-        tracker = _Tracker(operator_position if robot_arm is not None else None)
-        recorder = _Recorder(
-            SerialDumper(output_dir, video_fps=fps) if output_dir is not None else None, sound_emitter)
-        button_handler = ButtonHandler()
-
-        fps_counter = FPSCounter("Data Collection")
-        while not world.should_stop:
+    def run(self, should_stop: ir.SignalReader):
+        while not ir.is_true(should_stop):
             try:
-                _parse_buttons(buttons_reader.value, button_handler)
-                if button_handler.just_pressed('right_B'):
-                    recorder.turn_off() if recorder.on else recorder.turn_on()
-                elif button_handler.just_pressed('right_A'):
-                    tracker.turn_off() if tracker.on else tracker.turn_on(robot_state.value.position)
-                elif button_handler.just_pressed('right_stick') and not tracker.umi_mode:
+                _parse_buttons(self.buttons_reader.value, self.button_handler)
+                if self.button_handler.just_pressed('right_B'):
+                    self.recorder.turn_off() if self.recorder.on else self.recorder.turn_on()
+                elif self.button_handler.just_pressed('right_A'):
+                    self.tracker.turn_off() if self.tracker.on else self.tracker.turn_on(self.robot_state.value.position)
+                elif self.button_handler.just_pressed('right_stick') and not self.tracker.umi_mode:
                     print("Resetting robot")
-                    recorder.turn_off()
-                    tracker.turn_off()
-                    robot_commands.emit(roboarm.command.Reset())
+                    self.recorder.turn_off()
+                    self.tracker.turn_off()
+                    self.robot_commands.emit(roboarm.command.Reset())
 
-                target_grip = button_handler.get_value('right_trigger')
-                target_grip_emitter.emit(target_grip)
+                target_grip = self.button_handler.get_value('right_trigger')
+                self.target_grip_emitter.emit(target_grip)
 
-                controller_positions, controller_positions_updated = controller_positions_reader.value
-                target_robot_pos = tracker.update(controller_positions['right'])
-                if tracker.on and controller_positions_updated:  # Don't spam the robot with commands.
-                    robot_commands.emit(roboarm.command.CartesianMove(target_robot_pos))
+                controller_positions, controller_positions_updated = self.controller_positions_reader.value
+                target_robot_pos = self.tracker.update(controller_positions['right'])
+                if self.tracker.on and controller_positions_updated:  # Don't spam the robot with commands.
+                    self.robot_commands.emit(roboarm.command.CartesianMove(target_robot_pos))
 
-                frame_messages = {name: reader.read() for name, reader in frame_readers.items()}
+                frame_messages = {name: reader.read() for name, reader in self.frame_readers.items()}
                 any_frame_updated = any(msg.data[1] and msg.data[0] is not None for msg in frame_messages.values())
 
-                fps_counter.tick()
-                if not recorder.on or not any_frame_updated:
-                    time.sleep(0.001)
-                    continue
+                self.fps_counter.tick()
+                if not self.recorder.on or not any_frame_updated:
+                    yield
 
                 frame_messages = {name: ir.Message(msg.data[0], msg.ts) for name, msg in frame_messages.items()}
 
@@ -223,15 +203,150 @@ def main(robot_arm: Any | None,  # noqa: C901  Function is too complex
                     ep_dict['left_controller_translation'] = controller_positions['left'].translation.copy()
                     ep_dict['left_controller_quaternion'] = controller_positions['left'].rotation.as_quat.copy()
 
-                recorder.update(data=ep_dict,
+                self.recorder.update(data=ep_dict,
                                 video_frames={name: frame.data['image'] for name, frame in frame_messages.items()})
 
             except ir.NoValueException:
-                time.sleep(0.001)
-                continue
+                yield
 
 
-main = ir1.Config(
+
+def main(  # noqa: C901  Function is too complex
+    output_dir: str,
+    robot_arm: Any | None,
+    gripper: DHGripper,
+    webxr: WebXR,
+    sound: SoundSystem,
+    cameras: Dict[str, LinuxVideo],
+    fps: int = 30,
+    stream_video_to_webxr: str | None = None,
+    operator_position: geom.Transform3D | None = None,
+):
+
+    with ir.World() as world:
+        frame_readers = {}
+        cameras = cameras or {}
+        for camera_name, camera in cameras.items():
+            camera.frame, frame_reader = world.pipe()
+            frame_readers[camera_name] = ir.ValueUpdated(ir.DefaultReader(frame_reader, None))
+
+        webxr.controller_positions, controller_positions_reader = world.pipe()
+        controller_positions_reader = ir.ValueUpdated(controller_positions_reader)
+        webxr.buttons, buttons_reader = world.pipe()
+
+        if stream_video_to_webxr is not None:
+            raise NotImplementedError("TODO: fix video streaming to webxr, since it's currently lagging")
+            webxr.frame = ir.map(frame_readers[stream_video_to_webxr], lambda x: x['image'])
+
+        world.run_background(webxr.run, *[camera.run for camera in cameras.values()])
+
+        robot_state, robot_commands = ir.NoOpReader(), ir.NoOpEmitter()
+        if robot_arm is not None:
+            robot_arm.state, robot_state = world.zero_copy_sm()
+            robot_commands, robot_arm.commands = world.pipe(1)
+            world.run_background(robot_arm.run)
+
+        target_grip_emitter = ir.NoOpEmitter()
+        if gripper is not None:
+            target_grip_emitter, gripper.target_grip = world.pipe(1)
+            world.run_background(gripper.run)
+
+        sound_emitter = ir.NoOpEmitter()
+        if sound is not None:
+            sound_emitter, sound.wav_path = world.pipe()
+            world.run_background(sound.run)
+
+        dc = DataCollection(
+            output_dir,
+            fps,
+            buttons_reader,
+            sound_emitter,
+            robot_commands,
+            target_grip_emitter,
+            controller_positions_reader,
+            robot_state,
+            frame_readers,
+            operator_position,
+        )
+
+        world.run_sync(dc.run)
+
+
+def main_mujoco(
+    output_dir: str,
+    mujoco_model_path: str,
+    webxr: WebXR,
+    sound: SoundSystem,
+    operator_position: geom.Transform3D | None = None,
+    loaders: Sequence[MujocoSceneTransform] = (),
+    fps: int = 30,
+):
+    sim = MujocoSim(mujoco_model_path, loaders)
+
+    robot_arm = MujocoFranka(sim)
+    cameras = {
+        'camera': MujocoCamera(sim, sim.data, 'camera', (320, 240))
+    }
+    gripper = MujocoGripper(sim, 'gripper')
+
+    clock = sim.get_clock()
+
+    with ir.World() as world:
+        frame_readers = {}
+        cameras = cameras or {}
+        for camera_name, camera in cameras.items():
+            camera.frame, frame_reader = world.pipe()
+            frame_readers[camera_name] = ir.ValueUpdated(ir.DefaultReader(frame_reader, None))
+
+        webxr.controller_positions, controller_positions_reader = world.pipe()
+        controller_positions_reader = ir.ValueUpdated(controller_positions_reader)
+        webxr.buttons, buttons_reader = world.pipe()
+
+        world.run_background(webxr.run)
+
+        robot_state, robot_commands = ir.NoOpReader(), ir.NoOpEmitter()
+        robot_arm.state, robot_state = world.zero_copy_sm()
+        robot_commands, robot_arm.commands = world.pipe(1)
+
+        target_grip_emitter, gripper.target_grip = world.pipe(1)
+
+        sound_emitter = ir.NoOpEmitter()
+        if sound is not None:
+            sound_emitter, sound.wav_path = world.pipe()
+            world.run_background(sound.run)
+
+        dc = DataCollection(
+            output_dir,
+            fps,
+            buttons_reader,
+            sound_emitter,
+            robot_commands,
+            target_grip_emitter,
+            controller_positions_reader,
+            robot_state,
+            frame_readers,
+            operator_position,
+        )
+
+        sim_iter = world.compose_runs(
+            dc.run,
+            *[camera.run for camera in cameras.values()],
+            robot_arm.run,
+            gripper.run,
+            clock=clock,
+        )
+
+        # run as fast as possible
+        # world.run_sync(sim_iter)
+
+        # run at real-time
+        real_clock = ir.RealClock()
+        for _ in sim_iter:
+            now = real_clock.now()
+            clock.sleep(now - clock.now())
+
+
+main_cfg = ir1.Config(
     main,
     robot_arm=None,
     gripper=pimm.cfg.hardware.gripper.dh_gripper,
@@ -246,4 +361,4 @@ main = ir1.Config(
 )
 
 if __name__ == "__main__":
-    ir1.cli(main)
+    ir1.cli(main_cfg)
