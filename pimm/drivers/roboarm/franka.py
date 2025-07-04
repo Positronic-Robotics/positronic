@@ -107,7 +107,7 @@ class Robot:
         commands = ir.DefaultReader(ir.ValueUpdated(self.commands), (None, False))
         robot_state = FrankaState()
         last_q = None
-        rate_limiter = RateLimiter(hz=500)
+        rate_limiter = RateLimiter(hz=1000)
 
         # Reset robot
         reset_motion = franky.JointWaypointMotion([franky.JointWaypoint(self._home_joints)])
