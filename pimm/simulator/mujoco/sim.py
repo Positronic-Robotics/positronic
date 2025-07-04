@@ -6,7 +6,7 @@ from positronic.simulator.mujoco.sim import create_from_config, MujocoSimulatorE
 
 
 class MujocoSim:
-    target_position: ir.SignalReader = ir.NoOpReader()
+    commands: ir.SignalReader = ir.NoOpReader()
 
     state: ir.SignalEmitter = ir.NoOpEmitter()
     frames: Dict[str, ir.SignalEmitter] = {}
@@ -20,11 +20,13 @@ class MujocoSim:
             camera_names: Sequence[str],
             camera_width: int,
             camera_height: int,
-            loaders: Sequence[MujocoSceneTransform] = ()
+            loaders: Sequence[MujocoSceneTransform] = (),
     ):
         self.sim = create_from_config(
             mujoco_model_path, simulation_hz, camera_names, camera_width, camera_height, loaders
         )
+        self.simulate_until = 0
+
 
     @property
     def camera_names(self):
@@ -33,11 +35,24 @@ class MujocoSim:
     def run(self, should_stop: ir.SignalReader):
         self.sim.renderer.initialize()
         while not ir.is_true(should_stop):
-            self.sim.simulator.step()
-            self.state.emit(self.sim.simulator.joints)
+            while self.sim.simulator.ts_sec < self.simulate_until:
+                command = self.commands.read()
+                if command is not None:
+                    q = self.sim.inverse_kinematics.recalculate_ik(command)
+                    self.sim.simulator.set_joint_positions(q)
 
-            frames = self.sim.renderer.render()
-            for cam_name, frame in frames.items():
-                self.frames[cam_name].emit({'frame': frame})
+                self.sim.simulator.step()
+                self.state.emit(self.sim.simulator.joints)
 
-            time.sleep(1 / 500)
+                frames = self.sim.renderer.render()
+                for cam_name, frame in frames.items():
+                    self.frames[cam_name].emit({'frame': frame})
+
+    def step(self, time: float | None = None):
+        if time is None:
+            time = self.sim.simulator.model.opt.timestep
+        self.simulate_until = self.time + time
+
+    @property
+    def time(self):
+        return self.sim.simulator.ts_sec

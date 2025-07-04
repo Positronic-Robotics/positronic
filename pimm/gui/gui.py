@@ -58,11 +58,12 @@ class DearpyguiUi:
         dpg.show_viewport(maximized=True)
 
 
-    def run(self):
+    def run(self, should_stop: ir.SignalReader):
+        self.init()
         fps_counter = FPSCounter("UI")
         frame_fps_counter = FPSCounter("Frame")
 
-        while dpg.is_dearpygui_running():
+        while ir.is_true(should_stop) and dpg.is_dearpygui_running():
             fps_counter.tick()
             pressed_keys = _get_down_keys()
             self.buttons.emit(ir.Message(pressed_keys))
