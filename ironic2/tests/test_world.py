@@ -186,7 +186,7 @@ class TestWorld:
     def test_world_pipe_creation(self):
         """Test that World.pipe creates emitter and reader pair."""
         world = World()
-        emitter, reader = world.pipe()
+        emitter, reader = world.mp_pipe()
 
         assert isinstance(emitter, QueueEmitter)
         assert isinstance(reader, QueueReader)
@@ -194,7 +194,7 @@ class TestWorld:
     def test_world_pipe_communication(self):
         """Test that pipe emitter and reader can communicate."""
         world = World()
-        emitter, reader = world.pipe()
+        emitter, reader = world.mp_pipe()
 
         # Initially reader should return None
         assert reader.read() is None
@@ -284,8 +284,8 @@ class TestIntegration:
         world = World()
 
         # Create communication channels
-        emitter1, reader1 = world.pipe()
-        emitter2, reader2 = world.pipe()
+        emitter1, reader1 = world.mp_pipe()
+        emitter2, reader2 = world.mp_pipe()
 
         # Test data flow
         emitter1.emit("message1")

@@ -56,8 +56,8 @@ class Gripper:
 if __name__ == "__main__":
     with ir.World() as world:
         gripper = Gripper(ip="172.168.0.2")
-        target_grip, gripper.target_grip = world.pipe(1)
-        gripper.grip, actual_grip = world.pipe(1)
+        target_grip, gripper.target_grip = world.mp_pipe(1)
+        gripper.grip, actual_grip = world.mp_pipe(1)
         world.start(gripper.run)
 
         commands = [(1.0, 0.0), (0.0, 4.0), (0.65, 8.0), (0.35, 12.0)]

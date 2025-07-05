@@ -67,10 +67,10 @@ if __name__ == "__main__":
     with ir.World() as world:
         gripper = DHGripper("/dev/ttyUSB0")
 
-        speed, gripper.speed = world.pipe()
-        force, gripper.force = world.pipe()
-        target_grip, gripper.target_grip = world.pipe()
-        gripper.grip, grip = world.pipe()
+        speed, gripper.speed = world.mp_pipe()
+        force, gripper.force = world.mp_pipe()
+        target_grip, gripper.target_grip = world.mp_pipe()
+        gripper.grip, grip = world.mp_pipe()
 
         world.start(gripper.run)
 

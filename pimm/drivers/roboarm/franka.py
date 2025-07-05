@@ -155,8 +155,8 @@ class Robot:
 if __name__ == "__main__":
     with ir.World() as world:
         robot = Robot("172.168.0.2", relative_dynamics_factor=0.2, cartesian_mode=CartesianMode.LIBFRANKA)
-        commands, robot.commands = world.pipe()
-        robot.state, state = world.pipe()
+        commands, robot.commands = world.mp_pipe()
+        robot.state, state = world.mp_pipe()
         world.start(robot.run)
 
         trajectory = [

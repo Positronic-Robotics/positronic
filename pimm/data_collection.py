@@ -129,76 +129,58 @@ FRANKA_FRONT_TRANSFORM = geom.Transform3D(rotation=geom.Rotation.from_quat([0.5,
 FRANKA_BACK_TRANSFORM = geom.Transform3D(rotation=geom.Rotation.from_quat([-0.5, -0.5, 0.5, 0.5]))
 
 
-def main(robot_arm: Any | None,  # noqa: C901  Function is too complex
-         gripper: DHGripper | None,
-         webxr: WebXR,
-         sound: SoundSystem | None,
-         cameras: Dict[str, LinuxVideo] | None,
-         output_dir: str | None = None,
-         fps: int = 30,
-         stream_video_to_webxr: str | None = None,
-         operator_position: geom.Transform3D = FRANKA_FRONT_TRANSFORM,
-         ):
+class DataCollection:
+    frame_readers : Dict[str, ir.SignalReader] = {}
+    controller_positions_reader : ir.SignalReader = ir.NoOpReader()
+    buttons_reader : ir.SignalReader = ir.NoOpReader()
+    robot_state : ir.SignalReader = ir.NoOpReader()
+    robot_commands : ir.SignalEmitter = ir.NoOpEmitter()
+    target_grip_emitter : ir.SignalEmitter = ir.NoOpEmitter()
+    sound_emitter : ir.SignalEmitter = ir.NoOpEmitter()
 
-    with ir.World() as world:
-        frame_readers = {}
-        cameras = cameras or {}
-        for camera_name, camera in cameras.items():
-            camera.frame, frame_reader = world.pipe()
-            frame_readers[camera_name] = ir.ValueUpdated(ir.DefaultReader(frame_reader, None))
+    def __init__(self, operator_position: geom.Transform3D | None, output_dir: str | None, fps: int) -> None:
+        self.operator_position = operator_position
+        self.output_dir = output_dir
+        self.fps = fps
 
-        webxr.controller_positions, controller_positions_reader = world.pipe()
-        controller_positions_reader = ir.ValueUpdated(controller_positions_reader)
-        webxr.buttons, buttons_reader = world.pipe()
+    def run(self, should_stop: ir.SignalReader) -> None:  # noqa: C901
+        frame_readers = {
+            camera_name: ir.ValueUpdated(ir.DefaultReader(frame_reader, None))
+            for camera_name, frame_reader in self.frame_readers.items()
+        }
+        controller_positions_reader = ir.ValueUpdated(self.controller_positions_reader)
 
-        if stream_video_to_webxr is not None:
-            raise NotImplementedError("TODO: fix video streaming to webxr, since it's currently lagging")
-            webxr.frame = ir.map(frame_readers[stream_video_to_webxr], lambda x: x['image'])
-
-        world.start(webxr.run, *[camera.run for camera in cameras.values()])
-
-        robot_state, robot_commands = ir.NoOpReader(), ir.NoOpEmitter()
-        if robot_arm is not None:
-            robot_arm.state, robot_state = world.zero_copy_sm()
-            robot_commands, robot_arm.commands = world.pipe(1)
-            world.start(robot_arm.run)
-
-        target_grip_emitter = ir.NoOpEmitter()
-        if gripper is not None:
-            target_grip_emitter, gripper.target_grip = world.pipe(1)
-            world.start(gripper.run)
-
-        sound_emitter = ir.NoOpEmitter()
-        if sound is not None:
-            sound_emitter, sound.wav_path = world.pipe()
-            world.start(sound.run)
-
-        tracker = _Tracker(operator_position if robot_arm is not None else None)
+        tracker = _Tracker(self.operator_position)
         recorder = _Recorder(
-            SerialDumper(output_dir, video_fps=fps) if output_dir is not None else None, sound_emitter)
+            SerialDumper(self.output_dir, video_fps=self.fps) if self.output_dir is not None else None,
+            self.sound_emitter)
         button_handler = ButtonHandler()
 
         fps_counter = FPSCounter("Data Collection")
-        while not world.should_stop:
+        while not should_stop.value:
             try:
-                _parse_buttons(buttons_reader.value, button_handler)
+                _parse_buttons(self.buttons_reader.value, button_handler)
                 if button_handler.just_pressed('right_B'):
                     recorder.turn_off() if recorder.on else recorder.turn_on()
                 elif button_handler.just_pressed('right_A'):
-                    tracker.turn_off() if tracker.on else tracker.turn_on(robot_state.value.position)
+                    if tracker.on:
+                        tracker.turn_off()
+                    else:
+                        with self.robot_state.zc_lock():
+                            tracker.turn_on(self.robot_state.value.position)
                 elif button_handler.just_pressed('right_stick') and not tracker.umi_mode:
                     print("Resetting robot")
                     recorder.turn_off()
                     tracker.turn_off()
-                    robot_commands.emit(roboarm.command.Reset())
+                    self.robot_commands.emit(roboarm.command.Reset())
 
                 target_grip = button_handler.get_value('right_trigger')
-                target_grip_emitter.emit(target_grip)
+                self.target_grip_emitter.emit(target_grip)
 
                 controller_positions, controller_positions_updated = controller_positions_reader.value
                 target_robot_pos = tracker.update(controller_positions['right'])
                 if tracker.on and controller_positions_updated:  # Don't spam the robot with commands.
-                    robot_commands.emit(roboarm.command.CartesianMove(target_robot_pos))
+                    self.robot_commands.emit(roboarm.command.CartesianMove(target_robot_pos))
 
                 frame_messages = {name: reader.read() for name, reader in frame_readers.items()}
                 any_frame_updated = any(msg.data[1] and msg.data[0] is not None for msg in frame_messages.values())
@@ -229,6 +211,48 @@ def main(robot_arm: Any | None,  # noqa: C901  Function is too complex
             except ir.NoValueException:
                 time.sleep(0.001)
                 continue
+
+
+def main(robot_arm: Any | None,  # noqa: C901  Function is too complex
+         gripper: DHGripper | None,
+         webxr: WebXR,
+         sound: SoundSystem | None,
+         cameras: Dict[str, LinuxVideo] | None,
+         output_dir: str | None = None,
+         fps: int = 30,
+         stream_video_to_webxr: str | None = None,
+         operator_position: geom.Transform3D = FRANKA_FRONT_TRANSFORM,
+         ):
+
+    with ir.World() as world:
+        data_collection = DataCollection(operator_position, output_dir, fps)
+        cameras = cameras or {}
+        for camera_name, camera in cameras.items():
+            camera.frame, data_collection.frame_readers[camera_name] = world.mp_pipe()
+
+        webxr.controller_positions, data_collection.controller_positions_reader = world.mp_pipe()
+        webxr.buttons, data_collection.buttons_reader = world.mp_pipe()
+
+        if stream_video_to_webxr is not None:
+            raise NotImplementedError("TODO: fix video streaming to webxr, since it's currently lagging")
+            webxr.frame = ir.map(data_collection.frame_readers[stream_video_to_webxr], lambda x: x['image'])
+
+        world.start(webxr.run, *[camera.run for camera in cameras.values()])
+
+        if robot_arm is not None:
+            robot_arm.state, data_collection.robot_state = world.zero_copy_sm()
+            robot_arm.commands, data_collection.robot_commands = world.mp_pipe(1)
+            world.start(robot_arm.run)
+
+        if gripper is not None:
+            gripper.target_grip, data_collection.target_grip_emitter = world.mp_pipe(1)
+            world.start(gripper.run)
+
+        if sound is not None:
+            sound.wav_path, data_collection.sound_emitter = world.mp_pipe()
+            world.start(sound.run)
+
+        data_collection.run(ir.EventReader(world.should_stop))
 
 
 main = ir1.Config(

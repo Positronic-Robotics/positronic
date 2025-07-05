@@ -77,6 +77,6 @@ if __name__ == "__main__":
         camera = OpenCVCamera(0, (640, 480), fps=30)
         writer = VideoWriter(sys.argv[1], 30)
 
-        camera.frame, writer.frame = world.pipe()
+        camera.frame, writer.frame = world.mp_pipe()
         world.start(camera.run)
         writer.run()

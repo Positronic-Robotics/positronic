@@ -113,7 +113,7 @@ class World:
 
         self._sm_manager.__exit__(exc_type, exc_value, traceback)
 
-    def pipe(self, maxsize: int = 0) -> Tuple[SignalEmitter, SignalReader]:
+    def mp_pipe(self, maxsize: int = 0) -> Tuple[SignalEmitter, SignalReader]:
         """Create a queue-based communication channel between processes.
 
         Args:
