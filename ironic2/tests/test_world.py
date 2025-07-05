@@ -2,7 +2,6 @@ import pytest
 import multiprocessing as mp
 from queue import Empty, Full
 from unittest.mock import Mock, patch
-import time
 
 from ironic2.core import Message
 from ironic2.world import (QueueEmitter, QueueReader, EventReader, World)
@@ -11,7 +10,7 @@ from ironic2.world import (QueueEmitter, QueueReader, EventReader, World)
 def dummy_process(stop_signal):
     """A simple background process that runs until stopped."""
     while not stop_signal.read().data:
-        time.sleep(0.01)
+        yield 0.01
 
 
 class TestQueueEmitter:
@@ -233,7 +232,7 @@ class TestWorld:
 
         with world:
             # Start a background process
-            world.start(dummy_process)
+            world.start_in_subprocess(dummy_process)
 
             # Verify process is running
             assert len(world.background_processes) == 1
@@ -256,7 +255,7 @@ class TestWorld:
         try:
             with world:
                 # Start a background process
-                world.start(dummy_process)
+                world.start_in_subprocess(dummy_process)
 
                 # Verify process is running
                 assert len(world.background_processes) == 1

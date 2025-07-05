@@ -1,7 +1,6 @@
 import asyncio
 import base64
 import threading
-import time
 import traceback
 
 import numpy as np
@@ -162,8 +161,8 @@ class WebXR:
         self.server_thread = threading.Thread(target=server.run, daemon=True)
         self.server_thread.start()
 
-        while not ir.is_true(should_stop):
-            time.sleep(0.1)
+        while not should_stop.value:
+            yield 0.1
 
         server.should_exit = True
         self.server_thread.join()

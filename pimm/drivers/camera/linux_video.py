@@ -73,4 +73,6 @@ class LinuxVideo:
             if result is not None:
                 self.frame.emit(result)
 
+            yield 0.0  # Give control back to the world
+
         device.close()

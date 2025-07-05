@@ -444,12 +444,13 @@ class RateLimiter:
         self._last_time = None
         self.interval = every_sec if every_sec is not None else 1.0 / hz
 
-    def wait(self):
+    def wait_time(self) -> float:
         """Wait if necessary to enforce the rate limit."""
         now = time.monotonic()
         if self._last_time is not None and now - self._last_time < self.interval:
-            time.sleep(self.interval - (now - self._last_time))
+            return self.interval - (now - self._last_time)
         self._last_time = time.monotonic()
+        return 0.0
 
 
 def last_value(port: OutputPort, initial_value: Any = NoValue) -> Callable[[], Message]:

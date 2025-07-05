@@ -237,20 +237,20 @@ def main(robot_arm: Any | None,  # noqa: C901  Function is too complex
             raise NotImplementedError("TODO: fix video streaming to webxr, since it's currently lagging")
             webxr.frame = ir.map(data_collection.frame_readers[stream_video_to_webxr], lambda x: x['image'])
 
-        world.start(webxr.run, *[camera.run for camera in cameras.values()])
+        world.start_in_subprocess(webxr.run, *[camera.run for camera in cameras.values()])
 
         if robot_arm is not None:
             robot_arm.state, data_collection.robot_state = world.zero_copy_sm()
             robot_arm.commands, data_collection.robot_commands = world.mp_pipe(1)
-            world.start(robot_arm.run)
+            world.start_in_subprocess(robot_arm.run)
 
         if gripper is not None:
             gripper.target_grip, data_collection.target_grip_emitter = world.mp_pipe(1)
-            world.start(gripper.run)
+            world.start_in_subprocess(gripper.run)
 
         if sound is not None:
             sound.wav_path, data_collection.sound_emitter = world.mp_pipe()
-            world.start(sound.run)
+            world.start_in_subprocess(sound.run)
 
         data_collection.run(ir.EventReader(world.should_stop))
 

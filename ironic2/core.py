@@ -2,7 +2,7 @@ from abc import ABC, abstractmethod
 from contextlib import nullcontext
 from dataclasses import dataclass
 import time
-from typing import Any, Callable, ContextManager, final
+from typing import Any, Callable, ContextManager, Iterator, final
 
 # Internal sentinel object to distinguish between no default and explicit None default
 _RAISE_EXCEPTION_SENTINEL = object()
@@ -92,4 +92,4 @@ def is_true(signal: SignalReader) -> bool:
     return value.data is True
 
 
-ControlSystem = Callable[[SignalReader], None]
+ControlLoop = Callable[[SignalReader], Iterator[float]]

@@ -56,7 +56,7 @@ class DHGripper:
             except ir.NoValueException:
                 pass
 
-            time.sleep(0.001)  # Small delay to prevent busy-waiting
+            yield 0.001  # Small delay to prevent busy-waiting
 
         client.close()
 
@@ -72,7 +72,7 @@ if __name__ == "__main__":
         target_grip, gripper.target_grip = world.mp_pipe()
         gripper.grip, grip = world.mp_pipe()
 
-        world.start(gripper.run)
+        world.start_in_subprocess(gripper.run)
 
         print("Setting gripper to 20% speed and 100% force", flush=True)
         speed.emit(20)

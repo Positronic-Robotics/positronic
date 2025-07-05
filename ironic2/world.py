@@ -8,9 +8,9 @@ import sys
 from queue import Empty, Full
 import time
 import traceback
-from typing import Any, Callable, List, Tuple
+from typing import Any, List, Tuple
 
-from .core import Message, SignalEmitter, SignalReader, system_clock
+from .core import ControlLoop, Message, SignalEmitter, SignalReader, system_clock
 from .shared_memory import ZeroCopySMEmitter, ZeroCopySMReader
 
 
@@ -56,9 +56,10 @@ class EventReader(SignalReader):
         return Message(data=self._event.is_set(), ts=system_clock())
 
 
-def _bg_wrapper(run_func: Callable, stop_event: mp.Event, name: str):
+def _bg_wrapper(run_func: ControlLoop, stop_event: mp.Event, name: str):
     try:
-        run_func(EventReader(stop_event))
+        for sleep_time in run_func(EventReader(stop_event)):
+            time.sleep(sleep_time)
     except KeyboardInterrupt:
         # Silently handle KeyboardInterrupt in background processes
         pass
@@ -139,7 +140,7 @@ class World:
         self._sm_emitters_readers.append((emitter, reader))
         return emitter, reader
 
-    def start(self, *background_loops: List[Callable]):
+    def start_in_subprocess(self, *background_loops: List[ControlLoop]):
         """Starts background control loops. Can be called multiple times for different control loops."""
         for bg_loop in background_loops:
             if hasattr(bg_loop, '__self__'):
@@ -154,3 +155,10 @@ class World:
     @property
     def should_stop(self) -> bool:
         return self._stop_event.is_set()
+
+    def should_stop_reader(self) -> SignalReader:
+        return EventReader(self._stop_event)
+
+    def run(self, control_loop: ControlLoop):
+        for sleep_time in control_loop(self.should_stop_reader()):
+            time.sleep(sleep_time)

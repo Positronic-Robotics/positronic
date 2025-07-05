@@ -1,4 +1,5 @@
 import time
+from typing import Iterator
 
 import franky
 
@@ -27,7 +28,7 @@ class Gripper:
         self._close_threshold = close_threshold
         self._open_threshold = open_threshold
 
-    def run(self, should_stop: ir.SignalReader) -> None:
+    def run(self, should_stop: ir.SignalReader) -> Iterator[float]:
         gripper = franky.Gripper(self._ip)
         print(f"Connected to gripper at {self._ip}, homing...")
         gripper.homing()
@@ -47,9 +48,9 @@ class Gripper:
                     gripper.open_async(speed=speed.value)
                     is_open = True
             except ir.NoValueException:
-                time.sleep(0.05)
+                yield 0.05
 
-            limiter.wait()
+            yield limiter.wait_time()
             self.grip.emit(gripper.width / gripper.max_width)
 
 
@@ -58,7 +59,7 @@ if __name__ == "__main__":
         gripper = Gripper(ip="172.168.0.2")
         target_grip, gripper.target_grip = world.mp_pipe(1)
         gripper.grip, actual_grip = world.mp_pipe(1)
-        world.start(gripper.run)
+        world.start_in_subprocess(gripper.run)
 
         commands = [(1.0, 0.0), (0.0, 4.0), (0.65, 8.0), (0.35, 12.0)]
 

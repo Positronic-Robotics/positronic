@@ -1,5 +1,6 @@
 import time
 from enum import Enum
+from typing import Iterator
 
 import franky
 import numpy as np
@@ -99,7 +100,7 @@ class Robot:
         robot.set_load(0.0, [0.0, 0.0, 0.0], [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0])
         robot.relative_dynamics_factor = rel_dynamics_factor
 
-    def run(self, should_stop: ir.SignalReader) -> None:
+    def run(self, should_stop: ir.SignalReader) -> Iterator[float]:
         robot = franky.Robot(self._ip, realtime_config=franky.RealtimeConfig.Ignore)
         Robot._init_robot(robot, self._relative_dynamics_factor)
         robot.recover_from_errors()
@@ -146,7 +147,7 @@ class Robot:
                     robot.recover_from_errors()
                     print(f"Motion failed for {pos}: {e}")
 
-            rate_limiter.wait()
+            yield rate_limiter.wait_time()
             js = robot.current_joint_state
             robot_state.encode(js.position, js.velocity, robot.current_pose.end_effector_pose)
             self.state.emit(robot_state)
@@ -157,7 +158,7 @@ if __name__ == "__main__":
         robot = Robot("172.168.0.2", relative_dynamics_factor=0.2, cartesian_mode=CartesianMode.LIBFRANKA)
         commands, robot.commands = world.mp_pipe()
         robot.state, state = world.mp_pipe()
-        world.start(robot.run)
+        world.start_in_subprocess(robot.run)
 
         trajectory = [
             ([0.03, 0.03, 0.03], 0.0),

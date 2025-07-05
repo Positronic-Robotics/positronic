@@ -1,4 +1,4 @@
-from typing import Tuple
+from typing import Iterator, Tuple
 import wave
 import pyaudio
 import numpy as np
@@ -52,7 +52,7 @@ class SoundSystem:
             frequency = self.base_frequency * (2 ** octave)
             return self.enable_master_volume, frequency
 
-    def run(self, should_stop: ir.SignalReader):
+    def run(self, should_stop: ir.SignalReader) -> Iterator[float]:
         p = pyaudio.PyAudio()
         stream = p.open(
             format=pyaudio.paFloat32,
@@ -68,7 +68,7 @@ class SoundSystem:
         wav_path = ir.DefaultReader(ir.ValueUpdated(self.wav_path), (None, False))
         level = ir.DefaultReader(ir.ValueUpdated(self.level), 0.0)
 
-        while not ir.is_true(should_stop):
+        while not should_stop.value:
             # Load new files
             path, is_updated = wav_path.value
             if is_updated:
@@ -80,6 +80,7 @@ class SoundSystem:
 
             chunk_size = stream.get_write_available()
             if chunk_size == 0:
+                yield 0.0
                 continue
 
             master_volume, frequency = self._level_to_frequency(level.value)
@@ -94,6 +95,7 @@ class SoundSystem:
                 if wave_chunk is None:
                     wave_file.close()
                     finished_files.append(name)
+                    yield 0.0
                     continue
                 wave_chunk = np.frombuffer(wave_chunk, dtype=np.int16)
 
@@ -107,6 +109,7 @@ class SoundSystem:
                 del audio_files[name]
 
             stream.write(next_chunk.tobytes())
+            yield 0.0
 
     def sound_fn(self, size: int, master_volume: float, frequency: float) -> np.ndarray:
         """
