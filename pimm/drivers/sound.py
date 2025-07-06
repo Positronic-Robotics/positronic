@@ -52,7 +52,7 @@ class SoundSystem:
             frequency = self.base_frequency * (2 ** octave)
             return self.enable_master_volume, frequency
 
-    def run(self, should_stop: ir.SignalReader) -> Iterator[float]:
+    def run(self, should_stop: ir.SignalReader, clock: ir.Clock) -> Iterator[float]:
         p = pyaudio.PyAudio()
         stream = p.open(
             format=pyaudio.paFloat32,

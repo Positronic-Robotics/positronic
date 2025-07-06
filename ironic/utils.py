@@ -6,6 +6,7 @@ from typing import Any, Callable
 
 from ironic.system import (ControlSystem, Message, OutputPort, State, ironic_system, on_message, out_property,
                            system_clock, NoValue)
+from ironic2.core import Clock
 
 Change = namedtuple('Change', ['prev', 'current'])
 
@@ -436,20 +437,21 @@ class ThrottledCallback:
 class RateLimiter:
     """Rate limiter that enforces a minimum interval between calls."""
 
-    def __init__(self, *, every_sec=None, hz=None) -> None:
+    def __init__(self, clock: Clock, *, every_sec=None, hz=None) -> None:
         """
         One of every_sec or hz must be provided.
         """
         assert (every_sec is None) ^ (hz is None), "Exactly one of every_sec or hz must be provided"
+        self._clock = clock
         self._last_time = None
         self.interval = every_sec if every_sec is not None else 1.0 / hz
 
     def wait_time(self) -> float:
         """Wait if necessary to enforce the rate limit."""
-        now = time.monotonic()
+        now = self._clock.now()
         if self._last_time is not None and now - self._last_time < self.interval:
             return self.interval - (now - self._last_time)
-        self._last_time = time.monotonic()
+        self._last_time = now
         return 0.0
 
 

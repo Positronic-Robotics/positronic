@@ -17,7 +17,7 @@ class LinuxVideo:
         self.fps = fps
         self.pixel_format = pixel_format
 
-    def run(self, should_stop: ir.SignalReader):
+    def run(self, should_stop: ir.SignalReader, clock: ir.Clock):
         codec_mapping = {
             PixelFormat.H264: 'h264',
             PixelFormat.HEVC: 'hevc',

@@ -10,16 +10,18 @@ import time
 import traceback
 from typing import Any, List, Tuple
 
-from .core import ControlLoop, Message, SignalEmitter, SignalReader, system_clock
+from .core import Clock, ControlLoop, Message, SignalEmitter, SignalReader
 from .shared_memory import ZeroCopySMEmitter, ZeroCopySMReader
 
 
 class QueueEmitter(SignalEmitter):
 
-    def __init__(self, queue: mp.Queue):
+    def __init__(self, queue: mp.Queue, clock: Clock):
         self._queue = queue
+        self._clock = clock
 
     def emit(self, data: Any, ts: int = -1) -> bool:
+        ts = ts if ts >= 0 else self._clock.now_ns()
         try:
             self._queue.put_nowait(Message(data, ts))
             return True
@@ -49,16 +51,26 @@ class QueueReader(SignalReader):
 
 class EventReader(SignalReader):
 
-    def __init__(self, event: mp.Event):
+    def __init__(self, event: mp.Event, clock: Clock):
         self._event = event
+        self._clock = clock
 
     def read(self) -> Message | None:
-        return Message(data=self._event.is_set(), ts=system_clock())
+        return Message(data=self._event.is_set(), ts=self._clock.now_ns())
 
 
-def _bg_wrapper(run_func: ControlLoop, stop_event: mp.Event, name: str):
+class SystemClock(Clock):
+
+    def now(self) -> float:
+        return time.monotonic()
+
+    def now_ns(self) -> int:
+        return time.monotonic_ns()
+
+
+def _bg_wrapper(run_func: ControlLoop, stop_event: mp.Event, clock: Clock, name: str):
     try:
-        for sleep_time in run_func(EventReader(stop_event)):
+        for sleep_time in run_func(EventReader(stop_event), clock):
             time.sleep(sleep_time)
     except KeyboardInterrupt:
         # Silently handle KeyboardInterrupt in background processes
@@ -77,9 +89,11 @@ def _bg_wrapper(run_func: ControlLoop, stop_event: mp.Event, name: str):
 class World:
     """Utility class to bind and run control loops."""
 
-    def __init__(self):
+    def __init__(self, clock: Clock = SystemClock()):
         # TODO: stop_signal should be a shared variable, since we should be able to track if background
         # processes are still running
+        self._clock = clock
+
         self._stop_event = mp.Event()
         self.background_processes = []
         self._manager = mp.Manager()
@@ -124,7 +138,7 @@ class World:
             Tuple of (emitter, reader) for inter-process communication
         """
         q = self._manager.Queue(maxsize=maxsize)
-        return QueueEmitter(q), QueueReader(q)
+        return QueueEmitter(q, self._clock), QueueReader(q)
 
     def zero_copy_sm(self) -> Tuple[SignalEmitter, SignalReader]:
         """Create a zero-copy shared memory channel for efficient data sharing.
@@ -135,7 +149,7 @@ class World:
         Returns:
             Tuple of (emitter, reader) for zero-copy inter-process communication
         """
-        emitter = ZeroCopySMEmitter(self._manager, self._sm_manager)
+        emitter = ZeroCopySMEmitter(self._manager, self._sm_manager, self._clock)
         reader = ZeroCopySMReader(emitter)
         self._sm_emitters_readers.append((emitter, reader))
         return emitter, reader
@@ -147,7 +161,10 @@ class World:
                 name = f"{bg_loop.__self__.__class__.__name__}.{bg_loop.__name__}"
             else:
                 name = getattr(bg_loop, '__name__', 'anonymous')
-            p = mp.Process(target=_bg_wrapper, args=(bg_loop, self._stop_event, name), daemon=True, name=name)
+            p = mp.Process(target=_bg_wrapper,
+                           args=(bg_loop, self._stop_event, self._clock, name),
+                           daemon=True,
+                           name=name)
             p.start()
             self.background_processes.append(p)
             print(f"Started background process {name} (pid {p.pid})", flush=True)
@@ -157,8 +174,8 @@ class World:
         return self._stop_event.is_set()
 
     def should_stop_reader(self) -> SignalReader:
-        return EventReader(self._stop_event)
+        return EventReader(self._stop_event, self._clock)
 
     def run(self, control_loop: ControlLoop):
-        for sleep_time in control_loop(self.should_stop_reader()):
+        for sleep_time in control_loop(self.should_stop_reader(), self._clock):
             time.sleep(sleep_time)

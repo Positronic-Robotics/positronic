@@ -3,8 +3,8 @@ import multiprocessing as mp
 from queue import Empty, Full
 from unittest.mock import Mock, patch
 
-from ironic2.core import Message
-from ironic2.world import (QueueEmitter, QueueReader, EventReader, World)
+from ironic2.core import Clock, Message
+from ironic2.world import (QueueEmitter, QueueReader, EventReader, SystemClock, World)
 
 
 def dummy_process(stop_signal):
@@ -19,7 +19,7 @@ class TestQueueEmitter:
     def test_queue_emitter_emit_success(self):
         """Test successful emission to queue."""
         queue = mp.Manager().Queue()
-        emitter = QueueEmitter(queue)
+        emitter = QueueEmitter(queue, SystemClock())
 
         result = emitter.emit("test_data")
         assert result is True
@@ -33,7 +33,7 @@ class TestQueueEmitter:
     def test_queue_emitter_emit_with_timestamp(self):
         """Test emission with explicit timestamp."""
         queue = mp.Manager().Queue()
-        emitter = QueueEmitter(queue)
+        emitter = QueueEmitter(queue, SystemClock())
         timestamp = 1234567890
 
         result = emitter.emit("test_data", ts=timestamp)
@@ -46,7 +46,7 @@ class TestQueueEmitter:
     def test_queue_emitter_full_queue_removes_old_message(self):
         """Test that full queue removes old message before adding new one."""
         queue = mp.Manager().Queue(maxsize=1)
-        emitter = QueueEmitter(queue)
+        emitter = QueueEmitter(queue, SystemClock())
 
         # Fill the queue
         emitter.emit("old_data")
@@ -71,7 +71,7 @@ class TestQueueEmitter:
         mock_queue.get_nowait.side_effect = Full()  # get also fails (queue behavior)
         mock_queue_class.return_value = mock_queue
 
-        emitter = QueueEmitter(mock_queue)
+        emitter = QueueEmitter(mock_queue, SystemClock())
         result = emitter.emit("test_data")
 
         assert result is False
@@ -149,7 +149,7 @@ class TestEventReader:
     def test_event_reader_unset_event(self):
         """Test reading from an unset event."""
         event = mp.Event()
-        reader = EventReader(event)
+        reader = EventReader(event, SystemClock())
 
         result = reader.read()
         assert isinstance(result, Message)
@@ -160,23 +160,27 @@ class TestEventReader:
         """Test reading from a set event."""
         event = mp.Event()
         event.set()
-        reader = EventReader(event)
+        reader = EventReader(event, SystemClock())
 
         result = reader.read()
         assert isinstance(result, Message)
         assert result.data is True
         assert isinstance(result.ts, int)
 
-    @patch('ironic2.world.system_clock')
-    def test_event_reader_uses_system_clock(self, mock_system_clock):
-        """Test that EventReader uses system_clock for timestamps."""
-        mock_system_clock.return_value = 987654321
+    def test_event_reader_uses_clock(self):
+        """Test that EventReader uses clocks for timestamps."""
+        class MockClock(Clock):
+            def now(self) -> float:
+                return 0.987654321
+
+            def now_ns(self) -> int:
+                return 987654321
+
         event = mp.Event()
-        reader = EventReader(event)
+        reader = EventReader(event, MockClock())
 
         result = reader.read()
         assert result.ts == 987654321
-        mock_system_clock.assert_called_once()
 
 
 class TestWorld:
@@ -299,7 +303,7 @@ class TestIntegration:
     def test_event_reader_integration(self):
         """Test EventReader with actual multiprocessing Event."""
         event = mp.Event()
-        reader = EventReader(event)
+        reader = EventReader(event, SystemClock())
 
         # Initially event is not set
         result = reader.read()

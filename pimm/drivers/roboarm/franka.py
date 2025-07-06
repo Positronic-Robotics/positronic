@@ -100,7 +100,7 @@ class Robot:
         robot.set_load(0.0, [0.0, 0.0, 0.0], [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0])
         robot.relative_dynamics_factor = rel_dynamics_factor
 
-    def run(self, should_stop: ir.SignalReader) -> Iterator[float]:
+    def run(self, should_stop: ir.SignalReader, clock: ir.Clock) -> Iterator[float]:
         robot = franky.Robot(self._ip, realtime_config=franky.RealtimeConfig.Ignore)
         Robot._init_robot(robot, self._relative_dynamics_factor)
         robot.recover_from_errors()
@@ -108,7 +108,7 @@ class Robot:
         commands = ir.DefaultReader(ir.ValueUpdated(self.commands), (None, False))
         robot_state = FrankaState()
         last_q = None
-        rate_limiter = RateLimiter(hz=1000)
+        rate_limiter = RateLimiter(clock, hz=1000)
 
         # Reset robot
         reset_motion = franky.JointWaypointMotion([franky.JointWaypoint(self._home_joints)])

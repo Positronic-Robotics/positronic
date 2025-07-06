@@ -44,7 +44,7 @@ class WebXR:
         self.server_thread = None
         self.jpeg_encoder = turbojpeg.TurboJPEG()
 
-    def run(self, should_stop: ir.SignalReader):  # noqa: C901  Function is too complex
+    def run(self, should_stop: ir.SignalReader, clock: ir.Clock):  # noqa: C901  Function is too complex
         app = FastAPI()
 
         def encode_frame(image):
@@ -106,7 +106,7 @@ class WebXR:
                         # Use asyncio.wait_for with timeout to avoid blocking indefinitely
                         data = await asyncio.wait_for(websocket.receive_json(), timeout=1)
                         controller_positions, buttons = _parse_controller_data(data)
-                        ts = ir.system_clock()
+                        ts = clock.now_ns()
                         if controller_positions['left'] is not None or controller_positions['right'] is not None:
                             self.controller_positions.emit(controller_positions, ts)
                         if buttons['left'] is not None or buttons['right'] is not None:
