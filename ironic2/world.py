@@ -1,5 +1,6 @@
 """Implementation of multiprocessing channels."""
 
+import heapq
 import logging
 import multiprocessing as mp
 import multiprocessing.shared_memory
@@ -8,7 +9,7 @@ import sys
 from queue import Empty, Full
 import time
 import traceback
-from typing import Any, List, Tuple
+from typing import Any, Iterator, List, Tuple
 
 from .core import Clock, ControlLoop, Message, SignalEmitter, SignalReader
 from .shared_memory import ZeroCopySMEmitter, ZeroCopySMReader
@@ -176,6 +177,52 @@ class World:
     def should_stop_reader(self) -> SignalReader:
         return EventReader(self._stop_event, self._clock)
 
-    def run(self, control_loop: ControlLoop):
-        for sleep_time in control_loop(self.should_stop_reader(), self._clock):
+    def interleave(self, *loops: List[ControlLoop]) -> Iterator[float]:
+        """Interleave multiple control loops, scheduling them based on their timing requirements.
+
+        This method runs multiple control loops concurrently by executing the next scheduled
+        loop and then yielding the wait time until the next execution should occur.
+
+        Args:
+            *loops: Variable number of control loops to interleave
+
+        Yields:
+            float: Wait times until the next scheduled execution should occur
+
+        Behavior:
+            - All loops start at the same time
+            - At each step: execute the next scheduled loop, then yield wait time
+            - Loops are scheduled for future execution based on their yielded sleep times
+            - When any loop completes (StopIteration), the stop event is set
+            - Other loops can check the stop event and exit early if desired
+            - The method continues until all loops have completed
+            - Number of yields equals number of loop executions
+        """
+        start = self._clock.now()
+        ssr = self.should_stop_reader()
+        counter = 0
+        priority_queue = []
+
+        # Initialize all loops with the same start time and unique counters
+        for loop in loops:
+            heapq.heappush(priority_queue, (start, counter, iter(loop(ssr, self._clock))))
+            counter += 1
+
+        while priority_queue:
+            next_time, _, loop = heapq.heappop(priority_queue)
+
+            try:
+                sleep_time = next(loop)
+                heapq.heappush(priority_queue, (next_time + sleep_time, counter, loop))
+                counter += 1
+
+                if priority_queue:   # Yield the wait time until the next execution should occur
+                    yield max(0, priority_queue[0][0] - self._clock.now())
+
+            except StopIteration:
+                # Don't add the loop back and don't yield after a loop completes - it is done
+                self._stop_event.set()
+
+    def run(self, *loops: ControlLoop):
+        for sleep_time in self.interleave(*loops):
             time.sleep(sleep_time)
