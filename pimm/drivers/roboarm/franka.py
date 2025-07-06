@@ -7,7 +7,6 @@ import numpy as np
 
 import geom
 import ironic2 as ir
-from ironic.utils import RateLimiter
 
 from . import RobotStatus, State, command
 
@@ -108,7 +107,7 @@ class Robot:
         commands = ir.DefaultReader(ir.ValueUpdated(self.commands), (None, False))
         robot_state = FrankaState()
         last_q = None
-        rate_limiter = RateLimiter(clock, hz=1000)
+        rate_limiter = ir.RateLimiter(clock, hz=1000)
 
         # Reset robot
         reset_motion = franky.JointWaypointMotion([franky.JointWaypoint(self._home_joints)])

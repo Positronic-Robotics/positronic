@@ -4,7 +4,6 @@ from typing import Iterator
 import franky
 
 import ironic2 as ir
-from ironic.utils import RateLimiter
 
 
 class Gripper:
@@ -34,7 +33,7 @@ class Gripper:
         gripper.homing()
 
         is_open = True
-        limiter = RateLimiter(clock, hz=100)
+        limiter = ir.RateLimiter(clock, hz=100)
         force = ir.DefaultReader(self.force, 5.0)  # N
         speed = ir.DefaultReader(self.speed, 0.05)  # m/s
 

@@ -1,6 +1,6 @@
 from .core import (Clock, ControlLoop, Message, NoOpEmitter, NoOpReader, SignalEmitter, SignalReader,
                    NoValueException)
-from .utils import map, ValueUpdated, DefaultReader
+from .utils import map, ValueUpdated, DefaultReader, RateLimiter
 from .world import World
 
 __all__ = [
@@ -15,5 +15,6 @@ __all__ = [
     'map',
     'ValueUpdated',
     'DefaultReader',
+    'RateLimiter',
     'World',
 ]
