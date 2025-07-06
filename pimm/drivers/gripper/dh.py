@@ -43,7 +43,7 @@ class DHGripper:
         force = ir.DefaultReader(self.force, 100)
         speed = ir.DefaultReader(self.speed, 100)
 
-        while not ir.is_true(should_stop):
+        while not should_stop.value:
             # Update gripper based on shared values
             try:
                 width = round((1 - max(0, min(target_grip.value, 1))) * 1000)

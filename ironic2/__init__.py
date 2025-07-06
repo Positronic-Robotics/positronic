@@ -1,5 +1,5 @@
 from .core import (ControlLoop, Message, NoOpEmitter, NoOpReader, SignalEmitter, SignalReader, system_clock,
-                   NoValueException, is_true)
+                   NoValueException)
 from .utils import map, ValueUpdated, DefaultReader
 from .world import World
 
@@ -12,7 +12,6 @@ __all__ = [
     'NoOpEmitter',
     'NoOpReader',
     'NoValueException',
-    'is_true',
     'map',
     'ValueUpdated',
     'DefaultReader',

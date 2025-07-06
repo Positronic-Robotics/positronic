@@ -85,11 +85,4 @@ class NoOpReader(SignalReader):
         return None
 
 
-def is_true(signal: SignalReader) -> bool:
-    value = signal.read()
-    if value is None:
-        return False
-    return value.data is True
-
-
 ControlLoop = Callable[[SignalReader], Iterator[float]]

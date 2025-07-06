@@ -74,7 +74,7 @@ class WebXR:
             try:
                 fps = FPSCounter("Video Stream")
                 last_sent_ts = None
-                while not ir.is_true(should_stop):
+                while not should_stop.value:
                     await asyncio.sleep(1 / 60)
 
                     msg = self.frame.read()
@@ -101,7 +101,7 @@ class WebXR:
             print("WebSocket connection accepted")
             try:
                 fps = FPSCounter("Websocket")
-                while not ir.is_true(should_stop):
+                while not should_stop.value:
                     try:
                         # Use asyncio.wait_for with timeout to avoid blocking indefinitely
                         data = await asyncio.wait_for(websocket.receive_json(), timeout=1)
