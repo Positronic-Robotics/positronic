@@ -4,6 +4,7 @@ import numpy as np
 from linuxpy.video.device import Device, PixelFormat
 
 import ironic2 as ir
+from ironic.utils import FPSCounter
 
 
 class LinuxVideo:
@@ -16,6 +17,7 @@ class LinuxVideo:
         self.height = height
         self.fps = fps
         self.pixel_format = pixel_format
+        self.fps_counter = FPSCounter(f"LinuxVideo {device_path}")
 
     def run(self, should_stop: ir.SignalReader, clock: ir.Clock):
         codec_mapping = {
@@ -72,6 +74,7 @@ class LinuxVideo:
 
             if result is not None:
                 self.frame.emit(result)
+                self.fps_counter.tick()
 
             yield 0.0  # Give control back to the world
 

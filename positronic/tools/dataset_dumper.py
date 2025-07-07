@@ -92,7 +92,7 @@ class SerialDumper:
                 self.data[k].append(v)
             elif isinstance(v, list):
                 self.data[k].append(v.copy())
-            elif isinstance(v, (int, float, str)):
+            elif isinstance(v, (int, float, str, np.number)):
                 self.data[k].append(v)
             else:
                 print(f"Appending {k} of type {type(v)}. Please check if you need to make a copy.")

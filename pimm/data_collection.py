@@ -86,6 +86,7 @@ class _Recorder:
         self._end_wav_path = "positronic/assets/sounds/recording-has-stopped.wav"
         self._meta = {}
         self._clock = clock
+        self._fps_counter = FPSCounter("Recorder")
 
     def turn_on(self):
         if self._dumper is None:
@@ -121,6 +122,7 @@ class _Recorder:
 
         if self._dumper is not None:
             self._dumper.write(data=data, video_frames=video_frames)
+            self._fps_counter.tick()
 
 
 # map xyz -> zxy
@@ -154,7 +156,7 @@ class DataCollection:
         recorder = _Recorder(
             SerialDumper(self.output_dir, video_fps=self.fps) if self.output_dir is not None else None,
             self.sound_emitter,
-            self._clock)
+            clock)
         button_handler = ButtonHandler()
 
         fps_counter = FPSCounter("Data Collection")
@@ -184,6 +186,7 @@ class DataCollection:
                     self.robot_commands.emit(roboarm.command.CartesianMove(target_robot_pos))
 
                 frame_messages = {name: reader.read() for name, reader in frame_readers.items()}
+                # TODO: fix frame synchronization. Two 30 FPS cameras is updated at 60 FPS
                 any_frame_updated = any(msg.data[1] and msg.data[0] is not None for msg in frame_messages.values())
 
                 fps_counter.tick()
@@ -250,13 +253,15 @@ def main(robot_arm: Any | None,  # noqa: C901  Function is too complex
             world.start_in_subprocess(gripper.run)
 
         if sound is not None:
-            sound.wav_path, data_collection.sound_emitter = world.mp_pipe()
+            data_collection.sound_emitter, sound.wav_path = world.mp_pipe()
             world.start_in_subprocess(sound.run)
 
-        data_collection.run(ir.EventReader(world.should_stop))
+        dc_steps = iter(world.interleave(data_collection.run))
+        while not world.should_stop:
+            next(dc_steps)
 
 
-main = ir1.Config(
+main_cfg = ir1.Config(
     main,
     robot_arm=None,
     gripper=pimm.cfg.hardware.gripper.dh_gripper,
@@ -271,4 +276,4 @@ main = ir1.Config(
 )
 
 if __name__ == "__main__":
-    ir1.cli(main)
+    ir1.cli(main_cfg)

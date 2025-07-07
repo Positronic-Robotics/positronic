@@ -71,7 +71,7 @@ class SystemClock(Clock):
 
 def _bg_wrapper(run_func: ControlLoop, stop_event: mp.Event, clock: Clock, name: str):
     try:
-        for sleep_time in run_func(EventReader(stop_event), clock):
+        for sleep_time in run_func(EventReader(stop_event, clock), clock):
             time.sleep(sleep_time)
     except KeyboardInterrupt:
         # Silently handle KeyboardInterrupt in background processes
