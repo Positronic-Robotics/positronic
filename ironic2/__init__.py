@@ -1,20 +1,20 @@
-from .core import (ControlSystem, Message, NoOpEmitter, NoOpReader, SignalEmitter, SignalReader, system_clock,
-                   NoValueException, is_true)
-from .utils import map, ValueUpdated, DefaultReader
+from .core import (Clock, ControlLoop, Message, NoOpEmitter, NoOpReader, SignalEmitter, SignalReader,
+                   NoValueException)
+from .utils import map, ValueUpdated, DefaultReader, RateLimiter
 from .world import World
 
 __all__ = [
     'Message',
-    'ControlSystem',
+    'ControlLoop',
     'SignalEmitter',
     'SignalReader',
-    'system_clock',
+    'Clock',
     'NoOpEmitter',
     'NoOpReader',
     'NoValueException',
-    'is_true',
     'map',
     'ValueUpdated',
     'DefaultReader',
+    'RateLimiter',
     'World',
 ]

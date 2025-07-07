@@ -5,7 +5,7 @@ from typing import Any, ContextManager, Self
 
 import numpy as np
 
-from ironic2.core import Message, SignalEmitter, SignalReader, system_clock
+from ironic2.core import Clock, Message, SignalEmitter, SignalReader
 
 # Requirements:
 # - Writer does not know which communication channel is used
@@ -173,7 +173,7 @@ class NumpySMAdapter(SMCompliant):
 
 class ZeroCopySMEmitter(SignalEmitter):
 
-    def __init__(self, manager: mp.Manager, sm_manager: mp.managers.SharedMemoryManager):
+    def __init__(self, manager: mp.Manager, sm_manager: mp.managers.SharedMemoryManager, clock: Clock):
         self._data_type: type[SMCompliant] | None = None
         self._sm = None
         self._lock = manager.Lock()
@@ -181,9 +181,10 @@ class ZeroCopySMEmitter(SignalEmitter):
         self._out_data = None
         self._expected_buf_size = None
         self._sm_manager = sm_manager
+        self._clock = clock
 
     def emit(self, data: Any, ts: int = -1) -> bool:
-        ts = ts or system_clock()
+        ts = ts if ts >= 0 else self._clock.now_ns()
         if self._data_type is None:
             self._data_type = type(data)
             assert issubclass(self._data_type, SMCompliant), f"Data type {self._data_type} is not SMCompliant"

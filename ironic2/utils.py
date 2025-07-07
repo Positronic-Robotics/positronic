@@ -1,6 +1,7 @@
 from typing import Callable, Any
 
 from ironic2 import SignalReader, SignalEmitter, Message
+from ironic2.core import Clock
 
 
 class MapSignalReader(SignalReader):
@@ -67,3 +68,24 @@ class DefaultReader(SignalReader):
         if msg is None:
             return self.default_msg
         return msg
+
+
+class RateLimiter:
+    """Rate limiter that enforces a minimum interval between calls."""
+
+    def __init__(self, clock: Clock, *, every_sec=None, hz=None) -> None:
+        """
+        One of every_sec or hz must be provided.
+        """
+        assert (every_sec is None) ^ (hz is None), "Exactly one of every_sec or hz must be provided"
+        self._clock = clock
+        self._last_time = None
+        self._interval = every_sec if every_sec is not None else 1.0 / hz
+
+    def wait_time(self) -> float:
+        """Wait if necessary to enforce the rate limit."""
+        now = self._clock.now()
+        if self._last_time is not None and now - self._last_time < self._interval:
+            return self._interval - (now - self._last_time)
+        self._last_time = now
+        return 0.0

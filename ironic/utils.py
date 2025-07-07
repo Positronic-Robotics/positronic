@@ -433,25 +433,6 @@ class ThrottledCallback:
             self.callback()
 
 
-class RateLimiter:
-    """Rate limiter that enforces a minimum interval between calls."""
-
-    def __init__(self, *, every_sec=None, hz=None) -> None:
-        """
-        One of every_sec or hz must be provided.
-        """
-        assert (every_sec is None) ^ (hz is None), "Exactly one of every_sec or hz must be provided"
-        self._last_time = None
-        self.interval = every_sec if every_sec is not None else 1.0 / hz
-
-    def wait(self):
-        """Wait if necessary to enforce the rate limit."""
-        now = time.monotonic()
-        if self._last_time is not None and now - self._last_time < self.interval:
-            time.sleep(self.interval - (now - self._last_time))
-        self._last_time = time.monotonic()
-
-
 def last_value(port: OutputPort, initial_value: Any = NoValue) -> Callable[[], Message]:
     """Creates a property that returns the last value received from an output port.
 

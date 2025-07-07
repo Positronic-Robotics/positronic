@@ -1,4 +1,3 @@
-import time
 from typing import Any, Dict
 
 import geom
@@ -79,13 +78,14 @@ class _Tracker:
 
 # TODO: Support aborting current episode.
 class _Recorder:
-    def __init__(self, dumper: SerialDumper | None, sound_emitter: ir.SignalEmitter):
+    def __init__(self, dumper: SerialDumper | None, sound_emitter: ir.SignalEmitter, clock: ir.Clock):
         self.on = False
         self._dumper = dumper
         self._sound_emitter = sound_emitter
         self._start_wav_path = "positronic/assets/sounds/recording-has-started.wav"
         self._end_wav_path = "positronic/assets/sounds/recording-has-stopped.wav"
         self._meta = {}
+        self._clock = clock
 
     def turn_on(self):
         if self._dumper is None:
@@ -93,7 +93,7 @@ class _Recorder:
             return
 
         if not self.on:
-            self._meta['episode_start'] = ir.system_clock()
+            self._meta['episode_start'] = self._clock.now_ns()
             if self._dumper is not None:
                 self._dumper.start_episode()
                 print(f"Episode {self._dumper.episode_count} started")
@@ -143,7 +143,7 @@ class DataCollection:
         self.output_dir = output_dir
         self.fps = fps
 
-    def run(self, should_stop: ir.SignalReader) -> None:  # noqa: C901
+    def run(self, should_stop: ir.SignalReader, clock: ir.Clock) -> None:  # noqa: C901
         frame_readers = {
             camera_name: ir.ValueUpdated(ir.DefaultReader(frame_reader, None))
             for camera_name, frame_reader in self.frame_readers.items()
@@ -153,7 +153,8 @@ class DataCollection:
         tracker = _Tracker(self.operator_position)
         recorder = _Recorder(
             SerialDumper(self.output_dir, video_fps=self.fps) if self.output_dir is not None else None,
-            self.sound_emitter)
+            self.sound_emitter,
+            self._clock)
         button_handler = ButtonHandler()
 
         fps_counter = FPSCounter("Data Collection")
@@ -187,7 +188,7 @@ class DataCollection:
 
                 fps_counter.tick()
                 if not recorder.on or not any_frame_updated:
-                    time.sleep(0.001)
+                    yield 0.001
                     continue
 
                 frame_messages = {name: ir.Message(msg.data[0], msg.ts) for name, msg in frame_messages.items()}
@@ -209,7 +210,7 @@ class DataCollection:
                                 video_frames={name: frame.data['image'] for name, frame in frame_messages.items()})
 
             except ir.NoValueException:
-                time.sleep(0.001)
+                yield 0.001
                 continue
 
 
@@ -237,20 +238,20 @@ def main(robot_arm: Any | None,  # noqa: C901  Function is too complex
             raise NotImplementedError("TODO: fix video streaming to webxr, since it's currently lagging")
             webxr.frame = ir.map(data_collection.frame_readers[stream_video_to_webxr], lambda x: x['image'])
 
-        world.start(webxr.run, *[camera.run for camera in cameras.values()])
+        world.start_in_subprocess(webxr.run, *[camera.run for camera in cameras.values()])
 
         if robot_arm is not None:
             robot_arm.state, data_collection.robot_state = world.zero_copy_sm()
             robot_arm.commands, data_collection.robot_commands = world.mp_pipe(1)
-            world.start(robot_arm.run)
+            world.start_in_subprocess(robot_arm.run)
 
         if gripper is not None:
             gripper.target_grip, data_collection.target_grip_emitter = world.mp_pipe(1)
-            world.start(gripper.run)
+            world.start_in_subprocess(gripper.run)
 
         if sound is not None:
             sound.wav_path, data_collection.sound_emitter = world.mp_pipe()
-            world.start(sound.run)
+            world.start_in_subprocess(sound.run)
 
         data_collection.run(ir.EventReader(world.should_stop))
 

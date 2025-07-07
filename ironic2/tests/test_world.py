@@ -2,16 +2,32 @@ import pytest
 import multiprocessing as mp
 from queue import Empty, Full
 from unittest.mock import Mock, patch
-import time
 
-from ironic2.core import Message
-from ironic2.world import (QueueEmitter, QueueReader, EventReader, World)
+from ironic2.core import Clock, Message
+from ironic2.world import (QueueEmitter, QueueReader, EventReader, SystemClock, World)
+
+
+class MockClock(Clock):
+    """Mock clock that can be controlled for testing."""
+
+    def __init__(self, start_time: float = 0.0):
+        self._time = start_time
+
+    def now(self) -> float:
+        return self._time
+
+    def now_ns(self) -> int:
+        return int(self._time * 1e9)
+
+    def advance(self, delta: float):
+        """Advance the clock by delta seconds."""
+        self._time += delta
 
 
 def dummy_process(stop_signal):
     """A simple background process that runs until stopped."""
     while not stop_signal.read().data:
-        time.sleep(0.01)
+        yield 0.01
 
 
 class TestQueueEmitter:
@@ -20,7 +36,7 @@ class TestQueueEmitter:
     def test_queue_emitter_emit_success(self):
         """Test successful emission to queue."""
         queue = mp.Manager().Queue()
-        emitter = QueueEmitter(queue)
+        emitter = QueueEmitter(queue, SystemClock())
 
         result = emitter.emit("test_data")
         assert result is True
@@ -34,7 +50,7 @@ class TestQueueEmitter:
     def test_queue_emitter_emit_with_timestamp(self):
         """Test emission with explicit timestamp."""
         queue = mp.Manager().Queue()
-        emitter = QueueEmitter(queue)
+        emitter = QueueEmitter(queue, SystemClock())
         timestamp = 1234567890
 
         result = emitter.emit("test_data", ts=timestamp)
@@ -47,7 +63,7 @@ class TestQueueEmitter:
     def test_queue_emitter_full_queue_removes_old_message(self):
         """Test that full queue removes old message before adding new one."""
         queue = mp.Manager().Queue(maxsize=1)
-        emitter = QueueEmitter(queue)
+        emitter = QueueEmitter(queue, SystemClock())
 
         # Fill the queue
         emitter.emit("old_data")
@@ -72,7 +88,7 @@ class TestQueueEmitter:
         mock_queue.get_nowait.side_effect = Full()  # get also fails (queue behavior)
         mock_queue_class.return_value = mock_queue
 
-        emitter = QueueEmitter(mock_queue)
+        emitter = QueueEmitter(mock_queue, SystemClock())
         result = emitter.emit("test_data")
 
         assert result is False
@@ -150,7 +166,7 @@ class TestEventReader:
     def test_event_reader_unset_event(self):
         """Test reading from an unset event."""
         event = mp.Event()
-        reader = EventReader(event)
+        reader = EventReader(event, SystemClock())
 
         result = reader.read()
         assert isinstance(result, Message)
@@ -161,23 +177,27 @@ class TestEventReader:
         """Test reading from a set event."""
         event = mp.Event()
         event.set()
-        reader = EventReader(event)
+        reader = EventReader(event, SystemClock())
 
         result = reader.read()
         assert isinstance(result, Message)
         assert result.data is True
         assert isinstance(result.ts, int)
 
-    @patch('ironic2.world.system_clock')
-    def test_event_reader_uses_system_clock(self, mock_system_clock):
-        """Test that EventReader uses system_clock for timestamps."""
-        mock_system_clock.return_value = 987654321
+    def test_event_reader_uses_clock(self):
+        """Test that EventReader uses clocks for timestamps."""
+        class MockClock(Clock):
+            def now(self) -> float:
+                return 0.987654321
+
+            def now_ns(self) -> int:
+                return 987654321
+
         event = mp.Event()
-        reader = EventReader(event)
+        reader = EventReader(event, MockClock())
 
         result = reader.read()
         assert result.ts == 987654321
-        mock_system_clock.assert_called_once()
 
 
 class TestWorld:
@@ -233,7 +253,7 @@ class TestWorld:
 
         with world:
             # Start a background process
-            world.start(dummy_process)
+            world.start_in_subprocess(dummy_process)
 
             # Verify process is running
             assert len(world.background_processes) == 1
@@ -256,7 +276,7 @@ class TestWorld:
         try:
             with world:
                 # Start a background process
-                world.start(dummy_process)
+                world.start_in_subprocess(dummy_process)
 
                 # Verify process is running
                 assert len(world.background_processes) == 1
@@ -300,7 +320,7 @@ class TestIntegration:
     def test_event_reader_integration(self):
         """Test EventReader with actual multiprocessing Event."""
         event = mp.Event()
-        reader = EventReader(event)
+        reader = EventReader(event, SystemClock())
 
         # Initially event is not set
         result = reader.read()
@@ -315,3 +335,150 @@ class TestIntegration:
         event.clear()
         result = reader.read()
         assert result.data is False
+
+
+class TestWorldInterleave:
+    """Test the World.interleave method with comprehensive scenarios."""
+
+    def test_single_loop(self):
+        """Test interleaving with multiple scenarios: single loop, multiple loops, timing, and scheduling."""
+        clock = MockClock(0.0)
+
+        with World(clock) as world:
+            execution_order = []
+
+            # Test single loop
+            def single_loop(stop_reader, clock):
+                """Simple loop that runs 2 times."""
+                for i in range(2):
+                    execution_order.append(f"single_{i}")
+                    yield 0.1
+
+            sleep_times = list(world.interleave(single_loop))
+
+            # Should have 2 sleep times - one after each execution
+            assert len(sleep_times) == 2
+            assert execution_order == ["single_0", "single_1"]
+
+            # Stop event should be set after loop completes
+            assert world.should_stop
+
+    def test_two_loops(self):
+        clock = MockClock(0.0)
+        execution_order = []
+
+        with World(clock) as world:
+            def loop_a(stop_reader, clock):
+                for i in range(2):
+                    execution_order.append(f"a_{i}")
+                    yield 0.1
+
+            def loop_b(stop_reader, clock):
+                for i in range(2):
+                    execution_order.append(f"b_{i}")
+                    yield 0.1
+
+            sleep_times = list(world.interleave(loop_a, loop_b))
+
+            assert len(sleep_times) == 4
+
+            # Both loops should have executed all their steps
+            assert len([item for item in execution_order if item.startswith("a_")]) == 2
+            assert len([item for item in execution_order if item.startswith("b_")]) == 2
+
+            # Stop event should be set after first loop completes
+            assert world.should_stop
+
+    def test_no_loops(self):
+        clock = MockClock(100.0)
+
+        with World(clock) as world:
+            sleep_times = list(world.interleave())
+            assert len(sleep_times) == 0
+            assert not world.should_stop
+
+        # Test exception handling
+    def test_failing_loop(self):
+        clock = MockClock(100.0)
+        with World(clock) as world:
+            execution_order = []
+
+            def failing_loop(stop_reader, clock):
+                """Loop that raises an exception."""
+                execution_order.append("before_exception")
+                raise ValueError("Test exception")
+                yield 0.1  # This should never be reached
+
+            # The exception should be raised and stop the interleave
+            with pytest.raises(ValueError, match="Test exception"):
+                list(world.interleave(failing_loop))
+
+            assert "before_exception" in execution_order
+
+    def test_interleave_stop_behavior(self):
+        """Test stop event behavior: early stopping and completion detection."""
+        clock = MockClock(0.0)
+
+        with World(clock) as world:
+            execution_order = []
+
+            def stop_checking_loop(stop_reader, clock):
+                """Loop that checks stop signal and exits early."""
+                for i in range(10):  # Would run 10 times if not stopped
+                    if stop_reader.value:
+                        execution_order.append(f"stopped_at_{i}")
+                        return
+                    execution_order.append(f"step_{i}")
+                    yield 0.1
+
+            def short_loop(stop_reader, clock):
+                """Short loop that completes quickly."""
+                for i in range(2):
+                    execution_order.append(f"short_{i}")
+                    yield 0.1
+
+            # The short loop should complete first and set the stop event
+            sleep_times = list(world.interleave(stop_checking_loop, short_loop))
+
+            # Both loops should run some steps
+            assert len(sleep_times) >= 4
+            assert world.should_stop
+
+            # Should have some execution from both loops
+            assert any(item.startswith("step_") for item in execution_order)
+            assert any(item.startswith("short_") for item in execution_order)
+
+            # The stop_checking_loop should detect the stop event and exit early
+            assert any(item.startswith("stopped_at_") for item in execution_order)
+
+    def test_interleave_scheduling_order(self):
+        """Test that loops are scheduled in the correct order based on their sleep times."""
+        clock = MockClock(0.0)
+
+        with World(clock) as world:
+            execution_order = []
+
+            def loop_a(stop_reader, clock):
+                """Loop A with specific timing."""
+                execution_order.append("a_0")
+                yield 0.3  # Will run next at time 0.3
+                execution_order.append("a_1")
+                yield 0.1  # Will run next at time 0.4
+
+            def loop_b(stop_reader, clock):
+                """Loop B with different timing."""
+                execution_order.append("b_0")
+                yield 0.1  # Will run next at time 0.1
+                execution_order.append("b_1")
+                yield 0.1  # Will run next at time 0.2
+
+            sleep_times = list(world.interleave(loop_a, loop_b))
+
+            # Expected execution order based on scheduling:
+            # t=0.0: a_0, b_0 (both start simultaneously)
+            # t=0.1: b_1 (loop_b scheduled first)
+            # t=0.2: (no loops ready)
+            # t=0.3: a_1 (loop_a scheduled next)
+            # Should have 4 steps total
+            assert len(sleep_times) == 4
+            assert execution_order == ["a_0", "b_0", "b_1", "a_1"]

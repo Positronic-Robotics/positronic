@@ -284,7 +284,7 @@ class TestZeroCopySMAPI:
             assert np.allclose(message2.data.array, [5.5, 6.6])
             assert np.allclose(message3.data.array, [5.5, 6.6])
 
-    def test_zero_timestamp_means_no_data(self):
+    def test_negative_timestamp_means_no_data(self):
         """Test that zero timestamp is treated as no data available."""
         with World() as world:
             emitter, reader = world.zero_copy_sm()
@@ -293,12 +293,12 @@ class TestZeroCopySMAPI:
             data = NumpySMAdapter(array)
 
             # Emit with timestamp 0 (should be auto-generated to non-zero)
-            result = emitter.emit(data, ts=0)
+            result = emitter.emit(data, ts=-1)
             assert result is True
 
             message = reader.read()
             assert message is not None
-            assert message.ts != 0  # Should be auto-generated
+            assert message.ts >= 0  # Should be auto-generated
 
     def test_shared_memory_survives_data_modifications(self):
         """Test that shared memory correctly reflects live data modifications."""
