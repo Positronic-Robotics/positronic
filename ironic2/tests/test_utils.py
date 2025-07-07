@@ -1,7 +1,7 @@
 from unittest.mock import Mock
 
-from ironic2.core import Message, SignalReader
-from ironic2.utils import ValueUpdated, DefaultReader
+from ironic2.core import Message, SignalReader, Clock
+from ironic2.utils import ValueUpdated, DefaultReader, RateLimiter
 
 
 class TestValueUpdated:
@@ -134,3 +134,123 @@ class TestDefaultReader:
         assert result is not None
         assert result.data == default_data
         assert result.ts == default_ts
+
+
+class TestRateLimiter:
+    """Test the RateLimiter class."""
+
+    def test_initialisation(self):
+        """Test that providing both every_sec and hz raises AssertionError."""
+        mock_clock = Mock(spec=Clock)
+
+        RateLimiter(mock_clock, every_sec=0.5)  # Should not raise
+        RateLimiter(mock_clock, hz=10)  # Should not raise
+
+        try:
+            RateLimiter(mock_clock, every_sec=0.5, hz=10)
+            assert False, "Expected AssertionError"
+        except AssertionError as e:
+            assert "Exactly one of every_sec or hz must be provided" in str(e)
+
+        try:
+            RateLimiter(mock_clock)
+            assert False, "Expected AssertionError"
+        except AssertionError as e:
+            assert "Exactly one of every_sec or hz must be provided" in str(e)
+
+    def test_first_call_returns_zero_wait(self):
+        """Test that first call to wait_time returns 0."""
+        mock_clock = Mock(spec=Clock)
+        mock_clock.now.return_value = 100.0
+
+        rate_limiter = RateLimiter(mock_clock, every_sec=0.5)
+        wait_time = rate_limiter.wait_time()
+
+        assert wait_time == 0.0
+
+    def test_call_within_interval_returns_correct_wait_time(self):
+        """Test that calls within interval return correct wait time."""
+        mock_clock = Mock(spec=Clock)
+        rate_limiter = RateLimiter(mock_clock, every_sec=0.5)
+
+        # First call at time 100
+        mock_clock.now.return_value = 100.0
+        wait_time1 = rate_limiter.wait_time()
+        assert wait_time1 == 0.0
+
+        # Second call at time 100.2 (within 0.5 second interval)
+        mock_clock.now.return_value = 100.2
+        wait_time2 = rate_limiter.wait_time()
+        assert abs(wait_time2 - 0.3) < 1e-10  # 0.5 - (100.2 - 100.0)
+
+    def test_call_after_interval_returns_zero_wait(self):
+        """Test that calls after interval return 0 wait time."""
+        mock_clock = Mock(spec=Clock)
+        rate_limiter = RateLimiter(mock_clock, every_sec=0.5)
+
+        # First call at time 100
+        mock_clock.now.return_value = 100.0
+        wait_time1 = rate_limiter.wait_time()
+        assert wait_time1 == 0.0
+
+        # Second call at time 100.6 (after 0.5 second interval)
+        mock_clock.now.return_value = 100.6
+        wait_time2 = rate_limiter.wait_time()
+        assert wait_time2 == 0.0
+
+    def test_multiple_calls_timing_behavior(self):
+        """Test multiple calls and their timing behavior."""
+        mock_clock = Mock(spec=Clock)
+        rate_limiter = RateLimiter(mock_clock, every_sec=1.0)
+
+        # First call
+        mock_clock.now.return_value = 100.0
+        assert rate_limiter.wait_time() == 0.0
+
+        # Second call - within interval
+        mock_clock.now.return_value = 100.3
+        assert abs(rate_limiter.wait_time() - 0.7) < 1e-10
+
+        # Third call - still within interval from first call
+        mock_clock.now.return_value = 100.5
+        assert abs(rate_limiter.wait_time() - 0.5) < 1e-10
+
+        # Fourth call - after interval
+        mock_clock.now.return_value = 101.2
+        assert rate_limiter.wait_time() == 0.0
+
+    def test_hz_parameter_different_frequencies(self):
+        """Test that hz parameter works with different frequencies."""
+        mock_clock = Mock(spec=Clock)
+
+        # Test high frequency rate limiting
+        rate_limiter_high = RateLimiter(mock_clock, hz=100)
+        mock_clock.now.return_value = 0.0
+        assert rate_limiter_high.wait_time() == 0.0
+        mock_clock.now.return_value = 0.005  # Half the interval
+        assert rate_limiter_high.wait_time() > 0.0
+
+        # Test low frequency rate limiting
+        rate_limiter_low = RateLimiter(mock_clock, hz=2)
+        mock_clock.now.return_value = 10.0
+        assert rate_limiter_low.wait_time() == 0.0
+        mock_clock.now.return_value = 10.25  # Half the interval
+        assert rate_limiter_low.wait_time() > 0.0
+
+    def test_precise_timing_with_hz(self):
+        """Test precise timing behavior with hz parameter."""
+        mock_clock = Mock(spec=Clock)
+        rate_limiter = RateLimiter(mock_clock, hz=100)  # 0.01 second interval
+
+        # First call
+        mock_clock.now.return_value = 50.0
+        assert rate_limiter.wait_time() == 0.0
+
+        # Second call - just before interval
+        mock_clock.now.return_value = 50.009
+        wait_time = rate_limiter.wait_time()
+        assert abs(wait_time - 0.001) < 1e-10  # Very close to 0.001
+
+        # Third call - just after interval
+        mock_clock.now.return_value = 50.011
+        assert rate_limiter.wait_time() == 0.0

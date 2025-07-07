@@ -16,7 +16,7 @@ class OpenCVCamera:
         self.resolution = resolution
         self.fps = fps
 
-    def run(self, should_stop: ir.SignalReader):
+    def run(self, should_stop: ir.SignalReader, clock: ir.Clock):
         cap = cv2.VideoCapture(self.camera_id)
         cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.resolution[0])
         cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.resolution[1])
@@ -54,7 +54,7 @@ if __name__ == "__main__":
             self.fps = fps
             self.codec = codec
 
-        def run(self, should_stop: ir.SignalReader):
+        def run(self, should_stop: ir.SignalReader, clock: ir.Clock):
             print(f"Writing to {self.filename}")
             fps_counter = FPSCounter('VideoWriter')
             with av.open(self.filename, mode='w', format='mp4') as container:

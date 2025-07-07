@@ -1,16 +1,7 @@
 from abc import ABC, abstractmethod
 from contextlib import nullcontext
 from dataclasses import dataclass
-import time
 from typing import Any, Callable, ContextManager, Iterator, final
-
-# Internal sentinel object to distinguish between no default and explicit None default
-_RAISE_EXCEPTION_SENTINEL = object()
-
-
-def system_clock() -> int:
-    """Get current timestamp in nanoseconds."""
-    return time.monotonic_ns()
 
 
 class NoValueException(Exception):
@@ -29,17 +20,16 @@ class Message:
     data: Any
     ts: int = -1  # -1 means no value
 
-    def __post_init__(self):
-        if self.ts == -1:
-            self.ts = system_clock()
-
 
 class SignalEmitter(ABC):
     """Write a signal value. All implementations must be non-blocking."""
 
     @abstractmethod
     def emit(self, data: Any, ts: int = -1) -> bool:
-        """Emit a message with the given data and timestamp. Returns True if successful."""
+        """
+        Emit a message with the given data and timestamp. Returns True if successful.
+        Must overwrite ts with current clock time if negative.
+        """
         pass
 
     def zc_lock(self) -> ContextManager[None]:
@@ -85,11 +75,20 @@ class NoOpReader(SignalReader):
         return None
 
 
-def is_true(signal: SignalReader) -> bool:
-    value = signal.read()
-    if value is None:
-        return False
-    return value.data is True
+class Clock(ABC):
+    """A clock is a source of timestamps. It can be system clock, or a more precise clock."""
+
+    @abstractmethod
+    def now(self) -> float:
+        """Get current timestamp in seconds."""
+        pass
+
+    def now_ns(self) -> int:
+        """Get current timestamp in nanoseconds."""
+        return int(self.now() * 1e9)
 
 
-ControlLoop = Callable[[SignalReader], Iterator[float]]
+# In Ironic a control loop is a main abstraction. This is a code that manages a particular piece of robotic system.
+# It can be camera, sensor, gripper, robotic arm, inference loop, etc. A robotic system then is a collection of
+# control loops that communicate with each other.
+ControlLoop = Callable[[SignalReader, Clock], Iterator[float]]

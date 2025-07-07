@@ -4,7 +4,6 @@ from typing import Iterator
 import franky
 
 import ironic2 as ir
-from ironic.utils import RateLimiter
 
 
 class Gripper:
@@ -28,13 +27,13 @@ class Gripper:
         self._close_threshold = close_threshold
         self._open_threshold = open_threshold
 
-    def run(self, should_stop: ir.SignalReader) -> Iterator[float]:
+    def run(self, should_stop: ir.SignalReader, clock: ir.Clock) -> Iterator[float]:
         gripper = franky.Gripper(self._ip)
         print(f"Connected to gripper at {self._ip}, homing...")
         gripper.homing()
 
         is_open = True
-        limiter = RateLimiter(hz=100)
+        limiter = ir.RateLimiter(clock, hz=100)
         force = ir.DefaultReader(self.force, 5.0)  # N
         speed = ir.DefaultReader(self.speed, 0.05)  # m/s
 

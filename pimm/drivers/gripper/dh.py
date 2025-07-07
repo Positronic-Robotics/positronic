@@ -16,7 +16,7 @@ class DHGripper:
     def __init__(self, port: str):
         self.port = port
 
-    def run(self, should_stop: ir.SignalReader):
+    def run(self, should_stop: ir.SignalReader, clock: ir.Clock):
         client = ModbusClient.ModbusSerialClient(
             port=self.port,
             baudrate=115200,
@@ -36,14 +36,14 @@ class DHGripper:
         if _state_g() != 1 or _state_r() != 1:
             client.write_register(0x100, 0xa5, slave=1)
             while _state_g() != 1 and _state_r() != 1:
-                time.sleep(0.1)
+                yield 0.1
 
         target_grip = ir.DefaultReader(self.target_grip, 0)
         # TODO: We must translate these to physical units (N and m/s)
         force = ir.DefaultReader(self.force, 100)
         speed = ir.DefaultReader(self.speed, 100)
 
-        while not ir.is_true(should_stop):
+        while not should_stop.value:
             # Update gripper based on shared values
             try:
                 width = round((1 - max(0, min(target_grip.value, 1))) * 1000)

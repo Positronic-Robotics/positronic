@@ -17,7 +17,7 @@ class LinuxVideo:
         self.fps = fps
         self.pixel_format = pixel_format
 
-    def run(self, should_stop: ir.SignalReader):
+    def run(self, should_stop: ir.SignalReader, clock: ir.Clock):
         codec_mapping = {
             PixelFormat.H264: 'h264',
             PixelFormat.HEVC: 'hevc',
@@ -41,7 +41,7 @@ class LinuxVideo:
         device.set_fps(device.info.buffers[0], self.fps)
 
         for frame in device:
-            if ir.is_true(should_stop):
+            if should_stop.value:
                 break
 
             data = np.frombuffer(frame.data, dtype=np.uint8)
