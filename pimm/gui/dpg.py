@@ -57,7 +57,6 @@ class DearpyguiUi:
         dpg.setup_dearpygui()
         dpg.show_viewport(maximized=True)
 
-
     def run(self, should_stop: ir.SignalReader, clock: ir.Clock):
         self.init()
         fps_counter = FPSCounter("UI")

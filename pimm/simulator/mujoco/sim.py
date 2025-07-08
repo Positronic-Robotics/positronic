@@ -132,9 +132,8 @@ class MujocoFranka:
             elif isinstance(command, JointMove):
                 self.set_actuator_values(command.positions)
 
-            # TODO: get dq
             # TODO: still a copy here
-            state.encode(self.joints, np.zeros(7), self.ee_pose)
+            state.encode(self.q, self.dq, self.ee_pose)
 
             self.state.emit(state)
             yield 0.0
@@ -155,8 +154,12 @@ class MujocoFranka:
         return None
 
     @property
-    def joints(self) -> np.ndarray:
+    def q(self) -> np.ndarray:
         return np.array([self.sim.data.qpos[i] for i in self.joint_qpos_ids])
+
+    @property
+    def dq(self) -> np.ndarray:
+        return np.array([self.sim.data.qvel[i] for i in self.joint_qpos_ids])
 
     @property
     def ee_pose(self) -> geom.Transform3D:
