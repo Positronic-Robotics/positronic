@@ -284,22 +284,20 @@ def main_sim(
 ):
 
     sim = MujocoSim(mujoco_model_path, loaders)
-
     robot_arm = MujocoFranka(sim, suffix='_ph')
     cameras = {
         'handcam_left': MujocoCamera(sim.model, sim.data, 'handcam_left_ph', (320, 240)),
         'handcam_right': MujocoCamera(sim.model, sim.data, 'handcam_right_ph', (320, 240)),
     }
     gripper = MujocoGripper(sim, 'actuator8_ph')
-
     gui = DearpyguiUi()
-
 
     with ir.World(clock=sim) as world:
         data_collection = DataCollection(operator_position, output_dir, fps)
         cameras = cameras or {}
         for camera_name, camera in cameras.items():
             camera.frame, data_collection.frame_readers[camera_name] = world.mp_pipe()
+            # TODO: currently using single Reader in two processes will result in a race condition
             gui.cameras[camera_name] = data_collection.frame_readers[camera_name]
 
         webxr.controller_positions, data_collection.controller_positions_reader = world.mp_pipe()

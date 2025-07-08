@@ -5,9 +5,6 @@ import numpy as np
 
 import geom
 
-from pimm.drivers.roboarm.command import CartesianMove, Reset
-
-
 
 class RobotStatus(Enum):
     """Different statuses that the robot can be in."""

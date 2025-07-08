@@ -51,7 +51,6 @@ class MujocoSim(ir.Clock):
         target_time = self.data.time + duration
         while self.data.time < target_time:
             mj.mj_step(self.model, self.data)
-            #print(self.data.ctrl)
 
 
 class MujocoCamera:

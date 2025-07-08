@@ -18,6 +18,5 @@ __all__ = [
     'DefaultReader',
     'RateLimiter',
     'World',
-    
     'shared_memory',
 ]
