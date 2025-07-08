@@ -208,33 +208,28 @@ class World:
             - Number of yields equals number of loop executions
         """
         start = self._clock.now()
-        ssr = self.should_stop_reader()
-        step_generators = [iter(loop(ssr, self._clock)) for loop in loops]
-        start_time = self._clock.now_ns()
-        priority_queue = [(start_time, gen_idx) for gen_idx in range(len(step_generators))]
-        heapq.heapify(priority_queue)
+        counter = 0
+        priority_queue = []
+
+        # Initialize all loops with the same start time and unique counters
+        for loop in loops:
+            heapq.heappush(priority_queue, (start, counter, iter(loop(self.should_stop_reader(), self._clock))))
+            counter += 1
 
         while priority_queue:
-            time = self._clock.now_ns()
-            generator_idxs = []
-            # Pop all generators that are ready to execute, and schedule them for the next execution
-            # this guarantees at least some progress for all generators, even if some of them are busy-waiting
-            while priority_queue and priority_queue[0][0] <= time:
-                _, i = heapq.heappop(priority_queue)
-                generator_idxs.append(i)
+            _, _, loop = heapq.heappop(priority_queue)
 
-            for i in generator_idxs:
-                try:
-                    time_to_sleep = next(step_generators[i]) or 0
-                    next_execution_time = self._clock.now_ns() + int(time_to_sleep * 1e9)
-                    heapq.heappush(priority_queue, (next_execution_time, i))
-                except StopIteration:
-                    break
+            try:
+                sleep_time = next(loop)
+                heapq.heappush(priority_queue, (self._clock.now() + sleep_time, counter, loop))
+                counter += 1
 
-            next_task_time = priority_queue[0][0] if priority_queue else 0
-            time_to_sleep = max(next_task_time - self._clock.now_ns(), 0)
+                if priority_queue:  # Yield the wait time until the next execution should occur
+                    yield max(0, priority_queue[0][0] - self._clock.now())
 
-            yield time_to_sleep
+            except StopIteration:
+                # Don't add the loop back and don't yield after a loop completes - it is done
+                self._stop_event.set()
 
     def run(self, *loops: ControlLoop):
         for sleep_time in self.interleave(*loops):
