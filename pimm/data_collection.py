@@ -1,4 +1,7 @@
+import time
 from typing import Any, Dict
+
+from mujoco import Sequence
 
 import geom
 import ironic as ir1
@@ -9,6 +12,9 @@ from pimm.drivers.sound import SoundSystem
 from pimm.drivers.camera.linux_video import LinuxVideo
 from pimm.drivers.gripper.dh import DHGripper
 from pimm.drivers.webxr import WebXR
+from pimm.gui.dpg import DearpyguiUi
+from pimm.simulator.mujoco.sim import MujocoCamera, MujocoFranka, MujocoGripper, MujocoSim
+from positronic.simulator.mujoco.scene.transforms import MujocoSceneTransform
 from positronic.tools.buttons import ButtonHandler
 from positronic.tools.dataset_dumper import SerialDumper
 
@@ -16,6 +22,7 @@ import pimm.cfg.hardware.gripper
 import pimm.cfg.webxr
 import pimm.cfg.hardware.camera
 import pimm.cfg.sound
+import pimm.cfg.simulator
 
 
 def _parse_buttons(buttons: ir.Message | None, button_handler: ButtonHandler):
@@ -170,7 +177,7 @@ class DataCollection:
                         tracker.turn_off()
                     else:
                         with self.robot_state.zc_lock():
-                            tracker.turn_on(self.robot_state.value.position)
+                            tracker.turn_on(self.robot_state.value.ee_pose)
                 elif button_handler.just_pressed('right_stick') and not tracker.umi_mode:
                     print("Resetting robot")
                     recorder.turn_off()
@@ -182,6 +189,7 @@ class DataCollection:
 
                 controller_positions, controller_positions_updated = controller_positions_reader.value
                 target_robot_pos = tracker.update(controller_positions['right'])
+
                 if tracker.on and controller_positions_updated:  # Don't spam the robot with commands.
                     self.robot_commands.emit(roboarm.command.CartesianMove(target_robot_pos))
 
@@ -190,6 +198,7 @@ class DataCollection:
                 any_frame_updated = any(msg.data[1] and msg.data[0] is not None for msg in frame_messages.values())
 
                 fps_counter.tick()
+
                 if not recorder.on or not any_frame_updated:
                     yield 0.001
                     continue
@@ -211,6 +220,7 @@ class DataCollection:
 
                 recorder.update(data=ep_dict,
                                 video_frames={name: frame.data['image'] for name, frame in frame_messages.items()})
+                yield 0.001
 
             except ir.NoValueException:
                 yield 0.001
@@ -245,11 +255,11 @@ def main(robot_arm: Any | None,  # noqa: C901  Function is too complex
 
         if robot_arm is not None:
             robot_arm.state, data_collection.robot_state = world.zero_copy_sm()
-            robot_arm.commands, data_collection.robot_commands = world.mp_pipe(1)
+            data_collection.robot_commands, robot_arm.commands = world.mp_pipe(1)
             world.start_in_subprocess(robot_arm.run)
 
         if gripper is not None:
-            gripper.target_grip, data_collection.target_grip_emitter = world.mp_pipe(1)
+            data_collection.target_grip_emitter, gripper.target_grip = world.mp_pipe(1)
             world.start_in_subprocess(gripper.run)
 
         if sound is not None:
@@ -257,8 +267,74 @@ def main(robot_arm: Any | None,  # noqa: C901  Function is too complex
             world.start_in_subprocess(sound.run)
 
         dc_steps = iter(world.interleave(data_collection.run))
+        # TODO: add time sleep
         while not world.should_stop:
             next(dc_steps)
+
+
+def main_sim(
+        mujoco_model_path: str,
+        webxr: WebXR,
+        sound: SoundSystem | None = None,
+        loaders: Sequence[MujocoSceneTransform] = (),
+        output_dir: str | None = None,
+        fps: int = 30,
+        stream_video_to_webxr: str | None = None,
+        operator_position: geom.Transform3D = FRANKA_FRONT_TRANSFORM,
+):
+
+    sim = MujocoSim(mujoco_model_path, loaders)
+
+    robot_arm = MujocoFranka(sim, suffix='_ph')
+    cameras = {
+        'handcam_left': MujocoCamera(sim.model, sim.data, 'handcam_left_ph', (320, 240)),
+        'handcam_right': MujocoCamera(sim.model, sim.data, 'handcam_right_ph', (320, 240)),
+    }
+    gripper = MujocoGripper(sim, 'actuator8_ph')
+
+    gui = DearpyguiUi()
+
+
+    with ir.World(clock=sim) as world:
+        data_collection = DataCollection(operator_position, output_dir, fps)
+        cameras = cameras or {}
+        for camera_name, camera in cameras.items():
+            camera.frame, data_collection.frame_readers[camera_name] = world.mp_pipe()
+            gui.cameras[camera_name] = data_collection.frame_readers[camera_name]
+
+        webxr.controller_positions, data_collection.controller_positions_reader = world.mp_pipe()
+        webxr.buttons, data_collection.buttons_reader = world.mp_pipe()
+
+        world.start_in_subprocess(webxr.run, gui.run)
+
+        robot_arm.state, data_collection.robot_state = world.mp_pipe()
+        data_collection.robot_commands, robot_arm.commands = world.mp_pipe(1)
+
+        data_collection.target_grip_emitter, gripper.target_grip = world.mp_pipe(1)
+
+        if sound is not None:
+            data_collection.sound_emitter, sound.wav_path = world.mp_pipe()
+            world.start_in_subprocess(sound.run)
+
+        sim_iter = world.interleave(
+            sim.run,
+            *[camera.run for camera in cameras.values()],
+            robot_arm.run,
+            gripper.run,
+            data_collection.run,
+        )
+
+        sim_iter = iter(sim_iter)
+
+        start_time = ir.world.SystemClock().now_ns()
+        sim_start_time = sim.now_ns()
+
+        while not world.should_stop:
+            time_since_start = ir.world.SystemClock().now_ns() - start_time
+            if sim.now_ns() < sim_start_time + time_since_start:
+                next(sim_iter)
+            else:
+                time.sleep(0.001)
 
 
 main_cfg = ir1.Config(
@@ -275,5 +351,15 @@ main_cfg = ir1.Config(
     operator_position=FRANKA_FRONT_TRANSFORM,
 )
 
+main_sim_cfg = ir1.Config(
+    main_sim,
+    mujoco_model_path="positronic/assets/mujoco/franka_table.xml",
+    webxr=pimm.cfg.webxr.webxr,
+    sound=pimm.cfg.sound.sound,
+    operator_position=FRANKA_BACK_TRANSFORM,
+    loaders=pimm.cfg.simulator.stack_cubes_loaders,
+)
+
 if __name__ == "__main__":
-    ir1.cli(main_cfg)
+    # TODO: add ability to specify multiple targets in CLI
+    ir1.cli(main_sim_cfg)

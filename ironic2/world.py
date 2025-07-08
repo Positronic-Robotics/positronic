@@ -1,5 +1,6 @@
 """Implementation of multiprocessing channels."""
 
+from contextlib import nullcontext
 import heapq
 import logging
 import multiprocessing as mp
@@ -9,7 +10,7 @@ import sys
 from queue import Empty, Full
 import time
 import traceback
-from typing import Any, Iterator, List, Tuple
+from typing import Any, ContextManager, Iterator, List, Tuple
 
 from .core import Clock, ControlLoop, Message, SignalEmitter, SignalReader
 from .shared_memory import ZeroCopySMEmitter, ZeroCopySMReader
@@ -35,6 +36,9 @@ class QueueEmitter(SignalEmitter):
             except (Empty, Full):
                 return False
 
+    def zc_lock(self) -> ContextManager[None]:
+        return nullcontext()
+
 
 class QueueReader(SignalReader):
 
@@ -48,6 +52,9 @@ class QueueReader(SignalReader):
         except Empty:
             pass
         return self._last_value
+
+    def zc_lock(self) -> ContextManager[None]:
+        return nullcontext()
 
 
 class EventReader(SignalReader):
@@ -84,6 +91,7 @@ def _bg_wrapper(run_func: ControlLoop, stop_event: mp.Event, clock: Clock, name:
         print(f"{'='*60}\n", file=sys.stderr)
         logging.error(f"Error in control system {name}:\n{traceback.format_exc()}")
     finally:
+        print(f"Stopping background process by {name}", flush=True)
         stop_event.set()
 
 
@@ -162,8 +170,9 @@ class World:
                 name = f"{bg_loop.__self__.__class__.__name__}.{bg_loop.__name__}"
             else:
                 name = getattr(bg_loop, '__name__', 'anonymous')
+            # TODO: now we allow only real clock, change clock to a Emitter?
             p = mp.Process(target=_bg_wrapper,
-                           args=(bg_loop, self._stop_event, self._clock, name),
+                           args=(bg_loop, self._stop_event, SystemClock(), name),
                            daemon=True,
                            name=name)
             p.start()
@@ -200,28 +209,32 @@ class World:
         """
         start = self._clock.now()
         ssr = self.should_stop_reader()
-        counter = 0
-        priority_queue = []
-
-        # Initialize all loops with the same start time and unique counters
-        for loop in loops:
-            heapq.heappush(priority_queue, (start, counter, iter(loop(ssr, self._clock))))
-            counter += 1
+        step_generators = [iter(loop(ssr, self._clock)) for loop in loops]
+        start_time = self._clock.now_ns()
+        priority_queue = [(start_time, gen_idx) for gen_idx in range(len(step_generators))]
+        heapq.heapify(priority_queue)
 
         while priority_queue:
-            next_time, _, loop = heapq.heappop(priority_queue)
+            time = self._clock.now_ns()
+            generator_idxs = []
+            # Pop all generators that are ready to execute, and schedule them for the next execution
+            # this guarantees at least some progress for all generators, even if some of them are busy-waiting
+            while priority_queue and priority_queue[0][0] <= time:
+                _, i = heapq.heappop(priority_queue)
+                generator_idxs.append(i)
 
-            try:
-                sleep_time = next(loop)
-                heapq.heappush(priority_queue, (next_time + sleep_time, counter, loop))
-                counter += 1
+            for i in generator_idxs:
+                try:
+                    time_to_sleep = next(step_generators[i]) or 0
+                    next_execution_time = self._clock.now_ns() + int(time_to_sleep * 1e9)
+                    heapq.heappush(priority_queue, (next_execution_time, i))
+                except StopIteration:
+                    break
 
-                if priority_queue:   # Yield the wait time until the next execution should occur
-                    yield max(0, priority_queue[0][0] - self._clock.now())
+            next_task_time = priority_queue[0][0] if priority_queue else 0
+            time_to_sleep = max(next_task_time - self._clock.now_ns(), 0)
 
-            except StopIteration:
-                # Don't add the loop back and don't yield after a loop completes - it is done
-                self._stop_event.set()
+            yield time_to_sleep
 
     def run(self, *loops: ControlLoop):
         for sleep_time in self.interleave(*loops):
