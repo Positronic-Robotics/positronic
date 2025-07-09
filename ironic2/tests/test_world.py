@@ -294,6 +294,26 @@ class TestWorld:
         # We can't check is_alive() after exit because processes are closed
         assert len(world.background_processes) == 1
 
+    def test_world_mp_pipe_multiple_readers_created(self):
+        """Test that World.mp_pipe can create multiple readers."""
+        world = World()
+        emitter, readers = world.mp_one_to_many_pipe(n_readers=2)
+        assert len(readers) == 2
+        assert isinstance(readers[0], QueueReader)
+        assert isinstance(readers[1], QueueReader)
+
+    def test_world_mp_pipe_multiple_readers_message_received_by_all_readers(self):
+        """Test that multiple readers can read from the same queue."""
+        world = World()
+        emitter, readers = world.mp_one_to_many_pipe(n_readers=2)
+
+        messages = ["test_message_1", "test_message_2", "test_message_3"]
+        for message in messages:
+            success = emitter.emit(message)
+            assert success
+            assert readers[0].read().data == message
+            assert readers[1].read().data == message
+
 
 # Integration tests
 class TestIntegration:
@@ -482,3 +502,31 @@ class TestWorldInterleave:
             # Should have 4 steps total
             assert len(sleep_times) == 4
             assert execution_order == ["a_0", "b_0", "b_1", "a_1"]
+
+    def test_interleave_introducing_new_loop_not_affect_order_of_existing_loops(self):
+        clock = MockClock(0.0)
+        execution_order = []
+
+        def loop_a(stop_reader, clock):
+            for i in range(5):
+                execution_order.append(f"a_{i}")
+                yield 0.1
+
+        def loop_b(stop_reader, clock):
+            for i in range(6):
+                execution_order.append(f"b_{i}")
+            yield 0.2
+
+        def loop_c(stop_reader, clock):
+            for i in range(7):
+                execution_order.append(f"c_{i}")
+                yield 0.3
+
+        with World(clock) as world:
+            list(world.interleave(loop_a, loop_b))
+            original_order = execution_order.copy()
+            execution_order.clear()
+            list(world.interleave(loop_c, loop_a, loop_c, loop_b, loop_c))
+
+        execution_order = [item for item in execution_order if not item.startswith('c_')]
+        assert execution_order == original_order

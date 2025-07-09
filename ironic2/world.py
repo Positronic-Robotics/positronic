@@ -9,7 +9,7 @@ import sys
 from queue import Empty, Full
 import time
 import traceback
-from typing import Any, Iterator, List, Tuple
+from typing import Any, Iterator, List, Sequence, Tuple
 
 from .core import Clock, ControlLoop, Message, SignalEmitter, SignalReader
 from .shared_memory import ZeroCopySMEmitter, ZeroCopySMReader
@@ -34,6 +34,22 @@ class QueueEmitter(SignalEmitter):
                 return True
             except (Empty, Full):
                 return False
+
+
+class BroadcastEmitter(SignalEmitter):
+    def __init__(self, emitters: Sequence[SignalEmitter]):
+        """Emitter that broadcasts messages to all emmiters.
+
+        Args:
+            emitters: (Sequence[SignalEmitter]) Emitters to broadcast to.
+        """
+        self._emitters = emitters
+
+    def emit(self, data: Any, ts: int = -1) -> bool:
+        any_failed = False
+        for emitter in self._emitters:
+            any_failed = any_failed or not emitter.emit(data, ts)
+        return not any_failed
 
 
 class QueueReader(SignalReader):
@@ -140,7 +156,26 @@ class World:
             Tuple of (emitter, reader) for inter-process communication
         """
         q = self._manager.Queue(maxsize=maxsize)
+
         return QueueEmitter(q, self._clock), QueueReader(q)
+
+    def mp_one_to_many_pipe(self, n_readers: int, maxsize: int = 0) -> Tuple[SignalEmitter, Sequence[SignalReader]]:
+        """Create a single-emitter-many-readers communication channel.
+
+        Args:
+            n_readers: (int) Number of readers to create
+            maxsize: (int) Maximum queue size (0 for unlimited)
+
+        Returns:
+            Tuple of (emitter, readers) for single-emitter-many-readers communication
+        """
+        readers = []
+        emitters = []
+        for _ in range(n_readers):
+            emiter, reader = self.mp_pipe(maxsize)
+            readers.append(reader)
+            emitters.append(emiter)
+        return BroadcastEmitter(emitters), readers
 
     def zero_copy_sm(self) -> Tuple[SignalEmitter, SignalReader]:
         """Create a zero-copy shared memory channel for efficient data sharing.
