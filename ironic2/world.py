@@ -1,6 +1,5 @@
 """Implementation of multiprocessing channels."""
 
-from contextlib import nullcontext
 import heapq
 import logging
 import multiprocessing as mp
@@ -10,7 +9,7 @@ import sys
 from queue import Empty, Full
 import time
 import traceback
-from typing import Any, ContextManager, Iterator, List, Tuple
+from typing import Any, Iterator, List, Tuple
 
 from .core import Clock, ControlLoop, Message, SignalEmitter, SignalReader
 from .shared_memory import ZeroCopySMEmitter, ZeroCopySMReader
@@ -36,9 +35,6 @@ class QueueEmitter(SignalEmitter):
             except (Empty, Full):
                 return False
 
-    def zc_lock(self) -> ContextManager[None]:
-        return nullcontext()
-
 
 class QueueReader(SignalReader):
 
@@ -52,9 +48,6 @@ class QueueReader(SignalReader):
         except Empty:
             pass
         return self._last_value
-
-    def zc_lock(self) -> ContextManager[None]:
-        return nullcontext()
 
 
 class EventReader(SignalReader):

@@ -6,7 +6,6 @@ from mujoco import Sequence
 import geom
 import ironic as ir1
 import ironic2 as ir
-from ironic.utils import FPSCounter
 from pimm.drivers import roboarm
 from pimm.drivers.sound import SoundSystem
 from pimm.drivers.camera.linux_video import LinuxVideo
@@ -93,7 +92,7 @@ class _Recorder:
         self._end_wav_path = "positronic/assets/sounds/recording-has-stopped.wav"
         self._meta = {}
         self._clock = clock
-        self._fps_counter = FPSCounter("Recorder")
+        self._fps_counter = ir.utils.FPSCounter("Recorder")
 
     def turn_on(self):
         if self._dumper is None:
@@ -166,7 +165,7 @@ class DataCollection:
             clock)
         button_handler = ButtonHandler()
 
-        fps_counter = FPSCounter("Data Collection")
+        fps_counter = ir.utils.FPSCounter("Data Collection")
         while not should_stop.value:
             try:
                 _parse_buttons(self.buttons_reader.value, button_handler)
@@ -289,7 +288,7 @@ def main_sim(
         'handcam_left': MujocoCamera(sim.model, sim.data, 'handcam_left_ph', (320, 240)),
         'handcam_right': MujocoCamera(sim.model, sim.data, 'handcam_right_ph', (320, 240)),
     }
-    gripper = MujocoGripper(sim, 'actuator8_ph')
+    gripper = MujocoGripper(sim, actuator_name='actuator8_ph', joint_name='finger_joint1_ph')
     gui = DearpyguiUi()
 
     with ir.World(clock=sim) as world:

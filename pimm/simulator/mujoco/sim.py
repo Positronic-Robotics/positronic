@@ -6,10 +6,9 @@ import mujoco as mj
 from dm_control import mujoco as dm_mujoco
 from dm_control.utils import inverse_kinematics as ik
 import numpy as np
-from ironic.utils import FPSCounter
 
 from pimm.drivers.roboarm import RobotStatus, State
-from pimm.drivers.roboarm.command import CartesianMove, JointMove
+from pimm.drivers.roboarm import command as roboarm_command
 from positronic.simulator.mujoco.scene.transforms import MujocoSceneTransform, load_model_from_spec_file
 
 
@@ -23,11 +22,12 @@ class MujocoSim(ir.Clock):
     def __init__(self, mujoco_model_path: str, loaders: Sequence[MujocoSceneTransform] = ()):
         self.model, self.metadata = load_from_xml_path(mujoco_model_path, loaders)
         self.data = mj.MjData(self.model)
-        self.fps_counter = FPSCounter("MujocoSim")
-        self.initial_ctrl = self.metadata.get('initial_ctrl')
+        self.fps_counter = ir.utils.FPSCounter("MujocoSim")
+        self.initial_ctrl = [float(x) for x in self.metadata.get('initial_ctrl').split(',')]
         self.warmup_steps = 1000
 
     def run(self, should_stop: ir.SignalReader, clock: ir.Clock):
+        self.reset()
         while not should_stop.value:
             self.step()
             self.fps_counter.tick()
@@ -35,9 +35,6 @@ class MujocoSim(ir.Clock):
 
     def now(self) -> float:
         return self.data.time
-
-    def now_ns(self) -> int:
-        return int(self.data.time * 1e9)
 
     def reset(self):
         mj.mj_resetData(self.model, self.data)
@@ -63,7 +60,7 @@ class MujocoCamera:
         self.render_resolution = resolution
         self.camera_name = camera_name
         self.fps = fps
-        self.fps_counter = FPSCounter("MujocoCamera")
+        self.fps_counter = ir.utils.FPSCounter("MujocoCamera")
 
     def run(self, should_stop: ir.SignalReader, clock: ir.Clock):
         renderer = mj.Renderer(self.model, height=self.render_resolution[1], width=self.render_resolution[0])
@@ -125,12 +122,20 @@ class MujocoFranka:
 
         while not should_stop.value:
             command = self.commands.value
-            if isinstance(command, CartesianMove):
-                q = self._recalculate_ik(command.pose)
-                if q is not None:
-                    self.set_actuator_values(q)
-            elif isinstance(command, JointMove):
-                self.set_actuator_values(command.positions)
+            match command:
+                case roboarm_command.CartesianMove():
+                    q = self._recalculate_ik(command.pose)
+                    if q is not None:
+                        self.set_actuator_values(q)
+                case roboarm_command.JointMove():
+                    self.set_actuator_values(command.positions)
+                case roboarm_command.Reset():
+                    # TODO: it's not clear how to make reset, because interleave breakes if time goes backwards
+                    pass
+                case None:
+                    pass
+                case _:
+                    raise ValueError(f"Unknown command type: {type(command)}")
 
             # TODO: still a copy here
             state.encode(self.q, self.dq, self.ee_pose)
@@ -181,9 +186,10 @@ class MujocoGripper:
     target_grip: ir.SignalReader = ir.NoOpReader()
     grip: ir.SignalEmitter = ir.NoOpEmitter()
 
-    def __init__(self, sim: MujocoSim, actuator_name: str):
+    def __init__(self, sim: MujocoSim, actuator_name: str, joint_name: str):
         self.sim = sim
         self.actuator_name = actuator_name
+        self.joint_name = joint_name
 
     def run(self, should_stop: ir.SignalReader, clock: ir.Clock):
         self.target_grip = ir.DefaultReader(self.target_grip, 0)
@@ -192,6 +198,5 @@ class MujocoGripper:
             target_grip = self.target_grip.value
             self.sim.data.actuator(self.actuator_name).ctrl = target_grip
 
-            # TODO: this is wrong but follows previous implementation. We need to get proper qpos instead of ctrl
-            self.grip.emit(self.sim.data.actuator(self.actuator_name).ctrl)
+            self.grip.emit(self.sim.data.joint(self.joint_name).qpos.item())
             yield 0.0
