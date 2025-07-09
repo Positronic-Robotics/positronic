@@ -22,7 +22,7 @@ class MujocoSim(ir.Clock):
     def __init__(self, mujoco_model_path: str, loaders: Sequence[MujocoSceneTransform] = ()):
         self.model, self.metadata = load_from_xml_path(mujoco_model_path, loaders)
         self.data = mj.MjData(self.model)
-        self.fps_counter = ir.utils.FPSCounter("MujocoSim")
+        self.fps_counter = ir.utils.RateCounter("MujocoSim")
         self.initial_ctrl = [float(x) for x in self.metadata.get('initial_ctrl').split(',')]
         self.warmup_steps = 1000
 
@@ -60,7 +60,7 @@ class MujocoCamera:
         self.render_resolution = resolution
         self.camera_name = camera_name
         self.fps = fps
-        self.fps_counter = ir.utils.FPSCounter("MujocoCamera")
+        self.fps_counter = ir.utils.RateCounter("MujocoCamera")
 
     def run(self, should_stop: ir.SignalReader, clock: ir.Clock):
         renderer = mj.Renderer(self.model, height=self.render_resolution[1], width=self.render_resolution[0])
@@ -104,9 +104,13 @@ class MujocoFrankaState(State, ir.shared_memory.NumpySMAdapter):
 
 
 class MujocoFranka:
+
     commands: ir.SignalReader = ir.NoOpReader()
 
     state: ir.SignalEmitter = ir.NoOpEmitter()
+
+    class _NoCommandsYet:
+        pass
 
     def __init__(self, sim: MujocoSim, suffix: str = ''):
         self.sim = sim
@@ -117,25 +121,26 @@ class MujocoFranka:
         self.joint_qpos_ids = [self.sim.model.joint(joint).qposadr.item() for joint in self.joint_names]
 
     def run(self, should_stop: ir.SignalReader, clock: ir.Clock):
-        self.commands = ir.DefaultReader(self.commands, None)
+        commands = ir.ValueUpdated(ir.DefaultReader(self.commands, self._NoCommandsYet()))
         state = MujocoFrankaState()
 
         while not should_stop.value:
-            command = self.commands.value
-            match command:
-                case roboarm_command.CartesianMove():
-                    q = self._recalculate_ik(command.pose)
-                    if q is not None:
-                        self.set_actuator_values(q)
-                case roboarm_command.JointMove():
-                    self.set_actuator_values(command.positions)
-                case roboarm_command.Reset():
-                    # TODO: it's not clear how to make reset, because interleave breakes if time goes backwards
-                    pass
-                case None:
-                    pass
-                case _:
-                    raise ValueError(f"Unknown command type: {type(command)}")
+            command, is_updated = commands.value
+            if is_updated:
+                match command:
+                    case roboarm_command.CartesianMove():
+                        q = self._recalculate_ik(command.pose)
+                        if q is not None:
+                            self.set_actuator_values(q)
+                    case roboarm_command.JointMove():
+                        self.set_actuator_values(command.positions)
+                    case roboarm_command.Reset():
+                        # TODO: it's not clear how to make reset, because interleave breakes if time goes backwards
+                        pass
+                    case self._NoCommandsYet():
+                        pass
+                    case _:
+                        raise ValueError(f"Unknown command type: {type(command)}")
 
             # TODO: still a copy here
             state.encode(self.q, self.dq, self.ee_pose)

@@ -92,7 +92,7 @@ class _Recorder:
         self._end_wav_path = "positronic/assets/sounds/recording-has-stopped.wav"
         self._meta = {}
         self._clock = clock
-        self._fps_counter = ir.utils.FPSCounter("Recorder")
+        self._fps_counter = ir.utils.RateCounter("Recorder")
 
     def turn_on(self):
         if self._dumper is None:
@@ -165,7 +165,7 @@ class DataCollection:
             clock)
         button_handler = ButtonHandler()
 
-        fps_counter = ir.utils.FPSCounter("Data Collection")
+        fps_counter = ir.utils.RateCounter("Data Collection")
         while not should_stop.value:
             try:
                 _parse_buttons(self.buttons_reader.value, button_handler)
@@ -266,9 +266,12 @@ def main(robot_arm: Any | None,  # noqa: C901  Function is too complex
             world.start_in_subprocess(sound.run)
 
         dc_steps = iter(world.interleave(data_collection.run))
-        # TODO: add time sleep
+
         while not world.should_stop:
-            next(dc_steps)
+            try:
+                time.sleep(next(dc_steps))
+            except StopIteration:
+                break
 
 
 def main_sim(
@@ -327,11 +330,14 @@ def main_sim(
         sim_start_time = sim.now_ns()
 
         while not world.should_stop:
-            time_since_start = ir.world.SystemClock().now_ns() - start_time
-            if sim.now_ns() < sim_start_time + time_since_start:
-                next(sim_iter)
-            else:
-                time.sleep(0.001)
+            try:
+                time_since_start = ir.world.SystemClock().now_ns() - start_time
+                if sim.now_ns() < sim_start_time + time_since_start:
+                    next(sim_iter)
+                else:
+                    time.sleep(0.001)
+            except StopIteration:
+                break
 
 
 main_cfg = ir1.Config(

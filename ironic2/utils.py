@@ -92,10 +92,10 @@ class RateLimiter:
         return 0.0
 
 
-class FPSCounter:
-    """Utility class for tracking and reporting frames per second (FPS).
+class RateCounter:
+    """Utility class for tracking and reporting call rate.
 
-    Counts frames and periodically reports the average FPS over the reporting interval.
+    Counts events and periodically reports the average rate over the reporting interval.
 
     Args:
         prefix (str): Prefix string to use in FPS report messages
@@ -109,15 +109,15 @@ class FPSCounter:
 
     def reset(self):
         self.last_report_time = time.monotonic()
-        self.frame_count = 0
+        self.tick_count = 0
 
     def report(self):
-        fps = self.frame_count / (time.monotonic() - self.last_report_time)
-        print(f"{self.prefix}: {fps:.2f} fps")
+        rate = self.tick_count / (time.monotonic() - self.last_report_time)
+        print(f"{self.prefix}: {rate:.2f} Hz")
         self.last_report_time = time.monotonic()
-        self.frame_count = 0
+        self.tick_count = 0
 
     def tick(self):
-        self.frame_count += 1
+        self.tick_count += 1
         if time.monotonic() - self.last_report_time >= self.report_every_sec:
             self.report()
