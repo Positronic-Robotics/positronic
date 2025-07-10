@@ -1,5 +1,5 @@
 import time
-from typing import Any, Dict
+from typing import Any, Callable, Dict
 
 from mujoco import Sequence
 
@@ -84,7 +84,12 @@ class _Tracker:
 
 # TODO: Support aborting current episode.
 class _Recorder:
-    def __init__(self, dumper: SerialDumper | None, sound_emitter: ir.SignalEmitter, clock: ir.Clock):
+    def __init__(
+        self,
+        dumper: SerialDumper | None,
+        sound_emitter: ir.SignalEmitter,
+        clock: ir.Clock,
+    ):
         self.on = False
         self._dumper = dumper
         self._sound_emitter = sound_emitter
@@ -119,8 +124,12 @@ class _Recorder:
             print(f"Episode {self._dumper.episode_count} ended")
             self._sound_emitter.emit(self._end_wav_path)
             self.on = False
+            self._meta = {}
         else:
             print("Not recording, ignoring turn_off")
+
+    def add_metadata(self, metadata: dict):
+        self._meta.update(metadata)
 
     def update(self, data: dict, video_frames: dict):
         if not self.on:
@@ -146,10 +155,17 @@ class DataCollection:
     target_grip_emitter : ir.SignalEmitter = ir.NoOpEmitter()
     sound_emitter : ir.SignalEmitter = ir.NoOpEmitter()
 
-    def __init__(self, operator_position: geom.Transform3D | None, output_dir: str | None, fps: int) -> None:
+    def __init__(
+        self,
+        operator_position: geom.Transform3D | None,
+        output_dir: str | None,
+        fps: int,
+        metadata_getter: Callable[[], Dict] | None = None,
+    ):
         self.operator_position = operator_position
         self.output_dir = output_dir
         self.fps = fps
+        self.metadata_getter = metadata_getter or (lambda: {})
 
     def run(self, should_stop: ir.SignalReader, clock: ir.Clock) -> None:  # noqa: C901
         frame_readers = {
@@ -162,7 +178,8 @@ class DataCollection:
         recorder = _Recorder(
             SerialDumper(self.output_dir, video_fps=self.fps) if self.output_dir is not None else None,
             self.sound_emitter,
-            clock)
+            clock,
+        )
         button_handler = ButtonHandler()
 
         fps_counter = ir.utils.RateCounter("Data Collection")
@@ -170,7 +187,12 @@ class DataCollection:
             try:
                 _parse_buttons(self.buttons_reader.value, button_handler)
                 if button_handler.just_pressed('right_B'):
-                    recorder.turn_off() if recorder.on else recorder.turn_on()
+                    if recorder.on:
+                        recorder.turn_off()
+                    else:
+                        recorder.turn_on()
+                        recorder.add_metadata(self.metadata_getter())
+
                 elif button_handler.just_pressed('right_A'):
                     if tracker.on:
                         tracker.turn_off()
@@ -290,12 +312,11 @@ def main_sim(
     gui = DearpyguiUi()
 
     with ir.World(clock=sim) as world:
-        data_collection = DataCollection(operator_position, output_dir, fps)
+        data_collection = DataCollection(operator_position, output_dir, fps, metadata_getter=sim.save_state)
         cameras = cameras or {}
         for camera_name, camera in cameras.items():
-            camera.frame, data_collection.frame_readers[camera_name] = world.mp_pipe()
-            # TODO: currently using single Reader in two processes will result in a race condition
-            gui.cameras[camera_name] = data_collection.frame_readers[camera_name]
+            camera.frame, (data_collection.frame_readers[camera_name], gui.cameras[camera_name]) = \
+                world.mp_one_to_many_pipe(2)
 
         webxr.controller_positions, data_collection.controller_positions_reader = world.mp_pipe()
         webxr.buttons, data_collection.buttons_reader = world.mp_pipe()

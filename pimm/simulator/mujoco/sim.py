@@ -1,4 +1,4 @@
-from typing import Sequence, Tuple
+from typing import Dict, Sequence, Tuple
 
 import geom
 import ironic2 as ir
@@ -17,6 +17,13 @@ def load_from_xml_path(model_path: str, loaders: Sequence[MujocoSceneTransform] 
 
     return model, metadata
 
+STATE_SPECS = [
+    mj.mjtState.mjSTATE_FULLPHYSICS,
+    mj.mjtState.mjSTATE_USER,
+    mj.mjtState.mjSTATE_INTEGRATION,
+    mj.mjtState.mjSTATE_WARMSTART,
+]
+
 
 class MujocoSim(ir.Clock):
     def __init__(self, mujoco_model_path: str, loaders: Sequence[MujocoSceneTransform] = ()):
@@ -25,9 +32,9 @@ class MujocoSim(ir.Clock):
         self.fps_counter = ir.utils.RateCounter("MujocoSim")
         self.initial_ctrl = [float(x) for x in self.metadata.get('initial_ctrl').split(',')]
         self.warmup_steps = 1000
+        self.reset()
 
     def run(self, should_stop: ir.SignalReader, clock: ir.Clock):
-        self.reset()
         while not should_stop.value:
             self.step()
             self.fps_counter.tick()
@@ -42,6 +49,32 @@ class MujocoSim(ir.Clock):
             self.data.ctrl = self.initial_ctrl
         mj.mj_step(self.model, self.data, self.warmup_steps)
         self.data.time = 0
+
+    def load_state(self, state: dict, reset_time: bool = True):
+        mj.mj_resetData(self.model, self.data)
+        for spec in STATE_SPECS:
+            mj.mj_setState(self.model, self.data, np.array(state[spec.name]), spec)
+
+        if reset_time:
+            self.data.time = 0
+
+    def save_state(self) -> Dict[str, np.ndarray]:
+        """
+        Saves full state of the simulator.
+
+        This state could be used to restore the exact state of the simulator.
+
+        Returns:
+            data: A dictionary containing the full state of the simulator.
+        """
+        data = {}
+
+        for spec in STATE_SPECS:
+            size = mj.mj_stateSize(self.model, spec)
+            data[spec.name] = np.empty(size, np.float64)
+            mj.mj_getState(self.model, self.data, data[spec.name], spec)
+
+        return data
 
     def step(self, duration: float | None = None) -> None:
         duration = duration or self.model.opt.timestep
