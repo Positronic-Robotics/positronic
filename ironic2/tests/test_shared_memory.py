@@ -381,3 +381,11 @@ class TestZeroCopySMAPI:
                 assert message.data.array.shape == test_array.shape, f"Shape mismatch for {description}"
                 assert message.data.array.dtype == test_array.dtype, f"Dtype mismatch for {description}"
                 assert np.array_equal(message.data.array, test_array), f"Data mismatch for {description}"
+
+    def test_world_context_required(self):
+        w = World()
+        with pytest.raises(
+            AssertionError,
+            match="Zero-copy shared memory is only available after entering the world context"
+        ):
+            w.zero_copy_sm()

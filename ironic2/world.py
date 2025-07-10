@@ -117,12 +117,15 @@ class World:
         self._manager = mp.Manager()
         self._sm_manager = mp.managers.SharedMemoryManager()
         self._sm_emitters_readers = []
+        self.entered = False
 
     def __enter__(self):
         self._sm_manager.__enter__()
+        self.entered = True
         return self
 
     def __exit__(self, exc_type, exc_value, traceback):
+        self.entered = False
         print("Stopping background processes...", flush=True)
         self._stop_event.set()
         time.sleep(0.1)
@@ -186,6 +189,7 @@ class World:
         Returns:
             Tuple of (emitter, reader) for zero-copy inter-process communication
         """
+        assert self.entered, "Zero-copy shared memory is only available after entering the world context."
         emitter = ZeroCopySMEmitter(self._manager, self._sm_manager, self._clock)
         reader = ZeroCopySMReader(emitter)
         self._sm_emitters_readers.append((emitter, reader))
