@@ -69,6 +69,7 @@ class DataDumper:
                 'target_grip': target_grip,
                 'target_robot_position_translation': target_robot_pos.translation.copy(),
                 'target_robot_position_quaternion': target_robot_pos.rotation.as_quat.copy(),
+                'target_timestamp': clock.now_ns(),
                 **{f'{name}_timestamp': frame.ts for name, frame in frame_messages.items()},
             }
 
@@ -87,21 +88,28 @@ class RecordReplay:
         self.record = torch.load(record_path)
 
     def run(self, should_stop: ir.SignalReader, clock: ir.Clock) -> None:
-        timestamps = self.record['handcam_left_timestamp'] - self.record['handcam_left_timestamp'][0]
+        timestamps = self.record['target_timestamp'] - self.record['target_timestamp'][0] + 0.002
 
-        for i, ts in enumerate(timestamps):
-            yield max(0, ts / 1e9 - clock.now())
+        i = 0
+        while i < len(timestamps):
             if should_stop.value:
                 break
-            target_grip = self.record['target_grip'][i]
+            #             v
+            # ts = [0, 1, 5, 10]
+            # clock = 3
+            if clock.now_ns() < timestamps[i]:
+                yield 0.0
+                continue
+
+            target_grip = self.record['target_grip'][i].item()
             target_robot_pos = self.record['target_robot_position_translation'][i]
             target_robot_pos.rotation = geom.Rotation.from_quat(self.record['target_robot_position_quaternion'][i])
-            self.target_grip.emit(target_grip, ts=ts)
+            self.target_grip.emit(target_grip)
             self.robot_commands.emit(roboarm.command.CartesianMove(
                 geom.Transform3D(translation=target_robot_pos, rotation=target_robot_pos.rotation)),
-                ts=ts,
             )
-
+            i += 1
+            yield 0.0
 
 
 def main_sim(
@@ -116,8 +124,8 @@ def main_sim(
     sim.load_state(record_replay.record)
     robot_arm = MujocoFranka(sim, suffix='_ph')
     cameras = {
-        'handcam_left': MujocoCamera(sim.model, sim.data, 'handcam_left_ph', (320, 240)),
-        'handcam_right': MujocoCamera(sim.model, sim.data, 'handcam_right_ph', (320, 240)),
+        'handcam_left': MujocoCamera(sim.model, sim.data, 'handcam_left_ph', (320, 240), fps=fps),
+        'handcam_right': MujocoCamera(sim.model, sim.data, 'handcam_right_ph', (320, 240), fps=fps),
     }
     gripper = MujocoGripper(sim, actuator_name='actuator8_ph', joint_name='finger_joint1_ph')
 

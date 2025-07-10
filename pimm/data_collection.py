@@ -211,6 +211,7 @@ class DataCollection:
 
                 controller_positions, controller_positions_updated = controller_positions_reader.value
                 target_robot_pos = tracker.update(controller_positions['right'])
+                last_target_ts = clock.now_ns()
 
                 if tracker.on and controller_positions_updated:  # Don't spam the robot with commands.
                     self.robot_commands.emit(roboarm.command.CartesianMove(target_robot_pos))
@@ -231,6 +232,7 @@ class DataCollection:
                     'target_grip': target_grip,
                     'target_robot_position_translation': target_robot_pos.translation.copy(),
                     'target_robot_position_quaternion': target_robot_pos.rotation.as_quat.copy(),
+                    'target_timestamp': last_target_ts,
                     **{f'{name}_timestamp': frame.ts for name, frame in frame_messages.items()},
                 }
                 if controller_positions['right'] is not None:
@@ -305,8 +307,8 @@ def main_sim(
     sim = MujocoSim(mujoco_model_path, loaders)
     robot_arm = MujocoFranka(sim, suffix='_ph')
     cameras = {
-        'handcam_left': MujocoCamera(sim.model, sim.data, 'handcam_left_ph', (320, 240)),
-        'handcam_right': MujocoCamera(sim.model, sim.data, 'handcam_right_ph', (320, 240)),
+        'handcam_left': MujocoCamera(sim.model, sim.data, 'handcam_left_ph', (320, 240), fps=fps),
+        'handcam_right': MujocoCamera(sim.model, sim.data, 'handcam_right_ph', (320, 240), fps=fps),
     }
     gripper = MujocoGripper(sim, actuator_name='actuator8_ph', joint_name='finger_joint1_ph')
     gui = DearpyguiUi()
@@ -316,14 +318,14 @@ def main_sim(
         cameras = cameras or {}
         for camera_name, camera in cameras.items():
             camera.frame, (data_collection.frame_readers[camera_name], gui.cameras[camera_name]) = \
-                world.mp_one_to_many_pipe(2)
+                world.mp_one_to_many_pipe(2, maxsize=1)
 
-        webxr.controller_positions, data_collection.controller_positions_reader = world.mp_pipe()
-        webxr.buttons, data_collection.buttons_reader = world.mp_pipe()
+        webxr.controller_positions, data_collection.controller_positions_reader = world.mp_pipe(1)
+        webxr.buttons, data_collection.buttons_reader = world.mp_pipe(1)
 
         world.start_in_subprocess(webxr.run, gui.run)
 
-        robot_arm.state, data_collection.robot_state = world.mp_pipe()
+        robot_arm.state, data_collection.robot_state = world.mp_pipe(1)
         data_collection.robot_commands, robot_arm.commands = world.mp_pipe(1)
 
         data_collection.target_grip_emitter, gripper.target_grip = world.mp_pipe(1)

@@ -162,9 +162,7 @@ class MujocoFranka:
             if is_updated:
                 match command:
                     case roboarm_command.CartesianMove():
-                        q = self._recalculate_ik(command.pose)
-                        if q is not None:
-                            self.set_actuator_values(q)
+                        self.set_ee_pose(command.pose)
                     case roboarm_command.JointMove():
                         self.set_actuator_values(command.positions)
                     case roboarm_command.Reset():
@@ -214,6 +212,11 @@ class MujocoFranka:
         for i in range(7):
             self.sim.data.actuator(self.actuator_names[i]).ctrl = actuator_values[i]
 
+    def set_ee_pose(self, ee_pose: geom.Transform3D):
+        q = self._recalculate_ik(ee_pose)
+        if q is not None:
+            self.set_actuator_values(q)
+
     def _xmat_to_quat(self, xmat: np.ndarray) -> np.ndarray:
         site_quat = np.empty(4)
         mj.mju_mat2Quat(site_quat, xmat)
@@ -234,7 +237,10 @@ class MujocoGripper:
 
         while not should_stop.value:
             target_grip = self.target_grip.value
-            self.sim.data.actuator(self.actuator_name).ctrl = target_grip
+            self.set_target_grip(target_grip)
 
             self.grip.emit(self.sim.data.joint(self.joint_name).qpos.item())
             yield ir.Pass()
+
+    def set_target_grip(self, target_grip: float):
+        self.sim.data.actuator(self.actuator_name).ctrl = target_grip
