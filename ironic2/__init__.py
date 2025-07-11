@@ -1,7 +1,7 @@
 from .core import (Clock, ControlLoop, Message, NoOpEmitter, NoOpReader, SignalEmitter, SignalReader,
                    NoValueException, Sleep, Pass)
 from .utils import map, ValueUpdated, DefaultReader, RateLimiter
-from .world import World
+from .world import World, BroadcastEmitter
 from . import shared_memory
 
 __all__ = [
@@ -20,5 +20,9 @@ __all__ = [
     'SignalReader',
     'Sleep',
     'ValueUpdated',
+    'DefaultReader',
+    'RateLimiter',
     'World',
+    'shared_memory',
+    'BroadcastEmitter',
 ]

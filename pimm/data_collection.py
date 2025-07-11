@@ -272,8 +272,10 @@ def main(robot_arm: Any | None,  # noqa: C901  Function is too complex
         webxr.buttons, data_collection.buttons_reader = world.mp_pipe()
 
         if stream_video_to_webxr is not None:
-            raise NotImplementedError("TODO: fix video streaming to webxr, since it's currently lagging")
-            webxr.frame = ir.map(data_collection.frame_readers[stream_video_to_webxr], lambda x: x['image'])
+            emitter, reader = world.mp_pipe()
+            cameras[stream_video_to_webxr].frame = ir.BroadcastEmitter([emitter, cameras[stream_video_to_webxr].frame])
+
+            webxr.frame = ir.map(reader, lambda x: x['image'])
 
         world.start_in_subprocess(webxr.run, *[camera.run for camera in cameras.values()])
 
