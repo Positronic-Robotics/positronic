@@ -17,6 +17,7 @@ def load_from_xml_path(model_path: str, loaders: Sequence[MujocoSceneTransform] 
 
     return model, metadata
 
+
 STATE_SPECS = [
     mj.mjtState.mjSTATE_FULLPHYSICS,
     mj.mjtState.mjSTATE_USER,

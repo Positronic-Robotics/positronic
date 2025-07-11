@@ -318,17 +318,17 @@ def main_sim(
         cameras = cameras or {}
         for camera_name, camera in cameras.items():
             camera.frame, (data_collection.frame_readers[camera_name], gui.cameras[camera_name]) = \
-                world.mp_one_to_many_pipe(2, maxsize=1)
+                world.mp_one_to_many_pipe(2)
 
-        webxr.controller_positions, data_collection.controller_positions_reader = world.mp_pipe(1)
-        webxr.buttons, data_collection.buttons_reader = world.mp_pipe(1)
+        webxr.controller_positions, data_collection.controller_positions_reader = world.mp_pipe()
+        webxr.buttons, data_collection.buttons_reader = world.mp_pipe()
 
         world.start_in_subprocess(webxr.run, gui.run)
 
-        robot_arm.state, data_collection.robot_state = world.mp_pipe(1)
-        data_collection.robot_commands, robot_arm.commands = world.mp_pipe(1)
+        robot_arm.state, data_collection.robot_state = world.local_pipe()
+        data_collection.robot_commands, robot_arm.commands = world.local_pipe()
 
-        data_collection.target_grip_emitter, gripper.target_grip = world.mp_pipe(1)
+        data_collection.target_grip_emitter, gripper.target_grip = world.local_pipe()
 
         if sound is not None:
             data_collection.sound_emitter, sound.wav_path = world.mp_pipe()

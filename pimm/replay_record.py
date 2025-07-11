@@ -1,5 +1,3 @@
-import heapq
-import time
 from typing import Dict
 
 from mujoco import Sequence
@@ -43,7 +41,6 @@ class DataDumper:
         recorder.turn_on()
         fps_counter = ir.utils.RateCounter("Data Collection")
 
-
         while not should_stop.value:
             frame_messages = {name: reader.read() for name, reader in frame_readers.items()}
             # TODO: fix frame synchronization. Two 30 FPS cameras is updated at 60 FPS
@@ -72,7 +69,6 @@ class DataDumper:
                 'target_timestamp': clock.now_ns(),
                 **{f'{name}_timestamp': frame.ts for name, frame in frame_messages.items()},
             }
-
             recorder.update(data=ep_dict,
                             video_frames={name: frame.data['image'] for name, frame in frame_messages.items()})
             yield 0.001
@@ -88,31 +84,25 @@ class RecordReplay:
         self.record = torch.load(record_path)
 
     def run(self, should_stop: ir.SignalReader, clock: ir.Clock) -> None:
-        timestamps = self.record['target_timestamp'] - self.record['target_timestamp'][0] + 0.002
+        timestamps = self.record['target_timestamp'] - self.record['target_timestamp'][0]
 
-        i = 0
-        while i < len(timestamps):
-            if should_stop.value:
-                break
-            #             v
-            # ts = [0, 1, 5, 10]
-            # clock = 3
-            if clock.now_ns() < timestamps[i]:
-                yield 0.0
-                continue
+        self._emit_commands(0)
+        for i, ts in enumerate(timestamps[1:], start=1):
+            yield max(0, ts - clock.now_ns()) / 1e9
+            self._emit_commands(i)
 
-            target_grip = self.record['target_grip'][i].item()
-            target_robot_pos = self.record['target_robot_position_translation'][i]
-            target_robot_pos.rotation = geom.Rotation.from_quat(self.record['target_robot_position_quaternion'][i])
-            self.target_grip.emit(target_grip)
-            self.robot_commands.emit(roboarm.command.CartesianMove(
-                geom.Transform3D(translation=target_robot_pos, rotation=target_robot_pos.rotation)),
-            )
-            i += 1
-            yield 0.0
+    def _emit_commands(self, idx):
+        target_grip = self.record['target_grip'][idx].item()
+        target_robot_pos = self.record['target_robot_position_translation'][idx]
+        target_robot_pos.rotation = geom.Rotation.from_quat(self.record['target_robot_position_quaternion'][idx])
+
+        self.target_grip.emit(target_grip)
+        self.robot_commands.emit(roboarm.command.CartesianMove(
+            geom.Transform3D(translation=target_robot_pos, rotation=target_robot_pos.rotation)),
+        )
 
 
-def main_sim(
+def main(
         record_path: str,
         mujoco_model_path: str,
         loaders: Sequence[MujocoSceneTransform] = (),
@@ -133,32 +123,33 @@ def main_sim(
         data_collection = DataDumper(output_dir, fps)
         cameras = cameras or {}
         for camera_name, camera in cameras.items():
-            camera.frame, data_collection.frame_readers[camera_name] = world.mp_pipe()
+            camera.frame, data_collection.frame_readers[camera_name] = world.local_pipe()
 
-        robot_arm.state, data_collection.robot_state = world.mp_pipe()
+        robot_arm.state, data_collection.robot_state = world.local_pipe()
 
-        record_replay.robot_commands, (robot_arm.commands, data_collection.robot_commands) = world.mp_one_to_many_pipe(2)
+        record_replay.robot_commands, (robot_arm.commands, data_collection.robot_commands) = \
+            world.local_one_to_many_pipe(2)
 
-        record_replay.target_grip, (gripper.target_grip, data_collection.target_grip) = world.mp_one_to_many_pipe(2)
+        record_replay.target_grip, (gripper.target_grip, data_collection.target_grip) = world.local_one_to_many_pipe(2)
 
         sim_iter = world.interleave(
-            sim.run,
             *[camera.run for camera in cameras.values()],
             robot_arm.run,
             gripper.run,
             record_replay.run,
             data_collection.run,
+            sim.run,
         )
 
         for _ in tqdm.tqdm(sim_iter):
             pass
 
-main_sim_cfg = ir1.Config(
-    main_sim,
+
+main_cfg = ir1.Config(
+    main,
     mujoco_model_path="positronic/assets/mujoco/franka_table.xml",
     loaders=pimm.cfg.simulator.stack_cubes_loaders,
 )
 
 if __name__ == "__main__":
-    # TODO: add ability to specify multiple targets in CLI
-    ir1.cli(main_sim_cfg)
+    ir1.cli(main_cfg)

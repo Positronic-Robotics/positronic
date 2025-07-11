@@ -4,7 +4,7 @@ import multiprocessing as mp
 from queue import Empty, Full
 from unittest.mock import Mock, patch
 
-from ironic2.core import Clock, Message, Sleep
+from ironic2.core import Clock, Message, SignalEmitter, SignalReader, Sleep
 from ironic2.world import (QueueEmitter, QueueReader, EventReader, SystemClock, World)
 
 
@@ -204,13 +204,14 @@ class TestEventReader:
 class TestWorld:
     """Test the World class."""
 
-    def test_world_pipe_creation(self):
+    @pytest.mark.parametrize('pipe_fn_name', ['mp_pipe', 'local_pipe'])
+    def test_world_pipe_creation(self, pipe_fn_name):
         """Test that World.pipe creates emitter and reader pair."""
         world = World()
-        emitter, reader = world.mp_pipe()
+        emitter, reader = getattr(world, pipe_fn_name)()
 
-        assert isinstance(emitter, QueueEmitter)
-        assert isinstance(reader, QueueReader)
+        assert isinstance(emitter, SignalEmitter)
+        assert isinstance(reader, SignalReader)
 
     def test_background_process(self):
         """Test that background processes will run simple control loop."""
@@ -228,21 +229,23 @@ class TestWorld:
             assert not world.background_processes[0].is_alive()
             assert world.background_processes[0].exitcode == 0
 
-    def test_world_pipe_communication(self):
+    @pytest.mark.parametrize('pipe_fn_name', ['mp_pipe', 'local_pipe'])
+    def test_world_pipe_communication(self, pipe_fn_name):
         """Test that pipe emitter and reader can communicate."""
         world = World()
-        emitter, reader = world.mp_pipe()
+        emitter, reader = getattr(world, pipe_fn_name)()
 
         # Initially reader should return None
         assert reader.read() is None
 
-        # Emit a message
-        emitter.emit("test_message")
+        for message in ["test_message_1", "test_message_2", "test_message_3"]:
+            # Emit a message
+            emitter.emit(message)
 
-        # Reader should now have the message
-        result = reader.read()
-        assert isinstance(result, Message)
-        assert result.data == "test_message"
+            # Reader should now have the message
+            result = reader.read()
+            assert isinstance(result, Message)
+            assert result.data == message
 
     def test_world_context_manager_enter(self):
         """Test that World.__enter__ returns self."""
@@ -311,18 +314,23 @@ class TestWorld:
         # We can't check is_alive() after exit because processes are closed
         assert len(world.background_processes) == 1
 
-    def test_world_mp_pipe_multiple_readers_created(self):
+    @pytest.mark.parametrize('pipe_fn_name', ['mp_one_to_many_pipe', 'local_one_to_many_pipe'])
+    def test_world_mp_pipe_multiple_readers_created(self, pipe_fn_name):
         """Test that World.mp_pipe can create multiple readers."""
         world = World()
-        emitter, readers = world.mp_one_to_many_pipe(n_readers=2)
+        pipe_fn = getattr(world, pipe_fn_name)
+        emitter, readers = pipe_fn(n_readers=2)
         assert len(readers) == 2
-        assert isinstance(readers[0], QueueReader)
-        assert isinstance(readers[1], QueueReader)
+        assert isinstance(emitter, SignalEmitter)
+        assert isinstance(readers[0], SignalReader)
+        assert isinstance(readers[1], SignalReader)
 
-    def test_world_mp_pipe_multiple_readers_message_received_by_all_readers(self):
+    @pytest.mark.parametrize('pipe_fn_name', ['mp_one_to_many_pipe', 'local_one_to_many_pipe'])
+    def test_world_mp_pipe_multiple_readers_message_received_by_all_readers(self, pipe_fn_name):
         """Test that multiple readers can read from the same queue."""
         world = World()
-        emitter, readers = world.mp_one_to_many_pipe(n_readers=2)
+        pipe_fn = getattr(world, pipe_fn_name)
+        emitter, readers = pipe_fn(n_readers=2)
 
         messages = ["test_message_1", "test_message_2", "test_message_3"]
         for message in messages:
@@ -540,10 +548,33 @@ class TestWorldInterleave:
                 yield Sleep(0.3)
 
         with World(clock) as world:
-            list(world.interleave(loop_a, loop_b))
+            for time_to_sleep in world.interleave(loop_a, loop_b):
+                clock.advance(time_to_sleep)
             original_order = execution_order.copy()
             execution_order.clear()
-            list(world.interleave(loop_c, loop_a, loop_c, loop_b, loop_c))
+            for time_to_sleep in world.interleave(loop_c, loop_a, loop_c, loop_b, loop_c):
+                clock.advance(time_to_sleep)
 
         execution_order = [item for item in execution_order if not item.startswith('c_')]
         assert execution_order == original_order
+
+    def test_iterleave_loops_with_sleep_0_execute_interchangeably(self):
+        clock = MockClock(0.0)
+        execution_order = []
+
+        def loop_a(stop_reader, clock):
+            for i in range(4):
+                execution_order.append(f"a_{i}")
+                yield 0.0
+
+        def loop_b(stop_reader, clock):
+            for i in range(4):
+                execution_order.append(f"b_{i}")
+                yield 0.0
+
+        with World(clock) as world:
+            for time_to_sleep in world.interleave(loop_a, loop_b):
+                clock.advance(time_to_sleep)
+            original_order = execution_order.copy()
+
+            assert original_order == ["a_0", "b_0", "a_1", "b_1", "a_2", "b_2", "a_3", "b_3"]

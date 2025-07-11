@@ -1,5 +1,6 @@
 """Implementation of multiprocessing channels."""
 
+from collections import deque
 import heapq
 import logging
 import multiprocessing as mp
@@ -66,6 +67,28 @@ class QueueReader(SignalReader):
         return self._last_value
 
 
+class LocalQueueEmitter(SignalEmitter):
+    def __init__(self, queue: deque, clock: Clock):
+        self._queue = queue
+        self._clock = clock
+
+    def emit(self, data: Any, ts: int = -1) -> bool:
+        self._queue.append(Message(data, ts if ts >= 0 else self._clock.now_ns()))
+        return True
+
+
+class LocalQueueReader(SignalReader):
+    def __init__(self, queue: deque):
+        self._queue = queue
+        self._last_value = None
+
+    def read(self) -> Message | None:
+        if len(self._queue) > 0:
+            self._last_value = self._queue.popleft()
+
+        return self._last_value
+
+
 class EventReader(SignalReader):
 
     def __init__(self, event: mp.Event, clock: Clock):
@@ -119,10 +142,12 @@ class World:
         self._stop_event = mp.Event()
         self.background_processes = []
         self._manager = mp.Manager()
+        self._sm_manager = mp.managers.SharedMemoryManager()
         self._sm_emitters_readers = []
         self.entered = False
 
     def __enter__(self):
+        self._sm_manager.__enter__()
         self.entered = True
         return self
 
@@ -149,7 +174,15 @@ class World:
             reader.close()
             emitter.close()
 
-    def mp_pipe(self, maxsize: int = 0) -> Tuple[SignalEmitter, SignalReader]:
+        self._sm_manager.__exit__(exc_type, exc_value, traceback)
+
+    def local_pipe(self, maxsize: int = 1) -> Tuple[SignalEmitter, SignalReader]:
+        """Create a queue-based communication channel between processes.
+        """
+        q = deque(maxlen=maxsize)
+        return LocalQueueEmitter(q, self._clock), LocalQueueReader(q)
+
+    def mp_pipe(self, maxsize: int = 1) -> Tuple[SignalEmitter, SignalReader]:
         """Create a queue-based communication channel between processes.
 
         Args:
@@ -162,7 +195,18 @@ class World:
 
         return QueueEmitter(q, self._clock), QueueReader(q)
 
-    def mp_one_to_many_pipe(self, n_readers: int, maxsize: int = 0) -> Tuple[SignalEmitter, Sequence[SignalReader]]:
+    def local_one_to_many_pipe(self, n_readers: int, maxsize: int = 1) -> Tuple[SignalEmitter, Sequence[SignalReader]]:
+        """Create a single-emitter-many-readers communication channel.
+        """
+        emitters = []
+        readers = []
+        for _ in range(n_readers):
+            emitter, reader = self.local_pipe(maxsize)
+            emitters.append(emitter)
+            readers.append(reader)
+        return BroadcastEmitter(emitters), readers
+
+    def mp_one_to_many_pipe(self, n_readers: int, maxsize: int = 1) -> Tuple[SignalEmitter, Sequence[SignalReader]]:
         """Create a single-emitter-many-readers communication channel.
 
         Args:
@@ -248,8 +292,10 @@ class World:
 
         # Initialize all loops with the same start time and unique counters
         for loop in loops:
-            heapq.heappush(priority_queue, (start, counter, iter(loop(self.should_stop_reader(), self._clock))))
+            priority_queue.append((start, counter, iter(loop(self.should_stop_reader(), self._clock))))
             counter += 1
+
+        heapq.heapify(priority_queue)
 
         while priority_queue:
             _, _, loop = heapq.heappop(priority_queue)
