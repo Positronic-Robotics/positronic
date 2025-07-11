@@ -11,7 +11,7 @@ import time
 import traceback
 from typing import Any, Iterator, List, Sequence, Tuple
 
-from .core import Clock, ControlLoop, Message, SignalEmitter, SignalReader
+from .core import Clock, ControlLoop, Message, SignalEmitter, SignalReader, Sleep
 from .shared_memory import ZeroCopySMEmitter, ZeroCopySMReader
 
 
@@ -87,8 +87,12 @@ class SystemClock(Clock):
 
 def _bg_wrapper(run_func: ControlLoop, stop_event: mp.Event, clock: Clock, name: str):
     try:
-        for sleep_time in run_func(EventReader(stop_event, clock), clock):
-            time.sleep(sleep_time)
+        for command in run_func(EventReader(stop_event, clock), clock):
+            match command:
+                case Sleep(seconds):
+                    time.sleep(seconds)
+                case _:
+                    raise ValueError(f"Unknown command: {command}")
     except KeyboardInterrupt:
         # Silently handle KeyboardInterrupt in background processes
         pass
@@ -252,17 +256,21 @@ class World:
             _, _, loop = heapq.heappop(priority_queue)
 
             try:
-                sleep_time = next(loop)
+                sleep_time = next(loop).seconds  # Right now the only command is Sleep, so we can safely cast to float
                 heapq.heappush(priority_queue, (self._clock.now() + sleep_time, counter, loop))
                 counter += 1
 
                 if priority_queue:  # Yield the wait time until the next execution should occur
-                    yield max(0, priority_queue[0][0] - self._clock.now())
+                    yield Sleep(max(0, priority_queue[0][0] - self._clock.now()))
 
             except StopIteration:
                 # Don't add the loop back and don't yield after a loop completes - it is done
                 self._stop_event.set()
 
     def run(self, *loops: ControlLoop):
-        for sleep_time in self.interleave(*loops):
-            time.sleep(sleep_time)
+        for command in self.interleave(*loops):
+            match command:
+                case Sleep(seconds):
+                    time.sleep(seconds)
+                case _:
+                    raise ValueError(f"Unknown command: {command}")

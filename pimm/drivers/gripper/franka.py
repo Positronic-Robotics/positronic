@@ -47,9 +47,9 @@ class Gripper:
                     gripper.open_async(speed=speed.value)
                     is_open = True
             except ir.NoValueException:
-                yield 0.05
+                yield ir.Sleep(0.05)
 
-            yield limiter.wait_time()
+            yield ir.Sleep(limiter.wait_time())
             self.grip.emit(gripper.width / gripper.max_width)
 
 

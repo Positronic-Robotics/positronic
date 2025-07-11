@@ -31,7 +31,7 @@ class MujocoSim(ir.Clock):
         while not should_stop.value:
             self.step()
             self.fps_counter.tick()
-            yield 0.0
+            yield ir.Pass()
 
     def now(self) -> float:
         return self.data.time
@@ -70,7 +70,7 @@ class MujocoCamera:
             frame = renderer.render()
             self.frame.emit({'image': frame}, ts=clock.now_ns())
             self.fps_counter.tick()
-            yield 1 / self.fps
+            yield ir.Sleep(1 / self.fps)
 
         renderer.close()
 
@@ -146,7 +146,7 @@ class MujocoFranka:
             state.encode(self.q, self.dq, self.ee_pose)
 
             self.state.emit(state)
-            yield 0.0
+            yield ir.Pass()
 
     def _recalculate_ik(self, target_robot_position: geom.Transform3D) -> np.ndarray | None:
         result = ik.qpos_from_site_pose(
@@ -204,4 +204,4 @@ class MujocoGripper:
             self.sim.data.actuator(self.actuator_name).ctrl = target_grip
 
             self.grip.emit(self.sim.data.joint(self.joint_name).qpos.item())
-            yield 0.0
+            yield ir.Pass()

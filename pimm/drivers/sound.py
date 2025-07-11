@@ -80,7 +80,7 @@ class SoundSystem:
 
             chunk_size = stream.get_write_available()
             if chunk_size == 0:
-                yield 0.0
+                yield ir.Pass()
                 continue
 
             master_volume, frequency = self._level_to_frequency(level.value)
@@ -95,7 +95,7 @@ class SoundSystem:
                 if wave_chunk is None:
                     wave_file.close()
                     finished_files.append(name)
-                    yield 0.0
+                    yield ir.Pass()
                     continue
                 wave_chunk = np.frombuffer(wave_chunk, dtype=np.int16)
 
@@ -109,7 +109,7 @@ class SoundSystem:
                 del audio_files[name]
 
             stream.write(next_chunk.tobytes())
-            yield 0.0
+            yield ir.Pass()
 
     def sound_fn(self, size: int, master_volume: float, frequency: float) -> np.ndarray:
         """

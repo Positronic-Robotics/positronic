@@ -37,7 +37,7 @@ class OpenCVCamera:
             fps_counter.tick()
             # Use system time for timestamp since OpenCV doesn't provide frame timestamps
             self.frame.emit({'frame': frame})
-            yield 0.0  # Give control back to the world
+            yield ir.Pass()  # Give control back to the world
 
 
 if __name__ == "__main__":
@@ -66,7 +66,7 @@ if __name__ == "__main__":
                 while not should_stop.value:
                     frame, updated = frame_reader.value
                     if not updated:
-                        yield 0.5 / self.fps
+                        yield ir.Sleep(0.5 / self.fps)
                         continue
 
                     frame = av.VideoFrame.from_ndarray(frame['frame'], format='rgb24')

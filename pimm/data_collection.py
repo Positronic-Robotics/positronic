@@ -199,7 +199,7 @@ class DataCollection:
                 fps_counter.tick()
 
                 if not recorder.on or not any_frame_updated:
-                    yield 0.001
+                    yield ir.Sleep(0.001)
                     continue
 
                 frame_messages = {name: ir.Message(msg.data[0], msg.ts) for name, msg in frame_messages.items()}
@@ -219,10 +219,10 @@ class DataCollection:
 
                 recorder.update(data=ep_dict,
                                 video_frames={name: frame.data['image'] for name, frame in frame_messages.items()})
-                yield 0.001
+                yield ir.Sleep(0.001)
 
             except ir.NoValueException:
-                yield 0.001
+                yield ir.Sleep(0.001)
                 continue
 
 

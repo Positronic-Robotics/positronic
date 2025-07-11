@@ -162,7 +162,7 @@ class WebXR:
         self.server_thread.start()
 
         while not should_stop.value:
-            yield 0.1
+            yield ir.Sleep(0.1)
 
         server.should_exit = True
         self.server_thread.join()

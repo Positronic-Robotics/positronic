@@ -100,6 +100,15 @@ class Clock(ABC):
         return int(self.now() * 1e9)
 
 
+@dataclass
+class Sleep:
+    seconds: float
+
+
+def Pass() -> Sleep:
+    return Sleep(0.0)
+
+
 # In Ironic a control loop is a main abstraction. This is a code that manages a particular piece of robotic system.
 # It can be camera, sensor, gripper, robotic arm, inference loop, etc. A robotic system then is a collection of
 # control loops that communicate with each other.

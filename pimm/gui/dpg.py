@@ -86,7 +86,7 @@ class DearpyguiUi:
 
             dpg.set_value("info", info_text)
             dpg.render_dearpygui_frame()
-            yield 0.0
+            yield ir.Pass()
 
         print("GUI stopped")
 

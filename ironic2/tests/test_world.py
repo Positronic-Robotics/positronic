@@ -1,9 +1,10 @@
+import time
 import pytest
 import multiprocessing as mp
 from queue import Empty, Full
 from unittest.mock import Mock, patch
 
-from ironic2.core import Clock, Message
+from ironic2.core import Clock, Message, Sleep
 from ironic2.world import (QueueEmitter, QueueReader, EventReader, SystemClock, World)
 
 
@@ -24,10 +25,10 @@ class MockClock(Clock):
         self._time += delta
 
 
-def dummy_process(stop_signal):
+def dummy_process(stop_reader, clock):
     """A simple background process that runs until stopped."""
-    while not stop_signal.read().data:
-        yield 0.01
+    while not stop_reader.read().data:
+        yield Sleep(0.01)
 
 
 class TestQueueEmitter:
@@ -211,6 +212,22 @@ class TestWorld:
         assert isinstance(emitter, QueueEmitter)
         assert isinstance(reader, QueueReader)
 
+    def test_background_process(self):
+        """Test that background processes will run simple control loop."""
+        world = World()
+        with world:
+            world.start_in_subprocess(dummy_process)
+
+            time.sleep(0.2)  # Some time to let the process run
+            assert len(world.background_processes) == 1
+
+            # We have to set the private event manually, because out of the scope of the context manager
+            # we can't access exit code of the process
+            world._stop_event.set()
+            world.background_processes[0].join(timeout=0.5)
+            assert not world.background_processes[0].is_alive()
+            assert world.background_processes[0].exitcode == 0
+
     def test_world_pipe_communication(self):
         """Test that pipe emitter and reader can communicate."""
         world = World()
@@ -372,7 +389,7 @@ class TestWorldInterleave:
                 """Simple loop that runs 2 times."""
                 for i in range(2):
                     execution_order.append(f"single_{i}")
-                    yield 0.1
+                    yield Sleep(0.1)
 
             sleep_times = list(world.interleave(single_loop))
 
@@ -391,12 +408,12 @@ class TestWorldInterleave:
             def loop_a(stop_reader, clock):
                 for i in range(2):
                     execution_order.append(f"a_{i}")
-                    yield 0.1
+                    yield Sleep(0.1)
 
             def loop_b(stop_reader, clock):
                 for i in range(2):
                     execution_order.append(f"b_{i}")
-                    yield 0.1
+                    yield Sleep(0.1)
 
             sleep_times = list(world.interleave(loop_a, loop_b))
 
@@ -427,7 +444,7 @@ class TestWorldInterleave:
                 """Loop that raises an exception."""
                 execution_order.append("before_exception")
                 raise ValueError("Test exception")
-                yield 0.1  # This should never be reached
+                yield Sleep(0.1)  # This should never be reached
 
             # The exception should be raised and stop the interleave
             with pytest.raises(ValueError, match="Test exception"):
@@ -449,13 +466,13 @@ class TestWorldInterleave:
                         execution_order.append(f"stopped_at_{i}")
                         return
                     execution_order.append(f"step_{i}")
-                    yield 0.1
+                    yield Sleep(0.1)
 
             def short_loop(stop_reader, clock):
                 """Short loop that completes quickly."""
                 for i in range(2):
                     execution_order.append(f"short_{i}")
-                    yield 0.1
+                    yield Sleep(0.1)
 
             # The short loop should complete first and set the stop event
             sleep_times = list(world.interleave(stop_checking_loop, short_loop))
@@ -481,16 +498,16 @@ class TestWorldInterleave:
             def loop_a(stop_reader, clock):
                 """Loop A with specific timing."""
                 execution_order.append("a_0")
-                yield 0.3  # Will run next at time 0.3
+                yield Sleep(0.3)  # Will run next at time 0.3
                 execution_order.append("a_1")
-                yield 0.1  # Will run next at time 0.4
+                yield Sleep(0.1)  # Will run next at time 0.4
 
             def loop_b(stop_reader, clock):
                 """Loop B with different timing."""
                 execution_order.append("b_0")
-                yield 0.1  # Will run next at time 0.1
+                yield Sleep(0.1)  # Will run next at time 0.1
                 execution_order.append("b_1")
-                yield 0.1  # Will run next at time 0.2
+                yield Sleep(0.1)  # Will run next at time 0.2
 
             sleep_times = list(world.interleave(loop_a, loop_b))
 
@@ -510,17 +527,17 @@ class TestWorldInterleave:
         def loop_a(stop_reader, clock):
             for i in range(5):
                 execution_order.append(f"a_{i}")
-                yield 0.1
+                yield Sleep(0.1)
 
         def loop_b(stop_reader, clock):
             for i in range(6):
                 execution_order.append(f"b_{i}")
-            yield 0.2
+            yield Sleep(0.2)
 
         def loop_c(stop_reader, clock):
             for i in range(7):
                 execution_order.append(f"c_{i}")
-                yield 0.3
+                yield Sleep(0.3)
 
         with World(clock) as world:
             list(world.interleave(loop_a, loop_b))

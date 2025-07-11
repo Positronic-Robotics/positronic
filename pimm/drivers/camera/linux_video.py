@@ -76,6 +76,6 @@ class LinuxVideo:
                 self.frame.emit(result)
                 self.fps_counter.tick()
 
-            yield 0.0  # Give control back to the world
+            yield ir.Pass()  # Give control back to the world
 
         device.close()
