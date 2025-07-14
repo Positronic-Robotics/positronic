@@ -227,9 +227,7 @@ class ZeroCopySMEmitter(SignalEmitter):
             self._out_data = None
 
         if self._sm is not None:
-            print(">>> Closing shared memory in emitter")
             self._sm.close()
-            print(">>> Unlinking shared memory in emitter")
             self._sm.unlink()
             self._sm = None
 
@@ -281,7 +279,6 @@ class ZeroCopySMReader(SignalReader):
 
         if self._sm is not None:
             # Don't call unlink here, it will be called by the emitter
-            print("Closing shared memory in reader")
             self._sm.close()
             self._sm = None
 

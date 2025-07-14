@@ -367,8 +367,8 @@ class TestZeroCopySMAPI:
             (np.array([3.14, 2.71], dtype=np.float32), "1D float32"),
             (np.array([[1.0, 2.0], [3.0, 4.0]], dtype=np.float64), "2D float64"),
             # Complex floating point
-            (np.array([1+2j, 3+4j], dtype=np.complex64), "1D complex64"),
-            (np.array([[1+2j, 3+4j], [5+6j, 7+8j]], dtype=np.complex128), "2D complex128"),
+            (np.array([1 + 2j, 3 + 4j], dtype=np.complex64), "1D complex64"),
+            (np.array([[1 + 2j, 3 + 4j], [5 + 6j, 7 + 8j]], dtype=np.complex128), "2D complex128"),
         ]
 
         for test_array, description in test_cases:
@@ -386,16 +386,13 @@ class TestZeroCopySMAPI:
 
     def test_world_context_required(self):
         w = World()
-        with pytest.raises(
-            AssertionError,
-            match="Zero-copy shared memory is only available after entering the world context"
-        ):
+        with pytest.raises(AssertionError,
+                           match="Zero-copy shared memory is only available after entering the world context"):
             w.zero_copy_sm()
 
 
-
 class TestEmitterControlLoop:
-    emitter : SignalEmitter = NoOpEmitter()
+    emitter: SignalEmitter = NoOpEmitter()
 
     def run(self, _should_stop: SignalReader, _clock: Clock) -> Iterator[Sleep]:
         yield Sleep(0.2)
@@ -411,7 +408,6 @@ class TestEmitterControlLoop:
         self.emitter.emit(data, ts=67890)
 
         yield Sleep(0.2)
-
 
 
 class TestZeroCopyMultiprocessing:

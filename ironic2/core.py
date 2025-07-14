@@ -41,6 +41,9 @@ class SignalEmitter(ABC):
         If reader code respects the similar lock, you won't have data races.
 
         If emitter/reader pair does not support zero-copy, this is a harmless no-op.
+
+        Note: Only call zc_lock() when accessing data for writing, not when calling emit() itself.
+        Calling emit() inside a zc_lock() context will raise an assertion error.
         """
         return nullcontext()
 
@@ -77,6 +80,9 @@ class SignalReader(ABC):
         If reader code respects the similar lock, you won't have data races.
 
         If emitter/reader pair does not support zero-copy, this is a harmless no-op.
+
+        Note: Only call zc_lock() when accessing data from the reader, not when calling read() itself.
+        Calling read() inside a zc_lock() context will raise an assertion error.
         """
         return nullcontext()
 
