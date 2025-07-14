@@ -5,7 +5,7 @@ import ironic as ir
 import geom
 from positronic.tools.buttons import ButtonHandler
 
-logging.basicConfig(level=logging.INFO, handlers=[logging.StreamHandler(), logging.FileHandler("teleop.log", mode="w")])
+logging.basicConfig(level=logging.INFO, handlers=[logging.StreamHandler()])
 
 
 # map xyz -> zxy

@@ -146,10 +146,11 @@ class Robot:
                     robot.recover_from_errors()
                     print(f"Motion failed for {pos}: {e}")
 
-            yield ir.Sleep(rate_limiter.wait_time())
             js = robot.current_joint_state
             robot_state.encode(js.position, js.velocity, robot.current_pose.end_effector_pose)
             self.state.emit(robot_state)
+
+            yield ir.Sleep(rate_limiter.wait_time())
 
 
 if __name__ == "__main__":

@@ -253,7 +253,8 @@ def main(robot_arm: Any | None,  # noqa: C901  Function is too complex
         world.start_in_subprocess(webxr.run, *[camera.run for camera in cameras.values()])
 
         if robot_arm is not None:
-            robot_arm.state, data_collection.robot_state = world.zero_copy_sm()
+            # robot_arm.state, data_collection.robot_state = world.zero_copy_sm()
+            robot_arm.state, data_collection.robot_state = world.mp_pipe(1)
             data_collection.robot_commands, robot_arm.commands = world.mp_pipe(1)
             world.start_in_subprocess(robot_arm.run)
 
@@ -265,13 +266,7 @@ def main(robot_arm: Any | None,  # noqa: C901  Function is too complex
             data_collection.sound_emitter, sound.wav_path = world.mp_pipe()
             world.start_in_subprocess(sound.run)
 
-        dc_steps = iter(world.interleave(data_collection.run))
-
-        while not world.should_stop:
-            try:
-                time.sleep(next(dc_steps))
-            except StopIteration:
-                break
+        world.run(data_collection.run)
 
 
 def main_sim(
@@ -365,4 +360,4 @@ main_sim_cfg = cfgc.Config(
 
 if __name__ == "__main__":
     # TODO: add ability to specify multiple targets in CLI
-    cfgc.cli(main_sim_cfg)
+    cfgc.cli(main_cfg)

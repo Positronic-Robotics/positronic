@@ -134,13 +134,7 @@ class WebXR:
                     'file': {
                         'class': 'logging.FileHandler',
                         'formatter': 'default',
-                        'filename': 'webxr.log',
-                        'mode': 'w',
-                    },
-                    'console': {
-                        'class': 'logging.FileHandler',
-                        'formatter': 'default',
-                        'filename': 'webxr.log',
+                        'filename': '/tmp/webxr.log',
                         'mode': 'w',
                     }
                 },
@@ -163,6 +157,8 @@ class WebXR:
 
         while not should_stop.value:
             yield ir.Sleep(0.1)
+            if not self.server_thread.is_alive():
+                raise RuntimeError("WebXR server thread died")
 
         server.should_exit = True
         self.server_thread.join()

@@ -40,3 +40,5 @@ class State(ABC):
     def status(self) -> RobotStatus:
         """Robot status."""
         pass
+
+from . import command
