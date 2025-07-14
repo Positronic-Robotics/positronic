@@ -1,5 +1,5 @@
 import time
-from typing import Any, Callable, Dict, Generator
+from typing import Any, Callable, Dict, Iterator
 
 from mujoco import Sequence
 
@@ -162,7 +162,7 @@ class DataCollection:
         self.fps = fps
         self.metadata_getter = metadata_getter or (lambda: {})
 
-    def run(self, should_stop: ir.SignalReader, clock: ir.Clock) -> Generator[ir.Sleep, None, None]:  # noqa: C901
+    def run(self, should_stop: ir.SignalReader, clock: ir.Clock) -> Iterator[ir.Sleep]:  # noqa: C901
         frame_readers = {
             camera_name: ir.ValueUpdated(ir.DefaultReader(frame_reader, None))
             for camera_name, frame_reader in self.frame_readers.items()

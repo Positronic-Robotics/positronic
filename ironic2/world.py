@@ -12,7 +12,7 @@ import sys
 from queue import Empty, Full
 import time
 import traceback
-from typing import Generator, Sequence, Tuple, TypeVar
+from typing import Iterator, Sequence, Tuple, TypeVar
 
 from .core import Clock, ControlLoop, Message, SignalEmitter, SignalReader, Sleep
 from .shared_memory import SMCompliant, ZeroCopySMEmitter, ZeroCopySMReader
@@ -291,7 +291,7 @@ class World:
     def should_stop_reader(self) -> SignalReader[bool]:
         return EventReader(self._stop_event, self._clock)
 
-    def interleave(self, *loops: ControlLoop) -> Generator[Sleep, None, None]:
+    def interleave(self, *loops: ControlLoop) -> Iterator[Sleep]:
         """Interleave multiple control loops, scheduling them based on their timing requirements.
 
         This method runs multiple control loops concurrently by executing the next scheduled

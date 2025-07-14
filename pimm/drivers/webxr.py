@@ -2,7 +2,7 @@ import asyncio
 import base64
 import threading
 import traceback
-from typing import Generator
+from typing import Iterator
 
 import numpy as np
 from fastapi import FastAPI, WebSocket
@@ -45,11 +45,7 @@ class WebXR:
         self.server_thread = None
         self.jpeg_encoder = turbojpeg.TurboJPEG()
 
-    def run(  # noqa: C901  Function is too complex
-        self,
-        should_stop: ir.SignalReader,
-        clock: ir.Clock,
-    ) -> Generator[ir.Sleep, None, None]:
+    def run(self, should_stop: ir.SignalReader, clock: ir.Clock) -> Iterator[ir.Sleep]:  # noqa: C901
         app = FastAPI()
 
         def encode_frame(image):

@@ -1,4 +1,4 @@
-from typing import Dict, Generator
+from typing import Dict, Iterator
 
 from mujoco import Sequence
 import torch
@@ -26,7 +26,7 @@ class DataDumper:
         self.output_dir = output_dir
         self.fps = fps
 
-    def run(self, should_stop: ir.SignalReader, clock: ir.Clock) -> Generator[ir.Sleep, None, None]:  # noqa: C901
+    def run(self, should_stop: ir.SignalReader, clock: ir.Clock) -> Iterator[ir.Sleep]:  # noqa: C901
         frame_readers = {
             camera_name: ir.ValueUpdated(ir.DefaultReader(frame_reader, None))
             for camera_name, frame_reader in self.frame_readers.items()
@@ -83,7 +83,7 @@ class RecordReplay:
     def __init__(self, record_path: str):
         self.record = torch.load(record_path)
 
-    def run(self, should_stop: ir.SignalReader, clock: ir.Clock) -> Generator[ir.Sleep, None, None]:
+    def run(self, should_stop: ir.SignalReader, clock: ir.Clock) -> Iterator[ir.Sleep]:
         timestamps = self.record['target_timestamp'] - self.record['target_timestamp'][0]
 
         self._emit_commands(0)

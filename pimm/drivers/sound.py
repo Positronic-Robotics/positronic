@@ -1,4 +1,4 @@
-from typing import Generator, Tuple
+from typing import Iterator, Tuple
 import wave
 import pyaudio
 import numpy as np
@@ -52,7 +52,7 @@ class SoundSystem:
             frequency = self.base_frequency * (2 ** octave)
             return self.enable_master_volume, frequency
 
-    def run(self, should_stop: ir.SignalReader, clock: ir.Clock) -> Generator[ir.Sleep, None, None]:
+    def run(self, should_stop: ir.SignalReader, clock: ir.Clock) -> Iterator[ir.Sleep]:
         p = pyaudio.PyAudio()
         stream = p.open(
             format=pyaudio.paFloat32,

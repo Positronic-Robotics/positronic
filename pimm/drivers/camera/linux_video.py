@@ -2,7 +2,7 @@ import av
 import cv2
 import numpy as np
 from linuxpy.video.device import Device, PixelFormat
-from typing import Generator
+from typing import Iterator
 
 import ironic2 as ir
 from ironic.utils import FPSCounter
@@ -20,7 +20,7 @@ class LinuxVideo:
         self.pixel_format = pixel_format
         self.fps_counter = FPSCounter(f"LinuxVideo {device_path}")
 
-    def run(self, should_stop: ir.SignalReader, clock: ir.Clock) -> Generator[ir.Sleep, None, None]:
+    def run(self, should_stop: ir.SignalReader, clock: ir.Clock) -> Iterator[ir.Sleep]:
         codec_mapping = {
             PixelFormat.H264: 'h264',
             PixelFormat.HEVC: 'hevc',
