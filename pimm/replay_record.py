@@ -1,17 +1,17 @@
-from typing import Dict
+from typing import Dict, Generator
 
 from mujoco import Sequence
 import torch
 import tqdm
 
 import geom
-import ironic as ir1
+import configuronic as cfgc
 import ironic2 as ir
 from pimm.drivers import roboarm
 from pimm.simulator.mujoco.sim import MujocoCamera, MujocoFranka, MujocoGripper, MujocoSim
 from positronic.simulator.mujoco.scene.transforms import MujocoSceneTransform
 from positronic.tools.dataset_dumper import SerialDumper
-from pimm.data_collection import _Recorder
+from pimm.data_collection import Recorder
 
 import pimm.cfg.simulator
 
@@ -20,13 +20,13 @@ class DataDumper:
     frame_readers : Dict[str, ir.SignalReader] = {}
     robot_state : ir.SignalReader = ir.NoOpReader()
     robot_commands : ir.SignalReader = ir.NoOpReader()
-    target_grip : ir.SignalReader = ir.NoOpReader()
+    target_grip : ir.SignalReader[float] = ir.NoOpReader()
 
     def __init__(self, output_dir: str | None, fps: int) -> None:
         self.output_dir = output_dir
         self.fps = fps
 
-    def run(self, should_stop: ir.SignalReader, clock: ir.Clock) -> None:  # noqa: C901
+    def run(self, should_stop: ir.SignalReader, clock: ir.Clock) -> Generator[ir.Sleep, None, None]:  # noqa: C901
         frame_readers = {
             camera_name: ir.ValueUpdated(ir.DefaultReader(frame_reader, None))
             for camera_name, frame_reader in self.frame_readers.items()
@@ -34,7 +34,7 @@ class DataDumper:
         target_grip_reader = ir.DefaultReader(self.target_grip, None)
         target_robot_pos_reader = ir.DefaultReader(self.robot_commands, None)
 
-        recorder = _Recorder(
+        recorder = Recorder(
             SerialDumper(self.output_dir, video_fps=self.fps) if self.output_dir is not None else None,
             ir.NoOpEmitter(),
             clock)
@@ -49,14 +49,14 @@ class DataDumper:
             fps_counter.tick()
 
             if not any_frame_updated:
-                yield 0.001
+                yield ir.Sleep(0.001)
                 continue
 
             target_grip = target_grip_reader.value
             target_robot_pos = target_robot_pos_reader.value
 
             if target_robot_pos is None or target_grip is None:
-                yield 0.001
+                yield ir.Sleep(0.001)
                 continue
 
             target_robot_pos = target_robot_pos.pose
@@ -71,34 +71,34 @@ class DataDumper:
             }
             recorder.update(data=ep_dict,
                             video_frames={name: frame.data['image'] for name, frame in frame_messages.items()})
-            yield 0.001
+            yield ir.Sleep(0.001)
 
         recorder.turn_off()
 
 
 class RecordReplay:
     robot_commands : ir.SignalEmitter = ir.NoOpEmitter()
-    target_grip : ir.SignalEmitter = ir.NoOpEmitter()
+    target_grip : ir.SignalEmitter[float] = ir.NoOpEmitter()
 
     def __init__(self, record_path: str):
         self.record = torch.load(record_path)
 
-    def run(self, should_stop: ir.SignalReader, clock: ir.Clock) -> None:
+    def run(self, should_stop: ir.SignalReader, clock: ir.Clock) -> Generator[ir.Sleep, None, None]:
         timestamps = self.record['target_timestamp'] - self.record['target_timestamp'][0]
 
         self._emit_commands(0)
         for i, ts in enumerate(timestamps[1:], start=1):
-            yield max(0, ts - clock.now_ns()) / 1e9
+            yield ir.Sleep(max(0, ts - clock.now_ns()) / 1e9)
             self._emit_commands(i)
 
     def _emit_commands(self, idx):
         target_grip = self.record['target_grip'][idx].item()
         target_robot_pos = self.record['target_robot_position_translation'][idx]
-        target_robot_pos.rotation = geom.Rotation.from_quat(self.record['target_robot_position_quaternion'][idx])
+        target_robot_pos_rotation = geom.Rotation.from_quat(self.record['target_robot_position_quaternion'][idx])
 
         self.target_grip.emit(target_grip)
         self.robot_commands.emit(roboarm.command.CartesianMove(
-            geom.Transform3D(translation=target_robot_pos, rotation=target_robot_pos.rotation)),
+            pose=geom.Transform3D(translation=target_robot_pos, rotation=target_robot_pos_rotation)),
         )
 
 
@@ -127,10 +127,11 @@ def main(
 
         robot_arm.state, data_collection.robot_state = world.local_pipe()
 
-        record_replay.robot_commands, (robot_arm.commands, data_collection.robot_commands) = \
-            world.local_one_to_many_pipe(2)
+        record_replay.robot_commands, (robot_arm.commands,
+                                       data_collection.robot_commands) = world.local_one_to_many_pipe(2)
 
-        record_replay.target_grip, (gripper.target_grip, data_collection.target_grip) = world.local_one_to_many_pipe(2)
+        record_replay.target_grip, (gripper.target_grip,
+                                    data_collection.target_grip) = world.local_one_to_many_pipe(2)
 
         sim_iter = world.interleave(
             *[camera.run for camera in cameras.values()],
@@ -145,11 +146,11 @@ def main(
             pass
 
 
-main_cfg = ir1.Config(
+main_cfg = cfgc.Config(
     main,
     mujoco_model_path="positronic/assets/mujoco/franka_table.xml",
     loaders=pimm.cfg.simulator.stack_cubes_loaders,
 )
 
 if __name__ == "__main__":
-    ir1.cli(main_cfg)
+    cfgc.cli(main_cfg)

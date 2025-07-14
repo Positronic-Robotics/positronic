@@ -549,11 +549,11 @@ class TestWorldInterleave:
 
         with World(clock) as world:
             for time_to_sleep in world.interleave(loop_a, loop_b):
-                clock.advance(time_to_sleep)
+                clock.advance(time_to_sleep.seconds)
             original_order = execution_order.copy()
             execution_order.clear()
             for time_to_sleep in world.interleave(loop_c, loop_a, loop_c, loop_b, loop_c):
-                clock.advance(time_to_sleep)
+                clock.advance(time_to_sleep.seconds)
 
         execution_order = [item for item in execution_order if not item.startswith('c_')]
         assert execution_order == original_order
@@ -565,16 +565,16 @@ class TestWorldInterleave:
         def loop_a(stop_reader, clock):
             for i in range(4):
                 execution_order.append(f"a_{i}")
-                yield 0.0
+                yield Sleep(0.0)
 
         def loop_b(stop_reader, clock):
             for i in range(4):
                 execution_order.append(f"b_{i}")
-                yield 0.0
+                yield Sleep(0.0)
 
         with World(clock) as world:
             for time_to_sleep in world.interleave(loop_a, loop_b):
-                clock.advance(time_to_sleep)
+                clock.advance(time_to_sleep.seconds)
             original_order = execution_order.copy()
 
             assert original_order == ["a_0", "b_0", "a_1", "b_1", "a_2", "b_2", "a_3", "b_3"]

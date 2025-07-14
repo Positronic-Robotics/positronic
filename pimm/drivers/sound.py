@@ -1,4 +1,4 @@
-from typing import Iterator, Tuple
+from typing import Generator, Tuple
 import wave
 import pyaudio
 import numpy as np
@@ -7,8 +7,8 @@ import ironic2 as ir
 
 
 class SoundSystem:
-    level: ir.SignalReader = ir.NoOpReader()
-    wav_path: ir.SignalReader = ir.NoOpReader()
+    level: ir.SignalReader[float] = ir.NoOpReader()
+    wav_path: ir.SignalReader[str] = ir.NoOpReader()
 
     def __init__(
             self,
@@ -52,7 +52,7 @@ class SoundSystem:
             frequency = self.base_frequency * (2 ** octave)
             return self.enable_master_volume, frequency
 
-    def run(self, should_stop: ir.SignalReader, clock: ir.Clock) -> Iterator[float]:
+    def run(self, should_stop: ir.SignalReader, clock: ir.Clock) -> Generator[ir.Sleep, None, None]:
         p = pyaudio.PyAudio()
         stream = p.open(
             format=pyaudio.paFloat32,
@@ -65,8 +65,8 @@ class SoundSystem:
         audio_files = {}
         file_idx = 0
 
-        wav_path = ir.DefaultReader(ir.ValueUpdated(self.wav_path), (None, False))
-        level = ir.DefaultReader(ir.ValueUpdated(self.level), 0.0)
+        wav_path = ir.DefaultReader(ir.ValueUpdated(self.wav_path), ("", False))
+        level = ir.DefaultReader(self.level, 0.0)
 
         while not should_stop.value:
             # Load new files

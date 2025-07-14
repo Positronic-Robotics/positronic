@@ -1,5 +1,5 @@
 from enum import Enum
-from typing import Any
+from typing import Any, Sequence
 
 import numpy as np
 
@@ -119,7 +119,7 @@ class Rotation(np.ndarray, metaclass=RotationMeta):
     Instead, use the `Rotation.Representation` enum to create a rotation.
     """
 
-    def __new__(cls, w=1.0, x=0.0, y=0.0, z=0.0, dtype=np.float64):
+    def __new__(cls, w=1.0, x=0.0, y=0.0, z=0.0, *, dtype=np.float64):
         obj = np.asarray([w, x, y, z], dtype=dtype).view(cls)
         return obj
 
@@ -210,12 +210,12 @@ class Rotation(np.ndarray, metaclass=RotationMeta):
         return Rotation(w, -x, -y, -z)
 
     @classmethod
-    def from_quat(cls, quat: np.ndarray) -> 'Rotation':
+    def from_quat(cls, quat: Sequence[float]) -> 'Rotation':
         """
         Create a rotation from a 4-element numpy array. The order of the elements is (w, x, y, z).
 
         Args:
-            quat: (numpy.ndarray) numpy array with w, x, y, z elements.
+            quat: (Sequence[float]) w, x, y, z elements.
 
         Returns:
             Rotation object.
@@ -223,12 +223,12 @@ class Rotation(np.ndarray, metaclass=RotationMeta):
         return cls(*quat)
 
     @classmethod
-    def from_quat_xyzw(cls, quat: np.ndarray) -> 'Rotation':
+    def from_quat_xyzw(cls, quat: Sequence[float]) -> 'Rotation':
         """
         Create a rotation from a 4-element numpy array. The order of the elements is (x, y, z, w).
 
         Args:
-            quat: (numpy.ndarray) numpy array with x, y, z, w elements.
+            quat: (Sequence[float]) x, y, z, w elements.
 
         Returns:
             Rotation object.

@@ -1,7 +1,10 @@
 from abc import ABC, abstractmethod
 from contextlib import nullcontext
 from dataclasses import dataclass
-from typing import Any, Callable, ContextManager, Iterator, final
+from typing import Callable, ContextManager, Generic, Iterator, final, TypeVar
+
+
+T = TypeVar('T')
 
 
 class NoValueException(Exception):
@@ -9,7 +12,7 @@ class NoValueException(Exception):
 
 
 @dataclass
-class Message:
+class Message(Generic[T]):
     """
     Contains some data and a timestamp for this data. Timestamps are integers,
     to avoid floating point precision issues. It can be related to epoch or
@@ -17,15 +20,15 @@ class Message:
 
     If no timestamp is provided, the current system time is used.
     """
-    data: Any
+    data: T
     ts: int = -1  # -1 means no value
 
 
-class SignalEmitter(ABC):
+class SignalEmitter(ABC, Generic[T]):
     """Write a signal value. All implementations must be non-blocking."""
 
     @abstractmethod
-    def emit(self, data: Any, ts: int = -1) -> bool:
+    def emit(self, data: T, ts: int = -1) -> bool:
         """
         Emit a message with the given data and timestamp. Returns True if successful.
         Must overwrite ts with current clock time if negative.
@@ -48,23 +51,23 @@ class SignalEmitter(ABC):
         return nullcontext()
 
 
-class NoOpEmitter(SignalEmitter):
+class NoOpEmitter(SignalEmitter[T]):
 
-    def emit(self, data: Any, ts: int = -1) -> bool:
+    def emit(self, data: T, ts: int = -1) -> bool:
         return True
 
 
-class SignalReader(ABC):
+class SignalReader(ABC, Generic[T]):
     """Read a signal value. All implementations must be non-blocking."""
 
     @abstractmethod
-    def read(self) -> Message | None:
+    def read(self) -> Message[T] | None:
         """Returns next message, otherwise last value. None if nothing was read yet."""
         pass
 
     @final
     @property
-    def value(self) -> Any:
+    def value(self) -> T:
         """Returns the current value of the signal."""
         msg = self.read()
         if msg is None:
@@ -87,9 +90,9 @@ class SignalReader(ABC):
         return nullcontext()
 
 
-class NoOpReader(SignalReader):
+class NoOpReader(SignalReader[T]):
 
-    def read(self) -> Message | None:
+    def read(self) -> None:
         return None
 
 
@@ -118,4 +121,4 @@ def Pass() -> Sleep:
 # In Ironic a control loop is a main abstraction. This is a code that manages a particular piece of robotic system.
 # It can be camera, sensor, gripper, robotic arm, inference loop, etc. A robotic system then is a collection of
 # control loops that communicate with each other.
-ControlLoop = Callable[[SignalReader, Clock], Iterator[float]]
+ControlLoop = Callable[[SignalReader, Clock], Iterator[Sleep]]

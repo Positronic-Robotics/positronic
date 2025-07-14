@@ -1,4 +1,5 @@
 from typing import Dict, Sequence, Tuple
+import logging
 
 import geom
 import ironic2 as ir
@@ -10,6 +11,8 @@ import numpy as np
 from pimm.drivers.roboarm import RobotStatus, State
 from pimm.drivers.roboarm import command as roboarm_command
 from positronic.simulator.mujoco.scene.transforms import MujocoSceneTransform, load_model_from_spec_file
+
+logger = logging.getLogger(__name__)
 
 
 def load_from_xml_path(model_path: str, loaders: Sequence[MujocoSceneTransform] = ()) -> mj.MjModel:
@@ -138,13 +141,12 @@ class MujocoFrankaState(State, ir.shared_memory.NumpySMAdapter):
 
 
 class MujocoFranka:
-
-    commands: ir.SignalReader = ir.NoOpReader()
-
-    state: ir.SignalEmitter = ir.NoOpEmitter()
-
     class _NoCommandsYet:
         pass
+
+    commands: ir.SignalReader[roboarm_command.CommandType | _NoCommandsYet] = ir.NoOpReader()
+
+    state: ir.SignalEmitter[MujocoFrankaState] = ir.NoOpEmitter()
 
     def __init__(self, sim: MujocoSim, suffix: str = ''):
         self.sim = sim
@@ -162,10 +164,10 @@ class MujocoFranka:
             command, is_updated = commands.value
             if is_updated:
                 match command:
-                    case roboarm_command.CartesianMove():
-                        self.set_ee_pose(command.pose)
-                    case roboarm_command.JointMove():
-                        self.set_actuator_values(command.positions)
+                    case roboarm_command.CartesianMove(pose=pose):
+                        self.set_ee_pose(pose)
+                    case roboarm_command.JointMove(positions=positions):
+                        self.set_actuator_values(positions)
                     case roboarm_command.Reset():
                         # TODO: it's not clear how to make reset, because interleave breakes if time goes backwards
                         pass
@@ -205,9 +207,10 @@ class MujocoFranka:
 
     @property
     def ee_pose(self) -> geom.Transform3D:
-        return geom.Transform3D(translation=self.sim.data.site(self.ee_name).xpos.copy(),
-                                rotation=geom.Rotation.from_quat(
-                                    self._xmat_to_quat(self.sim.data.site(self.ee_name).xmat.copy())))
+        translation = self.sim.data.site(self.ee_name).xpos.copy()
+        rotmat: np.ndarray = self.sim.data.site(self.ee_name).xmat.copy()
+        quat = self._xmat_to_quat(rotmat)
+        return geom.Transform3D(translation=translation, rotation=geom.Rotation.from_quat(quat))
 
     def set_actuator_values(self, actuator_values: np.ndarray):
         for i in range(7):
@@ -217,6 +220,8 @@ class MujocoFranka:
         q = self._recalculate_ik(ee_pose)
         if q is not None:
             self.set_actuator_values(q)
+        else:
+            logger.warning(f"Failed to calculate IK for ee_pose: {ee_pose}")
 
     def _xmat_to_quat(self, xmat: np.ndarray) -> np.ndarray:
         site_quat = np.empty(4)
@@ -225,7 +230,7 @@ class MujocoFranka:
 
 
 class MujocoGripper:
-    target_grip: ir.SignalReader = ir.NoOpReader()
+    target_grip: ir.SignalReader[int] = ir.NoOpReader()
     grip: ir.SignalEmitter = ir.NoOpEmitter()
 
     def __init__(self, sim: MujocoSim, actuator_name: str, joint_name: str):

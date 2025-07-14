@@ -23,3 +23,6 @@ class CartesianMove:
 class JointMove:
     """Move the robot joints to the given positions."""
     positions: np.ndarray
+
+
+CommandType = Reset | CartesianMove | JointMove

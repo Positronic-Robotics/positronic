@@ -1,5 +1,5 @@
 import time
-from typing import Any, Callable, Dict
+from typing import Any, Callable, Dict, Generator
 
 from mujoco import Sequence
 
@@ -83,13 +83,8 @@ class _Tracker:
 
 
 # TODO: Support aborting current episode.
-class _Recorder:
-    def __init__(
-        self,
-        dumper: SerialDumper | None,
-        sound_emitter: ir.SignalEmitter,
-        clock: ir.Clock,
-    ):
+class Recorder:
+    def __init__(self, dumper: SerialDumper | None, sound_emitter: ir.SignalEmitter[str], clock: ir.Clock):
         self.on = False
         self._dumper = dumper
         self._sound_emitter = sound_emitter
@@ -152,8 +147,8 @@ class DataCollection:
     buttons_reader : ir.SignalReader = ir.NoOpReader()
     robot_state : ir.SignalReader = ir.NoOpReader()
     robot_commands : ir.SignalEmitter = ir.NoOpEmitter()
-    target_grip_emitter : ir.SignalEmitter = ir.NoOpEmitter()
-    sound_emitter : ir.SignalEmitter = ir.NoOpEmitter()
+    target_grip_emitter : ir.SignalEmitter[float] = ir.NoOpEmitter()
+    sound_emitter : ir.SignalEmitter[str] = ir.NoOpEmitter()
 
     def __init__(
         self,
@@ -167,7 +162,7 @@ class DataCollection:
         self.fps = fps
         self.metadata_getter = metadata_getter or (lambda: {})
 
-    def run(self, should_stop: ir.SignalReader, clock: ir.Clock) -> None:  # noqa: C901
+    def run(self, should_stop: ir.SignalReader, clock: ir.Clock) -> Generator[ir.Sleep, None, None]:  # noqa: C901
         frame_readers = {
             camera_name: ir.ValueUpdated(ir.DefaultReader(frame_reader, None))
             for camera_name, frame_reader in self.frame_readers.items()
@@ -175,7 +170,7 @@ class DataCollection:
         controller_positions_reader = ir.ValueUpdated(self.controller_positions_reader)
 
         tracker = _Tracker(self.operator_position)
-        recorder = _Recorder(
+        recorder = Recorder(
             SerialDumper(self.output_dir, video_fps=self.fps) if self.output_dir is not None else None,
             self.sound_emitter,
             clock,
@@ -292,7 +287,13 @@ def main(robot_arm: Any | None,  # noqa: C901  Function is too complex
             data_collection.sound_emitter, sound.wav_path = world.mp_pipe()
             world.start_in_subprocess(sound.run)
 
-        world.run(data_collection.run)
+        dc_steps = iter(world.interleave(data_collection.run))
+
+        while not world.should_stop:
+            try:
+                time.sleep(next(dc_steps).seconds)
+            except StopIteration:
+                break
 
 
 def main_sim(
@@ -319,8 +320,8 @@ def main_sim(
         data_collection = DataCollection(operator_position, output_dir, fps, metadata_getter=sim.save_state)
         cameras = cameras or {}
         for camera_name, camera in cameras.items():
-            camera.frame, (data_collection.frame_readers[camera_name], gui.cameras[camera_name]) = \
-                world.mp_one_to_many_pipe(2)
+            camera.frame, (data_collection.frame_readers[camera_name],
+                           gui.cameras[camera_name]) = world.mp_one_to_many_pipe(2)
 
         webxr.controller_positions, data_collection.controller_positions_reader = world.mp_pipe()
         webxr.buttons, data_collection.buttons_reader = world.mp_pipe()
@@ -385,4 +386,4 @@ main_sim_cfg = cfgc.Config(
 
 if __name__ == "__main__":
     # TODO: add ability to specify multiple targets in CLI
-    cfgc.cli(main_cfg)
+    cfgc.cli(main_sim_cfg)

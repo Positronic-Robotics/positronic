@@ -7,6 +7,8 @@ import numpy as np
 
 import geom
 
+from . import command
+
 
 class RobotStatus(Enum):
     """Different statuses that the robot can be in."""

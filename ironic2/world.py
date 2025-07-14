@@ -5,24 +5,29 @@ import heapq
 import logging
 import multiprocessing as mp
 import multiprocessing.shared_memory
-import multiprocessing.managers
+import multiprocessing.managers as mp_managers
+from multiprocessing.synchronize import Event as EventClass
+
 import sys
 from queue import Empty, Full
 import time
 import traceback
-from typing import Any, Iterator, List, Sequence, Tuple
+from typing import Generator, Sequence, Tuple, TypeVar
 
 from .core import Clock, ControlLoop, Message, SignalEmitter, SignalReader, Sleep
-from .shared_memory import ZeroCopySMEmitter, ZeroCopySMReader
+from .shared_memory import SMCompliant, ZeroCopySMEmitter, ZeroCopySMReader
 
 
-class QueueEmitter(SignalEmitter):
+T = TypeVar('T')
+T_SM = TypeVar('T_SM', bound=SMCompliant)
 
+
+class QueueEmitter(SignalEmitter[T]):
     def __init__(self, queue: mp.Queue, clock: Clock):
         self._queue = queue
         self._clock = clock
 
-    def emit(self, data: Any, ts: int = -1) -> bool:
+    def emit(self, data: T, ts: int = -1) -> bool:
         ts = ts if ts >= 0 else self._clock.now_ns()
         try:
             self._queue.put_nowait(Message(data, ts))
@@ -37,8 +42,8 @@ class QueueEmitter(SignalEmitter):
                 return False
 
 
-class BroadcastEmitter(SignalEmitter):
-    def __init__(self, emitters: Sequence[SignalEmitter]):
+class BroadcastEmitter(SignalEmitter[T]):
+    def __init__(self, emitters: Sequence[SignalEmitter[T]]):
         """Emitter that broadcasts messages to all emmiters.
 
         Args:
@@ -46,20 +51,19 @@ class BroadcastEmitter(SignalEmitter):
         """
         self._emitters = emitters
 
-    def emit(self, data: Any, ts: int = -1) -> bool:
+    def emit(self, data: T, ts: int = -1) -> bool:
         any_failed = False
         for emitter in self._emitters:
             any_failed = any_failed or not emitter.emit(data, ts)
         return not any_failed
 
 
-class QueueReader(SignalReader):
-
+class QueueReader(SignalReader[T]):
     def __init__(self, queue: mp.Queue):
         self._queue = queue
         self._last_value = None
 
-    def read(self) -> Message | None:
+    def read(self) -> Message[T] | None:
         try:
             self._last_value = self._queue.get_nowait()
         except Empty:
@@ -67,40 +71,49 @@ class QueueReader(SignalReader):
         return self._last_value
 
 
-class LocalQueueEmitter(SignalEmitter):
+class LocalQueueEmitter(SignalEmitter[T]):
     def __init__(self, queue: deque, clock: Clock):
+        """Emitter that allows to emit messages to deque.
+
+        Args:
+            queue: (deque) Queue to emit to.
+            clock: (Clock) Clock to use for timestamps.
+        """
         self._queue = queue
         self._clock = clock
 
-    def emit(self, data: Any, ts: int = -1) -> bool:
+    def emit(self, data: T, ts: int = -1) -> bool:
         self._queue.append(Message(data, ts if ts >= 0 else self._clock.now_ns()))
         return True
 
 
-class LocalQueueReader(SignalReader):
+class LocalQueueReader(SignalReader[T]):
     def __init__(self, queue: deque):
+        """Reader that allows to read messages from deque.
+
+        Args:
+            queue: (deque) Queue to read from.
+        """
         self._queue = queue
         self._last_value = None
 
-    def read(self) -> Message | None:
+    def read(self) -> Message[T] | None:
         if len(self._queue) > 0:
             self._last_value = self._queue.popleft()
 
         return self._last_value
 
 
-class EventReader(SignalReader):
-
-    def __init__(self, event: mp.Event, clock: Clock):
+class EventReader(SignalReader[bool]):
+    def __init__(self, event: EventClass, clock: Clock):
         self._event = event
         self._clock = clock
 
-    def read(self) -> Message | None:
+    def read(self) -> Message[bool] | None:
         return Message(data=self._event.is_set(), ts=self._clock.now_ns())
 
 
 class SystemClock(Clock):
-
     def now(self) -> float:
         return time.monotonic()
 
@@ -108,7 +121,7 @@ class SystemClock(Clock):
         return time.monotonic_ns()
 
 
-def _bg_wrapper(run_func: ControlLoop, stop_event: mp.Event, clock: Clock, name: str):
+def _bg_wrapper(run_func: ControlLoop, stop_event: EventClass, clock: Clock, name: str):
     try:
         for command in run_func(EventReader(stop_event, clock), clock):
             match command:
@@ -142,7 +155,7 @@ class World:
         self._stop_event = mp.Event()
         self.background_processes = []
         self._manager = mp.Manager()
-        self._sm_manager = mp.managers.SharedMemoryManager()
+        self._sm_manager = mp_managers.SharedMemoryManager()
         self._sm_emitters_readers = []
         self.entered = False
 
@@ -176,26 +189,35 @@ class World:
 
         self._sm_manager.__exit__(exc_type, exc_value, traceback)
 
-    def local_pipe(self, maxsize: int = 1) -> Tuple[SignalEmitter, SignalReader]:
-        """Create a queue-based communication channel between processes.
+    def local_pipe(self, maxsize: int = 1) -> Tuple[SignalEmitter[T], SignalReader[T]]:
+        """Create a queue-based communication channel within the same process.
+
+        Args:
+            maxsize: (int) Maximum queue size (0 for unlimited). Default is 1.
+
+        Returns:
+            Tuple of (emitter, reader) for local communication
         """
         q = deque(maxlen=maxsize)
         return LocalQueueEmitter(q, self._clock), LocalQueueReader(q)
 
-    def mp_pipe(self, maxsize: int = 1) -> Tuple[SignalEmitter, SignalReader]:
+    def mp_pipe(self, maxsize: int = 1) -> Tuple[SignalEmitter[T], SignalReader[T]]:
         """Create a queue-based communication channel between processes.
 
         Args:
-            maxsize: Maximum queue size (0 for unlimited)
+            maxsize: (int) Maximum queue size (0 for unlimited). Default is 1.
 
         Returns:
             Tuple of (emitter, reader) for inter-process communication
         """
         q = self._manager.Queue(maxsize=maxsize)
 
-        return QueueEmitter(q, self._clock), QueueReader(q)
+        return QueueEmitter(q, self._clock), QueueReader(q)  # type: ignore
 
-    def local_one_to_many_pipe(self, n_readers: int, maxsize: int = 1) -> Tuple[SignalEmitter, Sequence[SignalReader]]:
+    def local_one_to_many_pipe(
+        self, n_readers: int,
+        maxsize: int = 1
+    ) -> Tuple[SignalEmitter[T], Sequence[SignalReader[T]]]:
         """Create a single-emitter-many-readers communication channel.
         """
         emitters = []
@@ -206,7 +228,11 @@ class World:
             readers.append(reader)
         return BroadcastEmitter(emitters), readers
 
-    def mp_one_to_many_pipe(self, n_readers: int, maxsize: int = 1) -> Tuple[SignalEmitter, Sequence[SignalReader]]:
+    def mp_one_to_many_pipe(
+        self,
+        n_readers: int,
+        maxsize: int = 1
+    ) -> Tuple[SignalEmitter[T], Sequence[SignalReader[T]]]:
         """Create a single-emitter-many-readers communication channel.
 
         Args:
@@ -224,7 +250,7 @@ class World:
             emitters.append(emiter)
         return BroadcastEmitter(emitters), readers
 
-    def zero_copy_sm(self) -> Tuple[SignalEmitter, SignalReader]:
+    def zero_copy_sm(self) -> Tuple[SignalEmitter[T_SM], SignalReader[T_SM]]:
         """Create a zero-copy shared memory channel for efficient data sharing.
 
         Args:
@@ -242,7 +268,7 @@ class World:
         self._sm_emitters_readers.append((emitter, reader))
         return emitter, reader
 
-    def start_in_subprocess(self, *background_loops: List[ControlLoop]):
+    def start_in_subprocess(self, *background_loops: ControlLoop):
         """Starts background control loops. Can be called multiple times for different control loops."""
         for bg_loop in background_loops:
             if hasattr(bg_loop, '__self__'):
@@ -262,10 +288,10 @@ class World:
     def should_stop(self) -> bool:
         return self._stop_event.is_set()
 
-    def should_stop_reader(self) -> SignalReader:
+    def should_stop_reader(self) -> SignalReader[bool]:
         return EventReader(self._stop_event, self._clock)
 
-    def interleave(self, *loops: List[ControlLoop]) -> Iterator[float]:
+    def interleave(self, *loops: ControlLoop) -> Generator[Sleep, None, None]:
         """Interleave multiple control loops, scheduling them based on their timing requirements.
 
         This method runs multiple control loops concurrently by executing the next scheduled
@@ -301,7 +327,7 @@ class World:
             _, _, loop = heapq.heappop(priority_queue)
 
             try:
-                sleep_time = next(loop).seconds  # Right now the only command is Sleep, so we can safely cast to float
+                sleep_time = next(loop).seconds
                 heapq.heappush(priority_queue, (self._clock.now() + sleep_time, counter, loop))
                 counter += 1
 
