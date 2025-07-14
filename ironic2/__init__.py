@@ -1,22 +1,24 @@
 from .core import (Clock, ControlLoop, Message, NoOpEmitter, NoOpReader, SignalEmitter, SignalReader,
-                   NoValueException)
+                   NoValueException, Sleep, Pass)
 from .utils import map, ValueUpdated, DefaultReader, RateLimiter
 from .world import World
 from . import shared_memory
 
 __all__ = [
-    'Message',
-    'ControlLoop',
-    'SignalEmitter',
-    'SignalReader',
     'Clock',
+    'ControlLoop',
+    'DefaultReader',
+    'map',
+    'Message',
     'NoOpEmitter',
     'NoOpReader',
     'NoValueException',
-    'map',
-    'ValueUpdated',
-    'DefaultReader',
+    'Pass',
     'RateLimiter',
-    'World',
     'shared_memory',
+    'SignalEmitter',
+    'SignalReader',
+    'Sleep',
+    'ValueUpdated',
+    'World',
 ]

@@ -27,7 +27,7 @@ class Gripper:
         self._close_threshold = close_threshold
         self._open_threshold = open_threshold
 
-    def run(self, should_stop: ir.SignalReader, clock: ir.Clock) -> Iterator[float]:
+    def run(self, should_stop: ir.SignalReader, clock: ir.Clock) -> Iterator[ir.Sleep]:
         gripper = franky.Gripper(self._ip)
         print(f"Connected to gripper at {self._ip}, homing...")
         gripper.homing()

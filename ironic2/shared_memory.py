@@ -76,6 +76,8 @@ class NumpySMAdapter(SMCompliant):
     # Reverse mapping
     CODE_TO_DTYPE = {v: k for k, v in DTYPE_TO_CODE.items()}
 
+    _array: np.ndarray
+
     def __init__(self, array: np.ndarray):
         if not array.flags.c_contiguous:
             raise ValueError("Array must be C-contiguous. Use np.ascontiguousarray() to make it contiguous.")

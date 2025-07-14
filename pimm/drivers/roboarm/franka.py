@@ -18,34 +18,34 @@ class FrankaState(State, ir.shared_memory.NumpySMAdapter):
         super().__init__(np.zeros(7 + 7 + 7 + 1, dtype=np.float32))
 
     @property
-    def q(self) -> np.array:
-        return self._values[:7]
+    def q(self) -> np.ndarray:
+        return self._array[:7]
 
     @property
-    def dq(self) -> np.array:
-        return self._values[7:14]
+    def dq(self) -> np.ndarray:
+        return self._array[7:14]
 
     @property
     def ee_pose(self) -> geom.Transform3D:
-        return geom.Transform3D(self._values[14:14 + 3], self._values[14 + 3:14 + 7])
+        return geom.Transform3D(self._array[14:14 + 3], self._array[14 + 3:14 + 7])
 
     @property
     def status(self) -> RobotStatus:
-        return RobotStatus(int(self._values[14 + 7]))
+        return RobotStatus(int(self._array[14 + 7]))
 
     def _start_reset(self):
-        self._values[14 + 7] = RobotStatus.RESETTING.value
+        self._array[14 + 7] = RobotStatus.RESETTING.value
 
     def _finish_reset(self):
-        self._values[14 + 7] = RobotStatus.AVAILABLE.value
+        self._array[14 + 7] = RobotStatus.AVAILABLE.value
 
     def encode(self, q, dq, ee_pose):
-        self._values[:7] = q
-        self._values[7:14] = dq
-        self._values[14:14 + 3] = ee_pose.translation
+        self._array[:7] = q
+        self._array[7:14] = dq
+        self._array[14:14 + 3] = ee_pose.translation
         q_wxyz = np.concatenate([ee_pose.quaternion[3:], ee_pose.quaternion[:3]])
-        self._values[14 + 3:14 + 7] = q_wxyz
-        self._values[14 + 7] = RobotStatus.AVAILABLE.value
+        self._array[14 + 3:14 + 7] = q_wxyz
+        self._array[14 + 7] = RobotStatus.AVAILABLE.value
 
 
 class CartesianMode(Enum):
@@ -99,7 +99,7 @@ class Robot:
         robot.set_load(0.0, [0.0, 0.0, 0.0], [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0])
         robot.relative_dynamics_factor = rel_dynamics_factor
 
-    def run(self, should_stop: ir.SignalReader, clock: ir.Clock) -> Iterator[float]:
+    def run(self, should_stop: ir.SignalReader, clock: ir.Clock) -> Iterator[ir.Sleep]:
         robot = franky.Robot(self._ip, realtime_config=franky.RealtimeConfig.Ignore)
         Robot._init_robot(robot, self._relative_dynamics_factor)
         robot.recover_from_errors()
@@ -130,7 +130,7 @@ class Robot:
                         reset()
                         continue
                     case command.CartesianMove(pose):
-                        pos = franky.Affine(translation=pose.translation, quaternion=pose.rotation.as_quat_xyzw())
+                        pos = franky.Affine(translation=pose.translation, quaternion=pose.rotation.as_quat_xyzw)
 
                 if self._cartesian_mode == CartesianMode.LIBFRANKA:
                     motion = franky.CartesianMotion(pos, franky.ReferenceType.Absolute)
@@ -172,7 +172,7 @@ if __name__ == "__main__":
         while not world.should_stop and (state.read() is None or state.value.status == RobotStatus.RESETTING):
             time.sleep(0.01)
 
-        origin = state.value.position
+        origin = state.value.ee_pose
         print(f"Origin: {origin}")
 
         start, i = time.monotonic(), 0
