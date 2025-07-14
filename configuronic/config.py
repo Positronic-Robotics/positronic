@@ -174,7 +174,7 @@ class Config:
             AssertionError: If the target is not callable.
 
         Example:
-            >>> @ir.config
+            >>> @cfgc.config
             >>> def sum(a, b):
             >>>     return a + b
             >>> res = sum.override(a=1, b=2).instantiate()
@@ -182,7 +182,7 @@ class Config:
 
             >>> def sum(a, b):
             >>>     return a + b
-            >>> res = ir.Config(sum, a=1, b=2).instantiate()
+            >>> res = cfgc.Config(sum, a=1, b=2).instantiate()
             >>> assert res == 3
         """
         assert callable(target), f"Target must be callable, got object of type {type(target)}."
@@ -325,7 +325,7 @@ class Config:
 
         Example:
             >>> import fire
-            >>> @ir.config
+            >>> @cfgc.config
             >>> def sum(a, b):
             >>>     return a + b
             >>> option1 = sum.override(a=1).override_and_instantiate
@@ -377,13 +377,13 @@ def config(target: Callable | None = None, **kwargs):
         The Config object.
 
     Example:
-        >>> @ir.config(a=1, b=2)
+        >>> @cfgc.config(a=1, b=2)
         >>> def sum(a, b):
         >>>     return a + b
         >>> res = sum.instantiate()
         >>> assert res == 3
 
-        >>> @ir.config
+        >>> @cfgc.config
         >>> def sum(a, b):
         >>>     return a + b
         >>> res = sum.override(a=1, b=2).instantiate()
@@ -406,10 +406,10 @@ def cli(config: Config):
         config: The config object to run.
 
     Example:
-        >>> @ir.config
+        >>> @cfgc.config
         >>> def sum(a, b):
         >>>     return a + b
-        >>> ir.cli(sum)
+        >>> cfgc.cli(sum)
         >>> # Shell call: python script.py --a 1 --b 2
         >>> # Shell call: python script.py --help
     """

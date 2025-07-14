@@ -5,11 +5,10 @@ from .system import (
 )
 from .compose import compose, extend
 from . import utils
-from .config import config, Config, ConfigError, cli, get_required_args
 
 __all__ = [
     'Message', 'OutputPort', 'ControlSystem',
     'ironic_system', 'on_message', 'out_property',
     'system_clock', 'State', 'NoValue', 'is_port', 'is_property',
-    'utils', 'compose', 'extend', 'config', 'Config', 'ConfigError', 'cli', 'get_required_args'
+    'utils', 'compose', 'extend'
 ]
