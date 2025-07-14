@@ -1,4 +1,6 @@
+from contextlib import contextmanager
 import multiprocessing as mp
+import multiprocessing.shared_memory
 import struct
 from abc import ABC, abstractmethod
 from typing import Any, ContextManager, Self
@@ -76,7 +78,7 @@ class NumpySMAdapter(SMCompliant):
     # Reverse mapping
     CODE_TO_DTYPE = {v: k for k, v in DTYPE_TO_CODE.items()}
 
-    _array: np.ndarray
+    _array: np.ndarray | None = None
 
     def __init__(self, array: np.ndarray):
         if not array.flags.c_contiguous:
@@ -85,6 +87,7 @@ class NumpySMAdapter(SMCompliant):
 
     @property
     def array(self) -> np.ndarray:
+        assert self._array is not None, "Array is not initialized"
         return self._array
 
     def buf_size(self) -> int:
@@ -95,12 +98,14 @@ class NumpySMAdapter(SMCompliant):
         # 4 bytes per dimension: dimension sizes (uint32)
         # remaining bytes: array data
 
+        assert self._array is not None, "Array is not initialized"
         header_size = 1 + 1 + (4 * self._array.ndim)  # dtype + ndim + shape
         data_size = self._array.nbytes
         return header_size + data_size
 
     def move_to_buffer(self, buffer: memoryview | bytes | bytearray) -> None:
         """Bind numpy array to shared memory buffer."""
+        assert self._array is not None, "Array is not initialized"
         # Ensure array is still contiguous
         if not self._array.flags.c_contiguous:
             raise ValueError("Array must be C-contiguous. Use np.ascontiguousarray() to make it contiguous.")
@@ -175,15 +180,17 @@ class NumpySMAdapter(SMCompliant):
 
 class ZeroCopySMEmitter(SignalEmitter):
 
-    def __init__(self, manager: mp.Manager, sm_manager: mp.managers.SharedMemoryManager, clock: Clock):
+    def __init__(self, lock: mp.Lock, ts_value: mp.Value, sm_queue: mp.Queue, clock: Clock):
         self._data_type: type[SMCompliant] | None = None
+        self._lock = lock
+        self._ts_value = ts_value
+        self._sm_queue = sm_queue
+
         self._sm = None
-        self._lock = manager.Lock()
-        self._ts_value = manager.Value('Q', -1)
-        self._out_data = None
+        self._out_data : SMCompliant | None = None
         self._expected_buf_size = None
-        self._sm_manager = sm_manager
         self._clock = clock
+        self._locked_in = False
 
     def emit(self, data: Any, ts: int = -1) -> bool:
         ts = ts if ts >= 0 else self._clock.now_ns()
@@ -197,8 +204,11 @@ class ZeroCopySMEmitter(SignalEmitter):
 
         if self._sm is None:  # First emit - create shared memory with the size from this instance
             self._expected_buf_size = buf_size
-            self._sm = self._sm_manager.SharedMemory(size=buf_size)
-            data.move_to_buffer(self._sm.buf)
+            self._sm = mp.shared_memory.SharedMemory(create=True, size=buf_size)
+            self._sm_queue.put((self._sm, self._data_type))
+
+            with self.zc_lock():
+                data.move_to_buffer(self._sm.buf)
             self._out_data = data
         else:  # Subsequent emits - validate buffer size matches
             assert buf_size == self._expected_buf_size, \
@@ -206,7 +216,7 @@ class ZeroCopySMEmitter(SignalEmitter):
                 "All data instances must have the same buffer size for a given channel."
             assert data is self._out_data, "SMEmitter can only emit the same object multiple times"
 
-        with self._lock:
+        with self.zc_lock():
             self._ts_value.value = ts
         return True
 
@@ -216,29 +226,48 @@ class ZeroCopySMEmitter(SignalEmitter):
             self._out_data.close()
             self._out_data = None
 
+        if self._sm is not None:
+            print(">>> Closing shared memory in emitter")
+            self._sm.close()
+            print(">>> Unlinking shared memory in emitter")
+            self._sm.unlink()
+            self._sm = None
+
+    @contextmanager
     def zc_lock(self) -> ContextManager[None]:
-        return self._lock
+        assert not self._locked_in, "Already locked, likely to call `emit` in a locked context"
+        self._locked_in = True
+        with self._lock:
+            yield
+            self._locked_in = False
 
 
 class ZeroCopySMReader(SignalReader):
 
-    def __init__(self, emitter: ZeroCopySMEmitter):
-        self._emitter = emitter
+    def __init__(self, lock: mp.Lock, ts_value: mp.Value, sm_queue: mp.Queue):
+        self._lock = lock
+        self._ts_value = ts_value
+        self._sm_queue = sm_queue
+
         self._out_value = None
         self._readonly_buffer = None
+        self._locked_in = False
+        self._sm = None
 
     def read(self) -> Message | None:
-        if self._emitter._sm is None:
-            return None
+        with self.zc_lock():
+            if self._ts_value.value == -1:
+                return None
 
         if self._out_value is None:
-            self._readonly_buffer = self._emitter._sm.buf.toreadonly()
-            self._out_value = self._emitter._data_type.create_from_memoryview(self._readonly_buffer)
+            self._sm, data_type = self._sm_queue.get_nowait()
+            self._readonly_buffer = self._sm.buf.toreadonly()
+            self._out_value = data_type.create_from_memoryview(self._readonly_buffer)
 
-        with self._emitter._lock:
-            if self._emitter._ts_value.value == -1:
+        with self._lock:
+            if self._ts_value.value == -1:
                 return None
-            return Message(data=self._out_value, ts=self._emitter._ts_value.value)
+            return Message(data=self._out_value, ts=self._ts_value.value)
 
     def close(self):
         """Release references to shared memory to allow proper cleanup."""
@@ -250,5 +279,16 @@ class ZeroCopySMReader(SignalReader):
             self._readonly_buffer.release()
             self._readonly_buffer = None
 
+        if self._sm is not None:
+            # Don't call unlink here, it will be called by the emitter
+            print("Closing shared memory in reader")
+            self._sm.close()
+            self._sm = None
+
+    @contextmanager
     def zc_lock(self) -> ContextManager[None]:
-        return self._emitter.zc_lock()
+        assert not self._locked_in, "Already locked, likely to call `read` in a locked context"
+        self._locked_in = True
+        with self._lock:
+            yield
+            self._locked_in = False

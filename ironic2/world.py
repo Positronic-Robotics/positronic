@@ -119,12 +119,10 @@ class World:
         self._stop_event = mp.Event()
         self.background_processes = []
         self._manager = mp.Manager()
-        self._sm_manager = mp.managers.SharedMemoryManager()
         self._sm_emitters_readers = []
         self.entered = False
 
     def __enter__(self):
-        self._sm_manager.__enter__()
         self.entered = True
         return self
 
@@ -150,8 +148,6 @@ class World:
         for emitter, reader in self._sm_emitters_readers:
             reader.close()
             emitter.close()
-
-        self._sm_manager.__exit__(exc_type, exc_value, traceback)
 
     def mp_pipe(self, maxsize: int = 0) -> Tuple[SignalEmitter, SignalReader]:
         """Create a queue-based communication channel between processes.
@@ -194,8 +190,11 @@ class World:
             Tuple of (emitter, reader) for zero-copy inter-process communication
         """
         assert self.entered, "Zero-copy shared memory is only available after entering the world context."
-        emitter = ZeroCopySMEmitter(self._manager, self._sm_manager, self._clock)
-        reader = ZeroCopySMReader(emitter)
+        lock = self._manager.Lock()
+        ts_value = self._manager.Value('Q', -1)
+        sm_queue = self._manager.Queue()
+        emitter = ZeroCopySMEmitter(lock, ts_value, sm_queue, self._clock)
+        reader = ZeroCopySMReader(lock, ts_value, sm_queue)
         self._sm_emitters_readers.append((emitter, reader))
         return emitter, reader
 

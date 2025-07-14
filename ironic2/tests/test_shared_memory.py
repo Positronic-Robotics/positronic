@@ -1,8 +1,10 @@
+from typing import Iterator
 import pytest
 import numpy as np
 
-from ironic2.core import Message
+from ironic2.core import Clock, Message, NoOpEmitter, SignalEmitter, SignalReader, Sleep
 from ironic2.shared_memory import NumpySMAdapter
+from ironic2.utils import DefaultReader, ValueUpdated
 from ironic2.world import ZeroCopySMEmitter, ZeroCopySMReader, World
 
 
@@ -389,3 +391,50 @@ class TestZeroCopySMAPI:
             match="Zero-copy shared memory is only available after entering the world context"
         ):
             w.zero_copy_sm()
+
+
+
+class TestEmitterControlLoop:
+    emitter : SignalEmitter = NoOpEmitter()
+
+    def run(self, _should_stop: SignalReader, _clock: Clock) -> Iterator[Sleep]:
+        yield Sleep(0.2)
+
+        test_array = np.array([1.0, 2.0, 3.0], dtype=np.float32)
+        data = NumpySMAdapter(test_array)
+        self.emitter.emit(data, ts=12345)
+
+        yield Sleep(0.2)
+
+        with self.emitter.zc_lock():
+            data.array[0] = 10.0
+        self.emitter.emit(data, ts=67890)
+
+        yield Sleep(0.2)
+
+
+
+class TestZeroCopyMultiprocessing:
+    """Test zero-copy shared memory in multiprocessing environment."""
+
+    def test_simple_multiprocessing_communication(self):
+        """Test that zero-copy shared memory works across processes."""
+
+        emitter_control_loop = TestEmitterControlLoop()
+
+        with World() as world:
+            emitter_control_loop.emitter, reader = world.zero_copy_sm()
+
+            reader = DefaultReader(ValueUpdated(reader), (None, False))
+            world.start_in_subprocess(emitter_control_loop.run)
+
+            data = []
+            while not world.should_stop:
+                value, updated = reader.value
+                if updated:
+                    with reader.zc_lock():
+                        data.append(value.array.copy())
+
+            assert len(data) == 2
+            assert np.allclose(data[0], [1.0, 2.0, 3.0])
+            assert np.allclose(data[1], [10.0, 2.0, 3.0])

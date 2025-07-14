@@ -1,5 +1,5 @@
 import time
-from typing import Callable, Any
+from typing import Callable, Any, ContextManager
 
 from ironic2 import SignalReader, SignalEmitter, Message
 from ironic2.core import Clock
@@ -17,6 +17,9 @@ class MapSignalReader(SignalReader):
             return None
         return Message(self.func(orig_message.data), orig_message.ts)
 
+    def zc_lock(self) -> ContextManager[None]:
+        return self.reader.zc_lock()
+
 
 class MapSignalEmitter(SignalEmitter):
 
@@ -24,8 +27,11 @@ class MapSignalEmitter(SignalEmitter):
         self.emitter = emitter
         self.func = func
 
-    def emit(self, data: Any, ts: int | None = None) -> bool:
+    def emit(self, data: Any, ts: int = -1) -> bool:
         return self.emitter.emit(self.func(data), ts)
+
+    def zc_lock(self) -> ContextManager[None]:
+        return self.emitter.zc_lock()
 
 
 def map(reader: SignalReader | SignalEmitter, func: Callable[[Any], Any]) -> SignalReader | SignalEmitter:
@@ -56,6 +62,9 @@ class ValueUpdated(SignalReader):
 
         return Message((orig_message.data, is_updated), self.last_ts)
 
+    def zc_lock(self) -> ContextManager[None]:
+        return self.reader.zc_lock()
+
 
 class DefaultReader(SignalReader):
     """Signal reader that returns a default value if no value is available."""
@@ -69,6 +78,9 @@ class DefaultReader(SignalReader):
         if msg is None:
             return self.default_msg
         return msg
+
+    def zc_lock(self) -> ContextManager[None]:
+        return self.reader.zc_lock()
 
 
 class RateLimiter:

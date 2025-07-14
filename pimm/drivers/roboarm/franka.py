@@ -13,9 +13,11 @@ from . import RobotStatus, State, command
 
 class FrankaState(State, ir.shared_memory.NumpySMAdapter):
 
-    def __init__(self):
-        # q, dq, ee_pose, status
-        super().__init__(np.zeros(7 + 7 + 7 + 1, dtype=np.float32))
+    def __init__(self, array: np.ndarray | None = None):
+        if array is None:
+            # q, dq, ee_pose, status
+            array = np.zeros(7 + 7 + 7 + 1, dtype=np.float32)
+        super().__init__(array)
 
     @property
     def q(self) -> np.ndarray:
@@ -99,6 +101,19 @@ class Robot:
         robot.set_load(0.0, [0.0, 0.0, 0.0], [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0])
         robot.relative_dynamics_factor = rel_dynamics_factor
 
+    def _reset(self, robot: franky.Robot, robot_state: FrankaState):
+        with self.state.zc_lock():
+            robot_state._start_reset()
+        self.state.emit(robot_state)
+
+        robot.join_motion(timeout=0.1)
+        reset_motion = franky.JointWaypointMotion([franky.JointWaypoint(self._home_joints)])
+        robot.move(reset_motion, asynchronous=False)
+
+        with self.state.zc_lock():
+            robot_state._finish_reset()
+        self.state.emit(robot_state)
+
     def run(self, should_stop: ir.SignalReader, clock: ir.Clock) -> Iterator[ir.Sleep]:
         robot = franky.Robot(self._ip, realtime_config=franky.RealtimeConfig.Ignore)
         Robot._init_robot(robot, self._relative_dynamics_factor)
@@ -109,25 +124,14 @@ class Robot:
         last_q = None
         rate_limiter = ir.RateLimiter(clock, hz=1000)
 
-        # Reset robot
-        reset_motion = franky.JointWaypointMotion([franky.JointWaypoint(self._home_joints)])
-
-        def reset():
-            robot_state._start_reset()
-            self.state.emit(robot_state)
-            robot.join_motion(timeout=0.1)
-            robot.move(reset_motion, asynchronous=False)
-            robot_state._finish_reset()
-            self.state.emit(robot_state)
-
-        reset()
+        self._reset(robot, robot_state)
 
         while not should_stop.value:
             cmd, updated = commands.value
             if updated:
                 match cmd:
                     case command.Reset():
-                        reset()
+                        self._reset(robot, robot_state)
                         continue
                     case command.CartesianMove(pose):
                         pos = franky.Affine(translation=pose.translation, quaternion=pose.rotation.as_quat_xyzw)
@@ -147,7 +151,8 @@ class Robot:
                     print(f"Motion failed for {pos}: {e}")
 
             js = robot.current_joint_state
-            robot_state.encode(js.position, js.velocity, robot.current_pose.end_effector_pose)
+            with self.state.zc_lock():
+                robot_state.encode(js.position, js.velocity, robot.current_pose.end_effector_pose)
             self.state.emit(robot_state)
 
             yield ir.Sleep(rate_limiter.wait_time())
