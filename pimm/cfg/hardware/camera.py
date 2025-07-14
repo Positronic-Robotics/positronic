@@ -1,8 +1,8 @@
-import ironic as ir
+import configuronic as cfgc
 from pimm.drivers.camera.linux_video import LinuxVideo
 
 
-arducam_left = ir.Config(
+arducam_left = cfgc.Config(
     LinuxVideo,
     device_path="/dev/v4l/by-id/usb-Arducam_Technology_Co.__Ltd._Arducam_UC684_UC684LEFT-video-index0",
     width=1280,

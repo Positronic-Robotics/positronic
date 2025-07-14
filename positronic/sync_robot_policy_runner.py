@@ -1,22 +1,23 @@
 import time
-import fire
-import rerun as rr
-import numpy as np
 
+import fire
+import numpy as np
+import rerun as rr
+
+import configuronic as cfgc
 import positronic.cfg.hardware
 import positronic.cfg.hardware.camera
+import positronic.cfg.inference.action
+import positronic.cfg.inference.policy
+import positronic.cfg.inference.state
+import positronic.cfg.simulator
 from positronic.drivers.camera.linuxpy_video import LinuxPyCamera
 from positronic.drivers.gripper.dh import DHGripper
 from positronic.drivers.roboarm.kinova.control_system import KinovaSync
 from positronic.inference.action import ActionDecoder
+from positronic.inference.inference import (rerun_log_action,
+                                            rerun_log_observation)
 from positronic.inference.state import StateEncoder
-from positronic.inference.inference import rerun_log_action, rerun_log_observation
-
-import ironic as ir
-import positronic.cfg.inference.state
-import positronic.cfg.inference.action
-import positronic.cfg.inference.policy
-import positronic.cfg.simulator
 
 
 def get_state(
@@ -125,19 +126,19 @@ def run_policy_in_simulator(  # noqa: C901  Function is too complex
     env.cleanup()
 
 
-kinova_sync = ir.Config(
+kinova_sync = cfgc.Config(
     KinovaSync,
     ip="192.168.1.10",
     relative_dynamics_factor=0.2,
 )
 
-gripper = ir.Config(
+gripper = cfgc.Config(
     DHGripper,
     port="/dev/ttyUSB0",
 )
 
 
-run = ir.Config(
+run = cfgc.Config(
     run_policy_in_simulator,
     env=kinova_sync,
     gripper=gripper,

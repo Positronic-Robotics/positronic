@@ -10,7 +10,7 @@ import fire
 
 from lerobot.common.datasets.lerobot_dataset import LeRobotDataset
 
-import ironic as ir
+import configuronic as cfgc
 import positronic.cfg.inference.action
 import positronic.cfg.inference.state
 from positronic.inference.action import ActionDecoder
@@ -72,6 +72,7 @@ class EpisodeDictDataset(torch.utils.data.Dataset):
     """
     This dataset is used to load the episode data from the file and encode it into a dictionary.
     """
+
     def __init__(self, episode_files: list[Path], state_encoder: StateEncoder, action_encoder: ActionDecoder):
         self.episode_files = episode_files
         self.state_encoder = state_encoder
@@ -133,7 +134,7 @@ def append_data_to_dataset(
     print(f"Total length of the dataset: {seconds_to_str(total_length)}")
 
 
-@ir.config(
+@cfgc.config(
     fps=30,
     video=True,
     state_encoder=positronic.cfg.inference.state.end_effector,
@@ -176,7 +177,7 @@ def convert_to_lerobot_dataset(
     print(f"Dataset converted and saved to {output_dir}")
 
 
-@ir.config(
+@cfgc.config(
     state_encoder=positronic.cfg.inference.state.end_effector,
     action_encoder=positronic.cfg.inference.action.umi_relative,
     task="pick plate from the table and place it into the dishwasher",

@@ -4,7 +4,7 @@ import numpy as np
 import rerun as rr
 import tqdm
 
-import ironic as ir
+import configuronic as cfgc
 from geom import Transform3D
 from positronic.drivers.roboarm.kinova.base import JointCompliantController, KinematicsSolver, wrap_joint_angle
 
@@ -108,7 +108,7 @@ def debug_kinematics(urdf_path: str, mujoco_model_path: str, rerun: str, traject
         print(f"Joint {i}: [{min_tau:.2f}, {max_tau:.2f}]")
 
 
-main = ir.Config(debug_kinematics, trajectory=trajectory)
+main = cfgc.Config(debug_kinematics, trajectory=trajectory)
 
 if __name__ == "__main__":
-    ir.cli(main)
+    cfgc.cli(main)

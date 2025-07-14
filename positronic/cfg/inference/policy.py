@@ -1,4 +1,4 @@
-import ironic as ir
+import configuronic as cfgc
 
 
 def _get_act_policy(checkpoint_path: str, use_temporal_ensembler: bool = False, n_action_steps: int | None = None):
@@ -34,7 +34,7 @@ def _get_pi0_fast_policy(checkpoint_path: str):
     return policy
 
 
-act = ir.Config(_get_act_policy, use_temporal_ensembler=False)
-diffusion = ir.Config(_get_diffusion_policy)
-pi0 = ir.Config(_get_pi0_policy)
-pi0_fast = ir.Config(_get_pi0_fast_policy)
+act = cfgc.Config(_get_act_policy, use_temporal_ensembler=False)
+diffusion = cfgc.Config(_get_diffusion_policy)
+pi0 = cfgc.Config(_get_pi0_policy)
+pi0_fast = cfgc.Config(_get_pi0_fast_policy)

@@ -1,10 +1,8 @@
-import ironic as ir
-
-from positronic.inference.state import StateEncoder, ImageEncodingConfig
-
+import configuronic as cfgc
+from positronic.inference.state import ImageEncodingConfig, StateEncoder
 
 # State for umi-style inference (two cameras and gripper state)
-end_effector = ir.Config(
+end_effector = cfgc.Config(
     StateEncoder,
     state_output_key='observation.state',
     images=[
@@ -26,7 +24,7 @@ end_effector = ir.Config(
 
 
 # Similiar to end_effector but with additional frames with 15 frame offset
-end_effector_mem15 = ir.Config(
+end_effector_mem15 = cfgc.Config(
     StateEncoder,
     state_output_key='observation.state',
     images=[
@@ -60,7 +58,7 @@ end_effector_mem15 = ir.Config(
 
 
 # State for back and front camera used mostly in simulation
-end_effector_back_front = ir.Config(
+end_effector_back_front = cfgc.Config(
     StateEncoder,
     state_output_key='observation.state',
     images=[
@@ -80,7 +78,7 @@ end_effector_back_front = ir.Config(
     ]
 )
 
-end_effector_224 = ir.Config(
+end_effector_224 = cfgc.Config(
     StateEncoder,
     state_output_key='observation.state',
     images=[

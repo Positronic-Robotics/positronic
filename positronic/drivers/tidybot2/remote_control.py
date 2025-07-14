@@ -6,6 +6,7 @@ import logging
 import fire
 import numpy as np
 
+import configuronic as cfgc
 import ironic as ir
 import positronic.cfg.hardware.tidybot
 import positronic.cfg.ui
@@ -64,7 +65,7 @@ class TidybotTeleop(ir.ControlSystem):
         return ir.State.ALIVE
 
 
-teleop = ir.Config(TidybotTeleop, max_vel=(1.0, 1.0, 3.14))
+teleop = cfgc.Config(TidybotTeleop, max_vel=(1.0, 1.0, 3.14))
 
 
 async def _main(gamepad: ir.ControlSystem, tidybot: ir.ControlSystem, teleop: ir.ControlSystem):
@@ -76,10 +77,10 @@ async def _main(gamepad: ir.ControlSystem, tidybot: ir.ControlSystem, teleop: ir
     await ir.utils.run_gracefully(system)
 
 
-main = ir.Config(_main,
-                 gamepad=positronic.cfg.ui.gamepad,
-                 tidybot=positronic.cfg.hardware.tidybot.vehicle0,
-                 teleop=teleop)
+main = cfgc.Config(_main,
+                   gamepad=positronic.cfg.ui.gamepad,
+                   tidybot=positronic.cfg.hardware.tidybot.vehicle0,
+                   teleop=teleop)
 
 
 async def async_main(**kwargs):

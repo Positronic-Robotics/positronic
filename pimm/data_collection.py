@@ -4,7 +4,7 @@ from typing import Any, Dict
 from mujoco import Sequence
 
 import geom
-import ironic as ir1
+import configuronic as cfgc
 import ironic2 as ir
 from pimm.drivers import roboarm
 from pimm.drivers.sound import SoundSystem
@@ -340,13 +340,13 @@ def main_sim(
                 break
 
 
-main_cfg = ir1.Config(
+main_cfg = cfgc.Config(
     main,
     robot_arm=None,
     gripper=pimm.cfg.hardware.gripper.dh_gripper,
     webxr=pimm.cfg.webxr.webxr,
     sound=pimm.cfg.sound.sound,
-    cameras=ir1.Config(
+    cameras=cfgc.Config(
         dict,
         left=pimm.cfg.hardware.camera.arducam_left,
         right=pimm.cfg.hardware.camera.arducam_right,
@@ -354,7 +354,7 @@ main_cfg = ir1.Config(
     operator_position=FRANKA_FRONT_TRANSFORM,
 )
 
-main_sim_cfg = ir1.Config(
+main_sim_cfg = cfgc.Config(
     main_sim,
     mujoco_model_path="positronic/assets/mujoco/franka_table.xml",
     webxr=pimm.cfg.webxr.webxr,
@@ -365,4 +365,4 @@ main_sim_cfg = ir1.Config(
 
 if __name__ == "__main__":
     # TODO: add ability to specify multiple targets in CLI
-    ir1.cli(main_sim_cfg)
+    cfgc.cli(main_sim_cfg)

@@ -1,25 +1,24 @@
 import os
 from typing import Dict
 
-from tqdm import tqdm
 import fire
 import torch
+from tqdm import tqdm
 
+import configuronic as cfgc
 import geom
-import ironic as ir
-
 import positronic.cfg.simulator
 from positronic.simulator.mujoco.sim import MujocoSimulatorEnv
 from positronic.tools.dataset_dumper import SerialDumper
 
 
 def process_episode(
-        episode_path: str,
-        output_dir: str,
-        env: MujocoSimulatorEnv,
-        observation_hz: int,
-        use_ik: bool,
-        image_name_mapping: Dict[str, str],
+    episode_path: str,
+    output_dir: str,
+    env: MujocoSimulatorEnv,
+    observation_hz: int,
+    use_ik: bool,
+    image_name_mapping: Dict[str, str],
 ):
     data = torch.load(episode_path)
     n_frames = len(data['image_timestamp'])
@@ -43,8 +42,7 @@ def process_episode(
             if use_ik:
                 target_robot_position = geom.Transform3D(
                     translation=data['target_robot_position_translation'][event_idx],
-                    quaternion=data['target_robot_position_quaternion'][event_idx]
-                )
+                    quaternion=data['target_robot_position_quaternion'][event_idx])
                 try:
                     actuator_values = env.inverse_kinematics.recalculate_ik(target_robot_position)
                 except Exception:
@@ -96,23 +94,15 @@ def process_episode(
     dataset_writer.end_episode()
 
 
-@ir.config(
-    observation_hz=60,
-    use_ik=False,
-    env=positronic.cfg.simulator.simulator,
-    image_name_mapping={
-        'front': 'handcam_front',
-        'back': 'handcam_back',
-    }
-)
-def main(
-    input_dir: str,
-    output_dir: str,
-    env: MujocoSimulatorEnv,
-    observation_hz: int,
-    use_ik: bool,
-    image_name_mapping: Dict[str, str]
-):
+@cfgc.config(observation_hz=60,
+             use_ik=False,
+             env=positronic.cfg.simulator.simulator,
+             image_name_mapping={
+                 'front': 'handcam_front',
+                 'back': 'handcam_back',
+             })
+def main(input_dir: str, output_dir: str, env: MujocoSimulatorEnv, observation_hz: int, use_ik: bool,
+         image_name_mapping: Dict[str, str]):
     # Get all episode files from input directory
     input_files = [f for f in os.listdir(input_dir) if f.endswith('.pt')]
 

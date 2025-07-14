@@ -1,10 +1,11 @@
 import numpy as np
 
+import configuronic as cfgc
 import geom
-import positronic.cfg.hardware.camera
-import positronic.cfg.hardware.roboarms
-import positronic.cfg.hardware.gripper
 import ironic as ir
+import positronic.cfg.hardware.camera
+import positronic.cfg.hardware.gripper
+import positronic.cfg.hardware.roboarms
 
 
 def _state_mapping(env: ir.ControlSystem):
@@ -18,7 +19,7 @@ def _state_mapping(env: ir.ControlSystem):
     return ir.extend(env, state=ir.utils.properties_dict(**robot_properties))
 
 
-@ir.config(camera=None)
+@cfgc.config(camera=None)
 def roboarm(arm: ir.ControlSystem, camera: ir.ControlSystem | None = None):
     from positronic.drivers.gripper.dh import DHGripper
     gripper = DHGripper(port='/dev/ttyUSB0')
@@ -51,7 +52,7 @@ GRIPPER_REGISTRATION = geom.Transform3D(
 )
 
 
-@ir.config(
+@cfgc.config(
     camera=positronic.cfg.hardware.camera.merged,
     registration_transform=GRIPPER_REGISTRATION,
     gripper=None,
@@ -83,7 +84,7 @@ def umi(camera: ir.ControlSystem, registration_transform: geom.Transform3D, grip
 umi_gripper = umi.override(gripper=positronic.cfg.hardware.gripper.dh)
 
 
-@ir.config(
+@cfgc.config(
     roboarm=positronic.cfg.hardware.roboarms.franka_ik,
     camera=positronic.cfg.hardware.camera.merged,
 )

@@ -1,18 +1,19 @@
 # Configuration for the UI
 
 import asyncio
-from collections import deque
 import time
+from collections import deque
 from typing import List
 
 import numpy as np
 
+import configuronic as cfgc
 import geom
 import ironic as ir
 import positronic.teleop
 
 
-@ir.config(port=5005)
+@cfgc.config(port=5005)
 def webxr(port: int, require_left: bool, require_right: bool):
     from positronic.webxr import WebXR
 
@@ -36,7 +37,9 @@ webxr_left = webxr.override(require_left=True, require_right=False)
 webxr_right = webxr.override(require_left=False, require_right=True)
 
 
-@ir.config(webxr=webxr_right, operator_position=positronic.teleop.FRANKA_FRONT_TRANSFORM, stream_to_webxr='first.image')
+@cfgc.config(webxr=webxr_right,
+             operator_position=positronic.teleop.FRANKA_FRONT_TRANSFORM,
+             stream_to_webxr='first.image')
 def teleop(webxr: ir.ControlSystem, operator_position: geom.Transform3D, stream_to_webxr: str | None = None):
     teleop_cs = positronic.teleop.TeleopSystem(operator_position)
     components = [webxr, teleop_cs]
@@ -57,14 +60,12 @@ def teleop(webxr: ir.ControlSystem, operator_position: geom.Transform3D, stream_
     return ir.compose(*components, inputs=inputs, outputs=teleop_cs.output_mappings)
 
 
-@ir.config(webxr=webxr_both)
+@cfgc.config(webxr=webxr_both)
 def teleop_umi(webxr: ir.ControlSystem, stream_to_webxr: str | None = None):
     teleop_cs = positronic.teleop.TeleopButtons()
     components = [webxr, teleop_cs]
 
-    teleop_cs.bind(
-        teleop_buttons=ir.utils.map_port(lambda x: x['right'], webxr.outs.buttons),
-    )
+    teleop_cs.bind(teleop_buttons=ir.utils.map_port(lambda x: x['right'], webxr.outs.buttons), )
 
     inputs = {'images': None}
 
@@ -82,7 +83,7 @@ def teleop_umi(webxr: ir.ControlSystem, stream_to_webxr: str | None = None):
     return ir.compose(*components, inputs=inputs, outputs=outputs)
 
 
-@ir.config(translation_speed=0.0005, rotation_speed=0.001, translation_dead_zone=0.8, rotation_dead_zone=0.7)
+@cfgc.config(translation_speed=0.0005, rotation_speed=0.001, translation_dead_zone=0.8, rotation_dead_zone=0.7)
 def spacemouse(translation_speed: float, rotation_speed: float, translation_dead_zone: float,
                rotation_dead_zone: float):
     from positronic.drivers.spacemouse import SpacemouseCS
@@ -94,7 +95,7 @@ def spacemouse(translation_speed: float, rotation_speed: float, translation_dead
     return ir.compose(smouse, inputs=inputs, outputs=outputs)
 
 
-@ir.config(tracking=teleop, extra_ui_camera_names=['handcam_back', 'handcam_front', 'front_view', 'back_view'])
+@cfgc.config(tracking=teleop, extra_ui_camera_names=['handcam_back', 'handcam_front', 'front_view', 'back_view'])
 def teleop_with_ui(tracking: ir.ControlSystem, extra_ui_camera_names: List[str] | None):
     if extra_ui_camera_names:
         from positronic.simulator.mujoco.mujoco_gui import DearpyguiUi
@@ -113,19 +114,19 @@ def teleop_with_ui(tracking: ir.ControlSystem, extra_ui_camera_names: List[str] 
     return tracking
 
 
-@ir.config(camera_names=['handcam_left', 'handcam_right'])
+@cfgc.config(camera_names=['handcam_left', 'handcam_right'])
 def dearpygui_ui(camera_names: List[str]):
     from positronic.simulator.mujoco.mujoco_gui import DearpyguiUi
     return DearpyguiUi(camera_names)
 
 
-@ir.config(joystick_id=0, fps=200, deadzone_size=0.1)
+@cfgc.config(joystick_id=0, fps=200, deadzone_size=0.1)
 def gamepad(joystick_id, fps, deadzone_size):
     from positronic.drivers.ui.gamepad import GamepadCS
     return GamepadCS(joystick_id=joystick_id, fps=fps, deadzone_size=deadzone_size)
 
 
-@ir.config(time_len_sec=5.0)
+@cfgc.config(time_len_sec=5.0)
 def stub(time_len_sec: float):  # noqa: C901  Function is too complex
 
     @ir.ironic_system(

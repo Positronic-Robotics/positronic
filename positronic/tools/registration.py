@@ -1,16 +1,17 @@
 import asyncio
-import numpy as np
 from typing import List
-import geom
+
 import fire
-from geom.trajectory import AbsoluteTrajectory, RelativeTrajectory
-
-from scipy.linalg import orthogonal_procrustes
-import ironic as ir
+import numpy as np
 import rerun as rr
+from scipy.linalg import orthogonal_procrustes
 
-import positronic.cfg.ui
+import configuronic as cfgc
+import ironic as ir
+import geom
 import positronic.cfg.hardware.roboarms
+import positronic.cfg.ui
+from geom.trajectory import AbsoluteTrajectory, RelativeTrajectory
 
 
 def _plot_trajectory(trajectory: AbsoluteTrajectory, name: str, color: List[int] = [255, 0, 0, 255]):
@@ -209,7 +210,7 @@ class RegistrationSystem(ir.ControlSystem):
             print(f"{percentile}th percentile Tracking error: {np.percentile(error, percentile)}")
 
 
-@ir.config(webxr=positronic.cfg.ui.webxr_both, robot_arm=positronic.cfg.hardware.roboarms.franka_ik)
+@cfgc.config(webxr=positronic.cfg.ui.webxr_both, robot_arm=positronic.cfg.hardware.roboarms.franka_ik)
 async def perform_registration(
     webxr: ir.ControlSystem,
     robot_arm: ir.ControlSystem,

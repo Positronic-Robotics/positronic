@@ -1,7 +1,7 @@
-import ironic as ir
+import configuronic as cfgc
 
 
-@ir.config(port="/dev/ttyUSB0")
+@cfgc.config(port="/dev/ttyUSB0")
 def dh(port: str):
     from positronic.drivers.gripper.dh import DHGripper
 

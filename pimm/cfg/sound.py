@@ -1,6 +1,6 @@
-import ironic as ir
+import configuronic as cfgc
 import pimm.drivers.sound
 
-sound = ir.Config(
+sound = cfgc.Config(
     pimm.drivers.sound.SoundSystem,
 )
