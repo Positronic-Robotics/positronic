@@ -141,10 +141,7 @@ class MujocoFrankaState(State, ir.shared_memory.NumpySMAdapter):
 
 
 class MujocoFranka:
-    class _NoCommandsYet:
-        pass
-
-    commands: ir.SignalReader[roboarm_command.CommandType | _NoCommandsYet] = ir.NoOpReader()
+    commands: ir.SignalReader[roboarm_command.CommandType] = ir.NoOpReader()
 
     state: ir.SignalEmitter[MujocoFrankaState] = ir.NoOpEmitter()
 
@@ -157,7 +154,7 @@ class MujocoFranka:
         self.joint_qpos_ids = [self.sim.model.joint(joint).qposadr.item() for joint in self.joint_names]
 
     def run(self, should_stop: ir.SignalReader, clock: ir.Clock):
-        commands = ir.ValueUpdated(ir.DefaultReader(self.commands, self._NoCommandsYet()))
+        commands = ir.DefaultReader(ir.ValueUpdated(self.commands), (None, False))
         state = MujocoFrankaState()
 
         while not should_stop.value:
@@ -170,8 +167,6 @@ class MujocoFranka:
                         self.set_actuator_values(positions)
                     case roboarm_command.Reset():
                         # TODO: it's not clear how to make reset, because interleave breakes if time goes backwards
-                        pass
-                    case self._NoCommandsYet():
                         pass
                     case _:
                         raise ValueError(f"Unknown command type: {type(command)}")
@@ -230,7 +225,7 @@ class MujocoFranka:
 
 
 class MujocoGripper:
-    target_grip: ir.SignalReader[int] = ir.NoOpReader()
+    target_grip: ir.SignalReader[float] = ir.NoOpReader()
     grip: ir.SignalEmitter = ir.NoOpEmitter()
 
     def __init__(self, sim: MujocoSim, actuator_name: str, joint_name: str):
@@ -239,10 +234,10 @@ class MujocoGripper:
         self.joint_name = joint_name
 
     def run(self, should_stop: ir.SignalReader, clock: ir.Clock):
-        self.target_grip = ir.DefaultReader(self.target_grip, 0)
+        target_grip_reader = ir.DefaultReader(self.target_grip, 0.0)
 
         while not should_stop.value:
-            target_grip = self.target_grip.value
+            target_grip = target_grip_reader.value
             self.set_target_grip(target_grip)
 
             self.grip.emit(self.sim.data.joint(self.joint_name).qpos.item())

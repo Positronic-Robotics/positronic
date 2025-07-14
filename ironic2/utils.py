@@ -22,6 +22,7 @@ class MapSignalReader(SignalReader[T]):
     def zc_lock(self) -> ContextManager[None]:
         return self.reader.zc_lock()
 
+
 class MapSignalEmitter(SignalEmitter[T]):
 
     def __init__(self, emitter: SignalEmitter[T], func: Callable[[T], T]):
@@ -77,14 +78,17 @@ class ValueUpdated(SignalReader[Tuple[T, bool]]):
         return self.reader.zc_lock()
 
 
-class DefaultReader(SignalReader[T]):
+K = TypeVar('K')
+
+
+class DefaultReader(SignalReader[T | K]):
     """Signal reader that returns a default value if no value is available."""
 
-    def __init__(self, reader: SignalReader[T], default: T, default_ts: int = 0):
+    def __init__(self, reader: SignalReader[T], default: K, default_ts: int = 0):
         self.reader = reader
         self.default_msg = Message(default, default_ts)
 
-    def read(self) -> Message[T] | None:
+    def read(self) -> Message[T | K] | None:
         msg = self.reader.read()
         if msg is None:
             return self.default_msg

@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from typing import Callable, ContextManager, Generic, Iterator, final, TypeVar
 
 
-T = TypeVar('T')
+T = TypeVar('T', covariant=True)
 
 
 class NoValueException(Exception):

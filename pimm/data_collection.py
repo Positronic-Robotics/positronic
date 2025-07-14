@@ -24,7 +24,7 @@ import pimm.cfg.sound
 import pimm.cfg.simulator
 
 
-def _parse_buttons(buttons: ir.Message | None, button_handler: ButtonHandler):
+def _parse_buttons(buttons: Dict, button_handler: ButtonHandler):
     for side in ['left', 'right']:
         if buttons[side] is None:
             continue
@@ -143,10 +143,10 @@ FRANKA_BACK_TRANSFORM = geom.Transform3D(rotation=geom.Rotation.from_quat([-0.5,
 
 class DataCollection:
     frame_readers : Dict[str, ir.SignalReader] = {}
-    controller_positions_reader : ir.SignalReader = ir.NoOpReader()
-    buttons_reader : ir.SignalReader = ir.NoOpReader()
-    robot_state : ir.SignalReader = ir.NoOpReader()
-    robot_commands : ir.SignalEmitter = ir.NoOpEmitter()
+    controller_positions_reader : ir.SignalReader[Dict[str, geom.Transform3D]] = ir.NoOpReader()
+    buttons_reader : ir.SignalReader[Dict] = ir.NoOpReader()
+    robot_state : ir.SignalReader[roboarm.State] = ir.NoOpReader()
+    robot_commands : ir.SignalEmitter[roboarm.command.CommandType] = ir.NoOpEmitter()
     target_grip_emitter : ir.SignalEmitter[float] = ir.NoOpEmitter()
     sound_emitter : ir.SignalEmitter[str] = ir.NoOpEmitter()
 
@@ -206,6 +206,8 @@ class DataCollection:
 
                 controller_positions, controller_positions_updated = controller_positions_reader.value
                 target_robot_pos = tracker.update(controller_positions['right'])
+                # TODO: that's not clear how to deal with the fact that target_ts from webxr use real clock
+                # and `clock` could be simulator/real clock.
                 last_target_ts = clock.now_ns()
 
                 if tracker.on and controller_positions_updated:  # Don't spam the robot with commands.

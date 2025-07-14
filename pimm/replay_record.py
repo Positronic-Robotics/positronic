@@ -19,7 +19,7 @@ import pimm.cfg.simulator
 class DataDumper:
     frame_readers : Dict[str, ir.SignalReader] = {}
     robot_state : ir.SignalReader = ir.NoOpReader()
-    robot_commands : ir.SignalReader = ir.NoOpReader()
+    robot_commands : ir.SignalReader[roboarm.command.CommandType] = ir.NoOpReader()
     target_grip : ir.SignalReader[float] = ir.NoOpReader()
 
     def __init__(self, output_dir: str | None, fps: int) -> None:
@@ -28,7 +28,7 @@ class DataDumper:
 
     def run(self, should_stop: ir.SignalReader, clock: ir.Clock) -> Iterator[ir.Sleep]:  # noqa: C901
         frame_readers = {
-            camera_name: ir.ValueUpdated(ir.DefaultReader(frame_reader, None))
+            camera_name: ir.DefaultReader(ir.ValueUpdated(frame_reader), (None, False))
             for camera_name, frame_reader in self.frame_readers.items()
         }
         target_grip_reader = ir.DefaultReader(self.target_grip, None)
