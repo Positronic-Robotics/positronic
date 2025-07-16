@@ -28,7 +28,7 @@ class DataDumper:
 
     def run(self, should_stop: ir.SignalReader, clock: ir.Clock) -> Iterator[ir.Sleep]:  # noqa: C901
         frame_readers = {
-            camera_name: ir.DefaultReader(ir.ValueUpdated(frame_reader), (None, False))
+            camera_name: ir.DefaultReader(ir.ValueUpdated(frame_reader), ({}, False))
             for camera_name, frame_reader in self.frame_readers.items()
         }
         target_grip_reader = ir.DefaultReader(self.target_grip, None)
@@ -42,9 +42,8 @@ class DataDumper:
         fps_counter = ir.utils.RateCounter("Data Collection")
 
         while not should_stop.value:
-            frame_messages = {name: reader.read() for name, reader in frame_readers.items()}
             # TODO: fix frame synchronization. Two 30 FPS cameras is updated at 60 FPS
-            any_frame_updated = any(msg.data[1] and msg.data[0] is not None for msg in frame_messages.values())
+            frame_messages, any_frame_updated = ir.utils.is_any_updated(frame_readers)
 
             fps_counter.tick()
 
@@ -60,7 +59,6 @@ class DataDumper:
                 continue
 
             target_robot_pos = target_robot_pos.pose
-            frame_messages = {name: ir.Message(msg.data[0], msg.ts) for name, msg in frame_messages.items()}
 
             ep_dict = {
                 'target_grip': target_grip,
