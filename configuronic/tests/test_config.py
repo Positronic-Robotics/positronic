@@ -462,6 +462,16 @@ def test_override_and_instantiate_with_colon_from_copied_config_applies_replativ
     assert env_obj.camera == 2
 
 
+def test_override_nesetd_value_with_colon_from_copied_config_applies_replative_to_cfg_module():
+    from configuronic.tests.support_package.cfg2 import a_nested_b_value1
+
+    env_cfg = cfgc.Config(Env, camera=a_nested_b_value1)
+
+    env_obj = env_cfg.override(**{"camera.value": ":b_cfg_value2"}).instantiate()
+
+    assert env_obj.camera.value.value == 2
+
+
 def test_override_with_colon_from_overriden_config_applies_replative_to_cfg_module():
     from configuronic.tests.support_package.cfg2 import a_cfg_value1_override_value3
 
@@ -632,18 +642,18 @@ def test_required_args_with_args_returns_necessary_args():
     def func(a, b, c):
         return a + b + c
 
-    func = cfgc.Config(func, 1, 2)
+    func_cfg = cfgc.Config(func, 1, 2)
 
-    assert cfgc.get_required_args(func) == ["c"]
+    assert cfgc.get_required_args(func_cfg) == ["c"]
 
 
 def test_required_args_with_args_and_keyword_only_args_returns_necessary_args():
     def func(a, b, *, c):
         return a + b + c
 
-    func = cfgc.Config(func, 1, 2)
+    func_cfg = cfgc.Config(func, 1, 2)
 
-    assert cfgc.get_required_args(func) == ["c"]
+    assert cfgc.get_required_args(func_cfg) == ["c"]
 
 
 def test_required_args_with_args_not_required():

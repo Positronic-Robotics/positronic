@@ -1,9 +1,10 @@
 from collections import deque
 import posixpath
+from types import ModuleType
 import yaml
 import importlib.util
 import inspect
-from typing import Any, Callable, Dict, Tuple, List
+from typing import Any, Callable, Dict, Tuple, List, overload
 
 
 INSTANTIATE_PREFIX = '@'
@@ -157,7 +158,7 @@ def _set_value(obj, key, value):
         raise ConfigError(f"Cannot set value of {obj} with key {key}")
 
 
-def _get_creator_module():
+def _get_creator_module() -> ModuleType:
     current_frame = inspect.currentframe()
     # current frame: this function
     # current frame back: place where this function is called from
@@ -166,7 +167,12 @@ def _get_creator_module():
     assert current_frame.f_back is not None, "Current frame back is None. Should not happen."
     assert current_frame.f_back.f_back is not None, \
         "Current frame back back is None. This function was probably called from python interpreter."
-    return inspect.getmodule(current_frame.f_back.f_back)
+
+    module = inspect.getmodule(current_frame.f_back.f_back)
+
+    assert module is not None, "Module is None. Should not happen."
+
+    return module
 
 
 class Config:
@@ -392,7 +398,17 @@ def get_required_args(config: Config) -> List[str]:
     return required_args
 
 
-def config(target: Callable | None = None, **kwargs):
+@overload
+def config(target: Callable, **kwargs) -> Config:
+    ...
+
+
+@overload
+def config(**kwargs) -> Callable[[Callable], Config]:
+    ...
+
+
+def config(target: Callable | None = None, **kwargs) -> Config | Callable[[Callable], Config]:
     """
     Decorator to create a Config object.
 
