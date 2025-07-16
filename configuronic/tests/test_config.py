@@ -442,6 +442,36 @@ def test_override_with_colon_from_cfg_module_applies_replative_to_cfg_module():
     assert env_obj.camera.value == 2
 
 
+def test_override_with_colon_from_copied_config_applies_replative_to_cfg_module():
+    from configuronic.tests.support_package.cfg2 import a_cfg_value1_copy
+
+    env_cfg = cfgc.Config(Env, camera=a_cfg_value1_copy)
+
+    env_obj = env_cfg.override(camera=":return2").instantiate()
+
+    assert env_obj.camera == 2
+
+
+def test_override_and_instantiate_with_colon_from_copied_config_applies_replative_to_cfg_module():
+    from configuronic.tests.support_package.cfg2 import a_cfg_value1_copy
+
+    env_cfg = cfgc.Config(Env, camera=a_cfg_value1_copy)
+
+    env_obj = env_cfg.override_and_instantiate(camera=":return2")
+
+    assert env_obj.camera == 2
+
+
+def test_override_with_colon_from_overriden_config_applies_replative_to_cfg_module():
+    from configuronic.tests.support_package.cfg2 import a_cfg_value1_override_value3
+
+    env_cfg = cfgc.Config(Env, camera=a_cfg_value1_override_value3)
+
+    env_obj = env_cfg.override(camera=":return2").instantiate()
+
+    assert env_obj.camera == 2
+
+
 def test_override_with_colon_and_string_default():
     env_cfg = cfgc.Config(Env, camera="@configuronic.tests.test_config.Camera")
 

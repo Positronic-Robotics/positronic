@@ -77,7 +77,7 @@ def _import_object_from_path(path: str) -> Any:
 def _get_base_path_from_default(default: Any) -> str:
     """Extract base path from different types of default values."""
     if isinstance(default, Config):
-        return default._created_module.__name__ + '.' + "stub_name"
+        return default._creator_module.__name__ + '.' + "stub_name"
     elif isinstance(default, str):
         return default.lstrip(INSTANTIATE_PREFIX)
     elif hasattr(default, "__module__") and hasattr(default, "__name__"):
@@ -157,6 +157,18 @@ def _set_value(obj, key, value):
         raise ConfigError(f"Cannot set value of {obj} with key {key}")
 
 
+def _get_creator_module():
+    current_frame = inspect.currentframe()
+    # current frame: this function
+    # current frame back: place where this function is called from
+    # current frame back back: place one level upperer
+    assert current_frame is not None, "Current frame is None. Do your python interpreter support frames?"
+    assert current_frame.f_back is not None, "Current frame back is None. Should not happen."
+    assert current_frame.f_back.f_back is not None, \
+        "Current frame back back is None. This function was probably called from python interpreter."
+    return inspect.getmodule(current_frame.f_back.f_back)
+
+
 class Config:
     def __init__(self, target, *args, **kwargs):
         """
@@ -190,15 +202,12 @@ class Config:
         self.args = list(args)  # TODO: cover argument override with tests
         self.kwargs = kwargs
 
-        current_frame = inspect.currentframe()
-
-        assert current_frame is not None, "Current frame is None"
-        assert current_frame.f_back is not None, "Current frame back is None"
-
-        self._created_module = inspect.getmodule(current_frame.f_back)
+        self._creator_module = _get_creator_module()
 
     def override(self, **overrides) -> 'Config':
         overriden_cfg = self.copy()
+        # we want to keep the same module for the overriden config
+        overriden_cfg._creator_module = _get_creator_module()
 
         for key, value in overrides.items():
             key_list = key.split('.')
@@ -217,7 +226,6 @@ class Config:
 
     def _set_value(self, key, value):
         default = self._get_value(key) if self._has_value(key) else None
-        print(f"Default: {default}")
         value = _resolve_value(value, default)
 
         if key[0].isdigit():
@@ -307,18 +315,27 @@ class Config:
         Recursively copy config signatures.
         """
 
+        cfg = self._copy()
+        cfg._creator_module = _get_creator_module()
+        return cfg
+
+    def _copy(self):
+        """
+        Recursively copy config signatures.
+        """
+
         new_args = [
-            arg.copy() if isinstance(arg, Config) else arg
+            arg._copy() if isinstance(arg, Config) else arg
             for arg in self.args
         ]
 
         new_kwargs = {
-            key: value.copy() if isinstance(value, Config) else value
+            key: value._copy() if isinstance(value, Config) else value
             for key, value in self.kwargs.items()
         }
 
         cfg = Config(self.target, *new_args, **new_kwargs)
-        cfg._created_module = self._created_module
+        cfg._creator_module = self._creator_module
         return cfg
 
     def override_and_instantiate(self, **kwargs):
