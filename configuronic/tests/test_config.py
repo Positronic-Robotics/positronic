@@ -425,11 +425,21 @@ def test_override_with_multiple_colons_relative_path():
     from configuronic.tests.support_package.subpkg.a import A
     from configuronic.tests.support_package.b import B
 
-    env_cfg = cfgc.Config(Env, camera=cfgc.Config(A))
+    env_cfg = cfgc.Config(Env, camera=A)
 
     env_obj = env_cfg.override(camera=":::b.B").instantiate()
 
     assert env_obj.camera is B
+
+
+def test_override_with_colon_from_cfg_module_applies_replative_to_cfg_module():
+    from configuronic.tests.support_package.cfg import a_cfg_value1
+
+    env_cfg = cfgc.Config(Env, camera=a_cfg_value1)
+
+    env_obj = env_cfg.override(camera=":a_cfg_value2").instantiate()
+
+    assert env_obj.camera.value == 2
 
 
 def test_override_with_colon_and_string_default():

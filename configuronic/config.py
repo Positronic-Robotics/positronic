@@ -77,7 +77,7 @@ def _import_object_from_path(path: str) -> Any:
 def _get_base_path_from_default(default: Any) -> str:
     """Extract base path from different types of default values."""
     if isinstance(default, Config):
-        return f"{default.target.__module__}.{default.target.__name__}"
+        return default._created_module.__name__ + '.' + "stub_name"
     elif isinstance(default, str):
         return default.lstrip(INSTANTIATE_PREFIX)
     elif hasattr(default, "__module__") and hasattr(default, "__name__"):
@@ -190,6 +190,13 @@ class Config:
         self.args = list(args)  # TODO: cover argument override with tests
         self.kwargs = kwargs
 
+        current_frame = inspect.currentframe()
+
+        assert current_frame is not None, "Current frame is None"
+        assert current_frame.f_back is not None, "Current frame back is None"
+
+        self._created_module = inspect.getmodule(current_frame.f_back)
+
     def override(self, **overrides) -> 'Config':
         overriden_cfg = self.copy()
 
@@ -210,6 +217,7 @@ class Config:
 
     def _set_value(self, key, value):
         default = self._get_value(key) if self._has_value(key) else None
+        print(f"Default: {default}")
         value = _resolve_value(value, default)
 
         if key[0].isdigit():
@@ -309,7 +317,9 @@ class Config:
             for key, value in self.kwargs.items()
         }
 
-        return Config(self.target, *new_args, **new_kwargs)
+        cfg = Config(self.target, *new_args, **new_kwargs)
+        cfg._created_module = self._created_module
+        return cfg
 
     def override_and_instantiate(self, **kwargs):
         """
