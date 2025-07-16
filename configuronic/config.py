@@ -206,7 +206,7 @@ class Config:
 
     def override(self, **overrides) -> 'Config':
         overriden_cfg = self.copy()
-        # we want to keep the same module for the overriden config
+        # we want to keep creator module (module override was called from) for the overriden config
         overriden_cfg._creator_module = _get_creator_module()
 
         for key, value in overrides.items():
