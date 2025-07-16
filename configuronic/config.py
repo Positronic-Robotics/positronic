@@ -84,7 +84,8 @@ def _get_base_path_from_default(default: Any) -> str:
     elif hasattr(default, "__module__") and hasattr(default, "__name__"):
         return f"{default.__module__}.{default.__name__}"
     elif hasattr(default, "__class__") and hasattr(default, "name"):  # Handle Enum values
-        return f"{default.__class__.__module__}.{default.__class__.__name__}.{default.name}"
+        enum_class = default.__class__
+        return f"{enum_class.__module__}.{enum_class.__qualname__}.{default.name}"
     else:
         raise ValueError(
             "Default value must be Config, import string, an object with __module__ and __name__, or an Enum value"

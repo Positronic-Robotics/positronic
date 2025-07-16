@@ -1,6 +1,14 @@
+from enum import Enum
+
 import pytest
 
 import configuronic as cfgc
+
+
+class ResolutionEnum(Enum):
+    RES_1080P = "1080p"
+    RES_720P = "720p"
+    RES_480P = "480p"
 
 
 class Env:
@@ -9,6 +17,12 @@ class Env:
 
 
 class Camera:
+
+    class InnerResolutionEnum(Enum):
+        RES_1080P = "1080p"
+        RES_720P = "720p"
+        RES_480P = "480p"
+
     def __init__(self, name: str):
         self.name = name
 
@@ -419,6 +433,24 @@ def test_override_with_single_colon_relative_path():
     env_obj = env_cfg.override(camera=":static_object").instantiate()
 
     assert env_obj.camera is static_object
+
+
+def test_override_with_single_colon_enum_inside_class_relative_path():
+
+    @cfgc.config(status=Camera.InnerResolutionEnum.RES_1080P)
+    def return_value(status):
+        return status
+
+    assert return_value.override(status=":RES_720P").instantiate() == Camera.InnerResolutionEnum.RES_720P
+
+
+def test_override_with_single_colon_enum_relative_path():
+
+    @cfgc.config(status=ResolutionEnum.RES_1080P)
+    def return_value(status):
+        return status
+
+    assert return_value.override(status=":RES_720P").instantiate() == ResolutionEnum.RES_720P
 
 
 def test_override_with_multiple_colons_relative_path():
