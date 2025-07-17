@@ -59,7 +59,7 @@ class RotationTranslationGripAction(ActionDecoder, abc.ABC):
     def get_features(self):
         return {
             'action': {
-                'dtype': 'float32',
+                'dtype': 'float64',
                 'shape': (self.rotation_size + 4,),
                 'names': [
                     *[f'rotation_{i}' for i in range(self.rotation_size)],
