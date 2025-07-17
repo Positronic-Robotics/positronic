@@ -1,12 +1,12 @@
-from contextlib import nullcontext
 import time
-from typing import Callable, Dict, Generic, Mapping, Sequence, Tuple, overload, TypeVar, ContextManager
+from typing import Callable, Mapping, Tuple, overload, TypeVar, ContextManager
 
 from ironic2 import SignalReader, SignalEmitter, Message
 from ironic2.core import Clock
 
 
 T = TypeVar('T', covariant=True)
+K = TypeVar('K', covariant=True)
 
 
 class MapSignalReader(SignalReader[T]):
@@ -56,7 +56,7 @@ def map(signal: SignalReader[T] | SignalEmitter[T], func: Callable[[T], T]) -> S
         raise ValueError(f"Invalid signal type: {type(signal)}")
 
 
-class ValueUpdated(SignalReader[Tuple[T, bool]], Generic[T]):
+class ValueUpdated(SignalReader[Tuple[T, bool]]):
     """Wrapper around reader to signal whether the value we read is 'new'."""
 
     def __init__(self, reader: SignalReader[T]):
@@ -87,9 +87,6 @@ def is_any_updated(readers: Mapping[str, SignalReader[Tuple[T, bool]]]) -> Tuple
     messages = {k: Message(msg.data[0], msg.ts) for k, msg in messages.items() if msg is not None}
 
     return messages, is_any_updated
-
-
-K = TypeVar('K', covariant=True)
 
 
 class DefaultReader(SignalReader[T | K]):

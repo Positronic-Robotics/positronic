@@ -162,8 +162,6 @@ class MujocoFranka:
             if is_updated:
                 match command:
                     case roboarm_command.CartesianMove(pose=pose):
-                        print(f"State:{state.ee_pose}")
-                        print(f"CartesianMove: {pose}")
                         self.set_ee_pose(pose)
                     case roboarm_command.JointMove(positions=positions):
                         self.set_actuator_values(positions)
