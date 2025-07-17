@@ -89,6 +89,7 @@ class Inference:
 
             roboarm_command = roboarm.command.CartesianMove(pose=target_pos)
 
+            # TODO: this should be inside the policy
             if self.policy.chunk_start():
                 reference_pose = target_pos
 
