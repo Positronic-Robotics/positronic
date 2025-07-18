@@ -1,7 +1,7 @@
 from unittest.mock import Mock
 
 from ironic2.core import Message, SignalReader, Clock
-from ironic2.utils import ValueUpdated, DefaultReader, RateLimiter
+from ironic2.utils import ValueUpdated, DefaultReader, RateLimiter, is_any_updated
 
 
 class TestValueUpdated:
@@ -254,3 +254,82 @@ class TestRateLimiter:
         # Third call - just after interval
         mock_clock.now.return_value = 50.011
         assert rate_limiter.wait_time() == 0.0
+
+
+class TestIsAnyUpdated:
+    def test_returns_false_if_no_values_updated(self):
+        reader1 = Mock(spec=SignalReader)
+        reader1.read.return_value = Message(data=1, ts=1)
+        reader2 = Mock(spec=SignalReader)
+        reader2.read.return_value = Message(data=2, ts=2)
+
+        vu_reader1 = ValueUpdated(reader1)
+        vu_reader2 = ValueUpdated(reader2)
+
+        # read messages once
+        vu_reader1.read()
+        vu_reader2.read()
+
+        messages, is_updated = is_any_updated({'reader1': vu_reader1, 'reader2': vu_reader2})
+
+        assert messages == {'reader1': Message(data=1, ts=1), 'reader2': Message(data=2, ts=2)}
+        assert not is_updated
+
+    def test_returns_true_if_all_values_updated(self):
+        reader1 = Mock(spec=SignalReader)
+        reader1.read.return_value = Message(data=1, ts=1)
+        reader2 = Mock(spec=SignalReader)
+        reader2.read.return_value = Message(data=2, ts=2)
+
+        vu_reader1 = ValueUpdated(reader1)
+        vu_reader2 = ValueUpdated(reader2)
+
+        messages, is_updated = is_any_updated({'reader1': vu_reader1, 'reader2': vu_reader2})
+
+        assert messages == {'reader1': Message(data=1, ts=1), 'reader2': Message(data=2, ts=2)}
+        assert is_updated
+
+    def test_returns_true_if_any_value_updated(self):
+        reader1 = Mock(spec=SignalReader)
+        reader1.read.return_value = Message(data=1, ts=1)
+        reader2 = Mock(spec=SignalReader)
+        reader2.read.return_value = Message(data=2, ts=2)
+
+        vu_reader1 = ValueUpdated(reader1)
+        vu_reader2 = ValueUpdated(reader2)
+
+        # only one value is updated
+        vu_reader1.read()
+
+        messages, is_updated = is_any_updated({'reader1': vu_reader1, 'reader2': vu_reader2})
+
+        assert messages == {'reader1': Message(data=1, ts=1), 'reader2': Message(data=2, ts=2)}
+        assert is_updated
+
+    def test_returns_false_and_empty_dict_if_all_readers_has_no_data(self):
+        reader1 = Mock(spec=SignalReader)
+        reader1.read.return_value = None
+        reader2 = Mock(spec=SignalReader)
+        reader2.read.return_value = None
+
+        vu_reader1 = ValueUpdated(reader1)
+        vu_reader2 = ValueUpdated(reader2)
+
+        messages, is_updated = is_any_updated({'reader1': vu_reader1, 'reader2': vu_reader2})
+
+        assert messages == {}
+        assert not is_updated
+
+    def test_returns_true_and_present_data_if_some_readers_has_no_data(self):
+        reader1 = Mock(spec=SignalReader)
+        reader1.read.return_value = None
+        reader2 = Mock(spec=SignalReader)
+        reader2.read.return_value = Message(data=2, ts=2)
+
+        vu_reader1 = ValueUpdated(reader1)
+        vu_reader2 = ValueUpdated(reader2)
+
+        messages, is_updated = is_any_updated({'reader1': vu_reader1, 'reader2': vu_reader2})
+
+        assert messages == {'reader2': Message(data=2, ts=2)}
+        assert is_updated

@@ -80,6 +80,17 @@ class ValueUpdated(SignalReader[Tuple[T, bool]]):
 
 
 def is_any_updated(readers: Mapping[str, SignalReader[Tuple[T, bool]]]) -> Tuple[dict[str, Message[T]], bool]:
+    """Get the latest value of all readers and whether any of them are updated.
+
+    In case some of the readers return None, this keys will be omitted from the returned dict.
+
+    Args:
+        readers: A mapping of reader names to readers. Typically a dict of ValueUpdated readers.
+
+    Returns:
+        (dict[str, Message[T]], bool): Dict with latest values and a bool indicating whether any of the readers
+        are updated.
+    """
     messages = {k: reader.read() for k, reader in readers.items()}
     is_updated = {k: msg.data[1] for k, msg in messages.items() if msg is not None}
     is_any_updated = any(is_updated.values())

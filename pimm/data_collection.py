@@ -364,11 +364,10 @@ main_cfg = cfgc.Config(
     gripper=pimm.cfg.hardware.gripper.dh_gripper,
     webxr=pimm.cfg.webxr.webxr,
     sound=pimm.cfg.sound.sound,
-    cameras=cfgc.Config(
-        dict,
-        left=pimm.cfg.hardware.camera.arducam_left,
-        right=pimm.cfg.hardware.camera.arducam_right,
-    ),
+    cameras={
+        'left': pimm.cfg.hardware.camera.arducam_left,
+        'right': pimm.cfg.hardware.camera.arducam_right,
+    },
     operator_position=FRANKA_FRONT_TRANSFORM,
 )
 

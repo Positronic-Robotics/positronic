@@ -1,4 +1,3 @@
-import time
 from typing import Any, Iterator, Mapping, Sequence
 
 import numpy as np
@@ -26,12 +25,12 @@ import positronic.cfg.inference.policy
 
 
 class Inference:
-    frame_readers : dict[str, ir.SignalReader[Mapping[str, np.ndarray]]] = {}
+    frames : dict[str, ir.SignalReader[Mapping[str, np.ndarray]]] = {}
     robot_state : ir.SignalReader[roboarm.State] = ir.NoOpReader()
     gripper_state : ir.SignalReader[float] = ir.NoOpReader()
 
     robot_commands : ir.SignalEmitter[roboarm.command.CommandType] = ir.NoOpEmitter()
-    target_grip_emitter : ir.SignalEmitter[float] = ir.NoOpEmitter()
+    target_grip : ir.SignalEmitter[float] = ir.NoOpEmitter()
 
     def __init__(
         self,
@@ -43,15 +42,14 @@ class Inference:
     ):
         self.state_encoder = state_encoder
         self.action_decoder = action_decoder
-        self.policy = policy
-        self.policy.to(device)
+        self.policy = policy.to(device)
         self.device = device
         self.rerun_path = rerun_path
 
     def run(self, should_stop: ir.SignalReader, clock: ir.Clock) -> Iterator[ir.Sleep]:
-        frame_readers = {
-            camera_name: ir.DefaultReader(ir.ValueUpdated(frame_reader), ({}, False))
-            for camera_name, frame_reader in self.frame_readers.items()
+        frames = {
+            camera_name: ir.DefaultReader(ir.ValueUpdated(frame), ({}, False))
+            for camera_name, frame in self.frames.items()
         }
 
         reference_pose = None
@@ -61,24 +59,25 @@ class Inference:
             rr.save(self.rerun_path)
 
         while not should_stop.value:
-            image_messages, is_updated = ir.utils.is_any_updated(frame_readers)
+            frame_messages, is_updated = ir.utils.is_any_updated(frames)
             if not is_updated:
-                yield ir.Pass()
+                yield ir.Sleep(0.001)
                 continue
 
-            images = {k: v.data['image'] for k, v in image_messages.items()}
+            images = {k: v.data['image'] for k, v in frame_messages.items()}
 
-            if reference_pose is None:
-                reference_pose = self.robot_state.value.ee_pose.copy()
+            with self.robot_state.zc_lock():
+                if reference_pose is None:
+                    reference_pose = self.robot_state.value.ee_pose.copy()
 
-            inputs = {
-                'robot_position_translation': self.robot_state.value.ee_pose.translation,
-                'robot_position_rotation': self.robot_state.value.ee_pose.rotation.as_quat,
-                'robot_joints': self.robot_state.value.q,
-                'grip': self.gripper_state.value,
-                'reference_robot_position_translation': reference_pose.translation,
-                'reference_robot_position_quaternion': reference_pose.rotation.as_quat
-            }
+                inputs = {
+                    'robot_position_translation': self.robot_state.value.ee_pose.translation,
+                    'robot_position_rotation': self.robot_state.value.ee_pose.rotation.as_quat,
+                    'robot_joints': self.robot_state.value.q,
+                    'grip': self.gripper_state.value,
+                    'reference_robot_position_translation': reference_pose.translation,
+                    'reference_robot_position_quaternion': reference_pose.rotation.as_quat
+                }
             obs = self.state_encoder.encode(images, inputs)
             for key in obs:
                 obs[key] = obs[key].to(self.device)
@@ -94,7 +93,7 @@ class Inference:
                 reference_pose = target_pos
 
             self.robot_commands.emit(roboarm_command)
-            self.target_grip_emitter.emit(action_dict['target_grip'].item())
+            self.target_grip.emit(action_dict['target_grip'].item())
 
             if self.rerun_path:
                 rerun_log_observation(clock.now(), obs)
@@ -117,7 +116,7 @@ def main(robot_arm: Any | None,
         inference = Inference(state_encoder, action_decoder, device, policy, rerun_path)
         cameras = cameras or {}
         for camera_name, camera in cameras.items():
-            camera.frame, inference.frame_readers[camera_name] = world.mp_pipe()
+            camera.frame, inference.frames[camera_name] = world.mp_pipe()
 
         world.start_in_subprocess(*[camera.run for camera in cameras.values()])
 
@@ -127,16 +126,10 @@ def main(robot_arm: Any | None,
             world.start_in_subprocess(robot_arm.run)
 
         if gripper is not None:
-            inference.target_grip_emitter, gripper.target_grip = world.mp_pipe()
+            inference.target_grip, gripper.target_grip = world.mp_pipe()
             world.start_in_subprocess(gripper.run)
 
-        inference_steps = iter(world.interleave(inference.run))
-
-        while not world.should_stop:
-            try:
-                time.sleep(next(inference_steps).seconds)
-            except StopIteration:
-                break
+        world.run(inference.run)
 
 
 def main_sim(
@@ -162,13 +155,13 @@ def main_sim(
     with ir.World(clock=sim) as world:
         cameras = cameras or {}
         for camera_name, camera in cameras.items():
-            camera.frame, inference.frame_readers[camera_name] = world.local_pipe()
+            camera.frame, inference.frames[camera_name] = world.local_pipe()
 
         robot_arm.state, inference.robot_state = world.local_pipe()
         inference.robot_commands, robot_arm.commands = world.local_pipe()
         gripper.grip, inference.gripper_state = world.local_pipe()
 
-        inference.target_grip_emitter, gripper.target_grip = world.local_pipe()
+        inference.target_grip, gripper.target_grip = world.local_pipe()
 
         sim_iter = world.interleave(
             sim.run,
@@ -178,10 +171,7 @@ def main_sim(
             inference.run,
         )
 
-        sim_iter = iter(sim_iter)
-
         p_bar = tqdm.tqdm(total=simulation_time, unit='s')
-
         for _ in sim_iter:
             p_bar.n = round(sim.now(), 1)
             p_bar.refresh()
@@ -196,11 +186,10 @@ main_cfg = cfgc.Config(
     state_encoder=positronic.cfg.inference.state.end_effector_224,
     action_decoder=positronic.cfg.inference.action.umi_relative,
     policy=positronic.cfg.inference.policy.act,
-    cameras=cfgc.Config(
-        dict,
-        left=pimm.cfg.hardware.camera.arducam_left,
-        right=pimm.cfg.hardware.camera.arducam_right,
-    ),
+    cameras={
+        'left': pimm.cfg.hardware.camera.arducam_left,
+        'right': pimm.cfg.hardware.camera.arducam_right,
+    },
     rerun_path="inference.rrd",
     device='cuda',
 )
