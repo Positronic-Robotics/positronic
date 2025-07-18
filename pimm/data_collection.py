@@ -146,6 +146,8 @@ class DataCollection:
     controller_positions_reader : ir.SignalReader[Dict[str, geom.Transform3D]] = ir.NoOpReader()
     buttons_reader : ir.SignalReader[Dict] = ir.NoOpReader()
     robot_state : ir.SignalReader[roboarm.State] = ir.NoOpReader()
+    gripper_state : ir.SignalReader[float] = ir.NoOpReader()
+
     robot_commands : ir.SignalEmitter[roboarm.command.CommandType] = ir.NoOpEmitter()
     target_grip_emitter : ir.SignalEmitter[float] = ir.NoOpEmitter()
     sound_emitter : ir.SignalEmitter[str] = ir.NoOpEmitter()
@@ -228,6 +230,24 @@ class DataCollection:
                     'target_timestamp': last_target_ts,
                     **{f'{name}_timestamp': frame.ts for name, frame in frame_messages.items()},
                 }
+
+                with self.robot_state.zc_lock():
+                    value = self.robot_state.read()
+
+                if value is not None:
+                    value = value.data
+                    ep_dict = {
+                        **ep_dict,
+                        'robot_position_translation': value.ee_pose.translation.copy(),
+                        'robot_position_rotation': value.ee_pose.rotation.as_quat.copy(),
+                        'robot_joints': value.q.copy(),
+                    }
+
+                with self.gripper_state.zc_lock():
+                    value = self.gripper_state.read()
+                if value is not None:
+                    ep_dict['grip'] = value.data
+
                 if controller_positions['right'] is not None:
                     ep_dict['right_controller_translation'] = controller_positions['right'].translation.copy()
                     ep_dict['right_controller_quaternion'] = controller_positions['right'].rotation.as_quat.copy()
@@ -244,7 +264,7 @@ class DataCollection:
                 continue
 
 
-def main(robot_arm: Any | None,  # noqa: C901  Function is too complex
+def main(robot_arm: Any | None,
          gripper: DHGripper | None,
          webxr: WebXR,
          sound: SoundSystem | None,
@@ -279,6 +299,7 @@ def main(robot_arm: Any | None,  # noqa: C901  Function is too complex
 
         if gripper is not None:
             data_collection.target_grip_emitter, gripper.target_grip = world.mp_pipe(1)
+            gripper.grip, data_collection.gripper_state = world.local_pipe()
             world.start_in_subprocess(gripper.run)
 
         if sound is not None:
@@ -329,6 +350,7 @@ def main_sim(
         data_collection.robot_commands, robot_arm.commands = world.local_pipe()
 
         data_collection.target_grip_emitter, gripper.target_grip = world.local_pipe()
+        gripper.grip, data_collection.gripper_state = world.local_pipe()
 
         if sound is not None:
             data_collection.sound_emitter, sound.wav_path = world.mp_pipe()
