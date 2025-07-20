@@ -177,6 +177,7 @@ def _get_creator_module() -> ModuleType:
 
 
 class Config:
+
     def __init__(self, target, *args, **kwargs):
         """
         Initialize a Config object.
@@ -212,6 +213,7 @@ class Config:
         self._creator_module = _get_creator_module()
 
     def override(self, **overrides) -> 'Config':
+        # TODO: Generate a detailed docstring for this method
         overriden_cfg = self.copy()
         # we want to keep creator module (module override was called from) for the overriden config
         overriden_cfg._creator_module = _get_creator_module()
@@ -276,6 +278,7 @@ class Config:
 
         Raises:
         """
+
         def _instantiate_value(value, key, path):
             try:
                 if isinstance(value, Config):
@@ -296,9 +299,7 @@ class Config:
         instantiated_args = [_instantiate_value(arg, key, path) for key, arg in enumerate(self.args)]
 
         # Recursively instantiate any Config objects in kwargs
-        instantiated_kwargs = {
-            key: _instantiate_value(value, key, path) for key, value in self.kwargs.items()
-        }
+        instantiated_kwargs = {key: _instantiate_value(value, key, path) for key, value in self.kwargs.items()}
 
         return self.target(*instantiated_args, **instantiated_kwargs)
 
@@ -331,15 +332,9 @@ class Config:
         Recursively copy config signatures.
         """
 
-        new_args = [
-            arg._copy() if isinstance(arg, Config) else arg
-            for arg in self.args
-        ]
+        new_args = [arg.copy() if isinstance(arg, Config) else arg for arg in self.args]
 
-        new_kwargs = {
-            key: value._copy() if isinstance(value, Config) else value
-            for key, value in self.kwargs.items()
-        }
+        new_kwargs = {key: value.copy() if isinstance(value, Config) else value for key, value in self.kwargs.items()}
 
         cfg = Config(self.target, *new_args, **new_kwargs)
         cfg._creator_module = self._creator_module
