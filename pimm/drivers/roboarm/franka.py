@@ -2,6 +2,8 @@ import time
 from enum import Enum
 from typing import Iterator
 
+from mujoco import Any
+
 import franky
 import numpy as np
 
@@ -13,11 +15,11 @@ from . import RobotStatus, State, command
 
 class FrankaState(State, ir.shared_memory.NumpySMAdapter):
 
-    def __init__(self, array: np.ndarray | None = None):
-        if array is None:
-            # q, dq, ee_pose, status
-            array = np.zeros(7 + 7 + 7 + 1, dtype=np.float32)
-        super().__init__(array)
+    def __init__(self):
+        super().__init__(shape=(7 + 7 + 7 + 1,), dtype=np.float32)
+
+    def instantiation_params(self) -> tuple[Any, ...]:
+        return ()
 
     @property
     def q(self) -> np.ndarray:
@@ -102,16 +104,14 @@ class Robot:
         robot.relative_dynamics_factor = rel_dynamics_factor
 
     def _reset(self, robot: franky.Robot, robot_state: FrankaState):
-        with self.state.zc_lock():
-            robot_state._start_reset()
+        robot_state._start_reset()
         self.state.emit(robot_state)
 
         robot.join_motion(timeout=0.1)
         reset_motion = franky.JointWaypointMotion([franky.JointWaypoint(self._home_joints)])
         robot.move(reset_motion, asynchronous=False)
 
-        with self.state.zc_lock():
-            robot_state._finish_reset()
+        robot_state._finish_reset()
         self.state.emit(robot_state)
 
     def run(self, should_stop: ir.SignalReader, clock: ir.Clock) -> Iterator[ir.Sleep]:
@@ -151,8 +151,7 @@ class Robot:
                     print(f"Motion failed for {pos}: {e}")
 
             js = robot.current_joint_state
-            with self.state.zc_lock():
-                robot_state.encode(js.position, js.velocity, robot.current_pose.end_effector_pose)
+            robot_state.encode(js.position, js.velocity, robot.current_pose.end_effector_pose)
             self.state.emit(robot_state)
 
             yield ir.Sleep(rate_limiter.wait_time())

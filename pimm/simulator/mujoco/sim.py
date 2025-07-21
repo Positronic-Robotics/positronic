@@ -1,4 +1,4 @@
-from typing import Dict, Sequence, Tuple
+from typing import Any, Dict, Sequence, Tuple
 import logging
 
 import geom
@@ -113,10 +113,11 @@ class MujocoCamera:
 
 
 class MujocoFrankaState(State, ir.shared_memory.NumpySMAdapter):
-    def __init__(self, array: np.ndarray | None = None):
-        if array is None:
-            array = np.zeros(7 + 7 + 7 + 1, dtype=np.float32)
-        super().__init__(array)
+    def __init__(self):
+        super().__init__(shape=(7 + 7 + 7 + 1,), dtype=np.float32)
+
+    def instantiation_params(self) -> tuple[Any, ...]:
+        return ()
 
     @property
     def q(self) -> np.ndarray:

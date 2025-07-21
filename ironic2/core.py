@@ -35,21 +35,6 @@ class SignalEmitter(ABC, Generic[T]):
         """
         pass
 
-    def zc_lock(self) -> ContextManager[None]:
-        """Some emitter/reader pairs can implement zero-copy operations.
-        Zero-copy means that writing and reading code work with the physically same memory.
-        You want to avoid reading simultaneously with writing, as the data will appear to be corrupted.
-
-        This method returns a context manager that writing code should enter before modifying the data.
-        If reader code respects the similar lock, you won't have data races.
-
-        If emitter/reader pair does not support zero-copy, this is a harmless no-op.
-
-        Note: Only call zc_lock() when accessing data for writing, not when calling emit() itself.
-        Calling emit() inside a zc_lock() context will raise an assertion error.
-        """
-        return nullcontext()
-
 
 class NoOpEmitter(SignalEmitter[T]):
 
@@ -73,21 +58,6 @@ class SignalReader(ABC, Generic[T]):
         if msg is None:
             raise NoValueException
         return msg.data
-
-    def zc_lock(self) -> ContextManager[None]:
-        """Some emitter/reader pairs can implement zero-copy operations.
-        Zero-copy means that writing and reading code work with the physically same memory.
-        You want to avoid reading simultaneously with writing, as the data will appear to be corrupted.
-
-        This method returns a context manager that writing code should enter before modifying the data.
-        If reader code respects the similar lock, you won't have data races.
-
-        If emitter/reader pair does not support zero-copy, this is a harmless no-op.
-
-        Note: Only call zc_lock() when accessing data from the reader, not when calling read() itself.
-        Calling read() inside a zc_lock() context will raise an assertion error.
-        """
-        return nullcontext()
 
 
 class NoOpReader(SignalReader[T]):

@@ -250,7 +250,7 @@ class World:
             emitters.append(emiter)
         return BroadcastEmitter(emitters), readers
 
-    def zero_copy_sm(self) -> Tuple[SignalEmitter[T_SM], SignalReader[T_SM]]:
+    def shared_memory(self) -> Tuple[SignalEmitter[T_SM], SignalReader[T_SM]]:
         """Create a zero-copy shared memory channel for efficient data sharing.
 
         Args:

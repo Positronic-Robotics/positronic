@@ -20,9 +20,6 @@ class MapSignalReader(SignalReader[T]):
             return None
         return Message(self.func(orig_message.data), orig_message.ts)
 
-    def zc_lock(self) -> ContextManager[None]:
-        return self.reader.zc_lock()
-
 
 class MapSignalEmitter(SignalEmitter[T]):
 
@@ -32,9 +29,6 @@ class MapSignalEmitter(SignalEmitter[T]):
 
     def emit(self, data: T, ts: int = -1) -> bool:
         return self.emitter.emit(self.func(data), ts)
-
-    def zc_lock(self) -> ContextManager[None]:
-        return self.emitter.zc_lock()
 
 
 @overload
@@ -75,9 +69,6 @@ class ValueUpdated(SignalReader[Tuple[T, bool]]):
 
         return Message((orig_message.data, is_updated), self.last_ts)
 
-    def zc_lock(self) -> ContextManager[None]:
-        return self.reader.zc_lock()
-
 
 def is_any_updated(readers: Mapping[str, SignalReader[Tuple[T, bool]]]) -> Tuple[dict[str, Message[T]], bool]:
     """Get the latest value of all readers and whether any of them are updated.
@@ -112,9 +103,6 @@ class DefaultReader(SignalReader[T | K]):
         if msg is None:
             return self.default_msg
         return msg
-
-    def zc_lock(self) -> ContextManager[None]:
-        return self.reader.zc_lock()
 
 
 class RateLimiter:

@@ -76,19 +76,18 @@ class Inference:
                 yield ir.Sleep(0.001)
                 continue
 
-            with self.robot_state.zc_lock():
-                robot_state = robot_state.data
-                if reference_pose is None:
-                    reference_pose = robot_state.ee_pose.copy()
+            robot_state = robot_state.data
+            if reference_pose is None:
+                reference_pose = robot_state.ee_pose.copy()
 
-                inputs = {
-                    'robot_position_translation': robot_state.ee_pose.translation,
-                    'robot_position_rotation': robot_state.ee_pose.rotation.as_quat,
-                    'robot_joints': robot_state.q,
-                    'grip': gripper_state.data,
-                    'reference_robot_position_translation': reference_pose.translation,
-                    'reference_robot_position_quaternion': reference_pose.rotation.as_quat
-                }
+            inputs = {
+                'robot_position_translation': robot_state.ee_pose.translation,
+                'robot_position_rotation': robot_state.ee_pose.rotation.as_quat,
+                'robot_joints': robot_state.q,
+                'grip': gripper_state.data,
+                'reference_robot_position_translation': reference_pose.translation,
+                'reference_robot_position_quaternion': reference_pose.rotation.as_quat
+            }
             obs = self.state_encoder.encode(images, inputs)
             for key in obs:
                 obs[key] = obs[key].to(self.device)
@@ -132,7 +131,7 @@ def main(robot_arm: Any | None,
         world.start_in_subprocess(*[camera.run for camera in cameras.values()])
 
         if robot_arm is not None:
-            robot_arm.state, inference.robot_state = world.zero_copy_sm()
+            robot_arm.state, inference.robot_state = world.shared_memory()
             inference.robot_commands, robot_arm.commands = world.mp_pipe()
             world.start_in_subprocess(robot_arm.run)
 

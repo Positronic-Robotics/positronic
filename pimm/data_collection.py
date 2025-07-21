@@ -195,8 +195,7 @@ class DataCollection:
                         tracker.turn_off()
                     else:
                         robot_state = self.robot_state.value
-                        with self.robot_state.zc_lock():
-                            tracker.turn_on(robot_state.ee_pose)
+                        tracker.turn_on(robot_state.ee_pose)
                 elif button_handler.just_pressed('right_stick') and not tracker.umi_mode:
                     print("Resetting robot")
                     recorder.turn_off()
@@ -291,7 +290,7 @@ def main(robot_arm: Any | None,
         world.start_in_subprocess(webxr.run, *[camera.run for camera in cameras.values()])
 
         if robot_arm is not None:
-            robot_arm.state, data_collection.robot_state = world.zero_copy_sm()
+            robot_arm.state, data_collection.robot_state = world.shared_memory()
             data_collection.robot_commands, robot_arm.commands = world.mp_pipe(1)
             world.start_in_subprocess(robot_arm.run)
 
