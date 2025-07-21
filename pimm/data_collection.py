@@ -231,8 +231,7 @@ class DataCollection:
                     **{f'{name}_timestamp': frame.ts for name, frame in frame_messages.items()},
                 }
 
-                with self.robot_state.zc_lock():
-                    value = self.robot_state.read()
+                value = self.robot_state.read()
 
                 if value is not None:
                     value = value.data
@@ -243,8 +242,7 @@ class DataCollection:
                         'robot_joints': value.q.copy(),
                     }
 
-                with self.gripper_state.zc_lock():
-                    value = self.gripper_state.read()
+                value = self.gripper_state.read()
                 if value is not None:
                     ep_dict['grip'] = value.data
 

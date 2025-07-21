@@ -66,15 +66,26 @@ class Inference:
 
             images = {k: v.data['image'] for k, v in frame_messages.items()}
 
+            robot_state = self.robot_state.read()
+            if robot_state is None:
+                yield ir.Sleep(0.001)
+                continue
+
+            gripper_state = self.gripper_state.read()
+            if gripper_state is None:
+                yield ir.Sleep(0.001)
+                continue
+
             with self.robot_state.zc_lock():
+                robot_state = robot_state.data
                 if reference_pose is None:
-                    reference_pose = self.robot_state.value.ee_pose.copy()
+                    reference_pose = robot_state.ee_pose.copy()
 
                 inputs = {
-                    'robot_position_translation': self.robot_state.value.ee_pose.translation,
-                    'robot_position_rotation': self.robot_state.value.ee_pose.rotation.as_quat,
-                    'robot_joints': self.robot_state.value.q,
-                    'grip': self.gripper_state.value,
+                    'robot_position_translation': robot_state.ee_pose.translation,
+                    'robot_position_rotation': robot_state.ee_pose.rotation.as_quat,
+                    'robot_joints': robot_state.q,
+                    'grip': gripper_state.data,
                     'reference_robot_position_translation': reference_pose.translation,
                     'reference_robot_position_quaternion': reference_pose.rotation.as_quat
                 }

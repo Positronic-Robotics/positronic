@@ -113,8 +113,10 @@ class MujocoCamera:
 
 
 class MujocoFrankaState(State, ir.shared_memory.NumpySMAdapter):
-    def __init__(self):
-        super().__init__(np.zeros(7 + 7 + 7 + 1, dtype=np.float32))
+    def __init__(self, array: np.ndarray | None = None):
+        if array is None:
+            array = np.zeros(7 + 7 + 7 + 1, dtype=np.float32)
+        super().__init__(array)
 
     @property
     def q(self) -> np.ndarray:
