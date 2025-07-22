@@ -251,15 +251,17 @@ class World:
         return BroadcastEmitter(emitters), readers
 
     def shared_memory(self) -> Tuple[SignalEmitter[T_SM], SignalReader[T_SM]]:
-        """Create a zero-copy shared memory channel for efficient data sharing.
+        """Create shared memory channel for efficient data sharing.
+
+        Message data must be a SMCompliant type and have the same buffer size as the first message emitted.
 
         Args:
             data_type: SMCompliant type that defines the shared data structure
 
         Returns:
-            Tuple of (emitter, reader) for zero-copy inter-process communication
+            Tuple of (emitter, reader) for shared memory inter-process communication
         """
-        assert self.entered, "Zero-copy shared memory is only available after entering the world context."
+        assert self.entered, "Shared memory is only available after entering the world context."
         lock = self._manager.Lock()
         ts_value = self._manager.Value('Q', -1)
         sm_queue = self._manager.Queue()

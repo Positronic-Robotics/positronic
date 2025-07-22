@@ -28,11 +28,11 @@ class TestNumpySMAdapter:
         assert np.array_equal(new_adapter.array, original_array)
 
 
-class TestZeroCopySMAPI:
-    """Test the public API for zero-copy shared memory communication."""
+class TestSharedMemoryAPI:
+    """Test the public API for shared memory communication."""
 
-    def test_world_creates_zero_copy_sm_pair(self):
-        """Test that World.zero_copy_sm creates a working emitter/reader pair."""
+    def test_world_creates_shared_memory_pair(self):
+        """Test that World.shared_memory creates a working emitter/reader pair."""
         with World() as world:
             emitter, reader = world.shared_memory()
 
@@ -272,7 +272,7 @@ class TestZeroCopySMAPI:
     def test_world_context_required(self):
         w = World()
         with pytest.raises(AssertionError,
-                           match="Zero-copy shared memory is only available after entering the world context"):
+                           match="Shared memory is only available after entering the world context"):
             w.shared_memory()
 
 
@@ -296,11 +296,11 @@ class TestEmitterControlLoop:
         yield Sleep(0.2)
 
 
-class TestZeroCopyMultiprocessing:
-    """Test zero-copy shared memory in multiprocessing environment."""
+class TestSharedMemoryMultiprocessing:
+    """Test shared memory in multiprocessing environment."""
 
     def test_simple_multiprocessing_communication(self):
-        """Test that zero-copy shared memory works across processes."""
+        """Test that shared memory works across processes."""
 
         emitter_control_loop = TestEmitterControlLoop()
 

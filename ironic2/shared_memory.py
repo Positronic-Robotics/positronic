@@ -7,51 +7,39 @@ import numpy as np
 
 from ironic2.core import Clock, Message, SignalEmitter, SignalReader
 
-# Requirements:
-# - Writer does not know which communication channel is used
-# - Shared memory is zero-copy, i.e. both reader and writer point to the same memory
-# - Numpy Array must be passed as easily as possible
-
 
 class SMCompliant(ABC):
-    """Interface for data that could be used as view of some contigubuffer."""
+    """Interface for data that could be used as view of some contiguous buffer."""
 
     def buf_size(self) -> int:
-        """Return the buffer size needed for `data`."""
+        """Return the buffer size needed for this instance."""
         return 0
 
     def instantiation_params(self) -> tuple[Any, ...]:
-        """Return the parameters needed to instantiate the class from the buffer."""
+        """Return the parameters needed to instantiate this class from the buffer."""
         return ()
 
     @abstractmethod
     def set_to_buffer(self, buffer: memoryview | bytes | bytearray) -> None:
-        """Bind the instance to a memory buffer (kinda zero-copy serialization).
-        This method is called at most once per `data` instance.
-        After the call, all the data must be stored within the buffer and all 'updates' to
-        the data must be done through the buffer.
+        """Serialize data to the given buffer.
 
         Args:
-            data: The data to bind to the buffer.
-            buffer: The memory buffer to bind to.
+            buffer: The memory buffer to serialize to.
         """
         pass
 
     @abstractmethod
-    def read_from_buffer(cls, buffer: memoryview | bytes) -> None:
-        """Given a memoryview, create an instance of the class from the memoryview (kinda zero-copy deserialization).
+    def read_from_buffer(self, buffer: memoryview | bytes) -> None:
+        """Deserialize data from the given buffer.
 
         Args:
-            buffer: The memory buffer to create the instance from. Can be a memoryview, bytes, or bytearray.
-
-        Returns:
-            The 'deserialized' data mapped to the buffer.
+            buffer: The memory buffer to deserialize from.
         """
         pass
 
 
 class NumpySMAdapter(SMCompliant):
-    """SMAdapter implementation for numpy arrays with support for all numeric dtypes."""
+    """SMAdapter implementation for numpy arrays."""
 
     def __init__(self, shape: tuple[int, ...], dtype: np.dtype):
         self.array = np.empty(shape, dtype=dtype)
