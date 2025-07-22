@@ -5,7 +5,7 @@ import numpy as np
 from ironic2.core import Clock, Message, NoOpEmitter, SignalEmitter, SignalReader, Sleep
 from ironic2.shared_memory import NumpySMAdapter
 from ironic2.utils import DefaultReader, ValueUpdated
-from ironic2.world import ZeroCopySMEmitter, ZeroCopySMReader, World
+from ironic2.world import SharedMemoryEmitter, SharedMemoryReader, World
 
 
 class TestNumpySMAdapter:
@@ -36,8 +36,8 @@ class TestZeroCopySMAPI:
         with World() as world:
             emitter, reader = world.shared_memory()
 
-            assert isinstance(emitter, ZeroCopySMEmitter)
-            assert isinstance(reader, ZeroCopySMReader)
+            assert isinstance(emitter, SharedMemoryEmitter)
+            assert isinstance(reader, SharedMemoryReader)
 
     def test_emitter_reader_basic_communication(self):
         """Test basic communication between emitter and reader."""

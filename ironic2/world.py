@@ -15,7 +15,7 @@ import traceback
 from typing import Iterator, Sequence, Tuple, TypeVar
 
 from .core import Clock, ControlLoop, Message, SignalEmitter, SignalReader, Sleep
-from .shared_memory import SMCompliant, ZeroCopySMEmitter, ZeroCopySMReader
+from .shared_memory import SMCompliant, SharedMemoryEmitter, SharedMemoryReader
 
 
 T = TypeVar('T')
@@ -263,8 +263,8 @@ class World:
         lock = self._manager.Lock()
         ts_value = self._manager.Value('Q', -1)
         sm_queue = self._manager.Queue()
-        emitter = ZeroCopySMEmitter(lock, ts_value, sm_queue, self._clock)
-        reader = ZeroCopySMReader(lock, ts_value, sm_queue)
+        emitter = SharedMemoryEmitter(lock, ts_value, sm_queue, self._clock)
+        reader = SharedMemoryReader(lock, ts_value, sm_queue)
         self._sm_emitters_readers.append((emitter, reader))
         return emitter, reader
 

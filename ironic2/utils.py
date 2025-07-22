@@ -1,5 +1,5 @@
 import time
-from typing import Callable, Mapping, Tuple, overload, TypeVar, ContextManager
+from typing import Callable, Mapping, Tuple, overload, TypeVar
 
 from ironic2 import SignalReader, SignalEmitter, Message
 from ironic2.core import Clock

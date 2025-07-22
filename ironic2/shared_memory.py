@@ -1,9 +1,7 @@
-from contextlib import contextmanager
 import multiprocessing as mp
 import multiprocessing.shared_memory
-import struct
 from abc import ABC, abstractmethod
-from typing import Any, ContextManager, Self
+from typing import Any
 
 import numpy as np
 
@@ -52,37 +50,26 @@ class SMCompliant(ABC):
         pass
 
 
-
 class NumpySMAdapter(SMCompliant):
     """SMAdapter implementation for numpy arrays with support for all numeric dtypes."""
-    _array: np.ndarray | None = None
 
     def __init__(self, shape: tuple[int, ...], dtype: np.dtype):
-        self._array = np.empty(shape, dtype=dtype)
+        self.array = np.empty(shape, dtype=dtype)
 
     def instantiation_params(self) -> tuple[Any, ...]:
-        return (self._array.shape, self._array.dtype)
-
-    @property
-    def array(self) -> np.ndarray:
-        return self._array
-
-    @array.setter
-    def array(self, array: np.ndarray) -> None:
-        self._array = array
+        return (self.array.shape, self.array.dtype)
 
     def buf_size(self) -> int:
-        return self._array.nbytes
+        return self.array.nbytes
 
     def set_to_buffer(self, buffer: memoryview | bytes | bytearray) -> None:
-        buffer[:] = self._array.view(np.uint8).reshape(-1).data
+        buffer[:] = self.array.view(np.uint8).reshape(-1).data
 
     def read_from_buffer(self, buffer: memoryview | bytes) -> None:
-        self._array[:] = np.frombuffer(buffer, dtype=self._array.dtype).reshape(self._array.shape)
+        self.array[:] = np.frombuffer(buffer, dtype=self.array.dtype).reshape(self.array.shape)
 
 
-
-class ZeroCopySMEmitter(SignalEmitter):
+class SharedMemoryEmitter(SignalEmitter):
     def __init__(self, lock: mp.Lock, ts_value: mp.Value, sm_queue: mp.Queue, clock: Clock):
         self._data_type: type[SMCompliant] | None = None
         self._lock = lock
@@ -126,7 +113,7 @@ class ZeroCopySMEmitter(SignalEmitter):
             self._sm = None
 
 
-class ZeroCopySMReader(SignalReader):
+class SharedMemoryReader(SignalReader):
     def __init__(self, lock: mp.Lock, ts_value: mp.Value, sm_queue: mp.Queue):
         self._lock = lock
         self._ts_value = ts_value
