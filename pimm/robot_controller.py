@@ -2,11 +2,11 @@ import configuronic as cfgc
 import pimm.cfg.hardware.roboarm
 import ironic2 as ir
 import geom
-from pimm.drivers.roboarm import BaseRobot, command
+from pimm.drivers.roboarm import command
 
 
 @cfgc.config(robot=pimm.cfg.hardware.roboarm.kinova)
-def main(robot: BaseRobot):
+def main(robot):
     with ir.World() as world:
         command_emmiter, robot.commands = world.mp_pipe()
         robot.state, state_reader = world.shared_memory()

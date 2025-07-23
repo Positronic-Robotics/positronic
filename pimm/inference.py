@@ -48,7 +48,7 @@ class Inference:
         self.rerun_path = rerun_path
         self.inference_fps = inference_fps
 
-    def run(self, should_stop: ir.SignalReader, clock: ir.Clock) -> Iterator[ir.Sleep]:
+    def run(self, should_stop: ir.SignalReader, clock: ir.Clock) -> Iterator[ir.Sleep]:  # noqa: C901
         frames = {
             camera_name: ir.DefaultReader(frame, {})
             for camera_name, frame in self.frames.items()
@@ -82,7 +82,7 @@ class Inference:
             robot_state = robot_state.data
 
             if robot_state.status == roboarm.RobotStatus.MOVING:
-                # TODO: seems to be necessary to wait previos command 
+                # TODO: seems to be necessary to wait previos command
                 yield ir.Sleep(0.001)
                 continue
 

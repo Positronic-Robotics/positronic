@@ -1,5 +1,4 @@
 import os
-from enum import Enum
 from typing import Iterator
 
 from mujoco import Any
@@ -10,7 +9,7 @@ import geom
 import ironic2 as ir
 from pimm.drivers.roboarm.kinova.api import KinovaAPI
 from pimm.drivers.roboarm.kinova.base import JointCompliantController, KinematicsSolver
-from pimm.drivers.roboarm import BaseRobot, RobotStatus, State, command
+from pimm.drivers.roboarm import RobotStatus, State, command
 
 
 def _set_realtime_priority():
@@ -63,8 +62,8 @@ class KinovaState(State, ir.shared_memory.NumpySMAdapter):
         self.array[14 + 3:14 + 7] = ee_pose.rotation.as_quat
         self.array[14 + 7] = status.value
 
-# joint_move 1 0 0.5 -1.5 0.0 -0.5 1.57079633
-class Robot(BaseRobot):
+
+class Robot:
     commands: ir.SignalReader[command.CommandType] = ir.NoOpReader()
     state: ir.SignalEmitter[KinovaState] = ir.NoOpEmitter()
 
@@ -94,7 +93,8 @@ class Robot(BaseRobot):
             q, dq, tau = api.apply_current_command(None)  # Warm up
             joint_controller.compute_torque(q, dq, tau)
             current_command = np.zeros(api.actuator_count, dtype=np.float32)
-            robot_state.encode(q, dq, self.solver.forward(q), RobotStatus.AVAILABLE)
+            ee_pose = self.solver.forward(joint_controller.q_s)
+            robot_state.encode(q, dq, ee_pose, RobotStatus.AVAILABLE)
 
             while not should_stop.value:
                 cmd, updated = commands.value
@@ -112,11 +112,10 @@ class Robot(BaseRobot):
                 torque_command = joint_controller.compute_torque(q, dq, tau)
                 np.divide(torque_command, torque_constant, out=current_command)
                 q, dq, tau = api.apply_current_command(current_command)
-                q_s = joint_controller.q_s
-                ee = self.solver.forward(q)
+                ee_pose = self.solver.forward(joint_controller.q_s)
 
                 status = RobotStatus.MOVING if not joint_controller.finished else RobotStatus.AVAILABLE
-                robot_state.encode(q, dq, ee, status)
+                robot_state.encode(q, dq, ee_pose, status)
                 self.state.emit(robot_state)
 
                 yield ir.Sleep(rate_limiter.wait_time())
