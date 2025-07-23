@@ -4,13 +4,15 @@ from enum import Enum
 import numpy as np
 
 import geom
-from . import command
+import ironic2 as ir
+from pimm.drivers.roboarm.command import CommandType
 
 
 class RobotStatus(Enum):
     """Different statuses that the robot can be in."""
     AVAILABLE = 0
     RESETTING = 1
+    MOVING = 2
 
 
 class State(ABC):
@@ -41,3 +43,9 @@ class State(ABC):
     def status(self) -> RobotStatus:
         """Robot status."""
         pass
+
+
+class BaseRobot(ABC):
+    """Abstract robot driver."""
+    commands: ir.SignalReader[CommandType]
+    state: ir.SignalEmitter[State]

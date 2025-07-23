@@ -11,3 +11,10 @@ def franka(ip: str, relative_dynamics_factor: float, cartesian_mode: str, home_j
                  relative_dynamics_factor=relative_dynamics_factor,
                  cartesian_mode=CartesianMode(cartesian_mode),
                  home_joints=home_joints)
+
+
+@cfgc.config(ip='192.168.1.10', relative_dynamics_factor=0.5)
+def kinova(ip, relative_dynamics_factor):
+    from pimm.drivers.roboarm.kinova.driver import Robot
+
+    return Robot(ip=ip, relative_dynamics_factor=relative_dynamics_factor)

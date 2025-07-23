@@ -42,19 +42,19 @@ class DHGripper:
         # TODO: We must translate these to physical units (N and m/s)
         force = ir.DefaultReader(self.force, 100)
         speed = ir.DefaultReader(self.speed, 100)
-
         while not should_stop.value:
+            print('starting gripper loop')
             # Update gripper based on shared values
             try:
                 width = round((1 - max(0, min(target_grip.value, 1))) * 1000)
                 client.write_register(0x103, c_uint16(width).value, slave=1)
                 client.write_register(0x101, c_uint16(force.value).value, slave=1)
                 client.write_register(0x104, c_uint16(speed.value).value, slave=1)
-
-                current_grip = 1 - client.read_holding_registers(0x202, count=1, slave=1).registers[0] / 1000
-                self.grip.emit(current_grip)
             except ir.NoValueException:
                 pass
+            print('emitting grip')
+            current_grip = 1 - client.read_holding_registers(0x202, count=1, slave=1).registers[0] / 1000
+            self.grip.emit(current_grip)
 
             yield ir.Sleep(0.001)  # Small delay to prevent busy-waiting
 

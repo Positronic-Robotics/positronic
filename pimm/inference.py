@@ -19,8 +19,8 @@ import pimm.cfg.hardware.roboarm
 import pimm.cfg.hardware.gripper
 import pimm.cfg.hardware.camera
 import pimm.cfg.simulator
+import pimm.cfg.inference.state
 import positronic.cfg.inference.action
-import positronic.cfg.inference.state
 import positronic.cfg.inference.policy
 
 
@@ -39,32 +39,35 @@ class Inference:
         device: str,
         policy,
         rerun_path: str | None = None,
+        inference_fps: int = 30,
     ):
         self.state_encoder = state_encoder
         self.action_decoder = action_decoder
         self.policy = policy.to(device)
         self.device = device
         self.rerun_path = rerun_path
+        self.inference_fps = inference_fps
 
     def run(self, should_stop: ir.SignalReader, clock: ir.Clock) -> Iterator[ir.Sleep]:
         frames = {
-            camera_name: ir.DefaultReader(ir.ValueUpdated(frame), ({}, False))
+            camera_name: ir.DefaultReader(frame, {})
             for camera_name, frame in self.frames.items()
         }
 
         reference_pose = None
+        rate_limiter = ir.RateLimiter(clock, hz=self.inference_fps)
 
         if self.rerun_path:
             rr.init("inference")
             rr.save(self.rerun_path)
 
         while not should_stop.value:
-            frame_messages, is_updated = ir.utils.is_any_updated(frames)
-            if not is_updated:
+            frame_messages = {k: v.read() for k, v in frames.items()}
+            if not all('image' in v.data for v in frame_messages.values()):
                 yield ir.Sleep(0.001)
                 continue
 
-            images = {k: v.data['image'] for k, v in frame_messages.items()}
+            images = {f"{k}.image": v.data['image'] for k, v in frame_messages.items()}
 
             robot_state = self.robot_state.read()
             if robot_state is None:
@@ -77,6 +80,12 @@ class Inference:
                 continue
 
             robot_state = robot_state.data
+
+            if robot_state.status == roboarm.RobotStatus.MOVING:
+                # TODO: seems to be necessary to wait previos command 
+                yield ir.Sleep(0.001)
+                continue
+
             if reference_pose is None:
                 reference_pose = robot_state.ee_pose.copy()
 
@@ -109,7 +118,7 @@ class Inference:
                 rerun_log_observation(clock.now(), obs)
                 rerun_log_action(clock.now(), action)
 
-            yield ir.Sleep(0.001)
+            yield ir.Sleep(rate_limiter.wait_time())
 
 
 def main(robot_arm: Any | None,
@@ -137,6 +146,7 @@ def main(robot_arm: Any | None,
 
         if gripper is not None:
             inference.target_grip, gripper.target_grip = world.mp_pipe()
+            gripper.grip, inference.gripper_state = world.mp_pipe()
             world.start_in_subprocess(gripper.run)
 
         world.run(inference.run)
@@ -191,9 +201,9 @@ def main_sim(
 
 main_cfg = cfgc.Config(
     main,
-    robot_arm=pimm.cfg.hardware.roboarm.franka,
+    robot_arm=pimm.cfg.hardware.roboarm.kinova,
     gripper=pimm.cfg.hardware.gripper.dh_gripper,
-    state_encoder=positronic.cfg.inference.state.end_effector_224,
+    state_encoder=pimm.cfg.inference.state.end_effector_224,
     action_decoder=positronic.cfg.inference.action.umi_relative,
     policy=positronic.cfg.inference.policy.act,
     cameras={
@@ -209,7 +219,7 @@ main_sim_cfg = cfgc.Config(
     main_sim,
     mujoco_model_path="positronic/assets/mujoco/franka_table.xml",
     loaders=pimm.cfg.simulator.stack_cubes_loaders,
-    state_encoder=positronic.cfg.inference.state.end_effector_back_front,
+    state_encoder=pimm.cfg.inference.state.end_effector_back_front,
     action_decoder=positronic.cfg.inference.action.relative_robot_position,
     policy=positronic.cfg.inference.policy.act,
     rerun_path="inference.rrd",
@@ -220,4 +230,4 @@ main_sim_cfg = cfgc.Config(
 
 if __name__ == "__main__":
     # TODO: add ability to specify multiple targets in CLI
-    cfgc.cli(main_sim_cfg)
+    cfgc.cli(main_cfg)
