@@ -93,8 +93,6 @@ class Robot:
             q, dq, tau = api.apply_current_command(None)  # Warm up
             joint_controller.compute_torque(q, dq, tau)
             current_command = np.zeros(api.actuator_count, dtype=np.float32)
-            ee_pose = self.solver.forward(joint_controller.q_s)
-            robot_state.encode(q, dq, ee_pose, RobotStatus.AVAILABLE)
 
             while not should_stop.value:
                 cmd, updated = commands.value
@@ -108,6 +106,8 @@ class Robot:
                         case command.JointMove(positions):
                             qpos = np.array(positions, dtype=np.float32)
                             joint_controller.set_target_qpos(qpos)
+                        case _:
+                            print(f"Unsuported command: {cmd}")
 
                 torque_command = joint_controller.compute_torque(q, dq, tau)
                 np.divide(torque_command, torque_constant, out=current_command)

@@ -82,7 +82,7 @@ class Inference:
             robot_state = robot_state.data
 
             if robot_state.status == roboarm.RobotStatus.MOVING:
-                # TODO: seems to be necessary to wait previos command
+                # TODO: seems to be necessary to wait previous command to finish
                 yield ir.Sleep(0.001)
                 continue
 

@@ -145,6 +145,7 @@ class Robot:
                     motion = franky.JointMotion(last_q, return_when_finished=False)
 
                 try:
+                    # TODO: implement MOVING state support
                     robot.move(motion, asynchronous=True)
                 except franky.ControlException as e:
                     robot.recover_from_errors()
