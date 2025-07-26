@@ -8,7 +8,7 @@ from positronic.simulator.mujoco.sim import MujocoSimulatorEnv
 from positronic.inference.state import StateEncoder
 from positronic.inference.inference import rerun_log_action, rerun_log_observation
 
-import configuronic as cfgc
+import configuronic as cfn
 import positronic.cfg.inference.state
 import positronic.cfg.inference.action
 import positronic.cfg.inference.policy
@@ -105,7 +105,7 @@ def run_policy_in_simulator(  # noqa: C901  Function is too complex
     renderer.close()
 
 
-run = cfgc.Config(
+run = cfn.Config(
     run_policy_in_simulator,
     env=positronic.cfg.simulator.simulator,
     state_encoder=positronic.cfg.inference.state.end_effector_back_front,

@@ -5,7 +5,7 @@ import fire
 import torch
 from tqdm import tqdm
 
-import configuronic as cfgc
+import configuronic as cfn
 import geom
 import positronic.cfg.simulator
 from positronic.simulator.mujoco.sim import MujocoSimulatorEnv
@@ -94,13 +94,13 @@ def process_episode(
     dataset_writer.end_episode()
 
 
-@cfgc.config(observation_hz=60,
-             use_ik=False,
-             env=positronic.cfg.simulator.simulator,
-             image_name_mapping={
-                 'front': 'handcam_front',
-                 'back': 'handcam_back',
-             })
+@cfn.config(observation_hz=60,
+            use_ik=False,
+            env=positronic.cfg.simulator.simulator,
+            image_name_mapping={
+                'front': 'handcam_front',
+                'back': 'handcam_back',
+            })
 def main(input_dir: str, output_dir: str, env: MujocoSimulatorEnv, observation_hz: int, use_ik: bool,
          image_name_mapping: Dict[str, str]):
     # Get all episode files from input directory

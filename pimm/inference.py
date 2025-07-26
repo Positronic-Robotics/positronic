@@ -4,7 +4,7 @@ import numpy as np
 import tqdm
 import rerun as rr
 
-import configuronic as cfgc
+import configuronic as cfn
 import ironic2 as ir
 from pimm.drivers import roboarm
 from pimm.drivers.camera.linux_video import LinuxVideo
@@ -199,7 +199,7 @@ def main_sim(
                 break
 
 
-main_cfg = cfgc.Config(
+main_cfg = cfn.Config(
     main,
     robot_arm=pimm.cfg.hardware.roboarm.kinova,
     gripper=pimm.cfg.hardware.gripper.dh_gripper,
@@ -215,7 +215,7 @@ main_cfg = cfgc.Config(
 )
 
 
-main_sim_cfg = cfgc.Config(
+main_sim_cfg = cfn.Config(
     main_sim,
     mujoco_model_path="positronic/assets/mujoco/franka_table.xml",
     loaders=pimm.cfg.simulator.stack_cubes_loaders,
@@ -230,4 +230,4 @@ main_sim_cfg = cfgc.Config(
 
 if __name__ == "__main__":
     # TODO: add ability to specify multiple targets in CLI
-    cfgc.cli(main_cfg)
+    cfn.cli(main_cfg)

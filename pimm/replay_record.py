@@ -5,7 +5,7 @@ import torch
 import tqdm
 
 import geom
-import configuronic as cfgc
+import configuronic as cfn
 import ironic2 as ir
 from pimm.drivers import roboarm
 from pimm.simulator.mujoco.sim import MujocoCamera, MujocoFranka, MujocoGripper, MujocoSim
@@ -144,11 +144,11 @@ def main(
             pass
 
 
-main_cfg = cfgc.Config(
+main_cfg = cfn.Config(
     main,
     mujoco_model_path="positronic/assets/mujoco/franka_table.xml",
     loaders=pimm.cfg.simulator.stack_cubes_loaders,
 )
 
 if __name__ == "__main__":
-    cfgc.cli(main_cfg)
+    cfn.cli(main_cfg)

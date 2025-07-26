@@ -1,7 +1,7 @@
-import configuronic as cfgc
+import configuronic as cfn
 
 
-@cfgc.config
+@cfn.config
 def linux_video(**kwargs):
     from pimm.drivers.camera.linux_video import LinuxVideo
 

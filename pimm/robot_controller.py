@@ -1,11 +1,11 @@
-import configuronic as cfgc
+import configuronic as cfn
 import pimm.cfg.hardware.roboarm
 import ironic2 as ir
 import geom
 from pimm.drivers.roboarm import command
 
 
-@cfgc.config(robot=pimm.cfg.hardware.roboarm.kinova)
+@cfn.config(robot=pimm.cfg.hardware.roboarm.kinova)
 def main(robot):
     with ir.World() as world:
         command_emmiter, robot.commands = world.mp_pipe()
@@ -38,4 +38,4 @@ def main(robot):
 
 
 if __name__ == '__main__':
-    cfgc.cli(main)
+    cfn.cli(main)

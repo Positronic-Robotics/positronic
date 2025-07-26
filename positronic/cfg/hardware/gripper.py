@@ -1,7 +1,7 @@
-import configuronic as cfgc
+import configuronic as cfn
 
 
-@cfgc.config(port="/dev/ttyUSB0")
+@cfn.config(port="/dev/ttyUSB0")
 def dh(port: str):
     from positronic.drivers.gripper.dh import DHGripper
 

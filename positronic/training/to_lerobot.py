@@ -10,7 +10,7 @@ import fire
 
 from lerobot.common.datasets.lerobot_dataset import LeRobotDataset
 
-import configuronic as cfgc
+import configuronic as cfn
 import positronic.cfg.inference.action
 import positronic.cfg.inference.state
 from positronic.inference.action import ActionDecoder
@@ -134,7 +134,7 @@ def append_data_to_dataset(
     print(f"Total length of the dataset: {seconds_to_str(total_length)}")
 
 
-@cfgc.config(
+@cfn.config(
     fps=30,
     video=True,
     state_encoder=positronic.cfg.inference.state.end_effector,
@@ -177,7 +177,7 @@ def convert_to_lerobot_dataset(
     print(f"Dataset converted and saved to {output_dir}")
 
 
-@cfgc.config(
+@cfn.config(
     state_encoder=positronic.cfg.inference.state.end_effector,
     action_encoder=positronic.cfg.inference.action.umi_relative,
     task="pick plate from the table and place it into the dishwasher",

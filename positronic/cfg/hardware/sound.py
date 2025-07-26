@@ -1,6 +1,6 @@
 import numpy as np
 
-import configuronic as cfgc
+import configuronic as cfn
 import ironic as ir
 
 
@@ -44,7 +44,7 @@ def _sound_system(
     return ir.compose(*components, inputs=inputs, outputs=sound_system.output_mappings)
 
 
-start_stop = cfgc.Config(
+start_stop = cfn.Config(
     _sound_system,
     force_feedback_volume=None,
     start_recording_wav_path="positronic/assets/sounds/recording-has-started.wav",

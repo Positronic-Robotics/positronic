@@ -1,10 +1,10 @@
-import configuronic as cfgc
+import configuronic as cfn
 
 
-@cfgc.config(ip="172.168.0.2",
-             relative_dynamics_factor=0.2,
-             cartesian_mode="positronic",
-             home_joints=[0.0, -0.31, 0.0, -1.65, 0.0, 1.522, 0.0])
+@cfn.config(ip="172.168.0.2",
+            relative_dynamics_factor=0.2,
+            cartesian_mode="positronic",
+            home_joints=[0.0, -0.31, 0.0, -1.65, 0.0, 1.522, 0.0])
 def franka(ip: str, relative_dynamics_factor: float, cartesian_mode: str, home_joints: list[float]):
     from pimm.drivers.roboarm.franka import Robot, CartesianMode  # noqa: F401
     return Robot(ip=ip,
@@ -13,7 +13,7 @@ def franka(ip: str, relative_dynamics_factor: float, cartesian_mode: str, home_j
                  home_joints=home_joints)
 
 
-@cfgc.config(ip='192.168.1.10', relative_dynamics_factor=0.5)
+@cfn.config(ip='192.168.1.10', relative_dynamics_factor=0.5)
 def kinova(ip, relative_dynamics_factor):
     from pimm.drivers.roboarm.kinova.driver import Robot
 

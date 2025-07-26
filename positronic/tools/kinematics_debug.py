@@ -3,7 +3,7 @@ import mujoco
 import numpy as np
 import rerun as rr
 
-import configuronic as cfgc
+import configuronic as cfn
 from geom import Transform3D
 from positronic.drivers.roboarm.kinova.base import JointCompliantController, KinematicsSolver, wrap_joint_angle
 
@@ -77,7 +77,7 @@ def debug_kinematics(input_filename, rerun):
         step += 1
 
 
-main = cfgc.Config(debug_kinematics)
+main = cfn.Config(debug_kinematics)
 
 if __name__ == "__main__":
     fire.Fire(main.override_and_instantiate)

@@ -1,8 +1,8 @@
-import configuronic as cfgc
+import configuronic as cfn
 from positronic.inference.state import ImageEncodingConfig, StateEncoder
 
 
-@cfgc.config
+@cfn.config
 def end_effector(resolution: tuple[int, int]):
     return StateEncoder(
         state_output_key='observation.state',
@@ -30,7 +30,7 @@ end_effector_352x192 = end_effector.override(resolution=(352, 192))
 
 
 # State for back and front camera used mostly in simulation
-end_effector_back_front = cfgc.Config(
+end_effector_back_front = cfn.Config(
     StateEncoder,
     state_output_key='observation.state',
     images=[
@@ -52,7 +52,7 @@ end_effector_back_front = cfgc.Config(
 
 
 # Similiar to end_effector but with additional frames with 15 frame offset
-end_effector_mem15 = cfgc.Config(
+end_effector_mem15 = cfn.Config(
     StateEncoder,
     state_output_key='observation.state',
     images=[

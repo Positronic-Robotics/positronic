@@ -1,6 +1,6 @@
-import configuronic as cfgc
+import configuronic as cfn
 import pimm.drivers.sound
 
-sound = cfgc.Config(
+sound = cfn.Config(
     pimm.drivers.sound.SoundSystem,
 )

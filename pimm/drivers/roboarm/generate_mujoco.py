@@ -1,6 +1,6 @@
 from typing import Sequence
 import mujoco as mj
-import configuronic as cfgc
+import configuronic as cfn
 import numpy as np
 
 from pimm.drivers.roboarm.generate_urdf import create_arm, MotorParameters
@@ -127,7 +127,7 @@ def _add_camera(spec: mj.MjSpec) -> None:
     )
 
 
-@cfgc.config(
+@cfn.config(
         wall_mounted=False,
         urdf_path='robot_urdf.xml',
         link_lengths=[0.05, 0.05, 0.2, 0.05, 0.2, 0.05],
@@ -177,4 +177,4 @@ def main(
 
 
 if __name__ == "__main__":
-    cfgc.cli(main)
+    cfn.cli(main)

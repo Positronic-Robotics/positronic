@@ -4,7 +4,7 @@ from typing import Callable, List
 import franky
 import fire
 
-import configuronic as cfgc
+import configuronic as cfn
 
 
 @dataclass
@@ -74,12 +74,12 @@ def main(ip: str, relative_dynamics_factor: float, targets: List[Callable[[], fr
     print(robot.current_pose.end_effector_pose)
 
 
-base_cfg = cfgc.Config(
+base_cfg = cfn.Config(
     main,
     ip="172.168.0.2",
     relative_dynamics_factor=0.2,
     targets=[
-        cfgc.Config(JointMotion, joints=[0, 0, 0, 0, 0, 0, 0]),
+        cfn.Config(JointMotion, joints=[0, 0, 0, 0, 0, 0, 0]),
     ]
 )
 

@@ -4,7 +4,7 @@ import fire
 import numpy as np
 import rerun as rr
 
-import configuronic as cfgc
+import configuronic as cfn
 import positronic.cfg.hardware
 import positronic.cfg.hardware.camera
 import positronic.cfg.inference.action
@@ -126,19 +126,19 @@ def run_policy_in_simulator(  # noqa: C901  Function is too complex
     env.cleanup()
 
 
-kinova_sync = cfgc.Config(
+kinova_sync = cfn.Config(
     KinovaSync,
     ip="192.168.1.10",
     relative_dynamics_factor=0.2,
 )
 
-gripper = cfgc.Config(
+gripper = cfn.Config(
     DHGripper,
     port="/dev/ttyUSB0",
 )
 
 
-run = cfgc.Config(
+run = cfn.Config(
     run_policy_in_simulator,
     env=kinova_sync,
     gripper=gripper,

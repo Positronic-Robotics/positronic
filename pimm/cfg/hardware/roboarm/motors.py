@@ -1,8 +1,8 @@
-import configuronic as cfgc
+import configuronic as cfn
 from pimm.drivers.roboarm.generate_urdf import MotorParameters
 
 
-my_actuator_rmd_x10_p35_100 = cfgc.Config(
+my_actuator_rmd_x10_p35_100 = cfn.Config(
     MotorParameters,
     radius=0.061,
     height=0.060,
@@ -12,7 +12,7 @@ my_actuator_rmd_x10_p35_100 = cfgc.Config(
 )
 
 
-my_actuator_rmd_x8_p6_20 = cfgc.Config(
+my_actuator_rmd_x8_p6_20 = cfn.Config(
     MotorParameters,
     radius=0.049,
     height=0.037,
@@ -21,7 +21,7 @@ my_actuator_rmd_x8_p6_20 = cfgc.Config(
     velocity_limit=2.0,
 )
 
-my_actuator_rmd_x6_v3 = cfgc.Config(
+my_actuator_rmd_x6_v3 = cfn.Config(
     MotorParameters,
     radius=0.0395,
     height=0.0295,

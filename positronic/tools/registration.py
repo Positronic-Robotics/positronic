@@ -6,7 +6,7 @@ import numpy as np
 import rerun as rr
 from scipy.linalg import orthogonal_procrustes
 
-import configuronic as cfgc
+import configuronic as cfn
 import ironic as ir
 import geom
 import positronic.cfg.hardware.roboarms
@@ -210,7 +210,7 @@ class RegistrationSystem(ir.ControlSystem):
             print(f"{percentile}th percentile Tracking error: {np.percentile(error, percentile)}")
 
 
-@cfgc.config(webxr=positronic.cfg.ui.webxr_both, robot_arm=positronic.cfg.hardware.roboarms.franka_ik)
+@cfn.config(webxr=positronic.cfg.ui.webxr_both, robot_arm=positronic.cfg.hardware.roboarms.franka_ik)
 async def perform_registration(
     webxr: ir.ControlSystem,
     robot_arm: ir.ControlSystem,

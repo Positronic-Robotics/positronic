@@ -1,16 +1,16 @@
 from typing import List, Optional
 
-import configuronic as cfgc
+import configuronic as cfn
 import ironic as ir
 
 
-@cfgc.config(ip="172.168.0.2",
-             relative_dynamics_factor=0.2,
-             gripper_speed=0.02,
-             realtime_config="Ignore",
-             collision_behavior=None,
-             home_joints_config=None,
-             cartesian_mode="LIBFRANKA")
+@cfn.config(ip="172.168.0.2",
+            relative_dynamics_factor=0.2,
+            gripper_speed=0.02,
+            realtime_config="Ignore",
+            collision_behavior=None,
+            home_joints_config=None,
+            cartesian_mode="LIBFRANKA")
 def franka_default(ip: str, relative_dynamics_factor: float, gripper_speed: float, realtime_config: str,
                    collision_behavior: Optional[List[List[float]]], home_joints_config: Optional[List[float]],
                    cartesian_mode: str):
@@ -38,7 +38,7 @@ franka_ik = franka_default.override(ip="172.168.0.2",
                                     cartesian_mode="POSITRONIC")
 
 
-@cfgc.config(ip="192.168.1.10", relative_dynamics_factor=0.5)
+@cfn.config(ip="192.168.1.10", relative_dynamics_factor=0.5)
 def kinova(ip: str, relative_dynamics_factor: float):
     from positronic.drivers.roboarm.kinova.control_system import Kinova
     kinova = Kinova(ip, relative_dynamics_factor)

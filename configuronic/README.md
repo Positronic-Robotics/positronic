@@ -1,45 +1,54 @@
 # Configuronic
 
-Configuronic is a concise "Configuration as a Code" library that is developed by our team at Positronic Robotics while working on our Ironic framework.
+Configuronic is a concise "Configuration as a Code" library that is developed by Positronic Robotics while working on Robotics ML platform.
 
-We designed this library from the first principles, after fruitless attempts to cope with Hydra framework. These principles are:
+We designed this library from the first principles, after fruitless attempts to cope with Hydra framework.
 
+These foundatinoal principles are:
 * Don't repeat yourself twice.
 * Provide clearn and effective way to change configuration from the command line.
-* Express configurations in Python (no YAML, JSON, XML or INI files).
+* Express configurations in Python, rather than YAML, JSON, XML, INI or anything else.
 * Be minimal and simple.
 
-Configuronic is that we came up with. Let's start with a
+Let's [take a look (FIXME)](https://positronic.ro/) into a
 
 ## Simple example
 ```python
-# 'utils/record_video.py'
-import configuronic as cfgc
+# 'examples/basic.py'
+import numpy as np
+import configuronic as cfn
 
-def basic_camera(camera_id: int, fps):
-    cam = library1.Camera(camera_id)
-    camera.set_fps(fps)
-    return cam
 
-basic_camera_0 = cfgc.Config(camera_id=0, fps=30)
-basic_camera_1 = basic_camera_0.override(camera_id=1)
+def noisy_sin(w, th, noise_std=0.1):
+    t = np.linspace(0, 1, 100)
+    return np.sin(w * t + th) + np.random.normal(0, noise_std, 100)
 
-@cfgc.config(usb_path='/dev/v4l/by-id/usb-video-index0')
-def v4l_camera(usb_path):
-    cam = some_v4l_lib.Camera(usb_path)
-    return cam
 
-def save_video(camera, filename, codec):
-    """Record video from camera to a file."""
-    with open(filename, 'w') as out_file:
-        video = VideoWriter(out_file, codec)
-        for _ in range(1000):
-            video.append(camera.get_frame())
+noisy_sin_01 = cfn.Config(noisy_sin, w=1, th=0)
+clean_sin = noisy_sin.override(noise_std=0)
 
-main = cfgc.Config(save_video, camera=basic_camera, codec='libx264')
+
+@cfn.config
+def second_order_polynomial(a=1, b=0, c=0):
+    x = np.linspace(0, 1, 100)
+    return a * x**2 + b * x + c
+
+
+def print_exp_moving_average(sequence, alpha=0.1):
+    result = None
+    for x in sequence:
+        if result is None:
+            result = x
+        else:
+            result = alpha * x + (1 - alpha) * result
+        print(result)
+    return result
+
+
+main = cfn.Config(print_exp_moving_average, sequence=noisy_sin)
 
 if __name__ == "__main__":
-    cfgc.cli(main)
+    cfn.cli(main)
 ```
 
 And this is how you can run that script:
@@ -117,7 +126,7 @@ pip install configuronic
 ### Basic Usage
 
 ```python
-import configuronic as cfgc
+import configuronic as cfn
 
 # Define a function
 def train_model(learning_rate: float, batch_size: int, epochs: int):
@@ -125,7 +134,7 @@ def train_model(learning_rate: float, batch_size: int, epochs: int):
     return "model_trained"
 
 # Create a configuration
-model_config = cfgc.Config(
+model_config = cfn.Config(
     train_model,
     learning_rate=0.001,
     batch_size=32,
@@ -139,9 +148,9 @@ result = model_config.instantiate()
 ### Using the Decorator
 
 ```python
-import configuronic as cfgc
+import configuronic as cfn
 
-@cfgc.config(learning_rate=0.001, batch_size=32)
+@cfn.config(learning_rate=0.001, batch_size=32)
 def train_model(learning_rate: float, batch_size: int, epochs: int = 100):
     print(f"Training with lr={learning_rate}, batch={batch_size}, epochs={epochs}")
     return "model_trained"
@@ -155,10 +164,10 @@ result = train_model.override(epochs=200).instantiate()
 ### Hardware Configuration
 
 ```python
-import configuronic as cfgc
+import configuronic as cfn
 
 # Configure camera settings
-@cfgc.config(device_path="/dev/video0", width=1280, height=720, fps=30)
+@cfn.config(device_path="/dev/video0", width=1280, height=720, fps=30)
 def camera_left(device_path: str, width: int, height: int, fps: int):
     from my_drivers.camera import Camera
     return Camera(device_path=device_path, width=width, height=height, fps=fps)
@@ -167,7 +176,7 @@ def camera_left(device_path: str, width: int, height: int, fps: int):
 camera_right = camera_left.override(device_path="/dev/video1")
 
 # Configure robot arm
-@cfgc.config(ip="192.168.1.100", speed_factor=0.5)
+@cfn.config(ip="192.168.1.100", speed_factor=0.5)
 def robot_arm(ip: str, speed_factor: float):
     from my_drivers.robot import RobotArm
     return RobotArm(ip=ip, speed_factor=speed_factor)
@@ -176,7 +185,7 @@ def robot_arm(ip: str, speed_factor: float):
 ### Nested Configurations
 
 ```python
-import configuronic as cfgc
+import configuronic as cfn
 
 # Main application configuration
 def main(cameras: dict, robot, output_dir: str = "/tmp/data"):
@@ -184,9 +193,9 @@ def main(cameras: dict, robot, output_dir: str = "/tmp/data"):
     print(f"Robot: {robot}")
     print(f"Output: {output_dir}")
 
-main_config = cfgc.Config(
+main_config = cfn.Config(
     main,
-    cameras=cfgc.Config(
+    cameras=cfn.Config(
         dict,
         left=camera_left,
         right=camera_right,
@@ -215,7 +224,7 @@ Configuronic supports two types of import paths:
 #### Absolute Imports (`@`)
 ```python
 # Import and instantiate an object from an absolute path
-config = cfgc.Config(
+config = cfn.Config(
     my_function,
     processor="@sklearn.preprocessing.StandardScaler",  # Imports and creates StandardScaler()
     model="@torch.nn.Linear"
@@ -225,7 +234,7 @@ config = cfgc.Config(
 #### Relative Imports (`:`)
 ```python
 # Import relative to the current module/class
-@cfgc.config(base_model="@transformers.BertModel")
+@cfn.config(base_model="@transformers.BertModel")
 def fine_tuned_model(base_model, num_classes: int):
     # Use `:` to import relative to BertModel
     tokenizer = ":BertTokenizer"  # Resolves to transformers.BertTokenizer
@@ -237,15 +246,15 @@ def fine_tuned_model(base_model, num_classes: int):
 Automatically generate CLIs from your configurations:
 
 ```python
-import configuronic as cfgc
+import configuronic as cfn
 
-@cfgc.config
+@cfn.config
 def train(model_name: str, learning_rate: float = 0.001, epochs: int = 100):
     print(f"Training {model_name} for {epochs} epochs with lr={learning_rate}")
 
 # This creates a CLI automatically
 if __name__ == "__main__":
-    cfgc.cli(train)
+    cfn.cli(train)
 ```
 
 Run from command line:
@@ -260,10 +269,10 @@ python train.py --model_name "bert-base" --learning_rate 0.0001 --epochs 50
 ### Environment-Specific Configurations
 
 ```python
-import configuronic as cfgc
+import configuronic as cfn
 
 # Base configuration
-@cfgc.config(host="localhost", port=8080, debug=False)
+@cfn.config(host="localhost", port=8080, debug=False)
 def server_config(host: str, port: int, debug: bool):
     return {"host": host, "port": port, "debug": debug}
 
@@ -286,7 +295,7 @@ staging_config = prod_config.override(port=8080)
 print(config)
 
 # Get required arguments that need to be set
-required_args = cfgc.get_required_args(config)
+required_args = cfn.get_required_args(config)
 print(f"Missing arguments: {required_args}")
 
 # Convert to dictionary
