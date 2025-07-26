@@ -566,6 +566,28 @@ def test_relative_import_with_nested_enum_default():
     assert result == "BAD_REQUEST"
 
 
+def identity(x):
+    return x
+
+
+def test_override_with_colon_resolves_against_nested_config_module():
+    """
+    After we copy a Config that originated in cfg2.py, overriding it
+    with a relative import (':return2') must still resolve inside the
+    *cfg2* module, not configuronic.config.
+    """
+    top_cfg = cfn.Config(identity, x=cfn.tests.support_package.cfg2.a_cfg_value1_copy)
+
+    result = top_cfg.override(x=":return2").instantiate()
+    assert result == 2
+
+
+def test_override_and_instantiate_with_colon_resolves_against_nested_config_module():
+    top_cfg = cfn.Config(identity, x=cfn.tests.support_package.cfg2.a_cfg_value1_copy)
+    result = top_cfg.override_and_instantiate(x=":return2")
+    assert result == 2
+
+
 def test_config_with_list_arg_could_be_overridden():
     @cfn.config(a=["a", "b", "c"])
     def join(a):

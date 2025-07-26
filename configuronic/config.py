@@ -332,9 +332,9 @@ class Config:
         Recursively copy config signatures.
         """
 
-        new_args = [arg.copy() if isinstance(arg, Config) else arg for arg in self.args]
+        new_args = [arg._copy() if isinstance(arg, Config) else arg for arg in self.args]
 
-        new_kwargs = {key: value.copy() if isinstance(value, Config) else value for key, value in self.kwargs.items()}
+        new_kwargs = {key: value._copy() if isinstance(value, Config) else value for key, value in self.kwargs.items()}
 
         cfg = Config(self.target, *new_args, **new_kwargs)
         cfg._creator_module = self._creator_module

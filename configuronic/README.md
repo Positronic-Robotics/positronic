@@ -25,7 +25,7 @@ def noisy_sin(w, th, noise_std=0.1):
 
 
 noisy_sin_01 = cfn.Config(noisy_sin, w=1, th=0)
-clean_sin = noisy_sin.override(noise_std=0)
+clean_sin = noisy_sin_01.override(noise_std=0)
 
 
 @cfn.config
@@ -37,50 +37,48 @@ def second_order_polynomial(a=1, b=0, c=0):
 def print_exp_moving_average(sequence, alpha=0.1):
     result = None
     for x in sequence:
-        if result is None:
-            result = x
-        else:
-            result = alpha * x + (1 - alpha) * result
+        result = x if result is None else alpha * x + (1 - alpha) * result
         print(result)
     return result
 
 
-main = cfn.Config(print_exp_moving_average, sequence=noisy_sin)
+main = cfn.Config(print_exp_moving_average, sequence=noisy_sin_01)
 
 if __name__ == "__main__":
     cfn.cli(main)
 ```
 
-And this is how you can run that script:
+This script runs `print_exp_moving_average` method, and *configuronic* enables you to control its arguments via commandline:
+
 ```bash
 # Run default configuration
-python utils/record_video.py --filename=/tmp/out.mp4
-# This will print the following:
-python utils/record_video.py --help
-# TODO: Generate output
+python examples/basic.py
+# See the configuration in readable format.
+python examples/basic.py --help
+# Config:
+#
+# '@target': '@__main__.print_exp_moving_average'
+# sequence: {'@target': '@__main__.noisy_sin', w: 1, th: 0}
 
-# This will print error because filename must be specfied
-python utils/record_video.py
+# Overwrite sequence parameter with different config
+python examples/basic.py --sequence=clean_sin
 
-# Overwrite existing parameter
-python utils/record_video.py --filename=/tmp/out.mp4 --codec='mpeg4'
-
-# Overwrite nested parameter
-python utils/record_video.py --filename=/tmp/out.mp4 --camera.fps=60
+# Change nested parameter
+python examples/basic.py --sequence.w=2.5
 
 # TODO: What about None in cli arguments? How is it handled?
 
-# Absolute reference to another object config
-python utils/record_video.py --filename=/tmp/out.mp4 --camera=@utils.record_video.v4l_camera
-# With it you can access it arguments
-python utils/record_video.py --filename=/tmp/out.mp4 --camera=@utils.record_video.v4l_camera --camera.usb_path='/dev/v4l/another'
+# You can reference another config by its absolute Python path
+python examples/basic.py --sequence=@configuronic.examples.basic.second_order_polynomial
+# Or by the path relative to the existing default
+python examples/basic.py --filename=/tmp/out.mp4 --camera=@utils.record_video.v4l_camera --camera.usb_path='/dev/v4l/another'
 # This will fail, as the default camera does not have 'usb_path' argument
-python utils/record_video.py --filename=/tmp/out.mp4 --camera.usb_path='/dev/v4l/another' --camera=@utils.record_video.v4l_camera
+python examples/basic.py --filename=/tmp/out.mp4 --camera.usb_path='/dev/v4l/another' --camera=@utils.record_video.v4l_camera
 
 # Relative reference to another config
-python utils/record_video.py --filename=/tmp/out.mp4 --camera=:basic_camera_1
+python examples/basic.py --filename=/tmp/out.mp4 --camera=:basic_camera_1
 # Relative reference to another config and modify it
-python utils/record_video.py --filename=/tmp/out.mp4 --camera=:basic_camera_1 --camera.camera_id=2
+python examples/basic.py --filename=/tmp/out.mp4 --camera=:basic_camera_1 --camera.camera_id=2
 ```
 
 ## Configuration as a Code
