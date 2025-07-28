@@ -1,361 +1,478 @@
 # Configuronic
 
-Configuronic is a concise "Configuration as a Code" library that is developed by Positronic Robotics while working on Robotics ML platform.
+[![Python 3.8+](https://img.shields.io/badge/python-3.8+-blue.svg)](https://www.python.org/downloads/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![PyPI version](https://badge.fury.io/py/configuronic.svg)](https://badge.fury.io/py/configuronic)
+**FIXME: Add tests**
 
-We designed this library from the first principles, after fruitless attempts to cope with Hydra framework.
+**Configuronic** is a powerful "Configuration as Code" library designed for modern Python applications, particularly in robotics, machine learning, and complex system configurations. Born from the need for a cleaner alternative to existing configuration frameworks, configuronic embraces Python's native syntax while providing powerful CLI integration and hierarchical configuration management.
 
-These foundatinoal principles are:
-* Don't repeat yourself twice.
-* Provide clearn and effective way to change configuration from the command line.
-* Express configurations in Python, rather than YAML, JSON, XML, INI or anything else.
-* Be minimal and simple.
+## ✨ Why Configuronic?
 
-Let's [take a look (FIXME)](https://positronic.ro/) into a
+* 🎯 **DRY Principle**: Write configurations in Python, not YAML/JSON/XML
+* 🚀 **CLI-First**: Automatic command-line interfaces with complex nested parameter support
+* 🔧 **Simple & Minimal**: Clean API that gets out of your way
+* 🌳 **Hierarchical**: Deep nesting and inheritance support
+* 🔄 **Dynamic**: Runtime configuration resolution with relative imports
 
-## Simple example
+## 🚀 Quick Start
+
 ```python
-# 'examples/basic.py'
-import numpy as np
 import configuronic as cfn
 
+@cfn.config(learning_rate=0.001, epochs=100)
+def train_model(learning_rate: float, epochs: int, model_name: str = "bert-base"):
+    print(f"Training {model_name} for {epochs} epochs with lr={learning_rate}")
+    # Your training logic here
 
-def noisy_sin(w, th, noise_std=0.1):
-    t = np.linspace(0, 1, 100)
-    return np.sin(w * t + th) + np.random.normal(0, noise_std, 100)
+if __name__ == "__main__":
+    cfn.cli(train_model)
+```
 
+Run from command line:
+```bash
+# Use defaults
+python train.py
 
-noisy_sin_01 = cfn.Config(noisy_sin, w=1, th=0)
-clean_sin = noisy_sin_01.override(noise_std=0)
+# Override parameters
+python train.py --learning_rate=0.0001 --epochs=50 --model_name="gpt-2"
 
+# See current configuration
+python train.py --help
+```
 
-@cfn.config
-def second_order_polynomial(a=1, b=0, c=0):
-    x = np.linspace(0, 1, 100)
-    return a * x**2 + b * x + c
+## 📖 Table of Contents
 
+- [Installation](#installation)
+- [Core Concepts](#core-concepts)
+- [Real-World Examples](#real-world-examples)
+- [Advanced Features](#advanced-features)
+- [CLI Usage](#cli-usage)
+- [API Reference](#api-reference)
+- [Best Practices](#best-practices)
+- [Contributing](#contributing)
 
-def print_exp_moving_average(sequence, alpha=0.1):
-    result = None
-    for x in sequence:
-        result = x if result is None else alpha * x + (1 - alpha) * result
-        print(result)
-    return result
+## 📦 Installation
 
+### Using uv (recommended)
+```bash
+uv pip install configuronic
+```
 
-main = cfn.Config(print_exp_moving_average, sequence=noisy_sin_01)
+### Using pip
+```bash
+pip install configuronic
+```
+
+### Development Installation
+```bash
+git clone https://github.com/positronic/configuronic.git
+cd configuronic
+uv pip install -e .
+```
+
+## 🧠 Core Concepts
+
+### Configuration as Code
+
+In configuronic, configurations are **closures** - callables that store both the function and its arguments. This functional approach enables powerful composition and inheritance patterns.
+
+```python
+import configuronic as cfn
+
+# Create a configuration
+@cfn.config(batch_size=32, lr=0.001)
+def create_optimizer(batch_size: int, lr: float):
+    return torch.optim.Adam(lr=lr)
+
+# Override and create variants
+fast_optimizer = create_optimizer.override(lr=0.01)
+large_batch_optimizer = create_optimizer.override(batch_size=128)
+
+# Instantiate when needed
+optimizer = fast_optimizer.instantiate()
+```
+
+### Two Main Operations
+
+**1. `override(**kwargs)`** - Create configuration variants
+```python
+base_config = cfn.Config(MyModel, layers=3, units=64)
+deep_config = base_config.override(layers=6)
+wide_config = base_config.override(units=128)
+```
+
+**2. `instantiate()`** - Execute configuration and get result
+```python
+model = deep_config.instantiate()  # Returns MyModel(layers=6, units=64)
+```
+
+### Nested Configuration Override
+
+Support for deep parameter modification using dot notation:
+
+```python
+# Configure a complex training pipeline
+training_cfg = cfn.Config(
+    train_pipeline,
+    model=cfn.Config(TransformerModel, layers=6, hidden_size=512),
+    optimizer=cfn.Config(torch.optim.Adam, lr=0.001),
+    data=cfn.Config(DataLoader, batch_size=32)
+)
+
+# Override nested parameters
+fast_training = training_cfg.override(**{
+    "optimizer.lr": 0.01,
+    "data.batch_size": 64,
+    "model.layers": 12
+})
+```
+
+## 🌍 Real-World Examples
+
+### Robotics Hardware Configuration
+
+```python
+import configuronic as cfn
+
+@cfn.config(ip="172.168.0.2", port="/dev/ttyUSB0")
+def robot_arm(ip: str, relative_dynamics_factor: float = 0.2):
+    from my_robots import FrankaArm
+    return FrankaArm(ip=ip, dynamics_factor=relative_dynamics_factor)
+
+@cfn.config(device_path="/dev/video0", fps=30)
+def camera(device_path: str, width: int = 1920, height: int = 1080, fps: int = 30):
+    from my_cameras import Camera
+    return Camera(device_path, width, height, fps)
+
+# Create specific hardware configurations
+left_camera = camera.override(device_path="/dev/video1")
+right_camera = camera.override(device_path="/dev/video2")
+
+# Main system configuration
+@cfn.config(arm=robot_arm,
+            cameras={'left': left_cam, 'right': right_cam})
+def main(arm, cameras, gripper=None):
+    from robot_library import RobotSystem
+    system = RobotSystem(arm=arm, cameras=cameras, gripper=gripper)
+    system.run()
 
 if __name__ == "__main__":
     cfn.cli(main)
 ```
 
-This script runs `print_exp_moving_average` method, and *configuronic* enables you to control its arguments via commandline:
+### Machine Learning Pipeline
 
+```python
+@cfn.config(model_name="bert-base", max_length=512)
+def create_tokenizer(model_name: str, max_length: int):
+    from transformers import AutoTokenizer
+    tokenizer = AutoTokenizer.from_pretrained(model_name)
+    tokenizer.model_max_length = max_length
+    return tokenizer
+
+@cfn.config(hidden_size=768, num_layers=12)
+def create_model(hidden_size: int, num_layers: int, tokenizer):
+    vocab_size = len(tokenizer)
+    return TransformerModel(vocab_size, hidden_size, num_layers)
+
+# Configure the complete pipeline
+@cfn.config
+def training_pipeline(
+    tokenizer=create_tokenizer,
+    model=create_model,
+    learning_rate: float = 1e-4,
+    batch_size: int = 16
+):
+    # Pipeline implementation
+    return TrainingPipeline(tokenizer, model, learning_rate, batch_size)
+
+if __name__ == "__main__":
+    cfn.cli(training_pipeline)
+```
+
+Run with different configurations:
 ```bash
-# Run default configuration
-python examples/basic.py
-# See the configuration in readable format.
-python examples/basic.py --help
-# Config:
-#
-# '@target': '@__main__.print_exp_moving_average'
-# sequence: {'@target': '@__main__.noisy_sin', w: 1, th: 0}
+# Use defaults
+python train.py
 
-# Overwrite sequence parameter with different config
-python examples/basic.py --sequence=clean_sin
+# Quick experiments
+python train.py --learning_rate=1e-3 --batch_size=32
 
-# Change nested parameter
-python examples/basic.py --sequence.w=2.5
+# Override nested model parameters
+python train.py --model.num_layers=6 --tokenizer.max_length=256
 
-# TODO: What about None in cli arguments? How is it handled?
-
-# You can reference another config by its absolute Python path
-python examples/basic.py --sequence=@configuronic.examples.basic.second_order_polynomial
-# Or by the path relative to the existing default
-python examples/basic.py --filename=/tmp/out.mp4 --camera=@utils.record_video.v4l_camera --camera.usb_path='/dev/v4l/another'
-# This will fail, as the default camera does not have 'usb_path' argument
-python examples/basic.py --filename=/tmp/out.mp4 --camera.usb_path='/dev/v4l/another' --camera=@utils.record_video.v4l_camera
-
-# Relative reference to another config
-python examples/basic.py --filename=/tmp/out.mp4 --camera=:basic_camera_1
-# Relative reference to another config and modify it
-python examples/basic.py --filename=/tmp/out.mp4 --camera=:basic_camera_1 --camera.camera_id=2
+# Switch to different model entirely
+python train.py --tokenizer.model_name="gpt2" --model.hidden_size=1024
 ```
 
-## Configuration as a Code
+## 🔧 Advanced Features
 
-When you "configure" something, what exactly do you configure? Function calls. Different configurations mean different set of arguments for a function call. Usually this is some kind of `main` function. It may call other functions, or instantiate classes, and you might want to configure them as well.
+### Import Resolution with `@` and `:`
 
-In our library, `class Config` is just a callable with the fixed set of arguments to be called. In functional paradigm this is often called closure [**give a link**].
-
-Essentially you can do just two things with `Config` – `instantiate()` and `override()` (allright, you can also `copy()`, but it is not that cool as the other two).
-
-`instantiate()` just calls the callable with bound arguments, with an important caveat. If any of the arguments is another `Config`, it instantiates it beforehand. Configuronic also recursively goes through lists, tuples and dictionary values, and if they are `Configs`, it instantiates them.
-
-`override(**overrides)` creates another `Config` with bindings updated by `**overrides`. This is the part responsible for commandline magic, as we will see later. Now, let us consider a
-
-## Best practices
-* Do imports in configuration functions
-* Specify defaults in the configuration, not in the function defaults
-* If you want to put somewhere the set of arguments to remember the configuration, just store it as overwritten config in your main
-
-
-## Design Principles
-
-- **Config = Code**: No YAML, JSON, or other text-based configuration formats
-- **Configuration is just the way to call functions**: Configurations are simply stored function calls that can be modified and executed later
-
-## Key Features
-
-- 🔧 **Deferred execution**: Store function calls and their arguments without executing them
-- 🔄 **Override parameters**: Easily modify configurations without changing the original
-- 🏗️ **Composable**: Nest configurations within other configurations
-- 🖥️ **Auto CLI**: Automatically generate command-line interfaces from configurations
-- 🔗 **Smart imports**: Support for both absolute (`@`) and relative (`:`) import paths
-- 📝 **Type-safe**: Leverage Python's type system for configuration validation
-
-## Installation
-
-```bash
-pip install configuronic
-```
-
-## Quick Start
-
-### Basic Usage
-
-```python
-import configuronic as cfn
-
-# Define a function
-def train_model(learning_rate: float, batch_size: int, epochs: int):
-    print(f"Training with lr={learning_rate}, batch={batch_size}, epochs={epochs}")
-    return "model_trained"
-
-# Create a configuration
-model_config = cfn.Config(
-    train_model,
-    learning_rate=0.001,
-    batch_size=32,
-    epochs=100
-)
-
-# Execute the configuration
-result = model_config.instantiate()
-```
-
-### Using the Decorator
-
-```python
-import configuronic as cfn
-
-@cfn.config(learning_rate=0.001, batch_size=32)
-def train_model(learning_rate: float, batch_size: int, epochs: int = 100):
-    print(f"Training with lr={learning_rate}, batch={batch_size}, epochs={epochs}")
-    return "model_trained"
-
-# Override parameters and execute
-result = train_model.override(epochs=200).instantiate()
-```
-
-## Real-World Examples
-
-### Hardware Configuration
-
-```python
-import configuronic as cfn
-
-# Configure camera settings
-@cfn.config(device_path="/dev/video0", width=1280, height=720, fps=30)
-def camera_left(device_path: str, width: int, height: int, fps: int):
-    from my_drivers.camera import Camera
-    return Camera(device_path=device_path, width=width, height=height, fps=fps)
-
-# Create a variant for the right camera
-camera_right = camera_left.override(device_path="/dev/video1")
-
-# Configure robot arm
-@cfn.config(ip="192.168.1.100", speed_factor=0.5)
-def robot_arm(ip: str, speed_factor: float):
-    from my_drivers.robot import RobotArm
-    return RobotArm(ip=ip, speed_factor=speed_factor)
-```
-
-### Nested Configurations
-
-```python
-import configuronic as cfn
-
-# Main application configuration
-def main(cameras: dict, robot, output_dir: str = "/tmp/data"):
-    print(f"Starting with cameras: {cameras.keys()}")
-    print(f"Robot: {robot}")
-    print(f"Output: {output_dir}")
-
-main_config = cfn.Config(
-    main,
-    cameras=cfn.Config(
-        dict,
-        left=camera_left,
-        right=camera_right,
-    ),
-    robot=robot_arm,
-    output_dir="/home/user/experiments"
-)
-
-# Override nested parameters
-experiment_config = main_config.override(
-    **{
-        "cameras.left.fps": 60,          # Override nested camera FPS
-        "robot.speed_factor": 0.8,       # Override robot speed
-        "output_dir": "/tmp/experiment"   # Override output directory
-    }
-)
-
-# Execute
-experiment_config.instantiate()
-```
-
-### Import Paths
-
-Configuronic supports two types of import paths:
+Configuronic provides powerful import resolution syntax that allows you to dynamically reference Python objects, especially useful for CLI usage.
 
 #### Absolute Imports (`@`)
-```python
-# Import and instantiate an object from an absolute path
-config = cfn.Config(
-    my_function,
-    processor="@sklearn.preprocessing.StandardScaler",  # Imports and creates StandardScaler()
-    model="@torch.nn.Linear"
-)
+Direct import paths to any Python object:
+```bash
+# From command line - these import exact module paths
+python train.py --model="@transformers.BertModel"
+python train.py --optimizer="@torch.optim.SGD"
+python train.py --tokenizer="@transformers.AutoTokenizer"
 ```
 
 #### Relative Imports (`:`)
+Navigate relative to the current module, similar to how `../` works in file paths:
+
 ```python
-# Import relative to the current module/class
-@cfn.config(base_model="@transformers.BertModel")
-def fine_tuned_model(base_model, num_classes: int):
-    # Use `:` to import relative to BertModel
-    tokenizer = ":BertTokenizer"  # Resolves to transformers.BertTokenizer
-    return MyModel(base_model, tokenizer, num_classes)
+# If default is myproject.models.BertEncoder
+python train.py --encoder=":RobertaEncoder"        # -> myproject.models.RobertaEncoder (same module)
+python train.py --encoder="::utils.CustomEncoder"  # -> myproject.utils.CustomEncoder (parent module)
+python train.py --encoder=":::shared.BaseEncoder"  # -> myproject.shared.BaseEncoder (grandparent module)
 ```
 
-### Command Line Interface
+**How it works:** Each `:` acts like `../` in file system navigation:
+- `:` = stay in current module (like `./`)
+- `::` = go up one module level (like `../`)
+- `:::` = go up two module levels (like `../../`), etc.
 
-Automatically generate CLIs from your configurations:
+The path after the colons specifies the target within that module hierarchy.
+
+### Lists and Dictionaries
+
+Configuronic seamlessly handles nested data structures:
 
 ```python
-import configuronic as cfn
+simulation_cfg = cfn.Config(
+    run_simulation,
+    loaders=[
+        cfn.Config(AddCameras, camera_config=camera_cfg),
+        cfn.Config(AddObjects, objects=["cube", "sphere"]),
+        cfn.Config(SetLighting, intensity=0.8)
+    ],
+    cameras={
+        'main': cfn.Config(Camera, position=[0, 0, 1]),
+        'side': cfn.Config(Camera, position=[1, 0, 0])
+    }
+)
 
-@cfn.config
-def train(model_name: str, learning_rate: float = 0.001, epochs: int = 100):
-    print(f"Training {model_name} for {epochs} epochs with lr={learning_rate}")
+# Override specific items
+modified_sim = simulation_cfg.override(**{
+    "loaders.0.camera_config.fps": 60,  # First loader's camera FPS
+    "cameras.main.position": [0, 0, 2]   # Main camera position
+})
+```
 
-# This creates a CLI automatically
+### Configuration Inheritance
+
+```python
+# Base configuration
+base_camera = cfn.Config(Camera, width=1920, height=1080, fps=30)
+
+# Derived configurations
+hd_camera = base_camera.override(width=1280, height=720)
+high_fps_camera = base_camera.override(fps=60)
+webcam = base_camera.override(width=640, height=480, fps=15)
+
+# All inherit base settings unless overridden
+```
+
+## 🖥️ CLI Usage
+
+Configuronic leverages [Python Fire](https://github.com/google/python-fire) for automatic CLI generation:
+
+### Basic CLI
+```python
+@cfn.config(param1="default", param2=42)
+def my_function(param1: str, param2: int):
+    return f"{param1}: {param2}"
+
 if __name__ == "__main__":
-    cfn.cli(train)
+    cfn.cli(my_function)
 ```
 
-Run from command line:
+### Command Line Examples
 ```bash
-# Show help and current configuration
-python train.py --help
+# Show help and current config
+python script.py --help
 
 # Override parameters
-python train.py --model_name "bert-base" --learning_rate 0.0001 --epochs 50
+python script.py --param1="hello" --param2=100
+
+# Nested parameter override
+python script.py --model.layers=6 --optimizer.lr=0.001
+
+# Using absolute imports
+python script.py --model="@my_models.CustomTransformer"
+
+# Using relative imports
+python script.py --tokenizer=":CustomTokenizer"
+
+# Complex nested overrides
+python script.py --cameras.left.fps=60 --cameras.right.device="/dev/video2"
 ```
 
-### Environment-Specific Configurations
+## 📚 API Reference
+
+### Core Classes
+
+#### `Config(target, *args, **kwargs)`
+Main configuration class that stores a callable and its arguments.
+
+**Methods:**
+- `override(**kwargs) -> Config`: Create new config with updated parameters
+- `instantiate() -> Any`: Execute the configuration and return result
+- `copy() -> Config`: Deep copy the configuration
+- `override_and_instantiate(**kwargs) -> Any`: Convenience method for override + instantiate
+
+#### `@config` Decorator
+```python
+@cfn.config  # No override, just turn function into config.
+def print_greeting(greeting: str = 'Hello', entity: str = 'world'):
+    print(f'{greeting} {entity}!')
+
+@cfn.config(arg1="default", arg2=42)  # With defaults
+def my_function(...):
+    pass
+```
+
+### Utility Functions
+
+#### `cli(config: Config)`
+Generate automatic command-line interface for any configuration.
+
+#### `get_required_args(config: Config) -> List[str]`
+Get list of required arguments for a configuration.
+
+### Special Syntax
+
+- `@module.path.Class` - Absolute import path to any Python object
+- `:RelativeClass` - Relative import (same module, like `./`)
+- `::parent.Class` - Relative import (up one level, like `../`)
+
+> **Path Resolution:** The `:` syntax works like file system navigation where each colon moves up one module level in the Python package hierarchy, then navigates down to the specified target.
+
+
+## 💡 Best Practices
+
+### 1. Create Separate Modules for Configurations
+If you don't want your business logic modules to depend on `configuronic`, it's wise to have a separate package for configurations.
+```python
+# configs/models.py
+transformer_base = cfn.Config(TransformerModel, layers=6, hidden_size=512)
+transformer_large = transformer_base.override(layers=12, hidden_size=1024)
+
+# configs/training.py
+from .models import transformer_base
+training_pipeline = cfn.Config(TrainingPipeline, model=transformer_base)
+```
+
+### 2. Import Inside Configuration Functions
+In robotic applications, some configurations may depend on parituclar hardware and Python packages that provide drivers, that are not always available. If you don't want to force your users to install all of them, consider making imports inside the functions that you configure.
+```python
+@cfn.config
+def create_model(layers: int = 6):
+    # Import inside the function to avoid circular dependencies
+    from my_project.models import TransformerModel
+    return TransformerModel(layers=layers)
+```
+
+### 3. Use `override` to create as many custom configurations as you need
+When working with text configuration files, it's natural to create separate files for different environments or use cases. In `configuronic`, just create new configuration variables that override the base config.
 
 ```python
-import configuronic as cfn
+# Base training configuration
+base_training = cfn.Config(
+    TrainingPipeline,
+    model=cfn.Config(TransformerModel, layers=6, hidden_size=512),
+    optimizer=cfn.Config(torch.optim.Adam, lr=0.001),
+    batch_size=32,
+    epochs=10
+)
 
-# Base configuration
-@cfn.config(host="localhost", port=8080, debug=False)
-def server_config(host: str, port: int, debug: bool):
-    return {"host": host, "port": port, "debug": debug}
+# Development environment - smaller, faster
+dev_training = base_training.override(
+    batch_size=8, epochs=2,
+    **{"model.layers": 3, "model.hidden_size": 256})
 
-# Development environment
-dev_config = server_config.override(debug=True, port=8000)
+# Production environment - optimized settings
+prod_training = base_training.override(
+    batch_size=64, epochs=100,
+    **{"optimizer.lr": 0.0001})
 
-# Production environment
-prod_config = server_config.override(host="0.0.0.0", port=80)
+# Experimental setup - large model
+experimental_training = base_training.override(
+    **{
+        "model.layers": 12,
+        "model.hidden_size": 1024,
+        "optimizer.lr": 0.0005,
+        "batch_size": 16
+    })
 
-# Staging environment
-staging_config = prod_config.override(port=8080)
+# Quick debugging setup
+debug_training = base_training.override(
+    epochs=1, batch_size=2, **{"model.layers": 1})
+
+# Now you can easily switch between configurations
+# TODO: Make this part of Configuronic
+if __name__ == "__main__":
+    import sys
+    configs = {
+        'dev': dev_training,
+        'prod': prod_training,
+        'experimental': experimental_training,
+        'debug': debug_training
+    }
+
+    config_name = sys.argv[1] if len(sys.argv) > 1 else 'dev'
+    selected_config = configs.get(config_name, dev_training)
+
+    cfn.cli(selected_config)
 ```
 
-## Advanced Features
+**Usage:**
+```bash
+python train.py dev          # Use development config
+python train.py prod         # Use production config
+python train.py experimental # Use experimental config
+python train.py debug        # Use debug config
 
-### Configuration Inspection
-
-```python
-# View configuration as YAML
-print(config)
-
-# Get required arguments that need to be set
-required_args = cfn.get_required_args(config)
-print(f"Missing arguments: {required_args}")
-
-# Convert to dictionary
-config_dict = config._to_dict()
+# Still supports all override capabilities
+python train.py prod --epochs=50 --batch_size=128
 ```
 
-### Error Handling
 
-```python
-from configuronic import ConfigError
+## 🤝 Contributing
+We welcome contributions! Here's how to get started:
 
-try:
-    # This will raise ConfigError if parameters are invalid
-    result = config.instantiate()
-except ConfigError as e:
-    print(f"Configuration error: {e}")
+### Development Setup
+```bash
+git clone https://github.com/your-org/configuronic.git
+cd configuronic
+uv pip install -e ".[dev]"  # FIXME: add pytest and pytest-cov there
 ```
 
-### Override and Execute Pattern
-
-```python
-# Common pattern for creating flexible entry points
-def run_experiment(**kwargs):
-    return base_config.override(**kwargs).instantiate()
-
-# Use with fire or other CLI libraries
-import fire
-fire.Fire(run_experiment)
+### Running Tests
+```bash
+pytest  # Run all tests
+pytest --cov=configuronic  # Run with coverage
 ```
+### 📋 Guidelines
+- Follow existing code style and patterns
+- Add tests for new functionality
+- Ensure all tests pass before submitting
+- Update documentation as needed
 
-## Best Practices
+## 📄 License
 
-1. **Use type hints**: They help with IDE support and catch errors early
-2. **Default values**: Provide sensible defaults in your functions
-3. **Composition over inheritance**: Build complex configs by composing simpler ones
-4. **Environment separation**: Create separate configs for dev/staging/prod
-5. **CLI-ready**: Design configs to work well with the auto-generated CLI
+This project is licensed under the MIT License - see the [LICENSE](LICENSE.md) file for details.
 
-## API Reference
+## 📞 Support
 
-### `Config`
-- `Config(target, *args, **kwargs)`: Create a configuration
-- `.override(**kwargs)`: Create a new config with overridden parameters
-- `.instantiate()`: Execute the configuration and return the result
-- `.copy()`: Create a deep copy of the configuration
+- 🐛 **Bug Reports**: [GitHub Issues](https://github.com/your-org/configuronic/issues)
+- 💬 **Discussions**: [GitHub Discussions](https://github.com/your-org/configuronic/discussions) **FIXME: Create Discord**
+- 📧 **Email**: hi@positronic.ro
 
-### `@config` decorator
-- `@config`: Convert a function into a Config object
-- `@config(**kwargs)`: Create a Config with default parameters
+---
 
-### `cli(config)`
-- Generate a command-line interface from a configuration
-
-### Import Resolution
-- `@module.Class`: Absolute import path
-- `:RelativeClass`: Relative to the current context
-- Multiple `:` traverse up the module hierarchy (`:../sibling_module.Class`)
-
-## Contributing
-
-Contributions are welcome! Please feel free to submit a Pull Request.
-
-## License
-
-[Add your license here]
+**⭐ If you find Configuronic useful, please consider giving it a star on GitHub!**
