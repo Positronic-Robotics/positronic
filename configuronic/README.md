@@ -215,12 +215,12 @@ python train.py --tokenizer.model_name="gpt2" --model.hidden_size=1024
 Configuronic provides powerful import resolution syntax that allows you to dynamically reference Python objects, especially useful for CLI usage.
 
 #### Absolute Imports (`@`)
-Direct import paths to any Python object:
+Direct import paths to any Python object. If you need to use a literal `@` at the beginning of a string (not for imports), use `@@`:
 ```bash
 # From command line - these import exact module paths
-python train.py --model="@transformers.BertModel"
-python train.py --optimizer="@torch.optim.SGD"
-python train.py --tokenizer="@transformers.AutoTokenizer"
+python train.py --model="@transformers.BertModel"     # Import BertModel
+python train.py --message="@@starts_with_at"          # Literal string "@starts_with_at"
+python train.py --text="foo@bar"                      # No escaping needed in the middle
 ```
 
 #### Relative Imports (`.`)
@@ -332,6 +332,9 @@ python script.py --model.layers=6 --optimizer.lr=0.001
 # Using absolute imports
 python script.py --model="@my_models.CustomTransformer"
 
+# To pass a string that starts with @, repeat it twice
+python script.py --message="@@this_is_literal_at_sign"
+
 # Using relative imports
 python script.py --tokenizer=".CustomTokenizer"
 
@@ -390,6 +393,7 @@ Get list of required arguments for a configuration.
 - `@module.path.Class` - Absolute import path to any Python object
 - `.RelativeClass` - Relative import (same module, like `./`)
 - `..parent.Class` - Relative import (up one level, like `../`)
+- `@@literal_string` - Escape literal `@` characters in the beginning of strings
 
 > **Path Resolution:** The `.` syntax works like file system navigation where each dot moves up one module level in the Python package hierarchy, then navigates down to the specified target.
 

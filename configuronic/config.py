@@ -134,7 +134,10 @@ def _resolve_value(value: Any, default: Any | None = None) -> Any:
     """
     if isinstance(value, str):
         if value.startswith(INSTANTIATE_PREFIX):
-            return _import_object_from_path(value)
+            if value[len(INSTANTIATE_PREFIX):].startswith(INSTANTIATE_PREFIX):
+                return value[len(INSTANTIATE_PREFIX):]
+            else:
+                return _import_object_from_path(value)
         if value.startswith(RELATIVE_PATH_PREFIX) and not isinstance(default, str):
             return _resolve_relative_import(value, default)
 

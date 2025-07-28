@@ -801,5 +801,41 @@ def test_override_non_existing_nested_argument_raises_config_error():
         composite_obj.override(**{"arg.a.b": 4}).instantiate()
 
 
+def test_escape_at_sign_with_double_at():
+    """Test that @@ escapes to literal @ in string values."""
+    @cfn.config(message="Hello")
+    def print_message(message):
+        return message
+
+    # Test that @@ becomes literal @
+    result = print_message.override(message="@@this_is_literal_at_sign").instantiate()
+    assert result == "@this_is_literal_at_sign"
+
+
+def test_escape_at_sign_in_nested_config():
+    """Test that @@ escaping works in nested configurations."""
+    @cfn.config(name="default")
+    def create_person(name):
+        return {"name": name}
+
+    @cfn.config(person=create_person)
+    def create_profile(person):
+        return person
+
+    result = create_profile.override(**{"person.name": "@@special_name"}).instantiate()
+    assert result["name"] == "@special_name"
+
+
+def test_escape_at_sign_with_multiple_at_signs():
+    """Test that multiple @ signs are handled correctly."""
+    @cfn.config(text="default")
+    def process_text(text):
+        return text
+
+    # Test multiple @ signs
+    result = process_text.override(text="@@@three_at_signs").instantiate()
+    assert result == "@@three_at_signs"
+
+
 if __name__ == "__main__":
     pytest.main()
