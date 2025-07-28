@@ -106,7 +106,7 @@ model = deep_config.instantiate()  # Returns MyModel(layers=6, units=64)
 ```python
 # These are equivalent:
 result1 = config.override(param=value).instantiate()
-result2 = config(param=value)
+result2 = config(param=value)()
 ```
 
 ### Nested Configuration Override

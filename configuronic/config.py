@@ -94,11 +94,11 @@ def _get_base_path_from_default(default: Any) -> str:
 
 def _construct_relative_path(value: str, base_path: str):
     leading = 0
-    for i in range(len(value)):
-        if value[i] != RELATIVE_PATH_PREFIX:
+    for leading in range(len(value)):
+        if value[leading] != RELATIVE_PATH_PREFIX:
             break
-        leading += 1
 
+    assert '🤷‍♂️' not in value, "Configuronic does not support relative imports with 🤷‍♂️. Sorry 🤷‍♂️"
     value = '🤷‍♂️' * leading + value[leading:]
 
     path = base_path + value
@@ -224,7 +224,26 @@ class Config:
         self._creator_module = _get_creator_module()
 
     def override(self, **overrides) -> 'Config':
-        # TODO: Generate a detailed docstring for this method
+        """
+        Create a new Config with updated parameters.
+
+        Supports nested parameter updates using dot notation (e.g. "model.layers").
+        Handles absolute imports (@) and relative imports (.).
+
+        Args:
+            **overrides: Parameter paths and their new values.
+
+        Returns:
+            Config: A new Config with overridden parameters.
+
+        Raises:
+            ConfigError: If parameter path is invalid.
+
+        Example:
+            >>> cfg = Config(Pipeline, model=Config(MyModel, layers=6))
+            >>> new_cfg = cfg.override(**{"model.layers": 12})
+            >>> new_cfg = cfg.override(model="@my_models.CustomModel")
+        """
         overriden_cfg = self.copy()
         # we want to keep creator module (module override was called from) for the overriden config
         overriden_cfg._creator_module = _get_creator_module()
@@ -413,7 +432,7 @@ def config(**kwargs) -> Callable[[Callable], Config]:
         **kwargs: Keyword arguments to be passed to the target object.
 
     Returns:
-        A decorator function that creates a Config object.
+        A decorator factory that creates a Config object.
 
     Example:
         >>> @cfn.config(a=1, b=2)
