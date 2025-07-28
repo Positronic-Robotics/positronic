@@ -102,6 +102,13 @@ wide_config = base_config.override(units=128)
 model = deep_config.instantiate()  # Returns MyModel(layers=6, units=64)
 ```
 
+**Callable Syntax** - Config objects are callable, providing a shorthand for override + instantiate
+```python
+# These are equivalent:
+result1 = config.override(param=value).instantiate()
+result2 = config(param=value)
+```
+
 ### Nested Configuration Override
 
 Support for deep parameter modification using dot notation:
@@ -357,7 +364,7 @@ Main configuration class that stores a callable and its arguments.
 - `override(**kwargs) -> Config`: Create new config with updated parameters
 - `instantiate() -> Any`: Execute the configuration and return result
 - `copy() -> Config`: Deep copy the configuration
-- `override_and_instantiate(**kwargs) -> Any`: Convenience method for override + instantiate
+- `__call__(**kwargs) -> Any`: `override` config with `**kwargs` and `instantiate` it. **Note:** only keyword specified arguments are supported.
 
 #### `@config` Decorator
 ```python

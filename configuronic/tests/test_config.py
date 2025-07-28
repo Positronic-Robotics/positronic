@@ -256,15 +256,15 @@ def test_config_as_decorator_override_values_and_instantiate_works():
     def sum(a, b):
         return a + b
 
-    assert sum.override_and_instantiate() == 3
+    assert sum() == 3
 
 
-def test_override_and_instantiate_works_with_flat_configs():
+def test_config_callable_works_with_flat_configs():
     @cfn.config(a=1, b=2)
     def sum(a, b):
         return a + b
 
-    assert sum.override_and_instantiate() == 3
+    assert sum() == 3
 
 
 def test_instantiate_with_lists_and_dicts():
@@ -484,12 +484,12 @@ def test_override_with_dot_from_copied_config_applies_replative_to_cfg_module():
     assert env_obj.camera == 2
 
 
-def test_override_and_instantiate_with_dot_from_copied_config_applies_replative_to_cfg_module():
+def test_config_callable_with_dot_from_copied_config_applies_replative_to_cfg_module():
     from configuronic.tests.support_package.cfg2 import a_cfg_value1_copy
 
     env_cfg = cfn.Config(Env, camera=a_cfg_value1_copy)
 
-    env_obj = env_cfg.override_and_instantiate(camera=".return2")
+    env_obj = env_cfg(camera=".return2")
 
     assert env_obj.camera == 2
 
@@ -582,10 +582,32 @@ def test_override_with_dot_resolves_against_nested_config_module():
     assert result == 2
 
 
-def test_override_and_instantiate_with_dot_resolves_against_nested_config_module():
+def test_config_callable_with_dot_resolves_against_nested_config_module():
     top_cfg = cfn.Config(identity, x=cfn.tests.support_package.cfg2.a_cfg_value1_copy)
-    result = top_cfg.override_and_instantiate(x=".return2")
+    result = top_cfg(x=".return2")
     assert result == 2
+
+
+def test_config_objects_are_callable():
+    """Test that Config objects and overridden Config objects are callable."""
+    @cfn.config(a=1, b=2)
+    def add_numbers(a, b):
+        return a + b
+
+    # Base config should be callable
+    assert callable(add_numbers)
+    assert add_numbers() == 3
+
+    # Overridden config should also be callable
+    overridden_config = add_numbers.override(a=5)
+    assert callable(overridden_config)
+    assert overridden_config() == 7
+
+    # Calling with additional override should work
+    assert add_numbers(a=10, b=20) == 30
+
+    # Calling overridden config with additional override should work
+    assert overridden_config(b=10) == 15
 
 
 def test_config_with_list_arg_could_be_overridden():

@@ -348,7 +348,7 @@ class Config:
         cfg._creator_module = self._creator_module
         return cfg
 
-    def override_and_instantiate(self, **kwargs):
+    def __call__(self, **kwargs):
         """
         Override the config with the given kwargs and instantiate the config.
 
@@ -365,8 +365,8 @@ class Config:
             >>> @cfn.config()
             >>> def sum(a, b):
             >>>     return a + b
-            >>> option1 = sum.override(a=1).override_and_instantiate
-            >>> option2 = sum.override(b=2).override_and_instantiate
+            >>> option1 = sum.override(a=1)
+            >>> option2 = sum.override(b=2)
             >>> fire.Fire()
             >>> # Shell call: python script.py option1 --b 5
             >>> # Shell call: python script.py option2 --a 5
