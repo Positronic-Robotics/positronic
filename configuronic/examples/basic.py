@@ -11,7 +11,7 @@ noisy_sin_01 = cfn.Config(noisy_sin, w=1, th=0)
 clean_sin = noisy_sin_01.override(noise_std=0)
 
 
-@cfn.config
+@cfn.config()
 def second_order_polynomial(a=1, b=0, c=0):
     x = np.linspace(0, 1, 100)
     return a * x**2 + b * x + c

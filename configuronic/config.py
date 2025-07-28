@@ -3,7 +3,7 @@ from types import ModuleType
 import yaml
 import importlib.util
 import inspect
-from typing import Any, Callable, Dict, Tuple, List, overload
+from typing import Any, Callable, Dict, Tuple, List
 import posixpath
 
 
@@ -202,7 +202,7 @@ class Config:
             AssertionError: If the target is not callable.
 
         Example:
-            >>> @cfn.config
+            >>> @cfn.config()
             >>> def sum(a, b):
             >>>     return a + b
             >>> res = sum.override(a=1, b=2).instantiate()
@@ -362,7 +362,7 @@ class Config:
 
         Example:
             >>> import fire
-            >>> @cfn.config
+            >>> @cfn.config()
             >>> def sum(a, b):
             >>>     return a + b
             >>> option1 = sum.override(a=1).override_and_instantiate
@@ -402,26 +402,15 @@ def get_required_args(config: Config) -> List[str]:
     return required_args
 
 
-@overload
-def config(target: Callable, **kwargs) -> Config:
-    ...
-
-
-@overload
 def config(**kwargs) -> Callable[[Callable], Config]:
-    ...
-
-
-def config(target: Callable | None = None, **kwargs) -> Config | Callable[[Callable], Config]:
     """
     Decorator to create a Config object.
 
     Args:
-        target: The target object to be configured.
         **kwargs: Keyword arguments to be passed to the target object.
 
     Returns:
-        The Config object.
+        A decorator function that creates a Config object.
 
     Example:
         >>> @cfn.config(a=1, b=2)
@@ -430,19 +419,15 @@ def config(target: Callable | None = None, **kwargs) -> Config | Callable[[Calla
         >>> res = sum.instantiate()
         >>> assert res == 3
 
-        >>> @cfn.config
+        >>> @cfn.config()
         >>> def sum(a, b):
         >>>     return a + b
         >>> res = sum.override(a=1, b=2).instantiate()
         >>> assert res == 3
     """
-
-    if target is None:
-        def _config_decorator(target):
-            return Config(target, **kwargs)
-        return _config_decorator
-    else:
-        return Config(target)
+    def _config_decorator(target):
+        return Config(target, **kwargs)
+    return _config_decorator
 
 
 def cli(config: Config):
@@ -453,7 +438,7 @@ def cli(config: Config):
         config: The config object to run.
 
     Example:
-        >>> @cfn.config
+        >>> @cfn.config()
         >>> def sum(a, b):
         >>>     return a + b
         >>> cfn.cli(sum)

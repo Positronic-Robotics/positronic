@@ -172,7 +172,7 @@ def create_model(hidden_size: int, num_layers: int, tokenizer):
     return TransformerModel(vocab_size, hidden_size, num_layers)
 
 # Configure the complete pipeline
-@cfn.config
+@cfn.config()
 def training_pipeline(
     tokenizer=create_tokenizer,
     model=create_model,
@@ -247,7 +247,7 @@ from configs.base import original_config
 # Copy updates the config's module context to experiments.vision
 copied_config = original_config.copy()
 
-@cfn.config
+@cfn.config()
 def local_function():
     return "local result"
 
@@ -404,7 +404,7 @@ training_pipeline = cfn.Config(TrainingPipeline, model=transformer_base)
 ### 2. Import Inside Configuration Functions
 In robotic applications, some configurations may depend on parituclar hardware and Python packages that provide drivers, that are not always available. If you don't want to force your users to install all of them, consider making imports inside the functions that you configure.
 ```python
-@cfn.config
+@cfn.config()
 def create_model(layers: int = 6):
     from my_project.models import TransformerModel
     return TransformerModel(layers=layers)

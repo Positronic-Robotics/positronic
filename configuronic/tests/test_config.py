@@ -236,7 +236,7 @@ def test_instantiate_not_complete_config_raises_error():
 
 
 def test_config_as_decorator_acts_as_config_class():
-    @cfn.config
+    @cfn.config()
     def sum(a, b):
         return a + b
 
@@ -244,7 +244,7 @@ def test_config_as_decorator_acts_as_config_class():
 
 
 def test_config_as_decorator_default_args_are_passed_to_target():
-    @cfn.config
+    @cfn.config()
     def sum(a=1, b=2):
         return a + b
 
@@ -315,7 +315,7 @@ def test_instantiate_with_lists_and_dicts():
     assert deeply_nested.instantiate() == 13  # 6 + 7 = 13
 
     # Test with decorator syntax and nesting
-    @cfn.config
+    @cfn.config()
     def complex_operation(a, items, data):
         return a + sum(items) + sum(data.values())
 
@@ -372,11 +372,11 @@ def test_instantiate_exception_during_instantiation_has_correct_path_with_list()
     def func(list_arg):
         return list_arg[0]
 
-    @cfn.config
+    @cfn.config()
     def goob_obj():
         return 1
 
-    @cfn.config
+    @cfn.config()
     def bad_obj():
         raise ValueError("Bad object")
 
@@ -392,11 +392,11 @@ def test_instantiate_exception_during_instantiation_has_correct_path_with_dict()
     def func(dict_arg):
         return dict_arg['key']
 
-    @cfn.config
+    @cfn.config()
     def goob_obj():
         return 1
 
-    @cfn.config
+    @cfn.config()
     def bad_obj():
         raise ValueError("Bad object")
 
@@ -409,7 +409,7 @@ def test_instantiate_exception_during_instantiation_has_correct_path_with_dict()
 
 
 def test_instantiate_override_with_complex_path_to_object_works():
-    @cfn.config
+    @cfn.config()
     def true_if_math_module(obj):
         import math
 
@@ -419,7 +419,7 @@ def test_instantiate_override_with_complex_path_to_object_works():
 
 
 def test_instantiate_override_with_path_to_module_works():
-    @cfn.config
+    @cfn.config()
     def return_true(obj):
         return True
 
@@ -661,7 +661,7 @@ def test_config_with_dict_arg_with_nested_config_could_be_overridden():
 
 
 def test_required_args_with_no_default_values_returns_all_args():
-    @cfn.config
+    @cfn.config()
     def func(a, b):
         return a + b
 
@@ -669,7 +669,7 @@ def test_required_args_with_no_default_values_returns_all_args():
 
 
 def test_required_args_with_default_value_in_function():
-    @cfn.config
+    @cfn.config()
     def func(a, b=1):
         return a + b
 
@@ -711,7 +711,7 @@ def test_required_args_with_args_and_keyword_only_args_returns_necessary_args():
 
 
 def test_required_args_with_args_not_required():
-    @cfn.config
+    @cfn.config()
     def func(*args_name):
         return sum(args_name)
 
@@ -719,7 +719,7 @@ def test_required_args_with_args_not_required():
 
 
 def test_required_args_with_kwargs_not_required():
-    @cfn.config
+    @cfn.config()
     def func(**kwargs_name):
         return sum(kwargs_name.values())
 
@@ -745,7 +745,7 @@ def test_override_non_existing_list_arg_raises_config_error():
 
 
 def test_override_kwargs_function_with_new_argument_returns_expected_dict():
-    @cfn.config
+    @cfn.config()
     def func(**kwargs):
         return kwargs
 
