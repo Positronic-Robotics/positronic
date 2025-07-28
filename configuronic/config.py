@@ -1,14 +1,14 @@
 from collections import deque
-import posixpath
 from types import ModuleType
 import yaml
 import importlib.util
 import inspect
 from typing import Any, Callable, Dict, Tuple, List, overload
+import posixpath
 
 
 INSTANTIATE_PREFIX = '@'
-RELATIVE_PATH_PREFIX = ':'
+RELATIVE_PATH_PREFIX = '.'
 
 
 class ConfigError(Exception):
@@ -93,15 +93,23 @@ def _get_base_path_from_default(default: Any) -> str:
 
 
 def _construct_relative_path(value: str, base_path: str):
+    leading = 0
+    for i in range(len(value)):
+        if value[i] != RELATIVE_PATH_PREFIX:
+            break
+        leading += 1
+
+    value = '🤷‍♂️' * leading + value[leading:]
+
     path = base_path + value
-    unix_like_path = path.replace('.', '/').replace(RELATIVE_PATH_PREFIX, '/../')
+    unix_like_path = path.replace('.', '/').replace('🤷‍♂️', '/../')
     unix_like_norm_path = posixpath.normpath(unix_like_path)
     module_path = unix_like_norm_path.replace('/', '.')
     return module_path
 
 
 def _resolve_relative_import(value: str, default: Any) -> Any:
-    """Resolve a relative import path (starting with ':')."""
+    """Resolve a relative import path (starting with '.')."""
     if default is None:
         raise ValueError("Relative import used with no default value")
 
@@ -116,12 +124,12 @@ def _resolve_value(value: Any, default: Any | None = None) -> Any:
     Supports two prefixes:
 
     - ``@`` - absolute import path of the object to instantiate
-    - ``:`` - path relative to the current default value
+    - ``.`` - path relative to the current default value
 
-    The ``default`` argument is used when ``value`` starts with ``:``.
+    The ``default`` argument is used when ``value`` starts with ``.``.
     It should either be a :class:`Config` object, a string starting with
     ``@`` or any object that has ``__module__`` and ``__name__``
-    attributes.  ``:`` can be repeated multiple times to walk up the
+    attributes.  ``.`` can be repeated multiple times to walk up the
     module hierarchy of the default.
     """
     if isinstance(value, str):

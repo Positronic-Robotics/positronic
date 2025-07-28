@@ -426,107 +426,107 @@ def test_instantiate_override_with_path_to_module_works():
     assert return_true.override(obj="@http.HTTPStatus.OK").instantiate()
 
 
-def test_override_with_single_colon_relative_path():
+def test_override_with_single_dot_relative_path():
     camera_cfg = cfn.Config(Camera, name="OpenCV")
     env_cfg = cfn.Config(Env, camera=camera_cfg)
 
-    env_obj = env_cfg.override(camera=":static_object").instantiate()
+    env_obj = env_cfg.override(camera=".static_object").instantiate()
 
     assert env_obj.camera is static_object
 
 
-def test_override_with_single_colon_enum_inside_class_relative_path():
+def test_override_with_single_dot_enum_inside_class_relative_path():
 
     @cfn.config(status=Camera.InnerResolutionEnum.RES_1080P)
     def return_value(status):
         return status
 
-    assert return_value.override(status=":RES_720P").instantiate() == Camera.InnerResolutionEnum.RES_720P
+    assert return_value.override(status=".RES_720P").instantiate() == Camera.InnerResolutionEnum.RES_720P
 
 
-def test_override_with_single_colon_enum_relative_path():
+def test_override_with_single_dot_enum_relative_path():
 
     @cfn.config(status=ResolutionEnum.RES_1080P)
     def return_value(status):
         return status
 
-    assert return_value.override(status=":RES_720P").instantiate() == ResolutionEnum.RES_720P
+    assert return_value.override(status=".RES_720P").instantiate() == ResolutionEnum.RES_720P
 
 
-def test_override_with_multiple_colons_relative_path():
+def test_override_with_multiple_dots_relative_path():
     from configuronic.tests.support_package.subpkg.a import A
     from configuronic.tests.support_package.b import B
 
     env_cfg = cfn.Config(Env, camera=A)
 
-    env_obj = env_cfg.override(camera=":::b.B").instantiate()
+    env_obj = env_cfg.override(camera="...b.B").instantiate()
 
     assert env_obj.camera is B
 
 
-def test_override_with_colon_from_cfg_module_applies_replative_to_cfg_module():
+def test_override_with_dot_from_cfg_module_applies_replative_to_cfg_module():
     from configuronic.tests.support_package.cfg import a_cfg_value1
 
     env_cfg = cfn.Config(Env, camera=a_cfg_value1)
 
-    env_obj = env_cfg.override(camera=":a_cfg_value2").instantiate()
+    env_obj = env_cfg.override(camera=".a_cfg_value2").instantiate()
 
     assert env_obj.camera.value == 2
 
 
-def test_override_with_colon_from_copied_config_applies_replative_to_cfg_module():
+def test_override_with_dot_from_copied_config_applies_replative_to_cfg_module():
     from configuronic.tests.support_package.cfg2 import a_cfg_value1_copy
 
     env_cfg = cfn.Config(Env, camera=a_cfg_value1_copy)
 
-    env_obj = env_cfg.override(camera=":return2").instantiate()
+    env_obj = env_cfg.override(camera=".return2").instantiate()
 
     assert env_obj.camera == 2
 
 
-def test_override_and_instantiate_with_colon_from_copied_config_applies_replative_to_cfg_module():
+def test_override_and_instantiate_with_dot_from_copied_config_applies_replative_to_cfg_module():
     from configuronic.tests.support_package.cfg2 import a_cfg_value1_copy
 
     env_cfg = cfn.Config(Env, camera=a_cfg_value1_copy)
 
-    env_obj = env_cfg.override_and_instantiate(camera=":return2")
+    env_obj = env_cfg.override_and_instantiate(camera=".return2")
 
     assert env_obj.camera == 2
 
 
-def test_override_nesetd_value_with_colon_from_copied_config_applies_replative_to_cfg_module():
+def test_override_nesetd_value_with_dot_from_copied_config_applies_replative_to_cfg_module():
     from configuronic.tests.support_package.cfg2 import a_nested_b_value1
 
     env_cfg = cfn.Config(Env, camera=a_nested_b_value1)
 
-    env_obj = env_cfg.override(**{"camera.value": ":b_cfg_value2"}).instantiate()
+    env_obj = env_cfg.override(**{"camera.value": ".b_cfg_value2"}).instantiate()
 
     assert env_obj.camera.value.value == 2
 
 
-def test_override_with_colon_from_overriden_config_applies_replative_to_cfg_module():
+def test_override_with_dot_from_overriden_config_applies_replative_to_cfg_module():
     from configuronic.tests.support_package.cfg2 import a_cfg_value1_override_value3
 
     env_cfg = cfn.Config(Env, camera=a_cfg_value1_override_value3)
 
-    env_obj = env_cfg.override(camera=":return2").instantiate()
+    env_obj = env_cfg.override(camera=".return2").instantiate()
 
     assert env_obj.camera == 2
 
 
-def test_override_with_colon_and_string_default():
+def test_override_with_dot_and_string_default():
     env_cfg = cfn.Config(Env, camera="@configuronic.tests.test_config.Camera")
 
-    env_obj = env_cfg.override(camera=":static_object").instantiate()
+    env_obj = env_cfg.override(camera=".static_object").instantiate()
 
     assert env_obj.camera is static_object
 
 
-def test_override_with_colon_without_default_raises():
+def test_override_with_dot_without_default_raises():
     env_cfg = cfn.Config(Env, camera=None)
 
     with pytest.raises(ValueError):
-        env_cfg.override(camera=":static_object")
+        env_cfg.override(camera=".static_object")
 
 
 def test_relative_import_with_enum_default():
@@ -540,7 +540,7 @@ def test_relative_import_with_enum_default():
     cfg = cfn.Config(process_enum, enum_val=http.HTTPStatus.OK)
 
     # Override with a relative import (this should work after the fix)
-    result_cfg = cfg.override(enum_val=":NOT_FOUND")
+    result_cfg = cfg.override(enum_val=".NOT_FOUND")
     result = result_cfg.instantiate()
 
     assert result == 404
@@ -560,7 +560,7 @@ def test_relative_import_with_nested_enum_default():
     cfg = cfn.Config(process_nested_enum, enum_val=http.HTTPStatus.OK)
 
     # Override with a relative import (this should work after the fix)
-    result_cfg = cfg.override(enum_val=":BAD_REQUEST")
+    result_cfg = cfg.override(enum_val=".BAD_REQUEST")
     result = result_cfg.instantiate()
 
     assert result == "BAD_REQUEST"
@@ -570,21 +570,21 @@ def identity(x):
     return x
 
 
-def test_override_with_colon_resolves_against_nested_config_module():
+def test_override_with_dot_resolves_against_nested_config_module():
     """
     After we copy a Config that originated in cfg2.py, overriding it
-    with a relative import (':return2') must still resolve inside the
+    with a relative import ('.return2') must still resolve inside the
     *cfg2* module, not configuronic.config.
     """
     top_cfg = cfn.Config(identity, x=cfn.tests.support_package.cfg2.a_cfg_value1_copy)
 
-    result = top_cfg.override(x=":return2").instantiate()
+    result = top_cfg.override(x=".return2").instantiate()
     assert result == 2
 
 
-def test_override_and_instantiate_with_colon_resolves_against_nested_config_module():
+def test_override_and_instantiate_with_dot_resolves_against_nested_config_module():
     top_cfg = cfn.Config(identity, x=cfn.tests.support_package.cfg2.a_cfg_value1_copy)
-    result = top_cfg.override_and_instantiate(x=":return2")
+    result = top_cfg.override_and_instantiate(x=".return2")
     assert result == 2
 
 

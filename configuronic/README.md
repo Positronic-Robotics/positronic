@@ -203,7 +203,7 @@ python train.py --tokenizer.model_name="gpt2" --model.hidden_size=1024
 
 ## 🔧 Advanced Features
 
-### Import Resolution with `@` and `:`
+### Import Resolution with `@` and `.`
 
 Configuronic provides powerful import resolution syntax that allows you to dynamically reference Python objects, especially useful for CLI usage.
 
@@ -216,26 +216,26 @@ python train.py --optimizer="@torch.optim.SGD"
 python train.py --tokenizer="@transformers.AutoTokenizer"
 ```
 
-#### Relative Imports (`:`)
-Navigate relative to the current module, similar to how `../` works in file paths:
+#### Relative Imports (`.`)
+Navigate relative to the current module, similar to Python's relative import syntax:
 
 ```python
 # If default is myproject.models.BertEncoder
-python train.py --encoder=":RobertaEncoder"        # -> myproject.models.RobertaEncoder (same module)
-python train.py --encoder="::utils.CustomEncoder"  # -> myproject.utils.CustomEncoder (parent module)
-python train.py --encoder=":::shared.BaseEncoder"  # -> myproject.shared.BaseEncoder (grandparent module)
+python train.py --encoder=".RobertaEncoder"        # -> myproject.models.RobertaEncoder (same module)
+python train.py --encoder="..utils.CustomEncoder"  # -> myproject.utils.CustomEncoder (parent module)
+python train.py --encoder="...shared.BaseEncoder"  # -> myproject.shared.BaseEncoder (grandparent module)
 ```
 
-**How it works:** Each `:` acts like `../` in file system navigation:
-- `:` = stay in current module (like `./`)
-- `::` = go up one module level (like `../`)
-- `:::` = go up two module levels (like `../../`), etc.
+**How it works:** Each `.` acts like `../` in file system navigation:
+- `.` = stay in current module (like `./`)
+- `..` = go up one module level (like `../`)
+- `...` = go up two module levels (like `../../`), etc.
 
-The path after the colons specifies the target within that module hierarchy.
+The path after the dots specifies the target within that module hierarchy.
 
 #### Configuration Copy Across Modules
 
-The `copy()` method updates module context so relative imports (`:`) resolve from the new module location:
+The `copy()` method updates module context so relative imports (`.`) resolve from the new module location:
 
 ```python
 # configs/base.py
@@ -251,12 +251,12 @@ copied_config = original_config.copy()
 def local_function():
     return "local result"
 
-# When copied_config is used as default, ':' resolves in experiments.vision
+# When copied_config is used as default, '.' resolves in experiments.vision
 env_cfg = cfn.Config(Environment, setup=copied_config)
-specialized_cfg = env_cfg.override(setup=":local_function")  # Finds local_function
+specialized_cfg = env_cfg.override(setup=".local_function")  # Finds local_function
 ```
 
-Without `copy()`, `:local_function` would try to resolve in `configs.base` and fail.
+Without `copy()`, `.local_function` would try to resolve in `configs.base` and fail.
 
 ### Lists and Dictionaries
 
@@ -326,7 +326,7 @@ python script.py --model.layers=6 --optimizer.lr=0.001
 python script.py --model="@my_models.CustomTransformer"
 
 # Using relative imports
-python script.py --tokenizer=":CustomTokenizer"
+python script.py --tokenizer=".CustomTokenizer"
 
 # Complex nested overrides
 python script.py --cameras.left.fps=60 --cameras.right.device="/dev/video2"
@@ -381,10 +381,10 @@ Get list of required arguments for a configuration.
 ### Special Syntax
 
 - `@module.path.Class` - Absolute import path to any Python object
-- `:RelativeClass` - Relative import (same module, like `./`)
-- `::parent.Class` - Relative import (up one level, like `../`)
+- `.RelativeClass` - Relative import (same module, like `./`)
+- `..parent.Class` - Relative import (up one level, like `../`)
 
-> **Path Resolution:** The `:` syntax works like file system navigation where each colon moves up one module level in the Python package hierarchy, then navigates down to the specified target.
+> **Path Resolution:** The `.` syntax works like file system navigation where each dot moves up one module level in the Python package hierarchy, then navigates down to the specified target.
 
 
 ## 💡 Best Practices
