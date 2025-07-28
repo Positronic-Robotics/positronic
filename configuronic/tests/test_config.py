@@ -515,8 +515,7 @@ def test_override_with_dot_from_overriden_config_applies_replative_to_cfg_module
 
 
 def test_override_with_dot_and_string_default():
-    env_cfg = cfn.Config(Env, camera="@configuronic.tests.test_config.Camera")
-
+    env_cfg = cfn.Config(Env).override(camera="@configuronic.tests.test_config.Camera")
     env_obj = env_cfg.override(camera=".static_object").instantiate()
 
     assert env_obj.camera is static_object
@@ -608,6 +607,15 @@ def test_config_objects_are_callable():
 
     # Calling overridden config with additional override should work
     assert overridden_config(b=10) == 15
+
+
+def test_string_override_with_leading_dot():
+    @cfn.config(greeting="Hello", name="world")
+    def greeting(greeting, name):
+        return f"{greeting}, {name}!"
+
+    # Because the default is a string, the leading dot is not treated as a relative import
+    assert greeting.override(name=".weird_name")() == "Hello, .weird_name!"
 
 
 def test_config_with_list_arg_could_be_overridden():
