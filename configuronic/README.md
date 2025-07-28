@@ -5,7 +5,7 @@
 [![PyPI version](https://badge.fury.io/py/configuronic.svg)](https://badge.fury.io/py/configuronic)
 **FIXME: Add tests**
 
-**Configuronic** is a powerful "Configuration as Code" library designed for modern Python applications, particularly in robotics, machine learning, and complex system configurations. Born from the need for a cleaner alternative to existing configuration frameworks, configuronic embraces Python's native syntax while providing powerful CLI integration and hierarchical configuration management.
+**Configuronic** is a simple yet powerful "Configuration as Code" library designed for modern Python applications, particularly in robotics, machine learning, and complex system configurations. Born from the need for a cleaner alternative to existing configuration frameworks, configuronic embraces Python's native syntax while providing powerful CLI integration and hierarchical configuration management.
 
 ## ✨ Why Configuronic?
 
@@ -54,12 +54,7 @@ python train.py --help
 
 ## 📦 Installation
 
-### Using uv (recommended)
-```bash
-uv pip install configuronic
-```
-
-### Using pip
+Using pip
 ```bash
 pip install configuronic
 ```
@@ -75,7 +70,7 @@ uv pip install -e .
 
 ### Configuration as Code
 
-In configuronic, configurations are **closures** - callables that store both the function and its arguments. This functional approach enables powerful composition and inheritance patterns.
+In configuronic, configurations are **closures** - callables that store both the function and its arguments. It is somewhat similar to [`functools.partial`](https://docs.python.org/3/library/functools.html#functools.partial) This functional approach enables powerful composition and inheritance patterns.
 
 ```python
 import configuronic as cfn
@@ -102,7 +97,7 @@ deep_config = base_config.override(layers=6)
 wide_config = base_config.override(units=128)
 ```
 
-**2. `instantiate()`** - Execute configuration and get result
+**2. `instantiate()`** - Execute function with configured arguments and get its result
 ```python
 model = deep_config.instantiate()  # Returns MyModel(layers=6, units=64)
 ```
@@ -238,6 +233,31 @@ python train.py --encoder=":::shared.BaseEncoder"  # -> myproject.shared.BaseEnc
 
 The path after the colons specifies the target within that module hierarchy.
 
+#### Configuration Copy Across Modules
+
+The `copy()` method updates module context so relative imports (`:`) resolve from the new module location:
+
+```python
+# configs/base.py
+original_config = cfn.Config(SomeClass, value=1)
+
+# experiments/vision.py
+from configs.base import original_config
+
+# Copy updates the config's module context to experiments.vision
+copied_config = original_config.copy()
+
+@cfn.config
+def local_function():
+    return "local result"
+
+# When copied_config is used as default, ':' resolves in experiments.vision
+env_cfg = cfn.Config(Environment, setup=copied_config)
+specialized_cfg = env_cfg.override(setup=":local_function")  # Finds local_function
+```
+
+Without `copy()`, `:local_function` would try to resolve in `configs.base` and fail.
+
 ### Lists and Dictionaries
 
 Configuronic seamlessly handles nested data structures:
@@ -312,6 +332,20 @@ python script.py --tokenizer=":CustomTokenizer"
 python script.py --cameras.left.fps=60 --cameras.right.device="/dev/video2"
 ```
 
+### Parameter Override Order ⚠️
+
+**Important:** Parameter overrides are executed in order of declaration. When overriding nested configurations, set the parent object first, then its properties:
+
+```bash
+# ✅ Correct: set camera first, then its resolution
+python script.py --camera="@opencv.Camera" --camera.resolution="full_hd"
+
+# ❌ Incorrect: this will reset camera after setting resolution
+python script.py --camera.resolution="full_hd" --camera="@opencv.Camera"
+```
+
+In the incorrect example, the default camera's resolution gets updated first, but then the entire camera object is replaced, losing the resolution override.
+
 ## 📚 API Reference
 
 ### Core Classes
@@ -372,10 +406,11 @@ In robotic applications, some configurations may depend on parituclar hardware a
 ```python
 @cfn.config
 def create_model(layers: int = 6):
-    # Import inside the function to avoid circular dependencies
     from my_project.models import TransformerModel
     return TransformerModel(layers=layers)
 ```
+
+But in smaller projects it might be very convinient to put configurations alongside the methods they manage.
 
 ### 3. Use `override` to create as many custom configurations as you need
 When working with text configuration files, it's natural to create separate files for different environments or use cases. In `configuronic`, just create new configuration variables that override the base config.
