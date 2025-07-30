@@ -51,10 +51,10 @@ class NumpySMAdapter(SMCompliant):
         return self.array.nbytes
 
     def set_to_buffer(self, buffer: memoryview | bytes | bytearray) -> None:
-        buffer[:] = self.array.view(np.uint8).reshape(-1).data
+        buffer[:self.array.nbytes] = self.array.view(np.uint8).reshape(-1).data
 
     def read_from_buffer(self, buffer: memoryview | bytes) -> None:
-        self.array[:] = np.frombuffer(buffer, dtype=self.array.dtype).reshape(self.array.shape)
+        self.array[:] = np.frombuffer(buffer[:self.array.nbytes], dtype=self.array.dtype).reshape(self.array.shape)
 
 
 class SharedMemoryEmitter(SignalEmitter):
@@ -80,6 +80,7 @@ class SharedMemoryEmitter(SignalEmitter):
 
         if self._sm is None:  # First emit - create shared memory with the size from this instance
             self._expected_buf_size = buf_size
+            # Note that size of shared_memory could be larger than the requested size depending on the platform
             self._sm = mp.shared_memory.SharedMemory(create=True, size=buf_size)
             self._sm_queue.put((self._sm, self._data_type, data.instantiation_params()))
         else:  # Subsequent emits - validate buffer size matches
