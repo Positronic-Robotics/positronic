@@ -62,6 +62,8 @@ comm==0.2.2
     # via
     #   ipykernel
     #   ipywidgets
+configuronic==0.1.0
+    # via positronic (pyproject.toml)
 contourpy==1.3.2
     # via matplotlib
 cvxopt==1.3.2
@@ -95,7 +97,9 @@ fastjsonschema==2.21.1
 filelock==3.18.0
     # via torch
 fire==0.7.0
-    # via positronic (pyproject.toml)
+    # via
+    #   positronic (pyproject.toml)
+    #   configuronic
 flake8==7.2.0
     # via positronic (pyproject.toml)
 fonttools==4.58.0
@@ -428,6 +432,7 @@ pyturbojpeg @ git+https://github.com/lilohuang/PyTurboJPEG.git@87bdba487a6198afd
 pyyaml==6.0.2
     # via
     #   positronic (pyproject.toml)
+    #   configuronic
     #   jupyter-events
     #   uvicorn
 pyzmq==26.4.0

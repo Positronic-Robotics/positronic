@@ -29,7 +29,8 @@ dependencies = [
     "fastapi",
     "ruckig",
     "cvxopt",
-    "pyyaml"
+    "pyyaml",
+    "configuronic"
 ]
 
 [project.optional-dependencies]
@@ -70,7 +71,6 @@ testpaths = [
     "positronic/tests",
     "ironic/tests",
     "ironic2/tests",
-    "configuronic/tests",
     "pimm/tests",
 ]
 python_files = ["test_*.py", "*_test.py"]

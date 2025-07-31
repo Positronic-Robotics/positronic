@@ -106,6 +106,8 @@ comm==0.2.2
     # via
     #   ipykernel
     #   ipywidgets
+configuronic==0.1.0
+    # via positronic (pyproject.toml)
 contourpy==1.3.1
     # via matplotlib
 cvxopt==1.3.2
@@ -159,7 +161,9 @@ filelock==3.17.0
     #   huggingface-hub
     #   torch
 fire==0.7.0
-    # via positronic (pyproject.toml)
+    # via
+    #   positronic (pyproject.toml)
+    #   configuronic
 flake8==7.2.0
     # via positronic (pyproject.toml)
 fonttools==4.56.0
@@ -562,6 +566,7 @@ pytz==2025.1
 pyyaml==6.0.2
     # via
     #   positronic (pyproject.toml)
+    #   configuronic
     #   datasets
     #   draccus
     #   huggingface-hub
