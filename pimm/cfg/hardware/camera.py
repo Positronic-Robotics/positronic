@@ -1,7 +1,7 @@
 import configuronic as cfn
 
 
-@cfn.config
+@cfn.config()
 def linux_video(**kwargs):
     from pimm.drivers.camera.linux_video import LinuxVideo
 
@@ -20,3 +20,17 @@ arducam_left = linux_video.override(
 arducam_right = arducam_left.override(
     device_path="/dev/v4l/by-id/usb-Arducam_Technology_Co.__Ltd._Arducam_UC684_UC684RIGHT-video-index0",
 )
+
+
+@cfn.config()
+def zed(**kwargs):
+    from pimm.drivers.camera.zed import SLCamera
+
+    return SLCamera(**kwargs)
+
+
+@cfn.config()
+def luxonis(**kwargs):
+    from pimm.drivers.camera.luxonis import LuxonisCamera
+
+    return LuxonisCamera(**kwargs)
