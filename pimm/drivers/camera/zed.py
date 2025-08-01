@@ -4,6 +4,7 @@ import numpy as np
 import pyzed.sl as sl
 
 import ironic2 as ir
+from ironic.utils import FPSCounter
 
 
 class SLCamera:
@@ -45,13 +46,12 @@ class SLCamera:
 
         self.max_depth = max_depth
         self.depth_mask = depth_mask
-        self.rate_limiter = ir.utils.RateLimiter(fps)
 
     def run(self, should_stop: ir.SignalReader, clock: ir.Clock) -> Iterator[ir.Sleep]:
-        fps = ir.utils.FPSCounter("Camera")
-
+        fps_counter = FPSCounter("Camera")
         zed = sl.Camera()
         zed.open(self.init_params)
+
         SUCCESS = sl.ERROR_CODE.SUCCESS
         TIME_REF_IMAGE = sl.TIME_REFERENCE.IMAGE
 
@@ -72,12 +72,8 @@ class SLCamera:
                     w = np_image.shape[1] // 2
                     frame['left'] = np_image[:, :w, :]
                     frame['right'] = np_image[:, w:, :]
-                elif self.view == sl.VIEW.LEFT:
-                    frame['left'] = np_image[:, :, :]
-                elif self.view == sl.VIEW.RIGHT:
-                    frame['right'] = np_image[:, :, :]
                 else:
-                    frame['image'] = np_image[:, :, :]
+                    frame['image'] = np_image
 
                 if self.init_params.depth_mode != sl.DEPTH_MODE.NONE:
                     depth = sl.Mat()
@@ -93,6 +89,6 @@ class SLCamera:
                         # Adding last axis so that it has same number of dimensions as normal image
                         frame['depth'] = data.astype(np.uint8)[..., np.newaxis]
             self.frame.emit(frame, ts=ts_s)
-            fps.tick()
-            yield self.rate_limiter.wait_time()
+            fps_counter.tick()
+            yield ir.Sleep(0.001)
         zed.close()
