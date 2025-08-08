@@ -1,3 +1,5 @@
+from dataclasses import dataclass
+from enum import Enum
 from typing import Iterator
 import ironic2 as ir
 import numpy as np
@@ -6,18 +8,6 @@ import scservo_sdk as scs
 
 PROTOCOL_VERSION = 0
 TIMEOUT_MS = 1000
-
-leader_calibration = {
-    "homing_offsets": np.array([-109, 912, -194, -82, -865, -1427]),
-    "range_mins": np.array([664, 1006, 688, 853, 225, 2036]),
-    "range_maxs": np.array([3286, 3375, 2895, 3150, 4037, 3260]),
-}
-
-follower_calibration = {
-    "homing_offsets": np.array([-855, 1089, -497, -140, 875, -1010]),
-    "range_mins": np.array([889, 731, 969, 888, 23, 2034]),
-    "range_maxs": np.array([3589, 3100, 3174, 3177, 3865, 3513]),
-}
 
 
 SCS_SERIES_CONTROL_TABLE = {
@@ -208,11 +198,15 @@ def write_to_motor(port_handler, packet_handler, motor_indices: list[int], data_
         )
 
 
-class MotorBus:
-    target_position: ir.SignalReader = ir.NoOpReader()
-    position: ir.SignalEmitter = ir.NoOpEmitter()
 
-    def __init__(self, port: str, calibration: dict[str, np.ndarray], processing_freq: float = 1000.0):
+class MotorBus:
+    target_position: ir.SignalReader[np.ndarray] = ir.NoOpReader()
+    torque_mode: ir.SignalReader[bool] = ir.NoOpReader()
+
+    position: ir.SignalEmitter[np.ndarray] = ir.NoOpEmitter()
+
+
+    def __init__(self, port: str, calibration: dict[str, np.ndarray] | None = None, processing_freq: float = 1000.0):
         self.port = port
         self.motor_indices = [1, 2, 3, 4, 5, 6]
         self.processing_freq = processing_freq
@@ -229,28 +223,50 @@ class MotorBus:
 
     def run(self, should_stop: ir.SignalReader, clock: ir.Clock) -> Iterator[ir.Sleep]:
         rate_limit = ir.RateLimiter(hz=self.processing_freq, clock=clock)
-        fps = ir
+        fps = ir.utils.RateCounter(f"feetech-bus-{self.port}")
         port_handler, packet_handler = self.connect()
+
+        torque_mode_reader = ir.DefaultReader(ir.ValueUpdated(self.torque_mode), (None, False))
+        target_position_reader = ir.DefaultReader(ir.ValueUpdated(self.target_position), (None, False))
 
         while not should_stop.value:
             position = read_from_motor(port_handler, packet_handler, self.motor_indices, "Present_Position")
-            position = self.apply_calibration(position)
-            target_position = self.target_position.read()
-            if target_position is not None:
-                target_position = self.revert_calibration(target_position.data)
+            torque_mode, is_updated = torque_mode_reader.value
+            if is_updated:
+                if torque_mode:
+                    write_to_motor(port_handler, packet_handler, self.motor_indices, "Torque_Enable", np.ones(len(self.motor_indices)))
+                    write_to_motor(port_handler, packet_handler, self.motor_indices, "Lock", np.ones(len(self.motor_indices)))
+                else:
+                    write_to_motor(port_handler, packet_handler, self.motor_indices, "Torque_Enable", np.zeros(len(self.motor_indices)))
+                    write_to_motor(port_handler, packet_handler, self.motor_indices, "Lock", np.zeros(len(self.motor_indices)))
+
+            target_position, is_updated = target_position_reader.value
+            if is_updated:
+                target_position = self.revert_calibration(target_position)
                 write_to_motor(port_handler, packet_handler, self.motor_indices, "Goal_Position", target_position)
+
+            position = self.apply_calibration(position)
             self.position.emit(position)
+            fps.tick()
             yield ir.Sleep(rate_limit.wait_time())
+
+        # Disable torque and lock to prevent motors degrading
+        write_to_motor(port_handler, packet_handler, self.motor_indices, "Torque_Enable", np.zeros(len(self.motor_indices)))
+        write_to_motor(port_handler, packet_handler, self.motor_indices, "Lock", np.zeros(len(self.motor_indices)))
 
         port_handler.closePort()
 
 
     def apply_calibration(self, values: np.ndarray):
+        if self.calibration is None:
+            return values
         # convert raw values to 0-1 range
-        return (values - self.calibration["range_mins"]) / (self.calibration["range_maxs"] - self.calibration["range_mins"])
+        return (values - self.calibration["mins"]) / (self.calibration["maxs"] - self.calibration["mins"])
 
     def revert_calibration(self, values: np.ndarray, clip: bool = True):
-        values = values * (self.calibration["range_maxs"] - self.calibration["range_mins"]) + self.calibration["range_mins"]
+        if self.calibration is None:
+            return values
+        values = values * (self.calibration["maxs"] - self.calibration["mins"]) + self.calibration["mins"]
         if clip:
-            values = np.clip(values, self.calibration["range_mins"], self.calibration["range_maxs"])
+            values = np.clip(values, self.calibration["mins"], self.calibration["maxs"])
         return values
