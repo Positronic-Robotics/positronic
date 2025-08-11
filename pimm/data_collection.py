@@ -18,6 +18,7 @@ from positronic.tools.buttons import ButtonHandler
 from positronic.tools.dataset_dumper import SerialDumper
 
 import pimm.cfg.hardware.gripper
+import pimm.cfg.hardware.roboarm
 import pimm.cfg.webxr
 import pimm.cfg.hardware.camera
 import pimm.cfg.sound
@@ -217,7 +218,6 @@ class DataCollection:
                 # TODO: fix frame synchronization. Two 30 FPS cameras is updated at 60 FPS
                 frame_messages, any_frame_updated = ir.utils.is_any_updated(frame_readers)
                 fps_counter.tick()
-
                 if not recorder.on or not any_frame_updated:
                     yield ir.Sleep(0.001)
                     continue
@@ -297,7 +297,8 @@ def main(robot_arm: Any | None,
         if gripper is not None:
             data_collection.target_grip_emitter, gripper.target_grip = world.mp_pipe(1)
             gripper.grip, data_collection.gripper_state = world.local_pipe()
-            world.start_in_subprocess(gripper.run)
+            if gripper is not robot_arm:
+                world.start_in_subprocess(gripper.run)
 
         if sound is not None:
             data_collection.sound_emitter, sound.wav_path = world.mp_pipe()
@@ -399,6 +400,22 @@ main_sim_cfg = cfn.Config(
     loaders=pimm.cfg.simulator.stack_cubes_loaders,
 )
 
+@cfn.config(
+    robot_arm=pimm.cfg.hardware.roboarm.so101,
+    webxr=pimm.cfg.webxr.webxr,
+    sound=pimm.cfg.sound.sound,
+    operator_position=FRANKA_FRONT_TRANSFORM,
+    cameras={'right': pimm.cfg.hardware.camera.arducam_right}
+)
+def so101cfg(robot_arm, **kwargs):
+    return cfn.Config(
+        main,
+        robot_arm=robot_arm,
+        gripper=robot_arm,
+        **kwargs,
+    )
+
+
 if __name__ == "__main__":
     # TODO: add ability to specify multiple targets in CLI
-    cfn.cli(main_sim_cfg)
+    cfn.cli(so101cfg)

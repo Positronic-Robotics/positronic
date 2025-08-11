@@ -1,5 +1,7 @@
 import configuronic as cfn
 
+import pimm.cfg.hardware.motors
+
 
 @cfn.config(ip="172.168.0.2",
             relative_dynamics_factor=0.2,
@@ -18,3 +20,9 @@ def kinova(ip, relative_dynamics_factor):
     from pimm.drivers.roboarm.kinova.driver import Robot
 
     return Robot(ip=ip, relative_dynamics_factor=relative_dynamics_factor)
+
+
+@cfn.config(motor_bus=pimm.cfg.hardware.motors.so101_leader)
+def so101(motor_bus):
+    from pimm.drivers.roboarm.so101.driver import Robot
+    return Robot(motor_bus=motor_bus)

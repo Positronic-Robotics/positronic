@@ -1,0 +1,102 @@
+<?xml version="1.0" ?>
+<robot name="positronic_roboarm">
+  <link name="base"/>
+  <link name="link1">
+    <inertial>
+      <origin xyz="0.000000 0.000000 0.000322" rpy="0 0 0"/>
+      <mass value="1.71"/>
+      <inertia ixx="0.002125" ixy="0.000000" ixz="0.000000" iyy="0.002125" iyz="0.000000" izz="0.003166"/>
+    </inertial>
+  </link>
+  <joint name="joint_1" type="revolute">
+    <origin xyz="0.000000 0.000000 0.000000" rpy="0.000000 0.000000 0.000000"/>
+    <parent link="base"/>
+    <child link="link1"/>
+    <axis xyz="0 0 1"/>
+    <limit effort="100.0" velocity="2.0"/>
+  </joint>
+  <link name="link2">
+    <inertial>
+      <origin xyz="0.000000 0.000000 0.000322" rpy="0 0 0"/>
+      <mass value="1.71"/>
+      <inertia ixx="0.002125" ixy="0.000000" ixz="0.000000" iyy="0.002125" iyz="0.000000" izz="0.003166"/>
+    </inertial>
+  </link>
+  <joint name="joint_2" type="revolute">
+    <origin xyz="0.000000 0.000000 0.141000" rpy="1.570796 0.000000 0.000000"/>
+    <parent link="link1"/>
+    <child link="link2"/>
+    <axis xyz="0 0 1"/>
+    <limit effort="100.0" velocity="2.0"/>
+  </joint>
+  <link name="link3">
+    <inertial>
+      <origin xyz="0.000000 0.000000 0.008660" rpy="0 0 0"/>
+      <mass value="0.53"/>
+      <inertia ixx="0.000853" ixy="0.000000" ixz="0.000000" iyy="0.000853" iyz="0.000000" izz="0.000395"/>
+    </inertial>
+  </link>
+  <joint name="joint_3" type="revolute">
+    <origin xyz="0.000000 0.000000 0.141000" rpy="-1.570796 0.000000 0.000000"/>
+    <parent link="link2"/>
+    <child link="link3"/>
+    <axis xyz="0 0 1"/>
+    <limit effort="40.0" velocity="2.0"/>
+  </joint>
+  <link name="link4">
+    <inertial>
+      <origin xyz="0.000000 0.000000 0.000795" rpy="0 0 0"/>
+      <mass value="0.50"/>
+      <inertia ixx="0.000246" ixy="0.000000" ixz="0.000000" iyy="0.000246" iyz="0.000000" izz="0.000385"/>
+    </inertial>
+  </link>
+  <joint name="joint_4" type="revolute">
+    <origin xyz="0.000000 0.000000 0.254250" rpy="1.570796 0.000000 0.000000"/>
+    <parent link="link3"/>
+    <child link="link4"/>
+    <axis xyz="0 0 1"/>
+    <limit effort="40.0" velocity="2.0"/>
+  </joint>
+  <link name="link5">
+    <inertial>
+      <origin xyz="0.000000 0.000000 0.008660" rpy="0 0 0"/>
+      <mass value="0.53"/>
+      <inertia ixx="0.000853" ixy="0.000000" ixz="0.000000" iyy="0.000853" iyz="0.000000" izz="0.000395"/>
+    </inertial>
+  </link>
+  <joint name="joint_5" type="revolute">
+    <origin xyz="0.000000 0.000000 0.104250" rpy="-1.570796 0.000000 0.000000"/>
+    <parent link="link4"/>
+    <child link="link5"/>
+    <axis xyz="0 0 1"/>
+    <limit effort="40.0" velocity="2.0"/>
+  </joint>
+  <link name="link6">
+    <inertial>
+      <origin xyz="0.000000 0.000000 0.000795" rpy="0 0 0"/>
+      <mass value="0.50"/>
+      <inertia ixx="0.000246" ixy="0.000000" ixz="0.000000" iyy="0.000246" iyz="0.000000" izz="0.000385"/>
+    </inertial>
+  </link>
+  <joint name="joint_6" type="revolute">
+    <origin xyz="0.000000 0.000000 0.254250" rpy="1.570796 0.000000 0.000000"/>
+    <parent link="link5"/>
+    <child link="link6"/>
+    <axis xyz="0 0 1"/>
+    <limit effort="40.0" velocity="2.0"/>
+  </joint>
+  <link name="link7">
+    <inertial>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <mass value="5.49"/>
+      <inertia ixx="0.002540" ixy="0.000000" ixz="0.000000" iyy="0.002540" iyz="0.000000" izz="0.004283"/>
+    </inertial>
+  </link>
+  <joint name="joint_7" type="revolute">
+    <origin xyz="0.000000 0.000000 0.104250" rpy="-1.570796 0.000000 0.000000"/>
+    <parent link="link6"/>
+    <child link="link7"/>
+    <axis xyz="0 0 1"/>
+    <limit effort="40.0" velocity="2.0"/>
+  </joint>
+</robot>

@@ -1,23 +1,28 @@
-from dataclasses import dataclass
-from enum import Enum
-from typing import Iterator
-import ironic2 as ir
 import numpy as np
-
 import scservo_sdk as scs
+
 
 PROTOCOL_VERSION = 0
 TIMEOUT_MS = 1000
 
+# Sign-Magnitude encoding bits
+STS_SMS_SERIES_ENCODINGS_TABLE = {
+    "Homing_Offset": 11,
+    "Goal_Velocity": 15,
+    "Present_Velocity": 15,
+}
 
-SCS_SERIES_CONTROL_TABLE = {
-    "Model": (3, 2),
+STS_SMS_SERIES_CONTROL_TABLE = {
+    # EPROM
+    "Firmware_Major_Version": (0, 1),  # read-only
+    "Firmware_Minor_Version": (1, 1),  # read-only
+    "Model_Number": (3, 2),  # read-only
     "ID": (5, 1),
     "Baud_Rate": (6, 1),
-    "Return_Delay": (7, 1),
+    "Return_Delay_Time": (7, 1),
     "Response_Status_Level": (8, 1),
-    "Min_Angle_Limit": (9, 2),
-    "Max_Angle_Limit": (11, 2),
+    "Min_Position_Limit": (9, 2),
+    "Max_Position_Limit": (11, 2),
     "Max_Temperature_Limit": (13, 1),
     "Max_Voltage_Limit": (14, 1),
     "Min_Voltage_Limit": (15, 1),
@@ -33,32 +38,63 @@ SCS_SERIES_CONTROL_TABLE = {
     "CCW_Dead_Zone": (27, 1),
     "Protection_Current": (28, 2),
     "Angular_Resolution": (30, 1),
-    "Offset": (31, 2),
-    "Mode": (33, 1),
+    "Homing_Offset": (31, 2),
+    "Operating_Mode": (33, 1),
     "Protective_Torque": (34, 1),
     "Protection_Time": (35, 1),
     "Overload_Torque": (36, 1),
-    "Speed_closed_loop_P_proportional_coefficient": (37, 1),
+    "Velocity_closed_loop_P_proportional_coefficient": (37, 1),
     "Over_Current_Protection_Time": (38, 1),
     "Velocity_closed_loop_I_integral_coefficient": (39, 1),
+    # SRAM
     "Torque_Enable": (40, 1),
     "Acceleration": (41, 1),
     "Goal_Position": (42, 2),
     "Goal_Time": (44, 2),
-    "Goal_Speed": (46, 2),
+    "Goal_Velocity": (46, 2),
     "Torque_Limit": (48, 2),
     "Lock": (55, 1),
-    "Present_Position": (56, 2),
-    "Present_Speed": (58, 2),
-    "Present_Load": (60, 2),
-    "Present_Voltage": (62, 1),
-    "Present_Temperature": (63, 1),
-    "Status": (65, 1),
-    "Moving": (66, 1),
-    "Present_Current": (69, 2),
-    # Not in the Memory Table
-    "Maximum_Acceleration": (85, 2),
+    "Present_Position": (56, 2),  # read-only
+    "Present_Velocity": (58, 2),  # read-only
+    "Present_Load": (60, 2),  # read-only
+    "Present_Voltage": (62, 1),  # read-only
+    "Present_Temperature": (63, 1),  # read-only
+    "Status": (65, 1),  # read-only
+    "Moving": (66, 1),  # read-only
+    "Present_Current": (69, 2),  # read-only
+    "Goal_Position_2": (71, 2),  # read-only
+    # Factory
+    "Moving_Velocity": (80, 1),
+    "Moving_Velocity_Threshold": (80, 1),
+    "DTs": (81, 1),  # (ms)
+    "Velocity_Unit_factor": (82, 1),
+    "Hts": (83, 1),  # (ns) valid for firmware >= 2.54, other versions keep 0
+    "Maximum_Velocity_Limit": (84, 1),
+    "Maximum_Acceleration": (85, 1),
+    "Acceleration_Multiplier ": (86, 1),  # Acceleration multiplier in effect when acceleration is 0
 }
+
+def encode_sign_magnitude(value: int, sign_bit_index: int):
+    """
+    https://en.wikipedia.org/wiki/Signed_number_representations#Sign%E2%80%93magnitude
+    """
+    max_magnitude = (1 << sign_bit_index) - 1
+    magnitude = abs(value)
+    if magnitude > max_magnitude:
+        raise ValueError(f"Magnitude {magnitude} exceeds {max_magnitude} (max for {sign_bit_index=})")
+
+    direction_bit = 1 if value < 0 else 0
+    return (direction_bit << sign_bit_index) | magnitude
+
+
+def decode_sign_magnitude(encoded_value: int, sign_bit_index: int):
+    """
+    https://en.wikipedia.org/wiki/Signed_number_representations#Sign%E2%80%93magnitude
+    """
+    direction_bit = (encoded_value >> sign_bit_index) & 1
+    magnitude_mask = (1 << sign_bit_index) - 1
+    magnitude = encoded_value & magnitude_mask
+    return -magnitude if direction_bit else magnitude
 
 
 def read_from_motor(port_handler, packet_handler, motor_indices: list[int], data_name: str) -> np.ndarray:
@@ -69,7 +105,7 @@ def read_from_motor(port_handler, packet_handler, motor_indices: list[int], data
         port_handler: The port handler for the serial connection
         packet_handler: The packet handler for communication protocol
         motor_indices: List of motor IDs to read from
-        data_name: Name of the data to read (must be in SCS_SERIES_CONTROL_TABLE)
+        data_name: Name of the data to read (must be in STS_SMS_SERIES_CONTROL_TABLE)
 
     Returns:
         np.ndarray: Array of values read from the motors
@@ -78,10 +114,10 @@ def read_from_motor(port_handler, packet_handler, motor_indices: list[int], data
         KeyError: If data_name is not in the control table
         ConnectionError: If communication fails
     """
-    if data_name not in SCS_SERIES_CONTROL_TABLE:
+    if data_name not in STS_SMS_SERIES_CONTROL_TABLE:
         raise KeyError(f"Data name '{data_name}' not found in control table")
 
-    addr, bytes = SCS_SERIES_CONTROL_TABLE[data_name]
+    addr, bytes = STS_SMS_SERIES_CONTROL_TABLE[data_name]
     group = scs.GroupSyncRead(port_handler, packet_handler, addr, bytes)
 
     for idx in motor_indices:
@@ -105,6 +141,10 @@ def read_from_motor(port_handler, packet_handler, motor_indices: list[int], data
         value = group.getData(idx, addr, bytes)
         values.append(value)
 
+
+    if data_name in STS_SMS_SERIES_ENCODINGS_TABLE:
+        sign_bit_index = STS_SMS_SERIES_ENCODINGS_TABLE[data_name]
+        values = [decode_sign_magnitude(value, sign_bit_index) for value in values]
     values = np.array(values)
 
     # Convert to signed int for position data
@@ -163,7 +203,7 @@ def write_to_motor(port_handler, packet_handler, motor_indices: list[int], data_
         port_handler: The port handler for the serial connection
         packet_handler: The packet handler for communication protocol
         motor_indices: List of motor IDs to write to
-        data_name: Name of the data to write (must be in SCS_SERIES_CONTROL_TABLE)
+        data_name: Name of the data to write (must be in STS_SMS_SERIES_CONTROL_TABLE)
         values: Array of values to write to the motors
 
     Raises:
@@ -171,16 +211,19 @@ def write_to_motor(port_handler, packet_handler, motor_indices: list[int], data_
         ConnectionError: If communication fails
         ValueError: If the number of values doesn't match the number of motor indices
     """
-    if data_name not in SCS_SERIES_CONTROL_TABLE:
+    if data_name not in STS_SMS_SERIES_CONTROL_TABLE:
         raise KeyError(f"Data name '{data_name}' not found in control table")
 
     if len(values) != len(motor_indices):
         raise ValueError(f"Number of values ({len(values)}) must match number of motor indices ({len(motor_indices)})")
 
-    addr, bytes = SCS_SERIES_CONTROL_TABLE[data_name]
+    addr, bytes = STS_SMS_SERIES_CONTROL_TABLE[data_name]
     group = scs.GroupSyncWrite(port_handler, packet_handler, addr, bytes)
 
     for idx, value in zip(motor_indices, values, strict=True):
+        if data_name in STS_SMS_SERIES_ENCODINGS_TABLE:
+            sign_bit_index = STS_SMS_SERIES_ENCODINGS_TABLE[data_name]
+            value = encode_sign_magnitude(value, sign_bit_index)
         data = convert_to_bytes(int(value), bytes)
         group.addParam(idx, data)
 
@@ -198,64 +241,62 @@ def write_to_motor(port_handler, packet_handler, motor_indices: list[int], data_
         )
 
 
-
 class MotorBus:
-    target_position: ir.SignalReader[np.ndarray] = ir.NoOpReader()
-    torque_mode: ir.SignalReader[bool] = ir.NoOpReader()
-
-    position: ir.SignalEmitter[np.ndarray] = ir.NoOpEmitter()
-
-
     def __init__(self, port: str, calibration: dict[str, np.ndarray] | None = None, processing_freq: float = 1000.0):
         self.port = port
         self.motor_indices = [1, 2, 3, 4, 5, 6]
         self.processing_freq = processing_freq
         self.calibration = calibration
+        self.port_handler = None
+        self.packet_handler = None
 
     def connect(self):
-        port_handler = scs.PortHandler(self.port)
-        packet_handler = scs.PacketHandler(PROTOCOL_VERSION)
+        assert self.port_handler is None and self.packet_handler is None, "Already connected"
+        self.port_handler = scs.PortHandler(self.port)
+        self.packet_handler = scs.PacketHandler(PROTOCOL_VERSION)
 
-        if not port_handler.openPort():
+        if not self.port_handler.openPort():
             raise OSError(f"Failed to open port '{self.port}'.")
-        port_handler.setPacketTimeoutMillis(TIMEOUT_MS)
-        return port_handler, packet_handler
+        self.port_handler.setPacketTimeoutMillis(TIMEOUT_MS)
 
-    def run(self, should_stop: ir.SignalReader, clock: ir.Clock) -> Iterator[ir.Sleep]:
-        rate_limit = ir.RateLimiter(hz=self.processing_freq, clock=clock)
-        fps = ir.utils.RateCounter(f"feetech-bus-{self.port}")
-        port_handler, packet_handler = self.connect()
+    def _read(self, data_name: str) -> np.ndarray:
+        return read_from_motor(self.port_handler, self.packet_handler, self.motor_indices, data_name)
 
-        torque_mode_reader = ir.DefaultReader(ir.ValueUpdated(self.torque_mode), (None, False))
-        target_position_reader = ir.DefaultReader(ir.ValueUpdated(self.target_position), (None, False))
+    def _write(self, data_name: str, values: np.ndarray):
+        write_to_motor(self.port_handler, self.packet_handler, self.motor_indices, data_name, values)
 
-        while not should_stop.value:
-            position = read_from_motor(port_handler, packet_handler, self.motor_indices, "Present_Position")
-            torque_mode, is_updated = torque_mode_reader.value
-            if is_updated:
-                if torque_mode:
-                    write_to_motor(port_handler, packet_handler, self.motor_indices, "Torque_Enable", np.ones(len(self.motor_indices)))
-                    write_to_motor(port_handler, packet_handler, self.motor_indices, "Lock", np.ones(len(self.motor_indices)))
-                else:
-                    write_to_motor(port_handler, packet_handler, self.motor_indices, "Torque_Enable", np.zeros(len(self.motor_indices)))
-                    write_to_motor(port_handler, packet_handler, self.motor_indices, "Lock", np.zeros(len(self.motor_indices)))
+    @property
+    def position(self) -> np.ndarray:
+        position = self._read("Present_Position")
+        position = self.apply_calibration(position)
+        return position
 
-            target_position, is_updated = target_position_reader.value
-            if is_updated:
-                target_position = self.revert_calibration(target_position)
-                write_to_motor(port_handler, packet_handler, self.motor_indices, "Goal_Position", target_position)
+    @property
+    def velocity(self) -> np.ndarray:
+        velocity = self._read("Present_Velocity")
+        velocity = self.apply_calibration(velocity)
+        return velocity
 
-            position = self.apply_calibration(position)
-            self.position.emit(position)
-            fps.tick()
-            yield ir.Sleep(rate_limit.wait_time())
+    @property
+    def torque_mode(self) -> bool:
+        return self._read("Torque_Enable") == 1
 
+    def set_torque_mode(self, enabled: bool):
+        values = np.ones(len(self.motor_indices)) if enabled else np.zeros(len(self.motor_indices))
+        self._write("Torque_Enable", values)
+        self._write("Lock", values)
+
+    def set_target_position(self, positions: np.ndarray):
+        positions = self.revert_calibration(positions)
+        self._write("Goal_Position", positions)
+
+    def disconnect(self):
+        assert self.port_handler is not None and self.packet_handler is not None, "Not connected"
         # Disable torque and lock to prevent motors degrading
-        write_to_motor(port_handler, packet_handler, self.motor_indices, "Torque_Enable", np.zeros(len(self.motor_indices)))
-        write_to_motor(port_handler, packet_handler, self.motor_indices, "Lock", np.zeros(len(self.motor_indices)))
-
-        port_handler.closePort()
-
+        self.set_torque_mode(False)
+        self.port_handler.closePort()
+        self.port_handler = None
+        self.packet_handler = None
 
     def apply_calibration(self, values: np.ndarray):
         if self.calibration is None:
@@ -270,3 +311,10 @@ class MotorBus:
         if clip:
             values = np.clip(values, self.calibration["mins"], self.calibration["maxs"])
         return values
+
+    def stats(self):
+        result = {}
+        for data_name in STS_SMS_SERIES_CONTROL_TABLE:
+            values = self._read(data_name)
+            result[data_name] = values
+        return result

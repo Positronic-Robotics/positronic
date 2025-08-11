@@ -2,7 +2,6 @@ import configuronic as cfn
 import numpy as np
 
 
-
 leader_calibration = {
     "mins": np.array([552.0, 927.0, 876.0, 729.0, 306.0, 2045.0]),
     "maxs": np.array([3081.0, 3286.0, 3089.0, 3032.0, 4131.0, 3299.0]),
