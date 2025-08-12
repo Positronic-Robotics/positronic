@@ -11,25 +11,36 @@ This is a library for recording, storing, sharing and using robotic datasets. We
 We optimize for:
 * Fast append during recording (low latency).
 * Random access at query time by the timestamp.
-* Window slices like "5 seconds before time X”.
+* Window slices like "5 seconds before time X".
 
 ## Public API
 In the current version we have only "scalar" and "vector" Signals supported. Also, we support one and only one timestamp type per Signal. There are two main classes in the library.
 ```python
 class Signal[T]:
-    # Returns the value and timestamp of the closest record at or before the given timestamp, or None if not found
-    def at(self, ts: int) -> Tuple[T, int] | None:
+    # Returns the number of records in the signal
+    def __len__(self) -> int:
         pass
-    # All the records in [start_ts, end_ts]
-    def window(self, start_ts: int, end_ts: int) -> Tuple[Sequence[T], Sequence[int]]:
+
+    # Access data by index or slice
+    # signal[idx] returns (value, timestamp_ns) tuple
+    # signal[start:end] returns a Signal view of the slice
+    def __getitem__(self, index_or_slice: int | slice) -> Tuple[T, int] | Signal[T]:
+        pass
+
+    # Timestamp-based indexer property for accessing data by time
+    # signal.time[ts_ns] returns (value, timestamp_ns) for closest record at or before ts_ns
+    # signal.time[start_ts:end_ts] returns Signal view for time window [start_ts, end_ts)
+    # signal.time[start:end:step] returns Signal with sampled values at step intervals
+    @property
+    def time(self) -> Sequence[Tuple[T, int]]:
         pass
 
 class SignalWriter[T]:
-    # Appends data. Fails if `ts` is not increasing or the data is not compliant
-    def append(self, data: T, ts: int) -> None:
+    # Appends data with timestamp. Fails if ts_ns is not increasing or data shape/dtype doesn't match
+    def append(self, data: T, ts_ns: int) -> None:
         pass
 
-    # Finalises the writing. All following `append` calls will fail
+    # Finalizes the writing. All following append calls will fail
     def finish(self) -> None:
         pass
 ```
@@ -44,9 +55,11 @@ The Signal and writers for image data types (i.e. video) will be implemented lat
 
 ### Scalar / Vector
 
-Every sequence is stored in one parquet file, with 'timestamp' and 'value' columns. The `at` and `window` methods rely on the binary search and hence have O(log N) compute time.
+Every sequence is stored in one parquet file, with 'timestamp' and 'value' columns. The timestamp-based access via the `time` property relies on binary search and hence has O(log N) compute time.
 
-All the classes are lazy, in the sense that they don't perform any IO or computations until requested. The `SimpleSignal` keeps all the data in pyarrow array in memory. Once the data is loaded into memory, we never make any copies of it, and we just provide the read-only access to the underlying data to the user.
+All the classes are lazy, in the sense that they don't perform any IO or computations until requested. The `SimpleSignal` keeps all the data in numpy arrays in memory after loading from the parquet file. Once the data is loaded into memory, we provide efficient access through views.
 
-We use `polars.search_sorted` to perform binary search operations.
+When accessing data via slices (either index-based like `signal[0:100]` or time-based like `signal.time[start_ts:end_ts]`), the library returns Signal views that share the underlying data with the original Signal. These views have the same API as the original Signal and provide zero-copy access to the data.
+
+We use `numpy.searchsorted` to perform binary search operations for efficient timestamp-based lookups.
 
