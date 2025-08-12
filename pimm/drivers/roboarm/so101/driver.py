@@ -118,7 +118,6 @@ class Robot:
         """
         return qpos * (self.joint_limits[:, 1] - self.joint_limits[:, 0]) + self.joint_limits[:, 0]
 
-
     def rad_to_norm(self, qpos: np.ndarray) -> np.ndarray:
         """Convert radians to normalized position [0, 1].
         """

@@ -74,6 +74,7 @@ STS_SMS_SERIES_CONTROL_TABLE = {
     "Acceleration_Multiplier ": (86, 1),  # Acceleration multiplier in effect when acceleration is 0
 }
 
+
 def encode_sign_magnitude(value: int, sign_bit_index: int):
     """
     https://en.wikipedia.org/wiki/Signed_number_representations#Sign%E2%80%93magnitude
@@ -140,7 +141,6 @@ def read_from_motor(port_handler, packet_handler, motor_indices: list[int], data
     for idx in motor_indices:
         value = group.getData(idx, addr, bytes)
         values.append(value)
-
 
     if data_name in STS_SMS_SERIES_ENCODINGS_TABLE:
         sign_bit_index = STS_SMS_SERIES_ENCODINGS_TABLE[data_name]

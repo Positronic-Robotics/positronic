@@ -1,7 +1,6 @@
 import configuronic as cfn
 import ironic2 as ir
 import numpy as np
-import json
 
 import pimm.cfg.hardware.motors
 from pimm.drivers.motors.feetech import MotorBus
@@ -35,12 +34,12 @@ def get_function(motor_bus: MotorBus):
 
             yield ir.Sleep(0.001)
 
-        mins_str = np.array2string(mins, separator=', ')
-        maxs_str = np.array2string(maxs, separator=', ')
+        mins_str = np.array2string(mins, separator=', ', precision=1).strip()
+        maxs_str = np.array2string(maxs, separator=', ', precision=1).strip()
 
         print("{")
-        print(f'    "mins": np.array({mins_str}),' )
-        print(f'    "maxs": np.array({maxs_str})' )
+        print(f'    "mins": np.array({mins_str}),')
+        print(f'    "maxs": np.array({maxs_str})')
         print("}")
 
     return calibrate_fn
@@ -53,6 +52,7 @@ def calibrate(motor_bus: MotorBus):
         w.start_in_subprocess(calibrate_fn)
 
         input("Move all joints to it's limit, then press ENTER...")
+
 
 if __name__ == "__main__":
     cfn.cli(calibrate)

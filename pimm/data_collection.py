@@ -400,6 +400,7 @@ main_sim_cfg = cfn.Config(
     loaders=pimm.cfg.simulator.stack_cubes_loaders,
 )
 
+
 @cfn.config(
     robot_arm=pimm.cfg.hardware.roboarm.so101,
     webxr=pimm.cfg.webxr.webxr,
