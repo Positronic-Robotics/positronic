@@ -4,13 +4,13 @@ import pyarrow.parquet as pq
 import polars as pl
 import numpy as np
 from pathlib import Path
-from .core import Stream, StreamWriter
+from .core import Signal, SignalWriter
 
 T = TypeVar('T')
 
 
-class SimpleStream(Stream[T]):
-    """Parquet-based implementation for scalar and vector streams.
+class SimpleSignal(Signal[T]):
+    """Parquet-based implementation for scalar and vector Signals.
 
     Stores data in a parquet file with 'timestamp' and 'value' columns.
     Provides O(log N) random access using binary search operations.
@@ -18,7 +18,7 @@ class SimpleStream(Stream[T]):
     """
 
     def __init__(self, filepath: Path):
-        """Initialize stream reader from a parquet file."""
+        """Initialize Signal reader from a parquet file."""
         self.filepath = filepath
         self._data = None
         self._timestamps = None
@@ -61,8 +61,8 @@ class SimpleStream(Stream[T]):
         return (self._values[start_idx:end_idx], self._timestamps[start_idx:end_idx])
 
 
-class SimpleStreamWriter(StreamWriter[T]):
-    """Parquet-based writer for scalar and vector streams.
+class SimpleSignalWriter(SignalWriter[T]):
+    """Parquet-based writer for scalar and vector Signals.
 
     Writes data in chunks to parquet file for memory efficiency.
     Enforces consistent shape/dtype and strictly increasing timestamps.
@@ -70,7 +70,7 @@ class SimpleStreamWriter(StreamWriter[T]):
     """
 
     def __init__(self, filepath: Path, chunk_size: int = 10000):
-        """Initialize stream writer to save data to a parquet file.
+        """Initialize Signal writer to save data to a parquet file.
 
         Args:
             filepath: Path to the output parquet file

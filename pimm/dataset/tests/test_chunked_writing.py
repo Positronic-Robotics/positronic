@@ -7,7 +7,7 @@ from pathlib import Path
 
 import numpy as np
 
-from pimm.dataset.vector import SimpleStream, SimpleStreamWriter
+from pimm.dataset.vector import SimpleSignal, SimpleSignalWriter
 
 
 def test_large_dataset_chunked_writing():
@@ -17,7 +17,7 @@ def test_large_dataset_chunked_writing():
         filepath = Path(tmpdir) / "large_test.parquet"
 
         chunk_size, num_records = 1000, 10000
-        writer = SimpleStreamWriter(filepath, chunk_size=chunk_size)
+        writer = SimpleSignalWriter(filepath, chunk_size=chunk_size)
         start_time = time.time()
         for i in range(num_records):
             data = np.array([i, i*2, i*3], dtype=np.float32)
@@ -31,7 +31,7 @@ def test_large_dataset_chunked_writing():
         assert filepath.exists()
 
         start_time = time.time()
-        reader = SimpleStream(filepath)
+        reader = SimpleSignal(filepath)
 
         result = reader.at(5000000)
         assert result is not None
