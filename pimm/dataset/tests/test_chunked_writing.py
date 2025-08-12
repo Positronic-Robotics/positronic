@@ -33,20 +33,20 @@ def test_large_dataset_chunked_writing():
         start_time = time.time()
         reader = SimpleSignal(filepath)
 
-        result = reader.at(5000000)
-        assert result is not None
-        value, ts = result
+        # Test time access
+        value, ts = reader.time[5000000]
         np.testing.assert_array_equal(value, np.array([5, 10, 15], dtype=np.float32))
+        assert ts == 5000000
 
-        # Test window query (window appears to be inclusive on both ends)
-        values, timestamps = reader.window(0, 9000000)  # First 10 records (0-9)
-        assert len(values) == 10, f"Expected 10 values, got {len(values)}"
-        assert len(timestamps) == 10, f"Expected 10 timestamps, got {len(timestamps)}"
+        # Test time window query
+        view = reader.time[0:9000001]  # First 10 records (0-9), end is exclusive
+        assert len(view) == 10, f"Expected 10 values, got {len(view)}"
 
-        # Verify the window content
+        # Verify the window content using index access
         for i in range(10):
-            np.testing.assert_array_equal(values[i], np.array([i, i*2, i*3], dtype=np.float32))
-            assert timestamps[i] == i * 1000000
+            value, ts = view[i]
+            np.testing.assert_array_equal(value, np.array([i, i*2, i*3], dtype=np.float32))
+            assert ts == i * 1000000
 
         read_time = time.time() - start_time
         print(f"Reading completed in {read_time:.2f} seconds")

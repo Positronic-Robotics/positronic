@@ -5,33 +5,51 @@ T = TypeVar('T')
 
 
 class Signal(ABC, Generic[T]):
+
     @abstractmethod
-    def at(self, ts_ns: int) -> Tuple[T, int] | None:
-        """Returns the value and timestamp of the closest record at or before the given timestamp.
+    def __len__(self) -> int:
+        """Returns the number of records in the signal."""
+        pass
 
-        Args:
-            ts_ns: Timestamp in nanoseconds
+    @property
+    @abstractmethod
+    def time(self) -> Sequence[Tuple[T, int]]:
+        """Returns an indexer for accessing Signal data by timestamp.
 
-        Returns:
-            Tuple of (value, timestamp_ns) or None if not found
+        Similar to pandas.loc, this property provides a timestamp-based indexer.
+
+        Usage:
+            signal.time[ts_ns] -> Tuple[T, int]
+                Returns (value, timestamp_ns) for the closest record at or before ts_ns.
+                Raises KeyError if there's no record at or before ts_ns.
+
+            signal.time[start_ts_ns:end_ts_ns] -> Signal[T]
+                Returns a Signal view containing all records in [start_ts_ns, end_ts_ns)
+                (i.e. the end timestamp is not included)
+
+            signal.time[start_ts_ns:end_ts_ns:step_ts_ns] -> Signal[T]
+                Returns a Signal with values at intermediate timestamps spaced by step_ts_ns,
+                where each value is the closest record at or before that timestamp.
+                Timestamps that are before the first timestamp are not included in the result.
         """
         pass
 
     @abstractmethod
-    def window(self, start_ts_ns: int, end_ts_ns: int) -> Tuple[Sequence[T], Sequence[int]]:
-        """Returns all records in the inclusive range [start_ts_ns, end_ts_ns].
+    def __getitem__(self, index_or_slice: int | slice) -> Tuple[T, int] | "Signal[T]":
+        """Access the Signal data by index or slice.
 
         Args:
-            start_ts_ns: Start timestamp in nanoseconds
-            end_ts_ns: End timestamp in nanoseconds
+            index_or_slice: Integer index or slice object
 
         Returns:
-            Tuple of (values, timestamps_ns) sequences
+            If index: Tuple of (value, timestamp_ns)
+            If slice: Signal[T] view of the original data
         """
         pass
 
 
 class SignalWriter(ABC, Generic[T]):
+
     @abstractmethod
     def append(self, data: T, ts_ns: int) -> None:
         """Appends data with timestamp.
