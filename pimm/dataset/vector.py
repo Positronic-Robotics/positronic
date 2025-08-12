@@ -10,14 +10,22 @@ T = TypeVar('T')
 
 
 class SimpleStream(Stream[T]):
+    """Parquet-based implementation for scalar and vector streams.
+
+    Stores data in a parquet file with 'timestamp' and 'value' columns.
+    Provides O(log N) random access using binary search operations.
+    Data is lazily loaded into memory and kept as pyarrow arrays.
+    """
 
     def __init__(self, filepath: Path):
+        """Initialize stream reader from a parquet file."""
         self.filepath = filepath
         self._data = None
         self._timestamps = None
         self._values = None
 
     def _load_data(self):
+        """Lazily load parquet data into memory as numpy arrays."""
         if self._data is None:
             table = pq.read_table(self.filepath)
             df = pl.from_arrow(table)
@@ -54,8 +62,15 @@ class SimpleStream(Stream[T]):
 
 
 class SimpleStreamWriter(StreamWriter[T]):
+    """Parquet-based writer for scalar and vector streams.
+
+    Accumulates data in memory and writes to parquet on finish().
+    Enforces consistent shape/dtype and strictly increasing timestamps.
+    Supports scalars and fixed-size vectors/arrays.
+    """
 
     def __init__(self, filepath: Path):
+        """Initialize stream writer to save data to a parquet file."""
         self.filepath = filepath
         self._timestamps = []
         self._values = []
@@ -98,6 +113,7 @@ class SimpleStreamWriter(StreamWriter[T]):
         self._last_ts = ts_ns
 
     def finish(self) -> None:
+        """Write accumulated data to parquet file and mark writer as finished."""
         if self._finished:
             return
 
