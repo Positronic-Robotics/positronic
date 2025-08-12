@@ -56,6 +56,54 @@ class TestSignalTimeAccess:
         assert ts == 1000
 
 
+class TestSignalIndexAccess:
+    def test_index_access_scalar(self, tmp_path):
+        signal = create_signal(tmp_path, [(42, 1000), (43, 2000), (44, 3000)])
+        assert signal[0] == (42, 1000)
+        assert signal[1] == (43, 2000)
+        assert signal[2] == (44, 3000)
+
+    def test_index_access_negative(self, tmp_path):
+        signal = create_signal(tmp_path, [(42, 1000), (43, 2000), (44, 3000)])
+        assert signal[-1] == (44, 3000)
+        assert signal[-2] == (43, 2000)
+        assert signal[-3] == (42, 1000)
+
+    def test_index_out_of_range(self, tmp_path):
+        signal = create_signal(tmp_path, [(42, 1000), (43, 2000)])
+        with pytest.raises(IndexError):
+            signal[2]
+        with pytest.raises(IndexError):
+            signal[-3]
+
+    def test_index_slice(self, tmp_path):
+        signal = create_signal(tmp_path, [(42, 1000), (43, 2000), (44, 3000), (45, 4000)])
+        view = signal[1:3]
+        assert len(view) == 2
+        assert view[0] == (43, 2000)
+        assert view[1] == (44, 3000)
+
+    def test_index_slice_negative_indices(self, tmp_path):
+        signal = create_signal(tmp_path, [(42, 1000), (43, 2000), (44, 3000), (45, 4000)])
+        view = signal[-2:]
+        assert len(view) == 2
+        assert view[0] == (44, 3000)
+        assert view[1] == (45, 4000)
+
+    def test_index_slice_step_not_supported(self, tmp_path):
+        signal = create_signal(tmp_path, [(42, 1000), (43, 2000), (44, 3000)])
+        with pytest.raises(ValueError, match="Step slicing not supported"):
+            signal[0:3:2]
+
+    def test_nested_view_slicing(self, tmp_path):
+        signal = create_signal(tmp_path, [(42, 1000), (43, 2000), (44, 3000), (45, 4000), (46, 5000)])
+        view1 = signal[1:4]  # Contains (43, 2000), (44, 3000), (45, 4000)
+        view2 = view1[1:]    # Should contain (44, 3000), (45, 4000)
+        assert len(view2) == 2
+        assert view2[0] == (44, 3000)
+        assert view2[1] == (45, 4000)
+
+
 class TestSignalTimeWindow:
     def test_time_window_empty_Signal(self, tmp_path):
         signal = create_signal(tmp_path, [], "empty.parquet")
@@ -97,6 +145,83 @@ class TestSignalTimeWindow:
         view = signal.time[2000:2001]  # Very small window
         assert len(view) == 1
         assert view[0] == (43, 2000)
+
+
+class TestSignalTimeStepped:
+    def test_time_stepped_scalar(self, tmp_path):
+        signal = create_signal(tmp_path, [(42, 1000), (43, 2000), (44, 3000), (45, 4000), (46, 5000)])
+        sampled = signal.time[1000:5000:1000]
+        assert len(sampled) == 4
+        assert sampled[0] == (42, 1000)
+        assert sampled[1] == (43, 2000)
+        assert sampled[2] == (44, 3000)
+        assert sampled[3] == (45, 4000)
+
+    def test_time_stepped_between_timestamps(self, tmp_path):
+        signal = create_signal(tmp_path, [(42, 1000), (43, 3000), (44, 5000)])
+        sampled = signal.time[1000:6000:2000]
+        # At 1000: exact match -> 42
+        # At 3000: exact match -> 43  
+        # At 5000: exact match -> 44
+        assert len(sampled) == 3
+        assert sampled[0] == (42, 1000)
+        assert sampled[1] == (43, 3000)
+        assert sampled[2] == (44, 5000)
+
+    def test_time_stepped_before_first_timestamp(self, tmp_path):
+        signal = create_signal(tmp_path, [(42, 2000), (43, 3000), (44, 4000)])
+        sampled = signal.time[1000:5000:1000]
+        # Should skip timestamps before first data point
+        assert len(sampled) == 3
+        assert sampled[0] == (42, 2000)  # At 2000
+        assert sampled[1] == (43, 3000)  # At 3000
+        assert sampled[2] == (44, 4000)  # At 4000
+
+    def test_time_stepped_empty_signal(self, tmp_path):
+        signal = create_signal(tmp_path, [], "empty.parquet")
+        sampled = signal.time[1000:5000:1000]
+        assert len(sampled) == 0
+
+    def test_time_stepped_zero_step(self, tmp_path):
+        signal = create_signal(tmp_path, [(42, 1000), (43, 2000)])
+        sampled = signal.time[1000:2000:0]
+        assert len(sampled) == 0
+
+    def test_time_stepped_negative_step(self, tmp_path):
+        signal = create_signal(tmp_path, [(42, 1000), (43, 2000)])
+        sampled = signal.time[1000:2000:-1000]
+        assert len(sampled) == 0
+
+    def test_time_stepped_vector_data(self, tmp_path):
+        signal = create_signal(tmp_path, [
+            (np.array([1.0, 2.0]), 1000),
+            (np.array([3.0, 4.0]), 2000),
+            (np.array([5.0, 6.0]), 3000)
+        ])
+        sampled = signal.time[1500:3500:1000]
+        assert len(sampled) == 2
+        value0, _ = sampled[0]
+        value1, _ = sampled[1]
+        np.testing.assert_array_equal(value0, [1.0, 2.0])  # At 1500, gets value from 1000
+        np.testing.assert_array_equal(value1, [3.0, 4.0])  # At 2500, gets value from 2000
+
+    def test_time_stepped_view_consistency(self, tmp_path):
+        # Test that stepped views maintain Signal interface
+        signal = create_signal(tmp_path, [(42, 1000), (43, 2000), (44, 3000)])
+        sampled = signal.time[1000:3000:1000]
+        
+        # Test len
+        assert len(sampled) == 2
+        
+        # Test index access
+        assert sampled[0] == (42, 1000)
+        assert sampled[1] == (43, 2000)
+        
+        # Test negative indexing
+        assert sampled[-1] == (43, 2000)
+        
+        # Test that it has time property
+        assert hasattr(sampled, 'time')
 
 
 class TestSignalWriterAppend:

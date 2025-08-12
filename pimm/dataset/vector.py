@@ -241,6 +241,7 @@ class SimpleSignal(Signal[T]):
         sampled._timestamps = self._timestamps[indices]
         sampled._values = self._values[indices]
         sampled._time_indexer = TimeIndexer(sampled)
+        sampled._load_data = lambda: None  # Data already loaded
         return sampled
 
 
