@@ -7,25 +7,26 @@ import pimm.cfg.hardware.motors
 from pimm.drivers.motors.feetech import MotorBus
 
 
-def get_function(position: ir.SignalReader, torque_mode: ir.SignalReader):
-    def record_limits(should_stop: ir.SignalReader, clock: ir.Clock):
-        mins = np.full(6, np.inf)
-        maxs = np.full(6, -np.inf)
+def get_function(motor_bus: MotorBus):
+    def calibrate_fn(should_stop: ir.SignalReader, clock: ir.Clock):
+        motor_bus.connect()
+        mins = np.full(len(motor_bus.motor_indices), np.inf)
+        maxs = np.full(len(motor_bus.motor_indices), -np.inf)
 
         print_limiter = ir.RateLimiter(hz=30, clock=clock)
         print()
         print()
 
         while not should_stop.value:
-            if position.read() is None:
+            if motor_bus.position is None:
                 yield ir.Sleep(0.001)
             else:
                 break
 
-        torque_mode.emit(False)
+        motor_bus.set_torque_mode(False)
 
         while not should_stop.value:
-            pos = position.value
+            pos = motor_bus.position
             mins = np.minimum(mins, pos)
             maxs = np.maximum(maxs, pos)
 
@@ -34,19 +35,22 @@ def get_function(position: ir.SignalReader, torque_mode: ir.SignalReader):
 
             yield ir.Sleep(0.001)
 
-        print(json.dumps({"mins": mins.tolist(), "maxs": maxs.tolist()}, indent=4))
+        mins_str = np.array2string(mins, separator=', ')
+        maxs_str = np.array2string(maxs, separator=', ')
 
-    return record_limits
+        print("{")
+        print(f'    "mins": np.array({mins_str}),' )
+        print(f'    "maxs": np.array({maxs_str})' )
+        print("}")
+
+    return calibrate_fn
 
 
 @cfn.config(motor_bus=pimm.cfg.hardware.motors.feetech)
 def calibrate(motor_bus: MotorBus):
     with ir.World() as w:
-        motor_bus.position, motor_position = w.mp_pipe()
-        torque_mode, motor_bus.torque_mode = w.mp_pipe()
-
-        record_limits = get_function(motor_position, torque_mode)
-        w.start_in_subprocess(record_limits, motor_bus.run)
+        calibrate_fn = get_function(motor_bus)
+        w.start_in_subprocess(calibrate_fn)
 
         input("Move all joints to it's limit, then press ENTER...")
 

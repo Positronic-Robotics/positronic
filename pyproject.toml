@@ -46,6 +46,7 @@ hardware = [
     "pygame==2.5.2",
     "pyserial", # For DH gripper
     "feetech-servo-sdk", # for feetech motors
+    "placo"
 ]
 dev = [
     "jupyter",

@@ -27,7 +27,7 @@ class Kinematics:
         target_ee_pose: geom.Transform3D,
         position_weight: float = 1.0,
         orientation_weight: float = 1.0,
-        n_iter: int = 100,
+        n_iter: int = 10,
     ) -> np.ndarray:
         target_pose_mtx = target_ee_pose.as_matrix
         for i, joint_name in enumerate(self.joint_names):
@@ -36,6 +36,7 @@ class Kinematics:
         self.tip_frame.T_world_frame = target_pose_mtx
         self.robot.update_kinematics()
 
+        # For some reason, the solver doesn't converge without this loop
         for i in range(n_iter):
             self.solver.solve(True)
             self.robot.update_kinematics()
