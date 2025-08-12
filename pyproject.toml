@@ -31,7 +31,6 @@ dependencies = [
     "cvxopt",
     "pyyaml",
     "configuronic",
-    "polars",
     "pyarrow",
 ]
 
