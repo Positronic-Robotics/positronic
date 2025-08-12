@@ -1,10 +1,8 @@
-import pytest
 import numpy as np
 import pyarrow as pa
-import sys
-import os
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from vector import SimpleStream, SimpleStreamWriter
+import pytest
+
+from pimm.dataset.vector import SimpleStream, SimpleStreamWriter
 
 
 def create_stream(tmp_path, data_timestamps, name="test.parquet"):

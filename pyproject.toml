@@ -30,7 +30,9 @@ dependencies = [
     "ruckig",
     "cvxopt",
     "pyyaml",
-    "configuronic"
+    "configuronic",
+    "polars",
+    "pyarrow",
 ]
 
 [project.optional-dependencies]
@@ -72,5 +74,6 @@ testpaths = [
     "ironic/tests",
     "ironic2/tests",
     "pimm/tests",
+    "pimm/dataset/tests",
 ]
 python_files = ["test_*.py", "*_test.py"]

@@ -4,7 +4,7 @@ import pyarrow.parquet as pq
 import polars as pl
 import numpy as np
 from pathlib import Path
-from core import Stream, StreamWriter
+from .core import Stream, StreamWriter
 
 T = TypeVar('T')
 
@@ -64,20 +64,44 @@ class SimpleStream(Stream[T]):
 class SimpleStreamWriter(StreamWriter[T]):
     """Parquet-based writer for scalar and vector streams.
 
-    Accumulates data in memory and writes to parquet on finish().
+    Writes data in chunks to parquet file for memory efficiency.
     Enforces consistent shape/dtype and strictly increasing timestamps.
     Supports scalars and fixed-size vectors/arrays.
     """
 
-    def __init__(self, filepath: Path):
-        """Initialize stream writer to save data to a parquet file."""
+    def __init__(self, filepath: Path, chunk_size: int = 10000):
+        """Initialize stream writer to save data to a parquet file.
+
+        Args:
+            filepath: Path to the output parquet file
+            chunk_size: Number of records to accumulate before writing a chunk (default 10000)
+        """
         self.filepath = filepath
+        self.chunk_size = chunk_size
+        self._writer = None
         self._timestamps = []
         self._values = []
         self._finished = False
         self._last_ts = None
         self._expected_shape = None
         self._expected_dtype = None
+
+    def _flush_chunk(self):
+        """Write current chunk to parquet file."""
+        if len(self._timestamps) == 0:
+            return
+
+        timestamps_array = pa.array(self._timestamps, type=pa.int64())
+        values_array = pa.array(self._values)
+        batch = pa.record_batch([timestamps_array, values_array],
+                                names=['timestamp', 'value'])
+
+        if self._writer is None:
+            self._writer = pq.ParquetWriter(self.filepath, batch.schema)
+
+        self._writer.write_batch(batch)
+        self._timestamps = []
+        self._values = []
 
     def append(self, data: T, ts_ns: int) -> None:
         if self._finished:
@@ -112,28 +136,22 @@ class SimpleStreamWriter(StreamWriter[T]):
         self._values.append(data)
         self._last_ts = ts_ns
 
+        if len(self._timestamps) >= self.chunk_size:
+            self._flush_chunk()
+
     def finish(self) -> None:
-        """Write accumulated data to parquet file and mark writer as finished."""
+        """Write remaining data to parquet file and mark writer as finished."""
         if self._finished:
             return
 
         self._finished = True
 
-        if len(self._timestamps) == 0:
-            # Create empty table with default schema
+        self._flush_chunk()  # Flush any remaining data
+
+        if self._writer:
+            self._writer.close()
+        elif len(self._timestamps) == 0 and self._writer is None:
+            # No data was ever written, create empty file with default schema
             schema = pa.schema([('timestamp', pa.int64()), ('value', pa.int64())])
             table = pa.table({'timestamp': [], 'value': []}, schema=schema)
-        else:
-            timestamps_array = pa.array(self._timestamps, type=pa.int64())
-
-            # Handle different data types appropriately
-            if self._expected_shape is not None:
-                # Vector data - convert to arrow array
-                values_array = pa.array(self._values)
-            else:
-                # Scalar data
-                values_array = pa.array(self._values)
-
-            table = pa.table({'timestamp': timestamps_array, 'value': values_array})
-
-        pq.write_table(table, self.filepath)
+            pq.write_table(table, self.filepath)
