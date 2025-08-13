@@ -70,8 +70,6 @@ lerobot = [
 [tool.pytest.ini_options]
 testpaths = [
     "geom/tests",
-    "positronic/tests",
-    "ironic/tests",
     "ironic2/tests",
     "pimm/tests",
 ]
