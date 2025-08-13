@@ -8,7 +8,7 @@ from .core import Signal, SignalWriter
 T = TypeVar('T')
 
 
-class ArraySignal(Signal[T]):
+class _ArraySignal(Signal[T]):
     """An in-memory, array-backed Signal implementation.
 
     - Index slicing returns zero-copy views
@@ -19,7 +19,7 @@ class ArraySignal(Signal[T]):
     def __init__(self, timestamps: np.ndarray, values: np.ndarray):
         self._timestamps = timestamps
         self._values = values
-        self._time_indexer = TimeIndexer(self)
+        self._time_indexer = _TimeIndexer(self)
 
     def _load_data(self):
         # Already in-memory
@@ -45,21 +45,21 @@ class ArraySignal(Signal[T]):
             start, stop, step = index_or_slice.indices(len(self))
             if step != 1:
                 raise ValueError("Step slicing not supported for index-based slicing")
-            return ArraySignal(self._timestamps[start:stop], self._values[start:stop])
+            return _ArraySignal(self._timestamps[start:stop], self._values[start:stop])
         else:
             raise TypeError(f"Invalid index type: {type(index_or_slice)}")
 
     def _window_view(self, start_ts_ns: int, end_ts_ns: int):
         if len(self) == 0:
-            return ArraySignal(self._timestamps[:0], self._values[:0])
+            return _ArraySignal(self._timestamps[:0], self._values[:0])
 
         start_idx = int(np.searchsorted(self._timestamps, start_ts_ns, side='left'))
         end_idx = int(np.searchsorted(self._timestamps, end_ts_ns, side='left'))
-        return ArraySignal(self._timestamps[start_idx:end_idx], self._values[start_idx:end_idx])
+        return _ArraySignal(self._timestamps[start_idx:end_idx], self._values[start_idx:end_idx])
 
     def _stepped_view(self, start_ts_ns: int, end_ts_ns: int, step_ts_ns: int):
         if len(self) == 0 or step_ts_ns <= 0:
-            return ArraySignal(self._timestamps[:0], self._values[:0])
+            return _ArraySignal(self._timestamps[:0], self._values[:0])
 
         sampled_indices: list[int] = []
         requested_timestamps: list[int] = []
@@ -74,14 +74,14 @@ class ArraySignal(Signal[T]):
             ts += step_ts_ns
 
         if not sampled_indices:
-            return ArraySignal(self._timestamps[:0], self._values[:0])
+            return _ArraySignal(self._timestamps[:0], self._values[:0])
 
         idx_array = np.array(sampled_indices, dtype=np.int64)
         req_ts_array = np.array(requested_timestamps, dtype=np.int64)
-        return ArraySignal(req_ts_array, self._values[idx_array])
+        return _ArraySignal(req_ts_array, self._values[idx_array])
 
 
-class TimeIndexer:
+class _TimeIndexer:
     """Helper class to implement the time property for Signal."""
 
     def __init__(self, signal):
@@ -130,7 +130,7 @@ class SimpleSignal(Signal[T]):
         # Initialize with empty arrays to satisfy type checkers; real data is loaded lazily
         self._timestamps: np.ndarray = np.empty(0, dtype=np.int64)
         self._values: np.ndarray = np.empty(0, dtype=object)
-        self._time_indexer = TimeIndexer(self)
+        self._time_indexer = _TimeIndexer(self)
 
     def _load_data(self):
         """Lazily load parquet data into memory as numpy arrays."""
@@ -140,10 +140,10 @@ class SimpleSignal(Signal[T]):
             self._values = table['value'].to_numpy()
             self._data = table
 
-    def _as_array_signal(self) -> ArraySignal:
+    def _as_array_signal(self) -> _ArraySignal:
         """Create an ArraySignal view over the loaded numpy arrays (zero-copy)."""
         self._load_data()
-        return ArraySignal(self._timestamps, self._values)
+        return _ArraySignal(self._timestamps, self._values)
 
     def __len__(self) -> int:
         """Returns the number of records in the signal."""
