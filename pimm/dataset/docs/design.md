@@ -27,10 +27,13 @@ class Signal[T]:
     def __getitem__(self, index_or_slice: int | slice) -> Tuple[T, int] | Signal[T]:
         pass
 
-    # Timestamp-based indexer property for accessing data by time
-    # signal.time[ts_ns] returns (value, timestamp_ns) for closest record at or before ts_ns
-    # signal.time[start_ts:end_ts] returns Signal view for time window [start_ts, end_ts)
-    # signal.time[start:end:step] returns Signal with sampled values at step intervals
+    # Timestamp-based indexer property for accessing data by time:
+    # * signal.time[ts_ns] returns (value, timestamp_ns) for closest record at or before ts_ns.
+    # * signal.time[start_ts:end_ts] returns Signal view for time window [start_ts, end_ts).
+    # * signal.time[start:end:step] returns a Signal sampled at requested timestamps:
+    #     t_i = start + i * step (for i >= 0 while t_i < end).
+    #     Each returned element is (value_at_or_before_t_i, t_i). If t_i precedes the first
+    #     record in the Signal it is skipped. step <= 0 yields an empty result.
     @property
     def time(self) -> Sequence[Tuple[T, int]]:
         pass
@@ -61,5 +64,4 @@ All the classes are lazy, in the sense that they don't perform any IO or computa
 
 When accessing data via slices (either index-based like `signal[0:100]` or time-based like `signal.time[start_ts:end_ts]`), the library returns Signal views that share the underlying data with the original Signal. These views have the same API as the original Signal and provide zero-copy access to the data.
 
-We use `numpy.searchsorted` to perform binary search operations for efficient timestamp-based lookups.
-
+For stepped time slicing `signal.time[start:end:step]`, the returned Signal contains samples located at the requested timestamps t_i = start + i * step (end-exclusive), as described above in the public API section. NOTE: stepped time slicing creates the copy of data, so it is not a "free" operation.

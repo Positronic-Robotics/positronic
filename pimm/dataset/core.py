@@ -28,9 +28,11 @@ class Signal(ABC, Generic[T]):
                 (i.e. the end timestamp is not included)
 
             signal.time[start_ts_ns:end_ts_ns:step_ts_ns] -> Signal[T]
-                Returns a Signal with values at intermediate timestamps spaced by step_ts_ns,
-                where each value is the closest record at or before that timestamp.
-                Timestamps that are before the first timestamp are not included in the result.
+                Returns a Signal sampled at "requested" timestamps t_i = start_ts_ns + i * step_ts_ns,
+                for i >= 0 while t_i < end_ts_ns. Each element of the returned Signal is
+                (value_at_or_before_t_i, t_i). If t_i is before the first available record,
+                that t_i is skipped. A non-positive step_ts_ns yields an empty result. The
+                end timestamp is exclusive.
         """
         pass
 

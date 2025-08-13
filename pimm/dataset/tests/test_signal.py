@@ -161,7 +161,7 @@ class TestSignalTimeStepped:
         signal = create_signal(tmp_path, [(42, 1000), (43, 3000), (44, 5000)])
         sampled = signal.time[1000:6000:2000]
         # At 1000: exact match -> 42
-        # At 3000: exact match -> 43  
+        # At 3000: exact match -> 43
         # At 5000: exact match -> 44
         assert len(sampled) == 3
         assert sampled[0] == (42, 1000)
@@ -200,28 +200,40 @@ class TestSignalTimeStepped:
         ])
         sampled = signal.time[1500:3500:1000]
         assert len(sampled) == 2
-        value0, _ = sampled[0]
-        value1, _ = sampled[1]
+        value0, ts0 = sampled[0]
+        value1, ts1 = sampled[1]
         np.testing.assert_array_equal(value0, [1.0, 2.0])  # At 1500, gets value from 1000
         np.testing.assert_array_equal(value1, [3.0, 4.0])  # At 2500, gets value from 2000
+        assert ts0 == 1500
+        assert ts1 == 2500
 
     def test_time_stepped_view_consistency(self, tmp_path):
         # Test that stepped views maintain Signal interface
         signal = create_signal(tmp_path, [(42, 1000), (43, 2000), (44, 3000)])
         sampled = signal.time[1000:3000:1000]
-        
+
         # Test len
         assert len(sampled) == 2
-        
+
         # Test index access
         assert sampled[0] == (42, 1000)
         assert sampled[1] == (43, 2000)
-        
+
         # Test negative indexing
         assert sampled[-1] == (43, 2000)
-        
+
         # Test that it has time property
         assert hasattr(sampled, 'time')
+
+    def test_time_stepped_returns_requested_timestamps_scalar(self, tmp_path):
+        signal = create_signal(tmp_path, [(10, 1000), (20, 2000), (30, 3000)])
+        # Request off-grid timestamps 1500 and 2500
+        sampled = signal.time[1500:3500:1000]
+        assert len(sampled) == 2
+        v0, t0 = sampled[0]
+        v1, t1 = sampled[1]
+        assert (v0, t0) == (10, 1500)  # carry-back value, requested timestamp
+        assert (v1, t1) == (20, 2500)
 
 
 class TestSignalWriterAppend:

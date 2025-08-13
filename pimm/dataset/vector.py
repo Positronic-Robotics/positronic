@@ -61,20 +61,24 @@ class ArraySignal(Signal[T]):
         if len(self) == 0 or step_ts_ns <= 0:
             return ArraySignal(self._timestamps[:0], self._values[:0])
 
-        indices: list[int] = []
+        sampled_indices: list[int] = []
+        requested_timestamps: list[int] = []
         ts = int(start_ts_ns)
+        first_ts = int(self._timestamps[0])
         while ts < end_ts_ns:
-            if ts >= int(self._timestamps[0]):
+            if ts >= first_ts:
                 idx = int(np.searchsorted(self._timestamps, ts, side='right')) - 1
                 if 0 <= idx < len(self):
-                    indices.append(idx)
+                    sampled_indices.append(idx)
+                    requested_timestamps.append(int(ts))
             ts += step_ts_ns
 
-        if not indices:
+        if not sampled_indices:
             return ArraySignal(self._timestamps[:0], self._values[:0])
 
-        idx_array = np.array(indices, dtype=np.int64)
-        return ArraySignal(self._timestamps[idx_array], self._values[idx_array])
+        idx_array = np.array(sampled_indices, dtype=np.int64)
+        req_ts_array = np.array(requested_timestamps, dtype=np.int64)
+        return ArraySignal(req_ts_array, self._values[idx_array])
 
 
 class TimeIndexer:
