@@ -168,7 +168,6 @@ class SimpleSignal(Signal[T]):
         return self._as_array_signal()._stepped_view(start_ts_ns, end_ts_ns, step_ts_ns)
 
 
-
 class SimpleSignalWriter(SignalWriter[T]):
     """Parquet-based writer for scalar and vector Signals.
 
@@ -201,8 +200,7 @@ class SimpleSignalWriter(SignalWriter[T]):
 
         timestamps_array = pa.array(self._timestamps, type=pa.int64())
         values_array = pa.array(self._values)
-        batch = pa.record_batch([timestamps_array, values_array],
-                                names=['timestamp', 'value'])
+        batch = pa.record_batch([timestamps_array, values_array], names=['timestamp', 'value'])
 
         if self._writer is None:
             self._writer = pq.ParquetWriter(self.filepath, batch.schema)
@@ -211,7 +209,7 @@ class SimpleSignalWriter(SignalWriter[T]):
         self._timestamps = []
         self._values = []
 
-    def append(self, data: T, ts_ns: int) -> None:
+    def append(self, data: T, ts_ns: int) -> None:  # noqa: C901  Function is too complex
         if self._finished:
             raise RuntimeError("Cannot append to a finished writer")
 

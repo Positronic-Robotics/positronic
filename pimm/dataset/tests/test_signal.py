@@ -26,6 +26,7 @@ def write_data(tmp_path, data_timestamps, name="test.parquet"):
 
 
 class TestSignalTimeAccess:
+
     def test_time_empty_Signal(self, tmp_path):
         signal = create_signal(tmp_path, [], "empty.parquet")
         with pytest.raises(KeyError):
@@ -57,6 +58,7 @@ class TestSignalTimeAccess:
 
 
 class TestSignalIndexAccess:
+
     def test_index_access_scalar(self, tmp_path):
         signal = create_signal(tmp_path, [(42, 1000), (43, 2000), (44, 3000)])
         assert signal[0] == (42, 1000)
@@ -98,13 +100,14 @@ class TestSignalIndexAccess:
     def test_nested_view_slicing(self, tmp_path):
         signal = create_signal(tmp_path, [(42, 1000), (43, 2000), (44, 3000), (45, 4000), (46, 5000)])
         view1 = signal[1:4]  # Contains (43, 2000), (44, 3000), (45, 4000)
-        view2 = view1[1:]    # Should contain (44, 3000), (45, 4000)
+        view2 = view1[1:]  # Should contain (44, 3000), (45, 4000)
         assert len(view2) == 2
         assert view2[0] == (44, 3000)
         assert view2[1] == (45, 4000)
 
 
 class TestSignalTimeWindow:
+
     def test_time_window_empty_Signal(self, tmp_path):
         signal = create_signal(tmp_path, [], "empty.parquet")
         view = signal.time[1000:2000]
@@ -130,7 +133,8 @@ class TestSignalTimeWindow:
         assert view[1] == (44, 3000)
 
     def test_time_window_vector_data(self, tmp_path):
-        signal = create_signal(tmp_path, [(np.array([1.0, 2.0]), 1000), (np.array([3.0, 4.0]), 2000), (np.array([5.0, 6.0]), 3000)])
+        signal = create_signal(tmp_path, [(np.array([1.0, 2.0]), 1000), (np.array([3.0, 4.0]), 2000),
+                                          (np.array([5.0, 6.0]), 3000)])
         view = signal.time[1000:2500]
         assert len(view) == 2
         value0, ts0 = view[0]
@@ -148,6 +152,7 @@ class TestSignalTimeWindow:
 
 
 class TestSignalTimeStepped:
+
     def test_time_stepped_scalar(self, tmp_path):
         signal = create_signal(tmp_path, [(42, 1000), (43, 2000), (44, 3000), (45, 4000), (46, 5000)])
         sampled = signal.time[1000:5000:1000]
@@ -193,11 +198,8 @@ class TestSignalTimeStepped:
         assert len(sampled) == 0
 
     def test_time_stepped_vector_data(self, tmp_path):
-        signal = create_signal(tmp_path, [
-            (np.array([1.0, 2.0]), 1000),
-            (np.array([3.0, 4.0]), 2000),
-            (np.array([5.0, 6.0]), 3000)
-        ])
+        signal = create_signal(tmp_path, [(np.array([1.0, 2.0]), 1000), (np.array([3.0, 4.0]), 2000),
+                                          (np.array([5.0, 6.0]), 3000)])
         sampled = signal.time[1500:3500:1000]
         assert len(sampled) == 2
         value0, ts0 = sampled[0]
@@ -237,6 +239,7 @@ class TestSignalTimeStepped:
 
 
 class TestSignalWriterAppend:
+
     def test_append_increasing_timestamps(self, tmp_path):
         signal = create_signal(tmp_path, [(42, 1000), (43, 2000), (44, 3000)])
         assert len(signal) == 3
@@ -300,6 +303,7 @@ class TestSignalWriterAppend:
 
 
 class TestSignalWriterFinish:
+
     def test_finish_empty_writer(self, tmp_path):
         filepath = write_data(tmp_path, [])
         assert filepath.exists()
