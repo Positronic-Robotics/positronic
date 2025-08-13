@@ -1,10 +1,12 @@
 from pathlib import Path
-from typing import Optional, List
+from typing import List, Optional, Tuple
+
+import av
 import numpy as np
 import pyarrow as pa
 import pyarrow.parquet as pq
-import av
-from .core import SignalWriter
+
+from .core import Signal, SignalWriter
 
 
 class VideoSignalWriter(SignalWriter[np.ndarray]):
@@ -124,3 +126,88 @@ class VideoSignalWriter(SignalWriter[np.ndarray]):
             frames_table = pa.table({'ts_ns': []}, schema=schema)
 
         pq.write_table(frames_table, self.frames_index_path)
+
+
+class VideoSignal(Signal[np.ndarray]):
+    """Reader for video signals.
+
+    Reads video frames from a video file (e.g., MP4/MKV) with a Parquet index
+    containing frame timestamps for fast random access.
+    """
+
+    def __init__(self, video_path: Path, frames_index_path: Path):
+        """Initialize VideoSignal reader.
+
+        Args:
+            video_path: Path to the video file to read
+            frames_index_path: Path to frames.parquet index file
+        """
+        self.video_path = video_path
+        self.frames_index_path = frames_index_path
+
+        # Lazy-load timestamp index
+        self._timestamps = None
+
+        # Lazy-load video container
+        self._container: Optional[av.container.InputContainer] = None
+        self._stream: Optional[av.video.stream.VideoStream] = None
+
+    def _load_timestamps(self):
+        """Lazily load timestamps from the index file."""
+        if self._timestamps is None:
+            frames_table = pq.read_table(self.frames_index_path)
+            # Convert timestamps to raw nanoseconds (int64)
+            ts_column = frames_table['ts_ns']
+            self._timestamps = np.array([t.value for t in ts_column], dtype=np.int64)
+
+    def _open_video(self):
+        """Open video container for reading."""
+        if self._container is None:
+            self._container = av.open(str(self.video_path))
+            self._stream = self._container.streams.video[0]
+
+    def __len__(self) -> int:
+        """Returns the number of frames in the signal."""
+        self._load_timestamps()
+        return len(self._timestamps)
+
+    @property
+    def time(self):
+        """Returns an indexer for accessing Signal data by timestamp.
+
+        Not implemented yet - will be added later.
+        """
+        raise NotImplementedError("Time indexing not yet implemented for VideoSignal")
+
+    def __getitem__(self, index: int) -> Tuple[np.ndarray, int]:
+        """Access a frame by index.
+
+        Args:
+            index: Integer index
+
+        Returns:
+            Tuple of (frame, timestamp_ns)
+        """
+        if not isinstance(index, int):
+            raise NotImplementedError(f"Only integer indexing is supported, got {type(index)}")
+
+        self._load_timestamps()
+
+        if index < 0:  # Handle negative indexing
+            index += len(self._timestamps)
+
+        if not 0 <= index < len(self._timestamps):
+            raise IndexError(f"Index {index} out of range")
+
+        self._open_video()
+        self._container.seek(0, stream=self._stream)
+
+        frame_count = 0
+        for packet in self._container.demux(self._stream):
+            for frame in packet.decode():
+                if frame_count == index:
+                    arr = frame.to_ndarray(format='rgb24')
+                    return (arr, self._timestamps[index])
+                frame_count += 1
+
+        raise IndexError(f"Could not decode frame {index}")
