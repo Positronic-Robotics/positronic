@@ -76,29 +76,6 @@ class _ArraySignal(Signal[T]):
         end_idx = int(np.searchsorted(self._timestamps, end_ts_ns, side='left'))
         return _ArraySignal(self._timestamps[start_idx:end_idx], self._values[start_idx:end_idx])
 
-    def _stepped_view(self, start_ts_ns: int, end_ts_ns: int, step_ts_ns: int):
-        if len(self) == 0 or step_ts_ns <= 0:
-            return _ArraySignal(self._timestamps[:0], self._values[:0])
-
-        sampled_indices: list[int] = []
-        requested_timestamps: list[int] = []
-        ts = int(start_ts_ns)
-        first_ts = int(self._timestamps[0])
-        while ts < end_ts_ns:
-            if ts >= first_ts:
-                idx = int(np.searchsorted(self._timestamps, ts, side='right')) - 1
-                if 0 <= idx < len(self):
-                    sampled_indices.append(idx)
-                    requested_timestamps.append(int(ts))
-            ts += step_ts_ns
-
-        if not sampled_indices:
-            return _ArraySignal(self._timestamps[:0], self._values[:0])
-
-        idx_array = np.array(sampled_indices, dtype=np.int64)
-        req_ts_array = np.array(requested_timestamps, dtype=np.int64)
-        return _ArraySignal(req_ts_array, self._values[idx_array])
-
 
 class _TimeIndexer:
     """Helper class to implement the time property for Signal."""
@@ -119,33 +96,15 @@ class _TimeIndexer:
                 raise KeyError(f"No record at or before timestamp {key}")
 
             return (self.signal._values[idx], self.signal._timestamps[idx])
-        elif isinstance(key, slice):
-            start = key.start if key.start is not None else 0
-            stop = key.stop if key.stop is not None else np.inf
-            step = key.step
-
-            if step is None:
-                # Regular window query - return a view
-                return self.signal._window_view(start, stop)
-            else:
-                # Stepped query - create sampled view
-                return self.signal._stepped_view(start, stop, step)
         elif isinstance(key, (list, tuple, np.ndarray)):
             # Sample at arbitrary requested timestamps
             self.signal._load_data()
 
             req_ts = np.asarray(key)
-            if req_ts.size == 0:
-                return _ArraySignal(self.signal._timestamps[:0], self.signal._values[:0])
-
             if not np.issubdtype(req_ts.dtype, np.integer):
-                # Try a safe cast to int64
-                try:
-                    req_ts = req_ts.astype(np.int64)
-                except Exception as exc:
-                    raise TypeError(f"Invalid timestamp array dtype: {req_ts.dtype}") from exc
+                raise TypeError(f"Invalid timestamp array dtype: {req_ts.dtype}")
 
-            if len(self.signal._timestamps) == 0:
+            if req_ts.size == 0 or len(self.signal._timestamps) == 0:
                 return _ArraySignal(self.signal._timestamps[:0], self.signal._values[:0])
 
             # For each requested timestamp t, find index of value at or before t
@@ -154,6 +113,11 @@ class _TimeIndexer:
                 raise KeyError("No record at or before some of the requested timestamps")
 
             return _ArraySignal(req_ts, self.signal._values[pos])
+        elif isinstance(key, slice):
+            if key.start is None: raise ValueError("Slice start is required")  # noqa: E501, E701
+            if key.stop is None: raise ValueError("Slice stop is required")  # noqa: E501, E701
+            if key.step is None or key.step <= 0: raise ValueError("Slice step must be positive")  # noqa: E501, E701
+            return self[np.arange(key.start, key.stop, key.step, dtype=np.int64)]
         else:
             raise TypeError(f"Invalid key type: {type(key)}")
 
@@ -205,10 +169,6 @@ class SimpleSignal(Signal[T]):
     def _window_view(self, start_ts_ns: int, end_ts_ns: int):
         """Create a zero-copy Signal view from a time window."""
         return self._as_array_signal()._window_view(start_ts_ns, end_ts_ns)
-
-    def _stepped_view(self, start_ts_ns: int, end_ts_ns: int, step_ts_ns: int):
-        """Create a Signal with values sampled at regular intervals."""
-        return self._as_array_signal()._stepped_view(start_ts_ns, end_ts_ns, step_ts_ns)
 
 
 class SimpleSignalWriter(SignalWriter[T]):

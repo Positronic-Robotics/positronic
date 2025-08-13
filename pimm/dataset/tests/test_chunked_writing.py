@@ -38,8 +38,7 @@ def test_large_dataset_chunked_writing():
         np.testing.assert_array_equal(value, np.array([5, 10, 15], dtype=np.float32))
         assert ts == 5000000
 
-        # Test time window query
-        view = reader.time[0:9000001]  # First 10 records (0-9), end is exclusive
+        view = reader.time[0:9000001:1000000]
         assert len(view) == 10, f"Expected 10 values, got {len(view)}"
 
         # Verify the window content using index access

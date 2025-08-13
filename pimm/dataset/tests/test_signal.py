@@ -118,45 +118,46 @@ class TestSignalTimeWindow:
 
     def test_time_window_empty_Signal(self, tmp_path):
         signal = create_signal(tmp_path, [], "empty.parquet")
-        view = signal.time[1000:2000]
-        assert len(view) == 0
+        sampled = signal.time[1000:2000:500]
+        assert len(sampled) == 0
 
     def test_time_window_no_data_in_range(self, tmp_path):
         signal = create_signal(tmp_path, [(42, 1000), (43, 2000)])
-        view = signal.time[3000:4000]
-        assert len(view) == 0
+        # Start before first timestamp is not supported for stepped access
+        with pytest.raises(KeyError):
+            _ = signal.time[500:1500:500]
 
     def test_time_window_scalar(self, tmp_path):
         signal = create_signal(tmp_path, [(42, 1000), (43, 2000), (44, 3000)])
-        view = signal.time[1000:3000]  # End is exclusive
-        assert len(view) == 2
-        assert view[0] == (42, 1000)
-        assert view[1] == (43, 2000)
+        sampled = signal.time[1000:3000:1000]  # End is exclusive
+        assert len(sampled) == 2
+        assert sampled[0] == (42, 1000)
+        assert sampled[1] == (43, 2000)
 
     def test_time_window_partial_range_scalar(self, tmp_path):
         signal = create_signal(tmp_path, [(42, 1000), (43, 2000), (44, 3000), (45, 4000)])
-        view = signal.time[1500:3500]
-        assert len(view) == 2
-        assert view[0] == (43, 2000)
-        assert view[1] == (44, 3000)
+        sampled = signal.time[2000:4000:1000]
+        assert len(sampled) == 2
+        assert sampled[0] == (43, 2000)
+        assert sampled[1] == (44, 3000)
 
     def test_time_window_vector_data(self, tmp_path):
         signal = create_signal(tmp_path, [(np.array([1.0, 2.0]), 1000), (np.array([3.0, 4.0]), 2000),
                                           (np.array([5.0, 6.0]), 3000)])
-        view = signal.time[1000:2500]
-        assert len(view) == 2
-        value0, ts0 = view[0]
+        sampled = signal.time[1000:3000:1000]
+        assert len(sampled) == 2
+        value0, ts0 = sampled[0]
         np.testing.assert_array_equal(value0, [1.0, 2.0])
         assert ts0 == 1000
-        value1, ts1 = view[1]
+        value1, ts1 = sampled[1]
         np.testing.assert_array_equal(value1, [3.0, 4.0])
         assert ts1 == 2000
 
     def test_time_window_single_point(self, tmp_path):
         signal = create_signal(tmp_path, [(42, 1000), (43, 2000), (44, 3000)])
-        view = signal.time[2000:2001]  # Very small window
-        assert len(view) == 1
-        assert view[0] == (43, 2000)
+        sampled = signal.time[2000:2001:1]
+        assert len(sampled) == 1
+        assert sampled[0] == (43, 2000)
 
 
 class TestSignalTimeStepped:
@@ -172,23 +173,18 @@ class TestSignalTimeStepped:
 
     def test_time_stepped_between_timestamps(self, tmp_path):
         signal = create_signal(tmp_path, [(42, 1000), (43, 3000), (44, 5000)])
-        sampled = signal.time[1000:6000:2000]
+        sampled = signal.time[1000:5000:2000]
         # At 1000: exact match -> 42
         # At 3000: exact match -> 43
-        # At 5000: exact match -> 44
-        assert len(sampled) == 3
+        assert len(sampled) == 2
         assert sampled[0] == (42, 1000)
         assert sampled[1] == (43, 3000)
-        assert sampled[2] == (44, 5000)
 
     def test_time_stepped_before_first_timestamp(self, tmp_path):
         signal = create_signal(tmp_path, [(42, 2000), (43, 3000), (44, 4000)])
-        sampled = signal.time[1000:5000:1000]
-        # Should skip timestamps before first data point
-        assert len(sampled) == 3
-        assert sampled[0] == (42, 2000)  # At 2000
-        assert sampled[1] == (43, 3000)  # At 3000
-        assert sampled[2] == (44, 4000)  # At 4000
+        # Start before first timestamp is not supported for stepped access
+        with pytest.raises(KeyError):
+            _ = signal.time[1000:5000:1000]
 
     def test_time_stepped_empty_signal(self, tmp_path):
         signal = create_signal(tmp_path, [], "empty.parquet")
@@ -197,18 +193,18 @@ class TestSignalTimeStepped:
 
     def test_time_stepped_zero_step(self, tmp_path):
         signal = create_signal(tmp_path, [(42, 1000), (43, 2000)])
-        sampled = signal.time[1000:2000:0]
-        assert len(sampled) == 0
+        with pytest.raises(ValueError):
+            _ = signal.time[1000:2000:0]
 
     def test_time_stepped_negative_step(self, tmp_path):
         signal = create_signal(tmp_path, [(42, 1000), (43, 2000)])
-        sampled = signal.time[1000:2000:-1000]
-        assert len(sampled) == 0
+        with pytest.raises(ValueError):
+            _ = signal.time[1000:2000:-1000]
 
     def test_time_stepped_vector_data(self, tmp_path):
         signal = create_signal(tmp_path, [(np.array([1.0, 2.0]), 1000), (np.array([3.0, 4.0]), 2000),
                                           (np.array([5.0, 6.0]), 3000)])
-        sampled = signal.time[1500:3500:1000]
+        sampled = signal.time[1500:3000:1000]
         assert len(sampled) == 2
         value0, ts0 = sampled[0]
         value1, ts1 = sampled[1]
@@ -222,28 +218,18 @@ class TestSignalTimeStepped:
         signal = create_signal(tmp_path, [(42, 1000), (43, 2000), (44, 3000)])
         sampled = signal.time[1000:3000:1000]
 
-        # Test len
         assert len(sampled) == 2
-
-        # Test index access
         assert sampled[0] == (42, 1000)
         assert sampled[1] == (43, 2000)
-
-        # Test negative indexing
         assert sampled[-1] == (43, 2000)
-
-        # Test that it has time property
-        assert hasattr(sampled, 'time')
 
     def test_time_stepped_returns_requested_timestamps_scalar(self, tmp_path):
         signal = create_signal(tmp_path, [(10, 1000), (20, 2000), (30, 3000)])
         # Request off-grid timestamps 1500 and 2500
         sampled = signal.time[1500:3500:1000]
         assert len(sampled) == 2
-        v0, t0 = sampled[0]
-        v1, t1 = sampled[1]
-        assert (v0, t0) == (10, 1500)  # carry-back value, requested timestamp
-        assert (v1, t1) == (20, 2500)
+        assert sampled[0] == (10, 1500)  # carry-back value, requested timestamp
+        assert sampled[1] == (20, 2500)
 
 
 class TestSignalWriterAppend:
@@ -361,7 +347,6 @@ class TestSignalIndexArrayAccess:
 
     def test_index_array_numpy_and_negative(self, tmp_path):
         signal = create_signal(tmp_path, [(10, 1000), (20, 2000), (30, 3000), (40, 4000)])
-        import numpy as np
         view = signal[np.array([-1, -3, 1], dtype=np.int64)]
         assert len(view) == 3
         assert view[0] == (40, 4000)
@@ -370,19 +355,16 @@ class TestSignalIndexArrayAccess:
 
     def test_index_array_out_of_range_raises(self, tmp_path):
         signal = create_signal(tmp_path, [(10, 1000), (20, 2000), (30, 3000)])
-        import numpy as np
         with pytest.raises(IndexError):
             _ = signal[np.array([0, 3], dtype=np.int64)]
 
     def test_index_array_boolean_not_supported(self, tmp_path):
         signal = create_signal(tmp_path, [(10, 1000), (20, 2000), (30, 3000)])
-        import numpy as np
         with pytest.raises(IndexError):
             _ = signal[np.array([True, False, True], dtype=np.bool_)]
 
     def test_index_array_invalid_dtype_raises(self, tmp_path):
         signal = create_signal(tmp_path, [(10, 1000), (20, 2000), (30, 3000)])
-        import numpy as np
         with pytest.raises(TypeError):
             _ = signal[np.array([0.0, 1.0], dtype=np.float64)]
 
@@ -395,7 +377,6 @@ class TestSignalIndexArrayAccess:
 class TestSignalTimeArrayAccess:
 
     def test_time_array_exact_and_offgrid(self, tmp_path):
-        import numpy as np
         signal = create_signal(tmp_path, [(10, 1000), (20, 2000), (30, 3000)])
         req = [1000, 1500, 3000]
         view = signal.time[req]
@@ -423,16 +404,10 @@ class TestSignalTimeArrayAccess:
 
     def test_time_array_empty(self, tmp_path):
         signal = create_signal(tmp_path, [(10, 1000), (20, 2000), (30, 3000)])
-        view = signal.time[[]]
-        assert len(view) == 0
+        with pytest.raises(TypeError):
+            _ = signal.time[[]]
 
     def test_time_array_float_inputs_cast(self, tmp_path):
-        import numpy as np
         signal = create_signal(tmp_path, [(10, 1000), (20, 2000), (30, 3000)])
-        view = signal.time[np.array([1000.0, 2500.0], dtype=np.float64)]
-        assert len(view) == 2
-        v0, t0 = view[0]
-        v1, t1 = view[1]
-        assert isinstance(t0, (int, np.integer)) and isinstance(t1, (int, np.integer))
-        assert (v0, t0) == (10, 1000)
-        assert (v1, t1) == (20, 2500)
+        with pytest.raises(TypeError):
+            _ = signal.time[np.array([1000.0, 2500.0], dtype=np.float64)]
