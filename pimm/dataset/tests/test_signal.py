@@ -413,3 +413,59 @@ class TestSignalTimeArrayAccess:
         signal = create_signal(tmp_path, [(10, 1000), (20, 2000), (30, 3000)])
         with pytest.raises(TypeError):
             _ = signal.time[np.array([1000.0, 2500.0], dtype=np.float64)]
+
+
+class TestSignalTimeWindowNoStep:
+
+    def test_time_window_nostep_basic_scalar(self, tmp_path):
+        signal = create_signal(tmp_path, [(42, 1000), (43, 2000), (44, 3000), (45, 4000)])
+        view = signal.time[1500:3500]
+        assert len(view) == 2
+        assert view[0] == (43, 2000)
+        assert view[1] == (44, 3000)
+
+    def test_time_window_nostep_inclusive_start_exclusive_end(self, tmp_path):
+        signal = create_signal(tmp_path, [(42, 1000), (43, 2000), (44, 3000), (45, 4000)])
+        view = signal.time[1000:3000]
+        assert len(view) == 2
+        assert view[0] == (42, 1000)
+        assert view[1] == (43, 2000)
+
+    def test_time_window_nostep_outside_bounds(self, tmp_path):
+        signal = create_signal(tmp_path, [(42, 1000), (43, 2000), (44, 3000), (45, 4000)])
+        full_view = signal.time[500:5000]
+        assert len(full_view) == 4
+        assert full_view[0] == (42, 1000)
+        assert full_view[-1] == (45, 4000)
+
+        empty1 = signal.time[100:900]
+        assert len(empty1) == 0
+        empty2 = signal.time[4500:5000]
+        assert len(empty2) == 0
+
+    def test_time_window_nostep_vector_data(self, tmp_path):
+        signal = create_signal(
+            tmp_path,
+            [
+                (np.array([1.0, 2.0]), 1000),
+                (np.array([3.0, 4.0]), 2000),
+                (np.array([5.0, 6.0]), 3000),
+            ],
+        )
+        view = signal.time[1500:3000]
+        assert len(view) == 1
+        value, ts = view[0]
+        np.testing.assert_array_equal(value, [3.0, 4.0])
+        assert ts == 2000
+
+    def test_time_window_nostep_empty_signal(self, tmp_path):
+        signal = create_signal(tmp_path, [], "empty.parquet")
+        view = signal.time[1000:2000]
+        assert len(view) == 0
+
+    def test_time_window_nostep_missing_start_or_stop_raises(self, tmp_path):
+        signal = create_signal(tmp_path, [(42, 1000), (43, 2000)])
+        with pytest.raises(ValueError):
+            _ = signal.time[:2000]
+        with pytest.raises(ValueError):
+            _ = signal.time[1000:]

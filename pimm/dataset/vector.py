@@ -61,6 +61,14 @@ class _ArraySignal(Signal[T]):
         else:
             raise TypeError(f"Invalid index type: {type(index_or_slice)}")
 
+    def _window_view(self, start_ts_ns: int, end_ts_ns: int) -> "Signal[T]":
+        if len(self) == 0:
+            return _ArraySignal(self._timestamps[:0], self._values[:0])
+
+        start_idx = int(np.searchsorted(self._timestamps, start_ts_ns, side='left'))
+        end_idx = int(np.searchsorted(self._timestamps, end_ts_ns, side='left'))
+        return _ArraySignal(self._timestamps[start_idx:end_idx], self._values[start_idx:end_idx])
+
 
 class _TimeIndexer:
     """Helper class to implement the time property for Signal."""
@@ -98,8 +106,12 @@ class _TimeIndexer:
         elif isinstance(key, slice):
             if key.start is None: raise ValueError("Slice start is required")  # noqa: E501, E701
             if key.stop is None: raise ValueError("Slice stop is required")  # noqa: E501, E701
-            if key.step is None or key.step <= 0: raise ValueError("Slice step must be positive")  # noqa: E501, E701
-            return self[np.arange(key.start, key.stop, key.step, dtype=np.int64)]
+            if key.step is not None and key.step <= 0: raise ValueError("Slice step must be positive")  # noqa: E501, E701
+
+            if key.step is not None:
+                return self[np.arange(key.start, key.stop, key.step, dtype=np.int64)]
+            else:
+                return self.signal._window_view(key.start, key.stop)
         else:
             raise TypeError(f"Invalid key type: {type(key)}")
 
@@ -147,6 +159,10 @@ class SimpleSignal(Signal[T]):
     def __getitem__(self, index_or_slice):
         """Access the Signal data by index or slice."""
         return self._as_array_signal()[index_or_slice]
+
+    def _window_view(self, start_ts_ns: int, end_ts_ns: int) -> "Signal[T]":
+        """Create a zero-copy Signal view from a time window."""
+        return self._as_array_signal()._window_view(start_ts_ns, end_ts_ns)
 
 
 class SimpleSignalWriter(SignalWriter[T]):

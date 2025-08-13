@@ -24,7 +24,9 @@ class Signal[T]:
     # Access data by index or slice
     # signal[idx] returns (value, timestamp_ns) tuple
     # signal[start:end] returns a Signal view of the slice
-    def __getitem__(self, index_or_slice: int | slice) -> Tuple[T, int] | Signal[T]:
+    # signal[[i1, i2, ...]] returns a Signal view with the selected indices
+    # (boolean masks are not supported)
+    def __getitem__(self, index_or_slice: int | slice | Sequence[int] | np.ndarray) -> Tuple[T, int] | Signal[T]:
         pass
 
     # Timestamp-based indexer property for accessing data by time:
@@ -32,10 +34,13 @@ class Signal[T]:
     # * signal.time[start_ts:end_ts] returns Signal view for time window [start_ts, end_ts).
     # * signal.time[start:end:step] returns a Signal sampled at requested timestamps:
     #     t_i = start + i * step (for i >= 0 while t_i < end).
-    #     Each returned element is (value_at_or_before_t_i, t_i). If t_i precedes the first
-    #     record in the Signal it is skipped. step <= 0 yields an empty result.
+    #     Each returned element is (value_at_or_before_t_i, t_i). If any requested timestamp
+    #     precedes the first record, a KeyError is raised. step must be positive.
+    # * signal.time[[t1, t2, ...]] returns a Signal sampled at the provided timestamps.
+    #     Each element is (value_at_or_before_t_i, t_i). Raises KeyError if any t_i precedes
+    #     the first record.
     @property
-    def time(self) -> Sequence[Tuple[T, int]]:
+    def time(self):
         pass
 
 class SignalWriter[T]:
@@ -64,4 +69,8 @@ All the classes are lazy, in the sense that they don't perform any IO or computa
 
 When accessing data via slices (either index-based like `signal[0:100]` or time-based like `signal.time[start_ts:end_ts]`), the library returns Signal views that share the underlying data with the original Signal. These views have the same API as the original Signal and provide zero-copy access to the data.
 
-For stepped time slicing `signal.time[start:end:step]`, the returned Signal contains samples located at the requested timestamps t_i = start + i * step (end-exclusive), as described above in the public API section. NOTE: stepped time slicing creates the copy of data, so it is not a "free" operation.
+For stepped time slicing `signal.time[start:end:step]`, the returned Signal contains samples located at the requested timestamps t_i = start + i * step (end-exclusive), as described above in the public API section. NOTE: stepped time slicing creates a copy of data, so it is not a "free" operation.
+
+Both index and time indexing supports arrays access:
+- Index-based arrays: `signal[[i1, i2, ...]]` or `signal[np.array([i1, i2, ...])]` returns a Signal view containing the records at the specified indices. Boolean masks are not supported.
+- Time-based arrays: `signal.time[[t1, t2, ...]]` returns a Signal sampled at the provided timestamps. Each element is `(value_at_or_before_t_i, t_i)`. A KeyError is raised if any requested timestamp precedes the first record. Implementation will allocate new arrays internally and therefore is not a zero-copy operation.
