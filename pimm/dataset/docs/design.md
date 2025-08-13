@@ -3,7 +3,10 @@
 This is a library for recording, storing, sharing and using robotic datasets. We differentiate between recording and storing the data and using it from with PyTorch when training. The first part is represented by data model while the second one is the view of that model.
 
 ## Core concepts
-* __Signal__ – sequence of typed data with every element of this sequence being associated with one or more timestamps. Within one Signal all the elements must have the same size (shape) and dtype, and we are checking for it. Three types are currently supported
+__Signal__ – strictly typed stepwise function of time, represented as a sequence of `(data, ts)` elements, strictily ordered by `ts`.
+The value at time `t` is defined as: $f(t) = \text{data}_i$ where $i = \max\{j : \text{ts}_j \leq t\}$. For $t < \text{ts}_0$ the function is not defined.
+
+Three types are currently supported.
   * __scalar__ of any supported type
   * __vector__ – of any length
   * __image__ – 3-channel images (of uint8 dtype)
