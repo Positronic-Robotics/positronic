@@ -70,6 +70,8 @@ Every sequence is stored in one parquet file, with 'timestamp' and 'value' colum
 
 All the classes are lazy, in the sense that they don't perform any IO or computations until requested. The `SimpleSignal` keeps all the data in numpy arrays in memory after loading from the parquet file. Once the data is loaded into memory, we provide efficient access through views.
 
+#### Access semantics
+
 When accessing data via slices (either index-based like `signal[0:100]` or time-based like `signal.time[start_ts:end_ts]`), the library returns Signal views that share the underlying data with the original Signal. These views have the same API as the original Signal and provide zero-copy access to the data.
 
 For stepped time slicing `signal.time[start:end:step]`, the returned Signal contains samples located at the requested timestamps t_i = start + i * step (end-exclusive), as described above in the public API section. NOTE: stepped time slicing creates a copy of data, so it is not a "free" operation.
@@ -77,3 +79,47 @@ For stepped time slicing `signal.time[start:end:step]`, the returned Signal cont
 Both index and time indexing supports arrays access:
 - Index-based arrays: `signal[[i1, i2, ...]]` or `signal[np.array([i1, i2, ...])]` returns a Signal view containing the records at the specified indices. Boolean masks are not supported.
 - Time-based arrays: `signal.time[[t1, t2, ...]]` returns a Signal sampled at the provided timestamps. Each element is `(value_at_or_before_t_i, t_i)`. A KeyError is raised if any requested timestamp precedes the first record. Implementation will allocate new arrays internally and therefore is not a zero-copy operation.
+
+### Video
+When implementing `VideoSignal` we are balancing the following trade-offs:
+
+* The disk size – the less the better,
+* The performance of random access to any given frame – must be a constant time,
+* Memory footprint – must also be constant for video data (timestamps are loaded into the memory)
+* User should have control over the size / performance trade off.
+
+We store image streams as a **separate video file** (e.g., MP4/MKV with H.264/H.265) and keep **two Parquet indices** (`frames` and `key_frames`) for fast random access. All timestamps are `timestamp('ns')` (PTS scaled to ns). Files are append-only.
+
+Currently we use only one video file per `VideoSignal`, though in the future we might support multiple files.
+
+#### Schemas
+
+```text
+frames.parquet
+  ts_ns    : timestamp('ns')   # presentation timestamp of the frame
+  offset   : int64             # byte offset of the packet in the video file
+
+keyframes.parquet
+  ts_ns     : timestamp('ns')  # timestamp of keyframe (I-frame)
+  frame_idx : int64            # index into frames.parquet (row number)
+  offset    : int64            # byte offset of the keyframe packet in video.bin
+```
+* Both frames and keyframes are strictly sorted by `ts_ns`.
+* Every row in `keyframes.parquet` corresponds to a row in `frames.parquet`, but not vice versa.
+* Offsets point to exact packet starts in video file.
+
+#### Access semantics
+
+Access interface is the same as for `SimpleSignals`, i.e. both index and time interfaces support plain integers, slices and arrays.
+We went an extra mile for you, and made all access patterns zero-copy over images, i.e. all of them are views of original data
+(though the timestamps are copied).
+
+Returned frame type is **decoded uint8 image (H×W×3)**. Decoding is on-demand; memory stays O(1). Grayscale (HxWx1) images are not supported yet.
+
+#### Recording
+`VideoSignalWriter` takes the names of the files to write and encoding settings, with the most important ones being codec and GOP (Group of Pictures, distance between keyframes) size.
+
+* Writer encodes packets to video file.
+* For every packet, append a row to `frames` with `(ts_ns, offset)`.
+* If packet is a keyframe, also append to `keyframes` `(ts_ns, frame_idx, offset)`.
+* Index files are flushed periodically; on open, the library verifies that the number of frames in video and in `frames` are equal. It warns if they are not equal, and provides access to the minimum of the two.
