@@ -155,64 +155,6 @@ def _perform_umi_registration(data):
     return transform
 
 
-def registration(
-    waypoints: RelativeTrajectory,
-    robot_command: ir.SignalEmitter,
-    robot_position: ir.SignalReader,
-    controller_positions: ir.SignalReader,
-    start_movement: ir.SignalReader,
-):
-
-    def _registration(should_stop: ir.SignalReader, clock: ir.Clock):
-        current_point = 0
-        move_throttler = ir.utils.RateLimiter(clock=clock, every_sec=2.0)
-        data = []
-
-        # wait for controller and robots to be ready
-        print("Waiting for controller and robots to be ready...")
-        while not should_stop.value:
-            if robot_position.read() is None:
-                yield ir.Sleep(0.001)
-                continue
-
-            if controller_positions.read() is None:
-                yield ir.Sleep(0.001)
-                continue
-
-            break
-
-        start = ir.DefaultReader(start_movement, False)
-        print("Everything is ready...")
-
-        while not should_stop.value:
-            if start.value:
-                yield ir.Sleep(0.1)
-                continue
-
-            if move_throttler.wait_time() <= 0:
-                robot_command.emit(roboarm_command.CartesianMove(waypoints[current_point]))
-                current_point += 1
-                if current_point >= len(waypoints):
-                    break
-
-            controller_pos = controller_positions.value
-
-            assert controller_pos['left'] is not None, "Left controller position is lost"
-            assert controller_pos['right'] is not None, "Right controller position is lost"
-
-            data.append({
-                'left_gripper': controller_pos['left'],
-                'right_gripper': controller_pos['right'],
-                'robot_position': robot_position.value.ee_pose,
-            })
-
-            yield ir.Sleep(0.001)
-
-        _perform_umi_registration(data)
-
-    return _registration
-
-
 @cfn.config(webxr=pimm.cfg.webxr.webxr, robot_arm=pimm.cfg.hardware.roboarm.so101)
 def perform_registration(webxr, robot_arm):
     """
@@ -224,24 +166,51 @@ def perform_registration(webxr, robot_arm):
     3. Install UMI gripper to the robot
     4. Press S button on keyboard and stay near the robot
     """
+    current_point = 0
+    data = []
 
     with ir.World() as w:
         commands, robot_arm.commands = w.mp_pipe()
         robot_arm.state, state = w.mp_pipe()
         webxr.controller_positions, controller_positions = w.mp_pipe()
-        start_movement, start_movement_reader = w.local_pipe()
 
-        registration_fn = registration(WAYPOINTS, commands, state, controller_positions, start_movement_reader)
-        w.start_in_subprocess(webxr.run, robot_arm.run, registration_fn)
+        w.start_in_subprocess(webxr.run, robot_arm.run)
+
+        move_throttler = ir.utils.RateLimiter(clock=ir.world.SystemClock(), every_sec=2.0)
 
         while not w.should_stop:
-            print("Press Enter after you attach the UMI gripper to the robot...")
-            input()
-            start_movement.emit(True)
+            if state.read() is None:
+                time.sleep(0.001)
+                continue
+            if controller_positions.read() is None:
+                time.sleep(0.001)
+                continue
             break
 
+        print("Press Enter after you attach the UMI gripper to the robot...")
+        input()
+
         while not w.should_stop:
-            time.sleep(1.0)
+            if move_throttler.wait_time() <= 0:
+                commands.emit(roboarm_command.CartesianMove(WAYPOINTS[current_point]))
+                current_point += 1
+                if current_point >= len(WAYPOINTS):
+                    break
+
+            controller_pos = controller_positions.value
+
+            assert controller_pos['left'] is not None, "Left controller position is lost"
+            assert controller_pos['right'] is not None, "Right controller position is lost"
+
+            data.append({
+                'left_gripper': controller_pos['left'],
+                'right_gripper': controller_pos['right'],
+                'robot_position': state.value.ee_pose,
+            })
+
+            time.sleep(0.001)
+
+        _perform_umi_registration(data)
 
 
 if __name__ == "__main__":

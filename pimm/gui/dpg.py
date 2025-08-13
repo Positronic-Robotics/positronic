@@ -5,8 +5,6 @@ import numpy as np
 
 import ironic2 as ir
 
-from ironic.utils import FPSCounter
-
 
 def _get_down_keys() -> List[int]:
     all_keys = [getattr(dpg, key) for key in dir(dpg) if key.startswith("mvKey_")]
@@ -59,8 +57,8 @@ class DearpyguiUi:
 
     def run(self, should_stop: ir.SignalReader, clock: ir.Clock):
         self.init()
-        fps_counter = FPSCounter("UI")
-        frame_fps_counter = FPSCounter("Frame")
+        fps_counter = ir.utils.RateCounter("UI")
+        frame_fps_counter = ir.utils.RateCounter("Frame")
 
         info_reader = ir.DefaultReader(self.info, "")
 

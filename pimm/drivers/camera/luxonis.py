@@ -2,8 +2,6 @@ from typing import Iterator
 import ironic2 as ir
 import depthai as dai
 
-from ironic.utils import FPSCounter
-
 
 # TODO: make this configurable
 class LuxonisCamera:
@@ -27,7 +25,7 @@ class LuxonisCamera:
         xoutColor.setStreamName("image")
 
         camColor.isp.link(xoutColor.input)
-        fps_counter = FPSCounter('luxonis')
+        fps_counter = ir.utils.RateCounter('luxonis')
 
         with dai.Device(pipeline, maxUsbSpeed=dai.UsbSpeed.SUPER_PLUS) as device:
             queue = device.getOutputQueue("image", 8, blocking=False)

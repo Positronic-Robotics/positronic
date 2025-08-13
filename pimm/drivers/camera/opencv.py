@@ -4,7 +4,6 @@ from typing import Tuple
 import cv2
 
 import ironic2 as ir
-from ironic.utils import FPSCounter
 
 
 class OpenCVCamera:
@@ -25,7 +24,7 @@ class OpenCVCamera:
         if not cap.isOpened():
             raise RuntimeError(f"Failed to open camera {self.camera_id}")
 
-        fps_counter = FPSCounter('OpenCV Camera')
+        fps_counter = ir.utils.RateCounter('OpenCV Camera')
 
         while not should_stop.value:
             ret, frame = cap.read()
@@ -56,7 +55,7 @@ if __name__ == "__main__":
 
         def run(self, should_stop: ir.SignalReader, clock: ir.Clock):
             print(f"Writing to {self.filename}")
-            fps_counter = FPSCounter('VideoWriter')
+            fps_counter = ir.utils.RateCounter('VideoWriter')
             with av.open(self.filename, mode='w', format='mp4') as container:
                 stream = container.add_stream(self.codec, rate=self.fps)
                 stream.pix_fmt = 'yuv420p'

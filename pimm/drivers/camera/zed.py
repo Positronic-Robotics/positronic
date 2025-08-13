@@ -4,7 +4,6 @@ import numpy as np
 import pyzed.sl as sl
 
 import ironic2 as ir
-from ironic.utils import FPSCounter
 
 
 class SLCamera:
@@ -48,7 +47,7 @@ class SLCamera:
         self.depth_mask = depth_mask
 
     def run(self, should_stop: ir.SignalReader, clock: ir.Clock) -> Iterator[ir.Sleep]:
-        fps_counter = FPSCounter("Camera")
+        fps_counter = ir.utils.RateCounter("Camera")
         zed = sl.Camera()
         zed.open(self.init_params)
 
