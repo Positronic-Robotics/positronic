@@ -3,6 +3,7 @@ from typing import Any, Iterator, Mapping, Sequence
 import numpy as np
 import tqdm
 import rerun as rr
+import torch
 
 import configuronic as cfn
 import ironic2 as ir
@@ -19,7 +20,6 @@ import pimm.cfg.hardware.gripper
 import pimm.cfg.hardware.camera
 import pimm.cfg.simulator
 import pimm.cfg.inference.state
-
 
 
 def rerun_log_observation(ts, obs):

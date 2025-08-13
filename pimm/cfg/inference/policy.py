@@ -33,10 +33,6 @@ def _get_pi0_fast_policy(checkpoint_path: str):
     policy = PI0FASTPolicy.from_pretrained(checkpoint_path, strict=True)
     return policy
 
-def _get_pi0_policy(host: str = "0.0.0.0", port: int = 8000):
-    from pimm.inference.pi0 import Pi0Policy
-    return Pi0Policy(host, port)
-
 
 act = cfgc.Config(_get_act_policy, use_temporal_ensembler=False)
 diffusion = cfgc.Config(_get_diffusion_policy)
