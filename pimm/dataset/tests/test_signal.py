@@ -93,9 +93,17 @@ class TestSignalIndexAccess:
         assert view[1] == (45, 4000)
 
     def test_index_slice_step_not_supported(self, tmp_path):
+        signal = create_signal(tmp_path, [(42, 1000), (43, 2000), (44, 3000), (45, 4000), (46, 5000)])
+        view = signal[0:5:2]
+        assert len(view) == 3
+        assert view[0] == (42, 1000)
+        assert view[1] == (44, 3000)
+        assert view[2] == (46, 5000)
+
+    def test_index_slice_zero_or_negative_step(self, tmp_path):
         signal = create_signal(tmp_path, [(42, 1000), (43, 2000), (44, 3000)])
-        with pytest.raises(ValueError, match="Step slicing not supported"):
-            signal[0:3:2]
+        assert len(signal[0:3:-1]) == 0
+        assert len(signal[2:0:-1]) == 0
 
     def test_nested_view_slicing(self, tmp_path):
         signal = create_signal(tmp_path, [(42, 1000), (43, 2000), (44, 3000), (45, 4000), (46, 5000)])

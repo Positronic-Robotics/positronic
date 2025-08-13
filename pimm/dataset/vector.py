@@ -43,9 +43,13 @@ class _ArraySignal(Signal[T]):
             return (self._values[idx], self._timestamps[idx])
         elif isinstance(index_or_slice, slice):
             start, stop, step = index_or_slice.indices(len(self))
-            if step != 1:
-                raise ValueError("Step slicing not supported for index-based slicing")
-            return _ArraySignal(self._timestamps[start:stop], self._values[start:stop])
+            # For index-based slicing, support positive step sizes. Zero or negative step
+            # yields an empty result to keep timestamps in ascending order for time ops.
+            if step is None:
+                step = 1
+            if step <= 0:
+                return _ArraySignal(self._timestamps[:0], self._values[:0])
+            return _ArraySignal(self._timestamps[start:stop:step], self._values[start:stop:step])
         else:
             raise TypeError(f"Invalid index type: {type(index_or_slice)}")
 
