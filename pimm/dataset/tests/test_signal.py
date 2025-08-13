@@ -102,8 +102,10 @@ class TestSignalIndexAccess:
 
     def test_index_slice_zero_or_negative_step(self, tmp_path):
         signal = create_signal(tmp_path, [(42, 1000), (43, 2000), (44, 3000)])
-        assert len(signal[0:3:-1]) == 0
-        assert len(signal[2:0:-1]) == 0
+        with pytest.raises(ValueError):
+            _ = signal[0:3:-1]
+        with pytest.raises(ValueError):
+            _ = signal[2:0:-1]
 
     def test_nested_view_slicing(self, tmp_path):
         signal = create_signal(tmp_path, [(42, 1000), (43, 2000), (44, 3000), (45, 4000), (46, 5000)])

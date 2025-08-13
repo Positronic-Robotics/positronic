@@ -22,11 +22,10 @@ class _ArraySignal(Signal[T]):
         self._time_indexer = _TimeIndexer(self)
 
     def _load_data(self):
-        # Already in-memory
-        return None
+        return None  # Already in-memory
 
     def __len__(self) -> int:
-        return int(self._timestamps.shape[0])
+        return len(self._timestamps)
 
     @property
     def time(self):
@@ -34,25 +33,19 @@ class _ArraySignal(Signal[T]):
 
     def __getitem__(self, index_or_slice):
         if isinstance(index_or_slice, int):
-            length = len(self)
             idx = index_or_slice
             if idx < 0:
-                idx = length + idx
-            if idx < 0 or idx >= length:
+                idx += len(self)
+            if not 0 <= idx < len(self):
                 raise IndexError(f"Index {index_or_slice} out of range")
             return (self._values[idx], self._timestamps[idx])
         elif isinstance(index_or_slice, slice):
             start, stop, step = index_or_slice.indices(len(self))
-            # For index-based slicing, support positive step sizes. Zero or negative step
-            # yields an empty result to keep timestamps in ascending order for time ops.
-            if step is None:
-                step = 1
             if step <= 0:
-                return _ArraySignal(self._timestamps[:0], self._values[:0])
+                raise ValueError("Slice step must be positive")
             return _ArraySignal(self._timestamps[start:stop:step], self._values[start:stop:step])
         elif isinstance(index_or_slice, (list, tuple, np.ndarray)):
             # Support fancy indexing by integer arrays/lists and boolean masks
-            length = len(self)
             idx_array = np.asarray(index_or_slice)
 
             if idx_array.size == 0:
@@ -68,14 +61,6 @@ class _ArraySignal(Signal[T]):
         else:
             raise TypeError(f"Invalid index type: {type(index_or_slice)}")
 
-    def _window_view(self, start_ts_ns: int, end_ts_ns: int):
-        if len(self) == 0:
-            return _ArraySignal(self._timestamps[:0], self._values[:0])
-
-        start_idx = int(np.searchsorted(self._timestamps, start_ts_ns, side='left'))
-        end_idx = int(np.searchsorted(self._timestamps, end_ts_ns, side='left'))
-        return _ArraySignal(self._timestamps[start_idx:end_idx], self._values[start_idx:end_idx])
-
 
 class _TimeIndexer:
     """Helper class to implement the time property for Signal."""
@@ -87,9 +72,6 @@ class _TimeIndexer:
         if isinstance(key, int):
             # Ensure data is loaded for SimpleSignal instances
             self.signal._load_data()
-
-            if len(self.signal._timestamps) == 0 or key < self.signal._timestamps[0]:
-                raise KeyError(f"No record at or before timestamp {key}")
 
             idx = np.searchsorted(self.signal._timestamps, key, side='right') - 1
             if idx < 0:
@@ -166,10 +148,6 @@ class SimpleSignal(Signal[T]):
         """Access the Signal data by index or slice."""
         return self._as_array_signal()[index_or_slice]
 
-    def _window_view(self, start_ts_ns: int, end_ts_ns: int):
-        """Create a zero-copy Signal view from a time window."""
-        return self._as_array_signal()._window_view(start_ts_ns, end_ts_ns)
-
 
 class SimpleSignalWriter(SignalWriter[T]):
     """Parquet-based writer for scalar and vector Signals.
@@ -198,7 +176,7 @@ class SimpleSignalWriter(SignalWriter[T]):
 
     def _flush_chunk(self):
         """Write current chunk to parquet file."""
-        if len(self._timestamps) == 0:
+        if not self._timestamps:
             return
 
         timestamps_array = pa.array(self._timestamps, type=pa.int64())
@@ -222,11 +200,8 @@ class SimpleSignalWriter(SignalWriter[T]):
         # Normalize the input value without changing the declared generic type T
         value: object = data
         if isinstance(value, pa.Array):  # runtime conversion; keep linter happy via getattr
-            to_numpy = getattr(value, "to_numpy", None)
-            if callable(to_numpy):
-                value = to_numpy()
-
-        if isinstance(value, (list, tuple)):
+            value = value.to_numpy()
+        elif isinstance(value, (list, tuple)):
             value = np.array(value)
 
         if isinstance(value, np.ndarray):
@@ -263,7 +238,7 @@ class SimpleSignalWriter(SignalWriter[T]):
 
         if self._writer:
             self._writer.close()
-        elif len(self._timestamps) == 0 and self._writer is None:
+        else:
             # No data was ever written, create empty file with default schema
             schema = pa.schema([('timestamp', pa.int64()), ('value', pa.int64())])
             table = pa.table({'timestamp': [], 'value': []}, schema=schema)
