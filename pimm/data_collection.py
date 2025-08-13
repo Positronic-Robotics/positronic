@@ -292,13 +292,13 @@ def main(robot_arm: Any | None,
         if robot_arm is not None:
             robot_arm.state, data_collection.robot_state = world.shared_memory()
             data_collection.robot_commands, robot_arm.commands = world.mp_pipe(1)
-            world.start_in_subprocess(robot_arm.run)
+            if gripper is not robot_arm:
+                world.start_in_subprocess(robot_arm.run)
 
         if gripper is not None:
-            data_collection.target_grip_emitter, gripper.target_grip = world.mp_pipe(1)
-            gripper.grip, data_collection.gripper_state = world.local_pipe()
-            if gripper is not robot_arm:
-                world.start_in_subprocess(gripper.run)
+            data_collection.target_grip_emitter, gripper.target_grip = world.mp_pipe()
+            gripper.grip, data_collection.gripper_state = world.mp_pipe()
+            world.start_in_subprocess(gripper.run)
 
         if sound is not None:
             data_collection.sound_emitter, sound.wav_path = world.mp_pipe()

@@ -22,7 +22,7 @@ def kinova(ip, relative_dynamics_factor):
     return Robot(ip=ip, relative_dynamics_factor=relative_dynamics_factor)
 
 
-@cfn.config(motor_bus=pimm.cfg.hardware.motors.so101_leader)
+@cfn.config(motor_bus=pimm.cfg.hardware.motors.so101_follower)
 def so101(motor_bus):
     from pimm.drivers.roboarm.so101.driver import Robot
     return Robot(motor_bus=motor_bus)
