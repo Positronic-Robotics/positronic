@@ -128,6 +128,41 @@ class VideoSignalWriter(SignalWriter[np.ndarray]):
         pq.write_table(frames_table, self.frames_index_path)
 
 
+class _VideoTimeIndexer:
+    """Helper class to implement the time property for VideoSignal."""
+
+    def __init__(self, signal: "VideoSignal"):
+        self.signal = signal
+
+    def __getitem__(self, key: int) -> Tuple[np.ndarray, int]:
+        """Access frame by timestamp.
+
+        Args:
+            key: Timestamp in nanoseconds
+
+        Returns:
+            Tuple of (frame, timestamp_ns) for the frame at or before the given timestamp
+
+        Raises:
+            KeyError: If no frame exists at or before the given timestamp
+            NotImplementedError: If key is not an integer
+        """
+        if not isinstance(key, int):
+            raise NotImplementedError(f"Only single integer timestamp is supported, got {type(key)}")
+
+        # Load timestamps if needed
+        self.signal._load_timestamps()
+
+        # Binary search to find the frame at or before the given timestamp
+        idx = np.searchsorted(self.signal._timestamps, key, side='right') - 1
+
+        if idx < 0:
+            raise KeyError(f"No record at or before timestamp {key}")
+
+        # Use the signal's integer indexing to get the frame
+        return self.signal[idx]
+
+
 class VideoSignal(Signal[np.ndarray]):
     """Reader for video signals.
 
@@ -173,11 +208,8 @@ class VideoSignal(Signal[np.ndarray]):
 
     @property
     def time(self):
-        """Returns an indexer for accessing Signal data by timestamp.
-
-        Not implemented yet - will be added later.
-        """
-        raise NotImplementedError("Time indexing not yet implemented for VideoSignal")
+        """Returns an indexer for accessing Signal data by timestamp."""
+        return _VideoTimeIndexer(self)
 
     def __getitem__(self, index: int) -> Tuple[np.ndarray, int]:
         """Access a frame by index.
@@ -188,8 +220,9 @@ class VideoSignal(Signal[np.ndarray]):
         Returns:
             Tuple of (frame, timestamp_ns)
         """
-        if not isinstance(index, int):
+        if not isinstance(index, (int, np.integer)):
             raise NotImplementedError(f"Only integer indexing is supported, got {type(index)}")
+        index = int(index)
 
         self._load_timestamps()
 

@@ -217,3 +217,59 @@ class TestVideoSignalIndexAccess:
         assert ts1 == ts2 == 1000
         assert_frames_equal(frame1, expected_frame)
         assert_frames_equal(frame2, expected_frame)
+
+
+class TestVideoSignalTimeAccess:
+    """Test time-based access to VideoSignal."""
+
+    def test_empty_signal(self, video_paths):
+        """Test time access on empty signal."""
+        signal = create_video_signal(video_paths, [])
+
+        with pytest.raises(KeyError):
+            signal.time[1000]
+
+    def test_exact_timestamp(self, video_paths):
+        """Test accessing frame at exact timestamp."""
+        expected_frame = create_frame(value=128)
+        signal = create_video_signal(video_paths, [(expected_frame, 1000)])
+
+        frame, ts = signal.time[1000]
+        assert ts == 1000
+        assert_frames_equal(frame, expected_frame)
+
+    def test_between_timestamps(self, video_paths):
+        """Test accessing frame between timestamps."""
+        expected_frames = [create_frame(value=50), create_frame(value=128), create_frame(value=200)]
+        signal = create_video_signal(video_paths, [(expected_frames[0], 1000), (expected_frames[1], 2000),
+                                                   (expected_frames[2], 3000)])
+
+        # Access at 1500 should return frame at 1000
+        frame, ts = signal.time[1500]
+        assert ts == 1000
+        assert_frames_equal(frame, expected_frames[0])
+
+        # Access at 2500 should return frame at 2000
+        frame, ts = signal.time[2500]
+        assert ts == 2000
+        assert_frames_equal(frame, expected_frames[1])
+
+    def test_after_last_timestamp(self, video_paths):
+        """Test accessing frame after last timestamp."""
+        expected_frames = [create_frame(value=50), create_frame(value=128)]
+        signal = create_video_signal(video_paths, [(expected_frames[0], 1000), (expected_frames[1], 2000)])
+
+        # Access at 5000 should return last frame at 2000
+        frame, ts = signal.time[5000]
+        assert ts == 2000
+        assert_frames_equal(frame, expected_frames[1])
+
+    def test_before_first_timestamp(self, video_paths):
+        """Test that accessing before first timestamp raises KeyError."""
+        signal = create_video_signal(video_paths, [(create_frame(value=100), 1000)])
+
+        with pytest.raises(KeyError):
+            signal.time[999]
+
+        with pytest.raises(KeyError):
+            signal.time[500]
