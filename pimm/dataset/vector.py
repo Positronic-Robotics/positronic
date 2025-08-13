@@ -1,4 +1,4 @@
-from typing import TypeVar, Tuple, Sequence
+from typing import TypeVar
 import pyarrow as pa
 import pyarrow.parquet as pq
 import numpy as np
@@ -8,105 +8,73 @@ from .core import Signal, SignalWriter
 T = TypeVar('T')
 
 
-class SimpleSignalView(Signal[T]):
-    """A zero-copy view of a SimpleSignal with sliced data."""
+class ArraySignal(Signal[T]):
+    """An in-memory, array-backed Signal implementation.
 
-    def __init__(self, parent_signal, start_idx: int, end_idx: int):
-        """Create a view over parent signal's data.
+    - Index slicing returns zero-copy views
+    - Time window returns zero-copy views
+    - Stepped view returns a new array with sampled rows
+    """
 
-        Args:
-            parent_signal: The parent SimpleSignal instance
-            start_idx: Start index (inclusive)
-            end_idx: End index (exclusive)
-        """
-        self._parent = parent_signal
-        self._start_idx = start_idx
-        self._end_idx = end_idx
-        # These are numpy array views (zero-copy)
-        self._timestamps = parent_signal._timestamps[start_idx:end_idx]
-        self._values = parent_signal._values[start_idx:end_idx]
+    def __init__(self, timestamps: np.ndarray, values: np.ndarray):
+        self._timestamps = timestamps
+        self._values = values
         self._time_indexer = TimeIndexer(self)
 
+    def _load_data(self):
+        # Already in-memory
+        return None
+
     def __len__(self) -> int:
-        """Returns the number of records in the signal view."""
-        return self._end_idx - self._start_idx
+        return int(self._timestamps.shape[0])
 
     @property
     def time(self):
-        """Returns an indexer for accessing Signal data by timestamp."""
         return self._time_indexer
 
     def __getitem__(self, index_or_slice):
-        """Access the Signal data by index or slice."""
         if isinstance(index_or_slice, int):
-            if index_or_slice < 0:
-                index_or_slice = len(self) + index_or_slice
-            if index_or_slice < 0 or index_or_slice >= len(self):
+            length = len(self)
+            idx = index_or_slice
+            if idx < 0:
+                idx = length + idx
+            if idx < 0 or idx >= length:
                 raise IndexError(f"Index {index_or_slice} out of range")
-            return (self._values[index_or_slice], self._timestamps[index_or_slice])
+            return (self._values[idx], self._timestamps[idx])
         elif isinstance(index_or_slice, slice):
-            # Create a view of this view
             start, stop, step = index_or_slice.indices(len(self))
             if step != 1:
                 raise ValueError("Step slicing not supported for index-based slicing")
-            # Adjust indices relative to parent
-            new_start = self._start_idx + start
-            new_end = self._start_idx + stop
-            return SimpleSignalView(self._parent, new_start, new_end)
+            return ArraySignal(self._timestamps[start:stop], self._values[start:stop])
         else:
             raise TypeError(f"Invalid index type: {type(index_or_slice)}")
 
-    def _load_data(self):
-        """Convienice method to simplify the implementation of the viewers.
-        """
-        pass
-
     def _window_view(self, start_ts_ns: int, end_ts_ns: int):
-        """Create a zero-copy Signal view from a time window."""
-        if len(self._timestamps) == 0:
-            return SimpleSignalView(self._parent, self._start_idx, self._start_idx)
+        if len(self) == 0:
+            return ArraySignal(self._timestamps[:0], self._values[:0])
 
-        start_idx = np.searchsorted(self._timestamps, start_ts_ns, side='left')
-        end_idx = np.searchsorted(self._timestamps, end_ts_ns, side='left')  # Note: exclusive end
-
-        # Adjust indices relative to parent
-        new_start = self._start_idx + start_idx
-        new_end = self._start_idx + end_idx
-        return SimpleSignalView(self._parent, new_start, new_end)
+        start_idx = int(np.searchsorted(self._timestamps, start_ts_ns, side='left'))
+        end_idx = int(np.searchsorted(self._timestamps, end_ts_ns, side='left'))
+        return ArraySignal(self._timestamps[start_idx:end_idx], self._values[start_idx:end_idx])
 
     def _stepped_view(self, start_ts_ns: int, end_ts_ns: int, step_ts_ns: int):
-        """Create a Signal with values sampled at regular intervals.
+        if len(self) == 0 or step_ts_ns <= 0:
+            return ArraySignal(self._timestamps[:0], self._values[:0])
 
-        Note: This creates a new array with sampled data, not a zero-copy view,
-        since we need to interpolate values at specific timestamps.
-        """
-        if len(self._timestamps) == 0 or step_ts_ns <= 0:
-            return SimpleSignalView(self._parent, self._start_idx, self._start_idx)
-
-        # Find indices for sampled timestamps
-        indices = []
-        ts = start_ts_ns
+        indices: list[int] = []
+        ts = int(start_ts_ns)
         while ts < end_ts_ns:
-            if ts >= self._timestamps[0]:
-                # TODO: This search can be reduced by starting at the previous index
-                idx = np.searchsorted(self._timestamps, ts, side='right') - 1
-                if idx >= 0 and idx < len(self._timestamps):
-                    # Adjust index relative to parent
-                    indices.append(self._start_idx + idx)
+            if ts >= int(self._timestamps[0]):
+                idx = int(np.searchsorted(self._timestamps, ts, side='right')) - 1
+                if 0 <= idx < len(self):
+                    indices.append(idx)
             ts += step_ts_ns
 
         if not indices:
-            return SimpleSignalView(self._parent, self._start_idx, self._start_idx)
+            return ArraySignal(self._timestamps[:0], self._values[:0])
 
-        # Create a new SimpleSignal with sampled data
-        # This is not zero-copy since we're sampling at specific intervals
-        sampled = SimpleSignal.__new__(SimpleSignal)
-        sampled.filepath = None
-        sampled._data = None
-        sampled._timestamps = self._parent._timestamps[indices]
-        sampled._values = self._parent._values[indices]
-        sampled._time_indexer = TimeIndexer(sampled)
-        return sampled
+        idx_array = np.array(indices, dtype=np.int64)
+        return ArraySignal(self._timestamps[idx_array], self._values[idx_array])
 
 
 class TimeIndexer:
@@ -154,19 +122,24 @@ class SimpleSignal(Signal[T]):
     def __init__(self, filepath: Path):
         """Initialize Signal reader from a parquet file."""
         self.filepath = filepath
-        self._data = None
-        self._timestamps = None
-        self._values = None
+        self._data: pa.Table | None = None
+        # Initialize with empty arrays to satisfy type checkers; real data is loaded lazily
+        self._timestamps: np.ndarray = np.empty(0, dtype=np.int64)
+        self._values: np.ndarray = np.empty(0, dtype=object)
         self._time_indexer = TimeIndexer(self)
 
     def _load_data(self):
         """Lazily load parquet data into memory as numpy arrays."""
         if self._data is None:
             table = pq.read_table(self.filepath)
-            # Direct conversion from Arrow to NumPy - no Polars needed
             self._timestamps = table['timestamp'].to_numpy()
             self._values = table['value'].to_numpy()
             self._data = table
+
+    def _as_array_signal(self) -> ArraySignal:
+        """Create an ArraySignal view over the loaded numpy arrays (zero-copy)."""
+        self._load_data()
+        return ArraySignal(self._timestamps, self._values)
 
     def __len__(self) -> int:
         """Returns the number of records in the signal."""
@@ -180,69 +153,15 @@ class SimpleSignal(Signal[T]):
 
     def __getitem__(self, index_or_slice):
         """Access the Signal data by index or slice."""
-        self._load_data()
-
-        if isinstance(index_or_slice, int):
-            if index_or_slice < 0:
-                index_or_slice = len(self._timestamps) + index_or_slice
-            if index_or_slice < 0 or index_or_slice >= len(self._timestamps):
-                raise IndexError(f"Index {index_or_slice} out of range")
-            return (self._values[index_or_slice], self._timestamps[index_or_slice])
-        elif isinstance(index_or_slice, slice):
-            # Create a zero-copy view
-            start, stop, step = index_or_slice.indices(len(self._timestamps))
-            if step != 1:
-                raise ValueError("Step slicing not supported for index-based slicing")
-            return SimpleSignalView(self, start, stop)
-        else:
-            raise TypeError(f"Invalid index type: {type(index_or_slice)}")
+        return self._as_array_signal()[index_or_slice]
 
     def _window_view(self, start_ts_ns: int, end_ts_ns: int):
         """Create a zero-copy Signal view from a time window."""
-        self._load_data()
-
-        if len(self._timestamps) == 0:
-            return SimpleSignalView(self, 0, 0)
-
-        start_idx = np.searchsorted(self._timestamps, start_ts_ns, side='left')
-        end_idx = np.searchsorted(self._timestamps, end_ts_ns, side='left')  # Note: exclusive end
-
-        return SimpleSignalView(self, start_idx, end_idx)
+        return self._as_array_signal()._window_view(start_ts_ns, end_ts_ns)
 
     def _stepped_view(self, start_ts_ns: int, end_ts_ns: int, step_ts_ns: int):
-        """Create a Signal with values sampled at regular intervals.
-
-        Note: This creates a new array with sampled data, not a zero-copy view,
-        since we need to interpolate values at specific timestamps.
-        """
-        self._load_data()
-
-        if len(self._timestamps) == 0 or step_ts_ns <= 0:
-            return SimpleSignalView(self, 0, 0)
-
-        # Find indices for sampled timestamps
-        indices = []
-        ts = start_ts_ns
-        while ts < end_ts_ns:
-            if ts >= self._timestamps[0]:
-                idx = np.searchsorted(self._timestamps, ts, side='right') - 1
-                if idx >= 0 and idx < len(self._timestamps):
-                    indices.append(idx)
-            ts += step_ts_ns
-
-        if not indices:
-            return SimpleSignalView(self, 0, 0)
-
-        # Create a new SimpleSignal with sampled data
-        # This is not zero-copy since we're sampling at specific intervals
-        sampled = SimpleSignal.__new__(SimpleSignal)
-        sampled.filepath = None
-        sampled._data = None
-        sampled._timestamps = self._timestamps[indices]
-        sampled._values = self._values[indices]
-        sampled._time_indexer = TimeIndexer(sampled)
-        sampled._load_data = lambda: None  # Data already loaded
-        return sampled
+        """Create a Signal with values sampled at regular intervals."""
+        return self._as_array_signal()._stepped_view(start_ts_ns, end_ts_ns, step_ts_ns)
 
 
 
@@ -264,8 +183,8 @@ class SimpleSignalWriter(SignalWriter[T]):
         self.filepath = filepath
         self.chunk_size = chunk_size
         self._writer = None
-        self._timestamps = []
-        self._values = []
+        self._timestamps: list[int] = []
+        self._values: list[object] = []
         self._finished = False
         self._last_ts = None
         self._expected_shape = None
@@ -295,30 +214,34 @@ class SimpleSignalWriter(SignalWriter[T]):
         if self._last_ts is not None and ts_ns <= self._last_ts:
             raise ValueError(f"Timestamp {ts_ns} is not increasing (last was {self._last_ts})")
 
-        if isinstance(data, pa.Array):
-            data = data.to_numpy()
+        # Normalize the input value without changing the declared generic type T
+        value: object = data
+        if isinstance(value, pa.Array):  # runtime conversion; keep linter happy via getattr
+            to_numpy = getattr(value, "to_numpy", None)
+            if callable(to_numpy):
+                value = to_numpy()
 
-        if isinstance(data, (list, tuple)):
-            data = np.array(data)
+        if isinstance(value, (list, tuple)):
+            value = np.array(value)
 
-        if isinstance(data, np.ndarray):
+        if isinstance(value, np.ndarray):
             if self._expected_shape is None:
-                self._expected_shape = data.shape
-                self._expected_dtype = data.dtype
+                self._expected_shape = value.shape
+                self._expected_dtype = value.dtype
             else:
-                if data.shape != self._expected_shape:
-                    raise ValueError(f"Data shape {data.shape} doesn't match expected shape {self._expected_shape}")
-                if data.dtype != self._expected_dtype:
-                    raise ValueError(f"Data dtype {data.dtype} doesn't match expected dtype {self._expected_dtype}")
+                if value.shape != self._expected_shape:
+                    raise ValueError(f"Data shape {value.shape} doesn't match expected shape {self._expected_shape}")
+                if value.dtype != self._expected_dtype:
+                    raise ValueError(f"Data dtype {value.dtype} doesn't match expected dtype {self._expected_dtype}")
         else:  # Scalar type
             if self._expected_dtype is None:
-                self._expected_dtype = type(data)
+                self._expected_dtype = type(value)
             else:
-                if type(data) != self._expected_dtype:
-                    raise ValueError(f"Data type {type(data)} doesn't match expected type {self._expected_dtype}")
+                if type(value) is not self._expected_dtype:
+                    raise ValueError(f"Data type {type(value)} doesn't match expected type {self._expected_dtype}")
 
-        self._timestamps.append(ts_ns)
-        self._values.append(data)
+        self._timestamps.append(int(ts_ns))
+        self._values.append(value)
         self._last_ts = ts_ns
 
         if len(self._timestamps) >= self.chunk_size:
