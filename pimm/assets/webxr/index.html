@@ -1,0 +1,281 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset='utf-8'>
+    <meta name='viewport' content='width=device-width, initial-scale=1, user-scalable=no'>
+    <meta name='mobile-web-app-capable' content='yes'>
+    <meta name='apple-mobile-web-app-capable' content='yes'>
+
+    <title>Input Tracking</title>
+    <script src="/three.min.js"></script>
+  </head>
+  <body>
+    <header>
+      <details open>
+        <summary>Input Tracking</summary>
+        <p>
+          This application tracks user input in an immersive AR environment using WebXR
+          and sends the data to a server.
+        </p>
+    </header>
+    <script type="module">
+        import { WebXRButton } from './webxr-button.js';
+        import { WebXRVideoPlayer } from './video-player.js';
+
+        let xrButton = null;
+        let xrImmersiveRefSpace = null;
+        let gl = null;
+        let websocket = null;
+        let scene, camera, renderer;
+        let videoPlayer = null;
+        let controllerAxes = {
+          left: null,
+          right: null
+        };
+
+        function initXR() {
+          xrButton = new WebXRButton({
+            onRequestSession: onRequestSession,
+            onEndSession: onEndSession
+          });
+          document.querySelector('header').appendChild(xrButton.domElement);
+
+          if (navigator.xr) {
+            navigator.xr.isSessionSupported('immersive-ar').then((supported) => {
+              xrButton.enabled = supported;
+            });
+          }
+        }
+
+        function initGL() {
+          if (gl) return;
+
+          scene = new THREE.Scene();
+          camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+
+          let webglCanvas = document.createElement('canvas');
+          renderer = new THREE.WebGLRenderer({
+            canvas: webglCanvas,
+            antialias: true,
+            alpha: true,
+            xrCompatible: true
+          });
+          renderer.setSize(window.innerWidth, window.innerHeight);
+          renderer.setPixelRatio(window.devicePixelRatio);
+          renderer.xr.enabled = true;
+          document.body.appendChild(renderer.domElement);
+
+          gl = renderer.getContext();
+
+          // Add some ambient light to make sure objects are visible
+          const ambientLight = new THREE.AmbientLight(0xffffff, 1.0);
+          scene.add(ambientLight);
+
+          // Initialize controller axes visualizations
+          initControllerAxes();
+        }
+
+        function initControllerAxes() {
+          // Create axis visualizers for both controllers
+          ['left', 'right'].forEach(hand => {
+            const axesGroup = new THREE.Group();
+            axesGroup.visible = false;
+
+            // Create axis lines - X (red), Y (green), Z (blue)
+            const axisLength = 0.1; // 10cm axes
+
+            // X axis (red)
+            const xGeometry = new THREE.BufferGeometry().setFromPoints([
+              new THREE.Vector3(0, 0, 0),
+              new THREE.Vector3(axisLength, 0, 0)
+            ]);
+            const xLine = new THREE.Line(
+              xGeometry,
+              new THREE.LineBasicMaterial({ color: 0xff0000, linewidth: 3 })
+            );
+
+            // Y axis (green)
+            const yGeometry = new THREE.BufferGeometry().setFromPoints([
+              new THREE.Vector3(0, 0, 0),
+              new THREE.Vector3(0, axisLength, 0)
+            ]);
+            const yLine = new THREE.Line(
+              yGeometry,
+              new THREE.LineBasicMaterial({ color: 0x00ff00, linewidth: 3 })
+            );
+
+            // Z axis (blue)
+            const zGeometry = new THREE.BufferGeometry().setFromPoints([
+              new THREE.Vector3(0, 0, 0),
+              new THREE.Vector3(0, 0, axisLength)
+            ]);
+            const zLine = new THREE.Line(
+              zGeometry,
+              new THREE.LineBasicMaterial({ color: 0x0000ff, linewidth: 3 })
+            );
+
+            axesGroup.add(xLine);
+            axesGroup.add(yLine);
+            axesGroup.add(zLine);
+
+            // Add a small sphere to represent the controller position
+            const sphere = new THREE.Mesh(
+              new THREE.SphereGeometry(0.02, 16, 16),
+              new THREE.MeshBasicMaterial({ color: hand === 'left' ? 0x8888ff : 0xff8888 })
+            );
+            axesGroup.add(sphere);
+
+            scene.add(axesGroup);
+            controllerAxes[hand] = axesGroup;
+          });
+        }
+
+        function onRequestSession() {
+          return navigator.xr.requestSession('immersive-ar', {
+            optionalFeatures: ['local-floor']
+          }).then((session) => {
+            xrButton.setSession(session);
+            onSessionStarted(session);
+          });
+        }
+
+        async function onSessionStarted(session) {
+          session.addEventListener('end', onSessionEnded);
+
+          initGL();
+
+          renderer.xr.setSession(session);
+
+          // Initialize video player after WebXR session starts
+          videoPlayer = new WebXRVideoPlayer();
+          await videoPlayer.init(scene, camera);
+
+          let refSpaceType = 'local';
+          session.requestReferenceSpace(refSpaceType).then((refSpace) => {
+            xrImmersiveRefSpace = refSpace;
+            session.requestAnimationFrame(onXRFrame);
+          });
+        }
+
+        function onEndSession(session) {
+          session.end();
+        }
+
+        function onSessionEnded(event) {
+          if (event.session.isImmersive) {
+            xrButton.setSession(null);
+          }
+        }
+
+        function updateInputSources(session, frame, refSpace) {
+          let controllers = {
+            left: null,
+            right: null
+          };
+
+          for (let inputSource of session.inputSources) {
+            if (inputSource.gripSpace && (inputSource.handedness === 'left' || inputSource.handedness === 'right')) {
+              let gripPose = frame.getPose(inputSource.gripSpace, refSpace);
+              if (gripPose) {
+                let pos = gripPose.transform.position;
+                let orient = gripPose.transform.orientation;
+                let buttons = inputSource.gamepad ? inputSource.gamepad.buttons.map(button => button.value) : [];
+
+                controllers[inputSource.handedness] = {
+                  position: [pos.x, pos.y, pos.z],
+                  orientation: [orient.w, orient.x, orient.y, orient.z],
+                  buttons: buttons
+                };
+
+                // Update controller axis visualization
+                if (controllerAxes[inputSource.handedness]) {
+                  const axesGroup = controllerAxes[inputSource.handedness];
+                  axesGroup.visible = true;
+
+                  // Set position - add helmet Y coordinate to controller Y
+                  axesGroup.position.set(pos.x, pos.y + 1.1, pos.z);
+
+                  // Set orientation using quaternion
+                  axesGroup.quaternion.set(orient.x, orient.y, orient.z, orient.w);
+                }
+              }
+            }
+          }
+
+          // Hide axes for controllers that aren't active
+          for (let hand of ['left', 'right']) {
+            if (!controllers[hand] && controllerAxes[hand]) {
+              controllerAxes[hand].visible = false;
+            }
+          }
+
+          sendTrackingData(controllers);
+        }
+
+        function sendTrackingData(controllers) {
+          if (websocket && websocket.readyState === WebSocket.OPEN) {
+            let data = {
+              controllers: controllers,
+              timestamp: Date.now()
+            };
+            websocket.send(JSON.stringify(data));
+            console.log(JSON.stringify(data));
+          }
+        }
+
+        function onXRFrame(t, frame) {
+          let session = frame.session;
+          let refSpace = xrImmersiveRefSpace;
+          let pose = frame.getViewerPose(refSpace);
+
+          if (pose) {
+            let glLayer = session.renderState.baseLayer;
+            gl.bindFramebuffer(gl.FRAMEBUFFER, glLayer.framebuffer);
+
+            // Update camera matrices from pose
+            for (let view of pose.views) {
+              const viewport = glLayer.getViewport(view);
+              gl.viewport(viewport.x, viewport.y, viewport.width, viewport.height);
+              camera.matrix.fromArray(view.transform.matrix);
+              camera.projectionMatrix.fromArray(view.projectionMatrix);
+              camera.updateMatrixWorld(true);
+            }
+
+            renderer.render(scene, camera);
+
+            if (videoPlayer) {
+              videoPlayer.update();
+            }
+          }
+
+          session.requestAnimationFrame(onXRFrame);
+          updateInputSources(session, frame, refSpace);
+        }
+
+        function initWebSocket() {
+          const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+          const wsUrl = `${protocol}//${window.location.host}/ws`;
+          websocket = new WebSocket(wsUrl);
+
+          websocket.onopen = (event) => {
+            console.log("WebSocket connection opened");
+          };
+
+          websocket.onclose = (event) => {
+            console.log("WebSocket connection closed");
+            if (event.code === 1006) {
+              console.error("WebSocket connection failed. Please check if the server is running and the WebSocket endpoint is correct.");
+            }
+          };
+
+          websocket.onerror = (error) => {
+            console.error("WebSocket error:", error);
+          };
+        }
+
+        // Start the XR application and WebSocket connection.
+        initXR();
+        initWebSocket();
+      </script>
+  </body>
+</html>

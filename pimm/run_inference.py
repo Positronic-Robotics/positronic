@@ -10,18 +10,42 @@ from pimm.drivers import roboarm
 from pimm.drivers.camera.linux_video import LinuxVideo
 from pimm.drivers.gripper.dh import DHGripper
 from pimm.simulator.mujoco.sim import MujocoCamera, MujocoFranka, MujocoGripper, MujocoSim
-from positronic.inference.action import ActionDecoder
-from positronic.inference.inference import rerun_log_action, rerun_log_observation
-from positronic.inference.state import StateEncoder
-from positronic.simulator.mujoco.scene.transforms import MujocoSceneTransform
+from pimm.inference.action import ActionDecoder
+from pimm.inference.state import StateEncoder
+from pimm.simulator.mujoco.transforms import MujocoSceneTransform
 
 import pimm.cfg.hardware.roboarm
 import pimm.cfg.hardware.gripper
 import pimm.cfg.hardware.camera
 import pimm.cfg.simulator
 import pimm.cfg.inference.state
-import positronic.cfg.inference.action
-import positronic.cfg.inference.policy
+
+
+
+def rerun_log_observation(ts, obs):
+    rr.set_time('time', duration=ts)
+
+    def log_image(name, tensor, compress: bool = True):
+        tensor = tensor.squeeze(0)
+        tensor = (tensor * 255).type(torch.uint8)
+        tensor = tensor.permute(1, 2, 0).cpu().numpy()
+        rr_img = rr.Image(tensor)
+        if compress:
+            rr_img = rr_img.compress()
+        rr.log(name, rr_img)
+
+    for k, v in obs.items():
+        if k.startswith("observation.images."):
+            log_image(k, v)
+
+    for i, state in enumerate(obs['observation.state'].squeeze(0)):
+        rr.log(f"observation/state/{i}", rr.Scalar(state.item()))
+
+
+def rerun_log_action(ts, action):
+    rr.set_time('time', duration=ts)
+    for i, action in enumerate(action):
+        rr.log(f"action/{i}", rr.Scalars(action))
 
 
 class Inference:
@@ -204,8 +228,8 @@ main_cfg = cfn.Config(
     robot_arm=pimm.cfg.hardware.roboarm.kinova,
     gripper=pimm.cfg.hardware.gripper.dh_gripper,
     state_encoder=pimm.cfg.inference.state.end_effector_224,
-    action_decoder=positronic.cfg.inference.action.umi_relative,
-    policy=positronic.cfg.inference.policy.act,
+    action_decoder=pimm.cfg.inference.action.umi_relative,
+    policy=pimm.cfg.inference.policy.act,
     cameras={
         'left': pimm.cfg.hardware.camera.arducam_left,
         'right': pimm.cfg.hardware.camera.arducam_right,
@@ -217,11 +241,11 @@ main_cfg = cfn.Config(
 
 main_sim_cfg = cfn.Config(
     main_sim,
-    mujoco_model_path="positronic/assets/mujoco/franka_table.xml",
+    mujoco_model_path="pimm/assets/mujoco/franka_table.xml",
     loaders=pimm.cfg.simulator.stack_cubes_loaders,
     state_encoder=pimm.cfg.inference.state.end_effector_back_front,
-    action_decoder=positronic.cfg.inference.action.relative_robot_position,
-    policy=positronic.cfg.inference.policy.act,
+    action_decoder=pimm.cfg.inference.action.relative_robot_position,
+    policy=pimm.cfg.inference.policy.act,
     rerun_path="inference.rrd",
     fps=60,
     device='cuda',

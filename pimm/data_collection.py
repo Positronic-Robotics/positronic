@@ -13,9 +13,9 @@ from pimm.drivers.gripper.dh import DHGripper
 from pimm.drivers.webxr import WebXR
 from pimm.gui.dpg import DearpyguiUi
 from pimm.simulator.mujoco.sim import MujocoCamera, MujocoFranka, MujocoGripper, MujocoSim
-from positronic.simulator.mujoco.scene.transforms import MujocoSceneTransform
-from positronic.tools.buttons import ButtonHandler
-from positronic.tools.dataset_dumper import SerialDumper
+from pimm.simulator.mujoco.transforms import MujocoSceneTransform
+from pimm.utils.buttons import ButtonHandler
+from pimm.utils.dataset_dumper import SerialDumper
 
 import pimm.cfg.hardware.gripper
 import pimm.cfg.hardware.roboarm
@@ -89,8 +89,8 @@ class Recorder:
         self.on = False
         self._dumper = dumper
         self._sound_emitter = sound_emitter
-        self._start_wav_path = "positronic/assets/sounds/recording-has-started.wav"
-        self._end_wav_path = "positronic/assets/sounds/recording-has-stopped.wav"
+        self._start_wav_path = "pimm/assets/sounds/recording-has-started.wav"
+        self._end_wav_path = "pimm/assets/sounds/recording-has-stopped.wav"
         self._meta = {}
         self._clock = clock
         self._fps_counter = ir.utils.RateCounter("Recorder")
@@ -393,7 +393,7 @@ main_cfg = cfn.Config(
 
 main_sim_cfg = cfn.Config(
     main_sim,
-    mujoco_model_path="positronic/assets/mujoco/franka_table.xml",
+    mujoco_model_path="pimm/assets/mujoco/franka_table.xml",
     webxr=pimm.cfg.webxr.webxr,
     sound=pimm.cfg.sound.sound,
     operator_position=FRANKA_BACK_TRANSFORM,

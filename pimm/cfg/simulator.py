@@ -1,6 +1,6 @@
 import configuronic as cfn
 
-from positronic.simulator.mujoco.scene.transforms import AddBox, AddCameras, SetBodyPosition
+from pimm.simulator.mujoco.transforms import AddBox, AddCameras, SetBodyPosition
 
 stack_cubes_loaders = [
     cfn.Config(AddCameras, additional_cameras={

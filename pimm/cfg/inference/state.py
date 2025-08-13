@@ -1,5 +1,5 @@
 import configuronic as cfn
-from positronic.inference.state import ImageEncodingConfig, StateEncoder
+from pimm.inference.state import ImageEncodingConfig, StateEncoder
 
 
 @cfn.config

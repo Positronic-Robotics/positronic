@@ -6,7 +6,7 @@ import tqdm
 
 import configuronic as cfn
 from geom import Transform3D
-from positronic.drivers.roboarm.kinova.base import JointCompliantController, KinematicsSolver, wrap_joint_angle
+from pimm.drivers.roboarm.kinova.base import JointCompliantController, KinematicsSolver, wrap_joint_angle
 
 
 def random_6dof_on_sphere(radius: float = 0.5) -> Tuple[List[float], List[float]]:

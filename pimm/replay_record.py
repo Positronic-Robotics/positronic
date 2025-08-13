@@ -9,8 +9,8 @@ import configuronic as cfn
 import ironic2 as ir
 from pimm.drivers import roboarm
 from pimm.simulator.mujoco.sim import MujocoCamera, MujocoFranka, MujocoGripper, MujocoSim
-from positronic.simulator.mujoco.scene.transforms import MujocoSceneTransform
-from positronic.tools.dataset_dumper import SerialDumper
+from pimm.simulator.mujoco.transforms import MujocoSceneTransform
+from pimm.utils.dataset_dumper import SerialDumper
 from pimm.data_collection import Recorder
 
 import pimm.cfg.simulator
@@ -146,7 +146,7 @@ def main(
 
 main_cfg = cfn.Config(
     main,
-    mujoco_model_path="positronic/assets/mujoco/franka_table.xml",
+    mujoco_model_path="pimm/assets/mujoco/franka_table.xml",
     loaders=pimm.cfg.simulator.stack_cubes_loaders,
 )
 

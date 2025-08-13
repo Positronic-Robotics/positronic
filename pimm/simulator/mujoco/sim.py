@@ -10,7 +10,7 @@ import numpy as np
 
 from pimm.drivers.roboarm import RobotStatus, State
 from pimm.drivers.roboarm import command as roboarm_command
-from positronic.simulator.mujoco.scene.transforms import MujocoSceneTransform, load_model_from_spec_file
+from pimm.simulator.mujoco.transforms import MujocoSceneTransform, load_model_from_spec_file
 
 logger = logging.getLogger(__name__)
 

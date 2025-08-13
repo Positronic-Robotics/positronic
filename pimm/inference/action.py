@@ -3,7 +3,7 @@ import abc
 import torch
 
 import geom
-from positronic.tools.registration import umi_relative
+from pimm.utils.registration import umi_relative
 
 
 def _convert_quat_to_tensor(q: geom.Rotation, representation: geom.Rotation.Representation | str) -> torch.Tensor:

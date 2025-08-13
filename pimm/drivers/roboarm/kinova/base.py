@@ -38,7 +38,7 @@ def wrap_joint_angle(q, q_base):
 class KinematicsSolver:
     """Solves forward and inverse kinematics for the Kinova arm."""
 
-    def __init__(self, path: str = 'positronic/drivers/roboarm/kinova/gen3.xml', ee_offset=0.0, site_name='pinch_site'):
+    def __init__(self, path: str = 'pimm/drivers/roboarm/kinova/gen3.xml', ee_offset=0.0, site_name='pinch_site'):
         self.model = mujoco.MjModel.from_xml_path(path)
         self.data = mujoco.MjData(self.model)
         self.model.body_gravcomp[:] = 1.0
@@ -232,7 +232,7 @@ class JointCompliantController:
     def __init__(
             self,
             actuator_count,
-            path: str = 'positronic/drivers/roboarm/kinova/model.urdf',
+            path: str = 'pimm/drivers/roboarm/kinova/model.urdf',
             relative_dynamics_factor=0.5,
             max_velocity=(1.396, 1.396, 1.396, 1.396, 2.443, 2.443, 2.443),
             max_acceleration=(4.188, 4.188, 4.188, 4.188, 7.853, 7.853, 7.853),

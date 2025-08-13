@@ -54,19 +54,19 @@ class WebXR:
 
         @app.get("/")
         async def root():
-            return FileResponse("positronic/assets/webxr/index.html")
+            return FileResponse("pimm/assets/webxr/index.html")
 
         @app.get("/three.min.js")
         async def three_min():
-            return FileResponse("positronic/assets/webxr/three.min.js")
+            return FileResponse("pimm/assets/webxr/three.min.js")
 
         @app.get("/webxr-button.js")
         async def webxr_button():
-            return FileResponse("positronic/assets/webxr/webxr-button.js")
+            return FileResponse("pimm/assets/webxr/webxr-button.js")
 
         @app.get("/video-player.js")
         async def video_player():
-            return FileResponse("positronic/assets/webxr/video-player.js")
+            return FileResponse("pimm/assets/webxr/video-player.js")
 
         @app.websocket("/video")
         async def video_stream(websocket: WebSocket):
