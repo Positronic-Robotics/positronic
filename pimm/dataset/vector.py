@@ -50,6 +50,21 @@ class _ArraySignal(Signal[T]):
             if step <= 0:
                 return _ArraySignal(self._timestamps[:0], self._values[:0])
             return _ArraySignal(self._timestamps[start:stop:step], self._values[start:stop:step])
+        elif isinstance(index_or_slice, (list, tuple, np.ndarray)):
+            # Support fancy indexing by integer arrays/lists and boolean masks
+            length = len(self)
+            idx_array = np.asarray(index_or_slice)
+
+            if idx_array.size == 0:
+                return _ArraySignal(self._timestamps[:0], self._values[:0])
+
+            if idx_array.dtype == np.bool_:
+                raise IndexError("Boolean indexes are not supported")
+
+            if not np.issubdtype(idx_array.dtype, np.integer):
+                raise TypeError(f"Invalid index array dtype: {idx_array.dtype}")
+
+            return _ArraySignal(self._timestamps[idx_array], self._values[idx_array])
         else:
             raise TypeError(f"Invalid index type: {type(index_or_slice)}")
 
@@ -115,6 +130,30 @@ class _TimeIndexer:
             else:
                 # Stepped query - create sampled view
                 return self.signal._stepped_view(start, stop, step)
+        elif isinstance(key, (list, tuple, np.ndarray)):
+            # Sample at arbitrary requested timestamps
+            self.signal._load_data()
+
+            req_ts = np.asarray(key)
+            if req_ts.size == 0:
+                return _ArraySignal(self.signal._timestamps[:0], self.signal._values[:0])
+
+            if not np.issubdtype(req_ts.dtype, np.integer):
+                # Try a safe cast to int64
+                try:
+                    req_ts = req_ts.astype(np.int64)
+                except Exception as exc:
+                    raise TypeError(f"Invalid timestamp array dtype: {req_ts.dtype}") from exc
+
+            if len(self.signal._timestamps) == 0:
+                return _ArraySignal(self.signal._timestamps[:0], self.signal._values[:0])
+
+            # For each requested timestamp t, find index of value at or before t
+            pos = np.searchsorted(self.signal._timestamps, req_ts, side='right') - 1
+            if not np.all(pos >= 0):
+                raise KeyError("No record at or before some of the requested timestamps")
+
+            return _ArraySignal(req_ts, self.signal._values[pos])
         else:
             raise TypeError(f"Invalid key type: {type(key)}")
 

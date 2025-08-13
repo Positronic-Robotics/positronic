@@ -348,3 +348,91 @@ class TestSignalWriterFinish:
         np.testing.assert_array_equal(value1, [3.5, 4.5])
         assert ts0 == 1000
         assert ts1 == 2000
+
+
+class TestSignalIndexArrayAccess:
+
+    def test_index_array_basic(self, tmp_path):
+        signal = create_signal(tmp_path, [(10, 1000), (20, 2000), (30, 3000), (40, 4000)])
+        view = signal[[0, 2]]
+        assert len(view) == 2
+        assert view[0] == (10, 1000)
+        assert view[1] == (30, 3000)
+
+    def test_index_array_numpy_and_negative(self, tmp_path):
+        signal = create_signal(tmp_path, [(10, 1000), (20, 2000), (30, 3000), (40, 4000)])
+        import numpy as np
+        view = signal[np.array([-1, -3, 1], dtype=np.int64)]
+        assert len(view) == 3
+        assert view[0] == (40, 4000)
+        assert view[1] == (20, 2000)
+        assert view[2] == (20, 2000)
+
+    def test_index_array_out_of_range_raises(self, tmp_path):
+        signal = create_signal(tmp_path, [(10, 1000), (20, 2000), (30, 3000)])
+        import numpy as np
+        with pytest.raises(IndexError):
+            _ = signal[np.array([0, 3], dtype=np.int64)]
+
+    def test_index_array_boolean_not_supported(self, tmp_path):
+        signal = create_signal(tmp_path, [(10, 1000), (20, 2000), (30, 3000)])
+        import numpy as np
+        with pytest.raises(IndexError):
+            _ = signal[np.array([True, False, True], dtype=np.bool_)]
+
+    def test_index_array_invalid_dtype_raises(self, tmp_path):
+        signal = create_signal(tmp_path, [(10, 1000), (20, 2000), (30, 3000)])
+        import numpy as np
+        with pytest.raises(TypeError):
+            _ = signal[np.array([0.0, 1.0], dtype=np.float64)]
+
+    def test_index_array_empty(self, tmp_path):
+        signal = create_signal(tmp_path, [(10, 1000), (20, 2000), (30, 3000)])
+        view = signal[[]]
+        assert len(view) == 0
+
+
+class TestSignalTimeArrayAccess:
+
+    def test_time_array_exact_and_offgrid(self, tmp_path):
+        import numpy as np
+        signal = create_signal(tmp_path, [(10, 1000), (20, 2000), (30, 3000)])
+        req = [1000, 1500, 3000]
+        view = signal.time[req]
+        assert len(view) == 3
+        v0, t0 = view[0]
+        v1, t1 = view[1]
+        v2, t2 = view[2]
+        assert (v0, t0) == (10, 1000)
+        assert (v1, t1) == (10, 1500)
+        assert (v2, t2) == (30, 3000)
+
+    def test_time_array_unsorted_and_repeated(self, tmp_path):
+        signal = create_signal(tmp_path, [(10, 1000), (20, 2000), (30, 3000)])
+        req = [3000, 1000, 3000]
+        view = signal.time[req]
+        assert len(view) == 3
+        assert view[0] == (30, 3000)
+        assert view[1] == (10, 1000)
+        assert view[2] == (30, 3000)
+
+    def test_time_array_before_first_raises(self, tmp_path):
+        signal = create_signal(tmp_path, [(10, 1000), (20, 2000), (30, 3000)])
+        with pytest.raises(KeyError):
+            _ = signal.time[[500, 1000]]
+
+    def test_time_array_empty(self, tmp_path):
+        signal = create_signal(tmp_path, [(10, 1000), (20, 2000), (30, 3000)])
+        view = signal.time[[]]
+        assert len(view) == 0
+
+    def test_time_array_float_inputs_cast(self, tmp_path):
+        import numpy as np
+        signal = create_signal(tmp_path, [(10, 1000), (20, 2000), (30, 3000)])
+        view = signal.time[np.array([1000.0, 2500.0], dtype=np.float64)]
+        assert len(view) == 2
+        v0, t0 = view[0]
+        v1, t1 = view[1]
+        assert isinstance(t0, (int, np.integer)) and isinstance(t1, (int, np.integer))
+        assert (v0, t0) == (10, 1000)
+        assert (v1, t1) == (20, 2500)

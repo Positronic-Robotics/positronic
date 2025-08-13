@@ -1,7 +1,15 @@
 from abc import ABC, abstractmethod
-from typing import TypeVar, Generic, Tuple, Sequence
+from typing import TypeVar, Generic, Tuple, Sequence, Protocol, runtime_checkable
+import numpy as np
 
 T = TypeVar('T')
+
+
+@runtime_checkable
+class TimeIndexerLike(Protocol, Generic[T]):
+
+    def __getitem__(self, key: int | slice | Sequence[int] | np.ndarray) -> Tuple[T, int] | "Signal[T]":
+        ...
 
 
 class Signal(ABC, Generic[T]):
@@ -13,7 +21,7 @@ class Signal(ABC, Generic[T]):
 
     @property
     @abstractmethod
-    def time(self) -> Sequence[Tuple[T, int]]:
+    def time(self) -> TimeIndexerLike[T]:
         """Returns an indexer for accessing Signal data by timestamp.
 
         Similar to pandas.loc, this property provides a timestamp-based indexer.
@@ -33,19 +41,23 @@ class Signal(ABC, Generic[T]):
                 (value_at_or_before_t_i, t_i). If t_i is before the first available record,
                 that t_i is skipped. A non-positive step_ts_ns yields an empty result. The
                 end timestamp is exclusive.
+
+            signal.time[[t1, t2, ...]] -> Signal[T]
+                Returns a Signal sampled at the provided timestamps. Each element is
+                (value_at_or_before_t_i, t_i). Raises KeyError if any t_i precedes the first record.
         """
         pass
 
     @abstractmethod
-    def __getitem__(self, index_or_slice: int | slice) -> Tuple[T, int] | "Signal[T]":
+    def __getitem__(self, index_or_slice: int | slice | Sequence[int] | np.ndarray) -> Tuple[T, int] | "Signal[T]":
         """Access the Signal data by index or slice.
 
         Args:
-            index_or_slice: Integer index or slice object
+            index_or_slice: Integer index, slice object, or array-like of indices
 
         Returns:
             If index: Tuple of (value, timestamp_ns)
-            If slice: Signal[T] view of the original data
+            If slice/array-like: Signal[T] view of the original data
         """
         pass
 
