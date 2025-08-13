@@ -1,3 +1,4 @@
+# This code is adopted from https://github.com/huggingface/lerobot/blob/0878c6880fa4fbadf0742751cf7b015f2d63a769/src/lerobot/motors/feetech/feetech.py
 import numpy as np
 import scservo_sdk as scs
 
@@ -74,6 +75,8 @@ STS_SMS_SERIES_CONTROL_TABLE = {
     "Acceleration_Multiplier ": (86, 1),  # Acceleration multiplier in effect when acceleration is 0
 }
 
+CONVERT_UINT32_TO_INT32_REQUIRED = ["Goal_Position", "Present_Position"]
+
 
 def encode_sign_magnitude(value: int, sign_bit_index: int):
     """
@@ -118,8 +121,8 @@ def read_from_motor(port_handler, packet_handler, motor_indices: list[int], data
     if data_name not in STS_SMS_SERIES_CONTROL_TABLE:
         raise KeyError(f"Data name '{data_name}' not found in control table")
 
-    addr, bytes = STS_SMS_SERIES_CONTROL_TABLE[data_name]
-    group = scs.GroupSyncRead(port_handler, packet_handler, addr, bytes)
+    addr, message_bytes = STS_SMS_SERIES_CONTROL_TABLE[data_name]
+    group = scs.GroupSyncRead(port_handler, packet_handler, addr, message_bytes)
 
     for idx in motor_indices:
         group.addParam(idx)
@@ -139,7 +142,7 @@ def read_from_motor(port_handler, packet_handler, motor_indices: list[int], data
 
     values = []
     for idx in motor_indices:
-        value = group.getData(idx, addr, bytes)
+        value = group.getData(idx, addr, message_bytes)
         values.append(value)
 
     if data_name in STS_SMS_SERIES_ENCODINGS_TABLE:
@@ -148,14 +151,13 @@ def read_from_motor(port_handler, packet_handler, motor_indices: list[int], data
     values = np.array(values)
 
     # Convert to signed int for position data
-    CONVERT_UINT32_TO_INT32_REQUIRED = ["Goal_Position", "Present_Position"]
     if data_name in CONVERT_UINT32_TO_INT32_REQUIRED:
         values = values.astype(np.int32)
 
     return values
 
 
-def convert_to_bytes(value, bytes):
+def convert_to_bytes(value, n_bytes):
     """
     Convert a value to the appropriate byte format for feetech motors.
 
@@ -171,16 +173,16 @@ def convert_to_bytes(value, bytes):
     """
     # Note: No need to convert back into unsigned int, since this byte preprocessing
     # already handles it for us.
-    if bytes == 1:
+    if n_bytes == 1:
         data = [
             scs.SCS_LOBYTE(scs.SCS_LOWORD(value)),
         ]
-    elif bytes == 2:
+    elif n_bytes == 2:
         data = [
             scs.SCS_LOBYTE(scs.SCS_LOWORD(value)),
             scs.SCS_HIBYTE(scs.SCS_LOWORD(value)),
         ]
-    elif bytes == 4:
+    elif n_bytes == 4:
         data = [
             scs.SCS_LOBYTE(scs.SCS_LOWORD(value)),
             scs.SCS_HIBYTE(scs.SCS_LOWORD(value)),
@@ -190,7 +192,7 @@ def convert_to_bytes(value, bytes):
     else:
         raise NotImplementedError(
             f"Value of the number of bytes to be sent is expected to be in [1, 2, 4], but "
-            f"{bytes} is provided instead."
+            f"{n_bytes} is provided instead."
         )
     return data
 
@@ -217,14 +219,14 @@ def write_to_motor(port_handler, packet_handler, motor_indices: list[int], data_
     if len(values) != len(motor_indices):
         raise ValueError(f"Number of values ({len(values)}) must match number of motor indices ({len(motor_indices)})")
 
-    addr, bytes = STS_SMS_SERIES_CONTROL_TABLE[data_name]
-    group = scs.GroupSyncWrite(port_handler, packet_handler, addr, bytes)
+    addr, message_bytes = STS_SMS_SERIES_CONTROL_TABLE[data_name]
+    group = scs.GroupSyncWrite(port_handler, packet_handler, addr, message_bytes)
 
     for idx, value in zip(motor_indices, values, strict=True):
         if data_name in STS_SMS_SERIES_ENCODINGS_TABLE:
             sign_bit_index = STS_SMS_SERIES_ENCODINGS_TABLE[data_name]
             value = encode_sign_magnitude(value, sign_bit_index)
-        data = convert_to_bytes(int(value), bytes)
+        data = convert_to_bytes(int(value), message_bytes)
         group.addParam(idx, data)
 
     # Try to write with retries

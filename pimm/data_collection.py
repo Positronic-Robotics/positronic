@@ -409,12 +409,7 @@ main_sim_cfg = cfn.Config(
     cameras={'right': pimm.cfg.hardware.camera.arducam_right}
 )
 def so101cfg(robot_arm, **kwargs):
-    return cfn.Config(
-        main,
-        robot_arm=robot_arm,
-        gripper=robot_arm,
-        **kwargs,
-    )
+    main(robot_arm=robot_arm, gripper=robot_arm, **kwargs)
 
 
 if __name__ == "__main__":
