@@ -76,20 +76,14 @@ class _TimeIndexer:
     def __init__(self, signal):
         self.signal = signal
 
-    def __getitem__(self, key):
+    def __getitem__(self, key):  # noqa: C901  Function is too complex
+        self.signal._load_data()
         if isinstance(key, int):
-            # Ensure data is loaded for SimpleSignal instances
-            self.signal._load_data()
-
             idx = np.searchsorted(self.signal._timestamps, key, side='right') - 1
             if idx < 0:
                 raise KeyError(f"No record at or before timestamp {key}")
-
             return (self.signal._values[idx], self.signal._timestamps[idx])
-        elif isinstance(key, (list, tuple, np.ndarray)):
-            # Sample at arbitrary requested timestamps
-            self.signal._load_data()
-
+        elif isinstance(key, (list, tuple, np.ndarray)):  # Sample at arbitrary requested timestamps
             req_ts = np.asarray(key)
             if not np.issubdtype(req_ts.dtype, np.integer):
                 raise TypeError(f"Invalid timestamp array dtype: {req_ts.dtype}")
@@ -104,14 +98,18 @@ class _TimeIndexer:
 
             return _ArraySignal(req_ts, self.signal._values[pos])
         elif isinstance(key, slice):
-            if key.start is None: raise ValueError("Slice start is required")  # noqa: E501, E701
-            if key.stop is None: raise ValueError("Slice stop is required")  # noqa: E501, E701
-            if key.step is not None and key.step <= 0: raise ValueError("Slice step must be positive")  # noqa: E501, E701
-
             if key.step is not None:
-                return self[np.arange(key.start, key.stop, key.step, dtype=np.int64)]
+                if key.step <= 0:
+                    raise ValueError("Slice step must be positive")
+                if key.start is None:
+                    raise ValueError("Slice start is required when step is provided")
+
+            start = key.start if key.start is not None else self.signal._timestamps[0]
+            stop = key.stop if key.stop is not None else (self.signal._timestamps[-1] + 1)
+            if key.step is not None:
+                return self[np.arange(start, stop, key.step, dtype=np.int64)]
             else:
-                return self.signal._window_view(key.start, key.stop)
+                return self.signal._window_view(start, stop)
         else:
             raise TypeError(f"Invalid key type: {type(key)}")
 
@@ -192,7 +190,7 @@ class SimpleSignalWriter(SignalWriter[T]):
 
     def _flush_chunk(self):
         """Write current chunk to parquet file."""
-        if not self._timestamps:
+        if len(self._timestamps) == 0:
             return
 
         timestamps_array = pa.array(self._timestamps, type=pa.int64())

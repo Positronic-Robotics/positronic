@@ -225,6 +225,23 @@ class TestSignalTimeStepped:
         assert sampled[1] == (43, 2000)
         assert sampled[-1] == (43, 2000)
 
+    def test_time_stepped_missing_stop(self, tmp_path):
+        signal = create_signal(tmp_path, [(10, 1000), (20, 2000), (30, 3000), (40, 4000), (50, 5000)])
+        sampled = signal.time[1000::1000]
+        assert len(sampled) == 5
+        assert sampled[0] == (10, 1000)
+        assert sampled[-1] == (50, 5000)
+
+    def test_time_stepped_missing_start_raises(self, tmp_path):
+        signal = create_signal(tmp_path, [(10, 1000), (20, 2000), (30, 3000)])
+        with pytest.raises(ValueError):
+            _ = signal.time[:3000:1000]
+
+    def test_time_stepped_missing_both_raises(self, tmp_path):
+        signal = create_signal(tmp_path, [(10, 1000), (20, 2000), (30, 3000)])
+        with pytest.raises(ValueError):
+            _ = signal.time[::1000]
+
     def test_time_stepped_returns_requested_timestamps_scalar(self, tmp_path):
         signal = create_signal(tmp_path, [(10, 1000), (20, 2000), (30, 3000)])
         # Request off-grid timestamps 1500 and 2500
@@ -463,9 +480,30 @@ class TestSignalTimeWindowNoStep:
         view = signal.time[1000:2000]
         assert len(view) == 0
 
-    def test_time_window_nostep_missing_start_or_stop_raises(self, tmp_path):
+    def test_time_window_nostep_missing_start(self, tmp_path):
+        signal = create_signal(tmp_path, [(42, 1000), (43, 2000), (44, 3000), (45, 4000)])
+        view = signal.time[:3000]
+        assert len(view) == 2
+        assert view[0] == (42, 1000)
+        assert view[1] == (43, 2000)
+
+    def test_time_window_nostep_missing_stop(self, tmp_path):
+        signal = create_signal(tmp_path, [(42, 1000), (43, 2000), (44, 3000), (45, 4000)])
+        view = signal.time[2000:]
+        assert len(view) == 3
+        assert view[0] == (43, 2000)
+        assert view[-1] == (45, 4000)
+
+    def test_time_window_nostep_full_slice(self, tmp_path):
+        signal = create_signal(tmp_path, [(42, 1000), (43, 2000), (44, 3000), (45, 4000)])
+        view = signal.time[:]
+        assert len(view) == 4
+        assert view[0] == (42, 1000)
+        assert view[-1] == (45, 4000)
+
+    def test_time_window_nostep_missing_bounds_outside(self, tmp_path):
         signal = create_signal(tmp_path, [(42, 1000), (43, 2000)])
-        with pytest.raises(ValueError):
-            _ = signal.time[:2000]
-        with pytest.raises(ValueError):
-            _ = signal.time[1000:]
+        empty1 = signal.time[:900]
+        assert len(empty1) == 0
+        empty2 = signal.time[3000:]
+        assert len(empty2) == 0
