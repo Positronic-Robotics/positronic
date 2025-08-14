@@ -5,7 +5,7 @@ from typing import Any
 
 import numpy as np
 
-from ironic2.core import Clock, Message, SignalEmitter, SignalReader
+from ironic.core import Clock, Message, SignalEmitter, SignalReader
 
 
 class SMCompliant(ABC):

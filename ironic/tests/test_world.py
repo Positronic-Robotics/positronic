@@ -4,8 +4,8 @@ import multiprocessing as mp
 from queue import Empty, Full
 from unittest.mock import Mock, patch
 
-from ironic2.core import Clock, Message, SignalEmitter, SignalReader, Sleep
-from ironic2.world import (QueueEmitter, QueueReader, EventReader, SystemClock, World)
+from ironic.core import Clock, Message, SignalEmitter, SignalReader, Sleep
+from ironic.world import (QueueEmitter, QueueReader, EventReader, SystemClock, World)
 
 
 class MockClock(Clock):

@@ -3,7 +3,7 @@ import wave
 import pyaudio
 import numpy as np
 
-import ironic2 as ir
+import ironic as ir
 
 
 class SoundSystem:

@@ -3,7 +3,7 @@ from typing import Iterator
 
 import franky
 
-import ironic2 as ir
+import ironic as ir
 
 
 class Gripper:

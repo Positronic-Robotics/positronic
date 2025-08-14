@@ -4,7 +4,7 @@ import numpy as np
 from linuxpy.video.device import Device, PixelFormat
 from typing import Iterator
 
-import ironic2 as ir
+import ironic as ir
 
 
 class LinuxVideo:

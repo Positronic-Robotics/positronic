@@ -2,10 +2,10 @@ from typing import Iterator
 import pytest
 import numpy as np
 
-from ironic2.core import Clock, Message, NoOpEmitter, SignalEmitter, SignalReader, Sleep
-from ironic2.shared_memory import NumpySMAdapter
-from ironic2.utils import DefaultReader, ValueUpdated
-from ironic2.world import SharedMemoryEmitter, SharedMemoryReader, World
+from ironic.core import Clock, Message, NoOpEmitter, SignalEmitter, SignalReader, Sleep
+from ironic.shared_memory import NumpySMAdapter
+from ironic.utils import DefaultReader, ValueUpdated
+from ironic.world import SharedMemoryEmitter, SharedMemoryReader, World
 
 
 class TestNumpySMAdapter:

@@ -10,7 +10,7 @@ from fastapi.responses import FileResponse
 import uvicorn
 import turbojpeg
 
-import ironic2 as ir
+import ironic as ir
 import geom
 
 

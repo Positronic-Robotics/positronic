@@ -3,7 +3,7 @@ from typing import Iterator
 import numpy as np
 import pyzed.sl as sl
 
-import ironic2 as ir
+import ironic as ir
 
 
 class SLCamera:

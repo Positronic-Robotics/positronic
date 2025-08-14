@@ -5,7 +5,7 @@ from mujoco import Sequence
 
 import geom
 import configuronic as cfn
-import ironic2 as ir
+import ironic as ir
 from pimm.drivers import roboarm
 from pimm.drivers.sound import SoundSystem
 from pimm.drivers.camera.linux_video import LinuxVideo

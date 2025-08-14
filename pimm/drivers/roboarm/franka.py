@@ -8,7 +8,7 @@ import franky
 import numpy as np
 
 import geom
-import ironic2 as ir
+import ironic as ir
 
 from . import RobotStatus, State, command
 

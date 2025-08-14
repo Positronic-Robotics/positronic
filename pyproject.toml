@@ -71,7 +71,7 @@ lerobot = [
 [tool.pytest.ini_options]
 testpaths = [
     "geom/tests",
-    "ironic2/tests",
+    "ironic/tests",
     "pimm/tests",
     "pimm/dataset/tests",
 ]

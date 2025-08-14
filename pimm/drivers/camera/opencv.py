@@ -3,7 +3,7 @@ from typing import Tuple
 
 import cv2
 
-import ironic2 as ir
+import ironic as ir
 
 
 class OpenCVCamera:

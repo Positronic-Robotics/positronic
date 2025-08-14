@@ -1,8 +1,8 @@
 import time
 from typing import Callable, Mapping, Tuple, overload, TypeVar
 
-from ironic2 import SignalReader, SignalEmitter, Message
-from ironic2.core import Clock
+from ironic import SignalReader, SignalEmitter, Message
+from ironic.core import Clock
 
 
 T = TypeVar('T', covariant=True)

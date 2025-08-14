@@ -3,7 +3,7 @@ from typing import Dict, List
 import dearpygui.dearpygui as dpg
 import numpy as np
 
-import ironic2 as ir
+import ironic as ir
 
 
 def _get_down_keys() -> List[int]:

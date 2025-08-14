@@ -1,5 +1,5 @@
 import configuronic as cfn
-import ironic2 as ir
+import ironic as ir
 import numpy as np
 
 import pimm.cfg.hardware.motors

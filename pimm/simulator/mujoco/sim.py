@@ -2,7 +2,7 @@ from typing import Any, Dict, Sequence, Tuple
 import logging
 
 import geom
-import ironic2 as ir
+import ironic as ir
 import mujoco as mj
 from dm_control import mujoco as dm_mujoco
 from dm_control.utils import inverse_kinematics as ik

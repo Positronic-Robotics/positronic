@@ -2,7 +2,7 @@ from typing import Iterator
 
 import numpy as np
 
-import ironic2 as ir
+import ironic as ir
 import geom
 from pimm.drivers.motors.feetech import MotorBus
 from pimm.drivers.roboarm import RobotStatus, State

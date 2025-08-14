@@ -3,7 +3,7 @@ import time
 
 import pymodbus.client as ModbusClient
 
-import ironic2 as ir
+import ironic as ir
 
 
 class DHGripper:

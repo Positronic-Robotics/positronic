@@ -1,6 +1,6 @@
 import configuronic as cfn
 import pimm.cfg.hardware.roboarm
-import ironic2 as ir
+import ironic as ir
 import geom
 from pimm.drivers.roboarm import command
 

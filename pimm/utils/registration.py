@@ -6,7 +6,7 @@ import rerun as rr
 from scipy.linalg import orthogonal_procrustes
 
 import configuronic as cfn
-import ironic2 as ir
+import ironic as ir
 import geom
 import pimm.cfg.hardware.roboarm
 import pimm.cfg.webxr

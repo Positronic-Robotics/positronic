@@ -1,5 +1,5 @@
 from typing import Iterator
-import ironic2 as ir
+import ironic as ir
 import depthai as dai
 
 

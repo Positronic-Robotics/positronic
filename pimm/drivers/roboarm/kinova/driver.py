@@ -6,7 +6,7 @@ from mujoco import Any
 import numpy as np
 
 import geom
-import ironic2 as ir
+import ironic as ir
 from pimm.drivers.roboarm.kinova.api import KinovaAPI
 from pimm.drivers.roboarm.kinova.base import JointCompliantController, KinematicsSolver
 from pimm.drivers.roboarm import RobotStatus, State, command

@@ -6,7 +6,7 @@ import tqdm
 
 import geom
 import configuronic as cfn
-import ironic2 as ir
+import ironic as ir
 from pimm.drivers import roboarm
 from pimm.simulator.mujoco.sim import MujocoCamera, MujocoFranka, MujocoGripper, MujocoSim
 from pimm.simulator.mujoco.transforms import MujocoSceneTransform

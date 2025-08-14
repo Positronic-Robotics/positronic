@@ -1,7 +1,7 @@
 from unittest.mock import Mock
 
-from ironic2.core import Message, SignalReader, Clock
-from ironic2.utils import ValueUpdated, DefaultReader, RateLimiter, is_any_updated
+from ironic.core import Message, SignalReader, Clock
+from ironic.utils import ValueUpdated, DefaultReader, RateLimiter, is_any_updated
 
 
 class TestValueUpdated:
