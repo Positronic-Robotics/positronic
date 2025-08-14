@@ -74,8 +74,8 @@ class TestVideoSignalWriter:
         # Check index file has exactly one timestamp
         frames_table = pq.read_table(video_paths['frames'])
         assert len(frames_table) == 1
-        # Convert timestamp to nanoseconds
-        assert frames_table['ts_ns'][0].value == 1000
+        # Timestamps are stored as int64
+        assert frames_table['ts_ns'][0].as_py() == 1000
 
     def test_write_multiple_frames(self, video_paths):
         """Test writing multiple frames with increasing timestamps."""
@@ -90,8 +90,8 @@ class TestVideoSignalWriter:
         # Should have exactly 10 timestamps in the index
         frames_table = pq.read_table(video_paths['frames'])
         assert len(frames_table) == 10
-        # Verify timestamps match what we wrote (convert from timestamp to ns)
-        stored_ts = [t.value for t in frames_table['ts_ns']]
+        # Verify timestamps match what we wrote
+        stored_ts = [t.as_py() for t in frames_table['ts_ns']]
         assert stored_ts == timestamps
 
     def test_invalid_frame_shape(self, writer):
@@ -258,15 +258,37 @@ class TestVideoSignalSliceAccess:
         assert ts == 3000
         assert_frames_equal(frame, expected_frames[2])
 
-    def test_slice_step_not_one_raises(self, video_paths):
-        """Test that step != 1 raises NotImplementedError."""
+    def test_slice_with_positive_step(self, video_paths):
+        """Test that positive steps work correctly."""
+        expected_frames = [create_frame(value=i*50) for i in range(5)]
+        frames_with_ts = [(f, (i + 1) * 1000) for i, f in enumerate(expected_frames)]
+        signal = create_video_signal(video_paths, frames_with_ts)
+
+        # Step=2 should give us frames 0, 2, 4
+        sliced = signal[::2]
+        assert len(sliced) == 3
+
+        frame, ts = sliced[0]
+        assert ts == 1000
+        assert_frames_equal(frame, expected_frames[0])
+
+        frame, ts = sliced[1]
+        assert ts == 3000
+        assert_frames_equal(frame, expected_frames[2])
+
+        frame, ts = sliced[2]
+        assert ts == 5000
+        assert_frames_equal(frame, expected_frames[4])
+
+    def test_slice_negative_step_raises(self, video_paths):
+        """Test that negative/zero steps raise IndexError."""
         signal = create_video_signal(video_paths, [(create_frame(value=100), 1000), (create_frame(value=150), 2000)])
 
-        with pytest.raises(NotImplementedError, match="Only step=1 is supported"):
-            signal[::2]
+        with pytest.raises(IndexError, match="Slice step must be positive"):
+            signal[::-1]
 
-        with pytest.raises(NotImplementedError, match="Only step=1 is supported"):
-            signal[0:2:2]
+        with pytest.raises(IndexError, match="Slice step must be positive"):
+            signal[1::-1]
 
     def test_slice_of_slice(self, video_paths):
         """Test slicing a sliced signal."""
@@ -333,6 +355,93 @@ class TestVideoSignalSliceAccess:
             sliced[-2]
 
 
+class TestVideoSignalArrayIndexAccess:
+    """Test array-based index access to VideoSignal."""
+
+    def test_array_index_basic(self, video_paths):
+        """Test basic array indexing."""
+        expected_frames = [create_frame(value=i*50) for i in range(5)]
+        frames_with_ts = [(f, (i + 1) * 1000) for i, f in enumerate(expected_frames)]
+        signal = create_video_signal(video_paths, frames_with_ts)
+
+        # Access frames 0, 2, 4 via array
+        view = signal[[0, 2, 4]]
+        assert len(view) == 3
+
+        frame, ts = view[0]
+        assert ts == 1000
+        assert_frames_equal(frame, expected_frames[0])
+
+        frame, ts = view[1]
+        assert ts == 3000
+        assert_frames_equal(frame, expected_frames[2])
+
+        frame, ts = view[2]
+        assert ts == 5000
+        assert_frames_equal(frame, expected_frames[4])
+
+    def test_array_index_with_negatives(self, video_paths):
+        """Test array indexing with negative indices."""
+        expected_frames = [create_frame(value=i*50) for i in range(4)]
+        frames_with_ts = [(f, (i + 1) * 1000) for i, f in enumerate(expected_frames)]
+        signal = create_video_signal(video_paths, frames_with_ts)
+
+        # Mix positive and negative indices
+        view = signal[[0, -1, 1, -2]]
+        assert len(view) == 4
+
+        assert view[0][1] == 1000  # frame 0
+        assert view[1][1] == 4000  # frame -1 (last)
+        assert view[2][1] == 2000  # frame 1
+        assert view[3][1] == 3000  # frame -2
+
+    def test_array_index_numpy(self, video_paths):
+        """Test array indexing with numpy array."""
+        expected_frames = [create_frame(value=i*50) for i in range(5)]
+        frames_with_ts = [(f, (i + 1) * 1000) for i, f in enumerate(expected_frames)]
+        signal = create_video_signal(video_paths, frames_with_ts)
+
+        # Use numpy array for indexing
+        indices = np.array([1, 3, 2])
+        view = signal[indices]
+        assert len(view) == 3
+
+        assert view[0][1] == 2000
+        assert view[1][1] == 4000
+        assert view[2][1] == 3000
+
+    def test_array_index_out_of_bounds(self, video_paths):
+        """Test that out of bounds array indices raise IndexError."""
+        signal = create_video_signal(video_paths, [(create_frame(value=100), 1000), (create_frame(value=150), 2000)])
+
+        with pytest.raises(IndexError):
+            signal[[0, 5]]
+
+        with pytest.raises(IndexError):
+            signal[[-3, 0]]
+
+    def test_array_index_on_slice(self, video_paths):
+        """Test array indexing on a sliced signal."""
+        expected_frames = [create_frame(value=i*50) for i in range(6)]
+        frames_with_ts = [(f, (i + 1) * 1000) for i, f in enumerate(expected_frames)]
+        signal = create_video_signal(video_paths, frames_with_ts)
+
+        # First take a slice [1:5] -> frames 1,2,3,4
+        sliced = signal[1:5]
+
+        # Then use array indexing [0, 2] -> frames 1, 3 from original
+        view = sliced[[0, 2]]
+        assert len(view) == 2
+
+        frame, ts = view[0]
+        assert ts == 2000
+        assert_frames_equal(frame, expected_frames[1])
+
+        frame, ts = view[1]
+        assert ts == 4000
+        assert_frames_equal(frame, expected_frames[3])
+
+
 class TestVideoSignalTimeAccess:
     """Test time-based access to VideoSignal."""
 
@@ -397,15 +506,15 @@ class TestVideoSignalTimeSliceAccess:
         expected_frames = [create_frame(value=50), create_frame(value=100), create_frame(value=150), create_frame(value=200)]
         frames_with_ts = [(expected_frames[i], (i + 1) * 1000) for i in range(4)]
         signal = create_video_signal(video_paths, frames_with_ts)
-        
+
         # Time slice [1500:3500] should include frames at 2000 and 3000
         sliced = signal.time[1500:3500]
         assert len(sliced) == 2
-        
+
         frame, ts = sliced[0]
         assert ts == 2000
         assert_frames_equal(frame, expected_frames[1])
-        
+
         frame, ts = sliced[1]
         assert ts == 3000
         assert_frames_equal(frame, expected_frames[2])
@@ -415,7 +524,7 @@ class TestVideoSignalTimeSliceAccess:
         expected_frames = [create_frame(value=50), create_frame(value=100), create_frame(value=150)]
         frames_with_ts = [(expected_frames[i], (i + 1) * 1000) for i in range(3)]
         signal = create_video_signal(video_paths, frames_with_ts)
-        
+
         # Exact boundaries
         sliced = signal.time[1000:3000]
         assert len(sliced) == 2
@@ -427,7 +536,7 @@ class TestVideoSignalTimeSliceAccess:
         expected_frames = [create_frame(value=50), create_frame(value=100), create_frame(value=150)]
         frames_with_ts = [(expected_frames[i], (i + 1) * 1000) for i in range(3)]
         signal = create_video_signal(video_paths, frames_with_ts)
-        
+
         # No start means from beginning
         sliced = signal.time[:2500]
         assert len(sliced) == 2
@@ -439,7 +548,7 @@ class TestVideoSignalTimeSliceAccess:
         expected_frames = [create_frame(value=50), create_frame(value=100), create_frame(value=150)]
         frames_with_ts = [(expected_frames[i], (i + 1) * 1000) for i in range(3)]
         signal = create_video_signal(video_paths, frames_with_ts)
-        
+
         # No stop means to end
         sliced = signal.time[1500:]
         assert len(sliced) == 2
@@ -451,7 +560,7 @@ class TestVideoSignalTimeSliceAccess:
         expected_frames = [create_frame(value=50), create_frame(value=100)]
         frames_with_ts = [(expected_frames[i], (i + 1) * 1000) for i in range(2)]
         signal = create_video_signal(video_paths, frames_with_ts)
-        
+
         # Full slice
         sliced = signal.time[:]
         assert len(sliced) == 2
@@ -461,15 +570,15 @@ class TestVideoSignalTimeSliceAccess:
     def test_time_slice_empty(self, video_paths):
         """Test empty time slices."""
         signal = create_video_signal(video_paths, [(create_frame(value=100), 2000), (create_frame(value=150), 3000)])
-        
+
         # Before all data
         sliced = signal.time[500:1000]
         assert len(sliced) == 0
-        
+
         # After all data
         sliced = signal.time[4000:5000]
         assert len(sliced) == 0
-        
+
         # Empty range
         sliced = signal.time[2500:2500]
         assert len(sliced) == 0
@@ -477,7 +586,7 @@ class TestVideoSignalTimeSliceAccess:
     def test_time_slice_with_step_raises(self, video_paths):
         """Test that time slicing with step raises NotImplementedError."""
         signal = create_video_signal(video_paths, [(create_frame(value=100), 1000)])
-        
+
         with pytest.raises(NotImplementedError, match="step is not supported"):
             signal.time[1000:3000:500]
 
@@ -486,15 +595,15 @@ class TestVideoSignalTimeSliceAccess:
         expected_frames = [create_frame(value=i*50) for i in range(5)]
         frames_with_ts = [(expected_frames[i], (i + 1) * 1000) for i in range(5)]
         signal = create_video_signal(video_paths, frames_with_ts)
-        
+
         # First time slice [1500:4500] -> frames at 2000, 3000, 4000
         sliced1 = signal.time[1500:4500]
         assert len(sliced1) == 3
-        
+
         # Second time slice [2500:3500] of first -> frame at 3000
         sliced2 = sliced1.time[2500:3500]
         assert len(sliced2) == 1
-        
+
         frame, ts = sliced2[0]
         assert ts == 3000
         assert_frames_equal(frame, expected_frames[2])
@@ -504,14 +613,14 @@ class TestVideoSignalTimeSliceAccess:
         expected_frames = [create_frame(value=i*50) for i in range(4)]
         frames_with_ts = [(expected_frames[i], (i + 1) * 1000) for i in range(4)]
         signal = create_video_signal(video_paths, frames_with_ts)
-        
+
         # Time slice then index
         sliced = signal.time[1500:3500]  # frames at 2000, 3000
-        
+
         frame, ts = sliced[0]
         assert ts == 2000
         assert_frames_equal(frame, expected_frames[1])
-        
+
         frame, ts = sliced[-1]
         assert ts == 3000
         assert_frames_equal(frame, expected_frames[2])
@@ -521,15 +630,15 @@ class TestVideoSignalTimeSliceAccess:
         expected_frames = [create_frame(value=i*50) for i in range(5)]
         frames_with_ts = [(expected_frames[i], (i + 1) * 1000) for i in range(5)]
         signal = create_video_signal(video_paths, frames_with_ts)
-        
+
         # Index slice [1:4] -> frames at 2000, 3000, 4000
         index_sliced = signal[1:4]
         assert len(index_sliced) == 3
-        
+
         # Time slice [2500:3500] -> frame at 3000
         time_sliced = index_sliced.time[2500:3500]
         assert len(time_sliced) == 1
-        
+
         frame, ts = time_sliced[0]
         assert ts == 3000
         assert_frames_equal(frame, expected_frames[2])

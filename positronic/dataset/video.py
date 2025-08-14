@@ -120,28 +120,26 @@ class VideoSignalWriter(SignalWriter[np.ndarray]):
 
         # Write frame index (just timestamps, frame numbers are implicit indices)
         if self._frame_timestamps:
-            frames_table = pa.table({'ts_ns': pa.array(self._frame_timestamps, type=pa.timestamp('ns'))})
+            frames_table = pa.table({'ts_ns': pa.array(self._frame_timestamps, type=pa.int64())})
         else:
-            schema = pa.schema([('ts_ns', pa.timestamp('ns'))])
+            schema = pa.schema([('ts_ns', pa.int64())])
             frames_table = pa.table({'ts_ns': []}, schema=schema)
 
         pq.write_table(frames_table, self.frames_index_path)
 
 
 class _VideoSliceView(Signal[np.ndarray]):
-    """A slice view of a VideoSignal."""
+    """A view of a VideoSignal using an array of indices."""
 
-    def __init__(self, parent: "VideoSignal", start: int, stop: int):
+    def __init__(self, parent: "VideoSignal", indices: np.ndarray):
         """Initialize a slice view.
 
         Args:
             parent: The parent VideoSignal
-            start: Start index (inclusive)
-            stop: Stop index (exclusive)
+            indices: Array of indices into the parent signal
         """
         self.parent = parent
-        self.start = start
-        self.stop = stop
+        self.indices = np.asarray(indices, dtype=np.int64)
 
     def _load_timestamps(self):
         """Ensure parent's timestamps are loaded."""
@@ -149,8 +147,7 @@ class _VideoSliceView(Signal[np.ndarray]):
 
     def __len__(self) -> int:
         """Returns the number of frames in this view."""
-        self._load_timestamps()
-        return self.stop - self.start
+        return len(self.indices)
 
     @property
     def time(self):
@@ -159,23 +156,35 @@ class _VideoSliceView(Signal[np.ndarray]):
 
     @property
     def _timestamps(self):
-        """Access the slice of parent's timestamps."""
+        """Access the timestamps for this view."""
         self._load_timestamps()
-        return self.parent._timestamps[self.start:self.stop]
+        return self.parent._timestamps[self.indices]
 
     def _get_frame_at_index(self, index: int) -> Tuple[np.ndarray, int]:
-        return self.parent._get_frame_at_index(self.start + index)
+        """Get frame at the given index in this view."""
+        return self.parent._get_frame_at_index(self.indices[index])
 
-    def __getitem__(self, index: Union[int, slice]) -> Union[Tuple[np.ndarray, int], "Signal[np.ndarray]"]:
+    def __getitem__(self, index: Union[int, slice, np.ndarray, list]) -> Union[Tuple[np.ndarray, int], "Signal[np.ndarray]"]:
         """Access a frame by index within this slice."""
         if isinstance(index, slice):
-            start, stop, step = index.indices(self.stop - self.start)
-            if step != 1:
-                raise NotImplementedError(f"Only step=1 is supported for slices, got step={step}")
-            return _VideoSliceView(self.parent, self.start + start, self.start + stop)
+            start, stop, step = index.indices(len(self.indices))
+            if step <= 0:
+                raise IndexError(f"Slice step must be positive, got {step}")
+            new_indices = self.indices[start:stop:step]
+            return _VideoSliceView(self.parent, new_indices)
+
+        if isinstance(index, (list, np.ndarray)):
+            index = np.asarray(index)
+            if index.dtype == bool:
+                raise NotImplementedError("Boolean indexing is not supported")
+            index = np.where(index < 0, index + len(self), index)
+            if np.any((index < 0) | (index >= len(self))):
+                raise IndexError("Index out of range")
+            new_indices = self.indices[index]
+            return _VideoSliceView(self.parent, new_indices)
 
         if not isinstance(index, (int, np.integer)):
-            raise NotImplementedError(f"Only integer indexing is supported, got {type(index)}")
+            raise NotImplementedError(f"Unsupported index type: {type(index)}")
         index = int(index)
 
         if index < 0:
@@ -183,7 +192,7 @@ class _VideoSliceView(Signal[np.ndarray]):
 
         if not 0 <= index < len(self):
             raise IndexError(f"Index {index} out of range")
-        return self.parent._get_frame_at_index(self.start + index)
+        return self.parent._get_frame_at_index(self.indices[index])
 
 
 class _VideoTimeIndexer:
@@ -219,11 +228,11 @@ class _VideoTimeIndexer:
             stop_idx = len(self.signal) if key.stop is None else np.searchsorted(self._timestamps, key.stop)
 
             if isinstance(self.signal, _VideoSliceView):
-                new_start = self.signal.start + start_idx
-                new_stop = self.signal.start + stop_idx
-                return _VideoSliceView(self.signal.parent, new_start, new_stop)
+                new_indices = self.signal.indices[start_idx:stop_idx]
+                return _VideoSliceView(self.signal.parent, new_indices)
             else:
-                return _VideoSliceView(self.signal, start_idx, stop_idx)
+                indices = np.arange(start_idx, stop_idx, dtype=np.int64)
+                return _VideoSliceView(self.signal, indices)
 
         if not isinstance(key, int):
             raise NotImplementedError(f"Only single integer timestamp or slice is supported, got {type(key)}")
@@ -302,25 +311,36 @@ class VideoSignal(Signal[np.ndarray]):
 
         raise IndexError(f"Could not decode frame {index}")
 
-    def __getitem__(self, index: Union[int, slice]) -> Union[Tuple[np.ndarray, int], Signal[np.ndarray]]:
-        """Access a frame by index or slice.
+    def __getitem__(self, index: Union[int, slice, np.ndarray, list]) -> Union[Tuple[np.ndarray, int], Signal[np.ndarray]]:
+        """Access a frame by index, slice, or array of indices.
 
         Args:
-            index: Integer index or slice
+            index: Integer index, slice, or array-like of indices
 
         Returns:
             If index: Tuple of (frame, timestamp_ns)
-            If slice: VideoSignal view of the sliced data
+            If slice/array: VideoSignal view of the selected data
         """
         if isinstance(index, slice):
             self._load_timestamps()
             start, stop, step = index.indices(len(self))
-            if step != 1:
-                raise NotImplementedError(f"Only step=1 is supported for slices, got step={step}")
-            return _VideoSliceView(self, start, stop)
+            if step <= 0:
+                raise IndexError(f"Slice step must be positive, got {step}")
+            indices = np.arange(start, stop, step, dtype=np.int64)
+            return _VideoSliceView(self, indices)
+
+        if isinstance(index, (list, np.ndarray)):
+            self._load_timestamps()
+            index = np.asarray(index)
+            if index.dtype == bool:
+                raise NotImplementedError("Boolean indexing is not supported")
+            index = np.where(index < 0, index + len(self), index)
+            if np.any((index < 0) | (index >= len(self))):
+                raise IndexError("Index out of range")
+            return _VideoSliceView(self, index)
 
         if not isinstance(index, (int, np.integer)):
-            raise NotImplementedError(f"Only integer indexing is supported, got {type(index)}")
+            raise NotImplementedError(f"Unsupported index type: {type(index)}")
         index = int(index)
         if index < 0:
             index += len(self)
