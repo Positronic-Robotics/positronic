@@ -583,12 +583,56 @@ class TestVideoSignalTimeSliceAccess:
         sliced = signal.time[2500:2500]
         assert len(sliced) == 0
 
-    def test_time_slice_with_step_raises(self, video_paths):
-        """Test that time slicing with step raises NotImplementedError."""
-        signal = create_video_signal(video_paths, [(create_frame(value=100), 1000)])
+    def test_time_slice_with_step_basic(self, video_paths):
+        """Test stepped time slicing returns requested timestamps with carry-back frames."""
+        expected_frames = [create_frame(value=i * 50) for i in range(5)]
+        frames_with_ts = [(expected_frames[i], (i + 1) * 1000) for i in range(5)]
+        signal = create_video_signal(video_paths, frames_with_ts)
 
-        with pytest.raises(NotImplementedError, match="step is not supported"):
-            signal.time[1000:3000:500]
+        # Sample at 1000, 2000, 3000, 4000 (end exclusive)
+        sampled = signal.time[1000:5000:1000]
+        assert len(sampled) == 4
+
+        for i in range(4):
+            frame, ts = sampled[i]
+            assert ts == (i + 1) * 1000
+            assert_frames_equal(frame, expected_frames[i])
+
+    def test_time_slice_with_step_offgrid(self, video_paths):
+        """Test stepped time slicing at off-grid timestamps returns requested timestamps."""
+        expected_frames = [create_frame(value=i * 50) for i in range(3)]
+        frames_with_ts = [(expected_frames[i], (i + 1) * 1000) for i in range(3)]
+        signal = create_video_signal(video_paths, frames_with_ts)
+
+        # Request 1500 and 2500 -> should get frames at 1000 and 2000
+        sampled = signal.time[1500:3000:1000]
+        assert len(sampled) == 2
+        frame0, ts0 = sampled[0]
+        frame1, ts1 = sampled[1]
+        assert ts0 == 1500
+        assert ts1 == 2500
+        assert_frames_equal(frame0, expected_frames[0])
+        assert_frames_equal(frame1, expected_frames[1])
+
+    def test_time_slice_with_step_missing_start_raises(self, video_paths):
+        signal = create_video_signal(video_paths, [(create_frame(value=10), 1000), (create_frame(value=20), 2000)])
+        with pytest.raises(KeyError):
+            _ = signal.time[:3000:1000]
+
+    def test_time_slice_with_step_start_before_first_raises(self, video_paths):
+        signal = create_video_signal(video_paths, [(create_frame(value=10), 2000), (create_frame(value=20), 3000)])
+        with pytest.raises(KeyError):
+            _ = signal.time[1000:4000:1000]
+
+    def test_time_slice_with_step_missing_stop(self, video_paths):
+        expected_frames = [create_frame(value=i * 10) for i in range(5)]
+        frames_with_ts = [(expected_frames[i], (i + 1) * 1000) for i in range(5)]
+        signal = create_video_signal(video_paths, frames_with_ts)
+        sampled = signal.time[1000::1000]
+        assert len(sampled) == 5
+        # First and last
+        assert sampled[0][1] == 1000
+        assert sampled[-1][1] == 5000
 
     def test_time_slice_of_slice(self, video_paths):
         """Test time slicing of a time-sliced signal."""
@@ -642,3 +686,59 @@ class TestVideoSignalTimeSliceAccess:
         frame, ts = time_sliced[0]
         assert ts == 3000
         assert_frames_equal(frame, expected_frames[2])
+
+
+class TestVideoSignalTimeArrayAccess:
+    """Test time-based array access to VideoSignal."""
+
+    def test_time_array_exact_and_offgrid(self, video_paths):
+        expected_frames = [create_frame(value=i * 10) for i in range(3)]
+        frames_with_ts = [(expected_frames[i], (i + 1) * 1000) for i in range(3)]
+        signal = create_video_signal(video_paths, frames_with_ts)
+
+        req = [1000, 1500, 3000]
+        view = signal.time[req]
+        assert len(view) == 3
+        f0, t0 = view[0]
+        f1, t1 = view[1]
+        f2, t2 = view[2]
+        assert t0 == 1000
+        assert t1 == 1500
+        assert t2 == 3000
+        assert_frames_equal(f0, expected_frames[0])
+        assert_frames_equal(f1, expected_frames[0])
+        assert_frames_equal(f2, expected_frames[2])
+
+    def test_time_array_unsorted_and_repeated(self, video_paths):
+        expected_frames = [create_frame(value=i * 10) for i in range(3)]
+        frames_with_ts = [(expected_frames[i], (i + 1) * 1000) for i in range(3)]
+        signal = create_video_signal(video_paths, frames_with_ts)
+
+        req = [3000, 1000, 3000]
+        view = signal.time[req]
+        assert len(view) == 3
+        # Timestamps are preserved as requested
+        assert view[0][1] == 3000
+        assert view[1][1] == 1000
+        assert view[2][1] == 3000
+        # Frames correspond to carry-back values
+        assert_frames_equal(view[0][0], expected_frames[2])
+        assert_frames_equal(view[1][0], expected_frames[0])
+        assert_frames_equal(view[2][0], expected_frames[2])
+
+    def test_time_array_before_first_raises(self, video_paths):
+        signal = create_video_signal(video_paths, [(create_frame(value=10), 1000), (create_frame(value=20), 2000)])
+        with pytest.raises(KeyError):
+            _ = signal.time[[500, 1000]]
+
+    def test_time_array_empty_raises(self, video_paths):
+        signal = create_video_signal(video_paths, [(create_frame(value=10), 1000), (create_frame(value=20), 2000)])
+        with pytest.raises(TypeError):
+            _ = signal.time[[]]
+        with pytest.raises(TypeError):
+            _ = signal.time[np.array([], dtype=np.int64)]
+
+    def test_time_array_float_inputs_raises(self, video_paths):
+        signal = create_video_signal(video_paths, [(create_frame(value=10), 1000), (create_frame(value=20), 2000)])
+        with pytest.raises(TypeError):
+            _ = signal.time[np.array([1000.0, 2500.0], dtype=np.float64)]
