@@ -387,7 +387,9 @@ ptyprocess==0.7.0
 pure-eval==0.2.3
     # via stack-data
 pyarrow==20.0.0
-    # via rerun-sdk
+    # via
+    #   positronic (pyproject.toml)
+    #   rerun-sdk
 pycodestyle==2.13.0
     # via flake8
 pycparser==2.22

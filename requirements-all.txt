@@ -81,13 +81,17 @@ cmeel==0.57.1
     #   cmeel-urdfdom
     #   cmeel-zlib
     #   eigenpy
+    #   eiquadprog
     #   hpp-fcl
     #   pin
+    #   placo
+    #   rhoban-cmeel-jsoncpp
 cmeel-assimp==5.4.3.1
     # via hpp-fcl
 cmeel-boost==1.83.0
     # via
     #   eigenpy
+    #   eiquadprog
     #   hpp-fcl
     #   pin
 cmeel-console-bridge==1.0.2.2
@@ -146,6 +150,8 @@ eigenpy==3.5.1
     # via hpp-fcl
 einops==0.8.1
     # via positronic (pyproject.toml)
+eiquadprog==1.2.8
+    # via placo
 etils==1.12.0
     # via mujoco
 executing==2.2.0
@@ -154,6 +160,8 @@ fastapi==0.115.11
     # via positronic (pyproject.toml)
 fastjsonschema==2.21.1
     # via nbformat
+feetech-servo-sdk==1.0.0
+    # via positronic (pyproject.toml)
 filelock==3.17.0
     # via
     #   datasets
@@ -237,12 +245,15 @@ ipython==9.0.1
     #   ipywidgets
     #   jupyter-console
     #   jupyter-ui-poll
+    #   meshcat
 ipython-pygments-lexers==1.1.1
     # via ipython
 ipywidgets==8.1.5
     # via
     #   anywidget
     #   jupyter
+ischedule==1.2.7
+    # via placo
 isoduration==20.11.0
     # via jsonschema
 jedi==0.19.2
@@ -338,6 +349,8 @@ mccabe==0.7.0
     # via flake8
 mergedeep==1.3.4
     # via draccus
+meshcat==0.3.2
+    # via placo
 mistune==3.1.2
     # via nbconvert
 mpmath==1.3.0
@@ -393,12 +406,14 @@ numpy==1.26.4
     #   imageio
     #   labmaze
     #   matplotlib
+    #   meshcat
     #   mujoco
     #   numba
     #   numpy-quaternion
     #   opencv-python
     #   opencv-python-headless
     #   pandas
+    #   placo
     #   pyturbojpeg
     #   rerun-sdk
     #   scipy
@@ -473,9 +488,14 @@ pillow==11.1.0
     #   diffusers
     #   imageio
     #   matplotlib
+    #   meshcat
     #   rerun-sdk
     #   torchvision
 pin==2.7.0
+    # via
+    #   positronic (pyproject.toml)
+    #   placo
+placo==0.6.5
     # via positronic (pyproject.toml)
 platformdirs==4.3.6
     # via jupyter-core
@@ -507,6 +527,7 @@ pure-eval==0.2.3
     # via stack-data
 pyarrow==19.0.1
     # via
+    #   positronic (pyproject.toml)
     #   datasets
     #   rerun-sdk
 pyaudio==0.2.14
@@ -531,6 +552,8 @@ pygments==2.19.1
     #   nbconvert
 pymodbus==3.8.6
     # via positronic (pyproject.toml)
+pyngrok==7.3.0
+    # via meshcat
 pyopengl==3.1.9
     # via
     #   dm-control
@@ -540,7 +563,9 @@ pyparsing==3.2.1
     #   dm-control
     #   matplotlib
 pyserial==3.5
-    # via positronic (pyproject.toml)
+    # via
+    #   positronic (pyproject.toml)
+    #   feetech-servo-sdk
 pyspacemouse==1.1.4
     # via positronic (pyproject.toml)
 pytest==8.3.5
@@ -571,6 +596,7 @@ pyyaml==6.0.2
     #   draccus
     #   huggingface-hub
     #   jupyter-events
+    #   pyngrok
     #   pyyaml-include
     #   timm
     #   uvicorn
@@ -582,6 +608,7 @@ pyzmq==26.2.1
     #   jupyter-client
     #   jupyter-console
     #   jupyter-server
+    #   meshcat
 referencing==0.36.2
     # via
     #   jsonschema
@@ -609,6 +636,8 @@ rfc3986-validator==0.1.1
     # via
     #   jsonschema
     #   jupyter-events
+rhoban-cmeel-jsoncpp==1.9.4.9
+    # via placo
 rpds-py==0.23.1
     # via
     #   jsonschema
@@ -680,6 +709,7 @@ tornado==6.4.2
     #   jupyter-client
     #   jupyter-server
     #   jupyterlab
+    #   meshcat
     #   notebook
     #   terminado
 tqdm==4.67.1
@@ -727,6 +757,8 @@ typing-inspect==0.9.0
     # via draccus
 tzdata==2025.1
     # via pandas
+u-msgpack-python==2.8.0
+    # via meshcat
 uri-template==1.3.0
     # via jsonschema
 urllib3==2.3.0

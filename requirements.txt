@@ -187,7 +187,9 @@ protobuf==5.29.3
 psutil==7.0.0
     # via imageio
 pyarrow==19.0.1
-    # via rerun-sdk
+    # via
+    #   positronic (pyproject.toml)
+    #   rerun-sdk
 pydantic==2.10.6
     # via fastapi
 pydantic-core==2.27.2
