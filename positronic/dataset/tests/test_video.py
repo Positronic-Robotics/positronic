@@ -387,3 +387,149 @@ class TestVideoSignalTimeAccess:
 
         with pytest.raises(KeyError):
             signal.time[500]
+
+
+class TestVideoSignalTimeSliceAccess:
+    """Test time-based slice access to VideoSignal."""
+
+    def test_time_slice_basic(self, video_paths):
+        """Test basic time slicing."""
+        expected_frames = [create_frame(value=50), create_frame(value=100), create_frame(value=150), create_frame(value=200)]
+        frames_with_ts = [(expected_frames[i], (i + 1) * 1000) for i in range(4)]
+        signal = create_video_signal(video_paths, frames_with_ts)
+        
+        # Time slice [1500:3500] should include frames at 2000 and 3000
+        sliced = signal.time[1500:3500]
+        assert len(sliced) == 2
+        
+        frame, ts = sliced[0]
+        assert ts == 2000
+        assert_frames_equal(frame, expected_frames[1])
+        
+        frame, ts = sliced[1]
+        assert ts == 3000
+        assert_frames_equal(frame, expected_frames[2])
+
+    def test_time_slice_inclusive_exclusive(self, video_paths):
+        """Test that time slicing is inclusive of start, exclusive of stop."""
+        expected_frames = [create_frame(value=50), create_frame(value=100), create_frame(value=150)]
+        frames_with_ts = [(expected_frames[i], (i + 1) * 1000) for i in range(3)]
+        signal = create_video_signal(video_paths, frames_with_ts)
+        
+        # Exact boundaries
+        sliced = signal.time[1000:3000]
+        assert len(sliced) == 2
+        assert sliced[0][1] == 1000
+        assert sliced[1][1] == 2000
+
+    def test_time_slice_no_start(self, video_paths):
+        """Test time slicing with no start time."""
+        expected_frames = [create_frame(value=50), create_frame(value=100), create_frame(value=150)]
+        frames_with_ts = [(expected_frames[i], (i + 1) * 1000) for i in range(3)]
+        signal = create_video_signal(video_paths, frames_with_ts)
+        
+        # No start means from beginning
+        sliced = signal.time[:2500]
+        assert len(sliced) == 2
+        assert sliced[0][1] == 1000
+        assert sliced[1][1] == 2000
+
+    def test_time_slice_no_stop(self, video_paths):
+        """Test time slicing with no stop time."""
+        expected_frames = [create_frame(value=50), create_frame(value=100), create_frame(value=150)]
+        frames_with_ts = [(expected_frames[i], (i + 1) * 1000) for i in range(3)]
+        signal = create_video_signal(video_paths, frames_with_ts)
+        
+        # No stop means to end
+        sliced = signal.time[1500:]
+        assert len(sliced) == 2
+        assert sliced[0][1] == 2000
+        assert sliced[1][1] == 3000
+
+    def test_time_slice_full(self, video_paths):
+        """Test full time slice."""
+        expected_frames = [create_frame(value=50), create_frame(value=100)]
+        frames_with_ts = [(expected_frames[i], (i + 1) * 1000) for i in range(2)]
+        signal = create_video_signal(video_paths, frames_with_ts)
+        
+        # Full slice
+        sliced = signal.time[:]
+        assert len(sliced) == 2
+        assert sliced[0][1] == 1000
+        assert sliced[1][1] == 2000
+
+    def test_time_slice_empty(self, video_paths):
+        """Test empty time slices."""
+        signal = create_video_signal(video_paths, [(create_frame(value=100), 2000), (create_frame(value=150), 3000)])
+        
+        # Before all data
+        sliced = signal.time[500:1000]
+        assert len(sliced) == 0
+        
+        # After all data
+        sliced = signal.time[4000:5000]
+        assert len(sliced) == 0
+        
+        # Empty range
+        sliced = signal.time[2500:2500]
+        assert len(sliced) == 0
+
+    def test_time_slice_with_step_raises(self, video_paths):
+        """Test that time slicing with step raises NotImplementedError."""
+        signal = create_video_signal(video_paths, [(create_frame(value=100), 1000)])
+        
+        with pytest.raises(NotImplementedError, match="step is not supported"):
+            signal.time[1000:3000:500]
+
+    def test_time_slice_of_slice(self, video_paths):
+        """Test time slicing of a time-sliced signal."""
+        expected_frames = [create_frame(value=i*50) for i in range(5)]
+        frames_with_ts = [(expected_frames[i], (i + 1) * 1000) for i in range(5)]
+        signal = create_video_signal(video_paths, frames_with_ts)
+        
+        # First time slice [1500:4500] -> frames at 2000, 3000, 4000
+        sliced1 = signal.time[1500:4500]
+        assert len(sliced1) == 3
+        
+        # Second time slice [2500:3500] of first -> frame at 3000
+        sliced2 = sliced1.time[2500:3500]
+        assert len(sliced2) == 1
+        
+        frame, ts = sliced2[0]
+        assert ts == 3000
+        assert_frames_equal(frame, expected_frames[2])
+
+    def test_time_slice_then_index(self, video_paths):
+        """Test integer indexing on a time-sliced signal."""
+        expected_frames = [create_frame(value=i*50) for i in range(4)]
+        frames_with_ts = [(expected_frames[i], (i + 1) * 1000) for i in range(4)]
+        signal = create_video_signal(video_paths, frames_with_ts)
+        
+        # Time slice then index
+        sliced = signal.time[1500:3500]  # frames at 2000, 3000
+        
+        frame, ts = sliced[0]
+        assert ts == 2000
+        assert_frames_equal(frame, expected_frames[1])
+        
+        frame, ts = sliced[-1]
+        assert ts == 3000
+        assert_frames_equal(frame, expected_frames[2])
+
+    def test_index_slice_then_time_slice(self, video_paths):
+        """Test time slicing on an index-sliced signal."""
+        expected_frames = [create_frame(value=i*50) for i in range(5)]
+        frames_with_ts = [(expected_frames[i], (i + 1) * 1000) for i in range(5)]
+        signal = create_video_signal(video_paths, frames_with_ts)
+        
+        # Index slice [1:4] -> frames at 2000, 3000, 4000
+        index_sliced = signal[1:4]
+        assert len(index_sliced) == 3
+        
+        # Time slice [2500:3500] -> frame at 3000
+        time_sliced = index_sliced.time[2500:3500]
+        assert len(time_sliced) == 1
+        
+        frame, ts = time_sliced[0]
+        assert ts == 3000
+        assert_frames_equal(frame, expected_frames[2])

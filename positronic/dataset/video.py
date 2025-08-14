@@ -163,17 +163,16 @@ class _VideoSliceView(Signal[np.ndarray]):
         self._load_timestamps()
         return self.parent._timestamps[self.start:self.stop]
 
+    def _get_frame_at_index(self, index: int) -> Tuple[np.ndarray, int]:
+        return self.parent._get_frame_at_index(self.start + index)
+
     def __getitem__(self, index: Union[int, slice]) -> Union[Tuple[np.ndarray, int], "Signal[np.ndarray]"]:
         """Access a frame by index within this slice."""
         if isinstance(index, slice):
-            # Handle slice of a slice
             start, stop, step = index.indices(self.stop - self.start)
             if step != 1:
                 raise NotImplementedError(f"Only step=1 is supported for slices, got step={step}")
-            # Return a new slice view with absolute indices
-            new_start = self.start + start
-            new_stop = self.start + stop
-            return _VideoSliceView(self.parent, new_start, new_stop)
+            return _VideoSliceView(self.parent, self.start + start, self.start + stop)
 
         if not isinstance(index, (int, np.integer)):
             raise NotImplementedError(f"Only integer indexing is supported, got {type(index)}")
@@ -184,10 +183,7 @@ class _VideoSliceView(Signal[np.ndarray]):
 
         if not 0 <= index < len(self):
             raise IndexError(f"Index {index} out of range")
-
-        # Use parent's __getitem__ with adjusted index
-        parent_index = self.start + index
-        return self.parent._get_frame_at_index(parent_index)
+        return self.parent._get_frame_at_index(self.start + index)
 
 
 class _VideoTimeIndexer:
@@ -196,32 +192,45 @@ class _VideoTimeIndexer:
     def __init__(self, signal: Union["VideoSignal", "_VideoSliceView"]):
         self.signal = signal
 
-    def __getitem__(self, key: int) -> Tuple[np.ndarray, int]:
-        """Access frame by timestamp.
+    @property
+    def _timestamps(self) -> np.ndarray:
+        self.signal._load_timestamps()
+        return self.signal._timestamps
+
+    def __getitem__(self, key: Union[int, slice]) -> Union[Tuple[np.ndarray, int], Signal[np.ndarray]]:
+        """Access frame by timestamp or time range.
 
         Args:
-            key: Timestamp in nanoseconds
+            key: Timestamp in nanoseconds or slice for time range
 
         Returns:
-            Tuple of (frame, timestamp_ns) for the frame at or before the given timestamp
+            If int: Tuple of (frame, timestamp_ns) for the frame at or before the given timestamp
+            If slice: VideoSignal view containing frames in the time range
 
         Raises:
             KeyError: If no frame exists at or before the given timestamp
-            NotImplementedError: If key is not an integer
+            NotImplementedError: If key is not an integer or slice, or if slice has step
         """
+        if isinstance(key, slice):
+            if key.step is not None:
+                raise NotImplementedError(f"Time slicing with step is not supported, got step={key.step}")
+
+            start_idx = 0 if key.start is None else np.searchsorted(self._timestamps, key.start)
+            stop_idx = len(self.signal) if key.stop is None else np.searchsorted(self._timestamps, key.stop)
+
+            if isinstance(self.signal, _VideoSliceView):
+                new_start = self.signal.start + start_idx
+                new_stop = self.signal.start + stop_idx
+                return _VideoSliceView(self.signal.parent, new_start, new_stop)
+            else:
+                return _VideoSliceView(self.signal, start_idx, stop_idx)
+
         if not isinstance(key, int):
-            raise NotImplementedError(f"Only single integer timestamp is supported, got {type(key)}")
+            raise NotImplementedError(f"Only single integer timestamp or slice is supported, got {type(key)}")
 
-        # Load timestamps if needed
-        self.signal._load_timestamps()
-
-        # Binary search to find the frame at or before the given timestamp
-        idx = np.searchsorted(self.signal._timestamps, key, side='right') - 1
-
+        idx = np.searchsorted(self._timestamps, key, side='right') - 1
         if idx < 0:
             raise KeyError(f"No record at or before timestamp {key}")
-
-        # Use the signal's integer indexing to get the frame
         return self.signal[idx]
 
 
@@ -242,8 +251,7 @@ class VideoSignal(Signal[np.ndarray]):
         self.video_path = video_path
         self.frames_index_path = frames_index_path
 
-        # Lazy-load timestamp index
-        self._timestamps = None
+        self._timestamps = None  # Lazy-load timestamps
 
         # Lazy-load video container
         self._container: Optional[av.container.InputContainer] = None
@@ -253,9 +261,7 @@ class VideoSignal(Signal[np.ndarray]):
         """Lazily load timestamps from the index file."""
         if self._timestamps is None:
             frames_table = pq.read_table(self.frames_index_path)
-            # Convert timestamps to raw nanoseconds (int64)
-            ts_column = frames_table['ts_ns']
-            self._timestamps = np.array([t.value for t in ts_column], dtype=np.int64)
+            self._timestamps = frames_table['ts_ns'].to_numpy()
 
     def _open_video(self):
         """Open video container for reading."""
@@ -316,10 +322,7 @@ class VideoSignal(Signal[np.ndarray]):
         if not isinstance(index, (int, np.integer)):
             raise NotImplementedError(f"Only integer indexing is supported, got {type(index)}")
         index = int(index)
-
-        self._load_timestamps()
-
-        if index < 0:  # Handle negative indexing
+        if index < 0:
             index += len(self)
 
         if not 0 <= index < len(self):
