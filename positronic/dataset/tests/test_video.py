@@ -219,6 +219,120 @@ class TestVideoSignalIndexAccess:
         assert_frames_equal(frame2, expected_frame)
 
 
+class TestVideoSignalSliceAccess:
+    """Test slice-based access to VideoSignal."""
+
+    def test_slice_basic(self, video_paths):
+        """Test basic slicing."""
+        expected_frames = [create_frame(value=50), create_frame(value=100), create_frame(value=150), create_frame(value=200)]
+        frames_with_ts = [(f, (i + 1) * 1000) for i, f in enumerate(expected_frames)]
+        signal = create_video_signal(video_paths, frames_with_ts)
+
+        # Slice [1:3]
+        sliced = signal[1:3]
+        assert len(sliced) == 2
+
+        frame, ts = sliced[0]
+        assert ts == 2000
+        assert_frames_equal(frame, expected_frames[1])
+
+        frame, ts = sliced[1]
+        assert ts == 3000
+        assert_frames_equal(frame, expected_frames[2])
+
+    def test_slice_with_negative_indices(self, video_paths):
+        """Test slicing with negative indices."""
+        expected_frames = [create_frame(value=50), create_frame(value=100), create_frame(value=150)]
+        frames_with_ts = [(f, (i + 1) * 1000) for i, f in enumerate(expected_frames)]
+        signal = create_video_signal(video_paths, frames_with_ts)
+
+        # Slice [-2:]
+        sliced = signal[-2:]
+        assert len(sliced) == 2
+
+        frame, ts = sliced[0]
+        assert ts == 2000
+        assert_frames_equal(frame, expected_frames[1])
+
+        frame, ts = sliced[1]
+        assert ts == 3000
+        assert_frames_equal(frame, expected_frames[2])
+
+    def test_slice_step_not_one_raises(self, video_paths):
+        """Test that step != 1 raises NotImplementedError."""
+        signal = create_video_signal(video_paths, [(create_frame(value=100), 1000), (create_frame(value=150), 2000)])
+
+        with pytest.raises(NotImplementedError, match="Only step=1 is supported"):
+            signal[::2]
+
+        with pytest.raises(NotImplementedError, match="Only step=1 is supported"):
+            signal[0:2:2]
+
+    def test_slice_of_slice(self, video_paths):
+        """Test slicing a sliced signal."""
+        expected_frames = [create_frame(value=i*50) for i in range(5)]
+        frames_with_ts = [(f, (i + 1) * 1000) for i, f in enumerate(expected_frames)]
+        signal = create_video_signal(video_paths, frames_with_ts)
+
+        # First slice [1:4] -> frames 1,2,3
+        sliced1 = signal[1:4]
+        assert len(sliced1) == 3
+
+        # Second slice [1:] of first slice -> frames 2,3
+        sliced2 = sliced1[1:]
+        assert len(sliced2) == 2
+
+        frame, ts = sliced2[0]
+        assert ts == 3000
+        assert_frames_equal(frame, expected_frames[2])
+
+        frame, ts = sliced2[1]
+        assert ts == 4000
+        assert_frames_equal(frame, expected_frames[3])
+
+    def test_slice_empty(self, video_paths):
+        """Test empty slices."""
+        signal = create_video_signal(video_paths, [(create_frame(value=100), 1000), (create_frame(value=150), 2000)])
+
+        # Empty slice
+        sliced = signal[2:2]
+        assert len(sliced) == 0
+
+        # Out of range slice
+        sliced = signal[5:10]
+        assert len(sliced) == 0
+
+    def test_slice_negative_index_access(self, video_paths):
+        """Test negative indexing within a slice."""
+        expected_frames = [create_frame(value=i*50) for i in range(4)]
+        frames_with_ts = [(f, (i + 1) * 1000) for i, f in enumerate(expected_frames)]
+        signal = create_video_signal(video_paths, frames_with_ts)
+
+        sliced = signal[1:3]  # frames 1,2
+
+        # Access with negative index
+        frame, ts = sliced[-1]
+        assert ts == 3000
+        assert_frames_equal(frame, expected_frames[2])
+
+        frame, ts = sliced[-2]
+        assert ts == 2000
+        assert_frames_equal(frame, expected_frames[1])
+
+    def test_slice_out_of_bounds(self, video_paths):
+        """Test out of bounds access in slice."""
+        signal = create_video_signal(video_paths, [(create_frame(value=100), 1000), (create_frame(value=150), 2000)])
+
+        sliced = signal[0:1]
+        assert len(sliced) == 1
+
+        with pytest.raises(IndexError):
+            sliced[1]
+
+        with pytest.raises(IndexError):
+            sliced[-2]
+
+
 class TestVideoSignalTimeAccess:
     """Test time-based access to VideoSignal."""
 
