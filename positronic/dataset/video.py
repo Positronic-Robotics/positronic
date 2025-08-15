@@ -181,7 +181,8 @@ class _VideoSliceView(Signal[np.ndarray]):
         """Map local range [start_idx:stop_idx] to parent indices for slice-based time lookups."""
         return self.parent, self.indices[start_idx:stop_idx]
 
-    def __getitem__(self, index: Union[int, slice, np.ndarray, list]) -> Union[Tuple[np.ndarray, int], "Signal[np.ndarray]"]:
+    def __getitem__(self, index: Union[int, slice, np.ndarray,
+                                       list]) -> Union[Tuple[np.ndarray, int], "Signal[np.ndarray]"]:
         """Access a frame by index within this slice."""
         if isinstance(index, slice):
             start, stop, step = index.indices(len(self.indices))
@@ -225,7 +226,8 @@ class _VideoTimeIndexer:
         self.signal._load_timestamps()
         return self.signal._timestamps
 
-    def __getitem__(self, key: Union[int, slice, List[int], np.ndarray]) -> Union[Tuple[np.ndarray, int], Signal[np.ndarray]]:  # noqa: C901
+    def __getitem__(self, key: Union[int, slice, List[int],
+                                     np.ndarray]) -> Union[Tuple[np.ndarray, int], Signal[np.ndarray]]:
         """Access frame by timestamp or time range.
 
         Args:
@@ -240,54 +242,54 @@ class _VideoTimeIndexer:
             NotImplementedError: If key is not an integer/array/slice
         """
         if isinstance(key, slice):
-            # If step is provided, produce sampled view at requested timestamps
-            if key.step is not None:
-                if key.step <= 0:
-                    raise KeyError("Slice step must be positive")
-                if key.start is None:
-                    raise KeyError("Slice start is required when step is provided")
-
-                stop = key.stop if key.stop is not None else int(self._timestamps[-1]) + 1
-                return self[np.arange(key.start, stop, key.step, dtype=np.int64)]
-
-            if len(self._timestamps) == 0:
-                return _VideoSliceView.empty()
-
-            start = key.start if key.start is not None else int(self._timestamps[0])
-            stop = key.stop if key.stop is not None else int(self._timestamps[-1]) + 1
-
-            start_idx = int(np.searchsorted(self._timestamps, start, side='left'))
-            stop_idx = int(np.searchsorted(self._timestamps, stop, side='left'))
-
-            parent, indices = self.signal._p_idx_for_range(start_idx, stop_idx)
-            return _VideoSliceView(parent, indices)
-
-        # Array of timestamps -> sampled view
+            return self._get_by_slice(key)
         if isinstance(key, (list, np.ndarray)):
-            req_ts = np.asarray(key)
-            if req_ts.size == 0:
-                raise TypeError("Empty timestamp arrays are not supported")
-            if not np.issubdtype(req_ts.dtype, np.integer):
-                raise TypeError(f"Invalid timestamp array dtype: {req_ts.dtype}")
-
-            # Locate indices of values at or before each requested timestamp
-            pos = np.searchsorted(self._timestamps, req_ts, side='right') - 1
-            if not np.all(pos >= 0):
-                raise KeyError("No record at or before some of the requested timestamps")
-
-            parent, parent_indices = self.signal._p_idx_for_pos(pos)
-            # Return a view with parent indices but timestamps equal to requested times
-            return _VideoSliceView(parent, parent_indices, sample_timestamps=req_ts.astype(np.int64, copy=False))
-
-        # Single timestamp -> single record (value at or before timestamp)
+            return self._get_by_array(key)
         if isinstance(key, (int, np.integer)):
-            ts = int(key)
-            idx = int(np.searchsorted(self._timestamps, ts, side='right') - 1)
-            if idx < 0:
-                raise KeyError(f"No record at or before timestamp {ts}")
-            return self.signal[idx]
-
+            return self._get_by_scalar(int(key))
         raise NotImplementedError(f"Unsupported key type for time indexing: {type(key)}")
+
+    def _get_by_scalar(self, ts: int) -> Tuple[np.ndarray, int]:
+        idx = int(np.searchsorted(self._timestamps, ts, side='right') - 1)
+        if idx < 0:
+            raise KeyError(f"No record at or before timestamp {ts}")
+        return self.signal[idx]
+
+    def _get_by_array(self, key: Union[List[int], np.ndarray]) -> Signal[np.ndarray]:
+        req_ts = np.asarray(key)
+        if req_ts.size == 0:
+            raise TypeError("Empty timestamp arrays are not supported")
+        if not np.issubdtype(req_ts.dtype, np.integer):
+            raise TypeError(f"Invalid timestamp array dtype: {req_ts.dtype}")
+
+        pos = np.searchsorted(self._timestamps, req_ts, side='right') - 1
+        if not np.all(pos >= 0):
+            raise KeyError("No record at or before some of the requested timestamps")
+
+        parent, parent_indices = self.signal._p_idx_for_pos(pos)
+        return _VideoSliceView(parent, parent_indices, sample_timestamps=req_ts.astype(np.int64, copy=False))
+
+    def _get_by_slice(self, sl: slice) -> Signal[np.ndarray]:
+        # Stepped time slice -> sample at requested timestamps
+        if sl.step is not None:
+            if sl.step <= 0:
+                raise KeyError("Slice step must be positive")
+            if sl.start is None:
+                raise KeyError("Slice start is required when step is provided")
+            stop = sl.stop if sl.stop is not None else int(self._timestamps[-1]) + 1
+            return self._get_by_array(np.arange(sl.start, stop, sl.step, dtype=np.int64))
+
+        # Non-stepped time slice -> contiguous view by frame indices
+        if len(self._timestamps) == 0:
+            return _VideoSliceView.empty()
+
+        start = sl.start if sl.start is not None else int(self._timestamps[0])
+        stop = sl.stop if sl.stop is not None else int(self._timestamps[-1]) + 1
+
+        start_idx = int(np.searchsorted(self._timestamps, start, side='left'))
+        stop_idx = int(np.searchsorted(self._timestamps, stop, side='left'))
+        parent, indices = self.signal._p_idx_for_range(start_idx, stop_idx)
+        return _VideoSliceView(parent, indices)
 
 
 class _VideoNavigator:
@@ -402,7 +404,8 @@ class VideoSignal(Signal[np.ndarray]):
 
         raise IndexError(f"Could not decode frame {index}")
 
-    def __getitem__(self, index: Union[int, slice, np.ndarray, list]) -> Union[Tuple[np.ndarray, int], Signal[np.ndarray]]:
+    def __getitem__(self, index: Union[int, slice, np.ndarray,
+                                       list]) -> Union[Tuple[np.ndarray, int], Signal[np.ndarray]]:
         """Access a frame by index, slice, or array of indices.
 
         Args:

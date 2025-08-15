@@ -2,7 +2,7 @@ import numpy as np
 import pyarrow.parquet as pq
 import pytest
 
-from pimm.dataset.video import VideoSignal, VideoSignalWriter
+from positronic.dataset.video import VideoSignal, VideoSignalWriter
 
 
 @pytest.fixture
@@ -245,7 +245,12 @@ class TestVideoSignalSliceAccess:
 
     def test_slice_basic(self, video_paths):
         """Test basic slicing."""
-        expected_frames = [create_frame(value=50), create_frame(value=100), create_frame(value=150), create_frame(value=200)]
+        expected_frames = [
+            create_frame(value=50),
+            create_frame(value=100),
+            create_frame(value=150),
+            create_frame(value=200)
+        ]
         frames_with_ts = [(f, (i + 1) * 1000) for i, f in enumerate(expected_frames)]
         signal = create_video_signal(video_paths, frames_with_ts)
 
@@ -281,7 +286,7 @@ class TestVideoSignalSliceAccess:
 
     def test_slice_with_positive_step(self, video_paths):
         """Test that positive steps work correctly."""
-        expected_frames = [create_frame(value=i*50) for i in range(5)]
+        expected_frames = [create_frame(value=i * 50) for i in range(5)]
         frames_with_ts = [(f, (i + 1) * 1000) for i, f in enumerate(expected_frames)]
         signal = create_video_signal(video_paths, frames_with_ts)
 
@@ -313,7 +318,7 @@ class TestVideoSignalSliceAccess:
 
     def test_slice_of_slice(self, video_paths):
         """Test slicing a sliced signal."""
-        expected_frames = [create_frame(value=i*50) for i in range(5)]
+        expected_frames = [create_frame(value=i * 50) for i in range(5)]
         frames_with_ts = [(f, (i + 1) * 1000) for i, f in enumerate(expected_frames)]
         signal = create_video_signal(video_paths, frames_with_ts)
 
@@ -347,7 +352,7 @@ class TestVideoSignalSliceAccess:
 
     def test_slice_negative_index_access(self, video_paths):
         """Test negative indexing within a slice."""
-        expected_frames = [create_frame(value=i*50) for i in range(4)]
+        expected_frames = [create_frame(value=i * 50) for i in range(4)]
         frames_with_ts = [(f, (i + 1) * 1000) for i, f in enumerate(expected_frames)]
         signal = create_video_signal(video_paths, frames_with_ts)
 
@@ -381,7 +386,7 @@ class TestVideoSignalArrayIndexAccess:
 
     def test_array_index_basic(self, video_paths):
         """Test basic array indexing."""
-        expected_frames = [create_frame(value=i*50) for i in range(5)]
+        expected_frames = [create_frame(value=i * 50) for i in range(5)]
         frames_with_ts = [(f, (i + 1) * 1000) for i, f in enumerate(expected_frames)]
         signal = create_video_signal(video_paths, frames_with_ts)
 
@@ -403,7 +408,7 @@ class TestVideoSignalArrayIndexAccess:
 
     def test_array_index_with_negatives(self, video_paths):
         """Test array indexing with negative indices."""
-        expected_frames = [create_frame(value=i*50) for i in range(4)]
+        expected_frames = [create_frame(value=i * 50) for i in range(4)]
         frames_with_ts = [(f, (i + 1) * 1000) for i, f in enumerate(expected_frames)]
         signal = create_video_signal(video_paths, frames_with_ts)
 
@@ -418,7 +423,7 @@ class TestVideoSignalArrayIndexAccess:
 
     def test_array_index_numpy(self, video_paths):
         """Test array indexing with numpy array."""
-        expected_frames = [create_frame(value=i*50) for i in range(5)]
+        expected_frames = [create_frame(value=i * 50) for i in range(5)]
         frames_with_ts = [(f, (i + 1) * 1000) for i, f in enumerate(expected_frames)]
         signal = create_video_signal(video_paths, frames_with_ts)
 
@@ -443,7 +448,7 @@ class TestVideoSignalArrayIndexAccess:
 
     def test_array_index_on_slice(self, video_paths):
         """Test array indexing on a sliced signal."""
-        expected_frames = [create_frame(value=i*50) for i in range(6)]
+        expected_frames = [create_frame(value=i * 50) for i in range(6)]
         frames_with_ts = [(f, (i + 1) * 1000) for i, f in enumerate(expected_frames)]
         signal = create_video_signal(video_paths, frames_with_ts)
 
@@ -524,7 +529,12 @@ class TestVideoSignalTimeSliceAccess:
 
     def test_time_slice_basic(self, video_paths):
         """Test basic time slicing."""
-        expected_frames = [create_frame(value=50), create_frame(value=100), create_frame(value=150), create_frame(value=200)]
+        expected_frames = [
+            create_frame(value=50),
+            create_frame(value=100),
+            create_frame(value=150),
+            create_frame(value=200)
+        ]
         frames_with_ts = [(expected_frames[i], (i + 1) * 1000) for i in range(4)]
         signal = create_video_signal(video_paths, frames_with_ts)
 
@@ -657,7 +667,7 @@ class TestVideoSignalTimeSliceAccess:
 
     def test_time_slice_of_slice(self, video_paths):
         """Test time slicing of a time-sliced signal."""
-        expected_frames = [create_frame(value=i*50) for i in range(5)]
+        expected_frames = [create_frame(value=i * 50) for i in range(5)]
         frames_with_ts = [(expected_frames[i], (i + 1) * 1000) for i in range(5)]
         signal = create_video_signal(video_paths, frames_with_ts)
 
@@ -675,7 +685,7 @@ class TestVideoSignalTimeSliceAccess:
 
     def test_time_slice_then_index(self, video_paths):
         """Test integer indexing on a time-sliced signal."""
-        expected_frames = [create_frame(value=i*50) for i in range(4)]
+        expected_frames = [create_frame(value=i * 50) for i in range(4)]
         frames_with_ts = [(expected_frames[i], (i + 1) * 1000) for i in range(4)]
         signal = create_video_signal(video_paths, frames_with_ts)
 
@@ -692,7 +702,7 @@ class TestVideoSignalTimeSliceAccess:
 
     def test_index_slice_then_time_slice(self, video_paths):
         """Test time slicing on an index-sliced signal."""
-        expected_frames = [create_frame(value=i*50) for i in range(5)]
+        expected_frames = [create_frame(value=i * 50) for i in range(5)]
         frames_with_ts = [(expected_frames[i], (i + 1) * 1000) for i in range(5)]
         signal = create_video_signal(video_paths, frames_with_ts)
 
@@ -765,7 +775,6 @@ class TestVideoSignalTimeArrayAccess:
             _ = signal.time[np.array([1000.0, 2500.0], dtype=np.float64)]
 
     def test_time_array_multiple_offgrid_same_gap(self, video_paths):
-        """Multiple requested times within one frame gap carry back to the same frame and preserve requested timestamps."""
         # Create three frames at 1000, 2000, 3000 ns with distinct contents
         expected_frames = [create_frame(value=i * 40) for i in range(3)]
         frames_with_ts = [(expected_frames[i], (i + 1) * 1000) for i in range(3)]

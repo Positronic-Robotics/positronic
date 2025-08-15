@@ -17,7 +17,7 @@ We optimize for:
 * Window slices like "5 seconds before time X".
 
 ## Public API
-In the current version we have only "scalar" and "vector" Signals supported. Also, we support one and only one timestamp type per Signal. There are two main classes in the library.
+We support three kinds of Signals: scalar, vector, and image (video). Also, we support one and only one timestamp type per Signal. There are two main classes in the library.
 ```python
 class Signal[T]:
     # Returns the number of records in the signal
@@ -60,9 +60,7 @@ class SignalWriter[T]:
 
 `Signal` and `SignalWriter` are abstract interfaces.
 
-Currently we have only one scalar and vector Signals implemented (`SimpleSignal` and `SimpleSignalWriter`). These classes cover both scalars and vectors, and work for all fixed size data types supported by pyarrow.
-
-The Signal and writers for image data types (i.e. video) will be implemented later.
+We provide implementations for scalar and vector Signals (`SimpleSignal`/`SimpleSignalWriter`) and for image Signals (`VideoSignal`/`VideoSignalWriter`).
 
 ### Scalar / Vector
 
@@ -96,20 +94,19 @@ Currently we use only one video file per `VideoSignal`, though in the future we 
 
 ```text
 frames.parquet
-  ts_ns    : timestamp('ns')   # presentation timestamp of the frame
+  ts_ns    : int64   # presentation timestamp of the frame in nanoseconds
 ```
 
-* Frames are strictly sorted by `ts_ns`.
+* Frames are strictly sorted by `ts_ns` and must be strictly increasing.
 * Frame numbers are implicit - they are simply the row indices (0, 1, 2, ...).
 * We rely on the modern video container's internal frame index for seeking.
 
 #### Access semantics
 
 Access interface is the same as for `SimpleSignals`, i.e. both index and time interfaces support plain integers, slices and arrays.
-We went an extra mile for you, and made all access patterns zero-copy over images, i.e. all of them are views of original data
-(though the timestamps are copied).
+All access patterns return views over the underlying index data (zero-copy for indices/timestamps; note that timestamps for sampled views are materialized). Frames are decoded on demand when accessed and are not duplicated across views unless decoded again.
 
-Returned frame type is **decoded uint8 image (H×W×3)**. Decoding is on-demand; memory stays O(1). Grayscale (HxWx1) images are not supported yet.
+Returned frame type is **decoded uint8 image (H×W×3)**. Decoding is on-demand; memory usage stays O(1) with respect to the number of frames (timestamps are kept in memory). Grayscale (HxWx1) images are not supported yet.
 
 #### Recording
 `VideoSignalWriter` takes the path to the video file, frame index file, and encoding settings (codec, GOP size, fps).
@@ -118,4 +115,3 @@ Returned frame type is **decoded uint8 image (H×W×3)**. Decoding is on-demand;
 * Writer encodes frames to video file using the specified codec (default: H.264).
 * For every input frame, the timestamp is appended to the `frames.parquet` index.
 * The frame number in the video corresponds to the index position in the timestamp array.
-
