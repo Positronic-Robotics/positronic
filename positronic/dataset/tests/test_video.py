@@ -170,6 +170,8 @@ class TestVideoSignalIndexAccess:
         signal = create_video_signal(video_paths, frames_with_ts)
         assert len(signal) == 3
 
+        analyse_video(video_paths)
+
         # Check each frame
         for i in range(3):
             frame, ts = signal[i]
@@ -217,6 +219,16 @@ class TestVideoSignalIndexAccess:
         assert ts1 == ts2 == 1000
         assert_frames_equal(frame1, expected_frame)
         assert_frames_equal(frame2, expected_frame)
+
+    def test_long_video(self, video_paths):
+        values = [(10 + i * 113) % 256 for i in range(1000)]
+        frames = [create_frame(v) for v in values]
+        signal = create_video_signal(video_paths, [(f, i * 1000) for i, f in enumerate(frames)])
+        seek_indexes = [100, 101, 102, 300, 5, 7, 10, 14, 19, 25, 100, 200, 300, 400, 401, 402, 999]
+        for index in seek_indexes:
+            frame, ts = signal[index]
+            assert ts == index * 1000
+            assert_frames_equal(frame, frames[index])
 
 
 class TestVideoSignalSliceAccess:
