@@ -88,25 +88,20 @@ When implementing `VideoSignal` we are balancing the following trade-offs:
 * Memory footprint – must also be constant for video data (timestamps are loaded into the memory)
 * User should have control over the size / performance trade off.
 
-We store image streams as a **separate video file** (e.g., MP4/MKV with H.264/H.265) and keep **two Parquet indices** (`frames` and `key_frames`) for fast random access. All timestamps are `timestamp('ns')` (PTS scaled to ns). Files are append-only.
+We store image streams as a **separate video file** (e.g., MP4/MKV with H.264/H.265) and keep a **single Parquet index** (`frames.parquet`) for timestamp mapping. All timestamps are `timestamp('ns')`. Files are append-only.
 
 Currently we use only one video file per `VideoSignal`, though in the future we might support multiple files.
 
-#### Schemas
+#### Schema
 
 ```text
 frames.parquet
   ts_ns    : timestamp('ns')   # presentation timestamp of the frame
-  offset   : int64             # byte offset of the packet in the video file
-
-keyframes.parquet
-  ts_ns     : timestamp('ns')  # timestamp of keyframe (I-frame)
-  frame_idx : int64            # index into frames.parquet (row number)
-  offset    : int64            # byte offset of the keyframe packet in video.bin
 ```
-* Both frames and keyframes are strictly sorted by `ts_ns`.
-* Every row in `keyframes.parquet` corresponds to a row in `frames.parquet`, but not vice versa.
-* Offsets point to exact packet starts in video file.
+
+* Frames are strictly sorted by `ts_ns`.
+* Frame numbers are implicit - they are simply the row indices (0, 1, 2, ...).
+* We rely on the modern video container's internal frame index for seeking.
 
 #### Access semantics
 
@@ -117,9 +112,10 @@ We went an extra mile for you, and made all access patterns zero-copy over image
 Returned frame type is **decoded uint8 image (H×W×3)**. Decoding is on-demand; memory stays O(1). Grayscale (HxWx1) images are not supported yet.
 
 #### Recording
-`VideoSignalWriter` takes the names of the files to write and encoding settings, with the most important ones being codec and GOP (Group of Pictures, distance between keyframes) size.
+`VideoSignalWriter` takes the path to the video file, frame index file, and encoding settings (codec, GOP size, fps).
 
-* Writer encodes packets to video file.
-* For every packet, append a row to `frames` with `(ts_ns, offset)`.
-* If packet is a keyframe, also append to `keyframes` `(ts_ns, frame_idx, offset)`.
-* Index files are flushed periodically; on open, the library verifies that the number of frames in video and in `frames` are equal. It warns if they are not equal, and provides access to the minimum of the two.
+* Frame dimensions (width, height) are automatically inferred from the first frame.
+* Writer encodes frames to video file using the specified codec (default: H.264).
+* For every input frame, the timestamp is appended to the `frames.parquet` index.
+* The frame number in the video corresponds to the index position in the timestamp array.
+
