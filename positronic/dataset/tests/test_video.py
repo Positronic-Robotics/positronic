@@ -218,6 +218,17 @@ class TestVideoSignalIndexAccess:
         assert_frames_equal(frame1, expected_frame)
         assert_frames_equal(frame2, expected_frame)
 
+    def test_time_array_after_end_simple(self, video_paths):
+        """Simple array-based time sampling beyond end returns last frame for each requested time."""
+        frames = [create_frame(value=v) for v in (10, 20)]
+        signal = create_video_signal(video_paths, [(frames[0], 1000), (frames[1], 2000)])
+
+        view = signal.time[[2500]]
+        assert len(view) == 1
+        frame, ts = view[0]
+        assert ts == 2500
+        assert_frames_equal(frame, frames[-1])
+
     def test_long_video(self, video_paths):
         values = [(10 + i * 113) % 256 for i in range(1000)]
         frames = [create_frame(v) for v in values]
@@ -752,3 +763,21 @@ class TestVideoSignalTimeArrayAccess:
         signal = create_video_signal(video_paths, [(create_frame(value=10), 1000), (create_frame(value=20), 2000)])
         with pytest.raises(TypeError):
             _ = signal.time[np.array([1000.0, 2500.0], dtype=np.float64)]
+
+    def test_time_array_multiple_offgrid_same_gap(self, video_paths):
+        """Multiple requested times within one frame gap carry back to the same frame and preserve requested timestamps."""
+        # Create three frames at 1000, 2000, 3000 ns with distinct contents
+        expected_frames = [create_frame(value=i * 40) for i in range(3)]
+        frames_with_ts = [(expected_frames[i], (i + 1) * 1000) for i in range(3)]
+        signal = create_video_signal(video_paths, frames_with_ts)
+
+        # Request multiple off-grid timestamps that all fall between 1000 and 2000
+        req = np.array([1100, 1500, 1900], dtype=np.int64)
+        view = signal.time[req]
+
+        # Length matches requests, timestamps preserved, frames carry back to the one at 1000
+        assert len(view) == len(req)
+        for i, t in enumerate(req):
+            frame, ts = view[i]
+            assert ts == int(t)
+            assert_frames_equal(frame, expected_frames[0])

@@ -1,4 +1,5 @@
 from collections import deque
+from functools import lru_cache
 from pathlib import Path
 from typing import Iterator, List, Optional, Tuple, Union
 
@@ -142,6 +143,10 @@ class _VideoSliceView(Signal[np.ndarray]):
         self.indices = np.asarray(indices, dtype=np.int64)
         self._sample_timestamps = None if sample_timestamps is None else np.asarray(sample_timestamps, dtype=np.int64)
 
+    @classmethod
+    def empty(cls):
+        return cls(None, np.array([], dtype=np.int64), np.array([], dtype=np.int64))
+
     def _load_timestamps(self):
         """Ensure parent's timestamps are loaded."""
         self.parent._load_timestamps()
@@ -226,7 +231,6 @@ class _VideoTimeIndexer:
             KeyError: If no frame exists at or before the given timestamp
             NotImplementedError: If key is not an integer/array/slice
         """
-        # Slice semantics (with optional step)
         if isinstance(key, slice):
             # If step is provided, produce sampled view at requested timestamps
             if key.step is not None:
@@ -234,21 +238,16 @@ class _VideoTimeIndexer:
                     raise KeyError("Slice step must be positive")
                 if key.start is None:
                     raise KeyError("Slice start is required when step is provided")
-            # Compute default start/stop if missing
+
+                stop = key.stop if key.stop is not None else int(self._timestamps[-1]) + 1
+                return self[np.arange(key.start, stop, key.step, dtype=np.int64)]
+
             if len(self._timestamps) == 0:
-                # Empty signal -> always empty view
-                return _VideoSliceView(self.signal if isinstance(self.signal, VideoSignal) else self.signal.parent,
-                                       np.arange(0, 0, dtype=np.int64),
-                                       np.arange(0, 0, dtype=np.int64))
+                return _VideoSliceView.empty()
 
             start = key.start if key.start is not None else int(self._timestamps[0])
             stop = key.stop if key.stop is not None else int(self._timestamps[-1]) + 1
 
-            if key.step is not None:
-                req_ts = np.arange(start, stop, key.step, dtype=np.int64)
-                return self[req_ts]
-
-            # No step: inclusive start, exclusive stop window
             start_idx = int(np.searchsorted(self._timestamps, start, side='left'))
             stop_idx = int(np.searchsorted(self._timestamps, stop, side='left'))
 
@@ -392,19 +391,10 @@ class VideoSignal(Signal[np.ndarray]):
         """Returns an indexer for accessing Signal data by timestamp."""
         return _VideoTimeIndexer(self)
 
+    @lru_cache(maxsize=1)  # Access to the same index might be frequent
     def _get_frame_at_index(self, index: int) -> Tuple[np.ndarray, int]:
-        """Internal method to get a frame at a specific index.
-
-        Args:
-            index: Absolute index in the video (must be valid)
-
-        Returns:
-            Tuple of (frame, timestamp_ns)
-        """
+        """Internal method to get a frame at a specific index."""
         index = int(index)
-        if index < 0 or index >= len(self):
-            raise IndexError(f"Index {index} out of range")
-
         self._nav.seek_if_needed(index)
         for frame_index, frame in self._nav:
             if frame_index == index:
@@ -425,7 +415,6 @@ class VideoSignal(Signal[np.ndarray]):
             If slice/array: VideoSignal view of the selected data
         """
         if isinstance(index, slice):
-            self._load_timestamps()
             start, stop, step = index.indices(len(self))
             if step <= 0:
                 raise IndexError(f"Slice step must be positive, got {step}")
@@ -433,7 +422,6 @@ class VideoSignal(Signal[np.ndarray]):
             return _VideoSliceView(self, indices)
 
         if isinstance(index, (list, np.ndarray)):
-            self._load_timestamps()
             index = np.asarray(index)
             if index.dtype == bool:
                 raise NotImplementedError("Boolean indexing is not supported")
