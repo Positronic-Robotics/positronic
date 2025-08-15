@@ -173,6 +173,14 @@ class _VideoSliceView(Signal[np.ndarray]):
         frame, _orig_ts = self.parent._get_frame_at_index(self.indices[index])
         return frame, int(self._timestamps[index])
 
+    def _p_idx_for_pos(self, pos: np.ndarray) -> Tuple["VideoSignal", np.ndarray]:
+        """Map local positions to parent indices for array-based time lookups."""
+        return self.parent, self.indices[pos]
+
+    def _p_idx_for_range(self, start_idx: int, stop_idx: int) -> Tuple["VideoSignal", np.ndarray]:
+        """Map local range [start_idx:stop_idx] to parent indices for slice-based time lookups."""
+        return self.parent, self.indices[start_idx:stop_idx]
+
     def __getitem__(self, index: Union[int, slice, np.ndarray, list]) -> Union[Tuple[np.ndarray, int], "Signal[np.ndarray]"]:
         """Access a frame by index within this slice."""
         if isinstance(index, slice):
@@ -251,12 +259,8 @@ class _VideoTimeIndexer:
             start_idx = int(np.searchsorted(self._timestamps, start, side='left'))
             stop_idx = int(np.searchsorted(self._timestamps, stop, side='left'))
 
-            if isinstance(self.signal, _VideoSliceView):
-                new_indices = self.signal.indices[start_idx:stop_idx]
-                return _VideoSliceView(self.signal.parent, new_indices)
-            else:
-                indices = np.arange(start_idx, stop_idx, dtype=np.int64)
-                return _VideoSliceView(self.signal, indices)
+            parent, indices = self.signal._p_idx_for_range(start_idx, stop_idx)
+            return _VideoSliceView(parent, indices)
 
         # Array of timestamps -> sampled view
         if isinstance(key, (list, np.ndarray)):
@@ -271,13 +275,7 @@ class _VideoTimeIndexer:
             if not np.all(pos >= 0):
                 raise KeyError("No record at or before some of the requested timestamps")
 
-            if isinstance(self.signal, _VideoSliceView):
-                parent_indices = self.signal.indices[pos]
-                parent = self.signal.parent
-            else:
-                parent_indices = pos.astype(np.int64, copy=False)
-                parent = self.signal
-
+            parent, parent_indices = self.signal._p_idx_for_pos(pos)
             # Return a view with parent indices but timestamps equal to requested times
             return _VideoSliceView(parent, parent_indices, sample_timestamps=req_ts.astype(np.int64, copy=False))
 
@@ -440,3 +438,11 @@ class VideoSignal(Signal[np.ndarray]):
             raise IndexError(f"Index {index} out of range")
 
         return self._get_frame_at_index(index)
+
+    def _p_idx_for_pos(self, pos: np.ndarray) -> Tuple["VideoSignal", np.ndarray]:
+        """Map absolute positions to parent indices for array-based time lookups."""
+        return self, pos.astype(np.int64, copy=False)
+
+    def _p_idx_for_range(self, start_idx: int, stop_idx: int) -> Tuple["VideoSignal", np.ndarray]:
+        """Map absolute range [start_idx:stop_idx] to parent indices for slice-based time lookups."""
+        return self, np.arange(start_idx, stop_idx, dtype=np.int64)
