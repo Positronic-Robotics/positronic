@@ -170,8 +170,6 @@ class TestVideoSignalIndexAccess:
         signal = create_video_signal(video_paths, frames_with_ts)
         assert len(signal) == 3
 
-        analyse_video(video_paths)
-
         # Check each frame
         for i in range(3):
             frame, ts = signal[i]

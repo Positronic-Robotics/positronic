@@ -293,6 +293,58 @@ class _VideoTimeIndexer:
         raise NotImplementedError(f"Unsupported key type for time indexing: {type(key)}")
 
 
+class _VideoNavigator:
+    """Efficiently navigates video frames using buffering and smart seeking."""
+
+    def __init__(self, video_path: Path, seek_threshold: int):
+        self._container = av.open(str(video_path))
+        self._stream = self._container.streams.video[0]
+
+        rate = self._stream.average_rate or self._stream.rate
+        ticks_per_frame = round(1.0 / (float(rate) * float(self._stream.time_base)))
+        self._ticks_per_frame = max(1, int(ticks_per_frame))
+        self._seek_threshold = seek_threshold
+
+        self._frame_buffer: deque[Tuple[int, av.VideoFrame]] = deque()
+
+        self._demux_iter = iter(self._container.demux(self._stream))
+        self._last_idx = -1
+
+    @property
+    def last_decoded_frame_index(self) -> int:
+        """Returns the index of the last decoded frame."""
+        return self._last_idx
+
+    def seek_if_needed(self, target_frame_index: int):
+        """Seeks to target frame if distance exceeds threshold."""
+        target_pts = target_frame_index * self._ticks_per_frame
+
+        if self._last_idx != -1 and 0 < target_frame_index - self._last_idx <= self._seek_threshold:
+            return
+
+        self._container.seek(target_pts, stream=self._stream)
+        self._demux_iter = iter(self._container.demux(self._stream))
+        self._frame_buffer.clear()
+        self._last_idx = -1
+
+    def __iter__(self) -> Iterator[Tuple[int, av.VideoFrame]]:
+        return self
+
+    def __next__(self) -> Tuple[int, av.VideoFrame]:
+        """Returns next frame from buffer or decodes new packets."""
+        while self._frame_buffer:
+            return self._frame_buffer.popleft()
+
+        while not self._frame_buffer:
+            packet = next(self._demux_iter)
+            for frame in packet.decode():
+                assert frame.pts is not None
+                self._last_idx = int(frame.pts // self._ticks_per_frame)
+                self._frame_buffer.append((self._last_idx, frame))
+
+        return self._frame_buffer.popleft()
+
+
 class VideoSignal(Signal[np.ndarray]):
     """Reader for video signals.
 
@@ -316,12 +368,7 @@ class VideoSignal(Signal[np.ndarray]):
         self._seek_threshold = seek_threshold or 30
 
         self._timestamps = None
-
-        self._last_decoded_pts: int | None = None
-        self._frame_buffer: deque[Tuple[int, av.VideoFrame]] = deque()
-        self._container: av.container.InputContainer | None = None
-        self._stream: av.video.stream.VideoStream | None = None
-        self._demux_iter: Iterator[av.Packet] | None = None
+        self._navigator: _VideoNavigator | None = None
 
     def _load_timestamps(self):
         """Lazily load timestamps from the index file."""
@@ -329,15 +376,11 @@ class VideoSignal(Signal[np.ndarray]):
             frames_table = pq.read_table(self.frames_index_path)
             self._timestamps = frames_table['ts_ns'].to_numpy()
 
-    def _open_video(self):
-        """Open video container for reading."""
-        if self._container is None:
-            self._container = av.open(str(self.video_path))
-            self._stream = self._container.streams.video[0]
-
-            rate = self._stream.average_rate or self._stream.rate
-            ticks_per_frame = round(1.0 / (float(rate) * float(self._stream.time_base)))
-            self._ticks_per_frame = max(1, int(ticks_per_frame))
+    @property
+    def _nav(self) -> _VideoNavigator:
+        if self._navigator is None:
+            self._navigator = _VideoNavigator(self.video_path, self._seek_threshold)
+        return self._navigator
 
     def __len__(self) -> int:
         """Returns the number of frames in the signal."""
@@ -358,44 +401,18 @@ class VideoSignal(Signal[np.ndarray]):
         Returns:
             Tuple of (frame, timestamp_ns)
         """
-        self._load_timestamps()
-        self._open_video()
+        index = int(index)
+        if index < 0 or index >= len(self):
+            raise IndexError(f"Index {index} out of range")
 
-        target_pts = int(index) * self._ticks_per_frame
-        seek_threshold = self._seek_threshold * self._ticks_per_frame
-
-        while self._frame_buffer:
-            pts, frame = self._frame_buffer.popleft()
-            self._last_decoded_pts = pts
-            if pts == target_pts:
-                arr = frame.to_ndarray(format='rgb24')
-                return (arr, self._timestamps[index])
-            elif pts > target_pts:
-                self._frame_buffer.clear()
+        self._nav.seek_if_needed(index)
+        for frame_index, frame in self._nav:
+            if frame_index == index:
+                return frame.to_ndarray(format='rgb24'), self._timestamps[index]
+            elif frame_index > index:
                 break
 
-        if self._last_decoded_pts is None or not (0 < target_pts - self._last_decoded_pts <= seek_threshold):
-            self._container.seek(target_pts, stream=self._stream, any_frame=False, backward=True)
-            self._last_decoded_pts = None
-            self._demux_iter = iter(self._container.demux(self._stream))
-            self._frame_buffer.clear()
-
-        result = None
-        try:
-            while True:
-                packet = next(self._demux_iter)
-                for frame in packet.decode():
-                    assert frame.pts is not None
-                    self._last_decoded_pts = int(frame.pts)
-                    if self._last_decoded_pts == target_pts:
-                        arr = frame.to_ndarray(format='rgb24')
-                        result = (arr, self._timestamps[index])
-                    elif self._last_decoded_pts > target_pts:
-                        self._frame_buffer.append((self._last_decoded_pts, frame))
-                if result is not None:
-                    return result
-        except StopIteration:
-            raise IndexError(f"Could not decode frame {index}")
+        raise IndexError(f"Could not decode frame {index}")
 
     def __getitem__(self, index: Union[int, slice, np.ndarray, list]) -> Union[Tuple[np.ndarray, int], Signal[np.ndarray]]:
         """Access a frame by index, slice, or array of indices.
