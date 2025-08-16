@@ -14,7 +14,23 @@ class TimeIndexerLike(Protocol, Generic[T]):
 
 
 class Signal(Sequence[Tuple[T, int]], ABC, Generic[T]):
+    """Strictly typed, stepwise function of time.
 
+    A Signal is an ordered sequence of (value, ts_ns) where timestamps are
+    strictly increasing. The value at time t is defined as the last value at
+    or before t; the signal is undefined for t < first_timestamp.
+
+    Access patterns:
+    - Index-based: integer/slice/array indexing by position. Slices and arrays
+      return Signal views; implementations aim to share storage when possible.
+    - Time-based: `signal.time[...]` provides timestamp access (snapshots,
+      windows, stepped sampling). Stepped time sampling materializes the
+      requested timestamps.
+
+    Concrete implementations decide storage/layout (e.g., Parquet for
+    scalar/vector, encoded video + Parquet index for images) but must follow
+    the semantics above.
+    """
     @abstractmethod
     def __len__(self) -> int:
         """Returns the number of records in the signal."""
@@ -76,7 +92,14 @@ class Signal(Sequence[Tuple[T, int]], ABC, Generic[T]):
 
 
 class SignalWriter(AbstractContextManager, ABC, Generic[T]):
+    """Append-only writer for Signals.
 
+    Writers accept (data, ts_ns) pairs with strictly increasing timestamps and
+    consistent shape/dtype per signal. They optimize for low-latency appends
+    during recording and finalize persistence on `finish()`. After finishing,
+    further `append` calls must fail. Concrete writers choose the backing store
+    (e.g., Parquet for scalar/vector; video + Parquet index for images).
+    """
     @abstractmethod
     def append(self, data: T, ts_ns: int) -> None:
         """Appends data with timestamp.
