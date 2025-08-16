@@ -3,6 +3,7 @@ import pytest
 
 from positronic.dataset.episode import DiskEpisode, DiskEpisodeWriter
 from positronic.dataset.core import Episode
+from positronic.dataset.tests.test_video import create_frame, assert_frames_equal
 
 
 def test_episode_writer_and_reader_basic(tmp_path):
@@ -225,3 +226,53 @@ def test_disk_episode_implements_abc(tmp_path):
 
     view = ep.time[1000:3000]
     assert isinstance(view, Episode)
+
+
+class TestEpisodeVideoIntegration:
+    def test_episode_writer_routes_images_to_video(self, tmp_path):
+        ep_dir = tmp_path / "ep_video"
+        w = DiskEpisodeWriter(ep_dir)
+
+        # Append a few frames under the same signal name
+        frames = [create_frame(30), create_frame(120), create_frame(200)]
+        ts = [1000, 2000, 4000]
+        for f, t in zip(frames, ts):
+            w.append("cam", f, t)
+        w.finish()
+
+        # Files created for a video signal
+        assert (ep_dir / "cam.mp4").exists()
+        assert (ep_dir / "cam.frames.parquet").exists()
+
+        # Reader exposes the signal under the same key
+        ep = DiskEpisode(ep_dir)
+        cam = ep["cam"]
+        assert len(cam) == 3
+
+        # Retrieve frames back and compare approximately (accounting for compression)
+        for i in range(3):
+            frame, t = cam[i]
+            assert t == ts[i]
+            assert_frames_equal(frame, frames[i], tolerance=25)
+
+    def test_episode_mixed_vector_and_video(self, tmp_path):
+        ep_dir = tmp_path / "ep_mixed"
+        w = DiskEpisodeWriter(ep_dir)
+        # Vector signal
+        w.append("a", 1, 1000)
+        w.append("a", 2, 2000)
+        # Video signal
+        w.append("cam", create_frame(10), 1500)
+        w.append("cam", create_frame(20), 2500)
+        w.finish()
+
+        ep = DiskEpisode(ep_dir)
+        # Keys include both signals
+        assert set(ep.keys) == {"a", "cam"}
+
+        # Time snapshot merges both
+        snap = ep.time[2000]
+        assert snap["a"] == (2, 2000)
+        cam_frame, cam_ts = snap["cam"]
+        assert cam_ts == 1500
+        assert_frames_equal(cam_frame, create_frame(10), tolerance=25)

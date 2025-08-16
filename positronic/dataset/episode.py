@@ -6,6 +6,7 @@ from json_tricks import dumps as json_dumps, loads as json_loads
 
 from .core import Signal, Episode, EpisodeWriter
 from .vector import SimpleSignal, SimpleSignalWriter
+from .video import VideoSignal, VideoSignalWriter
 
 T = TypeVar('T')
 
@@ -39,8 +40,16 @@ class DiskEpisodeWriter(EpisodeWriter):
         if signal_name in self._static_items:
             raise ValueError(f"Static item '{signal_name}' already set for this episode")
 
+        # Create writer on first append, choosing vector vs video based on data shape/dtype
         if signal_name not in self._writers:
-            self._writers[signal_name] = SimpleSignalWriter(self._path / f"{signal_name}.parquet")
+            if isinstance(data, np.ndarray) and data.dtype == np.uint8 and data.ndim == 3 and data.shape[2] == 3:
+                # Image signal -> route to video writer
+                video_path = self._path / f"{signal_name}.mp4"
+                frames_index = self._path / f"{signal_name}.frames.parquet"
+                self._writers[signal_name] = VideoSignalWriter(video_path, frames_index)
+            else:
+                # Scalar/vector signal
+                self._writers[signal_name] = SimpleSignalWriter(self._path / f"{signal_name}.parquet")
 
         self._writers[signal_name].append(data, ts_ns)
 
@@ -152,9 +161,24 @@ class DiskEpisode(Episode):
         """
         self._signals = {}
         self._static = {}
+        # Build video signals first: pair *.mp4 with *.frames.parquet
+        used_names: set[str] = set()
+        for video_file in directory.glob('*.mp4'):
+            name = video_file.stem
+            frames_idx = directory / f"{name}.frames.parquet"
+            if frames_idx.exists():
+                self._signals[name] = VideoSignal(video_file, frames_idx)
+                used_names.add(name)
+
+        # Load remaining parquet files as vector/scalar signals, skipping frame index files
         for file in directory.glob('*.parquet'):
-            # TODO: Support video, when it's here
-            key = file.name[:-len('.parquet')]
+            fname = file.name
+            if fname.endswith('.frames.parquet'):
+                # handled as part of a video signal above
+                continue
+            key = fname[:-len('.parquet')]
+            if key in used_names:
+                continue
             self._signals[key] = SimpleSignal(file)
         # Load all static JSON items from the single episode.json file
         ep_json = directory / 'episode.json'
