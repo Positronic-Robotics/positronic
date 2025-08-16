@@ -1,5 +1,9 @@
+import json
 from pathlib import Path
 from typing import Any, TypeVar
+
+import numpy as np
+from json_tricks import dumps as json_dumps, loads as json_loads
 
 from .core import Signal
 from .vector import SimpleSignal, SimpleSignalWriter
@@ -22,6 +26,8 @@ class EpisodeWriter:
         self._path.mkdir(parents=True, exist_ok=False)
 
         self._writers = {}
+        # Accumulated static items to be stored in a single episode.json
+        self._static_items: dict[str, Any] = {}
 
     def append(self, signal_name: str, data: T, ts_ns: int) -> None:
         """Append data to a named signal.
@@ -31,15 +37,43 @@ class EpisodeWriter:
             data: Data to append
             ts_ns: Timestamp in nanoseconds
         """
+        if signal_name in self._static_items:
+            raise ValueError(f"Static item '{signal_name}' already set for this episode")
+
         if signal_name not in self._writers:
             self._writers[signal_name] = SimpleSignalWriter(self._path / f"{signal_name}.parquet")
 
         self._writers[signal_name].append(data, ts_ns)
 
+    def set_static(self, name: str, data: Any) -> None:
+        """Set a static (non-time-varying) item by key for this episode.
+
+        All static items are persisted together into a single 'episode.json'.
+
+        Args:
+            name: The key name for the static item
+            data: JSON-serializable value to store
+
+        Raises:
+            ValueError: If the key has already been set or value not serializable
+        """
+        if name in self._writers:
+            raise ValueError(f"Signal '{name}' already exists for this episode")
+
+        if name in self._static_items:
+            raise ValueError(f"Static item '{name}' already set for this episode")
+
+        self._static_items[name] = data
+
     def finish(self):
         """Finish writing all signals."""
         for writer in self._writers.values():
             writer.finish()
+        # Write all static items into a single episode.json
+        episode_json = self._path / "episode.json"
+        if self._static_items or not episode_json.exists():
+            with episode_json.open('w', encoding='utf-8') as f:
+                f.write(json_dumps(self._static_items))
 
 
 class _TimeIndexer:
@@ -73,11 +107,20 @@ class Episode:
             directory: Directory containing signal files (*.parquet)
         """
         self._signals = {}
+        self._static = {}
         for file in directory.glob('*.parquet'):
             # TODO: Support video, when it's here
             key = file.name[:-len('.parquet')]
             self._signals[key] = SimpleSignal(file)
-
+        # Load all static JSON items from the single episode.json file
+        ep_json = directory / 'episode.json'
+        if ep_json.exists():
+            with ep_json.open('r', encoding='utf-8') as f:
+                data = json_loads(f.read())
+            if isinstance(data, dict):
+                self._static.update(data)
+            else:
+                raise ValueError("episode.json must contain a JSON object (mapping)")
     @property
     def start_ts(self):
         """Return the latest start timestamp across all signals in the episode.
@@ -107,23 +150,28 @@ class Episode:
 
     @property
     def keys(self):
-        """Return the names of all signals in this episode.
+        """Return the names of all items in this episode.
 
         Returns:
-            dict_keys: Signal names
+            dict_keys: Item names (both dynamic signals and static items)
         """
-        return self._signals.keys()
+        return {**{k: True for k in self._signals.keys()}, **{k: True for k in self._static.keys()}}.keys()
 
-    def __getitem__(self, signal_name: str) -> Signal[Any]:
-        """Get a signal by name.
+    def __getitem__(self, name: str) -> Signal[Any] | Any:
+        """Get an item (dynamic Signal or static value) by name.
 
         Args:
-            signal_name: Name of the signal to retrieve
+            name: Name of the item to retrieve
 
         Returns:
-            Signal[Any]: The requested signal
+            - Signal[Any]: if the name corresponds to a dynamic signal
+            - Any: the static value itself if the name corresponds to a static item
 
         Raises:
-            KeyError: If signal_name is not found in the episode
+            KeyError: If name is not found in the episode
         """
-        return self._signals[signal_name]
+        if name in self._signals:
+            return self._signals[name]
+        if name in self._static:
+            return self._static[name]
+        raise KeyError(name)
