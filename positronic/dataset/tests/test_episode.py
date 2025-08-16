@@ -1,4 +1,5 @@
 import numpy as np
+import pytest
 
 from positronic.dataset.episode import Episode, EpisodeWriter
 
@@ -147,3 +148,64 @@ def test_episode_writer_prevents_static_name_conflicting_with_signal(tmp_path):
     # Setting a static item with the same name should raise
     with np.testing.assert_raises_regex(ValueError, "Signal 'conflict_key' already exists"):
         w.set_static("conflict_key", {"foo": 2})
+
+
+class TestEpisodeTimeAccessor:
+    @pytest.fixture(autouse=True)
+    def _setup(self, tmp_path):
+        ep_dir = tmp_path / "ep_time_fixture"
+        w = EpisodeWriter(ep_dir)
+        # Static items
+        w.set_static("task", "stack")
+        w.set_static("version", 2)
+        w.set_static("params", {"k": 1})
+        # Dynamic signals
+        # a: 1000->1, 2000->2, 3000->3
+        w.append("a", 1, 1000)
+        w.append("a", 2, 2000)
+        w.append("a", 3, 3000)
+        # b: 1500->5, 2500->7, 3500->9
+        w.append("b", 5, 1500)
+        w.append("b", 7, 2500)
+        w.append("b", 9, 3500)
+        w.finish()
+
+        self.ep = Episode(ep_dir)
+
+
+    def test_int_includes_static(self):
+        snap = self.ep.time[2000]
+        # includes static keys
+        assert snap["task"] == "stack"
+        assert snap["version"] == 2
+        # includes dynamic samples at-or-before timestamp
+        assert snap["a"] == (2, 2000)
+        assert snap["b"] == (5, 1500)
+
+
+    def test_array_preserves_static_and_samples(self):
+        ts = [1500, 2500, 3000]
+        sub = self.ep.time[ts]
+        # static preserved
+        assert sub["task"] == "stack"
+        # dynamic are signals sampled at requested timestamps, length equals len(ts)
+        a = sub["a"]
+        b = sub["b"]
+        assert len(a) == 3 and len(b) == 3
+        # timestamps of sampled signals equal requested timestamps
+        assert a[0][1] == 1500 and a[1][1] == 2500 and a[2][1] == 3000
+        assert b[0][1] == 1500 and b[1][1] == 2500 and b[2][1] == 3000
+        # values correspond to last at-or-before
+        assert a[0][0] == 1 and a[1][0] == 2 and a[2][0] == 3
+        assert b[0][0] == 5 and b[1][0] == 7 and b[2][0] == 7
+
+
+    def test_slice_preserves_static_and_window(self):
+        # slice with step produces requested timestamps [1500, 2500, 3500)
+        sub = self.ep.time[1500:3501:1000]
+        assert sub["params"] == {"k": 1}
+        a = sub["a"]
+        b = sub["b"]
+        assert len(a) == 3 and len(b) == 3
+        assert [a[i][1] for i in range(3)] == [1500, 2500, 3500]
+        assert [b[i][1] for i in range(3)] == [1500, 2500, 3500]

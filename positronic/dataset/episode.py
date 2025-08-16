@@ -1,4 +1,3 @@
-import json
 from pathlib import Path
 from typing import Any, TypeVar
 
@@ -83,13 +82,26 @@ class _TimeIndexer:
         self.episode = episode
 
     def __getitem__(self, index_or_slice):
-        """Access all signals by timestamp or time slice."""
+        """Access all items by timestamp or time selection.
+
+        - Integer timestamp: returns a mapping of all dynamic signals sampled at
+          or before the timestamp, merged with all static items.
+        - Slice/list/ndarray: returns a new Episode with each dynamic signal
+          sliced/sampled accordingly and all static items preserved.
+        """
         if isinstance(index_or_slice, int):
-            return {key: signal.time[index_or_slice] for key, signal in self.episode._signals.items()}
-        else:
+            # Merge sampled dynamic values with static items
+            sampled = {key: signal.time[index_or_slice] for key, signal in self.episode._signals.items()}
+            return {**self.episode._static, **sampled}
+        elif isinstance(index_or_slice, (list, tuple, np.ndarray)) or isinstance(index_or_slice, slice):
+            # Return a new Episode-like object with sliced/sampled signals and preserved static
             res = Episode.__new__(Episode)
             res._signals = {key: signal.time[index_or_slice] for key, signal in self.episode._signals.items()}
+            # Preserve static data as-is
+            res._static = dict(self.episode._static)
             return res
+        else:
+            raise TypeError(f"Invalid index type: {type(index_or_slice)}")
 
 
 class Episode:
