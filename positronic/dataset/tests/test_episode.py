@@ -184,30 +184,30 @@ def test_episode_static_rejects_none(tmp_path):
 
 def test_episode_writer_set_static_twice_raises(tmp_path):
     ep_dir = tmp_path / "ep_static_dup"
-    w = DiskEpisodeWriter(ep_dir)
-    w.set_static("info", {"ok": True})
-    with np.testing.assert_raises_regex(ValueError, "already set"):
-        w.set_static("info", {"ok": False})
+    with DiskEpisodeWriter(ep_dir) as w:
+        w.set_static("info", {"ok": True})
+        with np.testing.assert_raises_regex(ValueError, "already set"):
+            w.set_static("info", {"ok": False})
 
 
 def test_episode_writer_prevents_signal_name_conflicting_with_static(tmp_path):
     ep_dir = tmp_path / "ep_conflict_static_then_signal"
-    w = DiskEpisodeWriter(ep_dir)
-    # Set a static item first
-    w.set_static("conflict_key", {"foo": 1})
-    # Appending a signal with the same name should raise
-    with np.testing.assert_raises_regex(ValueError, "Static item 'conflict_key' already set"):
-        w.append("conflict_key", 123, 1000)
+    with DiskEpisodeWriter(ep_dir) as w:
+        # Set a static item first
+        w.set_static("conflict_key", {"foo": 1})
+        # Appending a signal with the same name should raise
+        with np.testing.assert_raises_regex(ValueError, "Static item 'conflict_key' already set"):
+            w.append("conflict_key", 123, 1000)
 
 
 def test_episode_writer_prevents_static_name_conflicting_with_signal(tmp_path):
     ep_dir = tmp_path / "ep_conflict_signal_then_static"
-    w = DiskEpisodeWriter(ep_dir)
-    # Write a signal first
-    w.append("conflict_key", 1, 1000)
-    # Setting a static item with the same name should raise
-    with np.testing.assert_raises_regex(ValueError, "Signal 'conflict_key' already exists"):
-        w.set_static("conflict_key", {"foo": 2})
+    with DiskEpisodeWriter(ep_dir) as w:
+        # Write a signal first
+        w.append("conflict_key", 1, 1000)
+        # Setting a static item with the same name should raise
+        with np.testing.assert_raises_regex(ValueError, "Signal 'conflict_key' already exists"):
+            w.set_static("conflict_key", {"foo": 2})
 
 
 class TestEpisodeTimeAccessor:
