@@ -28,6 +28,18 @@ class _ArraySignal(Signal[T]):
         return len(self._timestamps)
 
     @property
+    def start_ts(self) -> int:
+        if len(self._timestamps) == 0:
+            raise ValueError("Signal is empty")
+        return int(self._timestamps[0])
+
+    @property
+    def last_ts(self) -> int:
+        if len(self._timestamps) == 0:
+            raise ValueError("Signal is empty")
+        return int(self._timestamps[-1])
+
+    @property
     def time(self):
         return self._time_indexer
 
@@ -148,6 +160,22 @@ class SimpleSignal(Signal[T]):
         """Returns the number of records in the signal."""
         self._load_data()
         return len(self._timestamps)
+
+    @property
+    def start_ts(self) -> int:
+        """Returns the timestamp of the first record in the signal."""
+        self._load_data()
+        if len(self._timestamps) == 0:
+            raise ValueError("Signal is empty")
+        return int(self._timestamps[0])
+
+    @property
+    def last_ts(self) -> int:
+        """Returns the timestamp of the last record in the signal."""
+        self._load_data()
+        if len(self._timestamps) == 0:
+            raise ValueError("Signal is empty")
+        return int(self._timestamps[-1])
 
     @property
     def time(self):

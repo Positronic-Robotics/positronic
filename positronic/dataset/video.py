@@ -155,6 +155,18 @@ class _VideoSliceView(Signal[np.ndarray]):
         return len(self.indices)
 
     @property
+    def start_ts(self) -> int:
+        if len(self) == 0:
+            raise ValueError("Signal is empty")
+        return int(self._timestamps[0])
+
+    @property
+    def last_ts(self) -> int:
+        if len(self) == 0:
+            raise ValueError("Signal is empty")
+        return int(self._timestamps[-1])
+
+    @property
     def time(self):
         """Returns an indexer for accessing Signal data by timestamp."""
         return _VideoTimeIndexer(self)
@@ -384,6 +396,22 @@ class VideoSignal(Signal[np.ndarray]):
         """Returns the number of frames in the signal."""
         self._load_timestamps()
         return len(self._timestamps)
+
+    @property
+    def start_ts(self) -> int:
+        """Returns the timestamp of the first frame in the signal."""
+        self._load_timestamps()
+        if len(self._timestamps) == 0:
+            raise ValueError("Signal is empty")
+        return int(self._timestamps[0])
+
+    @property
+    def last_ts(self) -> int:
+        """Returns the timestamp of the last frame in the signal."""
+        self._load_timestamps()
+        if len(self._timestamps) == 0:
+            raise ValueError("Signal is empty")
+        return int(self._timestamps[-1])
 
     @property
     def time(self):
