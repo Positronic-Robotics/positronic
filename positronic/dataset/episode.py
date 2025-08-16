@@ -78,7 +78,7 @@ class EpisodeWriter:
 class _TimeIndexer:
     """Time-based indexer for Episode signals."""
 
-    def __init__(self, episode: 'Episode') -> None:
+    def __init__(self, episode: 'Episode | _EpisodeView') -> None:
         self.episode = episode
 
     def __getitem__(self, index_or_slice):
@@ -94,14 +94,46 @@ class _TimeIndexer:
             sampled = {key: signal.time[index_or_slice] for key, signal in self.episode._signals.items()}
             return {**self.episode._static, **sampled}
         elif isinstance(index_or_slice, (list, tuple, np.ndarray)) or isinstance(index_or_slice, slice):
-            # Return a new Episode-like object with sliced/sampled signals and preserved static
-            res = Episode.__new__(Episode)
-            res._signals = {key: signal.time[index_or_slice] for key, signal in self.episode._signals.items()}
-            # Preserve static data as-is
-            res._static = dict(self.episode._static)
-            return res
+            # Return a view with sliced/sampled signals and preserved static
+            signals = {key: signal.time[index_or_slice] for key, signal in self.episode._signals.items()}
+            return _EpisodeView(signals, dict(self.episode._static))
         else:
             raise TypeError(f"Invalid index type: {type(index_or_slice)}")
+
+
+class _EpisodeView:
+    """In-memory view over an Episode's items.
+
+    Provides the same read API as Episode (keys, __getitem__, start_ts, last_ts, time),
+    but does not load from disk. Chained time indexing returns another EpisodeView.
+    """
+
+    def __init__(self, signals: dict[str, Signal[Any]], static: dict[str, Any]) -> None:
+        self._signals = signals
+        self._static = static
+
+    @property
+    def start_ts(self) -> int:
+        return max([signal.start_ts for signal in self._signals.values()]) if self._signals else 0
+
+    @property
+    def last_ts(self) -> int:
+        return max([signal.last_ts for signal in self._signals.values()]) if self._signals else 0
+
+    @property
+    def time(self):
+        return _TimeIndexer(self)
+
+    @property
+    def keys(self):
+        return {**{k: True for k in self._signals.keys()}, **{k: True for k in self._static.keys()}}.keys()
+
+    def __getitem__(self, name: str) -> Signal[Any] | Any:
+        if name in self._signals:
+            return self._signals[name]
+        if name in self._static:
+            return self._static[name]
+        raise KeyError(name)
 
 
 class Episode:
