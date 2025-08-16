@@ -4,13 +4,13 @@ from typing import Any, TypeVar
 import numpy as np
 from json_tricks import dumps as json_dumps, loads as json_loads
 
-from .core import Signal
+from .core import Signal, Episode, EpisodeWriter
 from .vector import SimpleSignal, SimpleSignalWriter
 
 T = TypeVar('T')
 
 
-class EpisodeWriter:
+class DiskEpisodeWriter(EpisodeWriter):
     """Writer for recording episode data containing multiple signals."""
 
     def __init__(self, directory: Path) -> None:
@@ -78,7 +78,7 @@ class EpisodeWriter:
 class _TimeIndexer:
     """Time-based indexer for Episode signals."""
 
-    def __init__(self, episode: 'Episode | _EpisodeView') -> None:
+    def __init__(self, episode: 'Episode') -> None:
         self.episode = episode
 
     def __getitem__(self, index_or_slice):
@@ -96,12 +96,12 @@ class _TimeIndexer:
         elif isinstance(index_or_slice, (list, tuple, np.ndarray)) or isinstance(index_or_slice, slice):
             # Return a view with sliced/sampled signals and preserved static
             signals = {key: signal.time[index_or_slice] for key, signal in self.episode._signals.items()}
-            return _EpisodeView(signals, dict(self.episode._static))
+            return EpisodeView(signals, dict(self.episode._static))
         else:
             raise TypeError(f"Invalid index type: {type(index_or_slice)}")
 
 
-class _EpisodeView:
+class EpisodeView(Episode):
     """In-memory view over an Episode's items.
 
     Provides the same read API as Episode (keys, __getitem__, start_ts, last_ts, time),
@@ -136,7 +136,7 @@ class _EpisodeView:
         raise KeyError(name)
 
 
-class Episode:
+class DiskEpisode(Episode):
     """Reader for episode data containing multiple signals.
 
     An Episode represents a collection of signals recorded together,

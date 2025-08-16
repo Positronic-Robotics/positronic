@@ -11,6 +11,8 @@ Three types are currently supported.
   * __vector__ – of any length
   * __image__ – 3-channel images (of uint8 dtype)
 
+__Episode__ – collection of Signals recorded together plus static, episode-level metadata. All dynamic signals in an Episode share a common time axis.
+
 We optimize for:
 * Fast append during recording (low latency).
 * Random access at query time by the timestamp.
@@ -53,6 +55,48 @@ class SignalWriter[T]:
         pass
 
     # Finalizes the writing. All following append calls will fail
+    def finish(self) -> None:
+        pass
+
+class Episode:
+    # Names of all items (dynamic signals + static items)
+    @property
+    def keys(self):
+        pass
+
+    # Access by name: returns a Signal for dynamic items or the value for static items
+    def __getitem__(self, name: str) -> Signal[Any] | Any:
+        pass
+
+    # Latest start and end timestamps across all dynamic signals
+    @property
+    def start_ts(self) -> int:
+        pass
+
+    @property
+    def last_ts(self) -> int:
+        pass
+
+    # Episode-wide time accessor:
+    # * ep.time[ts] -> dict merging static items with sampled values from each signal at-or-before ts
+    # * ep.time[start:end] -> EpisodeView windowed to [start, end)
+    # * ep.time[start:end:step] -> EpisodeView sampled at t_i = start + i*step (end-exclusive)
+    # * ep.time[[t1, t2, ...]] -> EpisodeView sampled at provided timestamps
+    @property
+    def time(self):
+        pass
+
+class EpisodeWriter:
+    # Append dynamic signal data; timestamps must be strictly increasing per signal
+    # Raises if the signal name conflicts with existing static items
+    def append(self, signal_name: str, data: T, ts_ns: int) -> None:
+        pass
+
+    # Set static (non-time-varying) item; raises on name conflicts
+    def set_static(self, name: str, data: Any) -> None:
+        pass
+
+    # Finalize writing and persist metadata
     def finish(self) -> None:
         pass
 ```
@@ -116,3 +160,33 @@ Returned frame type is **decoded uint8 image (H×W×3)**. Decoding is on-demand;
 * Writer encodes frames to video file using the specified codec (default: H.264).
 * For every input frame, the timestamp is appended to the `frames.parquet` index.
 * The frame number in the video corresponds to the index position in the timestamp array.
+
+## Episodes
+
+An Episode is a collection of Signals recorded together plus static, episode-level metadata. All dynamic signals in an Episode share a common time axis.
+
+### Recording
+
+Episodes are recorded via an `EpisodeWriter` implementations. You add time-varying data by calling `append(signal_name, data, ts_ns)` where timestamps are strictly increasing per signal name; you add episode-level metadata via `set_static(name, data)`. All static items are stored together in a single `episode.json`, while each dynamic signal is stored in its own format, defined by the particular `SignalWriter` implementation. (e.g., Parquet for scalar/vector; video file plus frame index for image signals).
+
+Name collisions are disallowed: attempting to `append` to a name that already exists as a static item raises an error, and vice versa.
+
+Calling `finish()` finalizes all underlying writers and persists metadata.
+
+### Time accessor
+
+Episode supports time-based access across all signals while preserving static items:
+
+- `ep.time[ts] -> dict`
+  - Snapshot: merges all static items with sampled values from each dynamic signal at-or-before `ts`.
+
+- `ep.time[start:end] -> EpisodeView`
+  - Window: each dynamic signal is restricted to `[start, end)`. Static items are preserved.
+
+- `ep.time[start:end:step] -> EpisodeView`
+  - Sampling: each dynamic signal is sampled at `t_i = start + i*step` (end-exclusive). Static items are preserved.
+
+- `ep.time[[t1, t2, ...]] -> EpisodeView`
+  - Arbitrary timestamps: each dynamic signal is sampled at the provided times. Static items are preserved.
+
+Access semantics mirror what is already defined for `Signal.time`: sampling returns values at-or-before requested timestamps; windowing returns views that share underlying storage; stepped sampling materializes requested timestamps. There is no index-based access for episodes — access is time-based only via `ep.time`.

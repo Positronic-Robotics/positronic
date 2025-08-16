@@ -1,5 +1,5 @@
 from abc import ABC, abstractmethod
-from typing import TypeVar, Generic, Tuple, Sequence, Protocol, runtime_checkable
+from typing import Any, TypeVar, Generic, Tuple, Sequence, Protocol, runtime_checkable
 import numpy as np
 
 T = TypeVar('T')
@@ -98,3 +98,72 @@ class SignalWriter(ABC, Generic[T]):
     @abstractmethod
     def __exit__(self, exc_type, exc, tb) -> None:
         ...
+
+
+class Episode(ABC):
+    """Abstract base class for an Episode (core concept).
+
+    Represents a collection of dynamic signals and static episode-level items
+    that share a common time axis. Concrete implementations may load from disk
+    or present in-memory views, but must provide the same read API.
+    """
+
+    @property
+    @abstractmethod
+    def keys(self):
+        """Names of all items (dynamic signals + static items)."""
+        pass
+
+    @abstractmethod
+    def __getitem__(self, name: str) -> Signal[Any] | Any:
+        """Access by name: returns a Signal for dynamic items or the value for static items."""
+        pass
+
+    @property
+    @abstractmethod
+    def start_ts(self) -> int:
+        """Latest start timestamp across all dynamic signals."""
+        pass
+
+    @property
+    @abstractmethod
+    def last_ts(self) -> int:
+        """Latest end timestamp across all dynamic signals."""
+        pass
+
+    @property
+    @abstractmethod
+    def time(self):
+        """Episode-wide time accessor.
+
+        - ep.time[ts] -> dict merging static items with sampled values from each signal at-or-before ts.
+        - ep.time[start:end] -> Episode view windowed to [start, end).
+        - ep.time[start:end:step] -> Episode view sampled at t_i = start + i*step (end-exclusive).
+        - ep.time[[t1, t2, ...]] -> Episode view sampled at provided timestamps.
+        """
+        pass
+
+
+class EpisodeWriter(ABC, Generic[T]):
+    """Abstract base class for writing episodes to a backing store."""
+
+    @abstractmethod
+    def append(self, signal_name: str, data: T, ts_ns: int) -> None:
+        """Append dynamic signal data with strictly increasing timestamps per signal.
+
+        Raises if appending to a name that conflicts with an existing static item.
+        """
+        pass
+
+    @abstractmethod
+    def set_static(self, name: str, data: Any) -> None:
+        """Set a static (non-time-varying) item for the episode.
+
+        Raises if the name conflicts with an existing dynamic signal or static item.
+        """
+        pass
+
+    @abstractmethod
+    def finish(self) -> None:
+        """Finalize writing and persist metadata and signal data."""
+        pass
