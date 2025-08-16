@@ -1,6 +1,7 @@
 from abc import ABC, abstractmethod
 from contextlib import AbstractContextManager
-from typing import Any, TypeVar, Generic, Tuple, Sequence, Protocol, runtime_checkable
+import collections.abc
+from typing import Any, Iterator, TypeVar, Generic, Tuple, Sequence, Protocol, runtime_checkable
 import numpy as np
 
 T = TypeVar('T')
@@ -200,3 +201,19 @@ class EpisodeWriter(AbstractContextManager, ABC, Generic[T]):
     @abstractmethod
     def __exit__(self, exc_type, exc, tb) -> None:
         ...
+
+
+class DatasetWriter(ABC):
+    @abstractmethod
+    def new_episode(self, **metadata: dict[str, Any]) -> EpisodeWriter:
+        pass
+
+
+class Dataset(ABC, collections.abc.Sequence[Episode]):
+    @abstractmethod
+    def __len__(self) -> int:
+        pass
+
+    @abstractmethod
+    def __getitem__(self, index_or_slice: int | slice | Sequence[int] | np.ndarray) -> Episode:
+        pass
