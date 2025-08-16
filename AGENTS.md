@@ -1,5 +1,8 @@
 # Contributor guide
 
+## Local environment
+- Use `uv` tool to manage python environment
+
 ## Testing insturctions
 - Find the CI plan in .github/workflows directory.
 - Run tests locally using `pytest` command. Use virtual environment (`.venv/bin/activate`)
