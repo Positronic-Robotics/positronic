@@ -31,7 +31,6 @@ class Signal(Sequence[Tuple[T, int]], ABC, Generic[T]):
         """Returns the timestamp of the last record in the signal."""
         pass
 
-
     @property
     @abstractmethod
     def time(self) -> TimeIndexerLike[T]:

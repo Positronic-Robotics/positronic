@@ -153,6 +153,7 @@ def test_episode_writer_prevents_static_name_conflicting_with_signal(tmp_path):
 
 
 class TestEpisodeTimeAccessor:
+
     @pytest.fixture(autouse=True)
     def _setup(self, tmp_path):
         ep_dir = tmp_path / "ep_time_fixture"
@@ -174,7 +175,6 @@ class TestEpisodeTimeAccessor:
 
         self.ep = DiskEpisode(ep_dir)
 
-
     def test_int_includes_static(self):
         snap = self.ep.time[2000]
         # includes static keys
@@ -183,7 +183,6 @@ class TestEpisodeTimeAccessor:
         # includes dynamic samples at-or-before timestamp
         assert snap["a"] == (2, 2000)
         assert snap["b"] == (5, 1500)
-
 
     def test_array_preserves_static_and_samples(self):
         ts = [1500, 2500, 3000]
@@ -200,7 +199,6 @@ class TestEpisodeTimeAccessor:
         # values correspond to last at-or-before
         assert a[0][0] == 1 and a[1][0] == 2 and a[2][0] == 3
         assert b[0][0] == 5 and b[1][0] == 7 and b[2][0] == 7
-
 
     def test_slice_preserves_static_and_window(self):
         # slice with step produces requested timestamps [1500, 2500, 3500)
@@ -229,6 +227,7 @@ def test_disk_episode_implements_abc(tmp_path):
 
 
 class TestEpisodeVideoIntegration:
+
     def test_episode_writer_routes_images_to_video(self, tmp_path):
         ep_dir = tmp_path / "ep_video"
         w = DiskEpisodeWriter(ep_dir)

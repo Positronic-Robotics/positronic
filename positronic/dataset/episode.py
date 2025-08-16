@@ -189,6 +189,7 @@ class DiskEpisode(Episode):
                 self._static.update(data)
             else:
                 raise ValueError("episode.json must contain a JSON object (mapping)")
+
     @property
     def start_ts(self):
         """Return the latest start timestamp across all signals in the episode.

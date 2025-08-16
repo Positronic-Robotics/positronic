@@ -835,3 +835,26 @@ class TestVideoSignalIteration:
         assert_frames_equal(items[0][0], expected_frames[0])
         assert items[1][1] == 2500
         assert_frames_equal(items[1][0], expected_frames[1])
+
+class TestVideoSignalStartLastTs:
+    def test_video_start_last_ts_basic(self, video_paths):
+        from positronic.dataset.video import VideoSignal
+        writer = VideoSignalWriter(video_paths['video'], video_paths['frames'], gop_size=5, fps=30)
+        writer.append(create_frame(10), 1000)
+        writer.append(create_frame(20), 2000)
+        writer.append(create_frame(30), 4000)
+        writer.finish()
+
+        s = VideoSignal(video_paths['video'], video_paths['frames'])
+        assert s.start_ts == 1000
+        assert s.last_ts == 4000
+
+    def test_video_start_last_ts_empty_raises(self, video_paths):
+        from positronic.dataset.video import VideoSignal
+        writer = VideoSignalWriter(video_paths['video'], video_paths['frames'])
+        writer.finish()
+        s = VideoSignal(video_paths['video'], video_paths['frames'])
+        with pytest.raises(ValueError):
+            _ = s.start_ts
+        with pytest.raises(ValueError):
+            _ = s.last_ts

@@ -48,6 +48,28 @@ class TestSignalTimeAccess:
         signal = create_signal(tmp_path, [(42, 1000), (43, 2000)])
         assert signal.time[3000] == (43, 2000)
 
+    def test_vector_start_last_ts_basic(self, tmp_path):
+        fp = tmp_path / "sig.parquet"
+        w = SimpleSignalWriter(fp)
+        w.append(1, 1000)
+        w.append(2, 2000)
+        w.append(3, 3000)
+        w.finish()
+
+        s = SimpleSignal(fp)
+        assert s.start_ts == 1000
+        assert s.last_ts == 3000
+
+    def test_vector_start_last_ts_empty_raises(self, tmp_path):
+        fp = tmp_path / "empty.parquet"
+        w = SimpleSignalWriter(fp)
+        w.finish()
+        s = SimpleSignal(fp)
+        with pytest.raises(ValueError):
+            _ = s.start_ts
+        with pytest.raises(ValueError):
+            _ = s.last_ts
+
     def test_time_vector_data(self, tmp_path):
         signal = create_signal(tmp_path, [(np.array([1.0, 2.0, 3.0]), 1000), (np.array([4.0, 5.0, 6.0]), 2000)])
         value, ts = signal.time[1500]
