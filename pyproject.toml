@@ -1,3 +1,7 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
 [project]
 name = "positronic"
 version = "0.1.0"
@@ -76,3 +80,10 @@ testpaths = [
     "positronic/tests",
 ]
 python_files = ["test_*.py", "*_test.py"]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = [
+    "positronic*",
+    "pimm*",
+]

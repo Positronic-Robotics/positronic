@@ -26,3 +26,6 @@ __all__ = [
     'shared_memory',
     'BroadcastEmitter',
 ]
+
+from importlib.metadata import version as _version
+__version__ = _version("positronic")
