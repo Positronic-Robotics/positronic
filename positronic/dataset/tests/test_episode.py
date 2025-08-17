@@ -100,6 +100,38 @@ def test_episode_static_items_json(tmp_path):
     assert a[0] == (42, 1000)
 
 
+def test_episode_meta_written_and_exposed(tmp_path):
+    ep_dir = tmp_path / "ep_meta"
+    w = DiskEpisodeWriter(ep_dir)
+    # also write a dynamic signal and static
+    w.append("a", 1, 1000)
+    w.set_static("user_key", "value")
+    w.finish()
+
+    # Files present
+    assert (ep_dir / "episode.json").exists()
+    assert (ep_dir / "meta.json").exists()
+
+    ep = DiskEpisode(ep_dir)
+    m = ep.meta
+    assert isinstance(m, dict)
+    assert "schema_version" in m and m["schema_version"] == 1
+    assert "created_ts_ns" in m and isinstance(m["created_ts_ns"], int)
+    assert "writer" in m and isinstance(m["writer"], dict)
+    assert m["writer"].get("name") == "positronic.dataset.episode.DiskEpisodeWriter"
+    # git info present when running inside a git repo; skip strict assertions otherwise
+    if "git" in m["writer"]:
+        git = m["writer"]["git"]
+        assert isinstance(git, dict)
+        assert set(["commit", "branch", "dirty"]).issubset(git.keys())
+
+    # Print meta.json content for debugging
+    with open(ep_dir / "meta.json") as f:
+        import json
+        meta_content = json.load(f)
+        print("meta.json content:", meta_content)
+
+
 def test_episode_static_numpy_arrays_roundtrip(tmp_path):
     ep_dir = tmp_path / "ep_static_np"
     w = DiskEpisodeWriter(ep_dir)

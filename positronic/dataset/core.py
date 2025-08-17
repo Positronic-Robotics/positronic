@@ -120,6 +120,17 @@ class Episode(ABC):
 
     @property
     @abstractmethod
+    def meta(self) -> dict:
+        """Read-only system metadata for this episode.
+
+        Contains only system-generated fields (e.g., creation timestamp,
+        schema version, writer info). Not included in `keys` and not
+        accessible via `__getitem__`.
+        """
+        pass
+
+    @property
+    @abstractmethod
     def start_ts(self) -> int:
         """Latest start timestamp across all dynamic signals."""
         pass

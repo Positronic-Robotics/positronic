@@ -1,5 +1,10 @@
 from pathlib import Path
 from typing import Any, TypeVar
+import time
+import platform
+import sys
+from importlib import metadata as importlib_metadata
+import subprocess
 
 import numpy as np
 from json_tricks import dumps as json_dumps, loads as json_loads
@@ -28,6 +33,41 @@ class DiskEpisodeWriter(EpisodeWriter):
         self._writers = {}
         # Accumulated static items to be stored in a single episode.json
         self._static_items: dict[str, Any] = {}
+
+        # Write system metadata immediately
+        meta = {
+            "schema_version": 1,
+            "created_ts_ns": time.time_ns(),
+            "writer": {
+                "name": f"{self.__class__.__module__}.{self.__class__.__qualname__}",
+                "version": None,
+                "python": sys.version.split(" ")[0],
+                "platform": platform.platform(),
+            },
+        }
+        try:
+            meta["writer"]["version"] = importlib_metadata.version("positronic")
+        except Exception:
+            # Package may not be installed; leave as None
+            meta["writer"]["version"] = None
+        # Try to collect Git metadata from the current repository
+        try:
+            commit = subprocess.run([
+                "git", "rev-parse", "HEAD"
+            ], capture_output=True, text=True, check=True).stdout.strip()
+            branch = subprocess.run([
+                "git", "rev-parse", "--abbrev-ref", "HEAD"
+            ], capture_output=True, text=True, check=True).stdout.strip()
+            status = subprocess.run([
+                "git", "status", "--porcelain"
+            ], capture_output=True, text=True, check=True).stdout
+            dirty = bool(status.strip())
+            meta["writer"]["git"] = {"commit": commit, "branch": branch, "dirty": dirty}
+        except Exception:
+            # Not a git repo or git unavailable
+            pass
+        with (self._path / "meta.json").open('w', encoding='utf-8') as f:
+            f.write(json_dumps(meta))
 
     def append(self, signal_name: str, data: T, ts_ns: int) -> None:
         """Append data to a named signal.
@@ -105,7 +145,7 @@ class _TimeIndexer:
         elif isinstance(index_or_slice, (list, tuple, np.ndarray)) or isinstance(index_or_slice, slice):
             # Return a view with sliced/sampled signals and preserved static
             signals = {key: signal.time[index_or_slice] for key, signal in self.episode._signals.items()}
-            return EpisodeView(signals, dict(self.episode._static))
+            return EpisodeView(signals, dict(self.episode._static), dict(getattr(self.episode, "_meta", {})))
         else:
             raise TypeError(f"Invalid index type: {type(index_or_slice)}")
 
@@ -117,9 +157,10 @@ class EpisodeView(Episode):
     but does not load from disk. Chained time indexing returns another EpisodeView.
     """
 
-    def __init__(self, signals: dict[str, Signal[Any]], static: dict[str, Any]) -> None:
+    def __init__(self, signals: dict[str, Signal[Any]], static: dict[str, Any], meta: dict[str, Any] | None = None) -> None:
         self._signals = signals
         self._static = static
+        self._meta = meta or {}
 
     @property
     def start_ts(self) -> int:
@@ -144,6 +185,10 @@ class EpisodeView(Episode):
             return self._static[name]
         raise KeyError(name)
 
+    @property
+    def meta(self) -> dict:
+        return dict(self._meta)
+
 
 class DiskEpisode(Episode):
     """Reader for episode data containing multiple signals.
@@ -161,6 +206,7 @@ class DiskEpisode(Episode):
         """
         self._signals = {}
         self._static = {}
+        self._meta = {}
         # Build video signals first: pair *.mp4 with *.frames.parquet
         used_names: set[str] = set()
         for video_file in directory.glob('*.mp4'):
@@ -189,6 +235,17 @@ class DiskEpisode(Episode):
                 self._static.update(data)
             else:
                 raise ValueError("episode.json must contain a JSON object (mapping)")
+        # Load system metadata from meta.json if present
+        meta_json = directory / 'meta.json'
+        if meta_json.exists():
+            with meta_json.open('r', encoding='utf-8') as f:
+                try:
+                    meta_data = json_loads(f.read())
+                    if isinstance(meta_data, dict):
+                        self._meta.update(meta_data)
+                except Exception:
+                    # Ignore malformed meta; keep empty
+                    pass
 
     @property
     def start_ts(self):
@@ -244,3 +301,7 @@ class DiskEpisode(Episode):
         if name in self._static:
             return self._static[name]
         raise KeyError(name)
+
+    @property
+    def meta(self) -> dict:
+        return dict(self._meta)

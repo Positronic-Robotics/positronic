@@ -68,6 +68,11 @@ class Episode:
     def __getitem__(self, name: str) -> Signal[Any] | Any:
         pass
 
+    # Read-only system metadata (not included in keys, not accessible via __getitem__)
+    @property
+    def meta(self) -> dict:
+        pass
+
     # Latest start and end timestamps across all dynamic signals
     @property
     def start_ts(self) -> int:
@@ -172,6 +177,24 @@ Episodes are recorded via an `EpisodeWriter` implementations. You add time-varyi
 Name collisions are disallowed: attempting to `append` to a name that already exists as a static item raises an error, and vice versa.
 
 Calling `finish()` finalizes all underlying writers and persists metadata.
+
+### System Metadata (meta)
+
+- Purpose: store system-generated, immutable information separate from user static items.
+- Storage: sidecar JSON file `meta.json` inside the episode directory.
+- Accessor: `Episode.meta` (read-only dict). Not included in `Episode.keys` and not accessible via `__getitem__`.
+- Written immediately on `EpisodeWriter` creation.
+- Contents (concise schema):
+  - `schema_version: int` – manifest version (starts at 1).
+  - `created_ts_ns: int` – episode creation time in nanoseconds.
+  - `writer: object` – environment and provenance:
+    - `name: str` – fully qualified writer class (e.g., `positronic.dataset.episode.DiskEpisodeWriter`).
+    - `version: str|null` – package version if available.
+    - `python: str` – interpreter version.
+    - `platform: str` – platform string.
+    - `git: {commit, branch, dirty}` – present if a Git repo is detected.
+
+Signal schemas (dtype, shape, etc.) are not duplicated here; they reside in the signal files themselves (e.g., Parquet/Arrow metadata or frame index files).
 
 ### Time accessor
 
