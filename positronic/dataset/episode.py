@@ -1,10 +1,11 @@
 from pathlib import Path
-from typing import Any, TypeVar
+from typing import Any, TypeVar, Callable
 import time
 import platform
 import sys
 from importlib import metadata as importlib_metadata
 import subprocess
+from functools import partial
 
 import numpy as np
 from json_tricks import dumps as json_dumps, loads as json_loads
@@ -52,15 +53,13 @@ class DiskEpisodeWriter(EpisodeWriter):
             meta["writer"]["version"] = None
         # Try to collect Git metadata from the current repository
         try:
-            commit = subprocess.run([
-                "git", "rev-parse", "HEAD"
-            ], capture_output=True, text=True, check=True).stdout.strip()
-            branch = subprocess.run([
-                "git", "rev-parse", "--abbrev-ref", "HEAD"
-            ], capture_output=True, text=True, check=True).stdout.strip()
-            status = subprocess.run([
-                "git", "status", "--porcelain"
-            ], capture_output=True, text=True, check=True).stdout
+            commit = subprocess.run(["git", "rev-parse", "HEAD"], capture_output=True, text=True,
+                                    check=True).stdout.strip()
+            branch = subprocess.run(["git", "rev-parse", "--abbrev-ref", "HEAD"],
+                                    capture_output=True,
+                                    text=True,
+                                    check=True).stdout.strip()
+            status = subprocess.run(["git", "status", "--porcelain"], capture_output=True, text=True, check=True).stdout
             dirty = bool(status.strip())
             meta["writer"]["git"] = {"commit": commit, "branch": branch, "dirty": dirty}
         except Exception:
@@ -140,12 +139,12 @@ class _TimeIndexer:
         """
         if isinstance(index_or_slice, int):
             # Merge sampled dynamic values with static items
-            sampled = {key: signal.time[index_or_slice] for key, signal in self.episode._signals.items()}
-            return {**self.episode._static, **sampled}
+            sampled = {key: sig.time[index_or_slice] for key, sig in self.episode._iter_signals()}
+            return {**self.episode._static_data, **sampled}
         elif isinstance(index_or_slice, (list, tuple, np.ndarray)) or isinstance(index_or_slice, slice):
             # Return a view with sliced/sampled signals and preserved static
-            signals = {key: signal.time[index_or_slice] for key, signal in self.episode._signals.items()}
-            return EpisodeView(signals, dict(self.episode._static), dict(getattr(self.episode, "_meta", {})))
+            signals = {key: sig.time[index_or_slice] for key, sig in self.episode._iter_signals()}
+            return EpisodeView(signals, dict(self.episode._static_data), dict(self.episode.meta))
         else:
             raise TypeError(f"Invalid index type: {type(index_or_slice)}")
 
@@ -157,7 +156,10 @@ class EpisodeView(Episode):
     but does not load from disk. Chained time indexing returns another EpisodeView.
     """
 
-    def __init__(self, signals: dict[str, Signal[Any]], static: dict[str, Any], meta: dict[str, Any] | None = None) -> None:
+    def __init__(self,
+                 signals: dict[str, Signal[Any]],
+                 static: dict[str, Any],
+                 meta: dict[str, Any] | None = None) -> None:
         self._signals = signals
         self._static = static
         self._meta = meta or {}
@@ -199,53 +201,66 @@ class DiskEpisode(Episode):
     """
 
     def __init__(self, directory: Path) -> None:
-        """Initialize episode reader from a directory.
+        """Initialize episode reader from a directory (lazy).
 
-        Args:
-            directory: Directory containing signal files (*.parquet)
+        - Defers loading of signal data, static items, and meta until accessed.
+        - Prepares lightweight factories for signals discovered on disk.
         """
-        self._signals = {}
-        self._static = {}
-        self._meta = {}
-        # Build video signals first: pair *.mp4 with *.frames.parquet
-        used_names: set[str] = set()
-        for video_file in directory.glob('*.mp4'):
-            name = video_file.stem
-            frames_idx = directory / f"{name}.frames.parquet"
-            if frames_idx.exists():
-                self._signals[name] = VideoSignal(video_file, frames_idx)
-                used_names.add(name)
+        self._dir = directory
+        # Lazy containers
+        self._signals: dict[str, Signal[Any]] = {}
+        # Map name -> zero-arg factory returning a Signal instance
+        self._signal_factories: dict[str, Callable[[], Signal[Any]]] = {}
+        self._static: dict[str, Any] | None = None
+        self._meta: dict[str, Any] | None = None
 
-        # Load remaining parquet files as vector/scalar signals, skipping frame index files
-        for file in directory.glob('*.parquet'):
+        # Discover available signal files but do not instantiate readers yet
+        used_names: set[str] = set()
+        for video_file in self._dir.glob('*.mp4'):
+            name = video_file.stem
+            frames_idx = self._dir / f"{name}.frames.parquet"
+            if not frames_idx.exists():
+                raise ValueError(f"Video file {video_file} has no frames index {frames_idx}")
+            self._signal_factories[name] = partial(VideoSignal, video_file, frames_idx)
+            used_names.add(name)
+
+        for file in self._dir.glob('*.parquet'):
             fname = file.name
             if fname.endswith('.frames.parquet'):
-                # handled as part of a video signal above
                 continue
             key = fname[:-len('.parquet')]
             if key in used_names:
                 continue
-            self._signals[key] = SimpleSignal(file)
-        # Load all static JSON items from the single episode.json file
-        ep_json = directory / 'episode.json'
-        if ep_json.exists():
-            with ep_json.open('r', encoding='utf-8') as f:
-                data = json_loads(f.read())
-            if isinstance(data, dict):
-                self._static.update(data)
-            else:
-                raise ValueError("episode.json must contain a JSON object (mapping)")
-        # Load system metadata from meta.json if present
-        meta_json = directory / 'meta.json'
-        if meta_json.exists():
-            with meta_json.open('r', encoding='utf-8') as f:
-                try:
-                    meta_data = json_loads(f.read())
-                    if isinstance(meta_data, dict):
-                        self._meta.update(meta_data)
-                except Exception:
-                    # Ignore malformed meta; keep empty
-                    pass
+            self._signal_factories[key] = partial(SimpleSignal, file)
+
+    # ---- lazy loaders ----
+    def _ensure_signal(self, name: str) -> Signal[Any]:
+        if name in self._signals:
+            return self._signals[name]
+        if name not in self._signal_factories:
+            raise KeyError(name)
+        factory = self._signal_factories[name]
+        sig = factory()
+        self._signals[name] = sig
+        return sig
+
+    def _iter_signals(self):
+        for name in self._signal_factories.keys():
+            yield name, self._ensure_signal(name)
+
+    @property
+    def _static_data(self) -> dict[str, Any]:
+        if self._static is None:
+            self._static = {}
+            ep_json = self._dir / 'episode.json'
+            if ep_json.exists():
+                with ep_json.open('r', encoding='utf-8') as f:
+                    data = json_loads(f.read())
+                if isinstance(data, dict):
+                    self._static.update(data)
+                else:
+                    raise ValueError("episode.json must contain a JSON object (mapping)")
+        return self._static
 
     @property
     def start_ts(self):
@@ -254,7 +269,10 @@ class DiskEpisode(Episode):
         Returns:
             int: Start timestamp in nanoseconds
         """
-        return max([signal.start_ts for signal in self._signals.values()])
+        values = [sig.start_ts for _, sig in self._iter_signals()]
+        if not values:
+            raise ValueError("Episode has no signals")
+        return max(values)
 
     @property
     def last_ts(self):
@@ -263,7 +281,10 @@ class DiskEpisode(Episode):
         Returns:
             int: Last timestamp in nanoseconds
         """
-        return max([signal.last_ts for signal in self._signals.values()])
+        values = [sig.last_ts for _, sig in self._iter_signals()]
+        if not values:
+            raise ValueError("Episode has no signals")
+        return max(values)
 
     @property
     def time(self):
@@ -281,7 +302,9 @@ class DiskEpisode(Episode):
         Returns:
             dict_keys: Item names (both dynamic signals and static items)
         """
-        return {**{k: True for k in self._signals.keys()}, **{k: True for k in self._static.keys()}}.keys()
+        dyn = {k: True for k in self._signal_factories.keys()}
+        stat = {k: True for k in self._static_data.keys()}
+        return {**dyn, **stat}.keys()
 
     def __getitem__(self, name: str) -> Signal[Any] | Any:
         """Get an item (dynamic Signal or static value) by name.
@@ -296,12 +319,24 @@ class DiskEpisode(Episode):
         Raises:
             KeyError: If name is not found in the episode
         """
-        if name in self._signals:
-            return self._signals[name]
-        if name in self._static:
-            return self._static[name]
+        if name in self._signal_factories:
+            return self._ensure_signal(name)
+        if name in self._static_data:
+            return self._static_data[name]
         raise KeyError(name)
 
     @property
     def meta(self) -> dict:
+        if self._meta is None:
+            meta: dict[str, Any] = {}
+            meta_json = self._dir / 'meta.json'
+            if meta_json.exists():
+                with meta_json.open('r', encoding='utf-8') as f:
+                    try:
+                        meta_data = json_loads(f.read())
+                        if isinstance(meta_data, dict):
+                            meta.update(meta_data)
+                    except Exception:
+                        pass
+            self._meta = meta
         return dict(self._meta)
