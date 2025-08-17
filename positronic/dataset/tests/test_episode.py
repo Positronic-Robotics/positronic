@@ -182,6 +182,27 @@ def test_episode_static_rejects_none(tmp_path):
             w.set_static("maybe", None)
 
 
+def test_episode_writer_abort_cleans_up_and_blocks_further_use(tmp_path):
+    ep_dir = tmp_path / "ep_abort"
+    w = DiskEpisodeWriter(ep_dir)
+
+    # Append some data to create resources
+    w.append("a", 1, 1000)
+    w.set_static("k", 1)
+    assert ep_dir.exists() and (ep_dir / "meta.json").exists()
+
+    # Abort should remove the directory and prevent further actions
+    w.abort()
+    assert not ep_dir.exists()
+
+    with pytest.raises(RuntimeError):
+        w.append("a", 2, 2000)
+    with pytest.raises(RuntimeError):
+        w.set_static("z", 2)
+    with pytest.raises(RuntimeError):
+        w.finish()
+
+
 def test_episode_writer_set_static_twice_raises(tmp_path):
     ep_dir = tmp_path / "ep_static_dup"
     with DiskEpisodeWriter(ep_dir) as w:

@@ -212,6 +212,7 @@ class SimpleSignalWriter(SignalWriter[T]):
         self._timestamps: list[int] = []
         self._values: list[object] = []
         self._finished = False
+        self._aborted = False
         self._last_ts = None
         self._expected_shape = None
         self._expected_dtype = None
@@ -235,6 +236,8 @@ class SimpleSignalWriter(SignalWriter[T]):
     def append(self, data: T, ts_ns: int) -> None:  # noqa: C901  Function is too complex
         if self._finished:
             raise RuntimeError("Cannot append to a finished writer")
+        if self._aborted:
+            raise RuntimeError("Cannot append to an aborted writer")
 
         if self._last_ts is not None and ts_ns <= self._last_ts:
             raise ValueError(f"Timestamp {ts_ns} is not increasing (last was {self._last_ts})")
@@ -271,7 +274,7 @@ class SimpleSignalWriter(SignalWriter[T]):
 
     def __exit__(self, exc_type, exc, tb) -> None:
         """Finalize the file on context exit (even on exceptions)."""
-        if self._finished:
+        if self._finished or self._aborted:
             return
         self._finished = True
         try:
@@ -284,3 +287,19 @@ class SimpleSignalWriter(SignalWriter[T]):
                 schema = pa.schema([('timestamp', pa.int64()), ('value', pa.int64())])
                 table = pa.table({'timestamp': [], 'value': []}, schema=schema)
                 pq.write_table(table, self.filepath)
+
+    def abort(self) -> None:
+        """Abort writing and remove any partial output file."""
+        if self._aborted:
+            return
+        if self._finished:
+            raise RuntimeError("Cannot abort a finished writer")
+
+        if self._writer is not None:
+            self._writer.close()
+        self._writer = None
+
+        if self.filepath.exists():
+            self.filepath.unlink()
+
+        self._aborted = True

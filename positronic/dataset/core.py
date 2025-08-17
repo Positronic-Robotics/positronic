@@ -32,6 +32,7 @@ class Signal(Sequence[Tuple[T, int]], ABC, Generic[T]):
     scalar/vector, encoded video + Parquet index for images) but must follow
     the semantics above.
     """
+
     @abstractmethod
     def __len__(self) -> int:
         """Returns the number of records in the signal."""
@@ -101,6 +102,7 @@ class SignalWriter(AbstractContextManager, ABC, Generic[T]):
     further `append` calls must fail. Concrete writers choose the backing store
     (e.g., Parquet for scalar/vector; video + Parquet index for images).
     """
+
     @abstractmethod
     def append(self, data: T, ts_ns: int) -> None:
         """Appends data with timestamp.
@@ -118,6 +120,14 @@ class SignalWriter(AbstractContextManager, ABC, Generic[T]):
     @abstractmethod
     def __exit__(self, exc_type, exc, tb) -> None:
         ...
+
+    @abstractmethod
+    def abort(self) -> None:
+        """Abort this writer and discard partial outputs. All appends after this point will fail.
+
+        Implementations should clean up any artifacts and invalidate the writer.
+        """
+        pass
 
 
 class Episode(ABC):
@@ -202,14 +212,24 @@ class EpisodeWriter(AbstractContextManager, ABC, Generic[T]):
     def __exit__(self, exc_type, exc, tb) -> None:
         ...
 
+    @abstractmethod
+    def abort(self) -> None:
+        """Abort the episode and delete all data. All appends after this point will fail.
+
+        Raises if the episode has already been finalized.
+        """
+        pass
+
 
 class DatasetWriter(ABC):
+
     @abstractmethod
     def new_episode(self, **metadata: dict[str, Any]) -> EpisodeWriter:
         pass
 
 
 class Dataset(ABC, collections.abc.Sequence[Episode]):
+
     @abstractmethod
     def __len__(self) -> int:
         pass

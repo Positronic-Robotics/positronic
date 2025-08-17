@@ -1,7 +1,8 @@
 import platform
+import shutil
 import sys
 import time
-from functools import partial
+from functools import lru_cache, partial
 from importlib import metadata as importlib_metadata
 from pathlib import Path
 from typing import Any, Callable, TypeVar
@@ -37,7 +38,7 @@ def _is_valid_static_value(value: Any) -> bool:
     return False
 
 
-class DiskEpisodeWriter(EpisodeWriter):
+class DiskEpisodeWriter:
     """Writer for recording episode data containing multiple signals."""
 
     def __init__(self, directory: Path) -> None:
@@ -54,27 +55,15 @@ class DiskEpisodeWriter(EpisodeWriter):
         self._writers = {}
         # Accumulated static items to be stored in a single episode.json
         self._static_items: dict[str, Any] = {}
+        self._finished = False
+        self._aborted = False
 
         # Write system metadata immediately
         meta = {
             "schema_version": EPISODE_SCHEMA_VERSION,
             "created_ts_ns": time.time_ns(),
-            "writer": {
-                "name": f"{self.__class__.__module__}.{self.__class__.__qualname__}",
-                "version": None,
-                "python": sys.version.split(" ")[0],
-                "platform": platform.platform(),
-            },
         }
-        try:
-            meta["writer"]["version"] = importlib_metadata.version("positronic")
-        except Exception:
-            # Package may not be installed; leave as None
-            meta["writer"]["version"] = None
-        # Try to collect Git metadata from the current repository
-        git = get_git_state()
-        if git is not None:
-            meta["writer"]["git"] = git
+        meta["writer"] = _cached_env_writer_info()
         with (self._path / "meta.json").open('w', encoding='utf-8') as f:
             json.dump(meta, f)
 
@@ -86,6 +75,10 @@ class DiskEpisodeWriter(EpisodeWriter):
             data: Data to append
             ts_ns: Timestamp in nanoseconds
         """
+        if self._finished:
+            raise RuntimeError("Cannot append to a finished writer")
+        if self._aborted:
+            raise RuntimeError("Cannot append to an aborted writer")
         if signal_name in self._static_items:
             raise ValueError(f"Static item '{signal_name}' already set for this episode")
 
@@ -114,6 +107,10 @@ class DiskEpisodeWriter(EpisodeWriter):
         Raises:
             ValueError: If the key has already been set or value not serializable
         """
+        if self._finished:
+            raise RuntimeError("Cannot set static on a finished writer")
+        if self._aborted:
+            raise RuntimeError("Cannot set static on an aborted writer")
         if name in self._writers:
             raise ValueError(f"Signal '{name}' already exists for this episode")
 
@@ -136,11 +133,45 @@ class DiskEpisodeWriter(EpisodeWriter):
                 # Do not suppress exceptions, just ensure we attempt to close others
                 if exc is None:
                     raise
+
+        if self._aborted:
+            return
+        self._finished = True
+
         # Write all static items into a single episode.json
         episode_json = self._path / "episode.json"
         if self._static_items or not episode_json.exists():
             with episode_json.open('w', encoding='utf-8') as f:
                 json.dump(self._static_items, f)
+
+    def abort(self) -> None:
+        """Abort writing: close resources and remove episode directory."""
+        if self._aborted:
+            return
+        if self._finished:
+            raise RuntimeError("Cannot abort a finished writer")
+
+        for w in list(self._writers.values()):
+            w.abort()
+
+        shutil.rmtree(self._path, ignore_errors=True)
+        self._aborted = True
+
+
+@lru_cache(maxsize=1)
+def _cached_env_writer_info() -> dict:
+    info = {
+        "python": sys.version.split(" ")[0],
+        "platform": platform.platform(),
+    }
+    try:
+        info["version"] = importlib_metadata.version("positronic")
+    except Exception:
+        info["version"] = ''
+    git_state = get_git_state()
+    if git_state is not None:
+        info['git'] = git_state
+    return info
 
 
 class _TimeIndexer:

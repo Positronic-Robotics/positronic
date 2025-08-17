@@ -61,6 +61,10 @@ class SignalWriter[T]:
     def __exit__(self, exc_type, exc, tb) -> None:
         ...
 
+    # Abort writing and remove any partial outputs; subsequent calls raise
+    def abort(self) -> None:
+        pass
+
 class Episode:
     # Names of all items (dynamic signals + static items)
     @property
@@ -110,6 +114,10 @@ class EpisodeWriter:
 
     def __exit__(self, exc_type, exc, tb) -> None:
         ...
+
+    # Abort the episode; underlying writers are aborted and the episode directory is removed
+    def abort(self) -> None:
+        pass
 ```
 
 ## Implementations
@@ -182,20 +190,20 @@ Episodes are recorded via an `EpisodeWriter` implementations. You add time-varyi
 
 Name collisions are disallowed: attempting to `append` to a name that already exists as a static item raises an error, and vice versa.
 
-Use as a context manager: exiting the `with` block finalizes all underlying
-signal writers and persists metadata.
+Use as a context manager: exiting the `with` block finalizes all underlying signal writers and persists metadata.
+Aborting: `abort()` stops recording, asks each underlying signal writer to abort, and removes the episode directory. After abort, all writer operations (`append`, `set_static`) raise.
 
 ### System Metadata (meta)
 
 - Purpose: store system-generated, immutable information separate from user static items.
 - Storage: sidecar JSON file `meta.json` inside the episode directory.
 - Accessor: `Episode.meta` (read-only dict). Not included in `Episode.keys` and not accessible via `__getitem__`.
-- Written immediately on `EpisodeWriter` creation.
+- Written: immediately on `EpisodeWriter` creation (side-effect of constructing the writer).
 - Contents (concise schema):
   - `schema_version: int` – manifest version (starts at 1).
   - `created_ts_ns: int` – episode creation time in nanoseconds.
   - `writer: object` – environment and provenance:
-    - `name: str` – fully qualified writer class (e.g., `positronic.dataset.episode.DiskEpisodeWriter`).
+    - `name: str` – fully-qualified writer class (e.g., `positronic.dataset.episode.DiskEpisodeWriter`).
     - `version: str|null` – package version if available.
     - `python: str` – interpreter version.
     - `platform: str` – platform string.

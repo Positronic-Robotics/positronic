@@ -40,6 +40,7 @@ class VideoSignalWriter(SignalWriter[np.ndarray]):
         self.fps = fps
 
         self._finished = False
+        self._aborted = False
         self._frame_count = 0
         self._last_ts = None
 
@@ -79,6 +80,8 @@ class VideoSignalWriter(SignalWriter[np.ndarray]):
         """
         if self._finished:
             raise RuntimeError("Cannot append to a finished writer")
+        if self._aborted:
+            raise RuntimeError("Cannot append to an aborted writer")
 
         if self._last_ts is not None and ts_ns <= self._last_ts:
             raise ValueError(f"Timestamp {ts_ns} is not increasing (last was {self._last_ts})")
@@ -104,7 +107,7 @@ class VideoSignalWriter(SignalWriter[np.ndarray]):
 
     def __exit__(self, exc_type, exc, tb) -> None:
         """Finalize the writing on context exit (even on exceptions)."""
-        if self._finished:
+        if self._finished or self._aborted:
             return
         self._finished = True
 
@@ -121,6 +124,23 @@ class VideoSignalWriter(SignalWriter[np.ndarray]):
             frames_table = pa.table({'ts_ns': []}, schema=schema)
 
         pq.write_table(frames_table, self.frames_index_path)
+
+    def abort(self) -> None:
+        """Abort writing and remove any partial outputs."""
+        if self._aborted:
+            return
+        if self._finished:
+            raise RuntimeError("Cannot abort a finished writer")
+
+        if self._container is not None:
+            self._container.close()
+        self._container = None
+
+        for p in [self.video_path, self.frames_index_path]:
+            if p.exists():
+                p.unlink()
+
+        self._aborted = True
 
 
 class _VideoSliceView(Signal[np.ndarray]):
