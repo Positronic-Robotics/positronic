@@ -1,7 +1,8 @@
 from abc import ABC, abstractmethod
 from contextlib import AbstractContextManager
 import collections.abc
-from typing import Any, Iterator, TypeVar, Generic, Tuple, Sequence, Protocol, runtime_checkable
+from typing import Any, Generic, Protocol, Sequence, Tuple, TypeVar, runtime_checkable
+
 import numpy as np
 
 T = TypeVar('T')

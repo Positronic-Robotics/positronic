@@ -374,15 +374,12 @@ class TestSignalWriterContext:
 
     def test_simple_writer_abort_removes_file_and_blocks_usage(self, tmp_path):
         fp = tmp_path / "abort.parquet"
-        w = SimpleSignalWriter(fp)
-        w.append(1, 1000)
-        w.abort()
-        assert not fp.exists()
-        with pytest.raises(RuntimeError):
-            w.append(2, 2000)
-        with pytest.raises(RuntimeError):
-            w.finish()
-
+        with SimpleSignalWriter(fp) as w:
+            w.append(1, 1000)
+            w.abort()
+            assert not fp.exists()
+            with pytest.raises(RuntimeError):
+                w.append(2, 2000)
 
 class TestSignalIndexArrayAccess:
 

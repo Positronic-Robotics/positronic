@@ -38,7 +38,7 @@ def _is_valid_static_value(value: Any) -> bool:
     return False
 
 
-class DiskEpisodeWriter:
+class DiskEpisodeWriter(EpisodeWriter):
     """Writer for recording episode data containing multiple signals."""
 
     def __init__(self, directory: Path) -> None:
@@ -64,6 +64,7 @@ class DiskEpisodeWriter:
             "created_ts_ns": time.time_ns(),
         }
         meta["writer"] = _cached_env_writer_info()
+        meta["writer"]["name"] = f"{self.__class__.__module__}.{self.__class__.__qualname__}"
         with (self._path / "meta.json").open('w', encoding='utf-8') as f:
             json.dump(meta, f)
 

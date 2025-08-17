@@ -2,8 +2,8 @@ from pathlib import Path
 
 import numpy as np
 
-from positronic.dataset.local_dataset import LocalDataset, LocalDatasetWriter
 from positronic.dataset.core import Episode
+from positronic.dataset.local_dataset import LocalDataset, LocalDatasetWriter
 
 
 def test_local_dataset_writer_creates_structure_and_persists(tmp_path):
@@ -12,11 +12,10 @@ def test_local_dataset_writer_creates_structure_and_persists(tmp_path):
 
     # Create three episodes with minimal content
     for i in range(3):
-        ew = w.new_episode(info={"idx": i})
-        ew.set_static("id", i)
-        # Optional: add a tiny dynamic signal
-        ew.append("a", i, 1000 + i)
-        ew.finish()
+        with w.new_episode(info={"idx": i}) as ew:
+            ew.set_static("id", i)
+            # Optional: add a tiny dynamic signal
+            ew.append("a", i, 1000 + i)
 
     # Structure exists
     assert (root / "000000" / "000000").exists()
@@ -32,9 +31,8 @@ def test_local_dataset_writer_creates_structure_and_persists(tmp_path):
 
     # Restart writer and keep appending
     w2 = LocalDatasetWriter(root)
-    ew = w2.new_episode()
-    ew.set_static("id", 3)
-    ew.finish()
+    with w2.new_episode() as ew:
+        ew.set_static("id", 3)
 
     ds2 = LocalDataset(root)
     assert len(ds2) == 4
@@ -47,9 +45,8 @@ def test_local_dataset_handles_block_rollover(tmp_path):
 
     # Create 1001 empty episodes (static-only) to cross a block boundary
     for i in range(1001):
-        ew = w.new_episode()
-        ew.set_static("id", i)
-        ew.finish()
+        with w.new_episode() as ew:
+            ew.set_static("id", i)
 
     # Check directories for episode 0 and 1000
     assert (root / "000000" / "000000").exists()
@@ -66,9 +63,8 @@ def test_local_dataset_handles_block_rollover(tmp_path):
 def build_simple_dataset(root: Path, n: int = 5) -> LocalDataset:
     w = LocalDatasetWriter(root)
     for i in range(n):
-        ew = w.new_episode()
-        ew.set_static("id", i)
-        ew.finish()
+        with w.new_episode() as ew:
+            ew.set_static("id", i)
     return LocalDataset(root)
 
 

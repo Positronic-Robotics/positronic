@@ -1,9 +1,9 @@
 import numpy as np
 import pytest
 
-from positronic.dataset.episode import DiskEpisode, DiskEpisodeWriter
 from positronic.dataset.core import Episode
-from positronic.dataset.tests.test_video import create_frame, assert_frames_equal
+from positronic.dataset.episode import DiskEpisode, DiskEpisodeWriter
+from positronic.dataset.tests.test_video import assert_frames_equal, create_frame
 
 
 def test_episode_writer_and_reader_basic(tmp_path):
@@ -181,27 +181,22 @@ def test_episode_static_rejects_none(tmp_path):
         with np.testing.assert_raises_regex(ValueError, "JSON-serializable"):
             w.set_static("maybe", None)
 
-
 def test_episode_writer_abort_cleans_up_and_blocks_further_use(tmp_path):
     ep_dir = tmp_path / "ep_abort"
-    w = DiskEpisodeWriter(ep_dir)
+    with DiskEpisodeWriter(ep_dir) as w:
+        # Append some data to create resources
+        w.append("a", 1, 1000)
+        w.set_static("k", 1)
+        assert ep_dir.exists() and (ep_dir / "meta.json").exists()
 
-    # Append some data to create resources
-    w.append("a", 1, 1000)
-    w.set_static("k", 1)
-    assert ep_dir.exists() and (ep_dir / "meta.json").exists()
+        # Abort should remove the directory and prevent further actions
+        w.abort()
+        assert not ep_dir.exists()
 
-    # Abort should remove the directory and prevent further actions
-    w.abort()
-    assert not ep_dir.exists()
-
-    with pytest.raises(RuntimeError):
-        w.append("a", 2, 2000)
-    with pytest.raises(RuntimeError):
-        w.set_static("z", 2)
-    with pytest.raises(RuntimeError):
-        w.finish()
-
+        with pytest.raises(RuntimeError):
+            w.append("a", 2, 2000)
+        with pytest.raises(RuntimeError):
+            w.set_static("z", 2)
 
 def test_episode_writer_set_static_twice_raises(tmp_path):
     ep_dir = tmp_path / "ep_static_dup"
