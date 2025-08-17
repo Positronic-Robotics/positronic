@@ -35,7 +35,7 @@ class OpenCVCamera:
 
             fps_counter.tick()
             # Use system time for timestamp since OpenCV doesn't provide frame timestamps
-            self.frame.emit({'frame': frame})
+            self.frame.emit({'image': frame})
             yield pimm.Pass()  # Give control back to the world
 
 
@@ -53,7 +53,7 @@ if __name__ == "__main__":
             self.fps = fps
             self.codec = codec
 
-        def run(self, should_stop: pimm.SignalReader, clock: pimm.Clock):
+        def run(self, should_stop: pimm.SignalReader):
             print(f"Writing to {self.filename}")
             fps_counter = pimm.utils.RateCounter('VideoWriter')
             with av.open(self.filename, mode='w', format='mp4') as container:
@@ -68,10 +68,11 @@ if __name__ == "__main__":
                         yield pimm.Sleep(0.5 / self.fps)
                         continue
 
-                    frame = av.VideoFrame.from_ndarray(frame['frame'], format='rgb24')
+                    frame = av.VideoFrame.from_ndarray(frame['image'], format='rgb24')
                     packet = stream.encode(frame)
                     container.mux(packet)
                     fps_counter.tick()
+
 
     with pimm.World() as world:
         camera = OpenCVCamera(0, (640, 480), fps=30)
@@ -80,5 +81,5 @@ if __name__ == "__main__":
         camera.frame, writer.frame = world.mp_pipe()
         world.start_in_subprocess(camera.run)
 
-        for sleep_time in writer.run(world.should_stop_reader()):
-            time.sleep(sleep_time)
+        for sleep_cmd in writer.run(world.should_stop_reader()):
+            time.sleep(sleep_cmd.seconds)
