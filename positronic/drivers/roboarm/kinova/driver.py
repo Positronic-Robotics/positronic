@@ -5,7 +5,7 @@ from mujoco import Any
 
 import numpy as np
 
-import geom
+from positronic import geom
 import pimm
 from positronic.drivers.roboarm.kinova.api import KinovaAPI
 from positronic.drivers.roboarm.kinova.base import JointCompliantController, KinematicsSolver

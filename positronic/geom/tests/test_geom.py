@@ -1,6 +1,6 @@
 import unittest
 import numpy as np
-from geom import Transform3D, Rotation, degrees_to_radians, radians_to_degrees
+from positronic.geom import Transform3D, Rotation, degrees_to_radians, radians_to_degrees
 
 
 class TestTransform3D(unittest.TestCase):

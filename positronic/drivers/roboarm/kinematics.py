@@ -1,7 +1,7 @@
 import placo
 import numpy as np
 
-import geom
+from positronic import geom
 
 
 class Kinematics:

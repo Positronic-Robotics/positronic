@@ -11,7 +11,7 @@ import uvicorn
 import turbojpeg
 
 import pimm
-import geom
+from positronic import geom
 
 
 def _parse_controller_data(data: dict):

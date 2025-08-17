@@ -1,4 +1,4 @@
-import geom
+from positronic import geom
 
 
 class AbsoluteTrajectory(list):

@@ -16,7 +16,7 @@ import pinocchio as pin
 from ruckig import InputParameter, OutputParameter, Result, Ruckig
 from cvxopt import matrix, solvers
 
-import geom
+from positronic import geom
 
 K_r = np.diag([0.3, 0.3, 0.3, 0.3, 0.18, 0.18, 0.18])
 K_l = np.diag([75.0, 75.0, 75.0, 75.0, 40.0, 40.0, 40.0])

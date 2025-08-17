@@ -70,9 +70,9 @@ lerobot = [
 
 [tool.pytest.ini_options]
 testpaths = [
-    "geom/tests",
     "pimm/tests",
-    "positronic/tests",
     "positronic/dataset/tests",
+    "positronic/geom/tests",
+    "positronic/tests",
 ]
 python_files = ["test_*.py", "*_test.py"]

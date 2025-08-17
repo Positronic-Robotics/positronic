@@ -1,8 +1,8 @@
 import pytest
 import numpy as np
 
-import geom
-from geom.trajectory import AbsoluteTrajectory, RelativeTrajectory
+from positronic import geom
+from positronic.geom.trajectory import AbsoluteTrajectory, RelativeTrajectory
 
 
 # rotation around z-axis by 90 degrees clockwise

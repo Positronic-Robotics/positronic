@@ -3,7 +3,7 @@ from typing import Iterator
 import numpy as np
 
 import pimm
-import geom
+from positronic import geom
 from positronic.drivers.motors.feetech import MotorBus
 from positronic.drivers.roboarm import RobotStatus, State
 from positronic.drivers.roboarm import command as roboarm_command

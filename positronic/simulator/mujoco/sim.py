@@ -1,7 +1,7 @@
 from typing import Any, Dict, Sequence, Tuple
 import logging
 
-import geom
+from positronic import geom
 import pimm
 import mujoco as mj
 from dm_control import mujoco as dm_mujoco

@@ -1,7 +1,7 @@
 import configuronic as cfn
 import positronic.cfg.hardware.roboarm
 import pimm
-import geom
+from positronic import geom
 from positronic.drivers.roboarm import command
 
 

@@ -3,7 +3,7 @@ from enum import Enum
 
 import numpy as np
 
-import geom
+from positronic import geom
 from positronic.drivers.roboarm import command
 
 

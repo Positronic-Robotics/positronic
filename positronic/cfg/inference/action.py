@@ -1,5 +1,5 @@
 import configuronic as cfn
-import geom
+from positronic import geom
 from positronic.inference.action import RelativeRobotPositionAction, UMIRelativeRobotPositionAction
 
 

@@ -2,7 +2,7 @@ import abc
 
 import torch
 
-import geom
+from positronic import geom
 from positronic.utils.registration import umi_relative
 
 

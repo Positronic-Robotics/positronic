@@ -7,11 +7,11 @@ from scipy.linalg import orthogonal_procrustes
 
 import configuronic as cfn
 import pimm
-import geom
+from positronic import geom
 import positronic.cfg.hardware.roboarm
 import positronic.cfg.webxr
 import positronic.drivers.roboarm.command as roboarm_command
-from geom.trajectory import AbsoluteTrajectory, RelativeTrajectory
+from positronic.geom.trajectory import AbsoluteTrajectory, RelativeTrajectory
 
 
 def _plot_trajectory(trajectory: AbsoluteTrajectory, name: str, color: List[int] = [255, 0, 0, 255]):

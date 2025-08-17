@@ -5,7 +5,7 @@ import rerun as rr
 import tqdm
 
 import configuronic as cfn
-from geom import Transform3D
+from positronic.geom import Transform3D
 from positronic.drivers.roboarm.kinova.base import JointCompliantController, KinematicsSolver, wrap_joint_angle
 
 

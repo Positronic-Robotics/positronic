@@ -7,7 +7,7 @@ from mujoco import Any
 import franky
 import numpy as np
 
-import geom
+from positronic import geom
 import pimm
 
 from . import RobotStatus, State, command

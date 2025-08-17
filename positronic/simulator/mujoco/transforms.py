@@ -6,7 +6,7 @@ from typing import Any, Dict, Sequence, Tuple
 import mujoco
 import numpy as np
 
-import geom
+from positronic import geom
 
 
 class MujocoSceneTransform(abc.ABC):

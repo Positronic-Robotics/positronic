@@ -4,7 +4,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
-import geom
+from positronic import geom
 
 
 @dataclass

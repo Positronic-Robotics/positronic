@@ -4,7 +4,7 @@ from mujoco import Sequence
 import torch
 import tqdm
 
-import geom
+from positronic import geom
 import configuronic as cfn
 import pimm
 from positronic.drivers import roboarm
