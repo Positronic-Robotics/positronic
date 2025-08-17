@@ -1,0 +1,125 @@
+from pathlib import Path
+
+import numpy as np
+
+from positronic.dataset.local_dataset import LocalDataset, LocalDatasetWriter
+from positronic.dataset.core import Episode
+
+
+def test_local_dataset_writer_creates_structure_and_persists(tmp_path):
+    root = tmp_path / "ds"
+    w = LocalDatasetWriter(root)
+
+    # Create three episodes with minimal content
+    for i in range(3):
+        ew = w.new_episode(info={"idx": i})
+        ew.set_static("id", i)
+        # Optional: add a tiny dynamic signal
+        ew.append("a", i, 1000 + i)
+        ew.finish()
+
+    # Structure exists
+    assert (root / "000000" / "000000").exists()
+    assert (root / "000000" / "000001").exists()
+    assert (root / "000000" / "000002").exists()
+
+    ds = LocalDataset(root)
+    assert len(ds) == 3
+    ep0 = ds[0]
+    assert isinstance(ep0, Episode)
+    assert ep0["id"] == 0
+    assert ep0["a"][0] == (0, 1000)
+
+    # Restart writer and keep appending
+    w2 = LocalDatasetWriter(root)
+    ew = w2.new_episode()
+    ew.set_static("id", 3)
+    ew.finish()
+
+    ds2 = LocalDataset(root)
+    assert len(ds2) == 4
+    assert ds2[3]["id"] == 3
+
+
+def test_local_dataset_handles_block_rollover(tmp_path):
+    root = tmp_path / "roll"
+    w = LocalDatasetWriter(root)
+
+    # Create 1001 empty episodes (static-only) to cross a block boundary
+    for i in range(1001):
+        ew = w.new_episode()
+        ew.set_static("id", i)
+        ew.finish()
+
+    # Check directories for episode 0 and 1000
+    assert (root / "000000" / "000000").exists()
+    assert (root / "001000" / "001000").exists()
+
+    ds = LocalDataset(root)
+    assert len(ds) == 1001
+    assert ds[0]["id"] == 0
+    assert ds[1000]["id"] == 1000
+
+
+# --- Indexing behavior tests ---
+
+def build_simple_dataset(root: Path, n: int = 5) -> LocalDataset:
+    w = LocalDatasetWriter(root)
+    for i in range(n):
+        ew = w.new_episode()
+        ew.set_static("id", i)
+        ew.finish()
+    return LocalDataset(root)
+
+
+def episode_ids(episodes):
+    return [ep["id"] for ep in episodes]
+
+
+def test_slice_indexing_returns_episode_list(tmp_path):
+    ds = build_simple_dataset(tmp_path / "ds", n=5)
+
+    sub = ds[1:4]
+    assert isinstance(sub, list)
+    assert len(sub) == 3
+    assert all(isinstance(ep, Episode) for ep in sub)
+    assert episode_ids(sub) == [1, 2, 3]
+
+    sub2 = ds[0:5:2]
+    assert episode_ids(sub2) == [0, 2, 4]
+
+    # Negative step slice
+    sub3 = ds[4:1:-1]
+    assert episode_ids(sub3) == [4, 3, 2]
+
+
+def test_array_indexing_returns_episode_list(tmp_path):
+    ds = build_simple_dataset(tmp_path / "ds2", n=5)
+
+    idx_list = [0, 3, 1]
+    out = ds[idx_list]
+    assert isinstance(out, list)
+    assert episode_ids(out) == [0, 3, 1]
+
+    idx_np = np.array([4, 0], dtype=int)
+    out2 = ds[idx_np]
+    assert episode_ids(out2) == [4, 0]
+
+    # Negative indices
+    out3 = ds[[-1, -5]]
+    assert episode_ids(out3) == [4, 0]
+
+
+def test_array_indexing_errors(tmp_path):
+    ds = build_simple_dataset(tmp_path / "ds3", n=4)
+
+    # Boolean mask not supported
+    with np.testing.assert_raises_regex(TypeError, "Boolean indexing is not supported"):
+        _ = ds[[True, False, True, False]]
+
+    with np.testing.assert_raises_regex(TypeError, "Boolean indexing is not supported"):
+        _ = ds[np.array([True, False, True, False])]
+
+    # Out of range
+    with np.testing.assert_raises(IndexError):
+        _ = ds[[10]]
