@@ -1,25 +1,36 @@
+from pathlib import Path
 import time
 from typing import Any, Callable, Dict, Iterator
 
+import configuronic as cfn
 from mujoco import Sequence
 
 from positronic import geom
 import configuronic as cfn
 import pimm
-from positronic.drivers import roboarm
-from positronic.drivers.webxr import WebXR
-from positronic.gui.dpg import DearpyguiUi
-from positronic.simulator.mujoco.sim import MujocoCamera, MujocoFranka, MujocoGripper, MujocoSim
-from positronic.simulator.mujoco.transforms import MujocoSceneTransform
-from positronic.utils.buttons import ButtonHandler
-from positronic.utils.dataset_dumper import SerialDumper
-
+import positronic.cfg.hardware.camera
 import positronic.cfg.hardware.gripper
 import positronic.cfg.hardware.roboarm
-import positronic.cfg.webxr
-import positronic.cfg.hardware.camera
-import positronic.cfg.sound
 import positronic.cfg.simulator
+import positronic.cfg.sound
+import positronic.cfg.webxr
+from positronic.dataset.core import DatasetWriter
+from positronic.drivers import roboarm
+from positronic.drivers.camera.linux_video import LinuxVideo
+from positronic.drivers.gripper.dh import DHGripper
+from positronic.drivers.sound import SoundSystem
+from positronic.drivers.webxr import WebXR
+from positronic.gui.dpg import DearpyguiUi
+from positronic.simulator.mujoco.sim import (
+    MujocoCamera,
+    MujocoFranka,
+    MujocoGripper,
+    MujocoSim,
+)
+from positronic.simulator.mujoco.transforms import MujocoSceneTransform
+from positronic.utils.buttons import ButtonHandler
+
+from positronic.dataset.local_dataset import LocalDatasetWriter
 
 
 def _parse_buttons(buttons: Dict, button_handler: ButtonHandler):
@@ -74,17 +85,20 @@ class _Tracker:
             return tracker_pos
 
         self._teleop_t = self._operator_position * tracker_pos * self._operator_position.inv
-        return geom.Transform3D(
-            self._teleop_t.translation + self._offset.translation,
-            self._teleop_t.rotation * self._offset.rotation
-        )
+        return geom.Transform3D(self._teleop_t.translation + self._offset.translation,
+                                self._teleop_t.rotation * self._offset.rotation)
 
 
 # TODO: Support aborting current episode.
 class Recorder:
-    def __init__(self, dumper: SerialDumper | None, sound_emitter: pimm.SignalEmitter[str], clock: pimm.Clock):
+
+    def __init__(self, ds_writer: DatasetWriter | None, sound_emitter: pimm.SignalEmitter[str], clock: pimm.Clock):
         self.on = False
-        self._dumper = dumper
+
+        self._episode_count = 0
+        self._ds_writer = ds_writer
+        self._ep_writer = None
+
         self._sound_emitter = sound_emitter
         self._start_wav_path = "positronic/assets/sounds/recording-has-started.wav"
         self._end_wav_path = "positronic/assets/sounds/recording-has-stopped.wav"
@@ -92,45 +106,47 @@ class Recorder:
         self._clock = clock
         self._fps_counter = pimm.utils.RateCounter("Recorder")
 
-    def turn_on(self):
-        if self._dumper is None:
+    def turn_on(self, **static_data: dict):
+        if self._ds_writer is None:
             print("No dumper, ignoring 'start recording' command")
             return
 
         if not self.on:
-            self._meta['episode_start'] = self._clock.now_ns()
-            if self._dumper is not None:
-                self._dumper.start_episode()
-                print(f"Episode {self._dumper.episode_count} started")
+            if self._ds_writer is not None and self._ep_writer is None:
+                self._ep_writer = self._ds_writer.new_episode()
+                for k, v in static_data.items():
+                    self._ep_writer.set_static(k, v)
+                self._episode_count += 1
+                print(f"Episode {self._episode_count} started")
                 self._sound_emitter.emit(self._start_wav_path)
             self.on = True
         else:
             print("Already recording, ignoring 'start recording' command")
 
-    def turn_off(self):
-        if self._dumper is None:
+    def turn_off(self, **static_data: dict):
+        if self._ds_writer is None:
             print("No dumper, ignoring 'stop recording' command")
             return
 
         if self.on:
-            self._dumper.end_episode(self._meta)
-            print(f"Episode {self._dumper.episode_count} ended")
+            if self._ds_writer is not None:
+                for k, v in static_data.items():
+                    self._ep_writer.set_static(k, v)
+                self._ep_writer.__exit__(None, None, None)
+                self._ep_writer = None
+
+            print(f"Episode {self._episode_count} ended")
             self._sound_emitter.emit(self._end_wav_path)
             self.on = False
-            self._meta = {}
         else:
             print("Not recording, ignoring turn_off")
 
-    def add_metadata(self, metadata: dict):
-        self._meta.update(metadata)
-
-    def update(self, data: dict, video_frames: dict):
+    def write(self, signal_name: str, data: Any, ts_ns: int | None = None):
         if not self.on:
             return
 
-        if self._dumper is not None:
-            self._dumper.write(data=data, video_frames=video_frames)
-            self._fps_counter.tick()
+        if self._ds_writer is not None:
+            self._ep_writer.append(signal_name, data, ts_ns or self._clock.now_ns())
 
 
 # map xyz -> zxy
@@ -140,15 +156,15 @@ FRANKA_BACK_TRANSFORM = geom.Transform3D(rotation=geom.Rotation.from_quat([-0.5,
 
 
 class DataCollection:
-    frame_readers : Dict[str, pimm.SignalReader] = {}
-    controller_positions_reader : pimm.SignalReader[Dict[str, geom.Transform3D]] = pimm.NoOpReader()
-    buttons_reader : pimm.SignalReader[Dict] = pimm.NoOpReader()
-    robot_state : pimm.SignalReader[roboarm.State] = pimm.NoOpReader()
-    gripper_state : pimm.SignalReader[float] = pimm.NoOpReader()
+    frame_readers: Dict[str, pimm.SignalReader] = {}
+    controller_positions_reader: pimm.SignalReader[Dict[str, geom.Transform3D]] = pimm.NoOpReader()
+    buttons_reader: pimm.SignalReader[Dict] = pimm.NoOpReader()
+    robot_state: pimm.SignalReader[roboarm.State] = pimm.NoOpReader()
+    gripper_state: pimm.SignalReader[float] = pimm.NoOpReader()
 
-    robot_commands : pimm.SignalEmitter[roboarm.command.CommandType] = pimm.NoOpEmitter()
-    target_grip_emitter : pimm.SignalEmitter[float] = pimm.NoOpEmitter()
-    sound_emitter : pimm.SignalEmitter[str] = pimm.NoOpEmitter()
+    robot_commands: pimm.SignalEmitter[roboarm.command.CommandType] = pimm.NoOpEmitter()
+    target_grip_emitter: pimm.SignalEmitter[float] = pimm.NoOpEmitter()
+    sound_emitter: pimm.SignalEmitter[str] = pimm.NoOpEmitter()
 
     def __init__(
         self,
@@ -168,16 +184,13 @@ class DataCollection:
             for camera_name, frame_reader in self.frame_readers.items()
         }
         controller_positions_reader = pimm.ValueUpdated(self.controller_positions_reader)
+        gripper_state_reader = pimm.DefaultReader(pimm.ValueUpdated(self.gripper_state), (None, False))
 
         tracker = _Tracker(self.operator_position)
-        recorder = Recorder(
-            SerialDumper(self.output_dir, video_fps=self.fps) if self.output_dir is not None else None,
-            self.sound_emitter,
-            clock,
-        )
+        writer = LocalDatasetWriter(Path(self.output_dir)) if self.output_dir is not None else None
+        recorder = Recorder(writer, self.sound_emitter, clock)
         button_handler = ButtonHandler()
 
-        fps_counter = pimm.utils.RateCounter("Data Collection")
         while not should_stop.value:
             try:
                 _parse_buttons(self.buttons_reader.value, button_handler)
@@ -185,15 +198,12 @@ class DataCollection:
                     if recorder.on:
                         recorder.turn_off()
                     else:
-                        recorder.turn_on()
-                        recorder.add_metadata(self.metadata_getter())
-
+                        recorder.turn_on(**self.metadata_getter())
                 elif button_handler.just_pressed('right_A'):
                     if tracker.on:
                         tracker.turn_off()
                     else:
-                        robot_state = self.robot_state.value
-                        tracker.turn_on(robot_state.ee_pose)
+                        tracker.turn_on(self.robot_state.value.ee_pose)
                 elif button_handler.just_pressed('right_stick') and not tracker.umi_mode:
                     print("Resetting robot")
                     recorder.turn_off()
@@ -201,56 +211,48 @@ class DataCollection:
                     self.robot_commands.emit(roboarm.command.Reset())
 
                 target_grip = button_handler.get_value('right_trigger')
+                recorder.write('target_grip', target_grip)
                 self.target_grip_emitter.emit(target_grip)
 
-                controller_positions, controller_positions_updated = controller_positions_reader.value
-                target_robot_pos = tracker.update(controller_positions['right'])
-                # TODO: that's not clear how to deal with the fact that target_ts from webxr use real clock
-                # and `clock` could be simulator/real clock.
-                last_target_ts = clock.now_ns()
+                controller_pos, controller_pos_updated = controller_positions_reader.value
+                target_ts = clock.now_ns()
+                if controller_pos_updated:
+                    if tracker.on:  # Don't spam the robot with commands.
+                        target_robot_pos = tracker.update(controller_pos['right'])
+                        recorder.write('target_robot_position_translation', target_robot_pos.translation, target_ts)
+                        recorder.write('target_robot_position_quaternion', target_robot_pos.rotation.as_quat, target_ts)
+                        self.robot_commands.emit(roboarm.command.CartesianMove(target_robot_pos))
 
-                if tracker.on and controller_positions_updated:  # Don't spam the robot with commands.
-                    self.robot_commands.emit(roboarm.command.CartesianMove(target_robot_pos))
+                    if controller_pos['right'] is not None:
+                        recorder.write('right_controller_translation', controller_pos['right'].translation, target_ts)
+                        recorder.write('right_controller_quaternion', controller_pos['right'].rotation.as_quat,
+                                       target_ts)
+                    if controller_pos['left'] is not None:
+                        recorder.write('left_controller_translation', controller_pos['left'].translation, target_ts)
+                        recorder.write('left_controller_quaternion', controller_pos['left'].rotation.as_quat, target_ts)
 
-                # TODO: fix frame synchronization. Two 30 FPS cameras is updated at 60 FPS
-                frame_messages, any_frame_updated = pimm.utils.is_any_updated(frame_readers)
-                fps_counter.tick()
-                if not recorder.on or not any_frame_updated:
-                    yield pimm.Sleep(0.001)
-                    continue
-
-                ep_dict = {
-                    'target_grip': target_grip,
-                    'target_robot_position_translation': target_robot_pos.translation.copy(),
-                    'target_robot_position_quaternion': target_robot_pos.rotation.as_quat.copy(),
-                    'target_timestamp': last_target_ts,
-                    **{f'{name}_timestamp': frame.ts for name, frame in frame_messages.items()},
-                }
+                for name, reader in frame_readers.items():
+                    frame, updated = reader.value
+                    image_ts = clock.now_ns()
+                    if updated:
+                        for k, image in frame.items():
+                            out_name = 'image.' + (name if k == 'image' else f'{name}.{k}')
+                            recorder.write(out_name, image, image_ts)
 
                 value = self.robot_state.read()
 
                 if value is not None:
+                    robot_ts = clock.now_ns()
                     value = value.data
-                    ep_dict = {
-                        **ep_dict,
-                        'robot_position_translation': value.ee_pose.translation.copy(),
-                        'robot_position_rotation': value.ee_pose.rotation.as_quat.copy(),
-                        'robot_joints': value.q.copy(),
-                    }
+                    recorder.write('robot_position_translation', value.ee_pose.translation, robot_ts)
+                    recorder.write('robot_position_rotation', value.ee_pose.rotation.as_quat, robot_ts)
+                    recorder.write('robot_joints', value.q, robot_ts)
+                    recorder.write('robot_joints_velocity', value.dq, robot_ts)
 
-                value = self.gripper_state.read()
-                if value is not None:
-                    ep_dict['grip'] = value.data
+                gripper_state, gripper_state_updated = gripper_state_reader.value
+                if gripper_state_updated:
+                    recorder.write('grip', gripper_state, target_ts)
 
-                if controller_positions['right'] is not None:
-                    ep_dict['right_controller_translation'] = controller_positions['right'].translation.copy()
-                    ep_dict['right_controller_quaternion'] = controller_positions['right'].rotation.as_quat.copy()
-                if controller_positions['left'] is not None:
-                    ep_dict['left_controller_translation'] = controller_positions['left'].translation.copy()
-                    ep_dict['left_controller_quaternion'] = controller_positions['left'].rotation.as_quat.copy()
-
-                recorder.update(data=ep_dict,
-                                video_frames={name: frame.data['image'] for name, frame in frame_messages.items()})
                 yield pimm.Sleep(0.001)
 
             except pimm.NoValueException:
@@ -281,8 +283,7 @@ def main(robot_arm: Any | None,
         if stream_video_to_webxr is not None:
             emitter, reader = world.mp_pipe()
             cameras[stream_video_to_webxr].frame = pimm.BroadcastEmitter(
-                [emitter, cameras[stream_video_to_webxr].frame]
-            )
+                [emitter, cameras[stream_video_to_webxr].frame])
 
             webxr.frame = pimm.map(reader, lambda x: x['image'])
 

@@ -8,10 +8,10 @@ import traceback
 from typing import Iterator
 
 import numpy as np
-import turbojpeg
-import uvicorn
 from fastapi import FastAPI, WebSocket
 from fastapi.responses import FileResponse
+import uvicorn
+import turbojpeg
 
 import pimm
 from positronic import geom
@@ -183,6 +183,7 @@ class WebXR:
                     base64_frame = encode_frame(msg.data)
                     await websocket.send_text(base64_frame)
                     fps.tick()
+
             except Exception as e:
                 print(f"Video WebSocket error: {e}")
                 print(traceback.format_exc())
