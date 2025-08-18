@@ -507,3 +507,29 @@ class TestSignalTimeWindowNoStep:
         assert len(empty1) == 0
         empty2 = signal.time[3000:]
         assert len(empty2) == 0
+
+
+class TestSignalIteration:
+
+    def test_iter_over_signal(self, tmp_path):
+        signal = create_signal(tmp_path, [(10, 1000), (20, 2000), (30, 3000)])
+        items = list(signal)
+        assert items == [(10, 1000), (20, 2000), (30, 3000)]
+
+    def test_iter_over_index_slice(self, tmp_path):
+        signal = create_signal(tmp_path, [(10, 1000), (20, 2000), (30, 3000), (40, 4000)])
+        view = signal[1:3]
+        items = list(view)
+        assert items == [(20, 2000), (30, 3000)]
+
+    def test_iter_over_time_slice(self, tmp_path):
+        signal = create_signal(tmp_path, [(10, 1000), (20, 2000), (30, 3000), (40, 4000)])
+        view = signal.time[1500:3500]
+        items = list(view)
+        assert items == [(20, 2000), (30, 3000)]
+
+    def test_iter_over_time_stepped(self, tmp_path):
+        signal = create_signal(tmp_path, [(10, 1000), (20, 2000), (30, 3000)])
+        sampled = signal.time[1500:3500:1000]
+        items = list(sampled)
+        assert items == [(10, 1500), (20, 2500)]

@@ -790,3 +790,50 @@ class TestVideoSignalTimeArrayAccess:
             frame, ts = view[i]
             assert ts == int(t)
             assert_frames_equal(frame, expected_frames[0])
+
+
+class TestVideoSignalIteration:
+    """Verify that VideoSignal and its views are iterable."""
+
+    def test_iter_over_signal(self, video_paths):
+        expected_frames = [create_frame(value=v) for v in (50, 100, 150)]
+        signal = create_video_signal(video_paths, [(f, (i + 1) * 1000) for i, f in enumerate(expected_frames)])
+        items = list(signal)
+        assert len(items) == 3
+        for i, (frame, ts) in enumerate(items):
+            assert ts == (i + 1) * 1000
+            assert_frames_equal(frame, expected_frames[i])
+
+    def test_iter_over_index_slice(self, video_paths):
+        expected_frames = [create_frame(value=i * 25) for i in range(4)]
+        signal = create_video_signal(video_paths, [(f, (i + 1) * 1000) for i, f in enumerate(expected_frames)])
+        view = signal[1:3]
+        items = list(view)
+        assert len(items) == 2
+        assert items[0][1] == 2000
+        assert_frames_equal(items[0][0], expected_frames[1])
+        assert items[1][1] == 3000
+        assert_frames_equal(items[1][0], expected_frames[2])
+
+    def test_iter_over_time_slice(self, video_paths):
+        expected_frames = [create_frame(value=i * 30) for i in range(4)]
+        signal = create_video_signal(video_paths, [(f, (i + 1) * 1000) for i, f in enumerate(expected_frames)])
+        view = signal.time[1500:3500]
+        items = list(view)
+        assert len(items) == 2
+        assert items[0][1] == 2000
+        assert_frames_equal(items[0][0], expected_frames[1])
+        assert items[1][1] == 3000
+        assert_frames_equal(items[1][0], expected_frames[2])
+
+    def test_iter_over_time_stepped(self, video_paths):
+        expected_frames = [create_frame(value=i * 40) for i in range(3)]
+        signal = create_video_signal(video_paths, [(f, (i + 1) * 1000) for i, f in enumerate(expected_frames)])
+        sampled = signal.time[1500:3000:1000]
+        items = list(sampled)
+        assert len(items) == 2
+        # Requested timestamps 1500 and 2500
+        assert items[0][1] == 1500
+        assert_frames_equal(items[0][0], expected_frames[0])
+        assert items[1][1] == 2500
+        assert_frames_equal(items[1][0], expected_frames[1])

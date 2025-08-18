@@ -12,7 +12,7 @@ class TimeIndexerLike(Protocol, Generic[T]):
         ...
 
 
-class Signal(ABC, Generic[T]):
+class Signal(Sequence[Tuple[T, int]], ABC, Generic[T]):
 
     @abstractmethod
     def __len__(self) -> int:

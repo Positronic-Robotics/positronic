@@ -17,6 +17,7 @@ We optimize for:
 * Window slices like "5 seconds before time X".
 
 ## Public API
+Signal implements `Sequence[(T, int)]` (iterable, indexable, reversible).
 We support three kinds of Signals: scalar, vector, and image (video). Also, we support one and only one timestamp type per Signal. There are two main classes in the library.
 ```python
 class Signal[T]:
