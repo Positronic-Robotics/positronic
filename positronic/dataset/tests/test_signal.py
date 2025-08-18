@@ -381,6 +381,7 @@ class TestSignalWriterContext:
             with pytest.raises(RuntimeError):
                 w.append(2, 2000)
 
+
 class TestSignalIndexArrayAccess:
 
     def test_index_array_basic(self, tmp_path):

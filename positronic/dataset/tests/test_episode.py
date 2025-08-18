@@ -147,8 +147,17 @@ def test_episode_static_accepts_valid_json_structures(tmp_path):
         "task": "stack",
         "ok": True,
         "version": 2,
-        "params": {"k": 1, "names": ["a", "b"], "thresholds": [0.1, 0.2]},
-        "nested": [{"v": 1}, {"v": 2, "flag": False}],
+        "params": {
+            "k": 1,
+            "names": ["a", "b"],
+            "thresholds": [0.1, 0.2]
+        },
+        "nested": [{
+            "v": 1
+        }, {
+            "v": 2,
+            "flag": False
+        }],
     }
     with DiskEpisodeWriter(ep_dir) as w:
         for k, v in payload.items():
@@ -181,6 +190,7 @@ def test_episode_static_rejects_none(tmp_path):
         with np.testing.assert_raises_regex(ValueError, "JSON-serializable"):
             w.set_static("maybe", None)
 
+
 def test_episode_writer_abort_cleans_up_and_blocks_further_use(tmp_path):
     ep_dir = tmp_path / "ep_abort"
     with DiskEpisodeWriter(ep_dir) as w:
@@ -197,6 +207,7 @@ def test_episode_writer_abort_cleans_up_and_blocks_further_use(tmp_path):
             w.append("a", 2, 2000)
         with pytest.raises(RuntimeError):
             w.set_static("z", 2)
+
 
 def test_episode_writer_set_static_twice_raises(tmp_path):
     ep_dir = tmp_path / "ep_static_dup"

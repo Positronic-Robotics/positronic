@@ -17,10 +17,10 @@ def test_local_dataset_writer_creates_structure_and_persists(tmp_path):
             # Optional: add a tiny dynamic signal
             ew.append("a", i, 1000 + i)
 
-    # Structure exists
-    assert (root / "000000" / "000000").exists()
-    assert (root / "000000" / "000001").exists()
-    assert (root / "000000" / "000002").exists()
+    # Structure exists (12-digit zero-padded ids)
+    assert (root / "000000000000" / "000000000000").exists()
+    assert (root / "000000000000" / "000000000001").exists()
+    assert (root / "000000000000" / "000000000002").exists()
 
     ds = LocalDataset(root)
     assert len(ds) == 3
@@ -49,8 +49,8 @@ def test_local_dataset_handles_block_rollover(tmp_path):
             ew.set_static("id", i)
 
     # Check directories for episode 0 and 1000
-    assert (root / "000000" / "000000").exists()
-    assert (root / "001000" / "001000").exists()
+    assert (root / "000000000000" / "000000000000").exists()
+    assert (root / "000000001000" / "000000001000").exists()
 
     ds = LocalDataset(root)
     assert len(ds) == 1001
