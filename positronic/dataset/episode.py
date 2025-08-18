@@ -303,14 +303,14 @@ class DiskEpisode(Episode):
     def _static_data(self) -> dict[str, Any]:
         if self._static is None:
             self._static = {}
-            ep_json = self._dir / 'episode.json'
+            ep_json = self._dir / 'static.json'
             if ep_json.exists():
                 with ep_json.open('r', encoding='utf-8') as f:
                     data = json.load(f)
                 if isinstance(data, dict):
                     self._static.update(data)
                 else:
-                    raise ValueError("episode.json must contain a JSON object (mapping)")
+                    raise ValueError("static.json must contain a JSON object (mapping)")
         return self._static
 
     @property

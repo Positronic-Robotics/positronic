@@ -23,33 +23,33 @@ class FrankaState(State, pimm.shared_memory.NumpySMAdapter):
 
     @property
     def q(self) -> np.ndarray:
-        return self._array[:7]
+        return self.array[:7]
 
     @property
     def dq(self) -> np.ndarray:
-        return self._array[7:14]
+        return self.array[7:14]
 
     @property
     def ee_pose(self) -> geom.Transform3D:
-        return geom.Transform3D(self._array[14:14 + 3], self._array[14 + 3:14 + 7])
+        return geom.Transform3D(self.array[14:14 + 3], self.array[14 + 3:14 + 7])
 
     @property
     def status(self) -> RobotStatus:
-        return RobotStatus(int(self._array[14 + 7]))
+        return RobotStatus(int(self.array[14 + 7]))
 
     def _start_reset(self):
-        self._array[14 + 7] = RobotStatus.RESETTING.value
+        self.array[14 + 7] = RobotStatus.RESETTING.value
 
     def _finish_reset(self):
-        self._array[14 + 7] = RobotStatus.AVAILABLE.value
+        self.array[14 + 7] = RobotStatus.AVAILABLE.value
 
     def encode(self, q, dq, ee_pose):
-        self._array[:7] = q
-        self._array[7:14] = dq
-        self._array[14:14 + 3] = ee_pose.translation
+        self.array[:7] = q
+        self.array[7:14] = dq
+        self.array[14:14 + 3] = ee_pose.translation
         q_wxyz = np.concatenate([ee_pose.quaternion[3:], ee_pose.quaternion[:3]])
-        self._array[14 + 3:14 + 7] = q_wxyz
-        self._array[14 + 7] = RobotStatus.AVAILABLE.value
+        self.array[14 + 3:14 + 7] = q_wxyz
+        self.array[14 + 7] = RobotStatus.AVAILABLE.value
 
 
 class CartesianMode(Enum):

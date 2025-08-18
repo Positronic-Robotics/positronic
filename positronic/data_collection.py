@@ -132,7 +132,7 @@ class Recorder:
             if self._ds_writer is not None:
                 for k, v in static_data.items():
                     self._ep_writer.set_static(k, v)
-                self._ep_writer.finish()
+                self._ep_writer.__exit__(None, None, None)
                 self._ep_writer = None
 
             print(f"Episode {self._episode_count} ended")
@@ -406,5 +406,6 @@ def so101cfg(robot_arm, **kwargs):
 
 if __name__ == "__main__":
     # TODO: add ability to specify multiple targets in CLI
-    cfn.cli(main_sim_cfg)
+    cfn.cli(main_cfg)
+    # cfn.cli(main_sim_cfg)
     # cfn.cli(so101cfg)

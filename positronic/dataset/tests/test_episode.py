@@ -67,7 +67,7 @@ def test_episode_getitem_returns_signal(tmp_path):
 def test_episode_static_items_json(tmp_path):
     ep_dir = tmp_path / "ep_static"
     with DiskEpisodeWriter(ep_dir) as w:
-        # write static metadata (single file episode.json)
+        # write static metadata (single file static.json)
         w.set_static("task", "pick_place")
         w.set_static("version", 1)
         w.set_static("params", {"speed": 0.5})
@@ -77,7 +77,7 @@ def test_episode_static_items_json(tmp_path):
         w.append("a", 43, 2000)
 
     # Files written
-    assert (ep_dir / "episode.json").exists()
+    assert (ep_dir / "static.json").exists()
     assert (ep_dir / "a.parquet").exists()
 
     ep = DiskEpisode(ep_dir)
@@ -104,7 +104,7 @@ def test_episode_meta_written_and_exposed(tmp_path):
         w.set_static("user_key", "value")
 
     # Files present
-    assert (ep_dir / "episode.json").exists()
+    assert (ep_dir / "static.json").exists()
     assert (ep_dir / "meta.json").exists()
 
     ep = DiskEpisode(ep_dir)
