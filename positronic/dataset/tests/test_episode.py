@@ -127,27 +127,59 @@ def test_episode_meta_written_and_exposed(tmp_path):
         print("meta.json content:", meta_content)
 
 
-def test_episode_static_numpy_arrays_roundtrip(tmp_path):
+def test_episode_static_numpy_arrays_rejected(tmp_path):
     ep_dir = tmp_path / "ep_static_np"
     with DiskEpisodeWriter(ep_dir) as w:
         arr_i32 = np.array([[1, 2], [3, 4]], dtype=np.int32)
         arr_f32 = np.array([1.5, 2.5, 3.5], dtype=np.float32)
         nested = {"cam": {"K": arr_f32.reshape(3, 1), "shape": [480, 640]}, "list": [arr_i32]}
-        w.set_static("arr_i32", arr_i32)
-        w.set_static("arr_f32", arr_f32)
-        w.set_static("nested", nested)
+        with np.testing.assert_raises_regex(ValueError, "JSON-serializable"):
+            w.set_static("arr_i32", arr_i32)
+        with np.testing.assert_raises_regex(ValueError, "JSON-serializable"):
+            w.set_static("arr_f32", arr_f32)
+        with np.testing.assert_raises_regex(ValueError, "JSON-serializable"):
+            w.set_static("nested", nested)
+
+
+def test_episode_static_accepts_valid_json_structures(tmp_path):
+    ep_dir = tmp_path / "ep_static_json_ok"
+    payload = {
+        "task": "stack",
+        "ok": True,
+        "version": 2,
+        "params": {"k": 1, "names": ["a", "b"], "thresholds": [0.1, 0.2]},
+        "nested": [{"v": 1}, {"v": 2, "flag": False}],
+    }
+    with DiskEpisodeWriter(ep_dir) as w:
+        for k, v in payload.items():
+            w.set_static(k, v)
 
     ep = DiskEpisode(ep_dir)
-    out_i32 = ep["arr_i32"]
-    out_f32 = ep["arr_f32"]
-    out_nested = ep["nested"]
+    for k, v in payload.items():
+        assert ep[k] == v
 
-    assert isinstance(out_i32, np.ndarray) and out_i32.dtype == np.int32
-    assert isinstance(out_f32, np.ndarray) and out_f32.dtype == np.float32
-    np.testing.assert_array_equal(out_i32, arr_i32)
-    np.testing.assert_array_equal(out_f32, arr_f32)
-    assert isinstance(out_nested["cam"]["K"], np.ndarray)
-    np.testing.assert_array_equal(out_nested["cam"]["K"], arr_f32.reshape(3, 1))
+
+def test_episode_static_rejects_non_string_keys(tmp_path):
+    ep_dir = tmp_path / "ep_static_bad_key"
+    with DiskEpisodeWriter(ep_dir) as w:
+        with np.testing.assert_raises_regex(ValueError, "JSON-serializable"):
+            w.set_static("bad", {1: "a"})
+
+
+def test_episode_static_rejects_tuple_and_set(tmp_path):
+    ep_dir = tmp_path / "ep_static_bad_types"
+    with DiskEpisodeWriter(ep_dir) as w:
+        with np.testing.assert_raises_regex(ValueError, "JSON-serializable"):
+            w.set_static("coords", (1, 2))
+        with np.testing.assert_raises_regex(ValueError, "JSON-serializable"):
+            w.set_static("labels", {"a", "b"})
+
+
+def test_episode_static_rejects_none(tmp_path):
+    ep_dir = tmp_path / "ep_static_none"
+    with DiskEpisodeWriter(ep_dir) as w:
+        with np.testing.assert_raises_regex(ValueError, "JSON-serializable"):
+            w.set_static("maybe", None)
 
 
 def test_episode_writer_set_static_twice_raises(tmp_path):

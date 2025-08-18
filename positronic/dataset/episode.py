@@ -6,9 +6,8 @@ from importlib import metadata as importlib_metadata
 from pathlib import Path
 from typing import Any, Callable, TypeVar
 
+import json
 import numpy as np
-from json_tricks import dumps as json_dumps
-from json_tricks import loads as json_loads
 
 from positronic.utils.git import get_git_state
 
@@ -19,6 +18,23 @@ from .video import VideoSignal, VideoSignalWriter
 EPISODE_SCHEMA_VERSION = 1
 T = TypeVar('T')
 SIGNAL_FACTORY_T = Callable[[], Signal[Any]]
+
+
+def _is_valid_static_value(value: Any) -> bool:
+    """Validate that a value conforms to our restricted JSON static schema.
+
+    Allowed:
+      - dict with string keys and values that are valid static values
+      - list with elements that are valid static values
+      - leaf values: str, int, float, bool
+    """
+    if isinstance(value, (str, int, float, bool)):
+        return True
+    if isinstance(value, list):
+        return all(_is_valid_static_value(v) for v in value)
+    if isinstance(value, dict):
+        return all(isinstance(k, str) and _is_valid_static_value(v) for k, v in value.items())
+    return False
 
 
 class DiskEpisodeWriter(EpisodeWriter):
@@ -60,7 +76,7 @@ class DiskEpisodeWriter(EpisodeWriter):
         if git is not None:
             meta["writer"]["git"] = git
         with (self._path / "meta.json").open('w', encoding='utf-8') as f:
-            f.write(json_dumps(meta))
+            json.dump(meta, f)
 
     def append(self, signal_name: str, data: T, ts_ns: int) -> None:
         """Append data to a named signal.
@@ -104,6 +120,10 @@ class DiskEpisodeWriter(EpisodeWriter):
         if name in self._static_items:
             raise ValueError(f"Static item '{name}' already set for this episode")
 
+        # Validate restricted JSON structure
+        if not _is_valid_static_value(data):
+            raise ValueError(
+                "Static item must be JSON-serializable: dict/list over numbers and strings")
         self._static_items[name] = data
 
     def __exit__(self, exc_type, exc, tb) -> None:
@@ -120,7 +140,7 @@ class DiskEpisodeWriter(EpisodeWriter):
         episode_json = self._path / "episode.json"
         if self._static_items or not episode_json.exists():
             with episode_json.open('w', encoding='utf-8') as f:
-                f.write(json_dumps(self._static_items))
+                json.dump(self._static_items, f)
 
 
 class _TimeIndexer:
@@ -254,7 +274,7 @@ class DiskEpisode(Episode):
             ep_json = self._dir / 'episode.json'
             if ep_json.exists():
                 with ep_json.open('r', encoding='utf-8') as f:
-                    data = json_loads(f.read())
+                    data = json.load(f)
                 if isinstance(data, dict):
                     self._static.update(data)
                 else:
@@ -332,7 +352,7 @@ class DiskEpisode(Episode):
             if meta_json.exists():
                 with meta_json.open('r', encoding='utf-8') as f:
                     try:
-                        meta_data = json_loads(f.read())
+                        meta_data = json.load(f)
                         if isinstance(meta_data, dict):
                             meta.update(meta_data)
                     except Exception:

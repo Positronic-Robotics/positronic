@@ -32,7 +32,6 @@ dependencies = [
     "pyyaml",
     "configuronic",
     "pyarrow",
-    "json-tricks",
 ]
 
 [project.optional-dependencies]
