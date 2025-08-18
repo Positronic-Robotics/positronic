@@ -12,7 +12,7 @@ def test_local_dataset_writer_creates_structure_and_persists(tmp_path):
 
     # Create three episodes with minimal content
     for i in range(3):
-        with w.new_episode(info={"idx": i}) as ew:
+        with w.new_episode() as ew:
             ew.set_static("id", i)
             # Optional: add a tiny dynamic signal
             ew.append("a", i, 1000 + i)

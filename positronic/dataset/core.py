@@ -223,18 +223,51 @@ class EpisodeWriter(AbstractContextManager, ABC, Generic[T]):
 
 
 class DatasetWriter(ABC):
+    """Abstract factory for creating new Episodes within a dataset.
+
+    Implementations allocate a new episode slot in the underlying dataset
+    (e.g., create a new directory or record) and return an `EpisodeWriter`
+    to populate it.
+    """
 
     @abstractmethod
-    def new_episode(self, **metadata: dict[str, Any]) -> EpisodeWriter:
+    def new_episode(self) -> EpisodeWriter:
+        """Allocate and return a writer for a new episode.
+
+        Returns:
+            EpisodeWriter: Context-managed writer used to append dynamic
+            signals and set static items.
+        """
         pass
 
 
 class Dataset(ABC, collections.abc.Sequence[Episode]):
+    """Ordered collection of Episodes with sequence-style access.
+
+    A Dataset provides read-only, index-based access to episodes. Concrete
+    implementations define discovery and storage (e.g., filesystem layout),
+    but must provide stable ordering and support integer, slice, and array
+    indexing. Slices and index arrays return lists of `Episode` objects.
+    """
 
     @abstractmethod
     def __len__(self) -> int:
+        """Return the number of episodes in the dataset."""
         pass
 
     @abstractmethod
     def __getitem__(self, index_or_slice: int | slice | Sequence[int] | np.ndarray) -> Episode:
+        """Access one or more episodes by position.
+
+        Args:
+            index_or_slice: Integer index, slice, or array-like of indices.
+
+        Returns:
+            - Episode: when `index_or_slice` is an integer
+            - list[Episode]: when a slice or index array is provided
+
+        Raises:
+            IndexError: If any index is out of range
+            TypeError: If boolean masks are provided or types unsupported
+        """
         pass

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Sequence
+from typing import Sequence
 
 import numpy as np
 
@@ -91,8 +91,8 @@ class LocalDatasetWriter(DatasetWriter):
 
     - Stores episodes under root / {block:012d} / {episode_id:012d}
     - Scans existing structure on init to continue episode numbering safely.
-    - `new_episode(**metadata)` allocates a new episode directory and returns a
-      DiskEpisodeWriter; provided metadata keys/values are written as static items.
+    - `new_episode()` allocates a new episode directory and returns a
+      DiskEpisodeWriter.
     """
 
     def __init__(self, root: Path) -> None:
@@ -113,7 +113,7 @@ class LocalDatasetWriter(DatasetWriter):
                     max_id = eid
         return max_id + 1
 
-    def new_episode(self, **metadata: dict[str, Any]) -> DiskEpisodeWriter:
+    def new_episode(self) -> DiskEpisodeWriter:
         eid = self._next_episode_id
         self._next_episode_id += 1  # Reserve id immediately
 
@@ -123,7 +123,4 @@ class LocalDatasetWriter(DatasetWriter):
         ep_dir = block_dir / f"{eid:012d}"
 
         writer = DiskEpisodeWriter(ep_dir)
-        # Attach provided metadata as static items
-        for k, v in metadata.items():
-            writer.set_static(k, v)
         return writer

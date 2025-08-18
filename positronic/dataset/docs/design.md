@@ -13,6 +13,8 @@ Three types are currently supported.
 
 __Episode__ – collection of Signals recorded together plus static, episode-level metadata. All dynamic signals in an Episode share a common time axis.
 
+__Dataset__ – ordered collection of Episodes with sequence-style access (indexing, slicing, and index arrays by position). Implementations decide storage and discovery; for example, `LocalDataset` stores episodes in a directory on disk.
+
 We optimize for:
 * Fast append during recording (low latency).
 * Random access at query time by the timestamp.
@@ -117,6 +119,20 @@ class EpisodeWriter:
 
     # Abort the episode; underlying writers are aborted and the episode directory is removed
     def abort(self) -> None:
+        pass
+
+class Dataset:
+    # Ordered collection of Episodes with sequence-style access
+    def __len__(self) -> int:
+        pass
+
+    # Indexing returns an Episode; slices and index arrays return lists of Episodes
+    def __getitem__(self, index_or_slice: int | slice | Sequence[int] | np.ndarray) -> Episode | list[Episode]:
+        pass
+
+class DatasetWriter:
+    # Allocate a new episode and return an EpisodeWriter (context-managed)
+    def new_episode(self) -> EpisodeWriter:
         pass
 ```
 
@@ -228,3 +244,23 @@ Episode supports time-based access across all signals while preserving static it
   - Arbitrary timestamps: each dynamic signal is sampled at the provided times. Static items are preserved.
 
 Access semantics mirror what is already defined for `Signal.time`: sampling returns values at-or-before requested timestamps; windowing returns views that share underlying storage; stepped sampling materializes requested timestamps. There is no index-based access for episodes — access is time-based only via `ep.time`.
+
+## Datasets
+
+Datasets organize many Episodes and provide simple sequence-style access. Implementations decide how episodes are stored and discovered (e.g., filesystem), but must expose a consistent order and length.
+- Access: `ds[i] -> Episode`; `ds[start:stop:step] -> list[Episode]`; `ds[[i1, i2, ...]] -> list[Episode]`. Boolean masks are not supported.
+
+### Local dataset
+
+`LocalDataset` is a filesystem-backed implementation that stores episodes in a directory.
+
+### Writing datasets
+
+`DatasetWriter` is a factory for `EpisodeWriter` instances. Implementations allocate a new episode slot and return an `EpisodeWriter` for recording:
+
+```python
+with dataset_writer.new_episode() as ew:
+    ew.set_static("task", "pick_place")
+    ew.set_static("id", 123)
+    ew.append("state", np.array([...]), ts_ns)
+```
