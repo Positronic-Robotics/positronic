@@ -1,16 +1,18 @@
-from pathlib import Path
-from typing import Any, TypeVar, Callable
-import time
 import platform
 import sys
-from importlib import metadata as importlib_metadata
-import subprocess
+import time
 from functools import partial
+from importlib import metadata as importlib_metadata
+from pathlib import Path
+from typing import Any, Callable, TypeVar
 
 import numpy as np
-from json_tricks import dumps as json_dumps, loads as json_loads
+from json_tricks import dumps as json_dumps
+from json_tricks import loads as json_loads
 
-from .core import Signal, Episode, EpisodeWriter
+from positronic.utils.git import get_git_state
+
+from .core import Episode, EpisodeWriter, Signal
 from .vector import SimpleSignal, SimpleSignalWriter
 from .video import VideoSignal, VideoSignalWriter
 
@@ -54,19 +56,9 @@ class DiskEpisodeWriter(EpisodeWriter):
             # Package may not be installed; leave as None
             meta["writer"]["version"] = None
         # Try to collect Git metadata from the current repository
-        try:
-            commit = subprocess.run(["git", "rev-parse", "HEAD"], capture_output=True, text=True,
-                                    check=True).stdout.strip()
-            branch = subprocess.run(["git", "rev-parse", "--abbrev-ref", "HEAD"],
-                                    capture_output=True,
-                                    text=True,
-                                    check=True).stdout.strip()
-            status = subprocess.run(["git", "status", "--porcelain"], capture_output=True, text=True, check=True).stdout
-            dirty = bool(status.strip())
-            meta["writer"]["git"] = {"commit": commit, "branch": branch, "dirty": dirty}
-        except Exception:
-            # Not a git repo or git unavailable
-            pass
+        git = get_git_state()
+        if git is not None:
+            meta["writer"]["git"] = git
         with (self._path / "meta.json").open('w', encoding='utf-8') as f:
             f.write(json_dumps(meta))
 
