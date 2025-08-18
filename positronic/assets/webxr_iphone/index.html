@@ -1,0 +1,150 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <title>WebXR iPhone Controller</title>
+    <script src="/three.min.js"></script>
+    <style>
+      html, body { margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden; background: transparent; }
+      header { position: fixed; top: 10px; left: 10px; z-index: 10; }
+      .hud { position: fixed; bottom: 0; left: 0; right: 0; padding: 12px 12px 20px; z-index: 10; pointer-events: none; }
+      .panel { background: rgba(0,0,0,0.5); backdrop-filter: blur(6px); border-radius: 12px; padding: 12px; color: #fff; font-family: -apple-system, system-ui, sans-serif; pointer-events: auto; }
+      .row { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+      .buttons { display: flex; gap: 8px; }
+      .btn { appearance: none; border: none; border-radius: 8px; padding: 10px 14px; color: #111; font-weight: 600; background: #fff; }
+      .btn:active { transform: translateY(1px); }
+      .btn--warn { background: #ffd166; }
+      .btn--danger { background: #ef476f; color: #fff; }
+      .slider { position: relative; width: 100%; height: 36px; touch-action: none; }
+      .slider__track { position: absolute; left: 0; right: 0; top: 50%; transform: translateY(-50%); height: 10px; background: rgba(255,255,255,0.25); border-radius: 999px; }
+      .slider__fill { position: absolute; left: 0; top: 0; height: 100%; background: #06d6a0; border-radius: 999px; width: 0%; }
+      .slider__handle { position: absolute; top: 50%; transform: translate(-50%, -50%); width: 22px; height: 22px; background: #fff; border-radius: 50%; box-shadow: 0 2px 6px rgba(0,0,0,0.3); }
+      .value { min-width: 54px; text-align: right; font-variant-numeric: tabular-nums; }
+      .hint { font-size: 12px; opacity: 0.9; margin-top: 6px; }
+    </style>
+  </head>
+  <body>
+    <header>
+      <details open>
+        <summary style="color:#333; background:#fff; padding:6px 10px; border-radius:8px; display:inline-block">WebXR iPhone</summary>
+      </details>
+    </header>
+    <div class="hud">
+      <div class="panel">
+        <div class="row" style="margin-bottom: 10px;">
+          <div style="font-weight:600;">Gripper</div>
+          <div class="value" id="sliderValue">0.00</div>
+        </div>
+        <div class="slider" id="gripSlider" aria-label="Gripper slider">
+          <div class="slider__track">
+            <div class="slider__fill" id="sliderFill"></div>
+          </div>
+          <div class="slider__handle" id="sliderHandle" style="left: 0%;"></div>
+        </div>
+        <div class="hint">Slider has extra padding near 0 and 1 for easier reach</div>
+        <div class="row" style="margin-top: 12px;">
+          <div class="buttons">
+            <button class="btn" id="btnA" title="Recording toggle (A)">A</button>
+            <button class="btn btn--warn" id="btnB" title="Tracking toggle (B)">B</button>
+            <button class="btn btn--danger" id="btnReset" title="Reset (Stick)">Reset</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <script type="module">
+      import { initWebSocket, startXRApp } from '/core.js';
+
+      let websocket = null;
+
+      // Buttons array: indices used: 0 (trigger/gripper), 3 (stick/reset), 4 (A), 5 (B)
+      const buttons = new Array(8).fill(0.0);
+      const ephemeralPresses = new Set(); // indices to pulse for 1 frame
+
+      // Gripper slider state
+      let gripValue = 0.0;
+      const PADDING_FRAC = 0.1; // 10% on each side clamps to 0/1
+
+      function clamp(v, lo, hi) { return Math.max(lo, Math.min(hi, v)); }
+
+      function setupSlider() {
+        const slider = document.getElementById('gripSlider');
+        const handle = document.getElementById('sliderHandle');
+        const fill = document.getElementById('sliderFill');
+        const valueEl = document.getElementById('sliderValue');
+
+        function setGrip(val) {
+          gripValue = clamp(val, 0.0, 1.0);
+          buttons[0] = gripValue; // right_trigger
+          const pct = gripValue * 100;
+          handle.style.left = `${pct}%`;
+          fill.style.width = `${pct}%`;
+          valueEl.textContent = gripValue.toFixed(2);
+        }
+
+        function updateFromEvent(ev) {
+          const rect = slider.getBoundingClientRect();
+          const x = (ev.touches ? ev.touches[0].clientX : ev.clientX) - rect.left;
+          const xNorm = clamp(x / rect.width, 0, 1);
+          // Map with padding: [0..P] -> 0, [1-P..1] -> 1, middle scaled to [0..1]
+          let v;
+          if (xNorm <= PADDING_FRAC) v = 0.0;
+          else if (xNorm >= 1.0 - PADDING_FRAC) v = 1.0;
+          else v = (xNorm - PADDING_FRAC) / (1.0 - 2.0 * PADDING_FRAC);
+          setGrip(v);
+        }
+
+        let dragging = false;
+        const start = (e) => { dragging = true; updateFromEvent(e); };
+        const move = (e) => { if (dragging) updateFromEvent(e); };
+        const end = () => { dragging = false; };
+
+        slider.addEventListener('mousedown', start);
+        slider.addEventListener('mousemove', move);
+        window.addEventListener('mouseup', end);
+        slider.addEventListener('touchstart', start, { passive: true });
+        slider.addEventListener('touchmove', move, { passive: true });
+        window.addEventListener('touchend', end);
+
+        setGrip(0.0);
+      }
+
+      function setupButtons() {
+        const pulse = (idx) => { ephemeralPresses.add(idx); };
+        document.getElementById('btnA').addEventListener('click', () => pulse(4));
+        document.getElementById('btnB').addEventListener('click', () => pulse(5));
+        document.getElementById('btnReset').addEventListener('click', () => pulse(3));
+      }
+
+      function onInit() {
+        // Nothing specific to initialize in 3D scene for iPhone
+      }
+
+      function onFrame({ view }) {
+        // Build right-controller from viewer pose
+        const p = view.transform.position;
+        const q = view.transform.orientation;
+        const btns = buttons.slice();
+        if (ephemeralPresses.size > 0) {
+          for (const idx of ephemeralPresses) btns[idx] = 1.0;
+        }
+        const controllers = {
+          left: null,
+          right: { position: [p.x, p.y, p.z], orientation: [q.w, q.x, q.y, q.z], buttons: btns }
+        };
+        // Clear pulses after including them in this frame
+        ephemeralPresses.clear();
+        return controllers;
+      }
+
+      // Boot using shared core
+      websocket = initWebSocket();
+      startXRApp({ websocket, onInit, onFrame });
+      setupSlider();
+      setupButtons();
+    </script>
+  </body>
+  </html>

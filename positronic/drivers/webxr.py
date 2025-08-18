@@ -3,6 +3,9 @@ import base64
 import os
 import subprocess
 import tempfile
+import os
+import subprocess
+import tempfile
 import threading
 import traceback
 from typing import Iterator
@@ -10,8 +13,10 @@ from typing import Iterator
 import numpy as np
 import turbojpeg
 import uvicorn
+import turbojpeg
+import uvicorn
 from fastapi import FastAPI, WebSocket
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, RedirectResponse
 
 import pimm
 from positronic import geom
@@ -69,23 +74,40 @@ class WebXR:
     controller_positions: pimm.SignalEmitter = pimm.NoOpEmitter()
     buttons: pimm.SignalEmitter = pimm.NoOpEmitter()
 
-    def __init__(self, port: int, ssl_keyfile: str = "key.pem", ssl_certfile: str = "cert.pem"):
+    def __init__(self,
+                 port: int,
+                 ssl_keyfile: str = "key.pem",
+                 ssl_certfile: str = "cert.pem",
+                 default_frontend: str = "oculus"):
         self.port = port
         self.ssl_keyfile = ssl_keyfile
         self.ssl_certfile = ssl_certfile
+        assert default_frontend in ("oculus", "iphone"), f"Unknown frontend: {default_frontend}"
+        self.default_frontend = default_frontend
         self.server_thread = None
 
     def run(self, should_stop: pimm.SignalReader, clock: pimm.Clock) -> Iterator[pimm.Sleep]:  # noqa: C901
         app = FastAPI()
         jpeg_encoder = turbojpeg.TurboJPEG()
 
+        jpeg_encoder = turbojpeg.TurboJPEG()
         def encode_frame(image):
             buffer = jpeg_encoder.encode(image, quality=50)
             return base64.b64encode(buffer).decode('utf-8')
 
         @app.get("/")
         async def root():
+            # Redirect to configured default frontend
+            target = "/oculus" if self.default_frontend == "oculus" else "/iphone"
+            return RedirectResponse(target)
+
+        @app.get("/oculus")
+        async def oculus():
             return FileResponse("positronic/assets/webxr/index.html")
+
+        @app.get("/iphone")
+        async def iphone():
+            return FileResponse("positronic/assets/webxr_iphone/index.html")
 
         @app.get("/three.min.js")
         async def three_min():
@@ -94,6 +116,10 @@ class WebXR:
         @app.get("/webxr-button.js")
         async def webxr_button():
             return FileResponse("positronic/assets/webxr/webxr-button.js")
+
+        @app.get("/core.js")
+        async def webxr_core():
+            return FileResponse("positronic/assets/webxr/core.js")
 
         @app.get("/video-player.js")
         async def video_player():

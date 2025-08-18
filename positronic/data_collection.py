@@ -381,7 +381,7 @@ main_cfg = cfn.Config(
     main,
     robot_arm=None,
     gripper=positronic.cfg.hardware.gripper.dh_gripper,
-    webxr=positronic.cfg.webxr.webxr,
+    webxr=positronic.cfg.webxr.oculus,
     sound=positronic.cfg.sound.sound,
     cameras={
         'left': positronic.cfg.hardware.camera.arducam_left,
@@ -393,7 +393,7 @@ main_cfg = cfn.Config(
 main_sim_cfg = cfn.Config(
     main_sim,
     mujoco_model_path="positronic/assets/mujoco/franka_table.xml",
-    webxr=positronic.cfg.webxr.webxr,
+    webxr=positronic.cfg.webxr.oculus,
     sound=positronic.cfg.sound.sound,
     operator_position=FRANKA_BACK_TRANSFORM,
     loaders=positronic.cfg.simulator.stack_cubes_loaders,
@@ -402,7 +402,7 @@ main_sim_cfg = cfn.Config(
 
 @cfn.config(
     robot_arm=positronic.cfg.hardware.roboarm.so101,
-    webxr=positronic.cfg.webxr.webxr,
+    webxr=positronic.cfg.webxr.oculus,
     sound=positronic.cfg.sound.sound,
     operator_position=FRANKA_FRONT_TRANSFORM,
     cameras={'right': positronic.cfg.hardware.camera.arducam_right}

@@ -19,63 +19,14 @@
         </p>
     </header>
     <script type="module">
-        import { WebXRButton } from './webxr-button.js';
         import { WebXRVideoPlayer } from './video-player.js';
+        import { initWebSocket, startXRApp } from '/core.js';
 
-        let xrButton = null;
-        let xrImmersiveRefSpace = null;
-        let gl = null;
         let websocket = null;
-        let scene, camera, renderer;
         let videoPlayer = null;
-        let controllerAxes = {
-          left: null,
-          right: null
-        };
+        let controllerAxes = { left: null, right: null };
 
-        function initXR() {
-          xrButton = new WebXRButton({
-            onRequestSession: onRequestSession,
-            onEndSession: onEndSession
-          });
-          document.querySelector('header').appendChild(xrButton.domElement);
-
-          if (navigator.xr) {
-            navigator.xr.isSessionSupported('immersive-ar').then((supported) => {
-              xrButton.enabled = supported;
-            });
-          }
-        }
-
-        function initGL() {
-          if (gl) return;
-
-          scene = new THREE.Scene();
-          camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
-
-          let webglCanvas = document.createElement('canvas');
-          renderer = new THREE.WebGLRenderer({
-            canvas: webglCanvas,
-            antialias: true,
-            alpha: true,
-            xrCompatible: true
-          });
-          renderer.setSize(window.innerWidth, window.innerHeight);
-          renderer.setPixelRatio(window.devicePixelRatio);
-          renderer.xr.enabled = true;
-          document.body.appendChild(renderer.domElement);
-
-          gl = renderer.getContext();
-
-          // Add some ambient light to make sure objects are visible
-          const ambientLight = new THREE.AmbientLight(0xffffff, 1.0);
-          scene.add(ambientLight);
-
-          // Initialize controller axes visualizations
-          initControllerAxes();
-        }
-
-        function initControllerAxes() {
+        function initControllerAxes(scene) {
           // Create axis visualizers for both controllers
           ['left', 'right'].forEach(hand => {
             const axesGroup = new THREE.Group();
@@ -129,153 +80,48 @@
             controllerAxes[hand] = axesGroup;
           });
         }
-
-        function onRequestSession() {
-          return navigator.xr.requestSession('immersive-ar', {
-            optionalFeatures: ['local-floor']
-          }).then((session) => {
-            xrButton.setSession(session);
-            onSessionStarted(session);
-          });
-        }
-
-        async function onSessionStarted(session) {
-          session.addEventListener('end', onSessionEnded);
-
-          initGL();
-
-          renderer.xr.setSession(session);
-
-          // Initialize video player after WebXR session starts
+        function onInit({ scene, camera }) {
+          initControllerAxes(scene);
+          // Initialize video player
           videoPlayer = new WebXRVideoPlayer();
-          await videoPlayer.init(scene, camera);
-
-          let refSpaceType = 'local';
-          session.requestReferenceSpace(refSpaceType).then((refSpace) => {
-            xrImmersiveRefSpace = refSpace;
-            session.requestAnimationFrame(onXRFrame);
-          });
+          videoPlayer.init(scene, camera);
         }
 
-        function onEndSession(session) {
-          session.end();
-        }
-
-        function onSessionEnded(event) {
-          if (event.session.isImmersive) {
-            xrButton.setSession(null);
-          }
-        }
-
-        function updateInputSources(session, frame, refSpace) {
-          let controllers = {
-            left: null,
-            right: null
-          };
-
+        function onFrame({ session, frame, refSpace }) {
+          // Gather controllers from input sources and update axes
+          const controllers = { left: null, right: null };
           for (let inputSource of session.inputSources) {
             if (inputSource.gripSpace && (inputSource.handedness === 'left' || inputSource.handedness === 'right')) {
-              let gripPose = frame.getPose(inputSource.gripSpace, refSpace);
-              if (gripPose) {
-                let pos = gripPose.transform.position;
-                let orient = gripPose.transform.orientation;
-                let buttons = inputSource.gamepad ? inputSource.gamepad.buttons.map(button => button.value) : [];
-
-                controllers[inputSource.handedness] = {
-                  position: [pos.x, pos.y, pos.z],
-                  orientation: [orient.w, orient.x, orient.y, orient.z],
-                  buttons: buttons
-                };
-
-                // Update controller axis visualization
-                if (controllerAxes[inputSource.handedness]) {
-                  const axesGroup = controllerAxes[inputSource.handedness];
-                  axesGroup.visible = true;
-
-                  // Set position - add helmet Y coordinate to controller Y
-                  axesGroup.position.set(pos.x, pos.y + 1.1, pos.z);
-
-                  // Set orientation using quaternion
-                  axesGroup.quaternion.set(orient.x, orient.y, orient.z, orient.w);
-                }
+              const gripPose = frame.getPose(inputSource.gripSpace, refSpace);
+              if (!gripPose) continue;
+              const pos = gripPose.transform.position;
+              const orient = gripPose.transform.orientation;
+              const buttons = inputSource.gamepad ? inputSource.gamepad.buttons.map(b => b.value) : [];
+              controllers[inputSource.handedness] = {
+                position: [pos.x, pos.y, pos.z],
+                orientation: [orient.w, orient.x, orient.y, orient.z],
+                buttons: buttons
+              };
+              const axesGroup = controllerAxes[inputSource.handedness];
+              if (axesGroup) {
+                axesGroup.visible = true;
+                axesGroup.position.set(pos.x, pos.y + 1.1, pos.z);
+                axesGroup.quaternion.set(orient.x, orient.y, orient.z, orient.w);
               }
             }
           }
-
-          // Hide axes for controllers that aren't active
           for (let hand of ['left', 'right']) {
             if (!controllers[hand] && controllerAxes[hand]) {
               controllerAxes[hand].visible = false;
             }
           }
-
-          sendTrackingData(controllers);
+          if (videoPlayer) videoPlayer.update();
+          return controllers;
         }
 
-        function sendTrackingData(controllers) {
-          if (websocket && websocket.readyState === WebSocket.OPEN) {
-            let data = {
-              controllers: controllers,
-              timestamp: Date.now()
-            };
-            websocket.send(JSON.stringify(data));
-            console.log(JSON.stringify(data));
-          }
-        }
-
-        function onXRFrame(t, frame) {
-          let session = frame.session;
-          let refSpace = xrImmersiveRefSpace;
-          let pose = frame.getViewerPose(refSpace);
-
-          if (pose) {
-            let glLayer = session.renderState.baseLayer;
-            gl.bindFramebuffer(gl.FRAMEBUFFER, glLayer.framebuffer);
-
-            // Update camera matrices from pose
-            for (let view of pose.views) {
-              const viewport = glLayer.getViewport(view);
-              gl.viewport(viewport.x, viewport.y, viewport.width, viewport.height);
-              camera.matrix.fromArray(view.transform.matrix);
-              camera.projectionMatrix.fromArray(view.projectionMatrix);
-              camera.updateMatrixWorld(true);
-            }
-
-            renderer.render(scene, camera);
-
-            if (videoPlayer) {
-              videoPlayer.update();
-            }
-          }
-
-          session.requestAnimationFrame(onXRFrame);
-          updateInputSources(session, frame, refSpace);
-        }
-
-        function initWebSocket() {
-          const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-          const wsUrl = `${protocol}//${window.location.host}/ws`;
-          websocket = new WebSocket(wsUrl);
-
-          websocket.onopen = (event) => {
-            console.log("WebSocket connection opened");
-          };
-
-          websocket.onclose = (event) => {
-            console.log("WebSocket connection closed");
-            if (event.code === 1006) {
-              console.error("WebSocket connection failed. Please check if the server is running and the WebSocket endpoint is correct.");
-            }
-          };
-
-          websocket.onerror = (error) => {
-            console.error("WebSocket error:", error);
-          };
-        }
-
-        // Start the XR application and WebSocket connection.
-        initXR();
-        initWebSocket();
+        // Start the XR application and WebSocket connection using shared core
+        websocket = initWebSocket();
+        startXRApp({ websocket, onInit, onFrame });
       </script>
   </body>
 </html>
