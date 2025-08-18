@@ -24,10 +24,9 @@ def create_frame(value=0, shape=(100, 100, 3)):
 
 def create_video_signal(video_paths, frames_with_timestamps):
     """Helper to create a video signal with given frames and timestamps."""
-    writer = VideoSignalWriter(video_paths['video'], video_paths['frames'])
-    for frame, ts in frames_with_timestamps:
-        writer.append(frame, ts)
-    writer.finish()
+    with VideoSignalWriter(video_paths['video'], video_paths['frames']) as writer:
+        for frame, ts in frames_with_timestamps:
+            writer.append(frame, ts)
     return VideoSignal(video_paths['video'], video_paths['frames'])
 
 
@@ -53,7 +52,8 @@ class TestVideoSignalWriter:
 
     def test_empty_writer(self, writer, video_paths):
         """Test creating and closing an empty writer."""
-        writer.finish()
+        with writer:
+            pass
 
         # Check that index file exists and has correct schema
         assert video_paths['frames'].exists()
@@ -64,8 +64,8 @@ class TestVideoSignalWriter:
     def test_write_single_frame(self, writer, video_paths):
         """Test writing a single frame."""
         frame = create_frame(value=128)
-        writer.append(frame, 1000)
-        writer.finish()
+        with writer as w:
+            w.append(frame, 1000)
 
         # Check video file was created
         assert video_paths['video'].exists()
@@ -77,15 +77,13 @@ class TestVideoSignalWriter:
         # Timestamps are stored as int64
         assert frames_table['ts_ns'][0].as_py() == 1000
 
-    def test_write_multiple_frames(self, video_paths):
+    def test_write_multiple_frames(self, writer, video_paths):
         """Test writing multiple frames with increasing timestamps."""
-        writer = VideoSignalWriter(video_paths['video'], video_paths['frames'], gop_size=5)
-
-        # Write 10 frames
-        timestamps = [1000 * (i + 1) for i in range(10)]
-        for i, ts in enumerate(timestamps):
-            writer.append(create_frame(i * 25, (50, 50, 3)), ts)
-        writer.finish()
+        with writer as w:
+            # Write 10 frames
+            timestamps = [1000 * (i + 1) for i in range(10)]
+            for i, ts in enumerate(timestamps):
+                w.append(create_frame(i * 25, (50, 50, 3)), ts)
 
         # Should have exactly 10 timestamps in the index
         frames_table = pq.read_table(video_paths['frames'])
@@ -94,7 +92,7 @@ class TestVideoSignalWriter:
         stored_ts = [t.as_py() for t in frames_table['ts_ns']]
         assert stored_ts == timestamps
 
-    def test_invalid_frame_shape(self, writer):
+    def test_invalid_frame_shape(self, video_paths):
         """Test that invalid frame shapes are rejected."""
         invalid_frames = [
             (np.zeros((100, 100), dtype=np.uint8), "Expected frame shape"),  # 2D
@@ -102,43 +100,43 @@ class TestVideoSignalWriter:
         ]
 
         for frame, match in invalid_frames:
-            with pytest.raises(ValueError, match=match):
-                writer.append(frame, 1000)
+            with VideoSignalWriter(video_paths['video'], video_paths['frames']) as writer:
+                with pytest.raises(ValueError, match=match):
+                    writer.append(frame, 1000)
 
     def test_invalid_dtype(self, writer):
         """Test that invalid dtypes are rejected."""
         frame = np.zeros((100, 100, 3), dtype=np.float32)
-        with pytest.raises(ValueError, match="Expected uint8 dtype"):
-            writer.append(frame, 1000)
+        with writer:
+            with pytest.raises(ValueError, match="Expected uint8 dtype"):
+                writer.append(frame, 1000)
 
     def test_non_increasing_timestamp(self, writer):
         """Test that non-increasing timestamps are rejected."""
         frame1 = create_frame(0)
         frame2 = create_frame(1)
-
-        writer.append(frame1, 2000)
-
-        # Try same and earlier timestamps
-        for ts in [2000, 1000]:
-            with pytest.raises(ValueError, match="not increasing"):
-                writer.append(frame2, ts)
+        with writer as w:
+            w.append(frame1, 2000)
+            # Try same and earlier timestamps
+            for ts in [2000, 1000]:
+                with pytest.raises(ValueError, match="not increasing"):
+                    w.append(frame2, ts)
 
     def test_inconsistent_dimensions(self, writer):
         """Test that frame dimensions must be consistent."""
-        writer.append(create_frame(0, (100, 100, 3)), 1000)
+        with writer as w:
+            w.append(create_frame(0, (100, 100, 3)), 1000)
+            # Different dimensions should fail
+            with pytest.raises(ValueError, match="Frame shape"):
+                w.append(create_frame(0, (50, 50, 3)), 2000)
 
-        # Different dimensions should fail
-        with pytest.raises(ValueError, match="Frame shape"):
-            writer.append(create_frame(0, (50, 50, 3)), 2000)
-
-    def test_append_after_finish(self, writer):
+    def test_append_after_context_exit(self, writer):
         """Test that appending after finish raises an error."""
         frame = create_frame()
-        writer.append(frame, 1000)
-        writer.finish()
-
+        with writer as w:
+            w.append(frame, 1000)
         with pytest.raises(RuntimeError, match="Cannot append to a finished writer"):
-            writer.append(frame, 2000)
+            w.append(frame, 2000)
 
 
 class TestVideoSignalIndexAccess:

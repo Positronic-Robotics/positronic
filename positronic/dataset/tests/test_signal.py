@@ -8,20 +8,18 @@ from positronic.dataset.vector import SimpleSignal, SimpleSignalWriter
 def create_signal(tmp_path, data_timestamps, name="test.parquet"):
     """Helper to create a Signal with data and timestamps."""
     filepath = tmp_path / name
-    writer = SimpleSignalWriter(filepath)
-    for data, ts in data_timestamps:
-        writer.append(data, ts)
-    writer.finish()
+    with SimpleSignalWriter(filepath) as writer:
+        for data, ts in data_timestamps:
+            writer.append(data, ts)
     return SimpleSignal(filepath)
 
 
 def write_data(tmp_path, data_timestamps, name="test.parquet"):
     """Helper to write data and return filepath."""
     filepath = tmp_path / name
-    writer = SimpleSignalWriter(filepath)
-    for data, ts in data_timestamps:
-        writer.append(data, ts)
-    writer.finish()
+    with SimpleSignalWriter(filepath) as writer:
+        for data, ts in data_timestamps:
+            writer.append(data, ts)
     return filepath
 
 
@@ -262,16 +260,17 @@ class TestSignalWriterAppend:
 
     def test_append_non_increasing_timestamp_raises(self, tmp_path):
         writer = SimpleSignalWriter(tmp_path / "test.parquet")
-        writer.append(42, 1000)
-        with pytest.raises(ValueError, match="is not increasing"):
-            writer.append(43, 1000)
-        with pytest.raises(ValueError, match="is not increasing"):
-            writer.append(43, 999)
+        with writer:
+            writer.append(42, 1000)
+            with pytest.raises(ValueError, match="is not increasing"):
+                writer.append(43, 1000)
+            with pytest.raises(ValueError, match="is not increasing"):
+                writer.append(43, 999)
 
-    def test_append_after_finish_raises(self, tmp_path):
+    def test_append_after_context_exit_raises(self, tmp_path):
         writer = SimpleSignalWriter(tmp_path / "test.parquet")
-        writer.append(42, 1000)
-        writer.finish()
+        with writer:
+            writer.append(42, 1000)
         with pytest.raises(RuntimeError, match="Cannot append to a finished writer"):
             writer.append(43, 2000)
 
@@ -315,37 +314,35 @@ class TestSignalWriterAppend:
         np.testing.assert_array_equal(value1, [4, 5, 6])
 
 
-class TestSignalWriterFinish:
+class TestSignalWriterContext:
 
-    def test_finish_empty_writer(self, tmp_path):
+    def test_context_empty_writer(self, tmp_path):
         filepath = write_data(tmp_path, [])
         assert filepath.exists()
         signal = SimpleSignal(filepath)
         assert len(signal) == 0
 
-    def test_finish_idempotent(self, tmp_path):
-        writer = SimpleSignalWriter(tmp_path / "test.parquet")
-        writer.append(42, 1000)
-        writer.finish()
-        writer.finish()  # Should not raise
-        signal = SimpleSignal(tmp_path / "test.parquet")
+    def test_context_writes_data(self, tmp_path):
+        filepath = tmp_path / "test.parquet"
+        with SimpleSignalWriter(filepath) as writer:
+            writer.append(42, 1000)
+        signal = SimpleSignal(filepath)
         assert signal.time[1000] == (42, 1000)
 
-    def test_finish_creates_file(self, tmp_path):
+    def test_context_creates_file(self, tmp_path):
         filepath = tmp_path / "test.parquet"
-        writer = SimpleSignalWriter(filepath)
-        writer.append(42, 1000)
-        assert not filepath.exists()
-        writer.finish()
+        with SimpleSignalWriter(filepath) as writer:
+            writer.append(42, 1000)
+            assert not filepath.exists()
         assert filepath.exists()
 
-    def test_finish_preserves_data_scalar(self, tmp_path):
+    def test_context_preserves_data_scalar(self, tmp_path):
         signal = create_signal(tmp_path, [(42, 1000), (43, 2000), (44, 3000)])
         assert signal[0] == (42, 1000)
         assert signal[1] == (43, 2000)
         assert signal[2] == (44, 3000)
 
-    def test_finish_preserves_data_vector(self, tmp_path):
+    def test_context_preserves_data_vector(self, tmp_path):
         signal = create_signal(tmp_path, [(np.array([1.5, 2.5]), 1000), (np.array([3.5, 4.5]), 2000)])
         value0, ts0 = signal[0]
         value1, ts1 = signal[1]

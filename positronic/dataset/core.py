@@ -73,12 +73,15 @@ class SignalWriter(ABC, Generic[T]):
             ts_ns: Timestamp in nanoseconds (must be strictly increasing)
 
         Raises:
-            RuntimeError: If writer has been finished
+            RuntimeError: If writer has been finished/closed
             ValueError: If timestamp is not increasing or data shape/dtype doesn't match
         """
         pass
 
+    # Writers are context managers. Exiting the context finalizes the file.
+    def __enter__(self) -> "SignalWriter[T]":
+        return self
+
     @abstractmethod
-    def finish(self) -> None:
-        """Finalizes the writing. All following append calls will fail."""
-        pass
+    def __exit__(self, exc_type, exc, tb) -> None:
+        ...

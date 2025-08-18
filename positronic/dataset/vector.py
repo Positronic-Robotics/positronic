@@ -241,19 +241,18 @@ class SimpleSignalWriter(SignalWriter[T]):
         if len(self._timestamps) >= self.chunk_size:
             self._flush_chunk()
 
-    def finish(self) -> None:
-        """Write remaining data to parquet file and mark writer as finished."""
+    def __exit__(self, exc_type, exc, tb) -> None:
+        """Finalize the file on context exit (even on exceptions)."""
         if self._finished:
             return
-
         self._finished = True
-
-        self._flush_chunk()  # Flush any remaining data
-
-        if self._writer:
-            self._writer.close()
-        else:
-            # No data was ever written, create empty file with default schema
-            schema = pa.schema([('timestamp', pa.int64()), ('value', pa.int64())])
-            table = pa.table({'timestamp': [], 'value': []}, schema=schema)
-            pq.write_table(table, self.filepath)
+        try:
+            self._flush_chunk()  # Flush any remaining data
+        finally:
+            if self._writer:
+                self._writer.close()
+            else:
+                # No data was ever written, create empty file with default schema
+                schema = pa.schema([('timestamp', pa.int64()), ('value', pa.int64())])
+                table = pa.table({'timestamp': [], 'value': []}, schema=schema)
+                pq.write_table(table, self.filepath)

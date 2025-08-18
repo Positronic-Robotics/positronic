@@ -102,11 +102,10 @@ class VideoSignalWriter(SignalWriter[np.ndarray]):
         self._frame_count += 1
         self._last_ts = ts_ns
 
-    def finish(self) -> None:
-        """Finalize the writing. All following append calls will fail."""
+    def __exit__(self, exc_type, exc, tb) -> None:
+        """Finalize the writing on context exit (even on exceptions)."""
         if self._finished:
             return
-
         self._finished = True
 
         if self._container is not None:
