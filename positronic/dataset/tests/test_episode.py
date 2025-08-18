@@ -8,12 +8,11 @@ from positronic.dataset.tests.test_video import create_frame, assert_frames_equa
 
 def test_episode_writer_and_reader_basic(tmp_path):
     ep_dir = tmp_path / "ep1"
-    w = DiskEpisodeWriter(ep_dir)
-    w.append("a", 1, 1000)
-    w.append("a", 2, 2000)
-    w.append("b", 10, 1500)
-    w.append("b", 20, 2500)
-    w.finish()
+    with DiskEpisodeWriter(ep_dir) as w:
+        w.append("a", 1, 1000)
+        w.append("a", 2, 2000)
+        w.append("b", 10, 1500)
+        w.append("b", 20, 2500)
 
     # Files written
     assert (ep_dir / "a.parquet").exists()
@@ -34,14 +33,13 @@ def test_episode_writer_and_reader_basic(tmp_path):
 
 def test_episode_start_last_ts(tmp_path):
     ep_dir = tmp_path / "ep2"
-    w = DiskEpisodeWriter(ep_dir)
-    # a: starts 1000, last 2000
-    w.append("a", 1, 1000)
-    w.append("a", 2, 2000)
-    # b: starts 1500, last 2500
-    w.append("b", 10, 1500)
-    w.append("b", 20, 2500)
-    w.finish()
+    with DiskEpisodeWriter(ep_dir) as w:
+        # a: starts 1000, last 2000
+        w.append("a", 1, 1000)
+        w.append("a", 2, 2000)
+        # b: starts 1500, last 2500
+        w.append("b", 10, 1500)
+        w.append("b", 20, 2500)
 
     ep = DiskEpisode(ep_dir)
     # Current Episode implementation uses max of starts and max of lasts
@@ -51,10 +49,9 @@ def test_episode_start_last_ts(tmp_path):
 
 def test_episode_getitem_returns_signal(tmp_path):
     ep_dir = tmp_path / "ep3"
-    w = DiskEpisodeWriter(ep_dir)
-    w.append("x", np.array([1, 2]), 1000)
-    w.append("x", np.array([3, 4]), 2000)
-    w.finish()
+    with DiskEpisodeWriter(ep_dir) as w:
+        w.append("x", np.array([1, 2]), 1000)
+        w.append("x", np.array([3, 4]), 2000)
 
     ep = DiskEpisode(ep_dir)
     x = ep["x"]
@@ -69,16 +66,15 @@ def test_episode_getitem_returns_signal(tmp_path):
 
 def test_episode_static_items_json(tmp_path):
     ep_dir = tmp_path / "ep_static"
-    w = DiskEpisodeWriter(ep_dir)
-    # write static metadata (single file episode.json)
-    w.set_static("task", "pick_place")
-    w.set_static("version", 1)
-    w.set_static("params", {"speed": 0.5})
-    w.set_static("tags", ["demo", "test"])
-    # also write a dynamic signal
-    w.append("a", 42, 1000)
-    w.append("a", 43, 2000)
-    w.finish()
+    with DiskEpisodeWriter(ep_dir) as w:
+        # write static metadata (single file episode.json)
+        w.set_static("task", "pick_place")
+        w.set_static("version", 1)
+        w.set_static("params", {"speed": 0.5})
+        w.set_static("tags", ["demo", "test"])
+        # also write a dynamic signal
+        w.append("a", 42, 1000)
+        w.append("a", 43, 2000)
 
     # Files written
     assert (ep_dir / "episode.json").exists()
@@ -102,11 +98,10 @@ def test_episode_static_items_json(tmp_path):
 
 def test_episode_meta_written_and_exposed(tmp_path):
     ep_dir = tmp_path / "ep_meta"
-    w = DiskEpisodeWriter(ep_dir)
-    # also write a dynamic signal and static
-    w.append("a", 1, 1000)
-    w.set_static("user_key", "value")
-    w.finish()
+    with DiskEpisodeWriter(ep_dir) as w:
+        # also write a dynamic signal and static
+        w.append("a", 1, 1000)
+        w.set_static("user_key", "value")
 
     # Files present
     assert (ep_dir / "episode.json").exists()
@@ -134,14 +129,13 @@ def test_episode_meta_written_and_exposed(tmp_path):
 
 def test_episode_static_numpy_arrays_roundtrip(tmp_path):
     ep_dir = tmp_path / "ep_static_np"
-    w = DiskEpisodeWriter(ep_dir)
-    arr_i32 = np.array([[1, 2], [3, 4]], dtype=np.int32)
-    arr_f32 = np.array([1.5, 2.5, 3.5], dtype=np.float32)
-    nested = {"cam": {"K": arr_f32.reshape(3, 1), "shape": [480, 640]}, "list": [arr_i32]}
-    w.set_static("arr_i32", arr_i32)
-    w.set_static("arr_f32", arr_f32)
-    w.set_static("nested", nested)
-    w.finish()
+    with DiskEpisodeWriter(ep_dir) as w:
+        arr_i32 = np.array([[1, 2], [3, 4]], dtype=np.int32)
+        arr_f32 = np.array([1.5, 2.5, 3.5], dtype=np.float32)
+        nested = {"cam": {"K": arr_f32.reshape(3, 1), "shape": [480, 640]}, "list": [arr_i32]}
+        w.set_static("arr_i32", arr_i32)
+        w.set_static("arr_f32", arr_f32)
+        w.set_static("nested", nested)
 
     ep = DiskEpisode(ep_dir)
     out_i32 = ep["arr_i32"]
@@ -189,21 +183,20 @@ class TestEpisodeTimeAccessor:
     @pytest.fixture(autouse=True)
     def _setup(self, tmp_path):
         ep_dir = tmp_path / "ep_time_fixture"
-        w = DiskEpisodeWriter(ep_dir)
-        # Static items
-        w.set_static("task", "stack")
-        w.set_static("version", 2)
-        w.set_static("params", {"k": 1})
-        # Dynamic signals
-        # a: 1000->1, 2000->2, 3000->3
-        w.append("a", 1, 1000)
-        w.append("a", 2, 2000)
-        w.append("a", 3, 3000)
-        # b: 1500->5, 2500->7, 3500->9
-        w.append("b", 5, 1500)
-        w.append("b", 7, 2500)
-        w.append("b", 9, 3500)
-        w.finish()
+        with DiskEpisodeWriter(ep_dir) as w:
+            # Static items
+            w.set_static("task", "stack")
+            w.set_static("version", 2)
+            w.set_static("params", {"k": 1})
+            # Dynamic signals
+            # a: 1000->1, 2000->2, 3000->3
+            w.append("a", 1, 1000)
+            w.append("a", 2, 2000)
+            w.append("a", 3, 3000)
+            # b: 1500->5, 2500->7, 3500->9
+            w.append("b", 5, 1500)
+            w.append("b", 7, 2500)
+            w.append("b", 9, 3500)
 
         self.ep = DiskEpisode(ep_dir)
 
@@ -245,11 +238,10 @@ class TestEpisodeTimeAccessor:
 
 def test_disk_episode_implements_abc(tmp_path):
     ep_dir = tmp_path / "ep_abc"
-    w = DiskEpisodeWriter(ep_dir)
-    w.append("a", 1, 1000)
-    w.append("a", 2, 2000)
-    w.set_static("task", "stack")
-    w.finish()
+    with DiskEpisodeWriter(ep_dir) as w:
+        w.append("a", 1, 1000)
+        w.append("a", 2, 2000)
+        w.set_static("task", "stack")
 
     ep = DiskEpisode(ep_dir)
     assert isinstance(ep, Episode)
@@ -262,14 +254,12 @@ class TestEpisodeVideoIntegration:
 
     def test_episode_writer_routes_images_to_video(self, tmp_path):
         ep_dir = tmp_path / "ep_video"
-        w = DiskEpisodeWriter(ep_dir)
-
-        # Append a few frames under the same signal name
-        frames = [create_frame(30), create_frame(120), create_frame(200)]
-        ts = [1000, 2000, 4000]
-        for f, t in zip(frames, ts):
-            w.append("cam", f, t)
-        w.finish()
+        with DiskEpisodeWriter(ep_dir) as w:
+            # Append a few frames under the same signal name
+            frames = [create_frame(30), create_frame(120), create_frame(200)]
+            ts = [1000, 2000, 4000]
+            for f, t in zip(frames, ts):
+                w.append("cam", f, t)
 
         # Files created for a video signal
         assert (ep_dir / "cam.mp4").exists()
@@ -288,14 +278,13 @@ class TestEpisodeVideoIntegration:
 
     def test_episode_mixed_vector_and_video(self, tmp_path):
         ep_dir = tmp_path / "ep_mixed"
-        w = DiskEpisodeWriter(ep_dir)
-        # Vector signal
-        w.append("a", 1, 1000)
-        w.append("a", 2, 2000)
-        # Video signal
-        w.append("cam", create_frame(10), 1500)
-        w.append("cam", create_frame(20), 2500)
-        w.finish()
+        with DiskEpisodeWriter(ep_dir) as w:
+            # Vector signal
+            w.append("a", 1, 1000)
+            w.append("a", 2, 2000)
+            # Video signal
+            w.append("cam", create_frame(10), 1500)
+            w.append("cam", create_frame(20), 2500)
 
         ep = DiskEpisode(ep_dir)
         # Keys include both signals

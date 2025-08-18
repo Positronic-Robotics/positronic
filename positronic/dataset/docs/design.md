@@ -54,9 +54,12 @@ class SignalWriter[T]:
     def append(self, data: T, ts_ns: int) -> None:
         pass
 
-    # Finalizes the writing. All following append calls will fail
-    def finish(self) -> None:
-        pass
+    # Writers are context managers. Exiting the context finalizes the file.
+    def __enter__(self) -> "SignalWriter[T]":
+        return self
+
+    def __exit__(self, exc_type, exc, tb) -> None:
+        ...
 
 class Episode:
     # Names of all items (dynamic signals + static items)
@@ -101,9 +104,12 @@ class EpisodeWriter:
     def set_static(self, name: str, data: Any) -> None:
         pass
 
-    # Finalize writing and persist metadata
-    def finish(self) -> None:
-        pass
+    # Writers are context managers. Exiting the context finalizes the episode.
+    def __enter__(self) -> "EpisodeWriter[T]":
+        return self
+
+    def __exit__(self, exc_type, exc, tb) -> None:
+        ...
 ```
 
 ## Implementations
@@ -176,7 +182,8 @@ Episodes are recorded via an `EpisodeWriter` implementations. You add time-varyi
 
 Name collisions are disallowed: attempting to `append` to a name that already exists as a static item raises an error, and vice versa.
 
-Calling `finish()` finalizes all underlying writers and persists metadata.
+Use as a context manager: exiting the `with` block finalizes all underlying
+signal writers and persists metadata.
 
 ### System Metadata (meta)
 

@@ -50,11 +50,10 @@ class TestSignalTimeAccess:
 
     def test_vector_start_last_ts_basic(self, tmp_path):
         fp = tmp_path / "sig.parquet"
-        w = SimpleSignalWriter(fp)
-        w.append(1, 1000)
-        w.append(2, 2000)
-        w.append(3, 3000)
-        w.finish()
+        with SimpleSignalWriter(fp) as w:
+            w.append(1, 1000)
+            w.append(2, 2000)
+            w.append(3, 3000)
 
         s = SimpleSignal(fp)
         assert s.start_ts == 1000
@@ -62,8 +61,8 @@ class TestSignalTimeAccess:
 
     def test_vector_start_last_ts_empty_raises(self, tmp_path):
         fp = tmp_path / "empty.parquet"
-        w = SimpleSignalWriter(fp)
-        w.finish()
+        with SimpleSignalWriter(fp):
+            pass
         s = SimpleSignal(fp)
         with pytest.raises(ValueError):
             _ = s.start_ts

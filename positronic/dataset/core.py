@@ -1,4 +1,5 @@
 from abc import ABC, abstractmethod
+from contextlib import AbstractContextManager
 from typing import Any, TypeVar, Generic, Tuple, Sequence, Protocol, runtime_checkable
 import numpy as np
 
@@ -74,7 +75,7 @@ class Signal(Sequence[Tuple[T, int]], ABC, Generic[T]):
         pass
 
 
-class SignalWriter(ABC, Generic[T]):
+class SignalWriter(AbstractContextManager, ABC, Generic[T]):
 
     @abstractmethod
     def append(self, data: T, ts_ns: int) -> None:
@@ -89,10 +90,6 @@ class SignalWriter(ABC, Generic[T]):
             ValueError: If timestamp is not increasing or data shape/dtype doesn't match
         """
         pass
-
-    # Writers are context managers. Exiting the context finalizes the file.
-    def __enter__(self) -> "SignalWriter[T]":
-        return self
 
     @abstractmethod
     def __exit__(self, exc_type, exc, tb) -> None:
@@ -154,8 +151,12 @@ class Episode(ABC):
         pass
 
 
-class EpisodeWriter(ABC, Generic[T]):
-    """Abstract base class for writing episodes to a backing store."""
+class EpisodeWriter(AbstractContextManager, ABC, Generic[T]):
+    """Abstract base class for writing episodes to a backing store.
+
+    Implementations are context managers. Exiting the context finalizes all
+    underlying signal writers and persists static metadata.
+    """
 
     @abstractmethod
     def append(self, signal_name: str, data: T, ts_ns: int) -> None:
@@ -174,6 +175,5 @@ class EpisodeWriter(ABC, Generic[T]):
         pass
 
     @abstractmethod
-    def finish(self) -> None:
-        """Finalize writing and persist metadata and signal data."""
-        pass
+    def __exit__(self, exc_type, exc, tb) -> None:
+        ...

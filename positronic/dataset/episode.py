@@ -14,7 +14,9 @@ from .core import Signal, Episode, EpisodeWriter
 from .vector import SimpleSignal, SimpleSignalWriter
 from .video import VideoSignal, VideoSignalWriter
 
+EPISODE_SCHEMA_VERSION = 1
 T = TypeVar('T')
+SIGNAL_FACTORY_T = Callable[[], Signal[Any]]
 
 
 class DiskEpisodeWriter(EpisodeWriter):
@@ -37,7 +39,7 @@ class DiskEpisodeWriter(EpisodeWriter):
 
         # Write system metadata immediately
         meta = {
-            "schema_version": 1,
+            "schema_version": EPISODE_SCHEMA_VERSION,
             "created_ts_ns": time.time_ns(),
             "writer": {
                 "name": f"{self.__class__.__module__}.{self.__class__.__qualname__}",
@@ -112,10 +114,16 @@ class DiskEpisodeWriter(EpisodeWriter):
 
         self._static_items[name] = data
 
-    def finish(self):
-        """Finish writing all signals."""
+    def __exit__(self, exc_type, exc, tb) -> None:
+        """Finalize all signal writers and persist static items on context exit."""
+        # Always try to close all signal writers
         for writer in self._writers.values():
-            writer.finish()
+            try:
+                writer.__exit__(exc_type, exc, tb)
+            except Exception:
+                # Do not suppress exceptions, just ensure we attempt to close others
+                if exc is None:
+                    raise
         # Write all static items into a single episode.json
         episode_json = self._path / "episode.json"
         if self._static_items or not episode_json.exists():
@@ -209,8 +217,7 @@ class DiskEpisode(Episode):
         self._dir = directory
         # Lazy containers
         self._signals: dict[str, Signal[Any]] = {}
-        # Map name -> zero-arg factory returning a Signal instance
-        self._signal_factories: dict[str, Callable[[], Signal[Any]]] = {}
+        self._signal_factories: dict[str, SIGNAL_FACTORY_T] = {}
         self._static: dict[str, Any] | None = None
         self._meta: dict[str, Any] | None = None
 
