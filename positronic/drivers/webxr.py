@@ -11,7 +11,7 @@ import numpy as np
 import turbojpeg
 import uvicorn
 from fastapi import FastAPI, WebSocket
-from fastapi.responses import FileResponse, RedirectResponse
+from fastapi.responses import FileResponse
 
 import pimm
 from positronic import geom
@@ -70,13 +70,13 @@ class WebXR:
                  port: int,
                  ssl_keyfile: str = "key.pem",
                  ssl_certfile: str = "cert.pem",
-                 default_frontend: str = "oculus",
+                 frontend: str = "oculus",
                  use_https: bool = True):
         self.port = port
         self.ssl_keyfile = ssl_keyfile
         self.ssl_certfile = ssl_certfile
-        assert default_frontend in ("oculus", "iphone"), f"Unknown frontend: {default_frontend}"
-        self.default_frontend = default_frontend
+        assert frontend in ("oculus", "iphone"), f"Unknown frontend: {frontend}"
+        self.frontend = frontend
         self.use_https = use_https
         self.server_thread = None
 
@@ -92,17 +92,10 @@ class WebXR:
 
         @app.get("/")
         async def root():
-            # Redirect to configured default frontend
-            target = "/oculus" if self.default_frontend == "oculus" else "/iphone"
-            return RedirectResponse(target)
-
-        @app.get("/oculus")
-        async def oculus():
-            return FileResponse("positronic/assets/webxr/index.html")
-
-        @app.get("/iphone")
-        async def iphone():
-            return FileResponse("positronic/assets/webxr_iphone/index.html")
+            if self.frontend == "oculus":
+                return FileResponse("positronic/assets/webxr/index.html")
+            else:
+                return FileResponse("positronic/assets/webxr_iphone/index.html")
 
         @app.get("/three.min.js")
         async def three_min():
@@ -116,9 +109,10 @@ class WebXR:
         async def webxr_core():
             return FileResponse("positronic/assets/webxr/core.js")
 
-        @app.get("/video-player.js")
-        async def video_player():
-            return FileResponse("positronic/assets/webxr/video-player.js")
+        if self.frontend == "oculus":
+            @app.get("/video-player.js")
+            async def video_player():
+                return FileResponse("positronic/assets/webxr/video-player.js")
 
         @app.websocket("/video")
         async def video_stream(websocket: WebSocket):
@@ -141,7 +135,6 @@ class WebXR:
                     base64_frame = encode_frame(msg.data)
                     await websocket.send_text(base64_frame)
                     fps.tick()
-
             except Exception as e:
                 print(f"Video WebSocket error: {e}")
                 print(traceback.format_exc())
