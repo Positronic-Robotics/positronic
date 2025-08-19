@@ -53,7 +53,7 @@ class DiskEpisodeWriter(EpisodeWriter):
         self._path.mkdir(parents=True, exist_ok=False)
 
         self._writers = {}
-        # Accumulated static items to be stored in a single episode.json
+        # Accumulated static items to be stored in a single static.json
         self._static_items: dict[str, Any] = {}
         self._finished = False
         self._aborted = False
@@ -99,7 +99,7 @@ class DiskEpisodeWriter(EpisodeWriter):
     def set_static(self, name: str, data: Any) -> None:
         """Set a static (non-time-varying) item by key for this episode.
 
-        All static items are persisted together into a single 'episode.json'.
+        All static items are persisted together into a single 'static.json'.
 
         Args:
             name: The key name for the static item
@@ -139,8 +139,8 @@ class DiskEpisodeWriter(EpisodeWriter):
             return
         self._finished = True
 
-        # Write all static items into a single episode.json
-        episode_json = self._path / "episode.json"
+        # Write all static items into a single static.json
+        episode_json = self._path / "static.json"
         if self._static_items or not episode_json.exists():
             with episode_json.open('w', encoding='utf-8') as f:
                 json.dump(self._static_items, f)
@@ -303,14 +303,14 @@ class DiskEpisode(Episode):
     def _static_data(self) -> dict[str, Any]:
         if self._static is None:
             self._static = {}
-            ep_json = self._dir / 'episode.json'
+            ep_json = self._dir / 'static.json'
             if ep_json.exists():
                 with ep_json.open('r', encoding='utf-8') as f:
                     data = json.load(f)
                 if isinstance(data, dict):
                     self._static.update(data)
                 else:
-                    raise ValueError("episode.json must contain a JSON object (mapping)")
+                    raise ValueError("static.json must contain a JSON object (mapping)")
         return self._static
 
     @property
