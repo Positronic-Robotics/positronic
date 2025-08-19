@@ -16,6 +16,30 @@ from fastapi.responses import FileResponse
 import pimm
 from positronic import geom
 
+_LOG_CONFIG = {
+    'version': 1,
+    'disable_existing_loggers': False,
+    'handlers': {
+        'file': {
+            'class': 'logging.FileHandler',
+            'formatter': 'default',
+            'filename': '/tmp/webxr.log',
+            'mode': 'w',
+        }
+    },
+    'loggers': {
+        '': {
+            'handlers': ['file'],
+            'level': 'INFO',
+        }
+    },
+    'formatters': {
+        'default': {
+            'format': '%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+        }
+    }
+}
+
 
 def _parse_controller_data(data: dict):
     controller_positions = {'left': None, 'right': None}
@@ -109,8 +133,6 @@ class WebXR:
         app = FastAPI()
         jpeg_encoder = turbojpeg.TurboJPEG()
 
-        jpeg_encoder = turbojpeg.TurboJPEG()
-
         def encode_frame(image):
             buffer = jpeg_encoder.encode(image, quality=50)
             return base64.b64encode(buffer).decode('utf-8')
@@ -135,6 +157,7 @@ class WebXR:
             return FileResponse("positronic/assets/webxr/core.js")
 
         if self.frontend == "oculus":
+
             @app.get("/video-player.js")
             async def video_player():
                 return FileResponse("positronic/assets/webxr/video-player.js")
@@ -198,33 +221,7 @@ class WebXR:
                                                          keyfile=self.ssl_keyfile,
                                                          certfile=self.ssl_certfile)
             ssl_kwargs = dict(ssl_keyfile=keyfile, ssl_certfile=certfile)
-        config = uvicorn.Config(app,
-                                host="0.0.0.0",
-                                port=self.port,
-                                log_config={
-                                    'version': 1,
-                                    'disable_existing_loggers': False,
-                                    'handlers': {
-                                        'file': {
-                                            'class': 'logging.FileHandler',
-                                            'formatter': 'default',
-                                            'filename': '/tmp/webxr.log',
-                                            'mode': 'w',
-                                        }
-                                    },
-                                    'loggers': {
-                                        '': {
-                                            'handlers': ['file'],
-                                            'level': 'INFO',
-                                        }
-                                    },
-                                    'formatters': {
-                                        'default': {
-                                            'format': '%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-                                        }
-                                    }
-                                },
-                                **ssl_kwargs)
+        config = uvicorn.Config(app, host="0.0.0.0", port=self.port, log_config=_LOG_CONFIG, **ssl_kwargs)
         server = uvicorn.Server(config)
         self.server_thread = threading.Thread(target=server.run, daemon=True)
         self.server_thread.start()
