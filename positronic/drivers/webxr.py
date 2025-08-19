@@ -61,6 +61,31 @@ def _get_or_create_ssl_files(port: int, keyfile: str, certfile: str) -> tuple[st
 
 
 class WebXR:
+    """WebXR server for Oculus headset or iPhone AR controller.
+
+    Serves a single frontend at a time and streams controller/pose data back
+    to the application over WebSocket, with an optional JPEG video stream.
+
+    Important for iPhone
+    - Use a WebXR-capable browser (XR Browser recommended).
+    - For development, use HTTP (`use_https=False`). XR Browser on iOS blocks self-signed
+      HTTPS and may not allow proceeding to an untrusted site, which also
+      blocks the `wss://` WebSocket.
+    - If HTTPS is required, provide a cert trusted by the device.
+
+    Endpoints
+    - `/`                -> selected frontend (no redirect)
+    - `/ws`              -> JSON controller stream from client to server
+    - `/video`           -> optional base64 JPEG frames (server to client)
+    - Shared assets: `/three.min.js`, `/webxr-button.js`, `/core.js`
+    - Oculus-only: `/video-player.js`
+
+    Parameters
+    - port: TCP port to bind.
+    - ssl_keyfile, ssl_certfile: TLS files if `use_https=True`.
+    - frontend: "oculus" or "iphone" (single-frontend mode).
+    - use_https: enable HTTPS; set False for iPhone dev.
+    """
 
     frame: pimm.SignalReader = pimm.NoOpReader()
     controller_positions: pimm.SignalEmitter = pimm.NoOpEmitter()
@@ -173,10 +198,6 @@ class WebXR:
                                                          keyfile=self.ssl_keyfile,
                                                          certfile=self.ssl_certfile)
             ssl_kwargs = dict(ssl_keyfile=keyfile, ssl_certfile=certfile)
-            print(
-                "WebXR: HTTPS enabled. If using iPhone/XR Browser, ensure the cert is trusted or set use_https=False for dev."
-            )
-
         config = uvicorn.Config(app,
                                 host="0.0.0.0",
                                 port=self.port,
