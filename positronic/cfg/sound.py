@@ -1,6 +1,7 @@
 import configuronic as cfn
-import positronic.drivers.sound
 
-sound = cfn.Config(
-    positronic.drivers.sound.SoundSystem,
-)
+
+@cfn.config()
+def sound(**kwargs):
+    import positronic.drivers.sound
+    return positronic.drivers.sound.SoundSystem(**kwargs)

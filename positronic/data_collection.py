@@ -7,9 +7,6 @@ from positronic import geom
 import configuronic as cfn
 import pimm
 from positronic.drivers import roboarm
-from positronic.drivers.sound import SoundSystem
-from positronic.drivers.camera.linux_video import LinuxVideo
-from positronic.drivers.gripper.dh import DHGripper
 from positronic.drivers.webxr import WebXR
 from positronic.gui.dpg import DearpyguiUi
 from positronic.simulator.mujoco.sim import MujocoCamera, MujocoFranka, MujocoGripper, MujocoSim
@@ -262,10 +259,10 @@ class DataCollection:
 
 
 def main(robot_arm: Any | None,
-         gripper: DHGripper | None,
+         gripper: Any | None,
          webxr: WebXR,
-         sound: SoundSystem | None,
-         cameras: Dict[str, LinuxVideo] | None,
+         sound: Any | None,
+         cameras: Dict[str, Any] | None,
          output_dir: str | None = None,
          fps: int = 30,
          stream_video_to_webxr: str | None = None,
@@ -318,7 +315,7 @@ def main(robot_arm: Any | None,
 def main_sim(
         mujoco_model_path: str,
         webxr: WebXR,
-        sound: SoundSystem | None = None,
+        sound: Any | None = None,
         loaders: Sequence[MujocoSceneTransform] = (),
         output_dir: str | None = None,
         fps: int = 30,
@@ -416,4 +413,5 @@ def so101cfg(robot_arm, **kwargs):
 
 if __name__ == "__main__":
     # TODO: add ability to specify multiple targets in CLI
-    cfn.cli(so101cfg)
+    cfn.cli(main_sim_cfg)
+    # cfn.cli(so101cfg)

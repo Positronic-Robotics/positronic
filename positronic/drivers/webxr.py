@@ -1,14 +1,17 @@
 import asyncio
 import base64
+import os
+import subprocess
+import tempfile
 import threading
 import traceback
 from typing import Iterator
 
 import numpy as np
+import turbojpeg
+import uvicorn
 from fastapi import FastAPI, WebSocket
 from fastapi.responses import FileResponse
-import uvicorn
-import turbojpeg
 
 import pimm
 from positronic import geom
@@ -28,27 +31,56 @@ def _parse_controller_data(data: dict):
     return controller_positions, buttons_dict
 
 
+def _get_or_create_ssl_files(port: int, keyfile: str, certfile: str) -> tuple[str, str]:
+    """Return paths to SSL key/cert, creating temp self-signed ones if missing.
+
+    - If both `keyfile` and `certfile` exist, return them.
+    - Otherwise, generate a self-signed cert/key pair in the system temp dir,
+      namespaced by `port`, and return those paths.
+    """
+    if os.path.exists(keyfile) and os.path.exists(certfile):
+        return keyfile, certfile
+
+    tmp_dir = tempfile.gettempdir()
+    tmp_key = os.path.join(tmp_dir, f"webxr_key_{port}.pem")
+    tmp_cert = os.path.join(tmp_dir, f"webxr_cert_{port}.pem")
+
+    if os.path.exists(tmp_key) and os.path.exists(tmp_cert):
+        return tmp_key, tmp_cert
+
+    try:
+        cl = [
+            "openssl", "req", "-x509", "-nodes", "-days", "365", "-newkey", "rsa:2048", "-keyout", tmp_key, "-out",
+            tmp_cert, "-subj", "/CN=localhost"
+        ],
+        subprocess.run(*cl, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        print(f"Generated self-signed SSL certs in {tmp_dir}")
+    except Exception as e:
+        print("Failed to generate SSL certificates via openssl. "
+              "Please ensure openssl is installed or provide cert/key files.")
+        raise e
+
+    return tmp_key, tmp_cert
+
+
 class WebXR:
 
     frame: pimm.SignalReader = pimm.NoOpReader()
     controller_positions: pimm.SignalEmitter = pimm.NoOpEmitter()
     buttons: pimm.SignalEmitter = pimm.NoOpEmitter()
 
-    def __init__(self,
-                 port: int,
-                 ssl_keyfile: str = "key.pem",
-                 ssl_certfile: str = "cert.pem"):
+    def __init__(self, port: int, ssl_keyfile: str = "key.pem", ssl_certfile: str = "cert.pem"):
         self.port = port
         self.ssl_keyfile = ssl_keyfile
         self.ssl_certfile = ssl_certfile
         self.server_thread = None
-        self.jpeg_encoder = turbojpeg.TurboJPEG()
 
     def run(self, should_stop: pimm.SignalReader, clock: pimm.Clock) -> Iterator[pimm.Sleep]:  # noqa: C901
         app = FastAPI()
+        jpeg_encoder = turbojpeg.TurboJPEG()
 
         def encode_frame(image):
-            buffer = self.jpeg_encoder.encode(image, quality=50)
+            buffer = jpeg_encoder.encode(image, quality=50)
             return base64.b64encode(buffer).decode('utf-8')
 
         @app.get("/")
@@ -121,12 +153,16 @@ class WebXR:
             except Exception as e:
                 print(f"WebSocket error: {e}")
 
+        keyfile, certfile = _get_or_create_ssl_files(port=self.port,
+                                                     keyfile=self.ssl_keyfile,
+                                                     certfile=self.ssl_certfile)
+
         config = uvicorn.Config(
             app,
             host="0.0.0.0",
             port=self.port,
-            ssl_keyfile=self.ssl_keyfile,
-            ssl_certfile=self.ssl_certfile,
+            ssl_keyfile=keyfile,
+            ssl_certfile=certfile,
             log_config={
                 'version': 1,
                 'disable_existing_loggers': False,

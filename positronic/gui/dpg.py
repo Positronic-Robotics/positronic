@@ -117,8 +117,8 @@ class DearpyguiUi:
 
     def _configure_image_sizes(self):
         n_images = len(self.cameras.keys())
-        n_cols = int(np.ceil(np.sqrt(n_images)))
-        n_rows = int(np.ceil(n_images / n_cols))
+        n_cols = max(1, int(np.ceil(np.sqrt(n_images))))
+        n_rows = max(1, int(np.ceil(n_images / n_cols)))
 
         width = dpg.get_item_width("image_grid")
         height = dpg.get_item_height("image_grid")
