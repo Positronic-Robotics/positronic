@@ -16,7 +16,7 @@ export function sendControllers(ws, controllers) {
   ws.send(JSON.stringify(payload));
 }
 
-export function startXRApp({ websocket, onInit, onFrame, referenceSpace = 'local' }) {
+export function startXRApp({ websocket, onInit, onFrame, referenceSpace = 'local', domOverlayRoot = (typeof document !== 'undefined' ? document.body : null) }) {
   let xrButton = null;
   let xrRefSpace = null;
   let scene = null, camera = null, renderer = null, gl = null;
@@ -40,7 +40,13 @@ export function startXRApp({ websocket, onInit, onFrame, referenceSpace = 'local
   }
 
   function onRequestSession() {
-    return navigator.xr.requestSession('immersive-ar', { optionalFeatures: ['local-floor'] }).then((session) => {
+    const sessionInit = {
+      optionalFeatures: ['local-floor', 'dom-overlay']
+    };
+    if (domOverlayRoot) {
+      sessionInit.domOverlay = { root: domOverlayRoot };
+    }
+    return navigator.xr.requestSession('immersive-ar', sessionInit).then((session) => {
       xrButton.setSession(session);
       onSessionStarted(session);
     });
@@ -50,6 +56,7 @@ export function startXRApp({ websocket, onInit, onFrame, referenceSpace = 'local
     session.addEventListener('end', onSessionEnded);
     initGL();
     renderer.xr.setSession(session);
+    try { document.body && document.body.classList.add('xr-active'); } catch {}
     session.requestReferenceSpace(referenceSpace).then((refSpace) => {
       xrRefSpace = refSpace;
       session.requestAnimationFrame(onXRFrame);
@@ -57,9 +64,9 @@ export function startXRApp({ websocket, onInit, onFrame, referenceSpace = 'local
   }
 
   function onSessionEnded(event) {
-    if (event.session.isImmersive) {
-      xrButton.setSession(null);
-    }
+    // Always reset button state on session end
+    xrButton.setSession(null);
+    try { document.body && document.body.classList.remove('xr-active'); } catch {}
   }
 
   function onXRFrame(t, frame) {
@@ -101,4 +108,3 @@ export function startXRApp({ websocket, onInit, onFrame, referenceSpace = 'local
   // return handles for optional external use
   return { get scene() { return scene; }, get camera() { return camera; }, get renderer() { return renderer; } };
 }
-
