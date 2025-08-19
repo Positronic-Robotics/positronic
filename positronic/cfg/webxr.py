@@ -9,4 +9,4 @@ oculus = cfn.Config(
     default_frontend="oculus",  # or "iphone"
 )
 
-iphone = oculus.override(default_frontend="iphone")
+iphone = oculus.override(default_frontend="iphone", use_https=False)

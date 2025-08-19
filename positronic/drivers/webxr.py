@@ -3,16 +3,11 @@ import base64
 import os
 import subprocess
 import tempfile
-import os
-import subprocess
-import tempfile
 import threading
 import traceback
 from typing import Iterator
 
 import numpy as np
-import turbojpeg
-import uvicorn
 import turbojpeg
 import uvicorn
 from fastapi import FastAPI, WebSocket
@@ -37,11 +32,9 @@ def _parse_controller_data(data: dict):
 
 
 def _get_or_create_ssl_files(port: int, keyfile: str, certfile: str) -> tuple[str, str]:
-    """Return paths to SSL key/cert, creating temp self-signed ones if missing.
+    """Return paths to SSL key/cert, creating basic self-signed ones if missing.
 
-    - If both `keyfile` and `certfile` exist, return them.
-    - Otherwise, generate a self-signed cert/key pair in the system temp dir,
-      namespaced by `port`, and return those paths.
+    Note: For iPhone/XR Browser development, prefer HTTP (use_https=False).
     """
     if os.path.exists(keyfile) and os.path.exists(certfile):
         return keyfile, certfile
@@ -61,8 +54,7 @@ def _get_or_create_ssl_files(port: int, keyfile: str, certfile: str) -> tuple[st
         subprocess.run(*cl, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         print(f"Generated self-signed SSL certs in {tmp_dir}")
     except Exception as e:
-        print("Failed to generate SSL certificates via openssl. "
-              "Please ensure openssl is installed or provide cert/key files.")
+        print("Failed to generate SSL certificates via openssl. Provide cert/key files or use HTTP.")
         raise e
 
     return tmp_key, tmp_cert
@@ -78,12 +70,14 @@ class WebXR:
                  port: int,
                  ssl_keyfile: str = "key.pem",
                  ssl_certfile: str = "cert.pem",
-                 default_frontend: str = "oculus"):
+                 default_frontend: str = "oculus",
+                 use_https: bool = True):
         self.port = port
         self.ssl_keyfile = ssl_keyfile
         self.ssl_certfile = ssl_certfile
         assert default_frontend in ("oculus", "iphone"), f"Unknown frontend: {default_frontend}"
         self.default_frontend = default_frontend
+        self.use_https = use_https
         self.server_thread = None
 
     def run(self, should_stop: pimm.SignalReader, clock: pimm.Clock) -> Iterator[pimm.Sleep]:  # noqa: C901
@@ -91,6 +85,7 @@ class WebXR:
         jpeg_encoder = turbojpeg.TurboJPEG()
 
         jpeg_encoder = turbojpeg.TurboJPEG()
+
         def encode_frame(image):
             buffer = jpeg_encoder.encode(image, quality=50)
             return base64.b64encode(buffer).decode('utf-8')
@@ -179,40 +174,43 @@ class WebXR:
             except Exception as e:
                 print(f"WebSocket error: {e}")
 
-        keyfile, certfile = _get_or_create_ssl_files(port=self.port,
-                                                     keyfile=self.ssl_keyfile,
-                                                     certfile=self.ssl_certfile)
+        ssl_kwargs = {}
+        if self.use_https:
+            keyfile, certfile = _get_or_create_ssl_files(port=self.port,
+                                                         keyfile=self.ssl_keyfile,
+                                                         certfile=self.ssl_certfile)
+            ssl_kwargs = dict(ssl_keyfile=keyfile, ssl_certfile=certfile)
+            print(
+                "WebXR: HTTPS enabled. If using iPhone/XR Browser, ensure the cert is trusted or set use_https=False for dev."
+            )
 
-        config = uvicorn.Config(
-            app,
-            host="0.0.0.0",
-            port=self.port,
-            ssl_keyfile=keyfile,
-            ssl_certfile=certfile,
-            log_config={
-                'version': 1,
-                'disable_existing_loggers': False,
-                'handlers': {
-                    'file': {
-                        'class': 'logging.FileHandler',
-                        'formatter': 'default',
-                        'filename': '/tmp/webxr.log',
-                        'mode': 'w',
-                    }
-                },
-                'loggers': {
-                    '': {
-                        'handlers': ['file'],
-                        'level': 'INFO',
-                    }
-                },
-                'formatters': {
-                    'default': {
-                        'format': '%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-                    }
-                }
-            },
-        )
+        config = uvicorn.Config(app,
+                                host="0.0.0.0",
+                                port=self.port,
+                                log_config={
+                                    'version': 1,
+                                    'disable_existing_loggers': False,
+                                    'handlers': {
+                                        'file': {
+                                            'class': 'logging.FileHandler',
+                                            'formatter': 'default',
+                                            'filename': '/tmp/webxr.log',
+                                            'mode': 'w',
+                                        }
+                                    },
+                                    'loggers': {
+                                        '': {
+                                            'handlers': ['file'],
+                                            'level': 'INFO',
+                                        }
+                                    },
+                                    'formatters': {
+                                        'default': {
+                                            'format': '%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+                                        }
+                                    }
+                                },
+                                **ssl_kwargs)
         server = uvicorn.Server(config)
         self.server_thread = threading.Thread(target=server.run, daemon=True)
         self.server_thread.start()
