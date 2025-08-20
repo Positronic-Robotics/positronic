@@ -268,7 +268,7 @@ def main(robot_arm: Any | None,
          stream_video_to_webxr: str | None = None,
          operator_position: geom.Transform3D = FRANKA_FRONT_TRANSFORM,
          ):
-
+    """Runs data collection in real hardware."""
     with pimm.World() as world:
         data_collection = DataCollection(operator_position, output_dir, fps)
         cameras = cameras or {}
@@ -321,6 +321,7 @@ def main_sim(
         fps: int = 30,
         operator_position: geom.Transform3D = FRANKA_FRONT_TRANSFORM,
 ):
+    """Runs data collection in simulator."""
 
     sim = MujocoSim(mujoco_model_path, loaders)
     robot_arm = MujocoFranka(sim, suffix='_ph')
@@ -408,10 +409,13 @@ main_sim_cfg = cfn.Config(
     cameras={'right': positronic.cfg.hardware.camera.arducam_right}
 )
 def so101cfg(robot_arm, **kwargs):
+    """Runs data collection on SO101 robot"""
     main(robot_arm=robot_arm, gripper=robot_arm, **kwargs)
 
 
 if __name__ == "__main__":
-    # TODO: add ability to specify multiple targets in CLI
-    cfn.cli(main_sim_cfg)
-    # cfn.cli(so101cfg)
+    cfn.cli({
+        "real": main_cfg,
+        "so101": so101cfg,
+        "sim": main_sim_cfg,
+    })

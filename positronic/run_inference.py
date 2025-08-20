@@ -253,5 +253,7 @@ main_sim_cfg = cfn.Config(
 )
 
 if __name__ == "__main__":
-    # TODO: add ability to specify multiple targets in CLI
-    cfn.cli(main_cfg)
+    cfn.cli({
+        "real": main_cfg,
+        "sim": main_sim_cfg,
+    })

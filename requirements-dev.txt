@@ -62,7 +62,7 @@ comm==0.2.3
     # via
     #   ipykernel
     #   ipywidgets
-configuronic==0.1.0
+configuronic==0.2.0
     # via positronic (pyproject.toml)
 contourpy==1.3.3
     # via matplotlib

@@ -81,7 +81,7 @@ cmeel-zlib==1.3.1
     # via cmeel-assimp
 coal==3.0.1
     # via pin
-configuronic==0.1.0
+configuronic==0.2.0
     # via positronic (pyproject.toml)
 contourpy==1.3.3
     # via matplotlib

@@ -34,7 +34,7 @@ dependencies = [
     "ruckig",
     "cvxopt",
     "pyyaml",
-    "configuronic",
+    "configuronic>=0.2",
     "pyarrow",
 ]
 
