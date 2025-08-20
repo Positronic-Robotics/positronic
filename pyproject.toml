@@ -8,57 +8,53 @@ version = "0.1.0"
 description = "Positronic robotics project"
 requires-python = "~=3.11"
 dependencies = [
-    "numpy",
-    "opencv-python-headless",
-    "torch",
-    "requests",
-    "scipy",
-    "uvicorn[standard]",
+    "av",
     "click",
     "cmake-build-extension",
+    "configuronic>=0.2",
+    "cvxopt",
     "dearpygui",
+    "dm_control",
+    "fastapi",
     "fire",
+    "imageio[ffmpeg]",
+    "matplotlib",
+    "mujoco",
     "numpy-quaternion>=2024.0",
-    "pytest",
-    "pytest-asyncio",
+    "numpy",
+    "opencv-python-headless",
+    "pyarrow",
+    "pyturbojpeg @ git+https://github.com/lilohuang/PyTurboJPEG.git@v1.7.8",
+    "pyyaml",
+    "requests",
+    "rerun-sdk>=0.23",
+    "ruckig",
+    "scipy",
+    "torch",
+    "uvicorn[standard]",
     "websockets",
     "yappi",
-    "dm_control",
-    "mujoco",
-    "pyturbojpeg @ git+https://github.com/lilohuang/PyTurboJPEG.git@v1.7.8",
-    "imageio[ffmpeg]",
-    "rerun-sdk>=0.23",
-    "matplotlib",
-    "av",
-    "fastapi",
-    "ruckig",
-    "cvxopt",
-    "pyyaml",
-    "configuronic>=0.2",
-    "pyarrow",
 ]
 
 [project.optional-dependencies]
 hardware = [
-    "pyaudio",
-    "pymodbus",
-    "pyspacemouse",
-    "linuxpy",
-    "pin",  # For Kinova and Tidybot2
-    # Tidybot2
-    "threadpoolctl==3.5.0",
-    "phoenix6==24.3.0",
-    "pygame==2.5.2",
-    "pyserial", # For DH gripper
     "feetech-servo-sdk", # for feetech motors
-    "placo"
+    "kortex-api @ https://artifactory.kinovaapps.com/artifactory/generic-local-public/kortex/API/2.7.0/kortex_api-2.7.0.post5-py3-none-any.whl; sys_platform == 'linux'",
+    "linuxpy",  # For Linux video capture
+    "pin",  # For Kinova
+    "placo",
+    "pyaudio",  # For SoundSystem
+    "pymodbus",  # For DH gripper
+    "pyserial", # For DH gripper
 ]
 dev = [
-    "jupyter",
-    "ipython",
-    "opencv-python",
-    "rerun-sdk[notebook]",
     "flake8",
+    "ipython",
+    "jupyter",
+    "opencv-python",
+    "pytest-asyncio",
+    "pytest",
+    "rerun-sdk[notebook]",
 ]
 lerobot = [
     "einops>=0.8.0",

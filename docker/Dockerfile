@@ -59,9 +59,10 @@ COPY requirements-hardware.txt .
 COPY pyproject.toml .
 
 RUN --mount=type=cache,target=/root/.cache/uv \
-    uv pip install -r requirements-hardware.txt
+    uv pip install -e .[hardware]
 
-COPY third_party/kortex_api-2.7.0.post5-py3-none-any.whl .
+# Download Kortex API wheel
+RUN wget https://artifactory.kinovaapps.com/artifactory/generic-local-public/kortex/API/2.7.0/kortex_api-2.7.0.post5-py3-none-any.whl
 RUN uv pip install kortex_api-2.7.0.post5-py3-none-any.whl
 
 WORKDIR /positronic
