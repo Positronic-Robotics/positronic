@@ -1,40 +1,33 @@
+from enum import Enum
+from pathlib import Path
 import time
-from typing import Any, Callable, Dict, Iterator
+from typing import Any, Callable, Dict, Iterator, Sequence
 
-from mujoco import Sequence
+import configuronic as cfn
 
 from positronic import geom
-import configuronic as cfn
 import pimm
+import positronic.cfg.hardware.camera
+import positronic.cfg.hardware.gripper
+import positronic.cfg.hardware.roboarm
+import positronic.cfg.simulator
+import positronic.cfg.sound
+import positronic.cfg.webxr
+
+from positronic.data_collection.controls import DataCollectionCommand
+from positronic.dataset.core import DatasetWriter
 from positronic.drivers import roboarm
 from positronic.drivers.webxr import WebXR
 from positronic.gui.dpg import DearpyguiUi
-from positronic.simulator.mujoco.sim import MujocoCamera, MujocoFranka, MujocoGripper, MujocoSim
+from positronic.simulator.mujoco.sim import (
+    MujocoCamera,
+    MujocoFranka,
+    MujocoGripper,
+    MujocoSim,
+)
 from positronic.simulator.mujoco.transforms import MujocoSceneTransform
-from positronic.utils.buttons import ButtonHandler
-from positronic.utils.dataset_dumper import SerialDumper
+from positronic.dataset.local_dataset import LocalDatasetWriter
 
-import positronic.cfg.hardware.gripper
-import positronic.cfg.hardware.roboarm
-import positronic.cfg.webxr
-import positronic.cfg.hardware.camera
-import positronic.cfg.sound
-import positronic.cfg.simulator
-
-
-def _parse_buttons(buttons: Dict, button_handler: ButtonHandler):
-    for side in ['left', 'right']:
-        if buttons[side] is None:
-            continue
-
-        mapping = {
-            f'{side}_A': buttons[side][4],
-            f'{side}_B': buttons[side][5],
-            f'{side}_trigger': buttons[side][0],
-            f'{side}_thumb': buttons[side][1],
-            f'{side}_stick': buttons[side][3]
-        }
-        button_handler.update_buttons(mapping)
 
 
 class _Tracker:
@@ -74,17 +67,19 @@ class _Tracker:
             return tracker_pos
 
         self._teleop_t = self._operator_position * tracker_pos * self._operator_position.inv
-        return geom.Transform3D(
-            self._teleop_t.translation + self._offset.translation,
-            self._teleop_t.rotation * self._offset.rotation
-        )
+        return geom.Transform3D(self._teleop_t.translation + self._offset.translation,
+                                self._teleop_t.rotation * self._offset.rotation)
 
 
 # TODO: Support aborting current episode.
 class Recorder:
-    def __init__(self, dumper: SerialDumper | None, sound_emitter: pimm.SignalEmitter[str], clock: pimm.Clock):
+    def __init__(self, ds_writer: DatasetWriter | None, sound_emitter: pimm.SignalEmitter[str], clock: pimm.Clock):
         self.on = False
-        self._dumper = dumper
+
+        self._episode_count = 0
+        self._ds_writer = ds_writer
+        self._ep_writer = None
+
         self._sound_emitter = sound_emitter
         self._start_wav_path = "positronic/assets/sounds/recording-has-started.wav"
         self._end_wav_path = "positronic/assets/sounds/recording-has-stopped.wav"
@@ -92,63 +87,71 @@ class Recorder:
         self._clock = clock
         self._fps_counter = pimm.utils.RateCounter("Recorder")
 
-    def turn_on(self):
-        if self._dumper is None:
+    def turn_on(self, **static_data: dict):
+        if self._ds_writer is None:
             print("No dumper, ignoring 'start recording' command")
             return
 
         if not self.on:
-            self._meta['episode_start'] = self._clock.now_ns()
-            if self._dumper is not None:
-                self._dumper.start_episode()
-                print(f"Episode {self._dumper.episode_count} started")
+            if self._ds_writer is not None and self._ep_writer is None:
+                self._ep_writer = self._ds_writer.new_episode()
+                for k, v in static_data.items():
+                    self._ep_writer.set_static(k, v)
+                self._episode_count += 1
+                print(f"Episode {self._episode_count} started")
                 self._sound_emitter.emit(self._start_wav_path)
             self.on = True
         else:
             print("Already recording, ignoring 'start recording' command")
 
-    def turn_off(self):
-        if self._dumper is None:
+    def turn_off(self, **static_data: dict):
+        if self._ds_writer is None:
             print("No dumper, ignoring 'stop recording' command")
             return
 
         if self.on:
-            self._dumper.end_episode(self._meta)
-            print(f"Episode {self._dumper.episode_count} ended")
+            if self._ds_writer is not None:
+                for k, v in static_data.items():
+                    self._ep_writer.set_static(k, v)
+                self._ep_writer.__exit__(None, None, None)
+                self._ep_writer = None
+
+            print(f"Episode {self._episode_count} ended")
             self._sound_emitter.emit(self._end_wav_path)
             self.on = False
-            self._meta = {}
         else:
             print("Not recording, ignoring turn_off")
 
-    def add_metadata(self, metadata: dict):
-        self._meta.update(metadata)
-
-    def update(self, data: dict, video_frames: dict):
+    def write(self, signal_name: str, data: Any, ts_ns: int | None = None):
         if not self.on:
             return
 
-        if self._dumper is not None:
-            self._dumper.write(data=data, video_frames=video_frames)
-            self._fps_counter.tick()
+        if self._ds_writer is not None:
+            self._ep_writer.append(signal_name, data, ts_ns or self._clock.now_ns())
 
 
-# map xyz -> zxy
-FRANKA_FRONT_TRANSFORM = geom.Transform3D(rotation=geom.Rotation.from_quat([0.5, 0.5, 0.5, 0.5]))
-# map xyz -> zxy + flip x and y
-FRANKA_BACK_TRANSFORM = geom.Transform3D(rotation=geom.Rotation.from_quat([-0.5, -0.5, 0.5, 0.5]))
+class OperatorPosition(Enum):
+    # map xyz -> zxy
+    BACK = geom.Transform3D(rotation=geom.Rotation.from_quat([0.5, 0.5, 0.5, 0.5]))
+    # map xyz -> zxy + flip x and y
+    FRONT = geom.Transform3D(rotation=geom.Rotation.from_quat([-0.5, -0.5, 0.5, 0.5]))
 
 
 class DataCollection:
-    frame_readers : Dict[str, pimm.SignalReader] = {}
-    controller_positions_reader : pimm.SignalReader[Dict[str, geom.Transform3D]] = pimm.NoOpReader()
-    buttons_reader : pimm.SignalReader[Dict] = pimm.NoOpReader()
-    robot_state : pimm.SignalReader[roboarm.State] = pimm.NoOpReader()
-    gripper_state : pimm.SignalReader[float] = pimm.NoOpReader()
+    # control signals
+    robot_policy: pimm.SignalReader[roboarm.command.CommandType] = pimm.NoOpReader()
+    gripper_policy: pimm.SignalReader[float] = pimm.NoOpReader()
+    data_collection_command: pimm.SignalReader[DataCollectionCommand] = pimm.NoOpReader()
 
-    robot_commands : pimm.SignalEmitter[roboarm.command.CommandType] = pimm.NoOpEmitter()
-    target_grip_emitter : pimm.SignalEmitter[float] = pimm.NoOpEmitter()
-    sound_emitter : pimm.SignalEmitter[str] = pimm.NoOpEmitter()
+    # hardware states
+    frame_readers: Dict[str, pimm.SignalReader] = {}
+    robot_state: pimm.SignalReader[roboarm.State] = pimm.NoOpReader()
+    gripper_state: pimm.SignalReader[float] = pimm.NoOpReader()
+
+    # output signals
+    robot_commands: pimm.SignalEmitter[roboarm.command.CommandType] = pimm.NoOpEmitter()
+    target_grip_emitter: pimm.SignalEmitter[float] = pimm.NoOpEmitter()
+    sound_emitter: pimm.SignalEmitter[str] = pimm.NoOpEmitter()
 
     def __init__(
         self,
@@ -167,95 +170,76 @@ class DataCollection:
             camera_name: pimm.DefaultReader(pimm.ValueUpdated(frame_reader), ({}, False))
             for camera_name, frame_reader in self.frame_readers.items()
         }
-        controller_positions_reader = pimm.ValueUpdated(self.controller_positions_reader)
+        robot_policy = pimm.DefaultReader(pimm.ValueUpdated(self.robot_policy), (None, False))
+        gripper_policy = pimm.DefaultReader(pimm.ValueUpdated(self.gripper_policy), (None, False))
+        gripper_state_reader = pimm.DefaultReader(pimm.ValueUpdated(self.gripper_state), (None, False))
 
         tracker = _Tracker(self.operator_position)
-        recorder = Recorder(
-            SerialDumper(self.output_dir, video_fps=self.fps) if self.output_dir is not None else None,
-            self.sound_emitter,
-            clock,
-        )
-        button_handler = ButtonHandler()
+        writer = LocalDatasetWriter(Path(self.output_dir)) if self.output_dir is not None else None
+        recorder = Recorder(writer, self.sound_emitter, clock)
 
-        fps_counter = pimm.utils.RateCounter("Data Collection")
         while not should_stop.value:
-            try:
-                _parse_buttons(self.buttons_reader.value, button_handler)
-                if button_handler.just_pressed('right_B'):
-                    if recorder.on:
-                        recorder.turn_off()
-                    else:
-                        recorder.turn_on()
-                        recorder.add_metadata(self.metadata_getter())
-
-                elif button_handler.just_pressed('right_A'):
-                    if tracker.on:
-                        tracker.turn_off()
-                    else:
-                        robot_state = self.robot_state.value
-                        tracker.turn_on(robot_state.ee_pose)
-                elif button_handler.just_pressed('right_stick') and not tracker.umi_mode:
-                    print("Resetting robot")
+            match self.data_collection_command.value:
+                case DataCollectionCommand.START_RECORDING:
+                    recorder.turn_on(**self.metadata_getter())
+                case DataCollectionCommand.STOP_RECORDING:
                     recorder.turn_off()
+                case DataCollectionCommand.START_TRACKING:
+                    tracker.turn_on(self.robot_state.value.ee_pose)
+                case DataCollectionCommand.STOP_TRACKING:
                     tracker.turn_off()
+                case DataCollectionCommand.RESET_ROBOT:
+                    tracker.turn_off()
+                    recorder.turn_off()
                     self.robot_commands.emit(roboarm.command.Reset())
+                case _:
+                    pass
 
-                target_grip = button_handler.get_value('right_trigger')
-                self.target_grip_emitter.emit(target_grip)
+            if tracker.on:
+                target_grip, is_gripper_updated = gripper_policy.value
+                if is_gripper_updated:
+                    self.target_grip_emitter.emit(target_grip)
 
-                controller_positions, controller_positions_updated = controller_positions_reader.value
-                target_robot_pos = tracker.update(controller_positions['right'])
-                # TODO: that's not clear how to deal with the fact that target_ts from webxr use real clock
-                # and `clock` could be simulator/real clock.
-                last_target_ts = clock.now_ns()
+                action, is_robot_updated = robot_policy.value
+                if is_robot_updated:
+                    target_robot_pos = tracker.update(action)
+                    self.robot_commands.emit(action)
 
-                if tracker.on and controller_positions_updated:  # Don't spam the robot with commands.
-                    self.robot_commands.emit(roboarm.command.CartesianMove(target_robot_pos))
-
-                # TODO: fix frame synchronization. Two 30 FPS cameras is updated at 60 FPS
-                frame_messages, any_frame_updated = pimm.utils.is_any_updated(frame_readers)
-                fps_counter.tick()
-                if not recorder.on or not any_frame_updated:
-                    yield pimm.Sleep(0.001)
-                    continue
-
-                ep_dict = {
-                    'target_grip': target_grip,
-                    'target_robot_position_translation': target_robot_pos.translation.copy(),
-                    'target_robot_position_quaternion': target_robot_pos.rotation.as_quat.copy(),
-                    'target_timestamp': last_target_ts,
-                    **{f'{name}_timestamp': frame.ts for name, frame in frame_messages.items()},
-                }
-
-                value = self.robot_state.read()
-
-                if value is not None:
-                    value = value.data
-                    ep_dict = {
-                        **ep_dict,
-                        'robot_position_translation': value.ee_pose.translation.copy(),
-                        'robot_position_rotation': value.ee_pose.rotation.as_quat.copy(),
-                        'robot_joints': value.q.copy(),
-                    }
-
-                value = self.gripper_state.read()
-                if value is not None:
-                    ep_dict['grip'] = value.data
-
-                if controller_positions['right'] is not None:
-                    ep_dict['right_controller_translation'] = controller_positions['right'].translation.copy()
-                    ep_dict['right_controller_quaternion'] = controller_positions['right'].rotation.as_quat.copy()
-                if controller_positions['left'] is not None:
-                    ep_dict['left_controller_translation'] = controller_positions['left'].translation.copy()
-                    ep_dict['left_controller_quaternion'] = controller_positions['left'].rotation.as_quat.copy()
-
-                recorder.update(data=ep_dict,
-                                video_frames={name: frame.data['image'] for name, frame in frame_messages.items()})
-                yield pimm.Sleep(0.001)
-
-            except pimm.NoValueException:
+            if not recorder.on:
                 yield pimm.Sleep(0.001)
                 continue
+
+            # record data
+            if is_gripper_updated:
+                recorder.write('target_grip', target_grip)
+
+            if is_robot_updated:
+                target_ts = clock.now_ns()
+                recorder.write('target_robot_position_translation', target_robot_pos.translation, target_ts)
+                recorder.write('target_robot_position_quaternion', target_robot_pos.rotation.as_quat, target_ts)
+
+            for name, reader in frame_readers.items():
+                frame, updated = reader.value
+                image_ts = clock.now_ns()
+                if updated:
+                    for k, image in frame.items():
+                        out_name = 'image.' + (name if k == 'image' else f'{name}.{k}')
+                        recorder.write(out_name, image, image_ts)
+
+            value = self.robot_state.read()
+            if value is not None:
+                robot_ts = clock.now_ns()
+                value = value.data
+                recorder.write('robot_position_translation', value.ee_pose.translation, robot_ts)
+                recorder.write('robot_position_rotation', value.ee_pose.rotation.as_quat, robot_ts)
+                recorder.write('robot_joints', value.q, robot_ts)
+                recorder.write('robot_joints_velocity', value.dq, robot_ts)
+
+            gripper_state, gripper_state_updated = gripper_state_reader.value
+            if gripper_state_updated:
+                recorder.write('grip', gripper_state, target_ts)
+
+            yield pimm.Sleep(0.001)
 
 
 def main(robot_arm: Any | None,
@@ -266,11 +250,11 @@ def main(robot_arm: Any | None,
          output_dir: str | None = None,
          fps: int = 30,
          stream_video_to_webxr: str | None = None,
-         operator_position: geom.Transform3D = FRANKA_FRONT_TRANSFORM,
+         operator_position: OperatorPosition = OperatorPosition.FRONT,
          ):
 
     with pimm.World() as world:
-        data_collection = DataCollection(operator_position, output_dir, fps)
+        data_collection = DataCollection(operator_position.value, output_dir, fps)
         cameras = cameras or {}
         for camera_name, camera in cameras.items():
             camera.frame, data_collection.frame_readers[camera_name] = world.mp_pipe()
@@ -319,7 +303,7 @@ def main_sim(
         loaders: Sequence[MujocoSceneTransform] = (),
         output_dir: str | None = None,
         fps: int = 30,
-        operator_position: geom.Transform3D = FRANKA_FRONT_TRANSFORM,
+        operator_position: OperatorPosition = OperatorPosition.FRONT,
 ):
 
     sim = MujocoSim(mujoco_model_path, loaders)
@@ -331,8 +315,11 @@ def main_sim(
     gripper = MujocoGripper(sim, actuator_name='actuator8_ph', joint_name='finger_joint1_ph')
     gui = DearpyguiUi()
 
+    def metadata_getter():
+        return {k: v.tolist() for k, v in sim.save_state().items()}
+
     with pimm.World(clock=sim) as world:
-        data_collection = DataCollection(operator_position, output_dir, fps, metadata_getter=sim.save_state)
+        data_collection = DataCollection(operator_position.value, output_dir, fps, metadata_getter=metadata_getter)
         cameras = cameras or {}
         for camera_name, camera in cameras.items():
             camera.frame, (data_collection.frame_readers[camera_name],
@@ -387,7 +374,7 @@ main_cfg = cfn.Config(
         'left': positronic.cfg.hardware.camera.arducam_left,
         'right': positronic.cfg.hardware.camera.arducam_right,
     },
-    operator_position=FRANKA_FRONT_TRANSFORM,
+    operator_position=OperatorPosition.FRONT,
 )
 
 main_sim_cfg = cfn.Config(
@@ -395,7 +382,7 @@ main_sim_cfg = cfn.Config(
     mujoco_model_path="positronic/assets/mujoco/franka_table.xml",
     webxr=positronic.cfg.webxr.oculus,
     sound=positronic.cfg.sound.sound,
-    operator_position=FRANKA_BACK_TRANSFORM,
+    operator_position=OperatorPosition.BACK,
     loaders=positronic.cfg.simulator.stack_cubes_loaders,
 )
 
@@ -404,7 +391,7 @@ main_sim_cfg = cfn.Config(
     robot_arm=positronic.cfg.hardware.roboarm.so101,
     webxr=positronic.cfg.webxr.oculus,
     sound=positronic.cfg.sound.sound,
-    operator_position=FRANKA_FRONT_TRANSFORM,
+    operator_position=OperatorPosition.FRONT,
     cameras={'right': positronic.cfg.hardware.camera.arducam_right}
 )
 def so101cfg(robot_arm, **kwargs):
@@ -412,6 +399,8 @@ def so101cfg(robot_arm, **kwargs):
 
 
 if __name__ == "__main__":
-    # TODO: add ability to specify multiple targets in CLI
-    cfn.cli(main_sim_cfg)
-    # cfn.cli(so101cfg)
+    cfn.cli({
+        "so101": so101cfg,
+        "sim": main_sim_cfg,
+        "real": main_cfg,
+    })

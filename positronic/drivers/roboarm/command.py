@@ -20,9 +20,21 @@ class CartesianMove:
 
 
 @dataclass
+class RelativeCartesianMove:
+    """Move the robot end-effector relative to the current pose."""
+    pose: geom.Transform3D
+
+
+@dataclass
 class JointMove:
     """Move the robot joints to the given positions."""
     positions: np.ndarray
 
 
-CommandType = Reset | CartesianMove | JointMove
+@dataclass
+class NoOp:
+    """No operation."""
+    pass
+
+
+CommandType = Reset | CartesianMove | JointMove | RelativeCartesianMove | NoOp
