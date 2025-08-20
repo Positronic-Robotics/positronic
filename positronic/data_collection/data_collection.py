@@ -29,48 +29,6 @@ from positronic.simulator.mujoco.transforms import MujocoSceneTransform
 from positronic.dataset.local_dataset import LocalDatasetWriter
 
 
-
-class _Tracker:
-    on = False
-    _offset = geom.Transform3D()
-    _teleop_t = geom.Transform3D()
-
-    def __init__(self, operator_position: geom.Transform3D | None):
-        self._operator_position = operator_position
-        self.on = self.umi_mode
-
-    @property
-    def umi_mode(self):
-        return self._operator_position is None
-
-    def turn_on(self, robot_pos: geom.Transform3D):
-        if self.umi_mode:
-            print("Ignoring tracking on/off in UMI mode")
-            return
-
-        self.on = True
-        print("Starting tracking")
-        self._offset = geom.Transform3D(
-            -self._teleop_t.translation + robot_pos.translation,
-            self._teleop_t.rotation.inv * robot_pos.rotation,
-        )
-
-    def turn_off(self):
-        if self.umi_mode:
-            print("Ignoring tracking on/off in UMI mode")
-            return
-        self.on = False
-        print("Stopped tracking")
-
-    def update(self, tracker_pos: geom.Transform3D):
-        if self.umi_mode:
-            return tracker_pos
-
-        self._teleop_t = self._operator_position * tracker_pos * self._operator_position.inv
-        return geom.Transform3D(self._teleop_t.translation + self._offset.translation,
-                                self._teleop_t.rotation * self._offset.rotation)
-
-
 # TODO: Support aborting current episode.
 class Recorder:
     def __init__(self, ds_writer: DatasetWriter | None, sound_emitter: pimm.SignalEmitter[str], clock: pimm.Clock):
@@ -174,7 +132,8 @@ class DataCollection:
         gripper_policy = pimm.DefaultReader(pimm.ValueUpdated(self.gripper_policy), (None, False))
         gripper_state_reader = pimm.DefaultReader(pimm.ValueUpdated(self.gripper_state), (None, False))
 
-        tracker = _Tracker(self.operator_position)
+        is_tracking_on = False
+
         writer = LocalDatasetWriter(Path(self.output_dir)) if self.output_dir is not None else None
         recorder = Recorder(writer, self.sound_emitter, clock)
 
@@ -185,24 +144,23 @@ class DataCollection:
                 case DataCollectionCommand.STOP_RECORDING:
                     recorder.turn_off()
                 case DataCollectionCommand.START_TRACKING:
-                    tracker.turn_on(self.robot_state.value.ee_pose)
+                    is_tracking_on = True
                 case DataCollectionCommand.STOP_TRACKING:
-                    tracker.turn_off()
+                    is_tracking_on = False
                 case DataCollectionCommand.RESET_ROBOT:
-                    tracker.turn_off()
+                    is_tracking_on = False
                     recorder.turn_off()
                     self.robot_commands.emit(roboarm.command.Reset())
                 case _:
                     pass
 
-            if tracker.on:
+            if is_tracking_on:
                 target_grip, is_gripper_updated = gripper_policy.value
                 if is_gripper_updated:
                     self.target_grip_emitter.emit(target_grip)
 
                 action, is_robot_updated = robot_policy.value
                 if is_robot_updated:
-                    target_robot_pos = tracker.update(action)
                     self.robot_commands.emit(action)
 
             if not recorder.on:
@@ -215,8 +173,10 @@ class DataCollection:
 
             if is_robot_updated:
                 target_ts = clock.now_ns()
-                recorder.write('target_robot_position_translation', target_robot_pos.translation, target_ts)
-                recorder.write('target_robot_position_quaternion', target_robot_pos.rotation.as_quat, target_ts)
+                # TODO: Record action depending on type of action (CartesianMove, RelativeCartesianMove, JointMove)
+                # recorder.write('target_robot_position_translation', target_robot_pos.translation, target_ts)
+                # recorder.write('target_robot_position_quaternion', target_robot_pos.rotation.as_quat, target_ts)
+                pass
 
             for name, reader in frame_readers.items():
                 frame, updated = reader.value
