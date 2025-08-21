@@ -61,7 +61,6 @@ class Robot:
         print("Warning: Proper dq units is not implemented for SO101!")
         print("================================================================")
 
-
     def run(self, should_stop: pimm.SignalReader, clock: pimm.Clock) -> Iterator[pimm.Sleep]:
         self.motor_bus.connect()
 

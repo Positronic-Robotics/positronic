@@ -16,8 +16,10 @@ arducam_left = linux_video.override(
     pixel_format="MJPG",
 )
 
+
 arducam_right = arducam_left.override(
-    device_path="/dev/v4l/by-id/usb-Arducam_Technology_Co.__Ltd._Arducam_UC684_UC684RIGHT-video-index0", )
+    device_path="/dev/v4l/by-id/usb-Arducam_Technology_Co.__Ltd._Arducam_UC684_UC684RIGHT-video-index0",
+)
 
 
 @cfn.config()

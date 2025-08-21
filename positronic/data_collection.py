@@ -1,14 +1,12 @@
 from enum import Enum
 from pathlib import Path
 import time
-from typing import Any, Callable, Dict, Iterator
+from typing import Any, Callable, Dict, Iterator, Sequence
 
 import configuronic as cfn
-from mujoco import Sequence
 
-from positronic import geom
-import configuronic as cfn
 import pimm
+from positronic import geom
 import positronic.cfg.hardware.camera
 import positronic.cfg.hardware.gripper
 import positronic.cfg.hardware.roboarm
