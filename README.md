@@ -42,8 +42,6 @@ uv run pytest
 # If you need hardware extras as well
 uv sync --frozen --extra dev --extra hardware
 
-# If you need LeRobot-related extras
-uv sync --frozen --extra lerobot
 ```
 
 ## Dependencies
@@ -67,7 +65,7 @@ uv lock
 uv sync --frozen
 ```
 
-For optional features, use extras: `--extra dev`, `--extra hardware`, or `--extra lerobot`.
+For optional features, use extras: `--extra dev` or `--extra hardware`.
 
 ## Development Installation
 

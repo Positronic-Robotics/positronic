@@ -30,6 +30,7 @@ dependencies = [
     "pyturbojpeg @ git+https://github.com/lilohuang/PyTurboJPEG.git@v1.7.8",
     "robosuite",
     "numba>=0.57",
+    "lerobot",
     "rerun-sdk>=0.23",
     "ruckig",
     "scipy",
@@ -60,17 +61,6 @@ dev = [
     "pytest-asyncio",
     "pytest",
     "rerun-sdk[notebook]",
-]
-lerobot = [
-    "einops>=0.8.0",
-    "datasets>=2.19.0",
-    "torchvision>=0.17.1",
-    "diffusers>=0.27.2",
-    "h5py>=3.10.0",
-    "huggingface-hub>=0.25.0",
-    "draccus>=0.10.0",
-    "jsonlines>=4.0.0",
-    "timm"
 ]
 
 [tool.uv.sources.kortex_api]
