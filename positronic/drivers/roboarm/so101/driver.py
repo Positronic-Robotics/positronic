@@ -23,7 +23,6 @@ class SO101State(State, pimm.shared_memory.NumpySMAdapter):
 
     @property
     def dq(self) -> np.ndarray:
-        print("Warning: dq units is unknown :) Have a great day!")
         return self.array[5:10]
 
     @property
@@ -57,6 +56,11 @@ class Robot:
         self.kinematic = Kinematics("positronic/drivers/roboarm/so101/so101.urdf", "gripper_frame_joint")
         self.joint_limits = self.kinematic.joint_limits
         self.home_joints = home_joints
+
+        print("================================================================")
+        print("Warning: Proper dq units is not implemented for SO101!")
+        print("================================================================")
+
 
     def run(self, should_stop: pimm.SignalReader, clock: pimm.Clock) -> Iterator[pimm.Sleep]:
         self.motor_bus.connect()
