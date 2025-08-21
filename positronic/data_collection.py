@@ -216,8 +216,8 @@ class DataCollection:
                 controller_pos, controller_pos_updated = controller_positions_reader.value
                 target_ts = clock.now_ns()
                 if controller_pos_updated:
+                    target_robot_pos = tracker.update(controller_pos['right'])
                     if tracker.on:  # Don't spam the robot with commands.
-                        target_robot_pos = tracker.update(controller_pos['right'])
                         recorder.write('target_robot_position_translation', target_robot_pos.translation, target_ts)
                         recorder.write('target_robot_position_quaternion', target_robot_pos.rotation.as_quat, target_ts)
                         self.robot_commands.emit(roboarm.command.CartesianMove(target_robot_pos))
@@ -407,7 +407,7 @@ main_sim_cfg = cfn.Config(
     robot_arm=positronic.cfg.hardware.roboarm.so101,
     webxr=positronic.cfg.webxr.oculus,
     sound=positronic.cfg.sound.sound,
-    operator_position=OperatorPosition.FRONT,
+    operator_position=OperatorPosition.BACK,
     cameras={'right': positronic.cfg.hardware.camera.arducam_right}
 )
 def so101cfg(robot_arm, **kwargs):
