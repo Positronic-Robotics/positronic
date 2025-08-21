@@ -13,14 +13,14 @@ jobs:
     - uses: actions/checkout@v4
       with:
         fetch-depth: 0  # Fetch all history for all branches and tags
-    - name: Set up Python 3.11
-      uses: actions/setup-python@v3
+    - name: Enable caching (uv)
+      uses: astral-sh/setup-uv@v5
       with:
-        python-version: "3.11"
-    - name: Install dependencies
-      run: |
-        python -m pip install --upgrade pip
-        python -m pip install flake8
+        enable-cache: true
+    - name: Set up Python
+      run: uv venv --python 3.11
+    - name: Install dev tools from lock
+      run: uv sync --frozen --extra dev
     - name: Run Flake8 linter
       run: |
         # Only check Python files that have changed
@@ -37,7 +37,7 @@ jobs:
         CHANGED_PY_FILES=$(echo "$CHANGED_FILES" | grep -E "\.py$" || true)
 
         if [ -n "$CHANGED_PY_FILES" ]; then
-          echo "$CHANGED_PY_FILES" | xargs flake8 --show-source
+          echo "$CHANGED_PY_FILES" | xargs uv run flake8 --show-source
         else
           echo "No Python files changed"
         fi
