@@ -21,10 +21,10 @@ jobs:
       - name: Set up Python
         run: uv venv --python 3.11
 
-      - name: Install dependencies
-        run: uv pip install -r requirements.txt
+      - name: Install dependencies from uv.lock
+        run: uv sync --frozen --extra dev
 
-      - name: Run tests
+      - name: Run tests (coverage enabled)
         env:
-         PYTHONPATH: ${{ env.PYTHONPATH }}:$PWD
+          PYTHONPATH: ${{ env.PYTHONPATH }}:$PWD
         run: uv run pytest

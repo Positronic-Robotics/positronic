@@ -9,8 +9,6 @@ description = "Positronic robotics project"
 requires-python = "~=3.11"
 dependencies = [
     "av",
-    "click",
-    "cmake-build-extension",
     "configuronic>=0.2",
     "cvxopt",
     "dearpygui",
@@ -18,40 +16,40 @@ dependencies = [
     "fastapi",
     "fire",
     "imageio[ffmpeg]",
-    "matplotlib",
     "mujoco",
-    "numpy-quaternion>=2024.0",
     "numpy",
     "opencv-python-headless",
     "pyarrow",
     "pyturbojpeg @ git+https://github.com/lilohuang/PyTurboJPEG.git@v1.7.8",
-    "pyyaml",
-    "requests",
+    "robosuite",
+    "numba>=0.57",
     "rerun-sdk>=0.23",
     "ruckig",
     "scipy",
     "torch",
     "uvicorn[standard]",
-    "websockets",
-    "yappi",
 ]
 
 [project.optional-dependencies]
 hardware = [
     "feetech-servo-sdk", # for feetech motors
-    "kortex-api @ https://artifactory.kinovaapps.com/artifactory/generic-local-public/kortex/API/2.7.0/kortex_api-2.7.0.post5-py3-none-any.whl; sys_platform == 'linux'",
+    "franky-control; sys_platform == 'linux'", # for franka arm
+    "kortex_api; sys_platform == 'linux'",
     "linuxpy",  # For Linux video capture
-    "pin",  # For Kinova
+    "pinocchio",  # For Kinova
     "placo",
-    "pyaudio",  # For SoundSystem
+    "pyaudio; sys_platform == 'linux'",  # For SoundSystem
     "pymodbus",  # For DH gripper
     "pyserial", # For DH gripper
+    "pyzed",  # ZED camera support
 ]
 dev = [
     "flake8",
     "ipython",
     "jupyter",
     "opencv-python",
+    "coverage",
+    "pytest-cov",
     "pytest-asyncio",
     "pytest",
     "rerun-sdk[notebook]",
@@ -68,6 +66,9 @@ lerobot = [
     "timm"
 ]
 
+[tool.uv.sources.kortex_api]
+url = "https://artifactory.kinovaapps.com/artifactory/generic-local-public/kortex/API/2.7.0/kortex_api-2.7.0.post5-py3-none-any.whl"
+
 [tool.pytest.ini_options]
 testpaths = [
     "pimm/tests",
@@ -76,6 +77,19 @@ testpaths = [
     "positronic/tests",
 ]
 python_files = ["test_*.py", "*_test.py"]
+addopts = [
+    "--cov=pimm",
+    "--cov=positronic",
+    "--cov-report=term-missing",
+]
+
+[tool.coverage.run]
+branch = true
+source = ["pimm", "positronic"]
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = false
 
 [tool.setuptools.packages.find]
 where = ["."]

@@ -1,5 +1,4 @@
 import time
-from enum import Enum
 from typing import Iterator
 
 from mujoco import Any
@@ -52,11 +51,6 @@ class FrankaState(State, pimm.shared_memory.NumpySMAdapter):
         self._array[14 + 7] = RobotStatus.AVAILABLE.value
 
 
-class CartesianMode(Enum):
-    LIBFRANKA = "libfranka"
-    POSITRONIC = "positronic"
-
-
 class Robot:
     commands: pimm.SignalReader = pimm.NoOpReader()
     state: pimm.SignalEmitter = pimm.NoOpEmitter()
@@ -64,17 +58,14 @@ class Robot:
     def __init__(self,
                  ip: str,
                  relative_dynamics_factor=0.2,
-                 cartesian_mode=CartesianMode.LIBFRANKA,
                  home_joints: list[float] = [0.0, -0.31, 0.0, -1.65, 0.0, 1.522, 0.0]) -> None:
         """
         :param ip: IP address of the robot.
         :param relative_dynamics_factor: Relative dynamics factor in [0, 1]. Smaller values are more conservative.
-        :param cartesian_mode: LIBFRANKA uses franky's inverse kinematics, POSITRONIC is our own.
         :param home_joints: Joints of "reset" position.
         """
         self._ip = ip
         self._relative_dynamics_factor = relative_dynamics_factor
-        self._cartesian_mode = cartesian_mode
         self._home_joints = home_joints
 
     @staticmethod
@@ -121,7 +112,6 @@ class Robot:
 
         commands = pimm.DefaultReader(pimm.ValueUpdated(self.commands), (None, False))
         robot_state = FrankaState()
-        last_q = None
         rate_limiter = pimm.RateLimiter(clock, hz=1000)
 
         self._reset(robot, robot_state)
@@ -136,14 +126,7 @@ class Robot:
                     case command.CartesianMove(pose):
                         pos = franky.Affine(translation=pose.translation, quaternion=pose.rotation.as_quat_xyzw)
 
-                if self._cartesian_mode == CartesianMode.LIBFRANKA:
-                    motion = franky.CartesianMotion(pos, franky.ReferenceType.Absolute)
-                else:
-                    if last_q is None:
-                        last_q = robot.current_joint_state.position
-                    last_q = robot.inverse_kinematics(pos, last_q)
-                    motion = franky.JointMotion(last_q, return_when_finished=False)
-
+                motion = franky.CartesianMotion(pos, franky.ReferenceType.Absolute)
                 try:
                     # TODO: implement MOVING state support
                     robot.move(motion, asynchronous=True)
@@ -160,7 +143,7 @@ class Robot:
 
 if __name__ == "__main__":
     with pimm.World() as world:
-        robot = Robot("172.168.0.2", relative_dynamics_factor=0.2, cartesian_mode=CartesianMode.LIBFRANKA)
+        robot = Robot("172.168.0.2", relative_dynamics_factor=0.2)
         commands, robot.commands = world.mp_pipe()
         robot.state, state = world.mp_pipe()
         world.start_in_subprocess(robot.run)
