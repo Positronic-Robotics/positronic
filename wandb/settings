@@ -1,5 +1,0 @@
-[default]
-entity = mcvertix
-project = positronic
-base_url = https://api.wandb.ai
-
