@@ -1,3 +1,4 @@
+from enum import Enum
 from pathlib import Path
 import time
 from typing import Any, Callable, Dict, Iterator
@@ -16,9 +17,6 @@ import positronic.cfg.sound
 import positronic.cfg.webxr
 from positronic.dataset.core import DatasetWriter
 from positronic.drivers import roboarm
-from positronic.drivers.camera.linux_video import LinuxVideo
-from positronic.drivers.gripper.dh import DHGripper
-from positronic.drivers.sound import SoundSystem
 from positronic.drivers.webxr import WebXR
 from positronic.gui.dpg import DearpyguiUi
 from positronic.simulator.mujoco.sim import (
@@ -149,10 +147,11 @@ class Recorder:
             self._ep_writer.append(signal_name, data, ts_ns or self._clock.now_ns())
 
 
-# map xyz -> zxy
-FRANKA_FRONT_TRANSFORM = geom.Transform3D(rotation=geom.Rotation.from_quat([0.5, 0.5, 0.5, 0.5]))
-# map xyz -> zxy + flip x and y
-FRANKA_BACK_TRANSFORM = geom.Transform3D(rotation=geom.Rotation.from_quat([-0.5, -0.5, 0.5, 0.5]))
+class OperatorPosition(Enum):
+    # map xyz -> zxy
+    FRONT = geom.Transform3D(rotation=geom.Rotation.from_quat([0.5, 0.5, 0.5, 0.5]))
+    # map xyz -> zxy + flip x and y
+    BACK = geom.Transform3D(rotation=geom.Rotation.from_quat([-0.5, -0.5, 0.5, 0.5]))
 
 
 class DataCollection:
@@ -268,11 +267,11 @@ def main(robot_arm: Any | None,
          output_dir: str | None = None,
          fps: int = 30,
          stream_video_to_webxr: str | None = None,
-         operator_position: geom.Transform3D = FRANKA_FRONT_TRANSFORM,
+         operator_position: OperatorPosition = OperatorPosition.FRONT,
          ):
     """Runs data collection in real hardware."""
     with pimm.World() as world:
-        data_collection = DataCollection(operator_position, output_dir, fps)
+        data_collection = DataCollection(operator_position.value, output_dir, fps)
         cameras = cameras or {}
         for camera_name, camera in cameras.items():
             camera.frame, data_collection.frame_readers[camera_name] = world.mp_pipe()
@@ -320,7 +319,7 @@ def main_sim(
         loaders: Sequence[MujocoSceneTransform] = (),
         output_dir: str | None = None,
         fps: int = 30,
-        operator_position: geom.Transform3D = FRANKA_FRONT_TRANSFORM,
+        operator_position: OperatorPosition = OperatorPosition.FRONT,
 ):
     """Runs data collection in simulator."""
 
@@ -334,7 +333,9 @@ def main_sim(
     gui = DearpyguiUi()
 
     with pimm.World(clock=sim) as world:
-        data_collection = DataCollection(operator_position, output_dir, fps, metadata_getter=sim.save_state)
+        def metadata_getter():
+            return {k: v.tolist() for k, v in sim.save_state().items()}
+        data_collection = DataCollection(operator_position.value, output_dir, fps, metadata_getter=metadata_getter)
         cameras = cameras or {}
         for camera_name, camera in cameras.items():
             camera.frame, (data_collection.frame_readers[camera_name],
@@ -389,7 +390,7 @@ main_cfg = cfn.Config(
         'left': positronic.cfg.hardware.camera.arducam_left,
         'right': positronic.cfg.hardware.camera.arducam_right,
     },
-    operator_position=FRANKA_FRONT_TRANSFORM,
+    operator_position=OperatorPosition.FRONT,
 )
 
 main_sim_cfg = cfn.Config(
@@ -397,7 +398,7 @@ main_sim_cfg = cfn.Config(
     mujoco_model_path="positronic/assets/mujoco/franka_table.xml",
     webxr=positronic.cfg.webxr.oculus,
     sound=positronic.cfg.sound.sound,
-    operator_position=FRANKA_BACK_TRANSFORM,
+    operator_position=OperatorPosition.BACK,
     loaders=positronic.cfg.simulator.stack_cubes_loaders,
 )
 
@@ -406,7 +407,7 @@ main_sim_cfg = cfn.Config(
     robot_arm=positronic.cfg.hardware.roboarm.so101,
     webxr=positronic.cfg.webxr.oculus,
     sound=positronic.cfg.sound.sound,
-    operator_position=FRANKA_FRONT_TRANSFORM,
+    operator_position=OperatorPosition.FRONT,
     cameras={'right': positronic.cfg.hardware.camera.arducam_right}
 )
 def so101cfg(robot_arm, **kwargs):
