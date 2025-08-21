@@ -4,9 +4,10 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "positronic"
-version = "0.1.0"
+version = "0.1.0rc1"
 description = "Positronic robotics project"
 requires-python = "~=3.11"
+readme = { file = "README.md", content-type = "text/markdown" }
 dependencies = [
     "av",
     "configuronic>=0.2",
@@ -96,4 +97,11 @@ where = ["."]
 include = [
     "positronic*",
     "pimm*",
+]
+
+[tool.setuptools.package-data]
+# Include static assets and XML files needed at runtime
+positronic = [
+  "assets/**",
+  "drivers/**/*.xml",
 ]

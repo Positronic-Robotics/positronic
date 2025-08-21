@@ -1,0 +1,50 @@
+name: Publish to PyPI
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-publish:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Enable uv (with cache)
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Build sdist and wheel
+        run: |
+          rm -rf dist/
+          uvx --from build pyproject-build --sdist --wheel
+
+      - name: Twine check
+        run: uvx twine check dist/*
+
+      - name: Verify version matches tag
+        run: |
+          TAG="${{ github.event.release.tag_name }}"
+          TAG="${TAG#v}"
+          FILE_VER=$(python -c "import tomllib;print(tomllib.load(open('pyproject.toml','rb'))['project']['version'])")
+          echo "Tag: $TAG | pyproject.toml: $FILE_VER"
+          if [ "$TAG" != "$FILE_VER" ]; then
+            echo "Error: tag ($TAG) does not match project.version ($FILE_VER)" >&2
+            exit 1
+          fi
+
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          password: ${{ secrets.PYPI_API_TOKEN }}

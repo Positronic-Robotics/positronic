@@ -63,9 +63,6 @@ class KinovaState(State, pimm.shared_memory.NumpySMAdapter):
         self.array[14 + 7] = status.value
 
 
-# In order to use the Kinova API, you need to install the Kortex API wheel, you can download it from:
-# https://artifactory.kinovaapps.com/artifactory/generic-local-public/kortex/API/2.7.0/kortex_api-2.7.0.post5-py3-none-any.whl
-# and then install it with `uv pip install kortex_api-2.7.0.post5-py3-none-any.whl`
 class Robot:
     commands: pimm.SignalReader[command.CommandType] = pimm.NoOpReader()
     state: pimm.SignalEmitter[KinovaState] = pimm.NoOpEmitter()
