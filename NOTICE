@@ -1,0 +1,10 @@
+Positronic Robotics Inc.
+Copyright (c) 2025 Positronic Robotics Inc.
+
+This product includes software developed by the Positronic Robotics Inc. contributors
+and may include third-party components under their respective licenses.
+
+Third-party notices:
+- three.js (MIT) assets under positronic/assets/webxr
+- MuJoCo model files as provided in assets (see files for license notices)
+

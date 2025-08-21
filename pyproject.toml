@@ -8,6 +8,12 @@ version = "0.1.0rc1"
 description = "Positronic robotics project"
 requires-python = "~=3.11"
 readme = { file = "README.md", content-type = "text/markdown" }
+license = { file = "LICENSE" }
+classifiers = [
+  "License :: OSI Approved :: Apache Software License",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3 :: Only",
+]
 dependencies = [
     "av",
     "configuronic>=0.2",
