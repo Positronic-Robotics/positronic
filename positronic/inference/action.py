@@ -1,42 +1,44 @@
 import abc
 
-import torch
+import numpy as np
 
 from positronic import geom
+from positronic.dataset.core import Signal
 from positronic.utils.registration import umi_relative
 
 
-def _convert_quat_to_tensor(q: geom.Rotation, representation: geom.Rotation.Representation | str) -> torch.Tensor:
+def _convert_quat_to_tensor(q: geom.Rotation, representation: geom.Rotation.Representation | str) -> np.ndarray:
     array = q.to(representation)
 
-    return torch.from_numpy(array).flatten()
+    return np.array(array).flatten()
 
 
 class ActionDecoder(abc.ABC):
     @abc.abstractmethod
-    def encode_episode(self, episode_data: dict[str, torch.Tensor]) -> torch.Tensor:
+    def encode_episode(self, signal_dict: dict[str, Signal], timestamps: np.ndarray) -> np.ndarray:
         """
         Encode the episode data into a tensor. Used for creating the dataset for training.
 
         Args:
-            episode_data: (dict[str, torch.Tensor]) Data of the entire episode.
+            signal_dict: (dict[str, Signal]) Data of the entire episode.
+            timestamps: (np.ndarray) Timestamps of the signals.
 
         Returns:
-            (torch.Tensor) The encoded episode data.
+            (np.ndarray) The encoded episode data.
         """
         pass
 
     @abc.abstractmethod
-    def decode(self, action_vector: torch.Tensor, inputs: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
+    def decode(self, action_vector: np.ndarray, inputs: dict[str, np.ndarray]) -> dict[str, np.ndarray]:
         """
         Decode the action vector into a dictionary of tensors. Used for inference.
 
         Args:
-            action_vector: (torch.Tensor) Action vector to decode.
-            inputs: (dict[str, torch.Tensor]) Additional inputs with things like current state.
+            action_vector: (np.ndarray) Action vector to decode.
+            inputs: (dict[str, np.ndarray]) Additional inputs with things like current state.
 
         Returns:
-            (dict[str, torch.Tensor]) The decoded action.
+            (dict[str, np.ndarray]) The decoded action.
         """
         pass
 
@@ -76,23 +78,24 @@ class AbsolutePositionAction(RotationTranslationGripAction):
     def __init__(self, rotation_representation: geom.Rotation.Representation | str = geom.Rotation.Representation.QUAT):
         super().__init__(rotation_representation)
 
-    def encode_episode(self, episode_data: dict[str, torch.Tensor]) -> torch.Tensor:
-        rotations = torch.zeros(len(episode_data['target_robot_position_quaternion']), self.rotation_size)
+    def encode_episode(self, signal_dict: dict[str, Signal], timestamps: np.ndarray) -> np.ndarray:
+        quat = np.array([x[0] for x in signal_dict['target_robot_position_quaternion'].time[timestamps]])
+        rotations = np.zeros((len(quat), self.rotation_size), dtype=np.float32)
 
         # TODO: make this vectorized
-        for i, q in enumerate(episode_data['target_robot_position_quaternion']):
+        for i, q in enumerate(quat):
             q = geom.Rotation(*q)
             rotation = _convert_quat_to_tensor(q, self.rotation_representation)
             rotations[i] = rotation
 
-        translations = episode_data['target_robot_position_translation']
-        grips = episode_data['target_grip']
+        translations = np.array([x[0] for x in signal_dict['target_robot_position_translation'].time[timestamps]])
+        grips = np.array([x[0] for x in signal_dict['target_grip'].time[timestamps]])
         if grips.ndim == 1:
-            grips = grips.unsqueeze(1)
+            grips = grips[:, np.newaxis]
 
-        return torch.cat([rotations, translations, grips], dim=1)
+        return np.concatenate([rotations, translations, grips], axis=1)
 
-    def decode(self, action_vector: torch.Tensor, inputs: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
+    def decode(self, action_vector: np.ndarray, inputs: dict[str, np.ndarray]) -> dict[str, np.ndarray]:
         rotation = action_vector[:self.rotation_size].reshape(self.rotation_shape)
         rot = geom.Rotation.create_from(rotation, self.rotation_representation)
 
@@ -110,29 +113,30 @@ class RelativeTargetPositionAction(RotationTranslationGripAction):
     def __init__(self, rotation_representation: geom.Rotation.Representation | str = geom.Rotation.Representation.QUAT):
         super().__init__(rotation_representation)
 
-    def encode_episode(self, episode_data: dict[str, torch.Tensor]) -> torch.Tensor:
-        mtxs = torch.zeros(len(episode_data['target_robot_position_quaternion']), self.rotation_size)
+    def encode_episode(self, signal_dict: dict[str, Signal], timestamps: np.ndarray) -> np.ndarray:
+        quat = signal_dict['target_robot_position_quaternion'].time[timestamps]
+        mtxs = np.zeros(len(quat), self.rotation_size)
 
         # TODO: make this vectorized
-        for i, q_target in enumerate(episode_data['target_robot_position_quaternion']):
+        for i, q_target in enumerate(quat):
             q_target = geom.Rotation.from_quat(*q_target)
-            q_current = geom.Rotation.from_quat(*episode_data['robot_position_quaternion'][i])
+            q_current = geom.Rotation.from_quat(*signal_dict['robot_position_quaternion'].time[timestamps][i])
             q_relative = q_current.inv * q_target
             q_relative = geom.Rotation.from_quat(geom.normalise_quat(q_relative.as_quat))
 
             mtx = _convert_quat_to_tensor(q_relative, self.rotation_representation)
             mtxs[i] = mtx.flatten()
 
-        translation_diff = (episode_data['target_robot_position_translation'] -
-                            episode_data['robot_position_translation'])
+        translation_diff = (np.asarray(signal_dict['target_robot_position_translation'].time[timestamps])[:, 0] -
+                            np.asarray(signal_dict['robot_position_translation'].time[timestamps])[:, 0])
 
-        grips = episode_data['target_grip']
+        grips = np.asarray(signal_dict['target_grip'].time[timestamps])[:, 0]
         if grips.ndim == 1:
             grips = grips.unsqueeze(1)
 
-        return torch.cat([mtxs, translation_diff, grips], dim=1)
+        return np.concatenate([mtxs, translation_diff, grips], axis=1)
 
-    def decode(self, action_vector: torch.Tensor, inputs: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
+    def decode(self, action_vector: np.ndarray, inputs: dict[str, np.ndarray]) -> dict[str, np.ndarray]:
         rotation = action_vector[:self.rotation_size].reshape(self.rotation_shape)
         q_diff = geom.Rotation.create_from(rotation, self.rotation_representation)
         tr_diff = action_vector[self.rotation_size:self.rotation_size + 3]
@@ -173,33 +177,37 @@ class RelativeRobotPositionAction(RotationTranslationGripAction):
 
         self.offset = offset
 
-    def encode_episode(self, episode_data: dict[str, torch.Tensor]) -> torch.Tensor:
-        rotations = torch.zeros(len(episode_data['robot_position_quaternion']), self.rotation_size)
-        translation_diff = -episode_data['robot_position_translation'].clone()
-        grips = torch.zeros_like(episode_data['grip'])
+    def encode_episode(self, signal_dict: dict[str, Signal], timestamps: np.ndarray) -> np.ndarray:
+        quat = np.array([x[0] for x in signal_dict['robot_position_quaternion'].time[timestamps]])
+        robot_position_translation = np.array([x[0] for x in signal_dict['robot_position_translation'].time[timestamps]])
+        grip = np.array([x[0] for x in signal_dict['grip'].time[timestamps]])
+
+        rotations = np.zeros((len(quat), self.rotation_size), dtype=np.float32)
+        translation_diff = -robot_position_translation
+        grips = np.zeros(len(quat), dtype=np.float32)
 
         # TODO: make this vectorized
-        for i, q_current in enumerate(episode_data['robot_position_quaternion']):
-            if i + self.offset >= len(episode_data['robot_position_quaternion']):
+        for i, q_current in enumerate(quat):
+            if i + self.offset >= len(quat):
                 rotations[i] = _convert_quat_to_tensor(geom.Rotation(1, 0, 0, 0), self.rotation_representation)
-                translation_diff[i] = torch.zeros(3)
+                translation_diff[i] = np.zeros(3)
                 continue
             q_current = geom.Rotation.from_quat(q_current)
-            q_target = geom.Rotation.from_quat(episode_data['robot_position_quaternion'][i + self.offset])
+            q_target = geom.Rotation.from_quat(quat[i + self.offset])
             q_relative = q_current.inv * q_target
             q_relative = geom.Rotation.from_quat(geom.normalise_quat(q_relative.as_quat))
 
             rotation = _convert_quat_to_tensor(q_relative, self.rotation_representation)
             rotations[i] = rotation
-            translation_diff[i] += episode_data['robot_position_translation'][i + self.offset]
-            grips[i] = episode_data['grip'][i + self.offset]
+            translation_diff[i] += robot_position_translation[i + self.offset]
+            grips[i] = grip[i + self.offset]
 
         if grips.ndim == 1:
-            grips = grips.unsqueeze(1)
+            grips = grips[:, np.newaxis]
 
-        return torch.cat([rotations, translation_diff, grips], dim=1)
+        return np.concatenate([rotations, translation_diff, grips], axis=1)
 
-    def decode(self, action_vector: torch.Tensor, inputs: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
+    def decode(self, action_vector: np.ndarray, inputs: dict[str, np.ndarray]) -> dict[str, np.ndarray]:
         rotation = action_vector[:self.rotation_size].reshape(self.rotation_shape)
         q_diff = geom.Rotation.create_from(rotation, self.rotation_representation)
         tr_diff = action_vector[self.rotation_size:self.rotation_size + 3]
@@ -251,38 +259,38 @@ class UMIRelativeRobotPositionAction(RotationTranslationGripAction):
 
         return umi_relative(left_trajectory, right_trajectory)
 
-    def encode_episode(self, episode_data: dict[str, torch.Tensor]) -> torch.Tensor:
-        n_samples = len(episode_data['target_grip'])
-        rotations = torch.zeros(n_samples, self.rotation_size)
-        translation_diff = torch.zeros(n_samples, 3)
-        grips = torch.zeros(n_samples)
+    def encode_episode(self, signal_dict: dict[str, Signal], timestamps: np.ndarray) -> np.ndarray:
+        n_samples = len(signal_dict['target_grip'].time[timestamps])
+        rotations = np.zeros((n_samples, self.rotation_size), dtype=np.float32)
+        translation_diff = np.zeros((n_samples, 3), dtype=np.float32)
+        grips = np.zeros(n_samples, dtype=np.float32)
         registration_transform = geom.Transform3D(
-            translation=episode_data['registration_transform_translation'],
-            rotation=geom.Rotation.from_quat(episode_data['registration_transform_quaternion'])
+            translation=np.asarray(signal_dict['registration_transform_translation'].time[timestamps])[:, 0],
+            rotation=geom.Rotation.from_quat(np.asarray(signal_dict['registration_transform_quaternion'].time[timestamps])[:, 0])
         )
 
-        relative_trajectory = self._prepare(episode_data)
+        relative_trajectory = self._prepare(signal_dict)
 
         # TODO: make this vectorized
         for i, q_relative in enumerate(relative_trajectory):
             if i + self.offset >= n_samples:
                 rotations[i] = _convert_quat_to_tensor(geom.Rotation(1, 0, 0, 0), self.rotation_representation)
-                translation_diff[i] = torch.zeros(3)
+                translation_diff[i] = np.zeros(3)
                 continue
             relative_registered = registration_transform.inv * q_relative * registration_transform
             q_relative_registered = geom.Rotation.from_quat(geom.normalise_quat(relative_registered.rotation.as_quat))
 
             rotation = _convert_quat_to_tensor(q_relative_registered, self.rotation_representation)
             rotations[i] = rotation
-            translation_diff[i] = torch.from_numpy(relative_registered.translation)
-            grips[i] = episode_data['target_grip'][i + self.offset]
+            translation_diff[i] = relative_registered.translation
+            grips[i] = np.asarray(signal_dict['target_grip'].time[timestamps])[i + self.offset]
 
         if grips.ndim == 1:
             grips = grips.unsqueeze(1)
 
-        return torch.cat([rotations, translation_diff, grips], dim=1)
+        return np.concatenate([rotations, translation_diff, grips], axis=1)
 
-    def decode(self, action_vector: torch.Tensor, inputs: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
+    def decode(self, action_vector: np.ndarray, inputs: dict[str, np.ndarray]) -> dict[str, np.ndarray]:
         rotation = action_vector[:self.rotation_size].reshape(self.rotation_shape)
         q_diff = geom.Rotation.create_from(rotation, self.rotation_representation)
         tr_diff = action_vector[self.rotation_size:self.rotation_size + 3]

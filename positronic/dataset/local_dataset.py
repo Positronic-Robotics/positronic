@@ -37,15 +37,15 @@ class LocalDataset(Dataset):
     Each episode directory is readable by DiskEpisode.
     """
 
-    def __init__(self, root: Path) -> None:
-        self.root = root
+    def __init__(self, root: Path | str) -> None:
+        self.root = Path(root)
         self._episodes: list[tuple[int, Path]] = []
         self._build_episode_list()
 
     def _build_episode_list(self) -> None:
         self._episodes.clear()
         if not self.root.exists():
-            return
+            raise FileNotFoundError(f"Root directory {self.root} does not exist")
         for block_dir in sorted([p for p in self.root.iterdir() if _is_numeric_dir(p)], key=lambda p: p.name):
             for ep_dir in sorted([p for p in block_dir.iterdir() if _is_numeric_dir(p)], key=lambda p: p.name):
                 ep_id = int(ep_dir.name)
@@ -95,8 +95,8 @@ class LocalDatasetWriter(DatasetWriter):
       DiskEpisodeWriter.
     """
 
-    def __init__(self, root: Path) -> None:
-        self.root = root
+    def __init__(self, root: Path | str) -> None:
+        self.root = Path(root)
         self.root.mkdir(parents=True, exist_ok=True)
         self._next_episode_id = self._compute_next_episode_id()
 

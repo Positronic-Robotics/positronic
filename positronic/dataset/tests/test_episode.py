@@ -20,7 +20,7 @@ def test_episode_writer_and_reader_basic(tmp_path):
 
     ep = DiskEpisode(ep_dir)
     # Keys present
-    assert set(ep.keys) == {"a", "b"}
+    assert set(ep.keys()) == {"a", "b"}
 
     # Access signals and basic data
     a = ep["a"]
@@ -82,7 +82,7 @@ def test_episode_static_items_json(tmp_path):
 
     ep = DiskEpisode(ep_dir)
     # keys include both static and dynamic names
-    assert set(ep.keys) == {"task", "version", "params", "tags", "a"}
+    assert set(ep.keys()) == {"task", "version", "params", "tags", "a"}
 
     # static access returns the value directly
     assert ep["task"] == "pick_place"
@@ -347,7 +347,7 @@ class TestEpisodeVideoIntegration:
 
         ep = DiskEpisode(ep_dir)
         # Keys include both signals
-        assert set(ep.keys) == {"a", "cam"}
+        assert set(ep.keys()) == {"a", "cam"}
 
         # Time snapshot merges both
         snap = ep.time[2000]

@@ -139,10 +139,14 @@ class Episode(ABC):
     or present in-memory views, but must provide the same read API.
     """
 
-    @property
     @abstractmethod
-    def keys(self):
-        """Names of all items (dynamic signals + static items)."""
+    def keys(self, *, dynamic: bool = True, static: bool = True) -> list[str]:
+        """Names of dynamic/static signals in the episode.
+
+        Args:
+            dynamic: Include dynamic signals
+            static: Include static items
+        """
         pass
 
     @abstractmethod

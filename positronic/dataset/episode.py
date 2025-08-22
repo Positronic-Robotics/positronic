@@ -200,6 +200,21 @@ class _TimeIndexer:
         else:
             raise TypeError(f"Invalid index type: {type(index_or_slice)}")
 
+    @property
+    def start_ts(self) -> int:
+        """Return the start timestamp of the episode in nanoseconds."""
+        return self.episode.start_ts
+
+    @property
+    def last_ts(self) -> int:
+        """Return the last timestamp of the episode in nanoseconds."""
+        return self.episode.last_ts
+
+    @property
+    def duration(self) -> int:
+        """Return the duration of the episode in nanoseconds."""
+        return self.last_ts - self.start_ts
+
 
 class EpisodeView(Episode):
     """In-memory view over an Episode's items.
@@ -228,7 +243,6 @@ class EpisodeView(Episode):
     def time(self):
         return _TimeIndexer(self)
 
-    @property
     def keys(self):
         return {**{k: True for k in self._signals.keys()}, **{k: True for k in self._static.keys()}}.keys()
 
@@ -346,16 +360,18 @@ class DiskEpisode(Episode):
         """
         return _TimeIndexer(self)
 
-    @property
-    def keys(self):
+    def keys(self, *, dynamic: bool = True, static: bool = True) -> list[str]:
         """Return the names of all items in this episode.
 
         Returns:
             dict_keys: Item names (both dynamic signals and static items)
         """
-        dyn = {k: True for k in self._signal_factories.keys()}
-        stat = {k: True for k in self._static_data.keys()}
-        return {**dyn, **stat}.keys()
+        signals = {}
+        if dynamic:
+            signals.update({k: True for k in self._signal_factories.keys()})
+        if static:
+            signals.update({k: True for k in self._static_data.keys()})
+        return signals.keys()
 
     def __getitem__(self, name: str) -> Signal[Any] | Any:
         """Get an item (dynamic Signal or static value) by name.

@@ -216,16 +216,16 @@ class DataCollection:
                 if controller_pos_updated:
                     target_robot_pos = tracker.update(controller_pos['right'])
                     if tracker.on:  # Don't spam the robot with commands.
-                        recorder.write('target_robot_position_translation', target_robot_pos.translation, target_ts)
+                        recorder.write('target_robot_position_translation', target_robot_pos.translation.copy(), target_ts)
                         recorder.write('target_robot_position_quaternion', target_robot_pos.rotation.as_quat, target_ts)
                         self.robot_commands.emit(roboarm.command.CartesianMove(target_robot_pos))
 
                     if controller_pos['right'] is not None:
-                        recorder.write('right_controller_translation', controller_pos['right'].translation, target_ts)
+                        recorder.write('right_controller_translation', controller_pos['right'].translation.copy(), target_ts)
                         recorder.write('right_controller_quaternion', controller_pos['right'].rotation.as_quat,
                                        target_ts)
                     if controller_pos['left'] is not None:
-                        recorder.write('left_controller_translation', controller_pos['left'].translation, target_ts)
+                        recorder.write('left_controller_translation', controller_pos['left'].translation.copy(), target_ts)
                         recorder.write('left_controller_quaternion', controller_pos['left'].rotation.as_quat, target_ts)
 
                 for name, reader in frame_readers.items():
@@ -241,10 +241,10 @@ class DataCollection:
                 if value is not None:
                     robot_ts = clock.now_ns()
                     value = value.data
-                    recorder.write('robot_position_translation', value.ee_pose.translation, robot_ts)
-                    recorder.write('robot_position_rotation', value.ee_pose.rotation.as_quat, robot_ts)
-                    recorder.write('robot_joints', value.q, robot_ts)
-                    recorder.write('robot_joints_velocity', value.dq, robot_ts)
+                    recorder.write('robot_position_translation', value.ee_pose.translation.copy(), robot_ts)
+                    recorder.write('robot_position_quaternion', value.ee_pose.rotation.as_quat.copy(), robot_ts)
+                    recorder.write('robot_joints', value.q.copy(), robot_ts)
+                    recorder.write('robot_joints_velocity', value.dq.copy(), robot_ts)
 
                 gripper_state, gripper_state_updated = gripper_state_reader.value
                 if gripper_state_updated:
@@ -318,6 +318,7 @@ def main_sim(
         output_dir: str | None = None,
         fps: int = 30,
         operator_position: OperatorPosition = OperatorPosition.FRONT,
+        stream_video_to_webxr: str | None = None,
 ):
     """Runs data collection in simulator."""
 
@@ -341,6 +342,13 @@ def main_sim(
 
         webxr.controller_positions, data_collection.controller_positions_reader = world.mp_pipe()
         webxr.buttons, data_collection.buttons_reader = world.mp_pipe()
+
+        if stream_video_to_webxr is not None:
+            emitter, reader = world.mp_pipe()
+            cameras[stream_video_to_webxr].frame = pimm.BroadcastEmitter(
+                [emitter, cameras[stream_video_to_webxr].frame])
+
+            webxr.frame = pimm.map(reader, lambda x: x['image'])
 
         world.start_in_subprocess(webxr.run, gui.run)
 

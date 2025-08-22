@@ -1,6 +1,7 @@
 from pathlib import Path
 
 import numpy as np
+import pytest
 
 from positronic.dataset.core import Episode
 from positronic.dataset.local_dataset import LocalDataset, LocalDatasetWriter
@@ -119,3 +120,14 @@ def test_array_indexing_errors(tmp_path):
     # Out of range
     with np.testing.assert_raises(IndexError):
         _ = ds[[10]]
+
+
+def test_local_dataset_with_str_root_creates(tmp_path):
+    ds = build_simple_dataset(str(tmp_path / "ds"), n=5)
+    assert len(ds) == 5
+    assert ds[0]["id"] == 0
+
+
+def test_local_dataset_folder_does_not_exist_raises():
+    with pytest.raises(FileNotFoundError):
+        _ = LocalDataset("PRETTY_MUCH_DEFINITELY_NON_EXISTING_FOLDER")
