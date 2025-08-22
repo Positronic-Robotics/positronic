@@ -18,6 +18,7 @@ end_effector_224 = end_effector.override(resolution=(224, 224))
 end_effector_384 = end_effector.override(resolution=(384, 384))
 end_effector_352x192 = end_effector.override(resolution=(352, 192))
 
+
 @cfn.config(resolution=(224, 224), fps=30)
 def end_effector_handcam(resolution: tuple[int, int], fps: int):
     from positronic.inference.observation import ObservationEncoder, ImageTransform, ToArrayTransform

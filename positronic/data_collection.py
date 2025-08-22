@@ -216,16 +216,23 @@ class DataCollection:
                 if controller_pos_updated:
                     target_robot_pos = tracker.update(controller_pos['right'])
                     if tracker.on:  # Don't spam the robot with commands.
-                        recorder.write('target_robot_position_translation', target_robot_pos.translation.copy(), target_ts)
+                        recorder.write(
+                            'target_robot_position_translation', target_robot_pos.translation.copy(), target_ts
+                        )
                         recorder.write('target_robot_position_quaternion', target_robot_pos.rotation.as_quat, target_ts)
                         self.robot_commands.emit(roboarm.command.CartesianMove(target_robot_pos))
 
                     if controller_pos['right'] is not None:
-                        recorder.write('right_controller_translation', controller_pos['right'].translation.copy(), target_ts)
-                        recorder.write('right_controller_quaternion', controller_pos['right'].rotation.as_quat,
-                                       target_ts)
+                        recorder.write(
+                            'right_controller_translation', controller_pos['right'].translation.copy(), target_ts
+                        )
+                        recorder.write(
+                            'right_controller_quaternion', controller_pos['right'].rotation.as_quat, target_ts
+                        )
                     if controller_pos['left'] is not None:
-                        recorder.write('left_controller_translation', controller_pos['left'].translation.copy(), target_ts)
+                        recorder.write(
+                            'left_controller_translation', controller_pos['left'].translation.copy(), target_ts
+                        )
                         recorder.write('left_controller_quaternion', controller_pos['left'].rotation.as_quat, target_ts)
 
                 for name, reader in frame_readers.items():

@@ -179,7 +179,9 @@ class RelativeRobotPositionAction(RotationTranslationGripAction):
 
     def encode_episode(self, signal_dict: dict[str, Signal], timestamps: np.ndarray) -> np.ndarray:
         quat = np.array([x[0] for x in signal_dict['robot_position_quaternion'].time[timestamps]])
-        robot_position_translation = np.array([x[0] for x in signal_dict['robot_position_translation'].time[timestamps]])
+        robot_position_translation = np.array(
+            [x[0] for x in signal_dict['robot_position_translation'].time[timestamps]]
+        )
         grip = np.array([x[0] for x in signal_dict['grip'].time[timestamps]])
 
         rotations = np.zeros((len(quat), self.rotation_size), dtype=np.float32)
@@ -266,7 +268,9 @@ class UMIRelativeRobotPositionAction(RotationTranslationGripAction):
         grips = np.zeros(n_samples, dtype=np.float32)
         registration_transform = geom.Transform3D(
             translation=np.asarray(signal_dict['registration_transform_translation'].time[timestamps])[:, 0],
-            rotation=geom.Rotation.from_quat(np.asarray(signal_dict['registration_transform_quaternion'].time[timestamps])[:, 0])
+            rotation=geom.Rotation.from_quat(
+                np.asarray(signal_dict['registration_transform_quaternion'].time[timestamps])[:, 0]
+            )
         )
 
         relative_trajectory = self._prepare(signal_dict)
