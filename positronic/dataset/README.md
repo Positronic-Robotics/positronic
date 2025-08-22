@@ -15,14 +15,14 @@ __Episode__ – collection of Signals recorded together plus static, episode-lev
 
 __Dataset__ – ordered collection of Episodes with sequence-style access (indexing, slicing, and index arrays by position). Implementations decide storage and discovery; for example, `LocalDataset` stores episodes in a directory on disk.
 
-We optimize for:
+### We optimize for:
 * Fast append during recording (low latency).
 * Random access at query time by the timestamp.
 * Window slices like "5 seconds before time X".
 
 ## Public API
 Signal implements `Sequence[(T, int)]` (iterable, indexable, reversible).
-We support three kinds of Signals: scalar, vector, and image (video). Also, we support one and only one timestamp type per Signal. There are two main classes in the library.
+We support three kinds of `Signal`s: scalar, vector, and image (video). Also, we support one and only one timestamp type per `Signal`.
 ```python
 class Signal[T]:
     # Returns the number of records in the signal
@@ -31,20 +31,20 @@ class Signal[T]:
 
     # Access data by index or slice
     # signal[idx] returns (value, timestamp_ns) tuple
-    # signal[start:end] returns a Signal view of the slice
-    # signal[[i1, i2, ...]] returns a Signal view with the selected indices
+    # signal[start:end] returns a `Signal` view of the slice
+    # signal[[i1, i2, ...]] returns a `Signal` view with the selected indices
     # (boolean masks are not supported)
     def __getitem__(self, index_or_slice: int | slice | Sequence[int] | np.ndarray) -> Tuple[T, int] | Signal[T]:
         pass
 
     # Timestamp-based indexer property for accessing data by time:
     # * signal.time[ts_ns] returns (value, timestamp_ns) for closest record at or before ts_ns.
-    # * signal.time[start_ts:end_ts] returns Signal view for time window [start_ts, end_ts).
-    # * signal.time[start:end:step] returns a Signal sampled at requested timestamps:
+    # * signal.time[start_ts:end_ts] returns `Signal` view for time window [start_ts, end_ts).
+    # * signal.time[start:end:step] returns a `Signal` sampled at requested timestamps:
     #     t_i = start + i * step (for i >= 0 while t_i < end).
     #     Each returned element is (value_at_or_before_t_i, t_i). If any requested timestamp
     #     precedes the first record, a KeyError is raised. step must be positive.
-    # * signal.time[[t1, t2, ...]] returns a Signal sampled at the provided timestamps.
+    # * signal.time[[t1, t2, ...]] returns a `Signal` sampled at the provided timestamps.
     #     Each element is (value_at_or_before_t_i, t_i). Raises KeyError if any t_i precedes
     #     the first record.
     @property
@@ -73,7 +73,7 @@ class Episode:
     def keys(self):
         pass
 
-    # Access by name: returns a Signal for dynamic items or the value for static items
+    # Access by name: returns a `Signal` for dynamic items or the value for static items
     def __getitem__(self, name: str) -> Signal[Any] | Any:
         pass
 
@@ -92,7 +92,7 @@ class Episode:
         pass
 
     # Episode-wide time accessor:
-    # * ep.time[ts] -> dict merging static items with sampled values from each signal at-or-before ts
+    # * ep.time[ts] -> dict merging static items with sampled values from each `Signal` at-or-before ts
     # * ep.time[start:end] -> EpisodeView windowed to [start, end)
     # * ep.time[start:end:step] -> EpisodeView sampled at t_i = start + i*step (end-exclusive)
     # * ep.time[[t1, t2, ...]] -> EpisodeView sampled at provided timestamps
@@ -101,8 +101,8 @@ class Episode:
         pass
 
 class EpisodeWriter:
-    # Append dynamic signal data; timestamps must be strictly increasing per signal
-    # Raises if the signal name conflicts with existing static items
+    # Append dynamic `Signal` data; timestamps must be strictly increasing per signal
+    # Raises if the `Signal` name conflicts with existing static items
     def append(self, signal_name: str, data: T, ts_ns: int) -> None:
         pass
 
@@ -117,7 +117,7 @@ class EpisodeWriter:
     def __exit__(self, exc_type, exc, tb) -> None:
         ...
 
-    # Abort the episode; underlying writers are aborted and the episode directory is removed
+    # Abort the episode; underlying writers are aborted and the `Episode` directory is removed
     def abort(self) -> None:
         pass
 
@@ -127,36 +127,36 @@ class Dataset:
         pass
 
     # Indexing returns an Episode; slices and index arrays return lists of Episodes
-    def __getitem__(self, index_or_slice: int | slice | Sequence[int] | np.ndarray) -> Episode | list[Episode]:
+    def __getitem__(self, index_or_slice: int | slice | Sequence[int] | np.ndarray) -> `Episode` | list[Episode]:
         pass
 
 class DatasetWriter:
-    # Allocate a new episode and return an EpisodeWriter (context-managed)
+    # Allocate a new `Episode` and return an EpisodeWriter (context-managed)
     def new_episode(self) -> EpisodeWriter:
         pass
 ```
 
-## Implementations
+## Signal implementations
 
 `Signal` and `SignalWriter` are abstract interfaces.
 
-We provide implementations for scalar and vector Signals (`SimpleSignal`/`SimpleSignalWriter`) and for image Signals (`VideoSignal`/`VideoSignalWriter`).
+We provide implementations for scalar and vector `Signal`s (`SimpleSignal`/`SimpleSignalWriter`) and for image `Signal`s (`VideoSignal`/`VideoSignalWriter`).
 
 ### Scalar / Vector
 
-Every sequence is stored in one parquet file, with 'timestamp' and 'value' columns. The timestamp-based access via the `time` property relies on binary search and hence has O(log N) compute time.
+Every sequence is stored in one parquet file, with `timestamp` and `value` columns. The timestamp-based access via the `time` property relies on binary search and hence has `O(log N)` compute time.
 
 All the classes are lazy, in the sense that they don't perform any IO or computations until requested. The `SimpleSignal` keeps all the data in numpy arrays in memory after loading from the parquet file. Once the data is loaded into memory, we provide efficient access through views.
 
 #### Access semantics
 
-When accessing data via slices (either index-based like `signal[0:100]` or time-based like `signal.time[start_ts:end_ts]`), the library returns Signal views that share the underlying data with the original Signal. These views have the same API as the original Signal and provide zero-copy access to the data.
+When accessing data via slices (either index-based like `signal[0:100]` or time-based like `signal.time[start_ts:end_ts]`), the library returns `Signal` views that share the underlying data with the original `Signal`. These views have the same API as the original `Signal` and provide zero-copy access to the data.
 
-For stepped time slicing `signal.time[start:end:step]`, the returned Signal contains samples located at the requested timestamps t_i = start + i * step (end-exclusive), as described above in the public API section. NOTE: stepped time slicing creates a copy of data, so it is not a "free" operation.
+For stepped time slicing `signal.time[start:end:step]`, the returned `Signal` contains samples located at the requested timestamps t_i = start + i * step (end-exclusive), as described above in the public API section. NOTE: stepped time slicing creates a copy of data, so it is not a "free" operation.
 
 Both index and time indexing supports arrays access:
-- Index-based arrays: `signal[[i1, i2, ...]]` or `signal[np.array([i1, i2, ...])]` returns a Signal view containing the records at the specified indices. Boolean masks are not supported.
-- Time-based arrays: `signal.time[[t1, t2, ...]]` returns a Signal sampled at the provided timestamps. Each element is `(value_at_or_before_t_i, t_i)`. A KeyError is raised if any requested timestamp precedes the first record. Implementation will allocate new arrays internally and therefore is not a zero-copy operation.
+- Index-based arrays: `signal[[i1, i2, ...]]` or `signal[np.array([i1, i2, ...])]` returns a `Signal` view containing the records at the specified indices. Boolean masks are not supported.
+- Time-based arrays: `signal.time[[t1, t2, ...]]` returns a `Signal` sampled at the provided timestamps. Each element is `(value_at_or_before_t_i, t_i)`. A KeyError is raised if any requested timestamp precedes the first record. Implementation will allocate new arrays internally and therefore is not a zero-copy operation.
 
 ### Video
 When implementing `VideoSignal` we are balancing the following trade-offs:
@@ -198,26 +198,26 @@ Returned frame type is **decoded uint8 image (H×W×3)**. Decoding is on-demand;
 
 ## Episodes
 
-An Episode is a collection of Signals recorded together plus static, episode-level metadata. All dynamic signals in an Episode share a common time axis.
+An `Episode` is a collection of `Signal`s recorded together plus static, episode-level metadata. All dynamic signals in an `Episode` share a common time axis.
 
 ### Recording
 
-Episodes are recorded via an `EpisodeWriter` implementations. You add time-varying data by calling `append(signal_name, data, ts_ns)` where timestamps are strictly increasing per signal name; you add episode-level metadata via `set_static(name, data)`. All static items are stored together in a single `static.json`, while each dynamic signal is stored in its own format, defined by the particular `SignalWriter` implementation. (e.g., Parquet for scalar/vector; video file plus frame index for image signals).
+Episodes are recorded via an `EpisodeWriter` implementations. You add time-varying data by calling `append(signal_name, data, ts_ns)` where timestamps are strictly increasing per `Signal` name; you add episode-level metadata via `set_static(name, data)`. All static items are stored together in a single `static.json`, while each dynamic `Signal` is stored in its own format, defined by the particular `SignalWriter` implementation. (e.g., Parquet for scalar/vector; video file plus frame index for image signals).
 
 Name collisions are disallowed: attempting to `append` to a name that already exists as a static item raises an error, and vice versa.
 
-Use as a context manager: exiting the `with` block finalizes all underlying signal writers and persists metadata.
-Aborting: `abort()` stops recording, asks each underlying signal writer to abort, and removes the episode directory. After abort, all writer operations (`append`, `set_static`) raise.
+Use as a context manager: exiting the `with` block finalizes all underlying `Signal` writers and persists metadata.
+Aborting: `abort()` stops recording, asks each underlying `Signal` writer to abort, and removes the `Episode` directory. After abort, all writer operations (`append`, `set_static`) raise.
 
 ### System Metadata (meta)
 
 - Purpose: store system-generated, immutable information separate from user static items.
-- Storage: sidecar JSON file `meta.json` inside the episode directory.
+- Storage: sidecar JSON file `meta.json` inside the `Episode` directory.
 - Accessor: `Episode.meta` (read-only dict). Not included in `Episode.keys` and not accessible via `__getitem__`.
 - Written: immediately on `EpisodeWriter` creation (side-effect of constructing the writer).
 - Contents (concise schema):
   - `schema_version: int` – manifest version (starts at 1).
-  - `created_ts_ns: int` – episode creation time in nanoseconds.
+  - `created_ts_ns: int` – `Episode` creation time in nanoseconds.
   - `writer: object` – environment and provenance:
     - `name: str` – fully-qualified writer class (e.g., `positronic.dataset.episode.DiskEpisodeWriter`).
     - `version: str|null` – package version if available.
@@ -225,29 +225,29 @@ Aborting: `abort()` stops recording, asks each underlying signal writer to abort
     - `platform: str` – platform string.
     - `git: {commit, branch, dirty}` – present if a Git repo is detected.
 
-Signal schemas (dtype, shape, etc.) are not duplicated here; they reside in the signal files themselves (e.g., Parquet/Arrow metadata or frame index files).
+Signal schemas (dtype, shape, etc.) are not duplicated here; they reside in the `Signal` files themselves (e.g., Parquet/Arrow metadata or frame index files).
 
 ### Time accessor
 
 Episode supports time-based access across all signals while preserving static items:
 
 - `ep.time[ts] -> dict`
-  - Snapshot: merges all static items with sampled values from each dynamic signal at-or-before `ts`.
+  - Snapshot: merges all static items with sampled values from each dynamic `Signal` at-or-before `ts`.
 
 - `ep.time[start:end] -> EpisodeView`
-  - Window: each dynamic signal is restricted to `[start, end)`. Static items are preserved.
+  - Window: each dynamic `Signal` is restricted to `[start, end)`. Static items are preserved.
 
 - `ep.time[start:end:step] -> EpisodeView`
-  - Sampling: each dynamic signal is sampled at `t_i = start + i*step` (end-exclusive). Static items are preserved.
+  - Sampling: each dynamic `Signal` is sampled at `t_i = start + i*step` (end-exclusive). Static items are preserved.
 
 - `ep.time[[t1, t2, ...]] -> EpisodeView`
-  - Arbitrary timestamps: each dynamic signal is sampled at the provided times. Static items are preserved.
+  - Arbitrary timestamps: each dynamic `Signal` is sampled at the provided times. Static items are preserved.
 
 Access semantics mirror what is already defined for `Signal.time`: sampling returns values at-or-before requested timestamps; windowing returns views that share underlying storage; stepped sampling materializes requested timestamps. There is no index-based access for episodes — access is time-based only via `ep.time`.
 
 ## Datasets
 
-Datasets organize many Episodes and provide simple sequence-style access. Implementations decide how episodes are stored and discovered (e.g., filesystem), but must expose a consistent order and length.
+`Dataset` organizes many `Episode`s and provide simple sequence-style access. Implementations decide how episodes are stored and discovered (e.g., filesystem), but must expose a consistent order and length.
 - Access: `ds[i] -> Episode`; `ds[start:stop:step] -> list[Episode]`; `ds[[i1, i2, ...]] -> list[Episode]`. Boolean masks are not supported.
 
 ### Local dataset
@@ -256,7 +256,7 @@ Datasets organize many Episodes and provide simple sequence-style access. Implem
 
 ### Writing datasets
 
-`DatasetWriter` is a factory for `EpisodeWriter` instances. Implementations allocate a new episode slot and return an `EpisodeWriter` for recording:
+`DatasetWriter` is a factory for `EpisodeWriter` instances. Implementations allocate a new `Episode` slot and return an `EpisodeWriter` for recording:
 
 ```python
 with dataset_writer.new_episode() as ew:
