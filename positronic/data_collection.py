@@ -152,7 +152,7 @@ class OperatorPosition(Enum):
     BACK = geom.Transform3D(rotation=geom.Rotation.from_quat([-0.5, -0.5, 0.5, 0.5]))
 
 
-class DataCollection:
+class DataCollectionController:
     frame_readers: Dict[str, pimm.SignalReader] = {}
     controller_positions_reader: pimm.SignalReader[Dict[str, geom.Transform3D]] = pimm.NoOpReader()
     buttons_reader: pimm.SignalReader[Dict] = pimm.NoOpReader()
@@ -163,13 +163,11 @@ class DataCollection:
     target_grip_emitter: pimm.SignalEmitter[float] = pimm.NoOpEmitter()
     sound_emitter: pimm.SignalEmitter[str] = pimm.NoOpEmitter()
 
-    def __init__(
-        self,
-        operator_position: geom.Transform3D | None,
-        output_dir: str | None,
-        fps: int,
-        metadata_getter: Callable[[], Dict] | None = None,
-    ):
+    def __init__(self,
+                 operator_position: geom.Transform3D | None,
+                 output_dir: str | None,
+                 fps: int,
+                 metadata_getter: Callable[[], Dict] | None = None):
         self.operator_position = operator_position
         self.output_dir = output_dir
         self.fps = fps
@@ -265,11 +263,10 @@ def main(robot_arm: Any | None,
          output_dir: str | None = None,
          fps: int = 30,
          stream_video_to_webxr: str | None = None,
-         operator_position: OperatorPosition = OperatorPosition.FRONT,
-         ):
+         operator_position: OperatorPosition = OperatorPosition.FRONT):
     """Runs data collection in real hardware."""
     with pimm.World() as world:
-        data_collection = DataCollection(operator_position.value, output_dir, fps)
+        data_collection = DataCollectionController(operator_position.value, output_dir, fps)
         cameras = cameras or {}
         for camera_name, camera in cameras.items():
             camera.frame, data_collection.frame_readers[camera_name] = world.mp_pipe()
@@ -310,15 +307,13 @@ def main(robot_arm: Any | None,
                 break
 
 
-def main_sim(
-        mujoco_model_path: str,
-        webxr: WebXR,
-        sound: Any | None = None,
-        loaders: Sequence[MujocoSceneTransform] = (),
-        output_dir: str | None = None,
-        fps: int = 30,
-        operator_position: OperatorPosition = OperatorPosition.FRONT,
-):
+def main_sim(mujoco_model_path: str,
+             webxr: WebXR,
+             sound: Any | None = None,
+             loaders: Sequence[MujocoSceneTransform] = (),
+             output_dir: str | None = None,
+             fps: int = 30,
+             operator_position: OperatorPosition = OperatorPosition.FRONT):
     """Runs data collection in simulator."""
 
     sim = MujocoSim(mujoco_model_path, loaders)
@@ -331,9 +326,14 @@ def main_sim(
     gui = DearpyguiUi()
 
     with pimm.World(clock=sim) as world:
+
         def metadata_getter():
             return {k: v.tolist() for k, v in sim.save_state().items()}
-        data_collection = DataCollection(operator_position.value, output_dir, fps, metadata_getter=metadata_getter)
+
+        data_collection = DataCollectionController(operator_position.value,
+                                                   output_dir,
+                                                   fps,
+                                                   metadata_getter=metadata_getter)
         cameras = cameras or {}
         for camera_name, camera in cameras.items():
             camera.frame, (data_collection.frame_readers[camera_name],
@@ -401,13 +401,11 @@ main_sim_cfg = cfn.Config(
 )
 
 
-@cfn.config(
-    robot_arm=positronic.cfg.hardware.roboarm.so101,
-    webxr=positronic.cfg.webxr.oculus,
-    sound=positronic.cfg.sound.sound,
-    operator_position=OperatorPosition.BACK,
-    cameras={'right': positronic.cfg.hardware.camera.arducam_right}
-)
+@cfn.config(robot_arm=positronic.cfg.hardware.roboarm.so101,
+            webxr=positronic.cfg.webxr.oculus,
+            sound=positronic.cfg.sound.sound,
+            operator_position=OperatorPosition.BACK,
+            cameras={'right': positronic.cfg.hardware.camera.arducam_right})
 def so101cfg(robot_arm, **kwargs):
     """Runs data collection on SO101 robot"""
     main(robot_arm=robot_arm, gripper=robot_arm, **kwargs)
