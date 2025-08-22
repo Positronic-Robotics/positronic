@@ -17,12 +17,12 @@ from typing import Iterator, Sequence, Tuple, TypeVar
 from .core import Clock, ControlLoop, Message, SignalEmitter, SignalReader, Sleep
 from .shared_memory import SMCompliant, SharedMemoryEmitter, SharedMemoryReader
 
-
 T = TypeVar('T')
 T_SM = TypeVar('T_SM', bound=SMCompliant)
 
 
 class QueueEmitter(SignalEmitter[T]):
+
     def __init__(self, queue: mp.Queue, clock: Clock):
         self._queue = queue
         self._clock = clock
@@ -43,6 +43,7 @@ class QueueEmitter(SignalEmitter[T]):
 
 
 class BroadcastEmitter(SignalEmitter[T]):
+
     def __init__(self, emitters: Sequence[SignalEmitter[T]]):
         """Emitter that broadcasts messages to all emmiters.
 
@@ -59,6 +60,7 @@ class BroadcastEmitter(SignalEmitter[T]):
 
 
 class QueueReader(SignalReader[T]):
+
     def __init__(self, queue: mp.Queue):
         self._queue = queue
         self._last_value = None
@@ -72,6 +74,7 @@ class QueueReader(SignalReader[T]):
 
 
 class LocalQueueEmitter(SignalEmitter[T]):
+
     def __init__(self, queue: deque, clock: Clock):
         """Emitter that allows to emit messages to deque.
 
@@ -88,6 +91,7 @@ class LocalQueueEmitter(SignalEmitter[T]):
 
 
 class LocalQueueReader(SignalReader[T]):
+
     def __init__(self, queue: deque):
         """Reader that allows to read messages from deque.
 
@@ -105,6 +109,7 @@ class LocalQueueReader(SignalReader[T]):
 
 
 class EventReader(SignalReader[bool]):
+
     def __init__(self, event: EventClass, clock: Clock):
         self._event = event
         self._clock = clock
@@ -114,6 +119,7 @@ class EventReader(SignalReader[bool]):
 
 
 class SystemClock(Clock):
+
     def now(self) -> float:
         return time.monotonic()
 
@@ -214,10 +220,9 @@ class World:
 
         return QueueEmitter(q, self._clock), QueueReader(q)  # type: ignore
 
-    def local_one_to_many_pipe(
-        self, n_readers: int,
-        maxsize: int = 1
-    ) -> Tuple[SignalEmitter[T], Sequence[SignalReader[T]]]:
+    def local_one_to_many_pipe(self,
+                               n_readers: int,
+                               maxsize: int = 1) -> Tuple[SignalEmitter[T], Sequence[SignalReader[T]]]:
         """Create a single-emitter-many-readers communication channel.
         """
         emitters = []
@@ -228,11 +233,9 @@ class World:
             readers.append(reader)
         return BroadcastEmitter(emitters), readers
 
-    def mp_one_to_many_pipe(
-        self,
-        n_readers: int,
-        maxsize: int = 1
-    ) -> Tuple[SignalEmitter[T], Sequence[SignalReader[T]]]:
+    def mp_one_to_many_pipe(self,
+                            n_readers: int,
+                            maxsize: int = 1) -> Tuple[SignalEmitter[T], Sequence[SignalReader[T]]]:
         """Create a single-emitter-many-readers communication channel.
 
         Args:
