@@ -27,7 +27,7 @@ dependencies = [
     "numpy",
     "opencv-python-headless",
     "pyarrow",
-    "pyturbojpeg @ git+https://github.com/lilohuang/PyTurboJPEG.git@v1.7.8",
+    "pyturbojpeg",
     "robosuite",
     "numba>=0.57",
     "lerobot",

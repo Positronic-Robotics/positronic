@@ -14,13 +14,11 @@ RUN apt-get update && apt-get install -y \
     libhidapi-dev  # Spacemouse
 
 ENV UV_LINK_MODE=copy
-
 RUN uv venv --python 3.11
 
 # activate venv to be used in docker run
 ENV VIRTUAL_ENV=/.venv/
 ENV PATH=/$VIRTUAL_ENV/bin:$PATH
-
 
 # Install libfranka
 RUN git clone --single-branch --recurse-submodules --branch 0.13.4 https://github.com/frankaemika/libfranka
@@ -34,6 +32,6 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 
 WORKDIR /positronic
 
-ENV PYTHONPATH=/positronic:/positronic/lerobot
+ENV PYTHONPATH=/positronic
 # Default command
 CMD ["bash"]
