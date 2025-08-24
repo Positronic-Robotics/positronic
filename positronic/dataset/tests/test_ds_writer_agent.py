@@ -1,16 +1,21 @@
 from typing import Any, List, Tuple
 
+import numpy as np
 import pytest
 
 import pimm
 from pimm.testing import MockClock
+from positronic import geom
+from positronic.dataset.core import DatasetWriter, EpisodeWriter
 from positronic.dataset.ds_writer_agent import (
     DsWriterAgent,
     DsWriterCommand,
     DsWriterCommandType,
+    Serializers,
 )
-from positronic.dataset.core import DatasetWriter, EpisodeWriter
 from positronic.dataset.local_dataset import LocalDataset, LocalDatasetWriter
+from positronic.drivers import roboarm
+from positronic.drivers.roboarm import command as rcmd
 
 
 @pytest.fixture
@@ -306,3 +311,115 @@ def test_serializer_none_drops_sample(world, clock, run_agent):
     w = ds.created[-1]
     # Only the positive value should be recorded
     assert [(s, v) for (s, v, _) in w.appends] == [("x", 3)]
+
+
+def test_transform_3d_serializer(world, clock, run_agent):
+    ds = FakeDatasetWriter()
+    agent, cmd_em, emitters = build_agent_with_pipes({"pose": Serializers.transform_3d}, ds, world)
+
+    t = np.array([0.1, -0.2, 0.3])
+    q = geom.Rotation.identity
+    pose = geom.Transform3D(translation=t, rotation=q)
+
+    def driver(stop_reader, clk):
+        cmd_em.emit(DsWriterCommand(DsWriterCommandType.START_EPISODE))
+        yield pimm.Sleep(0.001)
+        emitters["pose"].emit(pose)
+        yield pimm.Sleep(0.001)
+        cmd_em.emit(DsWriterCommand(DsWriterCommandType.STOP_EPISODE))
+        yield pimm.Sleep(0.001)
+
+    run_agent(agent, driver)
+
+    w = ds.created[-1]
+    names_vals = [(s, v) for (s, v, _) in w.appends]
+    assert len(names_vals) == 1 and names_vals[0][0] == "pose"
+    np.testing.assert_allclose(names_vals[0][1][:3], t)
+    np.testing.assert_allclose(names_vals[0][1][3:], q.as_quat)
+
+
+class _FakeState(roboarm.State):
+    def __init__(self, q, dq, ee_pose, status):
+        self._q = q
+        self._dq = dq
+        self._ee = ee_pose
+        self._status = status
+
+    @property
+    def q(self):
+        return self._q
+
+    @property
+    def dq(self):
+        return self._dq
+
+    @property
+    def ee_pose(self):
+        return self._ee
+
+    @property
+    def status(self):
+        return self._status
+
+
+def test_robot_state_serializer_drops_reset_and_emits_components(world, clock, run_agent):
+    ds = FakeDatasetWriter()
+    agent, cmd_em, emitters = build_agent_with_pipes({"robot_state": Serializers.robot_state}, ds, world)
+
+    q = np.arange(7, dtype=np.float32)
+    dq = np.arange(7, dtype=np.float32) + 10
+    t = np.array([0.0, 0.1, 0.2])
+    pose = geom.Transform3D(translation=t, rotation=geom.Rotation.identity)
+
+    def driver(stop_reader, clk):
+        cmd_em.emit(DsWriterCommand(DsWriterCommandType.START_EPISODE))
+        yield pimm.Sleep(0.001)
+        # First, RESETTING -> should be dropped
+        emitters["robot_state"].emit(_FakeState(q, dq, pose, roboarm.RobotStatus.RESETTING))
+        yield pimm.Sleep(0.001)
+        # Then, AVAILABLE -> should emit .q, .dq, .ee_pose
+        emitters["robot_state"].emit(_FakeState(q, dq, pose, roboarm.RobotStatus.AVAILABLE))
+        yield pimm.Sleep(0.001)
+        cmd_em.emit(DsWriterCommand(DsWriterCommandType.STOP_EPISODE))
+        yield pimm.Sleep(0.001)
+
+    run_agent(agent, driver)
+
+    w = ds.created[-1]
+    items = {name: val for (name, val, _) in w.appends}
+    # Should not contain any data from RESETTING
+    assert set(items.keys()) == {"robot_state.q", "robot_state.dq", "robot_state.ee_pose"}
+    np.testing.assert_allclose(items["robot_state.q"], q)
+    np.testing.assert_allclose(items["robot_state.dq"], dq)
+    np.testing.assert_allclose(items["robot_state.ee_pose"], np.concatenate([t, geom.Rotation.identity.as_quat]))
+
+
+def test_robot_command_serializer_variants(world, clock, run_agent):
+    ds = FakeDatasetWriter()
+    agent, cmd_em, emitters = build_agent_with_pipes({"cmd": Serializers.robot_command}, ds, world)
+
+    pose = geom.Transform3D(translation=np.array([0.2, 0.0, -0.1]), rotation=geom.Rotation.identity)
+    joints = np.arange(7, dtype=np.float32) * 0.1
+
+    def driver(stop_reader, clk):
+        cmd_em.emit(DsWriterCommand(DsWriterCommandType.START_EPISODE))
+        yield pimm.Sleep(0.001)
+        # Cartesian move
+        emitters["cmd"].emit(rcmd.CartesianMove(pose))
+        yield pimm.Sleep(0.001)
+        # Joint move
+        emitters["cmd"].emit(rcmd.JointMove(joints))
+        yield pimm.Sleep(0.001)
+        # Reset
+        emitters["cmd"].emit(rcmd.Reset())
+        yield pimm.Sleep(0.001)
+        cmd_em.emit(DsWriterCommand(DsWriterCommandType.STOP_EPISODE))
+        yield pimm.Sleep(0.001)
+
+    run_agent(agent, driver)
+
+    w = ds.created[-1]
+    items = {name: val for (name, val, _) in w.appends}
+    np.testing.assert_allclose(items["cmd.pose"], np.concatenate([pose.translation, pose.rotation.as_quat]))
+    np.testing.assert_allclose(items["cmd.joints"], joints)
+    assert items["cmd.reset"] == 1
