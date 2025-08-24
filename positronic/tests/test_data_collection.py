@@ -6,15 +6,11 @@ import pytest
 
 import pimm
 from pimm.testing import MockClock
+from positronic.data_collection import DataCollectionController, controller_positions_serializer
+from positronic.dataset.ds_writer_agent import DsWriterAgent, DsWriterCommand, DsWriterCommandType, Serializers
+from positronic.dataset.local_dataset import LocalDataset, LocalDatasetWriter
+from positronic.geom import Rotation, Transform3D
 
-from positronic.geom import Transform3D, Rotation
-from positronic.data_collection import (
-    DataCollectionController as DataCollection,
-    controller_positions_serializer,
-)
-from positronic.dataset.ds_writer_agent import DsWriterAgent, Serializers
-from positronic.dataset.local_dataset import LocalDatasetWriter
-from positronic.dataset.local_dataset import LocalDataset
 
 # TODO: Move these fixtures into a common module so that others can reuse them.
 @pytest.fixture
@@ -30,6 +26,7 @@ def world(clock):
 
 @pytest.fixture
 def run_interleaved(clock, world):
+
     def _run(*loops, steps: int = 200):
         it = world.interleave(*loops)
         for _ in range(steps):
@@ -38,9 +35,16 @@ def run_interleaved(clock, world):
             except StopIteration:
                 break
             clock.advance(sleep.seconds)
+
     return _run
 
-def make_buttons(*, trigger: float = 0.0, thumb: float = 0.0, stick: float = 0.0, A: bool = False, B: bool = False) -> Dict:
+
+def make_buttons(*,
+                 trigger: float = 0.0,
+                 thumb: float = 0.0,
+                 stick: float = 0.0,
+                 A: bool = False,
+                 B: bool = False) -> Dict:
     """Constructs controller buttons payload matching DataCollection mapping."""
     return {
         'left': None,
@@ -54,7 +58,7 @@ def assert_strictly_increasing(sig):
 
 
 def build_collection(world, out_dir: Path):
-    dc = DataCollection(operator_position=None)
+    dc = DataCollectionController(operator_position=None)
 
     # Build ds_agent with minimal signals: target_grip, controller_positions, grip
     spec = {
@@ -83,18 +87,19 @@ def build_collection(world, out_dir: Path):
     cmd_em, agent.command = world.local_pipe()
     dc.ds_agent_commands = cmd_em
 
-    return dc, agent, ctrl_em, buttons_em, grip_em
+    return dc, agent, ctrl_em, buttons_em, grip_em, cmd_em
 
 
 def test_data_collection_basic_recording(tmp_path, world, run_interleaved):
-    dc, agent, ctrl_em, buttons_em, grip_em = build_collection(world, tmp_path)
+    dc, agent, ctrl_em, buttons_em, grip_em, cmd_em = build_collection(world, tmp_path)
 
     # A simple right-hand pose and button frames
     right_pose = Transform3D(translation=np.array([0.1, 0.2, 0.3]), rotation=Rotation.identity)
 
     def driver(_stop, _clk) -> Iterator[pimm.Sleep]:
-        # Press right_B to start recording. Also set right_trigger value.
-        buttons_em.emit(make_buttons(trigger=0.7, B=True))
+        # Start recording and set right_trigger value.
+        cmd_em.emit(DsWriterCommand(DsWriterCommandType.START_EPISODE))
+        buttons_em.emit(make_buttons(trigger=0.7, B=False))
         yield pimm.Sleep(0.001)
 
         # Send controller pose and a gripper state update
@@ -102,10 +107,8 @@ def test_data_collection_basic_recording(tmp_path, world, run_interleaved):
         grip_em.emit(0.42)
         yield pimm.Sleep(0.001)
 
-        # Release B then press again to stop
-        buttons_em.emit(make_buttons(trigger=0.7, B=False))
-        yield pimm.Sleep(0.001)
-        buttons_em.emit(make_buttons(trigger=0.7, B=True))
+        # Stop recording
+        cmd_em.emit(DsWriterCommand(DsWriterCommandType.STOP_EPISODE))
         yield pimm.Sleep(0.001)
 
     run_interleaved(dc.run, lambda s, c: agent.run(s, c), driver)
@@ -143,8 +146,8 @@ def test_data_collection_basic_recording(tmp_path, world, run_interleaved):
 
 def test_data_collection_with_mujoco_robot_gripper(tmp_path):
     # Build Mujoco simulation and components
-    from positronic.simulator.mujoco.sim import MujocoSim, MujocoFranka, MujocoGripper
     from positronic.data_collection import OperatorPosition
+    from positronic.simulator.mujoco.sim import MujocoFranka, MujocoGripper, MujocoSim
 
     sim = MujocoSim("positronic/assets/mujoco/franka_table.xml", loaders=())
     robot = MujocoFranka(sim, suffix='_ph')
@@ -152,7 +155,7 @@ def test_data_collection_with_mujoco_robot_gripper(tmp_path):
 
     # Use sim as the world clock to advance time with physics
     with pimm.World(clock=sim) as world:
-        dc = DataCollection(operator_position=OperatorPosition.FRONT.value)
+        dc = DataCollectionController(operator_position=OperatorPosition.FRONT.value)
 
         # Build ds_agent and wiring analogous to main_sim
         spec = {
@@ -194,10 +197,15 @@ def test_data_collection_with_mujoco_robot_gripper(tmp_path):
         grip_em, agent.inputs['grip'] = world.local_pipe()
         gripper.grip = grip_em
 
+        # DC emits start/stop commands -> agent receives
+        cmd_em, agent.command = world.local_pipe()
+        dc.ds_agent_commands = cmd_em
+
         # Interleave sim, robot, gripper, and data collection
         def driver(_stop, _clk):
-            # Start recording with B press and set trigger=0.5
-            buttons_em.emit(make_buttons(trigger=0.5, B=True))
+            # Start recording and set trigger=0.5
+            cmd_em.emit(DsWriterCommand(DsWriterCommandType.START_EPISODE))
+            buttons_em.emit(make_buttons(trigger=0.5))
             yield pimm.Sleep(0.01)
 
             # Enable tracking with A press so target pose is produced
@@ -208,10 +216,8 @@ def test_data_collection_with_mujoco_robot_gripper(tmp_path):
             ctrl_em.emit({'left': None, 'right': Transform3D.identity})
             yield pimm.Sleep(0.02)
 
-            # Stop recording with another B press
-            buttons_em.emit(make_buttons(trigger=0.5, B=False))
-            yield pimm.Sleep(0.005)
-            buttons_em.emit(make_buttons(trigger=0.5, B=True))
+            # Stop recording
+            cmd_em.emit(DsWriterCommand(DsWriterCommandType.STOP_EPISODE))
             yield pimm.Sleep(0.005)
 
         steps = iter(world.interleave(sim.run, robot.run, gripper.run, dc.run, lambda s, c: agent.run(s, c), driver))
@@ -252,7 +258,7 @@ def test_data_collection_with_mujoco_robot_gripper(tmp_path):
     # Verify a robot command was emitted (tracking enabled and a pose sent)
     # We don't assert exact equality with state here; just presence and shape.
     cmd_pose = ep['robot_commands.pose']
-    assert len(cmd_pose) >= 1 and cmd_pose[0][0].shape == (7,)
+    assert len(cmd_pose) >= 1 and cmd_pose[0][0].shape == (7, )
 
     # Basic sanity on sizes and monotonic timestamps
     def assert_strictly_increasing(sig):
