@@ -1,19 +1,26 @@
+import time
 from enum import Enum
 from pathlib import Path
-import time
 from typing import Any, Callable, Dict, Iterator, Sequence
 
 import configuronic as cfn
+import numpy as np
 
 import pimm
-from positronic import geom
 import positronic.cfg.hardware.camera
 import positronic.cfg.hardware.gripper
 import positronic.cfg.hardware.roboarm
 import positronic.cfg.simulator
 import positronic.cfg.sound
 import positronic.cfg.webxr
-from positronic.dataset.ds_writer_agent import DsWriterAgent, DsWriterCommand, DsWriterCommandType
+from positronic import geom
+from positronic.dataset.ds_writer_agent import (
+    DsWriterAgent,
+    DsWriterCommand,
+    DsWriterCommandType,
+    Serializers,
+)
+from positronic.dataset.local_dataset import LocalDatasetWriter
 from positronic.drivers import roboarm
 from positronic.drivers.webxr import WebXR
 from positronic.gui.dpg import DearpyguiUi
@@ -25,8 +32,6 @@ from positronic.simulator.mujoco.sim import (
 )
 from positronic.simulator.mujoco.transforms import MujocoSceneTransform
 from positronic.utils.buttons import ButtonHandler
-
-from positronic.dataset.local_dataset import LocalDatasetWriter
 
 
 def _parse_buttons(buttons: Dict, button_handler: ButtonHandler):
@@ -123,7 +128,8 @@ class DataCollectionController:
                 _parse_buttons(self.buttons_reader.value, button_handler)
                 if button_handler.just_pressed('right_B'):
                     op = DsWriterCommandType.START_EPISODE if not recording else DsWriterCommandType.STOP_EPISODE
-                    self.ds_agent_commands.emit(DsWriterCommand(op, self.metadata_getter()))
+                    meta = self.metadata_getter() if op == DsWriterCommandType.STOP_EPISODE else {}
+                    self.ds_agent_commands.emit(DsWriterCommand(op, meta))
                     self.sound_emitter.emit(start_wav_path if not recording else end_wav_path)
                     recording = not recording
                 elif button_handler.just_pressed('right_A'):
@@ -240,6 +246,14 @@ def main(robot_arm: Any | None,
                 break
 
 
+def controller_positions_serializer(controller_positions: Dict[str, geom.Transform3D]) -> Dict[str, np.ndarray]:
+    res = {}
+    for side, pos in controller_positions.items():
+        if pos is not None:
+            res[f'.{side}'] = Serializers.transform_3d(pos)
+    return res
+
+
 def main_sim(mujoco_model_path: str,
              webxr: WebXR,
              sound: Any | None = None,
@@ -265,15 +279,21 @@ def main_sim(mujoco_model_path: str,
 
         data_collection = DataCollectionController(operator_position.value, metadata_getter=metadata_getter)
 
-        keys = ['target_grip', 'robot_commands', 'controller_positions', 'robot_state', 'grip']
         cameras = cameras or {}
         camera_mappings = {
             camera_name: f'image.{camera_name}' if camera_name != 'image' else 'image'
             for camera_name in cameras.keys()
         }
-        keys.extend(camera_mappings.values())
+        signal_specs = {
+            'target_grip': None,
+            'robot_commands': Serializers.robot_command,
+            'controller_positions': controller_positions_serializer,
+            'robot_state': Serializers.robot_state,
+            'grip': None,
+            **{v: None for v in camera_mappings.values()}
+        }
 
-        ds_agent = DsWriterAgent(LocalDatasetWriter(Path(output_dir)), keys) if output_dir is not None else None
+        ds_agent = DsWriterAgent(LocalDatasetWriter(Path(output_dir)), signal_specs) if output_dir is not None else None
 
         for camera_name, camera in cameras.items():
             if ds_agent is not None:

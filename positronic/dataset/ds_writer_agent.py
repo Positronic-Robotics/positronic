@@ -7,6 +7,7 @@ import numpy as np
 
 import pimm
 from positronic import geom
+from positronic.drivers import roboarm
 
 from .core import DatasetWriter, EpisodeWriter
 
@@ -48,8 +49,42 @@ class DsWriterCommand:
 Serializer = Callable[[Any], Any | dict[str, Any]]
 
 
-def transform3d(x: geom.Transform3D) -> np.ndarray:
-    return np.concatenate([x.translation, x.rotation.as_quat])
+class Serializers:
+    """Namespace of built-in serializers for convenience.
+
+    Usage:
+        from positronic.dataset.ds_writer_agent import Serializers
+        spec = {"ee_pose": Serializers.transform_3d}
+        agent = DsWriterAgent(writer, spec)
+
+    Notes:
+        - Also exported as `Serializers` (US spelling) for convenience.
+    """
+
+    @staticmethod
+    def transform_3d(x: geom.Transform3D) -> np.ndarray:
+        """Serialize a Transform3D into a 7D vector [tx, ty, tz, qx, qy, qz, qw]."""
+        return np.concatenate([x.translation, x.rotation.as_quat])
+
+    @staticmethod
+    def robot_state(state: roboarm.State) -> dict[str, np.ndarray] | None:
+        if state.status == roboarm.RobotStatus.RESETTING:
+            return None
+        return {
+            '.q': state.q,
+            '.dq': state.dq,
+            '.ee_pose': Serializers.transform_3d(state.ee_pose),
+        }
+
+    @staticmethod
+    def robot_command(command: roboarm.command.CommandType) -> dict[str, np.ndarray | int] | None:
+        match command:
+            case roboarm.command.CartesianMove(pose):
+                return {'.pose': Serializers.transform_3d(pose)}
+            case roboarm.command.JointMove(positions):
+                return {'.joints': positions}
+            case roboarm.command.Reset():
+                return {'.reset': 1}
 
 
 class DsWriterAgent:
