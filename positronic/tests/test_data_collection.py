@@ -11,7 +11,7 @@ from positronic.geom import Transform3D, Rotation
 from positronic.data_collection import DataCollectionController as DataCollection
 from positronic.dataset.local_dataset import LocalDataset
 
-
+# TODO: Move these fixtures into a common module so that others can reuse them.
 @pytest.fixture
 def clock():
     return MockClock()
@@ -35,6 +35,18 @@ def run_interleaved(clock, world):
             clock.advance(sleep.seconds)
     return _run
 
+def make_buttons(*, trigger: float = 0.0, thumb: float = 0.0, stick: float = 0.0, A: bool = False, B: bool = False) -> Dict:
+    """Constructs controller buttons payload matching DataCollection mapping."""
+    return {
+        'left': None,
+        'right': [trigger, thumb, 0.0, stick, 1.0 if A else 0.0, 1.0 if B else 0.0],
+    }
+
+
+def assert_strictly_increasing(sig):
+    for i in range(1, len(sig)):
+        assert sig[i][1] > sig[i - 1][1]
+
 
 def build_collection(world, out_dir: Path):
     dc = DataCollection(operator_position=None, output_dir=str(out_dir), fps=30)
@@ -55,10 +67,7 @@ def test_data_collection_basic_recording(tmp_path, world, run_interleaved):
 
     def driver(_stop, _clk) -> Iterator[pimm.Sleep]:
         # Press right_B to start recording. Also set right_trigger value.
-        buttons_em.emit({
-            'left': None,
-            'right': [0.7, 0.0, 0.0, 0.0, 0.0, 1.0],  # trigger=0.7, B=1.0
-        })
+        buttons_em.emit(make_buttons(trigger=0.7, B=True))
         yield pimm.Sleep(0.001)
 
         # Send controller pose and a gripper state update
@@ -67,9 +76,9 @@ def test_data_collection_basic_recording(tmp_path, world, run_interleaved):
         yield pimm.Sleep(0.001)
 
         # Release B then press again to stop
-        buttons_em.emit({'left': None, 'right': [0.7, 0.0, 0.0, 0.0, 0.0, 0.0]})
+        buttons_em.emit(make_buttons(trigger=0.7, B=False))
         yield pimm.Sleep(0.001)
-        buttons_em.emit({'left': None, 'right': [0.7, 0.0, 0.0, 0.0, 0.0, 1.0]})
+        buttons_em.emit(make_buttons(trigger=0.7, B=True))
         yield pimm.Sleep(0.001)
 
     run_interleaved(dc.run, driver)
@@ -105,11 +114,6 @@ def test_data_collection_basic_recording(tmp_path, world, run_interleaved):
     np.testing.assert_allclose(r_quat[0][0], right_pose.rotation.as_quat)
     np.testing.assert_allclose(t_quat[0][0], right_pose.rotation.as_quat)
 
-    # Timestamps should be strictly increasing for dynamic signals
-    def assert_strictly_increasing(sig):
-        for i in range(1, len(sig)):
-            assert sig[i][1] > sig[i - 1][1]
-
     assert_strictly_increasing(r_trans)
     assert_strictly_increasing(tgt_grip)
 
@@ -144,11 +148,11 @@ def test_data_collection_with_mujoco_robot_gripper(tmp_path):
         # Interleave sim, robot, gripper, and data collection
         def driver(_stop, _clk):
             # Start recording with B press and set trigger=0.5
-            buttons_em.emit({'left': None, 'right': [0.5, 0.0, 0.0, 0.0, 0.0, 1.0]})
+            buttons_em.emit(make_buttons(trigger=0.5, B=True))
             yield pimm.Sleep(0.01)
 
             # Enable tracking with A press so target pose is produced
-            buttons_em.emit({'left': None, 'right': [0.5, 0.0, 0.0, 0.0, 1.0, 0.0]})
+            buttons_em.emit(make_buttons(trigger=0.5, A=True))
             yield pimm.Sleep(0.01)
 
             # Send controller pose to move the robot a bit; keep it identity to simplify
@@ -156,9 +160,9 @@ def test_data_collection_with_mujoco_robot_gripper(tmp_path):
             yield pimm.Sleep(0.02)
 
             # Stop recording with another B press
-            buttons_em.emit({'left': None, 'right': [0.5, 0.0, 0.0, 0.0, 0.0, 0.0]})
+            buttons_em.emit(make_buttons(trigger=0.5, B=False))
             yield pimm.Sleep(0.005)
-            buttons_em.emit({'left': None, 'right': [0.5, 0.0, 0.0, 0.0, 0.0, 1.0]})
+            buttons_em.emit(make_buttons(trigger=0.5, B=True))
             yield pimm.Sleep(0.005)
 
         steps = iter(world.interleave(sim.run, robot.run, gripper.run, dc.run, driver))

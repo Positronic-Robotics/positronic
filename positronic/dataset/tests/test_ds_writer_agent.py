@@ -81,18 +81,11 @@ class FakeDatasetWriter(DatasetWriter):
 
 def build_agent_with_pipes(signal_names: list[str], ds_writer: DatasetWriter, world: pimm.World):
     agent = DsWriterAgent(ds_writer, signal_names)
-    # command channel
-    cmd_em, cmd_rd = world.local_pipe()
-    agent.command = cmd_rd  # type: ignore
-
-    # inputs channels, keep emitters for tests
-    emitters = {}
-    readers = []
+    emitters: dict[str, pimm.SignalEmitter[Any]] = {}
     for name in signal_names:
-        em, rd = world.local_pipe(maxsize=8)
-        emitters[name] = em
-        readers.append(rd)
-    agent.inputs = agent.inputs.__class__(*readers)  # replace namedtuple instance
+        emitters[name], agent.inputs[name] = world.local_pipe(maxsize=8)
+
+    cmd_em, agent.command = world.local_pipe()
 
     return agent, cmd_em, emitters
 
@@ -212,3 +205,19 @@ def test_integration_with_local_dataset_writer(tmp_path, world, clock, run_agent
     b = ep["b"]
     assert len(a) == 1 and len(b) == 1
     assert a[0][0] == 10 and b[0][0] == 20
+
+
+def test_inputs_mapping_is_immutable(world, clock, run_agent):
+    ds = FakeDatasetWriter()
+    agent, cmd_em, emitters = build_agent_with_pipes(["a"], ds, world)
+
+    # Cannot add new key
+    with pytest.raises(TypeError):
+        agent.inputs["b"] = pimm.NoOpReader()
+    # Can modify existing key's value
+    new_em, new_rd = world.local_pipe(maxsize=8)
+    agent.inputs["a"] = new_rd
+    assert agent.inputs["a"] is new_rd
+    # Deleting keys is not allowed
+    with pytest.raises(TypeError):
+        del agent.inputs["a"]
