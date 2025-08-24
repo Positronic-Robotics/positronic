@@ -87,6 +87,51 @@ class Serializers:
                 return {'.reset': 1}
 
 
+def _handle_command(ds_writer: DatasetWriter, cmd: DsWriterCommand, ep_writer: EpisodeWriter | None,
+                    ep_counter: int) -> tuple[EpisodeWriter | None, int]:
+    match cmd.type:
+        case DsWriterCommandType.START_EPISODE:
+            if ep_writer is None:
+                ep_counter += 1
+                print(f"DsWriterAgent: [START] Episode {ep_counter}")
+                ep_writer = ds_writer.new_episode()
+                for k, v in cmd.static_data.items():
+                    ep_writer.set_static(k, v)
+            else:
+                print("Episode already started, ignoring start command")
+        case DsWriterCommandType.STOP_EPISODE:
+            if ep_writer is not None:
+                for k, v in cmd.static_data.items():
+                    ep_writer.set_static(k, v)
+                ep_writer.__exit__(None, None, None)
+                print(f"DsWriterAgent: [STOP] Episode {ep_counter}")
+                ep_writer = None
+            else:
+                print("Episode not started, ignoring stop command")
+        case DsWriterCommandType.ABORT_EPISODE:
+            if ep_writer is not None:
+                ep_writer.abort()
+                ep_writer.__exit__(None, None, None)
+                print(f"DsWriterAgent: [ABORT] Episode {ep_counter}")
+                ep_writer = None
+            else:
+                print("Episode not started, ignoring abort command")
+    return ep_writer, ep_counter
+
+
+def _append_processed(ep_writer: EpisodeWriter, name: str, value: Any, clock: pimm.Clock) -> None:
+    ts = clock.now_ns()
+    if isinstance(value, dict):
+        for suffix, v in value.items():
+            if v is None:
+                continue
+            ep_writer.append(name + suffix, v, ts)
+    else:
+        if value is None:
+            return
+        ep_writer.append(name, value, ts)
+
+
 class DsWriterAgent:
     """Streams input signals into episodes based on control commands.
 
@@ -119,6 +164,11 @@ class DsWriterAgent:
         return self._inputs_view  # type: ignore[return-value]
 
     def run(self, should_stop: pimm.SignalReader, clock: pimm.Clock):
+        """Main loop: process commands and append updated inputs to the episode.
+
+        Refactored to reduce complexity: command handling, serialization, and
+        appending are split into helpers.
+        """
         limiter = pimm.utils.RateLimiter(clock, hz=self._poll_hz)
         commands = pimm.DefaultReader(pimm.ValueUpdated(self.command), (None, False))
 
@@ -132,50 +182,16 @@ class DsWriterAgent:
         while not should_stop.value:
             cmd, cmd_updated = commands.value
             if cmd_updated:
-                cmd: DsWriterCommand
-                match cmd.type:
-                    case DsWriterCommandType.START_EPISODE:
-                        if ep_writer is None:
-                            ep_counter += 1
-                            print(f"DsWriterAgent: [START] Episode {ep_counter}")
-                            ep_writer = self.ds_writer.new_episode()
-                            for k, v in cmd.static_data.items():
-                                ep_writer.set_static(k, v)
-                        else:
-                            print("Episode already started, ignoring start command")
-                    case DsWriterCommandType.STOP_EPISODE:
-                        if ep_writer is not None:
-                            for k, v in cmd.static_data.items():
-                                ep_writer.set_static(k, v)
-                            ep_writer.__exit__(None, None, None)
-                            print(f"DsWriterAgent: [STOP] Episode {ep_counter}")
-                            ep_writer = None
-                        else:
-                            print("Episode not started, ignoring stop command")
-                    case DsWriterCommandType.ABORT_EPISODE:
-                        if ep_writer is not None:
-                            ep_writer.abort()
-                            ep_writer.__exit__(None, None, None)
-                            print(f"DsWriterAgent: [ABORT] Episode {ep_counter}")
-                            ep_counter -= 1
-                            ep_writer = None
-                        else:
-                            print("Episode not started, ignoring abort command")
+                ep_writer, ep_counter = _handle_command(self.ds_writer, cmd, ep_writer, ep_counter)
 
             if ep_writer is not None:
                 for name, reader in signals.items():
                     value, updated = reader.value
                     if updated:
-                        if name in self._serializers:
-                            value = self._serializers[name](value)
-
-                        if isinstance(value, dict):
-                            for suffix, v in value.items():
-                                if v is not None:
-                                    ep_writer.append(name + suffix, v, clock.now_ns())
-                        else:
-                            if value is not None:
-                                ep_writer.append(name, value, clock.now_ns())
+                        serializer = self._serializers.get(name)
+                        if serializer is not None:
+                            value = serializer(value)
+                        _append_processed(ep_writer, name, value, clock)
 
             yield pimm.Sleep(limiter.wait_time())
 
