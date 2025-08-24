@@ -5,6 +5,6 @@
 
 ## Testing insturctions
 - Find the CI plan in .github/workflows directory.
-- Run tests locally using `pytest` command. Use virtual environment (`.venv/bin/activate`)
+- Run tests locally using `pytest` command. Use virtual environment (`.venv/bin/activate`). Disable coverage with `--no-cov` argument.
 - Add or update tests for the code you change, even if nobody asked.
 - Don't add new test files unless explicitly asked

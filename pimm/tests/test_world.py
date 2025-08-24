@@ -1,28 +1,13 @@
-import time
-import pytest
 import multiprocessing as mp
+import time
 from queue import Empty, Full
 from unittest.mock import Mock, patch
 
-from pimm.core import Clock, Message, SignalEmitter, SignalReader, Sleep
-from pimm.world import (QueueEmitter, QueueReader, EventReader, SystemClock, World)
+import pytest
 
-
-class MockClock(Clock):
-    """Mock clock that can be controlled for testing."""
-
-    def __init__(self, start_time: float = 0.0):
-        self._time = start_time
-
-    def now(self) -> float:
-        return self._time
-
-    def now_ns(self) -> int:
-        return int(self._time * 1e9)
-
-    def advance(self, delta: float):
-        """Advance the clock by delta seconds."""
-        self._time += delta
+from pimm.core import Message, SignalEmitter, SignalReader, Sleep
+from pimm.testing import MockClock
+from pimm.world import EventReader, QueueEmitter, QueueReader, SystemClock, World
 
 
 def dummy_process(stop_reader, clock):
@@ -187,15 +172,10 @@ class TestEventReader:
 
     def test_event_reader_uses_clock(self):
         """Test that EventReader uses clocks for timestamps."""
-        class MockClock(Clock):
-            def now(self) -> float:
-                return 0.987654321
-
-            def now_ns(self) -> int:
-                return 987654321
-
         event = mp.Event()
-        reader = EventReader(event, MockClock())
+        clk = MockClock()
+        clk.set(0.987654321)
+        reader = EventReader(event, clk)
 
         result = reader.read()
         assert result.ts == 987654321
