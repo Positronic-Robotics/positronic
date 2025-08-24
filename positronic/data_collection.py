@@ -13,7 +13,7 @@ import positronic.cfg.hardware.roboarm
 import positronic.cfg.simulator
 import positronic.cfg.sound
 import positronic.cfg.webxr
-from positronic.dataset.core import DatasetWriter
+from positronic.dataset.ds_writer_agent import DsWriterAgent, DsWriterCommand, DsWriterCommandType
 from positronic.drivers import roboarm
 from positronic.drivers.webxr import WebXR
 from positronic.gui.dpg import DearpyguiUi
@@ -85,66 +85,6 @@ class _Tracker:
                                 self._teleop_t.rotation * self._offset.rotation)
 
 
-# TODO: Support aborting current episode.
-class Recorder:
-
-    def __init__(self, ds_writer: DatasetWriter | None, sound_emitter: pimm.SignalEmitter[str], clock: pimm.Clock):
-        self.on = False
-
-        self._episode_count = 0
-        self._ds_writer = ds_writer
-        self._ep_writer = None
-
-        self._sound_emitter = sound_emitter
-        self._start_wav_path = "positronic/assets/sounds/recording-has-started.wav"
-        self._end_wav_path = "positronic/assets/sounds/recording-has-stopped.wav"
-        self._meta = {}
-        self._clock = clock
-        self._fps_counter = pimm.utils.RateCounter("Recorder")
-
-    def turn_on(self, **static_data: dict):
-        if self._ds_writer is None:
-            print("No dumper, ignoring 'start recording' command")
-            return
-
-        if not self.on:
-            if self._ds_writer is not None and self._ep_writer is None:
-                self._ep_writer = self._ds_writer.new_episode()
-                for k, v in static_data.items():
-                    self._ep_writer.set_static(k, v)
-                self._episode_count += 1
-                print(f"Episode {self._episode_count} started")
-                self._sound_emitter.emit(self._start_wav_path)
-            self.on = True
-        else:
-            print("Already recording, ignoring 'start recording' command")
-
-    def turn_off(self, **static_data: dict):
-        if self._ds_writer is None:
-            print("No dumper, ignoring 'stop recording' command")
-            return
-
-        if self.on:
-            if self._ds_writer is not None:
-                for k, v in static_data.items():
-                    self._ep_writer.set_static(k, v)
-                self._ep_writer.__exit__(None, None, None)
-                self._ep_writer = None
-
-            print(f"Episode {self._episode_count} ended")
-            self._sound_emitter.emit(self._end_wav_path)
-            self.on = False
-        else:
-            print("Not recording, ignoring turn_off")
-
-    def write(self, signal_name: str, data: Any, ts_ns: int | None = None):
-        if not self.on:
-            return
-
-        if self._ds_writer is not None:
-            self._ep_writer.append(signal_name, data, ts_ns or self._clock.now_ns())
-
-
 class OperatorPosition(Enum):
     # map xyz -> zxy
     FRONT = geom.Transform3D(rotation=geom.Rotation.from_quat([0.5, 0.5, 0.5, 0.5]))
@@ -153,47 +93,39 @@ class OperatorPosition(Enum):
 
 
 class DataCollectionController:
-    frame_readers: Dict[str, pimm.SignalReader] = {}
     controller_positions_reader: pimm.SignalReader[Dict[str, geom.Transform3D]] = pimm.NoOpReader()
     buttons_reader: pimm.SignalReader[Dict] = pimm.NoOpReader()
     robot_state: pimm.SignalReader[roboarm.State] = pimm.NoOpReader()
-    gripper_state: pimm.SignalReader[float] = pimm.NoOpReader()
 
     robot_commands: pimm.SignalEmitter[roboarm.command.CommandType] = pimm.NoOpEmitter()
     target_grip_emitter: pimm.SignalEmitter[float] = pimm.NoOpEmitter()
+
+    ds_agent_commands: pimm.SignalEmitter[DsWriterCommand] = pimm.NoOpEmitter()
     sound_emitter: pimm.SignalEmitter[str] = pimm.NoOpEmitter()
 
-    def __init__(self,
-                 operator_position: geom.Transform3D | None,
-                 output_dir: str | None,
-                 fps: int,
-                 metadata_getter: Callable[[], Dict] | None = None):
+    def __init__(self, operator_position: geom.Transform3D | None, metadata_getter: Callable[[], Dict] | None = None):
         self.operator_position = operator_position
-        self.output_dir = output_dir
-        self.fps = fps
         self.metadata_getter = metadata_getter or (lambda: {})
 
     def run(self, should_stop: pimm.SignalReader, clock: pimm.Clock) -> Iterator[pimm.Sleep]:  # noqa: C901
-        frame_readers = {
-            camera_name: pimm.DefaultReader(pimm.ValueUpdated(frame_reader), ({}, False))
-            for camera_name, frame_reader in self.frame_readers.items()
-        }
+        start_wav_path = "positronic/assets/sounds/recording-has-started.wav"
+        end_wav_path = "positronic/assets/sounds/recording-has-stopped.wav"
+
         controller_positions_reader = pimm.ValueUpdated(self.controller_positions_reader)
-        gripper_state_reader = pimm.DefaultReader(pimm.ValueUpdated(self.gripper_state), (None, False))
 
         tracker = _Tracker(self.operator_position)
-        writer = LocalDatasetWriter(Path(self.output_dir)) if self.output_dir is not None else None
-        recorder = Recorder(writer, self.sound_emitter, clock)
         button_handler = ButtonHandler()
+
+        recording = False
 
         while not should_stop.value:
             try:
                 _parse_buttons(self.buttons_reader.value, button_handler)
                 if button_handler.just_pressed('right_B'):
-                    if recorder.on:
-                        recorder.turn_off()
-                    else:
-                        recorder.turn_on(**self.metadata_getter())
+                    op = DsWriterCommandType.START_EPISODE if not recording else DsWriterCommandType.STOP_EPISODE
+                    self.ds_agent_commands.emit(DsWriterCommand(op, self.metadata_getter()))
+                    self.sound_emitter.emit(start_wav_path if not recording else end_wav_path)
+                    recording = not recording
                 elif button_handler.just_pressed('right_A'):
                     if tracker.on:
                         tracker.turn_off()
@@ -201,52 +133,17 @@ class DataCollectionController:
                         tracker.turn_on(self.robot_state.value.ee_pose)
                 elif button_handler.just_pressed('right_stick') and not tracker.umi_mode:
                     print("Resetting robot")
-                    recorder.turn_off()
+                    self.ds_agent_commands.emit(DsWriterCommand(DsWriterCommandType.ABORT_EPISODE))
+                    # TODO: add sound for aborting
                     tracker.turn_off()
                     self.robot_commands.emit(roboarm.command.Reset())
 
-                target_grip = button_handler.get_value('right_trigger')
-                recorder.write('target_grip', target_grip)
-                self.target_grip_emitter.emit(target_grip)
-
+                self.target_grip_emitter.emit(button_handler.get_value('right_trigger'))
                 controller_pos, controller_pos_updated = controller_positions_reader.value
-                target_ts = clock.now_ns()
                 if controller_pos_updated:
                     target_robot_pos = tracker.update(controller_pos['right'])
                     if tracker.on:  # Don't spam the robot with commands.
-                        recorder.write('target_robot_position_translation', target_robot_pos.translation, target_ts)
-                        recorder.write('target_robot_position_quaternion', target_robot_pos.rotation.as_quat, target_ts)
                         self.robot_commands.emit(roboarm.command.CartesianMove(target_robot_pos))
-
-                    if controller_pos['right'] is not None:
-                        recorder.write('right_controller_translation', controller_pos['right'].translation, target_ts)
-                        recorder.write('right_controller_quaternion', controller_pos['right'].rotation.as_quat,
-                                       target_ts)
-                    if controller_pos['left'] is not None:
-                        recorder.write('left_controller_translation', controller_pos['left'].translation, target_ts)
-                        recorder.write('left_controller_quaternion', controller_pos['left'].rotation.as_quat, target_ts)
-
-                for name, reader in frame_readers.items():
-                    frame, updated = reader.value
-                    image_ts = clock.now_ns()
-                    if updated:
-                        for k, image in frame.items():
-                            out_name = 'image.' + (name if k == 'image' else f'{name}.{k}')
-                            recorder.write(out_name, image, image_ts)
-
-                value = self.robot_state.read()
-
-                if value is not None:
-                    robot_ts = clock.now_ns()
-                    value = value.data
-                    recorder.write('robot_position_translation', value.ee_pose.translation, robot_ts)
-                    recorder.write('robot_position_rotation', value.ee_pose.rotation.as_quat, robot_ts)
-                    recorder.write('robot_joints', value.q, robot_ts)
-                    recorder.write('robot_joints_velocity', value.dq, robot_ts)
-
-                gripper_state, gripper_state_updated = gripper_state_reader.value
-                if gripper_state_updated:
-                    recorder.write('grip', gripper_state, target_ts)
 
                 yield pimm.Sleep(0.001)
 
@@ -261,17 +158,65 @@ def main(robot_arm: Any | None,
          sound: Any | None,
          cameras: Dict[str, Any] | None,
          output_dir: str | None = None,
-         fps: int = 30,
          stream_video_to_webxr: str | None = None,
          operator_position: OperatorPosition = OperatorPosition.FRONT):
     """Runs data collection in real hardware."""
     with pimm.World() as world:
-        data_collection = DataCollectionController(operator_position.value, output_dir, fps)
+        data_collection = DataCollectionController(operator_position.value)
+        keys = ['target_grip', 'robot_commands', 'controller_positions', 'robot_state', 'grip']
         cameras = cameras or {}
-        for camera_name, camera in cameras.items():
-            camera.frame, data_collection.frame_readers[camera_name] = world.mp_pipe()
+        camera_mappings = {
+            camera_name: f'image.{camera_name}' if camera_name != 'image' else 'image'
+            for camera_name in cameras.keys()
+        }
+        keys.extend(camera_mappings.values())
 
-        webxr.controller_positions, data_collection.controller_positions_reader = world.mp_pipe()
+        ds_agent = DsWriterAgent(LocalDatasetWriter(Path(output_dir)), keys) if output_dir is not None else None
+        if ds_agent is not None:
+            data_collection.ds_agent_commands, ds_agent.command = world.mp_pipe()
+            for camera_name, output_name in camera_mappings.items():
+                cameras[camera_name].frame, ds_agent.inputs[output_name] = world.mp_pipe()
+
+        if gripper is not None:
+            ems = []
+            if ds_agent is not None:
+                gripper.grip, ds_agent.inputs['grip'] = world.mp_pipe()
+                tgem, ds_agent.inputs['target_grip'] = world.mp_pipe()
+                ems.append(tgem)
+
+            tgem, gripper.target_grip = world.mp_pipe()
+            ems.append(tgem)
+            data_collection.target_grip_emitter = pimm.BroadcastEmitter(ems)
+            world.start_in_subprocess(gripper.run)
+
+        if robot_arm is not None:
+            cmd_ems = []
+            x, robot_arm.commands = world.mp_pipe()
+            cmd_ems.append(x)
+            if ds_agent is not None:
+                x, ds_agent.inputs['robot_commands'] = world.mp_pipe()
+                cmd_ems.append(x)
+            data_collection.robot_commands = pimm.BroadcastEmitter(cmd_ems)
+
+            state_ems = []
+            if ds_agent is not None:
+                x, ds_agent.inputs['robot_state'] = world.shared_memory()
+                state_ems.append(x)
+            x, data_collection.robot_state = world.shared_memory()
+            state_ems.append(x)
+            robot_arm.state = pimm.BroadcastEmitter(state_ems)
+            world.start_in_subprocess(robot_arm.run)
+
+        ctrl_ems = []
+        if ds_agent is not None:
+            emt, ds_agent.inputs['controller_positions'] = world.mp_pipe()
+            ctrl_ems.append(emt)
+            world.start_in_subprocess(ds_agent.run)
+
+        emt, data_collection.controller_positions_reader = world.mp_pipe()
+        ctrl_ems.append(emt)
+        webxr.controller_positions = pimm.BroadcastEmitter(ctrl_ems)
+
         webxr.buttons, data_collection.buttons_reader = world.mp_pipe()
 
         if stream_video_to_webxr is not None:
@@ -283,23 +228,11 @@ def main(robot_arm: Any | None,
 
         world.start_in_subprocess(webxr.run, *[camera.run for camera in cameras.values()])
 
-        if robot_arm is not None:
-            robot_arm.state, data_collection.robot_state = world.shared_memory()
-            data_collection.robot_commands, robot_arm.commands = world.mp_pipe(1)
-            if gripper is not robot_arm:
-                world.start_in_subprocess(robot_arm.run)
-
-        if gripper is not None:
-            data_collection.target_grip_emitter, gripper.target_grip = world.mp_pipe()
-            gripper.grip, data_collection.gripper_state = world.mp_pipe()
-            world.start_in_subprocess(gripper.run)
-
         if sound is not None:
             data_collection.sound_emitter, sound.wav_path = world.mp_pipe()
             world.start_in_subprocess(sound.run)
 
         dc_steps = iter(world.interleave(data_collection.run))
-
         while not world.should_stop:
             try:
                 time.sleep(next(dc_steps).seconds)
@@ -330,25 +263,69 @@ def main_sim(mujoco_model_path: str,
         def metadata_getter():
             return {k: v.tolist() for k, v in sim.save_state().items()}
 
-        data_collection = DataCollectionController(operator_position.value,
-                                                   output_dir,
-                                                   fps,
-                                                   metadata_getter=metadata_getter)
-        cameras = cameras or {}
-        for camera_name, camera in cameras.items():
-            camera.frame, (data_collection.frame_readers[camera_name],
-                           gui.cameras[camera_name]) = world.mp_one_to_many_pipe(2)
+        data_collection = DataCollectionController(operator_position.value, metadata_getter=metadata_getter)
 
-        webxr.controller_positions, data_collection.controller_positions_reader = world.mp_pipe()
+        keys = ['target_grip', 'robot_commands', 'controller_positions', 'robot_state', 'grip']
+        cameras = cameras or {}
+        camera_mappings = {
+            camera_name: f'image.{camera_name}' if camera_name != 'image' else 'image'
+            for camera_name in cameras.keys()
+        }
+        keys.extend(camera_mappings.values())
+
+        ds_agent = DsWriterAgent(LocalDatasetWriter(Path(output_dir)), keys) if output_dir is not None else None
+
+        for camera_name, camera in cameras.items():
+            if ds_agent is not None:
+                camera.frame, (ds_reader, gui_reader) = world.mp_one_to_many_pipe(2)
+                ds_agent.inputs[camera_mappings[camera_name]] = ds_reader
+                gui.cameras[camera_name] = gui_reader
+            else:
+                camera.frame, gui.cameras[camera_name] = world.mp_pipe()
+
+        # WebXR I/O
+        ctrl_emitters = []
+        if ds_agent is not None:
+            em, ds_agent.inputs['controller_positions'] = world.mp_pipe()
+            ctrl_emitters.append(em)
+
+        em, data_collection.controller_positions_reader = world.mp_pipe()
+        ctrl_emitters.append(em)
+        webxr.controller_positions = pimm.BroadcastEmitter(ctrl_emitters)
         webxr.buttons, data_collection.buttons_reader = world.mp_pipe()
 
         world.start_in_subprocess(webxr.run, gui.run)
 
-        robot_arm.state, data_collection.robot_state = world.local_pipe()
-        data_collection.robot_commands, robot_arm.commands = world.local_pipe()
+        state_emitters = []
+        if ds_agent is not None:
+            x, ds_agent.inputs['robot_state'] = world.shared_memory()
+            state_emitters.append(x)
+        x, data_collection.robot_state = world.shared_memory()
+        state_emitters.append(x)
+        robot_arm.state = pimm.BroadcastEmitter(state_emitters)
 
-        data_collection.target_grip_emitter, gripper.target_grip = world.local_pipe()
-        gripper.grip, data_collection.gripper_state = world.local_pipe()
+        cmd_emitters = []
+        x, robot_arm.commands = world.mp_pipe()
+        cmd_emitters.append(x)
+        if ds_agent is not None:
+            x, ds_agent.inputs['robot_commands'] = world.mp_pipe()
+            cmd_emitters.append(x)
+        data_collection.robot_commands = pimm.BroadcastEmitter(cmd_emitters)
+
+        tg_emitters = []
+        x, gripper.target_grip = world.mp_pipe()
+        tg_emitters.append(x)
+        if ds_agent is not None:
+            x, ds_agent.inputs['target_grip'] = world.mp_pipe()
+            tg_emitters.append(x)
+        data_collection.target_grip_emitter = pimm.BroadcastEmitter(tg_emitters)
+
+        if ds_agent is not None:
+            gripper.grip, ds_agent.inputs['grip'] = world.mp_pipe()
+
+        if ds_agent is not None:
+            data_collection.ds_agent_commands, ds_agent.command = world.mp_pipe()
+            world.start_in_subprocess(ds_agent.run)
 
         if sound is not None:
             data_collection.sound_emitter, sound.wav_path = world.mp_pipe()

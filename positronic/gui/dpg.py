@@ -12,14 +12,13 @@ def _get_down_keys() -> List[int]:
 
 
 class DearpyguiUi:
-    cameras: Dict[str, pimm.SignalReader] = {}
-    info: pimm.SignalReader = pimm.NoOpReader()
-
-    buttons: pimm.SignalEmitter = pimm.NoOpEmitter()
-
     def __init__(self):
         self.width = 320
         self.height = 240
+        # Instance-level state to survive pickling into subprocesses
+        self.cameras: Dict[str, pimm.SignalReader] = {}
+        self.info: pimm.SignalReader = pimm.NoOpReader()
+        self.buttons: pimm.SignalEmitter = pimm.NoOpEmitter()
 
     def init(self):
         self.cameras = {
