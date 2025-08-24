@@ -169,15 +169,23 @@ def main(robot_arm: Any | None,
     """Runs data collection in real hardware."""
     with pimm.World() as world:
         data_collection = DataCollectionController(operator_position.value)
-        keys = ['target_grip', 'robot_commands', 'controller_positions', 'robot_state', 'grip']
         cameras = cameras or {}
         camera_mappings = {
             camera_name: f'image.{camera_name}' if camera_name != 'image' else 'image'
             for camera_name in cameras.keys()
         }
-        keys.extend(camera_mappings.values())
 
-        ds_agent = DsWriterAgent(LocalDatasetWriter(Path(output_dir)), keys) if output_dir is not None else None
+        # Build ds_agent with serializers if output_dir provided
+        signal_specs = {
+            'target_grip': None,
+            'robot_commands': Serializers.robot_command,
+            'controller_positions': controller_positions_serializer,
+            'robot_state': Serializers.robot_state,
+            'grip': None,
+            **{v: None for v in camera_mappings.values()},
+        }
+
+        ds_agent = DsWriterAgent(LocalDatasetWriter(Path(output_dir)), signal_specs) if output_dir is not None else None
         if ds_agent is not None:
             data_collection.ds_agent_commands, ds_agent.command = world.mp_pipe()
             for camera_name, output_name in camera_mappings.items():
@@ -217,7 +225,6 @@ def main(robot_arm: Any | None,
         if ds_agent is not None:
             emt, ds_agent.inputs['controller_positions'] = world.mp_pipe()
             ctrl_ems.append(emt)
-            world.start_in_subprocess(ds_agent.run)
 
         emt, data_collection.controller_positions_reader = world.mp_pipe()
         ctrl_ems.append(emt)
@@ -233,6 +240,9 @@ def main(robot_arm: Any | None,
             webxr.frame = pimm.map(reader, lambda x: x['image'])
 
         world.start_in_subprocess(webxr.run, *[camera.run for camera in cameras.values()])
+
+        if ds_agent is not None:
+            world.start_in_subprocess(ds_agent.run)
 
         if sound is not None:
             data_collection.sound_emitter, sound.wav_path = world.mp_pipe()
