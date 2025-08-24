@@ -1,12 +1,13 @@
-import time
-import pytest
 import multiprocessing as mp
+import time
 from queue import Empty, Full
 from unittest.mock import Mock, patch
 
-from pimm.core import Clock, Message, SignalEmitter, SignalReader, Sleep
-from pimm.world import (QueueEmitter, QueueReader, EventReader, SystemClock, World)
+import pytest
+
+from pimm.core import Message, SignalEmitter, SignalReader, Sleep
 from pimm.testing import MockClock
+from pimm.world import EventReader, QueueEmitter, QueueReader, SystemClock, World
 
 
 def dummy_process(stop_reader, clock):

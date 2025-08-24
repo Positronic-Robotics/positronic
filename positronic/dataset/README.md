@@ -264,3 +264,40 @@ with dataset_writer.new_episode() as ew:
     ew.set_static("id", 123)
     ew.append("state", np.array([...]), ts_ns)
 ```
+
+## DsWriterAgent (streaming recorder)
+
+`DsWriterAgent` is a control-loop component (based on our `pimm` library) that turns live inputs into episode recordings using a flexible serializer pipeline. It listens for episode lifecycle commands (start/stop/abort) and, while an episode is open, appends any updated inputs with timestamps from the provided clock.
+
+Key ideas
+- Inputs are declared up front via `signals_spec: dict[name -> Serializer|None]`.
+- The agent polls inputs at a configurable rate and appends only on updates.
+- A separate `command` channel controls episode lifecycle.
+
+`Serializer` is a pure function that know how to translate the incoming data into a format that `SignalWriter` can accept:
+- A serializer receives the latest value for the input and can return:
+  - Transformed value: recorded under the same input name.
+  - Dict of suffix -> value: expanded and recorded as `name + suffix` for each
+    item (use empty suffix `""` to keep the base name as-is).
+  - `None`: the sample is dropped (not recorded).
+- If the serializer is `None` in `signals_spec`, the value is passed through.
+
+Built‑in serializers (`positronic.dataset.ds_writer_agent.Serializers`)
+- `transform_3d(pose: Transform3D) -> np.ndarray`
+  - Returns `[tx, ty, tz, qx, qy, qz, qw]` (shape `(7,)`).
+- `robot_state(state: roboarm.State) -> dict | None`
+  - Drops samples when `status == RobotStatus.RESETTING`.
+  - Otherwise expands to `{'.q': q, '.dq': dq, '.ee_pose': transform_3d(ee)}`.
+- `robot_command(command) -> dict`
+  - `CartesianMove(pose)` -> `{'.pose': transform_3d(pose)}`
+  - `JointMove(positions)` -> `{'.joints': positions}`
+  - `Reset()` -> `{'.reset': 1}`
+
+Lifecycle
+- `START_EPISODE`: allocates a new episode writer and applies provided static
+  metadata (`DsWriterCommand(static_data=...)`).
+- `STOP_EPISODE`: finalizes the episode (applies static data then closes).
+- `ABORT_EPISODE`: aborts and discards the episode directory.
+
+Notes
+- Timestamps come from the agent’s clock; they are strictly increasing per signal.

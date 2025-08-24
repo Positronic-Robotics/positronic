@@ -30,4 +30,3 @@ class MockClock(Clock):
     def set(self, time_sec: float) -> float:
         self._time = float(time_sec)
         return self._time
-
