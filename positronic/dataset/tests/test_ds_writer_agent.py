@@ -79,10 +79,19 @@ class FakeDatasetWriter(DatasetWriter):
         return w
 
 
-def build_agent_with_pipes(signal_names: list[str], ds_writer: DatasetWriter, world: pimm.World):
-    agent = DsWriterAgent(ds_writer, signal_names)
+def build_agent_with_pipes(signals_spec: dict[str, Any], ds_writer: DatasetWriter, world: pimm.World):
+    """Build agent with given signals spec and wire local pipes.
+
+    - signals_spec maps input name -> serializer (or None for pass-through).
+    - A serializer can:
+        * return a transformed value (recorded under the same name),
+        * return a dict mapping suffixes to values (recorded as name+suffix),
+        * return None to drop the sample (not recorded at all).
+    Returns (agent, cmd_emitter, emitters_by_name).
+    """
+    agent = DsWriterAgent(ds_writer, signals_spec)
     emitters: dict[str, pimm.SignalEmitter[Any]] = {}
-    for name in signal_names:
+    for name in signals_spec.keys():
         emitters[name], agent.inputs[name] = world.local_pipe(maxsize=8)
 
     cmd_em, agent.command = world.local_pipe()
@@ -92,7 +101,7 @@ def build_agent_with_pipes(signal_names: list[str], ds_writer: DatasetWriter, wo
 
 def test_start_stop_happy_path(world, clock, run_agent):
     ds = FakeDatasetWriter()
-    agent, cmd_em, emitters = build_agent_with_pipes(["a", "b"], ds, world)
+    agent, cmd_em, emitters = build_agent_with_pipes({"a": None, "b": None}, ds, world)
 
     def driver(stop_reader, clk):
         cmd_em.emit(DsWriterCommand(DsWriterCommandType.START_EPISODE, {"user": "alice"}))
@@ -116,7 +125,7 @@ def test_start_stop_happy_path(world, clock, run_agent):
 
 def test_ignore_duplicate_commands_and_empty_stop(world, clock, run_agent):
     ds = FakeDatasetWriter()
-    agent, cmd_em, emitters = build_agent_with_pipes(["x"], ds, world)
+    agent, cmd_em, emitters = build_agent_with_pipes({"x": None}, ds, world)
 
     def driver(stop_reader, clk):
         cmd_em.emit(DsWriterCommand(DsWriterCommandType.STOP_EPISODE))  # ignored
@@ -137,7 +146,7 @@ def test_ignore_duplicate_commands_and_empty_stop(world, clock, run_agent):
 
 def test_abort_flow_then_restart(world, clock, run_agent):
     ds = FakeDatasetWriter()
-    agent, cmd_em, emitters = build_agent_with_pipes(["s"], ds, world)
+    agent, cmd_em, emitters = build_agent_with_pipes({"s": None}, ds, world)
 
     def driver(stop_reader, clk):
         cmd_em.emit(DsWriterCommand(DsWriterCommandType.START_EPISODE))
@@ -161,7 +170,7 @@ def test_abort_flow_then_restart(world, clock, run_agent):
 
 def test_appends_only_on_updates_and_timestamps_from_clock(world, clock, run_agent):
     ds = FakeDatasetWriter()
-    agent, cmd_em, emitters = build_agent_with_pipes(["a"], ds, world)
+    agent, cmd_em, emitters = build_agent_with_pipes({"a": None}, ds, world)
 
     def driver(stop_reader, clk):
         cmd_em.emit(DsWriterCommand(DsWriterCommandType.START_EPISODE))
@@ -183,7 +192,7 @@ def test_appends_only_on_updates_and_timestamps_from_clock(world, clock, run_age
 
 def test_integration_with_local_dataset_writer(tmp_path, world, clock, run_agent):
     writer = LocalDatasetWriter(tmp_path)
-    agent, cmd_em, emitters = build_agent_with_pipes(["a", "b"], writer, world)
+    agent, cmd_em, emitters = build_agent_with_pipes({"a": None, "b": None}, writer, world)
 
     def driver(stop_reader, clk):
         cmd_em.emit(DsWriterCommand(DsWriterCommandType.START_EPISODE, {"task": "unit"}))
@@ -209,7 +218,7 @@ def test_integration_with_local_dataset_writer(tmp_path, world, clock, run_agent
 
 def test_inputs_mapping_is_immutable(world, clock, run_agent):
     ds = FakeDatasetWriter()
-    agent, cmd_em, emitters = build_agent_with_pipes(["a"], ds, world)
+    agent, cmd_em, emitters = build_agent_with_pipes({"a": None}, ds, world)
 
     # Cannot add new key
     with pytest.raises(TypeError):
@@ -221,3 +230,79 @@ def test_inputs_mapping_is_immutable(world, clock, run_agent):
     # Deleting keys is not allowed
     with pytest.raises(TypeError):
         del agent.inputs["a"]
+
+
+def test_serializer_scalar_transform(world, clock, run_agent):
+    ds = FakeDatasetWriter()
+
+    # Serializer doubles the value
+    def double(x):
+        return x * 2
+
+    agent, cmd_em, emitters = build_agent_with_pipes({"x": double}, ds, world)
+
+    def driver(stop_reader, clk):
+        cmd_em.emit(DsWriterCommand(DsWriterCommandType.START_EPISODE))
+        yield pimm.Sleep(0.001)
+        emitters["x"].emit(3)
+        yield pimm.Sleep(0.001)
+        cmd_em.emit(DsWriterCommand(DsWriterCommandType.STOP_EPISODE))
+        yield pimm.Sleep(0.001)
+
+    run_agent(agent, driver)
+
+    w = ds.created[-1]
+    assert [(s, v) for (s, v, _) in w.appends] == [("x", 6)]
+
+
+def test_serializer_dict_expansion(world, clock, run_agent):
+    ds = FakeDatasetWriter()
+
+    # Serializer splits into two signals:
+    # - empty key keeps base name ("img")
+    # - non-empty keys are treated as suffixes appended to base name (e.g., ".extra")
+    def expand(v):
+        return {"": v, ".extra": v + 1}
+
+    agent, cmd_em, emitters = build_agent_with_pipes({"img": expand}, ds, world)
+
+    def driver(stop_reader, clk):
+        cmd_em.emit(DsWriterCommand(DsWriterCommandType.START_EPISODE))
+        yield pimm.Sleep(0.001)
+        emitters["img"].emit(10)
+        yield pimm.Sleep(0.001)
+        cmd_em.emit(DsWriterCommand(DsWriterCommandType.STOP_EPISODE))
+        yield pimm.Sleep(0.001)
+
+    run_agent(agent, driver)
+
+    w = ds.created[-1]
+    names_and_vals = [(s, v) for (s, v, _) in w.appends]
+    assert ("img", 10) in names_and_vals
+    assert ("img.extra", 11) in names_and_vals
+
+
+def test_serializer_none_drops_sample(world, clock, run_agent):
+    ds = FakeDatasetWriter()
+
+    # Serializer drops negative values by returning None (sample is not recorded)
+    def drop_negative(v):
+        return None if v < 0 else v
+
+    agent, cmd_em, emitters = build_agent_with_pipes({"x": drop_negative}, ds, world)
+
+    def driver(stop_reader, clk):
+        cmd_em.emit(DsWriterCommand(DsWriterCommandType.START_EPISODE))
+        yield pimm.Sleep(0.001)
+        emitters["x"].emit(3)    # kept
+        yield pimm.Sleep(0.001)
+        emitters["x"].emit(-1)   # dropped
+        yield pimm.Sleep(0.001)
+        cmd_em.emit(DsWriterCommand(DsWriterCommandType.STOP_EPISODE))
+        yield pimm.Sleep(0.001)
+
+    run_agent(agent, driver)
+
+    w = ds.created[-1]
+    # Only the positive value should be recorded
+    assert [(s, v) for (s, v, _) in w.appends] == [("x", 3)]

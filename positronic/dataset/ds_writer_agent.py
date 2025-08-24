@@ -1,9 +1,12 @@
+import collections.abc as cabc
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any
-import collections.abc as cabc
+from typing import Any, Callable
+
+import numpy as np
 
 import pimm
+from positronic import geom
 
 from .core import DatasetWriter, EpisodeWriter
 
@@ -34,6 +37,21 @@ class DsWriterCommand:
     static_data: dict[str, Any] = field(default_factory=dict)
 
 
+# Serializer contract for inputs:
+# - If None is provided for a signal name in signals_spec, the value is passed through unchanged.
+# - If a callable is provided, it is invoked as serializer(value) and can return:
+#     * a transformed value -> recorded under the same signal name
+#     * a dict mapping suffix -> value -> expands into multiple signals recorded as name+suffix
+#         - use "" (empty string) to keep the base name as-is
+#         - any dict entry with value None is skipped (not recorded)
+#     * None -> the sample is dropped (not recorded)
+Serializer = Callable[[Any], Any | dict[str, Any]]
+
+
+def transform3d(x: geom.Transform3D) -> np.ndarray:
+    return np.concatenate([x.translation, x.rotation.as_quat])
+
+
 class DsWriterAgent:
     """Streams input signals into episodes based on control commands.
 
@@ -45,16 +63,20 @@ class DsWriterAgent:
     applying `static_data`; `ABORT_EPISODE` aborts and discards it. Invalid or
     out-of-order commands are ignored with a log message.
     """
-    command: pimm.SignalReader[DsWriterCommand] = pimm.NoOpReader()
 
-    def __init__(self, ds_writer: DatasetWriter, signal_names: list[str], poll_hz: float = 1000.0):
+    def __init__(self, ds_writer: DatasetWriter, signals_spec: dict[str, Serializer | None], poll_hz: float = 1000.0):
         self.ds_writer = ds_writer
         self._poll_hz = float(poll_hz)
 
+        self.command = pimm.NoOpReader[DsWriterCommand]()
+
         self._inputs: dict[str, pimm.SignalReader[Any]] = {
-            name: pimm.NoOpReader[Any]() for name in (signal_names or [])
+            name: pimm.NoOpReader[Any]()
+            for name in (signals_spec or [])
         }
         self._inputs_view = _KeyFrozenMapping(self._inputs)
+        # Only keep explicitly provided serializers; None means pass-through
+        self._serializers = {name: serializer for name, serializer in signals_spec.items() if serializer is not None}
 
     @property
     def inputs(self) -> dict[str, pimm.SignalReader[Any]]:
@@ -70,6 +92,7 @@ class DsWriterAgent:
             for name, reader in self._inputs.items()
         }
         ep_writer: EpisodeWriter | None = None
+        ep_counter = 0
 
         while not should_stop.value:
             cmd, cmd_updated = commands.value
@@ -78,6 +101,8 @@ class DsWriterAgent:
                 match cmd.type:
                     case DsWriterCommandType.START_EPISODE:
                         if ep_writer is None:
+                            ep_counter += 1
+                            print(f"DsWriterAgent: [START] Episode {ep_counter}")
                             ep_writer = self.ds_writer.new_episode()
                             for k, v in cmd.static_data.items():
                                 ep_writer.set_static(k, v)
@@ -88,6 +113,7 @@ class DsWriterAgent:
                             for k, v in cmd.static_data.items():
                                 ep_writer.set_static(k, v)
                             ep_writer.__exit__(None, None, None)
+                            print(f"DsWriterAgent: [STOP] Episode {ep_counter}")
                             ep_writer = None
                         else:
                             print("Episode not started, ignoring stop command")
@@ -95,6 +121,8 @@ class DsWriterAgent:
                         if ep_writer is not None:
                             ep_writer.abort()
                             ep_writer.__exit__(None, None, None)
+                            print(f"DsWriterAgent: [ABORT] Episode {ep_counter}")
+                            ep_counter -= 1
                             ep_writer = None
                         else:
                             print("Episode not started, ignoring abort command")
@@ -103,7 +131,16 @@ class DsWriterAgent:
                 for name, reader in signals.items():
                     value, updated = reader.value
                     if updated:
-                        ep_writer.append(name, value, clock.now_ns())
+                        if name in self._serializers:
+                            value = self._serializers[name](value)
+
+                        if isinstance(value, dict):
+                            for suffix, v in value.items():
+                                if v is not None:
+                                    ep_writer.append(name + suffix, v, clock.now_ns())
+                        else:
+                            if value is not None:
+                                ep_writer.append(name, value, clock.now_ns())
 
             yield pimm.Sleep(limiter.wait_time())
 
