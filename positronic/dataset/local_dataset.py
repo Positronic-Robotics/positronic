@@ -1,12 +1,10 @@
-from __future__ import annotations
-
 from pathlib import Path
 from typing import Sequence
 
 import numpy as np
 
 from .core import Dataset, DatasetWriter
-from .episode import DiskEpisode, DiskEpisodeWriter
+from .episode import Episode, DiskEpisodeWriter, load_episode_from_disk
 
 
 def _is_numeric_dir(p: Path) -> bool:
@@ -39,29 +37,31 @@ class LocalDataset(Dataset):
 
     def __init__(self, root: Path | str) -> None:
         self.root = Path(root)
-        self._episodes: list[tuple[int, Path]] = []
+        self._episode_paths: list[tuple[int, Path]] = []
+        self._episodes: dict[Path, Episode] = {}
         self._build_episode_list()
 
     def _build_episode_list(self) -> None:
-        self._episodes.clear()
+        episode_ids_paths: list[tuple[int, Path]] = []
         if not self.root.exists():
             raise FileNotFoundError(f"Root directory {self.root} does not exist")
         for block_dir in sorted([p for p in self.root.iterdir() if _is_numeric_dir(p)], key=lambda p: p.name):
             for ep_dir in sorted([p for p in block_dir.iterdir() if _is_numeric_dir(p)], key=lambda p: p.name):
-                ep_id = int(ep_dir.name)
-                self._episodes.append((ep_id, ep_dir))
+                episode_ids_paths.append((int(ep_dir.name), ep_dir))
 
         # Ensure episodes are sorted by id
-        self._episodes.sort(key=lambda x: x[0])
+        episode_ids_paths.sort(key=lambda x: x[0])
+        self._episode_paths = [x[1] for x in episode_ids_paths]
+        self._episodes = {}
 
     def __len__(self) -> int:
-        return len(self._episodes)
+        return len(self._episode_paths)
 
     def __getitem__(self, index_or_slice: int | slice | Sequence[int] | np.ndarray):
         if isinstance(index_or_slice, slice):
             # Return a list of Episodes for slices
             start, stop, step = index_or_slice.indices(len(self))
-            return [DiskEpisode(self._episodes[i][1]) for i in range(start, stop, step)]
+            return [self.get_episode_by_path(self._episode_paths[i]) for i in range(start, stop, step)]
 
         if isinstance(index_or_slice, (list, tuple, np.ndarray)):
             idxs = np.asarray(index_or_slice)
@@ -74,7 +74,7 @@ class LocalDataset(Dataset):
                     ii += len(self)
                 if not (0 <= ii < len(self)):
                     raise IndexError("Index out of range")
-                result.append(DiskEpisode(self._episodes[ii][1]))
+                result.append(self.get_episode_by_path(self._episode_paths[ii]))
             return result
 
         # Integer index
@@ -83,8 +83,14 @@ class LocalDataset(Dataset):
             i += len(self)
         if not (0 <= i < len(self)):
             raise IndexError("Index out of range")
-        return DiskEpisode(self._episodes[i][1])
+        return self.get_episode_by_path(self._episode_paths[i])
 
+    def get_episode_by_path(self, path: Path) -> Episode:
+        if path in self._episodes:
+            return self._episodes[path]
+        episode = load_episode_from_disk(path)
+        self._episodes[path] = episode
+        return episode
 
 class LocalDatasetWriter(DatasetWriter):
     """Writer that appends Episodes into a local directory structure.

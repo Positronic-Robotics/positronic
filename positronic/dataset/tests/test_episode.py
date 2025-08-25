@@ -1,8 +1,8 @@
 import numpy as np
 import pytest
 
-from positronic.dataset.core import Episode
-from positronic.dataset.episode import DiskEpisode, DiskEpisodeWriter
+from positronic.dataset.core import BaseEpisode
+from positronic.dataset.episode import Episode, DiskEpisodeWriter, load_episode_from_disk
 from positronic.dataset.tests.test_video import assert_frames_equal, create_frame
 
 
@@ -18,7 +18,7 @@ def test_episode_writer_and_reader_basic(tmp_path):
     assert (ep_dir / "a.parquet").exists()
     assert (ep_dir / "b.parquet").exists()
 
-    ep = DiskEpisode(ep_dir)
+    ep = load_episode_from_disk(ep_dir)
     # Keys present
     assert set(ep.keys()) == {"a", "b"}
 
@@ -41,7 +41,7 @@ def test_episode_start_last_ts(tmp_path):
         w.append("b", 10, 1500)
         w.append("b", 20, 2500)
 
-    ep = DiskEpisode(ep_dir)
+    ep = load_episode_from_disk(ep_dir)
     # Current Episode implementation uses max of starts and max of lasts
     assert ep.start_ts == 1500
     assert ep.last_ts == 2500
@@ -53,7 +53,7 @@ def test_episode_getitem_returns_signal(tmp_path):
         w.append("x", np.array([1, 2]), 1000)
         w.append("x", np.array([3, 4]), 2000)
 
-    ep = DiskEpisode(ep_dir)
+    ep = load_episode_from_disk(ep_dir)
     x = ep["x"]
     assert len(x) == 2
     v0, t0 = x[0]
@@ -80,7 +80,7 @@ def test_episode_static_items_json(tmp_path):
     assert (ep_dir / "static.json").exists()
     assert (ep_dir / "a.parquet").exists()
 
-    ep = DiskEpisode(ep_dir)
+    ep = load_episode_from_disk(ep_dir)
     # keys include both static and dynamic names
     assert set(ep.keys()) == {"task", "version", "params", "tags", "a"}
 
@@ -107,7 +107,7 @@ def test_episode_meta_written_and_exposed(tmp_path):
     assert (ep_dir / "static.json").exists()
     assert (ep_dir / "meta.json").exists()
 
-    ep = DiskEpisode(ep_dir)
+    ep = load_episode_from_disk(ep_dir)
     m = ep.meta
     assert isinstance(m, dict)
     assert "schema_version" in m and m["schema_version"] == 1
@@ -163,7 +163,7 @@ def test_episode_static_accepts_valid_json_structures(tmp_path):
         for k, v in payload.items():
             w.set_static(k, v)
 
-    ep = DiskEpisode(ep_dir)
+    ep = load_episode_from_disk(ep_dir)
     for k, v in payload.items():
         assert ep[k] == v
 
@@ -257,7 +257,7 @@ class TestEpisodeTimeAccessor:
             w.append("b", 7, 2500)
             w.append("b", 9, 3500)
 
-        self.ep = DiskEpisode(ep_dir)
+        self.ep = load_episode_from_disk(ep_dir)
 
     def test_int_includes_static(self):
         snap = self.ep.time[2000]
@@ -302,11 +302,11 @@ def test_disk_episode_implements_abc(tmp_path):
         w.append("a", 2, 2000)
         w.set_static("task", "stack")
 
-    ep = DiskEpisode(ep_dir)
-    assert isinstance(ep, Episode)
+    ep = load_episode_from_disk(ep_dir)
+    assert isinstance(ep, BaseEpisode)
 
     view = ep.time[1000:3000]
-    assert isinstance(view, Episode)
+    assert isinstance(view, BaseEpisode)
 
 
 class TestEpisodeVideoIntegration:
@@ -325,7 +325,7 @@ class TestEpisodeVideoIntegration:
         assert (ep_dir / "cam.frames.parquet").exists()
 
         # Reader exposes the signal under the same key
-        ep = DiskEpisode(ep_dir)
+        ep = load_episode_from_disk(ep_dir)
         cam = ep["cam"]
         assert len(cam) == 3
 
@@ -345,7 +345,7 @@ class TestEpisodeVideoIntegration:
             w.append("cam", create_frame(10), 1500)
             w.append("cam", create_frame(20), 2500)
 
-        ep = DiskEpisode(ep_dir)
+        ep = load_episode_from_disk(ep_dir)
         # Keys include both signals
         assert set(ep.keys()) == {"a", "cam"}
 

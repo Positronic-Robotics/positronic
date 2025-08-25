@@ -1,5 +1,6 @@
 import platform
 import shutil
+import stat
 import sys
 import time
 from functools import lru_cache, partial
@@ -12,7 +13,7 @@ import numpy as np
 
 from positronic.utils.git import get_git_state
 
-from .core import Episode, EpisodeWriter, Signal
+from .core import BaseEpisode, EpisodeWriter, Signal
 from .vector import SimpleSignal, SimpleSignalWriter
 from .video import VideoSignal, VideoSignalWriter
 
@@ -178,7 +179,7 @@ def _cached_env_writer_info() -> dict:
 class _TimeIndexer:
     """Time-based indexer for Episode signals."""
 
-    def __init__(self, episode: 'Episode') -> None:
+    def __init__(self, episode: 'BaseEpisode') -> None:
         self.episode = episode
 
     def __getitem__(self, index_or_slice):
@@ -191,12 +192,12 @@ class _TimeIndexer:
         """
         if isinstance(index_or_slice, int):
             # Merge sampled dynamic values with static items
-            sampled = {key: sig.time[index_or_slice] for key, sig in self.episode._iter_signals()}
-            return {**self.episode._static_data, **sampled}
+            sampled = {key: self.episode[key].time[index_or_slice] for key in self.episode.signal_keys()}
+            return {**self.episode._static, **sampled}
         elif isinstance(index_or_slice, (list, tuple, np.ndarray)) or isinstance(index_or_slice, slice):
             # Return a view with sliced/sampled signals and preserved static
-            signals = {key: sig.time[index_or_slice] for key, sig in self.episode._iter_signals()}
-            return EpisodeView(signals, dict(self.episode._static_data), dict(self.episode.meta))
+            signals = {key: self.episode[key].time[index_or_slice] for key in self.episode.signal_keys()}
+            return Episode(signals, dict(self.episode._static), dict(self.episode.meta))
         else:
             raise TypeError(f"Invalid index type: {type(index_or_slice)}")
 
@@ -216,49 +217,7 @@ class _TimeIndexer:
         return self.last_ts - self.start_ts
 
 
-class EpisodeView(Episode):
-    """In-memory view over an Episode's items.
-
-    Provides the same read API as Episode (keys, __getitem__, start_ts, last_ts, time),
-    but does not load from disk. Chained time indexing returns another EpisodeView.
-    """
-
-    def __init__(self,
-                 signals: dict[str, Signal[Any]],
-                 static: dict[str, Any],
-                 meta: dict[str, Any] | None = None) -> None:
-        self._signals = signals
-        self._static = static
-        self._meta = meta or {}
-
-    @property
-    def start_ts(self) -> int:
-        return max([signal.start_ts for signal in self._signals.values()]) if self._signals else 0
-
-    @property
-    def last_ts(self) -> int:
-        return max([signal.last_ts for signal in self._signals.values()]) if self._signals else 0
-
-    @property
-    def time(self):
-        return _TimeIndexer(self)
-
-    def keys(self):
-        return {**{k: True for k in self._signals.keys()}, **{k: True for k in self._static.keys()}}.keys()
-
-    def __getitem__(self, name: str) -> Signal[Any] | Any:
-        if name in self._signals:
-            return self._signals[name]
-        if name in self._static:
-            return self._static[name]
-        raise KeyError(name)
-
-    @property
-    def meta(self) -> dict:
-        return dict(self._meta)
-
-
-class DiskEpisode(Episode):
+class Episode(BaseEpisode):
     """Reader for episode data containing multiple signals.
 
     An Episode represents a collection of signals recorded together,
@@ -266,66 +225,15 @@ class DiskEpisode(Episode):
     All signals in an episode share a common timeline.
     """
 
-    def __init__(self, directory: Path) -> None:
+    def __init__(self, signals: dict[str, Signal[Any]], static: dict[str, Any], meta: dict[str, Any]) -> None:
         """Initialize episode reader from a directory (lazy).
 
         - Defers loading of signal data, static items, and meta until accessed.
         - Prepares lightweight factories for signals discovered on disk.
         """
-        self._dir = directory
-        # Lazy containers
-        self._signals: dict[str, Signal[Any]] = {}
-        self._signal_factories: dict[str, SIGNAL_FACTORY_T] = {}
-        self._static: dict[str, Any] | None = None
-        self._meta: dict[str, Any] | None = None
-
-        # Discover available signal files but do not instantiate readers yet
-        used_names: set[str] = set()
-        for video_file in self._dir.glob('*.mp4'):
-            name = video_file.stem
-            frames_idx = self._dir / f"{name}.frames.parquet"
-            if not frames_idx.exists():
-                raise ValueError(f"Video file {video_file} has no frames index {frames_idx}")
-            self._signal_factories[name] = partial(VideoSignal, video_file, frames_idx)
-            used_names.add(name)
-
-        for file in self._dir.glob('*.parquet'):
-            fname = file.name
-            if fname.endswith('.frames.parquet'):
-                continue
-            key = fname[:-len('.parquet')]
-            if key in used_names:
-                continue
-            self._signal_factories[key] = partial(SimpleSignal, file)
-
-    # ---- lazy loaders ----
-    def _ensure_signal(self, name: str) -> Signal[Any]:
-        if name in self._signals:
-            return self._signals[name]
-        if name not in self._signal_factories:
-            raise KeyError(name)
-        factory = self._signal_factories[name]
-        sig = factory()
-        self._signals[name] = sig
-        return sig
-
-    def _iter_signals(self):
-        for name in self._signal_factories.keys():
-            yield name, self._ensure_signal(name)
-
-    @property
-    def _static_data(self) -> dict[str, Any]:
-        if self._static is None:
-            self._static = {}
-            ep_json = self._dir / 'static.json'
-            if ep_json.exists():
-                with ep_json.open('r', encoding='utf-8') as f:
-                    data = json.load(f)
-                if isinstance(data, dict):
-                    self._static.update(data)
-                else:
-                    raise ValueError("static.json must contain a JSON object (mapping)")
-        return self._static
+        self._signals = signals
+        self._static = static
+        self._meta = meta
 
     @property
     def start_ts(self):
@@ -334,7 +242,7 @@ class DiskEpisode(Episode):
         Returns:
             int: Start timestamp in nanoseconds
         """
-        values = [sig.start_ts for _, sig in self._iter_signals()]
+        values = [self[name].start_ts for name in self.signal_keys()]
         if not values:
             raise ValueError("Episode has no signals")
         return max(values)
@@ -346,7 +254,7 @@ class DiskEpisode(Episode):
         Returns:
             int: Last timestamp in nanoseconds
         """
-        values = [sig.last_ts for _, sig in self._iter_signals()]
+        values = [self[name].last_ts for name in self.signal_keys()]
         if not values:
             raise ValueError("Episode has no signals")
         return max(values)
@@ -360,18 +268,19 @@ class DiskEpisode(Episode):
         """
         return _TimeIndexer(self)
 
-    def keys(self, *, dynamic: bool = True, static: bool = True) -> list[str]:
+    def keys(self) -> list[str]:
         """Return the names of all items in this episode.
 
         Returns:
             dict_keys: Item names (both dynamic signals and static items)
         """
-        signals = {}
-        if dynamic:
-            signals.update({k: True for k in self._signal_factories.keys()})
-        if static:
-            signals.update({k: True for k in self._static_data.keys()})
-        return signals.keys()
+        return self.signal_keys() + self.static_keys()
+
+    def signal_keys(self) -> list[str]:
+        return list(self._signals.keys())
+
+    def static_keys(self) -> list[str]:
+        return list(self._static.keys())
 
     def __getitem__(self, name: str) -> Signal[Any] | Any:
         """Get an item (dynamic Signal or static value) by name.
@@ -386,24 +295,63 @@ class DiskEpisode(Episode):
         Raises:
             KeyError: If name is not found in the episode
         """
-        if name in self._signal_factories:
-            return self._ensure_signal(name)
-        if name in self._static_data:
-            return self._static_data[name]
+        if name in self._signals:
+            return self._signals[name]
+        if name in self._static:
+            return self._static[name]
         raise KeyError(name)
 
     @property
     def meta(self) -> dict:
-        if self._meta is None:
-            meta: dict[str, Any] = {}
-            meta_json = self._dir / 'meta.json'
-            if meta_json.exists():
-                with meta_json.open('r', encoding='utf-8') as f:
-                    try:
-                        meta_data = json.load(f)
-                        if isinstance(meta_data, dict):
-                            meta.update(meta_data)
-                    except Exception:
-                        pass
-            self._meta = meta
         return dict(self._meta)
+
+
+def load_episode_from_disk(directory: Path | str) -> BaseEpisode:
+    signals = {}
+    static = {}
+    meta = {}
+    used_names: set[str] = set()
+
+    directory = Path(directory)
+
+    # Load video signals
+    for video_file in directory.glob('*.mp4'):
+        name = video_file.stem
+        frames_idx = directory / f"{name}.frames.parquet"
+        if not frames_idx.exists():
+            raise ValueError(f"Video file {video_file} has no frames index {frames_idx}")
+        signals[name] = VideoSignal(video_file, frames_idx)
+        used_names.add(name)
+
+    # Load scalar/vector signals
+    for file in directory.glob('*.parquet'):
+        fname = file.name
+        if fname.endswith('.frames.parquet'):
+            continue
+        key = fname[:-len('.parquet')]
+        if key in used_names:
+            continue
+        signals[key] = SimpleSignal(file)
+
+    # Load static items
+    ep_json = directory / 'static.json'
+    if ep_json.exists():
+        with ep_json.open('r', encoding='utf-8') as f:
+            data = json.load(f)
+        if isinstance(data, dict):
+            static.update(data)
+        else:
+            raise ValueError("static.json must contain a JSON object (mapping)")
+
+    # Load meta
+    meta_json = directory / 'meta.json'
+    if meta_json.exists():
+        with meta_json.open('r', encoding='utf-8') as f:
+            try:
+                meta_data = json.load(f)
+                if isinstance(meta_data, dict):
+                    meta.update(meta_data)
+            except Exception:
+                pass
+
+    return Episode(signals, static, meta)

@@ -3,7 +3,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from positronic.dataset.core import Episode
+from positronic.dataset.core import BaseEpisode
 from positronic.dataset.local_dataset import LocalDataset, LocalDatasetWriter
 
 
@@ -26,7 +26,7 @@ def test_local_dataset_writer_creates_structure_and_persists(tmp_path):
     ds = LocalDataset(root)
     assert len(ds) == 3
     ep0 = ds[0]
-    assert isinstance(ep0, Episode)
+    assert isinstance(ep0, BaseEpisode)
     assert ep0["id"] == 0
     assert ep0["a"][0] == (0, 1000)
 
@@ -79,7 +79,7 @@ def test_slice_indexing_returns_episode_list(tmp_path):
     sub = ds[1:4]
     assert isinstance(sub, list)
     assert len(sub) == 3
-    assert all(isinstance(ep, Episode) for ep in sub)
+    assert all(isinstance(ep, BaseEpisode) for ep in sub)
     assert episode_ids(sub) == [1, 2, 3]
 
     sub2 = ds[0:5:2]

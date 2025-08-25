@@ -131,7 +131,7 @@ class SignalWriter(AbstractContextManager, ABC, Generic[T]):
         pass
 
 
-class Episode(ABC):
+class BaseEpisode(ABC):
     """Abstract base class for an Episode (core concept).
 
     Represents a collection of dynamic signals and static episode-level items
@@ -140,13 +140,16 @@ class Episode(ABC):
     """
 
     @abstractmethod
-    def keys(self, *, dynamic: bool = True, static: bool = True) -> list[str]:
-        """Names of dynamic/static signals in the episode.
+    def keys(self) -> list[str]:
+        """Names of signals and static data in the episode."""
+        pass
 
-        Args:
-            dynamic: Include dynamic signals
-            static: Include static items
-        """
+    @abstractmethod
+    def static_keys(self) -> list[str]:
+        pass
+
+    @abstractmethod
+    def signal_keys(self) -> list[str]:
         pass
 
     @abstractmethod
@@ -245,7 +248,7 @@ class DatasetWriter(ABC):
         pass
 
 
-class Dataset(ABC, collections.abc.Sequence[Episode]):
+class Dataset(ABC, collections.abc.Sequence[BaseEpisode]):
     """Ordered collection of Episodes with sequence-style access.
 
     A Dataset provides read-only, index-based access to episodes. Concrete
@@ -260,7 +263,7 @@ class Dataset(ABC, collections.abc.Sequence[Episode]):
         pass
 
     @abstractmethod
-    def __getitem__(self, index_or_slice: int | slice | Sequence[int] | np.ndarray) -> Episode:
+    def __getitem__(self, index_or_slice: int | slice | Sequence[int] | np.ndarray) -> BaseEpisode:
         """Access one or more episodes by position.
 
         Args:

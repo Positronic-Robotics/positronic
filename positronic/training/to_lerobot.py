@@ -6,7 +6,6 @@
 #     "tqdm",
 #     "configuronic",
 #     "numpy",
-#     "fire",
 #     "scipy",
 # ]
 # ///
