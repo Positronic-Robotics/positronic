@@ -66,7 +66,7 @@ class _ArraySignal(Signal[T]):
             if idx_array.dtype == np.bool_:
                 raise IndexError("Boolean indexes are not supported")
 
-            if not np.issubdtype(idx_array.dtype, np.integer):
+            if not np.issubdtype(idx_array.dtype, np.integer) and not np.issubdtype(idx_array.dtype, np.floating):
                 raise TypeError(f"Invalid index array dtype: {idx_array.dtype}")
 
             return _ArraySignal(self._timestamps[idx_array], self._values[idx_array])
@@ -97,7 +97,7 @@ class _TimeIndexer:
             return (self.signal._values[idx], self.signal._timestamps[idx])
         elif isinstance(key, (list, tuple, np.ndarray)):  # Sample at arbitrary requested timestamps
             req_ts = np.asarray(key)
-            if not np.issubdtype(req_ts.dtype, np.integer):
+            if not np.issubdtype(req_ts.dtype, np.integer) and not np.issubdtype(req_ts.dtype, np.floating):
                 raise TypeError(f"Invalid timestamp array dtype: {req_ts.dtype}")
 
             if req_ts.size == 0 or len(self.signal._timestamps) == 0:

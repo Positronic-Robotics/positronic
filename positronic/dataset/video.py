@@ -290,7 +290,7 @@ class _VideoTimeIndexer:
         req_ts = np.asarray(key)
         if req_ts.size == 0:
             raise TypeError("Empty timestamp arrays are not supported")
-        if not np.issubdtype(req_ts.dtype, np.integer):
+        if not np.issubdtype(req_ts.dtype, np.integer) and not np.issubdtype(req_ts.dtype, np.floating):
             raise TypeError(f"Invalid timestamp array dtype: {req_ts.dtype}")
 
         pos = np.searchsorted(self._timestamps, req_ts, side='right') - 1

@@ -30,7 +30,7 @@ def create_video_signal(video_paths, frames_with_timestamps):
     return VideoSignal(video_paths['video'], video_paths['frames'])
 
 
-def assert_frames_equal(frame1, frame2, tolerance=20):
+def assert_frames_equal(frame1, frame2, tolerance=3):
     """Assert that two frames are approximately equal, accounting for video compression artifacts.
 
     Args:
@@ -760,6 +760,11 @@ class TestVideoSignalTimeArrayAccess:
         with pytest.raises(KeyError):
             _ = signal.time[[500, 1000]]
 
+    def test_time_array_before_first_float_timestamp_raises(self, video_paths):
+        signal = create_video_signal(video_paths, [(create_frame(value=10), 1000), (create_frame(value=20), 2000)])
+        with pytest.raises(KeyError):
+            _ = signal.time[[999.9, 1500]]
+
     def test_time_array_empty_raises(self, video_paths):
         signal = create_video_signal(video_paths, [(create_frame(value=10), 1000), (create_frame(value=20), 2000)])
         with pytest.raises(TypeError):
@@ -767,10 +772,19 @@ class TestVideoSignalTimeArrayAccess:
         with pytest.raises(TypeError):
             _ = signal.time[np.array([], dtype=np.int64)]
 
-    def test_time_array_float_inputs_raises(self, video_paths):
+    def test_time_array_float_inputs_returns_nearest_past_frame(self, video_paths):
+        signal = create_video_signal(video_paths, [(create_frame(value=10), 1000), (create_frame(value=20), 2000)])
+        view = signal.time[np.array([1000.1, 2500.4], dtype=np.float64)]
+        assert len(view) == 2
+        assert view[0][1] == 1000
+        assert view[1][1] == 2500
+        assert_frames_equal(view[0][0], create_frame(value=10))
+        assert_frames_equal(view[1][0], create_frame(value=20))
+
+    def test_time_array_complex_timestamp_raises(self, video_paths):
         signal = create_video_signal(video_paths, [(create_frame(value=10), 1000), (create_frame(value=20), 2000)])
         with pytest.raises(TypeError):
-            _ = signal.time[np.array([1000.0, 2500.0], dtype=np.float64)]
+            _ = signal.time[np.array([1000.1, 1500], dtype=np.complex128)]
 
     def test_time_array_multiple_offgrid_same_gap(self, video_paths):
         # Create three frames at 1000, 2000, 3000 ns with distinct contents

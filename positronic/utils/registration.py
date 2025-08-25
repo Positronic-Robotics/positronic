@@ -155,7 +155,7 @@ def _perform_umi_registration(data):
     return transform
 
 
-@cfn.config(webxr=positronic.cfg.webxr.webxr, robot_arm=positronic.cfg.hardware.roboarm.so101)
+@cfn.config(webxr=positronic.cfg.webxr.oculus, robot_arm=positronic.cfg.hardware.roboarm.so101)
 def perform_registration(webxr, robot_arm):
     """
     This function performs registration procedure.
