@@ -6,7 +6,7 @@ from unittest.mock import Mock, patch
 import pytest
 
 from pimm.core import Message, SignalEmitter, SignalReader, Sleep
-from pimm.testing import MockClock
+from pimm.tests.testing import MockClock
 from pimm.world import EventReader, QueueEmitter, QueueReader, SystemClock, World
 
 

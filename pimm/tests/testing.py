@@ -4,7 +4,7 @@ Exposes lightweight fakes/mocks to simplify deterministic testing of
 control loops and components that depend on `pimm.Clock`.
 """
 
-from .core import Clock
+from ..core import Clock
 
 
 class MockClock(Clock):

@@ -4,7 +4,7 @@ import numpy as np
 import pytest
 
 import pimm
-from pimm.testing import MockClock
+from pimm.tests.testing import MockClock
 from positronic import geom
 from positronic.dataset.core import DatasetWriter, EpisodeWriter
 from positronic.dataset.ds_writer_agent import (
