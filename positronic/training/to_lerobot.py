@@ -48,7 +48,7 @@ def observation_features(observation_encoder: ObservationEncoder) -> dict:
 
         elif isinstance(transform, ToArrayTransform):
             features[transform.output_key] = {
-                "dtype": "float32",
+                "dtype": "float64",
                 "shape": (transform.n_features,),
                 "names": ["state"],
             }
@@ -119,7 +119,7 @@ def append_data_to_dataset(
     fps=30,
     video=True,
     observation_encoder=positronic.cfg.inference.observation.end_effector_handcam,
-    action_encoder=positronic.cfg.inference.action.relative_robot_position,
+    action_encoder=positronic.cfg.inference.action.absolute_joint_position,
     task="pick up the red cube and place it on the green cube",
 )
 def convert_to_lerobot_dataset(

@@ -18,3 +18,9 @@ def relative_robot_position(rotation_representation: geom.Rotation.Representatio
 def absolute_position(rotation_representation: geom.Rotation.Representation):
     from positronic.inference.action import AbsolutePositionAction
     return AbsolutePositionAction(rotation_representation=rotation_representation)
+
+
+@cfn.config()
+def absolute_joint_position():
+    from positronic.inference.action import AbsoluteJointPositionAction
+    return AbsoluteJointPositionAction()

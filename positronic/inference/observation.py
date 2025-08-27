@@ -32,13 +32,24 @@ class ImageTransform(Transform):
 
 
 class ToArrayTransform(Transform):
-    def __init__(self, input_key: str, n_features: int, output_key: str | None = None):
+    def __init__(self, input_key: str | list[str], n_features: int, output_key: str | None = None):
         self.input_key = input_key
         self.output_key = output_key if output_key is not None else input_key
         self.n_features = n_features
 
     def encode(self, signal_dict: dict[str, Signal], timestamps: np.ndarray) -> dict:
-        data = np.array([x[0] for x in signal_dict[self.input_key].time[timestamps]])
+        if isinstance(self.input_key, str):
+            data = np.array([x[0] for x in signal_dict[self.input_key].time[timestamps]])
+        else:
+            data = []
+            for key in self.input_key:
+                x = np.array([x[0] for x in signal_dict[key].time[timestamps]])
+                if x.ndim == 1:
+                    x = x[:, np.newaxis]
+                print(x.shape)
+                data.append(x)
+            data = np.concatenate(data, axis=1)
+
         if data.ndim == 1:
             data = data[:, np.newaxis]
 
