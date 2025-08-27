@@ -1,4 +1,4 @@
-from typing import TypeVar
+from typing import Sequence, TypeVar
 import pyarrow as pa
 import pyarrow.parquet as pq
 import numpy as np
@@ -6,124 +6,6 @@ from pathlib import Path
 from .core import Signal, SignalWriter
 
 T = TypeVar('T')
-
-
-class _ArraySignal(Signal[T]):
-    """An in-memory, array-backed Signal implementation.
-
-    - Index slicing returns zero-copy views
-    - Time window returns zero-copy views
-    - Stepped view returns a new array with sampled rows
-    """
-
-    def __init__(self, timestamps: np.ndarray, values: np.ndarray):
-        self._timestamps = timestamps
-        self._values = values
-        self._time_indexer = _TimeIndexer(self)
-
-    def _load_data(self):
-        return None  # Already in-memory
-
-    def __len__(self) -> int:
-        return len(self._timestamps)
-
-    @property
-    def start_ts(self) -> int:
-        if len(self._timestamps) == 0:
-            raise ValueError("Signal is empty")
-        return int(self._timestamps[0])
-
-    @property
-    def last_ts(self) -> int:
-        if len(self._timestamps) == 0:
-            raise ValueError("Signal is empty")
-        return int(self._timestamps[-1])
-
-    @property
-    def time(self):
-        return self._time_indexer
-
-    def __getitem__(self, index_or_slice):
-        if isinstance(index_or_slice, int):
-            idx = index_or_slice
-            if idx < 0:
-                idx += len(self)
-            if not 0 <= idx < len(self):
-                raise IndexError(f"Index {index_or_slice} out of range")
-            return (self._values[idx], self._timestamps[idx])
-        elif isinstance(index_or_slice, slice):
-            start, stop, step = index_or_slice.indices(len(self))
-            if step <= 0:
-                raise ValueError("Slice step must be positive")
-            return _ArraySignal(self._timestamps[start:stop:step], self._values[start:stop:step])
-        elif isinstance(index_or_slice, (list, tuple, np.ndarray)):
-            # Support fancy indexing by integer arrays/lists and boolean masks
-            idx_array = np.asarray(index_or_slice)
-
-            if idx_array.size == 0:
-                return _ArraySignal(self._timestamps[:0], self._values[:0])
-
-            if idx_array.dtype == np.bool_:
-                raise IndexError("Boolean indexes are not supported")
-
-            if not np.issubdtype(idx_array.dtype, np.integer):
-                raise TypeError(f"Invalid index array dtype: {idx_array.dtype}")
-
-            return _ArraySignal(self._timestamps[idx_array], self._values[idx_array])
-        else:
-            raise TypeError(f"Invalid index type: {type(index_or_slice)}")
-
-    def _window_view(self, start_ts_ns: int, end_ts_ns: int) -> "Signal[T]":
-        if len(self) == 0:
-            return _ArraySignal(self._timestamps[:0], self._values[:0])
-
-        start_idx = int(np.searchsorted(self._timestamps, start_ts_ns, side='left'))
-        end_idx = int(np.searchsorted(self._timestamps, end_ts_ns, side='left'))
-        return _ArraySignal(self._timestamps[start_idx:end_idx], self._values[start_idx:end_idx])
-
-
-class _TimeIndexer:
-    """Helper class to implement the time property for Signal."""
-
-    def __init__(self, signal):
-        self.signal = signal
-
-    def __getitem__(self, key):  # noqa: C901  Function is too complex
-        self.signal._load_data()
-        if isinstance(key, int):
-            idx = np.searchsorted(self.signal._timestamps, key, side='right') - 1
-            if idx < 0:
-                raise KeyError(f"No record at or before timestamp {key}")
-            return (self.signal._values[idx], self.signal._timestamps[idx])
-        elif isinstance(key, (list, tuple, np.ndarray)):  # Sample at arbitrary requested timestamps
-            req_ts = np.asarray(key)
-            if not np.issubdtype(req_ts.dtype, np.integer):
-                raise TypeError(f"Invalid timestamp array dtype: {req_ts.dtype}")
-
-            if req_ts.size == 0 or len(self.signal._timestamps) == 0:
-                return _ArraySignal(self.signal._timestamps[:0], self.signal._values[:0])
-
-            # For each requested timestamp t, find index of value at or before t
-            pos = np.searchsorted(self.signal._timestamps, req_ts, side='right') - 1
-            if not np.all(pos >= 0):
-                raise KeyError("No record at or before some of the requested timestamps")
-
-            return _ArraySignal(req_ts, self.signal._values[pos])
-        elif isinstance(key, slice):
-            if key.step is not None:
-                if key.step <= 0:
-                    raise ValueError("Slice step must be positive")
-                if key.start is None:
-                    raise ValueError("Slice start is required when step is provided")
-
-            start = key.start if key.start is not None else self.signal._timestamps[0]
-            stop = key.stop if key.stop is not None else (self.signal._timestamps[-1] + 1)
-            if key.step is not None:
-                return self[np.arange(start, stop, key.step, dtype=np.int64)]
-            else:
-                return self.signal._window_view(start, stop)
-        else:
-            raise TypeError(f"Invalid key type: {type(key)}")
 
 
 class SimpleSignal(Signal[T]):
@@ -141,7 +23,7 @@ class SimpleSignal(Signal[T]):
         # Initialize with empty arrays to satisfy type checkers; real data is loaded lazily
         self._timestamps: np.ndarray = np.empty(0, dtype=np.int64)
         self._values: np.ndarray = np.empty(0, dtype=object)
-        self._time_indexer = _TimeIndexer(self)
+        # Lazily-loaded columns
 
     def _load_data(self):
         """Lazily load parquet data into memory as numpy arrays."""
@@ -151,44 +33,33 @@ class SimpleSignal(Signal[T]):
             self._values = table['value'].to_numpy()
             self._data = table
 
-    def _as_array_signal(self) -> _ArraySignal:
-        """Create an ArraySignal view over the loaded numpy arrays (zero-copy)."""
-        self._load_data()
-        return _ArraySignal(self._timestamps, self._values)
-
     def __len__(self) -> int:
         """Returns the number of records in the signal."""
         self._load_data()
         return len(self._timestamps)
 
-    @property
-    def start_ts(self) -> int:
-        """Returns the timestamp of the first record in the signal."""
+    def _ts_at(self, index_or_indices: int | Sequence[int] | np.ndarray) -> int | Sequence[int] | np.ndarray:
         self._load_data()
-        if len(self._timestamps) == 0:
-            raise ValueError("Signal is empty")
-        return int(self._timestamps[0])
+        if isinstance(index_or_indices, (int, np.integer)):
+            return int(self._timestamps[int(index_or_indices)])
+        return self._timestamps[index_or_indices]
 
-    @property
-    def last_ts(self) -> int:
-        """Returns the timestamp of the last record in the signal."""
+    def _values_at(self, index_or_indices: int | Sequence[int] | np.ndarray):
         self._load_data()
-        if len(self._timestamps) == 0:
-            raise ValueError("Signal is empty")
-        return int(self._timestamps[-1])
+        if isinstance(index_or_indices, (int, np.integer)):
+            return self._values[int(index_or_indices)]
+        return self._values[index_or_indices]
 
-    @property
-    def time(self):
-        """Returns an indexer for accessing Signal data by timestamp."""
-        return self._time_indexer
-
-    def __getitem__(self, index_or_slice):
-        """Access the Signal data by index or slice."""
-        return self._as_array_signal()[index_or_slice]
-
-    def _window_view(self, start_ts_ns: int, end_ts_ns: int) -> "Signal[T]":
-        """Create a zero-copy Signal view from a time window."""
-        return self._as_array_signal()._window_view(start_ts_ns, end_ts_ns)
+    def _search_ts(self, ts_or_array: int | Sequence[int] | np.ndarray):
+        self._load_data()
+        if isinstance(ts_or_array, (int, np.integer)):
+            return int(np.searchsorted(self._timestamps, int(ts_or_array), side='right') - 1)
+        req = np.asarray(ts_or_array)
+        if req.size == 0:
+            return np.array([], dtype=np.int64)
+        if not np.issubdtype(req.dtype, np.integer):
+            raise TypeError(f"Invalid timestamp array dtype: {req.dtype}")
+        return np.searchsorted(self._timestamps, req, side='right') - 1
 
 
 class SimpleSignalWriter(SignalWriter[T]):

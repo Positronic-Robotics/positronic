@@ -165,13 +165,16 @@ class _SignalViewTime(TimeIndexerLike[T], Generic[T]):
                     raise KeyError(f"Timestamp {ts} precedes the first record")
                 return self._signal._values_at(idx), self._signal._ts_at(idx)
             case slice() as sl if sl.step is None:
+                if len(self._signal) == 0:  # Empty signal -> empty view
+                    return _SignalView(self._signal, range(0, 0))
                 start = sl.start if sl.start is not None else self._signal.start_ts
                 stop = sl.stop if sl.stop is not None else self._signal.last_ts + 1
                 start_id, end_id = self._signal._search_ts([start, stop])
                 if stop > self._signal._ts_at(end_id):
                     end_id += 1
                 kwargs = {}
-                if self._signal._values_at(start_id) != start and start_id > -1:
+                # Inject start when not exact and within bounds
+                if start_id > -1 and self._signal._ts_at(start_id) < start:
                     kwargs['start_ts'] = start
                 if start_id < 0:
                     start_id = 0
@@ -182,16 +185,16 @@ class _SignalViewTime(TimeIndexerLike[T], Generic[T]):
                 raise ValueError("Slice start is required when step is provided")
             case np.ndarray() | SequenceABC() | slice() as tss:
                 if isinstance(tss, slice):
+                    if len(self._signal) == 0:  # Empty signal -> empty view
+                        return _SignalView(self._signal, range(0, 0))
                     start = tss.start if tss.start is not None else self._signal.start_ts
                     stop = tss.stop if tss.stop is not None else self._signal.last_ts + 1
                     if start < self._signal.start_ts:
                         raise KeyError(f"Timestamp {start} precedes the first record")
                     tss = np.arange(start, stop, tss.step)
-                # TODO: Update the docs, as this is change in behavior.
-                # When we sample before the first record, we return an empty signal.
-                idxs = self._signal._search_ts(tss)
-                # Start at the first non-negative index since idxs is non-decreasing.
-                idxs = idxs[np.searchsorted(idxs, 0, side='left'):]
+                idxs = np.asarray(self._signal._search_ts(tss))
+                if (idxs < 0).any():  # Any timestamp before first must raise
+                    raise KeyError("No record at or before some of the requested timestamps")
                 return _SignalView(self._signal, idxs, tss)
             case _:
                 raise TypeError(f"Unsupported index type: {type(ts_or_array)}")
@@ -217,7 +220,8 @@ class _SignalView(Signal[T], Generic[T]):
         if self._timestamps is not None:
             return self._timestamps[index_or_indices]
         match index_or_indices:
-            case int() as i:
+            case int() | np.integer() as i:
+                i = int(i)
                 return self._signal._ts_at(self._indices[i]) if self._start_ts is None or i > 0 else self._start_ts
             case slice() | np.ndarray() | SequenceABC() as idxs:
                 result = self._signal._ts_at(self._indices[idxs])

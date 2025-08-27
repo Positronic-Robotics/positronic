@@ -136,6 +136,13 @@ class TestCoreSignalTime:
         assert v[1] == (20, 2000)
         assert v[2] == (30, 3000)
 
+    def test_time_stepped_empty_signal(self):
+        ts = np.array([], dtype=np.int64)
+        vals = np.array([], dtype=np.int64)
+        sig = DummySignal(ts, vals)
+        sampled = sig.time[1000:5000:1000]
+        assert len(sampled) == 0
+
     def test_time_window_no_inject_when_exact(self, sig_simple):
         v = sig_simple.time[2000:3500]
         # Exact start at 2000 -> no injection
@@ -211,3 +218,29 @@ class TestCoreSignalViews:
         v = sig_simple.time[2000:5000]
         items = list(v)
         assert items == [(20, 2000), (30, 3000), (40, 4000)]
+
+    def test_array_on_slice_indexing(self, sig_simple):
+        # Slice then array-index into the slice
+        v = sig_simple[1:5]  # indices 1..4 -> ts 2000..5000
+        sub = v[[0, 2]]  # pick 2000 and 4000
+        assert list(sub) == [(20, 2000), (40, 4000)]
+
+    def test_time_slice_of_time_slice(self, sig_simple):
+        # Time slice, then another time slice (non-stepped)
+        first = sig_simple.time[1500:4500]  # 1500(injected), 2000, 3000, 4000
+        second = first.time[2000:3500]  # 2000, 3000
+        assert list(second) == [(20, 2000), (30, 3000)]
+
+    def test_iter_over_stepped_sampling(self, sig_simple):
+        # Iteration over stepped time sampling preserves requested timestamps
+        sampled = sig_simple.time[1500:3500:1000]
+        assert list(sampled) == [(10, 1500), (20, 2500)]
+
+    def test_time_array_mixed_before_first(self, sig_simple):
+        # Any timestamp before first must raise for array access
+        with pytest.raises(KeyError):
+            _ = sig_simple.time[[500, 1000]]
+
+    def test_time_array_empty(self, sig_simple):
+        view = sig_simple.time[[]]
+        assert len(view) == 0
