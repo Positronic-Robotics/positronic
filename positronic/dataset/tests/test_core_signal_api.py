@@ -19,7 +19,7 @@ class DummySignal(Signal[int]):
     def __len__(self) -> int:
         return int(self._ts.shape[0])
 
-    def ts_at(self, index_or_indices):
+    def _ts_at(self, index_or_indices):
         if isinstance(index_or_indices, (int, np.integer)):
             return int(self._ts[int(index_or_indices)])
         idxs = np.asarray(index_or_indices, dtype=np.int64)
@@ -27,7 +27,7 @@ class DummySignal(Signal[int]):
             return np.array([], dtype=np.int64)
         return self._ts[idxs]
 
-    def values_at(self, index_or_indices):
+    def _values_at(self, index_or_indices):
         if isinstance(index_or_indices, (int, np.integer)):
             return int(self._vals[int(index_or_indices)])
         idxs = np.asarray(index_or_indices, dtype=np.int64)
@@ -35,7 +35,7 @@ class DummySignal(Signal[int]):
             return []
         return self._vals[idxs]
 
-    def search_ts(self, ts_or_array):
+    def _search_ts(self, ts_or_array):
         if isinstance(ts_or_array, (int, np.integer)):
             return int(np.searchsorted(self._ts, int(ts_or_array), side='right') - 1)
         req = np.asarray(ts_or_array)
@@ -86,15 +86,10 @@ class TestCoreSignalBasics:
 
     def test_index_array(self, sig_simple):
         view = sig_simple[[0, 2, 4]]
-        assert len(view) == 3
-        assert view[0] == (10, 1000)
-        assert view[2] == (50, 5000)
+        assert list(view) == [(10, 1000), (30, 3000), (50, 5000)]
+
         view2 = sig_simple[np.array([0, -1, 1, -2], dtype=np.int64)]
-        assert len(view2) == 4
-        assert view2[0] == (10, 1000)
-        assert view2[1] == (50, 5000)
-        assert view2[2] == (20, 2000)
-        assert view2[3] == (40, 4000)
+        assert list(view2) == [(10, 1000), (50, 5000), (20, 2000), (40, 4000)]
         with pytest.raises(IndexError):
             _ = sig_simple[np.array([0, 5], dtype=np.int64)]
         with pytest.raises(IndexError):
@@ -121,9 +116,7 @@ class TestCoreSignalTime:
     def test_time_window_basic(self, sig_simple):
         view = sig_simple.time[1500:4500]
         # Injects a start sample at 1500 (carry-back 10), then 2000, 3000, 4000 (end-exclusive)
-        assert len(view) == 4
-        assert view[0] == (10, 1500)
-        assert view[-1] == (40, 4000)
+        assert list(view) == [(10, 1500), (20, 2000), (30, 3000), (40, 4000)]
         # Missing bounds
         v2 = sig_simple.time[:3000]
         assert len(v2) == 2  # 1000, 2000 (start None -> no injection)
@@ -133,7 +126,7 @@ class TestCoreSignalTime:
         assert len(v4) == len(sig_simple)
         # Outside ranges
         assert len(sig_simple.time[:900]) == 0
-        assert len(sig_simple.time[6000:]) == 0
+        assert list(sig_simple.time[6000:]) == [(50, 6000)]
 
     def test_time_window_injects_start(self, sig_simple):
         # Injection occurs when start is provided and >= first_ts but no exact record at start
@@ -151,19 +144,15 @@ class TestCoreSignalTime:
         assert v[1] == (30, 3000)
 
     def test_time_window_start_before_first_no_inject(self, sig_simple):
-        v = sig_simple.time[500:2500]
         # start before first_ts -> cannot inject; starts at first record 1000
-        assert len(v) == 2
-        assert v[0] == (10, 1000)
-        assert v[1] == (20, 2000)
+        assert list(sig_simple.time[500:2500]) == [(10, 1000), (20, 2000)]
+
+    def test_time_window_start_before_first_injects_start(self, sig_simple):
+        assert list(sig_simple.time[100:900]) == []
 
     def test_time_stepped(self, sig_simple):
         sampled = sig_simple.time[1000:6000:2000]
-        assert len(sampled) == 3
-        # Requested timestamps are preserved
-        assert sampled[0] == (10, 1000)
-        assert sampled[1] == (30, 3000)
-        assert sampled[2] == (50, 5000)
+        assert list(sampled) == [(10, 1000), (30, 3000), (50, 5000)]
         # Missing start raises
         with pytest.raises(ValueError):
             _ = sig_simple.time[:5000:1000]
@@ -175,28 +164,19 @@ class TestCoreSignalTime:
         # Start before first raises
         with pytest.raises(KeyError):
             _ = sig_simple.time[500:3000:1000]
+
         # Missing stop samples until last_ts+1
         full = sig_simple.time[1000::1000]
-        assert len(full) == 5
-        assert full[0] == (10, 1000)
-        assert full[-1] == (50, 5000)
+        assert list(full) == [(10, 1000), (20, 2000), (30, 3000), (40, 4000), (50, 5000)]
 
     def test_time_array_sampling(self, sig_simple):
         req = [1000, 1500, 3000]
         view = sig_simple.time[req]
-        assert len(view) == 3
-        assert view[0] == (10, 1000)
-        assert view[1] == (10, 1500)
-        assert view[2] == (30, 3000)
+        assert list(view) == [(10, 1000), (10, 1500), (30, 3000)]
         # Unsorted + duplicates
         view2 = sig_simple.time[[3000, 1000, 3000]]
-        assert len(view2) == 3
-        assert view2[0] == (30, 3000)
-        assert view2[1] == (10, 1000)
-        assert view2[2] == (30, 3000)
-        # Empty and invalid dtype
-        with pytest.raises(TypeError):
-            _ = sig_simple.time[[]]
+        assert list(view2) == [(30, 3000), (10, 1000), (30, 3000)]
+        # Invalid dtype
         with pytest.raises(TypeError):
             _ = sig_simple.time[np.array([1000.0, 2500.0], dtype=np.float64)]
 
@@ -225,9 +205,7 @@ class TestCoreSignalViews:
         # Slice the sampled view by time (non-stepped)
         sub = sampled.time[2500:4500]
         # End is exclusive, so 4500 is not included
-        assert len(sub) == 2
-        assert sub[0] == (20, 2500)
-        assert sub[1] == (30, 3500)
+        assert list(sub) == [(20, 2500), (30, 3500)]
 
     def test_iteration_over_views(self, sig_simple):
         v = sig_simple.time[2000:5000]

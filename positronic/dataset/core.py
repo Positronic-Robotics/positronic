@@ -2,6 +2,7 @@ from abc import ABC, abstractmethod
 from contextlib import AbstractContextManager
 import collections.abc
 from typing import Any, Generic, Protocol, Sequence, Tuple, TypeVar, runtime_checkable
+from collections.abc import Sequence as SequenceABC
 
 import numpy as np
 
@@ -36,23 +37,50 @@ class Signal(Sequence[Tuple[T, int]], ABC, Generic[T]):
 
     @abstractmethod
     def __len__(self) -> int:
-        """Returns the number of records in the signal."""
-        pass
+        """Number of records."""
+        raise NotImplementedError
+
+    @abstractmethod
+    def _ts_at(self, index_or_indices: int | Sequence[int] | np.ndarray) -> int | Sequence[int] | np.ndarray:
+        """Return timestamp(s) at given index(es). Input indices are in ascending order and in range [0, len(self)).
+
+        - If input is int, returns int timestamp.
+        - If input is list-like, returns an array/sequence of timestamps in the same order.
+        """
+        raise NotImplementedError
+
+    @abstractmethod
+    def _values_at(self, index_or_indices: int | Sequence[int] | np.ndarray) -> T | Sequence[T]:
+        """Return value(s) at given index(es). Input indices are in ascending order and in range [0, len(self))."""
+        raise NotImplementedError
+
+    @abstractmethod
+    def _search_ts(self, ts_or_array: int | Sequence[int] | np.ndarray) -> int | np.ndarray:
+        """Return floor index for given timestamp(s).
+
+        For each timestamp t, returns the largest i such that ts[i] <= t.
+        Returns -1 when t precedes the first record. For arrays, returns an
+        np.ndarray[int64] with the same shape.
+        """
+        raise NotImplementedError
+
+    # Public API
 
     @property
-    @abstractmethod
     def start_ts(self) -> int:
         """Returns the timestamp of the first record in the signal."""
-        pass
+        if len(self) == 0:
+            raise ValueError("Signal is empty")
+        return self._ts_at(0)
 
     @property
-    @abstractmethod
     def last_ts(self) -> int:
         """Returns the timestamp of the last record in the signal."""
-        pass
+        if len(self) == 0:
+            raise ValueError("Signal is empty")
+        return self._ts_at(len(self) - 1)
 
     @property
-    @abstractmethod
     def time(self) -> TimeIndexerLike[T]:
         """Returns an indexer for accessing Signal data by timestamp.
 
@@ -78,9 +106,8 @@ class Signal(Sequence[Tuple[T, int]], ABC, Generic[T]):
                 Returns a Signal sampled at the provided timestamps. Each element is
                 (value_at_or_before_t_i, t_i). Raises KeyError if any t_i precedes the first record.
         """
-        pass
+        return _SignalViewTime(self)
 
-    @abstractmethod
     def __getitem__(self, index_or_slice: int | slice | Sequence[int] | np.ndarray) -> Tuple[T, int] | "Signal[T]":
         """Access the Signal data by index or slice.
 
@@ -91,7 +118,136 @@ class Signal(Sequence[Tuple[T, int]], ABC, Generic[T]):
             If index: Tuple of (value, timestamp_ns)
             If slice/array-like: Signal[T] view of the original data
         """
-        pass
+        match index_or_slice:
+            case int() as idx:
+                if idx < 0:
+                    idx = len(self) + idx
+                if idx < 0 or idx >= len(self):
+                    raise IndexError(f"Index {idx} out of range for Signal of length {len(self)}")
+                return self._values_at(idx), self._ts_at(idx)
+            case slice() as sl:
+                if sl.step is not None and sl.step <= 0:
+                    raise ValueError("Slice step must be positive")
+                return _SignalView(self, range(*sl.indices(len(self))))
+            case np.ndarray() | SequenceABC() as idxs:
+                arr = np.asarray(idxs)
+                if arr.size == 0:
+                    return _SignalView(self, arr.astype(np.int64))
+                if arr.dtype == np.bool_:
+                    raise IndexError("Boolean mask indexing is not supported for Signal")
+                if not np.issubdtype(arr.dtype, np.integer):
+                    raise TypeError(f"Unsupported index dtype: {arr.dtype}")
+                arr[arr < 0] += len(self)
+                if (arr < 0).any() or (arr >= len(self)).any():
+                    raise IndexError("Index out of range for Signal")
+                return _SignalView(self, arr)
+            case _:
+                raise TypeError(f"Unsupported index type: {type(index_or_slice)}")
+
+
+class _SignalViewTime(TimeIndexerLike[T], Generic[T]):
+
+    def __init__(self, signal: Signal[T]):
+        self._signal = signal
+
+    def __getitem__(self, ts_or_array: int | Sequence[int] | np.ndarray | slice) -> Tuple[T, int] | "Signal[T]":
+        """Access the Signal data by timestamp.
+        The sequence of timestamps must be non-decreasing, otherwise the behavior is undefined.
+
+        Returns:
+            - Tuple[T, int]: When a single timestamp is provided.
+            - Signal[T]: When a sequence of timestamps is provided.
+        """
+        match ts_or_array:
+            case int() as ts:
+                idx = self._signal._search_ts(ts)
+                if idx < 0:
+                    raise KeyError(f"Timestamp {ts} precedes the first record")
+                return self._signal._values_at(idx), self._signal._ts_at(idx)
+            case slice() as sl if sl.step is None:
+                start = sl.start if sl.start is not None else self._signal.start_ts
+                stop = sl.stop if sl.stop is not None else self._signal.last_ts + 1
+                start_id, end_id = self._signal._search_ts([start, stop])
+                if stop > self._signal._ts_at(end_id):
+                    end_id += 1
+                kwargs = {}
+                if self._signal._values_at(start_id) != start and start_id > -1:
+                    kwargs['start_ts'] = start
+                if start_id < 0:
+                    start_id = 0
+                return _SignalView(self._signal, range(start_id, end_id, 1), **kwargs)
+            case slice() as sl if sl.step is not None and sl.step <= 0:
+                raise ValueError("Slice step must be positive")
+            case slice() as sl if sl.step is not None and sl.start is None:
+                raise ValueError("Slice start is required when step is provided")
+            case np.ndarray() | SequenceABC() | slice() as tss:
+                if isinstance(tss, slice):
+                    start = tss.start if tss.start is not None else self._signal.start_ts
+                    stop = tss.stop if tss.stop is not None else self._signal.last_ts + 1
+                    if start < self._signal.start_ts:
+                        raise KeyError(f"Timestamp {start} precedes the first record")
+                    tss = np.arange(start, stop, tss.step)
+                # TODO: Update the docs, as this is change in behavior.
+                # When we sample before the first record, we return an empty signal.
+                idxs = self._signal._search_ts(tss)
+                # Start at the first non-negative index since idxs is non-decreasing.
+                idxs = idxs[np.searchsorted(idxs, 0, side='left'):]
+                return _SignalView(self._signal, idxs, tss)
+            case _:
+                raise TypeError(f"Unsupported index type: {type(ts_or_array)}")
+
+
+class _SignalView(Signal[T], Generic[T]):
+
+    def __init__(self,
+                 signal: Signal[T],
+                 indices: Sequence[int],
+                 timestamps: Sequence[int] | None = None,
+                 start_ts: int | None = None):
+        self._signal = signal
+        self._indices = indices
+        assert timestamps is None or start_ts is None, "Only one of timestamps or start_ts can be provided"
+        self._timestamps = timestamps
+        self._start_ts = start_ts
+
+    def __len__(self) -> int:
+        return len(self._indices)
+
+    def _ts_at(self, index_or_indices: int | Sequence[int] | np.ndarray | slice) -> int | Sequence[int] | np.ndarray:
+        if self._timestamps is not None:
+            return self._timestamps[index_or_indices]
+        match index_or_indices:
+            case int() as i:
+                return self._signal._ts_at(self._indices[i]) if self._start_ts is None or i > 0 else self._start_ts
+            case slice() | np.ndarray() | SequenceABC() as idxs:
+                result = self._signal._ts_at(self._indices[idxs])
+                if self._start_ts is not None:
+                    if isinstance(idxs, slice):
+                        idxs = np.arange(*idxs.indices(len(self)))
+                    else:
+                        idxs = np.asarray(idxs)
+                    result[idxs == 0] = self._start_ts
+                return result
+            case _:
+                raise TypeError(f"Unsupported index type: {type(index_or_indices)}")
+
+    def _values_at(self, index_or_indices: int | Sequence[int] | np.ndarray) -> T | Sequence[T]:
+        match index_or_indices:
+            case int() | np.integer() | slice() | np.ndarray() | SequenceABC():
+                return self._signal._values_at(self._indices[index_or_indices])
+            case _:
+                raise TypeError(f"Unsupported index type: {type(index_or_indices)}")
+
+    def _search_ts(self, ts_or_array: int | Sequence[int] | np.ndarray) -> int | np.ndarray:
+        match ts_or_array:
+            case int() | slice() | np.ndarray() | SequenceABC():
+                if self._timestamps is None:
+                    parent_idx = self._signal._search_ts(ts_or_array)
+                    return np.searchsorted(self._indices, parent_idx, side='right') - 1
+                else:
+                    return np.searchsorted(self._timestamps, ts_or_array, side='right') - 1
+            case _:
+                raise TypeError(f"Unsupported index type: {type(ts_or_array)}")
 
 
 class SignalWriter(AbstractContextManager, ABC, Generic[T]):
