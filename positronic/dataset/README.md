@@ -3,7 +3,7 @@
 This is a library for recording, storing, sharing and using robotic datasets. We differentiate between recording and storing the data and using it from with PyTorch when training. The first part is represented by data model while the second one is the view of that model.
 
 ## Core concepts
-__Signal__ – strictly typed stepwise function of time, represented as a sequence of `(data, ts)` elements, strictily ordered by `ts`.
+__Signal__ – strictly typed stepwise function of time, represented as a sequence of `(data, ts)` elements with strictly increasing `ts`.
 The value at time `t` is defined as: $f(t) = \text{data}_i$ where $i = \max\{j : \text{ts}_j \leq t\}$. For $t < \text{ts}_0$ the function is not defined.
 
 Three types are currently supported.
@@ -21,35 +21,30 @@ __Dataset__ – ordered collection of Episodes with sequence-style access (index
 * Window slices like "5 seconds before time X".
 
 ## Public API
-Signal implements `Sequence[(T, int)]` (iterable, indexable, reversible).
-We support three kinds of `Signal`s: scalar, vector, and image (video). Also, we support one and only one timestamp type per `Signal`.
+Signal implements `Sequence[(T, int)]` (iterable, indexable). We support three kinds of `Signal`s: scalar, vector, and image (video). Timestamps are int nanoseconds.
 ```python
 class Signal[T]:
-    # Returns the number of records in the signal
-    def __len__(self) -> int:
-        pass
+    # Minimal abstract interface (implementations must provide):
+    def __len__(self) -> int: ...                # number of records
+    def _ts_at(self, idx_or_indices) -> int | np.ndarray: ...
+    def _values_at(self, idx_or_indices) -> T | Sequence[T]: ...
+    def _search_ts(self, ts_or_array) -> int | np.ndarray: ...  # floor index, -1 if before first
 
-    # Access data by index or slice
-    # signal[idx] returns (value, timestamp_ns) tuple
-    # signal[start:end] returns a `Signal` view of the slice
-    # signal[[i1, i2, ...]] returns a `Signal` view with the selected indices
-    # (boolean masks are not supported)
-    def __getitem__(self, index_or_slice: int | slice | Sequence[int] | np.ndarray) -> Tuple[T, int] | Signal[T]:
-        pass
+    # Index-based access (provided by the library):
+    # * signal[i] -> (value, ts) at i (negative indices supported)
+    # * signal[a:b:s] -> Signal view over [a:b:s], step>0 required
+    # * signal[[i1, i2, ...]] -> Signal view at those integer positions (no boolean masks)
 
-    # Timestamp-based indexer property for accessing data by time:
-    # * signal.time[ts_ns] returns (value, timestamp_ns) for closest record at or before ts_ns.
-    # * signal.time[start_ts:end_ts] returns `Signal` view for time window [start_ts, end_ts).
-    # * signal.time[start:end:step] returns a `Signal` sampled at requested timestamps:
-    #     t_i = start + i * step (for i >= 0 while t_i < end).
-    #     Each returned element is (value_at_or_before_t_i, t_i). If any requested timestamp
-    #     precedes the first record, a KeyError is raised. step must be positive.
-    # * signal.time[[t1, t2, ...]] returns a `Signal` sampled at the provided timestamps.
-    #     Each element is (value_at_or_before_t_i, t_i). Raises KeyError if any t_i precedes
-    #     the first record.
-    @property
-    def time(self):
-        pass
+    # Time-based access (provided by the library):
+    # * signal.time[ts] -> (value_at_or_before_ts, ts_at_or_before) or KeyError if ts < first
+    # * signal.time[start:stop] -> Signal view for [start, stop). Empty signal -> empty view.
+    #     If start < first: the window intersects to [first, stop). If start is between two
+    #     records and >= first, a carried-back sample is injected at exactly `start`.
+    # * signal.time[start:stop:step] -> sampled at t_i = start + i*step (end-exclusive). step>0
+    #     and start required; start < first -> KeyError. Timestamps in the result are the
+    #     requested ones.
+    # * signal.time[[t1, t2, ...]] -> sampled at provided timestamps. Empty arrays are supported
+    #     and return an empty Signal; non-integer dtype raises TypeError; any t < first -> KeyError.
 
 class SignalWriter[T]:
     # Appends data with timestamp. Fails if ts_ns is not increasing or data shape/dtype doesn't match
@@ -139,6 +134,10 @@ class DatasetWriter:
 ## Signal implementations
 
 `Signal` and `SignalWriter` are abstract interfaces.
+All `Signal` implementations (scalar/vector/video) only implement the minimal interface shown above.
+The library provides the full indexing/time behavior so every Signal behaves identically regardless of
+the backing store. This keeps implementations small and focused (e.g., Parquet arrays for vectors,
+video decoding for images) while ensuring consistent semantics.
 
 We provide implementations for scalar and vector `Signal`s (`SimpleSignal`/`SimpleSignalWriter`) and for image `Signal`s (`VideoSignal`/`VideoSignalWriter`).
 
@@ -150,13 +149,13 @@ All the classes are lazy, in the sense that they don't perform any IO or computa
 
 #### Access semantics
 
-When accessing data via slices (either index-based like `signal[0:100]` or time-based like `signal.time[start_ts:end_ts]`), the library returns `Signal` views that share the underlying data with the original `Signal`. These views have the same API as the original `Signal` and provide zero-copy access to the data.
-
-For stepped time slicing `signal.time[start:end:step]`, the returned `Signal` contains samples located at the requested timestamps t_i = start + i * step (end-exclusive), as described above in the public API section. NOTE: stepped time slicing creates a copy of data, so it is not a "free" operation.
-
-Both index and time indexing supports arrays access:
-- Index-based arrays: `signal[[i1, i2, ...]]` or `signal[np.array([i1, i2, ...])]` returns a `Signal` view containing the records at the specified indices. Boolean masks are not supported.
-- Time-based arrays: `signal.time[[t1, t2, ...]]` returns a `Signal` sampled at the provided timestamps. Each element is `(value_at_or_before_t_i, t_i)`. A KeyError is raised if any requested timestamp precedes the first record. Implementation will allocate new arrays internally and therefore is not a zero-copy operation.
+- Indexing by position: integers, positive-step slices, and integer arrays. Boolean masks are not supported.
+- Time scalar: at-or-before with KeyError if before first.
+- Time windows (non-stepped): [start, stop), inject start sample when start is between records (>= first).
+  If start < first, the window intersects to [first, stop). Empty signal -> empty view.
+- Time stepped windows: [start, stop: step], step > 0 and start required; start < first -> KeyError.
+  Samples at requested timestamps; values are carried back.
+- Time arrays: empty arrays are allowed (empty result); non-integer dtype raises TypeError; any t < first -> KeyError.
 
 ### Video
 When implementing `VideoSignal` we are balancing the following trade-offs:

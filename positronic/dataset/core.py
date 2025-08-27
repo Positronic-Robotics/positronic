@@ -17,22 +17,59 @@ class TimeIndexerLike(Protocol, Generic[T]):
 
 
 class Signal(Sequence[Tuple[T, int]], ABC, Generic[T]):
-    """Strictly typed, stepwise function of time.
+    """Strictly typed, stepwise function of time with a uniform access contract.
 
-    A Signal is an ordered sequence of (value, ts_ns) where timestamps are
-    strictly increasing. The value at time t is defined as the last value at
-    or before t; the signal is undefined for t < first_timestamp.
+    Definition
+    - A Signal is an ordered sequence of (value, ts_ns) with strictly increasing
+      timestamps. The value at time t is the last value at-or-before t. The
+      signal is undefined for t < first_timestamp.
 
-    Access patterns:
-    - Index-based: integer/slice/array indexing by position. Slices and arrays
-      return Signal views; implementations aim to share storage when possible.
-    - Time-based: `signal.time[...]` provides timestamp access (snapshots,
-      windows, stepped sampling). Stepped time sampling materializes the
-      requested timestamps.
+    What implementations must provide (limited abstract interface)
+    - __len__(): number of records.
+    - _ts_at(idx|indices): timestamp(s) for position(s).
+    - _values_at(idx|indices): value(s) for position(s).
+    - _search_ts(ts|array): floor index (largest i s.t. ts[i] <= t); -1 if t is
+      before the first record. For arrays, return a numpy int64 array.
+
+    The library implements all indexing/time semantics on top of this interface,
+    so derived classes only focus on storage/decoding (e.g., Parquet arrays or
+    video decoding) and do not reimplement access logic.
+
+    Access semantics
+    - Index-based (signal[...]):
+      - Integer: returns (value, ts) at that index; negative indices supported.
+      - Slice: returns a Signal view over [start:stop:step]; step must be positive
+        (ValueError on step <= 0). Views share underlying storage when possible.
+      - Array of integers (numpy/list): returns a Signal view at those positions.
+        Boolean masks are not supported (IndexError). Non-integer dtype raises
+        TypeError. Negative indices are normalized; out-of-range raises IndexError.
+
+    - Time-based (signal.time[...]):
+      - Scalar timestamp: returns (value_at_or_before_ts, ts_at_or_before). Raises
+        KeyError if ts < first_timestamp.
+      - Non-stepped window slice [start:stop):
+        - Empty signal returns an empty view.
+        - Defaults: start = first_timestamp, stop = last_timestamp + 1.
+        - If start < first_timestamp: the window intersects to [first_timestamp, stop)
+          (no injection at start in this case).
+        - Injection: if start is between two records and start >= first_timestamp,
+          inject a carried-back sample at exactly "start" with the timestamp set to
+          "start" and the value carried from the floor index. End is exclusive.
+      - Stepped window slice [start:stop:step]:
+        - step must be positive; start is required (ValueError otherwise).
+        - If start < first_timestamp: raises KeyError.
+        - Defaults: stop = last_timestamp + 1.
+        - Returns samples at requested timestamps t_i = start + i*step (end-exclusive),
+          each element is (value_at_or_before_t_i, t_i).
+      - Time arrays (signal.time[[t1, t2, ...]]):
+        - Empty arrays are supported and return an empty view.
+        - Dtype must be integer (TypeError otherwise).
+        - If any requested timestamp precedes the first record, raises KeyError.
+        - Order and duplicates are preserved; values are carried back from floor indices.
 
     Concrete implementations decide storage/layout (e.g., Parquet for
-    scalar/vector, encoded video + Parquet index for images) but must follow
-    the semantics above.
+    scalar/vector, encoded video + Parquet index for images) but must follow the
+    semantics above. All indexing/time behavior is handled by this base class.
     """
 
     @abstractmethod
