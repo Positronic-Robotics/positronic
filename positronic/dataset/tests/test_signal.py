@@ -107,5 +107,32 @@ class TestSignalWriterContext:
             w.append(1, 1000)
             w.abort()
             assert not fp.exists()
-            with pytest.raises(RuntimeError):
-                w.append(2, 2000)
+        with pytest.raises(RuntimeError):
+            w.append(2, 2000)
+
+
+class TestVectorInterface:
+
+    def test_len_and_search_ts_empty(self, tmp_path):
+        s = create_signal(tmp_path, [], "empty.parquet")
+        assert len(s) == 0
+        empty = s._search_ts(np.array([], dtype=np.int64))
+        assert isinstance(empty, np.ndarray)
+        assert empty.size == 0
+
+    def test_search_ts_invalid_dtype(self, tmp_path):
+        s = create_signal(tmp_path, [(1, 1000)])
+        with pytest.raises(TypeError):
+            _ = s._search_ts(np.array([1000.0], dtype=np.float64))
+
+    def test_values_and_ts_at(self, tmp_path):
+        s = create_signal(tmp_path, [(np.array([1, 2]), 1000), (np.array([3, 4]), 2000)])
+        assert s._ts_at(1) == 2000
+        ts_arr = s._ts_at(np.array([0, 1], dtype=np.int64))
+        assert np.array_equal(ts_arr, np.array([1000, 2000], dtype=np.int64))
+        v0 = s._values_at(0)
+        np.testing.assert_array_equal(v0, [1, 2])
+        varr = s._values_at(np.array([0, 1], dtype=np.int64))
+        assert len(varr) == 2
+        np.testing.assert_array_equal(varr[0], [1, 2])
+        np.testing.assert_array_equal(varr[1], [3, 4])
