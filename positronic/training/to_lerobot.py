@@ -48,7 +48,7 @@ def observation_features(observation_encoder: ObservationEncoder) -> dict:
 
         elif isinstance(transform, ToArrayTransform):
             features[transform.output_key] = {
-                "dtype": "float64",
+                "dtype": "float32",
                 "shape": (transform.n_features,),
                 "names": ["state"],
             }
@@ -73,7 +73,7 @@ class EpisodeDictDataset(torch.utils.data.Dataset):
         episode = self.dataset[idx]
         timestamps = np.linspace(episode.start_ts, episode.last_ts, int(episode.time.duration / 1e9 * self.fps))
         ep_dict = self.observation_encoder.episode_to_dict(episode, timestamps=timestamps)
-        ep_dict['action'] = self.action_encoder.encode_episode(episode, timestamps=timestamps)
+        ep_dict['actions'] = self.action_encoder.encode_episode(episode, timestamps=timestamps)
 
         return ep_dict
 
@@ -101,7 +101,7 @@ def append_data_to_dataset(
     )
 
     for episode_idx, ep_dict in enumerate(tqdm.tqdm(dataloader, desc="Processing episodes")):
-        num_frames = len(ep_dict['action'])
+        num_frames = len(ep_dict['actions'])
         total_length += num_frames * 1 / dataset.fps
 
         for i in range(num_frames):
@@ -159,7 +159,7 @@ def convert_to_lerobot_dataset(
 
 @cfn.config(
     observation_encoder=positronic.cfg.inference.observation.end_effector_handcam,
-    action_encoder=positronic.cfg.inference.action.relative_robot_position,
+    action_encoder=positronic.cfg.inference.action.absolute_position,
     task="pick up the red cube and place it on the green cube",
 )
 def append_data_to_lerobot_dataset(

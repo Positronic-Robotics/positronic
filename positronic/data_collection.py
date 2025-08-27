@@ -295,7 +295,7 @@ def main(robot_arm: Any | None,
 
         if robot_arm is not None:
             robot_arm.state, data_collection.robot_state = world.shared_memory()
-            data_collection.robot_commands, robot_arm.commands = world.mp_pipe(1)
+            data_collection.robot_commands, robot_arm.commands = world.mp_pipe()
             if gripper is not robot_arm:
                 world.start_in_subprocess(robot_arm.run)
 
@@ -332,8 +332,12 @@ def main_sim(
     sim = MujocoSim(mujoco_model_path, loaders)
     robot_arm = MujocoFranka(sim, suffix='_ph')
     cameras = {
-        'handcam_left': MujocoCamera(sim.model, sim.data, 'handcam_left_ph', (320, 240), fps=fps),
-        'handcam_right': MujocoCamera(sim.model, sim.data, 'handcam_right_ph', (320, 240), fps=fps),
+        'handcam_left': MujocoCamera(sim.model, sim.data, 'handcam_left_ph', (640, 480), fps=fps),
+        'handcam_right': MujocoCamera(sim.model, sim.data, 'handcam_right_ph', (640, 480), fps=fps),
+        'side_view': MujocoCamera(sim.model, sim.data, 'side_view_ph', (640, 480), fps=fps),
+        'table_view': MujocoCamera(sim.model, sim.data, 'table_view_ph', (640, 480), fps=fps),
+        'front_view': MujocoCamera(sim.model, sim.data, 'front_view_ph', (640, 480), fps=fps),
+        'back_view': MujocoCamera(sim.model, sim.data, 'back_view_ph', (640, 480), fps=fps),
     }
     gripper = MujocoGripper(sim, actuator_name='actuator8_ph', joint_name='finger_joint1_ph')
     gui = DearpyguiUi()
@@ -385,7 +389,9 @@ def main_sim(
         while not world.should_stop:
             try:
                 time_since_start = pimm.world.SystemClock().now_ns() - start_time
-                if sim.now_ns() < sim_start_time + time_since_start:
+                sim_time = sim.now_ns()
+
+                if sim_time < sim_start_time + time_since_start:
                     next(sim_iter)
                 else:
                     time.sleep(0.001)

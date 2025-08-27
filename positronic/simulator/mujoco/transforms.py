@@ -112,24 +112,27 @@ class SetBodyPosition(MujocoSceneTransform):
             np.random.seed(seed)
 
         if position is not None:
-            self.position = position
+            self.position_fn = lambda: position
         else:
-            self.position = np.random.uniform(random_position[0], random_position[1])
+            self.position_fn = lambda: np.random.uniform(random_position[0], random_position[1])
 
         if quaternion is None and random_euler is None:
-            self.quaternion = None
+            self.quaternion_fn = lambda: None
         elif quaternion is not None:
-            self.quaternion = quaternion
+            self.quaternion_fn = lambda: quaternion
         else:
-            euler = np.random.uniform(random_euler[0], random_euler[1])
-            self.quaternion = geom.Rotation.from_euler(euler).as_quat
+            def quaternion_fn():
+                euler = np.random.uniform(random_euler[0], random_euler[1])
+                return geom.Rotation.from_euler(euler).as_quat
+            self.quaternion_fn = quaternion_fn
 
     def apply(self, spec: mujoco.MjSpec) -> mujoco.MjSpec:
         bodies = [g for g in spec.bodies if g.name == self.body_name]
         assert len(bodies) == 1, f"Expected 1 body with name {self.body_name}, found {len(bodies)}"
-        bodies[0].pos = self.position
-        if self.quaternion is not None:
-            bodies[0].quat = self.quaternion
+        bodies[0].pos = self.position_fn()
+        quaternion = self.quaternion_fn()
+        if quaternion is not None:
+            bodies[0].quat = quaternion
         return spec
 
 

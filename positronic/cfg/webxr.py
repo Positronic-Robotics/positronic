@@ -8,9 +8,9 @@ import configuronic as cfn
     frontend="oculus",
     use_https=True,
 )
-def oculus(port: int, ssl_keyfile: str, ssl_certfile: str, use_https: bool):
+def oculus(port: int, ssl_keyfile: str, ssl_certfile: str, use_https: bool, frontend: str):
     from positronic.drivers.webxr import WebXR
-    return WebXR(port=port, ssl_keyfile=ssl_keyfile, ssl_certfile=ssl_certfile, frontend="oculus", use_https=use_https)
+    return WebXR(port=port, ssl_keyfile=ssl_keyfile, ssl_certfile=ssl_certfile, frontend=frontend, use_https=use_https)
 
 
 # iPhone controller: open http://<server-ip>:5005/ on the phone in XR Browser

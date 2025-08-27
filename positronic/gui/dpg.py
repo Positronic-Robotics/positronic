@@ -17,9 +17,9 @@ class DearpyguiUi:
 
     buttons: pimm.SignalEmitter = pimm.NoOpEmitter()
 
-    def __init__(self):
-        self.width = 320
-        self.height = 240
+    def __init__(self, width: int = 640, height: int = 480):
+        self.width = width
+        self.height = height
 
     def init(self):
         self.cameras = {

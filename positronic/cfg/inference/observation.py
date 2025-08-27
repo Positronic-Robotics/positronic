@@ -25,8 +25,8 @@ def end_effector_handcam(resolution: tuple[int, int], fps: int):
     return ObservationEncoder(
         transforms=[
             ImageTransform(input_key='image.handcam_left', output_key='observation.images.left', resize=resolution),
-            ImageTransform(input_key='image.handcam_right', output_key='observation.images.right', resize=resolution),
-            ToArrayTransform(input_key='grip', n_features=1, output_key='observation.state'),
+            ImageTransform(input_key='image.back_view', output_key='observation.images.side', resize=resolution),
+            ToArrayTransform(input_key='robot_joints', n_features=7, output_key='observation.state'),
         ],
         fps=fps
     )
