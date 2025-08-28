@@ -37,9 +37,9 @@ class Robotiq2F:
             client.write_registers(_REG_CMD, [0x0000, 0x0000, 0x0000], device_id=_SLAVE)
             client.write_registers(_REG_CMD, [0x0100, 0x0000, 0x0000], device_id=_SLAVE)
 
-            target_grip = pimm.DefaultReader(pimm.ValueUpdated(self.target_grip), (None, False))
-            force = pimm.DefaultReader(self.force, 255)  # device scale 0..255
-            speed = pimm.DefaultReader(self.speed, 255)  # device scale 0..255
+            target_grip = pimm.DefaultReader(pimm.ValueUpdated(self._target_grip), (None, False))
+            force = pimm.DefaultReader(self._force, 255)  # device scale 0..255
+            speed = pimm.DefaultReader(self._speed, 255)  # device scale 0..255
 
             while not should_stop.value:
                 pos_val, updated = target_grip.value
@@ -51,7 +51,7 @@ class Robotiq2F:
                     client.write_registers(_REG_CMD, [0x0900, pos, (frc << 8) | spd], device_id=_SLAVE)
 
                 reg = client.read_input_registers(_REG_IN_POS, count=1, device_id=_SLAVE).registers[0]
-                self.grip.emit(min(1.0, max(0.0, (reg >> 8) / 255.0)))
+                self._grip.emit(min(1.0, max(0.0, (reg >> 8) / 255.0)))
 
                 yield pimm.Sleep(limiter.wait_time())
         finally:

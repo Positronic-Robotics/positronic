@@ -1,4 +1,4 @@
-from typing import Iterator
+from typing import Iterator, Literal
 
 import numpy as np
 import pyzed.sl as sl
@@ -6,19 +6,20 @@ import pyzed.sl as sl
 import pimm
 
 
+# TODO: Currently in order to have pyzed available, one need to install Stereolabs SDK, and then generate
+# wheel file from it. We need to find a better solution how to install it via uv or at least Docker.
 class SLCamera:
     frame: pimm.SignalEmitter = pimm.NoOpEmitter()
 
-    def __init__(
-            self,
-            fps: int = 30,
-            view: sl.VIEW = sl.VIEW.LEFT,
-            resolution: sl.RESOLUTION = sl.RESOLUTION.AUTO,
-            depth_mode: sl.DEPTH_MODE = sl.DEPTH_MODE.NONE,
-            coordinate_units: sl.UNIT = sl.UNIT.METER,
-            max_depth: float = 10,
-            depth_mask: bool = False
-    ):
+    def __init__(self,
+                 serial_number: int | None = None,
+                 fps: int | None = None,
+                 view: Literal["left", "right", "side_by_side"] = "left",
+                 resolution: Literal["hd4k", "qhdplus", "hd2k", "hd1080", "hd1200", "hd1536", "hd720", "svga", "vga",
+                                     "auto"] = "auto",
+                 depth_mode: Literal["none", "near", "far", "high", "ultra"] = "none",
+                 max_depth: float = 10,
+                 depth_mask: bool = False):
         """
         StereoLabs camera driver.
 
@@ -34,14 +35,20 @@ class SLCamera:
         """
         super().__init__()
         self.init_params = sl.InitParameters()
-        self.init_params.camera_resolution = resolution
-        self.init_params.camera_fps = fps
-        self.init_params.depth_mode = depth_mode
-        self.init_params.coordinate_units = coordinate_units
+        self.init_params.camera_resolution = getattr(sl.RESOLUTION, resolution.upper())
+        if fps is not None:
+            self.init_params.camera_fps = fps
+        if serial_number is not None:
+            inpt = sl.InputType()
+            inpt.set_from_serial_number(serial_number)
+            self.init_params.input = inpt
+
+        self.view = getattr(sl.VIEW, view.upper())
+        self.init_params.depth_mode = getattr(sl.DEPTH_MODE, depth_mode.upper())
+        self.init_params.coordinate_units = sl.UNIT.METER
         self.init_params.sdk_verbose = 1
         self.init_params.enable_image_enhancement = False
         self.init_params.async_grab_camera_recovery = False
-        self.view = view
 
         self.max_depth = max_depth
         self.depth_mask = depth_mask
@@ -58,7 +65,7 @@ class SLCamera:
             result = zed.grab()
             frame = {}
             if result != SUCCESS:
-                yield pimm.Sleep(0.001)
+                yield pimm.Sleep(0.01)
                 continue
 
             image = sl.Mat()
@@ -89,5 +96,5 @@ class SLCamera:
                         frame['depth'] = data.astype(np.uint8)[..., np.newaxis]
             self.frame.emit(frame, ts=ts_s)
             fps_counter.tick()
-            yield pimm.Sleep(0.001)
+            yield pimm.Sleep(0.01)
         zed.close()

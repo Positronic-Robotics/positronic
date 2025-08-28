@@ -5,13 +5,11 @@ import positronic.cfg.hardware.motors
 
 @cfn.config(ip="172.168.0.2",
             relative_dynamics_factor=0.2,
-            cartesian_mode="positronic",
             home_joints=[0.0, -0.31, 0.0, -1.65, 0.0, 1.522, 0.0])
-def franka(ip: str, relative_dynamics_factor: float, cartesian_mode: str, home_joints: list[float]):
-    from positronic.drivers.roboarm.franka import Robot, CartesianMode  # noqa: F401
+def franka(ip: str, relative_dynamics_factor: float,  home_joints: list[float]):
+    from positronic.drivers.roboarm.franka import Robot  # noqa: F401
     return Robot(ip=ip,
                  relative_dynamics_factor=relative_dynamics_factor,
-                 cartesian_mode=CartesianMode(cartesian_mode),
                  home_joints=home_joints)
 
 

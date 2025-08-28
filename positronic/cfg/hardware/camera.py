@@ -29,6 +29,10 @@ def zed(**kwargs):
     return SLCamera(**kwargs)
 
 
+zed_m = zed.override(serial_number=17521925)
+zed_2i = zed.override(serial_number=39567055)
+
+
 @cfn.config()
 def luxonis(**kwargs):
     from positronic.drivers.camera.luxonis import LuxonisCamera

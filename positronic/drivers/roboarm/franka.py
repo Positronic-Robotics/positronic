@@ -112,7 +112,7 @@ class Robot:
 
         commands = pimm.DefaultReader(pimm.ValueUpdated(self.commands), (None, False))
         robot_state = FrankaState()
-        rate_limiter = pimm.RateLimiter(clock, hz=1000)
+        rate_limiter = pimm.RateLimiter(clock, hz=2000)
 
         self._reset(robot, robot_state)
 

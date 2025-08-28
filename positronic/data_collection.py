@@ -383,9 +383,21 @@ def so101cfg(robot_arm, **kwargs):
     main(robot_arm=robot_arm, gripper=robot_arm, **kwargs)
 
 
+droid = cfn.Config(
+    main,
+    robot_arm=positronic.cfg.hardware.roboarm.franka,
+    gripper=positronic.cfg.hardware.gripper.robotiq,
+    webxr=positronic.cfg.webxr.oculus,
+    sound=positronic.cfg.sound.sound,
+    cameras={'wrist': positronic.cfg.hardware.camera.zed_m.override(view='side_by_side', resolution='vga', fps=30),
+             'side': positronic.cfg.hardware.camera.zed_2i.override(view='left', resolution='vga', fps=30)},
+    operator_position=OperatorPosition.FRONT,
+)
+
 if __name__ == "__main__":
     cfn.cli({
         "real": main_cfg,
         "so101": so101cfg,
         "sim": main_sim_cfg,
+        "droid": droid,
     })
