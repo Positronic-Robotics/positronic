@@ -120,17 +120,23 @@ class TestVectorInterface:
         assert isinstance(empty, np.ndarray)
         assert empty.size == 0
 
-    def test_search_ts_invalid_dtype(self, tmp_path):
-        s = create_signal(tmp_path, [(1, 1000)])
+    def test_search_ts_numeric_and_invalid_dtype(self, tmp_path):
+        s = create_signal(tmp_path, [(1, 1000), (2, 2000), (3, 3000)])
+        # Accept float array: floor indices for 500, 1500, 2500, 3500
+        idx = s._search_ts(np.array([500.0, 1500.0, 2500.0, 3500.0], dtype=np.float64))
+        assert np.array_equal(idx, np.array([-1, 0, 1, 2]))
+        # Accept scalar float via list-like contract
+        assert s._search_ts([1999.9])[0] == 0
+        # Reject non-numeric dtype
         with pytest.raises(TypeError):
-            _ = s._search_ts(np.array([1000.0], dtype=np.float64))
+            _ = s._search_ts(np.array(["1000"], dtype=object))
 
     def test_values_and_ts_at(self, tmp_path):
         s = create_signal(tmp_path, [(np.array([1, 2]), 1000), (np.array([3, 4]), 2000)])
-        assert s._ts_at(1) == 2000
+        assert s._ts_at([1])[0] == 2000
         ts_arr = s._ts_at(np.array([0, 1], dtype=np.int64))
         assert np.array_equal(ts_arr, np.array([1000, 2000], dtype=np.int64))
-        v0 = s._values_at(0)
+        v0 = s._values_at([0])[0]
         np.testing.assert_array_equal(v0, [1, 2])
         varr = s._values_at(np.array([0, 1], dtype=np.int64))
         assert len(varr) == 2

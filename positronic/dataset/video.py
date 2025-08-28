@@ -250,17 +250,12 @@ class VideoSignal(Signal[np.ndarray]):
 
         raise IndexError(f"Could not decode frame {index}")
 
-    def _ts_at(self, index_or_indices: int | Sequence[int] | np.ndarray) -> int | Sequence[int] | np.ndarray:
+    def _ts_at(self, index_or_indices: Sequence[int] | np.ndarray) -> Sequence[int] | np.ndarray:
         self._load_timestamps()
-        if isinstance(index_or_indices, (int, np.integer)):
-            return int(self._timestamps[int(index_or_indices)])
         return self._timestamps[index_or_indices]
 
-    def _values_at(self, index_or_indices: int | Sequence[int] | np.ndarray):
+    def _values_at(self, index_or_indices: Sequence[int] | np.ndarray) -> Sequence[np.ndarray]:
         self._load_timestamps()
-        if isinstance(index_or_indices, (int, np.integer)):
-            frame, _ = self._get_frame_at_index(int(index_or_indices))
-            return frame
         if isinstance(index_or_indices, slice):
             start, stop, step = index_or_indices.indices(len(self))
             idxs = np.arange(start, stop, step, dtype=np.int64)
@@ -268,13 +263,11 @@ class VideoSignal(Signal[np.ndarray]):
             idxs = np.asarray(index_or_indices, dtype=np.int64)
         return [self._get_frame_at_index(int(i))[0] for i in idxs]
 
-    def _search_ts(self, ts_or_array: int | Sequence[int] | np.ndarray):
+    def _search_ts(self, ts_or_array: Sequence[int | float] | np.ndarray) -> np.ndarray:
         self._load_timestamps()
-        if isinstance(ts_or_array, (int, np.integer)):
-            return int(np.searchsorted(self._timestamps, int(ts_or_array), side='right') - 1)
         req = np.asarray(ts_or_array)
         if req.size == 0:
             return np.array([], dtype=np.int64)
-        if not np.issubdtype(req.dtype, np.integer):
+        if not np.issubdtype(req.dtype, np.number):
             raise TypeError(f"Invalid timestamp array dtype: {req.dtype}")
         return np.searchsorted(self._timestamps, req, side='right') - 1

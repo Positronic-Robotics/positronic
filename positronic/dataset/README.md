@@ -26,9 +26,9 @@ Signal implements `Sequence[(T, int)]` (iterable, indexable). We support three k
 class Signal[T]:
     # Minimal abstract interface (implementations must provide):
     def __len__(self) -> int: ...                # number of records
-    def _ts_at(self, idx_or_indices) -> int | np.ndarray: ...
-    def _values_at(self, idx_or_indices) -> T | Sequence[T]: ...
-    def _search_ts(self, ts_or_array) -> int | np.ndarray: ...  # floor index, -1 if before first
+    def _ts_at(self, indices) -> Sequence[int] | np.ndarray: ...       # list-like only
+    def _values_at(self, indices) -> Sequence[T]: ...                  # list-like only
+    def _search_ts(self, ts_array) -> np.ndarray: ...  # list-like only; floor indices, -1 if before first
 
     # Index-based access (provided by the library):
     # * signal[i] -> (value, ts) at i (negative indices supported)
@@ -44,7 +44,8 @@ class Signal[T]:
     #     and start required; start < first -> KeyError. Timestamps in the result are the
     #     requested ones.
     # * signal.time[[t1, t2, ...]] -> sampled at provided timestamps. Empty arrays are supported
-    #     and return an empty Signal; non-integer dtype raises TypeError; any t < first -> KeyError.
+    #     and return an empty Signal; non-numeric dtype raises TypeError (floats accepted);
+    #     any t < first -> KeyError.
 
 class SignalWriter[T]:
     # Appends data with timestamp. Fails if ts_ns is not increasing or data shape/dtype doesn't match
@@ -155,7 +156,8 @@ All the classes are lazy, in the sense that they don't perform any IO or computa
   If start < first, the window intersects to [first, stop). Empty signal -> empty view.
 - Time stepped windows: [start, stop: step], step > 0 and start required; start < first -> KeyError.
   Samples at requested timestamps; values are carried back.
-- Time arrays: empty arrays are allowed (empty result); non-integer dtype raises TypeError; any t < first -> KeyError.
+- Time arrays: empty arrays are allowed (empty result); non-numeric dtype raises TypeError (floats accepted);
+  any t < first -> KeyError.
 
 ### Video
 When implementing `VideoSignal` we are balancing the following trade-offs:

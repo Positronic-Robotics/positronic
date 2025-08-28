@@ -20,28 +20,22 @@ class DummySignal(Signal[int]):
         return int(self._ts.shape[0])
 
     def _ts_at(self, index_or_indices):
-        if isinstance(index_or_indices, (int, np.integer)):
-            return int(self._ts[int(index_or_indices)])
         idxs = np.asarray(index_or_indices, dtype=np.int64)
         if idxs.size == 0:
             return np.array([], dtype=np.int64)
         return self._ts[idxs]
 
     def _values_at(self, index_or_indices):
-        if isinstance(index_or_indices, (int, np.integer)):
-            return int(self._vals[int(index_or_indices)])
         idxs = np.asarray(index_or_indices, dtype=np.int64)
         if idxs.size == 0:
             return []
         return self._vals[idxs]
 
     def _search_ts(self, ts_or_array):
-        if isinstance(ts_or_array, (int, np.integer)):
-            return int(np.searchsorted(self._ts, int(ts_or_array), side='right') - 1)
         req = np.asarray(ts_or_array)
         if req.size == 0:
             return np.array([], dtype=np.int64)
-        if not np.issubdtype(req.dtype, np.integer):
+        if not np.issubdtype(req.dtype, np.number):
             raise TypeError(f"Invalid timestamp array dtype: {req.dtype}")
         return np.searchsorted(self._ts, req, side='right') - 1
 
@@ -99,6 +93,13 @@ class TestCoreSignalBasics:
         empty = sig_simple[[]]
         assert len(empty) == 0
 
+    def test_index_numpy_integer_scalars(self, sig_simple):
+        # Previously: numpy integer scalars did not match case int() and raised TypeError
+        assert sig_simple[np.int64(2)] == (30, 3000)
+        assert sig_simple[np.int32(0)] == (10, 1000)
+        # Negative numpy integers are supported via normalization
+        assert sig_simple[np.int64(-1)] == (50, 5000)
+
 
 class TestCoreSignalTime:
 
@@ -110,6 +111,8 @@ class TestCoreSignalTime:
         assert sig_simple.time[1000] == (10, 1000)
         # Between
         assert sig_simple.time[2500] == (20, 2000)
+        # Float scalar should be accepted
+        assert sig_simple.time[2500.0] == (20, 2000)
         # After last
         assert sig_simple.time[9999] == (50, 5000)
 
@@ -183,9 +186,9 @@ class TestCoreSignalTime:
         # Unsorted + duplicates
         view2 = sig_simple.time[[3000, 1000, 3000]]
         assert list(view2) == [(30, 3000), (10, 1000), (30, 3000)]
-        # Invalid dtype
-        with pytest.raises(TypeError):
-            _ = sig_simple.time[np.array([1000.0, 2500.0], dtype=np.float64)]
+        # Float timestamps are accepted for arrays
+        viewf = sig_simple.time[np.array([1000.0, 2500.0], dtype=np.float64)]
+        assert list(viewf) == [(10, 1000.0), (20, 2500.0)]
 
 
 class TestCoreSignalViews:

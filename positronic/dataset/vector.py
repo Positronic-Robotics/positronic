@@ -38,26 +38,20 @@ class SimpleSignal(Signal[T]):
         self._load_data()
         return len(self._timestamps)
 
-    def _ts_at(self, index_or_indices: int | Sequence[int] | np.ndarray) -> int | Sequence[int] | np.ndarray:
+    def _ts_at(self, index_or_indices: Sequence[int] | np.ndarray) -> Sequence[int] | np.ndarray:
         self._load_data()
-        if isinstance(index_or_indices, (int, np.integer)):
-            return int(self._timestamps[int(index_or_indices)])
         return self._timestamps[index_or_indices]
 
-    def _values_at(self, index_or_indices: int | Sequence[int] | np.ndarray):
+    def _values_at(self, index_or_indices: Sequence[int] | np.ndarray) -> Sequence[T]:
         self._load_data()
-        if isinstance(index_or_indices, (int, np.integer)):
-            return self._values[int(index_or_indices)]
         return self._values[index_or_indices]
 
-    def _search_ts(self, ts_or_array: int | Sequence[int] | np.ndarray):
+    def _search_ts(self, ts_or_array: Sequence[int | float] | np.ndarray) -> np.ndarray:
         self._load_data()
-        if isinstance(ts_or_array, (int, np.integer)):
-            return int(np.searchsorted(self._timestamps, int(ts_or_array), side='right') - 1)
         req = np.asarray(ts_or_array)
         if req.size == 0:
             return np.array([], dtype=np.int64)
-        if not np.issubdtype(req.dtype, np.integer):
+        if not np.issubdtype(req.dtype, np.number):
             raise TypeError(f"Invalid timestamp array dtype: {req.dtype}")
         return np.searchsorted(self._timestamps, req, side='right') - 1
 

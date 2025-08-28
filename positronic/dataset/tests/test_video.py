@@ -171,12 +171,15 @@ class TestVideoInterface:
         frame0, ts0 = sig[0]
         assert ts0 == 1000
         assert_frames_equal(frame0, create_frame(50))
-        assert sig._ts_at(1) == 2000
+        assert sig._ts_at([1])[0] == 2000
 
-    def test_search_ts_empty_and_invalid(self, video_paths):
+    def test_search_ts_empty_and_numeric(self, video_paths):
         sig = create_video_signal(video_paths, [(create_frame(50), 1000)])
         empty = sig._search_ts(np.array([], dtype=np.int64))
         assert isinstance(empty, np.ndarray)
         assert empty.size == 0
-        with pytest.raises(TypeError):
-            _ = sig._search_ts(np.array([1000.0], dtype=np.float64))
+        # Accept float array; floor index for one element
+        idx = sig._search_ts(np.array([999.9, 1000.0, 1000.1], dtype=np.float64))
+        assert np.array_equal(idx, np.array([-1, 0, 0]))
+        # Accept scalar float via list-like
+        assert sig._search_ts([1000.0])[0] == 0
