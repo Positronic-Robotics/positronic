@@ -1,4 +1,5 @@
 import abc
+import contextlib
 from pathlib import Path
 import pickle
 from typing import Any, Dict, Sequence, Tuple
@@ -7,6 +8,20 @@ import mujoco
 import numpy as np
 
 from positronic import geom
+
+
+@contextlib.contextmanager
+def np_seed(seed: int | None = None):
+    if seed is None:
+        yield
+        return
+
+    original_state = np.random.get_state()
+    np.random.seed(seed)
+    try:
+        yield
+    finally:
+        np.random.set_state(original_state)
 
 
 class MujocoSceneTransform(abc.ABC):
@@ -104,33 +119,35 @@ class SetBodyPosition(MujocoSceneTransform):
             seed: int | None = None,
     ):
         self.body_name = body_name
+        self.seed = seed
         assert (position is None) ^ (random_position is None), "One of position or random_position must be provided"
         assert (quaternion is None) or (random_euler is None), \
             "At most one of quaternion or random_euler must be provided"
 
-        if seed is not None:
-            np.random.seed(seed)
-
         if position is not None:
-            self.position = position
+            self.position_fn = lambda: position
         else:
-            self.position = np.random.uniform(random_position[0], random_position[1])
+            self.position_fn = lambda: np.random.uniform(random_position[0], random_position[1])
 
         if quaternion is None and random_euler is None:
-            self.quaternion = None
+            self.quaternion_fn = lambda: None
         elif quaternion is not None:
-            self.quaternion = quaternion
+            self.quaternion_fn = lambda: quaternion
         else:
-            euler = np.random.uniform(random_euler[0], random_euler[1])
-            self.quaternion = geom.Rotation.from_euler(euler).as_quat
+            def quaternion_fn():
+                euler = np.random.uniform(random_euler[0], random_euler[1])
+                return geom.Rotation.from_euler(euler).as_quat
+            self.quaternion_fn = quaternion_fn
 
     def apply(self, spec: mujoco.MjSpec) -> mujoco.MjSpec:
-        bodies = [g for g in spec.bodies if g.name == self.body_name]
-        assert len(bodies) == 1, f"Expected 1 body with name {self.body_name}, found {len(bodies)}"
-        bodies[0].pos = self.position
-        if self.quaternion is not None:
-            bodies[0].quat = self.quaternion
-        return spec
+        with np_seed(self.seed):
+            bodies = [g for g in spec.bodies if g.name == self.body_name]
+            assert len(bodies) == 1, f"Expected 1 body with name {self.body_name}, found {len(bodies)}"
+            bodies[0].pos = self.position_fn()
+            quaternion = self.quaternion_fn()
+            if quaternion is not None:
+                bodies[0].quat = quaternion
+            return spec
 
 
 def load_model_from_spec_file(

@@ -29,14 +29,33 @@ STATE_SPECS = [
 ]
 
 
+def save_state(model, data) -> Dict[str, np.ndarray]:
+    """
+    Saves full state of the simulator.
+    This state could be used to restore the exact state of the simulator.
+    Returns:
+        data: A dictionary containing the full state of the simulator.
+    """
+    state_data = {}
+
+    for spec in STATE_SPECS:
+        size = mj.mj_stateSize(model, spec)
+        state_data[spec.name] = np.empty(size, np.float64)
+        mj.mj_getState(model, data, state_data[spec.name], spec)
+
+    return state_data
+
+
 class MujocoSim(pimm.Clock):
     def __init__(self, mujoco_model_path: str, loaders: Sequence[MujocoSceneTransform] = ()):
-        self.model, self.metadata = load_from_xml_path(mujoco_model_path, loaders)
+        self.mujoco_model_path = mujoco_model_path
+        self.loaders = loaders
+        self.model, self.metadata = load_from_xml_path(self.mujoco_model_path, self.loaders)
         self.data = mj.MjData(self.model)
         self.fps_counter = pimm.utils.RateCounter("MujocoSim")
         self.initial_ctrl = [float(x) for x in self.metadata.get('initial_ctrl').split(',')]
         self.warmup_steps = 1000
-        self.reset()
+        self.reset(reinitialize_model=False)
 
     def run(self, should_stop: pimm.SignalReader, clock: pimm.Clock):
         while not should_stop.value:
@@ -47,12 +66,23 @@ class MujocoSim(pimm.Clock):
     def now(self) -> float:
         return self.data.time
 
-    def reset(self):
+    def reset(self, reinitialize_model: bool = True):
+        time_before_reset = self.now()
+
         mj.mj_resetData(self.model, self.data)
+
+        if reinitialize_model:
+            model, _ = load_from_xml_path(self.mujoco_model_path, self.loaders)
+            data = mj.MjData(model)
+            state = save_state(model, data)
+            self.load_state(state, reset_time=False)
+
         if self.initial_ctrl is not None:
             self.data.ctrl = self.initial_ctrl
         mj.mj_step(self.model, self.data, self.warmup_steps)
-        self.data.time = 0
+
+        # We need to preserve time during the reset, because otherwise interleave will break
+        self.data.time = time_before_reset
 
     def load_state(self, state: dict, reset_time: bool = True):
         mj.mj_resetData(self.model, self.data)
@@ -71,14 +101,7 @@ class MujocoSim(pimm.Clock):
         Returns:
             data: A dictionary containing the full state of the simulator.
         """
-        data = {}
-
-        for spec in STATE_SPECS:
-            size = mj.mj_stateSize(self.model, spec)
-            data[spec.name] = np.empty(size, np.float64)
-            mj.mj_getState(self.model, self.data, data[spec.name], spec)
-
-        return data
+        return save_state(self.model, self.data)
 
     def step(self, duration: float | None = None) -> None:
         duration = duration or self.model.opt.timestep
@@ -169,8 +192,7 @@ class MujocoFranka:
                     case roboarm_command.JointMove(positions=positions):
                         self.set_actuator_values(positions)
                     case roboarm_command.Reset():
-                        # TODO: it's not clear how to make reset, because interleave breakes if time goes backwards
-                        pass
+                        self.sim.reset()
                     case _:
                         raise ValueError(f"Unknown command type: {type(command)}")
 
