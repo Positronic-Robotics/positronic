@@ -120,7 +120,7 @@ def append_data_to_dataset(
     video=True,
     observation_encoder=positronic.cfg.inference.observation.end_effector_handcam,
     action_encoder=positronic.cfg.inference.action.absolute_joint_position,
-    task="pick up the red cube and place it on the green cube",
+    task="pick up the green cube and place it on the red cube",
 )
 def convert_to_lerobot_dataset(
     input_dir: str,
@@ -160,7 +160,7 @@ def convert_to_lerobot_dataset(
 @cfn.config(
     observation_encoder=positronic.cfg.inference.observation.end_effector_handcam,
     action_encoder=positronic.cfg.inference.action.absolute_position,
-    task="pick up the red cube and place it on the green cube",
+    task="pick up the green cube and place it on the red cube",
 )
 def append_data_to_lerobot_dataset(
     dataset_dir: str,
