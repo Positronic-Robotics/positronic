@@ -1,9 +1,11 @@
+from pathlib import Path
 from typing import Sequence, TypeVar
+
+import numpy as np
 import pyarrow as pa
 import pyarrow.parquet as pq
-import numpy as np
-from pathlib import Path
-from .core import Signal, SignalWriter
+
+from .core import IndicesLike, RealNumericArrayLike, Signal, SignalWriter, is_realnum_dtype
 
 T = TypeVar('T')
 
@@ -38,20 +40,20 @@ class SimpleSignal(Signal[T]):
         self._load_data()
         return len(self._timestamps)
 
-    def _ts_at(self, index_or_indices: Sequence[int] | np.ndarray) -> Sequence[int] | np.ndarray:
+    def _ts_at(self, index_or_indices: IndicesLike) -> Sequence[int] | np.ndarray:
         self._load_data()
         return self._timestamps[index_or_indices]
 
-    def _values_at(self, index_or_indices: Sequence[int] | np.ndarray) -> Sequence[T]:
+    def _values_at(self, index_or_indices: IndicesLike) -> Sequence[T]:
         self._load_data()
         return self._values[index_or_indices]
 
-    def _search_ts(self, ts_or_array: Sequence[int | float] | np.ndarray) -> np.ndarray:
+    def _search_ts(self, ts_or_array: RealNumericArrayLike) -> IndicesLike:
         self._load_data()
         req = np.asarray(ts_or_array)
         if req.size == 0:
             return np.array([], dtype=np.int64)
-        if not np.issubdtype(req.dtype, np.number):
+        if not is_realnum_dtype(req.dtype):
             raise TypeError(f"Invalid timestamp array dtype: {req.dtype}")
         return np.searchsorted(self._timestamps, req, side='right') - 1
 

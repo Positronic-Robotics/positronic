@@ -23,12 +23,18 @@ __Dataset__ – ordered collection of Episodes with sequence-style access (index
 ## Public API
 Signal implements `Sequence[(T, int)]` (iterable, indexable). We support three kinds of `Signal`s: scalar, vector, and image (video). Timestamps are int nanoseconds.
 ```python
+T = TypeVar('T')  # The type of the data we manage
+
+IndicesLike = Sequence[int] | np.ndarray
+RealNumericArrayLike = Sequence[int] | Sequence[float] | np.ndarray
+
 class Signal[T]:
     # Minimal abstract interface (implementations must provide):
     def __len__(self) -> int: ...                # number of records
-    def _ts_at(self, indices) -> Sequence[int] | np.ndarray: ...       # list-like only
-    def _values_at(self, indices) -> Sequence[T]: ...                  # list-like only
-    def _search_ts(self, ts_array) -> np.ndarray: ...  # list-like only; floor indices, -1 if before first
+    def _ts_at(self, indices: IndicesLike) -> IndicesLike: ...         # list-like only
+    def _values_at(self, indices: IndicesLike) -> Sequence[T]: ...     # list-like only
+    def _search_ts(self, ts_array: RealNumericArrayLike) -> IndicesLike: ...
+        # list-like only; floor indices, -1 if before first
 
     # Index-based access (provided by the library):
     # * signal[i] -> (value, ts) at i (negative indices supported)

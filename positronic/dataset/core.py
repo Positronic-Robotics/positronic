@@ -1,12 +1,29 @@
-from abc import ABC, abstractmethod
-from contextlib import AbstractContextManager
 import collections.abc
-from typing import Any, Generic, Protocol, Sequence, Tuple, TypeVar, final, runtime_checkable
+from abc import ABC, abstractmethod
 from collections.abc import Sequence as SequenceABC
+from contextlib import AbstractContextManager
+from typing import (
+    Any,
+    Generic,
+    Protocol,
+    Sequence,
+    Tuple,
+    TypeAlias,
+    TypeVar,
+    final,
+    runtime_checkable,
+)
 
 import numpy as np
 
 T = TypeVar('T')
+
+IndicesLike: TypeAlias = Sequence[int] | np.ndarray
+RealNumericArrayLike: TypeAlias = Sequence[int] | Sequence[float] | np.ndarray
+
+
+def is_realnum_dtype(dtype) -> bool:
+    return np.issubdtype(dtype, np.integer) or np.issubdtype(dtype, np.floating)
 
 
 @runtime_checkable
@@ -80,17 +97,17 @@ class Signal(Sequence[Tuple[T, int]], ABC, Generic[T]):
         raise NotImplementedError
 
     @abstractmethod
-    def _ts_at(self, indices: Sequence[int] | np.ndarray) -> Sequence[int] | np.ndarray:
+    def _ts_at(self, indices: IndicesLike) -> Sequence[int] | np.ndarray:
         """Return timestamps at given indices (list-like only). Indices are in ascending order and in [0, len(self))."""
         raise NotImplementedError
 
     @abstractmethod
-    def _values_at(self, indices: Sequence[int] | np.ndarray) -> Sequence[T]:
+    def _values_at(self, indices: IndicesLike) -> Sequence[T]:
         """Return values at given indices (list-like only). Indices are in ascending order and in [0, len(self))."""
         raise NotImplementedError
 
     @abstractmethod
-    def _search_ts(self, ts_array: Sequence[int | float] | np.ndarray) -> np.ndarray:
+    def _search_ts(self, ts_array: RealNumericArrayLike) -> IndicesLike:
         """Return floor indices for given timestamps (list-like only).
 
         For each timestamp t, returns the largest i such that ts[i] <= t.
@@ -230,7 +247,7 @@ class _SignalViewTime(TimeIndexerLike[T], Generic[T]):
                     if start < self._signal.start_ts:
                         raise KeyError(f"Timestamp {start} precedes the first record")
                     tss = np.arange(start, stop, tss.step)
-                idxs = self._signal._search_ts(tss)
+                idxs = np.asarray(self._signal._search_ts(tss))
                 if (idxs < 0).any():  # Any timestamp before first must raise
                     raise KeyError("No record at or before some of the requested timestamps")
                 return _SignalView(self._signal, idxs, tss)
@@ -254,7 +271,7 @@ class _SignalView(Signal[T], Generic[T]):
     def __len__(self) -> int:
         return len(self._indices)
 
-    def _ts_at(self, indices: Sequence[int] | np.ndarray | slice) -> Sequence[int] | np.ndarray:
+    def _ts_at(self, indices: IndicesLike | slice) -> Sequence[int] | np.ndarray:
         if self._timestamps is not None:
             return np.asarray(self._timestamps)[indices]
         match indices:
@@ -273,7 +290,7 @@ class _SignalView(Signal[T], Generic[T]):
             case _:
                 raise TypeError(f"Unsupported index type: {type(indices)}")
 
-    def _values_at(self, indices: Sequence[int] | np.ndarray | slice) -> Sequence[T]:
+    def _values_at(self, indices: IndicesLike | slice) -> Sequence[T]:
         match indices:
             case slice() | np.ndarray() | SequenceABC():
                 if isinstance(indices, slice):
@@ -285,7 +302,7 @@ class _SignalView(Signal[T], Generic[T]):
             case _:
                 raise TypeError(f"Unsupported index type: {type(indices)}")
 
-    def _search_ts(self, ts_array: Sequence[int | float] | np.ndarray) -> np.ndarray:
+    def _search_ts(self, ts_array: RealNumericArrayLike) -> IndicesLike:
         match ts_array:
             case slice() | np.ndarray() | SequenceABC():
                 if self._timestamps is None:

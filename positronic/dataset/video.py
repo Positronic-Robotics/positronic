@@ -8,7 +8,7 @@ import numpy as np
 import pyarrow as pa
 import pyarrow.parquet as pq
 
-from .core import Signal, SignalWriter
+from .core import IndicesLike, RealNumericArrayLike, Signal, SignalWriter, is_realnum_dtype
 
 
 class VideoSignalWriter(SignalWriter[np.ndarray]):
@@ -250,11 +250,11 @@ class VideoSignal(Signal[np.ndarray]):
 
         raise IndexError(f"Could not decode frame {index}")
 
-    def _ts_at(self, index_or_indices: Sequence[int] | np.ndarray) -> Sequence[int] | np.ndarray:
+    def _ts_at(self, index_or_indices: IndicesLike) -> Sequence[int] | np.ndarray:
         self._load_timestamps()
         return self._timestamps[index_or_indices]
 
-    def _values_at(self, index_or_indices: Sequence[int] | np.ndarray) -> Sequence[np.ndarray]:
+    def _values_at(self, index_or_indices: IndicesLike) -> Sequence[np.ndarray]:
         self._load_timestamps()
         if isinstance(index_or_indices, slice):
             start, stop, step = index_or_indices.indices(len(self))
@@ -263,11 +263,11 @@ class VideoSignal(Signal[np.ndarray]):
             idxs = np.asarray(index_or_indices, dtype=np.int64)
         return [self._get_frame_at_index(int(i))[0] for i in idxs]
 
-    def _search_ts(self, ts_or_array: Sequence[int | float] | np.ndarray) -> np.ndarray:
+    def _search_ts(self, ts_or_array: RealNumericArrayLike) -> IndicesLike:
         self._load_timestamps()
         req = np.asarray(ts_or_array)
         if req.size == 0:
             return np.array([], dtype=np.int64)
-        if not np.issubdtype(req.dtype, np.number):
+        if not is_realnum_dtype(req.dtype):
             raise TypeError(f"Invalid timestamp array dtype: {req.dtype}")
         return np.searchsorted(self._timestamps, req, side='right') - 1
