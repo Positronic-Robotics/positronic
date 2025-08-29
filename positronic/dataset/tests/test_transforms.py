@@ -54,6 +54,28 @@ def test_empty_next(empty_signal):
     assert list(Next(empty_signal)) == []
 
 
+def test_previous_with_step(sig_simple):
+    pv = Previous(sig_simple, step=2)
+    assert list(pv) == [((30, 10, 2000), 3000), ((40, 20, 2000), 4000), ((50, 30, 2000), 5000)]
+
+
+def test_next_with_step(sig_simple):
+    nx = Next(sig_simple, step=2)
+    assert list(nx) == [((10, 30, 2000), 1000), ((20, 40, 2000), 2000), ((30, 50, 2000), 3000)]
+
+
+def test_prev_next_large_step(sig_simple):
+    assert list(Previous(sig_simple, step=10)) == []
+    assert list(Next(sig_simple, step=10)) == []
+
+
+def test_prev_next_invalid_step(sig_simple):
+    with pytest.raises(ValueError):
+        Previous(sig_simple, step=0)
+    with pytest.raises(ValueError):
+        Next(sig_simple, step=0)
+
+
 def test_join_delta_time_positive(sig_simple):
     jdt = JoinDeltaTime(sig_simple, 1000)
     # With positive delta, length preserved; last pairs with itself
@@ -163,15 +185,15 @@ def test_interleave_basic():
 
     il = Interleave(s1, s2)
     assert list(il) == [
-        ((10, 1, 500), 1500),   # t2_ref 1500 - t1_ref 1000 = +500
+        ((10, 1, 500), 1500),  # t2_ref 1500 - t1_ref 1000 = +500
         ((20, 1, -500), 2000),  # 1500 - 2000 = -500
-        ((20, 2, 500), 2500),   # 2500 - 2000 = +500
+        ((20, 2, 500), 2500),  # 2500 - 2000 = +500
         ((30, 2, -500), 3000),  # 2500 - 3000 = -500
-        ((30, 3, 500), 3500),   # 3500 - 3000 = +500
+        ((30, 3, 500), 3500),  # 3500 - 3000 = +500
         ((40, 3, -500), 4000),  # 3500 - 4000 = -500
-        ((40, 4, 500), 4500),   # 4500 - 4000 = +500
+        ((40, 4, 500), 4500),  # 4500 - 4000 = +500
         ((50, 4, -500), 5000),  # 4500 - 5000 = -500
-        ((50, 5, 500), 5500),   # 5500 - 5000 = +500
+        ((50, 5, 500), 5500),  # 5500 - 5000 = +500
     ]
 
 
@@ -192,8 +214,8 @@ def test_interleave_equal_timestamps_keep_duplicates():
     s2 = DummySignal([2000, 3000], [10, 20])
     il = Interleave(s1, s2, drop_duplicates=False)
     assert list(il) == [
-        ((2, 10, 0), 2000),   # s1's 2000, s2 at 2000
-        ((2, 10, 0), 2000),   # s2's 2000, s1 carried at 2000
+        ((2, 10, 0), 2000),  # s1's 2000, s2 at 2000
+        ((2, 10, 0), 2000),  # s2's 2000, s1 carried at 2000
         ((2, 20, 1000), 3000),
     ]
 

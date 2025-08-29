@@ -36,47 +36,53 @@ class Elementwise(Signal[U]):
 class Previous(Signal[Tuple[T, T, int]]):
     """Pairs each sample with the previous value and time delta.
 
-    For index i > 0, yields ((cur_value, prev_value, ts[i] - ts[i-1]), ts[i]).
-    The first element has no previous sample and is therefore omitted.
+    For index i >= step, yields ((cur_value, prev_value, ts[i] - ts[i-step]), ts[i]).
+    The first `step` elements have no previous sample at that distance and are omitted.
     """
 
-    def __init__(self, signal: Signal[T]) -> None:
+    def __init__(self, signal: Signal[T], step: int = 1) -> None:
+        if step <= 0:
+            raise ValueError("step must be positive")
         self._signal = signal
+        self._step = int(step)
 
     def __len__(self) -> int:
-        # First element is removed, as it has no previous
-        return max(len(self._signal) - 1, 0)
+        # First `step` elements are removed, as they have no previous
+        return max(len(self._signal) - self._step, 0)
 
     def _ts_at(self, indices: IndicesLike) -> Sequence[int] | np.ndarray:
-        indices = np.asarray(indices) + 1
+        indices = np.asarray(indices) + self._step
         return self._signal._ts_at(indices)
 
     def _values_at(self, indices: IndicesLike) -> Sequence[Tuple[T, T, int]]:
         indices = np.asarray(indices)
         prev_values = self._signal._values_at(indices)
-        cur_values = self._signal._values_at(indices + 1)
+        cur_values = self._signal._values_at(indices + self._step)
         prev_ts = self._signal._ts_at(indices)
         cur_ts = self._ts_at(indices)
         return list(zip(cur_values, prev_values, cur_ts - prev_ts, strict=True))
 
     def _search_ts(self, ts_array: RealNumericArrayLike) -> IndicesLike:
         result = self._signal._search_ts(ts_array)
-        return np.asarray(result) - 1
+        return np.asarray(result) - self._step
 
 
 class Next(Signal[Tuple[T, T, int]]):
     """Pairs each sample with the next value and time delta.
 
-    For index i < len-1, yields ((cur_value, next_value, ts[i+1] - ts[i]), ts[i]).
-    The last element has no next sample and is therefore omitted.
+    For index i with i+step < len, yields ((cur_value, next_value, ts[i+step] - ts[i]), ts[i]).
+    The last `step` elements have no next sample at that distance and are omitted.
     """
 
-    def __init__(self, signal: Signal[T]) -> None:
+    def __init__(self, signal: Signal[T], step: int = 1) -> None:
+        if step <= 0:
+            raise ValueError("step must be positive")
         self._signal = signal
+        self._step = int(step)
 
     def __len__(self) -> int:
-        # Last element is removed, as it has no next
-        return max(len(self._signal) - 1, 0)
+        # Last `step` elements are removed, as they have no next
+        return max(len(self._signal) - self._step, 0)
 
     def _ts_at(self, indices: IndicesLike) -> Sequence[int] | np.ndarray:
         indices = np.asarray(indices)
@@ -84,15 +90,17 @@ class Next(Signal[Tuple[T, T, int]]):
 
     def _values_at(self, indices: IndicesLike) -> Sequence[Tuple[T, T, int]]:
         indices = np.asarray(indices)
-        next_values = self._signal._values_at(indices + 1)
+        next_values = self._signal._values_at(indices + self._step)
         cur_values = self._signal._values_at(indices)
-        next_ts = self._signal._ts_at(indices + 1)
+        next_ts = self._signal._ts_at(indices + self._step)
         cur_ts = self._ts_at(indices)
         return list(zip(cur_values, next_values, next_ts - cur_ts, strict=True))
 
     def _search_ts(self, ts_array: RealNumericArrayLike) -> IndicesLike:
-        result = self._signal._search_ts(ts_array)
-        return np.asarray(result)
+        result = np.asarray(self._signal._search_ts(ts_array))
+        # Cap to last valid index in this view
+        last_valid = len(self) - 1
+        return np.minimum(result, last_valid)
 
 
 class JoinDeltaTime(Signal[Tuple[T, T, int]]):
