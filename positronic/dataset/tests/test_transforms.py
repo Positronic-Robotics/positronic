@@ -1,28 +1,24 @@
-import numpy as np
 import pytest
 
-from positronic.dataset.transforms import Elementwise, Previous, Next, JoinDeltaTime
+from positronic.dataset.transforms import Elementwise, Previous, Next, JoinDeltaTime, Interleave
 from .utils import DummySignal
 
 
 @pytest.fixture
 def sig_simple():
-    ts = np.array([1000, 2000, 3000, 4000, 5000], dtype=np.int64)
-    vals = np.array([10, 20, 30, 40, 50], dtype=np.int64)
+    ts = [1000, 2000, 3000, 4000, 5000]
+    vals = [10, 20, 30, 40, 50]
     return DummySignal(ts, vals)
 
 
 @pytest.fixture
 def empty_signal():
-    ts = np.array([], dtype=np.int64)
-    vals = np.array([], dtype=np.int64)
+    ts = []
+    vals = []
     return DummySignal(ts, vals)
 
 
 def _times10(x):
-    # Supports scalar int, numpy arrays and python lists
-    if isinstance(x, np.ndarray):
-        return x * 10
     if isinstance(x, list):
         return [v * 10 for v in x]
     return x * 10
@@ -96,8 +92,8 @@ def test_join_delta_time_offset_rounding(sig_simple):
 
 
 def test_join_delta_time_irregular_series():
-    ts = np.array([1000, 1300, 2000, 2700, 5000], dtype=np.int64)
-    vals = np.array([1, 2, 3, 4, 5], dtype=np.int64)
+    ts = [1000, 1300, 2000, 2700, 5000]
+    vals = [1, 2, 3, 4, 5]
     sig = DummySignal(ts, vals)
 
     # Positive delta: floor carry-back across irregular gaps, full length
@@ -152,4 +148,95 @@ def test_join_delta_time_positive_delta_too_large(sig_simple):
         ((30, 50, 2000), 3000),
         ((40, 50, 1000), 4000),
         ((50, 50, 0), 5000),
+    ]
+
+
+def test_interleave_basic():
+    # s1: 1000..5000 step 1000
+    ts1 = [1000, 2000, 3000, 4000, 5000]
+    v1 = [10, 20, 30, 40, 50]
+    s1 = DummySignal(ts1, v1)
+    # s2: shifted by +500 and extended to 5500
+    ts2 = [1500, 2500, 3500, 4500, 5500]
+    v2 = [1, 2, 3, 4, 5]
+    s2 = DummySignal(ts2, v2)
+
+    il = Interleave(s1, s2)
+    assert list(il) == [
+        ((10, 1, 500), 1500),   # t2_ref 1500 - t1_ref 1000 = +500
+        ((20, 1, -500), 2000),  # 1500 - 2000 = -500
+        ((20, 2, 500), 2500),   # 2500 - 2000 = +500
+        ((30, 2, -500), 3000),  # 2500 - 3000 = -500
+        ((30, 3, 500), 3500),   # 3500 - 3000 = +500
+        ((40, 3, -500), 4000),  # 3500 - 4000 = -500
+        ((40, 4, 500), 4500),   # 4500 - 4000 = +500
+        ((50, 4, -500), 5000),  # 4500 - 5000 = -500
+        ((50, 5, 500), 5500),   # 5500 - 5000 = +500
+    ]
+
+
+def test_interleave_equal_timestamps_drop_duplicates_default():
+    # Overlapping timestamp at 2000; by default duplicates dropped -> single entry at 2000
+    s1 = DummySignal([1000, 2000], [1, 2])
+    s2 = DummySignal([2000, 3000], [10, 20])
+    il = Interleave(s1, s2)  # drop_duplicates=True by default
+    assert list(il) == [
+        ((2, 10, 0), 2000),  # single entry at 2000
+        ((2, 20, 1000), 3000),
+    ]
+
+
+def test_interleave_equal_timestamps_keep_duplicates():
+    # With drop_duplicates=False, both entries at 2000 are kept
+    s1 = DummySignal([1000, 2000], [1, 2])
+    s2 = DummySignal([2000, 3000], [10, 20])
+    il = Interleave(s1, s2, drop_duplicates=False)
+    assert list(il) == [
+        ((2, 10, 0), 2000),   # s1's 2000, s2 at 2000
+        ((2, 10, 0), 2000),   # s2's 2000, s1 carried at 2000
+        ((2, 20, 1000), 3000),
+    ]
+
+
+def test_interleave_empty():
+    empty = DummySignal([], [])
+    s1 = DummySignal([1000], [1])
+    assert list(Interleave(empty, empty)) == []
+    assert list(Interleave(s1, empty)) == []
+    assert list(Interleave(empty, s1)) == []
+
+
+def test_interleave_keep_duplicates_nonoverlap_s1_before_s2():
+    # s1 entirely before s2; start at s2.start_ts; union contains only s2 timestamps
+    s1 = DummySignal([1000, 1500], [1, 2])
+    s2 = DummySignal([3000, 4000], [10, 20])
+    il = Interleave(s1, s2, drop_duplicates=False)
+    assert list(il) == [
+        ((2, 10, 1500), 3000),
+        ((2, 20, 2500), 4000),
+    ]
+
+
+def test_interleave_keep_duplicates_nonoverlap_s2_before_s1():
+    # s2 entirely before s1; start at s1.start_ts; union contains only s1 timestamps
+    s1 = DummySignal([3000, 4000], [30, 40])
+    s2 = DummySignal([1000, 1500], [1, 2])
+    il = Interleave(s1, s2, drop_duplicates=False)
+    assert list(il) == [
+        ((30, 2, -1500), 3000),
+        ((40, 2, -2500), 4000),
+    ]
+
+
+def test_interleave_keep_duplicates_random_indexing():
+    # Ensure k-th selection works for non-consecutive indices
+    s1 = DummySignal([1000, 3000, 5000], [1, 3, 5])
+    s2 = DummySignal([2000, 4000, 6000], [2, 4, 6])
+    il = Interleave(s1, s2, drop_duplicates=False)
+    # Pick indices 0,2,4 -> timestamps 2000, 4000, 6000
+    sub = il[[0, 2, 4]]
+    assert list(sub) == [
+        ((1, 2, 1000), 2000),
+        ((3, 4, 1000), 4000),
+        ((5, 6, 1000), 6000),
     ]

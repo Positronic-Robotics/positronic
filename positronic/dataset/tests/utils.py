@@ -9,11 +9,13 @@ class DummySignal(Signal[int]):
     Used to validate core Signal's generic indexing/time logic and views.
     """
 
-    def __init__(self, timestamps: np.ndarray, values: np.ndarray):
-        assert timestamps.ndim == 1
-        assert values.shape[0] == timestamps.shape[0]
-        self._ts = timestamps.astype(np.int64, copy=False)
-        self._vals = values
+    def __init__(self, timestamps, values):
+        ts_arr = np.asarray(timestamps, dtype=np.int64)
+        vals_arr = np.asarray(values)
+        assert ts_arr.ndim == 1
+        assert vals_arr.shape[0] == ts_arr.shape[0]
+        self._ts = ts_arr
+        self._vals = vals_arr
 
     def __len__(self) -> int:
         return int(self._ts.shape[0])
