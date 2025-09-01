@@ -33,9 +33,6 @@ class Elementwise(Signal[U]):
         return self._signal._search_ts(ts_array)
 
 
-# Previous and Next are superseded by IndexOffsets and have been removed.
-
-
 class IndexOffsets(Signal[Tuple[Tuple[T, ...], Tuple[int, ...]]]):
     """Join values and timestamps at relative indices around a reference index.
 
@@ -101,24 +98,26 @@ class IndexOffsets(Signal[Tuple[Tuple[T, ...], Tuple[int, ...]]]):
         return view_idx
 
 
-class JoinDeltaTime(Signal[Tuple[T, T, int]]):
-    """Join each sample with the value at a time offset `delta_ts`.
+class TimeOffsets(Signal[Tuple[Tuple[T, ...], Tuple[int, ...]]]):
+    """Sample values at time offsets relative to each reference timestamp.
 
-    - Positive `delta_ts` (future join): length is preserved and timestamps are
-      unchanged. Each element i returns ((v[i], v_at(ts[i] + delta), dt), ts[i]),
-      where v_at(t) carries back the last value at-or-before t. If t exceeds the
-      last timestamp, the last value is used and dt becomes 0 (clamped).
+    Given deltas D = [d1, d2, ..., dN], for each valid reference index i returns
+        ((v_at(ts[i]+d1), ..., v_at(ts[i]+dN), t_at(ts[i]+d1), ..., t_at(ts[i]+dN)), ts[i])
+    where v_at(t) carries back the last value at-or-before t.
 
-    - Negative `delta_ts` (past join): elements whose shifted time precedes the
-      first timestamp are dropped. For remaining elements i, returns
-      ((v[i], v_at(ts[i] + delta), dt), ts[i]) with dt = ts[i] - ts_at(ts[i] + delta).
-
-    - Zero `delta_ts`: pairs each element with itself and dt = 0.
+    Semantics:
+    - For negative deltas: elements whose shifted time precedes the first
+      timestamp are dropped (affects the start of the series).
+    - For non-negative deltas: when the shifted time exceeds the last
+      timestamp, sampling clamps to the last element.
     """
 
-    def __init__(self, signal: Signal[T], delta_ts: int) -> None:
+    def __init__(self, signal: Signal[T], deltas_ts: Sequence[int]) -> None:
         self._signal = signal
-        self._delta_ts = int(delta_ts)
+        offs = np.asarray(deltas_ts, dtype=np.int64)
+        if offs.size == 0:
+            raise ValueError("deltas_ts must be non-empty")
+        self._deltas = offs
         self._bounds_ready = False
         self._start_offset = 0
         self._last_index = -1
@@ -126,27 +125,23 @@ class JoinDeltaTime(Signal[Tuple[T, T, int]]):
     def _compute_bounds(self) -> None:
         if self._bounds_ready:
             return
-        sig_len = len(self._signal)
-        if sig_len == 0:
+        n = len(self._signal)
+        if n == 0:
             self._start_offset = 0
             self._last_index = -1
             self._bounds_ready = True
             return
-
-        # Default bounds include the whole signal
         start_offset = 0
-        last_index = sig_len - 1
-
-        if self._delta_ts < 0:
-            # Valid i satisfy ts[i] >= start_ts + |delta|
-            thr_ts = self._signal.start_ts + (-self._delta_ts)
-            floor_idx = int(np.asarray(self._signal._search_ts([thr_ts]))[0])
+        last_index = n - 1
+        neg = self._deltas[self._deltas < 0]
+        if neg.size > 0:
+            thr = int(self._signal.start_ts + int(np.max(-neg)))
+            floor_idx = int(np.asarray(self._signal._search_ts([thr]))[0])
             if floor_idx < 0:
                 start_offset = 0
             else:
                 floor_ts = _ts_at_index(self._signal, floor_idx)
-                start_offset = floor_idx if floor_ts == thr_ts else floor_idx + 1
-
+                start_offset = floor_idx if floor_ts == thr else floor_idx + 1
         self._start_offset = start_offset
         self._last_index = last_index
         self._bounds_ready = True
@@ -159,40 +154,38 @@ class JoinDeltaTime(Signal[Tuple[T, T, int]]):
 
     def _ts_at(self, indices: IndicesLike) -> Sequence[int] | np.ndarray:
         self._compute_bounds()
-        idxs = np.asarray(indices)
+        idxs = np.asarray(indices, dtype=np.int64)
         if self._start_offset == 0:
             return self._signal._ts_at(idxs)
         else:
             return self._signal._ts_at(idxs + self._start_offset)
 
-    def _values_at(self, indices: IndicesLike) -> Sequence[Tuple[T, T, int]]:
+    def _values_at(self, indices: IndicesLike):
         self._compute_bounds()
-        mapped = np.asarray(indices)
+        base = np.asarray(indices, dtype=np.int64)
         if self._start_offset > 0:
-            mapped += self._start_offset
-        cur_vals = self._signal._values_at(mapped)
-        cur_ts = np.asarray(self._signal._ts_at(mapped))
-        target_ts = cur_ts + self._delta_ts
-        match_idx = np.asarray(self._signal._search_ts(target_ts))
-        delta_vals = self._signal._values_at(match_idx)
-        then_ts = np.asarray(self._signal._ts_at(match_idx))
-        if self._delta_ts >= 0:
-            dt = then_ts - cur_ts
-        else:
-            dt = cur_ts - then_ts
-        return list(zip(cur_vals, delta_vals, dt, strict=True))
+            base = base + self._start_offset
+        ref_ts = np.asarray(self._signal._ts_at(base))
+        vals_parts = []
+        ts_parts = []
+        for d in self._deltas:
+            target_ts = ref_ts + int(d)
+            idx = np.asarray(self._signal._search_ts(target_ts))
+            vals_parts.append(self._signal._values_at(idx))
+            ts_parts.append(np.asarray(self._signal._ts_at(idx)))
+        out = []
+        for row in zip(*vals_parts, *ts_parts, strict=False):
+            out.append(tuple(row))
+        return out
 
     def _search_ts(self, ts_array: RealNumericArrayLike) -> IndicesLike:
         self._compute_bounds()
         parent_idx = np.asarray(self._signal._search_ts(ts_array))
-        if self._delta_ts >= 0:
-            # Same indexing as the parent view
-            return parent_idx
-        else:
-            # Shift by start offset; anything before becomes -1
+        if (self._deltas < 0).any():
             shifted = parent_idx - self._start_offset
             shifted[parent_idx < self._start_offset] = -1
             return shifted
+        return parent_idx
 
 
 def _ts_at_index(sig: Signal[T], idx: int) -> int:

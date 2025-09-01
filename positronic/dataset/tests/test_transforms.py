@@ -1,6 +1,6 @@
 import pytest
 
-from positronic.dataset.transforms import Elementwise, JoinDeltaTime, Interleave, IndexOffsets
+from positronic.dataset.transforms import Elementwise, TimeOffsets, Interleave, IndexOffsets
 from .utils import DummySignal
 
 
@@ -79,104 +79,105 @@ def test_join_relative_index_errors_and_edges(sig_simple, empty_signal):
     assert list(IndexOffsets(empty_signal, [0, 1])) == []
 
 
-def test_join_delta_time_positive(sig_simple):
-    jdt = JoinDeltaTime(sig_simple, 1000)
-    # With positive delta, length preserved; last pairs with itself
-    assert list(jdt) == [
-        ((10, 20, 1000), 1000),
-        ((20, 30, 1000), 2000),
-        ((30, 40, 1000), 3000),
-        ((40, 50, 1000), 4000),
-        ((50, 50, 0), 5000),
+def test_time_offsets_positive(sig_simple):
+    to = TimeOffsets(sig_simple, [1000])
+    # Positive delta: length preserved, last clamps to itself
+    assert list(to) == [
+        ((20, 2000), 1000),
+        ((30, 3000), 2000),
+        ((40, 4000), 3000),
+        ((50, 5000), 4000),
+        ((50, 5000), 5000),
     ]
 
 
-def test_join_delta_time_negative(sig_simple):
-    jdt = JoinDeltaTime(sig_simple, -1000)
-    assert list(jdt) == [
-        ((20, 10, 1000), 2000),
-        ((30, 20, 1000), 3000),
-        ((40, 30, 1000), 4000),
-        ((50, 40, 1000), 5000),
+def test_time_offsets_negative(sig_simple):
+    to = TimeOffsets(sig_simple, [-1000])
+    # Drops first; pairs each with previous at -1000
+    assert list(to) == [
+        ((10, 1000), 2000),
+        ((20, 2000), 3000),
+        ((30, 3000), 4000),
+        ((40, 4000), 5000),
     ]
 
 
-def test_join_delta_time_zero(sig_simple):
-    jdt = JoinDeltaTime(sig_simple, 0)
-    assert list(jdt) == [((10, 10, 0), 1000), ((20, 20, 0), 2000), ((30, 30, 0), 3000), ((40, 40, 0), 4000),
-                         ((50, 50, 0), 5000)]
+def test_time_offsets_zero(sig_simple):
+    to = TimeOffsets(sig_simple, [0])
+    assert list(to) == [((10, 1000), 1000), ((20, 2000), 2000), ((30, 3000), 3000), ((40, 4000), 4000),
+                        ((50, 5000), 5000)]
 
 
-def test_join_delta_time_offset_rounding(sig_simple):
+def test_time_offsets_offset_rounding(sig_simple):
     # Delta that doesn't align with sampling: should carry back
-    jdt = JoinDeltaTime(sig_simple, 2500)
-    # All elements preserved; last pairs with itself, larger jump for early ones
-    assert list(jdt) == [
-        ((10, 30, 2000), 1000),
-        ((20, 40, 2000), 2000),
-        ((30, 50, 2000), 3000),
-        ((40, 50, 1000), 4000),
-        ((50, 50, 0), 5000),
+    to = TimeOffsets(sig_simple, [2500])
+    # All elements preserved; last clamps to itself
+    assert list(to) == [
+        ((30, 3000), 1000),
+        ((40, 4000), 2000),
+        ((50, 5000), 3000),
+        ((50, 5000), 4000),
+        ((50, 5000), 5000),
     ]
 
 
-def test_join_delta_time_irregular_series():
+def test_time_offsets_irregular_series():
     ts = [1000, 1300, 2000, 2700, 5000]
     vals = [1, 2, 3, 4, 5]
     sig = DummySignal(ts, vals)
 
     # Positive delta: floor carry-back across irregular gaps, full length
-    jdt_pos = JoinDeltaTime(sig, 1000)
-    assert list(jdt_pos) == [
-        ((1, 3, 1000), 1000),  # 1000 -> 2000
-        ((2, 3, 700), 1300),  # 1300 -> 2300 -> 2000
-        ((3, 4, 700), 2000),  # 2000 -> 3000 -> 2700
-        ((4, 4, 0), 2700),  # 2700 -> 3700 -> 2700
-        ((5, 5, 0), 5000),  # 5000 -> 6000 -> 5000
+    to_pos = TimeOffsets(sig, [1000])
+    assert list(to_pos) == [
+        ((3, 2000), 1000),  # 1000 -> 2000
+        ((3, 2000), 1300),  # 1300 -> 2300 -> 2000
+        ((4, 2700), 2000),  # 2000 -> 3000 -> 2700
+        ((4, 2700), 2700),  # 2700 -> 3700 -> 2700
+        ((5, 5000), 5000),  # 5000 -> 6000 -> 5000
     ]
 
     # Negative delta: match to earlier floors with varying diffs
-    jdt_neg = JoinDeltaTime(sig, -1000)
-    assert list(jdt_neg) == [
-        ((3, 1, 1000), 2000),  # 2000 -> 1000
-        ((4, 2, 1400), 2700),  # 2700 -> 1300
-        ((5, 4, 2300), 5000),  # 5000 -> 2700
+    to_neg = TimeOffsets(sig, [-1000])
+    assert list(to_neg) == [
+        ((1, 1000), 2000),  # 2000 -> 1000
+        ((2, 1300), 2700),  # 2700 -> 1300
+        ((4, 2700), 5000),  # 5000 -> 2700
     ]
 
     # Zero delta: identity pairs with zero time difference
-    jdt_zero = JoinDeltaTime(sig, 0)
-    assert list(jdt_zero) == [
-        ((1, 1, 0), 1000),
-        ((2, 2, 0), 1300),
-        ((3, 3, 0), 2000),
-        ((4, 4, 0), 2700),
-        ((5, 5, 0), 5000),
+    to_zero = TimeOffsets(sig, [0])
+    assert list(to_zero) == [
+        ((1, 1000), 1000),
+        ((2, 1300), 1300),
+        ((3, 2000), 2000),
+        ((4, 2700), 2700),
+        ((5, 5000), 5000),
     ]
 
 
-def test_join_delta_time_empty_signal(empty_signal):
-    assert list(JoinDeltaTime(empty_signal, 0)) == []
-    assert list(JoinDeltaTime(empty_signal, 123456)) == []
-    assert list(JoinDeltaTime(empty_signal, -987654)) == []
+def test_time_offsets_empty_signal(empty_signal):
+    assert list(TimeOffsets(empty_signal, [0])) == []
+    assert list(TimeOffsets(empty_signal, [123456])) == []
+    assert list(TimeOffsets(empty_signal, [-987654])) == []
 
 
-def test_join_delta_time_very_large_deltas(sig_simple):
+def test_time_offsets_very_large_deltas(sig_simple):
     # Negative delta too large: no elements remain
     delta_empty = -(sig_simple.last_ts - sig_simple.start_ts + 1)
-    jdt_empty = JoinDeltaTime(sig_simple, delta_empty)
-    assert list(jdt_empty) == []
+    to_empty = TimeOffsets(sig_simple, [delta_empty])
+    assert list(to_empty) == []
 
 
-def test_join_delta_time_positive_delta_too_large(sig_simple):
+def test_time_offsets_positive_delta_too_large(sig_simple):
     # Positive delta strictly greater than span -> full length, pairs with last
     delta_too_large = (sig_simple.last_ts - sig_simple.start_ts) + 1
-    jdt = JoinDeltaTime(sig_simple, delta_too_large)
-    assert list(jdt) == [
-        ((10, 50, 4000), 1000),
-        ((20, 50, 3000), 2000),
-        ((30, 50, 2000), 3000),
-        ((40, 50, 1000), 4000),
-        ((50, 50, 0), 5000),
+    to = TimeOffsets(sig_simple, [delta_too_large])
+    assert list(to) == [
+        ((50, 5000), 1000),
+        ((50, 5000), 2000),
+        ((50, 5000), 3000),
+        ((50, 5000), 4000),
+        ((50, 5000), 5000),
     ]
 
 
