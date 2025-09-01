@@ -4,8 +4,8 @@ import numpy as np
 
 from positronic.dataset.core import Signal, IndicesLike, RealNumericArrayLike
 
-T = TypeVar('T')
-U = TypeVar('U')
+T = TypeVar("T")
+U = TypeVar("U")
 
 
 class Elementwise(Signal[U]):
@@ -16,9 +16,9 @@ class Elementwise(Signal[U]):
     identical to the underlying signal.
     """
 
-    def __init__(self, signal: Signal[T], f: Callable[[T | Sequence[T]], U | Sequence[U]]) -> None:
+    def __init__(self, signal: Signal[T], fn: Callable[[Sequence[T]], Sequence[U]]):
         self._signal = signal
-        self._f = f
+        self._fn = fn
 
     def __len__(self) -> int:
         return len(self._signal)
@@ -27,80 +27,78 @@ class Elementwise(Signal[U]):
         return self._signal._ts_at(indices)
 
     def _values_at(self, indices: IndicesLike) -> Sequence[U]:
-        return self._f(self._signal._values_at(indices))
+        return self._fn(self._signal._values_at(indices))
 
     def _search_ts(self, ts_array: RealNumericArrayLike) -> IndicesLike:
         return self._signal._search_ts(ts_array)
 
 
-class Previous(Signal[Tuple[T, T, int]]):
-    """Pairs each sample with the previous value and time delta.
+# Previous and Next are superseded by IndexOffsets and have been removed.
 
-    For index i >= step, yields ((cur_value, prev_value, ts[i] - ts[i-step]), ts[i]).
-    The first `step` elements have no previous sample at that distance and are omitted.
+
+class IndexOffsets(Signal[Tuple[Tuple[T, ...], Tuple[int, ...]]]):
+    """Join values and timestamps at relative indices around a reference index.
+
+    Given a list of relative indices D = [d1, d2, ..., dN] (each may be negative
+    or positive), produces a view over the reference indices i where all
+    (i + dk) are in-bounds. For each valid i, returns
+        ((v[i+d1], ..., v[i+dN], t[i+d1], ..., t[i+dN]), t[i]).
+
+    Examples:
+      - Next with step=1  -> D = [0, 1]
+      - Previous step=1   -> D = [0, -1]
     """
 
-    def __init__(self, signal: Signal[T], step: int = 1) -> None:
-        if step <= 0:
-            raise ValueError("step must be positive")
+    def __init__(self, signal: Signal[T], relative_indices: Sequence[int]) -> None:
         self._signal = signal
-        self._step = int(step)
+        offs = np.asarray(relative_indices, dtype=np.int64)
+        if offs.size == 0:
+            raise ValueError("relative_indices must be non-empty")
+        self._offs = offs
+        self._min_off = int(np.min(self._offs))
+        self._max_off = int(np.max(self._offs))
 
     def __len__(self) -> int:
-        # First `step` elements are removed, as they have no previous
-        return max(len(self._signal) - self._step, 0)
+        n = len(self._signal)
+        start_trim = max(0, -self._min_off)
+        end_trim = max(0, self._max_off)
+        return max(0, n - start_trim - end_trim)
+
+    def _base_start(self) -> int:
+        return max(0, -self._min_off)
+
+    def _base_last(self) -> int:
+        n = len(self._signal)
+        return n - 1 - max(0, self._max_off)
 
     def _ts_at(self, indices: IndicesLike) -> Sequence[int] | np.ndarray:
-        indices = np.asarray(indices) + self._step
-        return self._signal._ts_at(indices)
+        base = np.asarray(indices, dtype=np.int64) + self._base_start()
+        return self._signal._ts_at(base)
 
-    def _values_at(self, indices: IndicesLike) -> Sequence[Tuple[T, T, int]]:
-        indices = np.asarray(indices)
-        prev_values = self._signal._values_at(indices)
-        cur_values = self._signal._values_at(indices + self._step)
-        prev_ts = self._signal._ts_at(indices)
-        cur_ts = self._ts_at(indices)
-        return list(zip(cur_values, prev_values, cur_ts - prev_ts, strict=True))
+    def _values_at(self, indices: IndicesLike):
+        base = np.asarray(indices, dtype=np.int64) + self._base_start()
+        vals_parts = []
+        ts_parts = []
+        for off in self._offs:
+            idxs = base + int(off)
+            vals_parts.append(self._signal._values_at(idxs))
+            ts_parts.append(np.asarray(self._signal._ts_at(idxs)))
 
-    def _search_ts(self, ts_array: RealNumericArrayLike) -> IndicesLike:
-        result = self._signal._search_ts(ts_array)
-        return np.asarray(result) - self._step
-
-
-class Next(Signal[Tuple[T, T, int]]):
-    """Pairs each sample with the next value and time delta.
-
-    For index i with i+step < len, yields ((cur_value, next_value, ts[i+step] - ts[i]), ts[i]).
-    The last `step` elements have no next sample at that distance and are omitted.
-    """
-
-    def __init__(self, signal: Signal[T], step: int = 1) -> None:
-        if step <= 0:
-            raise ValueError("step must be positive")
-        self._signal = signal
-        self._step = int(step)
-
-    def __len__(self) -> int:
-        # Last `step` elements are removed, as they have no next
-        return max(len(self._signal) - self._step, 0)
-
-    def _ts_at(self, indices: IndicesLike) -> Sequence[int] | np.ndarray:
-        indices = np.asarray(indices)
-        return self._signal._ts_at(indices)
-
-    def _values_at(self, indices: IndicesLike) -> Sequence[Tuple[T, T, int]]:
-        indices = np.asarray(indices)
-        next_values = self._signal._values_at(indices + self._step)
-        cur_values = self._signal._values_at(indices)
-        next_ts = self._signal._ts_at(indices + self._step)
-        cur_ts = self._ts_at(indices)
-        return list(zip(cur_values, next_values, next_ts - cur_ts, strict=True))
+        return list(zip(*vals_parts, *ts_parts, strict=False))
 
     def _search_ts(self, ts_array: RealNumericArrayLike) -> IndicesLike:
-        result = np.asarray(self._signal._search_ts(ts_array))
-        # Cap to last valid index in this view
-        last_valid = len(self) - 1
-        return np.minimum(result, last_valid)
+        # Map parent floor indices to view indices, clamping to valid range.
+        n = len(self)
+        t = np.asarray(ts_array)
+        if n == 0:
+            return np.full_like(t, -1, dtype=np.int64)  # nothing valid in this view
+        p = np.asarray(self._signal._search_ts(t))
+        base_start = self._base_start()
+        base_last = self._base_last()
+        view_idx = p - base_start
+        view_idx[p < base_start] = -1
+        view_idx[p > base_last] = n - 1
+        return view_idx
 
 
 class JoinDeltaTime(Signal[Tuple[T, T, int]]):
@@ -227,7 +225,9 @@ class Interleave(Signal[Tuple[T, U, int]]):
       materialized).
     """
 
-    def __init__(self, s1: Signal[T], s2: Signal[U], drop_duplicates: bool = True) -> None:
+    def __init__(
+        self, s1: Signal[T], s2: Signal[U], drop_duplicates: bool = True
+    ) -> None:
         self._s1 = s1
         self._s2 = s2
         self._drop_duplicates = drop_duplicates
@@ -252,7 +252,9 @@ class Interleave(Signal[Tuple[T, U, int]]):
         self._s2_start = _first_idx_at_or_after(self._s2, start_ts)
         if self._drop_duplicates:
             # Build union timestamps using a single merge implementation
-            self._union_ts = np.asarray(list(self._iter_merged_ts(dedup=True)), dtype=np.int64)
+            self._union_ts = np.asarray(
+                list(self._iter_merged_ts(dedup=True)), dtype=np.int64
+            )
             self._length = int(self._union_ts.shape[0])
         else:
             # Include both entries when timestamps are equal
@@ -326,10 +328,10 @@ class Interleave(Signal[Tuple[T, U, int]]):
             ta = _ts_at_index(self._s1, a_next)
             tb = _ts_at_index(self._s2, b_next)
             if ta <= tb:  # discard s1[a_idx : a_next+1]
-                k_remaining -= (a_next - a_idx + 1)
+                k_remaining -= a_next - a_idx + 1
                 a_idx = a_next + 1
             else:
-                k_remaining -= (b_next - b_idx + 1)
+                k_remaining -= b_next - b_idx + 1
                 b_idx = b_next + 1
 
     def __len__(self) -> int:
@@ -361,7 +363,7 @@ class Interleave(Signal[Tuple[T, U, int]]):
         t = np.asarray(ts_array)
         if self._drop_duplicates:
             assert self._union_ts is not None
-            return np.searchsorted(self._union_ts, t, side='right') - 1
+            return np.searchsorted(self._union_ts, t, side="right") - 1
 
         # Non-deduped: floor rank is sum of floors in each parent past the start offsets
         f1 = np.asarray(self._s1._search_ts(t))

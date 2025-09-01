@@ -1,6 +1,6 @@
 import pytest
 
-from positronic.dataset.transforms import Elementwise, Previous, Next, JoinDeltaTime, Interleave
+from positronic.dataset.transforms import Elementwise, JoinDeltaTime, Interleave, IndexOffsets
 from .utils import DummySignal
 
 
@@ -32,48 +32,51 @@ def test_elementwise(sig_simple):
     assert list(sig_simple) == [(10, 1000), (20, 2000), (30, 3000), (40, 4000), (50, 5000)]
 
 
-def test_previous(sig_simple):
-    pv = Previous(sig_simple)
-    assert list(pv) == [((20, 10, 1000), 2000), ((30, 20, 1000), 3000), ((40, 30, 1000), 4000), ((50, 40, 1000), 5000)]
-    # Underlying signal remains unchanged
-    assert list(sig_simple) == [(10, 1000), (20, 2000), (30, 3000), (40, 4000), (50, 5000)]
+def test_join_relative_index_prev_next_equivalents(sig_simple):
+    # [0, 1] (current and next)
+    j_next = IndexOffsets(sig_simple, [0, 1])
+    assert list(j_next) == [
+        ((10, 20, 1000, 2000), 1000),
+        ((20, 30, 2000, 3000), 2000),
+        ((30, 40, 3000, 4000), 3000),
+        ((40, 50, 4000, 5000), 4000),
+    ]
+    # [0, -1] (current and previous)
+    j_prev = IndexOffsets(sig_simple, [0, -1])
+    assert list(j_prev) == [
+        ((20, 10, 2000, 1000), 2000),
+        ((30, 20, 3000, 2000), 3000),
+        ((40, 30, 4000, 3000), 4000),
+        ((50, 40, 5000, 4000), 5000),
+    ]
 
 
-def test_empty_prev(empty_signal):
-    assert list(Previous(empty_signal)) == []
+def test_join_relative_index_basic(sig_simple):
+    # [0, 1] returns (v_i, v_{i+1}, t_i, t_{i+1})
+    j = IndexOffsets(sig_simple, [0, 1])
+    assert list(j) == [
+        ((10, 20, 1000, 2000), 1000),
+        ((20, 30, 2000, 3000), 2000),
+        ((30, 40, 3000, 4000), 3000),
+        ((40, 50, 4000, 5000), 4000),
+    ]
+
+    # [0, -1] returns (v_i, v_{i-1}, t_i, t_{i-1})
+    jprev = IndexOffsets(sig_simple, [0, -1])
+    assert list(jprev) == [
+        ((20, 10, 2000, 1000), 2000),
+        ((30, 20, 3000, 2000), 3000),
+        ((40, 30, 4000, 3000), 4000),
+        ((50, 40, 5000, 4000), 5000),
+    ]
 
 
-def test_next(sig_simple):
-    pv = Next(sig_simple)
-    assert list(pv) == [((10, 20, 1000), 1000), ((20, 30, 1000), 2000), ((30, 40, 1000), 3000), ((40, 50, 1000), 4000)]
-    # Underlying signal remains unchanged
-    assert list(sig_simple) == [(10, 1000), (20, 2000), (30, 3000), (40, 4000), (50, 5000)]
-
-
-def test_empty_next(empty_signal):
-    assert list(Next(empty_signal)) == []
-
-
-def test_previous_with_step(sig_simple):
-    pv = Previous(sig_simple, step=2)
-    assert list(pv) == [((30, 10, 2000), 3000), ((40, 20, 2000), 4000), ((50, 30, 2000), 5000)]
-
-
-def test_next_with_step(sig_simple):
-    nx = Next(sig_simple, step=2)
-    assert list(nx) == [((10, 30, 2000), 1000), ((20, 40, 2000), 2000), ((30, 50, 2000), 3000)]
-
-
-def test_prev_next_large_step(sig_simple):
-    assert list(Previous(sig_simple, step=10)) == []
-    assert list(Next(sig_simple, step=10)) == []
-
-
-def test_prev_next_invalid_step(sig_simple):
+def test_join_relative_index_errors_and_edges(sig_simple, empty_signal):
+    # Non-empty relative indices required
     with pytest.raises(ValueError):
-        Previous(sig_simple, step=0)
-    with pytest.raises(ValueError):
-        Next(sig_simple, step=0)
+        IndexOffsets(sig_simple, [])
+    # Empty signal yields empty
+    assert list(IndexOffsets(empty_signal, [0, 1])) == []
 
 
 def test_join_delta_time_positive(sig_simple):
@@ -90,8 +93,12 @@ def test_join_delta_time_positive(sig_simple):
 
 def test_join_delta_time_negative(sig_simple):
     jdt = JoinDeltaTime(sig_simple, -1000)
-    # Should match Previous semantics on this evenly spaced signal
-    assert list(jdt) == list(Previous(sig_simple))
+    assert list(jdt) == [
+        ((20, 10, 1000), 2000),
+        ((30, 20, 1000), 3000),
+        ((40, 30, 1000), 4000),
+        ((50, 40, 1000), 5000),
+    ]
 
 
 def test_join_delta_time_zero(sig_simple):
