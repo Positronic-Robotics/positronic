@@ -36,8 +36,18 @@ def end_effector_ee(resolution: tuple[int, int], fps: int):
     from positronic.inference.observation import ObservationEncoder, ImageTransform, ToArrayTransform
     return ObservationEncoder(
         transforms=[
-            ImageTransform(input_key='image.handcam_left', output_key='observation.images.left', resize=resolution),
-            ImageTransform(input_key='image.back_view', output_key='observation.images.side', resize=resolution),
+            ImageTransform(
+                input_key='image.handcam_left',
+                output_key='observation.images.left',
+                resize=resolution,
+                pad=True,
+            ),
+            ImageTransform(
+                input_key='image.back_view',
+                output_key='observation.images.side',
+                resize=resolution,
+                pad=True,
+            ),
             ToArrayTransform(input_key=['target_robot_position_quaternion', 'target_robot_position_translation', 'grip'], n_features=8, output_key='observation.state'),
         ],
         fps=fps
