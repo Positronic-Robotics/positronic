@@ -61,7 +61,7 @@ class RotationTranslationGripAction(ActionDecoder, abc.ABC):
     def get_features(self):
         return {
             'actions': {
-                'dtype': 'float32',
+                'dtype': 'float64',
                 'shape': (self.rotation_size + 4,),
                 'names': [
                     *[f'rotation_{i}' for i in range(self.rotation_size)],
@@ -331,6 +331,44 @@ class AbsoluteJointPositionAction(ActionDecoder):
     def decode(self, action_vector: np.ndarray, inputs: dict[str, np.ndarray]) -> dict[str, np.ndarray]:
         action_dict = {}
         action_dict['target_joints'] = action_vector[:-1]
+        if self.add_grip:
+            action_dict['target_grip'] = action_vector[-1]
+        return action_dict
+
+    def get_features(self):
+        n_joints = 7
+        if self.add_grip:
+            n_joints += 1
+
+        names = [f'joint_{i}' for i in range(n_joints)]
+        if self.add_grip:
+            names.append('grip')
+
+        return {
+            'actions': {
+                'dtype': 'float64',
+                'shape': (n_joints,),
+                'names': names,
+            },
+        }
+
+
+class TargetEEPositionAction(ActionDecoder):
+    def __init__(self, add_grip: bool = True):
+        self.add_grip = add_grip
+
+    def encode_episode(self, signal_dict: dict[str, Signal], timestamps: np.ndarray) -> np.ndarray:
+        translation = np.array([x[0] for x in signal_dict['target_robot_position_translation'].time[timestamps]])
+        rotation = np.array([x[0] for x in signal_dict['target_robot_position_quaternion'].time[timestamps]])
+        if self.add_grip:
+            grip = np.array([x[0] for x in signal_dict['grip'].time[timestamps]])
+            return np.concatenate([translation, rotation, grip[:, np.newaxis]], axis=1)
+        return np.concatenate([translation, rotation], axis=1)
+
+    def decode(self, action_vector: np.ndarray, inputs: dict[str, np.ndarray]) -> dict[str, np.ndarray]:
+        action_dict = {}
+        action_dict['target_robot_position_translation'] = action_vector[:3]
+        action_dict['target_robot_position_quaternion'] = action_vector[3:7]
         if self.add_grip:
             action_dict['target_grip'] = action_vector[-1]
         return action_dict
