@@ -57,8 +57,11 @@ class _MjPoseJacobianBackend:
         # F_T_EE and EE_T_K are ignored; test with identity attachments
         self._set_q(q)
         pos, quat = self._affine_from_site(self.data, self.site_id)
+
         # Build a small struct mimicking franky.Affine
-        class _A: pass
+        class _A:
+            pass
+
         a = _A()
         a.translation = pos
         a.quaternion = quat  # xyzw as expected by franka adapter
@@ -85,6 +88,7 @@ class _FakeState:
 
 
 class _FakeRobot:
+
     def __init__(self, model: _MjPoseJacobianBackend, q0: np.ndarray):
         self.model = model
         self.state = _FakeState(q=q0.copy(), F_T_EE=np.eye(4), EE_T_K=np.eye(4))
@@ -103,6 +107,7 @@ def _random_targets_around(start_pose: geom.Transform3D, n: int = 10, pos_radius
         t = geom.Transform3D(start_pose.translation + dp, rot * start_pose.rotation)
         targets.append(t)
     return targets
+
 
 @cfn.config()
 def debug_franka_ik(
@@ -156,7 +161,8 @@ def debug_franka_ik(
         J_end = backend.zero_jacobian(None, q_sol, np.eye(4), np.eye(4))
         cond_start = np.linalg.cond(J_start @ J_start.T)
         cond_end = np.linalg.cond(J_end @ J_end.T)
-        print(f"[{i:02d}] pos_err={pos_err:.4f} m, rot_err={rot_err:.4f} rad | cond(start)={cond_start:.1e}, cond(end)={cond_end:.1e}")
+        print(f"[{i:02d}] pos_err={pos_err:.4f}m, rot_err={rot_err:.4f}rad | cond(start)={cond_start:.1e}, "
+              f"cond(end)={cond_end:.1e}")
 
     print(f"Success {ok}/{n} within tight thresholds")
 

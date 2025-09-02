@@ -17,7 +17,7 @@ from . import RobotStatus, State, command
 class FrankaState(State, pimm.shared_memory.NumpySMAdapter):
 
     def __init__(self):
-        super().__init__(shape=(7 + 7 + 7 + 1,), dtype=np.float32)
+        super().__init__(shape=(7 + 7 + 7 + 1, ), dtype=np.float32)
 
     def instantiation_params(self) -> tuple[Any, ...]:
         return ()
@@ -78,7 +78,6 @@ def _damped_pinv(J: np.ndarray, lambda2: float) -> np.ndarray:
 class CartesianMode(Enum):
     FRANKY = 0
     IK = 1
-
 
 
 class Robot:
