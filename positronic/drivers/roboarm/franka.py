@@ -1,3 +1,4 @@
+import math
 import time
 from typing import Iterator
 
@@ -51,6 +52,28 @@ class FrankaState(State, pimm.shared_memory.NumpySMAdapter):
         self.array[14 + 7] = RobotStatus.AVAILABLE.value
 
 
+def _affine_to_geom(affine: franky.Affine) -> geom.Transform3D:
+    return geom.Transform3D(affine.translation, geom.Rotation.from_quat_xyzw(affine.quaternion))
+
+
+def _cartesian_error(cur: geom.Transform3D, tgt: geom.Transform3D) -> np.ndarray:
+    # Position error (base frame)
+    e_pos = cur.translation - tgt.translation
+
+    # Orientation error: e_rot = -R_cur * log(R_cur^T * R_tgt)
+    w = (cur.rotation.inv * tgt.rotation).as_rotvec
+    e_rot = -cur.rotation.as_rotation_matrix @ w
+
+    return np.concatenate([e_pos, e_rot])
+
+
+def _damped_pinv(J: np.ndarray, lambda2: float) -> np.ndarray:
+    # J: 6x7, return 7x6 damped pseudo-inverse using J^T (J J^T + λ I)^-1
+    I6 = np.eye(6)
+    JJt = J @ J.T
+    return J.T @ np.linalg.inv(JJt + lambda2 * I6)
+
+
 class Robot:
     commands: pimm.SignalReader = pimm.NoOpReader()
     state: pimm.SignalEmitter = pimm.NoOpEmitter()
@@ -94,6 +117,62 @@ class Robot:
         robot.set_load(0.0, [0.0, 0.0, 0.0], [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0])
         robot.relative_dynamics_factor = rel_dynamics_factor
 
+    @staticmethod
+    def _inverse_kinematics(
+        robot,
+        target: geom.Transform3D,
+        *,
+        tol: float = 1e-4,
+        max_iters: int = 50,
+        min_step: float = 1e-6,
+        pinv_reg: float = 0.1,
+        nullspace_gain: float = 0.003,
+        line_search_alpha: float = 1.0,
+        line_search_beta: float = 0.8,
+        line_search_max_steps: int = 20,
+    ):
+        I7 = np.eye(7)
+
+        # We use the current end-effector attachments (flange->EE and EE->K) from the state
+        state = robot.state
+        F_T_EE = state.F_T_EE
+        EE_T_K = state.EE_T_K
+        q0 = state.q
+
+        for _ in range(max_iters):
+            # Forward kinematics and error
+            x = robot.model.pose(franky.Frame.EndEffector, q0, F_T_EE, EE_T_K)
+            e = _cartesian_error(_affine_to_geom(x), target)
+            err_norm = float(np.linalg.norm(e))
+            if err_norm < tol:
+                break
+
+            # Jacobian and damped least-squares step
+            J = np.asarray(robot.model.zero_jacobian(franky.Frame.EndEffector, q0, F_T_EE, EE_T_K), dtype=float)
+            J_pinv = _damped_pinv(J, pinv_reg)
+
+            dq_primary = -J_pinv @ e
+            N = I7 - J_pinv @ J
+            dq_null = N @ (-nullspace_gain * math.exp(err_norm) * q0)
+            dq = dq_primary + dq_null
+
+            # Backtracking line search on pose error
+            step = line_search_alpha
+            for _ls in range(line_search_max_steps):
+                q_new = q0 + step * dq
+                x_new = robot.model.pose(franky.Frame.EndEffector, q_new, F_T_EE, EE_T_K)
+                e_new = _cartesian_error(_affine_to_geom(x_new), target)
+                if np.linalg.norm(e_new) < err_norm:
+                    break
+                step *= line_search_beta
+
+            if step < min_step:
+                break  # Could not find a meaningful improvement
+
+            q0 = q0 + step * dq
+
+        return q0
+
     def _reset(self, robot: franky.Robot, robot_state: FrankaState):
         robot_state._start_reset()
         self.state.emit(robot_state)
@@ -124,9 +203,14 @@ class Robot:
                         self._reset(robot, robot_state)
                         continue
                     case command.CartesianMove(pose):
-                        pos = franky.Affine(translation=pose.translation, quaternion=pose.rotation.as_quat_xyzw)
+                        # pos = franky.Affine(translation=pose.translation, quaternion=pose.rotation.as_quat_xyzw)
+                        # motion = franky.CartesianMotion(pos, franky.ReferenceType.Absolute)
 
-                motion = franky.CartesianMotion(pos, franky.ReferenceType.Absolute)
+                        q = Robot._inverse_kinematics(robot, pose)
+                        motion = franky.JointMotion(q)
+                    case _:
+                        raise NotImplementedError(f'Unsupported command {cmd}')
+
                 try:
                     # TODO: implement MOVING state support
                     robot.move(motion, asynchronous=True)
