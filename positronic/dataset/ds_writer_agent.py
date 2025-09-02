@@ -9,7 +9,8 @@ import pimm
 from positronic import geom
 from positronic.drivers import roboarm
 
-from .core import DatasetWriter, EpisodeWriter
+from .dataset import DatasetWriter
+from .episode import EpisodeWriter
 
 
 class DsWriterCommandType(Enum):

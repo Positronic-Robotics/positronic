@@ -2,7 +2,7 @@ from pathlib import Path
 
 import numpy as np
 
-from positronic.dataset.core import Episode
+from positronic.dataset import Episode
 from positronic.dataset.local_dataset import LocalDataset, LocalDatasetWriter
 
 

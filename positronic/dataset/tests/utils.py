@@ -1,6 +1,6 @@
 import numpy as np
 
-from positronic.dataset.core import IndicesLike, RealNumericArrayLike, is_realnum_dtype, Signal
+from positronic.dataset.signal import IndicesLike, RealNumericArrayLike, is_realnum_dtype, Signal
 
 
 class DummySignal(Signal[int]):

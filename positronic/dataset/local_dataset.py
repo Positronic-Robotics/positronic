@@ -5,7 +5,7 @@ from typing import Sequence
 
 import numpy as np
 
-from .core import Dataset, DatasetWriter
+from .dataset import Dataset, DatasetWriter
 from .episode import DiskEpisode, DiskEpisodeWriter
 
 

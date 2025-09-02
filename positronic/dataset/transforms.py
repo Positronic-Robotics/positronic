@@ -3,7 +3,8 @@ from typing import Any, Callable, Sequence, TypeVar, Tuple
 
 import numpy as np
 
-from .core import Signal, IndicesLike, RealNumericArrayLike, Episode
+from .signal import Signal, IndicesLike, RealNumericArrayLike
+from .episode import Episode
 
 T = TypeVar("T")
 U = TypeVar("U")

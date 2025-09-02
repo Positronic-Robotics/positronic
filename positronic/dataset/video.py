@@ -8,7 +8,7 @@ import numpy as np
 import pyarrow as pa
 import pyarrow.parquet as pq
 
-from .core import IndicesLike, RealNumericArrayLike, Signal, SignalWriter, is_realnum_dtype
+from .signal import IndicesLike, RealNumericArrayLike, Signal, SignalWriter, is_realnum_dtype
 
 
 class VideoSignalWriter(SignalWriter[np.ndarray]):

@@ -1,24 +1,140 @@
+import json
 import platform
 import shutil
 import sys
 import time
+from abc import ABC, abstractmethod
+from contextlib import AbstractContextManager
 from functools import lru_cache, partial
 from importlib import metadata as importlib_metadata
 from pathlib import Path
-from typing import Any, Callable, TypeVar
+from typing import Any, Callable, Generic, Sequence, TypeVar
 
-import json
 import numpy as np
 
 from positronic.utils.git import get_git_state
 
-from .core import Episode, EpisodeWriter, Signal
+from .signal import Signal
 from .vector import SimpleSignal, SimpleSignalWriter
 from .video import VideoSignal, VideoSignalWriter
 
 EPISODE_SCHEMA_VERSION = 1
 T = TypeVar('T')
 SIGNAL_FACTORY_T = Callable[[], Signal[Any]]
+
+
+class _EpisodeTimeIndexer:
+    """Time-based indexer for Episode signals."""
+
+    def __init__(self, episode: 'Episode') -> None:
+        self.episode = episode
+
+    def __getitem__(self, index_or_slice):
+        if isinstance(index_or_slice, int):
+            sampled = {key: sig.time[index_or_slice] for key, sig in self.episode.signals.items()}
+            return {**self.episode.static, **sampled}
+        elif isinstance(index_or_slice, (list, tuple, np.ndarray)) or isinstance(index_or_slice, slice):
+            signals = {key: sig.time[index_or_slice] for key, sig in self.episode.signals.items()}
+            return EpisodeView(signals, self.episode.static, dict(self.episode.meta))
+        else:
+            raise TypeError(f"Invalid index type: {type(index_or_slice)}")
+
+
+class Episode(ABC):
+    """Abstract base class for an Episode (core concept)."""
+
+    @property
+    @abstractmethod
+    def keys(self) -> Sequence[str]:
+        pass
+
+    @abstractmethod
+    def __getitem__(self, name: str) -> Signal[Any] | Any:
+        pass
+
+    @property
+    @abstractmethod
+    def meta(self) -> dict:
+        pass
+
+    @property
+    def signals(self) -> dict[str, Signal[Any]]:
+        out: dict[str, Signal[Any]] = {}
+        for k in self.keys:
+            v = self[k]
+            if isinstance(v, Signal):
+                out[k] = v
+        return out
+
+    @property
+    def static(self) -> dict[str, Any]:
+        out: dict[str, Any] = {}
+        for k in self.keys:
+            v = self[k]
+            if not isinstance(v, Signal):
+                out[k] = v
+        return out
+
+    @property
+    def start_ts(self):
+        values = [sig.start_ts for sig in self.signals.values()]
+        if not values:
+            raise ValueError("Episode has no signals")
+        return max(values)
+
+    @property
+    def last_ts(self):
+        values = [sig.last_ts for sig in self.signals.values()]
+        if not values:
+            raise ValueError("Episode has no signals")
+        return max(values)
+
+    @property
+    def time(self):
+        return _EpisodeTimeIndexer(self)
+
+
+class EpisodeView(Episode):
+    """In-memory view over an Episode's items."""
+
+    def __init__(self,
+                 signals: dict[str, Signal[Any]],
+                 static: dict[str, Any],
+                 meta: dict[str, Any] | None = None) -> None:
+        self._signals = signals
+        self._static = static
+        self._meta = meta or {}
+
+    @property
+    def start_ts(self) -> int:
+        return max([signal.start_ts for signal in self._signals.values()]) if self._signals else 0
+
+    @property
+    def last_ts(self) -> int:
+        return max([signal.last_ts for signal in self._signals.values()]) if self._signals else 0
+
+    @property
+    def keys(self):
+        return {**{k: True for k in self._signals.keys()}, **{k: True for k in self._static.keys()}}.keys()
+
+    def __getitem__(self, name: str) -> Signal[Any] | Any:
+        if name in self._signals:
+            return self._signals[name]
+        if name in self._static:
+            return self._static[name]
+        raise KeyError(name)
+
+    @property
+    def meta(self) -> dict:
+        return dict(self._meta)
+
+    @property
+    def signals(self) -> dict[str, Signal[Any]]:
+        return dict(self._signals)
+
+    @property
+    def static(self) -> dict[str, Any]:
+        return dict(self._static)
 
 
 def _is_valid_static_value(value: Any) -> bool:
@@ -36,6 +152,24 @@ def _is_valid_static_value(value: Any) -> bool:
     if isinstance(value, dict):
         return all(isinstance(k, str) and _is_valid_static_value(v) for k, v in value.items())
     return False
+
+
+class EpisodeWriter(AbstractContextManager, ABC, Generic[T]):
+    @abstractmethod
+    def append(self, signal_name: str, data: T, ts_ns: int) -> None:
+        pass
+
+    @abstractmethod
+    def set_static(self, name: str, data: Any) -> None:
+        pass
+
+    @abstractmethod
+    def __exit__(self, exc_type, exc, tb) -> None:
+        ...
+
+    @abstractmethod
+    def abort(self) -> None:
+        pass
 
 
 class DiskEpisodeWriter(EpisodeWriter):

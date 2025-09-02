@@ -6,7 +6,7 @@ import pytest
 import pimm
 from pimm.tests.testing import MockClock
 from positronic import geom
-from positronic.dataset.core import DatasetWriter, EpisodeWriter
+from positronic.dataset import DatasetWriter, EpisodeWriter
 from positronic.dataset.ds_writer_agent import (
     DsWriterAgent,
     DsWriterCommand,
