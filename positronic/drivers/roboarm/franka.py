@@ -1,3 +1,4 @@
+from enum import Enum
 import math
 import time
 from typing import Iterator
@@ -74,6 +75,12 @@ def _damped_pinv(J: np.ndarray, lambda2: float) -> np.ndarray:
     return J.T @ np.linalg.inv(JJt + lambda2 * I6)
 
 
+class CartesianMode(Enum):
+    FRANKY = 0
+    IK = 1
+
+
+
 class Robot:
     commands: pimm.SignalReader = pimm.NoOpReader()
     state: pimm.SignalEmitter = pimm.NoOpEmitter()
@@ -81,6 +88,7 @@ class Robot:
     def __init__(self,
                  ip: str,
                  relative_dynamics_factor=0.2,
+                 cartesian_mode: CartesianMode = CartesianMode.IK,
                  home_joints: list[float] = [0.0, -0.31, 0.0, -1.65, 0.0, 1.522, 0.0]) -> None:
         """
         :param ip: IP address of the robot.
@@ -89,6 +97,7 @@ class Robot:
         """
         self._ip = ip
         self._relative_dynamics_factor = relative_dynamics_factor
+        self._cartesian_mode = cartesian_mode
         self._home_joints = home_joints
 
     @staticmethod
@@ -203,11 +212,12 @@ class Robot:
                         self._reset(robot, robot_state)
                         continue
                     case command.CartesianMove(pose):
-                        # pos = franky.Affine(translation=pose.translation, quaternion=pose.rotation.as_quat_xyzw)
-                        # motion = franky.CartesianMotion(pos, franky.ReferenceType.Absolute)
-
-                        q = Robot._inverse_kinematics(robot, pose)
-                        motion = franky.JointMotion(q)
+                        if self._cartesian_mode == CartesianMode.FRANKY:
+                            pos = franky.Affine(translation=pose.translation, quaternion=pose.rotation.as_quat_xyzw)
+                            motion = franky.CartesianMotion(pos, franky.ReferenceType.Absolute)
+                        else:  # CartesianMode.IK
+                            q = Robot._inverse_kinematics(robot, pose)
+                            motion = franky.JointMotion(q)
                     case _:
                         raise NotImplementedError(f'Unsupported command {cmd}')
 
@@ -216,7 +226,7 @@ class Robot:
                     robot.move(motion, asynchronous=True)
                 except franky.ControlException as e:
                     robot.recover_from_errors()
-                    print(f"Motion failed for {pos}: {e}")
+                    print(f"Motion failed for {motion}: {e}")
 
             js = robot.current_joint_state
             robot_state.encode(js.position, js.velocity, robot.current_pose.end_effector_pose)
@@ -248,9 +258,11 @@ if __name__ == "__main__":
         origin = state.value.ee_pose
         print(f"Origin: {origin}")
 
+        alpha = 4.0
         start, i = time.monotonic(), 0
         while i < len(trajectory) and not world.should_stop:
             pos, duration = trajectory[i]
+            pos = np.asarray(pos) * alpha
             if time.monotonic() > start + duration:
                 print(f"Moving to {pos + origin.translation}")
                 commands.emit(command.CartesianMove(geom.Transform3D(pos + origin.translation, origin.rotation)))
