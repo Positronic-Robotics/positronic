@@ -120,8 +120,7 @@ class DiskEpisodeWriter(EpisodeWriter):
 
         # Validate restricted JSON structure
         if not _is_valid_static_value(data):
-            raise ValueError(
-                "Static item must be JSON-serializable: dict/list over numbers and strings")
+            raise ValueError("Static item must be JSON-serializable: dict/list over numbers and strings")
         self._static_items[name] = data
 
     def __exit__(self, exc_type, exc, tb) -> None:
@@ -173,75 +172,6 @@ def _cached_env_writer_info() -> dict:
     if git_state is not None:
         info['git'] = git_state
     return info
-
-
-class _TimeIndexer:
-    """Time-based indexer for Episode signals."""
-
-    def __init__(self, episode: 'Episode') -> None:
-        self.episode = episode
-
-    def __getitem__(self, index_or_slice):
-        """Access all items by timestamp or time selection.
-
-        - Integer timestamp: returns a mapping of all dynamic signals sampled at
-          or before the timestamp, merged with all static items.
-        - Slice/list/ndarray: returns a new Episode with each dynamic signal
-          sliced/sampled accordingly and all static items preserved.
-        """
-        if isinstance(index_or_slice, int):
-            # Merge sampled dynamic values with static items
-            sampled = {key: sig.time[index_or_slice] for key, sig in self.episode._iter_signals()}
-            return {**self.episode._static_data, **sampled}
-        elif isinstance(index_or_slice, (list, tuple, np.ndarray)) or isinstance(index_or_slice, slice):
-            # Return a view with sliced/sampled signals and preserved static
-            signals = {key: sig.time[index_or_slice] for key, sig in self.episode._iter_signals()}
-            return EpisodeView(signals, dict(self.episode._static_data), dict(self.episode.meta))
-        else:
-            raise TypeError(f"Invalid index type: {type(index_or_slice)}")
-
-
-class EpisodeView(Episode):
-    """In-memory view over an Episode's items.
-
-    Provides the same read API as Episode (keys, __getitem__, start_ts, last_ts, time),
-    but does not load from disk. Chained time indexing returns another EpisodeView.
-    """
-
-    def __init__(self,
-                 signals: dict[str, Signal[Any]],
-                 static: dict[str, Any],
-                 meta: dict[str, Any] | None = None) -> None:
-        self._signals = signals
-        self._static = static
-        self._meta = meta or {}
-
-    @property
-    def start_ts(self) -> int:
-        return max([signal.start_ts for signal in self._signals.values()]) if self._signals else 0
-
-    @property
-    def last_ts(self) -> int:
-        return max([signal.last_ts for signal in self._signals.values()]) if self._signals else 0
-
-    @property
-    def time(self):
-        return _TimeIndexer(self)
-
-    @property
-    def keys(self):
-        return {**{k: True for k in self._signals.keys()}, **{k: True for k in self._static.keys()}}.keys()
-
-    def __getitem__(self, name: str) -> Signal[Any] | Any:
-        if name in self._signals:
-            return self._signals[name]
-        if name in self._static:
-            return self._static[name]
-        raise KeyError(name)
-
-    @property
-    def meta(self) -> dict:
-        return dict(self._meta)
 
 
 class DiskEpisode(Episode):
@@ -314,39 +244,6 @@ class DiskEpisode(Episode):
         return self._static
 
     @property
-    def start_ts(self):
-        """Return the latest start timestamp across all signals in the episode.
-
-        Returns:
-            int: Start timestamp in nanoseconds
-        """
-        values = [sig.start_ts for _, sig in self._iter_signals()]
-        if not values:
-            raise ValueError("Episode has no signals")
-        return max(values)
-
-    @property
-    def last_ts(self):
-        """Return the latest end timestamp across all signals in the episode.
-
-        Returns:
-            int: Last timestamp in nanoseconds
-        """
-        values = [sig.last_ts for _, sig in self._iter_signals()]
-        if not values:
-            raise ValueError("Episode has no signals")
-        return max(values)
-
-    @property
-    def time(self):
-        """Return a time-based indexer for accessing all signals by timestamp.
-
-        Returns:
-            _TimeIndexer: Indexer that allows time-based access to all signals
-        """
-        return _TimeIndexer(self)
-
-    @property
     def keys(self):
         """Return the names of all items in this episode.
 
@@ -391,3 +288,15 @@ class DiskEpisode(Episode):
                         pass
             self._meta = meta
         return dict(self._meta)
+
+    @property
+    def signals(self) -> dict[str, Signal[Any]]:
+        # Ensure and return all signals; this may materialize readers lazily
+        out: dict[str, Signal[Any]] = {}
+        for name in self._signal_factories.keys():
+            out[name] = self._ensure_signal(name)
+        return out
+
+    @property
+    def static(self) -> dict[str, Any]:
+        return dict(self._static_data)

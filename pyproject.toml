@@ -88,6 +88,16 @@ source = ["pimm", "positronic"]
 show_missing = true
 skip_covered = false
 
+[tool.ruff]
+line-length = 120
+target-version = "py311"
+
+[tool.ruff.format]
+quote-style = "single"
+indent-style = "space"
+docstring-code-format = true
+preview = true
+
 [tool.setuptools.packages.find]
 where = ["."]
 include = [

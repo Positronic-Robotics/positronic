@@ -351,6 +351,32 @@ class SignalWriter(AbstractContextManager, ABC, Generic[T]):
         pass
 
 
+class _EpisodeTimeIndexer:
+    """Time-based indexer for Episode signals."""
+
+    def __init__(self, episode: 'Episode') -> None:
+        self.episode = episode
+
+    def __getitem__(self, index_or_slice):
+        """Access all items by timestamp or time selection.
+
+        - Integer timestamp: returns a mapping of all dynamic signals sampled at
+          or before the timestamp, merged with all static items.
+        - Slice/list/ndarray: returns a new Episode with each dynamic signal
+          sliced/sampled accordingly and all static items preserved.
+        """
+        if isinstance(index_or_slice, int):
+            # Merge sampled dynamic values with static items
+            sampled = {key: sig.time[index_or_slice] for key, sig in self.episode.signals.items()}
+            return {**self.episode.static, **sampled}
+        elif isinstance(index_or_slice, (list, tuple, np.ndarray)) or isinstance(index_or_slice, slice):
+            # Return a view with sliced/sampled signals and preserved static
+            signals = {key: sig.time[index_or_slice] for key, sig in self.episode.signals.items()}
+            return EpisodeView(signals, self.episode.static, dict(self.episode.meta))
+        else:
+            raise TypeError(f"Invalid index type: {type(index_or_slice)}")
+
+
 class Episode(ABC):
     """Abstract base class for an Episode (core concept).
 
@@ -361,7 +387,7 @@ class Episode(ABC):
 
     @property
     @abstractmethod
-    def keys(self):
+    def keys(self) -> Sequence[str]:
         """Names of all items (dynamic signals + static items)."""
         pass
 
@@ -382,28 +408,99 @@ class Episode(ABC):
         pass
 
     @property
-    @abstractmethod
-    def start_ts(self) -> int:
+    def start_ts(self):
         """Latest start timestamp across all dynamic signals."""
-        pass
+        values = [sig.start_ts for sig in self.signals.values()]
+        if not values:
+            raise ValueError("Episode has no signals")
+        return max(values)
 
     @property
-    @abstractmethod
-    def last_ts(self) -> int:
+    def last_ts(self):
         """Latest end timestamp across all dynamic signals."""
-        pass
+        values = [sig.last_ts for sig in self.signals.values()]
+        if not values:
+            raise ValueError("Episode has no signals")
+        return max(values)
 
     @property
-    @abstractmethod
+    @final
     def time(self):
-        """Episode-wide time accessor.
+        """Unified Episode-wide time accessor shared by all subclasses.
 
         - ep.time[ts] -> dict merging static items with sampled values from each signal at-or-before ts.
         - ep.time[start:end] -> Episode view windowed to [start, end).
         - ep.time[start:end:step] -> Episode view sampled at t_i = start + i*step (end-exclusive).
         - ep.time[[t1, t2, ...]] -> Episode view sampled at provided timestamps.
         """
-        pass
+        return _EpisodeTimeIndexer(self)
+
+    @property
+    def signals(self) -> dict[str, Signal[Any]]:
+        """Mapping of dynamic signal names to Signal objects.
+
+        Default implementation filters keys by value type using __getitem__.
+        Implementations may override for efficiency.
+        """
+        out: dict[str, Signal[Any]] = {}
+        for k in self.keys:
+            v = self[k]
+            if isinstance(v, Signal):
+                out[k] = v
+        return out
+
+    @property
+    def static(self) -> dict[str, Any]:
+        """Mapping of static item names to their values.
+
+        Default implementation filters keys by value type using __getitem__.
+        Implementations may override for efficiency.
+        """
+        out: dict[str, Any] = {}
+        for k in self.keys:
+            v = self[k]
+            if not isinstance(v, Signal):
+                out[k] = v
+        return out
+
+
+class EpisodeView(Episode):
+    """In-memory view over an Episode's items.
+
+    Provides the same read API as Episode (keys, __getitem__, start_ts, last_ts, time),
+    but does not load from disk. Chained time indexing returns another EpisodeView.
+    """
+
+    def __init__(self,
+                 signals: dict[str, Signal[Any]],
+                 static: dict[str, Any],
+                 meta: dict[str, Any] | None = None) -> None:
+        self._signals = signals
+        self._static = static
+        self._meta = meta or {}
+
+    @property
+    def keys(self):
+        return {**{k: True for k in self._signals.keys()}, **{k: True for k in self._static.keys()}}.keys()
+
+    def __getitem__(self, name: str) -> Signal[Any] | Any:
+        if name in self._signals:
+            return self._signals[name]
+        if name in self._static:
+            return self._static[name]
+        raise KeyError(name)
+
+    @property
+    def meta(self) -> dict:
+        return dict(self._meta)
+
+    @property
+    def signals(self) -> dict[str, Signal[Any]]:
+        return dict(self._signals)
+
+    @property
+    def static(self) -> dict[str, Any]:
+        return dict(self._static)
 
 
 class EpisodeWriter(AbstractContextManager, ABC, Generic[T]):

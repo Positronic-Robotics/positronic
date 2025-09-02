@@ -3,6 +3,7 @@ import abc
 import torch
 
 from positronic import geom
+from positronic.dataset import Episode
 from positronic.utils.registration import umi_relative
 
 
@@ -13,6 +14,7 @@ def _convert_quat_to_tensor(q: geom.Rotation, representation: geom.Rotation.Repr
 
 
 class ActionDecoder(abc.ABC):
+
     @abc.abstractmethod
     def encode_episode(self, episode_data: dict[str, torch.Tensor]) -> torch.Tensor:
         """
@@ -23,6 +25,13 @@ class ActionDecoder(abc.ABC):
 
         Returns:
             (torch.Tensor) The encoded episode data.
+        """
+        pass
+
+    @abc.abstractmethod
+    def encode_ep(self, episode: Episode) -> Episode:
+        """
+        Encode the episode data into a tensor. Used for creating the dataset for training.
         """
         pass
 
@@ -49,6 +58,7 @@ class ActionDecoder(abc.ABC):
 
 
 class RotationTranslationGripAction(ActionDecoder, abc.ABC):
+
     def __init__(self, rotation_representation: geom.Rotation.Representation | str = geom.Rotation.Representation.QUAT):
         rotation_representation = geom.Rotation.Representation(rotation_representation)
 
@@ -59,8 +69,9 @@ class RotationTranslationGripAction(ActionDecoder, abc.ABC):
     def get_features(self):
         return {
             'action': {
-                'dtype': 'float32',
-                'shape': (self.rotation_size + 4,),
+                'dtype':
+                'float32',
+                'shape': (self.rotation_size + 4, ),
                 'names': [
                     *[f'rotation_{i}' for i in range(self.rotation_size)],
                     'translation_x',
@@ -73,6 +84,7 @@ class RotationTranslationGripAction(ActionDecoder, abc.ABC):
 
 
 class AbsolutePositionAction(RotationTranslationGripAction):
+
     def __init__(self, rotation_representation: geom.Rotation.Representation | str = geom.Rotation.Representation.QUAT):
         super().__init__(rotation_representation)
 
@@ -92,21 +104,24 @@ class AbsolutePositionAction(RotationTranslationGripAction):
 
         return torch.cat([rotations, translations, grips], dim=1)
 
+    def encode_ep(self, episode: Episode) -> Episode:
+        pass
+
     def decode(self, action_vector: torch.Tensor, inputs: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
         rotation = action_vector[:self.rotation_size].reshape(self.rotation_shape)
         rot = geom.Rotation.create_from(rotation, self.rotation_representation)
 
         outputs = {
-            'target_robot_position': geom.Transform3D(
-                translation=action_vector[self.rotation_size:self.rotation_size + 3],
-                rotation=rot
-            ),
-            'target_grip': action_vector[self.rotation_size + 3]
+            'target_robot_position':
+            geom.Transform3D(translation=action_vector[self.rotation_size:self.rotation_size + 3], rotation=rot),
+            'target_grip':
+            action_vector[self.rotation_size + 3]
         }
         return outputs
 
 
 class RelativeTargetPositionAction(RotationTranslationGripAction):
+
     def __init__(self, rotation_representation: geom.Rotation.Representation | str = geom.Rotation.Representation.QUAT):
         super().__init__(rotation_representation)
 
@@ -143,21 +158,17 @@ class RelativeTargetPositionAction(RotationTranslationGripAction):
         tr_add = inputs['robot_position_translation'] + tr_diff
 
         outputs = {
-            'target_robot_position': geom.Transform3D(
-                translation=tr_add,
-                rotation=rot_mul
-            ),
+            'target_robot_position': geom.Transform3D(translation=tr_add, rotation=rot_mul),
             'target_grip': action_vector[self.rotation_size + 3]
         }
         return outputs
 
 
 class RelativeRobotPositionAction(RotationTranslationGripAction):
-    def __init__(
-            self,
-            offset: int,
-            rotation_representation: geom.Rotation.Representation | str = geom.Rotation.Representation.QUAT
-    ):
+
+    def __init__(self,
+                 offset: int,
+                 rotation_representation: geom.Rotation.Representation | str = geom.Rotation.Representation.QUAT):
         """
         Action that represents the relative position between the current robot position and the robot position
         after `offset` timesteps.
@@ -210,20 +221,18 @@ class RelativeRobotPositionAction(RotationTranslationGripAction):
         tr_add = inputs['reference_robot_position_translation'] + tr_diff
 
         outputs = {
-            'target_robot_position': geom.Transform3D(
-                translation=tr_add,
-                rotation=rot_mul
-            ),
+            'target_robot_position': geom.Transform3D(translation=tr_add, rotation=rot_mul),
             'target_grip': action_vector[self.rotation_size + 3]
         }
         return outputs
 
 
 class UMIRelativeRobotPositionAction(RotationTranslationGripAction):
+
     def __init__(
-            self,
-            offset: int,
-            rotation_representation: geom.Rotation.Representation | str = geom.Rotation.Representation.QUAT,
+        self,
+        offset: int,
+        rotation_representation: geom.Rotation.Representation | str = geom.Rotation.Representation.QUAT,
     ):
         """
         Action that represents the relative position between the current robot position and the robot position
@@ -256,10 +265,9 @@ class UMIRelativeRobotPositionAction(RotationTranslationGripAction):
         rotations = torch.zeros(n_samples, self.rotation_size)
         translation_diff = torch.zeros(n_samples, 3)
         grips = torch.zeros(n_samples)
-        registration_transform = geom.Transform3D(
-            translation=episode_data['registration_transform_translation'],
-            rotation=geom.Rotation.from_quat(episode_data['registration_transform_quaternion'])
-        )
+        registration_transform = geom.Transform3D(translation=episode_data['registration_transform_translation'],
+                                                  rotation=geom.Rotation.from_quat(
+                                                      episode_data['registration_transform_quaternion']))
 
         relative_trajectory = self._prepare(episode_data)
 
@@ -289,15 +297,10 @@ class UMIRelativeRobotPositionAction(RotationTranslationGripAction):
 
         diff_pose = geom.Transform3D(translation=tr_diff, rotation=q_diff)
 
-        reference_pose = geom.Transform3D(
-            inputs['reference_robot_position_translation'],
-            geom.Rotation.from_quat(inputs['reference_robot_position_quaternion'])
-        )
+        reference_pose = geom.Transform3D(inputs['reference_robot_position_translation'],
+                                          geom.Rotation.from_quat(inputs['reference_robot_position_quaternion']))
 
         new_pose = reference_pose * diff_pose
 
-        outputs = {
-            'target_robot_position': new_pose,
-            'target_grip': action_vector[self.rotation_size + 3]
-        }
+        outputs = {'target_robot_position': new_pose, 'target_grip': action_vector[self.rotation_size + 3]}
         return outputs

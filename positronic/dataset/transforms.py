@@ -1,8 +1,9 @@
-from typing import Callable, Sequence, TypeVar, Tuple
+from abc import ABC, abstractmethod
+from typing import Any, Callable, Sequence, TypeVar, Tuple
 
 import numpy as np
 
-from positronic.dataset.core import Signal, IndicesLike, RealNumericArrayLike
+from .core import Signal, IndicesLike, RealNumericArrayLike, Episode
 
 T = TypeVar("T")
 U = TypeVar("U")
@@ -236,9 +237,7 @@ class Join(Signal[Tuple[T, U, int]]):
         self._s1_start = _first_idx_at_or_after(self._s1, start_ts)
         self._s2_start = _first_idx_at_or_after(self._s2, start_ts)
         # Build union timestamps with duplicates collapsed
-        self._union_ts = np.asarray(
-            list(self._iter_merged_ts(dedup=True)), dtype=np.int64
-        )
+        self._union_ts = np.asarray(list(self._iter_merged_ts(dedup=True)), dtype=np.int64)
         self._length = int(self._union_ts.shape[0])
         self._bounds_ready = True
 
@@ -286,3 +285,32 @@ class Join(Signal[Tuple[T, U, int]]):
         t = np.asarray(ts_array)
         assert self._union_ts is not None
         return np.searchsorted(self._union_ts, t, side="right") - 1
+
+
+class EpisodeTransform(ABC):
+    """Transform an episode into a new episode."""
+
+    @abstractmethod
+    def keys(self) -> list[str]:
+        pass
+
+    @abstractmethod
+    def transform(self, name: str, episode: Episode) -> Signal[Any] | Any:
+        pass
+
+
+class TransformEpisode(Episode):
+    """Transform an episode into a new episode."""
+
+    def __init__(self, episode: Episode, transform: EpisodeTransform) -> None:
+        self._episode = episode
+        self._transform = transform
+
+    def keys(self) -> Sequence[str]:
+        return self._transform.keys()
+
+    def __getitem__(self, name: str) -> Signal[Any] | Any:
+        return self._transform.transform(name, self._episode)
+
+    def meta(self) -> dict[str, Any]:
+        return self._episode.meta()
