@@ -377,8 +377,7 @@ class Rotation(np.ndarray, metaclass=RotationMeta):
                           of the vector indicates the axis of rotation and its magnitude
                           represents the angle in radians.
         """
-        if self[0] > 1.0 or self[0] < -1.0:
-            return np.zeros(3)
+        self[:] = normalise_quat(self)
         angle = 2 * np.arccos(self[0])
         if angle < 1e-10:  # Handle small angles to avoid division by zero
             return np.zeros(3)

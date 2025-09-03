@@ -75,9 +75,9 @@ def _damped_pinv(J: np.ndarray, lambda2: float) -> np.ndarray:
     return J.T @ np.linalg.inv(JJt + lambda2 * I6)
 
 
-class CartesianMode(Enum):
+class IKSolver(Enum):
     FRANKY = 0
-    IK = 1
+    POSITRONIC = 1
 
 
 class Robot:
@@ -87,7 +87,7 @@ class Robot:
     def __init__(self,
                  ip: str,
                  relative_dynamics_factor=0.2,
-                 cartesian_mode: CartesianMode = CartesianMode.IK,
+                 cartesian_mode: IKSolver = IKSolver.POSITRONIC,
                  home_joints: list[float] = [0.0, -0.31, 0.0, -1.65, 0.0, 1.522, 0.0]) -> None:
         """
         :param ip: IP address of the robot.
@@ -211,7 +211,7 @@ class Robot:
                         self._reset(robot, robot_state)
                         continue
                     case command.CartesianMove(pose):
-                        if self._cartesian_mode == CartesianMode.FRANKY:
+                        if self._cartesian_mode == IKSolver.FRANKY:
                             pos = franky.Affine(translation=pose.translation, quaternion=pose.rotation.as_quat_xyzw)
                             motion = franky.CartesianMotion(pos, franky.ReferenceType.Absolute)
                         else:  # CartesianMode.IK
