@@ -205,62 +205,55 @@ def _first_idx_at_or_after(sig: Signal[T], ts: int) -> int:
     return floor if floor_ts == ts else floor + 1
 
 
-class Join(Signal[Tuple[T, U, int]]):
-    """Join two signals on the union of their timestamps with carry-back.
+class Join(Signal[tuple]):
+    """Join an arbitrary number of signals on the union of their timestamps.
 
-    - Reference times: sorted union of parents' timestamps, starting from
-      max(s1.start_ts, s2.start_ts). Equal timestamps are collapsed into a
-      single entry.
+    Semantics (generalizing the previous 2-signal Join):
+    - Reference times: sorted union of all parents' timestamps, starting from
+      max(s_i.start_ts). Equal timestamps across signals are collapsed.
     - Values: at each union timestamp t, returns
-      ((v1_at_or_before_t, v2_at_or_before_t, ts2_ref - ts1_ref), t), where
-      ts*_ref are the timestamps of the carried-back values in each parent.
-    - Union timestamps are precomputed for O(log N) time lookups.
+      ((v1, v2, ..., vN, t1_ref, t2_ref, ..., tN_ref), t), where
+        - vK = value of signal K at the last timestamp at-or-before t
+        - tK_ref = the timestamp of the carried-back value in signal K
+      For N=2, this yields ((v1, v2, t1_ref, t2_ref), t).
+    - Union timestamps are precomputed for O(log M) time lookups.
     """
 
-    def __init__(self, s1: Signal[T], s2: Signal[U]) -> None:
-        self._s1 = s1
-        self._s2 = s2
+    def __init__(self, *signals: Signal[Any]) -> None:
+        if len(signals) < 2:
+            raise ValueError("Join requires at least two signals")
+        self._signals: tuple[Signal[Any], ...] = tuple(signals)
         self._bounds_ready = False
-        self._s1_start = 0
-        self._s2_start = 0
+        self._starts: list[int] = [0] * len(self._signals)
         self._length = 0
         self._union_ts: np.ndarray | None = None
 
     def _compute_bounds(self) -> None:
         if self._bounds_ready:
             return
-        n1, n2 = len(self._s1), len(self._s2)
-        if n1 == 0 or n2 == 0:
-            self._s1_start = n1
-            self._s2_start = n2
+        n_all = [len(s) for s in self._signals]
+        if any(n == 0 for n in n_all):
+            self._starts = n_all[:]  # irrelevant; establishes emptiness
             self._length = 0
             self._bounds_ready = True
             return
-        start_ts = max(self._s1.start_ts, self._s2.start_ts)
-        self._s1_start = _first_idx_at_or_after(self._s1, start_ts)
-        self._s2_start = _first_idx_at_or_after(self._s2, start_ts)
-        # Build union timestamps with duplicates collapsed
-        self._union_ts = np.asarray(list(self._iter_merged_ts(dedup=True)), dtype=np.int64)
+        start_ts = max(s.start_ts for s in self._signals)
+        self._starts = [_first_idx_at_or_after(s, start_ts) for s in self._signals]
+        # Collect timestamps from each signal starting at its aligned start
+        ts_arrays = []
+        for s, st in zip(self._signals, self._starts):
+            if st < len(s):
+                idxs = np.arange(st, len(s), dtype=np.int64)
+                ts_arrays.append(np.asarray(s._ts_at(idxs), dtype=np.int64))
+        if len(ts_arrays) == 0:
+            self._union_ts = np.empty((0,), dtype=np.int64)
+        else:
+            all_ts = np.concatenate(ts_arrays)
+            self._union_ts = np.unique(all_ts)
         self._length = int(self._union_ts.shape[0])
         self._bounds_ready = True
 
-    def _iter_merged_ts(self, dedup: bool):
-        i1, i2 = self._s1_start, self._s2_start
-        n1, n2 = len(self._s1), len(self._s2)
-        inf_ts = np.iinfo(np.int64).max
-        while i1 < n1 or i2 < n2:
-            ts1 = _ts_at_index(self._s1, i1) if i1 < n1 else inf_ts
-            ts2 = _ts_at_index(self._s2, i2) if i2 < n2 else inf_ts
-            if dedup and ts1 == ts2:
-                yield ts1
-                i1 += 1
-                i2 += 1
-            elif ts1 <= ts2:
-                yield ts1
-                i1 += 1
-            else:
-                yield ts2
-                i2 += 1
+    # Note: previous 2-way merge helper removed; union now built via numpy unique.
 
     def __len__(self) -> int:
         self._compute_bounds()
@@ -271,17 +264,21 @@ class Join(Signal[Tuple[T, U, int]]):
         idxs = np.asarray(indices)
         return self._union_ts[idxs]
 
-    def _values_at(self, indices: IndicesLike) -> Sequence[Tuple[T, U, int]]:
+    def _values_at(self, indices: IndicesLike):
         ts = np.asarray(self._ts_at(indices))
-        # Sample both parents at these timestamps and compute dt between refs
-        idx1 = np.asarray(self._s1._search_ts(ts))
-        idx2 = np.asarray(self._s2._search_ts(ts))
-        v1 = self._s1._values_at(idx1)
-        v2 = self._s2._values_at(idx2)
-        t1 = np.asarray(self._s1._ts_at(idx1))
-        t2 = np.asarray(self._s2._ts_at(idx2))
-        dt = t2 - t1
-        return list(zip(v1, v2, dt, strict=True))
+        # For each signal, sample at-or-before these timestamps
+        idx_all = [np.asarray(s._search_ts(ts)) for s in self._signals]
+        vals_all = [s._values_at(idx) for s, idx in zip(self._signals, idx_all)]
+        tss_all = [np.asarray(s._ts_at(idx), dtype=np.int64) for s, idx in zip(self._signals, idx_all)]
+        # Build output tuples per row: (v1..vN, t1..tN)
+        out: list[tuple] = []
+        for row in zip(*vals_all, *tss_all, strict=False):
+            # row = (v1, v2, ..., vN, t1, t2, ..., tN)
+            n = len(self._signals)
+            vals = row[:n]
+            refs = row[n:]
+            out.append(tuple(vals + refs))
+        return out
 
     def _search_ts(self, ts_array: RealNumericArrayLike) -> IndicesLike:
         self._compute_bounds()
