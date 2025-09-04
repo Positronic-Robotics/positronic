@@ -254,6 +254,29 @@ class VideoSignal(Signal[np.ndarray]):
         self._load_timestamps()
         return self._timestamps[index_or_indices]
 
+    class _LazyFrames(Sequence[np.ndarray]):
+        """Lazy, indexable sequence of decoded frames for selected indices.
+
+        Decodes frames on demand using the parent `VideoSignal` navigator.
+        Supports random access by position and slicing without materializing
+        all frames up front.
+        """
+
+        def __init__(self, parent: "VideoSignal", indices: Sequence[int] | np.ndarray):
+            self._parent = parent
+            # Store as numpy int64 array for efficient indexing/slicing
+            self._indices = np.asarray(indices, dtype=np.int64)
+
+        def __len__(self) -> int:
+            return int(self._indices.shape[0])
+
+        def __getitem__(self, pos: int | slice) -> np.ndarray | Sequence[np.ndarray]:
+            if isinstance(pos, slice):
+                return VideoSignal._LazyFrames(self._parent, self._indices[pos])
+            idx = int(self._indices[int(pos)])
+            frame, _ts = self._parent._get_frame_at_index(idx)
+            return frame
+
     def _values_at(self, index_or_indices: IndicesLike) -> Sequence[np.ndarray]:
         self._load_timestamps()
         if isinstance(index_or_indices, slice):
@@ -261,7 +284,7 @@ class VideoSignal(Signal[np.ndarray]):
             idxs = np.arange(start, stop, step, dtype=np.int64)
         else:
             idxs = np.asarray(index_or_indices, dtype=np.int64)
-        return [self._get_frame_at_index(int(i))[0] for i in idxs]
+        return VideoSignal._LazyFrames(self, idxs)
 
     def _search_ts(self, ts_or_array: RealNumericArrayLike) -> IndicesLike:
         self._load_timestamps()
