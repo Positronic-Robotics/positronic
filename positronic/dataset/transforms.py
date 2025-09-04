@@ -5,6 +5,8 @@ import numpy as np
 import cv2
 from PIL import Image as PilImage
 
+from positronic import geom
+
 from .signal import Signal, IndicesLike, RealNumericArrayLike
 from .episode import Episode
 
@@ -446,18 +448,18 @@ class Image:
         return Elementwise(signal, fn)
 
 
-def concat(keys: Sequence[str], episode: Episode) -> Signal[np.ndarray]:
+def concat(*signals) -> Signal[np.ndarray]:
     """Concatenate multiple 1D array signals into a single array signal.
 
     - Aligns signals on the union of timestamps with carry-back semantics.
     - Values are vector-wise concatenations of each signal's values at-or-before t.
     - For batched requests, returns a single 2D array (batch, dim).
     """
-    n = len(keys)
+    n = len(signals)
     if n == 0:
         raise ValueError("concat requires at least one key")
     if n == 1:
-        return episode[keys[0]]
+        return signals[0]
 
     def fn(x: Sequence[tuple]) -> np.ndarray:
         # x is a sequence of tuples (v1, v2, ..., vN) for the requested indices.
@@ -485,4 +487,24 @@ def concat(keys: Sequence[str], episode: Episode) -> Signal[np.ndarray]:
                 out[i, offsets[j]:offsets[j] + dims[j]] = arr.ravel()
         return out
 
-    return Elementwise(Join(*(episode[k] for k in keys), include_ref_ts=False), fn)
+    return Elementwise(Join(*signals, include_ref_ts=False), fn)
+
+
+def recode_rotation(rep_from: geom.Rotation.Representation,
+                    rep_to: geom.Rotation.Representation,
+                    signal: Signal[np.ndarray]) -> Signal[np.ndarray]:
+    """Return a Signal view with rotation vectors recoded to a different representation.
+
+    Args:
+        rep_from: Input rotation representation.
+        rep_to: Output rotation representation.
+        signal: Input Signal with frames shaped (dim,), where dim depends on rep_from.
+    """
+    if rep_from == rep_to:
+        return signal
+
+    def fn(x: Sequence[np.ndarray]) -> Sequence[np.ndarray]:
+        # TODO: Use batch conversion instead.
+        return _LazySequence(x, lambda v: geom.Rotation.create_from(v, rep_from).to(rep_to).flatten())
+
+    return Elementwise(signal, fn)

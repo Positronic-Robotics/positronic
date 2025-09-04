@@ -314,6 +314,7 @@ def test_join_three_signals_no_ref_timestamps():
 
 
 class _DummyTransform(EpisodeTransform):
+
     def __init__(self):
         self._keys = ["a", "s"]
 
@@ -439,9 +440,7 @@ def test_concat_vectors_batched_and_alignment():
         [20],
     ]
     s2 = DummySignal(ts2, v2)
-
-    ep = EpisodeContainer(signals={"a": s1, "b": s2}, static={})
-    cat = concat(["a", "b"], ep)
+    cat = concat(s1, s2)
 
     # Expected union starting from max start (1500): [1500, 2000, 2500, 3000]
     # Values are concatenated vectors with carry-back

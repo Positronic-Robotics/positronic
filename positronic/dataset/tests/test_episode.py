@@ -276,9 +276,71 @@ class TestEpisodeVideoIntegration:
         # Keys include both signals
         assert set(ep.keys) == {"a", "cam"}
 
-        # Time snapshot merges both
+        # Time snapshot merges both; dynamic values only
         snap = ep.time[2000]
-        assert snap["a"] == (2, 2000)
-        cam_frame, cam_ts = snap["cam"]
-        assert cam_ts == 1500
+        assert snap["a"] == 2
+        cam_frame = snap["cam"]
         assert_frames_equal(cam_frame, create_frame(10), tolerance=25)
+
+
+class TestCoreEpisodeTime:
+
+    @pytest.fixture(autouse=True)
+    def _setup(self, tmp_path):
+        ep_dir = tmp_path / "ep_time_fixture"
+        with DiskEpisodeWriter(ep_dir) as w:
+            # Static items
+            w.set_static("task", "stack")
+            w.set_static("version", 2)
+            w.set_static("params", {"k": 1})
+            # Dynamic signals
+            # a: 1000->1, 2000->2, 3000->3
+            w.append("a", 1, 1000)
+            w.append("a", 2, 2000)
+            w.append("a", 3, 3000)
+            # b: 1500->5, 2500->7, 3500->9
+            w.append("b", 5, 1500)
+            w.append("b", 7, 2500)
+            w.append("b", 9, 3500)
+        self.ep = DiskEpisode(ep_dir)
+
+    def test_int_includes_static(self):
+        snap = self.ep.time[2000]
+        expected = {
+            "task": "stack",
+            "version": 2,
+            "params": {"k": 1},
+            "a": 2,
+            "b": 5,
+        }
+        assert snap == expected
+
+    def test_array_preserves_static_and_samples(self):
+        ts = [1500, 2500, 3000]
+        sub = self.ep.time[ts]
+        # Expected full dictionary comparison (static + sampled values)
+        expected = {
+            "task": "stack",
+            "version": 2,
+            "params": {"k": 1},
+            "a": [1, 2, 3],
+            "b": [5, 7, 7],
+        }
+        import numpy as np
+        sub_norm = {k: (v.tolist() if isinstance(v, np.ndarray) else v) for k, v in sub.items()}
+        assert sub_norm == expected
+
+
+def test_disk_episode_implements_abc(tmp_path):
+    ep_dir = tmp_path / "ep_abc"
+    with DiskEpisodeWriter(ep_dir) as w:
+        w.append("a", 1, 1000)
+        w.append("a", 2, 2000)
+        w.set_static("task", "stack")
+
+    ep = DiskEpisode(ep_dir)
+    from positronic.dataset import Episode
+    assert isinstance(ep, Episode)
+
+    view = ep.time[1000:3000]
+    assert isinstance(view, dict)

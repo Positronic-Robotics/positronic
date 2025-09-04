@@ -30,14 +30,23 @@ class _EpisodeTimeIndexer:
         self.episode = episode
 
     def __getitem__(self, index_or_slice):
-        if isinstance(index_or_slice, int):
-            sampled = {key: sig.time[index_or_slice] for key, sig in self.episode.signals.items()}
-            return {**self.episode.static, **sampled}
-        elif isinstance(index_or_slice, (list, tuple, np.ndarray)) or isinstance(index_or_slice, slice):
-            signals = {key: sig.time[index_or_slice] for key, sig in self.episode.signals.items()}
-            return EpisodeView(signals, self.episode.static, dict(self.episode.meta))
-        else:
-            raise TypeError(f"Invalid index type: {type(index_or_slice)}")
+        match index_or_slice:
+            case int() | np.integer() | float() | np.floating() as ts:
+                # For a single timestamp, return static items and only the values for signals
+                sampled = {key: sig.time[ts][0] for key, sig in self.episode.signals.items()}
+                return {**self.episode.static, **sampled}
+            case slice() | list() | tuple() | np.ndarray() as req:
+                # For slice or sequence of timestamps, return a dict:
+                # - static items as-is
+                # - dynamic signals mapped to sequences of values sampled at requested timestamps
+                result: dict[str, Any] = self.episode.static.copy()
+                for key, sig in self.episode.signals.items():
+                    view = sig.time[req]
+                    # Extract the full sequence of values corresponding to the time selection
+                    result[key] = view._values_at(slice(None))
+                return {**self.episode.static, **result}
+            case _:
+                raise TypeError(f"Invalid index type: {type(index_or_slice)}")
 
 
 class Episode(ABC):
@@ -94,7 +103,7 @@ class Episode(ABC):
         return _EpisodeTimeIndexer(self)
 
 
-class EpisodeView(Episode):
+class EpisodeContainer(Episode):
     """In-memory view over an Episode's items."""
 
     def __init__(self,
@@ -425,7 +434,6 @@ class DiskEpisode(Episode):
 
     @property
     def signals(self) -> dict[str, Signal[Any]]:
-        # Ensure and return all signals; this may materialize readers lazily
         out: dict[str, Signal[Any]] = {}
         for name in self._signal_factories.keys():
             out[name] = self._ensure_signal(name)
