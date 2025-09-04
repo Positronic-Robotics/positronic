@@ -35,10 +35,15 @@ class _EpisodeTimeIndexer:
                 # For a single timestamp, return static items and only the values for signals
                 sampled = {key: sig.time[ts][0] for key, sig in self.episode.signals.items()}
                 return {**self.episode.static, **sampled}
+            case slice() as sl if sl.step is None:
+                raise KeyError("Episode.time[start:stop] is not supported; use a step or explicit timestamps")
             case slice() | list() | tuple() | np.ndarray() as req:
                 # For slice or sequence of timestamps, return a dict:
                 # - static items as-is
                 # - dynamic signals mapped to sequences of values sampled at requested timestamps
+                # If slice with step but no stop provided, default stop to episode.last_ts (+1 for end-exclusive)
+                if isinstance(req, slice) and req.step is not None and req.stop is None:
+                    req = slice(req.start, self.episode.last_ts + 1, req.step)
                 result: dict[str, Any] = self.episode.static.copy()
                 for key, sig in self.episode.signals.items():
                     view = sig.time[req]

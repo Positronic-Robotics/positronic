@@ -95,9 +95,9 @@ class Episode:
 
     # Episode-wide time accessor:
     # * ep.time[ts] -> dict merging static items with sampled values from each `Signal` at-or-before ts
-    # * ep.time[start:end] -> EpisodeView windowed to [start, end)
-    # * ep.time[start:end:step] -> EpisodeView sampled at t_i = start + i*step (end-exclusive)
-    # * ep.time[[t1, t2, ...]] -> EpisodeView sampled at provided timestamps
+    # * ep.time[start:end] -> NOT SUPPORTED (to ensure equal-length sequences across signals)
+    # * ep.time[start:end:step] -> dict with static items and, for each signal, a sequence of signal values sampled at t_i = start + i*step (end‑exclusive). If `end` is omitted, it defaults to the episode's `last_ts` (common stop for all signals) to ensure equal-length sequences. Note that information about the actual timestamps where values originate from is not provided.
+    # * ep.time[[t1, t2, ...]] -> dict with static items and, for each signal, a sequence of signal values sampled at provided timestamps.
     @property
     def time(self):
         pass
@@ -236,21 +236,21 @@ Signal schemas (dtype, shape, etc.) are not duplicated here; they reside in the 
 
 ### Time accessor
 
-Episode supports time-based access across all signals while preserving static items:
+Episode supports time-based access across all signals while preserving static items. All episode time queries return a plain dict:
 
 - `ep.time[ts] -> dict`
-  - Snapshot: merges all static items with sampled values from each dynamic `Signal` at-or-before `ts`.
+  - Snapshot: merges all static items with sampled values (no timestamps) from each dynamic `Signal` at-or-before `ts`.
 
-- `ep.time[start:end] -> EpisodeView`
-  - Window: each dynamic `Signal` is restricted to `[start, end)`. Static items are preserved.
+- `ep.time[start:end]`
+  - Not supported: use stepped slicing (`start:end:step`) or explicit timestamp arrays to guarantee equal-length sequences across signals.
 
-- `ep.time[start:end:step] -> EpisodeView`
-  - Sampling: each dynamic `Signal` is sampled at `t_i = start + i*step` (end-exclusive). Static items are preserved.
+- `ep.time[start:end:step] -> dict`
+  - Sampling: for each dynamic `Signal`, returns a sequence of signal values sampled at `t_i = start + i*step` (end-exclusive). Static items are preserved as-is. `step > 0`, `start` are required. If `end` is omitted, it defaults to the episode's `last_ts` so that all per-signal sequences have the same length regardless of when each signal stops. If `start` is before the episode's `start_ts` (max of signal starts), a `KeyError` is raised.
 
-- `ep.time[[t1, t2, ...]] -> EpisodeView`
-  - Arbitrary timestamps: each dynamic `Signal` is sampled at the provided times. Static items are preserved.
+- `ep.time[[t1, t2, ...]] -> dict`
+  - Arbitrary timestamps: for each dynamic `Signal`, returns a sequence of signal values sampled at the provided times. Static items are preserved as-is.
 
-Access semantics mirror what is already defined for `Signal.time`: sampling returns values at-or-before requested timestamps; windowing returns views that share underlying storage; stepped sampling materializes requested timestamps. There is no index-based access for episodes — access is time-based only via `ep.time`.
+Access semantics mirror those of `Signal.time` for selecting timestamps; the episode-level result aggregates per-signal sequences but omits timestamps (values only). There is no index-based access for episodes — access is time-based only via `ep.time`.
 
 ## Datasets
 

@@ -330,6 +330,21 @@ class TestCoreEpisodeTime:
         sub_norm = {k: (v.tolist() if isinstance(v, np.ndarray) else v) for k, v in sub.items()}
         assert sub_norm == expected
 
+    def test_no_step_slice_raises_keyerror(self):
+        import pytest
+        with pytest.raises(KeyError):
+            _ = self.ep.time[1500:3000]
+
+    def test_stepped_slice_without_end_defaults_to_episode_last_ts(self):
+        start = self.ep.start_ts  # common start across signals
+        step = 500
+        sub = self.ep.time[start::step]
+        a_vals = sub["a"]
+        b_vals = sub["b"]
+        import numpy as np
+        expected_len = len(np.arange(start, self.ep.last_ts + 1, step))
+        assert len(a_vals) == len(b_vals) == expected_len
+
 
 def test_disk_episode_implements_abc(tmp_path):
     ep_dir = tmp_path / "ep_abc"
@@ -342,5 +357,5 @@ def test_disk_episode_implements_abc(tmp_path):
     from positronic.dataset import Episode
     assert isinstance(ep, Episode)
 
-    view = ep.time[1000:3000]
+    view = ep.time[1000:3000:1000]
     assert isinstance(view, dict)
