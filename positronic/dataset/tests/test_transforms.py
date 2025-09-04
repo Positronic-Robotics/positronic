@@ -1,6 +1,16 @@
 import pytest
 
-from positronic.dataset.transforms import Elementwise, TimeOffsets, Join, IndexOffsets
+from positronic.dataset.transforms import (
+    Elementwise,
+    TimeOffsets,
+    Join,
+    IndexOffsets,
+    TransformEpisode,
+    EpisodeTransform,
+    Image,
+)
+from positronic.dataset.episode import EpisodeContainer
+import numpy as np
 from .utils import DummySignal
 
 
@@ -233,3 +243,113 @@ def test_join_empty():
     assert list(Join(empty, empty)) == []
     assert list(Join(s1, empty)) == []
     assert list(Join(empty, s1)) == []
+
+
+class _DummyTransform(EpisodeTransform):
+    def __init__(self):
+        self._keys = ["a", "s"]
+
+    @property
+    def keys(self):
+        return list(self._keys)
+
+    def transform(self, name: str, episode):
+        if name == "a":
+            # 10x the base signal
+            base = episode["s"]
+            return Elementwise(base, lambda seq: np.asarray(seq) * 10)
+        if name == "s":
+            # Override original 's' by adding 1
+            base = episode["s"]
+            return Elementwise(base, lambda seq: np.asarray(seq) + 1)
+        raise KeyError(name)
+
+
+def test_transform_episode_keys_and_getitem_pass_through(sig_simple):
+    # Build an episode with one signal 's' and two static fields
+    ep = EpisodeContainer(signals={"s": sig_simple}, static={"id": 7, "note": "ok"}, meta={"origin": "unit"})
+    tf = _DummyTransform()
+    te = TransformEpisode(ep, tf, pass_through=True)
+
+    # Keys order: transform keys first, then original non-overlapping keys
+    assert list(te.keys) == ["a", "s", "id", "note"]
+
+    # __getitem__ should route to transform for transform keys
+    a_vals = [v for v, _ in te["a"]]
+    s_vals = [v for v, _ in te["s"]]
+    assert a_vals == [x * 10 for x, _ in ep["s"]]
+    assert s_vals == [x + 1 for x, _ in ep["s"]]
+
+    # Pass-through static values
+    assert te["id"] == 7
+    assert te["note"] == "ok"
+
+    # Meta passthrough
+    assert te.meta == {"origin": "unit"}
+
+    # Missing key raises
+    with pytest.raises(KeyError):
+        _ = te["missing"]
+
+
+def test_transform_episode_no_pass_through(sig_simple):
+    ep = EpisodeContainer(signals={"s": sig_simple}, static={"id": 7})
+    tf = _DummyTransform()
+    te = TransformEpisode(ep, tf, pass_through=False)
+
+    # Only transform keys
+    assert list(te.keys) == ["a", "s"]
+
+    # Transform values present
+    a_vals = [v for v, _ in te["a"]]
+    s_vals = [v for v, _ in te["s"]]
+    assert a_vals == [x * 10 for x, _ in ep["s"]]
+    assert s_vals == [x + 1 for x, _ in ep["s"]]
+
+    # Non-transform key should not be available
+    with pytest.raises(KeyError):
+        _ = te["id"]
+
+
+def test_image_resize_basic():
+    # Create a simple image signal with uniform frames
+    h, w = 4, 6
+    frame1 = np.full((h, w, 3), 10, dtype=np.uint8)
+    frame2 = np.full((h, w, 3), 200, dtype=np.uint8)
+    ts = [1000, 2000]
+    sig = DummySignal(ts, [frame1, frame2])
+
+    # Resize to (width=3, height=2)
+    resized = Image.resize(3, 2, sig)
+    assert len(resized) == 2
+
+    v0, t0 = resized[0]
+    v1, t1 = resized[1]
+    assert t0 == 1000 and t1 == 2000
+    assert v0.shape == (2, 3, 3)
+    assert v1.shape == (2, 3, 3)
+    assert v0.dtype == np.uint8 and v1.dtype == np.uint8
+    # Uniform frames should remain uniform after resize
+    assert np.unique(v0).tolist() == [10]
+    assert np.unique(v1).tolist() == [200]
+
+
+def test_image_resize_with_pad_basic():
+    # Frame narrower than target: expect horizontal padding with zeros
+    h, w = 4, 2
+    frame = np.full((h, w, 3), 255, dtype=np.uint8)  # white
+    ts = [1000]
+    sig = DummySignal(ts, [frame])
+
+    resized = Image.resize_with_pad(4, 4, sig)  # target H=W=4
+    v, t = resized[0]
+    assert t == 1000
+    assert v.shape == (4, 4, 3)
+    assert v.dtype == np.uint8
+    # Left and right columns should be zeros (black padding), middle columns white
+    left_col = v[:, 0, :]
+    right_col = v[:, -1, :]
+    mid = v[:, 1:-1, :]
+    assert np.unique(left_col).tolist() == [0]
+    assert np.unique(right_col).tolist() == [0]
+    assert np.unique(mid).tolist() == [255]

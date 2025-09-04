@@ -2,6 +2,8 @@ from abc import ABC, abstractmethod
 from typing import Any, Callable, Sequence, TypeVar, Tuple
 
 import numpy as np
+import cv2
+from PIL import Image as PilImage
 
 from .signal import Signal, IndicesLike, RealNumericArrayLike
 from .episode import Episode
@@ -291,8 +293,9 @@ class Join(Signal[Tuple[T, U, int]]):
 class EpisodeTransform(ABC):
     """Transform an episode into a new episode."""
 
+    @property
     @abstractmethod
-    def keys(self) -> list[str]:
+    def keys(self) -> Sequence[str]:
         pass
 
     @abstractmethod
@@ -301,17 +304,141 @@ class EpisodeTransform(ABC):
 
 
 class TransformEpisode(Episode):
-    """Transform an episode into a new episode."""
+    """Transform an episode into a new view of the episode."""
 
-    def __init__(self, episode: Episode, transform: EpisodeTransform) -> None:
+    def __init__(self, episode: Episode, transform: EpisodeTransform, pass_through: bool = False) -> None:
         self._episode = episode
         self._transform = transform
+        self._pass_through = pass_through
 
+    @property
     def keys(self) -> Sequence[str]:
-        return self._transform.keys()
+        # Preserve order: all transform keys first, then pass-through keys
+        # from the original episode that are not overridden by the transform.
+        ordered: list[str] = []
+        seen: set[str] = set()
+        for k in self._transform.keys:
+            if k not in seen:
+                ordered.append(k)
+                seen.add(k)
+        if self._pass_through:
+            for k in self._episode.keys:
+                if k not in seen:
+                    ordered.append(k)
+                    seen.add(k)
+        return ordered
 
     def __getitem__(self, name: str) -> Signal[Any] | Any:
-        return self._transform.transform(name, self._episode)
+        # If the transform defines this key, it takes precedence.
+        if name in self._transform.keys:
+            return self._transform.transform(name, self._episode)
+        if self._pass_through:
+            return self._episode[name]
+        raise KeyError(name)
 
+    @property
     def meta(self) -> dict[str, Any]:
-        return self._episode.meta()
+        return self._episode.meta
+
+
+class _LazySequence(Sequence[U]):
+    """Lazy, indexable view that applies `fn` on element access.
+
+    - Supports `len()` and integer indexing.
+    - Slicing returns another lazy view without materializing elements.
+    """
+
+    def __init__(self, seq: Sequence[T], fn: Callable[[T], U]) -> None:
+        self._seq = seq
+        self._fn = fn
+
+    def __len__(self) -> int:
+        return len(self._seq)
+
+    def __getitem__(self, index: int | slice) -> U | "_LazySequence[U]":
+        if isinstance(index, slice):
+            return _LazySequence(self._seq[index], self._fn)
+        return self._fn(self._seq[int(index)])
+
+
+class Image:
+    @staticmethod
+    def resize(width: int,
+               height: int,
+               signal: Signal[np.ndarray],
+               interpolation: int = cv2.INTER_LINEAR) -> Signal[np.ndarray]:
+        """Return a Signal view with frames resized using OpenCV.
+
+        Args:
+            resolution: Target size as (width, height) for cv2.resize (W, H).
+            signal: Input image Signal with frames shaped (H, W, 3), dtype uint8.
+            interpolation: OpenCV interpolation flag (e.g., cv2.INTER_LINEAR).
+        """
+        interp_flag = int(interpolation)
+
+        def per_frame(img: np.ndarray) -> np.ndarray:
+            if img.ndim != 3 or img.shape[2] != 3:
+                raise ValueError(f"Expected frame shape (H, W, 3), got {img.shape}")
+            return cv2.resize(img, dsize=(width, height), interpolation=interp_flag)
+
+        def fn(x: Sequence[np.ndarray]) -> Sequence[np.ndarray]:
+            return _LazySequence(x, per_frame)
+
+        return Elementwise(signal, fn)
+
+    @staticmethod
+    def _resize_with_pad_pil(image: PilImage.Image, height: int, width: int, method: int) -> PilImage.Image:
+        """Replicates tf.image.resize_with_pad for one image using PIL. Resizes an image to a target height and
+        width without distortion by padding with zeros.
+        Unlike the jax version, note that PIL uses [width, height, channel] ordering instead of [batch, h, w, c].
+        """
+        cur_width, cur_height = image.size
+        if cur_width == width and cur_height == height:
+            return image  # No need to resize if the image is already the correct size.
+
+        ratio = max(cur_width / width, cur_height / height)
+        resized_height = int(cur_height / ratio)
+        resized_width = int(cur_width / ratio)
+        resized_image = image.resize((resized_width, resized_height), resample=method)
+
+        zero_image = PilImage.new(resized_image.mode, (width, height), 0)
+        pad_height = max(0, int((height - resized_height) / 2))
+        pad_width = max(0, int((width - resized_width) / 2))
+        zero_image.paste(resized_image, (pad_width, pad_height))
+        assert zero_image.size == (width, height)
+        return zero_image
+
+    @staticmethod
+    def resize_with_pad(width: int,
+                        height: int,
+                        signal: Signal[np.ndarray],
+                        method=PilImage.Resampling.BILINEAR) -> Signal[np.ndarray]:
+        """Return a Signal view with frames resized-with-pad using PIL.
+
+        Args:
+            height: Target height (H).
+            width: Target width (W).
+            signal: Input image Signal with frames shaped (H, W, 3), dtype uint8.
+            method: PIL resampling method (e.g., PilImage.Resampling.BILINEAR).
+        """
+
+        def per_frame(img: np.ndarray) -> np.ndarray:
+            if img.shape[0] == height and img.shape[1] == width:
+                return img  # No need to resize if the image is already the correct size.
+
+            return np.array(
+                Image._resize_with_pad_pil(PilImage.fromarray(img), height, width, method=method)
+            )
+
+        def fn(x: Sequence[np.ndarray]) -> Sequence[np.ndarray]:
+            return _LazySequence(x, per_frame)
+
+        return Elementwise(signal, fn)
+
+
+def concat(keys: Sequence[str], episode: Episode) -> Signal[np.ndarray]:
+    """Concatenate multiple 1D float signals into a single 1D float array."""
+    if len(keys) == 1:
+        return episode[keys[0]]
+
+    raise NotImplementedError("concat for multiple keys not implemented yet")
