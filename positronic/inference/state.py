@@ -5,8 +5,6 @@ from typing import List, Optional
 import torch
 import torch.nn.functional as F
 
-from positronic.dataset import Episode
-
 
 @dataclass
 class ImageEncodingConfig:
@@ -52,9 +50,6 @@ class StateEncoder:
             dim=1
         )
         return obs
-
-    def encode_ep(self, episode: Episode) -> Episode:
-        pass
 
     def encode(self, images, inputs):
         """Encodes data for inference."""

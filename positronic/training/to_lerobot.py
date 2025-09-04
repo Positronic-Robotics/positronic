@@ -1,14 +1,3 @@
-# /// script
-# requires-python = ">=3.11"
-# dependencies = [
-#     "lerobot>=0.3",
-#     "torch",
-#     "tqdm",
-#     "configuronic",
-#     "numpy",
-#     "scipy",
-# ]
-# ///
 from pathlib import Path
 from io import BytesIO
 import tempfile
@@ -17,6 +6,7 @@ import torch
 import tqdm
 import numpy as np
 import imageio
+import fire
 
 from lerobot.common.datasets.lerobot_dataset import LeRobotDataset
 
@@ -107,12 +97,14 @@ class EpisodeDictDataset(torch.utils.data.Dataset):
         return ep_dict
 
 
-def append_data_to_dataset(dataset: LeRobotDataset,
-                           input_dir: Path,
-                           state_encoder: StateEncoder,
-                           action_encoder: ActionDecoder,
-                           task: str,
-                           num_workers: int = 16):
+def append_data_to_dataset(
+    dataset: LeRobotDataset,
+    input_dir: Path,
+    state_encoder: StateEncoder,
+    action_encoder: ActionDecoder,
+    task: str,
+    num_workers: int = 16,
+):
     dataset.start_image_writer(num_processes=num_workers)
     # Process each episode file
     episode_files = sorted([f for f in input_dir.glob('*.pt')])
@@ -213,4 +205,7 @@ def append_data_to_lerobot_dataset(
 
 
 if __name__ == "__main__":
-    cfn.cli({'convert': convert_to_lerobot_dataset, 'append': append_data_to_lerobot_dataset})
+    fire.Fire({
+        'convert': convert_to_lerobot_dataset.override_and_instantiate,
+        'append': append_data_to_lerobot_dataset.override_and_instantiate,
+    })
