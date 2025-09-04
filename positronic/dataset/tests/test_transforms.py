@@ -8,6 +8,7 @@ from positronic.dataset.transforms import (
     TransformEpisode,
     EpisodeTransform,
     Image,
+    concat,
 )
 from positronic.dataset.episode import EpisodeContainer
 import numpy as np
@@ -226,6 +227,30 @@ def test_join_basic():
     ]
 
 
+def test_join_basic_no_ref_timestamps():
+    # s1: 1000..5000 step 1000
+    ts1 = [1000, 2000, 3000, 4000, 5000]
+    v1 = [10, 20, 30, 40, 50]
+    s1 = DummySignal(ts1, v1)
+    # s2: shifted by +500 and extended to 5500
+    ts2 = [1500, 2500, 3500, 4500, 5500]
+    v2 = [1, 2, 3, 4, 5]
+    s2 = DummySignal(ts2, v2)
+
+    jn = Join(s1, s2, include_ref_ts=False)
+    assert list(jn) == [
+        ((10, 1), 1500),
+        ((20, 1), 2000),
+        ((20, 2), 2500),
+        ((30, 2), 3000),
+        ((30, 3), 3500),
+        ((40, 3), 4000),
+        ((40, 4), 4500),
+        ((50, 4), 5000),
+        ((50, 5), 5500),
+    ]
+
+
 def test_join_equal_timestamps_drop_duplicates_default():
     # Overlapping timestamp at 2000; by default duplicates dropped -> single entry at 2000
     s1 = DummySignal([1000, 2000], [1, 2])
@@ -264,6 +289,27 @@ def test_join_three_signals_basic():
         ((30, 2, 300, 3000, 2500, 3200), 3200),
         ((30, 3, 300, 3000, 3500, 3200), 3500),
         ((30, 3, 400, 3000, 3500, 4200), 4200),
+    ]
+
+
+def test_join_three_signals_no_ref_timestamps():
+    # s1: 1000,2000,3000
+    s1 = DummySignal([1000, 2000, 3000], [10, 20, 30])
+    # s2: shifted by +500 and extends beyond
+    s2 = DummySignal([1500, 2500, 3500], [1, 2, 3])
+    # s3: shifted by +200 from s1 and extends further
+    s3 = DummySignal([1200, 2200, 3200, 4200], [100, 200, 300, 400])
+
+    jn = Join(s1, s2, s3, include_ref_ts=False)
+    assert list(jn) == [
+        ((10, 1, 100), 1500),
+        ((20, 1, 100), 2000),
+        ((20, 1, 200), 2200),
+        ((20, 2, 200), 2500),
+        ((30, 2, 200), 3000),
+        ((30, 2, 300), 3200),
+        ((30, 3, 300), 3500),
+        ((30, 3, 400), 4200),
     ]
 
 
@@ -375,3 +421,46 @@ def test_image_resize_with_pad_basic():
     assert np.unique(left_col).tolist() == [0]
     assert np.unique(right_col).tolist() == [0]
     assert np.unique(mid).tolist() == [255]
+
+
+def test_concat_vectors_batched_and_alignment():
+    # Two vector signals with different timestamps
+    ts1 = [1000, 2000, 3000]
+    v1 = [
+        [1, 2],
+        [3, 4],
+        [5, 6],
+    ]
+    s1 = DummySignal(ts1, v1)
+
+    ts2 = [1500, 2500]
+    v2 = [
+        [10],
+        [20],
+    ]
+    s2 = DummySignal(ts2, v2)
+
+    ep = EpisodeContainer(signals={"a": s1, "b": s2}, static={})
+    cat = concat(["a", "b"], ep)
+
+    # Expected union starting from max start (1500): [1500, 2000, 2500, 3000]
+    # Values are concatenated vectors with carry-back
+    expected_rows = np.array([
+        [1, 2, 10],
+        [3, 4, 10],
+        [3, 4, 20],
+        [5, 6, 20],
+    ])
+    expected_ts = [1500, 2000, 2500, 3000]
+
+    # Batched request should return a single 2D array
+    rows = cat._values_at(np.arange(len(cat)))  # internal call to validate batching shape
+    assert isinstance(rows, np.ndarray)
+    assert rows.shape == expected_rows.shape
+    assert np.array_equal(rows, expected_rows)
+
+    # Iteration path (one-by-one) should match rows
+    vals = [v for v, _ in cat]
+    ts = [t for _, t in cat]
+    assert np.array_equal(np.stack(vals, axis=0), expected_rows)
+    assert ts == expected_ts

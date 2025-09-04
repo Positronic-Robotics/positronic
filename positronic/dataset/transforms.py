@@ -211,18 +211,29 @@ class Join(Signal[tuple]):
     Semantics (generalizing the previous 2-signal Join):
     - Reference times: sorted union of all parents' timestamps, starting from
       max(s_i.start_ts). Equal timestamps across signals are collapsed.
-    - Values: at each union timestamp t, returns
-      ((v1, v2, ..., vN, t1_ref, t2_ref, ..., tN_ref), t), where
+    - Values: at each union timestamp t, returns a tuple of carried-back values
+      from each signal, optionally followed by the reference timestamps used.
+
+      If `include_ref_ts=True` (default):
+        ((v1, v2, ..., vN, t1_ref, t2_ref, ..., tN_ref), t)
+      If `include_ref_ts=False`:
+        ((v1, v2, ..., vN), t)
+
+      where:
         - vK = value of signal K at the last timestamp at-or-before t
         - tK_ref = the timestamp of the carried-back value in signal K
-      For N=2, this yields ((v1, v2, t1_ref, t2_ref), t).
+      For N=2, the default shape is ((v1, v2, t1_ref, t2_ref), t).
     - Union timestamps are precomputed for O(log M) time lookups.
+
+    Raises:
+        ValueError: if fewer than two signals are provided.
     """
 
-    def __init__(self, *signals: Signal[Any]) -> None:
+    def __init__(self, *signals: Signal[Any], include_ref_ts: bool = True) -> None:
         if len(signals) < 2:
             raise ValueError("Join requires at least two signals")
         self._signals: tuple[Signal[Any], ...] = tuple(signals)
+        self._include_ref_ts = bool(include_ref_ts)
         self._bounds_ready = False
         self._starts: list[int] = [0] * len(self._signals)
         self._length = 0
@@ -246,7 +257,7 @@ class Join(Signal[tuple]):
                 idxs = np.arange(st, len(s), dtype=np.int64)
                 ts_arrays.append(np.asarray(s._ts_at(idxs), dtype=np.int64))
         if len(ts_arrays) == 0:
-            self._union_ts = np.empty((0,), dtype=np.int64)
+            self._union_ts = np.empty((0, ), dtype=np.int64)
         else:
             all_ts = np.concatenate(ts_arrays)
             self._union_ts = np.unique(all_ts)
@@ -270,14 +281,17 @@ class Join(Signal[tuple]):
         idx_all = [np.asarray(s._search_ts(ts)) for s in self._signals]
         vals_all = [s._values_at(idx) for s, idx in zip(self._signals, idx_all)]
         tss_all = [np.asarray(s._ts_at(idx), dtype=np.int64) for s, idx in zip(self._signals, idx_all)]
-        # Build output tuples per row: (v1..vN, t1..tN)
+        # Build output tuples per row.
         out: list[tuple] = []
         for row in zip(*vals_all, *tss_all, strict=False):
             # row = (v1, v2, ..., vN, t1, t2, ..., tN)
             n = len(self._signals)
             vals = row[:n]
             refs = row[n:]
-            out.append(tuple(vals + refs))
+            if self._include_ref_ts:
+                out.append(tuple(vals + refs))
+            else:
+                out.append(tuple(vals))
         return out
 
     def _search_ts(self, ts_array: RealNumericArrayLike) -> IndicesLike:
@@ -359,6 +373,7 @@ class _LazySequence(Sequence[U]):
 
 
 class Image:
+
     @staticmethod
     def resize(width: int,
                height: int,
@@ -423,9 +438,7 @@ class Image:
             if img.shape[0] == height and img.shape[1] == width:
                 return img  # No need to resize if the image is already the correct size.
 
-            return np.array(
-                Image._resize_with_pad_pil(PilImage.fromarray(img), height, width, method=method)
-            )
+            return np.array(Image._resize_with_pad_pil(PilImage.fromarray(img), height, width, method=method))
 
         def fn(x: Sequence[np.ndarray]) -> Sequence[np.ndarray]:
             return _LazySequence(x, per_frame)
@@ -434,8 +447,42 @@ class Image:
 
 
 def concat(keys: Sequence[str], episode: Episode) -> Signal[np.ndarray]:
-    """Concatenate multiple 1D float signals into a single 1D float array."""
-    if len(keys) == 1:
+    """Concatenate multiple 1D array signals into a single array signal.
+
+    - Aligns signals on the union of timestamps with carry-back semantics.
+    - Values are vector-wise concatenations of each signal's values at-or-before t.
+    - For batched requests, returns a single 2D array (batch, dim).
+    """
+    n = len(keys)
+    if n == 0:
+        raise ValueError("concat requires at least one key")
+    if n == 1:
         return episode[keys[0]]
 
-    raise NotImplementedError("concat for multiple keys not implemented yet")
+    def fn(x: Sequence[tuple]) -> np.ndarray:
+        # x is a sequence of tuples (v1, v2, ..., vN) for the requested indices.
+        # High-performance path: preallocate (batch, total_dim) and fill via slicing.
+        batch = len(x)
+        if batch == 0:
+            return np.empty((0, 0), dtype=np.float32)
+
+        # Infer per-signal dimensions and dtype from the first row
+        first_parts = [np.asarray(v) for v in x[0]]
+        dims = [p.size for p in first_parts]
+        offsets = np.cumsum([0] + dims[:-1]) if dims else [0]
+        total_dim = int(sum(dims))
+        dtype = np.result_type(*[p.dtype for p in first_parts]) if first_parts else np.float32
+        out = np.empty((batch, total_dim), dtype=dtype)
+
+        for j, p in enumerate(first_parts):  # Fill first row
+            out[0, offsets[j]:offsets[j] + dims[j]] = p.ravel()
+        for i in range(1, batch):  # Fill remaining rows
+            row = x[i]
+            for j, v in enumerate(row):
+                arr = np.asarray(v)
+                if arr.size != dims[j]:
+                    raise ValueError("concat: inconsistent vector size across rows")
+                out[i, offsets[j]:offsets[j] + dims[j]] = arr.ravel()
+        return out
+
+    return Elementwise(Join(*(episode[k] for k in keys), include_ref_ts=False), fn)
