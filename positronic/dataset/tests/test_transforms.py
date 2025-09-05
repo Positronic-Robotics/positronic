@@ -9,6 +9,7 @@ from positronic.dataset.transforms import (
     EpisodeTransform,
     Image,
     concat,
+    pairwise,
 )
 from positronic.dataset.episode import EpisodeContainer
 import numpy as np
@@ -51,55 +52,82 @@ def test_elementwise(sig_simple):
 
 def test_join_relative_index_prev_next_equivalents(sig_simple):
     # [0, 1] (current and next)
-    j_next = IndexOffsets(sig_simple, [0, 1])
+    j_next = IndexOffsets(sig_simple, 0, 1)
     assert list(j_next) == [
-        ((10, 20, 1000, 2000), 1000),
-        ((20, 30, 2000, 3000), 2000),
-        ((30, 40, 3000, 4000), 3000),
-        ((40, 50, 4000, 5000), 4000),
+        ((10, 20), 1000),
+        ((20, 30), 2000),
+        ((30, 40), 3000),
+        ((40, 50), 4000),
     ]
     # [0, -1] (current and previous)
-    j_prev = IndexOffsets(sig_simple, [0, -1])
+    j_prev = IndexOffsets(sig_simple, 0, -1)
     assert list(j_prev) == [
-        ((20, 10, 2000, 1000), 2000),
-        ((30, 20, 3000, 2000), 3000),
-        ((40, 30, 4000, 3000), 4000),
-        ((50, 40, 5000, 4000), 5000),
+        ((20, 10), 2000),
+        ((30, 20), 3000),
+        ((40, 30), 4000),
+        ((50, 40), 5000),
     ]
 
 
 def test_join_relative_index_basic(sig_simple):
     # [0, 1] returns (v_i, v_{i+1}, t_i, t_{i+1})
-    j = IndexOffsets(sig_simple, [0, 1])
+    j = IndexOffsets(sig_simple, 0, 1)
     assert list(j) == [
-        ((10, 20, 1000, 2000), 1000),
-        ((20, 30, 2000, 3000), 2000),
-        ((30, 40, 3000, 4000), 3000),
-        ((40, 50, 4000, 5000), 4000),
+        ((10, 20), 1000),
+        ((20, 30), 2000),
+        ((30, 40), 3000),
+        ((40, 50), 4000),
     ]
 
     # [0, -1] returns (v_i, v_{i-1}, t_i, t_{i-1})
-    jprev = IndexOffsets(sig_simple, [0, -1])
+    jprev = IndexOffsets(sig_simple, 0, -1)
     assert list(jprev) == [
-        ((20, 10, 2000, 1000), 2000),
-        ((30, 20, 3000, 2000), 3000),
-        ((40, 30, 4000, 3000), 4000),
-        ((50, 40, 5000, 4000), 5000),
+        ((20, 10), 2000),
+        ((30, 20), 3000),
+        ((40, 30), 4000),
+        ((50, 40), 5000),
+    ]
+
+    # Single offset without ref timestamps -> bare values as first element in (value, ref_ts)
+    j_single = IndexOffsets(sig_simple, 1)
+    assert list(j_single) == [
+        (20, 1000),
+        (30, 2000),
+        (40, 3000),
+        (50, 4000),
+    ]
+
+    # Single offset with ref timestamps -> (value, ts_at_offset)
+    j_single_ref = IndexOffsets(sig_simple, 1, include_ref_ts=True)
+    assert list(j_single_ref) == [
+        ((20, 2000), 1000),
+        ((30, 3000), 2000),
+        ((40, 4000), 3000),
+        ((50, 5000), 4000),
     ]
 
 
 def test_join_relative_index_errors_and_edges(sig_simple, empty_signal):
     # Non-empty relative indices required
     with pytest.raises(ValueError):
-        IndexOffsets(sig_simple, [])
+        IndexOffsets(sig_simple)
     # Empty signal yields empty
-    assert list(IndexOffsets(empty_signal, [0, 1])) == []
+    assert list(IndexOffsets(empty_signal, 0, 1)) == []
 
 
 def test_time_offsets_positive(sig_simple):
-    to = TimeOffsets(sig_simple, [1000])
+    to = TimeOffsets(sig_simple, 1000)
     # Positive delta: length preserved, last clamps to itself
     assert list(to) == [
+        (20, 1000),
+        (30, 2000),
+        (40, 3000),
+        (50, 4000),
+        (50, 5000),
+    ]
+    # With include_ref_ts=True returns (value_at_shift, ts_at_shift)
+    to_ref = TimeOffsets(sig_simple, 1000, include_ref_ts=True)
+    assert list(to_ref) == [
         ((20, 2000), 1000),
         ((30, 3000), 2000),
         ((40, 4000), 3000),
@@ -107,34 +135,60 @@ def test_time_offsets_positive(sig_simple):
         ((50, 5000), 5000),
     ]
 
+    # Multiple deltas without ref timestamps -> tuple of values, with clamping at the end
+    to_multi = TimeOffsets(sig_simple, -1000, 0, 1000)
+    assert list(to_multi) == [
+        ((10, 20, 30), 2000),
+        ((20, 30, 40), 3000),
+        ((30, 40, 50), 4000),
+        ((40, 50, 50), 5000),
+    ]
+
+    # Multiple deltas with ref timestamps -> values then reference timestamps
+    to_multi_ref = TimeOffsets(sig_simple, -1000, 0, 1000, include_ref_ts=True)
+    assert list(to_multi_ref) == [
+        ((10, 20, 30, 1000, 2000, 3000), 2000),
+        ((20, 30, 40, 2000, 3000, 4000), 3000),
+        ((30, 40, 50, 3000, 4000, 5000), 4000),
+        ((40, 50, 50, 4000, 5000, 5000), 5000),
+    ]
+
 
 def test_time_offsets_negative(sig_simple):
-    to = TimeOffsets(sig_simple, [-1000])
+    to = TimeOffsets(sig_simple, -1000)
     # Drops first; pairs each with previous at -1000
     assert list(to) == [
-        ((10, 1000), 2000),
-        ((20, 2000), 3000),
-        ((30, 3000), 4000),
-        ((40, 4000), 5000),
+        (10, 2000),
+        (20, 3000),
+        (30, 4000),
+        (40, 5000),
     ]
 
 
 def test_time_offsets_zero(sig_simple):
-    to = TimeOffsets(sig_simple, [0])
+    to = TimeOffsets(sig_simple, 0)
     assert list(to) == [
-        ((10, 1000), 1000),
-        ((20, 2000), 2000),
-        ((30, 3000), 3000),
-        ((40, 4000), 4000),
-        ((50, 5000), 5000),
+        (10, 1000),
+        (20, 2000),
+        (30, 3000),
+        (40, 4000),
+        (50, 5000),
     ]
 
 
 def test_time_offsets_offset_rounding(sig_simple):
     # Delta that doesn't align with sampling: should carry back
-    to = TimeOffsets(sig_simple, [2500])
+    to = TimeOffsets(sig_simple, 2500)
     # All elements preserved; last clamps to itself
     assert list(to) == [
+        (30, 1000),
+        (40, 2000),
+        (50, 3000),
+        (50, 4000),
+        (50, 5000),
+    ]
+    to_ref = TimeOffsets(sig_simple, 2500, include_ref_ts=True)
+    assert list(to_ref) == [
         ((30, 3000), 1000),
         ((40, 4000), 2000),
         ((50, 5000), 3000),
@@ -149,57 +203,57 @@ def test_time_offsets_irregular_series():
     sig = DummySignal(ts, vals)
 
     # Positive delta: floor carry-back across irregular gaps, full length
-    to_pos = TimeOffsets(sig, [1000])
+    to_pos = TimeOffsets(sig, 1000)
     assert list(to_pos) == [
-        ((3, 2000), 1000),  # 1000 -> 2000
-        ((3, 2000), 1300),  # 1300 -> 2300 -> 2000
-        ((4, 2700), 2000),  # 2000 -> 3000 -> 2700
-        ((4, 2700), 2700),  # 2700 -> 3700 -> 2700
-        ((5, 5000), 5000),  # 5000 -> 6000 -> 5000
+        (3, 1000),  # 1000 -> 2000
+        (3, 1300),  # 1300 -> 2300 -> 2000
+        (4, 2000),  # 2000 -> 3000 -> 2700
+        (4, 2700),  # 2700 -> 3700 -> 2700
+        (5, 5000),  # 5000 -> 6000 -> 5000
     ]
 
     # Negative delta: match to earlier floors with varying diffs
-    to_neg = TimeOffsets(sig, [-1000])
+    to_neg = TimeOffsets(sig, -1000)
     assert list(to_neg) == [
-        ((1, 1000), 2000),  # 2000 -> 1000
-        ((2, 1300), 2700),  # 2700 -> 1300
-        ((4, 2700), 5000),  # 5000 -> 2700
+        (1, 2000),  # 2000 -> 1000
+        (2, 2700),  # 2700 -> 1300
+        (4, 5000),  # 5000 -> 2700
     ]
 
     # Zero delta: identity pairs with zero time difference
-    to_zero = TimeOffsets(sig, [0])
+    to_zero = TimeOffsets(sig, 0)
     assert list(to_zero) == [
-        ((1, 1000), 1000),
-        ((2, 1300), 1300),
-        ((3, 2000), 2000),
-        ((4, 2700), 2700),
-        ((5, 5000), 5000),
+        (1, 1000),
+        (2, 1300),
+        (3, 2000),
+        (4, 2700),
+        (5, 5000),
     ]
 
 
 def test_time_offsets_empty_signal(empty_signal):
-    assert list(TimeOffsets(empty_signal, [0])) == []
-    assert list(TimeOffsets(empty_signal, [123456])) == []
-    assert list(TimeOffsets(empty_signal, [-987654])) == []
+    assert list(TimeOffsets(empty_signal, 0)) == []
+    assert list(TimeOffsets(empty_signal, 123456)) == []
+    assert list(TimeOffsets(empty_signal, -987654)) == []
 
 
 def test_time_offsets_very_large_deltas(sig_simple):
     # Negative delta too large: no elements remain
     delta_empty = -(sig_simple.last_ts - sig_simple.start_ts + 1)
-    to_empty = TimeOffsets(sig_simple, [delta_empty])
+    to_empty = TimeOffsets(sig_simple, delta_empty)
     assert list(to_empty) == []
 
 
 def test_time_offsets_positive_delta_too_large(sig_simple):
     # Positive delta strictly greater than span -> full length, pairs with last
     delta_too_large = (sig_simple.last_ts - sig_simple.start_ts) + 1
-    to = TimeOffsets(sig_simple, [delta_too_large])
+    to = TimeOffsets(sig_simple, delta_too_large)
     assert list(to) == [
-        ((50, 5000), 1000),
-        ((50, 5000), 2000),
-        ((50, 5000), 3000),
-        ((50, 5000), 4000),
-        ((50, 5000), 5000),
+        (50, 1000),
+        (50, 2000),
+        (50, 3000),
+        (50, 4000),
+        (50, 5000),
     ]
 
 
@@ -215,15 +269,15 @@ def test_join_basic():
 
     jn = Join(s1, s2)
     assert list(jn) == [
-        ((10, 1, 1000, 1500), 1500),
-        ((20, 1, 2000, 1500), 2000),
-        ((20, 2, 2000, 2500), 2500),
-        ((30, 2, 3000, 2500), 3000),
-        ((30, 3, 3000, 3500), 3500),
-        ((40, 3, 4000, 3500), 4000),
-        ((40, 4, 4000, 4500), 4500),
-        ((50, 4, 5000, 4500), 5000),
-        ((50, 5, 5000, 5500), 5500),
+        ((10, 1), 1500),
+        ((20, 1), 2000),
+        ((20, 2), 2500),
+        ((30, 2), 3000),
+        ((30, 3), 3500),
+        ((40, 3), 4000),
+        ((40, 4), 4500),
+        ((50, 4), 5000),
+        ((50, 5), 5500),
     ]
 
 
@@ -257,8 +311,8 @@ def test_join_equal_timestamps_drop_duplicates_default():
     s2 = DummySignal([2000, 3000], [10, 20])
     jn = Join(s1, s2)
     assert list(jn) == [
-        ((2, 10, 2000, 2000), 2000),  # single entry at 2000
-        ((2, 20, 2000, 3000), 3000),
+        ((2, 10), 2000),  # single entry at 2000
+        ((2, 20), 3000),
     ]
 
 
@@ -281,14 +335,14 @@ def test_join_three_signals_basic():
     jn = Join(s1, s2, s3)
     # Start from max starts (1500), union of timestamps with carry-back
     assert list(jn) == [
-        ((10, 1, 100, 1000, 1500, 1200), 1500),
-        ((20, 1, 100, 2000, 1500, 1200), 2000),
-        ((20, 1, 200, 2000, 1500, 2200), 2200),
-        ((20, 2, 200, 2000, 2500, 2200), 2500),
-        ((30, 2, 200, 3000, 2500, 2200), 3000),
-        ((30, 2, 300, 3000, 2500, 3200), 3200),
-        ((30, 3, 300, 3000, 3500, 3200), 3500),
-        ((30, 3, 400, 3000, 3500, 4200), 4200),
+        ((10, 1, 100), 1500),
+        ((20, 1, 100), 2000),
+        ((20, 1, 200), 2200),
+        ((20, 2, 200), 2500),
+        ((30, 2, 200), 3000),
+        ((30, 2, 300), 3200),
+        ((30, 3, 300), 3500),
+        ((30, 3, 400), 4200),
     ]
 
 
@@ -310,6 +364,35 @@ def test_join_three_signals_no_ref_timestamps():
         ((30, 2, 300), 3200),
         ((30, 3, 300), 3500),
         ((30, 3, 400), 4200),
+    ]
+
+
+def test_pairwise_basic_and_alignment():
+    # Two scalar signals with different timestamps
+    s1 = DummySignal([1000, 2000, 3000, 4000], [1, 2, 3, 4])
+    s2 = DummySignal([1500, 2500, 3500], [10, 20, 30])
+
+    add_sig = pairwise(s1, s2, np.add)
+    assert list(add_sig) == [
+        (11, 1500),  # 1 + 10
+        (12, 2000),  # 2 + 10
+        (22, 2500),  # 2 + 20
+        (23, 3000),  # 3 + 20
+        (33, 3500),  # 3 + 30
+        (34, 4000),  # 4 + 30
+    ]
+
+
+def test_pairwise_vectors_and_subtract():
+    s1 = DummySignal([1000, 2000, 3000], [[1, 2], [3, 4], [5, 6]])
+    s2 = DummySignal([1500, 2500], [[10, 20], [30, 40]])
+
+    sub = pairwise(s1, s2, np.subtract)
+    assert [(v.tolist(), t) for v, t in sub] == [
+        ([1 - 10, 2 - 20], 1500),
+        ([3 - 10, 4 - 20], 2000),
+        ([3 - 30, 4 - 40], 2500),
+        ([5 - 30, 6 - 40], 3000),
     ]
 
 
@@ -398,7 +481,7 @@ class _DummyTransform2(EpisodeTransform):
 
 def test_transform_episode_multiple_transforms_order_and_precedence(sig_simple):
     ep = EpisodeContainer(signals={"s": sig_simple}, static={"id": 42, "z": 9})
-    t1 = _DummyTransform()   # defines ["a", "s"] (s -> +1)
+    t1 = _DummyTransform()  # defines ["a", "s"] (s -> +1)
     t2 = _DummyTransform2()  # defines ["b", "s"] (s -> +100)
 
     # Concatenate transform keys in order; first occurrence of duplicates kept

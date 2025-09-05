@@ -41,26 +41,30 @@ class Elementwise(Signal[U]):
 
 
 class IndexOffsets(Signal[Tuple[Tuple[T, ...], Tuple[int, ...]]]):
-    """Join values and timestamps at relative indices around a reference index.
+    """Join values (and optionally timestamps) at relative indices around a reference index.
 
     Given a list of relative indices D = [d1, d2, ..., dN] (each may be negative
     or positive), produces a view over the reference indices i where all
     (i + dk) are in-bounds. For each valid i, returns
-        ((v[i+d1], ..., v[i+dN], t[i+d1], ..., t[i+dN]), t[i]).
+        ((v[i+d1], ..., v[i+dN]), t[i]) by default, or
+        ((v[i+d1], ..., v[i+dN], t[i+d1], ..., t[i+dN]), t[i]) if include_ref_ts=True.
 
     Examples:
       - Next with step=1  -> D = [0, 1]
       - Previous step=1   -> D = [0, -1]
     """
 
-    def __init__(self, signal: Signal[T], relative_indices: Sequence[int]) -> None:
+    def __init__(self, signal: Signal[T], *relative_indices: int, include_ref_ts: bool = False) -> None:
         self._signal = signal
+        if len(relative_indices) == 0:
+            raise ValueError("relative_indices must be non-empty")
         offs = np.asarray(relative_indices, dtype=np.int64)
         if offs.size == 0:
             raise ValueError("relative_indices must be non-empty")
         self._offs = offs
         self._min_off = int(np.min(self._offs))
         self._max_off = int(np.max(self._offs))
+        self._include_ref_ts = bool(include_ref_ts)
 
     def __len__(self) -> int:
         n = len(self._signal)
@@ -86,9 +90,13 @@ class IndexOffsets(Signal[Tuple[Tuple[T, ...], Tuple[int, ...]]]):
         for off in self._offs:
             idxs = base + int(off)
             vals_parts.append(self._signal._values_at(idxs))
-            ts_parts.append(np.asarray(self._signal._ts_at(idxs)))
-
-        return list(zip(*vals_parts, *ts_parts, strict=False))
+            if self._include_ref_ts:
+                ts_parts.append(np.asarray(self._signal._ts_at(idxs)))
+        pieces = vals_parts + ts_parts
+        if len(pieces) == 1:
+            return pieces[0]
+        else:
+            return list(zip(*pieces, strict=False))
 
     def _search_ts(self, ts_array: RealNumericArrayLike) -> IndicesLike:
         # Map parent floor indices to view indices, clamping to valid range.
@@ -119,12 +127,15 @@ class TimeOffsets(Signal[Tuple[Tuple[T, ...], Tuple[int, ...]]]):
       timestamp, sampling clamps to the last element.
     """
 
-    def __init__(self, signal: Signal[T], deltas_ts: Sequence[int]) -> None:
+    def __init__(self, signal: Signal[T], *deltas_ts: int, include_ref_ts: bool = False) -> None:
         self._signal = signal
+        if len(deltas_ts) == 0:
+            raise ValueError("deltas_ts must be non-empty")
         offs = np.asarray(deltas_ts, dtype=np.int64)
         if offs.size == 0:
             raise ValueError("deltas_ts must be non-empty")
         self._deltas = offs
+        self._include_ref_ts = bool(include_ref_ts)
         self._bounds_ready = False
         self._start_offset = 0
         self._last_index = -1
@@ -179,11 +190,13 @@ class TimeOffsets(Signal[Tuple[Tuple[T, ...], Tuple[int, ...]]]):
             target_ts = ref_ts + int(d)
             idx = np.asarray(self._signal._search_ts(target_ts))
             vals_parts.append(self._signal._values_at(idx))
-            ts_parts.append(np.asarray(self._signal._ts_at(idx)))
-        out = []
-        for row in zip(*vals_parts, *ts_parts, strict=False):
-            out.append(tuple(row))
-        return out
+            if self._include_ref_ts:
+                ts_parts.append(np.asarray(self._signal._ts_at(idx)))
+        pieces = vals_parts + ts_parts
+        if len(pieces) == 1:
+            return pieces[0]
+        else:
+            return list(zip(*pieces, strict=False))
 
     def _search_ts(self, ts_array: RealNumericArrayLike) -> IndicesLike:
         self._compute_bounds()
@@ -211,28 +224,28 @@ def _first_idx_at_or_after(sig: Signal[T], ts: int) -> int:
 class Join(Signal[tuple]):
     """Join an arbitrary number of signals on the union of their timestamps.
 
-    Semantics (generalizing the previous 2-signal Join):
+    Semantics:
     - Reference times: sorted union of all parents' timestamps, starting from
       max(s_i.start_ts). Equal timestamps across signals are collapsed.
     - Values: at each union timestamp t, returns a tuple of carried-back values
       from each signal, optionally followed by the reference timestamps used.
 
-      If `include_ref_ts=True` (default):
-        ((v1, v2, ..., vN, t1_ref, t2_ref, ..., tN_ref), t)
-      If `include_ref_ts=False`:
+      If ``include_ref_ts=False`` (default):
         ((v1, v2, ..., vN), t)
+      If ``include_ref_ts=True``:
+        ((v1, v2, ..., vN, t1_ref, t2_ref, ..., tN_ref), t)
 
       where:
         - vK = value of signal K at the last timestamp at-or-before t
         - tK_ref = the timestamp of the carried-back value in signal K
-      For N=2, the default shape is ((v1, v2, t1_ref, t2_ref), t).
+      For N=2 and include_ref_ts=True, the shape is ((v1, v2, t1_ref, t2_ref), t).
     - Union timestamps are precomputed for O(log M) time lookups.
 
     Raises:
         ValueError: if fewer than two signals are provided.
     """
 
-    def __init__(self, *signals: Signal[Any], include_ref_ts: bool = True) -> None:
+    def __init__(self, *signals: Signal[Any], include_ref_ts: bool = False) -> None:
         if len(signals) < 2:
             raise ValueError("Join requires at least two signals")
         self._signals: tuple[Signal[Any], ...] = tuple(signals)
@@ -455,6 +468,7 @@ class Image:
             signal: Input image Signal with frames shaped (H, W, 3), dtype uint8.
             method: PIL resampling method (e.g., PilImage.Resampling.BILINEAR).
         """
+
         def fn(x: Sequence[np.ndarray]) -> Sequence[np.ndarray]:
             return _LazySequence(x, partial(Image._resize_with_pad_per_frame, width, height, method))
 
@@ -500,11 +514,31 @@ def concat(*signals) -> Signal[np.ndarray]:
                 out[i, offsets[j]:offsets[j] + dims[j]] = arr.ravel()
         return out
 
-    return Elementwise(Join(*signals, include_ref_ts=False), fn)
+    return Elementwise(Join(*signals), fn)
 
 
-def recode_rotation(rep_from: geom.Rotation.Representation,
-                    rep_to: geom.Rotation.Representation,
+class _PairwiseMap:
+
+    def __init__(self, op: Callable[[Any, Any], Any]):
+        self._op = op
+
+    def __call__(self, rows: Sequence[tuple]) -> Sequence[Any]:
+        out: list[Any] = []
+        for a, b in rows:
+            out.append(self._op(a, b))
+        return out
+
+
+def pairwise(a: Signal[Any], b: Signal[Any], op: Callable[[Any, Any], Any]) -> Signal[Any]:
+    """Apply a binary operation pairwise across two signals aligned on time.
+
+    - Aligns `a` and `b` on the union of timestamps with carry-back semantics.
+    - Applies `op(a_value, b_value)` per row and returns a new Signal view of results.
+    """
+    return Elementwise(Join(a, b), _PairwiseMap(op))
+
+
+def recode_rotation(rep_from: geom.Rotation.Representation, rep_to: geom.Rotation.Representation,
                     signal: Signal[np.ndarray]) -> Signal[np.ndarray]:
     """Return a Signal view with rotation vectors recoded to a different representation.
 
