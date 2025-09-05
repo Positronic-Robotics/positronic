@@ -2,7 +2,7 @@ import configuronic as cfn
 from positronic.inference.state import ImageEncodingConfig, StateEncoder
 
 
-@cfn.config
+@cfn.config()
 def end_effector(resolution: tuple[int, int]):
     return StateEncoder(
         state_output_key='observation.state',

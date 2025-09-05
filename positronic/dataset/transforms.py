@@ -1,4 +1,5 @@
 from abc import ABC, abstractmethod
+from functools import partial
 from typing import Any, Callable, Sequence, TypeVar, Tuple
 
 import numpy as np
@@ -435,6 +436,13 @@ class Image:
         return zero_image
 
     @staticmethod
+    def _resize_with_pad_per_frame(width: int, height: int, method, img: np.ndarray) -> np.ndarray:
+        if img.shape[0] == height and img.shape[1] == width:
+            return img  # No need to resize if the image is already the correct size.
+
+        return np.array(Image._resize_with_pad_pil(PilImage.fromarray(img), height, width, method=method))
+
+    @staticmethod
     def resize_with_pad(width: int,
                         height: int,
                         signal: Signal[np.ndarray],
@@ -447,15 +455,8 @@ class Image:
             signal: Input image Signal with frames shaped (H, W, 3), dtype uint8.
             method: PIL resampling method (e.g., PilImage.Resampling.BILINEAR).
         """
-
-        def per_frame(img: np.ndarray) -> np.ndarray:
-            if img.shape[0] == height and img.shape[1] == width:
-                return img  # No need to resize if the image is already the correct size.
-
-            return np.array(Image._resize_with_pad_pil(PilImage.fromarray(img), height, width, method=method))
-
         def fn(x: Sequence[np.ndarray]) -> Sequence[np.ndarray]:
-            return _LazySequence(x, per_frame)
+            return _LazySequence(x, partial(Image._resize_with_pad_per_frame, width, height, method))
 
         return Elementwise(signal, fn)
 
