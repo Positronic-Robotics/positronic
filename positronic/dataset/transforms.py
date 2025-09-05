@@ -317,23 +317,34 @@ class EpisodeTransform(ABC):
 
 
 class TransformEpisode(Episode):
-    """Transform an episode into a new view of the episode."""
+    """Transform an episode into a new view of the episode.
 
-    def __init__(self, episode: Episode, transform: EpisodeTransform, pass_through: bool = False) -> None:
+    Supports one or more transforms. When multiple transforms are provided,
+    their keys are concatenated in the given order. For duplicate keys across
+    transforms, the first transform providing the key takes precedence.
+
+    If ``pass_through`` is True, any keys from the underlying episode that are
+    not provided by the transforms are appended after the transformed keys.
+    """
+
+    def __init__(self, episode: Episode, *transforms: EpisodeTransform, pass_through: bool = False) -> None:
+        if not transforms:
+            raise ValueError("TransformEpisode requires at least one transform")
         self._episode = episode
-        self._transform = transform
+        self._transforms: tuple[EpisodeTransform, ...] = tuple(transforms)
         self._pass_through = pass_through
 
     @property
     def keys(self) -> Sequence[str]:
-        # Preserve order: all transform keys first, then pass-through keys
-        # from the original episode that are not overridden by the transform.
+        # Preserve order across all transforms first, then pass-through keys
+        # from the original episode that are not overridden by any transform.
         ordered: list[str] = []
         seen: set[str] = set()
-        for k in self._transform.keys:
-            if k not in seen:
-                ordered.append(k)
-                seen.add(k)
+        for tf in self._transforms:
+            for k in tf.keys:
+                if k not in seen:
+                    ordered.append(k)
+                    seen.add(k)
         if self._pass_through:
             for k in self._episode.keys:
                 if k not in seen:
@@ -342,9 +353,10 @@ class TransformEpisode(Episode):
         return ordered
 
     def __getitem__(self, name: str) -> Signal[Any] | Any:
-        # If the transform defines this key, it takes precedence.
-        if name in self._transform.keys:
-            return self._transform.transform(name, self._episode)
+        # If any transform defines this key, the first one takes precedence.
+        for tf in self._transforms:
+            if name in tf.keys:
+                return tf.transform(name, self._episode)
         if self._pass_through:
             return self._episode[name]
         raise KeyError(name)

@@ -380,6 +380,42 @@ def test_transform_episode_no_pass_through(sig_simple):
         _ = te["id"]
 
 
+class _DummyTransform2(EpisodeTransform):
+
+    @property
+    def keys(self):
+        return ["b", "s"]
+
+    def transform(self, name: str, episode):
+        if name == "b":
+            base = episode["s"]
+            return Elementwise(base, lambda seq: np.asarray(seq) * -1)
+        if name == "s":
+            base = episode["s"]
+            return Elementwise(base, lambda seq: np.asarray(seq) + 100)
+        raise KeyError(name)
+
+
+def test_transform_episode_multiple_transforms_order_and_precedence(sig_simple):
+    ep = EpisodeContainer(signals={"s": sig_simple}, static={"id": 42, "z": 9})
+    t1 = _DummyTransform()   # defines ["a", "s"] (s -> +1)
+    t2 = _DummyTransform2()  # defines ["b", "s"] (s -> +100)
+
+    # Concatenate transform keys in order; first occurrence of duplicates kept
+    te = TransformEpisode(ep, t1, t2, pass_through=True)
+    assert list(te.keys) == ["a", "s", "b", "id", "z"]
+
+    # 's' should come from the first transform (t1)
+    s_vals = [v for v, _ in te["s"]]
+    assert s_vals == [x + 1 for x, _ in ep["s"]]
+
+    # Other transform keys are accessible
+    a_vals = [v for v, _ in te["a"]]
+    b_vals = [v for v, _ in te["b"]]
+    assert a_vals == [x * 10 for x, _ in ep["s"]]
+    assert b_vals == [-(x) for x, _ in ep["s"]]
+
+
 def test_image_resize_basic():
     # Create a simple image signal with uniform frames
     h, w = 4, 6
