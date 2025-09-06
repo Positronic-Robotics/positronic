@@ -1,26 +1,13 @@
 import configuronic as cfn
-from positronic.inference.state import ImageEncodingConfig, StateEncoder
 
 
 @cfn.config()
 def end_effector(resolution: tuple[int, int]):
-    return StateEncoder(
-        state_output_key='observation.state',
-        images=[
-            ImageEncodingConfig(
-                key='left.image',
-                output_key='observation.images.left',
-                resize=resolution
-            ),
-            ImageEncodingConfig(
-                key='right.image',
-                output_key='observation.images.right',
-                resize=resolution
-            ),
-        ],
-        state=[
-            'grip',  # fake grip
-        ]
+    from positronic.inference.state import ObservationEncoder
+    return ObservationEncoder(
+        state_features=['grip'],
+        left=('left.image', resolution),
+        right=('right.image', resolution),
     )
 
 
@@ -30,56 +17,38 @@ end_effector_352x192 = end_effector.override(resolution=(352, 192))
 
 
 # State for back and front camera used mostly in simulation
-end_effector_back_front = cfn.Config(
-    StateEncoder,
-    state_output_key='observation.state',
-    images=[
-        ImageEncodingConfig(
-            key='image.back',
-            output_key='observation.images.back',
-            resize=[352, 192]
-        ),
-        ImageEncodingConfig(
-            key='image.front',
-            output_key='observation.images.front',
-            resize=[352, 192]
-        ),
-    ],
-    state=[
-        'grip',
-    ]
-)
+@cfn.config()
+def end_effector_back_front():
+    from positronic.inference.state import ObservationEncoder
+    return ObservationEncoder(
+        state_features=['grip'],
+        back=('image.back', (352, 192)),
+        front=('image.front', (352, 192)),
+    )
 
 
-# Similiar to end_effector but with additional frames with 15 frame offset
-end_effector_mem15 = cfn.Config(
-    StateEncoder,
-    state_output_key='observation.state',
-    images=[
-        ImageEncodingConfig(
-            key='left.image',
-            output_key='observation.images.left',
-            resize=[352, 192]
-        ),
-        ImageEncodingConfig(
-            key='right.image',
-            output_key='observation.images.right',
-            resize=[352, 192]
-        ),
-        ImageEncodingConfig(
-            key='left.image',
-            output_key='observation.images.left_15',
-            resize=[352, 192],
-            offset=15
-        ),
-        ImageEncodingConfig(
-            key='right.image',
-            output_key='observation.images.right_15',
-            resize=[352, 192],
-            offset=15
-        ),
-    ],
-    state=[
-        'grip',  # fake grip
-    ]
-)
+# Similiar to end_effector but with additional frames listed for compatibility
+@cfn.config()
+def end_effector_mem15():
+    from positronic.inference.state import ObservationEncoder
+    return ObservationEncoder(
+        state_features=['grip'],
+        left=('left.image', (352, 192)),
+        right=('right.image', (352, 192)),
+        left_15=('left.image', (352, 192)),
+        right_15=('right.image', (352, 192)),
+    )
+
+
+@cfn.config()
+def franka_mujoco_stackcubes():
+    from positronic.inference.state import ObservationEncoder
+    return ObservationEncoder(
+        state_features=[
+            'robot_position_quaternion',
+            'robot_position_translation',
+            'grip',
+        ],
+        left=('image.handcam_left', (224, 224)),
+        side=('image.back_view', (224, 224)),
+    )

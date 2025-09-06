@@ -12,7 +12,7 @@ from positronic.drivers.camera.linux_video import LinuxVideo
 from positronic.drivers.gripper.dh import DHGripper
 from positronic.simulator.mujoco.sim import MujocoCamera, MujocoFranka, MujocoGripper, MujocoSim
 from positronic.inference.action import ActionDecoder
-from positronic.inference.state import StateEncoder
+from positronic.inference.state import ObservationEncoder
 from positronic.simulator.mujoco.transforms import MujocoSceneTransform
 
 import positronic.cfg.hardware.roboarm
@@ -58,7 +58,7 @@ class Inference:
 
     def __init__(
         self,
-        state_encoder: StateEncoder,
+        state_encoder: ObservationEncoder,
         action_decoder: ActionDecoder,
         device: str,
         policy,
@@ -121,9 +121,12 @@ class Inference:
                 'reference_robot_position_translation': reference_pose.translation,
                 'reference_robot_position_quaternion': reference_pose.rotation.as_quat
             }
-            obs = self.state_encoder.encode(images, inputs)
-            for key in obs:
-                obs[key] = obs[key].to(self.device)
+            obs = {}
+            for key, val in self.state_encoder.encode(images, inputs).items():
+                if isinstance(val, np.ndarray):
+                    obs[key] = torch.from_numpy(val).to(self.device)
+                else:
+                    obs[key] = torch.as_tensor(val).to(self.device)
 
             action = self.policy.select_action(obs).squeeze(0).cpu().numpy()
             action_dict = self.action_decoder.decode(action, inputs)
@@ -148,7 +151,7 @@ class Inference:
 def main(robot_arm: Any | None,
          gripper: DHGripper | None,
          cameras: Mapping[str, LinuxVideo] | None,
-         state_encoder: StateEncoder,
+         state_encoder: ObservationEncoder,
          action_decoder: ActionDecoder,
          policy,
          rerun_path: str | None = None,
@@ -178,7 +181,7 @@ def main(robot_arm: Any | None,
 
 def main_sim(
         mujoco_model_path: str,
-        state_encoder: StateEncoder,
+        state_encoder: ObservationEncoder,
         action_decoder: ActionDecoder,
         policy,
         rerun_path: str,

@@ -1,19 +1,20 @@
 from typing import Dict
+
 import fire
+import numpy as np
 import rerun as rr
+import torch
 from tqdm import tqdm
 
-from positronic.inference.action import ActionDecoder
-from positronic.simulator.mujoco.sim import MujocoSimulatorEnv
-from positronic.inference.state import StateEncoder
-from positronic.inference.inference import rerun_log_action, rerun_log_observation
-
 import configuronic as cfn
-import positronic.cfg.inference.state
 import positronic.cfg.inference.action
 import positronic.cfg.inference.policy
+import positronic.cfg.inference.state
 import positronic.cfg.simulator
-
+from positronic.inference.action import ActionDecoder
+from positronic.inference.state import ObservationEncoder
+from positronic.run_inference import rerun_log_action, rerun_log_observation
+from positronic.simulator.mujoco.sim import MujocoSimulatorEnv
 
 image_mapping = {
     'back': 'handcam_back',
@@ -22,16 +23,16 @@ image_mapping = {
 
 
 def run_policy_in_simulator(  # noqa: C901  Function is too complex
-        env: MujocoSimulatorEnv,
-        state_encoder: StateEncoder,
-        action_decoder: ActionDecoder,
-        policy,
-        rerun_path: str,
-        inference_time_sec: float,
-        observation_hz: float,
-        image_name_mapping: Dict[str, str],
-        device: str,
-        task: str | None,
+    env: MujocoSimulatorEnv,
+    state_encoder: ObservationEncoder,
+    action_decoder: ActionDecoder,
+    policy,
+    rerun_path: str,
+    inference_time_sec: float,
+    observation_hz: float,
+    image_name_mapping: Dict[str, str],
+    device: str,
+    task: str | None,
 ):
     if rerun_path:
         rr.init("inference", spawn=False)
@@ -71,9 +72,12 @@ def run_policy_in_simulator(  # noqa: C901  Function is too complex
                 'reference_robot_position_translation': reference_pose.translation,
                 'reference_robot_position_quaternion': reference_pose.rotation.as_quat
             }
-            obs = state_encoder.encode(images, inputs)
-            for key in obs:
-                obs[key] = obs[key].to(device)
+            obs = {}
+            for key, val in state_encoder.encode(images, inputs).items():
+                if isinstance(val, np.ndarray):
+                    obs[key] = torch.from_numpy(val).to(device)
+                else:
+                    obs[key] = torch.as_tensor(val).to(device)
 
             if task is not None:
                 obs['task'] = task

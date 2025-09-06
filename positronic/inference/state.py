@@ -1,101 +1,85 @@
-from collections import deque
-from dataclasses import dataclass, field
-from typing import List, Optional
+from typing import Any, Sequence
 
-import torch
-import torch.nn.functional as F
+from positronic.dataset import Signal, transforms
 
 
-@dataclass
-class ImageEncodingConfig:
-    key: str = "image"
-    output_key: Optional[str] = None  # If not None, the encoding will have different key
-    resize: Optional[List[int]] = None
-    offset: Optional[int] = None
+class ObservationEncoder(transforms.EpisodeTransform):
 
+    def __init__(self, state_features: list[str], **image_configs):
+        """
+        Build an observation encoder.
 
-@dataclass
-class StateEncodingConfig:
-    state_output_key: str
-    images: List[ImageEncodingConfig] = field(default_factory=list)
-    state: List[str] = field(default_factory=list)
+        Args:
+            state_features: list of keys to concatenate for the state vector.
+            image_configs: mapping from output image name (suffix) to tuple (input_key, (width, height)).
+                           The output key will be 'observation.images.{name}'.
+        """
+        self._state_features = state_features
+        self._image_configs = image_configs
 
+    @property
+    def keys(self) -> Sequence[str]:
+        return ['observation.state'] + [f'observation.images.{k}' for k in self._image_configs.keys()]
 
-class StateEncoder:
-    def __init__(self, state_output_key: str, images: List[ImageEncodingConfig], state: List[str]):
-        self.state_output_key = state_output_key
-        self.images = images
-        self.state = state
-        self.frame_queues = {}
-        for cfg in images:
-            self.frame_queues[cfg.key] = deque(maxlen=cfg.offset)
-
-    def encode_episode(self, episode_data):
-        """Encodes data for training (i.e. to_lerobot.py). Every episode is a dict of tensors."""
-        obs = {}
-        for cfg in self.images:
-            image = episode_data[cfg.key]
-            image = image.permute(0, 3, 2, 1)  # BHWC -> BCWH
-            if cfg.resize is not None:
-                image = F.interpolate(image, size=tuple(cfg.resize), mode='nearest')
-            if cfg.offset is not None:
-                image = torch.cat([torch.zeros_like(image[:cfg.offset]), image[:-cfg.offset]], dim=0)
-
-            output_key = cfg.output_key if cfg.output_key is not None else cfg.key
-            obs[output_key] = image.permute(0, 3, 2, 1)  # BCWH -> BHWC
-
-        obs[self.state_output_key] = torch.cat(
-            [episode_data[k].unsqueeze(1) if episode_data[k].dim() == 1 else episode_data[k]
-             for k in self.state],
-            dim=1
-        )
-        return obs
-
-    def encode(self, images, inputs):
-        """Encodes data for inference."""
-        obs = {}
-        for cfg in self.images:
-            if cfg.offset is not None:
-                image = self._get_from_frame_queue(cfg)
-            else:
-                image = torch.tensor(images[cfg.key]).permute(2, 1, 0).unsqueeze(0)
-                if cfg.resize is not None:
-                    image = F.interpolate(image, size=tuple(cfg.resize), mode='nearest')
-                image = image.float() / 255
-                self.frame_queues[cfg.key].append(image)
-            output_key = cfg.output_key if cfg.output_key is not None else cfg.key
-            obs[output_key] = image.permute(0, 1, 3, 2)
-
-        data = {}
-        for key in self.state:
-            tensor = torch.tensor(inputs[key], dtype=torch.float32)
-            if tensor.ndim == 0:
-                tensor = tensor.unsqueeze(0)
-            data[key] = tensor
-
-        obs[self.state_output_key] = torch.cat(
-            [data[k] for k in self.state], dim=0
-        ).unsqueeze(0).type(torch.float32)
-        return obs
-
-    def _get_from_frame_queue(self, cfg: ImageEncodingConfig):
-        if cfg.key in self.frame_queues and len(self.frame_queues[cfg.key]) == cfg.offset:
-            return self.frame_queues[cfg.key][0]
+    def transform(self, name: str, episode: transforms.Episode) -> Signal[Any] | Any:
+        if name == 'observation.state':
+            return transforms.concat(*[episode[k] for k in self._state_features])
+        elif name.startswith('observation.images.'):
+            key = name[len('observation.images.'):]
+            input_key, (widht, height) = self._image_configs[key]
+            return transforms.Image.resize_with_pad(widht, height, episode[input_key])
         else:
-            return torch.zeros(1, 3, *cfg.resize, dtype=torch.float32)
+            raise ValueError(f"Unknown observation key: {name}")
 
     def get_features(self):
         features = {}
-        for cfg in self.images:
-            features[cfg.output_key] = {
+        for key, (_, (width, height)) in self._image_configs.items():
+            features['observation.images.' + key] = {
                 "dtype": "video",
-                "shape": (*cfg.resize[::-1], 3),
+                "shape": (height, width, 3),
                 "names": ["height", "width", "channel"],
             }
-
-        features[self.state_output_key] = {
+        features['observation.state'] = {
             "dtype": "float64",
-            "shape": (len(self.state),),
-            "names": self.state,
+            "shape": (8, ),  # TODO: Invent the way to compute it dynamically
+            "names": ["state"],
         }
         return features
+
+    def encode(self, images: dict[str, Any], inputs: dict[str, Any]) -> dict[str, Any]:
+        """Encode a single inference observation from raw images and input dict.
+
+        Returns numpy arrays:
+          - images: (1, C, H, W), float32 in [0,1]
+          - state: (1, D), float32
+        """
+        import numpy as np
+
+        obs: dict[str, Any] = {}
+
+        # Encode images
+        for out_name, (input_key, (width, height)) in self._image_configs.items():
+            if input_key not in images:
+                raise KeyError(f"Missing image input '{input_key}' for '{out_name}'")
+            frame = images[input_key]
+            if not isinstance(frame, np.ndarray):
+                frame = np.asarray(frame)
+            if frame.ndim != 3 or frame.shape[2] != 3:
+                raise ValueError(f"Image '{input_key}' must be HWC with 3 channels, got {frame.shape}")
+            resized = transforms.Image._resize_with_pad_per_frame(width, height,
+                                                                  transforms.Image.PilImage.Resampling.BILINEAR, frame)
+            chw = np.transpose(resized.astype(np.float32) / 255.0, (2, 0, 1))
+            obs[f'observation.images.{out_name}'] = chw[np.newaxis, ...]
+
+        # Encode state vector
+        parts: list[np.ndarray] = []
+        for k in self._state_features:
+            v = inputs[k]
+            arr = np.asarray(v, dtype=np.float32).reshape(-1)
+            parts.append(arr)
+        if parts:
+            state_vec = np.concatenate(parts, axis=0)
+        else:
+            state_vec = np.empty((0, ), dtype=np.float32)
+        obs['observation.state'] = state_vec[np.newaxis, ...]
+        return obs

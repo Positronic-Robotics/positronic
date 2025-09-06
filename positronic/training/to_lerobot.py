@@ -9,22 +9,20 @@
 #     "scipy",
 # ]
 # ///
-from pathlib import Path
-from typing import Any, Sequence
 from collections.abc import Sequence as AbcSequence
+from pathlib import Path
 
-
+import numpy as np
 import torch
 import tqdm
-import numpy as np
-
 from lerobot.datasets.lerobot_dataset import LeRobotDataset
 
 import configuronic as cfn
-from positronic import geom
+from positronic.cfg.inference import action, state
 from positronic.dataset import transforms
-from positronic.dataset import Signal
 from positronic.dataset.local_dataset import LocalDataset
+from positronic.inference.action import ActionDecoder
+from positronic.inference.state import ObservationEncoder
 
 
 def seconds_to_str(seconds: float) -> str:
@@ -36,97 +34,12 @@ def seconds_to_str(seconds: float) -> str:
         return f"{seconds / 3600:.2f}h"
 
 
-class ActionEncoder(transforms.EpisodeTransform):
-
-    def __init__(self, rot_repr: geom.Rotation.Representation = geom.Rotation.Representation.QUAT):
-        self._rot_repr = rot_repr
-
-    @property
-    def keys(self) -> Sequence[str]:
-        return ['actions']
-
-    def transform(self, name: str, episode: transforms.Episode) -> Signal[Any] | Any:
-        if name != 'actions':
-            raise ValueError(f"Unknown action key: {name}")
-
-        rotations = transforms.recode_rotation(geom.Rotation.Representation.QUAT, self._rot_repr,
-                                               episode['target_robot_position_quaternion'])
-
-        return transforms.concat(rotations, episode['target_robot_position_translation'], episode['target_grip'])
-
-    def get_features(self):
-        return {
-            'actions': {
-                "dtype": "float64",
-                "shape": (self._rot_repr.size + 3 + 1, ),
-                "names": [
-                    *[f"rot_{i}" for i in range(self._rot_repr.size)], "translation_x", "translation_y",
-                    "translation_z", "grip"
-                ]
-            }
-        }
-
-
-@cfn.config()
-def action_baseline(rot_repr: geom.Rotation.Representation = geom.Rotation.Representation.QUAT):
-    return ActionEncoder(rot_repr=rot_repr)
-
-
-class ObservationEncoder(transforms.EpisodeTransform):
-
-    def __init__(self, state_features: list[str], **image_configs):
-        self._state_features = state_features
-        self._image_configs = image_configs
-
-    @property
-    def keys(self) -> Sequence[str]:
-        return ['observation.state'] + [f'observation.images.{k}' for k in self._image_configs.keys()]
-
-    def transform(self, name: str, episode: transforms.Episode) -> Signal[Any] | Any:
-        if name == 'observation.state':
-            return transforms.concat(*[episode[k] for k in self._state_features])
-        elif name.startswith('observation.images.'):
-            key = name[len('observation.images.'):]
-            input_key, (widht, height) = self._image_configs[key]
-            return transforms.Image.resize_with_pad(widht, height, episode[input_key])
-        else:
-            raise ValueError(f"Unknown observation key: {name}")
-
-    def get_features(self):
-        features = {}
-        for key, (input_key, (width, height)) in self._image_configs.items():
-            features['observation.images.' + key] = {
-                "dtype": "video",
-                "shape": (height, width, 3),
-                "names": ["height", "width", "channel"],
-            }
-        features['observation.state'] = {
-            "dtype": "float64",
-            "shape": (8,),  # TODO: Invent the way to compute it dynamically
-            "names": ["state"],
-        }
-        return features
-
-
-@cfn.config()
-def state_baseline():
-    return ObservationEncoder(
-        state_features=[
-            'target_robot_position_quaternion',
-            'target_robot_position_translation',
-            'grip',
-        ],
-        left=('image.handcam_left', (224, 224)),
-        side=('image.back_view', (224, 224)),
-    )
-
-
 class EpisodeDictDataset(torch.utils.data.Dataset):
     """
     This dataset is used to load the episode data from the file and encode it into a dictionary.
     """
 
-    def __init__(self, input_dir: Path, state_encoder: ObservationEncoder, action_encoder: ActionEncoder, fps: int):
+    def __init__(self, input_dir: Path, state_encoder: ObservationEncoder, action_encoder: ActionDecoder, fps: int):
         self.dataset = LocalDataset(input_dir)
         self.observation_encoder = state_encoder
         self.action_encoder = action_encoder
@@ -142,6 +55,7 @@ class EpisodeDictDataset(torch.utils.data.Dataset):
         return episode.time[timestamps]
 
 
+# This function needs to be serialisable for PyTorch DataLoader
 def _collate_fn(x):
     return x[0]
 
@@ -149,7 +63,7 @@ def _collate_fn(x):
 def append_data_to_dataset(dataset: LeRobotDataset,
                            input_dir: Path,
                            state_encoder: ObservationEncoder,
-                           action_encoder: ActionEncoder,
+                           action_encoder: ActionDecoder,
                            task: str | None = None,
                            num_workers: int = 16,
                            fps: int = 30):
@@ -158,16 +72,14 @@ def append_data_to_dataset(dataset: LeRobotDataset,
     total_length_sec = 0
 
     episode_dataset = EpisodeDictDataset(input_dir, state_encoder, action_encoder, fps=fps)
-    dataloader = torch.utils.data.DataLoader(
-        episode_dataset,
-        batch_size=1,
-        shuffle=False,
-        num_workers=num_workers,
-        collate_fn=_collate_fn
-    )
+    dataloader = torch.utils.data.DataLoader(episode_dataset,
+                                             batch_size=1,
+                                             shuffle=False,
+                                             num_workers=num_workers,
+                                             collate_fn=_collate_fn)
 
     for episode_idx, ep_dict in enumerate(tqdm.tqdm(dataloader, desc="Processing episodes")):
-        num_frames = len(ep_dict['actions'])
+        num_frames = len(ep_dict['action'])
         total_length_sec += num_frames * 1 / dataset.fps
 
         for i in range(num_frames):
@@ -188,15 +100,13 @@ def append_data_to_dataset(dataset: LeRobotDataset,
     print(f"Total length of the dataset: {seconds_to_str(total_length_sec)}")
 
 
-@cfn.config(
-    fps=30,
-    video=True,
-    state_encoder=state_baseline,
-    action_encoder=action_baseline,
-    task="pick plate from the table and place it into the dishwasher",
-)
+@cfn.config(fps=30,
+            video=True,
+            state_encoder=state.franka_mujoco_stackcubes,
+            action_encoder=action.absolute_position,
+            task="pick plate from the table and place it into the dishwasher")
 def convert_to_lerobot_dataset(input_dir: str, output_dir: str, fps: int, video: bool,
-                               state_encoder: ObservationEncoder, action_encoder: ActionEncoder, task: str):
+                               state_encoder: ObservationEncoder, action_encoder: ActionDecoder, task: str):
     features = {**state_encoder.get_features(), **action_encoder.get_features()}
 
     dataset = LeRobotDataset.create(repo_id='local',
@@ -214,13 +124,11 @@ def convert_to_lerobot_dataset(input_dir: str, output_dir: str, fps: int, video:
     print(f"Dataset converted and saved to {output_dir}")
 
 
-@cfn.config(
-    state_encoder=state_baseline,
-    action_encoder=action_baseline,
-    task="pick plate from the table and place it into the dishwasher",
-)
+@cfn.config(state_encoder=state.franka_mujoco_stackcubes,
+            action_encoder=action.absolute_position,
+            task="pick plate from the table and place it into the dishwasher")
 def append_data_to_lerobot_dataset(dataset_dir: str, input_dir: Path, state_encoder: ObservationEncoder,
-                                   action_encoder: ActionEncoder, task: str):
+                                   action_encoder: ActionDecoder, task: str):
     dataset = LeRobotDataset(repo_id='local', root=dataset_dir)
 
     append_data_to_dataset(dataset=dataset,
