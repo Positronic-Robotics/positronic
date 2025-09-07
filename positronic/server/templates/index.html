@@ -1,0 +1,191 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Positronic Dataset Viewer</title>
+    <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+    <div class="container">
+        <h1>Positronic Dataset Viewer</h1>
+        <div class="dataset-info">
+            <h2>Dataset: {{ repo_id }}</h2>
+            <div id="dataset-stats">Loading dataset information...</div>
+            <div id="loading-status" class="loading-status">
+                <strong>⏳ Dataset is loading...</strong>
+                <br>This may take a few minutes depending on the dataset size.
+            </div>
+        </div>
+
+        <h2>Episodes</h2>
+        <div id="episodes-container" class="episodes-grid">
+            <div class="loading">Loading episodes...</div>
+        </div>
+
+        <script>
+            let loadingCheckInterval = null;
+
+            async function checkDatasetStatus() {
+                try {
+                    const response = await fetch('/api/dataset_status');
+                    const status = await response.json();
+
+                    if (status.loading) {
+                        document.getElementById('loading-status').classList.add('show');
+                        document.getElementById('dataset-stats').innerHTML = 'Checking dataset status...';
+                        document.getElementById('episodes-container').innerHTML = '<div class="loading">Waiting for dataset to load...</div>';
+
+                        if (!loadingCheckInterval) {
+                            loadingCheckInterval = setInterval(checkDatasetStatus, 2000);
+                        }
+                    } else if (status.loaded) {
+                        if (loadingCheckInterval) {
+                            clearInterval(loadingCheckInterval);
+                            loadingCheckInterval = null;
+                        }
+                        document.getElementById('loading-status').classList.remove('show');
+                        loadDatasetInfo();
+                        loadEpisodes();
+                    } else {
+                        if (loadingCheckInterval) {
+                            clearInterval(loadingCheckInterval);
+                            loadingCheckInterval = null;
+                        }
+                        document.getElementById('loading-status').classList.remove('show');
+                        document.getElementById('dataset-stats').innerHTML = '<span class="error-message">Failed to load dataset</span>';
+                        document.getElementById('episodes-container').innerHTML = '<div class="loading error-message">Dataset loading failed</div>';
+                    }
+                } catch (error) {
+                    console.error('Error checking dataset status:', error);
+                }
+            }
+
+            async function loadDatasetInfo() {
+                try {
+                    const response = await fetch('/api/dataset_info');
+                    if (response.status === 202) {
+                        checkDatasetStatus();
+                        return;
+                    }
+
+                    const data = await response.json();
+
+                    // Format features information as a table
+                    let featuresHtml = `
+                        <table class="features-table">
+                            <thead>
+                                <tr>
+                                    <th>Feature</th>
+                                    <th>Type</th>
+                                    <th>Dimensions</th>
+                                    <th>Data Type</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                    `;
+
+                    for (const [key, info] of Object.entries(data.features)) {
+                        let typeCell = '';
+                        let typeClass = '';
+                        let dimensionCell = '';
+                        let dtypeCell = info.dtype || '-';
+                        let dtypeClass = '';
+
+                        if (info.dtype === 'image' || info.dtype === 'video') {
+                            typeCell = 'Camera';
+                            typeClass = 'chip-image';
+                            const shape = info.shape || [];
+                            dimensionCell = shape.length >= 3 ? `${shape[1]}×${shape[0]}×${shape[2]}` : '-';
+                            dtypeCell = 'uint8';
+                        } else {
+                            const shape = info.shape || [];
+                            if (shape.length === 0 || (shape.length === 1 && shape[0] === 1)) {
+                                typeCell = 'Scalar';
+                                typeClass = 'chip-scalar';
+                                dimensionCell = '1';
+                            } else if (shape.length === 1) {
+                                typeCell = 'Vector';
+                                typeClass = 'chip-vector';
+                                dimensionCell = shape[0].toString();
+                            } else {
+                                typeCell = 'Tensor';
+                                typeClass = 'chip-tensor';
+                                dimensionCell = shape.join('×');
+                            }
+                            dtypeCell = dtypeCell || 'float32';
+                        }
+
+                        const dtypeClassMap = {
+                            'float32': 'chip-float32',
+                            'float64': 'chip-float64',
+                            'int32': 'chip-int32',
+                            'int64': 'chip-int64',
+                            'uint8': 'chip-uint8',
+                            'bool': 'chip-bool'
+                        };
+                        dtypeClass = dtypeClassMap[dtypeCell] || 'chip-default';
+
+                        featuresHtml += `
+                            <tr>
+                                <td class="feature-name">${key}</td>
+                                <td><span class="chip ${typeClass}">${typeCell}</span></td>
+                                <td class="dimension-cell">${dimensionCell}</td>
+                                <td>${dtypeCell !== '-' ? `<span class="chip ${dtypeClass}">${dtypeCell}</span>` : '-'}</td>
+                            </tr>
+                        `;
+                    }
+
+                    featuresHtml += '</tbody></table>';
+
+                    const statsDiv = document.getElementById('dataset-stats');
+                    statsDiv.innerHTML = `
+                        <p><strong>Total Episodes:</strong> ${data.num_episodes} &nbsp;&nbsp;&nbsp; <strong>Total Samples:</strong> ${data.num_samples} &nbsp;&nbsp;&nbsp; <strong>FPS:</strong> ${data.fps} Hz</p>
+                        <h3>Features</h3>
+                        ${featuresHtml}
+                    `;
+                } catch (error) {
+                    console.error('Error loading dataset info:', error);
+                }
+            }
+
+            async function loadEpisodes() {
+                try {
+                    const response = await fetch('/api/episodes');
+                    if (response.status === 202) {
+                        checkDatasetStatus();
+                        return;
+                    }
+
+                    const episodes = await response.json();
+                    const container = document.getElementById('episodes-container');
+                    container.innerHTML = '';
+
+                    episodes.forEach((episode, index) => {
+                        const card = document.createElement('div');
+                        card.className = 'episode-card';
+                        card.onclick = () => window.location.href = `/episode/${episode.index}`;
+
+                        card.innerHTML = `
+                            <div class="episode-title">Episode ${episode.index}</div>
+                            <div class="episode-info">
+                                <p>${episode.length} samples</p>
+                                <p>${episode.task || 'Task: N/A'}</p>
+                            </div>
+                        `;
+
+                        container.appendChild(card);
+                    });
+                } catch (error) {
+                    console.error('Error loading episodes:', error);
+                    document.getElementById('episodes-container').innerHTML =
+                        '<div class="loading">Error loading episodes</div>';
+                }
+            }
+
+            checkDatasetStatus();
+        </script>
+    </div>
+</body>
+</html>
+

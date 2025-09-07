@@ -30,13 +30,16 @@ dependencies = [
     "pyturbojpeg",
     "robosuite",
     "numba>=0.57",
-    "lerobot",
-    "rerun-sdk>=0.23",
+#    "lerobot",
+    "rerun-sdk",
     "ruckig",
     "scipy",
     "torch",
     "uvicorn[standard]",
 ]
+
+[project.scripts]
+positronic-server = "positronic.server.positronic_server:main"
 
 [project.optional-dependencies]
 hardware = [
@@ -91,6 +94,7 @@ skip_covered = false
 
 [tool.ruff]
 line-length = 120
+
 target-version = "py311"
 
 [tool.ruff.format]
@@ -111,4 +115,6 @@ include = [
 positronic = [
   "assets/**",
   "drivers/**/*.xml",
+  "server/static/**",
+  "server/templates/**",
 ]
