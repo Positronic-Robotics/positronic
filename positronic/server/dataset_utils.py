@@ -1,4 +1,4 @@
-"""Dataset utilities for Positronic dataset visualization."""
+"""Dataset utilities for Positronic dataset visualization (images-only)."""
 
 from __future__ import annotations
 
@@ -6,11 +6,9 @@ import logging
 import os
 from collections.abc import Iterator
 from dataclasses import dataclass
-from enum import Enum
 from pathlib import Path
 from typing import Any, Optional, Tuple
 
-import av
 import numpy as np
 import rerun as rr
 import rerun.blueprint as rrb
@@ -19,11 +17,6 @@ from positronic.dataset.episode import Episode
 from positronic.dataset.local_dataset import LocalDataset
 from positronic.dataset.signal import Signal
 from positronic.dataset.video import VideoSignal
-
-
-class GenerationMode(Enum):
-    IMAGES = 'images'
-    VIDEO = 'video'
 
 
 @dataclass
@@ -157,26 +150,8 @@ def get_episodes_list(ds: LocalDataset) -> list[dict[str, Any]]:
     return episodes
 
 
-def _init_stream(image_key: str, fps: int, width: int, height: int):
-    container = av.open('/dev/null', 'w', format='h264')
-    stream = container.add_stream('libx264', rate=max(1, int(fps) or 30))
-    stream.width = width
-    stream.height = height
-    stream.max_b_frames = 0
-    rr.log(image_key, rr.VideoStream(codec=rr.VideoCodec.H264), static=True)
-    return stream
-
-
-def _log_image(image: np.ndarray, key: str, streams: dict[str, av.VideoStream],
-               generation_mode: GenerationMode) -> None:
-    if generation_mode == GenerationMode.IMAGES:
-        rr.log(key, rr.Image(image).compress())
-    else:
-        video_frame = av.VideoFrame.from_ndarray(image, format='rgb24')
-        for packet in streams[key].encode(video_frame):
-            if packet.pts is None:
-                continue
-            rr.log(key, rr.VideoStream.from_fields(sample=bytes(packet)))
+def _log_image(image: np.ndarray, key: str) -> None:
+    rr.log(key, rr.Image(image).compress())
 
 
 def _iter_reference_timeline(ep: Episode) -> Iterator[tuple[int, int]]:
@@ -210,11 +185,17 @@ def _iter_reference_timeline(ep: Episode) -> Iterator[tuple[int, int]]:
         yield i, int(ts)
 
 
-def _collect_signal_groups(ep: Episode) -> Tuple[list[str], list[str], dict[str, tuple[int, int, int]]]:
-    """Return (video_names, vector_names, shapes) for an episode."""
+def _collect_signal_groups(
+    ep: Episode,
+) -> Tuple[list[str], list[str], dict[str, tuple[int, int, int]], dict[str, int]]:
+    """Return (video_names, signal_names, shapes, signal_dims) for an episode.
+
+    signal_dims gives the number of plotted series per non-video signal (1 for scalar).
+    """
     video_names: list[str] = []
-    vector_names: list[str] = []
+    signal_names: list[str] = []
     shapes: dict[str, tuple[int, int, int]] = {}
+    signal_dims: dict[str, int] = {}
     for name, sig in ep.signals.items():
         if isinstance(sig, VideoSignal):
             try:
@@ -225,40 +206,63 @@ def _collect_signal_groups(ep: Episode) -> Tuple[list[str], list[str], dict[str,
             except Exception:
                 continue
         else:
-            vector_names.append(name)
-    return video_names, vector_names, shapes
+            signal_names.append(name)
+            # infer channel count for legend visibility
+            try:
+                if len(sig) == 0:
+                    signal_dims[name] = 1
+                else:
+                    v0, _ = sig[0]
+                    if isinstance(v0, np.ndarray):
+                        signal_dims[name] = int(v0.size) if v0.ndim >= 1 else 1
+                    else:
+                        signal_dims[name] = 1
+            except Exception:
+                signal_dims[name] = 1
+    return video_names, signal_names, shapes, signal_dims
 
 
-def _build_blueprint(task: Optional[str], video_names: list[str], vector_names: list[str]) -> rrb.Blueprint:
-    image_views = [rrb.Spatial2DView(name=k.replace('_', ' ').title(), origin=f'/{k}')
-                   for k in video_names] or [rrb.TextDocumentView(name='No Images', contents=['No image data found'])]
-    plot_legend = rrb.PlotLegend(corner=rrb.Corner2D.RightBottom)
-    vertical_views: list[rrb.View] = []
+def _build_blueprint(
+    task: Optional[str],
+    video_names: list[str],
+    signal_names: list[str],
+    signal_dims: dict[str, int],
+) -> rrb.Blueprint:
+    image_views = [
+        rrb.Spatial2DView(name=k.replace('_', ' ').title(), origin=f'/{k}') for k in video_names
+    ] or [rrb.TextDocumentView(name='No Images', contents=['No image data found'])]
+
+    # Individual TimeSeriesView per signal, on a common grid
+    # Legends: visible only if a signal has more than one plotted series
+    ts_panel: list[rrb.View] = []
     if task:
-        vertical_views.append(rrb.TextDocumentView(name='Task', origin='/task'))
-    if vector_names:
-        vertical_views.append(rrb.TimeSeriesView(name='Signals', origin='/signals', plot_legend=plot_legend))
+        ts_panel.append(rrb.TextDocumentView(name='Task', origin='/task'))
+    if signal_names:
+        per_signal_views = []
+        for sig in signal_names:
+            show_legend = (signal_dims.get(sig, 1) > 1)
+            per_signal_views.append(
+                rrb.TimeSeriesView(
+                    name=sig.replace('_', ' ').title(),
+                    origin=f'/signals/{sig}',
+                    plot_legend=rrb.PlotLegend(visible=show_legend),
+                )
+            )
+        ts_panel.append(rrb.Grid(*per_signal_views))
     else:
-        vertical_views.append(rrb.TextDocumentView(name='No Signals', contents=['No vector data found']))
-    row_shares = [0.2, 1] if task else [1]
+        ts_panel.append(rrb.TextDocumentView(name='No Signals', contents=['No signal data found']))
+
     return rrb.Blueprint(
         rrb.BlueprintPanel(state=rrb.PanelState.Hidden),
         rrb.SelectionPanel(state=rrb.PanelState.Hidden),
         rrb.TopPanel(state=rrb.PanelState.Expanded),
         rrb.TimePanel(state=rrb.PanelState.Expanded),
         rrb.Grid(
-            rrb.Vertical(*vertical_views, row_shares=row_shares),
+            rrb.Grid(*ts_panel),
             rrb.Grid(*image_views),
             column_shares=[1, 2],
         ),
     )
-
-
-def _init_streams(shapes: dict[str, tuple[int, int, int]], fps: int) -> dict[str, av.VideoStream]:
-    streams: dict[str, av.VideoStream] = {}
-    for key, (h, w, _c) in shapes.items():
-        streams[key] = _init_stream(key, fps=fps, width=w, height=h)
-    return streams
 
 
 def _set_time(frame_idx: int, ts_ns: int) -> None:
@@ -266,78 +270,91 @@ def _set_time(frame_idx: int, ts_ns: int) -> None:
     rr.set_time_sequence('frame_index', frame_idx)
 
 
-def _log_vectors_for_snapshot(vector_names: list[str], snap: dict[str, Any]) -> None:
-    for key in vector_names:
+def _log_vectors_for_snapshot(signal_names: list[str], snap: dict[str, Any]) -> None:
+    for key in signal_names:
         try:
             val = snap[key]
         except Exception:
             continue
-        _log_single_vector(key, val)
+        _log_single_signal(key, val)
 
 
-def _log_single_vector(key: str, val: Any) -> None:
+def _log_single_signal(key: str, val: Any) -> None:
+    """Log a single non-video signal using rr.Scalars with a vector.
+
+    Scalars are wrapped into a length-1 float32 array; tensors are flattened.
+    """
     if isinstance(val, np.ndarray):
+        arr = val
         if val.ndim == 0:
-            rr.log(f'signals/{key}', rr.Scalar(float(val)))
-        elif val.ndim == 1:
-            for i, v in enumerate(val.tolist()):
-                rr.log(f'signals/{key}/{i}', rr.Scalar(float(v)))
-        else:
-            flat = val.reshape(-1)
-            for i, v in enumerate(flat.tolist()):
-                rr.log(f'signals/{key}/{i}', rr.Scalar(float(v)))
+            arr = np.asarray([float(val)])
+        elif val.ndim >= 2:
+            arr = val.reshape(-1)
     else:
         try:
-            rr.log(f'signals/{key}', rr.Scalar(float(val)))
+            arr = np.asarray([float(val)])
+        except Exception:
+            return
+    rr.log(f'/signals/{key}', rr.Scalars(arr.astype(np.float64)))
+
+
+def _setup_series_names(ep: Episode, signal_names: list[str]) -> None:
+    """Log static SeriesLines with short names ('0','1',...) per signal.
+
+    This controls how multi-channel Scalars are labeled in the plot legend and tooltips.
+    """
+    for key in signal_names:
+        try:
+            sig = ep.signals[key]
+            n = len(sig)
+            if n == 0:
+                dims = 1
+            else:
+                val, _ = sig[0]
+                if isinstance(val, np.ndarray):
+                    dims = int(val.size) if val.ndim >= 1 else 1
+                else:
+                    dims = 1
+        except Exception:
+            dims = 1
+        names = [str(i) for i in range(max(1, dims))]
+        try:
+            rr.log(f'/signals/{key}', rr.SeriesLines(names=names), static=True)
         except Exception:
             pass
 
 
-def _log_videos_for_snapshot(video_names: list[str], snap: dict[str, Any], streams: dict[str, av.VideoStream],
-                             generation_mode: GenerationMode) -> None:
+def _log_videos_for_snapshot(
+    video_names: list[str],
+    snap: dict[str, Any],
+) -> None:
     for key in video_names:
         try:
             img = snap[key]
             if isinstance(img, np.ndarray) and img.ndim == 3:
-                _log_image(img, key, streams, generation_mode)
+                _log_image(img, key)
         except Exception:
             continue
-
-
-def _flush_streams(streams: dict[str, av.VideoStream]) -> None:
-    for key, stream in streams.items():
-        for packet in stream.encode():
-            if packet.pts is None:
-                continue
-            rr.set_time('time', duration=float(packet.pts * packet.time_base))
-            rr.log(key, rr.VideoStream.from_fields(sample=bytes(packet)))
 
 
 def _log_episode(
     ep: Episode,
     video_names: list[str],
-    vector_names: list[str],
+    signal_names: list[str],
     shapes: dict[str, tuple[int, int, int]],
-    generation_mode: GenerationMode,
     fps: int,
 ) -> None:
-    streams: dict[str, av.VideoStream] = _init_streams(shapes, fps) if generation_mode == GenerationMode.VIDEO else {}
-
     for frame_idx, ts_ns in _iter_reference_timeline(ep) or []:
         _set_time(frame_idx, ts_ns)
         snap = ep.time[ts_ns]
-        _log_videos_for_snapshot(video_names, snap, streams, generation_mode)
-        _log_vectors_for_snapshot(vector_names, snap)
-
-    if generation_mode == GenerationMode.VIDEO:
-        _flush_streams(streams)
+        _log_videos_for_snapshot(video_names, snap)
+        _log_vectors_for_snapshot(signal_names, snap)
 
 
 def generate_episode_rrd(
     ds: LocalDataset,
     episode_id: int,
     cache_path: str,
-    generation_mode: GenerationMode,
 ) -> str:
     """Generate an RRD for an episode and return its path (cached)."""
     if os.path.exists(cache_path):
@@ -355,17 +372,20 @@ def generate_episode_rrd(
         if task:
             rr.log('/task', rr.TextDocument(task), static=True)
 
-        video_names, vector_names, shapes = _collect_signal_groups(ep)
+        video_names, signal_names, shapes, signal_dims = _collect_signal_groups(ep)
 
-        # Resolve fps from dataset info (fallback 30)
+        # Approx fps from dataset info (best effort, falls back to 30 if 0)
         fps = 30
         info = get_dataset_info(ds)
         if isinstance(info.get('fps'), (int, float)) and info['fps']:
             fps = int(info['fps'])
 
-        rr.send_blueprint(_build_blueprint(task, video_names, vector_names))
+        rr.send_blueprint(_build_blueprint(task, video_names, signal_names, signal_dims))
 
-        _log_episode(ep, video_names, vector_names, shapes, generation_mode, fps)
+        # Provide short per-channel names for legend/tooltips
+        _setup_series_names(ep, signal_names)
+
+        _log_episode(ep, video_names, signal_names, shapes, fps)
 
         rr.save(cache_path)
 

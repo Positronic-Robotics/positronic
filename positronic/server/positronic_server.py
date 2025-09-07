@@ -20,7 +20,7 @@ from starlette.requests import Request
 
 import configuronic as cfn
 from positronic.dataset.local_dataset import LocalDataset
-from positronic.server.dataset_utils import GenerationMode, generate_episode_rrd, get_dataset_info, get_episodes_list
+from positronic.server.dataset_utils import generate_episode_rrd, get_dataset_info, get_episodes_list
 
 # Global app state
 app_state: dict[str, object] = {
@@ -28,7 +28,6 @@ app_state: dict[str, object] = {
     'loading_state': True,
     'root': '',
     'cache_dir': '',
-    'generation_mode': GenerationMode.IMAGES,
 }
 
 
@@ -143,12 +142,7 @@ async def api_episode_rrd(episode_id: int):
 
     try:
         cache_path = _get_rrd_cache_path(episode_id)
-        rrd_path = generate_episode_rrd(
-            ds,
-            episode_id,
-            cache_path,
-            app_state['generation_mode'],  # type: ignore[arg-type]
-        )
+        rrd_path = generate_episode_rrd(ds, episode_id, cache_path)
         if not os.path.exists(rrd_path):
             logging.error(f'RRD file not found at {rrd_path}')
             raise HTTPException(status_code=500, detail="RRD file generation failed")
@@ -167,7 +161,6 @@ async def api_episode_rrd(episode_id: int):
 def main(
     root: str,
     cache_dir: str = os.path.expanduser('~/.cache/positronic/server/'),
-    generation_mode: GenerationMode = GenerationMode.IMAGES,
     host: str = '0.0.0.0',
     port: int = 5000,
     debug: bool = False,
@@ -178,7 +171,6 @@ def main(
     Args:
         root: Path to dataset root directory
         cache_dir: Directory to cache generated RRD files
-        generation_mode: Whether to log images or h264 video
         host: Server host
         port: Server port
         debug: Enable debug logging
@@ -189,7 +181,6 @@ def main(
 
     app_state['root'] = str(root)
     app_state['cache_dir'] = cache_dir
-    app_state['generation_mode'] = generation_mode
     app_state['loading_state'] = True
 
     if reset_cache and os.path.exists(cache_dir):
