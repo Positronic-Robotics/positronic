@@ -72,6 +72,7 @@ testpaths = [
     "positronic/dataset/tests",
     "positronic/geom/tests",
     "positronic/tests",
+    "positronic/policy/tests",
 ]
 python_files = ["test_*.py", "*_test.py"]
 addopts = [

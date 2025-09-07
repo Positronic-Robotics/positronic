@@ -113,7 +113,7 @@ class EpisodeContainer(Episode):
 
     def __init__(self,
                  signals: dict[str, Signal[Any]],
-                 static: dict[str, Any],
+                 static: dict[str, Any] = {},
                  meta: dict[str, Any] | None = None) -> None:
         self._signals = signals
         self._static = static

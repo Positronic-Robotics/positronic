@@ -449,7 +449,7 @@ class Image:
         return zero_image
 
     @staticmethod
-    def _resize_with_pad_per_frame(width: int, height: int, method, img: np.ndarray) -> np.ndarray:
+    def resize_with_pad_per_frame(width: int, height: int, method, img: np.ndarray) -> np.ndarray:
         if img.shape[0] == height and img.shape[1] == width:
             return img  # No need to resize if the image is already the correct size.
 
@@ -470,7 +470,7 @@ class Image:
         """
 
         def fn(x: Sequence[np.ndarray]) -> Sequence[np.ndarray]:
-            return _LazySequence(x, partial(Image._resize_with_pad_per_frame, width, height, method))
+            return _LazySequence(x, partial(Image.resize_with_pad_per_frame, width, height, method))
 
         return Elementwise(signal, fn)
 
