@@ -11,15 +11,15 @@ from positronic.drivers import roboarm
 from positronic.drivers.camera.linux_video import LinuxVideo
 from positronic.drivers.gripper.dh import DHGripper
 from positronic.simulator.mujoco.sim import MujocoCamera, MujocoFranka, MujocoGripper, MujocoSim
-from positronic.inference.action import ActionDecoder
-from positronic.inference.state import ObservationEncoder
+from positronic.policy.action import ActionDecoder
+from positronic.policy.observation import ObservationEncoder
 from positronic.simulator.mujoco.transforms import MujocoSceneTransform
 
 import positronic.cfg.hardware.roboarm
 import positronic.cfg.hardware.gripper
 import positronic.cfg.hardware.camera
 import positronic.cfg.simulator
-import positronic.cfg.inference.state
+import positronic.cfg.policy.observation
 
 
 def rerun_log_observation(ts, obs):
@@ -230,9 +230,9 @@ main_cfg = cfn.Config(
     main,
     robot_arm=positronic.cfg.hardware.roboarm.kinova,
     gripper=positronic.cfg.hardware.gripper.dh_gripper,
-    state_encoder=positronic.cfg.inference.state.end_effector_224,
-    action_decoder=positronic.cfg.inference.action.umi_relative,
-    policy=positronic.cfg.inference.policy.act,
+    state_encoder=positronic.cfg.policy.observation.end_effector_224,
+    action_decoder=positronic.cfg.policy.action.umi_relative,
+    policy=positronic.cfg.policy.policy.act,
     cameras={
         'left': positronic.cfg.hardware.camera.arducam_left,
         'right': positronic.cfg.hardware.camera.arducam_right,
@@ -246,9 +246,9 @@ main_sim_cfg = cfn.Config(
     main_sim,
     mujoco_model_path="positronic/assets/mujoco/franka_table.xml",
     loaders=positronic.cfg.simulator.stack_cubes_loaders,
-    state_encoder=positronic.cfg.inference.state.end_effector_back_front,
-    action_decoder=positronic.cfg.inference.action.relative_robot_position,
-    policy=positronic.cfg.inference.policy.act,
+    state_encoder=positronic.cfg.policy.observation.end_effector_back_front,
+    action_decoder=positronic.cfg.policy.action.relative_robot_position,
+    policy=positronic.cfg.policy.policy.act,
     rerun_path="inference.rrd",
     fps=60,
     device='cuda',

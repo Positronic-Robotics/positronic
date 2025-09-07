@@ -3,7 +3,7 @@ import configuronic as cfn
 
 @cfn.config()
 def end_effector(resolution: tuple[int, int]):
-    from positronic.inference.state import ObservationEncoder
+    from positronic.policy.observation import ObservationEncoder
     return ObservationEncoder(
         state_features=['grip'],
         left=('left.image', resolution),
@@ -19,7 +19,7 @@ end_effector_352x192 = end_effector.override(resolution=(352, 192))
 # State for back and front camera used mostly in simulation
 @cfn.config()
 def end_effector_back_front():
-    from positronic.inference.state import ObservationEncoder
+    from positronic.policy.observation import ObservationEncoder
     return ObservationEncoder(
         state_features=['grip'],
         back=('image.back', (352, 192)),
@@ -30,7 +30,7 @@ def end_effector_back_front():
 # Similiar to end_effector but with additional frames listed for compatibility
 @cfn.config()
 def end_effector_mem15():
-    from positronic.inference.state import ObservationEncoder
+    from positronic.policy.observation import ObservationEncoder
     return ObservationEncoder(
         state_features=['grip'],
         left=('left.image', (352, 192)),
@@ -42,7 +42,7 @@ def end_effector_mem15():
 
 @cfn.config()
 def franka_mujoco_stackcubes():
-    from positronic.inference.state import ObservationEncoder
+    from positronic.policy.observation import ObservationEncoder
     return ObservationEncoder(
         state_features=[
             'robot_position_quaternion',

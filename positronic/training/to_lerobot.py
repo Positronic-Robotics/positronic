@@ -21,8 +21,8 @@ import configuronic as cfn
 from positronic.cfg.inference import action, state
 from positronic.dataset import transforms
 from positronic.dataset.local_dataset import LocalDataset
-from positronic.inference.action import ActionDecoder
-from positronic.inference.state import ObservationEncoder
+from positronic.policy.action import ActionDecoder
+from positronic.policy.observation import ObservationEncoder
 
 
 def seconds_to_str(seconds: float) -> str:
