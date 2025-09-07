@@ -85,9 +85,9 @@ async def episode_viewer(request: Request, episode_id: int):
     if ds is None:
         raise HTTPException(status_code=500, detail="Dataset failed to load")
 
-    episodes = get_episodes_list(ds)
-    episode = next((ep for ep in episodes if ep['index'] == episode_id), None)
-    if not episode:
+    try:
+        episode = ds[episode_id]
+    except IndexError:
         raise HTTPException(status_code=404, detail="Episode not found")
 
     return templates.TemplateResponse(
@@ -97,7 +97,7 @@ async def episode_viewer(request: Request, episode_id: int):
             "episode_id": episode_id,
             "num_episodes": len(ds),
             "rerun_version": rr.__version__,
-            "task": episode.get('task'),
+            "task": episode.static.get('task', None),
             "repo_id": app_state['root'],
         },
     )
@@ -147,25 +147,19 @@ async def api_episode_rrd(episode_id: int):
             logging.error(f'RRD file not found at {rrd_path}')
             raise HTTPException(status_code=500, detail="RRD file generation failed")
 
-        return FileResponse(
-            path=rrd_path,
-            media_type='application/octet-stream',
-            filename=f'episode_{episode_id}.rrd',
-        )
+        return FileResponse(path=rrd_path, media_type='application/octet-stream', filename=f'episode_{episode_id}.rrd')
     except Exception as e:
         logging.error(f'Error serving RRD file for episode {episode_id}: {e}', exc_info=True)
         raise HTTPException(status_code=500, detail=str(e)) from e
 
 
 @cfn.config()
-def main(
-    root: str,
-    cache_dir: str = os.path.expanduser('~/.cache/positronic/server/'),
-    host: str = '0.0.0.0',
-    port: int = 5000,
-    debug: bool = False,
-    reset_cache: bool = False,
-):
+def main(root: str,
+         cache_dir: str = os.path.expanduser('~/.cache/positronic/server/'),
+         host: str = '0.0.0.0',
+         port: int = 5000,
+         debug: bool = False,
+         reset_cache: bool = False):
     """Visualize a LocalDataset with Rerun.
 
     Args:

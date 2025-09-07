@@ -61,6 +61,11 @@ h1 {
     background-color: var(--color-card-bg-hover);
 }
 
+.repo-id {
+    color: var(--color-text-default);
+    font-weight: 700;
+}
+
 /* Tables */
 .features-table {
     margin-top: 10px;
@@ -193,4 +198,3 @@ body.episode-viewer { height: 100vh; display: flex; flex-direction: column; }
 ::-webkit-scrollbar-track { background: var(--scrollbar-background-color); border: 1px solid var(--scrollbar-border-color); }
 ::-webkit-scrollbar-thumb { background: var(--scrollbar-thumb-color); border-radius: 6px; }
 ::-webkit-scrollbar-thumb:hover { background: var(--navbar-background-color-hover); }
-

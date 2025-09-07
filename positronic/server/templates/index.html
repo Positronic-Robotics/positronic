@@ -10,7 +10,7 @@
     <div class="container">
         <h1>Positronic Dataset Viewer</h1>
         <div class="dataset-info">
-            <h2>Dataset: {{ repo_id }}</h2>
+            <h2>Dataset: <span class="repo-id">{{ repo_id }}</span></h2>
             <div id="dataset-stats">Loading dataset information...</div>
             <div id="loading-status" class="loading-status">
                 <strong>⏳ Dataset is loading...</strong>
@@ -138,12 +138,12 @@
 
                     featuresHtml += '</tbody></table>';
 
-                    const statsDiv = document.getElementById('dataset-stats');
-                    statsDiv.innerHTML = `
-                        <p><strong>Total Episodes:</strong> ${data.num_episodes} &nbsp;&nbsp;&nbsp; <strong>Total Samples:</strong> ${data.num_samples} &nbsp;&nbsp;&nbsp; <strong>FPS:</strong> ${data.fps} Hz</p>
-                        <h3>Features</h3>
-                        ${featuresHtml}
-                    `;
+                const statsDiv = document.getElementById('dataset-stats');
+                statsDiv.innerHTML = `
+                    <p><strong>${data.num_episodes}</strong> episodes.</p>
+                    <h3>Features</h3>
+                    ${featuresHtml}
+                `;
                 } catch (error) {
                     console.error('Error loading dataset info:', error);
                 }
@@ -169,7 +169,7 @@
                         card.innerHTML = `
                             <div class="episode-title">Episode ${episode.index}</div>
                             <div class="episode-info">
-                                <p>${episode.length} samples</p>
+                                <p>${episode.duration} sec</p>
                                 <p>${episode.task || 'Task: N/A'}</p>
                             </div>
                         `;
@@ -188,4 +188,3 @@
     </div>
 </body>
 </html>
-

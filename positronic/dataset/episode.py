@@ -104,6 +104,10 @@ class Episode(ABC):
         return max(values)
 
     @property
+    def duraion_ns(self):
+        return self.last_ts - self.start_ts
+
+    @property
     def time(self):
         return _EpisodeTimeIndexer(self)
 
