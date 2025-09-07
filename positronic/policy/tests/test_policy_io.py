@@ -55,6 +55,7 @@ def test_absolute_position_action_encode_decode_quat():
     sig = act.encode_episode(ep)
     vec = list(sig)[0][0]
     assert vec.shape == (8, )  # 4 quat + 3 trans + 1 grip
+    assert vec.dtype == np.float32
 
     out = act.decode(vec, inputs={})
     assert isinstance(out['target_robot_position'], Transform3D)
@@ -85,6 +86,7 @@ def test_relative_target_position_action_encode_decode_quat():
     vec = list(act.encode_episode(ep))[0][0]
     # First 4 should match target quaternion since current is identity
     np.testing.assert_allclose(vec[:4], q_tgt[0], atol=1e-6)
+    assert vec.dtype == np.float32
     # Current implementation encodes translation as (current - target)
     np.testing.assert_allclose(vec[4:7], t_cur[0] - t_tgt[0], atol=1e-6)
     assert np.isclose(vec[7], g_tgt[0])

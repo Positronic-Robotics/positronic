@@ -26,7 +26,7 @@ class ObservationEncoder(transforms.EpisodeTransform):
 
     def transform(self, name: str, episode: transforms.Episode) -> Signal[Any] | Any:
         if name == 'observation.state':
-            return transforms.concat(*[episode[k] for k in self._state_features])
+            return transforms.concat(*[episode[k] for k in self._state_features], dtype=np.float64)
         elif name.startswith('observation.images.'):
             key = name[len('observation.images.'):]
             input_key, (widht, height) = self._image_configs[key]

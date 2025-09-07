@@ -77,7 +77,10 @@ class AbsolutePositionAction(RotationTranslationGripAction):
 
     def encode_episode(self, episode: Episode) -> Signal[np.ndarray]:
         rotations = transforms.recode_rotation(RotRep.QUAT, self.rot_rep, episode['target_robot_position_quaternion'])
-        return transforms.concat(rotations, episode['target_robot_position_translation'], episode['target_grip'])
+        return transforms.concat(rotations,
+                                 episode['target_robot_position_translation'],
+                                 episode['target_grip'],
+                                 dtype=np.float32)
 
     def decode(self, action_vector: np.ndarray, inputs: dict[str, np.ndarray]) -> dict[str, Any]:
         rotation = action_vector[:self.rot_rep.size].reshape(self.rot_rep.shape)
@@ -120,7 +123,7 @@ class RelativeTargetPositionAction(RotationTranslationGripAction):
         # Grip: target_grip
         grips = episode['target_grip']
 
-        return transforms.concat(rotations, translations, grips)
+        return transforms.concat(rotations, translations, grips, dtype=np.float32)
 
     def decode(self, action_vector: np.ndarray, inputs: dict[str, np.ndarray]) -> dict[str, Any]:
         rotation = action_vector[:self.rot_rep.size].reshape(self.rot_rep.shape)
@@ -180,7 +183,7 @@ class RelativeRobotPositionAction(RotationTranslationGripAction):
         # Grip at future time
         grips_future = transforms.TimeOffsets(episode['grip'], self.offset_ns)
 
-        return transforms.concat(rotations, translations, grips_future)
+        return transforms.concat(rotations, translations, grips_future, dtype=np.float32)
 
     def decode(self, action_vector: np.ndarray, inputs: dict[str, np.ndarray]) -> dict[str, Any]:
         rotation = action_vector[:self.rot_rep.size].reshape(self.rot_rep.shape)

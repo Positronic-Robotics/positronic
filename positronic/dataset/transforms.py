@@ -475,7 +475,36 @@ class Image:
         return Elementwise(signal, fn)
 
 
-def concat(*signals) -> Signal[np.ndarray]:
+def _concat_per_frame(dtype: np.dtype | None, x: Sequence[tuple]) -> np.ndarray:
+    """Pickable callable that concatenates multiple array signals into a single array signal."""
+    # x is a sequence of tuples (v1, v2, ..., vN) for the requested indices.
+    # High-performance path: preallocate (batch, total_dim) and fill via slicing.
+    batch = len(x)
+    if batch == 0:
+        return np.empty((0, 0), dtype=dtype or np.float32)
+
+    # Infer per-signal dimensions and dtype from the first row
+    first_parts = [np.asarray(v) for v in x[0]]
+    dims = [p.size for p in first_parts]
+    offsets = np.cumsum([0] + dims[:-1]) if dims else [0]
+    total_dim = int(sum(dims))
+    if dtype is None:
+        dtype = np.result_type(*[p.dtype for p in first_parts]) if first_parts else np.float32
+    out = np.empty((batch, total_dim), dtype=dtype)
+
+    for j, p in enumerate(first_parts):  # Fill first row
+        out[0, offsets[j]:offsets[j] + dims[j]] = p.ravel().astype(dtype, copy=False)
+    for i in range(1, batch):  # Fill remaining rows
+        row = x[i]
+        for j, v in enumerate(row):
+            arr = np.asarray(v)
+            if arr.size != dims[j]:
+                raise ValueError("concat: inconsistent vector size across rows")
+            out[i, offsets[j]:offsets[j] + dims[j]] = arr.ravel().astype(dtype, copy=False)
+    return out
+
+
+def concat(*signals, dtype: np.dtype | str | None = None) -> Signal[np.ndarray]:
     """Concatenate multiple 1D array signals into a single array signal.
 
     - Aligns signals on the union of timestamps with carry-back semantics.
@@ -487,34 +516,20 @@ def concat(*signals) -> Signal[np.ndarray]:
         raise ValueError("concat requires at least one key")
     if n == 1:
         return signals[0]
+    return Elementwise(Join(*signals), partial(_concat_per_frame, dtype))
 
-    def fn(x: Sequence[tuple]) -> np.ndarray:
-        # x is a sequence of tuples (v1, v2, ..., vN) for the requested indices.
-        # High-performance path: preallocate (batch, total_dim) and fill via slicing.
-        batch = len(x)
-        if batch == 0:
-            return np.empty((0, 0), dtype=np.float32)
 
-        # Infer per-signal dimensions and dtype from the first row
-        first_parts = [np.asarray(v) for v in x[0]]
-        dims = [p.size for p in first_parts]
-        offsets = np.cumsum([0] + dims[:-1]) if dims else [0]
-        total_dim = int(sum(dims))
-        dtype = np.result_type(*[p.dtype for p in first_parts]) if first_parts else np.float32
-        out = np.empty((batch, total_dim), dtype=dtype)
+def _astype_per_frame(dtype: np.dtype, x: np.ndarray) -> np.ndarray:
+    """Pickable callable that casts arrays to a target dtype."""
+    arr = np.asarray(x)
+    if arr.dtype == dtype:
+        return arr
+    return arr.astype(dtype, copy=False)
 
-        for j, p in enumerate(first_parts):  # Fill first row
-            out[0, offsets[j]:offsets[j] + dims[j]] = p.ravel()
-        for i in range(1, batch):  # Fill remaining rows
-            row = x[i]
-            for j, v in enumerate(row):
-                arr = np.asarray(v)
-                if arr.size != dims[j]:
-                    raise ValueError("concat: inconsistent vector size across rows")
-                out[i, offsets[j]:offsets[j] + dims[j]] = arr.ravel()
-        return out
 
-    return Elementwise(Join(*signals), fn)
+def astype(signal: Signal[np.ndarray], dtype: np.dtype) -> Signal[np.ndarray]:
+    """Return a Signal view that casts batched values to a given dtype."""
+    return Elementwise(signal, partial(_astype_per_frame, dtype))
 
 
 class _PairwiseMap:
