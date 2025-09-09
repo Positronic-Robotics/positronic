@@ -59,6 +59,13 @@ class SLCamera:
 
         SUCCESS = sl.ERROR_CODE.SUCCESS
         TIME_REF_IMAGE = sl.TIME_REFERENCE.IMAGE
+        fps_counter = pimm.utils.RateCounter("Camera")
+
+        zed = sl.Camera()
+        error_code = zed.open(self.init_params)
+        if error_code != SUCCESS:
+            print(f"Failed to open camera: {error_code}")
+            return
 
         while not should_stop.value:
             result = zed.grab()
