@@ -256,17 +256,34 @@ class MujocoGripper:
     def __init__(self, sim: MujocoSim, actuator_name: str, joint_name: str):
         self.sim = sim
         self.actuator_name = actuator_name
+        self.actuator_control_range = self.sim.model.actuator(actuator_name).ctrlrange
         self.joint_name = joint_name
 
     def run(self, should_stop: pimm.SignalReader, clock: pimm.Clock):
         target_grip_reader = pimm.DefaultReader(self.target_grip, 0.0)
-
         while not should_stop.value:
             target_grip = target_grip_reader.value
             self.set_target_grip(target_grip)
 
-            self.grip.emit(self.sim.data.joint(self.joint_name).qpos.item())
+            current_grip = self.sim.data.joint(self.joint_name).qpos.item()
+            self.grip.emit(self._normalize_current_grip(current_grip))
             yield pimm.Pass()
 
     def set_target_grip(self, target_grip: float):
-        self.sim.data.actuator(self.actuator_name).ctrl = target_grip
+        self.sim.data.actuator(self.actuator_name).ctrl = self._denormalize_target_grip(target_grip)
+
+    def _denormalize_target_grip(self, target_grip: float) -> float:
+        """
+        Convert [0, 1] target grip to the range of the actuator control range
+        """
+        min_grip, max_grip = self.actuator_control_range
+        control_range = max_grip - min_grip
+        return min_grip + target_grip * control_range
+
+    def _normalize_current_grip(self, current_grip: float) -> float:
+        """
+        Convert the current grip to the range of [0, 1]
+        """
+        min_grip, max_grip = self.actuator_control_range
+        control_range = max_grip - min_grip
+        return (current_grip - min_grip) / control_range

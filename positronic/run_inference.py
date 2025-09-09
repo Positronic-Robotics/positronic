@@ -20,6 +20,8 @@ import positronic.cfg.hardware.gripper
 import positronic.cfg.hardware.camera
 import positronic.cfg.simulator
 import positronic.cfg.policy.observation
+import positronic.cfg.policy.action
+import positronic.cfg.policy.policy
 
 
 def rerun_log_observation(ts, obs):
@@ -38,14 +40,12 @@ def rerun_log_observation(ts, obs):
         if k.startswith("observation.images."):
             log_image(k, v)
 
-    for i, state in enumerate(obs['observation.state'].squeeze(0)):
-        rr.log(f"observation/state/{i}", rr.Scalar(state.item()))
+    rr.log(f"observation/state", rr.Scalars(obs['observation.state'].squeeze(0).cpu()))
 
 
 def rerun_log_action(ts, action):
     rr.set_time('time', duration=ts)
-    for i, action in enumerate(action):
-        rr.log(f"action/{i}", rr.Scalars(action))
+    rr.log(f"action", rr.Scalars(action))
 
 
 class Inference:
@@ -186,18 +186,19 @@ def main_sim(
         policy,
         rerun_path: str,
         loaders: Sequence[MujocoSceneTransform],
-        fps: int,
+        camera_fps: int,
+        policy_fps: int,
         device: str,
         simulation_time: float,
 ):
     sim = MujocoSim(mujoco_model_path, loaders)
     robot_arm = MujocoFranka(sim, suffix='_ph')
     cameras = {
-        'image.back': MujocoCamera(sim.model, sim.data, 'handcam_back_ph', (1280, 720), fps=fps),
-        'image.front': MujocoCamera(sim.model, sim.data, 'handcam_front_ph', (1280, 720), fps=fps),
+        'handcam_left': MujocoCamera(sim.model, sim.data, 'handcam_left_ph', (1280, 720), fps=camera_fps),
+        'back_view': MujocoCamera(sim.model, sim.data, 'back_view_ph', (1280, 720), fps=camera_fps),
     }
     gripper = MujocoGripper(sim, actuator_name='actuator8_ph', joint_name='finger_joint1_ph')
-    inference = Inference(state_encoder, action_decoder, device, policy, rerun_path)
+    inference = Inference(state_encoder, action_decoder, device, policy, rerun_path, policy_fps)
 
     with pimm.World(clock=sim) as world:
         cameras = cameras or {}
@@ -231,7 +232,7 @@ main_cfg = cfn.Config(
     robot_arm=positronic.cfg.hardware.roboarm.kinova,
     gripper=positronic.cfg.hardware.gripper.dh_gripper,
     state_encoder=positronic.cfg.policy.observation.end_effector_224,
-    action_decoder=positronic.cfg.policy.action.umi_relative,
+    action_decoder=positronic.cfg.policy.action.relative_robot_position,
     policy=positronic.cfg.policy.policy.act,
     cameras={
         'left': positronic.cfg.hardware.camera.arducam_left,
@@ -246,11 +247,12 @@ main_sim_cfg = cfn.Config(
     main_sim,
     mujoco_model_path="positronic/assets/mujoco/franka_table.xml",
     loaders=positronic.cfg.simulator.stack_cubes_loaders,
-    state_encoder=positronic.cfg.policy.observation.end_effector_back_front,
-    action_decoder=positronic.cfg.policy.action.relative_robot_position,
-    policy=positronic.cfg.policy.policy.act,
+    state_encoder=positronic.cfg.policy.observation.pi0,
+    action_decoder=positronic.cfg.policy.action.absolute_position,
+    policy=positronic.cfg.policy.policy.pi0,
     rerun_path="inference.rrd",
-    fps=60,
+    camera_fps=60,
+    policy_fps=15,
     device='cuda',
     simulation_time=10,
 )
