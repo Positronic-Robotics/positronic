@@ -113,10 +113,10 @@ class EpisodeContainer(Episode):
 
     def __init__(self,
                  signals: dict[str, Signal[Any]],
-                 static: dict[str, Any] = {},
+                 static: dict[str, Any] | None = None,
                  meta: dict[str, Any] | None = None) -> None:
         self._signals = signals
-        self._static = static
+        self._static = static or {}
         self._meta = meta or {}
 
     @property

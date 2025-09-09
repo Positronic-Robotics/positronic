@@ -14,8 +14,7 @@ RotRep = geom.Rotation.Representation
 
 
 def _convert_quat_to_array(q: geom.Rotation, representation: RotRep | str) -> np.ndarray:
-    array = q.to(representation)
-    return np.asarray(array).reshape(-1)
+    return q.to(representation).reshape(-1)
 
 
 def _relative_rot_vec(q_current: np.ndarray, q_target: np.ndarray, representation: RotRep | str) -> np.ndarray:
@@ -97,20 +96,12 @@ class RelativeTargetPositionAction(RotationTranslationGripAction):
     def __init__(self, rotation_representation: RotRep | str = RotRep.QUAT):
         super().__init__(rotation_representation)
 
-    @staticmethod
-    def _rot_rel_op(rot_rep: RotRep, q_cur: np.ndarray, q_tgt: np.ndarray) -> np.ndarray:
-        r_cur = geom.Rotation.from_quat(q_cur)
-        r_tgt = geom.Rotation.from_quat(q_tgt)
-        rel = r_cur.inv * r_tgt
-        rel = geom.Rotation.from_quat(geom.normalise_quat(rel.as_quat))
-        return rel.to(rot_rep).flatten()
-
     def encode_episode(self, episode: Episode) -> Signal[np.ndarray]:
         # Rotation difference: q_cur.inv * q_target, recoded
         rotations = transforms.pairwise(
             episode['robot_position_quaternion'],
             episode['target_robot_position_quaternion'],
-            partial(RelativeTargetPositionAction._rot_rel_op, self.rot_rep),
+            partial(_relative_rot_vec, representation=self.rot_rep),
         )
 
         # Translation difference: target - current
@@ -133,7 +124,7 @@ class RelativeTargetPositionAction(RotationTranslationGripAction):
         rot_mul = geom.Rotation.from_quat(inputs['robot_position_quaternion']) * q_diff
         rot_mul = geom.Rotation.from_quat(geom.normalise_quat(rot_mul.as_quat))
 
-        tr_add = np.asarray(inputs['robot_position_translation']) + np.asarray(tr_diff)
+        tr_add = inputs['robot_position_translation'] + tr_diff
 
         outputs = {
             'target_robot_position': geom.Transform3D(translation=tr_add, rotation=rot_mul),
@@ -160,14 +151,6 @@ class RelativeRobotPositionAction(RotationTranslationGripAction):
 
         self.offset_ns = offset_ns
 
-    @staticmethod
-    def _rot_rel_op_static(rot_rep: RotRep, qc: np.ndarray, qf: np.ndarray) -> np.ndarray:
-        r_cur = geom.Rotation.from_quat(qc)
-        r_fut = geom.Rotation.from_quat(qf)
-        rel = r_cur.inv * r_fut
-        rel = geom.Rotation.from_quat(geom.normalise_quat(rel.as_quat))
-        return rel.to(rot_rep).flatten()
-
     def encode_episode(self, episode: Episode) -> Signal[np.ndarray]:
         # Future quaternions and translations at t + offset_ns
         q_future = transforms.TimeOffsets(episode['robot_position_quaternion'], self.offset_ns)
@@ -175,7 +158,7 @@ class RelativeRobotPositionAction(RotationTranslationGripAction):
 
         # Rotation: q_cur.inv * q_future
         rotations = transforms.pairwise(episode['robot_position_quaternion'], q_future,
-                                        partial(RelativeRobotPositionAction._rot_rel_op_static, self.rot_rep))
+                                        partial(_relative_rot_vec, representation=self.rot_rep))
 
         # Translation: t_future - t_current
         translations = transforms.pairwise(episode['robot_position_translation'], t_future, np.subtract)
@@ -193,7 +176,7 @@ class RelativeRobotPositionAction(RotationTranslationGripAction):
         rot_mul = geom.Rotation.from_quat(inputs['reference_robot_position_quaternion']) * q_diff
         rot_mul = geom.Rotation.from_quat(geom.normalise_quat(rot_mul.as_quat))
 
-        tr_add = np.asarray(inputs['reference_robot_position_translation']) + np.asarray(tr_diff)
+        tr_add = inputs['reference_robot_position_translation'] + tr_diff
 
         outputs = {
             'target_robot_position': geom.Transform3D(translation=tr_add, rotation=rot_mul),

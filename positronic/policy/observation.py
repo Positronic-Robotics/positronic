@@ -45,7 +45,7 @@ class ObservationEncoder(transforms.EpisodeTransform):
         features['observation.state'] = {
             "dtype": "float64",
             "shape": (8, ),  # TODO: Invent the way to compute it dynamically
-            "names": ["state"],
+            "names": list(self._state_features),
         }
         return features
 

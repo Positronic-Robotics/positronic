@@ -1,5 +1,7 @@
 from typing import Any, Sequence
 
+import numpy as np
+
 from positronic.dataset import Signal, transforms
 
 
@@ -43,7 +45,7 @@ class ObservationEncoder(transforms.EpisodeTransform):
         features['observation.state'] = {
             "dtype": "float64",
             "shape": (8, ),  # TODO: Invent the way to compute it dynamically
-            "names": ["state"],
+            "names": list(self._state_features),
         }
         return features
 
@@ -54,8 +56,6 @@ class ObservationEncoder(transforms.EpisodeTransform):
           - images: (1, C, H, W), float32 in [0,1]
           - state: (1, D), float32
         """
-        import numpy as np
-
         obs: dict[str, Any] = {}
 
         # Encode images
