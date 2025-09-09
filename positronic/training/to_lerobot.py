@@ -9,6 +9,33 @@
 #     "scipy",
 # ]
 # ///
+"""
+PEP 723 standalone script
+-------------------------
+
+This script is intentionally decoupled from the core library’s dependencies so
+that `lerobot` does not become a hard requirement of `positronic`.
+
+How to run (recommended):
+- Use uv to run the script in an isolated env that also installs the local
+  project and its dependencies, while adding only the script-specific deps
+  (like `lerobot`) as declared above.
+
+Examples:
+- Convert to a new LeRobot dataset
+  uv run --with-editable . -s positronic/training/to_lerobot.py \
+    convert --input-dir /path/to/local_dataset --output-dir /path/to/lerobot_ds
+
+- Append to an existing LeRobot dataset
+  uv run --with-editable . -s positronic/training/to_lerobot.py \
+    append --dataset-dir /path/to/lerobot_ds --input-dir /path/to/local_dataset
+
+Notes:
+- The `--with-editable .` flag ensures your local `positronic` package and its
+  dependencies are available inside the ephemeral uv environment without
+  making `lerobot` a core dependency of the project.
+- Run `uv --version` to ensure uv is installed. See: https://docs.astral.sh/uv/
+"""
 from collections.abc import Sequence as AbcSequence
 from pathlib import Path
 
