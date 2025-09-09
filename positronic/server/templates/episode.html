@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Episode {{ episode_id }} / {{ num_episodes }} - Positronic Dataset Viewer</title>
+    <link rel="stylesheet" href="/static/styles.css?v={{ episode_id }}">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self' https://app.rerun.io; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline' https://app.rerun.io; frame-src https://app.rerun.io; connect-src 'self' https://app.rerun.io; img-src 'self' data: https://app.rerun.io">
+</head>
+<body class="episode-viewer">
+    <div class="header">
+        <div class="breadcrumbs">
+            <a href="/" class="breadcrumb-link">{{ repo_id }}</a>
+            <span class="breadcrumb-separator">›</span>
+            <span class="breadcrumb-text">Ep. </span>
+            <button onclick="window.location.href='/episode/{{ (episode_id - 1) % num_episodes }}'" class="nav-arrow-button" title="Previous episode">&lt;</button>
+            <form id="episode-form" class="episode-form" style="display: inline; margin: 0;">
+                <input type="text" id="episode-input" class="episode-input" value="{{ episode_id }}" data-original="{{ episode_id }}" maxlength="{{ num_episodes|string|length }}">
+            </form>
+            <button onclick="window.location.href='/episode/{{ (episode_id + 1) % num_episodes }}'" class="nav-arrow-button" title="Next episode">&gt;</button>
+            <span class="breadcrumb-text"> / {{ num_episodes }}</span>
+            {% if task %}<span class="task-description"> : {{ task }}</span>{% endif %}
+        </div>
+    </div>
+    <div id="viewer-container">
+        <div id="loading-overlay" class="loading-overlay">
+            Loading Rerun viewer...
+        </div>
+        <iframe id="viewer-iframe" style="display: none;"></iframe>
+    </div>
+
+    <script>
+        const episodeForm = document.getElementById('episode-form');
+        const episodeInput = document.getElementById('episode-input');
+        const maxEpisodes = {{ num_episodes }};
+
+        const maxEpisodeLength = String(maxEpisodes - 1).length;
+        episodeInput.style.width = `${maxEpisodeLength + 0.5}ch`;
+
+        episodeForm.addEventListener('submit', (e) => {
+            e.preventDefault();
+            const value = parseInt(episodeInput.value);
+            if (isNaN(value) || value < 0 || value >= maxEpisodes) {
+                episodeInput.value = episodeInput.dataset.original;
+                return;
+            }
+            window.location.href = `/episode/${value}`;
+        });
+
+        episodeInput.addEventListener('blur', () => {
+            const value = parseInt(episodeInput.value);
+            if (isNaN(value) || value < 0 || value >= maxEpisodes) {
+                episodeInput.value = episodeInput.dataset.original;
+            }
+        });
+
+        episodeInput.addEventListener('focus', () => {
+            episodeInput.select();
+        });
+
+        window.addEventListener('load', async () => {
+            const loadingOverlay = document.getElementById('loading-overlay');
+            const viewerIframe = document.getElementById('viewer-iframe');
+            try {
+                const rrdUrl = `${window.location.origin}/api/episode_rrd/{{ episode_id }}`;
+                const viewerUrl = `https://app.rerun.io/version/{{ rerun_version }}/index.html?url=${encodeURIComponent(rrdUrl)}`;
+                viewerIframe.src = viewerUrl;
+                viewerIframe.style.display = 'block';
+                loadingOverlay.style.display = 'none';
+            } catch (error) {
+                console.error('Error loading episode:', error);
+                loadingOverlay.innerHTML = `
+                    <div style="text-align: center;">
+                        <h2>Error loading episode</h2>
+                        <p>${error.message}</p>
+                        <br>
+                        <a href="/" class="dataset-button" style="margin-top: 20px;">Back to Dataset</a>
+                    </div>
+                `;
+            }
+        });
+    </script>
+</body>
+</html>
+
