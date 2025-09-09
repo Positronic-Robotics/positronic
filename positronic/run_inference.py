@@ -78,7 +78,6 @@ class Inference:
             for camera_name, frame in self.frames.items()
         }
 
-        reference_pose = None
         rate_limiter = pimm.RateLimiter(clock, hz=self.inference_fps)
 
         if self.rerun_path:
@@ -110,16 +109,11 @@ class Inference:
                 yield pimm.Sleep(0.001)
                 continue
 
-            if reference_pose is None:
-                reference_pose = robot_state.ee_pose.copy()
-
             inputs = {
                 'robot_position_translation': robot_state.ee_pose.translation,
                 'robot_position_rotation': robot_state.ee_pose.rotation.as_quat,
                 'robot_joints': robot_state.q,
                 'grip': gripper_state.data,
-                'reference_robot_position_translation': reference_pose.translation,
-                'reference_robot_position_quaternion': reference_pose.rotation.as_quat
             }
             obs = {}
             for key, val in self.state_encoder.encode(images, inputs).items():
@@ -133,10 +127,6 @@ class Inference:
             target_pos = action_dict['target_robot_position']
 
             roboarm_command = roboarm.command.CartesianMove(pose=target_pos)
-
-            # TODO: this should be inside the policy
-            if self.policy.chunk_start():
-                reference_pose = target_pos
 
             self.robot_commands.emit(roboarm_command)
             self.target_grip.emit(action_dict['target_grip'].item())
@@ -190,12 +180,13 @@ def main_sim(
         policy_fps: int,
         device: str,
         simulation_time: float,
+        camera_dict: Mapping[str, str],
 ):
     sim = MujocoSim(mujoco_model_path, loaders)
     robot_arm = MujocoFranka(sim, suffix='_ph')
     cameras = {
-        'handcam_left': MujocoCamera(sim.model, sim.data, 'handcam_left_ph', (1280, 720), fps=camera_fps),
-        'back_view': MujocoCamera(sim.model, sim.data, 'back_view_ph', (1280, 720), fps=camera_fps),
+        name: MujocoCamera(sim.model, sim.data, orig_name, (1280, 720), fps=camera_fps)
+        for name, orig_name in camera_dict.items()
     }
     gripper = MujocoGripper(sim, actuator_name='actuator8_ph', joint_name='finger_joint1_ph')
     inference = Inference(state_encoder, action_decoder, device, policy, rerun_path, policy_fps)
@@ -255,10 +246,25 @@ main_sim_cfg = cfn.Config(
     policy_fps=15,
     device='cuda',
     simulation_time=10,
+    camera_dict={
+        'handcam_left': 'handcam_left_ph',
+        'back_view': 'back_view_ph',
+    },
+)
+
+main_sim_act = main_sim_cfg.override(
+    policy=positronic.cfg.policy.policy.act,
+    state_encoder=positronic.cfg.policy.observation.franka_mujoco_stackcubes,
+    action_decoder=positronic.cfg.policy.action.absolute_position,
+    camera_dict={
+        'handcam_left': 'handcam_left_ph',
+        'back_view': 'back_view_ph',
+    },
 )
 
 if __name__ == "__main__":
     cfn.cli({
         "real": main_cfg,
         "sim": main_sim_cfg,
+        "sim_act": main_sim_act,
     })

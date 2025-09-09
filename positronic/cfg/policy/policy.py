@@ -2,7 +2,7 @@ import configuronic as cfn
 
 
 def _get_act_policy(checkpoint_path: str, use_temporal_ensembler: bool = False, n_action_steps: int | None = None):
-    from lerobot.common.policies.act.modeling_act import ACTPolicy, ACTTemporalEnsembler
+    from lerobot.policies.act.modeling_act import ACTPolicy, ACTTemporalEnsembler
     policy = ACTPolicy.from_pretrained(checkpoint_path, strict=True)
 
     if use_temporal_ensembler:
@@ -17,7 +17,7 @@ def _get_act_policy(checkpoint_path: str, use_temporal_ensembler: bool = False, 
 
 
 def _get_diffusion_policy(checkpoint_path: str):
-    from lerobot.common.policies.diffusion.modeling_diffusion import DiffusionPolicy
+    from lerobot.policies.diffusion.modeling_diffusion import DiffusionPolicy
     policy = DiffusionPolicy.from_pretrained(checkpoint_path, local_files_only=True, strict=True)
     return policy
 
