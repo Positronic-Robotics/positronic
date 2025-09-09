@@ -1,7 +1,5 @@
 """A FastAPI web server for visualizing Positronic LocalDatasets using Rerun."""
 
-from __future__ import annotations
-
 import logging
 import os
 import shutil

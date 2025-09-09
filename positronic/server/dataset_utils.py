@@ -1,12 +1,10 @@
 """Dataset utilities for Positronic dataset visualization (images-only)."""
 
-from __future__ import annotations
-
 import logging
 import os
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Optional, Tuple
+from typing import Any, Literal, Optional, Tuple
 
 import numpy as np
 import rerun as rr
@@ -21,7 +19,7 @@ from positronic.dataset.video import VideoSignal
 @dataclass
 class _SignalInfo:
     name: str
-    kind: str  # 'video' | 'vector' | 'scalar' | 'tensor'
+    kind: Literal['video', 'vector', 'scalar', 'tensor']
     shape: tuple[int, ...] | None
     dtype: str | None
 
@@ -38,16 +36,15 @@ def _infer_signal_info(ep: Episode, name: str) -> _SignalInfo:
         if len(v) == 0:
             return _SignalInfo(name=name, kind='scalar', shape=(), dtype=None)
         val, _ts = v[0]
-        if isinstance(val, np.ndarray):
-            if val.ndim == 0:
+        match val:
+            case np.ndarray() if val.ndim == 0:
                 return _SignalInfo(name=name, kind='scalar', shape=(), dtype=str(val.dtype))
-            elif val.ndim == 1:
+            case np.ndarray() if val.ndim == 1:
                 return _SignalInfo(name=name, kind='vector', shape=tuple(map(int, val.shape)), dtype=str(val.dtype))
-            else:
+            case np.ndarray():
                 return _SignalInfo(name=name, kind='tensor', shape=tuple(map(int, val.shape)), dtype=str(val.dtype))
-        else:
-            # Python scalar
-            return _SignalInfo(name=name, kind='scalar', shape=(), dtype=type(val).__name__)
+            case _:  # Python scalar
+                return _SignalInfo(name=name, kind='scalar', shape=(), dtype=type(val).__name__)
     else:
         # Static item; ignore here
         return _SignalInfo(name=name, kind='static', shape=None, dtype=None)
@@ -86,7 +83,7 @@ def get_dataset_info(ds: LocalDataset) -> dict[str, Any]:
 def get_episodes_list(ds: LocalDataset) -> list[dict[str, Any]]:
     return [{
         'index': idx,
-        'duration': ep.duraion_ns // 1e9,
+        'duration': ep.duraion_ns / 1e9,
         'task': ep.static.get('task', None),
     } for idx, ep in enumerate(ds)]
 
@@ -191,10 +188,7 @@ def _setup_series_names(ep: Episode, signal_names: list[str]) -> None:
         except Exception:
             dims = 1
         names = [str(i) for i in range(max(1, dims))]
-        try:
-            rr.log(f'/signals/{key}', rr.SeriesLines(names=names), static=True)
-        except Exception:
-            pass
+        rr.log(f'/signals/{key}', rr.SeriesLines(names=names), static=True)
 
 
 def _log_episode(ep: Episode, video_names: list[str], signal_names: list[str]) -> None:
