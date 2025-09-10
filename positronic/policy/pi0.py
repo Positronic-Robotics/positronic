@@ -23,6 +23,7 @@ def _prepare_observations(observation: Mapping[str, np.ndarray]) -> Mapping[str,
 
     return openpi_observation
 
+
 class PI0RemotePolicy:
     def __init__(self, host: str, port: int, n_action_steps: int | None = None):
         self.client = WebsocketClientPolicy(host, port)

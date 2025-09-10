@@ -40,12 +40,12 @@ def rerun_log_observation(ts, obs):
         if k.startswith("observation.images."):
             log_image(k, v)
 
-    rr.log(f"observation/state", rr.Scalars(obs['observation.state'].squeeze(0).cpu()))
+    rr.log("observation/state", rr.Scalars(obs['observation.state'].squeeze(0).cpu()))
 
 
 def rerun_log_action(ts, action):
     rr.set_time('time', duration=ts)
-    rr.log(f"action", rr.Scalars(action))
+    rr.log("action", rr.Scalars(action))
 
 
 class Inference:
