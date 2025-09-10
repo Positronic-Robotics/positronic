@@ -117,16 +117,15 @@ class Inference:
                 'robot_joints': robot_state.q,
                 'grip': gripper_state.data,
             }
-
-            if self.task is not None:
-                inputs['task'] = self.task
-
             obs = {}
             for key, val in self.state_encoder.encode(images, inputs).items():
                 if isinstance(val, np.ndarray):
                     obs[key] = torch.from_numpy(val).to(self.device)
                 else:
                     obs[key] = torch.as_tensor(val).to(self.device)
+
+            if self.task is not None:
+                obs['task'] = self.task
 
             action = self.policy.select_action(obs).squeeze(0).cpu().numpy()
             action_dict = self.action_decoder.decode(action, inputs)
@@ -262,8 +261,12 @@ main_sim_cfg = cfn.Config(
 
 main_sim_pi0 = main_sim_cfg.override(
     policy=positronic.cfg.policy.policy.pi0,
-    state_encoder=positronic.cfg.policy.observation.franka_mujoco_stackcubes,
+    state_encoder=positronic.cfg.policy.observation.pi0,
     action_decoder=positronic.cfg.policy.action.absolute_position,
+    camera_dict={
+        'left': 'handcam_left_ph',
+        'side': 'back_view_ph',
+    },
 )
 
 main_sim_act = main_sim_cfg.override(
