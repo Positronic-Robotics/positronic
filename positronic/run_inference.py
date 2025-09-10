@@ -72,6 +72,7 @@ class Inference:
         self.device = device
         self.rerun_path = rerun_path
         self.inference_fps = inference_fps
+        self.task = task
 
     def run(self, should_stop: pimm.SignalReader, clock: pimm.Clock) -> Iterator[pimm.Sleep]:  # noqa: C901
         frames = {
@@ -112,7 +113,7 @@ class Inference:
 
             inputs = {
                 'robot_position_translation': robot_state.ee_pose.translation,
-                'robot_position_rotation': robot_state.ee_pose.rotation.as_quat,
+                'robot_position_quaternion': robot_state.ee_pose.rotation.as_quat,
                 'robot_joints': robot_state.q,
                 'grip': gripper_state.data,
             }

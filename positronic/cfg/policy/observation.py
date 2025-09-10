@@ -58,7 +58,7 @@ def franka_mujoco_stackcubes():
 def pi0():
     from positronic.policy.observation import ObservationEncoder
     return ObservationEncoder(
-        state_features=['robot_position_rotation', 'robot_position_translation', 'grip'],
+        state_features=['robot_position_quaternion', 'robot_position_translation', 'grip'],
         image=('handcam_left.image', (224, 224)),
         side=('back_view.image', (224, 224)),
     )

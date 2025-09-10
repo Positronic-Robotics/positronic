@@ -11,7 +11,7 @@ except ImportError:
     raise ImportError(f"openpi_client not installed, install from {OPENPI_CLIENT_URL}")
 
 
-def _prepare_observations(observation: Mapping[str, np.ndarray]) -> Mapping[str, np.ndarray]:
+def _prepare_observations(observation: Mapping[str, torch.Tensor]) -> Mapping[str, np.ndarray]:
     openpi_observation = {
         "observation/image": observation["observation.images.side"][0].cpu().numpy(),
         "observation/wrist_image": observation["observation.images.image"][0].cpu().numpy(),
@@ -30,7 +30,7 @@ class PI0RemotePolicy:
         self.action_queue = deque()
         self.n_action_steps = n_action_steps
 
-    def select_action(self, observation: Mapping[str, np.ndarray]) -> np.ndarray:
+    def select_action(self, observation: Mapping[str, torch.Tensor]) -> np.ndarray:
         observation = _prepare_observations(observation)
 
         if len(self.action_queue) == 0:
@@ -42,9 +42,6 @@ class PI0RemotePolicy:
         action = self.action_queue.popleft()
 
         return torch.tensor(action)
-
-    def chunk_start(self) -> bool:
-        return len(self.action_queue) > 0
 
     def to(self, device: str):
         return self
