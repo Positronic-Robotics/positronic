@@ -244,7 +244,8 @@ class DiskEpisodeWriter(EpisodeWriter):
                 self._writers[signal_name] = VideoSignalWriter(video_path, frames_index)
             else:
                 # Scalar/vector signal
-                self._writers[signal_name] = SimpleSignalWriter(self._path / f"{signal_name}.parquet")
+                self._writers[signal_name] = SimpleSignalWriter(self._path / f"{signal_name}.parquet",
+                                                                drop_equal_bytes_threshold=128)
 
         self._writers[signal_name].append(data, ts_ns)
 

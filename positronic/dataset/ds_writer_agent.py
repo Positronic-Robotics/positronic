@@ -120,37 +120,17 @@ def _handle_command(ds_writer: DatasetWriter, cmd: DsWriterCommand, ep_writer: E
     return ep_writer, ep_counter
 
 
-def _values_equal(a: Any, b: Any) -> bool:
-    if isinstance(a, np.ndarray) and isinstance(b, np.ndarray):
-        return np.array_equal(a, b)
-    try:
-        return a == b
-    except Exception:
-        return False
-
-
-def _append_processed(ep_writer: EpisodeWriter, name: str, value: Any, clock: pimm.Clock,
-                      last_cache: dict[str, Any]) -> None:
-    """Append processed value(s) if changed since last append.
-
-    Supports serializers returning dicts of suffix->value by comparing and
-    caching per fully-qualified signal name (base + suffix).
-    """
+def _append_processed(ep_writer: EpisodeWriter, name: str, value: Any, clock: pimm.Clock) -> None:
     ts = clock.now_ns()
-    # Unified iterator of (full_name, v) pairs to handle both dict and scalar cases
     if isinstance(value, dict):
         items = ((name + suffix, v) for suffix, v in value.items())
     else:
-        items = ((name, value), )
+        items = ((name, value),)
 
     for full_name, v in items:
         if v is None:
             continue
-        last_v = last_cache.get(full_name)
-        if last_v is not None and _values_equal(v, last_v):
-            continue
         ep_writer.append(full_name, v, ts)
-        last_cache[full_name] = v
 
 
 class DsWriterAgent:
@@ -178,8 +158,6 @@ class DsWriterAgent:
         self._inputs_view = _KeyFrozenMapping(self._inputs)
         # Only keep explicitly provided serializers; None means pass-through
         self._serializers = {name: serializer for name, serializer in signals_spec.items() if serializer is not None}
-        # Per-episode cache of last appended values per fully-qualified signal name
-        self._last_written: dict[str, Any] = {}
 
     @property
     def inputs(self) -> dict[str, pimm.SignalReader[Any]]:
@@ -205,10 +183,7 @@ class DsWriterAgent:
         while not should_stop.value:
             cmd, cmd_updated = commands.value
             if cmd_updated:
-                prev_ep_writer = ep_writer
                 ep_writer, ep_counter = _handle_command(self.ds_writer, cmd, ep_writer, ep_counter)
-                if prev_ep_writer != ep_writer:  # Reset cache on episode start/stop transitions
-                    self._last_written.clear()
 
             if ep_writer is not None:
                 for name, reader in signals.items():
@@ -217,7 +192,7 @@ class DsWriterAgent:
                         serializer = self._serializers.get(name)
                         if serializer is not None:
                             value = serializer(value)
-                        _append_processed(ep_writer, name, value, clock, self._last_written)
+                        _append_processed(ep_writer, name, value, clock)
 
             yield pimm.Sleep(limiter.wait_time())
 

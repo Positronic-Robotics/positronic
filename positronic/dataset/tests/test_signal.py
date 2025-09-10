@@ -64,6 +64,31 @@ class TestSignalWriterAppend:
             with pytest.raises(ValueError, match="is not increasing"):
                 writer.append(43, 999)
 
+    def test_drop_equal_bytes_threshold_scalar(self, tmp_path):
+        fp = tmp_path / "dedupe_scalar.parquet"
+        with SimpleSignalWriter(fp, drop_equal_bytes_threshold=32) as w:
+            w.append(42, 1000)
+            w.append(42, 2000)  # equal, dropped
+            w.append(43, 3000)  # different, kept
+        s = SimpleSignal(fp)
+        assert len(s) == 2
+        assert s[0] == (42, 1000)
+        assert s[1] == (43, 3000)
+
+    def test_drop_equal_bytes_threshold_numpy_small(self, tmp_path):
+        fp = tmp_path / "dedupe_array.parquet"
+        with SimpleSignalWriter(fp, drop_equal_bytes_threshold=64) as w:
+            w.append(np.array([1, 2, 3], dtype=np.int64), 1000)
+            w.append(np.array([1, 2, 3], dtype=np.int64), 2000)  # equal content, dropped
+            w.append(np.array([1, 2, 4], dtype=np.int64), 3000)  # different, kept
+        s = SimpleSignal(fp)
+        assert len(s) == 2
+        v0, t0 = s[0]
+        v1, t1 = s[1]
+        np.testing.assert_array_equal(v0, [1, 2, 3])
+        np.testing.assert_array_equal(v1, [1, 2, 4])
+        assert (t0, t1) == (1000, 3000)
+
 
 class TestSignalWriterContext:
 

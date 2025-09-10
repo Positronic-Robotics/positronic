@@ -1,5 +1,5 @@
 from pathlib import Path
-from typing import Sequence, TypeVar
+from typing import Any, Sequence, TypeVar
 
 import numpy as np
 import pyarrow as pa
@@ -66,15 +66,18 @@ class SimpleSignalWriter(SignalWriter[T]):
     Supports scalars and fixed-size vectors/arrays.
     """
 
-    def __init__(self, filepath: Path, chunk_size: int = 10000):
+    def __init__(self, filepath: Path, chunk_size: int = 10000, drop_equal_bytes_threshold: int | None = None):
         """Initialize Signal writer to save data to a parquet file.
 
         Args:
             filepath: Path to the output parquet file
             chunk_size: Number of records to accumulate before writing a chunk (default 10000)
+            drop_equal_bytes_threshold: If set, and the first record's byte-size is below this
+                threshold, subsequent appends will drop values equal to the last written value.
         """
         self.filepath = filepath
         self.chunk_size = chunk_size
+        self._drop_equal_bytes_threshold = drop_equal_bytes_threshold
         self._writer = None
         self._timestamps: list[int] = []
         self._values: list[object] = []
@@ -83,6 +86,26 @@ class SimpleSignalWriter(SignalWriter[T]):
         self._last_ts = None
         self._expected_shape = None
         self._expected_dtype = None
+        self._dedupe_enabled = False
+        self._last_value: Any | None = None
+
+    def _equal(self, a: Any, b: Any) -> bool:
+        if isinstance(a, np.ndarray) and isinstance(b, np.ndarray):
+            return np.array_equal(a, b)
+        try:
+            return a == b
+        except Exception:
+            return False
+
+    def _nbytes(self, v: Any) -> int | None:
+        if isinstance(v, np.ndarray):
+            return int(v.nbytes)
+        if isinstance(v, (bytes, bytearray)):
+            return len(v)
+        try:
+            return int(np.array(v).nbytes)
+        except Exception:
+            return None
 
     def _flush_chunk(self):
         """Write current chunk to parquet file."""
@@ -109,7 +132,6 @@ class SimpleSignalWriter(SignalWriter[T]):
         if self._last_ts is not None and ts_ns <= self._last_ts:
             raise ValueError(f"Timestamp {ts_ns} is not increasing (last was {self._last_ts})")
 
-        # Normalize the input value without changing the declared generic type T
         value: object = data
         if isinstance(value, pa.Array):  # runtime conversion; keep linter happy via getattr
             value = value.to_numpy()
@@ -132,9 +154,18 @@ class SimpleSignalWriter(SignalWriter[T]):
                 if type(value) is not self._expected_dtype:
                     raise ValueError(f"Data type {type(value)} doesn't match expected type {self._expected_dtype}")
 
+        if self._last_ts is None and self._drop_equal_bytes_threshold is not None:
+            size_bytes = self._nbytes(value)
+            if size_bytes is not None and size_bytes < self._drop_equal_bytes_threshold:
+                self._dedupe_enabled = True
+
+        if (self._dedupe_enabled and self._last_value is not None and self._equal(value, self._last_value)):
+            return
+
         self._timestamps.append(int(ts_ns))
         self._values.append(value)
         self._last_ts = ts_ns
+        self._last_value = value
 
         if len(self._timestamps) >= self.chunk_size:
             self._flush_chunk()
