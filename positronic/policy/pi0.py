@@ -16,8 +16,10 @@ def _prepare_observations(observation: Mapping[str, np.ndarray]) -> Mapping[str,
         "observation/image": observation["observation.images.side"][0].cpu().numpy(),
         "observation/wrist_image": observation["observation.images.image"][0].cpu().numpy(),
         "observation/state": observation["observation.state"].cpu().numpy()[0],
-        "prompt": "pick up the green cube and put in on top of the red cube",
     }
+
+    if "task" in observation:
+        openpi_observation["prompt"] = observation["task"]
 
     return openpi_observation
 

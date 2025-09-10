@@ -64,6 +64,7 @@ class Inference:
         policy,
         rerun_path: str | None = None,
         inference_fps: int = 30,
+        task: str | None = None,
     ):
         self.state_encoder = state_encoder
         self.action_decoder = action_decoder
@@ -115,6 +116,10 @@ class Inference:
                 'robot_joints': robot_state.q,
                 'grip': gripper_state.data,
             }
+
+            if self.task is not None:
+                inputs['task'] = self.task
+
             obs = {}
             for key, val in self.state_encoder.encode(images, inputs).items():
                 if isinstance(val, np.ndarray):
@@ -181,6 +186,7 @@ def main_sim(
         device: str,
         simulation_time: float,
         camera_dict: Mapping[str, str],
+        task: str | None,
 ):
     sim = MujocoSim(mujoco_model_path, loaders)
     robot_arm = MujocoFranka(sim, suffix='_ph')
@@ -189,7 +195,7 @@ def main_sim(
         for name, orig_name in camera_dict.items()
     }
     gripper = MujocoGripper(sim, actuator_name='actuator8_ph', joint_name='finger_joint1_ph')
-    inference = Inference(state_encoder, action_decoder, device, policy, rerun_path, policy_fps)
+    inference = Inference(state_encoder, action_decoder, device, policy, rerun_path, policy_fps, task)
 
     with pimm.World(clock=sim) as world:
         cameras = cameras or {}
@@ -250,6 +256,7 @@ main_sim_cfg = cfn.Config(
         'handcam_left': 'handcam_left_ph',
         'back_view': 'back_view_ph',
     },
+    task="pick up the green cube and put in on top of the red cube",
 )
 
 main_sim_pi0 = main_sim_cfg.override(
