@@ -423,3 +423,65 @@ def test_robot_command_serializer_variants(world, clock, run_agent):
     np.testing.assert_allclose(items["cmd.pose"], np.concatenate([pose.translation, pose.rotation.as_quat]))
     np.testing.assert_allclose(items["cmd.joints"], joints)
     assert items["cmd.reset"] == 1
+
+
+def test_skips_append_when_value_unchanged(world, clock, run_agent):
+    ds = FakeDatasetWriter()
+    agent, cmd_em, emitters = build_agent_with_pipes({"x": None}, ds, world)
+
+    def driver(stop_reader, clk):
+        cmd_em.emit(DsWriterCommand(DsWriterCommandType.START_EPISODE))
+        yield pimm.Sleep(0.001)
+        emitters["x"].emit(42)
+        yield pimm.Sleep(0.001)
+        # Emit the same value again -> should be deduped
+        emitters["x"].emit(42)
+        yield pimm.Sleep(0.001)
+        cmd_em.emit(DsWriterCommand(DsWriterCommandType.STOP_EPISODE))
+        yield pimm.Sleep(0.001)
+
+    run_agent(agent, driver)
+
+    w = ds.created[-1]
+    assert [(s, v) for (s, v, _) in w.appends] == [("x", 42)]
+
+
+def test_skips_append_for_equal_arrays_and_expanded(world, clock, run_agent):
+    ds = FakeDatasetWriter()
+
+    def expand(v):
+        # Record base and an extra derived value
+        return {"": v, ".extra": v + 1}
+
+    agent, cmd_em, emitters = build_agent_with_pipes({"arr": None, "img": expand}, ds, world)
+
+    a1 = np.array([1, 2, 3], dtype=np.int64)
+    a2 = np.array([1, 2, 3], dtype=np.int64)  # equal content, different object
+    im1 = 10
+    im2 = 10  # equal scalar
+
+    def driver(stop_reader, clk):
+        cmd_em.emit(DsWriterCommand(DsWriterCommandType.START_EPISODE))
+        yield pimm.Sleep(0.001)
+        emitters["arr"].emit(a1)
+        emitters["img"].emit(im1)
+        yield pimm.Sleep(0.001)
+        # Emit equal content again -> should be deduped for both
+        emitters["arr"].emit(a2)
+        emitters["img"].emit(im2)
+        yield pimm.Sleep(0.001)
+        cmd_em.emit(DsWriterCommand(DsWriterCommandType.STOP_EPISODE))
+        yield pimm.Sleep(0.001)
+
+    run_agent(agent, driver)
+
+    w = ds.created[-1]
+    names_vals = [(s, v) for (s, v, _) in w.appends]
+    # Only one append for arr
+    assert names_vals.count(("arr", a1)) == 1
+    # For expanded, only one set of appends
+    assert ("img", im1) in names_vals
+    assert ("img.extra", im1 + 1) in names_vals
+    # No duplicates
+    assert names_vals.count(("img", im1)) == 1
+    assert names_vals.count(("img.extra", im1 + 1)) == 1
