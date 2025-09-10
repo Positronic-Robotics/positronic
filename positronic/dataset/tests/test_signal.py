@@ -351,3 +351,48 @@ class TestCoreSignalViews:
     def test_time_array_empty(self, sig_simple):
         view = sig_simple.time[[]]
         assert len(view) == 0
+
+
+class TestSignalDtypeShape:
+
+    def test_empty_signal_dtype_shape_raises(self, tmp_path):
+        fp = tmp_path / "empty.parquet"
+        with SimpleSignalWriter(fp):
+            pass
+        s = SimpleSignal(fp)
+        with pytest.raises(ValueError):
+            _ = s.dtype
+        with pytest.raises(ValueError):
+            _ = s.shape
+
+    def test_scalar_signal_dtype_shape(self, tmp_path):
+        s = create_signal(tmp_path, [(42, 1000), (43, 2000)])
+        # Python ints may be materialized as numpy integer scalars
+        assert s.dtype in (int, np.int64, np.int32)
+        assert s.shape == ()
+
+    def test_array_signal_dtype_shape(self, tmp_path):
+        arr1 = np.array([1.0, 2.0], dtype=np.float32)
+        arr2 = np.array([3.0, 4.0], dtype=np.float32)
+        s = create_signal(tmp_path, [(arr1, 1000), (arr2, 2000)], name="arr.parquet")
+        # dtype eq handles dtype('float32') vs np.float32
+        assert s.dtype == np.float32
+        assert s.shape == (2,)
+
+    def test_tuple_signal_dtype_shape(self):
+        ts = np.array([1000, 2000], dtype=np.int64)
+        obj_vals = np.empty(2, dtype=object)
+        obj_vals[0] = (np.array([1, 2, 3], dtype=np.int32), 5.0)
+        obj_vals[1] = (np.array([4, 5, 6], dtype=np.int32), 6.0)
+        sig = DummySignal(ts, obj_vals)
+        assert sig.dtype == (np.int32, float)
+        assert sig.shape == ((3,), ())
+
+    def test_other_object_dtype_shape(self):
+        ts = np.array([1000, 2000], dtype=np.int64)
+        obj_vals = np.empty(2, dtype=object)
+        obj_vals[0] = [1, 2, 3]
+        obj_vals[1] = [4, 5, 6]
+        sig = DummySignal(ts, obj_vals)
+        assert sig.dtype is list
+        assert sig.shape is None

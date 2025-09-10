@@ -1,7 +1,7 @@
 from abc import ABC, abstractmethod
 from collections.abc import Sequence as SequenceABC
 from contextlib import AbstractContextManager
-from typing import (Generic, Protocol, Sequence, Tuple, TypeAlias, TypeVar,
+from typing import (Any, Generic, Protocol, Sequence, Tuple, TypeAlias, TypeVar,
                     final, runtime_checkable)
 
 import numpy as np
@@ -14,6 +14,27 @@ RealNumericArrayLike: TypeAlias = Sequence[int] | Sequence[float] | np.ndarray
 
 def is_realnum_dtype(dtype) -> bool:
     return np.issubdtype(dtype, np.integer) or np.issubdtype(dtype, np.floating)
+
+
+def _infer_item_dtype_shape(item: Any) -> tuple[Any, Any]:
+    """Infer dtype and shape for a single signal element.
+
+    Rules:
+    - numpy.ndarray: dtype = array.dtype, shape = array.shape
+    - numeric scalars (Python int/float or numpy integer/floating scalars): dtype = type(item), shape = ()
+    - tuple: dtype, shape are tuples of per-element dtype/shape
+    - other: dtype = type(item), shape = None
+    """
+    if isinstance(item, np.ndarray):
+        return item.dtype, item.shape
+    if isinstance(item, (np.integer, np.floating, int, float)):
+        return type(item), ()
+    if isinstance(item, tuple):
+        dts_shapes = tuple(_infer_item_dtype_shape(x) for x in item)
+        dts = tuple(ds[0] for ds in dts_shapes)
+        shapes = tuple(ds[1] for ds in dts_shapes)
+        return dts, shapes
+    return type(item), None
 
 
 @runtime_checkable
@@ -62,6 +83,22 @@ class Signal(Sequence[Tuple[T, int]], ABC, Generic[T]):
             raise ValueError("Signal is empty")
         return int(np.asarray(self._ts_at([len(self) - 1]))[0])
 
+    @property
+    def dtype(self):
+        """Default dtype of signal elements. Computed based on the first element.
+
+        Raises ValueError if the signal is empty.
+        """
+        return self._compute_dtype_shape()[0]
+
+    @property
+    def shape(self):
+        """Default shape of signal elements. Computed based on the first element.
+
+        Raises ValueError if the signal is empty.
+        """
+        return self._compute_dtype_shape()[1]
+
     @final
     @property
     def time(self) -> TimeIndexerLike[T]:
@@ -94,6 +131,20 @@ class Signal(Sequence[Tuple[T, int]], ABC, Generic[T]):
                 return _SignalView(self, arr)
             case _:
                 raise TypeError(f"Unsupported index type: {type(index_or_slice)}")
+
+    def _compute_dtype_shape(self) -> tuple[Any, Any]:
+        """Compute and cache the dtype and shape for signal elements.
+
+        Returns a tuple (dtype, shape). Raises ValueError for empty signals.
+        """
+        if not hasattr(self, "_cached_dtype") or not hasattr(self, "_cached_shape"):
+            if len(self) == 0:
+                raise ValueError("Signal is empty")
+            first_val = self._values_at([0])[0]
+            dt, sh = _infer_item_dtype_shape(first_val)
+            self._cached_dtype = dt
+            self._cached_shape = sh
+        return self._cached_dtype, self._cached_shape
 
 
 class _SignalViewTime(TimeIndexerLike[T], Generic[T]):
