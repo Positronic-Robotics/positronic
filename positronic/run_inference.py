@@ -252,6 +252,12 @@ main_sim_cfg = cfn.Config(
     },
 )
 
+main_sim_pi0 = main_sim_cfg.override(
+    policy=positronic.cfg.policy.policy.pi0,
+    state_encoder=positronic.cfg.policy.observation.franka_mujoco_stackcubes,
+    action_decoder=positronic.cfg.policy.action.absolute_position,
+)
+
 main_sim_act = main_sim_cfg.override(
     policy=positronic.cfg.policy.policy.act,
     state_encoder=positronic.cfg.policy.observation.franka_mujoco_stackcubes,
@@ -265,6 +271,6 @@ main_sim_act = main_sim_cfg.override(
 if __name__ == "__main__":
     cfn.cli({
         "real": main_cfg,
-        "sim": main_sim_cfg,
+        "sim_pi0": main_sim_pi0,
         "sim_act": main_sim_act,
     })
