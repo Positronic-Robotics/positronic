@@ -8,7 +8,7 @@ try:
     from openpi_client.websocket_client_policy import WebsocketClientPolicy
 except ImportError:
     OPENPI_CLIENT_URL = "https://github.com/Physical-Intelligence/openpi/tree/main/packages/openpi-client"
-    print(f"openpi_client not installed, install from {OPENPI_CLIENT_URL}")
+    raise ImportError(f"openpi_client not installed, install from {OPENPI_CLIENT_URL}")
 
 
 def _prepare_observations(observation: Mapping[str, np.ndarray]) -> Mapping[str, np.ndarray]:
