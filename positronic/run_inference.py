@@ -92,7 +92,7 @@ class Inference:
                 yield pimm.Sleep(0.001)
                 continue
 
-            images = {f"{k}.image": v.data['image'] for k, v in frame_messages.items()}
+            images = {f"image.{k}": v.data['image'] for k, v in frame_messages.items()}
 
             robot_state = self.robot_state.read()
             if robot_state is None:
