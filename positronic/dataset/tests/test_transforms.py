@@ -144,14 +144,22 @@ def test_time_offsets_positive(sig_simple):
         ((40, 50, 50), 5000),
     ]
 
-    # Multiple deltas with ref timestamps -> values then reference timestamps
+    # Multiple deltas with ref timestamps -> (values_tuple, np.array(ref_timestamps))
     to_multi_ref = TimeOffsets(sig_simple, -1000, 0, 1000, include_ref_ts=True)
-    assert list(to_multi_ref) == [
-        ((10, 20, 30, 1000, 2000, 3000), 2000),
-        ((20, 30, 40, 2000, 3000, 4000), 3000),
-        ((30, 40, 50, 3000, 4000, 5000), 4000),
-        ((40, 50, 50, 4000, 5000, 5000), 5000),
+    actual = list(to_multi_ref)
+    exp_vals = [(10, 20, 30), (20, 30, 40), (30, 40, 50), (40, 50, 50)]
+    exp_ts_arrays = [
+        np.array([1000, 2000, 3000], dtype=np.int64),
+        np.array([2000, 3000, 4000], dtype=np.int64),
+        np.array([3000, 4000, 5000], dtype=np.int64),
+        np.array([4000, 5000, 5000], dtype=np.int64),
     ]
+    exp_ref_ts = [2000, 3000, 4000, 5000]
+    assert len(actual) == 4
+    for i, ((vals, ts_arr), ref_ts) in enumerate(actual):
+        assert tuple(vals) == exp_vals[i]
+        assert np.array_equal(ts_arr, exp_ts_arrays[i])
+        assert ref_ts == exp_ref_ts[i]
 
 
 def test_time_offsets_negative(sig_simple):
@@ -303,6 +311,70 @@ def test_join_basic_no_ref_timestamps():
         ((50, 4), 5000),
         ((50, 5), 5500),
     ]
+
+
+def test_index_offsets_multiple_with_ref_timestamps(sig_simple):
+    # Offsets [-1, 0, 1] should return grouped timestamps as np.ndarray[int64]
+    j = IndexOffsets(sig_simple, -1, 0, 1, include_ref_ts=True)
+    actual = list(j)
+    exp_vals = [
+        (10, 20, 30),
+        (20, 30, 40),
+        (30, 40, 50),
+    ]
+    exp_ts_arrays = [
+        np.array([1000, 2000, 3000], dtype=np.int64),
+        np.array([2000, 3000, 4000], dtype=np.int64),
+        np.array([3000, 4000, 5000], dtype=np.int64),
+    ]
+    exp_ref_ts = [2000, 3000, 4000]
+    assert len(actual) == 3
+    for i, ((vals, ts_arr), ref_ts) in enumerate(actual):
+        assert tuple(vals) == exp_vals[i]
+        assert np.array_equal(ts_arr, exp_ts_arrays[i])
+        assert ref_ts == exp_ref_ts[i]
+
+
+def test_join_with_ref_timestamps_grouped():
+    # s1: 1000..5000 step 1000
+    ts1 = [1000, 2000, 3000, 4000, 5000]
+    v1 = [10, 20, 30, 40, 50]
+    s1 = DummySignal(ts1, v1)
+    # s2: shifted by +500 and extended to 5500
+    ts2 = [1500, 2500, 3500, 4500, 5500]
+    v2 = [1, 2, 3, 4, 5]
+    s2 = DummySignal(ts2, v2)
+
+    jn = Join(s1, s2, include_ref_ts=True)
+    actual = list(jn)
+    exp_vals = [
+        (10, 1),
+        (20, 1),
+        (20, 2),
+        (30, 2),
+        (30, 3),
+        (40, 3),
+        (40, 4),
+        (50, 4),
+        (50, 5),
+    ]
+    exp_ts_arrays = [
+        np.array([1000, 1500], dtype=np.int64),
+        np.array([2000, 1500], dtype=np.int64),
+        np.array([2000, 2500], dtype=np.int64),
+        np.array([3000, 2500], dtype=np.int64),
+        np.array([3000, 3500], dtype=np.int64),
+        np.array([4000, 3500], dtype=np.int64),
+        np.array([4000, 4500], dtype=np.int64),
+        np.array([5000, 4500], dtype=np.int64),
+        np.array([5000, 5500], dtype=np.int64),
+    ]
+    exp_union_ts = [1500, 2000, 2500, 3000, 3500, 4000, 4500, 5000, 5500]
+    assert len(actual) == len(exp_vals)
+    for i, ((vals, ts_arr), ref_ts) in enumerate(actual):
+        assert tuple(vals) == exp_vals[i]
+        assert np.array_equal(ts_arr, exp_ts_arrays[i])
+        assert ref_ts == exp_union_ts[i]
 
 
 def test_join_equal_timestamps_drop_duplicates_default():

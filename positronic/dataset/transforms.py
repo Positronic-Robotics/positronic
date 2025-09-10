@@ -1,6 +1,6 @@
 from abc import ABC, abstractmethod
 from functools import partial
-from typing import Any, Callable, Sequence, TypeVar, Tuple
+from typing import Any, Callable, Sequence, TypeVar
 
 import numpy as np
 import cv2
@@ -40,18 +40,23 @@ class Elementwise(Signal[U]):
         return self._signal._search_ts(ts_array)
 
 
-class IndexOffsets(Signal[Tuple[Tuple[T, ...], Tuple[int, ...]]]):
-    """Join values (and optionally timestamps) at relative indices around a reference index.
+class IndexOffsets(Signal[tuple]):
+    """Join values (and optionally timestamps) at relative index offsets.
 
-    Given a list of relative indices D = [d1, d2, ..., dN] (each may be negative
-    or positive), produces a view over the reference indices i where all
-    (i + dk) are in-bounds. For each valid i, returns
-        ((v[i+d1], ..., v[i+dN]), t[i]) by default, or
-        ((v[i+d1], ..., v[i+dN], t[i+d1], ..., t[i+dN]), t[i]) if include_ref_ts=True.
+    For a base signal ``s`` and relative offsets ``D = [d1, d2, ..., dN]`` (each
+    may be negative or positive), this view iterates over base indices ``i`` for
+    which all ``i+dk`` are in-bounds. For each valid ``i`` the element is:
 
-    Examples:
-      - Next with step=1  -> D = [0, 1]
-      - Previous step=1   -> D = [0, -1]
+    - If ``include_ref_ts=False`` (default):
+        ((v[i+d1], ..., v[i+dN]), t[i])
+    - If ``include_ref_ts=True`` and ``N == 1`` (single offset):
+        ((v[i+d1], t[i+d1]), t[i])  # legacy 2-tuple form for backwards-compatibility
+    - If ``include_ref_ts=True`` and ``N > 1``:
+        (((v[i+d1], ..., v[i+dN]), np.ndarray[int64]([t[i+d1], ..., t[i+dN]])), t[i])
+
+    Notes:
+      - The grouped timestamp array uses dtype int64 and has shape (N,).
+      - This class does not modify values; it only aligns and groups neighbors.
     """
 
     def __init__(self, signal: Signal[T], *relative_indices: int, include_ref_ts: bool = False) -> None:
@@ -91,12 +96,18 @@ class IndexOffsets(Signal[Tuple[Tuple[T, ...], Tuple[int, ...]]]):
             idxs = base + int(off)
             vals_parts.append(self._signal._values_at(idxs))
             if self._include_ref_ts:
-                ts_parts.append(np.asarray(self._signal._ts_at(idxs)))
-        pieces = vals_parts + ts_parts
-        if len(pieces) == 1:
-            return pieces[0]
+                ts_parts.append(self._signal._ts_at(idxs))
+
+        n = len(self._offs)
+        if not self._include_ref_ts:
+            return list(zip(*vals_parts, strict=False)) if n > 1 else vals_parts[0]
         else:
-            return list(zip(*pieces, strict=False))
+            if n == 1:
+                return list(zip(vals_parts[0], ts_parts[0], strict=False))
+
+            ts = np.stack(ts_parts, axis=1)
+            out = [(tuple(parts[i] for parts in vals_parts), ts[i]) for i in range(len(base))]
+            return out
 
     def _search_ts(self, ts_array: RealNumericArrayLike) -> IndicesLike:
         # Map parent floor indices to view indices, clamping to valid range.
@@ -113,18 +124,26 @@ class IndexOffsets(Signal[Tuple[Tuple[T, ...], Tuple[int, ...]]]):
         return view_idx
 
 
-class TimeOffsets(Signal[Tuple[Tuple[T, ...], Tuple[int, ...]]]):
-    """Sample values at time offsets relative to each reference timestamp.
+class TimeOffsets(Signal[tuple]):
+    """Sample at-or-before values at time offsets relative to each base timestamp.
 
-    Given deltas D = [d1, d2, ..., dN], for each valid reference index i returns
-        ((v_at(ts[i]+d1), ..., v_at(ts[i]+dN), t_at(ts[i]+d1), ..., t_at(ts[i]+dN)), ts[i])
-    where v_at(t) carries back the last value at-or-before t.
+    For deltas ``D = [d1, d2, ..., dN]`` and base timestamps ``ts[i]``, this
+    view returns values and (optionally) the reference timestamps from the
+    carried-back samples taken at times ``ts[i] + dk``.
+
+    - If ``include_ref_ts=False`` (default):
+        ((v_at(ts[i]+d1), ..., v_at(ts[i]+dN)), ts[i])
+    - If ``include_ref_ts=True`` and ``N == 1`` (single delta):
+        ((v_at(ts[i]+d1), t_at(ts[i]+d1)), ts[i])  # legacy 2-tuple form
+    - If ``include_ref_ts=True`` and ``N > 1``:
+        (((v_at(ts[i]+d1), ..., v_at(ts[i]+dN)), np.ndarray[int64]([t_at(ts[i]+d1), ..., t_at(ts[i]+dN)])), ts[i])
 
     Semantics:
-    - For negative deltas: elements whose shifted time precedes the first
-      timestamp are dropped (affects the start of the series).
-    - For non-negative deltas: when the shifted time exceeds the last
-      timestamp, sampling clamps to the last element.
+      - Negative deltas can drop initial rows if ``ts[i]+d`` precedes the first
+        timestamp.
+      - Non-negative deltas clamp to the last element when the shifted time
+        exceeds the last timestamp.
+      - Grouped reference timestamp arrays always use dtype int64 and shape (N,).
     """
 
     def __init__(self, signal: Signal[T], *deltas_ts: int, include_ref_ts: bool = False) -> None:
@@ -154,7 +173,7 @@ class TimeOffsets(Signal[Tuple[Tuple[T, ...], Tuple[int, ...]]]):
         neg = self._deltas[self._deltas < 0]
         if neg.size > 0:
             thr = int(self._signal.start_ts + int(np.max(-neg)))
-            floor_idx = int(np.asarray(self._signal._search_ts([thr]))[0])
+            floor_idx = int(self._signal._search_ts([thr])[0])
             if floor_idx < 0:
                 start_offset = 0
             else:
@@ -183,20 +202,27 @@ class TimeOffsets(Signal[Tuple[Tuple[T, ...], Tuple[int, ...]]]):
         base = np.asarray(indices, dtype=np.int64)
         if self._start_offset > 0:
             base = base + self._start_offset
-        ref_ts = np.asarray(self._signal._ts_at(base))
+        ref_ts = np.asarray(self._signal._ts_at(base), dtype=np.int64)
+
         vals_parts = []
         ts_parts = []
         for d in self._deltas:
             target_ts = ref_ts + int(d)
-            idx = np.asarray(self._signal._search_ts(target_ts))
+            idx = self._signal._search_ts(target_ts)
             vals_parts.append(self._signal._values_at(idx))
             if self._include_ref_ts:
-                ts_parts.append(np.asarray(self._signal._ts_at(idx)))
-        pieces = vals_parts + ts_parts
-        if len(pieces) == 1:
-            return pieces[0]
-        else:
-            return list(zip(*pieces, strict=False))
+                ts_parts.append(self._signal._ts_at(idx))
+
+        n = len(self._deltas)
+        if not self._include_ref_ts:
+            return list(zip(*vals_parts, strict=False)) if n > 1 else vals_parts[0]
+
+        if n == 1:
+            return list(zip(vals_parts[0], ts_parts[0], strict=False))
+
+        ts = np.stack([np.asarray(t, dtype=np.int64) for t in ts_parts], axis=1)
+        out = [(tuple(parts[i] for parts in vals_parts), ts[i]) for i in range(len(base))]
+        return out
 
     def _search_ts(self, ts_array: RealNumericArrayLike) -> IndicesLike:
         self._compute_bounds()
@@ -210,11 +236,11 @@ class TimeOffsets(Signal[Tuple[Tuple[T, ...], Tuple[int, ...]]]):
 
 def _ts_at_index(sig: Signal[T], idx: int) -> int:
     """Fetch a single timestamp at the given index as int."""
-    return int(np.asarray(sig._ts_at([idx]))[0])
+    return int(sig._ts_at([idx])[0])
 
 
 def _first_idx_at_or_after(sig: Signal[T], ts: int) -> int:
-    floor = int(np.asarray(sig._search_ts([ts]))[0])
+    floor = int(sig._search_ts([ts])[0])
     if floor < 0:
         return 0
     floor_ts = _ts_at_index(sig, floor)
@@ -222,24 +248,25 @@ def _first_idx_at_or_after(sig: Signal[T], ts: int) -> int:
 
 
 class Join(Signal[tuple]):
-    """Join an arbitrary number of signals on the union of their timestamps.
+    """Join multiple signals on the union of their timestamps with carry-back.
 
     Semantics:
-    - Reference times: sorted union of all parents' timestamps, starting from
-      max(s_i.start_ts). Equal timestamps across signals are collapsed.
-    - Values: at each union timestamp t, returns a tuple of carried-back values
-      from each signal, optionally followed by the reference timestamps used.
+      - Reference timeline: sorted union of all signals' timestamps, starting
+        from ``max(s_k.start_ts)``. Equal timestamps across signals are
+        collapsed.
+      - Values: at each union timestamp ``t``, return a tuple of carried-back
+        values from each signal. If requested, also include reference timestamps
+        for those carried-back samples.
 
-      If ``include_ref_ts=False`` (default):
-        ((v1, v2, ..., vN), t)
-      If ``include_ref_ts=True``:
-        ((v1, v2, ..., vN, t1_ref, t2_ref, ..., tN_ref), t)
+      Shapes:
+        - If ``include_ref_ts=False`` (default):
+            ((v1, v2, ..., vN), t)
+        - If ``include_ref_ts=True`` (N ≥ 2 by construction):
+            (((v1, v2, ..., vN), np.ndarray[int64]([t1_ref, ..., tN_ref])), t)
 
-      where:
-        - vK = value of signal K at the last timestamp at-or-before t
-        - tK_ref = the timestamp of the carried-back value in signal K
-      For N=2 and include_ref_ts=True, the shape is ((v1, v2, t1_ref, t2_ref), t).
-    - Union timestamps are precomputed for O(log M) time lookups.
+      where ``vK`` is the value of signal K at the last timestamp at-or-before
+      ``t`` and ``tK_ref`` is that reference timestamp. The grouped timestamp
+      array is dtype int64 with shape (N,).
 
     Raises:
         ValueError: if fewer than two signals are provided.
@@ -271,11 +298,11 @@ class Join(Signal[tuple]):
         for s, st in zip(self._signals, self._starts):
             if st < len(s):
                 idxs = np.arange(st, len(s), dtype=np.int64)
-                ts_arrays.append(np.asarray(s._ts_at(idxs), dtype=np.int64))
+                ts_arrays.append(s._ts_at(idxs))
         if len(ts_arrays) == 0:
             self._union_ts = np.empty((0, ), dtype=np.int64)
         else:
-            all_ts = np.concatenate(ts_arrays)
+            all_ts = np.concatenate(ts_arrays).astype(np.int64, copy=False)
             self._union_ts = np.unique(all_ts)
         self._length = int(self._union_ts.shape[0])
         self._bounds_ready = True
@@ -292,29 +319,22 @@ class Join(Signal[tuple]):
         return self._union_ts[idxs]
 
     def _values_at(self, indices: IndicesLike):
-        ts = np.asarray(self._ts_at(indices))
+        ts = np.asarray(self._ts_at(indices), dtype=np.int64)
         # For each signal, sample at-or-before these timestamps
-        idx_all = [np.asarray(s._search_ts(ts)) for s in self._signals]
+        idx_all = [s._search_ts(ts) for s in self._signals]
         vals_all = [s._values_at(idx) for s, idx in zip(self._signals, idx_all)]
-        tss_all = [np.asarray(s._ts_at(idx), dtype=np.int64) for s, idx in zip(self._signals, idx_all)]
-        # Build output tuples per row.
-        out: list[tuple] = []
-        for row in zip(*vals_all, *tss_all, strict=False):
-            # row = (v1, v2, ..., vN, t1, t2, ..., tN)
-            n = len(self._signals)
-            vals = row[:n]
-            refs = row[n:]
-            if self._include_ref_ts:
-                out.append(tuple(vals + refs))
-            else:
-                out.append(tuple(vals))
-        return out
+        tss_all = [s._ts_at(idx) for s, idx in zip(self._signals, idx_all)]
+
+        if not self._include_ref_ts:
+            return [tuple(row) for row in zip(*vals_all, strict=False)]
+        else:
+            ts_mat = np.stack([np.asarray(t, dtype=np.int64) for t in tss_all], axis=1)
+            return [(tuple(row_vals), ts_mat[i]) for i, row_vals in enumerate(zip(*vals_all, strict=False))]
 
     def _search_ts(self, ts_array: RealNumericArrayLike) -> IndicesLike:
         self._compute_bounds()
-        t = np.asarray(ts_array)
         assert self._union_ts is not None
-        return np.searchsorted(self._union_ts, t, side="right") - 1
+        return np.searchsorted(self._union_ts, ts_array, side="right") - 1
 
 
 class EpisodeTransform(ABC):
