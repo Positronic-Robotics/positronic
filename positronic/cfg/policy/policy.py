@@ -22,7 +22,7 @@ def _get_diffusion_policy(checkpoint_path: str):
     return policy
 
 
-@cfn.config(n_action_steps=10)
+@cfn.config(n_action_steps=30)
 def pi0(n_action_steps: int | None = None):
     from positronic.policy.pi0 import PI0RemotePolicy
     return PI0RemotePolicy("localhost", 8000, n_action_steps)
