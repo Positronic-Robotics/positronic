@@ -14,8 +14,8 @@ import time
 import traceback
 from typing import Iterator, Sequence, Tuple, TypeVar
 
-from .core import Clock, ControlLoop, Message, SignalEmitter, SignalReader, Sleep
-from .shared_memory import SMCompliant, SharedMemoryEmitter, SharedMemoryReader
+from .core import Clock, ControlLoop, Message, SignalEmitter, SignalReceiver, Sleep
+from .shared_memory import SMCompliant, SharedMemoryEmitter, SharedMemoryReceiver
 
 T = TypeVar('T')
 T_SM = TypeVar('T_SM', bound=SMCompliant)
@@ -59,7 +59,7 @@ class BroadcastEmitter(SignalEmitter[T]):
         return not any_failed
 
 
-class QueueReader(SignalReader[T]):
+class QueueReceiver(SignalReceiver[T]):
 
     def __init__(self, queue: mp.Queue):
         self._queue = queue
@@ -90,7 +90,7 @@ class LocalQueueEmitter(SignalEmitter[T]):
         return True
 
 
-class LocalQueueReader(SignalReader[T]):
+class LocalQueueReceiver(SignalReceiver[T]):
 
     def __init__(self, queue: deque):
         """Reader that allows to read messages from deque.
@@ -108,7 +108,7 @@ class LocalQueueReader(SignalReader[T]):
         return self._last_value
 
 
-class EventReader(SignalReader[bool]):
+class EventReceiver(SignalReceiver[bool]):
 
     def __init__(self, event: EventClass, clock: Clock):
         self._event = event
@@ -129,7 +129,7 @@ class SystemClock(Clock):
 
 def _bg_wrapper(run_func: ControlLoop, stop_event: EventClass, clock: Clock, name: str):
     try:
-        for command in run_func(EventReader(stop_event, clock), clock):
+        for command in run_func(EventReceiver(stop_event, clock), clock):
             match command:
                 case Sleep(seconds):
                     time.sleep(seconds)
@@ -195,7 +195,7 @@ class World:
 
         self._sm_manager.__exit__(exc_type, exc_value, traceback)
 
-    def local_pipe(self, maxsize: int = 1) -> Tuple[SignalEmitter[T], SignalReader[T]]:
+    def local_pipe(self, maxsize: int = 1) -> Tuple[SignalEmitter[T], SignalReceiver[T]]:
         """Create a queue-based communication channel within the same process.
 
         Args:
@@ -205,9 +205,9 @@ class World:
             Tuple of (emitter, reader) for local communication
         """
         q = deque(maxlen=maxsize)
-        return LocalQueueEmitter(q, self._clock), LocalQueueReader(q)
+        return LocalQueueEmitter(q, self._clock), LocalQueueReceiver(q)
 
-    def mp_pipe(self, maxsize: int = 1) -> Tuple[SignalEmitter[T], SignalReader[T]]:
+    def mp_pipe(self, maxsize: int = 1) -> Tuple[SignalEmitter[T], SignalReceiver[T]]:
         """Create a queue-based communication channel between processes.
 
         Args:
@@ -218,11 +218,11 @@ class World:
         """
         q = self._manager.Queue(maxsize=maxsize)
 
-        return QueueEmitter(q, self._clock), QueueReader(q)  # type: ignore
+        return QueueEmitter(q, self._clock), QueueReceiver(q)  # type: ignore
 
     def local_one_to_many_pipe(self,
                                n_readers: int,
-                               maxsize: int = 1) -> Tuple[SignalEmitter[T], Sequence[SignalReader[T]]]:
+                               maxsize: int = 1) -> Tuple[SignalEmitter[T], Sequence[SignalReceiver[T]]]:
         """Create a single-emitter-many-readers communication channel.
         """
         emitters = []
@@ -235,7 +235,7 @@ class World:
 
     def mp_one_to_many_pipe(self,
                             n_readers: int,
-                            maxsize: int = 1) -> Tuple[SignalEmitter[T], Sequence[SignalReader[T]]]:
+                            maxsize: int = 1) -> Tuple[SignalEmitter[T], Sequence[SignalReceiver[T]]]:
         """Create a single-emitter-many-readers communication channel.
 
         Args:
@@ -253,7 +253,7 @@ class World:
             emitters.append(emiter)
         return BroadcastEmitter(emitters), readers
 
-    def shared_memory(self) -> Tuple[SignalEmitter[T_SM], SignalReader[T_SM]]:
+    def shared_memory(self) -> Tuple[SignalEmitter[T_SM], SignalReceiver[T_SM]]:
         """Create shared memory channel for efficient data sharing.
 
         Message data must be a SMCompliant type and have the same buffer size as the first message emitted.
@@ -269,7 +269,7 @@ class World:
         ts_value = self._manager.Value('Q', -1)
         sm_queue = self._manager.Queue()
         emitter = SharedMemoryEmitter(lock, ts_value, sm_queue, self._clock)
-        reader = SharedMemoryReader(lock, ts_value, sm_queue)
+        reader = SharedMemoryReceiver(lock, ts_value, sm_queue)
         self._sm_emitters_readers.append((emitter, reader))
         return emitter, reader
 
@@ -293,8 +293,8 @@ class World:
     def should_stop(self) -> bool:
         return self._stop_event.is_set()
 
-    def should_stop_reader(self) -> SignalReader[bool]:
-        return EventReader(self._stop_event, self._clock)
+    def should_stop_reader(self) -> SignalReceiver[bool]:
+        return EventReceiver(self._stop_event, self._clock)
 
     def interleave(self, *loops: ControlLoop) -> Iterator[Sleep]:
         """Interleave multiple control loops, scheduling them based on their timing requirements.

@@ -49,13 +49,6 @@ def rerun_log_action(ts, action):
 
 
 class Inference:
-    frames : dict[str, pimm.SignalReader[Mapping[str, np.ndarray]]] = {}
-    robot_state : pimm.SignalReader[roboarm.State] = pimm.NoOpReader()
-    gripper_state : pimm.SignalReader[float] = pimm.NoOpReader()
-
-    robot_commands : pimm.SignalEmitter[roboarm.command.CommandType] = pimm.NoOpEmitter()
-    target_grip : pimm.SignalEmitter[float] = pimm.NoOpEmitter()
-
     def __init__(
         self,
         state_encoder: ObservationEncoder,
@@ -73,10 +66,16 @@ class Inference:
         self.rerun_path = rerun_path
         self.inference_fps = inference_fps
         self.task = task
+        self.frames: dict[str, pimm.SignalReceiver[Mapping[str, np.ndarray]]] = {}
+        self.robot_state: pimm.SignalReceiver[roboarm.State] = pimm.NoOpReceiver()
+        self.gripper_state: pimm.SignalReceiver[float] = pimm.NoOpReceiver()
 
-    def run(self, should_stop: pimm.SignalReader, clock: pimm.Clock) -> Iterator[pimm.Sleep]:  # noqa: C901
+        self.robot_commands: pimm.SignalEmitter[roboarm.command.CommandType] = pimm.NoOpEmitter()
+        self.target_grip: pimm.SignalEmitter[float] = pimm.NoOpEmitter()
+
+    def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Sleep]:  # noqa: C901
         frames = {
-            camera_name: pimm.DefaultReader(frame, {})
+            camera_name: pimm.DefaultReceiver(frame, {})
             for camera_name, frame in self.frames.items()
         }
 

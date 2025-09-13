@@ -57,7 +57,7 @@ class MujocoSim(pimm.Clock):
         self.warmup_steps = 1000
         self.reset(reinitialize_model=False)
 
-    def run(self, should_stop: pimm.SignalReader, clock: pimm.Clock):
+    def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock):
         while not should_stop.value:
             self.step()
             self.fps_counter.tick()
@@ -111,8 +111,6 @@ class MujocoSim(pimm.Clock):
 
 
 class MujocoCamera:
-    frame: pimm.SignalEmitter = pimm.NoOpEmitter()
-
     def __init__(self, model, data, camera_name: str, resolution: Tuple[int, int], fps: int = 30):
         super().__init__()
         self.model = model
@@ -121,8 +119,9 @@ class MujocoCamera:
         self.camera_name = camera_name
         self.fps = fps
         self.fps_counter = pimm.utils.RateCounter("MujocoCamera")
+        self.frame: pimm.SignalEmitter = pimm.NoOpEmitter()
 
-    def run(self, should_stop: pimm.SignalReader, clock: pimm.Clock):
+    def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock):
         renderer = mj.Renderer(self.model, height=self.render_resolution[1], width=self.render_resolution[0])
 
         while not should_stop.value:
@@ -167,10 +166,6 @@ class MujocoFrankaState(State, pimm.shared_memory.NumpySMAdapter):
 
 
 class MujocoFranka:
-    commands: pimm.SignalReader[roboarm_command.CommandType] = pimm.NoOpReader()
-
-    state: pimm.SignalEmitter[MujocoFrankaState] = pimm.NoOpEmitter()
-
     def __init__(self, sim: MujocoSim, suffix: str = ''):
         self.sim = sim
         self.physics = dm_mujoco.Physics.from_model(sim.data)
@@ -178,9 +173,11 @@ class MujocoFranka:
         self.joint_names = [f'joint{i}{suffix}' for i in range(1, 8)]
         self.actuator_names = [f'actuator{i}{suffix}' for i in range(1, 8)]
         self.joint_qpos_ids = [self.sim.model.joint(joint).qposadr.item() for joint in self.joint_names]
+        self.commands: pimm.SignalReceiver[roboarm_command.CommandType] = pimm.NoOpReceiver()
+        self.state: pimm.SignalEmitter[MujocoFrankaState] = pimm.NoOpEmitter()
 
-    def run(self, should_stop: pimm.SignalReader, clock: pimm.Clock):
-        commands = pimm.DefaultReader(pimm.ValueUpdated(self.commands), (None, False))
+    def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock):
+        commands = pimm.DefaultReceiver(pimm.ValueUpdated(self.commands), (None, False))
         state = MujocoFrankaState()
 
         while not should_stop.value:
@@ -250,19 +247,18 @@ class MujocoFranka:
 
 
 class MujocoGripper:
-    target_grip: pimm.SignalReader[float] = pimm.NoOpReader()
-    grip: pimm.SignalEmitter = pimm.NoOpEmitter()
-
     def __init__(self, sim: MujocoSim, actuator_name: str, joint_name: str):
         self.sim = sim
         self.actuator_name = actuator_name
         self.actuator_control_range = self.sim.model.actuator(actuator_name).ctrlrange
         self.joint_name = joint_name
+        self.target_grip: pimm.SignalReceiver[float] = pimm.NoOpReceiver()
+        self.grip: pimm.SignalEmitter = pimm.NoOpEmitter()
 
-    def run(self, should_stop: pimm.SignalReader, clock: pimm.Clock):
-        target_grip_reader = pimm.DefaultReader(self.target_grip, 0.0)
+    def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock):
+        target_grip_receiver = pimm.DefaultReceiver(self.target_grip, 0.0)
         while not should_stop.value:
-            target_grip = target_grip_reader.value
+            target_grip = target_grip_receiver.value
             self.set_target_grip(target_grip)
 
             current_grip = self.sim.data.joint(self.joint_name).qpos.item()

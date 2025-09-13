@@ -81,9 +81,6 @@ class IKSolver(Enum):
 
 
 class Robot:
-    commands: pimm.SignalReader = pimm.NoOpReader()
-    state: pimm.SignalEmitter = pimm.NoOpEmitter()
-
     def __init__(self,
                  ip: str,
                  relative_dynamics_factor=0.2,
@@ -98,6 +95,8 @@ class Robot:
         self._relative_dynamics_factor = relative_dynamics_factor
         self._cartesian_mode = cartesian_mode
         self._home_joints = home_joints
+        self.commands: pimm.SignalReceiver = pimm.NoOpReceiver()
+        self.state: pimm.SignalEmitter = pimm.NoOpEmitter()
 
     @staticmethod
     def _init_robot(robot, rel_dynamics_factor: float):
@@ -192,12 +191,12 @@ class Robot:
         robot_state._finish_reset()
         self.state.emit(robot_state)
 
-    def run(self, should_stop: pimm.SignalReader, clock: pimm.Clock) -> Iterator[pimm.Sleep]:
+    def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Sleep]:
         robot = franky.Robot(self._ip, realtime_config=franky.RealtimeConfig.Ignore)
         Robot._init_robot(robot, self._relative_dynamics_factor)
         robot.recover_from_errors()
 
-        commands = pimm.DefaultReader(pimm.ValueUpdated(self.commands), (None, False))
+        commands = pimm.DefaultReceiver(pimm.ValueUpdated(self.commands), (None, False))
         robot_state = FrankaState()
         rate_limiter = pimm.RateLimiter(clock, hz=2000)
 

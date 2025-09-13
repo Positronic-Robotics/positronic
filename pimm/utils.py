@@ -1,7 +1,7 @@
 import time
 from typing import Callable, Mapping, Tuple, overload, TypeVar
 
-from pimm import SignalReader, SignalEmitter, Message
+from pimm import SignalReceiver, SignalEmitter, Message
 from pimm.core import Clock
 
 
@@ -9,8 +9,8 @@ T = TypeVar('T', covariant=True)
 K = TypeVar('K', covariant=True)
 
 
-class MapSignalReader(SignalReader[T]):
-    def __init__(self, reader: SignalReader[T], func: Callable[[T], T]):
+class MapSignalReceiver(SignalReceiver[T]):
+    def __init__(self, reader: SignalReceiver[T], func: Callable[[T], T]):
         self.reader = reader
         self.func = func
 
@@ -32,7 +32,7 @@ class MapSignalEmitter(SignalEmitter[T]):
 
 
 @overload
-def map(signal: SignalReader[T], func: Callable[[T], T]) -> SignalReader[T]:
+def map(signal: SignalReceiver[T], func: Callable[[T], T]) -> SignalReceiver[T]:
     ...
 
 
@@ -41,19 +41,19 @@ def map(signal: SignalEmitter[T], func: Callable[[T], T]) -> SignalEmitter[T]:
     ...
 
 
-def map(signal: SignalReader[T] | SignalEmitter[T], func: Callable[[T], T]) -> SignalReader[T] | SignalEmitter[T]:
-    if isinstance(signal, SignalReader):
-        return MapSignalReader(signal, func)
+def map(signal: SignalReceiver[T] | SignalEmitter[T], func: Callable[[T], T]) -> SignalReceiver[T] | SignalEmitter[T]:
+    if isinstance(signal, SignalReceiver):
+        return MapSignalReceiver(signal, func)
     elif isinstance(signal, SignalEmitter):
         return MapSignalEmitter(signal, func)
     else:
         raise ValueError(f"Invalid signal type: {type(signal)}")
 
 
-class ValueUpdated(SignalReader[Tuple[T, bool]]):
+class ValueUpdated(SignalReceiver[Tuple[T, bool]]):
     """Wrapper around reader to signal whether the value we read is 'new'."""
 
-    def __init__(self, reader: SignalReader[T]):
+    def __init__(self, reader: SignalReceiver[T]):
         """By default, if original reader returns None, we return None."""
         self.reader = reader
         self.last_ts = None
@@ -70,7 +70,7 @@ class ValueUpdated(SignalReader[Tuple[T, bool]]):
         return Message((orig_message.data, is_updated), self.last_ts)
 
 
-def is_any_updated(readers: Mapping[str, SignalReader[Tuple[T, bool]]]) -> Tuple[dict[str, Message[T]], bool]:
+def is_any_updated(readers: Mapping[str, SignalReceiver[Tuple[T, bool]]]) -> Tuple[dict[str, Message[T]], bool]:
     """Get the latest value of all readers and whether any of them are updated.
 
     In case some of the readers return None, this keys will be omitted from the returned dict.
@@ -91,10 +91,10 @@ def is_any_updated(readers: Mapping[str, SignalReader[Tuple[T, bool]]]) -> Tuple
     return messages, is_any_updated
 
 
-class DefaultReader(SignalReader[T | K]):
+class DefaultReceiver(SignalReceiver[T | K]):
     """Signal reader that returns a default value if no value is available."""
 
-    def __init__(self, reader: SignalReader[T], default: K, default_ts: int = 0):
+    def __init__(self, reader: SignalReceiver[T], default: K, default_ts: int = 0):
         self.reader = reader
         self.default_msg = Message(default, default_ts)
 

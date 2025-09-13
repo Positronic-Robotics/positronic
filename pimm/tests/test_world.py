@@ -5,9 +5,9 @@ from unittest.mock import Mock, patch
 
 import pytest
 
-from pimm.core import Message, SignalEmitter, SignalReader, Sleep
+from pimm.core import Message, SignalEmitter, SignalReceiver, Sleep
 from pimm.tests.testing import MockClock
-from pimm.world import EventReader, QueueEmitter, QueueReader, SystemClock, World
+from pimm.world import EventReceiver, QueueEmitter, QueueReceiver, SystemClock, World
 
 
 def dummy_process(stop_reader, clock):
@@ -81,13 +81,13 @@ class TestQueueEmitter:
         mock_queue.put_nowait.assert_called_once()  # Only called once since get_nowait fails
 
 
-class TestQueueReader:
-    """Test the QueueReader class."""
+class TestQueueReceiver:
+    """Test the QueueReceiver class."""
 
     def test_queue_reader_initial_state(self):
-        """Test that QueueReader initially returns None."""
+        """Test that QueueReceiver initially returns None."""
         queue = mp.Manager().Queue()
-        reader = QueueReader(queue)
+        reader = QueueReceiver(queue)
 
         result = reader.read()
         assert result is None
@@ -96,7 +96,7 @@ class TestQueueReader:
         """Test reading a message from the queue."""
         manager = mp.Manager()
         queue = manager.Queue()
-        reader = QueueReader(queue)
+        reader = QueueReceiver(queue)
 
         # Put a message in the queue
         test_message = Message("test_data", 123)
@@ -111,7 +111,7 @@ class TestQueueReader:
         """Test that reader returns last value when queue is empty."""
         manager = mp.Manager()
         queue = manager.Queue()
-        reader = QueueReader(queue)
+        reader = QueueReceiver(queue)
 
         # Put and read a message
         test_message = Message("test_data", 123)
@@ -127,7 +127,7 @@ class TestQueueReader:
         """Test that reader updates with new messages."""
         manager = mp.Manager()
         queue = manager.Queue()
-        reader = QueueReader(queue)
+        reader = QueueReceiver(queue)
 
         # Put first message
         message1 = Message("data1", 100)
@@ -146,13 +146,13 @@ class TestQueueReader:
         assert result3 == message2
 
 
-class TestEventReader:
-    """Test the EventReader class."""
+class TestEventReceiver:
+    """Test the EventReceiver class."""
 
     def test_event_reader_unset_event(self):
         """Test reading from an unset event."""
         event = mp.Event()
-        reader = EventReader(event, SystemClock())
+        reader = EventReceiver(event, SystemClock())
 
         result = reader.read()
         assert isinstance(result, Message)
@@ -163,7 +163,7 @@ class TestEventReader:
         """Test reading from a set event."""
         event = mp.Event()
         event.set()
-        reader = EventReader(event, SystemClock())
+        reader = EventReceiver(event, SystemClock())
 
         result = reader.read()
         assert isinstance(result, Message)
@@ -171,11 +171,11 @@ class TestEventReader:
         assert isinstance(result.ts, int)
 
     def test_event_reader_uses_clock(self):
-        """Test that EventReader uses clocks for timestamps."""
+        """Test that EventReceiver uses clocks for timestamps."""
         event = mp.Event()
         clk = MockClock()
         clk.set(0.987654321)
-        reader = EventReader(event, clk)
+        reader = EventReceiver(event, clk)
 
         result = reader.read()
         assert result.ts == 987654321
@@ -191,7 +191,7 @@ class TestWorld:
         emitter, reader = getattr(world, pipe_fn_name)()
 
         assert isinstance(emitter, SignalEmitter)
-        assert isinstance(reader, SignalReader)
+        assert isinstance(reader, SignalReceiver)
 
     def test_background_process(self):
         """Test that background processes will run simple control loop."""
@@ -302,8 +302,8 @@ class TestWorld:
         emitter, readers = pipe_fn(n_readers=2)
         assert len(readers) == 2
         assert isinstance(emitter, SignalEmitter)
-        assert isinstance(readers[0], SignalReader)
-        assert isinstance(readers[1], SignalReader)
+        assert isinstance(readers[0], SignalReceiver)
+        assert isinstance(readers[1], SignalReceiver)
 
     @pytest.mark.parametrize('pipe_fn_name', ['mp_one_to_many_pipe', 'local_one_to_many_pipe'])
     def test_world_mp_pipe_multiple_readers_message_received_by_all_readers(self, pipe_fn_name):
@@ -343,9 +343,9 @@ class TestIntegration:
         assert result2.data == "message2"
 
     def test_event_reader_integration(self):
-        """Test EventReader with actual multiprocessing Event."""
+        """Test EventReceiver with actual multiprocessing Event."""
         event = mp.Event()
-        reader = EventReader(event, SystemClock())
+        reader = EventReceiver(event, SystemClock())
 
         # Initially event is not set
         result = reader.read()

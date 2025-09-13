@@ -7,7 +7,7 @@ from positronic.drivers.motors.feetech import MotorBus
 
 
 def get_function(motor_bus: MotorBus):
-    def calibrate_fn(should_stop: pimm.SignalReader, clock: pimm.Clock):
+    def calibrate_fn(should_stop: pimm.SignalReceiver, clock: pimm.Clock):
         motor_bus.connect()
         mins = np.full(len(motor_bus.motor_indices), np.inf)
         maxs = np.full(len(motor_bus.motor_indices), -np.inf)

@@ -9,7 +9,7 @@ from positronic.drivers.roboarm import command
 def main(robot):
     with pimm.World() as world:
         command_emmiter, robot.commands = world.mp_pipe()
-        robot.state, state_reader = world.shared_memory()
+        robot.state, state_receiver = world.shared_memory()
 
         world.start_in_subprocess(robot.run)
 
@@ -27,10 +27,10 @@ def main(robot):
                     args = [float(x) for x in args]
                     command_emmiter.emit(command.JointMove(positions=args))
                 case ['info']:
-                    print("Q", state_reader.value.q)
-                    print("DQ", state_reader.value.dq)
-                    print("EE", state_reader.value.ee_pose.translation, state_reader.value.ee_pose.rotation.as_quat)
-                    print("Status", state_reader.value.status)
+                    print("Q", state_receiver.value.q)
+                    print("DQ", state_receiver.value.dq)
+                    print("EE", state_receiver.value.ee_pose.translation, state_receiver.value.ee_pose.rotation.as_quat)
+                    print("Status", state_receiver.value.status)
                 case ['quit']:
                     break
                 case arg:

@@ -20,11 +20,11 @@ class Robotiq2F:
     def __init__(self, port: str):
         self._port = port
         self._grip = pimm.NoOpEmitter()
-        self._target_grip = pimm.NoOpReader()
-        self._force = pimm.NoOpReader()
-        self._speed = pimm.NoOpReader()
+        self._target_grip = pimm.NoOpReceiver()
+        self._force = pimm.NoOpReceiver()
+        self._speed = pimm.NoOpReceiver()
 
-    def run(self, should_stop: pimm.SignalReader, clock: pimm.Clock) -> Iterator[pimm.Sleep]:
+    def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Sleep]:
         client = ModbusClient.ModbusSerialClient(port=self._port,
                                                  baudrate=_BAUD_RATE,
                                                  bytesize=_BYTESIZE,
@@ -37,9 +37,9 @@ class Robotiq2F:
             client.write_registers(_REG_CMD, [0x0000, 0x0000, 0x0000], device_id=_SLAVE)
             client.write_registers(_REG_CMD, [0x0100, 0x0000, 0x0000], device_id=_SLAVE)
 
-            target_grip = pimm.DefaultReader(pimm.ValueUpdated(self._target_grip), (None, False))
-            force = pimm.DefaultReader(self._force, 255)  # device scale 0..255
-            speed = pimm.DefaultReader(self._speed, 255)  # device scale 0..255
+            target_grip = pimm.DefaultReceiver(pimm.ValueUpdated(self._target_grip), (None, False))
+            force = pimm.DefaultReceiver(self._force, 255)  # device scale 0..255
+            speed = pimm.DefaultReceiver(self._speed, 255)  # device scale 0..255
 
             while not should_stop.value:
                 pos_val, updated = target_grip.value

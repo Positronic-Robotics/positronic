@@ -227,7 +227,7 @@ def test_inputs_mapping_is_immutable(world, clock, run_agent):
 
     # Cannot add new key
     with pytest.raises(TypeError):
-        agent.inputs["b"] = pimm.NoOpReader()
+        agent.inputs["b"] = pimm.NoOpReceiver()
     # Can modify existing key's value
     new_em, new_rd = world.local_pipe(maxsize=8)
     agent.inputs["a"] = new_rd

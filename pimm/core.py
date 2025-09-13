@@ -41,7 +41,7 @@ class NoOpEmitter(SignalEmitter[T]):
         return True
 
 
-class SignalReader(ABC, Generic[T]):
+class SignalReceiver(ABC, Generic[T]):
     """Read a signal value. All implementations must be non-blocking."""
 
     @abstractmethod
@@ -59,7 +59,7 @@ class SignalReader(ABC, Generic[T]):
         return msg.data
 
 
-class NoOpReader(SignalReader[T]):
+class NoOpReceiver(SignalReceiver[T]):
 
     def read(self) -> None:
         return None
@@ -90,4 +90,4 @@ def Pass() -> Sleep:
 # In pimm a control loop is a main abstraction. This is a code that manages a particular piece of robotic system.
 # It can be camera, sensor, gripper, robotic arm, inference loop, etc. A robotic system then is a collection of
 # control loops that communicate with each other.
-ControlLoop = Callable[[SignalReader, Clock], Iterator[Sleep]]
+ControlLoop = Callable[[SignalReceiver, Clock], Iterator[Sleep]]
