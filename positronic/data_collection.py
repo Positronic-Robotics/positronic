@@ -167,19 +167,18 @@ def _wire_core_channels(world: pimm.World, data_collection: 'DataCollectionContr
 
 
 class DataCollectionController:
-    controller_positions_reader: pimm.SignalReader[Dict[str, geom.Transform3D]] = pimm.NoOpReader()
-    buttons_reader: pimm.SignalReader[Dict] = pimm.NoOpReader()
-    robot_state: pimm.SignalReader[roboarm.State] = pimm.NoOpReader()
-
-    robot_commands: pimm.SignalEmitter[roboarm.command.CommandType] = pimm.NoOpEmitter()
-    target_grip_emitter: pimm.SignalEmitter[float] = pimm.NoOpEmitter()
-
-    ds_agent_commands: pimm.SignalEmitter[DsWriterCommand] = pimm.NoOpEmitter()
-    sound_emitter: pimm.SignalEmitter[str] = pimm.NoOpEmitter()
-
     def __init__(self, operator_position: geom.Transform3D | None, metadata_getter: Callable[[], Dict] | None = None):
         self.operator_position = operator_position
         self.metadata_getter = metadata_getter or (lambda: {})
+        self.controller_positions_reader: pimm.SignalReader[Dict[str, geom.Transform3D]] = pimm.NoOpReader()
+        self.buttons_reader: pimm.SignalReader[Dict] = pimm.NoOpReader()
+        self.robot_state: pimm.SignalReader[roboarm.State] = pimm.NoOpReader()
+
+        self.robot_commands: pimm.SignalEmitter[roboarm.command.CommandType] = pimm.NoOpEmitter()
+        self.target_grip_emitter: pimm.SignalEmitter[float] = pimm.NoOpEmitter()
+
+        self.ds_agent_commands: pimm.SignalEmitter[DsWriterCommand] = pimm.NoOpEmitter()
+        self.sound_emitter: pimm.SignalEmitter[str] = pimm.NoOpEmitter()
 
     def run(self, should_stop: pimm.SignalReader, clock: pimm.Clock) -> Iterator[pimm.Sleep]:  # noqa: C901
         start_wav_path = "positronic/assets/sounds/recording-has-started.wav"

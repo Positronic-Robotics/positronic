@@ -64,9 +64,6 @@ class KinovaState(State, pimm.shared_memory.NumpySMAdapter):
 
 
 class Robot:
-    commands: pimm.SignalReader[command.CommandType] = pimm.NoOpReader()
-    state: pimm.SignalEmitter[KinovaState] = pimm.NoOpEmitter()
-
     def __init__(self,
                  ip: str,
                  relative_dynamics_factor=0.2,
@@ -75,6 +72,8 @@ class Robot:
         self.relative_dynamics_factor = relative_dynamics_factor
         self.solver = KinematicsSolver()
         self.home_joints = home_joints
+        self.commands: pimm.SignalReader[command.CommandType] = pimm.NoOpReader()
+        self.state: pimm.SignalEmitter[KinovaState] = pimm.NoOpEmitter()
 
     def run(self, should_stop: pimm.SignalReader, clock: pimm.Clock) -> Iterator[pimm.Sleep]:
         _set_realtime_priority()

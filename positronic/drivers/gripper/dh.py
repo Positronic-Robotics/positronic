@@ -7,14 +7,12 @@ import pimm
 
 
 class DHGripper:
-
-    grip: pimm.SignalEmitter = pimm.NoOpEmitter()
-    target_grip: pimm.SignalReader = pimm.NoOpReader()
-    force: pimm.SignalReader = pimm.NoOpReader()
-    speed: pimm.SignalReader = pimm.NoOpReader()
-
     def __init__(self, port: str):
         self.port = port
+        self.grip: pimm.SignalEmitter = pimm.NoOpEmitter()
+        self.target_grip: pimm.SignalReader = pimm.NoOpReader()
+        self.force: pimm.SignalReader = pimm.NoOpReader()
+        self.speed: pimm.SignalReader = pimm.NoOpReader()
 
     def run(self, should_stop: pimm.SignalReader, clock: pimm.Clock):
         client = ModbusClient.ModbusSerialClient(

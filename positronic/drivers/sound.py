@@ -7,9 +7,6 @@ import pimm
 
 
 class SoundSystem:
-    level: pimm.SignalReader[float] = pimm.NoOpReader()
-    wav_path: pimm.SignalReader[str] = pimm.NoOpReader()
-
     def __init__(
             self,
             enable_threshold: float = 10.0,
@@ -42,6 +39,8 @@ class SoundSystem:
 
         self.active = True
         self.current_phase = 0.0
+        self.level: pimm.SignalReader[float] = pimm.NoOpReader()
+        self.wav_path: pimm.SignalReader[str] = pimm.NoOpReader()
 
     def _level_to_frequency(self, level: float) -> Tuple[float, float]:
         if level < self.enable_threshold:

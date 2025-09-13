@@ -7,11 +7,6 @@ import pimm
 
 
 class Gripper:
-    grip: pimm.SignalEmitter = pimm.NoOpEmitter()
-    target_grip: pimm.SignalReader = pimm.NoOpReader()
-    force: pimm.SignalReader = pimm.NoOpReader()
-    speed: pimm.SignalReader = pimm.NoOpReader()
-
     def __init__(self, ip: str, close_threshold: float = 0.6, open_threshold: float = 0.4):
         """
         Franka's gripper does not allow to rewrite the executing command with the newer one,
@@ -26,6 +21,10 @@ class Gripper:
         self._ip = ip
         self._close_threshold = close_threshold
         self._open_threshold = open_threshold
+        self.grip: pimm.SignalEmitter = pimm.NoOpEmitter()
+        self.target_grip: pimm.SignalReader = pimm.NoOpReader()
+        self.force: pimm.SignalReader = pimm.NoOpReader()
+        self.speed: pimm.SignalReader = pimm.NoOpReader()
 
     def run(self, should_stop: pimm.SignalReader, clock: pimm.Clock) -> Iterator[pimm.Sleep]:
         gripper = franky.Gripper(self._ip)

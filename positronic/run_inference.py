@@ -49,13 +49,6 @@ def rerun_log_action(ts, action):
 
 
 class Inference:
-    frames : dict[str, pimm.SignalReader[Mapping[str, np.ndarray]]] = {}
-    robot_state : pimm.SignalReader[roboarm.State] = pimm.NoOpReader()
-    gripper_state : pimm.SignalReader[float] = pimm.NoOpReader()
-
-    robot_commands : pimm.SignalEmitter[roboarm.command.CommandType] = pimm.NoOpEmitter()
-    target_grip : pimm.SignalEmitter[float] = pimm.NoOpEmitter()
-
     def __init__(
         self,
         state_encoder: ObservationEncoder,
@@ -73,6 +66,12 @@ class Inference:
         self.rerun_path = rerun_path
         self.inference_fps = inference_fps
         self.task = task
+        self.frames: dict[str, pimm.SignalReader[Mapping[str, np.ndarray]]] = {}
+        self.robot_state: pimm.SignalReader[roboarm.State] = pimm.NoOpReader()
+        self.gripper_state: pimm.SignalReader[float] = pimm.NoOpReader()
+
+        self.robot_commands: pimm.SignalEmitter[roboarm.command.CommandType] = pimm.NoOpEmitter()
+        self.target_grip: pimm.SignalEmitter[float] = pimm.NoOpEmitter()
 
     def run(self, should_stop: pimm.SignalReader, clock: pimm.Clock) -> Iterator[pimm.Sleep]:  # noqa: C901
         frames = {

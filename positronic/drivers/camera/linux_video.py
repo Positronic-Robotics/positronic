@@ -8,9 +8,6 @@ import pimm
 
 
 class LinuxVideo:
-
-    frame: pimm.SignalEmitter = pimm.NoOpEmitter()
-
     def __init__(self, device_path: str, width: int, height: int, fps: int, pixel_format: str):
         self.device_path = device_path
         self.width = width
@@ -18,6 +15,7 @@ class LinuxVideo:
         self.fps = fps
         self.pixel_format = pixel_format
         self.fps_counter = pimm.utils.RateCounter(f"LinuxVideo {device_path}")
+        self.frame: pimm.SignalEmitter = pimm.NoOpEmitter()
 
     def run(self, should_stop: pimm.SignalReader, clock: pimm.Clock) -> Iterator[pimm.Sleep]:
         codec_mapping = {

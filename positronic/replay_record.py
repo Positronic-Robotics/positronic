@@ -17,14 +17,13 @@ import positronic.cfg.simulator
 
 
 class DataDumper:
-    frame_readers : Dict[str, pimm.SignalReader] = {}
-    robot_state : pimm.SignalReader = pimm.NoOpReader()
-    robot_commands : pimm.SignalReader[roboarm.command.CommandType] = pimm.NoOpReader()
-    target_grip : pimm.SignalReader[float] = pimm.NoOpReader()
-
     def __init__(self, output_dir: str | None, fps: int) -> None:
         self.output_dir = output_dir
         self.fps = fps
+        self.frame_readers: Dict[str, pimm.SignalReader] = {}
+        self.robot_state: pimm.SignalReader = pimm.NoOpReader()
+        self.robot_commands: pimm.SignalReader[roboarm.command.CommandType] = pimm.NoOpReader()
+        self.target_grip: pimm.SignalReader[float] = pimm.NoOpReader()
 
     def run(self, should_stop: pimm.SignalReader, clock: pimm.Clock) -> Iterator[pimm.Sleep]:  # noqa: C901
         frame_readers = {
@@ -75,11 +74,10 @@ class DataDumper:
 
 
 class RecordReplay:
-    robot_commands : pimm.SignalEmitter = pimm.NoOpEmitter()
-    target_grip : pimm.SignalEmitter[float] = pimm.NoOpEmitter()
-
     def __init__(self, record_path: str):
         self.record = torch.load(record_path)
+        self.robot_commands: pimm.SignalEmitter = pimm.NoOpEmitter()
+        self.target_grip: pimm.SignalEmitter[float] = pimm.NoOpEmitter()
 
     def run(self, should_stop: pimm.SignalReader, clock: pimm.Clock) -> Iterator[pimm.Sleep]:
         timestamps = self.record['target_timestamp'] - self.record['target_timestamp'][0]

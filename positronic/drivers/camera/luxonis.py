@@ -5,11 +5,10 @@ import depthai as dai
 
 # TODO: make this configurable
 class LuxonisCamera:
-    frame: pimm.SignalEmitter = pimm.NoOpEmitter()
-
     def __init__(self, fps: int = 60):
         super().__init__()
         self.fps = fps
+        self.frame: pimm.SignalEmitter = pimm.NoOpEmitter()
 
     def run(self, should_stop: pimm.SignalReader, clock: pimm.Clock) -> Iterator[pimm.Sleep]:
         pipeline = dai.Pipeline()

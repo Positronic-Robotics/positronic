@@ -81,9 +81,6 @@ class IKSolver(Enum):
 
 
 class Robot:
-    commands: pimm.SignalReader = pimm.NoOpReader()
-    state: pimm.SignalEmitter = pimm.NoOpEmitter()
-
     def __init__(self,
                  ip: str,
                  relative_dynamics_factor=0.2,
@@ -98,6 +95,8 @@ class Robot:
         self._relative_dynamics_factor = relative_dynamics_factor
         self._cartesian_mode = cartesian_mode
         self._home_joints = home_joints
+        self.commands: pimm.SignalReader = pimm.NoOpReader()
+        self.state: pimm.SignalEmitter = pimm.NoOpEmitter()
 
     @staticmethod
     def _init_robot(robot, rel_dynamics_factor: float):

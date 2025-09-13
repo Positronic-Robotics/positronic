@@ -112,10 +112,6 @@ class WebXR:
     - use_https: enable HTTPS; set False for iPhone dev.
     """
 
-    frame: pimm.SignalReader = pimm.NoOpReader()
-    controller_positions: pimm.SignalEmitter = pimm.NoOpEmitter()
-    buttons: pimm.SignalEmitter = pimm.NoOpEmitter()
-
     def __init__(self,
                  port: int,
                  ssl_keyfile: str = "key.pem",
@@ -129,6 +125,9 @@ class WebXR:
         self.frontend = frontend
         self.use_https = use_https
         self.server_thread = None
+        self.frame: pimm.SignalReader = pimm.NoOpReader()
+        self.controller_positions: pimm.SignalEmitter = pimm.NoOpEmitter()
+        self.buttons: pimm.SignalEmitter = pimm.NoOpEmitter()
 
     def run(self, should_stop: pimm.SignalReader, clock: pimm.Clock) -> Iterator[pimm.Sleep]:  # noqa: C901
         app = FastAPI()

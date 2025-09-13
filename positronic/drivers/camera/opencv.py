@@ -7,13 +7,11 @@ import pimm
 
 
 class OpenCVCamera:
-
-    frame: pimm.SignalEmitter = pimm.NoOpEmitter()
-
     def __init__(self, camera_id: int, resolution: Tuple[int, int], fps: int):
         self.camera_id = camera_id
         self.resolution = resolution
         self.fps = fps
+        self.frame: pimm.SignalEmitter = pimm.NoOpEmitter()
 
     def run(self, should_stop: pimm.SignalReader, clock: pimm.Clock):
         cap = cv2.VideoCapture(self.camera_id)
@@ -46,12 +44,11 @@ if __name__ == "__main__":
     # We could implement this as a plain function
     # TODO: Extract this into utilities
     class VideoWriter:
-        frame: pimm.SignalReader = pimm.NoOpReader()
-
         def __init__(self, filename: str, fps: int, codec: str = 'libx264'):
             self.filename = filename
             self.fps = fps
             self.codec = codec
+            self.frame: pimm.SignalReader = pimm.NoOpReader()
 
         def run(self, should_stop: pimm.SignalReader):
             print(f"Writing to {self.filename}")
