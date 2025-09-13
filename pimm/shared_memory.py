@@ -5,7 +5,7 @@ from typing import Any
 
 import numpy as np
 
-from pimm.core import Clock, Message, SignalEmitter, SignalReader
+from pimm.core import Clock, Message, SignalEmitter, SignalReceiver
 
 
 class SMCompliant(ABC):
@@ -102,7 +102,7 @@ class SharedMemoryEmitter(SignalEmitter):
             self._sm = None
 
 
-class SharedMemoryReader(SignalReader):
+class SharedMemoryReceiver(SignalReceiver):
     def __init__(self, lock: mp.Lock, ts_value: mp.Value, sm_queue: mp.Queue):
         self._lock = lock
         self._ts_value = ts_value

@@ -2,10 +2,10 @@ from typing import Iterator
 import pytest
 import numpy as np
 
-from pimm.core import Clock, Message, NoOpEmitter, SignalEmitter, SignalReader, Sleep
+from pimm.core import Clock, Message, NoOpEmitter, SignalEmitter, SignalReceiver, Sleep
 from pimm.shared_memory import NumpySMAdapter
-from pimm.utils import DefaultReader, ValueUpdated
-from pimm.world import SharedMemoryEmitter, SharedMemoryReader, World
+from pimm.utils import DefaultReceiver, ValueUpdated
+from pimm.world import SharedMemoryEmitter, SharedMemoryReceiver, World
 
 
 class TestNumpySMAdapter:
@@ -37,7 +37,7 @@ class TestSharedMemoryAPI:
             emitter, reader = world.shared_memory()
 
             assert isinstance(emitter, SharedMemoryEmitter)
-            assert isinstance(reader, SharedMemoryReader)
+            assert isinstance(reader, SharedMemoryReceiver)
 
     def test_emitter_reader_basic_communication(self):
         """Test basic communication between emitter and reader."""
@@ -279,7 +279,7 @@ class TestSharedMemoryAPI:
 class TestEmitterControlLoop:
     emitter: SignalEmitter = NoOpEmitter()
 
-    def run(self, _should_stop: SignalReader, _clock: Clock) -> Iterator[Sleep]:
+    def run(self, _should_stop: SignalReceiver, _clock: Clock) -> Iterator[Sleep]:
         yield Sleep(0.2)
 
         test_array = np.array([1.0, 2.0, 3.0], dtype=np.float32)
@@ -307,7 +307,7 @@ class TestSharedMemoryMultiprocessing:
         with World() as world:
             emitter_control_loop.emitter, reader = world.shared_memory()
 
-            reader = DefaultReader(ValueUpdated(reader), (None, False))
+            reader = DefaultReceiver(ValueUpdated(reader), (None, False))
             world.start_in_subprocess(emitter_control_loop.run)
 
             data = []

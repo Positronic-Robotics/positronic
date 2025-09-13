@@ -72,12 +72,12 @@ class Robot:
         self.relative_dynamics_factor = relative_dynamics_factor
         self.solver = KinematicsSolver()
         self.home_joints = home_joints
-        self.commands: pimm.SignalReader[command.CommandType] = pimm.NoOpReader()
+        self.commands: pimm.SignalReceiver[command.CommandType] = pimm.NoOpReceiver()
         self.state: pimm.SignalEmitter[KinovaState] = pimm.NoOpEmitter()
 
-    def run(self, should_stop: pimm.SignalReader, clock: pimm.Clock) -> Iterator[pimm.Sleep]:
+    def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Sleep]:
         _set_realtime_priority()
-        commands = pimm.DefaultReader(pimm.ValueUpdated(self.commands), (None, False))
+        commands = pimm.DefaultReceiver(pimm.ValueUpdated(self.commands), (None, False))
         robot_state = KinovaState()
         rate_limiter = pimm.RateLimiter(clock, hz=1000)
 

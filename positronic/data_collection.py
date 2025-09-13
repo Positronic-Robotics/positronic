@@ -170,9 +170,9 @@ class DataCollectionController:
     def __init__(self, operator_position: geom.Transform3D | None, metadata_getter: Callable[[], Dict] | None = None):
         self.operator_position = operator_position
         self.metadata_getter = metadata_getter or (lambda: {})
-        self.controller_positions_reader: pimm.SignalReader[Dict[str, geom.Transform3D]] = pimm.NoOpReader()
-        self.buttons_reader: pimm.SignalReader[Dict] = pimm.NoOpReader()
-        self.robot_state: pimm.SignalReader[roboarm.State] = pimm.NoOpReader()
+        self.controller_positions_reader: pimm.SignalReceiver[Dict[str, geom.Transform3D]] = pimm.NoOpReceiver()
+        self.buttons_reader: pimm.SignalReceiver[Dict] = pimm.NoOpReceiver()
+        self.robot_state: pimm.SignalReceiver[roboarm.State] = pimm.NoOpReceiver()
 
         self.robot_commands: pimm.SignalEmitter[roboarm.command.CommandType] = pimm.NoOpEmitter()
         self.target_grip_emitter: pimm.SignalEmitter[float] = pimm.NoOpEmitter()
@@ -180,7 +180,7 @@ class DataCollectionController:
         self.ds_agent_commands: pimm.SignalEmitter[DsWriterCommand] = pimm.NoOpEmitter()
         self.sound_emitter: pimm.SignalEmitter[str] = pimm.NoOpEmitter()
 
-    def run(self, should_stop: pimm.SignalReader, clock: pimm.Clock) -> Iterator[pimm.Sleep]:  # noqa: C901
+    def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Sleep]:  # noqa: C901
         start_wav_path = "positronic/assets/sounds/recording-has-started.wav"
         end_wav_path = "positronic/assets/sounds/recording-has-stopped.wav"
 

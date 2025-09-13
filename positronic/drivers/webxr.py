@@ -125,11 +125,11 @@ class WebXR:
         self.frontend = frontend
         self.use_https = use_https
         self.server_thread = None
-        self.frame: pimm.SignalReader = pimm.NoOpReader()
+        self.frame: pimm.SignalReceiver = pimm.NoOpReceiver()
         self.controller_positions: pimm.SignalEmitter = pimm.NoOpEmitter()
         self.buttons: pimm.SignalEmitter = pimm.NoOpEmitter()
 
-    def run(self, should_stop: pimm.SignalReader, clock: pimm.Clock) -> Iterator[pimm.Sleep]:  # noqa: C901
+    def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Sleep]:  # noqa: C901
         app = FastAPI()
         jpeg_encoder = turbojpeg.TurboJPEG()
 

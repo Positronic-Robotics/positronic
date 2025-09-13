@@ -20,18 +20,18 @@ class DataDumper:
     def __init__(self, output_dir: str | None, fps: int) -> None:
         self.output_dir = output_dir
         self.fps = fps
-        self.frame_readers: Dict[str, pimm.SignalReader] = {}
-        self.robot_state: pimm.SignalReader = pimm.NoOpReader()
-        self.robot_commands: pimm.SignalReader[roboarm.command.CommandType] = pimm.NoOpReader()
-        self.target_grip: pimm.SignalReader[float] = pimm.NoOpReader()
+        self.frame_readers: Dict[str, pimm.SignalReceiver] = {}
+        self.robot_state: pimm.SignalReceiver = pimm.NoOpReceiver()
+        self.robot_commands: pimm.SignalReceiver[roboarm.command.CommandType] = pimm.NoOpReceiver()
+        self.target_grip: pimm.SignalReceiver[float] = pimm.NoOpReceiver()
 
-    def run(self, should_stop: pimm.SignalReader, clock: pimm.Clock) -> Iterator[pimm.Sleep]:  # noqa: C901
+    def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Sleep]:  # noqa: C901
         frame_readers = {
-            camera_name: pimm.DefaultReader(pimm.ValueUpdated(frame_reader), ({}, False))
+            camera_name: pimm.DefaultReceiver(pimm.ValueUpdated(frame_reader), ({}, False))
             for camera_name, frame_reader in self.frame_readers.items()
         }
-        target_grip_reader = pimm.DefaultReader(self.target_grip, None)
-        target_robot_pos_reader = pimm.DefaultReader(self.robot_commands, None)
+        target_grip_reader = pimm.DefaultReceiver(self.target_grip, None)
+        target_robot_pos_reader = pimm.DefaultReceiver(self.robot_commands, None)
 
         recorder = Recorder(
             SerialDumper(self.output_dir, video_fps=self.fps) if self.output_dir is not None else None,
@@ -79,7 +79,7 @@ class RecordReplay:
         self.robot_commands: pimm.SignalEmitter = pimm.NoOpEmitter()
         self.target_grip: pimm.SignalEmitter[float] = pimm.NoOpEmitter()
 
-    def run(self, should_stop: pimm.SignalReader, clock: pimm.Clock) -> Iterator[pimm.Sleep]:
+    def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Sleep]:
         timestamps = self.record['target_timestamp'] - self.record['target_timestamp'][0]
 
         self._emit_commands(0)

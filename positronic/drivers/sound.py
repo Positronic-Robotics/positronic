@@ -39,8 +39,8 @@ class SoundSystem:
 
         self.active = True
         self.current_phase = 0.0
-        self.level: pimm.SignalReader[float] = pimm.NoOpReader()
-        self.wav_path: pimm.SignalReader[str] = pimm.NoOpReader()
+        self.level: pimm.SignalReceiver[float] = pimm.NoOpReceiver()
+        self.wav_path: pimm.SignalReceiver[str] = pimm.NoOpReceiver()
 
     def _level_to_frequency(self, level: float) -> Tuple[float, float]:
         if level < self.enable_threshold:
@@ -51,7 +51,7 @@ class SoundSystem:
             frequency = self.base_frequency * (2 ** octave)
             return self.enable_master_volume, frequency
 
-    def run(self, should_stop: pimm.SignalReader, clock: pimm.Clock) -> Iterator[pimm.Sleep]:
+    def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Sleep]:
         p = pyaudio.PyAudio()
         stream = p.open(
             format=pyaudio.paFloat32,
@@ -64,8 +64,8 @@ class SoundSystem:
         audio_files = {}
         file_idx = 0
 
-        wav_path = pimm.DefaultReader(pimm.ValueUpdated(self.wav_path), ("", False))
-        level = pimm.DefaultReader(self.level, 0.0)
+        wav_path = pimm.DefaultReceiver(pimm.ValueUpdated(self.wav_path), ("", False))
+        level = pimm.DefaultReceiver(self.level, 0.0)
 
         while not should_stop.value:
             # Load new files

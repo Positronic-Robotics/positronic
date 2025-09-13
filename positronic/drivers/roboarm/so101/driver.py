@@ -50,8 +50,8 @@ class Robot:
         self.kinematic = Kinematics("positronic/drivers/roboarm/so101/so101.urdf", "gripper_frame_joint")
         self.joint_limits = self.kinematic.joint_limits
         self.home_joints = home_joints
-        self.commands: pimm.SignalReader[roboarm_command.CommandType] = pimm.NoOpReader()
-        self.target_grip: pimm.SignalReader[float] = pimm.NoOpReader()
+        self.commands: pimm.SignalReceiver[roboarm_command.CommandType] = pimm.NoOpReceiver()
+        self.target_grip: pimm.SignalReceiver[float] = pimm.NoOpReceiver()
 
         self.grip: pimm.SignalEmitter[float] = pimm.NoOpEmitter()
         self.state: pimm.SignalEmitter[SO101State] = pimm.NoOpEmitter()
@@ -60,15 +60,15 @@ class Robot:
         print("Warning: Proper dq units is not implemented for SO101!")
         print("================================================================")
 
-    def run(self, should_stop: pimm.SignalReader, clock: pimm.Clock) -> Iterator[pimm.Sleep]:
+    def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Sleep]:
         self.motor_bus.connect()
 
         rate_limit = pimm.RateLimiter(hz=1000, clock=clock)
         state = SO101State()
         initial_grip = self.motor_bus.position[-1]
 
-        command_reader = pimm.DefaultReader(pimm.ValueUpdated(self.commands), (None, False))
-        target_grip = pimm.DefaultReader(self.target_grip, initial_grip)
+        command_reader = pimm.DefaultReceiver(pimm.ValueUpdated(self.commands), (None, False))
+        target_grip = pimm.DefaultReceiver(self.target_grip, initial_grip)
 
         while not should_stop.value:
             command, is_updated = command_reader.value

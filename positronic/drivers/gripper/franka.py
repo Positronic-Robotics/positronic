@@ -22,19 +22,19 @@ class Gripper:
         self._close_threshold = close_threshold
         self._open_threshold = open_threshold
         self.grip: pimm.SignalEmitter = pimm.NoOpEmitter()
-        self.target_grip: pimm.SignalReader = pimm.NoOpReader()
-        self.force: pimm.SignalReader = pimm.NoOpReader()
-        self.speed: pimm.SignalReader = pimm.NoOpReader()
+        self.target_grip: pimm.SignalReceiver = pimm.NoOpReceiver()
+        self.force: pimm.SignalReceiver = pimm.NoOpReceiver()
+        self.speed: pimm.SignalReceiver = pimm.NoOpReceiver()
 
-    def run(self, should_stop: pimm.SignalReader, clock: pimm.Clock) -> Iterator[pimm.Sleep]:
+    def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Sleep]:
         gripper = franky.Gripper(self._ip)
         print(f"Connected to gripper at {self._ip}, homing...")
         gripper.homing()
 
         is_open = True
         limiter = pimm.RateLimiter(clock, hz=100)
-        force = pimm.DefaultReader(self.force, 5.0)  # N
-        speed = pimm.DefaultReader(self.speed, 0.05)  # m/s
+        force = pimm.DefaultReceiver(self.force, 5.0)  # N
+        speed = pimm.DefaultReceiver(self.speed, 0.05)  # m/s
 
         while not should_stop.value:
             try:

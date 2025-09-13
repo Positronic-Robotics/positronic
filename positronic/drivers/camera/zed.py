@@ -52,7 +52,7 @@ class SLCamera:
         self.depth_mask = depth_mask
         self.frame: pimm.SignalEmitter = pimm.NoOpEmitter()
 
-    def run(self, should_stop: pimm.SignalReader, clock: pimm.Clock) -> Iterator[pimm.Sleep]:
+    def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Sleep]:
         fps_counter = pimm.utils.RateCounter("Camera")
         zed = sl.Camera()
         zed.open(self.init_params)

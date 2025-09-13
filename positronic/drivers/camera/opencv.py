@@ -13,7 +13,7 @@ class OpenCVCamera:
         self.fps = fps
         self.frame: pimm.SignalEmitter = pimm.NoOpEmitter()
 
-    def run(self, should_stop: pimm.SignalReader, clock: pimm.Clock):
+    def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock):
         cap = cv2.VideoCapture(self.camera_id)
         cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.resolution[0])
         cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.resolution[1])
@@ -48,9 +48,9 @@ if __name__ == "__main__":
             self.filename = filename
             self.fps = fps
             self.codec = codec
-            self.frame: pimm.SignalReader = pimm.NoOpReader()
+            self.frame: pimm.SignalReceiver = pimm.NoOpReceiver()
 
-        def run(self, should_stop: pimm.SignalReader):
+        def run(self, should_stop: pimm.SignalReceiver):
             print(f"Writing to {self.filename}")
             fps_counter = pimm.utils.RateCounter('VideoWriter')
             with av.open(self.filename, mode='w', format='mp4') as container:
@@ -58,7 +58,7 @@ if __name__ == "__main__":
                 stream.pix_fmt = 'yuv420p'
                 stream.options = {'crf': '27', 'g': '2', 'preset': 'ultrafast', 'tune': 'zerolatency'}
 
-                frame_reader = pimm.DefaultReader(pimm.ValueUpdated(self.frame), (None, False))
+                frame_reader = pimm.DefaultReceiver(pimm.ValueUpdated(self.frame), (None, False))
                 while not should_stop.value:
                     frame, updated = frame_reader.value
                     if not updated:

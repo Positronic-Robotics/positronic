@@ -10,11 +10,11 @@ class DHGripper:
     def __init__(self, port: str):
         self.port = port
         self.grip: pimm.SignalEmitter = pimm.NoOpEmitter()
-        self.target_grip: pimm.SignalReader = pimm.NoOpReader()
-        self.force: pimm.SignalReader = pimm.NoOpReader()
-        self.speed: pimm.SignalReader = pimm.NoOpReader()
+        self.target_grip: pimm.SignalReceiver = pimm.NoOpReceiver()
+        self.force: pimm.SignalReceiver = pimm.NoOpReceiver()
+        self.speed: pimm.SignalReceiver = pimm.NoOpReceiver()
 
-    def run(self, should_stop: pimm.SignalReader, clock: pimm.Clock):
+    def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock):
         client = ModbusClient.ModbusSerialClient(
             port=self.port,
             baudrate=115200,
@@ -36,10 +36,10 @@ class DHGripper:
             while _state_g() != 1 and _state_r() != 1:
                 yield pimm.Sleep(0.1)
 
-        target_grip = pimm.DefaultReader(self.target_grip, 0)
+        target_grip = pimm.DefaultReceiver(self.target_grip, 0)
         # TODO: We must translate these to physical units (N and m/s)
-        force = pimm.DefaultReader(self.force, 100)
-        speed = pimm.DefaultReader(self.speed, 100)
+        force = pimm.DefaultReceiver(self.force, 100)
+        speed = pimm.DefaultReceiver(self.speed, 100)
 
         while not should_stop.value:
             # Update gripper based on shared values

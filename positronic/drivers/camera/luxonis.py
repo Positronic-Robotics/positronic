@@ -10,7 +10,7 @@ class LuxonisCamera:
         self.fps = fps
         self.frame: pimm.SignalEmitter = pimm.NoOpEmitter()
 
-    def run(self, should_stop: pimm.SignalReader, clock: pimm.Clock) -> Iterator[pimm.Sleep]:
+    def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Sleep]:
         pipeline = dai.Pipeline()
         pipeline.setXLinkChunkSize(0)  # increases speed
 

@@ -1,26 +1,26 @@
-from .core import (Clock, ControlLoop, Message, NoOpEmitter, NoOpReader, SignalEmitter, SignalReader,
+from .core import (Clock, ControlLoop, Message, NoOpEmitter, NoOpReceiver, SignalEmitter, SignalReceiver,
                    NoValueException, Sleep, Pass)
-from .utils import map, ValueUpdated, DefaultReader, RateLimiter
+from .utils import map, ValueUpdated, DefaultReceiver, RateLimiter
 from .world import World, BroadcastEmitter
 from . import shared_memory
 
 __all__ = [
     'Clock',
     'ControlLoop',
-    'DefaultReader',
+    'DefaultReceiver',
     'map',
     'Message',
     'NoOpEmitter',
-    'NoOpReader',
+    'NoOpReceiver',
     'NoValueException',
     'Pass',
     'RateLimiter',
     'shared_memory',
     'SignalEmitter',
-    'SignalReader',
+    'SignalReceiver',
     'Sleep',
     'ValueUpdated',
-    'DefaultReader',
+    'DefaultReceiver',
     'RateLimiter',
     'World',
     'shared_memory',

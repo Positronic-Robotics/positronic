@@ -1,7 +1,7 @@
 from unittest.mock import Mock
 
-from pimm.core import Message, SignalReader, Clock
-from pimm.utils import ValueUpdated, DefaultReader, RateLimiter, is_any_updated
+from pimm.core import Message, SignalReceiver, Clock
+from pimm.utils import ValueUpdated, DefaultReceiver, RateLimiter, is_any_updated
 
 
 class TestValueUpdated:
@@ -9,7 +9,7 @@ class TestValueUpdated:
 
     def test_first_read_with_data_returns_updated(self):
         """Test that first read with data returns updated=True."""
-        mock_reader = Mock(spec=SignalReader)
+        mock_reader = Mock(spec=SignalReceiver)
         test_data = "test_data"
         mock_reader.read.return_value = Message(data=test_data, ts=123)
 
@@ -22,7 +22,7 @@ class TestValueUpdated:
 
     def test_first_read_with_none_returns_none(self):
         """Test that first read with None returns None."""
-        mock_reader = Mock(spec=SignalReader)
+        mock_reader = Mock(spec=SignalReceiver)
         mock_reader.read.return_value = None
 
         value_updated = ValueUpdated(mock_reader)
@@ -32,7 +32,7 @@ class TestValueUpdated:
 
     def test_same_timestamp_returns_not_updated(self):
         """Test that reading the same timestamp returns updated=False."""
-        mock_reader = Mock(spec=SignalReader)
+        mock_reader = Mock(spec=SignalReceiver)
         test_data = "test_data"
         message = Message(data=test_data, ts=123)
         mock_reader.read.return_value = message
@@ -49,7 +49,7 @@ class TestValueUpdated:
 
     def test_different_timestamp_returns_updated(self):
         """Test that reading different timestamps returns updated=True."""
-        mock_reader = Mock(spec=SignalReader)
+        mock_reader = Mock(spec=SignalReceiver)
         test_data1 = "test_data1"
         test_data2 = "test_data2"
 
@@ -67,7 +67,7 @@ class TestValueUpdated:
 
     def test_timestamp_tracking_persists_across_calls(self):
         """Test that timestamp tracking persists across multiple calls."""
-        mock_reader = Mock(spec=SignalReader)
+        mock_reader = Mock(spec=SignalReceiver)
 
         value_updated = ValueUpdated(mock_reader)
 
@@ -93,7 +93,7 @@ class TestValueUpdated:
 
     def test_message_timestamp_is_preserved(self):
         """Test that the original message timestamp is preserved in the returned message."""
-        mock_reader = Mock(spec=SignalReader)
+        mock_reader = Mock(spec=SignalReceiver)
         test_data = "test_data"
         original_ts = 123456789
 
@@ -104,17 +104,17 @@ class TestValueUpdated:
         assert result.ts == original_ts
 
 
-class TestDefaultReader:
-    """Test the DefaultReader class."""
+class TestDefaultReceiver:
+    """Test the DefaultReceiver class."""
 
     def test_returns_reader_message_when_available(self):
         """Test that original reader's message is returned when available."""
-        mock_reader = Mock(spec=SignalReader)
+        mock_reader = Mock(spec=SignalReceiver)
         test_data = "actual_data"
         test_ts = 123
         mock_reader.read.return_value = Message(data=test_data, ts=test_ts)
 
-        default_reader = DefaultReader(mock_reader, "default_data", 456)
+        default_reader = DefaultReceiver(mock_reader, "default_data", 456)
         result = default_reader.read()
 
         assert result is not None
@@ -123,12 +123,12 @@ class TestDefaultReader:
 
     def test_returns_default_when_reader_returns_none(self):
         """Test that default message is returned when reader returns None."""
-        mock_reader = Mock(spec=SignalReader)
+        mock_reader = Mock(spec=SignalReceiver)
         mock_reader.read.return_value = None
 
         default_data = "default_value"
         default_ts = 789
-        default_reader = DefaultReader(mock_reader, default_data, default_ts)
+        default_reader = DefaultReceiver(mock_reader, default_data, default_ts)
         result = default_reader.read()
 
         assert result is not None
@@ -258,9 +258,9 @@ class TestRateLimiter:
 
 class TestIsAnyUpdated:
     def test_returns_false_if_no_values_updated(self):
-        reader1 = Mock(spec=SignalReader)
+        reader1 = Mock(spec=SignalReceiver)
         reader1.read.return_value = Message(data=1, ts=1)
-        reader2 = Mock(spec=SignalReader)
+        reader2 = Mock(spec=SignalReceiver)
         reader2.read.return_value = Message(data=2, ts=2)
 
         vu_reader1 = ValueUpdated(reader1)
@@ -276,9 +276,9 @@ class TestIsAnyUpdated:
         assert not is_updated
 
     def test_returns_true_if_all_values_updated(self):
-        reader1 = Mock(spec=SignalReader)
+        reader1 = Mock(spec=SignalReceiver)
         reader1.read.return_value = Message(data=1, ts=1)
-        reader2 = Mock(spec=SignalReader)
+        reader2 = Mock(spec=SignalReceiver)
         reader2.read.return_value = Message(data=2, ts=2)
 
         vu_reader1 = ValueUpdated(reader1)
@@ -290,9 +290,9 @@ class TestIsAnyUpdated:
         assert is_updated
 
     def test_returns_true_if_any_value_updated(self):
-        reader1 = Mock(spec=SignalReader)
+        reader1 = Mock(spec=SignalReceiver)
         reader1.read.return_value = Message(data=1, ts=1)
-        reader2 = Mock(spec=SignalReader)
+        reader2 = Mock(spec=SignalReceiver)
         reader2.read.return_value = Message(data=2, ts=2)
 
         vu_reader1 = ValueUpdated(reader1)
@@ -307,9 +307,9 @@ class TestIsAnyUpdated:
         assert is_updated
 
     def test_returns_false_and_empty_dict_if_all_readers_has_no_data(self):
-        reader1 = Mock(spec=SignalReader)
+        reader1 = Mock(spec=SignalReceiver)
         reader1.read.return_value = None
-        reader2 = Mock(spec=SignalReader)
+        reader2 = Mock(spec=SignalReceiver)
         reader2.read.return_value = None
 
         vu_reader1 = ValueUpdated(reader1)
@@ -321,9 +321,9 @@ class TestIsAnyUpdated:
         assert not is_updated
 
     def test_returns_true_and_present_data_if_some_readers_has_no_data(self):
-        reader1 = Mock(spec=SignalReader)
+        reader1 = Mock(spec=SignalReceiver)
         reader1.read.return_value = None
-        reader2 = Mock(spec=SignalReader)
+        reader2 = Mock(spec=SignalReceiver)
         reader2.read.return_value = Message(data=2, ts=2)
 
         vu_reader1 = ValueUpdated(reader1)

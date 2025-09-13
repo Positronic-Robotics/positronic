@@ -149,10 +149,10 @@ class DsWriterAgent:
         self.ds_writer = ds_writer
         self._poll_hz = float(poll_hz)
 
-        self.command = pimm.NoOpReader[DsWriterCommand]()
+        self.command = pimm.NoOpReceiver[DsWriterCommand]()
 
-        self._inputs: dict[str, pimm.SignalReader[Any]] = {
-            name: pimm.NoOpReader[Any]()
+        self._inputs: dict[str, pimm.SignalReceiver[Any]] = {
+            name: pimm.NoOpReceiver[Any]()
             for name in (signals_spec or [])
         }
         self._inputs_view = _KeyFrozenMapping(self._inputs)
@@ -160,21 +160,21 @@ class DsWriterAgent:
         self._serializers = {name: serializer for name, serializer in signals_spec.items() if serializer is not None}
 
     @property
-    def inputs(self) -> dict[str, pimm.SignalReader[Any]]:
+    def inputs(self) -> dict[str, pimm.SignalReceiver[Any]]:
         # Expose a mapping with frozen keys; values can be updated for existing keys.
         return self._inputs_view  # type: ignore[return-value]
 
-    def run(self, should_stop: pimm.SignalReader, clock: pimm.Clock):
+    def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock):
         """Main loop: process commands and append updated inputs to the episode.
 
         Refactored to reduce complexity: command handling, serialization, and
         appending are split into helpers.
         """
         limiter = pimm.utils.RateLimiter(clock, hz=self._poll_hz)
-        commands = pimm.DefaultReader(pimm.ValueUpdated(self.command), (None, False))
+        commands = pimm.DefaultReceiver(pimm.ValueUpdated(self.command), (None, False))
 
         signals = {
-            name: pimm.DefaultReader(pimm.ValueUpdated(reader), (None, False))
+            name: pimm.DefaultReceiver(pimm.ValueUpdated(reader), (None, False))
             for name, reader in self._inputs.items()
         }
         ep_writer: EpisodeWriter | None = None
