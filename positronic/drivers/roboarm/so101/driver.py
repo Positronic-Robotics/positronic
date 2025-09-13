@@ -67,11 +67,11 @@ class Robot:
         state = SO101State()
         initial_grip = self.motor_bus.position[-1]
 
-        command_reader = pimm.DefaultReceiver(pimm.ValueUpdated(self.commands), (None, False))
+        command_receiver = pimm.DefaultReceiver(pimm.ValueUpdated(self.commands), (None, False))
         target_grip = pimm.DefaultReceiver(self.target_grip, initial_grip)
 
         while not should_stop.value:
-            command, is_updated = command_reader.value
+            command, is_updated = command_receiver.value
             if is_updated:
                 match command:
                     case roboarm_command.Reset():

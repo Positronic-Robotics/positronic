@@ -27,11 +27,11 @@ class DataDumper:
 
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Sleep]:  # noqa: C901
         frame_readers = {
-            camera_name: pimm.DefaultReceiver(pimm.ValueUpdated(frame_reader), ({}, False))
-            for camera_name, frame_reader in self.frame_readers.items()
+            camera_name: pimm.DefaultReceiver(pimm.ValueUpdated(frame_receiver), ({}, False))
+            for camera_name, frame_receiver in self.frame_readers.items()
         }
-        target_grip_reader = pimm.DefaultReceiver(self.target_grip, None)
-        target_robot_pos_reader = pimm.DefaultReceiver(self.robot_commands, None)
+        target_grip_receiver = pimm.DefaultReceiver(self.target_grip, None)
+        target_robot_pos_receiver = pimm.DefaultReceiver(self.robot_commands, None)
 
         recorder = Recorder(
             SerialDumper(self.output_dir, video_fps=self.fps) if self.output_dir is not None else None,
@@ -50,8 +50,8 @@ class DataDumper:
                 yield pimm.Sleep(0.001)
                 continue
 
-            target_grip = target_grip_reader.value
-            target_robot_pos = target_robot_pos_reader.value
+            target_grip = target_grip_receiver.value
+            target_robot_pos = target_robot_pos_receiver.value
 
             if target_robot_pos is None or target_grip is None:
                 yield pimm.Sleep(0.001)

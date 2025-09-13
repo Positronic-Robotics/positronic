@@ -59,7 +59,7 @@ class DearpyguiUi:
         fps_counter = pimm.utils.RateCounter("UI")
         frame_fps_counter = pimm.utils.RateCounter("Frame")
 
-        info_reader = pimm.DefaultReceiver(self.info, "")
+        info_receiver = pimm.DefaultReceiver(self.info, "")
 
         while not should_stop.value and dpg.is_dearpygui_running():
             fps_counter.tick()
@@ -79,7 +79,7 @@ class DearpyguiUi:
                         self.raw_textures[cam_name][:, :, :3] /= 255
                         frame_fps_counter.tick()
 
-            info_text = info_reader.value
+            info_text = info_receiver.value
 
             dpg.set_value("info", info_text)
             dpg.render_dearpygui_frame()

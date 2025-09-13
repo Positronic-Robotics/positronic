@@ -114,9 +114,9 @@ def _setup_ds_agent_for_cameras(world: pimm.World,
         return
     for camera_name, camera in cameras.items():
         if gui is not None:
-            camera.frame, (ds_reader, gui_reader) = world.mp_one_to_many_pipe(2)
-            ds_agent.inputs[camera_mappings[camera_name]] = ds_reader
-            gui.cameras[camera_name] = gui_reader
+            camera.frame, (ds_receiver, gui_receiver) = world.mp_one_to_many_pipe(2)
+            ds_agent.inputs[camera_mappings[camera_name]] = ds_receiver
+            gui.cameras[camera_name] = gui_receiver
         else:
             camera.frame, ds_agent.inputs[camera_mappings[camera_name]] = world.mp_pipe()
 
@@ -129,10 +129,10 @@ def _wire_core_channels(world: pimm.World, data_collection: 'DataCollectionContr
         em, ds_agent.inputs['controller_positions'] = world.mp_pipe()
         ctrl_emitters.append(em)
         data_collection.ds_agent_commands, ds_agent.command = world.mp_pipe()
-    em, data_collection.controller_positions_reader = world.mp_pipe()
+    em, data_collection.controller_positions_receiver = world.mp_pipe()
     ctrl_emitters.append(em)
     webxr.controller_positions = pimm.BroadcastEmitter(ctrl_emitters)
-    webxr.buttons, data_collection.buttons_reader = world.mp_pipe()
+    webxr.buttons, data_collection.buttons_receiver = world.mp_pipe()
 
     # Robot state/commands
     if robot_arm is not None:
@@ -170,8 +170,8 @@ class DataCollectionController:
     def __init__(self, operator_position: geom.Transform3D | None, metadata_getter: Callable[[], Dict] | None = None):
         self.operator_position = operator_position
         self.metadata_getter = metadata_getter or (lambda: {})
-        self.controller_positions_reader: pimm.SignalReceiver[Dict[str, geom.Transform3D]] = pimm.NoOpReceiver()
-        self.buttons_reader: pimm.SignalReceiver[Dict] = pimm.NoOpReceiver()
+        self.controller_positions_receiver: pimm.SignalReceiver[Dict[str, geom.Transform3D]] = pimm.NoOpReceiver()
+        self.buttons_receiver: pimm.SignalReceiver[Dict] = pimm.NoOpReceiver()
         self.robot_state: pimm.SignalReceiver[roboarm.State] = pimm.NoOpReceiver()
 
         self.robot_commands: pimm.SignalEmitter[roboarm.command.CommandType] = pimm.NoOpEmitter()
@@ -184,7 +184,7 @@ class DataCollectionController:
         start_wav_path = "positronic/assets/sounds/recording-has-started.wav"
         end_wav_path = "positronic/assets/sounds/recording-has-stopped.wav"
 
-        controller_positions_reader = pimm.ValueUpdated(self.controller_positions_reader)
+        controller_positions_receiver = pimm.ValueUpdated(self.controller_positions_receiver)
 
         tracker = _Tracker(self.operator_position)
         button_handler = ButtonHandler()
@@ -193,7 +193,7 @@ class DataCollectionController:
 
         while not should_stop.value:
             try:
-                _parse_buttons(self.buttons_reader.value, button_handler)
+                _parse_buttons(self.buttons_receiver.value, button_handler)
                 if button_handler.just_pressed('right_B'):
                     op = DsWriterCommandType.START_EPISODE if not recording else DsWriterCommandType.STOP_EPISODE
                     meta = self.metadata_getter() if op == DsWriterCommandType.STOP_EPISODE else {}
@@ -213,7 +213,7 @@ class DataCollectionController:
                     self.robot_commands.emit(roboarm.command.Reset())
 
                 self.target_grip_emitter.emit(button_handler.get_value('right_trigger'))
-                controller_pos, controller_pos_updated = controller_positions_reader.value
+                controller_pos, controller_pos_updated = controller_positions_receiver.value
                 if controller_pos_updated:
                     target_robot_pos = tracker.update(controller_pos['right'])
                     if tracker.on:  # Don't spam the robot with commands.

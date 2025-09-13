@@ -256,9 +256,9 @@ class MujocoGripper:
         self.grip: pimm.SignalEmitter = pimm.NoOpEmitter()
 
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock):
-        target_grip_reader = pimm.DefaultReceiver(self.target_grip, 0.0)
+        target_grip_receiver = pimm.DefaultReceiver(self.target_grip, 0.0)
         while not should_stop.value:
-            target_grip = target_grip_reader.value
+            target_grip = target_grip_receiver.value
             self.set_target_grip(target_grip)
 
             current_grip = self.sim.data.joint(self.joint_name).qpos.item()

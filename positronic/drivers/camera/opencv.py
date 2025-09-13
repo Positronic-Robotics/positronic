@@ -58,9 +58,9 @@ if __name__ == "__main__":
                 stream.pix_fmt = 'yuv420p'
                 stream.options = {'crf': '27', 'g': '2', 'preset': 'ultrafast', 'tune': 'zerolatency'}
 
-                frame_reader = pimm.DefaultReceiver(pimm.ValueUpdated(self.frame), (None, False))
+                frame_receiver = pimm.DefaultReceiver(pimm.ValueUpdated(self.frame), (None, False))
                 while not should_stop.value:
-                    frame, updated = frame_reader.value
+                    frame, updated = frame_receiver.value
                     if not updated:
                         yield pimm.Sleep(0.5 / self.fps)
                         continue

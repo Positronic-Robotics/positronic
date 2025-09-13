@@ -70,11 +70,11 @@ def build_collection(world, out_dir: Path):
 
     # Wire controller positions to both DC and agent
     ctrl_em, (ctrl_rd_dc, ctrl_rd_agent) = world.local_one_to_many_pipe(2)
-    dc.controller_positions_reader = ctrl_rd_dc
+    dc.controller_positions_receiver = ctrl_rd_dc
     agent.inputs['controller_positions'] = ctrl_rd_agent
 
     # Wire buttons to DC
-    buttons_em, dc.buttons_reader = world.local_pipe()
+    buttons_em, dc.buttons_receiver = world.local_pipe()
 
     # DC emits target grip -> agent receives
     tg_em, agent.inputs['target_grip'] = world.local_pipe()
@@ -169,11 +169,11 @@ def test_data_collection_with_mujoco_robot_gripper(tmp_path):
 
         # Controller positions to DC and agent
         ctrl_em, (ctrl_rd_dc, ctrl_rd_agent) = world.local_one_to_many_pipe(2)
-        dc.controller_positions_reader = ctrl_rd_dc
+        dc.controller_positions_receiver = ctrl_rd_dc
         agent.inputs['controller_positions'] = ctrl_rd_agent
 
         # Buttons to DC
-        buttons_em, dc.buttons_reader = world.local_pipe()
+        buttons_em, dc.buttons_receiver = world.local_pipe()
 
         # Robot state to DC and agent
         rstate_em, (rstate_rd_agent, rstate_rd_dc) = world.local_one_to_many_pipe(2)
