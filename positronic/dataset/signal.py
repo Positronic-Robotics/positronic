@@ -226,6 +226,12 @@ class _SignalView(Signal[T], Generic[T]):
         self._timestamps = timestamps
         self._start_ts = start_ts
 
+    @property
+    def meta(self) -> SignalMeta:
+        if len(self) == 0:
+            raise ValueError("Signal is empty")
+        return self._signal.meta
+
     def __len__(self) -> int:
         return len(self._indices)
 

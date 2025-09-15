@@ -189,6 +189,17 @@ class TestVideoInterface:
         with pytest.raises(ValueError):
             _ = s.names
 
+    def test_video_view_meta_inherits_and_empty_view_raises(self, video_paths):
+        sig = create_video_signal(video_paths, [(create_frame(10), 1000), (create_frame(20), 2000)])
+        view = sig[0:2]
+        assert view.kind == Kind.IMAGE
+        assert view.names == ["height", "width", "channel"]
+        empty_view = sig[0:0]
+        with pytest.raises(ValueError):
+            _ = empty_view.kind
+        with pytest.raises(ValueError):
+            _ = empty_view.names
+
     def test_search_ts_empty_and_numeric(self, video_paths):
         sig = create_video_signal(video_paths, [(create_frame(50), 1000)])
         empty = sig._search_ts(np.array([], dtype=np.int64))

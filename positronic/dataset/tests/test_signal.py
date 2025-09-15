@@ -384,6 +384,17 @@ class TestSignalDtypeShape:
         assert s.names is None
         assert s.kind == Kind.NUMERIC
 
+    def test_signal_view_meta_inherits_and_empty_view_raises(self, tmp_path):
+        s = create_signal(tmp_path, [(1, 1000), (2, 2000), (3, 3000)])
+        view = s[1:3]
+        assert view.kind == Kind.NUMERIC
+        assert view.names is None
+        empty = s[0:0]
+        with pytest.raises(ValueError):
+            _ = empty.dtype
+        with pytest.raises(ValueError):
+            _ = empty.shape
+
     def test_array_signal_dtype_shape(self, tmp_path):
         arr1 = np.array([1.0, 2.0], dtype=np.float32)
         arr2 = np.array([3.0, 4.0], dtype=np.float32)
