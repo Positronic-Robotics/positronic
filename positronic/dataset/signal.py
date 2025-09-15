@@ -1,8 +1,10 @@
 from abc import ABC, abstractmethod
 from collections.abc import Sequence as SequenceABC
 from contextlib import AbstractContextManager
+from enum import Enum
 from typing import (Any, Generic, Protocol, Sequence, Tuple, TypeAlias, TypeVar, final, runtime_checkable)
 from functools import lru_cache
+from dataclasses import dataclass
 
 import numpy as np
 
@@ -46,28 +48,18 @@ class TimeIndexerLike(Protocol, Generic[T]):
         ...
 
 
-class SignalMeta(ABC):
-    """Abstract interface for signal element metadata."""
+class Kind(Enum):
+    NUMERIC = "numeric"
+    IMAGE = "image"
 
-    @property
-    @abstractmethod
-    def dtype(self):
-        ...
 
-    @property
-    @abstractmethod
-    def shape(self):
-        ...
-
-    @staticmethod
-    def compute(signal: "Signal[Any]") -> tuple[Any, Any]:
-        """Compute dtype and shape for a Signal by inspecting first element.
-
-        Raises ValueError if the signal is empty.
-        """
-        if len(signal) == 0:
-            raise ValueError("Signal is empty")
-        return _infer_item_dtype_shape(signal._values_at([0])[0])
+@dataclass
+class SignalMeta:
+    """Container for signal element metadata."""
+    dtype: Any
+    shape: Any
+    kind: 'Kind' = Kind.NUMERIC
+    names: Sequence[str] | None = None
 
 
 class Signal(Sequence[Tuple[T, int]], ABC, Generic[T]):
@@ -107,33 +99,21 @@ class Signal(Sequence[Tuple[T, int]], ABC, Generic[T]):
             raise ValueError("Signal is empty")
         return int(np.asarray(self._ts_at([len(self) - 1]))[0])
 
-    class _Meta(SignalMeta):
-
-        def __init__(self, signal: "Signal[Any]"):
-            self._signal = signal
-            self._dtype = None
-            self._shape = None
-
-        @property
-        def dtype(self):
-            dt, _ = self._compute()
-            return dt
-
-        @property
-        def shape(self):
-            _, sh = self._compute()
-            return sh
-
-        def _compute(self) -> tuple[Any, Any]:
-            if self._dtype is None or self._shape is None:
-                self._dtype, self._shape = SignalMeta.compute(self._signal)
-            return self._dtype, self._shape
-
     @property
     @lru_cache(maxsize=1)
     def meta(self) -> SignalMeta:
-        """Metadata accessor for signal elements (dtype, shape)."""
-        return Signal._Meta(self)
+        """Metadata accessor for signal elements (dtype, shape).
+
+        Default: infer from first value. Subclasses may override to supply
+        domain-specific kind/names or alternate inference.
+        """
+        if len(self) == 0:
+            raise ValueError("Signal is empty")
+        dtype, shape = _infer_item_dtype_shape(self._values_at([0])[0])
+        # Heuristic: uint8 HxWx3 treated as Image, else Numeric
+        kind = Kind.IMAGE if (dtype == np.uint8 and isinstance(shape, tuple) and len(shape) == 3
+                              and shape[2] == 3) else Kind.NUMERIC
+        return SignalMeta(dtype=dtype, shape=shape, kind=kind)
 
     @property
     def dtype(self):
@@ -142,6 +122,14 @@ class Signal(Sequence[Tuple[T, int]], ABC, Generic[T]):
     @property
     def shape(self):
         return self.meta.shape
+
+    @property
+    def kind(self) -> Kind:
+        return self.meta.kind
+
+    @property
+    def names(self) -> Sequence[str] | None:
+        return self.meta.names
 
     @final
     @property

@@ -3,6 +3,7 @@ import pyarrow.parquet as pq
 import pytest
 
 from positronic.dataset.video import VideoSignal, VideoSignalWriter
+from positronic.dataset.signal import Kind
 
 
 @pytest.fixture
@@ -172,6 +173,21 @@ class TestVideoInterface:
         assert ts0 == 1000
         assert_frames_equal(frame0, create_frame(50))
         assert sig._ts_at([1])[0] == 2000
+
+    def test_video_kind_and_names(self, video_paths):
+        sig = create_video_signal(video_paths, [(create_frame(10), 1000)])
+        assert sig.kind == Kind.IMAGE
+        assert sig.names == ["height", "width", "channel"]
+
+    def test_video_kind_names_empty_raises(self, video_paths):
+        # Create empty video index
+        with VideoSignalWriter(video_paths['video'], video_paths['frames']):
+            pass
+        s = VideoSignal(video_paths['video'], video_paths['frames'])
+        with pytest.raises(ValueError):
+            _ = s.kind
+        with pytest.raises(ValueError):
+            _ = s.names
 
     def test_search_ts_empty_and_numeric(self, video_paths):
         sig = create_video_signal(video_paths, [(create_frame(50), 1000)])

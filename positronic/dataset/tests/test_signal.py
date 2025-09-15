@@ -3,6 +3,7 @@ import pytest
 from .utils import DummySignal
 
 from positronic.dataset.vector import SimpleSignal, SimpleSignalWriter
+from positronic.dataset.signal import Kind
 
 
 def create_signal(tmp_path, data_timestamps, name="test.parquet"):
@@ -370,6 +371,18 @@ class TestSignalDtypeShape:
         # Python ints may be materialized as numpy integer scalars
         assert s.dtype in (int, np.int64, np.int32)
         assert s.shape == ()
+
+    def test_scalar_signal_names_none(self, tmp_path):
+        s = create_signal(tmp_path, [(1, 1000), (2, 2000)])
+        assert s.names is None
+        assert s.kind == Kind.NUMERIC
+
+    def test_vector_signal_kind_and_names(self, tmp_path):
+        arr1 = np.array([1.0, 2.0], dtype=np.float32)
+        arr2 = np.array([3.0, 4.0], dtype=np.float32)
+        s = create_signal(tmp_path, [(arr1, 1000), (arr2, 2000)], name="vec.parquet")
+        assert s.names is None
+        assert s.kind == Kind.NUMERIC
 
     def test_array_signal_dtype_shape(self, tmp_path):
         arr1 = np.array([1.0, 2.0], dtype=np.float32)

@@ -8,7 +8,7 @@ import numpy as np
 import pyarrow as pa
 import pyarrow.parquet as pq
 
-from .signal import IndicesLike, RealNumericArrayLike, Signal, SignalWriter, is_realnum_dtype
+from .signal import IndicesLike, RealNumericArrayLike, Signal, SignalWriter, is_realnum_dtype, SignalMeta, Kind
 
 
 class VideoSignalWriter(SignalWriter[np.ndarray]):
@@ -294,3 +294,12 @@ class VideoSignal(Signal[np.ndarray]):
         if not is_realnum_dtype(req.dtype):
             raise TypeError(f"Invalid timestamp array dtype: {req.dtype}")
         return np.searchsorted(self._timestamps, req, side='right') - 1
+
+    @property
+    @lru_cache(maxsize=1)
+    def meta(self) -> SignalMeta:
+        # Video frames are HWC (height, width, channel); classify as image
+        if len(self) == 0:
+            raise ValueError("Signal is empty")
+        base = super().meta
+        return SignalMeta(dtype=base.dtype, shape=base.shape, kind=Kind.IMAGE, names=["height", "width", "channel"])
