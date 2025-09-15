@@ -1,8 +1,8 @@
 from abc import ABC, abstractmethod
 from collections.abc import Sequence as SequenceABC
 from contextlib import AbstractContextManager
-from typing import (Any, Generic, Protocol, Sequence, Tuple, TypeAlias, TypeVar,
-                    final, runtime_checkable)
+from typing import (Any, Generic, Protocol, Sequence, Tuple, TypeAlias, TypeVar, final, runtime_checkable)
+from functools import lru_cache
 
 import numpy as np
 
@@ -46,6 +46,30 @@ class TimeIndexerLike(Protocol, Generic[T]):
         ...
 
 
+class SignalMeta(ABC):
+    """Abstract interface for signal element metadata."""
+
+    @property
+    @abstractmethod
+    def dtype(self):
+        ...
+
+    @property
+    @abstractmethod
+    def shape(self):
+        ...
+
+    @staticmethod
+    def compute(signal: "Signal[Any]") -> tuple[Any, Any]:
+        """Compute dtype and shape for a Signal by inspecting first element.
+
+        Raises ValueError if the signal is empty.
+        """
+        if len(signal) == 0:
+            raise ValueError("Signal is empty")
+        return _infer_item_dtype_shape(signal._values_at([0])[0])
+
+
 class Signal(Sequence[Tuple[T, int]], ABC, Generic[T]):
     """Strictly typed, stepwise function of time with a uniform access contract.
 
@@ -83,21 +107,41 @@ class Signal(Sequence[Tuple[T, int]], ABC, Generic[T]):
             raise ValueError("Signal is empty")
         return int(np.asarray(self._ts_at([len(self) - 1]))[0])
 
+    class _Meta(SignalMeta):
+
+        def __init__(self, signal: "Signal[Any]"):
+            self._signal = signal
+            self._dtype = None
+            self._shape = None
+
+        @property
+        def dtype(self):
+            dt, _ = self._compute()
+            return dt
+
+        @property
+        def shape(self):
+            _, sh = self._compute()
+            return sh
+
+        def _compute(self) -> tuple[Any, Any]:
+            if self._dtype is None or self._shape is None:
+                self._dtype, self._shape = SignalMeta.compute(self._signal)
+            return self._dtype, self._shape
+
+    @property
+    @lru_cache(maxsize=1)
+    def meta(self) -> SignalMeta:
+        """Metadata accessor for signal elements (dtype, shape)."""
+        return Signal._Meta(self)
+
     @property
     def dtype(self):
-        """Default dtype of signal elements. Computed based on the first element.
-
-        Raises ValueError if the signal is empty.
-        """
-        return self._compute_dtype_shape()[0]
+        return self.meta.dtype
 
     @property
     def shape(self):
-        """Default shape of signal elements. Computed based on the first element.
-
-        Raises ValueError if the signal is empty.
-        """
-        return self._compute_dtype_shape()[1]
+        return self.meta.shape
 
     @final
     @property
@@ -131,20 +175,6 @@ class Signal(Sequence[Tuple[T, int]], ABC, Generic[T]):
                 return _SignalView(self, arr)
             case _:
                 raise TypeError(f"Unsupported index type: {type(index_or_slice)}")
-
-    def _compute_dtype_shape(self) -> tuple[Any, Any]:
-        """Compute and cache the dtype and shape for signal elements.
-
-        Returns a tuple (dtype, shape). Raises ValueError for empty signals.
-        """
-        if not hasattr(self, "_cached_dtype") or not hasattr(self, "_cached_shape"):
-            if len(self) == 0:
-                raise ValueError("Signal is empty")
-            first_val = self._values_at([0])[0]
-            dt, sh = _infer_item_dtype_shape(first_val)
-            self._cached_dtype = dt
-            self._cached_shape = sh
-        return self._cached_dtype, self._cached_shape
 
 
 class _SignalViewTime(TimeIndexerLike[T], Generic[T]):
