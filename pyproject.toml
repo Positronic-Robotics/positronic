@@ -51,7 +51,7 @@ hardware = [
     "pyaudio; sys_platform == 'linux'",  # For SoundSystem
     "pymodbus",  # For DH gripper
     "pyserial", # For DH gripper
-    "pyzed",  # ZED camera support
+    "pyzed; sys_platform == 'linux'",  # ZED camera support
 ]
 dev = [
     "flake8",
@@ -67,6 +67,9 @@ dev = [
 
 [tool.uv.sources.kortex_api]
 url = "https://artifactory.kinovaapps.com/artifactory/generic-local-public/kortex/API/2.7.0/kortex_api-2.7.0.post5-py3-none-any.whl"
+
+[tool.uv.sources.pyzed]
+url = "https://download.stereolabs.com/zedsdk/5.0/whl/linux_x86_64/pyzed-5.0-cp311-cp311-linux_x86_64.whl"
 
 [tool.pytest.ini_options]
 testpaths = [

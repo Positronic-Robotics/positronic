@@ -170,16 +170,6 @@ class DataCollectionController:
 
     def __init__(self, operator_position: geom.Transform3D | None, metadata_getter: Callable[[], Dict] | None = None):
         self.operator_position = operator_position
-        self.controller_positions_reader: pimm.SignalReader[Dict[str, geom.Transform3D]] = pimm.NoOpReceiver()
-        self.buttons_reader: pimm.SignalReader[Dict] = pimm.NoOpReceiver()
-        self.robot_state: pimm.SignalReader[roboarm.State] = pimm.NoOpReceiver()
-
-        self.robot_commands: pimm.SignalEmitter[roboarm.command.CommandType] = pimm.NoOpEmitter()
-        self.target_grip_emitter: pimm.SignalEmitter[float] = pimm.NoOpEmitter()
-
-        self.ds_agent_commands: pimm.SignalEmitter[DsWriterCommand] = pimm.NoOpEmitter()
-        self.sound_emitter: pimm.SignalEmitter[str] = pimm.NoOpEmitter()
-
         self.metadata_getter = metadata_getter or (lambda: {})
         self.controller_positions_receiver: pimm.SignalReceiver[Dict[str, geom.Transform3D]] = pimm.NoOpReceiver()
         self.buttons_receiver: pimm.SignalReceiver[Dict] = pimm.NoOpReceiver()
