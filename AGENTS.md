@@ -1,5 +1,7 @@
 # Contributor guide
 
+- Don't restore any code that you wrote and I deleted.
+
 ## Local environment
 - Use `uv` tool to manage python environment
 

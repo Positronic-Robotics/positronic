@@ -62,6 +62,11 @@ def test_elementwise_names_with_source_names(sig_simple):
     assert ew.names == ["_times10 of feat"]
 
 
+def test_elementwise_names_override(sig_simple):
+    ew = Elementwise(sig_simple, _times10, names=['manual'])
+    assert ew.names == ['manual']
+
+
 def test_join_relative_index_prev_next_equivalents(sig_simple):
     # [0, 1] (current and next)
     j_next = IndexOffsets(sig_simple, 0, 1)
@@ -297,6 +302,11 @@ def test_time_offsets_meta_names_single_and_multi():
     assert vec_offsets.names == ['time offset -1.00 sec of (tx ty)', '(tx ty)', 'time offset 1.00 sec of (tx ty)']
 
 
+def test_time_offsets_names_override(sig_simple):
+    offsets = TimeOffsets(sig_simple, 0, 1_000, names=['now', 'later'])
+    assert offsets.names == ['now', 'later']
+
+
 def test_join_basic():
     # s1: 1000..5000 step 1000
     ts1 = [1000, 2000, 3000, 4000, 5000]
@@ -422,6 +432,11 @@ def test_index_offsets_meta_names():
     assert offsets.names == ['index offset -1 of (x y)', '(x y)', 'index offset 1 of (x y)']
 
 
+def test_index_offsets_names_override(sig_simple):
+    offsets = IndexOffsets(sig_simple, 0, 1, names=['lead', 'lag'])
+    assert offsets.names == ['lead', 'lag']
+
+
 def test_join_equal_timestamps_drop_duplicates_default():
     # Overlapping timestamp at 2000; by default duplicates dropped -> single entry at 2000
     s1 = DummySignal([1000, 2000], [1, 2])
@@ -499,6 +514,12 @@ def test_join_meta_names_all_none():
 
     joined = Join(s1, s2)
     assert joined.names is None
+
+
+def test_join_names_override(sig_simple):
+    sig2 = DummySignal([1000, 2000, 3000], [1, 2, 3])
+    joined = Join(sig_simple, sig2, names=['custom_a', 'custom_b'])
+    assert joined.names == ['custom_a', 'custom_b']
 
 
 def test_pairwise_basic_and_alignment():

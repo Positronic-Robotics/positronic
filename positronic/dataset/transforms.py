@@ -70,10 +70,11 @@ class Elementwise(Signal[U]):
     Non-numeric signals fall back to the base metadata.
     """
 
-    def __init__(self, signal: Signal[T], fn: Callable[[Sequence[T]], Sequence[U]]):
+    def __init__(self, signal: Signal[T], fn: Callable[[Sequence[T]], Sequence[U]], names: Sequence[str] | None = None):
         self._signal = signal
         self._fn = fn
         self._meta = None
+        self._names_override = list(names) if names is not None else None
 
     def __len__(self) -> int:
         return len(self._signal)
@@ -106,7 +107,9 @@ class Elementwise(Signal[U]):
         if self._meta is None:
             base = super().meta  # infers dtype/shape from transformed first element
             # Only craft names if numeric; otherwise use default
-            if base.kind != Kind.NUMERIC:
+            if self._names_override is not None:
+                self._meta = base.with_names(self._names_override)
+            elif base.kind != Kind.NUMERIC:
                 self._meta = base
             else:
                 fn_name = Elementwise._best_fn_name(self._fn)
@@ -143,7 +146,11 @@ class IndexOffsets(Signal[tuple]):
         ``"(name1 name2 ...)"`` following Join semantics.
     """
 
-    def __init__(self, signal: Signal[T], *relative_indices: int, include_ref_ts: bool = False) -> None:
+    def __init__(self,
+                 signal: Signal[T],
+                 *relative_indices: int,
+                 include_ref_ts: bool = False,
+                 names: Sequence[str] | None = None) -> None:
         self._signal = signal
         if len(relative_indices) == 0:
             raise ValueError("relative_indices must be non-empty")
@@ -155,6 +162,7 @@ class IndexOffsets(Signal[tuple]):
         self._max_off = int(np.max(self._offs))
         self._include_ref_ts = bool(include_ref_ts)
         self._meta: SignalMeta | None = None
+        self._names_override = list(names) if names is not None else None
 
     def __len__(self) -> int:
         n = len(self._signal)
@@ -215,7 +223,10 @@ class IndexOffsets(Signal[tuple]):
 
         if self._meta is None:
             base_meta = super().meta
-            names = _format_offset_names(self._signal.names, self._offs, index_offset_label)
+            if self._names_override is not None:
+                names = self._names_override
+            else:
+                names = _format_offset_names(self._signal.names, self._offs, index_offset_label)
             self._meta = base_meta.with_names(names)
         return self._meta
 
@@ -244,7 +255,11 @@ class TimeOffsets(Signal[tuple]):
         Zero offsets retain the original source name.
     """
 
-    def __init__(self, signal: Signal[T], *deltas_ts: int, include_ref_ts: bool = False) -> None:
+    def __init__(self,
+                 signal: Signal[T],
+                 *deltas_ts: int,
+                 include_ref_ts: bool = False,
+                 names: Sequence[str] | None = None) -> None:
         self._signal = signal
         if len(deltas_ts) == 0:
             raise ValueError("deltas_ts must be non-empty")
@@ -257,6 +272,7 @@ class TimeOffsets(Signal[tuple]):
         self._start_offset = 0
         self._last_index = -1
         self._meta: SignalMeta | None = None
+        self._names_override = list(names) if names is not None else None
 
     def _compute_bounds(self) -> None:
         if self._bounds_ready:
@@ -339,7 +355,10 @@ class TimeOffsets(Signal[tuple]):
 
         if self._meta is None:
             base_meta = super().meta
-            names = _format_offset_names(self._signal.names, self._deltas, time_offset_label)
+            if self._names_override is not None:
+                names = self._names_override
+            else:
+                names = _format_offset_names(self._signal.names, self._deltas, time_offset_label)
             self._meta = base_meta.with_names(names)
         return self._meta
 
@@ -388,7 +407,7 @@ class Join(Signal[tuple]):
         multi-argument transforms. Signals without names propagate ``None``.
     """
 
-    def __init__(self, *signals: Signal[Any], include_ref_ts: bool = False) -> None:
+    def __init__(self, *signals: Signal[Any], include_ref_ts: bool = False, names: Sequence[str] | None = None) -> None:
         if len(signals) < 2:
             raise ValueError("Join requires at least two signals")
         self._signals: tuple[Signal[Any], ...] = tuple(signals)
@@ -398,6 +417,7 @@ class Join(Signal[tuple]):
         self._length = 0
         self._union_ts: np.ndarray | None = None
         self._meta: SignalMeta | None = None
+        self._names_override = list(names) if names is not None else None
 
     def _compute_bounds(self) -> None:
         if self._bounds_ready:
@@ -457,9 +477,12 @@ class Join(Signal[tuple]):
     def meta(self) -> SignalMeta:
         if self._meta is None:
             base_meta = super().meta
-            parts = [_format_join_component_name(sig.names) for sig in self._signals]
-            names = [name if has else "" for name, has in parts]
-            self._meta = base_meta.with_names(names if any(has for _, has in parts) else None)
+            if self._names_override is not None:
+                names = self._names_override
+            else:
+                parts = [_format_join_component_name(sig.names) for sig in self._signals]
+                names = [name if has else "" for name, has in parts] if any(has for _, has in parts) else None
+            self._meta = base_meta.with_names(names)
         return self._meta
 
 
