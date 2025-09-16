@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 from typing import Any, Sequence, TypeVar
 
@@ -5,7 +6,7 @@ import numpy as np
 import pyarrow as pa
 import pyarrow.parquet as pq
 
-from .signal import IndicesLike, RealNumericArrayLike, Signal, SignalWriter, is_realnum_dtype
+from .signal import IndicesLike, RealNumericArrayLike, Signal, SignalMeta, SignalWriter, is_realnum_dtype
 
 T = TypeVar('T')
 
@@ -25,7 +26,7 @@ class SimpleSignal(Signal[T]):
         # Initialize with empty arrays to satisfy type checkers; real data is loaded lazily
         self._timestamps: np.ndarray = np.empty(0, dtype=np.int64)
         self._values: np.ndarray = np.empty(0, dtype=object)
-        # Lazily-loaded columns
+        self._names: list[str] | None = None
 
     def _load_data(self):
         """Lazily load parquet data into memory as numpy arrays."""
@@ -34,6 +35,15 @@ class SimpleSignal(Signal[T]):
             self._timestamps = table['timestamp'].to_numpy()
             self._values = table['value'].to_numpy()
             self._data = table
+
+            metadata = table.schema.metadata or {}
+            raw = metadata.get(b'names')
+            if raw is not None:
+                decoded = json.loads(raw.decode('utf-8'))
+                if isinstance(decoded, list):
+                    self._names = [str(item) for item in decoded]
+                elif isinstance(decoded, str):
+                    self._names = [decoded]
 
     def __len__(self) -> int:
         """Returns the number of records in the signal."""
@@ -57,6 +67,17 @@ class SimpleSignal(Signal[T]):
             raise TypeError(f"Invalid timestamp array dtype: {req.dtype}")
         return np.searchsorted(self._timestamps, req, side='right') - 1
 
+    @property
+    def meta(self) -> SignalMeta:
+        self._load_data()
+        base_meta = super().meta
+        if self._names is not None:
+            return SignalMeta(dtype=base_meta.dtype,
+                              shape=base_meta.shape,
+                              kind=base_meta.kind,
+                              names=self._names)
+        return base_meta
+
 
 class SimpleSignalWriter(SignalWriter[T]):
     """Parquet-based writer for scalar and vector Signals.
@@ -66,7 +87,11 @@ class SimpleSignalWriter(SignalWriter[T]):
     Supports scalars and fixed-size vectors/arrays.
     """
 
-    def __init__(self, filepath: Path, chunk_size: int = 10000, drop_equal_bytes_threshold: int | None = None):
+    def __init__(self,
+                 filepath: Path,
+                 chunk_size: int = 10000,
+                 drop_equal_bytes_threshold: int | None = None,
+                 names: Sequence[str] | None = None):
         """Initialize Signal writer to save data to a parquet file.
 
         Args:
@@ -74,6 +99,7 @@ class SimpleSignalWriter(SignalWriter[T]):
             chunk_size: Number of records to accumulate before writing a chunk (default 10000)
             drop_equal_bytes_threshold: If set, and the first record's byte-size is below this
                 threshold, subsequent appends will drop values equal to the last written value.
+            names: Optional feature names to persist in the parquet metadata
         """
         self.filepath = filepath
         self.chunk_size = chunk_size
@@ -88,6 +114,7 @@ class SimpleSignalWriter(SignalWriter[T]):
         self._expected_dtype = None
         self._dedupe_enabled = False
         self._last_value: Any | None = None
+        self._names = list(names) if names is not None else None
 
     def _equal(self, a: Any, b: Any) -> bool:
         if isinstance(a, np.ndarray) and isinstance(b, np.ndarray):
@@ -117,7 +144,11 @@ class SimpleSignalWriter(SignalWriter[T]):
         batch = pa.record_batch([timestamps_array, values_array], names=['timestamp', 'value'])
 
         if self._writer is None:
-            self._writer = pq.ParquetWriter(self.filepath, batch.schema)
+            schema = batch.schema
+            if self._names is not None:
+                metadata = {b'names': json.dumps(self._names).encode('utf-8')}
+                schema = schema.with_metadata(metadata)
+            self._writer = pq.ParquetWriter(self.filepath, schema)
 
         self._writer.write_batch(batch)
         self._timestamps = []
@@ -183,6 +214,9 @@ class SimpleSignalWriter(SignalWriter[T]):
             else:
                 # No data was ever written, create empty file with default schema
                 schema = pa.schema([('timestamp', pa.int64()), ('value', pa.int64())])
+                if self._names is not None:
+                    metadata = {b'names': json.dumps(self._names).encode('utf-8')}
+                    schema = schema.with_metadata(metadata)
                 table = pa.table({'timestamp': [], 'value': []}, schema=schema)
                 pq.write_table(table, self.filepath)
 

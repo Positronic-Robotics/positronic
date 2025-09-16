@@ -63,6 +63,32 @@ def test_episode_getitem_returns_signal(tmp_path):
     assert list(v1) == [3, 4]
 
 
+def test_episode_vector_names_roundtrip(tmp_path):
+    ep_dir = tmp_path / "ep_vec_names"
+    feature_names = ["px", "py"]
+    with DiskEpisodeWriter(ep_dir) as w:
+        w.append("vec", np.array([1.0, 2.0], dtype=np.float32), 1000, names=feature_names)
+        w.append("vec", np.array([3.0, 4.0], dtype=np.float32), 2000, names=feature_names)
+
+    sig = DiskEpisode(ep_dir)["vec"]
+    assert sig.names == feature_names
+
+
+def test_episode_vector_names_mismatch_raises(tmp_path):
+    ep_dir = tmp_path / "ep_vec_names_mismatch"
+    with DiskEpisodeWriter(ep_dir) as w:
+        w.append("vec", np.array([1.0, 2.0], dtype=np.float32), 1000, names=["px", "py"])
+        with pytest.raises(ValueError):
+            w.append("vec", np.array([3.0, 4.0], dtype=np.float32), 2000, names=["ax", "ay"])
+
+
+def test_episode_video_names_not_supported(tmp_path):
+    ep_dir = tmp_path / "ep_video_names"
+    with DiskEpisodeWriter(ep_dir) as w:
+        with pytest.raises(ValueError, match="Custom names are not supported"):
+            w.append("cam", create_frame(10), 1000, names=["r", "g", "b"])
+
+
 def test_episode_static_items_json(tmp_path):
     ep_dir = tmp_path / "ep_static"
     with DiskEpisodeWriter(ep_dir) as w:

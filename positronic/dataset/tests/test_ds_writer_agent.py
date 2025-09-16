@@ -1,4 +1,4 @@
-from typing import Any, List, Tuple
+from typing import Any, List, Sequence, Tuple
 
 import numpy as np
 import pytest
@@ -61,7 +61,7 @@ class FakeEpisodeWriter(EpisodeWriter[Any]):
         self.exited = False
         self.aborted = False
 
-    def append(self, signal_name: str, data: Any, ts_ns: int) -> None:
+    def append(self, signal_name: str, data: Any, ts_ns: int, names: Sequence[str] | None = None) -> None:
         self.appends.append((signal_name, data, int(ts_ns)))
 
     def set_static(self, name: str, data: Any) -> None:

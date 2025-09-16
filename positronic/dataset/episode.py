@@ -173,20 +173,42 @@ def _is_valid_static_value(value: Any) -> bool:
 
 
 class EpisodeWriter(AbstractContextManager, ABC, Generic[T]):
+    """Abstract interface for recording an episode's dynamic and static data.
+
+    Implementations accept time-ordered samples via ``append`` and persist
+    optional per-signal feature ``names`` metadata the first time a signal is
+    seen. Subsequent appends must reuse the same names (or omit them entirely).
+    Static items may be recorded once per key via ``set_static`` and the writer
+    behaves as a context manager for lifecycle management (``__exit__`` /
+    ``abort``).
+    """
+
     @abstractmethod
-    def append(self, signal_name: str, data: T, ts_ns: int) -> None:
+    def append(self, signal_name: str, data: T, ts_ns: int, names: Sequence[str] | None = None) -> None:
+        """Append a sample for the named signal.
+
+        Args:
+            signal_name: Identifier of the signal being written.
+            data: Sample payload to persist.
+            ts_ns: Timestamp in nanoseconds; must be strictly increasing.
+            names: Optional feature names to persist on the first append for the
+                signal; later calls should omit or match the original names.
+        """
         pass
 
     @abstractmethod
     def set_static(self, name: str, data: Any) -> None:
+        """Record a static (per-episode) item by key."""
         pass
 
     @abstractmethod
     def __exit__(self, exc_type, exc, tb) -> None:
+        """Finalize resources on context-manager exit."""
         ...
 
     @abstractmethod
     def abort(self) -> None:
+        """Abort the write and discard any partially written data."""
         pass
 
 
@@ -204,7 +226,8 @@ class DiskEpisodeWriter(EpisodeWriter):
         # Create the episode directory for output files
         self._path.mkdir(parents=True, exist_ok=False)
 
-        self._writers = {}
+        self._writers: dict[str, SimpleSignalWriter | VideoSignalWriter] = {}
+        self._signal_names: dict[str, list[str] | None] = {}
         # Accumulated static items to be stored in a single static.json
         self._static_items: dict[str, Any] = {}
         self._finished = False
@@ -220,7 +243,7 @@ class DiskEpisodeWriter(EpisodeWriter):
         with (self._path / "meta.json").open('w', encoding='utf-8') as f:
             json.dump(meta, f)
 
-    def append(self, signal_name: str, data: T, ts_ns: int) -> None:
+    def append(self, signal_name: str, data: T, ts_ns: int, names: Sequence[str] | None = None) -> None:
         """Append data to a named signal.
 
         Args:
@@ -238,14 +261,21 @@ class DiskEpisodeWriter(EpisodeWriter):
         # Create writer on first append, choosing vector vs video based on data shape/dtype
         if signal_name not in self._writers:
             if isinstance(data, np.ndarray) and data.dtype == np.uint8 and data.ndim == 3 and data.shape[2] == 3:
+                if names is not None:
+                    raise ValueError("Custom names are not supported for video signals")
                 # Image signal -> route to video writer
                 video_path = self._path / f"{signal_name}.mp4"
                 frames_index = self._path / f"{signal_name}.frames.parquet"
                 self._writers[signal_name] = VideoSignalWriter(video_path, frames_index)
+                self._signal_names[signal_name] = None
             else:
                 # Scalar/vector signal
                 self._writers[signal_name] = SimpleSignalWriter(self._path / f"{signal_name}.parquet",
-                                                                drop_equal_bytes_threshold=128)
+                                                                drop_equal_bytes_threshold=128,
+                                                                names=names)
+                self._signal_names[signal_name] = names
+        elif self._signal_names.get(signal_name) != names:
+            raise ValueError(f"Names for signal '{signal_name}' do not match previously provided names")
 
         self._writers[signal_name].append(data, ts_ns)
 
