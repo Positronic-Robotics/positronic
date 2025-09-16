@@ -1,18 +1,12 @@
 # Foundational Model Fine-tuning
 
-This document provides guidelines for robotics foundational model fine-tuning and using them for inference with the Positronics framework.
+This document provides guidelines for robotics foundational model fine-tuning and using them for inference with the Positronics framework. Make sure to install Positronics as described in the main [README.md](README.md) file before proceeding.
 
 Currently, only the fine-tuning of [Action Chunking with Transformers (ACT)](https://tonyzhaozh.github.io/aloha/) is described here. Other model fine-tuning procedures will be added in the future.
 
-## Prerequisites
-
-Install Positronics as described in the main [README.md](README.md) file.
-
 ## Fine-tune ACT Model
 
-### Prepare Data
-
-#### Dataset Conversion
+### Dataset Conversion
 The dataset in Positronics format should be converted to [LeRobot dataset format](https://github.com/huggingface/lerobot#the-lerobotdataset-format).
 
 To convert the dataset to the target format, execute the following command:
@@ -25,7 +19,7 @@ PYTHONPATH="$PWD" uv run positronic/training/to_lerobot.py convert \
 
 ### Install and Configure LeRobot
 
-Install [LeRobot from source](https://github.com/huggingface/lerobot#from-source) following the official instructions.
+Install [LeRobot from source](https://github.com/huggingface/lerobot#from-source) following the official instructions into a separate directory.
 
 Apply the necessary changes to LeRobot source code:
 1. Copy the patch file located in `patches/positronic-lerobot.patch` to the root of the LeRobot source code repository
@@ -73,16 +67,7 @@ PYTHONPATH="$PWD" python positronic/run_inference.py sim_act \
 The `CHECKPOINT_PATH` should point to the model checkpoint, for example:
 `<LEROBOT_SOURCE_PATH>/outputs/train/2025-09-11/14-16-10_positronic_act/checkpoints/last/pretrained_model/`
 
-#### Headless Mode (Server)
-
-When running in headless mode on a server, add `MUJOCO_GL=egl` to prevent the `AttributeError: 'Renderer' object has no attribute '_mjr_context'` error:
-
-```bash
-PYTHONPATH="$PWD" MUJOCO_GL=egl python positronic/run_inference.py sim_act \
-  --simulation-time 10 \
-  --policy.n_action_steps=30 \
-  --policy.checkpoint_path=<CHECKPOINT_PATH>
-```
+**Note:** When running in headless mode on a server, add `MUJOCO_GL=egl` to prevent the `AttributeError: 'Renderer' object has no attribute '_mjr_context'` error.
 
 #### Output Files
 
