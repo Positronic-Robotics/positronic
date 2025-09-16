@@ -14,6 +14,7 @@ import positronic.cfg.simulator
 import positronic.cfg.sound
 import positronic.cfg.webxr
 from positronic import geom
+from positronic.dataset import ds_writer_agent
 from positronic.dataset.ds_writer_agent import DsWriterAgent, DsWriterCommand, DsWriterCommandType, Serializers
 from positronic.dataset.local_dataset import LocalDatasetWriter
 from positronic.drivers import roboarm
@@ -227,6 +228,7 @@ class DataCollectionController:
                 continue
 
 
+@ds_writer_agent.names({'.left': Serializers.transform_3d.names, '.right': Serializers.transform_3d.names})
 def controller_positions_serializer(controller_positions: Dict[str, geom.Transform3D]) -> Dict[str, np.ndarray]:
     res = {}
     for side, pos in controller_positions.items():

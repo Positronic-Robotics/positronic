@@ -47,7 +47,20 @@ class DsWriterCommand:
 #         - use "" (empty string) to keep the base name as-is
 #         - any dict entry with value None is skipped (not recorded)
 #     * None -> the sample is dropped (not recorded)
+# - Serializers may expose a ``names`` attribute:
+#     * string or list[str]: metadata for the base signal
+#     * dict[str, str | list[str]]: metadata per derived signal suffix ("" keeps the base name)
 Serializer = Callable[[Any], Any | dict[str, Any]]
+
+
+def names(metadata: str | list[str] | dict[str, str | list[str]]):
+    """Attach feature-name metadata to a serializer function."""
+
+    def _decorator(fn: Callable[[Any], Any]) -> Callable[[Any], Any]:
+        setattr(fn, 'names', metadata)
+        return fn
+
+    return _decorator
 
 
 class Serializers:
@@ -63,11 +76,13 @@ class Serializers:
     """
 
     @staticmethod
+    @names(['tx', 'ty', 'tz', 'qx', 'qy', 'qz', 'qw'])
     def transform_3d(x: geom.Transform3D) -> np.ndarray:
         """Serialize a Transform3D into a 7D vector [tx, ty, tz, qx, qy, qz, qw]."""
         return np.concatenate([x.translation, x.rotation.as_quat])
 
     @staticmethod
+    @names({'.q': 'joints', '.dq': 'joint velocities', '.ee_pose': ['tx', 'ty', 'tz', 'qx', 'qy', 'qz', 'qw']})
     def robot_state(state: roboarm.State) -> dict[str, np.ndarray] | None:
         if state.status == roboarm.RobotStatus.RESETTING:
             return None
@@ -78,6 +93,7 @@ class Serializers:
         }
 
     @staticmethod
+    @names({'.pose': 'target pose', '.joints': 'target joints'})
     def robot_command(command: roboarm.command.CommandType) -> dict[str, np.ndarray | int] | None:
         match command:
             case roboarm.command.CartesianMove(pose):
@@ -88,36 +104,26 @@ class Serializers:
                 return {'.reset': 1}
 
 
-def _handle_command(ds_writer: DatasetWriter, cmd: DsWriterCommand, ep_writer: EpisodeWriter | None,
-                    ep_counter: int) -> tuple[EpisodeWriter | None, int]:
-    match cmd.type:
-        case DsWriterCommandType.START_EPISODE:
-            if ep_writer is None:
-                ep_counter += 1
-                print(f"DsWriterAgent: [START] Episode {ep_counter}")
-                ep_writer = ds_writer.new_episode()
-                for k, v in cmd.static_data.items():
-                    ep_writer.set_static(k, v)
+def _extract_names(serializer: Callable[[Any], Any]) -> dict[str, list[str]] | None:
+    names = getattr(serializer, 'names', None)
+    if names is None:
+        return None
+    if isinstance(names, str):
+        return {'': [names]}
+    if isinstance(names, list):
+        return {'': names}
+    if isinstance(names, dict):
+        out: dict[str, list[str]] = {}
+        for suffix, value in names.items():
+            key = '' if suffix in ('', None) else suffix
+            if isinstance(value, str):
+                out[key] = [value]
+            elif isinstance(value, list):
+                out[key] = value
             else:
-                print("Episode already started, ignoring start command")
-        case DsWriterCommandType.STOP_EPISODE:
-            if ep_writer is not None:
-                for k, v in cmd.static_data.items():
-                    ep_writer.set_static(k, v)
-                ep_writer.__exit__(None, None, None)
-                print(f"DsWriterAgent: [STOP] Episode {ep_counter}")
-                ep_writer = None
-            else:
-                print("Episode not started, ignoring stop command")
-        case DsWriterCommandType.ABORT_EPISODE:
-            if ep_writer is not None:
-                ep_writer.abort()
-                ep_writer.__exit__(None, None, None)
-                print(f"DsWriterAgent: [ABORT] Episode {ep_counter}")
-                ep_writer = None
-            else:
-                print("Episode not started, ignoring abort command")
-    return ep_writer, ep_counter
+                raise TypeError("Serializer names mapping values must be string or list")
+        return out
+    raise TypeError("Serializer names attribute must be a string, sequence, or mapping")
 
 
 def _append_processed(ep_writer: EpisodeWriter, name: str, value: Any, clock: pimm.Clock) -> None:
@@ -158,6 +164,11 @@ class DsWriterAgent:
         self._inputs_view = _KeyFrozenMapping(self._inputs)
         # Only keep explicitly provided serializers; None means pass-through
         self._serializers = {name: serializer for name, serializer in signals_spec.items() if serializer is not None}
+        self._signal_meta_specs: dict[str, dict[str, list[str]]] = {}
+        for name, serializer in self._serializers.items():
+            names = _extract_names(serializer)
+            if names is not None:
+                self._signal_meta_specs[name] = names
 
     @property
     def inputs(self) -> dict[str, pimm.SignalReceiver[Any]]:
@@ -183,7 +194,7 @@ class DsWriterAgent:
         while not should_stop.value:
             cmd, cmd_updated = commands.value
             if cmd_updated:
-                ep_writer, ep_counter = _handle_command(self.ds_writer, cmd, ep_writer, ep_counter)
+                ep_writer, ep_counter = self._handle_command(cmd, ep_writer, ep_counter)
 
             if ep_writer is not None:
                 for name, reader in signals.items():
@@ -195,6 +206,40 @@ class DsWriterAgent:
                         _append_processed(ep_writer, name, value, clock)
 
             yield pimm.Sleep(limiter.wait_time())
+
+    def _handle_command(self, cmd: DsWriterCommand, ep_writer: EpisodeWriter | None,
+                        ep_counter: int) -> tuple[EpisodeWriter | None, int]:
+        match cmd.type:
+            case DsWriterCommandType.START_EPISODE:
+                if ep_writer is None:
+                    ep_counter += 1
+                    print(f"DsWriterAgent: [START] Episode {ep_counter}")
+                    ep_writer = self.ds_writer.new_episode()
+                    for base_name, names_map in self._signal_meta_specs.items():
+                        for suffix, name_list in names_map.items():
+                            ep_writer.set_signal_meta(base_name + suffix, names=name_list)
+                    for k, v in cmd.static_data.items():
+                        ep_writer.set_static(k, v)
+                else:
+                    print("Episode already started, ignoring start command")
+            case DsWriterCommandType.STOP_EPISODE:
+                if ep_writer is not None:
+                    for k, v in cmd.static_data.items():
+                        ep_writer.set_static(k, v)
+                    ep_writer.__exit__(None, None, None)
+                    print(f"DsWriterAgent: [STOP] Episode {ep_counter}")
+                    ep_writer = None
+                else:
+                    print("Episode not started, ignoring stop command")
+            case DsWriterCommandType.ABORT_EPISODE:
+                if ep_writer is not None:
+                    ep_writer.abort()
+                    ep_writer.__exit__(None, None, None)
+                    print(f"DsWriterAgent: [ABORT] Episode {ep_counter}")
+                    ep_writer = None
+                else:
+                    print("Episode not started, ignoring abort command")
+        return ep_writer, ep_counter
 
 
 class _KeyFrozenMapping(cabc.MutableMapping):

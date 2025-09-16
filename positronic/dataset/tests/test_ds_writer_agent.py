@@ -60,12 +60,15 @@ class FakeEpisodeWriter(EpisodeWriter[Any]):
         self.appends: List[Tuple[str, Any, int]] = []
         self.exited = False
         self.aborted = False
+        self.meta_calls: dict[str, Sequence[str] | None] = {}
 
     def append(self, signal_name: str, data: Any, ts_ns: int) -> None:
         self.appends.append((signal_name, data, int(ts_ns)))
 
     def set_signal_meta(self, signal_name: str, *, names: Sequence[str] | None = None) -> None:
-        pass
+        if signal_name in self.meta_calls and self.meta_calls[signal_name] != names:
+            raise AssertionError("set_signal_meta called with different names")
+        self.meta_calls[signal_name] = names
 
     def set_static(self, name: str, data: Any) -> None:
         self.statics[name] = data
@@ -196,6 +199,57 @@ def test_appends_only_on_updates_and_timestamps_from_clock(world, clock, run_age
     w = ds.created[-1]
     assert len(w.appends) == 2
     assert w.appends[1][2] > w.appends[0][2]
+
+
+def test_serializer_names_declared_on_start(world, clock, run_agent):
+    ds = FakeDatasetWriter()
+
+    def ser(x):
+        return x
+
+    ser.names = 'feat'
+
+    agent, cmd_em, _ = build_agent_with_pipes({"a": ser}, ds, world)
+
+    def driver(stop_reader, clk):
+        cmd_em.emit(DsWriterCommand(DsWriterCommandType.START_EPISODE))
+        yield pimm.Sleep(0.001)
+        cmd_em.emit(DsWriterCommand(DsWriterCommandType.STOP_EPISODE))
+        yield pimm.Sleep(0.001)
+
+    run_agent(agent, driver)
+
+    writer = ds.created[-1]
+    assert writer.meta_calls.get("a") == ['feat']
+    assert writer.appends == []
+
+
+def test_dict_serializer_value_with_names(world, clock, run_agent):
+    ds = FakeDatasetWriter()
+
+    def ser(x):
+        return {'.x': np.array([1.0, 2.0])}
+
+    ser.names = {'.x': ['a', 'b']}
+
+    agent, cmd_em, emitters = build_agent_with_pipes({"sig": ser}, ds, world)
+
+    def driver(stop_reader, clk):
+        cmd_em.emit(DsWriterCommand(DsWriterCommandType.START_EPISODE))
+        yield pimm.Sleep(0.001)
+        emitters['sig'].emit(np.array([1.0, 2.0]))
+        yield pimm.Sleep(0.001)
+        cmd_em.emit(DsWriterCommand(DsWriterCommandType.STOP_EPISODE))
+        yield pimm.Sleep(0.001)
+
+    run_agent(agent, driver)
+
+    writer = ds.created[-1]
+    assert writer.meta_calls.get('sig.x') == ['a', 'b']
+    assert len(writer.appends) == 1
+    name, arr, _ = writer.appends[0]
+    assert name == 'sig.x'
+    np.testing.assert_allclose(arr, np.array([1.0, 2.0]))
 
 
 def test_integration_with_local_dataset_writer(tmp_path, world, clock, run_agent):

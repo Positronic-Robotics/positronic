@@ -4,14 +4,14 @@ from typing import Sequence
 
 import numpy as np
 
-from .episode import Episode
+from .episode import Episode, EpisodeWriter
 
 
 class DatasetWriter(ABC):
     """Abstract factory for creating new Episodes within a dataset."""
 
     @abstractmethod
-    def new_episode(self):
+    def new_episode(self) -> EpisodeWriter:
         """Allocate and return a writer for a new episode."""
         pass
 

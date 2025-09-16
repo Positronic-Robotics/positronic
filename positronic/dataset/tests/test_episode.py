@@ -93,6 +93,16 @@ def test_episode_video_names_not_supported(tmp_path):
             w.append("cam", create_frame(10), 1000)
 
 
+def test_set_signal_meta_without_append(tmp_path):
+    ep_dir = tmp_path / "ep_meta_only"
+    with DiskEpisodeWriter(ep_dir) as w:
+        w.set_signal_meta("vec", names=["a", "b"])
+
+    assert not (ep_dir / "vec.parquet").exists()
+    ep = DiskEpisode(ep_dir)
+    assert "vec" not in ep.keys
+
+
 def test_episode_static_items_json(tmp_path):
     ep_dir = tmp_path / "ep_static"
     with DiskEpisodeWriter(ep_dir) as w:
