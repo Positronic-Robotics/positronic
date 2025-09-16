@@ -30,9 +30,7 @@ class DummySignal(Signal[int]):
     @property
     def meta(self) -> SignalMeta:
         b_meta = super().meta
-        if self._names is None:
-            return b_meta
-        return SignalMeta(dtype=b_meta.dtype, shape=b_meta.shape, kind=b_meta.kind, names=list(self._names))
+        return b_meta.with_names(self._names)
 
     def __len__(self) -> int:
         return int(self._ts.shape[0])

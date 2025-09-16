@@ -1,4 +1,7 @@
-"""A FastAPI web server for visualizing Positronic LocalDatasets using Rerun."""
+"""A FastAPI web server for visualizing Positronic LocalDatasets using Rerun.
+
+Requires `positronic[server]` extras to be installed.
+"""
 
 import logging
 import os

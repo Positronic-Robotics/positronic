@@ -71,12 +71,7 @@ class SimpleSignal(Signal[T]):
     def meta(self) -> SignalMeta:
         self._load_data()
         base_meta = super().meta
-        if self._names is not None:
-            return SignalMeta(dtype=base_meta.dtype,
-                              shape=base_meta.shape,
-                              kind=base_meta.kind,
-                              names=self._names)
-        return base_meta
+        return base_meta.with_names(self._names)
 
 
 class SimpleSignalWriter(SignalWriter[T]):

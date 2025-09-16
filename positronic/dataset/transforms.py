@@ -1,5 +1,5 @@
 from abc import ABC, abstractmethod
-from functools import lru_cache, partial
+from functools import partial
 from typing import Any, Callable, Sequence, TypeVar
 
 import cv2
@@ -15,17 +15,65 @@ T = TypeVar("T")
 U = TypeVar("U")
 
 
+def _is_nonempty_name(name: str | None) -> bool:
+    """Return True when the provided feature name is a non-empty string."""
+    return isinstance(name, str) and name != ""
+
+
+def _format_join_component_name(names: Sequence[str] | None) -> tuple[str, bool]:
+    """Collapse a sequence of names into display form for join-style transforms."""
+    if names is None:
+        return "", False
+    filtered = [n for n in names if _is_nonempty_name(n)]
+    if not filtered:
+        return "", False
+    if len(filtered) == 1:
+        return filtered[0], True
+    return "(" + " ".join(filtered) + ")", True
+
+
+def _maybe_names(names: list[str]) -> list[str] | None:
+    """Return names if any are non-empty; otherwise propagate None."""
+    return names if any(_is_nonempty_name(n) for n in names) else None
+
+
+def _format_offset_names(src_names: Sequence[str] | None, offsets: Sequence[int],
+                         label_fn: Callable[[str, int], str]) -> list[str] | None:
+    """Produce feature names for offset-based transforms with shared rules."""
+    if src_names is None:
+        return None
+
+    def format_name(name: str, offset: int) -> str:
+        if not _is_nonempty_name(name):
+            return ""
+        return name if offset == 0 else label_fn(name, offset)
+
+    offsets = [int(o) for o in offsets]
+    if len(offsets) == 1:
+        return _maybe_names([format_name(name, offsets[0]) for name in src_names])
+
+    joined, has_any = _format_join_component_name(src_names)
+    if not has_any:
+        return None
+    return _maybe_names([format_name(joined, off) for off in offsets])
+
+
 class Elementwise(Signal[U]):
     """Element-wise value transform view over a Signal.
 
     Wraps another `Signal[T]` and applies a function `f` to its values while
     preserving timestamps and ordering. Length and time indexing semantics are
     identical to the underlying signal.
+
+    When the source signal exposes feature names, they are decorated with
+    ``"{fn_name} of {source}"`` to indicate the transformation applied.
+    Non-numeric signals fall back to the base metadata.
     """
 
     def __init__(self, signal: Signal[T], fn: Callable[[Sequence[T]], Sequence[U]]):
         self._signal = signal
         self._fn = fn
+        self._meta = None
 
     def __len__(self) -> int:
         return len(self._signal)
@@ -54,20 +102,22 @@ class Elementwise(Signal[U]):
         return 'fn'
 
     @property
-    @lru_cache(maxsize=1)
     def meta(self) -> SignalMeta:
-        base = super().meta  # infers dtype/shape from transformed first element
-        # Only craft names if numeric; otherwise use default
-        if base.kind != Kind.NUMERIC:
-            return base
-        fn_name = Elementwise._best_fn_name(self._fn)
-        src_names = self._signal.names
-        if src_names is None:
-            name = fn_name
-        else:
-            src_part = src_names[0] if len(src_names) == 1 else str(list(src_names))
-            name = f"{fn_name} of {src_part}"
-        return SignalMeta(dtype=base.dtype, shape=base.shape, kind=base.kind, names=[name])
+        if self._meta is None:
+            base = super().meta  # infers dtype/shape from transformed first element
+            # Only craft names if numeric; otherwise use default
+            if base.kind != Kind.NUMERIC:
+                self._meta = base
+            else:
+                fn_name = Elementwise._best_fn_name(self._fn)
+                src_names = self._signal.names
+                if src_names is None:
+                    name = fn_name
+                else:
+                    src_part = src_names[0] if len(src_names) == 1 else str(list(src_names))
+                    name = f"{fn_name} of {src_part}"
+                self._meta = base.with_names([name])
+        return self._meta
 
 
 class IndexOffsets(Signal[tuple]):
@@ -87,6 +137,10 @@ class IndexOffsets(Signal[tuple]):
     Notes:
       - The grouped timestamp array uses dtype int64 and has shape (N,).
       - This class does not modify values; it only aligns and groups neighbors.
+      - Feature names are derived from the source signal. Individual offsets are
+        labelled ``"index offset {d} of {name}"`` (or the original name when
+        ``d == 0``). When multiple offsets are present, a component name forms
+        ``"(name1 name2 ...)"`` following Join semantics.
     """
 
     def __init__(self, signal: Signal[T], *relative_indices: int, include_ref_ts: bool = False) -> None:
@@ -100,6 +154,7 @@ class IndexOffsets(Signal[tuple]):
         self._min_off = int(np.min(self._offs))
         self._max_off = int(np.max(self._offs))
         self._include_ref_ts = bool(include_ref_ts)
+        self._meta: SignalMeta | None = None
 
     def __len__(self) -> int:
         n = len(self._signal)
@@ -153,6 +208,17 @@ class IndexOffsets(Signal[tuple]):
         view_idx[p > base_last] = n - 1
         return view_idx
 
+    @property
+    def meta(self) -> SignalMeta:
+        def index_offset_label(name: str, offset: int):
+            return f"index offset {offset} of {name}"
+
+        if self._meta is None:
+            base_meta = super().meta
+            names = _format_offset_names(self._signal.names, self._offs, index_offset_label)
+            self._meta = base_meta.with_names(names)
+        return self._meta
+
 
 class TimeOffsets(Signal[tuple]):
     """Sample at-or-before values at time offsets relative to each base timestamp.
@@ -174,6 +240,8 @@ class TimeOffsets(Signal[tuple]):
       - Non-negative deltas clamp to the last element when the shifted time
         exceeds the last timestamp.
       - Grouped reference timestamp arrays always use dtype int64 and shape (N,).
+      - Names mirror ``IndexOffsets`` semantics but use ``"time offset {sec}"``.
+        Zero offsets retain the original source name.
     """
 
     def __init__(self, signal: Signal[T], *deltas_ts: int, include_ref_ts: bool = False) -> None:
@@ -188,6 +256,7 @@ class TimeOffsets(Signal[tuple]):
         self._bounds_ready = False
         self._start_offset = 0
         self._last_index = -1
+        self._meta: SignalMeta | None = None
 
     def _compute_bounds(self) -> None:
         if self._bounds_ready:
@@ -263,6 +332,17 @@ class TimeOffsets(Signal[tuple]):
             return shifted
         return parent_idx
 
+    @property
+    def meta(self) -> SignalMeta:
+        def time_offset_label(name: str, offset: int):
+            return f"time offset {offset / 1e9:.2f} sec of {name}"
+
+        if self._meta is None:
+            base_meta = super().meta
+            names = _format_offset_names(self._signal.names, self._deltas, time_offset_label)
+            self._meta = base_meta.with_names(names)
+        return self._meta
+
 
 def _ts_at_index(sig: Signal[T], idx: int) -> int:
     """Fetch a single timestamp at the given index as int."""
@@ -300,6 +380,12 @@ class Join(Signal[tuple]):
 
     Raises:
         ValueError: if fewer than two signals are provided.
+
+    Names:
+        When source signals provide feature names, each column preserves its
+        source naming. Multi-column signals collapse their names as
+        ``"(name1 name2 ...)"`` consistent with the semantics used by other
+        multi-argument transforms. Signals without names propagate ``None``.
     """
 
     def __init__(self, *signals: Signal[Any], include_ref_ts: bool = False) -> None:
@@ -311,6 +397,7 @@ class Join(Signal[tuple]):
         self._starts: list[int] = [0] * len(self._signals)
         self._length = 0
         self._union_ts: np.ndarray | None = None
+        self._meta: SignalMeta | None = None
 
     def _compute_bounds(self) -> None:
         if self._bounds_ready:
@@ -365,6 +452,15 @@ class Join(Signal[tuple]):
         self._compute_bounds()
         assert self._union_ts is not None
         return np.searchsorted(self._union_ts, ts_array, side="right") - 1
+
+    @property
+    def meta(self) -> SignalMeta:
+        if self._meta is None:
+            base_meta = super().meta
+            parts = [_format_join_component_name(sig.names) for sig in self._signals]
+            names = [name if has else "" for name, has in parts]
+            self._meta = base_meta.with_names(names if any(has for _, has in parts) else None)
+        return self._meta
 
 
 class EpisodeTransform(ABC):

@@ -61,6 +61,10 @@ class SignalMeta:
     kind: 'Kind' = Kind.NUMERIC
     names: Sequence[str] | None = None
 
+    def with_names(self, names: Sequence[str] | None) -> 'SignalMeta':
+        """Return a copy of this metadata with the provided feature names."""
+        return SignalMeta(dtype=self.dtype, shape=self.shape, kind=self.kind, names=names)
+
 
 class Signal(Sequence[Tuple[T, int]], ABC, Generic[T]):
     """Strictly typed, stepwise function of time with a uniform access contract.

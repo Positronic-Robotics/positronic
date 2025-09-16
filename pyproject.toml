@@ -30,7 +30,6 @@ dependencies = [
     "pyturbojpeg",
     "robosuite",
     "numba>=0.57",
-    "rerun-sdk>=0.23",
     "ruckig",
     "scipy",
     "torch",
@@ -63,6 +62,9 @@ dev = [
     "pytest-asyncio",
     "pytest",
     "rerun-sdk[notebook]",
+]
+server = [
+    "rerun-sdk>=0.23",
 ]
 
 [tool.uv.sources.kortex_api]

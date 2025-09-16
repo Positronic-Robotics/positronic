@@ -277,6 +277,26 @@ def test_time_offsets_positive_delta_too_large(sig_simple):
     ]
 
 
+def test_time_offsets_meta_names_single_and_multi():
+    timestamps = [0, 1_000_000_000, 2_000_000_000]
+    sig = DummySignal(timestamps, [0, 1, 2], names=['value'])
+
+    single = TimeOffsets(sig, 1_000_000_000)
+    assert single.names == ['time offset 1.00 sec of value']
+
+    zero = TimeOffsets(sig, 0)
+    assert zero.names == ['value']
+
+    multi = TimeOffsets(sig, -1_000_000_000, 0, 1_000_000_000)
+    assert multi.names == ['time offset -1.00 sec of value', 'value', 'time offset 1.00 sec of value']
+
+    vector = DummySignal(timestamps + [3_000_000_000],
+                         [[1, 2], [3, 4], [5, 6], [7, 8]],
+                         names=['tx', 'ty'])
+    vec_offsets = TimeOffsets(vector, -1_000_000_000, 0, 1_000_000_000)
+    assert vec_offsets.names == ['time offset -1.00 sec of (tx ty)', '(tx ty)', 'time offset 1.00 sec of (tx ty)']
+
+
 def test_join_basic():
     # s1: 1000..5000 step 1000
     ts1 = [1000, 2000, 3000, 4000, 5000]
@@ -389,6 +409,19 @@ def test_join_with_ref_timestamps_grouped():
         assert ref_ts == exp_union_ts[i]
 
 
+def test_index_offsets_meta_names():
+    sig = DummySignal([0, 1, 2, 3], [10, 20, 30, 40], names=['value'])
+    single = IndexOffsets(sig, 1)
+    assert single.names == ['index offset 1 of value']
+
+    zero = IndexOffsets(sig, 0)
+    assert zero.names == ['value']
+
+    multi = DummySignal([0, 1, 2, 3, 4], [[1, 2], [3, 4], [5, 6], [7, 8], [9, 10]], names=['x', 'y'])
+    offsets = IndexOffsets(multi, -1, 0, 1)
+    assert offsets.names == ['index offset -1 of (x y)', '(x y)', 'index offset 1 of (x y)']
+
+
 def test_join_equal_timestamps_drop_duplicates_default():
     # Overlapping timestamp at 2000; by default duplicates dropped -> single entry at 2000
     s1 = DummySignal([1000, 2000], [1, 2])
@@ -449,6 +482,23 @@ def test_join_three_signals_no_ref_timestamps():
         ((30, 3, 300), 3500),
         ((30, 3, 400), 4200),
     ]
+
+
+def test_join_meta_names():
+    s1 = DummySignal([0, 1], [10, 20], names=['a'])
+    s2 = DummySignal([0, 1], [[1, 2], [3, 4]], names=['b1', 'b2'])
+    s3 = DummySignal([0, 1], [5, 6])
+
+    joined = Join(s1, s2, s3)
+    assert joined.names == ['a', '(b1 b2)', '']
+
+
+def test_join_meta_names_all_none():
+    s1 = DummySignal([0, 1], [10, 20])
+    s2 = DummySignal([0, 1], [30, 40])
+
+    joined = Join(s1, s2)
+    assert joined.names is None
 
 
 def test_pairwise_basic_and_alignment():
