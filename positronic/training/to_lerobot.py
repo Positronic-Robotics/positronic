@@ -1,7 +1,7 @@
 # /// script
 # requires-python = ">=3.11"
 # dependencies = [
-#     "lerobot>=0.3",
+#     "lerobot>=0.3.3",
 #     "torch",
 #     "tqdm",
 #     "configuronic",
@@ -46,8 +46,9 @@ from lerobot.datasets.lerobot_dataset import LeRobotDataset
 
 import configuronic as cfn
 from positronic.cfg.policy import action, observation
-from positronic.dataset import transforms
+from positronic.dataset import transforms, Dataset
 from positronic.dataset.local_dataset import LocalDataset
+from positronic.dataset.signal import Kind
 from positronic.policy.action import ActionDecoder
 from positronic.policy.observation import ObservationEncoder
 
@@ -66,17 +67,15 @@ class EpisodeDictDataset(torch.utils.data.Dataset):
     This dataset is used to load the episode data from the file and encode it into a dictionary.
     """
 
-    def __init__(self, input_dir: Path, state_encoder: ObservationEncoder, action_encoder: ActionDecoder, fps: int):
-        self.dataset = LocalDataset(input_dir)
-        self.observation_encoder = state_encoder
-        self.action_encoder = action_encoder
+    def __init__(self, dataset: Dataset, fps: int):
+        self.dataset = dataset
         self.fps = fps
 
     def __len__(self):
         return len(self.dataset)
 
     def __getitem__(self, idx: int) -> dict:
-        episode = transforms.TransformedEpisode(self.dataset[idx], self.observation_encoder, self.action_encoder)
+        episode = self.dataset[idx]
         start, finish = episode.start_ts, episode.last_ts
         timestamps = np.arange(start, finish, 1e9 / self.fps, dtype=np.int64)
         return episode.time[timestamps]
@@ -87,18 +86,16 @@ def _collate_fn(x):
     return x[0]
 
 
-def append_data_to_dataset(dataset: LeRobotDataset,
-                           input_dir: Path,
-                           state_encoder: ObservationEncoder,
-                           action_encoder: ActionDecoder,
+def append_data_to_dataset(lr_dataset: LeRobotDataset,
+                           p_dataset: Dataset,
                            task: str | None = None,
                            num_workers: int = 16,
                            fps: int = 30):
-    dataset.start_image_writer(num_processes=num_workers)
+    lr_dataset.start_image_writer(num_processes=num_workers)
     # Process each episode file
     total_length_sec = 0
 
-    episode_dataset = EpisodeDictDataset(input_dir, state_encoder, action_encoder, fps=fps)
+    episode_dataset = EpisodeDictDataset(p_dataset, fps=fps)
     dataloader = torch.utils.data.DataLoader(episode_dataset,
                                              batch_size=1,
                                              shuffle=False,
@@ -107,7 +104,7 @@ def append_data_to_dataset(dataset: LeRobotDataset,
 
     for episode_idx, ep_dict in enumerate(tqdm.tqdm(dataloader, desc="Processing episodes")):
         num_frames = len(ep_dict['action'])
-        total_length_sec += num_frames * 1 / dataset.fps
+        total_length_sec += num_frames * 1 / lr_dataset.fps
 
         for i in range(num_frames):
             ep_task = task
@@ -120,11 +117,28 @@ def append_data_to_dataset(dataset: LeRobotDataset,
                 if isinstance(value, AbcSequence | np.ndarray) and len(value) == num_frames:
                     frame[key] = frame[key][i]
 
-            dataset.add_frame(frame, task=ep_task or '')
+            lr_dataset.add_frame(frame, task=ep_task or '')
 
-        dataset.save_episode()
-        dataset.encode_episode_videos(episode_idx)
+        lr_dataset.save_episode()
+        lr_dataset.encode_episode_videos(episode_idx)
     print(f"Total length of the dataset: {seconds_to_str(total_length_sec)}")
+
+
+def _extract_features(dataset: Dataset):
+    """Extract feature metadata from dataset signals for LeRobot dataset creation."""
+    features = {}
+    for name, meta in dataset.signals_meta.items():
+        feature = {'shape': meta.shape}
+        if meta.names is not None:
+            feature['names'] = meta.names
+
+        if meta.kind == Kind.IMAGE:
+            feature['dtype'] = 'video'
+        else:
+            feature['dtype'] = str(meta.dtype)
+
+        features[name] = feature
+    return features
 
 
 @cfn.config(fps=30,
@@ -134,20 +148,17 @@ def append_data_to_dataset(dataset: LeRobotDataset,
             task="pick plate from the table and place it into the dishwasher")
 def convert_to_lerobot_dataset(input_dir: str, output_dir: str, fps: int, video: bool,
                                state_encoder: ObservationEncoder, action_encoder: ActionDecoder, task: str):
-    features = {**state_encoder.get_features(), **action_encoder.get_features()}
+    dataset = LocalDataset(Path(input_dir))
+    dataset = transforms.TransformedDataset(dataset, state_encoder, action_encoder)
 
-    dataset = LeRobotDataset.create(repo_id='local',
-                                    fps=fps,
-                                    root=Path(output_dir),
-                                    use_videos=video,
-                                    features=features,
-                                    image_writer_threads=32)
+    lr_dataset = LeRobotDataset.create(repo_id='local',
+                                       fps=fps,
+                                       root=Path(output_dir),
+                                       use_videos=video,
+                                       features=_extract_features(dataset),
+                                       image_writer_threads=32)
 
-    append_data_to_dataset(dataset=dataset,
-                           input_dir=Path(input_dir),
-                           state_encoder=state_encoder,
-                           action_encoder=action_encoder,
-                           task=task)
+    append_data_to_dataset(lr_dataset=lr_dataset, p_dataset=dataset, task=task)
     print(f"Dataset converted and saved to {output_dir}")
 
 
@@ -156,13 +167,11 @@ def convert_to_lerobot_dataset(input_dir: str, output_dir: str, fps: int, video:
             task="pick plate from the table and place it into the dishwasher")
 def append_data_to_lerobot_dataset(dataset_dir: str, input_dir: Path, state_encoder: ObservationEncoder,
                                    action_encoder: ActionDecoder, task: str):
-    dataset = LeRobotDataset(repo_id='local', root=dataset_dir)
+    lr_dataset = LeRobotDataset(repo_id='local', root=dataset_dir)
 
-    append_data_to_dataset(dataset=dataset,
-                           input_dir=Path(input_dir),
-                           state_encoder=state_encoder,
-                           action_encoder=action_encoder,
-                           task=task)
+    dataset = LocalDataset(Path(input_dir))
+    dataset = transforms.TransformedDataset(dataset, state_encoder, action_encoder)
+    append_data_to_dataset(lr_dataset=lr_dataset, p_dataset=dataset, task=task)
     print(f"Dataset extended with {input_dir} and saved to {dataset_dir}")
 
 
