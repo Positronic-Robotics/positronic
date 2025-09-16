@@ -173,27 +173,16 @@ def _is_valid_static_value(value: Any) -> bool:
 
 
 class EpisodeWriter(AbstractContextManager, ABC, Generic[T]):
-    """Abstract interface for recording an episode's dynamic and static data.
-
-    Implementations accept time-ordered samples via ``append`` and persist
-    optional per-signal feature ``names`` metadata the first time a signal is
-    seen. Subsequent appends must reuse the same names (or omit them entirely).
-    Static items may be recorded once per key via ``set_static`` and the writer
-    behaves as a context manager for lifecycle management (``__exit__`` /
-    ``abort``).
-    """
+    """Abstract interface for recording an episode's dynamic and static data."""
 
     @abstractmethod
-    def append(self, signal_name: str, data: T, ts_ns: int, names: Sequence[str] | None = None) -> None:
-        """Append a sample for the named signal.
+    def append(self, signal_name: str, data: T, ts_ns: int) -> None:
+        """Append a sample for the named signal."""
+        pass
 
-        Args:
-            signal_name: Identifier of the signal being written.
-            data: Sample payload to persist.
-            ts_ns: Timestamp in nanoseconds; must be strictly increasing.
-            names: Optional feature names to persist on the first append for the
-                signal; later calls should omit or match the original names.
-        """
+    @abstractmethod
+    def set_signal_meta(self, signal_name: str, *, names: Sequence[str] | None = None) -> None:
+        """Declare metadata for a pending signal before writing samples."""
         pass
 
     @abstractmethod
@@ -243,7 +232,7 @@ class DiskEpisodeWriter(EpisodeWriter):
         with (self._path / "meta.json").open('w', encoding='utf-8') as f:
             json.dump(meta, f)
 
-    def append(self, signal_name: str, data: T, ts_ns: int, names: Sequence[str] | None = None) -> None:
+    def append(self, signal_name: str, data: T, ts_ns: int) -> None:
         """Append data to a named signal.
 
         Args:
@@ -260,6 +249,7 @@ class DiskEpisodeWriter(EpisodeWriter):
 
         # Create writer on first append, choosing vector vs video based on data shape/dtype
         if signal_name not in self._writers:
+            names = self._signal_names.get(signal_name)
             if isinstance(data, np.ndarray) and data.dtype == np.uint8 and data.ndim == 3 and data.shape[2] == 3:
                 if names is not None:
                     raise ValueError("Custom names are not supported for video signals")
@@ -274,10 +264,19 @@ class DiskEpisodeWriter(EpisodeWriter):
                                                                 drop_equal_bytes_threshold=128,
                                                                 names=names)
                 self._signal_names[signal_name] = names
-        elif self._signal_names.get(signal_name) != names:
-            raise ValueError(f"Names for signal '{signal_name}' do not match previously provided names")
 
         self._writers[signal_name].append(data, ts_ns)
+
+    def set_signal_meta(self, signal_name: str, *, names: Sequence[str] | None = None) -> None:
+        if self._finished:
+            raise RuntimeError("Cannot set signal meta on a finished writer")
+        if self._aborted:
+            raise RuntimeError("Cannot set signal meta on an aborted writer")
+        if signal_name in self._writers:
+            raise ValueError(f"Signal '{signal_name}' already has data written")
+        if signal_name in self._signal_names:
+            raise ValueError(f"Signal '{signal_name}' already has metadata set")
+        self._signal_names[signal_name] = names
 
     def set_static(self, name: str, data: Any) -> None:
         """Set a static (non-time-varying) item by key for this episode.

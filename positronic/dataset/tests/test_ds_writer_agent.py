@@ -61,8 +61,11 @@ class FakeEpisodeWriter(EpisodeWriter[Any]):
         self.exited = False
         self.aborted = False
 
-    def append(self, signal_name: str, data: Any, ts_ns: int, names: Sequence[str] | None = None) -> None:
+    def append(self, signal_name: str, data: Any, ts_ns: int) -> None:
         self.appends.append((signal_name, data, int(ts_ns)))
+
+    def set_signal_meta(self, signal_name: str, *, names: Sequence[str] | None = None) -> None:
+        pass
 
     def set_static(self, name: str, data: Any) -> None:
         self.statics[name] = data
