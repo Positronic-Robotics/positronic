@@ -8,19 +8,18 @@ from positronic.dataset.local_dataset import LocalDataset, LocalDatasetWriter
 
 def test_local_dataset_writer_creates_structure_and_persists(tmp_path):
     root = tmp_path / "ds"
-    w = LocalDatasetWriter(root)
-
-    # Create three episodes with minimal content
-    for i in range(3):
-        with w.new_episode() as ew:
-            ew.set_static("id", i)
-            # Optional: add a tiny dynamic signal
-            ew.append("a", i, 1000 + i)
+    with LocalDatasetWriter(root) as w:
+        # Create three episodes with minimal content
+        for i in range(3):
+            with w.new_episode() as ew:
+                ew.set_static("id", i)
+                ew.append("a", i, 1000 + i)
 
     # Structure exists (12-digit zero-padded ids)
     assert (root / "000000000000" / "000000000000").exists()
     assert (root / "000000000000" / "000000000001").exists()
     assert (root / "000000000000" / "000000000002").exists()
+    assert (root / "signals_meta.json").exists()
 
     ds = LocalDataset(root)
     assert len(ds) == 3
@@ -28,11 +27,13 @@ def test_local_dataset_writer_creates_structure_and_persists(tmp_path):
     assert isinstance(ep0, Episode)
     assert ep0["id"] == 0
     assert ep0["a"][0] == (0, 1000)
+    ds_meta = ds.signals_meta
+    assert "a" in ds_meta
 
     # Restart writer and keep appending
-    w2 = LocalDatasetWriter(root)
-    with w2.new_episode() as ew:
-        ew.set_static("id", 3)
+    with LocalDatasetWriter(root) as w2:
+        with w2.new_episode() as ew:
+            ew.set_static("id", 3)
 
     ds2 = LocalDataset(root)
     assert len(ds2) == 4
@@ -41,12 +42,11 @@ def test_local_dataset_writer_creates_structure_and_persists(tmp_path):
 
 def test_local_dataset_handles_block_rollover(tmp_path):
     root = tmp_path / "roll"
-    w = LocalDatasetWriter(root)
-
-    # Create 1001 empty episodes (static-only) to cross a block boundary
-    for i in range(1001):
-        with w.new_episode() as ew:
-            ew.set_static("id", i)
+    with LocalDatasetWriter(root) as w:
+        # Create 1001 empty episodes (static-only) to cross a block boundary
+        for i in range(1001):
+            with w.new_episode() as ew:
+                ew.set_static("id", i)
 
     # Check directories for episode 0 and 1000
     assert (root / "000000000000" / "000000000000").exists()
@@ -61,10 +61,10 @@ def test_local_dataset_handles_block_rollover(tmp_path):
 # --- Indexing behavior tests ---
 
 def build_simple_dataset(root: Path, n: int = 5) -> LocalDataset:
-    w = LocalDatasetWriter(root)
-    for i in range(n):
-        with w.new_episode() as ew:
-            ew.set_static("id", i)
+    with LocalDatasetWriter(root) as w:
+        for i in range(n):
+            with w.new_episode() as ew:
+                ew.set_static("id", i)
     return LocalDataset(root)
 
 
@@ -119,3 +119,16 @@ def test_array_indexing_errors(tmp_path):
     # Out of range
     with np.testing.assert_raises(IndexError):
         _ = ds[[10]]
+
+
+def test_signals_meta_fallback_without_file(tmp_path):
+    root = tmp_path / "meta_missing"
+    with LocalDatasetWriter(root) as w:
+        with w.new_episode() as ew:
+            ew.append("b", 1, 1000)
+
+    (root / "signals_meta.json").unlink()
+
+    ds = LocalDataset(root)
+    meta = ds.signals_meta
+    assert "b" in meta

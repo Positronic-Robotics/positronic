@@ -66,7 +66,9 @@ def build_collection(world, out_dir: Path):
         'controller_positions': controller_positions_serializer,
         'grip': None,
     }
-    agent = DsWriterAgent(LocalDatasetWriter(out_dir), spec)
+    writer_cm = LocalDatasetWriter(out_dir)
+    writer = writer_cm.__enter__()
+    agent = DsWriterAgent(writer, spec)
 
     # Wire controller positions to both DC and agent
     ctrl_em, (ctrl_rd_dc, ctrl_rd_agent) = world.local_one_to_many_pipe(2)
@@ -87,11 +89,11 @@ def build_collection(world, out_dir: Path):
     cmd_em, agent.command = world.local_pipe()
     dc.ds_agent_commands = cmd_em
 
-    return dc, agent, ctrl_em, buttons_em, grip_em, cmd_em
+    return dc, agent, ctrl_em, buttons_em, grip_em, cmd_em, writer_cm
 
 
 def test_data_collection_basic_recording(tmp_path, world, run_interleaved):
-    dc, agent, ctrl_em, buttons_em, grip_em, cmd_em = build_collection(world, tmp_path)
+    dc, agent, ctrl_em, buttons_em, grip_em, cmd_em, writer_cm = build_collection(world, tmp_path)
 
     # A simple right-hand pose and button frames
     right_pose = Transform3D(translation=np.array([0.1, 0.2, 0.3]), rotation=Rotation.identity)
@@ -111,7 +113,8 @@ def test_data_collection_basic_recording(tmp_path, world, run_interleaved):
         cmd_em.emit(DsWriterCommand(DsWriterCommandType.STOP_EPISODE))
         yield pimm.Sleep(0.001)
 
-    run_interleaved(dc.run, lambda s, c: agent.run(s, c), driver)
+    with writer_cm:
+        run_interleaved(dc.run, lambda s, c: agent.run(s, c), driver)
 
     ds = LocalDataset(tmp_path)
     assert len(ds) == 1
@@ -166,7 +169,8 @@ def test_data_collection_with_mujoco_robot_gripper(tmp_path):
             'robot_state': Serializers.robot_state,
             'grip': None,
         }
-        agent = DsWriterAgent(LocalDatasetWriter(tmp_path), spec)
+        writer_cm = LocalDatasetWriter(tmp_path)
+        agent = DsWriterAgent(writer_cm.__enter__(), spec)
 
         # Controller positions to DC and agent
         ctrl_em, (ctrl_rd_dc, ctrl_rd_agent) = world.local_one_to_many_pipe(2)
@@ -221,13 +225,15 @@ def test_data_collection_with_mujoco_robot_gripper(tmp_path):
             cmd_em.emit(DsWriterCommand(DsWriterCommandType.STOP_EPISODE))
             yield pimm.Sleep(0.005)
 
-        steps = iter(world.interleave(sim.run, robot.run, gripper.run, dc.run, lambda s, c: agent.run(s, c), driver))
-        # Advance a reasonable number of steps
-        for _ in range(400):
-            try:
-                next(steps)
-            except StopIteration:
-                break
+        with writer_cm:
+            steps = world.interleave(sim.run, robot.run, gripper.run, dc.run, lambda s, c: agent.run(s, c), driver)
+            steps = iter(steps)
+            # Advance a reasonable number of steps
+            for _ in range(400):
+                try:
+                    next(steps)
+                except StopIteration:
+                    break
 
     # Validate dataset contents
     ds = LocalDataset(tmp_path)

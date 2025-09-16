@@ -1,11 +1,12 @@
 import time
+from contextlib import nullcontext
 from enum import Enum
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterator, Sequence
 
-import configuronic as cfn
 import numpy as np
 
+import configuronic as cfn
 import pimm
 import positronic.cfg.hardware.camera
 import positronic.cfg.hardware.gripper
@@ -246,15 +247,17 @@ def main(robot_arm: Any | None,
          stream_video_to_webxr: str | None = None,
          operator_position: OperatorPosition = OperatorPosition.FRONT):
     """Runs data collection in real hardware."""
-    with pimm.World() as world:
+    writer_cm = LocalDatasetWriter(Path(output_dir)) if output_dir is not None else nullcontext(None)
+
+    with writer_cm as dataset_writer, pimm.World() as world:
         data_collection = DataCollectionController(operator_position.value)
         cameras = cameras or {}
         camera_mappings = _build_camera_mappings(cameras)
 
         ds_agent = None
-        if output_dir is not None:
+        if dataset_writer is not None:
             signal_specs = _build_signal_specs(camera_mappings)
-            ds_agent = DsWriterAgent(LocalDatasetWriter(Path(output_dir)), signal_specs)
+            ds_agent = DsWriterAgent(dataset_writer, signal_specs)
             _setup_ds_agent_for_cameras(world, cameras, camera_mappings, ds_agent)
 
         _wire_core_channels(world, data_collection, webxr, robot_arm, gripper, ds_agent)
@@ -303,7 +306,9 @@ def main_sim(mujoco_model_path: str,
     gripper = MujocoGripper(sim, actuator_name='actuator8_ph', joint_name='finger_joint1_ph')
     gui = DearpyguiUi()
 
-    with pimm.World(clock=sim) as world:
+    writer_cm = LocalDatasetWriter(Path(output_dir)) if output_dir is not None else nullcontext(None)
+
+    with writer_cm as dataset_writer, pimm.World(clock=sim) as world:
 
         def metadata_getter():
             return {k: v.tolist() for k, v in sim.save_state().items()}
@@ -314,9 +319,9 @@ def main_sim(mujoco_model_path: str,
         camera_mappings = _build_camera_mappings(cameras)
 
         ds_agent = None
-        if output_dir is not None:
+        if dataset_writer is not None:
             signal_specs = _build_signal_specs(camera_mappings)
-            ds_agent = DsWriterAgent(LocalDatasetWriter(Path(output_dir)), signal_specs)
+            ds_agent = DsWriterAgent(dataset_writer, signal_specs)
             _setup_ds_agent_for_cameras(world, cameras, camera_mappings, ds_agent, gui)
 
         _wire_core_channels(world, data_collection, webxr, robot_arm, gripper, ds_agent)
@@ -391,8 +396,10 @@ droid = cfn.Config(
     gripper=positronic.cfg.hardware.gripper.robotiq,
     webxr=positronic.cfg.webxr.oculus,
     sound=positronic.cfg.sound.sound,
-    cameras={'wrist': positronic.cfg.hardware.camera.zed_m.override(view='side_by_side', resolution='vga', fps=30),
-             'side': positronic.cfg.hardware.camera.zed_2i.override(view='left', resolution='vga', fps=30)},
+    cameras={
+        'wrist': positronic.cfg.hardware.camera.zed_m.override(view='side_by_side', resolution='vga', fps=30),
+        'side': positronic.cfg.hardware.camera.zed_2i.override(view='left', resolution='vga', fps=30)
+    },
     operator_position=OperatorPosition.FRONT,
 )
 

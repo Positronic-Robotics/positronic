@@ -204,7 +204,7 @@ class EpisodeWriter(AbstractContextManager, ABC, Generic[T]):
 class DiskEpisodeWriter(EpisodeWriter):
     """Writer for recording episode data containing multiple signals."""
 
-    def __init__(self, directory: Path) -> None:
+    def __init__(self, directory: Path, *, on_close: Callable[['DiskEpisodeWriter'], None] | None = None) -> None:
         """Initialize episode writer.
 
         Args:
@@ -221,6 +221,7 @@ class DiskEpisodeWriter(EpisodeWriter):
         self._static_items: dict[str, Any] = {}
         self._finished = False
         self._aborted = False
+        self._on_close = on_close
 
         # Write system metadata immediately
         meta = {
@@ -231,6 +232,10 @@ class DiskEpisodeWriter(EpisodeWriter):
         meta["writer"]["name"] = f"{self.__class__.__module__}.{self.__class__.__qualname__}"
         with (self._path / "meta.json").open('w', encoding='utf-8') as f:
             json.dump(meta, f)
+
+    @property
+    def path(self) -> Path:
+        return self._path
 
     def append(self, signal_name: str, data: T, ts_ns: int) -> None:
         """Append data to a named signal.
@@ -325,6 +330,9 @@ class DiskEpisodeWriter(EpisodeWriter):
         if self._static_items or not episode_json.exists():
             with episode_json.open('w', encoding='utf-8') as f:
                 json.dump(self._static_items, f)
+
+        if exc_type is None and not self._aborted and self._on_close is not None:
+            self._on_close(self)
 
     def abort(self) -> None:
         """Abort writing: close resources and remove episode directory."""

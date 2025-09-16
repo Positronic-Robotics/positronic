@@ -89,6 +89,9 @@ class FakeDatasetWriter(DatasetWriter):
         self.created.append(w)
         return w
 
+    def __exit__(self, exc_type, exc, tb) -> None:
+        return False
+
 
 def build_agent_with_pipes(signals_spec: dict[str, Any], ds_writer: DatasetWriter, world: pimm.World):
     """Build agent with given signals spec and wire local pipes.
@@ -253,20 +256,20 @@ def test_dict_serializer_value_with_names(world, clock, run_agent):
 
 
 def test_integration_with_local_dataset_writer(tmp_path, world, clock, run_agent):
-    writer = LocalDatasetWriter(tmp_path)
-    agent, cmd_em, emitters = build_agent_with_pipes({"a": None, "b": None}, writer, world)
+    with LocalDatasetWriter(tmp_path) as writer:
+        agent, cmd_em, emitters = build_agent_with_pipes({"a": None, "b": None}, writer, world)
 
-    def driver(stop_reader, clk):
-        cmd_em.emit(DsWriterCommand(DsWriterCommandType.START_EPISODE, {"task": "unit"}))
-        yield pimm.Sleep(0.001)
-        emitters["a"].emit(10)
-        yield pimm.Sleep(0.001)
-        emitters["b"].emit(20)
-        yield pimm.Sleep(0.001)
-        cmd_em.emit(DsWriterCommand(DsWriterCommandType.STOP_EPISODE, {"ok": True}))
-        yield pimm.Sleep(0.001)
+        def driver(stop_reader, clk):
+            cmd_em.emit(DsWriterCommand(DsWriterCommandType.START_EPISODE, {"task": "unit"}))
+            yield pimm.Sleep(0.001)
+            emitters["a"].emit(10)
+            yield pimm.Sleep(0.001)
+            emitters["b"].emit(20)
+            yield pimm.Sleep(0.001)
+            cmd_em.emit(DsWriterCommand(DsWriterCommandType.STOP_EPISODE, {"ok": True}))
+            yield pimm.Sleep(0.001)
 
-    run_agent(agent, driver)
+        run_agent(agent, driver)
 
     ds = LocalDataset(tmp_path)
     assert len(ds) == 1
