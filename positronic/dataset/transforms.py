@@ -218,6 +218,7 @@ class IndexOffsets(Signal[tuple]):
 
     @property
     def meta(self) -> SignalMeta:
+
         def index_offset_label(name: str, offset: int):
             return f"index offset {offset} of {name}"
 
@@ -350,6 +351,7 @@ class TimeOffsets(Signal[tuple]):
 
     @property
     def meta(self) -> SignalMeta:
+
         def time_offset_label(name: str, offset: int):
             return f"time offset {offset / 1e9:.2f} sec of {name}"
 
@@ -492,14 +494,16 @@ class EpisodeTransform(ABC):
     @property
     @abstractmethod
     def keys(self) -> Sequence[str]:
-        pass
+        """Keys that this transform generates."""
+        ...
 
     @abstractmethod
     def transform(self, name: str, episode: Episode) -> Signal[Any] | Any:
-        pass
+        """For given output key, return the transformed signal or static value."""
+        ...
 
 
-class TransformEpisode(Episode):
+class TransformedEpisode(Episode):
     """Transform an episode into a new view of the episode.
 
     Supports one or more transforms. When multiple transforms are provided,
@@ -512,7 +516,7 @@ class TransformEpisode(Episode):
 
     def __init__(self, episode: Episode, *transforms: EpisodeTransform, pass_through: bool = False) -> None:
         if not transforms:
-            raise ValueError("TransformEpisode requires at least one transform")
+            raise ValueError("TransformedEpisode requires at least one transform")
         self._episode = episode
         self._transforms: tuple[EpisodeTransform, ...] = tuple(transforms)
         self._pass_through = pass_through
@@ -593,7 +597,7 @@ class Image:
         def fn(x: Sequence[np.ndarray]) -> Sequence[np.ndarray]:
             return _LazySequence(x, per_frame)
 
-        return Elementwise(signal, fn)
+        return Elementwise(signal, fn, names=['height', 'width', 'channel'])
 
     @staticmethod
     def _resize_with_pad_pil(image: PilImage.Image, height: int, width: int, method: int) -> PilImage.Image:
@@ -641,7 +645,7 @@ class Image:
         def fn(x: Sequence[np.ndarray]) -> Sequence[np.ndarray]:
             return _LazySequence(x, partial(Image.resize_with_pad_per_frame, width, height, method))
 
-        return Elementwise(signal, fn)
+        return Elementwise(signal, fn, names=['height', 'width', 'channel'])
 
 
 def _concat_per_frame(dtype: np.dtype | None, x: Sequence[tuple]) -> np.ndarray:
@@ -673,7 +677,7 @@ def _concat_per_frame(dtype: np.dtype | None, x: Sequence[tuple]) -> np.ndarray:
     return out
 
 
-def concat(*signals, dtype: np.dtype | str | None = None) -> Signal[np.ndarray]:
+def concat(*signals, dtype: np.dtype | str | None = None, names: Sequence[str] | None = None) -> Signal[np.ndarray]:
     """Concatenate multiple 1D array signals into a single array signal.
 
     - Aligns signals on the union of timestamps with carry-back semantics.
@@ -685,7 +689,10 @@ def concat(*signals, dtype: np.dtype | str | None = None) -> Signal[np.ndarray]:
         raise ValueError("concat requires at least one key")
     if n == 1:
         return signals[0]
-    return Elementwise(Join(*signals), partial(_concat_per_frame, dtype))
+
+    if names is None:
+        names = [joined for joined, _ in _format_join_component_name([s.names for s in signals])]
+    return Elementwise(Join(*signals), partial(_concat_per_frame, dtype), names=_maybe_names(names or []))
 
 
 def _astype_per_frame(dtype: np.dtype, x: np.ndarray) -> np.ndarray:
@@ -698,7 +705,7 @@ def _astype_per_frame(dtype: np.dtype, x: np.ndarray) -> np.ndarray:
 
 def astype(signal: Signal[np.ndarray], dtype: np.dtype) -> Signal[np.ndarray]:
     """Return a Signal view that casts batched values to a given dtype."""
-    return Elementwise(signal, partial(_astype_per_frame, dtype))
+    return Elementwise(signal, partial(_astype_per_frame, dtype), names=signal.names)
 
 
 class _PairwiseMap:
@@ -713,13 +720,16 @@ class _PairwiseMap:
         return out
 
 
-def pairwise(a: Signal[Any], b: Signal[Any], op: Callable[[Any, Any], Any]) -> Signal[Any]:
+def pairwise(a: Signal[Any],
+             b: Signal[Any],
+             op: Callable[[Any, Any], Any],
+             names: Sequence[str] | None = None) -> Signal[Any]:
     """Apply a binary operation pairwise across two signals aligned on time.
 
     - Aligns `a` and `b` on the union of timestamps with carry-back semantics.
     - Applies `op(a_value, b_value)` per row and returns a new Signal view of results.
     """
-    return Elementwise(Join(a, b), _PairwiseMap(op))
+    return Elementwise(Join(a, b), _PairwiseMap(op), names=names)
 
 
 def recode_rotation(rep_from: geom.Rotation.Representation, rep_to: geom.Rotation.Representation,

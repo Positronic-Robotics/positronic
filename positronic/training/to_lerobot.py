@@ -76,7 +76,7 @@ class EpisodeDictDataset(torch.utils.data.Dataset):
         return len(self.dataset)
 
     def __getitem__(self, idx: int) -> dict:
-        episode = transforms.TransformEpisode(self.dataset[idx], self.observation_encoder, self.action_encoder)
+        episode = transforms.TransformedEpisode(self.dataset[idx], self.observation_encoder, self.action_encoder)
         start, finish = episode.start_ts, episode.last_ts
         timestamps = np.arange(start, finish, 1e9 / self.fps, dtype=np.int64)
         return episode.time[timestamps]

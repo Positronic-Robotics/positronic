@@ -2,6 +2,7 @@ import numpy as np
 import pytest
 
 from positronic.dataset.episode import EpisodeContainer
+from positronic.dataset.signal import Kind
 from positronic.dataset.transforms import (
     Elementwise,
     EpisodeTransform,
@@ -9,7 +10,7 @@ from positronic.dataset.transforms import (
     IndexOffsets,
     Join,
     TimeOffsets,
-    TransformEpisode,
+    TransformedEpisode,
     concat,
     pairwise,
 )
@@ -576,7 +577,7 @@ def test_transform_episode_keys_and_getitem_pass_through(sig_simple):
     # Build an episode with one signal 's' and two static fields
     ep = EpisodeContainer(signals={"s": sig_simple}, static={"id": 7, "note": "ok"}, meta={"origin": "unit"})
     tf = _DummyTransform()
-    te = TransformEpisode(ep, tf, pass_through=True)
+    te = TransformedEpisode(ep, tf, pass_through=True)
 
     # Keys order: transform keys first, then original non-overlapping keys
     assert list(te.keys) == ["a", "s", "id", "note"]
@@ -602,7 +603,7 @@ def test_transform_episode_keys_and_getitem_pass_through(sig_simple):
 def test_transform_episode_no_pass_through(sig_simple):
     ep = EpisodeContainer(signals={"s": sig_simple}, static={"id": 7})
     tf = _DummyTransform()
-    te = TransformEpisode(ep, tf, pass_through=False)
+    te = TransformedEpisode(ep, tf, pass_through=False)
 
     # Only transform keys
     assert list(te.keys) == ["a", "s"]
@@ -640,7 +641,7 @@ def test_transform_episode_multiple_transforms_order_and_precedence(sig_simple):
     t2 = _DummyTransform2()  # defines ["b", "s"] (s -> +100)
 
     # Concatenate transform keys in order; first occurrence of duplicates kept
-    te = TransformEpisode(ep, t1, t2, pass_through=True)
+    te = TransformedEpisode(ep, t1, t2, pass_through=True)
     assert list(te.keys) == ["a", "s", "b", "id", "z"]
 
     # 's' should come from the first transform (t1)
@@ -675,6 +676,8 @@ def test_image_resize_basic():
     # Uniform frames should remain uniform after resize
     assert np.unique(v0).tolist() == [10]
     assert np.unique(v1).tolist() == [200]
+    assert resized.names == ['height', 'width', 'channel']
+    assert resized.kind == Kind.IMAGE
 
 
 def test_image_resize_with_pad_basic():
@@ -696,6 +699,8 @@ def test_image_resize_with_pad_basic():
     assert np.unique(left_col).tolist() == [0]
     assert np.unique(right_col).tolist() == [0]
     assert np.unique(mid).tolist() == [255]
+    assert resized.names == ['height', 'width', 'channel']
+    assert resized.kind == Kind.IMAGE
 
 
 def test_concat_vectors_batched_and_alignment():
