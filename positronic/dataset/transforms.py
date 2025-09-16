@@ -8,6 +8,7 @@ from PIL import Image as PilImage
 
 from positronic import geom
 
+from .dataset import Dataset
 from .episode import Episode
 from .signal import IndicesLike, Kind, RealNumericArrayLike, Signal, SignalMeta
 
@@ -691,7 +692,13 @@ def concat(*signals, dtype: np.dtype | str | None = None, names: Sequence[str] |
         return signals[0]
 
     if names is None:
-        names = [joined for joined, _ in _format_join_component_name([s.names for s in signals])]
+        joined_names: list[str] = []
+        any_named = False
+        for sig in signals:
+            joined, has = _format_join_component_name(sig.names)
+            joined_names.append(joined)
+            any_named = any_named or has
+        names = joined_names if any_named else None
     return Elementwise(Join(*signals), partial(_concat_per_frame, dtype), names=_maybe_names(names or []))
 
 
@@ -749,3 +756,27 @@ def recode_rotation(rep_from: geom.Rotation.Representation, rep_to: geom.Rotatio
         return _LazySequence(x, lambda v: geom.Rotation.create_from(v, rep_from).to(rep_to).flatten())
 
     return Elementwise(signal, fn)
+
+
+class TransformedDataset(Dataset):
+    """Transform a dataset into a new view of the dataset."""
+
+    def __init__(self, dataset: Dataset, *transforms: EpisodeTransform, pass_through: bool = False) -> None:
+        self._dataset = dataset
+        self._transforms = transforms
+        self._pass_through = pass_through
+        self._meta = None
+
+    def __len__(self) -> int:
+        return len(self._dataset)
+
+    def __getitem__(self, index_or_slice: int | slice | Sequence[int] | np.ndarray) -> Episode:
+        episode = self._dataset[index_or_slice]
+        return TransformedEpisode(episode, *self._transforms, pass_through=self._pass_through)
+
+    @property
+    def signals_meta(self) -> dict[str, SignalMeta]:
+        if self._meta is None:
+            ep = self[0]
+            self._meta = {name: ep[name].meta for name in ep.signals.keys()}
+        return self._meta

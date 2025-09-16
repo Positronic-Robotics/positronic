@@ -76,10 +76,15 @@ class AbsolutePositionAction(RotationTranslationGripAction):
 
     def encode_episode(self, episode: Episode) -> Signal[np.ndarray]:
         rotations = transforms.recode_rotation(RotRep.QUAT, self.rot_rep, episode['target_robot_position_quaternion'])
+        names = [
+            'rotation_0', 'rotation_1', 'rotation_2', 'rotation_3', 'translation_x', 'translation_y', 'translation_z',
+            'grip'
+        ]
         return transforms.concat(rotations,
                                  episode['target_robot_position_translation'],
                                  episode['target_grip'],
-                                 dtype=np.float32)
+                                 dtype=np.float32,
+                                 names=names)
 
     def decode(self, action_vector: np.ndarray, inputs: dict[str, np.ndarray]) -> dict[str, Any]:
         rotation = action_vector[:self.rot_rep.size].reshape(self.rot_rep.shape)

@@ -1,6 +1,7 @@
 import numpy as np
 import pytest
 
+from positronic.dataset.dataset import Dataset
 from positronic.dataset.episode import EpisodeContainer
 from positronic.dataset.signal import Kind
 from positronic.dataset.transforms import (
@@ -10,6 +11,7 @@ from positronic.dataset.transforms import (
     IndexOffsets,
     Join,
     TimeOffsets,
+    TransformedDataset,
     TransformedEpisode,
     concat,
     pairwise,
@@ -653,6 +655,71 @@ def test_transform_episode_multiple_transforms_order_and_precedence(sig_simple):
     b_vals = [v for v, _ in te["b"]]
     assert a_vals == [x * 10 for x, _ in ep["s"]]
     assert b_vals == [-(x) for x, _ in ep["s"]]
+
+
+class _DummyDataset(Dataset):
+    """Minimal Dataset implementation used for TransformedDataset tests."""
+
+    def __init__(self, episodes, signals_meta):
+        self._episodes = list(episodes)
+        self._signals_meta = dict(signals_meta)
+        self.getitem_calls = 0
+
+    def __len__(self):
+        return len(self._episodes)
+
+    def __getitem__(self, index_or_slice):
+        self.getitem_calls += 1
+        if isinstance(index_or_slice, slice):
+            rng = range(*index_or_slice.indices(len(self)))
+            return [self._episodes[i] for i in rng]
+        if isinstance(index_or_slice, (list, tuple, np.ndarray)):
+            return [self._episodes[int(i)] for i in index_or_slice]
+        return self._episodes[int(index_or_slice)]
+
+    @property
+    def signals_meta(self):
+        return dict(self._signals_meta)
+
+
+def test_transformed_dataset_wraps_episode_with_transforms(sig_simple):
+    base_meta = {"a": sig_simple.meta, "s": sig_simple.meta}
+    episode = EpisodeContainer(signals={"s": sig_simple}, static={"id": 99}, meta=base_meta)
+    dataset = _DummyDataset([episode], signals_meta={"s": sig_simple.meta})
+    tf = _DummyTransform()
+
+    transformed = TransformedDataset(dataset, tf, pass_through=True)
+
+    assert len(transformed) == 1
+    wrapped = transformed[0]
+    assert isinstance(wrapped, TransformedEpisode)
+    assert list(wrapped.keys) == ["a", "s", "id"]
+
+    a_vals = [v for v, _ in wrapped["a"]]
+    s_vals = [v for v, _ in wrapped["s"]]
+    assert a_vals == [x * 10 for x, _ in episode["s"]]
+    assert s_vals == [x + 1 for x, _ in episode["s"]]
+    assert wrapped["id"] == 99
+
+    meta = transformed.signals_meta
+    assert set(meta.keys()) == {"a", "s"}
+    assert meta["s"].names == sig_simple.meta.names
+
+
+def test_transformed_dataset_signals_meta_cached(sig_simple):
+    base_meta = {"a": sig_simple.meta, "s": sig_simple.meta}
+    episode = EpisodeContainer(signals={"s": sig_simple}, meta=base_meta)
+    dataset = _DummyDataset([episode], signals_meta={"s": sig_simple.meta})
+    tf = _DummyTransform()
+
+    transformed = TransformedDataset(dataset, tf, pass_through=True)
+
+    assert dataset.getitem_calls == 0
+    first_meta = transformed.signals_meta
+    assert dataset.getitem_calls == 1
+    second_meta = transformed.signals_meta
+    assert dataset.getitem_calls == 1
+    assert second_meta is first_meta
 
 
 def test_image_resize_basic():
