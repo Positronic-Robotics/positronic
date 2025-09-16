@@ -1,6 +1,14 @@
+from collections.abc import Sequence
+
 import numpy as np
 
-from positronic.dataset.signal import IndicesLike, RealNumericArrayLike, is_realnum_dtype, Signal
+from positronic.dataset.signal import (
+    IndicesLike,
+    RealNumericArrayLike,
+    Signal,
+    SignalMeta,
+    is_realnum_dtype,
+)
 
 
 class DummySignal(Signal[int]):
@@ -9,13 +17,22 @@ class DummySignal(Signal[int]):
     Used to validate core Signal's generic indexing/time logic and views.
     """
 
-    def __init__(self, timestamps, values):
+    def __init__(self, timestamps, values, names: Sequence[str] | None = None):
         ts_arr = np.asarray(timestamps, dtype=np.int64)
         vals_arr = np.asarray(values)
         assert ts_arr.ndim == 1
         assert vals_arr.shape[0] == ts_arr.shape[0]
         self._ts = ts_arr
         self._vals = vals_arr
+        self._names = list(names) if names is not None else None
+        self._meta_override: SignalMeta | None = None
+
+    @property
+    def meta(self) -> SignalMeta:
+        b_meta = super().meta
+        if self._names is None:
+            return b_meta
+        return SignalMeta(dtype=b_meta.dtype, shape=b_meta.shape, kind=b_meta.kind, names=list(self._names))
 
     def __len__(self) -> int:
         return int(self._ts.shape[0])

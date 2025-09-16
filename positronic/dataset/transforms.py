@@ -1,15 +1,15 @@
 from abc import ABC, abstractmethod
-from functools import partial
+from functools import lru_cache, partial
 from typing import Any, Callable, Sequence, TypeVar
 
-import numpy as np
 import cv2
+import numpy as np
 from PIL import Image as PilImage
 
 from positronic import geom
 
-from .signal import Signal, IndicesLike, RealNumericArrayLike
 from .episode import Episode
+from .signal import IndicesLike, Kind, RealNumericArrayLike, Signal, SignalMeta
 
 T = TypeVar("T")
 U = TypeVar("U")
@@ -38,6 +38,36 @@ class Elementwise(Signal[U]):
 
     def _search_ts(self, ts_array: RealNumericArrayLike) -> IndicesLike:
         return self._signal._search_ts(ts_array)
+
+    @staticmethod
+    def _best_fn_name(fn: Callable[..., Any]) -> str:
+        base = fn
+        if isinstance(base, partial):
+            base = base.func
+        name = getattr(base, '__name__', None)
+        if name is not None:
+            return 'lambda' if name == '<lambda>' else name
+        # Fallback to class name for callables
+        cls = getattr(base, '__class__', None)
+        if cls is not None and hasattr(cls, '__name__'):
+            return cls.__name__
+        return 'fn'
+
+    @property
+    @lru_cache(maxsize=1)
+    def meta(self) -> SignalMeta:
+        base = super().meta  # infers dtype/shape from transformed first element
+        # Only craft names if numeric; otherwise use default
+        if base.kind != Kind.NUMERIC:
+            return base
+        fn_name = Elementwise._best_fn_name(self._fn)
+        src_names = self._signal.names
+        if src_names is None:
+            name = fn_name
+        else:
+            src_part = src_names[0] if len(src_names) == 1 else str(list(src_names))
+            name = f"{fn_name} of {src_part}"
+        return SignalMeta(dtype=base.dtype, shape=base.shape, kind=base.kind, names=[name])
 
 
 class IndexOffsets(Signal[tuple]):

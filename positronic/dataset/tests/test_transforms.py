@@ -1,18 +1,19 @@
+import numpy as np
 import pytest
 
+from positronic.dataset.episode import EpisodeContainer
 from positronic.dataset.transforms import (
     Elementwise,
-    TimeOffsets,
-    Join,
-    IndexOffsets,
-    TransformEpisode,
     EpisodeTransform,
     Image,
+    IndexOffsets,
+    Join,
+    TimeOffsets,
+    TransformEpisode,
     concat,
     pairwise,
 )
-from positronic.dataset.episode import EpisodeContainer
-import numpy as np
+
 from .utils import DummySignal
 
 
@@ -48,6 +49,17 @@ def test_elementwise(sig_simple):
         (40, 4000),
         (50, 5000),
     ]
+    # Names for numeric features: fn name only (source has no names)
+    assert ew.names == ['_times10']
+
+
+def test_elementwise_names_with_source_names(sig_simple):
+    elements = list(sig_simple)
+    vals = [val for val, _ in elements]
+    ts = [ts for _, ts in elements]
+    named = DummySignal(ts, vals, names=['feat'])
+    ew = Elementwise(named, _times10)
+    assert ew.names == ["_times10 of feat"]
 
 
 def test_join_relative_index_prev_next_equivalents(sig_simple):
