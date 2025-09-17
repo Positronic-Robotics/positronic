@@ -90,4 +90,8 @@ After the inference, the file `inference.rrd` containing the simulation run data
 
 ### Visualizing Inference Results
 
-Install the [ReRun](https://rerun.io/) tool and open the generated `.rrd` file in it to visualize the simulation results.
+To visualize the simulation results, open the generated `inference.rrd` file with [ReRun](https://rerun.io/), which is included in the Positronics environment:
+
+```bash
+rerun inference.rrd
+```
