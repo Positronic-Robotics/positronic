@@ -2,7 +2,7 @@ import numpy as np
 import pytest
 
 from positronic.dataset.dataset import Dataset
-from positronic.dataset.episode import EpisodeContainer
+from positronic.dataset.episode import Episode, EpisodeContainer
 from positronic.dataset.signal import Kind
 from positronic.dataset.transforms import (
     Elementwise,
@@ -692,7 +692,7 @@ def test_transformed_dataset_wraps_episode_with_transforms(sig_simple):
 
     assert len(transformed) == 1
     wrapped = transformed[0]
-    assert isinstance(wrapped, TransformedEpisode)
+    assert isinstance(wrapped, Episode)
     assert list(wrapped.keys) == ["a", "s", "id"]
 
     a_vals = [v for v, _ in wrapped["a"]]
@@ -703,7 +703,7 @@ def test_transformed_dataset_wraps_episode_with_transforms(sig_simple):
 
     meta = transformed.signals_meta
     assert set(meta.keys()) == {"a", "s"}
-    assert meta["s"].names == sig_simple.meta.names
+    assert meta["s"].names == wrapped["s"].names
 
 
 def test_transformed_dataset_signals_meta_cached(sig_simple):

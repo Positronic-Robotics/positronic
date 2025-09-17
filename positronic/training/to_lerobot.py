@@ -34,8 +34,8 @@ Notes:
 - The `--with-editable .` flag ensures your local `positronic` package and its
   dependencies are available inside the ephemeral uv environment without
   making `lerobot` a core dependency of the project.
-- Run `uv --version` to ensure uv is installed. See: https://docs.astral.sh/uv/
 """
+import resource
 from collections.abc import Sequence as AbcSequence
 from pathlib import Path
 
@@ -48,6 +48,18 @@ from lerobot.datasets.lerobot_dataset import LeRobotDataset
 import positronic.cfg.dataset
 from positronic.dataset import Dataset
 from positronic.dataset.signal import Kind
+
+
+def _raise_fd_limit(min_soft_limit: int = 4096) -> None:
+    """Increase soft RLIMIT_NOFILE to avoid LeRobot hitting macOS defaults."""
+    soft_limit, hard_limit = resource.getrlimit(resource.RLIMIT_NOFILE)
+    target = min(hard_limit, max(soft_limit, min_soft_limit))
+
+    if soft_limit < target:
+        try:
+            resource.setrlimit(resource.RLIMIT_NOFILE, (target, hard_limit))
+        except (ValueError, OSError):
+            pass
 
 
 def seconds_to_str(seconds: float) -> str:
@@ -88,6 +100,7 @@ def append_data_to_dataset(lr_dataset: LeRobotDataset,
                            task: str | None = None,
                            num_workers: int = 16,
                            fps: int = 30):
+    _raise_fd_limit()
     lr_dataset.start_image_writer(num_processes=num_workers)
     # Process each episode file
     total_length_sec = 0
