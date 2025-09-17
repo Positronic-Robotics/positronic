@@ -36,6 +36,9 @@ class Signal[T]:
     def _search_ts(self, ts_array: RealNumericArrayLike) -> IndicesLike: ...
         # list-like only; floor indices, -1 if before first
 
+    @property
+    def meta(self) -> SignalMeta: ...            # dtype, shape, kind, optional feature names
+
     # Index-based access (provided by the library):
     # * signal[i] -> (value, ts) at i (negative indices supported)
     # * signal[a:b:s] -> Signal view over [a:b:s], step>0 required
@@ -108,6 +111,10 @@ class EpisodeWriter:
     def append(self, signal_name: str, data: T, ts_ns: int) -> None:
         pass
 
+    # Declare feature names before writing data (optional)
+    def set_signal_meta(self, signal_name: str, *, names: Sequence[str] | None = None) -> None:
+        pass
+
     # Set static (non-time-varying) item; raises on name conflicts
     def set_static(self, name: str, data: Any) -> None:
         pass
@@ -132,11 +139,19 @@ class Dataset:
     def __getitem__(self, index_or_slice: int | slice | Sequence[int] | np.ndarray) -> `Episode` | list[Episode]:
         pass
 
+    @property
+    def signals_meta(self) -> dict[str, SignalMeta]:
+        pass
+
 class DatasetWriter:
     # Allocate a new `Episode` and return an EpisodeWriter (context-managed)
     def new_episode(self) -> EpisodeWriter:
         pass
 ```
+
+### Signal metadata
+
+Every `Signal` exposes a `SignalMeta` object that captures element dtype, shape, and a semantic kind (numeric or image). The base implementation infers these fields lazily from the first stored value, keeping implementations lightweight. Feature names (`meta.names`) are optional, user-provided labels for vector components; when set they propagate through episodes, datasets, and transforms. Writers can register names up front with `EpisodeWriter.set_signal_meta(..., names=...)`, and datasets aggregate the discovered metadata through `Dataset.signals_meta` so consumers can inspect schemas without materializing full episodes.
 
 ## Signal implementations
 
@@ -209,7 +224,7 @@ An `Episode` is a collection of `Signal`s recorded together plus static, episode
 
 ### Recording
 
-Episodes are recorded via an `EpisodeWriter` implementations. You add time-varying data by calling `append(signal_name, data, ts_ns)` where timestamps are strictly increasing per `Signal` name; you add episode-level metadata via `set_static(name, data)`. All static items are stored together in a single `static.json`, while each dynamic `Signal` is stored in its own format, defined by the particular `SignalWriter` implementation. (e.g., Parquet for scalar/vector; video file plus frame index for image signals).
+Episodes are recorded via an `EpisodeWriter` implementations. You add time-varying data by calling `append(signal_name, data, ts_ns)` where timestamps are strictly increasing per `Signal` name; you add episode-level metadata via `set_static(name, data)`. Optionally declare feature names before writing samples with `set_signal_meta(signal_name, names=[...])`; if omitted, names are inferred (or left unset) based on the recorded payload. All static items are stored together in a single `static.json`, while each dynamic `Signal` is stored in its own format, defined by the particular `SignalWriter` implementation. (e.g., Parquet for scalar/vector; video file plus frame index for image signals).
 
 Name collisions are disallowed: attempting to `append` to a name that already exists as a static item raises an error, and vice versa.
 
@@ -256,6 +271,7 @@ Access semantics mirror those of `Signal.time` for selecting timestamps; the epi
 
 `Dataset` organizes many `Episode`s and provide simple sequence-style access. Implementations decide how episodes are stored and discovered (e.g., filesystem), but must expose a consistent order and length.
 - Access: `ds[i] -> Episode`; `ds[start:stop:step] -> list[Episode]`; `ds[[i1, i2, ...]] -> list[Episode]`. Boolean masks are not supported.
+- Schema discovery: `ds.signals_meta` returns a `SignalMeta` per signal name, reusing the metadata recorded during ingestion so you can inspect shapes and feature names without loading an episode.
 
 ### Local dataset
 
@@ -272,7 +288,7 @@ with dataset_writer.new_episode() as ew:
     ew.append("state", np.array([...]), ts_ns)
 ```
 
-## DsWriterAgent (streaming recorder)
+## `DsWriterAgent` (streaming recorder)
 
 `DsWriterAgent` is a control-loop component (based on our `pimm` library) that turns live inputs into episode recordings using a flexible serializer pipeline. It listens for episode lifecycle commands (start/stop/abort) and, while an episode is open, appends any updated inputs with timestamps from the provided clock.
 
@@ -308,3 +324,70 @@ Lifecycle
 
 Notes
 - Timestamps come from the agent’s clock; they are strictly increasing per signal.
+
+## Transforms
+
+`positronic.dataset.transforms` provides lazy views for deriving new signals and datasets without duplicating storage. Each transform wraps existing `Signal`/`Episode`/`Dataset` objects and only computes when you access the data, so recordings remain immutable.
+
+### Building blocks
+- `Elementwise(signal, fn, names=None)`: wraps a single signal and maps batches of values through `fn` while keeping the timestamp index untouched. Most other helpers eventually call into this class.
+- `Join(*signals, include_ref_ts=False)`: aligns multiple signals on the union of their timestamps with carry-back semantics. The result yields tuples of values (and, optionally, reference timestamps) at every combined timestamp.
+- `IndexOffsets(signal, *relative_indices, include_ref_ts=False)`: samples neighbouring indices around each position (e.g., `i-1`, `i`, `i+1`) to build finite-difference style windows. Length shrinks when offsets fall out of bounds.
+- `TimeOffsets(signal, *deltas_ns, include_ref_ts=False)`: samples values at requested time deltas relative to the current time. Can be used to lookup into "past" or "future".
+
+Transforms automatically generate descriptive feature names whenever possible. You can override the labels by passing `names=[...]` when constructing the view.
+
+### Derived helpers
+Common utilities stack the building blocks to cover frequent needs:
+- `Image.resize(...)` and `Image.resize_with_pad(...)`: resize RGB frames per sample using OpenCV or PIL.
+- `concat(*signals, dtype=None)`: align signals with `Join` and concatenate their vector values into one array view.
+- `astype(signal, dtype)`: cast vector signals on the fly via `Elementwise`.
+- `pairwise(a, b, op)`: join two signals and apply a custom binary operator to every aligned pair.
+- `recode_rotation(rep_from, rep_to, signal)`: convert rotation representations using `positronic.geom` utilities.
+
+Typical use cases include building model-ready tensors, normalizing values, resizing video streams, or deriving velocities. Because every helper is a view, you can stack them freely and continue to use standard access patterns (`signal.time[...]`, indexing, slicing) without materializing intermediate results.
+
+### Episode and dataset transforms
+
+`EpisodeTransform` adapters expose derived episode-level keys. They follow a tiny protocol:
+
+```python
+class EpisodeTransform(ABC):
+    @property
+    def keys(self) -> Sequence[str]:
+        """Returns keys that this transform generates."""
+        ...
+
+    def transform(self, name: str, episode: Episode) -> Signal[Any] | Any:
+        """For output key and given episode, produce output Signal or static value."""
+        ...
+```
+
+`TransformedEpisode` applies one or more `EpisodeTransform`s to an existing episode (all in lazy model). When `pass_through=True`, all original keys are preserved, unless they are overwritten by transforms. `TransformedDataset` lifts the same idea to the dataset level so that every retrieved episode exposes the transformed view.
+
+### Example
+
+```python
+from positronic.dataset import transforms
+import numpy as np
+
+
+class Features(transforms.EpisodeTransform):
+    @property
+    def keys(self):
+        return ["features", "resized_image"]
+
+    def transform(self, name, episode):
+        if name == "features":
+          joint_q = episode["robot.q"]
+          ee_pose = episode["robot.ee_pose"]
+          return transforms.concat(joint_q, ee_pose, dtype=np.float32)
+        else:
+          return transforms.Image.resize(width=224, height=224, signal=episode["rgb_camera"])
+
+
+dataset = transforms.TransformedDataset(raw_dataset, Features(), pass_through=True)
+episode = dataset[0]
+# resized view; original imagery untouched
+frame0, _ts = episode['resized_image'].time[episode.start_ts]
+```
