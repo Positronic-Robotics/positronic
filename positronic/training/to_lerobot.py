@@ -39,18 +39,15 @@ Notes:
 from collections.abc import Sequence as AbcSequence
 from pathlib import Path
 
+import configuronic as cfn
 import numpy as np
 import torch
 import tqdm
 from lerobot.datasets.lerobot_dataset import LeRobotDataset
 
-import configuronic as cfn
-from positronic.cfg.policy import action, observation
-from positronic.dataset import transforms, Dataset
-from positronic.dataset.local_dataset import LocalDataset
+import positronic.cfg.dataset
+from positronic.dataset import Dataset
 from positronic.dataset.signal import Kind
-from positronic.policy.action import ActionDecoder
-from positronic.policy.observation import ObservationEncoder
 
 
 def seconds_to_str(seconds: float) -> str:
@@ -143,14 +140,9 @@ def _extract_features(dataset: Dataset):
 
 @cfn.config(fps=30,
             video=True,
-            state_encoder=observation.franka_mujoco_stackcubes,
-            action_encoder=action.absolute_position,
+            dataset=positronic.cfg.dataset.transformed,
             task="pick plate from the table and place it into the dishwasher")
-def convert_to_lerobot_dataset(input_dir: str, output_dir: str, fps: int, video: bool,
-                               state_encoder: ObservationEncoder, action_encoder: ActionDecoder, task: str):
-    dataset = LocalDataset(Path(input_dir))
-    dataset = transforms.TransformedDataset(dataset, state_encoder, action_encoder)
-
+def convert_to_lerobot_dataset(output_dir: str, fps: int, video: bool, dataset: Dataset, task: str):
     lr_dataset = LeRobotDataset.create(repo_id='local',
                                        fps=fps,
                                        root=Path(output_dir),
@@ -162,17 +154,12 @@ def convert_to_lerobot_dataset(input_dir: str, output_dir: str, fps: int, video:
     print(f"Dataset converted and saved to {output_dir}")
 
 
-@cfn.config(state_encoder=observation.franka_mujoco_stackcubes,
-            action_encoder=action.absolute_position,
+@cfn.config(dataset=positronic.cfg.dataset.transformed,
             task="pick plate from the table and place it into the dishwasher")
-def append_data_to_lerobot_dataset(dataset_dir: str, input_dir: Path, state_encoder: ObservationEncoder,
-                                   action_encoder: ActionDecoder, task: str):
+def append_data_to_lerobot_dataset(dataset_dir: str, dataset: Dataset, task: str):
     lr_dataset = LeRobotDataset(repo_id='local', root=dataset_dir)
-
-    dataset = LocalDataset(Path(input_dir))
-    dataset = transforms.TransformedDataset(dataset, state_encoder, action_encoder)
     append_data_to_dataset(lr_dataset=lr_dataset, p_dataset=dataset, task=task)
-    print(f"Dataset extended with {input_dir} and saved to {dataset_dir}")
+    print(f"Dataset extended and saved to {dataset_dir}")
 
 
 if __name__ == "__main__":
