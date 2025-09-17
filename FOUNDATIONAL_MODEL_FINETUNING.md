@@ -73,7 +73,7 @@ uv pip install -U lerobot
 Run the following command from the Positronics repository root folder:
 
 ```bash
-PYTHONPATH="$PWD" python positronic/run_inference.py sim_act \
+python positronic/run_inference.py sim_act \
   --simulation-time 10 \
   --policy.n_action_steps=30 \
   --policy.checkpoint_path=<CHECKPOINT_PATH>
@@ -82,7 +82,7 @@ PYTHONPATH="$PWD" python positronic/run_inference.py sim_act \
 The `CHECKPOINT_PATH` should point to the model checkpoint, for example:
 `<LEROBOT_SOURCE_PATH>/outputs/train/2025-09-11/14-16-10_positronic_act/checkpoints/last/pretrained_model/`
 
-**Note:** When running in headless mode on a server, add `MUJOCO_GL=egl` to prevent the `AttributeError: 'Renderer' object has no attribute '_mjr_context'` error.
+**Note:** When running in headless mode on a server, set `MUJOCO_GL=egl` to prevent the `AttributeError: 'Renderer' object has no attribute '_mjr_context'` error.
 
 #### Output Files
 
