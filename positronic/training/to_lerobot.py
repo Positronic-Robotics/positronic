@@ -35,7 +35,7 @@ Notes:
   dependencies are available inside the ephemeral uv environment without
   making `lerobot` a core dependency of the project.
 """
-import resource
+import resource  # This will fail on Windows, as this library is Unix only, but we don't support Windows anyway
 from collections.abc import Sequence as AbcSequence
 from pathlib import Path
 

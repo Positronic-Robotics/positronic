@@ -770,8 +770,8 @@ class TransformedDataset(Dataset):
     def __len__(self) -> int:
         return len(self._dataset)
 
-    def __getitem__(self, index_or_slice: int | slice | Sequence[int] | np.ndarray) -> Episode:
-        episode = self._dataset[index_or_slice]
+    def _get_episode(self, index: int) -> Episode:
+        episode = self._dataset[index]
         return TransformedEpisode(episode, *self._transforms, pass_through=self._pass_through)
 
     @property

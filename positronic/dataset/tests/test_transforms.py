@@ -668,14 +668,9 @@ class _DummyDataset(Dataset):
     def __len__(self):
         return len(self._episodes)
 
-    def __getitem__(self, index_or_slice):
+    def _get_episode(self, index: int):
         self.getitem_calls += 1
-        if isinstance(index_or_slice, slice):
-            rng = range(*index_or_slice.indices(len(self)))
-            return [self._episodes[i] for i in rng]
-        if isinstance(index_or_slice, (list, tuple, np.ndarray)):
-            return [self._episodes[int(i)] for i in index_or_slice]
-        return self._episodes[int(index_or_slice)]
+        return self._episodes[index]
 
     @property
     def signals_meta(self):
@@ -720,6 +715,36 @@ def test_transformed_dataset_signals_meta_cached(sig_simple):
     second_meta = transformed.signals_meta
     assert dataset.getitem_calls == 1
     assert second_meta is first_meta
+
+
+def test_transformed_dataset_sequence_indices_return_transformed_episodes():
+    episodes = []
+    for idx in range(3):
+        ts = [1000, 2000]
+        values = [idx * 10 + 1, idx * 10 + 2]
+        sig = DummySignal(ts, values)
+        episodes.append(EpisodeContainer(signals={"s": sig}, static={"id": idx}))
+
+    dataset = _DummyDataset(episodes, signals_meta={"s": episodes[0]["s"].meta})
+    tf = _DummyTransform()
+    transformed = TransformedDataset(dataset, tf, pass_through=True)
+
+    sliced = transformed[1:3]
+    assert len(sliced) == 2
+    for offset, episode in enumerate(sliced, start=1):
+        assert isinstance(episode, Episode)
+        base_vals = [val for val, _ in episodes[offset]["s"]]
+        assert [val for val, _ in episode["s"]] == [val + 1 for val in base_vals]
+        assert [val for val, _ in episode["a"]] == [val * 10 for val in base_vals]
+        assert episode["id"] == offset
+
+    idx_array = np.array([0, 2])
+    selected = transformed[idx_array]
+    assert [ep["id"] for ep in selected] == [0, 2]
+    for pos, episode in zip((0, 2), selected, strict=True):
+        base_vals = [val for val, _ in episodes[pos]["s"]]
+        assert [val for val, _ in episode["s"]] == [val + 1 for val in base_vals]
+        assert [val for val, _ in episode["a"]] == [val * 10 for val in base_vals]
 
 
 def test_image_resize_basic():

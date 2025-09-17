@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any, Sequence
+from typing import Any
 
 import numpy as np
 from pydoc import locate
@@ -117,33 +117,10 @@ class LocalDataset(Dataset):
     def __len__(self) -> int:
         return len(self._episodes)
 
-    def __getitem__(self, index_or_slice: int | slice | Sequence[int] | np.ndarray):
-        if isinstance(index_or_slice, slice):
-            # Return a list of Episodes for slices
-            start, stop, step = index_or_slice.indices(len(self))
-            return [DiskEpisode(self._episodes[i][1]) for i in range(start, stop, step)]
-
-        if isinstance(index_or_slice, (list, tuple, np.ndarray)):
-            idxs = np.asarray(index_or_slice)
-            if idxs.dtype == bool:
-                raise TypeError("Boolean indexing is not supported")
-            result = []
-            for i in idxs:
-                ii = int(i)
-                if ii < 0:
-                    ii += len(self)
-                if not (0 <= ii < len(self)):
-                    raise IndexError("Index out of range")
-                result.append(DiskEpisode(self._episodes[ii][1]))
-            return result
-
-        # Integer index
-        i = int(index_or_slice)
-        if i < 0:
-            i += len(self)
-        if not (0 <= i < len(self)):
+    def _get_episode(self, index: int) -> DiskEpisode:
+        if not (0 <= index < len(self)):
             raise IndexError("Index out of range")
-        return DiskEpisode(self._episodes[i][1])
+        return DiskEpisode(self._episodes[index][1])
 
     @property
     def signals_meta(self) -> dict[str, SignalMeta]:
