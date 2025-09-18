@@ -2,7 +2,8 @@
 
 Pimm (Positronic IMMediate) is Positronic's Python-native middleware for stitching
 robotic systems out of small, composable control loops. It takes inspiration from
-immediate-mode GUI frameworks such as Dear ImGui and egui: every loop reads the
+immediate-mode GUI frameworks such as [Dear ImGui](https://github.com/ocornut/imgui)
+and [egui](https://github.com/emilk/egui): every loop reads the
 current state, computes the next command, emits it, and yields control right away.
 There is no hidden background graph and no global event bus – just explicit data
 flow through signals and a deterministic scheduler.
@@ -108,8 +109,8 @@ Key behaviours:
   until it finishes or `world.should_stop` is set.
 - `world.interleave(*loops)` exposes the deterministic scheduler if you want to
   embed it in your own main loop; `world.run` simply executes it and sleeps.
-- All loops receive a `should_stop` signal so they can exit
-  cooperatively when the world shuts down.
+- All loops receive a `should_stop` signal ([`EventReceiver`](../pimm/world.py))
+  so they can exit cooperatively when the world shuts down.
 
 `Clock` instances supply timestamps. `World` defaults to `SystemClock` (monotonic
 wall time), but any custom `Clock` works – for example, `positronic.simulator.mujoco.sim.MujocoSim`
@@ -138,7 +139,7 @@ so receivers observe the changes.
 
 ## Building Larger Systems
 
-`positronic/data_collection.py` shows a representative assembly:
+[`positronic/data_collection.py`](../positronic/data_collection.py) shows a representative assembly:
 
 1. Controllers, simulators, dataset writers, and GUI widgets each expose a `run`
    generator.
@@ -150,21 +151,23 @@ so receivers observe the changes.
 4. Utilities like `ValueUpdated`, `DefaultReceiver`, and `RateLimiter` keep loops
    responsive without adding manual edge tracking.
 
-The same pattern appears in `positronic/robot_controller.py`, which connects a
-hardware driver to a CLI, and in the MuJoCo simulator bindings where the simulator
-itself implements `Clock` so physics time controls the rest of the world.
+The same pattern appears in [`positronic/robot_controller.py`](../positronic/robot_controller.py),
+which connects a hardware driver to a CLI, and in the MuJoCo simulator bindings
+([`positronic/simulator/mujoco/sim.py`](../positronic/simulator/mujoco/sim.py))
+where the simulator itself implements `Clock` so physics time controls the rest of
+the world.
 
 ## Testing Helpers
 
 Pimm is designed to be unit-test-friendly:
 
-- `pimm.tests.testing.MockClock` provides a deterministic, manually stepped clock.
+- [`pimm.tests.testing.MockClock`](../pimm/tests/testing.py) provides a deterministic, manually stepped clock.
 - Signals are regular Python objects, so you can stub them with simple fakes or
   the `NoOpEmitter`/`NoOpReceiver` placeholders found throughout `positronic/`.
 - `ValueUpdated` makes it easy to assert *when* new data appears, which is used
   heavily in the shared-memory tests.
 
-Refer to `pimm/tests/` and `positronic/tests/` for practical patterns, including
+Refer to [`pimm/tests/`](../pimm/tests) and [`positronic/tests/`](../positronic/tests) for practical patterns, including
 full pipelines validated through the scheduler.
 
 ## Project Status and Roadmap
