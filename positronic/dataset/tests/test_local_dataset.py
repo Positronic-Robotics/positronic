@@ -40,6 +40,31 @@ def test_local_dataset_writer_creates_structure_and_persists(tmp_path):
     assert ds2[3]["id"] == 3
 
 
+def test_local_dataset_writer_appends_existing(tmp_path):
+    root = tmp_path / "append"
+
+    writer = LocalDatasetWriter(root)
+    with writer.new_episode() as episode:
+        episode.append("test_signal", np.array([1.0], dtype=np.float32), ts_ns=1)
+
+    writer = LocalDatasetWriter(root)
+    with writer.new_episode() as episode:
+        episode.append("test_signal", np.array([2.0], dtype=np.float32), ts_ns=2)
+
+    ds = LocalDataset(root)
+    assert len(ds) == 2
+
+    first_signal = ds[0]["test_signal"]
+    second_signal = ds[1]["test_signal"]
+
+    np.testing.assert_allclose(first_signal[0][0], np.array([1.0], dtype=np.float32))
+    np.testing.assert_allclose(second_signal[0][0], np.array([2.0], dtype=np.float32))
+
+    block_dir = root / "000000000000"
+    assert (block_dir / "000000000000").exists()
+    assert (block_dir / "000000000001").exists()
+
+
 def test_local_dataset_handles_block_rollover(tmp_path):
     root = tmp_path / "roll"
     with LocalDatasetWriter(root) as w:
