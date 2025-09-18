@@ -1,21 +1,30 @@
 """Implementation of multiprocessing channels."""
 
-from collections import deque
 import heapq
 import logging
 import multiprocessing as mp
-import multiprocessing.shared_memory
 import multiprocessing.managers as mp_managers
-from multiprocessing.synchronize import Event as EventClass
-
+import multiprocessing.shared_memory
 import sys
-from queue import Empty, Full
 import time
 import traceback
+from collections import deque
+from multiprocessing.synchronize import Event as EventClass
+from queue import Empty, Full
 from typing import Iterator, Sequence, Tuple, TypeVar
 
-from .core import Clock, ControlLoop, Message, SignalEmitter, SignalReceiver, Sleep
-from .shared_memory import SMCompliant, SharedMemoryEmitter, SharedMemoryReceiver
+from .core import (
+    Clock,
+    ControlLoop,
+    ControlSystem,
+    ControlSystemEmitter,
+    ControlSystemReceiver,
+    Message,
+    SignalEmitter,
+    SignalReceiver,
+    Sleep,
+)
+from .shared_memory import SharedMemoryEmitter, SharedMemoryReceiver, SMCompliant
 
 T = TypeVar('T')
 T_SM = TypeVar('T_SM', bound=SMCompliant)
@@ -164,6 +173,7 @@ class World:
         self._sm_manager = mp_managers.SharedMemoryManager()
         self._sm_emitters_readers = []
         self.entered = False
+        self._connections = []
 
     def __enter__(self):
         self._sm_manager.__enter__()
@@ -207,7 +217,7 @@ class World:
         q = deque(maxlen=maxsize)
         return LocalQueueEmitter(q, self._clock), LocalQueueReceiver(q)
 
-    def mp_pipe(self, maxsize: int = 1) -> Tuple[SignalEmitter[T], SignalReceiver[T]]:
+    def mp_pipe(self, maxsize: int = 1, clock: Clock | None = None) -> Tuple[SignalEmitter[T], SignalReceiver[T]]:
         """Create a queue-based communication channel between processes.
 
         Args:
@@ -217,8 +227,7 @@ class World:
             Tuple of (emitter, reader) for inter-process communication
         """
         q = self._manager.Queue(maxsize=maxsize)
-
-        return QueueEmitter(q, self._clock), QueueReceiver(q)  # type: ignore
+        return QueueEmitter(q, clock or self._clock), QueueReceiver(q)  # type: ignore
 
     def local_one_to_many_pipe(self,
                                n_readers: int,
@@ -268,7 +277,7 @@ class World:
         lock = self._manager.Lock()
         ts_value = self._manager.Value('Q', -1)
         sm_queue = self._manager.Queue()
-        emitter = SharedMemoryEmitter(lock, ts_value, sm_queue, self._clock)
+        emitter = SharedMemoryEmitter(lock, ts_value, sm_queue, SystemClock())
         reader = SharedMemoryReceiver(lock, ts_value, sm_queue)
         self._sm_emitters_readers.append((emitter, reader))
         return emitter, reader
@@ -350,3 +359,61 @@ class World:
                     time.sleep(seconds)
                 case _:
                     raise ValueError(f"Unknown command: {command}")
+
+    def connect(self, emitter: ControlSystemEmitter[T], receiver: ControlSystemReceiver[T]):
+        """Declare a logical connection between Emitter and Receiver of two control systems.
+
+        The world inspects the ownership of both endpoints when ``start`` is
+        called and chooses an appropriate transport (local queue vs.
+        multiprocessing pipe). Each Receiver may only be connected once.
+        """
+        assert receiver not in [e[1] for e in self._connections], "Receiver can be connected only to one Emitter"
+        self._connections.append((emitter, receiver))
+
+    def start(self,
+              main_process: ControlSystem | list[ControlSystem],
+              background: ControlSystem | list[ControlSystem] | None = None):
+        """Bind declared connections and launch control systems.
+
+        ``main_process`` control systems are scheduled cooperatively in the
+        current process, while ``background`` systems are spawned in separate
+        processes. Based on the connection map registered via ``connect`` the
+        world wires control system emitters and receivers together using local
+        queues or multiprocessing queues. Returns an iterator produced by
+        ``interleave`` so callers can drive the cooperative scheduler.
+        """
+        main_process = main_process if isinstance(main_process, list) else [main_process]
+        background = background or []
+        background = background if isinstance(background, list) else [background]
+
+        local_cs = set(main_process)
+        all_cs = local_cs | set(background)
+
+        local_connections, mp_connections = [], []
+        for emitter, receiver in self._connections:
+            if emitter.owner in local_cs and receiver.owner in local_cs:
+                local_connections.append((emitter, receiver))
+            elif emitter.owner not in all_cs:
+                raise ValueError(f"Emitter {emitter.owner} is not in any control system")
+            elif receiver.owner not in all_cs:
+                raise ValueError(f"Receiver {receiver.owner} is not in any control system")
+            else:
+                mp_connections.append((emitter, receiver))
+
+        for emitter, receiver in local_connections:
+            em, re = self.local_pipe()
+            emitter._bind(em)
+            receiver._bind(re)
+
+        system_clock = SystemClock()
+        for emitter, receiver in mp_connections:
+            # When emitter lives in a different process, we use system clock to timestamp messages, otherwise we will
+            # have to serialise our local clock to the other process, which is not what we want.
+            clock = None if emitter.owner in local_cs else system_clock
+            # TODO: Use shared memory when we know it is possible.
+            em, re = self.mp_pipe(clock=clock)
+            emitter._bind(em)
+            receiver._bind(re)
+
+        self.start_in_subprocess(*[cs.run for cs in background])
+        return self.interleave(*[cs.run for cs in main_process])

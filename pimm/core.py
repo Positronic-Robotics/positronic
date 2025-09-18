@@ -35,12 +35,6 @@ class SignalEmitter(ABC, Generic[T]):
         pass
 
 
-class NoOpEmitter(SignalEmitter[T]):
-
-    def emit(self, data: T, ts: int = -1) -> bool:
-        return True
-
-
 class SignalReceiver(ABC, Generic[T]):
     """Read a signal value. All implementations must be non-blocking."""
 
@@ -57,6 +51,12 @@ class SignalReceiver(ABC, Generic[T]):
         if msg is None:
             raise NoValueException
         return msg.data
+
+
+class NoOpEmitter(SignalEmitter[T]):
+
+    def emit(self, data: T, ts: int = -1) -> bool:
+        return True
 
 
 class NoOpReceiver(SignalReceiver[T]):
@@ -91,3 +91,62 @@ def Pass() -> Sleep:
 # It can be camera, sensor, gripper, robotic arm, inference loop, etc. A robotic system then is a collection of
 # control loops that communicate with each other.
 ControlLoop = Callable[[SignalReceiver, Clock], Iterator[Sleep]]
+
+
+class ControlSystem(ABC):
+    """Composable unit of runtime that cooperates with the world scheduler.
+
+    A control system owns the emitters and receivers that make up its external
+    interface. The world supplies two utilities when running a system:
+
+    - ``should_stop``: a ``SignalReceiver`` that becomes true when the system
+      should shut down.
+    - ``clock``: the ``Clock`` instance the world uses for timestamping messages.
+
+    Implementations must advance their internal work by yielding ``Sleep``
+    instances, allowing the ``World`` interleaver to sequence multiple systems.
+    """
+
+    @abstractmethod
+    def run(self, should_stop: SignalReceiver, clock: Clock) -> Iterator[Sleep]:
+        pass
+
+
+class ControlSystemEmitter(SignalEmitter[T]):
+    """Emitter adaptor that keeps track of its owning control system."""
+
+    def __init__(self, owner: ControlSystem):
+        self._owner = owner
+        self._internal: list[SignalEmitter[T]] = []
+
+    @property
+    def owner(self) -> ControlSystem:
+        return self._owner
+
+    def _bind(self, emitter: SignalEmitter[T]):
+        self._internal.append(emitter)
+
+    def emit(self, data: T, ts: int = -1) -> bool:
+        for emitter in self._internal:
+            emitter.emit(data, ts)
+        # TODO: Remove bool as return type from all Emitters
+        return True
+
+
+class ControlSystemReceiver(SignalReceiver[T]):
+    """Receiver adaptor bound to a single upstream signal on behalf of a system."""
+
+    def __init__(self, owner: ControlSystem):
+        self._owner = owner
+        self._internal: SignalReceiver[T] | None = None
+
+    @property
+    def owner(self) -> ControlSystem:
+        return self._owner
+
+    def _bind(self, receiver: SignalReceiver[T]):
+        assert self._internal is None, "Receiver can be connected only to one Emitter"
+        self._internal = receiver
+
+    def read(self) -> Message[T] | None:
+        return self._internal.read() if self._internal is not None else None

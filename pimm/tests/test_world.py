@@ -5,7 +5,15 @@ from unittest.mock import Mock, patch
 
 import pytest
 
-from pimm.core import Message, SignalEmitter, SignalReceiver, Sleep
+from pimm.core import (
+    ControlSystem,
+    ControlSystemEmitter,
+    ControlSystemReceiver,
+    Message,
+    SignalEmitter,
+    SignalReceiver,
+    Sleep,
+)
 from pimm.tests.testing import MockClock
 from pimm.world import EventReceiver, QueueEmitter, QueueReceiver, SystemClock, World
 
@@ -14,6 +22,25 @@ def dummy_process(stop_reader, clock):
     """A simple background process that runs until stopped."""
     while not stop_reader.read().data:
         yield Sleep(0.01)
+
+
+class DummyControlSystem(ControlSystem):
+    """Minimal control system used for integration-style tests."""
+
+    def __init__(self, name: str, steps: int = 1):
+        self.name = name
+        self.steps = steps
+        self.emitter = ControlSystemEmitter(self)
+        self.receiver = ControlSystemReceiver(self)
+        self.invocations = []
+
+    def run(self, should_stop, clock):  # pragma: no cover - exercised via tests
+        self.invocations.append((should_stop, clock))
+        for _ in range(self.steps):
+            yield Sleep(0.0)
+
+    def __repr__(self):
+        return f"DummyControlSystem(name={self.name!r})"
 
 
 class TestQueueEmitter:
@@ -318,6 +345,107 @@ class TestWorld:
             assert success
             assert readers[0].read().data == message
             assert readers[1].read().data == message
+
+
+class TestWorldControlSystems:
+    """Tests exercising ControlSystem wiring and scheduling."""
+
+    def test_connect_enforces_unique_receiver(self):
+        world = World()
+        producer = DummyControlSystem('producer')
+        consumer = DummyControlSystem('consumer')
+
+        world.connect(producer.emitter, consumer.receiver)
+        with pytest.raises(AssertionError):
+            world.connect(producer.emitter, consumer.receiver)
+
+    def test_start_sets_up_local_connections(self):
+        clock = MockClock(0.0)
+        world = World(clock)
+        producer = DummyControlSystem('producer')
+        consumer = DummyControlSystem('consumer')
+        world.connect(producer.emitter, consumer.receiver)
+
+        scheduler = world.start([producer, consumer])
+
+        producer.emitter.emit('payload')
+        result = consumer.receiver.read()
+        assert result is not None
+        assert result.data == 'payload'
+        assert result.ts == 0
+
+        sleeps = list(scheduler)
+        assert [cmd.seconds for cmd in sleeps] == [0.0, 0.0]
+        assert world.should_stop
+
+        assert len(producer.invocations) == 1
+        assert len(consumer.invocations) == 1
+        producer_stop_reader, producer_clock = producer.invocations[0]
+        consumer_stop_reader, consumer_clock = consumer.invocations[0]
+        assert isinstance(producer_stop_reader, EventReceiver)
+        assert isinstance(consumer_stop_reader, EventReceiver)
+        assert producer_clock is clock
+        assert consumer_clock is clock
+
+    def test_start_uses_mp_pipe_for_cross_process_connections(self, monkeypatch):
+        clock = MockClock(0.0)
+        world = World(clock)
+        main_cs = DummyControlSystem('main')
+        background_cs = DummyControlSystem('background')
+        world.connect(background_cs.emitter, main_cs.receiver)
+
+        captured_clocks = []
+
+        def fake_mp_pipe(self, maxsize=1, clock=None):
+            captured_clocks.append(clock)
+            return self.local_pipe(maxsize)
+
+        monkeypatch.setattr(World, 'mp_pipe', fake_mp_pipe)
+
+        started_background = []
+
+        def fake_start_in_subprocess(self, *loops):
+            started_background.append(loops)
+
+        monkeypatch.setattr(World, 'start_in_subprocess', fake_start_in_subprocess)
+
+        scheduler = world.start(main_process=main_cs, background=background_cs)
+
+        background_cs.emitter.emit('payload')
+        result = main_cs.receiver.read()
+        assert result is not None
+        assert result.data == 'payload'
+
+        assert captured_clocks and isinstance(captured_clocks[0], SystemClock)
+        assert started_background == [(background_cs.run,)]
+        assert background_cs.invocations == []
+
+        sleeps = list(scheduler)
+        assert [cmd.seconds for cmd in sleeps] == [0.0]
+        assert len(main_cs.invocations) == 1
+        stop_reader, used_clock = main_cs.invocations[0]
+        assert isinstance(stop_reader, EventReceiver)
+        assert used_clock is clock
+
+    def test_start_requires_known_emitter_owner(self):
+        world = World()
+        known = DummyControlSystem('known')
+        unknown = DummyControlSystem('unknown')
+
+        world.connect(unknown.emitter, known.receiver)
+
+        with pytest.raises(ValueError, match='Emitter .* is not in any control system'):
+            world.start(main_process=known)
+
+    def test_start_requires_known_receiver_owner(self):
+        world = World()
+        producer = DummyControlSystem('producer')
+        missing_consumer = DummyControlSystem('missing_consumer')
+
+        world.connect(producer.emitter, missing_consumer.receiver)
+
+        with pytest.raises(ValueError, match='Receiver .* is not in any control system'):
+            world.start(main_process=producer)
 
 
 # Integration tests
