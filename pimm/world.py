@@ -11,7 +11,7 @@ import traceback
 from collections import deque
 from multiprocessing.synchronize import Event as EventClass
 from queue import Empty, Full
-from typing import Iterator, Sequence, Tuple, TypeVar
+from typing import Callable, Iterator, Sequence, Tuple, TypeVar
 
 from .core import (
     Clock,
@@ -360,15 +360,29 @@ class World:
                 case _:
                     raise ValueError(f"Unknown command: {command}")
 
-    def connect(self, emitter: ControlSystemEmitter[T], receiver: ControlSystemReceiver[T]):
+    def connect(self, emitter: ControlSystemEmitter[T], receiver: ControlSystemReceiver[T], *,
+                emitter_wrapper: Callable[[SignalEmitter[T]], SignalEmitter[T]] = lambda x: x,
+                receiver_wrapper: Callable[[SignalReceiver[T]], SignalReceiver[T]] = lambda x: x):
         """Declare a logical connection between Emitter and Receiver of two control systems.
 
         The world inspects the ownership of both endpoints when ``start`` is
         called and chooses an appropriate transport (local queue vs.
         multiprocessing pipe). Each Receiver may only be connected once.
+
+        Args:
+            emitter: The control system emitter to connect from
+            receiver: The control system receiver to connect to
+            emitter_wrapper: Optional function to wrap the underlying SignalEmitter
+                           before binding. Defaults to identity function.
+            receiver_wrapper: Optional function to wrap the underlying SignalReceiver
+                            before binding. Defaults to identity function.
+
+        The wrapper functions allow for transformation or decoration of the
+        underlying signal transport mechanisms, such as adding logging,
+        filtering, or other middleware functionality.
         """
         assert receiver not in [e[1] for e in self._connections], "Receiver can be connected only to one Emitter"
-        self._connections.append((emitter, receiver))
+        self._connections.append((emitter, receiver, emitter_wrapper, receiver_wrapper))
 
     def start(self,
               main_process: ControlSystem | list[ControlSystem],
@@ -390,15 +404,15 @@ class World:
         all_cs = local_cs | set(background)
 
         local_connections, mp_connections = [], []
-        for emitter, receiver in self._connections:
+        for emitter, receiver, emitter_wrapper, receiver_wrapper in self._connections:
             if emitter.owner in local_cs and receiver.owner in local_cs:
-                local_connections.append((emitter, receiver))
+                local_connections.append((emitter_wrapper(emitter), receiver_wrapper(receiver)))
             elif emitter.owner not in all_cs:
                 raise ValueError(f"Emitter {emitter.owner} is not in any control system")
             elif receiver.owner not in all_cs:
                 raise ValueError(f"Receiver {receiver.owner} is not in any control system")
             else:
-                mp_connections.append((emitter, receiver))
+                mp_connections.append((emitter_wrapper(emitter), receiver_wrapper(receiver)))
 
         for emitter, receiver in local_connections:
             em, re = self.local_pipe()

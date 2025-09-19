@@ -4,6 +4,7 @@ from typing import Callable, Generic, Iterator, final, TypeVar
 
 
 T = TypeVar('T', covariant=True)
+U = TypeVar('U')
 
 
 class NoValueException(Exception):
@@ -150,3 +151,29 @@ class ControlSystemReceiver(SignalReceiver[T]):
 
     def read(self) -> Message[T] | None:
         return self._internal.read() if self._internal is not None else None
+
+
+class ReceiverDict(dict[str, ControlSystemReceiver[U]]):
+    """Dictionary that lazily allocates receivers owned by a control system."""
+
+    def __init__(self, owner: ControlSystem):
+        super().__init__()
+        self._owner = owner
+
+    def __missing__(self, key: str) -> ControlSystemReceiver[U]:
+        receiver = ControlSystemReceiver(self._owner)
+        self[key] = receiver
+        return receiver
+
+
+class EmitterDict(dict[str, ControlSystemEmitter[U]]):
+    """Dictionary that lazily allocates emitters owned by a control system."""
+
+    def __init__(self, owner: ControlSystem):
+        super().__init__()
+        self._owner = owner
+
+    def __missing__(self, key: str) -> ControlSystemEmitter[U]:
+        emitter = ControlSystemEmitter(self._owner)
+        self[key] = emitter
+        return emitter
