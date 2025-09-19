@@ -213,6 +213,7 @@ def main(robot_arm: pimm.ControlSystem | None,
          stream_video_to_webxr: str | None = None,
          operator_position: OperatorPosition = OperatorPosition.FRONT):
     """Runs data collection in real hardware."""
+    cameras = cameras or {}
     data_collection = DataCollectionController(operator_position.value)
 
     writer_cm = LocalDatasetWriter(Path(output_dir)) if output_dir is not None else nullcontext(None)
@@ -220,7 +221,7 @@ def main(robot_arm: pimm.ControlSystem | None,
         ds_agent = _wire(world, cameras, dataset_writer, data_collection, webxr, robot_arm, gripper, sound)
 
         bg_cs = [webxr]
-        bg_cs.extend([camera.run for camera in cameras.values()])
+        bg_cs.extend(cameras.values())
         if ds_agent is not None:
             bg_cs.append(ds_agent)
         if robot_arm is not None:
@@ -235,7 +236,7 @@ def main(robot_arm: pimm.ControlSystem | None,
                           webxr.frame,
                           receiver_wrapper=lambda r: pimm.map(r, lambda x: x['image']))
 
-        dc_steps = iter(world.start(data_collection, *bg_cs))
+        dc_steps = iter(world.start(data_collection, bg_cs))
         while not world.should_stop:
             try:
                 time.sleep(next(dc_steps).seconds)

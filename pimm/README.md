@@ -3,9 +3,9 @@
 Pimm (Positronic IMMediate) is a tiny runtime that lets you describe a robotics
 application as a handful of control loops, wire their inputs and outputs, and let
 an orchestrator keep everybody up to date. It borrows the *immediate-mode* mindset
-from GUI frameworks such as ImGui/egui: every loop reads the freshest data,
-computes the next command, emits it, and yields right away—no hidden graph, no
-long-lived callbacks.
+from GUI frameworks such as [ImGui](https://github.com/ocornut/imgui)/[egui](https://github.com/emilk/egui):
+every loop reads the freshest data, computes the next command, emits it, and yields
+right away—no hidden graph, no long-lived callbacks.
 
 What makes this valuable for ML-oriented robotics is that you stay in plain
 Python. There is no special DSL, no ROS launch files, and you can unit-test each
@@ -166,3 +166,26 @@ automatically, when data allows it.
 Pimm is alpha software and continues to evolve. The next milestone is decoupling
 connection planning from scheduling so you can describe the signal graph once and
 choose execution placement later. Feedback and pull requests are very welcome!
+
+## Where Pimm Fits
+
+**ROS 2 (Python).** ROS 2 behaves like a robot operating system: it layers
+distributed publish/subscribe, service discovery, QoS controls, and IDL tooling on
+top of DDS. The trade-off is more moving parts and configuration. Pimm keeps the
+graph in your Python code: you describe control systems, call `world.connect`, and
+let the runtime decide whether a link is a queue or a subprocess pipe. That keeps
+the experience developer-friendly while still being extensible enough to drive
+production hardware (see [`positronic/drivers/`](../positronic/drivers/)).
+
+**dora-rs.** [Dora](https://dora-rs.ai/) organizes dataflow graphs through declarative
+manifests. An external agent launches executors—potentially written in other
+languages—to route events. Pimm takes the opposite approach: you wire everything
+imperatively inside Python, the world wires transports on the fly, and there is no
+separate control plane to manage. It suits teams who prefer to keep orchestration
+alongside the code they ship.
+
+**Gym environments.** OpenAI Gym / Gymnasium focus on simulator loops (`reset`,
+`step`) for reinforcement learning. They stop at the environment boundary: no
+guidance for wiring actual cameras, controllers, or dataset writers. Pimm acts as
+the runtime that lets those learned policies coexist with real sensors, robot
+drivers, and GUIs in one control loop.

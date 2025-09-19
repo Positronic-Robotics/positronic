@@ -2,16 +2,43 @@
 
 This is a library for recording, storing, sharing and using robotic datasets. We differentiate between recording and storing the data and using it from with PyTorch when training. The first part is represented by data model while the second one is the view of that model.
 
+## Table of Contents
+- [Core concepts](#core-concepts)
+  - [We optimize for](#we-optimize-for)
+- [Public API](#public-api)
+  - [Signal metadata](#signal-metadata)
+  - [Signal implementations](#signal-implementations)
+    - [Scalar / Vector](#scalar--vector)
+      - [Access semantics](#access-semantics)
+    - [Video](#video)
+      - [Schema](#schema)
+      - [Access semantics](#access-semantics-1)
+      - [Recording](#recording)
+- [Episodes](#episodes)
+  - [Recording](#recording-1)
+  - [System Metadata (meta)](#system-metadata-meta)
+  - [Time accessor](#time-accessor)
+- [Datasets](#datasets)
+  - [Local dataset](#local-dataset)
+  - [Writing datasets](#writing-datasets)
+- [`DsWriterAgent` (streaming recorder)](#dswriteragent-streaming-recorder)
+- [Transforms](#transforms)
+  - [Building blocks](#building-blocks)
+  - [Derived helpers](#derived-helpers)
+  - [Episode and dataset transforms](#episode-and-dataset-transforms)
+  - [Example](#example)
+- [resized view; original imagery untouched](#resized-view-original-imagery-untouched)
+
 ## Core concepts
 __Signal__ – strictly typed stepwise function of time, represented as a sequence of `(data, ts)` elements with strictly increasing `ts`.
-The value at time `t` is defined as: $f(t) = \text{data}_i$ where $i = \max\{j : \text{ts}_j \leq t\}$. For $t < \text{ts}_0$ the function is not defined.
+Think of it as a time series where each value stays in effect until the next timestamp updates it. Formally, $f(t) = \text{data}_i$ where $i = \max\{j : \text{ts}_j \leq t\}$, and nothing is defined before the very first timestamp. Because values propagate forward like this, every `Signal` can answer "what did we know at time _t_?" with a single lookup.
 
 Three types are currently supported.
   * __scalar__ of any supported type
   * __vector__ – of any length
   * __image__ – 3-channel images (of uint8 dtype)
 
-__Episode__ – collection of Signals recorded together plus static, episode-level metadata. All dynamic signals in an Episode share a common time axis.
+__Episode__ – collection of Signals recorded together plus static, episode-level metadata. All dynamic signals in an Episode share a common time axis, so a single time query can retrieve a synchronized view across everything.
 
 __Dataset__ – ordered collection of Episodes with sequence-style access (indexing, slicing, and index arrays by position). Implementations decide storage and discovery; for example, `LocalDataset` stores episodes in a directory on disk.
 
@@ -21,7 +48,7 @@ __Dataset__ – ordered collection of Episodes with sequence-style access (index
 * Window slices like "5 seconds before time X".
 
 ## Public API
-Signal implements `Sequence[(T, int)]` (iterable, indexable). We support three kinds of `Signal`s: scalar, vector, and image (video). Timestamps are int nanoseconds.
+Signal implements `Sequence[(T, int)]` (iterable, indexable). We support three kinds of `Signal`s: scalar, vector, and image (video). Timestamps are int nanoseconds. The headline feature is the shared `time` accessor: all helpers such as `_search_ts` exist to make sure that asking for a value at, before, or across specific timestamps is fast, predictable, and consistent across storage backends.
 ```python
 T = TypeVar('T')  # The type of the data we manage
 
@@ -45,6 +72,8 @@ class Signal[T]:
     # * signal[[i1, i2, ...]] -> Signal view at those integer positions (no boolean masks)
 
     # Time-based access (provided by the library):
+    # This accessor is the core experience: every query walks the shared timeline
+    # and returns the value that was current when that timestamp arrived.
     # * signal.time[ts] -> (value_at_or_before_ts, ts_at_or_before) or KeyError if ts < first
     # * signal.time[start:stop] -> Signal view for [start, stop). Empty signal -> empty view.
     #     If start < first: the window intersects to [first, stop). If start is between two
@@ -159,7 +188,7 @@ Every `Signal` exposes a `SignalMeta` object that captures element dtype, shape,
 All `Signal` implementations (scalar/vector/video) only implement the minimal interface shown above.
 The library provides the full indexing/time behavior so every Signal behaves identically regardless of
 the backing store. This keeps implementations small and focused (e.g., Parquet arrays for vectors,
-video decoding for images) while ensuring consistent semantics.
+video decoding for images) while ensuring consistent semantics for the `time` accessor.
 
 We provide implementations for scalar and vector `Signal`s (`SimpleSignal`/`SimpleSignalWriter`) and for image `Signal`s (`VideoSignal`/`VideoSignalWriter`).
 
@@ -251,7 +280,7 @@ Signal schemas (dtype, shape, etc.) are not duplicated here; they reside in the 
 
 ### Time accessor
 
-Episode supports time-based access across all signals while preserving static items. All episode time queries return a plain dict:
+Episode supports time-based access across all signals while preserving static items. This synchronized time lookup is the defining capability of an episode: given any timestamp you can reconstruct the full scene without manual alignment. All episode time queries return a plain dict:
 
 - `ep.time[ts] -> dict`
   - Snapshot: merges all static items with sampled values (no timestamps) from each dynamic `Signal` at-or-before `ts`.

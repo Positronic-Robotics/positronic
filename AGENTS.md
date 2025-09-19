@@ -1,6 +1,7 @@
 # Contributor guide
 
 - Don't restore any code that you wrote and I deleted.
+- Don't make any commits or other git changes unless explicitly asked for it.
 
 ## Local environment
 - Use `uv` tool to manage python environment
