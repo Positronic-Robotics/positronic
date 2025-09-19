@@ -1,0 +1,35 @@
+diff --git a/src/lerobot/envs/configs.py b/src/lerobot/envs/configs.py
+index 35797c6e..8ce5bcbd 100644
+--- a/src/lerobot/envs/configs.py
++++ b/src/lerobot/envs/configs.py
+@@ -271,3 +271,30 @@ class HILEnvConfig(EnvConfig):
+             "use_gamepad": self.use_gamepad,
+             "gripper_penalty": self.gripper_penalty,
+         }
++
++@EnvConfig.register_subclass("positronic")
++@dataclass
++class PositronicEnvConfig(EnvConfig):
++    """Configuration for the Positronic environment."""
++
++    fps: int = 15
++    features: dict[str, PolicyFeature] = field(
++        default_factory=lambda: {
++            "action": PolicyFeature(type=FeatureType.ACTION, shape=(8,)),
++            "observation.images.left": PolicyFeature(type=FeatureType.VISUAL, shape=(3, 224, 224)),
++            "observation.images.side": PolicyFeature(type=FeatureType.VISUAL, shape=(3, 224, 224)),
++            "observation.state": PolicyFeature(type=FeatureType.STATE, shape=(8,)),
++        }
++    )
++    features_map: dict[str, str] = field(
++        default_factory=lambda: {
++            "action": ACTION,
++            "observation.images.left": OBS_IMAGE,
++            "observation.images.side": OBS_IMAGE,
++            "observation.state": OBS_STATE,
++        }
++    )
++
++    @property
++    def gym_kwargs(self) -> dict:
++        return {}
