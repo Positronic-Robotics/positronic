@@ -1,0 +1,201 @@
+{
+    "dataset": {
+        "repo_id": "local",
+        "root": "/tmp/datasets",
+        "episodes": null,
+        "image_transforms": {
+            "enable": false,
+            "max_num_transforms": 3,
+            "random_order": false,
+            "tfs": {
+                "brightness": {
+                    "weight": 1.0,
+                    "type": "ColorJitter",
+                    "kwargs": {
+                        "brightness": [
+                            0.8,
+                            1.2
+                        ]
+                    }
+                },
+                "contrast": {
+                    "weight": 1.0,
+                    "type": "ColorJitter",
+                    "kwargs": {
+                        "contrast": [
+                            0.8,
+                            1.2
+                        ]
+                    }
+                },
+                "saturation": {
+                    "weight": 1.0,
+                    "type": "ColorJitter",
+                    "kwargs": {
+                        "saturation": [
+                            0.5,
+                            1.5
+                        ]
+                    }
+                },
+                "hue": {
+                    "weight": 1.0,
+                    "type": "ColorJitter",
+                    "kwargs": {
+                        "hue": [
+                            -0.05,
+                            0.05
+                        ]
+                    }
+                },
+                "sharpness": {
+                    "weight": 1.0,
+                    "type": "SharpnessJitter",
+                    "kwargs": {
+                        "sharpness": [
+                            0.5,
+                            1.5
+                        ]
+                    }
+                }
+            }
+        },
+        "revision": null,
+        "use_imagenet_stats": true,
+        "video_backend": "torchcodec"
+    },
+    "env": {
+        "type": "hil",
+        "task": "PandaPickCubeKeyboard-v0",
+        "fps": 100,
+        "features": {
+            "action": {
+                "type": "ACTION",
+                "shape": [
+                    4
+                ]
+            },
+            "observation.image": {
+                "type": "VISUAL",
+                "shape": [
+                    3,
+                    128,
+                    128
+                ]
+            },
+            "observation.state": {
+                "type": "STATE",
+                "shape": [
+                    18
+                ]
+            }
+        },
+        "features_map": {
+            "action": "action",
+            "observation.image": "observation.image",
+            "observation.state": "observation.state"
+        },
+        "name": "PandaPickCube",
+        "use_viewer": true,
+        "gripper_penalty": 0.0,
+        "use_gamepad": true,
+        "state_dim": 18,
+        "action_dim": 4,
+        "episode_length": 100,
+        "video_record": {
+            "enabled": false,
+            "record_dir": "videos",
+            "trajectory_name": "trajectory"
+        },
+        "reward_classifier_pretrained_path": null,
+        "robot_config": null,
+        "teleop_config": null,
+        "wrapper": null,
+        "mode": null,
+        "repo_id": null,
+        "dataset_root": null,
+        "num_episodes": 10,
+        "episode": 0,
+        "device": "cuda",
+        "push_to_hub": true,
+        "pretrained_policy_name_or_path": null,
+        "number_of_steps_after_success": 0
+    },
+    "policy": {
+        "type": "act",
+        "n_obs_steps": 1,
+        "normalization_mapping": {
+            "VISUAL": "MEAN_STD",
+            "STATE": "MEAN_STD",
+            "ACTION": "MEAN_STD"
+        },
+        "input_features": {},
+        "output_features": {},
+        "device": "mps",
+        "use_amp": false,
+        "push_to_hub": false,
+        "repo_id": null,
+        "private": null,
+        "tags": null,
+        "license": null,
+        "chunk_size": 100,
+        "n_action_steps": 100,
+        "vision_backbone": "resnet18",
+        "pretrained_backbone_weights": "ResNet18_Weights.IMAGENET1K_V1",
+        "replace_final_stride_with_dilation": false,
+        "pre_norm": false,
+        "dim_model": 512,
+        "n_heads": 8,
+        "dim_feedforward": 3200,
+        "feedforward_activation": "relu",
+        "n_encoder_layers": 4,
+        "n_decoder_layers": 1,
+        "use_vae": true,
+        "latent_dim": 32,
+        "n_vae_encoder_layers": 4,
+        "temporal_ensemble_coeff": null,
+        "dropout": 0.1,
+        "kl_weight": 10.0,
+        "optimizer_lr": 1e-05,
+        "optimizer_weight_decay": 0.0001,
+        "optimizer_lr_backbone": 1e-05
+    },
+    "output_dir": "outputs/train/2025-09-19/14-19-47_hil_act",
+    "job_name": "hil_act",
+    "resume": false,
+    "seed": 1000,
+    "num_workers": 4,
+    "batch_size": 8,
+    "steps": 100000,
+    "eval_freq": 0,
+    "log_freq": 200,
+    "save_checkpoint": true,
+    "save_freq": 20000,
+    "use_policy_training_preset": true,
+    "optimizer": {
+        "type": "adamw",
+        "lr": 1e-05,
+        "weight_decay": 0.0001,
+        "grad_clip_norm": 10.0,
+        "betas": [
+            0.9,
+            0.999
+        ],
+        "eps": 1e-08
+    },
+    "scheduler": null,
+    "eval": {
+        "n_episodes": 50,
+        "batch_size": 50,
+        "use_async_envs": false
+    },
+    "wandb": {
+        "enable": false,
+        "disable_artifact": false,
+        "project": "lerobot",
+        "entity": null,
+        "notes": null,
+        "run_id": null,
+        "mode": null
+    }
+}
