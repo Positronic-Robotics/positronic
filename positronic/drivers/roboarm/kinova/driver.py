@@ -63,7 +63,7 @@ class KinovaState(State, pimm.shared_memory.NumpySMAdapter):
         self.array[14 + 7] = status.value
 
 
-class Robot:
+class Robot(pimm.ControlSystem):
     def __init__(self,
                  ip: str,
                  relative_dynamics_factor=0.2,
@@ -72,8 +72,8 @@ class Robot:
         self.relative_dynamics_factor = relative_dynamics_factor
         self.solver = KinematicsSolver()
         self.home_joints = home_joints
-        self.commands: pimm.SignalReceiver[command.CommandType] = pimm.NoOpReceiver()
-        self.state: pimm.SignalEmitter[KinovaState] = pimm.NoOpEmitter()
+        self.commands: pimm.SignalReceiver[command.CommandType] = pimm.ControlSystemReceiver(self)
+        self.state: pimm.SignalEmitter[KinovaState] = pimm.ControlSystemEmitter(self)
 
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Sleep]:
         _set_realtime_priority()

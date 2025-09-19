@@ -6,13 +6,13 @@ import pymodbus.client as ModbusClient
 import pimm
 
 
-class DHGripper:
+class DHGripper(pimm.ControlSystem):
     def __init__(self, port: str):
         self.port = port
-        self.grip: pimm.SignalEmitter = pimm.NoOpEmitter()
-        self.target_grip: pimm.SignalReceiver = pimm.NoOpReceiver()
-        self.force: pimm.SignalReceiver = pimm.NoOpReceiver()
-        self.speed: pimm.SignalReceiver = pimm.NoOpReceiver()
+        self.grip: pimm.SignalEmitter = pimm.ControlSystemEmitter(self)
+        self.target_grip: pimm.SignalReceiver = pimm.ControlSystemReceiver(self)
+        self.force: pimm.SignalReceiver = pimm.ControlSystemReceiver(self)
+        self.speed: pimm.SignalReceiver = pimm.ControlSystemReceiver(self)
 
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock):
         client = ModbusClient.ModbusSerialClient(

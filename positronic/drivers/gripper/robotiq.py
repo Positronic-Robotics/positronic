@@ -15,14 +15,14 @@ _PARITY = "N"
 _STOPBITS = 1
 
 
-class Robotiq2F:
+class Robotiq2F(pimm.ControlSystem):
 
     def __init__(self, port: str):
         self._port = port
-        self.grip = pimm.NoOpEmitter()
-        self.target_grip = pimm.NoOpReceiver()
-        self.force = pimm.NoOpReceiver()
-        self.speed = pimm.NoOpReceiver()
+        self.grip = pimm.ControlSystemEmitter(self)
+        self.target_grip = pimm.ControlSystemReceiver(self)
+        self.force = pimm.ControlSystemReceiver(self)
+        self.speed = pimm.ControlSystemReceiver(self)
 
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Sleep]:
         client = ModbusClient.ModbusSerialClient(port=self._port,

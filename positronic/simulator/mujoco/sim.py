@@ -1,4 +1,4 @@
-from typing import Any, Dict, Sequence, Tuple
+from typing import Any, Dict, Iterator, Sequence, Tuple
 import logging
 
 from positronic import geom
@@ -46,7 +46,7 @@ def save_state(model, data) -> Dict[str, np.ndarray]:
     return state_data
 
 
-class MujocoSim(pimm.Clock):
+class MujocoSim(pimm.Clock, pimm.ControlSystem):
     def __init__(self, mujoco_model_path: str, loaders: Sequence[MujocoSceneTransform] = ()):
         self.mujoco_model_path = mujoco_model_path
         self.loaders = loaders
@@ -57,7 +57,7 @@ class MujocoSim(pimm.Clock):
         self.warmup_steps = 1000
         self.reset(reinitialize_model=False)
 
-    def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock):
+    def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Sleep]:
         while not should_stop.value:
             self.step()
             self.fps_counter.tick()
@@ -110,7 +110,7 @@ class MujocoSim(pimm.Clock):
             mj.mj_step(self.model, self.data)
 
 
-class MujocoCamera:
+class MujocoCamera(pimm.ControlSystem):
     def __init__(self, model, data, camera_name: str, resolution: Tuple[int, int], fps: int = 30):
         super().__init__()
         self.model = model
@@ -119,7 +119,7 @@ class MujocoCamera:
         self.camera_name = camera_name
         self.fps = fps
         self.fps_counter = pimm.utils.RateCounter("MujocoCamera")
-        self.frame: pimm.SignalEmitter = pimm.NoOpEmitter()
+        self.frame: pimm.SignalEmitter = pimm.ControlSystemEmitter(self)
 
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock):
         renderer = mj.Renderer(self.model, height=self.render_resolution[1], width=self.render_resolution[0])
@@ -165,7 +165,7 @@ class MujocoFrankaState(State, pimm.shared_memory.NumpySMAdapter):
         self.array[14 + 7] = self.status.value
 
 
-class MujocoFranka:
+class MujocoFranka(pimm.ControlSystem):
     def __init__(self, sim: MujocoSim, suffix: str = ''):
         self.sim = sim
         self.physics = dm_mujoco.Physics.from_model(sim.data)
@@ -173,8 +173,8 @@ class MujocoFranka:
         self.joint_names = [f'joint{i}{suffix}' for i in range(1, 8)]
         self.actuator_names = [f'actuator{i}{suffix}' for i in range(1, 8)]
         self.joint_qpos_ids = [self.sim.model.joint(joint).qposadr.item() for joint in self.joint_names]
-        self.commands: pimm.SignalReceiver[roboarm_command.CommandType] = pimm.NoOpReceiver()
-        self.state: pimm.SignalEmitter[MujocoFrankaState] = pimm.NoOpEmitter()
+        self.commands: pimm.SignalReceiver[roboarm_command.CommandType] = pimm.ControlSystemReceiver(self)
+        self.state: pimm.SignalEmitter[MujocoFrankaState] = pimm.ControlSystemEmitter(self)
 
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock):
         commands = pimm.DefaultReceiver(pimm.ValueUpdated(self.commands), (None, False))
@@ -246,14 +246,14 @@ class MujocoFranka:
         return site_quat
 
 
-class MujocoGripper:
+class MujocoGripper(pimm.ControlSystem):
     def __init__(self, sim: MujocoSim, actuator_name: str, joint_name: str):
         self.sim = sim
         self.actuator_name = actuator_name
         self.actuator_control_range = self.sim.model.actuator(actuator_name).ctrlrange
         self.joint_name = joint_name
-        self.target_grip: pimm.SignalReceiver[float] = pimm.NoOpReceiver()
-        self.grip: pimm.SignalEmitter = pimm.NoOpEmitter()
+        self.target_grip: pimm.SignalReceiver[float] = pimm.ControlSystemReceiver(self)
+        self.grip: pimm.SignalEmitter = pimm.ControlSystemEmitter(self)
 
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock):
         target_grip_receiver = pimm.DefaultReceiver(self.target_grip, 0.0)

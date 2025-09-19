@@ -85,7 +85,7 @@ def _get_or_create_ssl_files(port: int, keyfile: str, certfile: str) -> tuple[st
     return tmp_key, tmp_cert
 
 
-class WebXR:
+class WebXR(pimm.ControlSystem):
     """WebXR server for Oculus headset or iPhone AR controller.
 
     Serves a single frontend at a time and streams controller/pose data back
@@ -125,9 +125,9 @@ class WebXR:
         self.frontend = frontend
         self.use_https = use_https
         self.server_thread = None
-        self.frame: pimm.SignalReceiver = pimm.NoOpReceiver()
-        self.controller_positions: pimm.SignalEmitter = pimm.NoOpEmitter()
-        self.buttons: pimm.SignalEmitter = pimm.NoOpEmitter()
+        self.frame = pimm.ControlSystemReceiver(self)
+        self.controller_positions = pimm.ControlSystemEmitter(self)
+        self.buttons = pimm.ControlSystemEmitter(self)
 
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Sleep]:  # noqa: C901
         app = FastAPI()

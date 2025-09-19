@@ -139,7 +139,7 @@ def _append_processed(ep_writer: EpisodeWriter, name: str, value: Any, clock: pi
         ep_writer.append(full_name, v, ts)
 
 
-class DsWriterAgent:
+class DsWriterAgent(pimm.ControlSystem):
     """Streams input signals into episodes based on control commands.
 
     Listens on `command` for `DsWriterCommand` messages controlling the
@@ -155,10 +155,10 @@ class DsWriterAgent:
         self.ds_writer = ds_writer
         self._poll_hz = float(poll_hz)
 
-        self.command = pimm.NoOpReceiver[DsWriterCommand]()
+        self.command = pimm.ControlSystemReceiver[DsWriterCommand](self)
 
-        self._inputs: dict[str, pimm.SignalReceiver[Any]] = {
-            name: pimm.NoOpReceiver[Any]()
+        self._inputs: dict[str, pimm.ControlSystemReceiver[Any]] = {
+            name: pimm.ControlSystemReceiver[Any](self)
             for name in (signals_spec or [])
         }
         self._inputs_view = _KeyFrozenMapping(self._inputs)
@@ -171,7 +171,7 @@ class DsWriterAgent:
                 self._signal_meta_specs[name] = names
 
     @property
-    def inputs(self) -> dict[str, pimm.SignalReceiver[Any]]:
+    def inputs(self) -> dict[str, pimm.ControlSystemReceiver[Any]]:
         # Expose a mapping with frozen keys; values can be updated for existing keys.
         return self._inputs_view  # type: ignore[return-value]
 

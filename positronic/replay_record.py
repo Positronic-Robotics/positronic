@@ -16,6 +16,8 @@ from positronic.data_collection import Recorder
 import positronic.cfg.simulator
 
 
+# TODO: This is not working anymore, after we moved to the new dataset format and dumping code
+# This must be fixed or deleted
 class DataDumper:
     def __init__(self, output_dir: str | None, fps: int) -> None:
         self.output_dir = output_dir

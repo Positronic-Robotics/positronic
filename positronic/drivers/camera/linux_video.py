@@ -7,7 +7,7 @@ from typing import Iterator
 import pimm
 
 
-class LinuxVideo:
+class LinuxVideo(pimm.ControlSystem):
     def __init__(self, device_path: str, width: int, height: int, fps: int, pixel_format: str):
         self.device_path = device_path
         self.width = width
@@ -15,7 +15,7 @@ class LinuxVideo:
         self.fps = fps
         self.pixel_format = pixel_format
         self.fps_counter = pimm.utils.RateCounter(f"LinuxVideo {device_path}")
-        self.frame: pimm.SignalEmitter = pimm.NoOpEmitter()
+        self.frame: pimm.SignalEmitter = pimm.ControlSystemEmitter(self)
 
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Sleep]:
         codec_mapping = {

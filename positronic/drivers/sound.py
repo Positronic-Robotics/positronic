@@ -6,7 +6,7 @@ import numpy as np
 import pimm
 
 
-class SoundSystem:
+class SoundSystem(pimm.ControlSystem):
     def __init__(
             self,
             enable_threshold: float = 10.0,
@@ -26,7 +26,6 @@ class SoundSystem:
             master_volume: The volume of the sound.
             output_device_index: The index of the output device to use.
         """
-        super().__init__()
         assert sample_rate == 44100, "Only 44100Hz sample rate is currently supported"
         assert master_volume >= 0.0 and master_volume <= 1.0, "Master volume must be between 0 and 1"
 
@@ -39,8 +38,8 @@ class SoundSystem:
 
         self.active = True
         self.current_phase = 0.0
-        self.level: pimm.SignalReceiver[float] = pimm.NoOpReceiver()
-        self.wav_path: pimm.SignalReceiver[str] = pimm.NoOpReceiver()
+        self.level: pimm.SignalReceiver[float] = pimm.ControlSystemReceiver(self)
+        self.wav_path: pimm.SignalReceiver[str] = pimm.ControlSystemReceiver(self)
 
     def _level_to_frequency(self, level: float) -> Tuple[float, float]:
         if level < self.enable_threshold:

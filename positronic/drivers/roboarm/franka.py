@@ -56,7 +56,7 @@ class FrankaState(State, pimm.shared_memory.NumpySMAdapter):
         self.array[21] = RobotStatus.AVAILABLE.value
 
 
-class Robot:
+class Robot(pimm.ControlSystem):
     def __init__(self,
                  ip: str,
                  relative_dynamics_factor=0.2,
@@ -69,8 +69,8 @@ class Robot:
         self._ip = ip
         self._relative_dynamics_factor = relative_dynamics_factor
         self._home_joints = home_joints
-        self.commands: pimm.SignalReceiver = pimm.NoOpReceiver()
-        self.state: pimm.SignalEmitter = pimm.NoOpEmitter()
+        self.commands: pimm.SignalReceiver = pimm.ControlSystemReceiver(self)
+        self.state: pimm.SignalEmitter = pimm.ControlSystemEmitter(self)
 
     @staticmethod
     def _init_robot(robot):

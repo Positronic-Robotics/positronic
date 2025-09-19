@@ -8,7 +8,7 @@ import pimm
 
 # TODO: Currently in order to have pyzed available, one need to install Stereolabs SDK, and then generate
 # wheel file from it. We need to find a better solution how to install it via uv or at least Docker.
-class SLCamera:
+class SLCamera(pimm.ControlSystem):
     def __init__(self,
                  serial_number: int | None = None,
                  fps: int | None = None,
@@ -50,7 +50,7 @@ class SLCamera:
 
         self.max_depth = max_depth
         self.depth_mask = depth_mask
-        self.frame: pimm.SignalEmitter = pimm.NoOpEmitter()
+        self.frame: pimm.SignalEmitter = pimm.ControlSystemEmitter(self)
 
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Sleep]:
         SUCCESS = sl.ERROR_CODE.SUCCESS

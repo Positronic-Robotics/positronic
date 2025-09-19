@@ -6,12 +6,12 @@ import cv2
 import pimm
 
 
-class OpenCVCamera:
+class OpenCVCamera(pimm.ControlSystem):
     def __init__(self, camera_id: int, resolution: Tuple[int, int], fps: int):
         self.camera_id = camera_id
         self.resolution = resolution
         self.fps = fps
-        self.frame: pimm.SignalEmitter = pimm.NoOpEmitter()
+        self.frame = pimm.ControlSystemEmitter(self)
 
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock):
         cap = cv2.VideoCapture(self.camera_id)
@@ -43,14 +43,15 @@ if __name__ == "__main__":
 
     # We could implement this as a plain function
     # TODO: Extract this into utilities
-    class VideoWriter:
+    class VideoWriter(pimm.ControlSystem):
+
         def __init__(self, filename: str, fps: int, codec: str = 'libx264'):
             self.filename = filename
             self.fps = fps
             self.codec = codec
-            self.frame: pimm.SignalReceiver = pimm.NoOpReceiver()
+            self.frame = pimm.ControlSystemReceiver(self)
 
-        def run(self, should_stop: pimm.SignalReceiver):
+        def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock):
             print(f"Writing to {self.filename}")
             fps_counter = pimm.utils.RateCounter('VideoWriter')
             with av.open(self.filename, mode='w', format='mp4') as container:
@@ -73,9 +74,7 @@ if __name__ == "__main__":
     with pimm.World() as world:
         camera = OpenCVCamera(0, (640, 480), fps=30)
         writer = VideoWriter(sys.argv[1], 30)
+        world.connect(camera.frame, writer.frame)
 
-        camera.frame, writer.frame = world.mp_pipe()
-        world.start_in_subprocess(camera.run)
-
-        for sleep_cmd in writer.run(world.should_stop_reader()):
+        for sleep_cmd in world.start(writer, camera):
             time.sleep(sleep_cmd.seconds)

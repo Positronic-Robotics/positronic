@@ -2,11 +2,11 @@ import time
 from contextlib import nullcontext
 from enum import Enum
 from pathlib import Path
-from typing import Any, Callable, Dict, Iterator, Sequence
-
-import numpy as np
+from typing import Callable, Dict, Iterator, Sequence
 
 import configuronic as cfn
+import numpy as np
+
 import pimm
 import positronic.cfg.hardware.camera
 import positronic.cfg.hardware.gripper
@@ -89,99 +89,20 @@ class OperatorPosition(Enum):
     BACK = geom.Transform3D(rotation=geom.Rotation.from_quat([-0.5, -0.5, 0.5, 0.5]))
 
 
-def _build_camera_mappings(cameras: Dict[str, Any]) -> Dict[str, str]:
-    return {name: (f'image.{name}' if name != 'image' else 'image') for name in cameras.keys()}
-
-
-def _build_signal_specs(camera_mappings: Dict[str, str]) -> Dict[str, Any]:
-    return {
-        'target_grip': None,
-        'robot_commands': Serializers.robot_command,
-        'controller_positions': controller_positions_serializer,
-        'robot_state': Serializers.robot_state,
-        'grip': None,
-        **{
-            v: None
-            for v in camera_mappings.values()
-        },
-    }
-
-
-def _setup_ds_agent_for_cameras(world: pimm.World,
-                                cameras: Dict[str, Any],
-                                camera_mappings: Dict[str, str],
-                                ds_agent: DsWriterAgent | None,
-                                gui: DearpyguiUi | None = None) -> None:
-    if ds_agent is None:
-        return
-    for camera_name, camera in cameras.items():
-        if gui is not None:
-            camera.frame, (ds_receiver, gui_receiver) = world.mp_one_to_many_pipe(2)
-            ds_agent.inputs[camera_mappings[camera_name]] = ds_receiver
-            gui.cameras[camera_name] = gui_receiver
-        else:
-            camera.frame, ds_agent.inputs[camera_mappings[camera_name]] = world.mp_pipe()
-
-
-def _wire_core_channels(world: pimm.World, data_collection: 'DataCollectionController', webxr: WebXR,
-                        robot_arm: Any | None, gripper: Any | None, ds_agent: DsWriterAgent | None) -> None:
-    # Controller positions and buttons
-    ctrl_emitters: list[pimm.SignalEmitter] = []
-    if ds_agent is not None:
-        em, ds_agent.inputs['controller_positions'] = world.mp_pipe()
-        ctrl_emitters.append(em)
-        data_collection.ds_agent_commands, ds_agent.command = world.mp_pipe()
-    em, data_collection.controller_positions_receiver = world.mp_pipe()
-    ctrl_emitters.append(em)
-    webxr.controller_positions = pimm.BroadcastEmitter(ctrl_emitters)
-    webxr.buttons, data_collection.buttons_receiver = world.mp_pipe()
-
-    # Robot state/commands
-    if robot_arm is not None:
-        # Commands
-        cmd_emitters = []
-        x, robot_arm.commands = world.mp_pipe()
-        cmd_emitters.append(x)
-        if ds_agent is not None:
-            x, ds_agent.inputs['robot_commands'] = world.mp_pipe()
-            cmd_emitters.append(x)
-        data_collection.robot_commands = pimm.BroadcastEmitter(cmd_emitters)
-
-        # State via shared memory
-        state_emitters = []
-        if ds_agent is not None:
-            x, ds_agent.inputs['robot_state'] = world.shared_memory()
-            state_emitters.append(x)
-        x, data_collection.robot_state = world.shared_memory()
-        state_emitters.append(x)
-        robot_arm.state = pimm.BroadcastEmitter(state_emitters)
-
-    # Gripper
-    if gripper is not None:
-        tg_emitters = []
-        x, gripper.target_grip = world.mp_pipe()
-        tg_emitters.append(x)
-        if ds_agent is not None:
-            x, ds_agent.inputs['target_grip'] = world.mp_pipe()
-            tg_emitters.append(x)
-            gripper.grip, ds_agent.inputs['grip'] = world.mp_pipe()
-        data_collection.target_grip_emitter = pimm.BroadcastEmitter(tg_emitters)
-
-
-class DataCollectionController:
+class DataCollectionController(pimm.ControlSystem):
 
     def __init__(self, operator_position: geom.Transform3D | None, metadata_getter: Callable[[], Dict] | None = None):
         self.operator_position = operator_position
         self.metadata_getter = metadata_getter or (lambda: {})
-        self.controller_positions_receiver: pimm.SignalReceiver[Dict[str, geom.Transform3D]] = pimm.NoOpReceiver()
-        self.buttons_receiver: pimm.SignalReceiver[Dict] = pimm.NoOpReceiver()
-        self.robot_state: pimm.SignalReceiver[roboarm.State] = pimm.NoOpReceiver()
+        self.controller_positions_receiver = pimm.ControlSystemReceiver(self)
+        self.buttons_receiver = pimm.ControlSystemReceiver(self)
+        self.robot_state = pimm.ControlSystemReceiver(self)
 
-        self.robot_commands: pimm.SignalEmitter[roboarm.command.CommandType] = pimm.NoOpEmitter()
-        self.target_grip_emitter: pimm.SignalEmitter[float] = pimm.NoOpEmitter()
+        self.robot_commands = pimm.ControlSystemEmitter(self)
+        self.target_grip_emitter = pimm.ControlSystemEmitter(self)
 
-        self.ds_agent_commands: pimm.SignalEmitter[DsWriterCommand] = pimm.NoOpEmitter()
-        self.sound_emitter: pimm.SignalEmitter[str] = pimm.NoOpEmitter()
+        self.ds_agent_commands = pimm.ControlSystemEmitter(self)
+        self.sound_emitter = pimm.ControlSystemEmitter(self)
 
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Sleep]:  # noqa: C901
         start_wav_path = "positronic/assets/sounds/recording-has-started.wav"
@@ -238,49 +159,83 @@ def controller_positions_serializer(controller_positions: Dict[str, geom.Transfo
     return res
 
 
-def main(robot_arm: Any | None,
-         gripper: Any | None,
+def _wire(world: pimm.World, cameras: Dict[str, pimm.ControlSystem] | None, dataset_writer: LocalDatasetWriter | None,
+          data_collection: DataCollectionController, webxr: WebXR, robot_arm: pimm.ControlSystem | None,
+          gripper: pimm.ControlSystem | None, sound: pimm.ControlSystem | None):
+    cameras = cameras or {}
+    camera_mappings = {name: (f'image.{name}' if name != 'image' else 'image') for name in cameras.keys()}
+
+    world.connect(webxr.controller_positions, data_collection.controller_positions_receiver)
+    world.connect(webxr.buttons, data_collection.buttons_receiver)
+
+    if robot_arm is not None:
+        world.connect(data_collection.robot_commands, robot_arm.commands)
+        world.connect(robot_arm.state, data_collection.robot_state)
+
+    if gripper is not None:
+        world.connect(data_collection.target_grip_emitter, gripper.target_grip)
+
+    if sound is not None:
+        world.connect(data_collection.sound_emitter, sound.wav_path)
+
+    ds_agent = None
+    if dataset_writer is not None:
+        signals_spec = {v: None for v in camera_mappings.values()}
+        signals_spec['target_grip'] = None
+        signals_spec['robot_commands'] = Serializers.robot_command
+        signals_spec['controller_positions'] = controller_positions_serializer
+        signals_spec['robot_state'] = Serializers.robot_state
+        signals_spec['grip'] = None
+        ds_agent = DsWriterAgent(dataset_writer, signals_spec)
+        # Controls for the data set agent
+        world.connect(data_collection.ds_agent_commands, ds_agent.command)
+
+        # The data itself
+        for camera_name, camera in cameras.items():
+            world.connect(camera.frame, ds_agent.inputs[camera_mappings[camera_name]])
+        world.connect(webxr.controller_positions, ds_agent.inputs['controller_positions'])
+        world.connect(data_collection.robot_commands, ds_agent.inputs['robot_commands'])
+        world.connect(data_collection.target_grip_emitter, ds_agent.inputs['target_grip'])
+        if robot_arm is not None:
+            world.connect(robot_arm.state, ds_agent.inputs['robot_state'])
+        if gripper is not None:
+            world.connect(gripper.grip, ds_agent.inputs['grip'])
+
+    return ds_agent
+
+
+def main(robot_arm: pimm.ControlSystem | None,
+         gripper: pimm.ControlSystem | None,
          webxr: WebXR,
-         sound: Any | None,
-         cameras: Dict[str, Any] | None,
+         sound: pimm.ControlSystem | None,
+         cameras: Dict[str, pimm.ControlSystem] | None,
          output_dir: str | None = None,
          stream_video_to_webxr: str | None = None,
          operator_position: OperatorPosition = OperatorPosition.FRONT):
     """Runs data collection in real hardware."""
+    data_collection = DataCollectionController(operator_position.value)
+
     writer_cm = LocalDatasetWriter(Path(output_dir)) if output_dir is not None else nullcontext(None)
-
     with writer_cm as dataset_writer, pimm.World() as world:
-        data_collection = DataCollectionController(operator_position.value)
-        cameras = cameras or {}
-        camera_mappings = _build_camera_mappings(cameras)
+        ds_agent = _wire(world, cameras, dataset_writer, data_collection, webxr, robot_arm, gripper, sound)
 
-        ds_agent = None
-        if dataset_writer is not None:
-            signal_specs = _build_signal_specs(camera_mappings)
-            ds_agent = DsWriterAgent(dataset_writer, signal_specs)
-            _setup_ds_agent_for_cameras(world, cameras, camera_mappings, ds_agent)
-
-        _wire_core_channels(world, data_collection, webxr, robot_arm, gripper, ds_agent)
-
+        bg_cs = [webxr]
+        bg_cs.extend([camera.run for camera in cameras.values()])
+        if ds_agent is not None:
+            bg_cs.append(ds_agent)
         if robot_arm is not None:
-            world.start_in_subprocess(robot_arm.run)
+            bg_cs.append(robot_arm)
         if gripper is not None:
-            world.start_in_subprocess(gripper.run)
+            bg_cs.append(gripper)
+        if sound is not None:
+            bg_cs.append(sound)
 
         if stream_video_to_webxr is not None:
-            emitter, reader = world.mp_pipe()
-            cameras[stream_video_to_webxr].frame = pimm.BroadcastEmitter(
-                [emitter, cameras[stream_video_to_webxr].frame])
-            webxr.frame = pimm.map(reader, lambda x: x['image'])
+            world.connect(cameras[stream_video_to_webxr].frame,
+                          webxr.frame,
+                          receiver_wrapper=lambda r: pimm.map(r, lambda x: x['image']))
 
-        world.start_in_subprocess(webxr.run, *[camera.run for camera in cameras.values()])
-        if ds_agent is not None:
-            world.start_in_subprocess(ds_agent.run)
-        if sound is not None:
-            data_collection.sound_emitter, sound.wav_path = world.mp_pipe()
-            world.start_in_subprocess(sound.run)
-
-        dc_steps = iter(world.interleave(data_collection.run))
+        dc_steps = iter(world.start(data_collection, *bg_cs))
         while not world.should_stop:
             try:
                 time.sleep(next(dc_steps).seconds)
@@ -290,7 +245,7 @@ def main(robot_arm: Any | None,
 
 def main_sim(mujoco_model_path: str,
              webxr: WebXR,
-             sound: Any | None = None,
+             sound: pimm.ControlSystem | None = None,
              loaders: Sequence[MujocoSceneTransform] = (),
              output_dir: str | None = None,
              fps: int = 30,
@@ -306,41 +261,25 @@ def main_sim(mujoco_model_path: str,
     gripper = MujocoGripper(sim, actuator_name='actuator8_ph', joint_name='finger_joint1_ph')
     gui = DearpyguiUi()
 
+    def metadata_getter():
+        return {k: v.tolist() for k, v in sim.save_state().items()}
+
+    data_collection = DataCollectionController(operator_position.value, metadata_getter=metadata_getter)
+
     writer_cm = LocalDatasetWriter(Path(output_dir)) if output_dir is not None else nullcontext(None)
-
     with writer_cm as dataset_writer, pimm.World(clock=sim) as world:
+        ds_agent = _wire(world, cameras, dataset_writer, data_collection, webxr, robot_arm, gripper, sound)
 
-        def metadata_getter():
-            return {k: v.tolist() for k, v in sim.save_state().items()}
-
-        data_collection = DataCollectionController(operator_position.value, metadata_getter=metadata_getter)
-
-        cameras = cameras or {}
-        camera_mappings = _build_camera_mappings(cameras)
-
-        ds_agent = None
-        if dataset_writer is not None:
-            signal_specs = _build_signal_specs(camera_mappings)
-            ds_agent = DsWriterAgent(dataset_writer, signal_specs)
-            _setup_ds_agent_for_cameras(world, cameras, camera_mappings, ds_agent, gui)
-
-        _wire_core_channels(world, data_collection, webxr, robot_arm, gripper, ds_agent)
-
-        world.start_in_subprocess(webxr.run, gui.run)
-        if sound is not None:
-            data_collection.sound_emitter, sound.wav_path = world.mp_pipe()
-            world.start_in_subprocess(sound.run)
+        bg_cs = [webxr, gui]
         if ds_agent is not None:
-            world.start_in_subprocess(ds_agent.run)
+            bg_cs.append(ds_agent)
+        if sound is not None:
+            bg_cs.append(sound)
 
-        sim_iter = world.interleave(
-            sim.run,
-            *[camera.run for camera in cameras.values()],
-            robot_arm.run,
-            gripper.run,
-            data_collection.run,
-        )
+        for camera_name, camera in cameras.items():
+            world.connect(camera.frame, gui.cameras[camera_name])
 
+        sim_iter = world.start([sim, *cameras.values(), robot_arm, gripper, data_collection], bg_cs)
         sim_iter = iter(sim_iter)
 
         start_time = pimm.world.SystemClock().now_ns()

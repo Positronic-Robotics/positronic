@@ -1,27 +1,24 @@
 from typing import Any, Iterator, Mapping, Sequence
 
+import configuronic as cfn
 import numpy as np
-import tqdm
 import rerun as rr
 import torch
+import tqdm
 
-import configuronic as cfn
 import pimm
+import positronic.cfg.hardware.camera
+import positronic.cfg.hardware.gripper
+import positronic.cfg.hardware.roboarm
+import positronic.cfg.policy.action
+import positronic.cfg.policy.observation
+import positronic.cfg.policy.policy
+import positronic.cfg.simulator
 from positronic.drivers import roboarm
-from positronic.drivers.camera.linux_video import LinuxVideo
-from positronic.drivers.gripper.dh import DHGripper
-from positronic.simulator.mujoco.sim import MujocoCamera, MujocoFranka, MujocoGripper, MujocoSim
 from positronic.policy.action import ActionDecoder
 from positronic.policy.observation import ObservationEncoder
+from positronic.simulator.mujoco.sim import MujocoCamera, MujocoFranka, MujocoGripper, MujocoSim
 from positronic.simulator.mujoco.transforms import MujocoSceneTransform
-
-import positronic.cfg.hardware.roboarm
-import positronic.cfg.hardware.gripper
-import positronic.cfg.hardware.camera
-import positronic.cfg.simulator
-import positronic.cfg.policy.observation
-import positronic.cfg.policy.action
-import positronic.cfg.policy.policy
 
 
 def rerun_log_observation(ts, obs):
@@ -48,7 +45,8 @@ def rerun_log_action(ts, action):
     rr.log("action", rr.Scalars(action))
 
 
-class Inference:
+class Inference(pimm.ControlSystem):
+
     def __init__(
         self,
         state_encoder: ObservationEncoder,
@@ -66,18 +64,15 @@ class Inference:
         self.rerun_path = rerun_path
         self.inference_fps = inference_fps
         self.task = task
-        self.frames: dict[str, pimm.SignalReceiver[Mapping[str, np.ndarray]]] = {}
-        self.robot_state: pimm.SignalReceiver[roboarm.State] = pimm.NoOpReceiver()
-        self.gripper_state: pimm.SignalReceiver[float] = pimm.NoOpReceiver()
+        self.frames = pimm.ReceiverDict(self)
+        self.robot_state = pimm.ControlSystemReceiver(self)
+        self.gripper_state = pimm.ControlSystemReceiver(self)
 
-        self.robot_commands: pimm.SignalEmitter[roboarm.command.CommandType] = pimm.NoOpEmitter()
-        self.target_grip: pimm.SignalEmitter[float] = pimm.NoOpEmitter()
+        self.robot_commands = pimm.ControlSystemEmitter(self)
+        self.target_grip = pimm.ControlSystemEmitter(self)
 
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Sleep]:  # noqa: C901
-        frames = {
-            camera_name: pimm.DefaultReceiver(frame, {})
-            for camera_name, frame in self.frames.items()
-        }
+        frames = {camera_name: pimm.DefaultReceiver(frame, {}) for camera_name, frame in self.frames.items()}
 
         rate_limiter = pimm.RateLimiter(clock, hz=self.inference_fps)
 
@@ -142,16 +137,18 @@ class Inference:
             yield pimm.Sleep(rate_limiter.wait_time())
 
 
-def main(robot_arm: Any | None,
-         gripper: DHGripper | None,
-         cameras: Mapping[str, LinuxVideo] | None,
-         state_encoder: ObservationEncoder,
-         action_decoder: ActionDecoder,
-         policy,
-         rerun_path: str | None = None,
-         device: str = 'cuda',
-         ):
+def main(
+    robot_arm: Any | None,
+    gripper: pimm.ControlSystem | None,
+    cameras: Mapping[str, pimm.ControlSystem] | None,
+    state_encoder: ObservationEncoder,
+    action_decoder: ActionDecoder,
+    policy,
+    rerun_path: str | None = None,
+    device: str = 'cuda',
+):
 
+    # TODO: Refactor to use pimm.World.connect and pimm.World.start
     with pimm.World() as world:
         inference = Inference(state_encoder, action_decoder, device, policy, rerun_path)
         cameras = cameras or {}
@@ -174,18 +171,18 @@ def main(robot_arm: Any | None,
 
 
 def main_sim(
-        mujoco_model_path: str,
-        state_encoder: ObservationEncoder,
-        action_decoder: ActionDecoder,
-        policy,
-        rerun_path: str,
-        loaders: Sequence[MujocoSceneTransform],
-        camera_fps: int,
-        policy_fps: int,
-        device: str,
-        simulation_time: float,
-        camera_dict: Mapping[str, str],
-        task: str | None,
+    mujoco_model_path: str,
+    state_encoder: ObservationEncoder,
+    action_decoder: ActionDecoder,
+    policy,
+    rerun_path: str,
+    loaders: Sequence[MujocoSceneTransform],
+    camera_fps: int,
+    policy_fps: int,
+    device: str,
+    simulation_time: float,
+    camera_dict: Mapping[str, str],
+    task: str | None,
 ):
     sim = MujocoSim(mujoco_model_path, loaders)
     robot_arm = MujocoFranka(sim, suffix='_ph')
@@ -237,7 +234,6 @@ main_cfg = cfn.Config(
     rerun_path="inference.rrd",
     device='cuda',
 )
-
 
 main_sim_cfg = cfn.Config(
     main_sim,

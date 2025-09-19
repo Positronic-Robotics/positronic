@@ -43,18 +43,18 @@ class SO101State(State, pimm.shared_memory.NumpySMAdapter):
         self.array[17] = RobotStatus.AVAILABLE.value
 
 
-class Robot:
+class Robot(pimm.ControlSystem):
     def __init__(self, motor_bus: MotorBus, home_joints: list[float] = [0.0, 0.0, 0.0, 0.0, 0.0]):
         self.motor_bus = motor_bus
         self.mujoco_model_path = "positronic/drivers/roboarm/so101/so101.xml"
         self.kinematic = Kinematics("positronic/drivers/roboarm/so101/so101.urdf", "gripper_frame_joint")
         self.joint_limits = self.kinematic.joint_limits
         self.home_joints = home_joints
-        self.commands: pimm.SignalReceiver[roboarm_command.CommandType] = pimm.NoOpReceiver()
-        self.target_grip: pimm.SignalReceiver[float] = pimm.NoOpReceiver()
+        self.commands: pimm.SignalReceiver[roboarm_command.CommandType] = pimm.ControlSystemReceiver(self)
+        self.target_grip: pimm.SignalReceiver[float] = pimm.ControlSystemReceiver(self)
 
-        self.grip: pimm.SignalEmitter[float] = pimm.NoOpEmitter()
-        self.state: pimm.SignalEmitter[SO101State] = pimm.NoOpEmitter()
+        self.grip: pimm.SignalEmitter[float] = pimm.ControlSystemEmitter(self)
+        self.state: pimm.SignalEmitter[SO101State] = pimm.ControlSystemEmitter(self)
 
         print("================================================================")
         print("Warning: Proper dq units is not implemented for SO101!")

@@ -1,4 +1,4 @@
-from typing import Dict, List
+from typing import Iterator, List
 
 import dearpygui.dearpygui as dpg
 import numpy as np
@@ -11,14 +11,14 @@ def _get_down_keys() -> List[int]:
     return [key for key in all_keys if dpg.is_key_down(key)]
 
 
-class DearpyguiUi:
+class DearpyguiUi(pimm.ControlSystem):
     def __init__(self):
         self.width = 320
         self.height = 240
         # Instance-level state to survive pickling into subprocesses
-        self.cameras: Dict[str, pimm.SignalReceiver] = {}
-        self.info: pimm.SignalReceiver = pimm.NoOpReceiver()
-        self.buttons: pimm.SignalEmitter = pimm.NoOpEmitter()
+        self.cameras = pimm.ReceiverDict(self)
+        self.info = pimm.ControlSystemReceiver(self)
+        self.buttons = pimm.ControlSystemEmitter(self)
 
     def init(self):
         self.cameras = {
@@ -54,7 +54,7 @@ class DearpyguiUi:
         dpg.setup_dearpygui()
         dpg.show_viewport(maximized=True)
 
-    def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock):
+    def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Sleep]:
         self.init()
         fps_counter = pimm.utils.RateCounter("UI")
         frame_fps_counter = pimm.utils.RateCounter("Frame")
