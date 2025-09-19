@@ -144,13 +144,13 @@ loop, or plug it into different schedulers without rewriting it.
 
 ## Moving Large Blobs
 
-Some signals (camera frames, robot state vectors) benefit from zero-copy sharing.
-`world.shared_memory()` returns an emitter/receiver pair backed by shared memory.
-Payloads implement the `SMCompliant` protocol—`pimm.shared_memory.NumpySMAdapter`
-handles numpy arrays—so emitters know how big the buffer should be and receivers
-can view the data without copying. Currently you have to set shared-memory channels
-up manually, though we will modify the `pimm.World` scheduler to do it
-automatically, when data allows it.
+Some signals (camera frames, robot state vectors) require a large bandwidth and/or
+small latency, and hence benefit from communication channels that avoid serialisation.
+`world.mp_pipe(transport=pimm.world.TransportMode.SHARED_MEMORY)` returns an emitter/receiver pair backed by shared memory. Payloads implement the `SMCompliant` protocol—
+`pimm.shared_memory.NumpySMAdapter` handles numpy arrays—so emitters know how big
+the buffer should be and receivers can view the data without copying. If your data
+implements `SMCompliant` protocol, the shared memory communication will be used
+automatcially without your explicit request.
 
 ## Learn from Real Pipelines
 

@@ -1,6 +1,7 @@
 import configuronic as cfn
 import positronic.cfg.hardware.roboarm
 import pimm
+from pimm.world import TransportMode
 from positronic import geom
 from positronic.drivers.roboarm import command
 
@@ -9,7 +10,7 @@ from positronic.drivers.roboarm import command
 def main(robot):
     with pimm.World() as world:
         command_emmiter, robot.commands = world.mp_pipe()
-        robot.state, state_receiver = world.shared_memory()
+        robot.state, state_receiver = world.mp_pipe(transport=TransportMode.SHARED_MEMORY)
 
         world.start_in_subprocess(robot.run)
 

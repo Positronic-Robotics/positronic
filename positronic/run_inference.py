@@ -7,6 +7,7 @@ import torch
 import tqdm
 
 import pimm
+from pimm.world import TransportMode
 import positronic.cfg.hardware.camera
 import positronic.cfg.hardware.gripper
 import positronic.cfg.hardware.roboarm
@@ -158,7 +159,8 @@ def main(
         world.start_in_subprocess(*[camera.run for camera in cameras.values()])
 
         if robot_arm is not None:
-            robot_arm.state, inference.robot_state = world.shared_memory()
+            robot_arm.state, inference.robot_state = world.mp_pipe(
+                transport=TransportMode.SHARED_MEMORY)
             inference.robot_commands, robot_arm.commands = world.mp_pipe()
             world.start_in_subprocess(robot_arm.run)
 

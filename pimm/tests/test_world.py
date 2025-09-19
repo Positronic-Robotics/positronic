@@ -1,4 +1,5 @@
 import multiprocessing as mp
+import struct
 import time
 from queue import Empty, Full
 from unittest.mock import Mock, patch
@@ -14,6 +15,7 @@ from pimm.core import (
     SignalReceiver,
     Sleep,
 )
+from pimm.shared_memory import SMCompliant
 from pimm.tests.testing import MockClock
 from pimm.world import EventReceiver, QueueEmitter, QueueReceiver, SystemClock, World
 
@@ -41,6 +43,25 @@ class DummyControlSystem(ControlSystem):
 
     def __repr__(self):
         return f"DummyControlSystem(name={self.name!r})"
+
+
+class DummySMValue(SMCompliant):
+    """Simple SMCompliant payload used to test adaptive transports."""
+
+    def __init__(self, value: float = 0.0):
+        self.value = value
+
+    def buf_size(self) -> int:
+        return 8
+
+    def instantiation_params(self) -> tuple[float]:
+        return (0.0,)
+
+    def set_to_buffer(self, buffer: memoryview | bytes | bytearray) -> None:
+        buffer[:8] = struct.pack('d', self.value)
+
+    def read_from_buffer(self, buffer: memoryview | bytes) -> None:
+        self.value = struct.unpack('d', buffer[:8])[0]
 
 
 class TestQueueEmitter:
@@ -345,6 +366,43 @@ class TestWorld:
             assert success
             assert readers[0].read().data == message
             assert readers[1].read().data == message
+
+    def test_mp_pipe_uses_queue_for_non_shared_memory_payloads(self):
+        world = World()
+        emitter, reader = world.mp_pipe()
+
+        emitter.emit('hello', ts=123)
+
+        message = reader.read()
+        assert message is not None
+        assert message.data == 'hello'
+        assert message.ts == 123
+        assert hasattr(emitter, 'uses_shared_memory') and not emitter.uses_shared_memory
+        assert hasattr(reader, 'uses_shared_memory') and not reader.uses_shared_memory
+
+    def test_mp_pipe_switches_to_shared_memory_when_supported(self):
+        world = World()
+        emitter, reader = world.mp_pipe()
+
+        payload = DummySMValue(3.14)
+        assert emitter.emit(payload, ts=456)
+
+        message = reader.read()
+        assert message is not None
+        assert isinstance(message.data, DummySMValue)
+        assert message.data.value == pytest.approx(3.14)
+        assert message.ts == 456
+        assert emitter.uses_shared_memory
+        assert reader.uses_shared_memory
+
+    def test_mp_pipe_rejects_incompatible_payload_after_shared_memory_selected(self):
+        world = World()
+        emitter, _ = world.mp_pipe()
+
+        emitter.emit(DummySMValue(1.0))
+
+        with pytest.raises(TypeError, match='Shared memory transport selected'):  # type: ignore[arg-type]
+            emitter.emit('not-compatible')
 
 
 class TestWorldControlSystems:
