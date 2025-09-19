@@ -1,180 +1,168 @@
-# Pimm: Positronic Immediate Mode Middleware
+# Pimm: Immediate-Mode Middleware for Robotics
 
-Pimm (Positronic IMMediate) is Positronic's Python-native middleware for stitching
-robotic systems out of small, composable control loops. It takes inspiration from
-immediate-mode GUI frameworks such as [Dear ImGui](https://github.com/ocornut/imgui)
-and [egui](https://github.com/emilk/egui): every loop reads the
-current state, computes the next command, emits it, and yields control right away.
-There is no hidden background graph and no global event bus – just explicit data
-flow through signals and a deterministic scheduler.
+Pimm (Positronic IMMediate) is a tiny runtime that lets you describe a robotics
+application as a handful of control loops, wire their inputs and outputs, and let
+an orchestrator keep everybody up to date. It borrows the *immediate-mode* mindset
+from GUI frameworks such as ImGui/egui: every loop reads the freshest data,
+computes the next command, emits it, and yields right away—no hidden graph, no
+long-lived callbacks.
 
-Pimm powers the pipelines in [`positronic/`](../positronic), including the data
-collection stack, robot drivers, MuJoCo simulator bindings, and inference loops.
-This document explains the core mental model and how to put the library to work in
-your own control systems.
+What makes this valuable for ML-oriented robotics is that you stay in plain
+Python. There is no special DSL, no ROS launch files, and you can unit-test each
+piece exactly like any other Python class.
 
-## Why Immediate Mode for Robotics?
+## First Contact: Two Loops and a Wire
 
-- **Freshest data wins.** Signals are single-writer/single-direction channels. They
-  always expose the latest message, which mirrors how sensor streams, controller
-  inputs, and robot commands behave in practice.
-- **Deterministic scheduling.** Control loops are plain Python generators that
-  yield `pimm.Sleep(seconds)` (or `pimm.Pass()` for zero delay). The orchestrator
-  interleaves them with a predictable order, enabling reproducible simulator runs
-  and easier debugging.
-- **Python-first ergonomics.** No ROS graph description, no coloured async APIs.
-  Everything stays as regular Python objects so you can unit test components and
-  mix them with existing ML tooling.
-
-## Core Concepts
-
-### Signals
-
-A *signal* is a unidirectional channel made of a `SignalEmitter[T]` and a
-`SignalReceiver[T]` exchanging `Message[T]` objects (payload + integer timestamp).
-
-- Emitters are non-blocking; if a downstream queue is full, the oldest value is
-  dropped so the newest data always propagates.
-- Receivers cache the last observed message. Calling `reader.read()` returns the
-  newest `Message` or `None` if nothing was ever emitted. `reader.value` raises
-  `NoValueException` until the first message arrives.
-- Signals carry mutually exclusive pieces of information. If you can only act on
-  the most recent command, it should share the same signal (e.g. joint-space and
-  Cartesian commands for a robot arm).
-
-Pimm ships several ready-to-use transports:
-
-- `World.local_pipe()` – lock-free deque for components living in the same process.
-- `World.mp_pipe()` – `multiprocessing.Queue` backed pipe for cross-process links.
-- `World.shared_memory()` – zero-copy transport for large blobs when paired with an
-  `SMCompliant` payload (see below).
-- `BroadcastEmitter` – fan-out helper that keeps multiple emitters in sync, heavily
-  used in `positronic.data_collection` to tee robot commands to both the robot and
-  logging agents.
-
-Utility wrappers make common patterns trivial:
+Below is the smallest useful Pimm program. A sensor publishes a sine wave based on
+system time, and a logger prints whatever comes in. Notice how we only describe
+*what* each system does; the `World` takes care of choosing transports and keeping
+both loops alive (with the sensor happily running in a background process).
 
 ```python
-commands = pimm.ValueUpdated(robot.commands)          # detect "new" values
-latest_or_idle = pimm.DefaultReceiver(commands, (None, False))
-filtered = pimm.map(robot_state, my_transform)        # transform on read
-```
+import math
+import time
 
-### Control Loops
-
-A control loop has the signature `loop(should_stop: SignalReceiver, clock: Clock)
--> Iterator[pimm.Sleep]` and drives one aspect of the system (driver, sensor,
-inference, UI, etc.). Example:
-
-```python
 import pimm
 
-class JoystickBridge:
-    def __init__(self):
-        self.pose: pimm.SignalEmitter[pimm.geom.Transform3D] = pimm.NoOpEmitter()
+
+class SineSensor(pimm.ControlSystem):
+    def __init__(self, hz: float = 0.5):
+        self._hz = hz
+        self.signal = pimm.ControlSystemEmitter(self)
 
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock):
         while not should_stop.value:
-            pose = read_gamepad_transform()
-            self.pose.emit(pose, ts=clock.now_ns())
-            yield pimm.Sleep(0.01)
-```
+            now = clock.now()            # monotonic seconds supplied by the World
+            sample = math.sin(2 * math.pi * self._hz * now)
+            self.signal.emit(sample, ts=clock.now_ns())
+            yield pimm.Sleep(0.02)
 
-Pimm deliberately avoids `async` coroutines: generators keep call sites uncoloured
-and make deterministic interleaving straightforward.
 
-### World and Scheduling
-
-`World` is the runtime that wires signals and executes loops:
-
-```python
-with pimm.World() as world:
-    joystick = JoystickBridge()
-    planner = Planner()
-
-    # Wire channels
-    joystick.pose, planner.ee_pose = world.mp_pipe()
-    planner.commands, robot.commands = world.mp_pipe()
-
-    # Run planner inline, driver in a subprocess
-    world.start_in_subprocess(robot.run)
-    world.run(joystick.run, planner.run)
-```
-
-Key behaviours:
-
-- The context manager ensures background processes, shared memory blocks, and
-  queues are cleaned up even on exceptions.
-- `world.start_in_subprocess(loop)` forks a daemon process that drives a loop
-  until it finishes or `world.should_stop` is set.
-- `world.interleave(*loops)` exposes the deterministic scheduler if you want to
-  embed it in your own main loop; `world.run` simply executes it and sleeps.
-- All loops receive a `should_stop` signal ([`EventReceiver`](../pimm/world.py))
-  so they can exit cooperatively when the world shuts down.
-
-`Clock` instances supply timestamps. `World` defaults to `SystemClock` (monotonic
-wall time), but any custom `Clock` works – for example, `positronic.simulator.mujoco.sim.MujocoSim`
-implements `Clock` so simulator time drives the rest of the system.
-
-### Shared Memory Payloads
-
-For high-bandwidth data (robot state vectors, camera frames) Pimm relies on the
-`SMCompliant` protocol. Implementations describe how to size, write, and read a
-buffer. `pimm.shared_memory.NumpySMAdapter` covers numpy arrays:
-
-```python
-class MujocoFrankaState(State, pimm.shared_memory.NumpySMAdapter):
+class ConsoleLogger(pimm.ControlSystem):
     def __init__(self):
-        super().__init__(shape=(22,), dtype=np.float32)
+        self.source = pimm.ControlSystemReceiver(self)
 
-    # encode() fills self.array with the latest simulator state
+    def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock):
+        while not should_stop.value:
+            try:
+                value = self.source.value
+                print(f"{clock.now():.2f}s -> {value:+.3f}")
+            except pimm.NoValueException:
+                pass
+            yield pimm.Sleep(0.1)
+
 
 with pimm.World() as world:
-    robot.state, ds_writer.inputs['robot_state'] = world.shared_memory()
+    sensor = SineSensor()
+    logger = ConsoleLogger()
+
+    world.connect(sensor.signal, logger.source)
+
+    for sleep in world.start(logger, background=sensor):
+        time.sleep(sleep.seconds)
 ```
 
-Emitters ensure every payload matches the first message's shape and dtype. Readers
-materialise lightweight views onto the shared block; re-emit after mutating data
-so receivers observe the changes.
+Run it and you will see a stream of timestamps and sine values. A few important
+things happened under the hood:
 
-## Building Larger Systems
+- `world.connect(...)` recorded that the sensor feeds the logger. Later, `world.start`
+  noticed they run in different processes (the sensor goes to the background) and
+  automatically chose a multiprocessing queue for that connection.
+- The loop returned by `world.start(...)` schedules the logger in the main process
+  and forwards `Sleep` values so you can decide how to wait (here we simply
+  `time.sleep`).
+- When the with-block ends—or the user kills the program—the world notifies every
+  loop through the `should_stop` signal so they can exit gracefully.
 
-[`positronic/data_collection.py`](../positronic/data_collection.py) shows a representative assembly:
+That is the whole workflow: build small `ControlSystem` classes, `connect` their
+signals, and `start` whichever group you want to supervise directly. Everything
+else is plumbing you no longer have to write.
 
-1. Controllers, simulators, dataset writers, and GUI widgets each expose a `run`
-   generator.
-2. A `World` instance wires signals with a mix of `mp_pipe`, `shared_memory`, and
-   `BroadcastEmitter` so every participant receives the freshest inputs.
-3. Top-level orchestration starts long-running drivers in subprocesses (arm,
-   gripper, cameras) while interleaving coordination logic (`DataCollectionController`)
-   in the main process.
-4. Utilities like `ValueUpdated`, `DefaultReceiver`, and `RateLimiter` keep loops
-   responsive without adding manual edge tracking.
+## Signals: One Pipe per Idea
 
-The same pattern appears in [`positronic/robot_controller.py`](../positronic/robot_controller.py),
-which connects a hardware driver to a CLI, and in the MuJoCo simulator bindings
-([`positronic/simulator/mujoco/sim.py`](../positronic/simulator/mujoco/sim.py))
-where the simulator itself implements `Clock` so physics time controls the rest of
-the world.
+Signals are the heart of Pimm. Conceptually, a signal is a one-way pipe that
+carries mutually exclusive information. When a message travels down the pipe it
+replaces whatever was there before, so a reader always sees the newest payload—even
+if some messages were dropped along the way.
 
-## Testing Helpers
+This leads to a simple rule of thumb:
 
-Pimm is designed to be unit-test-friendly:
+> **If two pieces of data cannot both be acted on, they belong to the same signal.**
 
-- [`pimm.tests.testing.MockClock`](../pimm/tests/testing.py) provides a deterministic, manually stepped clock.
-- Signals are regular Python objects, so you can stub them with simple fakes or
-  the `NoOpEmitter`/`NoOpReceiver` placeholders found throughout `positronic/`.
-- `ValueUpdated` makes it easy to assert *when* new data appears, which is used
-  heavily in the shared-memory tests.
+Examples:
 
-Refer to [`pimm/tests/`](../pimm/tests) and [`positronic/tests/`](../positronic/tests) for practical patterns, including
-full pipelines validated through the scheduler.
+- A robot controller that can accept *either* joint-space *or* Cartesian commands
+  should publish them on a single signal, because executing one invalidates the
+  other.
+- A camera driver can bundle the latest image frame, camera intrinsics, or error
+  state into one message. The logger only needs the freshest view of that stream;
+  history is irrelevant.
+- WebXR inputs (poses + button presses) form a signal because you only care about
+  the latest controller state.
 
-## Project Status and Roadmap
+Because the newest value overwrites older ones, Pimm keeps signals lightweight and
+non-blocking. You can treat them as "push the latest observation" rather than
+"append to a queue". When you *do* need historical data (e.g., recording datasets)
+that logic lives in a dedicated control system such as `positronic.dataset.ds_writer_agent`.
 
-Pimm is currently in **alpha** and under active development. Near-term priorities
-include decoupling signal graph construction from scheduling so control loops can
-be declared without deciding where they execute. Expect APIs to stabilize over
-time as we keep refining the ergonomics for ML-focused robotics stacks.
+For common patterns Pimm provides small adapters:
 
-If you use the library outside the main Positronic repo, please share feedback.
+- `pimm.ValueUpdated(reader)` pairs each value with a boolean indicating if the
+  timestamp changed since the last read.
+- `pimm.DefaultReceiver(reader, default)` supplies safe defaults until real data
+  arrives.
+- `pimm.map(signal, func)` transforms data on the way in or out without creating
+  extra glue code.
+
+## Control Systems and the World
+
+A control system is any class that subclasses `pimm.ControlSystem` and implements
+`run(should_stop, clock) -> Iterator[pimm.Sleep]`. Inside that method you are free
+to use regular Python. Emitters (`ControlSystemEmitter`) and receivers
+(`ControlSystemReceiver`) are just fields on the object; they keep track of their
+owner so the world can wire them correctly.
+
+The `World` runtime plays three roles:
+
+1. **Connection planner.** Each call to `world.connect(emitter, receiver, ...)`
+   records a link. When you later call `world.start`, the world consults those
+   links, decides which ones stay local, which ones must cross processes, and
+   binds the underlying transports accordingly. Optional `emitter_wrapper` /
+   `receiver_wrapper` hooks let you decorate signals (rate limiting, logging,
+   transforms) at bind time.
+2. **Scheduler.** `world.start(main, background=None)` starts the chosen control
+   systems, spawns background ones in daemon processes, and returns an iterator of
+   `Sleep` commands for the main-process group. If you prefer a convenience wrapper
+   you can call `world.run(*main_loops)` instead.
+3. **Lifecycle manager.** Entering the `with pimm.World()` block creates shared
+   resources; exiting it cleans up queues, shared-memory buffers, and background
+   processes even if exceptions occur.
+
+Control systems deliberately use generators rather than Python `async` because it
+keeps your code uncoloured. You can call a loop from tests using a simple `for`
+loop, or plug it into different schedulers without rewriting it.
+
+## Moving Large Blobs
+
+Some signals (camera frames, robot state vectors) benefit from zero-copy sharing.
+`world.shared_memory()` returns an emitter/receiver pair backed by shared memory.
+Payloads implement the `SMCompliant` protocol—`pimm.shared_memory.NumpySMAdapter`
+handles numpy arrays—so emitters know how big the buffer should be and receivers
+can view the data without copying. Currently you have to set shared-memory channels
+up manually, though we will modify the `pimm.World` scheduler to do it
+automatically, when data allows it.
+
+## Learn from Real Pipelines
+
+- [`positronic/data_collection.py`](../positronic/data_collection.py) wires WebXR
+  input, robot drivers, cameras, a dataset logger, and a DearPyGui dashboard. It
+  showcases extensive use of `world.connect`, shared memory, and background loops.
+- [`positronic/simulator/mujoco/sim.py`](../positronic/simulator/mujoco/sim.py)
+  exposes MuJoCo as a `ControlSystem` that also serves as the global clock, so the
+  simulator drives every other loop deterministically.
+- [`positronic/tests/`](../positronic/tests) contains compact fixtures that mock
+  clocks, pipes, and loops for unit testing.
+
+Pimm is alpha software and continues to evolve. The next milestone is decoupling
+connection planning from scheduling so you can describe the signal graph once and
+choose execution placement later. Feedback and pull requests are very welcome!
