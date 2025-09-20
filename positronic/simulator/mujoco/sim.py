@@ -173,6 +173,7 @@ class MujocoFranka(pimm.ControlSystem):
         self.joint_names = [f'joint{i}{suffix}' for i in range(1, 8)]
         self.actuator_names = [f'actuator{i}{suffix}' for i in range(1, 8)]
         self.joint_qpos_ids = [self.sim.model.joint(joint).qposadr.item() for joint in self.joint_names]
+
         self.commands: pimm.SignalReceiver[roboarm_command.CommandType] = pimm.ControlSystemReceiver(self)
         self.state: pimm.SignalEmitter[MujocoFrankaState] = pimm.ControlSystemEmitter(self)
 

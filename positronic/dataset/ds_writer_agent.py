@@ -191,21 +191,25 @@ class DsWriterAgent(pimm.ControlSystem):
         ep_writer: EpisodeWriter | None = None
         ep_counter = 0
 
-        while not should_stop.value:
-            cmd, cmd_updated = commands.value
-            if cmd_updated:
-                ep_writer, ep_counter = self._handle_command(cmd, ep_writer, ep_counter)
+        try:
+            while not should_stop.value:
+                cmd, cmd_updated = commands.value
+                if cmd_updated:
+                    ep_writer, ep_counter = self._handle_command(cmd, ep_writer, ep_counter)
 
+                if ep_writer is not None:
+                    for name, reader in signals.items():
+                        value, updated = reader.value
+                        if updated:
+                            serializer = self._serializers.get(name)
+                            if serializer is not None:
+                                value = serializer(value)
+                            _append_processed(ep_writer, name, value, clock)
+
+                yield pimm.Sleep(limiter.wait_time())
+        finally:
             if ep_writer is not None:
-                for name, reader in signals.items():
-                    value, updated = reader.value
-                    if updated:
-                        serializer = self._serializers.get(name)
-                        if serializer is not None:
-                            value = serializer(value)
-                        _append_processed(ep_writer, name, value, clock)
-
-            yield pimm.Sleep(limiter.wait_time())
+                ep_writer.__exit__(None, None, None)
 
     def _handle_command(self, cmd: DsWriterCommand, ep_writer: EpisodeWriter | None,
                         ep_counter: int) -> tuple[EpisodeWriter | None, int]:

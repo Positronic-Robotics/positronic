@@ -686,13 +686,13 @@ wheels = [
 
 [[package]]
 name = "configuronic"
-version = "0.2.0"
+version = "0.2.2"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "fire" },
     { name = "pyyaml" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/ab/4c/6fd7aeba337632085c677e93a5c667daa4f6c46e5e44cdfb9f9e9097f172/configuronic-0.2.0.tar.gz", hash = "sha256:ce2b0d5762cf76296b7c61b2f84c787446b805e73b1cc4886539696b1bab87b6", size = 28963, upload-time = "2025-08-19T15:48:17.66Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/9e/a2/61a5a4de6d2f043caaa1ccb9fa1691ed4a0f09cca13c0cd9b523e461ca31/configuronic-0.2.2.tar.gz", hash = "sha256:3ceb5efe80e38afd15f9b6fb4735d1b0ab6e560cd251cca6814254f697cbb033", size = 29719, upload-time = "2025-09-05T17:01:46.116Z" }
 
 [[package]]
 name = "coverage"
@@ -2756,7 +2756,6 @@ dependencies = [
     { name = "opencv-python-headless" },
     { name = "pyarrow" },
     { name = "pyturbojpeg" },
-    { name = "rerun-sdk" },
     { name = "robosuite" },
     { name = "ruckig" },
     { name = "scipy" },
@@ -2788,6 +2787,9 @@ hardware = [
     { name = "pymodbus" },
     { name = "pyserial" },
     { name = "pyzed", marker = "sys_platform == 'linux'" },
+]
+server = [
+    { name = "rerun-sdk" },
 ]
 
 [package.metadata]
@@ -2824,7 +2826,7 @@ requires-dist = [
     { name = "pytest-cov", marker = "extra == 'dev'" },
     { name = "pyturbojpeg" },
     { name = "pyzed", marker = "sys_platform == 'linux' and extra == 'hardware'", url = "https://download.stereolabs.com/zedsdk/5.0/whl/linux_x86_64/pyzed-5.0-cp311-cp311-linux_x86_64.whl" },
-    { name = "rerun-sdk", specifier = ">=0.23" },
+    { name = "rerun-sdk", marker = "extra == 'server'", specifier = ">=0.23" },
     { name = "rerun-sdk", extras = ["notebook"], marker = "extra == 'dev'" },
     { name = "robosuite" },
     { name = "ruckig" },
@@ -2832,7 +2834,7 @@ requires-dist = [
     { name = "torch" },
     { name = "uvicorn", extras = ["standard"] },
 ]
-provides-extras = ["hardware", "dev"]
+provides-extras = ["hardware", "dev", "server"]
 
 [[package]]
 name = "positronic-franka"

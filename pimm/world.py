@@ -474,7 +474,7 @@ class World:
     def __exit__(self, exc_type, exc_value, traceback):
         self.entered = False
         print("Stopping background processes...", flush=True)
-        self._stop_event.set()
+        self.request_stop()
         time.sleep(0.1)
 
         print(f"Waiting for {len(self.background_processes)} background processes to terminate...", flush=True)
@@ -605,6 +605,9 @@ class World:
             self.background_processes.append(p)
             print(f"Started background process {name} (pid {p.pid})", flush=True)
 
+    def request_stop(self):
+        self._stop_event.set()
+
     @property
     def should_stop(self) -> bool:
         return self._stop_event.is_set()
@@ -657,7 +660,7 @@ class World:
 
             except StopIteration:
                 # Don't add the loop back and don't yield after a loop completes - it is done
-                self._stop_event.set()
+                self.request_stop()
 
     def run(self, *loops: ControlLoop):
         for command in self.interleave(*loops):
@@ -692,7 +695,43 @@ class World:
         filtering, or other middleware functionality.
         """
         assert receiver not in [e[1] for e in self._connections], "Receiver can be connected only to one Emitter"
+        assert isinstance(emitter, ControlSystemEmitter)
+        assert isinstance(receiver, ControlSystemReceiver)
         self._connections.append((emitter, receiver, emitter_wrapper, receiver_wrapper))
+
+    def mirror(self, connector: ControlSystemEmitter | ControlSystemReceiver, *, wrapper=lambda x: x):
+        """Create the complementary connector for an existing endpoint.
+
+        ``World`` infers whether the peer should live locally or in another
+        process by looking at the owning control system of each endpoint. To
+        keep that inference consistent, ``mirror`` instantiates the opposite
+        connector class with the same owner and immediately wires the pair via
+        :meth:`connect`.
+
+        Args:
+            connector: Either side of a control-system connection that needs a
+                matching peer.
+            wrapper: Optional callable applied to the transport bound to the
+                provided ``connector`` before the link is registered.
+
+        Returns:
+            The freshly created counterpart (`ControlSystemEmitter` for a
+            receiver input or `ControlSystemReceiver` for an emitter output).
+
+        Raises:
+            ValueError: If ``connector`` is neither an emitter nor a receiver.
+        """
+        if isinstance(connector, ControlSystemEmitter):
+            # We put the same owner, so that both ends are always either local or remote
+            receiver = ControlSystemReceiver(connector.owner)
+            self.connect(connector, receiver, emitter_wrapper=wrapper)
+            return receiver
+        elif isinstance(connector, ControlSystemReceiver):
+            emitter = ControlSystemEmitter(connector.owner)
+            self.connect(emitter, connector, receiver_wrapper=wrapper)
+            return emitter
+        raise ValueError(
+            f"Unsupported connector type: {type(connector)}. Expected ControlSystemEmitter or ControlSystemReceiver.")
 
     def start(self,
               main_process: ControlSystem | list[ControlSystem],

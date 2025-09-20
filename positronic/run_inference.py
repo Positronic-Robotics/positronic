@@ -1,13 +1,14 @@
+import time
+from contextlib import nullcontext
+from pathlib import Path
 from typing import Any, Iterator, Mapping, Sequence
 
 import configuronic as cfn
 import numpy as np
-import rerun as rr
 import torch
 import tqdm
 
 import pimm
-from pimm.world import TransportMode
 import positronic.cfg.hardware.camera
 import positronic.cfg.hardware.gripper
 import positronic.cfg.hardware.roboarm
@@ -15,6 +16,8 @@ import positronic.cfg.policy.action
 import positronic.cfg.policy.observation
 import positronic.cfg.policy.policy
 import positronic.cfg.simulator
+from positronic.dataset.ds_writer_agent import DsWriterAgent, DsWriterCommand, DsWriterCommandType, Serializers
+from positronic.dataset.local_dataset import LocalDatasetWriter
 from positronic.drivers import roboarm
 from positronic.policy.action import ActionDecoder
 from positronic.policy.observation import ObservationEncoder
@@ -22,47 +25,19 @@ from positronic.simulator.mujoco.sim import MujocoCamera, MujocoFranka, MujocoGr
 from positronic.simulator.mujoco.transforms import MujocoSceneTransform
 
 
-def rerun_log_observation(ts, obs):
-    rr.set_time('time', duration=ts)
-
-    def log_image(name, tensor, compress: bool = True):
-        tensor = tensor.squeeze(0)
-        tensor = (tensor * 255).type(torch.uint8)
-        tensor = tensor.permute(1, 2, 0).cpu().numpy()
-        rr_img = rr.Image(tensor)
-        if compress:
-            rr_img = rr_img.compress()
-        rr.log(name, rr_img)
-
-    for k, v in obs.items():
-        if k.startswith("observation.images."):
-            log_image(k, v)
-
-    rr.log("observation/state", rr.Scalars(obs['observation.state'].squeeze(0).cpu()))
-
-
-def rerun_log_action(ts, action):
-    rr.set_time('time', duration=ts)
-    rr.log("action", rr.Scalars(action))
-
-
 class Inference(pimm.ControlSystem):
 
-    def __init__(
-        self,
-        state_encoder: ObservationEncoder,
-        action_decoder: ActionDecoder,
-        device: str,
-        policy,
-        rerun_path: str | None = None,
-        inference_fps: int = 30,
-        task: str | None = None,
-    ):
+    def __init__(self,
+                 state_encoder: ObservationEncoder,
+                 action_decoder: ActionDecoder,
+                 device: str,
+                 policy,
+                 inference_fps: int = 30,
+                 task: str | None = None):
         self.state_encoder = state_encoder
         self.action_decoder = action_decoder
         self.policy = policy.to(device)
         self.device = device
-        self.rerun_path = rerun_path
         self.inference_fps = inference_fps
         self.task = task
         self.frames = pimm.ReceiverDict(self)
@@ -76,10 +51,6 @@ class Inference(pimm.ControlSystem):
         frames = {camera_name: pimm.DefaultReceiver(frame, {}) for camera_name, frame in self.frames.items()}
 
         rate_limiter = pimm.RateLimiter(clock, hz=self.inference_fps)
-
-        if self.rerun_path:
-            rr.init("inference")
-            rr.save(self.rerun_path)
 
         while not should_stop.value:
             frame_messages = {k: v.read() for k, v in frames.items()}
@@ -131,45 +102,60 @@ class Inference(pimm.ControlSystem):
             self.robot_commands.emit(roboarm_command)
             self.target_grip.emit(action_dict['target_grip'].item())
 
-            if self.rerun_path:
-                rerun_log_observation(clock.now(), obs)
-                rerun_log_action(clock.now(), action)
-
             yield pimm.Sleep(rate_limiter.wait_time())
 
 
-def main(
-    robot_arm: Any | None,
-    gripper: pimm.ControlSystem | None,
-    cameras: Mapping[str, pimm.ControlSystem] | None,
-    state_encoder: ObservationEncoder,
-    action_decoder: ActionDecoder,
-    policy,
-    rerun_path: str | None = None,
-    device: str = 'cuda',
-):
+def main(robot_arm: Any | None,
+         gripper: pimm.ControlSystem | None,
+         cameras: Mapping[str, pimm.ControlSystem] | None,
+         state_encoder: ObservationEncoder,
+         action_decoder: ActionDecoder,
+         policy,
+         device: str = 'cuda',
+         output_dir: str | None = None):
+    cameras = cameras or {}
+    writer_cm = LocalDatasetWriter(Path(output_dir)) if output_dir is not None else nullcontext(None)
+    with writer_cm as dataset_writer, pimm.World() as world:
+        inference = Inference(state_encoder, action_decoder, device, policy)
 
-    # TODO: Refactor to use pimm.World.connect and pimm.World.start
-    with pimm.World() as world:
-        inference = Inference(state_encoder, action_decoder, device, policy, rerun_path)
-        cameras = cameras or {}
+        bg_cs = []
+        ds_agent = None
+        if dataset_writer is not None:
+            signals_spec = {k: None for k in cameras.keys()}
+            signals_spec['robot_state'] = Serializers.robot_state
+            signals_spec['robot_commands'] = Serializers.robot_command
+            signals_spec['target_grip'] = None
+            signals_spec['grip'] = None
+            # TODO: Add parameter to tell writer to dump data in the time of message rather than the time when it was
+            # received
+            ds_agent = DsWriterAgent(dataset_writer, signals_spec)
+            bg_cs.append(ds_agent)
+
         for camera_name, camera in cameras.items():
-            camera.frame, inference.frames[camera_name] = world.mp_pipe()
-
-        world.start_in_subprocess(*[camera.run for camera in cameras.values()])
+            bg_cs.append(camera)
+            world.connect(camera.frame, inference.frames[camera_name])
+            if ds_agent is not None:
+                world.connect(camera.frame, ds_agent.inputs[camera_name])
 
         if robot_arm is not None:
-            robot_arm.state, inference.robot_state = world.mp_pipe(
-                transport=TransportMode.SHARED_MEMORY)
-            inference.robot_commands, robot_arm.commands = world.mp_pipe()
-            world.start_in_subprocess(robot_arm.run)
+            world.connect(robot_arm.state, inference.robot_state)
+            world.connect(inference.robot_commands, robot_arm.commands)
+            bg_cs.append(robot_arm)
+            if ds_agent is not None:
+                world.connect(robot_arm.state, ds_agent.inputs['robot_state'])
+                world.connect(inference.robot_commands, ds_agent.inputs['robot_commands'])
 
         if gripper is not None:
-            inference.target_grip, gripper.target_grip = world.mp_pipe()
-            gripper.grip, inference.gripper_state = world.mp_pipe()
-            world.start_in_subprocess(gripper.run)
+            world.connect(gripper.grip, inference.gripper_state)
+            world.connect(inference.target_grip, gripper.target_grip)
+            bg_cs.append(gripper)
+            if ds_agent is not None:
+                world.connect(gripper.grip, ds_agent.inputs['grip'])
+                world.connect(inference.target_grip, ds_agent.inputs['target_grip'])
 
-        world.run(inference.run)
+        # TODO: There must be some kind of control when to start and when to finish inference
+        for sleep_time in world.start(inference, bg_cs):
+            time.sleep(sleep_time.seconds)
 
 
 def main_sim(
@@ -177,7 +163,6 @@ def main_sim(
     state_encoder: ObservationEncoder,
     action_decoder: ActionDecoder,
     policy,
-    rerun_path: str,
     loaders: Sequence[MujocoSceneTransform],
     camera_fps: int,
     policy_fps: int,
@@ -185,41 +170,61 @@ def main_sim(
     simulation_time: float,
     camera_dict: Mapping[str, str],
     task: str | None,
+    output_dir: str | None = None,
 ):
     sim = MujocoSim(mujoco_model_path, loaders)
     robot_arm = MujocoFranka(sim, suffix='_ph')
+    gripper = MujocoGripper(sim, actuator_name='actuator8_ph', joint_name='finger_joint1_ph')
     cameras = {
         name: MujocoCamera(sim.model, sim.data, orig_name, (1280, 720), fps=camera_fps)
         for name, orig_name in camera_dict.items()
     }
-    gripper = MujocoGripper(sim, actuator_name='actuator8_ph', joint_name='finger_joint1_ph')
-    inference = Inference(state_encoder, action_decoder, device, policy, rerun_path, policy_fps, task)
+    inference = Inference(state_encoder, action_decoder, device, policy, policy_fps, task)
+    control_systems = list(cameras.values()) + [sim, robot_arm, gripper, inference]
 
-    with pimm.World(clock=sim) as world:
+    writer_cm = LocalDatasetWriter(Path(output_dir)) if output_dir is not None else nullcontext(None)
+    with writer_cm as dataset_writer, pimm.World(clock=sim) as world:
+        ds_agent = None
+        if dataset_writer is not None:
+            signals_spec = {k: None for k in cameras.keys()}
+            signals_spec['robot_state'] = Serializers.robot_state
+            signals_spec['robot_commands'] = Serializers.robot_command
+            signals_spec['target_grip'] = None
+            signals_spec['grip'] = None
+            ds_agent = DsWriterAgent(dataset_writer, signals_spec)
+            control_systems.append(ds_agent)
+
         cameras = cameras or {}
         for camera_name, camera in cameras.items():
-            camera.frame, inference.frames[camera_name] = world.local_pipe()
+            world.connect(camera.frame, inference.frames[camera_name])
+            if ds_agent is not None:
+                world.connect(camera.frame, ds_agent.inputs[camera_name])
 
-        robot_arm.state, inference.robot_state = world.local_pipe()
-        inference.robot_commands, robot_arm.commands = world.local_pipe()
-        gripper.grip, inference.gripper_state = world.local_pipe()
+        world.connect(robot_arm.state, inference.robot_state)
+        world.connect(inference.robot_commands, robot_arm.commands)
+        world.connect(gripper.grip, inference.gripper_state)
+        world.connect(inference.target_grip, gripper.target_grip)
 
-        inference.target_grip, gripper.target_grip = world.local_pipe()
+        if ds_agent is not None:
+            world.connect(robot_arm.state, ds_agent.inputs['robot_state'])
+            world.connect(inference.robot_commands, ds_agent.inputs['robot_commands'])
+            world.connect(gripper.grip, ds_agent.inputs['grip'])
+            world.connect(inference.target_grip, ds_agent.inputs['target_grip'])
 
-        sim_iter = world.interleave(
-            sim.run,
-            *[camera.run for camera in cameras.values()],
-            robot_arm.run,
-            gripper.run,
-            inference.run,
-        )
+        commands = world.mirror(ds_agent.command) if ds_agent else None
+
+        sim_iter = world.start(control_systems)
 
         p_bar = tqdm.tqdm(total=simulation_time, unit='s')
+        if commands is not None:
+            commands.emit(DsWriterCommand(type=DsWriterCommandType.START_EPISODE))
         for _ in sim_iter:
             p_bar.n = round(sim.now(), 1)
             p_bar.refresh()
             if sim.now() > simulation_time:
-                break
+                if commands is not None:
+                    commands.emit(DsWriterCommand(type=DsWriterCommandType.STOP_EPISODE))
+                world.request_stop()
 
 
 main_cfg = cfn.Config(
@@ -233,7 +238,6 @@ main_cfg = cfn.Config(
         'left': positronic.cfg.hardware.camera.arducam_left,
         'right': positronic.cfg.hardware.camera.arducam_right,
     },
-    rerun_path="inference.rrd",
     device='cuda',
 )
 
@@ -244,7 +248,6 @@ main_sim_cfg = cfn.Config(
     state_encoder=positronic.cfg.policy.observation.pi0,
     action_decoder=positronic.cfg.policy.action.absolute_position,
     policy=positronic.cfg.policy.policy.pi0,
-    rerun_path="inference.rrd",
     camera_fps=60,
     policy_fps=15,
     device='cuda',

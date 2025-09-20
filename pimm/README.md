@@ -138,6 +138,33 @@ The `World` runtime plays three roles:
    resources; exiting it cleans up queues, shared-memory buffers, and background
    processes even if exceptions occur.
 
+### Mirroring Connectors
+
+Once you have declared your wiring it is often handy to keep a handle to the
+"other side" of that connection in the supervising process. `World.mirror` makes
+this trivial: pass it either a `ControlSystemEmitter` or `ControlSystemReceiver`
+and it fabricates the matching endpoint with the same owning control system. The
+world then immediately wires the pair using the same transport selection logic as
+`connect`, so the mirrored endpoint stays in sync with its peer even if the peer
+lives in a background process.
+
+This lets the main process nudge or observe background systems after
+`world.start(...)` begins yielding sleeps. For example, in
+[`positronic/run_inference.py`](../positronic/run_inference.py) we mirror the
+dataset writer's command receiver:
+
+```python
+commands = world.mirror(ds_agent.command)
+commands.emit(DsWriterCommand(type=DsWriterCommandType.START_EPISODE))
+for sleep in world.start(inference, bg_cs):
+    time.sleep(sleep.seconds)
+```
+
+Because the mirrored emitter shares ownership with the dataset agent, the world
+chooses the appropriate pipe automatically. You can use the same trick to mirror
+state receivers for quick debugging dashboards or to expose one-off control knobs
+without writing bespoke plumbing.
+
 Control systems deliberately use generators rather than Python `async` because it
 keeps your code uncoloured. You can call a loop from tests using a simple `for`
 loop, or plug it into different schedulers without rewriting it.

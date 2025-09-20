@@ -137,6 +137,25 @@ def test_start_stop_happy_path(world, clock, run_agent):
     assert w.statics.get("done") is True
 
 
+def test_episode_finalizes_when_run_stops(world, clock, run_agent):
+    ds = FakeDatasetWriter()
+    agent, cmd_em, emitters = build_agent_with_pipes({"a": None}, ds, world)
+
+    def driver(stop_reader, clk):
+        cmd_em.emit(DsWriterCommand(DsWriterCommandType.START_EPISODE))
+        yield pimm.Sleep(0.001)
+        emitters["a"].emit(42)
+        yield pimm.Sleep(0.001)
+        # The driver ends without sending STOP; world should request stop next.
+
+    run_agent(agent, driver)
+
+    assert len(ds.created) == 1
+    w = ds.created[-1]
+    assert [(s, v) for (s, v, _) in w.appends] == [("a", 42)]
+    assert w.exited is True
+
+
 def test_ignore_duplicate_commands_and_empty_stop(world, clock, run_agent):
     ds = FakeDatasetWriter()
     agent, cmd_em, emitters = build_agent_with_pipes({"x": None}, ds, world)

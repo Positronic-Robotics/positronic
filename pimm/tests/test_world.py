@@ -235,11 +235,11 @@ class TestWorld:
     @pytest.mark.parametrize('pipe_fn_name', ['mp_pipe', 'local_pipe'])
     def test_world_pipe_creation(self, pipe_fn_name):
         """Test that World.pipe creates emitter and reader pair."""
-        world = World()
-        emitter, reader = getattr(world, pipe_fn_name)()
+        with World() as world:
+            emitter, reader = getattr(world, pipe_fn_name)()
 
-        assert isinstance(emitter, SignalEmitter)
-        assert isinstance(reader, SignalReceiver)
+            assert isinstance(emitter, SignalEmitter)
+            assert isinstance(reader, SignalReceiver)
 
     def test_background_process(self):
         """Test that background processes will run simple control loop."""
@@ -260,20 +260,20 @@ class TestWorld:
     @pytest.mark.parametrize('pipe_fn_name', ['mp_pipe', 'local_pipe'])
     def test_world_pipe_communication(self, pipe_fn_name):
         """Test that pipe emitter and reader can communicate."""
-        world = World()
-        emitter, reader = getattr(world, pipe_fn_name)()
+        with World() as world:
+            emitter, reader = getattr(world, pipe_fn_name)()
 
-        # Initially reader should return None
-        assert reader.read() is None
+            # Initially reader should return None
+            assert reader.read() is None
 
-        for message in ["test_message_1", "test_message_2", "test_message_3"]:
-            # Emit a message
-            emitter.emit(message)
+            for message in ["test_message_1", "test_message_2", "test_message_3"]:
+                # Emit a message
+                emitter.emit(message)
 
-            # Reader should now have the message
-            result = reader.read()
-            assert isinstance(result, Message)
-            assert result.data == message
+                # Reader should now have the message
+                result = reader.read()
+                assert isinstance(result, Message)
+                assert result.data == message
 
     def test_world_context_manager_enter(self):
         """Test that World.__enter__ returns self."""
@@ -345,112 +345,159 @@ class TestWorld:
     @pytest.mark.parametrize('pipe_fn_name', ['mp_one_to_many_pipe', 'local_one_to_many_pipe'])
     def test_world_mp_pipe_multiple_readers_created(self, pipe_fn_name):
         """Test that World.mp_pipe can create multiple readers."""
-        world = World()
-        pipe_fn = getattr(world, pipe_fn_name)
-        emitter, readers = pipe_fn(n_readers=2)
-        assert len(readers) == 2
-        assert isinstance(emitter, SignalEmitter)
-        assert isinstance(readers[0], SignalReceiver)
-        assert isinstance(readers[1], SignalReceiver)
+        with World() as world:
+            pipe_fn = getattr(world, pipe_fn_name)
+            emitter, readers = pipe_fn(n_readers=2)
+            assert len(readers) == 2
+            assert isinstance(emitter, SignalEmitter)
+            assert isinstance(readers[0], SignalReceiver)
+            assert isinstance(readers[1], SignalReceiver)
 
     @pytest.mark.parametrize('pipe_fn_name', ['mp_one_to_many_pipe', 'local_one_to_many_pipe'])
     def test_world_mp_pipe_multiple_readers_message_received_by_all_readers(self, pipe_fn_name):
         """Test that multiple readers can read from the same queue."""
-        world = World()
-        pipe_fn = getattr(world, pipe_fn_name)
-        emitter, readers = pipe_fn(n_readers=2)
+        with World() as world:
+            pipe_fn = getattr(world, pipe_fn_name)
+            emitter, readers = pipe_fn(n_readers=2)
 
-        messages = ["test_message_1", "test_message_2", "test_message_3"]
-        for message in messages:
-            success = emitter.emit(message)
-            assert success
-            assert readers[0].read().data == message
-            assert readers[1].read().data == message
+            messages = ["test_message_1", "test_message_2", "test_message_3"]
+            for message in messages:
+                success = emitter.emit(message)
+                assert success
+                assert readers[0].read().data == message
+                assert readers[1].read().data == message
 
     def test_mp_pipe_uses_queue_for_non_shared_memory_payloads(self):
-        world = World()
-        emitter, reader = world.mp_pipe()
+        with World() as world:
+            emitter, reader = world.mp_pipe()
 
-        emitter.emit('hello', ts=123)
+            emitter.emit('hello', ts=123)
 
-        message = reader.read()
-        assert message is not None
-        assert message.data == 'hello'
-        assert message.ts == 123
-        assert hasattr(emitter, 'uses_shared_memory') and not emitter.uses_shared_memory
-        assert hasattr(reader, 'uses_shared_memory') and not reader.uses_shared_memory
+            message = reader.read()
+            assert message is not None
+            assert message.data == 'hello'
+            assert message.ts == 123
+            assert hasattr(emitter, 'uses_shared_memory') and not emitter.uses_shared_memory
+            assert hasattr(reader, 'uses_shared_memory') and not reader.uses_shared_memory
 
     def test_mp_pipe_switches_to_shared_memory_when_supported(self):
-        world = World()
-        emitter, reader = world.mp_pipe()
+        with World() as world:
+            emitter, reader = world.mp_pipe()
 
-        payload = DummySMValue(3.14)
-        assert emitter.emit(payload, ts=456)
+            payload = DummySMValue(3.14)
+            assert emitter.emit(payload, ts=456)
 
-        message = reader.read()
-        assert message is not None
-        assert isinstance(message.data, DummySMValue)
-        assert message.data.value == pytest.approx(3.14)
-        assert message.ts == 456
-        assert emitter.uses_shared_memory
-        assert reader.uses_shared_memory
+            message = reader.read()
+            assert message is not None
+            assert isinstance(message.data, DummySMValue)
+            assert message.data.value == pytest.approx(3.14)
+            assert message.ts == 456
+            assert emitter.uses_shared_memory
+            assert reader.uses_shared_memory
 
     def test_mp_pipe_rejects_incompatible_payload_after_shared_memory_selected(self):
-        world = World()
-        emitter, _ = world.mp_pipe()
+        with World() as world:
+            emitter, _ = world.mp_pipe()
 
-        emitter.emit(DummySMValue(1.0))
+            emitter.emit(DummySMValue(1.0))
 
-        with pytest.raises(TypeError, match='Shared memory transport selected'):  # type: ignore[arg-type]
-            emitter.emit('not-compatible')
+            with pytest.raises(TypeError, match='Shared memory transport selected'):  # type: ignore[arg-type]
+                emitter.emit('not-compatible')
 
 
 class TestWorldControlSystems:
     """Tests exercising ControlSystem wiring and scheduling."""
 
     def test_connect_enforces_unique_receiver(self):
-        world = World()
         producer = DummyControlSystem('producer')
         consumer = DummyControlSystem('consumer')
 
-        world.connect(producer.emitter, consumer.receiver)
-        with pytest.raises(AssertionError):
+        with World() as world:
             world.connect(producer.emitter, consumer.receiver)
+            with pytest.raises(AssertionError):
+                world.connect(producer.emitter, consumer.receiver)
+
+    def test_mirror_from_emitter_creates_receiver_and_applies_wrapper(self):
+        clock = MockClock(0.0)
+        system = DummyControlSystem('loop')
+        wrapper = Mock(side_effect=lambda emitter: emitter)
+
+        with World(clock) as world:
+            mirrored = world.mirror(system.emitter, wrapper=wrapper)
+
+            assert isinstance(mirrored, ControlSystemReceiver)
+            wrapper.assert_not_called()
+
+            scheduler = world.start(system)
+            wrapper.assert_called_once_with(system.emitter)
+
+            system.emitter.emit('payload')
+            message = mirrored.read()
+            assert message is not None
+            assert message.data == 'payload'
+            assert message.ts == 0
+
+            scheduler.close()
+
+    def test_mirror_from_receiver_creates_emitter_and_applies_wrapper(self):
+        clock = MockClock(0.0)
+        system = DummyControlSystem('loop')
+        wrapper = Mock(side_effect=lambda receiver: receiver)
+
+        with World(clock) as world:
+            mirrored = world.mirror(system.receiver, wrapper=wrapper)
+
+            assert isinstance(mirrored, ControlSystemEmitter)
+            wrapper.assert_not_called()
+
+            scheduler = world.start(system)
+            wrapper.assert_called_once_with(system.receiver)
+
+            mirrored.emit('payload')
+            message = system.receiver.read()
+            assert message is not None
+            assert message.data == 'payload'
+            assert message.ts == 0
+
+            scheduler.close()
+
+    def test_mirror_rejects_unknown_connector(self):
+        with World() as world:
+            with pytest.raises(ValueError, match='Unsupported connector type'):
+                world.mirror(object())
 
     def test_start_sets_up_local_connections(self):
         clock = MockClock(0.0)
-        world = World(clock)
         producer = DummyControlSystem('producer')
         consumer = DummyControlSystem('consumer')
-        world.connect(producer.emitter, consumer.receiver)
+        with World(clock) as world:
+            world.connect(producer.emitter, consumer.receiver)
 
-        scheduler = world.start([producer, consumer])
+            scheduler = world.start([producer, consumer])
 
-        producer.emitter.emit('payload')
-        result = consumer.receiver.read()
-        assert result is not None
-        assert result.data == 'payload'
-        assert result.ts == 0
+            producer.emitter.emit('payload')
+            result = consumer.receiver.read()
+            assert result is not None
+            assert result.data == 'payload'
+            assert result.ts == 0
 
-        sleeps = list(scheduler)
-        assert [cmd.seconds for cmd in sleeps] == [0.0, 0.0]
-        assert world.should_stop
+            sleeps = list(scheduler)
+            assert [cmd.seconds for cmd in sleeps] == [0.0, 0.0]
+            assert world.should_stop
 
-        assert len(producer.invocations) == 1
-        assert len(consumer.invocations) == 1
-        producer_stop_reader, producer_clock = producer.invocations[0]
-        consumer_stop_reader, consumer_clock = consumer.invocations[0]
-        assert isinstance(producer_stop_reader, EventReceiver)
-        assert isinstance(consumer_stop_reader, EventReceiver)
-        assert producer_clock is clock
-        assert consumer_clock is clock
+            assert len(producer.invocations) == 1
+            assert len(consumer.invocations) == 1
+            producer_stop_reader, producer_clock = producer.invocations[0]
+            consumer_stop_reader, consumer_clock = consumer.invocations[0]
+            assert isinstance(producer_stop_reader, EventReceiver)
+            assert isinstance(consumer_stop_reader, EventReceiver)
+            assert producer_clock is clock
+            assert consumer_clock is clock
 
     def test_start_uses_mp_pipe_for_cross_process_connections(self, monkeypatch):
         clock = MockClock(0.0)
-        world = World(clock)
         main_cs = DummyControlSystem('main')
         background_cs = DummyControlSystem('background')
-        world.connect(background_cs.emitter, main_cs.receiver)
 
         captured_clocks = []
 
@@ -467,43 +514,46 @@ class TestWorldControlSystems:
 
         monkeypatch.setattr(World, 'start_in_subprocess', fake_start_in_subprocess)
 
-        scheduler = world.start(main_process=main_cs, background=background_cs)
+        with World(clock) as world:
+            world.connect(background_cs.emitter, main_cs.receiver)
 
-        background_cs.emitter.emit('payload')
-        result = main_cs.receiver.read()
-        assert result is not None
-        assert result.data == 'payload'
+            scheduler = world.start(main_process=main_cs, background=background_cs)
 
-        assert captured_clocks and isinstance(captured_clocks[0], SystemClock)
-        assert started_background == [(background_cs.run,)]
-        assert background_cs.invocations == []
+            background_cs.emitter.emit('payload')
+            result = main_cs.receiver.read()
+            assert result is not None
+            assert result.data == 'payload'
 
-        sleeps = list(scheduler)
-        assert [cmd.seconds for cmd in sleeps] == [0.0]
-        assert len(main_cs.invocations) == 1
-        stop_reader, used_clock = main_cs.invocations[0]
-        assert isinstance(stop_reader, EventReceiver)
-        assert used_clock is clock
+            assert captured_clocks and isinstance(captured_clocks[0], SystemClock)
+            assert started_background == [(background_cs.run,)]
+            assert background_cs.invocations == []
+
+            sleeps = list(scheduler)
+            assert [cmd.seconds for cmd in sleeps] == [0.0]
+            assert len(main_cs.invocations) == 1
+            stop_reader, used_clock = main_cs.invocations[0]
+            assert isinstance(stop_reader, EventReceiver)
+            assert used_clock is clock
 
     def test_start_requires_known_emitter_owner(self):
-        world = World()
         known = DummyControlSystem('known')
         unknown = DummyControlSystem('unknown')
 
-        world.connect(unknown.emitter, known.receiver)
+        with World() as world:
+            world.connect(unknown.emitter, known.receiver)
 
-        with pytest.raises(ValueError, match='Emitter .* is not in any control system'):
-            world.start(main_process=known)
+            with pytest.raises(ValueError, match='Emitter .* is not in any control system'):
+                world.start(main_process=known)
 
     def test_start_requires_known_receiver_owner(self):
-        world = World()
         producer = DummyControlSystem('producer')
         missing_consumer = DummyControlSystem('missing_consumer')
 
-        world.connect(producer.emitter, missing_consumer.receiver)
+        with World() as world:
+            world.connect(producer.emitter, missing_consumer.receiver)
 
-        with pytest.raises(ValueError, match='Receiver .* is not in any control system'):
-            world.start(main_process=producer)
+            with pytest.raises(ValueError, match='Receiver .* is not in any control system'):
+                world.start(main_process=producer)
 
 
 # Integration tests
@@ -512,21 +562,20 @@ class TestIntegration:
 
     def test_full_pipeline(self):
         """Test a complete pipeline with World, emitters, and readers."""
-        world = World()
+        with World() as world:
+            # Create communication channels
+            emitter1, reader1 = world.mp_pipe()
+            emitter2, reader2 = world.mp_pipe()
 
-        # Create communication channels
-        emitter1, reader1 = world.mp_pipe()
-        emitter2, reader2 = world.mp_pipe()
+            # Test data flow
+            emitter1.emit("message1")
+            emitter2.emit("message2")
 
-        # Test data flow
-        emitter1.emit("message1")
-        emitter2.emit("message2")
+            result1 = reader1.read()
+            result2 = reader2.read()
 
-        result1 = reader1.read()
-        result2 = reader2.read()
-
-        assert result1.data == "message1"
-        assert result2.data == "message2"
+            assert result1.data == "message1"
+            assert result2.data == "message2"
 
     def test_event_reader_integration(self):
         """Test EventReceiver with actual multiprocessing Event."""
