@@ -1,7 +1,6 @@
-import time
 from contextlib import nullcontext
 from pathlib import Path
-from typing import Any, Iterator, Mapping, Sequence
+from typing import Iterator, Mapping, Sequence
 
 import configuronic as cfn
 import numpy as np
@@ -9,14 +8,17 @@ import torch
 import tqdm
 
 import pimm
-import positronic.cfg.hardware.camera
-import positronic.cfg.hardware.gripper
-import positronic.cfg.hardware.roboarm
 import positronic.cfg.policy.action
 import positronic.cfg.policy.observation
 import positronic.cfg.policy.policy
 import positronic.cfg.simulator
-from positronic.dataset.ds_writer_agent import DsWriterAgent, DsWriterCommand, DsWriterCommandType, Serializers
+from positronic.dataset.ds_writer_agent import (
+    DsWriterAgent,
+    DsWriterCommand,
+    DsWriterCommandType,
+    Serializers,
+    TimeMode,
+)
 from positronic.dataset.local_dataset import LocalDatasetWriter
 from positronic.drivers import roboarm
 from positronic.policy.action import ActionDecoder
@@ -105,57 +107,7 @@ class Inference(pimm.ControlSystem):
             yield pimm.Sleep(rate_limiter.wait_time())
 
 
-def main(robot_arm: Any | None,
-         gripper: pimm.ControlSystem | None,
-         cameras: Mapping[str, pimm.ControlSystem] | None,
-         state_encoder: ObservationEncoder,
-         action_decoder: ActionDecoder,
-         policy,
-         device: str = 'cuda',
-         output_dir: str | None = None):
-    cameras = cameras or {}
-    writer_cm = LocalDatasetWriter(Path(output_dir)) if output_dir is not None else nullcontext(None)
-    with writer_cm as dataset_writer, pimm.World() as world:
-        inference = Inference(state_encoder, action_decoder, device, policy)
-
-        bg_cs = []
-        ds_agent = None
-        if dataset_writer is not None:
-            signals_spec = {k: None for k in cameras.keys()}
-            signals_spec['robot_state'] = Serializers.robot_state
-            signals_spec['robot_commands'] = Serializers.robot_command
-            signals_spec['target_grip'] = None
-            signals_spec['grip'] = None
-            # TODO: Add parameter to tell writer to dump data in the time of message rather than the time when it was
-            # received
-            ds_agent = DsWriterAgent(dataset_writer, signals_spec)
-            bg_cs.append(ds_agent)
-
-        for camera_name, camera in cameras.items():
-            bg_cs.append(camera)
-            world.connect(camera.frame, inference.frames[camera_name])
-            if ds_agent is not None:
-                world.connect(camera.frame, ds_agent.inputs[camera_name])
-
-        if robot_arm is not None:
-            world.connect(robot_arm.state, inference.robot_state)
-            world.connect(inference.robot_commands, robot_arm.commands)
-            bg_cs.append(robot_arm)
-            if ds_agent is not None:
-                world.connect(robot_arm.state, ds_agent.inputs['robot_state'])
-                world.connect(inference.robot_commands, ds_agent.inputs['robot_commands'])
-
-        if gripper is not None:
-            world.connect(gripper.grip, inference.gripper_state)
-            world.connect(inference.target_grip, gripper.target_grip)
-            bg_cs.append(gripper)
-            if ds_agent is not None:
-                world.connect(gripper.grip, ds_agent.inputs['grip'])
-                world.connect(inference.target_grip, ds_agent.inputs['target_grip'])
-
-        # TODO: There must be some kind of control when to start and when to finish inference
-        for sleep_time in world.start(inference, bg_cs):
-            time.sleep(sleep_time.seconds)
+# TODO: Inference for the real robot
 
 
 def main_sim(
@@ -191,7 +143,7 @@ def main_sim(
             signals_spec['robot_commands'] = Serializers.robot_command
             signals_spec['target_grip'] = None
             signals_spec['grip'] = None
-            ds_agent = DsWriterAgent(dataset_writer, signals_spec)
+            ds_agent = DsWriterAgent(dataset_writer, signals_spec, time_mode=TimeMode.MESSAGE)
             control_systems.append(ds_agent)
 
         cameras = cameras or {}
@@ -226,20 +178,6 @@ def main_sim(
                     commands.emit(DsWriterCommand(type=DsWriterCommandType.STOP_EPISODE))
                 world.request_stop()
 
-
-main_cfg = cfn.Config(
-    main,
-    robot_arm=positronic.cfg.hardware.roboarm.kinova,
-    gripper=positronic.cfg.hardware.gripper.dh_gripper,
-    state_encoder=positronic.cfg.policy.observation.end_effector_224,
-    action_decoder=positronic.cfg.policy.action.relative_robot_position,
-    policy=positronic.cfg.policy.policy.act,
-    cameras={
-        'left': positronic.cfg.hardware.camera.arducam_left,
-        'right': positronic.cfg.hardware.camera.arducam_right,
-    },
-    device='cuda',
-)
 
 main_sim_cfg = cfn.Config(
     main_sim,
@@ -281,7 +219,6 @@ main_sim_act = main_sim_cfg.override(
 
 if __name__ == "__main__":
     cfn.cli({
-        "real": main_cfg,
         "sim_pi0": main_sim_pi0,
         "sim_act": main_sim_act,
     })

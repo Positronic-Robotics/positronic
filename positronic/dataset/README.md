@@ -325,6 +325,7 @@ Key ideas
 - Inputs are declared up front via `signals_spec: dict[name -> Serializer|None]`.
 - The agent polls inputs at a configurable rate and appends only on updates.
 - A separate `command` channel controls episode lifecycle.
+- `time_mode` selects how timestamps are recorded: `CLOCK` (default) stamps samples when the agent ingests them (useful during live data collection so every signal reflects when the recorder could act on it), while `MESSAGE` preserves the timestamp attached by the emitting control system (ideal for analysing inference latency by keeping original emission times).
 
 `Serializer` is a pure function that know how to translate the incoming data into a format that `SignalWriter` can accept:
 - A serializer receives the latest value for the input and can return:
@@ -352,7 +353,8 @@ Lifecycle
 - `ABORT_EPISODE`: aborts and discards the episode directory.
 
 Notes
-- Timestamps come from the agent’s clock; they are strictly increasing per signal.
+- Use `CLOCK` when building training datasets: it aligns updates with the recorder’s processing timeline so downstream sampling matches what was actually ready for learning.
+- Use `MESSAGE` when logging inference or diagnosis runs: it keeps the source timestamps untouched so you can line up events across control systems and measure propagation delays.
 
 ## Transforms
 

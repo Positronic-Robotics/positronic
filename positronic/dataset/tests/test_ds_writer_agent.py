@@ -12,6 +12,7 @@ from positronic.dataset.ds_writer_agent import (
     DsWriterCommand,
     DsWriterCommandType,
     Serializers,
+    TimeMode,
 )
 from positronic.dataset.local_dataset import LocalDataset, LocalDatasetWriter
 from positronic.drivers import roboarm
@@ -31,6 +32,7 @@ def world(clock):
 
 @pytest.fixture
 def run_interleaved(clock, world):
+
     def _run(*loops, steps: int = 50):
         it = world.interleave(*loops)
         for _ in range(steps):
@@ -39,6 +41,7 @@ def run_interleaved(clock, world):
             except StopIteration:
                 break
             clock.advance(sleep.seconds)
+
     return _run
 
 
@@ -48,6 +51,7 @@ def run_agent(run_interleaved):
 
     Usage: run_agent(agent, driver, steps=...)
     """
+
     def _run_agent(agent, driver, *, steps: int = 50):
         return run_interleaved(lambda s, c: agent.run(s, c), driver, steps=steps)
 
@@ -55,6 +59,7 @@ def run_agent(run_interleaved):
 
 
 class FakeEpisodeWriter(EpisodeWriter[Any]):
+
     def __init__(self) -> None:
         self.statics: dict[str, Any] = {}
         self.appends: List[Tuple[str, Any, int]] = []
@@ -81,6 +86,7 @@ class FakeEpisodeWriter(EpisodeWriter[Any]):
 
 
 class FakeDatasetWriter(DatasetWriter):
+
     def __init__(self) -> None:
         self.created: List[FakeEpisodeWriter] = []
 
@@ -93,7 +99,11 @@ class FakeDatasetWriter(DatasetWriter):
         return False
 
 
-def build_agent_with_pipes(signals_spec: dict[str, Any], ds_writer: DatasetWriter, world: pimm.World):
+def build_agent_with_pipes(signals_spec: dict[str, Any],
+                           ds_writer: DatasetWriter,
+                           world: pimm.World,
+                           *,
+                           time_mode: TimeMode = TimeMode.CLOCK):
     """Build agent with given signals spec and wire local pipes.
 
     - signals_spec maps input name -> serializer (or None for pass-through).
@@ -103,7 +113,7 @@ def build_agent_with_pipes(signals_spec: dict[str, Any], ds_writer: DatasetWrite
         * return None to drop the sample (not recorded at all).
     Returns (agent, cmd_emitter, emitters_by_name).
     """
-    agent = DsWriterAgent(ds_writer, signals_spec)
+    agent = DsWriterAgent(ds_writer, signals_spec, time_mode=time_mode)
     emitters: dict[str, pimm.SignalEmitter[Any]] = {}
     for name in signals_spec.keys():
         emitters[name], agent.inputs[name] = world.local_pipe(maxsize=8)
@@ -221,6 +231,30 @@ def test_appends_only_on_updates_and_timestamps_from_clock(world, clock, run_age
     w = ds.created[-1]
     assert len(w.appends) == 2
     assert w.appends[1][2] > w.appends[0][2]
+
+
+def test_time_mode_message_uses_signal_timestamp(world, clock, run_agent):
+    ds = FakeDatasetWriter()
+    agent, cmd_em, emitters = build_agent_with_pipes({"a": None}, ds, world, time_mode=TimeMode.MESSAGE)
+
+    ts_first = 123_000_000
+    ts_second = 456_000_000
+
+    def driver(stop_reader, clk):
+        cmd_em.emit(DsWriterCommand(DsWriterCommandType.START_EPISODE))
+        yield pimm.Sleep(0.001)
+        emitters["a"].emit(1, ts=ts_first)
+        yield pimm.Sleep(0.001)
+        emitters["a"].emit(2, ts=ts_second)
+        yield pimm.Sleep(0.001)
+        cmd_em.emit(DsWriterCommand(DsWriterCommandType.STOP_EPISODE))
+        yield pimm.Sleep(0.001)
+
+    run_agent(agent, driver)
+
+    w = ds.created[-1]
+    assert [(s, v) for (s, v, _) in w.appends] == [("a", 1), ("a", 2)]
+    assert [ts for (_, _, ts) in w.appends] == [ts_first, ts_second]
 
 
 def test_serializer_names_declared_on_start(world, clock, run_agent):
@@ -378,9 +412,9 @@ def test_serializer_none_drops_sample(world, clock, run_agent):
     def driver(stop_reader, clk):
         cmd_em.emit(DsWriterCommand(DsWriterCommandType.START_EPISODE))
         yield pimm.Sleep(0.001)
-        emitters["x"].emit(3)    # kept
+        emitters["x"].emit(3)  # kept
         yield pimm.Sleep(0.001)
-        emitters["x"].emit(-1)   # dropped
+        emitters["x"].emit(-1)  # dropped
         yield pimm.Sleep(0.001)
         cmd_em.emit(DsWriterCommand(DsWriterCommandType.STOP_EPISODE))
         yield pimm.Sleep(0.001)
@@ -418,6 +452,7 @@ def test_transform_3d_serializer(world, clock, run_agent):
 
 
 class _FakeState(roboarm.State):
+
     def __init__(self, q, dq, ee_pose, status):
         self._q = q
         self._dq = dq

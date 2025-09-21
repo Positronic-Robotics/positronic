@@ -1,6 +1,6 @@
 import collections.abc as cabc
 from dataclasses import dataclass, field
-from enum import Enum
+from enum import Enum, IntEnum
 from typing import Any, Callable
 
 import numpy as np
@@ -126,17 +126,22 @@ def _extract_names(serializer: Callable[[Any], Any]) -> dict[str, list[str]] | N
     raise TypeError("Serializer names attribute must be a string, sequence, or mapping")
 
 
-def _append_processed(ep_writer: EpisodeWriter, name: str, value: Any, clock: pimm.Clock) -> None:
-    ts = clock.now_ns()
+def _append_processed(ep_writer: EpisodeWriter, name: str, value: Any, ts_ns: int) -> None:
     if isinstance(value, dict):
         items = ((name + suffix, v) for suffix, v in value.items())
     else:
-        items = ((name, value),)
+        items = ((name, value), )
 
     for full_name, v in items:
         if v is None:
             continue
-        ep_writer.append(full_name, v, ts)
+        ep_writer.append(full_name, v, ts_ns)
+
+
+class TimeMode(IntEnum):
+    """Mode of timestamping for the dataset writer."""
+    CLOCK = 0
+    MESSAGE = 1
 
 
 class DsWriterAgent(pimm.ControlSystem):
@@ -151,10 +156,14 @@ class DsWriterAgent(pimm.ControlSystem):
     out-of-order commands are ignored with a log message.
     """
 
-    def __init__(self, ds_writer: DatasetWriter, signals_spec: dict[str, Serializer | None], poll_hz: float = 1000.0):
+    def __init__(self,
+                 ds_writer: DatasetWriter,
+                 signals_spec: dict[str, Serializer | None],
+                 poll_hz: float = 1000.0,
+                 time_mode: TimeMode = TimeMode.CLOCK):
         self.ds_writer = ds_writer
         self._poll_hz = float(poll_hz)
-
+        self._time_mode = time_mode
         self.command = pimm.ControlSystemReceiver[DsWriterCommand](self)
 
         self._inputs: dict[str, pimm.ControlSystemReceiver[Any]] = {
@@ -199,12 +208,14 @@ class DsWriterAgent(pimm.ControlSystem):
 
                 if ep_writer is not None:
                     for name, reader in signals.items():
-                        value, updated = reader.value
+                        msg = reader.read()
+                        value, updated = msg.data
                         if updated:
                             serializer = self._serializers.get(name)
                             if serializer is not None:
                                 value = serializer(value)
-                            _append_processed(ep_writer, name, value, clock)
+                            time_ns = clock.now_ns() if self._time_mode == TimeMode.CLOCK else msg.ts
+                            _append_processed(ep_writer, name, value, time_ns)
 
                 yield pimm.Sleep(limiter.wait_time())
         finally:
