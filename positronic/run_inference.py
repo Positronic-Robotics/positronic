@@ -21,6 +21,7 @@ from positronic.dataset.ds_writer_agent import (
 )
 from positronic.dataset.local_dataset import LocalDatasetWriter
 from positronic.drivers import roboarm
+from positronic.gui.dpg import DearpyguiUi
 from positronic.policy.action import ActionDecoder
 from positronic.policy.observation import ObservationEncoder
 from positronic.simulator.mujoco.sim import MujocoCamera, MujocoFranka, MujocoGripper, MujocoSim
@@ -123,6 +124,7 @@ def main_sim(
     camera_dict: Mapping[str, str],
     task: str | None,
     output_dir: str | None = None,
+    show_gui: bool = False,
 ):
     sim = MujocoSim(mujoco_model_path, loaders)
     robot_arm = MujocoFranka(sim, suffix='_ph')
@@ -133,6 +135,10 @@ def main_sim(
     }
     inference = Inference(state_encoder, action_decoder, device, policy, policy_fps, task)
     control_systems = list(cameras.values()) + [sim, robot_arm, gripper, inference]
+
+    gui = None
+    if show_gui:
+        gui = DearpyguiUi()
 
     writer_cm = LocalDatasetWriter(Path(output_dir)) if output_dir is not None else nullcontext(None)
     with writer_cm as dataset_writer, pimm.World(clock=sim) as world:
@@ -146,30 +152,30 @@ def main_sim(
             ds_agent = DsWriterAgent(dataset_writer, signals_spec, time_mode=TimeMode.MESSAGE)
             control_systems.append(ds_agent)
 
+            world.connect(robot_arm.state, ds_agent.inputs['robot_state'])
+            world.connect(inference.robot_commands, ds_agent.inputs['robot_commands'])
+            world.connect(gripper.grip, ds_agent.inputs['grip'])
+            world.connect(inference.target_grip, ds_agent.inputs['target_grip'])
+
         cameras = cameras or {}
         for camera_name, camera in cameras.items():
             world.connect(camera.frame, inference.frames[camera_name])
             if ds_agent is not None:
                 world.connect(camera.frame, ds_agent.inputs[camera_name])
+            if gui is not None:
+                world.connect(camera.frame, gui.cameras[camera_name])
 
         world.connect(robot_arm.state, inference.robot_state)
         world.connect(inference.robot_commands, robot_arm.commands)
         world.connect(gripper.grip, inference.gripper_state)
         world.connect(inference.target_grip, gripper.target_grip)
 
-        if ds_agent is not None:
-            world.connect(robot_arm.state, ds_agent.inputs['robot_state'])
-            world.connect(inference.robot_commands, ds_agent.inputs['robot_commands'])
-            world.connect(gripper.grip, ds_agent.inputs['grip'])
-            world.connect(inference.target_grip, ds_agent.inputs['target_grip'])
-
         commands = world.mirror(ds_agent.command) if ds_agent else None
+        sim_iter = world.start(control_systems, gui)
 
-        sim_iter = world.start(control_systems)
-
-        p_bar = tqdm.tqdm(total=simulation_time, unit='s')
         if commands is not None:
             commands.emit(DsWriterCommand(type=DsWriterCommandType.START_EPISODE))
+        p_bar = tqdm.tqdm(total=simulation_time, unit='s')
         for _ in sim_iter:
             p_bar.n = round(sim.now(), 1)
             p_bar.refresh()

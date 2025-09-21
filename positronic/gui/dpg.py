@@ -1,5 +1,6 @@
 from typing import Iterator, List
 
+import cv2
 import dearpygui.dearpygui as dpg
 import numpy as np
 
@@ -12,6 +13,7 @@ def _get_down_keys() -> List[int]:
 
 
 class DearpyguiUi(pimm.ControlSystem):
+
     def __init__(self):
         self.width = 320
         self.height = 240
@@ -22,10 +24,12 @@ class DearpyguiUi(pimm.ControlSystem):
 
     def init(self):
         self.cameras = {
-            cam_name: pimm.ValueUpdated(reader) for cam_name, reader in self.cameras.items()
+            cam_name: pimm.DefaultReceiver(pimm.ValueUpdated(reader), (None, False))
+            for cam_name, reader in self.cameras.items()
         }
         self.raw_textures = {
-            cam_name: np.ones((self.height, self.width, 4), dtype=np.float32) for cam_name in self.cameras.keys()
+            cam_name: np.ones((self.height, self.width, 4), dtype=np.float32)
+            for cam_name in self.cameras.keys()
         }
         print(self.raw_textures.keys())
 
@@ -67,17 +71,15 @@ class DearpyguiUi(pimm.ControlSystem):
             self.buttons.emit(pimm.Message(pressed_keys))
 
             for cam_name, camera in self.cameras.items():
-                try:
-                    frame, is_new = camera.value
-                except pimm.NoValueException:
-                    frame = None
-                    is_new = False
+                frame, is_new = camera.value
 
-                if frame is not None:
-                    if is_new:
-                        self.raw_textures[cam_name][:, :, :3] = frame['image']
-                        self.raw_textures[cam_name][:, :, :3] /= 255
-                        frame_fps_counter.tick()
+                if frame is not None and is_new:
+                    image = frame['image']
+                    if image.shape[:2] != (self.height, self.width):
+                        image = cv2.resize(image, (self.width, self.height))
+                    self.raw_textures[cam_name][:, :, :3] = image
+                    self.raw_textures[cam_name][:, :, :3] /= 255
+                    frame_fps_counter.tick()
 
             info_text = info_receiver.value
 
