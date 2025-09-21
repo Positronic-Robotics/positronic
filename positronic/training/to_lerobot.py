@@ -169,10 +169,10 @@ def convert_to_lerobot_dataset(output_dir: str, fps: int, video: bool, dataset: 
 
 @cfn.config(dataset=positronic.cfg.dataset.transformed,
             task="pick plate from the table and place it into the dishwasher")
-def append_data_to_lerobot_dataset(dataset_dir: str, dataset: Dataset, task: str):
-    lr_dataset = LeRobotDataset(repo_id='local', root=dataset_dir)
+def append_data_to_lerobot_dataset(lerobot_dataset_dir: str, dataset: Dataset, task: str):
+    lr_dataset = LeRobotDataset(repo_id='local', root=lerobot_dataset_dir)
     append_data_to_dataset(lr_dataset=lr_dataset, p_dataset=dataset, task=task)
-    print(f"Dataset extended and saved to {dataset_dir}")
+    print(f"Dataset extended and saved to {lerobot_dataset_dir}")
 
 
 if __name__ == "__main__":

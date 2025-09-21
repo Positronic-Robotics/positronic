@@ -14,6 +14,8 @@ from positronic.dataset.episode import Episode
 from positronic.dataset.local_dataset import LocalDataset
 from positronic.dataset.signal import Signal
 from positronic.dataset.video import VideoSignal
+from positronic.utils.rerun_compat import (flatten_numeric, log_numeric_series,
+                                           log_series_styles, set_timeline_time)
 
 
 @dataclass
@@ -112,10 +114,8 @@ def _collect_signal_groups(ep: Episode) -> Tuple[list[str], list[str], dict[str,
                     signal_dims[name] = 1
                 else:
                     v0, _ = sig[0]
-                    if isinstance(v0, np.ndarray):
-                        signal_dims[name] = int(v0.size) if v0.ndim >= 1 else 1
-                    else:
-                        signal_dims[name] = 1
+                    arr = flatten_numeric(v0)
+                    signal_dims[name] = int(arr.size) if arr is not None else 1
             except Exception:
                 signal_dims[name] = 1
     return video_names, signal_names, signal_dims
@@ -151,29 +151,8 @@ def _build_blueprint(task: Optional[str], video_names: list[str], signal_names: 
     )
 
 
-def _log_single_signal(key: str, val: Any) -> None:
-    """Log a single non-video signal using rr.Scalars with a vector.
-
-    Scalars are wrapped into a length-1 float32 array; tensors are flattened.
-    """
-    if isinstance(val, np.ndarray):
-        if val.ndim == 0:
-            val = np.asarray([float(val)])
-        elif val.ndim >= 2:
-            val = val.reshape(-1)
-    else:
-        try:
-            val = np.asarray([float(val)])
-        except Exception:
-            return
-    rr.log(f'/signals/{key}', rr.Scalars(val))
-
-
 def _setup_series_names(ep: Episode, signal_names: list[str]) -> None:
-    """Log static SeriesLines with short names ('0','1',...) per signal.
-
-    This controls how multi-channel Scalars are labeled in the plot legend and tooltips.
-    """
+    """Log static series metadata with short names ('0','1',...) per signal."""
     for key in signal_names:
         try:
             sig = ep.signals[key]
@@ -181,25 +160,23 @@ def _setup_series_names(ep: Episode, signal_names: list[str]) -> None:
                 dims = 1
             else:
                 val, _ = sig[0]
-                if isinstance(val, np.ndarray):
-                    dims = int(val.size) if val.ndim >= 1 else 1
-                else:
-                    dims = 1
+                arr = flatten_numeric(val)
+                dims = int(arr.size) if arr is not None else 1
         except Exception:
             dims = 1
         names = [str(i) for i in range(max(1, dims))]
-        rr.log(f'/signals/{key}', rr.SeriesLines(names=names), static=True)
+        log_series_styles(f'/signals/{key}', names, static=True)
 
 
 def _log_episode(ep: Episode, video_names: list[str], signal_names: list[str]) -> None:
     for key in signal_names:
         for v, t in ep.signals[key]:
-            rr.time.set_time('time', timestamp=np.datetime64(t, 'ns'))
-            _log_single_signal(key, v)
+            set_timeline_time('time', np.datetime64(t, 'ns'))
+            log_numeric_series(f'/signals/{key}', v)
 
     for key in video_names:
         for frame, ts_ns in ep.signals[key]:
-            rr.time.set_time('time', timestamp=np.datetime64(ts_ns, 'ns'))
+            set_timeline_time('time', np.datetime64(ts_ns, 'ns'))
             rr.log(key, rr.Image(frame).compress())
 
 

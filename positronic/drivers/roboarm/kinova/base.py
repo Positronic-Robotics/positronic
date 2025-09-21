@@ -17,6 +17,7 @@ from ruckig import InputParameter, OutputParameter, Result, Ruckig
 from cvxopt import matrix, solvers
 
 from positronic import geom
+from positronic.utils.rerun_compat import log_numeric_series
 
 K_r = np.diag([0.3, 0.3, 0.3, 0.3, 0.18, 0.18, 0.18])
 K_l = np.diag([75.0, 75.0, 75.0, 75.0, 40.0, 40.0, 40.0])
@@ -205,12 +206,11 @@ class KinematicsSolver:
             iter += 1
 
         if debug:
-            import rerun as rr
-            rr.log('ik/iter', rr.Scalars(iter))
-            rr.log('ik/err', rr.Scalars(np.linalg.norm(self.err)))
-            rr.log('ik/err/pos', rr.Scalars(np.linalg.norm(self.err_pos)))
-            rr.log('ik/err/rot', rr.Scalars(np.linalg.norm(self.err_rot)))
-            rr.log('ik/update', rr.Scalars(self.data.qpos - qpos0))
+            log_numeric_series('ik/iter', iter)
+            log_numeric_series('ik/err', np.linalg.norm(self.err))
+            log_numeric_series('ik/err/pos', np.linalg.norm(self.err_pos))
+            log_numeric_series('ik/err/rot', np.linalg.norm(self.err_rot))
+            log_numeric_series('ik/update', self.data.qpos - qpos0)
         return self.data.qpos.copy()
 
 

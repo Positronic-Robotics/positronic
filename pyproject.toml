@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "positronic"
-version = "0.1.0rc1"
+version = "0.1.0rc2"
 description = "Positronic robotics project"
 requires-python = ">=3.11"
 readme = { file = "README.md", content-type = "text/markdown" }
@@ -34,6 +34,8 @@ dependencies = [
     "scipy",
     "torch",
     "uvicorn[standard]",
+    "lerobot>=0.3.3",  # TODO: Get rid of this, move all usages to standalone scripts
+    "rerun-sdk>=0.22",
 ]
 
 [project.scripts]
@@ -48,8 +50,8 @@ hardware = [
     "pinocchio",  # For Kinova
     "placo",
     "pyaudio; sys_platform == 'linux'",  # For SoundSystem
-    "pymodbus",  # For DH gripper
-    "pyserial", # For DH gripper
+    "pymodbus",  # For grippers
+    "pyserial", # For grippers
     "pyzed; sys_platform == 'linux'",  # ZED camera support
 ]
 dev = [
@@ -62,9 +64,6 @@ dev = [
     "pytest-asyncio",
     "pytest",
     "rerun-sdk[notebook]",
-]
-server = [
-    "rerun-sdk>=0.23",
 ]
 
 [tool.uv.sources.kortex_api]

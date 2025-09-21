@@ -7,6 +7,7 @@ import tqdm
 import configuronic as cfn
 from positronic.geom import Transform3D
 from positronic.drivers.roboarm.kinova.base import JointCompliantController, KinematicsSolver, wrap_joint_angle
+from positronic.utils.rerun_compat import log_numeric_series
 
 
 def random_6dof_on_sphere(radius: float = 0.5) -> Tuple[List[float], List[float]]:
@@ -88,15 +89,15 @@ def debug_kinematics(urdf_path: str, mujoco_model_path: str, rerun: str, traject
             cmd = trajectory[next_command][1]
             q_ik = solver.inverse(
                 Transform3D(translation=cmd[0], rotation=cmd[1]), q, max_iters=300)
-            rr.log('ik/qpos', rr.Scalars(q_ik))
+            log_numeric_series('ik/qpos', q_ik)
             rr.log('pos/cur_target', rr.Points3D(cmd[0], colors=[255, 255, 255]))
             controller.set_target_qpos(q_ik)
             next_command += 1
 
         if step % 100 == 0:
-            rr.log('state/qpos', rr.Scalars(q))
-            rr.log('state/qvel', rr.Scalars(dq))
-            rr.log('state/tau', rr.Scalars(tau))
+            log_numeric_series('state/qpos', q)
+            log_numeric_series('state/qvel', dq)
+            log_numeric_series('state/tau', tau)
             renderer.update_scene(data, camera='viewer')
             rr.log('render', rr.Image(renderer.render()).compress())
         step += 1

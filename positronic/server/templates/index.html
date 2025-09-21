@@ -169,7 +169,7 @@
                         card.innerHTML = `
                             <div class="episode-title">Episode ${episode.index}</div>
                             <div class="episode-info">
-                                <p>${episode.duration} sec</p>
+                                <p>${episode.duration.toFixed(1)} sec</p>
                                 <p>${episode.task || 'Task: N/A'}</p>
                             </div>
                         `;

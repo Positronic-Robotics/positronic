@@ -1,9 +1,16 @@
 import pickle
 
+import pytest
+
 import pimm
-from positronic.gui.dpg import DearpyguiUi
+
+try:
+    from positronic.gui.dpg import DearpyguiUi
+except ModuleNotFoundError:  # pragma: no cover - optional dependency
+    DearpyguiUi = None
 
 
+@pytest.mark.skipif(DearpyguiUi is None, reason='dearpygui is not available')
 def test_dearpygui_ui_is_picklable():
     gui = DearpyguiUi()
     original_receiver = gui.cameras['cam']
