@@ -53,7 +53,7 @@ class DearpyguiUi(pimm.ControlSystem):
 
         dpg.bind_item_handler_registry("image_grid", "adjust_images")
 
-        dpg.create_viewport(title='Custom Title', width=800, height=600)
+        dpg.create_viewport(title='Positronic Viewer', width=800, height=600)
         dpg.set_viewport_resize_callback(callback=self._viewport_resize)
         dpg.setup_dearpygui()
         dpg.show_viewport(maximized=True)
