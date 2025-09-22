@@ -1,5 +1,5 @@
 from pathlib import Path
-from typing import Dict, Iterator
+from typing import Dict
 
 import numpy as np
 import pytest
@@ -10,6 +10,7 @@ from positronic.data_collection import DataCollectionController, controller_posi
 from positronic.dataset.ds_writer_agent import DsWriterAgent, DsWriterCommand, DsWriterCommandType, Serializers
 from positronic.dataset.local_dataset import LocalDataset, LocalDatasetWriter
 from positronic.geom import Rotation, Transform3D
+from positronic.tests.testing_coutils import ManualDriver, drive_scheduler
 
 
 # TODO: Move these fixtures into a common module so that others can reuse them.
@@ -22,21 +23,6 @@ def clock():
 def world(clock):
     with pimm.World(clock=clock) as w:
         yield w
-
-
-@pytest.fixture
-def run_interleaved(clock, world):
-
-    def _run(*loops, steps: int = 200):
-        it = world.interleave(*loops)
-        for _ in range(steps):
-            try:
-                sleep = next(it)
-            except StopIteration:
-                break
-            clock.advance(sleep.seconds)
-
-    return _run
 
 
 def make_buttons(*,
@@ -70,51 +56,46 @@ def build_collection(world, out_dir: Path):
     writer = writer_cm.__enter__()
     agent = DsWriterAgent(writer, spec)
 
-    # Wire controller positions to both DC and agent
-    ctrl_em, (ctrl_rd_dc, ctrl_rd_agent) = world.local_one_to_many_pipe(2)
-    dc.controller_positions_receiver = ctrl_rd_dc
-    agent.inputs['controller_positions'] = ctrl_rd_agent
+    world.connect(dc.target_grip_emitter, agent.inputs['target_grip'])
+    world.connect(dc.ds_agent_commands, agent.command)
 
-    # Wire buttons to DC
-    buttons_em, dc.buttons_receiver = world.local_pipe()
+    ctrl_em_dc = world.pair(dc.controller_positions_receiver)
+    ctrl_em_agent = world.pair(agent.inputs['controller_positions'])
+    buttons_em = world.pair(dc.buttons_receiver)
+    grip_em = world.pair(agent.inputs['grip'])
 
-    # DC emits target grip -> agent receives
-    tg_em, agent.inputs['target_grip'] = world.local_pipe()
-    dc.target_grip_emitter = tg_em
-
-    # Directly emit gripper state to agent for test purposes
-    grip_em, agent.inputs['grip'] = world.local_pipe()
-
-    # DC emits start/stop commands -> agent receives
-    cmd_em, agent.command = world.local_pipe()
-    dc.ds_agent_commands = cmd_em
-
-    return dc, agent, ctrl_em, buttons_em, grip_em, cmd_em, writer_cm
+    return dc, agent, ctrl_em_dc, ctrl_em_agent, buttons_em, grip_em, writer_cm
 
 
-def test_data_collection_basic_recording(tmp_path, world, run_interleaved):
-    dc, agent, ctrl_em, buttons_em, grip_em, cmd_em, writer_cm = build_collection(world, tmp_path)
+def test_data_collection_basic_recording(tmp_path, world, clock):
+    dc, agent, ctrl_em_dc, ctrl_em_agent, buttons_em, grip_em, writer_cm = build_collection(world, tmp_path)
 
     # A simple right-hand pose and button frames
     right_pose = Transform3D(translation=np.array([0.1, 0.2, 0.3]), rotation=Rotation.identity)
 
-    def driver(_stop, _clk) -> Iterator[pimm.Sleep]:
-        # Start recording and set right_trigger value.
-        cmd_em.emit(DsWriterCommand(DsWriterCommandType.START_EPISODE))
+    payload = {'left': None, 'right': right_pose}
+
+    def start_episode():
+        dc.ds_agent_commands.emit(DsWriterCommand(DsWriterCommandType.START_EPISODE))
         buttons_em.emit(make_buttons(trigger=0.7, B=False))
-        yield pimm.Sleep(0.001)
 
-        # Send controller pose and a gripper state update
-        ctrl_em.emit({'left': None, 'right': right_pose})
+    def emit_signals():
+        ctrl_em_dc.emit(payload)
+        ctrl_em_agent.emit(payload)
         grip_em.emit(0.42)
-        yield pimm.Sleep(0.001)
 
-        # Stop recording
-        cmd_em.emit(DsWriterCommand(DsWriterCommandType.STOP_EPISODE))
-        yield pimm.Sleep(0.001)
+    def stop_episode():
+        dc.ds_agent_commands.emit(DsWriterCommand(DsWriterCommandType.STOP_EPISODE))
+
+    driver = ManualDriver([
+        (start_episode, 0.001),
+        (emit_signals, 0.001),
+        (stop_episode, 0.001),
+    ])
 
     with writer_cm:
-        run_interleaved(dc.run, lambda s, c: agent.run(s, c), driver)
+        scheduler = world.start([dc, agent, driver])
+        drive_scheduler(scheduler, clock=clock)
 
     ds = LocalDataset(tmp_path)
     assert len(ds) == 1
@@ -172,68 +153,44 @@ def test_data_collection_with_mujoco_robot_gripper(tmp_path):
         writer_cm = LocalDatasetWriter(tmp_path)
         agent = DsWriterAgent(writer_cm.__enter__(), spec)
 
-        # Controller positions to DC and agent
-        ctrl_em, (ctrl_rd_dc, ctrl_rd_agent) = world.local_one_to_many_pipe(2)
-        dc.controller_positions_receiver = ctrl_rd_dc
-        agent.inputs['controller_positions'] = ctrl_rd_agent
+        world.connect(robot.state, dc.robot_state)
+        world.connect(robot.state, agent.inputs['robot_state'])
+        world.connect(dc.robot_commands, robot.commands)
+        world.connect(dc.robot_commands, agent.inputs['robot_commands'])
+        world.connect(dc.target_grip_emitter, gripper.target_grip)
+        world.connect(dc.target_grip_emitter, agent.inputs['target_grip'])
+        world.connect(gripper.grip, agent.inputs['grip'])
+        world.connect(dc.ds_agent_commands, agent.command)
 
-        # Buttons to DC
-        buttons_em, dc.buttons_receiver = world.local_pipe()
+        ctrl_em_dc = world.pair(dc.controller_positions_receiver)
+        ctrl_em_agent = world.pair(agent.inputs['controller_positions'])
+        buttons_em = world.pair(dc.buttons_receiver)
 
-        # Robot state to DC and agent
-        rstate_em, (rstate_rd_agent, rstate_rd_dc) = world.local_one_to_many_pipe(2)
-        agent.inputs['robot_state'] = rstate_rd_agent
-        dc.robot_state = rstate_rd_dc
-        robot.state = rstate_em
-
-        # Commands from DC to robot and agent
-        cmd_em, (cmd_rd_robot, cmd_rd_agent) = world.local_one_to_many_pipe(2)
-        dc.robot_commands = cmd_em
-        robot.commands = cmd_rd_robot
-        agent.inputs['robot_commands'] = cmd_rd_agent
-
-        # Target grip to gripper and agent
-        tg_em, (tg_rd_gripper, tg_rd_agent) = world.local_one_to_many_pipe(2)
-        dc.target_grip_emitter = tg_em
-        gripper.target_grip = tg_rd_gripper
-        agent.inputs['target_grip'] = tg_rd_agent
-
-        # Gripper state direct to agent
-        grip_em, agent.inputs['grip'] = world.local_pipe()
-        gripper.grip = grip_em
-
-        # DC emits start/stop commands -> agent receives
-        cmd_em, agent.command = world.local_pipe()
-        dc.ds_agent_commands = cmd_em
-
-        # Interleave sim, robot, gripper, and data collection
-        def driver(_stop, _clk):
-            # Start recording and set trigger=0.5
-            cmd_em.emit(DsWriterCommand(DsWriterCommandType.START_EPISODE))
+        def start_episode():
+            dc.ds_agent_commands.emit(DsWriterCommand(DsWriterCommandType.START_EPISODE))
             buttons_em.emit(make_buttons(trigger=0.5))
-            yield pimm.Sleep(0.01)
 
-            # Enable tracking with A press so target pose is produced
+        def enable_tracking():
             buttons_em.emit(make_buttons(trigger=0.5, A=True))
-            yield pimm.Sleep(0.01)
 
-            # Send controller pose to move the robot a bit; keep it identity to simplify
-            ctrl_em.emit({'left': None, 'right': Transform3D.identity})
-            yield pimm.Sleep(0.02)
+        def emit_pose():
+            payload = {'left': None, 'right': Transform3D.identity}
+            ctrl_em_dc.emit(payload)
+            ctrl_em_agent.emit(payload)
 
-            # Stop recording
-            cmd_em.emit(DsWriterCommand(DsWriterCommandType.STOP_EPISODE))
-            yield pimm.Sleep(0.005)
+        def stop_episode():
+            dc.ds_agent_commands.emit(DsWriterCommand(DsWriterCommandType.STOP_EPISODE))
+
+        driver = ManualDriver([
+            (start_episode, 0.01),
+            (enable_tracking, 0.01),
+            (emit_pose, 0.02),
+            (stop_episode, 0.005),
+        ])
 
         with writer_cm:
-            steps = world.interleave(sim.run, robot.run, gripper.run, dc.run, lambda s, c: agent.run(s, c), driver)
-            steps = iter(steps)
-            # Advance a reasonable number of steps
-            for _ in range(400):
-                try:
-                    next(steps)
-                except StopIteration:
-                    break
+            scheduler = world.start([sim, robot, gripper, dc, agent, driver])
+            drive_scheduler(scheduler, steps=400)
 
     # Validate dataset contents
     ds = LocalDataset(tmp_path)
