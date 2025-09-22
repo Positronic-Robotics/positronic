@@ -170,11 +170,11 @@ def perform_registration(webxr, robot_arm):
     data = []
 
     with pimm.World() as w:
-        commands, robot_arm.commands = w.mp_pipe()
-        robot_arm.state, state = w.mp_pipe()
-        webxr.controller_positions, controller_positions = w.mp_pipe()
+        commands = w.pair(robot_arm.commands)
+        state = w.pair(robot_arm.state)
+        controller_positions = w.pair(webxr.controller_positions)
 
-        w.start_in_subprocess(webxr.run, robot_arm.run)
+        w.start([], background=[webxr, robot_arm])
 
         move_throttler = pimm.utils.RateLimiter(clock=pimm.world.SystemClock(), every_sec=2.0)
 

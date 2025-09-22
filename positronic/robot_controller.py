@@ -1,7 +1,6 @@
 import configuronic as cfn
 import positronic.cfg.hardware.roboarm
 import pimm
-from pimm.world import TransportMode
 from positronic import geom
 from positronic.drivers.roboarm import command
 
@@ -9,11 +8,10 @@ from positronic.drivers.roboarm import command
 @cfn.config(robot=positronic.cfg.hardware.roboarm.kinova)
 def main(robot):
     with pimm.World() as world:
-        command_emmiter, robot.commands = world.mp_pipe()
-        robot.state, state_receiver = world.mp_pipe(transport=TransportMode.SHARED_MEMORY)
+        command_emmiter = world.pair(robot.commands)
+        state_receiver = world.pair(robot.state)
 
-        world.start_in_subprocess(robot.run)
-
+        world.start([], background=robot)
         while True:
             text_command = input("Enter a command: ")
 

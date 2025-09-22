@@ -342,7 +342,7 @@ class TestWorld:
         # We can't check is_alive() after exit because processes are closed
         assert len(world.background_processes) == 1
 
-    @pytest.mark.parametrize('pipe_fn_name', ['mp_one_to_many_pipe', 'local_one_to_many_pipe'])
+    @pytest.mark.parametrize('pipe_fn_name', ['local_one_to_many_pipe'])
     def test_world_mp_pipe_multiple_readers_created(self, pipe_fn_name):
         """Test that World.mp_pipe can create multiple readers."""
         with World() as world:
@@ -353,7 +353,7 @@ class TestWorld:
             assert isinstance(readers[0], SignalReceiver)
             assert isinstance(readers[1], SignalReceiver)
 
-    @pytest.mark.parametrize('pipe_fn_name', ['mp_one_to_many_pipe', 'local_one_to_many_pipe'])
+    @pytest.mark.parametrize('pipe_fn_name', ['local_one_to_many_pipe'])
     def test_world_mp_pipe_multiple_readers_message_received_by_all_readers(self, pipe_fn_name):
         """Test that multiple readers can read from the same queue."""
         with World() as world:
@@ -534,6 +534,25 @@ class TestWorldControlSystems:
             stop_reader, used_clock = main_cs.invocations[0]
             assert isinstance(stop_reader, EventReceiver)
             assert used_clock is clock
+
+    def test_start_handles_empty_main_process(self, monkeypatch):
+        clock = MockClock(0.0)
+        background_cs = DummyControlSystem('background')
+
+        started_background = []
+
+        def fake_start_in_subprocess(self, *loops):
+            started_background.append(loops)
+
+        monkeypatch.setattr(World, 'start_in_subprocess', fake_start_in_subprocess)
+
+        with World(clock) as world:
+            scheduler = world.start([], background=background_cs)
+
+            assert started_background == [(background_cs.run,)]
+            assert list(scheduler) == []
+
+            scheduler.close()
 
     def test_start_requires_known_emitter_owner(self):
         known = DummyControlSystem('known')

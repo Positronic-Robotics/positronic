@@ -65,12 +65,12 @@ if __name__ == "__main__":
     with pimm.World() as world:
         gripper = DHGripper("/dev/ttyUSB0")
 
-        speed, gripper.speed = world.mp_pipe()
-        force, gripper.force = world.mp_pipe()
-        target_grip, gripper.target_grip = world.mp_pipe()
-        gripper.grip, grip = world.mp_pipe()
+        speed = world.pair(gripper.speed)
+        force = world.pair(gripper.force)
+        target_grip = world.pair(gripper.target_grip)
+        grip = world.pair(gripper.grip)
 
-        world.start_in_subprocess(gripper.run)
+        world.start([], background=gripper)
 
         print("Setting gripper to 20% speed and 100% force", flush=True)
         speed.emit(20)

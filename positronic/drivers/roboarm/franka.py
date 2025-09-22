@@ -150,9 +150,9 @@ class Robot(pimm.ControlSystem):
 if __name__ == "__main__":
     with pimm.World() as world:
         robot = Robot("172.168.0.2", relative_dynamics_factor=0.2)
-        commands, robot.commands = world.mp_pipe()
-        robot.state, state = world.mp_pipe()
-        world.start_in_subprocess(robot.run)
+        commands = world.pair(robot.commands)
+        state = world.pair(robot.state)
+        world.start([], background=robot)
 
         trajectory = [
             ([0.03, 0.03, 0.03], 0.0),

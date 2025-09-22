@@ -494,117 +494,6 @@ class World:
             reader.close()
             emitter.close()
 
-    def local_pipe(self, maxsize: int = 1) -> Tuple[SignalEmitter[T], SignalReceiver[T]]:
-        """Create a queue-based communication channel within the same process.
-
-        Args:
-            maxsize: (int) Maximum queue size (0 for unlimited). Default is 1.
-
-        Returns:
-            Tuple of (emitter, reader) for local communication
-        """
-        q = deque(maxlen=maxsize)
-        return LocalQueueEmitter(q, self._clock), LocalQueueReceiver(q)
-
-    def mp_pipe(self,
-                maxsize: int = 1,
-                clock: Clock | None = None,
-                *,
-                transport: TransportMode = TransportMode.UNDECIDED) -> Tuple[SignalEmitter[T], SignalReceiver[T]]:
-        """Create an inter-process channel with optional transport override.
-
-        ``transport`` defaults to ``TransportMode.UNDECIDED`` so the first emitted
-        payload decides between queue and shared memory. Passing
-        :class:`TransportMode.QUEUE` or :class:`TransportMode.SHARED_MEMORY`
-        forces a specific transport upfront.
-
-        Args:
-            maxsize: Maximum queue size (0 for unlimited). Default is 1.
-            clock: Optional clock override for timestamp generation when the
-                emitter lives in another process.
-            transport: Transport override. ``TransportMode.UNDECIDED`` enables
-                adaptive selection; ``TransportMode.QUEUE`` or
-                ``TransportMode.SHARED_MEMORY`` pins the transport.
-
-        Returns:
-            Tuple of (emitter, reader) suitable for inter-process communication.
-        """
-        if transport is TransportMode.SHARED_MEMORY and not self.entered:
-            raise AssertionError("Shared memory transport is only available after entering the world context.")
-
-        forced_mode: TransportMode | None
-        forced_mode = transport if transport in (TransportMode.QUEUE, TransportMode.SHARED_MEMORY) else None
-
-        message_queue = self._manager.Queue(maxsize=maxsize)
-        lock = self._manager.Lock()
-        ts_value = self._manager.Value('Q', -1)
-        sm_queue = self._manager.Queue()
-        initial_mode = forced_mode or TransportMode.UNDECIDED
-        mode_value = self._manager.Value('i', int(initial_mode))
-
-        emitter_clock = clock or self._clock
-        emitter = MultiprocessEmitter(emitter_clock,
-                                      message_queue,
-                                      mode_value,
-                                      lock,
-                                      ts_value,
-                                      sm_queue,
-                                      forced_mode=forced_mode)
-        receiver = MultiprocessReceiver(message_queue, mode_value, lock, ts_value, sm_queue, forced_mode=forced_mode)
-        emitter._attach_receiver(receiver)
-        receiver._attach_emitter(emitter)
-        self._cleanup_emitters_readers.append((emitter, receiver))
-        return emitter, receiver
-
-    def local_one_to_many_pipe(self,
-                               n_readers: int,
-                               maxsize: int = 1) -> Tuple[SignalEmitter[T], Sequence[SignalReceiver[T]]]:
-        """Create a single-emitter-many-readers communication channel.
-        """
-        emitters = []
-        readers = []
-        for _ in range(n_readers):
-            emitter, reader = self.local_pipe(maxsize)
-            emitters.append(emitter)
-            readers.append(reader)
-        return BroadcastEmitter(emitters), readers
-
-    def mp_one_to_many_pipe(self,
-                            n_readers: int,
-                            maxsize: int = 1) -> Tuple[SignalEmitter[T], Sequence[SignalReceiver[T]]]:
-        """Create a single-emitter-many-readers communication channel.
-
-        Args:
-            n_readers: (int) Number of readers to create
-            maxsize: (int) Maximum queue size (0 for unlimited)
-
-        Returns:
-            Tuple of (emitter, readers) for single-emitter-many-readers communication
-        """
-        readers = []
-        emitters = []
-        for _ in range(n_readers):
-            emiter, reader = self.mp_pipe(maxsize)
-            readers.append(reader)
-            emitters.append(emiter)
-        return BroadcastEmitter(emitters), readers
-
-    def start_in_subprocess(self, *background_loops: ControlLoop):
-        """Starts background control loops. Can be called multiple times for different control loops."""
-        for bg_loop in background_loops:
-            if hasattr(bg_loop, '__self__'):
-                name = f"{bg_loop.__self__.__class__.__name__}.{bg_loop.__name__}"
-            else:
-                name = getattr(bg_loop, '__name__', 'anonymous')
-            # TODO: now we allow only real clock, change clock to a Emitter?
-            p = mp.Process(target=_bg_wrapper,
-                           args=(bg_loop, self._stop_event, SystemClock(), name),
-                           daemon=True,
-                           name=name)
-            p.start()
-            self.background_processes.append(p)
-            print(f"Started background process {name} (pid {p.pid})", flush=True)
-
     def request_stop(self):
         self._stop_event.set()
 
@@ -661,14 +550,6 @@ class World:
             except StopIteration:
                 # Don't add the loop back and don't yield after a loop completes - it is done
                 self.request_stop()
-
-    def run(self, *loops: ControlLoop):
-        for command in self.interleave(*loops):
-            match command:
-                case Sleep(seconds):
-                    time.sleep(seconds)
-                case _:
-                    raise ValueError(f"Unknown command: {command}")
 
     def connect(self,
                 emitter: ControlSystemEmitter[T],
@@ -735,7 +616,7 @@ class World:
 
     def start(self,
               main_process: ControlSystem | list[ControlSystem],
-              background: ControlSystem | list[ControlSystem] | None = None):
+              background: ControlSystem | list[ControlSystem] | None = None) -> Iterator[Sleep]:
         """Bind declared connections and launch control systems.
 
         ``main_process`` control systems are scheduled cooperatively in the
@@ -780,3 +661,102 @@ class World:
 
         self.start_in_subprocess(*[cs.run for cs in background])
         return self.interleave(*[cs.run for cs in main_process])
+
+    def start_in_subprocess(self, *background_loops: ControlLoop):
+        """Starts background control loops. Can be called multiple times for different control loops.
+
+        Use `start` whenever possible, as this method is internal.
+        """
+        for bg_loop in background_loops:
+            if hasattr(bg_loop, '__self__'):
+                name = f"{bg_loop.__self__.__class__.__name__}.{bg_loop.__name__}"
+            else:
+                name = getattr(bg_loop, '__name__', 'anonymous')
+            # TODO: now we allow only real clock, change clock to a Emitter?
+            p = mp.Process(target=_bg_wrapper,
+                           args=(bg_loop, self._stop_event, SystemClock(), name),
+                           daemon=True,
+                           name=name)
+            p.start()
+            self.background_processes.append(p)
+            print(f"Started background process {name} (pid {p.pid})", flush=True)
+
+    def local_pipe(self, maxsize: int = 1) -> Tuple[SignalEmitter[T], SignalReceiver[T]]:
+        """Create a queue-based communication channel within the same process.
+
+        When possible, use `connect` or `pair` instead, as this method is somewhat internal.
+        Args:
+            maxsize: (int) Maximum queue size (0 for unlimited). Default is 1.
+
+        Returns:
+            Tuple of (emitter, reader) for local communication
+        """
+        q = deque(maxlen=maxsize)
+        return LocalQueueEmitter(q, self._clock), LocalQueueReceiver(q)
+
+    def mp_pipe(self,
+                maxsize: int = 1,
+                clock: Clock | None = None,
+                *,
+                transport: TransportMode = TransportMode.UNDECIDED) -> Tuple[SignalEmitter[T], SignalReceiver[T]]:
+        """Create an inter-process channel with optional transport override.
+
+        When possible, use `connect` or `pair` instead, as this method is somewhat internal.
+
+        ``transport`` defaults to ``TransportMode.UNDECIDED`` so the first emitted
+        payload decides between queue and shared memory. Passing
+        :class:`TransportMode.QUEUE` or :class:`TransportMode.SHARED_MEMORY`
+        forces a specific transport upfront.
+
+        Args:
+            maxsize: Maximum queue size (0 for unlimited). Default is 1.
+            clock: Optional clock override for timestamp generation when the
+                emitter lives in another process.
+            transport: Transport override. ``TransportMode.UNDECIDED`` enables
+                adaptive selection; ``TransportMode.QUEUE`` or
+                ``TransportMode.SHARED_MEMORY`` pins the transport.
+
+        Returns:
+            Tuple of (emitter, reader) suitable for inter-process communication.
+        """
+        if transport is TransportMode.SHARED_MEMORY and not self.entered:
+            raise AssertionError("Shared memory transport is only available after entering the world context.")
+
+        forced_mode: TransportMode | None
+        forced_mode = transport if transport in (TransportMode.QUEUE, TransportMode.SHARED_MEMORY) else None
+
+        message_queue = self._manager.Queue(maxsize=maxsize)
+        lock = self._manager.Lock()
+        ts_value = self._manager.Value('Q', -1)
+        sm_queue = self._manager.Queue()
+        initial_mode = forced_mode or TransportMode.UNDECIDED
+        mode_value = self._manager.Value('i', int(initial_mode))
+
+        emitter_clock = clock or self._clock
+        emitter = MultiprocessEmitter(emitter_clock,
+                                      message_queue,
+                                      mode_value,
+                                      lock,
+                                      ts_value,
+                                      sm_queue,
+                                      forced_mode=forced_mode)
+        receiver = MultiprocessReceiver(message_queue, mode_value, lock, ts_value, sm_queue, forced_mode=forced_mode)
+        emitter._attach_receiver(receiver)
+        receiver._attach_emitter(emitter)
+        self._cleanup_emitters_readers.append((emitter, receiver))
+        return emitter, receiver
+
+    def local_one_to_many_pipe(self,
+                               n_readers: int,
+                               maxsize: int = 1) -> Tuple[SignalEmitter[T], Sequence[SignalReceiver[T]]]:
+        """DEPRECATED: Create a single-emitter-many-readers communication channel.
+
+        Use `connect` or `pair` instead.
+        """
+        emitters = []
+        readers = []
+        for _ in range(n_readers):
+            emitter, reader = self.local_pipe(maxsize)
+            emitters.append(emitter)
+            readers.append(reader)
+        return BroadcastEmitter(emitters), readers

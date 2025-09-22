@@ -63,12 +63,12 @@ if __name__ == "__main__":
     with pimm.World() as world:
         gr = Robotiq2F(port="/dev/ttyUSB0")
 
-        spd, gr.speed = world.mp_pipe()
-        frc, gr.force = world.mp_pipe()
-        tgt, gr.target_grip = world.mp_pipe()
-        gr.grip, grip_rd = world.mp_pipe()
+        spd = world.pair(gr.speed)
+        frc = world.pair(gr.force)
+        tgt = world.pair(gr.target_grip)
+        grip = world.pair(gr.grip)
 
-        world.start_in_subprocess(gr.run)
+        world.start([], background=gr)
 
         spd.emit(128)
         frc.emit(128)
@@ -85,6 +85,6 @@ if __name__ == "__main__":
                     break
             time.sleep(0.1)
             try:
-                print(f"[{i}] Grip: {grip_rd.value:.2f}")
+                print(f"[{i}] Grip: {grip.value:.2f}")
             except pimm.NoValueException:
                 pass
