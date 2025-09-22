@@ -699,13 +699,13 @@ class World:
         assert isinstance(receiver, ControlSystemReceiver)
         self._connections.append((emitter, receiver, emitter_wrapper, receiver_wrapper))
 
-    def mirror(self, connector: ControlSystemEmitter | ControlSystemReceiver, *, wrapper=lambda x: x):
+    def pair(self, connector: ControlSystemEmitter | ControlSystemReceiver, *, wrapper=lambda x: x):
         """Create the complementary connector for an existing endpoint.
 
         ``World`` infers whether the peer should live locally or in another
         process by looking at the owning control system of each endpoint. To
-        keep that inference consistent, ``mirror`` instantiates the opposite
-        connector class with the same owner and immediately wires the pair via
+        keep that inference consistent, ``pair`` instantiates the opposite
+        connector class with the same owner and immediately wires the two via
         :meth:`connect`.
 
         Args:

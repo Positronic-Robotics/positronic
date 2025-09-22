@@ -170,7 +170,7 @@ def main_sim(
         world.connect(gripper.grip, inference.gripper_state)
         world.connect(inference.target_grip, gripper.target_grip)
 
-        commands = world.mirror(ds_agent.command) if ds_agent else None
+        commands = world.pair(ds_agent.command) if ds_agent else None
         sim_iter = world.start(control_systems, gui)
 
         if commands is not None:

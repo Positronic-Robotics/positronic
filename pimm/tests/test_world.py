@@ -423,7 +423,7 @@ class TestWorldControlSystems:
         wrapper = Mock(side_effect=lambda emitter: emitter)
 
         with World(clock) as world:
-            mirrored = world.mirror(system.emitter, wrapper=wrapper)
+            mirrored = world.pair(system.emitter, wrapper=wrapper)
 
             assert isinstance(mirrored, ControlSystemReceiver)
             wrapper.assert_not_called()
@@ -445,7 +445,7 @@ class TestWorldControlSystems:
         wrapper = Mock(side_effect=lambda receiver: receiver)
 
         with World(clock) as world:
-            mirrored = world.mirror(system.receiver, wrapper=wrapper)
+            mirrored = world.pair(system.receiver, wrapper=wrapper)
 
             assert isinstance(mirrored, ControlSystemEmitter)
             wrapper.assert_not_called()
@@ -464,7 +464,7 @@ class TestWorldControlSystems:
     def test_mirror_rejects_unknown_connector(self):
         with World() as world:
             with pytest.raises(ValueError, match='Unsupported connector type'):
-                world.mirror(object())
+                world.pair(object())
 
     def test_start_sets_up_local_connections(self):
         clock = MockClock(0.0)
