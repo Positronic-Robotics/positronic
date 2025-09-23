@@ -21,6 +21,9 @@ Every subsystem is implemented in plain Python so teams can move between simulat
 
 **Our goal is to make professional-grade ML robotics approachable.** Newcomers get clear defaults, WebXR teleoperation, and a reproducible training story; experienced teams can extend the same stack with custom drivers, schedulers, and datasets to support complex manipulation setups and large fleets.
 
+> **Positronic is under heavy development and in alpha stage. APIs, interfaces, and workflows may change significantly between releases.**
+
+
 ## Table of Contents
 - [Why Positronic](#why-positronic)
 - [Installation](#installation)
@@ -38,10 +41,10 @@ Every subsystem is implemented in plain Python so teams can move between simulat
 
 ## Why Positronic
 
-- **Immediate-mode runtime.** [`pimm`](pimm/README.md) wires sensors, controllers, inference, and GUIs without ROS launch files or bespoke DSLs. Loops stay testable and readable; see [pimm/README.md](pimm/README.md) for patterns.
-- **Dataset infrastructure.** The [positronic/dataset](positronic/dataset/README.md) layer captures multi-rate episodes, exposes lazy transforms, and feeds the web-based browser for triage and analysis (see [positronic/dataset/README.md](positronic/dataset/README.md)).
-- **Hardware-ready out of the box.** WebXR teleoperation ([positronic/cfg/webxr.py](positronic/cfg/webxr.py)), MuJoCo simulators ([positronic/assets/mujoco/franka_table.xml](positronic/assets/mujoco/franka_table.xml)), the DearPyGui UI ([positronic/gui/dpg.py](positronic/gui/dpg.py)), and hardware drivers ([positronic/drivers](positronic/drivers)) live alongside training and inference scripts so you can go from prototype to lab deployment quickly.
-- **Future-facing roadmap.** Native training on Positronic datasets, richer monitoring, and tighter CI hooks are active areas of development—everything in this README reflects the workflow we run today and the direction we are pushing toward.
+- **Immediate-mode runtime.** [`pimm`](pimm/README.md) wires sensors, controllers, inference, and GUIs without ROS launch files or bespoke DSLs. Loops stay testable and readable; see [README](pimm/README.md) for details.
+- **Dataset infrastructure.** The [positronic.dataset](positronic/dataset/README.md) layer captures multi-rate episodes, exposes lazy transforms, and feeds the web-based browser for triage and analysis (see [README](positronic/dataset/README.md)).
+- **Hardware-ready out of the box.** [WebXR teleoperation](positronic/drivers/webxr.py), [MuJoCo simulators](positronic/simulator/mujoco/sim.py)), the [DearPyGui UI](positronic/gui/dpg.py), and [multiple hardware drivers](positronic/drivers) live alongside training and inference scripts so you can go from prototype to lab deployment quickly.
+- **Future-facing roadmap.** Native training on Positronic datasets, curation capabilities in the viewer server, out-of-the-box support for $\pi_0$, GR00T and other polcies, support for more robotic and controlling hardware are active areas of development. Everything in this README reflects the workflow we run today and the direction we are pushing toward.
 
 ---
 
@@ -83,11 +86,11 @@ cd positronic
 
 ## Core modules at a glance
 
-- [`pimm`](pimm/README.md) — immediate-mode runtime for building control systems. Handy references: [pimm/README.md](pimm/README.md), [positronic/data_collection.py](positronic/data_collection.py), [positronic/run_inference.py](positronic/run_inference.py).
-- [positronic/dataset](positronic/dataset/README.md) — dataset writer/reader, transforms, and streaming agent. Documentation lives in [positronic/dataset/](positronic/dataset/README.md).
-- [positronic/server](positronic/server) — FastAPI + Rerun viewer for inspecting recordings ([positronic/server/positronic_server.py](positronic/server/positronic_server.py)).
-- [positronic/training](positronic/training) — scripts for converting datasets and running LeRobot pipelines while native Positronic training is being finalised.
-- [positronic/drivers](positronic/drivers), [positronic/cfg](positronic/cfg) — hardware definitions, WebXR frontends, simulator loaders, and policy configs ready to override per project.
+- [`pimm`](pimm/README.md) — immediate-mode runtime for building control systems. Handy references: [README](pimm/README.md), [Data collection script as example](positronic/data_collection.py), [Inference script as example](positronic/run_inference.py).
+- [`positronic.dataset` library](positronic/dataset/README.md) — dataset writer/reader, transforms, and streaming agent.
+- [`positronic-server`, FastAPI + Rerun viewer for inspecting recordings](positronic/server/positronic_server.py).
+- [`training`](positronic/training) — scripts for converting datasets and running LeRobot pipelines while native Positronic training is being finalised.
+- [`drivers`](positronic/drivers) — hardware definitions, WebXR frontends, simulator loaders, and [their configurations](positronic/cfg) ready to override per project.
 
 ---
 
@@ -151,17 +154,15 @@ Here's how to collect the data using VR Helmet:
 2. On the phone open **XR Browser** (or any WebXR-capable browser) and visit `http://<host-ip>:5005/`.
 3. Tap **Enter AR**, grant camera/gyroscope access, and hold the phone upright; the reticle represents the virtual controller.
 4. The on-screen HUD from [positronic/assets/webxr_iphone/index.html](positronic/assets/webxr_iphone/index.html) provides:
-   - **Record** (maps to `right_B`) for episode start/stop.
-   - **Track** (`right_A`) to toggle positional tracking.
-   - **Reset** (`right_stick`) to abort the current run.
-   - **Gripper slider** driving the analogue trigger with extra padding near 0/1 for precise open/close commands.
-5. With `--stream_video_to_webxr=<camera_name>` the phone shows the same live video feed as the VR headset.
+   - **Record** for episode start/stop.
+   - **Track**  to toggle positional tracking.
+   - **Reset**  to abort the current run and resetting the robot.
+   - **Gripper slider** to control the width of your gripper.
 
 #### Collection tips
 
-- Watch the DearPyGui window to confirm cameras and robot state update reliably. Restart an episode instead of saving partial data when a stream hiccups.
+- Watch the DearPyGui window to confirm cameras and robot state update reliably. Restart an episode instead of saving partial data when something goes wrong.
 - Record a few calibration runs first, review them, then capture full demonstrations.
-- Fill in episode metadata (task names, notes) when stopping runs; the values are stored in each episode’s static payload and surface in downstream tools.
 
 ### 3. Review and curate datasets — [positronic/server/positronic_server.py](positronic/server/positronic_server.py)
 
@@ -170,15 +171,16 @@ Inspect recordings before training:
 ```bash
 python -m positronic.server.positronic_server \
     --root=~/datasets/stack_cubes_raw \
-    --port=5001 \
-    --reset_cache=True
+    --port=5001
 ```
 
-The viewer loads `LocalDataset` in the background, caches `.rrd` bundles under `~/.cache/positronic/server/`, and serves a Rerun timeline per episode.
+The viewer loads `LocalDataset` in the background, generates `.rrd` files with the copies of each episode under `~/.cache/positronic/server/`, and serves a Rerun viewer per episode.
 
-![Dataset browser](positronic/assets/docs/server_screenshot.png)
+![Dataset viewer](positronic/assets/docs/server_screenshot.png)
 
-The UI is read-only by design: mark low-quality runs while watching, then rename or remove the corresponding episode directories manually. Static metadata lives in each episode’s `episode.json` if you need to edit it outside the GUI.
+The UI is read-only for now: mark low-quality runs while watching, then rename or remove the corresponding episode directories manually. Static metadata lives in each episode’s `episode.json` if you need to edit it outside the GUI.
+
+We will support curation mode in the future releases.
 
 ### 4. Convert to LeRobot — [positronic/training/to_lerobot.py](positronic/training/to_lerobot.py)
 
@@ -212,7 +214,7 @@ uv run --with-editable . -s positronic/training/lerobot_train.py \
     --base_config=positronic/training/train_config.json
 ```
 
-Checkpoints and logs are written under `outputs/train/<timestamp>_<job_name>/`. Adjust the base JSON to change architectures, backbones, or devices. When Positronic-first training is ready you will point the trainer at the raw dataset instead.
+Checkpoints and logs are written under `outputs/train/<timestamp>_<job_name>/`. Adjust the [training script](positronic/training/lerobot_train.py) to change architectures, backbones, or devices. When Positronic-first training is ready you will point the trainer at the raw dataset instead.
 
 ### 6. Validate policies — [positronic/run_inference.py](positronic/run_inference.py)
 
@@ -227,17 +229,9 @@ python -m positronic.run_inference sim_act \
     --show_gui
 ```
 
-[positronic/run_inference.py](positronic/run_inference.py) wires the MuJoCo scene, observation encoder ([positronic/cfg/policy.observation.franka_mujoco_stackcubes](positronic/cfg/policy.observation.franka_mujoco_stackcubes)), and action decoder ([positronic/cfg/policy.action.absolute_position](positronic/cfg/policy.action.absolute_position)). Passing `--output_dir` enables another `DsWriterAgent` so the run can be replayed in the dataset viewer.
+[`positronic.run_inference`](positronic/run_inference.py) wires the MuJoCo scene, [one of observation encoders](positronic/cfg/policy/observation.py), and [action decoder](positronic/cfg/policy/action.py). Passing `--output_dir` enables another `DsWriterAgent` so the run can be replayed in the dataset viewer.
 
 ---
-
-## Tooling and further reading
-
-- **Runtime patterns:** [pimm/README.md](pimm/README.md) covers control systems, signals, shared-memory transports, and pairing connections.
-- **Dataset internals:** [positronic/dataset/README.md](positronic/dataset/README.md) documents episode layout, writers, lazy transforms, and serializer conventions.
-- **Simulator utilities:** [positronic/simulator/mujoco/](positronic/simulator/mujoco/) contains loaders (e.g. [positronic/simulator/mujoco/transforms.py](positronic/simulator/mujoco/transforms.py)) for augmenting scenes with cameras, objects, and randomisation.
-- **Drivers and teleop:** Consult [positronic/drivers/](positronic/drivers/) for hardware specifics and [positronic/cfg/webxr.py](positronic/cfg/webxr.py) plus assets under [positronic/assets/webxr*/](positronic/assets/webxr*/) for headset/phone frontends.
-
 
 ## Development workflow
 
@@ -259,3 +253,5 @@ Use `uv add` / `uv remove` to modify dependencies and `uv lock` to refresh the l
 - **Deployment & supervision.** WebXR teleoperation ([positronic/cfg/webxr.py](positronic/cfg/webxr.py)), simulator loaders ([positronic/simulator/mujoco/transforms.py](positronic/simulator/mujoco/transforms.py)), an expanding set of hardware drivers ([positronic/drivers](positronic/drivers)), and inference loggers ([positronic/run_inference.py](positronic/run_inference.py)) help you roll out policies, watch live telemetry, and capture diagnostics for regression analysis.
 
 LeRobot is the learning engine; Positronic is the operations stack that keeps data flowing, policies running, and teams iterating on real robots.
+
+## TODO:Roadmap
