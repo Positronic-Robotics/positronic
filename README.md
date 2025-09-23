@@ -4,6 +4,7 @@
 [![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
 [![Tests](https://github.com/Positronic-Robotics/positronic/actions/workflows/unit-test.yaml/badge.svg)](https://github.com/Positronic-Robotics/positronic/actions/workflows/unit-test.yaml)
 [![PyPI](https://img.shields.io/pypi/v/positronic)](https://pypi.org/project/positronic/)
+[![Discord](https://img.shields.io/badge/Discord-Positronic%20Robotics-5865F2?logo=discord&logoColor=white)](https://discord.gg/GfbCeCQT)
 
 ## What is Positronic
 
@@ -19,7 +20,7 @@ It covers the full lifecycle:
 
 Every subsystem is implemented in plain Python so teams can move between simulation, teleoperation, and production code without switching languages or tools.
 
-**Our goal is to make professional-grade ML robotics approachable.** Newcomers get clear defaults, WebXR teleoperation, and a reproducible training story; experienced teams can extend the same stack with custom drivers, schedulers, and datasets to support complex manipulation setups and large fleets.
+**Our goal is to make professional-grade ML robotics approachable. Join the conversation on the [Positronic Discord](https://discord.gg/GfbCeCQT) to share feedback, showcase projects, and get help from the community.**
 
 > **Positronic is under heavy development and in alpha stage. APIs, interfaces, and workflows may change significantly between releases.**
 
@@ -253,7 +254,7 @@ uv run pytest --no-cov
 uv run flake8
 ```
 
-Use `uv add` / `uv remove` to modify dependencies and `uv lock` to refresh the lockfile. Contributions should include or update tests when code changes affect behaviour.
+Use `uv add` / `uv remove` to modify dependencies and `uv lock` to refresh the lockfile. Contributions should include or update tests when code changes affect behaviour. If you want to discuss ideas before sending a PR, hop into the [Discord server](https://discord.gg/GfbCeCQT).
 
 ## How Positronic differs from LeRobot
 
@@ -286,4 +287,4 @@ Our plans evolve with your feedback. Highlights for the next milestones:
   - **Hybrid cloud workflows.** Support ingestion of episodes straight into object storage while keeping local curation/debugging fast, plus optional cloud-hosted inference services.
   - **Remote inference in the cloud.** Deploy heavy but capable ML models in the cloud to control and operate your local hardware.
 
-Let us know what you need at hi@positronic.ro or [open a feature request at Github](https://github.com/Positronic-Robotics/positronic/issues/new).
+Let us know what you need our [Discord server](https://discord.gg/GfbCeCQT), drop us a line at hi@positronic.ro or [open a feature request](https://github.com/Positronic-Robotics/positronic/issues/new) at GitHub.
