@@ -15,6 +15,14 @@ RUN apt-get update && apt-get install -y \
     libfmt-dev \
     lsb-release \
     libhidapi-dev  # Spacemouse
+RUN apt-get update && apt-get install -y software-properties-common
+
+RUN add-apt-repository ppa:ubuntu-toolchain-r/test -y
+RUN apt-get update && apt-get install -y \
+    gcc-13 \
+    g++-13
+RUN update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-13 100 \
+    && update-alternatives --install /usr/bin/g++ g++ /usr/bin/g++-13 100
 
 RUN mkdir -p /etc/apt/keyrings
 RUN curl -fsSL http://robotpkg.openrobots.org/packages/debian/robotpkg.asc | tee /etc/apt/keyrings/robotpkg.asc
@@ -41,6 +49,9 @@ ENV PATH=/$VIRTUAL_ENV/bin:$PATH
 RUN git clone --single-branch --recurse-submodules --branch 0.15.3 https://github.com/frankaemika/libfranka
 RUN mkdir libfranka/build && cd libfranka/build && cmake -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTS=OFF .. && cmake --build . && cmake --install .
 ENV LD_LIBRARY_PATH=/usr/local/lib:$LD_LIBRARY_PATH
+
+ENV PIP_DEFAULT_TIMEOUT=600
+ENV UV_HTTP_TIMEOUT=600
 
 # Copy project metadata and lock for reproducible deps
 COPY pyproject.toml uv.lock .

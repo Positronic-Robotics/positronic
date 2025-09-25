@@ -107,6 +107,7 @@ class DataCollectionController(pimm.ControlSystem):
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Sleep]:  # noqa: C901
         start_wav_path = "positronic/assets/sounds/recording-has-started.wav"
         end_wav_path = "positronic/assets/sounds/recording-has-stopped.wav"
+        abort_wav_path = "positronic/assets/sounds/recording-has-been-aborted.wav"
 
         controller_positions_receiver = pimm.ValueUpdated(self.controller_positions_receiver)
 
@@ -131,9 +132,11 @@ class DataCollectionController(pimm.ControlSystem):
                         tracker.turn_on(self.robot_state.value.ee_pose)
                 elif button_handler.just_pressed('right_stick') and not tracker.umi_mode:
                     print("Resetting robot")
-                    self.ds_agent_commands.emit(DsWriterCommand(DsWriterCommandType.ABORT_EPISODE))
-                    # TODO: add sound for aborting
+                    if recording:
+                        self.ds_agent_commands.emit(DsWriterCommand(DsWriterCommandType.ABORT_EPISODE))
+                        self.sound_emitter.emit(abort_wav_path)
                     tracker.turn_off()
+                    recording = False
                     self.robot_commands.emit(roboarm.command.Reset())
 
                 self.target_grip_emitter.emit(button_handler.get_value('right_trigger'))
@@ -244,6 +247,11 @@ def main(robot_arm: pimm.ControlSystem | None,
                 break
 
 
+@cfn.config(mujoco_model_path="positronic/assets/mujoco/franka_table.xml",
+            webxr=positronic.cfg.webxr.oculus,
+            sound=positronic.cfg.sound.sound,
+            operator_position=OperatorPosition.BACK,
+            loaders=positronic.cfg.simulator.stack_cubes_loaders)
 def main_sim(mujoco_model_path: str,
              webxr: WebXR,
              sound: pimm.ControlSystem | None = None,
@@ -259,9 +267,12 @@ def main_sim(mujoco_model_path: str,
         'handcam_left': MujocoCamera(sim.model, sim.data, 'handcam_left_ph', (320, 240), fps=fps),
         'handcam_right': MujocoCamera(sim.model, sim.data, 'handcam_right_ph', (320, 240), fps=fps),
     }
-    side_camera = MujocoCamera(sim.model, sim.data, 'agentview', (320, 240), fps=fps)
-    gripper = MujocoGripper(sim, actuator_name='actuator8_ph', joint_name='finger_joint1_ph')
+    vis_cameras = [
+        MujocoCamera(sim.model, sim.data, 'agentview', (320, 240), fps=fps),
+        MujocoCamera(sim.model, sim.data, 'birdview', (320, 240), fps=fps)
+    ]
     gui = DearpyguiUi()
+    gripper = MujocoGripper(sim, actuator_name='actuator8_ph', joint_name='finger_joint1_ph')
 
     def metadata_getter():
         return {k: v.tolist() for k, v in sim.save_state().items()}
@@ -281,9 +292,10 @@ def main_sim(mujoco_model_path: str,
         for camera_name, camera in cameras.items():
             world.connect(camera.frame, gui.cameras[camera_name])
 
-        world.connect(side_camera.frame, gui.cameras['side'])
+        for camera in vis_cameras:
+            world.connect(camera.frame, gui.cameras[camera.camera_name])
 
-        sim_iter = world.start([sim, *cameras.values(), robot_arm, gripper, data_collection, side_camera], bg_cs)
+        sim_iter = world.start([sim, *cameras.values(), robot_arm, gripper, data_collection, *vis_cameras], bg_cs)
         sim_iter = iter(sim_iter)
 
         start_time = pimm.world.SystemClock().now_ns()
@@ -311,15 +323,6 @@ main_cfg = cfn.Config(
         'right': positronic.cfg.hardware.camera.arducam_right,
     },
     operator_position=OperatorPosition.FRONT,
-)
-
-main_sim_cfg = cfn.Config(
-    main_sim,
-    mujoco_model_path="positronic/assets/mujoco/franka_table.xml",
-    webxr=positronic.cfg.webxr.oculus,
-    sound=positronic.cfg.sound.sound,
-    operator_position=OperatorPosition.BACK,
-    loaders=positronic.cfg.simulator.stack_cubes_loaders,
 )
 
 
@@ -350,6 +353,6 @@ if __name__ == "__main__":
     cfn.cli({
         "real": main_cfg,
         "so101": so101cfg,
-        "sim": main_sim_cfg,
+        "sim": main_sim,
         "droid": droid,
     })

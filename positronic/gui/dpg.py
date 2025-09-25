@@ -1,6 +1,5 @@
-from typing import Iterator, List
+from typing import Dict, Iterator, List, Tuple
 
-import cv2
 import dearpygui.dearpygui as dpg
 import numpy as np
 
@@ -15,35 +14,37 @@ def _get_down_keys() -> List[int]:
 class DearpyguiUi(pimm.ControlSystem):
 
     def __init__(self):
-        self.width = 320
-        self.height = 240
-        # Instance-level state to survive pickling into subprocesses
+
         self.cameras = pimm.ReceiverDict(self)
+        self.im_sizes = {}
         self.info = pimm.ControlSystemReceiver(self)
         self.buttons = pimm.ControlSystemEmitter(self)
 
-    def init(self):
-        self.cameras = {
-            cam_name: pimm.DefaultReceiver(pimm.ValueUpdated(reader), (None, False))
-            for cam_name, reader in self.cameras.items()
-        }
+    def init(self, im_sizes: Dict[str, Tuple[int, int]]):
+        self.im_sizes = im_sizes
+        self.n_rows = max(1, int(np.ceil(np.sqrt(len(self.cameras)))))
+        self.n_cols = max(1, int(np.ceil(len(self.cameras) / self.n_rows)))
+
+        first_height, first_width = next(iter(self.im_sizes.values()))
+        self.im_height = first_height
+        self.im_width = first_width
+
         self.raw_textures = {
-            cam_name: np.ones((self.height, self.width, 4), dtype=np.float32)
-            for cam_name in self.cameras.keys()
+            cam_name: np.ones((height, width, 4), dtype=np.float32)
+            for cam_name, (height, width) in self.im_sizes.items()
         }
-        print(self.raw_textures.keys())
 
         dpg.create_context()
         with dpg.texture_registry():
-            for cam_name in self.cameras.keys():
-                dpg.add_raw_texture(width=self.width,
-                                    height=self.height,
+            for cam_name, (height, width) in self.im_sizes.items():
+                dpg.add_raw_texture(width=width,
+                                    height=height,
                                     tag=cam_name,
                                     format=dpg.mvFormat_Float_rgba,
                                     default_value=self.raw_textures[cam_name])
 
         with dpg.window(tag="image_grid", label="Cameras", no_scrollbar=True, no_scroll_with_mouse=True):
-            self._configure_image_grid()
+            self._configure_image_grid(len(self.cameras))
 
         with dpg.window(label="Info"):
             dpg.add_text("", tag="info")
@@ -59,52 +60,68 @@ class DearpyguiUi(pimm.ControlSystem):
         dpg.show_viewport(maximized=True)
 
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Sleep]:
-        self.init()
+        cameras = {
+            cam_name: pimm.DefaultReceiver(pimm.ValueUpdated(reader), (None, False))
+            for cam_name, reader in self.cameras.items()
+        }
+
         fps_counter = pimm.utils.RateCounter("UI")
         frame_fps_counter = pimm.utils.RateCounter("Frame")
 
         info_receiver = pimm.DefaultReceiver(self.info, "")
 
-        while not should_stop.value and dpg.is_dearpygui_running():
-            fps_counter.tick()
-            pressed_keys = _get_down_keys()
-            self.buttons.emit(pimm.Message(pressed_keys))
+        im_sizes = dict()
+        init_done = False
 
-            for cam_name, camera in self.cameras.items():
+        if not init_done and len(cameras) == 0:
+            self.init({})
+            init_done = True
+
+        while not should_stop.value and (not init_done or dpg.is_dearpygui_running()):
+            if init_done:
+                fps_counter.tick()
+                pressed_keys = _get_down_keys()
+                self.buttons.emit(pimm.Message(pressed_keys))
+
+            for cam_name, camera in cameras.items():
                 frame, is_new = camera.value
 
                 if frame is not None and is_new:
                     image = frame['image']
-                    if image.shape[:2] != (self.height, self.width):
-                        image = cv2.resize(image, (self.width, self.height))
-                    self.raw_textures[cam_name][:, :, :3] = image
-                    self.raw_textures[cam_name][:, :, :3] /= 255
+                    if cam_name not in im_sizes:
+                        im_sizes[cam_name] = image.shape[:2]
+                        print(f"Have {len(im_sizes)}/{len(cameras)} images")
+                        if not init_done and len(im_sizes) == len(cameras):
+                            self.init(im_sizes)
+                            init_done = True
+
+                    if init_done:
+                        texture = self.raw_textures[cam_name]
+                        texture[:, :, :3] = image
+                        texture[:, :, :3] /= 255
                     frame_fps_counter.tick()
 
-            info_text = info_receiver.value
+            if init_done:
+                info_text = info_receiver.value
+                dpg.set_value("info", info_text)
+                dpg.render_dearpygui_frame()
 
-            dpg.set_value("info", info_text)
-            dpg.render_dearpygui_frame()
             yield pimm.Pass()
 
         print("GUI stopped")
 
-    def _configure_image_grid(self):
-        n_images = len(self.cameras.keys())
+    def _configure_image_grid(self, n_images: int):
         if n_images == 0:
             return
 
-        n_cols = int(np.ceil(np.sqrt(n_images)))
-        n_rows = int(np.ceil(n_images / n_cols))
-
         with dpg.table(header_row=False):
-            for _ in range(n_cols):
+            for _ in range(self.n_cols):
                 dpg.add_table_column()
 
-            for i in range(n_rows):
+            for i in range(self.n_rows):
                 with dpg.table_row():
-                    for j in range(n_cols):
-                        idx = i * n_cols + j
+                    for j in range(self.n_cols):
+                        idx = i * self.n_cols + j
                         if idx < n_images:
                             cam_name = list(self.cameras.keys())[idx]
                             dpg.add_image(texture_tag=cam_name, tag=f"image_{cam_name}")

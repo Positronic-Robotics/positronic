@@ -3245,7 +3245,7 @@ wheels = [
 
 [[package]]
 name = "positronic"
-version = "0.1.0rc2"
+version = "0.1.0"
 source = { editable = "." }
 dependencies = [
     { name = "av" },
@@ -4011,7 +4011,7 @@ dependencies = [
     { name = "numpy", marker = "sys_platform == 'linux'" },
 ]
 wheels = [
-    { url = "https://download.stereolabs.com/zedsdk/5.0/whl/linux_x86_64/pyzed-5.0-cp311-cp311-linux_x86_64.whl", hash = "sha256:339a3ddfc29be881cecba3bfbf7257b163d2190d71f004959128a6085e6a8686" },
+    { url = "https://download.stereolabs.com/zedsdk/5.0/whl/linux_x86_64/pyzed-5.0-cp311-cp311-linux_x86_64.whl", hash = "sha256:ace1b1087201ba2a3632e9fb978edaf098994b2127d94519d986fe52c52b9793" },
 ]
 
 [package.metadata]

@@ -123,10 +123,11 @@ This command loads the [MuJoCo scene](positronic/assets/mujoco/franka_table.xml)
 
 ![Data collection GUI](positronic/assets/docs/dc_gui.png)
 
+When you are done, press `Ctrl+C` to stop the server.
+
 #### Use a mobile phone as a controller
 
 Both sim and real robots can be controlled by position tracking devices, such as a phone with WebXR-enabled browser or VR Helmet (we use Oculus Quest 3, though any VR device will work).
-
 
 Here's how to do it with your phone:
 

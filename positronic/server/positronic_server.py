@@ -1,7 +1,4 @@
-"""A FastAPI web server for visualizing Positronic LocalDatasets using Rerun.
-
-Requires `positronic[server]` extras to be installed.
-"""
+"""A FastAPI web server for visualizing Positronic LocalDatasets using Rerun."""
 
 import logging
 import os
@@ -20,6 +17,7 @@ from fastapi.templating import Jinja2Templates
 from starlette.requests import Request
 
 import configuronic as cfn
+from positronic import utils
 from positronic.dataset.local_dataset import LocalDataset
 from positronic.server.dataset_utils import generate_episode_rrd, get_dataset_info, get_episodes_list
 
@@ -200,7 +198,8 @@ def main(root: str,
     t = threading.Thread(target=load_dataset, daemon=True)
     t.start()
 
-    logging.info(f'Starting server on {host}:{port}')
+    primary_host = utils.resolve_host_ip()
+    logging.info(f'Starting server on http://{primary_host}:{port}')
     uvicorn.run(app, host=host, port=port, log_level="debug" if debug else "info")
 
 

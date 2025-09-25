@@ -15,7 +15,7 @@ from fastapi.responses import FileResponse
 
 
 import pimm
-from positronic import geom
+from positronic import geom, utils
 
 _LOG_CONFIG = {
     'version': 1,
@@ -83,6 +83,11 @@ def _get_or_create_ssl_files(port: int, keyfile: str, certfile: str) -> tuple[st
         raise e
 
     return tmp_key, tmp_cert
+
+
+def _build_access_url(host: str, port: int, use_https: bool) -> str:
+    scheme = "https" if use_https else "http"
+    return f"{scheme}://{host}:{port}/"
 
 
 class WebXR(pimm.ControlSystem):
@@ -225,6 +230,13 @@ class WebXR(pimm.ControlSystem):
         server = uvicorn.Server(config)
         self.server_thread = threading.Thread(target=server.run, daemon=True)
         self.server_thread.start()
+
+        primary_host = utils.resolve_host_ip()
+        url = _build_access_url(primary_host, self.port, self.use_https)
+        banner = "=" * 80
+        print(banner)
+        print(f" >>> WEBXR interface available at: {url} <<<")
+        print(banner)
 
         while not should_stop.value:
             yield pimm.Sleep(0.1)
