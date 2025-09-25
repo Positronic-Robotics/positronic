@@ -28,6 +28,22 @@ from positronic.simulator.mujoco.sim import MujocoCamera, MujocoFranka, MujocoGr
 from positronic.simulator.mujoco.transforms import MujocoSceneTransform
 
 
+def detect_device() -> str:
+    """Select the best available torch device unless one is provided."""
+    if torch.cuda.is_available():
+        return 'cuda'
+
+    mps_backend = getattr(torch.backends, 'mps', None)
+    if mps_backend is not None:
+        is_available = getattr(mps_backend, 'is_available', None)
+        is_built = getattr(mps_backend, 'is_built', None)
+        if callable(is_available) and is_available():
+            if not callable(is_built) or is_built():
+                return 'mps'
+
+    return 'cpu'
+
+
 class Inference(pimm.ControlSystem):
 
     def __init__(self,
@@ -43,10 +59,10 @@ class Inference(pimm.ControlSystem):
         self.device = device
         self.inference_fps = inference_fps
         self.task = task
+
         self.frames = pimm.ReceiverDict(self)
         self.robot_state = pimm.ControlSystemReceiver(self)
         self.gripper_state = pimm.ControlSystemReceiver(self)
-
         self.robot_commands = pimm.ControlSystemEmitter(self)
         self.target_grip = pimm.ControlSystemEmitter(self)
 
@@ -119,13 +135,14 @@ def main_sim(
     loaders: Sequence[MujocoSceneTransform],
     camera_fps: int,
     policy_fps: int,
-    device: str,
     simulation_time: float,
     camera_dict: Mapping[str, str],
     task: str | None,
+    device: str | None = None,
     output_dir: str | None = None,
     show_gui: bool = False,
 ):
+    device = device or detect_device()
     sim = MujocoSim(mujoco_model_path, loaders)
     robot_arm = MujocoFranka(sim, suffix='_ph')
     gripper = MujocoGripper(sim, actuator_name='actuator8_ph', joint_name='finger_joint1_ph')
@@ -194,7 +211,7 @@ main_sim_cfg = cfn.Config(
     policy=positronic.cfg.policy.policy.pi0,
     camera_fps=60,
     policy_fps=15,
-    device='cuda',
+    device=None,
     simulation_time=10,
     camera_dict={
         'handcam_left': 'handcam_left_ph',
