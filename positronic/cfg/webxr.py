@@ -5,3 +5,6 @@ oculus = cfn.Config(WebXR, port=5005, ssl_keyfile="key.pem", ssl_certfile="cert.
 
 # iPhone controller: open http://<server-ip>:5005/ on the phone in XR Browser
 iphone = oculus.override(frontend="iphone", use_https=False)
+
+# Android phones require https
+android = oculus.override(frontend="iphone", use_https=True)

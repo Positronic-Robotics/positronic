@@ -56,7 +56,8 @@ Clone the repository and set up a local `uv` environment (recommended) or use Do
 
 ### Option 1: Local via uv (recommended)
 
-Prerequisites: Python 3.11 and [uv](https://docs.astral.sh/uv/).
+Prerequisites: Python 3.11 and [uv](https://docs.astral.sh/uv/) and `libturbojpeg`
+(`sudo apt install libturbojpeg` on Linux or `brew install jpeg-turbo` on Mac)
 
 ```bash
 git clone git@github.com:Positronic-Robotics/positronic.git
@@ -67,7 +68,7 @@ source .venv/bin/activate     # activate the venv if you created one
 uv sync --frozen --extra dev  # install core + dev tooling
 ```
 
-Install hardware extras only when you need physical robot drivers:
+Install hardware extras only when you need physical robot drivers (Linux only):
 
 ```bash
 uv sync --frozen --extra hardware
@@ -115,30 +116,33 @@ Use the [Data collection script](positronic/data_collection.py) for both simulat
 ```bash
 python -m positronic.data_collection sim \
     --output_dir=~/datasets/stack_cubes_raw \
-    --webxr=.oculus \
-    --operator_position=OperatorPosition.BACK
+    --webxr=.ihpone --operator_position=.BACK
 ```
 
 This command loads the [MuJoCo scene](positronic/assets/mujoco/franka_table.xml) with loaders from the [simulator config](positronic/cfg/simulator.py), starts the [DearPyGui UI](positronic/gui/dpg.py), and records into the [Local dataset writer](positronic/dataset/local_dataset.py).
 
 ![Data collection GUI](positronic/assets/docs/dc_gui.png)
 
+#### Use a mobile phone as a controller
 
-#### Driving physical robots
+Both sim and real robots can be controlled by position tracking devices, such as a phone with WebXR-enabled browser or VR Helmet (we use Oculus Quest 3, though any VR device will work).
 
-Choose the configuration that matches your setup — all presets are defined in [Data collection script](positronic/data_collection.py) using `configuronic`:
 
-```bash
-python -m positronic.data_collection real  --output_dir=~/datasets/franka_kitchen
-python -m positronic.data_collection so101 --output_dir=~/datasets/so101_runs
-python -m positronic.data_collection droid --output_dir=~/datasets/droid_runs
-```
+Here's how to do it with your phone:
 
-Override components inline (e.g. `--webxr=.iphone`, `--sound=None`, `--operator_position=.FRONT`) or add new configs under [Hardware configs](positronic/cfg/hardware/).
+1. Launch data collection with `--webxr=.iphone` or `--webxr=android` (frontend defined in [WebXR config](positronic/cfg/webxr.py)).
+2. On iPhone, you need to use any WebXR-capable browser, such as **XR Browser**. On Android, the your default Chrome should support WebXR out of the box.
+3. On iPhone visit `http://<host-ip>:5005` (note **http**), on Android you will need to use `https://<host-ip>:5005`. WebXR module will print its address in the console.
+4. Tap **Enter AR**, grant camera/gyroscope access, and hold the phone upright; the reticle represents the virtual controller. If you don't see **Enter AR**, it means that either your browser does not support WebXR or you should try with/without https (`--webxr.use_https=True`).
+5. The on-screen HUD from [WebXR phone UI](positronic/assets/webxr_iphone/index.html) provides:
+   - **Record** for episode start/stop.
+   - **Track**  to toggle positional tracking.
+   - **Reset**  to abort the current run and resetting the robot.
+   - **Gripper slider** to control the width of your gripper.
+6. When you are in a tracking mode, the position of your phone controls the position of the gripper in 3D space. Use gripper slides to open/close the gripper.
+7. We suggest you to try to take green boxes and put them on top of the red boxes. You can start/stop recording demonstrations with **Record** button.
 
 #### Teleoperate with a VR headset (Meta Quest / Oculus)
-
-Both sim and real robots can be controlled by position tracking devices, such as VR Helmet (we use Oculus Quest 3, though any VR device will work) or even phone with WebXR-enabled browser.
 
 Here's how to collect the data using VR Helmet:
 1. Launch a collector command with `--webxr=.oculus`.
@@ -152,21 +156,26 @@ Here's how to collect the data using VR Helmet:
    - **Right stick press** — abort the current episode and send `roboarm.command.Reset()`.
    - **Right trigger** — analogue gripper control (captured as the `target_grip` signal).
 
-#### Use an iPhone as a controller
-
-1. Launch data collection with `--webxr=.iphone` (frontend defined in [WebXR config](positronic/cfg/webxr.py)).
-2. On the phone open **XR Browser** (or any WebXR-capable browser) and visit `http://<host-ip>:5005/`.
-3. Tap **Enter AR**, grant camera/gyroscope access, and hold the phone upright; the reticle represents the virtual controller.
-4. The on-screen HUD from [WebXR phone UI](positronic/assets/webxr_iphone/index.html) provides:
-   - **Record** for episode start/stop.
-   - **Track**  to toggle positional tracking.
-   - **Reset**  to abort the current run and resetting the robot.
-   - **Gripper slider** to control the width of your gripper.
 
 #### Collection tips
 
 - Watch the DearPyGui window to confirm cameras and robot state update reliably. Restart an episode instead of saving partial data when something goes wrong.
 - Record a few calibration runs first, review them, then capture full demonstrations.
+- We recommend you to collect at least 30 (50 even better) demonstrations, otherwise the policy won't be able to learn anything.
+
+#### Driving physical robots
+
+In the similar manner as you manage the virtual robot in simulator, you can drive robotic arms in the real life. Currently we support Franka and Kinova 7-DoF arms.
+Choose the configuration that matches your setup — all presets are defined in [Data collection script](positronic/data_collection.py) using `configuronic`:
+
+```bash
+python -m positronic.data_collection real  --output_dir=~/datasets/franka_kitchen
+python -m positronic.data_collection so101 --output_dir=~/datasets/so101_runs
+python -m positronic.data_collection droid --output_dir=~/datasets/droid_runs
+```
+
+Override components inline (e.g. `--webxr=.iphone`, `--sound=None`, `--operator_position=.FRONT`,
+ `--robot_arm=@positronic.cfg.hardware.roboarm.kinova`) or add new configs under [Hardware configs](positronic/cfg/hardware/).
 
 ### 3. Review and curate datasets
 
@@ -258,13 +267,13 @@ Use `uv add` / `uv remove` to modify dependencies and `uv lock` to refresh the l
 
 ## How Positronic differs from LeRobot
 
-[LeRobot](https://github.com/huggingface/lerobot) packages imitation- and reinforcement-learning algorithms, public datasets, and affordable reference robots so anyone can train and share policies. Positronic builds on that progress but is **aimed at teams running professional systems end to end**:
+If you want to explore ML robotics, prototype policies, or learn the basics, use [LeRobot](https://github.com/huggingface/lerobot). It shines for teaching and fast experiments with imitation/reinforcement learning and public datasets.
 
-- **Runtime & middleware.** [`pimm`](pimm/README.md) wires sensors, arms, teleop clients, and inference loops on production hardware without ROS launch files or bespoke DSLs.
-- **Data operations.** [Positronic dataset library](positronic/dataset/README.md) is a powerful library for robotic datasets.
-- **Deployment & supervision.** WebXR teleoperation ([WebXR config](positronic/cfg/webxr.py)), simulator loaders ([MuJoCo transform helpers](positronic/simulator/mujoco/transforms.py)), an expanding set of hardware drivers ([Drivers package](positronic/drivers)), and inference loggers ([Inference script](positronic/run_inference.py)) help you roll out policies, watch live telemetry, and capture diagnostics for regression analysis.
+If you need to build and operate real applications, use Positronic. Beyond training, it provides the runtime, data tooling, teleoperation, and hardware integrations required to put policies on robots, monitor them, and iterate safely.
 
-LeRobot is the learning engine; Positronic is the operations stack that keeps data flowing, policies running, and teams iterating on real robots.
+- LeRobot: training‑centric; quick demos and learning on reference robots and open datasets.
+- Positronic: lifecycle‑centric; immediate‑mode middleware ([Pimm](pimm/README.md)), first‑class data ops ([Positronic dataset](positronic/dataset/README.md)), and hardware‑first operations ([Drivers](positronic/drivers), [WebXR](positronic/cfg/webxr.py), [inference](positronic/run_inference.py)).
+
 
 ## Roadmap
 
