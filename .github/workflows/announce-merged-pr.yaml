@@ -1,0 +1,67 @@
+name: Announce merged PRs
+
+on:
+  pull_request:
+    types: [closed]
+
+jobs:
+  notify-discord:
+    # Only if actually merged, and only if merged into main
+    if: >
+      github.event.pull_request.merged == true &&
+      github.event.pull_request.base.ref == 'main'
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: read
+    steps:
+      - name: Post Discord embed
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_HOOK }} # add in repo Settings → Secrets and variables → Actions
+          REPO: ${{ github.repository }}
+          PR_NUM: ${{ github.event.pull_request.number }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
+          MERGED_BY: ${{ github.event.pull_request.merged_by.login }}
+          BASE_BRANCH: ${{ github.event.pull_request.base.ref }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: |
+          # Normalize/trim body (Discord embed description limit is 4096 chars)
+          body="${PR_BODY:-}"
+          # Strip CRs to avoid Windows line breaks
+          body="${body//$'\r'/}"
+          # Truncate to ~3500 chars to leave room for formatting
+          body="${body:0:3500}"
+
+          merged_by="${MERGED_BY:-unknown}"
+
+          # Build JSON safely with jq so all characters are escaped correctly
+          payload=$(jq -n \
+            --arg repo "$REPO" \
+            --arg num "$PR_NUM" \
+            --arg title "$PR_TITLE" \
+            --arg url "$PR_URL" \
+            --arg body "$body" \
+            --arg author "$PR_AUTHOR" \
+            --arg base "$BASE_BRANCH" \
+            --arg merged_by "$merged_by" \
+            '{
+              username: "GitHub",
+              embeds: [{
+                title: ("PR Merged: #"+$num+" \u2013 "+$title),
+                url: $url,
+                description: $body,
+                color: 5814783,
+                fields: [
+                  { "name": "Repository", "value": $repo, "inline": true },
+                  { "name": "Author", "value": ("@" + $author), "inline": true },
+                  { "name": "Merged into", "value": ("`" + $base + "`"), "inline": true }
+                ],
+                footer: { "text": ("Merged by " + $merged_by) }
+              }]
+            }')
+
+          curl -sS -X POST \
+            -H "Content-Type: application/json" \
+            -d "$payload" \
+            "$DISCORD_WEBHOOK_URL"
