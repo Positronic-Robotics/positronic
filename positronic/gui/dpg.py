@@ -6,6 +6,9 @@ import numpy as np
 import pimm
 
 
+_DEFAULT_IMAGE_SHAPE = (240, 320)
+
+
 def _get_down_keys() -> List[int]:
     all_keys = [getattr(dpg, key) for key in dir(dpg) if key.startswith("mvKey_")]
     return [key for key in all_keys if dpg.is_key_down(key)]
@@ -25,7 +28,10 @@ class DearpyguiUi(pimm.ControlSystem):
         self.n_rows = max(1, int(np.ceil(np.sqrt(len(self.cameras)))))
         self.n_cols = max(1, int(np.ceil(len(self.cameras) / self.n_rows)))
 
-        first_height, first_width = next(iter(self.im_sizes.values()))
+        if self.im_sizes:
+            first_height, first_width = next(iter(self.im_sizes.values()))
+        else:
+            first_height, first_width = _DEFAULT_IMAGE_SHAPE
         self.im_height = first_height
         self.im_width = first_width
 
