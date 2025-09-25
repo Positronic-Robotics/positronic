@@ -1,41 +1,64 @@
-name: Announce merged PRs
+name: Announce merged PRs (main only)
 
 on:
-  pull_request:
-    types: [closed]
+  push:
+    branches: [ main ]
 
 jobs:
-  notify-discord:
-    # Only if actually merged, and only if merged into main
-    if: >
-      github.event.pull_request.merged == true &&
-      github.event.pull_request.base.ref == 'main'
+  announce:
     runs-on: ubuntu-latest
     permissions:
+      contents: read
       pull-requests: read
     steps:
-      - name: Post Discord embed
+      - name: Find PR associated with this commit
+        id: find_pr
+        uses: actions/github-script@v7
         env:
-          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_HOOK }} # add in repo Settings → Secrets and variables → Actions
-          REPO: ${{ github.repository }}
-          PR_NUM: ${{ github.event.pull_request.number }}
-          PR_TITLE: ${{ github.event.pull_request.title }}
-          PR_URL: ${{ github.event.pull_request.html_url }}
-          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
-          MERGED_BY: ${{ github.event.pull_request.merged_by.login }}
-          BASE_BRANCH: ${{ github.event.pull_request.base.ref }}
-          PR_BODY: ${{ github.event.pull_request.body }}
-        run: |
-          # Normalize/trim body (Discord embed description limit is 4096 chars)
-          body="${PR_BODY:-}"
-          # Strip CRs to avoid Windows line breaks
-          body="${body//$'\r'/}"
-          # Truncate to ~3500 chars to leave room for formatting
-          body="${body:0:3500}"
+          SHA: ${{ github.sha }}
+        with:
+          script: |
+            const {owner, repo} = context.repo;
+            const sha = process.env.SHA;
+            const res = await github.rest.repos.listPullRequestsAssociatedWithCommit({
+              owner, repo, commit_sha: sha,
+            });
+            const pr = res.data.find(p => p.merged_at) || res.data[0];
+            if (!pr) {
+              core.setOutput('found', 'false');
+              return;
+            }
+            core.setOutput('found', 'true');
+            core.setOutput('num', pr.number.toString());
+            core.setOutput('title', pr.title || '');
+            core.setOutput('url', pr.html_url || '');
+            core.setOutput('body', pr.body || '');
+            core.setOutput('author', pr.user?.login || 'unknown');
+            core.setOutput('merged_by', pr.merged_by?.login || 'unknown');
+            core.setOutput('base', pr.base?.ref || 'main');
 
+      - name: Stop if no PR
+        if: steps.find_pr.outputs.found != 'true'
+        run: echo "No associated PR found for this push (likely a direct push). Skipping."
+
+      - name: Post Discord embed
+        if: steps.find_pr.outputs.found == 'true'
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}  # add this secret
+          REPO: ${{ github.repository }}
+          PR_NUM: ${{ steps.find_pr.outputs.num }}
+          PR_TITLE: ${{ steps.find_pr.outputs.title }}
+          PR_URL: ${{ steps.find_pr.outputs.url }}
+          PR_AUTHOR: ${{ steps.find_pr.outputs.author }}
+          MERGED_BY: ${{ steps.find_pr.outputs.merged_by }}
+          BASE_BRANCH: ${{ steps.find_pr.outputs.base }}
+          PR_BODY: ${{ steps.find_pr.outputs.body }}
+        run: |
+          body="${PR_BODY:-}"
+          body="${body//$'\r'/}"
+          body="${body:0:3500}"
           merged_by="${MERGED_BY:-unknown}"
 
-          # Build JSON safely with jq so all characters are escaped correctly
           payload=$(jq -n \
             --arg repo "$REPO" \
             --arg num "$PR_NUM" \
@@ -61,7 +84,11 @@ jobs:
               }]
             }')
 
-          curl -sS -X POST \
-            -H "Content-Type: application/json" \
-            -d "$payload" \
-            "$DISCORD_WEBHOOK_URL"
+          if [ -z "$DISCORD_WEBHOOK_URL" ]; then
+            echo "DISCORD_WEBHOOK_URL is empty. Did you create the secret?" >&2
+            exit 1
+          fi
+
+          curl -sS -X POST -H "Content-Type: application/json" \
+               -d "$payload" \
+               "$DISCORD_WEBHOOK_URL"
