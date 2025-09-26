@@ -136,12 +136,24 @@ Here's how to do it with your phone:
 3. On iPhone visit `http://<host-ip>:5005` (note **http**), on Android you will need to use `https://<host-ip>:5005`. WebXR module will print its address in the console.
 4. Tap **Enter AR**, grant camera/gyroscope access, and hold the phone upright; the reticle represents the virtual controller. If you don't see **Enter AR**, it means that either your browser does not support WebXR or you should try with/without https (`--webxr.use_https=True`).
 5. The on-screen HUD from [WebXR phone UI](positronic/assets/webxr_iphone/index.html) provides:
+   - **Track**  starts and stops positional tracking. When it's on, the movements of your phone are translated in the representative movements of robotic arm.
    - **Record** for episode start/stop.
-   - **Track**  to toggle positional tracking.
-   - **Reset**  to abort the current run and resetting the robot.
+   - **Reset**  aborts the current record and/or resetting the robot and scene.
    - **Gripper slider** to control the width of your gripper.
 6. When you are in a tracking mode, the position of your phone controls the position of the gripper in 3D space. Use gripper slides to open/close the gripper.
 7. We suggest you to try to take green boxes and put them on top of the red boxes. You can start/stop recording demonstrations with **Record** button.
+8. So your overall data collection workflow will be:
+  - You start tracking.
+  - You start recording the episode.
+  - With your phone you move the gripper to the green box.
+  - You open the gripper.
+  - You pick the green box and close the gripper to hold it.
+  - You move the gripper using your phone to the red box.
+  - You open the gripper when the green box is on top of the red one.
+  - You stop recording the episode.
+  - You press reset to generate the new scene and start a new demonstration.
+  - If anything went wrong and you want to abort recording, you hit reset.
+
 
 #### Teleoperate with a VR headset (Meta Quest / Oculus)
 

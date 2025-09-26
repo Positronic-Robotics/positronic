@@ -17,9 +17,12 @@
       .buttons { display: flex; gap: 10px; }
       .btn { appearance: none; border: none; border-radius: 10px; padding: 14px 18px; color: #111; font-weight: 700; background: #fff; font-size: 18px; min-width: 110px; }
       .btn:active { transform: translateY(1px); }
-      .btn--track { background: #ffd166; }
-      .btn--record { background: #ef476f; color: #fff; }
-      .btn--reset { background: #6c757d; color: #fff; }
+      .btn--track-off { background: #ffd166; color: #111; }
+      .btn--track-on { background: #073b4c; color: #fff; }
+      .btn--record-off { background: #06d6a0; color: #111; }
+      .btn--record-on { background: #ef476f; color: #fff; }
+      .btn--reset-off { background: #6c757d; color: #fff; }
+      .btn--reset-on { background: #118ab2; color: #fff; }
       /* Make the control area 5x+ larger for easy touch */
       .slider { position: relative; width: 100%; height: 200px; touch-action: none; -webkit-tap-highlight-color: transparent; }
       .slider__track { position: absolute; left: 0; right: 0; top: 50%; transform: translateY(-50%); height: 24px; background: rgba(255,255,255,0.25); border-radius: 999px; }
@@ -50,9 +53,9 @@
         <div class="hint">Slider has extra padding near 0 and 1 for easier reach</div>
         <div class="row" style="margin-top: 12px;">
           <div class="buttons">
-            <button class="btn btn--track" id="btnA" title="Start/Stop Tracking" aria-label="Start or stop tracking">Track</button>
-            <button class="btn btn--record" id="btnB" title="Start/Stop Recording" aria-label="Start or stop recording">Record</button>
-            <button class="btn btn--reset" id="btnReset" title="Reset" aria-label="Reset">Reset</button>
+            <button class="btn btn--track btn--track-off" id="btnA" title="Start Tracking" aria-label="Start Tracking">Start Tracking</button>
+            <button class="btn btn--record btn--record-off" id="btnB" title="Start Recording" aria-label="Start Recording">Start Recording</button>
+            <button class="btn btn--reset btn--reset-off" id="btnReset" title="Reset (press and hold)" aria-label="Reset">Reset</button>
           </div>
       </div>
     </div>
@@ -65,7 +68,6 @@
 
       // Buttons array: indices used: 0 (trigger/gripper), 3 (stick/reset), 4 (A), 5 (B)
       const buttons = new Array(8).fill(0.0);
-      const ephemeralPresses = new Set(); // indices to pulse for 1 frame
 
       // Gripper slider state
       let gripValue = 0.0;
@@ -116,10 +118,115 @@
       }
 
       function setupButtons() {
-        const pulse = (idx) => { ephemeralPresses.add(idx); };
-        document.getElementById('btnA').addEventListener('click', () => pulse(4));
-        document.getElementById('btnB').addEventListener('click', () => pulse(5));
-        document.getElementById('btnReset').addEventListener('click', () => pulse(3));
+        const configs = {
+          reset: {
+            idx: 3,
+            el: document.getElementById('btnReset'),
+            type: 'momentary',
+            labels: { off: 'Reset', on: 'Resetting...' },
+            aria: { off: 'Reset', on: 'Resetting' },
+            titles: { off: 'Reset (press and hold)', on: 'Resetting...' },
+            classes: { off: 'btn--reset-off', on: 'btn--reset-on' }
+          },
+          track: {
+            idx: 4,
+            el: document.getElementById('btnA'),
+            type: 'toggle',
+            labels: { off: 'Start Tracking', on: 'Stop Tracking' },
+            aria: { off: 'Start Tracking', on: 'Stop Tracking' },
+            titles: { off: 'Start Tracking', on: 'Stop Tracking' },
+            classes: { off: 'btn--track-off', on: 'btn--track-on' }
+          },
+          record: {
+            idx: 5,
+            el: document.getElementById('btnB'),
+            type: 'toggle',
+            labels: { off: 'Start Recording', on: 'Stop Recording' },
+            aria: { off: 'Start Recording', on: 'Stop Recording' },
+            titles: { off: 'Start Recording', on: 'Stop Recording' },
+            classes: { off: 'btn--record-off', on: 'btn--record-on' }
+          }
+        };
+
+        const state = {
+          reset: { pressed: false },
+          track: { pressed: false, latched: false },
+          record: { pressed: false, latched: false }
+        };
+
+        const applyVisual = (name) => {
+          const cfg = configs[name];
+          const st = state[name];
+          const active = cfg.type === 'toggle' ? st.latched : st.pressed;
+          const key = active ? 'on' : 'off';
+
+          const label = cfg.labels?.[key];
+          if (label !== undefined) cfg.el.textContent = label;
+
+          const aria = (cfg.aria && cfg.aria[key]) ?? label;
+          if (aria !== undefined) cfg.el.setAttribute('aria-label', aria);
+
+          const title = (cfg.titles && cfg.titles[key]) ?? label;
+          if (title !== undefined) cfg.el.setAttribute('title', title);
+
+          if (cfg.classes) {
+            const allClasses = Object.values(cfg.classes).filter(Boolean);
+            if (allClasses.length) cfg.el.classList.remove(...allClasses);
+            const activeClass = cfg.classes[key];
+            if (activeClass) cfg.el.classList.add(activeClass);
+          }
+        };
+
+        const setPressed = (name, pressed) => {
+          const cfg = configs[name];
+          const st = state[name];
+          if (st.pressed === pressed) return;
+          st.pressed = pressed;
+          buttons[cfg.idx] = pressed ? 1.0 : 0.0;
+          applyVisual(name);
+        };
+
+        const setLatched = (name, latched) => {
+          const cfg = configs[name];
+          if (cfg.type !== 'toggle') return;
+          const st = state[name];
+          if (st.latched === latched) return;
+          st.latched = latched;
+          applyVisual(name);
+        };
+
+        const press = (name) => setPressed(name, true);
+
+        const release = (name, shouldToggle) => {
+          const cfg = configs[name];
+          const st = state[name];
+          if (!st.pressed) return;
+          setPressed(name, false);
+          if (cfg.type === 'toggle' && shouldToggle) {
+            setLatched(name, !st.latched);
+          }
+          if (name === 'reset' && shouldToggle) {
+            setLatched('track', false);
+            setLatched('record', false);
+          }
+        };
+
+        const releaseAll = (shouldToggle) => {
+          for (const name of Object.keys(configs)) {
+            release(name, shouldToggle);
+          }
+        };
+
+        for (const name of Object.keys(configs)) {
+          applyVisual(name);
+          const el = configs[name].el;
+          el.addEventListener('touchstart', () => press(name), { passive: true });
+          el.addEventListener('touchend', () => release(name, true));
+          el.addEventListener('touchcancel', () => release(name, false));
+        }
+
+        window.addEventListener('touchend', () => releaseAll(true));
+        window.addEventListener('touchcancel', () => releaseAll(false));
       }
 
       function onInit() {
@@ -131,15 +238,10 @@
         const p = view.transform.position;
         const q = view.transform.orientation;
         const btns = buttons.slice();
-        if (ephemeralPresses.size > 0) {
-          for (const idx of ephemeralPresses) btns[idx] = 1.0;
-        }
         const controllers = {
           left: null,
           right: { position: [p.x, p.y, p.z], orientation: [q.w, q.x, q.y, q.z], buttons: btns }
         };
-        // Clear pulses after including them in this frame
-        ephemeralPresses.clear();
         return controllers;
       }
 
