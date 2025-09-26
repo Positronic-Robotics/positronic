@@ -15,8 +15,16 @@
       .panel { background: rgba(0,0,0,0.5); backdrop-filter: blur(6px); border-radius: 12px; padding: 12px; color: #fff; font-family: -apple-system, system-ui, sans-serif; pointer-events: auto; }
       .row { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
       .buttons { display: flex; gap: 10px; }
-      .btn { appearance: none; border: none; border-radius: 10px; padding: 14px 18px; color: #111; font-weight: 700; background: #fff; font-size: 18px; min-width: 110px; }
+      .btn { appearance: none; border: none; border-radius: 10px; padding: 10px 14px; color: #111; font-weight: 700; background: #fff; font-size: 16px; min-width: 96px; display: flex; flex-direction: column; align-items: center; gap: 6px; }
       .btn:active { transform: translateY(1px); }
+      .btn__title { line-height: 1; }
+      .btn__status { font-size: 12px; font-weight: 600; padding: 2px 10px; border-radius: 999px; line-height: 1; transition: background-color 0.2s ease, color 0.2s ease; }
+      .btn--toggle .btn__status { background: rgba(0,0,0,0.18); color: #111; }
+      .btn--toggle[data-state="on"] .btn__status { color: #fff; }
+      .btn--track .btn__status { background: rgba(7,59,76,0.18); color: #073b4c; }
+      .btn--track[data-state="on"] .btn__status { background: rgba(255,209,102,0.35); color: #073b4c; }
+      .btn--record .btn__status { background: rgba(239,71,111,0.18); color: #ef476f; }
+      .btn--record[data-state="on"] .btn__status { background: rgba(239,71,111,0.45); color: #fff; }
       .btn--track-off { background: #ffd166; color: #111; }
       .btn--track-on { background: #073b4c; color: #fff; }
       .btn--record-off { background: #06d6a0; color: #111; }
@@ -53,9 +61,18 @@
         <div class="hint">Slider has extra padding near 0 and 1 for easier reach</div>
         <div class="row" style="margin-top: 12px;">
           <div class="buttons">
-            <button class="btn btn--track btn--track-off" id="btnA" title="Start Tracking" aria-label="Start Tracking">Start Tracking</button>
-            <button class="btn btn--record btn--record-off" id="btnB" title="Start Recording" aria-label="Start Recording">Start Recording</button>
-            <button class="btn btn--reset btn--reset-off" id="btnReset" title="Reset (press and hold)" aria-label="Reset">Reset</button>
+            <button class="btn btn--toggle btn--track btn--track-off" id="btnA" title="Tracking disabled" aria-label="Tracking off">
+              <span class="btn__title" data-title>Tracking</span>
+              <span class="btn__status" data-status>Off</span>
+            </button>
+            <button class="btn btn--toggle btn--record btn--record-off" id="btnB" title="Recording stopped" aria-label="Recording stopped">
+              <span class="btn__title" data-title>Recording</span>
+              <span class="btn__status" data-status>Stopped</span>
+            </button>
+            <button class="btn btn--reset btn--reset-off" id="btnReset" title="Reset (press and hold)" aria-label="Reset">
+              <span class="btn__title" data-title>Reset</span>
+              <span class="btn__status" data-status></span>
+            </button>
           </div>
       </div>
     </div>
@@ -123,7 +140,8 @@
             idx: 3,
             el: document.getElementById('btnReset'),
             type: 'momentary',
-            labels: { off: 'Reset', on: 'Resetting...' },
+            baseLabel: 'Reset',
+            labels: { off: '', on: 'Resetting...' },
             aria: { off: 'Reset', on: 'Resetting' },
             titles: { off: 'Reset (press and hold)', on: 'Resetting...' },
             classes: { off: 'btn--reset-off', on: 'btn--reset-on' }
@@ -132,18 +150,20 @@
             idx: 4,
             el: document.getElementById('btnA'),
             type: 'toggle',
-            labels: { off: 'Start Tracking', on: 'Stop Tracking' },
-            aria: { off: 'Start Tracking', on: 'Stop Tracking' },
-            titles: { off: 'Start Tracking', on: 'Stop Tracking' },
+            baseLabel: 'Tracking',
+            labels: { off: 'Off', on: 'On' },
+            aria: { off: 'Tracking off', on: 'Tracking on' },
+            titles: { off: 'Tracking disabled', on: 'Tracking active' },
             classes: { off: 'btn--track-off', on: 'btn--track-on' }
           },
           record: {
             idx: 5,
             el: document.getElementById('btnB'),
             type: 'toggle',
-            labels: { off: 'Start Recording', on: 'Stop Recording' },
-            aria: { off: 'Start Recording', on: 'Stop Recording' },
-            titles: { off: 'Start Recording', on: 'Stop Recording' },
+            baseLabel: 'Recording',
+            labels: { off: 'Stopped', on: 'Active' },
+            aria: { off: 'Recording stopped', on: 'Recording active' },
+            titles: { off: 'Recording stopped', on: 'Recording active' },
             classes: { off: 'btn--record-off', on: 'btn--record-on' }
           }
         };
@@ -161,13 +181,17 @@
           const key = active ? 'on' : 'off';
 
           const label = cfg.labels?.[key];
-          if (label !== undefined) cfg.el.textContent = label;
+          const titleEl = cfg.el.querySelector('[data-title]');
+          if (titleEl) titleEl.textContent = cfg.baseLabel ?? (label ?? titleEl.textContent);
 
-          const aria = (cfg.aria && cfg.aria[key]) ?? label;
+          const statusEl = cfg.el.querySelector('[data-status]');
+          if (statusEl) statusEl.textContent = label ?? '';
+
+          const aria = (cfg.aria && cfg.aria[key]) ?? cfg.baseLabel ?? label;
           if (aria !== undefined) cfg.el.setAttribute('aria-label', aria);
 
-          const title = (cfg.titles && cfg.titles[key]) ?? label;
-          if (title !== undefined) cfg.el.setAttribute('title', title);
+          const titleAttr = (cfg.titles && cfg.titles[key]) ?? aria;
+          if (titleAttr !== undefined) cfg.el.setAttribute('title', titleAttr);
 
           if (cfg.classes) {
             const allClasses = Object.values(cfg.classes).filter(Boolean);
@@ -175,6 +199,9 @@
             const activeClass = cfg.classes[key];
             if (activeClass) cfg.el.classList.add(activeClass);
           }
+
+          if (cfg.type === 'toggle') cfg.el.dataset.state = key;
+          else delete cfg.el.dataset.state;
         };
 
         const setPressed = (name, pressed) => {
@@ -222,11 +249,11 @@
           const el = configs[name].el;
           el.addEventListener('touchstart', () => press(name), { passive: true });
           el.addEventListener('touchend', () => release(name, true));
-          el.addEventListener('touchcancel', () => release(name, false));
+          el.addEventListener('touchcancel', () => release(name, true));
         }
 
         window.addEventListener('touchend', () => releaseAll(true));
-        window.addEventListener('touchcancel', () => releaseAll(false));
+        window.addEventListener('touchcancel', () => releaseAll(true));
       }
 
       function onInit() {
