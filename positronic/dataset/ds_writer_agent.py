@@ -103,6 +103,10 @@ class Serializers:
             case roboarm.command.Reset():
                 return {'.reset': 1}
 
+    @staticmethod
+    def image(input: dict[str, np.ndarray], key: str = 'image'):
+        return input[key]
+
 
 def _extract_names(serializer: Callable[[Any], Any]) -> dict[str, list[str]] | None:
     names = getattr(serializer, 'names', None)

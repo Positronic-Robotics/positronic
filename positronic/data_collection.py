@@ -183,7 +183,7 @@ def _wire(world: pimm.World, cameras: Dict[str, pimm.ControlSystem] | None, data
 
     ds_agent = None
     if dataset_writer is not None:
-        signals_spec = {v: None for v in camera_mappings.values()}
+        signals_spec = {v: Serializers.image for v in camera_mappings.values()}
         signals_spec['target_grip'] = None
         signals_spec['robot_commands'] = Serializers.robot_command
         signals_spec['controller_positions'] = controller_positions_serializer

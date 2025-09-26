@@ -10,12 +10,8 @@ def local(path: str):
     return LocalDataset(Path(path))
 
 
-@cfn.config(transforms=[
-                observation.franka_mujoco_stackcubes,
-                action.absolute_position,
-            ],
-            pass_through=False)
-def transformed(path, transforms, pass_through):
+@cfn.config(observation=observation.franka_mujoco_stackcubes, action=action.absolute_position, pass_through=False)
+def transformed(path, observation, action, pass_through):
     from positronic.dataset.local_dataset import LocalDataset
     from positronic.dataset.transforms import TransformedDataset
-    return TransformedDataset(LocalDataset(Path(path)), *transforms, pass_through=pass_through)
+    return TransformedDataset(LocalDataset(Path(path)), observation, action, pass_through=pass_through)
