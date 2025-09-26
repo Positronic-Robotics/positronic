@@ -112,10 +112,9 @@ def test_inference_emits_cartesian_move(world, clock):
 
     robot_state = make_robot_state([0.1, 0.2, 0.3], [0.4, 0.5, 0.6])
 
-    command_em.emit(InferenceCommand.START())
-
     # Provide a single coherent observation bundle then stop the world loop.
     driver = ManualDriver([
+        (partial(command_em.emit, InferenceCommand.START()), 0.0),
         (partial(emit_ready_payload, frame_em, robot_em, grip_em, robot_state), 0.01),
         (None, 0.05),
     ])
@@ -177,10 +176,9 @@ def test_inference_skips_when_robot_is_moving(world, clock):
 
     robot_state = make_robot_state([0.5, 0.1, 0.2], [0.4, 0.2, 0.1], status=roboarm.RobotStatus.MOVING)
 
-    command_em.emit(InferenceCommand.START())
-
     # Feed an otherwise valid payload but keep status at MOVING so inference must wait.
     driver = ManualDriver([
+        (partial(command_em.emit, InferenceCommand.START()), 0.0),
         (partial(emit_ready_payload, frame_em, robot_em, grip_em, robot_state), 0.01),
         (None, 0.05),
     ])
@@ -213,9 +211,6 @@ def test_inference_waits_for_complete_inputs(world, clock):
 
     assert len(inference.frames) == 1
 
-    # Enable inference loop explicitly.
-    command_em.emit(InferenceCommand.START())
-
     robot_state = make_robot_state([0.2, 0.0, -0.1], [0.7, 0.1, -0.2])
 
     def assert_no_outputs():
@@ -225,6 +220,7 @@ def test_inference_waits_for_complete_inputs(world, clock):
 
     # First send an empty frame, then the full payload and ensure only the latter produces actions.
     driver = ManualDriver([
+        (partial(command_em.emit, InferenceCommand.START()), 0.0),
         (partial(frame_em.emit, {}), 0.01),
         (assert_no_outputs, 0.005),
         (partial(emit_ready_payload, frame_em, robot_em, grip_em, robot_state), 0.01),
