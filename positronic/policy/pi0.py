@@ -1,4 +1,3 @@
-
 from collections import deque
 from typing import Mapping
 import numpy as np
@@ -25,6 +24,7 @@ def _prepare_observations(observation: Mapping[str, torch.Tensor]) -> Mapping[st
 
 
 class PI0RemotePolicy:
+
     def __init__(self, host: str, port: int, n_action_steps: int | None = None):
         self.client = WebsocketClientPolicy(host, port)
         self.action_queue = deque()
@@ -42,6 +42,10 @@ class PI0RemotePolicy:
         action = self.action_queue.popleft()
 
         return torch.tensor(action)
+
+    def reset(self):
+        self.action_queue.clear()
+        self.client.reset()
 
     def to(self, device: str):
         return self
