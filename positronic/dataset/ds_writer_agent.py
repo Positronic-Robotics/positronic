@@ -220,7 +220,11 @@ class DsWriterAgent(pimm.ControlSystem):
                 yield pimm.Sleep(limiter.wait_time())
         finally:
             if ep_writer is not None:
-                ep_writer.__exit__(None, None, None)
+                try:
+                    ep_writer.abort()
+                finally:
+                    ep_writer.__exit__(None, None, None)
+                    print(f"DsWriterAgent: [ABORT] Episode {ep_counter}")
 
     def _handle_command(self, cmd: DsWriterCommand, ep_writer: EpisodeWriter | None,
                         ep_counter: int) -> tuple[EpisodeWriter | None, int]:
