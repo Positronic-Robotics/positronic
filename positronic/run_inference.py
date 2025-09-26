@@ -184,7 +184,7 @@ class Driver(pimm.ControlSystem):
             yield pimm.Sleep(self.simulation_time)
             self.ds_commands.emit(DsWriterCommand(type=DsWriterCommandType.STOP_EPISODE))
             self.inf_commands.emit(InferenceCommand.RESET())
-            yield pimm.Sleep(0.1)  # Let the tnings to propagate
+            yield pimm.Sleep(0.05)  # Let the tnings to propagate
 
 
 def main_sim(

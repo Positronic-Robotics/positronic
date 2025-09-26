@@ -263,14 +263,13 @@ def main_sim(mujoco_model_path: str,
 
     sim = MujocoSim(mujoco_model_path, loaders)
     robot_arm = MujocoFranka(sim, suffix='_ph')
+
     cameras = {
         'handcam_left': MujocoCamera(sim.model, sim.data, 'handcam_left_ph', (320, 240), fps=fps),
         'handcam_right': MujocoCamera(sim.model, sim.data, 'handcam_right_ph', (320, 240), fps=fps),
+        'back_view': MujocoCamera(sim.model, sim.data, 'back_view_ph', (320, 240), fps=fps),
+        'agent_view': MujocoCamera(sim.model, sim.data, 'agentview', (320, 240), fps=fps),
     }
-    vis_cameras = [
-        MujocoCamera(sim.model, sim.data, 'agentview', (320, 240), fps=fps),
-        MujocoCamera(sim.model, sim.data, 'birdview', (320, 240), fps=fps)
-    ]
     gui = DearpyguiUi()
     gripper = MujocoGripper(sim, actuator_name='actuator8_ph', joint_name='finger_joint1_ph')
 
@@ -292,10 +291,7 @@ def main_sim(mujoco_model_path: str,
         for camera_name, camera in cameras.items():
             world.connect(camera.frame, gui.cameras[camera_name])
 
-        for camera in vis_cameras:
-            world.connect(camera.frame, gui.cameras[camera.camera_name])
-
-        sim_iter = world.start([sim, *cameras.values(), robot_arm, gripper, data_collection, *vis_cameras], bg_cs)
+        sim_iter = world.start([sim, *cameras.values(), robot_arm, gripper, data_collection], bg_cs)
         sim_iter = iter(sim_iter)
 
         start_time = pimm.world.SystemClock().now_ns()
