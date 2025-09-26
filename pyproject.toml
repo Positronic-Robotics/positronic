@@ -35,7 +35,7 @@ dependencies = [
     "torch",
     "uvicorn[standard]",
     "lerobot>=0.3.3",  # TODO: Get rid of this, move all usages to standalone scripts
-    "rerun-sdk>=0.22",
+    "rerun-sdk~=0.22",
 ]
 
 [project.scripts]
