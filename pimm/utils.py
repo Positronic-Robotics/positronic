@@ -117,6 +117,10 @@ class RateLimiter:
         self._last_time = None
         self._interval = every_sec if every_sec is not None else 1.0 / hz  # type: ignore
 
+    def reset(self):
+        """Reset the rate limiter."""
+        self._last_time = None
+
     def wait_time(self) -> float:
         """Wait if necessary to enforce the rate limit."""
         now = self._clock.now()

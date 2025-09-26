@@ -7,7 +7,7 @@ from typing import Callable, Iterable, Sequence
 
 import pimm
 
-ScriptStep = tuple[Callable[[], None], float]
+ScriptStep = tuple[Callable[[], None] | None, float]
 
 
 def drive_scheduler(iterator: Iterable[pimm.Sleep], *, clock=None, steps: int = 200) -> None:
@@ -40,7 +40,8 @@ class ManualDriver(pimm.ControlSystem):
         for action, sleep_time in self.script:
             if should_stop.value:
                 return
-            action()
+            if action is not None:
+                action()
             yield pimm.Sleep(sleep_time)
 
 

@@ -8,7 +8,7 @@ from pimm.tests.testing import MockClock
 
 from positronic import geom
 from positronic.drivers import roboarm
-from positronic.run_inference import Inference
+from positronic.run_inference import Inference, InferenceCommand, InferenceCommandType
 from positronic.tests.testing_coutils import ManualDriver, drive_scheduler
 
 
@@ -94,6 +94,7 @@ def emit_ready_payload(frame_emitter, robot_emitter, grip_emitter, robot_state):
     grip_emitter.emit(0.25)
 
 
+@pytest.mark.timeout(3.0)
 def test_inference_emits_cartesian_move(world, clock):
     encoder = StubStateEncoder()
     decoder = StubActionDecoder()
@@ -105,16 +106,18 @@ def test_inference_emits_cartesian_move(world, clock):
     frame_em = world.pair(inference.frames['cam'])
     robot_em = world.pair(inference.robot_state)
     grip_em = world.pair(inference.gripper_state)
+    command_em = world.pair(inference.command)
     command_rx = world.pair(inference.robot_commands)
     grip_rx = world.pair(inference.target_grip)
 
     robot_state = make_robot_state([0.1, 0.2, 0.3], [0.4, 0.5, 0.6])
 
+    command_em.emit(InferenceCommand.START())
+
     # Provide a single coherent observation bundle then stop the world loop.
     driver = ManualDriver([
         (partial(emit_ready_payload, frame_em, robot_em, grip_em, robot_state), 0.01),
-        (lambda: None, 0.01),
-        (world.request_stop, 0.0),
+        (None, 0.05),
     ])
 
     scheduler = world.start([inference, driver])
@@ -156,6 +159,7 @@ def test_inference_emits_cartesian_move(world, clock):
     assert grip_msg.data == pytest.approx(float(decoder.grip))
 
 
+@pytest.mark.timeout(3.0)
 def test_inference_skips_when_robot_is_moving(world, clock):
     encoder = StubStateEncoder()
     decoder = StubActionDecoder()
@@ -167,16 +171,18 @@ def test_inference_skips_when_robot_is_moving(world, clock):
     frame_em = world.pair(inference.frames['cam'])
     robot_em = world.pair(inference.robot_state)
     grip_em = world.pair(inference.gripper_state)
+    command_em = world.pair(inference.command)
     command_rx = world.pair(inference.robot_commands)
     grip_rx = world.pair(inference.target_grip)
 
     robot_state = make_robot_state([0.5, 0.1, 0.2], [0.4, 0.2, 0.1], status=roboarm.RobotStatus.MOVING)
 
+    command_em.emit(InferenceCommand.START())
+
     # Feed an otherwise valid payload but keep status at MOVING so inference must wait.
     driver = ManualDriver([
         (partial(emit_ready_payload, frame_em, robot_em, grip_em, robot_state), 0.01),
-        (lambda: None, 0.01),
-        (world.request_stop, 0.0),
+        (None, 0.05),
     ])
 
     scheduler = world.start([inference, driver])
@@ -189,6 +195,7 @@ def test_inference_skips_when_robot_is_moving(world, clock):
     assert grip_rx.read() is None
 
 
+@pytest.mark.timeout(3.0)
 def test_inference_waits_for_complete_inputs(world, clock):
     encoder = StubStateEncoder()
     decoder = StubActionDecoder()
@@ -200,8 +207,14 @@ def test_inference_waits_for_complete_inputs(world, clock):
     frame_em = world.pair(inference.frames['cam'])
     robot_em = world.pair(inference.robot_state)
     grip_em = world.pair(inference.gripper_state)
+    command_em = world.pair(inference.command)
     command_rx = world.pair(inference.robot_commands)
     grip_rx = world.pair(inference.target_grip)
+
+    assert len(inference.frames) == 1
+
+    # Enable inference loop explicitly.
+    command_em.emit(InferenceCommand.START())
 
     robot_state = make_robot_state([0.2, 0.0, -0.1], [0.7, 0.1, -0.2])
 
@@ -215,11 +228,13 @@ def test_inference_waits_for_complete_inputs(world, clock):
         (partial(frame_em.emit, {}), 0.01),
         (assert_no_outputs, 0.005),
         (partial(emit_ready_payload, frame_em, robot_em, grip_em, robot_state), 0.01),
-        (world.request_stop, 0.0),
+        (None, 0.05),
     ])
 
     scheduler = world.start([inference, driver])
     drive_scheduler(scheduler, clock=clock, steps=30)
+
+    assert policy.last_obs is not None
 
     # Successful path should generate consistent Cartesian moves and grip commands.
     command_msg = command_rx.read()

@@ -62,6 +62,7 @@ dev = [
     "coverage",
     "pytest-cov",
     "pytest-asyncio",
+    "pytest-timeout",
     "pytest",
     "rerun-sdk[notebook]",
 ]

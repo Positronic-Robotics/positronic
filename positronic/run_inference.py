@@ -1,6 +1,8 @@
 from contextlib import nullcontext
+from dataclasses import dataclass
+from enum import Enum
 from pathlib import Path
-from typing import Iterator, Mapping, Sequence
+from typing import Any, Iterator, Mapping, Sequence
 
 import configuronic as cfn
 import numpy as np
@@ -44,6 +46,35 @@ def detect_device() -> str:
     return 'cpu'
 
 
+class InferenceCommandType(Enum):
+    """Commands for the inference."""
+    START = "start"
+    STOP = "stop"
+    RESET = "reset"
+
+
+@dataclass
+class InferenceCommand:
+    """Command for the inference."""
+    type: InferenceCommandType
+    payload: Any | None = None
+
+    @classmethod
+    def START(cls) -> 'InferenceCommand':
+        """Convenience method for creating a START command."""
+        return cls(InferenceCommandType.START, None)
+
+    @classmethod
+    def STOP(cls) -> 'InferenceCommand':
+        """Convenience method for creating a STOP command."""
+        return cls(InferenceCommandType.STOP, None)
+
+    @classmethod
+    def RESET(cls) -> 'InferenceCommand':
+        """Convenience method for creating a RESET command."""
+        return cls(InferenceCommandType.RESET, None)
+
+
 class Inference(pimm.ControlSystem):
 
     def __init__(self,
@@ -66,62 +97,74 @@ class Inference(pimm.ControlSystem):
         self.robot_commands = pimm.ControlSystemEmitter(self)
         self.target_grip = pimm.ControlSystemEmitter(self)
 
+        self.command = pimm.ControlSystemReceiver[InferenceCommand](self)
+
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Sleep]:  # noqa: C901
-        frames = {camera_name: pimm.DefaultReceiver(frame, {}) for camera_name, frame in self.frames.items()}
+        commands = pimm.DefaultReceiver(pimm.ValueUpdated(self.command), (None, False))
+        running = False
 
         rate_limiter = pimm.RateLimiter(clock, hz=self.inference_fps)
 
         while not should_stop.value:
-            frame_messages = {k: v.read() for k, v in frames.items()}
-            if not all('image' in v.data for v in frame_messages.values()):
-                yield pimm.Sleep(0.001)
+            command, is_updated = commands.value
+            if is_updated:
+                match command.type:
+                    case InferenceCommandType.START:
+                        running = True
+                        rate_limiter.reset()
+                    case InferenceCommandType.STOP:
+                        running = False
+                    case InferenceCommandType.RESET:
+                        self.robot_commands.emit(roboarm.command.Reset())
+                        self.target_grip.emit(0.0)
+                        self.policy.reset()
+                        running = False
+                        yield pimm.Pass()
+
+            try:
+                if not running:
+                    continue
+
+                frame_messages = {k: v.value for k, v in self.frames.items()}
+                images = {f"image.{k}": v['image'] for k, v in frame_messages.items() if 'image' in v}
+                if len(images) != len(self.frames):
+                    continue
+
+                robot_state = self.robot_state.value
+                if robot_state.status == roboarm.RobotStatus.MOVING:
+                    # TODO: seems to be necessary to wait previous command to finish
+                    continue
+
+                inputs = {
+                    'robot_position_translation': robot_state.ee_pose.translation,
+                    'robot_position_quaternion': robot_state.ee_pose.rotation.as_quat,
+                    'robot_joints': robot_state.q,
+                    'grip': self.gripper_state.value,
+                }
+                obs = {}
+                for key, val in self.state_encoder.encode(images, inputs).items():
+                    if isinstance(val, np.ndarray):
+                        obs[key] = torch.from_numpy(val).to(self.device)
+                    else:
+                        obs[key] = torch.as_tensor(val).to(self.device)
+
+                if self.task is not None:
+                    obs['task'] = self.task
+
+                action = self.policy.select_action(obs).squeeze(0).cpu().numpy()
+                action_dict = self.action_decoder.decode(action, inputs)
+                target_pos = action_dict['target_robot_position']
+
+                roboarm_command = roboarm.command.CartesianMove(pose=target_pos)
+
+                self.robot_commands.emit(roboarm_command)
+                self.target_grip.emit(action_dict['target_grip'].item())
+            except pimm.NoValueException:
                 continue
+            finally:
+                yield pimm.Sleep(rate_limiter.wait_time())
 
-            images = {f"image.{k}": v.data['image'] for k, v in frame_messages.items()}
 
-            robot_state = self.robot_state.read()
-            if robot_state is None:
-                yield pimm.Sleep(0.001)
-                continue
-
-            gripper_state = self.gripper_state.read()
-            if gripper_state is None:
-                yield pimm.Sleep(0.001)
-                continue
-
-            robot_state = robot_state.data
-
-            if robot_state.status == roboarm.RobotStatus.MOVING:
-                # TODO: seems to be necessary to wait previous command to finish
-                yield pimm.Sleep(0.001)
-                continue
-
-            inputs = {
-                'robot_position_translation': robot_state.ee_pose.translation,
-                'robot_position_quaternion': robot_state.ee_pose.rotation.as_quat,
-                'robot_joints': robot_state.q,
-                'grip': gripper_state.data,
-            }
-            obs = {}
-            for key, val in self.state_encoder.encode(images, inputs).items():
-                if isinstance(val, np.ndarray):
-                    obs[key] = torch.from_numpy(val).to(self.device)
-                else:
-                    obs[key] = torch.as_tensor(val).to(self.device)
-
-            if self.task is not None:
-                obs['task'] = self.task
-
-            action = self.policy.select_action(obs).squeeze(0).cpu().numpy()
-            action_dict = self.action_decoder.decode(action, inputs)
-            target_pos = action_dict['target_robot_position']
-
-            roboarm_command = roboarm.command.CartesianMove(pose=target_pos)
-
-            self.robot_commands.emit(roboarm_command)
-            self.target_grip.emit(action_dict['target_grip'].item())
-
-            yield pimm.Sleep(rate_limiter.wait_time())
 
 
 # TODO: Inference for the real robot
@@ -141,6 +184,7 @@ def main_sim(
     device: str | None = None,
     output_dir: str | None = None,
     show_gui: bool = False,
+    num_iterations: int = 1,
 ):
     device = device or detect_device()
     sim = MujocoSim(mujoco_model_path, loaders)
@@ -169,6 +213,8 @@ def main_sim(
             ds_agent = DsWriterAgent(dataset_writer, signals_spec, time_mode=TimeMode.MESSAGE)
             control_systems.append(ds_agent)
 
+            # TODO: It seems that the right way is for inference to report its inputs,
+            # rather than collecting them directly from "hardware".
             world.connect(robot_arm.state, ds_agent.inputs['robot_state'])
             world.connect(inference.robot_commands, ds_agent.inputs['robot_commands'])
             world.connect(gripper.grip, ds_agent.inputs['grip'])
@@ -187,19 +233,33 @@ def main_sim(
         world.connect(gripper.grip, inference.gripper_state)
         world.connect(inference.target_grip, gripper.target_grip)
 
-        commands = world.pair(ds_agent.command) if ds_agent else None
-        sim_iter = world.start(control_systems, gui)
+        class Driver(pimm.ControlSystem):
+            """Control system that orchestrates inference episodes by sending start/stop commands."""
+            def __init__(self):
+                self.ds_commands = pimm.ControlSystemEmitter(self)
+                self.inf_commands = pimm.ControlSystemEmitter(self)
 
-        if commands is not None:
-            commands.emit(DsWriterCommand(type=DsWriterCommandType.START_EPISODE))
-        p_bar = tqdm.tqdm(total=simulation_time, unit='s')
+            def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock):
+                for _ in range(num_iterations):
+                    self.ds_commands.emit(DsWriterCommand(type=DsWriterCommandType.START_EPISODE))
+                    self.inf_commands.emit(InferenceCommand.START())
+                    yield pimm.Sleep(simulation_time)
+                    self.ds_commands.emit(DsWriterCommand(type=DsWriterCommandType.STOP_EPISODE))
+                    self.inf_commands.emit(InferenceCommand.RESET())
+                    yield pimm.Sleep(0.1)  # Let the tnings to propagate
+
+        driver = Driver()
+        if ds_agent is not None:
+            world.connect(driver.ds_commands, ds_agent.command)
+        world.connect(driver.inf_commands, inference.command)
+
+        sim_iter = world.start([driver, *control_systems], gui)
+
+        p_bar = tqdm.tqdm(total=simulation_time * num_iterations, unit='s')
+
         for _ in sim_iter:
             p_bar.n = round(sim.now(), 1)
             p_bar.refresh()
-            if sim.now() > simulation_time:
-                if commands is not None:
-                    commands.emit(DsWriterCommand(type=DsWriterCommandType.STOP_EPISODE))
-                world.request_stop()
 
 
 main_sim_cfg = cfn.Config(
