@@ -165,9 +165,26 @@ class Inference(pimm.ControlSystem):
                 yield pimm.Sleep(rate_limiter.wait_time())
 
 
-
-
 # TODO: Inference for the real robot
+
+
+class Driver(pimm.ControlSystem):
+    """Control system that orchestrates inference episodes by sending start/stop commands."""
+
+    def __init__(self, num_iterations: int, simulation_time: float):
+        self.num_iterations = num_iterations
+        self.simulation_time = simulation_time
+        self.ds_commands = pimm.ControlSystemEmitter(self)
+        self.inf_commands = pimm.ControlSystemEmitter(self)
+
+    def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock):
+        for _ in range(self.num_iterations):
+            self.ds_commands.emit(DsWriterCommand(type=DsWriterCommandType.START_EPISODE))
+            self.inf_commands.emit(InferenceCommand.START())
+            yield pimm.Sleep(self.simulation_time)
+            self.ds_commands.emit(DsWriterCommand(type=DsWriterCommandType.STOP_EPISODE))
+            self.inf_commands.emit(InferenceCommand.RESET())
+            yield pimm.Sleep(0.1)  # Let the tnings to propagate
 
 
 def main_sim(
@@ -233,22 +250,7 @@ def main_sim(
         world.connect(gripper.grip, inference.gripper_state)
         world.connect(inference.target_grip, gripper.target_grip)
 
-        class Driver(pimm.ControlSystem):
-            """Control system that orchestrates inference episodes by sending start/stop commands."""
-            def __init__(self):
-                self.ds_commands = pimm.ControlSystemEmitter(self)
-                self.inf_commands = pimm.ControlSystemEmitter(self)
-
-            def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock):
-                for _ in range(num_iterations):
-                    self.ds_commands.emit(DsWriterCommand(type=DsWriterCommandType.START_EPISODE))
-                    self.inf_commands.emit(InferenceCommand.START())
-                    yield pimm.Sleep(simulation_time)
-                    self.ds_commands.emit(DsWriterCommand(type=DsWriterCommandType.STOP_EPISODE))
-                    self.inf_commands.emit(InferenceCommand.RESET())
-                    yield pimm.Sleep(0.1)  # Let the tnings to propagate
-
-        driver = Driver()
+        driver = Driver(num_iterations, simulation_time)
         if ds_agent is not None:
             world.connect(driver.ds_commands, ds_agent.command)
         world.connect(driver.inf_commands, inference.command)

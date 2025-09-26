@@ -8,7 +8,7 @@ from pimm.tests.testing import MockClock
 
 from positronic import geom
 from positronic.drivers import roboarm
-from positronic.run_inference import Inference, InferenceCommand, InferenceCommandType
+from positronic.run_inference import Inference, InferenceCommand
 from positronic.tests.testing_coutils import ManualDriver, drive_scheduler
 
 
