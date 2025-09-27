@@ -1,6 +1,7 @@
 import collections.abc as cabc
 from dataclasses import dataclass, field
 from enum import Enum, IntEnum
+from functools import partial
 from typing import Any, Callable
 
 import numpy as np
@@ -104,8 +105,10 @@ class Serializers:
                 return {'.reset': 1}
 
     @staticmethod
-    def image(input: dict[str, np.ndarray], key: str = 'image'):
-        return input[key]
+    def image(key: str = 'image'):
+        def _serializer(key: str, input: dict[str, np.ndarray]):
+            return input[key]
+        return partial(_serializer, key)
 
 
 def _extract_names(serializer: Callable[[Any], Any]) -> dict[str, list[str]] | None:
