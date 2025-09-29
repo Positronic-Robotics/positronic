@@ -117,9 +117,11 @@ class Serializers:
 
     @staticmethod
     def image(key: str = 'image'):
-        def _serializer(key: str, input: dict[str, np.ndarray]):
-            return input[key]
-        return partial(_serializer, key)
+        return partial(_extract_key, key)
+
+
+def _extract_key(key: str, data: dict[str, Any]) -> Any:
+    return data[key]
 
 
 def _extract_names(serializer: Callable[[Any], Any]) -> dict[str, list[str]] | None:

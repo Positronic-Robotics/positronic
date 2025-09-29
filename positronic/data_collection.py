@@ -121,7 +121,7 @@ class DataCollectionController(pimm.ControlSystem):
                 _parse_buttons(self.buttons_receiver.value, button_handler)
                 if button_handler.just_pressed('right_B'):
                     op = DsWriterCommandType.START_EPISODE if not recording else DsWriterCommandType.STOP_EPISODE
-                    meta = self.metadata_getter() if op == DsWriterCommandType.STOP_EPISODE else {}
+                    meta = self.metadata_getter() if op == DsWriterCommandType.START_EPISODE else {}
                     self.ds_agent_commands.emit(DsWriterCommand(op, meta))
                     self.sound_emitter.emit(start_wav_path if not recording else end_wav_path)
                     recording = not recording
