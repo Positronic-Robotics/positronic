@@ -22,6 +22,7 @@ This is a library for recording, storing, sharing and using robotic datasets. We
   - [Local dataset](#local-dataset)
   - [Writing datasets](#writing-datasets)
 - [`DsWriterAgent` (streaming recorder)](#dswriteragent-streaming-recorder)
+- [`DsPlayerAgent` (dataset player)](#dsplayeragent-dataset-player)
 - [Transforms](#transforms)
   - [Building blocks](#building-blocks)
   - [Derived helpers](#derived-helpers)
@@ -355,6 +356,25 @@ Lifecycle
 Notes
 - Use `CLOCK` when building training datasets: it aligns updates with the recorder’s processing timeline so downstream sampling matches what was actually ready for learning.
 - Use `MESSAGE` when logging inference or diagnosis runs: it keeps the source timestamps untouched so you can line up events across control systems and measure propagation delays.
+
+## `DsPlayerAgent` (dataset player)
+
+`DsPlayerAgent` replays recorded `Episode` objects back into a live `pimm` world by streaming signal values on demand. It mirrors the lifecycle style of `DsWriterAgent`, making it easy to pipe existing datasets through simulators, robots, or other consumers.
+
+Component layout
+- Outputs are dynamically declared via `player.outputs[name]` before playback begins; every declared name must map to a dynamic signal in the episode. Static-only items raise `ValueError`, and missing signals raise `KeyError` so wiring mistakes surface immediately.
+- `command` receives control messages. `DsPlayerStartCommand(episode, start_ts=None, end_ts=None)` starts playback, optionally restricting the time window. `DsPlayerAbortCommand()` stops immediately without emitting `finished`.
+- `finished` emits the originating `DsPlayerStartCommand` once all scheduled samples have been streamed.
+- `poll_hz` (default `100 Hz`) governs how frequently the agent checks for new work. Emission timestamps are aligned to the episode timeline: the first emitted sample anchors the playback and later samples preserve their original relative offsets.
+
+Playback semantics
+- Each output stream iterates `episode.signals[name].time[start_ts:end_ts]`, so inputs inherit all carry-back semantics and stepping logic from the dataset core.
+- Emitted timestamps are shifted so that the first sample appears at the clock time the agent received the `START` command. This keeps real-time consumers synchronized with the world clock while preserving inter-sample spacing from the dataset.
+
+Typical use cases
+- Driving robots or simulators from a stored episode while optionally recording the run again. See [`positronic/replay_record.py`](../../positronic/replay_record.py) where `DsPlayerAgent` feeds a Mujoco simulation and simultaneously streams into a `DsWriterAgent` to capture the replay.
+- Scrubbing subsets of an episode (via `start_ts`/`end_ts`) for debugging or visualization tools without rewriting the dataset.
+- Streaming into analysis pipelines that expect live `pimm` signals; consumers just connect to `player.outputs[...]` as if they were real hardware feeds.
 
 ## Transforms
 
