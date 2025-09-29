@@ -615,8 +615,8 @@ class World:
             f"Unsupported connector type: {type(connector)}. Expected ControlSystemEmitter or ControlSystemReceiver.")
 
     def start(self,
-              main_process: ControlSystem | list[ControlSystem],
-              background: ControlSystem | list[ControlSystem] | None = None) -> Iterator[Sleep]:
+              main_process: ControlSystem | list[ControlSystem | None],
+              background: ControlSystem | list[ControlSystem | None] | None = None) -> Iterator[Sleep]:
         """Bind declared connections and launch control systems.
 
         ``main_process`` control systems are scheduled cooperatively in the
@@ -627,8 +627,10 @@ class World:
         ``interleave`` so callers can drive the cooperative scheduler.
         """
         main_process = main_process if isinstance(main_process, list) else [main_process]
+        main_process = [m for m in main_process if m is not None]
         background = background or []
         background = background if isinstance(background, list) else [background]
+        background = [b for b in background if b is not None]
 
         local_cs = set(main_process)
         all_cs = local_cs | set(background)

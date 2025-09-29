@@ -85,7 +85,7 @@ def get_dataset_info(ds: LocalDataset) -> dict[str, Any]:
 def get_episodes_list(ds: LocalDataset) -> list[dict[str, Any]]:
     return [{
         'index': idx,
-        'duration': ep.duraion_ns / 1e9,
+        'duration': ep.duration_ns / 1e9,
         'task': ep.static.get('task', None),
     } for idx, ep in enumerate(ds)]
 

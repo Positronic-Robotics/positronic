@@ -554,7 +554,7 @@ class TransformedEpisode(Episode):
         return self._episode.meta
 
 
-class _LazySequence(Sequence[U]):
+class LazySequence(Sequence[U]):
     """Lazy, indexable view that applies `fn` on element access.
 
     - Supports `len()` and integer indexing.
@@ -568,9 +568,9 @@ class _LazySequence(Sequence[U]):
     def __len__(self) -> int:
         return len(self._seq)
 
-    def __getitem__(self, index: int | slice) -> U | "_LazySequence[U]":
+    def __getitem__(self, index: int | slice) -> U | "LazySequence[U]":
         if isinstance(index, slice):
-            return _LazySequence(self._seq[index], self._fn)
+            return LazySequence(self._seq[index], self._fn)
         return self._fn(self._seq[int(index)])
 
 
@@ -596,7 +596,7 @@ class Image:
             return cv2.resize(img, dsize=(width, height), interpolation=interp_flag)
 
         def fn(x: Sequence[np.ndarray]) -> Sequence[np.ndarray]:
-            return _LazySequence(x, per_frame)
+            return LazySequence(x, per_frame)
 
         return Elementwise(signal, fn, names=['height', 'width', 'channel'])
 
@@ -644,7 +644,7 @@ class Image:
         """
 
         def fn(x: Sequence[np.ndarray]) -> Sequence[np.ndarray]:
-            return _LazySequence(x, partial(Image.resize_with_pad_per_frame, width, height, method))
+            return LazySequence(x, partial(Image.resize_with_pad_per_frame, width, height, method))
 
         return Elementwise(signal, fn, names=['height', 'width', 'channel'])
 
@@ -753,7 +753,7 @@ def recode_rotation(rep_from: geom.Rotation.Representation, rep_to: geom.Rotatio
 
     def fn(x: Sequence[np.ndarray]) -> Sequence[np.ndarray]:
         # TODO: Use batch conversion instead.
-        return _LazySequence(x, lambda v: geom.Rotation.create_from(v, rep_from).to(rep_to).flatten())
+        return LazySequence(x, lambda v: geom.Rotation.create_from(v, rep_from).to(rep_to).flatten())
 
     return Elementwise(signal, fn)
 

@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Callable, Iterable, Sequence
+from typing import Any, Callable, Iterable, Iterator, List, Sequence, Tuple, TypeVar
 
 import pimm
 
 ScriptStep = tuple[Callable[[], None] | None, float]
+
+T = TypeVar('T')
 
 
 def drive_scheduler(iterator: Iterable[pimm.Sleep], *, clock=None, steps: int = 200) -> None:
@@ -48,3 +50,68 @@ class ManualDriver(pimm.ControlSystem):
 def scripted_driver(*steps: ScriptStep) -> ManualDriver:
     """Convenience factory mirroring ``ManualDriver`` construction."""
     return ManualDriver(script=steps)
+
+
+class RecordingEmitter(pimm.SignalEmitter[T]):
+    """Emitter that records all emissions for later assertions."""
+
+    def __init__(self) -> None:
+        self.emitted: List[Tuple[int, T]] = []
+
+    def emit(self, data: T, ts: int = -1) -> bool:
+        self.emitted.append((ts, data))
+        return True
+
+
+class ManualCommandReceiver(pimm.SignalReceiver[T]):
+    """Receiver stub with push/read semantics convenient for tests."""
+
+    def __init__(self) -> None:
+        self._pending: List[pimm.Message[T]] = []
+        self._last: pimm.Message[T] | None = None
+
+    def push(self, data: T, ts: int | None = None) -> None:
+        if ts is None:
+            base = self._pending[-1].ts if self._pending else (self._last.ts if self._last else -1)
+            ts = base + 1
+        self._pending.append(pimm.Message(data, ts))
+
+    def read(self) -> pimm.Message[T] | None:
+        if self._pending:
+            self._last = self._pending.pop(0)
+            return self._last
+        return self._last
+
+
+class MutableShouldStop:
+    """Mutable flag to coordinate manual shutdown in tests."""
+
+    def __init__(self, initial: bool = False) -> None:
+        self._value = initial
+
+    @property
+    def value(self) -> bool:
+        return self._value
+
+    def set(self, value: bool) -> None:
+        self._value = value
+
+
+def drive_until(loop: Iterator[pimm.Sleep], clock, condition, max_steps: int = 100) -> None:
+    for _ in range(max_steps):
+        clock.advance(next(loop).seconds)
+        if condition():
+            return
+    raise AssertionError('Condition not reached within step limit')
+
+
+def run_scripted_agent(agent: pimm.ControlSystem,
+                       script: Sequence[ScriptStep],
+                       *,
+                       world: pimm.World,
+                       clock: Any,
+                       steps: int = 200) -> None:
+    """Run ``agent`` alongside a scripted driver within ``world``."""
+    driver = ManualDriver(script=script)
+    scheduler = world.start([agent, driver])
+    drive_scheduler(scheduler, clock=clock, steps=steps)

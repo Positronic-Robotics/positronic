@@ -133,7 +133,7 @@ class DataCollectionController(pimm.ControlSystem):
                 elif button_handler.just_pressed('right_stick') and not tracker.umi_mode:
                     print("Resetting robot")
                     if recording:
-                        self.ds_agent_commands.emit(DsWriterCommand(DsWriterCommandType.ABORT_EPISODE))
+                        self.ds_agent_commands.emit(DsWriterCommand.ABORT())
                         self.sound_emitter.emit(abort_wav_path)
                     tracker.turn_off()
                     recording = False

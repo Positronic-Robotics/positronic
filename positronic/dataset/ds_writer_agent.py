@@ -39,6 +39,17 @@ class DsWriterCommand:
     type: DsWriterCommandType
     static_data: dict[str, Any] = field(default_factory=dict)
 
+    @staticmethod
+    def START(static_data: dict[str, Any] | None = None):
+        return DsWriterCommand(DsWriterCommandType.START_EPISODE, static_data or {})
+
+    @staticmethod
+    def STOP(static_data: dict[str, Any] | None = None):
+        return DsWriterCommand(DsWriterCommandType.STOP_EPISODE, static_data or {})
+
+    @staticmethod
+    def ABORT():
+        return DsWriterCommand(DsWriterCommandType.ABORT_EPISODE)
 
 # Serializer contract for inputs:
 # - If None is provided for a signal name in signals_spec, the value is passed through unchanged.
@@ -155,12 +166,17 @@ class DsWriterAgent(pimm.ControlSystem):
     """Streams input signals into episodes based on control commands.
 
     Listens on `command` for `DsWriterCommand` messages controlling the
-    episode lifecycle. On `START_EPISODE`, opens a new `EpisodeWriter` from
-    the provided `DatasetWriter` and applies `static_data`. While an episode
-    is open, any updated input signal (from `inputs`) is appended with the
-    current timestamp from `clock`. `STOP_EPISODE` finalizes the writer after
-    applying `static_data`; `ABORT_EPISODE` aborts and discards it. Invalid or
+    episode lifecycle.
+
+    On `START_EPISODE`, opens a new `EpisodeWriter` from the provided
+    `DatasetWriter` and applies `static_data`. While an episode is open, any
+    updated input signal (from `inputs`) is appended with the current timestamp
+    from `clock`. `STOP_EPISODE` finalizes the writer after applying
+    `static_data`; `ABORT_EPISODE` aborts and discards it. Invalid or
     out-of-order commands are ignored with a log message.
+
+    `TimeMode` selects whether timestamps come from the control loop clock
+    (`CLOCK`) or from the producing message (`MESSAGE`).
     """
 
     def __init__(self,

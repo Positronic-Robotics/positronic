@@ -1,3 +1,4 @@
+from functools import partial
 from typing import Any, Callable, List, Sequence, Tuple
 
 import numpy as np
@@ -17,7 +18,7 @@ from positronic.dataset.ds_writer_agent import (
 from positronic.dataset.local_dataset import LocalDataset, LocalDatasetWriter
 from positronic.drivers import roboarm
 from positronic.drivers.roboarm import command as rcmd
-from positronic.tests.testing_coutils import ManualDriver, drive_scheduler
+from positronic.tests.testing_coutils import run_scripted_agent
 
 
 @pytest.fixture
@@ -97,29 +98,18 @@ def build_agent_with_pipes(signals_spec: dict[str, Any],
     return agent, cmd_em, emitters
 
 
-def run_agent(agent: DsWriterAgent,
-              script: Sequence[tuple[Callable[[], None], float]],
-              *,
-              world: pimm.World,
-              clock: MockClock,
-              steps: int = 50) -> None:
-    driver = ManualDriver(script)
-    scheduler = world.start([agent, driver])
-    drive_scheduler(scheduler, clock=clock, steps=steps)
-
-
 def test_start_stop_happy_path(world, clock):
     ds = FakeDatasetWriter()
     agent, cmd_em, emitters = build_agent_with_pipes({"a": None, "b": None}, ds, world)
 
     script = [
-        (lambda: cmd_em.emit(DsWriterCommand(DsWriterCommandType.START_EPISODE, {"user": "alice"})), 0.001),
-        (lambda: emitters["a"].emit(1), 0.001),
-        (lambda: emitters["b"].emit(2), 0.001),
-        (lambda: cmd_em.emit(DsWriterCommand(DsWriterCommandType.STOP_EPISODE, {"done": True})), 0.001),
+        (partial(cmd_em.emit, DsWriterCommand(DsWriterCommandType.START_EPISODE, {"user": "alice"})), 0.001),
+        (partial(emitters["a"].emit, 1), 0.001),
+        (partial(emitters["b"].emit, 2), 0.001),
+        (partial(cmd_em.emit, DsWriterCommand(DsWriterCommandType.STOP_EPISODE, {"done": True})), 0.001),
     ]
 
-    run_agent(agent, script, world=world, clock=clock)
+    run_scripted_agent(agent, script, world=world, clock=clock)
 
     assert len(ds.created) == 1
     w = ds.created[-1]
@@ -134,11 +124,11 @@ def test_episode_finalizes_when_run_stops(world, clock):
     agent, cmd_em, emitters = build_agent_with_pipes({"a": None}, ds, world)
 
     script = [
-        (lambda: cmd_em.emit(DsWriterCommand(DsWriterCommandType.START_EPISODE)), 0.001),
-        (lambda: emitters["a"].emit(42), 0.001),
+        (partial(cmd_em.emit, DsWriterCommand(DsWriterCommandType.START_EPISODE)), 0.001),
+        (partial(emitters["a"].emit, 42), 0.001),
     ]
 
-    run_agent(agent, script, world=world, clock=clock)
+    run_scripted_agent(agent, script, world=world, clock=clock)
 
     assert len(ds.created) == 1
     w = ds.created[-1]
@@ -151,13 +141,13 @@ def test_ignore_duplicate_commands_and_empty_stop(world, clock):
     agent, cmd_em, emitters = build_agent_with_pipes({"x": None}, ds, world)
 
     script = [
-        (lambda: cmd_em.emit(DsWriterCommand(DsWriterCommandType.STOP_EPISODE)), 0.001),
-        (lambda: cmd_em.emit(DsWriterCommand(DsWriterCommandType.START_EPISODE)), 0.001),
-        (lambda: cmd_em.emit(DsWriterCommand(DsWriterCommandType.START_EPISODE)), 0.001),
-        (lambda: cmd_em.emit(DsWriterCommand(DsWriterCommandType.STOP_EPISODE)), 0.001),
+        (partial(cmd_em.emit, DsWriterCommand(DsWriterCommandType.STOP_EPISODE)), 0.001),
+        (partial(cmd_em.emit, DsWriterCommand(DsWriterCommandType.START_EPISODE)), 0.001),
+        (partial(cmd_em.emit, DsWriterCommand(DsWriterCommandType.START_EPISODE)), 0.001),
+        (partial(cmd_em.emit, DsWriterCommand(DsWriterCommandType.STOP_EPISODE)), 0.001),
     ]
 
-    run_agent(agent, script, world=world, clock=clock)
+    run_scripted_agent(agent, script, world=world, clock=clock)
 
     assert len(ds.created) == 1
     w = ds.created[-1]
@@ -169,14 +159,14 @@ def test_abort_flow_then_restart(world, clock):
     agent, cmd_em, emitters = build_agent_with_pipes({"s": None}, ds, world)
 
     script = [
-        (lambda: cmd_em.emit(DsWriterCommand(DsWriterCommandType.START_EPISODE)), 0.001),
-        (lambda: emitters["s"].emit(10), 0.001),
-        (lambda: cmd_em.emit(DsWriterCommand(DsWriterCommandType.ABORT_EPISODE)), 0.001),
-        (lambda: cmd_em.emit(DsWriterCommand(DsWriterCommandType.START_EPISODE)), 0.001),
-        (lambda: emitters["s"].emit(11), 0.001),
+        (partial(cmd_em.emit, DsWriterCommand(DsWriterCommandType.START_EPISODE)), 0.001),
+        (partial(emitters["s"].emit, 10), 0.001),
+        (partial(cmd_em.emit, DsWriterCommand(DsWriterCommandType.ABORT_EPISODE)), 0.001),
+        (partial(cmd_em.emit, DsWriterCommand(DsWriterCommandType.START_EPISODE)), 0.001),
+        (partial(emitters["s"].emit, 11), 0.001),
     ]
 
-    run_agent(agent, script, world=world, clock=clock)
+    run_scripted_agent(agent, script, world=world, clock=clock)
 
     assert len(ds.created) == 2
     w1, w2 = ds.created[0], ds.created[1]
@@ -189,13 +179,13 @@ def test_appends_only_on_updates_and_timestamps_from_clock(world, clock):
     agent, cmd_em, emitters = build_agent_with_pipes({"a": None}, ds, world)
 
     script = [
-        (lambda: cmd_em.emit(DsWriterCommand(DsWriterCommandType.START_EPISODE)), 0.001),
-        (lambda: emitters["a"].emit(1), 0.001),
-        (lambda: None, 0.001),
-        (lambda: emitters["a"].emit(2), 0.001),
+        (partial(cmd_em.emit, DsWriterCommand(DsWriterCommandType.START_EPISODE)), 0.001),
+        (partial(emitters["a"].emit, 1), 0.001),
+        (None, 0.001),
+        (partial(emitters["a"].emit, 2), 0.001),
     ]
 
-    run_agent(agent, script, world=world, clock=clock)
+    run_scripted_agent(agent, script, world=world, clock=clock)
 
     w = ds.created[-1]
     assert len(w.appends) == 2
@@ -210,13 +200,13 @@ def test_time_mode_message_uses_signal_timestamp(world, clock):
     ts_second = 456_000_000
 
     script = [
-        (lambda: cmd_em.emit(DsWriterCommand(DsWriterCommandType.START_EPISODE)), 0.001),
-        (lambda: emitters["a"].emit(1, ts=ts_first), 0.001),
-        (lambda: emitters["a"].emit(2, ts=ts_second), 0.001),
-        (lambda: cmd_em.emit(DsWriterCommand(DsWriterCommandType.STOP_EPISODE)), 0.001),
+        (partial(cmd_em.emit, DsWriterCommand(DsWriterCommandType.START_EPISODE)), 0.001),
+        (partial(emitters["a"].emit, 1, ts=ts_first), 0.001),
+        (partial(emitters["a"].emit, 2, ts=ts_second), 0.001),
+        (partial(cmd_em.emit, DsWriterCommand(DsWriterCommandType.STOP_EPISODE)), 0.001),
     ]
 
-    run_agent(agent, script, world=world, clock=clock)
+    run_scripted_agent(agent, script, world=world, clock=clock)
 
     w = ds.created[-1]
     assert [(s, v) for (s, v, _) in w.appends] == [("a", 1), ("a", 2)]
@@ -234,11 +224,11 @@ def test_serializer_names_declared_on_start(world, clock):
     agent, cmd_em, _ = build_agent_with_pipes({"a": ser}, ds, world)
 
     script = [
-        (lambda: cmd_em.emit(DsWriterCommand(DsWriterCommandType.START_EPISODE)), 0.001),
-        (lambda: cmd_em.emit(DsWriterCommand(DsWriterCommandType.STOP_EPISODE)), 0.001),
+        (partial(cmd_em.emit, DsWriterCommand(DsWriterCommandType.START_EPISODE)), 0.001),
+        (partial(cmd_em.emit, DsWriterCommand(DsWriterCommandType.STOP_EPISODE)), 0.001),
     ]
 
-    run_agent(agent, script, world=world, clock=clock)
+    run_scripted_agent(agent, script, world=world, clock=clock)
 
     writer = ds.created[-1]
     assert writer.meta_calls.get("a") == ['feat']
@@ -256,12 +246,12 @@ def test_dict_serializer_value_with_names(world, clock):
     agent, cmd_em, emitters = build_agent_with_pipes({"sig": ser}, ds, world)
 
     script = [
-        (lambda: cmd_em.emit(DsWriterCommand(DsWriterCommandType.START_EPISODE)), 0.001),
-        (lambda: emitters['sig'].emit(np.array([1.0, 2.0])), 0.001),
-        (lambda: cmd_em.emit(DsWriterCommand(DsWriterCommandType.STOP_EPISODE)), 0.001),
+        (partial(cmd_em.emit, DsWriterCommand(DsWriterCommandType.START_EPISODE)), 0.001),
+        (partial(emitters['sig'].emit, np.array([1.0, 2.0])), 0.001),
+        (partial(cmd_em.emit, DsWriterCommand(DsWriterCommandType.STOP_EPISODE)), 0.001),
     ]
 
-    run_agent(agent, script, world=world, clock=clock)
+    run_scripted_agent(agent, script, world=world, clock=clock)
 
     writer = ds.created[-1]
     assert writer.meta_calls.get('sig.x') == ['a', 'b']
@@ -276,13 +266,13 @@ def test_integration_with_local_dataset_writer(tmp_path, world, clock):
         agent, cmd_em, emitters = build_agent_with_pipes({"a": None, "b": None}, writer, world)
 
         script = [
-            (lambda: cmd_em.emit(DsWriterCommand(DsWriterCommandType.START_EPISODE, {"task": "unit"})), 0.001),
-            (lambda: emitters["a"].emit(10), 0.001),
-            (lambda: emitters["b"].emit(20), 0.001),
-            (lambda: cmd_em.emit(DsWriterCommand(DsWriterCommandType.STOP_EPISODE, {"ok": True})), 0.001),
+            (partial(cmd_em.emit, DsWriterCommand(DsWriterCommandType.START_EPISODE, {"task": "unit"})), 0.001),
+            (partial(emitters["a"].emit, 10), 0.001),
+            (partial(emitters["b"].emit, 20), 0.001),
+            (partial(cmd_em.emit, DsWriterCommand(DsWriterCommandType.STOP_EPISODE, {"ok": True})), 0.001),
         ]
 
-        run_agent(agent, script, world=world, clock=clock)
+        run_scripted_agent(agent, script, world=world, clock=clock)
 
     ds = LocalDataset(tmp_path)
     assert len(ds) == 1
@@ -320,12 +310,12 @@ def test_serializer_scalar_transform(world, clock):
     agent, cmd_em, emitters = build_agent_with_pipes({"x": double}, ds, world)
 
     script = [
-        (lambda: cmd_em.emit(DsWriterCommand(DsWriterCommandType.START_EPISODE)), 0.001),
-        (lambda: emitters["x"].emit(3), 0.001),
-        (lambda: cmd_em.emit(DsWriterCommand(DsWriterCommandType.STOP_EPISODE)), 0.001),
+        (partial(cmd_em.emit, DsWriterCommand(DsWriterCommandType.START_EPISODE)), 0.001),
+        (partial(emitters["x"].emit, 3), 0.001),
+        (partial(cmd_em.emit, DsWriterCommand(DsWriterCommandType.STOP_EPISODE)), 0.001),
     ]
 
-    run_agent(agent, script, world=world, clock=clock)
+    run_scripted_agent(agent, script, world=world, clock=clock)
 
     w = ds.created[-1]
     assert [(s, v) for (s, v, _) in w.appends] == [("x", 6)]
@@ -348,7 +338,7 @@ def test_serializer_dict_expansion(world, clock):
         (lambda: cmd_em.emit(DsWriterCommand(DsWriterCommandType.STOP_EPISODE)), 0.001),
     ]
 
-    run_agent(agent, script, world=world, clock=clock)
+    run_scripted_agent(agent, script, world=world, clock=clock)
 
     w = ds.created[-1]
     names_and_vals = [(s, v) for (s, v, _) in w.appends]
@@ -372,7 +362,7 @@ def test_serializer_none_drops_sample(world, clock):
         (lambda: cmd_em.emit(DsWriterCommand(DsWriterCommandType.STOP_EPISODE)), 0.001),
     ]
 
-    run_agent(agent, script, world=world, clock=clock)
+    run_scripted_agent(agent, script, world=world, clock=clock)
 
     w = ds.created[-1]
     # Only the positive value should be recorded
@@ -393,7 +383,7 @@ def test_transform_3d_serializer(world, clock):
         (lambda: cmd_em.emit(DsWriterCommand(DsWriterCommandType.STOP_EPISODE)), 0.001),
     ]
 
-    run_agent(agent, script, world=world, clock=clock)
+    run_scripted_agent(agent, script, world=world, clock=clock)
 
     w = ds.created[-1]
     names_vals = [(s, v) for (s, v, _) in w.appends]
@@ -443,7 +433,7 @@ def test_robot_state_serializer_drops_reset_and_emits_components(world, clock):
         (lambda: cmd_em.emit(DsWriterCommand(DsWriterCommandType.STOP_EPISODE)), 0.001),
     ]
 
-    run_agent(agent, script, world=world, clock=clock)
+    run_scripted_agent(agent, script, world=world, clock=clock)
 
     w = ds.created[-1]
     items = {name: val for (name, val, _) in w.appends}
@@ -469,7 +459,7 @@ def test_robot_command_serializer_variants(world, clock):
         (lambda: cmd_em.emit(DsWriterCommand(DsWriterCommandType.STOP_EPISODE)), 0.001),
     ]
 
-    run_agent(agent, script, world=world, clock=clock)
+    run_scripted_agent(agent, script, world=world, clock=clock)
 
     w = ds.created[-1]
     items = {name: val for (name, val, _) in w.appends}
