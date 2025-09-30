@@ -1,15 +1,16 @@
+from collections.abc import Iterator, Sequence
 from contextlib import nullcontext
 from pathlib import Path
-from typing import Any, Iterator, Sequence
+from typing import Any
 
 import configuronic as cfn
 import numpy as np
 import tqdm
 
 import pimm
-from positronic import geom
-import positronic.cfg.simulator
 import positronic.cfg.dataset
+import positronic.cfg.simulator
+from positronic import geom
 from positronic.dataset import Dataset, Episode, transforms
 from positronic.dataset.ds_player_agent import DsPlayerAgent, DsPlayerCommand, DsPlayerStartCommand
 from positronic.dataset.ds_writer_agent import DsWriterAgent, DsWriterCommand, Serializers, TimeMode
@@ -22,7 +23,6 @@ from positronic.simulator.mujoco.transforms import MujocoSceneTransform
 
 
 class ReplayController(pimm.ControlSystem):
-
     def __init__(self, episode: Episode):
         self.episode = episode
         self.player_command = pimm.ControlSystemEmitter[DsPlayerCommand](self)
@@ -46,7 +46,6 @@ class ReplayController(pimm.ControlSystem):
 
 
 class RestoreCommand(EpisodeTransform):
-
     @property
     def keys(self) -> Sequence[str]:
         return ['robot_commands']
@@ -58,21 +57,27 @@ class RestoreCommand(EpisodeTransform):
     @staticmethod
     def command_from_pose(pose: Sequence[np.ndarray]) -> Sequence[roboarm.command.CommandType]:
         return transforms.LazySequence(
-            pose, lambda p: roboarm.command.CartesianMove(
-                geom.Transform3D(translation=p[:3], rotation=geom.Rotation.from_quat(p[3:]))))
+            pose,
+            lambda p: roboarm.command.CartesianMove(
+                geom.Transform3D(translation=p[:3], rotation=geom.Rotation.from_quat(p[3:]))
+            ),
+        )
 
 
-@cfn.config(dataset=positronic.cfg.dataset.local,
-            mujoco_model_path="positronic/assets/mujoco/franka_table.xml",
-            loaders=positronic.cfg.simulator.stack_cubes_loaders)
-def main(dataset: Dataset,
-         ep_index: int,
-         mujoco_model_path: str,
-         loaders: Sequence[MujocoSceneTransform] = (),
-         output_dir: str | None = None,
-         show_gui: bool = False,
-         fps: int = 30):
-
+@cfn.config(
+    dataset=positronic.cfg.dataset.local,
+    mujoco_model_path='positronic/assets/mujoco/franka_table.xml',
+    loaders=positronic.cfg.simulator.stack_cubes_loaders,
+)
+def main(
+    dataset: Dataset,
+    ep_index: int,
+    mujoco_model_path: str,
+    loaders: Sequence[MujocoSceneTransform] = (),
+    output_dir: str | None = None,
+    show_gui: bool = False,
+    fps: int = 30,
+):
     dataset = transforms.TransformedDataset(dataset, RestoreCommand(), pass_through=True)
     episode = dataset[ep_index]
 
@@ -82,6 +87,8 @@ def main(dataset: Dataset,
     cameras = {
         'handcam_left': MujocoCamera(sim.model, sim.data, 'handcam_left_ph', (320, 240), fps=fps),
         'handcam_right': MujocoCamera(sim.model, sim.data, 'handcam_right_ph', (320, 240), fps=fps),
+        'back_view': MujocoCamera(sim.model, sim.data, 'back_view_ph', (320, 240), fps=fps),
+        'agent_view': MujocoCamera(sim.model, sim.data, 'agentview', (320, 240), fps=fps),
     }
     gripper = MujocoGripper(sim, actuator_name='actuator8_ph', joint_name='finger_joint1_ph')
     gui = DearpyguiUi() if show_gui else None
@@ -112,6 +119,10 @@ def main(dataset: Dataset,
             world.connect(replay.outputs['target_grip'], ds_agent.inputs['target_grip'])
             world.connect(controller.writer_command, ds_agent.command)
 
+        if gui is not None:
+            for camera_name, camera in cameras.items():
+                world.connect(camera.frame, gui.cameras[camera_name])
+
         world.connect(controller.player_command, replay.command)
         world.connect(replay.finished, controller.finished)
 
@@ -123,5 +134,5 @@ def main(dataset: Dataset,
             p_bar.refresh()
 
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     cfn.cli(main)
