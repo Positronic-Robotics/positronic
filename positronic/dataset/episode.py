@@ -133,7 +133,7 @@ class EpisodeContainer(Episode):
 
     @property
     def keys(self):
-        return {**{k: True for k in self._signals.keys()}, **{k: True for k in self._static.keys()}}.keys()
+        return {**dict.fromkeys(self._signals.keys(), True), **dict.fromkeys(self._static.keys(), True)}.keys()
 
     def __getitem__(self, name: str) -> Signal[Any] | Any:
         if name in self._signals:
@@ -443,8 +443,8 @@ class DiskEpisode(Episode):
         Returns:
             dict_keys: Item names (both dynamic signals and static items)
         """
-        dyn = {k: True for k in self._signal_factories.keys()}
-        stat = {k: True for k in self._static_data.keys()}
+        dyn = dict.fromkeys(self._signal_factories.keys(), True)
+        stat = dict.fromkeys(self._static_data.keys(), True)
         return {**dyn, **stat}.keys()
 
     def __getitem__(self, name: str) -> Signal[Any] | Any:

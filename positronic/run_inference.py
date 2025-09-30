@@ -231,7 +231,7 @@ def main_sim(
     with writer_cm as dataset_writer, pimm.World(clock=sim) as world:
         ds_agent = None
         if dataset_writer is not None:
-            signals_spec = {k: None for k in cameras.keys()}
+            signals_spec = dict.fromkeys(cameras.keys())
             signals_spec['robot_state'] = Serializers.robot_state
             signals_spec['robot_commands'] = Serializers.robot_command
             signals_spec['target_grip'] = None
