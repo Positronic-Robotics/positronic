@@ -1,0 +1,33 @@
+repos:
+  # Ruff - linting and formatting
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.8.4
+    hooks:
+      # Run the linter
+      - id: ruff
+        args: [--fix]
+      # Run the formatter
+      - id: ruff-format
+
+  # General pre-commit hooks
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-yaml
+      - id: check-toml
+      - id: check-added-large-files
+        args: ['--maxkb=1000']
+      - id: check-merge-conflict
+      - id: mixed-line-ending
+
+  # Commit signature verification
+  - repo: local
+    hooks:
+      - id: commit-signature-check
+        name: Commit Signature Verification
+        entry: bash -c 'git verify-commit HEAD 2>/dev/null || { echo "WARNING - Commit is not signed. Please configure GPG/SSH signing"; exit 1; }'
+        language: system
+        stages: [post-commit]
+        pass_filenames: false

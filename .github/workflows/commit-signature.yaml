@@ -1,0 +1,28 @@
+name: Commit Signature Verification
+
+on:
+  pull_request:
+    branches: [ "main" ]
+
+jobs:
+  commit-signature-check:
+    name: Verify Commit Signatures
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Check commit signatures
+        run: |
+          echo "Checking commit signatures..."
+          # Get all commits in the PR
+          git log origin/${{ github.base_ref }}..${{ github.sha }} --pretty=format:"%H %G?" | while read commit_hash sign_status; do
+            if [ "$sign_status" != "G" ] && [ "$sign_status" != "U" ]; then
+              echo "❌ Commit $commit_hash is not signed (status: $sign_status)"
+              echo "Please sign your commits with: git commit -S (GPG) or configure SSH signing"
+              exit 1
+            else
+              echo "✅ Commit $commit_hash is signed"
+            fi
+          done

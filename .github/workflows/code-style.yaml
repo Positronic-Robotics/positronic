@@ -21,7 +21,7 @@ jobs:
       run: uv venv --python 3.11
     - name: Install dev tools from lock
       run: uv sync --frozen --extra dev
-    - name: Run Flake8 linter
+    - name: Run Ruff linter
       run: |
         # Only check Python files that have changed
         if [ "${{ github.event_name }}" == "pull_request" ]; then
@@ -37,7 +37,7 @@ jobs:
         CHANGED_PY_FILES=$(echo "$CHANGED_FILES" | grep -E "\.py$" || true)
 
         if [ -n "$CHANGED_PY_FILES" ]; then
-          echo "$CHANGED_PY_FILES" | xargs uv run flake8 --show-source
+          echo "$CHANGED_PY_FILES" | xargs uv run ruff check --output-format=github
         else
           echo "No Python files changed"
         fi

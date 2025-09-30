@@ -269,14 +269,41 @@ The [Inference script](positronic/run_inference.py) wires the MuJoCo scene, [Obs
 
 ## Development workflow
 
+Don't forget to install development dependencies first
+```bash
+uv sync --frozen --extra dev  # install core + dev tooling
+```
+
+### Initial Setup
+
+Install pre-commit hooks (one-time setup):
+
+```bash
+pre-commit install --hook-type pre-commit --hook-type commit-msg
+```
+
+### Daily Development
+
 Run tests and linters from the root directory:
 
 ```bash
 uv run pytest --no-cov
-uv run flake8
+uv run ruff check .
+uv run ruff format .
 ```
 
-Use `uv add` / `uv remove` to modify dependencies and `uv lock` to refresh the lockfile. Contributions should include or update tests when code changes affect behaviour. If you want to discuss ideas before sending a PR, hop into the [Discord server](https://discord.gg/GfbCeCQT).
+Use `uv add` / `uv remove` to modify dependencies and `uv lock` to refresh the lockfile.
+
+### Contributing
+
+We welcome contributions from the community! Before submitting a pull request, please:
+
+1. Read our [CONTRIBUTING.md](CONTRIBUTING.md) for detailed guidelines
+2. Sign your commits cryptographically (SSH or GPG signing)
+3. Install and use pre-commit hooks for automated checks
+4. Follow our code style guidelines (enforced by Ruff)
+
+For questions or to discuss ideas before sending a PR, hop into the [Discord server](https://discord.gg/GfbCeCQT).
 
 ## How Positronic differs from LeRobot
 
