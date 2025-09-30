@@ -102,12 +102,13 @@ class Inference(pimm.ControlSystem):
         self.robot_commands = pimm.ControlSystemEmitter(self)
         self.target_grip = pimm.ControlSystemEmitter(self)
 
-        self.command = pimm.ControlSystemReceiver[InferenceCommand](self)
+        self.command = pimm.ControlSystemReceiver[InferenceCommand](self, maxsize=3)
 
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Sleep]:  # noqa: C901
         commands = pimm.DefaultReceiver(pimm.ValueUpdated(self.command), (None, False))
         running = False
 
+        # TODO: We should emit new commands per frame, not per inference fps
         rate_limiter = pimm.RateLimiter(clock, hz=self.inference_fps)
 
         while not should_stop.value:
@@ -189,7 +190,7 @@ class Driver(pimm.ControlSystem):
             yield pimm.Sleep(self.simulation_time)
             self.ds_commands.emit(DsWriterCommand(type=DsWriterCommandType.STOP_EPISODE))
             self.inf_commands.emit(InferenceCommand.RESET())
-            yield pimm.Sleep(0.05)  # Let the tnings to propagate
+            yield pimm.Sleep(0.02)  # Let the tnings to propagate
 
 
 def main_sim(
@@ -270,7 +271,6 @@ def main_sim(
         sim_iter = world.start([driver, *control_systems], gui)
 
         p_bar = tqdm.tqdm(total=simulation_time * num_iterations, unit='s')
-
         for _ in sim_iter:
             p_bar.n = round(sim.now(), 1)
             p_bar.refresh()

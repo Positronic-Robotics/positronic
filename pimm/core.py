@@ -145,10 +145,6 @@ class ControlSystemReceiver(SignalReceiver[T]):
     def maxsize(self) -> int | None:
         return self._maxsize
 
-    @maxsize.setter
-    def maxsize(self, maxsize: int | None):
-        self._maxsize = maxsize
-
     @property
     def owner(self) -> ControlSystem:
         return self._owner
