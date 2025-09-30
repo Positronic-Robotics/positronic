@@ -1,6 +1,7 @@
 import heapq
+from collections.abc import Iterator
 from dataclasses import dataclass, field
-from typing import Dict, Iterator, Optional, Tuple
+from typing import Optional
 
 import pimm
 from positronic.dataset import Episode
@@ -9,8 +10,8 @@ from positronic.dataset import Episode
 @dataclass
 class DsPlayerStartCommand:
     episode: Episode
-    start_ts: Optional[int] = None  # Start from `start_ts`
-    end_ts: Optional[int] = None  # End at `end_ts`
+    start_ts: int | None = None  # Start from `start_ts`
+    end_ts: int | None = None  # End at `end_ts`
 
 
 @dataclass
@@ -22,7 +23,6 @@ DsPlayerCommand = DsPlayerStartCommand | DsPlayerAbortCommand
 
 
 class DsPlayerAgent(pimm.ControlSystem):
-
     def __init__(self, poll_hz: float = 100.0):
         self.command = pimm.ControlSystemReceiver[DsPlayerCommand](self)
         self.outputs = pimm.EmitterDict(self)
@@ -31,7 +31,7 @@ class DsPlayerAgent(pimm.ControlSystem):
 
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock):
         commands = pimm.DefaultReceiver(pimm.ValueUpdated(self.command), (None, False))
-        playback: Optional[_Playback] = None
+        playback: _Playback | None = None
         limiter = pimm.utils.RateLimiter(clock, hz=self._poll_hz)
 
         while not should_stop.value:
@@ -68,15 +68,15 @@ class DsPlayerAgent(pimm.ControlSystem):
                 return new_playback
             case DsPlayerAbortCommand():
                 return None
-        raise ValueError(f"Unknown command: {cmd}")
+        raise ValueError(f'Unknown command: {cmd}')
 
 
 @dataclass
 class _Playback:
     command: DsPlayerStartCommand
     start_clock_ns: int
-    heap: list[Tuple[int, int, str, object]] = field(default_factory=list)
-    streams: Dict[str, Iterator[Tuple[object, int]]] = field(default_factory=dict)
+    heap: list[tuple[int, int, str, object]] = field(default_factory=list)
+    streams: dict[str, Iterator[tuple[object, int]]] = field(default_factory=dict)
     start_ts: int | None = None
     counter: int = 0
 
@@ -91,7 +91,7 @@ class _Playback:
         next_ts = self.heap[0][0] - self.start_ts + self.start_clock_ns
         return max(0, next_ts - now_ns)
 
-    def pop(self) -> Tuple[int, str, object]:
+    def pop(self) -> tuple[int, str, object]:
         scheduled_ts, _, name, value = heapq.heappop(self.heap)
         if self.start_ts is None:
             self.start_ts = scheduled_ts
@@ -112,9 +112,10 @@ class _Playback:
         self.counter += 1
 
     @classmethod
-    def start(cls, command: DsPlayerStartCommand, output_names: list[str],
-              start_clock_ns: int) -> Optional['_Playback']:
-        assert output_names, "No output names provided"
+    def start(
+        cls, command: DsPlayerStartCommand, output_names: list[str], start_clock_ns: int
+    ) -> Optional['_Playback']:
+        assert output_names, 'No output names provided'
 
         episode = command.episode
         playback = cls(command, start_clock_ns)
@@ -126,7 +127,7 @@ class _Playback:
                     raise ValueError(f"Requested output '{name}' is static and cannot be emitted")
                 raise KeyError(f"Requested output '{name}' is not present in episode signals")
 
-            playback.streams[name] = iter(signal.time[command.start_ts: command.end_ts])
+            playback.streams[name] = iter(signal.time[command.start_ts : command.end_ts])
             playback.schedule_next(name)
 
         return playback if playback.heap else None

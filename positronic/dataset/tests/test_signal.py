@@ -1,12 +1,13 @@
 import numpy as np
 import pytest
+
+from positronic.dataset.signal import Kind
+from positronic.dataset.vector import SimpleSignal, SimpleSignalWriter
+
 from .utils import DummySignal
 
-from positronic.dataset.vector import SimpleSignal, SimpleSignalWriter
-from positronic.dataset.signal import Kind
 
-
-def create_signal(tmp_path, data_timestamps, name="test.parquet", names=None):
+def create_signal(tmp_path, data_timestamps, name='test.parquet', names=None):
     """Helper to create a Signal with data and timestamps."""
     filepath = tmp_path / name
     with SimpleSignalWriter(filepath, names=names) as writer:
@@ -15,7 +16,7 @@ def create_signal(tmp_path, data_timestamps, name="test.parquet", names=None):
     return SimpleSignal(filepath)
 
 
-def write_data(tmp_path, data_timestamps, name="test.parquet", names=None):
+def write_data(tmp_path, data_timestamps, name='test.parquet', names=None):
     """Helper to write data and return filepath."""
     filepath = tmp_path / name
     with SimpleSignalWriter(filepath, names=names) as writer:
@@ -25,9 +26,8 @@ def write_data(tmp_path, data_timestamps, name="test.parquet", names=None):
 
 
 class TestVectorMeta:
-
     def test_vector_start_last_ts_basic(self, tmp_path):
-        fp = tmp_path / "sig.parquet"
+        fp = tmp_path / 'sig.parquet'
         with SimpleSignalWriter(fp) as w:
             w.append(1, 1000)
             w.append(2, 2000)
@@ -37,7 +37,7 @@ class TestVectorMeta:
         assert s.last_ts == 3000
 
     def test_vector_start_last_ts_empty_raises(self, tmp_path):
-        fp = tmp_path / "empty.parquet"
+        fp = tmp_path / 'empty.parquet'
         with SimpleSignalWriter(fp):
             pass
         s = SimpleSignal(fp)
@@ -48,7 +48,6 @@ class TestVectorMeta:
 
 
 class TestSignalWriterAppend:
-
     def test_append_increasing_timestamps(self, tmp_path):
         signal = create_signal(tmp_path, [(42, 1000), (43, 2000), (44, 3000)])
         assert len(signal) == 3
@@ -57,16 +56,16 @@ class TestSignalWriterAppend:
         assert signal[2] == (44, 3000)
 
     def test_append_non_increasing_timestamp_raises(self, tmp_path):
-        writer = SimpleSignalWriter(tmp_path / "test.parquet")
+        writer = SimpleSignalWriter(tmp_path / 'test.parquet')
         with writer:
             writer.append(42, 1000)
-            with pytest.raises(ValueError, match="is not increasing"):
+            with pytest.raises(ValueError, match='is not increasing'):
                 writer.append(43, 1000)
-            with pytest.raises(ValueError, match="is not increasing"):
+            with pytest.raises(ValueError, match='is not increasing'):
                 writer.append(43, 999)
 
     def test_drop_equal_bytes_threshold_scalar(self, tmp_path):
-        fp = tmp_path / "dedupe_scalar.parquet"
+        fp = tmp_path / 'dedupe_scalar.parquet'
         with SimpleSignalWriter(fp, drop_equal_bytes_threshold=32) as w:
             w.append(42, 1000)
             w.append(42, 2000)  # equal, dropped
@@ -77,7 +76,7 @@ class TestSignalWriterAppend:
         assert s[1] == (43, 3000)
 
     def test_drop_equal_bytes_threshold_numpy_small(self, tmp_path):
-        fp = tmp_path / "dedupe_array.parquet"
+        fp = tmp_path / 'dedupe_array.parquet'
         with SimpleSignalWriter(fp, drop_equal_bytes_threshold=64) as w:
             w.append(np.array([1, 2, 3], dtype=np.int64), 1000)
             w.append(np.array([1, 2, 3], dtype=np.int64), 2000)  # equal content, dropped
@@ -92,7 +91,6 @@ class TestSignalWriterAppend:
 
 
 class TestSignalWriterContext:
-
     def test_context_empty_writer(self, tmp_path):
         filepath = write_data(tmp_path, [])
         assert filepath.exists()
@@ -100,14 +98,14 @@ class TestSignalWriterContext:
         assert len(signal) == 0
 
     def test_context_writes_data(self, tmp_path):
-        filepath = tmp_path / "test.parquet"
+        filepath = tmp_path / 'test.parquet'
         with SimpleSignalWriter(filepath) as writer:
             writer.append(42, 1000)
         signal = SimpleSignal(filepath)
         assert signal.time[1000] == (42, 1000)
 
     def test_context_creates_file(self, tmp_path):
-        filepath = tmp_path / "test.parquet"
+        filepath = tmp_path / 'test.parquet'
         with SimpleSignalWriter(filepath) as writer:
             writer.append(42, 1000)
             assert not filepath.exists()
@@ -129,7 +127,7 @@ class TestSignalWriterContext:
         assert ts1 == 2000
 
     def test_simple_writer_abort_removes_file_and_blocks_usage(self, tmp_path):
-        fp = tmp_path / "abort.parquet"
+        fp = tmp_path / 'abort.parquet'
         with SimpleSignalWriter(fp) as w:
             w.append(1, 1000)
             w.abort()
@@ -139,9 +137,8 @@ class TestSignalWriterContext:
 
 
 class TestVectorInterface:
-
     def test_len_and_search_ts_empty(self, tmp_path):
-        s = create_signal(tmp_path, [], "empty.parquet")
+        s = create_signal(tmp_path, [], 'empty.parquet')
         assert len(s) == 0
         empty = s._search_ts(np.array([], dtype=np.int64))
         assert isinstance(empty, np.ndarray)
@@ -156,7 +153,7 @@ class TestVectorInterface:
         assert s._search_ts([1999.9])[0] == 0
         # Reject non-numeric dtype
         with pytest.raises(TypeError):
-            _ = s._search_ts(np.array(["1000"], dtype=object))
+            _ = s._search_ts(np.array(['1000'], dtype=object))
 
     def test_values_and_ts_at(self, tmp_path):
         s = create_signal(tmp_path, [(np.array([1, 2]), 1000), (np.array([3, 4]), 2000)])
@@ -179,7 +176,6 @@ def sig_simple():
 
 
 class TestCoreSignalBasics:
-
     def test_start_last_ts_basic(self, sig_simple):
         assert sig_simple.start_ts == 1000
         assert sig_simple.last_ts == 5000
@@ -231,7 +227,6 @@ class TestCoreSignalBasics:
 
 
 class TestCoreSignalTime:
-
     def test_time_scalar_cases(self, sig_simple):
         with pytest.raises(KeyError):
             _ = sig_simple.time[999]
@@ -303,7 +298,6 @@ class TestCoreSignalTime:
 
 
 class TestCoreSignalViews:
-
     def test_index_then_index(self, sig_simple):
         v1 = sig_simple[1:4]
         v2 = v1[::2]
@@ -355,9 +349,8 @@ class TestCoreSignalViews:
 
 
 class TestSignalDtypeShape:
-
     def test_empty_signal_dtype_shape_raises(self, tmp_path):
-        fp = tmp_path / "empty.parquet"
+        fp = tmp_path / 'empty.parquet'
         with SimpleSignalWriter(fp):
             pass
         s = SimpleSignal(fp)
@@ -380,18 +373,18 @@ class TestSignalDtypeShape:
     def test_vector_signal_kind_and_names(self, tmp_path):
         arr1 = np.array([1.0, 2.0], dtype=np.float32)
         arr2 = np.array([3.0, 4.0], dtype=np.float32)
-        s = create_signal(tmp_path, [(arr1, 1000), (arr2, 2000)], name="vec.parquet")
+        s = create_signal(tmp_path, [(arr1, 1000), (arr2, 2000)], name='vec.parquet')
         assert s.names is None
         assert s.kind == Kind.NUMERIC
 
     def test_vector_signal_names_persist(self, tmp_path):
         arr1 = np.array([1.0, 2.0], dtype=np.float32)
         arr2 = np.array([3.0, 4.0], dtype=np.float32)
-        feature_names = ["pos_x", "pos_y"]
+        feature_names = ['pos_x', 'pos_y']
         sig = create_signal(
             tmp_path,
             [(arr1, 1000), (arr2, 2000)],
-            name="vec_named.parquet",
+            name='vec_named.parquet',
             names=feature_names,
         )
         assert sig.names == feature_names
@@ -410,7 +403,7 @@ class TestSignalDtypeShape:
     def test_array_signal_dtype_shape(self, tmp_path):
         arr1 = np.array([1.0, 2.0], dtype=np.float32)
         arr2 = np.array([3.0, 4.0], dtype=np.float32)
-        s = create_signal(tmp_path, [(arr1, 1000), (arr2, 2000)], name="arr.parquet")
+        s = create_signal(tmp_path, [(arr1, 1000), (arr2, 2000)], name='arr.parquet')
         # dtype eq handles dtype('float32') vs np.float32
         assert s.dtype == np.float32
         assert s.shape == (2,)

@@ -1,27 +1,28 @@
 import time
-from typing import Iterator, Any
+from collections.abc import Iterator
+from typing import Any
 
 import numpy as np
+
 try:
     from . import _franka as pf
 except ImportError as e:
     raise ImportError(
-        "Franka support is not installed. Install the hardware extra:\n"
-        "  pip install \"positronic[hardware]\"\n"
-        "or install the Franka core directly:\n"
-        "  pip install positronic-franka\n"
+        'Franka support is not installed. Install the hardware extra:\n'
+        '  pip install "positronic[hardware]"\n'
+        'or install the Franka core directly:\n'
+        '  pip install positronic-franka\n'
     ) from e
 
-from positronic import geom
 import pimm
+from positronic import geom
 
 from . import RobotStatus, State, command
 
 
 class FrankaState(State, pimm.shared_memory.NumpySMAdapter):
-
     def __init__(self):
-        super().__init__(shape=(7 + 7 + 7 + 1, ), dtype=np.float32)
+        super().__init__(shape=(7 + 7 + 7 + 1,), dtype=np.float32)
 
     def instantiation_params(self) -> tuple[Any, ...]:
         return ()
@@ -36,7 +37,7 @@ class FrankaState(State, pimm.shared_memory.NumpySMAdapter):
 
     @property
     def ee_pose(self) -> geom.Transform3D:
-        return geom.Transform3D(self.array[14:14 + 3], self.array[14 + 3:14 + 7])
+        return geom.Transform3D(self.array[14 : 14 + 3], self.array[14 + 3 : 14 + 7])
 
     @property
     def status(self) -> RobotStatus:
@@ -57,10 +58,7 @@ class FrankaState(State, pimm.shared_memory.NumpySMAdapter):
 
 
 class Robot(pimm.ControlSystem):
-    def __init__(self,
-                 ip: str,
-                 relative_dynamics_factor=0.2,
-                 home_joints: list[float] = [0.0, -0.31, 0.0, -1.65, 0.0, 1.522, 0.0]) -> None:
+    def __init__(self, ip: str, relative_dynamics_factor=0.2, home_joints: list[float] | None = None) -> None:
         """
         :param ip: IP address of the robot.
         :param relative_dynamics_factor: Relative dynamics factor in [0, 1]. Smaller values are more conservative.
@@ -68,7 +66,7 @@ class Robot(pimm.ControlSystem):
         """
         self._ip = ip
         self._relative_dynamics_factor = relative_dynamics_factor
-        self._home_joints = home_joints
+        self._home_joints = home_joints if home_joints is not None else [0.0, -0.31, 0.0, -1.65, 0.0, 1.522, 0.0]
         self.commands: pimm.SignalReceiver = pimm.ControlSystemReceiver(self)
         self.state: pimm.SignalEmitter = pimm.ControlSystemEmitter(self)
 
@@ -104,9 +102,9 @@ class Robot(pimm.ControlSystem):
         self.state.emit(robot_state)
 
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Sleep]:
-        robot = pf.Robot(self._ip,
-                         realtime_config=pf.RealtimeConfig.Ignore,
-                         relative_dynamics_factor=self._relative_dynamics_factor)
+        robot = pf.Robot(
+            self._ip, realtime_config=pf.RealtimeConfig.Ignore, relative_dynamics_factor=self._relative_dynamics_factor
+        )
         Robot._init_robot(robot)
         robot.recover_from_errors()
 
@@ -134,22 +132,24 @@ class Robot(pimm.ControlSystem):
             st = robot.state()
             q = np.asarray(st.q, dtype=np.float32).reshape(-1)
             dq = np.asarray(st.dq, dtype=np.float32).reshape(-1)
-            ee = geom.Transform3D(translation=np.asarray(st.end_effector_pose[:3], dtype=np.float32),
-                                  rotation=geom.Rotation.from_quat([
-                                      float(st.end_effector_pose[3]),
-                                      float(st.end_effector_pose[4]),
-                                      float(st.end_effector_pose[5]),
-                                      float(st.end_effector_pose[6])
-                                  ]))
+            ee = geom.Transform3D(
+                translation=np.asarray(st.end_effector_pose[:3], dtype=np.float32),
+                rotation=geom.Rotation.from_quat([
+                    float(st.end_effector_pose[3]),
+                    float(st.end_effector_pose[4]),
+                    float(st.end_effector_pose[5]),
+                    float(st.end_effector_pose[6]),
+                ]),
+            )
             robot_state.encode(q, dq, ee)
             self.state.emit(robot_state)
 
             yield pimm.Sleep(rate_limiter.wait_time())
 
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     with pimm.World() as world:
-        robot = Robot("172.168.0.2", relative_dynamics_factor=0.2)
+        robot = Robot('172.168.0.2', relative_dynamics_factor=0.2)
         commands = world.pair(robot.commands)
         state = world.pair(robot.state)
         world.start([], background=robot)
@@ -168,7 +168,7 @@ if __name__ == "__main__":
             time.sleep(0.01)
 
         origin = state.value.ee_pose
-        print(f"Origin: {origin}")
+        print(f'Origin: {origin}')
 
         alpha = 3.0
         start, i = time.monotonic(), 0
@@ -176,10 +176,10 @@ if __name__ == "__main__":
             pos, duration = trajectory[i]
             pos = np.asarray(pos) * alpha
             if time.monotonic() > start + duration:
-                print(f"Moving to {pos + origin.translation}")
+                print(f'Moving to {pos + origin.translation}')
                 commands.emit(command.CartesianMove(geom.Transform3D(pos + origin.translation, origin.rotation)))
                 i += 1
             else:
                 time.sleep(0.01)
 
-        print("Finishing")
+        print('Finishing')

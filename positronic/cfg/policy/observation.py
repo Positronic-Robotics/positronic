@@ -4,6 +4,7 @@ import configuronic as cfn
 @cfn.config()
 def end_effector(resolution: tuple[int, int]):
     from positronic.policy.observation import ObservationEncoder
+
     return ObservationEncoder(
         state_features=['grip'],
         left=('left.image', resolution),
@@ -20,6 +21,7 @@ end_effector_352x192 = end_effector.override(resolution=(352, 192))
 @cfn.config()
 def end_effector_back_front():
     from positronic.policy.observation import ObservationEncoder
+
     return ObservationEncoder(
         state_features=['grip'],
         back=('image.back', (352, 192)),
@@ -31,6 +33,7 @@ def end_effector_back_front():
 @cfn.config()
 def end_effector_mem15():
     from positronic.policy.observation import ObservationEncoder
+
     return ObservationEncoder(
         state_features=['grip'],
         left=('left.image', (352, 192)),
@@ -43,6 +46,7 @@ def end_effector_mem15():
 @cfn.config(state=['robot_position_quaternion', 'robot_position_translation', 'grip'])
 def franka_mujoco_stackcubes(state):
     from positronic.policy.observation import ObservationEncoder
+
     return ObservationEncoder(
         state_features=state,
         left=('image.handcam_left', (224, 224)),
@@ -53,6 +57,7 @@ def franka_mujoco_stackcubes(state):
 @cfn.config()
 def pi0():
     from positronic.policy.observation import ObservationEncoder
+
     return ObservationEncoder(
         state_features=['robot_position_quaternion', 'robot_position_translation', 'grip'],
         image=('image.left', (224, 224)),

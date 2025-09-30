@@ -1,81 +1,81 @@
 """This code is adopted from https://github.com/huggingface/lerobot/blob/0878c6880fa4fbadf0742751cf7b015f2d63a769/src/lerobot/motors/feetech/feetech.py"""  # noqa: E501
+
 import numpy as np
 import scservo_sdk as scs
-
 
 PROTOCOL_VERSION = 0
 TIMEOUT_MS = 1000
 
 # Sign-Magnitude encoding bits
 STS_SMS_SERIES_ENCODINGS_TABLE = {
-    "Homing_Offset": 11,
-    "Goal_Velocity": 15,
-    "Present_Velocity": 15,
+    'Homing_Offset': 11,
+    'Goal_Velocity': 15,
+    'Present_Velocity': 15,
 }
 
 STS_SMS_SERIES_CONTROL_TABLE = {
     # EPROM
-    "Firmware_Major_Version": (0, 1),  # read-only
-    "Firmware_Minor_Version": (1, 1),  # read-only
-    "Model_Number": (3, 2),  # read-only
-    "ID": (5, 1),
-    "Baud_Rate": (6, 1),
-    "Return_Delay_Time": (7, 1),
-    "Response_Status_Level": (8, 1),
-    "Min_Position_Limit": (9, 2),
-    "Max_Position_Limit": (11, 2),
-    "Max_Temperature_Limit": (13, 1),
-    "Max_Voltage_Limit": (14, 1),
-    "Min_Voltage_Limit": (15, 1),
-    "Max_Torque_Limit": (16, 2),
-    "Phase": (18, 1),
-    "Unloading_Condition": (19, 1),
-    "LED_Alarm_Condition": (20, 1),
-    "P_Coefficient": (21, 1),
-    "D_Coefficient": (22, 1),
-    "I_Coefficient": (23, 1),
-    "Minimum_Startup_Force": (24, 2),
-    "CW_Dead_Zone": (26, 1),
-    "CCW_Dead_Zone": (27, 1),
-    "Protection_Current": (28, 2),
-    "Angular_Resolution": (30, 1),
-    "Homing_Offset": (31, 2),
-    "Operating_Mode": (33, 1),
-    "Protective_Torque": (34, 1),
-    "Protection_Time": (35, 1),
-    "Overload_Torque": (36, 1),
-    "Velocity_closed_loop_P_proportional_coefficient": (37, 1),
-    "Over_Current_Protection_Time": (38, 1),
-    "Velocity_closed_loop_I_integral_coefficient": (39, 1),
+    'Firmware_Major_Version': (0, 1),  # read-only
+    'Firmware_Minor_Version': (1, 1),  # read-only
+    'Model_Number': (3, 2),  # read-only
+    'ID': (5, 1),
+    'Baud_Rate': (6, 1),
+    'Return_Delay_Time': (7, 1),
+    'Response_Status_Level': (8, 1),
+    'Min_Position_Limit': (9, 2),
+    'Max_Position_Limit': (11, 2),
+    'Max_Temperature_Limit': (13, 1),
+    'Max_Voltage_Limit': (14, 1),
+    'Min_Voltage_Limit': (15, 1),
+    'Max_Torque_Limit': (16, 2),
+    'Phase': (18, 1),
+    'Unloading_Condition': (19, 1),
+    'LED_Alarm_Condition': (20, 1),
+    'P_Coefficient': (21, 1),
+    'D_Coefficient': (22, 1),
+    'I_Coefficient': (23, 1),
+    'Minimum_Startup_Force': (24, 2),
+    'CW_Dead_Zone': (26, 1),
+    'CCW_Dead_Zone': (27, 1),
+    'Protection_Current': (28, 2),
+    'Angular_Resolution': (30, 1),
+    'Homing_Offset': (31, 2),
+    'Operating_Mode': (33, 1),
+    'Protective_Torque': (34, 1),
+    'Protection_Time': (35, 1),
+    'Overload_Torque': (36, 1),
+    'Velocity_closed_loop_P_proportional_coefficient': (37, 1),
+    'Over_Current_Protection_Time': (38, 1),
+    'Velocity_closed_loop_I_integral_coefficient': (39, 1),
     # SRAM
-    "Torque_Enable": (40, 1),
-    "Acceleration": (41, 1),
-    "Goal_Position": (42, 2),
-    "Goal_Time": (44, 2),
-    "Goal_Velocity": (46, 2),
-    "Torque_Limit": (48, 2),
-    "Lock": (55, 1),
-    "Present_Position": (56, 2),  # read-only
-    "Present_Velocity": (58, 2),  # read-only
-    "Present_Load": (60, 2),  # read-only
-    "Present_Voltage": (62, 1),  # read-only
-    "Present_Temperature": (63, 1),  # read-only
-    "Status": (65, 1),  # read-only
-    "Moving": (66, 1),  # read-only
-    "Present_Current": (69, 2),  # read-only
-    "Goal_Position_2": (71, 2),  # read-only
+    'Torque_Enable': (40, 1),
+    'Acceleration': (41, 1),
+    'Goal_Position': (42, 2),
+    'Goal_Time': (44, 2),
+    'Goal_Velocity': (46, 2),
+    'Torque_Limit': (48, 2),
+    'Lock': (55, 1),
+    'Present_Position': (56, 2),  # read-only
+    'Present_Velocity': (58, 2),  # read-only
+    'Present_Load': (60, 2),  # read-only
+    'Present_Voltage': (62, 1),  # read-only
+    'Present_Temperature': (63, 1),  # read-only
+    'Status': (65, 1),  # read-only
+    'Moving': (66, 1),  # read-only
+    'Present_Current': (69, 2),  # read-only
+    'Goal_Position_2': (71, 2),  # read-only
     # Factory
-    "Moving_Velocity": (80, 1),
-    "Moving_Velocity_Threshold": (80, 1),
-    "DTs": (81, 1),  # (ms)
-    "Velocity_Unit_factor": (82, 1),
-    "Hts": (83, 1),  # (ns) valid for firmware >= 2.54, other versions keep 0
-    "Maximum_Velocity_Limit": (84, 1),
-    "Maximum_Acceleration": (85, 1),
-    "Acceleration_Multiplier ": (86, 1),  # Acceleration multiplier in effect when acceleration is 0
+    'Moving_Velocity': (80, 1),
+    'Moving_Velocity_Threshold': (80, 1),
+    'DTs': (81, 1),  # (ms)
+    'Velocity_Unit_factor': (82, 1),
+    'Hts': (83, 1),  # (ns) valid for firmware >= 2.54, other versions keep 0
+    'Maximum_Velocity_Limit': (84, 1),
+    'Maximum_Acceleration': (85, 1),
+    'Acceleration_Multiplier ': (86, 1),  # Acceleration multiplier in effect when acceleration is 0
 }
 
-CONVERT_UINT32_TO_INT32_REQUIRED = ["Goal_Position", "Present_Position"]
+CONVERT_UINT32_TO_INT32_REQUIRED = ['Goal_Position', 'Present_Position']
 
 
 def encode_sign_magnitude(value: int, sign_bit_index: int):
@@ -85,7 +85,7 @@ def encode_sign_magnitude(value: int, sign_bit_index: int):
     max_magnitude = (1 << sign_bit_index) - 1
     magnitude = abs(value)
     if magnitude > max_magnitude:
-        raise ValueError(f"Magnitude {magnitude} exceeds {max_magnitude} (max for {sign_bit_index=})")
+        raise ValueError(f'Magnitude {magnitude} exceeds {max_magnitude} (max for {sign_bit_index=})')
 
     direction_bit = 1 if value < 0 else 0
     return (direction_bit << sign_bit_index) | magnitude
@@ -136,8 +136,8 @@ def read_from_motor(port_handler, packet_handler, motor_indices: list[int], data
 
     if comm != scs.COMM_SUCCESS:
         raise ConnectionError(
-            f"Read failed due to communication error on port {port_handler.port_name} for indices {motor_indices}: "
-            f"{packet_handler.getTxRxResult(comm)}"
+            f'Read failed due to communication error on port {port_handler.port_name} for indices {motor_indices}: '
+            f'{packet_handler.getTxRxResult(comm)}'
         )
 
     values = []
@@ -191,8 +191,8 @@ def convert_to_bytes(value, n_bytes):
         ]
     else:
         raise NotImplementedError(
-            f"Value of the number of bytes to be sent is expected to be in [1, 2, 4], but "
-            f"{n_bytes} is provided instead."
+            f'Value of the number of bytes to be sent is expected to be in [1, 2, 4], but '
+            f'{n_bytes} is provided instead.'
         )
     return data
 
@@ -217,7 +217,7 @@ def write_to_motor(port_handler, packet_handler, motor_indices: list[int], data_
         raise KeyError(f"Data name '{data_name}' not found in control table")
 
     if len(values) != len(motor_indices):
-        raise ValueError(f"Number of values ({len(values)}) must match number of motor indices ({len(motor_indices)})")
+        raise ValueError(f'Number of values ({len(values)}) must match number of motor indices ({len(motor_indices)})')
 
     addr, message_bytes = STS_SMS_SERIES_CONTROL_TABLE[data_name]
     group = scs.GroupSyncWrite(port_handler, packet_handler, addr, message_bytes)
@@ -238,8 +238,8 @@ def write_to_motor(port_handler, packet_handler, motor_indices: list[int], data_
 
     if comm != scs.COMM_SUCCESS:
         raise ConnectionError(
-            f"Write failed due to communication error on port {port_handler.port_name} for indices {motor_indices}: "
-            f"{packet_handler.getTxRxResult(comm)}"
+            f'Write failed due to communication error on port {port_handler.port_name} for indices {motor_indices}: '
+            f'{packet_handler.getTxRxResult(comm)}'
         )
 
 
@@ -253,7 +253,7 @@ class MotorBus:
         self.packet_handler = None
 
     def connect(self):
-        assert self.port_handler is None and self.packet_handler is None, "Already connected"
+        assert self.port_handler is None and self.packet_handler is None, 'Already connected'
         self.port_handler = scs.PortHandler(self.port)
         self.packet_handler = scs.PacketHandler(PROTOCOL_VERSION)
 
@@ -269,31 +269,31 @@ class MotorBus:
 
     @property
     def position(self) -> np.ndarray:
-        position = self._read("Present_Position")
+        position = self._read('Present_Position')
         position = self.apply_calibration(position)
         return position
 
     @property
     def velocity(self) -> np.ndarray:
-        velocity = self._read("Present_Velocity")
+        velocity = self._read('Present_Velocity')
         velocity = self.apply_calibration(velocity)
         return velocity
 
     @property
     def torque_mode(self) -> bool:
-        return self._read("Torque_Enable") == 1
+        return self._read('Torque_Enable') == 1
 
     def set_torque_mode(self, enabled: bool):
         values = np.ones(len(self.motor_indices)) if enabled else np.zeros(len(self.motor_indices))
-        self._write("Torque_Enable", values)
-        self._write("Lock", values)
+        self._write('Torque_Enable', values)
+        self._write('Lock', values)
 
     def set_target_position(self, positions: np.ndarray):
         positions = self.revert_calibration(positions)
-        self._write("Goal_Position", positions)
+        self._write('Goal_Position', positions)
 
     def disconnect(self):
-        assert self.port_handler is not None and self.packet_handler is not None, "Not connected"
+        assert self.port_handler is not None and self.packet_handler is not None, 'Not connected'
         # Disable torque and lock to prevent motors degrading
         self.set_torque_mode(False)
         self.port_handler.closePort()
@@ -304,14 +304,14 @@ class MotorBus:
         if self.calibration is None:
             return values
         # convert raw values to 0-1 range
-        return (values - self.calibration["mins"]) / (self.calibration["maxs"] - self.calibration["mins"])
+        return (values - self.calibration['mins']) / (self.calibration['maxs'] - self.calibration['mins'])
 
     def revert_calibration(self, values: np.ndarray, clip: bool = True):
         if self.calibration is None:
             return values
-        values = values * (self.calibration["maxs"] - self.calibration["mins"]) + self.calibration["mins"]
+        values = values * (self.calibration['maxs'] - self.calibration['mins']) + self.calibration['mins']
         if clip:
-            values = np.clip(values, self.calibration["mins"], self.calibration["maxs"])
+            values = np.clip(values, self.calibration['mins'], self.calibration['maxs'])
         return values
 
     def stats(self):

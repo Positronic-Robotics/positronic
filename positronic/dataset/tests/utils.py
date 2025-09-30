@@ -52,5 +52,5 @@ class DummySignal(Signal[int]):
         if req.size == 0:
             return np.array([], dtype=np.int64)
         if not is_realnum_dtype(req.dtype):
-            raise TypeError(f"Invalid timestamp array dtype: {req.dtype}")
+            raise TypeError(f'Invalid timestamp array dtype: {req.dtype}')
         return np.searchsorted(self._ts, req, side='right') - 1

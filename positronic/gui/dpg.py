@@ -1,29 +1,26 @@
-from typing import Dict, Iterator, List, Tuple
+from collections.abc import Iterator
 
 import dearpygui.dearpygui as dpg
 import numpy as np
 
 import pimm
 
-
 _DEFAULT_IMAGE_SHAPE = (240, 320)
 
 
-def _get_down_keys() -> List[int]:
-    all_keys = [getattr(dpg, key) for key in dir(dpg) if key.startswith("mvKey_")]
+def _get_down_keys() -> list[int]:
+    all_keys = [getattr(dpg, key) for key in dir(dpg) if key.startswith('mvKey_')]
     return [key for key in all_keys if dpg.is_key_down(key)]
 
 
 class DearpyguiUi(pimm.ControlSystem):
-
     def __init__(self):
-
         self.cameras = pimm.ReceiverDict(self)
         self.im_sizes = {}
         self.info = pimm.ControlSystemReceiver(self)
         self.buttons = pimm.ControlSystemEmitter(self)
 
-    def init(self, im_sizes: Dict[str, Tuple[int, int]]):
+    def init(self, im_sizes: dict[str, tuple[int, int]]):
         self.im_sizes = im_sizes
         self.n_rows = max(1, int(np.ceil(np.sqrt(len(self.cameras)))))
         self.n_cols = max(1, int(np.ceil(len(self.cameras) / self.n_rows)))
@@ -43,22 +40,24 @@ class DearpyguiUi(pimm.ControlSystem):
         dpg.create_context()
         with dpg.texture_registry():
             for cam_name, (height, width) in self.im_sizes.items():
-                dpg.add_raw_texture(width=width,
-                                    height=height,
-                                    tag=cam_name,
-                                    format=dpg.mvFormat_Float_rgba,
-                                    default_value=self.raw_textures[cam_name])
+                dpg.add_raw_texture(
+                    width=width,
+                    height=height,
+                    tag=cam_name,
+                    format=dpg.mvFormat_Float_rgba,
+                    default_value=self.raw_textures[cam_name],
+                )
 
-        with dpg.window(tag="image_grid", label="Cameras", no_scrollbar=True, no_scroll_with_mouse=True):
+        with dpg.window(tag='image_grid', label='Cameras', no_scrollbar=True, no_scroll_with_mouse=True):
             self._configure_image_grid(len(self.cameras))
 
-        with dpg.window(label="Info"):
-            dpg.add_text("", tag="info")
+        with dpg.window(label='Info'):
+            dpg.add_text('', tag='info')
 
-        with dpg.item_handler_registry(tag="adjust_images"):
+        with dpg.item_handler_registry(tag='adjust_images'):
             dpg.add_item_resize_handler(callback=self._configure_image_sizes)
 
-        dpg.bind_item_handler_registry("image_grid", "adjust_images")
+        dpg.bind_item_handler_registry('image_grid', 'adjust_images')
 
         dpg.create_viewport(title='Positronic Viewer', width=800, height=600)
         dpg.set_viewport_resize_callback(callback=self._viewport_resize)
@@ -71,12 +70,12 @@ class DearpyguiUi(pimm.ControlSystem):
             for cam_name, reader in self.cameras.items()
         }
 
-        fps_counter = pimm.utils.RateCounter("UI")
-        frame_fps_counter = pimm.utils.RateCounter("Frame")
+        fps_counter = pimm.utils.RateCounter('UI')
+        frame_fps_counter = pimm.utils.RateCounter('Frame')
 
-        info_receiver = pimm.DefaultReceiver(self.info, "")
+        info_receiver = pimm.DefaultReceiver(self.info, '')
 
-        im_sizes = dict()
+        im_sizes = {}
         init_done = False
 
         if not init_done and len(cameras) == 0:
@@ -96,7 +95,7 @@ class DearpyguiUi(pimm.ControlSystem):
                     image = frame['image']
                     if cam_name not in im_sizes:
                         im_sizes[cam_name] = image.shape[:2]
-                        print(f"Have {len(im_sizes)}/{len(cameras)} images")
+                        print(f'Have {len(im_sizes)}/{len(cameras)} images')
                         if not init_done and len(im_sizes) == len(cameras):
                             self.init(im_sizes)
                             init_done = True
@@ -109,12 +108,12 @@ class DearpyguiUi(pimm.ControlSystem):
 
             if init_done:
                 info_text = info_receiver.value
-                dpg.set_value("info", info_text)
+                dpg.set_value('info', info_text)
                 dpg.render_dearpygui_frame()
 
             yield pimm.Pass()
 
-        print("GUI stopped")
+        print('GUI stopped')
 
     def _configure_image_grid(self, n_images: int):
         if n_images == 0:
@@ -130,23 +129,23 @@ class DearpyguiUi(pimm.ControlSystem):
                         idx = i * self.n_cols + j
                         if idx < n_images:
                             cam_name = list(self.cameras.keys())[idx]
-                            dpg.add_image(texture_tag=cam_name, tag=f"image_{cam_name}")
+                            dpg.add_image(texture_tag=cam_name, tag=f'image_{cam_name}')
 
     def _viewport_resize(self):
         width = dpg.get_viewport_width()
         height = dpg.get_viewport_height()
 
-        dpg.set_item_width("image_grid", width)
-        dpg.set_item_height("image_grid", height)
+        dpg.set_item_width('image_grid', width)
+        dpg.set_item_height('image_grid', height)
 
     def _configure_image_sizes(self):
         n_images = len(self.cameras.keys())
         n_cols = max(1, int(np.ceil(np.sqrt(n_images))))
         n_rows = max(1, int(np.ceil(n_images / n_cols)))
 
-        width = dpg.get_item_width("image_grid")
-        height = dpg.get_item_height("image_grid")
+        width = dpg.get_item_width('image_grid')
+        height = dpg.get_item_height('image_grid')
 
         for key in self.cameras.keys():
-            dpg.set_item_width(f"image_{key}", int(width / n_cols))
-            dpg.set_item_height(f"image_{key}", int(height / n_rows))
+            dpg.set_item_width(f'image_{key}', int(width / n_cols))
+            dpg.set_item_height(f'image_{key}', int(height / n_rows))

@@ -1,15 +1,13 @@
-from typing import Dict
-
+import configuronic as cfn
 import fire
 import numpy as np
 import rerun as rr
 import torch
 from tqdm import tqdm
 
-import configuronic as cfn
 import positronic.cfg.policy.action
-import positronic.cfg.policy.policy
 import positronic.cfg.policy.observation
+import positronic.cfg.policy.policy
 import positronic.cfg.simulator
 from positronic.policy.action import ActionDecoder
 from positronic.policy.observation import ObservationEncoder
@@ -30,12 +28,12 @@ def run_policy_in_simulator(  # noqa: C901  Function is too complex
     rerun_path: str,
     inference_time_sec: float,
     observation_hz: float,
-    image_name_mapping: Dict[str, str],
+    image_name_mapping: dict[str, str],
     device: str,
     task: str | None,
 ):
     if rerun_path:
-        rr.init("inference", spawn=False)
+        rr.init('inference', spawn=False)
         rr.save(rerun_path)
 
     policy = policy.to(device)
@@ -48,7 +46,7 @@ def run_policy_in_simulator(  # noqa: C901  Function is too complex
     steps = int(inference_time_sec * (1 / simulator.model.opt.timestep))
     frame_count = 0
 
-    for i in tqdm(range(steps)):
+    for _ in tqdm(range(steps)):
         simulator.step()
 
         # Get observations
@@ -58,7 +56,7 @@ def run_policy_in_simulator(  # noqa: C901  Function is too complex
             images = renderer.render()
 
             if image_name_mapping:
-                images = {f"image.{k}": images[v] for k, v in image_name_mapping.items()}
+                images = {f'image.{k}': images[v] for k, v in image_name_mapping.items()}
 
             # Encode state
             inputs = {
@@ -70,7 +68,7 @@ def run_policy_in_simulator(  # noqa: C901  Function is too complex
                 'grip': simulator.grip,
                 # TODO: following will be gone if we add support for state/action history
                 'reference_robot_position_translation': reference_pose.translation,
-                'reference_robot_position_quaternion': reference_pose.rotation.as_quat
+                'reference_robot_position_quaternion': reference_pose.rotation.as_quat,
             }
             obs = {}
             for key, val in state_encoder.encode(images, inputs).items():
@@ -115,14 +113,14 @@ run = cfn.Config(
     state_encoder=positronic.cfg.policy.observation.end_effector_back_front,
     action_decoder=positronic.cfg.policy.action.relative_robot_position,
     policy=positronic.cfg.policy.policy.act,
-    rerun_path="rerun.rrd",
+    rerun_path='rerun.rrd',
     inference_time_sec=10,
     observation_hz=60,
     image_name_mapping=image_mapping,
-    device="cuda",
+    device='cuda',
     task=None,
 )
 
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     fire.Fire(run.override_and_instantiate)

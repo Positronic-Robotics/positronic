@@ -49,12 +49,13 @@ def test_absolute_position_action_encode_decode_quat():
             'target_robot_position_quaternion': DummySignal(ts, q),
             'target_robot_position_translation': DummySignal(ts, t),
             'target_grip': DummySignal(ts, g),
-        })
+        }
+    )
 
     act = AbsolutePositionAction(Rotation.Representation.QUAT)
     sig = act.encode_episode(ep)
     vec = list(sig)[0][0]
-    assert vec.shape == (8, )  # 4 quat + 3 trans + 1 grip
+    assert vec.shape == (8,)  # 4 quat + 3 trans + 1 grip
     assert vec.dtype == np.float32
 
     out = act.decode(vec, inputs={})
@@ -80,7 +81,8 @@ def test_relative_target_position_action_encode_decode_quat():
             'robot_position_translation': DummySignal(ts, t_cur),
             'target_robot_position_translation': DummySignal(ts, t_tgt),
             'target_grip': DummySignal(ts, g_tgt),
-        })
+        }
+    )
 
     act = RelativeTargetPositionAction(Rotation.Representation.QUAT)
     vec = list(act.encode_episode(ep))[0][0]
@@ -91,10 +93,13 @@ def test_relative_target_position_action_encode_decode_quat():
     np.testing.assert_allclose(vec[4:7], t_cur[0] - t_tgt[0], atol=1e-6)
     assert np.isclose(vec[7], g_tgt[0])
 
-    out = act.decode(vec, inputs={
-        'robot_position_quaternion': q_cur[0],
-        'robot_position_translation': t_cur[0],
-    })
+    out = act.decode(
+        vec,
+        inputs={
+            'robot_position_quaternion': q_cur[0],
+            'robot_position_translation': t_cur[0],
+        },
+    )
     assert isinstance(out['target_robot_position'], Transform3D)
     # Decode applies diff to current translation
     np.testing.assert_allclose(out['target_robot_position'].translation, t_cur[0] + vec[4:7], atol=1e-6)
@@ -105,10 +110,12 @@ def test_relative_robot_position_action_decode_with_reference():
 
     # Zero rotation diff, small translation diff
     vec = np.array([1, 0, 0, 0, 0.05, -0.02, 0.01, 0.3], dtype=np.float32)
-    out = act.decode(vec,
-                     inputs={
-                         'reference_robot_position_quaternion': Rotation.identity,
-                         'reference_robot_position_translation': np.array([0.0, 0.0, 0.0], dtype=np.float32),
-                     })
+    out = act.decode(
+        vec,
+        inputs={
+            'reference_robot_position_quaternion': Rotation.identity,
+            'reference_robot_position_translation': np.array([0.0, 0.0, 0.0], dtype=np.float32),
+        },
+    )
     np.testing.assert_allclose(out['target_robot_position'].translation, [0.05, -0.02, 0.01], atol=1e-6)
     assert np.isclose(out['target_grip'], 0.3)

@@ -13,8 +13,8 @@ import math
 import mujoco
 import numpy as np
 import pinocchio as pin
-from ruckig import InputParameter, OutputParameter, Result, Ruckig
 from cvxopt import matrix, solvers
+from ruckig import InputParameter, OutputParameter, Result, Ruckig
 
 from positronic import geom
 from positronic.utils.rerun_compat import log_numeric_series
@@ -79,8 +79,10 @@ class KinematicsSolver:
         self.joint_limits_upper = np.array(self.joint_limits_upper)
 
         if len(self.joint_limits_idx) > 0:
-            self.G = np.vstack([np.eye(self.model.nv)[self.joint_limits_idx],
-                                -np.eye(self.model.nv)[self.joint_limits_idx]])
+            self.G = np.vstack([
+                np.eye(self.model.nv)[self.joint_limits_idx],
+                -np.eye(self.model.nv)[self.joint_limits_idx],
+            ])
             self.G = matrix(self.G)
         else:
             self.G = None
@@ -99,7 +101,7 @@ class KinematicsSolver:
     def inverse(self, pos: geom.Transform3D, qpos0: np.ndarray, max_iters: int = 40, err_thresh: float = 1e-5):
         self.data.qpos = qpos0
 
-        for iter in range(max_iters):
+        for _ in range(max_iters):
             mujoco.mj_kinematics(self.model, self.data)
             mujoco.mj_comPos(self.model, self.data)
 
@@ -118,8 +120,9 @@ class KinematicsSolver:
             mujoco.mj_jacSite(self.model, self.data, self.jac_pos, self.jac_rot, self.site_id)
             update = self.jac.T @ np.linalg.solve(self.jac @ self.jac.T + self.damping, self.err)
             qpos0_err = np.mod(self.qpos0 - self.data.qpos + np.pi, 2 * np.pi) - np.pi
-            update += (self.eye -
-                       (self.jac.T @ np.linalg.pinv(self.jac @ self.jac.T + self.damping)) @ self.jac) @ qpos0_err
+            update += (
+                self.eye - (self.jac.T @ np.linalg.pinv(self.jac @ self.jac.T + self.damping)) @ self.jac
+            ) @ qpos0_err
 
             # Enforce max angle change
             update_max = np.abs(update).max()
@@ -131,20 +134,22 @@ class KinematicsSolver:
 
         return self.data.qpos.copy()
 
-    def inverse_limits(self,
-                       pos: geom.Transform3D,
-                       qpos0: np.ndarray,
-                       max_iters: int = 20,
-                       err_thresh: float = 1e-3,
-                       clamp=True,
-                       debug=False):
-        assert self.G is not None, "Joint limits are not set"
+    def inverse_limits(
+        self,
+        pos: geom.Transform3D,
+        qpos0: np.ndarray,
+        max_iters: int = 20,
+        err_thresh: float = 1e-3,
+        clamp=True,
+        debug=False,
+    ):
+        assert self.G is not None, 'Joint limits are not set'
         solvers.options['show_progress'] = False
         qpos0 = wrap_joint_angle(qpos0, np.zeros(7)) if clamp else qpos0
         self.data.qpos = qpos0
 
         iter = 0
-        for i in range(max_iters):
+        for _ in range(max_iters):
             mujoco.mj_kinematics(self.model, self.data)
             mujoco.mj_comPos(self.model, self.data)
 
@@ -230,12 +235,12 @@ class JointCompliantController:
             return self.y
 
     def __init__(
-            self,
-            actuator_count,
-            path: str = 'positronic/drivers/roboarm/kinova/model.urdf',
-            relative_dynamics_factor=0.5,
-            max_velocity=(1.396, 1.396, 1.396, 1.396, 2.443, 2.443, 2.443),
-            max_acceleration=(4.188, 4.188, 4.188, 4.188, 7.853, 7.853, 7.853),
+        self,
+        actuator_count,
+        path: str = 'positronic/drivers/roboarm/kinova/model.urdf',
+        relative_dynamics_factor=0.5,
+        max_velocity=(1.396, 1.396, 1.396, 1.396, 2.443, 2.443, 2.443),
+        max_acceleration=(4.188, 4.188, 4.188, 4.188, 7.853, 7.853, 7.853),
     ):
         self.q_s = None
         self.q_d = None

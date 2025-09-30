@@ -1,18 +1,22 @@
 import time
 
 import numpy as np
-
 from kortex_api.autogen.client_stubs.ActuatorConfigClientRpc import ActuatorConfigClient
 from kortex_api.autogen.client_stubs.BaseClientRpc import BaseClient
 from kortex_api.autogen.client_stubs.BaseCyclicClientRpc import BaseCyclicClient
 from kortex_api.autogen.client_stubs.DeviceManagerClientRpc import DeviceManagerClient
-from kortex_api.autogen.messages import (ActuatorCyclic_pb2, ActuatorConfig_pb2, Base_pb2, BaseCyclic_pb2, Common_pb2,
-                                         Session_pb2)
+from kortex_api.autogen.messages import (
+    ActuatorConfig_pb2,
+    ActuatorCyclic_pb2,
+    Base_pb2,
+    BaseCyclic_pb2,
+    Common_pb2,
+    Session_pb2,
+)
 from kortex_api.RouterClient import RouterClient, RouterClientSendOptions
 from kortex_api.SessionManager import SessionManager
 from kortex_api.TCPTransport import TCPTransport
 from kortex_api.UDPTransport import UDPTransport
-
 
 _TCP_PORT = 10000
 _UDP_PORT = 10001
@@ -21,11 +25,13 @@ _UDP_PORT = 10001
 class DeviceConnection:
     """Manages TCP/UDP connections to a Kinova device."""
 
-    def __init__(self,
-                 ip_address: str,
-                 port: int,
-                 transport: TCPTransport | UDPTransport,
-                 credentials: tuple[str, str] = ('admin', 'admin')):
+    def __init__(
+        self,
+        ip_address: str,
+        port: int,
+        transport: TCPTransport | UDPTransport,
+        credentials: tuple[str, str] = ('admin', 'admin'),
+    ):
         self.ip_address = ip_address
         self.port = port
         self.credentials = credentials
@@ -83,7 +89,8 @@ class KinovaAPI:
         device_manager = DeviceManagerClient(self.base.router)
         device_handles = device_manager.ReadAllDevices()
         self.actuator_device_ids = [
-            handle.device_identifier for handle in device_handles.device_handle
+            handle.device_identifier
+            for handle in device_handles.device_handle
             if handle.device_type in [Common_pb2.BIG_ACTUATOR, Common_pb2.SMALL_ACTUATOR]
         ]
 
@@ -111,7 +118,7 @@ class KinovaAPI:
 
         self.base_feedback = self.base_cyclic.RefreshFeedback()
         self.base_command = BaseCyclic_pb2.Command()
-        for i in range(self.actuator_count):
+        for _ in range(self.actuator_count):
             self.base_command.actuators.add(flags=ActuatorCyclic_pb2.SERVO_ENABLE)
 
         self.apply_current_command(None)
@@ -145,8 +152,9 @@ class KinovaAPI:
         # Increment frame ID to ensure actuators can reject out-of-order frames
         self.base_command.frame_id = (self.base_command.frame_id + 1) % 65536
         for i in range(self.actuator_count):
-            self.base_command.actuators[i].current_motor = (current_command[i] if current_command is not None else
-                                                            self.base_feedback.actuators[i].current_motor)
+            self.base_command.actuators[i].current_motor = (
+                current_command[i] if current_command is not None else self.base_feedback.actuators[i].current_motor
+            )
             self.base_command.actuators[i].position = self.base_feedback.actuators[i].position
             self.base_command.actuators[i].command_id = self.base_command.frame_id
 

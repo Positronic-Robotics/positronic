@@ -7,6 +7,7 @@ import threading
 from contextlib import asynccontextmanager
 from pathlib import Path
 
+import configuronic as cfn
 import rerun as rr
 import uvicorn
 from fastapi import FastAPI, HTTPException
@@ -16,7 +17,6 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from starlette.requests import Request
 
-import configuronic as cfn
 from positronic import utils
 from positronic.dataset.local_dataset import LocalDataset
 from positronic.server.dataset_utils import generate_episode_rrd, get_dataset_info, get_episodes_list
@@ -58,71 +58,71 @@ app = FastAPI(lifespan=lifespan)
 # CORS for convenience
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=['*'],
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=['*'],
+    allow_headers=['*'],
 )
 
 # Static files and templates (packaged relative to this file)
 _static_dir = _pkg_path('static')
 _templates_dir = _pkg_path('templates')
-app.mount("/static", StaticFiles(directory=_static_dir), name="static")
+app.mount('/static', StaticFiles(directory=_static_dir), name='static')
 templates = Jinja2Templates(directory=_templates_dir)
 
 
-@app.get("/", response_class=HTMLResponse)
+@app.get('/', response_class=HTMLResponse)
 async def index(request: Request):
-    return templates.TemplateResponse("index.html", {"request": request, "repo_id": app_state['root']})
+    return templates.TemplateResponse('index.html', {'request': request, 'repo_id': app_state['root']})
 
 
-@app.get("/episode/{episode_id}", response_class=HTMLResponse)
+@app.get('/episode/{episode_id}', response_class=HTMLResponse)
 async def episode_viewer(request: Request, episode_id: int):
     if app_state['loading_state']:
-        raise HTTPException(status_code=202, detail="Dataset is still loading. Please wait...")
+        raise HTTPException(status_code=202, detail='Dataset is still loading. Please wait...')
     ds: LocalDataset | None = app_state.get('dataset')  # type: ignore[assignment]
     if ds is None:
-        raise HTTPException(status_code=500, detail="Dataset failed to load")
+        raise HTTPException(status_code=500, detail='Dataset failed to load')
 
     try:
         episode = ds[episode_id]
-    except IndexError:
-        raise HTTPException(status_code=404, detail="Episode not found")
+    except IndexError as e:
+        raise HTTPException(status_code=404, detail='Episode not found') from e
 
     return templates.TemplateResponse(
-        "episode.html",
+        'episode.html',
         {
-            "request": request,
-            "episode_id": episode_id,
-            "num_episodes": len(ds),
-            "rerun_version": rr.__version__,
-            "task": episode.static.get('task', None),
-            "repo_id": app_state['root'],
+            'request': request,
+            'episode_id': episode_id,
+            'num_episodes': len(ds),
+            'rerun_version': rr.__version__,
+            'task': episode.static.get('task', None),
+            'repo_id': app_state['root'],
         },
     )
 
 
-@app.get("/api/dataset_info")
+@app.get('/api/dataset_info')
 async def api_dataset_info():
     if app_state['loading_state']:
-        raise HTTPException(status_code=202, detail="Dataset is loading...")
+        raise HTTPException(status_code=202, detail='Dataset is loading...')
     ds: LocalDataset | None = app_state.get('dataset')  # type: ignore[assignment]
     if ds is None:
-        raise HTTPException(status_code=500, detail="Dataset failed to load")
+        raise HTTPException(status_code=500, detail='Dataset failed to load')
     return get_dataset_info(ds)
 
 
-@app.get("/api/episodes")
+@app.get('/api/episodes')
 async def api_episodes():
     if app_state['loading_state']:
-        raise HTTPException(status_code=202, detail="Dataset is loading...")
+        raise HTTPException(status_code=202, detail='Dataset is loading...')
     ds: LocalDataset | None = app_state.get('dataset')  # type: ignore[assignment]
     if ds is None:
-        raise HTTPException(status_code=500, detail="Dataset failed to load")
+        raise HTTPException(status_code=500, detail='Dataset failed to load')
     return get_episodes_list(ds)
 
 
-@app.get("/api/dataset_status")
+@app.get('/api/dataset_status')
 async def api_dataset_status():
     return {
         'loading': app_state['loading_state'],
@@ -131,20 +131,20 @@ async def api_dataset_status():
     }
 
 
-@app.get("/api/episode_rrd/{episode_id}")
+@app.get('/api/episode_rrd/{episode_id}')
 async def api_episode_rrd(episode_id: int):
     if app_state['loading_state']:
-        raise HTTPException(status_code=202, detail="Dataset is still loading")
+        raise HTTPException(status_code=202, detail='Dataset is still loading')
     ds: LocalDataset | None = app_state.get('dataset')  # type: ignore[assignment]
     if ds is None:
-        raise HTTPException(status_code=500, detail="Dataset failed to load")
+        raise HTTPException(status_code=500, detail='Dataset failed to load')
 
     try:
         cache_path = _get_rrd_cache_path(episode_id)
         rrd_path = generate_episode_rrd(ds, episode_id, cache_path)
         if not os.path.exists(rrd_path):
             logging.error(f'RRD file not found at {rrd_path}')
-            raise HTTPException(status_code=500, detail="RRD file generation failed")
+            raise HTTPException(status_code=500, detail='RRD file generation failed')
 
         return FileResponse(path=rrd_path, media_type='application/octet-stream', filename=f'episode_{episode_id}.rrd')
     except Exception as e:
@@ -153,12 +153,14 @@ async def api_episode_rrd(episode_id: int):
 
 
 @cfn.config()
-def main(root: str,
-         cache_dir: str = os.path.expanduser('~/.cache/positronic/server/'),
-         host: str = '0.0.0.0',
-         port: int = 5000,
-         debug: bool = False,
-         reset_cache: bool = False):
+def main(
+    root: str,
+    cache_dir: str = os.path.expanduser('~/.cache/positronic/server/'),
+    host: str = '0.0.0.0',
+    port: int = 5000,
+    debug: bool = False,
+    reset_cache: bool = False,
+):
     """Visualize a LocalDataset with Rerun.
 
     Args:
@@ -200,7 +202,7 @@ def main(root: str,
 
     primary_host = utils.resolve_host_ip()
     logging.info(f'Starting server on http://{primary_host}:{port}')
-    uvicorn.run(app, host=host, port=port, log_level="debug" if debug else "info")
+    uvicorn.run(app, host=host, port=port, log_level='debug' if debug else 'info')
 
 
 if __name__ == '__main__':

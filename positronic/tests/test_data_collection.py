@@ -1,5 +1,4 @@
 from pathlib import Path
-from typing import Dict
 
 import numpy as np
 import pytest
@@ -25,12 +24,9 @@ def world(clock):
         yield w
 
 
-def make_buttons(*,
-                 trigger: float = 0.0,
-                 thumb: float = 0.0,
-                 stick: float = 0.0,
-                 A: bool = False,
-                 B: bool = False) -> Dict:
+def make_buttons(
+    *, trigger: float = 0.0, thumb: float = 0.0, stick: float = 0.0, A: bool = False, B: bool = False
+) -> dict:
     """Constructs controller buttons payload matching DataCollection mapping."""
     return {
         'left': None,
@@ -134,7 +130,7 @@ def test_data_collection_with_mujoco_robot_gripper(tmp_path):
     from positronic.data_collection import OperatorPosition
     from positronic.simulator.mujoco.sim import MujocoFranka, MujocoGripper, MujocoSim
 
-    sim = MujocoSim("positronic/assets/mujoco/franka_table.xml", loaders=())
+    sim = MujocoSim('positronic/assets/mujoco/franka_table.xml', loaders=())
     robot = MujocoFranka(sim, suffix='_ph')
     gripper = MujocoGripper(sim, actuator_name='actuator8_ph', joint_name='finger_joint1_ph')
 
@@ -222,7 +218,7 @@ def test_data_collection_with_mujoco_robot_gripper(tmp_path):
     # Verify a robot command was emitted (tracking enabled and a pose sent)
     # We don't assert exact equality with state here; just presence and shape.
     cmd_pose = ep['robot_commands.pose']
-    assert len(cmd_pose) >= 1 and cmd_pose[0][0].shape == (7, )
+    assert len(cmd_pose) >= 1 and cmd_pose[0][0].shape == (7,)
 
     # Basic sanity on sizes and monotonic timestamps
     def assert_strictly_increasing(sig):

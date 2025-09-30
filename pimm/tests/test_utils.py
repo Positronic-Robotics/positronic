@@ -1,7 +1,7 @@
 from unittest.mock import Mock
 
-from pimm.core import Message, SignalReceiver, Clock
-from pimm.utils import ValueUpdated, DefaultReceiver, RateLimiter, is_any_updated
+from pimm.core import Clock, Message, SignalReceiver
+from pimm.utils import DefaultReceiver, RateLimiter, ValueUpdated, is_any_updated
 
 
 class TestValueUpdated:
@@ -10,7 +10,7 @@ class TestValueUpdated:
     def test_first_read_with_data_returns_updated(self):
         """Test that first read with data returns updated=True."""
         mock_reader = Mock(spec=SignalReceiver)
-        test_data = "test_data"
+        test_data = 'test_data'
         mock_reader.read.return_value = Message(data=test_data, ts=123)
 
         value_updated = ValueUpdated(mock_reader)
@@ -33,7 +33,7 @@ class TestValueUpdated:
     def test_same_timestamp_returns_not_updated(self):
         """Test that reading the same timestamp returns updated=False."""
         mock_reader = Mock(spec=SignalReceiver)
-        test_data = "test_data"
+        test_data = 'test_data'
         message = Message(data=test_data, ts=123)
         mock_reader.read.return_value = message
 
@@ -50,8 +50,8 @@ class TestValueUpdated:
     def test_different_timestamp_returns_updated(self):
         """Test that reading different timestamps returns updated=True."""
         mock_reader = Mock(spec=SignalReceiver)
-        test_data1 = "test_data1"
-        test_data2 = "test_data2"
+        test_data1 = 'test_data1'
+        test_data2 = 'test_data2'
 
         value_updated = ValueUpdated(mock_reader)
 
@@ -72,29 +72,29 @@ class TestValueUpdated:
         value_updated = ValueUpdated(mock_reader)
 
         # Multiple reads with same timestamp
-        mock_reader.read.return_value = Message(data="data1", ts=100)
+        mock_reader.read.return_value = Message(data='data1', ts=100)
         result1 = value_updated.read()
-        assert result1.data == ("data1", True)
+        assert result1.data == ('data1', True)
         assert result1.ts == 100
 
         result2 = value_updated.read()
-        assert result2.data == ("data1", False)
+        assert result2.data == ('data1', False)
         assert result2.ts == 100
 
         result3 = value_updated.read()
-        assert result3.data == ("data1", False)
+        assert result3.data == ('data1', False)
         assert result3.ts == 100
 
         # New timestamp
-        mock_reader.read.return_value = Message(data="data2", ts=200)
+        mock_reader.read.return_value = Message(data='data2', ts=200)
         result4 = value_updated.read()
-        assert result4.data == ("data2", True)
+        assert result4.data == ('data2', True)
         assert result4.ts == 200
 
     def test_message_timestamp_is_preserved(self):
         """Test that the original message timestamp is preserved in the returned message."""
         mock_reader = Mock(spec=SignalReceiver)
-        test_data = "test_data"
+        test_data = 'test_data'
         original_ts = 123456789
 
         value_updated = ValueUpdated(mock_reader)
@@ -110,11 +110,11 @@ class TestDefaultReceiver:
     def test_returns_reader_message_when_available(self):
         """Test that original reader's message is returned when available."""
         mock_reader = Mock(spec=SignalReceiver)
-        test_data = "actual_data"
+        test_data = 'actual_data'
         test_ts = 123
         mock_reader.read.return_value = Message(data=test_data, ts=test_ts)
 
-        default_reader = DefaultReceiver(mock_reader, "default_data", 456)
+        default_reader = DefaultReceiver(mock_reader, 'default_data', 456)
         result = default_reader.read()
 
         assert result is not None
@@ -126,7 +126,7 @@ class TestDefaultReceiver:
         mock_reader = Mock(spec=SignalReceiver)
         mock_reader.read.return_value = None
 
-        default_data = "default_value"
+        default_data = 'default_value'
         default_ts = 789
         default_reader = DefaultReceiver(mock_reader, default_data, default_ts)
         result = default_reader.read()
@@ -148,15 +148,15 @@ class TestRateLimiter:
 
         try:
             RateLimiter(mock_clock, every_sec=0.5, hz=10)
-            assert False, "Expected AssertionError"
+            raise AssertionError('Expected AssertionError')
         except AssertionError as e:
-            assert "Exactly one of every_sec or hz must be provided" in str(e)
+            assert 'Exactly one of every_sec or hz must be provided' in str(e)
 
         try:
             RateLimiter(mock_clock)
-            assert False, "Expected AssertionError"
+            raise AssertionError('Expected AssertionError')
         except AssertionError as e:
-            assert "Exactly one of every_sec or hz must be provided" in str(e)
+            assert 'Exactly one of every_sec or hz must be provided' in str(e)
 
     def test_first_call_returns_zero_wait(self):
         """Test that first call to wait_time returns 0."""

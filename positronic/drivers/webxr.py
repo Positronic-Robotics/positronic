@@ -5,14 +5,13 @@ import subprocess
 import tempfile
 import threading
 import traceback
-from typing import Iterator
+from collections.abc import Iterator
 
 import numpy as np
 import turbojpeg
 import uvicorn
 from fastapi import FastAPI, WebSocket
 from fastapi.responses import FileResponse
-
 
 import pimm
 from positronic import geom, utils
@@ -38,7 +37,7 @@ _LOG_CONFIG = {
         'default': {
             'format': '%(asctime)s - %(name)s - %(levelname)s - %(message)s',
         }
-    }
+    },
 }
 
 
@@ -65,29 +64,43 @@ def _get_or_create_ssl_files(port: int, keyfile: str, certfile: str) -> tuple[st
         return keyfile, certfile
 
     tmp_dir = tempfile.gettempdir()
-    tmp_key = os.path.join(tmp_dir, f"webxr_key_{port}.pem")
-    tmp_cert = os.path.join(tmp_dir, f"webxr_cert_{port}.pem")
+    tmp_key = os.path.join(tmp_dir, f'webxr_key_{port}.pem')
+    tmp_cert = os.path.join(tmp_dir, f'webxr_cert_{port}.pem')
 
     if os.path.exists(tmp_key) and os.path.exists(tmp_cert):
         return tmp_key, tmp_cert
 
     try:
-        cl = [
-            "openssl", "req", "-x509", "-nodes", "-days", "365", "-newkey", "rsa:2048", "-keyout", tmp_key, "-out",
-            tmp_cert, "-subj", "/CN=localhost"
-        ],
-        subprocess.run(*cl, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        print(f"Generated self-signed SSL certs in {tmp_dir}")
+        cl = (
+            [
+                'openssl',
+                'req',
+                '-x509',
+                '-nodes',
+                '-days',
+                '365',
+                '-newkey',
+                'rsa:2048',
+                '-keyout',
+                tmp_key,
+                '-out',
+                tmp_cert,
+                '-subj',
+                '/CN=localhost',
+            ],
+        )
+        subprocess.run(*cl, check=True, capture_output=True)
+        print(f'Generated self-signed SSL certs in {tmp_dir}')
     except Exception as e:
-        print("Failed to generate SSL certificates via openssl. Provide cert/key files or use HTTP.")
+        print('Failed to generate SSL certificates via openssl. Provide cert/key files or use HTTP.')
         raise e
 
     return tmp_key, tmp_cert
 
 
 def _build_access_url(host: str, port: int, use_https: bool) -> str:
-    scheme = "https" if use_https else "http"
-    return f"{scheme}://{host}:{port}/"
+    scheme = 'https' if use_https else 'http'
+    return f'{scheme}://{host}:{port}/'
 
 
 class WebXR(pimm.ControlSystem):
@@ -117,17 +130,19 @@ class WebXR(pimm.ControlSystem):
     - use_https: enable HTTPS; set False for iPhone dev.
     """
 
-    def __init__(self,
-                 port: int,
-                 ssl_keyfile: str = "key.pem",
-                 ssl_certfile: str = "cert.pem",
-                 frontend: str = "oculus",
-                 use_https: bool = True,
-                 sensitivity: float = 1.0):
+    def __init__(
+        self,
+        port: int,
+        ssl_keyfile: str = 'key.pem',
+        ssl_certfile: str = 'cert.pem',
+        frontend: str = 'oculus',
+        use_https: bool = True,
+        sensitivity: float = 1.0,
+    ):
         self.port = port
         self.ssl_keyfile = ssl_keyfile
         self.ssl_certfile = ssl_certfile
-        assert frontend in ("oculus", "iphone"), f"Unknown frontend: {frontend}"
+        assert frontend in ('oculus', 'iphone'), f'Unknown frontend: {frontend}'
         self.frontend = frontend
         self.use_https = use_https
         self.server_thread = None
@@ -144,37 +159,37 @@ class WebXR(pimm.ControlSystem):
             buffer = jpeg_encoder.encode(image, quality=50)
             return base64.b64encode(buffer).decode('utf-8')
 
-        @app.get("/")
+        @app.get('/')
         async def root():
-            if self.frontend == "oculus":
-                return FileResponse("positronic/assets/webxr/index.html")
+            if self.frontend == 'oculus':
+                return FileResponse('positronic/assets/webxr/index.html')
             else:
-                return FileResponse("positronic/assets/webxr_iphone/index.html")
+                return FileResponse('positronic/assets/webxr_iphone/index.html')
 
-        @app.get("/three.min.js")
+        @app.get('/three.min.js')
         async def three_min():
-            return FileResponse("positronic/assets/webxr/three.min.js")
+            return FileResponse('positronic/assets/webxr/three.min.js')
 
-        @app.get("/webxr-button.js")
+        @app.get('/webxr-button.js')
         async def webxr_button():
-            return FileResponse("positronic/assets/webxr/webxr-button.js")
+            return FileResponse('positronic/assets/webxr/webxr-button.js')
 
-        @app.get("/core.js")
+        @app.get('/core.js')
         async def webxr_core():
-            return FileResponse("positronic/assets/webxr/core.js")
+            return FileResponse('positronic/assets/webxr/core.js')
 
-        if self.frontend == "oculus":
+        if self.frontend == 'oculus':
 
-            @app.get("/video-player.js")
+            @app.get('/video-player.js')
             async def video_player():
-                return FileResponse("positronic/assets/webxr/video-player.js")
+                return FileResponse('positronic/assets/webxr/video-player.js')
 
-        @app.websocket("/video")
+        @app.websocket('/video')
         async def video_stream(websocket: WebSocket):
             await websocket.accept()
-            print("Video WebSocket connection accepted")
+            print('Video WebSocket connection accepted')
             try:
-                fps = pimm.utils.RateCounter("Video Stream")
+                fps = pimm.utils.RateCounter('Video Stream')
                 last_sent_ts = None
                 while not should_stop.value:
                     await asyncio.sleep(1 / 60)
@@ -191,17 +206,17 @@ class WebXR(pimm.ControlSystem):
                     await websocket.send_text(base64_frame)
                     fps.tick()
             except Exception as e:
-                print(f"Video WebSocket error: {e}")
+                print(f'Video WebSocket error: {e}')
                 print(traceback.format_exc())
             finally:
-                print("Video WebSocket connection closed")
+                print('Video WebSocket connection closed')
 
-        @app.websocket("/ws")
+        @app.websocket('/ws')
         async def websocket_endpoint(websocket: WebSocket):
             await websocket.accept()
-            print("WebSocket connection accepted")
+            print('WebSocket connection accepted')
             try:
-                fps = pimm.utils.RateCounter("Websocket")
+                fps = pimm.utils.RateCounter('Websocket')
                 while not should_stop.value:
                     try:
                         # Use asyncio.wait_for with timeout to avoid blocking indefinitely
@@ -219,37 +234,37 @@ class WebXR(pimm.ControlSystem):
                         if buttons['left'] is not None or buttons['right'] is not None:
                             self.buttons.emit(buttons, ts)
                         fps.tick()
-                    except asyncio.TimeoutError:
+                    except TimeoutError:
                         # Timeout is normal, just continue to check should_stop
                         continue
                     except Exception as e:
-                        print(f"Error processing WebSocket message: {e}")
+                        print(f'Error processing WebSocket message: {e}')
                         break
             except Exception as e:
-                print(f"WebSocket error: {e}")
+                print(f'WebSocket error: {e}')
 
         ssl_kwargs = {}
         if self.use_https:
-            keyfile, certfile = _get_or_create_ssl_files(port=self.port,
-                                                         keyfile=self.ssl_keyfile,
-                                                         certfile=self.ssl_certfile)
-            ssl_kwargs = dict(ssl_keyfile=keyfile, ssl_certfile=certfile)
-        config = uvicorn.Config(app, host="0.0.0.0", port=self.port, log_config=_LOG_CONFIG, **ssl_kwargs)
+            keyfile, certfile = _get_or_create_ssl_files(
+                port=self.port, keyfile=self.ssl_keyfile, certfile=self.ssl_certfile
+            )
+            ssl_kwargs = {'ssl_keyfile': keyfile, 'ssl_certfile': certfile}
+        config = uvicorn.Config(app, host='0.0.0.0', port=self.port, log_config=_LOG_CONFIG, **ssl_kwargs)
         server = uvicorn.Server(config)
         self.server_thread = threading.Thread(target=server.run, daemon=True)
         self.server_thread.start()
 
         primary_host = utils.resolve_host_ip()
         url = _build_access_url(primary_host, self.port, self.use_https)
-        banner = "=" * 80
+        banner = '=' * 80
         print(banner)
-        print(f" >>> WEBXR interface available at: {url} <<<")
+        print(f' >>> WEBXR interface available at: {url} <<<')
         print(banner)
 
         while not should_stop.value:
             yield pimm.Sleep(0.1)
             if not self.server_thread.is_alive():
-                raise RuntimeError("WebXR server thread died")
+                raise RuntimeError('WebXR server thread died')
 
         server.should_exit = True
         self.server_thread.join()

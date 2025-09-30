@@ -1,10 +1,11 @@
 import unittest
+
 import numpy as np
-from positronic.geom import Transform3D, Rotation, degrees_to_radians, radians_to_degrees
+
+from positronic.geom import Rotation, Transform3D, degrees_to_radians, radians_to_degrees
 
 
 class TestTransform3D(unittest.TestCase):
-
     def test_as_matrix(self):
         translation = np.array([1, 2, 3])
         rotation = Rotation(0.7071, 0.7071, 0, 0)  # 90 degrees rotation around x-axis
@@ -44,7 +45,6 @@ class TestTransform3D(unittest.TestCase):
 
 
 class TestRotation(unittest.TestCase):
-
     def test_mul(self):
         q1 = Rotation(0.7071, 0.7071, 0, 0)  # 90 degrees rotation around x-axis
         q2 = Rotation(0.7071, 0, 0.7071, 0)  # 90 degrees rotation around y-axis
@@ -129,9 +129,9 @@ class TestRotation(unittest.TestCase):
 
     def test_to_representation_rotation_matrix_same_as_as_rotation_matrix(self):
         q = Rotation(0.7071, 0.7071, 0, 0)  # 90 degrees rotation around x-axis
-        np.testing.assert_array_almost_equal(q.as_rotation_matrix,
-                                             q.to(Rotation.Representation.ROTATION_MATRIX),
-                                             decimal=4)
+        np.testing.assert_array_almost_equal(
+            q.as_rotation_matrix, q.to(Rotation.Representation.ROTATION_MATRIX), decimal=4
+        )
 
     def test_to_representation_rotvec_same_as_as_rotvec(self):
         q = Rotation(0.7071, 0.7071, 0, 0)  # 90 degrees rotation around x-axis
@@ -173,8 +173,9 @@ class TestRotation(unittest.TestCase):
     def test_from_value_same_as_create_from_representation(self):
         for representation in Rotation.Representation:
             data = np.zeros(representation.shape)
-            np.testing.assert_array_almost_equal(representation.from_value(data),
-                                                 Rotation.create_from(data, representation))
+            np.testing.assert_array_almost_equal(
+                representation.from_value(data), Rotation.create_from(data, representation)
+            )
 
     def test_to_representation_exists_for_all_representations(self):
         for representation in Rotation.Representation:
@@ -183,7 +184,6 @@ class TestRotation(unittest.TestCase):
 
 
 class TestUtils(unittest.TestCase):
-
     def test_degrees_to_radians(self):
         degrees = 180
         radians = degrees_to_radians(degrees)

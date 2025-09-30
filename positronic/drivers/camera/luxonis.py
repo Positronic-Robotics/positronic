@@ -1,6 +1,8 @@
-from typing import Iterator
-import pimm
+from collections.abc import Iterator
+
 import depthai as dai
+
+import pimm
 
 
 # TODO: make this configurable
@@ -20,13 +22,13 @@ class LuxonisCamera(pimm.ControlSystem):
         camColor.setColorOrder(dai.ColorCameraProperties.ColorOrder.RGB)
 
         xoutColor = pipeline.create(dai.node.XLinkOut)
-        xoutColor.setStreamName("image")
+        xoutColor.setStreamName('image')
 
         camColor.isp.link(xoutColor.input)
         fps_counter = pimm.utils.RateCounter('luxonis')
 
         with dai.Device(pipeline, maxUsbSpeed=dai.UsbSpeed.SUPER_PLUS) as device:
-            queue = device.getOutputQueue("image", 8, blocking=False)
+            queue = device.getOutputQueue('image', 8, blocking=False)
             while not should_stop.value:
                 frame = queue.tryGet()
                 if frame is None:

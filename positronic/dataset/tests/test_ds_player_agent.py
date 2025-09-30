@@ -1,8 +1,8 @@
 import pytest
 
 from pimm.tests.testing import MockClock
-from positronic.dataset.episode import EpisodeContainer
 from positronic.dataset.ds_player_agent import DsPlayerAbortCommand, DsPlayerAgent, DsPlayerStartCommand
+from positronic.dataset.episode import EpisodeContainer
 from positronic.dataset.tests.utils import DummySignal
 from positronic.tests.testing_coutils import ManualCommandReceiver, MutableShouldStop, RecordingEmitter, drive_until
 
@@ -22,10 +22,12 @@ def test_replays_signals_in_time_order():
     outputs = {'a': RecordingEmitter(), 'b': RecordingEmitter()}
     agent, command_receiver, finished = create_agent(outputs)
 
-    episode = EpisodeContainer(signals={
-        'a': DummySignal([1000, 3000], ['a1', 'a2']),
-        'b': DummySignal([2000], ['b1']),
-    })
+    episode = EpisodeContainer(
+        signals={
+            'a': DummySignal([1000, 3000], ['a1', 'a2']),
+            'b': DummySignal([2000], ['b1']),
+        }
+    )
 
     start_cmd = DsPlayerStartCommand(episode, start_ts=1000)
     command_receiver.push(start_cmd)
@@ -34,8 +36,9 @@ def test_replays_signals_in_time_order():
     should_stop = MutableShouldStop()
     loop = agent.run(should_stop, clock)
 
-    drive_until(loop, clock,
-                lambda: len(outputs['a'].emitted) == 2 and len(outputs['b'].emitted) == 1 and finished.emitted)
+    drive_until(
+        loop, clock, lambda: len(outputs['a'].emitted) == 2 and len(outputs['b'].emitted) == 1 and finished.emitted
+    )
     should_stop.set(True)
     with pytest.raises(StopIteration):
         next(loop)
@@ -49,10 +52,12 @@ def test_start_ts_defaults_to_episode_start():
     outputs = {'a': RecordingEmitter(), 'b': RecordingEmitter()}
     agent, command_receiver, finished = create_agent(outputs)
 
-    episode = EpisodeContainer(signals={
-        'a': DummySignal([1000, 3000], ['drop', 'keep']),
-        'b': DummySignal([2000], ['b1']),
-    })
+    episode = EpisodeContainer(
+        signals={
+            'a': DummySignal([1000, 3000], ['drop', 'keep']),
+            'b': DummySignal([2000], ['b1']),
+        }
+    )
 
     command_receiver.push(DsPlayerStartCommand(episode))
 
@@ -60,8 +65,9 @@ def test_start_ts_defaults_to_episode_start():
     should_stop = MutableShouldStop()
     loop = agent.run(should_stop, clock)
 
-    drive_until(loop, clock,
-                lambda: len(outputs['a'].emitted) == 2 and len(outputs['b'].emitted) == 1 and finished.emitted)
+    drive_until(
+        loop, clock, lambda: len(outputs['a'].emitted) == 2 and len(outputs['b'].emitted) == 1 and finished.emitted
+    )
     should_stop.set(True)
     with pytest.raises(StopIteration):
         next(loop)

@@ -4,7 +4,7 @@ import logging
 import os
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Literal, Optional, Tuple
+from typing import Any, Literal
 
 import numpy as np
 import rerun as rr
@@ -14,8 +14,7 @@ from positronic.dataset.episode import Episode
 from positronic.dataset.local_dataset import LocalDataset
 from positronic.dataset.signal import Signal
 from positronic.dataset.video import VideoSignal
-from positronic.utils.rerun_compat import (flatten_numeric, log_numeric_series,
-                                           log_series_styles, set_timeline_time)
+from positronic.utils.rerun_compat import flatten_numeric, log_numeric_series, log_series_styles, set_timeline_time
 
 
 @dataclass
@@ -83,14 +82,17 @@ def get_dataset_info(ds: LocalDataset) -> dict[str, Any]:
 
 
 def get_episodes_list(ds: LocalDataset) -> list[dict[str, Any]]:
-    return [{
-        'index': idx,
-        'duration': ep.duration_ns / 1e9,
-        'task': ep.static.get('task', None),
-    } for idx, ep in enumerate(ds)]
+    return [
+        {
+            'index': idx,
+            'duration': ep.duration_ns / 1e9,
+            'task': ep.static.get('task', None),
+        }
+        for idx, ep in enumerate(ds)
+    ]
 
 
-def _collect_signal_groups(ep: Episode) -> Tuple[list[str], list[str], dict[str, int]]:
+def _collect_signal_groups(ep: Episode) -> tuple[list[str], list[str], dict[str, int]]:
     """Return (video_names, signal_names, signal_dims) for an episode.
 
     signal_dims gives the number of plotted series per non-video signal (1 for scalar).
@@ -121,20 +123,22 @@ def _collect_signal_groups(ep: Episode) -> Tuple[list[str], list[str], dict[str,
     return video_names, signal_names, signal_dims
 
 
-def _build_blueprint(task: Optional[str], video_names: list[str], signal_names: list[str],
-                     signal_dims: dict[str, int]) -> rrb.Blueprint:
+def _build_blueprint(
+    task: str | None, video_names: list[str], signal_names: list[str], signal_dims: dict[str, int]
+) -> rrb.Blueprint:
     image_views = [rrb.Spatial2DView(name=k.replace('_', ' ').title(), origin=f'/{k}') for k in video_names]
 
     per_signal_views = []
     for sig in signal_names:
         # Legends visible only if a signal has more than one plotted series
-        show_legend = (signal_dims.get(sig, 1) > 1)
+        show_legend = signal_dims.get(sig, 1) > 1
         per_signal_views.append(
             rrb.TimeSeriesView(
                 name=sig.replace('_', ' ').title(),
                 origin=f'/signals/{sig}',
                 plot_legend=rrb.PlotLegend(visible=show_legend),
-            ))
+            )
+        )
 
     grid_items = []
     if per_signal_views:

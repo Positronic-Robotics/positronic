@@ -1,7 +1,7 @@
 import configuronic as cfn
-import pimm
 import numpy as np
 
+import pimm
 import positronic.cfg.hardware.motors
 from positronic.drivers.motors.feetech import MotorBus
 
@@ -30,17 +30,17 @@ def get_function(motor_bus: MotorBus):
             maxs = np.maximum(maxs, pos)
 
             if print_limiter.wait_time() > 0:
-                print(f"mins: {mins.tolist()}, maxs: {maxs.tolist()}", end='\r')
+                print(f'mins: {mins.tolist()}, maxs: {maxs.tolist()}', end='\r')
 
             yield pimm.Sleep(0.001)
 
         mins_str = np.array2string(mins, separator=', ', precision=1).strip()
         maxs_str = np.array2string(maxs, separator=', ', precision=1).strip()
 
-        print("{")
+        print('{')
         print(f'    "mins": np.array({mins_str}),')
         print(f'    "maxs": np.array({maxs_str})')
-        print("}")
+        print('}')
 
     return calibrate_fn
 
@@ -54,5 +54,5 @@ def calibrate(motor_bus: MotorBus):
         input("Move all joints to it's limit, then press ENTER...")
 
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     cfn.cli(calibrate)

@@ -2,14 +2,14 @@ import numpy as np
 import pyarrow.parquet as pq
 import pytest
 
-from positronic.dataset.video import VideoSignal, VideoSignalWriter
 from positronic.dataset.signal import Kind
+from positronic.dataset.video import VideoSignal, VideoSignalWriter
 
 
 @pytest.fixture
 def video_paths(tmp_path):
     """Create paths for video and index files."""
-    return {'video': tmp_path / "test.mp4", 'frames': tmp_path / "frames.parquet"}
+    return {'video': tmp_path / 'test.mp4', 'frames': tmp_path / 'frames.parquet'}
 
 
 @pytest.fixture
@@ -39,18 +39,18 @@ def assert_frames_equal(frame1, frame2, tolerance=20):
         frame2: Second frame to compare
         tolerance: Maximum allowed difference in median pixel values (default: 20)
     """
-    assert frame1.shape == frame2.shape, f"Shape mismatch: {frame1.shape} != {frame2.shape}"
-    assert frame1.dtype == frame2.dtype, f"Dtype mismatch: {frame1.dtype} != {frame2.dtype}"
+    assert frame1.shape == frame2.shape, f'Shape mismatch: {frame1.shape} != {frame2.shape}'
+    assert frame1.dtype == frame2.dtype, f'Dtype mismatch: {frame1.dtype} != {frame2.dtype}'
 
     # Compare median values to account for compression artifacts
     median1 = np.median(frame1)
     median2 = np.median(frame2)
-    assert median1 == pytest.approx(median2, abs=tolerance), \
-        f"Frame content mismatch: median {median1} != {median2} (tolerance={tolerance})"
+    assert median1 == pytest.approx(median2, abs=tolerance), (
+        f'Frame content mismatch: median {median1} != {median2} (tolerance={tolerance})'
+    )
 
 
 class TestVideoSignalWriter:
-
     def test_empty_writer(self, writer, video_paths):
         """Test creating and closing an empty writer."""
         with writer:
@@ -96,8 +96,8 @@ class TestVideoSignalWriter:
     def test_invalid_frame_shape(self, video_paths):
         """Test that invalid frame shapes are rejected."""
         invalid_frames = [
-            (np.zeros((100, 100), dtype=np.uint8), "Expected frame shape"),  # 2D
-            (np.zeros((100, 100, 4), dtype=np.uint8), "Expected frame shape"),  # 4 channels
+            (np.zeros((100, 100), dtype=np.uint8), 'Expected frame shape'),  # 2D
+            (np.zeros((100, 100, 4), dtype=np.uint8), 'Expected frame shape'),  # 4 channels
         ]
 
         for frame, match in invalid_frames:
@@ -109,7 +109,7 @@ class TestVideoSignalWriter:
         """Test that invalid dtypes are rejected."""
         frame = np.zeros((100, 100, 3), dtype=np.float32)
         with writer:
-            with pytest.raises(ValueError, match="Expected uint8 dtype"):
+            with pytest.raises(ValueError, match='Expected uint8 dtype'):
                 writer.append(frame, 1000)
 
     def test_non_increasing_timestamp(self, writer):
@@ -120,7 +120,7 @@ class TestVideoSignalWriter:
             w.append(frame1, 2000)
             # Try same and earlier timestamps
             for ts in [2000, 1000]:
-                with pytest.raises(ValueError, match="not increasing"):
+                with pytest.raises(ValueError, match='not increasing'):
                     w.append(frame2, ts)
 
     def test_inconsistent_dimensions(self, writer):
@@ -128,7 +128,7 @@ class TestVideoSignalWriter:
         with writer as w:
             w.append(create_frame(0, (100, 100, 3)), 1000)
             # Different dimensions should fail
-            with pytest.raises(ValueError, match="Frame shape"):
+            with pytest.raises(ValueError, match='Frame shape'):
                 w.append(create_frame(0, (50, 50, 3)), 2000)
 
     def test_append_after_context_exit(self, writer):
@@ -136,14 +136,14 @@ class TestVideoSignalWriter:
         frame = create_frame()
         with writer as w:
             w.append(frame, 1000)
-        with pytest.raises(RuntimeError, match="Cannot append to a finished writer"):
+        with pytest.raises(RuntimeError, match='Cannot append to a finished writer'):
             w.append(frame, 2000)
 
 
 class TestVideoSignalStartLastTs:
-
     def test_video_start_last_ts_basic(self, video_paths):
         from positronic.dataset.video import VideoSignal
+
         with VideoSignalWriter(video_paths['video'], video_paths['frames'], gop_size=5, fps=30) as writer:
             writer.append(create_frame(10), 1000)
             writer.append(create_frame(20), 2000)
@@ -155,6 +155,7 @@ class TestVideoSignalStartLastTs:
 
     def test_video_start_last_ts_empty_raises(self, video_paths):
         from positronic.dataset.video import VideoSignal
+
         with VideoSignalWriter(video_paths['video'], video_paths['frames']):
             pass
         s = VideoSignal(video_paths['video'], video_paths['frames'])
@@ -165,7 +166,6 @@ class TestVideoSignalStartLastTs:
 
 
 class TestVideoInterface:
-
     def test_len_values_ts_at(self, video_paths):
         sig = create_video_signal(video_paths, [(create_frame(50), 1000), (create_frame(100), 2000)])
         assert len(sig) == 2
@@ -177,7 +177,7 @@ class TestVideoInterface:
     def test_video_kind_and_names(self, video_paths):
         sig = create_video_signal(video_paths, [(create_frame(10), 1000)])
         assert sig.kind == Kind.IMAGE
-        assert sig.names == ["height", "width", "channel"]
+        assert sig.names == ['height', 'width', 'channel']
 
     def test_video_kind_names_empty_raises(self, video_paths):
         # Create empty video index
@@ -193,7 +193,7 @@ class TestVideoInterface:
         sig = create_video_signal(video_paths, [(create_frame(10), 1000), (create_frame(20), 2000)])
         view = sig[0:2]
         assert view.kind == Kind.IMAGE
-        assert view.names == ["height", "width", "channel"]
+        assert view.names == ['height', 'width', 'channel']
         empty_view = sig[0:0]
         with pytest.raises(ValueError):
             _ = empty_view.kind

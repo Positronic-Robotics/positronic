@@ -1,6 +1,6 @@
 import configuronic as cfn
-from positronic.drivers.roboarm.generate_urdf import MotorParameters
 
+from positronic.drivers.roboarm.generate_urdf import MotorParameters
 
 my_actuator_rmd_x10_p35_100 = cfn.Config(
     MotorParameters,

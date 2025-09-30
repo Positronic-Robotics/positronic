@@ -1,4 +1,5 @@
 from pkgutil import extend_path as _extend_path
+
 __path__ = _extend_path(__path__, __name__)
 
 from abc import ABC, abstractmethod
@@ -19,6 +20,7 @@ class RobotStatus(Enum):
     - RESETTING: The robot is resetting.
     - MOVING: The robot is moving to a new position, but is not yet at the new position.
     """
+
     AVAILABLE = 0
     RESETTING = 1
     MOVING = 2

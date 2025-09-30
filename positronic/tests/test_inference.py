@@ -1,11 +1,11 @@
 from functools import partial
+
 import numpy as np
 import pytest
 import torch
 
 import pimm
 from pimm.tests.testing import MockClock
-
 from positronic import geom
 from positronic.drivers import roboarm
 from positronic.run_inference import Inference, InferenceCommand
@@ -13,7 +13,6 @@ from positronic.tests.testing_coutils import ManualDriver, drive_scheduler
 
 
 class StubStateEncoder:
-
     def __init__(self) -> None:
         self.last_images: dict[str, dict] | None = None
         self.last_inputs: dict[str, object] | None = None
@@ -30,12 +29,12 @@ class StubStateEncoder:
 
 
 class StubActionDecoder:
-
     def __init__(self) -> None:
         self.last_action: np.ndarray | None = None
         self.last_inputs: dict[str, object] | None = None
-        self.pose = geom.Transform3D(translation=np.array([0.4, 0.5, 0.6], dtype=np.float32),
-                                     rotation=geom.Rotation.identity)
+        self.pose = geom.Transform3D(
+            translation=np.array([0.4, 0.5, 0.6], dtype=np.float32), rotation=geom.Rotation.identity
+        )
         self.grip = np.array(0.33, dtype=np.float32)
 
     def decode(self, action: np.ndarray, inputs: dict[str, object]) -> dict[str, object]:
@@ -48,7 +47,6 @@ class StubActionDecoder:
 
 
 class SpyPolicy:
-
     def __init__(self, action: torch.Tensor) -> None:
         self.action = action
         self.device: str | None = None
@@ -64,7 +62,6 @@ class SpyPolicy:
 
 
 class FakeRobotState:
-
     def __init__(self, translation: np.ndarray, joints: np.ndarray, status: roboarm.RobotStatus) -> None:
         self.ee_pose = geom.Transform3D(translation=translation, rotation=geom.Rotation.identity)
         self.q = joints

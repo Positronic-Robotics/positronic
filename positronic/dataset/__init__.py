@@ -1,6 +1,6 @@
-from .signal import (Signal, SignalWriter, IndicesLike, RealNumericArrayLike, is_realnum_dtype)
-from .episode import (Episode, EpisodeWriter)
-from .dataset import (Dataset, DatasetWriter)
+from .dataset import Dataset, DatasetWriter
+from .episode import Episode, EpisodeWriter
+from .signal import IndicesLike, RealNumericArrayLike, Signal, SignalWriter, is_realnum_dtype
 
 __all__ = [
     'Signal',

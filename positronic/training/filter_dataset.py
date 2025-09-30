@@ -1,13 +1,13 @@
-from pathlib import Path
-from typing import Dict, Any
-from io import BytesIO
 import os
+from io import BytesIO
+from pathlib import Path
+from typing import Any
 
+import fire
 import imageio
 import numpy as np
-import tqdm
-import fire
 import torch
+import tqdm
 
 
 def _decode_video_from_array(array: torch.Tensor) -> torch.Tensor:
@@ -28,24 +28,23 @@ def _decode_video_from_array(array: torch.Tensor) -> torch.Tensor:
         buffer.seek(0)
         try:
             with imageio.get_reader(buffer, format='mp4') as reader:
-                return torch.from_numpy(np.stack([frame for frame in reader]))
+                return torch.from_numpy(np.stack(list(reader)))
         except Exception:
             try:
-                print("Failed to decode video data. Trying to read from file.")
+                print('Failed to decode video data. Trying to read from file.')
                 with open('tmp.mp4', 'wb') as f:
                     f.write(array.numpy().tobytes())
                 return torch.from_numpy(np.stack(imageio.mimread('tmp.mp4')))
             except Exception as e:
-                raise ValueError(f"Failed to decode video data: {str(e)}")
+                raise ValueError(f'Failed to decode video data: {str(e)}') from e
             finally:
                 os.remove('tmp.mp4')
 
 
 def get_consistent_samples(
-        ds: Dict[str, Any],
-        min_interval_length: int = 30,
+    ds: dict[str, Any],
+    min_interval_length: int = 30,
 ):
-
     distance_between_controllers = torch.linalg.norm(ds['umi_left_translation'] - ds['umi_right_translation'], axis=1)
 
     # since controllers dosen't move relative to each other, the distance should be constant
@@ -78,11 +77,7 @@ def get_consistent_samples(
         consistent_intervals = [(starts[i].item(), ends[i].item()) for i in range(len(starts))]
 
     # Remove intervals that are too short
-    consistent_intervals = [
-        (start, end)
-        for start, end in consistent_intervals
-        if end - start >= min_interval_length
-    ]
+    consistent_intervals = [(start, end) for start, end in consistent_intervals if end - start >= min_interval_length]
 
     return consistent_intervals
 
@@ -106,7 +101,7 @@ def slice_sample(sample, consistent_intervals):
             if isinstance(v, torch.Tensor) and '.image' in k:
                 # Encode the video slice to bytes using imageio
                 video_slice = videos[k][start:end]
-                encoded_video = imageio.mimsave("<bytes>", video_slice, format='mp4')
+                encoded_video = imageio.mimsave('<bytes>', video_slice, format='mp4')
                 # Store the encoded frames
                 s[k] = torch.from_numpy(np.frombuffer(encoded_video, dtype=np.uint8))
             elif isinstance(v, torch.Tensor) and len(v) == sample_len:

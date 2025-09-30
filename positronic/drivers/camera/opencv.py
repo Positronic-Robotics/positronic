@@ -1,5 +1,4 @@
 import time
-from typing import Tuple
 
 import cv2
 
@@ -7,7 +6,7 @@ import pimm
 
 
 class OpenCVCamera(pimm.ControlSystem):
-    def __init__(self, camera_id: int, resolution: Tuple[int, int], fps: int):
+    def __init__(self, camera_id: int, resolution: tuple[int, int], fps: int):
         self.camera_id = camera_id
         self.resolution = resolution
         self.fps = fps
@@ -20,14 +19,14 @@ class OpenCVCamera(pimm.ControlSystem):
         cap.set(cv2.CAP_PROP_FPS, self.fps)
 
         if not cap.isOpened():
-            raise RuntimeError(f"Failed to open camera {self.camera_id}")
+            raise RuntimeError(f'Failed to open camera {self.camera_id}')
 
         fps_counter = pimm.utils.RateCounter('OpenCV Camera')
 
         while not should_stop.value:
             ret, frame = cap.read()
             if not ret:
-                raise RuntimeError("Failed to grab frame")
+                raise RuntimeError('Failed to grab frame')
 
             frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
 
@@ -37,14 +36,14 @@ class OpenCVCamera(pimm.ControlSystem):
             yield pimm.Pass()  # Give control back to the world
 
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     import sys
+
     import av
 
     # We could implement this as a plain function
     # TODO: Extract this into utilities
     class VideoWriter(pimm.ControlSystem):
-
         def __init__(self, filename: str, fps: int, codec: str = 'libx264'):
             self.filename = filename
             self.fps = fps
@@ -52,7 +51,7 @@ if __name__ == "__main__":
             self.frame = pimm.ControlSystemReceiver(self)
 
         def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock):
-            print(f"Writing to {self.filename}")
+            print(f'Writing to {self.filename}')
             fps_counter = pimm.utils.RateCounter('VideoWriter')
             with av.open(self.filename, mode='w', format='mp4') as container:
                 stream = container.add_stream(self.codec, rate=self.fps)

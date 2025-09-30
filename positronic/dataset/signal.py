@@ -1,10 +1,11 @@
 from abc import ABC, abstractmethod
+from collections.abc import Sequence
 from collections.abc import Sequence as SequenceABC
 from contextlib import AbstractContextManager
-from enum import Enum
-from typing import (Any, Generic, Protocol, Sequence, Tuple, TypeAlias, TypeVar, final, runtime_checkable)
-from functools import lru_cache
 from dataclasses import dataclass
+from enum import Enum
+from functools import lru_cache
+from typing import Any, Generic, Protocol, TypeAlias, TypeVar, Union, final, runtime_checkable
 
 import numpy as np
 
@@ -29,7 +30,7 @@ def _infer_item_dtype_shape(item: Any) -> tuple[Any, Any]:
     """
     if isinstance(item, np.ndarray):
         return item.dtype, item.shape
-    if isinstance(item, (np.integer, np.floating, int, float)):
+    if isinstance(item, np.integer | np.floating | int | float):
         return type(item), ()
     if isinstance(item, tuple):
         dts_shapes = tuple(_infer_item_dtype_shape(x) for x in item)
@@ -41,21 +42,21 @@ def _infer_item_dtype_shape(item: Any) -> tuple[Any, Any]:
 
 @runtime_checkable
 class TimeIndexerLike(Protocol, Generic[T]):
-
     def __getitem__(
-            self,
-            key: int | float | slice | Sequence[int] | Sequence[float] | np.ndarray) -> Tuple[T, int] | "Signal[T]":
-        ...
+        self,
+        key: int | float | slice | Sequence[int] | Sequence[float] | np.ndarray,
+    ) -> Union[tuple[T, int], 'Signal[T]']: ...
 
 
 class Kind(Enum):
-    NUMERIC = "numeric"
-    IMAGE = "image"
+    NUMERIC = 'numeric'
+    IMAGE = 'image'
 
 
 @dataclass
 class SignalMeta:
     """Container for signal element metadata."""
+
     dtype: Any
     shape: Any
     kind: 'Kind' = Kind.NUMERIC
@@ -66,7 +67,7 @@ class SignalMeta:
         return SignalMeta(dtype=self.dtype, shape=self.shape, kind=self.kind, names=names)
 
 
-class Signal(Sequence[Tuple[T, int]], ABC, Generic[T]):
+class Signal(Sequence[tuple[T, int]], ABC, Generic[T]):
     """Strictly typed, stepwise function of time with a uniform access contract.
 
     Implementations must provide only a minimal abstract interface; all indexing
@@ -94,13 +95,13 @@ class Signal(Sequence[Tuple[T, int]], ABC, Generic[T]):
     @property
     def start_ts(self) -> int:
         if len(self) == 0:
-            raise ValueError("Signal is empty")
+            raise ValueError('Signal is empty')
         return int(np.asarray(self._ts_at([0]))[0])
 
     @property
     def last_ts(self) -> int:
         if len(self) == 0:
-            raise ValueError("Signal is empty")
+            raise ValueError('Signal is empty')
         return int(np.asarray(self._ts_at([len(self) - 1]))[0])
 
     @property
@@ -112,11 +113,14 @@ class Signal(Sequence[Tuple[T, int]], ABC, Generic[T]):
         domain-specific kind/names or alternate inference.
         """
         if len(self) == 0:
-            raise ValueError("Signal is empty")
+            raise ValueError('Signal is empty')
         dtype, shape = _infer_item_dtype_shape(self._values_at([0])[0])
         # Heuristic: uint8 HxWx3 treated as Image, else Numeric
-        kind = Kind.IMAGE if (dtype == np.uint8 and isinstance(shape, tuple) and len(shape) == 3
-                              and shape[2] == 3) else Kind.NUMERIC
+        kind = (
+            Kind.IMAGE
+            if (dtype == np.uint8 and isinstance(shape, tuple) and len(shape) == 3 and shape[2] == 3)
+            else Kind.NUMERIC
+        )
         return SignalMeta(dtype=dtype, shape=shape, kind=kind)
 
     @property
@@ -141,45 +145,48 @@ class Signal(Sequence[Tuple[T, int]], ABC, Generic[T]):
         return _SignalViewTime(self)
 
     @final
-    def __getitem__(self, index_or_slice: int | slice | Sequence[int] | np.ndarray) -> Tuple[T, int] | "Signal[T]":
+    def __getitem__(
+        self, index_or_slice: int | slice | Sequence[int] | np.ndarray
+    ) -> Union[tuple[T, int], 'Signal[T]']:
         match index_or_slice:
             case int() | np.integer() as idx:
                 if idx < 0:
                     idx = len(self) + idx
                 if idx < 0 or idx >= len(self):
-                    raise IndexError(f"Index {idx} out of range for Signal of length {len(self)}")
+                    raise IndexError(f'Index {idx} out of range for Signal of length {len(self)}')
                 return self._values_at([idx])[0], int(self._ts_at([idx])[0])
             case slice() as sl:
                 if sl.step is not None and sl.step <= 0:
-                    raise ValueError("Slice step must be positive")
+                    raise ValueError('Slice step must be positive')
                 return _SignalView(self, range(*sl.indices(len(self))))
             case np.ndarray() | SequenceABC() as idxs:
                 arr = np.asarray(idxs)
                 if arr.size == 0:
                     return _SignalView(self, arr.astype(np.int64))
                 if arr.dtype == np.bool_:
-                    raise IndexError("Boolean mask indexing is not supported for Signal")
+                    raise IndexError('Boolean mask indexing is not supported for Signal')
                 if not np.issubdtype(arr.dtype, np.integer):
-                    raise TypeError(f"Unsupported index dtype: {arr.dtype}")
+                    raise TypeError(f'Unsupported index dtype: {arr.dtype}')
                 arr[arr < 0] += len(self)
                 if (arr < 0).any() or (arr >= len(self)).any():
-                    raise IndexError("Index out of range for Signal")
+                    raise IndexError('Index out of range for Signal')
                 return _SignalView(self, arr)
             case _:
-                raise TypeError(f"Unsupported index type: {type(index_or_slice)}")
+                raise TypeError(f'Unsupported index type: {type(index_or_slice)}')
 
 
 class _SignalViewTime(TimeIndexerLike[T], Generic[T]):
-
     def __init__(self, signal: Signal[T]):
         self._signal = signal
 
-    def __getitem__(self, ts_or_array: int | float | Sequence[int] | np.ndarray | slice) -> Tuple[T, int] | "Signal[T]":
+    def __getitem__(
+        self, ts_or_array: int | float | Sequence[int] | np.ndarray | slice
+    ) -> Union[tuple[T, int], 'Signal[T]']:
         match ts_or_array:
             case int() | float() | np.floating() as ts:
                 idx = int(self._signal._search_ts([ts])[0])
                 if idx < 0:
-                    raise KeyError(f"Timestamp {ts} precedes the first record")
+                    raise KeyError(f'Timestamp {ts} precedes the first record')
                 return self._signal._values_at([idx])[0], int(self._signal._ts_at([idx])[0])
             case slice() as sl if sl.step is None:
                 if len(self._signal) == 0:
@@ -197,9 +204,9 @@ class _SignalViewTime(TimeIndexerLike[T], Generic[T]):
                     start_id = 0
                 return _SignalView(self._signal, range(start_id, end_id, 1), **kwargs)
             case slice() as sl if sl.step is not None and sl.step <= 0:
-                raise ValueError("Slice step must be positive")
+                raise ValueError('Slice step must be positive')
             case slice() as sl if sl.step is not None and sl.start is None:
-                raise ValueError("Slice start is required when step is provided")
+                raise ValueError('Slice start is required when step is provided')
             case np.ndarray() | SequenceABC() | slice() as tss:
                 if isinstance(tss, slice):
                     if len(self._signal) == 0:
@@ -207,33 +214,34 @@ class _SignalViewTime(TimeIndexerLike[T], Generic[T]):
                     start = tss.start if tss.start is not None else self._signal.start_ts
                     stop = tss.stop if tss.stop is not None else self._signal.last_ts + 1
                     if start < self._signal.start_ts:
-                        raise KeyError(f"Timestamp {start} precedes the first record")
+                        raise KeyError(f'Timestamp {start} precedes the first record')
                     tss = np.arange(start, stop, tss.step)
                 idxs = np.asarray(self._signal._search_ts(tss))
                 if (idxs < 0).any():
-                    raise KeyError("No record at or before some of the requested timestamps")
+                    raise KeyError('No record at or before some of the requested timestamps')
                 return _SignalView(self._signal, idxs, tss)
             case _:
-                raise TypeError(f"Unsupported index type: {type(ts_or_array)}")
+                raise TypeError(f'Unsupported index type: {type(ts_or_array)}')
 
 
 class _SignalView(Signal[T], Generic[T]):
-
-    def __init__(self,
-                 signal: Signal[T],
-                 indices: Sequence[int],
-                 timestamps: Sequence[int] | None = None,
-                 start_ts: int | None = None):
+    def __init__(
+        self,
+        signal: Signal[T],
+        indices: Sequence[int],
+        timestamps: Sequence[int] | None = None,
+        start_ts: int | None = None,
+    ):
         self._signal = signal
         self._indices = indices
-        assert timestamps is None or start_ts is None, "Only one of timestamps or start_ts can be provided"
+        assert timestamps is None or start_ts is None, 'Only one of timestamps or start_ts can be provided'
         self._timestamps = timestamps
         self._start_ts = start_ts
 
     @property
     def meta(self) -> SignalMeta:
         if len(self) == 0:
-            raise ValueError("Signal is empty")
+            raise ValueError('Signal is empty')
         return self._signal.meta
 
     def __len__(self) -> int:
@@ -256,7 +264,7 @@ class _SignalView(Signal[T], Generic[T]):
                     result[idxs == 0] = self._start_ts
                 return result
             case _:
-                raise TypeError(f"Unsupported index type: {type(indices)}")
+                raise TypeError(f'Unsupported index type: {type(indices)}')
 
     def _values_at(self, indices: IndicesLike | slice) -> Sequence[T]:
         match indices:
@@ -268,7 +276,7 @@ class _SignalView(Signal[T], Generic[T]):
                     mapped = np.asarray(self._indices)[idxs]
                 return self._signal._values_at(mapped)
             case _:
-                raise TypeError(f"Unsupported index type: {type(indices)}")
+                raise TypeError(f'Unsupported index type: {type(indices)}')
 
     def _search_ts(self, ts_array: RealNumericArrayLike) -> IndicesLike:
         match ts_array:
@@ -279,7 +287,7 @@ class _SignalView(Signal[T], Generic[T]):
                 else:
                     return np.searchsorted(self._timestamps, ts_array, side='right') - 1
             case _:
-                raise TypeError(f"Unsupported index type: {type(ts_array)}")
+                raise TypeError(f'Unsupported index type: {type(ts_array)}')
 
 
 class SignalWriter(AbstractContextManager, ABC, Generic[T]):
@@ -290,8 +298,7 @@ class SignalWriter(AbstractContextManager, ABC, Generic[T]):
         pass
 
     @abstractmethod
-    def __exit__(self, exc_type, exc, tb) -> None:
-        ...
+    def __exit__(self, exc_type, exc, tb) -> None: ...
 
     @abstractmethod
     def abort(self) -> None:

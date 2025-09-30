@@ -1,6 +1,7 @@
 import json
+from collections.abc import Sequence
 from pathlib import Path
-from typing import Any, Sequence, TypeVar
+from typing import Any, TypeVar
 
 import numpy as np
 import pyarrow as pa
@@ -64,7 +65,7 @@ class SimpleSignal(Signal[T]):
         if req.size == 0:
             return np.array([], dtype=np.int64)
         if not is_realnum_dtype(req.dtype):
-            raise TypeError(f"Invalid timestamp array dtype: {req.dtype}")
+            raise TypeError(f'Invalid timestamp array dtype: {req.dtype}')
         return np.searchsorted(self._timestamps, req, side='right') - 1
 
     @property
@@ -82,11 +83,13 @@ class SimpleSignalWriter(SignalWriter[T]):
     Supports scalars and fixed-size vectors/arrays.
     """
 
-    def __init__(self,
-                 filepath: Path,
-                 chunk_size: int = 10000,
-                 drop_equal_bytes_threshold: int | None = None,
-                 names: Sequence[str] | None = None):
+    def __init__(
+        self,
+        filepath: Path,
+        chunk_size: int = 10000,
+        drop_equal_bytes_threshold: int | None = None,
+        names: Sequence[str] | None = None,
+    ):
         """Initialize Signal writer to save data to a parquet file.
 
         Args:
@@ -122,7 +125,7 @@ class SimpleSignalWriter(SignalWriter[T]):
     def _nbytes(self, v: Any) -> int | None:
         if isinstance(v, np.ndarray):
             return int(v.nbytes)
-        if isinstance(v, (bytes, bytearray)):
+        if isinstance(v, bytes | bytearray):
             return len(v)
         try:
             return int(np.array(v).nbytes)
@@ -151,17 +154,17 @@ class SimpleSignalWriter(SignalWriter[T]):
 
     def append(self, data: T, ts_ns: int) -> None:  # noqa: C901  Function is too complex
         if self._finished:
-            raise RuntimeError("Cannot append to a finished writer")
+            raise RuntimeError('Cannot append to a finished writer')
         if self._aborted:
-            raise RuntimeError("Cannot append to an aborted writer")
+            raise RuntimeError('Cannot append to an aborted writer')
 
         if self._last_ts is not None and ts_ns <= self._last_ts:
-            raise ValueError(f"Timestamp {ts_ns} is not increasing (last was {self._last_ts})")
+            raise ValueError(f'Timestamp {ts_ns} is not increasing (last was {self._last_ts})')
 
         value: object = data
         if isinstance(value, pa.Array):  # runtime conversion; keep linter happy via getattr
             value = value.to_numpy()
-        elif isinstance(value, (list, tuple)):
+        elif isinstance(value, list | tuple):
             value = np.array(value)
 
         if isinstance(value, np.ndarray):
@@ -185,7 +188,7 @@ class SimpleSignalWriter(SignalWriter[T]):
             if size_bytes is not None and size_bytes < self._drop_equal_bytes_threshold:
                 self._dedupe_enabled = True
 
-        if (self._dedupe_enabled and self._last_value is not None and self._equal(value, self._last_value)):
+        if self._dedupe_enabled and self._last_value is not None and self._equal(value, self._last_value):
             return
 
         self._timestamps.append(int(ts_ns))
@@ -220,7 +223,7 @@ class SimpleSignalWriter(SignalWriter[T]):
         if self._aborted:
             return
         if self._finished:
-            raise RuntimeError("Cannot abort a finished writer")
+            raise RuntimeError('Cannot abort a finished writer')
 
         if self._writer is not None:
             self._writer.close()

@@ -46,4 +46,4 @@ __all__ = [
 
 from importlib.metadata import version as _version
 
-__version__ = _version("positronic")
+__version__ = _version('positronic')

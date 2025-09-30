@@ -1,5 +1,5 @@
-import placo
 import numpy as np
+import placo
 
 from positronic import geom
 
@@ -14,7 +14,7 @@ class Kinematics:
         self.tip_frame = self.solver.add_frame_task(self.target_frame_name, np.eye(4))
 
     def forward(self, joint_positions: np.ndarray) -> geom.Transform3D:
-        for name, pos in zip(self.joint_names, joint_positions):
+        for name, pos in zip(self.joint_names, joint_positions, strict=False):
             self.robot.set_joint(name, pos)
         self.robot.update_kinematics()
         frame = self.robot.get_T_world_frame(self.target_frame_name)
@@ -32,12 +32,12 @@ class Kinematics:
         target_pose_mtx = target_ee_pose.as_matrix
         for i, joint_name in enumerate(self.joint_names):
             self.robot.set_joint(joint_name, current_joint_pos[i])
-        self.tip_frame.configure(self.target_frame_name, "soft", position_weight, orientation_weight)
+        self.tip_frame.configure(self.target_frame_name, 'soft', position_weight, orientation_weight)
         self.tip_frame.T_world_frame = target_pose_mtx
         self.robot.update_kinematics()
 
         # For some reason, the solver doesn't converge without this loop
-        for i in range(n_iter):
+        for _ in range(n_iter):
             self.solver.solve(True)
             self.robot.update_kinematics()
 

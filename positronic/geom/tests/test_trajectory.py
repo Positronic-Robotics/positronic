@@ -1,22 +1,13 @@
-import pytest
 import numpy as np
+import pytest
 
 from positronic import geom
 from positronic.geom.trajectory import AbsoluteTrajectory, RelativeTrajectory
 
-
 # rotation around z-axis by 90 degrees clockwise
-around_z_90 = geom.Rotation.from_rotation_matrix([
-    [0, -1, 0],
-    [1, 0, 0],
-    [0, 0, 1]
-])
+around_z_90 = geom.Rotation.from_rotation_matrix([[0, -1, 0], [1, 0, 0], [0, 0, 1]])
 
-around_z_270 = geom.Rotation.from_rotation_matrix([
-    [0, 1, 0],
-    [-1, 0, 0],
-    [0, 0, 1]
-])
+around_z_270 = geom.Rotation.from_rotation_matrix([[0, 1, 0], [-1, 0, 0], [0, 0, 1]])
 
 
 @pytest.fixture
@@ -60,33 +51,30 @@ def relative_trajectory() -> RelativeTrajectory:
 @pytest.fixture
 def start_position():
     """Fixture providing a start position for testing."""
-    return geom.Transform3D(
-        translation=np.array([1.0, 2.0, 3.0]),
-        rotation=around_z_270
-    )
+    return geom.Transform3D(translation=np.array([1.0, 2.0, 3.0]), rotation=around_z_270)
 
 
 def test_absolute_to_relative_conversion(
-        absolute_trajectory: AbsoluteTrajectory,
-        relative_trajectory: RelativeTrajectory,
+    absolute_trajectory: AbsoluteTrajectory,
+    relative_trajectory: RelativeTrajectory,
 ):
     converted_relative_trajectory = absolute_trajectory.to_relative()
 
     assert len(converted_relative_trajectory) == len(relative_trajectory)
 
-    for expected, actual in zip(relative_trajectory, converted_relative_trajectory):
+    for expected, actual in zip(relative_trajectory, converted_relative_trajectory, strict=False):
         np.testing.assert_allclose(expected.as_matrix, actual.as_matrix, atol=1e-6)
 
 
 def test_relative_to_absolute_conversion(
-        absolute_trajectory: AbsoluteTrajectory,
-        relative_trajectory: RelativeTrajectory,
+    absolute_trajectory: AbsoluteTrajectory,
+    relative_trajectory: RelativeTrajectory,
 ):
     converted_absolute_trajectory = relative_trajectory.to_absolute(absolute_trajectory[0])
 
     assert len(converted_absolute_trajectory) == len(absolute_trajectory)
 
-    for expected, actual in zip(absolute_trajectory, converted_absolute_trajectory):
+    for expected, actual in zip(absolute_trajectory, converted_absolute_trajectory, strict=False):
         np.testing.assert_allclose(expected.as_matrix, actual.as_matrix, atol=1e-6)
 
 
@@ -96,20 +84,20 @@ def test_cycle_conversion(absolute_trajectory_with_start_position: AbsoluteTraje
 
     assert len(converted_absolute) == len(absolute_trajectory_with_start_position)
 
-    for expected, actual in zip(absolute_trajectory_with_start_position, converted_absolute):
+    for expected, actual in zip(absolute_trajectory_with_start_position, converted_absolute, strict=False):
         np.testing.assert_allclose(expected.as_matrix, actual.as_matrix, atol=1e-6)
 
 
 def test_relative_to_absolute_conversion_with_start_position(
-        absolute_trajectory_with_start_position: AbsoluteTrajectory,
-        relative_trajectory: RelativeTrajectory,
-        start_position: geom.Transform3D,
+    absolute_trajectory_with_start_position: AbsoluteTrajectory,
+    relative_trajectory: RelativeTrajectory,
+    start_position: geom.Transform3D,
 ):
     converted_absolute = relative_trajectory.to_absolute(start_position)
 
     assert len(converted_absolute) == len(absolute_trajectory_with_start_position)
 
-    for expected, actual in zip(absolute_trajectory_with_start_position, converted_absolute):
+    for expected, actual in zip(absolute_trajectory_with_start_position, converted_absolute, strict=False):
         np.testing.assert_allclose(expected.as_matrix, actual.as_matrix, atol=1e-6)
 
 
@@ -117,5 +105,5 @@ def test_cycle_consistency_twice_produces_original_trajectory(absolute_trajector
     restored_1_cycle = absolute_trajectory.to_relative().to_absolute(geom.Transform3D.identity)
     restored_2_cycles = restored_1_cycle.to_relative().to_absolute(geom.Transform3D.identity)
 
-    for expected, actual in zip(absolute_trajectory, restored_2_cycles):
+    for expected, actual in zip(absolute_trajectory, restored_2_cycles, strict=False):
         np.testing.assert_allclose(expected.as_matrix, actual.as_matrix, atol=1e-6)

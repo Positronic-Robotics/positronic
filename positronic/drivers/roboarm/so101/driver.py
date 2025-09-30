@@ -1,4 +1,4 @@
-from typing import Iterator
+from collections.abc import Iterator
 
 import numpy as np
 
@@ -27,8 +27,8 @@ class SO101State(State, pimm.shared_memory.NumpySMAdapter):
 
     @property
     def ee_pose(self) -> geom.Transform3D:
-        translation = self.array[10:10 + 3]
-        quaternion = geom.Rotation.from_quat(self.array[10 + 3:10 + 7])
+        translation = self.array[10 : 10 + 3]
+        quaternion = geom.Rotation.from_quat(self.array[10 + 3 : 10 + 7])
         return geom.Transform3D(translation, quaternion)
 
     @property
@@ -38,27 +38,27 @@ class SO101State(State, pimm.shared_memory.NumpySMAdapter):
     def encode(self, q, dq, ee_pose):
         self.array[:5] = q
         self.array[5:10] = dq
-        self.array[10:10 + 3] = ee_pose.translation
-        self.array[10 + 3:10 + 7] = ee_pose.rotation.as_quat
+        self.array[10 : 10 + 3] = ee_pose.translation
+        self.array[10 + 3 : 10 + 7] = ee_pose.rotation.as_quat
         self.array[17] = RobotStatus.AVAILABLE.value
 
 
 class Robot(pimm.ControlSystem):
-    def __init__(self, motor_bus: MotorBus, home_joints: list[float] = [0.0, 0.0, 0.0, 0.0, 0.0]):
+    def __init__(self, motor_bus: MotorBus, home_joints: list[float] | None = None):
         self.motor_bus = motor_bus
-        self.mujoco_model_path = "positronic/drivers/roboarm/so101/so101.xml"
-        self.kinematic = Kinematics("positronic/drivers/roboarm/so101/so101.urdf", "gripper_frame_joint")
+        self.mujoco_model_path = 'positronic/drivers/roboarm/so101/so101.xml'
+        self.kinematic = Kinematics('positronic/drivers/roboarm/so101/so101.urdf', 'gripper_frame_joint')
         self.joint_limits = self.kinematic.joint_limits
-        self.home_joints = home_joints
+        self.home_joints = home_joints if home_joints is not None else [0.0, 0.0, 0.0, 0.0, 0.0]
         self.commands: pimm.SignalReceiver[roboarm_command.CommandType] = pimm.ControlSystemReceiver(self)
         self.target_grip: pimm.SignalReceiver[float] = pimm.ControlSystemReceiver(self)
 
         self.grip: pimm.SignalEmitter[float] = pimm.ControlSystemEmitter(self)
         self.state: pimm.SignalEmitter[SO101State] = pimm.ControlSystemEmitter(self)
 
-        print("================================================================")
-        print("Warning: Proper dq units is not implemented for SO101!")
-        print("================================================================")
+        print('================================================================')
+        print('Warning: Proper dq units is not implemented for SO101!')
+        print('================================================================')
 
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Sleep]:
         self.motor_bus.connect()
@@ -75,7 +75,7 @@ class Robot(pimm.ControlSystem):
             if is_updated:
                 match command:
                     case roboarm_command.Reset():
-                        raise NotImplementedError("Reset not implemented")
+                        raise NotImplementedError('Reset not implemented')
                     case roboarm_command.CartesianMove():
                         qpos = self._solve_ik(state, command)
                         q_with_gripper = np.concatenate([qpos, [target_grip.value]])
@@ -85,7 +85,7 @@ class Robot(pimm.ControlSystem):
                         q_with_gripper = np.concatenate([q_norm, [target_grip.value]])
                         self.motor_bus.set_target_position(q_with_gripper)
                     case _:
-                        raise ValueError(f"Unknown command: {command}")
+                        raise ValueError(f'Unknown command: {command}')
 
             q = self.motor_bus.position
             dq = self.motor_bus.velocity[:-1]
@@ -121,6 +121,5 @@ class Robot(pimm.ControlSystem):
         return qpos * (self.joint_limits[:, 1] - self.joint_limits[:, 0]) + self.joint_limits[:, 0]
 
     def rad_to_norm(self, qpos: np.ndarray) -> np.ndarray:
-        """Convert radians to normalized position [0, 1].
-        """
+        """Convert radians to normalized position [0, 1]."""
         return (qpos - self.joint_limits[:, 0]) / (self.joint_limits[:, 1] - self.joint_limits[:, 0])

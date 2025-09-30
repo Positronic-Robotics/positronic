@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from typing import Any, Sequence
+from collections.abc import Sequence
+from typing import Any
 
 import numpy as np
 import rerun as rr
@@ -60,7 +61,7 @@ def _to_nanos(timestamp: Any) -> int | None:
     if isinstance(timestamp, np.datetime64):
         return int(timestamp.astype('datetime64[ns]').astype('int64'))
 
-    if isinstance(timestamp, (np.integer, int, np.floating, float)):
+    if isinstance(timestamp, np.integer | int | np.floating | float):
         return int(timestamp)
 
     try:

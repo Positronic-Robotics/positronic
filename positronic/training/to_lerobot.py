@@ -35,6 +35,7 @@ Notes:
   dependencies are available inside the ephemeral uv environment without
   making `lerobot` a core dependency of the project.
 """
+
 import resource  # This will fail on Windows, as this library is Unix only, but we don't support Windows anyway
 from collections.abc import Sequence as AbcSequence
 from pathlib import Path
@@ -64,11 +65,11 @@ def _raise_fd_limit(min_soft_limit: int = 4096) -> None:
 
 def seconds_to_str(seconds: float) -> str:
     if seconds < 60:
-        return f"{seconds:.2f}s"
+        return f'{seconds:.2f}s'
     elif seconds < 3600:
-        return f"{seconds / 60:.2f}m"
+        return f'{seconds / 60:.2f}m'
     else:
-        return f"{seconds / 3600:.2f}h"
+        return f'{seconds / 3600:.2f}h'
 
 
 class EpisodeDictDataset(torch.utils.data.Dataset):
@@ -95,24 +96,20 @@ def _collate_fn(x):
     return x[0]
 
 
-def append_data_to_dataset(lr_dataset: LeRobotDataset,
-                           p_dataset: Dataset,
-                           task: str | None = None,
-                           num_workers: int = 16,
-                           fps: int = 30):
+def append_data_to_dataset(
+    lr_dataset: LeRobotDataset, p_dataset: Dataset, task: str | None = None, num_workers: int = 16, fps: int = 30
+):
     _raise_fd_limit()
     lr_dataset.start_image_writer(num_processes=num_workers)
     # Process each episode file
     total_length_sec = 0
 
     episode_dataset = EpisodeDictDataset(p_dataset, fps=fps)
-    dataloader = torch.utils.data.DataLoader(episode_dataset,
-                                             batch_size=1,
-                                             shuffle=False,
-                                             num_workers=num_workers,
-                                             collate_fn=_collate_fn)
+    dataloader = torch.utils.data.DataLoader(
+        episode_dataset, batch_size=1, shuffle=False, num_workers=num_workers, collate_fn=_collate_fn
+    )
 
-    for episode_idx, ep_dict in enumerate(tqdm.tqdm(dataloader, desc="Processing episodes")):
+    for episode_idx, ep_dict in enumerate(tqdm.tqdm(dataloader, desc='Processing episodes')):
         num_frames = len(ep_dict['action'])
         total_length_sec += num_frames * 1 / lr_dataset.fps
 
@@ -131,7 +128,7 @@ def append_data_to_dataset(lr_dataset: LeRobotDataset,
 
         lr_dataset.save_episode()
         lr_dataset.encode_episode_videos(episode_idx)
-    print(f"Total length of the dataset: {seconds_to_str(total_length_sec)}")
+    print(f'Total length of the dataset: {seconds_to_str(total_length_sec)}')
 
 
 def _extract_features(dataset: Dataset):
@@ -151,29 +148,34 @@ def _extract_features(dataset: Dataset):
     return features
 
 
-@cfn.config(fps=30,
-            video=True,
-            dataset=positronic.cfg.dataset.transformed,
-            task="pick plate from the table and place it into the dishwasher")
+@cfn.config(
+    fps=30,
+    video=True,
+    dataset=positronic.cfg.dataset.transformed,
+    task='pick plate from the table and place it into the dishwasher',
+)
 def convert_to_lerobot_dataset(output_dir: str, fps: int, video: bool, dataset: Dataset, task: str):
-    lr_dataset = LeRobotDataset.create(repo_id='local',
-                                       fps=fps,
-                                       root=Path(output_dir),
-                                       use_videos=video,
-                                       features=_extract_features(dataset),
-                                       image_writer_threads=32)
+    lr_dataset = LeRobotDataset.create(
+        repo_id='local',
+        fps=fps,
+        root=Path(output_dir),
+        use_videos=video,
+        features=_extract_features(dataset),
+        image_writer_threads=32,
+    )
 
     append_data_to_dataset(lr_dataset=lr_dataset, p_dataset=dataset, task=task)
-    print(f"Dataset converted and saved to {output_dir}")
+    print(f'Dataset converted and saved to {output_dir}')
 
 
-@cfn.config(dataset=positronic.cfg.dataset.transformed,
-            task="pick plate from the table and place it into the dishwasher")
+@cfn.config(
+    dataset=positronic.cfg.dataset.transformed, task='pick plate from the table and place it into the dishwasher'
+)
 def append_data_to_lerobot_dataset(lerobot_dataset_dir: str, dataset: Dataset, task: str):
     lr_dataset = LeRobotDataset(repo_id='local', root=lerobot_dataset_dir)
     append_data_to_dataset(lr_dataset=lr_dataset, p_dataset=dataset, task=task)
-    print(f"Dataset extended and saved to {lerobot_dataset_dir}")
+    print(f'Dataset extended and saved to {lerobot_dataset_dir}')
 
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     cfn.cli({'convert': convert_to_lerobot_dataset, 'append': append_data_to_lerobot_dataset})

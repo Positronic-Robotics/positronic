@@ -1,5 +1,5 @@
-from ctypes import c_uint16
 import time
+from ctypes import c_uint16
 
 import pymodbus.client as ModbusClient
 
@@ -19,7 +19,7 @@ class DHGripper(pimm.ControlSystem):
             port=self.port,
             baudrate=115200,
             bytesize=8,
-            parity="N",
+            parity='N',
             stopbits=1,
         )
         client.connect()
@@ -32,7 +32,7 @@ class DHGripper(pimm.ControlSystem):
 
         # Initial setup
         if _state_g() != 1 or _state_r() != 1:
-            client.write_register(0x100, 0xa5, slave=1)
+            client.write_register(0x100, 0xA5, slave=1)
             while _state_g() != 1 and _state_r() != 1:
                 yield pimm.Sleep(0.1)
 
@@ -59,11 +59,11 @@ class DHGripper(pimm.ControlSystem):
         client.close()
 
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     import numpy as np
 
     with pimm.World() as world:
-        gripper = DHGripper("/dev/ttyUSB0")
+        gripper = DHGripper('/dev/ttyUSB0')
 
         speed = world.pair(gripper.speed)
         force = world.pair(gripper.force)
@@ -72,14 +72,14 @@ if __name__ == "__main__":
 
         world.start([], background=gripper)
 
-        print("Setting gripper to 20% speed and 100% force", flush=True)
+        print('Setting gripper to 20% speed and 100% force', flush=True)
         speed.emit(20)
         force.emit(100)
 
-        for width in (np.sin(np.linspace(0, 10 * np.pi, 60)) + 1):
+        for width in np.sin(np.linspace(0, 10 * np.pi, 60)) + 1:
             target_grip.emit(width)
             time.sleep(0.5)
             try:
-                print(f"Real grip position: {grip.value}")
+                print(f'Real grip position: {grip.value}')
             except pimm.NoValueException:
                 pass

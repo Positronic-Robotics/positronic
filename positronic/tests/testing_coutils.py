@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable, Iterable, Iterator, Sequence
 from dataclasses import dataclass
-from typing import Any, Callable, Iterable, Iterator, List, Sequence, Tuple, TypeVar
+from typing import Any, TypeVar
 
 import pimm
 
@@ -56,7 +57,7 @@ class RecordingEmitter(pimm.SignalEmitter[T]):
     """Emitter that records all emissions for later assertions."""
 
     def __init__(self) -> None:
-        self.emitted: List[Tuple[int, T]] = []
+        self.emitted: list[tuple[int, T]] = []
 
     def emit(self, data: T, ts: int = -1) -> bool:
         self.emitted.append((ts, data))
@@ -67,7 +68,7 @@ class ManualCommandReceiver(pimm.SignalReceiver[T]):
     """Receiver stub with push/read semantics convenient for tests."""
 
     def __init__(self) -> None:
-        self._pending: List[pimm.Message[T]] = []
+        self._pending: list[pimm.Message[T]] = []
         self._last: pimm.Message[T] | None = None
 
     def push(self, data: T, ts: int | None = None) -> None:
@@ -105,12 +106,9 @@ def drive_until(loop: Iterator[pimm.Sleep], clock, condition, max_steps: int = 1
     raise AssertionError('Condition not reached within step limit')
 
 
-def run_scripted_agent(agent: pimm.ControlSystem,
-                       script: Sequence[ScriptStep],
-                       *,
-                       world: pimm.World,
-                       clock: Any,
-                       steps: int = 200) -> None:
+def run_scripted_agent(
+    agent: pimm.ControlSystem, script: Sequence[ScriptStep], *, world: pimm.World, clock: Any, steps: int = 200
+) -> None:
     """Run ``agent`` alongside a scripted driver within ``world``."""
     driver = ManualDriver(script=script)
     scheduler = world.start([agent, driver])

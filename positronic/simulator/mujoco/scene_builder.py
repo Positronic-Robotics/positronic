@@ -1,17 +1,16 @@
 import os
+import pathlib
 import pickle
 import random
-import pathlib
-from typing import Any, Dict, Optional, Tuple, Union
+from typing import Any
 
 import fire
 import mujoco
-
 import robosuite
 import robosuite.models
 import robosuite.models.arenas
 
-RANGE_OR_VALUE = Union[float, Tuple[float, float]]
+RANGE_OR_VALUE = float | tuple[float, float]
 ASSET_DIR_MESSAGE = """
 !!! This spec should be loaded with asset dict.
 See simulator.mujoco.transforms.load_model_from_spec !!!
@@ -25,11 +24,11 @@ def random_range(value: RANGE_OR_VALUE) -> float:
 
     try:
         return random.uniform(value[0], value[1])
-    except TypeError:
-        raise ValueError(f"Invalid range: {value}")
+    except TypeError as e:
+        raise ValueError(f'Invalid range: {value}') from e
 
 
-def extract_assets(spec: mujoco.MjSpec, parent_dir: Optional[str] = None) -> Dict[str, Any]:
+def extract_assets(spec: mujoco.MjSpec, parent_dir: str | None = None) -> dict[str, Any]:
     """
     Extract assets from the spec and return a dictionary of asset names to asset data.
 
@@ -56,7 +55,7 @@ def extract_assets(spec: mujoco.MjSpec, parent_dir: Optional[str] = None) -> Dic
             texture.name = os.path.splitext(os.path.basename(texture.file))[0]
 
         texture_file_ext = os.path.splitext(texture.file)[1]
-        texture_name = f"{texture.name}{texture_file_ext}"
+        texture_name = f'{texture.name}{texture_file_ext}'
         path = os.path.join(parent_dir, spec.texturedir) if parent_dir else spec.texturedir
 
         assets[texture_name] = _load_asset_binary(texture, path)
@@ -69,7 +68,7 @@ def extract_assets(spec: mujoco.MjSpec, parent_dir: Optional[str] = None) -> Dic
             mesh.name = os.path.splitext(os.path.basename(mesh.file))[0]
 
         mesh_file_ext = os.path.splitext(mesh.file)[1]
-        mesh_name = f"{mesh.name}{mesh_file_ext}"
+        mesh_name = f'{mesh.name}{mesh_file_ext}'
         path = os.path.join(parent_dir, spec.meshdir) if parent_dir else spec.meshdir
 
         assets[mesh_name] = _load_asset_binary(mesh, path)
@@ -81,7 +80,7 @@ def extract_assets(spec: mujoco.MjSpec, parent_dir: Optional[str] = None) -> Dic
 # TODO: In theory this could be implemented via series of scene transformations. But this is a bit of a pain. :_)
 def generate_scene(
     table_height: RANGE_OR_VALUE = 0.3,
-    table_size: Tuple[float, float, float] = (0.4, 0.6, 0.05),
+    table_size: tuple[float, float, float] = (0.4, 0.6, 0.05),
     portable: bool = True,
 ) -> mujoco.MjModel:
     table_height = random_range(table_height)
@@ -100,15 +99,15 @@ def generate_scene(
     # Add boxes
     asset_dict = {}
     # Load Panda robot specification as base
-    panda_spec = mujoco.MjSpec.from_file("assets/mujoco/mjx_panda.xml")
+    panda_spec = mujoco.MjSpec.from_file('assets/mujoco/mjx_panda.xml')
     if portable:
-        panda_assets = extract_assets(panda_spec, "assets/mujoco")
+        panda_assets = extract_assets(panda_spec, 'assets/mujoco')
         asset_dict = {**panda_assets}
 
     # Create temporary spec from the world to merge into Panda spec
     world_spec = mujoco.MjSpec.from_string(world.get_xml())
     if portable:
-        world_assets = extract_assets(world_spec, "")
+        world_assets = extract_assets(world_spec, '')
         asset_dict = {**asset_dict, **world_assets}
 
     # Adjust lighting
@@ -119,11 +118,11 @@ def generate_scene(
     world_spec.lights[0].castshadow = 0
 
     # add panda to world
-    origin_site = world_spec.worldbody.add_site(name="origin", pos=[0, 0, 0])
+    origin_site = world_spec.worldbody.add_site(name='origin', pos=[0, 0, 0])
     origin_site.attach_body(panda_spec.worldbody, '', '_ph')  # suffix is required by .attach()
 
     # Configure visual settings
-    g = getattr(world_spec.visual, "global")
+    g = getattr(world_spec.visual, 'global')
     g.azimuth = 120
     g.elevation = -20
     g.offwidth = 1920
@@ -135,7 +134,7 @@ def generate_scene(
 
         world_spec.assets = asset_dict
     else:
-        world_spec.meshdir = "assets/mujoco/assets/"
+        world_spec.meshdir = 'assets/mujoco/assets/'
 
     # Using custom texts to store metadata about the model
     world_spec.add_text(name='model_suffix', data='_ph')
@@ -144,7 +143,7 @@ def generate_scene(
     return world_spec, asset_dict
 
 
-def construct_scene(scene_path: Union[str, pathlib.Path]):
+def construct_scene(scene_path: str | pathlib.Path):
     scene_path = pathlib.Path(scene_path)
     scene_path.parent.mkdir(parents=True, exist_ok=True)
     assets_path = scene_path.with_suffix('.assets.pkl')
@@ -155,12 +154,12 @@ def construct_scene(scene_path: Union[str, pathlib.Path]):
 
     spec.compile()
 
-    with open(scene_path, "w") as f:
+    with open(scene_path, 'w') as f:
         f.write(spec.to_xml())
 
-    with open(assets_path, "wb") as f:
+    with open(assets_path, 'wb') as f:
         pickle.dump(assets, f)
 
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     fire.Fire(construct_scene)

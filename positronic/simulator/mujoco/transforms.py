@@ -1,8 +1,9 @@
 import abc
 import contextlib
-from pathlib import Path
 import pickle
-from typing import Any, Dict, Sequence, Tuple
+from collections.abc import Sequence
+from pathlib import Path
+from typing import Any
 
 import mujoco
 import numpy as np
@@ -31,7 +32,7 @@ class MujocoSceneTransform(abc.ABC):
 
 
 class AddCameras(MujocoSceneTransform):
-    def __init__(self, additional_cameras: Dict[str, Dict[str, Any]]):
+    def __init__(self, additional_cameras: dict[str, dict[str, Any]]):
         self.additional_cameras = additional_cameras
 
     def apply(self, spec: mujoco.MjSpec) -> mujoco.MjSpec:
@@ -40,9 +41,7 @@ class AddCameras(MujocoSceneTransform):
 
         for camera_name, camera_cfg in self.additional_cameras.items():
             spec.worldbody.add_camera(
-                name=f"{camera_name}{model_suffix}",
-                pos=camera_cfg['pos'],
-                xyaxes=camera_cfg['xyaxes']
+                name=f'{camera_name}{model_suffix}', pos=camera_cfg['pos'], xyaxes=camera_cfg['xyaxes']
             )
 
         return spec
@@ -57,7 +56,7 @@ class RecolorObject(MujocoSceneTransform):
     def apply(self, spec: mujoco.MjSpec) -> mujoco.MjSpec:
         # geom with name self.object_name
         geoms = [g for g in spec.geoms if g.name == self.object_name]
-        assert len(geoms) == 1, f"Expected 1 geom with name {self.object_name}, found {len(geoms)}"
+        assert len(geoms) == 1, f'Expected 1 geom with name {self.object_name}, found {len(geoms)}'
         geoms[0].rgba = np.array(self.color)
 
         return spec
@@ -65,17 +64,17 @@ class RecolorObject(MujocoSceneTransform):
 
 class AddBox(MujocoSceneTransform):
     def __init__(
-            self,
-            name: str,
-            size: Tuple[float, float, float],
-            pos: Tuple[float, float, float] | str,
-            quat: Tuple[float, float, float, float] | None = None,
-            density: float = 2500,
-            rgba: Tuple[float, float, float, float] = (0.5, 0, 0, 1),
-            freejoint: bool = False,
+        self,
+        name: str,
+        size: tuple[float, float, float],
+        pos: tuple[float, float, float] | str,
+        quat: tuple[float, float, float, float] | None = None,
+        density: float = 2500,
+        rgba: tuple[float, float, float, float] = (0.5, 0, 0, 1),
+        freejoint: bool = False,
     ):
-        self.body_name = f"{name}_body"
-        self.geom_name = f"{name}_geom"
+        self.body_name = f'{name}_body'
+        self.geom_name = f'{name}_geom'
         self.size = size
         self.pos = pos
         self.quat = quat
@@ -109,20 +108,21 @@ class AddBox(MujocoSceneTransform):
 
 class SetBodyPosition(MujocoSceneTransform):
     def __init__(
-            self,
-            body_name: str,
-            *,
-            position: Tuple[float, float, float] | None = None,
-            quaternion: Tuple[float, float, float, float] | None = None,
-            random_position: Tuple[Tuple[float, float, float], Tuple[float, float, float]] | None = None,
-            random_euler: Tuple[Tuple[float, float, float], Tuple[float, float, float]] | None = None,
-            seed: int | None = None,
+        self,
+        body_name: str,
+        *,
+        position: tuple[float, float, float] | None = None,
+        quaternion: tuple[float, float, float, float] | None = None,
+        random_position: tuple[tuple[float, float, float], tuple[float, float, float]] | None = None,
+        random_euler: tuple[tuple[float, float, float], tuple[float, float, float]] | None = None,
+        seed: int | None = None,
     ):
         self.body_name = body_name
         self.seed = seed
-        assert (position is None) ^ (random_position is None), "One of position or random_position must be provided"
-        assert (quaternion is None) or (random_euler is None), \
-            "At most one of quaternion or random_euler must be provided"
+        assert (position is None) ^ (random_position is None), 'One of position or random_position must be provided'
+        assert (quaternion is None) or (random_euler is None), (
+            'At most one of quaternion or random_euler must be provided'
+        )
 
         if position is not None:
             self.position_fn = lambda: position
@@ -134,15 +134,17 @@ class SetBodyPosition(MujocoSceneTransform):
         elif quaternion is not None:
             self.quaternion_fn = lambda: quaternion
         else:
+
             def quaternion_fn():
                 euler = np.random.uniform(random_euler[0], random_euler[1])
                 return geom.Rotation.from_euler(euler).as_quat
+
             self.quaternion_fn = quaternion_fn
 
     def apply(self, spec: mujoco.MjSpec) -> mujoco.MjSpec:
         with np_seed(self.seed):
             bodies = [g for g in spec.bodies if g.name == self.body_name]
-            assert len(bodies) == 1, f"Expected 1 body with name {self.body_name}, found {len(bodies)}"
+            assert len(bodies) == 1, f'Expected 1 body with name {self.body_name}, found {len(bodies)}'
             bodies[0].pos = self.position_fn()
             quaternion = self.quaternion_fn()
             if quaternion is not None:
@@ -151,9 +153,9 @@ class SetBodyPosition(MujocoSceneTransform):
 
 
 def load_model_from_spec_file(
-        xml_path: str,
-        loaders: Sequence[MujocoSceneTransform] = (),
-) -> Tuple[mujoco.MjModel, Dict[str, str]]:
+    xml_path: str,
+    loaders: Sequence[MujocoSceneTransform] = (),
+) -> tuple[mujoco.MjModel, dict[str, str]]:
     spec, metadata = load_spec_from_file(xml_path, loaders)
     model = spec.compile()
 
@@ -161,10 +163,10 @@ def load_model_from_spec_file(
 
 
 def load_spec_from_file(
-        xml_path: str,
-        loaders: Sequence[MujocoSceneTransform] = (),
-) -> Tuple[mujoco.MjSpec, Dict[str, str]]:
-    with open(xml_path, 'r') as f:
+    xml_path: str,
+    loaders: Sequence[MujocoSceneTransform] = (),
+) -> tuple[mujoco.MjSpec, dict[str, str]]:
+    with open(xml_path) as f:
         xml_string = f.read()
 
     spec = mujoco.MjSpec.from_string(xml_string)

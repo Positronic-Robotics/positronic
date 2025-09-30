@@ -47,7 +47,7 @@ class NumpySMAdapter(SMCompliant):
         return self.array.nbytes
 
     def set_to_buffer(self, buffer: memoryview | bytes | bytearray) -> None:
-        buffer[:self.array.nbytes] = self.array.view(np.uint8).reshape(-1).data
+        buffer[: self.array.nbytes] = self.array.view(np.uint8).reshape(-1).data
 
     def read_from_buffer(self, buffer: memoryview | bytes) -> None:
-        self.array[:] = np.frombuffer(buffer[:self.array.nbytes], dtype=self.array.dtype).reshape(self.array.shape)
+        self.array[:] = np.frombuffer(buffer[: self.array.nbytes], dtype=self.array.dtype).reshape(self.array.shape)

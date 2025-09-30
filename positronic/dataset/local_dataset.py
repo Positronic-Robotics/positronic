@@ -2,30 +2,30 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from pydoc import locate
 from typing import Any
 
 import numpy as np
-from pydoc import locate
 
 from .dataset import Dataset, DatasetWriter
 from .episode import DiskEpisode, DiskEpisodeWriter
 from .signal import Kind, SignalMeta
 
-_META_TAG = "__meta__"
+_META_TAG = '__meta__'
 
 
 def _encode_meta_value(value: Any) -> Any:
     if isinstance(value, np.dtype):
         return {_META_TAG: 'np_dtype', 'value': str(value)}
     if isinstance(value, type):
-        return {_META_TAG: 'py_type', 'value': f"{value.__module__}.{value.__qualname__}"}
+        return {_META_TAG: 'py_type', 'value': f'{value.__module__}.{value.__qualname__}'}
     if isinstance(value, tuple):
         return {_META_TAG: 'tuple', 'items': [_encode_meta_value(v) for v in value]}
     if isinstance(value, list):
         return {_META_TAG: 'list', 'items': [_encode_meta_value(v) for v in value]}
-    if isinstance(value, (np.integer, np.floating)):
+    if isinstance(value, np.integer | np.floating):
         return value.item()
-    if isinstance(value, (int, float, bool, str)) or value is None:
+    if isinstance(value, int | float | bool | str) or value is None:
         return value
     return {_META_TAG: 'repr', 'value': repr(value)}
 
@@ -39,7 +39,7 @@ def _decode_meta_value(value: Any) -> Any:
             case 'py_type':
                 located = locate(value['value'])
                 if located is None:
-                    raise ValueError(f"Unable to locate type {value['value']}")
+                    raise ValueError(f'Unable to locate type {value["value"]}')
                 return located
             case 'tuple':
                 return tuple(_decode_meta_value(v) for v in value['items'])
@@ -48,7 +48,7 @@ def _decode_meta_value(value: Any) -> Any:
             case 'repr':
                 return value['value']
             case _:
-                raise ValueError(f"Unsupported encoded meta kind: {kind}")
+                raise ValueError(f'Unsupported encoded meta kind: {kind}')
     return value
 
 
@@ -76,7 +76,7 @@ def _is_numeric_dir(p: Path) -> bool:
 
 def _ensure_block_dir(root: Path, episode_id: int) -> Path:
     block_start = (episode_id // 1000) * 1000
-    block_dir = root / f"{block_start:012d}"
+    block_dir = root / f'{block_start:012d}'
     block_dir.mkdir(parents=True, exist_ok=True)
     return block_dir
 
@@ -119,13 +119,13 @@ class LocalDataset(Dataset):
 
     def _get_episode(self, index: int) -> DiskEpisode:
         if not (0 <= index < len(self)):
-            raise IndexError("Index out of range")
+            raise IndexError('Index out of range')
         return DiskEpisode(self._episodes[index][1])
 
     @property
     def signals_meta(self) -> dict[str, SignalMeta]:
         if self._signals_meta is None:
-            meta_path = self.root / "signals_meta.json"
+            meta_path = self.root / 'signals_meta.json'
             if meta_path.exists():
                 with meta_path.open('r', encoding='utf-8') as f:
                     payload = json.load(f)
@@ -169,7 +169,7 @@ class LocalDatasetWriter(DatasetWriter):
 
     @property
     def _signals_meta_path(self) -> Path:
-        return self.root / "signals_meta.json"
+        return self.root / 'signals_meta.json'
 
     def _load_signals_meta(self) -> dict[str, SignalMeta]:
         path = self._signals_meta_path
@@ -192,7 +192,7 @@ class LocalDatasetWriter(DatasetWriter):
         block_dir = _ensure_block_dir(self.root, eid)
         # Do NOT create the episode directory here; DiskEpisodeWriter is
         # responsible for creating it and expects it to not exist yet.
-        ep_dir = block_dir / f"{eid:012d}"
+        ep_dir = block_dir / f'{eid:012d}'
 
         writer = DiskEpisodeWriter(ep_dir, on_close=self._handle_episode_closed)
         return writer

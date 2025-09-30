@@ -1,8 +1,9 @@
 import collections.abc as cabc
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from enum import Enum, IntEnum
 from functools import partial
-from typing import Any, Callable
+from typing import Any
 
 import numpy as np
 
@@ -22,9 +23,10 @@ class DsWriterCommandType(Enum):
     - `STOP_EPISODE`: Finalize the current episode, optionally updating static data.
     - `ABORT_EPISODE`: Abort and discard the current episode.
     """
-    START_EPISODE = "start_episode"
-    STOP_EPISODE = "stop_episode"
-    ABORT_EPISODE = "abort_episode"
+
+    START_EPISODE = 'start_episode'
+    STOP_EPISODE = 'stop_episode'
+    ABORT_EPISODE = 'abort_episode'
 
 
 @dataclass
@@ -36,6 +38,7 @@ class DsWriterCommand:
         static_data: Optional static key/value pairs to set on the episode
             when starting or right before stopping.
     """
+
     type: DsWriterCommandType
     static_data: dict[str, Any] = field(default_factory=dict)
 
@@ -70,7 +73,7 @@ def names(metadata: str | list[str] | dict[str, str | list[str]]):
     """Attach feature-name metadata to a serializer function."""
 
     def _decorator(fn: Callable[[Any], Any]) -> Callable[[Any], Any]:
-        setattr(fn, 'names', metadata)
+        fn.names = metadata
         return fn
 
     return _decorator
@@ -142,16 +145,16 @@ def _extract_names(serializer: Callable[[Any], Any]) -> dict[str, list[str]] | N
             elif isinstance(value, list):
                 out[key] = value
             else:
-                raise TypeError("Serializer names mapping values must be string or list")
+                raise TypeError('Serializer names mapping values must be string or list')
         return out
-    raise TypeError("Serializer names attribute must be a string, sequence, or mapping")
+    raise TypeError('Serializer names attribute must be a string, sequence, or mapping')
 
 
 def _append_processed(ep_writer: EpisodeWriter, name: str, value: Any, ts_ns: int) -> None:
     if isinstance(value, dict):
         items = ((name + suffix, v) for suffix, v in value.items())
     else:
-        items = ((name, value), )
+        items = ((name, value),)
 
     for full_name, v in items:
         if v is None:
@@ -161,6 +164,7 @@ def _append_processed(ep_writer: EpisodeWriter, name: str, value: Any, ts_ns: in
 
 class TimeMode(IntEnum):
     """Mode of timestamping for the dataset writer."""
+
     CLOCK = 0
     MESSAGE = 1
 
@@ -182,19 +186,20 @@ class DsWriterAgent(pimm.ControlSystem):
     (`CLOCK`) or from the producing message (`MESSAGE`).
     """
 
-    def __init__(self,
-                 ds_writer: DatasetWriter,
-                 signals_spec: dict[str, Serializer | None],
-                 poll_hz: float = 1000.0,
-                 time_mode: TimeMode = TimeMode.CLOCK):
+    def __init__(
+        self,
+        ds_writer: DatasetWriter,
+        signals_spec: dict[str, Serializer | None],
+        poll_hz: float = 1000.0,
+        time_mode: TimeMode = TimeMode.CLOCK,
+    ):
         self.ds_writer = ds_writer
         self._poll_hz = float(poll_hz)
         self._time_mode = time_mode
         self.command = pimm.ControlSystemReceiver[DsWriterCommand](self)
 
         self._inputs: dict[str, pimm.ControlSystemReceiver[Any]] = {
-            name: pimm.ControlSystemReceiver[Any](self)
-            for name in (signals_spec or [])
+            name: pimm.ControlSystemReceiver[Any](self) for name in (signals_spec or [])
         }
         self._inputs_view = _KeyFrozenMapping(self._inputs)
         # Only keep explicitly provided serializers; None means pass-through
@@ -250,15 +255,16 @@ class DsWriterAgent(pimm.ControlSystem):
                     ep_writer.abort()
                 finally:
                     ep_writer.__exit__(None, None, None)
-                    print(f"DsWriterAgent: [ABORT] Episode {ep_counter}")
+                    print(f'DsWriterAgent: [ABORT] Episode {ep_counter}')
 
-    def _handle_command(self, cmd: DsWriterCommand, ep_writer: EpisodeWriter | None,
-                        ep_counter: int) -> tuple[EpisodeWriter | None, int]:
+    def _handle_command(
+        self, cmd: DsWriterCommand, ep_writer: EpisodeWriter | None, ep_counter: int
+    ) -> tuple[EpisodeWriter | None, int]:
         match cmd.type:
             case DsWriterCommandType.START_EPISODE:
                 if ep_writer is None:
                     ep_counter += 1
-                    print(f"DsWriterAgent: [START] Episode {ep_counter}")
+                    print(f'DsWriterAgent: [START] Episode {ep_counter}')
                     ep_writer = self.ds_writer.new_episode()
                     for base_name, names_map in self._signal_meta_specs.items():
                         for suffix, name_list in names_map.items():
@@ -266,24 +272,24 @@ class DsWriterAgent(pimm.ControlSystem):
                     for k, v in cmd.static_data.items():
                         ep_writer.set_static(k, v)
                 else:
-                    print("Episode already started, ignoring start command")
+                    print('Episode already started, ignoring start command')
             case DsWriterCommandType.STOP_EPISODE:
                 if ep_writer is not None:
                     for k, v in cmd.static_data.items():
                         ep_writer.set_static(k, v)
                     ep_writer.__exit__(None, None, None)
-                    print(f"DsWriterAgent: [STOP] Episode {ep_counter}")
+                    print(f'DsWriterAgent: [STOP] Episode {ep_counter}')
                     ep_writer = None
                 else:
-                    print("Episode not started, ignoring stop command")
+                    print('Episode not started, ignoring stop command')
             case DsWriterCommandType.ABORT_EPISODE:
                 if ep_writer is not None:
                     ep_writer.abort()
                     ep_writer.__exit__(None, None, None)
-                    print(f"DsWriterAgent: [ABORT] Episode {ep_counter}")
+                    print(f'DsWriterAgent: [ABORT] Episode {ep_counter}')
                     ep_writer = None
                 else:
-                    print("Episode not started, ignoring abort command")
+                    print('Episode not started, ignoring abort command')
         return ep_writer, ep_counter
 
 
@@ -308,11 +314,11 @@ class _KeyFrozenMapping(cabc.MutableMapping):
 
     def __setitem__(self, key, value):
         if key not in self._backing:
-            raise TypeError("inputs keys are frozen; cannot add new key")
+            raise TypeError('inputs keys are frozen; cannot add new key')
         self._backing[key] = value
 
     def __delitem__(self, key):
-        raise TypeError("inputs keys are frozen; cannot delete keys")
+        raise TypeError('inputs keys are frozen; cannot delete keys')
 
     def __iter__(self):
         return iter(self._backing)
@@ -321,4 +327,4 @@ class _KeyFrozenMapping(cabc.MutableMapping):
         return len(self._backing)
 
     def __repr__(self) -> str:
-        return f"KeyFrozenMapping({self._backing!r})"
+        return f'KeyFrozenMapping({self._backing!r})'

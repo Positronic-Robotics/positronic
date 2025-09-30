@@ -1,6 +1,7 @@
 import configuronic as cfn
-import positronic.cfg.hardware.roboarm
+
 import pimm
+import positronic.cfg.hardware.roboarm
 from positronic import geom
 from positronic.drivers.roboarm import command
 
@@ -13,7 +14,7 @@ def main(robot):
 
         world.start([], background=robot)
         while True:
-            text_command = input("Enter a command: ")
+            text_command = input('Enter a command: ')
 
             match text_command.split(' '):
                 case ['reset']:
@@ -26,14 +27,14 @@ def main(robot):
                     args = [float(x) for x in args]
                     command_emmiter.emit(command.JointMove(positions=args))
                 case ['info']:
-                    print("Q", state_receiver.value.q)
-                    print("DQ", state_receiver.value.dq)
-                    print("EE", state_receiver.value.ee_pose.translation, state_receiver.value.ee_pose.rotation.as_quat)
-                    print("Status", state_receiver.value.status)
+                    print('Q', state_receiver.value.q)
+                    print('DQ', state_receiver.value.dq)
+                    print('EE', state_receiver.value.ee_pose.translation, state_receiver.value.ee_pose.rotation.as_quat)
+                    print('Status', state_receiver.value.status)
                 case ['quit']:
                     break
                 case arg:
-                    print(f"Unknown command: {arg}")
+                    print(f'Unknown command: {arg}')
 
 
 if __name__ == '__main__':

@@ -1,9 +1,9 @@
 import time
-from typing import Callable, Mapping, Tuple, overload, TypeVar
+from collections.abc import Callable, Mapping
+from typing import TypeVar, overload
 
-from pimm import SignalReceiver, SignalEmitter, Message
+from pimm import Message, SignalEmitter, SignalReceiver
 from pimm.core import Clock
-
 
 T = TypeVar('T', covariant=True)
 K = TypeVar('K', covariant=True)
@@ -22,7 +22,6 @@ class MapSignalReceiver(SignalReceiver[T]):
 
 
 class MapSignalEmitter(SignalEmitter[T]):
-
     def __init__(self, emitter: SignalEmitter[T], func: Callable[[T], T]):
         self.emitter = emitter
         self.func = func
@@ -32,13 +31,11 @@ class MapSignalEmitter(SignalEmitter[T]):
 
 
 @overload
-def map(signal: SignalReceiver[T], func: Callable[[T], T]) -> SignalReceiver[T]:
-    ...
+def map(signal: SignalReceiver[T], func: Callable[[T], T]) -> SignalReceiver[T]: ...
 
 
 @overload
-def map(signal: SignalEmitter[T], func: Callable[[T], T]) -> SignalEmitter[T]:
-    ...
+def map(signal: SignalEmitter[T], func: Callable[[T], T]) -> SignalEmitter[T]: ...
 
 
 def map(signal: SignalReceiver[T] | SignalEmitter[T], func: Callable[[T], T]) -> SignalReceiver[T] | SignalEmitter[T]:
@@ -47,10 +44,10 @@ def map(signal: SignalReceiver[T] | SignalEmitter[T], func: Callable[[T], T]) ->
     elif isinstance(signal, SignalEmitter):
         return MapSignalEmitter(signal, func)
     else:
-        raise ValueError(f"Invalid signal type: {type(signal)}")
+        raise ValueError(f'Invalid signal type: {type(signal)}')
 
 
-class ValueUpdated(SignalReceiver[Tuple[T, bool]]):
+class ValueUpdated(SignalReceiver[tuple[T, bool]]):
     """Wrapper around reader to signal whether the value we read is 'new'."""
 
     def __init__(self, reader: SignalReceiver[T]):
@@ -58,7 +55,7 @@ class ValueUpdated(SignalReceiver[Tuple[T, bool]]):
         self.reader = reader
         self.last_ts = None
 
-    def read(self) -> Message[Tuple[T, bool]] | None:
+    def read(self) -> Message[tuple[T, bool]] | None:
         orig_message = self.reader.read()
 
         if orig_message is None:
@@ -70,7 +67,7 @@ class ValueUpdated(SignalReceiver[Tuple[T, bool]]):
         return Message((orig_message.data, is_updated), self.last_ts)
 
 
-def is_any_updated(readers: Mapping[str, SignalReceiver[Tuple[T, bool]]]) -> Tuple[dict[str, Message[T]], bool]:
+def is_any_updated(readers: Mapping[str, SignalReceiver[tuple[T, bool]]]) -> tuple[dict[str, Message[T]], bool]:
     """Get the latest value of all readers and whether any of them are updated.
 
     In case some of the readers return None, this keys will be omitted from the returned dict.
@@ -112,7 +109,7 @@ class RateLimiter:
         """
         One of every_sec or hz must be provided.
         """
-        assert (every_sec is None) ^ (hz is None), "Exactly one of every_sec or hz must be provided"
+        assert (every_sec is None) ^ (hz is None), 'Exactly one of every_sec or hz must be provided'
         self._clock = clock
         self._last_time = None
         self._interval = every_sec if every_sec is not None else 1.0 / hz  # type: ignore
@@ -151,7 +148,7 @@ class RateCounter:
 
     def report(self):
         rate = self.tick_count / (time.monotonic() - self.last_report_time)
-        print(f"{self.prefix}: {rate:.2f} Hz")
+        print(f'{self.prefix}: {rate:.2f} Hz')
         self.last_report_time = time.monotonic()
         self.tick_count = 0
 

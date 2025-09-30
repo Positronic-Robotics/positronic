@@ -1,8 +1,9 @@
+from collections.abc import Iterator
+
 import av
 import cv2
 import numpy as np
 from linuxpy.video.device import Device, PixelFormat
-from typing import Iterator
 
 import pimm
 
@@ -14,7 +15,7 @@ class LinuxVideo(pimm.ControlSystem):
         self.height = height
         self.fps = fps
         self.pixel_format = pixel_format
-        self.fps_counter = pimm.utils.RateCounter(f"LinuxVideo {device_path}")
+        self.fps_counter = pimm.utils.RateCounter(f'LinuxVideo {device_path}')
         self.frame: pimm.SignalEmitter = pimm.ControlSystemEmitter(self)
 
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Sleep]:

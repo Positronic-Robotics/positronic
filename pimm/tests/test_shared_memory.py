@@ -1,6 +1,7 @@
-from typing import Iterator
-import pytest
+from collections.abc import Iterator
+
 import numpy as np
+import pytest
 
 from pimm.core import Clock, Message, NoOpEmitter, SignalEmitter, SignalReceiver, Sleep
 from pimm.shared_memory import NumpySMAdapter
@@ -73,9 +74,8 @@ class TestSharedMemoryAPI:
             # First emit defines type
             emitter.emit(NumpySMAdapter(shape=(2,), dtype=np.float32))
 
-            with pytest.raises(TypeError,
-                               match="Shared memory transport selected; data must implement SMCompliant"):
-                emitter.emit("wrong_type")
+            with pytest.raises(TypeError, match='Shared memory transport selected; data must implement SMCompliant'):
+                emitter.emit('wrong_type')
 
     def test_buffer_size_validation(self):
         """Test that emitter validates buffer size consistency."""
@@ -93,7 +93,7 @@ class TestSharedMemoryAPI:
             array2 = np.array([[[1, 2], [3, 4]], [[5, 6], [7, 8]]], dtype=np.uint8)  # Different size
             data2 = NumpySMAdapter(array2.shape, array2.dtype)
             data2.array = array2
-            with pytest.raises(AssertionError, match="Buffer size mismatch"):
+            with pytest.raises(AssertionError, match='Buffer size mismatch'):
                 emitter.emit(data2)
 
     def test_data_updates_reflected_in_shared_memory_with_emit(self):
@@ -240,22 +240,22 @@ class TestSharedMemoryAPI:
         """Test various array shapes and dtypes work correctly."""
         test_cases = [
             # Unsigned integers
-            (np.array([1, 2, 3], dtype=np.uint8), "1D uint8"),
-            (np.array([[1, 2], [3, 4]], dtype=np.uint16), "2D uint16"),
-            (np.array([42], dtype=np.uint32), "scalar-like uint32"),
-            (np.array([100], dtype=np.uint64), "scalar-like uint64"),
+            (np.array([1, 2, 3], dtype=np.uint8), '1D uint8'),
+            (np.array([[1, 2], [3, 4]], dtype=np.uint16), '2D uint16'),
+            (np.array([42], dtype=np.uint32), 'scalar-like uint32'),
+            (np.array([100], dtype=np.uint64), 'scalar-like uint64'),
             # Signed integers
-            (np.array([42], dtype=np.int8), "scalar-like int8"),
-            (np.array([1, 2, 3], dtype=np.int16), "1D int16"),
-            (np.array([[1, 2], [3, 4]], dtype=np.int32), "2D int32"),
-            (np.array([100], dtype=np.int64), "scalar-like int64"),
+            (np.array([42], dtype=np.int8), 'scalar-like int8'),
+            (np.array([1, 2, 3], dtype=np.int16), '1D int16'),
+            (np.array([[1, 2], [3, 4]], dtype=np.int32), '2D int32'),
+            (np.array([100], dtype=np.int64), 'scalar-like int64'),
             # Floating point
-            (np.array([[[1, 2], [3, 4]], [[5, 6], [7, 8]]], dtype=np.float16), "3D float16"),
-            (np.array([3.14, 2.71], dtype=np.float32), "1D float32"),
-            (np.array([[1.0, 2.0], [3.0, 4.0]], dtype=np.float64), "2D float64"),
+            (np.array([[[1, 2], [3, 4]], [[5, 6], [7, 8]]], dtype=np.float16), '3D float16'),
+            (np.array([3.14, 2.71], dtype=np.float32), '1D float32'),
+            (np.array([[1.0, 2.0], [3.0, 4.0]], dtype=np.float64), '2D float64'),
             # Complex floating point
-            (np.array([1 + 2j, 3 + 4j], dtype=np.complex64), "1D complex64"),
-            (np.array([[1 + 2j, 3 + 4j], [5 + 6j, 7 + 8j]], dtype=np.complex128), "2D complex128"),
+            (np.array([1 + 2j, 3 + 4j], dtype=np.complex64), '1D complex64'),
+            (np.array([[1 + 2j, 3 + 4j], [5 + 6j, 7 + 8j]], dtype=np.complex128), '2D complex128'),
         ]
 
         for test_array, description in test_cases:
@@ -267,15 +267,16 @@ class TestSharedMemoryAPI:
                 emitter.emit(data, ts=1000)
 
                 message = reader.read()
-                assert message is not None, f"Failed for {description}"
-                assert message.data.array.shape == test_array.shape, f"Shape mismatch for {description}"
-                assert message.data.array.dtype == test_array.dtype, f"Dtype mismatch for {description}"
-                assert np.array_equal(message.data.array, test_array), f"Data mismatch for {description}"
+                assert message is not None, f'Failed for {description}'
+                assert message.data.array.shape == test_array.shape, f'Shape mismatch for {description}'
+                assert message.data.array.dtype == test_array.dtype, f'Dtype mismatch for {description}'
+                assert np.array_equal(message.data.array, test_array), f'Data mismatch for {description}'
 
     def test_world_context_required(self):
         w = World()
-        with pytest.raises(AssertionError,
-                           match=r"Shared memory transport is only available after entering the world context\."):
+        with pytest.raises(
+            AssertionError, match=r'Shared memory transport is only available after entering the world context\.'
+        ):
             w.mp_pipe(transport=TransportMode.SHARED_MEMORY)
 
 

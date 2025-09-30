@@ -1,4 +1,5 @@
-from typing import Iterator, Literal
+from collections.abc import Iterator
+from typing import Literal
 
 import numpy as np
 import pyzed.sl as sl
@@ -9,15 +10,18 @@ import pimm
 # TODO: Currently in order to have pyzed available, one need to install Stereolabs SDK, and then generate
 # wheel file from it. We need to find a better solution how to install it via uv or at least Docker.
 class SLCamera(pimm.ControlSystem):
-    def __init__(self,
-                 serial_number: int | None = None,
-                 fps: int | None = None,
-                 view: Literal["left", "right", "side_by_side"] = "left",
-                 resolution: Literal["hd4k", "qhdplus", "hd2k", "hd1080", "hd1200", "hd1536", "hd720", "svga", "vga",
-                                     "auto"] = "auto",
-                 depth_mode: Literal["none", "near", "far", "high", "ultra"] = "none",
-                 max_depth: float = 10,
-                 depth_mask: bool = False):
+    def __init__(
+        self,
+        serial_number: int | None = None,
+        fps: int | None = None,
+        view: Literal['left', 'right', 'side_by_side'] = 'left',
+        resolution: Literal[
+            'hd4k', 'qhdplus', 'hd2k', 'hd1080', 'hd1200', 'hd1536', 'hd720', 'svga', 'vga', 'auto'
+        ] = 'auto',
+        depth_mode: Literal['none', 'near', 'far', 'high', 'ultra'] = 'none',
+        max_depth: float = 10,
+        depth_mask: bool = False,
+    ):
         """
         StereoLabs camera driver.
 
@@ -55,12 +59,12 @@ class SLCamera(pimm.ControlSystem):
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Sleep]:
         SUCCESS = sl.ERROR_CODE.SUCCESS
         TIME_REF_IMAGE = sl.TIME_REFERENCE.IMAGE
-        fps_counter = pimm.utils.RateCounter("Camera")
+        fps_counter = pimm.utils.RateCounter('Camera')
 
         zed = sl.Camera()
         error_code = zed.open(self.init_params)
         if error_code != SUCCESS:
-            print(f"Failed to open camera: {error_code}")
+            print(f'Failed to open camera: {error_code}')
             return
 
         while not should_stop.value:

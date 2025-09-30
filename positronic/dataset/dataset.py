@@ -1,7 +1,7 @@
 import collections.abc
 from abc import ABC, abstractmethod
+from collections.abc import Sequence
 from contextlib import AbstractContextManager
-from typing import Sequence
 
 import numpy as np
 
@@ -43,7 +43,7 @@ class Dataset(ABC, collections.abc.Sequence[Episode]):
             if idx < 0:
                 idx += length
             if not (0 <= idx < length):
-                raise IndexError("Index out of range")
+                raise IndexError('Index out of range')
             return idx
 
         if isinstance(index_or_slice, slice):
@@ -53,13 +53,13 @@ class Dataset(ABC, collections.abc.Sequence[Episode]):
         if isinstance(index_or_slice, np.ndarray):
             idxs = np.asarray(index_or_slice)
             if np.issubdtype(idxs.dtype, np.bool_):
-                raise TypeError("Boolean indexing is not supported")
+                raise TypeError('Boolean indexing is not supported')
             return [self._get_episode(normalize_index(int(i))) for i in idxs]
 
-        if isinstance(index_or_slice, collections.abc.Sequence) and not isinstance(index_or_slice, (str, bytes)):
+        if isinstance(index_or_slice, collections.abc.Sequence) and not isinstance(index_or_slice, str | bytes):
             idxs = np.asarray(index_or_slice)
             if np.issubdtype(idxs.dtype, np.bool_):
-                raise TypeError("Boolean indexing is not supported")
+                raise TypeError('Boolean indexing is not supported')
             return [self._get_episode(normalize_index(int(i))) for i in idxs]
 
         return self._get_episode(normalize_index(int(index_or_slice)))

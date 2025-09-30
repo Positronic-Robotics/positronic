@@ -1,26 +1,25 @@
 import os
-from typing import Iterator
-
-from mujoco import Any
+from collections.abc import Iterator
 
 import numpy as np
+from mujoco import Any
 
-from positronic import geom
 import pimm
+from positronic import geom
+from positronic.drivers.roboarm import RobotStatus, State, command
 from positronic.drivers.roboarm.kinova.api import KinovaAPI
 from positronic.drivers.roboarm.kinova.base import JointCompliantController, KinematicsSolver
-from positronic.drivers.roboarm import RobotStatus, State, command
 
 
 def _set_realtime_priority():
     try:
         # Set realtime scheduling priority
         os.sched_setscheduler(0, os.SCHED_FIFO, os.sched_param(os.sched_get_priority_max(os.SCHED_FIFO)))
-        print("Successfully set realtime scheduling priority")
+        print('Successfully set realtime scheduling priority')
     except (OSError, PermissionError) as e:
-        print(f"Warning: Could not set realtime scheduling priority: {e}")
+        print(f'Warning: Could not set realtime scheduling priority: {e}')
         print("Run `sudo setcap 'cap_sys_nice=eip' $(which python3)` to enable this")
-        print("Control loop will run with normal scheduling")
+        print('Control loop will run with normal scheduling')
 
 
 class KinovaState(State, pimm.shared_memory.NumpySMAdapter):
@@ -41,8 +40,7 @@ class KinovaState(State, pimm.shared_memory.NumpySMAdapter):
     @property
     def ee_pose(self) -> geom.Transform3D:
         return geom.Transform3D(
-            translation=self.array[14:14 + 3],
-            rotation=geom.Rotation.from_quat(self.array[14 + 3:14 + 7])
+            translation=self.array[14 : 14 + 3], rotation=geom.Rotation.from_quat(self.array[14 + 3 : 14 + 7])
         )
 
     @property
@@ -58,20 +56,17 @@ class KinovaState(State, pimm.shared_memory.NumpySMAdapter):
     def encode(self, q, dq, ee_pose, status: RobotStatus):
         self.array[:7] = q
         self.array[7:14] = dq
-        self.array[14:14 + 3] = ee_pose.translation
-        self.array[14 + 3:14 + 7] = ee_pose.rotation.as_quat
+        self.array[14 : 14 + 3] = ee_pose.translation
+        self.array[14 + 3 : 14 + 7] = ee_pose.rotation.as_quat
         self.array[14 + 7] = status.value
 
 
 class Robot(pimm.ControlSystem):
-    def __init__(self,
-                 ip: str,
-                 relative_dynamics_factor=0.2,
-                 home_joints: list[float] = [0.0, -0, 0.5, -1.5, 0.0, -0.5, 1.57079633]) -> None:
+    def __init__(self, ip: str, relative_dynamics_factor=0.2, home_joints: list[float] | None = None) -> None:
         self.ip = ip
         self.relative_dynamics_factor = relative_dynamics_factor
         self.solver = KinematicsSolver()
-        self.home_joints = home_joints
+        self.home_joints = home_joints if home_joints is not None else [0.0, -0, 0.5, -1.5, 0.0, -0.5, 1.57079633]
         self.commands: pimm.SignalReceiver[command.CommandType] = pimm.ControlSystemReceiver(self)
         self.state: pimm.SignalEmitter[KinovaState] = pimm.ControlSystemEmitter(self)
 
@@ -85,8 +80,7 @@ class Robot(pimm.ControlSystem):
 
         with KinovaAPI(self.ip) as api:
             joint_controller = JointCompliantController(
-                actuator_count=api.actuator_count,
-                relative_dynamics_factor=self.relative_dynamics_factor
+                actuator_count=api.actuator_count, relative_dynamics_factor=self.relative_dynamics_factor
             )
 
             q, dq, tau = api.apply_current_command(None)  # Warm up
@@ -106,7 +100,7 @@ class Robot(pimm.ControlSystem):
                             qpos = np.array(positions, dtype=np.float32)
                             joint_controller.set_target_qpos(qpos)
                         case _:
-                            print(f"Unsuported command: {cmd}")
+                            print(f'Unsuported command: {cmd}')
 
                 torque_command = joint_controller.compute_torque(q, dq, tau)
                 np.divide(torque_command, torque_constant, out=current_command)

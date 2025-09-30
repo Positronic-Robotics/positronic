@@ -1,6 +1,3 @@
-from typing import Dict
-
-
 class ButtonHandler:
     def __init__(self):
         """
@@ -10,16 +7,16 @@ class ButtonHandler:
 
         Example:
             >>> button_handler = ButtonHandler()
-            >>> current_button_state = {"button1": 0.0, "button2": 1.0, "trigger_value": 0.1234}
+            >>> current_button_state = {'button1': 0.0, 'button2': 1.0, 'trigger_value': 0.1234}
             >>> button_handler.update_buttons(current_button_state)
-            >>> assert button_handler.just_pressed("button1") is False
-            >>> assert button_handler.just_pressed("button2") is True
-            >>> assert button_handler.get_value("trigger_value") == 0.1234
-            >>> current_button_state = {"button1": 0.0, "button2": 1.0, "trigger_value": 0.5678}
+            >>> assert button_handler.just_pressed('button1') is False
+            >>> assert button_handler.just_pressed('button2') is True
+            >>> assert button_handler.get_value('trigger_value') == 0.1234
+            >>> current_button_state = {'button1': 0.0, 'button2': 1.0, 'trigger_value': 0.5678}
             >>> button_handler.update_buttons(current_button_state)
-            >>> assert button_handler.just_pressed("button1") is False
-            >>> assert button_handler.just_pressed("button2") is False
-            >>> assert button_handler.get_value("trigger_value") == 0.5678
+            >>> assert button_handler.just_pressed('button1') is False
+            >>> assert button_handler.just_pressed('button2') is False
+            >>> assert button_handler.get_value('trigger_value') == 0.5678
         """
         self._button_states = {}
         self._prev_states = {}
@@ -38,7 +35,7 @@ class ButtonHandler:
             self._prev_states[button_name] = 0.0
         self._button_states[button_name] = current_value
 
-    def update_buttons(self, button_states: Dict[str, float]) -> None:
+    def update_buttons(self, button_states: dict[str, float]) -> None:
         """
         Updates the state of multiple buttons with their current values
 
@@ -61,8 +58,7 @@ class ButtonHandler:
         """
         if button_name not in self._button_states:
             return False
-        return (self._prev_states[button_name] < threshold and
-                self._button_states[button_name] >= threshold)
+        return self._prev_states[button_name] < threshold and self._button_states[button_name] >= threshold
 
     def just_released(self, button_name: str, threshold: float = 0.4) -> bool:
         """
@@ -77,8 +73,7 @@ class ButtonHandler:
         """
         if button_name not in self._button_states:
             return False
-        return (self._prev_states[button_name] >= threshold and
-                self._button_states[button_name] < threshold)
+        return self._prev_states[button_name] >= threshold and self._button_states[button_name] < threshold
 
     def get_value(self, button_name: str) -> float:
         """
@@ -90,7 +85,7 @@ class ButtonHandler:
         Returns:
             (float) Current value of the button
         """
-        assert button_name in self._button_states, f"Button {button_name} was not updated"
+        assert button_name in self._button_states, f'Button {button_name} was not updated'
 
         return self._button_states[button_name]
 

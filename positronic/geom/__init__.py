@@ -1,5 +1,6 @@
+from collections.abc import Sequence
 from enum import Enum
-from typing import Any, Sequence
+from typing import Any
 
 import numpy as np
 
@@ -46,11 +47,11 @@ class Transform3D(metaclass=Transform3DMeta):
         Create a Transform3D object from a 4x4 transformation matrix.
         """
         if matrix.shape != (4, 4):
-            raise ValueError("Input matrix must be of shape (4, 4)")
+            raise ValueError('Input matrix must be of shape (4, 4)')
 
         # Check that the fourth row has the expected form [0, 0, 0, 1]
         if not np.allclose(matrix[3], [0, 0, 0, 1]):
-            raise ValueError("The fourth row of the matrix must be [0, 0, 0, 1]")
+            raise ValueError('The fourth row of the matrix must be [0, 0, 0, 1]')
 
         # Extract translation
         translation = matrix[:3, 3]
@@ -81,7 +82,7 @@ class Transform3D(metaclass=Transform3DMeta):
         Multiply two Transform3D objects. T1 * T2 means f(x) = T1(T2(x))
         """
         if not isinstance(other, Transform3D):
-            raise TypeError("Multiplicand must be an instance of Transform3D")
+            raise TypeError('Multiplicand must be an instance of Transform3D')
         return Transform3D(self.translation + self.rotation(other.translation), self.rotation * other.rotation)
 
     def __call__(self, vector):
@@ -89,18 +90,18 @@ class Transform3D(metaclass=Transform3DMeta):
         Apply the transformation to a 3D vector.
         """
         if len(vector) != 3:
-            raise ValueError("Input vector must be of length 3")
+            raise ValueError('Input vector must be of length 3')
         return self.rotation(vector) + self.translation
 
     def __repr__(self):
         translation_str = np.array2string(self.translation, precision=3, suppress_small=True)
         quaternion_str = np.array2string(self.rotation.as_quat, precision=3, suppress_small=True)
-        return f"Transform3D(t={translation_str}, q={quaternion_str})"
+        return f'Transform3D(t={translation_str}, q={quaternion_str})'
 
     def __str__(self):
         translation_str = np.array2string(self.translation, precision=3, suppress_small=True)
         quaternion_str = np.array2string(self.rotation.as_quat, precision=3, suppress_small=True)
-        return f"Translation: {translation_str}, Quaternion: {quaternion_str}"
+        return f'Translation: {translation_str}, Quaternion: {quaternion_str}'
 
     def copy(self):
         return Transform3D(self.translation.copy(), self.rotation.copy())
@@ -142,7 +143,7 @@ class Rotation(np.ndarray, metaclass=RotationMeta):
             elif self == Rotation.Representation.ROTVEC:
                 return Rotation.from_rotvec(value)
             else:
-                raise NotImplementedError(f"Rotation representation {self} not implemented")
+                raise NotImplementedError(f'Rotation representation {self} not implemented')
 
         @property
         def shape(self) -> int | tuple[int, int]:
@@ -157,7 +158,7 @@ class Rotation(np.ndarray, metaclass=RotationMeta):
             elif self == Rotation.Representation.ROTVEC:
                 return 3
             else:
-                raise NotImplementedError(f"Rotation representation {self} not implemented")
+                raise NotImplementedError(f'Rotation representation {self} not implemented')
 
         @property
         def size(self) -> int:
@@ -181,7 +182,7 @@ class Rotation(np.ndarray, metaclass=RotationMeta):
         Multiply two rotations.
         """
         if not isinstance(other, Rotation):
-            raise TypeError("Multiplicand must be an instance of Rotation")
+            raise TypeError('Multiplicand must be an instance of Rotation')
 
         w1, x1, y1, z1 = self
         w2, x2, y2, z2 = other
@@ -355,7 +356,7 @@ class Rotation(np.ndarray, metaclass=RotationMeta):
         elif representation == Rotation.Representation.ROTVEC:
             return self.as_rotvec
         else:
-            raise ValueError(f"Invalid rotation representation: {representation}")
+            raise ValueError(f'Invalid rotation representation: {representation}')
 
     @property
     def as_rotation_matrix(self):
@@ -363,9 +364,11 @@ class Rotation(np.ndarray, metaclass=RotationMeta):
         Represent the rotation as a rotation matrix.
         """
         w, x, y, z = self
-        return np.array([[1 - 2 * (y**2 + z**2), 2 * (x * y - z * w), 2 * (x * z + y * w)],
-                         [2 * (x * y + z * w), 1 - 2 * (x**2 + z**2), 2 * (y * z - x * w)],
-                         [2 * (x * z - y * w), 2 * (y * z + x * w), 1 - 2 * (x**2 + y**2)]])
+        return np.array([
+            [1 - 2 * (y**2 + z**2), 2 * (x * y - z * w), 2 * (x * z + y * w)],
+            [2 * (x * y + z * w), 1 - 2 * (x**2 + z**2), 2 * (y * z - x * w)],
+            [2 * (x * z - y * w), 2 * (y * z + x * w), 1 - 2 * (x**2 + y**2)],
+        ])
 
     @property
     def as_rotvec(self) -> np.ndarray:
@@ -393,7 +396,7 @@ class Rotation(np.ndarray, metaclass=RotationMeta):
         """
         # Roll (x-axis rotation)
         sinr_cosp = 2 * (self[0] * self[1] + self[2] * self[3])
-        cosr_cosp = 1 - 2 * (self[1]**2 + self[2]**2)
+        cosr_cosp = 1 - 2 * (self[1] ** 2 + self[2] ** 2)
         roll = np.arctan2(sinr_cosp, cosr_cosp)
 
         # Pitch (y-axis rotation)
@@ -405,7 +408,7 @@ class Rotation(np.ndarray, metaclass=RotationMeta):
 
         # Yaw (z-axis rotation)
         siny_cosp = 2 * (self[0] * self[3] + self[1] * self[2])
-        cosy_cosp = 1 - 2 * (self[2]**2 + self[3]**2)
+        cosy_cosp = 1 - 2 * (self[2] ** 2 + self[3] ** 2)
         yaw = np.arctan2(siny_cosp, cosy_cosp)
 
         return np.array([roll, pitch, yaw])

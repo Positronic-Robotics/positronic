@@ -1,6 +1,6 @@
 """Robotiq 2F-85 (and 2F-140) Modbus RTU driver (RS-485)."""
 
-from typing import Iterator
+from collections.abc import Iterator
 
 import pymodbus.client as ModbusClient
 
@@ -11,12 +11,11 @@ _REG_IN_POS = 0x07D2
 _SLAVE = 9
 _BAUD_RATE = 115200
 _BYTESIZE = 8
-_PARITY = "N"
+_PARITY = 'N'
 _STOPBITS = 1
 
 
 class Robotiq2F(pimm.ControlSystem):
-
     def __init__(self, port: str):
         self._port = port
         self.grip = pimm.ControlSystemEmitter(self)
@@ -25,12 +24,10 @@ class Robotiq2F(pimm.ControlSystem):
         self.speed = pimm.ControlSystemReceiver(self)
 
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Sleep]:
-        client = ModbusClient.ModbusSerialClient(port=self._port,
-                                                 baudrate=_BAUD_RATE,
-                                                 bytesize=_BYTESIZE,
-                                                 parity=_PARITY,
-                                                 stopbits=_STOPBITS)
-        assert client.connect(), f"Failed to connect to Robotiq gripper at {self._port}"
+        client = ModbusClient.ModbusSerialClient(
+            port=self._port, baudrate=_BAUD_RATE, bytesize=_BYTESIZE, parity=_PARITY, stopbits=_STOPBITS
+        )
+        assert client.connect(), f'Failed to connect to Robotiq gripper at {self._port}'
 
         try:
             limiter = pimm.RateLimiter(clock, hz=200)  # According to the manual, the gripper can handle 200Hz
@@ -58,10 +55,11 @@ class Robotiq2F(pimm.ControlSystem):
             client.close()
 
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     import time
+
     with pimm.World() as world:
-        gr = Robotiq2F(port="/dev/ttyUSB0")
+        gr = Robotiq2F(port='/dev/ttyUSB0')
 
         spd = world.pair(gr.speed)
         frc = world.pair(gr.force)
@@ -85,6 +83,6 @@ if __name__ == "__main__":
                     break
             time.sleep(0.1)
             try:
-                print(f"[{i}] Grip: {grip.value:.2f}")
+                print(f'[{i}] Grip: {grip.value:.2f}')
             except pimm.NoValueException:
                 pass

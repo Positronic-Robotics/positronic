@@ -6,10 +6,9 @@ information cannot be determined.
 """
 
 import subprocess
-from typing import Dict
 
 
-def get_git_state() -> Dict[str, str | bool] | None:
+def get_git_state() -> dict[str, str | bool] | None:
     """Return a dictionary with basic Git metadata or None if unavailable.
 
     The returned mapping includes:
@@ -21,19 +20,15 @@ def get_git_state() -> Dict[str, str | bool] | None:
     or if Git is not installed/accessible.
     """
     try:
-        commit = subprocess.run(
-            ["git", "rev-parse", "HEAD"], capture_output=True, text=True, check=True
-        ).stdout.strip()
+        commit = subprocess.run(['git', 'rev-parse', 'HEAD'], capture_output=True, text=True, check=True).stdout.strip()
         branch = subprocess.run(
-            ["git", "rev-parse", "--abbrev-ref", "HEAD"], capture_output=True, text=True, check=True
+            ['git', 'rev-parse', '--abbrev-ref', 'HEAD'], capture_output=True, text=True, check=True
         ).stdout.strip()
-        status = subprocess.run(
-            ["git", "status", "--porcelain"], capture_output=True, text=True, check=True
-        ).stdout
+        status = subprocess.run(['git', 'status', '--porcelain'], capture_output=True, text=True, check=True).stdout
         dirty = bool(status.strip())
-        return {"commit": commit, "branch": branch, "dirty": dirty}
+        return {'commit': commit, 'branch': branch, 'dirty': dirty}
     except Exception:
         return None
 
 
-__all__ = ["get_git_state"]
+__all__ = ['get_git_state']

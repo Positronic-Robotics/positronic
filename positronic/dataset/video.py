@@ -1,14 +1,14 @@
 from collections import deque
+from collections.abc import Iterator, Sequence
 from functools import lru_cache
 from pathlib import Path
-from typing import Iterator, List, Optional, Sequence, Tuple
 
 import av
 import numpy as np
 import pyarrow as pa
 import pyarrow.parquet as pq
 
-from .signal import IndicesLike, RealNumericArrayLike, Signal, SignalWriter, is_realnum_dtype, SignalMeta, Kind
+from .signal import IndicesLike, Kind, RealNumericArrayLike, Signal, SignalMeta, SignalWriter, is_realnum_dtype
 
 
 class VideoSignalWriter(SignalWriter[np.ndarray]):
@@ -18,12 +18,9 @@ class VideoSignalWriter(SignalWriter[np.ndarray]):
     containing frame timestamps for fast random access.
     """
 
-    def __init__(self,
-                 video_path: Path,
-                 frames_index_path: Path,
-                 codec: str = 'h264',
-                 gop_size: int = 30,
-                 fps: int = 100):
+    def __init__(
+        self, video_path: Path, frames_index_path: Path, codec: str = 'h264', gop_size: int = 30, fps: int = 100
+    ):
         """Initialize VideoSignalWriter.
 
         Args:
@@ -48,15 +45,15 @@ class VideoSignalWriter(SignalWriter[np.ndarray]):
         self._stream: av.video.stream.VideoStream | None = None
         self._width: int | None = None
         self._height: int | None = None
-        self._frame_timestamps: List[int] = []
+        self._frame_timestamps: list[int] = []
 
     def _init_video_encoder(self, first_frame: np.ndarray) -> None:
         """Initialize video encoder based on first frame dimensions."""
         if first_frame.ndim != 3 or first_frame.shape[2] != 3:
-            raise ValueError(f"Expected frame shape (H, W, 3), got {first_frame.shape}")
+            raise ValueError(f'Expected frame shape (H, W, 3), got {first_frame.shape}')
 
         if first_frame.dtype != np.uint8:
-            raise ValueError(f"Expected uint8 dtype, got {first_frame.dtype}")
+            raise ValueError(f'Expected uint8 dtype, got {first_frame.dtype}')
 
         self._height, self._width = first_frame.shape[:2]
 
@@ -79,12 +76,12 @@ class VideoSignalWriter(SignalWriter[np.ndarray]):
             ValueError: If timestamp is not increasing or data shape/dtype doesn't match
         """
         if self._finished:
-            raise RuntimeError("Cannot append to a finished writer")
+            raise RuntimeError('Cannot append to a finished writer')
         if self._aborted:
-            raise RuntimeError("Cannot append to an aborted writer")
+            raise RuntimeError('Cannot append to an aborted writer')
 
         if self._last_ts is not None and ts_ns <= self._last_ts:
-            raise ValueError(f"Timestamp {ts_ns} is not increasing (last was {self._last_ts})")
+            raise ValueError(f'Timestamp {ts_ns} is not increasing (last was {self._last_ts})')
 
         if self._container is None:
             self._init_video_encoder(data)
@@ -92,7 +89,7 @@ class VideoSignalWriter(SignalWriter[np.ndarray]):
             if data.shape[:2] != (self._height, self._width):
                 raise ValueError(f"Frame shape {data.shape[:2]} doesn't match expected ({self._height}, {self._width})")
             if data.dtype != np.uint8:
-                raise ValueError(f"Expected uint8 dtype, got {data.dtype}")
+                raise ValueError(f'Expected uint8 dtype, got {data.dtype}')
 
         self._frame_timestamps.append(ts_ns)
 
@@ -130,7 +127,7 @@ class VideoSignalWriter(SignalWriter[np.ndarray]):
         if self._aborted:
             return
         if self._finished:
-            raise RuntimeError("Cannot abort a finished writer")
+            raise RuntimeError('Cannot abort a finished writer')
 
         if self._container is not None:
             self._container.close()
@@ -155,7 +152,7 @@ class _VideoNavigator:
         self._ticks_per_frame = max(1, int(ticks_per_frame))
         self._seek_threshold = seek_threshold
 
-        self._frame_buffer: deque[Tuple[int, av.VideoFrame]] = deque()
+        self._frame_buffer: deque[tuple[int, av.VideoFrame]] = deque()
 
         self._demux_iter = iter(self._container.demux(self._stream))
         self._last_idx = -1
@@ -177,10 +174,10 @@ class _VideoNavigator:
         self._frame_buffer.clear()
         self._last_idx = -1
 
-    def __iter__(self) -> Iterator[Tuple[int, av.VideoFrame]]:
+    def __iter__(self) -> Iterator[tuple[int, av.VideoFrame]]:
         return self
 
-    def __next__(self) -> Tuple[int, av.VideoFrame]:
+    def __next__(self) -> tuple[int, av.VideoFrame]:
         """Returns next frame from buffer or decodes new packets."""
         while self._frame_buffer:
             return self._frame_buffer.popleft()
@@ -202,7 +199,7 @@ class VideoSignal(Signal[np.ndarray]):
     containing frame timestamps for fast random access.
     """
 
-    def __init__(self, video_path: Path, frames_index_path: Path, seek_threshold: Optional[int] = None):
+    def __init__(self, video_path: Path, frames_index_path: Path, seek_threshold: int | None = None):
         """Initialize VideoSignal reader.
 
         Args:
@@ -238,7 +235,7 @@ class VideoSignal(Signal[np.ndarray]):
         return len(self._timestamps)
 
     @lru_cache(maxsize=1)  # Access to the same index might be frequent
-    def _get_frame_at_index(self, index: int) -> Tuple[np.ndarray, int]:
+    def _get_frame_at_index(self, index: int) -> tuple[np.ndarray, int]:
         """Internal method to get a frame at a specific index."""
         index = int(index)
         self._nav.seek_if_needed(index)
@@ -248,7 +245,7 @@ class VideoSignal(Signal[np.ndarray]):
             elif frame_index > index:
                 break
 
-        raise IndexError(f"Could not decode frame {index}")
+        raise IndexError(f'Could not decode frame {index}')
 
     def _ts_at(self, index_or_indices: IndicesLike) -> Sequence[int] | np.ndarray:
         self._load_timestamps()
@@ -262,7 +259,7 @@ class VideoSignal(Signal[np.ndarray]):
         all frames up front.
         """
 
-        def __init__(self, parent: "VideoSignal", indices: Sequence[int] | np.ndarray):
+        def __init__(self, parent: 'VideoSignal', indices: Sequence[int] | np.ndarray):
             self._parent = parent
             # Store as numpy int64 array for efficient indexing/slicing
             self._indices = np.asarray(indices, dtype=np.int64)
@@ -292,7 +289,7 @@ class VideoSignal(Signal[np.ndarray]):
         if req.size == 0:
             return np.array([], dtype=np.int64)
         if not is_realnum_dtype(req.dtype):
-            raise TypeError(f"Invalid timestamp array dtype: {req.dtype}")
+            raise TypeError(f'Invalid timestamp array dtype: {req.dtype}')
         return np.searchsorted(self._timestamps, req, side='right') - 1
 
     @property
@@ -300,6 +297,6 @@ class VideoSignal(Signal[np.ndarray]):
     def meta(self) -> SignalMeta:
         # Video frames are HWC (height, width, channel); classify as image
         if len(self) == 0:
-            raise ValueError("Signal is empty")
+            raise ValueError('Signal is empty')
         base = super().meta
-        return SignalMeta(dtype=base.dtype, shape=base.shape, kind=Kind.IMAGE, names=["height", "width", "channel"])
+        return SignalMeta(dtype=base.dtype, shape=base.shape, kind=Kind.IMAGE, names=['height', 'width', 'channel'])
