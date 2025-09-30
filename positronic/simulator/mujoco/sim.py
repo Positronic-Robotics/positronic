@@ -1,15 +1,17 @@
-from typing import Any, Dict, Iterator, Sequence, Tuple
 import logging
+from collections.abc import Iterator, Mapping, Sequence
+from typing import Any
 
-from positronic import geom
-import pimm
 import mujoco as mj
+import numpy as np
 from dm_control import mujoco as dm_mujoco
 from dm_control.utils import inverse_kinematics as ik
-import numpy as np
 
+import pimm
+from positronic import geom
 from positronic.drivers.roboarm import RobotStatus, State
 from positronic.drivers.roboarm import command as roboarm_command
+from positronic.simulator.mujoco.observers import MujocoSimObserver
 from positronic.simulator.mujoco.transforms import MujocoSceneTransform, load_model_from_spec_file
 
 logger = logging.getLogger(__name__)
@@ -29,7 +31,7 @@ STATE_SPECS = [
 ]
 
 
-def save_state(model, data) -> Dict[str, np.ndarray]:
+def save_state(model, data) -> dict[str, np.ndarray]:
     """
     Saves full state of the simulator.
     This state could be used to restore the exact state of the simulator.
@@ -47,20 +49,33 @@ def save_state(model, data) -> Dict[str, np.ndarray]:
 
 
 class MujocoSim(pimm.Clock, pimm.ControlSystem):
-    def __init__(self, mujoco_model_path: str, loaders: Sequence[MujocoSceneTransform] = ()):
+    def __init__(
+        self,
+        mujoco_model_path: str,
+        loaders: Sequence[MujocoSceneTransform] = (),
+        observers: Mapping[str, MujocoSimObserver] | None = None,
+    ):
         self.mujoco_model_path = mujoco_model_path
         self.loaders = loaders
+        self.observers = observers or {}
         self.model, self.metadata = load_from_xml_path(self.mujoco_model_path, self.loaders)
         self.data = mj.MjData(self.model)
-        self.fps_counter = pimm.utils.RateCounter("MujocoSim")
+        self.fps_counter = pimm.utils.RateCounter('MujocoSim')
         self.initial_ctrl = [float(x) for x in self.metadata.get('initial_ctrl').split(',')]
         self.warmup_steps = 1000
         self.reset(reinitialize_model=False)
+        self.observations = pimm.EmitterDict(self)
 
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Sleep]:
         while not should_stop.value:
             self.step()
             self.fps_counter.tick()
+
+            for name, observer in self.observers.items():
+                value = observer(self.model, self.data)
+                if value is not None:
+                    self.observations[name].emit(value)
+
             yield pimm.Pass()
 
     def now(self) -> float:
@@ -92,7 +107,7 @@ class MujocoSim(pimm.Clock, pimm.ControlSystem):
         if reset_time:
             self.data.time = 0
 
-    def save_state(self) -> Dict[str, np.ndarray]:
+    def save_state(self) -> dict[str, np.ndarray]:
         """
         Saves full state of the simulator.
 
@@ -111,14 +126,14 @@ class MujocoSim(pimm.Clock, pimm.ControlSystem):
 
 
 class MujocoCamera(pimm.ControlSystem):
-    def __init__(self, model, data, camera_name: str, resolution: Tuple[int, int], fps: int = 30):
+    def __init__(self, model, data, camera_name: str, resolution: tuple[int, int], fps: int = 30):
         super().__init__()
         self.model = model
         self.data = data
         self.render_resolution = resolution
         self.camera_name = camera_name
         self.fps = fps
-        self.fps_counter = pimm.utils.RateCounter("MujocoCamera")
+        self.fps_counter = pimm.utils.RateCounter('MujocoCamera')
         self.frame: pimm.SignalEmitter = pimm.ControlSystemEmitter(self)
 
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock):
@@ -151,7 +166,7 @@ class MujocoFrankaState(State, pimm.shared_memory.NumpySMAdapter):
 
     @property
     def ee_pose(self) -> geom.Transform3D:
-        return geom.Transform3D(self.array[14:14 + 3], self.array[14 + 3:14 + 7])
+        return geom.Transform3D(self.array[14 : 14 + 3], self.array[14 + 3 : 14 + 7])
 
     @property
     def status(self) -> RobotStatus:
@@ -160,8 +175,8 @@ class MujocoFrankaState(State, pimm.shared_memory.NumpySMAdapter):
     def encode(self, q, dq, ee_pose):
         self.array[:7] = q
         self.array[7:14] = dq
-        self.array[14:14 + 3] = ee_pose.translation
-        self.array[14 + 3:14 + 7] = ee_pose.rotation.as_quat
+        self.array[14 : 14 + 3] = ee_pose.translation
+        self.array[14 + 3 : 14 + 7] = ee_pose.rotation.as_quat
         self.array[14 + 7] = self.status.value
 
 
@@ -192,7 +207,7 @@ class MujocoFranka(pimm.ControlSystem):
                     case roboarm_command.Reset():
                         self.sim.reset()
                     case _:
-                        raise ValueError(f"Unknown command type: {type(command)}")
+                        raise ValueError(f'Unknown command type: {type(command)}')
 
             # TODO: still a copy here
             state.encode(self.q, self.dq, self.ee_pose)
@@ -239,7 +254,7 @@ class MujocoFranka(pimm.ControlSystem):
         if q is not None:
             self.set_actuator_values(q)
         else:
-            logger.warning(f"Failed to calculate IK for ee_pose: {ee_pose}")
+            logger.warning(f'Failed to calculate IK for ee_pose: {ee_pose}')
 
     def _xmat_to_quat(self, xmat: np.ndarray) -> np.ndarray:
         site_quat = np.empty(4)

@@ -1,8 +1,9 @@
+from collections.abc import Iterator, Mapping, Sequence
 from contextlib import nullcontext
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
-from typing import Any, Iterator, Mapping, Sequence
+from typing import Any
 
 import configuronic as cfn
 import numpy as np
@@ -26,6 +27,7 @@ from positronic.drivers import roboarm
 from positronic.gui.dpg import DearpyguiUi
 from positronic.policy.action import ActionDecoder
 from positronic.policy.observation import ObservationEncoder
+from positronic.simulator.mujoco.observers import BodyDistance
 from positronic.simulator.mujoco.sim import MujocoCamera, MujocoFranka, MujocoGripper, MujocoSim
 from positronic.simulator.mujoco.transforms import MujocoSceneTransform
 
@@ -48,14 +50,16 @@ def detect_device() -> str:
 
 class InferenceCommandType(Enum):
     """Commands for the inference."""
-    START = "start"
-    STOP = "stop"
-    RESET = "reset"
+
+    START = 'start'
+    STOP = 'stop'
+    RESET = 'reset'
 
 
 @dataclass
 class InferenceCommand:
     """Command for the inference."""
+
     type: InferenceCommandType
     payload: Any | None = None
 
@@ -76,15 +80,16 @@ class InferenceCommand:
 
 
 class Inference(pimm.ControlSystem):
-
-    def __init__(self,
-                 state_encoder: ObservationEncoder,
-                 action_decoder: ActionDecoder,
-                 device: str,
-                 policy,
-                 inference_fps: int = 30,
-                 task: str | None = None):
-        self.state_encoder = state_encoder
+    def __init__(
+        self,
+        observation_encoder: ObservationEncoder,
+        action_decoder: ActionDecoder,
+        device: str,
+        policy,
+        inference_fps: int = 30,
+        task: str | None = None,
+    ):
+        self.observation_encoder = observation_encoder
         self.action_decoder = action_decoder
         self.policy = policy.to(device)
         self.device = device
@@ -126,7 +131,7 @@ class Inference(pimm.ControlSystem):
                     continue
 
                 frame_messages = {k: v.value for k, v in self.frames.items()}
-                images = {f"image.{k}": v['image'] for k, v in frame_messages.items() if 'image' in v}
+                images = {f'image.{k}': v['image'] for k, v in frame_messages.items() if 'image' in v}
                 if len(images) != len(self.frames):
                     continue
 
@@ -142,7 +147,7 @@ class Inference(pimm.ControlSystem):
                     'grip': self.gripper_state.value,
                 }
                 obs = {}
-                for key, val in self.state_encoder.encode(images, inputs).items():
+                for key, val in self.observation_encoder.encode(images, inputs).items():
                     if isinstance(val, np.ndarray):
                         obs[key] = torch.from_numpy(val).to(self.device)
                     else:
@@ -189,7 +194,7 @@ class Driver(pimm.ControlSystem):
 
 def main_sim(
     mujoco_model_path: str,
-    state_encoder: ObservationEncoder,
+    observation_encoder: ObservationEncoder,
     action_decoder: ActionDecoder,
     policy,
     loaders: Sequence[MujocoSceneTransform],
@@ -204,14 +209,17 @@ def main_sim(
     num_iterations: int = 1,
 ):
     device = device or detect_device()
-    sim = MujocoSim(mujoco_model_path, loaders)
+    observers = {
+        'box_distance': BodyDistance('box_0_body', 'box_1_body'),
+    }
+    sim = MujocoSim(mujoco_model_path, loaders, observers=observers)
     robot_arm = MujocoFranka(sim, suffix='_ph')
     gripper = MujocoGripper(sim, actuator_name='actuator8_ph', joint_name='finger_joint1_ph')
     cameras = {
-        name: MujocoCamera(sim.model, sim.data, orig_name, (1280, 720), fps=camera_fps)
+        name: MujocoCamera(sim.model, sim.data, orig_name, (640, 480), fps=camera_fps)
         for name, orig_name in camera_dict.items()
     }
-    inference = Inference(state_encoder, action_decoder, device, policy, policy_fps, task)
+    inference = Inference(observation_encoder, action_decoder, device, policy, policy_fps, task)
     control_systems = list(cameras.values()) + [sim, robot_arm, gripper, inference]
 
     gui = None
@@ -227,6 +235,8 @@ def main_sim(
             signals_spec['robot_commands'] = Serializers.robot_command
             signals_spec['target_grip'] = None
             signals_spec['grip'] = None
+            for observer_name in observers.keys():
+                signals_spec[observer_name] = None
             ds_agent = DsWriterAgent(dataset_writer, signals_spec, time_mode=TimeMode.MESSAGE)
             control_systems.append(ds_agent)
 
@@ -236,6 +246,8 @@ def main_sim(
             world.connect(inference.robot_commands, ds_agent.inputs['robot_commands'])
             world.connect(gripper.grip, ds_agent.inputs['grip'])
             world.connect(inference.target_grip, ds_agent.inputs['target_grip'])
+            for observer_name in observers.keys():
+                world.connect(sim.observations[observer_name], ds_agent.inputs[observer_name])
 
         cameras = cameras or {}
         for camera_name, camera in cameras.items():
@@ -266,9 +278,9 @@ def main_sim(
 
 main_sim_cfg = cfn.Config(
     main_sim,
-    mujoco_model_path="positronic/assets/mujoco/franka_table.xml",
+    mujoco_model_path='positronic/assets/mujoco/franka_table.xml',
     loaders=positronic.cfg.simulator.stack_cubes_loaders,
-    state_encoder=positronic.cfg.policy.observation.pi0,
+    observation_encoder=positronic.cfg.policy.observation.pi0,
     action_decoder=positronic.cfg.policy.action.absolute_position,
     policy=positronic.cfg.policy.policy.pi0,
     camera_fps=60,
@@ -279,12 +291,12 @@ main_sim_cfg = cfn.Config(
         'handcam_left': 'handcam_left_ph',
         'back_view': 'back_view_ph',
     },
-    task="pick up the green cube and put in on top of the red cube",
+    task='pick up the green cube and put in on top of the red cube',
 )
 
 main_sim_pi0 = main_sim_cfg.override(
     policy=positronic.cfg.policy.policy.pi0,
-    state_encoder=positronic.cfg.policy.observation.pi0,
+    observation_encoder=positronic.cfg.policy.observation.pi0,
     action_decoder=positronic.cfg.policy.action.absolute_position,
     camera_dict={
         'left': 'handcam_left_ph',
@@ -294,7 +306,7 @@ main_sim_pi0 = main_sim_cfg.override(
 
 main_sim_act = main_sim_cfg.override(
     policy=positronic.cfg.policy.policy.act,
-    state_encoder=positronic.cfg.policy.observation.franka_mujoco_stackcubes,
+    observation_encoder=positronic.cfg.policy.observation.franka_mujoco_stackcubes,
     action_decoder=positronic.cfg.policy.action.absolute_position,
     camera_dict={
         'handcam_left': 'handcam_left_ph',
@@ -302,8 +314,8 @@ main_sim_act = main_sim_cfg.override(
     },
 )
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     cfn.cli({
-        "sim_pi0": main_sim_pi0,
-        "sim_act": main_sim_act,
+        'sim_pi0': main_sim_pi0,
+        'sim_act': main_sim_act,
     })
