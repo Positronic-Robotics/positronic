@@ -1,0 +1,71 @@
+from abc import ABC, abstractmethod
+from collections.abc import Sequence
+from typing import Any
+
+from ..episode import Episode
+from ..signal import Signal
+
+
+class EpisodeTransform(ABC):
+    """Transform an episode into a new episode."""
+
+    @property
+    @abstractmethod
+    def keys(self) -> Sequence[str]:
+        """Keys that this transform generates."""
+        ...
+
+    @abstractmethod
+    def transform(self, name: str, episode: Episode) -> Signal[Any] | Any:
+        """For given output key, return the transformed signal or static value."""
+        ...
+
+
+class TransformedEpisode(Episode):
+    """Transform an episode into a new view of the episode.
+
+    Supports one or more transforms. When multiple transforms are provided,
+    their keys are concatenated in the given order. For duplicate keys across
+    transforms, the first transform providing the key takes precedence.
+
+    If ``pass_through`` is True, any keys from the underlying episode that are
+    not provided by the transforms are appended after the transformed keys.
+    """
+
+    def __init__(self, episode: Episode, *transforms: EpisodeTransform, pass_through: bool = False) -> None:
+        if not transforms:
+            raise ValueError('TransformedEpisode requires at least one transform')
+        self._episode = episode
+        self._transforms: tuple[EpisodeTransform, ...] = tuple(transforms)
+        self._pass_through = pass_through
+
+    @property
+    def keys(self) -> Sequence[str]:
+        # Preserve order across all transforms first, then pass-through keys
+        # from the original episode that are not overridden by any transform.
+        ordered: list[str] = []
+        seen: set[str] = set()
+        for tf in self._transforms:
+            for k in tf.keys:
+                if k not in seen:
+                    ordered.append(k)
+                    seen.add(k)
+        if self._pass_through:
+            for k in self._episode.keys:
+                if k not in seen:
+                    ordered.append(k)
+                    seen.add(k)
+        return ordered
+
+    def __getitem__(self, name: str) -> Signal[Any] | Any:
+        # If any transform defines this key, the first one takes precedence.
+        for tf in self._transforms:
+            if name in tf.keys:
+                return tf.transform(name, self._episode)
+        if self._pass_through:
+            return self._episode[name]
+        raise KeyError(name)
+
+    @property
+    def meta(self) -> dict[str, Any]:
+        return self._episode.meta

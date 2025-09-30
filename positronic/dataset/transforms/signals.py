@@ -1,36 +1,32 @@
-from abc import ABC, abstractmethod
+from collections.abc import Callable, Sequence
 from functools import partial
-from typing import Any, Callable, Sequence, TypeVar
+from typing import Any, TypeVar
 
-import cv2
 import numpy as np
-from PIL import Image as PilImage
 
 from positronic import geom
 
-from .dataset import Dataset
-from .episode import Episode
-from .signal import IndicesLike, Kind, RealNumericArrayLike, Signal, SignalMeta
+from ..signal import IndicesLike, Kind, RealNumericArrayLike, Signal, SignalMeta
 
-T = TypeVar("T")
-U = TypeVar("U")
+T = TypeVar('T')
+U = TypeVar('U')
 
 
 def _is_nonempty_name(name: str | None) -> bool:
     """Return True when the provided feature name is a non-empty string."""
-    return isinstance(name, str) and name != ""
+    return isinstance(name, str) and name != ''
 
 
 def _format_join_component_name(names: Sequence[str] | None) -> tuple[str, bool]:
     """Collapse a sequence of names into display form for join-style transforms."""
     if names is None:
-        return "", False
+        return '', False
     filtered = [n for n in names if _is_nonempty_name(n)]
     if not filtered:
-        return "", False
+        return '', False
     if len(filtered) == 1:
         return filtered[0], True
-    return "(" + " ".join(filtered) + ")", True
+    return '(' + ' '.join(filtered) + ')', True
 
 
 def _maybe_names(names: list[str]) -> list[str] | None:
@@ -38,15 +34,16 @@ def _maybe_names(names: list[str]) -> list[str] | None:
     return names if any(_is_nonempty_name(n) for n in names) else None
 
 
-def _format_offset_names(src_names: Sequence[str] | None, offsets: Sequence[int],
-                         label_fn: Callable[[str, int], str]) -> list[str] | None:
+def _format_offset_names(
+    src_names: Sequence[str] | None, offsets: Sequence[int], label_fn: Callable[[str, int], str]
+) -> list[str] | None:
     """Produce feature names for offset-based transforms with shared rules."""
     if src_names is None:
         return None
 
     def format_name(name: str, offset: int) -> str:
         if not _is_nonempty_name(name):
-            return ""
+            return ''
         return name if offset == 0 else label_fn(name, offset)
 
     offsets = [int(o) for o in offsets]
@@ -119,7 +116,7 @@ class Elementwise(Signal[U]):
                     name = fn_name
                 else:
                     src_part = src_names[0] if len(src_names) == 1 else str(list(src_names))
-                    name = f"{fn_name} of {src_part}"
+                    name = f'{fn_name} of {src_part}'
                 self._meta = base.with_names([name])
         return self._meta
 
@@ -147,17 +144,19 @@ class IndexOffsets(Signal[tuple]):
         ``"(name1 name2 ...)"`` following Join semantics.
     """
 
-    def __init__(self,
-                 signal: Signal[T],
-                 *relative_indices: int,
-                 include_ref_ts: bool = False,
-                 names: Sequence[str] | None = None) -> None:
+    def __init__(
+        self,
+        signal: Signal[T],
+        *relative_indices: int,
+        include_ref_ts: bool = False,
+        names: Sequence[str] | None = None,
+    ) -> None:
         self._signal = signal
         if len(relative_indices) == 0:
-            raise ValueError("relative_indices must be non-empty")
+            raise ValueError('relative_indices must be non-empty')
         offs = np.asarray(relative_indices, dtype=np.int64)
         if offs.size == 0:
-            raise ValueError("relative_indices must be non-empty")
+            raise ValueError('relative_indices must be non-empty')
         self._offs = offs
         self._min_off = int(np.min(self._offs))
         self._max_off = int(np.max(self._offs))
@@ -219,9 +218,8 @@ class IndexOffsets(Signal[tuple]):
 
     @property
     def meta(self) -> SignalMeta:
-
         def index_offset_label(name: str, offset: int):
-            return f"index offset {offset} of {name}"
+            return f'index offset {offset} of {name}'
 
         if self._meta is None:
             base_meta = super().meta
@@ -257,17 +255,15 @@ class TimeOffsets(Signal[tuple]):
         Zero offsets retain the original source name.
     """
 
-    def __init__(self,
-                 signal: Signal[T],
-                 *deltas_ts: int,
-                 include_ref_ts: bool = False,
-                 names: Sequence[str] | None = None) -> None:
+    def __init__(
+        self, signal: Signal[T], *deltas_ts: int, include_ref_ts: bool = False, names: Sequence[str] | None = None
+    ) -> None:
         self._signal = signal
         if len(deltas_ts) == 0:
-            raise ValueError("deltas_ts must be non-empty")
+            raise ValueError('deltas_ts must be non-empty')
         offs = np.asarray(deltas_ts, dtype=np.int64)
         if offs.size == 0:
-            raise ValueError("deltas_ts must be non-empty")
+            raise ValueError('deltas_ts must be non-empty')
         self._deltas = offs
         self._include_ref_ts = bool(include_ref_ts)
         self._bounds_ready = False
@@ -352,9 +348,8 @@ class TimeOffsets(Signal[tuple]):
 
     @property
     def meta(self) -> SignalMeta:
-
         def time_offset_label(name: str, offset: int):
-            return f"time offset {offset / 1e9:.2f} sec of {name}"
+            return f'time offset {offset / 1e9:.2f} sec of {name}'
 
         if self._meta is None:
             base_meta = super().meta
@@ -412,7 +407,7 @@ class Join(Signal[tuple]):
 
     def __init__(self, *signals: Signal[Any], include_ref_ts: bool = False, names: Sequence[str] | None = None) -> None:
         if len(signals) < 2:
-            raise ValueError("Join requires at least two signals")
+            raise ValueError('Join requires at least two signals')
         self._signals: tuple[Signal[Any], ...] = tuple(signals)
         self._include_ref_ts = bool(include_ref_ts)
         self._bounds_ready = False
@@ -435,12 +430,12 @@ class Join(Signal[tuple]):
         self._starts = [_first_idx_at_or_after(s, start_ts) for s in self._signals]
         # Collect timestamps from each signal starting at its aligned start
         ts_arrays = []
-        for s, st in zip(self._signals, self._starts):
+        for s, st in zip(self._signals, self._starts, strict=False):
             if st < len(s):
                 idxs = np.arange(st, len(s), dtype=np.int64)
                 ts_arrays.append(s._ts_at(idxs))
         if len(ts_arrays) == 0:
-            self._union_ts = np.empty((0, ), dtype=np.int64)
+            self._union_ts = np.empty((0,), dtype=np.int64)
         else:
             all_ts = np.concatenate(ts_arrays).astype(np.int64, copy=False)
             self._union_ts = np.unique(all_ts)
@@ -462,8 +457,8 @@ class Join(Signal[tuple]):
         ts = np.asarray(self._ts_at(indices), dtype=np.int64)
         # For each signal, sample at-or-before these timestamps
         idx_all = [s._search_ts(ts) for s in self._signals]
-        vals_all = [s._values_at(idx) for s, idx in zip(self._signals, idx_all)]
-        tss_all = [s._ts_at(idx) for s, idx in zip(self._signals, idx_all)]
+        vals_all = [s._values_at(idx) for s, idx in zip(self._signals, idx_all, strict=False)]
+        tss_all = [s._ts_at(idx) for s, idx in zip(self._signals, idx_all, strict=False)]
 
         if not self._include_ref_ts:
             return [tuple(row) for row in zip(*vals_all, strict=False)]
@@ -474,7 +469,7 @@ class Join(Signal[tuple]):
     def _search_ts(self, ts_array: RealNumericArrayLike) -> IndicesLike:
         self._compute_bounds()
         assert self._union_ts is not None
-        return np.searchsorted(self._union_ts, ts_array, side="right") - 1
+        return np.searchsorted(self._union_ts, ts_array, side='right') - 1
 
     @property
     def meta(self) -> SignalMeta:
@@ -484,74 +479,9 @@ class Join(Signal[tuple]):
                 names = self._names_override
             else:
                 parts = [_format_join_component_name(sig.names) for sig in self._signals]
-                names = [name if has else "" for name, has in parts] if any(has for _, has in parts) else None
+                names = [name if has else '' for name, has in parts] if any(has for _, has in parts) else None
             self._meta = base_meta.with_names(names)
         return self._meta
-
-
-class EpisodeTransform(ABC):
-    """Transform an episode into a new episode."""
-
-    @property
-    @abstractmethod
-    def keys(self) -> Sequence[str]:
-        """Keys that this transform generates."""
-        ...
-
-    @abstractmethod
-    def transform(self, name: str, episode: Episode) -> Signal[Any] | Any:
-        """For given output key, return the transformed signal or static value."""
-        ...
-
-
-class TransformedEpisode(Episode):
-    """Transform an episode into a new view of the episode.
-
-    Supports one or more transforms. When multiple transforms are provided,
-    their keys are concatenated in the given order. For duplicate keys across
-    transforms, the first transform providing the key takes precedence.
-
-    If ``pass_through`` is True, any keys from the underlying episode that are
-    not provided by the transforms are appended after the transformed keys.
-    """
-
-    def __init__(self, episode: Episode, *transforms: EpisodeTransform, pass_through: bool = False) -> None:
-        if not transforms:
-            raise ValueError("TransformedEpisode requires at least one transform")
-        self._episode = episode
-        self._transforms: tuple[EpisodeTransform, ...] = tuple(transforms)
-        self._pass_through = pass_through
-
-    @property
-    def keys(self) -> Sequence[str]:
-        # Preserve order across all transforms first, then pass-through keys
-        # from the original episode that are not overridden by any transform.
-        ordered: list[str] = []
-        seen: set[str] = set()
-        for tf in self._transforms:
-            for k in tf.keys:
-                if k not in seen:
-                    ordered.append(k)
-                    seen.add(k)
-        if self._pass_through:
-            for k in self._episode.keys:
-                if k not in seen:
-                    ordered.append(k)
-                    seen.add(k)
-        return ordered
-
-    def __getitem__(self, name: str) -> Signal[Any] | Any:
-        # If any transform defines this key, the first one takes precedence.
-        for tf in self._transforms:
-            if name in tf.keys:
-                return tf.transform(name, self._episode)
-        if self._pass_through:
-            return self._episode[name]
-        raise KeyError(name)
-
-    @property
-    def meta(self) -> dict[str, Any]:
-        return self._episode.meta
 
 
 class LazySequence(Sequence[U]):
@@ -568,85 +498,10 @@ class LazySequence(Sequence[U]):
     def __len__(self) -> int:
         return len(self._seq)
 
-    def __getitem__(self, index: int | slice) -> U | "LazySequence[U]":
+    def __getitem__(self, index: int | slice) -> U | 'LazySequence[U]':
         if isinstance(index, slice):
             return LazySequence(self._seq[index], self._fn)
         return self._fn(self._seq[int(index)])
-
-
-class Image:
-
-    @staticmethod
-    def resize(width: int,
-               height: int,
-               signal: Signal[np.ndarray],
-               interpolation: int = cv2.INTER_LINEAR) -> Signal[np.ndarray]:
-        """Return a Signal view with frames resized using OpenCV.
-
-        Args:
-            resolution: Target size as (width, height) for cv2.resize (W, H).
-            signal: Input image Signal with frames shaped (H, W, 3), dtype uint8.
-            interpolation: OpenCV interpolation flag (e.g., cv2.INTER_LINEAR).
-        """
-        interp_flag = int(interpolation)
-
-        def per_frame(img: np.ndarray) -> np.ndarray:
-            if img.ndim != 3 or img.shape[2] != 3:
-                raise ValueError(f"Expected frame shape (H, W, 3), got {img.shape}")
-            return cv2.resize(img, dsize=(width, height), interpolation=interp_flag)
-
-        def fn(x: Sequence[np.ndarray]) -> Sequence[np.ndarray]:
-            return LazySequence(x, per_frame)
-
-        return Elementwise(signal, fn, names=['height', 'width', 'channel'])
-
-    @staticmethod
-    def _resize_with_pad_pil(image: PilImage.Image, height: int, width: int, method: int) -> PilImage.Image:
-        """Replicates tf.image.resize_with_pad for one image using PIL. Resizes an image to a target height and
-        width without distortion by padding with zeros.
-        Unlike the jax version, note that PIL uses [width, height, channel] ordering instead of [batch, h, w, c].
-        """
-        cur_width, cur_height = image.size
-        if cur_width == width and cur_height == height:
-            return image  # No need to resize if the image is already the correct size.
-
-        ratio = max(cur_width / width, cur_height / height)
-        resized_height = int(cur_height / ratio)
-        resized_width = int(cur_width / ratio)
-        resized_image = image.resize((resized_width, resized_height), resample=method)
-
-        zero_image = PilImage.new(resized_image.mode, (width, height), 0)
-        pad_height = max(0, int((height - resized_height) / 2))
-        pad_width = max(0, int((width - resized_width) / 2))
-        zero_image.paste(resized_image, (pad_width, pad_height))
-        assert zero_image.size == (width, height)
-        return zero_image
-
-    @staticmethod
-    def resize_with_pad_per_frame(width: int, height: int, method, img: np.ndarray) -> np.ndarray:
-        if img.shape[0] == height and img.shape[1] == width:
-            return img  # No need to resize if the image is already the correct size.
-
-        return np.array(Image._resize_with_pad_pil(PilImage.fromarray(img), height, width, method=method))
-
-    @staticmethod
-    def resize_with_pad(width: int,
-                        height: int,
-                        signal: Signal[np.ndarray],
-                        method=PilImage.Resampling.BILINEAR) -> Signal[np.ndarray]:
-        """Return a Signal view with frames resized-with-pad using PIL.
-
-        Args:
-            height: Target height (H).
-            width: Target width (W).
-            signal: Input image Signal with frames shaped (H, W, 3), dtype uint8.
-            method: PIL resampling method (e.g., PilImage.Resampling.BILINEAR).
-        """
-
-        def fn(x: Sequence[np.ndarray]) -> Sequence[np.ndarray]:
-            return LazySequence(x, partial(Image.resize_with_pad_per_frame, width, height, method))
-
-        return Elementwise(signal, fn, names=['height', 'width', 'channel'])
 
 
 def _concat_per_frame(dtype: np.dtype | None, x: Sequence[tuple]) -> np.ndarray:
@@ -667,14 +522,14 @@ def _concat_per_frame(dtype: np.dtype | None, x: Sequence[tuple]) -> np.ndarray:
     out = np.empty((batch, total_dim), dtype=dtype)
 
     for j, p in enumerate(first_parts):  # Fill first row
-        out[0, offsets[j]:offsets[j] + dims[j]] = p.ravel().astype(dtype, copy=False)
+        out[0, offsets[j] : offsets[j] + dims[j]] = p.ravel().astype(dtype, copy=False)
     for i in range(1, batch):  # Fill remaining rows
         row = x[i]
         for j, v in enumerate(row):
             arr = np.asarray(v)
             if arr.size != dims[j]:
-                raise ValueError("concat: inconsistent vector size across rows")
-            out[i, offsets[j]:offsets[j] + dims[j]] = arr.ravel().astype(dtype, copy=False)
+                raise ValueError('concat: inconsistent vector size across rows')
+            out[i, offsets[j] : offsets[j] + dims[j]] = arr.ravel().astype(dtype, copy=False)
     return out
 
 
@@ -687,7 +542,7 @@ def concat(*signals, dtype: np.dtype | str | None = None, names: Sequence[str] |
     """
     n = len(signals)
     if n == 0:
-        raise ValueError("concat requires at least one key")
+        raise ValueError('concat requires at least one key')
     if n == 1:
         return signals[0]
 
@@ -716,7 +571,6 @@ def astype(signal: Signal[np.ndarray], dtype: np.dtype) -> Signal[np.ndarray]:
 
 
 class _PairwiseMap:
-
     def __init__(self, op: Callable[[Any, Any], Any]):
         self._op = op
 
@@ -727,10 +581,9 @@ class _PairwiseMap:
         return out
 
 
-def pairwise(a: Signal[Any],
-             b: Signal[Any],
-             op: Callable[[Any, Any], Any],
-             names: Sequence[str] | None = None) -> Signal[Any]:
+def pairwise(
+    a: Signal[Any], b: Signal[Any], op: Callable[[Any, Any], Any], names: Sequence[str] | None = None
+) -> Signal[Any]:
     """Apply a binary operation pairwise across two signals aligned on time.
 
     - Aligns `a` and `b` on the union of timestamps with carry-back semantics.
@@ -739,8 +592,9 @@ def pairwise(a: Signal[Any],
     return Elementwise(Join(a, b), _PairwiseMap(op), names=names)
 
 
-def recode_rotation(rep_from: geom.Rotation.Representation, rep_to: geom.Rotation.Representation,
-                    signal: Signal[np.ndarray]) -> Signal[np.ndarray]:
+def recode_rotation(
+    rep_from: geom.Rotation.Representation, rep_to: geom.Rotation.Representation, signal: Signal[np.ndarray]
+) -> Signal[np.ndarray]:
     """Return a Signal view with rotation vectors recoded to a different representation.
 
     Args:
@@ -756,27 +610,3 @@ def recode_rotation(rep_from: geom.Rotation.Representation, rep_to: geom.Rotatio
         return LazySequence(x, lambda v: geom.Rotation.create_from(v, rep_from).to(rep_to).flatten())
 
     return Elementwise(signal, fn)
-
-
-class TransformedDataset(Dataset):
-    """Transform a dataset into a new view of the dataset."""
-
-    def __init__(self, dataset: Dataset, *transforms: EpisodeTransform, pass_through: bool = False) -> None:
-        self._dataset = dataset
-        self._transforms = transforms
-        self._pass_through = pass_through
-        self._meta = None
-
-    def __len__(self) -> int:
-        return len(self._dataset)
-
-    def _get_episode(self, index: int) -> Episode:
-        episode = self._dataset[index]
-        return TransformedEpisode(episode, *self._transforms, pass_through=self._pass_through)
-
-    @property
-    def signals_meta(self) -> dict[str, SignalMeta]:
-        if self._meta is None:
-            ep = self[0]
-            self._meta = {name: ep[name].meta for name in ep.signals.keys()}
-        return self._meta

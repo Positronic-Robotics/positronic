@@ -1,23 +1,16 @@
 import numpy as np
 import pytest
 
-from positronic.dataset.dataset import Dataset
-from positronic.dataset.episode import Episode, EpisodeContainer
-from positronic.dataset.signal import Kind
 from positronic.dataset.transforms import (
     Elementwise,
-    EpisodeTransform,
-    Image,
     IndexOffsets,
     Join,
     TimeOffsets,
-    TransformedDataset,
-    TransformedEpisode,
     concat,
     pairwise,
 )
 
-from .utils import DummySignal
+from ...tests.utils import DummySignal
 
 
 @pytest.fixture
@@ -62,7 +55,7 @@ def test_elementwise_names_with_source_names(sig_simple):
     ts = [ts for _, ts in elements]
     named = DummySignal(ts, vals, names=['feat'])
     ew = Elementwise(named, _times10)
-    assert ew.names == ["_times10 of feat"]
+    assert ew.names == ['_times10 of feat']
 
 
 def test_elementwise_names_override(sig_simple):
@@ -298,9 +291,7 @@ def test_time_offsets_meta_names_single_and_multi():
     multi = TimeOffsets(sig, -1_000_000_000, 0, 1_000_000_000)
     assert multi.names == ['time offset -1.00 sec of value', 'value', 'time offset 1.00 sec of value']
 
-    vector = DummySignal(timestamps + [3_000_000_000],
-                         [[1, 2], [3, 4], [5, 6], [7, 8]],
-                         names=['tx', 'ty'])
+    vector = DummySignal(timestamps + [3_000_000_000], [[1, 2], [3, 4], [5, 6], [7, 8]], names=['tx', 'ty'])
     vec_offsets = TimeOffsets(vector, -1_000_000_000, 0, 1_000_000_000)
     assert vec_offsets.names == ['time offset -1.00 sec of (tx ty)', '(tx ty)', 'time offset 1.00 sec of (tx ty)']
 
@@ -552,247 +543,6 @@ def test_pairwise_vectors_and_subtract():
         ([3 - 30, 4 - 40], 2500),
         ([5 - 30, 6 - 40], 3000),
     ]
-
-
-class _DummyTransform(EpisodeTransform):
-
-    def __init__(self):
-        self._keys = ["a", "s"]
-
-    @property
-    def keys(self):
-        return list(self._keys)
-
-    def transform(self, name: str, episode):
-        if name == "a":
-            # 10x the base signal
-            base = episode["s"]
-            return Elementwise(base, lambda seq: np.asarray(seq) * 10)
-        if name == "s":
-            # Override original 's' by adding 1
-            base = episode["s"]
-            return Elementwise(base, lambda seq: np.asarray(seq) + 1)
-        raise KeyError(name)
-
-
-def test_transform_episode_keys_and_getitem_pass_through(sig_simple):
-    # Build an episode with one signal 's' and two static fields
-    ep = EpisodeContainer(signals={"s": sig_simple}, static={"id": 7, "note": "ok"}, meta={"origin": "unit"})
-    tf = _DummyTransform()
-    te = TransformedEpisode(ep, tf, pass_through=True)
-
-    # Keys order: transform keys first, then original non-overlapping keys
-    assert list(te.keys) == ["a", "s", "id", "note"]
-
-    # __getitem__ should route to transform for transform keys
-    a_vals = [v for v, _ in te["a"]]
-    s_vals = [v for v, _ in te["s"]]
-    assert a_vals == [x * 10 for x, _ in ep["s"]]
-    assert s_vals == [x + 1 for x, _ in ep["s"]]
-
-    # Pass-through static values
-    assert te["id"] == 7
-    assert te["note"] == "ok"
-
-    # Meta passthrough
-    assert te.meta == {"origin": "unit"}
-
-    # Missing key raises
-    with pytest.raises(KeyError):
-        _ = te["missing"]
-
-
-def test_transform_episode_no_pass_through(sig_simple):
-    ep = EpisodeContainer(signals={"s": sig_simple}, static={"id": 7})
-    tf = _DummyTransform()
-    te = TransformedEpisode(ep, tf, pass_through=False)
-
-    # Only transform keys
-    assert list(te.keys) == ["a", "s"]
-
-    # Transform values present
-    a_vals = [v for v, _ in te["a"]]
-    s_vals = [v for v, _ in te["s"]]
-    assert a_vals == [x * 10 for x, _ in ep["s"]]
-    assert s_vals == [x + 1 for x, _ in ep["s"]]
-
-    # Non-transform key should not be available
-    with pytest.raises(KeyError):
-        _ = te["id"]
-
-
-class _DummyTransform2(EpisodeTransform):
-
-    @property
-    def keys(self):
-        return ["b", "s"]
-
-    def transform(self, name: str, episode):
-        if name == "b":
-            base = episode["s"]
-            return Elementwise(base, lambda seq: np.asarray(seq) * -1)
-        if name == "s":
-            base = episode["s"]
-            return Elementwise(base, lambda seq: np.asarray(seq) + 100)
-        raise KeyError(name)
-
-
-def test_transform_episode_multiple_transforms_order_and_precedence(sig_simple):
-    ep = EpisodeContainer(signals={"s": sig_simple}, static={"id": 42, "z": 9})
-    t1 = _DummyTransform()  # defines ["a", "s"] (s -> +1)
-    t2 = _DummyTransform2()  # defines ["b", "s"] (s -> +100)
-
-    # Concatenate transform keys in order; first occurrence of duplicates kept
-    te = TransformedEpisode(ep, t1, t2, pass_through=True)
-    assert list(te.keys) == ["a", "s", "b", "id", "z"]
-
-    # 's' should come from the first transform (t1)
-    s_vals = [v for v, _ in te["s"]]
-    assert s_vals == [x + 1 for x, _ in ep["s"]]
-
-    # Other transform keys are accessible
-    a_vals = [v for v, _ in te["a"]]
-    b_vals = [v for v, _ in te["b"]]
-    assert a_vals == [x * 10 for x, _ in ep["s"]]
-    assert b_vals == [-(x) for x, _ in ep["s"]]
-
-
-class _DummyDataset(Dataset):
-    """Minimal Dataset implementation used for TransformedDataset tests."""
-
-    def __init__(self, episodes, signals_meta):
-        self._episodes = list(episodes)
-        self._signals_meta = dict(signals_meta)
-        self.getitem_calls = 0
-
-    def __len__(self):
-        return len(self._episodes)
-
-    def _get_episode(self, index: int):
-        self.getitem_calls += 1
-        return self._episodes[index]
-
-    @property
-    def signals_meta(self):
-        return dict(self._signals_meta)
-
-
-def test_transformed_dataset_wraps_episode_with_transforms(sig_simple):
-    base_meta = {"a": sig_simple.meta, "s": sig_simple.meta}
-    episode = EpisodeContainer(signals={"s": sig_simple}, static={"id": 99}, meta=base_meta)
-    dataset = _DummyDataset([episode], signals_meta={"s": sig_simple.meta})
-    tf = _DummyTransform()
-
-    transformed = TransformedDataset(dataset, tf, pass_through=True)
-
-    assert len(transformed) == 1
-    wrapped = transformed[0]
-    assert isinstance(wrapped, Episode)
-    assert list(wrapped.keys) == ["a", "s", "id"]
-
-    a_vals = [v for v, _ in wrapped["a"]]
-    s_vals = [v for v, _ in wrapped["s"]]
-    assert a_vals == [x * 10 for x, _ in episode["s"]]
-    assert s_vals == [x + 1 for x, _ in episode["s"]]
-    assert wrapped["id"] == 99
-
-    meta = transformed.signals_meta
-    assert set(meta.keys()) == {"a", "s"}
-    assert meta["s"].names == wrapped["s"].names
-
-
-def test_transformed_dataset_signals_meta_cached(sig_simple):
-    base_meta = {"a": sig_simple.meta, "s": sig_simple.meta}
-    episode = EpisodeContainer(signals={"s": sig_simple}, meta=base_meta)
-    dataset = _DummyDataset([episode], signals_meta={"s": sig_simple.meta})
-    tf = _DummyTransform()
-
-    transformed = TransformedDataset(dataset, tf, pass_through=True)
-
-    assert dataset.getitem_calls == 0
-    first_meta = transformed.signals_meta
-    assert dataset.getitem_calls == 1
-    second_meta = transformed.signals_meta
-    assert dataset.getitem_calls == 1
-    assert second_meta is first_meta
-
-
-def test_transformed_dataset_sequence_indices_return_transformed_episodes():
-    episodes = []
-    for idx in range(3):
-        ts = [1000, 2000]
-        values = [idx * 10 + 1, idx * 10 + 2]
-        sig = DummySignal(ts, values)
-        episodes.append(EpisodeContainer(signals={"s": sig}, static={"id": idx}))
-
-    dataset = _DummyDataset(episodes, signals_meta={"s": episodes[0]["s"].meta})
-    tf = _DummyTransform()
-    transformed = TransformedDataset(dataset, tf, pass_through=True)
-
-    sliced = transformed[1:3]
-    assert len(sliced) == 2
-    for offset, episode in enumerate(sliced, start=1):
-        assert isinstance(episode, Episode)
-        base_vals = [val for val, _ in episodes[offset]["s"]]
-        assert [val for val, _ in episode["s"]] == [val + 1 for val in base_vals]
-        assert [val for val, _ in episode["a"]] == [val * 10 for val in base_vals]
-        assert episode["id"] == offset
-
-    idx_array = np.array([0, 2])
-    selected = transformed[idx_array]
-    assert [ep["id"] for ep in selected] == [0, 2]
-    for pos, episode in zip((0, 2), selected, strict=True):
-        base_vals = [val for val, _ in episodes[pos]["s"]]
-        assert [val for val, _ in episode["s"]] == [val + 1 for val in base_vals]
-        assert [val for val, _ in episode["a"]] == [val * 10 for val in base_vals]
-
-
-def test_image_resize_basic():
-    # Create a simple image signal with uniform frames
-    h, w = 4, 6
-    frame1 = np.full((h, w, 3), 10, dtype=np.uint8)
-    frame2 = np.full((h, w, 3), 200, dtype=np.uint8)
-    ts = [1000, 2000]
-    sig = DummySignal(ts, [frame1, frame2])
-
-    # Resize to (width=3, height=2)
-    resized = Image.resize(3, 2, sig)
-    assert len(resized) == 2
-
-    v0, t0 = resized[0]
-    v1, t1 = resized[1]
-    assert t0 == 1000 and t1 == 2000
-    assert v0.shape == (2, 3, 3)
-    assert v1.shape == (2, 3, 3)
-    assert v0.dtype == np.uint8 and v1.dtype == np.uint8
-    # Uniform frames should remain uniform after resize
-    assert np.unique(v0).tolist() == [10]
-    assert np.unique(v1).tolist() == [200]
-    assert resized.names == ['height', 'width', 'channel']
-    assert resized.kind == Kind.IMAGE
-
-
-def test_image_resize_with_pad_basic():
-    # Frame narrower than target: expect horizontal padding with zeros
-    h, w = 4, 2
-    frame = np.full((h, w, 3), 255, dtype=np.uint8)  # white
-    ts = [1000]
-    sig = DummySignal(ts, [frame])
-
-    resized = Image.resize_with_pad(4, 4, sig)  # target H=W=4
-    v, t = resized[0]
-    assert t == 1000
-    assert v.shape == (4, 4, 3)
-    assert v.dtype == np.uint8
-    # Left and right columns should be zeros (black padding), middle columns white
-    left_col = v[:, 0, :]
-    right_col = v[:, -1, :]
-    mid = v[:, 1:-1, :]
-    assert np.unique(left_col).tolist() == [0]
-    assert np.unique(right_col).tolist() == [0]
-    assert np.unique(mid).tolist() == [255]
-    assert resized.names == ['height', 'width', 'channel']
-    assert resized.kind == Kind.IMAGE
 
 
 def test_concat_vectors_batched_and_alignment():
