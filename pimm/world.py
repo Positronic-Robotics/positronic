@@ -642,26 +642,26 @@ class World:
         local_connections, mp_connections = [], []
         for emitter, receiver, emitter_wrapper, receiver_wrapper in self._connections:
             if emitter.owner in local_cs and receiver.owner in local_cs:
-                local_connections.append((emitter_wrapper(emitter), receiver_wrapper(receiver)))
+                local_connections.append((emitter_wrapper(emitter), receiver_wrapper(receiver), receiver.maxsize))
             elif emitter.owner not in all_cs:
                 raise ValueError(f'Emitter {emitter.owner} is not in any control system')
             elif receiver.owner not in all_cs:
                 raise ValueError(f'Receiver {receiver.owner} is not in any control system')
             else:
-                mp_connections.append((emitter_wrapper(emitter), receiver_wrapper(receiver)))
+                mp_connections.append((emitter_wrapper(emitter), receiver_wrapper(receiver), receiver.maxsize))
 
-        for emitter, receiver in local_connections:
-            kwargs = {'maxsize': receiver.maxsize} if receiver.maxsize is not None else {}
+        for emitter, receiver, maxsize in local_connections:
+            kwargs = {'maxsize': maxsize} if maxsize is not None else {}
             em, re = self.local_pipe(**kwargs)
             emitter._bind(em)
             receiver._bind(re)
 
         system_clock = SystemClock()
-        for emitter, receiver in mp_connections:
+        for emitter, receiver, maxsize in mp_connections:
             # When emitter lives in a different process, we use system clock to timestamp messages, otherwise we will
             # have to serialise our local clock to the other process, which is not what we want.
             clock = None if emitter.owner in local_cs else system_clock
-            kwargs = {'maxsize': receiver.maxsize} if receiver.maxsize is not None else {}
+            kwargs = {'maxsize': maxsize} if maxsize is not None else {}
             em, re = self.mp_pipe(clock=clock, **kwargs)
             emitter._bind(em)
             receiver._bind(re)
