@@ -390,7 +390,7 @@ Transforms automatically generate descriptive feature names whenever possible. Y
 
 ### Derived helpers
 Common utilities stack the building blocks to cover frequent needs:
-- `Image.resize(...)` and `Image.resize_with_pad(...)`: resize RGB frames per sample using OpenCV or PIL.
+- `image.resize(...)` and `image.resize_with_pad(...)`: resize RGB frames per sample using OpenCV or PIL. Import from `positronic.dataset.transforms.image`.
 - `concat(*signals, dtype=None)`: align signals with `Join` and concatenate their vector values into one array view.
 - `astype(signal, dtype)`: cast vector signals on the fly via `Elementwise`.
 - `pairwise(a, b, op)`: join two signals and apply a custom binary operator to every aligned pair.
@@ -420,6 +420,7 @@ class EpisodeTransform(ABC):
 
 ```python
 from positronic.dataset import transforms
+from positronic.dataset.transforms import image
 import numpy as np
 
 
@@ -434,7 +435,7 @@ class Features(transforms.EpisodeTransform):
           ee_pose = episode["robot.ee_pose"]
           return transforms.concat(joint_q, ee_pose, dtype=np.float32)
         else:
-          return transforms.Image.resize(width=224, height=224, signal=episode["rgb_camera"])
+          return image.resize(width=224, height=224, signal=episode["rgb_camera"])
 
 
 dataset = transforms.TransformedDataset(raw_dataset, Features(), pass_through=True)
