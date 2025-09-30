@@ -157,3 +157,31 @@ def test_signals_meta_fallback_without_file(tmp_path):
     ds = LocalDataset(root)
     meta = ds.signals_meta
     assert "b" in meta
+
+
+def test_homedir_resolution(tmp_path):
+    # Create a test dataset under home directory
+    import tempfile
+    home = Path.home()
+    with tempfile.TemporaryDirectory(dir=home) as tmpdir:
+        actual_root = Path(tmpdir) / "ds"
+        with LocalDatasetWriter(actual_root) as w:
+            with w.new_episode() as ew:
+                ew.set_static("id", 42)
+
+        # Test LocalDataset with ~ path
+        relative_to_home = actual_root.relative_to(home)
+        tilde_path = Path("~") / relative_to_home
+
+        ds = LocalDataset(tilde_path)
+        assert len(ds) == 1
+        assert ds[0]["id"] == 42
+
+        # Test LocalDatasetWriter with ~ path
+        with LocalDatasetWriter(tilde_path) as w:
+            with w.new_episode() as ew:
+                ew.set_static("id", 43)
+
+        ds2 = LocalDataset(actual_root)
+        assert len(ds2) == 2
+        assert ds2[1]["id"] == 43

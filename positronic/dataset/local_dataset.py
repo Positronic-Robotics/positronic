@@ -97,7 +97,7 @@ class LocalDataset(Dataset):
     """
 
     def __init__(self, root: Path) -> None:
-        self.root = root
+        self.root = root.expanduser()
         self._episodes: list[tuple[int, Path]] = []
         self._build_episode_list()
         self._signals_meta: dict[str, SignalMeta] | None = None
@@ -149,7 +149,7 @@ class LocalDatasetWriter(DatasetWriter):
     """
 
     def __init__(self, root: Path) -> None:
-        self.root = root
+        self.root = root.expanduser()
         self.root.mkdir(parents=True, exist_ok=True)
         self._next_episode_id = self._compute_next_episode_id()
         self._signals_meta: dict[str, SignalMeta] = self._load_signals_meta()
