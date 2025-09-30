@@ -4,11 +4,12 @@ import shutil
 import sys
 import time
 from abc import ABC, abstractmethod
+from collections.abc import Callable, Sequence
 from contextlib import AbstractContextManager
 from functools import lru_cache, partial
 from importlib import metadata as importlib_metadata
 from pathlib import Path
-from typing import Any, Callable, Generic, Sequence, TypeVar
+from typing import Any, Generic, TypeVar
 
 import numpy as np
 
@@ -36,7 +37,7 @@ class _EpisodeTimeIndexer:
                 sampled = {key: sig.time[ts][0] for key, sig in self.episode.signals.items()}
                 return {**self.episode.static, **sampled}
             case slice() as sl if sl.step is None:
-                raise KeyError("Episode.time[start:stop] is not supported; use a step or explicit timestamps")
+                raise KeyError('Episode.time[start:stop] is not supported; use a step or explicit timestamps')
             case slice() | list() | tuple() | np.ndarray() as req:
                 # For slice or sequence of timestamps, return a dict:
                 # - static items as-is
@@ -51,7 +52,7 @@ class _EpisodeTimeIndexer:
                     result[key] = view._values_at(slice(None))
                 return {**self.episode.static, **result}
             case _:
-                raise TypeError(f"Invalid index type: {type(index_or_slice)}")
+                raise TypeError(f'Invalid index type: {type(index_or_slice)}')
 
 
 class Episode(ABC):
@@ -93,14 +94,14 @@ class Episode(ABC):
     def start_ts(self):
         values = [sig.start_ts for sig in self.signals.values()]
         if not values:
-            raise ValueError("Episode has no signals")
+            raise ValueError('Episode has no signals')
         return max(values)
 
     @property
     def last_ts(self):
         values = [sig.last_ts for sig in self.signals.values()]
         if not values:
-            raise ValueError("Episode has no signals")
+            raise ValueError('Episode has no signals')
         return max(values)
 
     @property
@@ -115,10 +116,9 @@ class Episode(ABC):
 class EpisodeContainer(Episode):
     """In-memory view over an Episode's items."""
 
-    def __init__(self,
-                 signals: dict[str, Signal[Any]],
-                 static: dict[str, Any] | None = None,
-                 meta: dict[str, Any] | None = None) -> None:
+    def __init__(
+        self, signals: dict[str, Signal[Any]], static: dict[str, Any] | None = None, meta: dict[str, Any] | None = None
+    ) -> None:
         self._signals = signals
         self._static = static or {}
         self._meta = meta or {}
@@ -163,7 +163,7 @@ def _is_valid_static_value(value: Any) -> bool:
       - list with elements that are valid static values
       - leaf values: str, int, float, bool
     """
-    if isinstance(value, (str, int, float, bool)):
+    if isinstance(value, str | int | float | bool):
         return True
     if isinstance(value, list):
         return all(_is_valid_static_value(v) for v in value)
@@ -211,7 +211,7 @@ class DiskEpisodeWriter(EpisodeWriter):
             directory: Directory to write episode data to (must not exist)
         """
         self._path = directory
-        assert not self._path.exists(), f"Writing to existing directory {self._path}"
+        assert not self._path.exists(), f'Writing to existing directory {self._path}'
         # Create the episode directory for output files
         self._path.mkdir(parents=True, exist_ok=False)
 
@@ -225,12 +225,12 @@ class DiskEpisodeWriter(EpisodeWriter):
 
         # Write system metadata immediately
         meta = {
-            "schema_version": EPISODE_SCHEMA_VERSION,
-            "created_ts_ns": time.time_ns(),
+            'schema_version': EPISODE_SCHEMA_VERSION,
+            'created_ts_ns': time.time_ns(),
         }
-        meta["writer"] = _cached_env_writer_info()
-        meta["writer"]["name"] = f"{self.__class__.__module__}.{self.__class__.__qualname__}"
-        with (self._path / "meta.json").open('w', encoding='utf-8') as f:
+        meta['writer'] = _cached_env_writer_info()
+        meta['writer']['name'] = f'{self.__class__.__module__}.{self.__class__.__qualname__}'
+        with (self._path / 'meta.json').open('w', encoding='utf-8') as f:
             json.dump(meta, f)
 
     @property
@@ -246,9 +246,9 @@ class DiskEpisodeWriter(EpisodeWriter):
             ts_ns: Timestamp in nanoseconds
         """
         if self._finished:
-            raise RuntimeError("Cannot append to a finished writer")
+            raise RuntimeError('Cannot append to a finished writer')
         if self._aborted:
-            raise RuntimeError("Cannot append to an aborted writer")
+            raise RuntimeError('Cannot append to an aborted writer')
         if signal_name in self._static_items:
             raise ValueError(f"Static item '{signal_name}' already set for this episode")
 
@@ -257,26 +257,26 @@ class DiskEpisodeWriter(EpisodeWriter):
             names = self._signal_names.get(signal_name)
             if isinstance(data, np.ndarray) and data.dtype == np.uint8 and data.ndim == 3 and data.shape[2] == 3:
                 if names is not None:
-                    raise ValueError("Custom names are not supported for video signals")
+                    raise ValueError('Custom names are not supported for video signals')
                 # Image signal -> route to video writer
-                video_path = self._path / f"{signal_name}.mp4"
-                frames_index = self._path / f"{signal_name}.frames.parquet"
+                video_path = self._path / f'{signal_name}.mp4'
+                frames_index = self._path / f'{signal_name}.frames.parquet'
                 self._writers[signal_name] = VideoSignalWriter(video_path, frames_index)
                 self._signal_names[signal_name] = None
             else:
                 # Scalar/vector signal
-                self._writers[signal_name] = SimpleSignalWriter(self._path / f"{signal_name}.parquet",
-                                                                drop_equal_bytes_threshold=128,
-                                                                names=names)
+                self._writers[signal_name] = SimpleSignalWriter(
+                    self._path / f'{signal_name}.parquet', drop_equal_bytes_threshold=128, names=names
+                )
                 self._signal_names[signal_name] = names
 
         self._writers[signal_name].append(data, ts_ns)
 
     def set_signal_meta(self, signal_name: str, *, names: Sequence[str] | None = None) -> None:
         if self._finished:
-            raise RuntimeError("Cannot set signal meta on a finished writer")
+            raise RuntimeError('Cannot set signal meta on a finished writer')
         if self._aborted:
-            raise RuntimeError("Cannot set signal meta on an aborted writer")
+            raise RuntimeError('Cannot set signal meta on an aborted writer')
         if signal_name in self._writers:
             raise ValueError(f"Signal '{signal_name}' already has data written")
         if signal_name in self._signal_names:
@@ -296,9 +296,9 @@ class DiskEpisodeWriter(EpisodeWriter):
             ValueError: If the key has already been set or value not serializable
         """
         if self._finished:
-            raise RuntimeError("Cannot set static on a finished writer")
+            raise RuntimeError('Cannot set static on a finished writer')
         if self._aborted:
-            raise RuntimeError("Cannot set static on an aborted writer")
+            raise RuntimeError('Cannot set static on an aborted writer')
         if name in self._writers:
             raise ValueError(f"Signal '{name}' already exists for this episode")
 
@@ -307,7 +307,7 @@ class DiskEpisodeWriter(EpisodeWriter):
 
         # Validate restricted JSON structure
         if not _is_valid_static_value(data):
-            raise ValueError("Static item must be JSON-serializable: dict/list over numbers and strings")
+            raise ValueError('Static item must be JSON-serializable: dict/list over numbers and strings')
         self._static_items[name] = data
 
     def __exit__(self, exc_type, exc, tb) -> None:
@@ -326,7 +326,7 @@ class DiskEpisodeWriter(EpisodeWriter):
         self._finished = True
 
         # Write all static items into a single static.json
-        episode_json = self._path / "static.json"
+        episode_json = self._path / 'static.json'
         if self._static_items or not episode_json.exists():
             with episode_json.open('w', encoding='utf-8') as f:
                 json.dump(self._static_items, f)
@@ -339,7 +339,7 @@ class DiskEpisodeWriter(EpisodeWriter):
         if self._aborted:
             return
         if self._finished:
-            raise RuntimeError("Cannot abort a finished writer")
+            raise RuntimeError('Cannot abort a finished writer')
 
         for w in list(self._writers.values()):
             w.abort()
@@ -351,13 +351,13 @@ class DiskEpisodeWriter(EpisodeWriter):
 @lru_cache(maxsize=1)
 def _cached_env_writer_info() -> dict:
     info = {
-        "python": sys.version.split(" ")[0],
-        "platform": platform.platform(),
+        'python': sys.version.split(' ')[0],
+        'platform': platform.platform(),
     }
     try:
-        info["version"] = importlib_metadata.version("positronic")
+        info['version'] = importlib_metadata.version('positronic')
     except Exception:
-        info["version"] = ''
+        info['version'] = ''
     git_state = get_git_state()
     if git_state is not None:
         info['git'] = git_state
@@ -389,9 +389,9 @@ class DiskEpisode(Episode):
         used_names: set[str] = set()
         for video_file in self._dir.glob('*.mp4'):
             name = video_file.stem
-            frames_idx = self._dir / f"{name}.frames.parquet"
+            frames_idx = self._dir / f'{name}.frames.parquet'
             if not frames_idx.exists():
-                raise ValueError(f"Video file {video_file} has no frames index {frames_idx}")
+                raise ValueError(f'Video file {video_file} has no frames index {frames_idx}')
             self._signal_factories[name] = partial(VideoSignal, video_file, frames_idx)
             used_names.add(name)
 
@@ -399,10 +399,13 @@ class DiskEpisode(Episode):
             fname = file.name
             if fname.endswith('.frames.parquet'):
                 continue
-            key = fname[:-len('.parquet')]
+            key = fname[: -len('.parquet')]
             if key in used_names:
                 continue
             self._signal_factories[key] = partial(SimpleSignal, file)
+
+    def __repr__(self) -> str:
+        return f'{self.__class__.__name__}(path={str(self._dir)!r})'
 
     # ---- lazy loaders ----
     def _ensure_signal(self, name: str) -> Signal[Any]:
@@ -430,7 +433,7 @@ class DiskEpisode(Episode):
                 if isinstance(data, dict):
                     self._static.update(data)
                 else:
-                    raise ValueError("static.json must contain a JSON object (mapping)")
+                    raise ValueError('static.json must contain a JSON object (mapping)')
         return self._static
 
     @property
