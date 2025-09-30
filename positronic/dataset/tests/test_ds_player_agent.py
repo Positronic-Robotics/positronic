@@ -1,6 +1,5 @@
 import pytest
 
-import pimm
 from pimm.tests.testing import MockClock
 from positronic.dataset.episode import EpisodeContainer
 from positronic.dataset.ds_player_agent import DsPlayerAbortCommand, DsPlayerAgent, DsPlayerStartCommand

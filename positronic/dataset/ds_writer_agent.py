@@ -51,6 +51,7 @@ class DsWriterCommand:
     def ABORT():
         return DsWriterCommand(DsWriterCommandType.ABORT_EPISODE)
 
+
 # Serializer contract for inputs:
 # - If None is provided for a signal name in signals_spec, the value is passed through unchanged.
 # - If a callable is provided, it is invoked as serializer(value) and can return:

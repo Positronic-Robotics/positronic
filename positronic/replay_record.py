@@ -1,13 +1,10 @@
 from contextlib import nullcontext
-import imp
 from pathlib import Path
-from tkinter import SE
-from typing import Any, Iterator
+from typing import Any, Iterator, Sequence
 
 import configuronic as cfn
 import numpy as np
 import tqdm
-from mujoco import Sequence
 
 import pimm
 from positronic import geom
@@ -60,8 +57,9 @@ class RestoreCommand(EpisodeTransform):
 
     @staticmethod
     def command_from_pose(pose: Sequence[np.ndarray]) -> Sequence[roboarm.command.CommandType]:
-        return transforms.LazySequence(pose, lambda p: roboarm.command.CartesianMove(
-            geom.Transform3D(translation=p[:3], rotation=geom.Rotation.from_quat(p[3:]))))
+        return transforms.LazySequence(
+            pose, lambda p: roboarm.command.CartesianMove(
+                geom.Transform3D(translation=p[:3], rotation=geom.Rotation.from_quat(p[3:]))))
 
 
 @cfn.config(dataset=positronic.cfg.dataset.local,

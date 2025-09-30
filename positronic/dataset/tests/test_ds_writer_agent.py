@@ -1,5 +1,5 @@
 from functools import partial
-from typing import Any, Callable, List, Sequence, Tuple
+from typing import Any, List, Sequence, Tuple
 
 import numpy as np
 import pytest
