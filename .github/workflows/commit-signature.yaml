@@ -13,16 +13,21 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Check commit signatures
+      - name: Check commit signatures via GitHub API
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          echo "Checking commit signatures..."
-          # Get all commits in the PR
-          git log origin/${{ github.base_ref }}..${{ github.sha }} --pretty=format:"%H %G?" | while read commit_hash sign_status; do
-            if [ "$sign_status" != "G" ] && [ "$sign_status" != "U" ]; then
-              echo "❌ Commit $commit_hash is not signed (status: $sign_status)"
-              echo "Please sign your commits with: git commit -S (GPG) or configure SSH signing"
-              exit 1
+          echo "Checking commit signatures via GitHub API..."
+          # Get all commits in the PR and check if GitHub verified them
+          for commit in $(git log origin/${{ github.base_ref }}..${{ github.sha }} --pretty=format:"%H"); do
+            # Use GitHub API to check if commit is verified
+            verified=$(gh api repos/${{ github.repository }}/commits/$commit --jq '.commit.verification.verified')
+
+            if [ "$verified" = "true" ]; then
+              echo "✅ Commit $commit is verified by GitHub"
             else
-              echo "✅ Commit $commit_hash is signed"
+              echo "❌ Commit $commit is NOT verified by GitHub"
+              echo "Please sign your commits with GPG or SSH signing and add your key to GitHub"
+              exit 1
             fi
           done
