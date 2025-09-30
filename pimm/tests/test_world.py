@@ -42,7 +42,7 @@ class DummyControlSystem(ControlSystem):
             yield Sleep(0.0)
 
     def __repr__(self):
-        return f"DummyControlSystem(name={self.name!r})"
+        return f'DummyControlSystem(name={self.name!r})'
 
 
 class DummySMValue(SMCompliant):
@@ -72,13 +72,13 @@ class TestQueueEmitter:
         queue = mp.Manager().Queue()
         emitter = QueueEmitter(queue, SystemClock())
 
-        result = emitter.emit("test_data")
+        result = emitter.emit('test_data')
         assert result is True
 
         # Verify the message was added to the queue
         message = queue.get_nowait()
         assert isinstance(message, Message)
-        assert message.data == "test_data"
+        assert message.data == 'test_data'
         assert isinstance(message.ts, int)
 
     def test_queue_emitter_emit_with_timestamp(self):
@@ -87,11 +87,11 @@ class TestQueueEmitter:
         emitter = QueueEmitter(queue, SystemClock())
         timestamp = 1234567890
 
-        result = emitter.emit("test_data", ts=timestamp)
+        result = emitter.emit('test_data', ts=timestamp)
         assert result is True
 
         message = queue.get_nowait()
-        assert message.data == "test_data"
+        assert message.data == 'test_data'
         assert message.ts == timestamp
 
     def test_queue_emitter_full_queue_removes_old_message(self):
@@ -100,15 +100,15 @@ class TestQueueEmitter:
         emitter = QueueEmitter(queue, SystemClock())
 
         # Fill the queue
-        emitter.emit("old_data")
+        emitter.emit('old_data')
 
         # Add another message (should remove old one)
-        result = emitter.emit("new_data")
+        result = emitter.emit('new_data')
         assert result is True
 
         # Only new message should be in queue
         message = queue.get_nowait()
-        assert message.data == "new_data"
+        assert message.data == 'new_data'
 
         # Queue should be empty now
         with pytest.raises(Empty):
@@ -123,7 +123,7 @@ class TestQueueEmitter:
         mock_queue_class.return_value = mock_queue
 
         emitter = QueueEmitter(mock_queue, SystemClock())
-        result = emitter.emit("test_data")
+        result = emitter.emit('test_data')
 
         assert result is False
         mock_queue.put_nowait.assert_called_once()  # Only called once since get_nowait fails
@@ -147,12 +147,12 @@ class TestQueueReceiver:
         reader = QueueReceiver(queue)
 
         # Put a message in the queue
-        test_message = Message("test_data", 123)
+        test_message = Message('test_data', 123)
         queue.put_nowait(test_message)
 
         result = reader.read()
         assert result == test_message
-        assert result.data == "test_data"
+        assert result.data == 'test_data'
         assert result.ts == 123
 
     def test_queue_reader_returns_last_value_when_empty(self):
@@ -162,7 +162,7 @@ class TestQueueReceiver:
         reader = QueueReceiver(queue)
 
         # Put and read a message
-        test_message = Message("test_data", 123)
+        test_message = Message('test_data', 123)
         queue.put_nowait(test_message)
         first_result = reader.read()
         assert first_result == test_message
@@ -178,13 +178,13 @@ class TestQueueReceiver:
         reader = QueueReceiver(queue)
 
         # Put first message
-        message1 = Message("data1", 100)
+        message1 = Message('data1', 100)
         queue.put_nowait(message1)
         result1 = reader.read()
         assert result1 == message1
 
         # Put second message
-        message2 = Message("data2", 200)
+        message2 = Message('data2', 200)
         queue.put_nowait(message2)
         result2 = reader.read()
         assert result2 == message2
@@ -266,7 +266,7 @@ class TestWorld:
             # Initially reader should return None
             assert reader.read() is None
 
-            for message in ["test_message_1", "test_message_2", "test_message_3"]:
+            for message in ['test_message_1', 'test_message_2', 'test_message_3']:
                 # Emit a message
                 emitter.emit(message)
 
@@ -331,7 +331,7 @@ class TestWorld:
                 assert world.background_processes[0].is_alive()
 
                 # Raise an exception to test cleanup
-                raise ValueError("Test exception")
+                raise ValueError('Test exception')
         except ValueError:
             pass  # Expected exception
 
@@ -341,31 +341,6 @@ class TestWorld:
         # Background processes should be terminated and cleaned up
         # We can't check is_alive() after exit because processes are closed
         assert len(world.background_processes) == 1
-
-    @pytest.mark.parametrize('pipe_fn_name', ['local_one_to_many_pipe'])
-    def test_world_mp_pipe_multiple_readers_created(self, pipe_fn_name):
-        """Test that World.mp_pipe can create multiple readers."""
-        with World() as world:
-            pipe_fn = getattr(world, pipe_fn_name)
-            emitter, readers = pipe_fn(n_readers=2)
-            assert len(readers) == 2
-            assert isinstance(emitter, SignalEmitter)
-            assert isinstance(readers[0], SignalReceiver)
-            assert isinstance(readers[1], SignalReceiver)
-
-    @pytest.mark.parametrize('pipe_fn_name', ['local_one_to_many_pipe'])
-    def test_world_mp_pipe_multiple_readers_message_received_by_all_readers(self, pipe_fn_name):
-        """Test that multiple readers can read from the same queue."""
-        with World() as world:
-            pipe_fn = getattr(world, pipe_fn_name)
-            emitter, readers = pipe_fn(n_readers=2)
-
-            messages = ["test_message_1", "test_message_2", "test_message_3"]
-            for message in messages:
-                success = emitter.emit(message)
-                assert success
-                assert readers[0].read().data == message
-                assert readers[1].read().data == message
 
     def test_mp_pipe_uses_queue_for_non_shared_memory_payloads(self):
         with World() as world:
@@ -587,14 +562,14 @@ class TestIntegration:
             emitter2, reader2 = world.mp_pipe()
 
             # Test data flow
-            emitter1.emit("message1")
-            emitter2.emit("message2")
+            emitter1.emit('message1')
+            emitter2.emit('message2')
 
             result1 = reader1.read()
             result2 = reader2.read()
 
-            assert result1.data == "message1"
-            assert result2.data == "message2"
+            assert result1.data == 'message1'
+            assert result2.data == 'message2'
 
     def test_event_reader_integration(self):
         """Test EventReceiver with actual multiprocessing Event."""
@@ -630,14 +605,14 @@ class TestWorldInterleave:
             def single_loop(stop_reader, clock):
                 """Simple loop that runs 2 times."""
                 for i in range(2):
-                    execution_order.append(f"single_{i}")
+                    execution_order.append(f'single_{i}')
                     yield Sleep(0.1)
 
             sleep_times = list(world.interleave(single_loop))
 
             # Should have 2 sleep times - one after each execution
             assert len(sleep_times) == 2
-            assert execution_order == ["single_0", "single_1"]
+            assert execution_order == ['single_0', 'single_1']
 
             # Stop event should be set after loop completes
             assert world.should_stop
@@ -647,14 +622,15 @@ class TestWorldInterleave:
         execution_order = []
 
         with World(clock) as world:
+
             def loop_a(stop_reader, clock):
                 for i in range(2):
-                    execution_order.append(f"a_{i}")
+                    execution_order.append(f'a_{i}')
                     yield Sleep(0.1)
 
             def loop_b(stop_reader, clock):
                 for i in range(2):
-                    execution_order.append(f"b_{i}")
+                    execution_order.append(f'b_{i}')
                     yield Sleep(0.1)
 
             sleep_times = list(world.interleave(loop_a, loop_b))
@@ -662,8 +638,8 @@ class TestWorldInterleave:
             assert len(sleep_times) == 4
 
             # Both loops should have executed all their steps
-            assert len([item for item in execution_order if item.startswith("a_")]) == 2
-            assert len([item for item in execution_order if item.startswith("b_")]) == 2
+            assert len([item for item in execution_order if item.startswith('a_')]) == 2
+            assert len([item for item in execution_order if item.startswith('b_')]) == 2
 
             # Stop event should be set after first loop completes
             assert world.should_stop
@@ -677,6 +653,7 @@ class TestWorldInterleave:
             assert not world.should_stop
 
         # Test exception handling
+
     def test_failing_loop(self):
         clock = MockClock(100.0)
         with World(clock) as world:
@@ -684,15 +661,15 @@ class TestWorldInterleave:
 
             def failing_loop(stop_reader, clock):
                 """Loop that raises an exception."""
-                execution_order.append("before_exception")
-                raise ValueError("Test exception")
+                execution_order.append('before_exception')
+                raise ValueError('Test exception')
                 yield Sleep(0.1)  # This should never be reached
 
             # The exception should be raised and stop the interleave
-            with pytest.raises(ValueError, match="Test exception"):
+            with pytest.raises(ValueError, match='Test exception'):
                 list(world.interleave(failing_loop))
 
-            assert "before_exception" in execution_order
+            assert 'before_exception' in execution_order
 
     def test_interleave_stop_behavior(self):
         """Test stop event behavior: early stopping and completion detection."""
@@ -705,15 +682,15 @@ class TestWorldInterleave:
                 """Loop that checks stop signal and exits early."""
                 for i in range(10):  # Would run 10 times if not stopped
                     if stop_reader.value:
-                        execution_order.append(f"stopped_at_{i}")
+                        execution_order.append(f'stopped_at_{i}')
                         return
-                    execution_order.append(f"step_{i}")
+                    execution_order.append(f'step_{i}')
                     yield Sleep(0.1)
 
             def short_loop(stop_reader, clock):
                 """Short loop that completes quickly."""
                 for i in range(2):
-                    execution_order.append(f"short_{i}")
+                    execution_order.append(f'short_{i}')
                     yield Sleep(0.1)
 
             # The short loop should complete first and set the stop event
@@ -724,11 +701,11 @@ class TestWorldInterleave:
             assert world.should_stop
 
             # Should have some execution from both loops
-            assert any(item.startswith("step_") for item in execution_order)
-            assert any(item.startswith("short_") for item in execution_order)
+            assert any(item.startswith('step_') for item in execution_order)
+            assert any(item.startswith('short_') for item in execution_order)
 
             # The stop_checking_loop should detect the stop event and exit early
-            assert any(item.startswith("stopped_at_") for item in execution_order)
+            assert any(item.startswith('stopped_at_') for item in execution_order)
 
     def test_interleave_scheduling_order(self):
         """Test that loops are scheduled in the correct order based on their sleep times."""
@@ -739,16 +716,16 @@ class TestWorldInterleave:
 
             def loop_a(stop_reader, clock):
                 """Loop A with specific timing."""
-                execution_order.append("a_0")
+                execution_order.append('a_0')
                 yield Sleep(0.3)  # Will run next at time 0.3
-                execution_order.append("a_1")
+                execution_order.append('a_1')
                 yield Sleep(0.1)  # Will run next at time 0.4
 
             def loop_b(stop_reader, clock):
                 """Loop B with different timing."""
-                execution_order.append("b_0")
+                execution_order.append('b_0')
                 yield Sleep(0.1)  # Will run next at time 0.1
-                execution_order.append("b_1")
+                execution_order.append('b_1')
                 yield Sleep(0.1)  # Will run next at time 0.2
 
             sleep_times = list(world.interleave(loop_a, loop_b))
@@ -760,7 +737,7 @@ class TestWorldInterleave:
             # t=0.3: a_1 (loop_a scheduled next)
             # Should have 4 steps total
             assert len(sleep_times) == 4
-            assert execution_order == ["a_0", "b_0", "b_1", "a_1"]
+            assert execution_order == ['a_0', 'b_0', 'b_1', 'a_1']
 
     def test_interleave_introducing_new_loop_not_affect_order_of_existing_loops(self):
         clock = MockClock(0.0)
@@ -768,17 +745,17 @@ class TestWorldInterleave:
 
         def loop_a(stop_reader, clock):
             for i in range(5):
-                execution_order.append(f"a_{i}")
+                execution_order.append(f'a_{i}')
                 yield Sleep(0.1)
 
         def loop_b(stop_reader, clock):
             for i in range(6):
-                execution_order.append(f"b_{i}")
+                execution_order.append(f'b_{i}')
             yield Sleep(0.2)
 
         def loop_c(stop_reader, clock):
             for i in range(7):
-                execution_order.append(f"c_{i}")
+                execution_order.append(f'c_{i}')
                 yield Sleep(0.3)
 
         with World(clock) as world:
@@ -798,12 +775,12 @@ class TestWorldInterleave:
 
         def loop_a(stop_reader, clock):
             for i in range(4):
-                execution_order.append(f"a_{i}")
+                execution_order.append(f'a_{i}')
                 yield Sleep(0.0)
 
         def loop_b(stop_reader, clock):
             for i in range(4):
-                execution_order.append(f"b_{i}")
+                execution_order.append(f'b_{i}')
                 yield Sleep(0.0)
 
         with World(clock) as world:
@@ -811,4 +788,4 @@ class TestWorldInterleave:
                 clock.advance(time_to_sleep.seconds)
             original_order = execution_order.copy()
 
-            assert original_order == ["a_0", "b_0", "a_1", "b_1", "a_2", "b_2", "a_3", "b_3"]
+            assert original_order == ['a_0', 'b_0', 'a_1', 'b_1', 'a_2', 'b_2', 'a_3', 'b_3']

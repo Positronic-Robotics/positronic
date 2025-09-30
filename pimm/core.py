@@ -1,7 +1,7 @@
 from abc import ABC, abstractmethod
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass
-from typing import Callable, Generic, Iterator, final, TypeVar
-
+from typing import Generic, TypeVar, final
 
 T = TypeVar('T', covariant=True)
 U = TypeVar('U')
@@ -20,6 +20,7 @@ class Message(Generic[T]):
 
     If no timestamp is provided, the current system time is used.
     """
+
     data: T
     ts: int = -1  # -1 means no value
 
@@ -55,13 +56,11 @@ class SignalReceiver(ABC, Generic[T]):
 
 
 class NoOpEmitter(SignalEmitter[T]):
-
     def emit(self, data: T, ts: int = -1) -> bool:
         return True
 
 
 class NoOpReceiver(SignalReceiver[T]):
-
     def read(self) -> None:
         return None
 
@@ -137,16 +136,25 @@ class ControlSystemEmitter(SignalEmitter[T]):
 class ControlSystemReceiver(SignalReceiver[T]):
     """Receiver adaptor bound to a single upstream signal on behalf of a system."""
 
-    def __init__(self, owner: ControlSystem):
+    def __init__(self, owner: ControlSystem, maxsize: int | None = None):
         self._owner = owner
         self._internal: SignalReceiver[T] | None = None
+        self._maxsize = maxsize
+
+    @property
+    def maxsize(self) -> int | None:
+        return self._maxsize
+
+    @maxsize.setter
+    def maxsize(self, maxsize: int | None):
+        self._maxsize = maxsize
 
     @property
     def owner(self) -> ControlSystem:
         return self._owner
 
     def _bind(self, receiver: SignalReceiver[T]):
-        assert self._internal is None, "Receiver can be connected only to one Emitter"
+        assert self._internal is None, 'Receiver can be connected only to one Emitter'
         self._internal = receiver
 
     def read(self) -> Message[T] | None:

@@ -9,10 +9,11 @@ import time
 import traceback
 import weakref
 from collections import deque
+from collections.abc import Callable, Iterator, Sequence
 from enum import IntEnum
 from multiprocessing.synchronize import Event as EventClass
 from queue import Empty, Full
-from typing import Any, Callable, Iterator, Sequence, Tuple, TypeVar
+from typing import Any, TypeVar
 
 from .core import (
     Clock,
@@ -37,7 +38,6 @@ class TransportMode(IntEnum):
 
 
 class QueueEmitter(SignalEmitter[T]):
-
     def __init__(self, queue: mp.Queue, clock: Clock):
         self._queue = queue
         self._clock = clock
@@ -58,7 +58,6 @@ class QueueEmitter(SignalEmitter[T]):
 
 
 class BroadcastEmitter(SignalEmitter[T]):
-
     def __init__(self, emitters: Sequence[SignalEmitter[T]]):
         """Emitter that broadcasts messages to all emmiters.
 
@@ -75,7 +74,6 @@ class BroadcastEmitter(SignalEmitter[T]):
 
 
 class QueueReceiver(SignalReceiver[T]):
-
     def __init__(self, queue: mp.Queue):
         self._queue = queue
         self._last_value = None
@@ -102,15 +100,17 @@ class MultiprocessEmitter(SignalEmitter[T]):
     the indirection via ``weakref``.
     """
 
-    def __init__(self,
-                 clock: Clock,
-                 queue: mp.Queue,
-                 mode_value: mp.Value,
-                 lock: mp.Lock,
-                 ts_value: mp.Value,
-                 sm_queue: mp.Queue,
-                 *,
-                 forced_mode: TransportMode | None = None):
+    def __init__(
+        self,
+        clock: Clock,
+        queue: mp.Queue,
+        mode_value: mp.Value,
+        lock: mp.Lock,
+        ts_value: mp.Value,
+        sm_queue: mp.Queue,
+        *,
+        forced_mode: TransportMode | None = None,
+    ):
         self._clock = clock
         self._queue = queue
         self._mode_value = mode_value
@@ -124,7 +124,7 @@ class MultiprocessEmitter(SignalEmitter[T]):
         self._sm_queue = sm_queue
         self._sm: multiprocessing.shared_memory.SharedMemory | None = None
         self._expected_buf_size: int | None = None
-        self._receiver_ref: weakref.ReferenceType['MultiprocessReceiver[Any]'] | None = None
+        self._receiver_ref: weakref.ReferenceType[MultiprocessReceiver[Any]] | None = None
         self._closed = False
         if forced_mode is not None:
             self._mode_value.value = int(forced_mode)
@@ -172,7 +172,7 @@ class MultiprocessEmitter(SignalEmitter[T]):
         if self._data_type is None:
             self._data_type = type(data)
         elif not isinstance(data, self._data_type):
-            raise TypeError(f"Data type mismatch: {type(data)} != {self._data_type}")
+            raise TypeError(f'Data type mismatch: {type(data)} != {self._data_type}')
 
         buf_size = data.buf_size()
 
@@ -182,8 +182,9 @@ class MultiprocessEmitter(SignalEmitter[T]):
             self._sm_queue.put((self._sm, self._data_type, data.instantiation_params()))
         else:
             assert self._expected_buf_size == buf_size, (
-                f"Buffer size mismatch: expected {self._expected_buf_size}, got {buf_size}. "
-                "All data instances must have the same buffer size for a given channel.")
+                f'Buffer size mismatch: expected {self._expected_buf_size}, got {buf_size}. '
+                'All data instances must have the same buffer size for a given channel.'
+            )
 
         with self._lock:
             data.set_to_buffer(self._sm.buf)
@@ -196,7 +197,7 @@ class MultiprocessEmitter(SignalEmitter[T]):
 
         if mode is TransportMode.SHARED_MEMORY:
             if not isinstance(data, SMCompliant):
-                raise TypeError("Shared memory transport selected; data must implement SMCompliant")
+                raise TypeError('Shared memory transport selected; data must implement SMCompliant')
             return self._emit_shared_memory(data, ts)
 
         return self._emit_queue(data, ts)
@@ -246,14 +247,16 @@ class MultiprocessReceiver(SignalReceiver[T]):
     close without introducing cycles or non-picklable state.
     """
 
-    def __init__(self,
-                 queue: mp.Queue,
-                 mode_value: mp.Value,
-                 lock: mp.Lock,
-                 ts_value: mp.Value,
-                 sm_queue: mp.Queue,
-                 *,
-                 forced_mode: TransportMode | None = None):
+    def __init__(
+        self,
+        queue: mp.Queue,
+        mode_value: mp.Value,
+        lock: mp.Lock,
+        ts_value: mp.Value,
+        sm_queue: mp.Queue,
+        *,
+        forced_mode: TransportMode | None = None,
+    ):
         self._queue = queue
         self._mode_value = mode_value
         self._forced_mode = forced_mode
@@ -269,7 +272,7 @@ class MultiprocessReceiver(SignalReceiver[T]):
 
         self._last_queue_message: Message[T] | None = None
         self._closed = False
-        self._emitter_ref: weakref.ReferenceType['MultiprocessEmitter[Any]'] | None = None
+        self._emitter_ref: weakref.ReferenceType[MultiprocessEmitter[Any]] | None = None
         if forced_mode is not None:
             self._mode_value.value = int(forced_mode)
 
@@ -376,7 +379,6 @@ class MultiprocessReceiver(SignalReceiver[T]):
 
 
 class LocalQueueEmitter(SignalEmitter[T]):
-
     def __init__(self, queue: deque, clock: Clock):
         """Emitter that allows to emit messages to deque.
 
@@ -393,7 +395,6 @@ class LocalQueueEmitter(SignalEmitter[T]):
 
 
 class LocalQueueReceiver(SignalReceiver[T]):
-
     def __init__(self, queue: deque):
         """Reader that allows to read messages from deque.
 
@@ -411,7 +412,6 @@ class LocalQueueReceiver(SignalReceiver[T]):
 
 
 class EventReceiver(SignalReceiver[bool]):
-
     def __init__(self, event: EventClass, clock: Clock):
         self._event = event
         self._clock = clock
@@ -421,7 +421,6 @@ class EventReceiver(SignalReceiver[bool]):
 
 
 class SystemClock(Clock):
-
     def now(self) -> float:
         return time.monotonic()
 
@@ -436,29 +435,29 @@ def _bg_wrapper(run_func: ControlLoop, stop_event: EventClass, clock: Clock, nam
                 case Sleep(seconds):
                     time.sleep(seconds)
                 case _:
-                    raise ValueError(f"Unknown command: {command}")
+                    raise ValueError(f'Unknown command: {command}')
     except KeyboardInterrupt:
         # Silently handle KeyboardInterrupt in background processes
         pass
     except Exception:
-        print(f"\n{'='*60}", file=sys.stderr)
+        print(f'\n{"=" * 60}', file=sys.stderr)
         print(f"ERROR in background process '{name}':", file=sys.stderr)
-        print(f"{'='*60}", file=sys.stderr)
+        print(f'{"=" * 60}', file=sys.stderr)
         print(traceback.format_exc(), file=sys.stderr)
-        print(f"{'='*60}\n", file=sys.stderr)
-        logging.error(f"Error in control system {name}:\n{traceback.format_exc()}")
+        print(f'{"=" * 60}\n', file=sys.stderr)
+        logging.error(f'Error in control system {name}:\n{traceback.format_exc()}')
     finally:
-        print(f"Stopping background process by {name}", flush=True)
+        print(f'Stopping background process by {name}', flush=True)
         stop_event.set()
 
 
 class World:
     """Utility class to bind and run control loops."""
 
-    def __init__(self, clock: Clock = SystemClock()):
+    def __init__(self, clock: Clock | None = None):
         # TODO: stop_signal should be a shared variable, since we should be able to track if background
         # processes are still running
-        self._clock = clock
+        self._clock = clock or SystemClock()
 
         self._stop_event = mp.Event()
         self.background_processes = []
@@ -473,11 +472,11 @@ class World:
 
     def __exit__(self, exc_type, exc_value, traceback):
         self.entered = False
-        print("Stopping background processes...", flush=True)
+        print('Stopping background processes...', flush=True)
         self.request_stop()
         time.sleep(0.1)
 
-        print(f"Waiting for {len(self.background_processes)} background processes to terminate...", flush=True)
+        print(f'Waiting for {len(self.background_processes)} background processes to terminate...', flush=True)
         for process in self.background_processes:
             process.join(timeout=3)
             if process.is_alive():
@@ -551,12 +550,14 @@ class World:
                 # Don't add the loop back and don't yield after a loop completes - it is done
                 self.request_stop()
 
-    def connect(self,
-                emitter: ControlSystemEmitter[T],
-                receiver: ControlSystemReceiver[T],
-                *,
-                emitter_wrapper: Callable[[SignalEmitter[T]], SignalEmitter[T]] = lambda x: x,
-                receiver_wrapper: Callable[[SignalReceiver[T]], SignalReceiver[T]] = lambda x: x):
+    def connect(
+        self,
+        emitter: ControlSystemEmitter[T],
+        receiver: ControlSystemReceiver[T],
+        *,
+        emitter_wrapper: Callable[[SignalEmitter[T]], SignalEmitter[T]] = lambda x: x,
+        receiver_wrapper: Callable[[SignalReceiver[T]], SignalReceiver[T]] = lambda x: x,
+    ):
         """Declare a logical connection between Emitter and Receiver of two control systems.
 
         The world inspects the ownership of both endpoints when ``start`` is
@@ -575,7 +576,7 @@ class World:
         underlying signal transport mechanisms, such as adding logging,
         filtering, or other middleware functionality.
         """
-        assert receiver not in [e[1] for e in self._connections], "Receiver can be connected only to one Emitter"
+        assert receiver not in [e[1] for e in self._connections], 'Receiver can be connected only to one Emitter'
         assert isinstance(emitter, ControlSystemEmitter)
         assert isinstance(receiver, ControlSystemReceiver)
         self._connections.append((emitter, receiver, emitter_wrapper, receiver_wrapper))
@@ -612,11 +613,14 @@ class World:
             self.connect(emitter, connector, receiver_wrapper=wrapper)
             return emitter
         raise ValueError(
-            f"Unsupported connector type: {type(connector)}. Expected ControlSystemEmitter or ControlSystemReceiver.")
+            f'Unsupported connector type: {type(connector)}. Expected ControlSystemEmitter or ControlSystemReceiver.'
+        )
 
-    def start(self,
-              main_process: ControlSystem | list[ControlSystem | None],
-              background: ControlSystem | list[ControlSystem | None] | None = None) -> Iterator[Sleep]:
+    def start(
+        self,
+        main_process: ControlSystem | list[ControlSystem | None],
+        background: ControlSystem | list[ControlSystem | None] | None = None,
+    ) -> Iterator[Sleep]:
         """Bind declared connections and launch control systems.
 
         ``main_process`` control systems are scheduled cooperatively in the
@@ -640,14 +644,15 @@ class World:
             if emitter.owner in local_cs and receiver.owner in local_cs:
                 local_connections.append((emitter_wrapper(emitter), receiver_wrapper(receiver)))
             elif emitter.owner not in all_cs:
-                raise ValueError(f"Emitter {emitter.owner} is not in any control system")
+                raise ValueError(f'Emitter {emitter.owner} is not in any control system')
             elif receiver.owner not in all_cs:
-                raise ValueError(f"Receiver {receiver.owner} is not in any control system")
+                raise ValueError(f'Receiver {receiver.owner} is not in any control system')
             else:
                 mp_connections.append((emitter_wrapper(emitter), receiver_wrapper(receiver)))
 
         for emitter, receiver in local_connections:
-            em, re = self.local_pipe()
+            kwargs = {'maxsize': receiver.maxsize} if receiver.maxsize is not None else {}
+            em, re = self.local_pipe(**kwargs)
             emitter._bind(em)
             receiver._bind(re)
 
@@ -656,8 +661,8 @@ class World:
             # When emitter lives in a different process, we use system clock to timestamp messages, otherwise we will
             # have to serialise our local clock to the other process, which is not what we want.
             clock = None if emitter.owner in local_cs else system_clock
-            # TODO: Use shared memory when we know it is possible.
-            em, re = self.mp_pipe(clock=clock)
+            kwargs = {'maxsize': receiver.maxsize} if receiver.maxsize is not None else {}
+            em, re = self.mp_pipe(clock=clock, **kwargs)
             emitter._bind(em)
             receiver._bind(re)
 
@@ -671,19 +676,18 @@ class World:
         """
         for bg_loop in background_loops:
             if hasattr(bg_loop, '__self__'):
-                name = f"{bg_loop.__self__.__class__.__name__}.{bg_loop.__name__}"
+                name = f'{bg_loop.__self__.__class__.__name__}.{bg_loop.__name__}'
             else:
                 name = getattr(bg_loop, '__name__', 'anonymous')
             # TODO: now we allow only real clock, change clock to a Emitter?
-            p = mp.Process(target=_bg_wrapper,
-                           args=(bg_loop, self._stop_event, SystemClock(), name),
-                           daemon=True,
-                           name=name)
+            p = mp.Process(
+                target=_bg_wrapper, args=(bg_loop, self._stop_event, SystemClock(), name), daemon=True, name=name
+            )
             p.start()
             self.background_processes.append(p)
-            print(f"Started background process {name} (pid {p.pid})", flush=True)
+            print(f'Started background process {name} (pid {p.pid})', flush=True)
 
-    def local_pipe(self, maxsize: int = 1) -> Tuple[SignalEmitter[T], SignalReceiver[T]]:
+    def local_pipe(self, maxsize: int = 1) -> tuple[SignalEmitter[T], SignalReceiver[T]]:
         """Create a queue-based communication channel within the same process.
 
         When possible, use `connect` or `pair` instead, as this method is somewhat internal.
@@ -696,11 +700,9 @@ class World:
         q = deque(maxlen=maxsize)
         return LocalQueueEmitter(q, self._clock), LocalQueueReceiver(q)
 
-    def mp_pipe(self,
-                maxsize: int = 1,
-                clock: Clock | None = None,
-                *,
-                transport: TransportMode = TransportMode.UNDECIDED) -> Tuple[SignalEmitter[T], SignalReceiver[T]]:
+    def mp_pipe(
+        self, maxsize: int = 1, clock: Clock | None = None, *, transport: TransportMode = TransportMode.UNDECIDED
+    ) -> tuple[SignalEmitter[T], SignalReceiver[T]]:
         """Create an inter-process channel with optional transport override.
 
         When possible, use `connect` or `pair` instead, as this method is somewhat internal.
@@ -722,7 +724,7 @@ class World:
             Tuple of (emitter, reader) suitable for inter-process communication.
         """
         if transport is TransportMode.SHARED_MEMORY and not self.entered:
-            raise AssertionError("Shared memory transport is only available after entering the world context.")
+            raise AssertionError('Shared memory transport is only available after entering the world context.')
 
         forced_mode: TransportMode | None
         forced_mode = transport if transport in (TransportMode.QUEUE, TransportMode.SHARED_MEMORY) else None
@@ -735,30 +737,11 @@ class World:
         mode_value = self._manager.Value('i', int(initial_mode))
 
         emitter_clock = clock or self._clock
-        emitter = MultiprocessEmitter(emitter_clock,
-                                      message_queue,
-                                      mode_value,
-                                      lock,
-                                      ts_value,
-                                      sm_queue,
-                                      forced_mode=forced_mode)
+        emitter = MultiprocessEmitter(
+            emitter_clock, message_queue, mode_value, lock, ts_value, sm_queue, forced_mode=forced_mode
+        )
         receiver = MultiprocessReceiver(message_queue, mode_value, lock, ts_value, sm_queue, forced_mode=forced_mode)
         emitter._attach_receiver(receiver)
         receiver._attach_emitter(emitter)
         self._cleanup_emitters_readers.append((emitter, receiver))
         return emitter, receiver
-
-    def local_one_to_many_pipe(self,
-                               n_readers: int,
-                               maxsize: int = 1) -> Tuple[SignalEmitter[T], Sequence[SignalReceiver[T]]]:
-        """DEPRECATED: Create a single-emitter-many-readers communication channel.
-
-        Use `connect` or `pair` instead.
-        """
-        emitters = []
-        readers = []
-        for _ in range(n_readers):
-            emitter, reader = self.local_pipe(maxsize)
-            emitters.append(emitter)
-            readers.append(reader)
-        return BroadcastEmitter(emitters), readers
