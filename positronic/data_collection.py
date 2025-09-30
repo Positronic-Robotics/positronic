@@ -1,8 +1,8 @@
 import time
+from collections.abc import Callable, Iterator, Sequence
 from contextlib import nullcontext
 from enum import Enum
 from pathlib import Path
-from typing import Callable, Dict, Iterator, Sequence
 
 import configuronic as cfn
 import numpy as np
@@ -26,7 +26,7 @@ from positronic.simulator.mujoco.transforms import MujocoSceneTransform
 from positronic.utils.buttons import ButtonHandler
 
 
-def _parse_buttons(buttons: Dict, button_handler: ButtonHandler):
+def _parse_buttons(buttons: dict, button_handler: ButtonHandler):
     for side in ['left', 'right']:
         if buttons[side] is None:
             continue
@@ -36,7 +36,7 @@ def _parse_buttons(buttons: Dict, button_handler: ButtonHandler):
             f'{side}_B': buttons[side][5],
             f'{side}_trigger': buttons[side][0],
             f'{side}_thumb': buttons[side][1],
-            f'{side}_stick': buttons[side][3]
+            f'{side}_stick': buttons[side][3],
         }
         button_handler.update_buttons(mapping)
 
@@ -56,11 +56,11 @@ class _Tracker:
 
     def turn_on(self, robot_pos: geom.Transform3D):
         if self.umi_mode:
-            print("Ignoring tracking on/off in UMI mode")
+            print('Ignoring tracking on/off in UMI mode')
             return
 
         self.on = True
-        print("Starting tracking")
+        print('Starting tracking')
         self._offset = geom.Transform3D(
             -self._teleop_t.translation + robot_pos.translation,
             self._teleop_t.rotation.inv * robot_pos.rotation,
@@ -68,18 +68,19 @@ class _Tracker:
 
     def turn_off(self):
         if self.umi_mode:
-            print("Ignoring tracking on/off in UMI mode")
+            print('Ignoring tracking on/off in UMI mode')
             return
         self.on = False
-        print("Stopped tracking")
+        print('Stopped tracking')
 
     def update(self, tracker_pos: geom.Transform3D):
         if self.umi_mode:
             return tracker_pos
 
         self._teleop_t = self._operator_position * tracker_pos * self._operator_position.inv
-        return geom.Transform3D(self._teleop_t.translation + self._offset.translation,
-                                self._teleop_t.rotation * self._offset.rotation)
+        return geom.Transform3D(
+            self._teleop_t.translation + self._offset.translation, self._teleop_t.rotation * self._offset.rotation
+        )
 
 
 class OperatorPosition(Enum):
@@ -90,8 +91,7 @@ class OperatorPosition(Enum):
 
 
 class DataCollectionController(pimm.ControlSystem):
-
-    def __init__(self, operator_position: geom.Transform3D | None, metadata_getter: Callable[[], Dict] | None = None):
+    def __init__(self, operator_position: geom.Transform3D | None, metadata_getter: Callable[[], dict] | None = None):
         self.operator_position = operator_position
         self.metadata_getter = metadata_getter or (lambda: {})
         self.controller_positions_receiver = pimm.ControlSystemReceiver(self)
@@ -105,9 +105,9 @@ class DataCollectionController(pimm.ControlSystem):
         self.sound_emitter = pimm.ControlSystemEmitter(self)
 
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Sleep]:  # noqa: C901
-        start_wav_path = "positronic/assets/sounds/recording-has-started.wav"
-        end_wav_path = "positronic/assets/sounds/recording-has-stopped.wav"
-        abort_wav_path = "positronic/assets/sounds/recording-has-been-aborted.wav"
+        start_wav_path = 'positronic/assets/sounds/recording-has-started.wav'
+        end_wav_path = 'positronic/assets/sounds/recording-has-stopped.wav'
+        abort_wav_path = 'positronic/assets/sounds/recording-has-been-aborted.wav'
 
         controller_positions_receiver = pimm.ValueUpdated(self.controller_positions_receiver)
 
@@ -131,7 +131,7 @@ class DataCollectionController(pimm.ControlSystem):
                     else:
                         tracker.turn_on(self.robot_state.value.ee_pose)
                 elif button_handler.just_pressed('right_stick') and not tracker.umi_mode:
-                    print("Resetting robot")
+                    print('Resetting robot')
                     if recording:
                         self.ds_agent_commands.emit(DsWriterCommand.ABORT())
                         self.sound_emitter.emit(abort_wav_path)
@@ -154,7 +154,7 @@ class DataCollectionController(pimm.ControlSystem):
 
 
 @ds_writer_agent.names({'.left': Serializers.transform_3d.names, '.right': Serializers.transform_3d.names})
-def controller_positions_serializer(controller_positions: Dict[str, geom.Transform3D]) -> Dict[str, np.ndarray]:
+def controller_positions_serializer(controller_positions: dict[str, geom.Transform3D]) -> dict[str, np.ndarray]:
     res = {}
     for side, pos in controller_positions.items():
         if pos is not None:
@@ -162,9 +162,16 @@ def controller_positions_serializer(controller_positions: Dict[str, geom.Transfo
     return res
 
 
-def _wire(world: pimm.World, cameras: Dict[str, pimm.ControlSystem] | None, dataset_writer: LocalDatasetWriter | None,
-          data_collection: DataCollectionController, webxr: WebXR, robot_arm: pimm.ControlSystem | None,
-          gripper: pimm.ControlSystem | None, sound: pimm.ControlSystem | None):
+def _wire(
+    world: pimm.World,
+    cameras: dict[str, pimm.ControlSystem] | None,
+    dataset_writer: LocalDatasetWriter | None,
+    data_collection: DataCollectionController,
+    webxr: WebXR,
+    robot_arm: pimm.ControlSystem | None,
+    gripper: pimm.ControlSystem | None,
+    sound: pimm.ControlSystem | None,
+):
     cameras = cameras or {}
     camera_mappings = {name: (f'image.{name}' if name != 'image' else 'image') for name in cameras.keys()}
 
@@ -207,14 +214,16 @@ def _wire(world: pimm.World, cameras: Dict[str, pimm.ControlSystem] | None, data
     return ds_agent
 
 
-def main(robot_arm: pimm.ControlSystem | None,
-         gripper: pimm.ControlSystem | None,
-         webxr: WebXR,
-         sound: pimm.ControlSystem | None,
-         cameras: Dict[str, pimm.ControlSystem] | None,
-         output_dir: str | None = None,
-         stream_video_to_webxr: str | None = None,
-         operator_position: OperatorPosition = OperatorPosition.FRONT):
+def main(
+    robot_arm: pimm.ControlSystem | None,
+    gripper: pimm.ControlSystem | None,
+    webxr: WebXR,
+    sound: pimm.ControlSystem | None,
+    cameras: dict[str, pimm.ControlSystem] | None,
+    output_dir: str | None = None,
+    stream_video_to_webxr: str | None = None,
+    operator_position: OperatorPosition = OperatorPosition.FRONT,
+):
     """Runs data collection in real hardware."""
     cameras = cameras or {}
     data_collection = DataCollectionController(operator_position.value)
@@ -235,9 +244,11 @@ def main(robot_arm: pimm.ControlSystem | None,
             bg_cs.append(sound)
 
         if stream_video_to_webxr is not None:
-            world.connect(cameras[stream_video_to_webxr].frame,
-                          webxr.frame,
-                          receiver_wrapper=lambda r: pimm.map(r, lambda x: x['image']))
+            world.connect(
+                cameras[stream_video_to_webxr].frame,
+                webxr.frame,
+                receiver_wrapper=lambda r: pimm.map(r, lambda x: x['image']),
+            )
 
         dc_steps = iter(world.start(data_collection, bg_cs))
         while not world.should_stop:
@@ -247,18 +258,22 @@ def main(robot_arm: pimm.ControlSystem | None,
                 break
 
 
-@cfn.config(mujoco_model_path="positronic/assets/mujoco/franka_table.xml",
-            webxr=positronic.cfg.webxr.oculus,
-            sound=positronic.cfg.sound.sound,
-            operator_position=OperatorPosition.BACK,
-            loaders=positronic.cfg.simulator.stack_cubes_loaders)
-def main_sim(mujoco_model_path: str,
-             webxr: WebXR,
-             sound: pimm.ControlSystem | None = None,
-             loaders: Sequence[MujocoSceneTransform] = (),
-             output_dir: str | None = None,
-             fps: int = 30,
-             operator_position: OperatorPosition = OperatorPosition.FRONT):
+@cfn.config(
+    mujoco_model_path='positronic/assets/mujoco/franka_table.xml',
+    webxr=positronic.cfg.webxr.oculus,
+    sound=positronic.cfg.sound.sound,
+    operator_position=OperatorPosition.BACK,
+    loaders=positronic.cfg.simulator.stack_cubes_loaders,
+)
+def main_sim(
+    mujoco_model_path: str,
+    webxr: WebXR,
+    sound: pimm.ControlSystem | None = None,
+    loaders: Sequence[MujocoSceneTransform] = (),
+    output_dir: str | None = None,
+    fps: int = 30,
+    operator_position: OperatorPosition = OperatorPosition.FRONT,
+):
     """Runs data collection in simulator."""
 
     sim = MujocoSim(mujoco_model_path, loaders)
@@ -283,15 +298,13 @@ def main_sim(mujoco_model_path: str,
         ds_agent = _wire(world, cameras, dataset_writer, data_collection, webxr, robot_arm, gripper, sound)
 
         bg_cs = [webxr, gui]
-        if ds_agent is not None:
-            bg_cs.append(ds_agent)
         if sound is not None:
             bg_cs.append(sound)
 
         for camera_name, camera in cameras.items():
             world.connect(camera.frame, gui.cameras[camera_name])
 
-        sim_iter = world.start([sim, *cameras.values(), robot_arm, gripper, data_collection], bg_cs)
+        sim_iter = world.start([sim, *cameras.values(), robot_arm, gripper, data_collection, ds_agent], bg_cs)
         sim_iter = iter(sim_iter)
 
         start_time = pimm.world.SystemClock().now_ns()
@@ -322,11 +335,13 @@ main_cfg = cfn.Config(
 )
 
 
-@cfn.config(robot_arm=positronic.cfg.hardware.roboarm.so101,
-            webxr=positronic.cfg.webxr.oculus,
-            sound=positronic.cfg.sound.sound,
-            operator_position=OperatorPosition.BACK,
-            cameras={'right': positronic.cfg.hardware.camera.arducam_right})
+@cfn.config(
+    robot_arm=positronic.cfg.hardware.roboarm.so101,
+    webxr=positronic.cfg.webxr.oculus,
+    sound=positronic.cfg.sound.sound,
+    operator_position=OperatorPosition.BACK,
+    cameras={'right': positronic.cfg.hardware.camera.arducam_right},
+)
 def so101cfg(robot_arm, **kwargs):
     """Runs data collection on SO101 robot"""
     main(robot_arm=robot_arm, gripper=robot_arm, **kwargs)
@@ -340,15 +355,15 @@ droid = cfn.Config(
     sound=positronic.cfg.sound.sound,
     cameras={
         'wrist': positronic.cfg.hardware.camera.zed_m.override(view='side_by_side', resolution='vga', fps=30),
-        'side': positronic.cfg.hardware.camera.zed_2i.override(view='left', resolution='vga', fps=30)
+        'side': positronic.cfg.hardware.camera.zed_2i.override(view='left', resolution='vga', fps=30),
     },
     operator_position=OperatorPosition.FRONT,
 )
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     cfn.cli({
-        "real": main_cfg,
-        "so101": so101cfg,
-        "sim": main_sim,
-        "droid": droid,
+        'real': main_cfg,
+        'so101': so101cfg,
+        'sim': main_sim,
+        'droid': droid,
     })
