@@ -27,7 +27,7 @@ from positronic.drivers import roboarm
 from positronic.gui.dpg import DearpyguiUi
 from positronic.policy.action import ActionDecoder
 from positronic.policy.observation import ObservationEncoder
-from positronic.simulator.mujoco.observers import BodyDistance
+from positronic.simulator.mujoco.observers import BodyDistance, StackingSuccess
 from positronic.simulator.mujoco.sim import MujocoCamera, MujocoFranka, MujocoGripper, MujocoSim
 from positronic.simulator.mujoco.transforms import MujocoSceneTransform
 
@@ -190,7 +190,7 @@ class Driver(pimm.ControlSystem):
             yield pimm.Sleep(self.simulation_time)
             self.ds_commands.emit(DsWriterCommand(type=DsWriterCommandType.STOP_EPISODE))
             self.inf_commands.emit(InferenceCommand.RESET())
-            yield pimm.Sleep(0.02)  # Let the tnings to propagate
+            yield pimm.Sleep(0.2)  # Let the things propagate
 
 
 def main_sim(
@@ -212,6 +212,7 @@ def main_sim(
     device = device or detect_device()
     observers = {
         'box_distance': BodyDistance('box_0_body', 'box_1_body'),
+        'stacking_success': StackingSuccess('box_0_body', 'box_1_body', 'hand_ph'),
     }
     sim = MujocoSim(mujoco_model_path, loaders, observers=observers)
     robot_arm = MujocoFranka(sim, suffix='_ph')

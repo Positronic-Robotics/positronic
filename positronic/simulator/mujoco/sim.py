@@ -99,6 +99,10 @@ class MujocoSim(pimm.Clock, pimm.ControlSystem):
         # We need to preserve time during the reset, because otherwise interleave will break
         self.data.time = time_before_reset
 
+        # Reset observers for new episode
+        for observer in self.observers.values():
+            observer.reset()
+
     def load_state(self, state: dict, reset_time: bool = True):
         mj.mj_resetData(self.model, self.data)
         for spec in STATE_SPECS:

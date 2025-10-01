@@ -265,9 +265,7 @@ class DiskEpisodeWriter(EpisodeWriter):
                 self._signal_names[signal_name] = None
             else:
                 # Scalar/vector signal
-                self._writers[signal_name] = SimpleSignalWriter(
-                    self._path / f'{signal_name}.parquet', drop_equal_bytes_threshold=128, names=names
-                )
+                self._writers[signal_name] = SimpleSignalWriter(self._path / f'{signal_name}.parquet', names=names)
                 self._signal_names[signal_name] = names
 
         self._writers[signal_name].append(data, ts_ns)
