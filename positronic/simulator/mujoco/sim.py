@@ -158,11 +158,13 @@ class MujocoFrankaState(State, pimm.shared_memory.NumpySMAdapter):
 
     @property
     def q(self) -> np.ndarray:
-        return self.array[:7]
+        # Return a copy so downstream consumers don't hold a view into the shared state buffer
+        return self.array[:7].copy()
 
     @property
     def dq(self) -> np.ndarray:
-        return self.array[7:14]
+        # Return a copy for the same reason as q
+        return self.array[7:14].copy()
 
     @property
     def ee_pose(self) -> geom.Transform3D:
