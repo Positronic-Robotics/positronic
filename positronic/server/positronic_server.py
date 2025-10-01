@@ -12,14 +12,14 @@ import rerun as rr
 import uvicorn
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, HTMLResponse
+from fastapi.responses import HTMLResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from starlette.requests import Request
 
 from positronic import utils
 from positronic.dataset.local_dataset import LocalDataset
-from positronic.server.dataset_utils import generate_episode_rrd, get_dataset_info, get_episodes_list
+from positronic.server.dataset_utils import get_dataset_info, get_episodes_list, stream_episode_rrd
 
 # Global app state
 app_state: dict[str, object] = {
@@ -69,6 +69,15 @@ _static_dir = _pkg_path('static')
 _templates_dir = _pkg_path('templates')
 app.mount('/static', StaticFiles(directory=_static_dir), name='static')
 templates = Jinja2Templates(directory=_templates_dir)
+
+
+def _iter_file_chunks(path: str, *, chunk_size: int = 128 * 1024):
+    with open(path, 'rb') as source:
+        while True:
+            chunk = source.read(chunk_size)
+            if not chunk:
+                break
+            yield chunk
 
 
 @app.get('/', response_class=HTMLResponse)
@@ -139,17 +148,33 @@ async def api_episode_rrd(episode_id: int):
     if ds is None:
         raise HTTPException(status_code=500, detail='Dataset failed to load')
 
-    try:
-        cache_path = _get_rrd_cache_path(episode_id)
-        rrd_path = generate_episode_rrd(ds, episode_id, cache_path)
-        if not os.path.exists(rrd_path):
-            logging.error(f'RRD file not found at {rrd_path}')
-            raise HTTPException(status_code=500, detail='RRD file generation failed')
+    cache_path = _get_rrd_cache_path(episode_id)
 
-        return FileResponse(path=rrd_path, media_type='application/octet-stream', filename=f'episode_{episode_id}.rrd')
-    except Exception as e:
-        logging.error(f'Error serving RRD file for episode {episode_id}: {e}', exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e)) from e
+    if os.path.exists(cache_path):
+        logging.debug(f'Serving cached RRD for episode {episode_id} from {cache_path}')
+        return StreamingResponse(
+            _iter_file_chunks(cache_path),
+            media_type='application/octet-stream',
+            headers={'Content-Disposition': f'attachment; filename=episode_{episode_id}.rrd'},
+        )
+
+    def _stream_and_cache():
+        success = False
+        try:
+            with open(cache_path, 'wb') as cache_file:
+                for chunk in stream_episode_rrd(ds, episode_id):
+                    cache_file.write(chunk)
+                    yield chunk
+            success = True
+        finally:
+            if not success:
+                shutil.rmtree(cache_path, ignore_errors=True)
+
+    return StreamingResponse(
+        _stream_and_cache(),
+        media_type='application/octet-stream',
+        headers={'Content-Disposition': f'attachment; filename=episode_{episode_id}.rrd'},
+    )
 
 
 @cfn.config()

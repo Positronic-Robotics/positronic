@@ -1,7 +1,7 @@
 """Dataset utilities for Positronic dataset visualization (images-only)."""
 
 import logging
-import os
+from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
@@ -123,9 +123,7 @@ def _collect_signal_groups(ep: Episode) -> tuple[list[str], list[str], dict[str,
     return video_names, signal_names, signal_dims
 
 
-def _build_blueprint(
-    task: str | None, video_names: list[str], signal_names: list[str], signal_dims: dict[str, int]
-) -> rrb.Blueprint:
+def _build_blueprint(video_names: list[str], signal_names: list[str], signal_dims: dict[str, int]) -> rrb.Blueprint:
     image_views = [rrb.Spatial2DView(name=k.replace('_', ' ').title(), origin=f'/{k}') for k in video_names]
 
     per_signal_views = []
@@ -172,42 +170,59 @@ def _setup_series_names(ep: Episode, signal_names: list[str]) -> None:
         log_series_styles(f'/signals/{key}', names, static=True)
 
 
-def _log_episode(ep: Episode, video_names: list[str], signal_names: list[str]) -> None:
-    for key in signal_names:
-        for v, t in ep.signals[key]:
-            set_timeline_time('time', np.datetime64(t, 'ns'))
-            log_numeric_series(f'/signals/{key}', v)
-
+def _episode_log_entries(ep: Episode, video_names: list[str], signal_names: list[str]):
     for key in video_names:
         for frame, ts_ns in ep.signals[key]:
-            set_timeline_time('time', np.datetime64(ts_ns, 'ns'))
-            rr.log(key, rr.Image(frame).compress())
+            yield ('video', key, frame, ts_ns)
+
+    for key in signal_names:
+        for value, ts_ns in ep.signals[key]:
+            yield ('numeric', key, value, ts_ns)
 
 
-def generate_episode_rrd(ds: LocalDataset, episode_id: int, cache_path: str) -> str:
-    """Generate an RRD for an episode and return its path (cached)."""
-    if os.path.exists(cache_path):
-        logging.info(f'Using cached RRD file for episode {episode_id}')
-        return cache_path
+class _BinaryStreamDrainer:
+    def __init__(self, stream: rr.recording_stream.BinaryStream, flush_every: int):
+        self._stream = stream
+        self._flush_every = max(1, flush_every)
+        self._counter = 0
+
+    def drain(self) -> Iterator[bytes]:
+        self._counter += 1
+        if self._counter < self._flush_every:
+            return
+        self._stream.flush()
+        chunk = self._stream.read(flush=False)
+        self._counter = 0
+
+        if chunk:
+            yield chunk
+
+
+@rr.recording_stream.recording_stream_generator_ctx
+def stream_episode_rrd(ds: LocalDataset, episode_id: int) -> Iterator[bytes]:
+    """Yield an episode RRD as chunks while it is being generated."""
 
     ep = ds[episode_id]
+    logging.info(f'Streaming RRD for episode {episode_id}')
 
-    logging.info(f'Generating new RRD file for episode {episode_id}')
     recording_id = f'positronic_ds_{Path(ds.root).name}_episode_{episode_id}'
     rec = rr.new_recording(application_id=recording_id)
+    drainer = _BinaryStreamDrainer(rec.binary_stream(), flush_every=128)
 
     with rec:
-        task = ep.static.get('task', None)
-        if task:
-            rr.log('/task', rr.TextDocument(task), static=True)
-
         video_names, signal_names, signal_dims = _collect_signal_groups(ep)
-        rr.send_blueprint(_build_blueprint(task, video_names, signal_names, signal_dims))
+        rr.send_blueprint(_build_blueprint(video_names, signal_names, signal_dims))
+        yield from drainer.drain()
 
-        # Provide short per-channel names for legend/tooltips
         _setup_series_names(ep, signal_names)
+        yield from drainer.drain()
 
-        _log_episode(ep, video_names, signal_names)
-        rr.save(cache_path)
+        for kind, key, payload, ts_ns in _episode_log_entries(ep, video_names, signal_names):
+            set_timeline_time('time', np.datetime64(ts_ns, 'ns'))
+            if kind == 'numeric':
+                log_numeric_series(f'/signals/{key}', payload)
+            else:
+                rr.log(key, rr.Image(payload).compress())
+            yield from drainer.drain()
 
-    return cache_path
+    yield from drainer.drain()
