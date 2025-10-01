@@ -181,21 +181,27 @@ def _episode_log_entries(ep: Episode, video_names: list[str], signal_names: list
 
 
 class _BinaryStreamDrainer:
-    def __init__(self, stream: rr.recording_stream.BinaryStream, flush_every: int):
+    def __init__(self, stream: rr.recording_stream.BinaryStream, min_bytes: int):
         self._stream = stream
-        self._flush_every = max(1, flush_every)
-        self._counter = 0
+        self._min_bytes = max(1, min_bytes)
+        self._buffer = bytearray()
 
-    def drain(self) -> Iterator[bytes]:
-        self._counter += 1
-        if self._counter < self._flush_every:
-            return
-        self._stream.flush()
-        chunk = self._stream.read(flush=False)
-        self._counter = 0
-
+    def drain(self, force: bool = False) -> Iterator[bytes]:
+        # Always flush to get the latest data
+        if force:
+            self._stream.flush()
+        chunk = self._stream.read(flush=force)
         if chunk:
-            yield chunk
+            self._buffer.extend(chunk)
+        # Yield in min_bytes-sized chunks
+        while len(self._buffer) >= self._min_bytes:
+            to_yield = self._buffer[: self._min_bytes]
+            yield bytes(to_yield)
+            self._buffer = self._buffer[self._min_bytes :]
+        # On force, yield any remaining bytes
+        if force and self._buffer:
+            yield bytes(self._buffer)
+            self._buffer.clear()
 
 
 @rr.recording_stream.recording_stream_generator_ctx
@@ -207,7 +213,7 @@ def stream_episode_rrd(ds: LocalDataset, episode_id: int) -> Iterator[bytes]:
 
     recording_id = f'positronic_ds_{Path(ds.root).name}_episode_{episode_id}'
     rec = rr.new_recording(application_id=recording_id)
-    drainer = _BinaryStreamDrainer(rec.binary_stream(), flush_every=128)
+    drainer = _BinaryStreamDrainer(rec.binary_stream(), min_bytes=2**20)
 
     with rec:
         video_names, signal_names, signal_dims = _collect_signal_groups(ep)
@@ -225,4 +231,4 @@ def stream_episode_rrd(ds: LocalDataset, episode_id: int) -> Iterator[bytes]:
                 rr.log(key, rr.Image(payload).compress())
             yield from drainer.drain()
 
-    yield from drainer.drain()
+    yield from drainer.drain(force=True)
