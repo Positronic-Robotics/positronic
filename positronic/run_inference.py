@@ -18,7 +18,6 @@ import positronic.cfg.simulator
 from positronic.dataset.ds_writer_agent import (
     DsWriterAgent,
     DsWriterCommand,
-    DsWriterCommandType,
     Serializers,
     TimeMode,
 )
@@ -177,18 +176,22 @@ class Inference(pimm.ControlSystem):
 class Driver(pimm.ControlSystem):
     """Control system that orchestrates inference episodes by sending start/stop commands."""
 
-    def __init__(self, num_iterations: int, simulation_time: float):
+    def __init__(self, num_iterations: int, simulation_time: float, meta: dict):
         self.num_iterations = num_iterations
         self.simulation_time = simulation_time
         self.ds_commands = pimm.ControlSystemEmitter(self)
         self.inf_commands = pimm.ControlSystemEmitter(self)
+        self.meta = meta
 
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock):
-        for _ in range(self.num_iterations):
-            self.ds_commands.emit(DsWriterCommand(type=DsWriterCommandType.START_EPISODE))
+        for i in range(self.num_iterations):
+            meta = self.meta.copy()
+            meta['inference.iteration'] = i
+
+            self.ds_commands.emit(DsWriterCommand.START(meta))
             self.inf_commands.emit(InferenceCommand.START())
             yield pimm.Sleep(self.simulation_time)
-            self.ds_commands.emit(DsWriterCommand(type=DsWriterCommandType.STOP_EPISODE))
+            self.ds_commands.emit(DsWriterCommand.STOP())
             self.inf_commands.emit(InferenceCommand.RESET())
             yield pimm.Sleep(0.2)  # Let the things propagate
 
@@ -224,9 +227,16 @@ def main_sim(
     inference = Inference(observation_encoder, action_decoder, device, policy, policy_fps, task)
     control_systems = list(cameras.values()) + [sim, robot_arm, gripper, inference]
 
-    gui = None
-    if show_gui:
-        gui = DearpyguiUi()
+    meta = {
+        'inference.device': device,
+        'inference.mujoco_model_path': mujoco_model_path,
+        'inference.policy_fps': policy_fps,
+        'inference.simulation_time': simulation_time,
+    }
+    if task is not None:
+        meta['inference.task'] = task
+
+    gui = DearpyguiUi() if show_gui else None
 
     writer_cm = LocalDatasetWriter(Path(output_dir)) if output_dir is not None else nullcontext(None)
     with writer_cm as dataset_writer, pimm.World(clock=sim) as world:
@@ -264,7 +274,7 @@ def main_sim(
         world.connect(gripper.grip, inference.gripper_state)
         world.connect(inference.target_grip, gripper.target_grip)
 
-        driver = Driver(num_iterations, simulation_time)
+        driver = Driver(num_iterations, simulation_time, meta=meta)
         if ds_agent is not None:
             world.connect(driver.ds_commands, ds_agent.command)
         world.connect(driver.inf_commands, inference.command)
