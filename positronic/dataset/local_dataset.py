@@ -98,6 +98,10 @@ class LocalDataset(Dataset):
 
     def __init__(self, root: Path) -> None:
         self.root = root.expanduser()
+        if not self.root.exists():
+            raise FileNotFoundError(
+                f'Dataset directory {self.root} does not exist. Check that the path is correct and accessible.'
+            )
         self._episodes: list[tuple[int, Path]] = []
         self._build_episode_list()
         self._signals_meta: dict[str, SignalMeta] | None = None

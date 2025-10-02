@@ -1,6 +1,7 @@
 from pathlib import Path
 
 import numpy as np
+import pytest
 
 from positronic.dataset import Episode
 from positronic.dataset.local_dataset import LocalDataset, LocalDatasetWriter
@@ -187,3 +188,12 @@ def test_homedir_resolution(tmp_path):
         ds2 = LocalDataset(actual_root)
         assert len(ds2) == 2
         assert ds2[1]['id'] == 43
+
+
+def test_local_dataset_requires_existing_root(tmp_path):
+    missing_root = tmp_path / 'missing_dataset'
+
+    with pytest.raises(FileNotFoundError) as excinfo:
+        LocalDataset(missing_root)
+
+    assert str(missing_root) in str(excinfo.value)
