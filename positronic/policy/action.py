@@ -40,8 +40,8 @@ class ActionDecoder(transforms.KeyFuncEpisodeTransform):
 
 class RotationTranslationGripAction(ActionDecoder, abc.ABC):
     def __init__(self, rotation_representation: RotRep | str = RotRep.QUAT):
+        super().__init__()
         self.rot_rep = RotRep(rotation_representation)
-        # self.rotation_shape = self.rot_rep.shape
 
 
 class AbsolutePositionAction(RotationTranslationGripAction):

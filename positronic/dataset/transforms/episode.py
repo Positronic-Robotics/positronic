@@ -25,16 +25,16 @@ class KeyFuncEpisodeTransform(EpisodeTransform):
     """Transform an episode using a dictionary of key-function pairs."""
 
     def __init__(self, **transforms: Callable[[Episode], Any]):
-        self._transforms = transforms
+        self._transform_fns = transforms
 
     @property
     def keys(self) -> Sequence[str]:
-        return list(self._transforms.keys())
+        return self._transform_fns.keys()
 
     def transform(self, name: str, episode: Episode) -> Signal[Any] | Any:
-        if name not in self._transforms:
-            raise KeyError(f'Unknown key: {name}, expected one of {self._transforms.keys()}')
-        return self._transforms[name](episode)
+        if name not in self._transform_fns:
+            raise KeyError(f'Unknown key: {name}, expected one of {self._transform_fns.keys()}')
+        return self._transform_fns[name](episode)
 
 
 class TransformedEpisode(Episode):
