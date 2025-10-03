@@ -124,7 +124,7 @@ def _collect_signal_groups(ep: Episode) -> tuple[list[str], list[str], dict[str,
 
 
 def _build_blueprint(video_names: list[str], signal_names: list[str], signal_dims: dict[str, int]) -> rrb.Blueprint:
-    image_views = [rrb.Spatial2DView(name=k.replace('_', ' ').title(), origin=f'/{k}') for k in video_names]
+    image_views = [rrb.Spatial2DView(name=k, origin=f'/{k}') for k in video_names]
 
     per_signal_views = []
     for sig in signal_names:
@@ -132,7 +132,7 @@ def _build_blueprint(video_names: list[str], signal_names: list[str], signal_dim
         show_legend = signal_dims.get(sig, 1) > 1
         per_signal_views.append(
             rrb.TimeSeriesView(
-                name=sig.replace('_', ' ').title(),
+                name=sig,
                 origin=f'/signals/{sig}',
                 plot_legend=rrb.PlotLegend(visible=show_legend),
             )
@@ -148,7 +148,7 @@ def _build_blueprint(video_names: list[str], signal_names: list[str], signal_dim
         rrb.BlueprintPanel(state=rrb.PanelState.Hidden),
         rrb.SelectionPanel(state=rrb.PanelState.Hidden),
         rrb.TopPanel(state=rrb.PanelState.Expanded),
-        rrb.TimePanel(state=rrb.PanelState.Expanded),
+        rrb.TimePanel(state=rrb.PanelState.Collapsed),
         rrb.Grid(*grid_items, column_shares=[1, 2]),
     )
 
