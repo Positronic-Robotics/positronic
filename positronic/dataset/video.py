@@ -259,7 +259,7 @@ class VideoSignal(Signal[np.ndarray]):
         all frames up front.
         """
 
-        def __init__(self, parent: 'VideoSignal', indices: Sequence[int] | np.ndarray):
+        def __init__(self, parent: 'VideoSignal', indices: IndicesLike):
             self._parent = parent
             # Store as numpy int64 array for efficient indexing/slicing
             self._indices = np.asarray(indices, dtype=np.int64)

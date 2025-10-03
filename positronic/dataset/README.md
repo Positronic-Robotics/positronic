@@ -53,7 +53,7 @@ Signal implements `Sequence[(T, int)]` (iterable, indexable). We support three k
 ```python
 T = TypeVar('T')  # The type of the data we manage
 
-IndicesLike = Sequence[int] | np.ndarray
+IndicesLike = slice | Sequence[int] | np.ndarray
 RealNumericArrayLike = Sequence[int] | Sequence[float] | np.ndarray
 
 class Signal[T]:
@@ -166,7 +166,7 @@ class Dataset:
         pass
 
     # Indexing returns an Episode; slices and index arrays return lists of Episodes
-    def __getitem__(self, index_or_slice: int | slice | Sequence[int] | np.ndarray) -> `Episode` | list[Episode]:
+    def __getitem__(self, index_or_slice: int | IndicesLike) -> `Episode` | list[Episode]:
         pass
 
     @property

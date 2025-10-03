@@ -33,8 +33,8 @@ class ObservationEncoder(transforms.EpisodeTransform):
             )
         elif name.startswith('observation.images.'):
             key = name[len('observation.images.') :]
-            input_key, (widht, height) = self._image_configs[key]
-            return image.resize_with_pad(widht, height, episode[input_key])
+            input_key, (width, height) = self._image_configs[key]
+            return image.resize_with_pad(width, height, episode[input_key])
         else:
             raise ValueError(f'Unknown observation key: {name}')
 

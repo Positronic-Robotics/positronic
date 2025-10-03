@@ -11,7 +11,7 @@ import numpy as np
 
 T = TypeVar('T')
 
-IndicesLike: TypeAlias = Sequence[int] | np.ndarray
+IndicesLike: TypeAlias = slice | Sequence[int] | np.ndarray
 RealNumericArrayLike: TypeAlias = Sequence[int] | Sequence[float] | np.ndarray
 
 
@@ -145,9 +145,7 @@ class Signal(Sequence[tuple[T, int]], ABC, Generic[T]):
         return _SignalViewTime(self)
 
     @final
-    def __getitem__(
-        self, index_or_slice: int | slice | Sequence[int] | np.ndarray
-    ) -> Union[tuple[T, int], 'Signal[T]']:
+    def __getitem__(self, index_or_slice: int | IndicesLike) -> Union[tuple[T, int], 'Signal[T]']:
         match index_or_slice:
             case int() | np.integer() as idx:
                 if idx < 0:
@@ -179,9 +177,7 @@ class _SignalViewTime(TimeIndexerLike[T], Generic[T]):
     def __init__(self, signal: Signal[T]):
         self._signal = signal
 
-    def __getitem__(
-        self, ts_or_array: int | float | Sequence[int] | np.ndarray | slice
-    ) -> Union[tuple[T, int], 'Signal[T]']:
+    def __getitem__(self, ts_or_array: int | IndicesLike) -> Union[tuple[T, int], 'Signal[T]']:
         match ts_or_array:
             case int() | float() | np.floating() as ts:
                 idx = int(self._signal._search_ts([ts])[0])
