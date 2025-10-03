@@ -5,6 +5,7 @@ from positronic.dataset.episode import EpisodeContainer
 from positronic.dataset.transforms import (
     Elementwise,
     EpisodeTransform,
+    KeyFuncEpisodeTransform,
     TransformedEpisode,
 )
 
@@ -63,6 +64,31 @@ def test_transform_episode_keys_and_getitem_pass_through(sig_simple):
     # Missing key raises
     with pytest.raises(KeyError):
         _ = te['missing']
+
+
+def test_key_func_episode_transform(sig_simple):
+    ep = EpisodeContainer(signals={'s': sig_simple}, static={'id': 3})
+    tf = KeyFuncEpisodeTransform(
+        double=lambda episode: Elementwise(
+            episode['s'],
+            lambda seq: np.asarray(seq) * 2,
+        ),
+        label=lambda episode: f'id={episode["id"]}',
+    )
+
+    assert list(tf.keys) == ['double', 'label']
+
+    doubled = tf.transform('double', ep)
+    assert [val for val, _ in doubled] == [2 * val for val, _ in ep['s']]
+    assert tf.transform('label', ep) == 'id=3'
+
+    with pytest.raises(KeyError):
+        tf.transform('missing', ep)
+
+    wrapped = TransformedEpisode(ep, tf, pass_through=False)
+    assert list(wrapped.keys) == ['double', 'label']
+    assert [val for val, _ in wrapped['double']] == [2 * val for val, _ in ep['s']]
+    assert wrapped['label'] == 'id=3'
 
 
 def test_transform_episode_pass_through_selected_keys(sig_simple):

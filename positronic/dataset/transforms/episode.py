@@ -1,5 +1,5 @@
 from abc import ABC, abstractmethod
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from typing import Any
 
 from ..episode import Episode
@@ -19,6 +19,22 @@ class EpisodeTransform(ABC):
     def transform(self, name: str, episode: Episode) -> Signal[Any] | Any:
         """For given output key, return the transformed signal or static value."""
         ...
+
+
+class KeyFuncEpisodeTransform(EpisodeTransform):
+    """Transform an episode using a dictionary of key-function pairs."""
+
+    def __init__(self, **transforms: Callable[[Episode], Any]):
+        self._transforms = transforms
+
+    @property
+    def keys(self) -> Sequence[str]:
+        return list(self._transforms.keys())
+
+    def transform(self, name: str, episode: Episode) -> Signal[Any] | Any:
+        if name not in self._transforms:
+            raise KeyError(f'Unknown key: {name}, expected one of {self._transforms.keys()}')
+        return self._transforms[name](episode)
 
 
 class TransformedEpisode(Episode):

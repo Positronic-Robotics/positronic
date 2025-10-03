@@ -25,15 +25,9 @@ def _relative_rot_vec(q_current: np.ndarray, q_target: np.ndarray, representatio
     return _convert_quat_to_array(rel, representation)
 
 
-class ActionDecoder(transforms.EpisodeTransform):
-    @property
-    def keys(self) -> list[str]:
-        return ['action']
-
-    def transform(self, name: str, episode: Episode) -> Signal[Any] | Any:
-        if name != 'action':
-            raise ValueError(f'Unknown action key: {name}')
-        return self.encode_episode(episode)
+class ActionDecoder(transforms.KeyFuncEpisodeTransform):
+    def __init__(self):
+        super().__init__(action=self.encode_episode)
 
     @abstractmethod
     def encode_episode(self, episode: Episode) -> Signal[Any]:

@@ -15,7 +15,6 @@ from positronic.dataset import Dataset, Episode, transforms
 from positronic.dataset.ds_player_agent import DsPlayerAgent, DsPlayerCommand, DsPlayerStartCommand
 from positronic.dataset.ds_writer_agent import DsWriterAgent, DsWriterCommand, Serializers, TimeMode
 from positronic.dataset.local_dataset import LocalDatasetWriter
-from positronic.dataset.transforms import EpisodeTransform
 from positronic.drivers import roboarm
 from positronic.gui.dpg import DearpyguiUi
 from positronic.simulator.mujoco.sim import MujocoCamera, MujocoFranka, MujocoGripper, MujocoSim
@@ -45,12 +44,11 @@ class ReplayController(pimm.ControlSystem):
                 yield pimm.Sleep(1)
 
 
-class RestoreCommand(EpisodeTransform):
-    @property
-    def keys(self) -> Sequence[str]:
-        return ['robot_commands']
+class RestoreCommand(transforms.KeyFuncEpisodeTransform):
+    def __init__(self):
+        super().__init__(robot_commands=self.transform)
 
-    def transform(self, name: str, episode: Episode) -> Any:
+    def transform(self, episode: Episode) -> Any:
         pose = episode['robot_commands.pose']
         return transforms.Elementwise(pose, RestoreCommand.command_from_pose, names=['robot_commands'])
 
