@@ -30,14 +30,21 @@ class TransformedEpisode(Episode):
 
     If ``pass_through`` is True, any keys from the underlying episode that are
     not provided by the transforms are appended after the transformed keys.
+    Alternatively, a list of key names can be provided to selectively pass
+    through only the listed keys from the original episode.
     """
 
-    def __init__(self, episode: Episode, *transforms: EpisodeTransform, pass_through: bool = False) -> None:
+    def __init__(self, episode: Episode, *transforms: EpisodeTransform, pass_through: bool | list[str] = False):
         if not transforms:
             raise ValueError('TransformedEpisode requires at least one transform')
         self._episode = episode
-        self._transforms: tuple[EpisodeTransform, ...] = tuple(transforms)
-        self._pass_through = pass_through
+        self._transforms = tuple(transforms)
+        if isinstance(pass_through, bool):
+            self._pass_through_all = pass_through
+            self._pass_through_keys = set()
+        else:
+            self._pass_through_all = False
+            self._pass_through_keys = set(pass_through)
 
     @property
     def keys(self) -> Sequence[str]:
@@ -50,11 +57,10 @@ class TransformedEpisode(Episode):
                 if k not in seen:
                     ordered.append(k)
                     seen.add(k)
-        if self._pass_through:
-            for k in self._episode.keys:
-                if k not in seen:
-                    ordered.append(k)
-                    seen.add(k)
+        for k in self._episode.keys:
+            if k not in seen and (self._pass_through_all or k in self._pass_through_keys):
+                ordered.append(k)
+                seen.add(k)
         return ordered
 
     def __getitem__(self, name: str) -> Signal[Any] | Any:
@@ -62,7 +68,7 @@ class TransformedEpisode(Episode):
         for tf in self._transforms:
             if name in tf.keys:
                 return tf.transform(name, self._episode)
-        if self._pass_through:
+        if self._pass_through_all or (self._pass_through_keys and name in self._pass_through_keys):
             return self._episode[name]
         raise KeyError(name)
 

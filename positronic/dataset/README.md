@@ -415,7 +415,7 @@ class EpisodeTransform(ABC):
         ...
 ```
 
-`TransformedEpisode` applies one or more `EpisodeTransform`s to an existing episode (all in lazy model). When `pass_through=True`, all original keys are preserved, unless they are overwritten by transforms. `TransformedDataset` lifts the same idea to the dataset level so that every retrieved episode exposes the transformed view.
+`TransformedEpisode` applies one or more `EpisodeTransform`s to an existing episode (all in lazy model). When `pass_through=True`, all original keys are preserved, unless they are overwritten by transforms. You can also provide a list of key names to `pass_through` so that only the listed originals remain visible. `TransformedDataset` lifts the same idea to the dataset level so that every retrieved episode exposes the transformed view.
 
 ### Example
 
@@ -439,7 +439,7 @@ class Features(transforms.EpisodeTransform):
           return image.resize(width=224, height=224, signal=episode["rgb_camera"])
 
 
-dataset = transforms.TransformedDataset(raw_dataset, Features(), pass_through=True)
+dataset = transforms.TransformedDataset(raw_dataset, Features(), pass_through=['robot.ee_pose'])
 episode = dataset[0]
 # resized view; original imagery untouched
 frame0, _ts = episode['resized_image'].time[episode.start_ts]

@@ -1,4 +1,5 @@
 import numpy as np
+import pytest
 
 from positronic.dataset.dataset import Dataset
 from positronic.dataset.episode import Episode, EpisodeContainer
@@ -74,6 +75,26 @@ def test_transformed_dataset_wraps_episode_with_transforms():
     meta = transformed.signals_meta
     assert set(meta.keys()) == {'a', 's'}
     assert meta['s'].names == wrapped['s'].names
+
+
+def test_transformed_dataset_pass_through_selected_keys():
+    sig_simple = DummySignal([1000, 2000], [10, 20])
+    episode = EpisodeContainer(
+        signals={'s': sig_simple},
+        static={'id': 42, 'note': 'keep', 'skip': 'drop'},
+    )
+    dataset = _DummyDataset([episode], signals_meta={'s': sig_simple.meta})
+    tf = _DummyTransform()
+
+    transformed = TransformedDataset(dataset, tf, pass_through=['note'])
+
+    wrapped = transformed[0]
+    assert list(wrapped.keys) == ['a', 's', 'note']
+    assert wrapped['note'] == 'keep'
+    with pytest.raises(KeyError):
+        _ = wrapped['id']
+    with pytest.raises(KeyError):
+        _ = wrapped['skip']
 
 
 def test_transformed_dataset_signals_meta_cached():

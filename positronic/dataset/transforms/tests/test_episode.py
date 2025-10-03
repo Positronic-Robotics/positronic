@@ -65,6 +65,23 @@ def test_transform_episode_keys_and_getitem_pass_through(sig_simple):
         _ = te['missing']
 
 
+def test_transform_episode_pass_through_selected_keys(sig_simple):
+    ep = EpisodeContainer(
+        signals={'s': sig_simple},
+        static={'id': 7, 'note': 'ok', 'skip': 'nope'},
+    )
+    tf = _DummyTransform()
+    te = TransformedEpisode(ep, tf, pass_through=['note'])
+
+    assert list(te.keys) == ['a', 's', 'note']
+    assert [v for v, _ in te['a']] == [x * 10 for x, _ in ep['s']]
+    assert te['note'] == 'ok'
+    with pytest.raises(KeyError):
+        _ = te['id']
+    with pytest.raises(KeyError):
+        _ = te['skip']
+
+
 def test_transform_episode_no_pass_through(sig_simple):
     ep = EpisodeContainer(signals={'s': sig_simple}, static={'id': 7})
     tf = _DummyTransform()
