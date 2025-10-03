@@ -31,7 +31,7 @@ class ObservationEncoder(transforms.KeyFuncEpisodeTransform):
 
     def encode_image(self, name: str, episode: Episode) -> Signal[Any]:
         input_key, (width, height) = self._image_configs[name]
-        return episode[input_key].resize_with_pad(width, height)
+        return image.resize_with_pad(width, height, signal=episode[input_key])
 
     def encode(self, images: dict[str, Any], inputs: dict[str, Any]) -> dict[str, Any]:
         """Encode a single inference observation from raw images and input dict.
