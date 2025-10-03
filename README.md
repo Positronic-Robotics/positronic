@@ -56,8 +56,11 @@ Clone the repository and set up a local `uv` environment (recommended) or use Do
 
 ### Option 1: Local via uv (recommended)
 
-Prerequisites: Python 3.11 and [uv](https://docs.astral.sh/uv/) and `libturbojpeg`
-(`sudo apt install libturbojpeg` on Linux or `brew install jpeg-turbo` on Mac)
+Prerequisites: Python 3.11, [uv](https://docs.astral.sh/uv/), `libturbojpeg`, and FFmpeg
+```
+sudo apt install libturbojpeg ffmpeg   # Linux
+brew install jpeg-turbo ffmpeg         # macOS
+```
 
 ```bash
 git clone git@github.com:Positronic-Robotics/positronic.git
@@ -131,7 +134,7 @@ Both sim and real robots can be controlled by position tracking devices, such as
 
 Here's how to do it with your phone:
 
-1. Launch data collection with `--webxr=.iphone` or `--webxr=android` (frontend defined in [WebXR config](positronic/cfg/webxr.py)).
+1. Launch data collection with `--webxr=.iphone` or `--webxr=.android` (frontend defined in [WebXR config](positronic/cfg/webxr.py)).
 2. On iPhone, you need to use any WebXR-capable browser, such as **XR Browser**. On Android, the your default Chrome should support WebXR out of the box.
 3. On iPhone visit `http://<host-ip>:5005` (note **http**), on Android you will need to use `https://<host-ip>:5005`. WebXR module will print its address in the console.
 4. Tap **Enter AR**, grant camera/gyroscope access, and hold the phone upright; the reticle represents the virtual controller. If you don't see **Enter AR**, it means that either your browser does not support WebXR or you should try with/without https (`--webxr.use_https=True`).
@@ -241,7 +244,7 @@ Run the [LeRobot training driver](positronic/training/lerobot_train.py) with Pos
 Train an ACT policy using LeRobot’s pipeline configured for Positronic observations and actions:
 
 ```bash
-uv run --with-editable . -s positronic/training/lerobot_train.py \
+python -m positronic.training.lerobot_train \
     --dataset_root=~/datasets/lerobot/stack_cubes \
     --base_config=positronic/training/train_config.json
 ```

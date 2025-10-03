@@ -1,25 +1,6 @@
-# /// script
-# requires-python = ">=3.11"
-# dependencies = [
-#     "lerobot>=0.3.3",
-#     "torch",
-#     "configuronic",
-# ]
-# ///
 """
-PEP 723 standalone script
--------------------------
-
-This script is intentionally decoupled from the core library’s dependencies so
-that `lerobot` does not become a hard requirement of `positronic`.
-
-How to run (recommended):
-- Use uv to run the script in an isolated env that also installs the local
-  project and its dependencies, while adding only the script-specific deps
-  (like `lerobot`) as declared above.
-
-Examples:
-`uv run -s positronic/training/lerobot_train.py --dataset_root=/tmp/datasets/`
+Example:
+`python -m positronic.training.lerobot_train --dataset_root=~/datasets/lerobot/stack_cubes`
 """
 
 from dataclasses import dataclass, field
@@ -65,7 +46,7 @@ def train(dataset_root: str, base_config: str = 'positronic/training/train_confi
     assert Path(base_config).is_file(), f'Base config file {base_config} does not exist.'
     cfg = TrainPipelineConfig.from_pretrained(base_config)
     cfg.env = PositronicEnvConfig()
-    cfg.dataset.root = dataset_root
+    cfg.dataset.root = Path(dataset_root).expanduser().absolute()
     cfg.dataset.repo_id = 'local'
     cfg.eval_freq = 0
     cfg.policy.push_to_hub = False
