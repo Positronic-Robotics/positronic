@@ -74,7 +74,7 @@ Install hardware extras only when you need physical robot drivers (Linux only):
 uv sync --frozen --extra hardware
 ```
 
-All runtime commands in the sections below assume either an activated virtual environment or `uv run --with-editable . -s …`.
+All runtime commands in the sections below assume either an activated virtual environment or `uv run python -m …`.
 
 ### Option 2: Docker
 
@@ -217,7 +217,7 @@ Use the [LeRobot conversion helper](positronic/training/to_lerobot.py) until nat
 Until training scripts consume Positronic datasets directly, convert curated runs into LeRobot format:
 
 ```bash
-uv run --with-editable . -s positronic/training/to_lerobot.py convert \
+python -m positronic.training.to_lerobot convert \
     --dataset.path=~/datasets/stack_cubes_raw \
     --output_dir=~/datasets/lerobot/stack_cubes \
     --task="pick up the green cube and place it on the red cube" \
@@ -227,7 +227,7 @@ uv run --with-editable . -s positronic/training/to_lerobot.py convert \
 The converter reads your data through `positronic.cfg.dataset.transformed` (see [Dataset config module](positronic/cfg/dataset.py)), applies the same observation/action transforms used at inference time, and writes a `LeRobotDataset`. Re-run the command whenever you tweak transforms or add new episodes. To extend an existing LeRobot dataset:
 
 ```bash
-uv run --with-editable . -s positronic/training/to_lerobot.py append \
+python -m positronic.training.to_lerobot append \
     --dataset_dir=~/datasets/lerobot/stack_cubes \
     --dataset.path=~/datasets/stack_cubes_new
 ```

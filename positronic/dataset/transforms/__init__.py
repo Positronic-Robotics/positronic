@@ -12,6 +12,7 @@ from .signals import (
     concat,
     pairwise,
     recode_rotation,
+    view,
 )
 
 __all__ = [
@@ -25,6 +26,7 @@ __all__ = [
     'astype',
     'pairwise',
     'recode_rotation',
+    'view',
     # Episode transforms
     'EpisodeTransform',
     'TransformedEpisode',

@@ -44,15 +44,16 @@ def test_absolute_position_action_encode_decode_quat():
     t = [np.array([0.1, -0.2, 0.3], dtype=np.float32) for _ in ts]
     g = [0.5, 0.6]
 
+    pose = [np.concatenate([t[i], q[i].as_quat]).astype(np.float32) for i in range(len(ts))]
+
     ep = EpisodeContainer(
         signals={
-            'target_robot_position_quaternion': DummySignal(ts, q),
-            'target_robot_position_translation': DummySignal(ts, t),
+            'robot_commands.pose': DummySignal(ts, pose),
             'target_grip': DummySignal(ts, g),
         }
     )
 
-    act = AbsolutePositionAction(Rotation.Representation.QUAT)
+    act = AbsolutePositionAction('robot_commands.pose', 'target_grip', Rotation.Representation.QUAT)
     sig = act.encode_episode(ep)
     vec = list(sig)[0][0]
     assert vec.shape == (8,)  # 4 quat + 3 trans + 1 grip
@@ -61,7 +62,7 @@ def test_absolute_position_action_encode_decode_quat():
     out = act.decode(vec, inputs={})
     assert isinstance(out['target_robot_position'], Transform3D)
     np.testing.assert_allclose(out['target_robot_position'].translation, t[0], atol=1e-6)
-    np.testing.assert_allclose(out['target_robot_position'].rotation.as_quat, q[0], atol=1e-6)
+    np.testing.assert_allclose(out['target_robot_position'].rotation.as_quat, q[0].as_quat, atol=1e-6)
     assert np.isclose(out['target_grip'], g[0])
 
 
@@ -74,12 +75,13 @@ def test_relative_target_position_action_encode_decode_quat():
     t_tgt = [np.array([0.1, 0.2, 0.3], dtype=np.float32)]
     g_tgt = [0.7]
 
+    cur_pose = [np.concatenate([t_cur[0], q_cur[0].as_quat]).astype(np.float32)]
+    tgt_pose = [np.concatenate([t_tgt[0], q_tgt[0].as_quat]).astype(np.float32)]
+
     ep = EpisodeContainer(
         signals={
-            'robot_position_quaternion': DummySignal(ts, q_cur),
-            'target_robot_position_quaternion': DummySignal(ts, q_tgt),
-            'robot_position_translation': DummySignal(ts, t_cur),
-            'target_robot_position_translation': DummySignal(ts, t_tgt),
+            'robot_state.ee_pose': DummySignal(ts, cur_pose),
+            'robot_commands.pose': DummySignal(ts, tgt_pose),
             'target_grip': DummySignal(ts, g_tgt),
         }
     )
@@ -87,7 +89,7 @@ def test_relative_target_position_action_encode_decode_quat():
     act = RelativeTargetPositionAction(Rotation.Representation.QUAT)
     vec = list(act.encode_episode(ep))[0][0]
     # First 4 should match target quaternion since current is identity
-    np.testing.assert_allclose(vec[:4], q_tgt[0], atol=1e-6)
+    np.testing.assert_allclose(vec[:4], q_tgt[0].as_quat, atol=1e-6)
     assert vec.dtype == np.float32
     # Current implementation encodes translation as (current - target)
     np.testing.assert_allclose(vec[4:7], t_cur[0] - t_tgt[0], atol=1e-6)

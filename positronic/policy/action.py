@@ -43,38 +43,22 @@ class ActionDecoder(transforms.EpisodeTransform):
     def decode(self, action_vector: np.ndarray, inputs: dict[str, np.ndarray]) -> dict[str, Any]:
         pass
 
-    @abstractmethod
-    def get_features(self) -> dict[str, dict]:
-        pass
-
 
 class RotationTranslationGripAction(ActionDecoder, abc.ABC):
     def __init__(self, rotation_representation: RotRep | str = RotRep.QUAT):
         self.rot_rep = RotRep(rotation_representation)
         # self.rotation_shape = self.rot_rep.shape
 
-    def get_features(self):
-        return {
-            'action': {
-                'dtype': 'float32',
-                'shape': (self.rot_rep.size + 4,),
-                'names': [
-                    *[f'rotation_{i}' for i in range(self.rot_rep.size)],
-                    'translation_x',
-                    'translation_y',
-                    'translation_z',
-                    'grip',
-                ],
-            }
-        }
-
 
 class AbsolutePositionAction(RotationTranslationGripAction):
-    def __init__(self, rotation_representation: RotRep | str = RotRep.QUAT):
+    def __init__(self, tgt_ee_pose_key: str, tgt_grip_key: str, rotation_representation: RotRep | str = RotRep.QUAT):
         super().__init__(rotation_representation)
+        self.tgt_ee_pose_key = tgt_ee_pose_key
+        self.tgt_grip_key = tgt_grip_key
 
     def encode_episode(self, episode: Episode) -> Signal[np.ndarray]:
-        rotations = transforms.recode_rotation(RotRep.QUAT, self.rot_rep, episode['target_robot_position_quaternion'])
+        pose = episode[self.tgt_ee_pose_key]
+        rotations = transforms.recode_rotation(RotRep.QUAT, self.rot_rep, pose, slice=slice(3, None))
         names = [
             'rotation_0',
             'rotation_1',
@@ -87,8 +71,8 @@ class AbsolutePositionAction(RotationTranslationGripAction):
         ]
         return transforms.concat(
             rotations,
-            episode['target_robot_position_translation'],
-            episode['target_grip'],
+            transforms.view(pose, slice(0, 3)),
+            episode[self.tgt_grip_key],
             dtype=np.float32,
             names=names,
         )
@@ -104,26 +88,36 @@ class AbsolutePositionAction(RotationTranslationGripAction):
 
 
 class RelativeTargetPositionAction(RotationTranslationGripAction):
-    def __init__(self, rotation_representation: RotRep | str = RotRep.QUAT):
+    def __init__(
+        self,
+        rotation_representation: RotRep | str = RotRep.QUAT,
+        robot_pose_key: str = 'robot_state.ee_pose',
+        target_pose_key: str = 'robot_commands.pose',
+        target_grip_key: str = 'target_grip',
+    ):
         super().__init__(rotation_representation)
+        self.robot_pose_key = robot_pose_key
+        self.target_pose_key = target_pose_key
+        self.target_grip_key = target_grip_key
 
     def encode_episode(self, episode: Episode) -> Signal[np.ndarray]:
+        robot_pose = episode[self.robot_pose_key]
+        target_pose = episode[self.target_pose_key]
+
         # Rotation difference: q_cur.inv * q_target, recoded
+        robot_quat = transforms.view(robot_pose, slice(3, None))
+        target_quat = transforms.view(target_pose, slice(3, None))
         rotations = transforms.pairwise(
-            episode['robot_position_quaternion'],
-            episode['target_robot_position_quaternion'],
-            partial(_relative_rot_vec, representation=self.rot_rep),
+            robot_quat, target_quat, partial(_relative_rot_vec, representation=self.rot_rep)
         )
 
         # Translation difference: target - current
-        translations = transforms.pairwise(
-            episode['robot_position_translation'],
-            episode['target_robot_position_translation'],
-            np.subtract,
-        )
+        robot_trans = transforms.view(robot_pose, slice(0, 3))
+        target_trans = transforms.view(target_pose, slice(0, 3))
+        translations = transforms.pairwise(robot_trans, target_trans, np.subtract)
 
         # Grip: target_grip
-        grips = episode['target_grip']
+        grips = episode[self.target_grip_key]
 
         return transforms.concat(rotations, translations, grips, dtype=np.float32)
 
@@ -145,7 +139,13 @@ class RelativeTargetPositionAction(RotationTranslationGripAction):
 
 
 class RelativeRobotPositionAction(RotationTranslationGripAction):
-    def __init__(self, offset_ns: int, rotation_representation: RotRep | str = RotRep.QUAT):
+    def __init__(
+        self,
+        offset_ns: int,
+        rotation_representation: RotRep | str = RotRep.QUAT,
+        pose_key: str = 'robot_state.ee_pose',
+        grip_key: str = 'grip',
+    ):
         """
         Action that represents the relative position between the current robot position and the robot position
         after `offset_ns` nanoseconds.
@@ -160,22 +160,27 @@ class RelativeRobotPositionAction(RotationTranslationGripAction):
         super().__init__(rotation_representation)
 
         self.offset_ns = offset_ns
+        self.pose_key = pose_key
+        self.grip_key = grip_key
 
     def encode_episode(self, episode: Episode) -> Signal[np.ndarray]:
-        # Future quaternions and translations at t + offset_ns
-        q_future = transforms.TimeOffsets(episode['robot_position_quaternion'], self.offset_ns)
-        t_future = transforms.TimeOffsets(episode['robot_position_translation'], self.offset_ns)
+        pose = episode[self.pose_key]
+        pose_future = transforms.TimeOffsets(pose, self.offset_ns)
 
-        # Rotation: q_cur.inv * q_future
+        current_quat = transforms.view(pose, slice(3, None))
+        future_quat = transforms.view(pose_future, slice(3, None))
         rotations = transforms.pairwise(
-            episode['robot_position_quaternion'], q_future, partial(_relative_rot_vec, representation=self.rot_rep)
+            current_quat,
+            future_quat,
+            partial(_relative_rot_vec, representation=self.rot_rep),
         )
 
-        # Translation: t_future - t_current
-        translations = transforms.pairwise(episode['robot_position_translation'], t_future, np.subtract)
+        current_trans = transforms.view(pose, slice(0, 3))
+        future_trans = transforms.view(pose_future, slice(0, 3))
+        translations = transforms.pairwise(current_trans, future_trans, np.subtract)
 
         # Grip at future time
-        grips_future = transforms.TimeOffsets(episode['grip'], self.offset_ns)
+        grips_future = transforms.TimeOffsets(episode[self.grip_key], self.offset_ns)
 
         return transforms.concat(rotations, translations, grips_future, dtype=np.float32)
 

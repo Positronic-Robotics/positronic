@@ -462,7 +462,8 @@ class DiskEpisode(Episode):
             return self._ensure_signal(name)
         if name in self._static_data:
             return self._static_data[name]
-        raise KeyError(name)
+        available = list(self._signal_factories.keys()) + list(self._static_data.keys())
+        raise KeyError(f"'{name}' not found in episode. Available keys: {', '.join(available)}")
 
     @property
     def meta(self) -> dict:

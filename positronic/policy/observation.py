@@ -38,21 +38,6 @@ class ObservationEncoder(transforms.EpisodeTransform):
         else:
             raise ValueError(f'Unknown observation key: {name}')
 
-    def get_features(self):
-        features = {}
-        for key, (_, (width, height)) in self._image_configs.items():
-            features['observation.images.' + key] = {
-                'dtype': 'video',
-                'shape': (height, width, 3),
-                'names': ['height', 'width', 'channel'],
-            }
-        features['observation.state'] = {
-            'dtype': 'float64',
-            'shape': (8,),  # TODO: Invent the way to compute it dynamically
-            'names': list(self._state_features),
-        }
-        return features
-
     def encode(self, images: dict[str, Any], inputs: dict[str, Any]) -> dict[str, Any]:
         """Encode a single inference observation from raw images and input dict.
 

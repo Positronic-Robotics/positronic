@@ -395,6 +395,7 @@ Common utilities stack the building blocks to cover frequent needs:
 - `astype(signal, dtype)`: cast vector signals on the fly via `Elementwise`.
 - `pairwise(a, b, op)`: join two signals and apply a custom binary operator to every aligned pair.
 - `recode_rotation(rep_from, rep_to, signal)`: convert rotation representations using `positronic.geom` utilities.
+- `view(signal, slice_obj)`: create a zero-copy view that slices each frame (e.g., select quaternion components from a pose vector) while preserving timestamps.
 
 Typical use cases include building model-ready tensors, normalizing values, resizing video streams, or deriving velocities. Because every helper is a view, you can stack them freely and continue to use standard access patterns (`signal.time[...]`, indexing, slicing) without materializing intermediate results.
 
