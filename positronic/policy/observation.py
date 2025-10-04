@@ -20,7 +20,7 @@ class ObservationEncoder(transforms.KeyFuncEpisodeTransform):
                            The output key will be 'observation.images.{name}'.
         """
         image_fns = {f'observation.images.{k}': partial(self.encode_image, k) for k in image_configs.keys()}
-        super().__init__(observation_state=self.encode_state, **image_fns)
+        super().__init__(**{'observation.state': self.encode_state}, **image_fns)
         self._state_features = state_features
         self._image_configs = image_configs
 
