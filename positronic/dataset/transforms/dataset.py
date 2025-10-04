@@ -7,10 +7,12 @@ from .episode import EpisodeTransform, TransformedEpisode
 class TransformedDataset(Dataset):
     """Transform a dataset into a new view of the dataset."""
 
-    def __init__(self, dataset: Dataset, *transforms: EpisodeTransform, pass_through: bool = False) -> None:
+    def __init__(self, dataset: Dataset, *transforms: EpisodeTransform, pass_through: bool | list[str] = False):
         self._dataset = dataset
         self._transforms = transforms
         self._pass_through = pass_through
+        if not isinstance(pass_through, bool):
+            self._pass_through = tuple(pass_through)
         self._meta = None
 
     def __len__(self) -> int:

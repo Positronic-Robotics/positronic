@@ -53,7 +53,7 @@ Signal implements `Sequence[(T, int)]` (iterable, indexable). We support three k
 ```python
 T = TypeVar('T')  # The type of the data we manage
 
-IndicesLike = Sequence[int] | np.ndarray
+IndicesLike = slice | Sequence[int] | np.ndarray
 RealNumericArrayLike = Sequence[int] | Sequence[float] | np.ndarray
 
 class Signal[T]:
@@ -166,7 +166,7 @@ class Dataset:
         pass
 
     # Indexing returns an Episode; slices and index arrays return lists of Episodes
-    def __getitem__(self, index_or_slice: int | slice | Sequence[int] | np.ndarray) -> `Episode` | list[Episode]:
+    def __getitem__(self, index_or_slice: int | IndicesLike) -> `Episode` | list[Episode]:
         pass
 
     @property
@@ -395,6 +395,7 @@ Common utilities stack the building blocks to cover frequent needs:
 - `astype(signal, dtype)`: cast vector signals on the fly via `Elementwise`.
 - `pairwise(a, b, op)`: join two signals and apply a custom binary operator to every aligned pair.
 - `recode_rotation(rep_from, rep_to, signal)`: convert rotation representations using `positronic.geom` utilities.
+- `view(signal, slice_obj)`: create a zero-copy view that slices each frame (e.g., select quaternion components from a pose vector) while preserving timestamps.
 
 Typical use cases include building model-ready tensors, normalizing values, resizing video streams, or deriving velocities. Because every helper is a view, you can stack them freely and continue to use standard access patterns (`signal.time[...]`, indexing, slicing) without materializing intermediate results.
 
@@ -414,7 +415,7 @@ class EpisodeTransform(ABC):
         ...
 ```
 
-`TransformedEpisode` applies one or more `EpisodeTransform`s to an existing episode (all in lazy model). When `pass_through=True`, all original keys are preserved, unless they are overwritten by transforms. `TransformedDataset` lifts the same idea to the dataset level so that every retrieved episode exposes the transformed view.
+`TransformedEpisode` applies one or more `EpisodeTransform`s to an existing episode (all in lazy model). When `pass_through=True`, all original keys are preserved, unless they are overwritten by transforms. You can also provide a list of key names to `pass_through` so that only the listed originals remain visible. `TransformedDataset` lifts the same idea to the dataset level so that every retrieved episode exposes the transformed view.
 
 ### Example
 
@@ -438,7 +439,7 @@ class Features(transforms.EpisodeTransform):
           return image.resize(width=224, height=224, signal=episode["rgb_camera"])
 
 
-dataset = transforms.TransformedDataset(raw_dataset, Features(), pass_through=True)
+dataset = transforms.TransformedDataset(raw_dataset, Features(), pass_through=['robot.ee_pose'])
 episode = dataset[0]
 # resized view; original imagery untouched
 frame0, _ts = episode['resized_image'].time[episode.start_ts]

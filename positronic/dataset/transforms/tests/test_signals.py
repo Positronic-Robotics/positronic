@@ -1,6 +1,7 @@
 import numpy as np
 import pytest
 
+from positronic import geom
 from positronic.dataset.transforms import (
     Elementwise,
     IndexOffsets,
@@ -8,7 +9,10 @@ from positronic.dataset.transforms import (
     TimeOffsets,
     concat,
     pairwise,
+    recode_rotation,
+    view,
 )
+from positronic.geom import Rotation
 
 from ...tests.utils import DummySignal
 
@@ -25,6 +29,17 @@ def empty_signal():
     ts = []
     vals = []
     return DummySignal(ts, vals)
+
+
+@pytest.fixture
+def vector_signal():
+    ts = [1000, 2000, 3000]
+    vals = [
+        np.array([1.0, 2.0, 3.0, 4.0], dtype=np.float32),
+        np.array([4.0, 5.0, 6.0, 7.0], dtype=np.float32),
+        np.array([7.0, 8.0, 9.0, 10.0], dtype=np.float32),
+    ]
+    return DummySignal(ts, vals, names=['c0', 'c1', 'c2', 'c3'])
 
 
 def _times10(x):
@@ -61,6 +76,67 @@ def test_elementwise_names_with_source_names(sig_simple):
 def test_elementwise_names_override(sig_simple):
     ew = Elementwise(sig_simple, _times10, names=['manual'])
     assert ew.names == ['manual']
+
+
+def test_view_slice_returns_lazy_subset(vector_signal):
+    sliced = view(vector_signal, slice(1, 3))
+
+    # view forwards existing feature names unchanged
+    assert sliced.names == vector_signal.names
+
+    base_samples = list(vector_signal)
+    result_samples = list(sliced)
+
+    assert len(result_samples) == len(base_samples)
+    for (vals, ts), (base_vals, base_ts) in zip(result_samples, base_samples, strict=False):
+        np.testing.assert_array_equal(vals, base_vals[1:3])
+        assert ts == base_ts
+
+
+def test_recode_rotation_quat_to_rotvec_with_slice():
+    ts = [1000, 2000]
+    # Each record stores quaternion followed by an auxiliary logit.
+    values = [
+        np.array([1.0, 0.0, 0.0, 0.0, 0.1], dtype=np.float32),
+        np.array([0.0, 1.0, 0.0, 0.0, 0.2], dtype=np.float32),
+    ]
+    signal = DummySignal(ts, values, names=['qw', 'qx', 'qy', 'qz', 'aux'])
+
+    recoded = recode_rotation(
+        Rotation.Representation.QUAT,
+        Rotation.Representation.ROTVEC,
+        signal,
+        slice=slice(0, 4),
+        names=['rx', 'ry', 'rz'],
+    )
+
+    samples = list(recoded)
+    assert len(samples) == 2
+    assert recoded.names == ['rx', 'ry', 'rz']
+
+    expected_rotvecs = [
+        geom.Rotation.create_from([1.0, 0.0, 0.0, 0.0], Rotation.Representation.QUAT).to(
+            Rotation.Representation.ROTVEC
+        ),
+        geom.Rotation.create_from([0.0, 1.0, 0.0, 0.0], Rotation.Representation.QUAT).to(
+            Rotation.Representation.ROTVEC
+        ),
+    ]
+
+    for (vals, ts_out), expected, ts_in in zip(samples, expected_rotvecs, ts, strict=False):
+        np.testing.assert_allclose(vals, expected)
+        assert ts_out == ts_in
+
+    recoded_quat = recode_rotation(
+        Rotation.Representation.QUAT,
+        Rotation.Representation.QUAT,
+        signal,
+        slice=slice(0, 4),
+    )
+    quat_samples = list(recoded_quat)
+    assert len(quat_samples) == 2
+    np.testing.assert_allclose(quat_samples[0][0], np.array([1.0, 0.0, 0.0, 0.0], dtype=np.float32))
+    np.testing.assert_allclose(quat_samples[1][0], np.array([0.0, 1.0, 0.0, 0.0], dtype=np.float32))
 
 
 def test_join_relative_index_prev_next_equivalents(sig_simple):

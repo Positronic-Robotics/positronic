@@ -1,7 +1,7 @@
 """Dataset transformation utilities."""
 
 from .dataset import TransformedDataset
-from .episode import EpisodeTransform, TransformedEpisode
+from .episode import EpisodeTransform, KeyFuncEpisodeTransform, TransformedEpisode
 from .signals import (
     Elementwise,
     IndexOffsets,
@@ -12,6 +12,7 @@ from .signals import (
     concat,
     pairwise,
     recode_rotation,
+    view,
 )
 
 __all__ = [
@@ -25,8 +26,10 @@ __all__ = [
     'astype',
     'pairwise',
     'recode_rotation',
+    'view',
     # Episode transforms
     'EpisodeTransform',
+    'KeyFuncEpisodeTransform',
     'TransformedEpisode',
     # Dataset transforms
     'TransformedDataset',

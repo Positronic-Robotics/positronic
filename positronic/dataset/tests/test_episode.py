@@ -240,6 +240,15 @@ def test_episode_writer_abort_cleans_up_and_blocks_further_use(tmp_path):
             w.set_static('z', 2)
 
 
+def test_episode_writer_context_aborts_on_exception(tmp_path):
+    ep_dir = tmp_path / 'ep_context_abort'
+    with pytest.raises(RuntimeError, match='boom'):
+        with DiskEpisodeWriter(ep_dir) as w:
+            w.append('a', 1, 1000)
+            raise RuntimeError('boom')
+    assert not ep_dir.exists()
+
+
 def test_episode_writer_set_static_twice_raises(tmp_path):
     ep_dir = tmp_path / 'ep_static_dup'
     with DiskEpisodeWriter(ep_dir) as w:

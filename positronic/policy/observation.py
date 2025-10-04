@@ -1,4 +1,4 @@
-from collections.abc import Sequence
+from functools import partial
 from typing import Any
 
 import numpy as np
@@ -9,7 +9,7 @@ from positronic.dataset.episode import Episode
 from positronic.dataset.transforms import image
 
 
-class ObservationEncoder(transforms.EpisodeTransform):
+class ObservationEncoder(transforms.KeyFuncEpisodeTransform):
     def __init__(self, state_features: list[str], **image_configs):
         """
         Build an observation encoder.
@@ -19,39 +19,19 @@ class ObservationEncoder(transforms.EpisodeTransform):
             image_configs: mapping from output image name (suffix) to tuple (input_key, (width, height)).
                            The output key will be 'observation.images.{name}'.
         """
+        image_fns = {f'observation.images.{k}': partial(self.encode_image, k) for k in image_configs.keys()}
+        super().__init__(**{'observation.state': self.encode_state}, **image_fns)
         self._state_features = state_features
         self._image_configs = image_configs
 
-    @property
-    def keys(self) -> Sequence[str]:
-        return ['observation.state'] + [f'observation.images.{k}' for k in self._image_configs.keys()]
+    def encode_state(self, episode: Episode) -> Signal[Any]:
+        return transforms.concat(
+            *[episode[k] for k in self._state_features], dtype=np.float64, names=self._state_features
+        )
 
-    def transform(self, name: str, episode: Episode) -> Signal[Any] | Any:
-        if name == 'observation.state':
-            return transforms.concat(
-                *[episode[k] for k in self._state_features], dtype=np.float64, names=self._state_features
-            )
-        elif name.startswith('observation.images.'):
-            key = name[len('observation.images.') :]
-            input_key, (widht, height) = self._image_configs[key]
-            return image.resize_with_pad(widht, height, episode[input_key])
-        else:
-            raise ValueError(f'Unknown observation key: {name}')
-
-    def get_features(self):
-        features = {}
-        for key, (_, (width, height)) in self._image_configs.items():
-            features['observation.images.' + key] = {
-                'dtype': 'video',
-                'shape': (height, width, 3),
-                'names': ['height', 'width', 'channel'],
-            }
-        features['observation.state'] = {
-            'dtype': 'float64',
-            'shape': (8,),  # TODO: Invent the way to compute it dynamically
-            'names': list(self._state_features),
-        }
-        return features
+    def encode_image(self, name: str, episode: Episode) -> Signal[Any]:
+        input_key, (width, height) = self._image_configs[name]
+        return image.resize_with_pad(width, height, signal=episode[input_key])
 
     def encode(self, images: dict[str, Any], inputs: dict[str, Any]) -> dict[str, Any]:
         """Encode a single inference observation from raw images and input dict.

@@ -1,12 +1,11 @@
 import collections.abc
 from abc import ABC, abstractmethod
-from collections.abc import Sequence
 from contextlib import AbstractContextManager
 
 import numpy as np
 
 from .episode import Episode, EpisodeWriter
-from .signal import SignalMeta
+from .signal import IndicesLike, SignalMeta
 
 
 class DatasetWriter(AbstractContextManager, ABC):
@@ -35,7 +34,7 @@ class Dataset(ABC, collections.abc.Sequence[Episode]):
         """Return the episode at a single, already-normalized index."""
         pass
 
-    def __getitem__(self, index_or_slice: int | slice | Sequence[int] | np.ndarray) -> Episode | list[Episode]:
+    def __getitem__(self, index_or_slice: int | IndicesLike) -> Episode | list[Episode]:
         """Return an Episode or list of Episodes after normalizing integer-based indices."""
         length = len(self)
 

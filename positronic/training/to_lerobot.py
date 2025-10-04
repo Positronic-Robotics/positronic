@@ -1,39 +1,18 @@
-# /// script
-# requires-python = ">=3.11"
-# dependencies = [
-#     "lerobot>=0.3.3",
-#     "torch",
-#     "tqdm",
-#     "configuronic",
-#     "numpy",
-#     "scipy",
-# ]
-# ///
 """
-PEP 723 standalone script
--------------------------
-
-This script is intentionally decoupled from the core library’s dependencies so
-that `lerobot` does not become a hard requirement of `positronic`.
-
-How to run (recommended):
-- Use uv to run the script in an isolated env that also installs the local
-  project and its dependencies, while adding only the script-specific deps
-  (like `lerobot`) as declared above.
+This utility converts Positronic datasets into LeRobot format. Now that
+`lerobot` ships with the Positronic training dependencies, the easiest way to
+run the tool is from the project environment (virtualenv or `uv run`).
 
 Examples:
 - Convert to a new LeRobot dataset
-  uv run --with-editable . -s positronic/training/to_lerobot.py \
-    convert --input-dir /path/to/local_dataset --output-dir /path/to/lerobot_ds
+  python -m positronic.training.to_lerobot convert \
+    --dataset.path=/path/to/local_dataset \
+    --output_dir=/path/to/lerobot_ds
 
 - Append to an existing LeRobot dataset
-  uv run --with-editable . -s positronic/training/to_lerobot.py \
-    append --dataset-dir /path/to/lerobot_ds --input-dir /path/to/local_dataset
-
-Notes:
-- The `--with-editable .` flag ensures your local `positronic` package and its
-  dependencies are available inside the ephemeral uv environment without
-  making `lerobot` a core dependency of the project.
+  python -m positronic.training.to_lerobot append \
+    --dataset_dir=/path/to/lerobot_ds \
+    --dataset.path=/path/to/local_dataset
 """
 
 import resource  # This will fail on Windows, as this library is Unix only, but we don't support Windows anyway
@@ -158,7 +137,7 @@ def convert_to_lerobot_dataset(output_dir: str, fps: int, video: bool, dataset: 
     lr_dataset = LeRobotDataset.create(
         repo_id='local',
         fps=fps,
-        root=Path(output_dir),
+        root=Path(output_dir).expanduser().absolute(),
         use_videos=video,
         features=_extract_features(dataset),
         image_writer_threads=32,
@@ -172,7 +151,7 @@ def convert_to_lerobot_dataset(output_dir: str, fps: int, video: bool, dataset: 
     dataset=positronic.cfg.dataset.transformed, task='pick plate from the table and place it into the dishwasher'
 )
 def append_data_to_lerobot_dataset(lerobot_dataset_dir: str, dataset: Dataset, task: str):
-    lr_dataset = LeRobotDataset(repo_id='local', root=lerobot_dataset_dir)
+    lr_dataset = LeRobotDataset(repo_id='local', root=Path(lerobot_dataset_dir).expanduser().absolute())
     append_data_to_dataset(lr_dataset=lr_dataset, p_dataset=dataset, task=task)
     print(f'Dataset extended and saved to {lerobot_dataset_dir}')
 

@@ -11,6 +11,9 @@ from ..signal import IndicesLike, Kind, RealNumericArrayLike, Signal, SignalMeta
 T = TypeVar('T')
 U = TypeVar('U')
 
+RotRep = geom.Rotation.Representation
+NpSignal = Signal[np.ndarray]
+
 
 def _is_nonempty_name(name: str | None) -> bool:
     """Return True when the provided feature name is a non-empty string."""
@@ -533,7 +536,7 @@ def _concat_per_frame(dtype: np.dtype | None, x: Sequence[tuple]) -> np.ndarray:
     return out
 
 
-def concat(*signals, dtype: np.dtype | str | None = None, names: Sequence[str] | None = None) -> Signal[np.ndarray]:
+def concat(*signals, dtype: np.dtype | str | None = None, names: Sequence[str] | None = None) -> NpSignal:
     """Concatenate multiple 1D array signals into a single array signal.
 
     - Aligns signals on the union of timestamps with carry-back semantics.
@@ -565,9 +568,16 @@ def _astype_per_frame(dtype: np.dtype, x: np.ndarray) -> np.ndarray:
     return arr.astype(dtype, copy=False)
 
 
-def astype(signal: Signal[np.ndarray], dtype: np.dtype) -> Signal[np.ndarray]:
+def astype(signal: NpSignal, dtype: np.dtype) -> NpSignal:
     """Return a Signal view that casts batched values to a given dtype."""
     return Elementwise(signal, partial(_astype_per_frame, dtype), names=signal.names)
+
+
+def view(signal: NpSignal, slice: slice) -> NpSignal:
+    def fn(x: Sequence[np.ndarray]) -> Sequence[np.ndarray]:
+        return LazySequence(x, lambda v: v[slice])
+
+    return Elementwise(signal, fn, names=signal.names)
 
 
 class _PairwiseMap:
@@ -593,20 +603,30 @@ def pairwise(
 
 
 def recode_rotation(
-    rep_from: geom.Rotation.Representation, rep_to: geom.Rotation.Representation, signal: Signal[np.ndarray]
-) -> Signal[np.ndarray]:
+    rep_from: RotRep,
+    rep_to: RotRep,
+    signal: NpSignal,
+    slice: slice | None = None,
+    names: Sequence[str] | None = None,
+) -> NpSignal:
     """Return a Signal view with rotation vectors recoded to a different representation.
 
     Args:
         rep_from: Input rotation representation.
         rep_to: Output rotation representation.
         signal: Input Signal with frames shaped (dim,), where dim depends on rep_from.
+        slice: Optional slice to select a subset of the input frame before conversion.
+        names: Optional feature names for the output signal.
     """
-    if rep_from == rep_to:
+    if rep_from == rep_to and slice is None:
         return signal
 
-    def fn(x: Sequence[np.ndarray]) -> Sequence[np.ndarray]:
-        # TODO: Use batch conversion instead.
-        return LazySequence(x, lambda v: geom.Rotation.create_from(v, rep_from).to(rep_to).flatten())
+    def decode(x: np.ndarray) -> np.ndarray:
+        if slice is not None:
+            x = x[slice]
+        return geom.Rotation.create_from(x, rep_from).to(rep_to).flatten()
 
-    return Elementwise(signal, fn)
+    def fn(x: Sequence[np.ndarray]) -> Sequence[np.ndarray]:
+        return LazySequence(x, decode)
+
+    return Elementwise(signal, fn, names=names)

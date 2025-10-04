@@ -2,19 +2,18 @@ import configuronic as cfn
 
 from positronic import geom
 
-
-@cfn.config(rotation_representation=geom.Rotation.Representation.ROTVEC, offset=1)
-def relative_robot_position(rotation_representation: geom.Rotation.Representation, offset: int):
-    from positronic.policy.action import RelativeRobotPositionAction
-
-    return RelativeRobotPositionAction(offset=offset, rotation_representation=rotation_representation)
+RotRep = geom.Rotation.Representation
 
 
-@cfn.config(rotation_representation=geom.Rotation.Representation.QUAT)
-def absolute_position(rotation_representation: geom.Rotation.Representation):
+@cfn.config(rotation_representation=RotRep.QUAT, tgt_ee_pose_key='robot_commands.pose', tgt_grip_key='target_grip')
+def absolute_position(rotation_representation: RotRep, tgt_ee_pose_key: str, tgt_grip_key: str):
     from positronic.policy.action import AbsolutePositionAction
 
-    return AbsolutePositionAction(rotation_representation=rotation_representation)
+    return AbsolutePositionAction(
+        tgt_ee_pose_key,
+        tgt_grip_key,
+        rotation_representation=rotation_representation,
+    )
 
 
 @cfn.config()
