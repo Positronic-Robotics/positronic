@@ -46,9 +46,10 @@ class ReplayController(pimm.ControlSystem):
 
 class RestoreCommand(transforms.KeyFuncEpisodeTransform):
     def __init__(self):
-        super().__init__(robot_commands=self.transform)
+        super().__init__(robot_commands=self._commands_from_episode)
 
-    def transform(self, episode: Episode) -> Any:
+    @staticmethod
+    def _commands_from_episode(episode: Episode) -> Any:
         pose = episode['robot_commands.pose']
         return transforms.Elementwise(pose, RestoreCommand.command_from_pose, names=['robot_commands'])
 
