@@ -5,7 +5,7 @@ import sys
 import time
 from abc import ABC, abstractmethod
 from collections.abc import Callable, Sequence
-from contextlib import AbstractContextManager
+from contextlib import AbstractContextManager, suppress
 from functools import lru_cache, partial
 from importlib import metadata as importlib_metadata
 from pathlib import Path
@@ -310,6 +310,11 @@ class DiskEpisodeWriter(EpisodeWriter):
 
     def __exit__(self, exc_type, exc, tb) -> None:
         """Finalize all signal writers and persist static items on context exit."""
+        if exc_type is not None and not self._aborted:
+            with suppress(Exception):
+                self.abort()
+            return
+
         # Always try to close all signal writers
         for writer in self._writers.values():
             try:
