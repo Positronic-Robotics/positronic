@@ -260,7 +260,6 @@ Run the trained policy in MuJoCo, record diagnostics, and optionally stream a GU
 ```bash
 python -m positronic.run_inference sim_act \
     --policy.checkpoint_path=~/datasets/lerobot/stack_cubes/checkpoints/last/pretrained_model \
-    --device=mps \
     --simulation_time=60 \
     --output_dir=~/datasets/inference_logs/stack_cubes_act \
     --show_gui

@@ -130,24 +130,25 @@ class Inference(pimm.ControlSystem):
                 if not running:
                     continue
 
-                frame_messages = {k: v.value for k, v in self.frames.items()}
-                images = {f'image.{k}': v['image'] for k, v in frame_messages.items() if 'image' in v}
-                if len(images) != len(self.frames):
-                    continue
-
                 robot_state = self.robot_state.value
                 if robot_state.status == roboarm.RobotStatus.MOVING:
                     # TODO: seems to be necessary to wait previous command to finish
                     continue
 
                 inputs = {
-                    'robot_position_translation': robot_state.ee_pose.translation,
-                    'robot_position_quaternion': robot_state.ee_pose.rotation.as_quat,
-                    'robot_joints': robot_state.q,
+                    'robot_state.q': robot_state.q,
+                    'robot_state.dq': robot_state.dq,
+                    'robot_state.ee_pose': Serializers.transform_3d(robot_state.ee_pose),
                     'grip': self.gripper_state.value,
                 }
+                frame_messages = {k: v.value for k, v in self.frames.items()}
+                images = {f'image.{k}': v['image'] for k, v in frame_messages.items() if 'image' in v}
+                if len(images) != len(self.frames):
+                    continue
+                inputs.update(images)
+
                 obs = {}
-                for key, val in self.observation_encoder.encode(images, inputs).items():
+                for key, val in self.observation_encoder.encode(inputs).items():
                     if isinstance(val, np.ndarray):
                         obs[key] = torch.from_numpy(val).to(self.device)
                     else:
@@ -221,7 +222,7 @@ def main_sim(
     robot_arm = MujocoFranka(sim, suffix='_ph')
     gripper = MujocoGripper(sim, actuator_name='actuator8_ph', joint_name='finger_joint1_ph')
     cameras = {
-        name: MujocoCamera(sim.model, sim.data, orig_name, (640, 480), fps=camera_fps)
+        name: MujocoCamera(sim.model, sim.data, orig_name, (320, 240), fps=camera_fps)
         for name, orig_name in camera_dict.items()
     }
     inference = Inference(observation_encoder, action_decoder, device, policy, policy_fps, task)
@@ -322,6 +323,7 @@ main_sim_act = main_sim_cfg.override(
     camera_dict={
         'handcam_left': 'handcam_left_ph',
         'back_view': 'back_view_ph',
+        'agent_view': 'agentview',
     },
 )
 

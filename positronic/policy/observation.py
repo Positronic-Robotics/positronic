@@ -33,7 +33,7 @@ class ObservationEncoder(transforms.KeyFuncEpisodeTransform):
         input_key, (width, height) = self._image_configs[name]
         return image.resize_with_pad(width, height, signal=episode[input_key])
 
-    def encode(self, images: dict[str, Any], inputs: dict[str, Any]) -> dict[str, Any]:
+    def encode(self, inputs: dict[str, Any]) -> dict[str, Any]:
         """Encode a single inference observation from raw images and input dict.
 
         Returns numpy arrays:
@@ -45,9 +45,9 @@ class ObservationEncoder(transforms.KeyFuncEpisodeTransform):
 
         # Encode images
         for out_name, (input_key, (width, height)) in self._image_configs.items():
-            if input_key not in images:
+            if input_key not in inputs:
                 raise KeyError(f"Missing image input '{input_key}' for '{out_name}'")
-            frame = images[input_key]
+            frame = inputs[input_key]
             if not isinstance(frame, np.ndarray):
                 frame = np.asarray(frame)
             if frame.ndim != 3 or frame.shape[2] != 3:

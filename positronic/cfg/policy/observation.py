@@ -59,7 +59,7 @@ def pi0():
     from positronic.policy.observation import ObservationEncoder
 
     return ObservationEncoder(
-        state_features=['robot_position_quaternion', 'robot_position_translation', 'grip'],
+        state_features=['robot_state.ee_pose', 'grip'],
         image=('image.left', (224, 224)),
         side=('image.side', (224, 224)),
     )
