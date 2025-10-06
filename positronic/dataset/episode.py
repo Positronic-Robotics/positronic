@@ -106,6 +106,8 @@ class Episode(ABC):
 
     @property
     def duration_ns(self):
+        if not self.signals:
+            return 0
         return self.last_ts - self.start_ts
 
     @property

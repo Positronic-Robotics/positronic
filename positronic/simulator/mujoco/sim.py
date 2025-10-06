@@ -137,7 +137,6 @@ class MujocoCamera(pimm.ControlSystem):
         self.render_resolution = resolution
         self.camera_name = camera_name
         self.fps = fps
-        self.fps_counter = pimm.utils.RateCounter('MujocoCamera')
         self.frame: pimm.SignalEmitter = pimm.ControlSystemEmitter(self)
 
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock):
@@ -147,7 +146,6 @@ class MujocoCamera(pimm.ControlSystem):
             renderer.update_scene(self.data, camera=self.camera_name)
             frame = renderer.render()
             self.frame.emit({'image': frame}, ts=clock.now_ns())
-            self.fps_counter.tick()
             yield pimm.Sleep(1 / self.fps)
 
         renderer.close()
