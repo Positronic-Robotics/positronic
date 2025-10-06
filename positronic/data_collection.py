@@ -297,14 +297,14 @@ def main_sim(
     with writer_cm as dataset_writer, pimm.World(clock=sim) as world:
         ds_agent = _wire(world, cameras, dataset_writer, data_collection, webxr, robot_arm, gripper, sound)
 
-        bg_cs = [webxr, gui]
+        bg_cs = [webxr, gui, ds_agent]
         if sound is not None:
             bg_cs.append(sound)
 
         for camera_name, camera in cameras.items():
             world.connect(camera.frame, gui.cameras[camera_name])
 
-        sim_iter = world.start([sim, *cameras.values(), robot_arm, gripper, data_collection, ds_agent], bg_cs)
+        sim_iter = world.start([sim, *cameras.values(), robot_arm, gripper, data_collection], bg_cs)
         sim_iter = iter(sim_iter)
 
         start_time = pimm.world.SystemClock().now_ns()
