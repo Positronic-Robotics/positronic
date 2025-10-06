@@ -4,7 +4,7 @@ import pytest
 from positronic.dataset.episode import EpisodeContainer
 from positronic.dataset.tests.utils import DummySignal
 from positronic.geom import Rotation, Transform3D
-from positronic.policy.action import AbsolutePositionAction, RelativeRobotPositionAction, RelativeTargetPositionAction
+from positronic.policy.action import AbsolutePositionAction, RelativeTargetPositionAction
 from positronic.policy.observation import ObservationEncoder
 
 
@@ -14,7 +14,7 @@ def test_observation_encode_images_and_state_shapes():
     img = np.full((h, w, 3), 255, dtype=np.uint8)
 
     enc = ObservationEncoder(state_features=['a', 'b'], left=('left.image', (w, h)))
-    obs = enc.encode({'left.image': img}, inputs={'a': [1, 2], 'b': 3.0})
+    obs = enc.encode({'left.image': img, 'a': [1, 2], 'b': 3.0})
 
     assert 'observation.images.left' in obs and 'observation.state' in obs
     left = obs['observation.images.left']
@@ -31,10 +31,10 @@ def test_observation_encode_images_and_state_shapes():
 def test_observation_encode_missing_or_bad_images_raise():
     enc = ObservationEncoder(state_features=[], left=('left.image', (8, 6)))
     with pytest.raises(KeyError):  # Missing key
-        enc.encode({}, inputs={})
+        enc.encode({})
 
     with pytest.raises(ValueError):  # Wrong shape
-        enc.encode({'left.image': np.zeros((8, 8), dtype=np.uint8)}, inputs={})
+        enc.encode({'left.image': np.zeros((8, 8), dtype=np.uint8)})
 
 
 def test_absolute_position_action_encode_decode_quat():
@@ -97,27 +97,8 @@ def test_relative_target_position_action_encode_decode_quat():
 
     out = act.decode(
         vec,
-        inputs={
-            'robot_position_quaternion': q_cur[0],
-            'robot_position_translation': t_cur[0],
-        },
+        inputs={'robot_state.ee_pose': np.concatenate([t_cur[0], q_cur[0].as_quat])},
     )
     assert isinstance(out['target_robot_position'], Transform3D)
     # Decode applies diff to current translation
     np.testing.assert_allclose(out['target_robot_position'].translation, t_cur[0] + vec[4:7], atol=1e-6)
-
-
-def test_relative_robot_position_action_decode_with_reference():
-    act = RelativeRobotPositionAction(offset_ns=1, rotation_representation=Rotation.Representation.QUAT)
-
-    # Zero rotation diff, small translation diff
-    vec = np.array([1, 0, 0, 0, 0.05, -0.02, 0.01, 0.3], dtype=np.float32)
-    out = act.decode(
-        vec,
-        inputs={
-            'reference_robot_position_quaternion': Rotation.identity,
-            'reference_robot_position_translation': np.array([0.0, 0.0, 0.0], dtype=np.float32),
-        },
-    )
-    np.testing.assert_allclose(out['target_robot_position'].translation, [0.05, -0.02, 0.01], atol=1e-6)
-    assert np.isclose(out['target_grip'], 0.3)

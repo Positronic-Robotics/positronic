@@ -14,16 +14,17 @@ from positronic.tests.testing_coutils import ManualDriver, drive_scheduler
 
 class StubStateEncoder:
     def __init__(self) -> None:
-        self.last_images: dict[str, dict] | None = None
         self.last_inputs: dict[str, object] | None = None
 
-    def encode(self, images: dict[str, dict], inputs: dict[str, object]) -> dict[str, object]:
-        self.last_images = images
+    def encode(self, inputs: dict[str, object]) -> dict[str, object]:
         self.last_inputs = inputs
+        pose = inputs['robot_state.ee_pose']
+        translation = pose[:3]
+        quaternion = pose[3:7]
         return {
             'vision': np.array([[1.0, 2.0]], dtype=np.float32),
-            'robot_translation': np.asarray(inputs['robot_position_translation']),
-            'robot_quaternion': np.asarray(inputs['robot_position_quaternion']),
+            'robot_translation': translation,
+            'robot_quaternion': quaternion,
             'grip_value': inputs['grip'],
         }
 
@@ -65,6 +66,7 @@ class FakeRobotState:
     def __init__(self, translation: np.ndarray, joints: np.ndarray, status: roboarm.RobotStatus) -> None:
         self.ee_pose = geom.Transform3D(translation=translation, rotation=geom.Rotation.identity)
         self.q = joints
+        self.dq = np.zeros_like(joints)
         self.status = status
 
 
@@ -129,19 +131,19 @@ def test_inference_emits_cartesian_move(world, clock):
     assert obs['grip_value'].item() == pytest.approx(0.25)
     assert obs['task'] == 'stack-blocks'
 
-    assert encoder.last_images is not None
     assert encoder.last_inputs is not None
-    images = encoder.last_images
     inputs = encoder.last_inputs
-    assert 'image.cam' in images
-    assert np.array_equal(inputs['robot_position_translation'], robot_state.ee_pose.translation)
-    assert np.array_equal(inputs['robot_joints'], robot_state.q)
+    assert 'image.cam' in inputs
+    expected_pose = np.concatenate([robot_state.ee_pose.translation, robot_state.ee_pose.rotation.as_quat])
+    np.testing.assert_allclose(inputs['robot_state.ee_pose'], expected_pose)
+    np.testing.assert_allclose(inputs['robot_state.q'], robot_state.q)
+    np.testing.assert_allclose(inputs['robot_state.dq'], np.zeros_like(robot_state.q))
 
     assert decoder.last_action is not None
     assert decoder.last_inputs is not None
     np.testing.assert_allclose(decoder.last_action, np.array([0.1, 0.2, 0.3, 0.4], dtype=np.float32))
-    assert np.array_equal(decoder.last_inputs['robot_position_translation'], robot_state.ee_pose.translation)
-    assert np.array_equal(decoder.last_inputs['robot_joints'], robot_state.q)
+    np.testing.assert_allclose(decoder.last_inputs['robot_state.ee_pose'], expected_pose)
+    np.testing.assert_allclose(decoder.last_inputs['robot_state.q'], robot_state.q)
 
     command_msg = command_rx.read()
     assert command_msg is not None

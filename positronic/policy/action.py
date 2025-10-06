@@ -120,73 +120,12 @@ class RelativeTargetPositionAction(RotationTranslationGripAction):
         q_diff = geom.Rotation.create_from(rotation, self.rot_rep)
         tr_diff = action_vector[self.rot_rep.size : self.rot_rep.size + 3]
 
-        rot_mul = geom.Rotation.from_quat(inputs['robot_position_quaternion']) * q_diff
+        robot_pose = inputs['robot_state.ee_pose']
+
+        rot_mul = geom.Rotation.from_quat(robot_pose[3:7]) * q_diff
         rot_mul = geom.Rotation.from_quat(geom.normalise_quat(rot_mul.as_quat))
 
-        tr_add = inputs['robot_position_translation'] + tr_diff
-
-        outputs = {
-            'target_robot_position': geom.Transform3D(translation=tr_add, rotation=rot_mul),
-            'target_grip': action_vector[self.rot_rep.size + 3],
-        }
-        return outputs
-
-
-class RelativeRobotPositionAction(RotationTranslationGripAction):
-    def __init__(
-        self,
-        offset_ns: int,
-        rotation_representation: RotRep | str = RotRep.QUAT,
-        pose_key: str = 'robot_state.ee_pose',
-        grip_key: str = 'grip',
-    ):
-        """
-        Action that represents the relative position between the current robot position and the robot position
-        after `offset_ns` nanoseconds.
-
-        Target_position_i = Pose_i ^ -1 * Pose_{i+offset_ns}
-        Target_grip_i = Grip_{i+offset_ns}
-
-        Args:
-            offset_ns: (int) Time delta to look ahead, in nanoseconds.
-            rotation_representation: (Rotation.Representation | str) The representation of the rotation.
-        """
-        super().__init__(rotation_representation)
-
-        self.offset_ns = offset_ns
-        self.pose_key = pose_key
-        self.grip_key = grip_key
-
-    def encode_episode(self, episode: Episode) -> Signal[np.ndarray]:
-        pose = episode[self.pose_key]
-        pose_future = transforms.TimeOffsets(pose, self.offset_ns)
-
-        current_quat = transforms.view(pose, slice(3, None))
-        future_quat = transforms.view(pose_future, slice(3, None))
-        rotations = transforms.pairwise(
-            current_quat,
-            future_quat,
-            partial(_relative_rot_vec, representation=self.rot_rep),
-        )
-
-        current_trans = transforms.view(pose, slice(0, 3))
-        future_trans = transforms.view(pose_future, slice(0, 3))
-        translations = transforms.pairwise(current_trans, future_trans, np.subtract)
-
-        # Grip at future time
-        grips_future = transforms.TimeOffsets(episode[self.grip_key], self.offset_ns)
-
-        return transforms.concat(rotations, translations, grips_future, dtype=np.float32)
-
-    def decode(self, action_vector: np.ndarray, inputs: dict[str, np.ndarray]) -> dict[str, Any]:
-        rotation = action_vector[: self.rot_rep.size].reshape(self.rot_rep.shape)
-        q_diff = geom.Rotation.create_from(rotation, self.rot_rep)
-        tr_diff = action_vector[self.rot_rep.size : self.rot_rep.size + 3]
-
-        rot_mul = geom.Rotation.from_quat(inputs['reference_robot_position_quaternion']) * q_diff
-        rot_mul = geom.Rotation.from_quat(geom.normalise_quat(rot_mul.as_quat))
-
-        tr_add = inputs['reference_robot_position_translation'] + tr_diff
+        tr_add = robot_pose[0:3] + tr_diff
 
         outputs = {
             'target_robot_position': geom.Transform3D(translation=tr_add, rotation=rot_mul),
