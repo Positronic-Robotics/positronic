@@ -19,11 +19,13 @@ class RobotStatus(Enum):
     - AVAILABLE: The robot is available to accept new commands.
     - RESETTING: The robot is resetting.
     - MOVING: The robot is moving to a new position, but is not yet at the new position.
+    - ERROR: The robot is in an error state.
     """
 
     AVAILABLE = 0
     RESETTING = 1
     MOVING = 2
+    ERROR = 3
 
 
 class State(ABC):

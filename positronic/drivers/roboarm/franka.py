@@ -49,15 +49,15 @@ class FrankaState(State, pimm.shared_memory.NumpySMAdapter):
     def _finish_reset(self):
         self.array[14 + 7] = RobotStatus.AVAILABLE.value
 
-    def encode(self, q, dq, ee_pose: geom.Transform3D):
-        self.array[:7] = q
-        self.array[7:14] = dq
-        self.array[14:17] = ee_pose.translation
-        self.array[17:21] = ee_pose.rotation.as_quat
-        self.array[21] = RobotStatus.AVAILABLE.value
+    def encode(self, state: pf.State):
+        self.array[:7] = state.q
+        self.array[7:14] = state.dq
+        self.array[14:21] = state.end_effector_pose
+        self.array[21] = RobotStatus.AVAILABLE.value if state.error == 0 else RobotStatus.ERROR.value
 
 
 class Robot(pimm.ControlSystem):
+
     def __init__(self, ip: str, relative_dynamics_factor=0.2, home_joints: list[float] | None = None) -> None:
         """
         :param ip: IP address of the robot.
@@ -102,9 +102,9 @@ class Robot(pimm.ControlSystem):
         self.state.emit(robot_state)
 
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Sleep]:
-        robot = pf.Robot(
-            self._ip, realtime_config=pf.RealtimeConfig.Ignore, relative_dynamics_factor=self._relative_dynamics_factor
-        )
+        robot = pf.Robot(self._ip,
+                         realtime_config=pf.RealtimeConfig.Ignore,
+                         relative_dynamics_factor=self._relative_dynamics_factor)
         Robot._init_robot(robot)
         robot.recover_from_errors()
 
@@ -130,19 +130,10 @@ class Robot(pimm.ControlSystem):
                         raise NotImplementedError(f'Unsupported command {cmd}')
 
             st = robot.state()
-            q = np.asarray(st.q, dtype=np.float32).reshape(-1)
-            dq = np.asarray(st.dq, dtype=np.float32).reshape(-1)
-            ee = geom.Transform3D(
-                translation=np.asarray(st.end_effector_pose[:3], dtype=np.float32),
-                rotation=geom.Rotation.from_quat([
-                    float(st.end_effector_pose[3]),
-                    float(st.end_effector_pose[4]),
-                    float(st.end_effector_pose[5]),
-                    float(st.end_effector_pose[6]),
-                ]),
-            )
-            robot_state.encode(q, dq, ee)
+            robot_state.encode(st)
             self.state.emit(robot_state)
+            if st.error != 0:
+                robot.recover_from_errors()
 
             yield pimm.Sleep(rate_limiter.wait_time())
 
