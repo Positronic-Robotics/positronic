@@ -127,6 +127,7 @@ quote-style = "single"
 indent-style = "space"
 docstring-code-format = true
 preview = true
+skip-magic-trailing-comma = true
 
 [tool.setuptools.packages.find]
 where = ["."]

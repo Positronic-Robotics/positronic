@@ -62,8 +62,7 @@ class _Tracker:
         self.on = True
         print('Starting tracking')
         self._offset = geom.Transform3D(
-            -self._teleop_t.translation + robot_pos.translation,
-            self._teleop_t.rotation.inv * robot_pos.rotation,
+            -self._teleop_t.translation + robot_pos.translation, self._teleop_t.rotation.inv * robot_pos.rotation
         )
 
     def turn_off(self):
@@ -171,6 +170,7 @@ def _wire(
     robot_arm: pimm.ControlSystem | None,
     gripper: pimm.ControlSystem | None,
     sound: pimm.ControlSystem | None,
+    time_mode: ds_writer_agent.TimeMode = ds_writer_agent.TimeMode.CLOCK,
 ):
     cameras = cameras or {}
     camera_mappings = {name: (f'image.{name}' if name != 'image' else 'image') for name in cameras.keys()}
@@ -196,7 +196,7 @@ def _wire(
         signals_spec['controller_positions'] = controller_positions_serializer
         signals_spec['robot_state'] = Serializers.robot_state
         signals_spec['grip'] = None
-        ds_agent = DsWriterAgent(dataset_writer, signals_spec)
+        ds_agent = DsWriterAgent(dataset_writer, signals_spec, time_mode=time_mode)
         # Controls for the data set agent
         world.connect(data_collection.ds_agent_commands, ds_agent.command)
 
@@ -295,7 +295,8 @@ def main_sim(
 
     writer_cm = LocalDatasetWriter(Path(output_dir)) if output_dir is not None else nullcontext(None)
     with writer_cm as dataset_writer, pimm.World(clock=sim) as world:
-        ds_agent = _wire(world, cameras, dataset_writer, data_collection, webxr, robot_arm, gripper, sound)
+        ds_agent = _wire(world, cameras, dataset_writer, data_collection, webxr, robot_arm, gripper, sound,
+                         time_mode=ds_writer_agent.TimeMode.MESSAGE)  # fmt: skip
 
         bg_cs = [webxr, gui, ds_agent]
         if sound is not None:
@@ -361,9 +362,4 @@ droid = cfn.Config(
 )
 
 if __name__ == '__main__':
-    cfn.cli({
-        'real': main_cfg,
-        'so101': so101cfg,
-        'sim': main_sim,
-        'droid': droid,
-    })
+    cfn.cli({'real': main_cfg, 'so101': so101cfg, 'sim': main_sim, 'droid': droid})
