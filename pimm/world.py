@@ -612,9 +612,7 @@ class World:
             emitter = ControlSystemEmitter(connector.owner)
             self.connect(emitter, connector, receiver_wrapper=wrapper)
             return emitter
-        raise ValueError(
-            f'Unsupported connector type: {type(connector)}. Expected ControlSystemEmitter or ControlSystemReceiver.'
-        )
+        raise ValueError(f'Unsupported connector type: {type(connector)}.')
 
     def start(
         self,
@@ -639,31 +637,32 @@ class World:
         local_cs = set(main_process)
         all_cs = local_cs | set(background)
 
+        system_clock = SystemClock()
         local_connections, mp_connections = [], []
         for emitter, receiver, emitter_wrapper, receiver_wrapper in self._connections:
             if emitter.owner in local_cs and receiver.owner in local_cs:
-                local_connections.append((emitter_wrapper(emitter), receiver_wrapper(receiver), receiver.maxsize))
+                local_connections.append((emitter, emitter_wrapper, receiver_wrapper(receiver), receiver.maxsize, None))
             elif emitter.owner not in all_cs:
                 raise ValueError(f'Emitter {emitter.owner} is not in any control system')
             elif receiver.owner not in all_cs:
                 raise ValueError(f'Receiver {receiver.owner} is not in any control system')
             else:
-                mp_connections.append((emitter_wrapper(emitter), receiver_wrapper(receiver), receiver.maxsize))
+                clock = system_clock if emitter.owner in local_cs else None
+                mp_connections.append((emitter, emitter_wrapper, receiver_wrapper(receiver), receiver.maxsize, clock))
 
-        for emitter, receiver, maxsize in local_connections:
+        for emitter, emitter_wrapper, receiver, maxsize, _clock in local_connections:
             kwargs = {'maxsize': maxsize} if maxsize is not None else {}
             em, re = self.local_pipe(**kwargs)
-            emitter._bind(em)
+            emitter._bind(emitter_wrapper(em))
             receiver._bind(re)
 
-        system_clock = SystemClock()
-        for emitter, receiver, maxsize in mp_connections:
+        for emitter, emitter_wrapper, receiver, maxsize, clock in mp_connections:
             # When emitter lives in a different process, we use system clock to timestamp messages, otherwise we will
             # have to serialise our local clock to the other process, which is not what we want.
-            clock = None if emitter.owner in local_cs else system_clock
             kwargs = {'maxsize': maxsize} if maxsize is not None else {}
             em, re = self.mp_pipe(clock=clock, **kwargs)
-            emitter._bind(em)
+
+            emitter._bind(emitter_wrapper(em))
             receiver._bind(re)
 
         self.start_in_subprocess(*[cs.run for cs in background])

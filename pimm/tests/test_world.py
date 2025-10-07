@@ -17,7 +17,7 @@ from pimm.core import (
 )
 from pimm.shared_memory import SMCompliant
 from pimm.tests.testing import MockClock
-from pimm.world import EventReceiver, QueueEmitter, QueueReceiver, SystemClock, World
+from pimm.world import EventReceiver, LocalQueueEmitter, QueueEmitter, QueueReceiver, SystemClock, World
 
 
 def dummy_process(stop_reader, clock):
@@ -393,29 +393,45 @@ class TestWorldControlSystems:
                 world.connect(producer.emitter, consumer.receiver)
 
     def test_mirror_from_emitter_creates_receiver_and_applies_wrapper(self):
-        clock = MockClock(0.0)
+        clock = MockClock(123.456)
         system = DummyControlSystem('loop')
-        wrapper = Mock(side_effect=lambda emitter: emitter)
+        captured: dict[str, SignalEmitter] = {}
+
+        class RecordingEmitter(SignalEmitter[str]):
+            def __init__(self, downstream: SignalEmitter[str]):
+                self.downstream = downstream
+                self.payloads: list[tuple[str, int]] = []
+
+            def emit(self, data: str, ts: int = -1) -> bool:
+                self.payloads.append((data, ts))
+                return self.downstream.emit(f'wrapped-{data}', ts)
+
+        def wrapper(emitter: SignalEmitter[str]) -> SignalEmitter[str]:
+            captured['transport'] = emitter
+            recording = RecordingEmitter(emitter)
+            captured['wrapper'] = recording
+            return recording
 
         with World(clock) as world:
             mirrored = world.pair(system.emitter, wrapper=wrapper)
 
             assert isinstance(mirrored, ControlSystemReceiver)
-            wrapper.assert_not_called()
 
-            scheduler = world.start(system)
-            wrapper.assert_called_once_with(system.emitter)
-
-            system.emitter.emit('payload')
+            world.start(system)
+            sent_ts = 987_654_321
+            system.emitter.emit('payload', ts=sent_ts)
             message = mirrored.read()
             assert message is not None
-            assert message.data == 'payload'
-            assert message.ts == 0
+            assert message.data == 'wrapped-payload'
+            assert message.ts == sent_ts
 
-            scheduler.close()
+            assert isinstance(captured['transport'], LocalQueueEmitter)
+            assert captured['transport'] is not system.emitter
+            assert isinstance(captured['wrapper'], RecordingEmitter)
+            assert captured['wrapper'].payloads == [('payload', sent_ts)]
 
     def test_mirror_from_receiver_creates_emitter_and_applies_wrapper(self):
-        clock = MockClock(0.0)
+        clock = MockClock(321.987)
         system = DummyControlSystem('loop')
         wrapper = Mock(side_effect=lambda receiver: receiver)
 
@@ -425,16 +441,15 @@ class TestWorldControlSystems:
             assert isinstance(mirrored, ControlSystemEmitter)
             wrapper.assert_not_called()
 
-            scheduler = world.start(system)
+            world.start(system)
             wrapper.assert_called_once_with(system.receiver)
 
-            mirrored.emit('payload')
+            sent_ts = 123_456_789
+            mirrored.emit('payload', ts=sent_ts)
             message = system.receiver.read()
             assert message is not None
             assert message.data == 'payload'
-            assert message.ts == 0
-
-            scheduler.close()
+            assert message.ts == sent_ts
 
     def test_mirror_rejects_unknown_connector(self):
         with World() as world:
@@ -499,9 +514,50 @@ class TestWorldControlSystems:
             assert result is not None
             assert result.data == 'payload'
 
-            assert captured_clocks and isinstance(captured_clocks[0], SystemClock)
+            assert captured_clocks == [None]
             assert started_background == [(background_cs.run,)]
             assert background_cs.invocations == []
+
+            sleeps = list(scheduler)
+            assert [cmd.seconds for cmd in sleeps] == [0.0]
+            assert len(main_cs.invocations) == 1
+            stop_reader, used_clock = main_cs.invocations[0]
+            assert isinstance(stop_reader, EventReceiver)
+            assert used_clock is clock
+
+    def test_start_cross_process_local_emitter_uses_system_clock(self, monkeypatch):
+        clock = MockClock(1.0)
+        main_cs = DummyControlSystem('main')
+        background_cs = DummyControlSystem('background')
+
+        captured_clocks = []
+
+        def fake_mp_pipe(self, maxsize=1, clock=None):
+            captured_clocks.append(clock)
+            return self.local_pipe(maxsize)
+
+        monkeypatch.setattr(World, 'mp_pipe', fake_mp_pipe)
+
+        started_background = []
+
+        def fake_start_in_subprocess(self, *loops):
+            started_background.append(loops)
+
+        monkeypatch.setattr(World, 'start_in_subprocess', fake_start_in_subprocess)
+
+        with World(clock) as world:
+            world.connect(main_cs.emitter, background_cs.receiver)
+
+            scheduler = world.start(main_process=main_cs, background=background_cs)
+
+            main_cs.emitter.emit('payload', ts=11_000)
+            result = background_cs.receiver.read()
+            assert result is not None
+            assert result.data == 'payload'
+            assert result.ts == 11_000
+
+            assert captured_clocks and isinstance(captured_clocks[0], SystemClock)
+            assert started_background == [(background_cs.run,)]
 
             sleeps = list(scheduler)
             assert [cmd.seconds for cmd in sleeps] == [0.0]
@@ -526,8 +582,6 @@ class TestWorldControlSystems:
 
             assert started_background == [(background_cs.run,)]
             assert list(scheduler) == []
-
-            scheduler.close()
 
     def test_start_requires_known_emitter_owner(self):
         known = DummyControlSystem('known')
