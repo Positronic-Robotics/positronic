@@ -193,7 +193,8 @@ def _wire(
 
     if sound is not None:
         world.connect(data_collection.sound_emitter, sound.wav_path)
-        world.connect(robot_arm.state, sound.level, emitter_wrapper=pimm.map(_wrench_to_level))
+        if robot_arm is not None:
+            world.connect(robot_arm.state, sound.level, emitter_wrapper=pimm.map(_wrench_to_level))
 
     ds_agent = None
     if dataset_writer is not None:
@@ -296,9 +297,7 @@ def main_sim(
         ds_agent = _wire(world, cameras, dataset_writer, data_collection, webxr, robot_arm, gripper, sound,
                          time_mode=ds_writer_agent.TimeMode.MESSAGE)  # fmt: skip
 
-        bg_cs = [webxr, gui, ds_agent]
-        if sound is not None:
-            bg_cs.append(sound)
+        bg_cs = [webxr, gui, ds_agent, sound]
 
         for camera_name, camera in cameras.items():
             world.connect(camera.frame, gui.cameras[camera_name])

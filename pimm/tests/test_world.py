@@ -514,7 +514,7 @@ class TestWorldControlSystems:
             assert result is not None
             assert result.data == 'payload'
 
-            assert captured_clocks == [None]
+            assert captured_clocks and isinstance(captured_clocks[0], SystemClock)
             assert started_background == [(background_cs.run,)]
             assert background_cs.invocations == []
 
@@ -525,7 +525,7 @@ class TestWorldControlSystems:
             assert isinstance(stop_reader, EventReceiver)
             assert used_clock is clock
 
-    def test_start_cross_process_local_emitter_uses_system_clock(self, monkeypatch):
+    def test_start_cross_process_local_emitter_uses_world_clock(self, monkeypatch):
         clock = MockClock(1.0)
         main_cs = DummyControlSystem('main')
         background_cs = DummyControlSystem('background')
@@ -556,7 +556,7 @@ class TestWorldControlSystems:
             assert result.data == 'payload'
             assert result.ts == 11_000
 
-            assert captured_clocks and isinstance(captured_clocks[0], SystemClock)
+            assert captured_clocks == [None]
             assert started_background == [(background_cs.run,)]
 
             sleeps = list(scheduler)
