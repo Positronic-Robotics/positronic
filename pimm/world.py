@@ -655,7 +655,7 @@ class World:
             elif receiver.owner not in all_cs:
                 raise ValueError(f'Receiver {receiver.owner} is not in any control system')
             else:
-                clock = system_clock if emitter.owner in local_cs else None
+                clock = None if emitter.owner in local_cs else system_clock
                 mp_connections.append((emitter, emitter_wrapper, receiver_wrapper(receiver), receiver.maxsize, clock))
 
         for emitter, emitter_wrapper, receiver, maxsize, _clock in local_connections:
