@@ -21,43 +21,57 @@ from . import RobotStatus, State, command
 
 
 class FrankaState(State, pimm.shared_memory.NumpySMAdapter):
+    Q_OFFSET = 0
+    DQ_OFFSET = Q_OFFSET + 7
+    EE_POSE_OFFSET = DQ_OFFSET + 7
+    EE_WRENCH_OFFSET = EE_POSE_OFFSET + 7
+    STATUS_OFFSET = EE_WRENCH_OFFSET + 6
+    TOTAL = STATUS_OFFSET + 1
+
     def __init__(self):
-        super().__init__(shape=(7 + 7 + 7 + 1,), dtype=np.float32)
+        super().__init__(shape=(FrankaState.TOTAL,), dtype=np.float32)
 
     def instantiation_params(self) -> tuple[Any, ...]:
         return ()
 
     @property
     def q(self) -> np.ndarray:
-        return self.array[:7]
+        return self.array[FrankaState.Q_OFFSET : FrankaState.Q_OFFSET + 7].copy()
 
     @property
     def dq(self) -> np.ndarray:
-        return self.array[7:14]
+        return self.array[FrankaState.DQ_OFFSET : FrankaState.DQ_OFFSET + 7].copy()
 
     @property
     def ee_pose(self) -> geom.Transform3D:
-        return geom.Transform3D(self.array[14 : 14 + 3], self.array[14 + 3 : 14 + 7])
+        ee_pose = self.array[FrankaState.EE_POSE_OFFSET : FrankaState.EE_POSE_OFFSET + 7].copy()
+        return geom.Transform3D(ee_pose[:3], ee_pose[3:7])
+
+    @property
+    def ee_wrench(self) -> np.ndarray | None:
+        return self.array[FrankaState.EE_WRENCH_OFFSET : FrankaState.EE_WRENCH_OFFSET + 6].copy()
 
     @property
     def status(self) -> RobotStatus:
-        return RobotStatus(int(self.array[14 + 7]))
+        return RobotStatus(int(self.array[FrankaState.STATUS_OFFSET]))
 
     def _start_reset(self):
-        self.array[14 + 7] = RobotStatus.RESETTING.value
+        self.array[FrankaState.STATUS_OFFSET] = RobotStatus.RESETTING.value
 
     def _finish_reset(self):
-        self.array[14 + 7] = RobotStatus.AVAILABLE.value
+        self.array[FrankaState.STATUS_OFFSET] = RobotStatus.AVAILABLE.value
 
     def encode(self, state: pf.State):
-        self.array[:7] = state.q
-        self.array[7:14] = state.dq
-        self.array[14:21] = state.end_effector_pose
-        self.array[21] = RobotStatus.AVAILABLE.value if state.error == 0 else RobotStatus.ERROR.value
+        self.array[FrankaState.Q_OFFSET : FrankaState.Q_OFFSET + 7] = state.q.copy()
+        self.array[FrankaState.DQ_OFFSET : FrankaState.DQ_OFFSET + 7] = state.dq.copy()
+        self.array[FrankaState.EE_POSE_OFFSET : FrankaState.EE_POSE_OFFSET + 7] = state.end_effector_pose.copy()
+        self.array[FrankaState.EE_WRENCH_OFFSET : FrankaState.EE_WRENCH_OFFSET + 6] = state.ee_wrench.copy()
+        self.array[FrankaState.STATUS_OFFSET] = (
+            RobotStatus.AVAILABLE.value if state.error == 0 else RobotStatus.ERROR.value
+        )
 
 
 class Robot(pimm.ControlSystem):
-
     def __init__(self, ip: str, relative_dynamics_factor=0.2, home_joints: list[float] | None = None) -> None:
         """
         :param ip: IP address of the robot.
@@ -102,9 +116,9 @@ class Robot(pimm.ControlSystem):
         self.state.emit(robot_state)
 
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Sleep]:
-        robot = pf.Robot(self._ip,
-                         realtime_config=pf.RealtimeConfig.Ignore,
-                         relative_dynamics_factor=self._relative_dynamics_factor)
+        robot = pf.Robot(
+            self._ip, realtime_config=pf.RealtimeConfig.Ignore, relative_dynamics_factor=self._relative_dynamics_factor
+        )
         Robot._init_robot(robot)
         robot.recover_from_errors()
 

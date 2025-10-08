@@ -102,7 +102,7 @@ def main(
 
         ds_agent = None
         if dataset_writer is not None:
-            signals_spec = {v: Serializers.image() for v in cameras}
+            signals_spec = dict.fromkeys(cameras.values(), Serializers.camera_images)
             signals_spec['target_grip'] = None
             signals_spec['robot_commands'] = Serializers.robot_command
             signals_spec['robot_state'] = Serializers.robot_state

@@ -56,3 +56,8 @@ class State(ABC):
     def status(self) -> RobotStatus:
         """Robot status."""
         pass
+
+    @property
+    def ee_wrench(self) -> np.ndarray | None:
+        """Wrench of the robot's end-effector in its own coordinate frame."""
+        return None

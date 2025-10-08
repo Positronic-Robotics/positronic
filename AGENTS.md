@@ -2,6 +2,7 @@
 
 - Don't restore any code that you wrote and I deleted.
 - Don't make any commits or other git changes unless explicitly asked for it.
+- Don't try to hinder and hide errors or exceptions. If something fails, it is better to fail publicly, until I explicitly ask you to take care of extra errors.
 
 ## Local environment
 - Use `uv` tool to manage python environment

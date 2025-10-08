@@ -38,13 +38,32 @@ def map(signal: SignalReceiver[T], func: Callable[[T], T]) -> SignalReceiver[T]:
 def map(signal: SignalEmitter[T], func: Callable[[T], T]) -> SignalEmitter[T]: ...
 
 
-def map(signal: SignalReceiver[T] | SignalEmitter[T], func: Callable[[T], T]) -> SignalReceiver[T] | SignalEmitter[T]:
-    if isinstance(signal, SignalReceiver):
-        return MapSignalReceiver(signal, func)
-    elif isinstance(signal, SignalEmitter):
-        return MapSignalEmitter(signal, func)
-    else:
-        raise ValueError(f'Invalid signal type: {type(signal)}')
+def map(
+    func: Callable[[T], T],
+) -> Callable[[SignalReceiver[T] | SignalEmitter[T]], SignalReceiver[T] | SignalEmitter[T]]:
+    """
+    Returns a wrapper that applies the given function to all values passing through a SignalReceiver or SignalEmitter.
+
+    Args:
+        func: A callable that takes a value of type T and returns a value of type T.
+
+    Returns:
+        A function that takes a SignalReceiver or SignalEmitter and returns a new SignalReceiver or SignalEmitter
+        that applies the function to all values read or emitted.
+
+    Raises:
+        ValueError: If the provided signal is not a SignalReceiver or SignalEmitter.
+    """
+
+    def wrapper(signal: SignalReceiver[T] | SignalEmitter[T]) -> SignalReceiver[T] | SignalEmitter[T]:
+        if isinstance(signal, SignalReceiver):
+            return MapSignalReceiver(signal, func)
+        elif isinstance(signal, SignalEmitter):
+            return MapSignalEmitter(signal, func)
+        else:
+            raise ValueError(f'Invalid signal type: {type(signal)}')
+
+    return wrapper
 
 
 class ValueUpdated(SignalReceiver[tuple[T, bool]]):

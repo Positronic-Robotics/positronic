@@ -161,6 +161,12 @@ def controller_positions_serializer(controller_positions: dict[str, geom.Transfo
     return res
 
 
+def _wrench_to_level(state: roboarm.State) -> float | None:
+    if state.ee_wrench is None:
+        return None
+    return np.linalg.norm(state.ee_wrench)
+
+
 def _wire(
     world: pimm.World,
     cameras: dict[str, pimm.ControlSystem] | None,
@@ -187,10 +193,11 @@ def _wire(
 
     if sound is not None:
         world.connect(data_collection.sound_emitter, sound.wav_path)
+        world.connect(robot_arm.state, sound.level, emitter_wrapper=pimm.map(_wrench_to_level))
 
     ds_agent = None
     if dataset_writer is not None:
-        signals_spec = {v: Serializers.image() for v in camera_mappings.values()}
+        signals_spec = dict.fromkeys(camera_mappings.values(), Serializers.camera_images)
         signals_spec['target_grip'] = None
         signals_spec['robot_commands'] = Serializers.robot_command
         signals_spec['controller_positions'] = controller_positions_serializer
@@ -234,20 +241,11 @@ def main(
 
         bg_cs = [webxr]
         bg_cs.extend(cameras.values())
-        if ds_agent is not None:
-            bg_cs.append(ds_agent)
-        if robot_arm is not None:
-            bg_cs.append(robot_arm)
-        if gripper is not None:
-            bg_cs.append(gripper)
-        if sound is not None:
-            bg_cs.append(sound)
+        bg_cs.extend([ds_agent, robot_arm, gripper, sound])
 
         if stream_video_to_webxr is not None:
             world.connect(
-                cameras[stream_video_to_webxr].frame,
-                webxr.frame,
-                receiver_wrapper=lambda r: pimm.map(r, lambda x: x['image']),
+                cameras[stream_video_to_webxr].frame, webxr.frame, receiver_wrapper=pimm.map(lambda x: x['image'])
             )
 
         dc_steps = iter(world.start(data_collection, bg_cs))
@@ -355,10 +353,10 @@ droid = cfn.Config(
     webxr=positronic.cfg.webxr.oculus,
     sound=positronic.cfg.sound.sound,
     cameras={
-        'wrist': positronic.cfg.hardware.camera.zed_m.override(view='side_by_side', resolution='vga', fps=30),
-        'side': positronic.cfg.hardware.camera.zed_2i.override(view='left', resolution='vga', fps=30),
+        'wrist': positronic.cfg.hardware.camera.zed_m.override(view='left', resolution='hd720', fps=30),
+        'exterior': positronic.cfg.hardware.camera.zed_2i.override(view='left', resolution='hd720', fps=30),
     },
-    operator_position=OperatorPosition.FRONT,
+    operator_position=OperatorPosition.BACK,
 )
 
 if __name__ == '__main__':

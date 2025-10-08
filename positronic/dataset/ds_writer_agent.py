@@ -2,7 +2,6 @@ import collections.abc as cabc
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from enum import Enum, IntEnum
-from functools import partial
 from typing import Any
 
 import numpy as np
@@ -102,11 +101,7 @@ class Serializers:
     def robot_state(state: roboarm.State) -> dict[str, np.ndarray] | None:
         if state.status == roboarm.RobotStatus.RESETTING:
             return None
-        return {
-            '.q': state.q,
-            '.dq': state.dq,
-            '.ee_pose': Serializers.transform_3d(state.ee_pose),
-        }
+        return {'.q': state.q, '.dq': state.dq, '.ee_pose': Serializers.transform_3d(state.ee_pose)}
 
     @staticmethod
     @names({'.pose': 'target pose', '.joints': 'target joints'})
@@ -120,12 +115,10 @@ class Serializers:
                 return {'.reset': 1}
 
     @staticmethod
-    def image(key: str = 'image'):
-        return partial(_extract_key, key)
-
-
-def _extract_key(key: str, data: dict[str, Any]) -> Any:
-    return data[key]
+    def camera_images(data: dict[str, Any]) -> dict[str, Any] | Any:
+        if len(data) == 1 and 'image' in data:
+            return data['image']
+        return data
 
 
 def _extract_names(serializer: Callable[[Any], Any]) -> dict[str, list[str]] | None:
