@@ -210,3 +210,51 @@ class TestVideoInterface:
         assert np.array_equal(idx, np.array([-1, 0, 0]))
         # Accept scalar float via list-like
         assert sig._search_ts([1000.0])[0] == 0
+
+
+class TestVideoExtraTimelines:
+    def test_video_writer_with_extra_timelines(self, video_paths):
+        """Test that VideoSignalWriter stores extra timelines in frames index."""
+        with VideoSignalWriter(video_paths['video'], video_paths['frames']) as w:
+            w.append(create_frame(50), 1000, extra_ts={'producer': 900, 'consumer': 1100})
+            w.append(create_frame(100), 2000, extra_ts={'producer': 1900, 'consumer': 2100})
+            w.append(create_frame(150), 3000, extra_ts={'producer': 2900, 'consumer': 3100})
+
+        # Read the frames index directly
+        table = pq.read_table(video_paths['frames'])
+        assert {'ts_ns', 'ts_ns.consumer', 'ts_ns.producer'} == set(table.column_names)
+
+        # Verify the data
+        assert table['ts_ns'].to_pylist() == [1000, 2000, 3000]
+        assert table['ts_ns.producer'].to_pylist() == [900, 1900, 2900]
+        assert table['ts_ns.consumer'].to_pylist() == [1100, 2100, 3100]
+
+    def test_video_writer_empty_with_no_extra_timelines(self, video_paths):
+        """Test empty video writer doesn't create extra timeline columns."""
+        with VideoSignalWriter(video_paths['video'], video_paths['frames']):
+            pass
+
+        table = pq.read_table(video_paths['frames'])
+        assert {'ts_ns'} == set(table.column_names)
+        assert len(table) == 0
+
+    def test_video_inconsistent_extra_ts_keys_raises(self, video_paths):
+        """Test that inconsistent extra_ts keys across appends raises ValueError."""
+        with pytest.raises(ValueError, match='extra_ts keys must be consistent'):
+            with VideoSignalWriter(video_paths['video'], video_paths['frames']) as w:
+                w.append(create_frame(50), 1000, extra_ts={'producer': 900})
+                w.append(create_frame(100), 2000, extra_ts={'producer': 1900, 'consumer': 2100})
+
+    def test_video_missing_extra_ts_after_first_raises(self, video_paths):
+        """Test that omitting extra_ts after providing it first raises ValueError."""
+        with pytest.raises(ValueError, match='extra_ts keys must be consistent'):
+            with VideoSignalWriter(video_paths['video'], video_paths['frames']) as w:
+                w.append(create_frame(50), 1000, extra_ts={'producer': 900})
+                w.append(create_frame(100), 2000)
+
+    def test_video_adding_extra_ts_after_none_raises(self, video_paths):
+        """Test that adding extra_ts after first append without it raises ValueError."""
+        with pytest.raises(ValueError, match='extra_ts keys must be consistent'):
+            with VideoSignalWriter(video_paths['video'], video_paths['frames']) as w:
+                w.append(create_frame(50), 1000)
+                w.append(create_frame(100), 2000, extra_ts={'producer': 1900})

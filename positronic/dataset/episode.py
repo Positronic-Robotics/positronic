@@ -178,7 +178,7 @@ class EpisodeWriter(AbstractContextManager, ABC, Generic[T]):
     """Abstract interface for recording an episode's dynamic and static data."""
 
     @abstractmethod
-    def append(self, signal_name: str, data: T, ts_ns: int) -> None:
+    def append(self, signal_name: str, data: T, ts_ns: int, extra_ts: dict[str, int] | None = None) -> None:
         """Append a sample for the named signal."""
         pass
 
@@ -226,10 +226,7 @@ class DiskEpisodeWriter(EpisodeWriter):
         self._on_close = on_close
 
         # Write system metadata immediately
-        meta = {
-            'schema_version': EPISODE_SCHEMA_VERSION,
-            'created_ts_ns': time.time_ns(),
-        }
+        meta = {'schema_version': EPISODE_SCHEMA_VERSION, 'created_ts_ns': time.time_ns()}
         meta['writer'] = _cached_env_writer_info()
         meta['writer']['name'] = f'{self.__class__.__module__}.{self.__class__.__qualname__}'
         with (self._path / 'meta.json').open('w', encoding='utf-8') as f:
@@ -239,13 +236,14 @@ class DiskEpisodeWriter(EpisodeWriter):
     def path(self) -> Path:
         return self._path
 
-    def append(self, signal_name: str, data: T, ts_ns: int) -> None:
+    def append(self, signal_name: str, data: T, ts_ns: int, extra_ts: dict[str, int] | None = None) -> None:
         """Append data to a named signal.
 
         Args:
             signal_name: Name of the signal to append to
             data: Data to append
             ts_ns: Timestamp in nanoseconds
+            extra_ts: Optional dict of extra timeline names to timestamps
         """
         if self._finished:
             raise RuntimeError('Cannot append to a finished writer')
@@ -270,7 +268,7 @@ class DiskEpisodeWriter(EpisodeWriter):
                 self._writers[signal_name] = SimpleSignalWriter(self._path / f'{signal_name}.parquet', names=names)
                 self._signal_names[signal_name] = names
 
-        self._writers[signal_name].append(data, ts_ns)
+        self._writers[signal_name].append(data, ts_ns, extra_ts)
 
     def set_signal_meta(self, signal_name: str, *, names: Sequence[str] | None = None) -> None:
         if self._finished:
@@ -355,10 +353,7 @@ class DiskEpisodeWriter(EpisodeWriter):
 
 @lru_cache(maxsize=1)
 def _cached_env_writer_info() -> dict:
-    info = {
-        'python': sys.version.split(' ')[0],
-        'platform': platform.platform(),
-    }
+    info = {'python': sys.version.split(' ')[0], 'platform': platform.platform()}
     try:
         info['version'] = importlib_metadata.version('positronic')
     except Exception:

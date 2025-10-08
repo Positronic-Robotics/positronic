@@ -1,4 +1,5 @@
 import json
+from collections import defaultdict
 from collections.abc import Sequence
 from pathlib import Path
 from typing import Any, TypeVar
@@ -105,6 +106,7 @@ class SimpleSignalWriter(SignalWriter[T]):
         self._writer = None
         self._timestamps: list[int] = []
         self._values: list[object] = []
+        self._extra_timelines: dict[str, list[int]] = defaultdict(list)
         self._finished = False
         self._aborted = False
         self._last_ts = None
@@ -137,9 +139,16 @@ class SimpleSignalWriter(SignalWriter[T]):
         if len(self._timestamps) == 0:
             return
 
-        timestamps_array = pa.array(self._timestamps, type=pa.int64())
-        values_array = pa.array(self._values)
-        batch = pa.record_batch([timestamps_array, values_array], names=['timestamp', 'value'])
+        # Build arrays for primary timestamp and value
+        arrays = [pa.array(self._timestamps, type=pa.int64()), pa.array(self._values)]
+        column_names = ['timestamp', 'value']
+
+        # Add extra timeline columns
+        for timeline_name in sorted(self._extra_timelines.keys()):
+            arrays.append(pa.array(self._extra_timelines[timeline_name], type=pa.int64()))
+            column_names.append(f'ts_ns.{timeline_name}')
+
+        batch = pa.record_batch(arrays, names=column_names)
 
         if self._writer is None:
             schema = batch.schema
@@ -151,8 +160,11 @@ class SimpleSignalWriter(SignalWriter[T]):
         self._writer.write_batch(batch)
         self._timestamps = []
         self._values = []
+        # Clear the defaultdict lists but keep the keys
+        for timeline_name in self._extra_timelines:
+            self._extra_timelines[timeline_name].clear()
 
-    def append(self, data: T, ts_ns: int) -> None:  # noqa: C901  Function is too complex
+    def append(self, data: T, ts_ns: int, extra_ts: dict[str, int] | None = None) -> None:  # noqa: C901
         if self._finished:
             raise RuntimeError('Cannot append to a finished writer')
         if self._aborted:
@@ -191,8 +203,24 @@ class SimpleSignalWriter(SignalWriter[T]):
         if self._dedupe_enabled and self._last_value is not None and self._equal(value, self._last_value):
             return
 
+        # Validate extra_ts consistency: keys must match across all appends
+        extra_ts = extra_ts or {}
+        current_keys = frozenset(extra_ts.keys())
+        if self._timestamps:  # Not the first append
+            expected_keys = frozenset(self._extra_timelines.keys())
+            if current_keys != expected_keys:
+                raise ValueError(
+                    f'extra_ts keys must be consistent across all appends. '
+                    f'Expected {sorted(expected_keys)}, got {sorted(current_keys)}'
+                )
+
         self._timestamps.append(int(ts_ns))
         self._values.append(value)
+
+        # Handle extra timelines using defaultdict
+        for timeline_name, timeline_ts in extra_ts.items():
+            self._extra_timelines[timeline_name].append(int(timeline_ts))
+
         self._last_ts = ts_ns
         self._last_value = value
 
@@ -211,11 +239,20 @@ class SimpleSignalWriter(SignalWriter[T]):
                 self._writer.close()
             else:
                 # No data was ever written, create empty file with default schema
-                schema = pa.schema([('timestamp', pa.int64()), ('value', pa.int64())])
+                fields = [('timestamp', pa.int64()), ('value', pa.int64())]
+                data_dict = {'timestamp': [], 'value': []}
+
+                # Add extra timeline columns to schema
+                for timeline_name in sorted(self._extra_timelines.keys()):
+                    col_name = f'ts_ns.{timeline_name}'
+                    fields.append((col_name, pa.int64()))
+                    data_dict[col_name] = []
+
+                schema = pa.schema(fields)
                 if self._names is not None:
                     metadata = {b'names': json.dumps(self._names).encode('utf-8')}
                     schema = schema.with_metadata(metadata)
-                table = pa.table({'timestamp': [], 'value': []}, schema=schema)
+                table = pa.table(data_dict, schema=schema)
                 pq.write_table(table, self.filepath)
 
     def abort(self) -> None:

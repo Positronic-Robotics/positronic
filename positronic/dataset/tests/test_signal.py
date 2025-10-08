@@ -1,4 +1,5 @@
 import numpy as np
+import pyarrow.parquet as pq
 import pytest
 
 from positronic.dataset.signal import Kind
@@ -381,12 +382,7 @@ class TestSignalDtypeShape:
         arr1 = np.array([1.0, 2.0], dtype=np.float32)
         arr2 = np.array([3.0, 4.0], dtype=np.float32)
         feature_names = ['pos_x', 'pos_y']
-        sig = create_signal(
-            tmp_path,
-            [(arr1, 1000), (arr2, 2000)],
-            name='vec_named.parquet',
-            names=feature_names,
-        )
+        sig = create_signal(tmp_path, [(arr1, 1000), (arr2, 2000)], name='vec_named.parquet', names=feature_names)
         assert sig.names == feature_names
 
     def test_signal_view_meta_inherits_and_empty_view_raises(self, tmp_path):
@@ -425,3 +421,58 @@ class TestSignalDtypeShape:
         sig = DummySignal(ts, obj_vals)
         assert sig.dtype is list
         assert sig.shape is None
+
+
+class TestExtraTimelines:
+    def test_simple_signal_writer_with_extra_timelines(self, tmp_path):
+        """Test that SimpleSignalWriter stores extra timelines in separate columns."""
+        fp = tmp_path / 'extra_timelines.parquet'
+        with SimpleSignalWriter(fp) as w:
+            w.append(10, 1000, extra_ts={'producer': 900, 'consumer': 1100})
+            w.append(20, 2000, extra_ts={'producer': 1900, 'consumer': 2100})
+            w.append(30, 3000, extra_ts={'producer': 2900, 'consumer': 3100})
+
+        # Read the parquet file directly to verify columns
+        # TODO: This must be deleted when we provide interface to read extra timelines
+        table = pq.read_table(fp)
+        assert {'timestamp', 'value', 'ts_ns.consumer', 'ts_ns.producer'} == set(table.column_names)
+
+        # Verify the data
+        assert table['timestamp'].to_pylist() == [1000, 2000, 3000]
+        assert table['value'].to_pylist() == [10, 20, 30]
+        assert table['ts_ns.producer'].to_pylist() == [900, 1900, 2900]
+        assert table['ts_ns.consumer'].to_pylist() == [1100, 2100, 3100]
+
+    def test_simple_signal_empty_with_extra_timelines(self, tmp_path):
+        """Test that empty signal writer with no appends doesn't create extra timeline columns."""
+        fp = tmp_path / 'empty_extra.parquet'
+        with SimpleSignalWriter(fp):
+            pass
+
+        table = pq.read_table(fp)
+        assert {'timestamp', 'value'} == set(table.column_names)
+        assert len(table) == 0
+
+    def test_inconsistent_extra_ts_keys_raises(self, tmp_path):
+        """Test that inconsistent extra_ts keys across appends raises ValueError."""
+        fp = tmp_path / 'inconsistent.parquet'
+        with pytest.raises(ValueError, match='extra_ts keys must be consistent'):
+            with SimpleSignalWriter(fp) as w:
+                w.append(10, 1000, extra_ts={'producer': 900})
+                w.append(20, 2000, extra_ts={'producer': 1900, 'consumer': 2100})
+
+    def test_missing_extra_ts_after_first_raises(self, tmp_path):
+        """Test that omitting extra_ts after providing it first raises ValueError."""
+        fp = tmp_path / 'missing.parquet'
+        with pytest.raises(ValueError, match='extra_ts keys must be consistent'):
+            with SimpleSignalWriter(fp) as w:
+                w.append(10, 1000, extra_ts={'producer': 900})
+                w.append(20, 2000)
+
+    def test_adding_extra_ts_after_none_raises(self, tmp_path):
+        """Test that adding extra_ts after first append without it raises ValueError."""
+        fp = tmp_path / 'late_extra.parquet'
+        with pytest.raises(ValueError, match='extra_ts keys must be consistent'):
+            with SimpleSignalWriter(fp) as w:
+                w.append(10, 1000)
+                w.append(20, 2000, extra_ts={'producer': 1900})

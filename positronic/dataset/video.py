@@ -1,4 +1,4 @@
-from collections import deque
+from collections import defaultdict, deque
 from collections.abc import Iterator, Sequence
 from functools import lru_cache
 from pathlib import Path
@@ -46,6 +46,7 @@ class VideoSignalWriter(SignalWriter[np.ndarray]):
         self._width: int | None = None
         self._height: int | None = None
         self._frame_timestamps: list[int] = []
+        self._extra_timelines: dict[str, list[int]] = defaultdict(list)
 
     def _init_video_encoder(self, first_frame: np.ndarray) -> None:
         """Initialize video encoder based on first frame dimensions."""
@@ -64,12 +65,13 @@ class VideoSignalWriter(SignalWriter[np.ndarray]):
         self._stream.pix_fmt = 'yuv420p'
         self._stream.gop_size = self.gop_size
 
-    def append(self, data: np.ndarray, ts_ns: int) -> None:
+    def append(self, data: np.ndarray, ts_ns: int, extra_ts: dict[str, int] | None = None) -> None:
         """Append a video frame with timestamp.
 
         Args:
             data: Image frame as uint8 numpy array with shape (H, W, 3)
             ts_ns: Timestamp in nanoseconds (must be strictly increasing)
+            extra_ts: Optional dict of extra timeline names to timestamps
 
         Raises:
             RuntimeError: If writer has been finished
@@ -91,7 +93,22 @@ class VideoSignalWriter(SignalWriter[np.ndarray]):
             if data.dtype != np.uint8:
                 raise ValueError(f'Expected uint8 dtype, got {data.dtype}')
 
+        # Validate extra_ts consistency: keys must match across all appends
+        extra_ts = extra_ts or {}
+        current_keys = frozenset(extra_ts.keys())
+        if self._frame_timestamps:  # Not the first append
+            expected_keys = frozenset(self._extra_timelines.keys())
+            if current_keys != expected_keys:
+                raise ValueError(
+                    f'extra_ts keys must be consistent across all appends. '
+                    f'Expected {sorted(expected_keys)}, got {sorted(current_keys)}'
+                )
+
         self._frame_timestamps.append(ts_ns)
+
+        # Handle extra timelines using defaultdict
+        for timeline_name, timeline_ts in extra_ts.items():
+            self._extra_timelines[timeline_name].append(int(timeline_ts))
 
         frame = av.VideoFrame.from_ndarray(data, format='rgb24')
         frame.pts = self._frame_count
@@ -113,12 +130,21 @@ class VideoSignalWriter(SignalWriter[np.ndarray]):
                 self._container.mux(packet)
             self._container.close()
 
-        # Write frame index (just timestamps, frame numbers are implicit indices)
+        # Write frame index with primary timestamp and extra timelines
+        data_dict = {'ts_ns': self._frame_timestamps if self._frame_timestamps else []}
+        fields = [('ts_ns', pa.int64())]
+
+        # Add extra timeline columns
+        for timeline_name in sorted(self._extra_timelines.keys()):
+            col_name = f'ts_ns.{timeline_name}'
+            data_dict[col_name] = self._extra_timelines[timeline_name] if self._extra_timelines[timeline_name] else []
+            fields.append((col_name, pa.int64()))
+
         if self._frame_timestamps:
-            frames_table = pa.table({'ts_ns': pa.array(self._frame_timestamps, type=pa.int64())})
+            frames_table = pa.table(data_dict)
         else:
-            schema = pa.schema([('ts_ns', pa.int64())])
-            frames_table = pa.table({'ts_ns': []}, schema=schema)
+            schema = pa.schema(fields)
+            frames_table = pa.table(data_dict, schema=schema)
 
         pq.write_table(frames_table, self.frames_index_path)
 

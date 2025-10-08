@@ -1,4 +1,5 @@
 import numpy as np
+import pyarrow.parquet as pq
 import pytest
 
 from positronic.dataset.episode import DiskEpisode, DiskEpisodeWriter
@@ -345,26 +346,14 @@ class TestCoreEpisodeTime:
 
     def test_int_includes_static(self):
         snap = self.ep.time[2000]
-        expected = {
-            'task': 'stack',
-            'version': 2,
-            'params': {'k': 1},
-            'a': 2,
-            'b': 5,
-        }
+        expected = {'task': 'stack', 'version': 2, 'params': {'k': 1}, 'a': 2, 'b': 5}
         assert snap == expected
 
     def test_array_preserves_static_and_samples(self):
         ts = [1500, 2500, 3000]
         sub = self.ep.time[ts]
         # Expected full dictionary comparison (static + sampled values)
-        expected = {
-            'task': 'stack',
-            'version': 2,
-            'params': {'k': 1},
-            'a': [1, 2, 3],
-            'b': [5, 7, 7],
-        }
+        expected = {'task': 'stack', 'version': 2, 'params': {'k': 1}, 'a': [1, 2, 3], 'b': [5, 7, 7]}
         import numpy as np
 
         sub_norm = {k: (v.tolist() if isinstance(v, np.ndarray) else v) for k, v in sub.items()}
@@ -402,3 +391,26 @@ def test_disk_episode_implements_abc(tmp_path):
 
     view = ep.time[1000:3000:1000]
     assert isinstance(view, dict)
+
+
+def test_episode_writer_with_extra_timelines(tmp_path):
+    """Test that EpisodeWriter passes extra timelines to signal writers."""
+
+    ep_dir = tmp_path / 'ep_extra_timelines'
+    with DiskEpisodeWriter(ep_dir) as w:
+        w.append('state', np.array([1.0, 2.0]), 1000, extra_ts={'producer': 900, 'consumer': 1100})
+        w.append('state', np.array([3.0, 4.0]), 2000, extra_ts={'producer': 1900, 'consumer': 2100})
+        w.append('image', create_frame(50), 1500, extra_ts={'producer': 1400, 'consumer': 1600})
+        w.append('image', create_frame(100), 2500, extra_ts={'producer': 2400, 'consumer': 2600})
+
+    # Verify vector signal has extra timelines
+    state_table = pq.read_table(ep_dir / 'state.parquet')
+    assert {'timestamp', 'ts_ns.producer', 'ts_ns.consumer'} <= set(state_table.column_names)
+    assert state_table['ts_ns.producer'].to_pylist() == [900, 1900]
+    assert state_table['ts_ns.consumer'].to_pylist() == [1100, 2100]
+
+    # Verify video signal has extra timelines
+    frames_table = pq.read_table(ep_dir / 'image.frames.parquet')
+    assert {'ts_ns', 'ts_ns.producer', 'ts_ns.consumer'} == set(frames_table.column_names)
+    assert frames_table['ts_ns.producer'].to_pylist() == [1400, 2400]
+    assert frames_table['ts_ns.consumer'].to_pylist() == [1600, 2600]

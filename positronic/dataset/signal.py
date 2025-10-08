@@ -43,8 +43,7 @@ def _infer_item_dtype_shape(item: Any) -> tuple[Any, Any]:
 @runtime_checkable
 class TimeIndexerLike(Protocol, Generic[T]):
     def __getitem__(
-        self,
-        key: int | float | slice | Sequence[int] | Sequence[float] | np.ndarray,
+        self, key: int | float | slice | Sequence[int] | Sequence[float] | np.ndarray
     ) -> Union[tuple[T, int], 'Signal[T]']: ...
 
 
@@ -290,7 +289,7 @@ class SignalWriter(AbstractContextManager, ABC, Generic[T]):
     """Append-only writer for Signals."""
 
     @abstractmethod
-    def append(self, data: T, ts_ns: int) -> None:
+    def append(self, data: T, ts_ns: int, extra_ts: dict[str, int] | None = None) -> None:
         pass
 
     @abstractmethod
