@@ -11,6 +11,7 @@ import weakref
 from collections import deque
 from collections.abc import Callable, Iterator, Sequence
 from enum import IntEnum
+from multiprocessing import resource_tracker
 from multiprocessing.synchronize import Event as EventClass
 from queue import Empty, Full
 from typing import Any, TypeVar
@@ -179,7 +180,7 @@ class MultiprocessEmitter(SignalEmitter[T]):
         if self._sm is None:
             self._expected_buf_size = buf_size
             self._sm = multiprocessing.shared_memory.SharedMemory(create=True, size=buf_size)
-            self._sm_queue.put((self._sm, self._data_type, data.instantiation_params()))
+            self._sm_queue.put((self._sm.name, buf_size, self._data_type, data.instantiation_params()))
         else:
             assert self._expected_buf_size == buf_size, (
                 f'Buffer size mismatch: expected {self._expected_buf_size}, got {buf_size}. '
@@ -304,11 +305,18 @@ class MultiprocessReceiver(SignalReceiver[T]):
             return True
 
         try:
-            self._sm, data_type, instantiation_params = self._sm_queue.get_nowait()
+            sm_name, buf_size, data_type, instantiation_params = self._sm_queue.get_nowait()
         except Empty:
             return False
 
-        self._readonly_buffer = self._sm.buf.toreadonly()
+        self._sm = multiprocessing.shared_memory.SharedMemory(name=sm_name)
+        resource_tracker.unregister(self._sm._name, 'shared_memory')
+
+        if self._sm.size < buf_size:
+            raise RuntimeError(f'Shared memory buffer size mismatch: expected at least {buf_size}, got {self._sm.size}')
+
+        # macOS may return buffers slightly larger than requested; constrain the view.
+        self._readonly_buffer = self._sm.buf.toreadonly()[:buf_size]
         self._out_value = data_type(*instantiation_params)
         return True
 
