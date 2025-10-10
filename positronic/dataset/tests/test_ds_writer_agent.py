@@ -36,13 +36,13 @@ def world(clock):
 class FakeEpisodeWriter(EpisodeWriter[Any]):
     def __init__(self) -> None:
         self.statics: dict[str, Any] = {}
-        self.appends: list[tuple[str, Any, int]] = []
+        self.appends: list[tuple[str, Any, int, dict[str, int] | None]] = []
         self.exited = False
         self.aborted = False
         self.meta_calls: dict[str, Sequence[str] | None] = {}
 
-    def append(self, signal_name: str, data: Any, ts_ns: int) -> None:
-        self.appends.append((signal_name, data, int(ts_ns)))
+    def append(self, signal_name: str, data: Any, ts_ns: int, extra_ts: dict[str, int] | None = None) -> None:
+        self.appends.append((signal_name, data, int(ts_ns), extra_ts))
 
     def set_signal_meta(self, signal_name: str, *, names: Sequence[str] | None = None) -> None:
         if signal_name in self.meta_calls and self.meta_calls[signal_name] != names:
@@ -108,7 +108,7 @@ def test_start_stop_happy_path(world, clock):
     assert len(ds.created) == 1
     w = ds.created[-1]
     assert w.statics.get('user') == 'alice'
-    assert [(s, v) for (s, v, _) in w.appends] == [('a', 1), ('b', 2)]
+    assert [(s, v) for (s, v, _, _) in w.appends] == [('a', 1), ('b', 2)]
     assert w.exited is True
     assert w.statics.get('done') is True
 
@@ -126,7 +126,7 @@ def test_episode_finalizes_when_run_stops(world, clock):
 
     assert len(ds.created) == 1
     w = ds.created[-1]
-    assert [(s, v) for (s, v, _) in w.appends] == [('a', 42)]
+    assert [(s, v) for (s, v, _, _) in w.appends] == [('a', 42)]
     assert w.exited is True
 
 
@@ -165,7 +165,7 @@ def test_abort_flow_then_restart(world, clock):
     assert len(ds.created) == 2
     w1, w2 = ds.created[0], ds.created[1]
     assert w1.aborted is True and w1.exited is True
-    assert [(s, v) for (s, v, _) in w2.appends] == [('s', 11)]
+    assert [(s, v) for (s, v, _, _) in w2.appends] == [('s', 11)]
 
 
 def test_appends_only_on_updates_and_timestamps_from_clock(world, clock):
@@ -203,8 +203,8 @@ def test_time_mode_message_uses_signal_timestamp(world, clock):
     run_scripted_agent(agent, script, world=world, clock=clock)
 
     w = ds.created[-1]
-    assert [(s, v) for (s, v, _) in w.appends] == [('a', 1), ('a', 2)]
-    assert [ts for (_, _, ts) in w.appends] == [ts_first, ts_second]
+    assert [(s, v) for (s, v, _, _) in w.appends] == [('a', 1), ('a', 2)]
+    assert [ts for (_, _, ts, _) in w.appends] == [ts_first, ts_second]
 
 
 def test_serializer_names_declared_on_start(world, clock):
@@ -250,12 +250,14 @@ def test_dict_serializer_value_with_names(world, clock):
     writer = ds.created[-1]
     assert writer.meta_calls.get('sig.x') == ['a', 'b']
     assert len(writer.appends) == 1
-    name, arr, _ = writer.appends[0]
+    name, arr, _, _ = writer.appends[0]
     assert name == 'sig.x'
     np.testing.assert_allclose(arr, np.array([1.0, 2.0]))
 
 
 def test_integration_with_local_dataset_writer(tmp_path, world, clock):
+    import pyarrow.parquet as pq
+
     with LocalDatasetWriter(tmp_path) as writer:
         agent, cmd_em, emitters = build_agent_with_pipes({'a': None, 'b': None}, writer, world)
 
@@ -276,6 +278,12 @@ def test_integration_with_local_dataset_writer(tmp_path, world, clock):
     b = ep['b']
     assert len(a) == 1 and len(b) == 1
     assert a[0][0] == 10 and b[0][0] == 20
+
+    # Verify extra timelines are in the parquet files
+    table_a = pq.read_table(ep._dir / 'a.parquet')
+    assert 'ts_ns.message' in table_a.column_names
+    assert 'ts_ns.system' in table_a.column_names
+    assert 'ts_ns.world' in table_a.column_names
 
 
 def test_inputs_mapping_is_immutable(world, clock):
@@ -312,7 +320,7 @@ def test_serializer_scalar_transform(world, clock):
     run_scripted_agent(agent, script, world=world, clock=clock)
 
     w = ds.created[-1]
-    assert [(s, v) for (s, v, _) in w.appends] == [('x', 6)]
+    assert [(s, v) for (s, v, _, _) in w.appends] == [('x', 6)]
 
 
 def test_serializer_dict_expansion(world, clock):
@@ -335,7 +343,7 @@ def test_serializer_dict_expansion(world, clock):
     run_scripted_agent(agent, script, world=world, clock=clock)
 
     w = ds.created[-1]
-    names_and_vals = [(s, v) for (s, v, _) in w.appends]
+    names_and_vals = [(s, v) for (s, v, _, _) in w.appends]
     assert ('img', 10) in names_and_vals
     assert ('img.extra', 11) in names_and_vals
 
@@ -360,7 +368,7 @@ def test_serializer_none_drops_sample(world, clock):
 
     w = ds.created[-1]
     # Only the positive value should be recorded
-    assert [(s, v) for (s, v, _) in w.appends] == [('x', 3)]
+    assert [(s, v) for (s, v, _, _) in w.appends] == [('x', 3)]
 
 
 def test_transform_3d_serializer(world, clock):
@@ -380,7 +388,7 @@ def test_transform_3d_serializer(world, clock):
     run_scripted_agent(agent, script, world=world, clock=clock)
 
     w = ds.created[-1]
-    names_vals = [(s, v) for (s, v, _) in w.appends]
+    names_vals = [(s, v) for (s, v, _, _) in w.appends]
     assert len(names_vals) == 1 and names_vals[0][0] == 'pose'
     np.testing.assert_allclose(names_vals[0][1][:3], t)
     np.testing.assert_allclose(names_vals[0][1][3:], q.as_quat)
@@ -429,7 +437,7 @@ def test_robot_state_serializer_drops_reset_and_emits_components(world, clock):
     run_scripted_agent(agent, script, world=world, clock=clock)
 
     w = ds.created[-1]
-    items = {name: val for (name, val, _) in w.appends}
+    items = {name: val for (name, val, _, _) in w.appends}
     # Should not contain any data from RESETTING
     assert set(items.keys()) == {'robot_state.q', 'robot_state.dq', 'robot_state.ee_pose'}
     np.testing.assert_allclose(items['robot_state.q'], q)
@@ -455,7 +463,41 @@ def test_robot_command_serializer_variants(world, clock):
     run_scripted_agent(agent, script, world=world, clock=clock)
 
     w = ds.created[-1]
-    items = {name: val for (name, val, _) in w.appends}
+    items = {name: val for (name, val, _, _) in w.appends}
     np.testing.assert_allclose(items['cmd.pose'], np.concatenate([pose.translation, pose.rotation.as_quat]))
     np.testing.assert_allclose(items['cmd.joints'], joints)
     assert items['cmd.reset'] == 1
+
+
+def test_multiple_timelines_recorded(world, clock):
+    """Test that DsWriterAgent records message, system, and world timelines."""
+    ds = FakeDatasetWriter()
+    agent, cmd_em, emitters = build_agent_with_pipes({'a': None}, ds, world)
+
+    script = [
+        (partial(cmd_em.emit, DsWriterCommand(DsWriterCommandType.START_EPISODE)), 0.001),
+        (partial(emitters['a'].emit, 42), 0.001),
+        (partial(cmd_em.emit, DsWriterCommand(DsWriterCommandType.STOP_EPISODE)), 0.001),
+    ]
+
+    run_scripted_agent(agent, script, world=world, clock=clock)
+
+    w = ds.created[-1]
+    assert len(w.appends) == 1
+    name, value, _primary_ts, extra_ts = w.appends[0]
+
+    assert name == 'a'
+    assert value == 42
+    assert extra_ts is not None
+
+    # Should have message and system timelines
+    assert 'message' in extra_ts
+    assert 'system' in extra_ts
+
+    # Since world uses MockClock (not SystemClock), should also have 'world'
+    assert 'world' in extra_ts
+
+    # All timestamps should be positive integers
+    assert isinstance(extra_ts['message'], int) and extra_ts['message'] > 0
+    assert isinstance(extra_ts['system'], int) and extra_ts['system'] > 0
+    assert isinstance(extra_ts['world'], int) and extra_ts['world'] > 0

@@ -143,7 +143,9 @@ def _extract_names(serializer: Callable[[Any], Any]) -> dict[str, list[str]] | N
     raise TypeError('Serializer names attribute must be a string, sequence, or mapping')
 
 
-def _append_processed(ep_writer: EpisodeWriter, name: str, value: Any, ts_ns: int) -> None:
+def _append_processed(
+    ep_writer: EpisodeWriter, name: str, value: Any, ts_ns: int, extra_ts: dict[str, int] | None = None
+) -> None:
     if isinstance(value, dict):
         items = ((name + suffix, v) for suffix, v in value.items())
     else:
@@ -152,7 +154,7 @@ def _append_processed(ep_writer: EpisodeWriter, name: str, value: Any, ts_ns: in
     for full_name, v in items:
         if v is None:
             continue
-        ep_writer.append(full_name, v, ts_ns)
+        ep_writer.append(full_name, v, ts_ns, extra_ts)
 
 
 class TimeMode(IntEnum):
@@ -235,11 +237,18 @@ class DsWriterAgent(pimm.ControlSystem):
                         msg = reader.read()
                         value, updated = msg.data
                         if updated:
+                            world_time_ns, message_time_ns = clock.now_ns(), msg.ts
+                            primary_ts = world_time_ns if self._time_mode == TimeMode.CLOCK else message_time_ns
+
+                            extra_ts = {'message': message_time_ns, 'system': pimm.world.SystemClock().now_ns()}
+                            # Only add 'world' if clock is not system clock
+                            if not isinstance(clock, pimm.world.SystemClock):
+                                extra_ts['world'] = world_time_ns
+
                             serializer = self._serializers.get(name)
                             if serializer is not None:
                                 value = serializer(value)
-                            time_ns = clock.now_ns() if self._time_mode == TimeMode.CLOCK else msg.ts
-                            _append_processed(ep_writer, name, value, time_ns)
+                            _append_processed(ep_writer, name, value, primary_ts, extra_ts)
 
                 yield pimm.Sleep(limiter.wait_time())
         finally:
