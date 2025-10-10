@@ -95,6 +95,7 @@ class VideoSignalWriter(SignalWriter[np.ndarray]):
 
         # Validate extra_ts consistency: keys must match across all appends
         extra_ts = extra_ts or {}
+        extra_ts = {k: int(v) for k, v in extra_ts.items()}
         current_keys = frozenset(extra_ts.keys())
         if self._frame_timestamps:  # Not the first append
             expected_keys = frozenset(self._extra_timelines.keys())
@@ -108,7 +109,7 @@ class VideoSignalWriter(SignalWriter[np.ndarray]):
 
         # Handle extra timelines using defaultdict
         for timeline_name, timeline_ts in extra_ts.items():
-            self._extra_timelines[timeline_name].append(int(timeline_ts))
+            self._extra_timelines[timeline_name].append(timeline_ts)
 
         frame = av.VideoFrame.from_ndarray(data, format='rgb24')
         frame.pts = self._frame_count

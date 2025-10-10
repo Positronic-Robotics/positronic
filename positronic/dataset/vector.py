@@ -205,6 +205,7 @@ class SimpleSignalWriter(SignalWriter[T]):
 
         # Validate extra_ts consistency: keys must match across all appends
         extra_ts = extra_ts or {}
+        extra_ts = {k: int(v) for k, v in extra_ts.items()}
         current_keys = frozenset(extra_ts.keys())
         if self._timestamps:  # Not the first append
             expected_keys = frozenset(self._extra_timelines.keys())
@@ -219,7 +220,7 @@ class SimpleSignalWriter(SignalWriter[T]):
 
         # Handle extra timelines using defaultdict
         for timeline_name, timeline_ts in extra_ts.items():
-            self._extra_timelines[timeline_name].append(int(timeline_ts))
+            self._extra_timelines[timeline_name].append(timeline_ts)
 
         self._last_ts = ts_ns
         self._last_value = value
