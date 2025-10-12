@@ -22,10 +22,10 @@ def main(robot):
                 case ['move', x, y, z, qw, qx, qy, qz]:
                     pos = [float(x) for x in [x, y, z]]
                     quat = geom.Rotation.from_quat([float(qw), float(qx), float(qy), float(qz)])
-                    command_emmiter.emit(command.CartesianMove(geom.Transform3D(translation=pos, rotation=quat)))
+                    command_emmiter.emit(command.CartesianPosition(geom.Transform3D(translation=pos, rotation=quat)))
                 case ['joint_move', *args]:
                     args = [float(x) for x in args]
-                    command_emmiter.emit(command.JointMove(positions=args))
+                    command_emmiter.emit(command.JointPosition(positions=args))
                 case ['info']:
                     print('Q', state_receiver.value.q)
                     print('DQ', state_receiver.value.dq)

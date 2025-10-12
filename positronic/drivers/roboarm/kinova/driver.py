@@ -93,10 +93,10 @@ class Robot(pimm.ControlSystem):
                     match cmd:
                         case command.Reset():
                             joint_controller.set_target_qpos(self.home_joints)
-                        case command.CartesianMove(pose):
+                        case command.CartesianPosition(pose):
                             qpos = self.solver.inverse(pose, robot_state.q)
                             joint_controller.set_target_qpos(qpos)
-                        case command.JointMove(positions):
+                        case command.JointPosition(positions):
                             qpos = np.array(positions, dtype=np.float32)
                             joint_controller.set_target_qpos(qpos)
                         case _:

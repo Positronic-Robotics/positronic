@@ -57,7 +57,7 @@ class RestoreCommand(transforms.KeyFuncEpisodeTransform):
     def command_from_pose(pose: Sequence[np.ndarray]) -> Sequence[roboarm.command.CommandType]:
         return transforms.LazySequence(
             pose,
-            lambda p: roboarm.command.CartesianMove(
+            lambda p: roboarm.command.CartesianPosition(
                 geom.Transform3D(translation=p[:3], rotation=geom.Rotation.from_quat(p[3:]))
             ),
         )

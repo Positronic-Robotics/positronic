@@ -107,9 +107,9 @@ class Serializers:
     @names({'.pose': 'target pose', '.joints': 'target joints'})
     def robot_command(command: roboarm.command.CommandType) -> dict[str, np.ndarray | int] | None:
         match command:
-            case roboarm.command.CartesianMove(pose):
+            case roboarm.command.CartesianPosition(pose):
                 return {'.pose': Serializers.transform_3d(pose)}
-            case roboarm.command.JointMove(positions):
+            case roboarm.command.JointPosition(positions):
                 return {'.joints': positions}
             case roboarm.command.Reset():
                 return {'.reset': 1}

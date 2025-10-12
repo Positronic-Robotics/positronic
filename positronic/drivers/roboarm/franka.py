@@ -73,6 +73,9 @@ class FrankaState(State, pimm.shared_memory.NumpySMAdapter):
 
 
 class Robot(pimm.ControlSystem):
+    # Copied from Droid: https://github.com/droid-dataset/droid/blob/main/droid/robot_ik/robot_ik_solver.py#L10
+    RELATIVE_MAX_JOIN_DELTA = np.array([0.2, 0.2, 0.2, 0.2, 0.2, 0.2, 0.2])
+
     def __init__(self, ip: str, relative_dynamics_factor=0.2, home_joints: list[float] | None = None) -> None:
         """
         :param ip: IP address of the robot.
@@ -129,22 +132,35 @@ class Robot(pimm.ControlSystem):
 
         self._reset(robot, robot_state)
 
+        max_joint_delta = self.RELATIVE_MAX_JOIN_DELTA.max()
+        max_joint_vel = self.RELATIVE_MAX_JOIN_DELTA / max_joint_delta
+
         while not should_stop.value:
+            st = robot.state()
             cmd, updated = commands.value
             if updated:
                 match cmd:
                     case command.Reset():
                         self._reset(robot, robot_state)
                         continue
-                    case command.CartesianMove(pose):
+                    case command.CartesianPosition(pose):
                         target_pose_wxyz = np.asarray([*pose.translation, *pose.rotation.as_quat])
                         ik_solution = robot.inverse_kinematics_with_limits(target_pose_wxyz)
                         # TODO: implement MOVING state support
                         robot.set_target_joints(ik_solution)
+                    case command.JointPosition(positions):
+                        robot.set_target_joints(positions)
+                    case command.JointDelta(velocities):
+                        # This is actually not a joint velocity, but a joint delta
+                        max_vel_norm = (np.abs(velocities) / max_joint_vel).max()
+                        if max_vel_norm > 1.0:
+                            velocities = velocities / max_vel_norm
+
+                        joint_delta = velocities * max_joint_delta
+                        robot.set_target_joints(st.q + joint_delta)
                     case _:
                         raise NotImplementedError(f'Unsupported command {cmd}')
 
-            st = robot.state()
             robot_state.encode(st)
             self.state.emit(robot_state)
             if st.error != 0:
@@ -184,7 +200,7 @@ if __name__ == '__main__':
             pos = np.asarray(pos) * alpha
             if time.monotonic() > start + duration:
                 print(f'Moving to {pos + origin.translation}')
-                commands.emit(command.CartesianMove(geom.Transform3D(pos + origin.translation, origin.rotation)))
+                commands.emit(command.CartesianPosition(geom.Transform3D(pos + origin.translation, origin.rotation)))
                 i += 1
             else:
                 time.sleep(0.01)

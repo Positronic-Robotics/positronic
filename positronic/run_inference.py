@@ -15,12 +15,7 @@ import positronic.cfg.policy.action
 import positronic.cfg.policy.observation
 import positronic.cfg.policy.policy
 import positronic.cfg.simulator
-from positronic.dataset.ds_writer_agent import (
-    DsWriterAgent,
-    DsWriterCommand,
-    Serializers,
-    TimeMode,
-)
+from positronic.dataset.ds_writer_agent import DsWriterAgent, DsWriterCommand, Serializers, TimeMode
 from positronic.dataset.local_dataset import LocalDatasetWriter
 from positronic.drivers import roboarm
 from positronic.gui.dpg import DearpyguiUi
@@ -161,7 +156,7 @@ class Inference(pimm.ControlSystem):
                 action_dict = self.action_decoder.decode(action, inputs)
                 target_pos = action_dict['target_robot_position']
 
-                roboarm_command = roboarm.command.CartesianMove(pose=target_pos)
+                roboarm_command = roboarm.command.CartesianPosition(pose=target_pos)
 
                 self.robot_commands.emit(roboarm_command)
                 self.target_grip.emit(action_dict['target_grip'].item())
@@ -299,10 +294,7 @@ main_sim_cfg = cfn.Config(
     policy_fps=15,
     device=None,
     simulation_time=10,
-    camera_dict={
-        'handcam_left': 'handcam_left_ph',
-        'back_view': 'back_view_ph',
-    },
+    camera_dict={'handcam_left': 'handcam_left_ph', 'back_view': 'back_view_ph'},
     task='pick up the green cube and put in on top of the red cube',
 )
 
@@ -310,25 +302,15 @@ main_sim_pi0 = main_sim_cfg.override(
     policy=positronic.cfg.policy.policy.pi0,
     observation_encoder=positronic.cfg.policy.observation.pi0,
     action_decoder=positronic.cfg.policy.action.absolute_position,
-    camera_dict={
-        'left': 'handcam_left_ph',
-        'side': 'back_view_ph',
-    },
+    camera_dict={'left': 'handcam_left_ph', 'side': 'back_view_ph'},
 )
 
 main_sim_act = main_sim_cfg.override(
     policy=positronic.cfg.policy.policy.act,
     observation_encoder=positronic.cfg.policy.observation.franka_mujoco_stackcubes,
     action_decoder=positronic.cfg.policy.action.absolute_position,
-    camera_dict={
-        'handcam_left': 'handcam_left_ph',
-        'back_view': 'back_view_ph',
-        'agent_view': 'agentview',
-    },
+    camera_dict={'handcam_left': 'handcam_left_ph', 'back_view': 'back_view_ph', 'agent_view': 'agentview'},
 )
 
 if __name__ == '__main__':
-    cfn.cli({
-        'sim_pi0': main_sim_pi0,
-        'sim_act': main_sim_act,
-    })
+    cfn.cli({'sim_pi0': main_sim_pi0, 'sim_act': main_sim_act})

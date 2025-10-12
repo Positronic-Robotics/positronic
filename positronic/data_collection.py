@@ -143,7 +143,7 @@ class DataCollectionController(pimm.ControlSystem):
                 if controller_pos_updated:
                     target_robot_pos = tracker.update(controller_pos['right'])
                     if tracker.on:  # Don't spam the robot with commands.
-                        self.robot_commands.emit(roboarm.command.CartesianMove(target_robot_pos))
+                        self.robot_commands.emit(roboarm.command.CartesianPosition(target_robot_pos))
 
                 yield pimm.Sleep(0.001)
 

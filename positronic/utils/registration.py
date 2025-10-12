@@ -23,12 +23,7 @@ def _plot_trajectory(trajectory: AbsoluteTrajectory, name: str, color: list[int]
         points.append(pos.translation)
 
     rr.log(
-        f'trajectory/{name}',
-        rr.Points3D(
-            positions=np.array(points),
-            radii=np.array([0.005]),
-            colors=np.array([color]),
-        ),
+        f'trajectory/{name}', rr.Points3D(positions=np.array(points), radii=np.array([0.005]), colors=np.array([color]))
     )
 
 
@@ -190,7 +185,7 @@ def perform_registration(webxr, robot_arm):
 
         while not w.should_stop:
             if move_throttler.wait_time() <= 0:
-                commands.emit(roboarm_command.CartesianMove(WAYPOINTS[current_point]))
+                commands.emit(roboarm_command.CartesianPosition(WAYPOINTS[current_point]))
                 current_point += 1
                 if current_point >= len(WAYPOINTS):
                     break

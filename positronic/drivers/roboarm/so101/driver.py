@@ -76,11 +76,11 @@ class Robot(pimm.ControlSystem):
                 match command:
                     case roboarm_command.Reset():
                         raise NotImplementedError('Reset not implemented')
-                    case roboarm_command.CartesianMove():
+                    case roboarm_command.CartesianPosition():
                         qpos = self._solve_ik(state, command)
                         q_with_gripper = np.concatenate([qpos, [target_grip.value]])
                         self.motor_bus.set_target_position(q_with_gripper)
-                    case roboarm_command.JointMove(qpos):
+                    case roboarm_command.JointPosition(qpos):
                         q_norm = self.rad_to_norm(qpos)
                         q_with_gripper = np.concatenate([q_norm, [target_grip.value]])
                         self.motor_bus.set_target_position(q_with_gripper)
@@ -97,7 +97,7 @@ class Robot(pimm.ControlSystem):
             self.grip.emit(gripper)
             yield pimm.Sleep(rate_limit.wait_time())
 
-    def _solve_ik(self, state, command: roboarm_command.CartesianMove) -> np.ndarray:
+    def _solve_ik(self, state, command: roboarm_command.CartesianPosition) -> np.ndarray:
         q = np.array(state.q).tolist()
         q.append(0.0)  # ignore gripper in ik
         q_rad_new = self.kinematic.inverse(q, command.pose, n_iter=10)

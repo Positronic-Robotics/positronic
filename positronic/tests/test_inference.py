@@ -3,21 +3,26 @@ from functools import partial
 import numpy as np
 import pytest
 import torch
+import tqdm
 
 import pimm
+import positronic.cfg.simulator
 from pimm.tests.testing import MockClock
 from positronic import geom
+from positronic.dataset.local_dataset import LocalDataset
 from positronic.drivers import roboarm
-from positronic.run_inference import Inference, InferenceCommand
+from positronic.run_inference import Inference, InferenceCommand, main_sim
 from positronic.tests.testing_coutils import ManualDriver, drive_scheduler
 
 
 class StubStateEncoder:
     def __init__(self) -> None:
         self.last_inputs: dict[str, object] | None = None
+        self.last_image_keys: list[str] = []
 
     def encode(self, inputs: dict[str, object]) -> dict[str, object]:
         self.last_inputs = inputs
+        self.last_image_keys = sorted([key for key in inputs if key.startswith('image.')])
         pose = inputs['robot_state.ee_pose']
         translation = pose[:3]
         quaternion = pose[3:7]
@@ -41,10 +46,26 @@ class StubActionDecoder:
     def decode(self, action: np.ndarray, inputs: dict[str, object]) -> dict[str, object]:
         self.last_action = np.copy(action)
         self.last_inputs = inputs
-        return {
-            'target_robot_position': self.pose,
-            'target_grip': self.grip,
-        }
+        decoded = np.asarray(action, dtype=np.float32).reshape(-1)
+
+        translation = self.pose.translation
+        if decoded.size >= 3:
+            translation = decoded[:3]
+
+        rotation = self.pose.rotation
+        if decoded.size >= 7:
+            quaternion = decoded[3:7]
+            norm = np.linalg.norm(quaternion)
+            if norm > 0:
+                rotation = geom.Rotation.from_quat(quaternion / norm)
+
+        if decoded.size >= 8:
+            self.grip = np.array(decoded[7], dtype=np.float32)
+        elif decoded.size >= 4:
+            self.grip = np.array(decoded[3], dtype=np.float32)
+
+        self.pose = geom.Transform3D(translation=np.array(translation, dtype=np.float32), rotation=rotation)
+        return {'target_robot_position': self.pose, 'target_grip': self.grip}
 
 
 class SpyPolicy:
@@ -60,6 +81,43 @@ class SpyPolicy:
     def select_action(self, obs: dict[str, torch.Tensor | object]) -> torch.Tensor:
         self.last_obs = obs
         return self.action
+
+
+DEFAULT_STUB_POLICY_ACTION = torch.tensor([[0.4, 0.5, 0.6, 1.0, 0.0, 0.0, 0.0, 0.33]], dtype=torch.float32)
+
+
+class StubPolicy:
+    def __init__(self, action: torch.Tensor | None = None) -> None:
+        if action is None:
+            action = DEFAULT_STUB_POLICY_ACTION.clone()
+        if action.ndim == 1:
+            action = action.unsqueeze(0)
+        self.action = action
+        self.device: str | None = None
+        self.last_obs: dict[str, torch.Tensor | object] | None = None
+        self.observations: list[dict[str, torch.Tensor | object]] = []
+        self.reset_calls = 0
+
+    def to(self, device: str):
+        self.device = device
+        self.action = self.action.to(device)
+        return self
+
+    def select_action(self, obs: dict[str, torch.Tensor | object]) -> torch.Tensor:
+        self.last_obs = obs
+        self.observations.append(obs)
+        return self.action
+
+    def reset(self) -> None:
+        self.reset_calls += 1
+
+
+def make_stub_observation_encoder() -> StubStateEncoder:
+    return StubStateEncoder()
+
+
+def make_stub_action_decoder() -> StubActionDecoder:
+    return StubActionDecoder()
 
 
 class FakeRobotState:
@@ -148,7 +206,7 @@ def test_inference_emits_cartesian_move(world, clock):
     command_msg = command_rx.read()
     assert command_msg is not None
     command = command_msg.data
-    assert isinstance(command, roboarm.command.CartesianMove)
+    assert isinstance(command, roboarm.command.CartesianPosition)
     np.testing.assert_allclose(command.pose.translation, decoder.pose.translation)
     np.testing.assert_allclose(command.pose.rotation.as_quat, decoder.pose.rotation.as_quat)
 
@@ -234,7 +292,7 @@ def test_inference_waits_for_complete_inputs(world, clock):
     # Successful path should generate consistent Cartesian moves and grip commands.
     command_msg = command_rx.read()
     assert command_msg is not None
-    assert isinstance(command_msg.data, roboarm.command.CartesianMove)
+    assert isinstance(command_msg.data, roboarm.command.CartesianPosition)
     np.testing.assert_allclose(command_msg.data.pose.translation, decoder.pose.translation)
 
     grip_msg = grip_rx.read()
@@ -244,3 +302,103 @@ def test_inference_waits_for_complete_inputs(world, clock):
     # Subsequent reads return the last value, so identity equality signals no new messages.
     assert command_rx.read() is command_msg
     assert grip_rx.read() is grip_msg
+
+
+# This integration test intentionally exercises the current `main_sim` wiring end-to-end.
+@pytest.mark.timeout(30.0)
+def test_main_sim_emits_commands_and_records_dataset(tmp_path, monkeypatch):
+    class DummyTqdm:
+        def __init__(self, *args, **kwargs):
+            self.n = 0.0
+
+        def refresh(self):
+            pass
+
+        def close(self):
+            pass
+
+        def update(self, *_args, **_kwargs):
+            pass
+
+    monkeypatch.setattr(tqdm, 'tqdm', lambda *args, **kwargs: DummyTqdm(*args, **kwargs))
+    monkeypatch.setenv('MUJOCO_GL', 'egl')
+
+    class FakeRenderer:
+        def __init__(self, _model, *, height, width, max_geom=10000, font_scale=None):
+            self.height = height
+            self.width = width
+
+        def update_scene(self, _data, camera=None):
+            pass
+
+        def render(self):
+            return np.zeros((self.height, self.width, 3), dtype=np.uint8)
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr('positronic.simulator.mujoco.sim.mj.Renderer', FakeRenderer)
+
+    observation_encoder = make_stub_observation_encoder()
+    action_decoder = make_stub_action_decoder()
+    policy = StubPolicy()
+
+    camera_dict = {'handcam_left': 'handcam_left_ph'}
+    loaders = [
+        cfg(seed=idx) if idx in (2, 4) else cfg()
+        for idx, cfg in enumerate(positronic.cfg.simulator.stack_cubes_loaders)
+    ]
+
+    main_sim(
+        mujoco_model_path='positronic/assets/mujoco/franka_table.xml',
+        observation_encoder=observation_encoder,
+        action_decoder=action_decoder,
+        policy=policy,
+        loaders=loaders,
+        camera_fps=10,
+        policy_fps=10,
+        simulation_time=0.4,
+        camera_dict=camera_dict,
+        task='integration-test',
+        device='cpu',
+        output_dir=str(tmp_path),
+        show_gui=False,
+        num_iterations=1,
+    )
+
+    ds = LocalDataset(tmp_path)
+    assert len(ds) == 1
+
+    episode = ds[0]
+    signals = episode.signals
+    assert 'robot_commands.pose' in signals
+    assert 'target_grip' in signals
+
+    camera_signals = [name for name in signals if 'handcam_left' in name]
+    assert camera_signals, f'Expected camera signal for handcam_left, found keys: {list(signals)}'
+    camera_signal = signals[camera_signals[0]]
+    camera_samples = list(camera_signal)
+    assert camera_samples, 'Camera signal for handcam_left is empty'
+    first_image, _ = camera_samples[0]
+    assert isinstance(first_image, np.ndarray)
+
+    pose_signal = signals['robot_commands.pose']
+    pose_samples = list(pose_signal)
+    assert pose_samples, 'robot_commands.pose signal is empty'
+    first_pose, _first_pose_ts = pose_samples[0]
+    np.testing.assert_allclose(first_pose[:3], np.array([0.4, 0.5, 0.6], dtype=np.float32))
+    np.testing.assert_allclose(first_pose[3:], np.array([1.0, 0.0, 0.0, 0.0], dtype=np.float32))
+    assert np.all(np.diff([ts for _, ts in pose_samples]) > 0) or len(pose_samples) == 1
+
+    grip_signal = signals['target_grip']
+    grip_samples = list(grip_signal)
+    assert grip_samples, 'target_grip signal is empty'
+    grip_values = [value for value, _ts in grip_samples]
+    assert grip_values[0] == pytest.approx(0.33, rel=1e-2, abs=1e-2)
+    assert np.all(np.diff([ts for _, ts in grip_samples]) > 0) or len(grip_samples) == 1
+
+    assert policy.observations, 'Policy did not receive any observations'
+    last_obs = policy.observations[-1]
+    assert last_obs['vision'].shape[0] == 1
+    assert observation_encoder.last_inputs is not None
+    assert any('handcam_left' in key for key in observation_encoder.last_image_keys)

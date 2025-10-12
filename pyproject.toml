@@ -88,6 +88,9 @@ addopts = [
     "--cov=positronic",
     "--cov-report=term-missing",
 ]
+filterwarnings = [
+    "ignore:.*DISPLAY environment variable is missing:glfw.GLFWError",
+]
 
 [tool.coverage.run]
 branch = true

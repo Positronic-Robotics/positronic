@@ -15,17 +15,24 @@ class Reset:
 
 
 @dataclass
-class CartesianMove:
+class CartesianPosition:
     """Move the robot end-effector to the given pose."""
 
     pose: geom.Transform3D
 
 
 @dataclass
-class JointMove:
+class JointPosition:
     """Move the robot joints to the given positions."""
 
     positions: np.ndarray
 
 
-CommandType = Reset | CartesianMove | JointMove
+@dataclass
+class JointDelta:
+    """Move the robot joints with the given velocities."""
+
+    velocities: np.ndarray
+
+
+CommandType = Reset | CartesianPosition | JointPosition | JointDelta

@@ -204,9 +204,9 @@ class MujocoFranka(pimm.ControlSystem):
             command, is_updated = commands.value
             if is_updated:
                 match command:
-                    case roboarm_command.CartesianMove(pose=pose):
+                    case roboarm_command.CartesianPosition(pose=pose):
                         self.set_ee_pose(pose)
-                    case roboarm_command.JointMove(positions=positions):
+                    case roboarm_command.JointPosition(positions=positions):
                         self.set_actuator_values(positions)
                     case roboarm_command.Reset():
                         self.sim.reset()

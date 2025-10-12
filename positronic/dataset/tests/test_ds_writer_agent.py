@@ -454,8 +454,8 @@ def test_robot_command_serializer_variants(world, clock):
 
     script = [
         (lambda: cmd_em.emit(DsWriterCommand(DsWriterCommandType.START_EPISODE)), 0.001),
-        (lambda: emitters['cmd'].emit(rcmd.CartesianMove(pose)), 0.001),
-        (lambda: emitters['cmd'].emit(rcmd.JointMove(joints)), 0.001),
+        (lambda: emitters['cmd'].emit(rcmd.CartesianPosition(pose)), 0.001),
+        (lambda: emitters['cmd'].emit(rcmd.JointPosition(joints)), 0.001),
         (lambda: emitters['cmd'].emit(rcmd.Reset()), 0.001),
         (lambda: cmd_em.emit(DsWriterCommand(DsWriterCommandType.STOP_EPISODE)), 0.001),
     ]
