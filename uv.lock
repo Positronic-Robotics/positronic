@@ -3431,12 +3431,12 @@ provides-extras = ["hardware", "dev"]
 
 [[package]]
 name = "positronic-franka"
-version = "0.2.0"
+version = "0.2.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "numpy", marker = "sys_platform == 'linux'" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/74/b8/9a9743ea107540816a999f4b4f449a650b667a30f440ddc5e933e79ea761/positronic_franka-0.2.0.tar.gz", hash = "sha256:b240e7247ac1db35f7c96b506f725a0eb3697d106f5847266578d14e7b943d41", size = 1786852, upload-time = "2025-10-07T14:44:38.424Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/85/ff/2315c98fc4c51bbad105a5989635f8795290eac61239601b79dcdfc92ac3/positronic_franka-0.2.1.tar.gz", hash = "sha256:e9794b88f542f31367fbdc7d00a3ec00f58a70a91c5b4f1147ced8112d70ef40", size = 1790701, upload-time = "2025-10-12T10:33:50.122Z" }
 
 [[package]]
 name = "pre-commit"

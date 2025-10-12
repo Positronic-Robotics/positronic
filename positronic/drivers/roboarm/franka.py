@@ -1,3 +1,4 @@
+import logging
 import time
 from collections.abc import Iterator
 from typing import Any
@@ -137,7 +138,7 @@ class Robot(pimm.ControlSystem):
                         continue
                     case command.CartesianMove(pose):
                         target_pose_wxyz = np.asarray([*pose.translation, *pose.rotation.as_quat])
-                        ik_solution = robot.inverse_kinematics(target_pose_wxyz)
+                        ik_solution = robot.inverse_kinematics_with_limits(target_pose_wxyz)
                         # TODO: implement MOVING state support
                         robot.set_target_joints(ik_solution)
                     case _:
@@ -147,6 +148,7 @@ class Robot(pimm.ControlSystem):
             robot_state.encode(st)
             self.state.emit(robot_state)
             if st.error != 0:
+                logging.warning(f'Error {st.error} occurred, recovering')
                 robot.recover_from_errors()
 
             yield pimm.Sleep(rate_limiter.wait_time())
