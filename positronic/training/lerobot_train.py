@@ -41,15 +41,36 @@ class PositronicEnvConfig(EnvConfig):
         return {}
 
 
+def _update_config(cfg: TrainPipelineConfig, **cfg_kwargs):
+    for k, v in cfg_kwargs.items():
+        try:
+            parts = k.split('.')
+            for part in parts[:-1]:
+                cfg = getattr(cfg, part)
+            setattr(cfg, parts[-1], v)
+        except AttributeError as e:
+            raise AttributeError(f'Could not update config for {k}') from e
+
+
 @cfn.config()
-def train(dataset_root: str, base_config: str = 'positronic/training/train_config.json'):
+def train(
+    dataset_root: str,
+    run_name: str,
+    output_dir=None,
+    base_config: str = 'positronic/training/train_config.json',
+    **cfg_kwargs,
+):
     assert Path(base_config).is_file(), f'Base config file {base_config} does not exist.'
     cfg = TrainPipelineConfig.from_pretrained(base_config)
     cfg.env = PositronicEnvConfig()
+    cfg.job_name = run_name
     cfg.dataset.root = Path(dataset_root).expanduser().absolute()
     cfg.dataset.repo_id = 'local'
     cfg.eval_freq = 0
     cfg.policy.push_to_hub = False
+    if output_dir is not None:
+        cfg.output_dir = Path(output_dir).expanduser().absolute() / run_name
+    _update_config(cfg, **cfg_kwargs)
 
     print('Starting training...')
     lerobot_train.init_logging()

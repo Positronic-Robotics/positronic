@@ -1,7 +1,6 @@
 {
     "dataset": {
         "repo_id": "local",
-        "root": "/tmp/datasets",
         "episodes": null,
         "image_transforms": {
             "enable": false,
@@ -64,63 +63,6 @@
         "use_imagenet_stats": true,
         "video_backend": "torchcodec"
     },
-    "env": {
-        "type": "hil",
-        "task": "PandaPickCubeKeyboard-v0",
-        "fps": 100,
-        "features": {
-            "action": {
-                "type": "ACTION",
-                "shape": [
-                    4
-                ]
-            },
-            "observation.image": {
-                "type": "VISUAL",
-                "shape": [
-                    3,
-                    128,
-                    128
-                ]
-            },
-            "observation.state": {
-                "type": "STATE",
-                "shape": [
-                    18
-                ]
-            }
-        },
-        "features_map": {
-            "action": "action",
-            "observation.image": "observation.image",
-            "observation.state": "observation.state"
-        },
-        "name": "PandaPickCube",
-        "use_viewer": true,
-        "gripper_penalty": 0.0,
-        "use_gamepad": true,
-        "state_dim": 18,
-        "action_dim": 4,
-        "episode_length": 100,
-        "video_record": {
-            "enabled": false,
-            "record_dir": "videos",
-            "trajectory_name": "trajectory"
-        },
-        "reward_classifier_pretrained_path": null,
-        "robot_config": null,
-        "teleop_config": null,
-        "wrapper": null,
-        "mode": null,
-        "repo_id": null,
-        "dataset_root": null,
-        "num_episodes": 10,
-        "episode": 0,
-        "device": "cuda",
-        "push_to_hub": true,
-        "pretrained_policy_name_or_path": null,
-        "number_of_steps_after_success": 0
-    },
     "policy": {
         "type": "act",
         "n_obs_steps": 1,
@@ -160,8 +102,6 @@
         "optimizer_weight_decay": 0.0001,
         "optimizer_lr_backbone": 1e-05
     },
-    "output_dir": "outputs/train/2025-09-19/14-19-47_hil_act",
-    "job_name": "hil_act",
     "resume": false,
     "seed": 1000,
     "num_workers": 4,
