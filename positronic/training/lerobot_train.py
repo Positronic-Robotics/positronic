@@ -45,9 +45,10 @@ def _update_config(cfg: TrainPipelineConfig, **cfg_kwargs):
     for k, v in cfg_kwargs.items():
         try:
             parts = k.split('.')
+            config = cfg
             for part in parts[:-1]:
-                cfg = getattr(cfg, part)
-            setattr(cfg, parts[-1], v)
+                config = getattr(config, part)
+            setattr(config, parts[-1], v)
         except AttributeError as e:
             raise AttributeError(f'Could not update config for {k}') from e
 
