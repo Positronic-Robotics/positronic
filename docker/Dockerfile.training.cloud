@@ -8,6 +8,8 @@ RUN apt-get update && apt-get install -y \
     build-essential \
     curl \
     git \
+    ffmpeg \
+    libturbojpeg \
     && rm -rf /var/lib/apt/lists/*
 
 # Configure uv and pip timeouts
@@ -32,6 +34,12 @@ COPY . /positronic
 
 # Set working directory
 WORKDIR /positronic
+
+# Install the project so runtime metadata (e.g. importlib.metadata) is present.
+# For local dev containers that bind-mount the repo, run
+# `uv pip install --no-deps -e /positronic` once after start so edits reflect
+# immediately while preserving metadata.
+RUN uv pip install --no-deps .
 
 # Set Python path
 ENV PYTHONPATH=/positronic
