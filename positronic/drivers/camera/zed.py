@@ -1,3 +1,4 @@
+import logging
 from collections.abc import Iterator
 from typing import Literal
 
@@ -21,6 +22,7 @@ class SLCamera(pimm.ControlSystem):
         depth_mode: Literal['none', 'near', 'far', 'high', 'ultra'] = 'none',
         max_depth: float = 10,
         depth_mask: bool = False,
+        max_recovery_time_sec: float = 10,
     ):
         """
         StereoLabs camera driver.
@@ -34,6 +36,7 @@ class SLCamera(pimm.ControlSystem):
             max_depth: (float) Maximum depth to use. Depth NaNs and +Inf will be set to this distance.
                         -Inf will be set to 0. All values above this will be set to max_depth.
             depth_mask: (bool) If True, will also generate image with 0 set to NaNs pixels, and 1 set to valid pixels
+            max_recovery_time_sec: (float) Maximum time to wait for camera recovery. If exceeded, will stop the camera.
         """
         super().__init__()
         self.init_params = sl.InitParameters()
@@ -50,10 +53,11 @@ class SLCamera(pimm.ControlSystem):
         self.init_params.coordinate_units = sl.UNIT.METER
         self.init_params.sdk_verbose = 1
         self.init_params.enable_image_enhancement = False
-        self.init_params.async_grab_camera_recovery = False
+        self.init_params.async_grab_camera_recovery = True
 
         self.max_depth = max_depth
         self.depth_mask = depth_mask
+        self.max_recovery_time_sec = max_recovery_time_sec
         self.frame: pimm.SignalEmitter = pimm.ControlSystemEmitter(self)
 
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Sleep]:
@@ -67,12 +71,24 @@ class SLCamera(pimm.ControlSystem):
             print(f'Failed to open camera: {error_code}')
             return
 
+        self.recovery_start_time = None
+
         while not should_stop.value:
             result = zed.grab()
             frame = {}
             if result != SUCCESS:
+                if self.recovery_start_time is None:
+                    logging.warning('Camera lost with error code %s, starting recovery', result)
+                    self.recovery_start_time = clock.now()
+                if clock.now() - self.recovery_start_time > self.max_recovery_time_sec:
+                    logging.error(f'Recovery time exceeded {self.max_recovery_time_sec} seconds, stopping')
+                    return
                 yield pimm.Sleep(0.01)
                 continue
+
+            if self.recovery_start_time is not None:
+                logging.info(f'Camera recovered after {clock.now() - self.recovery_start_time:.2f} seconds')
+                self.recovery_start_time = None
 
             image = sl.Mat()
             ts_s = zed.get_timestamp(TIME_REF_IMAGE).get_nanoseconds() / 1e9
