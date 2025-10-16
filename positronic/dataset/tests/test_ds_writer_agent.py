@@ -84,7 +84,9 @@ def build_agent_with_pipes(
         * return None to drop the sample (not recorded at all).
     Returns (agent, cmd_emitter, emitters_by_name).
     """
-    agent = DsWriterAgent(ds_writer, signals_spec, time_mode=time_mode)
+    agent = DsWriterAgent(ds_writer, time_mode=time_mode)
+    for name, serializer in signals_spec.items():
+        agent.add_signal(name, serializer)
     emitters: dict[str, pimm.SignalEmitter[Any]] = {name: world.pair(agent.inputs[name]) for name in signals_spec}
 
     cmd_em = world.pair(agent.command)

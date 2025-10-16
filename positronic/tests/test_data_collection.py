@@ -42,17 +42,14 @@ def assert_strictly_increasing(sig):
 def build_collection(world, out_dir: Path):
     dc = DataCollectionController(operator_position=None)
 
-    # Build ds_agent with minimal signals: target_grip, controller_positions, grip
-    spec = {
-        'target_grip': None,
-        'controller_positions': controller_positions_serializer,
-        'grip': None,
-    }
     writer_cm = LocalDatasetWriter(out_dir)
     writer = writer_cm.__enter__()
-    agent = DsWriterAgent(writer, spec)
+    agent = DsWriterAgent(writer)
+    agent.add_signal('target_grip')
+    agent.add_signal('controller_positions', controller_positions_serializer)
+    agent.add_signal('grip')
 
-    world.connect(dc.target_grip_emitter, agent.inputs['target_grip'])
+    world.connect(dc.target_grip, agent.inputs['target_grip'])
     world.connect(dc.ds_agent_commands, agent.command)
 
     ctrl_em_dc = world.pair(dc.controller_positions_receiver)
@@ -138,23 +135,20 @@ def test_data_collection_with_mujoco_robot_gripper(tmp_path):
     with pimm.World(clock=sim) as world:
         dc = DataCollectionController(operator_position=OperatorPosition.FRONT.value)
 
-        # Build ds_agent and wiring analogous to main_sim
-        spec = {
-            'target_grip': None,
-            'robot_commands': Serializers.robot_command,
-            'controller_positions': controller_positions_serializer,
-            'robot_state': Serializers.robot_state,
-            'grip': None,
-        }
         writer_cm = LocalDatasetWriter(tmp_path)
-        agent = DsWriterAgent(writer_cm.__enter__(), spec)
+        agent = DsWriterAgent(writer_cm.__enter__())
+        agent.add_signal('target_grip')
+        agent.add_signal('robot_commands', Serializers.robot_command)
+        agent.add_signal('controller_positions', controller_positions_serializer)
+        agent.add_signal('robot_state', Serializers.robot_state)
+        agent.add_signal('grip')
 
         world.connect(robot.state, dc.robot_state)
         world.connect(robot.state, agent.inputs['robot_state'])
         world.connect(dc.robot_commands, robot.commands)
         world.connect(dc.robot_commands, agent.inputs['robot_commands'])
-        world.connect(dc.target_grip_emitter, gripper.target_grip)
-        world.connect(dc.target_grip_emitter, agent.inputs['target_grip'])
+        world.connect(dc.target_grip, gripper.target_grip)
+        world.connect(dc.target_grip, agent.inputs['target_grip'])
         world.connect(gripper.grip, agent.inputs['grip'])
         world.connect(dc.ds_agent_commands, agent.command)
 

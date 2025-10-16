@@ -14,9 +14,9 @@ import positronic.cfg.hardware.roboarm
 import positronic.cfg.simulator
 import positronic.cfg.sound
 import positronic.cfg.webxr
-from positronic import geom
+from positronic import geom, wire
 from positronic.dataset import ds_writer_agent
-from positronic.dataset.ds_writer_agent import DsWriterAgent, DsWriterCommand, DsWriterCommandType, Serializers
+from positronic.dataset.ds_writer_agent import DsWriterCommand, DsWriterCommandType, Serializers
 from positronic.dataset.local_dataset import LocalDatasetWriter
 from positronic.drivers import roboarm
 from positronic.drivers.webxr import WebXR
@@ -96,12 +96,14 @@ class DataCollectionController(pimm.ControlSystem):
         self.controller_positions_receiver = pimm.ControlSystemReceiver(self)
         self.buttons_receiver = pimm.ControlSystemReceiver(self)
         self.robot_state = pimm.ControlSystemReceiver(self)
+        self.gripper_state = pimm.FakeReceiver(self)  # To make compatible with other "policy" control systems
+        self.frames = pimm.ReceiverDict(self, fake=True)
 
         self.robot_commands = pimm.ControlSystemEmitter(self)
-        self.target_grip_emitter = pimm.ControlSystemEmitter(self)
+        self.target_grip = pimm.ControlSystemEmitter(self)
 
         self.ds_agent_commands = pimm.ControlSystemEmitter(self)
-        self.sound_emitter = pimm.ControlSystemEmitter(self)
+        self.sound = pimm.ControlSystemEmitter(self)
 
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Sleep]:  # noqa: C901
         start_wav_path = 'positronic/assets/sounds/recording-has-started.wav'
@@ -122,7 +124,7 @@ class DataCollectionController(pimm.ControlSystem):
                     op = DsWriterCommandType.START_EPISODE if not recording else DsWriterCommandType.STOP_EPISODE
                     meta = self.metadata_getter() if op == DsWriterCommandType.START_EPISODE else {}
                     self.ds_agent_commands.emit(DsWriterCommand(op, meta))
-                    self.sound_emitter.emit(start_wav_path if not recording else end_wav_path)
+                    self.sound.emit(start_wav_path if not recording else end_wav_path)
                     recording = not recording
                 elif button_handler.just_pressed('right_A'):
                     if tracker.on:
@@ -133,12 +135,12 @@ class DataCollectionController(pimm.ControlSystem):
                     print('Resetting robot')
                     if recording:
                         self.ds_agent_commands.emit(DsWriterCommand.ABORT())
-                        self.sound_emitter.emit(abort_wav_path)
+                        self.sound.emit(abort_wav_path)
                     tracker.turn_off()
                     recording = False
                     self.robot_commands.emit(roboarm.command.Reset())
 
-                self.target_grip_emitter.emit(button_handler.get_value('right_trigger'))
+                self.target_grip.emit(button_handler.get_value('right_trigger'))
                 controller_pos, controller_pos_updated = controller_positions_receiver.value
                 if controller_pos_updated:
                     target_robot_pos = tracker.update(controller_pos['right'])
@@ -176,48 +178,24 @@ def _wire(
     robot_arm: pimm.ControlSystem | None,
     gripper: pimm.ControlSystem | None,
     sound: pimm.ControlSystem | None,
+    gui: DearpyguiUi | None,
     time_mode: ds_writer_agent.TimeMode = ds_writer_agent.TimeMode.CLOCK,
 ):
     cameras = cameras or {}
-    camera_mappings = {name: (f'image.{name}' if name != 'image' else 'image') for name in cameras.keys()}
+    cameras = {f'image.{name}' if name != 'image' else 'image': camera for name, camera in cameras.items()}
+
+    ds_agent = wire.wire(world, data_collection, dataset_writer, cameras, robot_arm, gripper, gui, time_mode)
 
     world.connect(webxr.controller_positions, data_collection.controller_positions_receiver)
     world.connect(webxr.buttons, data_collection.buttons_receiver)
 
-    if robot_arm is not None:
-        world.connect(data_collection.robot_commands, robot_arm.commands)
-        world.connect(robot_arm.state, data_collection.robot_state)
-
-    if gripper is not None:
-        world.connect(data_collection.target_grip_emitter, gripper.target_grip)
-
     if sound is not None:
-        world.connect(data_collection.sound_emitter, sound.wav_path)
-        if robot_arm is not None:
-            world.connect(robot_arm.state, sound.level, emitter_wrapper=pimm.map(_wrench_to_level))
+        world.connect(data_collection.sound, sound.wav_path)
+        world.connect(robot_arm.state, sound.level, emitter_wrapper=pimm.map(_wrench_to_level))
 
-    ds_agent = None
-    if dataset_writer is not None:
-        signals_spec = dict.fromkeys(camera_mappings.values(), Serializers.camera_images)
-        signals_spec['target_grip'] = None
-        signals_spec['robot_commands'] = Serializers.robot_command
-        signals_spec['controller_positions'] = controller_positions_serializer
-        signals_spec['robot_state'] = Serializers.robot_state
-        signals_spec['grip'] = None
-        ds_agent = DsWriterAgent(dataset_writer, signals_spec, time_mode=time_mode)
-        # Controls for the data set agent
+    if ds_agent is not None:
+        ds_agent.add_signal('controller_positions', controller_positions_serializer)
         world.connect(data_collection.ds_agent_commands, ds_agent.command)
-
-        # The data itself
-        for camera_name, camera in cameras.items():
-            world.connect(camera.frame, ds_agent.inputs[camera_mappings[camera_name]])
-        world.connect(webxr.controller_positions, ds_agent.inputs['controller_positions'])
-        world.connect(data_collection.robot_commands, ds_agent.inputs['robot_commands'])
-        world.connect(data_collection.target_grip_emitter, ds_agent.inputs['target_grip'])
-        if robot_arm is not None:
-            world.connect(robot_arm.state, ds_agent.inputs['robot_state'])
-        if gripper is not None:
-            world.connect(gripper.grip, ds_agent.inputs['grip'])
 
     return ds_agent
 
@@ -238,7 +216,7 @@ def main(
 
     writer_cm = LocalDatasetWriter(Path(output_dir)) if output_dir is not None else nullcontext(None)
     with writer_cm as dataset_writer, pimm.World() as world:
-        ds_agent = _wire(world, cameras, dataset_writer, data_collection, webxr, robot_arm, gripper, sound)
+        ds_agent = _wire(world, cameras, dataset_writer, data_collection, webxr, robot_arm, gripper, sound, None)
 
         bg_cs = [webxr]
         bg_cs.extend(cameras.values())
@@ -294,15 +272,12 @@ def main_sim(
 
     writer_cm = LocalDatasetWriter(Path(output_dir)) if output_dir is not None else nullcontext(None)
     with writer_cm as dataset_writer, pimm.World(clock=sim) as world:
-        ds_agent = _wire(world, cameras, dataset_writer, data_collection, webxr, robot_arm, gripper, sound,
+        ds_agent = _wire(world, cameras, dataset_writer, data_collection, webxr, robot_arm, gripper, sound, gui,
                          time_mode=ds_writer_agent.TimeMode.MESSAGE)  # fmt: skip
 
-        bg_cs = [webxr, gui, ds_agent, sound]
-
-        for camera_name, camera in cameras.items():
-            world.connect(camera.frame, gui.cameras[camera_name])
-
-        sim_iter = world.start([sim, *cameras.values(), robot_arm, gripper, data_collection], bg_cs)
+        sim_iter = world.start(
+            [sim, *cameras.values(), robot_arm, gripper, data_collection], [webxr, gui, ds_agent, sound]
+        )
         sim_iter = iter(sim_iter)
 
         start_time = pimm.world.SystemClock().now_ns()

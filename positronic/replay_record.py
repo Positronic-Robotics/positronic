@@ -10,7 +10,7 @@ import tqdm
 import pimm
 import positronic.cfg.dataset
 import positronic.cfg.simulator
-from positronic import geom
+from positronic import geom, wire
 from positronic.dataset import Dataset, Episode, transforms
 from positronic.dataset.ds_player_agent import DsPlayerAgent, DsPlayerCommand, DsPlayerStartCommand
 from positronic.dataset.ds_writer_agent import DsWriterAgent, DsWriterCommand, Serializers, TimeMode
@@ -19,6 +19,24 @@ from positronic.drivers import roboarm
 from positronic.gui.dpg import DearpyguiUi
 from positronic.simulator.mujoco.sim import MujocoCamera, MujocoFranka, MujocoGripper, MujocoSim
 from positronic.simulator.mujoco.transforms import MujocoSceneTransform
+
+
+class Replay(DsPlayerAgent):
+    """Adapts `DsPlayerAgent` to be used as a policy control system."""
+    def __init__(self, poll_hz: float = 100.0):
+        super().__init__(poll_hz)
+
+        self.robot_state = pimm.FakeReceiver(self)
+        self.gripper_state = pimm.FakeReceiver(self)
+        self.frames = pimm.ReceiverDict(self, fake=True)
+
+    @property
+    def robot_commands(self) -> pimm.ControlSystemEmitter:
+        return self.outputs['robot_commands']
+
+    @property
+    def target_grip(self) -> pimm.ControlSystemEmitter:
+        return self.outputs['target_grip']
 
 
 class ReplayController(pimm.ControlSystem):
@@ -92,35 +110,15 @@ def main(
     gripper = MujocoGripper(sim, actuator_name='actuator8_ph', joint_name='finger_joint1_ph')
     gui = DearpyguiUi() if show_gui else None
 
-    replay = DsPlayerAgent()
+    replay = Replay()
     controller = ReplayController(episode)
 
     writer_cm = LocalDatasetWriter(Path(output_dir)) if output_dir is not None else nullcontext(None)
     with writer_cm as dataset_writer, pimm.World(clock=sim) as world:
-        world.connect(replay.outputs['robot_commands'], robot_arm.commands)
-        world.connect(replay.outputs['target_grip'], gripper.target_grip)
+        ds_agent = wire.wire(world, replay, dataset_writer, cameras, robot_arm, gripper, gui, TimeMode.MESSAGE)
 
-        ds_agent = None
-        if dataset_writer is not None:
-            signals_spec = dict.fromkeys(cameras.keys(), Serializers.camera_images)
-            signals_spec['target_grip'] = None
-            signals_spec['robot_commands'] = Serializers.robot_command
-            signals_spec['robot_state'] = Serializers.robot_state
-            signals_spec['grip'] = None
-            ds_agent = DsWriterAgent(dataset_writer, signals_spec, time_mode=TimeMode.MESSAGE)
-
-            for camera_name, camera in cameras.items():
-                world.connect(camera.frame, ds_agent.inputs[camera_name])
-
-            world.connect(robot_arm.state, ds_agent.inputs['robot_state'])
-            world.connect(gripper.grip, ds_agent.inputs['grip'])
-            world.connect(replay.outputs['robot_commands'], ds_agent.inputs['robot_commands'])
-            world.connect(replay.outputs['target_grip'], ds_agent.inputs['target_grip'])
+        if ds_agent is not None:
             world.connect(controller.writer_command, ds_agent.command)
-
-        if gui is not None:
-            for camera_name, camera in cameras.items():
-                world.connect(camera.frame, gui.cameras[camera_name])
 
         world.connect(controller.player_command, replay.command)
         world.connect(replay.finished, controller.finished)

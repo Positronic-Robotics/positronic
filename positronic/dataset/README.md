@@ -323,7 +323,7 @@ with dataset_writer.new_episode() as ew:
 `DsWriterAgent` is a control-loop component (based on our `pimm` library) that turns live inputs into episode recordings using a flexible serializer pipeline. It listens for episode lifecycle commands (start/stop/abort) and, while an episode is open, appends any updated inputs with timestamps from the provided clock.
 
 Key ideas
-- Inputs are declared up front via `signals_spec: dict[name -> Serializer|None]`.
+- Inputs are registered explicitly through `DsWriterAgent.add_signal(name, serializer=None)`.
 - The agent polls inputs at a configurable rate and appends only on updates.
 - A separate `command` channel controls episode lifecycle.
 - `time_mode` selects how timestamps are recorded: `CLOCK` (default) stamps samples when the agent ingests them (useful during live data collection so every signal reflects when the recorder could act on it), while `MESSAGE` preserves the timestamp attached by the emitting control system (ideal for analysing inference latency by keeping original emission times).
@@ -334,7 +334,7 @@ Key ideas
   - Dict of suffix -> value: expanded and recorded as `name + suffix` for each
     item (use empty suffix `""` to keep the base name as-is).
   - `None`: the sample is dropped (not recorded).
-- If the serializer is `None` in `signals_spec`, the value is passed through.
+- Omitting the serializer (or passing `None`) records the value unchanged.
 
 Built‑in serializers (`positronic.dataset.ds_writer_agent.Serializers`)
 - `transform_3d(pose: Transform3D) -> np.ndarray`

@@ -15,7 +15,8 @@ import positronic.cfg.policy.action
 import positronic.cfg.policy.observation
 import positronic.cfg.policy.policy
 import positronic.cfg.simulator
-from positronic.dataset.ds_writer_agent import DsWriterAgent, DsWriterCommand, Serializers, TimeMode
+from positronic import wire
+from positronic.dataset.ds_writer_agent import DsWriterCommand, Serializers, TimeMode
 from positronic.dataset.local_dataset import LocalDatasetWriter
 from positronic.drivers import roboarm
 from positronic.gui.dpg import DearpyguiUi
@@ -236,46 +237,19 @@ def main_sim(
 
     writer_cm = LocalDatasetWriter(Path(output_dir)) if output_dir is not None else nullcontext(None)
     with writer_cm as dataset_writer, pimm.World(clock=sim) as world:
-        ds_agent = None
-        if dataset_writer is not None:
-            signals_spec = dict.fromkeys(cameras.keys())
-            signals_spec['robot_state'] = Serializers.robot_state
-            signals_spec['robot_commands'] = Serializers.robot_command
-            signals_spec['target_grip'] = None
-            signals_spec['grip'] = None
-            for observer_name in observers.keys():
-                signals_spec[observer_name] = None
-            ds_agent = DsWriterAgent(dataset_writer, signals_spec, time_mode=TimeMode.MESSAGE)
-            control_systems.append(ds_agent)
+        ds_agent = wire.wire(world, inference, dataset_writer, cameras, robot_arm, gripper, gui, TimeMode.MESSAGE)
 
-            # TODO: It seems that the right way is for inference to report its inputs,
-            # rather than collecting them directly from "hardware".
-            world.connect(robot_arm.state, ds_agent.inputs['robot_state'])
-            world.connect(inference.robot_commands, ds_agent.inputs['robot_commands'])
-            world.connect(gripper.grip, ds_agent.inputs['grip'])
-            world.connect(inference.target_grip, ds_agent.inputs['target_grip'])
+        if ds_agent is not None:
             for observer_name in observers.keys():
+                ds_agent.add_signal(observer_name)
                 world.connect(sim.observations[observer_name], ds_agent.inputs[observer_name])
 
-        cameras = cameras or {}
-        for camera_name, camera in cameras.items():
-            world.connect(camera.frame, inference.frames[camera_name])
-            if ds_agent is not None:
-                world.connect(camera.frame, ds_agent.inputs[camera_name])
-            if gui is not None:
-                world.connect(camera.frame, gui.cameras[camera_name])
-
-        world.connect(robot_arm.state, inference.robot_state)
-        world.connect(inference.robot_commands, robot_arm.commands)
-        world.connect(gripper.grip, inference.gripper_state)
-        world.connect(inference.target_grip, gripper.target_grip)
-
         driver = Driver(num_iterations, simulation_time, meta=meta)
+        world.connect(driver.inf_commands, inference.command)
         if ds_agent is not None:
             world.connect(driver.ds_commands, ds_agent.command)
-        world.connect(driver.inf_commands, inference.command)
 
-        sim_iter = world.start([driver, *control_systems], gui)
+        sim_iter = world.start([driver, *control_systems, ds_agent], gui)
 
         p_bar = tqdm.tqdm(total=simulation_time * num_iterations, unit='s')
         for _ in sim_iter:

@@ -55,7 +55,8 @@ class DsWriterCommand:
 
 
 # Serializer contract for inputs:
-# - If None is provided for a signal name in signals_spec, the value is passed through unchanged.
+# - Register signals with `DsWriterAgent.add_signal(name, serializer=None)`.
+# - If `serializer` is omitted or None, the value is passed through unchanged.
 # - If a callable is provided, it is invoked as serializer(value) and can return:
 #     * a transformed value -> recorded under the same signal name
 #     * a dict mapping suffix -> value -> expands into multiple signals recorded as name+suffix
@@ -83,8 +84,8 @@ class Serializers:
 
     Usage:
         from positronic.dataset.ds_writer_agent import Serializers
-        spec = {"ee_pose": Serializers.transform_3d}
-        agent = DsWriterAgent(writer, spec)
+        agent = DsWriterAgent(writer)
+        agent.add_signal("ee_pose", Serializers.transform_3d)
 
     Notes:
         - Also exported as `Serializers` (US spelling) for convenience.
@@ -184,7 +185,6 @@ class DsWriterAgent(pimm.ControlSystem):
     def __init__(
         self,
         ds_writer: DatasetWriter,
-        signals_spec: dict[str, Serializer | None],
         poll_hz: float = 1000.0,
         time_mode: TimeMode = TimeMode.CLOCK,
     ):
@@ -193,22 +193,22 @@ class DsWriterAgent(pimm.ControlSystem):
         self._time_mode = time_mode
         self.command = pimm.ControlSystemReceiver[DsWriterCommand](self)
 
-        self._inputs: dict[str, pimm.ControlSystemReceiver[Any]] = {
-            name: pimm.ControlSystemReceiver[Any](self) for name in (signals_spec or [])
-        }
-        self._inputs_view = _KeyFrozenMapping(self._inputs)
-        # Only keep explicitly provided serializers; None means pass-through
-        self._serializers = {name: serializer for name, serializer in signals_spec.items() if serializer is not None}
+        self._inputs: dict[str, pimm.ControlSystemReceiver[Any]] = {}
+        self._serializers = {}
         self._signal_meta_specs: dict[str, dict[str, list[str]]] = {}
-        for name, serializer in self._serializers.items():
-            names = _extract_names(serializer)
-            if names is not None:
-                self._signal_meta_specs[name] = names
+
+    def add_signal(self, name: str, serializer: Serializer | None = None):
+        self._inputs[name] = pimm.ControlSystemReceiver[Any](self)
+        names = _extract_names(serializer)
+        # Only keep explicitly provided serializers; None means pass-through
+        if names is not None:
+            self._signal_meta_specs[name] = names
+        if serializer is not None:
+            self._serializers[name] = serializer
 
     @property
     def inputs(self) -> dict[str, pimm.ControlSystemReceiver[Any]]:
-        # Expose a mapping with frozen keys; values can be updated for existing keys.
-        return self._inputs_view  # type: ignore[return-value]
+        return _KeyFrozenMapping(self._inputs)
 
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock):
         """Main loop: process commands and append updated inputs to the episode.
