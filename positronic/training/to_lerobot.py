@@ -15,6 +15,7 @@ Examples:
     --dataset.path=/path/to/local_dataset
 """
 
+import json
 import resource  # This will fail on Windows, as this library is Unix only, but we don't support Windows anyway
 from collections.abc import Sequence as AbcSequence
 from pathlib import Path
@@ -142,6 +143,13 @@ def convert_to_lerobot_dataset(output_dir: str, fps: int, video: bool, dataset: 
         features=_extract_features(dataset),
         image_writer_threads=32,
     )
+    if 'gr00t_modality' in dataset.meta:
+        modality = dataset.meta.get('gr00t_modality')
+        if modality is not None:
+            modality['annotation'] = {'language.language_instruction': {'original_key': 'task_index'}}
+            modality_path = Path(output_dir).expanduser().absolute() / 'meta' / 'modality.json'
+            with modality_path.open('w', encoding='utf-8') as f:
+                json.dump(modality, f, indent=2)
 
     append_data_to_dataset(lr_dataset=lr_dataset, p_dataset=dataset, task=task)
     print(f'Dataset converted and saved to {output_dir}')
@@ -152,6 +160,24 @@ def convert_to_lerobot_dataset(output_dir: str, fps: int, video: bool, dataset: 
 )
 def append_data_to_lerobot_dataset(lerobot_dataset_dir: str, dataset: Dataset, task: str):
     lr_dataset = LeRobotDataset(repo_id='local', root=Path(lerobot_dataset_dir).expanduser().absolute())
+
+    lr_modality_path = Path(lerobot_dataset_dir).expanduser().absolute() / 'meta' / 'modality.json'
+    ds_modality = dataset.meta.get('gr00t_modality', None)
+    if ds_modality is not None:
+        ds_modality['annotation'] = {'language.language_instruction': {'original_key': 'task_index'}}
+    if lr_modality_path.exists():
+        with lr_modality_path.open(encoding='utf-8') as f:
+            lr_modality = json.load(f)
+        if ds_modality is None or lr_modality != ds_modality:
+            raise ValueError(
+                "Mismatch in 'gr00t_modality':"
+                " Existing LeRobot dataset modality and dataset.meta['gr00t_modality']"
+                ' must both exist and be equal, or be absent from both.'
+            )
+    elif ds_modality is not None:
+        # If dataset has modality but lerobot dataset doesn't, this is an error
+        raise ValueError("'gr00t_modality' exists in dataset.meta but not in the destination LeRobot dataset.")
+
     append_data_to_dataset(lr_dataset=lr_dataset, p_dataset=dataset, task=task)
     print(f'Dataset extended and saved to {lerobot_dataset_dir}')
 

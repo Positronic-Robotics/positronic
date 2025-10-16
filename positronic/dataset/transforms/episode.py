@@ -20,6 +20,11 @@ class EpisodeTransform(ABC):
         """For given output key, return the transformed signal or static value."""
         ...
 
+    @property
+    def meta(self) -> dict[str, Any]:
+        """Metadata for this transform."""
+        return {}
+
 
 class KeyFuncEpisodeTransform(EpisodeTransform):
     """Transform an episode using a dictionary of key-function pairs."""

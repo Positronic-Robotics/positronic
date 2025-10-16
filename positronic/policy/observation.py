@@ -23,6 +23,15 @@ class ObservationEncoder(transforms.KeyFuncEpisodeTransform):
         super().__init__(**{'observation.state': self.encode_state}, **image_fns)
         self._state_features = state_features
         self._image_configs = images
+        self._metadata = {}
+
+    @property
+    def meta(self) -> dict[str, Any]:
+        return self._metadata
+
+    @meta.setter
+    def meta(self, value: dict[str, Any]):
+        self._metadata = value
 
     def encode_state(self, episode: Episode) -> Signal[Any]:
         return transforms.concat(

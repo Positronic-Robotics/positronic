@@ -173,6 +173,11 @@ class Dataset:
     def signals_meta(self) -> dict[str, SignalMeta]:
         pass
 
+    @property
+    def meta(self) -> dict[str, Any]:
+        # Optional dataset-level metadata (empty by default)
+        return {}
+
 class DatasetWriter:
     # Allocate a new `Episode` and return an EpisodeWriter (context-managed)
     def new_episode(self) -> EpisodeWriter:
@@ -416,6 +421,8 @@ class EpisodeTransform(ABC):
 ```
 
 `TransformedEpisode` applies one or more `EpisodeTransform`s to an existing episode (all in lazy model). When `pass_through=True`, all original keys are preserved, unless they are overwritten by transforms. You can also provide a list of key names to `pass_through` so that only the listed originals remain visible. `TransformedDataset` lifts the same idea to the dataset level so that every retrieved episode exposes the transformed view.
+
+Each `EpisodeTransform` can expose additional metadata through a `meta` property. `TransformedDataset.meta` merges those dictionaries (along with the wrapped dataset's `meta`) so downstream consumers can inspect accumulated metadata without materialising episodes.
 
 ### Example
 

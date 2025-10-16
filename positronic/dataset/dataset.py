@@ -1,6 +1,7 @@
 import collections.abc
 from abc import ABC, abstractmethod
 from contextlib import AbstractContextManager
+from typing import Any
 
 import numpy as np
 
@@ -68,3 +69,8 @@ class Dataset(ABC, collections.abc.Sequence[Episode]):
     def signals_meta(self) -> dict[str, SignalMeta]:
         """Return signal metadata keyed by signal name for the dataset schema."""
         pass
+
+    @property
+    def meta(self) -> dict[str, Any]:
+        """Return dataset metadata."""
+        return {}

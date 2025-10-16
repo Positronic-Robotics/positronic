@@ -29,6 +29,15 @@ def _relative_rot_vec(q_current: np.ndarray, q_target: np.ndarray, representatio
 class ActionDecoder(transforms.KeyFuncEpisodeTransform):
     def __init__(self):
         super().__init__(action=self.encode_episode)
+        self._metadata = {}
+
+    @property
+    def meta(self) -> dict[str, Any]:
+        return self._metadata
+
+    @meta.setter
+    def meta(self, value: dict[str, Any]):
+        self._metadata = value
 
     @abstractmethod
     def encode_episode(self, episode: Episode) -> Signal[Any]:

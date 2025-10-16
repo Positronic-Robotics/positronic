@@ -42,13 +42,25 @@ def end_effector_mem15():
 
 
 @cfn.config(state=['robot_state.ee_pose', 'grip'])
-def franka_mujoco_stackcubes(state):
+def franka_mujoco_stackcubes(state: list[str]):
     from positronic.policy.observation import ObservationEncoder
 
-    return ObservationEncoder(
+    result = ObservationEncoder(
         state_features=state,
         images={'left': ('image.handcam_left', (224, 224)), 'side': ('image.back_view', (224, 224))},
     )
+    result.meta['gr00t_modality'] = {
+        'state': {
+            'robot_position_quaternion': {'start': 0, 'end': 4, 'rotation_type': 'quaternion'},
+            'robot_position_translation': {'start': 4, 'end': 7},
+            'grip': {'start': 7, 'end': 8},
+        },
+        'video': {
+            'ego_view': {'original_key': 'observation.images.left'},
+            'side_image': {'original_key': 'observation.images.side'},
+        },
+    }
+    return result
 
 
 @cfn.config()

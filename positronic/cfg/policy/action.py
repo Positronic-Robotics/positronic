@@ -9,7 +9,15 @@ RotRep = geom.Rotation.Representation
 def absolute_position(rotation_representation: RotRep, tgt_ee_pose_key: str, tgt_grip_key: str):
     from positronic.policy.action import AbsolutePositionAction
 
-    return AbsolutePositionAction(tgt_ee_pose_key, tgt_grip_key, rotation_representation=rotation_representation)
+    result = AbsolutePositionAction(tgt_ee_pose_key, tgt_grip_key, rotation_representation=rotation_representation)
+    result.meta['gr00t_modality'] = {
+        'action': {
+            'target_robot_position_quaternion': {'start': 0, 'end': 4, 'rotation_type': 'quaternion'},
+            'target_robot_position_translation': {'start': 4, 'end': 7},
+            'target_grip': {'start': 7, 'end': 8},
+        }
+    }
+    return result
 
 
 @cfn.config(num_joints=7)
