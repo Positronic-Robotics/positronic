@@ -137,6 +137,36 @@ class TestSignalWriterContext:
             w.append(2, 2000)
 
 
+class TestSignalWriterChunking:
+    def test_large_dataset_chunked_writing(self, tmp_path):
+        filepath = tmp_path / 'large_test.parquet'
+        chunk_size, num_records = 1000, 10000
+
+        with SimpleSignalWriter(filepath, chunk_size=chunk_size) as writer:
+            for i in range(num_records):
+                data = np.array([i, i * 2, i * 3], dtype=np.float32)
+                timestamp = i * 10**6  # nanoseconds
+                writer.append(data, timestamp)
+
+        assert filepath.exists()
+
+        reader = SimpleSignal(filepath)
+
+        value, ts = reader.time[5_000_000]
+        np.testing.assert_array_equal(value, np.array([5, 10, 15], dtype=np.float32))
+        assert ts == 5_000_000
+
+        view = reader.time[0:9_000_001:1_000_000]
+        assert len(view) == 10
+
+        for i in range(10):
+            value, ts = view[i]
+            np.testing.assert_array_equal(value, np.array([i, i * 2, i * 3], dtype=np.float32))
+            assert ts == i * 1_000_000
+
+        assert filepath.stat().st_size > 0
+
+
 class TestVectorInterface:
     def test_len_and_search_ts_empty(self, tmp_path):
         s = create_signal(tmp_path, [], 'empty.parquet')
