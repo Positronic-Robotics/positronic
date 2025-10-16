@@ -10,9 +10,11 @@ from pimm.core import (
     ControlSystem,
     ControlSystemEmitter,
     ControlSystemReceiver,
+    EmitterDict,
     FakeEmitter,
     FakeReceiver,
     Message,
+    ReceiverDict,
     SignalEmitter,
     SignalReceiver,
     Sleep,
@@ -977,4 +979,198 @@ class TestFakeConnectors:
             assert result.ts == 456
 
             # Fake connections should not deliver data
+            assert consumer1.receiver.read() is None
+
+
+class TestReceiverDict:
+    """Test ReceiverDict lazy allocation with fake receiver support."""
+
+    def test_creates_real_receivers_by_default(self):
+        """Test that ReceiverDict creates real receivers by default."""
+        system = DummyControlSystem('test')
+        receivers = ReceiverDict(system)
+
+        receiver = receivers['test_key']
+        assert isinstance(receiver, ControlSystemReceiver)
+        assert not isinstance(receiver, FakeReceiver)
+        assert receiver.owner is system
+
+    def test_creates_fake_receivers_when_all_fake(self):
+        """Test that ReceiverDict creates fake receivers when fake=True."""
+        system = DummyControlSystem('test')
+        receivers = ReceiverDict(system, fake=True)
+
+        receiver1 = receivers['key1']
+        receiver2 = receivers['key2']
+
+        assert isinstance(receiver1, FakeReceiver)
+        assert isinstance(receiver2, FakeReceiver)
+        assert receiver1.owner is system
+        assert receiver2.owner is system
+
+    def test_creates_specific_fake_receivers(self):
+        """Test that ReceiverDict creates fake receivers for specific keys."""
+        system = DummyControlSystem('test')
+        receivers = ReceiverDict(system, fake={'fake_key1', 'fake_key2'})
+
+        real_receiver = receivers['real_key']
+        fake_receiver1 = receivers['fake_key1']
+        fake_receiver2 = receivers['fake_key2']
+
+        assert isinstance(real_receiver, ControlSystemReceiver)
+        assert not isinstance(real_receiver, FakeReceiver)
+
+        assert isinstance(fake_receiver1, FakeReceiver)
+        assert isinstance(fake_receiver2, FakeReceiver)
+
+    def test_lazy_allocation(self):
+        """Test that receivers are only created when accessed."""
+        system = DummyControlSystem('test')
+        receivers = ReceiverDict(system)
+
+        assert len(receivers) == 0
+
+        _ = receivers['key1']
+        assert len(receivers) == 1
+
+        _ = receivers['key2']
+        assert len(receivers) == 2
+
+    def test_same_key_returns_same_receiver(self):
+        """Test that accessing the same key returns the same receiver instance."""
+        system = DummyControlSystem('test')
+        receivers = ReceiverDict(system)
+
+        receiver1 = receivers['test_key']
+        receiver2 = receivers['test_key']
+
+        assert receiver1 is receiver2
+
+    def test_fake_receivers_block_communication_in_world(self):
+        """Test that fake receivers from ReceiverDict block communication."""
+        producer = DummyControlSystem('producer', steps=1)
+        consumer = DummyControlSystem('consumer', steps=1)
+        consumer.inputs = ReceiverDict(consumer, fake={'optional_input'})
+
+        with World() as world:
+            # Connect to fake receiver
+            world.connect(producer.emitter, consumer.inputs['optional_input'])
+
+            scheduler = world.start([producer, consumer])
+            producer.emitter.emit('test_data')
+            list(scheduler)
+
+            # Connection should be ignored
+            assert len(world._connections) == 0
+
+
+class TestEmitterDict:
+    """Test EmitterDict lazy allocation with fake emitter support."""
+
+    def test_creates_real_emitters_by_default(self):
+        """Test that EmitterDict creates real emitters by default."""
+        system = DummyControlSystem('test')
+        emitters = EmitterDict(system)
+
+        emitter = emitters['test_key']
+        assert isinstance(emitter, ControlSystemEmitter)
+        assert not isinstance(emitter, FakeEmitter)
+        assert emitter.owner is system
+
+    def test_creates_fake_emitters_when_all_fake(self):
+        """Test that EmitterDict creates fake emitters when fake=True."""
+        system = DummyControlSystem('test')
+        emitters = EmitterDict(system, fake=True)
+
+        emitter1 = emitters['key1']
+        emitter2 = emitters['key2']
+
+        assert isinstance(emitter1, FakeEmitter)
+        assert isinstance(emitter2, FakeEmitter)
+        assert emitter1.owner is system
+        assert emitter2.owner is system
+
+    def test_creates_specific_fake_emitters(self):
+        """Test that EmitterDict creates fake emitters for specific keys."""
+        system = DummyControlSystem('test')
+        emitters = EmitterDict(system, fake={'fake_key1', 'fake_key2'})
+
+        real_emitter = emitters['real_key']
+        fake_emitter1 = emitters['fake_key1']
+        fake_emitter2 = emitters['fake_key2']
+
+        assert isinstance(real_emitter, ControlSystemEmitter)
+        assert not isinstance(real_emitter, FakeEmitter)
+
+        assert isinstance(fake_emitter1, FakeEmitter)
+        assert isinstance(fake_emitter2, FakeEmitter)
+
+    def test_lazy_allocation(self):
+        """Test that emitters are only created when accessed."""
+        system = DummyControlSystem('test')
+        emitters = EmitterDict(system)
+
+        assert len(emitters) == 0
+
+        _ = emitters['key1']
+        assert len(emitters) == 1
+
+        _ = emitters['key2']
+        assert len(emitters) == 2
+
+    def test_same_key_returns_same_emitter(self):
+        """Test that accessing the same key returns the same emitter instance."""
+        system = DummyControlSystem('test')
+        emitters = EmitterDict(system)
+
+        emitter1 = emitters['test_key']
+        emitter2 = emitters['test_key']
+
+        assert emitter1 is emitter2
+
+    def test_fake_emitters_block_communication_in_world(self):
+        """Test that fake emitters from EmitterDict block communication."""
+        producer = DummyControlSystem('producer', steps=1)
+        consumer = DummyControlSystem('consumer', steps=1)
+        producer.outputs = EmitterDict(producer, fake={'optional_output'})
+
+        with World() as world:
+            # Connect from fake emitter
+            world.connect(producer.outputs['optional_output'], consumer.receiver)
+
+            scheduler = world.start([producer, consumer])
+            list(scheduler)
+
+            # Connection should be ignored
+            assert len(world._connections) == 0
+
+    def test_mixed_real_and_fake_emitters(self):
+        """Test EmitterDict with mixed real and fake emitters in wiring."""
+        producer = DummyControlSystem('producer', steps=1)
+        consumer1 = DummyControlSystem('consumer1', steps=1)
+        consumer2 = DummyControlSystem('consumer2', steps=1)
+        producer.outputs = EmitterDict(producer, fake={'fake_output'})
+
+        with World() as world:
+            # Connect fake emitter
+            world.connect(producer.outputs['fake_output'], consumer1.receiver)
+            # Connect real emitter
+            world.connect(producer.outputs['real_output'], consumer2.receiver)
+
+            scheduler = world.start([producer, consumer1, consumer2])
+
+            # Send data through real output
+            producer.outputs['real_output'].emit('real_data')
+
+            list(scheduler)
+
+            # Only real connection should exist
+            assert len(world._connections) == 1
+
+            # Real connection should work
+            result = consumer2.receiver.read()
+            assert result is not None
+            assert result.data == 'real_data'
+
+            # Fake connection should not deliver data
             assert consumer1.receiver.read() is None

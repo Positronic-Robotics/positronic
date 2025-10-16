@@ -1,5 +1,5 @@
 from abc import ABC, abstractmethod
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterable, Iterator
 from dataclasses import dataclass
 from typing import Generic, TypeVar, final
 
@@ -186,26 +186,38 @@ class FakeReceiver(ControlSystemReceiver[T]):
 
 
 class ReceiverDict(dict[str, ControlSystemReceiver[U]]):
-    """Dictionary that lazily allocates receivers owned by a control system."""
+    """Dictionary that lazily allocates receivers owned by a control system.
 
-    def __init__(self, owner: ControlSystem):
+    Pass fake=True for all fake receivers, or fake={'key1', 'key2'} for specific keys.
+    """
+
+    def __init__(self, owner: ControlSystem, fake: bool | Iterable[str] = False):
         super().__init__()
         self._owner = owner
+        self._fake = set(fake) if isinstance(fake, Iterable) else set()
+        self._all_fake = fake is True
 
     def __missing__(self, key: str) -> ControlSystemReceiver[U]:
-        receiver = ControlSystemReceiver(self._owner)
+        fake = self._all_fake or key in self._fake
+        receiver = FakeReceiver(self._owner) if fake else ControlSystemReceiver(self._owner)
         self[key] = receiver
         return receiver
 
 
 class EmitterDict(dict[str, ControlSystemEmitter[U]]):
-    """Dictionary that lazily allocates emitters owned by a control system."""
+    """Dictionary that lazily allocates emitters owned by a control system.
 
-    def __init__(self, owner: ControlSystem):
+    Pass fake=True for all fake emitters, or fake={'key1', 'key2'} for specific keys.
+    """
+
+    def __init__(self, owner: ControlSystem, fake: bool | Iterable[str] = False):
         super().__init__()
         self._owner = owner
+        self._fake = set(fake) if isinstance(fake, Iterable) else set()
+        self._all_fake = fake is True
 
     def __missing__(self, key: str) -> ControlSystemEmitter[U]:
-        emitter = ControlSystemEmitter(self._owner)
+        fake = self._all_fake or key in self._fake
+        emitter = FakeEmitter(self._owner) if fake else ControlSystemEmitter(self._owner)
         self[key] = emitter
         return emitter

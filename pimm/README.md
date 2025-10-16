@@ -147,6 +147,25 @@ Use fake connectors when control systems share most of their interface but diffe
 in optional signals. The type system sees them as normal connectors, so your
 wiring stays uniform.
 
+For control systems with many inputs or outputs, `ReceiverDict` and `EmitterDict`
+lazily allocate connectors on access. Pass `fake=True` to make all connectors fake,
+or `fake={'key1', 'key2'}` to make only specific ones fake:
+
+```python
+class MultiCameraSystem(pimm.ControlSystem):
+    def __init__(self):
+        # Create receivers for cameras, some may not exist
+        self.cameras = pimm.ReceiverDict(self, fake={'camera3', 'camera4'})
+
+    def run(self, should_stop, clock):
+        while not should_stop.value:
+            # Access cameras by key - real ones get data, fake ones are ignored
+            frame1 = self.cameras['camera1'].read()
+            frame2 = self.cameras['camera2'].read()
+            # camera3 and camera4 are fake, connections to them are ignored
+            yield pimm.Sleep(0.03)
+```
+
 ## Control Systems and the World
 
 A control system is any class that subclasses `pimm.ControlSystem` and implements
@@ -227,7 +246,7 @@ Pimm is alpha software and continues to evolve. The next milestone is decoupling
 connection planning from scheduling so you can describe the signal graph once and
 choose execution placement later. Feedback and pull requests are very welcome!
 
-## Where Pimm Fits
+## How PImm compares to alteratives:
 
 **ROS 2 (Python).** ROS 2 behaves like a robot operating system: it layers
 distributed publish/subscribe, service discovery, QoS controls, and IDL tooling on
