@@ -22,6 +22,8 @@ from .core import (
     ControlSystem,
     ControlSystemEmitter,
     ControlSystemReceiver,
+    FakeEmitter,
+    FakeReceiver,
     Message,
     SignalEmitter,
     SignalReceiver,
@@ -587,7 +589,8 @@ class World:
         assert receiver not in [e[1] for e in self._connections], 'Receiver can be connected only to one Emitter'
         assert isinstance(emitter, ControlSystemEmitter)
         assert isinstance(receiver, ControlSystemReceiver)
-        self._connections.append((emitter, receiver, emitter_wrapper, receiver_wrapper))
+        if not isinstance(emitter, FakeEmitter) and not isinstance(receiver, FakeReceiver):
+            self._connections.append((emitter, receiver, emitter_wrapper, receiver_wrapper))
 
     def pair(self, connector: ControlSystemEmitter | ControlSystemReceiver, *, wrapper=lambda x: x):
         """Create the complementary connector for an existing endpoint.

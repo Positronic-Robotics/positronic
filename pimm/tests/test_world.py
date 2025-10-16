@@ -10,6 +10,8 @@ from pimm.core import (
     ControlSystem,
     ControlSystemEmitter,
     ControlSystemReceiver,
+    FakeEmitter,
+    FakeReceiver,
     Message,
     SignalEmitter,
     SignalReceiver,
@@ -843,3 +845,136 @@ class TestWorldInterleave:
             original_order = execution_order.copy()
 
             assert original_order == ['a_0', 'b_0', 'a_1', 'b_1', 'a_2', 'b_2', 'a_3', 'b_3']
+
+
+class TestFakeConnectors:
+    """Test communication blocking behavior with FakeEmitter and FakeReceiver."""
+
+    def test_fake_emitter_blocks_communication(self):
+        """Test that FakeEmitter prevents signals from reaching a real receiver."""
+        producer = DummyControlSystem('producer', steps=1)
+        consumer = DummyControlSystem('consumer', steps=1)
+
+        fake_emitter = FakeEmitter(producer)
+
+        with World() as world:
+            # Connect fake emitter to real receiver
+            world.connect(fake_emitter, consumer.receiver)
+
+            # Start the control systems
+            scheduler = world.start([producer, consumer])
+            list(scheduler)
+
+            # Real receiver should not receive anything (returns None initially)
+            result = consumer.receiver.read()
+            assert result is None
+
+    def test_fake_receiver_blocks_communication(self):
+        """Test that FakeReceiver prevents signals from a real emitter."""
+        producer = DummyControlSystem('producer', steps=1)
+        consumer = DummyControlSystem('consumer', steps=1)
+
+        fake_receiver = FakeReceiver(consumer)
+
+        with World() as world:
+            # Connect real emitter to fake receiver
+            world.connect(producer.emitter, fake_receiver)
+
+            # Start the control systems
+            scheduler = world.start([producer, consumer])
+
+            # Emit from real emitter - should not raise error
+            producer.emitter.emit('test_data')
+
+            list(scheduler)
+
+            # Fake receiver should not be bound, so emit should succeed
+            # but the data goes nowhere
+
+    def test_fake_emitter_to_real_receiver_no_data_flow(self):
+        """Test that connecting FakeEmitter to real receiver prevents data flow."""
+        producer = DummyControlSystem('producer', steps=1)
+        consumer = DummyControlSystem('consumer', steps=1)
+
+        fake_emitter = FakeEmitter(producer)
+
+        with World() as world:
+            world.connect(fake_emitter, consumer.receiver)
+
+            scheduler = world.start([producer, consumer])
+            list(scheduler)
+
+            # Consumer receiver should remain uninitialized
+            assert consumer.receiver.read() is None
+
+    def test_real_emitter_to_fake_receiver_no_data_flow(self):
+        """Test that connecting real emitter to FakeReceiver prevents data flow."""
+        producer = DummyControlSystem('producer', steps=1)
+        consumer = DummyControlSystem('consumer', steps=1)
+
+        fake_receiver = FakeReceiver(consumer)
+
+        with World() as world:
+            world.connect(producer.emitter, fake_receiver)
+
+            scheduler = world.start([producer, consumer])
+
+            # Emit data from real emitter
+            producer.emitter.emit('test_message', ts=123)
+
+            list(scheduler)
+
+            # Data should not flow to fake receiver (connection was ignored)
+            # No error should occur
+
+    def test_both_fake_connectors_no_error(self):
+        """Test that connecting FakeEmitter to FakeReceiver causes no errors."""
+        producer = DummyControlSystem('producer', steps=1)
+        consumer = DummyControlSystem('consumer', steps=1)
+
+        fake_emitter = FakeEmitter(producer)
+        fake_receiver = FakeReceiver(consumer)
+
+        with World() as world:
+            world.connect(fake_emitter, fake_receiver)
+
+            # Should not raise any errors
+            scheduler = world.start([producer, consumer])
+            list(scheduler)
+
+            # Connection should be ignored
+            assert len(world._connections) == 0
+
+    def test_real_connections_work_alongside_fake_connections(self):
+        """Test that real connections work properly when fake connections are present."""
+        producer1 = DummyControlSystem('producer1', steps=1)
+        producer2 = DummyControlSystem('producer2', steps=1)
+        consumer1 = DummyControlSystem('consumer1', steps=1)
+        consumer2 = DummyControlSystem('consumer2', steps=1)
+
+        fake_emitter = FakeEmitter(producer1)
+        fake_receiver = FakeReceiver(consumer1)
+
+        with World() as world:
+            # Add fake connections
+            world.connect(fake_emitter, consumer1.receiver)
+            world.connect(producer2.emitter, fake_receiver)
+
+            # Add real connection
+            world.connect(producer2.emitter, consumer2.receiver)
+
+            scheduler = world.start([producer1, producer2, consumer1, consumer2])
+
+            # Send data through real connection
+            producer2.emitter.emit('real_data', ts=456)
+
+            list(scheduler)
+
+            # Real connection should work
+            result = consumer2.receiver.read()
+            assert result is not None
+            assert result.data == 'real_data'
+            assert result.ts == 456
+
+            # Fake connections should not deliver data
+            assert consumer1.receiver.read() is None

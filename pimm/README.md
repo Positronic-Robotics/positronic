@@ -114,6 +114,39 @@ For common patterns Pimm provides small adapters:
 - `pimm.map(signal, func)` transforms data on the way in or out without creating
   extra glue code.
 
+### Optional Connectors for Duck Typing
+
+Sometimes control systems need compatible interfaces even when they don't share
+all the same inputs or outputs. `FakeEmitter` and `FakeReceiver` act as
+placeholders that prevent signal flow:
+
+```python
+class DataCollectionController(pimm.ControlSystem):
+    def __init__(self):
+        self.robot_state = pimm.ControlSystemReceiver(self)
+        self.gripper_state = pimm.FakeReceiver(self)  # Optional input
+        # ...
+
+class Inference(pimm.ControlSystem):
+    def __init__(self):
+        self.robot_state = pimm.ControlSystemReceiver(self)
+        self.gripper_state = pimm.ControlSystemReceiver(self)  # Required input
+        # ...
+```
+
+When you connect a `FakeEmitter` or `FakeReceiver`, `world.connect` silently
+ignores the connection—no data flows, no transport is created. This lets you
+write wiring code that works with both control systems without branching:
+
+```python
+world.connect(robot.state, controller.robot_state)
+world.connect(gripper.state, controller.gripper_state)  # No-op if FakeReceiver
+```
+
+Use fake connectors when control systems share most of their interface but differ
+in optional signals. The type system sees them as normal connectors, so your
+wiring stays uniform.
+
 ## Control Systems and the World
 
 A control system is any class that subclasses `pimm.ControlSystem` and implements

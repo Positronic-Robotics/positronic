@@ -3,7 +3,7 @@ from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from typing import Generic, TypeVar, final
 
-T = TypeVar('T', covariant=True)
+T = TypeVar('T')
 U = TypeVar('U')
 
 
@@ -155,6 +155,34 @@ class ControlSystemReceiver(SignalReceiver[T]):
 
     def read(self) -> Message[T] | None:
         return self._internal.read() if self._internal is not None else None
+
+
+class FakeEmitter(ControlSystemEmitter[T]):
+    """Placeholder emitter for optional outputs.
+
+    Used for duck typing compatibility when control systems have different interfaces.
+    World.connect ignores connections involving FakeEmitter, preventing signal flow.
+    """
+
+    def emit(self, data: T, ts: int = -1) -> bool:
+        raise RuntimeError('FakeEmitter.emit() is not supposed to be called')
+
+    def _bind(self, emitter: SignalEmitter[T]):
+        raise RuntimeError('FakeEmitter._bind() is not supposed to be called')
+
+
+class FakeReceiver(ControlSystemReceiver[T]):
+    """Placeholder receiver for optional inputs.
+
+    Used for duck typing compatibility when control systems have different interfaces.
+    World.connect ignores connections involving FakeReceiver, preventing signal flow.
+    """
+
+    def read(self) -> Message[T] | None:
+        raise RuntimeError('FakeReceiver.read() is not supposed to be called')
+
+    def _bind(self, receiver: SignalReceiver[T]):
+        raise RuntimeError('FakeReceiver._bind() is not supposed to be called')
 
 
 class ReceiverDict(dict[str, ControlSystemReceiver[U]]):
