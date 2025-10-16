@@ -13,7 +13,7 @@ import positronic.cfg.simulator
 from positronic import geom, wire
 from positronic.dataset import Dataset, Episode, transforms
 from positronic.dataset.ds_player_agent import DsPlayerAgent, DsPlayerCommand, DsPlayerStartCommand
-from positronic.dataset.ds_writer_agent import DsWriterAgent, DsWriterCommand, Serializers, TimeMode
+from positronic.dataset.ds_writer_agent import DsWriterCommand, TimeMode
 from positronic.dataset.local_dataset import LocalDatasetWriter
 from positronic.drivers import roboarm
 from positronic.gui.dpg import DearpyguiUi
@@ -23,6 +23,7 @@ from positronic.simulator.mujoco.transforms import MujocoSceneTransform
 
 class Replay(DsPlayerAgent):
     """Adapts `DsPlayerAgent` to be used as a policy control system."""
+
     def __init__(self, poll_hz: float = 100.0):
         super().__init__(poll_hz)
 

@@ -28,10 +28,7 @@ def make_buttons(
     *, trigger: float = 0.0, thumb: float = 0.0, stick: float = 0.0, A: bool = False, B: bool = False
 ) -> dict:
     """Constructs controller buttons payload matching DataCollection mapping."""
-    return {
-        'left': None,
-        'right': [trigger, thumb, 0.0, stick, 1.0 if A else 0.0, 1.0 if B else 0.0],
-    }
+    return {'left': None, 'right': [trigger, thumb, 0.0, stick, 1.0 if A else 0.0, 1.0 if B else 0.0]}
 
 
 def assert_strictly_increasing(sig):
@@ -52,7 +49,7 @@ def build_collection(world, out_dir: Path):
     world.connect(dc.target_grip, agent.inputs['target_grip'])
     world.connect(dc.ds_agent_commands, agent.command)
 
-    ctrl_em_dc = world.pair(dc.controller_positions_receiver)
+    ctrl_em_dc = world.pair(dc.controller_positions)
     ctrl_em_agent = world.pair(agent.inputs['controller_positions'])
     buttons_em = world.pair(dc.buttons_receiver)
     grip_em = world.pair(agent.inputs['grip'])
@@ -80,11 +77,7 @@ def test_data_collection_basic_recording(tmp_path, world, clock):
     def stop_episode():
         dc.ds_agent_commands.emit(DsWriterCommand(DsWriterCommandType.STOP_EPISODE))
 
-    driver = ManualDriver([
-        (start_episode, 0.001),
-        (emit_signals, 0.001),
-        (stop_episode, 0.001),
-    ])
+    driver = ManualDriver([(start_episode, 0.001), (emit_signals, 0.001), (stop_episode, 0.001)])
 
     with writer_cm:
         scheduler = world.start([dc, agent, driver])
@@ -95,11 +88,7 @@ def test_data_collection_basic_recording(tmp_path, world, clock):
     ep = ds[0]
 
     # Expect these keys to be present and have records under new serializers
-    expected_keys = {
-        'target_grip',
-        'controller_positions.right',
-        'grip',
-    }
+    expected_keys = {'target_grip', 'controller_positions.right', 'grip'}
     assert expected_keys.issubset(set(ep.keys))
 
     right_pose_sig = ep['controller_positions.right']
@@ -152,7 +141,7 @@ def test_data_collection_with_mujoco_robot_gripper(tmp_path):
         world.connect(gripper.grip, agent.inputs['grip'])
         world.connect(dc.ds_agent_commands, agent.command)
 
-        ctrl_em_dc = world.pair(dc.controller_positions_receiver)
+        ctrl_em_dc = world.pair(dc.controller_positions)
         ctrl_em_agent = world.pair(agent.inputs['controller_positions'])
         buttons_em = world.pair(dc.buttons_receiver)
 

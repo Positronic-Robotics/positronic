@@ -93,7 +93,7 @@ class DataCollectionController(pimm.ControlSystem):
     def __init__(self, operator_position: geom.Transform3D | None, metadata_getter: Callable[[], dict] | None = None):
         self.operator_position = operator_position
         self.metadata_getter = metadata_getter or (lambda: {})
-        self.controller_positions_receiver = pimm.ControlSystemReceiver(self)
+        self.controller_positions = pimm.ControlSystemReceiver(self)
         self.buttons_receiver = pimm.ControlSystemReceiver(self)
         self.robot_state = pimm.ControlSystemReceiver(self)
         self.gripper_state = pimm.FakeReceiver(self)  # To make compatible with other "policy" control systems
@@ -110,7 +110,7 @@ class DataCollectionController(pimm.ControlSystem):
         end_wav_path = 'positronic/assets/sounds/recording-has-stopped.wav'
         abort_wav_path = 'positronic/assets/sounds/recording-has-been-aborted.wav'
 
-        controller_positions_receiver = pimm.ValueUpdated(self.controller_positions_receiver)
+        controller_positions_receiver = pimm.ValueUpdated(self.controller_positions)
 
         tracker = _Tracker(self.operator_position)
         button_handler = ButtonHandler()
@@ -186,7 +186,7 @@ def _wire(
 
     ds_agent = wire.wire(world, data_collection, dataset_writer, cameras, robot_arm, gripper, gui, time_mode)
 
-    world.connect(webxr.controller_positions, data_collection.controller_positions_receiver)
+    world.connect(webxr.controller_positions, data_collection.controller_positions)
     world.connect(webxr.buttons, data_collection.buttons_receiver)
 
     if sound is not None:
@@ -195,6 +195,7 @@ def _wire(
 
     if ds_agent is not None:
         ds_agent.add_signal('controller_positions', controller_positions_serializer)
+        world.connect(webxr.controller_positions, ds_agent.inputs['controller_positions'])
         world.connect(data_collection.ds_agent_commands, ds_agent.command)
 
     return ds_agent
