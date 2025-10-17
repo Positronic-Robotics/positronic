@@ -132,3 +132,27 @@ class RelativeTargetPositionAction(RotationTranslationGripAction):
         target_pose = geom.Transform3D(translation=tr_add, rotation=rot_mul)
         target_grip = action_vector[self.rot_rep.size + 3].item()
         return (command.CartesianPosition(pose=target_pose), target_grip)
+
+
+class JointDeltaAction(ActionDecoder):
+    """DROID-style joint velocity action decoder.
+
+    Action vector: (num_joints + 1,) = [joint_velocities..., gripper_position]
+    """
+
+    def __init__(self, num_joints: int = 7):
+        super().__init__()
+        self.num_joints = num_joints
+
+    def encode_episode(self, episode: Episode) -> Signal[np.ndarray]:
+        raise NotImplementedError('JointVelocityAction is not supposed for training yet')
+
+    def decode(self, action_vector: np.ndarray, inputs: dict[str, np.ndarray]) -> tuple[command.CommandType, float]:
+        if action_vector.shape[-1] != self.num_joints + 1:
+            raise ValueError(f'Expected action vector of size {self.num_joints + 1}, got {action_vector.shape[-1]}')
+
+        action_vector = action_vector.clip(-1.0, 1.0)
+        velocities = action_vector[: self.num_joints]
+        grip = 1.0 if action_vector[self.num_joints].item() > 0.5 else 0.0
+
+        return (command.JointDelta(velocities=velocities), grip)

@@ -115,10 +115,6 @@ class Inference(pimm.ControlSystem):
                     continue
 
                 robot_state = self.robot_state.value
-                if robot_state.status == roboarm.RobotStatus.MOVING:
-                    # TODO: seems to be necessary to wait previous command to finish
-                    continue
-
                 inputs = {
                     'robot_state.q': robot_state.q,
                     'robot_state.dq': robot_state.dq,
@@ -298,7 +294,6 @@ main_sim_cfg = cfn.Config(
     loaders=positronic.cfg.simulator.stack_cubes_loaders,
     observation_encoder=positronic.cfg.policy.observation.pi0,
     action_decoder=positronic.cfg.policy.action.absolute_position,
-    policy=positronic.cfg.policy.policy.pi0,
     camera_fps=15,
     policy_fps=15,
     simulation_time=10,
@@ -307,7 +302,7 @@ main_sim_cfg = cfn.Config(
 )
 
 main_sim_pi0 = main_sim_cfg.override(
-    policy=positronic.cfg.policy.policy.pi0,
+    policy=positronic.cfg.policy.policy.openpi,
     observation_encoder=positronic.cfg.policy.observation.pi0,
     action_decoder=positronic.cfg.policy.action.absolute_position,
     # We use 3 cameras not because we need it, but because Mujoco does not render
@@ -324,7 +319,7 @@ main_sim_act = main_sim_cfg.override(
     camera_dict={'handcam_left': 'handcam_left_ph', 'back_view': 'back_view_ph', 'agent_view': 'agentview'},
 )
 
-droid = cfn.Config(
+openpi_droid = cfn.Config(
     main,
     robot_arm=positronic.cfg.hardware.roboarm.franka,
     gripper=positronic.cfg.hardware.gripper.robotiq,
@@ -332,12 +327,11 @@ droid = cfn.Config(
         'wrist': positronic.cfg.hardware.camera.zed_m.override(view='left', resolution='vga', fps=30),
         'exterior': positronic.cfg.hardware.camera.zed_2i.override(view='left', resolution='vga', fps=30),
     },
-    observation_encoder=positronic.cfg.policy.observation.pi0,
-    action_decoder=positronic.cfg.policy.action.absolute_position,
-    policy=positronic.cfg.policy.policy.pi0,
+    observation_encoder=positronic.cfg.policy.observation.openpi_droid,
+    action_decoder=positronic.cfg.policy.action.joint_delta,
+    policy=positronic.cfg.policy.policy.droid,
     policy_fps=15,
-    task='pick up the green cube and put in on top of the red cube',
 )
 
 if __name__ == '__main__':
-    cfn.cli({'sim_pi0': main_sim_pi0, 'sim_act': main_sim_act, 'droid': droid})
+    cfn.cli({'sim_pi0': main_sim_pi0, 'sim_act': main_sim_act, 'droid_real': openpi_droid})

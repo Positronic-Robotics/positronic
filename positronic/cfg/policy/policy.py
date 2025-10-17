@@ -31,11 +31,20 @@ def _get_diffusion_policy(checkpoint_path: str, device: str | None = None):
     return LerobotPolicy(policy, device)
 
 
-@cfn.config(n_action_steps=30)
-def pi0(n_action_steps: int | None = None):
-    from positronic.policy.pi0 import PI0RemotePolicy
+@cfn.config(host='localhost', port=8000, n_action_steps=30)
+def openpi(host: str, port: int, n_action_steps: int | None):
+    """PI0/PI0.5 policy with Cartesian control."""
+    from positronic.policy.pi0 import OpenPIRemotePolicy
 
-    return PI0RemotePolicy('localhost', 8000, n_action_steps)
+    return OpenPIRemotePolicy(host, port, n_action_steps)
+
+
+@cfn.config(host='localhost', port=8000, n_action_steps=8)
+def droid(host: str, port: int, n_action_steps: int):
+    """DROID policy with joint velocity control and action chunking."""
+    from positronic.policy.pi0 import OpenPIRemotePolicy, droid_request
+
+    return OpenPIRemotePolicy(host, port, n_action_steps, obs_tf=droid_request)
 
 
 act = cfn.Config(_get_act_policy, use_temporal_ensembler=False)

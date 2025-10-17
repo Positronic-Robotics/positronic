@@ -9,15 +9,11 @@ RotRep = geom.Rotation.Representation
 def absolute_position(rotation_representation: RotRep, tgt_ee_pose_key: str, tgt_grip_key: str):
     from positronic.policy.action import AbsolutePositionAction
 
-    return AbsolutePositionAction(
-        tgt_ee_pose_key,
-        tgt_grip_key,
-        rotation_representation=rotation_representation,
-    )
+    return AbsolutePositionAction(tgt_ee_pose_key, tgt_grip_key, rotation_representation=rotation_representation)
 
 
-@cfn.config()
-def absolute_joint_position():
-    from positronic.policy.action import AbsoluteJointPositionAction
+@cfn.config(num_joints=7)
+def joint_delta(num_joints: int):
+    from positronic.policy.action import JointDeltaAction
 
-    return AbsoluteJointPositionAction()
+    return JointDeltaAction(num_joints=num_joints)
