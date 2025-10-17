@@ -2,7 +2,6 @@ from functools import partial
 
 import numpy as np
 import pytest
-import torch
 import tqdm
 
 import pimm
@@ -69,41 +68,30 @@ class StubActionDecoder:
 
 
 class SpyPolicy:
-    def __init__(self, action: torch.Tensor) -> None:
+    def __init__(self, action: np.ndarray) -> None:
         self.action = action
-        self.device: str | None = None
-        self.last_obs: dict[str, torch.Tensor | object] | None = None
+        self.last_obs: dict[str, object] | None = None
 
-    def to(self, device: str):
-        self.device = device
-        return self
-
-    def select_action(self, obs: dict[str, torch.Tensor | object]) -> torch.Tensor:
+    def select_action(self, obs: dict[str, object]) -> np.ndarray:
         self.last_obs = obs
         return self.action
 
 
-DEFAULT_STUB_POLICY_ACTION = torch.tensor([[0.4, 0.5, 0.6, 1.0, 0.0, 0.0, 0.0, 0.33]], dtype=torch.float32)
+DEFAULT_STUB_POLICY_ACTION = np.array([[0.4, 0.5, 0.6, 1.0, 0.0, 0.0, 0.0, 0.33]], dtype=np.float32)
 
 
 class StubPolicy:
-    def __init__(self, action: torch.Tensor | None = None) -> None:
+    def __init__(self, action: np.ndarray | None = None) -> None:
         if action is None:
-            action = DEFAULT_STUB_POLICY_ACTION.clone()
+            action = DEFAULT_STUB_POLICY_ACTION.copy()
         if action.ndim == 1:
-            action = action.unsqueeze(0)
+            action = action[np.newaxis, :]
         self.action = action
-        self.device: str | None = None
-        self.last_obs: dict[str, torch.Tensor | object] | None = None
-        self.observations: list[dict[str, torch.Tensor | object]] = []
+        self.last_obs: dict[str, object] | None = None
+        self.observations: list[dict[str, object]] = []
         self.reset_calls = 0
 
-    def to(self, device: str):
-        self.device = device
-        self.action = self.action.to(device)
-        return self
-
-    def select_action(self, obs: dict[str, torch.Tensor | object]) -> torch.Tensor:
+    def select_action(self, obs: dict[str, object]) -> np.ndarray:
         self.last_obs = obs
         self.observations.append(obs)
         return self.action
@@ -155,9 +143,9 @@ def emit_ready_payload(frame_emitter, robot_emitter, grip_emitter, robot_state):
 def test_inference_emits_cartesian_move(world, clock):
     encoder = StubStateEncoder()
     decoder = StubActionDecoder()
-    policy = SpyPolicy(action=torch.tensor([[0.1, 0.2, 0.3, 0.4]], dtype=torch.float32))
+    policy = SpyPolicy(action=np.array([[0.1, 0.2, 0.3, 0.4]], dtype=np.float32))
 
-    inference = Inference(encoder, decoder, 'cpu', policy, inference_fps=15, task='stack-blocks')
+    inference = Inference(encoder, decoder, policy, inference_fps=15, task='stack-blocks')
 
     # Wire inference interfaces so we can inspect the produced commands and grip targets.
     frame_em = world.pair(inference.frames['cam'])
@@ -179,14 +167,12 @@ def test_inference_emits_cartesian_move(world, clock):
     scheduler = world.start([inference, driver])
     drive_scheduler(scheduler, clock=clock, steps=20)
 
-    assert policy.device == 'cpu'
     assert policy.last_obs is not None
     obs = policy.last_obs
-    assert obs['vision'].device.type == 'cpu'
-    np.testing.assert_allclose(obs['vision'].cpu().numpy(), np.array([[1.0, 2.0]], dtype=np.float32))
-    np.testing.assert_allclose(obs['robot_translation'].cpu().numpy(), robot_state.ee_pose.translation)
-    np.testing.assert_allclose(obs['robot_quaternion'].cpu().numpy(), robot_state.ee_pose.rotation.as_quat)
-    assert obs['grip_value'].item() == pytest.approx(0.25)
+    np.testing.assert_allclose(obs['vision'], np.array([[1.0, 2.0]], dtype=np.float32))
+    np.testing.assert_allclose(obs['robot_translation'], robot_state.ee_pose.translation)
+    np.testing.assert_allclose(obs['robot_quaternion'], robot_state.ee_pose.rotation.as_quat)
+    assert obs['grip_value'] == pytest.approx(0.25)
     assert obs['task'] == 'stack-blocks'
 
     assert encoder.last_inputs is not None
@@ -199,7 +185,7 @@ def test_inference_emits_cartesian_move(world, clock):
 
     assert decoder.last_action is not None
     assert decoder.last_inputs is not None
-    np.testing.assert_allclose(decoder.last_action, np.array([0.1, 0.2, 0.3, 0.4], dtype=np.float32))
+    np.testing.assert_allclose(decoder.last_action, np.array([[0.1, 0.2, 0.3, 0.4]], dtype=np.float32))
     np.testing.assert_allclose(decoder.last_inputs['robot_state.ee_pose'], expected_pose)
     np.testing.assert_allclose(decoder.last_inputs['robot_state.q'], robot_state.q)
 
@@ -219,9 +205,9 @@ def test_inference_emits_cartesian_move(world, clock):
 def test_inference_skips_when_robot_is_moving(world, clock):
     encoder = StubStateEncoder()
     decoder = StubActionDecoder()
-    policy = SpyPolicy(action=torch.tensor([[0.9]], dtype=torch.float32))
+    policy = SpyPolicy(action=np.array([[0.9]], dtype=np.float32))
 
-    inference = Inference(encoder, decoder, 'cpu', policy, inference_fps=15)
+    inference = Inference(encoder, decoder, policy, inference_fps=15)
 
     # Capture IO to verify that nothing is emitted while the robot is busy.
     frame_em = world.pair(inference.frames['cam'])
@@ -254,9 +240,9 @@ def test_inference_skips_when_robot_is_moving(world, clock):
 def test_inference_waits_for_complete_inputs(world, clock):
     encoder = StubStateEncoder()
     decoder = StubActionDecoder()
-    policy = SpyPolicy(action=torch.tensor([[0.5, 0.6, 0.7, 0.8]], dtype=torch.float32))
+    policy = SpyPolicy(action=np.array([[0.5, 0.6, 0.7, 0.8]], dtype=np.float32))
 
-    inference = Inference(encoder, decoder, 'cpu', policy, inference_fps=15)
+    inference = Inference(encoder, decoder, policy, inference_fps=15)
 
     # Keep handles to the control system IO so we can drip feed partial data.
     frame_em = world.pair(inference.frames['cam'])
@@ -360,7 +346,6 @@ def test_main_sim_emits_commands_and_records_dataset(tmp_path, monkeypatch):
         simulation_time=0.4,
         camera_dict=camera_dict,
         task='integration-test',
-        device='cpu',
         output_dir=str(tmp_path),
         show_gui=False,
         num_iterations=1,
@@ -399,6 +384,7 @@ def test_main_sim_emits_commands_and_records_dataset(tmp_path, monkeypatch):
 
     assert policy.observations, 'Policy did not receive any observations'
     last_obs = policy.observations[-1]
+    assert isinstance(last_obs['vision'], np.ndarray)
     assert last_obs['vision'].shape[0] == 1
     assert observation_encoder.last_inputs is not None
     assert any('handcam_left' in key for key in observation_encoder.last_image_keys)

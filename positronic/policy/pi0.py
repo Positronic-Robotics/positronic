@@ -4,6 +4,8 @@ from collections.abc import Mapping
 import numpy as np
 import torch
 
+from . import Policy
+
 try:
     from openpi_client.websocket_client_policy import WebsocketClientPolicy
 except ImportError as e:
@@ -24,7 +26,7 @@ def _prepare_observations(observation: Mapping[str, torch.Tensor]) -> Mapping[st
     return openpi_observation
 
 
-class PI0RemotePolicy:
+class PI0RemotePolicy(Policy):
     def __init__(self, host: str, port: int, n_action_steps: int | None = None):
         self.client = WebsocketClientPolicy(host, port)
         self.action_queue = deque()
@@ -46,6 +48,3 @@ class PI0RemotePolicy:
     def reset(self):
         self.action_queue.clear()
         self.client.reset()
-
-    def to(self, device: str):
-        return self

@@ -1,7 +1,14 @@
 import configuronic as cfn
 
+from positronic.policy.lerobot import LerobotPolicy
 
-def _get_act_policy(checkpoint_path: str, use_temporal_ensembler: bool = False, n_action_steps: int | None = None):
+
+def _get_act_policy(
+    checkpoint_path: str,
+    use_temporal_ensembler: bool = False,
+    n_action_steps: int | None = None,
+    device: str | None = None,
+):
     from lerobot.policies.act.modeling_act import ACTPolicy, ACTTemporalEnsembler
 
     policy = ACTPolicy.from_pretrained(checkpoint_path, strict=True)
@@ -14,14 +21,14 @@ def _get_act_policy(checkpoint_path: str, use_temporal_ensembler: bool = False, 
     if n_action_steps is not None:
         policy.config.n_action_steps = n_action_steps
 
-    return policy
+    return LerobotPolicy(policy, device)
 
 
-def _get_diffusion_policy(checkpoint_path: str):
+def _get_diffusion_policy(checkpoint_path: str, device: str | None = None):
     from lerobot.policies.diffusion.modeling_diffusion import DiffusionPolicy
 
     policy = DiffusionPolicy.from_pretrained(checkpoint_path, local_files_only=True, strict=True)
-    return policy
+    return LerobotPolicy(policy, device)
 
 
 @cfn.config(n_action_steps=30)

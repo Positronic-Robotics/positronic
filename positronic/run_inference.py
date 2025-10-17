@@ -11,8 +11,6 @@ from pathlib import Path
 from typing import Any
 
 import configuronic as cfn
-import numpy as np
-import torch
 import tqdm
 
 import pimm
@@ -33,22 +31,6 @@ from positronic.policy.observation import ObservationEncoder
 from positronic.simulator.mujoco.observers import BodyDistance, StackingSuccess
 from positronic.simulator.mujoco.sim import MujocoCamera, MujocoFranka, MujocoGripper, MujocoSim
 from positronic.simulator.mujoco.transforms import MujocoSceneTransform
-
-
-def detect_device() -> str:
-    """Select the best available torch device unless one is provided."""
-    if torch.cuda.is_available():
-        return 'cuda'
-
-    mps_backend = getattr(torch.backends, 'mps', None)
-    if mps_backend is not None:
-        is_available = getattr(mps_backend, 'is_available', None)
-        is_built = getattr(mps_backend, 'is_built', None)
-        if callable(is_available) and is_available():
-            if not callable(is_built) or is_built():
-                return 'mps'
-
-    return 'cpu'
 
 
 class InferenceCommandType(Enum):
@@ -87,15 +69,13 @@ class Inference(pimm.ControlSystem):
         self,
         observation_encoder: ObservationEncoder,
         action_decoder: ActionDecoder,
-        device: str,
         policy,
         inference_fps: int = 30,
         task: str | None = None,
     ):
         self.observation_encoder = observation_encoder
         self.action_decoder = action_decoder
-        self.policy = policy.to(device)
-        self.device = device
+        self.policy = policy
         self.inference_fps = inference_fps
         self.task = task
 
@@ -151,17 +131,11 @@ class Inference(pimm.ControlSystem):
                     continue
                 inputs.update(images)
 
-                obs = {}
-                for key, val in self.observation_encoder.encode(inputs).items():
-                    if isinstance(val, np.ndarray):
-                        obs[key] = torch.from_numpy(val).to(self.device)
-                    else:
-                        obs[key] = torch.as_tensor(val).to(self.device)
-
+                obs = self.observation_encoder.encode(inputs)
                 if self.task is not None:
                     obs['task'] = self.task
 
-                action = self.policy.select_action(obs).squeeze(0).cpu().numpy()
+                action = self.policy.select_action(obs)
                 action_dict = self.action_decoder.decode(action, inputs)
                 target_pos = action_dict['target_robot_position']
 
@@ -217,12 +191,10 @@ def main(
     policy,
     policy_fps: int = 15,
     task: str | None = None,
-    device: str | None = None,
     output_dir: str | None = None,
 ):
     """Runs inference on real hardware."""
-    device = device or detect_device()
-    inference = Inference(observation_encoder, action_decoder, device, policy, policy_fps, task)
+    inference = Inference(observation_encoder, action_decoder, policy, policy_fps, task)
 
     writer_cm = LocalDatasetWriter(Path(output_dir)) if output_dir is not None else nullcontext(None)
     with writer_cm as dataset_writer, pimm.World() as world:
@@ -273,12 +245,10 @@ def main_sim(
     simulation_time: float,
     camera_dict: Mapping[str, str],
     task: str | None,
-    device: str | None = None,
     output_dir: str | None = None,
     show_gui: bool = False,
     num_iterations: int = 1,
 ):
-    device = device or detect_device()
     observers = {
         'box_distance': BodyDistance('box_0_body', 'box_1_body'),
         'stacking_success': StackingSuccess('box_0_body', 'box_1_body', 'hand_ph'),
@@ -290,11 +260,10 @@ def main_sim(
         name: MujocoCamera(sim.model, sim.data, orig_name, (320, 240), fps=camera_fps)
         for name, orig_name in camera_dict.items()
     }
-    inference = Inference(observation_encoder, action_decoder, device, policy, policy_fps, task)
+    inference = Inference(observation_encoder, action_decoder, policy, policy_fps, task)
     control_systems = list(cameras.values()) + [sim, robot_arm, gripper, inference]
 
     meta = {
-        'inference.device': device,
         'inference.mujoco_model_path': mujoco_model_path,
         'inference.policy_fps': policy_fps,
         'inference.simulation_time': simulation_time,
@@ -335,7 +304,6 @@ main_sim_cfg = cfn.Config(
     policy=positronic.cfg.policy.policy.pi0,
     camera_fps=60,
     policy_fps=15,
-    device=None,
     simulation_time=10,
     camera_dict={'handcam_left': 'handcam_left_ph', 'back_view': 'back_view_ph'},
     task='pick up the green cube and put in on top of the red cube',
@@ -368,7 +336,6 @@ droid = cfn.Config(
     policy=positronic.cfg.policy.policy.pi0,
     policy_fps=15,
     task='pick up the green cube and put in on top of the red cube',
-    device=None,
 )
 
 if __name__ == '__main__':
