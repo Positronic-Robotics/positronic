@@ -1,7 +1,225 @@
 from unittest.mock import Mock
 
-from pimm.core import Clock, Message, SignalReceiver
-from pimm.utils import DefaultReceiver, RateLimiter, ValueUpdated, is_any_updated
+from pimm.core import Clock, Message, SignalEmitter, SignalReceiver
+from pimm.utils import DefaultReceiver, MapSignalEmitter, MapSignalReceiver, RateLimiter, ValueUpdated, is_any_updated
+
+
+class TestMapSignalReceiver:
+    """Test the MapSignalReceiver class."""
+
+    def test_transforms_data_with_mapping_function(self):
+        """Test that data is transformed by the mapping function."""
+        mock_reader = Mock(spec=SignalReceiver)
+        test_data = 10
+        test_ts = 123
+        mock_reader.read.return_value = Message(data=test_data, ts=test_ts)
+
+        # Double the value
+        map_reader = MapSignalReceiver(mock_reader, lambda x: x * 2)
+        result = map_reader.read()
+
+        assert result is not None
+        assert result.data == 20
+        assert result.ts == test_ts
+
+    def test_preserves_timestamp(self):
+        """Test that original timestamp is preserved."""
+        mock_reader = Mock(spec=SignalReceiver)
+        test_ts = 987654321
+        mock_reader.read.return_value = Message(data='test', ts=test_ts)
+
+        map_reader = MapSignalReceiver(mock_reader, lambda x: x.upper())
+        result = map_reader.read()
+
+        assert result is not None
+        assert result.ts == test_ts
+
+    def test_returns_none_when_reader_returns_none(self):
+        """Test that None is returned when underlying reader returns None."""
+        mock_reader = Mock(spec=SignalReceiver)
+        mock_reader.read.return_value = None
+
+        map_reader = MapSignalReceiver(mock_reader, lambda x: x * 2)
+        result = map_reader.read()
+
+        assert result is None
+
+    def test_filters_when_func_returns_none(self):
+        """Test that returning None from func filters out the value."""
+        mock_reader = Mock(spec=SignalReceiver)
+        test_ts = 456
+        mock_reader.read.return_value = Message(data=10, ts=test_ts)
+
+        # Filter function that returns None
+        map_reader = MapSignalReceiver(mock_reader, lambda x: None)
+        result = map_reader.read()
+
+        assert result is None
+
+    def test_filters_preserve_last_non_none_message(self):
+        """Test that when func returns None, we return the last non-None message."""
+        mock_reader = Mock(spec=SignalReceiver)
+
+        # First read: return a valid value
+        mock_reader.read.return_value = Message(data=10, ts=100)
+        map_reader = MapSignalReceiver(mock_reader, lambda x: x * 2 if x < 20 else None)
+
+        result1 = map_reader.read()
+        assert result1 is not None
+        assert result1.data == 20
+        assert result1.ts == 100
+
+        # Second read: func returns None, should return last message
+        mock_reader.read.return_value = Message(data=30, ts=200)
+        result2 = map_reader.read()
+        assert result2 is not None
+        assert result2.data == 20  # Last non-None value
+        assert result2.ts == 100  # Last non-None timestamp
+
+    def test_filtering_with_conditional_logic(self):
+        """Test filtering with conditional logic."""
+        mock_reader = Mock(spec=SignalReceiver)
+
+        # Filter only even numbers
+        def filter_even(x):
+            return x if x % 2 == 0 else None
+
+        map_reader = MapSignalReceiver(mock_reader, filter_even)
+
+        # Test with even number
+        mock_reader.read.return_value = Message(data=10, ts=100)
+        result1 = map_reader.read()
+        assert result1 is not None
+        assert result1.data == 10
+
+        # Test with odd number (should return last message)
+        mock_reader.read.return_value = Message(data=11, ts=200)
+        result2 = map_reader.read()
+        assert result2 is not None
+        assert result2.data == 10  # Last even number
+        assert result2.ts == 100
+
+        # Test with another even number
+        mock_reader.read.return_value = Message(data=12, ts=300)
+        result3 = map_reader.read()
+        assert result3 is not None
+        assert result3.data == 12
+        assert result3.ts == 300
+
+    def test_initial_state_has_no_last_message(self):
+        """Test that initial state returns None when func returns None."""
+        mock_reader = Mock(spec=SignalReceiver)
+        mock_reader.read.return_value = Message(data=10, ts=100)
+
+        # First read with func returning None should return None
+        map_reader = MapSignalReceiver(mock_reader, lambda x: None)
+        result = map_reader.read()
+
+        assert result is None
+
+
+class TestMapSignalEmitter:
+    """Test the MapSignalEmitter class."""
+
+    def test_transforms_data_before_emitting(self):
+        """Test that data is transformed before being emitted."""
+        mock_emitter = Mock(spec=SignalEmitter)
+        mock_emitter.emit.return_value = True
+
+        # Double the value before emitting
+        map_emitter = MapSignalEmitter(mock_emitter, lambda x: x * 2)
+        result = map_emitter.emit(10, ts=123)
+
+        assert result is True
+        mock_emitter.emit.assert_called_once_with(20, 123)
+
+    def test_preserves_timestamp(self):
+        """Test that timestamp is preserved when emitting."""
+        mock_emitter = Mock(spec=SignalEmitter)
+        mock_emitter.emit.return_value = True
+
+        map_emitter = MapSignalEmitter(mock_emitter, lambda x: x.upper())
+        test_ts = 987654321
+        map_emitter.emit('test', ts=test_ts)
+
+        mock_emitter.emit.assert_called_once_with('TEST', test_ts)
+
+    def test_returns_emitter_result(self):
+        """Test that the result from underlying emitter is returned."""
+        mock_emitter = Mock(spec=SignalEmitter)
+
+        # Test when emitter returns True
+        mock_emitter.emit.return_value = True
+        map_emitter = MapSignalEmitter(mock_emitter, lambda x: x * 2)
+        result = map_emitter.emit(5)
+        assert result is True
+
+        # Test when emitter returns False
+        mock_emitter.emit.return_value = False
+        result = map_emitter.emit(5)
+        assert result is False
+
+    def test_filters_when_func_returns_none(self):
+        """Test that returning None from func prevents emission."""
+        mock_emitter = Mock(spec=SignalEmitter)
+
+        # Filter function that returns None
+        map_emitter = MapSignalEmitter(mock_emitter, lambda x: None)
+        result = map_emitter.emit(10, ts=123)
+
+        # Should return True but not call the underlying emitter
+        assert result is True
+        mock_emitter.emit.assert_not_called()
+
+    def test_conditional_filtering(self):
+        """Test filtering with conditional logic."""
+        mock_emitter = Mock(spec=SignalEmitter)
+        mock_emitter.emit.return_value = True
+
+        # Only emit even numbers
+        def filter_even(x):
+            return x if x % 2 == 0 else None
+
+        map_emitter = MapSignalEmitter(mock_emitter, filter_even)
+
+        # Emit even number - should pass through
+        result1 = map_emitter.emit(10, ts=100)
+        assert result1 is True
+        mock_emitter.emit.assert_called_once_with(10, 100)
+
+        # Emit odd number - should be filtered
+        mock_emitter.reset_mock()
+        result2 = map_emitter.emit(11, ts=200)
+        assert result2 is True
+        mock_emitter.emit.assert_not_called()
+
+        # Emit another even number - should pass through
+        result3 = map_emitter.emit(12, ts=300)
+        assert result3 is True
+        mock_emitter.emit.assert_called_once_with(12, 300)
+
+    def test_transform_and_filter_combination(self):
+        """Test combining transformation and filtering."""
+        mock_emitter = Mock(spec=SignalEmitter)
+        mock_emitter.emit.return_value = True
+
+        # Transform and filter: square numbers, but only if result < 100
+        def transform_and_filter(x):
+            squared = x * x
+            return squared if squared < 100 else None
+
+        map_emitter = MapSignalEmitter(mock_emitter, transform_and_filter)
+
+        # 5 squared = 25, should pass
+        result1 = map_emitter.emit(5, ts=100)
+        assert result1 is True
+        mock_emitter.emit.assert_called_once_with(25, 100)
+
+        # 15 squared = 225, should be filtered
+        mock_emitter.reset_mock()
+        result2 = map_emitter.emit(15, ts=200)
+        assert result2 is True
+        mock_emitter.emit.assert_not_called()
 
 
 class TestValueUpdated:

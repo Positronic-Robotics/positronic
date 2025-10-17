@@ -111,8 +111,10 @@ For common patterns Pimm provides small adapters:
   timestamp changed since the last read.
 - `pimm.DefaultReceiver(reader, default)` supplies safe defaults until real data
   arrives.
-- `pimm.map(signal, func)` transforms data on the way in or out without creating
-  extra glue code.
+- `pimm.map(signal, func)` transforms data on the way in or out. If `func`
+  returns `None`, the value is filtered: receivers return the last valid message
+  while emitters skip emission entirely. This enables conditional filtering like
+  `lambda x: x if x > 0 else None`.
 
 ### Optional Connectors for Duck Typing
 

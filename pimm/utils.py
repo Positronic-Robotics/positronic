@@ -10,24 +10,46 @@ K = TypeVar('K', covariant=True)
 
 
 class MapSignalReceiver(SignalReceiver[T]):
+    """Transform and filter signal data on read.
+
+    If func returns None, the value is filtered out and receiver behaves
+    like it didn't see the filtered message.
+    """
+
     def __init__(self, reader: SignalReceiver[T], func: Callable[[T], T]):
         self.reader = reader
         self.func = func
+
+        self.last_message = None
 
     def read(self):
         orig_message = self.reader.read()
         if orig_message is None:
             return None
-        return Message(self.func(orig_message.data), orig_message.ts)
+
+        transformed_data = self.func(orig_message.data)
+        if transformed_data is None:
+            return self.last_message
+        self.last_message = Message(transformed_data, orig_message.ts)
+        return self.last_message
 
 
 class MapSignalEmitter(SignalEmitter[T]):
+    """Transform and filter signal data on emit.
+
+    If func returns None, the value is filtered out and nothing is emitted.
+    This enables conditional filtering at the emission point.
+    """
+
     def __init__(self, emitter: SignalEmitter[T], func: Callable[[T], T]):
         self.emitter = emitter
         self.func = func
 
     def emit(self, data: T, ts: int = -1) -> bool:
-        return self.emitter.emit(self.func(data), ts)
+        transformed_data = self.func(data)
+        if transformed_data is None:
+            return True
+        return self.emitter.emit(transformed_data, ts)
 
 
 @overload
@@ -41,15 +63,17 @@ def map(signal: SignalEmitter[T], func: Callable[[T], T]) -> SignalEmitter[T]: .
 def map(
     func: Callable[[T], T],
 ) -> Callable[[SignalReceiver[T] | SignalEmitter[T]], SignalReceiver[T] | SignalEmitter[T]]:
-    """
-    Returns a wrapper that applies the given function to all values passing through a SignalReceiver or SignalEmitter.
+    """Transform or filter values passing through a signal.
+
+    Returns a wrapper that applies func to all values. If func returns None,
+    the value is filtered: receivers return the last valid message, emitters
+    skip emission entirely.
 
     Args:
-        func: A callable that takes a value of type T and returns a value of type T.
+        func: Callable that transforms type T to T, or returns None to filter.
 
     Returns:
-        A function that takes a SignalReceiver or SignalEmitter and returns a new SignalReceiver or SignalEmitter
-        that applies the function to all values read or emitted.
+        A function that wraps a SignalReceiver or SignalEmitter with the transform.
 
     Raises:
         ValueError: If the provided signal is not a SignalReceiver or SignalEmitter.
