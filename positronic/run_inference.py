@@ -1,3 +1,7 @@
+import select
+import sys
+import termios
+import tty
 from collections.abc import Iterator, Mapping, Sequence
 from contextlib import nullcontext
 from dataclasses import dataclass
@@ -165,6 +169,25 @@ class Inference(pimm.ControlSystem):
                 continue
             finally:
                 yield pimm.Sleep(rate_limiter.wait_time())
+
+
+class KeyboardControl(pimm.ControlSystem):
+    def __init__(self):
+        self.keyboard_inputs = pimm.ControlSystemEmitter(self)
+
+    def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock):
+        fd = sys.stdin.fileno()
+        old_settings = termios.tcgetattr(fd)
+        tty.setcbreak(fd)
+
+        try:
+            while not should_stop.value:
+                r, _, _ = select.select([sys.stdin], [], [], 0.0)
+                if r:
+                    self.keyboard_inputs.emit(sys.stdin.read(1))
+                yield pimm.Sleep(0.01)
+        finally:
+            termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
 
 
 # TODO: Inference for the real robot
