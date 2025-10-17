@@ -1,8 +1,8 @@
 from collections import deque
 from collections.abc import Mapping
+from typing import Any
 
 import numpy as np
-import torch
 
 from . import Policy
 
@@ -13,11 +13,11 @@ except ImportError as e:
     raise ImportError(f'openpi_client not installed, install from {OPENPI_CLIENT_URL}') from e
 
 
-def _prepare_observations(observation: Mapping[str, torch.Tensor]) -> Mapping[str, np.ndarray]:
+def _prepare_observations(observation: dict[str, Any]) -> dict[str, np.ndarray]:
     openpi_observation = {
-        'observation/image': observation['observation.images.side'][0].cpu().numpy(),
-        'observation/wrist_image': observation['observation.images.image'][0].cpu().numpy(),
-        'observation/state': observation['observation.state'].cpu().numpy()[0],
+        'observation/image': observation['observation.images.side'][0],
+        'observation/wrist_image': observation['observation.images.image'][0],
+        'observation/state': observation['observation.state'][0],
     }
 
     if 'task' in observation:
@@ -32,7 +32,7 @@ class PI0RemotePolicy(Policy):
         self.action_queue = deque()
         self.n_action_steps = n_action_steps
 
-    def select_action(self, observation: Mapping[str, torch.Tensor]) -> np.ndarray:
+    def select_action(self, observation: Mapping[str, Any]) -> np.ndarray:
         observation = _prepare_observations(observation)
 
         if len(self.action_queue) == 0:
@@ -43,7 +43,7 @@ class PI0RemotePolicy(Policy):
 
         action = self.action_queue.popleft()
 
-        return torch.tensor(action)
+        return np.array(action)
 
     def reset(self):
         self.action_queue.clear()
