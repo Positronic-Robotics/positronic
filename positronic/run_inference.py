@@ -147,6 +147,11 @@ class KeyboardControl(pimm.ControlSystem):
         self.keyboard_inputs = pimm.ControlSystemEmitter(self)
 
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock):
+        # Check if stdin is a TTY before attempting terminal operations
+        if not sys.stdin.isatty():
+            print('WARNING: KeyboardControl cannot read input - stdin is not a terminal', file=sys.stderr)
+            return
+
         fd = sys.stdin.fileno()
         old_settings = termios.tcgetattr(fd)
         tty.setcbreak(fd)
@@ -185,22 +190,24 @@ def main(
     policy_fps: int = 15,
     task: str | None = None,
     output_dir: str | None = None,
+    show_gui: bool = False,
 ):
     """Runs inference on real hardware."""
     inference = Inference(observation_encoder, action_decoder, policy, policy_fps, task)
 
+    gui = DearpyguiUi() if show_gui else None
     writer_cm = LocalDatasetWriter(Path(output_dir)) if output_dir is not None else nullcontext(None)
     with writer_cm as dataset_writer, pimm.World() as world:
-        ds_agent = wire.wire(world, inference, dataset_writer, cameras, robot_arm, gripper, None, TimeMode.CLOCK)
+        ds_agent = wire.wire(world, inference, dataset_writer, cameras, robot_arm, gripper, gui, TimeMode.CLOCK)
 
         keyboard = KeyboardControl()
         print('Keyboard controls: [s]tart, sto[p], [r]eset')
 
         world.connect(keyboard.keyboard_inputs, inference.command, emitter_wrapper=pimm.map(key_to_command))
 
-        bg_cs = [keyboard, *cameras.values(), robot_arm, gripper, ds_agent]
+        bg_cs = [*cameras.values(), robot_arm, gripper, ds_agent, gui]
 
-        for cmd in world.start(inference, bg_cs):
+        for cmd in world.start([inference, keyboard], bg_cs):
             time.sleep(cmd.seconds)
 
 
