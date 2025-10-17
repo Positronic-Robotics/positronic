@@ -1,5 +1,6 @@
 """Dataset utilities for Positronic dataset visualization (images-only)."""
 
+import heapq
 import logging
 from collections.abc import Iterator
 from dataclasses import dataclass
@@ -74,20 +75,12 @@ def get_dataset_info(ds: LocalDataset) -> dict[str, Any]:
         ep0 = ds[0]
         features = _infer_features(ep0)
 
-    return {
-        'root': str(ds.root),
-        'num_episodes': num_eps,
-        'features': features,
-    }
+    return {'root': str(ds.root), 'num_episodes': num_eps, 'features': features}
 
 
 def get_episodes_list(ds: LocalDataset) -> list[dict[str, Any]]:
     return [
-        {
-            'index': idx,
-            'duration': ep.duration_ns / 1e9,
-            'task': ep.static.get('task', None),
-        }
+        {'index': idx, 'duration': ep.duration_ns / 1e9, 'task': ep.static.get('task', None)}
         for idx, ep in enumerate(ds)
     ]
 
@@ -131,11 +124,7 @@ def _build_blueprint(video_names: list[str], signal_names: list[str], signal_dim
         # Legends visible only if a signal has more than one plotted series
         show_legend = signal_dims.get(sig, 1) > 1
         per_signal_views.append(
-            rrb.TimeSeriesView(
-                name=sig,
-                origin=f'/signals/{sig}',
-                plot_legend=rrb.PlotLegend(visible=show_legend),
-            )
+            rrb.TimeSeriesView(name=sig, origin=f'/signals/{sig}', plot_legend=rrb.PlotLegend(visible=show_legend))
         )
 
     grid_items = []
@@ -170,14 +159,46 @@ def _setup_series_names(ep: Episode, signal_names: list[str]) -> None:
         log_series_styles(f'/signals/{key}', names, static=True)
 
 
-def _episode_log_entries(ep: Episode, video_names: list[str], signal_names: list[str]):
-    for key in video_names:
-        for frame, ts_ns in ep.signals[key]:
-            yield ('video', key, frame, ts_ns)
+def _signal_samples(sig: Signal[Any]) -> Iterator[tuple[Any, int]]:
+    length = len(sig)
+    if length == 0:
+        return iter(())
+    timestamps = sig._ts_at(slice(0, length))
+    values = sig._values_at(slice(0, length))
 
-    for key in signal_names:
-        for value, ts_ns in ep.signals[key]:
-            yield ('numeric', key, value, ts_ns)
+    def _generator():
+        for idx in range(length):
+            yield values[idx], int(timestamps[idx])
+
+    return _generator()
+
+
+def _episode_log_entries(ep: Episode, video_names: list[str], signal_names: list[str]):
+    heap: list[tuple[int, int, str, str, Any, Iterator[tuple[Any, int]]]] = []
+
+    def _push(sig_index: int, kind: str, key: str, iterator: Iterator[tuple[Any, int]]):
+        try:
+            payload, ts_ns = next(iterator)
+        except StopIteration:
+            return
+        heapq.heappush(heap, (ts_ns, sig_index, kind, key, payload, iterator))
+
+    iterators: list[tuple[int, str, str, Iterator[tuple[Any, int]]]] = []
+
+    for idx, key in enumerate(video_names):
+        iterators.append((idx, 'video', key, _signal_samples(ep.signals[key])))
+
+    base_idx = len(iterators)
+    for offset, key in enumerate(signal_names):
+        iterators.append((base_idx + offset, 'numeric', key, _signal_samples(ep.signals[key])))
+
+    for sig_index, kind, key, iterator in iterators:
+        _push(sig_index, kind, key, iterator)
+
+    while heap:
+        ts_ns, sig_index, kind, key, payload, iterator = heapq.heappop(heap)
+        yield (kind, key, payload, ts_ns)
+        _push(sig_index, kind, key, iterator)
 
 
 class _BinaryStreamDrainer:
@@ -224,7 +245,7 @@ def stream_episode_rrd(ds: LocalDataset, episode_id: int) -> Iterator[bytes]:
         yield from drainer.drain()
 
         for kind, key, payload, ts_ns in _episode_log_entries(ep, video_names, signal_names):
-            set_timeline_time('time', np.datetime64(ts_ns, 'ns'))
+            set_timeline_time('time', ts_ns)
             if kind == 'numeric':
                 log_numeric_series(f'/signals/{key}', payload)
             else:
