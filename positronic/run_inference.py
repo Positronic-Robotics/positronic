@@ -302,7 +302,7 @@ main_sim_cfg = cfn.Config(
     observation_encoder=positronic.cfg.policy.observation.pi0,
     action_decoder=positronic.cfg.policy.action.absolute_position,
     policy=positronic.cfg.policy.policy.pi0,
-    camera_fps=60,
+    camera_fps=15,
     policy_fps=15,
     simulation_time=10,
     camera_dict={'handcam_left': 'handcam_left_ph', 'back_view': 'back_view_ph'},
@@ -320,7 +320,7 @@ main_sim_act = main_sim_cfg.override(
     policy=positronic.cfg.policy.policy.act,
     observation_encoder=positronic.cfg.policy.observation.franka_mujoco_stackcubes,
     action_decoder=positronic.cfg.policy.action.absolute_position,
-    camera_dict={'handcam_left': 'handcam_left_ph', 'back_view': 'back_view_ph', 'agent_view': 'agentview'},
+    camera_dict={'handcam_left': 'handcam_left_ph', 'back_view': 'back_view_ph'},
 )
 
 droid = cfn.Config(
