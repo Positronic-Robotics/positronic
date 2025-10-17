@@ -3,7 +3,8 @@ import pytest
 
 from positronic.dataset.episode import EpisodeContainer
 from positronic.dataset.tests.utils import DummySignal
-from positronic.geom import Rotation, Transform3D
+from positronic.drivers.roboarm import command as cmd_module
+from positronic.geom import Rotation
 from positronic.policy.action import AbsolutePositionAction, RelativeTargetPositionAction
 from positronic.policy.observation import ObservationEncoder
 
@@ -46,12 +47,7 @@ def test_absolute_position_action_encode_decode_quat():
 
     pose = [np.concatenate([t[i], q[i].as_quat]).astype(np.float32) for i in range(len(ts))]
 
-    ep = EpisodeContainer(
-        signals={
-            'robot_commands.pose': DummySignal(ts, pose),
-            'target_grip': DummySignal(ts, g),
-        }
-    )
+    ep = EpisodeContainer(signals={'robot_commands.pose': DummySignal(ts, pose), 'target_grip': DummySignal(ts, g)})
 
     act = AbsolutePositionAction('robot_commands.pose', 'target_grip', Rotation.Representation.QUAT)
     sig = act.encode_episode(ep)
@@ -59,11 +55,11 @@ def test_absolute_position_action_encode_decode_quat():
     assert vec.shape == (8,)  # 4 quat + 3 trans + 1 grip
     assert vec.dtype == np.float32
 
-    out = act.decode(vec, inputs={})
-    assert isinstance(out['target_robot_position'], Transform3D)
-    np.testing.assert_allclose(out['target_robot_position'].translation, t[0], atol=1e-6)
-    np.testing.assert_allclose(out['target_robot_position'].rotation.as_quat, q[0].as_quat, atol=1e-6)
-    assert np.isclose(out['target_grip'], g[0])
+    command, target_grip = act.decode(vec, inputs={})
+    assert isinstance(command, cmd_module.CartesianPosition)
+    np.testing.assert_allclose(command.pose.translation, t[0], atol=1e-6)
+    np.testing.assert_allclose(command.pose.rotation.as_quat, q[0].as_quat, atol=1e-6)
+    assert np.isclose(target_grip, g[0])
 
 
 def test_relative_target_position_action_encode_decode_quat():
@@ -95,10 +91,8 @@ def test_relative_target_position_action_encode_decode_quat():
     np.testing.assert_allclose(vec[4:7], t_cur[0] - t_tgt[0], atol=1e-6)
     assert np.isclose(vec[7], g_tgt[0])
 
-    out = act.decode(
-        vec,
-        inputs={'robot_state.ee_pose': np.concatenate([t_cur[0], q_cur[0].as_quat])},
-    )
-    assert isinstance(out['target_robot_position'], Transform3D)
+    command, target_grip = act.decode(vec, inputs={'robot_state.ee_pose': np.concatenate([t_cur[0], q_cur[0].as_quat])})
+    assert isinstance(command, cmd_module.CartesianPosition)
     # Decode applies diff to current translation
-    np.testing.assert_allclose(out['target_robot_position'].translation, t_cur[0] + vec[4:7], atol=1e-6)
+    np.testing.assert_allclose(command.pose.translation, t_cur[0] + vec[4:7], atol=1e-6)
+    assert np.isclose(target_grip, g_tgt[0])

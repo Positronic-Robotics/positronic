@@ -42,7 +42,7 @@ class StubActionDecoder:
         )
         self.grip = np.array(0.33, dtype=np.float32)
 
-    def decode(self, action: np.ndarray, inputs: dict[str, object]) -> dict[str, object]:
+    def decode(self, action: np.ndarray, inputs: dict[str, object]) -> tuple[roboarm.command.CommandType, float]:
         self.last_action = np.copy(action)
         self.last_inputs = inputs
         decoded = np.asarray(action, dtype=np.float32).reshape(-1)
@@ -64,7 +64,7 @@ class StubActionDecoder:
             self.grip = np.array(decoded[3], dtype=np.float32)
 
         self.pose = geom.Transform3D(translation=np.array(translation, dtype=np.float32), rotation=rotation)
-        return {'target_robot_position': self.pose, 'target_grip': self.grip}
+        return (roboarm.command.CartesianPosition(pose=self.pose), float(self.grip))
 
 
 class SpyPolicy:

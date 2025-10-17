@@ -9,6 +9,7 @@ from positronic import geom
 from positronic.dataset import transforms
 from positronic.dataset.episode import Episode
 from positronic.dataset.signal import Signal
+from positronic.drivers.roboarm import command
 
 RotRep = geom.Rotation.Representation
 
@@ -34,7 +35,13 @@ class ActionDecoder(transforms.KeyFuncEpisodeTransform):
         pass
 
     @abstractmethod
-    def decode(self, action_vector: np.ndarray, inputs: dict[str, np.ndarray]) -> dict[str, Any]:
+    def decode(self, action_vector: np.ndarray, inputs: dict[str, np.ndarray]) -> tuple[command.CommandType, float]:
+        """Decode action vector into a robot command and target grip value.
+
+        Returns:
+            tuple: (robot_command, target_grip) where robot_command is a roboarm.command type
+                   and target_grip is a float
+        """
         pass
 
 
@@ -64,21 +71,16 @@ class AbsolutePositionAction(RotationTranslationGripAction):
             'grip',
         ]
         return transforms.concat(
-            rotations,
-            transforms.view(pose, slice(0, 3)),
-            episode[self.tgt_grip_key],
-            dtype=np.float32,
-            names=names,
+            rotations, transforms.view(pose, slice(0, 3)), episode[self.tgt_grip_key], dtype=np.float32, names=names
         )
 
-    def decode(self, action_vector: np.ndarray, inputs: dict[str, np.ndarray]) -> dict[str, Any]:
+    def decode(self, action_vector: np.ndarray, inputs: dict[str, np.ndarray]) -> tuple[command.CommandType, float]:
         rotation = action_vector[: self.rot_rep.size].reshape(self.rot_rep.shape)
         rot = geom.Rotation.create_from(rotation, self.rot_rep)
         trans = action_vector[self.rot_rep.size : self.rot_rep.size + 3]
-        return {
-            'target_robot_position': geom.Transform3D(trans, rot),
-            'target_grip': action_vector[self.rot_rep.size + 3],
-        }
+        target_pose = geom.Transform3D(trans, rot)
+        target_grip = action_vector[self.rot_rep.size + 3].item()
+        return (command.CartesianPosition(pose=target_pose), target_grip)
 
 
 class RelativeTargetPositionAction(RotationTranslationGripAction):
@@ -115,7 +117,7 @@ class RelativeTargetPositionAction(RotationTranslationGripAction):
 
         return transforms.concat(rotations, translations, grips, dtype=np.float32)
 
-    def decode(self, action_vector: np.ndarray, inputs: dict[str, np.ndarray]) -> dict[str, Any]:
+    def decode(self, action_vector: np.ndarray, inputs: dict[str, np.ndarray]) -> tuple[command.CommandType, float]:
         rotation = action_vector[: self.rot_rep.size].reshape(self.rot_rep.shape)
         q_diff = geom.Rotation.create_from(rotation, self.rot_rep)
         tr_diff = action_vector[self.rot_rep.size : self.rot_rep.size + 3]
@@ -127,8 +129,6 @@ class RelativeTargetPositionAction(RotationTranslationGripAction):
 
         tr_add = robot_pose[0:3] + tr_diff
 
-        outputs = {
-            'target_robot_position': geom.Transform3D(translation=tr_add, rotation=rot_mul),
-            'target_grip': action_vector[self.rot_rep.size + 3],
-        }
-        return outputs
+        target_pose = geom.Transform3D(translation=tr_add, rotation=rot_mul)
+        target_grip = action_vector[self.rot_rep.size + 3].item()
+        return (command.CartesianPosition(pose=target_pose), target_grip)

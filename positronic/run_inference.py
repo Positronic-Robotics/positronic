@@ -136,13 +136,10 @@ class Inference(pimm.ControlSystem):
                     obs['task'] = self.task
 
                 action = self.policy.select_action(obs)
-                action_dict = self.action_decoder.decode(action, inputs)
-                target_pos = action_dict['target_robot_position']
-
-                roboarm_command = roboarm.command.CartesianPosition(pose=target_pos)
+                roboarm_command, target_grip = self.action_decoder.decode(action, inputs)
 
                 self.robot_commands.emit(roboarm_command)
-                self.target_grip.emit(action_dict['target_grip'].item())
+                self.target_grip.emit(target_grip)
             except pimm.NoValueException:
                 continue
             finally:
@@ -313,14 +310,18 @@ main_sim_pi0 = main_sim_cfg.override(
     policy=positronic.cfg.policy.policy.pi0,
     observation_encoder=positronic.cfg.policy.observation.pi0,
     action_decoder=positronic.cfg.policy.action.absolute_position,
-    camera_dict={'left': 'handcam_left_ph', 'side': 'back_view_ph'},
+    # We use 3 cameras not because we need it, but because Mujoco does not render
+    # the second image when using only 2 cameras
+    camera_dict={'left': 'handcam_left_ph', 'side': 'back_view_ph', 'agent_view': 'agentview'},
 )
 
 main_sim_act = main_sim_cfg.override(
     policy=positronic.cfg.policy.policy.act,
     observation_encoder=positronic.cfg.policy.observation.franka_mujoco_stackcubes,
     action_decoder=positronic.cfg.policy.action.absolute_position,
-    camera_dict={'handcam_left': 'handcam_left_ph', 'back_view': 'back_view_ph'},
+    # We use 3 cameras not because we need it, but because Mujoco does not render
+    # the second image when using only 2 cameras
+    camera_dict={'handcam_left': 'handcam_left_ph', 'back_view': 'back_view_ph', 'agent_view': 'agentview'},
 )
 
 droid = cfn.Config(

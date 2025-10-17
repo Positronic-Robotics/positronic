@@ -9,6 +9,7 @@
 
 ## Testing insturctions
 - Find the CI plan in .github/workflows directory.
+- Never import inside the test function, unless there's an extremely critical reason to do so. Prefer adding imports to the head.
 - The work is done in virtual environment (`.venv/bin/activate`). You may need to initialise it when running scripts.
 - Run tests locally using `pytest` command. Disable coverage with `--no-cov` argument.
 - Add or update tests for the code you change, even if nobody asked.
