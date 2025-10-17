@@ -1,6 +1,7 @@
 import select
 import sys
 import termios
+import time
 import tty
 from collections.abc import Iterator, Mapping, Sequence
 from contextlib import nullcontext
@@ -15,6 +16,9 @@ import torch
 import tqdm
 
 import pimm
+import positronic.cfg.hardware.camera
+import positronic.cfg.hardware.gripper
+import positronic.cfg.hardware.roboarm
 import positronic.cfg.policy.action
 import positronic.cfg.policy.observation
 import positronic.cfg.policy.policy
@@ -190,7 +194,49 @@ class KeyboardControl(pimm.ControlSystem):
             termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
 
 
-# TODO: Inference for the real robot
+def key_to_command(key: str) -> InferenceCommand | None:
+    """Map keyboard inputs to inference commands, filtering out unmapped keys."""
+    if key == 's':
+        print('Starting inference...')
+        return InferenceCommand.START()
+    elif key == 'p':
+        print('Stopping inference...')
+        return InferenceCommand.STOP()
+    elif key == 'r':
+        print('Resetting...')
+        return InferenceCommand.RESET()
+    return None
+
+
+def main(
+    robot_arm: pimm.ControlSystem,
+    gripper: pimm.ControlSystem,
+    cameras: dict[str, pimm.ControlSystem],
+    observation_encoder: ObservationEncoder,
+    action_decoder: ActionDecoder,
+    policy,
+    policy_fps: int = 15,
+    task: str | None = None,
+    device: str | None = None,
+    output_dir: str | None = None,
+):
+    """Runs inference on real hardware."""
+    device = device or detect_device()
+    inference = Inference(observation_encoder, action_decoder, device, policy, policy_fps, task)
+
+    writer_cm = LocalDatasetWriter(Path(output_dir)) if output_dir is not None else nullcontext(None)
+    with writer_cm as dataset_writer, pimm.World() as world:
+        ds_agent = wire.wire(world, inference, dataset_writer, cameras, robot_arm, gripper, None, TimeMode.CLOCK)
+
+        keyboard = KeyboardControl()
+        print('Keyboard controls: [s]tart, sto[p], [r]eset')
+
+        world.connect(keyboard.keyboard_inputs, inference.command, emitter_wrapper=pimm.map(key_to_command))
+
+        bg_cs = [keyboard, *cameras.values(), robot_arm, gripper, ds_agent]
+
+        for cmd in world.start(inference, bg_cs):
+            time.sleep(cmd.seconds)
 
 
 class Driver(pimm.ControlSystem):
@@ -309,5 +355,21 @@ main_sim_act = main_sim_cfg.override(
     camera_dict={'handcam_left': 'handcam_left_ph', 'back_view': 'back_view_ph', 'agent_view': 'agentview'},
 )
 
+droid = cfn.Config(
+    main,
+    robot_arm=positronic.cfg.hardware.roboarm.franka,
+    gripper=positronic.cfg.hardware.gripper.robotiq,
+    cameras={
+        'wrist': positronic.cfg.hardware.camera.zed_m.override(view='left', resolution='vga', fps=30),
+        'exterior': positronic.cfg.hardware.camera.zed_2i.override(view='left', resolution='vga', fps=30),
+    },
+    observation_encoder=positronic.cfg.policy.observation.pi0,
+    action_decoder=positronic.cfg.policy.action.absolute_position,
+    policy=positronic.cfg.policy.policy.pi0,
+    policy_fps=15,
+    task='pick up the green cube and put in on top of the red cube',
+    device=None,
+)
+
 if __name__ == '__main__':
-    cfn.cli({'sim_pi0': main_sim_pi0, 'sim_act': main_sim_act})
+    cfn.cli({'sim_pi0': main_sim_pi0, 'sim_act': main_sim_act, 'droid': droid})
