@@ -22,6 +22,17 @@
             {% if task %}<span class="task-description"> : {{ task }}</span>{% endif %}
         </div>
     </div>
+    {% if episode_path or episode_size_mb %}
+    <div class="episode-path">
+        {% if episode_path %}
+        <span class="episode-path-label">Episode path:</span>
+        <code class="episode-path-value">{{ episode_path }}</code>
+        {% endif %}
+        {% if episode_size_mb %}
+        <span class="episode-size">({{ episode_size_mb }} MB)</span>
+        {% endif %}
+    </div>
+    {% endif %}
     <div id="viewer-container">
         <div id="loading-overlay" class="loading-overlay">
             Loading Rerun viewer...

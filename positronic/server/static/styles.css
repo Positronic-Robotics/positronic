@@ -162,6 +162,11 @@ h1 {
 .header { background-color: var(--navbar-background-color); color: var(--navbar-text-color); padding: 15px 20px; display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--color-border-default); }
 .header h1 { margin: 0; font-size: 24px; border-bottom: none; padding-bottom: 0; }
 
+.episode-path { background-color: var(--color-card-bg); border-bottom: 1px solid var(--color-border-default); padding: 10px 20px; display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+.episode-path-label { color: var(--color-text-default); opacity: 0.75; font-size: 14px; }
+.episode-path-value { background-color: var(--color-bg-form-btn-default); border-radius: 4px; padding: 2px 6px; font-family: 'SF Mono', Monaco, 'Cascadia Code', 'Roboto Mono', Consolas, 'Courier New', monospace; font-size: 14px; color: var(--color-text-default-light); }
+.episode-size { color: var(--color-text-default); opacity: 0.7; font-size: 14px; }
+
 /* Breadcrumbs */
 .breadcrumbs { font-size: 18px; display: flex; align-items: center; gap: 5px; flex-wrap: wrap; }
 .breadcrumb-link { color: var(--color-accent-green); text-decoration: none; transition: opacity 0.2s; }

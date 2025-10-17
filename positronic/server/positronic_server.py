@@ -22,12 +22,7 @@ from positronic.dataset.local_dataset import LocalDataset
 from positronic.server.dataset_utils import get_dataset_info, get_episodes_list, stream_episode_rrd
 
 # Global app state
-app_state: dict[str, object] = {
-    'dataset': None,
-    'loading_state': True,
-    'root': '',
-    'cache_dir': '',
-}
+app_state: dict[str, object] = {'dataset': None, 'loading_state': True, 'root': '', 'cache_dir': ''}
 
 
 def _pkg_path(*parts: str) -> str:
@@ -57,11 +52,7 @@ app = FastAPI(lifespan=lifespan)
 
 # CORS for convenience
 app.add_middleware(
-    CORSMiddleware,
-    allow_origins=['*'],
-    allow_credentials=True,
-    allow_methods=['*'],
-    allow_headers=['*'],
+    CORSMiddleware, allow_origins=['*'], allow_credentials=True, allow_methods=['*'], allow_headers=['*']
 )
 
 # Static files and templates (packaged relative to this file)
@@ -98,6 +89,10 @@ async def episode_viewer(request: Request, episode_id: int):
     except IndexError as e:
         raise HTTPException(status_code=404, detail='Episode not found') from e
 
+    meta = episode.meta
+    size_mb = meta.get('size_mb')
+    size_mb_display = f'{size_mb:.2f}' if isinstance(size_mb, int | float) else None
+
     return templates.TemplateResponse(
         'episode.html',
         {
@@ -107,6 +102,8 @@ async def episode_viewer(request: Request, episode_id: int):
             'rerun_version': rr.__version__,
             'task': episode.static.get('task', None),
             'repo_id': app_state['root'],
+            'episode_path': meta.get('path'),
+            'episode_size_mb': size_mb_display,
         },
     )
 

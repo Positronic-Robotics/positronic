@@ -154,6 +154,13 @@ def test_episode_meta_written_and_exposed(tmp_path):
     assert 'created_ts_ns' in m and isinstance(m['created_ts_ns'], int)
     assert 'writer' in m and isinstance(m['writer'], dict)
     assert m['writer'].get('name') == 'positronic.dataset.episode.DiskEpisodeWriter'
+    expected_path = str(ep_dir.expanduser().absolute())
+    assert m.get('path') == expected_path
+    assert 'size_mb' in m and isinstance(m['size_mb'], float)
+    assert m['size_mb'] > 0
+    formatted_size = f'{m["size_mb"]:.2f}'
+    assert isinstance(formatted_size, str)
+    assert formatted_size.replace('.', '', 1).isdigit()
     # git info present when running inside a git repo; skip strict assertions otherwise
     if 'git' in m['writer']:
         git = m['writer']['git']
