@@ -42,11 +42,11 @@ class SoundSystem(pimm.ControlSystem):
         self.level: pimm.SignalReceiver[float] = pimm.ControlSystemReceiver(self)
         self.wav_path: pimm.SignalReceiver[str] = pimm.ControlSystemReceiver(self)
 
-    def _level_to_frequency(self, level: float) -> tuple[float, float]:
-        if level < self.enable_threshold:
+    def _level_to_frequency(self, level: float | None) -> tuple[float, float]:
+        if level is None or level < self.enable_threshold:
             return 0.0, self.base_frequency
         else:
-            level = level - self.enable_threshold
+            level = float(level) - self.enable_threshold
             octave = level / self.raise_octave_each
             frequency = self.base_frequency * (2**octave)
             return self.enable_master_volume, frequency

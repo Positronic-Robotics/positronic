@@ -154,6 +154,8 @@ class MujocoCamera(pimm.ControlSystem):
 class MujocoFrankaState(State, pimm.shared_memory.NumpySMAdapter):
     def __init__(self):
         super().__init__(shape=(7 + 7 + 7 + 1,), dtype=np.float32)
+        self.array.fill(0.0)
+        self.array[14 + 7] = RobotStatus.AVAILABLE.value
 
     def instantiation_params(self) -> tuple[Any, ...]:
         return ()

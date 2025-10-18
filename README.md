@@ -58,8 +58,8 @@ Clone the repository and set up a local `uv` environment (recommended) or use Do
 
 Prerequisites: Python 3.11, [uv](https://docs.astral.sh/uv/), `libturbojpeg`, and FFmpeg
 ```
-sudo apt install libturbojpeg ffmpeg   # Linux
-brew install jpeg-turbo ffmpeg         # macOS
+sudo apt install libturbojpeg ffmpeg portaudio19-dev  # Linux
+brew install jpeg-turbo ffmpeg                        # macOS
 ```
 
 ```bash
@@ -119,7 +119,7 @@ Use the [Data collection script](positronic/data_collection.py) for both simulat
 ```bash
 python -m positronic.data_collection sim \
     --output_dir=~/datasets/stack_cubes_raw \
-    --webxr=.ihpone --operator_position=.BACK
+    --sound=None --webxr=.iphone --operator_position=.BACK
 ```
 
 This command loads the [MuJoCo scene](positronic/assets/mujoco/franka_table.xml) with loaders from the [simulator config](positronic/cfg/simulator.py), starts the [DearPyGui UI](positronic/gui/dpg.py), and records into the [Local dataset writer](positronic/dataset/local_dataset.py).
