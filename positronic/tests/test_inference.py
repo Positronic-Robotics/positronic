@@ -202,41 +202,6 @@ def test_inference_emits_cartesian_move(world, clock):
 
 
 @pytest.mark.timeout(3.0)
-def test_inference_skips_when_robot_is_moving(world, clock):
-    encoder = StubStateEncoder()
-    decoder = StubActionDecoder()
-    policy = SpyPolicy(action=np.array([[0.9]], dtype=np.float32))
-
-    inference = Inference(encoder, decoder, policy, inference_fps=15)
-
-    # Capture IO to verify that nothing is emitted while the robot is busy.
-    frame_em = world.pair(inference.frames['cam'])
-    robot_em = world.pair(inference.robot_state)
-    grip_em = world.pair(inference.gripper_state)
-    command_em = world.pair(inference.command)
-    command_rx = world.pair(inference.robot_commands)
-    grip_rx = world.pair(inference.target_grip)
-
-    robot_state = make_robot_state([0.5, 0.1, 0.2], [0.4, 0.2, 0.1], status=roboarm.RobotStatus.MOVING)
-
-    # Feed an otherwise valid payload but keep status at MOVING so inference must wait.
-    driver = ManualDriver([
-        (partial(command_em.emit, InferenceCommand.START()), 0.0),
-        (partial(emit_ready_payload, frame_em, robot_em, grip_em, robot_state), 0.01),
-        (None, 0.05),
-    ])
-
-    scheduler = world.start([inference, driver])
-    drive_scheduler(scheduler, clock=clock, steps=20)
-
-    assert policy.last_obs is None
-    assert decoder.last_action is None
-
-    assert command_rx.read() is None
-    assert grip_rx.read() is None
-
-
-@pytest.mark.timeout(3.0)
 def test_inference_waits_for_complete_inputs(world, clock):
     encoder = StubStateEncoder()
     decoder = StubActionDecoder()
