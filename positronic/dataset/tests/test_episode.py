@@ -2,8 +2,16 @@ import numpy as np
 import pyarrow.parquet as pq
 import pytest
 
-from positronic.dataset.episode import DiskEpisode, DiskEpisodeWriter
+from positronic.dataset.local_dataset import DiskEpisode, DiskEpisodeWriter
 from positronic.dataset.tests.test_video import assert_frames_equal, create_frame
+
+
+def test_episode_imports_remain_backward_compatible():
+    from positronic.dataset.episode import DiskEpisode as EpisodeDiskEpisode
+    from positronic.dataset.episode import DiskEpisodeWriter as EpisodeDiskEpisodeWriter
+
+    assert EpisodeDiskEpisode is DiskEpisode
+    assert EpisodeDiskEpisodeWriter is DiskEpisodeWriter
 
 
 def test_episode_writer_and_reader_basic(tmp_path):
@@ -153,7 +161,7 @@ def test_episode_meta_written_and_exposed(tmp_path):
     assert 'schema_version' in m and m['schema_version'] == 1
     assert 'created_ts_ns' in m and isinstance(m['created_ts_ns'], int)
     assert 'writer' in m and isinstance(m['writer'], dict)
-    assert m['writer'].get('name') == 'positronic.dataset.episode.DiskEpisodeWriter'
+    assert m['writer'].get('name') == 'positronic.dataset.local_dataset.DiskEpisodeWriter'
     expected_path = str(ep_dir.expanduser().absolute())
     assert m.get('path') == expected_path
     assert 'size_mb' in m and isinstance(m['size_mb'], float)

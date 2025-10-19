@@ -271,7 +271,7 @@ Aborting: `abort()` stops recording, asks each underlying `Signal` writer to abo
   - `schema_version: int` – manifest version (starts at 1).
   - `created_ts_ns: int` – `Episode` creation time in nanoseconds.
   - `writer: object` – environment and provenance:
-    - `name: str` – fully-qualified writer class (e.g., `positronic.dataset.episode.DiskEpisodeWriter`).
+    - `name: str` – fully-qualified writer class (e.g., `positronic.dataset.local_dataset.DiskEpisodeWriter`).
     - `version: str|null` – package version if available.
     - `python: str` – interpreter version.
     - `platform: str` – platform string.
