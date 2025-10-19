@@ -112,6 +112,8 @@ class Serializers:
                 return {'.pose': Serializers.transform_3d(pose)}
             case roboarm.command.JointPosition(positions):
                 return {'.joints': positions}
+            case roboarm.command.JointDelta(delta):
+                return {'.joint_deltas': delta}
             case roboarm.command.Reset():
                 return {'.reset': 1}
 
@@ -182,12 +184,7 @@ class DsWriterAgent(pimm.ControlSystem):
     (`CLOCK`) or from the producing message (`MESSAGE`).
     """
 
-    def __init__(
-        self,
-        ds_writer: DatasetWriter,
-        poll_hz: float = 1000.0,
-        time_mode: TimeMode = TimeMode.CLOCK,
-    ):
+    def __init__(self, ds_writer: DatasetWriter, poll_hz: float = 1000.0, time_mode: TimeMode = TimeMode.CLOCK):
         self.ds_writer = ds_writer
         self._poll_hz = float(poll_hz)
         self._time_mode = time_mode

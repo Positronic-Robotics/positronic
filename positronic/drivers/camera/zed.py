@@ -23,6 +23,7 @@ class SLCamera(pimm.ControlSystem):
         max_depth: float = 10,
         depth_mask: bool = False,
         max_recovery_time_sec: float = 10,
+        image_enhancement: bool = False,
     ):
         """
         StereoLabs camera driver.
@@ -52,7 +53,7 @@ class SLCamera(pimm.ControlSystem):
         self.init_params.depth_mode = getattr(sl.DEPTH_MODE, depth_mode.upper())
         self.init_params.coordinate_units = sl.UNIT.METER
         self.init_params.sdk_verbose = 1
-        self.init_params.enable_image_enhancement = False
+        self.init_params.enable_image_enhancement = image_enhancement
         self.init_params.async_grab_camera_recovery = True
 
         self.max_depth = max_depth
