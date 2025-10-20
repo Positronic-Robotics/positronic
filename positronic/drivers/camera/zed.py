@@ -9,8 +9,6 @@ import pimm
 from pimm.shared_memory import NumpySMAdapter
 
 
-# TODO: Currently in order to have pyzed available, one need to install Stereolabs SDK, and then generate
-# wheel file from it. We need to find a better solution how to install it via uv or at least Docker.
 class SLCamera(pimm.ControlSystem):
     def __init__(
         self,

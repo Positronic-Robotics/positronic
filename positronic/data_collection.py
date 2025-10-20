@@ -16,7 +16,13 @@ import positronic.cfg.sound
 import positronic.cfg.webxr
 from positronic import geom, wire
 from positronic.dataset import ds_writer_agent
-from positronic.dataset.ds_writer_agent import DsWriterCommand, DsWriterCommandType, Serializers
+from positronic.dataset.ds_writer_agent import (
+    DsWriterAgent,
+    DsWriterCommand,
+    DsWriterCommandType,
+    Serializers,
+    TimeMode,
+)
 from positronic.dataset.local_dataset import LocalDatasetWriter
 from positronic.drivers import roboarm
 from positronic.drivers.webxr import WebXR
@@ -171,20 +177,12 @@ def _wrench_to_level(state: roboarm.State) -> float | None:
 
 def _wire(
     world: pimm.World,
-    cameras: dict[str, pimm.SignalEmitter] | None,
-    dataset_writer: LocalDatasetWriter | None,
+    ds_agent: DsWriterAgent | None,
     data_collection: DataCollectionController,
     webxr: WebXR,
     robot_arm: pimm.ControlSystem | None,
-    gripper: pimm.ControlSystem | None,
     sound: pimm.ControlSystem | None,
-    gui: DearpyguiUi | None,
-    time_mode: ds_writer_agent.TimeMode = ds_writer_agent.TimeMode.CLOCK,
 ):
-    # TODO: Refactor this function to be called after wire.wire. Many params will go away
-    cameras = cameras or {}
-    ds_agent = wire.wire(world, data_collection, dataset_writer, cameras, robot_arm, gripper, gui, time_mode)
-
     world.connect(webxr.controller_positions, data_collection.controller_positions)
     world.connect(webxr.buttons, data_collection.buttons_receiver)
 
@@ -218,9 +216,8 @@ def main(
 
     writer_cm = LocalDatasetWriter(Path(output_dir)) if output_dir is not None else nullcontext(None)
     with writer_cm as dataset_writer, pimm.World() as world:
-        ds_agent = _wire(
-            world, camera_emitters, dataset_writer, data_collection, webxr, robot_arm, gripper, sound, None
-        )
+        ds_agent = wire.wire(world, data_collection, dataset_writer, camera_emitters, robot_arm, gripper, None)
+        _wire(world, ds_agent, data_collection, webxr, robot_arm, sound)
 
         bg_cs = [webxr]
         bg_cs.extend(camera_instances.values())
@@ -281,8 +278,8 @@ def main_sim(
 
     writer_cm = LocalDatasetWriter(Path(output_dir)) if output_dir is not None else nullcontext(None)
     with writer_cm as dataset_writer, pimm.World(clock=sim) as world:
-        ds_agent = _wire(world, cameras, dataset_writer, data_collection, webxr, robot_arm, gripper, sound, gui,
-                         time_mode=ds_writer_agent.TimeMode.MESSAGE)  # fmt: skip
+        ds_agent = wire.wire(world, data_collection, dataset_writer, cameras, robot_arm, gripper, gui, TimeMode.MESSAGE)
+        _wire(world, ds_agent, data_collection, webxr, robot_arm, sound)
 
         sim_iter = world.start(
             [sim, *camera_instances.values(), robot_arm, gripper, data_collection], [webxr, gui, ds_agent, sound]
