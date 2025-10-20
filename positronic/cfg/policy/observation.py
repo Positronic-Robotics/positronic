@@ -61,6 +61,16 @@ def pi0():
     )
 
 
+@cfn.config()
+def openpi_sim(image_size=(224, 224)):
+    from positronic.policy.observation import ObservationEncoder
+
+    return ObservationEncoder(
+        state_features=['robot_state.q', 'grip'],
+        images={'exterior': ('image.back_view', image_size), 'wrist': ('image.handcam_left', image_size)},
+    )
+
+
 @cfn.config(exterior_camera='image.exterior', wrist_camera='image.wrist', image_size=(224, 224))
 def openpi_droid(exterior_camera: str, wrist_camera: str, image_size: tuple[int, int]):
     """DROID observation encoder using joint positions."""

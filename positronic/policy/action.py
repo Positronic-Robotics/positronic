@@ -140,6 +140,11 @@ class JointDeltaAction(ActionDecoder):
     Action vector: (num_joints + 1,) = [joint_velocities..., gripper_position]
     """
 
+    # Copied from Droid: https://github.com/droid-dataset/droid/blob/main/droid/robot_ik/robot_ik_solver.py#L10
+    RELATIVE_MAX_JOIN_DELTA = np.array([0.2, 0.2, 0.2, 0.2, 0.2, 0.2, 0.2])
+    MAX_JOINT_DELTA = RELATIVE_MAX_JOIN_DELTA.max()
+    MAX_JONIT_VEL = RELATIVE_MAX_JOIN_DELTA / MAX_JOINT_DELTA
+
     def __init__(self, num_joints: int = 7):
         super().__init__()
         self.num_joints = num_joints
@@ -155,4 +160,8 @@ class JointDeltaAction(ActionDecoder):
         velocities = action_vector[: self.num_joints]
         grip = 1.0 if action_vector[self.num_joints].item() > 0.5 else 0.0
 
-        return (command.JointDelta(velocities=velocities), grip)
+        max_vel_norm = (np.abs(velocities) / self.MAX_JONIT_VEL).max()
+        if max_vel_norm > 1.0:
+            velocities = velocities / max_vel_norm
+
+        return (command.JointDelta(velocities=velocities * self.MAX_JOINT_DELTA), grip)

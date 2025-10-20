@@ -46,7 +46,7 @@ class ObservationEncoder(transforms.KeyFuncEpisodeTransform):
         # Encode images
         for out_name, (input_key, (width, height)) in self._image_configs.items():
             if input_key not in inputs:
-                raise KeyError(f"Missing image input '{input_key}' for '{out_name}'")
+                raise KeyError(f"Missing image input '{input_key}' for '{out_name}', available keys: {inputs.keys()}")
             frame = inputs[input_key]
             if not isinstance(frame, np.ndarray):
                 frame = np.asarray(frame)

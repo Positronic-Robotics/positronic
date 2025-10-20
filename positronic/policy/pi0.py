@@ -16,13 +16,16 @@ except ImportError as e:
 
 
 def basic_pi0_request(observation: dict[str, Any]) -> dict[str, Any]:
-    res = {
-        'observation/image': observation['observation.images.side'],
-        'observation/wrist_image': observation['observation.images.image'],
-        'observation/state': observation['observation.state'],
-    }
-    if 'task' in observation:
-        res['prompt'] = observation['task']
+    try:
+        res = {
+            'observation/image': observation['observation.images.side'],
+            'observation/wrist_image': observation['observation.images.image'],
+            'observation/state': observation['observation.state'],
+        }
+        if 'task' in observation:
+            res['prompt'] = observation['task']
+    except KeyError as e:
+        raise KeyError(f'Missing key, available keys: {observation.keys()}') from e
     return res
 
 

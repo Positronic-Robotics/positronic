@@ -203,6 +203,8 @@ class MujocoFranka(pimm.ControlSystem):
         state = MujocoFrankaState()
 
         while not should_stop.value:
+            # TODO: still a copy here
+            state.encode(self.q, self.dq, self.ee_pose)
             command, is_updated = commands.value
             if is_updated:
                 match command:
@@ -210,13 +212,12 @@ class MujocoFranka(pimm.ControlSystem):
                         self.set_ee_pose(pose)
                     case roboarm_command.JointPosition(positions=positions):
                         self.set_actuator_values(positions)
+                    case roboarm_command.JointDelta(velocities=delta):
+                        self.set_actuator_values(self.q + delta)
                     case roboarm_command.Reset():
                         self.sim.reset()
                     case _:
                         raise ValueError(f'Unknown command type: {type(command)}')
-
-            # TODO: still a copy here
-            state.encode(self.q, self.dq, self.ee_pose)
 
             self.state.emit(state)
             yield pimm.Pass()
