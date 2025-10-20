@@ -1,7 +1,7 @@
 from abc import ABC, abstractmethod
 from collections.abc import Sequence
 from contextlib import AbstractContextManager
-from typing import TYPE_CHECKING, Any, Generic, TypeVar
+from typing import Any, Generic, TypeVar
 
 import numpy as np
 
@@ -190,27 +190,12 @@ class EpisodeWriter(AbstractContextManager, ABC, Generic[T]):
         pass
 
 
-if TYPE_CHECKING:  # pragma: no cover - typing only
-    from .local_dataset import DiskEpisode, DiskEpisodeWriter
-
 __all__ = [
     'EPISODE_SCHEMA_VERSION',
     'Episode',
     'EpisodeWriter',
     'EpisodeContainer',
     '_is_valid_static_value',
-    'DiskEpisode',
-    'DiskEpisodeWriter',
 ]
-
-
-def __getattr__(name: str):
-    if name in {'DiskEpisode', 'DiskEpisodeWriter'}:
-        from .local_dataset import DiskEpisode, DiskEpisodeWriter
-
-        value = DiskEpisode if name == 'DiskEpisode' else DiskEpisodeWriter
-        globals()[name] = value
-        return value
-    raise AttributeError(f'module {__name__!r} has no attribute {name!r}')
 
 

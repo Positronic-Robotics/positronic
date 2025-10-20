@@ -5,15 +5,6 @@ import pytest
 from positronic.dataset.local_dataset import DiskEpisode, DiskEpisodeWriter
 from positronic.dataset.tests.test_video import assert_frames_equal, create_frame
 
-
-def test_episode_imports_remain_backward_compatible():
-    from positronic.dataset.episode import DiskEpisode as EpisodeDiskEpisode
-    from positronic.dataset.episode import DiskEpisodeWriter as EpisodeDiskEpisodeWriter
-
-    assert EpisodeDiskEpisode is DiskEpisode
-    assert EpisodeDiskEpisodeWriter is DiskEpisodeWriter
-
-
 def test_episode_writer_and_reader_basic(tmp_path):
     ep_dir = tmp_path / 'ep1'
     with DiskEpisodeWriter(ep_dir) as w:
