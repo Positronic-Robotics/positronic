@@ -17,7 +17,7 @@ from positronic.dataset.ds_writer_agent import DsWriterCommand, TimeMode
 from positronic.dataset.local_dataset import LocalDatasetWriter
 from positronic.drivers import roboarm
 from positronic.gui.dpg import DearpyguiUi
-from positronic.simulator.mujoco.sim import MujocoCamera, MujocoFranka, MujocoGripper, MujocoSim
+from positronic.simulator.mujoco.sim import MujocoCameras, MujocoFranka, MujocoGripper, MujocoSim
 from positronic.simulator.mujoco.transforms import MujocoSceneTransform
 
 
@@ -102,15 +102,14 @@ def main(
     sim = MujocoSim(mujoco_model_path, loaders)
     sim.load_state(episode.static)
     robot_arm = MujocoFranka(sim, suffix='_ph')
-    # Create camera instances
-    camera_instances = {
-        'image.handcam_left': MujocoCamera(sim.model, sim.data, 'handcam_left_ph', (320, 240), fps=fps),
-        'image.handcam_right': MujocoCamera(sim.model, sim.data, 'handcam_right_ph', (320, 240), fps=fps),
-        'image.back_view': MujocoCamera(sim.model, sim.data, 'back_view_ph', (320, 240), fps=fps),
-        'image.agent_view': MujocoCamera(sim.model, sim.data, 'agentview', (320, 240), fps=fps),
-    }
+    mujoco_cameras = MujocoCameras(sim.model, sim.data, resolution=(320, 240), fps=fps)
     # Map signal names to emitters for wire()
-    cameras = {name: cam.frame for name, cam in camera_instances.items()}
+    cameras = {
+        'image.handcam_left': mujoco_cameras.cameras['handcam_left_ph'],
+        'image.handcam_right': mujoco_cameras.cameras['handcam_right_ph'],
+        'image.back_view': mujoco_cameras.cameras['back_view_ph'],
+        'image.agent_view': mujoco_cameras.cameras['agentview'],
+    }
     gripper = MujocoGripper(sim, actuator_name='actuator8_ph', joint_name='finger_joint1_ph')
     gui = DearpyguiUi() if show_gui else None
 
@@ -127,7 +126,7 @@ def main(
         world.connect(controller.player_command, replay.command)
         world.connect(replay.finished, controller.finished)
 
-        sim_iter = world.start([sim, *camera_instances.values(), robot_arm, gripper, replay, ds_agent, controller], gui)
+        sim_iter = world.start([sim, mujoco_cameras, robot_arm, gripper, replay, ds_agent, controller], gui)
         p_bar = tqdm.tqdm(total=round(episode.duration_ns / 1e9, 1), unit='s')
 
         for _ in sim_iter:

@@ -30,7 +30,7 @@ from positronic.gui.dpg import DearpyguiUi
 from positronic.policy.action import ActionDecoder
 from positronic.policy.observation import ObservationEncoder
 from positronic.simulator.mujoco.observers import BodyDistance, StackingSuccess
-from positronic.simulator.mujoco.sim import MujocoCamera, MujocoFranka, MujocoGripper, MujocoSim
+from positronic.simulator.mujoco.sim import MujocoCameras, MujocoFranka, MujocoGripper, MujocoSim
 from positronic.simulator.mujoco.transforms import MujocoSceneTransform
 
 rr.init('droid_eval')
@@ -278,17 +278,11 @@ def main_sim(
     sim = MujocoSim(mujoco_model_path, loaders, observers=observers)
     robot_arm = MujocoFranka(sim, suffix='_ph')
     gripper = MujocoGripper(sim, actuator_name='actuator8_ph', joint_name='finger_joint1_ph')
-    # TODO: Should we create one renderer that generates multiple images? I guess it might bring
-    # some performance improvements and potentlially solve problem with 3 streams to be required
-    # in order for 2 cameras to render properly.
-    camera_instances = {
-        name: MujocoCamera(sim.model, sim.data, orig_name, (320, 240), fps=camera_fps)
-        for name, orig_name in camera_dict.items()
-    }
+    mujoco_cameras = MujocoCameras(sim.model, sim.data, resolution=(320, 240), fps=camera_fps)
     # Map signal names to emitters for wire()
-    cameras = {name: cam.frame for name, cam in camera_instances.items()}
+    cameras = {name: mujoco_cameras.cameras[orig_name] for name, orig_name in camera_dict.items()}
     inference = Inference(observation_encoder, action_decoder, policy, policy_fps, task)
-    control_systems = list(camera_instances.values()) + [sim, robot_arm, gripper, inference]
+    control_systems = [mujoco_cameras, sim, robot_arm, gripper, inference]
 
     meta = {
         'inference.mujoco_model_path': mujoco_model_path,

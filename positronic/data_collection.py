@@ -27,7 +27,7 @@ from positronic.dataset.local_dataset import LocalDatasetWriter
 from positronic.drivers import roboarm
 from positronic.drivers.webxr import WebXR
 from positronic.gui.dpg import DearpyguiUi
-from positronic.simulator.mujoco.sim import MujocoCamera, MujocoFranka, MujocoGripper, MujocoSim
+from positronic.simulator.mujoco.sim import MujocoCameras, MujocoFranka, MujocoGripper, MujocoSim
 from positronic.simulator.mujoco.transforms import MujocoSceneTransform
 from positronic.utils.buttons import ButtonHandler
 
@@ -259,15 +259,14 @@ def main_sim(
     sim = MujocoSim(mujoco_model_path, loaders)
     robot_arm = MujocoFranka(sim, suffix='_ph')
 
-    # Create camera instances
-    camera_instances = {
-        'image.handcam_left': MujocoCamera(sim.model, sim.data, 'handcam_left_ph', (320, 240), fps=fps),
-        'image.handcam_right': MujocoCamera(sim.model, sim.data, 'handcam_right_ph', (320, 240), fps=fps),
-        'image.back_view': MujocoCamera(sim.model, sim.data, 'back_view_ph', (320, 240), fps=fps),
-        'image.agent_view': MujocoCamera(sim.model, sim.data, 'agentview', (320, 240), fps=fps),
-    }
+    mujoco_cameras = MujocoCameras(sim.model, sim.data, resolution=(320, 240), fps=fps)
     # Map signal names to emitters for wire()
-    cameras = {name: cam.frame for name, cam in camera_instances.items()}
+    cameras = {
+        'image.handcam_left': mujoco_cameras.cameras['handcam_left_ph'],
+        'image.handcam_right': mujoco_cameras.cameras['handcam_right_ph'],
+        'image.back_view': mujoco_cameras.cameras['back_view_ph'],
+        'image.agent_view': mujoco_cameras.cameras['agentview'],
+    }
     gui = DearpyguiUi()
     gripper = MujocoGripper(sim, actuator_name='actuator8_ph', joint_name='finger_joint1_ph')
 
@@ -282,7 +281,7 @@ def main_sim(
         _wire(world, ds_agent, data_collection, webxr, robot_arm, sound)
 
         sim_iter = world.start(
-            [sim, *camera_instances.values(), robot_arm, gripper, data_collection], [webxr, gui, ds_agent, sound]
+            [sim, mujoco_cameras, robot_arm, gripper, data_collection], [webxr, gui, ds_agent, sound]
         )
         sim_iter = iter(sim_iter)
 

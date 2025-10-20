@@ -284,7 +284,10 @@ def test_main_sim_emits_commands_and_records_dataset(tmp_path, monkeypatch):
         def update_scene(self, _data, camera=None):
             pass
 
-        def render(self):
+        def render(self, out=None):
+            if out is not None:
+                out[:] = np.zeros((self.height, self.width, 3), dtype=np.uint8)
+                return None
             return np.zeros((self.height, self.width, 3), dtype=np.uint8)
 
         def close(self):

@@ -129,26 +129,42 @@ class MujocoSim(pimm.Clock, pimm.ControlSystem):
             mj.mj_step(self.model, self.data)
 
 
-class MujocoCamera(pimm.ControlSystem):
-    def __init__(self, model, data, camera_name: str, resolution: tuple[int, int], fps: int = 30):
+class MujocoCameras(pimm.ControlSystem):
+    """Manages multiple mujoco cameras with a shared renderer.
+
+    Cameras are accessed via self.cameras[mujoco_camera_name].
+    Only cameras that are bound (connected) are rendered each frame.
+    """
+
+    def __init__(self, model, data, resolution: tuple[int, int], fps: int = 30):
         super().__init__()
         self.model = model
         self.data = data
-        self.render_resolution = resolution
-        self.camera_name = camera_name
+        self.resolution = resolution
         self.fps = fps
-        self.frame: pimm.SignalEmitter = pimm.ControlSystemEmitter(self)
-        self._frame_adapter = None
+        self.cameras: pimm.EmitterDict = pimm.EmitterDict(self)
+        self._adapters: dict[str, pimm.shared_memory.NumpySMAdapter] = {}
 
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock):
-        renderer = mj.Renderer(self.model, height=self.render_resolution[1], width=self.render_resolution[0])
+        renderer = mj.Renderer(self.model, height=self.resolution[1], width=self.resolution[0])
+
+        existing_cameras = {self.model.camera(i).name for i in range(self.model.ncam)}
+        for camera_name in self.cameras.keys():
+            if camera_name not in existing_cameras:
+                raise RuntimeError(
+                    f"Camera '{camera_name}' is bound but does not exist in the mujoco model. "
+                    f'Available cameras: {existing_cameras}'
+                )
+            self._adapters[camera_name] = pimm.shared_memory.NumpySMAdapter(
+                shape=(self.resolution[1], self.resolution[0], 3), dtype=np.uint8
+            )
 
         while not should_stop.value:
-            renderer.update_scene(self.data, camera=self.camera_name)
-            frame = renderer.render()
+            for camera_name in self.cameras.keys():
+                renderer.update_scene(self.data, camera=camera_name)
+                renderer.render(out=self._adapters[camera_name].array)
+                self.cameras[camera_name].emit(self._adapters[camera_name], ts=clock.now_ns())
 
-            self._frame_adapter = pimm.shared_memory.NumpySMAdapter.lazy_init(frame, self._frame_adapter)
-            self.frame.emit(self._frame_adapter, ts=clock.now_ns())
             yield pimm.Sleep(1 / self.fps)
 
         renderer.close()
