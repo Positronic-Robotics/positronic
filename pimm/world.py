@@ -11,7 +11,6 @@ import weakref
 from collections import deque
 from collections.abc import Callable, Iterator, Sequence
 from enum import IntEnum
-from multiprocessing import resource_tracker
 from multiprocessing.synchronize import Event as EventClass
 from queue import Empty, Full
 from typing import Any, TypeVar
@@ -312,7 +311,6 @@ class MultiprocessReceiver(SignalReceiver[T]):
             return False
 
         self._sm = multiprocessing.shared_memory.SharedMemory(name=sm_name)
-        resource_tracker.unregister(self._sm._name, 'shared_memory')
 
         if self._sm.size < buf_size:
             raise RuntimeError(f'Shared memory buffer size mismatch: expected at least {buf_size}, got {self._sm.size}')
