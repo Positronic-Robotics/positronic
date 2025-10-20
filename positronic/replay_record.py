@@ -103,10 +103,10 @@ def main(
     sim.load_state(episode.static)
     robot_arm = MujocoFranka(sim, suffix='_ph')
     cameras = {
-        'handcam_left': MujocoCamera(sim.model, sim.data, 'handcam_left_ph', (320, 240), fps=fps),
-        'handcam_right': MujocoCamera(sim.model, sim.data, 'handcam_right_ph', (320, 240), fps=fps),
-        'back_view': MujocoCamera(sim.model, sim.data, 'back_view_ph', (320, 240), fps=fps),
-        'agent_view': MujocoCamera(sim.model, sim.data, 'agentview', (320, 240), fps=fps),
+        'image.handcam_left': MujocoCamera(sim.model, sim.data, 'handcam_left_ph', (320, 240), fps=fps),
+        'image.handcam_right': MujocoCamera(sim.model, sim.data, 'handcam_right_ph', (320, 240), fps=fps),
+        'image.back_view': MujocoCamera(sim.model, sim.data, 'back_view_ph', (320, 240), fps=fps),
+        'image.agent_view': MujocoCamera(sim.model, sim.data, 'agentview', (320, 240), fps=fps),
     }
     gripper = MujocoGripper(sim, actuator_name='actuator8_ph', joint_name='finger_joint1_ph')
     gui = DearpyguiUi() if show_gui else None

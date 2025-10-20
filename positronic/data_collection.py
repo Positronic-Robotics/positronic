@@ -182,8 +182,6 @@ def _wire(
     time_mode: ds_writer_agent.TimeMode = ds_writer_agent.TimeMode.CLOCK,
 ):
     cameras = cameras or {}
-    cameras = {f'image.{name}' if name != 'image' else 'image': camera for name, camera in cameras.items()}
-
     ds_agent = wire.wire(world, data_collection, dataset_writer, cameras, robot_arm, gripper, gui, time_mode)
 
     world.connect(webxr.controller_positions, data_collection.controller_positions)
@@ -258,10 +256,10 @@ def main_sim(
     robot_arm = MujocoFranka(sim, suffix='_ph')
 
     cameras = {
-        'handcam_left': MujocoCamera(sim.model, sim.data, 'handcam_left_ph', (320, 240), fps=fps),
-        'handcam_right': MujocoCamera(sim.model, sim.data, 'handcam_right_ph', (320, 240), fps=fps),
-        'back_view': MujocoCamera(sim.model, sim.data, 'back_view_ph', (320, 240), fps=fps),
-        'agent_view': MujocoCamera(sim.model, sim.data, 'agentview', (320, 240), fps=fps),
+        'image.handcam_left': MujocoCamera(sim.model, sim.data, 'handcam_left_ph', (320, 240), fps=fps),
+        'image.handcam_right': MujocoCamera(sim.model, sim.data, 'handcam_right_ph', (320, 240), fps=fps),
+        'image.back_view': MujocoCamera(sim.model, sim.data, 'back_view_ph', (320, 240), fps=fps),
+        'image.agent_view': MujocoCamera(sim.model, sim.data, 'agentview', (320, 240), fps=fps),
     }
     gui = DearpyguiUi()
     gripper = MujocoGripper(sim, actuator_name='actuator8_ph', joint_name='finger_joint1_ph')
@@ -302,8 +300,8 @@ main_cfg = cfn.Config(
     webxr=positronic.cfg.webxr.oculus,
     sound=positronic.cfg.sound.sound,
     cameras={
-        'left': positronic.cfg.hardware.camera.arducam_left,
-        'right': positronic.cfg.hardware.camera.arducam_right,
+        'image.left': positronic.cfg.hardware.camera.arducam_left,
+        'image.right': positronic.cfg.hardware.camera.arducam_right,
     },
     operator_position=OperatorPosition.FRONT,
 )
@@ -314,7 +312,7 @@ main_cfg = cfn.Config(
     webxr=positronic.cfg.webxr.oculus,
     sound=positronic.cfg.sound.sound,
     operator_position=OperatorPosition.BACK,
-    cameras={'right': positronic.cfg.hardware.camera.arducam_right},
+    cameras={'image.right': positronic.cfg.hardware.camera.arducam_right},
 )
 def so101cfg(robot_arm, **kwargs):
     """Runs data collection on SO101 robot"""
@@ -328,8 +326,8 @@ droid = cfn.Config(
     webxr=positronic.cfg.webxr.oculus,
     sound=positronic.cfg.sound.sound,
     cameras={
-        'wrist': positronic.cfg.hardware.camera.zed_m.override(view='left', resolution='hd720', fps=30),
-        'exterior': positronic.cfg.hardware.camera.zed_2i.override(view='left', resolution='hd720', fps=30),
+        'image.wrist': positronic.cfg.hardware.camera.zed_m.override(view='left', resolution='hd720', fps=30),
+        'image.exterior': positronic.cfg.hardware.camera.zed_2i.override(view='left', resolution='hd720', fps=30),
     },
     operator_position=OperatorPosition.BACK,
 )

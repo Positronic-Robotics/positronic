@@ -126,7 +126,7 @@ class Inference(pimm.ControlSystem):
                     'grip': self.gripper_state.value,
                 }
                 frame_messages = {k: v.value for k, v in self.frames.items()}
-                images = {f'image.{k}': v['image'] for k, v in frame_messages.items() if 'image' in v}
+                images = {k: v['image'] for k, v in frame_messages.items() if 'image' in v}
                 if len(images) != len(self.frames):
                     continue
                 inputs.update(images)
@@ -273,6 +273,7 @@ def main_sim(
     sim = MujocoSim(mujoco_model_path, loaders, observers=observers)
     robot_arm = MujocoFranka(sim, suffix='_ph')
     gripper = MujocoGripper(sim, actuator_name='actuator8_ph', joint_name='finger_joint1_ph')
+    # Camera names in camera_dict are now fully qualified (e.g., 'image.handcam_left')
     cameras = {
         name: MujocoCamera(sim.model, sim.data, orig_name, (320, 240), fps=camera_fps)
         for name, orig_name in camera_dict.items()
@@ -321,7 +322,7 @@ main_sim_cfg = cfn.Config(
     camera_fps=15,
     policy_fps=15,
     simulation_time=10,
-    camera_dict={'handcam_left': 'handcam_left_ph', 'back_view': 'back_view_ph'},
+    camera_dict={'image.handcam_left': 'handcam_left_ph', 'image.back_view': 'back_view_ph'},
     task='pick up the green cube and put in on top of the red cube',
 )
 
@@ -331,7 +332,7 @@ main_sim_pi0 = main_sim_cfg.override(
     action_decoder=positronic.cfg.policy.action.absolute_position,
     # We use 3 cameras not because we need it, but because Mujoco does not render
     # the second image when using only 2 cameras
-    camera_dict={'left': 'handcam_left_ph', 'side': 'back_view_ph', 'agent_view': 'agentview'},
+    camera_dict={'image.left': 'handcam_left_ph', 'image.side': 'back_view_ph', 'image.agent_view': 'agentview'},
 )
 
 main_sim_pi05_droid = main_sim_cfg.override(
@@ -342,7 +343,11 @@ main_sim_pi05_droid = main_sim_cfg.override(
     action_decoder=positronic.cfg.policy.action.joint_delta,
     # We use 3 cameras not because we need it, but because Mujoco does not render
     # the second image when using only 2 cameras
-    camera_dict={'handcam_left': 'handcam_left_ph', 'back_view': 'back_view_ph', 'agent_view': 'agentview'},
+    camera_dict={
+        'image.handcam_left': 'handcam_left_ph',
+        'image.back_view': 'back_view_ph',
+        'image.agent_view': 'agentview',
+    },
     policy_fps=15,
 )
 
@@ -352,7 +357,11 @@ main_sim_act = main_sim_cfg.override(
     action_decoder=positronic.cfg.policy.action.absolute_position,
     # We use 3 cameras not because we need it, but because Mujoco does not render
     # the second image when using only 2 cameras
-    camera_dict={'handcam_left': 'handcam_left_ph', 'back_view': 'back_view_ph', 'agent_view': 'agentview'},
+    camera_dict={
+        'image.handcam_left': 'handcam_left_ph',
+        'image.back_view': 'back_view_ph',
+        'image.agent_view': 'agentview',
+    },
 )
 
 openpi_droid = cfn.Config(
@@ -360,10 +369,10 @@ openpi_droid = cfn.Config(
     robot_arm=positronic.cfg.hardware.roboarm.franka,
     gripper=positronic.cfg.hardware.gripper.robotiq,
     cameras={
-        'wrist': positronic.cfg.hardware.camera.zed_m.override(
+        'image.wrist': positronic.cfg.hardware.camera.zed_m.override(
             view='left', resolution='hd720', fps=30, image_enhancement=True
         ),
-        'exterior': positronic.cfg.hardware.camera.zed_2i.override(
+        'image.exterior': positronic.cfg.hardware.camera.zed_2i.override(
             view='left', resolution='hd720', fps=30, image_enhancement=True
         ),
     },

@@ -148,7 +148,7 @@ def test_inference_emits_cartesian_move(world, clock):
     inference = Inference(encoder, decoder, policy, inference_fps=15, task='stack-blocks')
 
     # Wire inference interfaces so we can inspect the produced commands and grip targets.
-    frame_em = world.pair(inference.frames['cam'])
+    frame_em = world.pair(inference.frames['image.cam'])
     robot_em = world.pair(inference.robot_state)
     grip_em = world.pair(inference.gripper_state)
     command_em = world.pair(inference.command)
@@ -294,7 +294,7 @@ def test_main_sim_emits_commands_and_records_dataset(tmp_path, monkeypatch):
     action_decoder = make_stub_action_decoder()
     policy = StubPolicy()
 
-    camera_dict = {'handcam_left': 'handcam_left_ph'}
+    camera_dict = {'image.handcam_left': 'handcam_left_ph'}
     loaders = [
         cfg(seed=idx) if idx in (2, 4) else cfg()
         for idx, cfg in enumerate(positronic.cfg.simulator.stack_cubes_loaders)
