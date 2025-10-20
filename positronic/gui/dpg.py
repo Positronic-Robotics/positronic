@@ -92,7 +92,7 @@ class DearpyguiUi(pimm.ControlSystem):
                 frame, is_new = camera.value
 
                 if frame is not None and is_new:
-                    image = frame['image']
+                    image = frame.array  # Extract from NumpySMAdapter
                     if cam_name not in im_sizes:
                         im_sizes[cam_name] = image.shape[:2]
                         print(f'Have {len(im_sizes)}/{len(cameras)} images')

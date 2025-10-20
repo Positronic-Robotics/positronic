@@ -171,7 +171,7 @@ def _wrench_to_level(state: roboarm.State) -> float | None:
 
 def _wire(
     world: pimm.World,
-    cameras: dict[str, pimm.ControlSystem] | None,
+    cameras: dict[str, pimm.SignalEmitter] | None,
     dataset_writer: LocalDatasetWriter | None,
     data_collection: DataCollectionController,
     webxr: WebXR,
@@ -181,6 +181,7 @@ def _wire(
     gui: DearpyguiUi | None,
     time_mode: ds_writer_agent.TimeMode = ds_writer_agent.TimeMode.CLOCK,
 ):
+    # TODO: Refactor this function to be called after wire.wire. Many params will go away
     cameras = cameras or {}
     ds_agent = wire.wire(world, data_collection, dataset_writer, cameras, robot_arm, gripper, gui, time_mode)
 
@@ -210,20 +211,26 @@ def main(
     operator_position: OperatorPosition = OperatorPosition.FRONT,
 ):
     """Runs data collection in real hardware."""
-    cameras = cameras or {}
+    # Convert camera instances to emitters for wire()
+    camera_instances = cameras or {}
+    camera_emitters = {name: cam.frame for name, cam in camera_instances.items()}
     data_collection = DataCollectionController(operator_position.value)
 
     writer_cm = LocalDatasetWriter(Path(output_dir)) if output_dir is not None else nullcontext(None)
     with writer_cm as dataset_writer, pimm.World() as world:
-        ds_agent = _wire(world, cameras, dataset_writer, data_collection, webxr, robot_arm, gripper, sound, None)
+        ds_agent = _wire(
+            world, camera_emitters, dataset_writer, data_collection, webxr, robot_arm, gripper, sound, None
+        )
 
         bg_cs = [webxr]
-        bg_cs.extend(cameras.values())
+        bg_cs.extend(camera_instances.values())
         bg_cs.extend([ds_agent, robot_arm, gripper, sound])
 
         if stream_video_to_webxr is not None:
             world.connect(
-                cameras[stream_video_to_webxr].frame, webxr.frame, receiver_wrapper=pimm.map(lambda x: x['image'])
+                camera_emitters[stream_video_to_webxr],
+                webxr.frame,
+                receiver_wrapper=pimm.map(lambda adapter: adapter.array),
             )
 
         dc_steps = iter(world.start(data_collection, bg_cs))
@@ -255,12 +262,15 @@ def main_sim(
     sim = MujocoSim(mujoco_model_path, loaders)
     robot_arm = MujocoFranka(sim, suffix='_ph')
 
-    cameras = {
+    # Create camera instances
+    camera_instances = {
         'image.handcam_left': MujocoCamera(sim.model, sim.data, 'handcam_left_ph', (320, 240), fps=fps),
         'image.handcam_right': MujocoCamera(sim.model, sim.data, 'handcam_right_ph', (320, 240), fps=fps),
         'image.back_view': MujocoCamera(sim.model, sim.data, 'back_view_ph', (320, 240), fps=fps),
         'image.agent_view': MujocoCamera(sim.model, sim.data, 'agentview', (320, 240), fps=fps),
     }
+    # Map signal names to emitters for wire()
+    cameras = {name: cam.frame for name, cam in camera_instances.items()}
     gui = DearpyguiUi()
     gripper = MujocoGripper(sim, actuator_name='actuator8_ph', joint_name='finger_joint1_ph')
 
@@ -275,7 +285,7 @@ def main_sim(
                          time_mode=ds_writer_agent.TimeMode.MESSAGE)  # fmt: skip
 
         sim_iter = world.start(
-            [sim, *cameras.values(), robot_arm, gripper, data_collection], [webxr, gui, ds_agent, sound]
+            [sim, *camera_instances.values(), robot_arm, gripper, data_collection], [webxr, gui, ds_agent, sound]
         )
         sim_iter = iter(sim_iter)
 

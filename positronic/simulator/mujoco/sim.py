@@ -138,6 +138,7 @@ class MujocoCamera(pimm.ControlSystem):
         self.camera_name = camera_name
         self.fps = fps
         self.frame: pimm.SignalEmitter = pimm.ControlSystemEmitter(self)
+        self._frame_adapter = None
 
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock):
         renderer = mj.Renderer(self.model, height=self.render_resolution[1], width=self.render_resolution[0])
@@ -145,7 +146,9 @@ class MujocoCamera(pimm.ControlSystem):
         while not should_stop.value:
             renderer.update_scene(self.data, camera=self.camera_name)
             frame = renderer.render()
-            self.frame.emit({'image': frame}, ts=clock.now_ns())
+
+            self._frame_adapter = pimm.shared_memory.NumpySMAdapter.lazy_init(frame, self._frame_adapter)
+            self.frame.emit(self._frame_adapter, ts=clock.now_ns())
             yield pimm.Sleep(1 / self.fps)
 
         renderer.close()

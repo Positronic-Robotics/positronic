@@ -118,10 +118,9 @@ class Serializers:
                 return {'.reset': 1}
 
     @staticmethod
-    def camera_images(data: dict[str, Any]) -> dict[str, Any] | Any:
-        if len(data) == 1 and 'image' in data:
-            return data['image']
-        return data
+    def camera_images(data: pimm.shared_memory.NumpySMAdapter) -> np.ndarray:
+        """Extract array from NumpySMAdapter for storage."""
+        return data.array
 
 
 def _extract_names(serializer: Callable[[Any], Any]) -> dict[str, list[str]] | None:
@@ -146,9 +145,7 @@ def _extract_names(serializer: Callable[[Any], Any]) -> dict[str, list[str]] | N
     raise TypeError('Serializer names attribute must be a string, sequence, or mapping')
 
 
-def _append_processed(
-    ep_writer: EpisodeWriter, name: str, value: Any, ts_ns: int, extra_ts: dict[str, int] | None = None
-) -> None:
+def _append(ep_writer: EpisodeWriter, name: str, value: Any, ts_ns: int, extra_ts: dict[str, int] | None = None):
     if isinstance(value, dict):
         items = ((name + suffix, v) for suffix, v in value.items())
     else:
@@ -245,7 +242,7 @@ class DsWriterAgent(pimm.ControlSystem):
                             serializer = self._serializers.get(name)
                             if serializer is not None:
                                 value = serializer(value)
-                            _append_processed(ep_writer, name, value, primary_ts, extra_ts)
+                            _append(ep_writer, name, value, primary_ts, extra_ts)
 
                 yield pimm.Sleep(limiter.wait_time())
         finally:

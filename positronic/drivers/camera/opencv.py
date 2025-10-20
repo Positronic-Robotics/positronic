@@ -11,6 +11,7 @@ class OpenCVCamera(pimm.ControlSystem):
         self.resolution = resolution
         self.fps = fps
         self.frame = pimm.ControlSystemEmitter(self)
+        self._frame_adapter = None
 
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock):
         cap = cv2.VideoCapture(self.camera_id)
@@ -32,7 +33,8 @@ class OpenCVCamera(pimm.ControlSystem):
 
             fps_counter.tick()
             # Use system time for timestamp since OpenCV doesn't provide frame timestamps
-            self.frame.emit({'image': frame})
+            self._frame_adapter = pimm.shared_memory.NumpySMAdapter.lazy_init(frame, self._frame_adapter)
+            self.frame.emit(self._frame_adapter)
             yield pimm.Pass()  # Give control back to the world
 
 

@@ -123,6 +123,10 @@ class ControlSystemEmitter(SignalEmitter[T]):
     def owner(self) -> ControlSystem:
         return self._owner
 
+    @property
+    def num_bound(self) -> int:
+        return len(self._internal)
+
     def _bind(self, emitter: SignalEmitter[T]):
         self._internal.append(emitter)
 

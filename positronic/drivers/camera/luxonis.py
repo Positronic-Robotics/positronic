@@ -10,6 +10,7 @@ class LuxonisCamera(pimm.ControlSystem):
     def __init__(self, fps: int = 60):
         self.fps = fps
         self.frame: pimm.SignalEmitter = pimm.ControlSystemEmitter(self)
+        self._frame_adapter = None
 
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Sleep]:
         pipeline = dai.Pipeline()
@@ -36,9 +37,9 @@ class LuxonisCamera(pimm.ControlSystem):
                     continue
                 fps_counter.tick()
 
-                image = frame.getCvFrame()
-                res = {'image': image[..., ::-1]}
+                image = frame.getCvFrame()[..., ::-1]  # BGR to RGB
                 ts = frame.getTimestamp().total_seconds()
 
-                self.frame.emit(res, ts=ts)
+                self._frame_adapter = pimm.shared_memory.NumpySMAdapter.lazy_init(image, self._frame_adapter)
+                self.frame.emit(self._frame_adapter, ts=ts)
                 yield pimm.Sleep(0.001)

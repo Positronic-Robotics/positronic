@@ -134,7 +134,9 @@ def make_robot_state(translation, joints, status=roboarm.RobotStatus.AVAILABLE) 
 
 
 def emit_ready_payload(frame_emitter, robot_emitter, grip_emitter, robot_state):
-    frame_emitter.emit({'image': np.zeros((2, 2, 3), dtype=np.uint8)})
+    frame_adapter = pimm.shared_memory.NumpySMAdapter((2, 2, 3), np.uint8)
+    frame_adapter.array[:] = np.zeros((2, 2, 3), dtype=np.uint8)
+    frame_emitter.emit(frame_adapter)
     robot_emitter.emit(robot_state)
     grip_emitter.emit(0.25)
 
@@ -229,7 +231,7 @@ def test_inference_waits_for_complete_inputs(world, clock):
     # First send an empty frame, then the full payload and ensure only the latter produces actions.
     driver = ManualDriver([
         (partial(command_em.emit, InferenceCommand.START()), 0.0),
-        (partial(frame_em.emit, {}), 0.01),
+        (partial(frame_em.emit, pimm.shared_memory.NumpySMAdapter((0, 0, 0), np.uint8)), 0.01),
         (assert_no_outputs, 0.005),
         (partial(emit_ready_payload, frame_em, robot_em, grip_em, robot_state), 0.01),
         (None, 0.05),

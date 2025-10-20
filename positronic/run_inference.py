@@ -126,7 +126,8 @@ class Inference(pimm.ControlSystem):
                     'grip': self.gripper_state.value,
                 }
                 frame_messages = {k: v.value for k, v in self.frames.items()}
-                images = {k: v['image'] for k, v in frame_messages.items() if 'image' in v}
+                # Extract array from NumpySMAdapter
+                images = {k: v.array for k, v in frame_messages.items()}
                 if len(images) != len(self.frames):
                     continue
                 inputs.update(images)
@@ -210,10 +211,14 @@ def main(
     """Runs inference on real hardware."""
     inference = Inference(observation_encoder, action_decoder, policy, policy_fps, task)
 
+    # Convert camera instances to emitters for wire()
+    camera_instances = cameras
+    camera_emitters = {name: cam.frame for name, cam in camera_instances.items()}
+
     gui = DearpyguiUi() if show_gui else None
     writer_cm = LocalDatasetWriter(Path(output_dir)) if output_dir is not None else nullcontext(None)
     with writer_cm as dataset_writer, pimm.World() as world:
-        ds_agent = wire.wire(world, inference, dataset_writer, cameras, robot_arm, gripper, gui, TimeMode.CLOCK)
+        ds_agent = wire.wire(world, inference, dataset_writer, camera_emitters, robot_arm, gripper, gui, TimeMode.CLOCK)
 
         keyboard = KeyboardControl()
         print('Keyboard controls: [s]tart, sto[p], [r]eset')
@@ -222,7 +227,7 @@ def main(
         if ds_agent is not None:
             world.connect(keyboard.keyboard_inputs, ds_agent.command, emitter_wrapper=pimm.map(key_to_ds_command))
 
-        bg_cs = [*cameras.values(), robot_arm, gripper, ds_agent, gui]
+        bg_cs = [*camera_instances.values(), robot_arm, gripper, ds_agent, gui]
 
         for cmd in world.start([inference, keyboard], bg_cs):
             time.sleep(cmd.seconds)
@@ -273,13 +278,17 @@ def main_sim(
     sim = MujocoSim(mujoco_model_path, loaders, observers=observers)
     robot_arm = MujocoFranka(sim, suffix='_ph')
     gripper = MujocoGripper(sim, actuator_name='actuator8_ph', joint_name='finger_joint1_ph')
-    # Camera names in camera_dict are now fully qualified (e.g., 'image.handcam_left')
-    cameras = {
+    # TODO: Should we create one renderer that generates multiple images? I guess it might bring
+    # some performance improvements and potentlially solve problem with 3 streams to be required
+    # in order for 2 cameras to render properly.
+    camera_instances = {
         name: MujocoCamera(sim.model, sim.data, orig_name, (320, 240), fps=camera_fps)
         for name, orig_name in camera_dict.items()
     }
+    # Map signal names to emitters for wire()
+    cameras = {name: cam.frame for name, cam in camera_instances.items()}
     inference = Inference(observation_encoder, action_decoder, policy, policy_fps, task)
-    control_systems = list(cameras.values()) + [sim, robot_arm, gripper, inference]
+    control_systems = list(camera_instances.values()) + [sim, robot_arm, gripper, inference]
 
     meta = {
         'inference.mujoco_model_path': mujoco_model_path,

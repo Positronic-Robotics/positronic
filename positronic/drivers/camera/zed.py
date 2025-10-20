@@ -6,6 +6,7 @@ import numpy as np
 import pyzed.sl as sl
 
 import pimm
+from pimm.shared_memory import NumpySMAdapter
 
 
 # TODO: Currently in order to have pyzed available, one need to install Stereolabs SDK, and then generate
@@ -57,14 +58,37 @@ class SLCamera(pimm.ControlSystem):
         self.init_params.async_grab_camera_recovery = True
 
         self.max_depth = max_depth
-        self.depth_mask = depth_mask
+        self.depth_mask_enabled = self.init_params.depth_mode != sl.DEPTH_MODE.NONE and depth_mask
         self.max_recovery_time_sec = max_recovery_time_sec
+
+        # Main frame channel (always present)
         self.frame: pimm.SignalEmitter = pimm.ControlSystemEmitter(self)
+        self._frame_adapter = None  # Lazy init
+
+        # Depth channels (always available for connection, but checked at runtime)
+        self.depth: pimm.SignalEmitter = pimm.ControlSystemEmitter(self)
+        self._depth_adapter = None  # Lazy init
+
+        self.depth_mask: pimm.SignalEmitter = pimm.ControlSystemEmitter(self)
+        self._depth_mask_adapter = None  # Lazy init
 
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Sleep]:
         SUCCESS = sl.ERROR_CODE.SUCCESS
         TIME_REF_IMAGE = sl.TIME_REFERENCE.IMAGE
         fps_counter = pimm.utils.RateCounter('Camera')
+
+        # Runtime validation: check if depth channels are connected but not enabled
+        if self.depth.num_bound > 0 and self.init_params.depth_mode == sl.DEPTH_MODE.NONE:
+            raise RuntimeError(
+                'depth channel is connected but depth_mode is "none". '
+                'Set depth_mode to "near", "far", "high", or "ultra" to enable depth.'
+            )
+
+        if self.depth_mask.num_bound > 0 and not self.depth_mask_enabled:
+            raise RuntimeError(
+                'depth_mask channel is connected but depth_mask parameter is False. '
+                'Set depth_mask=True to enable depth mask output.'
+            )
 
         zed = sl.Camera()
         error_code = zed.open(self.init_params)
@@ -76,7 +100,6 @@ class SLCamera(pimm.ControlSystem):
 
         while not should_stop.value:
             result = zed.grab()
-            frame = {}
             if result != SUCCESS:
                 if self.recovery_start_time is None:
                     logging.warning('Camera lost with error code %s, starting recovery', result)
@@ -94,30 +117,44 @@ class SLCamera(pimm.ControlSystem):
             image = sl.Mat()
             ts_s = zed.get_timestamp(TIME_REF_IMAGE).get_nanoseconds() / 1e9
             if zed.retrieve_image(image, self.view) == SUCCESS:
-                # The images are in BGRA format
+                # The images are in BGRA format, convert to RGB
                 np_image = image.get_data()[:, :, [2, 1, 0]]
 
-                if self.view == sl.VIEW.SIDE_BY_SIDE:
-                    w = np_image.shape[1] // 2
-                    frame['left'] = np_image[:, :w, :]
-                    frame['right'] = np_image[:, w:, :]
-                else:
-                    frame['image'] = np_image
+                # Emit main frame (either single view or side-by-side)
+                # Note: For side-by-side, we emit the full (H, W*2, 3) image
+                # Consumer is responsible for splitting if needed
+                self._frame_adapter = NumpySMAdapter.lazy_init(np_image, self._frame_adapter)
+                self.frame.emit(self._frame_adapter, ts=ts_s)
 
+                # Handle depth if enabled and connected
                 if self.init_params.depth_mode != sl.DEPTH_MODE.NONE:
-                    depth = sl.Mat()
-                    if zed.retrieve_measure(depth, sl.MEASURE.DEPTH) == SUCCESS:
-                        data = depth.get_data()
-                        if self.depth_mask:
-                            depth_mask = np.nan_to_num(data, nan=0, posinf=0, neginf=0)
-                            depth_mask[depth_mask != 0] = 255
-                            frame['depth_mask'] = depth_mask.astype(np.uint8)[..., np.newaxis]
+                    # Only retrieve depth data if at least one depth channel is connected
+                    if self.depth.num_bound > 0 or self.depth_mask.num_bound > 0:
+                        depth = sl.Mat()
+                        if zed.retrieve_measure(depth, sl.MEASURE.DEPTH) == SUCCESS:
+                            depth_data = depth.get_data()
 
-                        data = np.nan_to_num(data, copy=False, nan=self.max_depth, posinf=self.max_depth, neginf=0)
-                        data = data.clip(max=self.max_depth) / self.max_depth * 255
-                        # Adding last axis so that it has same number of dimensions as normal image
-                        frame['depth'] = data.astype(np.uint8)[..., np.newaxis]
-            self.frame.emit(frame, ts=ts_s)
+                            # Process and emit depth mask if connected
+                            if self.depth_mask.num_bound > 0:
+                                depth_mask = np.nan_to_num(depth_data, nan=0, posinf=0, neginf=0)
+                                depth_mask[depth_mask != 0] = 255
+
+                                self._depth_mask_adapter = NumpySMAdapter.lazy_init(
+                                    depth_mask.astype(np.uint8)[..., np.newaxis], self._depth_mask_adapter
+                                )
+                                self.depth_mask.emit(self._depth_mask_adapter, ts=ts_s)
+
+                            # Process and emit depth if connected
+                            if self.depth.num_bound > 0:
+                                depth_data = np.nan_to_num(
+                                    depth_data, copy=False, nan=self.max_depth, posinf=self.max_depth, neginf=0
+                                )
+                                depth_data = depth_data.clip(max=self.max_depth) / self.max_depth * 255
+                                depth_uint8 = depth_data.astype(np.uint8)[..., np.newaxis]
+
+                                self._depth_adapter = NumpySMAdapter.lazy_init(depth_uint8, self._depth_adapter)
+                                self.depth.emit(self._depth_adapter, ts=ts_s)
+
             fps_counter.tick()
             yield pimm.Sleep(0.01)
         zed.close()

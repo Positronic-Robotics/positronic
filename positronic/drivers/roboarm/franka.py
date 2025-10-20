@@ -63,10 +63,10 @@ class FrankaState(State, pimm.shared_memory.NumpySMAdapter):
         self.array[FrankaState.STATUS_OFFSET] = RobotStatus.AVAILABLE.value
 
     def encode(self, state: pf.State):
-        self.array[FrankaState.Q_OFFSET : FrankaState.Q_OFFSET + 7] = state.q.copy()
-        self.array[FrankaState.DQ_OFFSET : FrankaState.DQ_OFFSET + 7] = state.dq.copy()
-        self.array[FrankaState.EE_POSE_OFFSET : FrankaState.EE_POSE_OFFSET + 7] = state.end_effector_pose.copy()
-        self.array[FrankaState.EE_WRENCH_OFFSET : FrankaState.EE_WRENCH_OFFSET + 6] = state.ee_wrench.copy()
+        self.array[FrankaState.Q_OFFSET : FrankaState.Q_OFFSET + 7] = state.q
+        self.array[FrankaState.DQ_OFFSET : FrankaState.DQ_OFFSET + 7] = state.dq
+        self.array[FrankaState.EE_POSE_OFFSET : FrankaState.EE_POSE_OFFSET + 7] = state.end_effector_pose
+        self.array[FrankaState.EE_WRENCH_OFFSET : FrankaState.EE_WRENCH_OFFSET + 6] = state.ee_wrench
         self.array[FrankaState.STATUS_OFFSET] = (
             RobotStatus.AVAILABLE.value if state.error == 0 else RobotStatus.ERROR.value
         )

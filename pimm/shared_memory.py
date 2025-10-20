@@ -51,3 +51,19 @@ class NumpySMAdapter(SMCompliant):
 
     def read_from_buffer(self, buffer: memoryview | bytes) -> None:
         self.array[:] = np.frombuffer(buffer[: self.array.nbytes], dtype=self.array.dtype).reshape(self.array.shape)
+
+    @staticmethod
+    def lazy_init(array: np.ndarray, adapter: 'NumpySMAdapter | None') -> 'NumpySMAdapter':
+        """Lazily initialize adapter and copy array data.
+
+        Args:
+            array: The numpy array to copy
+            adapter: Existing adapter or None (will be created if None)
+
+        Returns:
+            The adapter (either the passed one or newly created) with array data copied
+        """
+        if adapter is None:
+            adapter = NumpySMAdapter(array.shape, array.dtype)
+        adapter.array[:] = array
+        return adapter
