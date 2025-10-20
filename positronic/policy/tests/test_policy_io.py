@@ -14,23 +14,23 @@ def test_observation_encode_images_and_state_shapes():
     h, w = 6, 8
     img = np.full((h, w, 3), 255, dtype=np.uint8)
 
-    enc = ObservationEncoder(state_features=['a', 'b'], left=('left.image', (w, h)))
+    enc = ObservationEncoder(state_features=['a', 'b'], images={'left': ('left.image', (w, h))})
     obs = enc.encode({'left.image': img, 'a': [1, 2], 'b': 3.0})
 
     assert 'observation.images.left' in obs and 'observation.state' in obs
     left = obs['observation.images.left']
     state = obs['observation.state']
 
-    assert left.shape == (1, 3, h, w)
-    assert left.dtype == np.float32
-    assert np.isclose(left.max(), 1.0) and np.isclose(left.min(), 1.0)
+    assert left.shape == (h, w, 3)
+    assert left.dtype == np.uint8
+    assert np.all(left == 255)
 
-    assert state.shape == (1, 3)
-    np.testing.assert_allclose(state[0], np.array([1, 2, 3], dtype=np.float32))
+    assert state.shape == (3,)
+    np.testing.assert_allclose(state, np.array([1, 2, 3], dtype=np.float32))
 
 
 def test_observation_encode_missing_or_bad_images_raise():
-    enc = ObservationEncoder(state_features=[], left=('left.image', (8, 6)))
+    enc = ObservationEncoder(state_features=[], images={'left': ('left.image', (8, 6))})
     with pytest.raises(KeyError):  # Missing key
         enc.encode({})
 

@@ -35,6 +35,9 @@ class LerobotPolicy(Policy):
             if key == 'task':
                 obs[key] = val
             elif isinstance(val, np.ndarray):
+                if key.startswith('observation.images.'):
+                    val = np.transpose(val.astype(np.float32) / 255.0, (2, 0, 1))
+                val = val[np.newaxis, ...]
                 obs[key] = torch.from_numpy(val).to(self.device)
             else:
                 obs[key] = torch.as_tensor(val).to(self.device)

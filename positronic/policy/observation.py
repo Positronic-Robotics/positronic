@@ -10,23 +10,23 @@ from positronic.dataset.transforms import image
 
 
 class ObservationEncoder(transforms.KeyFuncEpisodeTransform):
-    def __init__(self, state_features: list[str], **image_configs):
+    def __init__(self, state_features: list[str], images: dict[str, tuple[str, tuple[int, int]]]):
         """
         Build an observation encoder.
 
         Args:
             state_features: list of keys to concatenate for the state vector.
-            image_configs: mapping from output image name (suffix) to tuple (input_key, (width, height)).
-                           The output key will be 'observation.images.{name}'.
+            images: mapping from output image name (suffix) to tuple (input_key, (width, height)).
+                    The output key will be 'observation.images.{name}'.
         """
-        image_fns = {f'observation.images.{k}': partial(self.encode_image, k) for k in image_configs.keys()}
+        image_fns = {f'observation.images.{k}': partial(self.encode_image, k) for k in images.keys()}
         super().__init__(**{'observation.state': self.encode_state}, **image_fns)
         self._state_features = state_features
-        self._image_configs = image_configs
+        self._image_configs = images
 
     def encode_state(self, episode: Episode) -> Signal[Any]:
         return transforms.concat(
-            *[episode[k] for k in self._state_features], dtype=np.float64, names=self._state_features
+            *[episode[k] for k in self._state_features], dtype=np.float32, names=self._state_features
         )
 
     def encode_image(self, name: str, episode: Episode) -> Signal[Any]:
@@ -37,8 +37,8 @@ class ObservationEncoder(transforms.KeyFuncEpisodeTransform):
         """Encode a single inference observation from raw images and input dict.
 
         Returns numpy arrays:
-          - images: (1, C, H, W), float32 in [0,1]
-          - state: (1, D), float32
+          - images: (H, W, C), uint8
+          - state: (D,), float32
         """
 
         obs: dict[str, Any] = {}
@@ -53,8 +53,7 @@ class ObservationEncoder(transforms.KeyFuncEpisodeTransform):
             if frame.ndim != 3 or frame.shape[2] != 3:
                 raise ValueError(f"Image '{input_key}' must be HWC with 3 channels, got {frame.shape}")
             resized = image.resize_with_pad_per_frame(width, height, PilImage.Resampling.BILINEAR, frame)
-            chw = np.transpose(resized.astype(np.float32) / 255.0, (2, 0, 1))
-            obs[f'observation.images.{out_name}'] = chw[np.newaxis, ...]
+            obs[f'observation.images.{out_name}'] = resized
 
         # Encode state vector
         parts: list[np.ndarray] = []
@@ -66,5 +65,5 @@ class ObservationEncoder(transforms.KeyFuncEpisodeTransform):
             state_vec = np.concatenate(parts, axis=0)
         else:
             state_vec = np.empty((0,), dtype=np.float32)
-        obs['observation.state'] = state_vec[np.newaxis, ...]
+        obs['observation.state'] = state_vec
         return obs

@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any
 
 import configuronic as cfn
+import rerun as rr
 import tqdm
 
 import pimm
@@ -31,6 +32,9 @@ from positronic.policy.observation import ObservationEncoder
 from positronic.simulator.mujoco.observers import BodyDistance, StackingSuccess
 from positronic.simulator.mujoco.sim import MujocoCamera, MujocoFranka, MujocoGripper, MujocoSim
 from positronic.simulator.mujoco.transforms import MujocoSceneTransform
+
+rr.init('droid_eval')
+rr.save('positronic_inference.rrd')
 
 
 class InferenceCommandType(Enum):
@@ -166,7 +170,7 @@ class KeyboardControl(pimm.ControlSystem):
             termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
 
 
-def key_to_command(key: str) -> InferenceCommand | None:
+def key_to_inf_command(key: str) -> InferenceCommand | None:
     """Map keyboard inputs to inference commands, filtering out unmapped keys."""
     if key == 's':
         print('Starting inference...')
@@ -177,6 +181,17 @@ def key_to_command(key: str) -> InferenceCommand | None:
     elif key == 'r':
         print('Resetting...')
         return InferenceCommand.RESET()
+    return None
+
+
+def key_to_ds_command(key: str) -> DsWriterCommand | None:
+    """Map keyboard inputs to dataset writer commands, filtering out unmapped keys."""
+    if key == 's':
+        return DsWriterCommand.START()
+    elif key == 'p':
+        return DsWriterCommand.STOP()
+    elif key == 'r':
+        return DsWriterCommand.STOP()
     return None
 
 
@@ -203,7 +218,9 @@ def main(
         keyboard = KeyboardControl()
         print('Keyboard controls: [s]tart, sto[p], [r]eset')
 
-        world.connect(keyboard.keyboard_inputs, inference.command, emitter_wrapper=pimm.map(key_to_command))
+        world.connect(keyboard.keyboard_inputs, inference.command, emitter_wrapper=pimm.map(key_to_inf_command))
+        if ds_agent is not None:
+            world.connect(keyboard.keyboard_inputs, ds_agent.command, emitter_wrapper=pimm.map(key_to_ds_command))
 
         bg_cs = [*cameras.values(), robot_arm, gripper, ds_agent, gui]
 
@@ -331,8 +348,12 @@ openpi_droid = cfn.Config(
     robot_arm=positronic.cfg.hardware.roboarm.franka,
     gripper=positronic.cfg.hardware.gripper.robotiq,
     cameras={
-        'wrist': positronic.cfg.hardware.camera.zed_m.override(view='left', resolution='vga', fps=30),
-        'exterior': positronic.cfg.hardware.camera.zed_2i.override(view='left', resolution='vga', fps=30),
+        'wrist': positronic.cfg.hardware.camera.zed_m.override(
+            view='left', resolution='hd720', fps=30, image_enhancement=True
+        ),
+        'exterior': positronic.cfg.hardware.camera.zed_2i.override(
+            view='left', resolution='hd720', fps=30, image_enhancement=True
+        ),
     },
     observation_encoder=positronic.cfg.policy.observation.openpi_droid,
     action_decoder=positronic.cfg.policy.action.joint_delta,

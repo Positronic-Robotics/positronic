@@ -6,7 +6,7 @@ def end_effector(resolution: tuple[int, int]):
     from positronic.policy.observation import ObservationEncoder
 
     return ObservationEncoder(
-        state_features=['grip'], left=('left.image', resolution), right=('right.image', resolution)
+        state_features=['grip'], images={'left': ('left.image', resolution), 'right': ('right.image', resolution)}
     )
 
 
@@ -21,7 +21,7 @@ def end_effector_back_front():
     from positronic.policy.observation import ObservationEncoder
 
     return ObservationEncoder(
-        state_features=['grip'], back=('image.back', (352, 192)), front=('image.front', (352, 192))
+        state_features=['grip'], images={'back': ('image.back', (352, 192)), 'front': ('image.front', (352, 192))}
     )
 
 
@@ -32,10 +32,12 @@ def end_effector_mem15():
 
     return ObservationEncoder(
         state_features=['grip'],
-        left=('left.image', (352, 192)),
-        right=('right.image', (352, 192)),
-        left_15=('left.image', (352, 192)),
-        right_15=('right.image', (352, 192)),
+        images={
+            'left': ('left.image', (352, 192)),
+            'right': ('right.image', (352, 192)),
+            'left_15': ('left.image', (352, 192)),
+            'right_15': ('right.image', (352, 192)),
+        },
     )
 
 
@@ -44,7 +46,8 @@ def franka_mujoco_stackcubes(state):
     from positronic.policy.observation import ObservationEncoder
 
     return ObservationEncoder(
-        state_features=state, left=('image.handcam_left', (224, 224)), side=('image.back_view', (224, 224))
+        state_features=state,
+        images={'left': ('image.handcam_left', (224, 224)), 'side': ('image.back_view', (224, 224))},
     )
 
 
@@ -54,8 +57,7 @@ def pi0():
 
     return ObservationEncoder(
         state_features=['robot_state.ee_pose', 'grip'],
-        image=('image.left', (224, 224)),
-        side=('image.side', (224, 224)),
+        images={'left': ('image.left', (224, 224)), 'side': ('image.side', (224, 224))},
     )
 
 
@@ -66,6 +68,5 @@ def openpi_droid(exterior_camera: str, wrist_camera: str, image_size: tuple[int,
 
     return ObservationEncoder(
         state_features=['robot_state.q', 'grip'],
-        exterior=(exterior_camera, image_size),
-        wrist=(wrist_camera, image_size),
+        images={'exterior': (exterior_camera, image_size), 'wrist': (wrist_camera, image_size)},
     )
