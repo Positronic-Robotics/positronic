@@ -15,69 +15,45 @@ except ImportError as e:
     raise ImportError(f'openpi_client not installed, install from {OPENPI_CLIENT_URL}') from e
 
 
-def basic_pi0_request(observation: dict[str, Any]) -> dict[str, Any]:
-    try:
-        res = {
-            'observation/image': observation['observation.images.side'],
-            'observation/wrist_image': observation['observation.images.image'],
-            'observation/state': observation['observation.state'],
-        }
-        if 'task' in observation:
-            res['prompt'] = observation['task']
-    except KeyError as e:
-        raise KeyError(f'Missing key, available keys: {observation.keys()}') from e
-    return res
-
-
-def droid_request(observation: dict[str, Any]) -> dict[str, Any]:
-    res = {
-        'observation/joint_position': observation['observation.state'][:7],
-        'observation/gripper_position': observation['observation.state'][7:8],
-        'observation/exterior_image_1_left': observation['observation.images.exterior'],
-        'observation/wrist_image_left': observation['observation.images.wrist'],
-    }
-    if 'task' in observation:
-        res['prompt'] = observation['task']
-    return res
-
-
 class OpenPIRemotePolicy(Policy):
-    def __init__(self, host: str, port: int, n_action_steps: int | None = None, obs_tf=basic_pi0_request):
+    def __init__(self, host: str, port: int, n_action_steps: int | None = None):
         self.client = WebsocketClientPolicy(host, port)
         self.action_queue = deque()
         self.n_action_steps = n_action_steps
-        self.obs_tf = obs_tf
         self.start_time = None
         self.last_log_time = None
 
-    def select_action(self, observation: Mapping[str, Any]) -> np.ndarray:
+    def select_action(self, obs: Mapping[str, Any]) -> np.ndarray:
         if self.start_time is None:
             self.start_time = time.monotonic()
 
         if len(self.action_queue) == 0:
-            request = self.obs_tf(observation)
-            if self.obs_tf == droid_request:
-                rr.set_time_seconds('offset_time', time.monotonic() - self.start_time)
-                rr.log('observation/exterior_image_1_left', rr.Image(request['observation/exterior_image_1_left']))
-                rr.log('observation/wrist_image_left', rr.Image(request['observation/wrist_image_left']))
-                jp = request['observation/joint_position']
-                for i in range(jp.shape[0]):
-                    rr.log(f'observation/joint_position/{i}', rr.Scalar(jp[i]))
-                rr.log('observation/gripper_position', rr.Scalar(request['observation/gripper_position']))
+            rr.set_time_seconds('offset_time', time.monotonic() - self.start_time)
+            for key, value in obs.items():
+                if isinstance(value, np.ndarray) and value.ndim == 3:
+                    rr.log(key, rr.Image(value))
+                elif isinstance(value, np.ndarray) and value.ndim == 1:
+                    for i in range(value.shape[0]):
+                        rr.log(f'{key}/{i}', rr.Scalar(value[i]))
+                elif isinstance(value, float | int):
+                    rr.log(key, rr.Scalar(value))
 
-            action_chunk = self.client.infer(request)['actions']
+            if 'task' in obs:
+                obs['prompt'] = obs['task']
+                del obs['task']
+
+            action_chunk = self.client.infer(obs)['actions']
             if self.n_action_steps is not None:
                 action_chunk = action_chunk[: self.n_action_steps]
             self.action_queue.extend(action_chunk)
 
         action = self.action_queue.popleft()
-        if self.obs_tf == droid_request:
-            rr.set_time_seconds('offset_time', time.monotonic() - self.start_time)
-            for i, action_value in enumerate(action):
-                rr.log(f'raw_action/{i}', rr.Scalar(action_value))
+        rr.set_time_seconds('offset_time', time.monotonic() - self.start_time)
+        for i, action_value in enumerate(action):
+            rr.log(f'raw_action/{i}', rr.Scalar(action_value))
 
-            if self.last_log_time is not None:
-                rr.log('delay', rr.Scalar(time.monotonic() - self.last_log_time))
+        if self.last_log_time is not None:
+            rr.log('delay', rr.Scalar(time.monotonic() - self.last_log_time))
         self.last_log_time = time.monotonic()
 
         return np.array(action)

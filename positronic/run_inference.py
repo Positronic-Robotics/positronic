@@ -33,8 +33,9 @@ from positronic.simulator.mujoco.observers import BodyDistance, StackingSuccess
 from positronic.simulator.mujoco.sim import MujocoCameras, MujocoFranka, MujocoGripper, MujocoSim
 from positronic.simulator.mujoco.transforms import MujocoSceneTransform
 
-rr.init('droid_eval')
+rr.init('positronic')
 rr.save('positronic_inference.rrd')
+# rr.spawn()
 
 
 class InferenceCommandType(Enum):
@@ -320,7 +321,6 @@ main_sim_cfg = cfn.Config(
     main_sim,
     mujoco_model_path='positronic/assets/mujoco/franka_table.xml',
     loaders=positronic.cfg.simulator.stack_cubes_loaders,
-    observation_encoder=positronic.cfg.policy.observation.pi0_eepose,
     action_decoder=positronic.cfg.policy.action.absolute_position,
     camera_fps=15,
     policy_fps=15,
@@ -339,18 +339,12 @@ main_sim_pi0 = main_sim_cfg.override(
 )
 
 main_sim_pi05_droid = main_sim_cfg.override(
-    policy=positronic.cfg.policy.policy.droid,
-    observation_encoder=positronic.cfg.policy.observation.openpi_droid.override(
-        exterior_camera='image.back_view', wrist_camera='image.handcam_left'
-    ),
-    action_decoder=positronic.cfg.policy.action.joint_delta,
     # We use 3 cameras not because we need it, but because Mujoco does not render
     # the second image when using only 2 cameras
-    camera_dict={
-        'image.handcam_left': 'handcam_left_ph',
-        'image.back_view': 'back_view_ph',
-        'image.agent_view': 'agentview',
-    },
+    camera_dict={'image.wrist': 'handcam_back_ph', 'image.exterior': 'back_view_ph', 'image.agent_view': 'agentview'},
+    policy=positronic.cfg.policy.policy.droid,
+    observation_encoder=positronic.cfg.policy.observation.openpi_droid,
+    action_decoder=positronic.cfg.policy.action.joint_delta,
     policy_fps=15,
 )
 
@@ -379,16 +373,16 @@ openpi_droid = cfn.Config(
             view='left', resolution='hd720', fps=30, image_enhancement=True
         ),
     },
+    policy=positronic.cfg.policy.policy.droid,
     observation_encoder=positronic.cfg.policy.observation.openpi_droid,
     action_decoder=positronic.cfg.policy.action.joint_delta,
-    policy=positronic.cfg.policy.policy.droid,
     policy_fps=15,
 )
 
 if __name__ == '__main__':
     cfn.cli({
+        'sim_act': main_sim_act,
         'sim_pi0': main_sim_pi0,
         'sim_pi05': main_sim_pi05_droid,
-        'sim_act': main_sim_act,
         'droid_real': openpi_droid,
     })

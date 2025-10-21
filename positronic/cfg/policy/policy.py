@@ -39,13 +39,6 @@ def openpi(host: str, port: int, n_action_steps: int | None):
     return OpenPIRemotePolicy(host, port, n_action_steps)
 
 
-@cfn.config(host='localhost', port=8000, n_action_steps=8)
-def droid(host: str, port: int, n_action_steps: int):
-    """DROID policy with joint velocity control and action chunking."""
-    from positronic.policy.pi0 import OpenPIRemotePolicy, droid_request
-
-    return OpenPIRemotePolicy(host, port, n_action_steps, obs_tf=droid_request)
-
-
+droid = openpi.override(n_action_steps=15)
 act = cfn.Config(_get_act_policy, use_temporal_ensembler=False)
 diffusion = cfn.Config(_get_diffusion_policy)

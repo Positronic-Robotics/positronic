@@ -1,10 +1,10 @@
 import configuronic as cfn
 
+from positronic.policy.observation import ObservationEncoder
+
 
 @cfn.config(image_size=(224, 224))
 def eepose_grip(wrist_camera: str, side_camera: str, image_size: tuple[int, int]):
-    from positronic.policy.observation import ObservationEncoder
-
     state = {'observation.state': ['robot_state.ee_pose', 'grip']}
     state_dim = 8
     images = {
@@ -36,31 +36,23 @@ def eepose_grip(wrist_camera: str, side_camera: str, image_size: tuple[int, int]
 
 
 mujoco_eepose = eepose_grip.override(wrist_camera='image.handcam_left', side_camera='image.back_view')
-pi0_eepose = eepose_grip.override(wrist_camera='image.left', side_camera='image.side')
 
 
 @cfn.config()
-def openpi_sim(image_size=(224, 224)):
-    from positronic.policy.observation import ObservationEncoder
-
+def pi0_eepose():
     return ObservationEncoder(
-        state={'observation.state': ['robot_state.q', 'grip']},
-        images={
-            'observation.images.exterior': ('image.back_view', image_size),
-            'observation.images.wrist': ('image.handcam_left', image_size),
-        },
+        state={'observation/state': ['robot_state.ee_pose', 'grip']},
+        images={'observation/wrist_image': ('image.left', (224, 224)), 'observation/image': ('image.side', (224, 224))},
     )
 
 
 @cfn.config(exterior_camera='image.exterior', wrist_camera='image.wrist', image_size=(224, 224))
 def openpi_droid(exterior_camera: str, wrist_camera: str, image_size: tuple[int, int]):
     """DROID observation encoder using joint positions."""
-    from positronic.policy.observation import ObservationEncoder
-
     return ObservationEncoder(
-        state={'observation.state': ['robot_state.q', 'grip']},
+        state={'observation/joint_position': ['robot_state.q'], 'observation/gripper_position': ['grip']},
         images={
-            'observation.images.exterior': (exterior_camera, image_size),
-            'observation.images.wrist': (wrist_camera, image_size),
+            'observation/wrist_image_left': (wrist_camera, image_size),
+            'observation/exterior_image_1_left': (exterior_camera, image_size),
         },
     )
