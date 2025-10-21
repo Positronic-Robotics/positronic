@@ -329,18 +329,18 @@ main_sim_cfg = cfn.Config(
     task='pick up the green cube and put in on top of the red cube',
 )
 
-main_sim_pi0 = main_sim_cfg.override(
+main_sim_openpi_positronic = main_sim_cfg.override(
     policy=positronic.cfg.policy.policy.openpi,
-    observation_encoder=positronic.cfg.policy.observation.pi0_eepose,
+    observation_encoder=positronic.cfg.policy.observation.openpi_positronic,
     action_decoder=positronic.cfg.policy.action.absolute_position,
     # We use 3 cameras not because we need it, but because Mujoco does not render
     # the second image when using only 2 cameras
     camera_dict={'image.left': 'handcam_left_ph', 'image.side': 'back_view_ph', 'image.agent_view': 'agentview'},
 )
 
-main_sim_pi05_droid = main_sim_cfg.override(
-    # We use 3 cameras not because we need it, but because Mujoco does not render
-    # the second image when using only 2 cameras
+main_sim_openpi_droid = main_sim_cfg.override(
+    # We use 3 cameras not because we need it, but because Mujoco does not render the second image when using
+    # only 2 cameras.
     camera_dict={'image.wrist': 'handcam_back_ph', 'image.exterior': 'back_view_ph', 'image.agent_view': 'agentview'},
     policy=positronic.cfg.policy.policy.droid,
     observation_encoder=positronic.cfg.policy.observation.openpi_droid,
@@ -382,7 +382,7 @@ openpi_droid = cfn.Config(
 if __name__ == '__main__':
     cfn.cli({
         'sim_act': main_sim_act,
-        'sim_pi0': main_sim_pi0,
-        'sim_pi05': main_sim_pi05_droid,
+        'sim_openpi_positronic': main_sim_openpi_positronic,
+        'sim_openpi_droid': main_sim_openpi_droid,
         'droid_real': openpi_droid,
     })

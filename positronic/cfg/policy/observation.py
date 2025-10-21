@@ -39,7 +39,7 @@ mujoco_eepose = eepose_grip.override(wrist_camera='image.handcam_left', side_cam
 
 
 @cfn.config()
-def pi0_eepose():
+def openpi_positronic():
     return ObservationEncoder(
         state={'observation/state': ['robot_state.ee_pose', 'grip']},
         images={'observation/wrist_image': ('image.left', (224, 224)), 'observation/image': ('image.side', (224, 224))},
