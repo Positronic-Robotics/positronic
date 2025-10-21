@@ -10,18 +10,18 @@ from positronic.dataset.transforms import image
 
 
 class ObservationEncoder(transforms.KeyFuncEpisodeTransform):
-    def __init__(self, state_features: list[str], images: dict[str, tuple[str, tuple[int, int]]]):
+    def __init__(self, state: dict[str, list[str]], images: dict[str, tuple[str, tuple[int, int]]]):
         """
         Build an observation encoder.
 
         Args:
-            state_features: list of keys to concatenate for the state vector.
-            images: mapping from output image name (suffix) to tuple (input_key, (width, height)).
-                    The output key will be 'observation.images.{name}'.
+            state: mapping from output state key to an ordered list of episode keys to concatenate.
+            images: mapping from output image name to tuple (input_key, (width, height)).
         """
-        image_fns = {f'observation.images.{k}': partial(self.encode_image, k) for k in images.keys()}
-        super().__init__(**{'observation.state': self.encode_state}, **image_fns)
-        self._state_features = state_features
+        state_fns = {k: partial(self.encode_state, k) for k in state.keys()}
+        image_fns = {k: partial(self.encode_image, k) for k in images.keys()}
+        super().__init__(**state_fns, **image_fns)
+        self._state = state
         self._image_configs = images
         self._metadata = {}
 
@@ -33,22 +33,16 @@ class ObservationEncoder(transforms.KeyFuncEpisodeTransform):
     def meta(self, value: dict[str, Any]):
         self._metadata = value
 
-    def encode_state(self, episode: Episode) -> Signal[Any]:
-        return transforms.concat(
-            *[episode[k] for k in self._state_features], dtype=np.float32, names=self._state_features
-        )
+    def encode_state(self, out_name: str, episode: Episode) -> Signal[Any]:
+        state_features = self._state[out_name]
+        return transforms.concat(*[episode[k] for k in state_features], dtype=np.float32, names=state_features)
 
-    def encode_image(self, name: str, episode: Episode) -> Signal[Any]:
-        input_key, (width, height) = self._image_configs[name]
+    def encode_image(self, out_name: str, episode: Episode) -> Signal[Any]:
+        input_key, (width, height) = self._image_configs[out_name]
         return image.resize_with_pad(width, height, signal=episode[input_key])
 
     def encode(self, inputs: dict[str, Any]) -> dict[str, Any]:
-        """Encode a single inference observation from raw images and input dict.
-
-        Returns numpy arrays:
-          - images: (H, W, C), uint8
-          - state: (D,), float32
-        """
+        """Encode a single inference observation from raw images and input dict."""
 
         obs: dict[str, Any] = {}
 
@@ -62,17 +56,20 @@ class ObservationEncoder(transforms.KeyFuncEpisodeTransform):
             if frame.ndim != 3 or frame.shape[2] != 3:
                 raise ValueError(f"Image '{input_key}' must be HWC with 3 channels, got {frame.shape}")
             resized = image.resize_with_pad_per_frame(width, height, PilImage.Resampling.BILINEAR, frame)
-            obs[f'observation.images.{out_name}'] = resized
+            obs[out_name] = resized
 
         # Encode state vector
-        parts: list[np.ndarray] = []
-        for k in self._state_features:
-            v = inputs[k]
-            arr = np.asarray(v, dtype=np.float32).reshape(-1)
-            parts.append(arr)
-        if parts:
-            state_vec = np.concatenate(parts, axis=0)
-        else:
-            state_vec = np.empty((0,), dtype=np.float32)
-        obs['observation.state'] = state_vec
+        for out_name, feature_names in self._state.items():
+            parts: list[np.ndarray] = []
+            for feature in feature_names:
+                if feature not in inputs:
+                    raise KeyError(f"Missing state input '{feature}' for '{out_name}', available keys: {inputs.keys()}")
+                v = inputs[feature]
+                arr = np.asarray(v, dtype=np.float32).reshape(-1)
+                parts.append(arr)
+            if parts:
+                state_vec = np.concatenate(parts, axis=0)
+            else:
+                state_vec = np.empty((0,), dtype=np.float32)
+            obs[out_name] = state_vec
         return obs

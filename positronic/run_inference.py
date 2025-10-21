@@ -320,7 +320,7 @@ main_sim_cfg = cfn.Config(
     main_sim,
     mujoco_model_path='positronic/assets/mujoco/franka_table.xml',
     loaders=positronic.cfg.simulator.stack_cubes_loaders,
-    observation_encoder=positronic.cfg.policy.observation.pi0,
+    observation_encoder=positronic.cfg.policy.observation.pi0_eepose,
     action_decoder=positronic.cfg.policy.action.absolute_position,
     camera_fps=15,
     policy_fps=15,
@@ -331,7 +331,7 @@ main_sim_cfg = cfn.Config(
 
 main_sim_pi0 = main_sim_cfg.override(
     policy=positronic.cfg.policy.policy.openpi,
-    observation_encoder=positronic.cfg.policy.observation.pi0,
+    observation_encoder=positronic.cfg.policy.observation.pi0_eepose,
     action_decoder=positronic.cfg.policy.action.absolute_position,
     # We use 3 cameras not because we need it, but because Mujoco does not render
     # the second image when using only 2 cameras
@@ -356,7 +356,7 @@ main_sim_pi05_droid = main_sim_cfg.override(
 
 main_sim_act = main_sim_cfg.override(
     policy=positronic.cfg.policy.policy.act,
-    observation_encoder=positronic.cfg.policy.observation.franka_mujoco_stackcubes,
+    observation_encoder=positronic.cfg.policy.observation.mujoco_eepose,
     action_decoder=positronic.cfg.policy.action.absolute_position,
     # We use 3 cameras not because we need it, but because Mujoco does not render
     # the second image when using only 2 cameras

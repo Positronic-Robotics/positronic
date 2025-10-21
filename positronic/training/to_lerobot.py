@@ -28,7 +28,6 @@ from lerobot.datasets.lerobot_dataset import LeRobotDataset
 
 import positronic.cfg.dataset
 from positronic.dataset import Dataset
-from positronic.dataset.signal import Kind
 
 
 def _raise_fd_limit(min_soft_limit: int = 4096) -> None:
@@ -111,23 +110,6 @@ def append_data_to_dataset(
     print(f'Total length of the dataset: {seconds_to_str(total_length_sec)}')
 
 
-def _extract_features(dataset: Dataset):
-    """Extract feature metadata from dataset signals for LeRobot dataset creation."""
-    features = {}
-    for name, meta in dataset.signals_meta.items():
-        feature = {'shape': meta.shape}
-        if meta.names is not None:
-            feature['names'] = meta.names
-
-        if meta.kind == Kind.IMAGE:
-            feature['dtype'] = 'video'
-        else:
-            feature['dtype'] = str(meta.dtype)
-
-        features[name] = feature
-    return features
-
-
 @cfn.config(
     fps=30,
     video=True,
@@ -135,12 +117,13 @@ def _extract_features(dataset: Dataset):
     task='pick plate from the table and place it into the dishwasher',
 )
 def convert_to_lerobot_dataset(output_dir: str, fps: int, video: bool, dataset: Dataset, task: str):
+    assert dataset.meta['lerobot_features'] is not None, "dataset.meta['lerobot_features'] is required"
     lr_dataset = LeRobotDataset.create(
         repo_id='local',
         fps=fps,
         root=Path(output_dir).expanduser().absolute(),
         use_videos=video,
-        features=_extract_features(dataset),
+        features=dataset.meta['lerobot_features'],
         image_writer_threads=32,
     )
     if 'gr00t_modality' in dataset.meta:

@@ -1,54 +1,18 @@
 import configuronic as cfn
 
 
-@cfn.config()
-def end_effector(resolution: tuple[int, int]):
+@cfn.config(image_size=(224, 224))
+def eepose_grip(wrist_camera: str, side_camera: str, image_size: tuple[int, int]):
     from positronic.policy.observation import ObservationEncoder
 
-    return ObservationEncoder(
-        state_features=['grip'], images={'left': ('left.image', resolution), 'right': ('right.image', resolution)}
-    )
+    state = {'observation.state': ['robot_state.ee_pose', 'grip']}
+    state_dim = 8
+    images = {
+        'observation.images.left': (wrist_camera, image_size),
+        'observation.images.side': (side_camera, image_size),
+    }
 
-
-end_effector_224 = end_effector.override(resolution=(224, 224))
-end_effector_384 = end_effector.override(resolution=(384, 384))
-end_effector_352x192 = end_effector.override(resolution=(352, 192))
-
-
-# State for back and front camera used mostly in simulation
-@cfn.config()
-def end_effector_back_front():
-    from positronic.policy.observation import ObservationEncoder
-
-    return ObservationEncoder(
-        state_features=['grip'], images={'back': ('image.back', (352, 192)), 'front': ('image.front', (352, 192))}
-    )
-
-
-# Similiar to end_effector but with additional frames listed for compatibility
-@cfn.config()
-def end_effector_mem15():
-    from positronic.policy.observation import ObservationEncoder
-
-    return ObservationEncoder(
-        state_features=['grip'],
-        images={
-            'left': ('left.image', (352, 192)),
-            'right': ('right.image', (352, 192)),
-            'left_15': ('left.image', (352, 192)),
-            'right_15': ('right.image', (352, 192)),
-        },
-    )
-
-
-@cfn.config(state=['robot_state.ee_pose', 'grip'])
-def franka_mujoco_stackcubes(state: list[str]):
-    from positronic.policy.observation import ObservationEncoder
-
-    result = ObservationEncoder(
-        state_features=state,
-        images={'left': ('image.handcam_left', (224, 224)), 'side': ('image.back_view', (224, 224))},
-    )
+    result = ObservationEncoder(state=state, images=images)
     result.meta['gr00t_modality'] = {
         'state': {
             'robot_position_quaternion': {'start': 0, 'end': 4, 'rotation_type': 'quaternion'},
@@ -60,17 +24,19 @@ def franka_mujoco_stackcubes(state: list[str]):
             'side_image': {'original_key': 'observation.images.side'},
         },
     }
+    lerobot_features = {k: {'shape': (state_dim,), 'names': v, 'dtype': 'float32'} for k, v in state.items()}
+    for out_name, (_input_key, (width, height)) in result._image_configs.items():
+        lerobot_features[out_name] = {
+            'shape': (height, width, 3),
+            'names': ['height', 'width', 'channel'],
+            'dtype': 'video',
+        }
+    result.meta['lerobot_features'] = lerobot_features
     return result
 
 
-@cfn.config()
-def pi0():
-    from positronic.policy.observation import ObservationEncoder
-
-    return ObservationEncoder(
-        state_features=['robot_state.ee_pose', 'grip'],
-        images={'left': ('image.left', (224, 224)), 'side': ('image.side', (224, 224))},
-    )
+mujoco_eepose = eepose_grip.override(wrist_camera='image.handcam_left', side_camera='image.back_view')
+pi0_eepose = eepose_grip.override(wrist_camera='image.left', side_camera='image.side')
 
 
 @cfn.config()
@@ -78,8 +44,11 @@ def openpi_sim(image_size=(224, 224)):
     from positronic.policy.observation import ObservationEncoder
 
     return ObservationEncoder(
-        state_features=['robot_state.q', 'grip'],
-        images={'exterior': ('image.back_view', image_size), 'wrist': ('image.handcam_left', image_size)},
+        state={'observation.state': ['robot_state.q', 'grip']},
+        images={
+            'observation.images.exterior': ('image.back_view', image_size),
+            'observation.images.wrist': ('image.handcam_left', image_size),
+        },
     )
 
 
@@ -89,6 +58,9 @@ def openpi_droid(exterior_camera: str, wrist_camera: str, image_size: tuple[int,
     from positronic.policy.observation import ObservationEncoder
 
     return ObservationEncoder(
-        state_features=['robot_state.q', 'grip'],
-        images={'exterior': (exterior_camera, image_size), 'wrist': (wrist_camera, image_size)},
+        state={'observation.state': ['robot_state.q', 'grip']},
+        images={
+            'observation.images.exterior': (exterior_camera, image_size),
+            'observation.images.wrist': (wrist_camera, image_size),
+        },
     )
