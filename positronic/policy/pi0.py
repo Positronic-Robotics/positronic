@@ -56,13 +56,14 @@ class OpenPIRemotePolicy(Policy):
 
         if len(self.action_queue) == 0:
             request = self.obs_tf(observation)
-            rr.set_time_seconds('offset_time', time.monotonic() - self.start_time)
-            rr.log('observation/exterior_image_1_left', rr.Image(request['observation/exterior_image_1_left']))
-            rr.log('observation/wrist_image_left', rr.Image(request['observation/wrist_image_left']))
-            jp = request['observation/joint_position']
-            for i in range(jp.shape[0]):
-                rr.log(f'observation/joint_position/{i}', rr.Scalar(jp[i]))
-            rr.log('observation/gripper_position', rr.Scalar(request['observation/gripper_position']))
+            if self.obs_tf == droid_request:
+                rr.set_time_seconds('offset_time', time.monotonic() - self.start_time)
+                rr.log('observation/exterior_image_1_left', rr.Image(request['observation/exterior_image_1_left']))
+                rr.log('observation/wrist_image_left', rr.Image(request['observation/wrist_image_left']))
+                jp = request['observation/joint_position']
+                for i in range(jp.shape[0]):
+                    rr.log(f'observation/joint_position/{i}', rr.Scalar(jp[i]))
+                rr.log('observation/gripper_position', rr.Scalar(request['observation/gripper_position']))
 
             action_chunk = self.client.infer(request)['actions']
             if self.n_action_steps is not None:
@@ -70,12 +71,13 @@ class OpenPIRemotePolicy(Policy):
             self.action_queue.extend(action_chunk)
 
         action = self.action_queue.popleft()
-        rr.set_time_seconds('offset_time', time.monotonic() - self.start_time)
-        for i, action_value in enumerate(action):
-            rr.log(f'raw_action/{i}', rr.Scalar(action_value))
+        if self.obs_tf == droid_request:
+            rr.set_time_seconds('offset_time', time.monotonic() - self.start_time)
+            for i, action_value in enumerate(action):
+                rr.log(f'raw_action/{i}', rr.Scalar(action_value))
 
-        if self.last_log_time is not None:
-            rr.log('delay', rr.Scalar(time.monotonic() - self.last_log_time))
+            if self.last_log_time is not None:
+                rr.log('delay', rr.Scalar(time.monotonic() - self.last_log_time))
         self.last_log_time = time.monotonic()
 
         return np.array(action)
