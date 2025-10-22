@@ -11,6 +11,7 @@ import weakref
 from collections import deque
 from collections.abc import Callable, Iterator, Sequence
 from enum import IntEnum
+from multiprocessing import resource_tracker
 from multiprocessing.synchronize import Event as EventClass
 from queue import Empty, Full
 from typing import Any, TypeVar
@@ -311,6 +312,15 @@ class MultiprocessReceiver(SignalReceiver[T]):
             return False
 
         self._sm = multiprocessing.shared_memory.SharedMemory(name=sm_name)
+
+        # Unregister from resource tracker to prevent double-cleanup.
+        # The emitter (creator) is responsible for unlinking; the receiver only closes.
+        # This prevents "leaked shared_memory" warnings on process shutdown.
+        try:
+            resource_tracker.unregister(self._sm._name, 'shared_memory')
+        except Exception:
+            # If unregister fails (e.g., not registered), continue anyway.
+            pass
 
         if self._sm.size < buf_size:
             raise RuntimeError(f'Shared memory buffer size mismatch: expected at least {buf_size}, got {self._sm.size}')
