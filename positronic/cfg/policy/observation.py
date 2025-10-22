@@ -35,7 +35,8 @@ def eepose_grip(wrist_camera: str, side_camera: str, image_size: tuple[int, int]
     return result
 
 
-mujoco_eepose = eepose_grip.override(wrist_camera='image.handcam_left', side_camera='image.back_view')
+eepose_mujoco = eepose_grip.override(wrist_camera='image.handcam_left', side_camera='image.back_view')
+eepose_real = eepose_grip.override(wrist_camera='image.wrist', side_camera='image.exterior')
 
 
 @cfn.config()

@@ -134,17 +134,17 @@ def convert_to_lerobot_dataset(output_dir: str, fps: int, video: bool, dataset: 
             with modality_path.open('w', encoding='utf-8') as f:
                 json.dump(modality, f, indent=2)
 
-    append_data_to_dataset(lr_dataset=lr_dataset, p_dataset=dataset, task=task)
+    append_data_to_dataset(lr_dataset=lr_dataset, p_dataset=dataset, task=task, fps=fps)
     print(f'Dataset converted and saved to {output_dir}')
 
 
 @cfn.config(
     dataset=positronic.cfg.dataset.transformed, task='pick plate from the table and place it into the dishwasher'
 )
-def append_data_to_lerobot_dataset(lerobot_dataset_dir: str, dataset: Dataset, task: str):
-    lr_dataset = LeRobotDataset(repo_id='local', root=Path(lerobot_dataset_dir).expanduser().absolute())
+def append_data_to_lerobot_dataset(output_dir: str, dataset: Dataset, task: str, fps: int):
+    lr_dataset = LeRobotDataset(repo_id='local', root=Path(output_dir).expanduser().absolute())
 
-    lr_modality_path = Path(lerobot_dataset_dir).expanduser().absolute() / 'meta' / 'modality.json'
+    lr_modality_path = Path(output_dir).expanduser().absolute() / 'meta' / 'modality.json'
     ds_modality = dataset.meta.get('gr00t_modality', None)
     if ds_modality is not None:
         ds_modality['annotation'] = {'language.language_instruction': {'original_key': 'task_index'}}
@@ -161,8 +161,8 @@ def append_data_to_lerobot_dataset(lerobot_dataset_dir: str, dataset: Dataset, t
         # If dataset has modality but lerobot dataset doesn't, this is an error
         raise ValueError("'gr00t_modality' exists in dataset.meta but not in the destination LeRobot dataset.")
 
-    append_data_to_dataset(lr_dataset=lr_dataset, p_dataset=dataset, task=task)
-    print(f'Dataset extended and saved to {lerobot_dataset_dir}')
+    append_data_to_dataset(lr_dataset=lr_dataset, p_dataset=dataset, task=task, fps=fps)
+    print(f'Dataset extended and saved to {output_dir}')
 
 
 if __name__ == '__main__':

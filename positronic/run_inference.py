@@ -350,7 +350,7 @@ main_sim_openpi_droid = main_sim_cfg.override(
 
 main_sim_act = main_sim_cfg.override(
     policy=positronic.cfg.policy.policy.act,
-    observation_encoder=positronic.cfg.policy.observation.mujoco_eepose,
+    observation_encoder=positronic.cfg.policy.observation.eepose_mujoco,
     action_decoder=positronic.cfg.policy.action.absolute_position,
     # We use 3 cameras not because we need it, but because Mujoco does not render
     # the second image when using only 2 cameras
