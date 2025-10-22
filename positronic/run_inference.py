@@ -335,7 +335,7 @@ main_sim_openpi_positronic = main_sim_cfg.override(
     action_decoder=positronic.cfg.policy.action.absolute_position,
     # We use 3 cameras not because we need it, but because Mujoco does not render
     # the second image when using only 2 cameras
-    camera_dict={'image.left': 'handcam_left_ph', 'image.side': 'back_view_ph', 'image.agent_view': 'agentview'},
+    camera_dict={'image.wrist': 'handcam_left_ph', 'image.exterior': 'back_view_ph', 'image.agent_view': 'agentview'},
 )
 
 main_sim_openpi_droid = main_sim_cfg.override(
@@ -379,10 +379,16 @@ openpi_droid = cfn.Config(
     policy_fps=15,
 )
 
+openpi_positronic_real = openpi_droid.override(
+    observation_encoder=positronic.cfg.policy.observation.openpi_positronic,
+    action_decoder=positronic.cfg.policy.action.absolute_position,
+)
+
 if __name__ == '__main__':
     cfn.cli({
         'sim_act': main_sim_act,
         'sim_openpi_positronic': main_sim_openpi_positronic,
         'sim_openpi_droid': main_sim_openpi_droid,
         'droid_real': openpi_droid,
+        'openpi_real': openpi_positronic_real,
     })
