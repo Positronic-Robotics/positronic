@@ -46,10 +46,11 @@ class StubActionDecoder:
         self.grip = np.array(0.33, dtype=np.float32)
         self.meta: dict[str, object] = {}
 
-    def decode(self, action: np.ndarray, inputs: dict[str, object]) -> tuple[roboarm.command.CommandType, float]:
-        self.last_action = np.copy(action)
+    def decode(self, action: dict[str, object], inputs: dict[str, object]) -> tuple[roboarm.command.CommandType, float]:
+        action_vector = action['action']
+        self.last_action = np.copy(action_vector)
         self.last_inputs = inputs
-        decoded = np.asarray(action, dtype=np.float32).reshape(-1)
+        decoded = np.asarray(action_vector, dtype=np.float32).reshape(-1)
 
         translation = self.pose.translation
         if decoded.size >= 3:
@@ -76,9 +77,9 @@ class SpyPolicy:
         self.action = action
         self.last_obs: dict[str, object] | None = None
 
-    def select_action(self, obs: dict[str, object]) -> np.ndarray:
+    def select_action(self, obs: dict[str, object]) -> dict[str, object]:
         self.last_obs = obs
-        return self.action
+        return {'action': self.action}
 
 
 DEFAULT_STUB_POLICY_ACTION = np.array([[0.4, 0.5, 0.6, 1.0, 0.0, 0.0, 0.0, 0.33]], dtype=np.float32)
@@ -96,10 +97,10 @@ class StubPolicy:
         self.reset_calls = 0
         self.meta: dict[str, object] = {}
 
-    def select_action(self, obs: dict[str, object]) -> np.ndarray:
+    def select_action(self, obs: dict[str, object]) -> dict[str, object]:
         self.last_obs = obs
         self.observations.append(obs)
-        return self.action
+        return {'action': self.action}
 
     def reset(self) -> None:
         self.reset_calls += 1

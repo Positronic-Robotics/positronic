@@ -30,7 +30,7 @@ class LerobotPolicy(Policy):
         self.original.to(self.device)
         self.extra_meta = extra_meta or {}
 
-    def select_action(self, observation: dict[str, Any]) -> np.ndarray:
+    def select_action(self, observation: dict[str, Any]) -> dict[str, Any]:
         obs = {}
         for key, val in observation.items():
             if key == 'task':
@@ -43,7 +43,8 @@ class LerobotPolicy(Policy):
             else:
                 obs[key] = torch.as_tensor(val).to(self.device)
 
-        return self.original.select_action(obs).squeeze(0).cpu().numpy()
+        action = self.original.select_action(obs).squeeze(0).cpu().numpy()
+        return {'action': action}
 
     def reset(self):
         self.original.reset()

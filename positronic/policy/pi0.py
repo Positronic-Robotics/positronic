@@ -20,7 +20,7 @@ class OpenPIRemotePolicy(Policy):
         self.start_time = None
         self.last_log_time = None
 
-    def select_action(self, obs: Mapping[str, Any]) -> np.ndarray:
+    def select_action(self, obs: Mapping[str, Any]) -> dict[str, Any]:
         if self.start_time is None:
             self.start_time = time.monotonic()
 
@@ -54,7 +54,7 @@ class OpenPIRemotePolicy(Policy):
             rr.log('delay', rr.Scalar(time.monotonic() - self.last_log_time))
         self.last_log_time = time.monotonic()
 
-        return np.array(action)
+        return {'action': np.array(action)}
 
     def reset(self):
         self.action_queue.clear()
