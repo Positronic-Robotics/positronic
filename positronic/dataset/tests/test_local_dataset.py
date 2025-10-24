@@ -4,6 +4,7 @@ import numpy as np
 import pytest
 
 from positronic.dataset import Episode
+from positronic.dataset.dataset import ConcatDataset
 from positronic.dataset.local_dataset import LocalDataset, LocalDatasetWriter
 
 
@@ -87,20 +88,21 @@ def test_local_dataset_handles_block_rollover(tmp_path):
 # --- Indexing behavior tests ---
 
 
-def build_simple_dataset(root: Path, n: int = 5) -> LocalDataset:
-    with LocalDatasetWriter(root) as w:
-        for i in range(n):
-            with w.new_episode() as ew:
-                ew.set_static('id', i)
-    return LocalDataset(root)
-
-
 def episode_ids(episodes):
     return [ep['id'] for ep in episodes]
 
 
+def build_dataset_with_signal(root: Path, values: list[int]) -> LocalDataset:
+    with LocalDatasetWriter(root) as w:
+        for i, value in enumerate(values):
+            with w.new_episode() as ew:
+                ew.set_static('id', value)
+                ew.append('signal', np.array([value], dtype=np.float32), ts_ns=10_000 + i)
+    return LocalDataset(root)
+
+
 def test_slice_indexing_returns_episode_list(tmp_path):
-    ds = build_simple_dataset(tmp_path / 'ds', n=5)
+    ds = build_dataset_with_signal(tmp_path / 'ds', list(range(5)))
 
     sub = ds[1:4]
     assert isinstance(sub, list)
@@ -117,7 +119,7 @@ def test_slice_indexing_returns_episode_list(tmp_path):
 
 
 def test_array_indexing_returns_episode_list(tmp_path):
-    ds = build_simple_dataset(tmp_path / 'ds2', n=5)
+    ds = build_dataset_with_signal(tmp_path / 'ds2', list(range(5)))
 
     idx_list = [0, 3, 1]
     out = ds[idx_list]
@@ -134,7 +136,7 @@ def test_array_indexing_returns_episode_list(tmp_path):
 
 
 def test_array_indexing_errors(tmp_path):
-    ds = build_simple_dataset(tmp_path / 'ds3', n=4)
+    ds = build_dataset_with_signal(tmp_path / 'ds3', list(range(4)))
 
     # Boolean mask not supported
     with np.testing.assert_raises_regex(TypeError, 'Boolean indexing is not supported'):
@@ -197,3 +199,26 @@ def test_local_dataset_requires_existing_root(tmp_path):
         LocalDataset(missing_root)
 
     assert str(missing_root) in str(excinfo.value)
+
+
+def test_concat_dataset_length_and_indexing(tmp_path):
+    ds1 = build_dataset_with_signal(tmp_path / 'concat_ds1', [0, 1])
+    ds2 = build_dataset_with_signal(tmp_path / 'concat_ds2', [2, 3, 4])
+
+    concatenated = ConcatDataset(ds1, ds2)
+
+    assert len(concatenated) == 5
+    ids = [concatenated[i]['id'] for i in range(len(concatenated))]
+    assert ids == [0, 1, 2, 3, 4]
+
+    second_half = concatenated[3:]
+    assert episode_ids(second_half) == [3, 4]
+
+
+def test_dataset_add_operator_returns_concat(tmp_path):
+    ds1 = build_dataset_with_signal(tmp_path / 'add_ds1', [0])
+    ds2 = build_dataset_with_signal(tmp_path / 'add_ds2', [1, 2])
+
+    combined = ds1 + ds2
+    assert isinstance(combined, ConcatDataset)
+    assert episode_ids(combined[:]) == [0, 1, 2]

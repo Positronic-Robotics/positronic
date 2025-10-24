@@ -74,3 +74,54 @@ class Dataset(ABC, collections.abc.Sequence[Episode]):
     def meta(self) -> dict[str, Any]:
         """Return dataset metadata."""
         return {}
+
+    def __add__(self, other: 'Dataset') -> 'Dataset':
+        if not isinstance(other, Dataset):
+            return NotImplemented
+        return ConcatDataset(self, other)
+
+    def __radd__(self, other: 'Dataset | int') -> 'Dataset':
+        # Support sum([...]) by treating 0 as the additive identity.
+        if other == 0:
+            return self
+        if isinstance(other, Dataset):
+            return ConcatDataset(other, self)
+        return NotImplemented
+
+
+class ConcatDataset(Dataset):
+    """Concatenate two datasets together."""
+
+    def __init__(self, *datasets: Dataset):
+        if len(datasets) == 0:
+            raise ValueError('ConcatDataset requires at least one dataset')
+        flattened: list[Dataset] = []
+        for dataset in datasets:
+            if isinstance(dataset, ConcatDataset):
+                flattened.extend(dataset._datasets)
+            else:
+                flattened.append(dataset)
+        self._datasets: tuple[Dataset, ...] = tuple(flattened)
+        self._cached_signals_meta: dict[str, SignalMeta] | None = None
+
+    def __len__(self) -> int:
+        return sum(len(ds) for ds in self._datasets)
+
+    def _get_episode(self, index: int) -> Episode:
+        original_index = index
+        for ds in self._datasets:
+            if index < len(ds):
+                return ds[index]
+            index -= len(ds)
+        # We should never reach here because of the upfront bounds check.
+        raise IndexError(f'Index {original_index} out of range for ConcatDataset of length {len(self)}')
+
+    @property
+    def signals_meta(self) -> dict[str, SignalMeta]:
+        if self._cached_signals_meta is None:
+            meta = self._datasets[0].signals_meta
+            for ds in self._datasets[1:]:
+                if ds.signals_meta != meta:
+                    raise ValueError('All datasets must share identical signal metadata to concatenate')
+            self._cached_signals_meta = dict(meta)
+        return dict(self._cached_signals_meta)
