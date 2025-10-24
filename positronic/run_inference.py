@@ -363,7 +363,7 @@ main_sim_act = main_sim_cfg.override(
 
 openpi_droid = cfn.Config(
     main,
-    robot_arm=positronic.cfg.hardware.roboarm.franka,
+    robot_arm=positronic.cfg.hardware.roboarm.franka_droid,
     gripper=positronic.cfg.hardware.gripper.robotiq,
     cameras={
         'image.wrist': positronic.cfg.hardware.camera.zed_m.override(

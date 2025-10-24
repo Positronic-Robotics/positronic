@@ -329,7 +329,7 @@ def so101cfg(robot_arm, **kwargs):
 
 droid = cfn.Config(
     main,
-    robot_arm=positronic.cfg.hardware.roboarm.franka,
+    robot_arm=positronic.cfg.hardware.roboarm.franka_droid,
     gripper=positronic.cfg.hardware.gripper.robotiq,
     webxr=positronic.cfg.webxr.oculus,
     sound=positronic.cfg.sound.sound,
