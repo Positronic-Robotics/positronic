@@ -48,3 +48,19 @@ def joint_delta(num_joints: int):
     result.meta['lerobot_features'] = {'action': {'shape': (num_joints + 1,), 'names': ['actions'], 'dtype': 'float32'}}
 
     return result
+
+
+@cfn.config()
+def gr00t_oxe_droid():
+    from positronic.policy.action import RelativeTargetPositionAction
+
+    result = RelativeTargetPositionAction(rotation_representation=RotRep.ROTVEC)
+    result.meta['gr00t_modality'] = {
+        'action': {
+            'eef_rotation_delta': {'start': 0, 'end': 3, 'rotation_type': 'axis_angle'},
+            'eef_position_delta': {'start': 3, 'end': 6},
+            'gripper_position': {'start': 6, 'end': 7},
+        }
+    }
+    result.meta['lerobot_features'] = {'action': {'shape': (7,), 'names': ['actions'], 'dtype': 'float32'}}
+    return result

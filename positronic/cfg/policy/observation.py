@@ -85,3 +85,37 @@ def openpi_droid(exterior_camera: str, wrist_camera: str, image_size: tuple[int,
             'observation/exterior_image_1_left': (exterior_camera, image_size),
         },
     )
+
+
+@cfn.config()
+def gr00t_oxe_droid():
+    state_spec = {'observation.state': ['robot_state.ee_pose', 'grip']}
+    result = ObservationEncoder(
+        state=state_spec,
+        images={
+            'observation.images.exterior': ('image.exterior', (224, 224)),
+            'observation.images.wrist': ('image.wrist', (224, 224)),
+        },
+    )
+    result.meta['gr00t_modality'] = {
+        'state': {
+            'eef_rotation': {'start': 0, 'end': 4, 'rotation_type': 'quaternion'},
+            'eef_position': {'start': 4, 'end': 7},
+            'gripper_position': {'start': 7, 'end': 8},
+        },
+        'video': {
+            'exterior_image_1': {'original_key': 'observation.images.exterior'},
+            'exterior_image_2': {'original_key': 'observation.images.exterior'},
+            'wrist_image': {'original_key': 'observation.images.wrist'},
+        },
+    }
+    state_dim = 8
+    lerobot_features = {k: {'shape': (state_dim,), 'names': v, 'dtype': 'float32'} for k, v in state_spec.items()}
+    for out_name, (_input_key, (width, height)) in result._image_configs.items():
+        lerobot_features[out_name] = {
+            'shape': (height, width, 3),
+            'names': ['height', 'width', 'channel'],
+            'dtype': 'video',
+        }
+    result.meta['lerobot_features'] = lerobot_features
+    return result
