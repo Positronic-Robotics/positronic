@@ -21,7 +21,6 @@ def test_local_dataset_writer_creates_structure_and_persists(tmp_path):
     assert (root / '000000000000' / '000000000000').exists()
     assert (root / '000000000000' / '000000000001').exists()
     assert (root / '000000000000' / '000000000002').exists()
-    assert (root / 'signals_meta.json').exists()
 
     ds = LocalDataset(root)
     assert len(ds) == 3
@@ -29,8 +28,6 @@ def test_local_dataset_writer_creates_structure_and_persists(tmp_path):
     assert isinstance(ep0, Episode)
     assert ep0['id'] == 0
     assert ep0['a'][0] == (0, 1000)
-    ds_meta = ds.signals_meta
-    assert 'a' in ds_meta
 
     # Restart writer and keep appending
     with LocalDatasetWriter(root) as w2:
@@ -148,19 +145,6 @@ def test_array_indexing_errors(tmp_path):
     # Out of range
     with np.testing.assert_raises(IndexError):
         _ = ds[[10]]
-
-
-def test_signals_meta_fallback_without_file(tmp_path):
-    root = tmp_path / 'meta_missing'
-    with LocalDatasetWriter(root) as w:
-        with w.new_episode() as ew:
-            ew.append('b', 1, 1000)
-
-    (root / 'signals_meta.json').unlink()
-
-    ds = LocalDataset(root)
-    meta = ds.signals_meta
-    assert 'b' in meta
 
 
 def test_homedir_resolution(tmp_path):

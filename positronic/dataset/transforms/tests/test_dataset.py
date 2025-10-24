@@ -3,11 +3,7 @@ import pytest
 
 from positronic.dataset.dataset import Dataset
 from positronic.dataset.episode import Episode, EpisodeContainer
-from positronic.dataset.transforms import (
-    Elementwise,
-    EpisodeTransform,
-    TransformedDataset,
-)
+from positronic.dataset.transforms import Elementwise, EpisodeTransform, TransformedDataset
 
 from ...tests.utils import DummySignal
 
@@ -35,9 +31,8 @@ class _DummyTransform(EpisodeTransform):
 class _DummyDataset(Dataset):
     """Minimal Dataset implementation used for TransformedDataset tests."""
 
-    def __init__(self, episodes, signals_meta):
+    def __init__(self, episodes):
         self._episodes = list(episodes)
-        self._signals_meta = dict(signals_meta)
         self.getitem_calls = 0
 
     def __len__(self):
@@ -47,16 +42,12 @@ class _DummyDataset(Dataset):
         self.getitem_calls += 1
         return self._episodes[index]
 
-    @property
-    def signals_meta(self):
-        return dict(self._signals_meta)
-
 
 def test_transformed_dataset_wraps_episode_with_transforms():
     sig_simple = DummySignal([1000, 2000, 3000, 4000, 5000], [10, 20, 30, 40, 50])
     base_meta = {'a': sig_simple.meta, 's': sig_simple.meta}
     episode = EpisodeContainer(signals={'s': sig_simple}, static={'id': 99}, meta=base_meta)
-    dataset = _DummyDataset([episode], signals_meta={'s': sig_simple.meta})
+    dataset = _DummyDataset([episode])
     tf = _DummyTransform()
 
     transformed = TransformedDataset(dataset, tf, pass_through=True)
@@ -72,18 +63,11 @@ def test_transformed_dataset_wraps_episode_with_transforms():
     assert s_vals == [x + 1 for x, _ in episode['s']]
     assert wrapped['id'] == 99
 
-    meta = transformed.signals_meta
-    assert set(meta.keys()) == {'a', 's'}
-    assert meta['s'].names == wrapped['s'].names
-
 
 def test_transformed_dataset_pass_through_selected_keys():
     sig_simple = DummySignal([1000, 2000], [10, 20])
-    episode = EpisodeContainer(
-        signals={'s': sig_simple},
-        static={'id': 42, 'note': 'keep', 'skip': 'drop'},
-    )
-    dataset = _DummyDataset([episode], signals_meta={'s': sig_simple.meta})
+    episode = EpisodeContainer(signals={'s': sig_simple}, static={'id': 42, 'note': 'keep', 'skip': 'drop'})
+    dataset = _DummyDataset([episode])
     tf = _DummyTransform()
 
     transformed = TransformedDataset(dataset, tf, pass_through=['note'])
@@ -97,23 +81,6 @@ def test_transformed_dataset_pass_through_selected_keys():
         _ = wrapped['skip']
 
 
-def test_transformed_dataset_signals_meta_cached():
-    sig_simple = DummySignal([1000, 2000, 3000, 4000, 5000], [10, 20, 30, 40, 50])
-    base_meta = {'a': sig_simple.meta, 's': sig_simple.meta}
-    episode = EpisodeContainer(signals={'s': sig_simple}, meta=base_meta)
-    dataset = _DummyDataset([episode], signals_meta={'s': sig_simple.meta})
-    tf = _DummyTransform()
-
-    transformed = TransformedDataset(dataset, tf, pass_through=True)
-
-    assert dataset.getitem_calls == 0
-    first_meta = transformed.signals_meta
-    assert dataset.getitem_calls == 1
-    second_meta = transformed.signals_meta
-    assert dataset.getitem_calls == 1
-    assert second_meta is first_meta
-
-
 def test_transformed_dataset_sequence_indices_return_transformed_episodes():
     episodes = []
     for idx in range(3):
@@ -122,7 +89,7 @@ def test_transformed_dataset_sequence_indices_return_transformed_episodes():
         sig = DummySignal(ts, values)
         episodes.append(EpisodeContainer(signals={'s': sig}, static={'id': idx}))
 
-    dataset = _DummyDataset(episodes, signals_meta={'s': episodes[0]['s'].meta})
+    dataset = _DummyDataset(episodes)
     tf = _DummyTransform()
     transformed = TransformedDataset(dataset, tf, pass_through=True)
 

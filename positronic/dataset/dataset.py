@@ -6,7 +6,7 @@ from typing import Any
 import numpy as np
 
 from .episode import Episode, EpisodeWriter
-from .signal import IndicesLike, SignalMeta
+from .signal import IndicesLike
 
 
 class DatasetWriter(AbstractContextManager, ABC):
@@ -65,12 +65,6 @@ class Dataset(ABC, collections.abc.Sequence[Episode]):
         return self._get_episode(normalize_index(int(index_or_slice)))
 
     @property
-    @abstractmethod
-    def signals_meta(self) -> dict[str, SignalMeta]:
-        """Return signal metadata keyed by signal name for the dataset schema."""
-        pass
-
-    @property
     def meta(self) -> dict[str, Any]:
         """Return dataset metadata."""
         return {}
@@ -102,7 +96,6 @@ class ConcatDataset(Dataset):
             else:
                 flattened.append(dataset)
         self._datasets: tuple[Dataset, ...] = tuple(flattened)
-        self._cached_signals_meta: dict[str, SignalMeta] | None = None
 
     def __len__(self) -> int:
         return sum(len(ds) for ds in self._datasets)
@@ -115,13 +108,3 @@ class ConcatDataset(Dataset):
             index -= len(ds)
         # We should never reach here because of the upfront bounds check.
         raise IndexError(f'Index {original_index} out of range for ConcatDataset of length {len(self)}')
-
-    @property
-    def signals_meta(self) -> dict[str, SignalMeta]:
-        if self._cached_signals_meta is None:
-            meta = self._datasets[0].signals_meta
-            for ds in self._datasets[1:]:
-                if ds.signals_meta != meta:
-                    raise ValueError('All datasets must share identical signal metadata to concatenate')
-            self._cached_signals_meta = dict(meta)
-        return dict(self._cached_signals_meta)

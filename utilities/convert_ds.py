@@ -31,10 +31,19 @@ from positronic.dataset.transforms import KeyFuncEpisodeTransform, TransformedDa
 from positronic.dataset.video import VideoSignal
 
 
+def _discover_image_signals(dataset: Dataset) -> list[str]:
+    """Inspect episodes to find signals carrying image data."""
+    for episode in dataset:
+        image_keys = [name for name, signal in episode.signals.items() if signal.kind == Kind.IMAGE]
+        if image_keys:
+            return image_keys
+    return []
+
+
 @cfn.config()
 def update_v0_1_0(path: str):
     dataset = LocalDataset(Path(path))
-    image_features = [key for key, meta in dataset.signals_meta.items() if meta.kind == Kind.IMAGE]
+    image_features = _discover_image_signals(dataset)
 
     funcs = {
         'controller_positions.right': lambda ep: transforms.concat(

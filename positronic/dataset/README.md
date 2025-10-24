@@ -170,10 +170,6 @@ class Dataset:
         pass
 
     @property
-    def signals_meta(self) -> dict[str, SignalMeta]:
-        pass
-
-    @property
     def meta(self) -> dict[str, Any]:
         # Optional dataset-level metadata (empty by default)
         return {}
@@ -186,7 +182,7 @@ class DatasetWriter:
 
 ### Signal metadata
 
-Every `Signal` exposes a `SignalMeta` object that captures element dtype, shape, and a semantic kind (numeric or image). The base implementation infers these fields lazily from the first stored value, keeping implementations lightweight. Feature names (`meta.names`) are optional, user-provided labels for vector components; when set they propagate through episodes, datasets, and transforms. Writers can register names up front with `EpisodeWriter.set_signal_meta(..., names=...)`, and datasets aggregate the discovered metadata through `Dataset.signals_meta` so consumers can inspect schemas without materializing full episodes.
+Every `Signal` exposes a `SignalMeta` object that captures element dtype, shape, and a semantic kind (numeric or image). The base implementation infers these fields lazily from the first stored value, keeping implementations lightweight. Feature names (`meta.names`) are optional, user-provided labels for vector components; when set they propagate through episodes, datasets, and transforms. Writers can register names up front with `EpisodeWriter.set_signal_meta(..., names=...)`, and callers that need schema-level views can inspect individual episodes (e.g., `dataset[0]['signal'].meta`) or maintain their own manifests if required.
 
 ## Signal implementations
 
@@ -306,7 +302,7 @@ Access semantics mirror those of `Signal.time` for selecting timestamps; the epi
 
 `Dataset` organizes many `Episode`s and provide simple sequence-style access. Implementations decide how episodes are stored and discovered (e.g., filesystem), but must expose a consistent order and length.
 - Access: `ds[i] -> Episode`; `ds[start:stop:step] -> list[Episode]`; `ds[[i1, i2, ...]] -> list[Episode]`. Boolean masks are not supported.
-- Schema discovery: `ds.signals_meta` returns a `SignalMeta` per signal name, reusing the metadata recorded during ingestion so you can inspect shapes and feature names without loading an episode.
+- Schema discovery: inspect a representative episode (for example `ds[0]['signal'].meta`) or maintain an external manifest if you need to reason about schemas without materializing episodes.
 
 ### Local dataset
 
