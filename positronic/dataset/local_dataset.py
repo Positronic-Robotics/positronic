@@ -102,11 +102,11 @@ class DiskEpisodeWriter(EpisodeWriter):
             extra_ts: Optional dict of extra timeline names to timestamps
         """
         if self._finished:
-            raise RuntimeError('Cannot append to a finished writer')
+            raise RuntimeError(f'Cannot append to a finished writer {self._path}')
         if self._aborted:
-            raise RuntimeError('Cannot append to an aborted writer')
+            raise RuntimeError(f'Cannot append to an aborted writer {self._path}')
         if signal_name in self._static_items:
-            raise ValueError(f"Static item '{signal_name}' already set for this episode")
+            raise ValueError(f"Static item '{signal_name}' already set for this episode {self._path}")
 
         # Create writer on first append, choosing vector vs video based on data shape/dtype
         if signal_name not in self._writers:
@@ -288,7 +288,7 @@ class DiskEpisode(Episode):
         if name in self._static_data:
             return self._static_data[name]
         available = list(self._signal_factories.keys()) + list(self._static_data.keys())
-        raise KeyError(f"'{name}' not found in episode. Available keys: {', '.join(available)}")
+        raise KeyError(f"'{name}' not found in episode {self._dir}. Available keys: {', '.join(available)}")
 
     @property
     def meta(self) -> dict:
@@ -366,7 +366,7 @@ class LocalDataset(Dataset):
 
     def _get_episode(self, index: int) -> DiskEpisode:
         if not (0 <= index < len(self)):
-            raise IndexError('Index out of range')
+            raise IndexError(f'Index {index} out of range for {self.root} dataset with {len(self)} episodes')
         return DiskEpisode(self._episodes[index][1])
 
 
