@@ -326,4 +326,4 @@ class VideoSignal(Signal[np.ndarray]):
         if len(self) == 0:
             raise ValueError('Signal is empty')
         base = super().meta
-        return SignalMeta(dtype=base.dtype, shape=base.shape, kind=Kind.IMAGE, names=['height', 'width', 'channel'])
+        return SignalMeta(dtype=base.dtype, shape=base.shape, kind=Kind.IMAGE)

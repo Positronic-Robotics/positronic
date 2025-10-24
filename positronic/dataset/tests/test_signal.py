@@ -8,19 +8,19 @@ from positronic.dataset.vector import SimpleSignal, SimpleSignalWriter
 from .utils import DummySignal
 
 
-def create_signal(tmp_path, data_timestamps, name='test.parquet', names=None):
+def create_signal(tmp_path, data_timestamps, name='test.parquet'):
     """Helper to create a Signal with data and timestamps."""
     filepath = tmp_path / name
-    with SimpleSignalWriter(filepath, names=names) as writer:
+    with SimpleSignalWriter(filepath) as writer:
         for data, ts in data_timestamps:
             writer.append(data, ts)
     return SimpleSignal(filepath)
 
 
-def write_data(tmp_path, data_timestamps, name='test.parquet', names=None):
+def write_data(tmp_path, data_timestamps, name='test.parquet'):
     """Helper to write data and return filepath."""
     filepath = tmp_path / name
-    with SimpleSignalWriter(filepath, names=names) as writer:
+    with SimpleSignalWriter(filepath) as writer:
         for data, ts in data_timestamps:
             writer.append(data, ts)
     return filepath
@@ -396,30 +396,10 @@ class TestSignalDtypeShape:
         assert s.dtype in (int, np.int64, np.int32)
         assert s.shape == ()
 
-    def test_scalar_signal_names_none(self, tmp_path):
-        s = create_signal(tmp_path, [(1, 1000), (2, 2000)])
-        assert s.names is None
-        assert s.kind == Kind.NUMERIC
-
-    def test_vector_signal_kind_and_names(self, tmp_path):
-        arr1 = np.array([1.0, 2.0], dtype=np.float32)
-        arr2 = np.array([3.0, 4.0], dtype=np.float32)
-        s = create_signal(tmp_path, [(arr1, 1000), (arr2, 2000)], name='vec.parquet')
-        assert s.names is None
-        assert s.kind == Kind.NUMERIC
-
-    def test_vector_signal_names_persist(self, tmp_path):
-        arr1 = np.array([1.0, 2.0], dtype=np.float32)
-        arr2 = np.array([3.0, 4.0], dtype=np.float32)
-        feature_names = ['pos_x', 'pos_y']
-        sig = create_signal(tmp_path, [(arr1, 1000), (arr2, 2000)], name='vec_named.parquet', names=feature_names)
-        assert sig.names == feature_names
-
     def test_signal_view_meta_inherits_and_empty_view_raises(self, tmp_path):
         s = create_signal(tmp_path, [(1, 1000), (2, 2000), (3, 3000)])
         view = s[1:3]
         assert view.kind == Kind.NUMERIC
-        assert view.names is None
         empty = s[0:0]
         with pytest.raises(ValueError):
             _ = empty.dtype

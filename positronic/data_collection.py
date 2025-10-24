@@ -15,7 +15,6 @@ import positronic.cfg.simulator
 import positronic.cfg.sound
 import positronic.cfg.webxr
 from positronic import geom, wire
-from positronic.dataset import ds_writer_agent
 from positronic.dataset.ds_writer_agent import (
     DsWriterAgent,
     DsWriterCommand,
@@ -160,7 +159,6 @@ class DataCollectionController(pimm.ControlSystem):
                 continue
 
 
-@ds_writer_agent.names({'.left': Serializers.transform_3d.names, '.right': Serializers.transform_3d.names})
 def controller_positions_serializer(controller_positions: dict[str, geom.Transform3D]) -> dict[str, np.ndarray]:
     res = {}
     for side, pos in controller_positions.items():

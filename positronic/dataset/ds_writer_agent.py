@@ -63,20 +63,7 @@ class DsWriterCommand:
 #         - use "" (empty string) to keep the base name as-is
 #         - any dict entry with value None is skipped (not recorded)
 #     * None -> the sample is dropped (not recorded)
-# - Serializers may expose a ``names`` attribute:
-#     * string or list[str]: metadata for the base signal
-#     * dict[str, str | list[str]]: metadata per derived signal suffix ("" keeps the base name)
 Serializer = Callable[[Any], Any | dict[str, Any]]
-
-
-def names(metadata: str | list[str] | dict[str, str | list[str]]):
-    """Attach feature-name metadata to a serializer function."""
-
-    def _decorator(fn: Callable[[Any], Any]) -> Callable[[Any], Any]:
-        fn.names = metadata
-        return fn
-
-    return _decorator
 
 
 class Serializers:
@@ -92,20 +79,17 @@ class Serializers:
     """
 
     @staticmethod
-    @names(['tx', 'ty', 'tz', 'qx', 'qy', 'qz', 'qw'])
     def transform_3d(x: geom.Transform3D) -> np.ndarray:
         """Serialize a Transform3D into a 7D vector [tx, ty, tz, qx, qy, qz, qw]."""
         return np.concatenate([x.translation, x.rotation.as_quat])
 
     @staticmethod
-    @names({'.q': 'joints', '.dq': 'joint velocities', '.ee_pose': ['tx', 'ty', 'tz', 'qx', 'qy', 'qz', 'qw']})
     def robot_state(state: roboarm.State) -> dict[str, np.ndarray] | None:
         if state.status == roboarm.RobotStatus.RESETTING:
             return None
         return {'.q': state.q, '.dq': state.dq, '.ee_pose': Serializers.transform_3d(state.ee_pose)}
 
     @staticmethod
-    @names({'.pose': 'target pose', '.joints': 'target joints'})
     def robot_command(command: roboarm.command.CommandType) -> dict[str, np.ndarray | int] | None:
         match command:
             case roboarm.command.CartesianPosition(pose):
@@ -121,28 +105,6 @@ class Serializers:
     def camera_images(data: pimm.shared_memory.NumpySMAdapter) -> np.ndarray:
         """Extract array from NumpySMAdapter for storage."""
         return data.array
-
-
-def _extract_names(serializer: Callable[[Any], Any]) -> dict[str, list[str]] | None:
-    names = getattr(serializer, 'names', None)
-    if names is None:
-        return None
-    if isinstance(names, str):
-        return {'': [names]}
-    if isinstance(names, list):
-        return {'': names}
-    if isinstance(names, dict):
-        out: dict[str, list[str]] = {}
-        for suffix, value in names.items():
-            key = '' if suffix in ('', None) else suffix
-            if isinstance(value, str):
-                out[key] = [value]
-            elif isinstance(value, list):
-                out[key] = value
-            else:
-                raise TypeError('Serializer names mapping values must be string or list')
-        return out
-    raise TypeError('Serializer names attribute must be a string, sequence, or mapping')
 
 
 def _append(ep_writer: EpisodeWriter, name: str, value: Any, ts_ns: int, extra_ts: dict[str, int] | None = None):
@@ -188,15 +150,10 @@ class DsWriterAgent(pimm.ControlSystem):
         self.command = pimm.ControlSystemReceiver[DsWriterCommand](self)
 
         self._inputs: dict[str, pimm.ControlSystemReceiver[Any]] = {}
-        self._serializers = {}
-        self._signal_meta_specs: dict[str, dict[str, list[str]]] = {}
+        self._serializers: dict[str, Callable[[Any], Any | dict[str, Any]]] = {}
 
     def add_signal(self, name: str, serializer: Serializer | None = None):
         self._inputs[name] = pimm.ControlSystemReceiver[Any](self)
-        names = _extract_names(serializer)
-        # Only keep explicitly provided serializers; None means pass-through
-        if names is not None:
-            self._signal_meta_specs[name] = names
         if serializer is not None:
             self._serializers[name] = serializer
 
@@ -262,9 +219,6 @@ class DsWriterAgent(pimm.ControlSystem):
                     ep_counter += 1
                     print(f'DsWriterAgent: [START] Episode {ep_counter}')
                     ep_writer = self.ds_writer.new_episode()
-                    for base_name, names_map in self._signal_meta_specs.items():
-                        for suffix, name_list in names_map.items():
-                            ep_writer.set_signal_meta(base_name + suffix, names=name_list)
                     for k, v in cmd.static_data.items():
                         ep_writer.set_static(k, v)
                 else:

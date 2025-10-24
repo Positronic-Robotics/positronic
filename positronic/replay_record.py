@@ -70,7 +70,7 @@ class RestoreCommand(transforms.KeyFuncEpisodeTransform):
     @staticmethod
     def _commands_from_episode(episode: Episode) -> Any:
         pose = episode['robot_commands.pose']
-        return transforms.Elementwise(pose, RestoreCommand.command_from_pose, names=['robot_commands'])
+        return transforms.Elementwise(pose, RestoreCommand.command_from_pose)
 
     @staticmethod
     def command_from_pose(pose: Sequence[np.ndarray]) -> Sequence[roboarm.command.CommandType]:

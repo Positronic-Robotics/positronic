@@ -96,7 +96,6 @@ def test_data_collection_basic_recording(tmp_path, world, clock):
     grip = ep['grip']
 
     assert len(right_pose_sig) == 1
-    assert right_pose_sig.names == Serializers.transform_3d.names
     assert len(tgt_grip) >= 1
     assert len(grip) == 1
 

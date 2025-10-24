@@ -1,4 +1,3 @@
-from collections.abc import Sequence
 from functools import partial
 from typing import Any
 
@@ -39,15 +38,9 @@ class FakeEpisodeWriter(EpisodeWriter[Any]):
         self.appends: list[tuple[str, Any, int, dict[str, int] | None]] = []
         self.exited = False
         self.aborted = False
-        self.meta_calls: dict[str, Sequence[str] | None] = {}
 
     def append(self, signal_name: str, data: Any, ts_ns: int, extra_ts: dict[str, int] | None = None) -> None:
         self.appends.append((signal_name, data, int(ts_ns), extra_ts))
-
-    def set_signal_meta(self, signal_name: str, *, names: Sequence[str] | None = None) -> None:
-        if signal_name in self.meta_calls and self.meta_calls[signal_name] != names:
-            raise AssertionError('set_signal_meta called with different names')
-        self.meta_calls[signal_name] = names
 
     def set_static(self, name: str, data: Any) -> None:
         self.statics[name] = data
@@ -207,54 +200,6 @@ def test_time_mode_message_uses_signal_timestamp(world, clock):
     w = ds.created[-1]
     assert [(s, v) for (s, v, _, _) in w.appends] == [('a', 1), ('a', 2)]
     assert [ts for (_, _, ts, _) in w.appends] == [ts_first, ts_second]
-
-
-def test_serializer_names_declared_on_start(world, clock):
-    ds = FakeDatasetWriter()
-
-    def ser(x):
-        return x
-
-    ser.names = 'feat'
-
-    agent, cmd_em, _ = build_agent_with_pipes({'a': ser}, ds, world)
-
-    script = [
-        (partial(cmd_em.emit, DsWriterCommand(DsWriterCommandType.START_EPISODE)), 0.001),
-        (partial(cmd_em.emit, DsWriterCommand(DsWriterCommandType.STOP_EPISODE)), 0.001),
-    ]
-
-    run_scripted_agent(agent, script, world=world, clock=clock)
-
-    writer = ds.created[-1]
-    assert writer.meta_calls.get('a') == ['feat']
-    assert writer.appends == []
-
-
-def test_dict_serializer_value_with_names(world, clock):
-    ds = FakeDatasetWriter()
-
-    def ser(x):
-        return {'.x': np.array([1.0, 2.0])}
-
-    ser.names = {'.x': ['a', 'b']}
-
-    agent, cmd_em, emitters = build_agent_with_pipes({'sig': ser}, ds, world)
-
-    script = [
-        (partial(cmd_em.emit, DsWriterCommand(DsWriterCommandType.START_EPISODE)), 0.001),
-        (partial(emitters['sig'].emit, np.array([1.0, 2.0])), 0.001),
-        (partial(cmd_em.emit, DsWriterCommand(DsWriterCommandType.STOP_EPISODE)), 0.001),
-    ]
-
-    run_scripted_agent(agent, script, world=world, clock=clock)
-
-    writer = ds.created[-1]
-    assert writer.meta_calls.get('sig.x') == ['a', 'b']
-    assert len(writer.appends) == 1
-    name, arr, _, _ = writer.appends[0]
-    assert name == 'sig.x'
-    np.testing.assert_allclose(arr, np.array([1.0, 2.0]))
 
 
 def test_integration_with_local_dataset_writer(tmp_path, world, clock):

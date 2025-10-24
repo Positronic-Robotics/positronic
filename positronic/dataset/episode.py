@@ -154,11 +154,6 @@ class EpisodeWriter(AbstractContextManager, ABC, Generic[T]):
         pass
 
     @abstractmethod
-    def set_signal_meta(self, signal_name: str, *, names: Sequence[str] | None = None) -> None:
-        """Declare metadata for a pending signal before writing samples."""
-        pass
-
-    @abstractmethod
     def set_static(self, name: str, data: Any) -> None:
         """Record a static (per-episode) item by key."""
         pass

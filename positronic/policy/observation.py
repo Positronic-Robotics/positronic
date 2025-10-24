@@ -35,7 +35,7 @@ class ObservationEncoder(transforms.KeyFuncEpisodeTransform):
 
     def encode_state(self, out_name: str, episode: Episode) -> Signal[Any]:
         state_features = self._state[out_name]
-        return transforms.concat(*[episode[k] for k in state_features], dtype=np.float32, names=state_features)
+        return transforms.concat(*[episode[k] for k in state_features], dtype=np.float32)
 
     def encode_image(self, out_name: str, episode: Episode) -> Signal[Any]:
         input_key, (width, height) = self._image_configs[out_name]

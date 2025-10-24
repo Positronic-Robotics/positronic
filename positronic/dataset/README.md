@@ -141,10 +141,6 @@ class EpisodeWriter:
     def append(self, signal_name: str, data: T, ts_ns: int) -> None:
         pass
 
-    # Declare feature names before writing data (optional)
-    def set_signal_meta(self, signal_name: str, *, names: Sequence[str] | None = None) -> None:
-        pass
-
     # Set static (non-time-varying) item; raises on name conflicts
     def set_static(self, name: str, data: Any) -> None:
         pass
@@ -182,7 +178,7 @@ class DatasetWriter:
 
 ### Signal metadata
 
-Every `Signal` exposes a `SignalMeta` object that captures element dtype, shape, and a semantic kind (numeric or image). The base implementation infers these fields lazily from the first stored value, keeping implementations lightweight. Feature names (`meta.names`) are optional, user-provided labels for vector components; when set they propagate through episodes, datasets, and transforms. Writers can register names up front with `EpisodeWriter.set_signal_meta(..., names=...)`, and callers that need schema-level views can inspect individual episodes (e.g., `dataset[0]['signal'].meta`) or maintain their own manifests if required.
+Every `Signal` exposes a `SignalMeta` object that captures element dtype, shape, and a semantic kind (numeric or image). The base implementation infers these fields lazily from the first stored value, keeping implementations lightweight.
 
 ## Signal implementations
 
@@ -255,7 +251,7 @@ An `Episode` is a collection of `Signal`s recorded together plus static, episode
 
 ### Recording
 
-Episodes are recorded via an `EpisodeWriter` implementations. You add time-varying data by calling `append(signal_name, data, ts_ns)` where timestamps are strictly increasing per `Signal` name; you add episode-level metadata via `set_static(name, data)`. Optionally declare feature names before writing samples with `set_signal_meta(signal_name, names=[...])`; if omitted, names are inferred (or left unset) based on the recorded payload. All static items are stored together in a single `static.json`, while each dynamic `Signal` is stored in its own format, defined by the particular `SignalWriter` implementation. (e.g., Parquet for scalar/vector; video file plus frame index for image signals).
+Episodes are recorded via an `EpisodeWriter` implementations. You add time-varying data by calling `append(signal_name, data, ts_ns)` where timestamps are strictly increasing per `Signal` name; you add episode-level metadata via `set_static(name, data)`. All static items are stored together in a single `static.json`, while each dynamic `Signal` is stored in its own format, defined by the particular `SignalWriter` implementation (e.g., Parquet for scalar/vector; video file plus frame index for image signals).
 
 Name collisions are disallowed: attempting to `append` to a name that already exists as a static item raises an error, and vice versa.
 
@@ -382,12 +378,12 @@ Typical use cases
 `positronic.dataset.transforms` provides lazy views for deriving new signals and datasets without duplicating storage. Each transform wraps existing `Signal`/`Episode`/`Dataset` objects and only computes when you access the data, so recordings remain immutable.
 
 ### Building blocks
-- `Elementwise(signal, fn, names=None)`: wraps a single signal and maps batches of values through `fn` while keeping the timestamp index untouched. Most other helpers eventually call into this class.
+- `Elementwise(signal, fn)`: wraps a single signal and maps batches of values through `fn` while keeping the timestamp index untouched. Most other helpers eventually call into this class.
 - `Join(*signals, include_ref_ts=False)`: aligns multiple signals on the union of their timestamps with carry-back semantics. The result yields tuples of values (and, optionally, reference timestamps) at every combined timestamp.
 - `IndexOffsets(signal, *relative_indices, include_ref_ts=False)`: samples neighbouring indices around each position (e.g., `i-1`, `i`, `i+1`) to build finite-difference style windows. Length shrinks when offsets fall out of bounds.
 - `TimeOffsets(signal, *deltas_ns, include_ref_ts=False)`: samples values at requested time deltas relative to the current time. Can be used to lookup into "past" or "future".
 
-Transforms automatically generate descriptive feature names whenever possible. You can override the labels by passing `names=[...]` when constructing the view.
+Transforms operate purely on values; if you need semantic labels, maintain them alongside your data at a higher layer.
 
 ### Derived helpers
 Common utilities stack the building blocks to cover frequent needs:

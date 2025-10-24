@@ -30,7 +30,7 @@ def resize(
     def fn(x: Sequence[np.ndarray]) -> Sequence[np.ndarray]:
         return LazySequence(x, per_frame)
 
-    return Elementwise(signal, fn, names=['height', 'width', 'channel'])
+    return Elementwise(signal, fn)
 
 
 def _resize_with_pad_pil(image: PilImage.Image, height: int, width: int, method: int) -> PilImage.Image:
@@ -77,4 +77,4 @@ def resize_with_pad(
     def fn(x: Sequence[np.ndarray]) -> Sequence[np.ndarray]:
         return LazySequence(x, partial(resize_with_pad_per_frame, width, height, method))
 
-    return Elementwise(signal, fn, names=['height', 'width', 'channel'])
+    return Elementwise(signal, fn)

@@ -59,11 +59,6 @@ class SignalMeta:
     dtype: Any
     shape: Any
     kind: 'Kind' = Kind.NUMERIC
-    names: Sequence[str] | None = None
-
-    def with_names(self, names: Sequence[str] | None) -> 'SignalMeta':
-        """Return a copy of this metadata with the provided feature names."""
-        return SignalMeta(dtype=self.dtype, shape=self.shape, kind=self.kind, names=names)
 
 
 class Signal(Sequence[tuple[T, int]], ABC, Generic[T]):
@@ -133,10 +128,6 @@ class Signal(Sequence[tuple[T, int]], ABC, Generic[T]):
     @property
     def kind(self) -> Kind:
         return self.meta.kind
-
-    @property
-    def names(self) -> Sequence[str] | None:
-        return self.meta.names
 
     @final
     @property

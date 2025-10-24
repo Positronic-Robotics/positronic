@@ -174,31 +174,25 @@ class TestVideoInterface:
         assert_frames_equal(frame0, create_frame(50))
         assert sig._ts_at([1])[0] == 2000
 
-    def test_video_kind_and_names(self, video_paths):
+    def test_video_kind(self, video_paths):
         sig = create_video_signal(video_paths, [(create_frame(10), 1000)])
         assert sig.kind == Kind.IMAGE
-        assert sig.names == ['height', 'width', 'channel']
 
-    def test_video_kind_names_empty_raises(self, video_paths):
+    def test_video_kind_empty_raises(self, video_paths):
         # Create empty video index
         with VideoSignalWriter(video_paths['video'], video_paths['frames']):
             pass
         s = VideoSignal(video_paths['video'], video_paths['frames'])
         with pytest.raises(ValueError):
             _ = s.kind
-        with pytest.raises(ValueError):
-            _ = s.names
 
     def test_video_view_meta_inherits_and_empty_view_raises(self, video_paths):
         sig = create_video_signal(video_paths, [(create_frame(10), 1000), (create_frame(20), 2000)])
         view = sig[0:2]
         assert view.kind == Kind.IMAGE
-        assert view.names == ['height', 'width', 'channel']
         empty_view = sig[0:0]
         with pytest.raises(ValueError):
             _ = empty_view.kind
-        with pytest.raises(ValueError):
-            _ = empty_view.names
 
     def test_search_ts_empty_and_numeric(self, video_paths):
         sig = create_video_signal(video_paths, [(create_frame(50), 1000)])

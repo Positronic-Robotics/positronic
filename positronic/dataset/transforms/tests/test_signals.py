@@ -39,7 +39,7 @@ def vector_signal():
         np.array([4.0, 5.0, 6.0, 7.0], dtype=np.float32),
         np.array([7.0, 8.0, 9.0, 10.0], dtype=np.float32),
     ]
-    return DummySignal(ts, vals, names=['c0', 'c1', 'c2', 'c3'])
+    return DummySignal(ts, vals)
 
 
 def _times10(x):
@@ -53,36 +53,11 @@ def test_elementwise(sig_simple):
     # Length preserved; values transformed; timestamps unchanged
     assert list(ew) == [(100, 1000), (200, 2000), (300, 3000), (400, 4000), (500, 5000)]
     # Underlying signal remains unchanged
-    assert list(sig_simple) == [
-        (10, 1000),
-        (20, 2000),
-        (30, 3000),
-        (40, 4000),
-        (50, 5000),
-    ]
-    # Names for numeric features: fn name only (source has no names)
-    assert ew.names == ['_times10']
-
-
-def test_elementwise_names_with_source_names(sig_simple):
-    elements = list(sig_simple)
-    vals = [val for val, _ in elements]
-    ts = [ts for _, ts in elements]
-    named = DummySignal(ts, vals, names=['feat'])
-    ew = Elementwise(named, _times10)
-    assert ew.names == ['_times10 of feat']
-
-
-def test_elementwise_names_override(sig_simple):
-    ew = Elementwise(sig_simple, _times10, names=['manual'])
-    assert ew.names == ['manual']
+    assert list(sig_simple) == [(10, 1000), (20, 2000), (30, 3000), (40, 4000), (50, 5000)]
 
 
 def test_view_slice_returns_lazy_subset(vector_signal):
     sliced = view(vector_signal, slice(1, 3))
-
-    # view forwards existing feature names unchanged
-    assert sliced.names == vector_signal.names
 
     base_samples = list(vector_signal)
     result_samples = list(sliced)
@@ -100,19 +75,12 @@ def test_recode_rotation_quat_to_rotvec_with_slice():
         np.array([1.0, 0.0, 0.0, 0.0, 0.1], dtype=np.float32),
         np.array([0.0, 1.0, 0.0, 0.0, 0.2], dtype=np.float32),
     ]
-    signal = DummySignal(ts, values, names=['qw', 'qx', 'qy', 'qz', 'aux'])
+    signal = DummySignal(ts, values)
 
-    recoded = recode_rotation(
-        Rotation.Representation.QUAT,
-        Rotation.Representation.ROTVEC,
-        signal,
-        slice=slice(0, 4),
-        names=['rx', 'ry', 'rz'],
-    )
+    recoded = recode_rotation(Rotation.Representation.QUAT, Rotation.Representation.ROTVEC, signal, slice=slice(0, 4))
 
     samples = list(recoded)
     assert len(samples) == 2
-    assert recoded.names == ['rx', 'ry', 'rz']
 
     expected_rotvecs = [
         geom.Rotation.create_from([1.0, 0.0, 0.0, 0.0], Rotation.Representation.QUAT).to(
@@ -128,10 +96,7 @@ def test_recode_rotation_quat_to_rotvec_with_slice():
         assert ts_out == ts_in
 
     recoded_quat = recode_rotation(
-        Rotation.Representation.QUAT,
-        Rotation.Representation.QUAT,
-        signal,
-        slice=slice(0, 4),
+        Rotation.Representation.QUAT, Rotation.Representation.QUAT, signal, slice=slice(0, 4)
     )
     quat_samples = list(recoded_quat)
     assert len(quat_samples) == 2
@@ -142,58 +107,28 @@ def test_recode_rotation_quat_to_rotvec_with_slice():
 def test_join_relative_index_prev_next_equivalents(sig_simple):
     # [0, 1] (current and next)
     j_next = IndexOffsets(sig_simple, 0, 1)
-    assert list(j_next) == [
-        ((10, 20), 1000),
-        ((20, 30), 2000),
-        ((30, 40), 3000),
-        ((40, 50), 4000),
-    ]
+    assert list(j_next) == [((10, 20), 1000), ((20, 30), 2000), ((30, 40), 3000), ((40, 50), 4000)]
     # [0, -1] (current and previous)
     j_prev = IndexOffsets(sig_simple, 0, -1)
-    assert list(j_prev) == [
-        ((20, 10), 2000),
-        ((30, 20), 3000),
-        ((40, 30), 4000),
-        ((50, 40), 5000),
-    ]
+    assert list(j_prev) == [((20, 10), 2000), ((30, 20), 3000), ((40, 30), 4000), ((50, 40), 5000)]
 
 
 def test_join_relative_index_basic(sig_simple):
     # [0, 1] returns (v_i, v_{i+1}, t_i, t_{i+1})
     j = IndexOffsets(sig_simple, 0, 1)
-    assert list(j) == [
-        ((10, 20), 1000),
-        ((20, 30), 2000),
-        ((30, 40), 3000),
-        ((40, 50), 4000),
-    ]
+    assert list(j) == [((10, 20), 1000), ((20, 30), 2000), ((30, 40), 3000), ((40, 50), 4000)]
 
     # [0, -1] returns (v_i, v_{i-1}, t_i, t_{i-1})
     jprev = IndexOffsets(sig_simple, 0, -1)
-    assert list(jprev) == [
-        ((20, 10), 2000),
-        ((30, 20), 3000),
-        ((40, 30), 4000),
-        ((50, 40), 5000),
-    ]
+    assert list(jprev) == [((20, 10), 2000), ((30, 20), 3000), ((40, 30), 4000), ((50, 40), 5000)]
 
     # Single offset without ref timestamps -> bare values as first element in (value, ref_ts)
     j_single = IndexOffsets(sig_simple, 1)
-    assert list(j_single) == [
-        (20, 1000),
-        (30, 2000),
-        (40, 3000),
-        (50, 4000),
-    ]
+    assert list(j_single) == [(20, 1000), (30, 2000), (40, 3000), (50, 4000)]
 
     # Single offset with ref timestamps -> (value, ts_at_offset)
     j_single_ref = IndexOffsets(sig_simple, 1, include_ref_ts=True)
-    assert list(j_single_ref) == [
-        ((20, 2000), 1000),
-        ((30, 3000), 2000),
-        ((40, 4000), 3000),
-        ((50, 5000), 4000),
-    ]
+    assert list(j_single_ref) == [((20, 2000), 1000), ((30, 3000), 2000), ((40, 4000), 3000), ((50, 5000), 4000)]
 
 
 def test_join_relative_index_errors_and_edges(sig_simple, empty_signal):
@@ -207,13 +142,7 @@ def test_join_relative_index_errors_and_edges(sig_simple, empty_signal):
 def test_time_offsets_positive(sig_simple):
     to = TimeOffsets(sig_simple, 1000)
     # Positive delta: length preserved, last clamps to itself
-    assert list(to) == [
-        (20, 1000),
-        (30, 2000),
-        (40, 3000),
-        (50, 4000),
-        (50, 5000),
-    ]
+    assert list(to) == [(20, 1000), (30, 2000), (40, 3000), (50, 4000), (50, 5000)]
     # With include_ref_ts=True returns (value_at_shift, ts_at_shift)
     to_ref = TimeOffsets(sig_simple, 1000, include_ref_ts=True)
     assert list(to_ref) == [
@@ -226,12 +155,7 @@ def test_time_offsets_positive(sig_simple):
 
     # Multiple deltas without ref timestamps -> tuple of values, with clamping at the end
     to_multi = TimeOffsets(sig_simple, -1000, 0, 1000)
-    assert list(to_multi) == [
-        ((10, 20, 30), 2000),
-        ((20, 30, 40), 3000),
-        ((30, 40, 50), 4000),
-        ((40, 50, 50), 5000),
-    ]
+    assert list(to_multi) == [((10, 20, 30), 2000), ((20, 30, 40), 3000), ((30, 40, 50), 4000), ((40, 50, 50), 5000)]
 
     # Multiple deltas with ref timestamps -> (values_tuple, np.array(ref_timestamps))
     to_multi_ref = TimeOffsets(sig_simple, -1000, 0, 1000, include_ref_ts=True)
@@ -254,36 +178,19 @@ def test_time_offsets_positive(sig_simple):
 def test_time_offsets_negative(sig_simple):
     to = TimeOffsets(sig_simple, -1000)
     # Drops first; pairs each with previous at -1000
-    assert list(to) == [
-        (10, 2000),
-        (20, 3000),
-        (30, 4000),
-        (40, 5000),
-    ]
+    assert list(to) == [(10, 2000), (20, 3000), (30, 4000), (40, 5000)]
 
 
 def test_time_offsets_zero(sig_simple):
     to = TimeOffsets(sig_simple, 0)
-    assert list(to) == [
-        (10, 1000),
-        (20, 2000),
-        (30, 3000),
-        (40, 4000),
-        (50, 5000),
-    ]
+    assert list(to) == [(10, 1000), (20, 2000), (30, 3000), (40, 4000), (50, 5000)]
 
 
 def test_time_offsets_offset_rounding(sig_simple):
     # Delta that doesn't align with sampling: should carry back
     to = TimeOffsets(sig_simple, 2500)
     # All elements preserved; last clamps to itself
-    assert list(to) == [
-        (30, 1000),
-        (40, 2000),
-        (50, 3000),
-        (50, 4000),
-        (50, 5000),
-    ]
+    assert list(to) == [(30, 1000), (40, 2000), (50, 3000), (50, 4000), (50, 5000)]
     to_ref = TimeOffsets(sig_simple, 2500, include_ref_ts=True)
     assert list(to_ref) == [
         ((30, 3000), 1000),
@@ -319,13 +226,7 @@ def test_time_offsets_irregular_series():
 
     # Zero delta: identity pairs with zero time difference
     to_zero = TimeOffsets(sig, 0)
-    assert list(to_zero) == [
-        (1, 1000),
-        (2, 1300),
-        (3, 2000),
-        (4, 2700),
-        (5, 5000),
-    ]
+    assert list(to_zero) == [(1, 1000), (2, 1300), (3, 2000), (4, 2700), (5, 5000)]
 
 
 def test_time_offsets_empty_signal(empty_signal):
@@ -345,36 +246,7 @@ def test_time_offsets_positive_delta_too_large(sig_simple):
     # Positive delta strictly greater than span -> full length, pairs with last
     delta_too_large = (sig_simple.last_ts - sig_simple.start_ts) + 1
     to = TimeOffsets(sig_simple, delta_too_large)
-    assert list(to) == [
-        (50, 1000),
-        (50, 2000),
-        (50, 3000),
-        (50, 4000),
-        (50, 5000),
-    ]
-
-
-def test_time_offsets_meta_names_single_and_multi():
-    timestamps = [0, 1_000_000_000, 2_000_000_000]
-    sig = DummySignal(timestamps, [0, 1, 2], names=['value'])
-
-    single = TimeOffsets(sig, 1_000_000_000)
-    assert single.names == ['time offset 1.00 sec of value']
-
-    zero = TimeOffsets(sig, 0)
-    assert zero.names == ['value']
-
-    multi = TimeOffsets(sig, -1_000_000_000, 0, 1_000_000_000)
-    assert multi.names == ['time offset -1.00 sec of value', 'value', 'time offset 1.00 sec of value']
-
-    vector = DummySignal(timestamps + [3_000_000_000], [[1, 2], [3, 4], [5, 6], [7, 8]], names=['tx', 'ty'])
-    vec_offsets = TimeOffsets(vector, -1_000_000_000, 0, 1_000_000_000)
-    assert vec_offsets.names == ['time offset -1.00 sec of (tx ty)', '(tx ty)', 'time offset 1.00 sec of (tx ty)']
-
-
-def test_time_offsets_names_override(sig_simple):
-    offsets = TimeOffsets(sig_simple, 0, 1_000, names=['now', 'later'])
-    assert offsets.names == ['now', 'later']
+    assert list(to) == [(50, 1000), (50, 2000), (50, 3000), (50, 4000), (50, 5000)]
 
 
 def test_join_basic():
@@ -429,11 +301,7 @@ def test_index_offsets_multiple_with_ref_timestamps(sig_simple):
     # Offsets [-1, 0, 1] should return grouped timestamps as np.ndarray[int64]
     j = IndexOffsets(sig_simple, -1, 0, 1, include_ref_ts=True)
     actual = list(j)
-    exp_vals = [
-        (10, 20, 30),
-        (20, 30, 40),
-        (30, 40, 50),
-    ]
+    exp_vals = [(10, 20, 30), (20, 30, 40), (30, 40, 50)]
     exp_ts_arrays = [
         np.array([1000, 2000, 3000], dtype=np.int64),
         np.array([2000, 3000, 4000], dtype=np.int64),
@@ -459,17 +327,7 @@ def test_join_with_ref_timestamps_grouped():
 
     jn = Join(s1, s2, include_ref_ts=True)
     actual = list(jn)
-    exp_vals = [
-        (10, 1),
-        (20, 1),
-        (20, 2),
-        (30, 2),
-        (30, 3),
-        (40, 3),
-        (40, 4),
-        (50, 4),
-        (50, 5),
-    ]
+    exp_vals = [(10, 1), (20, 1), (20, 2), (30, 2), (30, 3), (40, 3), (40, 4), (50, 4), (50, 5)]
     exp_ts_arrays = [
         np.array([1000, 1500], dtype=np.int64),
         np.array([2000, 1500], dtype=np.int64),
@@ -487,24 +345,6 @@ def test_join_with_ref_timestamps_grouped():
         assert tuple(vals) == exp_vals[i]
         assert np.array_equal(ts_arr, exp_ts_arrays[i])
         assert ref_ts == exp_union_ts[i]
-
-
-def test_index_offsets_meta_names():
-    sig = DummySignal([0, 1, 2, 3], [10, 20, 30, 40], names=['value'])
-    single = IndexOffsets(sig, 1)
-    assert single.names == ['index offset 1 of value']
-
-    zero = IndexOffsets(sig, 0)
-    assert zero.names == ['value']
-
-    multi = DummySignal([0, 1, 2, 3, 4], [[1, 2], [3, 4], [5, 6], [7, 8], [9, 10]], names=['x', 'y'])
-    offsets = IndexOffsets(multi, -1, 0, 1)
-    assert offsets.names == ['index offset -1 of (x y)', '(x y)', 'index offset 1 of (x y)']
-
-
-def test_index_offsets_names_override(sig_simple):
-    offsets = IndexOffsets(sig_simple, 0, 1, names=['lead', 'lag'])
-    assert offsets.names == ['lead', 'lag']
 
 
 def test_join_equal_timestamps_drop_duplicates_default():
@@ -569,29 +409,6 @@ def test_join_three_signals_no_ref_timestamps():
     ]
 
 
-def test_join_meta_names():
-    s1 = DummySignal([0, 1], [10, 20], names=['a'])
-    s2 = DummySignal([0, 1], [[1, 2], [3, 4]], names=['b1', 'b2'])
-    s3 = DummySignal([0, 1], [5, 6])
-
-    joined = Join(s1, s2, s3)
-    assert joined.names == ['a', '(b1 b2)', '']
-
-
-def test_join_meta_names_all_none():
-    s1 = DummySignal([0, 1], [10, 20])
-    s2 = DummySignal([0, 1], [30, 40])
-
-    joined = Join(s1, s2)
-    assert joined.names is None
-
-
-def test_join_names_override(sig_simple):
-    sig2 = DummySignal([1000, 2000, 3000], [1, 2, 3])
-    joined = Join(sig_simple, sig2, names=['custom_a', 'custom_b'])
-    assert joined.names == ['custom_a', 'custom_b']
-
-
 def test_pairwise_basic_and_alignment():
     # Two scalar signals with different timestamps
     s1 = DummySignal([1000, 2000, 3000, 4000], [1, 2, 3, 4])
@@ -624,29 +441,17 @@ def test_pairwise_vectors_and_subtract():
 def test_concat_vectors_batched_and_alignment():
     # Two vector signals with different timestamps
     ts1 = [1000, 2000, 3000]
-    v1 = [
-        [1, 2],
-        [3, 4],
-        [5, 6],
-    ]
+    v1 = [[1, 2], [3, 4], [5, 6]]
     s1 = DummySignal(ts1, v1)
 
     ts2 = [1500, 2500]
-    v2 = [
-        [10],
-        [20],
-    ]
+    v2 = [[10], [20]]
     s2 = DummySignal(ts2, v2)
     cat = concat(s1, s2)
 
     # Expected union starting from max start (1500): [1500, 2000, 2500, 3000]
     # Values are concatenated vectors with carry-back
-    expected_rows = np.array([
-        [1, 2, 10],
-        [3, 4, 10],
-        [3, 4, 20],
-        [5, 6, 20],
-    ])
+    expected_rows = np.array([[1, 2, 10], [3, 4, 10], [3, 4, 20], [5, 6, 20]])
     expected_ts = [1500, 2000, 2500, 3000]
 
     # Batched request should return a single 2D array

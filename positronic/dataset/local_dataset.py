@@ -5,7 +5,7 @@ import platform
 import shutil
 import sys
 import time
-from collections.abc import Callable, Sequence
+from collections.abc import Callable
 from contextlib import suppress
 from functools import lru_cache, partial
 from importlib import metadata as importlib_metadata
@@ -74,7 +74,6 @@ class DiskEpisodeWriter(EpisodeWriter):
         self._path.mkdir(parents=True, exist_ok=False)
 
         self._writers: dict[str, SimpleSignalWriter | VideoSignalWriter] = {}
-        self._signal_names: dict[str, list[str] | None] = {}
         # Accumulated static items to be stored in a single static.json
         self._static_items: dict[str, Any] = {}
         self._finished = False
@@ -110,32 +109,16 @@ class DiskEpisodeWriter(EpisodeWriter):
 
         # Create writer on first append, choosing vector vs video based on data shape/dtype
         if signal_name not in self._writers:
-            names = self._signal_names.get(signal_name)
             if isinstance(data, np.ndarray) and data.dtype == np.uint8 and data.ndim == 3 and data.shape[2] == 3:
-                if names is not None:
-                    raise ValueError('Custom names are not supported for video signals')
                 # Image signal -> route to video writer
                 video_path = self._path / f'{signal_name}.mp4'
                 frames_index = self._path / f'{signal_name}.frames.parquet'
                 self._writers[signal_name] = VideoSignalWriter(video_path, frames_index)
-                self._signal_names[signal_name] = None
             else:
                 # Scalar/vector signal
-                self._writers[signal_name] = SimpleSignalWriter(self._path / f'{signal_name}.parquet', names=names)
-                self._signal_names[signal_name] = names
+                self._writers[signal_name] = SimpleSignalWriter(self._path / f'{signal_name}.parquet')
 
         self._writers[signal_name].append(data, ts_ns, extra_ts)
-
-    def set_signal_meta(self, signal_name: str, *, names: Sequence[str] | None = None) -> None:
-        if self._finished:
-            raise RuntimeError('Cannot set signal meta on a finished writer')
-        if self._aborted:
-            raise RuntimeError('Cannot set signal meta on an aborted writer')
-        if signal_name in self._writers:
-            raise ValueError(f"Signal '{signal_name}' already has data written")
-        if signal_name in self._signal_names:
-            raise ValueError(f"Signal '{signal_name}' already has metadata set")
-        self._signal_names[signal_name] = names
 
     def set_static(self, name: str, data: Any) -> None:
         """Set a static (non-time-varying) item by key for this episode.

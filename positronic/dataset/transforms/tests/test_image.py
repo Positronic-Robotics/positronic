@@ -27,7 +27,6 @@ def test_image_resize_basic():
     # Uniform frames should remain uniform after resize
     assert np.unique(v0).tolist() == [10]
     assert np.unique(v1).tolist() == [200]
-    assert resized.names == ['height', 'width', 'channel']
     assert resized.kind == Kind.IMAGE
 
 
@@ -50,5 +49,4 @@ def test_image_resize_with_pad_basic():
     assert np.unique(left_col).tolist() == [0]
     assert np.unique(right_col).tolist() == [0]
     assert np.unique(mid).tolist() == [255]
-    assert resized.names == ['height', 'width', 'channel']
     assert resized.kind == Kind.IMAGE
