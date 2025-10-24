@@ -1,7 +1,9 @@
-.PHONY: all build tag push clean prune help
+.PHONY: all build tag push clean prune help build-base build-training build-groot tag-training tag-groot push-training push-groot
 
 # Image configuration
-IMAGE_NAME := positronic-training
+IMAGE_NAME_TRAINING := positronic-training
+IMAGE_NAME_GROOT := positronic-groot
+IMAGE_NAME_BASE := positronic-base
 
 # Extract version from pyproject.toml
 VERSION := $(shell grep '^version = ' ../pyproject.toml | sed 's/version = "\(.*\)"/\1/')
@@ -18,17 +20,28 @@ NB_REGISTRY_FQDN := $(shell echo "$(REGISTRY_INFO)" | cut -d' ' -f2)
 # Full registry URL
 REGISTRY_URL := $(NB_REGISTRY_FQDN)/$(NB_REGISTRY_PATH)
 
-# Image tags
-TAG_LATEST := $(REGISTRY_URL)/$(IMAGE_NAME):latest
-TAG_VERSION := $(REGISTRY_URL)/$(IMAGE_NAME):v$(VERSION)
-TAG_SHA := $(REGISTRY_URL)/$(IMAGE_NAME):$(GIT_SHA)
-LOCAL_TAG := $(IMAGE_NAME):local
+# Image tags for training
+TAG_TRAINING_LATEST := $(REGISTRY_URL)/$(IMAGE_NAME_TRAINING):latest
+TAG_TRAINING_VERSION := $(REGISTRY_URL)/$(IMAGE_NAME_TRAINING):v$(VERSION)
+TAG_TRAINING_SHA := $(REGISTRY_URL)/$(IMAGE_NAME_TRAINING):$(GIT_SHA)
+LOCAL_TAG_TRAINING := $(IMAGE_NAME_TRAINING):local
+
+# Image tags for groot
+TAG_GROOT_LATEST := $(REGISTRY_URL)/$(IMAGE_NAME_GROOT):latest
+TAG_GROOT_VERSION := $(REGISTRY_URL)/$(IMAGE_NAME_GROOT):v$(VERSION)
+TAG_GROOT_SHA := $(REGISTRY_URL)/$(IMAGE_NAME_GROOT):$(GIT_SHA)
+LOCAL_TAG_GROOT := $(IMAGE_NAME_GROOT):local
+
+# Local base image tag
+LOCAL_TAG_BASE := $(IMAGE_NAME_BASE):local
 
 help:
-	@echo "Positronic Training Container - Makefile"
+	@echo "Positronic Docker Build System - Makefile"
 	@echo ""
 	@echo "Configuration:"
-	@echo "  Image Name:     $(IMAGE_NAME)"
+	@echo "  Training Image: $(IMAGE_NAME_TRAINING)"
+	@echo "  Groot Image:    $(IMAGE_NAME_GROOT)"
+	@echo "  Base Image:     $(IMAGE_NAME_BASE)"
 	@echo "  Version:        $(VERSION)"
 	@echo "  Git SHA:        $(GIT_SHA)"
 	@echo "  Registry FQDN:  $(NB_REGISTRY_FQDN)"
@@ -36,57 +49,116 @@ help:
 	@echo "  Registry URL:   $(REGISTRY_URL)"
 	@echo ""
 	@echo "Targets:"
-	@echo "  make build      Build the training image with baked source code"
-	@echo "  make tag        Tag the image (depends on build)"
-	@echo "  make push       Push all tags to Nebius (depends on tag)"
-	@echo "  make all        Build, tag, and push (alias for push)"
-	@echo "  make clean      Remove local training images"
-	@echo "  make prune      Remove dangling/unused Docker images"
-	@echo "  make help       Show this help message"
+	@echo "  make build-base      Build the base image with common dependencies"
+	@echo "  make build-training  Build the training image (depends on base)"
+	@echo "  make build-groot     Build the groot image (depends on base)"
+	@echo "  make build           Build base, training, and groot images"
+	@echo ""
+	@echo "  make tag-training    Tag the training image (depends on build-training)"
+	@echo "  make tag-groot       Tag the groot image (depends on build-groot)"
+	@echo "  make tag             Tag both images"
+	@echo ""
+	@echo "  make push-training   Push training tags to Nebius (depends on tag-training)"
+	@echo "  make push-groot      Push groot tags to Nebius (depends on tag-groot)"
+	@echo "  make push            Push all tags to Nebius (depends on tag)"
+	@echo ""
+	@echo "  make all             Build, tag, and push all images (alias for push)"
+	@echo "  make clean           Remove all local images"
+	@echo "  make prune           Remove dangling/unused Docker images"
+	@echo "  make help            Show this help message"
 
-build:
-	@echo "Building $(IMAGE_NAME) with source code baked in..."
+build-base:
+	@echo "Building base image with common dependencies..."
+	docker build -f Dockerfile.base -t $(LOCAL_TAG_BASE) ..
+
+build-training: build-base
+	@echo "Building $(IMAGE_NAME_TRAINING) with source code baked in..."
 	@if [ -z "$(VERSION)" ]; then \
 		echo "Error: Could not extract version from pyproject.toml"; \
 		exit 1; \
 	fi
-	docker build -f Dockerfile.training.cloud -t $(LOCAL_TAG) ..
+	docker build -f Dockerfile.training.cloud -t $(LOCAL_TAG_TRAINING) ..
 
-tag: build
-	@echo "Tagging image with multiple tags..."
+build-groot: build-base
+	@echo "Building $(IMAGE_NAME_GROOT) image..."
+	@if [ -z "$(VERSION)" ]; then \
+		echo "Error: Could not extract version from pyproject.toml"; \
+		exit 1; \
+	fi
+	docker build -f Dockerfile.groot -t $(LOCAL_TAG_GROOT) ..
+
+build: build-base build-training build-groot
+
+tag-training: build-training
+	@echo "Tagging training image with multiple tags..."
 	@if [ -z "$(NB_REGISTRY_FQDN)" ] || [ -z "$(NB_REGISTRY_PATH)" ]; then \
 		echo "Error: Nebius configuration not found. Please ensure:"; \
 		echo "  1. Nebius CLI is configured (run: nebius config list)"; \
 		echo "  2. Registry 'positronic' exists (run: nebius registry list)"; \
 		exit 1; \
 	fi
-	docker tag $(LOCAL_TAG) $(TAG_LATEST)
-	docker tag $(LOCAL_TAG) $(TAG_VERSION)
-	docker tag $(LOCAL_TAG) $(TAG_SHA)
+	docker tag $(LOCAL_TAG_TRAINING) $(TAG_TRAINING_LATEST)
+	docker tag $(LOCAL_TAG_TRAINING) $(TAG_TRAINING_VERSION)
+	docker tag $(LOCAL_TAG_TRAINING) $(TAG_TRAINING_SHA)
 	@echo "Tagged with:"
-	@echo "  - $(TAG_LATEST)"
-	@echo "  - $(TAG_VERSION)"
-	@echo "  - $(TAG_SHA)"
+	@echo "  - $(TAG_TRAINING_LATEST)"
+	@echo "  - $(TAG_TRAINING_VERSION)"
+	@echo "  - $(TAG_TRAINING_SHA)"
 
-push: tag
-	@echo "Pushing images to Nebius Container Registry..."
-	docker push $(TAG_LATEST)
-	docker push $(TAG_VERSION)
-	docker push $(TAG_SHA)
+tag-groot: build-groot
+	@echo "Tagging groot image with multiple tags..."
+	@if [ -z "$(NB_REGISTRY_FQDN)" ] || [ -z "$(NB_REGISTRY_PATH)" ]; then \
+		echo "Error: Nebius configuration not found. Please ensure:"; \
+		echo "  1. Nebius CLI is configured (run: nebius config list)"; \
+		echo "  2. Registry 'positronic' exists (run: nebius registry list)"; \
+		exit 1; \
+	fi
+	docker tag $(LOCAL_TAG_GROOT) $(TAG_GROOT_LATEST)
+	docker tag $(LOCAL_TAG_GROOT) $(TAG_GROOT_VERSION)
+	docker tag $(LOCAL_TAG_GROOT) $(TAG_GROOT_SHA)
+	@echo "Tagged with:"
+	@echo "  - $(TAG_GROOT_LATEST)"
+	@echo "  - $(TAG_GROOT_VERSION)"
+	@echo "  - $(TAG_GROOT_SHA)"
+
+tag: tag-training tag-groot
+
+push-training: tag-training
+	@echo "Pushing training images to Nebius Container Registry..."
+	docker push $(TAG_TRAINING_LATEST)
+	docker push $(TAG_TRAINING_VERSION)
+	docker push $(TAG_TRAINING_SHA)
 	@echo ""
-	@echo "Successfully pushed to Nebius Container Registry!"
+	@echo "Successfully pushed training images to Nebius Container Registry!"
 	@echo "To use on cloud instances, set:"
 	@echo "  export IMAGE_REGISTRY=$(REGISTRY_URL)/"
+
+push-groot: tag-groot
+	@echo "Pushing groot images to Nebius Container Registry..."
+	docker push $(TAG_GROOT_LATEST)
+	docker push $(TAG_GROOT_VERSION)
+	docker push $(TAG_GROOT_SHA)
+	@echo ""
+	@echo "Successfully pushed groot images to Nebius Container Registry!"
+	@echo "To use on cloud instances, set:"
+	@echo "  export IMAGE_REGISTRY=$(REGISTRY_URL)/"
+
+push: push-training push-groot
 
 all: push
 
 clean:
-	@echo "Removing local training images..."
-	-docker rmi $(LOCAL_TAG)
-	-docker rmi $(TAG_LATEST)
-	-docker rmi $(TAG_VERSION)
-	-docker rmi $(TAG_SHA)
-	@echo "Local images removed."
+	@echo "Removing all local images..."
+	-docker rmi $(LOCAL_TAG_BASE)
+	-docker rmi $(LOCAL_TAG_TRAINING)
+	-docker rmi $(TAG_TRAINING_LATEST)
+	-docker rmi $(TAG_TRAINING_VERSION)
+	-docker rmi $(TAG_TRAINING_SHA)
+	-docker rmi $(LOCAL_TAG_GROOT)
+	-docker rmi $(TAG_GROOT_LATEST)
+	-docker rmi $(TAG_GROOT_VERSION)
+	-docker rmi $(TAG_GROOT_SHA)
+	@echo "All local images removed."
 
 prune:
 	@echo "Pruning dangling and unused Docker images..."

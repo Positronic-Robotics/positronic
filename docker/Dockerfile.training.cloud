@@ -1,28 +1,5 @@
-FROM nvidia/cuda:12.4.1-cudnn-devel-ubuntu22.04
-
-# Copy uv for fast Python package management
-COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
-
-# Install minimal system dependencies
-RUN apt-get update && apt-get install -y \
-    build-essential \
-    curl \
-    git \
-    ffmpeg \
-    libturbojpeg \
-    && rm -rf /var/lib/apt/lists/*
-
-# Configure uv and pip timeouts
-ENV UV_LINK_MODE=copy
-ENV PIP_DEFAULT_TIMEOUT=600
-ENV UV_HTTP_TIMEOUT=600
-
-# Create Python virtual environment
-RUN uv venv --python 3.11
-
-# Activate venv for docker run
-ENV VIRTUAL_ENV=/.venv
-ENV PATH=/$VIRTUAL_ENV/bin:$PATH
+# Use local base image with common dependencies
+FROM positronic-base:local
 
 # Copy project metadata and lock for reproducible deps
 COPY pyproject.toml uv.lock ./

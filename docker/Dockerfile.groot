@@ -1,0 +1,32 @@
+# Use local base image with common dependencies
+FROM positronic-base:local
+
+# Clone gr00t repository
+WORKDIR /
+RUN git clone https://github.com/Positronic-Robotics/gr00t.git
+
+# Set working directory to gr00t
+WORKDIR /gr00t
+
+# Install base dependencies from pyproject.toml
+RUN --mount=type=cache,target=/root/.cache/uv \
+    uv pip install -e ".[base]"
+
+# Install remaining special dependencies (before packages that need build isolation disabled)
+RUN --mount=type=cache,target=/root/.cache/uv \
+    uv pip install diffusers pyzmq decord
+
+# Install packages that require special handling with --no-build-isolation
+# These packages need dependencies (like torch) already installed to build
+RUN --mount=type=cache,target=/root/.cache/uv \
+    uv pip install --no-build-isolation flash-attn
+
+# Install pytorch3d from git (requires torch at build time, so --no-build-isolation)
+RUN --mount=type=cache,target=/root/.cache/uv \
+    uv pip install --no-build-isolation "git+https://github.com/facebookresearch/pytorch3d.git@stable"
+
+# Set Python path
+ENV PYTHONPATH=/gr00t
+
+# Default command
+CMD ["bash"]
