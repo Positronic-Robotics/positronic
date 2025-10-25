@@ -45,6 +45,7 @@ class OpenPIRemotePolicy(Policy):
             action_chunk = self.client.infer(obs)['actions']
             if self.n_action_steps is not None:
                 action_chunk = action_chunk[: self.n_action_steps]
+
             self.action_queue.extend(action_chunk)
 
         action = self.action_queue.popleft()

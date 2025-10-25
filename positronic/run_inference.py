@@ -219,7 +219,9 @@ def main(
     gui = DearpyguiUi() if show_gui else None
     writer_cm = LocalDatasetWriter(Path(output_dir)) if output_dir is not None else nullcontext(None)
     with writer_cm as dataset_writer, pimm.World() as world:
-        ds_agent = wire.wire(world, inference, dataset_writer, camera_emitters, robot_arm, gripper, gui, TimeMode.CLOCK)
+        ds_agent = wire.wire(
+            world, inference, dataset_writer, camera_emitters, robot_arm, gripper, gui, TimeMode.MESSAGE
+        )
 
         keyboard = KeyboardControl()
         print('Keyboard controls: [s]tart, sto[p], [r]eset')
