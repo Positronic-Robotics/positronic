@@ -1,6 +1,5 @@
 from abc import ABC, abstractmethod
-from collections.abc import Callable, Sequence
-from functools import lru_cache
+from collections.abc import Callable, Iterator, Sequence
 from typing import Any
 
 from ..episode import Episode, EpisodeContainer
@@ -60,13 +59,13 @@ class TransformedEpisode(Episode):
     through only the listed keys from the original episode.
     """
 
+    _MISSING = object()
+
     def __init__(self, episode: Episode, *transforms: EpisodeTransform, pass_through: bool | list[str] = False):
         if not transforms:
             raise ValueError('TransformedEpisode requires at least one transform')
         self._episode = episode
         self._transforms = tuple(transforms)
-
-        self._cache = {}
 
         if isinstance(pass_through, bool):
             self._pass_through_all = pass_through
@@ -75,41 +74,40 @@ class TransformedEpisode(Episode):
             self._pass_through_all = False
             self._pass_through_keys = set(pass_through)
 
-    @property
-    @lru_cache(maxsize=1)
-    def keys(self) -> Sequence[str]:
-        # Preserve order across all transforms first, then pass-through keys
-        # from the original episode that are not overridden by any transform.
-        ordered: list[str] = []
+        self._cache: dict[str, Any] = {}
         seen: set[str] = set()
         for tf in self._transforms:
             for k in tf.keys:
                 if k not in seen:
-                    ordered.append(k)
+                    self._cache[k] = self._MISSING
                     seen.add(k)
-        for k in self._episode.keys:
+        for k in self._episode:
             if k not in seen and (self._pass_through_all or k in self._pass_through_keys):
-                ordered.append(k)
+                self._cache[k] = self._MISSING
                 seen.add(k)
-        return ordered
+
+    def __iter__(self) -> Iterator[str]:
+        yield from self._cache.keys()
+
+    def __len__(self) -> int:
+        return len(self._cache)
 
     def __getitem__(self, name: str) -> Signal[Any] | Any:
-        if name in self._cache:
+        if name not in self._cache:
+            raise KeyError(f'Key {name} not found in transformed episode. Available keys: {", ".join(self.keys())}')
+        if self._cache[name] is not self._MISSING:
             return self._cache[name]
-
-        if name not in self.keys:
-            raise KeyError(f'Key {name} not found in transformed episode. Available keys: {", ".join(self.keys)}')
 
         for tf in self._transforms:
             if name in tf.keys:
                 episode = tf.transform(self._episode)
-                for k in episode.keys:
+                for k in episode:
                     self._cache[k] = episode[k]
                 return self._cache[name]
 
         if self._pass_through_all or (self._pass_through_keys and name in self._pass_through_keys):
             return self._episode[name]
-        raise KeyError(name)
+        raise KeyError(name)  # Should never happen
 
     @property
     def meta(self) -> dict[str, Any]:

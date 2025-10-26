@@ -220,7 +220,7 @@ def test_integration_with_local_dataset_writer(tmp_path, world, clock):
     ds = LocalDataset(tmp_path)
     assert len(ds) == 1
     ep = ds[0]
-    assert set(ep.keys) == {'a', 'b', 'task', 'ok'}
+    assert set(ep.keys()) == {'a', 'b', 'task', 'ok'}
     a = ep['a']
     b = ep['b']
     assert len(a) == 1 and len(b) == 1

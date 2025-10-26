@@ -6,7 +6,7 @@ import shutil
 import sys
 import time
 from collections import deque
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from contextlib import suppress
 from functools import lru_cache, partial
 from importlib import metadata as importlib_metadata
@@ -263,16 +263,12 @@ class DiskEpisode(Episode):
                     raise ValueError('static.json must contain a JSON object (mapping)')
         return self._static
 
-    @property
-    def keys(self):
-        """Return the names of all items in this episode.
+    def __iter__(self) -> Iterator[str]:
+        yield from self._signal_factories.keys()
+        yield from self._static_data.keys()
 
-        Returns:
-            dict_keys: Item names (both dynamic signals and static items)
-        """
-        dyn = dict.fromkeys(self._signal_factories.keys(), True)
-        stat = dict.fromkeys(self._static_data.keys(), True)
-        return {**dyn, **stat}.keys()
+    def __len__(self) -> int:
+        return len(self._signal_factories) + len(self._static_data)
 
     def __getitem__(self, name: str) -> Signal[Any] | Any:
         """Get an item (dynamic Signal or static value) by name.

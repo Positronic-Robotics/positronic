@@ -38,7 +38,7 @@ def test_transform_episode_keys_and_getitem_pass_through(sig_simple):
     te = TransformedEpisode(ep, tf, pass_through=True)
 
     # Keys order: transform keys first, then original non-overlapping keys
-    assert list(te.keys) == ['a', 's', 'id', 'note']
+    assert list(te.keys()) == ['a', 's', 'id', 'note']
 
     # __getitem__ should route to transform for transform keys
     a_vals = [v for v, _ in te['a']]
@@ -72,7 +72,7 @@ def test_key_func_episode_transform(sig_simple):
     assert transformed['label'] == 'id=3'
 
     wrapped = TransformedEpisode(ep, tf, pass_through=False)
-    assert list(wrapped.keys) == ['double', 'label']
+    assert list(wrapped.keys()) == ['double', 'label']
     assert [val for val, _ in wrapped['double']] == [2 * val for val, _ in ep['s']]
     assert wrapped['label'] == 'id=3'
 
@@ -82,7 +82,7 @@ def test_transform_episode_pass_through_selected_keys(sig_simple):
     tf = _DummyTransform()
     te = TransformedEpisode(ep, tf, pass_through=['note'])
 
-    assert list(te.keys) == ['a', 's', 'note']
+    assert list(te.keys()) == ['a', 's', 'note']
     assert [v for v, _ in te['a']] == [x * 10 for x, _ in ep['s']]
     assert te['note'] == 'ok'
     with pytest.raises(KeyError):
@@ -97,7 +97,7 @@ def test_transform_episode_no_pass_through(sig_simple):
     te = TransformedEpisode(ep, tf, pass_through=False)
 
     # Only transform keys
-    assert list(te.keys) == ['a', 's']
+    assert list(te.keys()) == ['a', 's']
 
     # Transform values present
     a_vals = [v for v, _ in te['a']]
@@ -129,7 +129,7 @@ def test_transform_episode_multiple_transforms_order_and_precedence(sig_simple):
 
     # Concatenate transform keys in order; first occurrence of duplicates kept
     te = TransformedEpisode(ep, t1, t2, pass_through=True)
-    assert list(te.keys) == ['a', 's', 'b', 'id', 'z']
+    assert list(te.keys()) == ['a', 's', 'b', 'id', 'z']
 
     # 's' should come from the first transform (t1)
     s_vals = [v for v, _ in te['s']]

@@ -1,5 +1,5 @@
 from abc import ABC, abstractmethod
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Iterator, Mapping
 from contextlib import AbstractContextManager
 from typing import Any, Generic, TypeVar
 
@@ -43,18 +43,16 @@ class _EpisodeTimeIndexer:
                 raise TypeError(f'Invalid index type: {type(index_or_slice)}')
 
 
-class Episode(ABC):
-    """Abstract base class for an Episode (core concept)."""
+class Episode(ABC, Mapping[str, Any]):
+    """Abstract base class for an Episode (core concept).
 
-    @property
-    @abstractmethod
-    def keys(self) -> Sequence[str]:
-        pass
+    Subclasses must implement the following methods:
+    - __getitem__ - return a Signal or static value by name
+    - __iter__ - return an iterator over the keys
+    - __len__ - return the number of keys
+    """
 
-    @abstractmethod
-    def __getitem__(self, name: str) -> Signal[Any] | Any:
-        pass
-
+    # TODO: Replace meta with static data starting with 'meta.' prefix.
     @property
     @abstractmethod
     def meta(self) -> dict:
@@ -63,7 +61,7 @@ class Episode(ABC):
     @property
     def signals(self) -> dict[str, Signal[Any]]:
         out: dict[str, Signal[Any]] = {}
-        for k in self.keys:
+        for k in self:
             v = self[k]
             if isinstance(v, Signal):
                 out[k] = v
@@ -72,7 +70,7 @@ class Episode(ABC):
     @property
     def static(self) -> dict[str, Any]:
         out: dict[str, Any] = {}
-        for k in self.keys:
+        for k in self:
             v = self[k]
             if not isinstance(v, Signal):
                 out[k] = v
@@ -113,17 +111,15 @@ class EpisodeContainer(Episode):
         self._static = static or {}
         self._meta = meta or {}
 
-    @property
-    def start_ts(self) -> int:
-        return max([signal.start_ts for signal in self._signals.values()]) if self._signals else 0
+    def keys(self) -> list[str]:
+        return [*self._signals.keys(), *self._static.keys()]
 
-    @property
-    def last_ts(self) -> int:
-        return max([signal.last_ts for signal in self._signals.values()]) if self._signals else 0
+    def __iter__(self) -> Iterator[str]:
+        yield from self._signals.keys()
+        yield from self._static.keys()
 
-    @property
-    def keys(self):
-        return {**dict.fromkeys(self._signals.keys(), True), **dict.fromkeys(self._static.keys(), True)}.keys()
+    def __len__(self) -> int:
+        return len(self._signals) + len(self._static)
 
     def __getitem__(self, name: str) -> Signal[Any] | Any:
         if name in self._signals:

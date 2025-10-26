@@ -72,6 +72,8 @@ class Signal(Sequence[tuple[T, int]], ABC, Generic[T]):
     def __len__(self) -> int:
         raise NotImplementedError
 
+    # "Protected" API
+
     @abstractmethod
     def _ts_at(self, indices: IndicesLike) -> Sequence[int] | np.ndarray:
         raise NotImplementedError

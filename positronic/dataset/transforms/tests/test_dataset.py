@@ -52,7 +52,7 @@ def test_transformed_dataset_wraps_episode_with_transforms():
     assert len(transformed) == 1
     wrapped = transformed[0]
     assert isinstance(wrapped, Episode)
-    assert list(wrapped.keys) == ['a', 's', 'id']
+    assert list(wrapped.keys()) == ['a', 's', 'id']
 
     a_vals = [v for v, _ in wrapped['a']]
     s_vals = [v for v, _ in wrapped['s']]
@@ -70,7 +70,7 @@ def test_transformed_dataset_pass_through_selected_keys():
     transformed = TransformedDataset(dataset, tf, pass_through=['note'])
 
     wrapped = transformed[0]
-    assert list(wrapped.keys) == ['a', 's', 'note']
+    assert list(wrapped.keys()) == ['a', 's', 'note']
     assert wrapped['note'] == 'keep'
     with pytest.raises(KeyError):
         _ = wrapped['id']
