@@ -211,6 +211,35 @@ def test_dataset_add_operator_returns_concat(tmp_path):
 # --- load_all_datasets tests ---
 
 
+def test_load_all_datasets_from_root_itself(tmp_path):
+    """Test loading when the root directory itself is a dataset."""
+    root = tmp_path / 'dataset'
+
+    build_dataset_with_signal(root, [0, 1, 2])
+
+    result = load_all_datasets(root)
+
+    assert len(result) == 3
+    assert episode_ids(result[:]) == [0, 1, 2]
+
+
+def test_load_all_datasets_root_is_dataset_stops_exploration(tmp_path):
+    """Test that if root is a valid dataset, subdirectories are not explored."""
+    root = tmp_path / 'datasets'
+
+    # Root itself is a dataset
+    build_dataset_with_signal(root, [0, 1])
+    # Root also has subdirectories with datasets (but they should be ignored)
+    build_dataset_with_signal(root / 'ds1', [2, 3])
+    build_dataset_with_signal(root / 'ds2', [4, 5])
+
+    result = load_all_datasets(root)
+
+    # Should only load the root dataset, not the subdirectories
+    assert len(result) == 2
+    assert episode_ids(result[:]) == [0, 1]
+
+
 def test_load_all_datasets_single_dataset(tmp_path):
     """Test loading a directory with a single dataset."""
     root = tmp_path / 'datasets'
@@ -295,6 +324,37 @@ def test_load_all_datasets_skips_files(tmp_path):
 
     assert len(result) == 3
     assert episode_ids(result[:]) == [0, 1, 2]
+
+
+def test_load_all_datasets_deep_nesting(tmp_path):
+    """Test BFS finds datasets at different depths."""
+    root = tmp_path / 'datasets'
+    root.mkdir()
+
+    # Create datasets at different levels
+    # Level 1: not a dataset, has subdirs
+    (root / 'a').mkdir()
+    build_dataset_with_signal(root / 'a' / 'dataset1', [0, 1])
+
+    # Level 1: is a dataset (should not explore its children)
+    build_dataset_with_signal(root / 'b', [2, 3])
+    build_dataset_with_signal(root / 'b' / 'ignored', [99])  # Should be ignored
+
+    # Level 1: not a dataset, has deeper nesting
+    (root / 'c').mkdir()
+    (root / 'c' / 'level2').mkdir()
+    build_dataset_with_signal(root / 'c' / 'level2' / 'dataset2', [4, 5])
+
+    result = load_all_datasets(root)
+
+    # Should find datasets in BFS order: b (stops), a/dataset1, c/level2/dataset2
+    # b's children should be ignored because b is a valid dataset
+    assert len(result) == 6
+    ids = episode_ids(result[:])
+    # b should be first (alphabetically at same level), then a/dataset1, then c/level2/dataset2
+    assert ids == [2, 3, 0, 1, 4, 5]
+    # Verify that b/ignored (with ID 99) was NOT loaded
+    assert 99 not in ids
 
 
 def test_load_all_datasets_alphabetical_order(tmp_path):

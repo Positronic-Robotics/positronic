@@ -5,6 +5,7 @@ import platform
 import shutil
 import sys
 import time
+from collections import deque
 from collections.abc import Callable
 from contextlib import suppress
 from functools import lru_cache, partial
@@ -417,13 +418,15 @@ class LocalDatasetWriter(DatasetWriter):
 
 
 def load_all_datasets(root: Path) -> Dataset:
-    """Load and concatenate all LocalDatasets found in subdirectories of root.
+    """Load and concatenate all LocalDatasets found in root directory tree.
 
-    Scans the given directory for subdirectories and attempts to load each as a
-    LocalDataset. Successfully loaded datasets are concatenated into a single Dataset.
+    Uses breadth-first search to find datasets. For each directory, tries to load it
+    as a LocalDataset. If successful, that branch is complete. If not, expands into
+    subdirectories and tries them. Continues until all branches either resolve to
+    datasets or have no more subdirectories to explore.
 
     Args:
-        root: Path to directory containing dataset subdirectories
+        root: Path to directory that may be a dataset and/or contain dataset subdirectories
 
     Returns:
         Dataset: A ConcatDataset combining all found datasets, or a single LocalDataset
@@ -441,20 +444,24 @@ def load_all_datasets(root: Path) -> Dataset:
     if not root.is_dir():
         raise ValueError(f'{root} is not a directory')
 
-    # Try to load each subdirectory as a LocalDataset
     datasets: list[Dataset] = []
-    for subdir in sorted(root.iterdir()):
-        if not subdir.is_dir():
-            continue
+    # Queue of directories to explore
+    to_explore: deque[Path] = deque([root])
 
+    while to_explore:
+        current_path = to_explore.popleft()
+
+        # Try to load this directory as a dataset
         try:
-            dataset = LocalDataset(subdir)
-            # Only include non-empty datasets
+            dataset = LocalDataset(current_path)
             if len(dataset) > 0:
                 datasets.append(dataset)
+                continue
         except (FileNotFoundError, ValueError):
-            # Skip directories that aren't valid LocalDatasets
-            continue
+            pass
+
+        subdirs = sorted([p for p in current_path.iterdir() if p.is_dir()])
+        to_explore.extend(subdirs)
 
     if len(datasets) == 0:
         raise ValueError(f'No valid datasets found in {root}')
