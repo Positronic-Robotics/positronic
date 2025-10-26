@@ -89,7 +89,7 @@ def test_data_collection_basic_recording(tmp_path, world, clock):
 
     # Expect these keys to be present and have records under new serializers
     expected_keys = {'target_grip', 'controller_positions.right', 'grip'}
-    assert expected_keys.issubset(set(ep.keys))
+    assert expected_keys.issubset(set(ep.keys()))
 
     right_pose_sig = ep['controller_positions.right']
     tgt_grip = ep['target_grip']
@@ -183,7 +183,7 @@ def test_data_collection_with_mujoco_robot_gripper(tmp_path):
         'robot_state.ee_pose',
         'grip',
     }
-    assert expected.issubset(set(ep.keys))
+    assert expected.issubset(set(ep.keys()))
 
     # Robot/gripper signals should have at least one sample
     robot_j = ep['robot_state.q']
