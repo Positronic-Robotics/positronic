@@ -94,11 +94,14 @@ class TransformedEpisode(Episode):
         if self._cache[name] is not self._MISSING:
             return self._cache[name]
 
-        for tf in self._transforms:
+        for i, tf in enumerate(self._transforms):
             if name in tf.keys:
                 episode = tf.transform(self._episode)
-                for k in episode:
-                    self._cache[k] = episode[k]
+                # Only cache keys that this transform is the first to declare (precedence)
+                for k in tf.keys:
+                    # Check if any earlier transform declares this key
+                    if not any(k in earlier.keys for earlier in self._transforms[:i]):
+                        self._cache[k] = episode[k]
                 return self._cache[name]
 
         if self._pass_through_all or (self._pass_through_keys and name in self._pass_through_keys):

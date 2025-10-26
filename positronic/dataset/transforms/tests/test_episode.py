@@ -140,3 +140,21 @@ def test_transform_episode_multiple_transforms_order_and_precedence(sig_simple):
     b_vals = [v for v, _ in te['b']]
     assert a_vals == [x * 10 for x, _ in ep['s']]
     assert b_vals == [-(x) for x, _ in ep['s']]
+
+
+def test_transform_episode_precedence_independent_of_access_order(sig_simple):
+    """Verify that transform precedence is based on declaration order, not access order."""
+    ep = EpisodeContainer(data={'s': sig_simple, 'id': 1})
+    t1 = _DummyTransform()  # defines ["a", "s"] (s -> +1)
+    t2 = _DummyTransform2()  # defines ["b", "s"] (s -> +100)
+
+    te = TransformedEpisode(ep, t1, t2, pass_through=False)
+
+    # Access 'b' first (from t2), which should NOT affect 's' precedence
+    b_vals = [v for v, _ in te['b']]
+    assert b_vals == [-(x) for x, _ in ep['s']]
+
+    # 's' should STILL come from t1 (first transform), not t2
+    # Even though we accessed 'b' (from t2) first
+    s_vals = [v for v, _ in te['s']]
+    assert s_vals == [x + 1 for x, _ in ep['s']], "Key 's' should come from t1 regardless of access order"
