@@ -758,13 +758,13 @@ wheels = [
 
 [[package]]
 name = "configuronic"
-version = "0.2.3"
+version = "0.3.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "fire" },
     { name = "pyyaml" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/f9/71/c87b54b5d17d1ef27aa0ad507591b92f82369d37891914e91dcbcdd7bab4/configuronic-0.2.3.tar.gz", hash = "sha256:f6ff04d5bea1f6156810d9c065033271d17eb36e5e05ffebfc8faa11237dbebf", size = 30044, upload-time = "2025-09-25T12:18:07.888Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/be/ea/377116f1764482f477f78694f7a0f5d5daec38a6684832bbc87df7049b08/configuronic-0.3.0.tar.gz", hash = "sha256:8631ea568a847f340f2976294d56ec2a7d04b2267a60fd50566ac557cae4fe89", size = 33352, upload-time = "2025-10-26T13:09:13.282Z" }
 
 [[package]]
 name = "coverage"
