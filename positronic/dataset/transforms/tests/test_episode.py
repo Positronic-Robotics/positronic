@@ -2,12 +2,7 @@ import numpy as np
 import pytest
 
 from positronic.dataset.episode import EpisodeContainer
-from positronic.dataset.transforms import (
-    Elementwise,
-    EpisodeTransform,
-    KeyFuncEpisodeTransform,
-    TransformedEpisode,
-)
+from positronic.dataset.transforms import Elementwise, EpisodeTransform, KeyFuncEpisodeTransform, TransformedEpisode
 
 from ...tests.utils import DummySignal
 
@@ -27,16 +22,13 @@ class _DummyTransform(EpisodeTransform):
     def keys(self):
         return list(self._keys)
 
-    def transform(self, name: str, episode):
-        if name == 'a':
-            # 10x the base signal
-            base = episode['s']
-            return Elementwise(base, lambda seq: np.asarray(seq) * 10)
-        if name == 's':
-            # Override original 's' by adding 1
-            base = episode['s']
-            return Elementwise(base, lambda seq: np.asarray(seq) + 1)
-        raise KeyError(name)
+    def transform(self, episode):
+        # 10x the base signal for 'a'
+        base_s = episode['s']
+        a_signal = Elementwise(base_s, lambda seq: np.asarray(seq) * 10)
+        # Override original 's' by adding 1
+        s_signal = Elementwise(base_s, lambda seq: np.asarray(seq) + 1)
+        return EpisodeContainer(signals={'a': a_signal, 's': s_signal}, static={}, meta=episode.meta)
 
 
 def test_transform_episode_keys_and_getitem_pass_through(sig_simple):
@@ -69,21 +61,15 @@ def test_transform_episode_keys_and_getitem_pass_through(sig_simple):
 def test_key_func_episode_transform(sig_simple):
     ep = EpisodeContainer(signals={'s': sig_simple}, static={'id': 3})
     tf = KeyFuncEpisodeTransform(
-        double=lambda episode: Elementwise(
-            episode['s'],
-            lambda seq: np.asarray(seq) * 2,
-        ),
+        double=lambda episode: Elementwise(episode['s'], lambda seq: np.asarray(seq) * 2),
         label=lambda episode: f'id={episode["id"]}',
     )
 
     assert list(tf.keys) == ['double', 'label']
 
-    doubled = tf.transform('double', ep)
-    assert [val for val, _ in doubled] == [2 * val for val, _ in ep['s']]
-    assert tf.transform('label', ep) == 'id=3'
-
-    with pytest.raises(KeyError):
-        tf.transform('missing', ep)
+    transformed = tf.transform(ep)
+    assert [val for val, _ in transformed['double']] == [2 * val for val, _ in ep['s']]
+    assert transformed['label'] == 'id=3'
 
     wrapped = TransformedEpisode(ep, tf, pass_through=False)
     assert list(wrapped.keys) == ['double', 'label']
@@ -92,10 +78,7 @@ def test_key_func_episode_transform(sig_simple):
 
 
 def test_transform_episode_pass_through_selected_keys(sig_simple):
-    ep = EpisodeContainer(
-        signals={'s': sig_simple},
-        static={'id': 7, 'note': 'ok', 'skip': 'nope'},
-    )
+    ep = EpisodeContainer(signals={'s': sig_simple}, static={'id': 7, 'note': 'ok', 'skip': 'nope'})
     tf = _DummyTransform()
     te = TransformedEpisode(ep, tf, pass_through=['note'])
 
@@ -132,14 +115,11 @@ class _DummyTransform2(EpisodeTransform):
     def keys(self):
         return ['b', 's']
 
-    def transform(self, name: str, episode):
-        if name == 'b':
-            base = episode['s']
-            return Elementwise(base, lambda seq: np.asarray(seq) * -1)
-        if name == 's':
-            base = episode['s']
-            return Elementwise(base, lambda seq: np.asarray(seq) + 100)
-        raise KeyError(name)
+    def transform(self, episode):
+        base = episode['s']
+        b_signal = Elementwise(base, lambda seq: np.asarray(seq) * -1)
+        s_signal = Elementwise(base, lambda seq: np.asarray(seq) + 100)
+        return EpisodeContainer(signals={'b': b_signal, 's': s_signal}, static={}, meta=episode.meta)
 
 
 def test_transform_episode_multiple_transforms_order_and_precedence(sig_simple):

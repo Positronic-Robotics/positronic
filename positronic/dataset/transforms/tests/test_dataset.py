@@ -16,16 +16,13 @@ class _DummyTransform(EpisodeTransform):
     def keys(self):
         return list(self._keys)
 
-    def transform(self, name: str, episode):
-        if name == 'a':
-            # 10x the base signal
-            base = episode['s']
-            return Elementwise(base, lambda seq: np.asarray(seq) * 10)
-        if name == 's':
-            # Override original 's' by adding 1
-            base = episode['s']
-            return Elementwise(base, lambda seq: np.asarray(seq) + 1)
-        raise KeyError(name)
+    def transform(self, episode):
+        # 10x the base signal for 'a'
+        base_s = episode['s']
+        a_signal = Elementwise(base_s, lambda seq: np.asarray(seq) * 10)
+        # Override original 's' by adding 1
+        s_signal = Elementwise(base_s, lambda seq: np.asarray(seq) + 1)
+        return EpisodeContainer(signals={'a': a_signal, 's': s_signal}, static={}, meta=episode.meta)
 
 
 class _DummyDataset(Dataset):

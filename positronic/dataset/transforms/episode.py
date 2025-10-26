@@ -1,8 +1,9 @@
 from abc import ABC, abstractmethod
 from collections.abc import Callable, Sequence
+from functools import lru_cache
 from typing import Any
 
-from ..episode import Episode
+from ..episode import Episode, EpisodeContainer
 from ..signal import Signal
 
 
@@ -16,13 +17,13 @@ class EpisodeTransform(ABC):
         ...
 
     @abstractmethod
-    def transform(self, name: str, episode: Episode) -> Signal[Any] | Any:
-        """For given output key, return the transformed signal or static value."""
+    def transform(self, episode: Episode) -> Episode:
+        """Transform an episode and return a new episode with transformed signals and static values."""
         ...
 
     @property
     def meta(self) -> dict[str, Any]:
-        """Metadata for this transform."""
+        """Metadata for this transform. Transformed episodes can have different metadata from transform metadata."""
         return {}
 
 
@@ -36,10 +37,14 @@ class KeyFuncEpisodeTransform(EpisodeTransform):
     def keys(self) -> Sequence[str]:
         return self._transform_fns.keys()
 
-    def transform(self, name: str, episode: Episode) -> Signal[Any] | Any:
-        if name not in self._transform_fns:
-            raise KeyError(f'Unknown key: {name}, expected one of {self._transform_fns.keys()}')
-        return self._transform_fns[name](episode)
+    def transform(self, episode: Episode) -> Episode:
+        sigs, stats = {}, {}
+        for name, fn in self._transform_fns.items():
+            res = fn(episode)
+            col = sigs if isinstance(res, Signal) else stats
+            col[name] = res
+
+        return EpisodeContainer(sigs, stats, episode.meta)
 
 
 class TransformedEpisode(Episode):
@@ -60,6 +65,9 @@ class TransformedEpisode(Episode):
             raise ValueError('TransformedEpisode requires at least one transform')
         self._episode = episode
         self._transforms = tuple(transforms)
+
+        self._cache = {}
+
         if isinstance(pass_through, bool):
             self._pass_through_all = pass_through
             self._pass_through_keys = set()
@@ -68,6 +76,7 @@ class TransformedEpisode(Episode):
             self._pass_through_keys = set(pass_through)
 
     @property
+    @lru_cache(maxsize=1)
     def keys(self) -> Sequence[str]:
         # Preserve order across all transforms first, then pass-through keys
         # from the original episode that are not overridden by any transform.
@@ -85,14 +94,24 @@ class TransformedEpisode(Episode):
         return ordered
 
     def __getitem__(self, name: str) -> Signal[Any] | Any:
-        # If any transform defines this key, the first one takes precedence.
+        if name in self._cache:
+            return self._cache[name]
+
+        if name not in self.keys:
+            raise KeyError(f'Key {name} not found in transformed episode. Available keys: {", ".join(self.keys)}')
+
         for tf in self._transforms:
             if name in tf.keys:
-                return tf.transform(name, self._episode)
+                episode = tf.transform(self._episode)
+                for k in episode.keys:
+                    self._cache[k] = episode[k]
+                return self._cache[name]
+
         if self._pass_through_all or (self._pass_through_keys and name in self._pass_through_keys):
             return self._episode[name]
         raise KeyError(name)
 
     @property
     def meta(self) -> dict[str, Any]:
+        # TODO: Should we add metadata from the transforms?
         return self._episode.meta
