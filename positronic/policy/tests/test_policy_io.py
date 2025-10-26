@@ -57,7 +57,7 @@ def test_absolute_position_action_encode_decode_quat():
 
     pose = [np.concatenate([t[i], q[i].as_quat]).astype(np.float32) for i in range(len(ts))]
 
-    ep = EpisodeContainer(signals={'robot_commands.pose': DummySignal(ts, pose), 'target_grip': DummySignal(ts, g)})
+    ep = EpisodeContainer({'robot_commands.pose': DummySignal(ts, pose), 'target_grip': DummySignal(ts, g)})
 
     act = AbsolutePositionAction('robot_commands.pose', 'target_grip', Rotation.Representation.QUAT)
     sig = act.encode_episode(ep)
@@ -84,13 +84,11 @@ def test_relative_target_position_action_encode_decode_quat():
     cur_pose = [np.concatenate([t_cur[0], q_cur[0].as_quat]).astype(np.float32)]
     tgt_pose = [np.concatenate([t_tgt[0], q_tgt[0].as_quat]).astype(np.float32)]
 
-    ep = EpisodeContainer(
-        signals={
-            'robot_state.ee_pose': DummySignal(ts, cur_pose),
-            'robot_commands.pose': DummySignal(ts, tgt_pose),
-            'target_grip': DummySignal(ts, g_tgt),
-        }
-    )
+    ep = EpisodeContainer({
+        'robot_state.ee_pose': DummySignal(ts, cur_pose),
+        'robot_commands.pose': DummySignal(ts, tgt_pose),
+        'target_grip': DummySignal(ts, g_tgt),
+    })
 
     act = RelativeTargetPositionAction(Rotation.Representation.QUAT)
     vec = list(act.encode_episode(ep))[0][0]

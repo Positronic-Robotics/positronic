@@ -37,13 +37,9 @@ class KeyFuncEpisodeTransform(EpisodeTransform):
         return self._transform_fns.keys()
 
     def transform(self, episode: Episode) -> Episode:
-        sigs, stats = {}, {}
-        for name, fn in self._transform_fns.items():
-            res = fn(episode)
-            col = sigs if isinstance(res, Signal) else stats
-            col[name] = res
-
-        return EpisodeContainer(sigs, stats, episode.meta)
+        # TODO: Should we lazy-fy this?
+        data = {name: fn(episode) for name, fn in self._transform_fns.items()}
+        return EpisodeContainer(data, episode.meta)
 
 
 class TransformedEpisode(Episode):

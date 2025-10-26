@@ -306,12 +306,12 @@ class DiskEpisode(Episode):
             self._meta = meta
             self._meta['path'] = str(self._dir.expanduser().resolve(strict=False))
             size_bytes = 0
-            for entry in self._dir.rglob('*'):
-                if entry.is_file():
-                    with suppress(OSError):
+            with suppress(OSError):
+                for entry in self._dir.rglob('*'):
+                    if entry.is_file():
                         size_bytes += entry.stat().st_size
             self._meta['size_mb'] = size_bytes / (1024 * 1024)
-        return dict(self._meta)
+        return self._meta.copy()
 
     @property
     def signals(self) -> dict[str, Signal[Any]]:

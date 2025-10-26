@@ -22,7 +22,7 @@ class _DummyTransform(EpisodeTransform):
         a_signal = Elementwise(base_s, lambda seq: np.asarray(seq) * 10)
         # Override original 's' by adding 1
         s_signal = Elementwise(base_s, lambda seq: np.asarray(seq) + 1)
-        return EpisodeContainer(signals={'a': a_signal, 's': s_signal}, static={}, meta=episode.meta)
+        return EpisodeContainer(data={'a': a_signal, 's': s_signal}, meta=episode.meta)
 
 
 class _DummyDataset(Dataset):
@@ -43,7 +43,7 @@ class _DummyDataset(Dataset):
 def test_transformed_dataset_wraps_episode_with_transforms():
     sig_simple = DummySignal([1000, 2000, 3000, 4000, 5000], [10, 20, 30, 40, 50])
     base_meta = {'a': sig_simple.meta, 's': sig_simple.meta}
-    episode = EpisodeContainer(signals={'s': sig_simple}, static={'id': 99}, meta=base_meta)
+    episode = EpisodeContainer(data={'s': sig_simple, 'id': 99}, meta=base_meta)
     dataset = _DummyDataset([episode])
     tf = _DummyTransform()
 
@@ -63,7 +63,7 @@ def test_transformed_dataset_wraps_episode_with_transforms():
 
 def test_transformed_dataset_pass_through_selected_keys():
     sig_simple = DummySignal([1000, 2000], [10, 20])
-    episode = EpisodeContainer(signals={'s': sig_simple}, static={'id': 42, 'note': 'keep', 'skip': 'drop'})
+    episode = EpisodeContainer(data={'s': sig_simple, 'id': 42, 'note': 'keep', 'skip': 'drop'})
     dataset = _DummyDataset([episode])
     tf = _DummyTransform()
 
@@ -84,7 +84,7 @@ def test_transformed_dataset_sequence_indices_return_transformed_episodes():
         ts = [1000, 2000]
         values = [idx * 10 + 1, idx * 10 + 2]
         sig = DummySignal(ts, values)
-        episodes.append(EpisodeContainer(signals={'s': sig}, static={'id': idx}))
+        episodes.append(EpisodeContainer(data={'s': sig, 'id': idx}))
 
     dataset = _DummyDataset(episodes)
     tf = _DummyTransform()

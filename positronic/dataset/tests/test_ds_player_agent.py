@@ -22,12 +22,7 @@ def test_replays_signals_in_time_order():
     outputs = {'a': RecordingEmitter(), 'b': RecordingEmitter()}
     agent, command_receiver, finished = create_agent(outputs)
 
-    episode = EpisodeContainer(
-        signals={
-            'a': DummySignal([1000, 3000], ['a1', 'a2']),
-            'b': DummySignal([2000], ['b1']),
-        }
-    )
+    episode = EpisodeContainer(data={'a': DummySignal([1000, 3000], ['a1', 'a2']), 'b': DummySignal([2000], ['b1'])})
 
     start_cmd = DsPlayerStartCommand(episode, start_ts=1000)
     command_receiver.push(start_cmd)
@@ -53,10 +48,7 @@ def test_start_ts_defaults_to_episode_start():
     agent, command_receiver, finished = create_agent(outputs)
 
     episode = EpisodeContainer(
-        signals={
-            'a': DummySignal([1000, 3000], ['drop', 'keep']),
-            'b': DummySignal([2000], ['b1']),
-        }
+        data={'a': DummySignal([1000, 3000], ['drop', 'keep']), 'b': DummySignal([2000], ['b1'])}
     )
 
     command_receiver.push(DsPlayerStartCommand(episode))
@@ -81,7 +73,7 @@ def test_respects_end_timestamp():
     outputs = {'a': RecordingEmitter()}
     agent, command_receiver, _ = create_agent(outputs)
 
-    episode = EpisodeContainer(signals={'a': DummySignal([1000, 2000, 3000], ['first', 'excluded', 'after'])})
+    episode = EpisodeContainer(data={'a': DummySignal([1000, 2000, 3000], ['first', 'excluded', 'after'])})
     command_receiver.push(DsPlayerStartCommand(episode, start_ts=1000, end_ts=2000))
 
     clock = MockClock()
@@ -96,7 +88,7 @@ def test_abort_stops_without_emitting_finished():
     outputs = {'a': RecordingEmitter()}
     agent, command_receiver, finished = create_agent(outputs)
 
-    episode = EpisodeContainer(signals={'a': DummySignal([1000, 2000], ['first', 'second'])})
+    episode = EpisodeContainer(data={'a': DummySignal([1000, 2000], ['first', 'second'])})
     command_receiver.push(DsPlayerStartCommand(episode, start_ts=1000))
 
     clock = MockClock()
@@ -123,7 +115,7 @@ def test_raises_for_static_only_output():
     outputs = {'static': RecordingEmitter()}
     agent, command_receiver, _ = create_agent(outputs)
 
-    episode = EpisodeContainer(signals={'dynamic': DummySignal([1000], [1])}, static={'static': 42})
+    episode = EpisodeContainer(data={'dynamic': DummySignal([1000], [1]), 'static': 42})
 
     command_receiver.push(DsPlayerStartCommand(episode, start_ts=1000))
 

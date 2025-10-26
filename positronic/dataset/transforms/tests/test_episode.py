@@ -28,12 +28,12 @@ class _DummyTransform(EpisodeTransform):
         a_signal = Elementwise(base_s, lambda seq: np.asarray(seq) * 10)
         # Override original 's' by adding 1
         s_signal = Elementwise(base_s, lambda seq: np.asarray(seq) + 1)
-        return EpisodeContainer(signals={'a': a_signal, 's': s_signal}, static={}, meta=episode.meta)
+        return EpisodeContainer(data={'a': a_signal, 's': s_signal}, meta=episode.meta)
 
 
 def test_transform_episode_keys_and_getitem_pass_through(sig_simple):
     # Build an episode with one signal 's' and two static fields
-    ep = EpisodeContainer(signals={'s': sig_simple}, static={'id': 7, 'note': 'ok'}, meta={'origin': 'unit'})
+    ep = EpisodeContainer(data={'s': sig_simple, 'id': 7, 'note': 'ok'}, meta={'origin': 'unit'})
     tf = _DummyTransform()
     te = TransformedEpisode(ep, tf, pass_through=True)
 
@@ -59,7 +59,7 @@ def test_transform_episode_keys_and_getitem_pass_through(sig_simple):
 
 
 def test_key_func_episode_transform(sig_simple):
-    ep = EpisodeContainer(signals={'s': sig_simple}, static={'id': 3})
+    ep = EpisodeContainer(data={'s': sig_simple, 'id': 3})
     tf = KeyFuncEpisodeTransform(
         double=lambda episode: Elementwise(episode['s'], lambda seq: np.asarray(seq) * 2),
         label=lambda episode: f'id={episode["id"]}',
@@ -78,7 +78,7 @@ def test_key_func_episode_transform(sig_simple):
 
 
 def test_transform_episode_pass_through_selected_keys(sig_simple):
-    ep = EpisodeContainer(signals={'s': sig_simple}, static={'id': 7, 'note': 'ok', 'skip': 'nope'})
+    ep = EpisodeContainer(data={'s': sig_simple, 'id': 7, 'note': 'ok', 'skip': 'nope'})
     tf = _DummyTransform()
     te = TransformedEpisode(ep, tf, pass_through=['note'])
 
@@ -92,7 +92,7 @@ def test_transform_episode_pass_through_selected_keys(sig_simple):
 
 
 def test_transform_episode_no_pass_through(sig_simple):
-    ep = EpisodeContainer(signals={'s': sig_simple}, static={'id': 7})
+    ep = EpisodeContainer(data={'s': sig_simple, 'id': 7})
     tf = _DummyTransform()
     te = TransformedEpisode(ep, tf, pass_through=False)
 
@@ -119,11 +119,11 @@ class _DummyTransform2(EpisodeTransform):
         base = episode['s']
         b_signal = Elementwise(base, lambda seq: np.asarray(seq) * -1)
         s_signal = Elementwise(base, lambda seq: np.asarray(seq) + 100)
-        return EpisodeContainer(signals={'b': b_signal, 's': s_signal}, static={}, meta=episode.meta)
+        return EpisodeContainer(data={'b': b_signal, 's': s_signal}, meta=episode.meta)
 
 
 def test_transform_episode_multiple_transforms_order_and_precedence(sig_simple):
-    ep = EpisodeContainer(signals={'s': sig_simple}, static={'id': 42, 'z': 9})
+    ep = EpisodeContainer(data={'s': sig_simple, 'id': 42, 'z': 9})
     t1 = _DummyTransform()  # defines ["a", "s"] (s -> +1)
     t2 = _DummyTransform2()  # defines ["b", "s"] (s -> +100)
 

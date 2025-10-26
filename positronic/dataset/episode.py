@@ -104,41 +104,25 @@ class Episode(ABC, Mapping[str, Any]):
 class EpisodeContainer(Episode):
     """In-memory view over an Episode's items."""
 
-    def __init__(
-        self, signals: dict[str, Signal[Any]], static: dict[str, Any] | None = None, meta: dict[str, Any] | None = None
-    ) -> None:
-        self._signals = signals
-        self._static = static or {}
+    def __init__(self, data: dict[str, Signal[Any] | Any], meta: dict[str, Any] | None = None) -> None:
+        self._data = data
         self._meta = meta or {}
 
     def keys(self) -> list[str]:
-        return [*self._signals.keys(), *self._static.keys()]
+        return list(self._data.keys())
 
     def __iter__(self) -> Iterator[str]:
-        yield from self._signals.keys()
-        yield from self._static.keys()
+        yield from self._data.keys()
 
     def __len__(self) -> int:
-        return len(self._signals) + len(self._static)
+        return len(self._data)
 
     def __getitem__(self, name: str) -> Signal[Any] | Any:
-        if name in self._signals:
-            return self._signals[name]
-        if name in self._static:
-            return self._static[name]
-        raise KeyError(name)
+        return self._data[name]
 
     @property
     def meta(self) -> dict:
-        return dict(self._meta)
-
-    @property
-    def signals(self) -> dict[str, Signal[Any]]:
-        return dict(self._signals)
-
-    @property
-    def static(self) -> dict[str, Any]:
-        return dict(self._static)
+        return self._meta.copy()
 
 
 class EpisodeWriter(AbstractContextManager, ABC, Generic[T]):
