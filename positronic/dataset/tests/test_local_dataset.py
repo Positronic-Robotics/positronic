@@ -5,7 +5,7 @@ import pytest
 
 from positronic.dataset import Episode
 from positronic.dataset.dataset import ConcatDataset
-from positronic.dataset.local_dataset import LocalDataset, LocalDatasetWriter
+from positronic.dataset.local_dataset import LocalDataset, LocalDatasetWriter, load_all_datasets
 
 
 def test_local_dataset_writer_creates_structure_and_persists(tmp_path):
@@ -206,3 +206,163 @@ def test_dataset_add_operator_returns_concat(tmp_path):
     combined = ds1 + ds2
     assert isinstance(combined, ConcatDataset)
     assert episode_ids(combined[:]) == [0, 1, 2]
+
+
+# --- load_all_datasets tests ---
+
+
+def test_load_all_datasets_single_dataset(tmp_path):
+    """Test loading a directory with a single dataset."""
+    root = tmp_path / 'datasets'
+    root.mkdir()
+
+    # Create one dataset
+    build_dataset_with_signal(root / 'ds1', [0, 1, 2])
+
+    # Load all datasets
+    result = load_all_datasets(root)
+
+    assert len(result) == 3
+    assert episode_ids(result[:]) == [0, 1, 2]
+
+
+def test_load_all_datasets_multiple_datasets(tmp_path):
+    """Test loading a directory with multiple datasets."""
+    root = tmp_path / 'datasets'
+    root.mkdir()
+
+    # Create three datasets
+    build_dataset_with_signal(root / 'ds1', [0, 1])
+    build_dataset_with_signal(root / 'ds2', [2, 3, 4])
+    build_dataset_with_signal(root / 'ds3', [5])
+
+    # Load all datasets
+    result = load_all_datasets(root)
+
+    assert len(result) == 6
+    assert episode_ids(result[:]) == [0, 1, 2, 3, 4, 5]
+
+
+def test_load_all_datasets_skips_empty_datasets(tmp_path):
+    """Test that empty datasets are skipped."""
+    root = tmp_path / 'datasets'
+    root.mkdir()
+
+    # Create one valid dataset and one empty directory
+    build_dataset_with_signal(root / 'ds1', [0, 1])
+    (root / 'empty_ds').mkdir()
+
+    # Load all datasets
+    result = load_all_datasets(root)
+    assert len(result) == 2
+    assert episode_ids(result[:]) == [0, 1]
+
+
+def test_load_all_datasets_skips_non_dataset_directories(tmp_path):
+    """Test that non-dataset directories are skipped gracefully."""
+    root = tmp_path / 'datasets'
+    root.mkdir()
+
+    # Create a valid dataset
+    build_dataset_with_signal(root / 'ds1', [0, 1])
+
+    # Create some non-dataset directories
+    (root / 'random_dir').mkdir()
+    (root / 'another_dir').mkdir()
+    (root / 'random_dir' / 'file.txt').write_text('not a dataset')
+
+    # Load all datasets
+    result = load_all_datasets(root)
+
+    assert len(result) == 2
+    assert episode_ids(result[:]) == [0, 1]
+
+
+def test_load_all_datasets_skips_files(tmp_path):
+    """Test that regular files in the root are ignored."""
+    root = tmp_path / 'datasets'
+    root.mkdir()
+
+    # Create a valid dataset
+    build_dataset_with_signal(root / 'ds1', [0, 1, 2])
+
+    # Create some regular files
+    (root / 'readme.txt').write_text('readme')
+    (root / 'config.json').write_text('{}')
+
+    # Load all datasets
+    result = load_all_datasets(root)
+
+    assert len(result) == 3
+    assert episode_ids(result[:]) == [0, 1, 2]
+
+
+def test_load_all_datasets_alphabetical_order(tmp_path):
+    """Test that datasets are loaded in alphabetical order."""
+    root = tmp_path / 'datasets'
+    root.mkdir()
+
+    # Create datasets with names that would be out of order if not sorted
+    build_dataset_with_signal(root / 'ds_c', [6, 7])
+    build_dataset_with_signal(root / 'ds_a', [0, 1])
+    build_dataset_with_signal(root / 'ds_b', [2, 3, 4, 5])
+
+    # Load all datasets
+    result = load_all_datasets(root)
+
+    assert len(result) == 8
+    assert episode_ids(result[:]) == [0, 1, 2, 3, 4, 5, 6, 7]
+
+
+def test_load_all_datasets_nonexistent_directory(tmp_path):
+    """Test that FileNotFoundError is raised for non-existent directory."""
+    missing_path = tmp_path / 'nonexistent'
+
+    with pytest.raises(FileNotFoundError, match='does not exist'):
+        load_all_datasets(missing_path)
+
+
+def test_load_all_datasets_not_a_directory(tmp_path):
+    """Test that ValueError is raised when path is a file, not a directory."""
+    file_path = tmp_path / 'file.txt'
+    file_path.write_text('not a directory')
+
+    with pytest.raises(ValueError, match='is not a directory'):
+        load_all_datasets(file_path)
+
+
+def test_load_all_datasets_no_valid_datasets(tmp_path):
+    """Test that ValueError is raised when no valid datasets are found."""
+    root = tmp_path / 'datasets'
+    root.mkdir()
+
+    # Create only non-dataset directories
+    (root / 'random1').mkdir()
+    (root / 'random2').mkdir()
+    (root / 'file.txt').write_text('file')
+
+    with pytest.raises(ValueError, match='No valid datasets found'):
+        load_all_datasets(root)
+
+
+def test_load_all_datasets_with_tilde_path(tmp_path):
+    """Test that tilde paths are expanded correctly."""
+    import tempfile
+
+    home = Path.home()
+    with tempfile.TemporaryDirectory(dir=home) as tmpdir:
+        actual_root = Path(tmpdir) / 'datasets'
+        actual_root.mkdir()
+
+        # Create datasets
+        build_dataset_with_signal(actual_root / 'ds1', [0, 1])
+        build_dataset_with_signal(actual_root / 'ds2', [2, 3])
+
+        # Test with tilde path
+        relative_to_home = actual_root.relative_to(home)
+        tilde_path = Path('~') / relative_to_home
+
+        result = load_all_datasets(tilde_path)
+
+        assert len(result) == 4
+        assert episode_ids(result[:]) == [0, 1, 2, 3]

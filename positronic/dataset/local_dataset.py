@@ -16,7 +16,7 @@ import numpy as np
 
 from positronic.utils.git import get_git_state
 
-from .dataset import Dataset, DatasetWriter
+from .dataset import ConcatDataset, Dataset, DatasetWriter
 from .episode import EPISODE_SCHEMA_VERSION, SIGNAL_FACTORY_T, Episode, EpisodeWriter, T
 from .signal import Signal
 from .vector import SimpleSignal, SimpleSignalWriter
@@ -414,3 +414,52 @@ class LocalDatasetWriter(DatasetWriter):
 
     def __exit__(self, exc_type, exc, tb) -> None:
         pass
+
+
+def load_all_datasets(root: Path) -> Dataset:
+    """Load and concatenate all LocalDatasets found in subdirectories of root.
+
+    Scans the given directory for subdirectories and attempts to load each as a
+    LocalDataset. Successfully loaded datasets are concatenated into a single Dataset.
+
+    Args:
+        root: Path to directory containing dataset subdirectories
+
+    Returns:
+        Dataset: A ConcatDataset combining all found datasets, or a single LocalDataset
+                 if only one is found
+
+    Raises:
+        FileNotFoundError: If root does not exist
+        ValueError: If no valid datasets are found in root or if root is not a directory
+    """
+
+    root = Path(root).expanduser()
+    if not root.exists():
+        raise FileNotFoundError(f'Directory {root} does not exist')
+
+    if not root.is_dir():
+        raise ValueError(f'{root} is not a directory')
+
+    # Try to load each subdirectory as a LocalDataset
+    datasets: list[Dataset] = []
+    for subdir in sorted(root.iterdir()):
+        if not subdir.is_dir():
+            continue
+
+        try:
+            dataset = LocalDataset(subdir)
+            # Only include non-empty datasets
+            if len(dataset) > 0:
+                datasets.append(dataset)
+        except (FileNotFoundError, ValueError):
+            # Skip directories that aren't valid LocalDatasets
+            continue
+
+    if len(datasets) == 0:
+        raise ValueError(f'No valid datasets found in {root}')
+
+    if len(datasets) == 1:
+        return datasets[0]
+
+    return ConcatDataset(*datasets)
