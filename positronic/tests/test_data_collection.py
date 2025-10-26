@@ -1,3 +1,4 @@
+from collections.abc import Callable
 from pathlib import Path
 
 import numpy as np
@@ -5,6 +6,7 @@ import pytest
 
 import pimm
 from pimm.tests.testing import MockClock
+from positronic import wire
 from positronic.data_collection import DataCollectionController, controller_positions_serializer
 from positronic.dataset.ds_writer_agent import DsWriterAgent, DsWriterCommand, DsWriterCommandType, Serializers
 from positronic.dataset.local_dataset import LocalDataset, LocalDatasetWriter
@@ -36,29 +38,82 @@ def assert_strictly_increasing(sig):
         assert sig[i][1] > sig[i - 1][1]
 
 
-def build_collection(world, out_dir: Path):
-    dc = DataCollectionController(operator_position=None)
+class DummyRobot(pimm.ControlSystem):
+    def __init__(self):
+        self.commands = pimm.FakeReceiver(self)
+        self.state = pimm.FakeEmitter(self)
+
+    def run(self, should_stop: pimm.SignalReceiver, _clock: pimm.Clock):
+        while not should_stop.value:
+            yield pimm.Sleep(0.1)
+
+
+def build_collection(world, out_dir: Path, *, metadata_getter: Callable[[], dict[str, object]] | None = None):
+    dc = DataCollectionController(operator_position=None, metadata_getter=metadata_getter)
+    robot = DummyRobot()
 
     writer_cm = LocalDatasetWriter(out_dir)
     writer = writer_cm.__enter__()
-    agent = DsWriterAgent(writer)
-    agent.add_signal('target_grip')
-    agent.add_signal('controller_positions', controller_positions_serializer)
-    agent.add_signal('grip')
+    ds_agent = wire.wire(world, dc, writer, {}, robot, None, None)
+    assert ds_agent is not None
+    ds_agent.add_signal('controller_positions', controller_positions_serializer)
 
-    world.connect(dc.target_grip, agent.inputs['target_grip'])
-    world.connect(dc.ds_agent_commands, agent.command)
+    world.connect(dc.ds_agent_commands, ds_agent.command)
 
     ctrl_em_dc = world.pair(dc.controller_positions)
-    ctrl_em_agent = world.pair(agent.inputs['controller_positions'])
+    ctrl_em_agent = world.pair(ds_agent.inputs['controller_positions'])
     buttons_em = world.pair(dc.buttons_receiver)
-    grip_em = world.pair(agent.inputs['grip'])
+    grip_em = world.pair(ds_agent.inputs['grip'])
 
-    return dc, agent, ctrl_em_dc, ctrl_em_agent, buttons_em, grip_em, writer_cm
+    return dc, ds_agent, ctrl_em_dc, ctrl_em_agent, buttons_em, grip_em, writer_cm, robot
+
+
+def test_data_collection_records_task_metadata(tmp_path, world, clock):
+    call_count = 0
+
+    def metadata_getter():
+        nonlocal call_count
+        call_count += 1
+        return {'task': 'stack-blocks'}
+
+    (dc, agent, ctrl_em_dc, ctrl_em_agent, buttons_em, grip_em, writer_cm, robot) = build_collection(
+        world, tmp_path, metadata_getter=metadata_getter
+    )
+
+    right_pose = Transform3D(translation=np.array([0.2, 0.1, -0.1]), rotation=Rotation.identity)
+    controller_payload = {'left': None, 'right': right_pose}
+
+    def emit_pose():
+        ctrl_em_dc.emit(controller_payload)
+        ctrl_em_agent.emit(controller_payload)
+        grip_em.emit(0.33)
+
+    def send_buttons(**kwargs):
+        buttons_em.emit(make_buttons(**kwargs))
+
+    driver = ManualDriver([
+        (lambda: send_buttons(trigger=0.0, B=False), 0.002),
+        (lambda: send_buttons(trigger=0.9, B=True), 0.002),
+        (emit_pose, 0.002),
+        (lambda: send_buttons(trigger=0.1, B=False), 0.002),
+        (lambda: send_buttons(trigger=0.8, B=True), 0.002),
+        (None, 0.005),
+    ])
+
+    with writer_cm:
+        scheduler = world.start([dc, agent, robot, driver])
+        drive_scheduler(scheduler, clock=clock, steps=400)
+
+    assert call_count == 1
+
+    dataset = LocalDataset(tmp_path)
+    assert len(dataset) == 1
+    episode = dataset[0]
+    assert episode['task'] == 'stack-blocks'
 
 
 def test_data_collection_basic_recording(tmp_path, world, clock):
-    dc, agent, ctrl_em_dc, ctrl_em_agent, buttons_em, grip_em, writer_cm = build_collection(world, tmp_path)
+    dc, agent, ctrl_em_dc, ctrl_em_agent, buttons_em, grip_em, writer_cm, robot = build_collection(world, tmp_path)
 
     # A simple right-hand pose and button frames
     right_pose = Transform3D(translation=np.array([0.1, 0.2, 0.3]), rotation=Rotation.identity)
@@ -80,7 +135,7 @@ def test_data_collection_basic_recording(tmp_path, world, clock):
     driver = ManualDriver([(start_episode, 0.001), (emit_signals, 0.001), (stop_episode, 0.001)])
 
     with writer_cm:
-        scheduler = world.start([dc, agent, driver])
+        scheduler = world.start([dc, agent, robot, driver])
         drive_scheduler(scheduler, clock=clock)
 
     ds = LocalDataset(tmp_path)

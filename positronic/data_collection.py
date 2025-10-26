@@ -205,21 +205,21 @@ def main(
     output_dir: str | None = None,
     stream_video_to_webxr: str | None = None,
     operator_position: OperatorPosition = OperatorPosition.FRONT,
+    task: str | None = None,
 ):
     """Runs data collection in real hardware."""
     # Convert camera instances to emitters for wire()
     camera_instances = cameras or {}
     camera_emitters = {name: cam.frame for name, cam in camera_instances.items()}
-    data_collection = DataCollectionController(operator_position.value)
+    static_getter = None if task is None else lambda: {'task': task}
+    data_collection = DataCollectionController(operator_position.value, metadata_getter=static_getter)
 
     writer_cm = LocalDatasetWriter(Path(output_dir)) if output_dir is not None else nullcontext(None)
     with writer_cm as dataset_writer, pimm.World() as world:
         ds_agent = wire.wire(world, data_collection, dataset_writer, camera_emitters, robot_arm, gripper, None)
         _wire(world, ds_agent, data_collection, webxr, robot_arm, sound)
 
-        bg_cs = [webxr]
-        bg_cs.extend(camera_instances.values())
-        bg_cs.extend([ds_agent, robot_arm, gripper, sound])
+        bg_cs = [webxr, *camera_instances.values(), ds_agent, robot_arm, gripper, sound]
 
         if stream_video_to_webxr is not None:
             world.connect(
@@ -251,6 +251,7 @@ def main_sim(
     output_dir: str | None = None,
     fps: int = 30,
     operator_position: OperatorPosition = OperatorPosition.FRONT,
+    task: str | None = None,
 ):
     """Runs data collection in simulator."""
 
@@ -269,7 +270,10 @@ def main_sim(
     gripper = MujocoGripper(sim, actuator_name='actuator8_ph', joint_name='finger_joint1_ph')
 
     def metadata_getter():
-        return {k: v.tolist() for k, v in sim.save_state().items()}
+        result = {k: v.tolist() for k, v in sim.save_state().items()}
+        if task is not None:
+            result['task'] = task
+        return result
 
     data_collection = DataCollectionController(operator_position.value, metadata_getter=metadata_getter)
 
