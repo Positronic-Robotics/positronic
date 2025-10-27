@@ -17,9 +17,11 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from starlette.requests import Request
 
+import positronic.cfg.dataset
 from positronic import utils
+from positronic.dataset.dataset import Dataset
 from positronic.dataset.local_dataset import LocalDataset
-from positronic.server.dataset_utils import get_dataset_info, get_episodes_list, stream_episode_rrd
+from positronic.server.dataset_utils import get_dataset_info, get_dataset_root, get_episodes_list, stream_episode_rrd
 
 # Global app state
 app_state: dict[str, object] = {'dataset': None, 'loading_state': True, 'root': '', 'cache_dir': ''}
@@ -34,7 +36,7 @@ def _get_rrd_cache_path(episode_id: int) -> str:
     if ds is None:
         raise RuntimeError('Dataset not loaded')
     cache_root = str(app_state['cache_dir'])
-    ds_id = str(Path(ds.root).resolve()).replace(os.sep, '_').replace(':', '')
+    ds_id = str(Path(str(app_state['root'])).resolve()).replace(os.sep, '_').replace(':', '')
     episode_cache_dir = os.path.join(cache_root, ds_id)
     os.makedirs(episode_cache_dir, exist_ok=True)
     return os.path.join(episode_cache_dir, f'episode_{episode_id}.rrd')
@@ -174,29 +176,30 @@ async def api_episode_rrd(episode_id: int):
     )
 
 
-@cfn.config()
+@cfn.config(dataset=positronic.cfg.dataset.local)
 def main(
-    root: str,
+    dataset: Dataset,
     cache_dir: str = os.path.expanduser('~/.cache/positronic/server/'),
     host: str = '0.0.0.0',
     port: int = 5000,
     debug: bool = False,
     reset_cache: bool = False,
 ):
-    """Visualize a LocalDataset with Rerun.
+    """Visualize a Dataset with Rerun.
 
     Args:
-        root: Path to dataset root directory
+        dataset: Dataset to visualize
         cache_dir: Directory to cache generated RRD files
         host: Server host
         port: Server port
         debug: Enable debug logging
         reset_cache: If True, clear cache_dir at startup
     """
+    root = get_dataset_root(dataset)
     deb_level = logging.DEBUG if debug else logging.INFO
     logging.basicConfig(level=deb_level, format='%(asctime)s - %(levelname)s - %(message)s')
 
-    app_state['root'] = str(root)
+    app_state['root'] = root
     app_state['cache_dir'] = cache_dir
     app_state['loading_state'] = True
 
@@ -210,7 +213,7 @@ def main(
 
     def load_dataset():
         try:
-            ds = LocalDataset(Path(root))
+            ds = dataset
             logging.info(f'Dataset loaded. Episodes: {len(ds)}')
             app_state['dataset'] = ds
             app_state['loading_state'] = False

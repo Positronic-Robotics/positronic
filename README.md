@@ -201,11 +201,11 @@ Inspect recordings before training:
 
 ```bash
 python -m positronic.server.positronic_server \
-    --root=~/datasets/stack_cubes_raw \
+    --dataset.path=~/datasets/stack_cubes_raw \
     --port=5001
 ```
 
-The viewer loads `LocalDataset` in the background, generates `.rrd` files with the copies of each episode under `~/.cache/positronic/server/`, and serves a Rerun viewer per episode.
+The viewer loads `LocalDataset` in the background, generates `.rrd` files with the copies of each episode under `~/.cache/positronic/server/`, and serves a Rerun viewer per episode. You could also load `TransformedDataset` by specifying it with the `--dataset` argument.
 
 ![Dataset viewer](positronic/assets/docs/server_screenshot.png)
 

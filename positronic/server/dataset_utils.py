@@ -11,10 +11,9 @@ import numpy as np
 import rerun as rr
 import rerun.blueprint as rrb
 
+from positronic.dataset.dataset import Dataset
 from positronic.dataset.episode import Episode
-from positronic.dataset.local_dataset import LocalDataset
-from positronic.dataset.signal import Signal
-from positronic.dataset.video import VideoSignal
+from positronic.dataset.signal import Kind, Signal
 from positronic.utils.rerun_compat import flatten_numeric, log_numeric_series, log_series_styles, set_timeline_time
 
 
@@ -28,12 +27,12 @@ class _SignalInfo:
 
 def _infer_signal_info(ep: Episode, name: str) -> _SignalInfo:
     v = ep[name]
-    if isinstance(v, VideoSignal):
+    if v.kind == Kind.IMAGE:
         # Decode first frame to get shape
         frame, _ts = v[0]
         h, w = int(frame.shape[0]), int(frame.shape[1])
         return _SignalInfo(name=name, kind='video', shape=(h, w, 3), dtype='uint8')
-    elif isinstance(v, Signal):
+    elif v.kind in Kind.NUMERIC:
         # Peek first value to infer shape/dtype
         if len(v) == 0:
             return _SignalInfo(name=name, kind='scalar', shape=(), dtype=None)
@@ -66,7 +65,7 @@ def _infer_features(ep: Episode) -> dict[str, dict[str, Any]]:
     return features
 
 
-def get_dataset_info(ds: LocalDataset) -> dict[str, Any]:
+def get_dataset_info(ds: Dataset) -> dict[str, Any]:
     """Return basic info + feature descriptions for the dataset."""
     num_eps = len(ds)
     features: dict[str, dict[str, Any]] = {}
@@ -75,10 +74,10 @@ def get_dataset_info(ds: LocalDataset) -> dict[str, Any]:
         ep0 = ds[0]
         features = _infer_features(ep0)
 
-    return {'root': str(ds.root), 'num_episodes': num_eps, 'features': features}
+    return {'root': get_dataset_root(ds), 'num_episodes': num_eps, 'features': features}
 
 
-def get_episodes_list(ds: LocalDataset) -> list[dict[str, Any]]:
+def get_episodes_list(ds: Dataset) -> list[dict[str, Any]]:
     return [
         {'index': idx, 'duration': ep.duration_ns / 1e9, 'task': ep.static.get('task', None)}
         for idx, ep in enumerate(ds)
@@ -94,7 +93,7 @@ def _collect_signal_groups(ep: Episode) -> tuple[list[str], list[str], dict[str,
     signal_names: list[str] = []
     signal_dims: dict[str, int] = {}
     for name, sig in ep.signals.items():
-        if isinstance(sig, VideoSignal):
+        if sig.kind == Kind.IMAGE:
             try:
                 frame, _ = sig[0]
                 h, w = frame.shape[:2]
@@ -163,8 +162,8 @@ def _signal_samples(sig: Signal[Any]) -> Iterator[tuple[Any, int]]:
     length = len(sig)
     if length == 0:
         return iter(())
-    timestamps = sig._ts_at(slice(0, length))
-    values = sig._values_at(slice(0, length))
+    timestamps = sig._ts_at(np.arange(0, length))
+    values = sig._values_at(np.arange(0, length))
 
     def _generator():
         for idx in range(length):
@@ -226,13 +225,13 @@ class _BinaryStreamDrainer:
 
 
 @rr.recording_stream.recording_stream_generator_ctx
-def stream_episode_rrd(ds: LocalDataset, episode_id: int) -> Iterator[bytes]:
+def stream_episode_rrd(ds: Dataset, episode_id: int) -> Iterator[bytes]:
     """Yield an episode RRD as chunks while it is being generated."""
 
     ep = ds[episode_id]
     logging.info(f'Streaming RRD for episode {episode_id}')
 
-    recording_id = f'positronic_ds_{Path(ds.root).name}_episode_{episode_id}'
+    recording_id = f'positronic_ds_{Path(get_dataset_root(ds)).name}_episode_{episode_id}'
     rec = rr.new_recording(application_id=recording_id)
     drainer = _BinaryStreamDrainer(rec.binary_stream(), min_bytes=2**20)
 
@@ -253,3 +252,18 @@ def stream_episode_rrd(ds: LocalDataset, episode_id: int) -> Iterator[bytes]:
             yield from drainer.drain()
 
     yield from drainer.drain(force=True)
+
+
+def get_dataset_root(dataset: Dataset) -> str:
+    """Extract root path from Dataset type."""
+    from positronic.dataset.local_dataset import LocalDataset
+    from positronic.dataset.transforms import TransformedDataset
+
+    if isinstance(dataset, LocalDataset):
+        return str(dataset.root)
+
+    # If it's a TransformedDataset, unwrap to get the underlying LocalDataset
+    if isinstance(dataset, TransformedDataset):
+        return get_dataset_root(dataset._dataset)
+
+    raise ValueError('Dataset does not provide root path information.')
