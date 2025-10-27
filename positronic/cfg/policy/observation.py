@@ -4,14 +4,11 @@ from positronic.policy.observation import ObservationEncoder
 
 
 @cfn.config(image_size=(224, 224))
-def eepose_grip(wrist_camera: str, side_camera: str, image_size: tuple[int, int]):
-    state = {'observation.state': ['robot_state.ee_pose', 'grip']}
+def eepose_grip(state_name: str, image_size: tuple[int, int], image_mappings: dict[str, str]):
+    #  wrist_camera: str, side_camera: str
+    state = {state_name: ['robot_state.ee_pose', 'grip']}
     state_dim = 8
-    images = {
-        'observation.images.left': (wrist_camera, image_size),
-        'observation.images.side': (side_camera, image_size),
-    }
-
+    images = {k: (v, image_size) for k, v in image_mappings.items()}
     result = ObservationEncoder(state=state, images=images)
     result.meta['gr00t_modality'] = {
         'state': {
@@ -19,7 +16,7 @@ def eepose_grip(wrist_camera: str, side_camera: str, image_size: tuple[int, int]
             'robot_position_translation': {'start': 4, 'end': 7},
             'grip': {'start': 7, 'end': 8},
         },
-        'video': {
+        'video': {  # TODO: Generalize this
             'ego_view': {'original_key': 'observation.images.left'},
             'side_image': {'original_key': 'observation.images.side'},
         },
@@ -35,19 +32,18 @@ def eepose_grip(wrist_camera: str, side_camera: str, image_size: tuple[int, int]
     return result
 
 
-eepose_mujoco = eepose_grip.override(wrist_camera='image.handcam_left', side_camera='image.back_view')
-eepose_real = eepose_grip.override(wrist_camera='image.wrist', side_camera='image.exterior')
-
-
-@cfn.config(exterior_camera='image.exterior', wrist_camera='image.wrist', image_size=(224, 224))
-def openpi_positronic(exterior_camera: str, wrist_camera: str, image_size: tuple[int, int]):
-    return ObservationEncoder(
-        state={'observation/state': ['robot_state.ee_pose', 'grip']},
-        images={
-            'observation/wrist_image': (wrist_camera, image_size),
-            'observation/image': (exterior_camera, image_size),
-        },
-    )
+eepose_mujoco = eepose_grip.override(
+    state_name='observation.state',
+    image_mappings={'observation.images.left': 'image.handcam_left', 'observation.images.side': 'image.back_view'},
+)
+eepose_real = eepose_grip.override(
+    state_name='observation.state',
+    image_mappings={'observation.images.left': 'image.wrist', 'observation.images.side': 'image.exterior'},
+)
+openpi_positronic = eepose_grip.override(
+    state_name='observation/state',
+    image_mappings={'observation/wrist_image': 'image.wrist', 'observation/image': 'image.exterior'},
+)
 
 
 @cfn.config(exterior_camera='image.exterior', wrist_camera='image.wrist', image_size=(224, 224))

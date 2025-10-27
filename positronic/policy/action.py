@@ -68,17 +68,12 @@ class AbsolutePositionAction(RotationTranslationGripAction):
 
     def encode_episode(self, episode: Episode) -> Signal[np.ndarray]:
         pose = episode[self.tgt_ee_pose_key]
-        rotations = transforms.recode_rotation(RotRep.QUAT, self.rot_rep, pose, slice=slice(3, None))
-        return transforms.concat(
-            rotations, transforms.view(pose, slice(0, 3)), episode[self.tgt_grip_key], dtype=np.float32
-        )
+        pose = transforms.recode_transform(RotRep.QUAT, self.rot_rep, pose)
+        return transforms.concat(pose, episode[self.tgt_grip_key], dtype=np.float32)
 
     def decode(self, action_vector: np.ndarray, inputs: dict[str, np.ndarray]) -> tuple[command.CommandType, float]:
-        rotation = action_vector[: self.rot_rep.size].reshape(self.rot_rep.shape)
-        rot = geom.Rotation.create_from(rotation, self.rot_rep)
-        trans = action_vector[self.rot_rep.size : self.rot_rep.size + 3]
-        target_pose = geom.Transform3D(trans, rot)
-        target_grip = action_vector[self.rot_rep.size + 3].item()
+        target_pose = geom.Transform3D.from_vector(action_vector[:-1], self.rot_rep)
+        target_grip = action_vector[-1].item()
         return (command.CartesianPosition(pose=target_pose), target_grip)
 
 

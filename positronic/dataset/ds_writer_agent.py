@@ -81,7 +81,7 @@ class Serializers:
     @staticmethod
     def transform_3d(x: geom.Transform3D) -> np.ndarray:
         """Serialize a Transform3D into a 7D vector [tx, ty, tz, qx, qy, qz, qw]."""
-        return np.concatenate([x.translation, x.rotation.as_quat])
+        return x.as_vector(geom.Rotation.Representation.QUAT)
 
     @staticmethod
     def robot_state(state: roboarm.State) -> dict[str, np.ndarray] | None:
