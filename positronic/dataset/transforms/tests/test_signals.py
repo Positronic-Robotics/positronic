@@ -10,6 +10,7 @@ from positronic.dataset.transforms import (
     concat,
     pairwise,
     recode_rotation,
+    recode_transform,
     view,
 )
 from positronic.geom import Rotation
@@ -102,6 +103,39 @@ def test_recode_rotation_quat_to_rotvec_with_slice():
     assert len(quat_samples) == 2
     np.testing.assert_allclose(quat_samples[0][0], np.array([1.0, 0.0, 0.0, 0.0], dtype=np.float32))
     np.testing.assert_allclose(quat_samples[1][0], np.array([0.0, 1.0, 0.0, 0.0], dtype=np.float32))
+
+
+def test_recode_transform_rotation_matrix_to_quat():
+    transforms = [
+        geom.Transform3D(
+            translation=np.array([0.1, -0.2, 0.3]), rotation=Rotation.from_euler(np.array([0.1, 0.2, -0.3]))
+        ),
+        geom.Transform3D(
+            translation=np.array([-0.4, 0.5, 0.6]), rotation=Rotation.from_euler(np.array([-0.2, 0.4, 0.1]))
+        ),
+    ]
+    ts = [1000, 2000]
+    vals = [t.as_vector(Rotation.Representation.ROTATION_MATRIX) for t in transforms]
+    signal = DummySignal(ts, vals)
+
+    recoded = recode_transform(Rotation.Representation.ROTATION_MATRIX, Rotation.Representation.QUAT, signal)
+    samples = list(recoded)
+
+    assert len(samples) == len(transforms)
+    for (vec, ts_out), transform, ts_in in zip(samples, transforms, ts, strict=False):
+        expected = transform.as_vector(Rotation.Representation.QUAT)
+        np.testing.assert_allclose(vec, expected)
+        assert ts_out == ts_in
+
+
+def test_recode_transform_identity_returns_original_signal():
+    ts = [5000]
+    vals = [geom.Transform3D.identity.as_vector(Rotation.Representation.QUAT)]
+    signal = DummySignal(ts, vals)
+
+    recoded = recode_transform(Rotation.Representation.QUAT, Rotation.Representation.QUAT, signal)
+
+    assert recoded is signal
 
 
 def test_join_relative_index_prev_next_equivalents(sig_simple):

@@ -375,6 +375,11 @@ class LazySequence(Sequence[U]):
         return self._fn(self._seq[int(index)])
 
 
+def lazy_sequence(fn: Callable[[T], U]) -> Callable[[Sequence[T]], Sequence[U]]:
+    """Decorator that wraps an elementwise transform into a lazy sequence transform."""
+    return partial(LazySequence, fn=fn)
+
+
 def _concat_per_frame(dtype: np.dtype | None, x: Sequence[tuple]) -> np.ndarray:
     """Pickable callable that concatenates multiple array signals into a single array signal."""
     # x is a sequence of tuples (v1, v2, ..., vN) for the requested indices.
@@ -460,6 +465,30 @@ def pairwise(a: Signal[Any], b: Signal[Any], op: Callable[[Any, Any], Any]) -> S
     return Elementwise(Join(a, b), _PairwiseMap(op))
 
 
+def recode_transform(rep_from: RotRep, rep_to: RotRep, signal: NpSignal) -> NpSignal:
+    """Return a Signal view with SE(3) vectors recoded to a new rotation representation.
+
+    The input signal must yield vectors produced by ``Transform3D.as_vector``
+    that concatenate a translation with a rotation encoded using ``rep_from``.
+    Values are lazily converted so that each frame's rotation is expressed in
+    ``rep_to`` while translations and timestamps remain untouched.
+
+    Args:
+        rep_from: Rotation representation used by the input signal values.
+        rep_to: Desired rotation representation for the output signal.
+        signal: Source signal providing Transform3D vectors encoded with
+            ``rep_from``.
+    """
+    if rep_from == rep_to:
+        return signal
+
+    @lazy_sequence
+    def decode(x: np.ndarray) -> np.ndarray:
+        return geom.Transform3D.from_vector(x, rep_from).as_vector(rep_to)
+
+    return Elementwise(signal, decode)
+
+
 def recode_rotation(rep_from: RotRep, rep_to: RotRep, signal: NpSignal, slice: slice | None = None) -> NpSignal:
     """Return a Signal view with rotation vectors recoded to a different representation.
 
@@ -472,12 +501,10 @@ def recode_rotation(rep_from: RotRep, rep_to: RotRep, signal: NpSignal, slice: s
     if rep_from == rep_to and slice is None:
         return signal
 
+    @lazy_sequence
     def decode(x: np.ndarray) -> np.ndarray:
         if slice is not None:
             x = x[slice]
         return geom.Rotation.create_from(x, rep_from).to(rep_to).flatten()
 
-    def fn(x: Sequence[np.ndarray]) -> Sequence[np.ndarray]:
-        return LazySequence(x, decode)
-
-    return Elementwise(signal, fn)
+    return Elementwise(signal, decode)
