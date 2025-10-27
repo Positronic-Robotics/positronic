@@ -44,15 +44,16 @@ def log_series_styles(base_path: str, names: Sequence[str], *, static: bool = Tr
     if not names:
         return
 
-    if hasattr(rr, 'SeriesPoints'):
-        if len(names) > 1:
-            rr.log(base_path, rr.SeriesPoints(names=list(names), marker='asterisk'), static=static)
-        else:
-            rr.log(base_path, rr.SeriesPoint(name=names[0], marker='asterisk'), static=static)
+    if hasattr(rr, 'SeriesLines'):
+        rr.log(base_path, rr.SeriesLines(names=list(names)), static=static)
+        return
+
+    if len(names) == 1:
+        rr.log(base_path, rr.SeriesLine(name=names[0]), static=static)
         return
 
     for idx, name in enumerate(names):
-        rr.log(f'{base_path}/{idx}', rr.SeriesPoint(name=name, marker='asterisk'), static=static)
+        rr.log(f'{base_path}/{idx}', rr.SeriesLine(name=name), static=static)
 
 
 def _to_nanos(timestamp: Any) -> int | None:
