@@ -32,7 +32,7 @@ def _infer_signal_info(ep: Episode, name: str) -> _SignalInfo:
         frame, _ts = v[0]
         h, w = int(frame.shape[0]), int(frame.shape[1])
         return _SignalInfo(name=name, kind='video', shape=(h, w, 3), dtype='uint8')
-    elif v.kind in Kind.NUMERIC:
+    elif v.kind == Kind.NUMERIC:
         # Peek first value to infer shape/dtype
         if len(v) == 0:
             return _SignalInfo(name=name, kind='scalar', shape=(), dtype=None)
