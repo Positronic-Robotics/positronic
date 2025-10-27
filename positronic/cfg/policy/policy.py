@@ -43,3 +43,10 @@ def openpi(host: str, port: int, n_action_steps: int | None):
 droid = openpi.override(n_action_steps=15)
 act = cfn.Config(_get_act_policy, use_temporal_ensembler=False)
 diffusion = cfn.Config(_get_diffusion_policy)
+
+
+@cfn.config()
+def groot(host: str = 'localhost', port: int = 5555, timeout_ms: int = 15000):
+    from positronic.policy.gr00t import Gr00tPolicy
+
+    return Gr00tPolicy(host, port, timeout_ms)

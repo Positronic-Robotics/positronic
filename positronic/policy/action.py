@@ -146,6 +146,7 @@ class RelativeTargetPositionAction(RotationTranslationGripAction):
         return transforms.concat(rotations, translations, grips, dtype=np.float32)
 
     def decode(self, action: dict[str, Any], inputs: dict[str, np.ndarray]) -> tuple[command.CommandType, float]:
+        print(action)
         action_vector = action['action']
         rotation = action_vector[: self.rot_rep.size].reshape(self.rot_rep.shape)
         q_diff = geom.Rotation.create_from(rotation, self.rot_rep)

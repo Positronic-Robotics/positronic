@@ -88,7 +88,7 @@ def openpi_droid(exterior_camera: str, wrist_camera: str, image_size: tuple[int,
 
 
 @cfn.config()
-def gr00t_oxe_droid():
+def groot_oxe_droid():
     state_spec = {'observation.state': ['robot_state.ee_pose', 'grip']}
     result = ObservationEncoder(
         state=state_spec,
@@ -118,4 +118,18 @@ def gr00t_oxe_droid():
             'dtype': 'video',
         }
     result.meta['lerobot_features'] = lerobot_features
+    return result
+
+
+@cfn.config()
+def groot_infer():
+    state_spec = {'observation.state': ['robot_state.ee_pose', 'grip']}
+    result = ObservationEncoder(
+        state=state_spec,
+        images={
+            'video.exterior_image_1': ('image.exterior', (224, 224)),
+            'video.exterior_image_2': ('image.exterior', (224, 224)),
+            'video.wrist_image': ('image.wrist', (224, 224)),
+        },
+    )
     return result

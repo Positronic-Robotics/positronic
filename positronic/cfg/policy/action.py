@@ -51,7 +51,7 @@ def joint_delta(num_joints: int):
 
 
 @cfn.config()
-def gr00t_oxe_droid():
+def groot_oxe_droid():
     from positronic.policy.action import RelativeTargetPositionAction
 
     result = RelativeTargetPositionAction(rotation_representation=RotRep.ROTVEC)

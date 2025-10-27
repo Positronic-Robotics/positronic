@@ -219,6 +219,12 @@ class Gr00tPolicy(Policy):
         self._client = ExternalRobotInferenceClient(host, port, timeout_ms)
 
     def select_action(self, obs: dict[str, Any]) -> dict[str, Any]:
+        print('--------------------------------')
+        print({k: v.shape if isinstance(v, np.ndarray) else v for k, v in obs.items()})
+        print('--------------------------------')
         result = self._client.get_action(obs)
         assert isinstance(result, dict), f'Expected dictionary, got {type(result)}'
+        print('*********')
+        print({k: v.shape if isinstance(v, np.ndarray) else v for k, v in result.items()})
+        print('*********')
         return result
