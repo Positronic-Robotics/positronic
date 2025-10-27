@@ -17,22 +17,7 @@ def absolute_position(rotation_representation: RotRep, tgt_ee_pose_key: str, tgt
             'target_grip': {'start': 7, 'end': 8},
         }
     }
-    result.meta['lerobot_features'] = {
-        'action': {
-            'shape': (8,),
-            'names': [
-                'rotation_0',
-                'rotation_1',
-                'rotation_2',
-                'rotation_3',
-                'translation_x',
-                'translation_y',
-                'translation_z',
-                'grip',
-            ],
-            'dtype': 'float32',
-        }
-    }
+    result.meta['lerobot_features'] = {'action': {'shape': (8,), 'names': ['actions'], 'dtype': 'float32'}}
     return result
 
 

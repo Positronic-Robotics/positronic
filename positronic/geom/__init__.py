@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from collections.abc import Sequence
 from enum import Enum
 from typing import Any
@@ -13,7 +15,7 @@ class Transform3DMeta(type):
 
 # y = R * x + t
 class Transform3D(metaclass=Transform3DMeta):
-    identity: 'Transform3D'
+    identity: Transform3D
     __slots__ = ('translation', 'rotation')
 
     def __init__(self, translation=None, rotation=None):
@@ -40,6 +42,16 @@ class Transform3D(metaclass=Transform3DMeta):
         matrix[:3, 3] = t
 
         return matrix
+
+    def as_vector(self, rep: Rotation.Representation | str) -> np.ndarray:
+        return np.concatenate([self.translation, self.rotation.to(rep).reshape(-1)])
+
+    @staticmethod
+    def from_vector(vector: np.ndarray, rep: Rotation.Representation | str) -> Transform3D:
+        rotation = vector[3:]
+        if rep == Rotation.Representation.ROTATION_MATRIX and rotation.shape == (9,):
+            rotation = rotation.reshape(3, 3)
+        return Transform3D(vector[:3], rep.from_value(rotation))
 
     @staticmethod
     def from_matrix(matrix):
@@ -131,7 +143,7 @@ class Rotation(np.ndarray, metaclass=RotationMeta):
         ROTATION_MATRIX = 'rotation_matrix'
         ROTVEC = 'rotvec'
 
-        def from_value(self, value: Any) -> 'Rotation':
+        def from_value(self, value: Any) -> Rotation:
             if self == Rotation.Representation.QUAT:
                 return Rotation.from_quat(value)
             elif self == Rotation.Representation.QUAT_XYZW:
@@ -211,7 +223,7 @@ class Rotation(np.ndarray, metaclass=RotationMeta):
         return Rotation(w, -x, -y, -z)
 
     @classmethod
-    def from_quat(cls, quat: Sequence[float]) -> 'Rotation':
+    def from_quat(cls, quat: Sequence[float]) -> Rotation:
         """
         Create a rotation from a 4-element numpy array. The order of the elements is (w, x, y, z).
 
@@ -224,7 +236,7 @@ class Rotation(np.ndarray, metaclass=RotationMeta):
         return cls(*quat)
 
     @classmethod
-    def from_quat_xyzw(cls, quat: Sequence[float]) -> 'Rotation':
+    def from_quat_xyzw(cls, quat: Sequence[float]) -> Rotation:
         """
         Create a rotation from a 4-element numpy array. The order of the elements is (x, y, z, w).
 
@@ -241,7 +253,7 @@ class Rotation(np.ndarray, metaclass=RotationMeta):
         """
         Create a rotation from a rotation matrix.
         """
-        m = np.asarray(matrix, dtype=np.float64)[:3, :3]
+        m = np.asarray(matrix)[:3, :3]
         t = np.trace(m)
         if t > 0.0:
             s = np.sqrt(t + 1.0)
@@ -296,7 +308,7 @@ class Rotation(np.ndarray, metaclass=RotationMeta):
         return cls(w, x, y, z)
 
     @classmethod
-    def from_rotvec(cls, rotvec: np.ndarray) -> 'Rotation':
+    def from_rotvec(cls, rotvec: np.ndarray) -> Rotation:
         """
         Create rotation from a rotation vector.
 
@@ -322,7 +334,7 @@ class Rotation(np.ndarray, metaclass=RotationMeta):
         return cls(w, x, y, z)
 
     @classmethod
-    def create_from(cls, value: Any, representation: Representation | str) -> 'Rotation':
+    def create_from(cls, value: Any, representation: Representation | str) -> Rotation:
         """
         Create a rotation from any supported rotation representation.
 

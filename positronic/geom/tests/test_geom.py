@@ -43,6 +43,86 @@ class TestTransform3D(unittest.TestCase):
         expected_result = np.array([2, 1, 4])
         np.testing.assert_array_almost_equal(result, expected_result, decimal=4)
 
+    def test_inv_returns_inverse_transform(self):
+        translation = np.array([0.5, -1.2, 2.3])
+        rotation = Rotation(0.7071, 0, 0.7071, 0)  # 90 degrees rotation around y-axis
+        transform = Transform3D(translation, rotation)
+
+        composed = transform * transform.inv
+
+        np.testing.assert_allclose(composed.translation, Transform3D.identity.translation, atol=1e-4, rtol=0)
+        np.testing.assert_allclose(composed.rotation.as_quat, Transform3D.identity.rotation.as_quat, atol=1e-4, rtol=0)
+
+    def test_identity_is_zero_translation_identity_rotation(self):
+        identity = Transform3D.identity
+
+        np.testing.assert_array_almost_equal(identity.translation, np.zeros(3))
+        np.testing.assert_array_almost_equal(identity.rotation.as_quat, np.array([1.0, 0.0, 0.0, 0.0]))
+
+    def test_copy_creates_independent_transform(self):
+        translation = np.array([1.0, 2.0, 3.0])
+        rotation = Rotation(0.9238795, 0.3826834, 0.0, 0.0)  # 45 degrees around x-axis
+        transform = Transform3D(translation, rotation)
+        expected_translation = np.array([1.0, 2.0, 3.0])
+        expected_quat = np.array([0.9238795, 0.3826834, 0.0, 0.0])
+
+        copied = transform.copy()
+
+        self.assertIsNot(transform.translation, copied.translation)
+        self.assertIsNot(transform.rotation, copied.rotation)
+
+        transform.translation[0] += 10.0
+        transform.rotation[1] += 0.1
+
+        np.testing.assert_array_almost_equal(copied.translation, expected_translation)
+        np.testing.assert_array_almost_equal(copied.rotation.as_quat, expected_quat, decimal=6)
+
+    def test_from_matrix_with_invalid_shape_raises(self):
+        with self.assertRaises(ValueError):
+            Transform3D.from_matrix(np.eye(3))
+
+    def test_from_matrix_with_invalid_last_row_raises(self):
+        matrix = np.eye(4)
+        matrix[3, 3] = 2
+
+        with self.assertRaises(ValueError):
+            Transform3D.from_matrix(matrix)
+
+    def test_as_vector_returns_translation_followed_by_rotation_representation(self):
+        translation = np.array([0.4, -0.2, 1.8])
+        rotation = Rotation(0.9238795, 0.0, 0.3826834, 0.0)  # 45 degrees around y-axis
+        transform = Transform3D(translation, rotation)
+
+        vec = transform.as_vector(Rotation.Representation.QUAT)
+
+        np.testing.assert_array_equal(vec[:3], translation)
+        np.testing.assert_array_almost_equal(vec[3:], rotation.as_quat)
+
+    def test_as_vector_with_rotation_matrix_representation(self):
+        translation = np.array([0.1, 0.2, -0.3])
+        rotation = Rotation(0.7071068, 0.0, 0.7071068, 0.0)  # 90 degrees around y-axis
+        transform = Transform3D(translation, rotation)
+
+        vec = transform.as_vector(Rotation.Representation.ROTATION_MATRIX)
+
+        self.assertEqual(vec.shape, (12,))
+        np.testing.assert_array_equal(vec[:3], translation)
+        np.testing.assert_array_almost_equal(vec[3:].reshape(3, 3), rotation.as_rotation_matrix)
+        reconstructed = Transform3D.from_vector(vec, Rotation.Representation.ROTATION_MATRIX)
+        np.testing.assert_array_almost_equal(reconstructed.translation, translation)
+        np.testing.assert_array_almost_equal(reconstructed.rotation.as_quat, rotation.as_quat)
+
+    def test_from_vector_recreates_transform_for_rotation_matrix_representation(self):
+        translation = np.array([-0.5, 0.8, 0.25])
+        rotation = Rotation(0.7071068, 0.0, 0.7071068, 0.0)  # 90 degrees around y-axis
+        transform = Transform3D(translation, rotation)
+
+        vec = transform.as_vector(Rotation.Representation.ROTATION_MATRIX)
+        reconstructed = Transform3D.from_vector(vec, Rotation.Representation.ROTATION_MATRIX)
+
+        np.testing.assert_array_almost_equal(reconstructed.translation, translation)
+        np.testing.assert_array_almost_equal(reconstructed.rotation.as_quat, rotation.as_quat)
+
 
 class TestRotation(unittest.TestCase):
     def test_mul(self):
