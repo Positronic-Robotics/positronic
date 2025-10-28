@@ -1,5 +1,5 @@
 import time
-from collections.abc import Callable, Mapping
+from collections.abc import Callable
 from typing import TypeVar, overload
 
 from pimm import Message, SignalEmitter, SignalReceiver
@@ -16,11 +16,11 @@ class MapSignalReceiver(SignalReceiver[T]):
     like it didn't see the filtered message.
     """
 
-    def __init__(self, reader: SignalReceiver[T], func: Callable[[T], T]):
+    def __init__(self, reader: SignalReceiver[T], func: Callable[[T], T | None]):
         self.reader = reader
         self.func = func
 
-        self.last_message = None
+        self.last_message: Message[T] | None = None
 
     def read(self):
         orig_message = self.reader.read()
@@ -29,8 +29,11 @@ class MapSignalReceiver(SignalReceiver[T]):
 
         transformed_data = self.func(orig_message.data)
         if transformed_data is None:
+            if self.last_message is not None:
+                self.last_message.updated = False
             return self.last_message
-        self.last_message = Message(transformed_data, orig_message.ts)
+
+        self.last_message = Message(transformed_data, orig_message.ts, orig_message.updated)
         return self.last_message
 
 
@@ -41,27 +44,26 @@ class MapSignalEmitter(SignalEmitter[T]):
     This enables conditional filtering at the emission point.
     """
 
-    def __init__(self, emitter: SignalEmitter[T], func: Callable[[T], T]):
+    def __init__(self, emitter: SignalEmitter[T], func: Callable[[T], T | None]):
         self.emitter = emitter
         self.func = func
 
-    def emit(self, data: T, ts: int = -1) -> bool:
+    def emit(self, data: T, ts: int = -1):
         transformed_data = self.func(data)
-        if transformed_data is None:
-            return True
-        return self.emitter.emit(transformed_data, ts)
+        if transformed_data is not None:
+            self.emitter.emit(transformed_data, ts)
 
 
 @overload
-def map(signal: SignalReceiver[T], func: Callable[[T], T]) -> SignalReceiver[T]: ...
+def map(signal: SignalReceiver[T], func: Callable[[T], T | None]) -> SignalReceiver[T]: ...
 
 
 @overload
-def map(signal: SignalEmitter[T], func: Callable[[T], T]) -> SignalEmitter[T]: ...
+def map(signal: SignalEmitter[T], func: Callable[[T], T | None]) -> SignalEmitter[T]: ...
 
 
 def map(
-    func: Callable[[T], T],
+    func: Callable[[T], T | None],
 ) -> Callable[[SignalReceiver[T] | SignalEmitter[T]], SignalReceiver[T] | SignalEmitter[T]]:
     """Transform or filter values passing through a signal.
 
@@ -90,55 +92,14 @@ def map(
     return wrapper
 
 
-class ValueUpdated(SignalReceiver[tuple[T, bool]]):
-    """Wrapper around reader to signal whether the value we read is 'new'."""
-
-    def __init__(self, reader: SignalReceiver[T]):
-        """By default, if original reader returns None, we return None."""
-        self.reader = reader
-        self.last_ts = None
-
-    def read(self) -> Message[tuple[T, bool]] | None:
-        orig_message = self.reader.read()
-
-        if orig_message is None:
-            return None
-
-        is_updated = orig_message.ts != self.last_ts
-        self.last_ts = orig_message.ts
-
-        return Message((orig_message.data, is_updated), self.last_ts)
-
-
-def is_any_updated(readers: Mapping[str, SignalReceiver[tuple[T, bool]]]) -> tuple[dict[str, Message[T]], bool]:
-    """Get the latest value of all readers and whether any of them are updated.
-
-    In case some of the readers return None, this keys will be omitted from the returned dict.
-
-    Args:
-        readers: A mapping of reader names to readers. Typically a dict of ValueUpdated readers.
-
-    Returns:
-        (dict[str, Message[T]], bool): Dict with latest values and a bool indicating whether any of the readers
-        are updated.
-    """
-    messages = {k: reader.read() for k, reader in readers.items()}
-    is_updated = {k: msg.data[1] for k, msg in messages.items() if msg is not None}
-    is_any_updated = any(is_updated.values())
-
-    messages = {k: Message(msg.data[0], msg.ts) for k, msg in messages.items() if msg is not None}
-
-    return messages, is_any_updated
-
-
 class DefaultReceiver(SignalReceiver[T | K]):
     """Signal reader that returns a default value if no value is available."""
 
     def __init__(self, reader: SignalReceiver[T], default: K, default_ts: int = 0):
         self.reader = reader
-        self.default_msg = Message(default, default_ts)
+        self.default_msg = Message(default, default_ts, False)
 
-    def read(self) -> Message[T | K] | None:
+    def read(self) -> Message[T | K]:
         msg = self.reader.read()
         if msg is None:
             return self.default_msg

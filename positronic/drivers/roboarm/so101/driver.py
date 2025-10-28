@@ -67,17 +67,18 @@ class Robot(pimm.ControlSystem):
         state = SO101State()
         initial_grip = self.motor_bus.position[-1]
 
-        command_receiver = pimm.DefaultReceiver(pimm.ValueUpdated(self.commands), (None, False))
+        command_receiver = pimm.DefaultReceiver(self.commands, None)
         target_grip = pimm.DefaultReceiver(self.target_grip, initial_grip)
 
         while not should_stop.value:
-            command, is_updated = command_receiver.value
-            if is_updated:
-                match command:
+            # command, is_updated = command_receiver.value
+            cmd_msg = command_receiver.read()
+            if cmd_msg.updated:
+                match cmd_msg.data:
                     case roboarm_command.Reset():
                         raise NotImplementedError('Reset not implemented')
-                    case roboarm_command.CartesianPosition():
-                        qpos = self._solve_ik(state, command)
+                    case roboarm_command.CartesianPosition(pose):
+                        qpos = self._solve_ik(state, pose)
                         q_with_gripper = np.concatenate([qpos, [target_grip.value]])
                         self.motor_bus.set_target_position(q_with_gripper)
                     case roboarm_command.JointPosition(qpos):
@@ -85,7 +86,7 @@ class Robot(pimm.ControlSystem):
                         q_with_gripper = np.concatenate([q_norm, [target_grip.value]])
                         self.motor_bus.set_target_position(q_with_gripper)
                     case _:
-                        raise ValueError(f'Unknown command: {command}')
+                        raise ValueError(f'Unknown command: {cmd_msg.data}')
 
             q = self.motor_bus.position
             dq = self.motor_bus.velocity[:-1]

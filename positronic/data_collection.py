@@ -115,10 +115,9 @@ class DataCollectionController(pimm.ControlSystem):
         end_wav_path = 'positronic/assets/sounds/recording-has-stopped.wav'
         abort_wav_path = 'positronic/assets/sounds/recording-has-been-aborted.wav'
 
-        controller_positions_receiver = pimm.ValueUpdated(self.controller_positions)
-
         tracker = _Tracker(self.operator_position)
         button_handler = ButtonHandler()
+        controller_positions = pimm.DefaultReceiver(self.controller_positions, None)
 
         recording = False
 
@@ -146,9 +145,9 @@ class DataCollectionController(pimm.ControlSystem):
                     self.robot_commands.emit(roboarm.command.Reset())
 
                 self.target_grip.emit(button_handler.get_value('right_trigger'))
-                controller_pos, controller_pos_updated = controller_positions_receiver.value
-                if controller_pos_updated:
-                    target_robot_pos = tracker.update(controller_pos['right'])
+                cp_msg = controller_positions.read()
+                if cp_msg.updated:
+                    target_robot_pos = tracker.update(cp_msg.data['right'])
                     if tracker.on:  # Don't spam the robot with commands.
                         self.robot_commands.emit(roboarm.command.CartesianPosition(target_robot_pos))
 

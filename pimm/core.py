@@ -21,17 +21,18 @@ class Message(Generic[T]):
     If no timestamp is provided, the current system time is used.
     """
 
-    data: T
+    data: T | None
     ts: int = -1  # -1 means no value
+    updated: bool = True
 
 
 class SignalEmitter(ABC, Generic[T]):
     """Write a signal value. All implementations must be non-blocking."""
 
     @abstractmethod
-    def emit(self, data: T, ts: int = -1) -> bool:
+    def emit(self, data: T, ts: int = -1):
         """
-        Emit a message with the given data and timestamp. Returns True if successful.
+        Emit a message with the given data and timestamp.
         Must overwrite ts with current clock time if negative.
         """
         pass
@@ -56,8 +57,8 @@ class SignalReceiver(ABC, Generic[T]):
 
 
 class NoOpEmitter(SignalEmitter[T]):
-    def emit(self, data: T, ts: int = -1) -> bool:
-        return True
+    def emit(self, data: T, ts: int = -1):
+        pass
 
 
 class NoOpReceiver(SignalReceiver[T]):
@@ -130,11 +131,9 @@ class ControlSystemEmitter(SignalEmitter[T]):
     def _bind(self, emitter: SignalEmitter[T]):
         self._internal.append(emitter)
 
-    def emit(self, data: T, ts: int = -1) -> bool:
+    def emit(self, data: T, ts: int = -1):
         for emitter in self._internal:
             emitter.emit(data, ts)
-        # TODO: Remove bool as return type from all Emitters
-        return True
 
 
 class ControlSystemReceiver(SignalReceiver[T]):
@@ -168,7 +167,7 @@ class FakeEmitter(ControlSystemEmitter[T]):
     World.connect ignores connections involving FakeEmitter, preventing signal flow.
     """
 
-    def emit(self, data: T, ts: int = -1) -> bool:
+    def emit(self, data: T, ts: int = -1):
         raise RuntimeError('FakeEmitter.emit() is not supposed to be called')
 
     def _bind(self, emitter: SignalEmitter[T]):

@@ -60,14 +60,14 @@ if __name__ == '__main__':
                 stream.pix_fmt = 'yuv420p'
                 stream.options = {'crf': '27', 'g': '2', 'preset': 'ultrafast', 'tune': 'zerolatency'}
 
-                frame_receiver = pimm.DefaultReceiver(pimm.ValueUpdated(self.frame), (None, False))
+                frame_receiver = pimm.DefaultReceiver(self.frame, None)
                 while not should_stop.value:
-                    frame, updated = frame_receiver.value
-                    if not updated:
+                    frame_msg = frame_receiver.read()
+                    if not frame_msg.updated:
                         yield pimm.Sleep(0.5 / self.fps)
                         continue
 
-                    frame = av.VideoFrame.from_ndarray(frame['image'], format='rgb24')
+                    frame = av.VideoFrame.from_ndarray(frame_msg.data.value, format='rgb24')
                     packet = stream.encode(frame)
                     container.mux(packet)
                     fps_counter.tick()

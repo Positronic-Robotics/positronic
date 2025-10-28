@@ -105,10 +105,12 @@ non-blocking. You can treat them as "push the latest observation" rather than
 "append to a queue". When you *do* need historical data (e.g., recording datasets)
 that logic lives in a dedicated control system such as `positronic.dataset.ds_writer_agent`.
 
-For common patterns Pimm provides small adapters:
+Signals also expose freshness straight on the payload: every `Message` has an
+`updated` flag that is `True` only when the value changed since the previous read.
+Control loops can gate their work on that bit without extra wrappers.
 
-- `pimm.ValueUpdated(reader)` pairs each value with a boolean indicating if the
-  timestamp changed since the last read.
+For common transformation patterns Pimm provides small adapters:
+
 - `pimm.DefaultReceiver(reader, default)` supplies safe defaults until real data
   arrives.
 - `pimm.map(signal, func)` transforms data on the way in or out. If `func`

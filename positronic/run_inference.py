@@ -93,16 +93,16 @@ class Inference(pimm.ControlSystem):
         self.command = pimm.ControlSystemReceiver[InferenceCommand](self, maxsize=3)
 
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Sleep]:  # noqa: C901
-        commands = pimm.DefaultReceiver(pimm.ValueUpdated(self.command), (None, False))
+        commands = pimm.DefaultReceiver(self.command, None)
         running = False
 
         # TODO: We should emit new commands per frame, not per inference fps
         rate_limiter = pimm.RateLimiter(clock, hz=self.inference_fps)
 
         while not should_stop.value:
-            command, is_updated = commands.value
-            if is_updated:
-                match command.type:
+            command_msg = commands.read()
+            if command_msg.updated:
+                match command_msg.data.type:
                     case InferenceCommandType.START:
                         running = True
                         rate_limiter.reset()

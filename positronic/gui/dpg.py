@@ -65,10 +65,7 @@ class DearpyguiUi(pimm.ControlSystem):
         dpg.show_viewport(maximized=True)
 
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Sleep]:
-        cameras = {
-            cam_name: pimm.DefaultReceiver(pimm.ValueUpdated(reader), (None, False))
-            for cam_name, reader in self.cameras.items()
-        }
+        cameras = {cam_name: pimm.DefaultReceiver(reader, None) for cam_name, reader in self.cameras.items()}
 
         fps_counter = pimm.utils.RateCounter('UI')
         frame_fps_counter = pimm.utils.RateCounter('Frame')
@@ -89,10 +86,11 @@ class DearpyguiUi(pimm.ControlSystem):
                 self.buttons.emit(pimm.Message(pressed_keys))
 
             for cam_name, camera in cameras.items():
-                frame, is_new = camera.value
+                # frame, is_new = camera.value
+                cam_msg = camera.read()
 
-                if frame is not None and is_new:
-                    image = frame.array  # Extract from NumpySMAdapter
+                if cam_msg.data is not None and cam_msg.updated:
+                    image = cam_msg.data.array  # Extract from NumpySMAdapter
                     if cam_name not in im_sizes:
                         im_sizes[cam_name] = image.shape[:2]
                         print(f'Have {len(im_sizes)}/{len(cameras)} images')

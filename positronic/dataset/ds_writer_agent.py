@@ -168,26 +168,22 @@ class DsWriterAgent(pimm.ControlSystem):
         appending are split into helpers.
         """
         limiter = pimm.utils.RateLimiter(clock, hz=self._poll_hz)
-        commands = pimm.DefaultReceiver(pimm.ValueUpdated(self.command), (None, False))
+        commands = pimm.DefaultReceiver(self.command, None)
 
-        signals = {
-            name: pimm.DefaultReceiver(pimm.ValueUpdated(reader), (None, False))
-            for name, reader in self._inputs.items()
-        }
+        signals = {name: pimm.DefaultReceiver(reader, None) for name, reader in self._inputs.items()}
         ep_writer: EpisodeWriter | None = None
         ep_counter = 0
 
         try:
             while not should_stop.value:
-                cmd, cmd_updated = commands.value
-                if cmd_updated:
-                    ep_writer, ep_counter = self._handle_command(cmd, ep_writer, ep_counter)
+                cmd_msg = commands.read()
+                if cmd_msg.updated:
+                    ep_writer, ep_counter = self._handle_command(cmd_msg.data, ep_writer, ep_counter)
 
                 if ep_writer is not None:
                     for name, reader in signals.items():
                         msg = reader.read()
-                        value, updated = msg.data
-                        if updated:
+                        if msg.updated:
                             world_time_ns, message_time_ns = clock.now_ns(), msg.ts
                             primary_ts = world_time_ns if self._time_mode == TimeMode.CLOCK else message_time_ns
 
@@ -197,6 +193,7 @@ class DsWriterAgent(pimm.ControlSystem):
                                 extra_ts['world'] = world_time_ns
 
                             serializer = self._serializers.get(name)
+                            value = msg.data
                             if serializer is not None:
                                 value = serializer(value)
                             _append(ep_writer, name, value, primary_ts, extra_ts)
@@ -210,9 +207,7 @@ class DsWriterAgent(pimm.ControlSystem):
                     ep_writer.__exit__(None, None, None)
                     print(f'DsWriterAgent: [ABORT] Episode {ep_counter}')
 
-    def _handle_command(
-        self, cmd: DsWriterCommand, ep_writer: EpisodeWriter | None, ep_counter: int
-    ) -> tuple[EpisodeWriter | None, int]:
+    def _handle_command(self, cmd: DsWriterCommand, ep_writer: EpisodeWriter | None, ep_counter: int):
         match cmd.type:
             case DsWriterCommandType.START_EPISODE:
                 if ep_writer is None:

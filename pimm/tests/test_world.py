@@ -21,7 +21,7 @@ from pimm.core import (
 )
 from pimm.shared_memory import SMCompliant
 from pimm.tests.testing import MockClock
-from pimm.world import EventReceiver, LocalQueueEmitter, QueueEmitter, QueueReceiver, SystemClock, World
+from pimm.world import EventReceiver, LocalQueueEmitter, QueueEmitter, SystemClock, World
 
 
 def dummy_process(stop_reader, clock):
@@ -76,9 +76,7 @@ class TestQueueEmitter:
         queue = mp.Manager().Queue()
         emitter = QueueEmitter(queue, SystemClock())
 
-        result = emitter.emit('test_data')
-        assert result is True
-
+        emitter.emit('test_data')
         # Verify the message was added to the queue
         message = queue.get_nowait()
         assert isinstance(message, Message)
@@ -91,8 +89,7 @@ class TestQueueEmitter:
         emitter = QueueEmitter(queue, SystemClock())
         timestamp = 1234567890
 
-        result = emitter.emit('test_data', ts=timestamp)
-        assert result is True
+        emitter.emit('test_data', ts=timestamp)
 
         message = queue.get_nowait()
         assert message.data == 'test_data'
@@ -107,8 +104,7 @@ class TestQueueEmitter:
         emitter.emit('old_data')
 
         # Add another message (should remove old one)
-        result = emitter.emit('new_data')
-        assert result is True
+        emitter.emit('new_data')
 
         # Only new message should be in queue
         message = queue.get_nowait()
@@ -127,75 +123,8 @@ class TestQueueEmitter:
         mock_queue_class.return_value = mock_queue
 
         emitter = QueueEmitter(mock_queue, SystemClock())
-        result = emitter.emit('test_data')
-
-        assert result is False
+        emitter.emit('test_data')
         mock_queue.put_nowait.assert_called_once()  # Only called once since get_nowait fails
-
-
-class TestQueueReceiver:
-    """Test the QueueReceiver class."""
-
-    def test_queue_reader_initial_state(self):
-        """Test that QueueReceiver initially returns None."""
-        queue = mp.Manager().Queue()
-        reader = QueueReceiver(queue)
-
-        result = reader.read()
-        assert result is None
-
-    def test_queue_reader_reads_message(self):
-        """Test reading a message from the queue."""
-        manager = mp.Manager()
-        queue = manager.Queue()
-        reader = QueueReceiver(queue)
-
-        # Put a message in the queue
-        test_message = Message('test_data', 123)
-        queue.put_nowait(test_message)
-
-        result = reader.read()
-        assert result == test_message
-        assert result.data == 'test_data'
-        assert result.ts == 123
-
-    def test_queue_reader_returns_last_value_when_empty(self):
-        """Test that reader returns last value when queue is empty."""
-        manager = mp.Manager()
-        queue = manager.Queue()
-        reader = QueueReceiver(queue)
-
-        # Put and read a message
-        test_message = Message('test_data', 123)
-        queue.put_nowait(test_message)
-        first_result = reader.read()
-        assert first_result == test_message
-
-        # Queue is now empty, should return same message
-        second_result = reader.read()
-        assert second_result == test_message
-
-    def test_queue_reader_updates_with_new_messages(self):
-        """Test that reader updates with new messages."""
-        manager = mp.Manager()
-        queue = manager.Queue()
-        reader = QueueReceiver(queue)
-
-        # Put first message
-        message1 = Message('data1', 100)
-        queue.put_nowait(message1)
-        result1 = reader.read()
-        assert result1 == message1
-
-        # Put second message
-        message2 = Message('data2', 200)
-        queue.put_nowait(message2)
-        result2 = reader.read()
-        assert result2 == message2
-
-        # Should still return latest message when queue is empty
-        result3 = reader.read()
-        assert result3 == message2
 
 
 class TestEventReceiver:
@@ -231,6 +160,21 @@ class TestEventReceiver:
 
         result = reader.read()
         assert result.ts == 987654321
+
+    def test_event_reader_updated_flag(self):
+        """EventReceiver should toggle updated when event state changes."""
+        event = mp.Event()
+        reader = EventReceiver(event, SystemClock())
+
+        first = reader.read()
+        assert first.updated is True
+
+        second = reader.read()
+        assert second.updated is False
+
+        event.set()
+        third = reader.read()
+        assert third.updated is True
 
 
 class TestWorld:
@@ -278,6 +222,12 @@ class TestWorld:
                 result = reader.read()
                 assert isinstance(result, Message)
                 assert result.data == message
+                assert result.updated is True
+
+                stale_result = reader.read()
+                assert isinstance(stale_result, Message)
+                assert stale_result.data == message
+                assert stale_result.updated is False
 
     def test_world_context_manager_enter(self):
         """Test that World.__enter__ returns self."""
@@ -356,23 +306,35 @@ class TestWorld:
             assert message is not None
             assert message.data == 'hello'
             assert message.ts == 123
+            assert message.updated is True
             assert hasattr(emitter, 'uses_shared_memory') and not emitter.uses_shared_memory
             assert hasattr(reader, 'uses_shared_memory') and not reader.uses_shared_memory
+
+            message2 = reader.read()
+            assert message2 is not None
+            assert message2.updated is False
 
     def test_mp_pipe_switches_to_shared_memory_when_supported(self):
         with World() as world:
             emitter, reader = world.mp_pipe()
 
             payload = DummySMValue(3.14)
-            assert emitter.emit(payload, ts=456)
+            emitter.emit(payload, ts=456)
 
             message = reader.read()
             assert message is not None
             assert isinstance(message.data, DummySMValue)
             assert message.data.value == pytest.approx(3.14)
             assert message.ts == 456
+            assert message.updated is True
             assert emitter.uses_shared_memory
             assert reader.uses_shared_memory
+
+            # Subsequent read without new data should mark message as stale
+            message2 = reader.read()
+            assert message2 is not None
+            assert message2.updated is False
+            assert message2.data == message.data
 
     def test_mp_pipe_rejects_incompatible_payload_after_shared_memory_selected(self):
         with World() as world:
@@ -406,9 +368,9 @@ class TestWorldControlSystems:
                 self.downstream = downstream
                 self.payloads: list[tuple[str, int]] = []
 
-            def emit(self, data: str, ts: int = -1) -> bool:
+            def emit(self, data: str, ts: int = -1):
                 self.payloads.append((data, ts))
-                return self.downstream.emit(f'wrapped-{data}', ts)
+                self.downstream.emit(f'wrapped-{data}', ts)
 
         def wrapper(emitter: SignalEmitter[str]) -> SignalEmitter[str]:
             captured['transport'] = emitter
@@ -417,7 +379,7 @@ class TestWorldControlSystems:
             return recording
 
         with World(clock) as world:
-            mirrored = world.pair(system.emitter, wrapper=wrapper)
+            mirrored = world.pair(system.emitter, emitter_wrapper=wrapper)
 
             assert isinstance(mirrored, ControlSystemReceiver)
 
@@ -440,7 +402,7 @@ class TestWorldControlSystems:
         wrapper = Mock(side_effect=lambda receiver: receiver)
 
         with World(clock) as world:
-            mirrored = world.pair(system.receiver, wrapper=wrapper)
+            mirrored = world.pair(system.receiver, emitter_wrapper=wrapper)
 
             assert isinstance(mirrored, ControlSystemEmitter)
             wrapper.assert_not_called()

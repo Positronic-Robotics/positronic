@@ -218,15 +218,16 @@ class MujocoFranka(pimm.ControlSystem):
         self.state: pimm.SignalEmitter[MujocoFrankaState] = pimm.ControlSystemEmitter(self)
 
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock):
-        commands = pimm.DefaultReceiver(pimm.ValueUpdated(self.commands), (None, False))
+        commands = pimm.DefaultReceiver(self.commands, None)
         state = MujocoFrankaState()
 
         while not should_stop.value:
             # TODO: still a copy here
             state.encode(self.q, self.dq, self.ee_pose)
-            command, is_updated = commands.value
-            if is_updated:
-                match command:
+            # command, is_updated = commands.value
+            cmd_msg = commands.read()
+            if cmd_msg.updated:
+                match cmd_msg.data:
                     case roboarm_command.CartesianPosition(pose=pose):
                         self.set_ee_pose(pose)
                     case roboarm_command.JointPosition(positions=positions):
@@ -236,7 +237,7 @@ class MujocoFranka(pimm.ControlSystem):
                     case roboarm_command.Reset():
                         self.sim.reset()
                     case _:
-                        raise ValueError(f'Unknown command type: {type(command)}')
+                        raise ValueError(f'Unknown command type: {type(cmd_msg.data)}')
 
             self.state.emit(state)
             yield pimm.Pass()

@@ -18,11 +18,10 @@ from .core import (
     SignalReceiver,
     Sleep,
 )
-from .utils import DefaultReceiver, RateLimiter, ValueUpdated, map
-from .world import BroadcastEmitter, World
+from .utils import DefaultReceiver, RateLimiter, map
+from .world import World
 
 __all__ = [
-    'BroadcastEmitter',
     'Clock',
     'ControlLoop',
     'ControlSystem',
@@ -44,7 +43,6 @@ __all__ = [
     'SignalEmitter',
     'SignalReceiver',
     'Sleep',
-    'ValueUpdated',
     'World',
 ]
 

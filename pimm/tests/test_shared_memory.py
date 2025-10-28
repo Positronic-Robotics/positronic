@@ -5,7 +5,7 @@ import pytest
 
 from pimm.core import Clock, Message, NoOpEmitter, SignalEmitter, SignalReceiver, Sleep
 from pimm.shared_memory import NumpySMAdapter
-from pimm.utils import DefaultReceiver, ValueUpdated
+from pimm.utils import DefaultReceiver
 from pimm.world import TransportMode, World
 
 
@@ -55,8 +55,7 @@ class TestSharedMemoryAPI:
             data = NumpySMAdapter(array.shape, array.dtype)
             data.array = array
 
-            result = emitter.emit(data, ts=12345)
-            assert result is True
+            emitter.emit(data, ts=12345)
 
             # Reader should now receive the data
             message = reader.read()
@@ -65,6 +64,11 @@ class TestSharedMemoryAPI:
             assert message.ts == 12345
             assert isinstance(message.data, NumpySMAdapter)
             assert np.allclose(message.data.array, [3.14, 2.71])
+            assert message.updated is True
+
+            stale = reader.read()
+            assert stale is not None
+            assert stale.updated is False
 
     def test_emitter_rejects_wrong_data_type(self):
         """Test that emitter rejects data of wrong type."""
@@ -86,8 +90,7 @@ class TestSharedMemoryAPI:
             array1 = np.array([[1, 2], [3, 4]], dtype=np.uint8)
             data1 = NumpySMAdapter(array1.shape, array1.dtype)
             data1.array = array1
-            result1 = emitter.emit(data1)
-            assert result1 is True
+            emitter.emit(data1)
 
             # Try to emit data with different buffer size (should fail)
             array2 = np.array([[[1, 2], [3, 4]], [[5, 6], [7, 8]]], dtype=np.uint8)  # Different size
@@ -203,9 +206,7 @@ class TestSharedMemoryAPI:
             data.array = array
 
             # Emit with timestamp 0 (should be auto-generated to non-zero)
-            result = emitter.emit(data, ts=-1)
-            assert result is True
-
+            emitter.emit(data, ts=-1)
             message = reader.read()
             assert message is not None
             assert message.ts >= 0  # Should be auto-generated
@@ -311,14 +312,14 @@ class TestSharedMemoryMultiprocessing:
         with World() as world:
             emitter_control_loop.emitter, reader = world.mp_pipe(transport=TransportMode.SHARED_MEMORY)
 
-            reader = DefaultReceiver(ValueUpdated(reader), (None, False))
+            reader = DefaultReceiver(reader, None)
             world.start_in_subprocess(emitter_control_loop.run)
 
             data = []
             while not world.should_stop:
-                value, updated = reader.value
-                if updated:
-                    data.append(value.array.copy())
+                msg = reader.read()
+                if msg.updated:
+                    data.append(msg.data.array.copy())
 
             assert len(data) == 2
             assert np.allclose(data[0], [1.0, 2.0, 3.0])

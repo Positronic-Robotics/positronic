@@ -1,3 +1,4 @@
+import logging
 import wave
 from collections.abc import Iterator
 
@@ -64,15 +65,14 @@ class SoundSystem(pimm.ControlSystem):
         audio_files = {}
         file_idx = 0
 
-        wav_path = pimm.DefaultReceiver(pimm.ValueUpdated(self.wav_path), ('', False))
+        wav_path = pimm.DefaultReceiver(self.wav_path, '')
         level = pimm.DefaultReceiver(self.level, 0.0)
 
         while not should_stop.value:
-            # Load new files
-            path, is_updated = wav_path.value
-            if is_updated:
-                print(f'Playing {path}')
-                audio_files[file_idx] = wave.open(path, 'rb')
+            path_msg = wav_path.read()
+            if path_msg.updated:
+                logging.info('Playing %s', path_msg.data)
+                audio_files[file_idx] = wave.open(path_msg.data, 'rb')
                 assert audio_files[file_idx].getframerate() == 44100, 'Only 44100Hz wav files are currently supported'
                 assert audio_files[file_idx].getsampwidth() == 2, 'Only 16-bit wav files are currently supported'
                 file_idx += 1

@@ -34,14 +34,14 @@ class Robotiq2F(pimm.ControlSystem):
             client.write_registers(_REG_CMD, [0x0000, 0x0000, 0x0000], device_id=_SLAVE)
             client.write_registers(_REG_CMD, [0x0100, 0x0000, 0x0000], device_id=_SLAVE)
 
-            target_grip = pimm.DefaultReceiver(pimm.ValueUpdated(self.target_grip), (None, False))
+            target_grip = pimm.DefaultReceiver(self.target_grip, None)
             force = pimm.DefaultReceiver(self.force, 255)  # device scale 0..255
             speed = pimm.DefaultReceiver(self.speed, 255)  # device scale 0..255
 
             while not should_stop.value:
-                pos_val, updated = target_grip.value
-                if updated:
-                    pos = int(max(0, min(1, pos_val)) * 255)
+                pos_msg = target_grip.read()
+                if pos_msg.updated:
+                    pos = int(max(0, min(1, pos_msg.data)) * 255)
                     spd = int(max(0, min(255, speed.value)))
                     frc = int(max(0, min(255, force.value)))
 

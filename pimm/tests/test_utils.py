@@ -1,7 +1,7 @@
 from unittest.mock import Mock
 
 from pimm.core import Clock, Message, SignalEmitter, SignalReceiver
-from pimm.utils import DefaultReceiver, MapSignalEmitter, MapSignalReceiver, RateLimiter, ValueUpdated, is_any_updated
+from pimm.utils import DefaultReceiver, MapSignalEmitter, MapSignalReceiver, RateLimiter
 
 
 class TestMapSignalReceiver:
@@ -21,6 +21,7 @@ class TestMapSignalReceiver:
         assert result is not None
         assert result.data == 20
         assert result.ts == test_ts
+        assert result.updated is True
 
     def test_preserves_timestamp(self):
         """Test that original timestamp is preserved."""
@@ -33,6 +34,7 @@ class TestMapSignalReceiver:
 
         assert result is not None
         assert result.ts == test_ts
+        assert result.updated is True
 
     def test_returns_none_when_reader_returns_none(self):
         """Test that None is returned when underlying reader returns None."""
@@ -68,6 +70,7 @@ class TestMapSignalReceiver:
         assert result1 is not None
         assert result1.data == 20
         assert result1.ts == 100
+        assert result1.updated is True
 
         # Second read: func returns None, should return last message
         mock_reader.read.return_value = Message(data=30, ts=200)
@@ -75,6 +78,7 @@ class TestMapSignalReceiver:
         assert result2 is not None
         assert result2.data == 20  # Last non-None value
         assert result2.ts == 100  # Last non-None timestamp
+        assert result2.updated is False
 
     def test_filtering_with_conditional_logic(self):
         """Test filtering with conditional logic."""
@@ -98,6 +102,7 @@ class TestMapSignalReceiver:
         assert result2 is not None
         assert result2.data == 10  # Last even number
         assert result2.ts == 100
+        assert result2.updated is False
 
         # Test with another even number
         mock_reader.read.return_value = Message(data=12, ts=300)
@@ -105,6 +110,7 @@ class TestMapSignalReceiver:
         assert result3 is not None
         assert result3.data == 12
         assert result3.ts == 300
+        assert result3.updated is True
 
     def test_initial_state_has_no_last_message(self):
         """Test that initial state returns None when func returns None."""
@@ -117,6 +123,18 @@ class TestMapSignalReceiver:
 
         assert result is None
 
+    def test_propagates_updated_flag(self):
+        """Test that updated flag from upstream reader is preserved."""
+        mock_reader = Mock(spec=SignalReceiver)
+        msg = Message(data=42, ts=100, updated=False)
+        mock_reader.read.return_value = msg
+
+        map_reader = MapSignalReceiver(mock_reader, lambda x: x)
+        result = map_reader.read()
+
+        assert result is not None
+        assert result.updated is False
+
 
 class TestMapSignalEmitter:
     """Test the MapSignalEmitter class."""
@@ -124,202 +142,60 @@ class TestMapSignalEmitter:
     def test_transforms_data_before_emitting(self):
         """Test that data is transformed before being emitted."""
         mock_emitter = Mock(spec=SignalEmitter)
-        mock_emitter.emit.return_value = True
-
-        # Double the value before emitting
         map_emitter = MapSignalEmitter(mock_emitter, lambda x: x * 2)
-        result = map_emitter.emit(10, ts=123)
-
-        assert result is True
+        map_emitter.emit(10, ts=123)
         mock_emitter.emit.assert_called_once_with(20, 123)
 
     def test_preserves_timestamp(self):
         """Test that timestamp is preserved when emitting."""
         mock_emitter = Mock(spec=SignalEmitter)
-        mock_emitter.emit.return_value = True
-
         map_emitter = MapSignalEmitter(mock_emitter, lambda x: x.upper())
         test_ts = 987654321
         map_emitter.emit('test', ts=test_ts)
-
         mock_emitter.emit.assert_called_once_with('TEST', test_ts)
-
-    def test_returns_emitter_result(self):
-        """Test that the result from underlying emitter is returned."""
-        mock_emitter = Mock(spec=SignalEmitter)
-
-        # Test when emitter returns True
-        mock_emitter.emit.return_value = True
-        map_emitter = MapSignalEmitter(mock_emitter, lambda x: x * 2)
-        result = map_emitter.emit(5)
-        assert result is True
-
-        # Test when emitter returns False
-        mock_emitter.emit.return_value = False
-        result = map_emitter.emit(5)
-        assert result is False
 
     def test_filters_when_func_returns_none(self):
         """Test that returning None from func prevents emission."""
         mock_emitter = Mock(spec=SignalEmitter)
-
-        # Filter function that returns None
-        map_emitter = MapSignalEmitter(mock_emitter, lambda x: None)
-        result = map_emitter.emit(10, ts=123)
-
-        # Should return True but not call the underlying emitter
-        assert result is True
+        map_emitter = MapSignalEmitter(mock_emitter, lambda _: None)
+        map_emitter.emit(10, ts=123)
         mock_emitter.emit.assert_not_called()
 
     def test_conditional_filtering(self):
         """Test filtering with conditional logic."""
         mock_emitter = Mock(spec=SignalEmitter)
-        mock_emitter.emit.return_value = True
 
-        # Only emit even numbers
         def filter_even(x):
             return x if x % 2 == 0 else None
 
         map_emitter = MapSignalEmitter(mock_emitter, filter_even)
 
-        # Emit even number - should pass through
-        result1 = map_emitter.emit(10, ts=100)
-        assert result1 is True
+        map_emitter.emit(10, ts=100)
         mock_emitter.emit.assert_called_once_with(10, 100)
 
-        # Emit odd number - should be filtered
         mock_emitter.reset_mock()
-        result2 = map_emitter.emit(11, ts=200)
-        assert result2 is True
+        map_emitter.emit(11, ts=200)
         mock_emitter.emit.assert_not_called()
 
-        # Emit another even number - should pass through
-        result3 = map_emitter.emit(12, ts=300)
-        assert result3 is True
+        map_emitter.emit(12, ts=300)
         mock_emitter.emit.assert_called_once_with(12, 300)
 
     def test_transform_and_filter_combination(self):
         """Test combining transformation and filtering."""
         mock_emitter = Mock(spec=SignalEmitter)
-        mock_emitter.emit.return_value = True
 
-        # Transform and filter: square numbers, but only if result < 100
         def transform_and_filter(x):
             squared = x * x
             return squared if squared < 100 else None
 
         map_emitter = MapSignalEmitter(mock_emitter, transform_and_filter)
 
-        # 5 squared = 25, should pass
-        result1 = map_emitter.emit(5, ts=100)
-        assert result1 is True
+        map_emitter.emit(5, ts=100)
         mock_emitter.emit.assert_called_once_with(25, 100)
 
-        # 15 squared = 225, should be filtered
         mock_emitter.reset_mock()
-        result2 = map_emitter.emit(15, ts=200)
-        assert result2 is True
+        map_emitter.emit(15, ts=200)
         mock_emitter.emit.assert_not_called()
-
-
-class TestValueUpdated:
-    """Test the ValueUpdated class."""
-
-    def test_first_read_with_data_returns_updated(self):
-        """Test that first read with data returns updated=True."""
-        mock_reader = Mock(spec=SignalReceiver)
-        test_data = 'test_data'
-        mock_reader.read.return_value = Message(data=test_data, ts=123)
-
-        value_updated = ValueUpdated(mock_reader)
-        result = value_updated.read()
-
-        assert result is not None
-        assert result.data == (test_data, True)
-        assert result.ts == 123
-
-    def test_first_read_with_none_returns_none(self):
-        """Test that first read with None returns None."""
-        mock_reader = Mock(spec=SignalReceiver)
-        mock_reader.read.return_value = None
-
-        value_updated = ValueUpdated(mock_reader)
-        result = value_updated.read()
-
-        assert result is None
-
-    def test_same_timestamp_returns_not_updated(self):
-        """Test that reading the same timestamp returns updated=False."""
-        mock_reader = Mock(spec=SignalReceiver)
-        test_data = 'test_data'
-        message = Message(data=test_data, ts=123)
-        mock_reader.read.return_value = message
-
-        value_updated = ValueUpdated(mock_reader)
-
-        # First read
-        result1 = value_updated.read()
-        assert result1.data[1] is True  # First read should be updated
-
-        # Second read with same timestamp
-        result2 = value_updated.read()
-        assert result2.data[1] is False  # Same timestamp should not be updated
-
-    def test_different_timestamp_returns_updated(self):
-        """Test that reading different timestamps returns updated=True."""
-        mock_reader = Mock(spec=SignalReceiver)
-        test_data1 = 'test_data1'
-        test_data2 = 'test_data2'
-
-        value_updated = ValueUpdated(mock_reader)
-
-        # First read
-        mock_reader.read.return_value = Message(data=test_data1, ts=123)
-        result1 = value_updated.read()
-        assert result1.data == (test_data1, True)
-
-        # Second read with different timestamp
-        mock_reader.read.return_value = Message(data=test_data2, ts=456)
-        result2 = value_updated.read()
-        assert result2.data == (test_data2, True)
-
-    def test_timestamp_tracking_persists_across_calls(self):
-        """Test that timestamp tracking persists across multiple calls."""
-        mock_reader = Mock(spec=SignalReceiver)
-
-        value_updated = ValueUpdated(mock_reader)
-
-        # Multiple reads with same timestamp
-        mock_reader.read.return_value = Message(data='data1', ts=100)
-        result1 = value_updated.read()
-        assert result1.data == ('data1', True)
-        assert result1.ts == 100
-
-        result2 = value_updated.read()
-        assert result2.data == ('data1', False)
-        assert result2.ts == 100
-
-        result3 = value_updated.read()
-        assert result3.data == ('data1', False)
-        assert result3.ts == 100
-
-        # New timestamp
-        mock_reader.read.return_value = Message(data='data2', ts=200)
-        result4 = value_updated.read()
-        assert result4.data == ('data2', True)
-        assert result4.ts == 200
-
-    def test_message_timestamp_is_preserved(self):
-        """Test that the original message timestamp is preserved in the returned message."""
-        mock_reader = Mock(spec=SignalReceiver)
-        test_data = 'test_data'
-        original_ts = 123456789
-
-        value_updated = ValueUpdated(mock_reader)
-        mock_reader.read.return_value = Message(data=test_data, ts=original_ts)
-
-        result = value_updated.read()
-        assert result.ts == original_ts
 
 
 class TestDefaultReceiver:
@@ -338,6 +214,7 @@ class TestDefaultReceiver:
         assert result is not None
         assert result.data == test_data
         assert result.ts == test_ts
+        assert result.updated is True
 
     def test_returns_default_when_reader_returns_none(self):
         """Test that default message is returned when reader returns None."""
@@ -352,6 +229,7 @@ class TestDefaultReceiver:
         assert result is not None
         assert result.data == default_data
         assert result.ts == default_ts
+        assert result.updated is False
 
 
 class TestRateLimiter:
@@ -472,82 +350,3 @@ class TestRateLimiter:
         # Third call - just after interval
         mock_clock.now.return_value = 50.011
         assert rate_limiter.wait_time() == 0.0
-
-
-class TestIsAnyUpdated:
-    def test_returns_false_if_no_values_updated(self):
-        reader1 = Mock(spec=SignalReceiver)
-        reader1.read.return_value = Message(data=1, ts=1)
-        reader2 = Mock(spec=SignalReceiver)
-        reader2.read.return_value = Message(data=2, ts=2)
-
-        vu_reader1 = ValueUpdated(reader1)
-        vu_reader2 = ValueUpdated(reader2)
-
-        # read messages once
-        vu_reader1.read()
-        vu_reader2.read()
-
-        messages, is_updated = is_any_updated({'reader1': vu_reader1, 'reader2': vu_reader2})
-
-        assert messages == {'reader1': Message(data=1, ts=1), 'reader2': Message(data=2, ts=2)}
-        assert not is_updated
-
-    def test_returns_true_if_all_values_updated(self):
-        reader1 = Mock(spec=SignalReceiver)
-        reader1.read.return_value = Message(data=1, ts=1)
-        reader2 = Mock(spec=SignalReceiver)
-        reader2.read.return_value = Message(data=2, ts=2)
-
-        vu_reader1 = ValueUpdated(reader1)
-        vu_reader2 = ValueUpdated(reader2)
-
-        messages, is_updated = is_any_updated({'reader1': vu_reader1, 'reader2': vu_reader2})
-
-        assert messages == {'reader1': Message(data=1, ts=1), 'reader2': Message(data=2, ts=2)}
-        assert is_updated
-
-    def test_returns_true_if_any_value_updated(self):
-        reader1 = Mock(spec=SignalReceiver)
-        reader1.read.return_value = Message(data=1, ts=1)
-        reader2 = Mock(spec=SignalReceiver)
-        reader2.read.return_value = Message(data=2, ts=2)
-
-        vu_reader1 = ValueUpdated(reader1)
-        vu_reader2 = ValueUpdated(reader2)
-
-        # only one value is updated
-        vu_reader1.read()
-
-        messages, is_updated = is_any_updated({'reader1': vu_reader1, 'reader2': vu_reader2})
-
-        assert messages == {'reader1': Message(data=1, ts=1), 'reader2': Message(data=2, ts=2)}
-        assert is_updated
-
-    def test_returns_false_and_empty_dict_if_all_readers_has_no_data(self):
-        reader1 = Mock(spec=SignalReceiver)
-        reader1.read.return_value = None
-        reader2 = Mock(spec=SignalReceiver)
-        reader2.read.return_value = None
-
-        vu_reader1 = ValueUpdated(reader1)
-        vu_reader2 = ValueUpdated(reader2)
-
-        messages, is_updated = is_any_updated({'reader1': vu_reader1, 'reader2': vu_reader2})
-
-        assert messages == {}
-        assert not is_updated
-
-    def test_returns_true_and_present_data_if_some_readers_has_no_data(self):
-        reader1 = Mock(spec=SignalReceiver)
-        reader1.read.return_value = None
-        reader2 = Mock(spec=SignalReceiver)
-        reader2.read.return_value = Message(data=2, ts=2)
-
-        vu_reader1 = ValueUpdated(reader1)
-        vu_reader2 = ValueUpdated(reader2)
-
-        messages, is_updated = is_any_updated({'reader1': vu_reader1, 'reader2': vu_reader2})
-
-        assert messages == {'reader2': Message(data=2, ts=2)}
-        assert is_updated

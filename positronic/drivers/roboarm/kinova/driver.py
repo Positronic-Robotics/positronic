@@ -72,7 +72,7 @@ class Robot(pimm.ControlSystem):
 
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Sleep]:
         _set_realtime_priority()
-        commands = pimm.DefaultReceiver(pimm.ValueUpdated(self.commands), (None, False))
+        commands = pimm.DefaultReceiver(self.commands, None)
         robot_state = KinovaState()
         rate_limiter = pimm.RateLimiter(clock, hz=1000)
 
@@ -88,9 +88,9 @@ class Robot(pimm.ControlSystem):
             current_command = np.zeros(api.actuator_count, dtype=np.float32)
 
             while not should_stop.value:
-                cmd, updated = commands.value
-                if updated:
-                    match cmd:
+                cmd_msg = commands.read()
+                if cmd_msg.updated:
+                    match cmd_msg.data:
                         case command.Reset():
                             joint_controller.set_target_qpos(self.home_joints)
                         case command.CartesianPosition(pose):
@@ -100,7 +100,7 @@ class Robot(pimm.ControlSystem):
                             qpos = np.array(positions, dtype=np.float32)
                             joint_controller.set_target_qpos(qpos)
                         case _:
-                            print(f'Unsuported command: {cmd}')
+                            print(f'Unsuported command: {cmd_msg.data}')
 
                 torque_command = joint_controller.compute_torque(q, dq, tau)
                 np.divide(torque_command, torque_constant, out=current_command)

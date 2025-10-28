@@ -30,14 +30,14 @@ class DsPlayerAgent(pimm.ControlSystem):
         self._poll_hz = float(poll_hz)
 
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock):
-        commands = pimm.DefaultReceiver(pimm.ValueUpdated(self.command), (None, False))
+        commands = pimm.DefaultReceiver(self.command, None)
         playback: _Playback | None = None
         limiter = pimm.utils.RateLimiter(clock, hz=self._poll_hz)
 
         while not should_stop.value:
-            cmd, updated = commands.value
-            if updated:
-                playback = self._apply_command(cmd, clock)
+            cmd_msg = commands.read()
+            if cmd_msg.updated:
+                playback = self._apply_command(cmd_msg.data, clock)
 
             if playback is None:
                 yield pimm.Sleep(limiter.wait_time())

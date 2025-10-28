@@ -59,9 +59,8 @@ class RecordingEmitter(pimm.SignalEmitter[T]):
     def __init__(self) -> None:
         self.emitted: list[tuple[int, T]] = []
 
-    def emit(self, data: T, ts: int = -1) -> bool:
+    def emit(self, data: T, ts: int = -1):
         self.emitted.append((ts, data))
-        return True
 
 
 class ManualCommandReceiver(pimm.SignalReceiver[T]):
@@ -80,7 +79,8 @@ class ManualCommandReceiver(pimm.SignalReceiver[T]):
     def read(self) -> pimm.Message[T] | None:
         if self._pending:
             self._last = self._pending.pop(0)
-            return self._last
+        elif self._last is not None:
+            self._last.updated = False
         return self._last
 
 
