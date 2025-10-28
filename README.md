@@ -211,7 +211,7 @@ To inspect a transformed dataset (the same one used during training):
 ```bash
 python -m positronic.server.positronic_server \
     --dataset=@positronic.cfg.dataset.transformed \
-    --dataset.path=~/datasets/stack_cubes_raw \
+    --dataset.base.path=~/datasets/stack_cubes_raw \
     --port=5001
 ```
 
