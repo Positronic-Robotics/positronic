@@ -197,15 +197,27 @@ Override components inline (e.g. `--webxr=.iphone`, `--sound=None`, `--operator_
 
 Browse datasets with the [Positronic Server app](positronic/server/positronic_server.py).
 
-Inspect recordings before training:
+The server can inspect **any dataset type**, not just local directories. Pass any class that implements the dataset interface — including transformed datasets, concatenations, or custom compositions.
+
+For simple local datasets:
 
 ```bash
 python -m positronic.server.positronic_server \
     --dataset.path=~/datasets/stack_cubes_raw \
     --port=5001
 ```
+To inspect a transformed dataset (the same one used during training):
 
-The viewer loads `LocalDataset` in the background, generates `.rrd` files with the copies of each episode under `~/.cache/positronic/server/`, and serves a Rerun viewer per episode. You could also load `TransformedDataset` by specifying it with the `--dataset` argument.
+```bash
+python -m positronic.server.positronic_server \
+    --dataset=@positronic.cfg.dataset.transformed \
+    --dataset.path=~/datasets/stack_cubes_raw \
+    --port=5001
+```
+
+You can preview exactly what `to_lerobot` will export by passing similar `--dataset` parameters you would use for conversion. This lets you verify transforms before running a full export.
+
+The viewer generates `.rrd` files with copies of each episode under `~/.cache/positronic/server/` and serves a Rerun viewer per episode.
 
 ![Dataset viewer](positronic/assets/docs/server_screenshot.png)
 
@@ -324,7 +336,7 @@ Our plans evolve with your feedback. Highlights for the next milestones:
 - **Short term**
   - **Policy presets for $\pi_0$ and GR00T.** Bundle ready-to-use configs in [policy config module](positronic/cfg/policy/policy.py) so switching policies is a single flag.
   - **Automated evaluation harness.** Extend [Inference script](positronic/run_inference.py) and the MuJoCo loaders in [MuJoCo transform helpers](positronic/simulator/mujoco/transforms.py) to score new checkpoints automatically on curated scenarios.
-  - **Richer Positronic Server.** Teach [Positronic Server](positronic/server/positronic_server.py) to open transformed datasets, surface static/meta fields, and offer annotation + filtering flows for rapid triage.
+  - **Richer Positronic Server.** Teach [Positronic Server](positronic/server/positronic_server.py) to surface static/meta fields, and offer annotation + filtering flows for rapid triage.
   - **PyTorch bridging layer.** Provide a native adapter on top of [Positronic dataset library](positronic/dataset/README.md) so training scripts can stream tensors without an intermediate export.
   - **Direct LeRobot integration.** Let [LeRobot training driver](positronic/training/lerobot_train.py) read Positronic datasets directly, retiring the temporary [LeRobot conversion helper](positronic/training/to_lerobot.py) conversion.
   - **Remote inference primitives.** Add network-friendly transports to [Inference script](positronic/run_inference.py) so policies can live on a different machine than the robot.

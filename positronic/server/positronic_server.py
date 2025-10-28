@@ -195,7 +195,7 @@ def main(
         debug: Enable debug logging
         reset_cache: If True, clear cache_dir at startup
     """
-    root = get_dataset_root(dataset)
+    root = get_dataset_root(dataset) or 'unknown_dataset'
     deb_level = logging.DEBUG if debug else logging.INFO
     logging.basicConfig(level=deb_level, format='%(asctime)s - %(levelname)s - %(message)s')
 

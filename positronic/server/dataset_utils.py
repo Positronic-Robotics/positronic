@@ -13,7 +13,9 @@ import rerun.blueprint as rrb
 
 from positronic.dataset.dataset import Dataset
 from positronic.dataset.episode import Episode
-from positronic.dataset.signal import Kind, Signal
+from positronic.dataset.local_dataset import LocalDataset
+from positronic.dataset.signal import Kind
+from positronic.dataset.transforms import TransformedDataset
 from positronic.utils.rerun_compat import flatten_numeric, log_numeric_series, log_series_styles, set_timeline_time
 
 
@@ -158,20 +160,6 @@ def _setup_series_names(ep: Episode, signal_names: list[str]) -> None:
         log_series_styles(f'/signals/{key}', names, static=True)
 
 
-def _signal_samples(sig: Signal[Any]) -> Iterator[tuple[Any, int]]:
-    length = len(sig)
-    if length == 0:
-        return iter(())
-    timestamps = sig._ts_at(np.arange(0, length))
-    values = sig._values_at(np.arange(0, length))
-
-    def _generator():
-        for idx in range(length):
-            yield values[idx], int(timestamps[idx])
-
-    return _generator()
-
-
 def _episode_log_entries(ep: Episode, video_names: list[str], signal_names: list[str]):
     heap: list[tuple[int, int, str, str, Any, Iterator[tuple[Any, int]]]] = []
 
@@ -185,11 +173,11 @@ def _episode_log_entries(ep: Episode, video_names: list[str], signal_names: list
     iterators: list[tuple[int, str, str, Iterator[tuple[Any, int]]]] = []
 
     for idx, key in enumerate(video_names):
-        iterators.append((idx, 'video', key, _signal_samples(ep.signals[key])))
+        iterators.append((idx, 'video', key, iter(ep.signals[key])))
 
     base_idx = len(iterators)
     for offset, key in enumerate(signal_names):
-        iterators.append((base_idx + offset, 'numeric', key, _signal_samples(ep.signals[key])))
+        iterators.append((base_idx + offset, 'numeric', key, iter(ep.signals[key])))
 
     for sig_index, kind, key, iterator in iterators:
         _push(sig_index, kind, key, iterator)
@@ -231,7 +219,9 @@ def stream_episode_rrd(ds: Dataset, episode_id: int) -> Iterator[bytes]:
     ep = ds[episode_id]
     logging.info(f'Streaming RRD for episode {episode_id}')
 
-    recording_id = f'positronic_ds_{Path(get_dataset_root(ds)).name}_episode_{episode_id}'
+    dataset_root = get_dataset_root(ds)
+    dataset_name = Path(dataset_root).name if dataset_root else 'unknown'
+    recording_id = f'positronic_ds_{dataset_name}_episode_{episode_id}'
     rec = rr.new_recording(application_id=recording_id)
     drainer = _BinaryStreamDrainer(rec.binary_stream(), min_bytes=2**20)
 
@@ -254,10 +244,8 @@ def stream_episode_rrd(ds: Dataset, episode_id: int) -> Iterator[bytes]:
     yield from drainer.drain(force=True)
 
 
-def get_dataset_root(dataset: Dataset) -> str:
-    """Extract root path from Dataset type."""
-    from positronic.dataset.local_dataset import LocalDataset
-    from positronic.dataset.transforms import TransformedDataset
+def get_dataset_root(dataset: Dataset) -> str | None:
+    """Try to extract root path from Dataset type."""
 
     if isinstance(dataset, LocalDataset):
         return str(dataset.root)
@@ -266,4 +254,4 @@ def get_dataset_root(dataset: Dataset) -> str:
     if isinstance(dataset, TransformedDataset):
         return get_dataset_root(dataset._dataset)
 
-    raise ValueError('Dataset does not provide root path information.')
+    return None
