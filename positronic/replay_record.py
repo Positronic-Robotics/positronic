@@ -59,6 +59,20 @@ class RestoreCommand(transforms.KeyFuncEpisodeTransform):
         )
 
 
+def parse_episodes(episodes: int | list[int] | str, dataset: Dataset) -> list[int]:
+    if isinstance(episodes, int):
+        return [episodes]
+    elif isinstance(episodes, list):
+        return episodes
+    elif isinstance(episodes, str):
+        if episodes == 'all':
+            return list(range(len(dataset)))
+        start, end = episodes.split(':')
+        return list(range(int(start), int(end)))
+    else:
+        raise ValueError(f'episodes must be int, list[int], or str, got {type(episodes)}')
+
+
 @cfn.config(
     dataset=positronic.cfg.dataset.local,
     cameras={'image.handcam_left': 'handcam_left_ph', 'image.wrist': 'wrist_cam_ph', 'image.back_view': 'back_view_ph'},
@@ -67,7 +81,7 @@ class RestoreCommand(transforms.KeyFuncEpisodeTransform):
 )
 def main(
     dataset: Dataset,
-    ep_index: int,
+    episodes: int | list[int] | str,
     mujoco_model_path: str,
     cameras: dict[str, str],
     loaders: Sequence[MujocoSceneTransform] = (),
@@ -75,46 +89,72 @@ def main(
     show_gui: bool = False,
     fps: int = 30,
 ):
+    """Replay and optionally record episodes from a dataset.
+
+    Args:
+        dataset: Source dataset containing episodes to replay
+        episodes: Episodes to replay. Accepts multiple formats:
+            - Single episode: --episodes 5
+            - Multiple episodes: --episodes '[0,5,10]'
+            - Range of episodes: --episodes '0:10' (replays episodes 0 through 9)
+            - All episodes: --episodes all
+        mujoco_model_path: Path to MuJoCo XML model file
+        cameras: Mapping from output camera names to MuJoCo camera names in the scene
+        loaders: Scene transform loaders to apply to the MuJoCo model
+        output_dir: Directory to write recorded episodes (if None, no recording)
+        show_gui: Whether to display GUI visualization during replay
+        fps: Frames per second for camera rendering
+    """
+    indices = parse_episodes(episodes, dataset)
+
+    # Apply dataset transform once
     dataset = transforms.TransformedDataset(dataset, RestoreCommand(), pass_through=True)
-    episode = dataset[ep_index]
 
-    sim = MujocoSim(mujoco_model_path, loaders)
-    sim.load_state(episode.static)
-    robot_arm = MujocoFranka(sim, suffix='_ph')
-    mujoco_cameras = MujocoCameras(sim.model, sim.data, resolution=(320, 240), fps=fps)
-    cameras = {name: mujoco_cameras.cameras[orig_name] for name, orig_name in cameras.items()}
-    gripper = MujocoGripper(sim, actuator_name='actuator8_ph', joint_name='finger_joint1_ph')
-    gui = DearpyguiUi() if show_gui else None
-
-    replay = Replay()
-
+    # Create writer context outside the loop so it persists across episodes
     writer_cm = LocalDatasetWriter(Path(output_dir)) if output_dir is not None else nullcontext(None)
-    with writer_cm as dataset_writer, pimm.World(clock=sim) as world:
-        ds_agent = wire.wire(world, replay, dataset_writer, cameras, robot_arm, gripper, gui, TimeMode.MESSAGE)
-        player_cmd = world.pair(replay.command)
+    with writer_cm as dataset_writer:
+        # Process each episode
+        for ep_index in indices:
+            episode = dataset[ep_index]
 
-        ds_cmd = pimm.NoOpEmitter()
-        if ds_agent is not None:
-            ds_cmd = world.pair(ds_agent.command)
+            sim = MujocoSim(mujoco_model_path, loaders)
+            sim.load_state(episode.static)
+            robot_arm = MujocoFranka(sim, suffix='_ph')
+            mujoco_cameras = MujocoCameras(sim.model, sim.data, resolution=(320, 240), fps=fps)
+            cameras_mapped = {name: mujoco_cameras.cameras[orig_name] for name, orig_name in cameras.items()}
+            gripper = MujocoGripper(sim, actuator_name='actuator8_ph', joint_name='finger_joint1_ph')
+            gui = DearpyguiUi() if show_gui else None
 
-            # This is extremely hacky, but it works. The problem to connect them directly
-            # is that any emitter can be connected only to one receiver.
-            def call_stop(_finished: bool):
-                ds_cmd.emit(DsWriterCommand.STOP())
-                world.request_stop()
-                return True
+            replay = Replay()
 
-            _ = world.pair(replay.finished, emitter_wrapper=pimm.map(call_stop))
+            with pimm.World(clock=sim) as world:
+                ds_agent = wire.wire(
+                    world, replay, dataset_writer, cameras_mapped, robot_arm, gripper, gui, TimeMode.MESSAGE
+                )
+                player_cmd = world.pair(replay.command)
 
-        sim_iter = world.start([sim, mujoco_cameras, robot_arm, gripper, replay, ds_agent], gui)
-        ds_cmd.emit(DsWriterCommand.START(episode.static))
-        player_cmd.emit(DsPlayerStartCommand(episode))
+                ds_cmd = pimm.NoOpEmitter()
+                if ds_agent is not None:
+                    ds_cmd = world.pair(ds_agent.command)
 
-        p_bar = tqdm.tqdm(total=round(episode.duration_ns / 1e9, 1), unit='s')
+                # This is extremely hacky, but it works. The problem to connect them directly
+                # is that any emitter can be connected only to one receiver.
+                def call_stop(_finished, ds_cmd=ds_cmd, world=world):
+                    ds_cmd.emit(DsWriterCommand.STOP())
+                    world.request_stop()
+                    return True
 
-        for _ in sim_iter:
-            p_bar.n = round(sim.now(), 1)
-            p_bar.refresh()
+                _ = world.pair(replay.finished, emitter_wrapper=pimm.map(call_stop))
+
+                sim_iter = world.start([sim, mujoco_cameras, robot_arm, gripper, replay, ds_agent], gui)
+                ds_cmd.emit(DsWriterCommand.START(episode.static))
+                player_cmd.emit(DsPlayerStartCommand(episode))
+
+                p_bar = tqdm.tqdm(total=round(episode.duration_ns / 1e9, 1), unit='s')
+
+                for _ in sim_iter:
+                    p_bar.n = round(sim.now(), 1)
+                    p_bar.refresh()
 
 
 if __name__ == '__main__':

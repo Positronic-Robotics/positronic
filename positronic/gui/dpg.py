@@ -89,7 +89,6 @@ class DearpyguiUi(pimm.ControlSystem):
                     image = cam_msg.data.array  # Extract from NumpySMAdapter
                     if cam_name not in im_sizes:
                         im_sizes[cam_name] = image.shape[:2]
-                        print(f'Have {len(im_sizes)}/{len(self.cameras)} images')
                         if not init_done and len(im_sizes) == len(self.cameras):
                             self.init(im_sizes)
                             init_done = True
@@ -106,8 +105,6 @@ class DearpyguiUi(pimm.ControlSystem):
                 dpg.render_dearpygui_frame()
 
             yield pimm.Pass()
-
-        print('GUI stopped')
 
     def _configure_image_grid(self, n_images: int):
         if n_images == 0:

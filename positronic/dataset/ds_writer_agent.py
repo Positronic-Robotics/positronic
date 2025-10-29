@@ -197,6 +197,10 @@ class DsWriterAgent(pimm.ControlSystem):
 
                 yield pimm.Sleep(limiter.wait_time())
         finally:
+            cmd_msg = self.command.read()
+            if cmd_msg.updated:
+                ep_writer, ep_counter = self._handle_command(cmd_msg.data, ep_writer, ep_counter)
+
             if ep_writer is not None:
                 try:
                     ep_writer.abort()
