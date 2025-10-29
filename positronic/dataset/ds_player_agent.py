@@ -1,7 +1,8 @@
+from __future__ import annotations
+
 import heapq
 from collections.abc import Iterator
 from dataclasses import dataclass, field
-from typing import Optional
 
 import pimm
 from positronic.dataset import Episode
@@ -58,7 +59,7 @@ class DsPlayerAgent(pimm.ControlSystem):
 
             yield pimm.Pass()
 
-    def _apply_command(self, cmd: DsPlayerCommand, clock: pimm.Clock) -> Optional['_Playback']:
+    def _apply_command(self, cmd: DsPlayerCommand, clock: pimm.Clock) -> _Playback | None:
         match cmd:
             case DsPlayerStartCommand() as start_cmd:
                 new_playback = _Playback.start(start_cmd, list(self.outputs.keys()), clock.now_ns())
@@ -111,9 +112,7 @@ class _Playback:
         self.counter += 1
 
     @classmethod
-    def start(
-        cls, command: DsPlayerStartCommand, output_names: list[str], start_clock_ns: int
-    ) -> Optional['_Playback']:
+    def start(cls, command: DsPlayerStartCommand, output_names: list[str], start_clock_ns: int) -> _Playback | None:
         assert output_names, 'No output names provided'
 
         episode = command.episode

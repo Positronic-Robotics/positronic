@@ -237,6 +237,12 @@ def main(
 @cfn.config(
     mujoco_model_path='positronic/assets/mujoco/franka_table.xml',
     webxr=positronic.cfg.webxr.oculus,
+    cameras={
+        'image.handcam_left': 'handcam_left_ph',
+        'image.handcam_right': 'handcam_right_ph',
+        'image.back_view': 'back_view_ph',
+        'image.wrist': 'wrist_cam_ph',
+    },
     sound=positronic.cfg.sound.sound,
     operator_position=OperatorPosition.BACK,
     loaders=positronic.cfg.simulator.stack_cubes_loaders,
@@ -244,6 +250,7 @@ def main(
 def main_sim(
     mujoco_model_path: str,
     webxr: WebXR,
+    cameras: dict[str, str],
     sound: pimm.ControlSystem | None = None,
     loaders: Sequence[MujocoSceneTransform] = (),
     output_dir: str | None = None,
@@ -257,13 +264,7 @@ def main_sim(
     robot_arm = MujocoFranka(sim, suffix='_ph')
 
     mujoco_cameras = MujocoCameras(sim.model, sim.data, resolution=(320, 240), fps=fps)
-    # Map signal names to emitters for wire()
-    cameras = {
-        'image.handcam_left': mujoco_cameras.cameras['handcam_left_ph'],
-        'image.handcam_right': mujoco_cameras.cameras['handcam_right_ph'],
-        'image.back_view': mujoco_cameras.cameras['back_view_ph'],
-        'image.wrist': mujoco_cameras.cameras['wrist_cam_ph'],
-    }
+    cameras = {name: mujoco_cameras.cameras[orig_name] for name, orig_name in cameras.items()}
     gui = DearpyguiUi()
     gripper = MujocoGripper(sim, actuator_name='actuator8_ph', joint_name='finger_joint1_ph')
 
