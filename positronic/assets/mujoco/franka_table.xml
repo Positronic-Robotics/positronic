@@ -273,6 +273,7 @@
                         <camera name="handcam_front_ph" pos="0.05 0 0.01" quat="0 0.707105 0.707108 0" fovy="105"/>
                         <camera name="handcam_back_ph" pos="-0.05 0 0.01" quat="0 0.707105 0.707108 0" fovy="105"/>
                         <camera name="handcam_right_ph" pos="0.05 0.05 0.01" quat="0 0.707105 0.707108 0" fovy="105"/>
+                        <camera name="wrist_cam_ph" pos="-0.05 0.03 0.015" xyaxes="0 -1 0 -1 0 0.2" fovy="90"/>
                         <body name="left_finger_ph" pos="0 0 0.0584">
                           <inertial pos="0 0 0" mass="0.015" diaginertia="2.375e-06 2.375e-06 7.5e-07"/>
                           <joint name="finger_joint1_ph" class="finger_ph" pos="0 0 0" axis="0 1 0" damping="10"/>

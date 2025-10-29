@@ -262,7 +262,7 @@ def main_sim(
         'image.handcam_left': mujoco_cameras.cameras['handcam_left_ph'],
         'image.handcam_right': mujoco_cameras.cameras['handcam_right_ph'],
         'image.back_view': mujoco_cameras.cameras['back_view_ph'],
-        'image.agent_view': mujoco_cameras.cameras['agentview'],
+        'image.wrist': mujoco_cameras.cameras['wrist_cam_ph'],
     }
     gui = DearpyguiUi()
     gripper = MujocoGripper(sim, actuator_name='actuator8_ph', joint_name='finger_joint1_ph')
