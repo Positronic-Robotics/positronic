@@ -19,9 +19,9 @@ class Robotiq2F(pimm.ControlSystem):
     def __init__(self, port: str):
         self._port = port
         self.grip = pimm.ControlSystemEmitter(self)
-        self.target_grip = pimm.ControlSystemReceiver(self)
-        self.force = pimm.ControlSystemReceiver(self)
-        self.speed = pimm.ControlSystemReceiver(self)
+        self.target_grip = pimm.ControlSystemReceiver(self, default=None)
+        self.force = pimm.ControlSystemReceiver(self, default=255)  # device scale 0..255
+        self.speed = pimm.ControlSystemReceiver(self, default=255)  # device scale 0..255
 
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Sleep]:
         client = ModbusClient.ModbusSerialClient(
@@ -34,16 +34,12 @@ class Robotiq2F(pimm.ControlSystem):
             client.write_registers(_REG_CMD, [0x0000, 0x0000, 0x0000], device_id=_SLAVE)
             client.write_registers(_REG_CMD, [0x0100, 0x0000, 0x0000], device_id=_SLAVE)
 
-            target_grip = pimm.DefaultReceiver(self.target_grip, None)
-            force = pimm.DefaultReceiver(self.force, 255)  # device scale 0..255
-            speed = pimm.DefaultReceiver(self.speed, 255)  # device scale 0..255
-
             while not should_stop.value:
-                pos_msg = target_grip.read()
+                pos_msg = self.target_grip.read()
                 if pos_msg.updated:
                     pos = int(max(0, min(1, pos_msg.data)) * 255)
-                    spd = int(max(0, min(255, speed.value)))
-                    frc = int(max(0, min(255, force.value)))
+                    spd = int(max(0, min(255, self.speed.value)))
+                    frc = int(max(0, min(255, self.force.value)))
 
                     client.write_registers(_REG_CMD, [0x0900, pos, (frc << 8) | spd], device_id=_SLAVE)
 

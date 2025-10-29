@@ -1,7 +1,7 @@
 from unittest.mock import Mock
 
-from pimm.core import Clock, Message, SignalEmitter, SignalReceiver
-from pimm.utils import DefaultReceiver, MapSignalEmitter, MapSignalReceiver, RateLimiter
+from pimm.core import Clock, ControlSystem, ControlSystemReceiver, Message, SignalEmitter, SignalReceiver
+from pimm.utils import MapSignalEmitter, MapSignalReceiver, RateLimiter
 
 
 class TestMapSignalReceiver:
@@ -198,38 +198,65 @@ class TestMapSignalEmitter:
         mock_emitter.emit.assert_not_called()
 
 
-class TestDefaultReceiver:
-    """Test the DefaultReceiver class."""
+class TestControlSystemReceiverDefault:
+    """Test the ControlSystemReceiver with default parameter."""
 
-    def test_returns_reader_message_when_available(self):
-        """Test that original reader's message is returned when available."""
-        mock_reader = Mock(spec=SignalReceiver)
+    def test_returns_default_when_not_bound(self):
+        """Test that default value is returned when receiver is not bound."""
+        mock_system = Mock(spec=ControlSystem)
+        receiver = ControlSystemReceiver(mock_system, default='default_value')
+
+        result = receiver.read()
+
+        assert result is not None
+        assert result.data == 'default_value'
+        assert result.ts == -1
+        assert result.updated is False
+
+    def test_returns_actual_value_when_bound(self):
+        """Test that actual value is returned when receiver is bound and has data."""
+        mock_system = Mock(spec=ControlSystem)
+        receiver = ControlSystemReceiver(mock_system, default='default_value')
+
+        # Mock the internal receiver
+        mock_internal = Mock(spec=SignalReceiver)
         test_data = 'actual_data'
         test_ts = 123
-        mock_reader.read.return_value = Message(data=test_data, ts=test_ts)
+        mock_internal.read.return_value = Message(data=test_data, ts=test_ts, updated=True)
+        receiver._bind(mock_internal)
 
-        default_reader = DefaultReceiver(mock_reader, 'default_data', 456)
-        result = default_reader.read()
+        result = receiver.read()
 
         assert result is not None
         assert result.data == test_data
         assert result.ts == test_ts
         assert result.updated is True
 
-    def test_returns_default_when_reader_returns_none(self):
-        """Test that default message is returned when reader returns None."""
-        mock_reader = Mock(spec=SignalReceiver)
-        mock_reader.read.return_value = None
+    def test_returns_default_when_bound_but_no_data(self):
+        """Test that default is returned when bound but internal receiver returns None."""
+        mock_system = Mock(spec=ControlSystem)
+        receiver = ControlSystemReceiver(mock_system, default=42)
 
-        default_data = 'default_value'
-        default_ts = 789
-        default_reader = DefaultReceiver(mock_reader, default_data, default_ts)
-        result = default_reader.read()
+        # Mock the internal receiver to return None
+        mock_internal = Mock(spec=SignalReceiver)
+        mock_internal.read.return_value = None
+        receiver._bind(mock_internal)
+
+        result = receiver.read()
 
         assert result is not None
-        assert result.data == default_data
-        assert result.ts == default_ts
+        assert result.data == 42
+        assert result.ts == -1
         assert result.updated is False
+
+    def test_no_default_returns_none(self):
+        """Test that None is returned when no default is specified and no data available."""
+        mock_system = Mock(spec=ControlSystem)
+        receiver = ControlSystemReceiver(mock_system)
+
+        result = receiver.read()
+
+        assert result is None
 
 
 class TestRateLimiter:

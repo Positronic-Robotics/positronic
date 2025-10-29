@@ -40,8 +40,8 @@ class SoundSystem(pimm.ControlSystem):
 
         self.active = True
         self.current_phase = 0.0
-        self.level: pimm.SignalReceiver[float] = pimm.ControlSystemReceiver(self)
-        self.wav_path: pimm.SignalReceiver[str] = pimm.ControlSystemReceiver(self)
+        self.level: pimm.SignalReceiver[float] = pimm.ControlSystemReceiver(self, default=0.0)
+        self.wav_path: pimm.SignalReceiver[str] = pimm.ControlSystemReceiver(self, default='')
 
     def _level_to_frequency(self, level: float | None) -> tuple[float, float]:
         if level is None or level < self.enable_threshold:
@@ -65,11 +65,8 @@ class SoundSystem(pimm.ControlSystem):
         audio_files = {}
         file_idx = 0
 
-        wav_path = pimm.DefaultReceiver(self.wav_path, '')
-        level = pimm.DefaultReceiver(self.level, 0.0)
-
         while not should_stop.value:
-            path_msg = wav_path.read()
+            path_msg = self.wav_path.read()
             if path_msg.updated:
                 logging.info('Playing %s', path_msg.data)
                 audio_files[file_idx] = wave.open(path_msg.data, 'rb')
@@ -82,7 +79,7 @@ class SoundSystem(pimm.ControlSystem):
                 yield pimm.Pass()
                 continue
 
-            master_volume, frequency = self._level_to_frequency(level.value)
+            master_volume, frequency = self._level_to_frequency(self.level.value)
 
             # Generate tone chunk
             next_chunk = self.sound_fn(chunk_size, master_volume, frequency)

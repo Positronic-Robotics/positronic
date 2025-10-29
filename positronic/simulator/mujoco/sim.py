@@ -214,18 +214,17 @@ class MujocoFranka(pimm.ControlSystem):
         self.actuator_names = [f'actuator{i}{suffix}' for i in range(1, 8)]
         self.joint_qpos_ids = [self.sim.model.joint(joint).qposadr.item() for joint in self.joint_names]
 
-        self.commands: pimm.SignalReceiver[roboarm_command.CommandType] = pimm.ControlSystemReceiver(self)
+        self.commands: pimm.SignalReceiver[roboarm_command.CommandType] = pimm.ControlSystemReceiver(self, default=None)
         self.state: pimm.SignalEmitter[MujocoFrankaState] = pimm.ControlSystemEmitter(self)
 
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock):
-        commands = pimm.DefaultReceiver(self.commands, None)
         state = MujocoFrankaState()
 
         while not should_stop.value:
             # TODO: still a copy here
             state.encode(self.q, self.dq, self.ee_pose)
             # command, is_updated = commands.value
-            cmd_msg = commands.read()
+            cmd_msg = self.commands.read()
             if cmd_msg.updated:
                 match cmd_msg.data:
                     case roboarm_command.CartesianPosition(pose=pose):
@@ -295,13 +294,12 @@ class MujocoGripper(pimm.ControlSystem):
         self.actuator_name = actuator_name
         self.actuator_control_range = self.sim.model.actuator(actuator_name).ctrlrange
         self.joint_name = joint_name
-        self.target_grip: pimm.SignalReceiver[float] = pimm.ControlSystemReceiver(self)
+        self.target_grip: pimm.SignalReceiver[float] = pimm.ControlSystemReceiver(self, default=0.0)
         self.grip: pimm.SignalEmitter = pimm.ControlSystemEmitter(self)
 
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock):
-        target_grip_receiver = pimm.DefaultReceiver(self.target_grip, 0.0)
         while not should_stop.value:
-            target_grip = target_grip_receiver.value
+            target_grip = self.target_grip.value
             self.set_target_grip(target_grip)
 
             current_grip = self.sim.data.joint(self.joint_name).qpos.item()

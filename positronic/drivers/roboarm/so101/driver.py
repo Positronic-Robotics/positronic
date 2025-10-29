@@ -50,8 +50,8 @@ class Robot(pimm.ControlSystem):
         self.kinematic = Kinematics('positronic/drivers/roboarm/so101/so101.urdf', 'gripper_frame_joint')
         self.joint_limits = self.kinematic.joint_limits
         self.home_joints = home_joints if home_joints is not None else [0.0, 0.0, 0.0, 0.0, 0.0]
-        self.commands: pimm.SignalReceiver[roboarm_command.CommandType] = pimm.ControlSystemReceiver(self)
-        self.target_grip: pimm.SignalReceiver[float] = pimm.ControlSystemReceiver(self)
+        self.commands: pimm.SignalReceiver[roboarm_command.CommandType] = pimm.ControlSystemReceiver(self, default=None)
+        self.target_grip: pimm.SignalReceiver[float] = pimm.ControlSystemReceiver(self, default=0.0)
 
         self.grip: pimm.SignalEmitter[float] = pimm.ControlSystemEmitter(self)
         self.state: pimm.SignalEmitter[SO101State] = pimm.ControlSystemEmitter(self)
@@ -65,25 +65,21 @@ class Robot(pimm.ControlSystem):
 
         rate_limit = pimm.RateLimiter(hz=1000, clock=clock)
         state = SO101State()
-        initial_grip = self.motor_bus.position[-1]
-
-        command_receiver = pimm.DefaultReceiver(self.commands, None)
-        target_grip = pimm.DefaultReceiver(self.target_grip, initial_grip)
 
         while not should_stop.value:
             # command, is_updated = command_receiver.value
-            cmd_msg = command_receiver.read()
+            cmd_msg = self.commands.read()
             if cmd_msg.updated:
                 match cmd_msg.data:
                     case roboarm_command.Reset():
                         raise NotImplementedError('Reset not implemented')
                     case roboarm_command.CartesianPosition(pose):
                         qpos = self._solve_ik(state, pose)
-                        q_with_gripper = np.concatenate([qpos, [target_grip.value]])
+                        q_with_gripper = np.concatenate([qpos, [self.target_grip.value]])
                         self.motor_bus.set_target_position(q_with_gripper)
                     case roboarm_command.JointPosition(qpos):
                         q_norm = self.rad_to_norm(qpos)
-                        q_with_gripper = np.concatenate([q_norm, [target_grip.value]])
+                        q_with_gripper = np.concatenate([q_norm, [self.target_grip.value]])
                         self.motor_bus.set_target_position(q_with_gripper)
                     case _:
                         raise ValueError(f'Unknown command: {cmd_msg.data}')

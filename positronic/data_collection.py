@@ -98,7 +98,7 @@ class DataCollectionController(pimm.ControlSystem):
     def __init__(self, operator_position: geom.Transform3D | None, metadata_getter: Callable[[], dict] | None = None):
         self.operator_position = operator_position
         self.metadata_getter = metadata_getter or (lambda: {})
-        self.controller_positions = pimm.ControlSystemReceiver(self)
+        self.controller_positions = pimm.ControlSystemReceiver(self, default=None)
         self.buttons_receiver = pimm.ControlSystemReceiver(self)
         self.robot_state = pimm.ControlSystemReceiver(self)
         self.gripper_state = pimm.FakeReceiver(self)  # To make compatible with other "policy" control systems
@@ -117,7 +117,6 @@ class DataCollectionController(pimm.ControlSystem):
 
         tracker = _Tracker(self.operator_position)
         button_handler = ButtonHandler()
-        controller_positions = pimm.DefaultReceiver(self.controller_positions, None)
 
         recording = False
 
@@ -145,7 +144,7 @@ class DataCollectionController(pimm.ControlSystem):
                     self.robot_commands.emit(roboarm.command.Reset())
 
                 self.target_grip.emit(button_handler.get_value('right_trigger'))
-                cp_msg = controller_positions.read()
+                cp_msg = self.controller_positions.read()
                 if cp_msg.updated:
                     target_robot_pos = tracker.update(cp_msg.data['right'])
                     if tracker.on:  # Don't spam the robot with commands.

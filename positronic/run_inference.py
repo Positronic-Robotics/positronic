@@ -90,17 +90,16 @@ class Inference(pimm.ControlSystem):
         self.robot_commands = pimm.ControlSystemEmitter(self)
         self.target_grip = pimm.ControlSystemEmitter(self)
 
-        self.command = pimm.ControlSystemReceiver[InferenceCommand](self, maxsize=3)
+        self.command = pimm.ControlSystemReceiver[InferenceCommand](self, default=None, maxsize=3)
 
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Sleep]:  # noqa: C901
-        commands = pimm.DefaultReceiver(self.command, None)
         running = False
 
         # TODO: We should emit new commands per frame, not per inference fps
         rate_limiter = pimm.RateLimiter(clock, hz=self.inference_fps)
 
         while not should_stop.value:
-            command_msg = commands.read()
+            command_msg = self.command.read()
             if command_msg.updated:
                 match command_msg.data.type:
                     case InferenceCommandType.START:

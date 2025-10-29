@@ -50,7 +50,7 @@ if __name__ == '__main__':
             self.filename = filename
             self.fps = fps
             self.codec = codec
-            self.frame = pimm.ControlSystemReceiver(self)
+            self.frame = pimm.ControlSystemReceiver(self, default=None)
 
         def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock):
             print(f'Writing to {self.filename}')
@@ -60,9 +60,8 @@ if __name__ == '__main__':
                 stream.pix_fmt = 'yuv420p'
                 stream.options = {'crf': '27', 'g': '2', 'preset': 'ultrafast', 'tune': 'zerolatency'}
 
-                frame_receiver = pimm.DefaultReceiver(self.frame, None)
                 while not should_stop.value:
-                    frame_msg = frame_receiver.read()
+                    frame_msg = self.frame.read()
                     if not frame_msg.updated:
                         yield pimm.Sleep(0.5 / self.fps)
                         continue

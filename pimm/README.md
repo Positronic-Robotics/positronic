@@ -109,10 +109,12 @@ Signals also expose freshness straight on the payload: every `Message` has an
 `updated` flag that is `True` only when the value changed since the previous read.
 Control loops can gate their work on that bit without extra wrappers.
 
-For common transformation patterns Pimm provides small adapters:
+`ControlSystemReceiver` accepts a `default=` parameter to supply safe defaults
+until real data arrives. When a receiver has no value yet, it returns a message
+with the default value and `updated=False`.
 
-- `pimm.DefaultReceiver(reader, default)` supplies safe defaults until real data
-  arrives.
+For data transformation, Pimm provides:
+
 - `pimm.map(signal, func)` transforms data on the way in or out. If `func`
   returns `None`, the value is filtered: receivers return the last valid message
   while emitters skip emission entirely. This enables conditional filtering like

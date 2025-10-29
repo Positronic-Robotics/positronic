@@ -147,13 +147,13 @@ class DsWriterAgent(pimm.ControlSystem):
         self.ds_writer = ds_writer
         self._poll_hz = float(poll_hz)
         self._time_mode = time_mode
-        self.command = pimm.ControlSystemReceiver[DsWriterCommand](self)
+        self.command = pimm.ControlSystemReceiver[DsWriterCommand](self, default=None)
 
         self._inputs: dict[str, pimm.ControlSystemReceiver[Any]] = {}
         self._serializers: dict[str, Callable[[Any], Any | dict[str, Any]]] = {}
 
     def add_signal(self, name: str, serializer: Serializer | None = None):
-        self._inputs[name] = pimm.ControlSystemReceiver[Any](self)
+        self._inputs[name] = pimm.ControlSystemReceiver[Any](self, default=None)
         if serializer is not None:
             self._serializers[name] = serializer
 
@@ -168,20 +168,17 @@ class DsWriterAgent(pimm.ControlSystem):
         appending are split into helpers.
         """
         limiter = pimm.utils.RateLimiter(clock, hz=self._poll_hz)
-        commands = pimm.DefaultReceiver(self.command, None)
-
-        signals = {name: pimm.DefaultReceiver(reader, None) for name, reader in self._inputs.items()}
         ep_writer: EpisodeWriter | None = None
         ep_counter = 0
 
         try:
             while not should_stop.value:
-                cmd_msg = commands.read()
+                cmd_msg = self.command.read()
                 if cmd_msg.updated:
                     ep_writer, ep_counter = self._handle_command(cmd_msg.data, ep_writer, ep_counter)
 
                 if ep_writer is not None:
-                    for name, reader in signals.items():
+                    for name, reader in self._inputs.items():
                         msg = reader.read()
                         if msg.updated:
                             world_time_ns, message_time_ns = clock.now_ns(), msg.ts

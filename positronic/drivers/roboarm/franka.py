@@ -82,7 +82,7 @@ class Robot(pimm.ControlSystem):
         self._ip = ip
         self._relative_dynamics_factor = relative_dynamics_factor
         self._home_joints = home_joints if home_joints is not None else [0.0, -0.31, 0.0, -1.65, 0.0, 1.522, 0.0]
-        self.commands: pimm.SignalReceiver = pimm.ControlSystemReceiver(self)
+        self.commands: pimm.SignalReceiver = pimm.ControlSystemReceiver(self, default=None)
         self.state: pimm.SignalEmitter = pimm.ControlSystemEmitter(self)
 
     @staticmethod
@@ -123,7 +123,6 @@ class Robot(pimm.ControlSystem):
         Robot._init_robot(robot)
         robot.recover_from_errors()
 
-        commands = pimm.DefaultReceiver(self.commands, None)
         robot_state = FrankaState()
         rate_limiter = pimm.RateLimiter(clock, hz=2000)
 
@@ -131,7 +130,7 @@ class Robot(pimm.ControlSystem):
 
         while not should_stop.value:
             st = robot.state()
-            cmd_msg = commands.read()
+            cmd_msg = self.commands.read()
             if cmd_msg.updated:
                 match cmd_msg.data:
                     case command.Reset():

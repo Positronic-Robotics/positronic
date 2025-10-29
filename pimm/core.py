@@ -11,6 +11,9 @@ class NoValueException(Exception):
     pass
 
 
+NODEFAULT = object()
+
+
 @dataclass
 class Message(Generic[T]):
     """
@@ -139,8 +142,9 @@ class ControlSystemEmitter(SignalEmitter[T]):
 class ControlSystemReceiver(SignalReceiver[T]):
     """Receiver adaptor bound to a single upstream signal on behalf of a system."""
 
-    def __init__(self, owner: ControlSystem, maxsize: int | None = None):
+    def __init__(self, owner: ControlSystem, default: T | None = NODEFAULT, maxsize: int | None = None):
         self._owner = owner
+        self._default = default
         self._internal: SignalReceiver[T] | None = None
         self._maxsize = maxsize
 
@@ -157,7 +161,13 @@ class ControlSystemReceiver(SignalReceiver[T]):
         self._internal = receiver
 
     def read(self) -> Message[T] | None:
-        return self._internal.read() if self._internal is not None else None
+        if self._internal is not None:
+            value = self._internal.read()
+            if value is not None:
+                return value
+        if self._default is not NODEFAULT:
+            return Message(self._default, -1, False)  # Default value is always not-updated
+        return None
 
 
 class FakeEmitter(ControlSystemEmitter[T]):
@@ -194,15 +204,16 @@ class ReceiverDict(dict[str, ControlSystemReceiver[U]]):
     Pass fake=True for all fake receivers, or fake={'key1', 'key2'} for specific keys.
     """
 
-    def __init__(self, owner: ControlSystem, fake: bool | Iterable[str] = False):
+    def __init__(self, owner: ControlSystem, *, default: U | None = NODEFAULT, fake: bool | Iterable[str] = False):
         super().__init__()
         self._owner = owner
+        self._default = default
         self._fake = set(fake) if isinstance(fake, Iterable) else set()
         self._all_fake = fake is True
 
     def __missing__(self, key: str) -> ControlSystemReceiver[U]:
         fake = self._all_fake or key in self._fake
-        receiver = FakeReceiver(self._owner) if fake else ControlSystemReceiver(self._owner)
+        receiver = FakeReceiver(self._owner) if fake else ControlSystemReceiver(self._owner, self._default)
         self[key] = receiver
         return receiver
 

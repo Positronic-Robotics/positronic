@@ -15,9 +15,9 @@ def _get_down_keys() -> list[int]:
 
 class DearpyguiUi(pimm.ControlSystem):
     def __init__(self):
-        self.cameras = pimm.ReceiverDict(self)
+        self.cameras = pimm.ReceiverDict(self, default=None)
         self.im_sizes = {}
-        self.info = pimm.ControlSystemReceiver(self)
+        self.info = pimm.ControlSystemReceiver(self, default='')
         self.buttons = pimm.ControlSystemEmitter(self)
 
     def init(self, im_sizes: dict[str, tuple[int, int]]):
@@ -65,17 +65,13 @@ class DearpyguiUi(pimm.ControlSystem):
         dpg.show_viewport(maximized=True)
 
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Sleep]:
-        cameras = {cam_name: pimm.DefaultReceiver(reader, None) for cam_name, reader in self.cameras.items()}
-
         fps_counter = pimm.utils.RateCounter('UI')
         frame_fps_counter = pimm.utils.RateCounter('Frame')
-
-        info_receiver = pimm.DefaultReceiver(self.info, '')
 
         im_sizes = {}
         init_done = False
 
-        if not init_done and len(cameras) == 0:
+        if not init_done and len(self.cameras) == 0:
             self.init({})
             init_done = True
 
@@ -85,7 +81,7 @@ class DearpyguiUi(pimm.ControlSystem):
                 pressed_keys = _get_down_keys()
                 self.buttons.emit(pimm.Message(pressed_keys))
 
-            for cam_name, camera in cameras.items():
+            for cam_name, camera in self.cameras.items():
                 # frame, is_new = camera.value
                 cam_msg = camera.read()
 
@@ -93,8 +89,8 @@ class DearpyguiUi(pimm.ControlSystem):
                     image = cam_msg.data.array  # Extract from NumpySMAdapter
                     if cam_name not in im_sizes:
                         im_sizes[cam_name] = image.shape[:2]
-                        print(f'Have {len(im_sizes)}/{len(cameras)} images')
-                        if not init_done and len(im_sizes) == len(cameras):
+                        print(f'Have {len(im_sizes)}/{len(self.cameras)} images')
+                        if not init_done and len(im_sizes) == len(self.cameras):
                             self.init(im_sizes)
                             init_done = True
 
@@ -105,7 +101,7 @@ class DearpyguiUi(pimm.ControlSystem):
                     frame_fps_counter.tick()
 
             if init_done:
-                info_text = info_receiver.value
+                info_text = self.info.value
                 dpg.set_value('info', info_text)
                 dpg.render_dearpygui_frame()
 

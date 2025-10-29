@@ -18,7 +18,7 @@ from .core import (
     SignalReceiver,
     Sleep,
 )
-from .utils import DefaultReceiver, RateLimiter, map
+from .utils import RateLimiter, map
 from .world import World
 
 __all__ = [
@@ -27,7 +27,6 @@ __all__ = [
     'ControlSystem',
     'ControlSystemEmitter',
     'ControlSystemReceiver',
-    'DefaultReceiver',
     'EmitterDict',
     'FakeEmitter',
     'FakeReceiver',

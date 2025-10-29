@@ -67,12 +67,11 @@ class Robot(pimm.ControlSystem):
         self.relative_dynamics_factor = relative_dynamics_factor
         self.solver = KinematicsSolver()
         self.home_joints = home_joints if home_joints is not None else [0.0, -0, 0.5, -1.5, 0.0, -0.5, 1.57079633]
-        self.commands: pimm.SignalReceiver[command.CommandType] = pimm.ControlSystemReceiver(self)
+        self.commands: pimm.SignalReceiver[command.CommandType] = pimm.ControlSystemReceiver(self, default=None)
         self.state: pimm.SignalEmitter[KinovaState] = pimm.ControlSystemEmitter(self)
 
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Sleep]:
         _set_realtime_priority()
-        commands = pimm.DefaultReceiver(self.commands, None)
         robot_state = KinovaState()
         rate_limiter = pimm.RateLimiter(clock, hz=1000)
 
@@ -88,7 +87,7 @@ class Robot(pimm.ControlSystem):
             current_command = np.zeros(api.actuator_count, dtype=np.float32)
 
             while not should_stop.value:
-                cmd_msg = commands.read()
+                cmd_msg = self.commands.read()
                 if cmd_msg.updated:
                     match cmd_msg.data:
                         case command.Reset():

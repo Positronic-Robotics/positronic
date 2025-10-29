@@ -92,20 +92,6 @@ def map(
     return wrapper
 
 
-class DefaultReceiver(SignalReceiver[T | K]):
-    """Signal reader that returns a default value if no value is available."""
-
-    def __init__(self, reader: SignalReceiver[T], default: K, default_ts: int = 0):
-        self.reader = reader
-        self.default_msg = Message(default, default_ts, False)
-
-    def read(self) -> Message[T | K]:
-        msg = self.reader.read()
-        if msg is None:
-            return self.default_msg
-        return msg
-
-
 class RateLimiter:
     """Rate limiter that enforces a minimum interval between calls."""
 

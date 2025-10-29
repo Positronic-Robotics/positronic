@@ -5,7 +5,6 @@ import pytest
 
 from pimm.core import Clock, Message, NoOpEmitter, SignalEmitter, SignalReceiver, Sleep
 from pimm.shared_memory import NumpySMAdapter
-from pimm.utils import DefaultReceiver
 from pimm.world import TransportMode, World
 
 
@@ -312,13 +311,12 @@ class TestSharedMemoryMultiprocessing:
         with World() as world:
             emitter_control_loop.emitter, reader = world.mp_pipe(transport=TransportMode.SHARED_MEMORY)
 
-            reader = DefaultReceiver(reader, None)
             world.start_in_subprocess(emitter_control_loop.run)
 
             data = []
             while not world.should_stop:
                 msg = reader.read()
-                if msg.updated:
+                if msg is not None and msg.updated:
                     data.append(msg.data.array.copy())
 
             assert len(data) == 2
