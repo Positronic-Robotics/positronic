@@ -86,7 +86,7 @@ class DiskEpisodeWriter(EpisodeWriter):
         meta['writer'] = _cached_env_writer_info()
         meta['writer']['name'] = f'{self.__class__.__module__}.{self.__class__.__qualname__}'
         with (self._path / 'meta.json').open('w', encoding='utf-8') as f:
-            json.dump(meta, f)
+            json.dump(meta, f, indent=2)
 
     @property
     def path(self) -> Path:
@@ -172,7 +172,7 @@ class DiskEpisodeWriter(EpisodeWriter):
         episode_json = self._path / 'static.json'
         if self._static_items or not episode_json.exists():
             with episode_json.open('w', encoding='utf-8') as f:
-                json.dump(self._static_items, f)
+                json.dump(self._static_items, f, indent=2)
 
         if exc_type is None and not self._aborted and self._on_close is not None:
             self._on_close(self)

@@ -57,8 +57,11 @@ def update_v0_1_0(path: str):
         ),
     }
 
+    static_features = list(dataset[0].static.keys())
     return TransformedDataset(
-        dataset, KeyFuncEpisodeTransform(**funcs), pass_through=['grip', 'target_grip'] + image_features
+        dataset,
+        KeyFuncEpisodeTransform(**funcs),
+        pass_through=['grip', 'target_grip'] + image_features + static_features,
     )
 
 
