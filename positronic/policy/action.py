@@ -77,6 +77,33 @@ class AbsolutePositionAction(RotationTranslationGripAction):
         return (command.CartesianPosition(pose=target_pose), target_grip)
 
 
+class AbsoluteJointsAction(ActionDecoder):
+    """Absolute joint position action decoder.
+
+    Action vector: (num_joints + 1,) = [joint_positions..., gripper_position]
+    """
+
+    def __init__(
+        self, tgt_joints_key: str = 'robot_commands.joints', tgt_grip_key: str = 'target_grip', num_joints: int = 7
+    ):
+        super().__init__()
+        self.tgt_joints_key = tgt_joints_key
+        self.tgt_grip_key = tgt_grip_key
+        self.num_joints = num_joints
+
+    def encode_episode(self, episode: Episode) -> Signal[np.ndarray]:
+        joints = episode[self.tgt_joints_key]
+        return transforms.concat(joints, episode[self.tgt_grip_key], dtype=np.float32)
+
+    def decode(self, action_vector: np.ndarray, inputs: dict[str, np.ndarray]) -> tuple[command.CommandType, float]:
+        if action_vector.shape[-1] != self.num_joints + 1:
+            raise ValueError(f'Expected action vector of size {self.num_joints + 1}, got {action_vector.shape[-1]}')
+
+        joint_positions = action_vector[: self.num_joints]
+        target_grip = action_vector[-1].item()
+        return (command.JointPosition(positions=joint_positions), target_grip)
+
+
 class RelativeTargetPositionAction(RotationTranslationGripAction):
     def __init__(
         self,

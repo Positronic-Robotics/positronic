@@ -5,7 +5,7 @@ import positronic.drivers.roboarm.command as cmd_module
 from positronic.dataset.episode import EpisodeContainer
 from positronic.dataset.tests.utils import DummySignal
 from positronic.geom import Rotation
-from positronic.policy.action import AbsolutePositionAction, RelativeTargetPositionAction
+from positronic.policy.action import AbsoluteJointsAction, AbsolutePositionAction, RelativeTargetPositionAction
 from positronic.policy.observation import ObservationEncoder
 
 
@@ -104,3 +104,23 @@ def test_relative_target_position_action_encode_decode_quat():
     # Decode applies diff to current translation
     np.testing.assert_allclose(command.pose.translation, t_cur[0] + vec[4:7], atol=1e-6)
     assert np.isclose(target_grip, g_tgt[0])
+
+
+def test_absolute_joints_action_encode_decode():
+    # Known joint positions and grip
+    ts = [1000, 2000]
+    joints = [np.array([0.1, -0.2, 0.3, 0.4, -0.5, 0.6, 0.7], dtype=np.float32) for _ in ts]
+    g = [0.5, 0.6]
+
+    ep = EpisodeContainer({'robot_commands.joints': DummySignal(ts, joints), 'target_grip': DummySignal(ts, g)})
+
+    act = AbsoluteJointsAction('robot_commands.joints', 'target_grip', num_joints=7)
+    sig = act.encode_episode(ep)
+    vec = list(sig)[0][0]
+    assert vec.shape == (8,)  # 7 joints + 1 grip
+    assert vec.dtype == np.float32
+
+    command, target_grip = act.decode(vec, inputs={})
+    assert isinstance(command, cmd_module.JointPosition)
+    np.testing.assert_allclose(command.positions, joints[0], atol=1e-6)
+    assert np.isclose(target_grip, g[0])

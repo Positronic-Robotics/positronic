@@ -21,6 +21,25 @@ def absolute_position(rotation_representation: RotRep, tgt_ee_pose_key: str, tgt
     return result
 
 
+# TODO: This currently does not work, as collected datasets use cartesian control
+# Two potential solutions:
+# * Have a trasnform that computes IK (cartesian -> joint)
+# * As most controllers do IK themselves, log target joints in the data collection
+@cfn.config(tgt_joints_key='robot_commands.joints', tgt_grip_key='target_grip', num_joints=7)
+def absolute_joints(tgt_joints_key: str, tgt_grip_key: str, num_joints: int):
+    from positronic.policy.action import AbsoluteJointsAction
+
+    result = AbsoluteJointsAction(tgt_joints_key, tgt_grip_key, num_joints=num_joints)
+    result.meta['gr00t_modality'] = {
+        'action': {
+            'target_joint_positions': {'start': 0, 'end': num_joints},
+            'target_grip': {'start': num_joints, 'end': num_joints + 1},
+        }
+    }
+    result.meta['lerobot_features'] = {'action': {'shape': (num_joints + 1,), 'names': ['actions'], 'dtype': 'float32'}}
+    return result
+
+
 @cfn.config(num_joints=7)
 def joint_delta(num_joints: int):
     from positronic.policy.action import JointDeltaAction
