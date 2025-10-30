@@ -385,7 +385,9 @@ openpi_positronic_real = openpi_droid.override(
     action_decoder=positronic.cfg.policy.action.absolute_position,
 )
 
-if __name__ == '__main__':
+
+# Separate function for [projects.scripts]
+def _internal_main():
     cfn.cli({
         'sim_act': main_sim_act,
         'sim_openpi_positronic': main_sim_openpi_positronic,
@@ -393,3 +395,7 @@ if __name__ == '__main__':
         'droid_real': openpi_droid,
         'openpi_real': openpi_positronic_real,
     })
+
+
+if __name__ == '__main__':
+    _internal_main()

@@ -339,5 +339,10 @@ droid = cfn.Config(
     operator_position=OperatorPosition.BACK,
 )
 
-if __name__ == '__main__':
+
+def _internal_main():
     cfn.cli({'real': main_cfg, 'so101': so101cfg, 'sim': main_sim, 'droid': droid})
+
+
+if __name__ == '__main__':
+    _internal_main()

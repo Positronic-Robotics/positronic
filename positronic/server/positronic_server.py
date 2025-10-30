@@ -230,5 +230,9 @@ def main(
     uvicorn.run(app, host=host, port=port, log_level='debug' if debug else 'info')
 
 
-if __name__ == '__main__':
+def _internal_main():
     cfn.cli(main)
+
+
+if __name__ == '__main__':
+    _internal_main()

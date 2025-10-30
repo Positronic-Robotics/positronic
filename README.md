@@ -77,7 +77,14 @@ Install hardware extras only when you need physical robot drivers (Linux only):
 uv sync --frozen --extra hardware
 ```
 
-All runtime commands in the sections below assume either an activated virtual environment or `uv run python -m …`.
+After installation, the following command-line scripts will be available:
+- `positronic-data-collection` — collect demonstrations in simulation or on hardware
+- `positronic-server` — browse and inspect datasets
+- `positronic-to-lerobot` — convert datasets to LeRobot format
+- `positronic-train` — train policies using LeRobot
+- `positronic-inference` — run trained policies in simulation or on hardware
+
+All commands work both inside an activated virtual environment and with `uv run` prefix (e.g., `uv run positronic-server`).
 
 ### Option 2: Docker
 
@@ -92,10 +99,10 @@ cd positronic
 
 ## Core modules at a glance
 
-- [`pimm`](pimm/README.md) — immediate-mode runtime for building control systems. Handy references: [README](pimm/README.md), [Data collection example](positronic/data_collection.py), [Inference example](positronic/run_inference.py).
+- [`pimm`](pimm/README.md) — immediate-mode runtime for building control systems. Handy references: [README](pimm/README.md), [Data collection script](positronic/data_collection.py), [Inference script](positronic/run_inference.py).
 - [Positronic dataset library](positronic/dataset/README.md) — dataset writer/reader, transforms, and streaming agent.
-- [Positronic server](positronic/server/positronic_server.py) — FastAPI + Rerun viewer for inspecting recordings.
-- [Training scripts](positronic/training) — scripts for converting datasets and running LeRobot pipelines while native Positronic training is being finalised.
+- [Positronic server](positronic/server/positronic_server.py) — FastAPI + Rerun viewer for inspecting recordings. Run via `positronic-server`.
+- [Training scripts](positronic/training) — scripts for converting datasets (`positronic-to-lerobot`) and running LeRobot pipelines (`positronic-train`) while native Positronic training is being finalised.
 - [Drivers package](positronic/drivers) — hardware definitions, WebXR frontends, simulator loaders, and [Config presets](positronic/cfg) ready to override per project.
 
 ---
@@ -117,7 +124,7 @@ Use the [Data collection script](positronic/data_collection.py) for both simulat
 #### Quick start in simulation
 
 ```bash
-python -m positronic.data_collection sim \
+positronic-data-collection sim \
     --output_dir=~/datasets/stack_cubes_raw \
     --sound=None --webxr=.iphone --operator_position=.BACK
 ```
@@ -185,9 +192,9 @@ In the similar manner as you manage the virtual robot in simulator, you can driv
 Choose the configuration that matches your setup — all presets are defined in [Data collection script](positronic/data_collection.py) using `configuronic`:
 
 ```bash
-python -m positronic.data_collection real  --output_dir=~/datasets/franka_kitchen
-python -m positronic.data_collection so101 --output_dir=~/datasets/so101_runs
-python -m positronic.data_collection droid --output_dir=~/datasets/droid_runs
+positronic-data-collection real  --output_dir=~/datasets/franka_kitchen
+positronic-data-collection so101 --output_dir=~/datasets/so101_runs
+positronic-data-collection droid --output_dir=~/datasets/droid_runs
 ```
 
 Override components inline (e.g. `--webxr=.iphone`, `--sound=None`, `--operator_position=.FRONT`,
@@ -202,14 +209,14 @@ The server can inspect **any dataset type**, not just local directories. Pass an
 For simple local datasets:
 
 ```bash
-python -m positronic.server.positronic_server \
+positronic-server \
     --dataset.path=~/datasets/stack_cubes_raw \
     --port=5001
 ```
 To inspect a transformed dataset (the same one used during training):
 
 ```bash
-python -m positronic.server.positronic_server \
+positronic-server \
     --dataset=@positronic.cfg.dataset.transformed \
     --dataset.base.path=~/datasets/stack_cubes_raw \
     --port=5001
@@ -232,7 +239,7 @@ Use the [LeRobot conversion helper](positronic/training/to_lerobot.py) until nat
 Until training scripts consume Positronic datasets directly, convert curated runs into LeRobot format:
 
 ```bash
-python -m positronic.training.to_lerobot convert \
+positronic-to-lerobot convert \
     --dataset.path=~/datasets/stack_cubes_raw \
     --output_dir=~/datasets/lerobot/stack_cubes \
     --task="pick up the green cube and place it on the red cube" \
@@ -242,9 +249,10 @@ python -m positronic.training.to_lerobot convert \
 The converter reads your data through `positronic.cfg.dataset.transformed` (see [Dataset config module](positronic/cfg/dataset.py)), applies the same observation/action transforms used at inference time, and writes a `LeRobotDataset`. Re-run the command whenever you tweak transforms or add new episodes. To extend an existing LeRobot dataset:
 
 ```bash
-python -m positronic.training.to_lerobot append \
-    --dataset_dir=~/datasets/lerobot/stack_cubes \
-    --dataset.path=~/datasets/stack_cubes_new
+positronic-to-lerobot append \
+    --output_dir=~/datasets/lerobot/stack_cubes \
+    --dataset.path=~/datasets/stack_cubes_new \
+    --fps=30
 ```
 
 Keep the original Positronic datasets — once native training lands you will no longer need this conversion step.
@@ -256,8 +264,9 @@ Run the [LeRobot training driver](positronic/training/lerobot_train.py) with Pos
 Train an ACT policy using LeRobot’s pipeline configured for Positronic observations and actions:
 
 ```bash
-python -m positronic.training.lerobot_train \
+positronic-train \
     --dataset_root=~/datasets/lerobot/stack_cubes \
+    --run_name=stack_cubes_act \
     --base_config=positronic/training/train_config.json
 ```
 
@@ -270,7 +279,7 @@ Replay checkpoints through the [Inference script](positronic/run_inference.py) t
 Run the trained policy in MuJoCo, record diagnostics, and optionally stream a GUI:
 
 ```bash
-python -m positronic.run_inference sim_act \
+positronic-inference sim_act \
     --policy.checkpoint_path=~/datasets/lerobot/stack_cubes/checkpoints/last/pretrained_model \
     --simulation_time=60 \
     --output_dir=~/datasets/inference_logs/stack_cubes_act \

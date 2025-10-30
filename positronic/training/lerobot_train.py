@@ -1,6 +1,6 @@
 """
 Example:
-`python -m positronic.training.lerobot_train --dataset_root=~/datasets/lerobot/stack_cubes`
+`positronic-train --dataset_root=~/datasets/lerobot/stack_cubes`
 """
 
 from dataclasses import dataclass, field
@@ -79,5 +79,9 @@ def train(
     print('Training finished.')
 
 
-if __name__ == '__main__':
+def _internal_main():
     cfn.cli(train)
+
+
+if __name__ == '__main__':
+    _internal_main()

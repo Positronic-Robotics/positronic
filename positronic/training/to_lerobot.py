@@ -5,14 +5,16 @@ run the tool is from the project environment (virtualenv or `uv run`).
 
 Examples:
 - Convert to a new LeRobot dataset
-  python -m positronic.training.to_lerobot convert \
+  positronic-to-lerobot convert \
     --dataset.path=/path/to/local_dataset \
-    --output_dir=/path/to/lerobot_ds
+    --output_dir=/path/to/lerobot_ds \
+    --fps=30
 
 - Append to an existing LeRobot dataset
-  python -m positronic.training.to_lerobot append \
-    --dataset_dir=/path/to/lerobot_ds \
-    --dataset.path=/path/to/local_dataset
+  positronic-to-lerobot append \
+    --output_dir=/path/to/lerobot_ds \
+    --dataset.path=/path/to/local_dataset \
+    --fps=30
 """
 
 import json
@@ -157,5 +159,9 @@ def append_data_to_lerobot_dataset(output_dir: str, dataset: Dataset, fps: int, 
     print(f'Dataset extended and saved to {output_dir}')
 
 
-if __name__ == '__main__':
+def _internal_main():
     cfn.cli({'convert': convert_to_lerobot_dataset, 'append': append_data_to_lerobot_dataset})
+
+
+if __name__ == '__main__':
+    _internal_main()
