@@ -77,12 +77,14 @@ class Inference(pimm.ControlSystem):
         policy,
         inference_fps: int = 30,
         task: str | None = None,
+        simulate_timeout: bool = False,
     ):
         self.observation_encoder = observation_encoder
         self.action_decoder = action_decoder
         self.policy = policy
         self.inference_fps = inference_fps
         self.task = task
+        self.simulate_timeout = simulate_timeout
 
         self.frames = pimm.ReceiverDict(self)
         self.robot_state = pimm.ControlSystemReceiver(self)
@@ -136,8 +138,13 @@ class Inference(pimm.ControlSystem):
                 if self.task is not None:
                     obs['task'] = self.task
 
+                start = time.monotonic()
                 action = self.policy.select_action(obs)
                 roboarm_command, target_grip = self.action_decoder.decode(action, inputs)
+
+                duration = time.monotonic() - start
+                if self.simulate_timeout:
+                    yield pimm.Sleep(duration)
 
                 self.robot_commands.emit(roboarm_command)
                 self.target_grip.emit(target_grip)
@@ -272,6 +279,7 @@ def main_sim(
     output_dir: str | None = None,
     show_gui: bool = False,
     num_iterations: int = 1,
+    simulate_timeout: bool = False,
 ):
     observers = {
         'box_distance': BodyDistance('box_0_body', 'box_1_body'),
@@ -283,7 +291,7 @@ def main_sim(
     mujoco_cameras = MujocoCameras(sim.model, sim.data, resolution=(320, 240), fps=camera_fps)
     # Map signal names to emitters for wire()
     cameras = {name: mujoco_cameras.cameras[orig_name] for name, orig_name in camera_dict.items()}
-    inference = Inference(observation_encoder, action_decoder, policy, policy_fps, task)
+    inference = Inference(observation_encoder, action_decoder, policy, policy_fps, task, simulate_timeout)
     control_systems = [mujoco_cameras, sim, robot_arm, gripper, inference]
 
     meta = {
