@@ -75,9 +75,7 @@ def _collate_fn(x):
     return x[0]
 
 
-def append_data_to_dataset(
-    lr_dataset: LeRobotDataset, p_dataset: Dataset, task: str | None = None, num_workers: int = 16, fps: int = 30
-):
+def append_data_to_dataset(lr_dataset: LeRobotDataset, p_dataset: Dataset, fps, task=None, num_workers=16):
     _raise_fd_limit()
     lr_dataset.start_image_writer(num_processes=num_workers)
     # Process each episode file
@@ -93,16 +91,17 @@ def append_data_to_dataset(
         total_length_sec += num_frames * 1 / lr_dataset.fps
 
         for i in range(num_frames):
-            ep_task = task
-            if task is None and 'task' in ep_dict:
-                ep_task = ep_dict['task']
-
             frame = {}
             for key, value in ep_dict.items():
                 frame[key] = ep_dict[key]
                 if isinstance(value, AbcSequence | np.ndarray) and len(value) == num_frames:
                     frame[key] = frame[key][i]
 
+            ep_task = task
+            if task is None:
+                ep_task = frame.get('task', '')
+
+            frame.pop('task', None)
             lr_dataset.add_frame(frame, task=ep_task or '')
 
         lr_dataset.save_episode()
@@ -110,13 +109,8 @@ def append_data_to_dataset(
     print(f'Total length of the dataset: {seconds_to_str(total_length_sec)}')
 
 
-@cfn.config(
-    fps=30,
-    video=True,
-    dataset=positronic.cfg.dataset.transformed,
-    task='pick plate from the table and place it into the dishwasher',
-)
-def convert_to_lerobot_dataset(output_dir: str, fps: int, video: bool, dataset: Dataset, task: str):
+@cfn.config(video=True, dataset=positronic.cfg.dataset.transformed)
+def convert_to_lerobot_dataset(output_dir: str, fps: int, video: bool, dataset: Dataset, task=None):
     assert dataset.meta['lerobot_features'] is not None, "dataset.meta['lerobot_features'] is required"
     lr_dataset = LeRobotDataset.create(
         repo_id='local',
@@ -138,10 +132,8 @@ def convert_to_lerobot_dataset(output_dir: str, fps: int, video: bool, dataset: 
     print(f'Dataset converted and saved to {output_dir}')
 
 
-@cfn.config(
-    dataset=positronic.cfg.dataset.transformed, task='pick plate from the table and place it into the dishwasher'
-)
-def append_data_to_lerobot_dataset(output_dir: str, dataset: Dataset, task: str, fps: int):
+@cfn.config(dataset=positronic.cfg.dataset.transformed)
+def append_data_to_lerobot_dataset(output_dir: str, dataset: Dataset, fps: int, task=None):
     lr_dataset = LeRobotDataset(repo_id='local', root=Path(output_dir).expanduser().absolute())
 
     lr_modality_path = Path(output_dir).expanduser().absolute() / 'meta' / 'modality.json'
