@@ -16,6 +16,7 @@ classifiers = [
 ]
 dependencies = [
     "av",
+    "boto3",
     "configuronic>=0.2",
     "cvxopt",
     "dearpygui",
@@ -34,7 +35,7 @@ dependencies = [
     "scipy",
     "torch",
     "uvicorn[standard]",
-    "lerobot>=0.3.3",  # TODO: Get rid of this, move all usages to standalone scripts
+    "lerobot>=0.3.3", # TODO: Get rid of this, move all usages to standalone scripts
     "rerun-sdk~=0.22",
 ]
 
@@ -86,6 +87,7 @@ testpaths = [
     "positronic/geom/tests",
     "positronic/tests",
     "positronic/policy/tests",
+    "positronic/utils/s3/tests",
 ]
 python_files = ["test_*.py", "*_test.py"]
 addopts = [
