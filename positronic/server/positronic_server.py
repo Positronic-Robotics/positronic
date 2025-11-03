@@ -18,6 +18,7 @@ from fastapi.templating import Jinja2Templates
 from starlette.requests import Request
 
 import positronic.cfg.dataset
+import positronic.utils.s3 as pos3
 from positronic import utils
 from positronic.dataset.dataset import Dataset
 from positronic.dataset.local_dataset import LocalDataset
@@ -177,6 +178,7 @@ async def api_episode_rrd(episode_id: int):
 
 
 @cfn.config(dataset=positronic.cfg.dataset.local)
+@pos3.with_mirror()
 def main(
     dataset: Dataset,
     cache_dir: str = os.path.expanduser('~/.cache/positronic/server/'),

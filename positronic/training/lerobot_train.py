@@ -12,6 +12,8 @@ from lerobot.constants import ACTION, OBS_IMAGE, OBS_STATE
 from lerobot.envs.configs import EnvConfig, FeatureType, PolicyFeature
 from lerobot.scripts import train as lerobot_train
 
+import positronic.utils.s3 as pos3
+
 
 @EnvConfig.register_subclass('positronic')
 @dataclass
@@ -54,10 +56,11 @@ def _update_config(cfg: TrainPipelineConfig, **cfg_kwargs):
 
 
 @cfn.config()
+@pos3.with_mirror()
 def train(
     dataset_root: str,
     run_name: str,
-    output_dir=None,
+    output_dir,
     base_config: str = 'positronic/training/train_config.json',
     **cfg_kwargs,
 ):
@@ -65,12 +68,11 @@ def train(
     cfg = TrainPipelineConfig.from_pretrained(base_config)
     cfg.env = PositronicEnvConfig()
     cfg.job_name = run_name
-    cfg.dataset.root = Path(dataset_root).expanduser().absolute()
+    cfg.dataset.root = pos3.download(dataset_root)
     cfg.dataset.repo_id = 'local'
     cfg.eval_freq = 0
     cfg.policy.push_to_hub = False
-    if output_dir is not None:
-        cfg.output_dir = Path(output_dir).expanduser().absolute() / run_name
+    cfg.output_dir = pos3.upload(output_dir) / run_name
     _update_config(cfg, **cfg_kwargs)
 
     print('Starting training...')

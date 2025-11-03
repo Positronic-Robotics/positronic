@@ -1,5 +1,6 @@
 import configuronic as cfn
 
+import positronic.utils.s3 as pos3
 from positronic.policy.lerobot import LerobotPolicy
 
 
@@ -11,7 +12,7 @@ def _get_act_policy(
 ):
     from lerobot.policies.act.modeling_act import ACTPolicy, ACTTemporalEnsembler
 
-    policy = ACTPolicy.from_pretrained(checkpoint_path, strict=True)
+    policy = ACTPolicy.from_pretrained(pos3.download(checkpoint_path), strict=True)
 
     if use_temporal_ensembler:
         policy.config.n_action_steps = 1
@@ -27,7 +28,7 @@ def _get_act_policy(
 def _get_diffusion_policy(checkpoint_path: str, device: str | None = None):
     from lerobot.policies.diffusion.modeling_diffusion import DiffusionPolicy
 
-    policy = DiffusionPolicy.from_pretrained(checkpoint_path, local_files_only=True, strict=True)
+    policy = DiffusionPolicy.from_pretrained(pos3.download(checkpoint_path), local_files_only=True, strict=True)
     return LerobotPolicy(policy, device)
 
 

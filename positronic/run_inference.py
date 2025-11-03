@@ -7,7 +7,6 @@ from collections.abc import Iterator, Mapping, Sequence
 from contextlib import nullcontext
 from dataclasses import dataclass
 from enum import Enum
-from pathlib import Path
 from typing import Any
 
 import configuronic as cfn
@@ -22,6 +21,7 @@ import positronic.cfg.policy.action
 import positronic.cfg.policy.observation
 import positronic.cfg.policy.policy
 import positronic.cfg.simulator
+import positronic.utils.s3 as pos3
 from positronic import wire
 from positronic.dataset.ds_writer_agent import DsWriterCommand, Serializers, TimeMode
 from positronic.dataset.local_dataset import LocalDatasetWriter
@@ -203,6 +203,7 @@ def key_to_ds_command(key: str) -> DsWriterCommand | None:
     return None
 
 
+@pos3.with_mirror()
 def main(
     robot_arm: pimm.ControlSystem,
     gripper: pimm.ControlSystem,
@@ -223,7 +224,7 @@ def main(
     camera_emitters = {name: cam.frame for name, cam in camera_instances.items()}
 
     gui = DearpyguiUi() if show_gui else None
-    writer_cm = LocalDatasetWriter(Path(output_dir)) if output_dir is not None else nullcontext(None)
+    writer_cm = LocalDatasetWriter(pos3.upload(output_dir)) if output_dir is not None else nullcontext(None)
     with writer_cm as dataset_writer, pimm.World() as world:
         ds_agent = wire.wire(
             world, inference, dataset_writer, camera_emitters, robot_arm, gripper, gui, TimeMode.MESSAGE
@@ -265,6 +266,7 @@ class Driver(pimm.ControlSystem):
             yield pimm.Sleep(0.2)  # Let the things propagate
 
 
+@pos3.with_mirror()
 def main_sim(
     mujoco_model_path: str,
     observation_encoder: ObservationEncoder,
@@ -304,22 +306,18 @@ def main_sim(
 
     gui = DearpyguiUi() if show_gui else None
 
-    writer_cm = LocalDatasetWriter(Path(output_dir)) if output_dir is not None else nullcontext(None)
+    writer_cm = LocalDatasetWriter(pos3.upload(output_dir)) if output_dir is not None else nullcontext(None)
     with writer_cm as dataset_writer, pimm.World(clock=sim) as world:
         ds_agent = wire.wire(world, inference, dataset_writer, cameras, robot_arm, gripper, gui, TimeMode.MESSAGE)
-
         if ds_agent is not None:
             for observer_name in observers.keys():
                 ds_agent.add_signal(observer_name)
                 world.connect(sim.observations[observer_name], ds_agent.inputs[observer_name])
-
         driver = Driver(num_iterations, simulation_time, meta=meta)
         world.connect(driver.inf_commands, inference.command)
         if ds_agent is not None:
             world.connect(driver.ds_commands, ds_agent.command)
-
         sim_iter = world.start([driver, *control_systems, ds_agent], gui)
-
         p_bar = tqdm.tqdm(total=simulation_time * num_iterations, unit='s')
         for _ in sim_iter:
             p_bar.n = round(sim.now(), 1)

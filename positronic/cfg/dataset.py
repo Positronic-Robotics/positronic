@@ -1,7 +1,6 @@
-from pathlib import Path
-
 import configuronic as cfn
 
+import positronic.utils.s3 as pos3
 from positronic.cfg.policy import action, observation
 from positronic.dataset.transforms import TransformedDataset
 from positronic.dataset.transforms.episode import KeyFuncEpisodeTransform
@@ -11,7 +10,7 @@ from positronic.dataset.transforms.episode import KeyFuncEpisodeTransform
 def local(path: str):
     from positronic.dataset.local_dataset import load_all_datasets
 
-    return load_all_datasets(Path(path))
+    return load_all_datasets(pos3.download(path))
 
 
 @cfn.config(

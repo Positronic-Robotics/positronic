@@ -20,7 +20,6 @@ Examples:
 import json
 import resource  # This will fail on Windows, as this library is Unix only, but we don't support Windows anyway
 from collections.abc import Sequence as AbcSequence
-from pathlib import Path
 
 import configuronic as cfn
 import numpy as np
@@ -29,6 +28,7 @@ import tqdm
 from lerobot.datasets.lerobot_dataset import LeRobotDataset
 
 import positronic.cfg.dataset
+import positronic.utils.s3 as pos3
 from positronic.dataset import Dataset
 
 
@@ -113,11 +113,12 @@ def append_data_to_dataset(lr_dataset: LeRobotDataset, p_dataset: Dataset, fps, 
 
 @cfn.config(video=True, dataset=positronic.cfg.dataset.transformed)
 def convert_to_lerobot_dataset(output_dir: str, fps: int, video: bool, dataset: Dataset, task=None):
+    output_dir = pos3.upload(output_dir, interval=None)
     assert dataset.meta['lerobot_features'] is not None, "dataset.meta['lerobot_features'] is required"
     lr_dataset = LeRobotDataset.create(
         repo_id='local',
         fps=fps,
-        root=Path(output_dir).expanduser().absolute(),
+        root=output_dir,
         use_videos=video,
         features=dataset.meta['lerobot_features'],
         image_writer_threads=32,
@@ -126,7 +127,7 @@ def convert_to_lerobot_dataset(output_dir: str, fps: int, video: bool, dataset: 
         modality = dataset.meta.get('gr00t_modality')
         if modality is not None:
             modality['annotation'] = {'language.language_instruction': {'original_key': 'task_index'}}
-            modality_path = Path(output_dir).expanduser().absolute() / 'meta' / 'modality.json'
+            modality_path = output_dir / 'meta' / 'modality.json'
             with modality_path.open('w', encoding='utf-8') as f:
                 json.dump(modality, f, indent=2)
 
@@ -136,9 +137,10 @@ def convert_to_lerobot_dataset(output_dir: str, fps: int, video: bool, dataset: 
 
 @cfn.config(dataset=positronic.cfg.dataset.transformed)
 def append_data_to_lerobot_dataset(output_dir: str, dataset: Dataset, fps: int, task=None):
-    lr_dataset = LeRobotDataset(repo_id='local', root=Path(output_dir).expanduser().absolute())
+    output_dir = pos3.upload(output_dir, interval=None)
+    lr_dataset = LeRobotDataset(repo_id='local', root=output_dir)
 
-    lr_modality_path = Path(output_dir).expanduser().absolute() / 'meta' / 'modality.json'
+    lr_modality_path = output_dir / 'meta' / 'modality.json'
     ds_modality = dataset.meta.get('gr00t_modality', None)
     if ds_modality is not None:
         ds_modality['annotation'] = {'language.language_instruction': {'original_key': 'task_index'}}
@@ -160,7 +162,8 @@ def append_data_to_lerobot_dataset(output_dir: str, dataset: Dataset, fps: int, 
 
 
 def _internal_main():
-    cfn.cli({'convert': convert_to_lerobot_dataset, 'append': append_data_to_lerobot_dataset})
+    with pos3.mirror():
+        cfn.cli({'convert': convert_to_lerobot_dataset, 'append': append_data_to_lerobot_dataset})
 
 
 if __name__ == '__main__':
