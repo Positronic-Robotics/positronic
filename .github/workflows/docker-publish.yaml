@@ -7,16 +7,27 @@ on:
   workflow_dispatch: {}
 
 env:
-  NB_REGISTRY_FQDN: ${{ vars.NEBIUS_REGISTRY_FQDN }}
-  NB_REGISTRY_PATH: ${{ vars.NEBIUS_REGISTRY_PATH }}
+  NB_REGISTRY_FQDN: ${{ vars.NB_REGISTRY_FQDN }}
+  NB_REGISTRY_PATH: ${{ vars.NB_REGISTRY_PATH }}
 
 jobs:
-  build-and-push:
+  push-training:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet
+          sudo rm -rf /usr/local/lib/android
+          sudo rm -rf /opt/ghc
+          sudo rm -rf "${AGENT_TOOLSDIRECTORY:-/opt/hostedtoolcache}/CodeQL"
+          sudo rm -rf "${AGENT_TOOLSDIRECTORY:-/opt/hostedtoolcache}/node"
+          sudo rm -rf "${AGENT_TOOLSDIRECTORY:-/opt/hostedtoolcache}/go"
+          sudo rm -rf /usr/lib/jvm
+          sudo docker system prune -af || true
+          df -h
       - name: Log in to Nebius Container Registry
         run: |
           if [ -z "${NB_REGISTRY_FQDN}" ]; then
@@ -25,7 +36,6 @@ jobs:
           fi
           echo "${{ secrets.NEBIUS_CONTAINER_REGISTRY_TOKEN }}" | \
             docker login "${NB_REGISTRY_FQDN}" --username iam --password-stdin
-
       - name: Build and push images
         working-directory: docker
         env:
@@ -40,4 +50,45 @@ jobs:
           make NB_REGISTRY_FQDN="${NB_REGISTRY_FQDN}" \
                NB_REGISTRY_PATH="${NB_REGISTRY_PATH}" \
                REGISTRY_URL="${REGISTRY_URL}" \
-               push
+               push-training
+  push-groot:
+    runs-on: ubuntu-latest
+    needs: push-training
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet
+          sudo rm -rf /usr/local/lib/android
+          sudo rm -rf /opt/ghc
+          sudo rm -rf "${AGENT_TOOLSDIRECTORY:-/opt/hostedtoolcache}/CodeQL"
+          sudo rm -rf "${AGENT_TOOLSDIRECTORY:-/opt/hostedtoolcache}/node"
+          sudo rm -rf "${AGENT_TOOLSDIRECTORY:-/opt/hostedtoolcache}/go"
+          sudo rm -rf /usr/lib/jvm
+          sudo docker system prune -af || true
+          df -h
+      - name: Log in to Nebius Container Registry
+        run: |
+          if [ -z "${NB_REGISTRY_FQDN}" ]; then
+            echo "NB_REGISTRY_FQDN repository variable is not set" >&2
+            exit 1
+          fi
+          echo "${{ secrets.NEBIUS_CONTAINER_REGISTRY_TOKEN }}" | \
+            docker login "${NB_REGISTRY_FQDN}" --username iam --password-stdin
+      - name: Build and push groot image
+        working-directory: docker
+        env:
+          NB_REGISTRY_FQDN: ${{ env.NB_REGISTRY_FQDN }}
+          NB_REGISTRY_PATH: ${{ env.NB_REGISTRY_PATH }}
+        run: |
+          if [ -z "${NB_REGISTRY_PATH}" ]; then
+            echo "NB_REGISTRY_PATH repository variable is not set" >&2
+            exit 1
+          fi
+          REGISTRY_URL="${NB_REGISTRY_FQDN}/${NB_REGISTRY_PATH}"
+          make NB_REGISTRY_FQDN="${NB_REGISTRY_FQDN}" \
+               NB_REGISTRY_PATH="${NB_REGISTRY_PATH}" \
+               REGISTRY_URL="${REGISTRY_URL}" \
+               push-groot
