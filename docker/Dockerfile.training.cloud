@@ -1,10 +1,10 @@
 # Use local base image with common dependencies
 FROM positronic-base:local
 
-# Copy project metadata and lock for reproducible deps
+# Copy project metadata and lock for reproducible runtime resolution
 COPY pyproject.toml uv.lock ./
-RUN --mount=type=cache,target=/root/.cache/uv \
-    uv sync --frozen --extra dev --no-install-project
+# Defer dependency resolution to runtime via `uv run` so large wheels stay out
+# of the image layers and benefit from mounted caches.
 
 # Copy source code into the image
 COPY . /positronic
@@ -16,7 +16,8 @@ WORKDIR /positronic
 # For local dev containers that bind-mount the repo, run
 # `uv pip install --no-deps -e /positronic` once after start so edits reflect
 # immediately while preserving metadata.
-RUN uv pip install --no-deps .
+RUN --mount=type=cache,target=/root/.cache/uv \
+    uv pip install --no-deps .
 
 # Set Python path
 ENV PYTHONPATH=/positronic

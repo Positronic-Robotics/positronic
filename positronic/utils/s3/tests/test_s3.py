@@ -170,3 +170,127 @@ class TestUpload:
                 time.sleep(2.5)
 
         assert mock_s3.upload_file.call_count >= 2
+
+    @patch(BOTO3_PATCH_TARGET)
+    def test_upload_no_sync_on_error(self, mock_boto_client):
+        """Test that uploads with sync_on_error=False don't sync when context exits with error."""
+        mock_s3 = _setup_s3_mock(mock_boto_client)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output = Path(tmpdir) / 'output'
+            output.mkdir()
+            (output / 'data.txt').write_text('content')
+
+            try:
+                with s3.mirror(cache_root=tmpdir, show_progress=False):
+                    s3.upload('s3://bucket/output', local=output, interval=None, sync_on_error=False)
+                    raise RuntimeError('Test error')
+            except RuntimeError:
+                pass
+
+        # Should not have synced because sync_on_error=False and context exited with error
+        assert mock_s3.upload_file.call_count == 0
+
+    @patch(BOTO3_PATCH_TARGET)
+    def test_upload_sync_on_error_true(self, mock_boto_client):
+        """Test that uploads with sync_on_error=True do sync when context exits with error."""
+        mock_s3 = _setup_s3_mock(mock_boto_client)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output = Path(tmpdir) / 'output'
+            output.mkdir()
+            (output / 'data.txt').write_text('content')
+
+            try:
+                with s3.mirror(cache_root=tmpdir, show_progress=False):
+                    s3.upload('s3://bucket/output', local=output, interval=None, sync_on_error=True)
+                    raise RuntimeError('Test error')
+            except RuntimeError:
+                pass
+
+        # Should have synced because sync_on_error=True
+        assert mock_s3.upload_file.call_count >= 1
+
+
+class TestDownloadSync:
+    @patch(BOTO3_PATCH_TARGET)
+    def test_download_delete_removes_orphaned_files(self, mock_boto_client):
+        """Test that download with delete=True removes local files not in S3."""
+        # S3 only has file1.txt
+        paginate = [{'Contents': [{'Key': 'data/file1.txt', 'Size': 5}]}]
+        _setup_s3_mock(mock_boto_client, paginate)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            local_dir = Path(tmpdir) / 'data'
+            local_dir.mkdir()
+            # Create local files - file1.txt (exists in S3) and file2.txt (orphan)
+            (local_dir / 'file1.txt').write_bytes(b'12345')
+            orphan_file = local_dir / 'file2.txt'
+            orphan_file.write_text('orphan')
+
+            with s3.mirror(cache_root=tmpdir, show_progress=False):
+                s3.download('s3://bucket/data', local=local_dir, delete=True)
+
+            # file1.txt should exist (no need to download, same size)
+            assert (local_dir / 'file1.txt').exists()
+            # file2.txt should be deleted
+            assert not orphan_file.exists()
+
+    @patch(BOTO3_PATCH_TARGET)
+    def test_download_no_delete_preserves_orphaned_files(self, mock_boto_client):
+        """Test that download with delete=False preserves local files not in S3."""
+        # S3 only has file1.txt
+        paginate = [{'Contents': [{'Key': 'data/file1.txt', 'Size': 5}]}]
+        _setup_s3_mock(mock_boto_client, paginate)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            local_dir = Path(tmpdir) / 'data'
+            local_dir.mkdir()
+            # Create local files
+            (local_dir / 'file1.txt').write_bytes(b'12345')
+            orphan_file = local_dir / 'file2.txt'
+            orphan_file.write_text('orphan')
+
+            with s3.mirror(cache_root=tmpdir, show_progress=False):
+                s3.download('s3://bucket/data', local=local_dir, delete=False)
+
+            # Both files should exist
+            assert (local_dir / 'file1.txt').exists()
+            assert orphan_file.exists()
+
+    @patch(BOTO3_PATCH_TARGET)
+    def test_download_syncs_directories(self, mock_boto_client):
+        """Test that download syncs directory structure including empty dirs."""
+        # S3 has a directory marker
+        paginate = [
+            {
+                'Contents': [
+                    {'Key': 'data/subdir/', 'Size': 0},  # Directory marker
+                    {'Key': 'data/subdir/file.txt', 'Size': 5},
+                ]
+            }
+        ]
+        mock_s3 = _setup_s3_mock(mock_boto_client, paginate)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            local_dir = Path(tmpdir) / 'data'
+
+            with s3.mirror(cache_root=tmpdir, show_progress=False):
+                s3.download('s3://bucket/data', local=local_dir, delete=True)
+
+            # Directory should be created
+            assert (local_dir / 'subdir').is_dir()
+            # File download should have been attempted
+            assert mock_s3.download_file.call_count >= 1
+
+    @patch(BOTO3_PATCH_TARGET)
+    def test_download_delete_parameter_conflict(self, mock_boto_client):
+        """Test that registering same download with different delete param raises error."""
+        paginate = [{'Contents': [{'Key': 'data/file.txt', 'Size': 5}]}]
+        _setup_s3_mock(mock_boto_client, paginate)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with s3.mirror(cache_root=tmpdir, show_progress=False):
+                s3.download('s3://bucket/data', delete=True)
+                with pytest.raises(ValueError, match='already registered with different parameters'):
+                    s3.download('s3://bucket/data', delete=False)

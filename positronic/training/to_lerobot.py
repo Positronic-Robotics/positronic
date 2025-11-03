@@ -113,7 +113,7 @@ def append_data_to_dataset(lr_dataset: LeRobotDataset, p_dataset: Dataset, fps, 
 
 @cfn.config(video=True, dataset=positronic.cfg.dataset.transformed)
 def convert_to_lerobot_dataset(output_dir: str, fps: int, video: bool, dataset: Dataset, task=None):
-    output_dir = pos3.upload(output_dir, interval=None)
+    output_dir = pos3.upload(output_dir, interval=None, sync_on_error=False)
     assert dataset.meta['lerobot_features'] is not None, "dataset.meta['lerobot_features'] is required"
     lr_dataset = LeRobotDataset.create(
         repo_id='local',
@@ -137,7 +137,7 @@ def convert_to_lerobot_dataset(output_dir: str, fps: int, video: bool, dataset: 
 
 @cfn.config(dataset=positronic.cfg.dataset.transformed)
 def append_data_to_lerobot_dataset(output_dir: str, dataset: Dataset, fps: int, task=None):
-    output_dir = pos3.upload(output_dir, interval=None)
+    output_dir = pos3.upload(output_dir, interval=None, sync_on_error=False)
     lr_dataset = LeRobotDataset(repo_id='local', root=output_dir)
 
     lr_modality_path = output_dir / 'meta' / 'modality.json'
@@ -161,9 +161,9 @@ def append_data_to_lerobot_dataset(output_dir: str, dataset: Dataset, fps: int, 
     print(f'Dataset extended and saved to {output_dir}')
 
 
+@pos3.with_mirror()
 def _internal_main():
-    with pos3.mirror():
-        cfn.cli({'convert': convert_to_lerobot_dataset, 'append': append_data_to_lerobot_dataset})
+    cfn.cli({'convert': convert_to_lerobot_dataset, 'append': append_data_to_lerobot_dataset})
 
 
 if __name__ == '__main__':
