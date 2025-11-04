@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import shutil
 import threading
 import time
 from collections.abc import Iterable, Iterator
@@ -345,6 +346,7 @@ class _Mirror:
         total_bytes = 0
 
         for remote, local_path, delete in tasks:
+            logger.debug('Syncing upload: %s from %s (delete=%s)', remote, local_path, delete)
             bucket, prefix = _parse_s3_url(remote)
             to_copy, to_delete = _compute_sync_diff(_scan_local(local_path), self._scan_s3(bucket, prefix))
 
@@ -374,11 +376,12 @@ class _Mirror:
                 futures = [executor.submit(self._remove_from_s3, bucket, key) for bucket, key in to_remove_sorted]
                 iterator = as_completed(futures)
                 if self.options.show_progress:
-                    iterator = tqdm(iterator, total=len(to_remove_sorted), desc='Deleting')
+                    iterator = tqdm(iterator, total=len(to_remove_sorted), desc=f'Deleting in {remote}')
                 _process_futures(iterator, 'Delete')
 
     def _perform_download(self, remote: str, local_path: Path, delete: bool) -> None:
         bucket, prefix = _parse_s3_url(remote)
+        logger.debug('Performing download: s3://%s/%s to %s (delete=%s)', bucket, prefix, local_path, delete)
         to_copy, to_delete = _compute_sync_diff(self._scan_s3(bucket, prefix), _scan_local(local_path))
 
         to_put: list[tuple[FileInfo, str, str, Path]] = []
@@ -390,8 +393,11 @@ class _Mirror:
             to_put.append((info, bucket, s3_key, local_path))
             total_bytes += info.size
 
+        if delete:
+            logger.debug('Will delete %d local items not in S3', len(to_delete))
         for info in to_delete if delete else []:
             target = local_path / info.relative_path if info.relative_path else local_path
+            logger.debug('Marking for local deletion: %s', target)
             to_remove.append(target)
 
         if to_put:
@@ -408,10 +414,11 @@ class _Mirror:
                 futures = [executor.submit(self._remove_locally, path) for path in to_remove_sorted]
                 iterator = as_completed(futures)
                 if self.options.show_progress:
-                    iterator = tqdm(iterator, total=len(to_remove_sorted), desc='Deleting')
+                    iterator = tqdm(iterator, total=len(to_remove_sorted), desc=f'Deleting in {remote}')
                 _process_futures(iterator, 'Delete')
 
     def _list_s3_objects(self, bucket: str, key: str) -> Iterator[dict]:
+        logger.debug('Listing S3 objects: bucket=%s, key=%s', bucket, key)
         try:
             obj = self.s3_client.head_object(Bucket=bucket, Key=key)
         except ClientError as exc:
@@ -419,14 +426,18 @@ class _Mirror:
             if error_code != '404':
                 raise
         else:
+            logger.debug('Found single object via head_object: %s', key)
             yield {**obj, 'Key': key}
             return
 
         paginator = self.s3_client.get_paginator('list_objects_v2')
         for page in paginator.paginate(Bucket=bucket, Prefix=key):
-            yield from page.get('Contents', [])
+            objects = page.get('Contents', [])
+            logger.debug('Listed %d objects with prefix %s', len(objects), key)
+            yield from objects
 
     def _scan_s3(self, bucket: str, prefix: str) -> Iterator[FileInfo]:
+        logger.debug('Scanning S3: s3://%s/%s', bucket, prefix)
         seen_dirs: set[str] = set()
 
         for obj in self._list_s3_objects(bucket, prefix):
@@ -488,7 +499,7 @@ class _Mirror:
     def _remove_locally(self, path: Path) -> None:
         try:
             if path.is_dir():
-                path.rmdir()
+                shutil.rmtree(path)
             else:
                 path.unlink()
         except Exception as exc:
