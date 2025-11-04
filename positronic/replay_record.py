@@ -43,7 +43,7 @@ class Replay(DsPlayerAgent):
 
 class RestoreCommand(transforms.KeyFuncEpisodeTransform):
     def __init__(self):
-        super().__init__(robot_commands=self._commands_from_episode)
+        super().__init__(add={'robot_commands': self._commands_from_episode}, pass_through=True)
 
     @staticmethod
     def _commands_from_episode(episode: Episode) -> Any:
@@ -109,7 +109,7 @@ def main(
     indices = parse_episodes(episodes, dataset)
 
     # Apply dataset transform once
-    dataset = transforms.TransformedDataset(dataset, RestoreCommand(), pass_through=True)
+    dataset = transforms.TransformedDataset(dataset, RestoreCommand())
 
     # Create writer context outside the loop so it persists across episodes
     writer_cm = LocalDatasetWriter(Path(output_dir)) if output_dir is not None else nullcontext(None)

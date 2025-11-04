@@ -1,5 +1,5 @@
 from abc import ABC, abstractmethod
-from collections.abc import Callable, Iterator, Sequence
+from collections.abc import Callable, Iterator
 from typing import Any
 
 from ..episode import Episode, EpisodeContainer
@@ -9,15 +9,9 @@ from ..signal import Signal
 class EpisodeTransform(ABC):
     """Transform an episode into a new episode."""
 
-    @property
     @abstractmethod
-    def keys(self) -> Sequence[str]:
-        """Keys that this transform generates."""
-        ...
-
-    @abstractmethod
-    def transform(self, episode: Episode) -> Episode:
-        """Transform an episode and return a new episode with transformed signals and static values."""
+    def __call__(self, episode: Episode) -> Episode:
+        """Transform an episode into a new episode."""
         ...
 
     @property
@@ -29,84 +23,95 @@ class EpisodeTransform(ABC):
 class KeyFuncEpisodeTransform(EpisodeTransform):
     """Transform an episode using a dictionary of key-function pairs."""
 
-    def __init__(self, **transforms: Callable[[Episode], Any]):
-        self._transform_fns = transforms
+    def __init__(
+        self,
+        add: dict[str, Callable[[Episode], Any]],
+        remove: bool | list[str] = False,
+        pass_through: bool | list[str] = True,
+    ):
+        self._transform_fns = add
+        self.pass_keys = set()
+        if pass_through is True:
+            assert remove is not True, 'If pass_through is True, remove must be False or a list of keys to remove.'
+            self.remove = set(remove) if isinstance(remove, list) else set()
+            self.pass_all = True
+        elif pass_through is False:
+            assert remove is False, "When we don't pass anything through, there's nothing to remove."
+            self.remove = set()
+            self.pass_all = False
+        else:
+            assert remove is False, "When we pass through specific keys, to remove keys just don't pass them through."
+            self.pass_keys = set(pass_through)
+            self.remove = set()
+            self.pass_all = False
 
-    @property
-    def keys(self) -> Sequence[str]:
-        return self._transform_fns.keys()
+    def _pass_key(self, key: str) -> bool:
+        return (key not in self.remove) and (self.pass_all or key in self.pass_keys)
 
-    def transform(self, episode: Episode) -> Episode:
+    def __call__(self, episode: Episode) -> Episode:
         # TODO: Should we lazy-fy this?
-        data = {name: fn(episode) for name, fn in self._transform_fns.items()}
+        data = {k: v for k, v in episode.items() if self._pass_key(k)}
+        data.update({name: fn(episode) for name, fn in self._transform_fns.items()})
         return EpisodeContainer(data, episode.meta)
 
 
+class Concatenate(EpisodeTransform):
+    """Concatenate multiple transforms into a single transform.
+
+    Applies all transforms to the same input episode and merges their results.
+    If transforms produce overlapping keys, the first transform in the list takes precedence.
+    """
+
+    def __init__(self, *transforms: EpisodeTransform):
+        self._transforms = tuple(transforms)
+
+    def __call__(self, episode: Episode) -> Episode:
+        res = {}
+        for tf in reversed(self._transforms):
+            res.update(tf(episode))
+        return EpisodeContainer(res, episode.meta)
+
+    @property
+    def meta(self) -> dict[str, Any]:
+        return {k: v for tf in reversed(self._transforms) for k, v in tf.meta.items()}
+
+
 class TransformedEpisode(Episode):
-    """Transform an episode into a new view of the episode.
+    """Lazily transform an episode into a new view of the episode.
 
-    Supports one or more transforms. When multiple transforms are provided,
-    their keys are concatenated in the given order. For duplicate keys across
-    transforms, the first transform providing the key takes precedence.
+    Applies transforms sequentially (chained), where each transform receives the output
+    of the previous transform. The transforms are applied in reverse order to match the
+    precedence behavior where the first transform in the list takes precedence for duplicate keys.
 
-    If ``pass_through`` is True, any keys from the underlying episode that are
-    not provided by the transforms are appended after the transformed keys.
-    Alternatively, a list of key names can be provided to selectively pass
-    through only the listed keys from the original episode.
+    The transformation is lazy - transforms are only executed on first access to any key,
+    and the result is cached for subsequent accesses.
     """
 
     _MISSING = object()
 
-    def __init__(self, episode: Episode, *transforms: EpisodeTransform, pass_through: bool | list[str] = False):
+    def __init__(self, episode: Episode, *transforms: EpisodeTransform):
         if not transforms:
             raise ValueError('TransformedEpisode requires at least one transform')
         self._episode = episode
         self._transforms = tuple(transforms)
 
-        if isinstance(pass_through, bool):
-            self._pass_through_all = pass_through
-            self._pass_through_keys = set()
-        else:
-            self._pass_through_all = False
-            self._pass_through_keys = set(pass_through)
+        self._cache: Episode | None = None
 
-        self._cache: dict[str, Any] = {}
-        seen: set[str] = set()
-        for tf in self._transforms:
-            for k in tf.keys:
-                if k not in seen:
-                    self._cache[k] = self._MISSING
-                    seen.add(k)
-        for k in self._episode:
-            if k not in seen and (self._pass_through_all or k in self._pass_through_keys):
-                self._cache[k] = self._MISSING
-                seen.add(k)
+    def _get_cache(self) -> Episode:
+        if self._cache is None:
+            self._cache = self._episode
+            for tf in reversed(self._transforms):
+                self._cache = tf(self._cache)
+        return self._cache
 
     def __iter__(self) -> Iterator[str]:
-        yield from self._cache.keys()
+        yield from self._get_cache().keys()
 
     def __len__(self) -> int:
-        return len(self._cache)
+        return len(self._get_cache())
 
     def __getitem__(self, name: str) -> Signal[Any] | Any:
-        if name not in self._cache:
-            raise KeyError(f'Key {name} not found in transformed episode. Available keys: {", ".join(self.keys())}')
-        if self._cache[name] is not self._MISSING:
-            return self._cache[name]
-
-        for i, tf in enumerate(self._transforms):
-            if name in tf.keys:
-                episode = tf.transform(self._episode)
-                # Only cache keys that this transform is the first to declare (precedence)
-                for k in tf.keys:
-                    # Check if any earlier transform declares this key
-                    if not any(k in earlier.keys for earlier in self._transforms[:i]):
-                        self._cache[k] = episode[k]
-                return self._cache[name]
-
-        if self._pass_through_all or (self._pass_through_keys and name in self._pass_through_keys):
-            return self._episode[name]
-        raise KeyError(name)  # Should never happen
+        return self._get_cache()[name]
 
     @property
     def meta(self) -> dict[str, Any]:

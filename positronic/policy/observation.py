@@ -18,9 +18,9 @@ class ObservationEncoder(transforms.KeyFuncEpisodeTransform):
             state: mapping from output state key to an ordered list of episode keys to concatenate.
             images: mapping from output image name to tuple (input_key, (width, height)).
         """
-        state_fns = {k: partial(self.encode_state, k) for k in state.keys()}
-        image_fns = {k: partial(self.encode_image, k) for k in images.keys()}
-        super().__init__(**state_fns, **image_fns)
+        transform_fns = {k: partial(self.encode_state, k) for k in state.keys()}
+        transform_fns.update({k: partial(self.encode_image, k) for k in images.keys()})
+        super().__init__(add=transform_fns, pass_through=False)
         self._state = state
         self._image_configs = images
         self._metadata = {}

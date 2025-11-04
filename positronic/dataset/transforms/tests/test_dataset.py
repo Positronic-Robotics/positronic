@@ -3,26 +3,9 @@ import pytest
 
 from positronic.dataset.dataset import Dataset
 from positronic.dataset.episode import Episode, EpisodeContainer
-from positronic.dataset.transforms import Elementwise, EpisodeTransform, TransformedDataset
+from positronic.dataset.transforms import TransformedDataset
 
-from ...tests.utils import DummySignal
-
-
-class _DummyTransform(EpisodeTransform):
-    def __init__(self):
-        self._keys = ['a', 's']
-
-    @property
-    def keys(self):
-        return list(self._keys)
-
-    def transform(self, episode):
-        # 10x the base signal for 'a'
-        base_s = episode['s']
-        a_signal = Elementwise(base_s, lambda seq: np.asarray(seq) * 10)
-        # Override original 's' by adding 1
-        s_signal = Elementwise(base_s, lambda seq: np.asarray(seq) + 1)
-        return EpisodeContainer(data={'a': a_signal, 's': s_signal}, meta=episode.meta)
+from ...tests.utils import DummySignal, DummyTransform
 
 
 class _DummyDataset(Dataset):
@@ -45,9 +28,9 @@ def test_transformed_dataset_wraps_episode_with_transforms():
     base_meta = {'a': sig_simple.meta, 's': sig_simple.meta}
     episode = EpisodeContainer(data={'s': sig_simple, 'id': 99}, meta=base_meta)
     dataset = _DummyDataset([episode])
-    tf = _DummyTransform()
+    tf = DummyTransform(operations={'a': ('s', lambda x: x * 10), 's': ('s', lambda x: x + 1)}, pass_through=True)
 
-    transformed = TransformedDataset(dataset, tf, pass_through=True)
+    transformed = TransformedDataset(dataset, tf)
 
     assert len(transformed) == 1
     wrapped = transformed[0]
@@ -65,9 +48,9 @@ def test_transformed_dataset_pass_through_selected_keys():
     sig_simple = DummySignal([1000, 2000], [10, 20])
     episode = EpisodeContainer(data={'s': sig_simple, 'id': 42, 'note': 'keep', 'skip': 'drop'})
     dataset = _DummyDataset([episode])
-    tf = _DummyTransform()
+    tf = DummyTransform(operations={'a': ('s', lambda x: x * 10), 's': ('s', lambda x: x + 1)}, pass_through=['note'])
 
-    transformed = TransformedDataset(dataset, tf, pass_through=['note'])
+    transformed = TransformedDataset(dataset, tf)
 
     wrapped = transformed[0]
     assert list(wrapped.keys()) == ['a', 's', 'note']
@@ -87,8 +70,8 @@ def test_transformed_dataset_sequence_indices_return_transformed_episodes():
         episodes.append(EpisodeContainer(data={'s': sig, 'id': idx}))
 
     dataset = _DummyDataset(episodes)
-    tf = _DummyTransform()
-    transformed = TransformedDataset(dataset, tf, pass_through=True)
+    tf = DummyTransform(operations={'a': ('s', lambda x: x * 10), 's': ('s', lambda x: x + 1)}, pass_through=True)
+    transformed = TransformedDataset(dataset, tf)
 
     sliced = transformed[1:3]
     assert len(sliced) == 2
