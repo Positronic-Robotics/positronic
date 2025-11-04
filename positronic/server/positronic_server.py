@@ -177,7 +177,7 @@ async def api_episode_rrd(episode_id: int):
     )
 
 
-@cfn.config(dataset=positronic.cfg.dataset.local)
+@cfn.config(dataset=positronic.cfg.dataset.local_all)
 def main(
     dataset: Dataset,
     cache_dir: str = os.path.expanduser('~/.cache/positronic/server/'),

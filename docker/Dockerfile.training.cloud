@@ -1,16 +1,16 @@
 # Use local base image with common dependencies
 FROM positronic-base:local
 
+# Set working directory
+WORKDIR /positronic
+
 # Copy project metadata and lock for reproducible runtime resolution
 COPY pyproject.toml uv.lock ./
 # Defer dependency resolution to runtime via `uv run` so large wheels stay out
 # of the image layers and benefit from mounted caches.
 
 # Copy source code into the image
-COPY . /positronic
-
-# Set working directory
-WORKDIR /positronic
+COPY . .
 
 # Install the project so runtime metadata (e.g. importlib.metadata) is present.
 # For local dev containers that bind-mount the repo, run
