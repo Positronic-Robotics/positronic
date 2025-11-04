@@ -10,6 +10,7 @@ import tqdm
 import pimm
 import positronic.cfg.dataset
 import positronic.cfg.simulator
+import positronic.utils.s3 as pos3
 from positronic import geom, wire
 from positronic.dataset import Dataset, Episode, transforms
 from positronic.dataset.ds_player_agent import DsPlayerAgent, DsPlayerStartCommand
@@ -158,4 +159,5 @@ def main(
 
 
 if __name__ == '__main__':
-    cfn.cli(main)
+    with pos3.mirror():
+        cfn.cli(main)

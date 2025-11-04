@@ -6,6 +6,7 @@ import tqdm
 
 import pimm
 import positronic.cfg.simulator
+import positronic.utils.s3 as pos3
 from pimm.tests.testing import MockClock
 from positronic import geom
 from positronic.dataset.local_dataset import LocalDataset
@@ -305,21 +306,22 @@ def test_main_sim_emits_commands_and_records_dataset(tmp_path, monkeypatch):
         for idx, cfg in enumerate(positronic.cfg.simulator.stack_cubes_loaders)
     ]
 
-    main_sim(
-        mujoco_model_path='positronic/assets/mujoco/franka_table.xml',
-        observation_encoder=observation_encoder,
-        action_decoder=action_decoder,
-        policy=policy,
-        loaders=loaders,
-        camera_fps=10,
-        policy_fps=10,
-        simulation_time=0.4,
-        camera_dict=camera_dict,
-        task='integration-test',
-        output_dir=str(tmp_path),
-        show_gui=False,
-        num_iterations=1,
-    )
+    with pos3.mirror():
+        main_sim(
+            mujoco_model_path='positronic/assets/mujoco/franka_table.xml',
+            observation_encoder=observation_encoder,
+            action_decoder=action_decoder,
+            policy=policy,
+            loaders=loaders,
+            camera_fps=10,
+            policy_fps=10,
+            simulation_time=0.4,
+            camera_dict=camera_dict,
+            task='integration-test',
+            output_dir=str(tmp_path),
+            show_gui=False,
+            num_iterations=1,
+        )
 
     ds = LocalDataset(tmp_path)
     assert len(ds) == 1

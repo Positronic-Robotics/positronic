@@ -203,7 +203,6 @@ def key_to_ds_command(key: str) -> DsWriterCommand | None:
     return None
 
 
-@pos3.with_mirror()
 def main(
     robot_arm: pimm.ControlSystem,
     gripper: pimm.ControlSystem,
@@ -266,7 +265,6 @@ class Driver(pimm.ControlSystem):
             yield pimm.Sleep(0.2)  # Let the things propagate
 
 
-@pos3.with_mirror()
 def main_sim(
     mujoco_model_path: str,
     observation_encoder: ObservationEncoder,
@@ -393,6 +391,7 @@ openpi_positronic_real = openpi_droid.override(
 
 
 # Separate function for [projects.scripts]
+@pos3.with_mirror()
 def _internal_main():
     cfn.cli({
         'sim_act': main_sim_act,

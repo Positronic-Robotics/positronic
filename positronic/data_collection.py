@@ -194,7 +194,6 @@ def _wire(
     return ds_agent
 
 
-@pos3.with_mirror()
 def main(
     robot_arm: pimm.ControlSystem | None,
     gripper: pimm.ControlSystem | None,
@@ -248,7 +247,6 @@ def main(
     operator_position=OperatorPosition.BACK,
     loaders=positronic.cfg.simulator.stack_cubes_loaders,
 )
-@pos3.with_mirror()
 def main_sim(
     mujoco_model_path: str,
     webxr: WebXR,
@@ -342,6 +340,7 @@ droid = cfn.Config(
 )
 
 
+@pos3.with_mirror()
 def _internal_main():
     cfn.cli({'real': main_cfg, 'so101': so101cfg, 'sim': main_sim, 'droid': droid})
 

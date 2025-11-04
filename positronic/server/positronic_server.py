@@ -178,7 +178,6 @@ async def api_episode_rrd(episode_id: int):
 
 
 @cfn.config(dataset=positronic.cfg.dataset.local)
-@pos3.with_mirror()
 def main(
     dataset: Dataset,
     cache_dir: str = os.path.expanduser('~/.cache/positronic/server/'),
@@ -232,6 +231,7 @@ def main(
     uvicorn.run(app, host=host, port=port, log_level='debug' if debug else 'info')
 
 
+@pos3.with_mirror()
 def _internal_main():
     cfn.cli(main)
 
