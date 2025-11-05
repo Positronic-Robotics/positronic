@@ -24,6 +24,7 @@ from positronic.dataset.ds_writer_agent import (
 )
 from positronic.dataset.local_dataset import LocalDatasetWriter
 from positronic.drivers import roboarm
+from positronic.drivers.roboarm import State as RoboarmState
 from positronic.drivers.webxr import WebXR
 from positronic.gui.dpg import DearpyguiUi
 from positronic.simulator.mujoco.sim import MujocoCameras, MujocoFranka, MujocoGripper, MujocoSim
@@ -165,7 +166,7 @@ def controller_positions_serializer(controller_positions: dict[str, geom.Transfo
     return res
 
 
-def _wrench_to_level(state: roboarm.State) -> float | None:
+def _wrench_to_level(state: RoboarmState) -> float | None:
     if state.ee_wrench is None:
         return None
     return np.linalg.norm(state.ee_wrench)

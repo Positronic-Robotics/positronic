@@ -1,6 +1,7 @@
-from pkgutil import extend_path as _extend_path
+"""Robot arm drivers package.
 
-__path__ = _extend_path(__path__, __name__)
+This package provides drivers for various robot arms including Franka, Kinova, and SO-101.
+"""
 
 from abc import ABC, abstractmethod
 from enum import Enum
@@ -8,7 +9,9 @@ from enum import Enum
 import numpy as np
 
 from positronic import geom
-from positronic.drivers.roboarm import command
+
+# Import command submodule to make it accessible as roboarm.command
+from . import command
 
 
 class RobotStatus(Enum):
@@ -61,3 +64,6 @@ class State(ABC):
     def ee_wrench(self) -> np.ndarray | None:
         """Wrench of the robot's end-effector in its own coordinate frame."""
         return None
+
+
+__all__ = ['RobotStatus', 'State', 'command']

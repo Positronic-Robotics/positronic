@@ -50,7 +50,7 @@ positronic-data-collection="positronic.data_collection:_internal_main"
 [project.optional-dependencies]
 hardware = [
     "feetech-servo-sdk", # for feetech motors
-    "positronic-franka; sys_platform == 'linux'",
+    "positronic-franka>=0.3.0; sys_platform == 'linux'",
     "kortex_api; sys_platform == 'linux'",
     "linuxpy",  # For Linux video capture
     "pinocchio",  # For Kinova

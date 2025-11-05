@@ -16,7 +16,7 @@ from positronic.dataset.ds_writer_agent import (
     TimeMode,
 )
 from positronic.dataset.local_dataset import LocalDataset, LocalDatasetWriter
-from positronic.drivers import roboarm
+from positronic.drivers.roboarm import RobotStatus, State
 from positronic.drivers.roboarm import command as rcmd
 from positronic.tests.testing_coutils import run_scripted_agent
 
@@ -341,7 +341,7 @@ def test_transform_3d_serializer(world, clock):
     np.testing.assert_allclose(names_vals[0][1][3:], q.as_quat)
 
 
-class _FakeState(roboarm.State):
+class _FakeState(State):
     def __init__(self, q, dq, ee_pose, status):
         self._q = q
         self._dq = dq
@@ -376,8 +376,8 @@ def test_robot_state_serializer_drops_reset_and_emits_components(world, clock):
 
     script = [
         (lambda: cmd_em.emit(DsWriterCommand(DsWriterCommandType.START_EPISODE)), 0.001),
-        (lambda: emitters['robot_state'].emit(_FakeState(q, dq, pose, roboarm.RobotStatus.RESETTING)), 0.001),
-        (lambda: emitters['robot_state'].emit(_FakeState(q, dq, pose, roboarm.RobotStatus.AVAILABLE)), 0.001),
+        (lambda: emitters['robot_state'].emit(_FakeState(q, dq, pose, RobotStatus.RESETTING)), 0.001),
+        (lambda: emitters['robot_state'].emit(_FakeState(q, dq, pose, RobotStatus.AVAILABLE)), 0.001),
         (lambda: cmd_em.emit(DsWriterCommand(DsWriterCommandType.STOP_EPISODE)), 0.001),
     ]
 

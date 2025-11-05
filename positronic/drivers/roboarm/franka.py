@@ -6,7 +6,7 @@ from typing import Any
 import numpy as np
 
 try:
-    from . import _franka as pf
+    import positronic_franka._franka as pf
 except ImportError as e:
     raise ImportError(
         'Franka support is not installed. Install the hardware extra:\n'

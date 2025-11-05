@@ -8,7 +8,8 @@ import numpy as np
 
 import pimm
 from positronic import geom
-from positronic.drivers import roboarm
+from positronic.drivers.roboarm import RobotStatus, State
+from positronic.drivers.roboarm.command import CartesianPosition, CommandType, JointDelta, JointPosition, Reset
 
 from .dataset import DatasetWriter
 from .episode import EpisodeWriter
@@ -84,21 +85,21 @@ class Serializers:
         return x.as_vector(geom.Rotation.Representation.QUAT)
 
     @staticmethod
-    def robot_state(state: roboarm.State) -> dict[str, np.ndarray] | None:
-        if state.status == roboarm.RobotStatus.RESETTING:
+    def robot_state(state: State) -> dict[str, np.ndarray] | None:
+        if state.status == RobotStatus.RESETTING:
             return None
         return {'.q': state.q, '.dq': state.dq, '.ee_pose': Serializers.transform_3d(state.ee_pose)}
 
     @staticmethod
-    def robot_command(command: roboarm.command.CommandType) -> dict[str, np.ndarray | int] | None:
+    def robot_command(command: CommandType) -> dict[str, np.ndarray | int] | None:
         match command:
-            case roboarm.command.CartesianPosition(pose):
+            case CartesianPosition(pose):
                 return {'.pose': Serializers.transform_3d(pose)}
-            case roboarm.command.JointPosition(positions):
+            case JointPosition(positions):
                 return {'.joints': positions}
-            case roboarm.command.JointDelta(delta):
+            case JointDelta(delta):
                 return {'.joint_deltas': delta}
-            case roboarm.command.Reset():
+            case Reset():
                 return {'.reset': 1}
 
     @staticmethod

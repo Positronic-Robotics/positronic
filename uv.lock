@@ -3445,7 +3445,7 @@ requires-dist = [
     { name = "opencv-python-headless" },
     { name = "pinocchio", marker = "extra == 'hardware'" },
     { name = "placo", marker = "extra == 'hardware'" },
-    { name = "positronic-franka", marker = "sys_platform == 'linux' and extra == 'hardware'" },
+    { name = "positronic-franka", marker = "sys_platform == 'linux' and extra == 'hardware'", specifier = ">=0.3.0" },
     { name = "pre-commit", marker = "extra == 'dev'" },
     { name = "pyarrow" },
     { name = "pyaudio", marker = "sys_platform == 'linux' and extra == 'hardware'" },
@@ -3470,12 +3470,12 @@ provides-extras = ["hardware", "dev"]
 
 [[package]]
 name = "positronic-franka"
-version = "0.2.1"
+version = "0.3.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "numpy", marker = "sys_platform == 'linux'" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/85/ff/2315c98fc4c51bbad105a5989635f8795290eac61239601b79dcdfc92ac3/positronic_franka-0.2.1.tar.gz", hash = "sha256:e9794b88f542f31367fbdc7d00a3ec00f58a70a91c5b4f1147ced8112d70ef40", size = 1790701, upload-time = "2025-10-12T10:33:50.122Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/7f/42/3a6e3d285f00dd29ef96b4138b7e3e02c6b6b742ef5e203b14af27bd1a22/positronic_franka-0.3.0.tar.gz", hash = "sha256:be0d02a31b47a6b79c013c2501c6a28fbf840e6d58f62208e15af7937385071d", size = 1791137, upload-time = "2025-11-05T16:26:50.449Z" }
 
 [[package]]
 name = "pre-commit"

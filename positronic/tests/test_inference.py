@@ -11,6 +11,7 @@ from pimm.tests.testing import MockClock
 from positronic import geom
 from positronic.dataset.local_dataset import LocalDataset
 from positronic.drivers import roboarm
+from positronic.drivers.roboarm import RobotStatus
 from positronic.run_inference import Inference, InferenceCommand, main_sim
 from positronic.tests.testing_coutils import ManualDriver, drive_scheduler
 
@@ -110,7 +111,7 @@ def make_stub_action_decoder() -> StubActionDecoder:
 
 
 class FakeRobotState:
-    def __init__(self, translation: np.ndarray, joints: np.ndarray, status: roboarm.RobotStatus) -> None:
+    def __init__(self, translation: np.ndarray, joints: np.ndarray, status: RobotStatus) -> None:
         self.ee_pose = geom.Transform3D(translation=translation, rotation=geom.Rotation.identity)
         self.q = joints
         self.dq = np.zeros_like(joints)
@@ -128,7 +129,7 @@ def world(clock):
         yield w
 
 
-def make_robot_state(translation, joints, status=roboarm.RobotStatus.AVAILABLE) -> FakeRobotState:
+def make_robot_state(translation, joints, status=RobotStatus.AVAILABLE) -> FakeRobotState:
     translation = np.asarray(translation, dtype=np.float32)
     joints = np.asarray(joints, dtype=np.float32)
     return FakeRobotState(translation, joints, status)
