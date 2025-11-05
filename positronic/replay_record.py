@@ -16,6 +16,7 @@ from positronic.dataset import Dataset, Episode, transforms
 from positronic.dataset.ds_player_agent import DsPlayerAgent, DsPlayerStartCommand
 from positronic.dataset.ds_writer_agent import DsWriterCommand, TimeMode
 from positronic.dataset.local_dataset import LocalDatasetWriter
+from positronic.dataset.transforms.episode import Derive, Group, Identity
 from positronic.drivers import roboarm
 from positronic.gui.dpg import DearpyguiUi
 from positronic.simulator.mujoco.sim import MujocoCameras, MujocoFranka, MujocoGripper, MujocoSim
@@ -41,9 +42,9 @@ class Replay(DsPlayerAgent):
         return self.outputs['target_grip']
 
 
-class RestoreCommand(transforms.KeyFuncEpisodeTransform):
+class RestoreCommand(Derive):
     def __init__(self):
-        super().__init__(add={'robot_commands': self._commands_from_episode}, pass_through=True)
+        super().__init__(robot_commands=self._commands_from_episode)
 
     @staticmethod
     def _commands_from_episode(episode: Episode) -> Any:
@@ -109,7 +110,7 @@ def main(
     indices = parse_episodes(episodes, dataset)
 
     # Apply dataset transform once
-    dataset = transforms.TransformedDataset(dataset, RestoreCommand())
+    dataset = transforms.TransformedDataset(dataset, Group(RestoreCommand(), Identity()))
 
     # Create writer context outside the loop so it persists across episodes
     writer_cm = LocalDatasetWriter(Path(output_dir)) if output_dir is not None else nullcontext(None)

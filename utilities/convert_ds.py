@@ -24,10 +24,11 @@ from pathlib import Path
 import configuronic as cfn
 import tqdm
 
-from positronic.dataset import Dataset, transforms
+from positronic.dataset import Dataset
 from positronic.dataset.local_dataset import LocalDataset, LocalDatasetWriter
 from positronic.dataset.signal import Kind
-from positronic.dataset.transforms import KeyFuncEpisodeTransform, TransformedDataset
+from positronic.dataset.transforms import TransformedDataset
+from positronic.dataset.transforms.episode import Concat, Derive, FromValue, Group, Identity, Rename
 from positronic.dataset.video import VideoSignal
 
 
@@ -40,27 +41,23 @@ def _discover_image_signals(dataset: Dataset) -> list[str]:
 
 @cfn.config()
 def update_v0_1_0(path: str):
-    dataset = LocalDataset(Path(path))
-    image_features = _discover_image_signals(dataset)
-
-    funcs = {
-        'controller_positions.right': lambda ep: transforms.concat(
-            ep['right_controller_translation'], ep['right_controller_quaternion']
-        ),
-        'robot_commands.pose': lambda ep: transforms.concat(
-            ep['target_robot_position_translation'], ep['target_robot_position_quaternion']
-        ),
-        'robot_state.q': lambda ep: ep['robot_joints'],
-        'robot_state.dq': lambda ep: ep['robot_joints_velocity'],
-        'robot_state.ee_pose': lambda ep: transforms.concat(
-            ep['robot_position_translation'], ep['robot_position_quaternion']
-        ),
-    }
-
-    static_features = list(dataset[0].static.keys())
     return TransformedDataset(
-        dataset,
-        KeyFuncEpisodeTransform(**funcs, pass_through=['grip', 'target_grip'] + image_features + static_features),
+        LocalDataset(Path(path)),
+        Group(
+            Derive(**{
+                'controller_positions.right': Concat('right_controller_translation', 'right_controller_quaternion'),
+                'robot_commands.pose': Concat('target_robot_position_translation', 'target_robot_position_quaternion'),
+                'robot_state.ee_pose': Concat('robot_position_translation', 'robot_position_quaternion'),
+                'task': FromValue('Pick up the green cube and place it on the red cube.'),
+            }),
+            Rename({
+                'robot_state.q': 'robot_state.joints',
+                'robot_state.dq': 'robot_state.joints_velocity',
+                'image.wrist': 'image.handcam_left',
+                'image.exterior': 'image.back_view',
+            }),
+            Identity('grip', 'target_grip', 'mjSTATE_FULLPHYSICS', 'mjSTATE_INTEGRATION', 'mjSTATE_WARMSTART'),
+        ),
     )
 
 

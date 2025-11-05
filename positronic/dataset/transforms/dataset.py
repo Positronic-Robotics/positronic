@@ -1,17 +1,10 @@
 from typing import Any
 
+from positronic.utils import merge_dicts
+
 from ..dataset import Dataset
 from ..episode import Episode
 from .episode import EpisodeTransform, TransformedEpisode
-
-
-def _merge(dst: dict, src: dict) -> dict:
-    for key, value in src.items():
-        if isinstance(value, dict) and isinstance(dst.get(key), dict):
-            dst[key] = _merge(dst[key], value)
-        else:
-            dst[key] = value
-    return dst
 
 
 class TransformedDataset(Dataset):
@@ -31,5 +24,5 @@ class TransformedDataset(Dataset):
     def meta(self) -> dict[str, Any]:
         result = self._dataset.meta.copy()
         for tf in self._transforms:
-            result = _merge(result, tf.meta)
+            result = merge_dicts(result, tf.meta)
         return result

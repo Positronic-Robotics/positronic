@@ -398,48 +398,71 @@ Typical use cases include building model-ready tensors, normalizing values, resi
 
 ### Episode and dataset transforms
 
-`EpisodeTransform` adapters expose derived episode-level keys. They follow a tiny protocol:
+`EpisodeTransform` transforms one episode into another episode. They follow a simple protocol:
 
 ```python
 class EpisodeTransform(ABC):
-    @property
-    def keys(self) -> Sequence[str]:
-        """Returns keys that this transform generates."""
+    @abstractmethod
+    def __call__(self, episode: Episode) -> Episode:
+        """Transform an episode into a new episode."""
         ...
 
-    def transform(self, name: str, episode: Episode) -> Signal[Any] | Any:
-        """For output key and given episode, produce output Signal or static value."""
-        ...
+    @property
+    def meta(self) -> dict[str, Any]:
+        """Optional metadata for this transform."""
+        return {}
 ```
 
-`TransformedEpisode` applies one or more `EpisodeTransform`s to an existing episode (all in lazy model). When `pass_through=True`, all original keys are preserved, unless they are overwritten by transforms. You can also provide a list of key names to `pass_through` so that only the listed originals remain visible. `TransformedDataset` lifts the same idea to the dataset level so that every retrieved episode exposes the transformed view.
+Each transform is responsible for defining which keys are available in the output `Episode`. The library provides several built-in transforms:
 
-Each `EpisodeTransform` can expose additional metadata through a `meta` property. `TransformedDataset.meta` merges those dictionaries (along with the wrapped dataset's `meta`) so downstream consumers can inspect accumulated metadata without materialising episodes.
+- **`Derive(**functions)`**: Create new keys by applying functions to the input episode. Each keyword argument maps an output key to a function `(Episode) -> Signal | Any`.
+- **`Group(*transforms)`**: Apply multiple transforms in parallel to the same input episode and merge their results. If transforms produce overlapping keys, the first transform takes precedence.
+- **`Rename(mapping)`**: Rename episode keys according to a dictionary mapping `new_key -> old_key`. Only renamed keys are included.
+- **`Identity(*keys)`**: Select specific keys to keep, or pass through the entire episode unchanged if no keys are specified.
+
+Helper callables (used within `Derive`):
+- **`Concat(*keys)`**: Concatenate multiple signals into a single array signal.
+- **`FromValue(value)`**: Return a constant value (useful for adding static labels).
+
+`TransformedEpisode` applies a sequence of transforms lazily—transforms are chained sequentially where each receives the output of the previous one. Transformation happens on first access and results are cached. `TransformedDataset` lifts the same pattern to the dataset level so every retrieved episode is automatically transformed.
+
+Each `EpisodeTransform` can expose metadata via its `meta` property. `TransformedDataset.meta` merges these dictionaries (along with the wrapped dataset's `meta`) so downstream consumers can inspect accumulated metadata without materializing episodes.
 
 ### Example
 
 ```python
 from positronic.dataset import transforms
 from positronic.dataset.transforms import image
+from positronic.dataset.transforms.episode import Derive, Group, Identity
 import numpy as np
 
 
+# Define a custom encoder
 class Features(transforms.EpisodeTransform):
-    @property
-    def keys(self):
-        return ["features", "resized_image"]
-
-    def transform(self, name, episode):
-        if name == "features":
-          joint_q = episode["robot.q"]
-          ee_pose = episode["robot.ee_pose"]
-          return transforms.concat(joint_q, ee_pose, dtype=np.float32)
-        else:
-          return image.resize(width=224, height=224, signal=episode["rgb_camera"])
+    def __call__(self, episode: Episode) -> Episode:
+        joint_q = episode["robot.q"]
+        ee_pose = episode["robot.ee_pose"]
+        features = transforms.concat(joint_q, ee_pose, dtype=np.float32)
+        resized_image = image.resize(width=224, height=224, signal=episode["rgb_camera"])
+        return EpisodeContainer(
+            {"features": features, "resized_image": resized_image},
+            episode.meta
+        )
 
 
-dataset = transforms.TransformedDataset(raw_dataset, Features(), pass_through=['robot.ee_pose'])
+# Or use built-in Derive for simple cases
+features_transform = Derive(
+    features=lambda ep: transforms.concat(ep["robot.q"], ep["robot.ee_pose"], dtype=np.float32),
+    resized_image=lambda ep: image.resize(width=224, height=224, signal=ep["rgb_camera"])
+)
+
+# Apply transform to dataset and select keys to keep
+dataset = transforms.TransformedDataset(
+    raw_dataset,
+    Group(features_transform, Identity('robot.ee_pose'))
+)
+
 episode = dataset[0]
-# resized view; original imagery untouched
+# Resized view; original imagery untouched
 frame0, _ts = episode['resized_image'].time[episode.start_ts]
 ```

@@ -1,7 +1,7 @@
 """Dataset transformation utilities."""
 
 from .dataset import TransformedDataset
-from .episode import Concatenate, EpisodeTransform, KeyFuncEpisodeTransform, TransformedEpisode
+from .episode import EpisodeTransform, TransformedEpisode
 from .signals import (
     Elementwise,
     IndexOffsets,
@@ -31,8 +31,6 @@ __all__ = [
     'view',
     # Episode transforms
     'EpisodeTransform',
-    'KeyFuncEpisodeTransform',
-    'Concatenate',
     'TransformedEpisode',
     # Dataset transforms
     'TransformedDataset',

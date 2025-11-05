@@ -217,7 +217,7 @@ To inspect a transformed dataset (the same one used during training):
 
 ```bash
 positronic-server \
-    --dataset=@positronic.cfg.dataset.transformed \
+    --dataset=@positronic.cfg.dataset.encoded \
     --dataset.base.path=~/datasets/stack_cubes_raw \
     --port=5001
 ```
@@ -246,7 +246,7 @@ positronic-to-lerobot convert \
     --fps=30
 ```
 
-The converter reads your data through `positronic.cfg.dataset.transformed` (see [Dataset config module](positronic/cfg/dataset.py)), applies the same observation/action transforms used at inference time, and writes a `LeRobotDataset`. Re-run the command whenever you tweak transforms or add new episodes. To extend an existing LeRobot dataset:
+The converter reads your data through `positronic.cfg.dataset.encoded` (see [Dataset config module](positronic/cfg/dataset.py)), applies the same observation/action transforms used at inference time, and writes a `LeRobotDataset`. Re-run the command whenever you tweak transforms or add new episodes. To extend an existing LeRobot dataset:
 
 ```bash
 positronic-to-lerobot append \

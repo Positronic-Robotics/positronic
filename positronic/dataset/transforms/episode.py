@@ -2,6 +2,10 @@ from abc import ABC, abstractmethod
 from collections.abc import Callable, Iterator
 from typing import Any
 
+from positronic.dataset.transforms import signals
+from positronic.dataset.transforms.signals import NpSignal
+from positronic.utils import merge_dicts
+
 from ..episode import Episode, EpisodeContainer
 from ..signal import Signal
 
@@ -20,46 +24,36 @@ class EpisodeTransform(ABC):
         return {}
 
 
-class KeyFuncEpisodeTransform(EpisodeTransform):
-    """Transform an episode using a dictionary of key-function pairs."""
+class Derive(EpisodeTransform):
+    """Derive new episode keys by applying functions to the input episode.
 
-    def __init__(
-        self,
-        add: dict[str, Callable[[Episode], Any]],
-        remove: bool | list[str] = False,
-        pass_through: bool | list[str] = True,
-    ):
-        self._transform_fns = add
-        self.pass_keys = set()
-        if pass_through is True:
-            assert remove is not True, 'If pass_through is True, remove must be False or a list of keys to remove.'
-            self.remove = set(remove) if isinstance(remove, list) else set()
-            self.pass_all = True
-        elif pass_through is False:
-            assert remove is False, "When we don't pass anything through, there's nothing to remove."
-            self.remove = set()
-            self.pass_all = False
-        else:
-            assert remove is False, "When we pass through specific keys, to remove keys just don't pass them through."
-            self.pass_keys = set(pass_through)
-            self.remove = set()
-            self.pass_all = False
+    Each keyword argument maps an output key name to a function that takes an Episode
+    and returns either a Signal or a static value.
 
-    def _pass_key(self, key: str) -> bool:
-        return (key not in self.remove) and (self.pass_all or key in self.pass_keys)
+    Example:
+        Derive(
+            state=Concat('joint_q', 'ee_pose'),
+            label=FromValue('pick_place')
+        )
+    """
+
+    def __init__(self, **transforms: dict[str, Callable[[Episode], Any]]):
+        self._transforms = transforms
 
     def __call__(self, episode: Episode) -> Episode:
         # TODO: Should we lazy-fy this?
-        data = {k: v for k, v in episode.items() if self._pass_key(k)}
-        data.update({name: fn(episode) for name, fn in self._transform_fns.items()})
+        data = {name: fn(episode) for name, fn in self._transforms.items()}
         return EpisodeContainer(data, episode.meta)
 
 
-class Concatenate(EpisodeTransform):
-    """Concatenate multiple transforms into a single transform.
+class Group(EpisodeTransform):
+    """Group multiple transforms into a single transform for parallel application.
 
     Applies all transforms to the same input episode and merges their results.
     If transforms produce overlapping keys, the first transform in the list takes precedence.
+
+    Example:
+        Group(observation_encoder, action_encoder, task_labeler)
     """
 
     def __init__(self, *transforms: EpisodeTransform):
@@ -73,7 +67,94 @@ class Concatenate(EpisodeTransform):
 
     @property
     def meta(self) -> dict[str, Any]:
-        return {k: v for tf in reversed(self._transforms) for k, v in tf.meta.items()}
+        result = {}
+        for tf in reversed(self._transforms):
+            result = merge_dicts(result, tf.meta)
+        return result
+
+
+class Rename(EpisodeTransform):
+    """Rename keys in an episode.
+
+    Only renamed keys are included in the output episode.
+
+    Example:
+        # Rename 'robot_state.q' to 'robot_joints' and 'image.wrist' to 'image.handcam'
+        Rename({'robot_joints': 'robot_state.q', 'image.handcam': 'image.wrist'})
+    """
+
+    def __init__(self, mapping: dict[str, str]):
+        """
+        Args:
+            mapping: Dictionary mapping new_key -> old_key (output key -> input key)
+        """
+        self._mapping = mapping
+
+    def __call__(self, episode: Episode) -> Episode:
+        res = {k: episode[v] for k, v in self._mapping.items()}
+        return EpisodeContainer(res, episode.meta)
+
+
+class Identity(EpisodeTransform):
+    """Select specific keys from an episode, or pass through unchanged if no keys specified.
+
+    Example:
+        Identity('robot_state', 'image')  # Only keep these two keys
+        Identity()  # Pass through all keys unchanged
+    """
+
+    def __init__(self, *features: str):
+        """
+        Args:
+            *features: Keys to include. If empty, returns the original episode unchanged.
+        """
+        self._features = set(features)
+
+    def __call__(self, episode: Episode) -> Episode:
+        if not self._features:
+            return episode
+        return EpisodeContainer({k: episode[k] for k in self._features}, episode.meta)
+
+
+class Concat:
+    """Helper for concatenating multiple episode signals into a single array signal.
+
+    This is a callable helper (not an EpisodeTransform) typically used within Derive.
+
+    Example:
+        Derive(ee_pose=Concat('ee_translation', 'ee_quaternion'))
+    """
+
+    def __init__(self, *features: str) -> None:
+        """
+        Args:
+            *features: Episode keys to concatenate in order
+        """
+        self._features = features
+
+    def __call__(self, episode: Episode) -> NpSignal:
+        return signals.concat(*[episode[k] for k in self._features])
+
+
+class FromValue:
+    """Helper that returns a constant value, ignoring the episode.
+
+    This is a callable helper (not an EpisodeTransform) typically used within Derive
+    to add static/constant values to episodes.
+
+    Example:
+        Derive(task=FromValue('pick_place'))
+    """
+
+    def __init__(self, value: Any):
+        """
+        Args:
+            value: The constant value to return
+        """
+        self._value = value
+
+    def __call__(self, episode: Episode) -> Any:
+        return self._value
 
 
 class TransformedEpisode(Episode):

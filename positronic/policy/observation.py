@@ -7,9 +7,10 @@ from PIL import Image as PilImage
 from positronic.dataset import Signal, transforms
 from positronic.dataset.episode import Episode
 from positronic.dataset.transforms import image
+from positronic.dataset.transforms.episode import Derive
 
 
-class ObservationEncoder(transforms.KeyFuncEpisodeTransform):
+class ObservationEncoder(Derive):
     def __init__(self, state: dict[str, list[str]], images: dict[str, tuple[str, tuple[int, int]]]):
         """
         Build an observation encoder.
@@ -18,9 +19,9 @@ class ObservationEncoder(transforms.KeyFuncEpisodeTransform):
             state: mapping from output state key to an ordered list of episode keys to concatenate.
             images: mapping from output image name to tuple (input_key, (width, height)).
         """
-        transform_fns = {k: partial(self.encode_state, k) for k in state.keys()}
-        transform_fns.update({k: partial(self.encode_image, k) for k in images.keys()})
-        super().__init__(add=transform_fns, pass_through=False)
+        transforms = {k: partial(self.encode_state, k) for k in state.keys()}
+        transforms.update({k: partial(self.encode_image, k) for k in images.keys()})
+        super().__init__(**transforms)
         self._state = state
         self._image_configs = images
         self._metadata = {}

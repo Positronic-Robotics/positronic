@@ -9,6 +9,7 @@ from positronic import geom
 from positronic.dataset import transforms
 from positronic.dataset.episode import Episode
 from positronic.dataset.signal import Signal
+from positronic.dataset.transforms.episode import Derive
 from positronic.drivers.roboarm import command
 
 RotRep = geom.Rotation.Representation
@@ -26,9 +27,9 @@ def _relative_rot_vec(q_current: np.ndarray, q_target: np.ndarray, representatio
     return _convert_quat_to_array(rel, representation)
 
 
-class ActionDecoder(transforms.KeyFuncEpisodeTransform):
+class ActionDecoder(Derive):
     def __init__(self):
-        super().__init__(add={'action': self.encode_episode}, pass_through=False)
+        super().__init__(action=self.encode_episode)
         self._metadata = {}
 
     @property

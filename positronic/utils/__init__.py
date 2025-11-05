@@ -24,3 +24,12 @@ def resolve_host_ip() -> str:
             return ip
 
     return candidates[0] if candidates else '127.0.0.1'
+
+
+def merge_dicts(dst: dict, src: dict) -> dict:
+    for key, value in src.items():
+        if isinstance(value, dict) and isinstance(dst.get(key), dict):
+            dst[key] = merge_dicts(dst[key], value)
+        else:
+            dst[key] = value
+    return dst

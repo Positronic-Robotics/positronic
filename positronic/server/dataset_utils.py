@@ -80,10 +80,13 @@ def get_dataset_info(ds: Dataset) -> dict[str, Any]:
 
 
 def get_episodes_list(ds: Dataset) -> list[dict[str, Any]]:
-    return [
-        {'index': idx, 'duration': ep.duration_ns / 1e9, 'task': ep.static.get('task', None)}
-        for idx, ep in enumerate(ds)
-    ]
+    result = []
+    for idx, ep in enumerate(ds):
+        try:
+            result.append({'index': idx, 'duration': ep.duration_ns / 1e9, 'task': ep.static.get('task', None)})
+        except Exception as e:
+            raise Exception(f'Error getting episode {idx}: {ep.meta}') from e
+    return result
 
 
 def _collect_signal_groups(ep: Episode) -> tuple[list[str], list[str], dict[str, int]]:
