@@ -4,7 +4,6 @@ import heapq
 import logging
 import multiprocessing as mp
 import multiprocessing.shared_memory
-from multiprocessing.queues import Queue
 import sys
 import time
 import traceback
@@ -12,6 +11,7 @@ from collections import deque
 from collections.abc import Callable, Iterator
 from enum import IntEnum
 from multiprocessing import resource_tracker
+from multiprocessing.queues import Queue
 from multiprocessing.synchronize import Event as EventClass
 from queue import Empty, Full
 from typing import TypeVar
