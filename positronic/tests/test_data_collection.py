@@ -264,3 +264,6 @@ def test_data_collection_with_mujoco_robot_gripper(tmp_path):
 
     for name in ['robot_state.q', 'robot_state.dq', 'grip']:
         assert_strictly_increasing(ep[name])
+
+
+

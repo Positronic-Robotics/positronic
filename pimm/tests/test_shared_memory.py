@@ -322,3 +322,69 @@ class TestSharedMemoryMultiprocessing:
             assert len(data) == 2
             assert np.allclose(data[0], [1.0, 2.0, 3.0])
             assert np.allclose(data[1], [10.0, 2.0, 3.0])
+
+
+class TestSharedMemoryBroadcast:
+    """Test broadcast functionality with shared memory."""
+
+    def test_broadcast_basic_communication(self):
+        """Test that one emitter can broadcast to multiple receivers."""
+        with World() as world:
+            emitter, receivers = world.mp_pipe_broadcast(num_receivers=3)
+
+            # Emit data
+            array = np.array([1.0, 2.0], dtype=np.float32)
+            data = NumpySMAdapter(array.shape, array.dtype)
+            data.array = array
+            emitter.emit(data, ts=100)
+
+            # All receivers should get the data
+            for receiver in receivers:
+                msg = receiver.read()
+                assert msg is not None
+                assert np.allclose(msg.data.array, [1.0, 2.0])
+                assert msg.ts == 100
+                assert msg.updated is True
+
+    def test_broadcast_independent_updated_flags(self):
+        """Test that each receiver has independent updated flag."""
+        with World() as world:
+            emitter, receivers = world.mp_pipe_broadcast(num_receivers=2)
+
+            array = np.array([3.0, 4.0], dtype=np.float32)
+            data = NumpySMAdapter(array.shape, array.dtype)
+            data.array = array
+            emitter.emit(data, ts=200)
+
+            # Receiver 0 reads (marks as read)
+            msg0 = receivers[0].read()
+            assert msg0.updated is True
+
+            # Receiver 1 hasn't read yet, should still be updated
+            msg1 = receivers[1].read()
+            assert msg1.updated is True
+
+            # Both read again - should be stale for both
+            assert receivers[0].read().updated is False
+            assert receivers[1].read().updated is False
+
+    def test_broadcast_multiple_emissions(self):
+        """Test multiple emissions to broadcast receivers."""
+        with World() as world:
+            emitter, receivers = world.mp_pipe_broadcast(num_receivers=2)
+
+            # First emission
+            data1 = NumpySMAdapter((2,), np.float32)
+            data1.array = np.array([1.0, 2.0], dtype=np.float32)
+            emitter.emit(data1, ts=100)
+
+            # Second emission
+            data2 = NumpySMAdapter((2,), np.float32)
+            data2.array = np.array([3.0, 4.0], dtype=np.float32)
+            emitter.emit(data2, ts=200)
+
+            # All receivers should see the latest data
+            for receiver in receivers:
+                msg = receiver.read()
+                assert np.allclose(msg.data.array, [3.0, 4.0])
+                assert msg.ts == 200

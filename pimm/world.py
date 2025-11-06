@@ -4,6 +4,7 @@ import heapq
 import logging
 import multiprocessing as mp
 import multiprocessing.shared_memory
+from multiprocessing.queues import Queue
 import sys
 import time
 import traceback
