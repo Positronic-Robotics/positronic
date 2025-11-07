@@ -201,6 +201,22 @@ class _Mirror:
             self._stop_event = None
 
     def download(self, remote: str, local: str | Path | None, delete: bool) -> Path:
+        """
+        Register (and perform if needed) a download from a remote S3 bucket path to a local directory or file.
+
+        Args:
+            remote (str): Source S3 URL (e.g., "s3://bucket/key/prefix") or local path.
+                If a local path is provided, it is validated and returned directly.
+            local (str | Path | None): Local directory or file destination. If None, uses cache path from options.
+            delete (bool): If True, deletes local files not present in S3.
+
+        Returns:
+            Path: The canonical local path associated with this download registration.
+
+        Raises:
+            FileNotFoundError: If remote is a local path that does not exist.
+            ValueError: If download registration conflicts with an existing download or upload or parameters differ.
+        """
         if not _is_s3_path(remote):
             path = Path(remote).expanduser().resolve()
             if not path.exists():
@@ -289,6 +305,24 @@ class _Mirror:
                 self._ensure_background_thread_unlocked()
 
         return local_path
+
+    def sync(
+        self,
+        remote: str,
+        local: str | Path | None,
+        interval: int | None,
+        delete_local: bool,
+        delete_remote: bool,
+        sync_on_error: bool,
+    ) -> Path:
+        local_path = self.download(remote, local, delete_local)
+        if not _is_s3_path(remote):
+            return local_path
+
+        normalized = _normalize_s3_url(remote)
+        # Unregister the download to allow upload registration for the same remote
+        self._downloads.pop(normalized, None)
+        return self.upload(remote, local_path, interval, delete_remote, sync_on_error)
 
     def _check_download_conflicts(self, candidate: str) -> None:
         for upload_remote in self._uploads:
@@ -576,4 +610,16 @@ def upload(
     return mirror_obj.upload(remote, local, interval, delete, sync_on_error)
 
 
-__all__ = ['mirror', 'download', 'upload', '_parse_s3_url']
+def sync(
+    remote: str,
+    local: str | Path | None = None,
+    interval: int | None = 300,
+    delete_local: bool = True,
+    delete_remote: bool = True,
+    sync_on_error: bool = False,
+) -> Path:
+    mirror_obj = _require_active_mirror()
+    return mirror_obj.sync(remote, local, interval, delete_local, delete_remote, sync_on_error)
+
+
+__all__ = ['mirror', 'download', 'upload', 'sync', '_parse_s3_url']

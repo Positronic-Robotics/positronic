@@ -294,3 +294,195 @@ class TestDownloadSync:
                 s3.download('s3://bucket/data', delete=True)
                 with pytest.raises(ValueError, match='already registered with different parameters'):
                     s3.download('s3://bucket/data', delete=False)
+
+
+class TestSync:
+    @patch(BOTO3_PATCH_TARGET)
+    def test_sync_requires_active_mirror(self, mock_boto_client):
+        """Test that sync requires an active mirror context."""
+        with pytest.raises(RuntimeError, match='No active mirror'):
+            s3.sync('s3://bucket/data')
+
+    @patch(BOTO3_PATCH_TARGET)
+    def test_sync_basic_functionality(self, mock_boto_client):
+        """Test that sync performs download then upload and allows same remote path."""
+        paginate = [{'Contents': [{'Key': 'data/file.txt', 'Size': 5}]}]
+        mock_s3 = _setup_s3_mock(mock_boto_client, paginate)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            local_dir = Path(tmpdir) / 'data'
+            local_dir.mkdir()
+            # Add a new file that doesn't exist in S3 to ensure upload happens
+            (local_dir / 'new_file.txt').write_text('new content')
+
+            with s3.mirror(cache_root=tmpdir, show_progress=False):
+                result_path = s3.sync('s3://bucket/data', local=local_dir, interval=None, delete_local=False)
+
+            assert result_path == local_dir.resolve()
+            # Should have downloaded
+            assert mock_s3.download_file.call_count >= 1
+            # Should have uploaded (at least the new file)
+            assert mock_s3.upload_file.call_count >= 1
+
+    @patch(BOTO3_PATCH_TARGET)
+    def test_sync_local_passthrough(self, mock_boto_client):
+        """Test that sync with local path just returns the path."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            local_path = Path(tmpdir) / 'data'
+            local_path.mkdir()
+
+            with s3.mirror(show_progress=False):
+                resolved = s3.sync(str(local_path))
+
+            assert resolved == local_path.resolve()
+
+    @patch(BOTO3_PATCH_TARGET)
+    def test_sync_delete_flags(self, mock_boto_client):
+        """Test that delete_local and delete_remote flags work correctly."""
+        # Test delete_local: S3 only has file1.txt
+        paginate_local = [{'Contents': [{'Key': 'data/file1.txt', 'Size': 5}]}]
+        _setup_s3_mock(mock_boto_client, paginate_local)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            local_dir = Path(tmpdir) / 'data'
+            local_dir.mkdir()
+            (local_dir / 'file1.txt').write_bytes(b'12345')
+            orphan_local = local_dir / 'file2.txt'
+            orphan_local.write_text('orphan')
+
+            with s3.mirror(cache_root=tmpdir, show_progress=False):
+                # delete_local=True should remove orphaned local files
+                s3.sync('s3://bucket/data', local=local_dir, delete_local=True, delete_remote=False, interval=None)
+
+            assert (local_dir / 'file1.txt').exists()
+            assert not orphan_local.exists()
+
+        # Test delete_local=False: preserve orphaned files
+        with tempfile.TemporaryDirectory() as tmpdir:
+            local_dir = Path(tmpdir) / 'data'
+            local_dir.mkdir()
+            (local_dir / 'file1.txt').write_bytes(b'12345')
+            orphan_local = local_dir / 'file2.txt'
+            orphan_local.write_text('orphan')
+
+            with s3.mirror(cache_root=tmpdir, show_progress=False):
+                s3.sync('s3://bucket/data', local=local_dir, delete_local=False, delete_remote=False, interval=None)
+
+            assert (local_dir / 'file1.txt').exists()
+            assert orphan_local.exists()
+
+        # Test delete_remote: S3 has file1.txt and file2.txt, local only has file1.txt
+        paginate_remote = [{'Contents': [{'Key': 'data/file1.txt', 'Size': 5}, {'Key': 'data/file2.txt', 'Size': 5}]}]
+        mock_s3_remote = _setup_s3_mock(mock_boto_client, paginate_remote)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            local_dir = Path(tmpdir) / 'data'
+            local_dir.mkdir()
+            (local_dir / 'file1.txt').write_bytes(b'12345')
+
+            with s3.mirror(cache_root=tmpdir, show_progress=False):
+                # delete_remote=True should remove orphaned S3 files
+                s3.sync('s3://bucket/data', local=local_dir, delete_local=False, delete_remote=True, interval=None)
+
+            assert mock_s3_remote.delete_object.call_count >= 1
+
+        # Test delete_remote=False: preserve orphaned S3 files
+        mock_s3_no_delete = _setup_s3_mock(mock_boto_client, paginate_remote)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            local_dir = Path(tmpdir) / 'data'
+            local_dir.mkdir()
+            (local_dir / 'file1.txt').write_bytes(b'12345')
+
+            with s3.mirror(cache_root=tmpdir, show_progress=False):
+                s3.sync('s3://bucket/data', local=local_dir, delete_local=False, delete_remote=False, interval=None)
+
+            assert mock_s3_no_delete.delete_object.call_count == 0
+
+    @patch(BOTO3_PATCH_TARGET)
+    def test_sync_background_sync(self, mock_boto_client):
+        """Test that sync with interval enables background syncing."""
+        paginate = [{'Contents': [{'Key': 'data/file.txt', 'Size': 5}]}]
+        mock_s3 = _setup_s3_mock(mock_boto_client, paginate)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            local_dir = Path(tmpdir) / 'data'
+            local_dir.mkdir()
+            (local_dir / 'file.txt').write_text('content')
+
+            with s3.mirror(cache_root=tmpdir, show_progress=False):
+                s3.sync('s3://bucket/data', local=local_dir, interval=1)
+                time.sleep(2.5)
+
+            # Should have synced multiple times in background
+            assert mock_s3.upload_file.call_count >= 2
+
+    @patch(BOTO3_PATCH_TARGET)
+    def test_sync_on_error_flag(self, mock_boto_client):
+        """Test that sync_on_error flag controls syncing on context exit with error."""
+        paginate = [{'Contents': [{'Key': 'data/file.txt', 'Size': 5}]}]
+        mock_s3_no_sync = _setup_s3_mock(mock_boto_client, paginate)
+
+        # Test sync_on_error=False: should not sync on error exit
+        with tempfile.TemporaryDirectory() as tmpdir:
+            local_dir = Path(tmpdir) / 'data'
+            local_dir.mkdir()
+            (local_dir / 'file.txt').write_text('content')
+
+            try:
+                with s3.mirror(cache_root=tmpdir, show_progress=False):
+                    s3.sync('s3://bucket/data', local=local_dir, interval=None, sync_on_error=False)
+                    raise RuntimeError('Test error')
+            except RuntimeError:
+                pass
+
+            assert mock_s3_no_sync.download_file.call_count >= 1
+
+        # Test sync_on_error=True: should sync on error exit
+        mock_s3_with_sync = _setup_s3_mock(mock_boto_client, paginate)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            local_dir = Path(tmpdir) / 'data'
+            local_dir.mkdir()
+            (local_dir / 'file.txt').write_text('content')
+
+            try:
+                with s3.mirror(cache_root=tmpdir, show_progress=False):
+                    s3.sync('s3://bucket/data', local=local_dir, interval=None, sync_on_error=True)
+                    raise RuntimeError('Test error')
+            except RuntimeError:
+                pass
+
+            # Should have synced because sync_on_error=True
+            assert mock_s3_with_sync.upload_file.call_count >= 1
+
+    @patch(BOTO3_PATCH_TARGET)
+    def test_sync_conflicts(self, mock_boto_client):
+        """Test that sync conflicts with existing registrations and second sync call."""
+        paginate = [{'Contents': [{'Key': 'data/file.txt', 'Size': 5}]}]
+        _setup_s3_mock(mock_boto_client, paginate)
+
+        # Test conflict with existing download
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with s3.mirror(cache_root=tmpdir, show_progress=False):
+                s3.download('s3://bucket/data/subdir')
+                with pytest.raises(ValueError, match='Conflict'):
+                    s3.sync('s3://bucket/data', interval=None)
+
+        # Test conflict with existing upload
+        _setup_s3_mock(mock_boto_client)
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with s3.mirror(cache_root=tmpdir, show_progress=False):
+                s3.upload('s3://bucket/data/subdir')
+                with pytest.raises(ValueError, match='Conflict'):
+                    s3.sync('s3://bucket/data', interval=None)
+
+        # Test second sync call conflicts (upload already registered)
+        _setup_s3_mock(mock_boto_client, paginate)
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with s3.mirror(cache_root=tmpdir, show_progress=False):
+                path1 = s3.sync('s3://bucket/data', interval=None)
+                assert path1 is not None
+                # Second sync call tries to download, which conflicts with existing upload
+                with pytest.raises(ValueError, match='Conflict'):
+                    s3.sync('s3://bucket/data', interval=None)
