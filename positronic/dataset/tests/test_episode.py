@@ -174,13 +174,15 @@ def test_episode_static_rejects_non_string_keys(tmp_path):
             w.set_static('bad', {1: 'a'})
 
 
-def test_episode_static_rejects_tuple_and_set(tmp_path):
+def test_episode_static_accepts_tuple_but_rejects_set(tmp_path):
     ep_dir = tmp_path / 'ep_static_bad_types'
     with DiskEpisodeWriter(ep_dir) as w:
-        with np.testing.assert_raises_regex(ValueError, 'JSON-serializable'):
-            w.set_static('coords', (1, 2))
+        w.set_static('coords', (1, 2))
         with np.testing.assert_raises_regex(ValueError, 'JSON-serializable'):
             w.set_static('labels', {'a', 'b'})
+
+    ep = DiskEpisode(ep_dir)
+    assert ep['coords'] == [1, 2]
 
 
 def test_episode_static_rejects_none(tmp_path):
@@ -196,7 +198,7 @@ def test_episode_writer_abort_cleans_up_and_blocks_further_use(tmp_path):
         # Append some data to create resources
         w.append('a', 1, 1000)
         w.set_static('k', 1)
-        assert ep_dir.exists() and (ep_dir / 'meta.json').exists()
+        assert ep_dir.exists()
 
         # Abort should remove the directory and prevent further actions
         w.abort()

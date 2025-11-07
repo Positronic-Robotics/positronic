@@ -208,7 +208,7 @@ lives in a background process.
 
 This lets the main process nudge or observe background systems after
 `world.start(...)` begins yielding sleeps. For example, in
-[`positronic/run_inference.py`](../positronic/run_inference.py) we pair the
+[`positronic/inference.py`](../positronic/inference.py) we pair the
 dataset writer's command receiver:
 
 ```python

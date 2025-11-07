@@ -12,7 +12,7 @@ from positronic import geom
 from positronic.dataset.local_dataset import LocalDataset
 from positronic.drivers import roboarm
 from positronic.drivers.roboarm import RobotStatus
-from positronic.run_inference import Inference, InferenceCommand, main_sim
+from positronic.inference import Inference, InferenceCommand, main_sim
 from positronic.tests.testing_coutils import ManualDriver, drive_scheduler
 
 
@@ -20,6 +20,7 @@ class StubStateEncoder:
     def __init__(self) -> None:
         self.last_inputs: dict[str, object] | None = None
         self.last_image_keys: list[str] = []
+        self.meta: dict[str, object] = {}
 
     def encode(self, inputs: dict[str, object]) -> dict[str, object]:
         self.last_inputs = inputs
@@ -43,6 +44,7 @@ class StubActionDecoder:
             translation=np.array([0.4, 0.5, 0.6], dtype=np.float32), rotation=geom.Rotation.identity
         )
         self.grip = np.array(0.33, dtype=np.float32)
+        self.meta: dict[str, object] = {}
 
     def decode(self, action: np.ndarray, inputs: dict[str, object]) -> tuple[roboarm.command.CommandType, float]:
         self.last_action = np.copy(action)
@@ -92,6 +94,7 @@ class StubPolicy:
         self.last_obs: dict[str, object] | None = None
         self.observations: list[dict[str, object]] = []
         self.reset_calls = 0
+        self.meta: dict[str, object] = {}
 
     def select_action(self, obs: dict[str, object]) -> np.ndarray:
         self.last_obs = obs

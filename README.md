@@ -99,7 +99,7 @@ cd positronic
 
 ## Core modules at a glance
 
-- [`pimm`](pimm/README.md) — immediate-mode runtime for building control systems. Handy references: [README](pimm/README.md), [Data collection script](positronic/data_collection.py), [Inference script](positronic/run_inference.py).
+- [`pimm`](pimm/README.md) — immediate-mode runtime for building control systems. Handy references: [README](pimm/README.md), [Data collection script](positronic/data_collection.py), [Inference script](positronic/inference.py).
 - [Positronic dataset library](positronic/dataset/README.md) — dataset writer/reader, transforms, and streaming agent.
 - [Positronic server](positronic/server/positronic_server.py) — FastAPI + Rerun viewer for inspecting recordings. Run via `positronic-server`.
 - [Training scripts](positronic/training) — scripts for converting datasets (`positronic-to-lerobot`) and running LeRobot pipelines (`positronic-train`) while native Positronic training is being finalised.
@@ -274,7 +274,7 @@ Checkpoints and logs are written under `outputs/train/<timestamp>_<job_name>/`. 
 
 ### 6. Validate policies
 
-Replay checkpoints through the [Inference script](positronic/run_inference.py) to test in MuJoCo or log hardware runs.
+Replay checkpoints through the [Inference script](positronic/inference.py) to test in MuJoCo or log hardware runs.
 
 Run the trained policy in MuJoCo, record diagnostics, and optionally stream a GUI:
 
@@ -286,7 +286,7 @@ positronic-inference sim_act \
     --show_gui
 ```
 
-The [Inference script](positronic/run_inference.py) wires the MuJoCo scene, [Observation encoders](positronic/cfg/policy/observation.py), and [Action decoder](positronic/cfg/policy/action.py). Passing `--output_dir` enables another `DsWriterAgent` so the run can be replayed in the dataset viewer.
+The [Inference script](positronic/inference.py) wires the MuJoCo scene, [Observation encoders](positronic/cfg/policy/observation.py), and [Action decoder](positronic/cfg/policy/action.py). Passing `--output_dir` enables another `DsWriterAgent` so the run can be replayed in the dataset viewer.
 
 ---
 
@@ -335,7 +335,7 @@ If you want to explore ML robotics, prototype policies, or learn the basics, use
 If you need to build and operate real applications, use Positronic. Beyond training, it provides the runtime, data tooling, teleoperation, and hardware integrations required to put policies on robots, monitor them, and iterate safely.
 
 - LeRobot: training‑centric; quick demos and learning on reference robots and open datasets.
-- Positronic: lifecycle‑centric; immediate‑mode middleware ([Pimm](pimm/README.md)), first‑class data ops ([Positronic dataset](positronic/dataset/README.md)), and hardware‑first operations ([Drivers](positronic/drivers), [WebXR](positronic/cfg/webxr.py), [inference](positronic/run_inference.py)).
+- Positronic: lifecycle‑centric; immediate‑mode middleware ([Pimm](pimm/README.md)), first‑class data ops ([Positronic dataset](positronic/dataset/README.md)), and hardware‑first operations ([Drivers](positronic/drivers), [WebXR](positronic/cfg/webxr.py), [inference](positronic/inference.py)).
 
 
 ## Roadmap
@@ -344,11 +344,11 @@ Our plans evolve with your feedback. Highlights for the next milestones:
 
 - **Short term**
   - **Policy presets for $\pi_0$ and GR00T.** Bundle ready-to-use configs in [policy config module](positronic/cfg/policy/policy.py) so switching policies is a single flag.
-  - **Automated evaluation harness.** Extend [Inference script](positronic/run_inference.py) and the MuJoCo loaders in [MuJoCo transform helpers](positronic/simulator/mujoco/transforms.py) to score new checkpoints automatically on curated scenarios.
+  - **Automated evaluation harness.** Extend [Inference script](positronic/inference.py) and the MuJoCo loaders in [MuJoCo transform helpers](positronic/simulator/mujoco/transforms.py) to score new checkpoints automatically on curated scenarios.
   - **Richer Positronic Server.** Teach [Positronic Server](positronic/server/positronic_server.py) to surface static/meta fields, and offer annotation + filtering flows for rapid triage.
   - **PyTorch bridging layer.** Provide a native adapter on top of [Positronic dataset library](positronic/dataset/README.md) so training scripts can stream tensors without an intermediate export.
   - **Direct LeRobot integration.** Let [LeRobot training driver](positronic/training/lerobot_train.py) read Positronic datasets directly, retiring the temporary [LeRobot conversion helper](positronic/training/to_lerobot.py) conversion.
-  - **Remote inference primitives.** Add network-friendly transports to [Inference script](positronic/run_inference.py) so policies can live on a different machine than the robot.
+  - **Remote inference primitives.** Add network-friendly transports to [Inference script](positronic/inference.py) so policies can live on a different machine than the robot.
 - **Medium term**
   - **SO101 leader support.** Promote SO101 from follower mode to a first-class leader arm in [Hardware configs](positronic/cfg/hardware).
   - **New operator inputs.** Ship keyboard and gamepad controllers inside [Drivers package](positronic/drivers) for quick teleop on commodity hardware.
