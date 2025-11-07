@@ -11,3 +11,7 @@ class Policy(ABC):
 
     def reset(self):
         return None
+
+    @property
+    def meta(self) -> dict[str, Any]:
+        return {}

@@ -30,6 +30,7 @@ dependencies = [
     "pyarrow",
     "pyturbojpeg",
     "robosuite",
+    "openpi-client",
     "numba>=0.57",
     "ruckig",
     "scipy",
@@ -41,7 +42,7 @@ dependencies = [
 
 [project.scripts]
 positronic-server="positronic.server.positronic_server:_internal_main"
-positronic-inference="positronic.run_inference:_internal_main"
+positronic-inference="positronic.inference:_internal_main"
 positronic-to-lerobot="positronic.training.to_lerobot:_internal_main"
 positronic-train="positronic.training.lerobot_train:_internal_main"
 positronic-data-collection="positronic.data_collection:_internal_main"
@@ -79,6 +80,11 @@ url = "https://artifactory.kinovaapps.com/artifactory/generic-local-public/korte
 
 [tool.uv.sources.pyzed]
 url = "https://download.stereolabs.com/zedsdk/5.0/whl/linux_x86_64/pyzed-5.0-cp311-cp311-linux_x86_64.whl"
+
+[tool.uv.sources.openpi-client]
+git = "https://github.com/Positronic-Robotics/openpi.git"
+rev = "main-positronic"
+subdirectory = "packages/openpi-client"
 
 [tool.pytest.ini_options]
 testpaths = [

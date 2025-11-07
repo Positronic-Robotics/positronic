@@ -24,10 +24,11 @@ def _detect_device() -> str:
 
 
 class LerobotPolicy(Policy):
-    def __init__(self, original: PreTrainedPolicy, device: str | None = None):
+    def __init__(self, original: PreTrainedPolicy, device: str | None = None, extra_meta: dict[str, Any] | None = None):
         self.original = original
         self.device = device or _detect_device()
         self.original.to(self.device)
+        self.extra_meta = extra_meta or {}
 
     def select_action(self, observation: dict[str, Any]) -> np.ndarray:
         obs = {}
@@ -46,3 +47,7 @@ class LerobotPolicy(Policy):
 
     def reset(self):
         self.original.reset()
+
+    @property
+    def meta(self) -> dict[str, Any]:
+        return self.extra_meta.copy()

@@ -27,7 +27,7 @@ from .video import VideoSignal, VideoSignalWriter
 def _is_valid_static_value(value: Any) -> bool:
     if isinstance(value, str | int | float | bool):
         return True
-    if isinstance(value, list):
+    if isinstance(value, list | tuple):
         return all(_is_valid_static_value(v) for v in value)
     if isinstance(value, dict):
         return all(isinstance(k, str) and _is_valid_static_value(v) for k, v in value.items())
@@ -82,11 +82,9 @@ class DiskEpisodeWriter(EpisodeWriter):
         self._on_close = on_close
 
         # Write system metadata immediately
-        meta = {'schema_version': EPISODE_SCHEMA_VERSION, 'created_ts_ns': time.time_ns()}
-        meta['writer'] = _cached_env_writer_info()
-        meta['writer']['name'] = f'{self.__class__.__module__}.{self.__class__.__qualname__}'
-        with (self._path / 'meta.json').open('w', encoding='utf-8') as f:
-            json.dump(meta, f, indent=2)
+        self._meta = {'schema_version': EPISODE_SCHEMA_VERSION, 'created_ts_ns': time.time_ns()}
+        self._meta['writer'] = _cached_env_writer_info()
+        self._meta['writer']['name'] = f'{self.__class__.__module__}.{self.__class__.__qualname__}'
 
     @property
     def path(self) -> Path:
@@ -145,7 +143,9 @@ class DiskEpisodeWriter(EpisodeWriter):
 
         # Validate restricted JSON structure
         if not _is_valid_static_value(data):
-            raise ValueError('Static item must be JSON-serializable: dict/list over numbers and strings')
+            raise ValueError(
+                f'Static item must be JSON-serializable: dict/list over numbers and strings, but got {name}\n{data=!r}'
+            )
         self._static_items[name] = data
 
     def __exit__(self, exc_type, exc, tb) -> None:
@@ -173,6 +173,9 @@ class DiskEpisodeWriter(EpisodeWriter):
         if self._static_items or not episode_json.exists():
             with episode_json.open('w', encoding='utf-8') as f:
                 json.dump(self._static_items, f, indent=2)
+
+        with (self._path / 'meta.json').open('w', encoding='utf-8') as f:
+            json.dump(self._meta, f, indent=2)
 
         if exc_type is None and not self._aborted and self._on_close is not None:
             self._on_close(self)

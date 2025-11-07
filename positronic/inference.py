@@ -3,7 +3,7 @@ import sys
 import termios
 import time
 import tty
-from collections.abc import Iterator, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import nullcontext
 from dataclasses import dataclass
 from enum import Enum
@@ -32,6 +32,7 @@ from positronic.policy.observation import ObservationEncoder
 from positronic.simulator.mujoco.observers import BodyDistance, StackingSuccess
 from positronic.simulator.mujoco.sim import MujocoCameras, MujocoFranka, MujocoGripper, MujocoSim
 from positronic.simulator.mujoco.transforms import MujocoSceneTransform
+from positronic.utils import flatten_dict
 
 rr.init('positronic')
 rr.save('positronic_inference.rrd')
@@ -94,8 +95,23 @@ class Inference(pimm.ControlSystem):
 
         self.command = pimm.ControlSystemReceiver[InferenceCommand](self, default=None, maxsize=3)
 
+    def meta(self) -> dict[str, Any]:
+        result = {
+            'inference.policy_fps': self.inference_fps,
+            'inference.task': self.task,
+            'inference.simulate_timeout': self.simulate_timeout,
+        }
+        for k, v in flatten_dict(self.observation_encoder.meta).items():
+            result[f'inference.observation.{k}'] = v
+        for k, v in flatten_dict(self.action_decoder.meta).items():
+            result[f'inference.action.{k}'] = v
+        for k, v in flatten_dict(self.policy.meta).items():
+            result[f'inference.policy.{k}'] = v
+        return result
+
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Sleep]:  # noqa: C901
         running = False
+        start_time = time.monotonic()
 
         # TODO: We should emit new commands per frame, not per inference fps
         rate_limiter = pimm.RateLimiter(clock, hz=self.inference_fps)
@@ -106,14 +122,17 @@ class Inference(pimm.ControlSystem):
                 match command_msg.data.type:
                     case InferenceCommandType.START:
                         running = True
+                        start_time = time.monotonic()
                         rate_limiter.reset()
                     case InferenceCommandType.STOP:
                         running = False
+                        print(f'Inference stopped after {time.monotonic() - start_time:.2f} seconds')
                     case InferenceCommandType.RESET:
                         self.robot_commands.emit(roboarm.command.Reset())
                         self.target_grip.emit(0.0)
                         self.policy.reset()
                         running = False
+                        print(f'Inference aborted after {time.monotonic() - start_time:.2f} seconds')
                         yield pimm.Pass()
 
             try:
@@ -178,29 +197,30 @@ class KeyboardControl(pimm.ControlSystem):
             termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
 
 
-def key_to_inf_command(key: str) -> InferenceCommand | None:
-    """Map keyboard inputs to inference commands, filtering out unmapped keys."""
-    if key == 's':
-        print('Starting inference...')
-        return InferenceCommand.START()
-    elif key == 'p':
-        print('Stopping inference...')
-        return InferenceCommand.STOP()
-    elif key == 'r':
-        print('Resetting...')
-        return InferenceCommand.RESET()
-    return None
+class KeyboardHanlder:
+    def __init__(self, meta_getter: Callable[[], dict[str, Any]]):
+        self.meta_getter = meta_getter
 
+    def inference_command(self, key: str) -> InferenceCommand | None:
+        if key == 's':
+            print('Starting inference...')
+            return InferenceCommand.START()
+        elif key == 'p':
+            print('Stopping inference...')
+            return InferenceCommand.STOP()
+        elif key == 'r':
+            print('Resetting...')
+            return InferenceCommand.RESET()
+        return None
 
-def key_to_ds_command(key: str) -> DsWriterCommand | None:
-    """Map keyboard inputs to dataset writer commands, filtering out unmapped keys."""
-    if key == 's':
-        return DsWriterCommand.START()
-    elif key == 'p':
-        return DsWriterCommand.STOP()
-    elif key == 'r':
-        return DsWriterCommand.STOP()
-    return None
+    def ds_writer_command(self, key: str) -> DsWriterCommand | None:
+        if key == 's':
+            return DsWriterCommand.START(self.meta_getter())
+        elif key == 'p':
+            return DsWriterCommand.STOP()
+        elif key == 'r':
+            return DsWriterCommand.ABORT()
+        return None
 
 
 def main(
@@ -222,6 +242,8 @@ def main(
     camera_instances = cameras
     camera_emitters = {name: cam.frame for name, cam in camera_instances.items()}
 
+    keyboard_handler = KeyboardHanlder(meta_getter=inference.meta)
+
     gui = DearpyguiUi() if show_gui else None
     writer_cm = LocalDatasetWriter(pos3.upload(output_dir)) if output_dir is not None else nullcontext(None)
     with writer_cm as dataset_writer, pimm.World() as world:
@@ -232,9 +254,13 @@ def main(
         keyboard = KeyboardControl()
         print('Keyboard controls: [s]tart, sto[p], [r]eset')
 
-        world.connect(keyboard.keyboard_inputs, inference.command, emitter_wrapper=pimm.map(key_to_inf_command))
+        world.connect(
+            keyboard.keyboard_inputs, inference.command, emitter_wrapper=pimm.map(keyboard_handler.inference_command)
+        )
         if ds_agent is not None:
-            world.connect(keyboard.keyboard_inputs, ds_agent.command, emitter_wrapper=pimm.map(key_to_ds_command))
+            world.connect(
+                keyboard.keyboard_inputs, ds_agent.command, emitter_wrapper=pimm.map(keyboard_handler.ds_writer_command)
+            )
 
         bg_cs = [*camera_instances.values(), robot_arm, gripper, ds_agent, gui]
 
@@ -245,17 +271,17 @@ def main(
 class Driver(pimm.ControlSystem):
     """Control system that orchestrates inference episodes by sending start/stop commands."""
 
-    def __init__(self, num_iterations: int, simulation_time: float, meta: dict):
+    def __init__(self, num_iterations: int, simulation_time: float, meta_getter: Callable[[], dict[str, Any]]):
         self.num_iterations = num_iterations
         self.simulation_time = simulation_time
         self.ds_commands = pimm.ControlSystemEmitter(self)
         self.inf_commands = pimm.ControlSystemEmitter(self)
-        self.meta = meta
+        self.meta_getter = meta_getter
 
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock):
         for i in range(self.num_iterations):
-            meta = self.meta.copy()
-            meta['inference.iteration'] = i
+            meta = self.meta_getter()
+            meta['simulation.iteration'] = i
 
             self.ds_commands.emit(DsWriterCommand.START(meta))
             self.inf_commands.emit(InferenceCommand.START())
@@ -294,14 +320,7 @@ def main_sim(
     inference = Inference(observation_encoder, action_decoder, policy, policy_fps, task, simulate_timeout)
     control_systems = [mujoco_cameras, sim, robot_arm, gripper, inference]
 
-    meta = {
-        'inference.mujoco_model_path': mujoco_model_path,
-        'inference.policy_fps': policy_fps,
-        'inference.simulation_time': simulation_time,
-    }
-    if task is not None:
-        meta['inference.task'] = task
-
+    sim_meta = {'simulation.mujoco_model_path': mujoco_model_path, 'simulation.simulation_time': simulation_time}
     gui = DearpyguiUi() if show_gui else None
 
     writer_cm = LocalDatasetWriter(pos3.upload(output_dir)) if output_dir is not None else nullcontext(None)
@@ -311,7 +330,7 @@ def main_sim(
             for observer_name in observers.keys():
                 ds_agent.add_signal(observer_name)
                 world.connect(sim.observations[observer_name], ds_agent.inputs[observer_name])
-        driver = Driver(num_iterations, simulation_time, meta=meta)
+        driver = Driver(num_iterations, simulation_time, lambda: sim_meta.copy() | inference.meta())
         world.connect(driver.inf_commands, inference.command)
         if ds_agent is not None:
             world.connect(driver.ds_commands, ds_agent.command)

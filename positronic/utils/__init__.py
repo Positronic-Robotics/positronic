@@ -33,3 +33,13 @@ def merge_dicts(dst: dict, src: dict) -> dict:
         else:
             dst[key] = value
     return dst
+
+
+def flatten_dict(d: dict, prefix: str = '') -> dict:
+    result = {}
+    for key, value in d.items():
+        if isinstance(value, dict):
+            result.update(flatten_dict(value, f'{prefix}{key}.'))
+        else:
+            result[f'{prefix}{key}'] = value
+    return result

@@ -5,14 +5,11 @@ from typing import Any
 
 import numpy as np
 import rerun as rr
+from openpi_client.websocket_client_policy import WebsocketClientPolicy
+
+from positronic.utils import flatten_dict
 
 from . import Policy
-
-try:
-    from openpi_client.websocket_client_policy import WebsocketClientPolicy
-except ImportError as e:
-    OPENPI_CLIENT_URL = 'https://github.com/Physical-Intelligence/openpi/tree/main/packages/openpi-client'
-    raise ImportError(f'openpi_client not installed, install from {OPENPI_CLIENT_URL}') from e
 
 
 class OpenPIRemotePolicy(Policy):
@@ -62,3 +59,8 @@ class OpenPIRemotePolicy(Policy):
     def reset(self):
         self.action_queue.clear()
         self.client.reset()
+
+    @property
+    def meta(self) -> dict[str, Any]:
+        result = {'type': 'openpi', 'n_action_steps': self.n_action_steps, 'server': self.client.get_server_metadata()}
+        return flatten_dict(result)
