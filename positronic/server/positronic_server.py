@@ -107,6 +107,7 @@ async def episode_viewer(request: Request, episode_id: int):
             'repo_id': app_state['root'],
             'episode_path': meta.get('path'),
             'episode_size_mb': size_mb_display,
+            'static_data': episode.static,
         },
     )
 
