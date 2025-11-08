@@ -21,6 +21,7 @@ from positronic.drivers import roboarm
 from positronic.gui.dpg import DearpyguiUi
 from positronic.simulator.mujoco.sim import MujocoCameras, MujocoFranka, MujocoGripper, MujocoSim
 from positronic.simulator.mujoco.transforms import MujocoSceneTransform
+from positronic.utils.logging import init_logging
 
 
 class Replay(DsPlayerAgent):
@@ -160,5 +161,6 @@ def main(
 
 
 if __name__ == '__main__':
+    init_logging()
     with pos3.mirror():
         cfn.cli(main)

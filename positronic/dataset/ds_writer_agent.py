@@ -15,6 +15,9 @@ from positronic.drivers.roboarm.command import CartesianPosition, CommandType, J
 from .dataset import DatasetWriter
 from .episode import EpisodeWriter
 
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
+
 
 class DsWriterCommandType(Enum):
     """Episode lifecycle commands for the dataset writer.
@@ -208,36 +211,36 @@ class DsWriterAgent(pimm.ControlSystem):
                     ep_writer.abort()
                 finally:
                     ep_writer.__exit__(None, None, None)
-                    logging.info(f'DsWriterAgent: [ABORT] Episode {ep_counter}')
+                    logger.info(f'DsWriterAgent: [ABORT] Episode {ep_counter}')
 
     def _handle_command(self, cmd: DsWriterCommand, ep_writer: EpisodeWriter | None, ep_counter: int):
         match cmd.type:
             case DsWriterCommandType.START_EPISODE:
                 if ep_writer is None:
                     ep_counter += 1
-                    logging.info(f'DsWriterAgent: [START] Episode {ep_counter}')
+                    logger.info(f'DsWriterAgent: [START] Episode {ep_counter}')
                     ep_writer = self.ds_writer.new_episode()
                     for k, v in cmd.static_data.items():
                         ep_writer.set_static(k, v)
                 else:
-                    logging.warning('Episode already started, ignoring start command')
+                    logger.warning('Episode already started, ignoring start command')
             case DsWriterCommandType.STOP_EPISODE:
                 if ep_writer is not None:
                     for k, v in cmd.static_data.items():
                         ep_writer.set_static(k, v)
                     ep_writer.__exit__(None, None, None)
-                    logging.info(f'DsWriterAgent: [STOP] Episode {ep_counter} {ep_writer.meta.get("path", "unknown")}')
+                    logger.info(f'DsWriterAgent: [STOP] Episode {ep_counter} {ep_writer.meta.get("path", "unknown")}')
                     ep_writer = None
                 else:
-                    logging.warning('Episode not started, ignoring stop command')
+                    logger.warning('Episode not started, ignoring stop command')
             case DsWriterCommandType.ABORT_EPISODE:
                 if ep_writer is not None:
                     ep_writer.abort()
                     ep_writer.__exit__(None, None, None)
-                    logging.info(f'DsWriterAgent: [ABORT] Episode {ep_counter}')
+                    logger.info(f'DsWriterAgent: [ABORT] Episode {ep_counter}')
                     ep_writer = None
                 else:
-                    logging.warning('Episode not started, ignoring abort command')
+                    logger.warning('Episode not started, ignoring abort command')
         return ep_writer, ep_counter
 
 

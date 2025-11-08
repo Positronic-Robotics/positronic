@@ -14,6 +14,7 @@ from lerobot.envs.configs import EnvConfig, FeatureType, PolicyFeature
 from lerobot.scripts import train as lerobot_train
 
 import positronic.utils.s3 as pos3
+from positronic.utils.logging import init_logging
 
 
 @EnvConfig.register_subclass('positronic')
@@ -83,6 +84,7 @@ def train(
 
 
 def _internal_main():
+    init_logging()
     cfn.cli(train)
 
 

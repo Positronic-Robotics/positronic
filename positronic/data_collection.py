@@ -31,6 +31,7 @@ from positronic.gui.dpg import DearpyguiUi
 from positronic.simulator.mujoco.sim import MujocoCameras, MujocoFranka, MujocoGripper, MujocoSim
 from positronic.simulator.mujoco.transforms import MujocoSceneTransform
 from positronic.utils.buttons import ButtonHandler
+from positronic.utils.logging import init_logging
 
 
 def _parse_buttons(buttons: dict, button_handler: ButtonHandler):
@@ -214,7 +215,9 @@ def main(
     static_getter = None if task is None else lambda: {'task': task}
     data_collection = DataCollectionController(operator_position.value, metadata_getter=static_getter)
 
-    writer_cm = LocalDatasetWriter(pos3.sync(output_dir)) if output_dir is not None else nullcontext(None)
+    writer_cm = (
+        LocalDatasetWriter(pos3.sync(output_dir, sync_on_error=True)) if output_dir is not None else nullcontext()
+    )
     with writer_cm as dataset_writer, pimm.World() as world:
         ds_agent = wire.wire(world, data_collection, dataset_writer, camera_emitters, robot_arm, gripper, None)
         _wire(world, ds_agent, data_collection, webxr, robot_arm, sound)
@@ -278,7 +281,9 @@ def main_sim(
 
     data_collection = DataCollectionController(operator_position.value, metadata_getter=metadata_getter)
 
-    writer_cm = LocalDatasetWriter(pos3.sync(output_dir)) if output_dir is not None else nullcontext(None)
+    writer_cm = (
+        LocalDatasetWriter(pos3.sync(output_dir, sync_on_error=True)) if output_dir is not None else nullcontext()
+    )
     with writer_cm as dataset_writer, pimm.World(clock=sim) as world:
         ds_agent = wire.wire(world, data_collection, dataset_writer, cameras, robot_arm, gripper, gui, TimeMode.MESSAGE)
         _wire(world, ds_agent, data_collection, webxr, robot_arm, sound)
@@ -344,6 +349,7 @@ droid = cfn.Config(
 
 @pos3.with_mirror()
 def _internal_main():
+    init_logging()
     cfn.cli({'real': main_cfg, 'so101': so101cfg, 'sim': main_sim, 'droid': droid})
 
 

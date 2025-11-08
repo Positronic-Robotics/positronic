@@ -454,7 +454,7 @@ def _bg_wrapper(run_func: ControlLoop, stop_event: EventClass, clock: Clock, nam
         print(f'{"=" * 60}\n', file=sys.stderr)
         logging.error(f'Error in control system {name}:\n{traceback.format_exc()}')
     finally:
-        logging.info(f'Stopping background process by {name}', flush=True)
+        logging.info(f'Stopping background process by {name}')
         stop_event.set()
 
 
@@ -479,23 +479,21 @@ class World:
 
     def __exit__(self, exc_type, exc_value, traceback):
         self.entered = False
-        logging.info('Stopping background processes...', flush=True)
+        logging.info('Stopping background processes...')
         self.request_stop()
         time.sleep(0.1)
 
-        logging.info(f'Waiting for {len(self.background_processes)} background processes to terminate...', flush=True)
+        logging.info(f'Waiting for {len(self.background_processes)} background processes to terminate...')
         for process in self.background_processes:
             process.join(timeout=3)
             if process.is_alive():
-                logging.warning(
-                    f'Process {process.name} (pid {process.pid}) did not respond, terminating...', flush=True
-                )
+                logging.warning(f'Process {process.name} (pid {process.pid}) did not respond, terminating...')
                 process.terminate()
                 process.join(timeout=2)  # Give it a moment to terminate
                 if process.is_alive():
-                    logging.warning(f'Process {process.name} (pid {process.pid}) still alive, killing...', flush=True)
+                    logging.warning(f'Process {process.name} (pid {process.pid}) still alive, killing...')
                     process.kill()
-            logging.info(f'Process {process.name} (pid {process.pid}) finished', flush=True)
+            logging.info(f'Process {process.name} (pid {process.pid}) finished')
             process.close()
 
         for emitter, reader in self._cleanup_emitters_readers:
@@ -702,7 +700,7 @@ class World:
             )
             p.start()
             self.background_processes.append(p)
-            logging.info(f'Started background process {name} (pid {p.pid})', flush=True)
+            logging.info(f'Started background process {name} (pid {p.pid})')
 
     def local_pipe(self, maxsize: int = 1) -> tuple[SignalEmitter[T], SignalReceiver[T]]:
         """Create a queue-based communication channel within the same process.

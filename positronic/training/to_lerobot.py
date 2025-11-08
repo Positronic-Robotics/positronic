@@ -31,6 +31,7 @@ from lerobot.datasets.lerobot_dataset import LeRobotDataset
 import positronic.cfg.dataset
 import positronic.utils.s3 as pos3
 from positronic.dataset import Dataset
+from positronic.utils.logging import init_logging
 
 
 def _raise_fd_limit(min_soft_limit: int = 4096) -> None:
@@ -164,6 +165,7 @@ def append_data_to_lerobot_dataset(output_dir: str, dataset: Dataset, fps: int, 
 
 @pos3.with_mirror()
 def _internal_main():
+    init_logging()
     cfn.cli({'convert': convert_to_lerobot_dataset, 'append': append_data_to_lerobot_dataset})
 
 

@@ -34,6 +34,7 @@ from positronic.simulator.mujoco.observers import BodyDistance, StackingSuccess
 from positronic.simulator.mujoco.sim import MujocoCameras, MujocoFranka, MujocoGripper, MujocoSim
 from positronic.simulator.mujoco.transforms import MujocoSceneTransform
 from positronic.utils import flatten_dict
+from positronic.utils.logging import init_logging
 
 rr.init('positronic')
 rr.save('positronic_inference.rrd')
@@ -414,6 +415,7 @@ openpi_positronic_real = openpi_droid.override(
 # Separate function for [projects.scripts]
 @pos3.with_mirror()
 def _internal_main():
+    init_logging()
     cfn.cli({
         'sim_act': main_sim_act,
         'sim_openpi_positronic': main_sim_openpi_positronic,
