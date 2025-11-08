@@ -72,7 +72,7 @@ def train(
     cfg.dataset.repo_id = 'local'
     cfg.eval_freq = 0
     cfg.policy.push_to_hub = False
-    cfg.output_dir = pos3.upload(output_dir) / run_name
+    cfg.output_dir = pos3.sync(output_dir) / run_name
     _update_config(cfg, **cfg_kwargs)
 
     print('Starting training...')

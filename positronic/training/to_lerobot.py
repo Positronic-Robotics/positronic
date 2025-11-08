@@ -137,7 +137,7 @@ def convert_to_lerobot_dataset(output_dir: str, fps: int, video: bool, dataset: 
 
 @cfn.config(dataset=positronic.cfg.dataset.encoded)
 def append_data_to_lerobot_dataset(output_dir: str, dataset: Dataset, fps: int, task=None):
-    output_dir = pos3.upload(output_dir, interval=None, sync_on_error=False)
+    output_dir = pos3.sync(output_dir, interval=None, sync_on_error=False)
     lr_dataset = LeRobotDataset(repo_id='local', root=output_dir)
 
     lr_modality_path = output_dir / 'meta' / 'modality.json'

@@ -245,7 +245,7 @@ def main(
     keyboard_handler = KeyboardHanlder(meta_getter=inference.meta)
 
     gui = DearpyguiUi() if show_gui else None
-    writer_cm = LocalDatasetWriter(pos3.upload(output_dir)) if output_dir is not None else nullcontext(None)
+    writer_cm = LocalDatasetWriter(pos3.sync(output_dir)) if output_dir is not None else nullcontext(None)
     with writer_cm as dataset_writer, pimm.World() as world:
         ds_agent = wire.wire(
             world, inference, dataset_writer, camera_emitters, robot_arm, gripper, gui, TimeMode.MESSAGE
@@ -323,7 +323,7 @@ def main_sim(
     sim_meta = {'simulation.mujoco_model_path': mujoco_model_path, 'simulation.simulation_time': simulation_time}
     gui = DearpyguiUi() if show_gui else None
 
-    writer_cm = LocalDatasetWriter(pos3.upload(output_dir)) if output_dir is not None else nullcontext(None)
+    writer_cm = LocalDatasetWriter(pos3.sync(output_dir)) if output_dir is not None else nullcontext(None)
     with writer_cm as dataset_writer, pimm.World(clock=sim) as world:
         ds_agent = wire.wire(world, inference, dataset_writer, cameras, robot_arm, gripper, gui, TimeMode.MESSAGE)
         if ds_agent is not None:
