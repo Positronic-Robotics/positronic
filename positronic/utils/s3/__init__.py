@@ -219,8 +219,6 @@ class _Mirror:
         """
         if not _is_s3_path(remote):
             path = Path(remote).expanduser().resolve()
-            if not path.exists():
-                raise FileNotFoundError(f'Local download path does not exist: {path}')
             return path
 
         normalized = _normalize_s3_url(remote)
