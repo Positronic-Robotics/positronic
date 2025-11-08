@@ -6,6 +6,7 @@
     <title>Episode {{ episode_id }} / {{ num_episodes }} - Positronic Dataset Viewer</title>
     <link rel="stylesheet" href="/static/styles.css?v={{ episode_id }}">
     <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; frame-src 'self'; connect-src 'self'; img-src 'self' data:">
+    <script src="/static/main.js" defer></script>
 </head>
 <body class="episode-viewer">
     <div class="header">
@@ -22,22 +23,37 @@
             {% if task %}<span class="task-description"> : {{ task }}</span>{% endif %}
         </div>
     </div>
-    {% if episode_path or episode_size_mb %}
-    <div class="episode-path">
-        {% if episode_path %}
-        <span class="episode-path-label">Episode path:</span>
-        <code class="episode-path-value">{{ episode_path }}</code>
-        {% endif %}
-        {% if episode_size_mb %}
-        <span class="episode-size">({{ episode_size_mb }} MB)</span>
-        {% endif %}
-    </div>
-    {% endif %}
-    <div id="viewer-container">
-        <div id="loading-overlay" class="loading-overlay">
-            Loading Rerun viewer...
+    <div  class="episode-info-header">
+        {% if episode_path or episode_size_mb %}
+        <div class="episode-path">
+            {% if episode_path %}
+            <span class="episode-path-label">Episode path:</span>
+            <code class="episode-path-value">{{ episode_path }}</code>
+            {% endif %}
+            {% if episode_size_mb %}
+            <span class="episode-size">({{ episode_size_mb }} MB)</span>
+            {% endif %}
         </div>
-        <iframe id="viewer-iframe" style="display: none;"></iframe>
+        {% endif %}
+
+        <button class="sidebar-toggler">☰ Dataset Info</button>
+    </div>
+    <div class="episode-container">
+        <div id="viewer-container">
+            <div id="loading-overlay" class="loading-overlay">
+                Loading Rerun viewer...
+            </div>
+            <iframe id="viewer-iframe" style="display: none;"></iframe>
+        </div>
+        <div class="sidebar">
+            <div class="sidebar-resizer"></div>
+            <div class="sidebar-header">
+                Dataset Info
+            </div>
+            <div class="sidebar-content">
+
+            </div>
+        </div>
     </div>
 
     <script>
