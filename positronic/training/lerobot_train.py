@@ -3,6 +3,7 @@ Example:
 `positronic-train --dataset_root=~/datasets/lerobot/stack_cubes`
 """
 
+import logging
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -75,10 +76,10 @@ def train(
     cfg.output_dir = pos3.sync(output_dir) / run_name
     _update_config(cfg, **cfg_kwargs)
 
-    print('Starting training...')
+    logging.info('Starting training...')
     lerobot_train.init_logging()
     lerobot_train.train(cfg)
-    print('Training finished.')
+    logging.info('Training finished.')
 
 
 def _internal_main():

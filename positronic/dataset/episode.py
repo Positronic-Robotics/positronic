@@ -147,3 +147,8 @@ class EpisodeWriter(AbstractContextManager, ABC, Generic[T]):
     def abort(self) -> None:
         """Abort the write and discard any partially written data."""
         pass
+
+    @property
+    def meta(self) -> dict:
+        """Metadata for the episode, known at the time of request."""
+        return {}

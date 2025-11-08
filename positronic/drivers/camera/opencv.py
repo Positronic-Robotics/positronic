@@ -1,5 +1,8 @@
+import logging
+import sys
 import time
 
+import av
 import cv2
 
 import pimm
@@ -39,10 +42,6 @@ class OpenCVCamera(pimm.ControlSystem):
 
 
 if __name__ == '__main__':
-    import sys
-
-    import av
-
     # We could implement this as a plain function
     # TODO: Extract this into utilities
     class VideoWriter(pimm.ControlSystem):
@@ -53,7 +52,7 @@ if __name__ == '__main__':
             self.frame = pimm.ControlSystemReceiver(self, default=None)
 
         def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock):
-            print(f'Writing to {self.filename}')
+            logging.info(f'Writing to {self.filename}')
             fps_counter = pimm.utils.RateCounter('VideoWriter')
             with av.open(self.filename, mode='w', format='mp4') as container:
                 stream = container.add_stream(self.codec, rate=self.fps)

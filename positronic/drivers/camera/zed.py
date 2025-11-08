@@ -91,7 +91,7 @@ class SLCamera(pimm.ControlSystem):
         zed = sl.Camera()
         error_code = zed.open(self.init_params)
         if error_code != SUCCESS:
-            print(f'Failed to open camera: {error_code}')
+            logging.error(f'Failed to open camera: {error_code}')
             return
 
         self.recovery_start_time = None

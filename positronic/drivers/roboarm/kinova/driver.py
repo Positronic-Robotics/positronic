@@ -1,3 +1,4 @@
+import logging
 import os
 from collections.abc import Iterator
 
@@ -15,11 +16,11 @@ def _set_realtime_priority():
     try:
         # Set realtime scheduling priority
         os.sched_setscheduler(0, os.SCHED_FIFO, os.sched_param(os.sched_get_priority_max(os.SCHED_FIFO)))
-        print('Successfully set realtime scheduling priority')
+        logging.info('Successfully set realtime scheduling priority')
     except (OSError, PermissionError) as e:
-        print(f'Warning: Could not set realtime scheduling priority: {e}')
-        print("Run `sudo setcap 'cap_sys_nice=eip' $(which python3)` to enable this")
-        print('Control loop will run with normal scheduling')
+        logging.warning(f'Warning: Could not set realtime scheduling priority: {e}')
+        logging.warning("Run `sudo setcap 'cap_sys_nice=eip' $(which python3)` to enable this")
+        logging.warning('Control loop will run with normal scheduling')
 
 
 class KinovaState(State, pimm.shared_memory.NumpySMAdapter):

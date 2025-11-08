@@ -113,7 +113,7 @@ class Robot(pimm.ControlSystem):
         robot.set_joint_impedance([3000, 3000, 3000, 2500, 2500, 2000, 2000])
         robot.set_cartesian_impedance([3000, 3000, 3000, 300, 300, 300])
         if load is not None:
-            print(f'Setting load to {load}')
+            logging.info(f'Setting load to {load}')
             robot.set_load(*load)
         else:
             robot.set_load(0.0, [0.0, 0.0, 0.0], [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0])

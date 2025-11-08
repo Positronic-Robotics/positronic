@@ -1,3 +1,4 @@
+import logging
 import time
 from collections.abc import Callable, Iterator, Sequence
 from contextlib import nullcontext
@@ -62,21 +63,21 @@ class _Tracker:
 
     def turn_on(self, robot_pos: geom.Transform3D):
         if self.umi_mode:
-            print('Ignoring tracking on/off in UMI mode')
+            logging.info('Ignoring tracking on/off in UMI mode')
             return
 
         self.on = True
-        print('Starting tracking')
+        logging.info('Starting tracking')
         self._offset = geom.Transform3D(
             -self._teleop_t.translation + robot_pos.translation, self._teleop_t.rotation.inv * robot_pos.rotation
         )
 
     def turn_off(self):
         if self.umi_mode:
-            print('Ignoring tracking on/off in UMI mode')
+            logging.info('Ignoring tracking on/off in UMI mode')
             return
         self.on = False
-        print('Stopped tracking')
+        logging.info('Stopped tracking')
 
     def update(self, tracker_pos: geom.Transform3D):
         if self.umi_mode:
@@ -136,7 +137,7 @@ class DataCollectionController(pimm.ControlSystem):
                     else:
                         tracker.turn_on(self.robot_state.value.ee_pose)
                 elif button_handler.just_pressed('right_stick') and not tracker.umi_mode:
-                    print('Resetting robot')
+                    logging.info('Resetting robot')
                     if recording:
                         self.ds_agent_commands.emit(DsWriterCommand.ABORT())
                         self.sound.emit(abort_wav_path)

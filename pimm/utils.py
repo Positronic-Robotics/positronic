@@ -1,3 +1,4 @@
+import logging
 import time
 from collections.abc import Callable
 from typing import TypeVar, overload
@@ -127,10 +128,12 @@ class RateCounter:
         report_every_sec (float): How often to report FPS, in seconds (default: 10.0)
     """
 
-    def __init__(self, prefix: str, report_every_sec: float = 10.0):
+    def __init__(self, prefix: str, report_every_sec: float = 10.0, level: int | None = logging.DEBUG):
+        # None means print to stdout
         self.prefix = prefix
         self.report_every_sec = report_every_sec
         self.reset()
+        self.level = level
 
     def reset(self):
         self.last_report_time = time.monotonic()
@@ -138,7 +141,10 @@ class RateCounter:
 
     def report(self):
         rate = self.tick_count / (time.monotonic() - self.last_report_time)
-        print(f'{self.prefix}: {rate:.2f} Hz')
+        if self.level is None:
+            print(f'{self.prefix}: {rate:.2f} Hz')
+        else:
+            logging.log(self.level, '%s: %.2f Hz', self.prefix, rate)
         self.last_report_time = time.monotonic()
         self.tick_count = 0
 

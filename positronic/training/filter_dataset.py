@@ -1,3 +1,4 @@
+import logging
 import os
 from io import BytesIO
 from pathlib import Path
@@ -31,7 +32,7 @@ def _decode_video_from_array(array: torch.Tensor) -> torch.Tensor:
                 return torch.from_numpy(np.stack(list(reader)))
         except Exception:
             try:
-                print('Failed to decode video data. Trying to read from file.')
+                logging.warning('Failed to decode video data. Trying to read from file.')
                 with open('tmp.mp4', 'wb') as f:
                     f.write(array.numpy().tobytes())
                 return torch.from_numpy(np.stack(imageio.mimread('tmp.mp4')))
@@ -41,10 +42,7 @@ def _decode_video_from_array(array: torch.Tensor) -> torch.Tensor:
                 os.remove('tmp.mp4')
 
 
-def get_consistent_samples(
-    ds: dict[str, Any],
-    min_interval_length: int = 30,
-):
+def get_consistent_samples(ds: dict[str, Any], min_interval_length: int = 30):
     distance_between_controllers = torch.linalg.norm(ds['umi_left_translation'] - ds['umi_right_translation'], axis=1)
 
     # since controllers dosen't move relative to each other, the distance should be constant

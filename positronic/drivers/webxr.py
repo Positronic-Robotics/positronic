@@ -1,5 +1,6 @@
 import asyncio
 import base64
+import logging
 import os
 import subprocess
 import tempfile
@@ -20,24 +21,10 @@ _LOG_CONFIG = {
     'version': 1,
     'disable_existing_loggers': False,
     'handlers': {
-        'file': {
-            'class': 'logging.FileHandler',
-            'formatter': 'default',
-            'filename': '/tmp/webxr.log',
-            'mode': 'w',
-        }
+        'file': {'class': 'logging.FileHandler', 'formatter': 'default', 'filename': '/tmp/webxr.log', 'mode': 'w'}
     },
-    'loggers': {
-        '': {
-            'handlers': ['file'],
-            'level': 'INFO',
-        }
-    },
-    'formatters': {
-        'default': {
-            'format': '%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-        }
-    },
+    'loggers': {'': {'handlers': ['file'], 'level': 'INFO'}},
+    'formatters': {'default': {'format': '%(asctime)s - %(name)s - %(levelname)s - %(message)s'}},
 }
 
 
@@ -90,9 +77,9 @@ def _get_or_create_ssl_files(port: int, keyfile: str, certfile: str) -> tuple[st
             ],
         )
         subprocess.run(*cl, check=True, capture_output=True)
-        print(f'Generated self-signed SSL certs in {tmp_dir}')
+        logging.info(f'Generated self-signed SSL certs in {tmp_dir}')
     except Exception as e:
-        print('Failed to generate SSL certificates via openssl. Provide cert/key files or use HTTP.')
+        logging.warning('Failed to generate SSL certificates via openssl. Provide cert/key files or use HTTP.')
         raise e
 
     return tmp_key, tmp_cert
@@ -187,7 +174,7 @@ class WebXR(pimm.ControlSystem):
         @app.websocket('/video')
         async def video_stream(websocket: WebSocket):
             await websocket.accept()
-            print('Video WebSocket connection accepted')
+            logging.info('Video WebSocket connection accepted')
             try:
                 fps = pimm.utils.RateCounter('Video Stream')
                 last_sent_ts = None
@@ -206,15 +193,15 @@ class WebXR(pimm.ControlSystem):
                     await websocket.send_text(base64_frame)
                     fps.tick()
             except Exception as e:
-                print(f'Video WebSocket error: {e}')
-                print(traceback.format_exc())
+                logging.error(f'Video WebSocket error: {e}')
+                logging.error(traceback.format_exc())
             finally:
-                print('Video WebSocket connection closed')
+                logging.info('Video WebSocket connection closed')
 
         @app.websocket('/ws')
         async def websocket_endpoint(websocket: WebSocket):
             await websocket.accept()
-            print('WebSocket connection accepted')
+            logging.info('WebSocket connection accepted')
             try:
                 fps = pimm.utils.RateCounter('Websocket')
                 while not should_stop.value:
@@ -238,10 +225,10 @@ class WebXR(pimm.ControlSystem):
                         # Timeout is normal, just continue to check should_stop
                         continue
                     except Exception as e:
-                        print(f'Error processing WebSocket message: {e}')
+                        logging.error(f'Error processing WebSocket message: {e}')
                         break
             except Exception as e:
-                print(f'WebSocket error: {e}')
+                logging.error(f'WebSocket error: {e}')
 
         ssl_kwargs = {}
         if self.use_https:

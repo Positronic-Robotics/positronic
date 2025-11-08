@@ -18,6 +18,7 @@ Examples:
 """
 
 import json
+import logging
 import resource  # This will fail on Windows, as this library is Unix only, but we don't support Windows anyway
 from collections.abc import Sequence as AbcSequence
 
@@ -108,7 +109,7 @@ def append_data_to_dataset(lr_dataset: LeRobotDataset, p_dataset: Dataset, fps, 
 
         lr_dataset.save_episode()
         lr_dataset.encode_episode_videos(episode_idx)
-    print(f'Total length of the dataset: {seconds_to_str(total_length_sec)}')
+    logging.info(f'Total length of the dataset: {seconds_to_str(total_length_sec)}')
 
 
 @cfn.config(video=True, dataset=positronic.cfg.dataset.encoded)
@@ -132,7 +133,7 @@ def convert_to_lerobot_dataset(output_dir: str, fps: int, video: bool, dataset: 
                 json.dump(modality, f, indent=2)
 
     append_data_to_dataset(lr_dataset=lr_dataset, p_dataset=dataset, task=task, fps=fps)
-    print(f'Dataset converted and saved to {output_dir}')
+    logging.info(f'Dataset converted and saved to {output_dir}')
 
 
 @cfn.config(dataset=positronic.cfg.dataset.encoded)
@@ -158,7 +159,7 @@ def append_data_to_lerobot_dataset(output_dir: str, dataset: Dataset, fps: int, 
         raise ValueError("'gr00t_modality' exists in dataset.meta but not in the destination LeRobot dataset.")
 
     append_data_to_dataset(lr_dataset=lr_dataset, p_dataset=dataset, task=task, fps=fps)
-    print(f'Dataset extended and saved to {output_dir}')
+    logging.info(f'Dataset extended and saved to {output_dir}')
 
 
 @pos3.with_mirror()

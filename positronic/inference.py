@@ -1,3 +1,4 @@
+import logging
 import select
 import sys
 import termios
@@ -181,6 +182,7 @@ class KeyboardControl(pimm.ControlSystem):
         # Check if stdin is a TTY before attempting terminal operations
         if not sys.stdin.isatty():
             print('WARNING: KeyboardControl cannot read input - stdin is not a terminal', file=sys.stderr)
+            logging.warning('KeyboardControl cannot read input - stdin is not a terminal')
             return
 
         fd = sys.stdin.fileno()
@@ -203,13 +205,13 @@ class KeyboardHanlder:
 
     def inference_command(self, key: str) -> InferenceCommand | None:
         if key == 's':
-            print('Starting inference...')
+            logging.info('Starting inference...')
             return InferenceCommand.START()
         elif key == 'p':
-            print('Stopping inference...')
+            logging.info('Stopping inference...')
             return InferenceCommand.STOP()
         elif key == 'r':
-            print('Resetting...')
+            logging.info('Resetting...')
             return InferenceCommand.RESET()
         return None
 

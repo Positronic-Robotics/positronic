@@ -85,6 +85,7 @@ class DiskEpisodeWriter(EpisodeWriter):
         self._meta = {'schema_version': EPISODE_SCHEMA_VERSION, 'created_ts_ns': time.time_ns()}
         self._meta['writer'] = _cached_env_writer_info()
         self._meta['writer']['name'] = f'{self.__class__.__module__}.{self.__class__.__qualname__}'
+        self._meta['path'] = str(self._path.resolve(strict=True))
 
     @property
     def path(self) -> Path:
@@ -192,6 +193,11 @@ class DiskEpisodeWriter(EpisodeWriter):
 
         shutil.rmtree(self._path, ignore_errors=True)
         self._aborted = True
+
+    @property
+    def meta(self) -> dict:
+        """Metadata for the episode, known at the time of request."""
+        return self._meta.copy()
 
 
 class DiskEpisode(Episode):

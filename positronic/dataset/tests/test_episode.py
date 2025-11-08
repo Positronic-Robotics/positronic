@@ -127,13 +127,6 @@ def test_episode_meta_written_and_exposed(tmp_path):
         assert isinstance(git, dict)
         assert {'commit', 'branch', 'dirty'}.issubset(git.keys())
 
-    # Print meta.json content for debugging
-    with open(ep_dir / 'meta.json') as f:
-        import json
-
-        meta_content = json.load(f)
-        print('meta.json content:', meta_content)
-
 
 def test_episode_static_numpy_arrays_rejected(tmp_path):
     ep_dir = tmp_path / 'ep_static_np'
