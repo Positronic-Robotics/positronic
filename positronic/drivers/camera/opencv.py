@@ -2,7 +2,6 @@ import logging
 import sys
 import time
 
-import av
 import cv2
 
 import pimm
@@ -42,6 +41,8 @@ class OpenCVCamera(pimm.ControlSystem):
 
 
 if __name__ == '__main__':
+    import av
+
     # We could implement this as a plain function
     # TODO: Extract this into utilities
     class VideoWriter(pimm.ControlSystem):
