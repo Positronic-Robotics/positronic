@@ -17,7 +17,7 @@ classifiers = [
 dependencies = [
     "av",
     "boto3",
-    "configuronic>=0.2",
+    "configuronic",
     "cvxopt",
     "dearpygui",
     "dm_control",
@@ -30,18 +30,16 @@ dependencies = [
     "numba>=0.57",
     "numpy",
     "opencv-python-headless",
+    "openpi-client",
     "pyarrow",
     "pydantic",
     "pyturbojpeg",
     "rerun-sdk~=0.22",
     "robosuite",
-    "openpi-client",
     "ruckig",
     "scipy",
     "torch",
     "uvicorn[standard]",
-    "lerobot>=0.3.3",  # TODO: Get rid of this, move all usages to standalone scripts
-    "rerun-sdk~=0.22",
     "zmq",
 ]
 

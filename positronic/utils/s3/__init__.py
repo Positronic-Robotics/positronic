@@ -322,6 +322,38 @@ class _Mirror:
         self._downloads.pop(normalized, None)
         return self.upload(remote, local_path, interval, delete_remote, sync_on_error)
 
+    def ls(self, prefix: str, recursive: bool = False) -> list[str]:
+        """Lists objects under the given prefix, working for both local directories and S3 prefixes."""
+        if _is_s3_path(prefix):
+            normalized = _normalize_s3_url(prefix)
+            bucket, key = _parse_s3_url(normalized)
+            # Ensure directory-like listing by appending '/' to avoid spurious prefix matches
+            if key:
+                key = key + '/'
+            items = []
+            for info in self._scan_s3(bucket, key):
+                if info.relative_path:
+                    # Skip nested items if not recursive
+                    if not recursive and '/' in info.relative_path:
+                        continue
+                    # Reconstruct the full S3 key
+                    if key:
+                        s3_key = key.rstrip('/') + '/' + info.relative_path
+                    else:
+                        s3_key = info.relative_path
+                    items.append(f's3://{bucket}/{s3_key}')
+            return items
+        else:
+            path = Path(prefix).expanduser().resolve()
+            items = []
+            for info in _scan_local(path):
+                if info.relative_path:
+                    # Skip nested items if not recursive
+                    if not recursive and '/' in info.relative_path:
+                        continue
+                    items.append(str(path / info.relative_path))
+            return items
+
     def _check_download_conflicts(self, candidate: str) -> None:
         for upload_remote in self._uploads:
             if _s3_paths_conflict(candidate, upload_remote):
@@ -620,4 +652,9 @@ def sync(
     return mirror_obj.sync(remote, local, interval, delete_local, delete_remote, sync_on_error)
 
 
-__all__ = ['mirror', 'download', 'upload', 'sync', '_parse_s3_url']
+def ls(prefix: str, recursive: bool = False) -> list[str]:
+    mirror_obj = _require_active_mirror()
+    return mirror_obj.ls(prefix, recursive)
+
+
+__all__ = ['mirror', 'download', 'upload', 'sync', 'ls', '_parse_s3_url']

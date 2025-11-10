@@ -486,3 +486,66 @@ class TestSync:
                 # Second sync call tries to download, which conflicts with existing upload
                 with pytest.raises(ValueError, match='Conflict'):
                     s3.sync('s3://bucket/data', interval=None)
+
+
+class TestLs:
+    def test_ls_local_non_recursive(self):
+        """Test non-recursive listing excludes nested items."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            base = Path(tmpdir)
+            (base / 'file.txt').write_text('x')
+            (base / 'dir').mkdir()
+            (base / 'dir' / 'nested.txt').write_text('x')
+
+            with s3.mirror(show_progress=False):
+                items = s3._require_active_mirror().ls(str(base), recursive=False)
+
+            assert str(base / 'dir' / 'nested.txt') not in items
+            assert str(base / 'file.txt') in items
+
+    def test_ls_local_recursive(self):
+        """Test recursive listing includes nested items."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            base = Path(tmpdir)
+            (base / 'dir').mkdir()
+            (base / 'dir' / 'nested.txt').write_text('x')
+
+            with s3.mirror(show_progress=False):
+                items = s3._require_active_mirror().ls(str(base), recursive=True)
+
+            assert str(base / 'dir' / 'nested.txt') in items
+
+    @patch(BOTO3_PATCH_TARGET)
+    def test_ls_s3_non_recursive(self, mock_boto_client):
+        """Test non-recursive S3 listing excludes nested items."""
+        paginate = [{'Contents': [{'Key': 'data/file.txt', 'Size': 5}, {'Key': 'data/sub/nested.txt', 'Size': 10}]}]
+        _setup_s3_mock(mock_boto_client, paginate)
+
+        with s3.mirror(show_progress=False):
+            items = s3._require_active_mirror().ls('s3://bucket/data', recursive=False)
+
+        assert 's3://bucket/data/sub/nested.txt' not in items
+        assert 's3://bucket/data/file.txt' in items
+
+    @patch(BOTO3_PATCH_TARGET)
+    def test_ls_s3_recursive(self, mock_boto_client):
+        """Test recursive S3 listing includes nested items."""
+        paginate = [{'Contents': [{'Key': 'data/sub/nested.txt', 'Size': 10}]}]
+        _setup_s3_mock(mock_boto_client, paginate)
+
+        with s3.mirror(show_progress=False):
+            items = s3._require_active_mirror().ls('s3://bucket/data', recursive=True)
+
+        assert 's3://bucket/data/sub/nested.txt' in items
+
+    @patch(BOTO3_PATCH_TARGET)
+    def test_ls_s3_no_spurious_prefix_match(self, mock_boto_client):
+        """Test that listing s3://bucket/data doesn't match s3://bucket/data-other."""
+        paginate = [{'Contents': [{'Key': 'data/file.txt', 'Size': 5}, {'Key': 'data-other/file.txt', 'Size': 10}]}]
+        _setup_s3_mock(mock_boto_client, paginate)
+
+        with s3.mirror(show_progress=False):
+            items = s3._require_active_mirror().ls('s3://bucket/data', recursive=False)
+
+        assert 's3://bucket/data/file.txt' in items
+        assert 's3://bucket/data-other/file.txt' not in items
