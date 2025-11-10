@@ -3,6 +3,7 @@
     --color-text-default: #f0f0f0;
     --color-text-default-light: #f2f2f2;
     --color-bg-default: #111111;
+    --color-bg-highlight: #222222;
     --color-border-default: #1F1F1F;
     --color-border-dark: var(--color-border-default);
     --color-ui-hover-bg: #1A1A1A;
@@ -281,8 +282,8 @@ body.episode-viewer { height: 100vh; display: flex; flex-direction: column; }
 }
 
 .sidebar-header {
-    padding: 6px 10px;
-    font-size: 12px;
+    padding: 10px;
+    font-size: 16px;
     font-weight: 500;
     background-color: var(--sidebar-header-bg);
 }
@@ -307,6 +308,11 @@ body.episode-viewer { height: 100vh; display: flex; flex-direction: column; }
     width: 100%;
     border-collapse: collapse;
     border: none;
+    background-color: var(--color-bg-default);
+}
+
+.sidebar-content table tr:nth-child(even) {
+    background-color: var(--color-bg-highlight);
 }
 
 .sidebar-content table table {
