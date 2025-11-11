@@ -1,19 +1,22 @@
 document.addEventListener('DOMContentLoaded', () => {
-  let sidebarWidth = 300;
+  const sidebarState = loadSidebarState();
   const sidebarToggler = document.querySelector('.sidebar-toggler');
   const sidebar = document.querySelector('.sidebar');
   const sidebarResizer = document.querySelector('.sidebar-resizer');
   const episodeViewer = document.getElementById('viewer-container');
+  setSidebarWidth(sidebarState.sidebarWidth);
+  toggleSidebar(sidebarState.isExpanded);
 
   const sidebarResizeHandler = (event) => {
     event.preventDefault();
-    sidebarWidth = Math.max(100, document.body.clientWidth - event.clientX);
-    sidebar.style.width = `${sidebarWidth}px`;
+    setSidebarWidth(document.body.clientWidth - event.clientX);
+    saveSidebarState();
   };
 
   sidebarToggler.addEventListener('click', () => {
-    const isExpanded = sidebar.classList.toggle('expanded');
-    sidebar.style.width = isExpanded ? `${sidebarWidth}px` : '0px';
+    const isExpanded = sidebar.classList.contains('expanded');
+    toggleSidebar(!isExpanded);
+    saveSidebarState();
   });
 
   sidebarResizer.addEventListener('mousedown', (event) => {
@@ -33,6 +36,28 @@ document.addEventListener('DOMContentLoaded', () => {
       { once: true }
     );
   });
+
+  function setSidebarWidth(width) {
+    sidebarState.sidebarWidth = Math.max(100, width);
+    sidebar.style.width = `${sidebarState.sidebarWidth}px`;
+  }
+
+  function toggleSidebar(isExpanded) {
+    sidebar.classList.toggle('expanded', isExpanded);
+    sidebar.style.width = isExpanded ? `${sidebarState.sidebarWidth}px` : '0px';
+    sidebarState.isExpanded = isExpanded;
+  }
+
+  function saveSidebarState() {
+    localStorage.setItem('sidebarState', JSON.stringify(sidebarState));
+  }
+
+  function loadSidebarState() {
+    const defaultState = { isExpanded: false, sidebarWidth: 300 };
+    const savedState = JSON.parse(localStorage.getItem('sidebarState'));
+
+    return { ...defaultState, ...savedState };
+  }
 });
 
 function initializeSidebar(staticData) {
