@@ -3,13 +3,25 @@ document.addEventListener('DOMContentLoaded', () => {
   const sidebarToggler = document.querySelector('.sidebar-toggler');
   const sidebar = document.querySelector('.sidebar');
   const sidebarResizer = document.querySelector('.sidebar-resizer');
+  const sidebarContent = document.querySelector('.sidebar-content');
+  const keyColumnResizer = document.querySelector('.key-column-resizer');
   const episodeViewer = document.getElementById('viewer-container');
+
   setSidebarWidth(sidebarState.sidebarWidth);
+  setKeyColumnWidth(sidebarState.keyColumnWidth);
+  setSidebarScrollTop(sidebarState.scrollTop);
   toggleSidebar(sidebarState.isExpanded);
 
   const sidebarResizeHandler = (event) => {
     event.preventDefault();
     setSidebarWidth(document.body.clientWidth - event.clientX);
+    saveSidebarState();
+  };
+
+  const keyColumnResizeHandler = (event) => {
+    const offsetX = sidebarState.sidebarWidth - (document.body.clientWidth - event.clientX);
+    const columnWidth = Math.min(Math.max(50, offsetX), sidebarState.sidebarWidth - 50);
+    setKeyColumnWidth(columnWidth);
     saveSidebarState();
   };
 
@@ -19,22 +31,33 @@ document.addEventListener('DOMContentLoaded', () => {
     saveSidebarState();
   });
 
-  sidebarResizer.addEventListener('mousedown', (event) => {
-    episodeViewer.style.zIndex = -1;
-    sidebar.classList.add('isResizing');
-    document.body.style.userSelect = 'none';
-    document.addEventListener('mousemove', sidebarResizeHandler);
+  [
+    { resizer: sidebarResizer, handler: sidebarResizeHandler },
+    { resizer: keyColumnResizer, handler: keyColumnResizeHandler },
+  ].forEach(({ resizer, handler }) => {
+    resizer.addEventListener('mousedown', (event) => {
+      episodeViewer.style.zIndex = -1;
+      sidebar.classList.add('isResizing');
+      document.body.style.userSelect = 'none';
+      document.addEventListener('mousemove', handler);
 
-    document.addEventListener(
-      'mouseup',
-      (event) => {
-        document.removeEventListener('mousemove', sidebarResizeHandler);
-        episodeViewer.style.zIndex = '';
-        sidebar.classList.remove('isResizing');
-        document.body.style.userSelect = '';
-      },
-      { once: true }
-    );
+      document.addEventListener(
+        'mouseup',
+        (event) => {
+          document.removeEventListener('mousemove', handler);
+          episodeViewer.style.zIndex = '';
+          sidebar.classList.remove('isResizing');
+          document.body.style.userSelect = '';
+        },
+        { once: true }
+      );
+    });
+  });
+
+  sidebarContent.addEventListener('scroll', () => {
+    const scrollTop = sidebarContent.scrollTop;
+    setSidebarScrollTop(scrollTop);
+    saveSidebarState();
   });
 
   function setSidebarWidth(width) {
@@ -48,12 +71,27 @@ document.addEventListener('DOMContentLoaded', () => {
     sidebarState.isExpanded = isExpanded;
   }
 
+  function setKeyColumnWidth(width) {
+    sidebar.style.setProperty('--dataset-key-column-width', `${width}px`);
+    sidebarState.keyColumnWidth = width;
+  }
+
+  function setSidebarScrollTop(scrollTop) {
+    sidebarContent.scrollTop = scrollTop;
+    sidebarState.scrollTop = scrollTop;
+  }
+
   function saveSidebarState() {
     localStorage.setItem('sidebarState', JSON.stringify(sidebarState));
   }
 
   function loadSidebarState() {
-    const defaultState = { isExpanded: false, sidebarWidth: 300 };
+    const defaultState = {
+      isExpanded: false,
+      sidebarWidth: 300,
+      keyColumnWidth: 150,
+      scrollTop: 0,
+    };
     const savedState = JSON.parse(localStorage.getItem('sidebarState'));
 
     return { ...defaultState, ...savedState };
@@ -91,8 +129,11 @@ function initializeSidebar(staticData) {
     }
   }
 
-  function renderLevel(key, value) {
-    let html = `<table><tbody>`;
+  function renderLevel(key, value, isRoot = false) {
+    let html = isRoot
+      ? '<table class="root-table"><colgroup><col class="dataset-key-column"><col></colgroup>'
+      : '<table>';
+    html += '<tbody>';
 
     if (isNestable(value)) {
       for (const [key, val] of Object.entries(value)) {
@@ -111,7 +152,7 @@ function initializeSidebar(staticData) {
     return html;
   }
 
-  sidebarContent.innerHTML = renderLevel('', staticData);
+  sidebarContent.insertAdjacentHTML('beforeend', renderLevel('', staticData, true));
   document.querySelectorAll('.expand-button').forEach((button) => {
     button.addEventListener('click', () => {
       const table = button.parentElement.querySelector('table');

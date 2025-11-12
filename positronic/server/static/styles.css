@@ -22,6 +22,7 @@
     --navbar-button-text-color: #111111;
     --color-accent-green: rgb(177, 231, 79);
     --sidebar-header-bg: #1d2123;
+    --dataset-key-column-width: 150px;
 }
 
 /* Base styles */
@@ -258,7 +259,7 @@ body.episode-viewer { height: 100vh; display: flex; flex-direction: column; }
     visibility: visible;
 }
 
-.sidebar-resizer {
+.resizer {
     width: 10px;
     cursor: ew-resize;
     background-color: transparent;
@@ -269,7 +270,7 @@ body.episode-viewer { height: 100vh; display: flex; flex-direction: column; }
     z-index: 1;
 }
 
-.sidebar-resizer::before {
+.resizer::before {
     content: '';
     display: block;
     width: 3px;
@@ -277,8 +278,17 @@ body.episode-viewer { height: 100vh; display: flex; flex-direction: column; }
     margin: 0 auto;
 }
 
-.sidebar-resizer:hover::before {
+.resizer:hover::before {
     background-color: #fff;
+}
+
+.key-column-resizer {
+    transform: translate(calc(var(--dataset-key-column-width) + 10px), 0);
+}
+
+.key-column-resizer::before {
+    background-color: var(--color-bg-form-btn-default);
+    width: 1px;
 }
 
 .sidebar-header {
@@ -325,6 +335,22 @@ body.episode-viewer { height: 100vh; display: flex; flex-direction: column; }
 .sidebar-content td {
     padding: 10px;
     vertical-align: top;
+}
+
+.dataset-key-column {
+    width: var(--dataset-key-column-width);
+}
+
+table.root-table > tbody > tr > td {
+    max-width: 0;
+}
+
+table.root-table > tbody > tr > td:first-child {
+    max-width: var(--dataset-key-column-width);
+    min-width: var(--dataset-key-column-width);
+    text-overflow: ellipsis;
+    overflow: hidden;
+    white-space: nowrap;
 }
 
 .expand-button {
