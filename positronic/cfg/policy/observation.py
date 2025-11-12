@@ -99,8 +99,8 @@ def groot_oxe_droid():
     )
     result.meta['gr00t_modality'] = {
         'state': {
-            'eef_rotation': {'start': 0, 'end': 4, 'rotation_type': 'quaternion'},
-            'eef_position': {'start': 4, 'end': 7},
+            'eef_position': {'start': 0, 'end': 3},
+            'eef_rotation': {'start': 3, 'end': 7, 'rotation_type': 'quaternion'},
             'gripper_position': {'start': 7, 'end': 8},
         },
         'video': {
