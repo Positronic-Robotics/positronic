@@ -12,7 +12,7 @@ from contextlib import contextmanager, nullcontext
 from contextvars import ContextVar
 from dataclasses import dataclass, field
 from functools import wraps
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 from urllib.parse import urlparse
 
@@ -91,6 +91,36 @@ def _scan_local(path: Path) -> Iterator[FileInfo]:
             yield FileInfo(relative_path=relative, size=p.stat().st_size, is_dir=False)
 
 
+def _filter_fileinfo(fileinfo_iter: Iterator[FileInfo], exclude: list[str] | None) -> Iterator[FileInfo]:
+    """
+    Filter FileInfo objects based on glob patterns.
+
+    Args:
+        fileinfo_iter: Iterator of FileInfo objects to filter
+        exclude: List of glob patterns to exclude (supports *, **, ?, [...])
+
+    Yields:
+        FileInfo objects that don't match any exclude patterns
+    """
+    if not exclude:
+        yield from fileinfo_iter
+        return
+    excluded_dirs: set[str] = set()
+
+    for info in fileinfo_iter:
+        # Skip if any parent directory was excluded
+        if any(info.relative_path == ed or info.relative_path.startswith(ed + '/') for ed in excluded_dirs):
+            continue
+
+        # Check if this path matches any exclude pattern
+        path = PurePosixPath(info.relative_path) if info.relative_path else PurePosixPath('.')
+        if any(path.match(pattern) for pattern in exclude):
+            if info.is_dir:
+                excluded_dirs.add(info.relative_path)
+        else:
+            yield info
+
+
 def _compute_sync_diff(source: Iterator[FileInfo], target: Iterator[FileInfo]) -> tuple[list[FileInfo], list[FileInfo]]:
     source_map: dict[str, FileInfo] = {info.relative_path: info for info in source}
     target_map: dict[str, FileInfo] = {info.relative_path: info for info in target}
@@ -132,13 +162,19 @@ class _DownloadRegistration:
     remote: str
     local_path: Path
     delete: bool
+    exclude: list[str] | None
     ready: threading.Event = field(default_factory=threading.Event)
     error: Exception | None = None
 
     def __eq__(self, other):
         if not isinstance(other, _DownloadRegistration):
             return False
-        return self.remote == other.remote and self.local_path == other.local_path and self.delete == other.delete
+        return (
+            self.remote == other.remote
+            and self.local_path == other.local_path
+            and self.delete == other.delete
+            and self.exclude == other.exclude
+        )
 
 
 @dataclass
@@ -148,6 +184,7 @@ class _UploadRegistration:
     interval: int | None
     delete: bool
     sync_on_error: bool
+    exclude: list[str] | None
     last_sync: float = 0.0
 
     def __eq__(self, other):
@@ -159,6 +196,7 @@ class _UploadRegistration:
             and self.interval == other.interval
             and self.delete == other.delete
             and self.sync_on_error == other.sync_on_error
+            and self.exclude == other.exclude
         )
 
 
@@ -200,7 +238,7 @@ class _Mirror:
             self._final_sync(had_error=had_error)
             self._stop_event = None
 
-    def download(self, remote: str, local: str | Path | None, delete: bool) -> Path:
+    def download(self, remote: str, local: str | Path | None, delete: bool, exclude: list[str] | None = None) -> Path:
         """
         Register (and perform if needed) a download from a remote S3 bucket path to a local directory or file.
 
@@ -209,6 +247,7 @@ class _Mirror:
                 If a local path is provided, it is validated and returned directly.
             local (str | Path | None): Local directory or file destination. If None, uses cache path from options.
             delete (bool): If True, deletes local files not present in S3.
+            exclude (list[str] | None): List of glob patterns to exclude from download.
 
         Returns:
             Path: The canonical local path associated with this download registration.
@@ -223,7 +262,9 @@ class _Mirror:
 
         normalized = _normalize_s3_url(remote)
         local_path = self.options.cache_path_for(remote) if local is None else Path(local).expanduser().resolve()
-        new_registration = _DownloadRegistration(remote=normalized, local_path=local_path, delete=delete)
+        new_registration = _DownloadRegistration(
+            remote=normalized, local_path=local_path, delete=delete, exclude=exclude
+        )
 
         with self._lock:
             existing = self._downloads.get(normalized)
@@ -240,7 +281,7 @@ class _Mirror:
 
         if need_download:
             try:
-                self._perform_download(normalized, local_path, delete)
+                self._perform_download(normalized, local_path, delete, exclude)
             except Exception as exc:
                 registration.error = exc
                 registration.ready.set()
@@ -256,7 +297,7 @@ class _Mirror:
 
         return local_path
 
-    def upload(self, remote, local, interval, delete, sync_on_error) -> Path:
+    def upload(self, remote, local, interval, delete, sync_on_error, exclude: list[str] | None = None) -> Path:
         """
         Register (and perform if needed) an upload from a local directory or file to a remote S3 bucket path.
 
@@ -266,6 +307,7 @@ class _Mirror:
             interval (int | None): If set, enables periodic background uploads (seconds between syncs).
             delete (bool): If True, deletes remote files not present locally.
             sync_on_error (bool): If True, attempts to sync files even when encountering errors.
+            exclude (list[str] | None): List of glob patterns to exclude from upload.
 
         Returns:
             Path: The canonical local path associated with this upload registration.
@@ -287,6 +329,7 @@ class _Mirror:
             interval=interval,
             delete=delete,
             sync_on_error=sync_on_error,
+            exclude=exclude,
             last_sync=0,
         )
 
@@ -312,15 +355,16 @@ class _Mirror:
         delete_local: bool,
         delete_remote: bool,
         sync_on_error: bool,
+        exclude: list[str] | None = None,
     ) -> Path:
-        local_path = self.download(remote, local, delete_local)
+        local_path = self.download(remote, local, delete_local, exclude)
         if not _is_s3_path(remote):
             return local_path
 
         normalized = _normalize_s3_url(remote)
         # Unregister the download to allow upload registration for the same remote
         self._downloads.pop(normalized, None)
-        return self.upload(remote, local_path, interval, delete_remote, sync_on_error)
+        return self.upload(remote, local_path, interval, delete_remote, sync_on_error, exclude)
 
     def ls(self, prefix: str, recursive: bool = False) -> list[str]:
         """Lists objects under the given prefix, working for both local directories and S3 prefixes."""
@@ -344,14 +388,15 @@ class _Mirror:
                     items.append(f's3://{bucket}/{s3_key}')
             return items
         else:
-            path = Path(prefix).expanduser().resolve()
+            display_path = Path(prefix).expanduser()
+            scan_path = display_path.resolve()
             items = []
-            for info in _scan_local(path):
+            for info in _scan_local(scan_path):
                 if info.relative_path:
                     # Skip nested items if not recursive
                     if not recursive and '/' in info.relative_path:
                         continue
-                    items.append(str(path / info.relative_path))
+                    items.append(str(display_path.joinpath(Path(info.relative_path))))
             return items
 
     def _check_download_conflicts(self, candidate: str) -> None:
@@ -397,10 +442,10 @@ class _Mirror:
         self._sync_uploads(uploads)
 
     def _sync_uploads(self, registrations: Iterable[_UploadRegistration]) -> None:
-        tasks: list[tuple[str, Path, bool]] = []
+        tasks: list[tuple[str, Path, bool, list[str] | None]] = []
         for registration in registrations:
             if registration.local_path.exists():
-                tasks.append((registration.remote, registration.local_path, registration.delete))
+                tasks.append((registration.remote, registration.local_path, registration.delete, registration.exclude))
 
         if not tasks:
             return
@@ -409,10 +454,13 @@ class _Mirror:
         to_remove: list[tuple[str, str]] = []
         total_bytes = 0
 
-        for remote, local_path, delete in tasks:
+        for remote, local_path, delete, exclude in tasks:
             logger.debug('Syncing upload: %s from %s (delete=%s)', remote, local_path, delete)
             bucket, prefix = _parse_s3_url(remote)
-            to_copy, to_delete = _compute_sync_diff(_scan_local(local_path), self._scan_s3(bucket, prefix))
+            to_copy, to_delete = _compute_sync_diff(
+                _filter_fileinfo(_scan_local(local_path), exclude),
+                _filter_fileinfo(self._scan_s3(bucket, prefix), exclude),
+            )
 
             for info in to_copy:
                 s3_key = prefix + ('/' + info.relative_path if info.relative_path else '')
@@ -443,10 +491,12 @@ class _Mirror:
                     iterator = tqdm(iterator, total=len(to_remove_sorted), desc=f'Deleting in {remote}')
                 _process_futures(iterator, 'Delete')
 
-    def _perform_download(self, remote: str, local_path: Path, delete: bool) -> None:
+    def _perform_download(self, remote: str, local_path: Path, delete: bool, exclude: list[str] | None) -> None:
         bucket, prefix = _parse_s3_url(remote)
         logger.debug('Performing download: s3://%s/%s to %s (delete=%s)', bucket, prefix, local_path, delete)
-        to_copy, to_delete = _compute_sync_diff(self._scan_s3(bucket, prefix), _scan_local(local_path))
+        to_copy, to_delete = _compute_sync_diff(
+            _filter_fileinfo(self._scan_s3(bucket, prefix), exclude), _filter_fileinfo(_scan_local(local_path), exclude)
+        )
 
         to_put: list[tuple[FileInfo, str, str, Path]] = []
         to_remove: list[Path] = []
@@ -624,9 +674,11 @@ def _require_active_mirror() -> _Mirror:
     raise RuntimeError('No active mirror context')
 
 
-def download(remote: str, local: str | Path | None = None, delete: bool = True) -> Path:
+def download(
+    remote: str, local: str | Path | None = None, delete: bool = True, exclude: list[str] | None = None
+) -> Path:
     mirror_obj = _require_active_mirror()
-    return mirror_obj.download(remote, local, delete)
+    return mirror_obj.download(remote, local, delete, exclude)
 
 
 def upload(
@@ -635,9 +687,10 @@ def upload(
     interval: int | None = 300,
     delete: bool = True,
     sync_on_error: bool = False,
+    exclude: list[str] | None = None,
 ) -> Path:
     mirror_obj = _require_active_mirror()
-    return mirror_obj.upload(remote, local, interval, delete, sync_on_error)
+    return mirror_obj.upload(remote, local, interval, delete, sync_on_error, exclude)
 
 
 def sync(
@@ -647,9 +700,10 @@ def sync(
     delete_local: bool = True,
     delete_remote: bool = True,
     sync_on_error: bool = False,
+    exclude: list[str] | None = None,
 ) -> Path:
     mirror_obj = _require_active_mirror()
-    return mirror_obj.sync(remote, local, interval, delete_local, delete_remote, sync_on_error)
+    return mirror_obj.sync(remote, local, interval, delete_local, delete_remote, sync_on_error, exclude)
 
 
 def ls(prefix: str, recursive: bool = False) -> list[str]:

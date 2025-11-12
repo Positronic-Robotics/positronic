@@ -549,3 +549,156 @@ class TestLs:
 
         assert 's3://bucket/data/file.txt' in items
         assert 's3://bucket/data-other/file.txt' not in items
+
+
+class TestExclude:
+    @patch(BOTO3_PATCH_TARGET)
+    def test_download_exclude_simple_pattern(self, mock_boto_client):
+        """Test that exclude filters out files matching simple patterns."""
+        # S3 has file.txt and file.log
+        paginate = [{'Contents': [{'Key': 'data/file.txt', 'Size': 5}, {'Key': 'data/file.log', 'Size': 10}]}]
+        mock_s3 = _setup_s3_mock(mock_boto_client, paginate)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            local_dir = Path(tmpdir) / 'data'
+
+            with s3.mirror(cache_root=tmpdir, show_progress=False):
+                s3.download('s3://bucket/data', local=local_dir, exclude=['*.log'])
+
+            # Should only download file.txt, not file.log
+            assert mock_s3.download_file.call_count == 1
+            call_args = mock_s3.download_file.call_args_list[0][0]
+            assert 'file.txt' in call_args[1]  # S3 key
+            assert 'file.log' not in str(call_args)
+
+    @patch(BOTO3_PATCH_TARGET)
+    def test_download_exclude_recursive_pattern(self, mock_boto_client):
+        """Test that exclude with ** filters recursively."""
+        # S3 has files in nested directories
+        paginate = [
+            {
+                'Contents': [
+                    {'Key': 'data/file.txt', 'Size': 5},
+                    {'Key': 'data/logs/error.log', 'Size': 10},
+                    {'Key': 'data/logs/debug.log', 'Size': 10},
+                    {'Key': 'data/sub/logs/info.log', 'Size': 10},
+                ]
+            }
+        ]
+        mock_s3 = _setup_s3_mock(mock_boto_client, paginate)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            local_dir = Path(tmpdir) / 'data'
+
+            with s3.mirror(cache_root=tmpdir, show_progress=False):
+                s3.download('s3://bucket/data', local=local_dir, exclude=['**/*.log'])
+
+            # Should only download file.txt, not any .log files
+            assert mock_s3.download_file.call_count == 1
+            call_args = mock_s3.download_file.call_args_list[0][0]
+            assert 'file.txt' in call_args[1]
+
+    @patch(BOTO3_PATCH_TARGET)
+    def test_download_exclude_directory(self, mock_boto_client):
+        """Test that excluding a directory excludes all its contents."""
+        # S3 has files in multiple directories
+        paginate = [
+            {
+                'Contents': [
+                    {'Key': 'data/file.txt', 'Size': 5},
+                    {'Key': 'data/logs/', 'Size': 0},  # Directory marker
+                    {'Key': 'data/logs/error.log', 'Size': 10},
+                    {'Key': 'data/logs/debug.log', 'Size': 10},
+                ]
+            }
+        ]
+        mock_s3 = _setup_s3_mock(mock_boto_client, paginate)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            local_dir = Path(tmpdir) / 'data'
+
+            with s3.mirror(cache_root=tmpdir, show_progress=False):
+                s3.download('s3://bucket/data', local=local_dir, exclude=['logs'])
+
+            # Should only download file.txt, not logs directory or its contents
+            assert mock_s3.download_file.call_count == 1
+            call_args = mock_s3.download_file.call_args_list[0][0]
+            assert 'file.txt' in call_args[1]
+
+    @patch(BOTO3_PATCH_TARGET)
+    def test_upload_exclude_pattern(self, mock_boto_client):
+        """Test that exclude filters out files during upload."""
+        mock_s3 = _setup_s3_mock(mock_boto_client)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            local_dir = Path(tmpdir) / 'data'
+            local_dir.mkdir()
+            (local_dir / 'file.txt').write_text('content')
+            (local_dir / 'file.log').write_text('log content')
+
+            with s3.mirror(cache_root=tmpdir, show_progress=False):
+                s3.upload('s3://bucket/data', local=local_dir, interval=None, exclude=['*.log'])
+
+            # Should only upload file.txt, not file.log
+            assert mock_s3.upload_file.call_count == 1
+            call_args = mock_s3.upload_file.call_args_list[0][0]
+            assert 'file.txt' in str(call_args[0])  # Local file path
+            assert 'file.log' not in str(call_args)
+
+    @patch(BOTO3_PATCH_TARGET)
+    def test_sync_exclude_pattern(self, mock_boto_client):
+        """Test that exclude filters files during sync in both directions."""
+        # S3 has file.txt and remote.log
+        paginate = [{'Contents': [{'Key': 'data/file.txt', 'Size': 5}, {'Key': 'data/remote.log', 'Size': 10}]}]
+        mock_s3 = _setup_s3_mock(mock_boto_client, paginate)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            local_dir = Path(tmpdir) / 'data'
+            local_dir.mkdir()
+            (local_dir / 'file.txt').write_bytes(b'12345')  # Same size as S3
+            (local_dir / 'local.log').write_text('local log')
+
+            with s3.mirror(cache_root=tmpdir, show_progress=False):
+                s3.sync('s3://bucket/data', local=local_dir, interval=None, exclude=['*.log'])
+
+            # Should not download remote.log or upload local.log
+            # Only file.txt should be considered (and it's already synced)
+            assert mock_s3.download_file.call_count == 0  # file.txt already exists with same size
+            assert mock_s3.upload_file.call_count == 0  # file.txt already synced, *.log excluded
+
+    @patch(BOTO3_PATCH_TARGET)
+    def test_download_exclude_parameter_conflict(self, mock_boto_client):
+        """Test that registering download with different exclude param raises error."""
+        paginate = [{'Contents': [{'Key': 'data/file.txt', 'Size': 5}]}]
+        _setup_s3_mock(mock_boto_client, paginate)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with s3.mirror(cache_root=tmpdir, show_progress=False):
+                s3.download('s3://bucket/data', exclude=['*.log'])
+                with pytest.raises(ValueError, match='already registered with different parameters'):
+                    s3.download('s3://bucket/data', exclude=['*.txt'])
+
+    @patch(BOTO3_PATCH_TARGET)
+    def test_exclude_multiple_patterns(self, mock_boto_client):
+        """Test that multiple exclude patterns work together."""
+        paginate = [
+            {
+                'Contents': [
+                    {'Key': 'data/file.txt', 'Size': 5},
+                    {'Key': 'data/file.log', 'Size': 10},
+                    {'Key': 'data/file.tmp', 'Size': 10},
+                ]
+            }
+        ]
+        mock_s3 = _setup_s3_mock(mock_boto_client, paginate)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            local_dir = Path(tmpdir) / 'data'
+
+            with s3.mirror(cache_root=tmpdir, show_progress=False):
+                s3.download('s3://bucket/data', local=local_dir, exclude=['*.log', '*.tmp'])
+
+            # Should only download file.txt
+            assert mock_s3.download_file.call_count == 1
+            call_args = mock_s3.download_file.call_args_list[0][0]
+            assert 'file.txt' in call_args[1]
