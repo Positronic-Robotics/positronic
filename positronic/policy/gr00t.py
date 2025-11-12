@@ -1,5 +1,6 @@
 import io
 import json
+from collections import deque
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
@@ -8,6 +9,8 @@ import msgpack
 import numpy as np
 import zmq
 from pydantic import BaseModel
+
+from positronic.utils import flatten_dict
 
 from . import Policy
 
@@ -215,16 +218,24 @@ class ExternalRobotInferenceClient(BaseInferenceClient):
 
 
 class Gr00tPolicy(Policy):
-    def __init__(self, host: str = 'localhost', port: int = 5555, timeout_ms: int = 15000):
+    def __init__(self, host: str = 'localhost', port: int = 9000, timeout_ms: int = 15000):
         self._client = ExternalRobotInferenceClient(host, port, timeout_ms)
+        self._cache = {}
+        self._observation = {}
 
     def select_action(self, obs: dict[str, Any]) -> dict[str, Any]:
-        print('--------------------------------')
-        print({k: v.shape if isinstance(v, np.ndarray) else v for k, v in obs.items()})
-        print('--------------------------------')
-        result = self._client.get_action(obs)
-        assert isinstance(result, dict), f'Expected dictionary, got {type(result)}'
-        print('*********')
-        print({k: v.shape if isinstance(v, np.ndarray) else v for k, v in result.items()})
-        print('*********')
-        return result
+        if not self._cache or any(not v for v in self._cache.values()):
+            self._observation = flatten_dict(obs, 'observation.')
+            for k, v in obs.items():
+                if isinstance(v, np.ndarray):
+                    obs[k] = np.expand_dims(v, axis=0)
+                else:
+                    obs[k] = [v]
+
+            result = self._client.get_action(obs)
+            assert isinstance(result, dict), f'Expected dictionary, got {type(result)}'
+
+            self._cache = {k: deque(v) for k, v in result.items()}
+
+        result = {k: v.popleft() for k, v in self._cache.items()}
+        return result | self._observation
