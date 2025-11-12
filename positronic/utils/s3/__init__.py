@@ -84,8 +84,8 @@ def _scan_local(path: Path) -> Iterator[FileInfo]:
         p = stack.pop()
         relative = p.relative_to(base).as_posix() if p != base else ''
         if p.is_dir():
-            if relative:
-                yield FileInfo(relative_path=relative, size=0, is_dir=True)
+            # Always yield directories, including the root (relative_path='')
+            yield FileInfo(relative_path=relative, size=0, is_dir=True)
             stack.extend(p.iterdir())
         else:
             yield FileInfo(relative_path=relative, size=p.stat().st_size, is_dir=False)
@@ -524,12 +524,11 @@ class _Mirror:
 
         if to_remove:
             to_remove_sorted = sorted(to_remove, key=lambda x: len(x.parts), reverse=True)
-            with ThreadPoolExecutor(max_workers=self.options.max_workers) as executor:
-                futures = [executor.submit(self._remove_locally, path) for path in to_remove_sorted]
-                iterator = as_completed(futures)
-                if self.options.show_progress:
-                    iterator = tqdm(iterator, total=len(to_remove_sorted), desc=f'Deleting in {remote}')
-                _process_futures(iterator, 'Delete')
+            iterator = to_remove_sorted
+            if self.options.show_progress:
+                iterator = tqdm(iterator, desc=f'Deleting in {remote}')
+            for path in iterator:
+                self._remove_locally(path)
 
     def _list_s3_objects(self, bucket: str, key: str) -> Iterator[dict]:
         logger.debug('Listing S3 objects: bucket=%s, key=%s', bucket, key)
@@ -553,8 +552,10 @@ class _Mirror:
     def _scan_s3(self, bucket: str, prefix: str) -> Iterator[FileInfo]:
         logger.debug('Scanning S3: s3://%s/%s', bucket, prefix)
         seen_dirs: set[str] = set()
+        has_content = False
 
         for obj in self._list_s3_objects(bucket, prefix):
+            has_content = True
             key = obj['Key']
             relative = key[len(prefix) :].lstrip('/')
 
@@ -573,6 +574,11 @@ class _Mirror:
                         if dir_path and dir_path not in seen_dirs:
                             yield FileInfo(relative_path=dir_path, size=0, is_dir=True)
                             seen_dirs.add(dir_path)
+
+        if has_content:
+            yield FileInfo(
+                relative_path='', size=0, is_dir=True
+            )  # Yield root directory marker for symmetry with _scan_local
 
     def _progress_bar(self, total_bytes: int, desc: str):
         if not self.options.show_progress:

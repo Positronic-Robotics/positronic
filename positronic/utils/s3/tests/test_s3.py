@@ -295,6 +295,47 @@ class TestDownloadSync:
                 with pytest.raises(ValueError, match='already registered with different parameters'):
                     s3.download('s3://bucket/data', delete=False)
 
+    @patch(BOTO3_PATCH_TARGET)
+    def test_download_delete_empty_s3_removes_all_local(self, mock_boto_client):
+        """Test that download with delete=True removes all local files, dirs, and root when S3 is empty."""
+        # S3 is completely empty
+        paginate = [{'Contents': []}]
+        _setup_s3_mock(mock_boto_client, paginate)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            local_dir = Path(tmpdir) / 'data'
+            local_dir.mkdir()
+            # Create nested directory structure with files
+            (local_dir / 'file.txt').write_text('content')
+            subdir = local_dir / 'subdir'
+            subdir.mkdir()
+            (subdir / 'nested.txt').write_text('nested content')
+
+            with s3.mirror(cache_root=tmpdir, show_progress=False):
+                s3.download('s3://bucket/data', local=local_dir, delete=True)
+
+            # When S3 is completely empty, the local directory itself should be removed
+            assert not local_dir.exists()
+
+    @patch(BOTO3_PATCH_TARGET)
+    def test_download_no_delete_empty_s3_preserves_local(self, mock_boto_client):
+        """Test that download with delete=False preserves local dir when S3 is empty."""
+        # S3 is completely empty
+        paginate = [{'Contents': []}]
+        _setup_s3_mock(mock_boto_client, paginate)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            local_dir = Path(tmpdir) / 'data'
+            local_dir.mkdir()
+            (local_dir / 'file.txt').write_text('content')
+
+            with s3.mirror(cache_root=tmpdir, show_progress=False):
+                s3.download('s3://bucket/data', local=local_dir, delete=False)
+
+            # With delete=False, local directory and its contents should be preserved
+            assert local_dir.exists()
+            assert (local_dir / 'file.txt').exists()
+
 
 class TestSync:
     @patch(BOTO3_PATCH_TARGET)
@@ -455,6 +496,29 @@ class TestSync:
 
             # Should have synced because sync_on_error=True
             assert mock_s3_with_sync.upload_file.call_count >= 1
+
+    @patch(BOTO3_PATCH_TARGET)
+    def test_sync_empty_s3_deletes_local_directories(self, mock_boto_client):
+        """Test that sync with empty S3 deletes local directory completely."""
+        # S3 is completely empty
+        paginate = [{'Contents': []}]
+        _setup_s3_mock(mock_boto_client, paginate)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            local_dir = Path(tmpdir) / 'data'
+            local_dir.mkdir()
+            # Create nested directory structure
+            (local_dir / 'file.txt').write_text('content')
+            subdir = local_dir / 'subdir'
+            subdir.mkdir()
+            (subdir / 'nested.txt').write_text('nested')
+
+            with s3.mirror(cache_root=tmpdir, show_progress=False):
+                # sync with empty S3 should delete everything local including root
+                s3.sync('s3://bucket/data', local=local_dir, interval=None, delete_local=True, delete_remote=False)
+
+            # When S3 is completely empty, the local directory itself should be removed
+            assert not local_dir.exists()
 
     @patch(BOTO3_PATCH_TARGET)
     def test_sync_conflicts(self, mock_boto_client):
