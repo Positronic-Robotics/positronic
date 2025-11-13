@@ -300,8 +300,9 @@ body.episode-viewer { height: 100vh; display: flex; flex-direction: column; }
 
 .sidebar-content {
     padding: 0px;
-    font-size: 13px;
-    color: var(--color-text-default);
+    font-size: 12px;
+    font-family: Monaco, Menlo, 'Courier New', monospace;
+    color: #a3a3a3;
     overflow-y: auto;
     overflow-x: hidden;
     position: relative;
@@ -333,7 +334,7 @@ body.episode-viewer { height: 100vh; display: flex; flex-direction: column; }
 }
 
 .sidebar-content td {
-    padding: 10px;
+    padding: 13px;
     vertical-align: top;
 }
 

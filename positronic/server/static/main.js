@@ -139,13 +139,13 @@ function initializeSidebar(staticData) {
       for (const [key, val] of Object.entries(value)) {
         html += `
           <tr>
-            <td><strong>${key}</strong></td>
+            <td>${key}</td>
               <td>${renderValue(val)} ${isNestable(val) ? renderLevel(key, val) : ''}</td>
           </tr>
         `;
       }
     } else {
-      html += `<tr><td><strong>${key}</strong></td><td>${renderValue(value)}</td></tr>`;
+      html += `<tr><td>${key}</td><td>${renderValue(value)}</td></tr>`;
     }
     html += '</tbody></table>';
 
