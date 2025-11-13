@@ -59,18 +59,14 @@ def _update_config(cfg: TrainPipelineConfig, **cfg_kwargs):
 
 @cfn.config()
 @pos3.with_mirror()
-def train(
-    dataset_root: str,
-    run_name: str,
-    output_dir,
-    base_config: str = 'positronic/training/train_config.json',
-    **cfg_kwargs,
-):
+def train(dataset_root: str, run_name: str, output_dir, **cfg_kwargs):
+    base_config = str(Path(__file__).resolve().parent.joinpath('train_config.json'))
     assert Path(base_config).is_file(), f'Base config file {base_config} does not exist.'
+    run_name = str(run_name)
     cfg = TrainPipelineConfig.from_pretrained(base_config)
     cfg.env = PositronicEnvConfig()
     cfg.job_name = run_name
-    cfg.dataset.root = pos3.download(dataset_root)
+    cfg.dataset.root = str(pos3.download(dataset_root))
     cfg.dataset.repo_id = 'local'
     cfg.eval_freq = 0
     cfg.policy.push_to_hub = False
