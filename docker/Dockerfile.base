@@ -18,6 +18,12 @@ RUN apt-get update && apt-get install -y \
     libglew-dev \
     && rm -rf /var/lib/apt/lists/*
 
+# Create NVIDIA EGL vendor configuration file
+# This is required for libglvnd to find NVIDIA's EGL implementation
+RUN mkdir -p /usr/share/glvnd/egl_vendor.d/ && \
+echo '{\n    "file_format_version" : "1.0.0",\n    "ICD" : {\n        "library_path" : "libEGL_nvidia.so.0"\n    }\n}' \
+> /usr/share/glvnd/egl_vendor.d/10_nvidia.json
+
 # Configure uv and pip timeouts
 ENV UV_LINK_MODE=copy
 ENV PIP_DEFAULT_TIMEOUT=600
