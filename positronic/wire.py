@@ -29,7 +29,7 @@ def wire(
 
         ds_agent.add_signal('target_grip')
         ds_agent.add_signal('robot_commands', Serializers.robot_command)
-        # TODO: Controller positions must be binded outside of this function
+        # TODO: Controller positions must be bound outside of this function
         ds_agent.add_signal('robot_state', Serializers.robot_state)
         ds_agent.add_signal('grip')
 
@@ -41,27 +41,27 @@ def wire(
         if gripper is not None:
             world.connect(gripper.grip, ds_agent.inputs['grip'])
 
+    # Camera connections: one-to-one or one-to-many
+    if cameras:
+        for signal_name, emitter in cameras.items():
+            if isinstance(emitter, pimm.FakeEmitter):
+                continue
 
-        # Camera broadcast connections: one emitter -> multiple receivers
-        if cameras:
-            for signal_name, emitter in cameras.items():
-                # Collect all receivers for this camera signal
-                receivers = []
-                receivers.append(policy.frames[signal_name])
-                if ds_agent is not None:
-                    receivers.append(ds_agent.inputs[signal_name])
-                if gui is not None:
-                    receivers.append(gui.cameras[signal_name])
+            # Collect all receivers for this camera signal
+            receivers = [policy.frames[signal_name]]
 
-                # filter out FakeReceiver
-                receivers = [r for r in receivers if not isinstance(r, pimm.FakeReceiver)]
+            if ds_agent is not None:
+                receivers.append(ds_agent.inputs[signal_name])
+            if gui is not None:
+                receivers.append(gui.cameras[signal_name])
 
-                # connect emitter with one or several receivers
-                if len(receivers) > 1:
-                    world.connect_broadcast(emitter, receivers)
-                elif len(receivers) == 1:
-                    world.connect(emitter, receivers[0])
-                else:
-                    raise ValueError("No receivers have been specified for data collection.")
+            # filter out FakeReceiver
+            receivers = [r for r in receivers if not isinstance(r, pimm.FakeReceiver)]
+            if not receivers:
+                raise ValueError(f"No valid receivers specified for camera signal '{signal_name}'.")
+
+            # Connect emitter individually to each receiver
+            for receiver in receivers:
+                world.connect(emitter, receiver)
 
     return ds_agent

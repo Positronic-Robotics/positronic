@@ -14,7 +14,7 @@ from multiprocessing import resource_tracker
 from multiprocessing.queues import Queue
 from multiprocessing.synchronize import Event as EventClass
 from queue import Empty, Full
-from typing import TypeVar
+from typing import Any, TypeVar
 
 from .core import (
     Clock,
@@ -79,8 +79,8 @@ class MultiprocessEmitter(SignalEmitter[T]):
         mode_value: mp.Value,
         lock: mp.Lock,
         ts_value: mp.Value,
-        up_value: mp.Value,
-        sm_queue: mp.Queue,
+        up_values: list[mp.Value],      # a flag that new data has been written - for each receiver
+        sm_queue: Queue | list[Queue],  # mp.Queue | list[mp.Queue],
         *,
         forced_mode: TransportMode | None = None,
     ):
@@ -96,6 +96,9 @@ class MultiprocessEmitter(SignalEmitter[T]):
         self._ts_value = ts_value
         self._up_value = up_value
         self._sm_queue = sm_queue
+        self._up_values = up_values
+        self._sm_queues = sm_queue if isinstance(sm_queue, list) else [sm_queue]
+
         self._sm: multiprocessing.shared_memory.SharedMemory | None = None
         self._expected_buf_size: int | None = None
         self._closed = False
@@ -149,7 +152,11 @@ class MultiprocessEmitter(SignalEmitter[T]):
         if self._sm is None:
             self._expected_buf_size = buf_size
             self._sm = multiprocessing.shared_memory.SharedMemory(create=True, size=buf_size)
-            self._sm_queue.put((self._sm.name, buf_size, self._data_type, data.instantiation_params()))
+
+            # support multiple receivers
+            for idx, sm_q in enumerate(self._sm_queues):
+                metadata = (self._sm.name, buf_size, self._data_type, data.instantiation_params(), idx)
+                sm_q.put(metadata)
         else:
             assert self._expected_buf_size == buf_size, (
                 f'Buffer size mismatch: expected {self._expected_buf_size}, got {buf_size}. '
@@ -159,7 +166,10 @@ class MultiprocessEmitter(SignalEmitter[T]):
         with self._lock:
             data.set_to_buffer(self._sm.buf)
             self._ts_value.value = ts
-            self._up_value.value = True
+            # set "fresh data" flag for every receiver
+            for up_value in self._up_values:
+                up_value.value = True
+
         return True
 
     def emit(self, data: T, ts: int = -1):
@@ -717,7 +727,7 @@ class World:
             emitter_clock, message_queue, mode_value, lock, ts_value, up_value, sm_queue, forced_mode=forced_mode
         )
         receiver = MultiprocessReceiver(
-            message_queue, mode_value, lock, ts_value, up_value, sm_queue, forced_mode=forced_mode
+            message_queue, mode_value, lock, ts_value, up_values, sm_queue, forced_mode=forced_mode
         )
         self._cleanup_emitters_readers.append((emitter, receiver))
         return emitter, receiver
