@@ -1136,3 +1136,4 @@ class TestEmitterDict:
 
             # Fake connection should not deliver data
             assert consumer1.receiver.read() is None
+
