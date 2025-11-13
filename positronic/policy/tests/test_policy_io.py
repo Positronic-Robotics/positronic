@@ -95,8 +95,7 @@ def test_relative_target_position_action_encode_decode_quat():
     # First 4 should match target quaternion since current is identity
     np.testing.assert_allclose(vec[:4], q_tgt[0].as_quat, atol=1e-6)
     assert vec.dtype == np.float32
-    # Current implementation encodes translation as (current - target)
-    np.testing.assert_allclose(vec[4:7], t_cur[0] - t_tgt[0], atol=1e-6)
+    np.testing.assert_allclose(vec[4:7], t_tgt[0] - t_cur[0], atol=1e-6)
     assert np.isclose(vec[7], g_tgt[0])
 
     command, target_grip = act.decode(
