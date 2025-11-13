@@ -12,6 +12,10 @@ RUN apt-get update && apt-get install -y \
     libturbojpeg \
     libsm6 \
     libxext6 \
+    libegl1 \
+    libgles2 \
+    libosmesa6-dev \
+    libglew-dev \
     && rm -rf /var/lib/apt/lists/*
 
 # Configure uv and pip timeouts
