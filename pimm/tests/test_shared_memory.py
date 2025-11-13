@@ -1,5 +1,6 @@
 from collections.abc import Iterator
 import multiprocessing as mp
+
 import numpy as np
 import pytest
 
@@ -375,8 +376,8 @@ class TestBroadcastSharedMemory:
             assert np.allclose(third[0].data.array, 5.0)
 
     def test_emitter_close_unlinks_shared_memory(self):
-        from pimm.shared_memory import NumpySMAdapter
         import gc
+        from pimm.shared_memory import NumpySMAdapter
 
         with World() as world:
             emitter, receivers = world.mp_pipe_broadcast(num_receivers=2, maxsize=[1, 1])
