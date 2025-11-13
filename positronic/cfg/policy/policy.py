@@ -4,12 +4,8 @@ import positronic.utils.s3 as pos3
 from positronic.policy.lerobot import LerobotPolicy
 
 
-def _get_act_policy(
-    checkpoint_path: str,
-    use_temporal_ensembler: bool = False,
-    n_action_steps: int | None = None,
-    device: str | None = None,
-):
+@cfn.config(use_temporal_ensembler=False)
+def act(checkpoint_path: str, use_temporal_ensembler: bool, n_action_steps: int | None = None, device=None):
     from lerobot.policies.act.modeling_act import ACTPolicy, ACTTemporalEnsembler
 
     policy = ACTPolicy.from_pretrained(pos3.download(checkpoint_path), strict=True)
@@ -41,7 +37,6 @@ def openpi(host: str, port: int, n_action_steps: int | None):
 
 
 droid = openpi.override(n_action_steps=15)
-act = cfn.Config(_get_act_policy, use_temporal_ensembler=False)
 diffusion = cfn.Config(_get_diffusion_policy)
 
 

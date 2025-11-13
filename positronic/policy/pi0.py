@@ -62,5 +62,7 @@ class OpenPIRemotePolicy(Policy):
 
     @property
     def meta(self) -> dict[str, Any]:
-        result = {'type': 'openpi', 'n_action_steps': self.n_action_steps, 'server': self.client.get_server_metadata()}
+        result = {'type': 'openpi', 'server': self.client.get_server_metadata()}
+        if self.n_action_steps is not None:
+            result['n_action_steps'] = self.n_action_steps
         return flatten_dict(result)
