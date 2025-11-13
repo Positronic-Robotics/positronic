@@ -153,6 +153,9 @@ class BaseInferenceClient:
     def _init_socket(self):
         """Initialize or reinitialize the socket with current settings"""
         self.socket = self.context.socket(zmq.REQ)
+        # Set timeout on socket before connecting
+        self.socket.setsockopt(zmq.RCVTIMEO, self.timeout_ms)
+        self.socket.setsockopt(zmq.SNDTIMEO, self.timeout_ms)
         self.socket.connect(f'tcp://{self.host}:{self.port}')
 
     def ping(self) -> bool:
@@ -177,6 +180,9 @@ class BaseInferenceClient:
             endpoint: The name of the endpoint.
             data: The input data for the endpoint.
             requires_input: Whether the endpoint requires input data.
+
+        Raises:
+            RuntimeError: If the server returns an error or if a timeout occurs.
         """
         request: dict = {'endpoint': endpoint}
         if requires_input:
@@ -184,8 +190,14 @@ class BaseInferenceClient:
         if self.api_token:
             request['api_token'] = self.api_token
 
-        self.socket.send(MsgSerializer.to_bytes(request))
-        message = self.socket.recv()
+        try:
+            self.socket.send(MsgSerializer.to_bytes(request))
+            message = self.socket.recv()
+        except zmq.error.Again as err:
+            raise RuntimeError(
+                f'Timeout after {self.timeout_ms}ms while calling endpoint "{endpoint}" at {self.host}:{self.port}'
+            ) from err
+
         response = MsgSerializer.from_bytes(message)
 
         if 'error' in response:
