@@ -1,5 +1,5 @@
-from collections.abc import Iterator
 import multiprocessing as mp
+from collections.abc import Iterator
 
 import numpy as np
 import pytest
@@ -377,6 +377,7 @@ class TestBroadcastSharedMemory:
 
     def test_emitter_close_unlinks_shared_memory(self):
         import gc
+
         from pimm.shared_memory import NumpySMAdapter
 
         with World() as world:
