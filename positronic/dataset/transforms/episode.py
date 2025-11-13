@@ -37,7 +37,7 @@ class Derive(EpisodeTransform):
         )
     """
 
-    def __init__(self, **transforms: dict[str, Callable[[Episode], Any]]):
+    def __init__(self, **transforms: Callable[[Episode], Any]):
         self._transforms = transforms
 
     def __call__(self, episode: Episode) -> Episode:
@@ -143,7 +143,7 @@ class FromValue:
     to add static/constant values to episodes.
 
     Example:
-        Derive(task=FromValue('pick_place'))
+        Derive(task=FromValue('pick and place the green cube'))
     """
 
     def __init__(self, value: Any):
