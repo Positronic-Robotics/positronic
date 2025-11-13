@@ -33,7 +33,7 @@ from positronic.policy.observation import ObservationEncoder
 from positronic.simulator.mujoco.observers import BodyDistance, StackingSuccess
 from positronic.simulator.mujoco.sim import MujocoCameras, MujocoFranka, MujocoGripper, MujocoSim
 from positronic.simulator.mujoco.transforms import MujocoSceneTransform
-from positronic.utils import flatten_dict
+from positronic.utils import flatten_dict, package_assets_path
 from positronic.utils.logging import init_logging
 
 rr.init('positronic')
@@ -346,7 +346,7 @@ def main_sim(
 
 main_sim_cfg = cfn.Config(
     main_sim,
-    mujoco_model_path='positronic/assets/mujoco/franka_table.xml',
+    mujoco_model_path=package_assets_path('assets/mujoco/franka_table.xml'),
     loaders=positronic.cfg.simulator.stack_cubes_loaders,
     action_decoder=positronic.cfg.policy.action.absolute_position,
     camera_fps=15,

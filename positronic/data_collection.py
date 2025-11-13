@@ -30,6 +30,7 @@ from positronic.drivers.webxr import WebXR
 from positronic.gui.dpg import DearpyguiUi
 from positronic.simulator.mujoco.sim import MujocoCameras, MujocoFranka, MujocoGripper, MujocoSim
 from positronic.simulator.mujoco.transforms import MujocoSceneTransform
+from positronic.utils import package_assets_path
 from positronic.utils.buttons import ButtonHandler
 from positronic.utils.logging import init_logging
 
@@ -240,7 +241,7 @@ def main(
 
 
 @cfn.config(
-    mujoco_model_path='positronic/assets/mujoco/franka_table.xml',
+    mujoco_model_path=package_assets_path('assets/mujoco/franka_table.xml'),
     webxr=positronic.cfg.webxr.oculus,
     cameras={
         'image.handcam_left': 'handcam_left_ph',

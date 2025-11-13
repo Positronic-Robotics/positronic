@@ -1,4 +1,7 @@
 import socket
+from pathlib import Path
+
+from positronic import __file__ as pkg_init_file
 
 
 def resolve_host_ip() -> str:
@@ -43,3 +46,8 @@ def flatten_dict(d: dict, prefix: str = '') -> dict:
         else:
             result[f'{prefix}{key}'] = value
     return result
+
+
+def package_assets_path(relative_path: str) -> str:
+    pdg_dir = Path(pkg_init_file).resolve().parent
+    return str(pdg_dir / relative_path)
