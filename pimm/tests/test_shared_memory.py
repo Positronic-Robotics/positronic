@@ -1,5 +1,5 @@
 from collections.abc import Iterator
-
+import multiprocessing as mp
 import numpy as np
 import pytest
 
@@ -324,67 +324,75 @@ class TestSharedMemoryMultiprocessing:
             assert np.allclose(data[1], [10.0, 2.0, 3.0])
 
 
-class TestSharedMemoryBroadcast:
-    """Test broadcast functionality with shared memory."""
 
-    def test_broadcast_basic_communication(self):
-        """Test that one emitter can broadcast to multiple receivers."""
+
+class TestBroadcastSharedMemory:
+    """Tests for World.mp_pipe_broadcast shared-memory broadcasting."""
+
+    def test_broadcast_single_emission_updates_all_receivers(self):
+        from pimm.shared_memory import NumpySMAdapter
+
         with World() as world:
-            emitter, receivers = world.mp_pipe_broadcast(num_receivers=3)
+            emitter, receivers = world.mp_pipe_broadcast(num_receivers=3, maxsize=[1, 1, 1])
 
-            # Emit data
-            array = np.array([1.0, 2.0], dtype=np.float32)
-            data = NumpySMAdapter(array.shape, array.dtype)
-            data.array = array
-            emitter.emit(data, ts=100)
+            # Emit one shared-memory message
+            data = NumpySMAdapter((2, 2), np.float32)
+            data.array[:] = np.array([[10, 20], [30, 40]], dtype=np.float32)
+            emitter.emit(data, ts=12345)
 
-            # All receivers should get the data
+            # Each receiver should read the same data and timestamp
             for receiver in receivers:
                 msg = receiver.read()
                 assert msg is not None
-                assert np.allclose(msg.data.array, [1.0, 2.0])
-                assert msg.ts == 100
-                assert msg.updated is True
+                assert msg.updated
+                assert msg.ts == 12345
+                assert np.allclose(msg.data.array, data.array)
 
-    def test_broadcast_independent_updated_flags(self):
-        """Test that each receiver has independent updated flag."""
+    def test_subsequent_reads_toggle_updated_flag(self):
+        from pimm.shared_memory import NumpySMAdapter
+
         with World() as world:
-            emitter, receivers = world.mp_pipe_broadcast(num_receivers=2)
+            emitter, receivers = world.mp_pipe_broadcast(num_receivers=2, maxsize=[1, 1])
 
-            array = np.array([3.0, 4.0], dtype=np.float32)
-            data = NumpySMAdapter(array.shape, array.dtype)
-            data.array = array
-            emitter.emit(data, ts=200)
+            # Emit data once
+            data = NumpySMAdapter((2, 2), np.float32)
+            data.array[:] = np.ones((2, 2), dtype=np.float32)
+            emitter.emit(data)
 
-            # Receiver 0 reads (marks as read)
-            msg0 = receivers[0].read()
-            assert msg0.updated is True
+            # First read: updated=True
+            first = [r.read() for r in receivers]
+            assert all(m.updated for m in first)
 
-            # Receiver 1 hasn't read yet, should still be updated
-            msg1 = receivers[1].read()
-            assert msg1.updated is True
+            # Second read (no new emission): updated=False
+            second = [r.read() for r in receivers]
+            assert all(not m.updated for m in second)
 
-            # Both read again - should be stale for both
-            assert receivers[0].read().updated is False
-            assert receivers[1].read().updated is False
+            # Emit again, should toggle updated=True again
+            data.array[:] = np.full((2, 2), 5.0)
+            emitter.emit(data)
+            third = [r.read() for r in receivers]
+            assert all(m.updated for m in third)
+            assert np.allclose(third[0].data.array, 5.0)
 
-    def test_broadcast_multiple_emissions(self):
-        """Test multiple emissions to broadcast receivers."""
+    def test_emitter_close_unlinks_shared_memory(self):
+        from pimm.shared_memory import NumpySMAdapter
+        import gc
+
         with World() as world:
-            emitter, receivers = world.mp_pipe_broadcast(num_receivers=2)
+            emitter, receivers = world.mp_pipe_broadcast(num_receivers=2, maxsize=[1, 1])
+            data = NumpySMAdapter((2, 2), np.float32)
+            data.array[:] = np.eye(2, dtype=np.float32)
+            emitter.emit(data)
 
-            # First emission
-            data1 = NumpySMAdapter((2,), np.float32)
-            data1.array = np.array([1.0, 2.0], dtype=np.float32)
-            emitter.emit(data1, ts=100)
+            # Ensure buffer exists before close
+            assert emitter._sm is not None
+            sm_name = emitter._sm.name
 
-            # Second emission
-            data2 = NumpySMAdapter((2,), np.float32)
-            data2.array = np.array([3.0, 4.0], dtype=np.float32)
-            emitter.emit(data2, ts=200)
+            # Close emitter and force cleanup
+            emitter.close()
+            gc.collect()
 
-            # All receivers should see the latest data
-            for receiver in receivers:
-                msg = receiver.read()
-                assert np.allclose(msg.data.array, [3.0, 4.0])
-                assert msg.ts == 200
+            # The shared memory should now be closed/unlinked
+            with pytest.raises(FileNotFoundError):
+                mp.shared_memory.SharedMemory(name=sm_name)
+

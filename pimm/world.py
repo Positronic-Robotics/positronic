@@ -79,8 +79,8 @@ class MultiprocessEmitter(SignalEmitter[T]):
         mode_value: mp.Value,
         lock: mp.Lock,
         ts_value: mp.Value,
-        up_values: list[mp.Value],      # a flag that new data has been written - for each receiver
-        sm_queue: Queue | list[Queue],  # mp.Queue | list[mp.Queue],
+        up_values: list[mp.Value],      # a bool flag that new data has been written - for each receiver
+        sm_queue: Queue | list[Queue],  # special queue to send SM block name to many receivers
         *,
         forced_mode: TransportMode | None = None,
     ):
@@ -94,8 +94,6 @@ class MultiprocessEmitter(SignalEmitter[T]):
         self._data_type: type[SMCompliant] | None = None
         self._lock = lock
         self._ts_value = ts_value
-        self._up_value = up_value
-        self._sm_queue = sm_queue
         self._up_values = up_values
         self._sm_queues = sm_queue if isinstance(sm_queue, list) else [sm_queue]
 
