@@ -78,6 +78,58 @@ def find_uv_lock(start_dir: Path) -> Path | None:
     return None
 
 
+def get_docker_info() -> dict | None:
+    """Detect if running inside Docker and gather container metadata.
+
+    Returns:
+        Dictionary with Docker info if running in a container, None otherwise.
+        May include: container_id, hostname, and cgroup_info.
+    """
+    docker_info = {}
+
+    # Check for /.dockerenv file (common Docker indicator)
+    if Path('/.dockerenv').exists():
+        docker_info['dockerenv_present'] = True
+
+    # Check IS_DOCKER environment variable (used in some setups)
+    if os.environ.get('IS_DOCKER'):
+        docker_info['is_docker_env'] = True
+
+    # Try to read container ID from cgroup
+    cgroup_path = Path('/proc/self/cgroup')
+    if cgroup_path.exists():
+        try:
+            cgroup_content = cgroup_path.read_text(encoding='utf-8')
+            # Look for docker or containerd in cgroup
+            for line in cgroup_content.splitlines():
+                if 'docker' in line or 'containerd' in line:
+                    docker_info['in_container'] = True
+                    # Try to extract container ID from cgroup path
+                    # Format is typically: .../docker/<container_id> or .../docker-<container_id>.scope
+                    parts = line.split('/')
+                    for part in parts:
+                        if part.startswith('docker-') and part.endswith('.scope'):
+                            container_id = part.replace('docker-', '').replace('.scope', '')
+                            docker_info['container_id'] = container_id[:12]  # Short format
+                            break
+                        elif len(part) == 64 and all(c in '0123456789abcdef' for c in part):
+                            # Full container ID (64 hex chars)
+                            docker_info['container_id'] = part[:12]  # Short format
+                            break
+                    break
+        except (OSError, UnicodeDecodeError):
+            pass
+
+    # If we found any Docker indicators, add hostname
+    if docker_info:
+        try:
+            docker_info['hostname'] = socket.gethostname()
+        except OSError:
+            pass
+        return docker_info
+    return None
+
+
 def run_metadata(patterns: list[str] | None = None, add_git_diff: bool = True, add_uv_lock: bool = True) -> dict:
     """Capture script run metadata for maximum reproducibility.
 
@@ -101,7 +153,7 @@ def run_metadata(patterns: list[str] | None = None, add_git_diff: bool = True, a
         - package_version: Positronic package version (if available)
         - git: Git state (commit, branch, dirty flag)
         - git_diff: Git diff for uncommitted changes matching patterns
-        - environment: Environment information (VIRTUAL_ENV, uv.lock presence)
+        - environment: Environment information (VIRTUAL_ENV, uv.lock presence, docker info)
     """
 
     if patterns is None:
@@ -123,8 +175,8 @@ def run_metadata(patterns: list[str] | None = None, add_git_diff: bool = True, a
         metadata['git.positronic'] = pkg_git_state
         if add_git_diff:
             git_diff = get_git_diff(workdir=pkg_dir, patterns=patterns)
-        if git_diff:
-            metadata['git.positronic.diff'] = git_diff
+            if git_diff:
+                metadata['git.positronic.diff'] = git_diff
 
     git_state = get_git_state()
     if git_state and git_state != pkg_git_state:
@@ -139,6 +191,11 @@ def run_metadata(patterns: list[str] | None = None, add_git_diff: bool = True, a
     virtual_env = os.environ.get('VIRTUAL_ENV')
     if virtual_env:
         environment['virtual_env'] = virtual_env
+
+    # Docker information
+    docker_info = get_docker_info()
+    if docker_info:
+        environment['docker'] = docker_info
 
     if add_uv_lock:
         # Read uv.lock content from current directory
