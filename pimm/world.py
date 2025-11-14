@@ -7,14 +7,13 @@ import multiprocessing.shared_memory
 import sys
 import time
 import traceback
-import weakref
 from collections import deque
 from collections.abc import Callable, Iterator
 from enum import IntEnum
 from multiprocessing import resource_tracker
 from multiprocessing.synchronize import Event as EventClass
 from queue import Empty, Full
-from typing import Any, TypeVar
+from typing import TypeVar
 
 from .core import (
     Clock,
@@ -98,7 +97,6 @@ class MultiprocessEmitter(SignalEmitter[T]):
         self._sm_queue = sm_queue
         self._sm: multiprocessing.shared_memory.SharedMemory | None = None
         self._expected_buf_size: int | None = None
-        self._receiver_ref: weakref.ReferenceType[MultiprocessReceiver[Any]] | None = None
         self._closed = False
         if forced_mode is not None:
             self._mode_value.value = int(forced_mode)
@@ -116,9 +114,6 @@ class MultiprocessEmitter(SignalEmitter[T]):
     def _set_mode(self, mode: TransportMode) -> None:
         self._mode = mode
         self._mode_value.value = int(mode)
-
-    def _attach_receiver(self, receiver: 'MultiprocessReceiver[Any]') -> None:
-        self._receiver_ref = weakref.ref(receiver)
 
     def _ensure_mode(self, data: T) -> TransportMode:
         if self._mode is not TransportMode.UNDECIDED:
@@ -183,11 +178,6 @@ class MultiprocessEmitter(SignalEmitter[T]):
             return
         self._closed = True
 
-        if self._receiver_ref is not None:
-            receiver = self._receiver_ref()
-            if receiver is not None:
-                receiver.close()
-
         if self._sm is not None:
             try:
                 self._sm.close()
@@ -197,17 +187,6 @@ class MultiprocessEmitter(SignalEmitter[T]):
             else:
                 self._sm.unlink()
             self._sm = None
-
-    def __getstate__(self):
-        # Drop weakrefs so multiprocessing can pickle the emitter state.
-        state = self.__dict__.copy()
-        state['_receiver_ref'] = None
-        return state
-
-    def __setstate__(self, state):
-        # Recreate weakref slot after unpickling in a child process.
-        self.__dict__.update(state)
-        self._receiver_ref = None
 
     def __del__(self):
         # Last-resort cleanup when user code forgets to close the emitter.
@@ -250,7 +229,6 @@ class MultiprocessReceiver(SignalReceiver[T]):
 
         self._last_queue_message: Message[T] | None = None
         self._closed = False
-        self._emitter_ref: weakref.ReferenceType[MultiprocessEmitter[Any]] | None = None
         if forced_mode is not None:
             self._mode_value.value = int(forced_mode)
 
@@ -263,9 +241,6 @@ class MultiprocessReceiver(SignalReceiver[T]):
     @property
     def uses_shared_memory(self) -> bool:
         return self.transport_mode is TransportMode.SHARED_MEMORY
-
-    def _attach_emitter(self, emitter: 'MultiprocessEmitter[Any]') -> None:
-        self._emitter_ref = weakref.ref(emitter)
 
     def _read_queue(self) -> Message[T] | None:
         try:
@@ -358,25 +333,9 @@ class MultiprocessReceiver(SignalReceiver[T]):
             self._sm.close()
             self._sm = None
 
-        if self._emitter_ref is not None:
-            emitter = self._emitter_ref()
-            if emitter is not None:
-                emitter._receiver_ref = None
-
     def __del__(self):
         # Ensure shared-memory buffers are released on GC.
         self.close()
-
-    def __getstate__(self):
-        # Weakrefs are not picklable; strip them before multiprocessing serialises us.
-        state = self.__dict__.copy()
-        state['_emitter_ref'] = None
-        return state
-
-    def __setstate__(self, state):
-        # Restore weakref slot once deserialised in the target process.
-        self.__dict__.update(state)
-        self._emitter_ref = None
 
 
 class LocalQueueEmitter(SignalEmitter[T]):
@@ -759,7 +718,5 @@ class World:
         receiver = MultiprocessReceiver(
             message_queue, mode_value, lock, ts_value, up_value, sm_queue, forced_mode=forced_mode
         )
-        emitter._attach_receiver(receiver)
-        receiver._attach_emitter(emitter)
         self._cleanup_emitters_readers.append((emitter, receiver))
         return emitter, receiver
