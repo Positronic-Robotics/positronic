@@ -11,7 +11,6 @@ from enum import Enum
 from typing import Any
 
 import configuronic as cfn
-import rerun as rr
 import tqdm
 
 import pimm
@@ -35,10 +34,6 @@ from positronic.simulator.mujoco.sim import MujocoCameras, MujocoFranka, MujocoG
 from positronic.simulator.mujoco.transforms import MujocoSceneTransform
 from positronic.utils import flatten_dict, package_assets_path
 from positronic.utils.logging import init_logging
-
-rr.init('positronic')
-rr.save('positronic_inference.rrd')
-# rr.spawn()
 
 
 class InferenceCommandType(Enum):
