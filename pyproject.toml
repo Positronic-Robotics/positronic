@@ -34,6 +34,7 @@ dependencies = [
     "pyarrow",
     "pydantic",
     "pyturbojpeg",
+    "pyyaml",
     "rerun-sdk~=0.22",
     "robosuite",
     "ruckig",

@@ -14,6 +14,7 @@ from lerobot.envs.configs import EnvConfig, FeatureType, PolicyFeature
 from lerobot.scripts import train as lerobot_train
 
 import positronic.utils.s3 as pos3
+from positronic import utils
 from positronic.utils.logging import init_logging
 
 
@@ -71,6 +72,7 @@ def train(dataset_root: str, run_name: str, output_dir, **cfg_kwargs):
     cfg.eval_freq = 0
     cfg.policy.push_to_hub = False
     cfg.output_dir = pos3.sync(output_dir) / run_name
+    utils.save_run_metadata(cfg.output_dir, patterns=['*.py', '*.toml'])
     _update_config(cfg, **cfg_kwargs)
 
     logging.info('Starting training...')

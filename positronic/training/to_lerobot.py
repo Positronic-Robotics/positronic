@@ -30,6 +30,7 @@ from lerobot.datasets.lerobot_dataset import LeRobotDataset
 
 import positronic.cfg.dataset
 import positronic.utils.s3 as pos3
+from positronic import utils
 from positronic.dataset import Dataset
 from positronic.utils.logging import init_logging
 
@@ -117,6 +118,7 @@ def append_data_to_dataset(lr_dataset: LeRobotDataset, p_dataset: Dataset, fps, 
 def convert_to_lerobot_dataset(output_dir: str, fps: int, video: bool, dataset: Dataset, task=None):
     output_dir = pos3.sync(output_dir, interval=None, sync_on_error=False)
     assert dataset.meta['lerobot_features'] is not None, "dataset.meta['lerobot_features'] is required"
+
     lr_dataset = LeRobotDataset.create(
         repo_id='local',
         fps=fps,
@@ -125,6 +127,10 @@ def convert_to_lerobot_dataset(output_dir: str, fps: int, video: bool, dataset: 
         features=dataset.meta['lerobot_features'],
         image_writer_threads=32,
     )
+    # Adding this file after the LR dataset is created,
+    # otherwise the former will complain about the directory not being empty.
+    utils.save_run_metadata(output_dir, patterns=['*.py', '*.toml'])
+
     if 'gr00t_modality' in dataset.meta:
         modality = dataset.meta.get('gr00t_modality')
         if modality is not None:
@@ -141,6 +147,9 @@ def convert_to_lerobot_dataset(output_dir: str, fps: int, video: bool, dataset: 
 def append_data_to_lerobot_dataset(output_dir: str, dataset: Dataset, fps: int, task=None):
     output_dir = pos3.sync(output_dir, interval=None, sync_on_error=False)
     lr_dataset = LeRobotDataset(repo_id='local', root=output_dir)
+
+    # Save metadata for append operation
+    utils.save_run_metadata(output_dir, patterns=['*.py', '*.toml'], prefix='append_metadata')
 
     lr_modality_path = output_dir / 'meta' / 'modality.json'
     ds_modality = dataset.meta.get('gr00t_modality', None)
