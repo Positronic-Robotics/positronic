@@ -25,7 +25,7 @@ from positronic.dataset.local_dataset import LocalDataset
 from positronic.server.dataset_utils import get_dataset_info, get_dataset_root, get_episodes_list, stream_episode_rrd
 
 # Global app state
-app_state: dict[str, object] = {'dataset': None, 'loading_state': True, 'root': '', 'cache_dir': ''}
+app_state: dict[str, object] = {'dataset': None, 'loading_state': True, 'root': '', 'cache_dir': '', 'episode_keys': {}}
 
 
 def _pkg_path(*parts: str) -> str:
@@ -129,7 +129,11 @@ async def api_episodes():
     ds: LocalDataset | None = app_state.get('dataset')  # type: ignore[assignment]
     if ds is None:
         raise HTTPException(status_code=500, detail='Dataset failed to load')
-    return get_episodes_list(ds)
+
+    labels = [label if label is not None else key for key, label in app_state['episode_keys'].items()]
+    episodes = get_episodes_list(ds, app_state['episode_keys'].keys())
+
+    return {'labels': labels, 'episodes': episodes}
 
 
 @app.get('/api/dataset_status')
@@ -186,6 +190,7 @@ def main(
     port: int = 5000,
     debug: bool = False,
     reset_cache: bool = False,
+    episode_keys: dict[str, str | None] | None = None,
 ):
     """Visualize a Dataset with Rerun.
 
@@ -198,12 +203,14 @@ def main(
         reset_cache: If True, clear cache_dir at startup
     """
     root = get_dataset_root(dataset) or 'unknown_dataset'
+    episode_keys = episode_keys or {'duration': 'Duration', 'task': 'Task'}
     deb_level = logging.DEBUG if debug else logging.INFO
     logging.basicConfig(level=deb_level, format='%(asctime)s - %(levelname)s - %(message)s')
 
     app_state['root'] = root
     app_state['cache_dir'] = cache_dir
     app_state['loading_state'] = True
+    app_state['episode_keys'] = {'index': '#', **episode_keys}
 
     if reset_cache and os.path.exists(cache_dir):
         logging.info(f'Clearing RRD cache directory: {os.path.abspath(cache_dir)}')

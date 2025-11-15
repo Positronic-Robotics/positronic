@@ -19,7 +19,7 @@
         </div>
 
         <h2>Episodes</h2>
-        <div id="episodes-container" class="episodes-grid">
+        <div id="episodes-container" class="episodes-table">
             <div class="loading">Loading episodes...</div>
         </div>
 
@@ -157,24 +157,41 @@
                         return;
                     }
 
-                    const episodes = await response.json();
+                    const { labels, episodes } = await response.json();
                     const container = document.getElementById('episodes-container');
                     container.innerHTML = '';
 
-                    episodes.forEach((episode, index) => {
-                        const card = document.createElement('div');
-                        card.className = 'episode-card';
-                        card.onclick = () => window.location.href = `/episode/${episode.index}`;
+                    const headerRow = document.createElement('div');
+                    headerRow.className = 'episodes-header';
+                    headerRow.innerHTML = `
+                        <div class="episode-header-row">
+                            ${labels
+                                .map(label => `<div class="episode-cell">${label}</div>`)
+                                .join('')}
+                        </div>
+                    `;
+                    container.appendChild(headerRow);
 
-                        card.innerHTML = `
-                            <div class="episode-title">Episode ${episode.index}</div>
-                            <div class="episode-info">
-                                <p>${episode.duration.toFixed(1)} sec</p>
-                                <p>${episode.task || 'Task: N/A'}</p>
-                            </div>
-                        `;
+                    function renderValue(value) {
+                        switch (typeof value) {
+                            case 'number':
+                                return value.toFixed(2);
+                            default:
+                                return String(value ?? 'N/A');
+                        }
+                    }
 
-                        container.appendChild(card);
+                    episodes.forEach((episode) => {
+                        const row = document.createElement('a');
+                        row.className = 'episode-row';
+                        row.href = `/episode/${episode[0]}`;  // Assuming the first element is the episode index or ID
+                        row.innerHTML = episode.map((value, i) => (
+                            `<div class="episode-cell">
+                                ${i === 0? value : renderValue(value)}
+                            </div>`
+                        )).join('');
+
+                        container.appendChild(row);
                     });
                 } catch (error) {
                     console.error('Error loading episodes:', error);

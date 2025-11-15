@@ -129,31 +129,46 @@ h1 {
 .chip-bool { background-color: rgba(93, 64, 55, 0.2); color: #a1887f; }
 .chip-default { background-color: rgba(69, 90, 100, 0.2); color: #90a4ae; }
 
-/* Episode grid */
-.episodes-grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
-    gap: 20px;
+/* Episode table */
+.episodes-table {
+    display: table;
+    width: 100%;
+    border-collapse: collapse;
     margin-top: 20px;
+    border-top: 1px solid transparent;
 }
 
-.episode-card {
-    background-color: var(--color-card-bg);
-    padding: 20px;
-    border-radius: 8px;
-    border: 1px solid var(--color-border-default);
-    transition: transform 0.2s, background-color 0.2s;
+.episodes-header {
+    display: table-header-group;
+    color: var(--color-accent-green);
+    font-size: 18px;
+}
+
+.episode-header-row {
+    display: table-row;
+}
+
+.episode-row {
+    display: table-row;
     cursor: pointer;
+    color: var(--color-text-default);
+    text-decoration: none;
 }
 
-.episode-card:hover {
-    transform: translateY(-2px);
-    background-color: var(--color-card-bg-hover);
-    border-color: var(--color-accent-green);
+.episode-row:nth-child(even) {
+    background-color: var(--color-bg-highlight);
 }
 
-.episode-title { font-size: 18px; font-weight: bold; color: var(--color-text-default-light); margin-bottom: 10px; }
-.episode-info { color: var(--color-text-default); font-size: 14px; opacity: 0.8; }
+.episode-row:hover,
+.episode-row:focus-visible {
+    outline: 1px solid var(--color-accent-green);
+}
+
+.episode-cell {
+    display: table-cell;
+    padding: 13px;
+    vertical-align: middle;
+}
 
 /* Loading and status */
 .loading { text-align: center; padding: 40px; color: var(--color-text-default); opacity: 0.7; }
