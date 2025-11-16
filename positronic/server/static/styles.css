@@ -154,6 +154,10 @@ h1 {
     text-align: left;
 }
 
+.episodes-table th:last-child {
+    width: 50px;
+}
+
 .episodes-table tr {
     color: var(--color-text-default);
 }
@@ -166,6 +170,10 @@ h1 {
 .episodes-table td {
     padding: 13px;
     vertical-align: middle;
+}
+
+.episodes-table td:last-child {
+    text-align: right;
 }
 
 .episodes-table a {

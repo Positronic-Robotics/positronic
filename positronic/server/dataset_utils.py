@@ -79,19 +79,17 @@ def get_dataset_info(ds: Dataset) -> dict[str, Any]:
     return {'root': get_dataset_root(ds), 'num_episodes': num_eps, 'features': features}
 
 
-def get_episodes_list(ds: Dataset, keys: list[str]) -> list[list[Any]]:
+def get_episodes_list(ds: Dataset, keys: list[str], formatters: dict[str, str | None]) -> list[list[Any]]:
     result = []
     for idx, ep in enumerate(ds):
         try:
-            row: list[Any] = []
-            for key in keys:
-                computed_keys = {'index': idx, 'duration': ep.duration_ns / 1e9}
+            computed_keys = {'index': idx, 'duration': ep.duration_ns / 1e9}
+            mapping = ep.static | computed_keys
+            row: list[Any] = [
+                formatters[key] % mapping.get(key) if formatters.get(key) and key in mapping else mapping.get(key, None)
+                for key in keys
+            ]
 
-                if key in computed_keys:
-                    row.append(computed_keys[key])
-                    continue
-
-                row.append(ep.static.get(key, None))
             result.append(row)
         except Exception as e:
             raise Exception(f'Error getting episode {idx}: {ep.meta}') from e

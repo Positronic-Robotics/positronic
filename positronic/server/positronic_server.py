@@ -130,8 +130,19 @@ async def api_episodes():
     if ds is None:
         raise HTTPException(status_code=500, detail='Dataset failed to load')
 
-    labels = [label if label is not None else key for key, label in app_state['episode_keys'].items()]
-    episodes = get_episodes_list(ds, app_state['episode_keys'].keys())
+    labels = []
+    formatters = {}
+    for key, value in app_state['episode_keys'].items():
+        if isinstance(value, dict):
+            label = value.get('label')
+            labels.append(label if label is not None else key)
+            formatters[key] = value.get('format')
+        elif value is not None:
+            labels.append(value)
+        else:
+            labels.append(key)
+
+    episodes = get_episodes_list(ds, app_state['episode_keys'].keys(), formatters=formatters)
 
     return {'labels': labels, 'episodes': episodes}
 
@@ -182,7 +193,10 @@ async def api_episode_rrd(episode_id: int):
     )
 
 
-@cfn.config(dataset=positronic.cfg.dataset.local_all)
+@cfn.config(
+    dataset=positronic.cfg.dataset.local_all,
+    episode_keys={'duration': {'label': 'Duration', 'format': '% .2f sec'}, 'task': 'Task'},
+)
 def main(
     dataset: Dataset,
     cache_dir: str = os.path.expanduser('~/.cache/positronic/server/'),
@@ -190,7 +204,7 @@ def main(
     port: int = 5000,
     debug: bool = False,
     reset_cache: bool = False,
-    episode_keys: dict[str, str | None] | None = None,
+    episode_keys: dict[str, dict[str, str] | str | None] | None = None,
 ):
     """Visualize a Dataset with Rerun.
 
@@ -203,7 +217,6 @@ def main(
         reset_cache: If True, clear cache_dir at startup
     """
     root = get_dataset_root(dataset) or 'unknown_dataset'
-    episode_keys = episode_keys or {'duration': 'Duration', 'task': 'Task'}
     deb_level = logging.DEBUG if debug else logging.INFO
     logging.basicConfig(level=deb_level, format='%(asctime)s - %(levelname)s - %(message)s')
 
