@@ -19,7 +19,7 @@
         </div>
 
         <h2>Episodes</h2>
-        <div id="episodes-container" class="episodes-table">
+        <div id="episodes-container">
             <div class="loading">Loading episodes...</div>
         </div>
 
@@ -31,10 +31,14 @@
                     const response = await fetch('/api/dataset_status');
                     const status = await response.json();
 
+                    const loadingStatus = document.getElementById('loading-status');
+                    const datasetStats = document.getElementById('dataset-stats');
+                    const episodesContainer = document.getElementById('episodes-container');
+
                     if (status.loading) {
-                        document.getElementById('loading-status').classList.add('show');
-                        document.getElementById('dataset-stats').innerHTML = 'Checking dataset status...';
-                        document.getElementById('episodes-container').innerHTML = '<div class="loading">Waiting for dataset to load...</div>';
+                        loadingStatus.classList.add('show');
+                        datasetStats.innerHTML = 'Checking dataset status...';
+                        episodesContainer.innerHTML = '<div class="loading">Waiting for dataset to load...</div>';
 
                         if (!loadingCheckInterval) {
                             loadingCheckInterval = setInterval(checkDatasetStatus, 2000);
@@ -44,17 +48,21 @@
                             clearInterval(loadingCheckInterval);
                             loadingCheckInterval = null;
                         }
-                        document.getElementById('loading-status').classList.remove('show');
+                        loadingStatus.classList.remove('show');
                         loadDatasetInfo();
-                        loadEpisodes();
+
+                        const { episodes, labels } = await loadEpisodes();
+                        const episodesTable = createEpisodesTable(episodes, labels);
+                        episodesContainer.innerHTML = '';
+                        episodesContainer.appendChild(episodesTable);
                     } else {
                         if (loadingCheckInterval) {
                             clearInterval(loadingCheckInterval);
                             loadingCheckInterval = null;
                         }
-                        document.getElementById('loading-status').classList.remove('show');
-                        document.getElementById('dataset-stats').innerHTML = '<span class="error-message">Failed to load dataset</span>';
-                        document.getElementById('episodes-container').innerHTML = '<div class="loading error-message">Dataset loading failed</div>';
+                        loadingStatus.classList.remove('show');
+                        datasetStats.innerHTML = '<span class="error-message">Failed to load dataset</span>';
+                        episodesContainer.innerHTML = '<div class="loading error-message">Dataset loading failed</div>';
                     }
                 } catch (error) {
                     console.error('Error checking dataset status:', error);
@@ -157,47 +165,68 @@
                         return;
                     }
 
-                    const { labels, episodes } = await response.json();
-                    const container = document.getElementById('episodes-container');
-                    container.innerHTML = '';
+                    const { episodes, labels } = await response.json();
 
-                    const headerRow = document.createElement('div');
-                    headerRow.className = 'episodes-header';
-                    headerRow.innerHTML = `
-                        <div class="episode-header-row">
-                            ${labels
-                                .map(label => `<div class="episode-cell">${label}</div>`)
-                                .join('')}
-                        </div>
-                    `;
-                    container.appendChild(headerRow);
-
-                    function renderValue(value) {
-                        switch (typeof value) {
-                            case 'number':
-                                return value.toFixed(2);
-                            default:
-                                return String(value ?? 'N/A');
-                        }
-                    }
-
-                    episodes.forEach((episode) => {
-                        const row = document.createElement('a');
-                        row.className = 'episode-row';
-                        row.href = `/episode/${episode[0]}`;  // Assuming the first element is the episode index or ID
-                        row.innerHTML = episode.map((value, i) => (
-                            `<div class="episode-cell">
-                                ${i === 0? value : renderValue(value)}
-                            </div>`
-                        )).join('');
-
-                        container.appendChild(row);
-                    });
+                    return { episodes, labels };
                 } catch (error) {
                     console.error('Error loading episodes:', error);
                     document.getElementById('episodes-container').innerHTML =
                         '<div class="loading">Error loading episodes</div>';
                 }
+            }
+
+            function createEpisodesTable(episodes, labels) {
+                const createTableCell = (content, isHeader = false) => {
+                    const episodeCell = document.createElement(isHeader ? 'th' : 'td');
+                    episodeCell.textContent = content;
+
+                    return episodeCell;
+                };
+
+                const episodesTable = document.createElement('table');
+                episodesTable.classList.add('episodes-table');
+
+                const tableHeader = document.createElement('thead');
+                const headerRow = document.createElement('tr');
+
+                for (const label of labels) {
+                    headerRow.appendChild(createTableCell(label, true));
+                }
+
+                headerRow.appendChild(createTableCell('', true)); // For the "View" column
+
+                tableHeader.appendChild(headerRow);
+                episodesTable.appendChild(tableHeader);
+
+                function renderValue(value) {
+                    switch (typeof value) {
+                        case 'number':
+                            return value.toFixed(2);
+                        default:
+                            return String(value ?? 'N/A');
+                    }
+                }
+
+                for (const episode of episodes) {
+                    const row = document.createElement('tr');
+
+                    for (const [index, value] of episode.entries()) {
+                        row.appendChild(
+                            createTableCell(index === 0 ? value : renderValue(value))
+                        );
+                    }
+
+                    const viewCell = createTableCell('');
+                    const viewLink = document.createElement('a');
+                    viewLink.href = `/episode/${episode[0]}`; // Assuming the first element is the episode index or ID
+                    viewLink.textContent = 'View';
+                    viewCell.appendChild(viewLink);
+                    row.appendChild(viewCell);
+
+                    episodesTable.appendChild(row);
+                }
+
+                return episodesTable;
             }
 
             checkDatasetStatus();

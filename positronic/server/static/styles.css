@@ -129,45 +129,52 @@ h1 {
 .chip-bool { background-color: rgba(93, 64, 55, 0.2); color: #a1887f; }
 .chip-default { background-color: rgba(69, 90, 100, 0.2); color: #90a4ae; }
 
-/* Episode table */
+/* Episodes table */
 .episodes-table {
-    display: table;
     width: 100%;
-    border-collapse: collapse;
+    border-collapse: separate;
+    border-spacing: 0;
     margin-top: 20px;
-    border-top: 1px solid transparent;
 }
 
-.episodes-header {
-    display: table-header-group;
+.episodes-table thead {
+    position: sticky;
+    top: 1px;
     color: var(--color-accent-green);
+    background-color: var(--navbar-background-color);
     font-size: 18px;
+    height: 70px;
 }
 
-.episode-header-row {
-    display: table-row;
+.episodes-table th {
+    color: var(--color-accent-green);
+    border-top: 1px solid;
+    border-bottom: 1px solid;
+    font-weight: normal;
+    text-align: left;
 }
 
-.episode-row {
-    display: table-row;
-    cursor: pointer;
+.episodes-table tr {
     color: var(--color-text-default);
-    text-decoration: none;
 }
 
-.episode-row:nth-child(even) {
+.episodes-table tr:nth-child(even) {
     background-color: var(--color-bg-highlight);
 }
 
-.episode-row:hover,
-.episode-row:focus-visible {
-    outline: 1px solid var(--color-accent-green);
-}
-
-.episode-cell {
-    display: table-cell;
+.episodes-table th,
+.episodes-table td {
     padding: 13px;
     vertical-align: middle;
+}
+
+.episodes-table a {
+    color: var(--color-accent-green);
+    text-decoration: none;
+}
+
+.episodes-table a:hover {
+    text-decoration: underline;
 }
 
 /* Loading and status */
