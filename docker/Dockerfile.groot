@@ -1,29 +1,35 @@
 # Use local base image with common dependencies
 FROM positronic-base:local
 
-# Clone gr00t repository
-WORKDIR /
-RUN git clone https://github.com/Positronic-Robotics/gr00t.git
-
-# Set working directory to gr00t
 WORKDIR /gr00t
 
+# Copy only pyproject.toml first for dependency installation
+COPY pyproject.toml .
+
+# Create minimal package structure needed for editable install (just __init__.py)
+# This allows dependency installation without copying all source code
+# RUN mkdir -p gr00t && touch gr00t/__init__.py
+
 # Install base dependencies from pyproject.toml
-RUN --mount=type=cache,target=/root/.cache/uv \
-    uv pip install -e ".[base]"
+RUN --mount=type=cache,target=/root/.cache/uv uv pip install -e ".[base]"
 
 # Install remaining special dependencies (before packages that need build isolation disabled)
-RUN --mount=type=cache,target=/root/.cache/uv \
-    uv pip install diffusers pyzmq decord
+RUN --mount=type=cache,target=/root/.cache/uv uv pip install diffusers pyzmq decord
 
 # Install packages that require special handling with --no-build-isolation
 # These packages need dependencies (like torch) already installed to build
-RUN --mount=type=cache,target=/root/.cache/uv \
-    uv pip install --no-build-isolation flash-attn
+RUN --mount=type=cache,target=/root/.cache/uv uv pip install --no-build-isolation flash-attn
 
 # Install pytorch3d from git (requires torch at build time, so --no-build-isolation)
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv pip install --no-build-isolation "git+https://github.com/facebookresearch/pytorch3d.git@stable"
+
+# Copy the entire gr00t directory (overwrites the minimal structure)
+# This won't invalidate pytorch3d unless pyproject.toml changed
+COPY . .
+
+# Reinstall in editable mode to ensure proper linking with the full source code
+RUN uv pip install --no-deps -e .
 
 # Set Python path
 ENV PYTHONPATH=/gr00t

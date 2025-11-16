@@ -85,7 +85,7 @@ build-groot: build-base
 		echo "Error: Could not extract version from pyproject.toml"; \
 		exit 1; \
 	fi
-	docker build --platform linux/amd64 -f Dockerfile.groot -t $(LOCAL_TAG_GROOT) ..
+	docker build --platform linux/amd64 -f Dockerfile.groot -t $(LOCAL_TAG_GROOT) ../../gr00t
 
 build: build-base build-training build-groot
 
