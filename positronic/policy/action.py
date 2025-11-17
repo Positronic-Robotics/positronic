@@ -196,26 +196,3 @@ class JointDeltaAction(ActionDecoder):
             velocities = velocities / max_vel_norm
 
         return (command.JointDelta(velocities=velocities * self.MAX_JOINT_DELTA), grip)
-
-
-class GrootActionDecoder(ActionDecoder):
-    def __init__(self):
-        super().__init__()
-
-    def encode_episode(self, episode: Episode) -> Signal[np.ndarray]:
-        raise NotImplementedError('GrootActionDecoder is not supposed for training yet')
-
-    def decode(self, action: dict[str, Any], inputs: dict[str, np.ndarray]) -> tuple[command.CommandType, float]:
-        # robot_pose = geom.Transform3D.from_vector(action['observation.observation.state'][:7], RotRep.QUAT)
-        robot_pose = geom.Transform3D.from_vector(inputs['robot_state.ee_pose'], RotRep.QUAT)
-
-        q_diff = geom.Rotation.create_from(action['action.eef_rotation_delta'], RotRep.ROTVEC)
-        tr_diff = action['action.eef_position_delta']
-
-        rot_mul = robot_pose.rotation * q_diff
-        rot_mul = geom.Rotation.from_quat(geom.normalise_quat(rot_mul.as_quat))
-        tr_add = robot_pose.translation + tr_diff
-
-        target_pose = geom.Transform3D(translation=tr_add, rotation=rot_mul)
-        target_grip = action['action.gripper_position'].item()
-        return (command.CartesianPosition(pose=target_pose), target_grip)

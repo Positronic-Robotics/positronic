@@ -156,29 +156,23 @@ def groot_oxe_droid():
     return result
 
 
-class GrootInferenceObservationEncoder(ObservationEncoder):
-    def __init__(self):
-        state = {'observation.state': ['robot_state.ee_pose', 'grip']}
-        images = {
-            'video.wrist_image': ('image.wrist', (224, 224)),
-            'video.exterior_image_1': ('image.exterior', (224, 224)),
-            # TODO: Seems like we can simply drop it.
-            'video.exterior_image_2': ('image.exterior', (224, 224)),
-        }
-        super().__init__(state, images)
-
-    def encode(self, inputs: dict[str, Any]) -> dict[str, Any]:
-        obs = super().encode(inputs)
-        state = obs.pop('observation.state')
-        eef_position = state[:3]
-        eef_rotation = state[3:7]
-        gripper_position = state[7:]
-        obs['state.eef_position'] = eef_position
-        obs['state.eef_rotation'] = eef_rotation
-        obs['state.gripper_position'] = gripper_position
-        return obs
-
-
 @cfn.config()
 def groot_infer():
+    class GrootInferenceObservationEncoder(ObservationEncoder):
+        def __init__(self):
+            state = {'observation.state': ['robot_state.ee_pose', 'grip']}
+            images = {
+                'video.wrist_image': ('image.wrist', (224, 224)),
+                'video.exterior_image_1': ('image.exterior', (224, 224)),
+            }
+            super().__init__(state, images)
+
+        def encode(self, inputs: dict[str, Any]) -> dict[str, Any]:
+            obs = super().encode(inputs)
+            state = obs.pop('observation.state')
+            obs['state.robot_position_translation'] = state[:3]
+            obs['state.robot_position_quaternion'] = state[3:7]
+            obs['state.grip'] = state[7]
+            return obs
+
     return GrootInferenceObservationEncoder()
