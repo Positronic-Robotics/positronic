@@ -532,16 +532,19 @@ class _Mirror:
 
     def _list_s3_objects(self, bucket: str, key: str) -> Iterator[dict]:
         logger.debug('Listing S3 objects: bucket=%s, key=%s', bucket, key)
-        try:
-            obj = self.s3_client.head_object(Bucket=bucket, Key=key)
-        except ClientError as exc:
-            error_code = exc.response['Error']['Code']
-            if error_code != '404':
-                raise
-        else:
-            logger.debug('Found single object via head_object: %s', key)
-            yield {**obj, 'Key': key}
-            return
+        # Skip head_object for directory-like keys ending with '/'
+        # as we want to list contents, not check if the directory marker exists
+        if not key.endswith('/'):
+            try:
+                obj = self.s3_client.head_object(Bucket=bucket, Key=key)
+            except ClientError as exc:
+                error_code = exc.response['Error']['Code']
+                if error_code != '404':
+                    raise
+            else:
+                logger.debug('Found single object via head_object: %s', key)
+                yield {**obj, 'Key': key}
+                return
 
         paginator = self.s3_client.get_paginator('list_objects_v2')
         for page in paginator.paginate(Bucket=bucket, Prefix=key):
