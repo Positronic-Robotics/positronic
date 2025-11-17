@@ -187,6 +187,7 @@
                 episodesTable.classList.add('episodes-table');
 
                 const tableHeader = document.createElement('thead');
+                const tableBody = document.createElement('tbody');
                 const headerRow = document.createElement('tr');
 
                 for (const label of labels) {
@@ -197,6 +198,7 @@
 
                 tableHeader.appendChild(headerRow);
                 episodesTable.appendChild(tableHeader);
+                episodesTable.appendChild(tableBody);
 
                 function renderValue(value) {
                     switch (typeof value) {
@@ -223,7 +225,7 @@
                     viewCell.appendChild(viewLink);
                     row.appendChild(viewCell);
 
-                    episodesTable.appendChild(row);
+                    tableBody.appendChild(row);
                 }
 
                 return episodesTable;
