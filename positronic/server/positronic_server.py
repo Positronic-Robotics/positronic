@@ -223,7 +223,7 @@ def main(
     app_state['root'] = root
     app_state['cache_dir'] = cache_dir
     app_state['loading_state'] = True
-    app_state['episode_keys'] = {'index': '#', **episode_keys}
+    app_state['episode_keys'] = {'index': '#', **(episode_keys or {})}
 
     if reset_cache and os.path.exists(cache_dir):
         logging.info(f'Clearing RRD cache directory: {os.path.abspath(cache_dir)}')
