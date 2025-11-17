@@ -12,8 +12,8 @@ def absolute_position(rotation_representation: RotRep, tgt_ee_pose_key: str, tgt
     result = AbsolutePositionAction(tgt_ee_pose_key, tgt_grip_key, rotation_representation=rotation_representation)
     result.meta['gr00t_modality'] = {
         'action': {
-            'target_robot_position_quaternion': {'start': 0, 'end': 4, 'rotation_type': 'quaternion'},
-            'target_robot_position_translation': {'start': 4, 'end': 7},
+            'target_robot_position_translation': {'start': 0, 'end': 3},
+            'target_robot_position_quaternion': {'start': 3, 'end': 7, 'rotation_type': 'quaternion'},
             'target_grip': {'start': 7, 'end': 8},
         }
     }
