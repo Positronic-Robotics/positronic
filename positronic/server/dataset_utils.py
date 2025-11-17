@@ -3,11 +3,9 @@
 import heapq
 import logging
 from collections.abc import Iterator
-from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any
 
-import numpy as np
 import rerun as rr
 import rerun.blueprint as rrb
 
@@ -17,66 +15,6 @@ from positronic.dataset.local_dataset import LocalDataset
 from positronic.dataset.signal import Kind
 from positronic.dataset.transforms import TransformedDataset
 from positronic.utils.rerun_compat import flatten_numeric, log_numeric_series, log_series_styles, set_timeline_time
-
-
-@dataclass
-class _SignalInfo:
-    name: str
-    kind: Literal['video', 'vector', 'scalar', 'tensor']
-    shape: tuple[int, ...] | None
-    dtype: str | None
-
-
-def _infer_signal_info(ep: Episode, name: str) -> _SignalInfo:
-    v = ep[name]
-    if v.kind == Kind.IMAGE:
-        # Decode first frame to get shape
-        frame, _ts = v[0]
-        h, w = int(frame.shape[0]), int(frame.shape[1])
-        return _SignalInfo(name=name, kind='video', shape=(h, w, 3), dtype='uint8')
-    elif v.kind == Kind.NUMERIC:
-        # Peek first value to infer shape/dtype
-        if len(v) == 0:
-            return _SignalInfo(name=name, kind='scalar', shape=(), dtype=None)
-        val, _ts = v[0]
-        match val:
-            case np.ndarray() if val.ndim == 0:
-                return _SignalInfo(name=name, kind='scalar', shape=(), dtype=str(val.dtype))
-            case np.ndarray() if val.ndim == 1:
-                return _SignalInfo(name=name, kind='vector', shape=tuple(map(int, val.shape)), dtype=str(val.dtype))
-            case np.ndarray():
-                return _SignalInfo(name=name, kind='tensor', shape=tuple(map(int, val.shape)), dtype=str(val.dtype))
-            case _:  # Python scalar
-                return _SignalInfo(name=name, kind='scalar', shape=(), dtype=type(val).__name__)
-    else:
-        # Static item; ignore here
-        return _SignalInfo(name=name, kind='static', shape=None, dtype=None)
-
-
-# TODO: Make this part of dataset.Signal, dataset.Episode and dataset.Dataset APIs
-def _infer_features(ep: Episode) -> dict[str, dict[str, Any]]:
-    """Infer feature metadata (shapes/dtypes) from an episode."""
-    features: dict[str, dict[str, Any]] = {}
-    for name in ep.signals.keys():
-        info = _infer_signal_info(ep, name)
-        if info.kind == 'video' and info.shape is not None:
-            features[name] = {'dtype': 'image', 'shape': list(info.shape)}
-        elif info.kind in ('vector', 'tensor', 'scalar'):
-            shape = [] if info.shape is None else list(info.shape)
-            features[name] = {'dtype': 'float32' if info.dtype is None else info.dtype, 'shape': shape}
-    return features
-
-
-def get_dataset_info(ds: Dataset) -> dict[str, Any]:
-    """Return basic info + feature descriptions for the dataset."""
-    num_eps = len(ds)
-    features: dict[str, dict[str, Any]] = {}
-
-    if num_eps > 0:
-        ep0 = ds[0]
-        features = _infer_features(ep0)
-
-    return {'root': get_dataset_root(ds), 'num_episodes': num_eps, 'features': features}
 
 
 def get_episodes_list(ds: Dataset, keys: list[str], formatters: dict[str, str | None]) -> list[list[Any]]:

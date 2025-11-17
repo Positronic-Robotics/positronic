@@ -72,6 +72,7 @@
             async function loadDatasetInfo() {
                 try {
                     const response = await fetch('/api/dataset_info');
+
                     if (response.status === 202) {
                         checkDatasetStatus();
                         return;
@@ -79,79 +80,10 @@
 
                     const data = await response.json();
 
-                    // Format features information as a table
-                    let featuresHtml = `
-                        <table class="features-table">
-                            <thead>
-                                <tr>
-                                    <th>Feature</th>
-                                    <th>Type</th>
-                                    <th>Dimensions</th>
-                                    <th>Data Type</th>
-                                </tr>
-                            </thead>
-                            <tbody>
+                    const statsDiv = document.getElementById('dataset-stats');
+                    statsDiv.innerHTML = `
+                        <p><strong>${data.num_episodes}</strong> episodes.</p>
                     `;
-
-                    for (const [key, info] of Object.entries(data.features)) {
-                        let typeCell = '';
-                        let typeClass = '';
-                        let dimensionCell = '';
-                        let dtypeCell = info.dtype || '-';
-                        let dtypeClass = '';
-
-                        if (info.dtype === 'image' || info.dtype === 'video') {
-                            typeCell = 'Camera';
-                            typeClass = 'chip-image';
-                            const shape = info.shape || [];
-                            dimensionCell = shape.length >= 3 ? `${shape[1]}×${shape[0]}×${shape[2]}` : '-';
-                            dtypeCell = 'uint8';
-                        } else {
-                            const shape = info.shape || [];
-                            if (shape.length === 0 || (shape.length === 1 && shape[0] === 1)) {
-                                typeCell = 'Scalar';
-                                typeClass = 'chip-scalar';
-                                dimensionCell = '1';
-                            } else if (shape.length === 1) {
-                                typeCell = 'Vector';
-                                typeClass = 'chip-vector';
-                                dimensionCell = shape[0].toString();
-                            } else {
-                                typeCell = 'Tensor';
-                                typeClass = 'chip-tensor';
-                                dimensionCell = shape.join('×');
-                            }
-                            dtypeCell = dtypeCell || 'float32';
-                        }
-
-                        const dtypeClassMap = {
-                            'float32': 'chip-float32',
-                            'float64': 'chip-float64',
-                            'int32': 'chip-int32',
-                            'int64': 'chip-int64',
-                            'uint8': 'chip-uint8',
-                            'bool': 'chip-bool'
-                        };
-                        dtypeClass = dtypeClassMap[dtypeCell] || 'chip-default';
-
-                        featuresHtml += `
-                            <tr>
-                                <td class="feature-name">${key}</td>
-                                <td><span class="chip ${typeClass}">${typeCell}</span></td>
-                                <td class="dimension-cell">${dimensionCell}</td>
-                                <td>${dtypeCell !== '-' ? `<span class="chip ${dtypeClass}">${dtypeCell}</span>` : '-'}</td>
-                            </tr>
-                        `;
-                    }
-
-                    featuresHtml += '</tbody></table>';
-
-                const statsDiv = document.getElementById('dataset-stats');
-                statsDiv.innerHTML = `
-                    <p><strong>${data.num_episodes}</strong> episodes.</p>
-                    <h3>Features</h3>
-                    ${featuresHtml}
-                `;
                 } catch (error) {
                     console.error('Error loading dataset info:', error);
                 }

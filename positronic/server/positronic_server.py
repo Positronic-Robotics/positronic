@@ -22,7 +22,7 @@ import positronic.utils.s3 as pos3
 from positronic import utils
 from positronic.dataset.dataset import Dataset
 from positronic.dataset.local_dataset import LocalDataset
-from positronic.server.dataset_utils import get_dataset_info, get_dataset_root, get_episodes_list, stream_episode_rrd
+from positronic.server.dataset_utils import get_dataset_root, get_episodes_list, stream_episode_rrd
 
 # Global app state
 app_state: dict[str, object] = {'dataset': None, 'loading_state': True, 'root': '', 'cache_dir': '', 'episode_keys': {}}
@@ -119,7 +119,7 @@ async def api_dataset_info():
     ds: LocalDataset | None = app_state.get('dataset')  # type: ignore[assignment]
     if ds is None:
         raise HTTPException(status_code=500, detail='Dataset failed to load')
-    return get_dataset_info(ds)
+    return {'root': app_state['root'], 'num_episodes': len(ds)}
 
 
 @app.get('/api/episodes')
