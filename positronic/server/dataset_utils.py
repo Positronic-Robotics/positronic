@@ -85,10 +85,14 @@ def get_episodes_list(ds: Dataset, keys: list[str], formatters: dict[str, str | 
         try:
             computed_keys = {'index': idx, 'duration': ep.duration_ns / 1e9}
             mapping = ep.static | computed_keys
-            row: list[Any] = [
-                formatters[key] % mapping.get(key) if formatters.get(key) and key in mapping else mapping.get(key, None)
-                for key in keys
-            ]
+            row: list[Any] = []
+
+            for key in keys:
+                value = mapping.get(key)
+                if value is not None and formatters.get(key):
+                    row.append(formatters[key] % value)
+                else:
+                    row.append(value)
 
             result.append(row)
         except Exception as e:
