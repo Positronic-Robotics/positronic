@@ -238,12 +238,17 @@ class Gr00tPolicy(Policy):
     def select_action(self, obs: dict[str, Any]) -> dict[str, Any]:
         if not self._cache or any(not v for v in self._cache.values()):
             self._observation = flatten_dict(obs, 'observation.')
-            for k, v in obs.items():
+            for k in obs:
+                v = obs[k]
                 if isinstance(v, np.ndarray):
                     obs[k] = np.expand_dims(v, axis=0)
+                    if np.issubdtype(obs[k].dtype, np.floating):
+                        obs[k] = obs[k].astype(np.float64)
                 else:
-                    obs[k] = [v]
-
+                    v = [v]
+                    if isinstance(v[0], np.floating):
+                        v = np.array(v).astype(np.float64)
+                    obs[k] = v
             result = self._client.get_action(obs)
             assert isinstance(result, dict), f'Expected dictionary, got {type(result)}'
 

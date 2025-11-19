@@ -172,7 +172,7 @@ def groot_infer():
             state = obs.pop('observation.state')
             obs['state.robot_position_translation'] = state[:3]
             obs['state.robot_position_quaternion'] = state[3:7]
-            obs['state.grip'] = state[7]
+            obs['state.grip'] = state[7:8]
             return obs
 
     return GrootInferenceObservationEncoder()
