@@ -424,8 +424,18 @@ def _internal_main():
         'sim_act': main_sim_act,
         'sim_openpi_positronic': main_sim_openpi_positronic,
         'sim_openpi_droid': main_sim_openpi_droid,
+        'sim_groot': main_sim_openpi_positronic.override(
+            policy=positronic.cfg.policy.policy.groot,
+            observation_encoder=positronic.cfg.policy.observation.groot_infer,
+            action_decoder=positronic.cfg.policy.action.groot_infer,
+        ),
         'droid_real': openpi_droid,
         'openpi_real': openpi_positronic_real,
+        'groot_droid': openpi_droid.override(
+            policy=positronic.cfg.policy.policy.groot,
+            observation_encoder=positronic.cfg.policy.observation.groot_infer,
+            action_decoder=positronic.cfg.policy.action.groot_infer,
+        ),
     })
 
 
