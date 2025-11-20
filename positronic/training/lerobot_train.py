@@ -4,6 +4,8 @@ Example:
 """
 
 import logging
+import threading
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -72,8 +74,21 @@ def train(dataset_root: str, run_name: str, output_dir, **cfg_kwargs):
     cfg.eval_freq = 0
     cfg.policy.push_to_hub = False
     cfg.output_dir = pos3.sync(output_dir) / run_name
-    utils.save_run_metadata(cfg.output_dir, patterns=['*.py', '*.toml'])
     _update_config(cfg, **cfg_kwargs)
+
+    # Start a background thread to save metadata once the directory is created by lerobot
+    # This avoids FileExistsError since lerobot expects the directory to not exist
+    def _save_metadata_delayed():
+        output_path = Path(cfg.output_dir)
+        # Wait for directory to be created (max 5 min)
+        for _ in range(60):
+            if output_path.exists():
+                utils.save_run_metadata(output_path, patterns=['*.py', '*.toml'])
+                return
+            time.sleep(5)
+        logging.warning(f'Timed out waiting for output directory {output_path} to be created')
+
+    threading.Thread(target=_save_metadata_delayed, daemon=True).start()
 
     logging.info('Starting training...')
     lerobot_train.init_logging()
