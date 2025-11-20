@@ -4,6 +4,7 @@ Example:
 """
 
 import logging
+import os
 import threading
 import time
 from dataclasses import dataclass, field
@@ -68,6 +69,11 @@ def train(dataset_root: str, run_name: str, output_dir, **cfg_kwargs):
     run_name = str(run_name)
     cfg = TrainPipelineConfig.from_pretrained(base_config)
     cfg.env = PositronicEnvConfig()
+
+    if os.getenv('WANDB_API_KEY'):
+        cfg.wandb.enable = True
+        cfg.wandb.project = 'lerobot-train'
+
     cfg.job_name = run_name
     cfg.dataset.root = str(pos3.download(dataset_root))
     cfg.dataset.repo_id = 'local'
