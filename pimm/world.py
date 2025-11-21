@@ -185,6 +185,16 @@ class MultiprocessEmitter(SignalEmitter[T]):
         ts = ts if ts >= 0 else self._clock.now_ns()
         mode = self._ensure_mode(data)
 
+        # Debug: first few emits
+        if not hasattr(self, '_emit_count'):
+            self._emit_count = 0
+        self._emit_count += 1
+
+        if self._emit_count <= 3 or self._emit_count % 30 == 0:
+            print(
+                f"DEBUG MultiprocessEmitter: emit #{self._emit_count}, mode={mode}, num_receivers={len(self._up_values)}",
+                flush=True)
+
         if mode is TransportMode.SHARED_MEMORY:
             if not isinstance(data, SMCompliant):
                 raise TypeError('Shared memory transport selected; data must implement SMCompliant')
@@ -329,8 +339,7 @@ class MultiprocessReceiver(SignalReceiver[T]):
         with self._lock:
             if self._ts_value.value == -1:
                 return None
-        if self._up_index is None:
-            return None
+
         if not self._ensure_shared_memory_initialized():
             return None
 
@@ -347,7 +356,18 @@ class MultiprocessReceiver(SignalReceiver[T]):
 
 
     def read(self) -> Message[T] | None:
+        # DEBUG
+        if not hasattr(self, '_read_count'):
+            self._read_count = 0
+        self._read_count += 1
+
         mode = self.transport_mode
+
+        # DEBUG
+        if self._read_count % 100 == 0:
+            print(
+                f"DEBUG MultiprocessReceiver: read #{self._read_count}, mode={mode}, _out_value={self._out_value is not None}, _up_index={self._up_index}",
+                flush=True)
 
         if mode is TransportMode.SHARED_MEMORY:
             return self._read_shared_memory()
@@ -693,16 +713,13 @@ class World:
             # When emitter lives in a different process, we use system clock to timestamp messages, otherwise we will
             # have to serialise our local clock to the other process, which is not what we want.
             num_receivers = len(receivers_logical_list)
-            _, _, maxsize, clock = receivers_logical_list[0]    # these parameters are the same for all receivers
+            emitter_wrapper, _, maxsize, clock = receivers_logical_list[0]    # these parameters are the same for all receivers
 
             kwargs = {'maxsize': maxsize, 'num_receivers': num_receivers} if maxsize is not None else {
                 'num_receivers': num_receivers}
             emitter_physical, receivers_physical = self.mp_pipes(clock=clock, **kwargs)
 
-
-            emitter_wrapper, _, _, _ = receivers_logical_list[0]
             emitter_logical._bind(emitter_wrapper(emitter_physical))
-
 
             if isinstance(receivers_physical, list):
                 for (_, logical_receiver, _, _), physical_receiver in zip(receivers_logical_list, receivers_physical):

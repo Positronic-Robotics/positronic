@@ -180,7 +180,7 @@ class TestEventReceiver:
 class TestWorld:
     """Test the World class."""
 
-    @pytest.mark.parametrize('pipe_fn_name', ['mp_pipe', 'local_pipe'])
+    @pytest.mark.parametrize('pipe_fn_name', ['mp_pipes', 'local_pipe'])
     def test_world_pipe_creation(self, pipe_fn_name):
         """Test that World.pipe creates emitter and reader pair."""
         with World() as world:
@@ -205,7 +205,7 @@ class TestWorld:
             assert not world.background_processes[0].is_alive()
             assert world.background_processes[0].exitcode == 0
 
-    @pytest.mark.parametrize('pipe_fn_name', ['mp_pipe', 'local_pipe'])
+    @pytest.mark.parametrize('pipe_fn_name', ['mp_pipes', 'local_pipe'])
     def test_world_pipe_communication(self, pipe_fn_name):
         """Test that pipe emitter and reader can communicate."""
         with World() as world:
@@ -296,9 +296,9 @@ class TestWorld:
         # We can't check is_alive() after exit because processes are closed
         assert len(world.background_processes) == 1
 
-    def test_mp_pipe_uses_queue_for_non_shared_memory_payloads(self):
+    def test_mp_pipes_uses_queue_for_non_shared_memory_payloads(self):
         with World() as world:
-            emitter, reader = world.mp_pipe()
+            emitter, reader = world.mp_pipes()
 
             emitter.emit('hello', ts=123)
 
@@ -314,9 +314,9 @@ class TestWorld:
             assert message2 is not None
             assert message2.updated is False
 
-    def test_mp_pipe_switches_to_shared_memory_when_supported(self):
+    def test_mp_pipes_switches_to_shared_memory_when_supported(self):
         with World() as world:
-            emitter, reader = world.mp_pipe()
+            emitter, reader = world.mp_pipes()
 
             payload = DummySMValue(3.14)
             emitter.emit(payload, ts=456)
@@ -336,9 +336,9 @@ class TestWorld:
             assert message2.updated is False
             assert message2.data == message.data
 
-    def test_mp_pipe_rejects_incompatible_payload_after_shared_memory_selected(self):
+    def test_mp_pipes_rejects_incompatible_payload_after_shared_memory_selected(self):
         with World() as world:
-            emitter, _ = world.mp_pipe()
+            emitter, _ = world.mp_pipes()
 
             emitter.emit(DummySMValue(1.0))
 
@@ -450,18 +450,18 @@ class TestWorldControlSystems:
             assert producer_clock is clock
             assert consumer_clock is clock
 
-    def test_start_uses_mp_pipe_for_cross_process_connections(self, monkeypatch):
+    def test_start_uses_mp_pipes_for_cross_process_connections(self, monkeypatch):
         clock = MockClock(0.0)
         main_cs = DummyControlSystem('main')
         background_cs = DummyControlSystem('background')
 
         captured_clocks = []
 
-        def fake_mp_pipe(self, maxsize=1, clock=None):
+        def fake_mp_pipes(self, maxsize=1, clock=None, **kwargs):
             captured_clocks.append(clock)
             return self.local_pipe(maxsize)
 
-        monkeypatch.setattr(World, 'mp_pipe', fake_mp_pipe)
+        monkeypatch.setattr(World, 'mp_pipes', fake_mp_pipes)
 
         started_background = []
 
@@ -498,11 +498,11 @@ class TestWorldControlSystems:
 
         captured_clocks = []
 
-        def fake_mp_pipe(self, maxsize=1, clock=None):
+        def fake_mp_pipes(self, maxsize=1, clock=None, **kvargs):
             captured_clocks.append(clock)
             return self.local_pipe(maxsize)
 
-        monkeypatch.setattr(World, 'mp_pipe', fake_mp_pipe)
+        monkeypatch.setattr(World, 'mp_pipes', fake_mp_pipes)
 
         started_background = []
 
@@ -578,8 +578,8 @@ class TestIntegration:
         """Test a complete pipeline with World, emitters, and readers."""
         with World() as world:
             # Create communication channels
-            emitter1, reader1 = world.mp_pipe()
-            emitter2, reader2 = world.mp_pipe()
+            emitter1, reader1 = world.mp_pipes()
+            emitter2, reader2 = world.mp_pipes()
 
             # Test data flow
             emitter1.emit('message1')

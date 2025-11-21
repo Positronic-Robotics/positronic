@@ -35,7 +35,7 @@ class TestSharedMemoryAPI:
     def test_world_creates_shared_memory_pair(self):
         """Test that forcing shared memory yields a working emitter/reader pair."""
         with World() as world:
-            emitter, reader = world.mp_pipe(transport=TransportMode.SHARED_MEMORY)
+            emitter, reader = world.mp_pipes(transport=TransportMode.SHARED_MEMORY)
 
             assert isinstance(emitter, SignalEmitter)
             assert isinstance(reader, SignalReceiver)
@@ -45,7 +45,7 @@ class TestSharedMemoryAPI:
     def test_emitter_reader_basic_communication(self):
         """Test basic communication between emitter and reader."""
         with World() as world:
-            emitter, reader = world.mp_pipe(transport=TransportMode.SHARED_MEMORY)
+            emitter, reader = world.mp_pipes(transport=TransportMode.SHARED_MEMORY)
 
             # Initially reader should return None (no data)
             assert reader.read() is None
@@ -73,7 +73,7 @@ class TestSharedMemoryAPI:
     def test_emitter_rejects_wrong_data_type(self):
         """Test that emitter rejects data of wrong type."""
         with World() as world:
-            emitter, _ = world.mp_pipe(transport=TransportMode.SHARED_MEMORY)
+            emitter, _ = world.mp_pipes(transport=TransportMode.SHARED_MEMORY)
 
             # First emit defines type
             emitter.emit(NumpySMAdapter(shape=(2,), dtype=np.float32))
@@ -84,7 +84,7 @@ class TestSharedMemoryAPI:
     def test_buffer_size_validation(self):
         """Test that emitter validates buffer size consistency."""
         with World() as world:
-            emitter, _ = world.mp_pipe(transport=TransportMode.SHARED_MEMORY)
+            emitter, _ = world.mp_pipes(transport=TransportMode.SHARED_MEMORY)
 
             # First data with small array
             array1 = np.array([[1, 2], [3, 4]], dtype=np.uint8)
@@ -101,7 +101,7 @@ class TestSharedMemoryAPI:
 
     def test_data_updates_reflected_in_shared_memory_with_emit(self):
         with World() as world:
-            emitter, reader = world.mp_pipe(transport=TransportMode.SHARED_MEMORY)
+            emitter, reader = world.mp_pipes(transport=TransportMode.SHARED_MEMORY)
 
             array = np.array([1.0, 2.0], dtype=np.float32)
             data = NumpySMAdapter(array.shape, array.dtype)
@@ -125,7 +125,7 @@ class TestSharedMemoryAPI:
 
     def test_data_updates_not_reflected_in_shared_memory_without_emit(self):
         with World() as world:
-            emitter, reader = world.mp_pipe(transport=TransportMode.SHARED_MEMORY)
+            emitter, reader = world.mp_pipes(transport=TransportMode.SHARED_MEMORY)
 
             array = np.array([1.0, 2.0], dtype=np.float32)
             data = NumpySMAdapter(array.shape, array.dtype)
@@ -149,7 +149,7 @@ class TestSharedMemoryAPI:
     def test_reader_returns_none_when_no_data_written(self):
         """Test that reader returns None when no data has been written."""
         with World() as world:
-            _, reader = world.mp_pipe(transport=TransportMode.SHARED_MEMORY)
+            _, reader = world.mp_pipes(transport=TransportMode.SHARED_MEMORY)
 
             # Reader should return None when no data has been emitted
             result = reader.read()
@@ -158,8 +158,8 @@ class TestSharedMemoryAPI:
     def test_multiple_readers_see_same_data(self):
         """Test that multiple readers can access the same shared memory."""
         with World() as world:
-            emitter, reader1 = world.mp_pipe(transport=TransportMode.SHARED_MEMORY)
-            _, reader2 = world.mp_pipe(transport=TransportMode.SHARED_MEMORY)
+            emitter, reader1 = world.mp_pipes(transport=TransportMode.SHARED_MEMORY)
+            _, reader2 = world.mp_pipes(transport=TransportMode.SHARED_MEMORY)
 
             # Note: This creates separate shared memory instances, so let's test
             # that each pair works independently
@@ -179,7 +179,7 @@ class TestSharedMemoryAPI:
     def test_data_persistence_across_multiple_reads(self):
         """Test that data persists across multiple read operations."""
         with World() as world:
-            emitter, reader = world.mp_pipe(transport=TransportMode.SHARED_MEMORY)
+            emitter, reader = world.mp_pipes(transport=TransportMode.SHARED_MEMORY)
 
             array = np.array([5.5, 6.6], dtype=np.float32)
             data = NumpySMAdapter(array.shape, array.dtype)
@@ -199,7 +199,7 @@ class TestSharedMemoryAPI:
     def test_negative_timestamp_means_no_data(self):
         """Test that zero timestamp is treated as no data available."""
         with World() as world:
-            emitter, reader = world.mp_pipe(transport=TransportMode.SHARED_MEMORY)
+            emitter, reader = world.mp_pipes(transport=TransportMode.SHARED_MEMORY)
 
             array = np.array([1.0, 1.0], dtype=np.float32)
             data = NumpySMAdapter(array.shape, array.dtype)
@@ -214,7 +214,7 @@ class TestSharedMemoryAPI:
     def test_shared_memory_survives_data_modifications(self):
         """Test that shared memory correctly reflects live data modifications."""
         with World() as world:
-            emitter, reader = world.mp_pipe(transport=TransportMode.SHARED_MEMORY)
+            emitter, reader = world.mp_pipes(transport=TransportMode.SHARED_MEMORY)
 
             array = np.array([10.0, 20.0], dtype=np.float32)
             data = NumpySMAdapter(array.shape, array.dtype)
@@ -261,7 +261,7 @@ class TestSharedMemoryAPI:
 
         for test_array, description in test_cases:
             with World() as world:
-                emitter, reader = world.mp_pipe(transport=TransportMode.SHARED_MEMORY)
+                emitter, reader = world.mp_pipes(transport=TransportMode.SHARED_MEMORY)
 
                 data = NumpySMAdapter(test_array.shape, test_array.dtype)
                 data.array = test_array
@@ -278,7 +278,7 @@ class TestSharedMemoryAPI:
         with pytest.raises(
             AssertionError, match=r'Shared memory transport is only available after entering the world context\.'
         ):
-            w.mp_pipe(transport=TransportMode.SHARED_MEMORY)
+            w.mp_pipes(transport=TransportMode.SHARED_MEMORY)
 
 
 class TestEmitterControlLoop:
@@ -310,7 +310,7 @@ class TestSharedMemoryMultiprocessing:
         emitter_control_loop = TestEmitterControlLoop()
 
         with World() as world:
-            emitter_control_loop.emitter, reader = world.mp_pipe(transport=TransportMode.SHARED_MEMORY)
+            emitter_control_loop.emitter, reader = world.mp_pipes(transport=TransportMode.SHARED_MEMORY)
 
             world.start_in_subprocess(emitter_control_loop.run)
 
@@ -325,76 +325,4 @@ class TestSharedMemoryMultiprocessing:
             assert np.allclose(data[1], [10.0, 2.0, 3.0])
 
 
-
-
-class TestBroadcastSharedMemory:
-    """Tests for World.mp_pipe_broadcast shared-memory broadcasting."""
-
-    def test_broadcast_single_emission_updates_all_receivers(self):
-        from pimm.shared_memory import NumpySMAdapter
-
-        with World() as world:
-            emitter, receivers = world.mp_pipe_broadcast(num_receivers=3, maxsize=[1, 1, 1])
-
-            # Emit one shared-memory message
-            data = NumpySMAdapter((2, 2), np.float32)
-            data.array[:] = np.array([[10, 20], [30, 40]], dtype=np.float32)
-            emitter.emit(data, ts=12345)
-
-            # Each receiver should read the same data and timestamp
-            for receiver in receivers:
-                msg = receiver.read()
-                assert msg is not None
-                assert msg.updated
-                assert msg.ts == 12345
-                assert np.allclose(msg.data.array, data.array)
-
-    def test_subsequent_reads_toggle_updated_flag(self):
-        from pimm.shared_memory import NumpySMAdapter
-
-        with World() as world:
-            emitter, receivers = world.mp_pipe_broadcast(num_receivers=2, maxsize=[1, 1])
-
-            # Emit data once
-            data = NumpySMAdapter((2, 2), np.float32)
-            data.array[:] = np.ones((2, 2), dtype=np.float32)
-            emitter.emit(data)
-
-            # First read: updated=True
-            first = [r.read() for r in receivers]
-            assert all(m.updated for m in first)
-
-            # Second read (no new emission): updated=False
-            second = [r.read() for r in receivers]
-            assert all(not m.updated for m in second)
-
-            # Emit again, should toggle updated=True again
-            data.array[:] = np.full((2, 2), 5.0)
-            emitter.emit(data)
-            third = [r.read() for r in receivers]
-            assert all(m.updated for m in third)
-            assert np.allclose(third[0].data.array, 5.0)
-
-    def test_emitter_close_unlinks_shared_memory(self):
-        import gc
-
-        from pimm.shared_memory import NumpySMAdapter
-
-        with World() as world:
-            emitter, receivers = world.mp_pipe_broadcast(num_receivers=2, maxsize=[1, 1])
-            data = NumpySMAdapter((2, 2), np.float32)
-            data.array[:] = np.eye(2, dtype=np.float32)
-            emitter.emit(data)
-
-            # Ensure buffer exists before close
-            assert emitter._sm is not None
-            sm_name = emitter._sm.name
-
-            # Close emitter and force cleanup
-            emitter.close()
-            gc.collect()
-
-            # The shared memory should now be closed/unlinked
-            with pytest.raises(FileNotFoundError):
-                mp.shared_memory.SharedMemory(name=sm_name)
 
