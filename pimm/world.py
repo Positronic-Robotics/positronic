@@ -97,7 +97,6 @@ class MultiprocessEmitter(SignalEmitter[T]):
         self._ts_value = ts_value
         self._up_values = up_values if isinstance(sm_queues, list) else [up_values]
         self._sm_queues = sm_queues if isinstance(sm_queues, list) else [sm_queues]
-
         self._sm: multiprocessing.shared_memory.SharedMemory | None = None
         self._expected_buf_size: int | None = None
         self._closed = False
