@@ -79,8 +79,8 @@ class MultiprocessEmitter(SignalEmitter[T]):
         mode_value: mp.Value,
         lock: mp.Lock,
         ts_value: mp.Value,
-        up_values: list[mp.Value],      # a bool flag that new data has been written - for each receiver
-        sm_queue: Queue | list[Queue],  # special queue to send SM block name to many receivers
+        up_values: ValueProxy[bool] | list[ValueProxy[bool]],   # a bool flag that new data has been written - for each receiver
+        sm_queues: Queue | list[Queue],  # special queue to send SM block name to many receivers
         *,
         forced_mode: TransportMode | None = None,
     ):
@@ -94,8 +94,8 @@ class MultiprocessEmitter(SignalEmitter[T]):
         self._data_type: type[SMCompliant] | None = None
         self._lock = lock
         self._ts_value = ts_value
-        self._up_values = up_values
-        self._sm_queues = sm_queue if isinstance(sm_queue, list) else [sm_queue]
+        self._up_values = up_values if isinstance(sm_queues, list) else [up_values]
+        self._sm_queues = sm_queues if isinstance(sm_queues, list) else [sm_queues]
 
         self._sm: multiprocessing.shared_memory.SharedMemory | None = None
         self._expected_buf_size: int | None = None
@@ -683,9 +683,14 @@ class World:
         q = deque(maxlen=maxsize)
         return LocalQueueEmitter(q, self._clock), LocalQueueReceiver(q)
 
-    def mp_pipe(
-        self, maxsize: int = 1, clock: Clock | None = None, *, transport: TransportMode = TransportMode.UNDECIDED
-    ) -> tuple[SignalEmitter[T], SignalReceiver[T]]:
+    def mp_pipes(
+            self,
+            maxsize: int = 1,
+            clock: Clock | None = None,
+            *,
+            num_receivers: int = 1,
+            transport: TransportMode = TransportMode.UNDECIDED
+    ) -> tuple[SignalEmitter[T], SignalReceiver[T] | list[SignalReceiver[T]]]:
         """Create an inter-process channel with optional transport override.
 
         When possible, use `connect` or `pair` instead, as this method is somewhat internal.
@@ -699,15 +704,20 @@ class World:
             maxsize: Maximum queue size (0 for unlimited). Default is 1.
             clock: Optional clock override for timestamp generation when the
                 emitter lives in another process.
+            num_receivers: number of receivers to emit. i.e broadcast if > 1
             transport: Transport override. ``TransportMode.UNDECIDED`` enables
                 adaptive selection; ``TransportMode.QUEUE`` or
                 ``TransportMode.SHARED_MEMORY`` pins the transport.
 
         Returns:
-            Tuple of (emitter, reader) suitable for inter-process communication.
+            Tuple of (emitter, reader-s) suitable for inter-process communication.
         """
         if transport is TransportMode.SHARED_MEMORY and not self.entered:
             raise AssertionError('Shared memory transport is only available after entering the world context.')
+
+        is_broadcast = num_receivers > 1
+        if is_broadcast and transport not in (TransportMode.SHARED_MEMORY, TransportMode.UNDECIDED):
+            raise ValueError('Broadcast mode requires SHARED_MEMORY or UNDECIDED transport mode.')
 
         forced_mode: TransportMode | None
         forced_mode = transport if transport in (TransportMode.QUEUE, TransportMode.SHARED_MEMORY) else None
@@ -715,17 +725,26 @@ class World:
         message_queue = self._manager.Queue(maxsize=maxsize)
         lock = self._manager.Lock()
         ts_value = self._manager.Value('Q', -1)
-        up_value = self._manager.Value('b', False)
-        sm_queue = self._manager.Queue()
+        up_values = [self._manager.Value('b', False) for _ in range(num_receivers)]
+        sm_queues = [self._manager.Queue() for _ in range(num_receivers)]
         initial_mode = forced_mode or TransportMode.UNDECIDED
         mode_value = self._manager.Value('i', int(initial_mode))
 
         emitter_clock = clock or self._clock
         emitter = MultiprocessEmitter(
-            emitter_clock, message_queue, mode_value, lock, ts_value, up_value, sm_queue, forced_mode=forced_mode
+            emitter_clock, message_queue, mode_value, lock, ts_value, up_values, sm_queues, forced_mode=forced_mode
         )
-        receiver = MultiprocessReceiver(
-            message_queue, mode_value, lock, ts_value, up_values, sm_queue, forced_mode=forced_mode
-        )
-        self._cleanup_emitters_readers.append((emitter, receiver))
-        return emitter, receiver
+
+        receivers = []
+        for up_value, sm_queue in zip(up_values, sm_queues):
+            receiver = MultiprocessReceiver(
+                message_queue, mode_value, lock, ts_value, up_value, sm_queue, forced_mode=forced_mode
+            )
+            receivers.append(receiver)
+
+        for r in receivers:
+            self._cleanup_emitters_readers.append((emitter, r))
+
+        return emitter, receivers if num_receivers > 1 else receivers[0]
+
+
