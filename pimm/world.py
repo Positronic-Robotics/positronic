@@ -11,6 +11,7 @@ from collections import deque
 from collections.abc import Callable, Iterator
 from enum import IntEnum
 from multiprocessing import resource_tracker
+from multiprocessing.managers import ValueProxy
 from multiprocessing.queues import Queue
 from multiprocessing.synchronize import Event as EventClass
 from queue import Empty, Full
@@ -118,6 +119,7 @@ class MultiprocessEmitter(SignalEmitter[T]):
         self._mode_value.value = int(mode)
 
     def _ensure_mode(self, data: T) -> TransportMode:
+        """Choose the data transport based on the first piece of data emitted"""
         if self._mode is not TransportMode.UNDECIDED:
             return self._mode
 
@@ -640,17 +642,33 @@ class World:
             emitter._bind(emitter_wrapper(em))
             receiver._bind(re)
 
+        # Interprocess connection handling
+        grouped_mp_connections = defaultdict(list)
         for emitter, emitter_wrapper, receiver, maxsize, clock in mp_connections:
+            grouped_mp_connections[emitter].append((emitter_wrapper, receiver, maxsize, clock))
+
+        for emitter_logical, receivers_logical_list in grouped_mp_connections.items():
             # When emitter lives in a different process, we use system clock to timestamp messages, otherwise we will
             # have to serialise our local clock to the other process, which is not what we want.
-            kwargs = {'maxsize': maxsize} if maxsize is not None else {}
-            em, re = self.mp_pipe(clock=clock, **kwargs)
+            num_receivers = len(receivers_logical_list)
+            emitter_wrapper, _, maxsize, clock = receivers_logical_list[0]    # these parameters are the same for all receivers
 
-            emitter._bind(emitter_wrapper(em))
-            receiver._bind(re)
+            kwargs = {'maxsize': maxsize, 'num_receivers': num_receivers} if maxsize is not None else {
+                'num_receivers': num_receivers}
+            emitter_physical, receivers_physical = self.mp_pipes(clock=clock, **kwargs)
+
+            emitter_logical._bind(emitter_wrapper(emitter_physical))
+
+            if isinstance(receivers_physical, list):
+                for (_, logical_receiver, _, _), physical_receiver in zip(receivers_logical_list, receivers_physical):
+                    logical_receiver._bind(physical_receiver)
+            else:
+                (_, logical_receiver, _, _) = receivers_logical_list[0]
+                logical_receiver._bind(receivers_physical)
 
         self.start_in_subprocess(*[cs.run for cs in background])
         return self.interleave(*[cs.run for cs in main_process])
+
 
     def start_in_subprocess(self, *background_loops: ControlLoop):
         """Starts background control loops. Can be called multiple times for different control loops.
