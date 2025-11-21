@@ -234,6 +234,7 @@ class Gr00tPolicy(Policy):
         self._client = ExternalRobotInferenceClient(host, port, timeout_ms)
         self._cache = {}
         self._observation = {}
+        self.server_metadata = None
 
     def select_action(self, obs: dict[str, Any]) -> dict[str, Any]:
         if not self._cache or any(not v for v in self._cache.values()):
@@ -256,3 +257,11 @@ class Gr00tPolicy(Policy):
 
         result = {k: v.popleft() for k, v in self._cache.items()}
         return result | self._observation
+
+    @property
+    def meta(self) -> dict[str, Any]:
+        if self.server_metadata is None:
+            self.server_metadata = self._client.call_endpoint('get_metadata', requires_input=False)
+        result = {'type': 'groot'}
+        result['server'] = self.server_metadata.copy()
+        return result
