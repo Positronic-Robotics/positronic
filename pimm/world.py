@@ -12,6 +12,7 @@ from collections import defaultdict, deque
 from collections.abc import Callable, Iterator
 from enum import IntEnum
 from multiprocessing import resource_tracker
+from multiprocessing.managers import ValueProxy
 from multiprocessing.queues import Queue
 from multiprocessing.synchronize import Event as EventClass
 from queue import Empty, Full
@@ -81,8 +82,8 @@ class MultiprocessEmitter(SignalEmitter[T]):
         mode_value: mp.Value,
         lock: mp.Lock,
         ts_value: mp.Value,
-        up_values: list[mp.Value],      # a bool flag that new data has been written - for each receiver
-        sm_queue: Queue | list[Queue],  # special queue to send SM block name to many receivers
+        up_values: ValueProxy[bool] | list[ValueProxy[bool]],   # a bool flag that new data has been written - for each receiver
+        sm_queues: Queue | list[Queue],  # special queue to send SM block name to many receivers
         *,
         forced_mode: TransportMode | None = None,
     ):
@@ -96,12 +97,12 @@ class MultiprocessEmitter(SignalEmitter[T]):
         self._data_type: type[SMCompliant] | None = None
         self._lock = lock
         self._ts_value = ts_value
-        self._up_values = up_values
-        self._sm_queues = sm_queue if isinstance(sm_queue, list) else [sm_queue]
+        self._up_values = up_values if isinstance(sm_queues, list) else [up_values]
+        self._sm_queues = sm_queues if isinstance(sm_queues, list) else [sm_queues]
 
         self._sm: multiprocessing.shared_memory.SharedMemory | None = None
         self._expected_buf_size: int | None = None
-        self._receiver_refs: list[weakref.ReferenceType[MultiprocessReceiver[Any]]] = []
+
         self._closed = False
         if forced_mode is not None:
             self._mode_value.value = int(forced_mode)
@@ -196,14 +197,6 @@ class MultiprocessEmitter(SignalEmitter[T]):
         if self._closed:
             return
         self._closed = True
-
-        while self._receiver_refs:
-            receiver_ref = self._receiver_refs.pop()
-            if receiver_ref is None:
-                continue
-            receiver = receiver_ref() if callable(receiver_ref) else receiver_ref
-            if receiver is not None:
-                receiver.close()
 
         if self._sm is not None:
             try:
@@ -380,12 +373,6 @@ class MultiprocessReceiver(SignalReceiver[T]):
         if self._sm is not None:
             self._sm.close()
             self._sm = None
-
-        # clear its own weak_ref to prevent shared memory leak
-        if self._emitter_ref is not None:
-            emitter = self._emitter_ref()
-            if (emitter is not None) and (self._up_index < len(emitter._receiver_refs)):
-                emitter._receiver_refs[self._up_index] = None
 
     def __del__(self):
         # Ensure shared-memory buffers are released on GC.
@@ -656,9 +643,9 @@ class World:
         raise ValueError(f'Unsupported connector type: {type(connector)}.')
 
     def start(
-        self,
-        main_process: ControlSystem | list[ControlSystem | None],
-        background: ControlSystem | list[ControlSystem | None] | None = None,
+            self,
+            main_process: ControlSystem | list[ControlSystem | None],
+            background: ControlSystem | list[ControlSystem | None] | None = None,
     ) -> Iterator[Sleep]:
         """Bind declared connections and launch control systems.
 
@@ -668,15 +655,7 @@ class World:
         world wires control system emitters and receivers together using local
         queues or multiprocessing queues. Returns an iterator produced by
         ``interleave`` so callers can drive the cooperative scheduler.
-
-        Handles both regular connections (one-to-one) and broadcast connections (one-to-many) by
-        detecting broadcast case on-the-fly (one emitter has multiple receivers).
-        All connections first are grouping into the ones which cross border between processes
-        and the ones which do not.
-        For the first group we create broadcast (mp_pipe_broadcast), and for the second group
-        we create local connections.
         """
-
         main_process = main_process if isinstance(main_process, list) else [main_process]
         main_process = [m for m in main_process if m is not None]
         background = background or []
@@ -687,92 +666,54 @@ class World:
         all_cs = local_cs | set(background)
 
         system_clock = SystemClock()
-
-        # Group connections by emitter to detect broadcasts
-        emitter_to_connections = defaultdict(list)
+        local_connections, mp_connections = [], []
         for emitter, receiver, emitter_wrapper, receiver_wrapper in self._connections:
-            if emitter.owner not in all_cs:
-                raise ValueError(f"Emitter {emitter.owner} is not in any control system")
-            if receiver.owner not in all_cs:
-                raise ValueError(f"Receiver {receiver.owner} is not in any control system")
-            emitter_to_connections[emitter].append((receiver, emitter_wrapper, receiver_wrapper))
-
-        # Process each emitter and its receivers
-        for emitter, receiver_list in emitter_to_connections.items():
-            emitter_is_local = emitter.owner in local_cs
-
-            if len(receiver_list) == 1:
-                # Single receiver: use simple one-to-one connection
-                receiver, emitter_wrapper, receiver_wrapper = receiver_list[0]
-                receiver_is_local = receiver.owner in local_cs
-
-                if emitter_is_local and receiver_is_local:
-                    kwargs = {'maxsize': receiver.maxsize} if receiver.maxsize is not None else {}
-                    em, re = self.local_pipe(**kwargs)
-                    emitter._bind(emitter_wrapper(em))
-                    receiver_wrapper(receiver)._bind(re)
-                else:
-                    # Cross-process: use mp_pipe
-                    clock = None if emitter_is_local else system_clock
-                    kwargs = {'maxsize': receiver.maxsize} if receiver.maxsize is not None else {}
-                    em, re = self.mp_pipe(clock=clock, **kwargs)
-                    emitter._bind(emitter_wrapper(em))
-                    receiver_wrapper(receiver)._bind(re)
-
+            if emitter.owner in local_cs and receiver.owner in local_cs:
+                local_connections.append((emitter, emitter_wrapper, receiver_wrapper(receiver), receiver.maxsize, None))
+            elif emitter.owner not in all_cs:
+                raise ValueError(f'Emitter {emitter.owner} is not in any control system')
+            elif receiver.owner not in all_cs:
+                raise ValueError(f'Receiver {receiver.owner} is not in any control system')
             else:
-                # Multiple receivers: broadcast scenario
-                local_receivers = []
-                mp_receivers = []
+                clock = None if emitter.owner in local_cs else system_clock
+                mp_connections.append((emitter, emitter_wrapper, receiver_wrapper(receiver), receiver.maxsize, clock))
 
-                # Group receivers into local and cross-process
-                for receiver, emitter_wrapper, receiver_wrapper in receiver_list:
-                    receiver_is_local = receiver.owner in local_cs
-                    if emitter_is_local and receiver_is_local:
-                        local_receivers.append((receiver, emitter_wrapper, receiver_wrapper))
-                    else:
-                        mp_receivers.append((receiver, emitter_wrapper, receiver_wrapper))
+        for emitter, emitter_wrapper, receiver, maxsize, _clock in local_connections:
+            kwargs = {'maxsize': maxsize} if maxsize is not None else {}
+            em, re = self.local_pipe(**kwargs)
+            emitter._bind(emitter_wrapper(em))
+            receiver._bind(re)
 
-                # Handle local broadcast connections (same process)
-                if local_receivers:
-                    for receiver, emitter_wrapper, receiver_wrapper in local_receivers:
-                        kwargs = {'maxsize': receiver.maxsize} if receiver.maxsize is not None else {}
-                        em, re = self.local_pipe(**kwargs)
-                        emitter._bind(emitter_wrapper(em))
-                        receiver_wrapper(receiver)._bind(re)
+        # Interprocess connection handling
+        grouped_mp_connections = defaultdict(list)
+        for emitter, emitter_wrapper, receiver, maxsize, clock in mp_connections:
+            grouped_mp_connections[emitter].append((emitter_wrapper, receiver, maxsize, clock))
 
-                # Handle cross-process broadcast connections
-                if mp_receivers:
-                    clock = None if emitter_is_local else system_clock
-                    # TODO: maxsize should be same for all pipes ina broadcast?
-                    maxsizes = [r.maxsize if r.maxsize is not None else 1 for r, _, _ in mp_receivers]
+        for emitter_logical, receivers_logical_list in grouped_mp_connections.items():
+            # When emitter lives in a different process, we use system clock to timestamp messages, otherwise we will
+            # have to serialise our local clock to the other process, which is not what we want.
+            num_receivers = len(receivers_logical_list)
+            _, _, maxsize, clock = receivers_logical_list[0]    # these parameters are the same for all receivers
 
-                    try:
-                        # Attempt to create shared memory broadcast
-                        em, re_list = self.mp_pipe_broadcast(
-                            num_receivers=len(mp_receivers),
-                            maxsize=maxsizes,
-                            clock=clock
-                        )
+            kwargs = {'maxsize': maxsize, 'num_receivers': num_receivers} if maxsize is not None else {
+                'num_receivers': num_receivers}
+            emitter_physical, receivers_physical = self.mp_pipes(clock=clock, **kwargs)
 
-                        # Bind emitter only once for all mp receivers
-                        emitter._bind(mp_receivers[0][1](em))  # Use first emitter_wrapper
 
-                        # Bind each receiver
-                        for (receiver, _, receiver_wrapper), re in zip(mp_receivers, re_list, strict=True):
-                            receiver_wrapper(receiver)._bind(re)
+            emitter_wrapper, _, _, _ = receivers_logical_list[0]
+            emitter_logical._bind(emitter_wrapper(emitter_physical))
 
-                    except (AssertionError, Exception) as e:
-                        # Fallback to multiple individual mp_pipes if broadcast not available
-                        # or if data doesn't support shared memory
-                        print(f"Warning: Could not create SM broadcast ({e}), falling back to multiple pipes")
-                        for receiver, emitter_wrapper, receiver_wrapper in mp_receivers:
-                            kwargs = {'maxsize': receiver.maxsize} if receiver.maxsize is not None else {}
-                            em, re = self.mp_pipe(clock=clock, **kwargs)
-                            emitter._bind(emitter_wrapper(em))
-                            receiver_wrapper(receiver)._bind(re)
+
+            if isinstance(receivers_physical, list):
+                for (_, logical_receiver, _, _), physical_receiver in zip(receivers_logical_list, receivers_physical):
+                    logical_receiver._bind(physical_receiver)
+            else:
+                (_, logical_receiver, _, _) = receivers_logical_list[0]
+                logical_receiver._bind(receivers_physical)
 
         self.start_in_subprocess(*[cs.run for cs in background])
         return self.interleave(*[cs.run for cs in main_process])
+
 
     def start_in_subprocess(self, *background_loops: ControlLoop):
         """Starts background control loops. Can be called multiple times for different control loops.
@@ -806,9 +747,14 @@ class World:
         q = deque(maxlen=maxsize)
         return LocalQueueEmitter(q, self._clock), LocalQueueReceiver(q)
 
-    def mp_pipe(
-        self, maxsize: int = 1, clock: Clock | None = None, *, transport: TransportMode = TransportMode.UNDECIDED
-    ) -> tuple[SignalEmitter[T], SignalReceiver[T]]:
+    def mp_pipes(
+            self,
+            maxsize: int = 1,
+            clock: Clock | None = None,
+            *,
+            num_receivers: int = 1,
+            transport: TransportMode = TransportMode.UNDECIDED
+    ) -> tuple[SignalEmitter[T], SignalReceiver[T] | list[SignalReceiver[T]]]:
         """Create an inter-process channel with optional transport override.
 
         When possible, use `connect` or `pair` instead, as this method is somewhat internal.
@@ -822,108 +768,47 @@ class World:
             maxsize: Maximum queue size (0 for unlimited). Default is 1.
             clock: Optional clock override for timestamp generation when the
                 emitter lives in another process.
+            num_receivers: number of receivers to emit. i.e broadcast if > 1
             transport: Transport override. ``TransportMode.UNDECIDED`` enables
                 adaptive selection; ``TransportMode.QUEUE`` or
                 ``TransportMode.SHARED_MEMORY`` pins the transport.
 
         Returns:
-            Tuple of (emitter, reader) suitable for inter-process communication.
+            Tuple of (emitter, reader-s) suitable for inter-process communication.
         """
         if transport is TransportMode.SHARED_MEMORY and not self.entered:
             raise AssertionError('Shared memory transport is only available after entering the world context.')
 
+        is_broadcast = num_receivers > 1
+        if is_broadcast and transport not in (TransportMode.SHARED_MEMORY, TransportMode.UNDECIDED):
+            raise ValueError('Broadcast mode requires SHARED_MEMORY or UNDECIDED transport mode.')
+
         forced_mode: TransportMode | None
         forced_mode = transport if transport in (TransportMode.QUEUE, TransportMode.SHARED_MEMORY) else None
 
-        # create primitives which will be shared between emitter and receiver
         message_queue = self._manager.Queue(maxsize=maxsize)
         lock = self._manager.Lock()
-        ts_value = self._manager.Value('Q', -1)             # the most recent emission
-        up_value = self._manager.Value('b', False)
-
-        sm_queue = self._manager.Queue()        # metadata about the shared memory block
-        initial_mode = forced_mode or TransportMode.UNDECIDED
-        mode_value = self._manager.Value('i', int(initial_mode))    # transport mode
-
-        emitter_clock = clock or self._clock
-        # emitter can have multiple receivers, that is why  [up_value]
-        emitter = MultiprocessEmitter(
-            emitter_clock, message_queue, mode_value, lock, ts_value, [up_value], sm_queue, forced_mode=forced_mode
-        )
-        receiver = MultiprocessReceiver(
-            message_queue, mode_value, lock, ts_value, up_value, sm_queue, forced_mode=forced_mode
-        )
-        emitter._attach_receiver(receiver)
-        receiver._attach_emitter(emitter)
-        self._cleanup_emitters_readers.append((emitter, receiver))
-        return emitter, receiver
-
-
-    def mp_pipe_broadcast(
-            self,
-            num_receivers: int,
-            maxsize: list[int],
-            clock: Clock | None = None
-    ) -> tuple[SignalEmitter[T], list[SignalReceiver[T]]]:
-        """Create an inter-process broadcast channel: one emitter, multiple receivers.
-
-        All receivers share the same shared memory block but each has:
-        - Its own queue to receive shared memory metadata
-        - Its own 'updated' flag to track if they've read the latest data
-
-        Args:
-            num_receivers: Number of receivers to create
-            maxsize: Maximum queue size (unused for shared memory mode)
-            clock: Optional clock override for timestamp generation
-
-        Returns:
-            Tuple of (emitter, list of receivers) for broadcast communication
-        """
-        if not self.entered:
-            raise AssertionError('Broadcast with shared memory is only available after entering the world context.')
-
-        # Create shared primitives for broadcast
-        lock = self._manager.Lock()
-        ts_value = self._manager.Value('Q', -1)         # Shared timestamp
-
-        # Multiple possible receivers: many "consume data" flag and many queues
+        ts_value = self._manager.Value('Q', -1)
         up_values = [self._manager.Value('b', False) for _ in range(num_receivers)]
-        sm_queues = [self._manager.Queue() for _ in range(num_receivers)]  # One queue per receiver
-
-        mode_value = self._manager.Value('i', int(TransportMode.SHARED_MEMORY))
+        sm_queues = [self._manager.Queue() for _ in range(num_receivers)]
+        initial_mode = forced_mode or TransportMode.UNDECIDED
+        mode_value = self._manager.Value('i', int(initial_mode))
 
         emitter_clock = clock or self._clock
-
-        # Create ONE MultiprocessEmitter with list of queues
         emitter = MultiprocessEmitter(
-            emitter_clock,
-            None,  # No message queue for shared memory mode
-            mode_value,
-            lock,
-            ts_value,
-            up_values,
-            sm_queues,
-            forced_mode=TransportMode.SHARED_MEMORY
+            emitter_clock, message_queue, mode_value, lock, ts_value, up_values, sm_queues, forced_mode=forced_mode
         )
 
-        # Create MULTIPLE MultiprocessReceivers
         receivers = []
-        for i in range(num_receivers):
+        for up_value, sm_queue in zip(up_values, sm_queues):
             receiver = MultiprocessReceiver(
-                None,  # No message queue for shared memory mode
-                mode_value,
-                lock,
-                ts_value,
-                up_values[i],
-                sm_queues[i],  # Each receiver gets its own queue
-                forced_mode=TransportMode.SHARED_MEMORY
+                message_queue, mode_value, lock, ts_value, up_value, sm_queue, forced_mode=forced_mode
             )
-
-            # Attach receiver to emitter (sets _up_index)
-            emitter._attach_receiver(receiver)
-            receiver._attach_emitter(emitter)
             receivers.append(receiver)
 
-            self._cleanup_emitters_readers.append((emitter, receiver))
+        for r in receivers:
+            self._cleanup_emitters_readers.append((emitter, r))
 
-        return emitter, receivers
+        return emitter, receivers if num_receivers > 1 else receivers[0]
+
+
