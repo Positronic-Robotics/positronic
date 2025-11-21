@@ -99,10 +99,8 @@ class MultiprocessEmitter(SignalEmitter[T]):
         self._ts_value = ts_value
         self._up_values = up_values if isinstance(sm_queues, list) else [up_values]
         self._sm_queues = sm_queues if isinstance(sm_queues, list) else [sm_queues]
-
         self._sm: multiprocessing.shared_memory.SharedMemory | None = None
         self._expected_buf_size: int | None = None
-
         self._closed = False
         if forced_mode is not None:
             self._mode_value.value = int(forced_mode)
@@ -120,12 +118,6 @@ class MultiprocessEmitter(SignalEmitter[T]):
     def _set_mode(self, mode: TransportMode) -> None:
         self._mode = mode
         self._mode_value.value = int(mode)
-
-    def _attach_receiver(self, receiver: 'MultiprocessReceiver[Any]') -> int:
-        self._receiver_refs.append(weakref.ref(receiver))
-        # we need to set idx even if we are not broadcasting
-        idx = len(self._receiver_refs) - 1
-        receiver._up_index = idx
 
     def _ensure_mode(self, data: T) -> TransportMode:
         """Choose the data transport based on the first piece of data emitted"""
@@ -185,16 +177,6 @@ class MultiprocessEmitter(SignalEmitter[T]):
         ts = ts if ts >= 0 else self._clock.now_ns()
         mode = self._ensure_mode(data)
 
-        # Debug: first few emits
-        if not hasattr(self, '_emit_count'):
-            self._emit_count = 0
-        self._emit_count += 1
-
-        if self._emit_count <= 3 or self._emit_count % 30 == 0:
-            print(
-                f"DEBUG MultiprocessEmitter: emit #{self._emit_count}, mode={mode}, num_receivers={len(self._up_values)}",
-                flush=True)
-
         if mode is TransportMode.SHARED_MEMORY:
             if not isinstance(data, SMCompliant):
                 raise TypeError('Shared memory transport selected; data must implement SMCompliant')
@@ -217,17 +199,6 @@ class MultiprocessEmitter(SignalEmitter[T]):
             else:
                 self._sm.unlink()
             self._sm = None
-
-    def __getstate__(self):
-        # Drop weakrefs so multiprocessing can pickle the emitter state.
-        state = self.__dict__.copy()
-        state['_receiver_refs'] = None
-        return state
-
-    def __setstate__(self, state):
-        # Recreate weakref slot after unpickling in a child process.
-        self.__dict__.update(state)
-        self._receiver_refs = []
 
     def __del__(self):
         # Last-resort cleanup when user code forgets to close the emitter.
@@ -267,11 +238,9 @@ class MultiprocessReceiver(SignalReceiver[T]):
         self._sm: multiprocessing.shared_memory.SharedMemory | None = None
         self._out_value: SMCompliant | None = None
         self._readonly_buffer: memoryview | None = None
-        self._up_index: int | None = None       # read flag index for this receiver: Assigned by emitter
 
         self._last_queue_message: Message[T] | None = None
         self._closed = False
-        self._emitter_ref: weakref.ReferenceType[MultiprocessEmitter[Any]] | None = None
         if forced_mode is not None:
             self._mode_value.value = int(forced_mode)
 
@@ -285,9 +254,6 @@ class MultiprocessReceiver(SignalReceiver[T]):
     @property
     def uses_shared_memory(self) -> bool:
         return self.transport_mode is TransportMode.SHARED_MEMORY
-
-    def _attach_emitter(self, emitter: 'MultiprocessEmitter[Any]') -> None:
-        self._emitter_ref = weakref.ref(emitter)
 
     def _read_queue(self) -> Message[T] | None:
         try:
@@ -356,18 +322,7 @@ class MultiprocessReceiver(SignalReceiver[T]):
 
 
     def read(self) -> Message[T] | None:
-        # DEBUG
-        if not hasattr(self, '_read_count'):
-            self._read_count = 0
-        self._read_count += 1
-
         mode = self.transport_mode
-
-        # DEBUG
-        if self._read_count % 100 == 0:
-            print(
-                f"DEBUG MultiprocessReceiver: read #{self._read_count}, mode={mode}, _out_value={self._out_value is not None}, _up_index={self._up_index}",
-                flush=True)
 
         if mode is TransportMode.SHARED_MEMORY:
             return self._read_shared_memory()
@@ -397,17 +352,6 @@ class MultiprocessReceiver(SignalReceiver[T]):
     def __del__(self):
         # Ensure shared-memory buffers are released on GC.
         self.close()
-
-    def __getstate__(self):
-        # Weakrefs are not picklable; strip them before multiprocessing serialises us.
-        state = self.__dict__.copy()
-        state['_emitter_ref'] = None
-        return state
-
-    def __setstate__(self, state):
-        # Restore weakref slot once de-serialised in the target process.
-        self.__dict__.update(state)
-        self._emitter_ref = None
 
 
 class LocalQueueEmitter(SignalEmitter[T]):
