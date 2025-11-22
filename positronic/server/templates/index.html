@@ -2,8 +2,7 @@
 
 {% block title %}Run explorer{% endblock %}
 
-{% block description %}Run explorer for the Physical AI Leaderboard. Browse individual evaluation runs on real robot hardware.
-{% endblock %}
+{% block description %}Positronic Dataset Viewer.{% endblock %}
 
 {% block scripts %}
 <script>
@@ -15,22 +14,17 @@
 <main class="main">
     <header class="page-header">
         <div class="page-kicker">Run explorer</div>
-        <h1>Evaluation runs</h1>
-        <p>
-            Each row is a single evaluation run on the physical station. Filter by model, task, and
-            equipment, then inspect a specific run in detail.
-        </p>
-    </header>
-
-    <section class="card card--table">
+        <h1>{{repo_id}}</h1>
+        <p id="dataset-stats">Loading dataset information...</p>
         <div class="dataset-info">
-            <p id="dataset-stats">Loading dataset information...</p>
             <div id="loading-status" class="loading-status">
                 <strong>⏳ Dataset is loading...</strong>
                 <br />This may take a few minutes depending on the dataset size.
             </div>
         </div>
+    </header>
 
+    <section class="card card--table">
         <div id="episodes-container" class="table-wrapper table-wrapper--dense">
             <div class="loading">Loading episodes...</div>
             <table class="episodes-table hidden">
