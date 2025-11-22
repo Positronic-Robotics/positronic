@@ -46,7 +46,6 @@
   --scrollbar-thumb-color: #212121;
   --scrollbar-border-color: #111111;
 
-  --sidebar-header-bg: #1d2123;
   --dataset-key-column-width: 150px;
 }
 
@@ -633,18 +632,8 @@ tbody tr.lb-row--baseline:hover {
   width: 1px;
 }
 
-.sidebar-header {
-  padding: 10px;
-  font-size: 16px;
-  font-weight: 500;
-  background-color: var(--sidebar-header-bg);
-}
-
 .sidebar-content {
   padding: 0px;
-  font-size: 12px;
-  font-family: Monaco, Menlo, 'Courier New', monospace;
-  color: #a3a3a3;
   overflow-y: auto;
   overflow-x: hidden;
   position: relative;
@@ -662,24 +651,11 @@ tbody tr.lb-row--baseline:hover {
   border: none;
 }
 
-.sidebar-content table tr:hover {
-  background-color: initial;
-}
-
-.sidebar-content table tr:nth-child(even) {
-  background-color: var(--panel-bg);
-}
-
 .sidebar-content table table {
   display: none;
   width: auto;
   margin-top: 10px;
   border: 1px solid var(--border-subtle);
-}
-
-.sidebar-content td {
-  padding: 13px;
-  vertical-align: top;
 }
 
 .dataset-key-column {

@@ -28,7 +28,7 @@ async function checkDatasetStatus() {
       loadDatasetInfo();
 
       const { episodes, labels } = await loadEpisodes();
-       populateEpisodesTable(episodes, labels);
+      populateEpisodesTable(episodes, labels);
       episodesContainer.removeChild(episodesLoadingStatus);
       episodesTable.classList.remove('hidden');
     } else {
@@ -106,12 +106,12 @@ function populateEpisodesTable(episodes, labels) {
     tableBody.appendChild(row);
   }
 
-  function createTableCell (content, isHeader = false) {
+  function createTableCell(content, isHeader = false) {
     const episodeCell = document.createElement(isHeader ? 'th' : 'td');
     episodeCell.textContent = content;
 
     return episodeCell;
-  };
+  }
 
   function renderValue(value) {
     switch (typeof value) {
@@ -227,7 +227,7 @@ document.addEventListener('DOMContentLoaded', () => {
 });
 
 function initializeSidebar(staticData) {
-  const sidebarContent = document.querySelector('.sidebar-content-wrapper');
+  const sidebarContent = document.querySelector('.sidebar-content-wrapper tbody');
 
   function isNestable(value) {
     return typeof value === 'object' && value !== null;
@@ -257,30 +257,29 @@ function initializeSidebar(staticData) {
     }
   }
 
-  function renderLevel(key, value, isRoot = false) {
-    let html = isRoot
-      ? '<table class="root-table"><colgroup><col class="dataset-key-column"><col></colgroup>'
-      : '<table>';
-    html += '<tbody>';
+  function renderLevel(key, value) {
+    let html = '';
 
     if (isNestable(value)) {
       for (const [key, val] of Object.entries(value)) {
         html += `
           <tr>
             <td>${key}</td>
-              <td>${renderValue(val)} ${isNestable(val) ? renderLevel(key, val) : ''}</td>
+              <td>
+                ${renderValue(val)}
+                ${isNestable(val) ? `<table><tbody>${renderLevel(key, val)}</tbody></table>` : ''}
+              </td>
           </tr>
         `;
       }
     } else {
       html += `<tr><td>${key}</td><td>${renderValue(value)}</td></tr>`;
     }
-    html += '</tbody></table>';
 
     return html;
   }
 
-  sidebarContent.insertAdjacentHTML('beforeend', renderLevel('', staticData, true));
+  sidebarContent.insertAdjacentHTML('beforeend', renderLevel('', staticData));
   document.querySelectorAll('.expand-button').forEach((button) => {
     button.addEventListener('click', () => {
       const table = button.parentElement.querySelector('table');
