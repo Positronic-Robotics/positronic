@@ -1,0 +1,23 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    {% block head %}
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>PhAIL – {% block title %}{% endblock %}</title>
+    <meta
+      name="description"
+      content="{% block description %}{% endblock %}"
+    />
+    <link rel="stylesheet" href="/static/styles.css" />
+    {% endblock %}
+</head>
+<body>
+    <div id="app-shell">
+      {% block content %}{% endblock %}
+    </div>
+
+    <script src="/static/app.js"></script>
+    {% block scripts %}{% endblock %}
+</body>
+</html>

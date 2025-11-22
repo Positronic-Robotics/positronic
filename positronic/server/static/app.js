@@ -1,3 +1,128 @@
+let loadingCheckInterval = null;
+
+async function checkDatasetStatus() {
+  try {
+    const response = await fetch('/api/dataset_status');
+    const status = await response.json();
+
+    const datasetStats = document.getElementById('dataset-stats');
+    const episodesContainer = document.getElementById('episodes-container');
+    const episodesTable = episodesContainer.querySelector('.episodes-table');
+    const datasetLoadingStatus = document.getElementById('loading-status');
+    const episodesLoadingStatus = episodesContainer.querySelector('.loading');
+
+    if (status.loading) {
+      datasetLoadingStatus.classList.add('show');
+      datasetStats.innerHTML = 'Checking dataset status...';
+      episodesContainer.innerHTML = '<div class="loading">Waiting for dataset to load...</div>';
+
+      if (!loadingCheckInterval) {
+        loadingCheckInterval = setInterval(checkDatasetStatus, 2000);
+      }
+    } else if (status.loaded) {
+      if (loadingCheckInterval) {
+        clearInterval(loadingCheckInterval);
+        loadingCheckInterval = null;
+      }
+      datasetLoadingStatus.classList.remove('show');
+      loadDatasetInfo();
+
+      const { episodes, labels } = await loadEpisodes();
+       populateEpisodesTable(episodes, labels);
+      episodesContainer.removeChild(episodesLoadingStatus);
+      episodesTable.classList.remove('hidden');
+    } else {
+      if (loadingCheckInterval) {
+        clearInterval(loadingCheckInterval);
+        loadingCheckInterval = null;
+      }
+      datasetLoadingStatus.classList.remove('show');
+      datasetStats.innerHTML = '<span class="error-message">Failed to load dataset</span>';
+      episodesContainer.innerHTML =
+        '<div class="loading error-message">Dataset loading failed</div>';
+    }
+  } catch (error) {
+    console.error('Error checking dataset status:', error);
+  }
+}
+
+async function loadDatasetInfo() {
+  try {
+    const response = await fetch('/api/dataset_info');
+    if (response.status === 202) {
+      checkDatasetStatus();
+      return;
+    }
+
+    const data = await response.json();
+
+    const statsDiv = document.getElementById('dataset-stats');
+    statsDiv.innerHTML = `<p><strong>${data.num_episodes}</strong> episodes.</p>`;
+  } catch (error) {
+    console.error('Error loading dataset info:', error);
+  }
+}
+
+async function loadEpisodes() {
+  try {
+    const response = await fetch('/api/episodes');
+    if (response.status === 202) {
+      checkDatasetStatus();
+      return;
+    }
+
+    const { episodes, labels } = await response.json();
+
+    return { episodes, labels };
+  } catch (error) {
+    console.error('Error loading episodes:', error);
+    document.getElementById('episodes-container').innerHTML =
+      '<div class="loading">Error loading episodes</div>';
+  }
+}
+
+function populateEpisodesTable(episodes, labels) {
+  const headerRow = document.querySelector('.episodes-table thead tr');
+  const tableBody = document.querySelector('.episodes-table tbody');
+
+  const headerColumns = labels.map((label) => createTableCell(label, true));
+  headerRow.prepend(...headerColumns);
+
+  for (const episode of episodes) {
+    const row = document.createElement('tr');
+
+    for (const [index, value] of episode.entries()) {
+      row.appendChild(createTableCell(index === 0 ? value : renderValue(value)));
+    }
+
+    const viewCell = createTableCell('');
+    const viewLink = document.createElement('a');
+    viewLink.className = 'btn btn-primary btn-small';
+    viewLink.href = `/episode/${episode[0]}`; // Assuming the first element is the episode index or ID
+    viewLink.textContent = 'View';
+    viewCell.appendChild(viewLink);
+    row.appendChild(viewCell);
+
+    tableBody.appendChild(row);
+  }
+
+  function createTableCell (content, isHeader = false) {
+    const episodeCell = document.createElement(isHeader ? 'th' : 'td');
+    episodeCell.textContent = content;
+
+    return episodeCell;
+  };
+
+  function renderValue(value) {
+    switch (typeof value) {
+      case 'number':
+        return value.toFixed(2);
+      default:
+        return String(value ?? 'N/A');
+    }
+  }
+}
+
 document.addEventListener('DOMContentLoaded', () => {
   const sidebarState = loadSidebarState();
   const sidebarToggler = document.querySelector('.sidebar-toggler');
@@ -6,6 +131,9 @@ document.addEventListener('DOMContentLoaded', () => {
   const sidebarContent = document.querySelector('.sidebar-content');
   const keyColumnResizer = document.querySelector('.key-column-resizer');
   const episodeViewer = document.getElementById('viewer-container');
+
+  // TODO: Split logic to run page-specific explicitly
+  if (!sidebar) return;
 
   setSidebarWidth(sidebarState.sidebarWidth);
   setKeyColumnWidth(sidebarState.keyColumnWidth);

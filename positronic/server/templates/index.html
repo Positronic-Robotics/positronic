@@ -1,170 +1,47 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Positronic Dataset Viewer</title>
-    <link rel="stylesheet" href="/static/styles.css">
-</head>
-<body>
-    <div class="container">
-        <h1>Positronic Dataset Viewer</h1>
+{% extends "base.html" %}
+
+{% block title %}Run explorer{% endblock %}
+
+{% block description %}Run explorer for the Physical AI Leaderboard. Browse individual evaluation runs on real robot hardware.
+{% endblock %}
+
+{% block scripts %}
+<script>
+    checkDatasetStatus();
+</script>
+{% endblock %}
+
+{% block content %}
+<main class="main">
+    <header class="page-header">
+        <div class="page-kicker">Run explorer</div>
+        <h1>Evaluation runs</h1>
+        <p>
+            Each row is a single evaluation run on the physical station. Filter by model, task, and
+            equipment, then inspect a specific run in detail.
+        </p>
+    </header>
+
+    <section class="card card--table">
         <div class="dataset-info">
-            <h2>Dataset: <span class="repo-id">{{ repo_id }}</span></h2>
-            <div id="dataset-stats">Loading dataset information...</div>
+            <p id="dataset-stats">Loading dataset information...</p>
             <div id="loading-status" class="loading-status">
                 <strong>⏳ Dataset is loading...</strong>
-                <br>This may take a few minutes depending on the dataset size.
+                <br />This may take a few minutes depending on the dataset size.
             </div>
         </div>
 
-        <h2>Episodes</h2>
-        <div id="episodes-container">
+        <div id="episodes-container" class="table-wrapper table-wrapper--dense">
             <div class="loading">Loading episodes...</div>
+            <table class="episodes-table hidden">
+                <thead>
+                    <tr>
+                        <th scope="col" class="col-actions"></th>
+                    </tr>
+                </thead>
+                <tbody></tbody>
+            </table>
         </div>
-
-        <script>
-            let loadingCheckInterval = null;
-
-            async function checkDatasetStatus() {
-                try {
-                    const response = await fetch('/api/dataset_status');
-                    const status = await response.json();
-
-                    const loadingStatus = document.getElementById('loading-status');
-                    const datasetStats = document.getElementById('dataset-stats');
-                    const episodesContainer = document.getElementById('episodes-container');
-
-                    if (status.loading) {
-                        loadingStatus.classList.add('show');
-                        datasetStats.innerHTML = 'Checking dataset status...';
-                        episodesContainer.innerHTML = '<div class="loading">Waiting for dataset to load...</div>';
-
-                        if (!loadingCheckInterval) {
-                            loadingCheckInterval = setInterval(checkDatasetStatus, 2000);
-                        }
-                    } else if (status.loaded) {
-                        if (loadingCheckInterval) {
-                            clearInterval(loadingCheckInterval);
-                            loadingCheckInterval = null;
-                        }
-                        loadingStatus.classList.remove('show');
-                        loadDatasetInfo();
-
-                        const { episodes, labels } = await loadEpisodes();
-                        const episodesTable = createEpisodesTable(episodes, labels);
-                        episodesContainer.innerHTML = '';
-                        episodesContainer.appendChild(episodesTable);
-                    } else {
-                        if (loadingCheckInterval) {
-                            clearInterval(loadingCheckInterval);
-                            loadingCheckInterval = null;
-                        }
-                        loadingStatus.classList.remove('show');
-                        datasetStats.innerHTML = '<span class="error-message">Failed to load dataset</span>';
-                        episodesContainer.innerHTML = '<div class="loading error-message">Dataset loading failed</div>';
-                    }
-                } catch (error) {
-                    console.error('Error checking dataset status:', error);
-                }
-            }
-
-            async function loadDatasetInfo() {
-                try {
-                    const response = await fetch('/api/dataset_info');
-
-                    if (response.status === 202) {
-                        checkDatasetStatus();
-                        return;
-                    }
-
-                    const data = await response.json();
-
-                    const statsDiv = document.getElementById('dataset-stats');
-                    statsDiv.innerHTML = `
-                        <p><strong>${data.num_episodes}</strong> episodes.</p>
-                    `;
-                } catch (error) {
-                    console.error('Error loading dataset info:', error);
-                }
-            }
-
-            async function loadEpisodes() {
-                try {
-                    const response = await fetch('/api/episodes');
-                    if (response.status === 202) {
-                        checkDatasetStatus();
-                        return;
-                    }
-
-                    const { episodes, labels } = await response.json();
-
-                    return { episodes, labels };
-                } catch (error) {
-                    console.error('Error loading episodes:', error);
-                    document.getElementById('episodes-container').innerHTML =
-                        '<div class="loading">Error loading episodes</div>';
-                }
-            }
-
-            function createEpisodesTable(episodes, labels) {
-                const createTableCell = (content, isHeader = false) => {
-                    const episodeCell = document.createElement(isHeader ? 'th' : 'td');
-                    episodeCell.textContent = content;
-
-                    return episodeCell;
-                };
-
-                const episodesTable = document.createElement('table');
-                episodesTable.classList.add('episodes-table');
-
-                const tableHeader = document.createElement('thead');
-                const tableBody = document.createElement('tbody');
-                const headerRow = document.createElement('tr');
-
-                for (const label of labels) {
-                    headerRow.appendChild(createTableCell(label, true));
-                }
-
-                headerRow.appendChild(createTableCell('', true)); // For the "View" column
-
-                tableHeader.appendChild(headerRow);
-                episodesTable.appendChild(tableHeader);
-                episodesTable.appendChild(tableBody);
-
-                function renderValue(value) {
-                    switch (typeof value) {
-                        case 'number':
-                            return value.toFixed(2);
-                        default:
-                            return String(value ?? 'N/A');
-                    }
-                }
-
-                for (const episode of episodes) {
-                    const row = document.createElement('tr');
-
-                    for (const [index, value] of episode.entries()) {
-                        row.appendChild(
-                            createTableCell(index === 0 ? value : renderValue(value))
-                        );
-                    }
-
-                    const viewCell = createTableCell('');
-                    const viewLink = document.createElement('a');
-                    viewLink.href = `/episode/${episode[0]}`; // Assuming the first element is the episode index or ID
-                    viewLink.textContent = 'View';
-                    viewCell.appendChild(viewLink);
-                    row.appendChild(viewCell);
-
-                    tableBody.appendChild(row);
-                }
-
-                return episodesTable;
-            }
-
-            checkDatasetStatus();
-        </script>
-    </div>
-</body>
-</html>
+    </section>
+</main>
+{% endblock %}
