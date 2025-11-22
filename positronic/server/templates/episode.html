@@ -19,7 +19,7 @@ Episode {{ episode_id }} / {{ num_episodes }} - Positronic Dataset Viewer
     const maxEpisodes = {{ num_episodes }};
 
     const maxEpisodeLength = String(maxEpisodes - 1).length;
-    episodeInput.style.width = `${maxEpisodeLength + 0.5}ch`;
+    episodeInput.style.width = `${maxEpisodeLength + 1.5}ch`;
 
     episodeForm.addEventListener('submit', (e) => {
         e.preventDefault();
@@ -74,13 +74,13 @@ Episode {{ episode_id }} / {{ num_episodes }} - Positronic Dataset Viewer
             <span class="breadcrumb-separator">›</span>
             <span class="breadcrumb-text">Ep. </span>
             <button onclick="window.location.href='/episode/{{ (episode_id - 1) % num_episodes }}'"
-                class="nav-arrow-button" title="Previous episode">&lt;</button>
+                class="btn btn-ghost" title="Previous episode">&lt;</button>
             <form id="episode-form" class="episode-form" style="display: inline; margin: 0;">
                 <input type="text" id="episode-input" class="episode-input" value="{{ episode_id }}"
                     data-original="{{ episode_id }}" maxlength="{{ num_episodes|string|length }}">
             </form>
             <button onclick="window.location.href='/episode/{{ (episode_id + 1) % num_episodes }}'"
-                class="nav-arrow-button" title="Next episode">&gt;</button>
+                class="btn btn-ghost" title="Next episode">&gt;</button>
             <span class="breadcrumb-text"> / {{ num_episodes }}</span>
             {% if task %}<span class="task-description"> : {{ task }}</span>{% endif %}
         </div>
@@ -98,7 +98,7 @@ Episode {{ episode_id }} / {{ num_episodes }} - Positronic Dataset Viewer
         </div>
         {% endif %}
 
-        <button class="sidebar-toggler">☰ Static Data</button>
+        <button class="sidebar-toggler btn btn-primary">☰ Static Data</button>
     </div>
     <div class="episode-container">
         <div id="viewer-container">

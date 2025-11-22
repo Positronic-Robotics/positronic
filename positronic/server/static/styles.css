@@ -74,6 +74,10 @@ body {
   -webkit-font-smoothing: antialiased;
 }
 
+button {
+  font-family: inherit;
+}
+
 #app-shell {
   min-height: 100vh;
   display: flex;
@@ -407,30 +411,6 @@ tbody tr.lb-row--baseline:hover {
   display: flex;
   gap: 10px;
 }
-.nav-arrow-button {
-  background-color: var(--navbar-list-item-hover);
-  border: 1px solid var(--accent);
-  color: var(--accent);
-  font-size: 18px;
-  font-weight: bold;
-  cursor: pointer;
-  padding: 4px 8px;
-  margin: 0 3px;
-  line-height: 1;
-  height: 32px;
-  width: 32px;
-  border-radius: 4px;
-  transition: all 0.2s;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  vertical-align: middle;
-  box-sizing: border-box;
-}
-.nav-arrow-button:hover {
-  background-color: var(--accent);
-  color: var(--color-bg-body);
-}
 .episode-form {
   display: inline;
   margin: 0;
@@ -560,24 +540,6 @@ tbody tr.lb-row--baseline:hover {
   justify-content: space-between;
   padding: 10px 20px;
   background: var(--panel-bg);
-}
-
-.sidebar-toggler {
-  background-color: var(--navbar-list-item-hover);
-  color: var(--text-primary);
-  border: none;
-  padding: 10px 15px;
-  border-radius: 4px;
-  cursor: pointer;
-  text-decoration: none;
-  display: inline-block;
-  text-align: center;
-  transition: background-color 0.2s;
-  margin-left: 20px;
-}
-
-.sidebar-toggler:hover {
-  background-color: var(--navbar-list-item-hover);
 }
 
 .sidebar {
