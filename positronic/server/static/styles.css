@@ -540,6 +540,7 @@ tbody tr.lb-row--baseline:hover {
   justify-content: space-between;
   padding: 10px 20px;
   background: var(--panel-bg);
+  z-index: 1;
 }
 
 .sidebar {
