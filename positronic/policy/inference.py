@@ -28,9 +28,9 @@ class InferenceCommand:
     payload: Any | None = None
 
     @classmethod
-    def START(cls) -> 'InferenceCommand':
+    def START(cls, **kwargs) -> 'InferenceCommand':
         """Convenience method for creating a START command."""
-        return cls(InferenceCommandType.START, None)
+        return cls(InferenceCommandType.START, kwargs)
 
     @classmethod
     def STOP(cls) -> 'InferenceCommand':
@@ -50,14 +50,13 @@ class Inference(pimm.ControlSystem):
         action_decoder: ActionDecoder,
         policy,
         inference_fps: int = 30,
-        task: str | None = None,
         simulate_timeout: bool = False,
     ):
         self.observation_encoder = observation_encoder
         self.action_decoder = action_decoder
         self.policy = policy
         self.inference_fps = inference_fps
-        self.task = task
+        self.context: dict[str, Any] = {}
         self.simulate_timeout = simulate_timeout
 
         self.frames = pimm.ReceiverDict(self)
@@ -69,11 +68,9 @@ class Inference(pimm.ControlSystem):
         self.command = pimm.ControlSystemReceiver[InferenceCommand](self, default=None, maxsize=3)
 
     def meta(self) -> dict[str, Any]:
-        result = {
-            'inference.policy_fps': self.inference_fps,
-            'inference.task': self.task,
-            'inference.simulate_timeout': self.simulate_timeout,
-        }
+        result = {'inference.policy_fps': self.inference_fps, 'inference.simulate_timeout': self.simulate_timeout}
+        for k, v in flatten_dict(self.context).items():
+            result[f'inference.context.{k}'] = v
         for k, v in flatten_dict(self.observation_encoder.meta).items():
             result[f'inference.observation.{k}'] = v
         for k, v in flatten_dict(self.action_decoder.meta).items():
@@ -95,6 +92,7 @@ class Inference(pimm.ControlSystem):
                 match command_msg.data.type:
                     case InferenceCommandType.START:
                         running = True
+                        self.context = command_msg.data.payload or {}
                         start_time = time.monotonic()
                         rate_limiter.reset()
                     case InferenceCommandType.STOP:
@@ -127,8 +125,7 @@ class Inference(pimm.ControlSystem):
                 inputs.update(images)
 
                 obs = self.observation_encoder.encode(inputs)
-                if self.task is not None:
-                    obs['task'] = self.task
+                obs.update(self.context)
 
                 start = time.monotonic()
                 action = self.policy.select_action(obs)

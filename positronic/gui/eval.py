@@ -93,12 +93,17 @@ class EvalUI(pimm.ControlSystem):
         )
 
         # --- Configuration ---
+        tasks = [
+            'Pick all the towels one by one from transparent tote and place them into the large grey tote.',
+            'Pick all the wooden spoons one by one from transparent tote and place them into the large grey tote.',
+            'Pick all the scissors one by one from transparent tote and place them into the large grey tote.',
+        ]
         self.task_radio = self._add(
             'task_radio',
             [State.WAITING],
             dpg.add_radio_button,
-            items=['Towels', 'Spoons', 'Other'],
-            default_value='Towels',
+            items=[*tasks, 'Other'],
+            default_value=tasks[0],
             callback=self.radio_callback,
         )
         self.custom_input = self._add(
@@ -191,7 +196,7 @@ class EvalUI(pimm.ControlSystem):
             if dpg.get_value(self.task_radio.tag) == 'Other'
             else dpg.get_value(self.task_radio.tag)
         )
-        self.inference_command.emit(InferenceCommand.START())
+        self.inference_command.emit(InferenceCommand.START(task=task_name))
         self.ds_writer_command.emit(DsWriterCommand.START(static_data={'task': task_name}))
 
     def stop(self):
@@ -223,12 +228,7 @@ class EvalUI(pimm.ControlSystem):
         if self.state != State.REVIEWING:
             return
 
-        # Get task value - use custom input if "Other" is selected
-        task_radio_value = dpg.get_value('task_radio')
-        task_value = dpg.get_value('custom_input') if task_radio_value == 'Other' else task_radio_value
-
         data = {
-            'task': task_value,
             'total_items': dpg.get_value('total_items_input'),
             'successful_items': dpg.get_value('successful_items_input'),
             'aborted': dpg.get_value('aborted_checkbox'),
@@ -353,7 +353,7 @@ class EvalUI(pimm.ControlSystem):
                     dpg.add_text('Configuration')
 
                     with dpg.group(horizontal=True):
-                        with dpg.child_window(height=self.size(110), width=self.size(240), border=True):
+                        with dpg.child_window(height=self.size(110), width=self.size(480), border=True):
                             dpg.add_text('Task')
                             with dpg.group(horizontal=True):
                                 self.task_radio.render()

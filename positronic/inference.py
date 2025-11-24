@@ -33,13 +33,14 @@ from positronic.utils.logging import init_logging
 
 
 class KeyboardHanlder:
-    def __init__(self, meta_getter: Callable[[], dict[str, Any]]):
+    def __init__(self, meta_getter: Callable[[], dict[str, Any]], task: str | None = None):
         self.meta_getter = meta_getter
+        self.task = task
 
     def inference_command(self, key: str) -> InferenceCommand | None:
         if key == 's':
             logging.info('Starting inference...')
-            return InferenceCommand.START()
+            return InferenceCommand.START(task=self.task)
         elif key == 'p':
             logging.info('Stopping inference...')
             return InferenceCommand.STOP()
@@ -61,12 +62,19 @@ class KeyboardHanlder:
 class TimedDriver(pimm.ControlSystem):
     """Control system that orchestrates inference episodes by sending start/stop commands."""
 
-    def __init__(self, num_iterations: int, simulation_time: float, meta_getter: Callable[[], dict[str, Any]]):
+    def __init__(
+        self,
+        num_iterations: int,
+        simulation_time: float,
+        meta_getter: Callable[[], dict[str, Any]],
+        task: str | None = None,
+    ):
         self.num_iterations = num_iterations
         self.simulation_time = simulation_time
         self.ds_commands = pimm.ControlSystemEmitter(self)
         self.inf_commands = pimm.ControlSystemEmitter(self)
         self.meta_getter = meta_getter
+        self.task = task
 
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock):
         for i in range(self.num_iterations):
@@ -74,7 +82,7 @@ class TimedDriver(pimm.ControlSystem):
             meta['simulation.iteration'] = i
 
             self.ds_commands.emit(DsWriterCommand.START(meta))
-            self.inf_commands.emit(InferenceCommand.START())
+            self.inf_commands.emit(InferenceCommand.START(task=self.task))
             yield pimm.Sleep(self.simulation_time)
             self.ds_commands.emit(DsWriterCommand.STOP())
             self.inf_commands.emit(InferenceCommand.RESET())
@@ -103,10 +111,10 @@ def eval_ui(ui_scale):
 
 
 @cfn.config(show_gui=False)
-def keyboard(show_gui):
+def keyboard(show_gui, task):
     def _internal(meta_getter):
         keyboard = KeyboardControl()
-        keyboard_handler = KeyboardHanlder(meta_getter=meta_getter)
+        keyboard_handler = KeyboardHanlder(meta_getter=meta_getter, task=task)
         print('Keyboard controls: [s]tart, sto[p], [r]eset')
         return (
             None if not show_gui else DearpyguiUi(),
@@ -119,10 +127,10 @@ def keyboard(show_gui):
 
 
 @cfn.config(num_iterations=1, simulation_time=15, show_gui=False)
-def timed(num_iterations, simulation_time, show_gui):
+def timed(num_iterations, simulation_time, show_gui, task):
     def _internal(meta_getter):
         gui = None if not show_gui else DearpyguiUi()
-        driver = TimedDriver(num_iterations, simulation_time, meta_getter)
+        driver = TimedDriver(num_iterations, simulation_time, meta_getter, task=task)
         return gui, (driver.inf_commands, lambda x: x), (driver.ds_commands, lambda x: x), [driver]
 
     return _internal
@@ -137,11 +145,10 @@ def main(
     policy,
     driver: Callable,
     policy_fps: int = 15,
-    task: str | None = None,
     output_dir: str | Path | None = None,
 ):
     """Runs inference on real hardware."""
-    inference = Inference(observation_encoder, action_decoder, policy, policy_fps, task)
+    inference = Inference(observation_encoder, action_decoder, policy, policy_fps)
 
     # Convert camera instances to emitters for wire()
     camera_instances = cameras
@@ -178,7 +185,6 @@ def main_sim(
     policy_fps: int,
     driver: Callable,
     camera_dict: Mapping[str, str],
-    task: str | None,
     output_dir: str | Path | None = None,
     simulate_timeout: bool = False,
     observers: Mapping[str, Any] | None = None,
@@ -194,7 +200,7 @@ def main_sim(
     mujoco_cameras = MujocoCameras(sim.model, sim.data, resolution=(320, 240), fps=camera_fps)
     # Map signal names to emitters for wire()
     cameras = {name: mujoco_cameras.cameras[orig_name] for name, orig_name in camera_dict.items()}
-    inference = Inference(observation_encoder, action_decoder, policy, policy_fps, task, simulate_timeout)
+    inference = Inference(observation_encoder, action_decoder, policy, policy_fps, simulate_timeout=simulate_timeout)
     control_systems = [mujoco_cameras, sim, robot_arm, gripper, inference]
 
     sim_meta = {'simulation.mujoco_model_path': mujoco_model_path}
@@ -227,9 +233,8 @@ main_sim_cfg = cfn.Config(
     action_decoder=positronic.cfg.policy.action.absolute_position,
     camera_fps=15,
     policy_fps=15,
-    driver=timed.override(simulation_time=15),
+    driver=timed.override(simulation_time=15, task='pick up the green cube and put in on top of the red cube'),
     camera_dict={'image.handcam_left': 'handcam_left_ph', 'image.back_view': 'back_view_ph'},
-    task='pick up the green cube and put in on top of the red cube',
 )
 
 main_sim_openpi_positronic = main_sim_cfg.override(
