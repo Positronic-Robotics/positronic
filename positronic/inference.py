@@ -59,7 +59,7 @@ class KeyboardHanlder:
         return None
 
 
-class Driver(pimm.ControlSystem):
+class TimedDriver(pimm.ControlSystem):
     """Control system that orchestrates inference episodes by sending start/stop commands."""
 
     def __init__(self, num_iterations: int, simulation_time: float, meta_getter: Callable[[], dict[str, Any]]):
@@ -114,7 +114,7 @@ def driver(control_mode, show_gui, meta_getter, **kwargs):
             gui = None if not show_gui else DearpyguiUi()
             num_iterations = kwargs.get('num_iterations', 1)
             simulation_time = kwargs.get('simulation_time', 10.0)
-            driver = Driver(num_iterations, simulation_time, meta_getter)
+            driver = TimedDriver(num_iterations, simulation_time, meta_getter)
             return (gui, (driver.inf_commands, lambda x: x), (driver.ds_commands, lambda x: x), [driver])
         case _:
             raise ValueError(f'Unknown control mode: {control_mode}')
