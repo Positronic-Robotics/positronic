@@ -309,11 +309,13 @@ def main_sim(
     show_gui: bool = False,
     num_iterations: int = 1,
     simulate_timeout: bool = False,
+    observers: Mapping[str, Any] | None = None,
 ):
-    observers = {
-        'box_distance': BodyDistance('box_0_body', 'box_1_body'),
-        'stacking_success': StackingSuccess('box_0_body', 'box_1_body', 'hand_ph'),
-    }
+    if observers is None:
+        observers = {
+            'box_distance': BodyDistance('box_0_body', 'box_1_body'),
+            'stacking_success': StackingSuccess('box_0_body', 'box_1_body', 'hand_ph'),
+        }
     sim = MujocoSim(mujoco_model_path, loaders, observers=observers)
     robot_arm = MujocoFranka(sim, suffix='_ph')
     gripper = MujocoGripper(sim, actuator_name='actuator8_ph', joint_name='finger_joint1_ph')
@@ -439,6 +441,7 @@ def _internal_main():
         'sim_pnp': main_sim_cfg.override(
             loaders=positronic.cfg.simulator.multi_tote_loaders,
             task='pick up objects from the red tote and place them in the green tote',
+            observers={},
         ),
     })
 

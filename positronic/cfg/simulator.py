@@ -44,6 +44,7 @@ multi_tote_loaders = [
         object2_name='tote_1',
         table_bounds=((0.35, 0.65), (-0.2, 0.2)),
         min_distance=0.25,
+        object_sizes=([0.08, 0.12, 0.03], [0.08, 0.12, 0.03]),
     ),
     cfn.Config(
         AddObjectsInTote,

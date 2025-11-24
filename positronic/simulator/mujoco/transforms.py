@@ -258,7 +258,9 @@ class AddObjectsInTote(MujocoSceneTransform):
                 # The bottom geom has thickness 0.005 (default) and is at pos=[0, 0, t].
                 # So the floor of the tote is at tote_pos[2] + 2*t.
                 # We add a small margin + stacking.
-                z = tote_pos[2] + 0.02 + i * 0.025
+                # Assuming default thickness of 0.005 for now as it is not passed in.
+                tote_thickness = 0.005
+                z = tote_pos[2] + 2 * tote_thickness + self.object_size[2] + i * 2 * self.object_size[2]
 
                 body = spec.worldbody.add_body(name=f'{self.object_name_prefix}_{i}_body', pos=[x, y, z])
                 body.add_geom(
@@ -280,12 +282,14 @@ class SetTwoObjectsPositions(MujocoSceneTransform):
         object2_name: str,
         table_bounds: tuple[tuple[float, float], tuple[float, float]],
         min_distance: float,
+        object_sizes: tuple[tuple[float, float, float], tuple[float, float, float]] | None = None,
         seed: int | None = None,
     ):
         self.object1_name = object1_name
         self.object2_name = object2_name
         self.table_bounds = table_bounds  # ((min_x, max_x), (min_y, max_y))
         self.min_distance = min_distance
+        self.object_sizes = object_sizes
         self.seed = seed
 
     def apply(self, spec: mujoco.MjSpec) -> mujoco.MjSpec:
@@ -301,7 +305,17 @@ class SetTwoObjectsPositions(MujocoSceneTransform):
 
                 dist = np.linalg.norm(np.array(pos1[:2]) - np.array(pos2[:2]))
 
-                if dist >= self.min_distance:
+                overlap = False
+                if self.object_sizes is not None:
+                    s1, s2 = self.object_sizes
+                    # Check AABB overlap
+                    # sizes are half-sizes (w, l, h)
+                    # Overlap if |x1 - x2| < w1 + w2 AND |y1 - y2| < l1 + l2
+                    # We add a small margin to min_distance effectively
+                    if abs(pos1[0] - pos2[0]) < (s1[0] + s2[0]) and abs(pos1[1] - pos2[1]) < (s1[1] + s2[1]):
+                        overlap = True
+
+                if dist >= self.min_distance and not overlap:
                     body1.pos = pos1
                     body2.pos = pos2
                     return spec
