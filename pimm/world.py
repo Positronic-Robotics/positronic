@@ -269,7 +269,7 @@ class MultiprocessReceiver(SignalReceiver[T]):
             return True
 
         try:
-            sm_name, buf_size, data_type, instantiation_params = self._sm_queue.get_nowait()
+            sm_name, buf_size, data_type, instantiation_params, idx = self._sm_queue.get_nowait()
         except Empty:
             return False
 
@@ -685,7 +685,7 @@ class World:
             )
             p.start()
             self.background_processes.append(p)
-            logging.info(f'Started background process {name} (pid {p.pid})')
+            print(f'Started background process {name} (pid {p.pid})', flush=True)
 
     def local_pipe(self, maxsize: int = 1) -> tuple[SignalEmitter[T], SignalReceiver[T]]:
         """Create a queue-based communication channel within the same process.
