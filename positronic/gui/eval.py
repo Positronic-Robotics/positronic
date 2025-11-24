@@ -1,19 +1,14 @@
 import json
-from collections.abc import Callable
+import time
+from collections.abc import Callable, Iterator
 from enum import Enum, auto
 
 import dearpygui.dearpygui as dpg
 import numpy as np
 
-
-def create_mock_image(width, height):
-    # Generate random RGBA noise (0.0 to 1.0)
-    data = np.random.random((height, width, 4))
-    return data.flatten()
-
-
-def on_start():
-    print('Start triggered')
+import pimm
+from positronic.dataset.ds_writer_agent import DsWriterCommand
+from positronic.policy.inference import InferenceCommand
 
 
 class State(Enum):
@@ -54,10 +49,15 @@ class UIElement:
                 dpg.configure_item(self.tag, readonly=False)
 
 
-class EvalController:
+class EvalUI(pimm.ControlSystem):
     def __init__(self):
         self.state = State.WAITING
         self.elements: list[UIElement] = []
+
+        # --- Inputs/Outputs ---
+        self.cameras = pimm.ReceiverDict(self, default=None)
+        self.inference_command = pimm.ControlSystemEmitter(self)
+        self.ds_writer_command = pimm.ControlSystemEmitter(self)
 
         # --- Actions ---
         self.start_btn = self._add('start_btn', [State.WAITING], dpg.add_button, label='Start', callback=self.start)
@@ -128,6 +128,12 @@ class EvalController:
             callback=lambda: self.cancel(),
         )
 
+        # Internal state for camera rendering
+        self.im_sizes = {}
+        self.raw_textures = {}
+        self.n_rows = 1
+        self.n_cols = 1
+
     def _add(self, tag, enabled_states, render_func, **kwargs):
         element = UIElement(tag, enabled_states, render_func, **kwargs)
         self.elements.append(element)
@@ -142,12 +148,25 @@ class EvalController:
         self.state = State.RUNNING
         self.update_ui()
 
+        # Emit commands
+        task_name = (
+            dpg.get_value(self.custom_input.tag)
+            if dpg.get_value(self.task_radio.tag) == 'Other'
+            else dpg.get_value(self.task_radio.tag)
+        )
+        self.inference_command.emit(InferenceCommand.START())
+        self.ds_writer_command.emit(DsWriterCommand.START(static_data={'task': task_name}))
+
     def stop(self):
         if self.state != State.RUNNING:
             return
         print('State: REVIEWING')
         self.state = State.REVIEWING
         self.update_ui()
+
+        # Emit commands
+        self.inference_command.emit(InferenceCommand.STOP())
+        self.ds_writer_command.emit(DsWriterCommand.SUSPEND())
 
     def reset(self):
         if self.state == State.REVIEWING:
@@ -159,6 +178,9 @@ class EvalController:
         # Reset to WAITING
         self.state = State.WAITING
         self.update_ui()
+
+        # Emit commands
+        self.inference_command.emit(InferenceCommand.RESET())
 
     def submit(self):
         if self.state != State.REVIEWING:
@@ -180,6 +202,9 @@ class EvalController:
         self.state = State.WAITING
         self.update_ui()
 
+        # Emit commands
+        self.ds_writer_command.emit(DsWriterCommand.STOP(static_data=data))
+
     def cancel(self):
         if self.state != State.REVIEWING:
             return
@@ -188,6 +213,9 @@ class EvalController:
         dpg.set_value('successful_items_input', 0)
         self.state = State.WAITING
         self.update_ui()
+
+        # Emit commands
+        self.ds_writer_command.emit(DsWriterCommand.ABORT())
 
     # --- Callbacks ---
 
@@ -207,9 +235,6 @@ class EvalController:
         self.update_ui()
 
     def model_failure_callback(self, sender, app_data):
-        # This callback is only triggered if the checkbox is interacted with.
-        # The actual enabled/disabled state is managed by update_ui.
-        # If it's clicked when it shouldn't be, update_ui will correct it.
         pass
 
     # --- UI Update ---
@@ -219,149 +244,196 @@ class EvalController:
             element.update(self.state)
 
         # Special logic for dependent widgets
-        # Custom Input: Visibility depends on 'Other' being selected
         is_other = dpg.get_value('task_radio') == 'Other'
         dpg.configure_item(self.custom_input.tag, show=is_other)
 
-        # Model Failure: Only enabled if Aborted is checked AND we are in REVIEWING
         if self.state == State.REVIEWING:
             if not dpg.get_value('aborted_checkbox'):
                 self.model_failure_checkbox._set_fake_disabled(True)
-                dpg.set_value(self.model_failure_checkbox.tag, False)  # Also reset value if disabled
+                dpg.set_value(self.model_failure_checkbox.tag, False)
             else:
-                # If aborted is checked, it should follow its base enabled_states (which is REVIEWING)
                 self.model_failure_checkbox._set_fake_disabled(False)
         else:
-            # If not in REVIEWING, it should be disabled based on its base config
             self.model_failure_checkbox._set_fake_disabled(True)
-            dpg.set_value(self.model_failure_checkbox.tag, False)  # Also reset value if disabled
+            dpg.set_value(self.model_failure_checkbox.tag, False)
 
-        # Reset values for certain items when state changes to WAITING
         if self.state == State.WAITING:
             dpg.set_value(self.successful_items.tag, 0)
             dpg.set_value(self.aborted_checkbox.tag, False)
             dpg.set_value(self.model_failure_checkbox.tag, False)
             dpg.set_value(self.notes_input.tag, '')
 
+    # --- Control System Run Loop ---
 
-controller = EvalController()
+    def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Sleep]:
+        # Initialize DPG Context
+        dpg.create_context()
+
+        # Initialize textures based on available cameras (wait for first frame or default)
+        # For now, we'll initialize dynamically in the loop or just setup a placeholder if needed.
+        # But DPG needs textures created before adding images usually, or added dynamically.
+        # Let's use a dynamic approach similar to dpg.py but adapted.
+
+        # General Theme for "Fake Disabled" Elements
+        with dpg.theme(tag='disabled_theme'):
+            with dpg.theme_component(dpg.mvAll):
+                dpg.add_theme_color(dpg.mvThemeCol_Text, (80, 80, 80))
+                dpg.add_theme_color(dpg.mvThemeCol_Button, (30, 30, 30))
+                dpg.add_theme_color(dpg.mvThemeCol_ButtonHovered, (30, 30, 30))
+                dpg.add_theme_color(dpg.mvThemeCol_ButtonActive, (30, 30, 30))
+                dpg.add_theme_color(dpg.mvThemeCol_FrameBg, (30, 30, 30))
+                dpg.add_theme_color(dpg.mvThemeCol_CheckMark, (80, 80, 80))
+                dpg.add_theme_color(dpg.mvThemeCol_FrameBgHovered, (30, 30, 30))
+                dpg.add_theme_color(dpg.mvThemeCol_FrameBgActive, (30, 30, 30))
+
+        # Window
+        with dpg.window(label='Evaluation Control', width=500, height=800, tag='main_window'):
+            dpg.add_text('Camera Feed')
+            # Image grid container
+            with dpg.group(tag='image_grid_group'):
+                pass  # Images will be added here
+
+            dpg.add_separator()
+            dpg.add_text('Controls')
+            with dpg.group(horizontal=True):
+                self.start_btn.render()
+                self.stop_btn.render()
+                self.reset_btn.render()
+
+            dpg.add_separator()
+            dpg.add_text('Configuration')
+
+            with dpg.group(horizontal=True):
+                with dpg.child_window(height=110, width=240, border=True):
+                    dpg.add_text('Task')
+                    with dpg.group(horizontal=True):
+                        self.task_radio.render()
+                        with dpg.group():
+                            dpg.add_spacer(height=42)
+                            self.custom_input.render()
+
+                with dpg.group():
+                    self.total_items.render()
+                    self.successful_items.render()
+
+            self.aborted_checkbox.render()
+            self.model_failure_checkbox.render()
+
+            dpg.add_separator()
+            dpg.add_text('Notes')
+            with dpg.group(horizontal=True):
+                self.notes_input.render()
+                with dpg.group(horizontal=False):
+                    self.submit_btn.render()
+                    self.cancel_btn.render()
+
+        # Key Handler
+        with dpg.handler_registry():
+
+            def safe_trigger(callback):
+                text_inputs = ['notes_input', 'custom_input', 'total_items_input', 'successful_items_input']
+                for tag in text_inputs:
+                    if dpg.is_item_focused(tag):
+                        return
+                callback()
+
+            dpg.add_key_press_handler(dpg.mvKey_S, callback=lambda s, a: safe_trigger(self.start))
+            dpg.add_key_press_handler(dpg.mvKey_P, callback=lambda s, a: safe_trigger(self.stop))
+            dpg.add_key_press_handler(dpg.mvKey_R, callback=lambda s, a: safe_trigger(self.reset))
+
+            def change_radio_selection(sender, app_data):
+                if self.state != State.WAITING:
+                    return
+                if dpg.is_item_focused('task_radio'):
+                    items = dpg.get_item_configuration('task_radio')['items']
+                    current = dpg.get_value('task_radio')
+                    idx = items.index(current)
+                    if app_data == dpg.mvKey_Up:
+                        new_idx = max(0, idx - 1)
+                    elif app_data == dpg.mvKey_Down:
+                        new_idx = min(len(items) - 1, idx + 1)
+                    else:
+                        return
+                    new_value = items[new_idx]
+                    dpg.set_value('task_radio', new_value)
+                    self.radio_callback('task_radio', new_value)
+
+            dpg.add_key_press_handler(dpg.mvKey_Up, callback=change_radio_selection)
+            dpg.add_key_press_handler(dpg.mvKey_Down, callback=change_radio_selection)
+
+            # Add key handlers for submit/cancel when in REVIEWING state
+            def submit_on_enter():
+                if self.state == State.REVIEWING:
+                    self.submit()
+
+            def cancel_on_escape():
+                if self.state == State.REVIEWING:
+                    self.cancel()
+
+            dpg.add_key_press_handler(dpg.mvKey_Return, callback=lambda s, a: safe_trigger(submit_on_enter))
+            dpg.add_key_press_handler(dpg.mvKey_Escape, callback=lambda s, a: safe_trigger(cancel_on_escape))
+
+        dpg.create_viewport(title='Eval UI', width=520, height=850)
+        dpg.configure_app(keyboard_navigation=True)
+        dpg.setup_dearpygui()
+        dpg.show_viewport()
+
+        # Initialize UI state
+        self.update_ui()
+
+        while not should_stop.value and dpg.is_dearpygui_running():
+            # Handle Cameras
+            for cam_name, camera in self.cameras.items():
+                cam_msg = camera.read()
+                if cam_msg.data is not None and cam_msg.updated:
+                    image = cam_msg.data.array
+
+                    if cam_name not in self.im_sizes:
+                        height, width = image.shape[:2]
+                        self.im_sizes[cam_name] = (height, width)
+
+                        with dpg.texture_registry(show=False):
+                            data = np.zeros((height, width, 4), dtype=np.float32)
+                            dpg.add_raw_texture(
+                                width, height, default_value=data, format=dpg.mvFormat_Float_rgba, tag=f'tex_{cam_name}'
+                            )
+                            self.raw_textures[cam_name] = data
+
+                        dpg.add_image(f'tex_{cam_name}', parent='image_grid_group', width=width, height=height)
+
+                    texture = self.raw_textures[cam_name]
+                    texture[:, :, :3] = image / 255.0
+                    texture[:, :, 3] = 1.0
+
+            dpg.render_dearpygui_frame()
+            yield pimm.Pass()
+
+        dpg.destroy_context()
 
 
 def main():
-    dpg.create_context()
+    import numpy as np
 
-    # Mock Image Data
-    width, height, channels = 256, 256, 3
-    texture_data = np.random.random((width, height, channels)).flatten()
+    class FakeCamera(pimm.ControlSystem):
+        def __init__(self):
+            super().__init__()
+            self.frame = pimm.ControlSystemEmitter(self)
 
-    with dpg.texture_registry(show=False):
-        dpg.add_static_texture(width=width, height=height, default_value=texture_data, tag='mock_image')
+        def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock):
+            adapter = None
+            while not should_stop.value:
+                img = np.random.randint(0, 255, (480, 640, 3), dtype=np.uint8)
+                adapter = pimm.shared_memory.NumpySMAdapter.lazy_init(img, adapter)
+                self.frame.emit(adapter)
+                yield pimm.Sleep(1 / 15)
 
-    # General Theme for "Fake Disabled" Elements
-    with dpg.theme(tag='disabled_theme'):
-        with dpg.theme_component(dpg.mvAll):
-            dpg.add_theme_color(dpg.mvThemeCol_Text, (80, 80, 80))
-            dpg.add_theme_color(dpg.mvThemeCol_Button, (30, 30, 30))
-            dpg.add_theme_color(dpg.mvThemeCol_ButtonHovered, (30, 30, 30))
-            dpg.add_theme_color(dpg.mvThemeCol_ButtonActive, (30, 30, 30))
-            dpg.add_theme_color(dpg.mvThemeCol_FrameBg, (30, 30, 30))
-            dpg.add_theme_color(dpg.mvThemeCol_CheckMark, (80, 80, 80))
-            dpg.add_theme_color(dpg.mvThemeCol_FrameBgHovered, (30, 30, 30))
-            dpg.add_theme_color(dpg.mvThemeCol_FrameBgActive, (30, 30, 30))
+    with pimm.World() as world:
+        ui = EvalUI()
+        fake_camera = FakeCamera()
+        world.connect(fake_camera.frame, ui.cameras['main'])
 
-    # Window
-    with dpg.window(label='Evaluation Control', width=500, height=800):
-        dpg.add_text('Mock Image Feed')
-        dpg.add_image('mock_image')
-
-        dpg.add_separator()
-        dpg.add_text('Controls')
-        with dpg.group(horizontal=True):
-            controller.start_btn.render()
-            controller.stop_btn.render()
-            controller.reset_btn.render()
-
-        dpg.add_separator()
-        dpg.add_text('Configuration')
-
-        # Split into two columns: Radio Group (Left) and Numeric Inputs (Right)
-        with dpg.group(horizontal=True):
-            # Left Column: Radio buttons with custom input
-            with dpg.child_window(height=110, width=240, border=True):
-                dpg.add_text('Task')
-                with dpg.group(horizontal=True):
-                    controller.task_radio.render()
-
-                    with dpg.group():
-                        # Spacer to push the input down to the 3rd radio option
-                        dpg.add_spacer(height=42)
-                        controller.custom_input.render()
-
-            # Right Column: Numeric Inputs
-            with dpg.group():
-                controller.total_items.render()
-                controller.successful_items.render()
-
-        controller.aborted_checkbox.render()
-        controller.model_failure_checkbox.render()
-        # Initial binding done by update_ui
-
-        dpg.add_separator()
-        dpg.add_text('Notes')
-        with dpg.group(horizontal=True):
-            controller.notes_input.render()
-            with dpg.group(horizontal=False):
-                controller.submit_btn.render()
-                controller.cancel_btn.render()
-
-    # Key Handler
-    with dpg.handler_registry():
-
-        def safe_trigger(callback):
-            text_inputs = ['notes_input', 'custom_input', 'total_items_input', 'successful_items_input']
-            for tag in text_inputs:
-                if dpg.is_item_focused(tag):
-                    return  # Ignore shortcut if typing
-            callback()
-
-        dpg.add_key_press_handler(dpg.mvKey_S, callback=lambda s, a: safe_trigger(controller.start))
-        dpg.add_key_press_handler(dpg.mvKey_P, callback=lambda s, a: safe_trigger(controller.stop))
-        dpg.add_key_press_handler(dpg.mvKey_R, callback=lambda s, a: safe_trigger(controller.reset))
-
-        # Custom handler for Radio Button navigation (Up/Down arrows)
-        def change_radio_selection(sender, app_data):
-            # Only allow if radio is not disabled (check state)
-            if controller.state != State.WAITING:
-                return
-
-            if dpg.is_item_focused('task_radio'):
-                items = dpg.get_item_configuration('task_radio')['items']
-                current = dpg.get_value('task_radio')
-                idx = items.index(current)
-                if app_data == dpg.mvKey_Up:
-                    new_idx = max(0, idx - 1)
-                elif app_data == dpg.mvKey_Down:
-                    new_idx = min(len(items) - 1, idx + 1)
-                else:
-                    return
-
-                new_value = items[new_idx]
-                dpg.set_value('task_radio', new_value)
-                controller.radio_callback('task_radio', new_value)
-
-        dpg.add_key_press_handler(dpg.mvKey_Up, callback=change_radio_selection)
-        dpg.add_key_press_handler(dpg.mvKey_Down, callback=change_radio_selection)
-
-    dpg.create_viewport(title='Eval UI', width=520, height=650)
-    dpg.configure_app(keyboard_navigation=True)
-    dpg.setup_dearpygui()
-    dpg.show_viewport()
-
-    # Initialize UI state
-    controller.update_ui()
-
-    dpg.start_dearpygui()
-    dpg.destroy_context()
+        for cmd in world.start([ui, fake_camera]):
+            time.sleep(cmd.seconds)
 
 
 if __name__ == '__main__':

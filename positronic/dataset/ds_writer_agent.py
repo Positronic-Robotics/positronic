@@ -31,6 +31,7 @@ class DsWriterCommandType(Enum):
     START_EPISODE = 'start_episode'
     STOP_EPISODE = 'stop_episode'
     ABORT_EPISODE = 'abort_episode'
+    SUSPEND_EPISODE = 'suspend_episode'
 
 
 @dataclass
@@ -38,7 +39,7 @@ class DsWriterCommand:
     """Command message consumed by `DsWriterAgent`.
 
     Args:
-        type: Desired episode action (start/stop/abort).
+        type: Desired episode action (start/stop/abort/suspend).
         static_data: Optional static key/value pairs to set on the episode
             when starting or right before stopping.
     """
@@ -57,6 +58,10 @@ class DsWriterCommand:
     @staticmethod
     def ABORT():
         return DsWriterCommand(DsWriterCommandType.ABORT_EPISODE)
+
+    @staticmethod
+    def SUSPEND():
+        return DsWriterCommand(DsWriterCommandType.SUSPEND_EPISODE)
 
 
 # Serializer contract for inputs:
@@ -175,14 +180,17 @@ class DsWriterAgent(pimm.ControlSystem):
         limiter = pimm.utils.RateLimiter(clock, hz=self._poll_hz)
         ep_writer: EpisodeWriter | None = None
         ep_counter = 0
+        suspended = False
 
         try:
             while not should_stop.value:
                 cmd_msg = self.command.read()
                 if cmd_msg.updated:
-                    ep_writer, ep_counter = self._handle_command(cmd_msg.data, ep_writer, ep_counter)
+                    ep_writer, ep_counter, suspended = self._handle_command(
+                        cmd_msg.data, ep_writer, ep_counter, suspended
+                    )
 
-                if ep_writer is not None:
+                if ep_writer is not None and not suspended:
                     for name, reader in self._inputs.items():
                         msg = reader.read()
                         if msg.updated:
@@ -204,7 +212,7 @@ class DsWriterAgent(pimm.ControlSystem):
         finally:
             cmd_msg = self.command.read()
             if cmd_msg.updated:
-                ep_writer, ep_counter = self._handle_command(cmd_msg.data, ep_writer, ep_counter)
+                ep_writer, ep_counter, suspended = self._handle_command(cmd_msg.data, ep_writer, ep_counter, suspended)
 
             if ep_writer is not None:
                 try:
@@ -213,7 +221,7 @@ class DsWriterAgent(pimm.ControlSystem):
                     ep_writer.__exit__(None, None, None)
                     logger.info(f'DsWriterAgent: [ABORT] Episode {ep_counter}')
 
-    def _handle_command(self, cmd: DsWriterCommand, ep_writer: EpisodeWriter | None, ep_counter: int):
+    def _handle_command(self, cmd: DsWriterCommand, ep_writer: EpisodeWriter | None, ep_counter: int, suspended: bool):
         match cmd.type:
             case DsWriterCommandType.START_EPISODE:
                 if ep_writer is None:
@@ -222,6 +230,7 @@ class DsWriterAgent(pimm.ControlSystem):
                     ep_writer = self.ds_writer.new_episode()
                     for k, v in cmd.static_data.items():
                         ep_writer.set_static(k, v)
+                    suspended = False
                 else:
                     logger.warning('Episode already started, ignoring start command')
             case DsWriterCommandType.STOP_EPISODE:
@@ -231,6 +240,7 @@ class DsWriterAgent(pimm.ControlSystem):
                     ep_writer.__exit__(None, None, None)
                     logger.info(f'DsWriterAgent: [STOP] Episode {ep_counter} {ep_writer.meta.get("path", "unknown")}')
                     ep_writer = None
+                    suspended = False
                 else:
                     logger.warning('Episode not started, ignoring stop command')
             case DsWriterCommandType.ABORT_EPISODE:
@@ -239,9 +249,16 @@ class DsWriterAgent(pimm.ControlSystem):
                     ep_writer.__exit__(None, None, None)
                     logger.info(f'DsWriterAgent: [ABORT] Episode {ep_counter}')
                     ep_writer = None
+                    suspended = False
                 else:
                     logger.warning('Episode not started, ignoring abort command')
-        return ep_writer, ep_counter
+            case DsWriterCommandType.SUSPEND_EPISODE:
+                if ep_writer is not None:
+                    logger.info(f'DsWriterAgent: [SUSPEND] Episode {ep_counter}')
+                    suspended = True
+                else:
+                    logger.warning('Episode not started, ignoring suspend command')
+        return ep_writer, ep_counter, suspended
 
 
 class _KeyFrozenMapping(cabc.MutableMapping):

@@ -1,9 +1,7 @@
 import logging
 import time
-from collections.abc import Callable, Iterator, Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from contextlib import nullcontext
-from dataclasses import dataclass
-from enum import Enum
 from pathlib import Path
 from typing import Any
 
@@ -20,152 +18,19 @@ import positronic.cfg.policy.policy
 import positronic.cfg.simulator
 import positronic.utils.s3 as pos3
 from positronic import utils, wire
-from positronic.dataset.ds_writer_agent import DsWriterCommand, Serializers, TimeMode
+from positronic.dataset.ds_writer_agent import DsWriterCommand, TimeMode
 from positronic.dataset.local_dataset import LocalDatasetWriter
-from positronic.drivers import roboarm
 from positronic.gui.dpg import DearpyguiUi
+from positronic.gui.eval import EvalUI
 from positronic.gui.keyboard import KeyboardControl
 from positronic.policy.action import ActionDecoder
+from positronic.policy.inference import Inference, InferenceCommand
 from positronic.policy.observation import ObservationEncoder
 from positronic.simulator.mujoco.observers import BodyDistance, StackingSuccess
 from positronic.simulator.mujoco.sim import MujocoCameras, MujocoFranka, MujocoGripper, MujocoSim
 from positronic.simulator.mujoco.transforms import MujocoSceneTransform
-from positronic.utils import flatten_dict, package_assets_path
+from positronic.utils import package_assets_path
 from positronic.utils.logging import init_logging
-
-
-class InferenceCommandType(Enum):
-    """Commands for the inference."""
-
-    START = 'start'
-    STOP = 'stop'
-    RESET = 'reset'
-
-
-@dataclass
-class InferenceCommand:
-    """Command for the inference."""
-
-    type: InferenceCommandType
-    payload: Any | None = None
-
-    @classmethod
-    def START(cls) -> 'InferenceCommand':
-        """Convenience method for creating a START command."""
-        return cls(InferenceCommandType.START, None)
-
-    @classmethod
-    def STOP(cls) -> 'InferenceCommand':
-        """Convenience method for creating a STOP command."""
-        return cls(InferenceCommandType.STOP, None)
-
-    @classmethod
-    def RESET(cls) -> 'InferenceCommand':
-        """Convenience method for creating a RESET command."""
-        return cls(InferenceCommandType.RESET, None)
-
-
-class Inference(pimm.ControlSystem):
-    def __init__(
-        self,
-        observation_encoder: ObservationEncoder,
-        action_decoder: ActionDecoder,
-        policy,
-        inference_fps: int = 30,
-        task: str | None = None,
-        simulate_timeout: bool = False,
-    ):
-        self.observation_encoder = observation_encoder
-        self.action_decoder = action_decoder
-        self.policy = policy
-        self.inference_fps = inference_fps
-        self.task = task
-        self.simulate_timeout = simulate_timeout
-
-        self.frames = pimm.ReceiverDict(self)
-        self.robot_state = pimm.ControlSystemReceiver(self)
-        self.gripper_state = pimm.ControlSystemReceiver(self)
-        self.robot_commands = pimm.ControlSystemEmitter(self)
-        self.target_grip = pimm.ControlSystemEmitter(self)
-
-        self.command = pimm.ControlSystemReceiver[InferenceCommand](self, default=None, maxsize=3)
-
-    def meta(self) -> dict[str, Any]:
-        result = {
-            'inference.policy_fps': self.inference_fps,
-            'inference.task': self.task,
-            'inference.simulate_timeout': self.simulate_timeout,
-        }
-        for k, v in flatten_dict(self.observation_encoder.meta).items():
-            result[f'inference.observation.{k}'] = v
-        for k, v in flatten_dict(self.action_decoder.meta).items():
-            result[f'inference.action.{k}'] = v
-        for k, v in flatten_dict(self.policy.meta).items():
-            result[f'inference.policy.{k}'] = v
-        return result
-
-    def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Sleep]:  # noqa: C901
-        running = False
-        start_time = time.monotonic()
-
-        # TODO: We should emit new commands per frame, not per inference fps
-        rate_limiter = pimm.RateLimiter(clock, hz=self.inference_fps)
-
-        while not should_stop.value:
-            command_msg = self.command.read()
-            if command_msg.updated:
-                match command_msg.data.type:
-                    case InferenceCommandType.START:
-                        running = True
-                        start_time = time.monotonic()
-                        rate_limiter.reset()
-                    case InferenceCommandType.STOP:
-                        running = False
-                        print(f'Inference stopped after {time.monotonic() - start_time:.2f} seconds')
-                    case InferenceCommandType.RESET:
-                        self.robot_commands.emit(roboarm.command.Reset())
-                        self.target_grip.emit(0.0)
-                        self.policy.reset()
-                        running = False
-                        print(f'Inference aborted after {time.monotonic() - start_time:.2f} seconds')
-                        yield pimm.Pass()
-
-            try:
-                if not running:
-                    continue
-
-                robot_state = self.robot_state.value
-                inputs = {
-                    'robot_state.q': robot_state.q,
-                    'robot_state.dq': robot_state.dq,
-                    'robot_state.ee_pose': Serializers.transform_3d(robot_state.ee_pose),
-                    'grip': self.gripper_state.value,
-                }
-                frame_messages = {k: v.value for k, v in self.frames.items()}
-                # Extract array from NumpySMAdapter
-                images = {k: v.array for k, v in frame_messages.items()}
-                if len(images) != len(self.frames):
-                    continue
-                inputs.update(images)
-
-                obs = self.observation_encoder.encode(inputs)
-                if self.task is not None:
-                    obs['task'] = self.task
-
-                start = time.monotonic()
-                action = self.policy.select_action(obs)
-                roboarm_command, target_grip = self.action_decoder.decode(action, inputs)
-
-                duration = time.monotonic() - start
-                if self.simulate_timeout:
-                    yield pimm.Sleep(duration)
-
-                self.robot_commands.emit(roboarm_command)
-                self.target_grip.emit(target_grip)
-            except pimm.NoValueException:
-                continue
-            finally:
-                yield pimm.Sleep(rate_limiter.wait_time())
 
 
 class KeyboardHanlder:
@@ -194,55 +59,6 @@ class KeyboardHanlder:
         return None
 
 
-def main(
-    robot_arm: pimm.ControlSystem,
-    gripper: pimm.ControlSystem,
-    cameras: dict[str, pimm.ControlSystem],
-    observation_encoder: ObservationEncoder,
-    action_decoder: ActionDecoder,
-    policy,
-    policy_fps: int = 15,
-    task: str | None = None,
-    output_dir: str | Path | None = None,
-    show_gui: bool = False,
-):
-    """Runs inference on real hardware."""
-    inference = Inference(observation_encoder, action_decoder, policy, policy_fps, task)
-
-    # Convert camera instances to emitters for wire()
-    camera_instances = cameras
-    camera_emitters = {name: cam.frame for name, cam in camera_instances.items()}
-
-    keyboard_handler = KeyboardHanlder(meta_getter=inference.meta)
-
-    gui = DearpyguiUi() if show_gui else None
-    if output_dir is not None:
-        output_dir = pos3.sync(output_dir, sync_on_error=True)
-        utils.save_run_metadata(output_dir, patterns=['*.py', '*.toml'])
-
-    writer_cm = LocalDatasetWriter(output_dir) if output_dir is not None else nullcontext(None)
-    with writer_cm as dataset_writer, pimm.World() as world:
-        ds_agent = wire.wire(
-            world, inference, dataset_writer, camera_emitters, robot_arm, gripper, gui, TimeMode.MESSAGE
-        )
-
-        keyboard = KeyboardControl()
-        print('Keyboard controls: [s]tart, sto[p], [r]eset')
-
-        world.connect(
-            keyboard.keyboard_inputs, inference.command, emitter_wrapper=pimm.map(keyboard_handler.inference_command)
-        )
-        if ds_agent is not None:
-            world.connect(
-                keyboard.keyboard_inputs, ds_agent.command, emitter_wrapper=pimm.map(keyboard_handler.ds_writer_command)
-            )
-
-        bg_cs = [*camera_instances.values(), robot_arm, gripper, ds_agent, gui]
-
-        for cmd in world.start([inference, keyboard], bg_cs):
-            time.sleep(cmd.seconds)
-
-
 class Driver(pimm.ControlSystem):
     """Control system that orchestrates inference episodes by sending start/stop commands."""
 
@@ -266,6 +82,88 @@ class Driver(pimm.ControlSystem):
             yield pimm.Sleep(0.2)  # Let the things propagate
 
 
+def driver(control_mode, show_gui, meta_getter, **kwargs):
+    match control_mode:
+        case 'eval_ui':
+            gui = EvalUI()
+
+            def inject_metadata(cmd: DsWriterCommand) -> DsWriterCommand:
+                if cmd.type == DsWriterCommand.START(None).type:
+                    # Merge inference metadata into the start command
+                    # Note: cmd.static_data from UI takes precedence if keys collide?
+                    # Actually usually we want system config (inference.meta) + user input (task)
+                    # inference.meta() is a dict.
+                    new_static = meta_getter().copy()
+                    new_static.update(cmd.static_data)
+                    return DsWriterCommand(cmd.type, new_static)
+                return cmd
+
+            return gui, (gui.inference_command, lambda x: x), (gui.ds_writer_command, inject_metadata), []
+        case 'keyboard':
+            gui = None if not show_gui else DearpyguiUi()
+            keyboard = KeyboardControl()
+            keyboard_handler = KeyboardHanlder(meta_getter=meta_getter)
+            print('Keyboard controls: [s]tart, sto[p], [r]eset')
+            return (
+                gui,
+                (keyboard.keyboard_inputs, pimm.map(keyboard_handler.inference_command)),
+                (keyboard.keyboard_inputs, pimm.map(keyboard_handler.ds_writer_command)),
+                [keyboard],
+            )
+        case 'timed':
+            gui = None if not show_gui else DearpyguiUi()
+            num_iterations = kwargs.get('num_iterations', 1)
+            simulation_time = kwargs.get('simulation_time', 10.0)
+            driver = Driver(num_iterations, simulation_time, meta_getter)
+            return (gui, (driver.inf_commands, lambda x: x), (driver.ds_commands, lambda x: x), [driver])
+        case _:
+            raise ValueError(f'Unknown control mode: {control_mode}')
+
+
+def main(
+    robot_arm: pimm.ControlSystem,
+    gripper: pimm.ControlSystem,
+    cameras: dict[str, pimm.ControlSystem],
+    observation_encoder: ObservationEncoder,
+    action_decoder: ActionDecoder,
+    policy,
+    policy_fps: int = 15,
+    task: str | None = None,
+    output_dir: str | Path | None = None,
+    show_gui: bool = False,
+    control_mode: str = 'keyboard',
+):
+    """Runs inference on real hardware."""
+    inference = Inference(observation_encoder, action_decoder, policy, policy_fps, task)
+
+    # Convert camera instances to emitters for wire()
+    camera_instances = cameras
+    camera_emitters = {name: cam.frame for name, cam in camera_instances.items()}
+
+    if control_mode == 'timed':
+        raise ValueError("Control mode 'timed' is not supported in main()")
+
+    gui, inference_emitter, ds_writer_emitter, foreground_cs = driver(control_mode, show_gui, inference.meta)
+
+    if output_dir is not None:
+        output_dir = pos3.sync(output_dir, sync_on_error=True)
+        utils.save_run_metadata(output_dir, patterns=['*.py', '*.toml'])
+
+    writer_cm = LocalDatasetWriter(output_dir) if output_dir is not None else nullcontext(None)
+    with writer_cm as dataset_writer, pimm.World() as world:
+        ds_agent = wire.wire(
+            world, inference, dataset_writer, camera_emitters, robot_arm, gripper, gui, TimeMode.MESSAGE
+        )
+        world.connect(inference_emitter[0], inference.command, emitter_wrapper=inference_emitter[1])
+        if ds_agent is not None:
+            world.connect(ds_writer_emitter[0], ds_agent.command, emitter_wrapper=ds_writer_emitter[1])
+
+        bg_cs = [*camera_instances.values(), robot_arm, gripper, ds_agent, gui]
+
+        for cmd in world.start([inference] + foreground_cs, bg_cs):
+            time.sleep(cmd.seconds)
+
+
 def main_sim(
     mujoco_model_path: str,
     observation_encoder: ObservationEncoder,
@@ -281,6 +179,7 @@ def main_sim(
     show_gui: bool = False,
     num_iterations: int = 1,
     simulate_timeout: bool = False,
+    control_mode: str = 'timed',
     observers: Mapping[str, Any] | None = None,
 ):
     if observers is None:
@@ -298,7 +197,14 @@ def main_sim(
     control_systems = [mujoco_cameras, sim, robot_arm, gripper, inference]
 
     sim_meta = {'simulation.mujoco_model_path': mujoco_model_path, 'simulation.simulation_time': simulation_time}
-    gui = DearpyguiUi() if show_gui else None
+
+    gui, inference_emitter, ds_writer_emitter, foreground_cs = driver(
+        control_mode,
+        show_gui,
+        lambda: sim_meta.copy() | inference.meta(),
+        num_iterations=num_iterations,
+        simulation_time=simulation_time,
+    )
 
     if output_dir is not None:
         output_dir = pos3.sync(output_dir, sync_on_error=True)
@@ -311,11 +217,11 @@ def main_sim(
             for observer_name in observers.keys():
                 ds_agent.add_signal(observer_name)
                 world.connect(sim.observations[observer_name], ds_agent.inputs[observer_name])
-        driver = Driver(num_iterations, simulation_time, lambda: sim_meta.copy() | inference.meta())
-        world.connect(driver.inf_commands, inference.command)
+        world.connect(inference_emitter[0], inference.command, emitter_wrapper=inference_emitter[1])
         if ds_agent is not None:
-            world.connect(driver.ds_commands, ds_agent.command)
-        sim_iter = world.start([driver, *control_systems, ds_agent], gui)
+            world.connect(ds_writer_emitter[0], ds_agent.command, emitter_wrapper=ds_writer_emitter[1])
+
+        sim_iter = world.start([*foreground_cs, *control_systems, ds_agent], gui)
         p_bar = tqdm.tqdm(total=simulation_time * num_iterations, unit='s')
         for _ in sim_iter:
             p_bar.n = round(sim.now(), 1)

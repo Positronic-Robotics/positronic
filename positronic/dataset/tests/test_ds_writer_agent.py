@@ -448,3 +448,23 @@ def test_multiple_timelines_recorded(world, clock):
     assert isinstance(extra_ts['message'], int) and extra_ts['message'] > 0
     assert isinstance(extra_ts['system'], int) and extra_ts['system'] > 0
     assert isinstance(extra_ts['world'], int) and extra_ts['world'] > 0
+
+
+def test_suspend_resume(world, clock):
+    ds = FakeDatasetWriter()
+    agent, cmd_em, emitters = build_agent_with_pipes({'a': None}, ds, world)
+
+    script = [
+        (partial(cmd_em.emit, DsWriterCommand(DsWriterCommandType.START_EPISODE)), 0.001),
+        (partial(emitters['a'].emit, 1), 0.001),
+        (partial(cmd_em.emit, DsWriterCommand(DsWriterCommandType.SUSPEND_EPISODE)), 0.001),
+        (partial(emitters['a'].emit, 2), 0.001),  # Should be ignored
+        (partial(cmd_em.emit, DsWriterCommand(DsWriterCommandType.STOP_EPISODE)), 0.001),
+    ]
+
+    run_scripted_agent(agent, script, world=world, clock=clock)
+
+    assert len(ds.created) == 1
+    w = ds.created[-1]
+    assert [(s, v) for (s, v, _, _) in w.appends] == [('a', 1)]
+    assert w.exited is True
