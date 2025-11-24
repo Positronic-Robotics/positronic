@@ -646,11 +646,11 @@ class World:
         for emitter, emitter_wrapper, receiver, maxsize, clock in mp_connections:
             grouped_mp_connections[emitter].append((emitter_wrapper, receiver, maxsize, clock))
 
-        for emitter_logical, receivers_logical_list in grouped_mp_connections.items():
+        for emitter_logical, receivers_logical in grouped_mp_connections.items():
             # When emitter lives in a different process, we use system clock to timestamp messages, otherwise we will
             # have to serialise our local clock to the other process, which is not what we want.
-            num_receivers = len(receivers_logical_list)
-            emitter_wrapper, _, maxsize, clock = receivers_logical_list[0]    # these parameters are the same for all receivers
+            num_receivers = len(receivers_logical)
+            emitter_wrapper, _, maxsize, clock = receivers_logical[0]    # parameters the same for all receivers
 
             kwargs = {'maxsize': maxsize, 'num_receivers': num_receivers} if maxsize is not None else {
                 'num_receivers': num_receivers}
@@ -659,10 +659,10 @@ class World:
             emitter_logical._bind(emitter_wrapper(emitter_physical))
 
             if isinstance(receivers_physical, list):
-                for (_, logical_receiver, _, _), physical_receiver in zip(receivers_logical_list, receivers_physical, strict=True):
+                for (_, logical_receiver, _, _), physical_receiver in zip(receivers_logical, receivers_physical, strict=True):
                     logical_receiver._bind(physical_receiver)
             else:
-                (_, logical_receiver, _, _) = receivers_logical_list[0]
+                (_, logical_receiver, _, _) = receivers_logical[0]
                 logical_receiver._bind(receivers_physical)
 
         self.start_in_subprocess(*[cs.run for cs in background])
