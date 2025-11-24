@@ -6,7 +6,6 @@ from pathlib import Path
 from typing import Any
 
 import configuronic as cfn
-import tqdm
 
 import pimm
 import positronic.cfg.hardware.camera
@@ -82,42 +81,51 @@ class TimedDriver(pimm.ControlSystem):
             yield pimm.Sleep(0.2)  # Let the things propagate
 
 
-def driver(control_mode, show_gui, meta_getter, **kwargs):
-    match control_mode:
-        case 'eval_ui':
-            gui = EvalUI()
+@cfn.config(ui_scale=1)
+def eval_ui(ui_scale):
+    def _internal(meta_getter):
+        gui = EvalUI(ui_scale=ui_scale)
 
-            def inject_metadata(cmd: DsWriterCommand) -> DsWriterCommand:
-                if cmd.type == DsWriterCommand.START(None).type:
-                    # Merge inference metadata into the start command
-                    # Note: cmd.static_data from UI takes precedence if keys collide?
-                    # Actually usually we want system config (inference.meta) + user input (task)
-                    # inference.meta() is a dict.
-                    new_static = meta_getter().copy()
-                    new_static.update(cmd.static_data)
-                    return DsWriterCommand(cmd.type, new_static)
-                return cmd
+        def inject_metadata(cmd: DsWriterCommand) -> DsWriterCommand:
+            if cmd.type == DsWriterCommand.START(None).type:
+                # Merge inference metadata into the start command
+                # Note: cmd.static_data from UI takes precedence if keys collide?
+                # Actually usually we want system config (inference.meta) + user input (task)
+                # inference.meta() is a dict.
+                new_static = meta_getter().copy()
+                new_static.update(cmd.static_data)
+                return DsWriterCommand(cmd.type, new_static)
+            return cmd
 
-            return gui, (gui.inference_command, lambda x: x), (gui.ds_writer_command, inject_metadata), []
-        case 'keyboard':
-            gui = None if not show_gui else DearpyguiUi()
-            keyboard = KeyboardControl()
-            keyboard_handler = KeyboardHanlder(meta_getter=meta_getter)
-            print('Keyboard controls: [s]tart, sto[p], [r]eset')
-            return (
-                gui,
-                (keyboard.keyboard_inputs, pimm.map(keyboard_handler.inference_command)),
-                (keyboard.keyboard_inputs, pimm.map(keyboard_handler.ds_writer_command)),
-                [keyboard],
-            )
-        case 'timed':
-            gui = None if not show_gui else DearpyguiUi()
-            num_iterations = kwargs.get('num_iterations', 1)
-            simulation_time = kwargs.get('simulation_time', 10.0)
-            driver = TimedDriver(num_iterations, simulation_time, meta_getter)
-            return (gui, (driver.inf_commands, lambda x: x), (driver.ds_commands, lambda x: x), [driver])
-        case _:
-            raise ValueError(f'Unknown control mode: {control_mode}')
+        return gui, (gui.inference_command, lambda x: x), (gui.ds_writer_command, pimm.map(inject_metadata)), []
+
+    return _internal
+
+
+@cfn.config(show_gui=False)
+def keyboard(show_gui):
+    def _internal(meta_getter):
+        keyboard = KeyboardControl()
+        keyboard_handler = KeyboardHanlder(meta_getter=meta_getter)
+        print('Keyboard controls: [s]tart, sto[p], [r]eset')
+        return (
+            None if not show_gui else DearpyguiUi(),
+            (keyboard.keyboard_inputs, pimm.map(keyboard_handler.inference_command)),
+            (keyboard.keyboard_inputs, pimm.map(keyboard_handler.ds_writer_command)),
+            [keyboard],
+        )
+
+    return _internal
+
+
+@cfn.config(num_iterations=1, simulation_time=15, show_gui=False)
+def timed(num_iterations, simulation_time, show_gui):
+    def _internal(meta_getter):
+        gui = None if not show_gui else DearpyguiUi()
+        driver = TimedDriver(num_iterations, simulation_time, meta_getter)
+        return gui, (driver.inf_commands, lambda x: x), (driver.ds_commands, lambda x: x), [driver]
+
+    return _internal
 
 
 def main(
@@ -127,11 +135,10 @@ def main(
     observation_encoder: ObservationEncoder,
     action_decoder: ActionDecoder,
     policy,
+    driver: Callable,
     policy_fps: int = 15,
     task: str | None = None,
     output_dir: str | Path | None = None,
-    show_gui: bool = False,
-    control_mode: str = 'keyboard',
 ):
     """Runs inference on real hardware."""
     inference = Inference(observation_encoder, action_decoder, policy, policy_fps, task)
@@ -140,10 +147,7 @@ def main(
     camera_instances = cameras
     camera_emitters = {name: cam.frame for name, cam in camera_instances.items()}
 
-    if control_mode == 'timed':
-        raise ValueError("Control mode 'timed' is not supported in main()")
-
-    gui, inference_emitter, ds_writer_emitter, foreground_cs = driver(control_mode, show_gui, inference.meta)
+    gui, inference_emitter, ds_writer_emitter, foreground_cs = driver(inference.meta)
 
     if output_dir is not None:
         output_dir = pos3.sync(output_dir, sync_on_error=True)
@@ -172,14 +176,11 @@ def main_sim(
     loaders: Sequence[MujocoSceneTransform],
     camera_fps: int,
     policy_fps: int,
-    simulation_time: float,
+    driver: Callable,
     camera_dict: Mapping[str, str],
     task: str | None,
     output_dir: str | Path | None = None,
-    show_gui: bool = False,
-    num_iterations: int = 1,
     simulate_timeout: bool = False,
-    control_mode: str = 'timed',
     observers: Mapping[str, Any] | None = None,
 ):
     if observers is None:
@@ -196,15 +197,9 @@ def main_sim(
     inference = Inference(observation_encoder, action_decoder, policy, policy_fps, task, simulate_timeout)
     control_systems = [mujoco_cameras, sim, robot_arm, gripper, inference]
 
-    sim_meta = {'simulation.mujoco_model_path': mujoco_model_path, 'simulation.simulation_time': simulation_time}
+    sim_meta = {'simulation.mujoco_model_path': mujoco_model_path}
 
-    gui, inference_emitter, ds_writer_emitter, foreground_cs = driver(
-        control_mode,
-        show_gui,
-        lambda: sim_meta.copy() | inference.meta(),
-        num_iterations=num_iterations,
-        simulation_time=simulation_time,
-    )
+    gui, inference_emitter, ds_writer_emitter, foreground_cs = driver(lambda: sim_meta.copy() | inference.meta())
 
     if output_dir is not None:
         output_dir = pos3.sync(output_dir, sync_on_error=True)
@@ -221,11 +216,8 @@ def main_sim(
         if ds_agent is not None:
             world.connect(ds_writer_emitter[0], ds_agent.command, emitter_wrapper=ds_writer_emitter[1])
 
-        sim_iter = world.start([*foreground_cs, *control_systems, ds_agent], gui)
-        p_bar = tqdm.tqdm(total=simulation_time * num_iterations, unit='s')
-        for _ in sim_iter:
-            p_bar.n = round(sim.now(), 1)
-            p_bar.refresh()
+        for _ in world.start([*foreground_cs, *control_systems, ds_agent], gui):
+            pass
 
 
 main_sim_cfg = cfn.Config(
@@ -235,7 +227,7 @@ main_sim_cfg = cfn.Config(
     action_decoder=positronic.cfg.policy.action.absolute_position,
     camera_fps=15,
     policy_fps=15,
-    simulation_time=10,
+    driver=timed.override(simulation_time=15),
     camera_dict={'image.handcam_left': 'handcam_left_ph', 'image.back_view': 'back_view_ph'},
     task='pick up the green cube and put in on top of the red cube',
 )
@@ -285,14 +277,10 @@ openpi_droid = cfn.Config(
         ),
     },
     policy=positronic.cfg.policy.policy.droid,
+    driver=keyboard,
     observation_encoder=positronic.cfg.policy.observation.openpi_droid,
     action_decoder=positronic.cfg.policy.action.joint_delta,
     policy_fps=15,
-)
-
-openpi_positronic_real = openpi_droid.override(
-    observation_encoder=positronic.cfg.policy.observation.openpi_positronic,
-    action_decoder=positronic.cfg.policy.action.absolute_position,
 )
 
 
@@ -310,7 +298,10 @@ def _internal_main():
             action_decoder=positronic.cfg.policy.action.groot_infer,
         ),
         'droid_real': openpi_droid,
-        'openpi_real': openpi_positronic_real,
+        'openpi_real': openpi_droid.override(
+            observation_encoder=positronic.cfg.policy.observation.openpi_positronic,
+            action_decoder=positronic.cfg.policy.action.absolute_position,
+        ),
         'groot_droid': openpi_droid.override(
             policy=positronic.cfg.policy.policy.groot,
             observation_encoder=positronic.cfg.policy.observation.groot_infer,

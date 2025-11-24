@@ -3,6 +3,7 @@ import time
 from collections.abc import Callable, Iterator
 from enum import Enum, auto
 
+import cv2
 import dearpygui.dearpygui as dpg
 import numpy as np
 
@@ -50,9 +51,12 @@ class UIElement:
 
 
 class EvalUI(pimm.ControlSystem):
-    def __init__(self):
+    def __init__(self, max_im_size: tuple[int, int] = (320, 240), ui_scale: float = 1.0):
         self.state = State.WAITING
         self.elements: list[UIElement] = []
+        # Scale max_im_size by ui_scale
+        self.ui_scale = ui_scale
+        self.max_im_size = (self.size(max_im_size[0]), self.size(max_im_size[1]))
 
         # --- Inputs/Outputs ---
         self.cameras = pimm.ReceiverDict(self, default=None)
@@ -60,10 +64,32 @@ class EvalUI(pimm.ControlSystem):
         self.ds_writer_command = pimm.ControlSystemEmitter(self)
 
         # --- Actions ---
-        self.start_btn = self._add('start_btn', [State.WAITING], dpg.add_button, label='Start', callback=self.start)
-        self.stop_btn = self._add('stop_btn', [State.RUNNING], dpg.add_button, label='Stop', callback=self.stop)
+        self.start_btn = self._add(
+            'start_btn',
+            [State.WAITING],
+            dpg.add_button,
+            label='Start',
+            callback=self.start,
+            width=self.size(80),
+            height=self.size(32),
+        )
+        self.stop_btn = self._add(
+            'stop_btn',
+            [State.RUNNING],
+            dpg.add_button,
+            label='Stop',
+            callback=self.stop,
+            width=self.size(80),
+            height=self.size(32),
+        )
         self.reset_btn = self._add(
-            'reset_btn', [State.WAITING, State.RUNNING], dpg.add_button, label='Reset', callback=self.reset
+            'reset_btn',
+            [State.WAITING, State.RUNNING],
+            dpg.add_button,
+            label='Reset',
+            callback=self.reset,
+            width=self.size(80),
+            height=self.size(32),
         )
 
         # --- Configuration ---
@@ -75,7 +101,9 @@ class EvalUI(pimm.ControlSystem):
             default_value='Towels',
             callback=self.radio_callback,
         )
-        self.custom_input = self._add('custom_input', [State.WAITING], dpg.add_input_text, show=False, width=130)
+        self.custom_input = self._add(
+            'custom_input', [State.WAITING], dpg.add_input_text, show=False, width=self.size(130)
+        )
 
         self.total_items = self._add(
             'total_items_input',
@@ -83,7 +111,7 @@ class EvalUI(pimm.ControlSystem):
             dpg.add_input_int,
             label='Total items',
             step=1,
-            width=100,
+            width=self.size(100),
         )
         self.successful_items = self._add(
             'successful_items_input',
@@ -91,7 +119,7 @@ class EvalUI(pimm.ControlSystem):
             dpg.add_input_int,
             label='Successful items',
             step=1,
-            width=100,
+            width=self.size(100),
         )
 
         self.aborted_checkbox = self._add(
@@ -107,15 +135,20 @@ class EvalUI(pimm.ControlSystem):
 
         # --- Notes & Submission ---
         self.notes_input = self._add(
-            'notes_input', [State.REVIEWING], dpg.add_input_text, multiline=True, height=60, width=380
+            'notes_input',
+            [State.REVIEWING],
+            dpg.add_input_text,
+            multiline=True,
+            height=self.size(60),
+            width=self.size(380),
         )
         self.submit_btn = self._add(
             'submit_btn',
             [State.REVIEWING],
             dpg.add_button,
             label='Submit',
-            width=100,
-            height=28,
+            width=self.size(100),
+            height=self.size(28),
             callback=lambda: self.submit(),
         )
         self.cancel_btn = self._add(
@@ -123,8 +156,8 @@ class EvalUI(pimm.ControlSystem):
             [State.REVIEWING],
             dpg.add_button,
             label='Cancel',
-            width=100,
-            height=28,
+            width=self.size(100),
+            height=self.size(28),
             callback=lambda: self.cancel(),
         )
 
@@ -138,6 +171,10 @@ class EvalUI(pimm.ControlSystem):
         element = UIElement(tag, enabled_states, render_func, **kwargs)
         self.elements.append(element)
         return element
+
+    def size(self, v: int) -> int:
+        """Scale a value by ui_scale."""
+        return int(v * self.ui_scale)
 
     # --- State Transitions ---
 
@@ -186,9 +223,12 @@ class EvalUI(pimm.ControlSystem):
         if self.state != State.REVIEWING:
             return
 
+        # Get task value - use custom input if "Other" is selected
+        task_radio_value = dpg.get_value('task_radio')
+        task_value = dpg.get_value('custom_input') if task_radio_value == 'Other' else task_radio_value
+
         data = {
-            'task': dpg.get_value('task_radio'),
-            'custom_task': dpg.get_value('custom_input') if dpg.get_value('task_radio') == 'Other' else None,
+            'task': task_value,
             'total_items': dpg.get_value('total_items_input'),
             'successful_items': dpg.get_value('successful_items_input'),
             'aborted': dpg.get_value('aborted_checkbox'),
@@ -287,45 +327,62 @@ class EvalUI(pimm.ControlSystem):
                 dpg.add_theme_color(dpg.mvThemeCol_FrameBgActive, (30, 30, 30))
 
         # Window
-        with dpg.window(label='Evaluation Control', width=500, height=800, tag='main_window'):
-            dpg.add_text('Camera Feed')
-            # Image grid container
-            with dpg.group(tag='image_grid_group'):
-                pass  # Images will be added here
-
-            dpg.add_separator()
-            dpg.add_text('Controls')
+        with dpg.window(label='Evaluation Control', width=self.size(1200), height=self.size(800), tag='main_window'):
             with dpg.group(horizontal=True):
-                self.start_btn.render()
-                self.stop_btn.render()
-                self.reset_btn.render()
+                # Left side: Camera feeds in vertical column
+                with dpg.group(horizontal=False, tag='image_grid_group'):
+                    dpg.add_text('Camera Feed')
 
-            dpg.add_separator()
-            dpg.add_text('Configuration')
+                # Spacer between images and controls
+                dpg.add_spacer(width=self.size(20))
 
-            with dpg.group(horizontal=True):
-                with dpg.child_window(height=110, width=240, border=True):
-                    dpg.add_text('Task')
-                    with dpg.group(horizontal=True):
-                        self.task_radio.render()
-                        with dpg.group():
-                            dpg.add_spacer(height=42)
-                            self.custom_input.render()
-
-                with dpg.group():
-                    self.total_items.render()
-                    self.successful_items.render()
-
-            self.aborted_checkbox.render()
-            self.model_failure_checkbox.render()
-
-            dpg.add_separator()
-            dpg.add_text('Notes')
-            with dpg.group(horizontal=True):
-                self.notes_input.render()
+                # Right side: Controls
                 with dpg.group(horizontal=False):
-                    self.submit_btn.render()
-                    self.cancel_btn.render()
+                    dpg.add_text('Controls')
+                    dpg.add_spacer(height=self.size(5))
+                    with dpg.group(horizontal=True):
+                        self.start_btn.render()
+                        dpg.add_spacer(width=self.size(10))
+                        self.stop_btn.render()
+                        dpg.add_spacer(width=self.size(10))
+                        self.reset_btn.render()
+
+                    dpg.add_spacer(height=self.size(15))
+                    dpg.add_separator()
+                    dpg.add_spacer(height=self.size(10))
+                    dpg.add_text('Configuration')
+
+                    with dpg.group(horizontal=True):
+                        with dpg.child_window(height=self.size(110), width=self.size(240), border=True):
+                            dpg.add_text('Task')
+                            with dpg.group(horizontal=True):
+                                self.task_radio.render()
+                                with dpg.group():
+                                    dpg.add_spacer(height=self.size(42))
+                                    self.custom_input.render()
+
+                        with dpg.group():
+                            self.total_items.render()
+                            dpg.add_spacer(height=self.size(5))
+                            self.successful_items.render()
+
+                    dpg.add_spacer(height=self.size(10))
+                    self.aborted_checkbox.render()
+                    dpg.add_spacer(height=self.size(5))
+                    self.model_failure_checkbox.render()
+
+                    dpg.add_spacer(height=self.size(15))
+                    dpg.add_separator()
+                    dpg.add_spacer(height=self.size(10))
+                    dpg.add_text('Notes')
+                    dpg.add_spacer(height=self.size(5))
+                    with dpg.group(horizontal=True):
+                        self.notes_input.render()
+                        dpg.add_spacer(width=self.size(10))
+                        with dpg.group(horizontal=False):
+                            self.submit_btn.render()
+                            dpg.add_spacer(height=self.size(5))
+                            self.cancel_btn.render()
 
         # Key Handler
         with dpg.handler_registry():
@@ -373,10 +430,14 @@ class EvalUI(pimm.ControlSystem):
             dpg.add_key_press_handler(dpg.mvKey_Return, callback=lambda s, a: safe_trigger(submit_on_enter))
             dpg.add_key_press_handler(dpg.mvKey_Escape, callback=lambda s, a: safe_trigger(cancel_on_escape))
 
-        dpg.create_viewport(title='Eval UI', width=520, height=850)
+        dpg.create_viewport(title='Eval UI', width=self.size(520), height=self.size(850))
+        dpg.set_viewport_vsync(True)
         dpg.configure_app(keyboard_navigation=True)
+        if self.ui_scale != 1.0:
+            dpg.set_global_font_scale(self.ui_scale)
         dpg.setup_dearpygui()
         dpg.show_viewport()
+        dpg.maximize_viewport()
 
         # Initialize UI state
         self.update_ui()
@@ -389,17 +450,35 @@ class EvalUI(pimm.ControlSystem):
                     image = cam_msg.data.array
 
                     if cam_name not in self.im_sizes:
-                        height, width = image.shape[:2]
-                        self.im_sizes[cam_name] = (height, width)
+                        orig_height, orig_width = image.shape[:2]
+
+                        # Calculate display size (downsample if needed)
+                        max_width, max_height = self.max_im_size
+                        scale = min(max_width / orig_width, max_height / orig_height, 1.0)
+                        display_width = int(orig_width * scale)
+                        display_height = int(orig_height * scale)
+
+                        self.im_sizes[cam_name] = (display_height, display_width)
 
                         with dpg.texture_registry(show=False):
-                            data = np.zeros((height, width, 4), dtype=np.float32)
+                            data = np.zeros((display_height, display_width, 4), dtype=np.float32)
                             dpg.add_raw_texture(
-                                width, height, default_value=data, format=dpg.mvFormat_Float_rgba, tag=f'tex_{cam_name}'
+                                display_width,
+                                display_height,
+                                default_value=data,
+                                format=dpg.mvFormat_Float_rgba,
+                                tag=f'tex_{cam_name}',
                             )
                             self.raw_textures[cam_name] = data
 
-                        dpg.add_image(f'tex_{cam_name}', parent='image_grid_group', width=width, height=height)
+                        dpg.add_image(
+                            f'tex_{cam_name}', parent='image_grid_group', width=display_width, height=display_height
+                        )
+
+                    # Downsample image if needed to match display size
+                    display_height, display_width = self.im_sizes[cam_name]
+                    if image.shape[0] != display_height or image.shape[1] != display_width:
+                        image = cv2.resize(image, (display_width, display_height), interpolation=cv2.INTER_AREA)
 
                     texture = self.raw_textures[cam_name]
                     texture[:, :, :3] = image / 255.0
