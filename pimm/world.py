@@ -7,7 +7,7 @@ import multiprocessing.shared_memory
 import sys
 import time
 import traceback
-from collections import deque
+from collections import defaultdict, deque
 from collections.abc import Callable, Iterator
 from enum import IntEnum
 from multiprocessing import resource_tracker
@@ -15,7 +15,7 @@ from multiprocessing.managers import ValueProxy
 from multiprocessing.queues import Queue
 from multiprocessing.synchronize import Event as EventClass
 from queue import Empty, Full
-from typing import Any, TypeVar
+from typing import TypeVar
 
 from .core import (
     Clock,
@@ -66,11 +66,7 @@ class MultiprocessEmitter(SignalEmitter[T]):
     shared-memory buffer. It defers the transport choice until the first payload
     unless ``forced_mode`` pins the decision.
 
-    Weak references link the emitter and its paired receiver so that whichever
-    side closes first can tell the other to release shared-memory views before
-    unlinking the underlying buffer. Full references would create reference cycles
-    and break pickling when ``multiprocessing`` spawns child processes, hence
-    the indirection via ``weakref``.
+    Broadcast emitting is supported by allowing up_values and sm_queues be lists.
     """
 
     def __init__(
@@ -80,8 +76,8 @@ class MultiprocessEmitter(SignalEmitter[T]):
         mode_value: mp.Value,
         lock: mp.Lock,
         ts_value: mp.Value,
-        up_values: ValueProxy[bool] | list[ValueProxy[bool]],   # a bool flag that new data has been written - for each receiver
-        sm_queues: Queue | list[Queue],  # special queue to send SM block name to many receivers
+        up_values: ValueProxy[bool] | list[ValueProxy[bool]],   # a flag that new data has arrived (for each receiver)
+        sm_queues: Queue | list[Queue],  # a queue to send SM metadata to many receivers
         *,
         forced_mode: TransportMode | None = None,
     ):
@@ -311,9 +307,13 @@ class MultiprocessReceiver(SignalReceiver[T]):
             assert self._readonly_buffer is not None
             assert self._out_value is not None
             self._out_value.read_from_buffer(self._readonly_buffer)
+
+            # update read status for an individual
             updated = self._up_value.value
             self._up_value.value = False
-            return Message(data=self._out_value, ts=self._ts_value.value, updated=updated)
+
+            return Message(data=self._out_value, ts=self._ts_value.value, updated=updated) # instead of True
+
 
     def read(self) -> Message[T] | None:
         mode = self.transport_mode
@@ -600,9 +600,9 @@ class World:
         raise ValueError(f'Unsupported connector type: {type(connector)}.')
 
     def start(
-        self,
-        main_process: ControlSystem | list[ControlSystem | None],
-        background: ControlSystem | list[ControlSystem | None] | None = None,
+            self,
+            main_process: ControlSystem | list[ControlSystem | None],
+            background: ControlSystem | list[ControlSystem | None] | None = None,
     ) -> Iterator[Sleep]:
         """Bind declared connections and launch control systems.
 
