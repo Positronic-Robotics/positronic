@@ -1,4 +1,5 @@
 import json
+from collections.abc import Callable
 from enum import Enum, auto
 
 import dearpygui.dearpygui as dpg
@@ -15,52 +16,154 @@ def on_start():
     print('Start triggered')
 
 
-class EvalState(Enum):
+class State(Enum):
     WAITING = auto()
     RUNNING = auto()
     REVIEWING = auto()
 
 
+class UIElement:
+    def __init__(self, tag: str, enabled_states: list[State], render_func: Callable, **kwargs):
+        self.tag = tag
+        self.enabled_states = enabled_states
+        self.render_func = render_func
+        self.kwargs = kwargs
+
+    def render(self, **overrides):
+        """Renders the DPG element."""
+        kwargs = {**self.kwargs, **overrides}
+        self.render_func(tag=self.tag, **kwargs)
+
+    def update(self, current_state: State):
+        """Updates the enabled/disabled state based on current_state."""
+        should_be_enabled = current_state in self.enabled_states
+        self._set_fake_disabled(not should_be_enabled)
+
+    def _set_fake_disabled(self, is_disabled: bool):
+        # Always keep enabled=True to allow custom styling
+        dpg.configure_item(self.tag, enabled=True)
+
+        if is_disabled:
+            dpg.bind_item_theme(self.tag, 'disabled_theme')
+            # For inputs, make them readonly if possible
+            if dpg.get_item_type(self.tag) in ['mvAppItemType::mvInputText', 'mvAppItemType::mvInputInt']:
+                dpg.configure_item(self.tag, readonly=True)
+        else:
+            dpg.bind_item_theme(self.tag, 0)  # Reset to default
+            if dpg.get_item_type(self.tag) in ['mvAppItemType::mvInputText', 'mvAppItemType::mvInputInt']:
+                dpg.configure_item(self.tag, readonly=False)
+
+
 class EvalController:
     def __init__(self):
-        self.state = EvalState.WAITING
+        self.state = State.WAITING
+        self.elements: list[UIElement] = []
+
+        # --- Actions ---
+        self.start_btn = self._add('start_btn', [State.WAITING], dpg.add_button, label='Start', callback=self.start)
+        self.stop_btn = self._add('stop_btn', [State.RUNNING], dpg.add_button, label='Stop', callback=self.stop)
+        self.reset_btn = self._add(
+            'reset_btn', [State.WAITING, State.RUNNING], dpg.add_button, label='Reset', callback=self.reset
+        )
+
+        # --- Configuration ---
+        self.task_radio = self._add(
+            'task_radio',
+            [State.WAITING],
+            dpg.add_radio_button,
+            items=['Towels', 'Spoons', 'Other'],
+            default_value='Towels',
+            callback=self.radio_callback,
+        )
+        self.custom_input = self._add('custom_input', [State.WAITING], dpg.add_input_text, show=False, width=130)
+
+        self.total_items = self._add(
+            'total_items_input',
+            [State.WAITING, State.REVIEWING],
+            dpg.add_input_int,
+            label='Total items',
+            step=1,
+            width=100,
+        )
+        self.successful_items = self._add(
+            'successful_items_input',
+            [State.RUNNING, State.REVIEWING],
+            dpg.add_input_int,
+            label='Successful items',
+            step=1,
+            width=100,
+        )
+
+        self.aborted_checkbox = self._add(
+            'aborted_checkbox', [State.REVIEWING], dpg.add_checkbox, label='Aborted', callback=self.aborted_callback
+        )
+        self.model_failure_checkbox = self._add(
+            'model_failure_checkbox',
+            [State.REVIEWING],
+            dpg.add_checkbox,
+            label='Model failure',
+            callback=self.model_failure_callback,
+        )
+
+        # --- Notes & Submission ---
+        self.notes_input = self._add(
+            'notes_input', [State.REVIEWING], dpg.add_input_text, multiline=True, height=60, width=380
+        )
+        self.submit_btn = self._add(
+            'submit_btn',
+            [State.REVIEWING],
+            dpg.add_button,
+            label='Submit',
+            width=100,
+            height=28,
+            callback=lambda: self.submit(),
+        )
+        self.cancel_btn = self._add(
+            'cancel_btn',
+            [State.REVIEWING],
+            dpg.add_button,
+            label='Cancel',
+            width=100,
+            height=28,
+            callback=lambda: self.cancel(),
+        )
+
+    def _add(self, tag, enabled_states, render_func, **kwargs):
+        element = UIElement(tag, enabled_states, render_func, **kwargs)
+        self.elements.append(element)
+        return element
+
+    # --- State Transitions ---
 
     def start(self):
-        if self.state != EvalState.WAITING:
+        if self.state != State.WAITING:
             return
         print('State: RUNNING')
-        self.state = EvalState.RUNNING
+        self.state = State.RUNNING
         self.update_ui()
 
     def stop(self):
-        if self.state != EvalState.RUNNING:
+        if self.state != State.RUNNING:
             return
         print('State: REVIEWING')
-        self.state = EvalState.REVIEWING
+        self.state = State.REVIEWING
         self.update_ui()
 
     def reset(self):
-        if self.state == EvalState.WAITING:
-            # Allow reset in WAITING to just reset data? Or only from RUNNING/REVIEWING?
-            # Requirement: "Pressing reset issues reset in the console." in WAITING.
-            pass
-        elif self.state == EvalState.RUNNING:
-            pass
-        elif self.state == EvalState.REVIEWING:
+        if self.state == State.REVIEWING:
             return  # Reset disabled in REVIEWING
 
         print('State: WAITING (Reset)')
         # Reset data
         dpg.set_value('successful_items_input', 0)
         # Reset to WAITING
-        self.state = EvalState.WAITING
+        self.state = State.WAITING
         self.update_ui()
 
     def submit(self):
-        if self.state != EvalState.REVIEWING:
+        if self.state != State.REVIEWING:
             return
 
-        # Gather data
         data = {
             'task': dpg.get_value('task_radio'),
             'custom_task': dpg.get_value('custom_input') if dpg.get_value('task_radio') == 'Other' else None,
@@ -72,139 +175,76 @@ class EvalController:
         }
         print(json.dumps(data, indent=2))
 
-        # Clear data
         dpg.set_value('notes_input', '')
         dpg.set_value('successful_items_input', 0)
-
-        # Transition to WAITING
-        self.state = EvalState.WAITING
+        self.state = State.WAITING
         self.update_ui()
 
     def cancel(self):
-        if self.state != EvalState.REVIEWING:
+        if self.state != State.REVIEWING:
             return
-
         print('State: WAITING (Cancelled)')
-
-        # Clear data
         dpg.set_value('notes_input', '')
         dpg.set_value('successful_items_input', 0)
-
-        # Transition to WAITING
-        self.state = EvalState.WAITING
+        self.state = State.WAITING
         self.update_ui()
 
-    def update_ui(self):
-        state = self.state
+    # --- Callbacks ---
 
-        # Helper for "Fake Disabled" styling
-        def set_disabled(tag, is_disabled):
-            # Always keep enabled=True to allow custom styling
-            dpg.configure_item(tag, enabled=True)
+    def radio_callback(self, sender, app_data):
+        # Guard: Only allow change in WAITING
+        if self.state != State.WAITING:
+            pass
 
-            if is_disabled:
-                dpg.bind_item_theme(tag, 'disabled_theme')
-                # For inputs, make them readonly if possible
-                if dpg.get_item_type(tag) in ['mvAppItemType::mvInputText', 'mvAppItemType::mvInputInt']:
-                    dpg.configure_item(tag, readonly=True)
-            else:
-                dpg.bind_item_theme(tag, 0)  # Reset to default
-                if dpg.get_item_type(tag) in ['mvAppItemType::mvInputText', 'mvAppItemType::mvInputInt']:
-                    dpg.configure_item(tag, readonly=False)
+        show_custom = app_data == 'Other'
+        dpg.configure_item('custom_input', show=show_custom)
+        # We need to update UI to ensure the new custom input gets correct state
+        self.update_ui()
 
-        # WAITING
-        if state == EvalState.WAITING:
-            set_disabled('start_btn', False)
-            set_disabled('stop_btn', True)
-            set_disabled('reset_btn', False)
-
-            set_disabled('task_radio', False)
-            # Custom input enabled only if Other selected
-            set_disabled('custom_input', dpg.get_value('task_radio') != 'Other')
-
-            set_disabled('total_items_input', False)
-            dpg.set_value('successful_items_input', 0)
-            set_disabled('successful_items_input', True)
-
+    def aborted_callback(self, sender, app_data):
+        if self.state != State.REVIEWING:
             dpg.set_value('aborted_checkbox', False)
-            set_disabled('aborted_checkbox', True)
-            set_disabled('model_failure_checkbox', True)
+        self.update_ui()
 
-            dpg.set_value('notes_input', '')
-            set_disabled('notes_input', True)
-            set_disabled('submit_btn', True)
-            set_disabled('cancel_btn', True)
+    def model_failure_callback(self, sender, app_data):
+        # This callback is only triggered if the checkbox is interacted with.
+        # The actual enabled/disabled state is managed by update_ui.
+        # If it's clicked when it shouldn't be, update_ui will correct it.
+        pass
 
-        # RUNNING
-        elif state == EvalState.RUNNING:
-            set_disabled('start_btn', True)
-            set_disabled('stop_btn', False)
-            set_disabled('reset_btn', False)
+    # --- UI Update ---
 
-            set_disabled('task_radio', True)
-            set_disabled('custom_input', True)
+    def update_ui(self):
+        for element in self.elements:
+            element.update(self.state)
 
-            set_disabled('total_items_input', True)
-            set_disabled('successful_items_input', False)
+        # Special logic for dependent widgets
+        # Custom Input: Visibility depends on 'Other' being selected
+        is_other = dpg.get_value('task_radio') == 'Other'
+        dpg.configure_item(self.custom_input.tag, show=is_other)
 
-            set_disabled('aborted_checkbox', True)
-            set_disabled('model_failure_checkbox', True)
-
-            set_disabled('notes_input', True)
-            set_disabled('submit_btn', True)
-            set_disabled('cancel_btn', True)
-
-        # REVIEWING
-        elif state == EvalState.REVIEWING:
-            set_disabled('start_btn', True)
-            set_disabled('stop_btn', True)
-            set_disabled('reset_btn', True)
-
-            set_disabled('task_radio', True)
-            set_disabled('custom_input', True)
-
-            set_disabled('total_items_input', False)
-            set_disabled('successful_items_input', False)
-
-            set_disabled('aborted_checkbox', False)
-
-            # Model failure depends on Aborted
-            if dpg.get_value('aborted_checkbox'):
-                set_disabled('model_failure_checkbox', False)
+        # Model Failure: Only enabled if Aborted is checked AND we are in REVIEWING
+        if self.state == State.REVIEWING:
+            if not dpg.get_value('aborted_checkbox'):
+                self.model_failure_checkbox._set_fake_disabled(True)
+                dpg.set_value(self.model_failure_checkbox.tag, False)  # Also reset value if disabled
             else:
-                set_disabled('model_failure_checkbox', True)
+                # If aborted is checked, it should follow its base enabled_states (which is REVIEWING)
+                self.model_failure_checkbox._set_fake_disabled(False)
+        else:
+            # If not in REVIEWING, it should be disabled based on its base config
+            self.model_failure_checkbox._set_fake_disabled(True)
+            dpg.set_value(self.model_failure_checkbox.tag, False)  # Also reset value if disabled
 
-            set_disabled('notes_input', False)
-            set_disabled('submit_btn', False)
-            set_disabled('cancel_btn', False)
+        # Reset values for certain items when state changes to WAITING
+        if self.state == State.WAITING:
+            dpg.set_value(self.successful_items.tag, 0)
+            dpg.set_value(self.aborted_checkbox.tag, False)
+            dpg.set_value(self.model_failure_checkbox.tag, False)
+            dpg.set_value(self.notes_input.tag, '')
 
 
 controller = EvalController()
-
-
-def radio_callback(sender, app_data):
-    # Guard: Only allow change in WAITING
-    if controller.state != EvalState.WAITING:
-        # Revert change? Hard to know previous value without storing it.
-        # But since we set it to "fake disabled", user click shouldn't visually do much if we handle it right?
-        pass
-
-    show_custom = app_data == 'Other'
-    dpg.configure_item('custom_input', show=show_custom)
-    controller.update_ui()
-
-
-def aborted_callback(sender, app_data):
-    if controller.state != EvalState.REVIEWING:
-        dpg.set_value('aborted_checkbox', False)  # Force off if not in reviewing
-    controller.update_ui()
-
-
-def model_failure_callback(sender, app_data):
-    # Only allowed in REVIEWING and if Aborted is checked
-    allowed = (controller.state == EvalState.REVIEWING) and dpg.get_value('aborted_checkbox')
-    if not allowed:
-        dpg.set_value('model_failure_checkbox', False)
 
 
 def main():
@@ -237,9 +277,9 @@ def main():
         dpg.add_separator()
         dpg.add_text('Controls')
         with dpg.group(horizontal=True):
-            dpg.add_button(label='[S]tart', tag='start_btn', callback=lambda: controller.start())
-            dpg.add_button(label='Sto[p]', tag='stop_btn', callback=lambda: controller.stop())
-            dpg.add_button(label='[R]eset', tag='reset_btn', callback=lambda: controller.reset())
+            controller.start_btn.render()
+            controller.stop_btn.render()
+            controller.reset_btn.render()
 
         dpg.add_separator()
         dpg.add_text('Configuration')
@@ -250,45 +290,34 @@ def main():
             with dpg.child_window(height=110, width=240, border=True):
                 dpg.add_text('Task')
                 with dpg.group(horizontal=True):
-                    dpg.add_radio_button(
-                        items=['Towels', 'Spoons', 'Other'],
-                        callback=radio_callback,
-                        default_value='Towels',
-                        tag='task_radio',
-                    )
+                    controller.task_radio.render()
 
                     with dpg.group():
                         # Spacer to push the input down to the 3rd radio option
                         dpg.add_spacer(height=42)
-                        dpg.add_input_text(tag='custom_input', show=False, width=130)
+                        controller.custom_input.render()
 
             # Right Column: Numeric Inputs
             with dpg.group():
-                dpg.add_input_int(label='Total items', step=1, width=100, tag='total_items_input')
-                dpg.add_input_int(label='Successful items', step=1, width=100, tag='successful_items_input')
+                controller.total_items.render()
+                controller.successful_items.render()
 
-        # Checkbox
-        dpg.add_checkbox(label='Aborted', tag='aborted_checkbox', callback=aborted_callback)
-        dpg.add_checkbox(label='Model failure', tag='model_failure_checkbox', callback=model_failure_callback)
+        controller.aborted_checkbox.render()
+        controller.model_failure_checkbox.render()
         # Initial binding done by update_ui
 
         dpg.add_separator()
         dpg.add_text('Notes')
         with dpg.group(horizontal=True):
-            dpg.add_input_text(multiline=True, height=60, width=380, tag='notes_input')
+            controller.notes_input.render()
             with dpg.group(horizontal=False):
-                dpg.add_button(
-                    label='Submit', width=100, height=28, tag='submit_btn', callback=lambda: controller.submit()
-                )
-                dpg.add_button(
-                    label='Cancel', width=100, height=28, tag='cancel_btn', callback=lambda: controller.cancel()
-                )
+                controller.submit_btn.render()
+                controller.cancel_btn.render()
 
     # Key Handler
     with dpg.handler_registry():
 
         def safe_trigger(callback):
-            # List of text input tags to check for focus
             text_inputs = ['notes_input', 'custom_input', 'total_items_input', 'successful_items_input']
             for tag in text_inputs:
                 if dpg.is_item_focused(tag):
@@ -302,7 +331,7 @@ def main():
         # Custom handler for Radio Button navigation (Up/Down arrows)
         def change_radio_selection(sender, app_data):
             # Only allow if radio is not disabled (check state)
-            if controller.state != EvalState.WAITING:
+            if controller.state != State.WAITING:
                 return
 
             if dpg.is_item_focused('task_radio'):
@@ -318,7 +347,7 @@ def main():
 
                 new_value = items[new_idx]
                 dpg.set_value('task_radio', new_value)
-                radio_callback('task_radio', new_value)
+                controller.radio_callback('task_radio', new_value)
 
         dpg.add_key_press_handler(dpg.mvKey_Up, callback=change_radio_selection)
         dpg.add_key_press_handler(dpg.mvKey_Down, callback=change_radio_selection)
