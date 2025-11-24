@@ -659,7 +659,7 @@ class World:
             emitter_logical._bind(emitter_wrapper(emitter_physical))
 
             if isinstance(receivers_physical, list):
-                for (_, logical_receiver, _, _), physical_receiver in zip(receivers_logical_list, receivers_physical):
+                for (_, logical_receiver, _, _), physical_receiver in zip(receivers_logical_list, receivers_physical, strict=True):
                     logical_receiver._bind(physical_receiver)
             else:
                 (_, logical_receiver, _, _) = receivers_logical_list[0]
@@ -753,7 +753,7 @@ class World:
         )
 
         receivers = []
-        for up_value, sm_queue in zip(up_values, sm_queues):
+        for up_value, sm_queue in zip(up_values, sm_queues, strict=True):
             receiver = MultiprocessReceiver(
                 message_queue, mode_value, lock, ts_value, up_value, sm_queue, forced_mode=forced_mode
             )

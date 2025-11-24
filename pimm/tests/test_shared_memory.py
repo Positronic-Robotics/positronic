@@ -1,4 +1,3 @@
-import multiprocessing as mp
 from collections.abc import Iterator
 
 import numpy as np
