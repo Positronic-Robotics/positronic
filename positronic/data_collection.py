@@ -351,7 +351,13 @@ droid = cfn.Config(
 @pos3.with_mirror()
 def _internal_main():
     init_logging()
-    cfn.cli({'real': main_cfg, 'so101': so101cfg, 'sim': main_sim, 'droid': droid})
+    cfn.cli({
+        'real': main_cfg,
+        'so101': so101cfg,
+        'sim': main_sim,
+        'sim_pnp': main_sim.override(loaders=positronic.cfg.simulator.multi_tote_loaders),
+        'droid': droid,
+    })
 
 
 if __name__ == '__main__':

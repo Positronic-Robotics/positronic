@@ -83,21 +83,14 @@ class AddBox(MujocoSceneTransform):
         self.freejoint = freejoint
 
     def apply(self, spec: mujoco.MjSpec) -> mujoco.MjSpec:
-        body_dict = {
-            'name': self.body_name,
-            'pos': self.pos,
-        }
+        body_dict = {'name': self.body_name, 'pos': self.pos}
         if self.quat is not None:
             body_dict['quat'] = self.quat
 
         body = spec.worldbody.add_body(**body_dict)
 
         body.add_geom(
-            name=self.geom_name,
-            size=self.size,
-            density=self.density,
-            rgba=self.rgba,
-            type=mujoco.mjtGeom.mjGEOM_BOX,
+            name=self.geom_name, size=self.size, density=self.density, rgba=self.rgba, type=mujoco.mjtGeom.mjGEOM_BOX
         )
 
         if self.freejoint:
@@ -152,9 +145,172 @@ class SetBodyPosition(MujocoSceneTransform):
             return spec
 
 
+class AddTote(MujocoSceneTransform):
+    def __init__(
+        self,
+        name: str,
+        size: tuple[float, float, float],
+        pos: tuple[float, float, float] | str,
+        thickness: float = 0.005,
+        rgba: tuple[float, float, float, float] = (1, 1, 1, 1),
+        density: float = 1000,
+    ):
+        self.name = name
+        self.size = size  # (width, length, height)
+        self.pos = pos
+        self.thickness = thickness
+        self.rgba = rgba
+        self.density = density
+
+    def apply(self, spec: mujoco.MjSpec) -> mujoco.MjSpec:
+        body = spec.worldbody.add_body(name=f'{self.name}_body', pos=self.pos)
+        width, length, height = self.size
+        thickness = self.thickness
+
+        # Bottom
+        body.add_geom(
+            name=f'{self.name}_bottom',
+            type=mujoco.mjtGeom.mjGEOM_BOX,
+            size=[width, length, thickness],
+            pos=[0, 0, thickness],
+            rgba=self.rgba,
+            density=self.density,
+        )
+        # Front
+        body.add_geom(
+            name=f'{self.name}_front',
+            type=mujoco.mjtGeom.mjGEOM_BOX,
+            size=[width, thickness, height],
+            pos=[0, -length + thickness, height + thickness],
+            rgba=self.rgba,
+            density=self.density,
+        )
+        # Back
+        body.add_geom(
+            name=f'{self.name}_back',
+            type=mujoco.mjtGeom.mjGEOM_BOX,
+            size=[width, thickness, height],
+            pos=[0, length - thickness, height + thickness],
+            rgba=self.rgba,
+            density=self.density,
+        )
+        # Left
+        body.add_geom(
+            name=f'{self.name}_left',
+            type=mujoco.mjtGeom.mjGEOM_BOX,
+            size=[thickness, length - 2 * thickness, height],
+            pos=[-width + thickness, 0, height + thickness],
+            rgba=self.rgba,
+            density=self.density,
+        )
+        # Right
+        body.add_geom(
+            name=f'{self.name}_right',
+            type=mujoco.mjtGeom.mjGEOM_BOX,
+            size=[thickness, length - 2 * thickness, height],
+            pos=[width - thickness, 0, height + thickness],
+            rgba=self.rgba,
+            density=self.density,
+        )
+
+        body.add_freejoint()
+
+        return spec
+
+
+class AddObjectsInTote(MujocoSceneTransform):
+    def __init__(
+        self,
+        tote_name: str,
+        object_name_prefix: str,
+        num_objects: int,
+        object_size: tuple[float, float, float],
+        tote_size: tuple[float, float, float],
+        rgba: tuple[float, float, float, float],
+        seed: int | None = None,
+    ):
+        self.tote_name = tote_name
+        self.object_name_prefix = object_name_prefix
+        self.num_objects = num_objects
+        self.object_size = object_size
+        self.tote_size = tote_size
+        self.rgba = rgba
+        self.seed = seed
+
+    def apply(self, spec: mujoco.MjSpec) -> mujoco.MjSpec:
+        tote_body = next(b for b in spec.bodies if b.name == f'{self.tote_name}_body')
+        tote_pos = tote_body.pos
+
+        width, length, height = self.tote_size
+
+        # Define placement area inside the tote (accounting for walls)
+        margin = 0.02
+        min_x = tote_pos[0] - width + margin
+        max_x = tote_pos[0] + width - margin
+        min_y = tote_pos[1] - length + margin
+        max_y = tote_pos[1] + length - margin
+
+        with np_seed(self.seed):
+            for i in range(self.num_objects):
+                x = np.random.uniform(min_x, max_x)
+                y = np.random.uniform(min_y, max_y)
+                # tote_pos[2] is the bottom of the tote body.
+                # The bottom geom has thickness 0.005 (default) and is at pos=[0, 0, t].
+                # So the floor of the tote is at tote_pos[2] + 2*t.
+                # We add a small margin + stacking.
+                z = tote_pos[2] + 0.02 + i * 0.025
+
+                body = spec.worldbody.add_body(name=f'{self.object_name_prefix}_{i}_body', pos=[x, y, z])
+                body.add_geom(
+                    name=f'{self.object_name_prefix}_{i}_geom',
+                    type=mujoco.mjtGeom.mjGEOM_BOX,
+                    size=self.object_size,
+                    rgba=self.rgba,
+                    density=1000,
+                )
+                body.add_freejoint()
+
+        return spec
+
+
+class SetTwoObjectsPositions(MujocoSceneTransform):
+    def __init__(
+        self,
+        object1_name: str,
+        object2_name: str,
+        table_bounds: tuple[tuple[float, float], tuple[float, float]],
+        min_distance: float,
+        seed: int | None = None,
+    ):
+        self.object1_name = object1_name
+        self.object2_name = object2_name
+        self.table_bounds = table_bounds  # ((min_x, max_x), (min_y, max_y))
+        self.min_distance = min_distance
+        self.seed = seed
+
+    def apply(self, spec: mujoco.MjSpec) -> mujoco.MjSpec:
+        with np_seed(self.seed):
+            body1 = next(b for b in spec.bodies if b.name == f'{self.object1_name}_body')
+            body2 = next(b for b in spec.bodies if b.name == f'{self.object2_name}_body')
+
+            (min_x, max_x), (min_y, max_y) = self.table_bounds
+
+            for _ in range(100):  # Max attempts
+                pos1 = [np.random.uniform(min_x, max_x), np.random.uniform(min_y, max_y), body1.pos[2]]
+                pos2 = [np.random.uniform(min_x, max_x), np.random.uniform(min_y, max_y), body2.pos[2]]
+
+                dist = np.linalg.norm(np.array(pos1[:2]) - np.array(pos2[:2]))
+
+                if dist >= self.min_distance:
+                    body1.pos = pos1
+                    body2.pos = pos2
+                    return spec
+
+            raise RuntimeError('Could not place objects without overlap after 100 attempts')
+
+
 def load_model_from_spec_file(
-    xml_path: str,
-    loaders: Sequence[MujocoSceneTransform] = (),
+    xml_path: str, loaders: Sequence[MujocoSceneTransform] = ()
 ) -> tuple[mujoco.MjModel, dict[str, str]]:
     spec, metadata = load_spec_from_file(xml_path, loaders)
     model = spec.compile()
@@ -163,8 +319,7 @@ def load_model_from_spec_file(
 
 
 def load_spec_from_file(
-    xml_path: str,
-    loaders: Sequence[MujocoSceneTransform] = (),
+    xml_path: str, loaders: Sequence[MujocoSceneTransform] = ()
 ) -> tuple[mujoco.MjSpec, dict[str, str]]:
     with open(xml_path) as f:
         xml_string = f.read()

@@ -436,6 +436,10 @@ def _internal_main():
             observation_encoder=positronic.cfg.policy.observation.groot_infer,
             action_decoder=positronic.cfg.policy.action.groot_infer,
         ),
+        'sim_pnp': main_sim_cfg.override(
+            loaders=positronic.cfg.simulator.multi_tote_loaders,
+            task='pick up objects from the red tote and place them in the green tote',
+        ),
     })
 
 
