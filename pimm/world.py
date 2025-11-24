@@ -659,7 +659,8 @@ class World:
             emitter_logical._bind(emitter_wrapper(emitter_physical))
 
             if isinstance(receivers_physical, list):
-                for (_, logical_receiver, _, _), physical_receiver in zip(receivers_logical, receivers_physical, strict=True):
+                for (_, logical_receiver, _, _), physical_receiver in zip(
+                        receivers_logical, receivers_physical, strict=True):
                     logical_receiver._bind(physical_receiver)
             else:
                 (_, logical_receiver, _, _) = receivers_logical[0]
