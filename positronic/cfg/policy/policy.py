@@ -41,7 +41,7 @@ diffusion = cfn.Config(_get_diffusion_policy)
 
 
 @cfn.config()
-def groot(host: str = 'localhost', port: int = 5555, timeout_ms: int = 15000):
+def groot(host: str = 'localhost', port: int = 9000, timeout_ms: int = 15000):
     from positronic.policy.gr00t import Gr00tPolicy
 
     return Gr00tPolicy(host, port, timeout_ms)
