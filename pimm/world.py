@@ -72,7 +72,7 @@ class MultiprocessEmitter(SignalEmitter[T]):
     def __init__(
         self,
         clock: Clock,
-        queue: mp.Queue,
+        queues: Queue | list[Queue],
         mode_value: mp.Value,
         lock: mp.Lock,
         ts_value: mp.Value,
@@ -82,7 +82,7 @@ class MultiprocessEmitter(SignalEmitter[T]):
         forced_mode: TransportMode | None = None,
     ):
         self._clock = clock
-        self._queue = queue
+        self._queues = queues if isinstance(queues, list) else [queues]
         self._mode_value = mode_value
         self._forced_mode = forced_mode
         self._mode = forced_mode or TransportMode.UNDECIDED
@@ -125,16 +125,22 @@ class MultiprocessEmitter(SignalEmitter[T]):
         return self._mode
 
     def _emit_queue(self, data: T, ts: int) -> bool:
-        try:
-            self._queue.put_nowait(Message(data, ts))
-            return True
-        except Full:
+        msg = Message(data, ts)
+        success = False
+
+        for q in self._queues:
             try:
-                self._queue.get_nowait()
-                self._queue.put_nowait(Message(data, ts))
-                return True
-            except (Empty, Full):
-                return False
+                q.put_nowait(msg)
+                success = True
+            except Full:
+                try:
+                    q.get_nowait()  # drop oldest
+                    q.put_nowait(msg)
+                    success = True
+                except (Empty, Full):
+                    pass  # try next queue
+
+        return success
 
     def _emit_shared_memory(self, data: SMCompliant, ts: int) -> bool:
         if self._data_type is None:
@@ -652,19 +658,17 @@ class World:
             num_receivers = len(receivers_logical)
             emitter_wrapper, _, maxsize, clock = receivers_logical[0]    # parameters the same for all receivers
 
-            kwargs = {'maxsize': maxsize, 'num_receivers': num_receivers} if maxsize is not None else {
-                'num_receivers': num_receivers}
-            emitter_physical, receivers_physical = self.mp_pipes(clock=clock, **kwargs)
+            kwargs = {'maxsize': maxsize} if maxsize is not None else {}
+            emitter_physical, receivers_physical = self.mp_pipes(clock=clock, num_receivers=num_receivers, **kwargs)
 
             emitter_logical._bind(emitter_wrapper(emitter_physical))
 
-            if isinstance(receivers_physical, list):
-                for (_, logical_receiver, _, _), physical_receiver in zip(
-                        receivers_logical, receivers_physical, strict=True):
-                    logical_receiver._bind(physical_receiver)
-            else:
-                (_, logical_receiver, _, _) = receivers_logical[0]
-                logical_receiver._bind(receivers_physical)
+            if not isinstance(receivers_physical, list):
+                receivers_physical = [receivers_physical]
+
+            for (_, logical_receiver, _, _), physical_receiver in zip(
+                    receivers_logical, receivers_physical, strict=True):
+                logical_receiver._bind(physical_receiver)
 
         self.start_in_subprocess(*[cs.run for cs in background])
         return self.interleave(*[cs.run for cs in main_process])
@@ -733,14 +737,10 @@ class World:
         if transport is TransportMode.SHARED_MEMORY and not self.entered:
             raise AssertionError('Shared memory transport is only available after entering the world context.')
 
-        is_broadcast = num_receivers > 1
-        if is_broadcast and transport not in (TransportMode.SHARED_MEMORY, TransportMode.UNDECIDED):
-            raise ValueError('Broadcast mode requires SHARED_MEMORY or UNDECIDED transport mode.')
-
         forced_mode: TransportMode | None
         forced_mode = transport if transport in (TransportMode.QUEUE, TransportMode.SHARED_MEMORY) else None
 
-        message_queue = self._manager.Queue(maxsize=maxsize)
+        message_queues = [self._manager.Queue(maxsize=maxsize) for _ in range(num_receivers)]
         lock = self._manager.Lock()
         ts_value = self._manager.Value('Q', -1)
         up_values = [self._manager.Value('b', False) for _ in range(num_receivers)]
@@ -750,13 +750,13 @@ class World:
 
         emitter_clock = clock or self._clock
         emitter = MultiprocessEmitter(
-            emitter_clock, message_queue, mode_value, lock, ts_value, up_values, sm_queues, forced_mode=forced_mode
+            emitter_clock, message_queues, mode_value, lock, ts_value, up_values, sm_queues, forced_mode=forced_mode
         )
 
         receivers = []
-        for up_value, sm_queue in zip(up_values, sm_queues, strict=True):
+        for m_queue, up_value, sm_queue in zip(message_queues, up_values, sm_queues, strict=True):
             receiver = MultiprocessReceiver(
-                message_queue, mode_value, lock, ts_value, up_value, sm_queue, forced_mode=forced_mode
+                m_queue, mode_value, lock, ts_value, up_value, sm_queue, forced_mode=forced_mode
             )
             receivers.append(receiver)
 
