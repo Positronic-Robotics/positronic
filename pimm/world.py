@@ -155,8 +155,8 @@ class MultiprocessEmitter(SignalEmitter[T]):
             self._sm = multiprocessing.shared_memory.SharedMemory(create=True, size=buf_size)
 
             # support multiple receivers
-            for idx, sm_q in enumerate(self._sm_queues):
-                metadata = (self._sm.name, buf_size, self._data_type, data.instantiation_params(), idx)
+            for sm_q in self._sm_queues:
+                metadata = (self._sm.name, buf_size, self._data_type, data.instantiation_params())
                 sm_q.put(metadata)
         else:
             assert self._expected_buf_size == buf_size, (
@@ -275,7 +275,7 @@ class MultiprocessReceiver(SignalReceiver[T]):
             return True
 
         try:
-            sm_name, buf_size, data_type, instantiation_params, idx = self._sm_queue.get_nowait()
+            sm_name, buf_size, data_type, instantiation_params = self._sm_queue.get_nowait()
         except Empty:
             return False
 
