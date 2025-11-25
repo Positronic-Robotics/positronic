@@ -5,7 +5,7 @@ import tqdm
 import positronic.cfg.simulator
 import positronic.utils.s3 as pos3
 from positronic.dataset.local_dataset import LocalDataset
-from positronic.inference import main_sim
+from positronic.inference import main_sim, timed
 from positronic.policy.tests.test_inference import StubPolicy, make_stub_action_decoder, make_stub_observation_encoder
 
 
@@ -66,12 +66,9 @@ def test_main_sim_emits_commands_and_records_dataset(tmp_path, monkeypatch):
             loaders=loaders,
             camera_fps=10,
             policy_fps=10,
-            simulation_time=0.4,
+            driver=timed.override(simulation_time=0.4, task='integration-test', show_gui=False, num_iterations=1)(),
             camera_dict=camera_dict,
-            task='integration-test',
             output_dir=str(tmp_path),
-            show_gui=False,
-            num_iterations=1,
         )
 
     ds = LocalDataset(tmp_path)
