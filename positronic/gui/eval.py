@@ -104,6 +104,23 @@ class EvalUI(pimm.ControlSystem):
             'custom_input', [State.WAITING], dpg.add_input_text, show=False, width=self.size(350)
         )
 
+        self.tote_radio = self._add(
+            'tote_radio',
+            [State.WAITING, State.RUNNING, State.REVIEWING],
+            dpg.add_radio_button,
+            items=['left', 'right', 'NA'],
+            default_value='NA',
+            horizontal=True,
+        )
+        self.camera_radio = self._add(
+            'camera_radio',
+            [State.WAITING, State.RUNNING, State.REVIEWING],
+            dpg.add_radio_button,
+            items=['left', 'right', 'NA'],
+            default_value='NA',
+            horizontal=True,
+        )
+
         self.total_items = self._add(
             'total_items_input',
             [State.WAITING, State.REVIEWING],
@@ -223,12 +240,22 @@ class EvalUI(pimm.ControlSystem):
             return
 
         data = {
-            'total_items': dpg.get_value('total_items_input'),
-            'successful_items': dpg.get_value('successful_items_input'),
-            'aborted': dpg.get_value('aborted_checkbox'),
-            'model_failure': dpg.get_value('model_failure_checkbox'),
-            'notes': dpg.get_value('notes_input'),
+            'eval.total_items': dpg.get_value('total_items_input'),
+            'eval.successful_items': dpg.get_value('successful_items_input'),
+            'eval.aborted': dpg.get_value('aborted_checkbox'),
+            'eval.model_failure': dpg.get_value('model_failure_checkbox'),
+            'eval.notes': dpg.get_value('notes_input'),
         }
+
+        # Add conditional fields
+        tote_val = dpg.get_value('tote_radio')
+        if tote_val != 'NA':
+            data['eval.tote_placement'] = tote_val
+
+        camera_val = dpg.get_value('camera_radio')
+        if camera_val != 'NA':
+            data['eval.external_camera'] = camera_val
+
         print(json.dumps(data, indent=2))
 
         dpg.set_value('notes_input', '')
@@ -401,6 +428,13 @@ class EvalUI(pimm.ControlSystem):
                             self.total_items.render()
                             dpg.add_spacer(height=self.size(5))
                             self.successful_items.render()
+
+                            dpg.add_spacer(height=self.size(10))
+                            dpg.add_text('Tote Placement')
+                            self.tote_radio.render()
+
+                            dpg.add_text('External Camera')
+                            self.camera_radio.render()
 
                     dpg.add_spacer(height=self.size(10))
                     self.aborted_checkbox.render()
