@@ -33,21 +33,7 @@ class UIElement:
     def update(self, current_state: State):
         """Updates the enabled/disabled state based on current_state."""
         should_be_enabled = current_state in self.enabled_states
-        self._set_fake_disabled(not should_be_enabled)
-
-    def _set_fake_disabled(self, is_disabled: bool):
-        # Always keep enabled=True to allow custom styling
-        dpg.configure_item(self.tag, enabled=True)
-
-        if is_disabled:
-            dpg.bind_item_theme(self.tag, 'disabled_theme')
-            # For inputs, make them readonly if possible
-            if dpg.get_item_type(self.tag) in ['mvAppItemType::mvInputText', 'mvAppItemType::mvInputInt']:
-                dpg.configure_item(self.tag, readonly=True)
-        else:
-            dpg.bind_item_theme(self.tag, 0)  # Reset to default
-            if dpg.get_item_type(self.tag) in ['mvAppItemType::mvInputText', 'mvAppItemType::mvInputInt']:
-                dpg.configure_item(self.tag, readonly=False)
+        dpg.configure_item(self.tag, enabled=should_be_enabled)
 
 
 class EvalUI(pimm.ControlSystem):
@@ -107,7 +93,7 @@ class EvalUI(pimm.ControlSystem):
             callback=self.radio_callback,
         )
         self.custom_input = self._add(
-            'custom_input', [State.WAITING], dpg.add_input_text, show=False, width=self.size(130)
+            'custom_input', [State.WAITING], dpg.add_input_text, show=False, width=self.size(350)
         )
 
         self.total_items = self._add(
@@ -154,7 +140,7 @@ class EvalUI(pimm.ControlSystem):
             label='Submit',
             width=self.size(100),
             height=self.size(28),
-            callback=lambda: self.submit(),
+            callback=self.submit,
         )
         self.cancel_btn = self._add(
             'cancel_btn',
@@ -163,7 +149,7 @@ class EvalUI(pimm.ControlSystem):
             label='Cancel',
             width=self.size(100),
             height=self.size(28),
-            callback=lambda: self.cancel(),
+            callback=self.cancel,
         )
 
         # Internal state for camera rendering
@@ -183,7 +169,7 @@ class EvalUI(pimm.ControlSystem):
 
     # --- State Transitions ---
 
-    def start(self):
+    def start(self, sender=None, app_data=None):
         if self.state != State.WAITING:
             return
         print('State: RUNNING')
@@ -199,7 +185,7 @@ class EvalUI(pimm.ControlSystem):
         self.inference_command.emit(InferenceCommand.START(task=task_name))
         self.ds_writer_command.emit(DsWriterCommand.START(static_data={'task': task_name}))
 
-    def stop(self):
+    def stop(self, sender=None, app_data=None):
         if self.state != State.RUNNING:
             return
         print('State: REVIEWING')
@@ -210,7 +196,7 @@ class EvalUI(pimm.ControlSystem):
         self.inference_command.emit(InferenceCommand.STOP())
         self.ds_writer_command.emit(DsWriterCommand.SUSPEND())
 
-    def reset(self):
+    def reset(self, sender=None, app_data=None):
         if self.state == State.REVIEWING:
             return  # Reset disabled in REVIEWING
 
@@ -224,7 +210,7 @@ class EvalUI(pimm.ControlSystem):
         # Emit commands
         self.inference_command.emit(InferenceCommand.RESET())
 
-    def submit(self):
+    def submit(self, sender=None, app_data=None):
         if self.state != State.REVIEWING:
             return
 
@@ -245,7 +231,7 @@ class EvalUI(pimm.ControlSystem):
         # Emit commands
         self.ds_writer_command.emit(DsWriterCommand.STOP(static_data=data))
 
-    def cancel(self):
+    def cancel(self, sender=None, app_data=None):
         if self.state != State.REVIEWING:
             return
         print('State: WAITING (Cancelled)')
@@ -262,12 +248,10 @@ class EvalUI(pimm.ControlSystem):
     def radio_callback(self, sender, app_data):
         # Guard: Only allow change in WAITING
         if self.state != State.WAITING:
-            pass
+            return
 
-        show_custom = app_data == 'Other'
-        dpg.configure_item('custom_input', show=show_custom)
         # We need to update UI to ensure the new custom input gets correct state
-        self.update_ui()
+        self.update_ui(task_value=app_data)
 
     def aborted_callback(self, sender, app_data):
         if self.state != State.REVIEWING:
@@ -279,22 +263,26 @@ class EvalUI(pimm.ControlSystem):
 
     # --- UI Update ---
 
-    def update_ui(self):
+    def update_ui(self, task_value=None):
         for element in self.elements:
             element.update(self.state)
 
         # Special logic for dependent widgets
-        is_other = dpg.get_value('task_radio') == 'Other'
+        if task_value is None:
+            task_value = dpg.get_value('task_radio')
+
+        is_other = task_value == 'Other'
         dpg.configure_item(self.custom_input.tag, show=is_other)
 
         if self.state == State.REVIEWING:
             if not dpg.get_value('aborted_checkbox'):
-                self.model_failure_checkbox._set_fake_disabled(True)
+                # We can't use _set_fake_disabled anymore, use direct configure
+                dpg.configure_item(self.model_failure_checkbox.tag, enabled=False)
                 dpg.set_value(self.model_failure_checkbox.tag, False)
             else:
-                self.model_failure_checkbox._set_fake_disabled(False)
+                dpg.configure_item(self.model_failure_checkbox.tag, enabled=True)
         else:
-            self.model_failure_checkbox._set_fake_disabled(True)
+            dpg.configure_item(self.model_failure_checkbox.tag, enabled=False)
             dpg.set_value(self.model_failure_checkbox.tag, False)
 
         if self.state == State.WAITING:
@@ -313,18 +301,6 @@ class EvalUI(pimm.ControlSystem):
         # For now, we'll initialize dynamically in the loop or just setup a placeholder if needed.
         # But DPG needs textures created before adding images usually, or added dynamically.
         # Let's use a dynamic approach similar to dpg.py but adapted.
-
-        # General Theme for "Fake Disabled" Elements
-        with dpg.theme(tag='disabled_theme'):
-            with dpg.theme_component(dpg.mvAll):
-                dpg.add_theme_color(dpg.mvThemeCol_Text, (80, 80, 80))
-                dpg.add_theme_color(dpg.mvThemeCol_Button, (30, 30, 30))
-                dpg.add_theme_color(dpg.mvThemeCol_ButtonHovered, (30, 30, 30))
-                dpg.add_theme_color(dpg.mvThemeCol_ButtonActive, (30, 30, 30))
-                dpg.add_theme_color(dpg.mvThemeCol_FrameBg, (30, 30, 30))
-                dpg.add_theme_color(dpg.mvThemeCol_CheckMark, (80, 80, 80))
-                dpg.add_theme_color(dpg.mvThemeCol_FrameBgHovered, (30, 30, 30))
-                dpg.add_theme_color(dpg.mvThemeCol_FrameBgActive, (30, 30, 30))
 
         # Window
         with dpg.window(label='Evaluation Control', width=self.size(1200), height=self.size(800), tag='main_window'):
@@ -353,13 +329,13 @@ class EvalUI(pimm.ControlSystem):
                     dpg.add_text('Configuration')
 
                     with dpg.group(horizontal=True):
-                        with dpg.child_window(height=self.size(110), width=self.size(480), border=True):
+                        # Increased height to fit vertical stack of radio buttons + input
+                        with dpg.child_window(height=self.size(180), width=self.size(480), border=True):
                             dpg.add_text('Task')
-                            with dpg.group(horizontal=True):
-                                self.task_radio.render()
-                                with dpg.group():
-                                    dpg.add_spacer(height=self.size(42))
-                                    self.custom_input.render()
+                            # Vertical layout: Radio buttons first, then input below
+                            self.task_radio.render()
+                            dpg.add_spacer(height=self.size(5))
+                            self.custom_input.render()
 
                         with dpg.group():
                             self.total_items.render()
