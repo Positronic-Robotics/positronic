@@ -33,7 +33,13 @@ class UIElement:
     def update(self, current_state: State):
         """Updates the enabled/disabled state based on current_state."""
         should_be_enabled = current_state in self.enabled_states
-        dpg.configure_item(self.tag, enabled=should_be_enabled)
+
+        if not should_be_enabled:
+            dpg.bind_item_theme(self.tag, 'disabled_theme')
+            dpg.configure_item(self.tag, enabled=False)
+        else:
+            dpg.bind_item_theme(self.tag, 0)
+            dpg.configure_item(self.tag, enabled=True)
 
 
 class EvalUI(pimm.ControlSystem):
@@ -301,6 +307,58 @@ class EvalUI(pimm.ControlSystem):
         # For now, we'll initialize dynamically in the loop or just setup a placeholder if needed.
         # But DPG needs textures created before adding images usually, or added dynamically.
         # Let's use a dynamic approach similar to dpg.py but adapted.
+
+        # General Theme for "Fake Disabled" Elements
+        with dpg.theme(tag='disabled_theme'):
+            # Default state (fallback)
+            with dpg.theme_component(dpg.mvAll):
+                dpg.add_theme_color(dpg.mvThemeCol_Text, (100, 100, 100))
+                dpg.add_theme_color(dpg.mvThemeCol_TextDisabled, (100, 100, 100))
+                dpg.add_theme_color(dpg.mvThemeCol_Button, (20, 20, 20))
+                dpg.add_theme_color(dpg.mvThemeCol_ButtonHovered, (20, 20, 20))
+                dpg.add_theme_color(dpg.mvThemeCol_ButtonActive, (20, 20, 20))
+                dpg.add_theme_color(dpg.mvThemeCol_FrameBg, (20, 20, 20))
+                dpg.add_theme_color(dpg.mvThemeCol_CheckMark, (100, 100, 100))
+                dpg.add_theme_color(dpg.mvThemeCol_FrameBgHovered, (20, 20, 20))
+                dpg.add_theme_color(dpg.mvThemeCol_FrameBgActive, (20, 20, 20))
+
+            # Explicit disabled state
+            with dpg.theme_component(dpg.mvAll, enabled_state=False):
+                dpg.add_theme_color(dpg.mvThemeCol_Text, (100, 100, 100))
+                dpg.add_theme_color(dpg.mvThemeCol_TextDisabled, (100, 100, 100))
+                dpg.add_theme_color(dpg.mvThemeCol_Button, (20, 20, 20))
+                dpg.add_theme_color(dpg.mvThemeCol_ButtonHovered, (20, 20, 20))
+                dpg.add_theme_color(dpg.mvThemeCol_ButtonActive, (20, 20, 20))
+                dpg.add_theme_color(dpg.mvThemeCol_FrameBg, (20, 20, 20))
+                dpg.add_theme_color(dpg.mvThemeCol_CheckMark, (100, 100, 100))
+                dpg.add_theme_color(dpg.mvThemeCol_FrameBgHovered, (20, 20, 20))
+                dpg.add_theme_color(dpg.mvThemeCol_FrameBgActive, (20, 20, 20))
+
+            # Specific components (Default)
+            with dpg.theme_component(dpg.mvButton):
+                dpg.add_theme_color(dpg.mvThemeCol_Button, (20, 20, 20))
+                dpg.add_theme_color(dpg.mvThemeCol_Text, (100, 100, 100))
+                dpg.add_theme_color(dpg.mvThemeCol_TextDisabled, (100, 100, 100))
+
+            with dpg.theme_component(dpg.mvRadioButton):
+                dpg.add_theme_color(dpg.mvThemeCol_Text, (100, 100, 100))
+                dpg.add_theme_color(dpg.mvThemeCol_TextDisabled, (100, 100, 100))
+                dpg.add_theme_color(dpg.mvThemeCol_FrameBg, (20, 20, 20))
+                dpg.add_theme_color(dpg.mvThemeCol_FrameBgHovered, (20, 20, 20))
+                dpg.add_theme_color(dpg.mvThemeCol_CheckMark, (100, 100, 100))
+
+            # Specific components (Disabled)
+            with dpg.theme_component(dpg.mvButton, enabled_state=False):
+                dpg.add_theme_color(dpg.mvThemeCol_Button, (20, 20, 20))
+                dpg.add_theme_color(dpg.mvThemeCol_Text, (100, 100, 100))
+                dpg.add_theme_color(dpg.mvThemeCol_TextDisabled, (100, 100, 100))
+
+            with dpg.theme_component(dpg.mvRadioButton, enabled_state=False):
+                dpg.add_theme_color(dpg.mvThemeCol_Text, (100, 100, 100))
+                dpg.add_theme_color(dpg.mvThemeCol_TextDisabled, (100, 100, 100))
+                dpg.add_theme_color(dpg.mvThemeCol_FrameBg, (20, 20, 20))
+                dpg.add_theme_color(dpg.mvThemeCol_FrameBgHovered, (20, 20, 20))
+                dpg.add_theme_color(dpg.mvThemeCol_CheckMark, (100, 100, 100))
 
         # Window
         with dpg.window(label='Evaluation Control', width=self.size(1200), height=self.size(800), tag='main_window'):
