@@ -76,8 +76,8 @@ class MultiprocessEmitter(SignalEmitter[T]):
         mode_value: mp.Value,
         lock: mp.Lock,
         ts_value: mp.Value,
-        up_values: list[ValueProxy[bool]],   # a flag that new data has arrived (for each receiver)
-        sm_queues: list[Queue],  # a queue to send SM metadata to many receivers
+        up_values: list[ValueProxy[bool]],
+        sm_queues: list[Queue],
         *,
         forced_mode: TransportMode | None = None,
     ):
@@ -167,7 +167,6 @@ class MultiprocessEmitter(SignalEmitter[T]):
         with self._lock:
             data.set_to_buffer(self._sm.buf)
             self._ts_value.value = ts
-            # set "fresh data" flag for every receiver
             for up_value in self._up_values:
                 up_value.value = True
 
@@ -314,7 +313,6 @@ class MultiprocessReceiver(SignalReceiver[T]):
             assert self._out_value is not None
             self._out_value.read_from_buffer(self._readonly_buffer)
 
-            # update read status for an individual
             updated = self._up_value.value
             self._up_value.value = False
 
