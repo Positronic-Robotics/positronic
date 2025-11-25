@@ -66,23 +66,23 @@ class MultiprocessEmitter(SignalEmitter[T]):
     shared-memory buffer. It defers the transport choice until the first payload
     unless ``forced_mode`` pins the decision.
 
-    Broadcast emitting is supported by allowing up_values and sm_queues be lists.
+    Broadcast emitting is supported by allowing queues, up_values and sm_queues be lists.
     """
 
     def __init__(
         self,
         clock: Clock,
-        queues: Queue | list[Queue],
+        queues: list[Queue],
         mode_value: mp.Value,
         lock: mp.Lock,
         ts_value: mp.Value,
-        up_values: ValueProxy[bool] | list[ValueProxy[bool]],   # a flag that new data has arrived (for each receiver)
-        sm_queues: Queue | list[Queue],  # a queue to send SM metadata to many receivers
+        up_values: list[ValueProxy[bool]],   # a flag that new data has arrived (for each receiver)
+        sm_queues: list[Queue],  # a queue to send SM metadata to many receivers
         *,
         forced_mode: TransportMode | None = None,
     ):
         self._clock = clock
-        self._queues = queues if isinstance(queues, list) else [queues]
+        self._queues = queues
         self._mode_value = mode_value
         self._forced_mode = forced_mode
         self._mode = forced_mode or TransportMode.UNDECIDED
@@ -91,8 +91,8 @@ class MultiprocessEmitter(SignalEmitter[T]):
         self._data_type: type[SMCompliant] | None = None
         self._lock = lock
         self._ts_value = ts_value
-        self._up_values = up_values if isinstance(sm_queues, list) else [up_values]
-        self._sm_queues = sm_queues if isinstance(sm_queues, list) else [sm_queues]
+        self._up_values = up_values
+        self._sm_queues = sm_queues
         self._sm: multiprocessing.shared_memory.SharedMemory | None = None
         self._expected_buf_size: int | None = None
         self._closed = False
