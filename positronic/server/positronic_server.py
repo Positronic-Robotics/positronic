@@ -210,7 +210,7 @@ def main(
     port: int = 5000,
     debug: bool = False,
     reset_cache: bool = False,
-    episode_keys: dict[str, dict[str, str] | str | None] | None = None,
+    episode_keys: dict[str, dict[str, str | dict] | str | None] | None = None,
 ):
     """Visualize a Dataset with Rerun.
 
