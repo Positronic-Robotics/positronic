@@ -312,10 +312,8 @@ class MultiprocessReceiver(SignalReceiver[T]):
             assert self._readonly_buffer is not None
             assert self._out_value is not None
             self._out_value.read_from_buffer(self._readonly_buffer)
-
             updated = self._up_value.value
             self._up_value.value = False
-
             return Message(data=self._out_value, ts=self._ts_value.value, updated=updated) # instead of True
 
 
@@ -469,9 +467,10 @@ class World:
             logging.info(f'Process {process.name} (pid {process.pid}) finished')
             process.close()
 
-        for emitter, reader in self._cleanup_emitters_readers:
-            reader.close()
+        for emitter, receivers in self._cleanup_emitters_readers:
+            [receiver.close() for receiver in (receivers if isinstance(receivers, list) else [receivers])]
             emitter.close()
+
 
     def request_stop(self):
         self._stop_event.set()
@@ -688,7 +687,7 @@ class World:
             )
             p.start()
             self.background_processes.append(p)
-            print(f'Started background process {name} (pid {p.pid})', flush=True)
+            logging.info(f'Started background process {name} (pid {p.pid})')
 
     def local_pipe(self, maxsize: int = 1) -> tuple[SignalEmitter[T], SignalReceiver[T]]:
         """Create a queue-based communication channel within the same process.
@@ -758,8 +757,7 @@ class World:
             )
             receivers.append(receiver)
 
-        for r in receivers:
-            self._cleanup_emitters_readers.append((emitter, r))
+        self._cleanup_emitters_readers.append((emitter, receivers))
 
         return emitter, receivers if num_receivers > 1 else receivers[0]
 

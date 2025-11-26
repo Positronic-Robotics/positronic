@@ -324,4 +324,169 @@ class TestSharedMemoryMultiprocessing:
             assert np.allclose(data[1], [10.0, 2.0, 3.0])
 
 
+class TestBroadcastCommunication:
+    """Test broadcast communication (one emitter, multiple receivers)."""
+
+    def test_broadcast_with_shared_memory(self):
+        """Test that one emitter can broadcast to multiple receivers via shared memory."""
+        with World() as world:
+            emitter, readers = world.mp_pipes(transport=TransportMode.SHARED_MEMORY, num_receivers=3)
+
+            assert isinstance(readers, list)
+            assert len(readers) == 3
+            assert all(isinstance(r, SignalReceiver) for r in readers)
+            assert all(r.uses_shared_memory for r in readers)
+
+            # Initially all readers should return None
+            assert all(r.read() is None for r in readers)
+
+            # Emit data
+            array = np.array([1.0, 2.0, 3.0], dtype=np.float32)
+            data = NumpySMAdapter(array.shape, array.dtype)
+            data.array = array
+            emitter.emit(data, ts=100)
+
+            # All readers should receive the same data
+            messages = [r.read() for r in readers]
+            assert all(msg is not None for msg in messages)
+            assert all(msg.ts == 100 for msg in messages)
+            assert all(msg.updated is True for msg in messages)
+            assert all(np.allclose(msg.data.array, [1.0, 2.0, 3.0]) for msg in messages)
+
+            # Update and emit again
+            data.array[0] = 10.0
+            emitter.emit(data, ts=200)
+
+            # All readers should see the updated values
+            messages = [r.read() for r in readers]
+            assert all(msg is not None for msg in messages)
+            assert all(msg.ts == 200 for msg in messages)
+            assert all(msg.updated is True for msg in messages)
+            assert all(np.allclose(msg.data.array, [10.0, 2.0, 3.0]) for msg in messages)
+
+    def test_broadcast_with_queue(self):
+        """Test that one emitter can broadcast to multiple receivers via queue."""
+        with World() as world:
+            emitter, readers = world.mp_pipes(transport=TransportMode.QUEUE, num_receivers=3)
+
+            assert isinstance(readers, list)
+            assert len(readers) == 3
+            assert all(isinstance(r, SignalReceiver) for r in readers)
+            assert all(not r.uses_shared_memory for r in readers)
+
+            # Initially all readers should return None
+            assert all(r.read() is None for r in readers)
+
+            # Emit data (regular Python object, not SMCompliant)
+            data = {"value": 42, "name": "test"}
+            emitter.emit(data, ts=100)
+
+            # All readers should receive the same data
+            messages = [r.read() for r in readers]
+            assert all(msg is not None for msg in messages)
+            assert all(msg.ts == 100 for msg in messages)
+            assert all(msg.updated is True for msg in messages)
+            assert all(msg.data == {"value": 42, "name": "test"} for msg in messages)
+
+            # Emit again with different data
+            data2 = {"value": 99, "name": "updated"}
+            emitter.emit(data2, ts=200)
+
+            # All readers should see the new data
+            messages = [r.read() for r in readers]
+            assert all(msg is not None for msg in messages)
+            assert all(msg.ts == 200 for msg in messages)
+            assert all(msg.updated is True for msg in messages)
+            assert all(msg.data == {"value": 99, "name": "updated"} for msg in messages)
+
+    def test_broadcast_independent_reader_states(self):
+        """Test that each receiver maintains independent read state."""
+        with World() as world:
+            emitter, readers = world.mp_pipes(transport=TransportMode.SHARED_MEMORY, num_receivers=2)
+
+            array = np.array([5.0, 6.0], dtype=np.float32)
+            data = NumpySMAdapter(array.shape, array.dtype)
+            data.array = array
+            emitter.emit(data, ts=100)
+
+            # First reader reads the message (updated=True)
+            msg1 = readers[0].read()
+            assert msg1.updated is True
+            assert msg1.ts == 100
+
+            # Second reader hasn't read yet, should still see updated=True
+            msg2 = readers[1].read()
+            assert msg2.updated is True
+            assert msg2.ts == 100
+
+            # Both readers read again without new emit (updated=False for both)
+            msg1_stale = readers[0].read()
+            msg2_stale = readers[1].read()
+            assert msg1_stale.updated is False
+            assert msg2_stale.updated is False
+
+
+class TestConnectOneToOne:
+    """Test one-to-one connections between emitter and receiver."""
+
+    def test_single_receiver_with_shared_memory(self):
+        """Test that mp_pipes returns a single receiver (not a list) when num_receivers=1."""
+        with World() as world:
+            emitter, reader = world.mp_pipes(transport=TransportMode.SHARED_MEMORY, num_receivers=1)
+
+            # Should return a single receiver, not a list
+            assert isinstance(reader, SignalReceiver)
+            assert not isinstance(reader, list)
+            assert reader.uses_shared_memory
+
+            # Test basic communication
+            array = np.array([7.0, 8.0], dtype=np.float32)
+            data = NumpySMAdapter(array.shape, array.dtype)
+            data.array = array
+            emitter.emit(data, ts=300)
+
+            message = reader.read()
+            assert message is not None
+            assert message.ts == 300
+            assert np.allclose(message.data.array, [7.0, 8.0])
+
+    def test_single_receiver_with_queue(self):
+        """Test one-to-one communication with queue transport."""
+        with World() as world:
+            emitter, reader = world.mp_pipes(transport=TransportMode.QUEUE, num_receivers=1)
+
+            # Should return a single receiver, not a list
+            assert isinstance(reader, SignalReceiver)
+            assert not isinstance(reader, list)
+            assert not reader.uses_shared_memory
+
+            # Test basic communication
+            data = {"status": "active", "count": 123}
+            emitter.emit(data, ts=400)
+
+            message = reader.read()
+            assert message is not None
+            assert message.ts == 400
+            assert message.data == {"status": "active", "count": 123}
+
+    def test_default_num_receivers_is_one(self):
+        """Test that num_receivers defaults to 1."""
+        with World() as world:
+            emitter, reader = world.mp_pipes(transport=TransportMode.SHARED_MEMORY)
+
+            # Default should be single receiver
+            assert isinstance(reader, SignalReceiver)
+            assert not isinstance(reader, list)
+
+            array = np.array([99.0], dtype=np.float32)
+            data = NumpySMAdapter(array.shape, array.dtype)
+            data.array = array
+            emitter.emit(data, ts=500)
+
+            message = reader.read()
+            assert message is not None
+            assert message.ts == 500
+            assert np.allclose(message.data.array, [99.0])
+
+
 
