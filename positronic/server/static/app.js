@@ -140,29 +140,19 @@ function populateEpisodesTable(episodes, columns) {
   function createBadge(value, options) {
     if (value === null || value === undefined) return '';
 
+    const allowedVariants = ['success', 'warning', 'danger', 'default'];
     const span = document.createElement('span');
     span.classList.add('badge');
     span.textContent = options?.label ?? String(value);
+    let variantClass;
 
-    let variant;
-    switch (options?.variant) {
-      case 'success':
-        variant = 'badge--success';
-        break;
-
-      case 'warning':
-        variant = 'badge--warning';
-        break;
-
-      case 'danger':
-        variant = 'badge--danger';
-        break;
-
-      default:
-        variant = 'badge--default';
+    if (options?.variant && allowedVariants.includes(options.variant)) {
+      variantClass = options.variant;
+    } else {
+      variantClass = 'default';
     }
 
-    span.classList.add(variant);
+    span.classList.add(`badge--${variantClass}`);
 
     return span;
   }

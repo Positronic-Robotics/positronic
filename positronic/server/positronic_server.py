@@ -135,16 +135,13 @@ async def api_episodes():
     for key, value in app_state['episode_keys'].items():
         column = {}
         if isinstance(value, dict):
-            label = value.get('label')
-            column['label'] = label if label is not None else key
+            column['label'] = value.get('label', key)
             formatters[key] = value.get('format')
 
             if 'renderer' in value:
                 column['renderer'] = value['renderer']
-        elif value is not None:
-            column['label'] = value
         else:
-            column['label'] = key
+            column['label'] = value or key
 
         columns.append(column)
 
