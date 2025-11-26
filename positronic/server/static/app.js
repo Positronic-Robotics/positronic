@@ -27,8 +27,8 @@ async function checkDatasetStatus() {
       datasetLoadingStatus.classList.remove('show');
       loadDatasetInfo();
 
-      const { episodes, labels } = await loadEpisodes();
-      populateEpisodesTable(episodes, labels);
+      const { episodes, columns } = await loadEpisodes();
+      populateEpisodesTable(episodes, columns);
       episodesContainer.removeChild(episodesLoadingStatus);
       episodesTable.classList.remove('hidden');
     } else {
@@ -71,9 +71,9 @@ async function loadEpisodes() {
       return;
     }
 
-    const { episodes, labels } = await response.json();
+    const { episodes, columns } = await response.json();
 
-    return { episodes, labels };
+    return { episodes, columns };
   } catch (error) {
     console.error('Error loading episodes:', error);
     document.getElementById('episodes-container').innerHTML =
@@ -81,18 +81,24 @@ async function loadEpisodes() {
   }
 }
 
-function populateEpisodesTable(episodes, labels) {
+function populateEpisodesTable(episodes, columns) {
   const headerRow = document.querySelector('.episodes-table thead tr');
   const tableBody = document.querySelector('.episodes-table tbody');
+  const renderers = [];
+  const headerColumns = [];
 
-  const headerColumns = labels.map((label) => createTableCell(label, true));
+  for (const { label, renderer } of Object.values(columns)) {
+    headerColumns.push(createTableCell(label, true));
+    renderers.push(renderer ?? null);
+  }
+
   headerRow.prepend(...headerColumns);
 
   for (const episode of episodes) {
     const row = document.createElement('tr');
 
     for (const [index, value] of episode.entries()) {
-      row.appendChild(createTableCell(index === 0 ? value : renderValue(value)));
+      row.appendChild(createTableCell(index === 0 ? value : getValue(value, renderers[index])));
     }
 
     const viewCell = createTableCell('');
@@ -108,18 +114,57 @@ function populateEpisodesTable(episodes, labels) {
 
   function createTableCell(content, isHeader = false) {
     const episodeCell = document.createElement(isHeader ? 'th' : 'td');
-    episodeCell.textContent = content;
+
+    if (content instanceof HTMLElement) {
+      episodeCell.appendChild(content);
+    } else {
+      episodeCell.textContent = String(content);
+    }
 
     return episodeCell;
   }
 
-  function renderValue(value) {
+  function getValue(value, renderer) {
+    if (renderer?.type == 'badge') {
+      return createBadge(value, renderer.options?.[value]);
+    }
+
     switch (typeof value) {
       case 'number':
         return value.toFixed(2);
       default:
         return String(value ?? 'N/A');
     }
+  }
+
+  function createBadge(value, options) {
+    if (value === null || value === undefined) return '';
+
+    const span = document.createElement('span');
+    span.classList.add('badge');
+    span.textContent = options?.label ?? String(value);
+
+    let variant;
+    switch (options?.variant) {
+      case 'success':
+        variant = 'badge--success';
+        break;
+
+      case 'warning':
+        variant = 'badge--warning';
+        break;
+
+      case 'danger':
+        variant = 'badge--danger';
+        break;
+
+      default:
+        variant = 'badge--default';
+    }
+
+    span.classList.add(variant);
+
+    return span;
   }
 }
 

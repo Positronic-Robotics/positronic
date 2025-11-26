@@ -130,21 +130,27 @@ async def api_episodes():
     if ds is None:
         raise HTTPException(status_code=500, detail='Dataset failed to load')
 
-    labels = []
+    columns = []
     formatters = {}
     for key, value in app_state['episode_keys'].items():
+        column = {}
         if isinstance(value, dict):
             label = value.get('label')
-            labels.append(label if label is not None else key)
+            column['label'] = label if label is not None else key
             formatters[key] = value.get('format')
+
+            if 'renderer' in value:
+                column['renderer'] = value['renderer']
         elif value is not None:
-            labels.append(value)
+            column['label'] = value
         else:
-            labels.append(key)
+            column['label'] = key
+
+        columns.append(column)
 
     episodes = get_episodes_list(ds, app_state['episode_keys'].keys(), formatters=formatters)
 
-    return {'labels': labels, 'episodes': episodes}
+    return {'columns': columns, 'episodes': episodes}
 
 
 @app.get('/api/dataset_status')
@@ -215,6 +221,30 @@ def main(
         port: Server port
         debug: Enable debug logging
         reset_cache: If True, clear cache_dir at startup
+        episode_keys: Mapping of episode static data keys to display in episode list,
+            where the value is either:
+            - A string label to display as the column header
+            - A dict with 'label' and optional 'format' and 'renderer' keys
+                - 'label': Column header label
+                - 'format': (optional) Format string for displaying the value
+                - 'renderer': (optional) Renderer configuration for custom display
+
+            Example:
+            {
+                'duration': {'label': 'Duration', 'format': '% .2f sec'},
+                'task': 'Task',
+                'status': {
+                    'label': 'Status',
+                    'renderer': {
+                        'type': 'badge',
+                        'options': {
+                            'degraded': {'label': 'Degraded', 'variant': 'danger'},
+                            'assist': {'label': 'Assist', 'variant': 'warning'},
+                            'pass': {'label': 'Pass', 'variant': 'success'},
+                        },
+                    },
+                },
+            }
     """
     root = get_dataset_root(dataset) or 'unknown_dataset'
     deb_level = logging.DEBUG if debug else logging.INFO
