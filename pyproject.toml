@@ -17,6 +17,7 @@ classifiers = [
 dependencies = [
     "av",
     "boto3",
+    "coloredlogs>=15.0.1",
     "configuronic",
     "cvxopt",
     "dearpygui",

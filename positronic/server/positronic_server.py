@@ -23,6 +23,7 @@ from positronic import utils
 from positronic.dataset.dataset import Dataset
 from positronic.dataset.local_dataset import LocalDataset
 from positronic.server.dataset_utils import get_dataset_root, get_episodes_list, stream_episode_rrd
+from positronic.utils.logging import init_logging
 
 # Global app state
 app_state: dict[str, object] = {'dataset': None, 'loading_state': True, 'root': '', 'cache_dir': '', 'episode_keys': {}}
@@ -281,6 +282,7 @@ def main(
 
 @pos3.with_mirror()
 def _internal_main():
+    init_logging()
     cfn.cli(main)
 
 

@@ -73,13 +73,15 @@ def train(dataset_root: str, run_name: str, output_dir, **cfg_kwargs):
     if os.getenv('WANDB_API_KEY'):
         cfg.wandb.enable = True
         cfg.wandb.project = 'lerobot-train'
+        cfg.wandb.run_id = run_name
+        cfg.wandb.disable_artifact = True
 
     cfg.job_name = run_name
     cfg.dataset.root = str(pos3.download(dataset_root))
     cfg.dataset.repo_id = 'local'
     cfg.eval_freq = 0
     cfg.policy.push_to_hub = False
-    cfg.output_dir = pos3.sync(output_dir) / run_name
+    cfg.output_dir = pos3.sync(output_dir, exclude=[f'{run_name}/wandb/*']) / run_name
     _update_config(cfg, **cfg_kwargs)
 
     # Start a background thread to save metadata once the directory is created by lerobot
