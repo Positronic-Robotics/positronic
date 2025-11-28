@@ -28,6 +28,7 @@ async function checkDatasetStatus() {
       loadDatasetInfo();
 
       const { episodes, columns } = await loadEpisodes();
+      renderEpisodesTableHeader(episodes, columns);
       populateEpisodesTable(episodes, columns);
       episodesContainer.removeChild(episodesLoadingStatus);
       episodesTable.classList.remove('hidden');
@@ -81,19 +82,96 @@ async function loadEpisodes() {
   }
 }
 
-function populateEpisodesTable(episodes, columns) {
-  const headerRow = document.querySelector('.episodes-table thead tr');
-  const tableBody = document.querySelector('.episodes-table tbody');
-  const renderers = [];
-  const headerColumns = [];
+function createTableCell(content, isHeader = false) {
+  const episodeCell = document.createElement(isHeader ? 'th' : 'td');
 
-  for (const { label, renderer } of Object.values(columns)) {
-    headerColumns.push(createTableCell(label, true));
-    renderers.push(renderer ?? null);
+  if (content instanceof HTMLElement) {
+    episodeCell.appendChild(content);
+  } else {
+    episodeCell.textContent = String(content);
+  }
+
+  return episodeCell;
+}
+
+function renderEpisodesTableHeader(episodes, columns) {
+  const headerRow = document.querySelector('.episodes-table thead tr');
+  const headerColumns = [];
+  const tableSort = { columnIndex: null, direction: 'desc' };
+
+  for (const [columnIndex, { label }] of Object.entries(columns)) {
+    const headerColumn = createTableCell(label, true);
+    headerColumn.classList.add('sortable');
+    headerColumn.dataset.sort = columnIndex;
+    headerColumns.push(headerColumn);
+
+    headerColumn.addEventListener('click', sortByColumnHandler);
   }
 
   headerRow.prepend(...headerColumns);
 
+  function sortByColumnHandler(event) {
+    const headerColumn = event.currentTarget;
+    const columnIndex = headerColumn.dataset.sort;
+    headerRow.querySelectorAll('th.sortable').forEach((th) => {
+      th.classList.remove('sorted-asc', 'sorted-desc');
+    });
+
+    if (tableSort.columnIndex === columnIndex) {
+      tableSort.direction = tableSort.direction === 'desc' ? 'asc' : 'desc';
+    } else {
+      tableSort.columnIndex = columnIndex;
+      tableSort.direction = 'desc';
+    }
+
+    headerColumn.classList.add(`sorted-${tableSort.direction}`);
+
+    populateEpisodesTable(
+      episodes.sort((a, b) => {
+        const aValue = getSortableValue(a[columnIndex]);
+        const bValue = getSortableValue(b[columnIndex]);
+
+        if (aValue === bValue) return 0;
+
+        if (tableSort.direction === 'asc') {
+          return aValue < bValue ? -1 : 1;
+        } else {
+          return aValue > bValue ? -1 : 1;
+        }
+      }),
+      columns
+    );
+  }
+
+  function getSortableValue(value) {
+    if (value === null || value === undefined) return '';
+
+    switch (typeof value) {
+      case 'number':
+      case 'boolean':
+        return value;
+
+      case 'string':
+        // TODO?: Maybe it's better to have an original data instead of formatted one
+        const numValue = parseFloat(value);
+
+        if (!isNaN(numValue)) {
+          return numValue;
+        }
+
+        return value.toLowerCase();
+
+      default:
+        return String(value);
+    }
+  }
+}
+
+function populateEpisodesTable(episodes, columns) {
+  const tableBody = document.querySelector('.episodes-table tbody');
+  const renderers = Object.values(columns).map(({ renderer }) => renderer ?? null);
+
+  tableBody.innerHTML = '';
   for (const episode of episodes) {
     const row = document.createElement('tr');
 
@@ -110,18 +188,6 @@ function populateEpisodesTable(episodes, columns) {
     row.appendChild(viewCell);
 
     tableBody.appendChild(row);
-  }
-
-  function createTableCell(content, isHeader = false) {
-    const episodeCell = document.createElement(isHeader ? 'th' : 'td');
-
-    if (content instanceof HTMLElement) {
-      episodeCell.appendChild(content);
-    } else {
-      episodeCell.textContent = String(content);
-    }
-
-    return episodeCell;
   }
 
   function getValue(value, renderer) {

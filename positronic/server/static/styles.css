@@ -245,16 +245,16 @@ th.sortable::after {
   opacity: 0.3;
 }
 
-th.sortable:not(.sort-asc):not(.sort-desc)::after {
+th.sortable:not(.sorted-asc):not(.sorted-desc)::after {
   border-top: 5px solid currentColor;
 }
 
-th.sortable.sort-asc::after {
+th.sortable.sorted-asc::after {
   border-bottom: 5px solid currentColor;
   opacity: 0.9;
 }
 
-th.sortable.sort-desc::after {
+th.sortable.sorted-desc::after {
   border-top: 5px solid currentColor;
   opacity: 0.9;
 }
