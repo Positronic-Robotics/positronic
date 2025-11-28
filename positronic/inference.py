@@ -91,7 +91,7 @@ class TimedDriver(pimm.ControlSystem):
             yield pimm.Sleep(self.simulation_time)
             self.ds_commands.emit(DsWriterCommand.STOP())
             self.inf_commands.emit(InferenceCommand.RESET())
-            yield pimm.Sleep(0.2)  # Let the things propagate
+            yield pimm.Sleep(0.5)  # Let the things propagate
 
 
 @cfn.config(ui_scale=1)

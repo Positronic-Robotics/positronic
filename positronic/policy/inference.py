@@ -81,7 +81,6 @@ class Inference(pimm.ControlSystem):
 
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Sleep]:  # noqa: C901
         running = False
-        start_time = time.monotonic()
 
         # TODO: We should emit new commands per frame, not per inference fps
         rate_limiter = pimm.RateLimiter(clock, hz=self.inference_fps)
@@ -93,17 +92,14 @@ class Inference(pimm.ControlSystem):
                     case InferenceCommandType.START:
                         running = True
                         self.context = command_msg.data.payload or {}
-                        start_time = time.monotonic()
                         rate_limiter.reset()
                     case InferenceCommandType.STOP:
                         running = False
-                        print(f'Inference stopped after {time.monotonic() - start_time:.2f} seconds')
                     case InferenceCommandType.RESET:
                         self.robot_commands.emit(roboarm.command.Reset())
                         self.target_grip.emit(0.0)
                         self.policy.reset()
                         running = False
-                        print(f'Inference aborted after {time.monotonic() - start_time:.2f} seconds')
                         yield pimm.Pass()
 
             try:

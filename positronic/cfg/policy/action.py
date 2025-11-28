@@ -76,9 +76,8 @@ def groot_infer():
             super().__init__('fake', 'fake')
 
         def decode(self, action, inputs):
-            target_pose = geom.Transform3D(
-                action['action.target_robot_position_translation'], action['action.target_robot_position_quaternion']
-            )
+            q = geom.normalise_quat(action['action.target_robot_position_quaternion'])
+            target_pose = geom.Transform3D(action['action.target_robot_position_translation'], q)
             target_grip = action['action.target_grip'].item()
             return (command.CartesianPosition(pose=target_pose), target_grip)
 
