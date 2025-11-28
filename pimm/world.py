@@ -31,6 +31,7 @@ from .core import (
     Sleep,
 )
 from .shared_memory import SMCompliant
+from .utils import identity
 
 T = TypeVar('T')
 
@@ -314,8 +315,7 @@ class MultiprocessReceiver(SignalReceiver[T]):
             self._out_value.read_from_buffer(self._readonly_buffer)
             updated = self._up_value.value
             self._up_value.value = False
-            return Message(data=self._out_value, ts=self._ts_value.value, updated=updated) # instead of True
-
+            return Message(data=self._out_value, ts=self._ts_value.value, updated=updated)  # instead of True
 
     def read(self) -> Message[T] | None:
         mode = self.transport_mode
@@ -471,7 +471,6 @@ class World:
             [receiver.close() for receiver in (receivers if isinstance(receivers, list) else [receivers])]
             emitter.close()
 
-
     def request_stop(self):
         self._stop_event.set()
 
@@ -534,8 +533,8 @@ class World:
         emitter: ControlSystemEmitter[T],
         receiver: ControlSystemReceiver[T],
         *,
-        emitter_wrapper: Callable[[SignalEmitter[T]], SignalEmitter[T]] = lambda x: x,
-        receiver_wrapper: Callable[[SignalReceiver[T]], SignalReceiver[T]] = lambda x: x,
+        emitter_wrapper: Callable[[SignalEmitter[T]], SignalEmitter[T]] = identity,
+        receiver_wrapper: Callable[[SignalReceiver[T]], SignalReceiver[T]] = identity,
     ):
         """Declare a logical connection between Emitter and Receiver of two control systems.
 
@@ -565,8 +564,8 @@ class World:
         self,
         connector: ControlSystemEmitter | ControlSystemReceiver,
         *,
-        emitter_wrapper: Callable[[SignalEmitter[T]], SignalEmitter[T]] = lambda x: x,
-        receiver_wrapper: Callable[[SignalReceiver[T]], SignalReceiver[T]] = lambda x: x,
+        emitter_wrapper: Callable[[SignalEmitter[T]], SignalEmitter[T]] = identity,
+        receiver_wrapper: Callable[[SignalReceiver[T]], SignalReceiver[T]] = identity,
     ):
         """Create the complementary connector for an existing endpoint.
 
@@ -603,9 +602,9 @@ class World:
         raise ValueError(f'Unsupported connector type: {type(connector)}.')
 
     def start(
-            self,
-            main_process: ControlSystem | list[ControlSystem | None],
-            background: ControlSystem | list[ControlSystem | None] | None = None,
+        self,
+        main_process: ControlSystem | list[ControlSystem | None],
+        background: ControlSystem | list[ControlSystem | None] | None = None,
     ) -> Iterator[Sleep]:
         """Bind declared connections and launch control systems.
 
@@ -653,7 +652,16 @@ class World:
             # When emitter lives in a different process, we use system clock to timestamp messages, otherwise we will
             # have to serialise our local clock to the other process, which is not what we want.
             num_receivers = len(receivers_logical)
-            emitter_wrapper, _, maxsize, clock = receivers_logical[0]    # parameters the same for all receivers
+            emitter_wrapper, _, maxsize, clock = receivers_logical[0]  # parameters the same for all receivers
+
+            for wrapper, _, _, _ in receivers_logical[1:]:
+                if wrapper != emitter_wrapper:
+                    raise ValueError(
+                        f'Conflicting emitter wrappers detected for emitter owned by '
+                        f"'{type(emitter_logical.owner).__name__}'. "
+                        'When broadcasting to multiple processes, all connections must use the same emitter wrapper. '
+                        "Use 'receiver_wrapper' instead to transform data for specific receivers."
+                    )
 
             kwargs = {'maxsize': maxsize} if maxsize is not None else {}
             emitter_physical, receivers_physical = self.mp_pipes(clock=clock, num_receivers=num_receivers, **kwargs)
@@ -663,13 +671,11 @@ class World:
             if not isinstance(receivers_physical, list):
                 receivers_physical = [receivers_physical]
 
-            for (_, logical_receiver, _, _), physical_receiver in zip(
-                    receivers_logical, receivers_physical, strict=True):
-                logical_receiver._bind(physical_receiver)
+            for (_, logical, _, _), physical in zip(receivers_logical, receivers_physical, strict=True):
+                logical._bind(physical)
 
         self.start_in_subprocess(*[cs.run for cs in background])
         return self.interleave(*[cs.run for cs in main_process])
-
 
     def start_in_subprocess(self, *background_loops: ControlLoop):
         """Starts background control loops. Can be called multiple times for different control loops.
@@ -703,12 +709,12 @@ class World:
         return LocalQueueEmitter(q, self._clock), LocalQueueReceiver(q)
 
     def mp_pipes(
-            self,
-            maxsize: int = 1,
-            clock: Clock | None = None,
-            *,
-            num_receivers: int = 1,
-            transport: TransportMode = TransportMode.UNDECIDED
+        self,
+        maxsize: int = 1,
+        clock: Clock | None = None,
+        *,
+        num_receivers: int = 1,
+        transport: TransportMode = TransportMode.UNDECIDED,
     ) -> tuple[SignalEmitter[T], SignalReceiver[T] | list[SignalReceiver[T]]]:
         """Create an inter-process channel with optional transport override.
 
@@ -760,5 +766,3 @@ class World:
         self._cleanup_emitters_readers.append((emitter, receivers))
 
         return emitter, receivers if num_receivers > 1 else receivers[0]
-
-

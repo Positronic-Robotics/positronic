@@ -10,6 +10,10 @@ T = TypeVar('T', covariant=True)
 K = TypeVar('K', covariant=True)
 
 
+def identity(x):
+    return x
+
+
 class MapSignalReceiver(SignalReceiver[T]):
     """Transform and filter signal data on read.
 
