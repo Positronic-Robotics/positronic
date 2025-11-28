@@ -543,6 +543,8 @@ class _Mirror:
                     raise
             else:
                 logger.debug('Found single object via head_object: %s', key)
+                if 'ContentLength' in obj and 'Size' not in obj:
+                    obj['Size'] = obj['ContentLength']
                 yield {**obj, 'Key': key}
                 return
 
