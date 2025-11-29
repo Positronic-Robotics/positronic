@@ -250,19 +250,19 @@ class TestRotation(unittest.TestCase):
         for representation in Rotation.Representation:
             self.assertIsNotNone(representation.size)
 
-    def test_create_from_representation_exists_for_all_representations(self):
+    def test_representations(self):
         for representation in Rotation.Representation:
-            data = np.zeros(representation.shape)
+            match representation:
+                case Rotation.Representation.QUAT:
+                    data = np.array([1.0, 0.0, 0.0, 0.0])
+                case Rotation.Representation.QUAT_XYZW:
+                    data = np.array([0.0, 0.0, 0.0, 1.0])
+                case Rotation.Representation.ROTATION_MATRIX:
+                    data = np.eye(3)
+                case _:
+                    data = np.zeros(representation.shape)
             self.assertIsNotNone(Rotation.create_from(data, representation))
-
-    def test_from_value_exists_for_all_representations(self):
-        for representation in Rotation.Representation:
-            data = np.zeros(representation.shape)
             self.assertIsNotNone(representation.from_value(data))
-
-    def test_from_value_same_as_create_from_representation(self):
-        for representation in Rotation.Representation:
-            data = np.zeros(representation.shape)
             np.testing.assert_array_almost_equal(
                 representation.from_value(data).as_quat, Rotation.create_from(data, representation).as_quat
             )

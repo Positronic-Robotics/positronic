@@ -149,7 +149,10 @@ class Rotation(metaclass=RotationMeta):
         """
         obj = object.__new__(cls)
         obj._quat = np.array(quat, dtype=np.float64, copy=True)
-        obj._quat /= np.linalg.norm(obj._quat)
+        norm = np.linalg.norm(obj._quat)
+        if norm <= 1e-9:
+            raise ValueError('Quaternion must be non-zero')
+        obj._quat /= norm
         return obj
 
     class Representation(Enum):
