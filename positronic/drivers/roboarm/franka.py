@@ -46,7 +46,7 @@ class FrankaState(State, pimm.shared_memory.NumpySMAdapter):
     @property
     def ee_pose(self) -> geom.Transform3D:
         ee_pose = self.array[FrankaState.EE_POSE_OFFSET : FrankaState.EE_POSE_OFFSET + 7].copy()
-        return geom.Transform3D(ee_pose[:3], ee_pose[3:7])
+        return geom.Transform3D(ee_pose[:3], geom.Rotation.from_quat(ee_pose[3:7]))
 
     @property
     def ee_wrench(self) -> np.ndarray | None:

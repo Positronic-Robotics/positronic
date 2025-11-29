@@ -22,9 +22,8 @@ class Transform3D(metaclass=Transform3DMeta):
         if translation is None:
             translation = np.zeros(3)
         if rotation is None:
-            rotation = Rotation(1, 0, 0, 0)
-        elif not isinstance(rotation, Rotation):
-            rotation = Rotation(*rotation)
+            rotation = Rotation.identity
+        assert isinstance(rotation, Rotation)
         self.translation = np.asarray(translation)
         self.rotation = rotation
 
@@ -125,15 +124,32 @@ class RotationMeta(type):
         return cls.from_quat(np.array([1, 0, 0, 0]))
 
 
-class Rotation(np.ndarray, metaclass=RotationMeta):
+class Rotation(metaclass=RotationMeta):
     """Class that represents a rotation in 3D space.
 
     The rotation is stored as a quaternion in the order (w, x, y, z), but users should not rely on this.
     Instead, use the `Rotation.Representation` enum to create a rotation.
     """
 
-    def __new__(cls, w=1.0, x=0.0, y=0.0, z=0.0, *, dtype=np.float64):
-        obj = np.asarray([w, x, y, z], dtype=dtype).view(cls)
+    __slots__ = ('_quat',)
+
+    def __init__(self, *args, **kwargs):
+        raise NotImplementedError('Use Rotation.from_... methods to create a Rotation object')
+
+    @classmethod
+    def from_quat(cls, quat: Sequence[float] | np.ndarray) -> Rotation:
+        """
+        Create a rotation from a 4-element numpy array. The order of the elements is (w, x, y, z).
+
+        Args:
+            quat: (Sequence[float] | np.ndarray) w, x, y, z elements.
+
+        Returns:
+            Rotation object.
+        """
+        obj = object.__new__(cls)
+        obj._quat = np.array(quat, dtype=np.float64, copy=True)
+        obj._quat /= np.linalg.norm(obj._quat)
         return obj
 
     class Representation(Enum):
@@ -196,44 +212,38 @@ class Rotation(np.ndarray, metaclass=RotationMeta):
         if not isinstance(other, Rotation):
             raise TypeError('Multiplicand must be an instance of Rotation')
 
-        w1, x1, y1, z1 = self
-        w2, x2, y2, z2 = other
+        w1, x1, y1, z1 = self._quat
+        w2, x2, y2, z2 = other._quat
 
         w = w1 * w2 - x1 * x2 - y1 * y2 - z1 * z2
         x = w1 * x2 + x1 * w2 + y1 * z2 - z1 * y2
         y = w1 * y2 - x1 * z2 + y1 * w2 + z1 * x2
         z = w1 * z2 + x1 * y2 - y1 * x2 + z1 * w2
 
-        return Rotation(w, x, y, z)
+        return Rotation.from_quat(np.array([w, x, y, z]))
 
     def __call__(self, vector):
         """
         Apply rotation to a vector.
         """
-        q_vector = Rotation(0, *vector)
-        rotated_vector = self * q_vector * self.inv
-        return np.array(rotated_vector[1:])
+        if len(vector) != 3:
+            raise ValueError('Input vector must be of length 3')
+
+        w, x, y, z = self._quat
+        q_vec = np.array([x, y, z])
+
+        t = 2 * np.cross(q_vec, vector)
+        rotated_vector = vector + w * t + np.cross(q_vec, t)
+
+        return rotated_vector
 
     @property
     def inv(self):
         """
         Inverse rotation.
         """
-        w, x, y, z = self
-        return Rotation(w, -x, -y, -z)
-
-    @classmethod
-    def from_quat(cls, quat: Sequence[float]) -> Rotation:
-        """
-        Create a rotation from a 4-element numpy array. The order of the elements is (w, x, y, z).
-
-        Args:
-            quat: (Sequence[float]) w, x, y, z elements.
-
-        Returns:
-            Rotation object.
-        """
-        return cls(*quat)
+        w, x, y, z = self._quat
+        return Rotation.from_quat(np.array([w, -x, -y, -z]))
 
     @classmethod
     def from_quat_xyzw(cls, quat: Sequence[float]) -> Rotation:
@@ -246,7 +256,7 @@ class Rotation(np.ndarray, metaclass=RotationMeta):
         Returns:
             Rotation object.
         """
-        return cls(quat[3], quat[0], quat[1], quat[2])
+        return cls.from_quat(np.array([quat[3], quat[0], quat[1], quat[2]]))
 
     @classmethod
     def from_rotation_matrix(cls, matrix):
@@ -285,7 +295,7 @@ class Rotation(np.ndarray, metaclass=RotationMeta):
                 x = (m[0, 2] + m[2, 0]) * s
                 y = (m[2, 1] + m[1, 2]) * s
                 w = (m[1, 0] - m[0, 1]) * s
-        return cls(w, x, y, z)
+        return cls.from_quat(np.array([w, x, y, z]))
 
     @classmethod
     def from_euler(cls, euler):
@@ -305,7 +315,7 @@ class Rotation(np.ndarray, metaclass=RotationMeta):
         y = cr * sp * cy + sr * cp * sy
         z = cr * cp * sy - sr * sp * cy
 
-        return cls(w, x, y, z)
+        return cls.from_quat(np.array([w, x, y, z]))
 
     @classmethod
     def from_rotvec(cls, rotvec: np.ndarray) -> Rotation:
@@ -320,7 +330,7 @@ class Rotation(np.ndarray, metaclass=RotationMeta):
         """
         angle = np.linalg.norm(rotvec)
         if angle < 1e-10:  # Handle small angles to avoid division by zero
-            return cls(1.0, 0.0, 0.0, 0.0)
+            return cls.from_quat(np.array([1.0, 0.0, 0.0, 0.0]))
 
         axis = rotvec / angle
         sin_theta_2 = np.sin(angle / 2)
@@ -331,7 +341,7 @@ class Rotation(np.ndarray, metaclass=RotationMeta):
         y = axis[1] * sin_theta_2
         z = axis[2] * sin_theta_2
 
-        return cls(w, x, y, z)
+        return cls.from_quat(np.array([w, x, y, z]))
 
     @classmethod
     def create_from(cls, value: Any, representation: Representation | str) -> Rotation:
@@ -375,7 +385,7 @@ class Rotation(np.ndarray, metaclass=RotationMeta):
         """
         Represent the rotation as a rotation matrix.
         """
-        w, x, y, z = self
+        w, x, y, z = self._quat
         return np.array([
             [1 - 2 * (y**2 + z**2), 2 * (x * y - z * w), 2 * (x * z + y * w)],
             [2 * (x * y + z * w), 1 - 2 * (x**2 + z**2), 2 * (y * z - x * w)],
@@ -392,13 +402,13 @@ class Rotation(np.ndarray, metaclass=RotationMeta):
                           of the vector indicates the axis of rotation and its magnitude
                           represents the angle in radians.
         """
-        self[:] = normalise_quat(self)
-        angle = 2 * np.arccos(self[0])
+        q = self._quat / np.linalg.norm(self._quat)
+        angle = 2 * np.arccos(q[0])
         if angle < 1e-10:  # Handle small angles to avoid division by zero
             return np.zeros(3)
 
         sin_theta_2 = np.sin(angle / 2)
-        axis = np.array([self[1], self[2], self[3]]) / sin_theta_2
+        axis = np.array([q[1], q[2], q[3]]) / sin_theta_2
         return axis * angle
 
     @property
@@ -407,20 +417,21 @@ class Rotation(np.ndarray, metaclass=RotationMeta):
         Convert a rotation to euler angles in radians.
         """
         # Roll (x-axis rotation)
-        sinr_cosp = 2 * (self[0] * self[1] + self[2] * self[3])
-        cosr_cosp = 1 - 2 * (self[1] ** 2 + self[2] ** 2)
+        w, x, y, z = self._quat
+        sinr_cosp = 2 * (w * x + y * z)
+        cosr_cosp = 1 - 2 * (x**2 + y**2)
         roll = np.arctan2(sinr_cosp, cosr_cosp)
 
         # Pitch (y-axis rotation)
-        sinp = 2 * (self[0] * self[2] - self[3] * self[1])
+        sinp = 2 * (w * y - z * x)
         if np.abs(sinp) >= 1:
             pitch = np.sign(sinp) * np.pi / 2  # use 90 degrees if out of range
         else:
             pitch = np.arcsin(sinp)
 
         # Yaw (z-axis rotation)
-        siny_cosp = 2 * (self[0] * self[3] + self[1] * self[2])
-        cosy_cosp = 1 - 2 * (self[2] ** 2 + self[3] ** 2)
+        siny_cosp = 2 * (w * z + x * y)
+        cosy_cosp = 1 - 2 * (y**2 + z**2)
         yaw = np.arctan2(siny_cosp, cosy_cosp)
 
         return np.array([roll, pitch, yaw])
@@ -430,28 +441,35 @@ class Rotation(np.ndarray, metaclass=RotationMeta):
         """
         Convert the rotation to a quaternion.
         """
-        return np.asarray(self)
+        return self._quat.copy()
 
     @property
     def as_quat_xyzw(self) -> np.ndarray:
         """
         Convert the rotation to a quaternion in the order (x, y, z, w).
         """
-        return np.asarray([self[1], self[2], self[3], self[0]])
+        return np.array([self._quat[1], self._quat[2], self._quat[3], self._quat[0]])
 
     @property
     def angle(self):
         """
         Compute the angle of the rotation in radians.
         """
-        return 2 * np.arccos(self[0])
+        return 2 * np.arccos(self._quat[0])
 
+    def copy(self):
+        return Rotation.from_quat(self._quat.copy())
 
-def normalise_quat(q: np.ndarray) -> np.ndarray:
-    """
-    Normalise a rotation, expressed as a 4-element numpy array.
-    """
-    return q / np.linalg.norm(q)
+    def __repr__(self):
+        return f'Rotation(w={self._quat[0]:.3f}, x={self._quat[1]:.3f}, y={self._quat[2]:.3f}, z={self._quat[3]:.3f})'
+
+    def __str__(self):
+        return self.__repr__()
+
+    def __eq__(self, other):
+        if not isinstance(other, Rotation):
+            return False
+        return np.allclose(self._quat, other._quat)
 
 
 def degrees_to_radians(degrees: float) -> float:

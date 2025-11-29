@@ -76,7 +76,7 @@ def test_relative_target_position_action_encode_decode_quat():
     ts = [1000]
     q_cur = [Rotation.identity]
     # 90 deg about X: w=cos(45)=sqrt(2)/2, x=sin(45)=sqrt(2)/2
-    q_tgt = [Rotation(np.sqrt(0.5), np.sqrt(0.5), 0, 0)]
+    q_tgt = [Rotation.from_quat([np.sqrt(0.5), np.sqrt(0.5), 0, 0])]
     t_cur = [np.array([0.0, 0.0, 0.0], dtype=np.float32)]
     t_tgt = [np.array([0.1, 0.2, 0.3], dtype=np.float32)]
     g_tgt = [0.7]

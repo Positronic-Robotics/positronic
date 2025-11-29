@@ -191,7 +191,7 @@ class MujocoFrankaState(State, pimm.shared_memory.NumpySMAdapter):
 
     @property
     def ee_pose(self) -> geom.Transform3D:
-        return geom.Transform3D(self.array[14 : 14 + 3], self.array[14 + 3 : 14 + 7])
+        return geom.Transform3D(self.array[14 : 14 + 3], geom.Rotation.from_quat(self.array[14 + 3 : 14 + 7]))
 
     @property
     def status(self) -> RobotStatus:

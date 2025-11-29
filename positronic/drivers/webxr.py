@@ -36,7 +36,7 @@ def _parse_controller_data(data: dict):
             translation = np.array(data['controllers'][side]['position'], dtype=np.float64)
             rotation = np.array(data['controllers'][side]['orientation'], dtype=np.float64)
             buttons = np.array(data['controllers'][side]['buttons'], dtype=np.float64)
-            controller_positions[side] = geom.Transform3D(translation, rotation)
+            controller_positions[side] = geom.Transform3D(translation, geom.Rotation.from_quat(rotation))
             buttons_dict[side] = buttons
 
     return controller_positions, buttons_dict

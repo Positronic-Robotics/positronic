@@ -23,7 +23,6 @@ def _relative_rot_vec(q_current: np.ndarray, q_target: np.ndarray, representatio
     r_cur = geom.Rotation.from_quat(q_current)
     r_tgt = geom.Rotation.from_quat(q_target)
     rel = r_cur.inv * r_tgt
-    rel = geom.Rotation.from_quat(geom.normalise_quat(rel.as_quat))
     return _convert_quat_to_array(rel, representation)
 
 
@@ -155,8 +154,6 @@ class RelativeTargetPositionAction(RotationTranslationGripAction):
         robot_pose = inputs['robot_state.ee_pose']
 
         rot_mul = geom.Rotation.from_quat(robot_pose[3:7]) * q_diff
-        rot_mul = geom.Rotation.from_quat(geom.normalise_quat(rot_mul.as_quat))
-
         tr_add = robot_pose[0:3] + tr_diff
 
         target_pose = geom.Transform3D(translation=tr_add, rotation=rot_mul)

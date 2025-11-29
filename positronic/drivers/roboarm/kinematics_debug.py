@@ -4,8 +4,8 @@ import numpy as np
 import rerun as rr
 import tqdm
 
+from positronic import geom
 from positronic.drivers.roboarm.kinova.base import JointCompliantController, KinematicsSolver, wrap_joint_angle
-from positronic.geom import Transform3D
 from positronic.utils.rerun_compat import log_numeric_series
 
 
@@ -84,7 +84,9 @@ def debug_kinematics(urdf_path: str, mujoco_model_path: str, rerun: str, traject
         if start_time + data.time * 10**3 > trajectory[next_command][0]:
             rr.log('pos/target', rr.Points3D(np.array([p[0] for _, p in trajectory[: next_command + 1]])))
             cmd = trajectory[next_command][1]
-            q_ik = solver.inverse(Transform3D(translation=cmd[0], rotation=cmd[1]), q, max_iters=300)
+            q_ik = solver.inverse(
+                geom.Transform3D(translation=cmd[0], rotation=geom.Rotation.from_quat(cmd[1])), q, max_iters=300
+            )
             log_numeric_series('ik/qpos', q_ik)
             rr.log('pos/cur_target', rr.Points3D(cmd[0], colors=[255, 255, 255]))
             controller.set_target_qpos(q_ik)
