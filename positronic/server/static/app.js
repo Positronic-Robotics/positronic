@@ -1,3 +1,8 @@
+const filtersState = {
+  sort: { columnIndex: null, direction: 'desc' },
+  filters: {},
+};
+let filtersData = {};
 let loadingCheckInterval = null;
 
 async function checkDatasetStatus() {
@@ -28,6 +33,8 @@ async function checkDatasetStatus() {
       loadDatasetInfo();
 
       const { episodes, columns } = await loadEpisodes();
+      filtersData = getFiltersData(episodes, columns);
+      renderFilters(episodes, columns);
       renderEpisodesTableHeader(episodes, columns);
       populateEpisodesTable(episodes, columns);
       episodesContainer.removeChild(episodesLoadingStatus);
@@ -97,7 +104,7 @@ function createTableCell(content, isHeader = false) {
 function renderEpisodesTableHeader(episodes, columns) {
   const headerRow = document.querySelector('.episodes-table thead tr');
   const headerColumns = [];
-  const tableSort = { columnIndex: null, direction: 'desc' };
+  const sortState = filtersState.sort;
 
   for (const [columnIndex, { label }] of Object.entries(columns)) {
     const headerColumn = createTableCell(label, true);
@@ -117,62 +124,101 @@ function renderEpisodesTableHeader(episodes, columns) {
       th.classList.remove('sorted-asc', 'sorted-desc');
     });
 
-    if (tableSort.columnIndex === columnIndex) {
-      tableSort.direction = tableSort.direction === 'desc' ? 'asc' : 'desc';
+    if (sortState.columnIndex === columnIndex) {
+      sortState.direction = sortState.direction === 'desc' ? 'asc' : 'desc';
     } else {
-      tableSort.columnIndex = columnIndex;
-      tableSort.direction = 'desc';
+      sortState.columnIndex = columnIndex;
+      sortState.direction = 'desc';
     }
 
-    headerColumn.classList.add(`sorted-${tableSort.direction}`);
+    headerColumn.classList.add(`sorted-${sortState.direction}`);
 
-    populateEpisodesTable(
-      episodes.sort((a, b) => {
-        const aValue = getSortableValue(a[columnIndex]);
-        const bValue = getSortableValue(b[columnIndex]);
+    populateEpisodesTable(episodes, columns);
+  }
+}
 
-        if (aValue === bValue) return 0;
+function renderFilters(episodes, columns) {
+  const controlsBar = document.querySelector('.controls-bar');
 
-        if (tableSort.direction === 'asc') {
-          return aValue < bValue ? -1 : 1;
-        } else {
-          return aValue > bValue ? -1 : 1;
-        }
-      }),
-      columns
+  for (const [index, filter] of Object.entries(filtersData)) {
+    const filterId = `filter-${index}`;
+    const filterContainer = document.createElement('div');
+    filterContainer.classList.add('control-group', 'control-group--grow');
+
+    const label = document.createElement('label');
+    label.htmlFor = filterId;
+    label.textContent = columns[index].label;
+    filterContainer.appendChild(label);
+
+    const select = document.createElement('select');
+    select.id = filterId;
+    select.addEventListener('change', (event) => {
+      if (event.target.value === '-1') {
+        delete filtersState.filters[index];
+      } else {
+        filtersState.filters[index] = event.target.value;
+      }
+
+      populateEpisodesTable(episodes, columns);
+    });
+
+    select.appendChild(createOption('-1', 'All'));
+    for (const [index, label] of filter.entries()) {
+      select.appendChild(createOption(index, label));
+    }
+
+    filterContainer.appendChild(select);
+    controlsBar.appendChild(filterContainer);
+  }
+
+  function createOption(value, label) {
+    const option = document.createElement('option');
+    option.value = value;
+    option.textContent = label;
+    return option;
+  }
+}
+
+function getFiltersData(episodes, columns) {
+  const filtersData = {};
+
+  for (const [index, column] of Object.entries(columns)) {
+    if (!column.filter) continue;
+
+    const columnData = new Set();
+
+    for (const episode of episodes) {
+      const value = episode[index];
+      if (value === null || value === undefined) continue;
+
+      columnData.add(String(value));
+    }
+
+    filtersData[index] = Array.from(columnData);
+  }
+
+  return filtersData;
+}
+
+function filterEpisodes(columnIndex, selectedValue) {
+  if (selectedValue === '') {
+    filteredEpisodes = filteredEpisodes;
+  } else {
+    filteredEpisodes = filteredEpisodes.filter(
+      (episode) => String(episode[columnIndex]) === selectedValue
     );
   }
 
-  function getSortableValue(value) {
-    if (value === null || value === undefined) return '';
-
-    switch (typeof value) {
-      case 'number':
-      case 'boolean':
-        return value;
-
-      case 'string':
-        // TODO?: Maybe it's better to have an original data instead of formatted one
-        const numValue = parseFloat(value);
-
-        if (!isNaN(numValue)) {
-          return numValue;
-        }
-
-        return value.toLowerCase();
-
-      default:
-        return String(value);
-    }
-  }
+  populateEpisodesTable(filteredEpisodes, columns);
 }
 
 function populateEpisodesTable(episodes, columns) {
   const tableBody = document.querySelector('.episodes-table tbody');
   const renderers = Object.values(columns).map(({ renderer }) => renderer ?? null);
+  const filteredEpisodes = getFilteredEpisodes(episodes);
 
   tableBody.innerHTML = '';
-  for (const episode of episodes) {
+  for (const episode of filteredEpisodes) {
     const row = document.createElement('tr');
 
     for (const [index, value] of episode.entries()) {
@@ -221,6 +267,59 @@ function populateEpisodesTable(episodes, columns) {
     span.classList.add(`badge--${variantClass}`);
 
     return span;
+  }
+}
+
+function getFilteredEpisodes(episodes) {
+  const { sort: sortState, filters } = filtersState;
+  let filteredEpisodes = episodes.slice();
+
+  filteredEpisodes = filteredEpisodes.filter((episode) => {
+    return Object.entries(filters).every(([columnIndex, valueIndex]) => {
+      return String(episode[columnIndex]) === filtersData[columnIndex][valueIndex];
+    });
+  });
+
+  if (sortState.columnIndex === null) {
+    return filteredEpisodes;
+  }
+
+  filteredEpisodes.sort((a, b) => {
+    const aValue = getSortableValue(a[sortState.columnIndex]);
+    const bValue = getSortableValue(b[sortState.columnIndex]);
+
+    if (aValue === bValue) return 0;
+
+    if (sortState.direction === 'asc') {
+      return aValue < bValue ? -1 : 1;
+    } else {
+      return aValue > bValue ? -1 : 1;
+    }
+  });
+
+  return filteredEpisodes;
+
+  function getSortableValue(value) {
+    if (value === null || value === undefined) return '';
+
+    switch (typeof value) {
+      case 'number':
+      case 'boolean':
+        return value;
+
+      case 'string':
+        // TODO?: Maybe it's better to have an original data instead of formatted one
+        const numValue = parseFloat(value);
+
+        if (!isNaN(numValue)) {
+          return numValue;
+        }
+
+        return value.toLowerCase();
+
+      default:
+        return String(value);
+    }
   }
 }
 

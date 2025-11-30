@@ -322,7 +322,6 @@ tbody tr.lb-row--baseline:hover {
   border: 1px solid rgba(248, 113, 113, 0.3);
 }
 
-
 /* Buttons */
 .btn {
   display: inline-flex;
@@ -365,6 +364,60 @@ tbody tr.lb-row--baseline:hover {
 .btn-ghost:hover {
   border-color: var(--accent);
   color: var(--accent);
+}
+
+/* Controls bar */
+.controls-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.9rem;
+  margin-bottom: 1.1rem;
+}
+
+.control-group {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  min-width: 160px;
+}
+
+.control-group--grow {
+  flex: 1 1 200px;
+}
+
+.control-group--compact {
+  width: 180px;
+}
+
+.control-group label {
+  font-size: 0.78rem;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  color: var(--text-soft);
+}
+
+select {
+  appearance: none;
+  border-radius: 999px;
+  border: 1px solid var(--border-subtle);
+  background: radial-gradient(circle at top left, rgba(148, 163, 184, 0.16), transparent 55%),
+    rgba(15, 23, 42, 0.98);
+  color: var(--text-primary);
+  padding: 0.45rem 1rem;
+  padding-right: 2rem;
+  font-size: 0.9rem;
+  line-height: 1.4;
+  outline: none;
+  background-image: linear-gradient(45deg, transparent 50%, var(--accent) 50%),
+    linear-gradient(135deg, var(--accent) 50%, transparent 50%);
+  background-position: calc(100% - 20px) 50%, calc(100% - 15px) 50%;
+  background-size: 6px 6px, 6px 6px;
+  background-repeat: no-repeat;
+}
+
+select:focus-visible {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent-soft);
 }
 
 /* Episode viewer header */
