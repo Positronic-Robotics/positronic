@@ -194,11 +194,6 @@ def main_sim(
     simulate_timeout: bool = False,
     observers: Mapping[str, Any] | None = None,
 ):
-    if observers is None:
-        observers = {
-            'box_distance': BodyDistance('box_0_body', 'box_1_body'),
-            'stacking_success': StackingSuccess('box_0_body', 'box_1_body', 'hand_ph'),
-        }
     sim = MujocoSim(mujoco_model_path, loaders, observers=observers)
     robot_arm = MujocoFranka(sim, suffix='_ph')
     gripper = MujocoGripper(sim, actuator_name='actuator8_ph', joint_name='finger_joint1_ph')
@@ -240,6 +235,10 @@ main_sim_cfg = cfn.Config(
     policy_fps=15,
     driver=timed.override(simulation_time=15, task='pick up the green cube and put in on top of the red cube'),
     camera_dict={'image.handcam_left': 'handcam_left_ph', 'image.back_view': 'back_view_ph'},
+    observers={
+        'box_distance': BodyDistance('box_0_body', 'box_1_body'),
+        'stacking_success': StackingSuccess('box_0_body', 'box_1_body', 'hand_ph'),
+    },
 )
 
 main_sim_openpi_positronic = main_sim_cfg.override(
@@ -317,10 +316,13 @@ def _internal_main():
             observation_encoder=positronic.cfg.policy.observation.groot_infer,
             action_decoder=positronic.cfg.policy.action.groot_infer,
         ),
-        'sim_pnp': main_sim_cfg.override(
+        'sim_pnp': main_sim_openpi_positronic.override(
+            policy=positronic.cfg.policy.policy.groot,
+            observation_encoder=positronic.cfg.policy.observation.groot_infer,
+            action_decoder=positronic.cfg.policy.action.groot_infer,
             loaders=positronic.cfg.simulator.multi_tote_loaders,
-            task='pick up objects from the red tote and place them in the green tote',
             observers={},
+            **{'driver.task': 'pick up objects from the red tote and place them in the green tote'},
         ),
     })
 

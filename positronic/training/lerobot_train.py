@@ -5,6 +5,7 @@ Example:
 
 import logging
 import os
+import sys
 import threading
 import time
 from dataclasses import dataclass, field
@@ -83,6 +84,22 @@ def train(dataset_root: str, run_name: str, output_dir, **cfg_kwargs):
     cfg.policy.push_to_hub = False
     cfg.output_dir = pos3.sync(output_dir, exclude=[f'{run_name}/wandb/*']) / run_name
     _update_config(cfg, **cfg_kwargs)
+
+    if cfg.resume:
+        checkpoints_dir = Path(cfg.output_dir) / 'checkpoints'
+        if checkpoints_dir.exists():
+            # Find the latest checkpoint directory (highest integer value)
+            checkpoint_dirs = [d for d in checkpoints_dir.iterdir() if d.is_dir() and d.name.isdigit()]
+            if checkpoint_dirs:
+                latest_checkpoint = max(checkpoint_dirs, key=lambda d: int(d.name))
+                config_path = latest_checkpoint / 'pretrained_model' / 'train_config.json'
+                logging.info(f'Resuming run. Automatically setting config_path to {config_path}')
+                # Hack: lerobot requires config_path to be in sys.argv for validation
+                sys.argv.append(f'--config_path={config_path}')
+            else:
+                logging.critical(f'No numeric checkpoint directories found in {checkpoints_dir}')
+        else:
+            logging.critical(f'Checkpoints directory {checkpoints_dir} does not exist')
 
     # Start a background thread to save metadata once the directory is created by lerobot
     # This avoids FileExistsError since lerobot expects the directory to not exist
