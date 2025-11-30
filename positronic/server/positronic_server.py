@@ -141,6 +141,9 @@ async def api_episodes():
 
             if 'renderer' in value:
                 column['renderer'] = value['renderer']
+
+            if 'filter' in value:
+                column['filter'] = value['filter']
         else:
             column['label'] = value or key
 
@@ -199,7 +202,7 @@ async def api_episode_rrd(episode_id: int):
 
 @cfn.config(
     dataset=positronic.cfg.dataset.local_all,
-    episode_keys={'duration': {'label': 'Duration', 'format': '% .2f sec'}, 'task': 'Task'},
+    episode_keys={'duration': {'label': 'Duration', 'format': '%.2f sec'}, 'task': {'label': 'Task', 'filter': True}},
 )
 def main(
     dataset: Dataset,
@@ -226,6 +229,7 @@ def main(
                 - 'label': Column header label
                 - 'format': (optional) Format string for displaying the value
                 - 'renderer': (optional) Renderer configuration for custom display
+                - 'filter': (optional) Boolean indicating if the column is filterable
 
             Example:
             {
