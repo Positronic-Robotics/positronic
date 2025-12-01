@@ -74,3 +74,21 @@ class ObservationEncoder(Derive):
                 state_vec = np.empty((0,), dtype=np.float32)
             obs[out_name] = state_vec
         return obs
+
+
+class GrootInferenceObservationEncoder(ObservationEncoder):
+    def __init__(self):
+        state = {'observation.state': ['robot_state.ee_pose', 'grip']}
+        images = {
+            'video.wrist_image': ('image.wrist', (224, 224)),
+            'video.exterior_image_1': ('image.exterior', (224, 224)),
+        }
+        super().__init__(state, images)
+
+    def encode(self, inputs: dict[str, Any]) -> dict[str, Any]:
+        obs = super().encode(inputs)
+        state = obs.pop('observation.state')
+        obs['state.robot_position_translation'] = state[:3]
+        obs['state.robot_position_quaternion'] = state[3:7]
+        obs['state.grip'] = state[7:8]
+        return obs

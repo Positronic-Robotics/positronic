@@ -1,5 +1,3 @@
-from typing import Any
-
 import configuronic as cfn
 
 from positronic.policy.observation import ObservationEncoder
@@ -158,21 +156,6 @@ def groot_oxe_droid():
 
 @cfn.config()
 def groot_infer():
-    class GrootInferenceObservationEncoder(ObservationEncoder):
-        def __init__(self):
-            state = {'observation.state': ['robot_state.ee_pose', 'grip']}
-            images = {
-                'video.wrist_image': ('image.wrist', (224, 224)),
-                'video.exterior_image_1': ('image.exterior', (224, 224)),
-            }
-            super().__init__(state, images)
-
-        def encode(self, inputs: dict[str, Any]) -> dict[str, Any]:
-            obs = super().encode(inputs)
-            state = obs.pop('observation.state')
-            obs['state.robot_position_translation'] = state[:3]
-            obs['state.robot_position_quaternion'] = state[3:7]
-            obs['state.grip'] = state[7:8]
-            return obs
+    from positronic.policy.observation import GrootInferenceObservationEncoder
 
     return GrootInferenceObservationEncoder()

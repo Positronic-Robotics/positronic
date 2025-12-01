@@ -68,19 +68,6 @@ def groot_oxe_droid():
 
 @cfn.config()
 def groot_infer():
-    from positronic.drivers.roboarm import command
-    from positronic.policy.action import AbsolutePositionAction
-
-    class GrootActionDecoder(AbsolutePositionAction):
-        def __init__(self):
-            super().__init__('fake', 'fake')
-
-        def decode(self, action, inputs):
-            target_pose = geom.Transform3D(
-                action['action.target_robot_position_translation'],
-                geom.Rotation.from_quat(action['action.target_robot_position_quaternion']),
-            )
-            target_grip = action['action.target_grip'].item()
-            return (command.CartesianPosition(pose=target_pose), target_grip)
+    from positronic.policy.action import GrootActionDecoder
 
     return GrootActionDecoder()

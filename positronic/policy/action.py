@@ -193,3 +193,16 @@ class JointDeltaAction(ActionDecoder):
             velocities = velocities / max_vel_norm
 
         return (command.JointDelta(velocities=velocities * self.MAX_JOINT_DELTA), grip)
+
+
+class GrootActionDecoder(AbsolutePositionAction):
+    def __init__(self):
+        super().__init__('fake', 'fake')
+
+    def decode(self, action, inputs):
+        target_pose = geom.Transform3D(
+            action['action.target_robot_position_translation'],
+            geom.Rotation.from_quat(action['action.target_robot_position_quaternion']),
+        )
+        target_grip = action['action.target_grip'].item()
+        return (command.CartesianPosition(pose=target_pose), target_grip)

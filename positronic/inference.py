@@ -32,34 +32,24 @@ from positronic.utils import package_assets_path
 from positronic.utils.logging import init_logging
 
 
-class SimMetaGetter:
-    def __init__(self, sim_meta: dict[str, Any], inference: Inference):
-        self.sim_meta = sim_meta
-        self.inference = inference
-
-    def __call__(self) -> dict[str, Any]:
-        return self.sim_meta.copy() | self.inference.meta()
-
-
 class MetadataInjector:
-    def __init__(self, meta_getter: Callable[[], dict[str, Any]]):
-        self.meta_getter = meta_getter
+    def __init__(self, static_meta: dict[str, Any]):
+        self.static_meta = static_meta
 
     def __call__(self, cmd: DsWriterCommand) -> DsWriterCommand:
         if cmd.type == DsWriterCommand.START(None).type:
             # Merge inference metadata into the start command
             # Note: cmd.static_data from UI takes precedence if keys collide?
             # Actually usually we want system config (inference.meta) + user input (task)
-            # inference.meta() is a dict.
-            new_static = self.meta_getter().copy()
+            new_static = self.static_meta.copy()
             new_static.update(cmd.static_data)
             return DsWriterCommand(cmd.type, new_static)
         return cmd
 
 
 class KeyboardHanlder:
-    def __init__(self, meta_getter: Callable[[], dict[str, Any]], task: str | None = None):
-        self.meta_getter = meta_getter
+    def __init__(self, static_meta: dict[str, Any], task: str | None = None):
+        self.static_meta = static_meta
         self.task = task
 
     def inference_command(self, key: str) -> InferenceCommand | None:
@@ -76,7 +66,7 @@ class KeyboardHanlder:
 
     def ds_writer_command(self, key: str) -> DsWriterCommand | None:
         if key == 's':
-            meta = self.meta_getter()
+            meta = self.static_meta.copy()
             if self.task:
                 meta['inference.task'] = self.task
             return DsWriterCommand.START(meta)
@@ -91,22 +81,18 @@ class TimedDriver(pimm.ControlSystem):
     """Control system that orchestrates inference episodes by sending start/stop commands."""
 
     def __init__(
-        self,
-        num_iterations: int,
-        simulation_time: float,
-        meta_getter: Callable[[], dict[str, Any]],
-        task: str | None = None,
+        self, num_iterations: int, simulation_time: float, static_meta: dict[str, Any], task: str | None = None
     ):
         self.num_iterations = num_iterations
         self.simulation_time = simulation_time
         self.ds_commands = pimm.ControlSystemEmitter(self)
         self.inf_commands = pimm.ControlSystemEmitter(self)
-        self.meta_getter = meta_getter
+        self.static_meta = static_meta
         self.task = task
 
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock):
         for i in range(self.num_iterations):
-            meta = self.meta_getter()
+            meta = self.static_meta.copy()
             meta['simulation.iteration'] = i
             if self.task:
                 meta['inference.task'] = self.task
@@ -121,13 +107,13 @@ class TimedDriver(pimm.ControlSystem):
 
 @cfn.config(ui_scale=1)
 def eval_ui(ui_scale):
-    def _internal(meta_getter):
+    def _internal(static_meta):
         gui = EvalUI(ui_scale=ui_scale)
 
         return (
             gui,
             (gui.inference_command, lambda x: x),
-            (gui.ds_writer_command, pimm.map(MetadataInjector(meta_getter))),
+            (gui.ds_writer_command, pimm.map(MetadataInjector(static_meta))),
             [],
         )
 
@@ -136,9 +122,9 @@ def eval_ui(ui_scale):
 
 @cfn.config(show_gui=False)
 def keyboard(show_gui, task):
-    def _internal(meta_getter):
+    def _internal(static_meta):
         keyboard = KeyboardControl()
-        keyboard_handler = KeyboardHanlder(meta_getter=meta_getter, task=task)
+        keyboard_handler = KeyboardHanlder(static_meta=static_meta, task=task)
         print('Keyboard controls: [s]tart, sto[p], [r]eset')
         return (
             None if not show_gui else DearpyguiUi(),
@@ -152,9 +138,9 @@ def keyboard(show_gui, task):
 
 @cfn.config(num_iterations=1, simulation_time=15, show_gui=False)
 def timed(num_iterations, simulation_time, show_gui, task):
-    def _internal(meta_getter):
+    def _internal(static_meta):
         gui = None if not show_gui else DearpyguiUi()
-        driver = TimedDriver(num_iterations, simulation_time, meta_getter, task=task)
+        driver = TimedDriver(num_iterations, simulation_time, static_meta, task=task)
         return gui, (driver.inf_commands, lambda x: x), (driver.ds_commands, lambda x: x), [driver]
 
     return _internal
@@ -178,7 +164,7 @@ def main(
     camera_instances = cameras
     camera_emitters = {name: cam.frame for name, cam in camera_instances.items()}
 
-    gui, inference_emitter, ds_writer_emitter, foreground_cs = driver(inference.meta)
+    gui, inference_emitter, ds_writer_emitter, foreground_cs = driver(inference.meta())
 
     if output_dir is not None:
         output_dir = pos3.sync(output_dir, sync_on_error=True)
@@ -224,8 +210,9 @@ def main_sim(
     control_systems = [mujoco_cameras, sim, robot_arm, gripper, inference]
 
     sim_meta = {'simulation.mujoco_model_path': mujoco_model_path}
+    static_meta = sim_meta.copy() | inference.meta()
 
-    gui, inference_emitter, ds_writer_emitter, foreground_cs = driver(SimMetaGetter(sim_meta, inference))
+    gui, inference_emitter, ds_writer_emitter, foreground_cs = driver(static_meta)
 
     if output_dir is not None:
         output_dir = pos3.sync(output_dir, sync_on_error=True)
@@ -312,6 +299,13 @@ openpi_droid = cfn.Config(
     policy_fps=15,
 )
 
+sim_groot = main_sim_cfg.override(
+    policy=positronic.cfg.policy.policy.groot,
+    observation_encoder=positronic.cfg.policy.observation.groot_infer,
+    action_decoder=positronic.cfg.policy.action.groot_infer,
+    camera_dict={'image.wrist': 'handcam_left_ph', 'image.exterior': 'back_view_ph', 'image.agent_view': 'agentview'},
+)
+
 
 # Separate function for [projects.scripts]
 @pos3.with_mirror()
@@ -321,11 +315,7 @@ def _internal_main():
         'sim_act': main_sim_act,
         'sim_openpi_positronic': main_sim_openpi_positronic,
         'sim_openpi_droid': main_sim_openpi_droid,
-        'sim_groot': main_sim_openpi_positronic.override(
-            policy=positronic.cfg.policy.policy.groot,
-            observation_encoder=positronic.cfg.policy.observation.groot_infer,
-            action_decoder=positronic.cfg.policy.action.groot_infer,
-        ),
+        'sim_groot': sim_groot,
         'droid_real': openpi_droid,
         'openpi_real': openpi_droid.override(
             observation_encoder=positronic.cfg.policy.observation.openpi_positronic,
@@ -336,13 +326,20 @@ def _internal_main():
             observation_encoder=positronic.cfg.policy.observation.groot_infer,
             action_decoder=positronic.cfg.policy.action.groot_infer,
         ),
-        'sim_pnp': main_sim_openpi_positronic.override(
-            policy=positronic.cfg.policy.policy.groot,
-            observation_encoder=positronic.cfg.policy.observation.groot_infer,
-            action_decoder=positronic.cfg.policy.action.groot_infer,
+        'sim_pnp_act': main_sim_act.override(
             loaders=positronic.cfg.simulator.multi_tote_loaders,
             observers={},
-            **{'driver.task': 'pick up objects from the red tote and place them in the green tote'},
+            **{'driver.task': 'Pick up objects from the red tote and place them in the green tote'},
+        ),
+        'sim_pnp_openpi': main_sim_openpi_positronic.override(
+            loaders=positronic.cfg.simulator.multi_tote_loaders,
+            observers={},
+            **{'driver.task': 'Pick up objects from the red tote and place them in the green tote'},
+        ),
+        'sim_pnp_groot': sim_groot.override(
+            loaders=positronic.cfg.simulator.multi_tote_loaders,
+            observers={},
+            **{'driver.task': 'Pick up objects from the red tote and place them in the green tote'},
         ),
     })
 

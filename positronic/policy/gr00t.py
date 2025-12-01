@@ -237,9 +237,6 @@ class Gr00tPolicy(Policy):
         self.server_metadata = None
         self.n_action_steps = n_action_steps
 
-    def _take(self, items):
-        return items[: self.n_action_steps]
-
     def select_action(self, obs: dict[str, Any]) -> dict[str, Any]:
         if not self._cache or any(not v for v in self._cache.values()):
             self._observation = flatten_dict(obs, 'observation.')
@@ -257,7 +254,7 @@ class Gr00tPolicy(Policy):
             result = self._client.get_action(obs)
             assert isinstance(result, dict), f'Expected dictionary, got {type(result)}'
 
-            self._cache = {k: deque(v) for k, v in result.items()}
+            self._cache = {k: deque(v[: self.n_action_steps]) for k, v in result.items()}
 
         result = {k: v.popleft() for k, v in self._cache.items()}
         return result | self._observation
