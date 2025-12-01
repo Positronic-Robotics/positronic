@@ -26,11 +26,18 @@ def _detect_device() -> str:
 class LerobotPolicy(Policy):
     def __init__(self, original: PreTrainedPolicy, device: str | None = None, extra_meta: dict[str, Any] | None = None):
         self.original = original
-        self.device = device or _detect_device()
+        self.target_device = device or _detect_device()
+        # We initialize on CPU to ensure the policy is pickleable when passed to a subprocess.
+        # The model will be moved to the target device (e.g. MPS/CUDA) lazily on the first inference call.
+        self.device = 'cpu'
         self.original.to(self.device)
         self.extra_meta = extra_meta or {}
 
     def select_action(self, observation: dict[str, Any]) -> dict[str, Any]:
+        if self.device != self.target_device:
+            self.original.to(self.target_device)
+            self.device = self.target_device
+
         obs = {}
         for key, val in observation.items():
             if key == 'task':

@@ -32,6 +32,31 @@ from positronic.utils import package_assets_path
 from positronic.utils.logging import init_logging
 
 
+class SimMetaGetter:
+    def __init__(self, sim_meta: dict[str, Any], inference: Inference):
+        self.sim_meta = sim_meta
+        self.inference = inference
+
+    def __call__(self) -> dict[str, Any]:
+        return self.sim_meta.copy() | self.inference.meta()
+
+
+class MetadataInjector:
+    def __init__(self, meta_getter: Callable[[], dict[str, Any]]):
+        self.meta_getter = meta_getter
+
+    def __call__(self, cmd: DsWriterCommand) -> DsWriterCommand:
+        if cmd.type == DsWriterCommand.START(None).type:
+            # Merge inference metadata into the start command
+            # Note: cmd.static_data from UI takes precedence if keys collide?
+            # Actually usually we want system config (inference.meta) + user input (task)
+            # inference.meta() is a dict.
+            new_static = self.meta_getter().copy()
+            new_static.update(cmd.static_data)
+            return DsWriterCommand(cmd.type, new_static)
+        return cmd
+
+
 class KeyboardHanlder:
     def __init__(self, meta_getter: Callable[[], dict[str, Any]], task: str | None = None):
         self.meta_getter = meta_getter
@@ -99,18 +124,12 @@ def eval_ui(ui_scale):
     def _internal(meta_getter):
         gui = EvalUI(ui_scale=ui_scale)
 
-        def inject_metadata(cmd: DsWriterCommand) -> DsWriterCommand:
-            if cmd.type == DsWriterCommand.START(None).type:
-                # Merge inference metadata into the start command
-                # Note: cmd.static_data from UI takes precedence if keys collide?
-                # Actually usually we want system config (inference.meta) + user input (task)
-                # inference.meta() is a dict.
-                new_static = meta_getter().copy()
-                new_static.update(cmd.static_data)
-                return DsWriterCommand(cmd.type, new_static)
-            return cmd
-
-        return gui, (gui.inference_command, lambda x: x), (gui.ds_writer_command, pimm.map(inject_metadata)), []
+        return (
+            gui,
+            (gui.inference_command, lambda x: x),
+            (gui.ds_writer_command, pimm.map(MetadataInjector(meta_getter))),
+            [],
+        )
 
     return _internal
 
@@ -194,6 +213,7 @@ def main_sim(
     simulate_timeout: bool = False,
     observers: Mapping[str, Any] | None = None,
 ):
+    observers = observers or {}
     sim = MujocoSim(mujoco_model_path, loaders, observers=observers)
     robot_arm = MujocoFranka(sim, suffix='_ph')
     gripper = MujocoGripper(sim, actuator_name='actuator8_ph', joint_name='finger_joint1_ph')
@@ -205,7 +225,7 @@ def main_sim(
 
     sim_meta = {'simulation.mujoco_model_path': mujoco_model_path}
 
-    gui, inference_emitter, ds_writer_emitter, foreground_cs = driver(lambda: sim_meta.copy() | inference.meta())
+    gui, inference_emitter, ds_writer_emitter, foreground_cs = driver(SimMetaGetter(sim_meta, inference))
 
     if output_dir is not None:
         output_dir = pos3.sync(output_dir, sync_on_error=True)
