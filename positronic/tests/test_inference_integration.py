@@ -52,10 +52,10 @@ def test_main_sim_emits_commands_and_records_dataset(tmp_path, monkeypatch):
     policy = StubPolicy()
 
     camera_dict = {'image.handcam_left': 'handcam_left_ph'}
-    loaders = [
-        cfg(seed=idx) if idx in (2, 4) else cfg()
-        for idx, cfg in enumerate(positronic.cfg.simulator.stack_cubes_loaders)
-    ]
+    loaders = positronic.cfg.simulator.stack_cubes_loaders()
+    for idx, loader in enumerate(loaders):
+        if idx in (2, 4):
+            loader.seed = idx
 
     with pos3.mirror():
         main_sim(
