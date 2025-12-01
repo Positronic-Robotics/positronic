@@ -68,7 +68,7 @@ class KeyboardHanlder:
         if key == 's':
             meta = self.static_meta.copy()
             if self.task:
-                meta['inference.task'] = self.task
+                meta['task'] = self.task
             return DsWriterCommand.START(meta)
         elif key == 'p':
             return DsWriterCommand.STOP()
@@ -95,7 +95,7 @@ class TimedDriver(pimm.ControlSystem):
             meta = self.static_meta.copy()
             meta['simulation.iteration'] = i
             if self.task:
-                meta['inference.task'] = self.task
+                meta['task'] = self.task
 
             self.ds_commands.emit(DsWriterCommand.START(meta))
             self.inf_commands.emit(InferenceCommand.START(task=self.task))
