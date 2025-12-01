@@ -40,8 +40,8 @@ droid = openpi.override(n_action_steps=15)
 diffusion = cfn.Config(_get_diffusion_policy)
 
 
-@cfn.config()
-def groot(host: str = 'localhost', port: int = 9000, timeout_ms: int = 15000):
+@cfn.config(n_action_steps=None)
+def groot(host: str = 'localhost', port: int = 9000, timeout_ms: int = 15000, n_action_steps: int | None = None):
     from positronic.policy.gr00t import Gr00tPolicy
 
-    return Gr00tPolicy(host, port, timeout_ms)
+    return Gr00tPolicy(host, port, timeout_ms, n_action_steps)

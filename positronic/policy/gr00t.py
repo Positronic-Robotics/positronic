@@ -230,11 +230,15 @@ class ExternalRobotInferenceClient(BaseInferenceClient):
 
 
 class Gr00tPolicy(Policy):
-    def __init__(self, host: str = 'localhost', port: int = 9000, timeout_ms: int = 15000):
+    def __init__(self, host: str = 'localhost', port: int = 9000, timeout_ms: int = 15000, n_action_steps=None):
         self._client = ExternalRobotInferenceClient(host, port, timeout_ms)
         self._cache = {}
         self._observation = {}
         self.server_metadata = None
+        self.n_action_steps = n_action_steps
+
+    def _take(self, items):
+        return items[: self.n_action_steps]
 
     def select_action(self, obs: dict[str, Any]) -> dict[str, Any]:
         if not self._cache or any(not v for v in self._cache.values()):
