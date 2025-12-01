@@ -82,6 +82,9 @@ def _scan_local(path: Path) -> Iterator[FileInfo]:
     # path => relative
     while stack:
         p = stack.pop()
+        if p.is_symlink():
+            continue
+
         relative = p.relative_to(base).as_posix() if p != base else ''
         if p.is_dir():
             # Always yield directories, including the root (relative_path='')
