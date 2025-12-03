@@ -220,3 +220,21 @@ def test_concat_with_key_func_transform(sig_simple):
     # Each value should be an array of [s1_val, s2_val]
     assert np.array_equal(vals[0], np.array([10, 100]))
     assert np.array_equal(vals[2], np.array([30, 300]))
+
+
+def test_derive_filters_none(sig_simple):
+    """Test that Derive filters out keys where the transform returns None."""
+    ep = EpisodeContainer(data={'s': sig_simple, 'id': 3})
+
+    tf = Derive(kept=lambda e: e['id'], skipped=lambda e: None)
+
+    transformed = tf(ep)
+
+    # 'kept' should be present
+    assert 'kept' in transformed.keys()
+    assert transformed['kept'] == 3
+
+    # 'skipped' should be filtered out
+    assert 'skipped' not in transformed.keys()
+    with pytest.raises(KeyError):
+        _ = transformed['skipped']

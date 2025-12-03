@@ -42,7 +42,12 @@ class Derive(EpisodeTransform):
 
     def __call__(self, episode: Episode) -> Episode:
         # TODO: Should we lazy-fy this?
-        data = {name: fn(episode) for name, fn in self._transforms.items()}
+        data = {}
+        for name, fn in self._transforms.items():
+            res = fn(episode)
+            if res is not None:
+                data[name] = res
+
         return EpisodeContainer(data, episode.meta)
 
 

@@ -1,13 +1,14 @@
 import random
-from pathlib import Path
 
 import configuronic as cfn
 import numpy as np
+from tqdm import tqdm
 
 import pimm
 from positronic import geom
 from positronic.dataset.ds_writer_agent import DsWriterAgent, DsWriterCommand, Serializers, TimeMode
 from positronic.dataset.local_dataset import LocalDatasetWriter
+from positronic.utils import s3 as pos3
 
 # --- Metadata Templates ---
 
@@ -54,7 +55,6 @@ OPENPI_META = {
 }
 
 TASKS = [
-    'Pick up the green cube and put in on top of the red cube',
     'Pick all the towels one by one from transparent tote and place them into the large grey tote.',
     'Pick all the wooden spoons one by one from transparent tote and place them into the large grey tote.',
     'Pick all the scissors one by one from transparent tote and place them into the large grey tote.',
@@ -94,7 +94,7 @@ class FakeGenerator(pimm.ControlSystem):
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock):
         rate_limiter = pimm.RateLimiter(clock, hz=self.fps)
 
-        for i in range(self.num_episodes):
+        for i in tqdm(range(self.num_episodes)):
             if should_stop.value:
                 break
 
@@ -203,7 +203,7 @@ def main(
     meta = META_MAP[policy]
     print(f'Generating {num_episodes} episodes to {output_dir} mimicking {policy}...')
 
-    writer = LocalDatasetWriter(Path(output_dir))
+    writer = LocalDatasetWriter(pos3.upload(output_dir, sync_on_error=True, interval=None))
 
     with pimm.World() as world:
         agent = DsWriterAgent(writer, time_mode=TimeMode.CLOCK)
@@ -228,4 +228,5 @@ def main(
 
 
 if __name__ == '__main__':
-    cfn.cli(main)
+    with pos3.mirror():
+        cfn.cli(main)

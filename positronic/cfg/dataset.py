@@ -2,10 +2,10 @@ import configuronic as cfn
 
 import positronic.utils.s3 as pos3
 from positronic.cfg.policy import action, observation
-from positronic.dataset.dataset import ConcatDataset
+from positronic.dataset.dataset import ConcatDataset, Dataset
 from positronic.dataset.local_dataset import LocalDataset, load_all_datasets
 from positronic.dataset.transforms import TransformedDataset
-from positronic.dataset.transforms.episode import Derive, Group, Identity
+from positronic.dataset.transforms.episode import Derive, EpisodeTransform, Group, Identity
 
 
 @cfn.config()
@@ -19,17 +19,17 @@ def local_all(path: str):
 
 
 @cfn.config()
-def concat_ds(datasets):
+def concat_ds(datasets: list[Dataset]):
     return ConcatDataset(*datasets)
 
 
 @cfn.config(transforms=[])
-def transform(base, transforms):
+def transform(base: Dataset, transforms: list[EpisodeTransform]):
     return TransformedDataset(base, *transforms)
 
 
 @cfn.config()
-def group(transforms):
+def group(transforms: list[EpisodeTransform]):
     return Group(*transforms)
 
 
