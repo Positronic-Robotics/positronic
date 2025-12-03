@@ -142,11 +142,10 @@ class EvalUI(pimm.ControlSystem):
             'aborted_checkbox', [State.REVIEWING], dpg.add_checkbox, label='Aborted', callback=self.aborted_callback
         )
         self.model_failure_checkbox = self._add(
-            'model_failure_checkbox',
-            [State.REVIEWING],
-            dpg.add_checkbox,
-            label='Model failure',
-            callback=self.model_failure_callback,
+            'model_failure_checkbox', [State.REVIEWING], dpg.add_checkbox, label='Model failure'
+        )
+        self.dangerous_behavior_checkbox = self._add(
+            'dangerous_behavior_checkbox', [State.REVIEWING], dpg.add_checkbox, label='Dangerous behavior'
         )
 
         # --- Notes & Submission ---
@@ -244,6 +243,7 @@ class EvalUI(pimm.ControlSystem):
             'eval.successful_items': dpg.get_value('successful_items_input'),
             'eval.aborted': dpg.get_value('aborted_checkbox'),
             'eval.model_failure': dpg.get_value('model_failure_checkbox'),
+            'eval.dangerous_behavior': dpg.get_value('dangerous_behavior_checkbox'),
             'eval.notes': dpg.get_value('notes_input'),
         }
 
@@ -293,9 +293,6 @@ class EvalUI(pimm.ControlSystem):
             dpg.set_value('aborted_checkbox', False)
         self.update_ui()
 
-    def model_failure_callback(self, sender, app_data):
-        pass
-
     # --- UI Update ---
 
     def update_ui(self, task_value=None):
@@ -314,16 +311,22 @@ class EvalUI(pimm.ControlSystem):
                 # We can't use _set_fake_disabled anymore, use direct configure
                 dpg.configure_item(self.model_failure_checkbox.tag, enabled=False)
                 dpg.set_value(self.model_failure_checkbox.tag, False)
+                dpg.configure_item(self.dangerous_behavior_checkbox.tag, enabled=False)
+                dpg.set_value(self.dangerous_behavior_checkbox.tag, False)
             else:
                 dpg.configure_item(self.model_failure_checkbox.tag, enabled=True)
+                dpg.configure_item(self.dangerous_behavior_checkbox.tag, enabled=True)
         else:
             dpg.configure_item(self.model_failure_checkbox.tag, enabled=False)
             dpg.set_value(self.model_failure_checkbox.tag, False)
+            dpg.configure_item(self.dangerous_behavior_checkbox.tag, enabled=False)
+            dpg.set_value(self.dangerous_behavior_checkbox.tag, False)
 
         if self.state == State.WAITING:
             dpg.set_value(self.successful_items.tag, 0)
             dpg.set_value(self.aborted_checkbox.tag, False)
             dpg.set_value(self.model_failure_checkbox.tag, False)
+            dpg.set_value(self.dangerous_behavior_checkbox.tag, False)
             dpg.set_value(self.notes_input.tag, '')
 
     # --- Control System Run Loop ---
@@ -440,6 +443,8 @@ class EvalUI(pimm.ControlSystem):
                     self.aborted_checkbox.render()
                     dpg.add_spacer(height=self.size(5))
                     self.model_failure_checkbox.render()
+                    dpg.add_spacer(height=self.size(5))
+                    self.dangerous_behavior_checkbox.render()
 
                     dpg.add_spacer(height=self.size(15))
                     dpg.add_separator()
