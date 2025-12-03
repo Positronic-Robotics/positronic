@@ -55,6 +55,35 @@ def joints_grip(state_name: str, image_size: tuple[int, int], image_mappings: di
     return result
 
 
+@cfn.config(image_size=(224, 224))
+def eepose_grip_joints(state_name: str, image_size: tuple[int, int], image_mappings: dict[str, str]):
+    state = {state_name: ['robot_state.ee_pose', 'grip', 'robot_state.q']}
+    state_dim = 7 + 1 + 7
+    images = {k: (v, image_size) for k, v in image_mappings.items()}
+    result = ObservationEncoder(state=state, images=images)
+    result.meta['gr00t_modality'] = {
+        'state': {
+            'robot_position_translation': {'start': 0, 'end': 3},
+            'robot_position_quaternion': {'start': 3, 'end': 7, 'rotation_type': 'quaternion'},
+            'grip': {'start': 7, 'end': 8},
+            'joints': {'start': 8, 'end': state_dim},
+        },
+        'video': {  # TODO: Generalize this
+            'ego_view': {'original_key': 'observation.images.left'},
+            'side_image': {'original_key': 'observation.images.side'},
+        },
+    }
+    lerobot_features = {k: {'shape': (state_dim,), 'names': v, 'dtype': 'float32'} for k, v in state.items()}
+    for out_name, (_input_key, (width, height)) in result._image_configs.items():
+        lerobot_features[out_name] = {
+            'shape': (height, width, 3),
+            'names': ['height', 'width', 'channel'],
+            'dtype': 'video',
+        }
+    result.meta['lerobot_features'] = lerobot_features
+    return result
+
+
 eepose_mujoco = eepose_grip.override(
     state_name='observation.state',
     image_mappings={'observation.images.left': 'image.handcam_left', 'observation.images.side': 'image.back_view'},
@@ -66,6 +95,10 @@ joints_mujoco = joints_grip.override(
 
 
 eepose_real = eepose_grip.override(
+    state_name='observation.state',
+    image_mappings={'observation.images.left': 'image.wrist', 'observation.images.side': 'image.exterior'},
+)
+eepose_q_real = eepose_grip_joints.override(
     state_name='observation.state',
     image_mappings={'observation.images.left': 'image.wrist', 'observation.images.side': 'image.exterior'},
 )
@@ -109,6 +142,40 @@ def groot_ee_absolute():
         },
     }
     state_dim = 8
+    lerobot_features = {k: {'shape': (state_dim,), 'names': v, 'dtype': 'float32'} for k, v in state_spec.items()}
+    for out_name, (_input_key, (width, height)) in result._image_configs.items():
+        lerobot_features[out_name] = {
+            'shape': (height, width, 3),
+            'names': ['height', 'width', 'channel'],
+            'dtype': 'video',
+        }
+    result.meta['lerobot_features'] = lerobot_features
+    return result
+
+
+@cfn.config()
+def groot_ee_q():
+    state_spec = {'observation.state': ['robot_state.ee_pose', 'grip', 'robot_state.q']}
+    result = ObservationEncoder(
+        state=state_spec,
+        images={
+            'observation.images.exterior': ('image.exterior', (224, 224)),
+            'observation.images.wrist': ('image.wrist', (224, 224)),
+        },
+    )
+    result.meta['gr00t_modality'] = {
+        'state': {
+            'robot_position_translation': {'start': 0, 'end': 3},
+            'robot_position_quaternion': {'start': 3, 'end': 7, 'rotation_type': 'quaternion'},
+            'grip': {'start': 7, 'end': 8},
+            'joint_position': {'start': 8, 'end': 8 + 7},
+        },
+        'video': {
+            'exterior_image_1': {'original_key': 'observation.images.exterior'},
+            'wrist_image': {'original_key': 'observation.images.wrist'},
+        },
+    }
+    state_dim = 8 + 7
     lerobot_features = {k: {'shape': (state_dim,), 'names': v, 'dtype': 'float32'} for k, v in state_spec.items()}
     for out_name, (_input_key, (width, height)) in result._image_configs.items():
         lerobot_features[out_name] = {
