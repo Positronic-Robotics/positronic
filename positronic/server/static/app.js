@@ -140,30 +140,31 @@ function renderEpisodesTableHeader(episodes, columns) {
 function renderFilters(episodes, columns) {
   const controlsBar = document.querySelector('.controls-bar');
 
-  for (const [index, filter] of Object.entries(filtersData)) {
-    const filterId = `filter-${index}`;
+  for (const [filterIndex, filter] of Object.entries(filtersData)) {
+    const filterId = `filter-${filterIndex}`;
     const filterContainer = document.createElement('div');
     filterContainer.classList.add('control-group', 'control-group--grow');
 
-    const label = document.createElement('label');
-    label.htmlFor = filterId;
-    label.textContent = columns[index].label;
-    filterContainer.appendChild(label);
+    const labelElement = document.createElement('label');
+    labelElement.htmlFor = filterId;
+    labelElement.textContent = columns[filterIndex].label;
+    filterContainer.appendChild(labelElement);
 
     const select = document.createElement('select');
     select.id = filterId;
     select.addEventListener('change', (event) => {
       if (event.target.value === '-1') {
-        delete filtersState.filters[index];
+        delete filtersState.filters[filterIndex];
       } else {
-        filtersState.filters[index] = event.target.value;
+        filtersState.filters[filterIndex] = event.target.value;
       }
 
       populateEpisodesTable(episodes, columns);
     });
 
     select.appendChild(createOption('-1', 'All'));
-    for (const [index, label] of filter.entries()) {
+    for (const [index, value] of filter.entries()) {
+      const label = columns[filterIndex].renderer?.options[value]?.label ?? value;
       select.appendChild(createOption(index, label));
     }
 
@@ -222,7 +223,7 @@ function populateEpisodesTable(episodes, columns) {
     const row = document.createElement('tr');
 
     for (const [index, value] of episode.entries()) {
-      row.appendChild(createTableCell(index === 0 ? value : getValue(value, renderers[index])));
+      row.appendChild(createTableCell(index === 0 ? value : getCellValue(value, renderers[index])));
     }
 
     const viewCell = createTableCell('');
@@ -236,7 +237,7 @@ function populateEpisodesTable(episodes, columns) {
     tableBody.appendChild(row);
   }
 
-  function getValue(value, renderer) {
+  function getCellValue(value, renderer) {
     if (renderer?.type == 'badge') {
       return createBadge(value, renderer.options?.[value]);
     }

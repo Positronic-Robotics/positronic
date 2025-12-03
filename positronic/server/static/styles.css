@@ -310,13 +310,13 @@ tbody tr.lb-row--baseline:hover {
   border: 1px solid rgba(74, 222, 128, 0.3);
 }
 
-.badge--danger {
+.badge--warning {
   background: rgba(251, 191, 36, 0.15);
   color: #fcd34d;
   border: 1px solid rgba(251, 191, 36, 0.3);
 }
 
-.badge--warning {
+.badge--danger {
   background: rgba(248, 113, 113, 0.15);
   color: #fca5a5;
   border: 1px solid rgba(248, 113, 113, 0.3);
