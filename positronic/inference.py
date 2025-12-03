@@ -172,9 +172,7 @@ def main(
 
     writer_cm = LocalDatasetWriter(output_dir) if output_dir is not None else nullcontext(None)
     with writer_cm as dataset_writer, pimm.World() as world:
-        ds_agent = wire.wire(
-            world, inference, dataset_writer, camera_emitters, robot_arm, gripper, gui, TimeMode.MESSAGE
-        )
+        ds_agent = wire.wire(world, inference, dataset_writer, camera_emitters, robot_arm, gripper, gui, TimeMode.CLOCK)
         world.connect(inference_emitter[0], inference.command, emitter_wrapper=inference_emitter[1])
         if ds_agent is not None:
             world.connect(ds_writer_emitter[0], ds_agent.command, emitter_wrapper=ds_writer_emitter[1])
@@ -299,6 +297,11 @@ openpi_droid = cfn.Config(
     policy_fps=15,
 )
 
+openpi_positronic = openpi_droid.override(
+    observation_encoder=positronic.cfg.policy.observation.openpi_positronic,
+    action_decoder=positronic.cfg.policy.action.absolute_position,
+)
+
 sim_groot = main_sim_cfg.override(
     policy=positronic.cfg.policy.policy.groot,
     observation_encoder=positronic.cfg.policy.observation.groot_infer,
@@ -316,12 +319,19 @@ def _internal_main():
         'sim_openpi_positronic': main_sim_openpi_positronic,
         'sim_openpi_droid': main_sim_openpi_droid,
         'sim_groot': sim_groot,
-        'droid_real': openpi_droid,
-        'openpi_real': openpi_droid.override(
-            observation_encoder=positronic.cfg.policy.observation.openpi_positronic,
+        'real_openpi_droid': openpi_droid,
+        'real_openpi_positronic': openpi_positronic,
+        'real_act': openpi_positronic.override(
+            policy=positronic.cfg.policy.policy.act,
+            observation_encoder=positronic.cfg.policy.observation.eepose_real.override(
+                image_mappings={
+                    'observation.images.wrist': 'image.wrist',
+                    'observation.images.exterior': 'image.exterior',
+                }
+            ),
             action_decoder=positronic.cfg.policy.action.absolute_position,
         ),
-        'groot_droid': openpi_droid.override(
+        'real_groot': openpi_droid.override(
             policy=positronic.cfg.policy.policy.groot,
             observation_encoder=positronic.cfg.policy.observation.groot_infer,
             action_decoder=positronic.cfg.policy.action.groot_infer,
