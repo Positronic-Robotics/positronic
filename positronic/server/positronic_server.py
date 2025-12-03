@@ -26,7 +26,14 @@ from positronic.server.dataset_utils import get_dataset_root, get_episodes_list,
 from positronic.utils.logging import init_logging
 
 # Global app state
-app_state: dict[str, object] = {'dataset': None, 'loading_state': True, 'root': '', 'cache_dir': '', 'episode_keys': {}}
+app_state: dict[str, object] = {
+    'dataset': None,
+    'loading_state': True,
+    'root': '',
+    'cache_dir': '',
+    'episode_keys': {},
+    'max_resolution': 640,
+}
 
 
 def _pkg_path(*parts: str) -> str:
@@ -172,6 +179,7 @@ async def api_episode_rrd(episode_id: int):
         raise HTTPException(status_code=500, detail='Dataset failed to load')
 
     cache_path = _get_rrd_cache_path(episode_id)
+    max_resolution: int = app_state.get('max_resolution')  # type: ignore[assignment]
 
     if os.path.exists(cache_path):
         logging.debug(f'Serving cached RRD for episode {episode_id} from {cache_path}')
@@ -185,7 +193,7 @@ async def api_episode_rrd(episode_id: int):
         success = False
         try:
             with open(cache_path, 'wb') as cache_file:
-                for chunk in stream_episode_rrd(ds, episode_id):
+                for chunk in stream_episode_rrd(ds, episode_id, max_resolution):
                     cache_file.write(chunk)
                     yield chunk
             success = True
@@ -211,6 +219,7 @@ def main(
     port: int = 5000,
     debug: bool = False,
     reset_cache: bool = False,
+    max_resolution: int = 640,
     episode_keys: dict[str, dict[str, str | bool | dict] | str | None] | None = None,
 ):
     """Visualize a Dataset with Rerun.
@@ -256,6 +265,7 @@ def main(
     app_state['cache_dir'] = cache_dir
     app_state['loading_state'] = True
     app_state['episode_keys'] = {'index': '#', **(episode_keys or {})}
+    app_state['max_resolution'] = max_resolution
 
     if reset_cache and os.path.exists(cache_dir):
         logging.info(f'Clearing RRD cache directory: {os.path.abspath(cache_dir)}')
