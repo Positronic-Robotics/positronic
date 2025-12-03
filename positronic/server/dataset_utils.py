@@ -191,14 +191,7 @@ def stream_episode_rrd(ds: Dataset, episode_id: int, max_resolution: int) -> Ite
             if kind == 'numeric':
                 log_numeric_series(f'/signals/{key}', payload)
             else:
-                height, width = payload.shape[:2]
-                max_width, max_height = _get_scaled_resolution(max_resolution, width, height)
-
-                # Downscale if needed
-                if width != max_width or height != max_height:
-                    payload = cv2.resize(payload, (max_width, max_height), interpolation=cv2.INTER_AREA)
-
-                rr.log(key, rr.Image(payload).compress())
+                rr.log(key, rr.Image(resize_if_needed(payload, max_resolution)).compress())
             yield from drainer.drain()
 
     yield from drainer.drain(force=True)
@@ -217,26 +210,13 @@ def get_dataset_root(dataset: Dataset) -> str | None:
     return None
 
 
-def _get_scaled_resolution(max_resolution: int, width: int, height: int) -> tuple[int, int]:
-    """Scale dimensions to fit within max_resolution while preserving aspect ratio.
+def resize_if_needed(image, max_resolution: int):
+    height, width = image.shape[:2]
+    scale = min(1, max_resolution / max(width, height))
+    max_width, max_height = int(width * scale), int(height * scale)
 
-    Args:
-        max_resolution: Maximum allowed value for the larger dimension
-        width: Original width
-        height: Original height
+    # Downscale if needed
+    if width != max_width or height != max_height:
+        return cv2.resize(image, (max_width, max_height), interpolation=cv2.INTER_AREA)
 
-    Returns:
-        Tuple of (scaled_width, scaled_height)
-    """
-    aspect_ratio = width / height
-
-    if width > height:
-        if width > max_resolution:
-            width = max_resolution
-            height = int(width / aspect_ratio)
-    else:
-        if height > max_resolution:
-            height = max_resolution
-            width = int(height * aspect_ratio)
-
-    return width, height
+    return image
