@@ -6,26 +6,30 @@ from positronic.policy.lerobot import LerobotPolicy
 
 @cfn.config(use_temporal_ensembler=False)
 def act(checkpoint_path: str, use_temporal_ensembler: bool, n_action_steps: int | None = None, device=None):
-    from lerobot.policies.act.modeling_act import ACTPolicy, ACTTemporalEnsembler
+    def factory():
+        from lerobot.policies.act.modeling_act import ACTPolicy, ACTTemporalEnsembler
 
-    policy = ACTPolicy.from_pretrained(pos3.download(checkpoint_path), strict=True)
+        policy = ACTPolicy.from_pretrained(pos3.download(checkpoint_path), strict=True)
 
-    if use_temporal_ensembler:
-        policy.config.n_action_steps = 1
-        policy.config.temporal_ensemble_coeff = 0.01
-        policy.temporal_ensembler = ACTTemporalEnsembler(0.01, policy.config.chunk_size)
+        if use_temporal_ensembler:
+            policy.config.n_action_steps = 1
+            policy.config.temporal_ensemble_coeff = 0.01
+            policy.temporal_ensembler = ACTTemporalEnsembler(0.01, policy.config.chunk_size)
 
-    if n_action_steps is not None:
-        policy.config.n_action_steps = n_action_steps
+        if n_action_steps is not None:
+            policy.config.n_action_steps = n_action_steps
+        return policy
 
-    return LerobotPolicy(policy, device, extra_meta={'type': 'act', 'checkpoint_path': checkpoint_path})
+    return LerobotPolicy(factory, device, extra_meta={'type': 'act', 'checkpoint_path': checkpoint_path})
 
 
 def _get_diffusion_policy(checkpoint_path: str, device: str | None = None):
     from lerobot.policies.diffusion.modeling_diffusion import DiffusionPolicy
 
-    policy = DiffusionPolicy.from_pretrained(pos3.download(checkpoint_path), local_files_only=True, strict=True)
-    return LerobotPolicy(policy, device, extra_meta={'type': 'diffusion', 'checkpoint_path': checkpoint_path})
+    def factory():
+        return DiffusionPolicy.from_pretrained(pos3.download(checkpoint_path), local_files_only=True, strict=True)
+
+    return LerobotPolicy(factory, device, extra_meta={'type': 'diffusion', 'checkpoint_path': checkpoint_path})
 
 
 @cfn.config(host='localhost', port=8000, n_action_steps=None)

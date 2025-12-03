@@ -1,3 +1,4 @@
+from collections.abc import Callable
 from typing import Any
 
 import numpy as np
@@ -24,19 +25,31 @@ def _detect_device() -> str:
 
 
 class LerobotPolicy(Policy):
-    def __init__(self, original: PreTrainedPolicy, device: str | None = None, extra_meta: dict[str, Any] | None = None):
-        self.original = original
-        self.target_device = device or _detect_device()
+    def __init__(
+        self,
+        policy_factory: Callable[[], PreTrainedPolicy],
+        device: str | None = None,
+        extra_meta: dict[str, Any] | None = None,
+    ):
+        self.factory = policy_factory
+        self.original = None
+        self.target_device = device
+
         # We initialize on CPU to ensure the policy is pickleable when passed to a subprocess.
         # The model will be moved to the target device (e.g. MPS/CUDA) lazily on the first inference call.
         self.device = 'cpu'
-        self.original.to(self.device)
         self.extra_meta = extra_meta or {}
 
-    def select_action(self, observation: dict[str, Any]) -> dict[str, Any]:
-        if self.device != self.target_device:
+    @property
+    def _policy(self) -> PreTrainedPolicy:
+        if self.original is None:
+            self.original = self.factory()
+            self.target_device = self.target_device or _detect_device()
             self.original.to(self.target_device)
-            self.device = self.target_device
+        return self.original
+
+    def select_action(self, observation: dict[str, Any]) -> dict[str, Any]:
+        policy = self._policy
 
         obs = {}
         for key, val in observation.items():
@@ -46,15 +59,15 @@ class LerobotPolicy(Policy):
                 if key.startswith('observation.images.'):
                     val = np.transpose(val.astype(np.float32) / 255.0, (2, 0, 1))
                 val = val[np.newaxis, ...]
-                obs[key] = torch.from_numpy(val).to(self.device)
+                obs[key] = torch.from_numpy(val).to(self.target_device)
             else:
-                obs[key] = torch.as_tensor(val).to(self.device)
+                obs[key] = torch.as_tensor(val).to(self.target_device)
 
-        action = self.original.select_action(obs).squeeze(0).cpu().numpy()
+        action = policy.select_action(obs).squeeze(0).cpu().numpy()
         return {'action': action}
 
     def reset(self):
-        self.original.reset()
+        self._policy.reset()
 
     @property
     def meta(self) -> dict[str, Any]:
