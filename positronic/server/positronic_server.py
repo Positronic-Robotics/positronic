@@ -208,10 +208,37 @@ async def api_episode_rrd(episode_id: int):
     )
 
 
-@cfn.config(
-    dataset=positronic.cfg.dataset.local_all,
-    episode_keys={'duration': {'label': 'Duration', 'format': '%.2f sec'}, 'task': {'label': 'Task', 'filter': True}},
-)
+@cfn.config()
+def default_table():
+    return {'duration': {'label': 'Duration', 'format': '%.2f sec'}, 'task': {'label': 'Task', 'filter': True}}
+
+
+@cfn.config()
+def eval_table():
+    return {
+        # TODO: We need to have an ability to remove the first ID column
+        'task_code': {'label': 'Task', 'filter': True},
+        'model': {'label': 'Model', 'filter': True},
+        'units': {'label': 'Units'},
+        'uph': {'label': 'UPH', 'format': '%.1f'},
+        'success': {'label': 'Success', 'format': '%.1f%%'},
+        # 'started': {'label': 'Started', 'format': '%Y-%m-%d %H:%M:%S'},  # This does not work now
+        'full_success': {
+            'label': 'Status',
+            'filter': True,  # Currently filter shows true / false, I expect it to show Pass / Fail
+            'renderer': {
+                'type': 'badge',
+                'options': {
+                    True: {'label': 'Pass', 'variant': 'success'},
+                    False: {'label': 'Fail', 'variant': 'danger'},
+                },
+            },
+        },
+        'duration': {'label': 'Duration', 'format': '%.1f sec'},
+    }
+
+
+@cfn.config(dataset=positronic.cfg.dataset.local_all, ep_table_cfg=default_table)
 def main(
     dataset: Dataset,
     cache_dir: str = os.path.expanduser('~/.cache/positronic/server/'),
@@ -220,7 +247,7 @@ def main(
     debug: bool = False,
     reset_cache: bool = False,
     max_resolution: int = 640,
-    episode_keys: dict[str, dict[str, str | bool | dict] | str | None] | None = None,
+    ep_table_cfg: dict[str, dict[str, str | bool | dict] | str | None] | None = None,
 ):
     """Visualize a Dataset with Rerun.
 
@@ -231,7 +258,7 @@ def main(
         port: Server port
         debug: Enable debug logging
         reset_cache: If True, clear cache_dir at startup
-        episode_keys: Mapping of episode static data keys to display in episode list,
+        ep_table_cfg: Mapping of episode static data keys to display in episode list,
             where the value is either:
             - A string label to display as the column header
             - A dict with 'label' and optional 'format' and 'renderer' keys
@@ -264,7 +291,7 @@ def main(
     app_state['root'] = root
     app_state['cache_dir'] = cache_dir
     app_state['loading_state'] = True
-    app_state['episode_keys'] = {'index': '#', **(episode_keys or {})}
+    app_state['episode_keys'] = {'index': '#', **(ep_table_cfg or {})}
     app_state['max_resolution'] = max_resolution
 
     if reset_cache and os.path.exists(cache_dir):

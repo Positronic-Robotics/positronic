@@ -40,7 +40,7 @@ def uph(ep: Episode) -> float | None:
     return ep.duration_ns / 1e9 / items
 
 
-evaluation_ds = base_cfg.transform.override(
+ds = base_cfg.transform.override(
     base=base_cfg.local,
     transforms=[
         base_cfg.group.override(
@@ -53,7 +53,7 @@ evaluation_ds = base_cfg.transform.override(
                     full_success=full_success,
                     uph=uph,
                     success=lambda ep: 100 * ep['eval.successful_items'] / ep['eval.total_items'],
-                    started=lambda ep: datetime.fromtimestamp(ep.meta['created_ts_ns'] / 1e9),
+                    started=lambda ep: datetime.fromtimestamp(ep.meta['created_ts_ns'] / 1e9).isoformat(),
                 ),
             ]
         )
