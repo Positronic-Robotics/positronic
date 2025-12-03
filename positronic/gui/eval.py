@@ -89,8 +89,8 @@ class EvalUI(pimm.ControlSystem):
             'Pick all the towels one by one from transparent tote and place them into the large grey tote.',
             'Pick all the wooden spoons one by one from transparent tote and place them into the large grey tote.',
             'Pick all the scissors one by one from transparent tote and place them into the large grey tote.',
-            'pick up the green cube and put in on top of the red cube',
-            'pick up objects from the red tote and place them in the green tote',
+            'Pick up the green cube and put in on top of the red cube.',
+            'Pick up objects from the red tote and place them in the green tote.',
         ]
         self.task_radio = self._add(
             'task_radio',
