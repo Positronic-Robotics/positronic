@@ -276,7 +276,7 @@ def main(
 
             Example:
             {
-                'duration': {'label': 'Duration', 'format': '% .2f sec'},
+                '__duration__': {'label': 'Duration', 'format': '%.2f sec'},
                 'task': 'Task',
                 'status': {
                     'label': 'Status',
