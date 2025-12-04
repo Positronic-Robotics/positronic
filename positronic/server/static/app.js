@@ -106,7 +106,9 @@ function renderEpisodesTableHeader(episodes, columns) {
   const headerColumns = [];
   const sortState = filtersState.sort;
 
-  for (const [columnIndex, { label }] of Object.entries(columns)) {
+  for (const [columnIndex, { label, hidden }] of Object.entries(columns)) {
+    if (hidden) continue;
+
     const headerColumn = createTableCell(label, true);
     headerColumn.classList.add('sortable');
     headerColumn.dataset.sort = columnIndex;
@@ -222,7 +224,11 @@ function populateEpisodesTable(episodes, columns) {
     const row = document.createElement('tr');
 
     for (const [index, value] of episode.entries()) {
-      row.appendChild(createTableCell(index === 0 ? value : getCellValue(value, columns[index])));
+      if (columns[index].hidden) continue;
+
+      row.appendChild(
+        createTableCell(index === 0 ? value + 1 : getCellValue(value, columns[index]))
+      );
     }
 
     const viewCell = createTableCell('');

@@ -154,6 +154,9 @@ async def api_episodes():
 
             if 'default' in value:
                 column['default'] = value['default']
+
+            if 'hidden' in value:
+                column['hidden'] = value['hidden']
         else:
             column['label'] = value or key
 
@@ -219,7 +222,7 @@ def default_table():
 @cfn.config()
 def eval_table():
     return {
-        # TODO: We need to have an ability to remove the first ID column
+        'index': {'label': '#', 'hidden': True},
         'task_code': {'label': 'Task', 'filter': True},
         'model': {'label': 'Model', 'filter': True},
         'units': {'label': 'Units'},
@@ -228,7 +231,7 @@ def eval_table():
         # 'started': {'label': 'Started', 'format': '%Y-%m-%d %H:%M:%S'},  # This does not work now
         'full_success': {
             'label': 'Status',
-            'filter': True,  # Currently filter shows true / false, I expect it to show Pass / Fail
+            'filter': True,
             'renderer': {
                 'type': 'badge',
                 'options': {
