@@ -140,26 +140,25 @@ async def api_episodes():
 
     columns = []
     formatters = {}
+    defaults = {}
     for key, value in app_state['episode_keys'].items():
         column = {}
         if isinstance(value, dict):
             column['label'] = value.get('label', key)
             formatters[key] = value.get('format')
+            defaults[key] = value.get('default')
 
             if 'renderer' in value:
                 column['renderer'] = value['renderer']
 
             if 'filter' in value:
                 column['filter'] = value['filter']
-
-            if 'default' in value:
-                column['default'] = value['default']
         else:
             column['label'] = value or key
 
         columns.append(column)
 
-    episodes = get_episodes_list(ds, app_state['episode_keys'].keys(), formatters=formatters)
+    episodes = get_episodes_list(ds, app_state['episode_keys'].keys(), formatters=formatters, defaults=defaults)
 
     return {'columns': columns, 'episodes': episodes}
 
@@ -226,7 +225,7 @@ def eval_table():
         'task_code': {'label': 'Task', 'filter': True},
         'model': {'label': 'Model', 'filter': True},
         'units': {'label': 'Units'},
-        'uph': {'label': 'UPH', 'format': '%.1f', 'default': ''},
+        'uph': {'label': 'UPH', 'format': '%.1f'},
         'success': {'label': 'Success', 'format': '%.1f%%'},
         'started': {'label': 'Started', 'format': '%Y-%m-%d %H:%M:%S'},
         'full_success': {

@@ -243,12 +243,7 @@ function populateEpisodesTable(episodes, columns) {
 
     const value = Array.isArray(entity) ? entity[1] : entity;
 
-    switch (typeof value) {
-      case 'number':
-        return value.toFixed(2);
-      default:
-        return String(value ?? column.default ?? 'N/A');
-    }
+    return value ?? '';
   }
 
   function createBadge(value, options) {
@@ -306,17 +301,7 @@ function getFilteredEpisodes(episodes) {
 
     const value = Array.isArray(entity) ? entity[0] : entity;
 
-    switch (typeof value) {
-      case 'number':
-      case 'boolean':
-        return value;
-
-      case 'string':
-        return value.toLowerCase();
-
-      default:
-        return String(value).toLowerCase();
-    }
+    return value;
   }
 }
 
