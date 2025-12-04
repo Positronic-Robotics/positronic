@@ -151,6 +151,9 @@ async def api_episodes():
 
             if 'filter' in value:
                 column['filter'] = value['filter']
+
+            if 'default' in value:
+                column['default'] = value['default']
         else:
             column['label'] = value or key
 
@@ -220,7 +223,7 @@ def eval_table():
         'task_code': {'label': 'Task', 'filter': True},
         'model': {'label': 'Model', 'filter': True},
         'units': {'label': 'Units'},
-        'uph': {'label': 'UPH', 'format': '%.1f'},
+        'uph': {'label': 'UPH', 'format': '%.1f', 'default': ''},
         'success': {'label': 'Success', 'format': '%.1f%%'},
         # 'started': {'label': 'Started', 'format': '%Y-%m-%d %H:%M:%S'},  # This does not work now
         'full_success': {
@@ -264,6 +267,7 @@ def main(
             - A dict with 'label' and optional 'format' and 'renderer' keys
                 - 'label': Column header label
                 - 'format': (optional) Format string for displaying the value
+                - 'default': (optional) Default value to use if the actual value is missing
                 - 'renderer': (optional) Renderer configuration for custom display
                 - 'filter': (optional) Boolean indicating if the column is filterable
 

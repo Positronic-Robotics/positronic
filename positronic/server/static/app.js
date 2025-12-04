@@ -215,7 +215,6 @@ function filterEpisodes(columnIndex, selectedValue) {
 
 function populateEpisodesTable(episodes, columns) {
   const tableBody = document.querySelector('.episodes-table tbody');
-  const renderers = Object.values(columns).map(({ renderer }) => renderer ?? null);
   const filteredEpisodes = getFilteredEpisodes(episodes);
 
   tableBody.innerHTML = '';
@@ -223,7 +222,7 @@ function populateEpisodesTable(episodes, columns) {
     const row = document.createElement('tr');
 
     for (const [index, value] of episode.entries()) {
-      row.appendChild(createTableCell(index === 0 ? value : getCellValue(value, renderers[index])));
+      row.appendChild(createTableCell(index === 0 ? value : getCellValue(value, columns[index])));
     }
 
     const viewCell = createTableCell('');
@@ -237,16 +236,16 @@ function populateEpisodesTable(episodes, columns) {
     tableBody.appendChild(row);
   }
 
-  function getCellValue(value, renderer) {
-    if (renderer?.type == 'badge') {
-      return createBadge(value, renderer.options?.[value]);
+  function getCellValue(value, column) {
+    if (column.renderer?.type === 'badge') {
+      return createBadge(value, column.renderer.options?.[value]);
     }
 
     switch (typeof value) {
       case 'number':
         return value.toFixed(2);
       default:
-        return String(value ?? 'N/A');
+        return String(value ?? column.default ?? 'N/A');
     }
   }
 
