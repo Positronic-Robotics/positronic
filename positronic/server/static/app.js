@@ -188,8 +188,8 @@ function getFiltersData(episodes, columns) {
 
     const columnData = new Set();
 
-    for (const episode of episodes) {
-      const value = episode[index];
+    for (const [episodeIndex, episodeData] of episodes) {
+      const value = episodeData[index];
       if (value === null || value === undefined) continue;
 
       columnData.add(String(value));
@@ -218,17 +218,17 @@ function populateEpisodesTable(episodes, columns) {
   const filteredEpisodes = getFilteredEpisodes(episodes);
 
   tableBody.innerHTML = '';
-  for (const episode of filteredEpisodes) {
+  for (const [episodeIndex, episodeData] of filteredEpisodes) {
     const row = document.createElement('tr');
 
-    for (const [index, value] of episode.entries()) {
-      row.appendChild(createTableCell(index === 0 ? value : getCellValue(value, columns[index])));
+    for (const [index, value] of episodeData.entries()) {
+      row.appendChild(createTableCell(getCellValue(value, columns[index])));
     }
 
     const viewCell = createTableCell('');
     const viewLink = document.createElement('a');
     viewLink.className = 'btn btn-primary btn-small';
-    viewLink.href = `/episode/${episode[0]}`; // Assuming the first element is the episode index or ID
+    viewLink.href = `/episode/${episodeIndex}`;
     viewLink.textContent = 'View';
     viewCell.appendChild(viewLink);
     row.appendChild(viewCell);
@@ -274,9 +274,9 @@ function getFilteredEpisodes(episodes) {
   const { sort: sortState, filters } = filtersState;
   let filteredEpisodes = episodes.slice();
 
-  filteredEpisodes = filteredEpisodes.filter((episode) => {
+  filteredEpisodes = filteredEpisodes.filter(([episodeIndex, episodeData]) => {
     return Object.entries(filters).every(([columnIndex, valueIndex]) => {
-      return String(episode[columnIndex]) === filtersData[columnIndex][valueIndex];
+      return String(episodeData[columnIndex]) === filtersData[columnIndex][valueIndex];
     });
   });
 
@@ -285,8 +285,8 @@ function getFilteredEpisodes(episodes) {
   }
 
   filteredEpisodes.sort((a, b) => {
-    const aValue = getSortableValue(a[sortState.columnIndex]);
-    const bValue = getSortableValue(b[sortState.columnIndex]);
+    const aValue = getSortableValue(a[1][sortState.columnIndex]);
+    const bValue = getSortableValue(b[1][sortState.columnIndex]);
 
     if (aValue === bValue) return 0;
 

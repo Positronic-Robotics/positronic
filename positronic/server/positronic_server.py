@@ -219,7 +219,6 @@ def default_table():
 @cfn.config()
 def eval_table():
     return {
-        # TODO: We need to have an ability to remove the first ID column
         'task_code': {'label': 'Task', 'filter': True},
         'model': {'label': 'Model', 'filter': True},
         'units': {'label': 'Units'},
@@ -228,7 +227,7 @@ def eval_table():
         # 'started': {'label': 'Started', 'format': '%Y-%m-%d %H:%M:%S'},  # This does not work now
         'full_success': {
             'label': 'Status',
-            'filter': True,  # Currently filter shows true / false, I expect it to show Pass / Fail
+            'filter': True,
             'renderer': {
                 'type': 'badge',
                 'options': {
@@ -295,7 +294,7 @@ def main(
     app_state['root'] = root
     app_state['cache_dir'] = cache_dir
     app_state['loading_state'] = True
-    app_state['episode_keys'] = {'index': '#', **(ep_table_cfg or {})}
+    app_state['episode_keys'] = ep_table_cfg or {}
     app_state['max_resolution'] = max_resolution
 
     if reset_cache and os.path.exists(cache_dir):

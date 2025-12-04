@@ -22,7 +22,7 @@ def get_episodes_list(ds: Dataset, keys: list[str], formatters: dict[str, str | 
     result = []
     for idx, ep in enumerate(ds):
         try:
-            computed_keys = {'index': idx, 'duration': ep.duration_ns / 1e9}
+            computed_keys = {'index': idx + 1, 'duration': ep.duration_ns / 1e9}
             mapping = ep.static | computed_keys
             row: list[Any] = []
 
@@ -33,7 +33,7 @@ def get_episodes_list(ds: Dataset, keys: list[str], formatters: dict[str, str | 
                 else:
                     row.append(value)
 
-            result.append(row)
+            result.append([idx, row])
         except Exception as e:
             raise Exception(f'Error getting episode {idx}: {ep.meta}') from e
     return result
