@@ -274,6 +274,10 @@ def main(
                 - 'renderer': (optional) Renderer configuration for custom display
                 - 'filter': (optional) Boolean indicating if the column is filterable
 
+            There are special keys:
+            - '__index__': Episode index
+            - '__duration__': Episode duration in seconds
+
             Example:
             {
                 '__duration__': {'label': 'Duration', 'format': '%.2f sec'},
