@@ -213,7 +213,11 @@ async def api_episode_rrd(episode_id: int):
 
 @cfn.config()
 def default_table():
-    return {'duration': {'label': 'Duration', 'format': '%.2f sec'}, 'task': {'label': 'Task', 'filter': True}}
+    return {
+        '__index__': {'label': '#', 'format': '%d'},
+        '__duration__': {'label': 'Duration', 'format': '%.2f sec'},
+        'task': {'label': 'Task', 'filter': True},
+    }
 
 
 @cfn.config()
@@ -236,7 +240,7 @@ def eval_table():
                 },
             },
         },
-        'duration': {'label': 'Duration', 'format': '%.1f sec'},
+        '__duration__': {'label': 'Duration', 'format': '%.1f sec'},
     }
 
 

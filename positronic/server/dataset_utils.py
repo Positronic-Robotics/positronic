@@ -22,7 +22,7 @@ def get_episodes_list(ds: Dataset, keys: list[str], formatters: dict[str, str | 
     result = []
     for idx, ep in enumerate(ds):
         try:
-            computed_keys = {'index': idx + 1, 'duration': ep.duration_ns / 1e9}
+            computed_keys = {'__index__': idx + 1, '__duration__': ep.duration_ns / 1e9}
             mapping = ep.static | computed_keys
             row: list[Any] = []
 
