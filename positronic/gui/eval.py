@@ -55,6 +55,7 @@ class EvalUI(pimm.ControlSystem):
         return tag
 
     def _create_theme(self):
+        """Creates the disabled theme for UI elements."""
         with dpg.theme(tag='disabled_theme'):
             with dpg.theme_component(dpg.mvAll):
                 dpg.add_theme_color(dpg.mvThemeCol_Text, (100, 100, 100))
@@ -67,18 +68,8 @@ class EvalUI(pimm.ControlSystem):
                 dpg.add_theme_color(dpg.mvThemeCol_FrameBgHovered, (20, 20, 20))
                 dpg.add_theme_color(dpg.mvThemeCol_FrameBgActive, (20, 20, 20))
 
-            with dpg.theme_component(dpg.mvAll, enabled_state=False):
-                dpg.add_theme_color(dpg.mvThemeCol_Text, (100, 100, 100))
-                dpg.add_theme_color(dpg.mvThemeCol_TextDisabled, (100, 100, 100))
-                dpg.add_theme_color(dpg.mvThemeCol_Button, (20, 20, 20))
-                dpg.add_theme_color(dpg.mvThemeCol_ButtonHovered, (20, 20, 20))
-                dpg.add_theme_color(dpg.mvThemeCol_ButtonActive, (20, 20, 20))
-                dpg.add_theme_color(dpg.mvThemeCol_FrameBg, (20, 20, 20))
-                dpg.add_theme_color(dpg.mvThemeCol_CheckMark, (100, 100, 100))
-                dpg.add_theme_color(dpg.mvThemeCol_FrameBgHovered, (20, 20, 20))
-                dpg.add_theme_color(dpg.mvThemeCol_FrameBgActive, (20, 20, 20))
-
     def _build_controls(self):
+        """Builds the main control buttons (Start, Stop, Reset)."""
         with dpg.group(horizontal=True):
             self._register(
                 dpg.add_button(label='Start', callback=self.start, width=self.size(80), height=self.size(32)),
@@ -96,6 +87,7 @@ class EvalUI(pimm.ControlSystem):
             )
 
     def _build_configuration(self):
+        """Builds the configuration section of the UI."""
         dpg.add_text('Configuration')
         with dpg.group(horizontal=True):
             with dpg.child_window(height=self.size(180), width=self.size(480), border=True):
@@ -163,6 +155,7 @@ class EvalUI(pimm.ControlSystem):
         )
 
     def _build_notes(self):
+        """Builds the notes section of the UI."""
         dpg.add_text('Notes')
         dpg.add_spacer(height=self.size(5))
         with dpg.group(horizontal=True):
@@ -183,6 +176,7 @@ class EvalUI(pimm.ControlSystem):
                 )
 
     def _setup_key_handlers(self):
+        """Sets up keyboard shortcuts."""
         with dpg.handler_registry():
 
             def safe_trigger(callback):
@@ -337,6 +331,7 @@ class EvalUI(pimm.ControlSystem):
     # --- UI Update ---
 
     def update_ui(self, task_value=None):
+        """Updates the UI state based on the current application state."""
         for tag, enabled_states in self.element_states.items():
             should_be_enabled = self.state in enabled_states
             if not should_be_enabled:
@@ -376,6 +371,48 @@ class EvalUI(pimm.ControlSystem):
             dpg.set_value('notes_input', '')
 
     # --- Control System Run Loop ---
+
+    def _update_camera_feed(self):
+        """Updates the camera feed textures."""
+        for cam_name, camera in self.cameras.items():
+            cam_msg = camera.read()
+            if cam_msg.data is not None and cam_msg.updated:
+                image = cam_msg.data.array
+
+                if cam_name not in self.im_sizes:
+                    orig_height, orig_width = image.shape[:2]
+
+                    # Calculate display size (downsample if needed)
+                    max_width, max_height = self.max_im_size
+                    scale = min(max_width / orig_width, max_height / orig_height, 1.0)
+                    display_width = int(orig_width * scale)
+                    display_height = int(orig_height * scale)
+
+                    self.im_sizes[cam_name] = (display_height, display_width)
+
+                    with dpg.texture_registry(show=False):
+                        data = np.zeros((display_height, display_width, 4), dtype=np.float32)
+                        dpg.add_raw_texture(
+                            display_width,
+                            display_height,
+                            default_value=data,
+                            format=dpg.mvFormat_Float_rgba,
+                            tag=f'tex_{cam_name}',
+                        )
+                        self.raw_textures[cam_name] = data
+
+                    dpg.add_image(
+                        f'tex_{cam_name}', parent='image_grid_group', width=display_width, height=display_height
+                    )
+
+                # Downsample image if needed to match display size
+                display_height, display_width = self.im_sizes[cam_name]
+                if image.shape[0] != display_height or image.shape[1] != display_width:
+                    image = cv2.resize(image, (display_width, display_height), interpolation=cv2.INTER_AREA)
+
+                texture = self.raw_textures[cam_name]
+                texture[:, :, :3] = image / 255.0
+                texture[:, :, 3] = 1.0
 
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Sleep]:
         # Initialize DPG Context
@@ -425,47 +462,7 @@ class EvalUI(pimm.ControlSystem):
         self.update_ui()
 
         while not should_stop.value and dpg.is_dearpygui_running():
-            # Handle Cameras
-            for cam_name, camera in self.cameras.items():
-                cam_msg = camera.read()
-                if cam_msg.data is not None and cam_msg.updated:
-                    image = cam_msg.data.array
-
-                    if cam_name not in self.im_sizes:
-                        orig_height, orig_width = image.shape[:2]
-
-                        # Calculate display size (downsample if needed)
-                        max_width, max_height = self.max_im_size
-                        scale = min(max_width / orig_width, max_height / orig_height, 1.0)
-                        display_width = int(orig_width * scale)
-                        display_height = int(orig_height * scale)
-
-                        self.im_sizes[cam_name] = (display_height, display_width)
-
-                        with dpg.texture_registry(show=False):
-                            data = np.zeros((display_height, display_width, 4), dtype=np.float32)
-                            dpg.add_raw_texture(
-                                display_width,
-                                display_height,
-                                default_value=data,
-                                format=dpg.mvFormat_Float_rgba,
-                                tag=f'tex_{cam_name}',
-                            )
-                            self.raw_textures[cam_name] = data
-
-                        dpg.add_image(
-                            f'tex_{cam_name}', parent='image_grid_group', width=display_width, height=display_height
-                        )
-
-                    # Downsample image if needed to match display size
-                    display_height, display_width = self.im_sizes[cam_name]
-                    if image.shape[0] != display_height or image.shape[1] != display_width:
-                        image = cv2.resize(image, (display_width, display_height), interpolation=cv2.INTER_AREA)
-
-                    texture = self.raw_textures[cam_name]
-                    texture[:, :, :3] = image / 255.0
-                    texture[:, :, 3] = 1.0
-
+            self._update_camera_feed()
             dpg.render_dearpygui_frame()
             yield pimm.Pass()
 
