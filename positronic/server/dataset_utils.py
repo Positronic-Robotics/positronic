@@ -3,6 +3,7 @@
 import heapq
 import logging
 from collections.abc import Iterator
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -28,8 +29,11 @@ def get_episodes_list(ds: Dataset, keys: list[str], formatters: dict[str, str | 
 
             for key in keys:
                 value = mapping.get(key)
-                if value is not None and formatters.get(key):
-                    row.append(formatters[key] % value)
+                if isinstance(value, datetime):
+                    formattedDate = value.strftime(formatters[key]) if formatters.get(key) else value.isoformat()
+                    row.append([value.timestamp(), formattedDate])
+                elif value is not None and formatters.get(key):
+                    row.append([value, formatters[key] % value])
                 else:
                     row.append(value)
 

@@ -228,7 +228,7 @@ def eval_table():
         'units': {'label': 'Units'},
         'uph': {'label': 'UPH', 'format': '%.1f', 'default': ''},
         'success': {'label': 'Success', 'format': '%.1f%%'},
-        # 'started': {'label': 'Started', 'format': '%Y-%m-%d %H:%M:%S'},  # This does not work now
+        'started': {'label': 'Started', 'format': '%Y-%m-%d %H:%M:%S'},
         'full_success': {
             'label': 'Status',
             'filter': True,
