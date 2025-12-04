@@ -45,6 +45,11 @@ class EvalUI(pimm.ControlSystem):
         self.im_sizes = {}
         self.raw_textures = {}
 
+        # New state
+        self.cap_per_item = 30
+        self.run_start_time = None
+        self.run_duration = None
+
     def size(self, v: int) -> int:
         """Scale a value by ui_scale."""
         return int(v * self.ui_scale)
@@ -55,7 +60,6 @@ class EvalUI(pimm.ControlSystem):
         return tag
 
     def _create_theme(self):
-        """Creates the disabled theme for UI elements."""
         with dpg.theme(tag='disabled_theme'):
             with dpg.theme_component(dpg.mvAll):
                 dpg.add_theme_color(dpg.mvThemeCol_Text, (100, 100, 100))
@@ -68,18 +72,77 @@ class EvalUI(pimm.ControlSystem):
                 dpg.add_theme_color(dpg.mvThemeCol_FrameBgHovered, (20, 20, 20))
                 dpg.add_theme_color(dpg.mvThemeCol_FrameBgActive, (20, 20, 20))
 
+            with dpg.theme_component(dpg.mvAll, enabled_state=False):
+                dpg.add_theme_color(dpg.mvThemeCol_Text, (100, 100, 100))
+                dpg.add_theme_color(dpg.mvThemeCol_TextDisabled, (100, 100, 100))
+                dpg.add_theme_color(dpg.mvThemeCol_Button, (20, 20, 20))
+                dpg.add_theme_color(dpg.mvThemeCol_ButtonHovered, (20, 20, 20))
+                dpg.add_theme_color(dpg.mvThemeCol_ButtonActive, (20, 20, 20))
+                dpg.add_theme_color(dpg.mvThemeCol_FrameBg, (20, 20, 20))
+                dpg.add_theme_color(dpg.mvThemeCol_CheckMark, (100, 100, 100))
+                dpg.add_theme_color(dpg.mvThemeCol_FrameBgHovered, (20, 20, 20))
+                dpg.add_theme_color(dpg.mvThemeCol_FrameBgActive, (20, 20, 20))
+
+        with dpg.theme(tag='finished_theme'):
+            with dpg.theme_component(dpg.mvButton):
+                dpg.add_theme_color(dpg.mvThemeCol_Button, (0, 100, 0))
+                dpg.add_theme_color(dpg.mvThemeCol_ButtonHovered, (0, 120, 0))
+                dpg.add_theme_color(dpg.mvThemeCol_ButtonActive, (0, 80, 0))
+
+        with dpg.theme(tag='stall_theme'):
+            with dpg.theme_component(dpg.mvButton):
+                dpg.add_theme_color(dpg.mvThemeCol_Button, (150, 150, 0))
+                dpg.add_theme_color(dpg.mvThemeCol_ButtonHovered, (170, 170, 0))
+                dpg.add_theme_color(dpg.mvThemeCol_ButtonActive, (130, 130, 0))
+
+        with dpg.theme(tag='safety_theme'):
+            with dpg.theme_component(dpg.mvButton):
+                dpg.add_theme_color(dpg.mvThemeCol_Button, (150, 0, 0))
+                dpg.add_theme_color(dpg.mvThemeCol_ButtonHovered, (170, 0, 0))
+                dpg.add_theme_color(dpg.mvThemeCol_ButtonActive, (130, 0, 0))
+
+        with dpg.theme(tag='system_theme'):
+            with dpg.theme_component(dpg.mvButton):
+                dpg.add_theme_color(dpg.mvThemeCol_Button, (80, 80, 80))
+                dpg.add_theme_color(dpg.mvThemeCol_ButtonHovered, (100, 100, 100))
+                dpg.add_theme_color(dpg.mvThemeCol_ButtonActive, (60, 60, 60))
+
     def _build_controls(self):
-        """Builds the main control buttons (Start, Stop, Reset)."""
         with dpg.group(horizontal=True):
             self._register(
                 dpg.add_button(label='Start', callback=self.start, width=self.size(80), height=self.size(32)),
                 [State.WAITING],
             )
             dpg.add_spacer(width=self.size(10))
-            self._register(
-                dpg.add_button(label='Stop', callback=self.stop, width=self.size(80), height=self.size(32)),
-                [State.RUNNING],
+            dpg.add_spacer(width=self.size(10))
+
+            # Stop buttons
+            btn_finished = dpg.add_button(
+                label='Finished', callback=lambda: self.stop_run('Success'), width=self.size(80), height=self.size(32)
             )
+            dpg.bind_item_theme(btn_finished, 'finished_theme')
+            self._register(btn_finished, [State.RUNNING])
+
+            dpg.add_spacer(width=self.size(5))
+            btn_stall = dpg.add_button(
+                label='Stall', callback=lambda: self.stop_run('Stalled'), width=self.size(80), height=self.size(32)
+            )
+            dpg.bind_item_theme(btn_stall, 'stall_theme')
+            self._register(btn_stall, [State.RUNNING])
+
+            dpg.add_spacer(width=self.size(5))
+            btn_safety = dpg.add_button(
+                label='Safety', callback=lambda: self.stop_run('Safety'), width=self.size(80), height=self.size(32)
+            )
+            dpg.bind_item_theme(btn_safety, 'safety_theme')
+            self._register(btn_safety, [State.RUNNING])
+
+            dpg.add_spacer(width=self.size(5))
+            btn_system = dpg.add_button(
+                label='System', callback=lambda: self.stop_run('System'), width=self.size(80), height=self.size(32)
+            )
+            dpg.bind_item_theme(btn_system, 'system_theme')
+            self._register(btn_system, [State.RUNNING])
             dpg.add_spacer(width=self.size(10))
             self._register(
                 dpg.add_button(label='Reset', callback=self.reset, width=self.size(80), height=self.size(32)),
@@ -87,7 +150,6 @@ class EvalUI(pimm.ControlSystem):
             )
 
     def _build_configuration(self):
-        """Builds the configuration section of the UI."""
         dpg.add_text('Configuration')
         with dpg.group(horizontal=True):
             with dpg.child_window(height=self.size(180), width=self.size(480), border=True):
@@ -112,9 +174,10 @@ class EvalUI(pimm.ControlSystem):
                         tag='total_items_input',
                         callback=self.validate_items_callback,
                     ),
-                    [State.WAITING, State.RUNNING, State.REVIEWING],
+                    [State.WAITING],
                 )
                 dpg.add_spacer(height=self.size(5))
+
                 self._register(
                     dpg.add_input_int(
                         label='Successful items',
@@ -125,6 +188,22 @@ class EvalUI(pimm.ControlSystem):
                     ),
                     [State.RUNNING, State.REVIEWING],
                 )
+
+                dpg.add_spacer(height=self.size(5))
+                self._register(
+                    dpg.add_input_int(
+                        label='Cap/item (s)',
+                        default_value=self.cap_per_item,
+                        width=self.size(100),
+                        tag='cap_per_item_input',
+                        callback=self.cap_callback,
+                        step=1,
+                    ),
+                    [State.WAITING],
+                )
+
+                dpg.add_spacer(height=self.size(5))
+                dpg.add_text('Total run cap: 0 sec', tag='total_run_cap_text')
 
                 dpg.add_spacer(height=self.size(10))
                 dpg.add_text('Tote Placement')
@@ -144,18 +223,17 @@ class EvalUI(pimm.ControlSystem):
                 )
 
         dpg.add_spacer(height=self.size(10))
+        dpg.add_text('Outcome')
         self._register(
-            dpg.add_checkbox(label='Aborted', callback=self.aborted_callback, tag='aborted_checkbox'), [State.REVIEWING]
-        )
-        dpg.add_spacer(height=self.size(5))
-        self._register(dpg.add_checkbox(label='Model failure', tag='model_failure_checkbox'), [State.REVIEWING])
-        dpg.add_spacer(height=self.size(5))
-        self._register(
-            dpg.add_checkbox(label='Dangerous behavior', tag='dangerous_behavior_checkbox'), [State.REVIEWING]
+            dpg.add_radio_button(
+                items=['Success', 'Stalled', 'Ran out of time', 'Safety', 'System'],
+                default_value='Success',
+                tag='outcome_radio',
+            ),
+            [State.REVIEWING],
         )
 
     def _build_notes(self):
-        """Builds the notes section of the UI."""
         dpg.add_text('Notes')
         dpg.add_spacer(height=self.size(5))
         with dpg.group(horizontal=True):
@@ -176,7 +254,6 @@ class EvalUI(pimm.ControlSystem):
                 )
 
     def _setup_key_handlers(self):
-        """Sets up keyboard shortcuts."""
         with dpg.handler_registry():
 
             def safe_trigger(callback):
@@ -187,7 +264,7 @@ class EvalUI(pimm.ControlSystem):
                 callback()
 
             dpg.add_key_press_handler(dpg.mvKey_S, callback=lambda s, a: safe_trigger(self.start))
-            dpg.add_key_press_handler(dpg.mvKey_P, callback=lambda s, a: safe_trigger(self.stop))
+            dpg.add_key_press_handler(dpg.mvKey_P, callback=lambda s, a: safe_trigger(lambda: self.stop_run('System')))
             dpg.add_key_press_handler(dpg.mvKey_R, callback=lambda s, a: safe_trigger(self.reset))
 
             def change_radio_selection(sender, app_data):
@@ -234,19 +311,30 @@ class EvalUI(pimm.ControlSystem):
         task_name = (
             dpg.get_value('custom_input') if dpg.get_value('task_radio') == 'Other' else dpg.get_value('task_radio')
         )
+        self.run_start_time = time.monotonic()
         self.inference_command.emit(InferenceCommand.START(task=task_name))
         self.ds_writer_command.emit(DsWriterCommand.START(static_data={'task': task_name}))
 
-    def stop(self, sender=None, app_data=None):
+    def stop_run(self, reason):
         if self.state != State.RUNNING:
             return
-        print('State: REVIEWING')
+        print(f'State: REVIEWING ({reason})')
         self.state = State.REVIEWING
+        self.run_duration = time.monotonic() - self.run_start_time
+
+        dpg.set_value('outcome_radio', reason)
+        if reason == 'Success':
+            total = dpg.get_value('total_items_input')
+            dpg.set_value('successful_items_input', total)
+
         self.update_ui()
 
         # Emit commands
         self.inference_command.emit(InferenceCommand.STOP())
         self.ds_writer_command.emit(DsWriterCommand.SUSPEND())
+
+    def stop(self, sender=None, app_data=None):
+        self.stop_run('System')
 
     def reset(self, sender=None, app_data=None):
         if self.state == State.REVIEWING:
@@ -269,10 +357,10 @@ class EvalUI(pimm.ControlSystem):
         data = {
             'eval.total_items': dpg.get_value('total_items_input'),
             'eval.successful_items': dpg.get_value('successful_items_input'),
-            'eval.aborted': dpg.get_value('aborted_checkbox'),
-            'eval.model_failure': dpg.get_value('model_failure_checkbox'),
-            'eval.dangerous_behavior': dpg.get_value('dangerous_behavior_checkbox'),
+            'eval.outcome': dpg.get_value('outcome_radio'),
             'eval.notes': dpg.get_value('notes_input'),
+            'eval.duration': self.run_duration,
+            'eval.cap_per_item': self.cap_per_item,
         }
 
         # Add conditional fields
@@ -316,10 +404,13 @@ class EvalUI(pimm.ControlSystem):
         # We need to update UI to ensure the new custom input gets correct state
         self.update_ui(task_value=app_data)
 
-    def aborted_callback(self, sender, app_data):
-        if self.state != State.REVIEWING:
-            dpg.set_value('aborted_checkbox', False)
+    def cap_callback(self, sender, app_data):
+        self.cap_per_item = app_data
         self.update_ui()
+
+    def aborted_callback(self, sender, app_data):
+        # Deprecated but kept if needed for other logic, though unused now
+        pass
 
     def validate_items_callback(self, sender, app_data):
         total = dpg.get_value('total_items_input')
@@ -328,10 +419,11 @@ class EvalUI(pimm.ControlSystem):
         if successful > total:
             dpg.set_value('successful_items_input', total)
 
+        self.update_ui()
+
     # --- UI Update ---
 
     def update_ui(self, task_value=None):
-        """Updates the UI state based on the current application state."""
         for tag, enabled_states in self.element_states.items():
             should_be_enabled = self.state in enabled_states
             if not should_be_enabled:
@@ -348,71 +440,22 @@ class EvalUI(pimm.ControlSystem):
         is_other = task_value == 'Other'
         dpg.configure_item('custom_input', show=is_other)
 
-        if self.state == State.REVIEWING:
-            if not dpg.get_value('aborted_checkbox'):
-                dpg.configure_item('model_failure_checkbox', enabled=False)
-                dpg.set_value('model_failure_checkbox', False)
-                dpg.configure_item('dangerous_behavior_checkbox', enabled=False)
-                dpg.set_value('dangerous_behavior_checkbox', False)
-            else:
-                dpg.configure_item('model_failure_checkbox', enabled=True)
-                dpg.configure_item('dangerous_behavior_checkbox', enabled=True)
-        else:
-            dpg.configure_item('model_failure_checkbox', enabled=False)
-            dpg.set_value('model_failure_checkbox', False)
-            dpg.configure_item('dangerous_behavior_checkbox', enabled=False)
-            dpg.set_value('dangerous_behavior_checkbox', False)
-
         if self.state == State.WAITING:
             dpg.set_value('successful_items_input', 0)
-            dpg.set_value('aborted_checkbox', False)
-            dpg.set_value('model_failure_checkbox', False)
-            dpg.set_value('dangerous_behavior_checkbox', False)
             dpg.set_value('notes_input', '')
 
+        # Update total run cap text
+        total_items = dpg.get_value('total_items_input')
+        total_seconds = total_items * self.cap_per_item
+        mins = total_seconds // 60
+        secs = total_seconds % 60
+        if mins > 0:
+            text = f'Total run cap: {mins} min {secs} sec'
+        else:
+            text = f'Total run cap: {secs} sec'
+        dpg.set_value('total_run_cap_text', text)
+
     # --- Control System Run Loop ---
-
-    def _update_camera_feed(self):
-        """Updates the camera feed textures."""
-        for cam_name, camera in self.cameras.items():
-            cam_msg = camera.read()
-            if cam_msg.data is not None and cam_msg.updated:
-                image = cam_msg.data.array
-
-                if cam_name not in self.im_sizes:
-                    orig_height, orig_width = image.shape[:2]
-
-                    # Calculate display size (downsample if needed)
-                    max_width, max_height = self.max_im_size
-                    scale = min(max_width / orig_width, max_height / orig_height, 1.0)
-                    display_width = int(orig_width * scale)
-                    display_height = int(orig_height * scale)
-
-                    self.im_sizes[cam_name] = (display_height, display_width)
-
-                    with dpg.texture_registry(show=False):
-                        data = np.zeros((display_height, display_width, 4), dtype=np.float32)
-                        dpg.add_raw_texture(
-                            display_width,
-                            display_height,
-                            default_value=data,
-                            format=dpg.mvFormat_Float_rgba,
-                            tag=f'tex_{cam_name}',
-                        )
-                        self.raw_textures[cam_name] = data
-
-                    dpg.add_image(
-                        f'tex_{cam_name}', parent='image_grid_group', width=display_width, height=display_height
-                    )
-
-                # Downsample image if needed to match display size
-                display_height, display_width = self.im_sizes[cam_name]
-                if image.shape[0] != display_height or image.shape[1] != display_width:
-                    image = cv2.resize(image, (display_width, display_height), interpolation=cv2.INTER_AREA)
-
-                texture = self.raw_textures[cam_name]
-                texture[:, :, :3] = image / 255.0
-                texture[:, :, 3] = 1.0
 
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Sleep]:
         # Initialize DPG Context
@@ -462,7 +505,54 @@ class EvalUI(pimm.ControlSystem):
         self.update_ui()
 
         while not should_stop.value and dpg.is_dearpygui_running():
-            self._update_camera_feed()
+            # Check for time limit
+            if self.state == State.RUNNING and self.run_start_time:
+                elapsed = time.monotonic() - self.run_start_time
+                total_cap = dpg.get_value('total_items_input') * self.cap_per_item
+                if elapsed > total_cap:
+                    self.stop_run('Ran out of time')
+
+            # Handle Cameras
+            for cam_name, camera in self.cameras.items():
+                cam_msg = camera.read()
+                if cam_msg.data is not None and cam_msg.updated:
+                    image = cam_msg.data.array
+
+                    if cam_name not in self.im_sizes:
+                        orig_height, orig_width = image.shape[:2]
+
+                        # Calculate display size (downsample if needed)
+                        max_width, max_height = self.max_im_size
+                        scale = min(max_width / orig_width, max_height / orig_height, 1.0)
+                        display_width = int(orig_width * scale)
+                        display_height = int(orig_height * scale)
+
+                        self.im_sizes[cam_name] = (display_height, display_width)
+
+                        with dpg.texture_registry(show=False):
+                            data = np.zeros((display_height, display_width, 4), dtype=np.float32)
+                            dpg.add_raw_texture(
+                                display_width,
+                                display_height,
+                                default_value=data,
+                                format=dpg.mvFormat_Float_rgba,
+                                tag=f'tex_{cam_name}',
+                            )
+                            self.raw_textures[cam_name] = data
+
+                        dpg.add_image(
+                            f'tex_{cam_name}', parent='image_grid_group', width=display_width, height=display_height
+                        )
+
+                    # Downsample image if needed to match display size
+                    display_height, display_width = self.im_sizes[cam_name]
+                    if image.shape[0] != display_height or image.shape[1] != display_width:
+                        image = cv2.resize(image, (display_width, display_height), interpolation=cv2.INTER_AREA)
+
+                    texture = self.raw_textures[cam_name]
+                    texture[:, :, :3] = image / 255.0
+                    texture[:, :, 3] = 1.0
+
             dpg.render_dearpygui_frame()
             yield pimm.Pass()
 
