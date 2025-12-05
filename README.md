@@ -104,6 +104,7 @@ cd positronic
 - [Positronic server](positronic/server/positronic_server.py) — FastAPI + Rerun viewer for inspecting recordings. Run via `positronic-server`.
 - [Training scripts](positronic/training) — scripts for converting datasets (`positronic-to-lerobot`) and running LeRobot pipelines (`positronic-train`) while native Positronic training is being finalised.
 - [Drivers package](positronic/drivers) — hardware definitions, WebXR frontends, simulator loaders, and [Config presets](positronic/cfg) ready to override per project.
+- [S3 helpers](positronic/utils/s3/README.md) — `@s3` Mirror/Download/Upload utilities for S3 **inputs and outputs** (e.g., pull datasets from S3, push checkpoints/logs back), with local caching used by the CLIs.
 
 ---
 
@@ -120,6 +121,8 @@ The usual loop is: collect demonstrations → inspect and curate → (temporaril
 ### 2. Collect demonstrations
 
 Use the [Data collection script](positronic/data_collection.py) for both simulation and hardware captures.
+
+S3 datasets/outputs: all CLI commands support remote paths via `@s3` Mirror/Download/Upload (see [S3 helpers](positronic/utils/s3/README.md)); pass S3 URLs and they will be cached locally and synced back automatically.
 
 #### Quick start in simulation
 
@@ -236,6 +239,8 @@ We will support curation mode in the future releases.
 
 Use the [LeRobot conversion helper](positronic/training/to_lerobot.py) until native training lands.
 
+S3 inputs/outputs work the same: point `--dataset.path` or `--output_dir` at S3 URLs to download data locally and upload results on completion.
+
 Until training scripts consume Positronic datasets directly, convert curated runs into LeRobot format:
 
 ```bash
@@ -267,8 +272,10 @@ Train an ACT policy using LeRobot’s pipeline configured for Positronic observa
 positronic-train \
     --dataset_root=~/datasets/lerobot/stack_cubes \
     --run_name=stack_cubes_act \
-    --base_config=positronic/training/train_config.json
+    --output_dir=~/datasets/lerobot/stack_cubes/runs
 ```
+
+S3 inputs/outputs: `--dataset_root` and `--output_dir` accept S3 URLs; data is cached locally and checkpoints/logs sync back via `@s3`.
 
 Checkpoints and logs are written under `outputs/train/<timestamp>_<job_name>/`. Adjust the [training script](positronic/training/lerobot_train.py) to change architectures, backbones, or devices. When Positronic-first training is ready you will point the trainer at the raw dataset instead.
 
@@ -281,10 +288,12 @@ Run the trained policy in MuJoCo, record diagnostics, and optionally stream a GU
 ```bash
 positronic-inference sim_act \
     --policy.checkpoint_path=~/datasets/lerobot/stack_cubes/checkpoints/last/pretrained_model \
-    --simulation_time=60 \
-    --output_dir=~/datasets/inference_logs/stack_cubes_act \
-    --show_gui
+    --driver.simulation_time=60 \
+    --driver.show_gui=True \
+    --output_dir=~/datasets/inference_logs/stack_cubes_act
 ```
+
+S3 inputs/outputs: `--policy.checkpoint_path` and `--output_dir` can point at S3; artifacts are downloaded to a cache and results synced back automatically.
 
 The [Inference script](positronic/inference.py) wires the MuJoCo scene, [Observation encoders](positronic/cfg/policy/observation.py), and [Action decoder](positronic/cfg/policy/action.py). Passing `--output_dir` enables another `DsWriterAgent` so the run can be replayed in the dataset viewer.
 
