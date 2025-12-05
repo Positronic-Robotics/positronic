@@ -311,7 +311,7 @@ class EvalUI(pimm.ControlSystem):
         task_name = (
             dpg.get_value('custom_input') if dpg.get_value('task_radio') == 'Other' else dpg.get_value('task_radio')
         )
-        self.run_start_time = time.monotonic()
+        self.run_start_time = self.clock.now()
         self.inference_command.emit(InferenceCommand.START(task=task_name))
         self.ds_writer_command.emit(DsWriterCommand.START(static_data={'task': task_name}))
 
@@ -320,7 +320,7 @@ class EvalUI(pimm.ControlSystem):
             return
         print(f'State: REVIEWING ({reason})')
         self.state = State.REVIEWING
-        self.run_duration = time.monotonic() - self.run_start_time
+        self.run_duration = self.clock.now() - self.run_start_time
 
         dpg.set_value('outcome_radio', reason)
         if reason == 'Success':
@@ -458,6 +458,7 @@ class EvalUI(pimm.ControlSystem):
     # --- Control System Run Loop ---
 
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Sleep]:
+        self.clock = clock
         # Initialize DPG Context
         dpg.create_context()
         self._create_theme()
@@ -507,7 +508,7 @@ class EvalUI(pimm.ControlSystem):
         while not should_stop.value and dpg.is_dearpygui_running():
             # Check for time limit
             if self.state == State.RUNNING and self.run_start_time:
-                elapsed = time.monotonic() - self.run_start_time
+                elapsed = self.clock.now() - self.run_start_time
                 total_cap = dpg.get_value('total_items_input') * self.cap_per_item
                 if elapsed > total_cap:
                     self.stop_run('Ran out of time')

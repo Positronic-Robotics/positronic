@@ -68,21 +68,23 @@ class FakeGenerator(pimm.ControlSystem):
         self,
         num_episodes: int,
         fps: int,
-        duration: float,
+        avg_run_per_item: float,
         policy_meta: dict,
         success_rate: float,
         failure_rate: float,
         min_items: int,
         max_items: int,
+        cap_per_item: int = 30,
     ):
         self.num_episodes = num_episodes
         self.fps = fps
-        self.duration = duration
+        self.avg_run_per_item = avg_run_per_item
         self.policy_meta = policy_meta
         self.success_rate = success_rate
         self.failure_rate = failure_rate
         self.min_items = min_items
         self.max_items = max_items
+        self.cap_per_item = cap_per_item
 
         # Emitters
         self.command = pimm.ControlSystemEmitter(self)
@@ -104,27 +106,35 @@ class FakeGenerator(pimm.ControlSystem):
 
             # Determine outcome
             is_success = random.random() < self.success_rate
-            model_failure = random.random() < self.failure_rate
 
-            if is_success and not model_failure:
+            if is_success:
+                outcome = 'Success'
                 successful_items = total_items
-                aborted = False
                 notes = ''
             else:
+                # Randomly choose a failure mode
+                outcome = random.choices(['Stalled', 'Ran out of time', 'Safety', 'System'], [0.5, 0.3, 0.1, 0.1])[0]
                 successful_items = random.randint(0, total_items - 1)
-                aborted = True
-                if model_failure:
-                    notes = 'Model failed to grasp object'
+                if outcome == 'Stalled':
+                    notes = 'Robot stalled'
+                elif outcome == 'Safety':
+                    notes = 'Safety violation'
                 else:
-                    notes = "Robot wasn't able to perform the operation."
+                    notes = 'System error or timeout'
+
+            # Calculate duration based on items and average run time
+            # Add some noise to the duration
+            base_duration = total_items * self.avg_run_per_item
+            episode_duration = max(1.0, random.normalvariate(base_duration, base_duration * 0.1))
 
             static_data = {
                 'task': task,
                 'eval.total_items': total_items,
                 'eval.successful_items': successful_items,
-                'eval.aborted': aborted,
-                'eval.model_failure': model_failure,
+                'eval.outcome': outcome,
                 'eval.notes': notes,
+                'eval.duration': episode_duration,
+                'eval.cap_per_item': self.cap_per_item,
                 'eval.tote_placement': random.choice(['left', 'right']),
                 'eval.external_camera': random.choices(['left', 'right', 'NA'], [5, 5, 1])[0],
                 'inference.policy_fps': self.fps,
@@ -132,12 +142,15 @@ class FakeGenerator(pimm.ControlSystem):
                 **self.policy_meta,
             }
 
-            print(f'Starting episode {i + 1}/{self.num_episodes}: {task} (Success: {successful_items}/{total_items})')
+            print(
+                f'Starting episode {i + 1}/{self.num_episodes}: {task} (Items: {total_items},'
+                f' Duration: {episode_duration:.2f}s, Outcome: {outcome})'
+            )
             self.command.emit(DsWriterCommand.START(static_data))
 
             # --- Episode Loop ---
             start_time = clock.now()
-            while clock.now() - start_time < self.duration:
+            while clock.now() - start_time < episode_duration:
                 if should_stop.value:
                     break
 
@@ -187,13 +200,20 @@ class FakeGenerator(pimm.ControlSystem):
 
 
 @cfn.config(
-    num_episodes=5, fps=15, duration=10.0, policy='groot', success_rate=0.8, failure_rate=0.5, min_items=1, max_items=5
+    num_episodes=5,
+    fps=15,
+    avg_run_per_item=2.0,
+    policy='groot',
+    success_rate=0.8,
+    failure_rate=0.5,
+    min_items=1,
+    max_items=5,
 )
 def main(
     output_dir: str,
     num_episodes: int,
     fps: int,
-    duration: float,
+    avg_run_per_item: float,
     policy: str,
     success_rate: float,
     failure_rate: float,
@@ -207,7 +227,9 @@ def main(
 
     with pimm.World() as world:
         agent = DsWriterAgent(writer, time_mode=TimeMode.CLOCK)
-        generator = FakeGenerator(num_episodes, fps, duration, meta, success_rate, failure_rate, min_items, max_items)
+        generator = FakeGenerator(
+            num_episodes, fps, avg_run_per_item, meta, success_rate, failure_rate, min_items, max_items
+        )
 
         # Wire generator to agent
         agent.add_signal('image.wrist', Serializers.camera_images)
