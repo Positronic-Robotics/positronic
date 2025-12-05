@@ -76,6 +76,8 @@ class ObservationEncoder(Derive):
         return obs
 
 
+# TODO: Refactor this, probably we need to have a separate class for Groot related encoders
+# that know how to encode in dataset and in inference times
 class GrootInferenceObservationEncoder(ObservationEncoder):
     def __init__(self):
         state = {'observation.state': ['robot_state.ee_pose', 'grip']}
@@ -91,4 +93,23 @@ class GrootInferenceObservationEncoder(ObservationEncoder):
         obs['state.robot_position_translation'] = state[:3]
         obs['state.robot_position_quaternion'] = state[3:7]
         obs['state.grip'] = state[7:8]
+        return obs
+
+
+class GrootEE_QObservationEncoder(ObservationEncoder):
+    def __init__(self):
+        state = {'observation.state': ['robot_state.ee_pose', 'grip', 'robot_state.q']}
+        images = {
+            'video.wrist_image': ('image.wrist', (224, 224)),
+            'video.exterior_image_1': ('image.exterior', (224, 224)),
+        }
+        super().__init__(state, images)
+
+    def encode(self, inputs: dict[str, Any]) -> dict[str, Any]:
+        obs = super().encode(inputs)
+        state = obs.pop('observation.state')
+        obs['state.robot_position_translation'] = state[:3]
+        obs['state.robot_position_quaternion'] = state[3:7]
+        obs['state.grip'] = state[7:8]
+        obs['state.joint_position'] = state[8:]
         return obs

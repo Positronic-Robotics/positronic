@@ -100,7 +100,15 @@ eepose_q_real = eepose_grip_joints.override(
 openpi_positronic = eepose_grip.override(
     state_name='observation/state',
     image_mappings={'observation/wrist_image': 'image.wrist', 'observation/image': 'image.exterior'},
-    groot_video_mappings={'ego_view': 'observation/wrist_image', 'side_image': 'observation/image'},
+    groot_state=None,
+    groot_video_mappings=None,
+)
+
+openpi_eeq = eepose_grip_joints.override(
+    state_name='observation/state',
+    image_mappings={'observation/wrist_image': 'image.wrist', 'observation/image': 'image.exterior'},
+    groot_state=None,
+    groot_video_mappings=None,
 )
 
 
@@ -140,3 +148,10 @@ def groot_infer():
     from positronic.policy.observation import GrootInferenceObservationEncoder
 
     return GrootInferenceObservationEncoder()
+
+
+@cfn.config()
+def groot_ee_q_infer():
+    from positronic.policy.observation import GrootEE_QObservationEncoder
+
+    return GrootEE_QObservationEncoder()
