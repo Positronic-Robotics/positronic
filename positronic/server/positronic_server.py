@@ -192,7 +192,7 @@ async def api_groups():
     for episode in ds:
         groups[episode.static[group_key]].append(episode)
 
-    rows = [{group_key: key, **group_fn(group)} for key, group in groups.items()]
+    rows = [{group_key: key, '__meta__': {'group': key}, **group_fn(group)} for key, group in groups.items()]
     episodes = get_episodes_list(rows, format_table.keys(), formatters=formatters, defaults=defaults)
     return {'columns': columns, 'episodes': episodes}
 
@@ -307,14 +307,14 @@ def model_perf_table():
             'model': episodes[0]['model'],
             'UPH': suc_items / (duration / 3600),
             'Success': 100 * suc_items / total_items,
-            'MTBF/A': duration / assists,
+            'MTBF/A': (duration / assists) if assists > 0 else None,
         }
 
     format_table = {
         'model': {'label': 'Model'},
         'UPH': {'format': '%.1f'},
         'Success': {'format': '%.2f%%'},
-        'MTBF/A': {'format': '%.1f sec'},
+        'MTBF/A': {'format': '%.1f sec', 'default': '-'},
     }
 
     return group_key, group_fn, format_table
