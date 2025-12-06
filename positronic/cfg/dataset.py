@@ -1,3 +1,7 @@
+"""
+Utility configurations for constructing datasets.
+"""
+
 import configuronic as cfn
 
 import positronic.utils.s3 as pos3
