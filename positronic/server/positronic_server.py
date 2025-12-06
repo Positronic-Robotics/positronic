@@ -192,7 +192,7 @@ async def api_groups():
     for episode in ds:
         groups[episode.static[group_key]].append(episode)
 
-    rows = [{group_key: key, **group_fn(group)} for key, group in groups.items()]
+    rows = [{group_key: key, '__meta__': {'group': key}, **group_fn(group)} for key, group in groups.items()]
     episodes = get_episodes_list(rows, format_table.keys(), formatters=formatters, defaults=defaults)
     return {'columns': columns, 'episodes': episodes}
 

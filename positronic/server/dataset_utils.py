@@ -19,6 +19,19 @@ from positronic.dataset.transforms import TransformedDataset
 from positronic.utils.rerun_compat import flatten_numeric, log_numeric_series, log_series_styles, set_timeline_time
 
 
+def _format_value(value: Any, formatter: str | None, default: Any) -> Any:
+    """Formats a single value based on its type and provided formatters/defaults."""
+    if isinstance(value, datetime):
+        formatted_date = value.strftime(formatter) if formatter else value.isoformat()
+        return [value.timestamp(), formatted_date]
+    elif value is not None and formatter:
+        return [value, formatter % value]
+    elif value is not None:
+        return value
+    else:
+        return default
+
+
 def get_episodes_list(
     ds: Iterator[dict[str, Any]], keys: list[str], formatters: dict[str, str | None], defaults: dict[str, Any]
 ) -> list[list[Any]]:
@@ -26,24 +39,10 @@ def get_episodes_list(
     for idx, ep in enumerate(ds):
         try:
             mapping = {'__index__': idx + 1, **ep}
-            row: list[Any] = []
-
-            for key in keys:
-                value = mapping.get(key)
-
-                if isinstance(value, datetime):
-                    formattedDate = value.strftime(formatters[key]) if formatters.get(key) else value.isoformat()
-                    row.append([value.timestamp(), formattedDate])
-                elif value is not None and formatters.get(key):
-                    row.append([value, formatters[key] % value])
-                elif value is not None:
-                    row.append(value)
-                else:
-                    row.append(defaults.get(key))
-
+            row = [_format_value(mapping.get(key), formatters.get(key), defaults.get(key)) for key in keys]
             result.append([idx, row])
         except Exception as e:
-            raise Exception(f'Error getting episode {idx}: {ep.meta}') from e
+            raise Exception(f'Error getting episode {idx}: {ep.get("__meta__", {})}') from e
     return result
 
 
