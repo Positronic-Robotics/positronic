@@ -1,0 +1,43 @@
+{% extends "base.html" %}
+
+{% block title %}Run explorer{% endblock %}
+
+{% block description %}Positronic Dataset Viewer.{% endblock %}
+
+{% block scripts %}
+<script>
+    window.API_ENDPOINT = "{{ api_endpoint }}";
+    window.SHOW_VIEW_LINK = false;
+    checkDatasetStatus();
+</script>
+{% endblock %}
+
+{% block content %}
+<main class="main">
+    <header class="page-header">
+        <div class="page-kicker">Group Explorer</div>
+        <h1>{{repo_id}}</h1>
+        <p id="dataset-stats">Loading dataset information...</p>
+        <div class="dataset-info">
+            <div id="loading-status" class="loading-status">
+                <strong>⏳ Dataset is loading...</strong>
+                <br />This may take a few minutes depending on the dataset size.
+            </div>
+        </div>
+    </header>
+    <section class="controls-bar"></section>
+    <section class="card card--table">
+        <div id="episodes-container" class="table-wrapper table-wrapper--dense">
+            <div class="loading">Loading episodes...</div>
+            <table class="episodes-table hidden">
+                <thead>
+                    <tr>
+                        <th scope="col" class="col-actions"></th>
+                    </tr>
+                </thead>
+                <tbody></tbody>
+            </table>
+        </div>
+    </section>
+</main>
+{% endblock %}

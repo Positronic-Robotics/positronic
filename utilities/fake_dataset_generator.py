@@ -2,7 +2,6 @@ import random
 
 import configuronic as cfn
 import numpy as np
-from tqdm import tqdm
 
 import pimm
 from positronic import geom
@@ -71,7 +70,6 @@ class FakeGenerator(pimm.ControlSystem):
         avg_run_per_item: float,
         policy_meta: dict,
         success_rate: float,
-        failure_rate: float,
         min_items: int,
         max_items: int,
         cap_per_item: int = 30,
@@ -81,7 +79,6 @@ class FakeGenerator(pimm.ControlSystem):
         self.avg_run_per_item = avg_run_per_item
         self.policy_meta = policy_meta
         self.success_rate = success_rate
-        self.failure_rate = failure_rate
         self.min_items = min_items
         self.max_items = max_items
         self.cap_per_item = cap_per_item
@@ -96,7 +93,7 @@ class FakeGenerator(pimm.ControlSystem):
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock):
         rate_limiter = pimm.RateLimiter(clock, hz=self.fps)
 
-        for i in tqdm(range(self.num_episodes)):
+        for i in range(self.num_episodes):
             if should_stop.value:
                 break
 
@@ -199,24 +196,14 @@ class FakeGenerator(pimm.ControlSystem):
             yield pimm.Sleep(0.5)
 
 
-@cfn.config(
-    num_episodes=5,
-    fps=15,
-    avg_run_per_item=2.0,
-    policy='groot',
-    success_rate=0.8,
-    failure_rate=0.5,
-    min_items=1,
-    max_items=5,
-)
+@cfn.config(num_episodes=5, fps=15, avg_run_per_item=5.0, success_rate=0.8, min_items=2, max_items=8)
 def main(
     output_dir: str,
     num_episodes: int,
+    policy: str,
     fps: int,
     avg_run_per_item: float,
-    policy: str,
     success_rate: float,
-    failure_rate: float,
     min_items: int,
     max_items: int,
 ):
@@ -227,9 +214,7 @@ def main(
 
     with pimm.World() as world:
         agent = DsWriterAgent(writer, time_mode=TimeMode.CLOCK)
-        generator = FakeGenerator(
-            num_episodes, fps, avg_run_per_item, meta, success_rate, failure_rate, min_items, max_items
-        )
+        generator = FakeGenerator(num_episodes, fps, avg_run_per_item, meta, success_rate, min_items, max_items)
 
         # Wire generator to agent
         agent.add_signal('image.wrist', Serializers.camera_images)

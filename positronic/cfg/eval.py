@@ -29,15 +29,11 @@ def units(ep: Episode) -> str:
     return f'{ep["eval.successful_items"]}/{ep["eval.total_items"]}'
 
 
-def full_success(ep: Episode) -> bool:
-    return (ep['eval.successful_items'] == ep['eval.total_items']) and not ep['eval.aborted']
-
-
 def uph(ep: Episode) -> float | None:
     items = ep['eval.successful_items']
     if items == 0:
         return None
-    return ep.duration_ns / 1e9 / items
+    return items / (ep.duration_ns / 1e9 / 3600)
 
 
 ds = base_cfg.transform.override(
@@ -50,7 +46,6 @@ ds = base_cfg.transform.override(
                     task_code=task_code,
                     model=model,
                     units=units,
-                    full_success=full_success,
                     uph=uph,
                     success=lambda ep: 100 * ep['eval.successful_items'] / ep['eval.total_items'],
                     started=lambda ep: datetime.fromtimestamp(ep.meta['created_ts_ns'] / 1e9),
