@@ -73,7 +73,8 @@ async function loadDatasetInfo() {
 
 async function loadEpisodes() {
   try {
-    const response = await fetch('/api/episodes');
+    const endpoint = window.API_ENDPOINT || '/api/episodes';
+    const response = await fetch(endpoint);
     if (response.status === 202) {
       checkDatasetStatus();
       return;
@@ -226,11 +227,13 @@ function populateEpisodesTable(episodes, columns) {
     }
 
     const viewCell = createTableCell('');
-    const viewLink = document.createElement('a');
-    viewLink.className = 'btn btn-primary btn-small';
-    viewLink.href = `/episode/${episodeIndex}`;
-    viewLink.textContent = 'View';
-    viewCell.appendChild(viewLink);
+    if (window.SHOW_VIEW_LINK !== false) {
+      const viewLink = document.createElement('a');
+      viewLink.className = 'btn btn-primary btn-small';
+      viewLink.href = `/episode/${episodeIndex}`;
+      viewLink.textContent = 'View';
+      viewCell.appendChild(viewLink);
+    }
     row.appendChild(viewCell);
 
     tableBody.appendChild(row);

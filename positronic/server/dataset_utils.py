@@ -20,13 +20,12 @@ from positronic.utils.rerun_compat import flatten_numeric, log_numeric_series, l
 
 
 def get_episodes_list(
-    ds: Dataset, keys: list[str], formatters: dict[str, str | None], defaults: dict[str, Any]
+    ds: Iterator[dict[str, Any]], keys: list[str], formatters: dict[str, str | None], defaults: dict[str, Any]
 ) -> list[list[Any]]:
     result = []
     for idx, ep in enumerate(ds):
         try:
-            computed_keys = {'__index__': idx + 1, '__duration__': ep.duration_ns / 1e9}
-            mapping = ep.static | computed_keys
+            mapping = {'__index__': idx + 1, **ep}
             row: list[Any] = []
 
             for key in keys:

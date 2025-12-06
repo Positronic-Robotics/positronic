@@ -4,14 +4,17 @@ import logging
 import os
 import shutil
 import threading
+from collections import defaultdict
+from collections.abc import Callable
 from contextlib import asynccontextmanager
+from datetime import datetime
 from pathlib import Path
+from typing import Any
 
 import configuronic as cfn
 import rerun as rr
 import uvicorn
 from fastapi import FastAPI, HTTPException
-from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -20,7 +23,7 @@ from starlette.requests import Request
 import positronic.cfg.dataset
 import positronic.utils.s3 as pos3
 from positronic import utils
-from positronic.dataset.dataset import Dataset
+from positronic.dataset import Dataset, Episode
 from positronic.dataset.local_dataset import LocalDataset
 from positronic.server.dataset_utils import get_dataset_root, get_episodes_list, stream_episode_rrd
 from positronic.utils.logging import init_logging
@@ -61,10 +64,6 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(lifespan=lifespan)
 
-# CORS for convenience
-app.add_middleware(
-    CORSMiddleware, allow_origins=['*'], allow_credentials=True, allow_methods=['*'], allow_headers=['*']
-)
 
 # Static files and templates (packaged relative to this file)
 _static_dir = _pkg_path('static')
@@ -104,6 +103,16 @@ async def episode_viewer(request: Request, episode_id: int):
     size_mb = meta.get('size_mb')
     size_mb_display = f'{size_mb:.2f}' if isinstance(size_mb, int | float) else None
 
+    # Ensure static_data is JSON serializable (e.g. handle datetime)
+    def _make_serializable(obj):
+        if isinstance(obj, datetime):
+            return obj.isoformat()
+        if isinstance(obj, dict):
+            return {k: _make_serializable(v) for k, v in obj.items()}
+        if isinstance(obj, list):
+            return [_make_serializable(v) for v in obj]
+        return obj
+
     return templates.TemplateResponse(
         'episode.html',
         {
@@ -115,7 +124,7 @@ async def episode_viewer(request: Request, episode_id: int):
             'repo_id': app_state['root'],
             'episode_path': meta.get('path'),
             'episode_size_mb': size_mb_display,
-            'static_data': episode.static,
+            'static_data': _make_serializable(episode.static),
         },
     )
 
@@ -130,18 +139,11 @@ async def api_dataset_info():
     return {'root': app_state['root'], 'num_episodes': len(ds)}
 
 
-@app.get('/api/episodes')
-async def api_episodes():
-    if app_state['loading_state']:
-        raise HTTPException(status_code=202, detail='Dataset is loading...')
-    ds: LocalDataset | None = app_state.get('dataset')  # type: ignore[assignment]
-    if ds is None:
-        raise HTTPException(status_code=500, detail='Dataset failed to load')
-
+def parse_table_cfg(table_cfg: dict[str, Any]) -> tuple:
     columns = []
     formatters = {}
     defaults = {}
-    for key, value in app_state['episode_keys'].items():
+    for key, value in table_cfg.items():
         column = {}
         if isinstance(value, dict):
             column['label'] = value.get('label', key)
@@ -157,10 +159,49 @@ async def api_episodes():
             column['label'] = value or key
 
         columns.append(column)
+    return columns, formatters, defaults
 
-    episodes = get_episodes_list(ds, app_state['episode_keys'].keys(), formatters=formatters, defaults=defaults)
 
+@app.get('/api/episodes')
+async def api_episodes():
+    if app_state['loading_state']:
+        raise HTTPException(status_code=202, detail='Dataset is loading...')
+    ds: LocalDataset | None = app_state.get('dataset')  # type: ignore[assignment]
+    if ds is None:
+        raise HTTPException(status_code=500, detail='Dataset failed to load')
+
+    config = app_state['episode_table_cfg']
+    columns, formatters, defaults = parse_table_cfg(config)
+    ep_it = ({'__meta__': ep.meta, '__duration__': ep.duration_ns / 1e9, **ep.static} for ep in ds)
+    episodes = get_episodes_list(ep_it, config.keys(), formatters=formatters, defaults=defaults)
     return {'columns': columns, 'episodes': episodes}
+
+
+@app.get('/api/groups')
+async def api_groups():
+    if app_state['loading_state']:
+        raise HTTPException(status_code=202, detail='Dataset is loading...')
+    ds: LocalDataset | None = app_state.get('dataset')
+    if ds is None:
+        raise HTTPException(status_code=500, detail='Dataset failed to load')
+
+    group_key, group_fn, format_table = app_state.get('group_table_cfg')
+    columns, formatters, defaults = parse_table_cfg(format_table)
+
+    groups = defaultdict(list)
+    for episode in ds:
+        groups[episode.static[group_key]].append(episode)
+
+    rows = [{group_key: key, **group_fn(group)} for key, group in groups.items()]
+    episodes = get_episodes_list(rows, format_table.keys(), formatters=formatters, defaults=defaults)
+    return {'columns': columns, 'episodes': episodes}
+
+
+@app.get('/grouped', response_class=HTMLResponse)
+async def grouped_view(request: Request):
+    return templates.TemplateResponse(
+        'grouped.html', {'request': request, 'repo_id': app_state['root'], 'api_endpoint': '/api/groups'}
+    )
 
 
 @app.get('/api/dataset_status')
@@ -210,8 +251,11 @@ async def api_episode_rrd(episode_id: int):
     )
 
 
+TableConfig = dict[str, dict[str, Any]]
+
+
 @cfn.config()
-def default_table():
+def default_table() -> TableConfig:
     return {
         '__index__': {'label': '#', 'format': '%d'},
         '__duration__': {'label': 'Duration', 'format': '%.2f sec'},
@@ -220,7 +264,7 @@ def default_table():
 
 
 @cfn.config()
-def eval_table():
+def eval_table() -> TableConfig:
     return {
         'task_code': {'label': 'Task', 'filter': True},
         'model': {'label': 'Model', 'filter': True},
@@ -228,14 +272,18 @@ def eval_table():
         'uph': {'label': 'UPH', 'format': '%.1f'},
         'success': {'label': 'Success', 'format': '%.1f%%'},
         'started': {'label': 'Started', 'format': '%Y-%m-%d %H:%M:%S'},
-        'full_success': {
+        'eval.outcome': {
             'label': 'Status',
             'filter': True,
             'renderer': {
                 'type': 'badge',
                 'options': {
-                    True: {'label': 'Pass', 'variant': 'success'},
-                    False: {'label': 'Fail', 'variant': 'danger'},
+                    # TODO: Currently the filter happens by original data, not the rendered value
+                    'Success': {'label': 'Pass', 'variant': 'success'},
+                    'Stalled': {'label': 'Fail', 'variant': 'warning'},
+                    'Ran out of time': {'label': 'Fail', 'variant': 'warning'},
+                    'System': {'label': 'Fail', 'variant': 'warning'},
+                    'Safety': {'label': 'Safety violation', 'variant': 'danger'},
                 },
             },
         },
@@ -243,7 +291,36 @@ def eval_table():
     }
 
 
-@cfn.config(dataset=positronic.cfg.dataset.local_all, ep_table_cfg=default_table)
+@cfn.config()
+def model_perf_table():
+    group_key = 'model'
+
+    def group_fn(episodes: list[Episode]) -> dict[str, Any]:
+        duration, suc_items, total_items, assists = 0, 0, 0, 0
+        for ep in episodes:
+            duration += ep['eval.duration']
+            suc_items += ep['eval.successful_items']
+            total_items += ep['eval.total_items']
+            assists += ep['eval.outcome'] == 'Success'
+
+        return {
+            'model': episodes[0]['model'],
+            'UPH': suc_items / (duration / 3600),
+            'Success': 100 * suc_items / total_items,
+            'MTBF/A': duration / assists,
+        }
+
+    format_table = {
+        'model': {'label': 'Model'},
+        'UPH': {'format': '%.1f'},
+        'Success': {'format': '%.2f%%'},
+        'MTBF/A': {'format': '%.1f sec'},
+    }
+
+    return group_key, group_fn, format_table
+
+
+@cfn.config(dataset=positronic.cfg.dataset.local_all, ep_table_cfg=default_table, group_table=model_perf_table)
 def main(
     dataset: Dataset,
     cache_dir: str = os.path.expanduser('~/.cache/positronic/server/'),
@@ -252,7 +329,8 @@ def main(
     debug: bool = False,
     reset_cache: bool = False,
     max_resolution: int = 640,
-    ep_table_cfg: dict[str, dict[str, str | bool | dict] | str | None] | None = None,
+    ep_table_cfg: TableConfig | None = None,
+    group_table: tuple[str, Callable[[list[Any]], dict[str, Any]], TableConfig] | None = None,
 ):
     """Visualize a Dataset with Rerun.
 
@@ -301,7 +379,8 @@ def main(
     app_state['root'] = root
     app_state['cache_dir'] = cache_dir
     app_state['loading_state'] = True
-    app_state['episode_keys'] = ep_table_cfg or {}
+    app_state['episode_table_cfg'] = ep_table_cfg or {}
+    app_state['group_table_cfg'] = group_table
     app_state['max_resolution'] = max_resolution
 
     if reset_cache and os.path.exists(cache_dir):
