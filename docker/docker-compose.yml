@@ -1,6 +1,6 @@
 services:
   positronic-training-base: &positronic-common
-    image: cr.eu-north1.nebius.cloud/e00a0ahqzcp9x0xczz/positronic-training:latest
+    image: positro/positronic:latest
     # build:
     #   context: ../positronic
     #   dockerfile: docker/Dockerfile.training.cloud
@@ -34,7 +34,7 @@ services:
     working_dir: /positronic
 
   positronic: &openpi-common
-    image: cr.eu-north1.nebius.cloud/e00a0ahqzcp9x0xczz/positronic-internal-openpi:latest
+    image: positro/openpi:latest
     # build:
     #   context: ../..
     #   dockerfile: internal/docker/Dockerfile
@@ -121,7 +121,7 @@ services:
       - "8001:8000"
 
   positronic-groot: &groot-common
-    image: cr.eu-north1.nebius.cloud/e00a0ahqzcp9x0xczz/positronic-internal-groot:latest
+    image: positro/gr00t:latest
 
     # Enable interactive terminal
     stdin_open: true
@@ -154,6 +154,7 @@ services:
   groot-train:
     <<: *groot-common
     container_name: groot-train
+    image: positro/gr00t:latest
     shm_size: 8g
     ipc: host  # Enable shared memory access for training
     entrypoint: ["uv", "run", "--python", "3.11", "python", "-m", "positronic.vendors.gr00t.train"]
@@ -161,6 +162,7 @@ services:
   groot-server: &groot-server-common
     <<: *groot-common
     container_name: groot-server
+    image: positro/gr00t:latest
     entrypoint: ["uv", "run", "--python", "3.11", "python", "-m", "positronic.vendors.gr00t.server"]
     ports:
       - "9000:9000"

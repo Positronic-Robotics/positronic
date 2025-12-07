@@ -1,5 +1,4 @@
-# Extend the published positronic-groot image (overridable via BASE_IMAGE)
-ARG BASE_IMAGE=positronic-groot:latest
+ARG BASE_IMAGE=positro/gr00t-base:latest
 FROM ${BASE_IMAGE}
 
 # Set working directory

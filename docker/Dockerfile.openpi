@@ -1,5 +1,4 @@
-# Extend the published openpi-training image (overridable via BASE_IMAGE)
-ARG BASE_IMAGE=openpi-training:latest
+ARG BASE_IMAGE=positro/openpi-base:latest
 FROM ${BASE_IMAGE}
 
 # Set working directory
