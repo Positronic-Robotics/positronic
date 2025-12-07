@@ -72,27 +72,27 @@ services:
   openpi-train:
     <<: *openpi-common
     container_name: openpi-train
-    entrypoint: ["uv", "run", "python", "-m", "positronic.vendors.openpi.train"]
+    entrypoint: ["uv", "run", "--python", "3.11", "python", "-m", "positronic.vendors.openpi.train"]
 
   openpi-stats:
     <<: *openpi-common
     container_name: openpi-stats
-    entrypoint: ["uv", "run", "python", "-m", "positronic.vendors.openpi.stats"]
+    entrypoint: ["uv", "run", "--python", "3.11", "python", "-m", "positronic.vendors.openpi.stats"]
 
   positronic-to-lerobot:
     <<: *openpi-common
     container_name: positronic-to-lerobot
-    entrypoint: ["uv", "run", "positronic-to-lerobot"]
+    entrypoint: ["uv", "run", "--python", "3.11", "positronic-to-lerobot"]
 
   lerobot-train:
     <<: *positronic-common
     container_name: lerobot-train
-    entrypoint: ["uv", "run", "positronic-train"]
+    entrypoint: ["uv", "run", "--python", "3.11", "positronic-train"]
 
   positronic-inference:
     <<: *openpi-common
     container_name: positronic-inference
-    entrypoint: ["uv", "run", "positronic-inference"]
+    entrypoint: ["uv", "run", "--python", "3.11", "positronic-inference"]
 
     devices:
       - /dev/dri:/dev/dri
@@ -104,14 +104,14 @@ services:
   positronic-server:
     <<: *openpi-common  # We need internal package for datasets
     container_name: positronic-server
-    entrypoint: ["uv", "run", "positronic-server"]
+    entrypoint: ["uv", "run", "--python", "3.11", "positronic-server"]
     ports:
       - "5000:5000"
 
   openpi-server: &openpi-server-common
     <<: *openpi-common
     container_name: openpi-server
-    entrypoint: ["uv", "run", "python", "-m", "positronic.vendors.openpi.server"]
+    entrypoint: ["uv", "run", "--python", "3.11", "python", "-m", "positronic.vendors.openpi.server"]
     ports:
       - "8000:8000"
 
@@ -156,11 +156,11 @@ services:
     container_name: groot-train
     shm_size: 8g
     ipc: host  # Enable shared memory access for training
-    entrypoint: ["uv", "run", "python", "-m", "positronic.vendors.gr00t.train"]
+    entrypoint: ["uv", "run", "--python", "3.11", "python", "-m", "positronic.vendors.gr00t.train"]
 
   groot-server: &groot-server-common
     <<: *groot-common
     container_name: groot-server
-    entrypoint: ["uv", "run", "python", "-m", "positronic.vendors.gr00t.server"]
+    entrypoint: ["uv", "run", "--python", "3.11", "python", "-m", "positronic.vendors.gr00t.server"]
     ports:
       - "9000:9000"

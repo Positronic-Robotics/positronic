@@ -28,10 +28,3 @@ echo '{\n    "file_format_version" : "1.0.0",\n    "ICD" : {\n        "library_p
 ENV UV_LINK_MODE=copy
 ENV PIP_DEFAULT_TIMEOUT=600
 ENV UV_HTTP_TIMEOUT=600
-
-# Create Python virtual environment for Python 3.11
-RUN uv venv --python 3.11
-
-# Activate venv for all subsequent commands and docker run
-ENV VIRTUAL_ENV=/.venv
-ENV PATH=$VIRTUAL_ENV/bin:$PATH

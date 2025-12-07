@@ -1,23 +1,16 @@
-# Extend the published positronic-training image (overridable via BASE_IMAGE)
-ARG BASE_IMAGE=positronic-training:latest
+# Extend the published openpi-training image (overridable via BASE_IMAGE)
+ARG BASE_IMAGE=openpi-training:latest
 FROM ${BASE_IMAGE}
 
 # Set working directory
 WORKDIR /positronic
 
 # Copy the positronic repository
-COPY positronic /positronic
+COPY . /positronic
 
-# Copy the OpenPI project alongside
-# Expects 'openpi' to be in the build context
-COPY openpi /openpi
-
-# Preinstall lerobot into OpenPI, as it fails to install from docker
-RUN --mount=type=cache,target=/root/.cache/uv \
-    cd /openpi && uv pip install --no-deps git+https://github.com/huggingface/lerobot@0cf864870cf29f4738d3ade893e6fd13fbd7cdb5
 
 # Update Python path to include both projects
-ENV PYTHONPATH=/positronic:/openpi/src
+ENV PYTHONPATH=/positronic:/openpi
 
 # Default command
 CMD ["bash"]

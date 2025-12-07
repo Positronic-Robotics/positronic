@@ -5,6 +5,7 @@ IMAGE_NAME_TRAINING := positronic-training
 IMAGE_NAME_BASE := positronic-base
 IMAGE_NAME_OPENPI := positronic-internal-openpi
 IMAGE_NAME_GROOT := positronic-internal-groot
+IMAGE_NAME_OPENPI_BASE := openpi-training
 
 # Extract version from pyproject.toml (first literal version entry)
 VERSION := $(shell sed -n 's/^version = "\([^"]*\)"/\1/p' ../pyproject.toml | head -n 1)
@@ -37,6 +38,9 @@ TAG_GROOT_LATEST := $(REGISTRY_URL)/$(IMAGE_NAME_GROOT):latest
 
 # Local base image tag
 LOCAL_TAG_BASE := $(IMAGE_NAME_BASE):local
+
+# OpenPI base image (pulled from registry)
+TAG_OPENPI_BASE := $(REGISTRY_URL)/$(IMAGE_NAME_OPENPI_BASE):latest
 
 help:
 	@echo "Positronic Docker Build System - Makefile"
@@ -78,11 +82,11 @@ build-training: build-base
 		echo "Error: Could not extract version from pyproject.toml"; \
 		exit 1; \
 	fi
-	docker build --platform linux/amd64 -f Dockerfile.training.cloud -t $(LOCAL_TAG_TRAINING) ..
+	docker build --platform linux/amd64 --build-arg BASE_IMAGE=$(LOCAL_TAG_BASE) -f Dockerfile.training.cloud -t $(LOCAL_TAG_TRAINING) ..
 
-build-openpi: build-training
-	@echo "Building $(IMAGE_NAME_OPENPI)..."
-	docker build --platform linux/amd64 --build-arg BASE_IMAGE=$(LOCAL_TAG_TRAINING) -f Dockerfile.openpi -t $(IMAGE_NAME_OPENPI):local ../..
+build-openpi:
+	@echo "Building $(IMAGE_NAME_OPENPI) using base $(TAG_OPENPI_BASE)..."
+	docker build --pull --platform linux/amd64 --build-arg BASE_IMAGE=$(TAG_OPENPI_BASE) -f Dockerfile.openpi -t $(IMAGE_NAME_OPENPI):local ..
 
 build-groot: build-training
 	@echo "Building $(IMAGE_NAME_GROOT)..."
