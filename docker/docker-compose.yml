@@ -1,0 +1,166 @@
+services:
+  positronic-training-base: &positronic-common
+    image: cr.eu-north1.nebius.cloud/e00a0ahqzcp9x0xczz/positronic-training:latest
+    # build:
+    #   context: ../positronic
+    #   dockerfile: docker/Dockerfile.training.cloud
+
+    # Enable interactive terminal
+    stdin_open: true
+    tty: true
+
+    # GPU support - requires nvidia-docker2 or Docker with NVIDIA Container Toolkit
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [compute, graphics, utility]
+
+    # Volume mounts
+    volumes:
+      - /home/vertix/.cache:/root/.cache
+      - /home/vertix/.aws:/root/.aws:ro
+
+    # Set HOME inside container to match the mount expectations
+    environment:
+      HOME: /root
+
+    env_file:
+      - path: .env.wandb
+        required: false
+
+    working_dir: /positronic
+
+  positronic: &openpi-common
+    image: cr.eu-north1.nebius.cloud/e00a0ahqzcp9x0xczz/positronic-internal-openpi:latest
+    # build:
+    #   context: ../..
+    #   dockerfile: internal/docker/Dockerfile
+
+    # Enable interactive terminal
+    stdin_open: true
+    tty: true
+
+    # GPU support - requires nvidia-docker2 or Docker with NVIDIA Container Toolkit
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [compute, graphics, utility]
+
+    # Volume mounts
+    volumes:
+      - /home/vertix/.cache:/root/.cache
+      - /home/vertix/.aws:/root/.aws:ro
+
+    # Set HOME inside container to match the mount expectations
+    environment:
+      HOME: /root
+
+    env_file:
+      - path: .env.wandb
+        required: false
+
+    working_dir: /positronic
+    ports:
+      - "5000:5000"
+
+  openpi-train:
+    <<: *openpi-common
+    container_name: openpi-train
+    entrypoint: ["uv", "run", "python", "-m", "positronic.vendors.openpi.train"]
+
+  openpi-stats:
+    <<: *openpi-common
+    container_name: openpi-stats
+    entrypoint: ["uv", "run", "python", "-m", "positronic.vendors.openpi.stats"]
+
+  positronic-to-lerobot:
+    <<: *openpi-common
+    container_name: positronic-to-lerobot
+    entrypoint: ["uv", "run", "positronic-to-lerobot"]
+
+  lerobot-train:
+    <<: *positronic-common
+    container_name: lerobot-train
+    entrypoint: ["uv", "run", "positronic-train"]
+
+  positronic-inference:
+    <<: *openpi-common
+    container_name: positronic-inference
+    entrypoint: ["uv", "run", "positronic-inference"]
+
+    devices:
+      - /dev/dri:/dev/dri
+
+    environment:
+      MUJOCO_GL: egl
+      PYOPENGL_PLATFORM: egl
+
+  positronic-server:
+    <<: *openpi-common  # We need internal package for datasets
+    container_name: positronic-server
+    entrypoint: ["uv", "run", "positronic-server"]
+    ports:
+      - "5000:5000"
+
+  openpi-server: &openpi-server-common
+    <<: *openpi-common
+    container_name: openpi-server
+    entrypoint: ["uv", "run", "python", "-m", "positronic.vendors.openpi.server"]
+    ports:
+      - "8000:8000"
+
+  openpi-server-8001:
+    <<: *openpi-server-common
+    ports:
+      - "8001:8000"
+
+  positronic-groot: &groot-common
+    image: cr.eu-north1.nebius.cloud/e00a0ahqzcp9x0xczz/positronic-internal-groot:latest
+
+    # Enable interactive terminal
+    stdin_open: true
+    tty: true
+
+    # GPU support - requires nvidia-docker2 or Docker with NVIDIA Container Toolkit
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [compute, graphics, utility]
+
+    # Volume mounts
+    volumes:
+      - /home/vertix/.cache:/root/.cache
+      - /home/vertix/.aws:/root/.aws:ro
+
+    # Set HOME inside container to match the mount expectations
+    environment:
+      HOME: /root
+
+    env_file:
+      - path: .env.wandb
+        required: false
+
+    working_dir: /positronic
+
+  groot-train:
+    <<: *groot-common
+    container_name: groot-train
+    shm_size: 8g
+    ipc: host  # Enable shared memory access for training
+    entrypoint: ["uv", "run", "python", "-m", "positronic.vendors.gr00t.train"]
+
+  groot-server: &groot-server-common
+    <<: *groot-common
+    container_name: groot-server
+    entrypoint: ["uv", "run", "python", "-m", "positronic.vendors.gr00t.server"]
+    ports:
+      - "9000:9000"

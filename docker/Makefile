@@ -3,6 +3,8 @@
 # Image configuration
 IMAGE_NAME_TRAINING := positronic-training
 IMAGE_NAME_BASE := positronic-base
+IMAGE_NAME_OPENPI := positronic-internal-openpi
+IMAGE_NAME_GROOT := positronic-internal-groot
 
 # Extract version from pyproject.toml (first literal version entry)
 VERSION := $(shell sed -n 's/^version = "\([^"]*\)"/\1/p' ../pyproject.toml | head -n 1)
@@ -29,6 +31,8 @@ TAG_TRAINING_LATEST := $(REGISTRY_URL)/$(IMAGE_NAME_TRAINING):latest
 TAG_TRAINING_VERSION := $(REGISTRY_URL)/$(IMAGE_NAME_TRAINING):v$(VERSION)
 TAG_TRAINING_SHA := $(REGISTRY_URL)/$(IMAGE_NAME_TRAINING):$(GIT_SHA)
 LOCAL_TAG_TRAINING := $(IMAGE_NAME_TRAINING):local
+TAG_OPENPI_LATEST := $(REGISTRY_URL)/$(IMAGE_NAME_OPENPI):latest
+TAG_GROOT_LATEST := $(REGISTRY_URL)/$(IMAGE_NAME_GROOT):latest
 
 
 # Local base image tag
@@ -66,7 +70,7 @@ help:
 
 build-base:
 	@echo "Building base image with common dependencies..."
-	docker build --platform linux/amd64 -f Dockerfile.base -t $(LOCAL_TAG_BASE) ..
+	docker build --pull --platform linux/amd64 -f Dockerfile.base -t $(LOCAL_TAG_BASE) ..
 
 build-training: build-base
 	@echo "Building $(IMAGE_NAME_TRAINING) with source code baked in..."
@@ -75,6 +79,14 @@ build-training: build-base
 		exit 1; \
 	fi
 	docker build --platform linux/amd64 -f Dockerfile.training.cloud -t $(LOCAL_TAG_TRAINING) ..
+
+build-openpi: build-training
+	@echo "Building $(IMAGE_NAME_OPENPI)..."
+	docker build --platform linux/amd64 --build-arg BASE_IMAGE=$(LOCAL_TAG_TRAINING) -f Dockerfile.openpi -t $(IMAGE_NAME_OPENPI):local ../..
+
+build-groot: build-training
+	@echo "Building $(IMAGE_NAME_GROOT)..."
+	docker build --pull --platform linux/amd64 --build-arg BASE_IMAGE=$(REGISTRY_URL)/positronic-groot:latest -f Dockerfile.groot -t $(IMAGE_NAME_GROOT):local ..
 
 build: build-base build-training
 
@@ -132,7 +144,25 @@ push-training: tag-training
 	@echo "To use on cloud instances, set:"
 	@echo "  export IMAGE_REGISTRY=$(REGISTRY_URL)/"
 
-push: push-base push-training
+push: push-base push-training push-openpi push-groot
+
+tag-openpi: build-openpi
+	@echo "Tagging openpi image..."
+	docker tag $(IMAGE_NAME_OPENPI):local $(TAG_OPENPI_LATEST)
+	@echo "Tagged with: $(TAG_OPENPI_LATEST)"
+
+push-openpi: tag-openpi
+	@echo "Pushing $(IMAGE_NAME_OPENPI) to Nebius..."
+	docker push $(TAG_OPENPI_LATEST)
+
+tag-groot: build-groot
+	@echo "Tagging groot image..."
+	docker tag $(IMAGE_NAME_GROOT):local $(TAG_GROOT_LATEST)
+	@echo "Tagged with: $(TAG_GROOT_LATEST)"
+
+push-groot: tag-groot
+	@echo "Pushing $(IMAGE_NAME_GROOT) to Nebius..."
+	docker push $(TAG_GROOT_LATEST)
 
 all: push
 

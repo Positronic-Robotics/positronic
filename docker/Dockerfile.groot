@@ -1,0 +1,19 @@
+# Extend the published positronic-groot image (overridable via BASE_IMAGE)
+ARG BASE_IMAGE=positronic-groot:latest
+FROM ${BASE_IMAGE}
+
+# Set working directory
+WORKDIR /positronic
+
+# Copy the positronic repository
+COPY . /positronic
+
+# Install the project so runtime metadata (e.g. importlib.metadata) is present.
+RUN --mount=type=cache,target=/root/.cache/uv \
+    uv pip install --no-deps .
+
+# Set Python path to include source root and gr00t
+ENV PYTHONPATH=/positronic:/gr00t
+
+# Default command
+CMD ["bash"]
