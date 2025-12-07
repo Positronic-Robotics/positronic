@@ -1,17 +1,12 @@
-name: Publish Docker Images
+name: Build and Push Positronic Images
 
 on:
   push:
     branches:
       - main
-  workflow_dispatch: {}
-
-env:
-  NB_REGISTRY_FQDN: ${{ vars.NB_REGISTRY_FQDN }}
-  NB_REGISTRY_PATH: ${{ vars.NB_REGISTRY_PATH }}
 
 jobs:
-  push-training:
+  build-and-push:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -28,26 +23,14 @@ jobs:
           sudo rm -rf /usr/lib/jvm
           sudo docker system prune -af || true
           df -h
-      - name: Log in to Nebius Container Registry
-        run: |
-          if [ -z "${NB_REGISTRY_FQDN}" ]; then
-            echo "NB_REGISTRY_FQDN repository variable is not set" >&2
-            exit 1
-          fi
-          echo "${{ secrets.NEBIUS_CONTAINER_REGISTRY_TOKEN }}" | \
-            docker login "${NB_REGISTRY_FQDN}" --username iam --password-stdin
-      - name: Build and push images
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_PASSWORD }}
+
+      - name: Build and Push
         working-directory: docker
-        env:
-          NB_REGISTRY_FQDN: ${{ env.NB_REGISTRY_FQDN }}
-          NB_REGISTRY_PATH: ${{ env.NB_REGISTRY_PATH }}
         run: |
-          if [ -z "${NB_REGISTRY_PATH}" ]; then
-            echo "NB_REGISTRY_PATH repository variable is not set" >&2
-            exit 1
-          fi
-          REGISTRY_URL="${NB_REGISTRY_FQDN}/${NB_REGISTRY_PATH}"
-          make NB_REGISTRY_FQDN="${NB_REGISTRY_FQDN}" \
-               NB_REGISTRY_PATH="${NB_REGISTRY_PATH}" \
-               REGISTRY_URL="${REGISTRY_URL}" \
-               push
+          make push
