@@ -46,7 +46,8 @@ Every subsystem is implemented in plain Python so teams can move between simulat
 - **Immediate-mode runtime.** [`pimm`](pimm/README.md) wires sensors, controllers, inference, and GUIs without ROS launch files or bespoke DSLs. Loops stay testable and readable; see the [Pimm README](pimm/README.md) for details.
 - **Dataset infrastructure.** The [Positronic dataset library](positronic/dataset/README.md) layer captures multi-rate episodes, exposes lazy transforms, and feeds the web-based browser for triage and analysis (see the [Dataset README](positronic/dataset/README.md)).
 - **Hardware-ready out of the box.** [WebXR driver](positronic/drivers/webxr.py), [MuJoCo integration](positronic/simulator/mujoco/sim.py), the [DearPyGui UI](positronic/gui/dpg.py), and the [Drivers package](positronic/drivers) live alongside training and inference scripts so you can go from prototype to lab deployment quickly.
-- **Future-facing roadmap.** Native training on Positronic datasets, curation capabilities in the viewer server, out-of-the-box support for $\pi_0$, GR00T and other polcies, support for more robotic and controlling hardware are active areas of development. Everything in this README reflects the workflow we run today and the direction we are pushing toward.
+- **Foundation Model Support.** We provide first-class, optimized workflows for state-of-the-art models like [$\pi_{0.5}$](positronic/vendors/openpi/README.md) and [GR00T](positronic/vendors/gr00t/README.md), enabling you to train on standard hardware (e.g., single H100) and deploy locally.
+- **Future-facing roadmap.** Native training on Positronic datasets, curation capabilities in the viewer server, and support for more robotic and controlling hardware are active areas of development. Everything in this README reflects the workflow we run today and the direction we are pushing toward.
 
 ---
 
@@ -299,6 +300,17 @@ The [Inference script](positronic/inference.py) wires the MuJoCo scene, [Observa
 
 ---
 
+## Supported Foundation Models
+
+Positronic provides first-class integrations for state-of-the-art foundation models. We maintain our own forks and configurations to ensure these models work seamlessly with our hardware and data stack.
+
+- **[OpenPI ($\pi_{0.5}$)](positronic/vendors/openpi/README.md)**: End-to-end support for the $\pi_{0.5}$ architecture, including training on single H100s using our optimized configs.
+- **[GR00T](positronic/vendors/gr00t/README.md)**: Full workflow for GR00T, from data conversion to H100 training and local inference.
+
+See the respective READMEs for detailed setup and training instructions.
+
+---
+
 ## Development workflow
 
 Don't forget to install development dependencies first
@@ -351,8 +363,9 @@ If you need to build and operate real applications, use Positronic. Beyond train
 
 Our plans evolve with your feedback. Highlights for the next milestones:
 
+- **Delivered**
+  - **Policy presets for $\pi_{0.5}$ and GR00T.** We have shipped full support for both architectures (see [Supported Foundation Models](#supported-foundation-models)).
 - **Short term**
-  - **Policy presets for $\pi_0$ and GR00T.** Bundle ready-to-use configs in [policy config module](positronic/cfg/policy/policy.py) so switching policies is a single flag.
   - **Automated evaluation harness.** Extend [Inference script](positronic/inference.py) and the MuJoCo loaders in [MuJoCo transform helpers](positronic/simulator/mujoco/transforms.py) to score new checkpoints automatically on curated scenarios.
   - **Richer Positronic Server.** Teach [Positronic Server](positronic/server/positronic_server.py) to surface static/meta fields, and offer annotation + filtering flows for rapid triage.
   - **PyTorch bridging layer.** Provide a native adapter on top of [Positronic dataset library](positronic/dataset/README.md) so training scripts can stream tensors without an intermediate export.
