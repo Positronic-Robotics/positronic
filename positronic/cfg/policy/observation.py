@@ -128,6 +128,10 @@ groot_ee_absolute = eepose_grip.override(
     image_mappings={'observation.images.exterior': 'image.exterior', 'observation.images.wrist': 'image.wrist'},
     groot_video_mappings={'exterior_image_1': 'observation.images.exterior', 'wrist_image': 'observation.images.wrist'},
 )
+groot_ee_absolute_mujoco = groot_ee_absolute.override(
+    image_mappings={'observation.images.exterior': 'image.back_view', 'observation.images.wrist': 'image.handcam_left'}
+)
+
 groot_ee_q = eepose_grip_joints.override(
     image_mappings={'observation.images.exterior': 'image.exterior', 'observation.images.wrist': 'image.wrist'},
     groot_video_mappings={'exterior_image_1': 'observation.images.exterior', 'wrist_image': 'observation.images.wrist'},
