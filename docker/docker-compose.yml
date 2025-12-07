@@ -1,9 +1,6 @@
 services:
   positronic-training-base: &positronic-common
     image: positro/positronic:latest
-    # build:
-    #   context: ../positronic
-    #   dockerfile: docker/Dockerfile.training.cloud
 
     # Enable interactive terminal
     stdin_open: true
@@ -20,8 +17,9 @@ services:
 
     # Volume mounts
     volumes:
-      - /home/vertix/.cache:/root/.cache
-      - /home/vertix/.aws:/root/.aws:ro
+      - ${CACHE_ROOT:-${HOME}}/.cache:/root/.cache
+      - ${CACHE_ROOT:-${HOME}}/.aws:/root/.aws:ro
+      - ${CACHE_ROOT:-${HOME}}/.local/share/uv:/root/.local/share/uv
 
     # Set HOME inside container to match the mount expectations
     environment:
@@ -35,9 +33,6 @@ services:
 
   positronic: &openpi-common
     image: positro/openpi:latest
-    # build:
-    #   context: ../..
-    #   dockerfile: internal/docker/Dockerfile
 
     # Enable interactive terminal
     stdin_open: true
@@ -54,8 +49,9 @@ services:
 
     # Volume mounts
     volumes:
-      - /home/vertix/.cache:/root/.cache
-      - /home/vertix/.aws:/root/.aws:ro
+      - ${CACHE_ROOT:-${HOME}}/.cache:/root/.cache
+      - ${CACHE_ROOT:-${HOME}}/.aws:/root/.aws:ro
+      - ${CACHE_ROOT:-${HOME}}/.local/share/uv:/root/.local/share/uv
 
     # Set HOME inside container to match the mount expectations
     environment:
@@ -80,7 +76,7 @@ services:
     entrypoint: ["uv", "run", "--python", "3.11", "python", "-m", "positronic.vendors.openpi.stats"]
 
   positronic-to-lerobot:
-    <<: *openpi-common
+    <<: *positronic-common
     container_name: positronic-to-lerobot
     entrypoint: ["uv", "run", "--python", "3.11", "positronic-to-lerobot"]
 
@@ -90,7 +86,7 @@ services:
     entrypoint: ["uv", "run", "--python", "3.11", "positronic-train"]
 
   positronic-inference:
-    <<: *openpi-common
+    <<: *positronic-common
     container_name: positronic-inference
     entrypoint: ["uv", "run", "--python", "3.11", "positronic-inference"]
 
@@ -102,7 +98,7 @@ services:
       PYOPENGL_PLATFORM: egl
 
   positronic-server:
-    <<: *openpi-common  # We need internal package for datasets
+    <<: *positronic-common  # We need internal package for datasets
     container_name: positronic-server
     entrypoint: ["uv", "run", "--python", "3.11", "positronic-server"]
     ports:
@@ -138,8 +134,9 @@ services:
 
     # Volume mounts
     volumes:
-      - /home/vertix/.cache:/root/.cache
-      - /home/vertix/.aws:/root/.aws:ro
+      - ${CACHE_ROOT:-${HOME}}/.cache:/root/.cache
+      - ${CACHE_ROOT:-${HOME}}/.aws:/root/.aws:ro
+      - ${CACHE_ROOT:-${HOME}}/.local/share/uv:/root/.local/share/uv
 
     # Set HOME inside container to match the mount expectations
     environment:
