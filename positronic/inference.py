@@ -33,23 +33,23 @@ from positronic.utils.logging import init_logging
 
 
 class MetadataInjector:
-    def __init__(self, static_meta: dict[str, Any]):
-        self.static_meta = static_meta
+    def __init__(self, meta_provider: Callable[[], dict[str, Any]]):
+        self.meta_provider = meta_provider
 
     def __call__(self, cmd: DsWriterCommand) -> DsWriterCommand:
         if cmd.type == DsWriterCommand.START(None).type:
             # Merge inference metadata into the start command
             # Note: cmd.static_data from UI takes precedence if keys collide?
             # Actually usually we want system config (inference.meta) + user input (task)
-            new_static = self.static_meta.copy()
+            new_static = self.meta_provider()
             new_static.update(cmd.static_data)
             return DsWriterCommand(cmd.type, new_static)
         return cmd
 
 
 class KeyboardHanlder:
-    def __init__(self, static_meta: dict[str, Any], task: str | None = None):
-        self.static_meta = static_meta
+    def __init__(self, meta_provider: Callable[[], dict[str, Any]], task: str | None = None):
+        self.meta_provider = meta_provider
         self.task = task
 
     def inference_command(self, key: str) -> InferenceCommand | None:
@@ -66,7 +66,7 @@ class KeyboardHanlder:
 
     def ds_writer_command(self, key: str) -> DsWriterCommand | None:
         if key == 's':
-            meta = self.static_meta.copy()
+            meta = self.meta_provider()
             if self.task:
                 meta['task'] = self.task
             return DsWriterCommand.START(meta)
@@ -81,18 +81,22 @@ class TimedDriver(pimm.ControlSystem):
     """Control system that orchestrates inference episodes by sending start/stop commands."""
 
     def __init__(
-        self, num_iterations: int, simulation_time: float, static_meta: dict[str, Any], task: str | None = None
+        self,
+        num_iterations: int,
+        simulation_time: float,
+        meta_provider: Callable[[], dict[str, Any]],
+        task: str | None = None,
     ):
         self.num_iterations = num_iterations
         self.simulation_time = simulation_time
         self.ds_commands = pimm.ControlSystemEmitter(self)
         self.inf_commands = pimm.ControlSystemEmitter(self)
-        self.static_meta = static_meta
+        self.meta_provider = meta_provider
         self.task = task
 
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock):
         for i in range(self.num_iterations):
-            meta = self.static_meta.copy()
+            meta = self.meta_provider()
             meta['simulation.iteration'] = i
             if self.task:
                 meta['task'] = self.task
@@ -107,13 +111,13 @@ class TimedDriver(pimm.ControlSystem):
 
 @cfn.config(ui_scale=1)
 def eval_ui(ui_scale):
-    def _internal(static_meta):
+    def _internal(meta_provider):
         gui = EvalUI(ui_scale=ui_scale)
 
         return (
             gui,
             (gui.inference_command, lambda x: x),
-            (gui.ds_writer_command, pimm.map(MetadataInjector(static_meta))),
+            (gui.ds_writer_command, pimm.map(MetadataInjector(meta_provider))),
             [],
         )
 
@@ -122,9 +126,9 @@ def eval_ui(ui_scale):
 
 @cfn.config(show_gui=False)
 def keyboard(show_gui, task):
-    def _internal(static_meta):
+    def _internal(meta_provider):
         keyboard = KeyboardControl()
-        keyboard_handler = KeyboardHanlder(static_meta=static_meta, task=task)
+        keyboard_handler = KeyboardHanlder(meta_provider=meta_provider, task=task)
         print('Keyboard controls: [s]tart, sto[p], [r]eset')
         return (
             None if not show_gui else DearpyguiUi(),
@@ -138,9 +142,9 @@ def keyboard(show_gui, task):
 
 @cfn.config(num_iterations=1, simulation_time=15, show_gui=False)
 def timed(num_iterations, simulation_time, show_gui, task):
-    def _internal(static_meta):
+    def _internal(meta_provider):
         gui = None if not show_gui else DearpyguiUi()
-        driver = TimedDriver(num_iterations, simulation_time, static_meta, task=task)
+        driver = TimedDriver(num_iterations, simulation_time, meta_provider, task=task)
         return gui, (driver.inf_commands, lambda x: x), (driver.ds_commands, lambda x: x), [driver]
 
     return _internal
@@ -164,7 +168,7 @@ def main(
     camera_instances = cameras
     camera_emitters = {name: cam.frame for name, cam in camera_instances.items()}
 
-    gui, inference_emitter, ds_writer_emitter, foreground_cs = driver(inference.meta())
+    gui, inference_emitter, ds_writer_emitter, foreground_cs = driver(inference.meta)
 
     if output_dir is not None:
         output_dir = pos3.sync(output_dir, sync_on_error=True)
@@ -208,9 +212,11 @@ def main_sim(
     control_systems = [mujoco_cameras, sim, robot_arm, gripper, inference]
 
     sim_meta = {'simulation.mujoco_model_path': mujoco_model_path}
-    static_meta = sim_meta.copy() | inference.meta()
 
-    gui, inference_emitter, ds_writer_emitter, foreground_cs = driver(static_meta)
+    def meta_provider():
+        return sim_meta.copy() | inference.meta()
+
+    gui, inference_emitter, ds_writer_emitter, foreground_cs = driver(meta_provider)
 
     if output_dir is not None:
         output_dir = pos3.sync(output_dir, sync_on_error=True)

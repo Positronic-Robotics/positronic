@@ -49,3 +49,13 @@ def groot(host: str = 'localhost', port: int = 9000, timeout_ms: int = 15000, n_
     from positronic.policy.gr00t import Gr00tPolicy
 
     return Gr00tPolicy(host, port, timeout_ms, n_action_steps)
+
+
+@cfn.config(weights=None)
+def sample(origins: list[cfn.Config], weights: list[float] | None):
+    """One could use the following CLI:
+    --policy=.sample --policy.origins='[".act"]' --policy.origins.0.checkpoint_path=<yada-yada>
+    """
+    from positronic.policy import SampledPolicy
+
+    return SampledPolicy(*origins, weights=weights)
