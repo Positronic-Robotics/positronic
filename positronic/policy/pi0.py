@@ -8,7 +8,7 @@ from openpi_client.websocket_client_policy import WebsocketClientPolicy
 
 from positronic.utils import flatten_dict
 
-from . import Policy
+from .base import Policy
 
 
 class OpenPIRemotePolicy(Policy):
