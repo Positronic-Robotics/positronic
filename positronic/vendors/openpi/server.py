@@ -4,8 +4,7 @@ import subprocess
 from pathlib import Path
 
 import configuronic as cfn
-
-import positronic.utils.s3 as pos3
+import pos3
 
 
 @cfn.config(config_name='pi05_positronic_lowmem', checkpoint=None, port=None, extra_args=[])

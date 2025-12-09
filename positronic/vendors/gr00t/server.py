@@ -3,8 +3,7 @@ import subprocess
 from pathlib import Path
 
 import configuronic as cfn
-
-import positronic.utils.s3 as pos3
+import pos3
 
 
 @cfn.config(checkpoint=None, groot_venv_path='/.venv/', port=9000, data_config='oxe_droid')

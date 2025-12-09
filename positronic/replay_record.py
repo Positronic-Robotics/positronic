@@ -5,12 +5,12 @@ from typing import Any
 
 import configuronic as cfn
 import numpy as np
+import pos3
 import tqdm
 
 import pimm
 import positronic.cfg.dataset
 import positronic.cfg.simulator
-import positronic.utils.s3 as pos3
 from positronic import geom, wire
 from positronic.dataset import Dataset, Episode, transforms
 from positronic.dataset.ds_player_agent import DsPlayerAgent, DsPlayerStartCommand

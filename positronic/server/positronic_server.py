@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any
 
 import configuronic as cfn
+import pos3
 import rerun as rr
 import uvicorn
 from fastapi import FastAPI, HTTPException
@@ -21,7 +22,6 @@ from fastapi.templating import Jinja2Templates
 from starlette.requests import Request
 
 import positronic.cfg.dataset
-import positronic.utils.s3 as pos3
 from positronic import utils
 from positronic.dataset import Dataset, Episode
 from positronic.dataset.local_dataset import LocalDataset

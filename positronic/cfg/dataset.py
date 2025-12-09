@@ -3,8 +3,8 @@ Utility configurations for constructing datasets.
 """
 
 import configuronic as cfn
+import pos3
 
-import positronic.utils.s3 as pos3
 from positronic.cfg.policy import action, observation
 from positronic.dataset.dataset import ConcatDataset, Dataset
 from positronic.dataset.local_dataset import LocalDataset, load_all_datasets

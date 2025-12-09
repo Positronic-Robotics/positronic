@@ -24,12 +24,12 @@ from collections.abc import Sequence as AbcSequence
 
 import configuronic as cfn
 import numpy as np
+import pos3
 import torch
 import tqdm
 from lerobot.datasets.lerobot_dataset import LeRobotDataset
 
 import positronic.cfg.dataset
-import positronic.utils.s3 as pos3
 from positronic import utils
 from positronic.dataset import Dataset
 from positronic.utils.logging import init_logging

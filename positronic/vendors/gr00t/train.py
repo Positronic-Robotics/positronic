@@ -3,8 +3,8 @@ import subprocess
 from pathlib import Path
 
 import configuronic as cfn
+import pos3
 
-import positronic.utils.s3 as pos3
 from positronic import utils
 
 

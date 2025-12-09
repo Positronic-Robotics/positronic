@@ -6,6 +6,7 @@ from enum import Enum
 
 import configuronic as cfn
 import numpy as np
+import pos3
 
 import pimm
 import positronic.cfg.hardware.camera
@@ -14,7 +15,6 @@ import positronic.cfg.hardware.roboarm
 import positronic.cfg.simulator
 import positronic.cfg.sound
 import positronic.cfg.webxr
-import positronic.utils.s3 as pos3
 from positronic import geom, wire
 from positronic.dataset.ds_writer_agent import (
     DsWriterAgent,

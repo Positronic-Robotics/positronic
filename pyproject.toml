@@ -16,7 +16,6 @@ classifiers = [
 ]
 dependencies = [
     "av",
-    "boto3",
     "coloredlogs>=15.0.1",
     "configuronic",
     "cvxopt",
@@ -32,6 +31,7 @@ dependencies = [
     "numpy",
     "opencv-python-headless",
     "openpi-client",
+    "pos3==0.1.0rc1",
     "pyarrow",
     "pydantic",
     "pyturbojpeg",

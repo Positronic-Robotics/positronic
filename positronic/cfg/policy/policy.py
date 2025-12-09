@@ -1,6 +1,6 @@
 import configuronic as cfn
+import pos3
 
-import positronic.utils.s3 as pos3
 from positronic.policy.lerobot import LerobotPolicy
 
 

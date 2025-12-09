@@ -1,9 +1,9 @@
 import numpy as np
+import pos3
 import pytest
 import tqdm
 
 import positronic.cfg.simulator
-import positronic.utils.s3 as pos3
 from positronic.dataset.local_dataset import LocalDataset
 from positronic.inference import main_sim, timed
 from positronic.policy.tests.test_inference import StubPolicy, make_stub_action_decoder, make_stub_observation_encoder

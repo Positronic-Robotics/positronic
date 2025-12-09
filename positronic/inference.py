@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any
 
 import configuronic as cfn
+import pos3
 
 import pimm
 import positronic.cfg.hardware.camera
@@ -15,7 +16,6 @@ import positronic.cfg.policy.action
 import positronic.cfg.policy.observation
 import positronic.cfg.policy.policy
 import positronic.cfg.simulator
-import positronic.utils.s3 as pos3
 from positronic import utils, wire
 from positronic.dataset.ds_writer_agent import DsWriterCommand, TimeMode
 from positronic.dataset.local_dataset import LocalDatasetWriter

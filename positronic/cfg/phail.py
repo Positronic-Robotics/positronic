@@ -8,8 +8,8 @@
 
 import configuronic as cfn
 import numpy as np
+import pos3
 
-import positronic.utils.s3 as pos3
 from positronic.dataset import Episode, Signal
 from positronic.dataset.local_dataset import load_all_datasets
 from positronic.dataset.transforms import TransformedDataset

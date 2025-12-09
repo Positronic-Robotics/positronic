@@ -12,12 +12,12 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 import configuronic as cfn
+import pos3
 from lerobot.configs.train import TrainPipelineConfig
 from lerobot.constants import ACTION, OBS_IMAGE, OBS_STATE
 from lerobot.envs.configs import EnvConfig, FeatureType, PolicyFeature
 from lerobot.scripts import train as lerobot_train
 
-import positronic.utils.s3 as pos3
 from positronic import utils
 from positronic.utils.logging import init_logging
 
