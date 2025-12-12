@@ -59,3 +59,10 @@ def sample(origins: list[cfn.Config], weights: list[float] | None):
     from positronic.policy import SampledPolicy
 
     return SampledPolicy(*origins, weights=weights)
+
+
+@cfn.config(host='localhost', port=8000)
+def remote(host: str, port: int):
+    from positronic.policy.remote import RemotePolicy
+
+    return RemotePolicy(host, port)
