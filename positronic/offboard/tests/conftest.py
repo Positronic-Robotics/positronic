@@ -7,7 +7,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from positronic.inference.server import InferenceServer
+from positronic.offboard.basic_server import InferenceServer
 
 
 def find_free_port() -> int:

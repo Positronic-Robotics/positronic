@@ -1,7 +1,7 @@
 from collections import deque
 from typing import Any
 
-from positronic.inference.client import InferenceClient, InferenceSession
+from positronic.offboard.client import InferenceClient, InferenceSession
 from positronic.utils import flatten_dict
 
 from .base import Policy

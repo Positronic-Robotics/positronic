@@ -1,4 +1,4 @@
-from positronic.inference.client import InferenceClient
+from positronic.offboard.client import InferenceClient
 
 
 def test_inference_client_connect_and_infer(inference_server, mock_policy):
