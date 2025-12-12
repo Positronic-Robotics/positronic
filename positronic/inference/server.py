@@ -5,7 +5,7 @@ import traceback
 import configuronic as cfn
 import ormsgpack
 import websockets
-from websockets.server import serve
+from websockets.asyncio.server import serve
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
