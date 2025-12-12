@@ -3,9 +3,10 @@ import logging
 import traceback
 
 import configuronic as cfn
-import ormsgpack
 import websockets
 from websockets.asyncio.server import serve
+
+from positronic.offboard.serialisation import deserialise, serialise
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -41,14 +42,14 @@ class InferenceServer:
             self.policy.reset()
 
             # Send Metadata
-            await websocket.send(ormsgpack.packb({'meta': self.policy.meta}, option=ormsgpack.OPT_SERIALIZE_NUMPY))
+            await websocket.send(serialise({'meta': self.policy.meta}))
 
             # Inference Loop
             async for message in websocket:
                 try:
-                    obs = ormsgpack.unpackb(message)
+                    obs = deserialise(message)
                     action = self.policy.select_action(obs)
-                    await websocket.send(ormsgpack.packb({'result': action}, option=ormsgpack.OPT_SERIALIZE_NUMPY))
+                    await websocket.send(serialise({'result': action}))
 
                 except Exception as e:
                     logger.error(f'Error processing message from {peer}: {e}')
@@ -56,7 +57,7 @@ class InferenceServer:
                     # Send error as a string message or a special error dict
                     # For simple protocol, we might just close or send error dict
                     error_response = {'error': str(e)}
-                    await websocket.send(ormsgpack.packb(error_response))
+                    await websocket.send(serialise(error_response))
 
         except websockets.exceptions.ConnectionClosed:
             logger.info(f'Connection closed for {peer}')

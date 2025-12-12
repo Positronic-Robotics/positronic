@@ -3,9 +3,10 @@ import logging
 from collections.abc import Generator
 from typing import Any
 
-import ormsgpack
 from websockets.sync.client import connect
 from websockets.sync.connection import Connection
+
+from .serialisation import deserialise, serialise
 
 logger = logging.getLogger(__name__)
 
@@ -18,8 +19,7 @@ class InferenceSession:
     def _handshake(self) -> dict[str, Any]:
         """Receive metadata from the server immediately after connection."""
         try:
-            metadata_packed = self._websocket.recv()
-            response = ormsgpack.unpackb(metadata_packed)
+            response = deserialise(self._websocket.recv())
             if 'error' in response:
                 raise RuntimeError(f'Server error: {response["error"]}')
             return response['meta']
@@ -40,8 +40,8 @@ class InferenceSession:
         if self._metadata is None:
             self._metadata = self._handshake()
 
-        self._websocket.send(ormsgpack.packb(obs, option=ormsgpack.OPT_SERIALIZE_NUMPY))
-        response = ormsgpack.unpackb(self._websocket.recv())
+        self._websocket.send(serialise(obs))
+        response = deserialise(self._websocket.recv())
 
         if isinstance(response, dict) and 'error' in response:
             raise RuntimeError(f'Server error: {response["error"]}')

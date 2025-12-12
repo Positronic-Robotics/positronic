@@ -5,7 +5,6 @@ from typing import Any
 
 import configuronic as cfn
 import numpy as np
-import ormsgpack
 import pos3
 import torch
 import websockets
@@ -13,6 +12,7 @@ from lerobot.policies.act.modeling_act import ACTPolicy
 from lerobot.policies.pretrained import PreTrainedPolicy
 from websockets.asyncio.server import serve
 
+from positronic.offboard.serialisation import deserialise, serialise
 from positronic.utils.logging import init_logging
 
 logger = logging.getLogger(__name__)
@@ -51,7 +51,10 @@ class InferenceServer:
         self.port = port
         self.device = device or _detect_device()
 
-        self.metadata.update({'host': host, 'port': port, 'device': device})
+        extra_meta = {'host': host, 'port': port, 'device': device}
+        if n_action_chunk is not None:
+            extra_meta['n_action_chunk'] = n_action_chunk
+        self.metadata.update(extra_meta)
 
     async def _handler(self, websocket):
         peer = websocket.remote_address
@@ -61,30 +64,36 @@ class InferenceServer:
             self.policy.reset()
 
             # Send Metadata
-            await websocket.send(ormsgpack.packb({'meta': self.metadata}, option=ormsgpack.OPT_SERIALIZE_NUMPY))
+            await websocket.send(serialise({'meta': self.metadata}))
 
             # Inference Loop
             async for message in websocket:
                 try:
-                    obs = ormsgpack.unpackb(message)
+                    obs = deserialise(message)
+                    logger.info('Parsed message')
                     for key, val in obs.items():
                         if isinstance(val, np.ndarray):
                             if key.startswith('observation.images.'):
                                 val = np.transpose(val.astype(np.float32) / 255.0, (2, 0, 1))
+                            else:
+                                val = val.astype(np.float32)
                             val = val[np.newaxis, ...]
+                            logger.debug('Size of %s: %s', key, val.shape)
                             obs[key] = torch.from_numpy(val).to(self.device)
-                        else:
+                        elif not isinstance(val, str):
+                            logger.debug('Size of %s: %s', key, val.shape)
                             obs[key] = torch.as_tensor(val).to(self.device)
 
                     action = self.policy.predict_action_chunk(obs)[:, : self.n_action_chunk]
                     action = action.squeeze(0).cpu().numpy()
-                    await websocket.send(ormsgpack.packb({'result': action}, option=ormsgpack.OPT_SERIALIZE_NUMPY))
+                    action = [{'action': a} for a in action]
+                    await websocket.send(serialise({'result': action}))
 
                 except Exception as e:
                     logger.error(f'Error processing message from {peer}: {e}')
                     logger.debug(traceback.format_exc())
                     error_response = {'error': str(e)}
-                    await websocket.send(ormsgpack.packb(error_response))
+                    await websocket.send(serialise(error_response))
 
         except websockets.exceptions.ConnectionClosed:
             logger.info(f'Connection closed for {peer}')
