@@ -14,6 +14,11 @@ logger = logging.getLogger(__name__)
 
 class InferenceServer:
     def __init__(self, policy, host: str, port: int):
+        """
+        A basic server implementation for running inference with a given policy.
+        This server does not support chunking, as the Policy class itself does not,
+        leading to potentially higher traffic between the client and server compared to an ideal, chunking-aware setup.
+        """
         self.policy = policy
         self.host = host
         self.port = port
