@@ -51,7 +51,7 @@ class InferenceServer:
         self.port = port
         self.device = device or _detect_device()
 
-        extra_meta = {'host': host, 'port': port, 'device': device}
+        extra_meta = {'host': host, 'port': port, 'device': self.device}
         if n_action_chunk is not None:
             extra_meta['n_action_chunk'] = n_action_chunk
         self.metadata.update(extra_meta)
@@ -64,6 +64,7 @@ class InferenceServer:
             self.policy.reset()
 
             # Send Metadata
+            logger.info(f'Sending metadata: {self.metadata}')
             await websocket.send(serialise({'meta': self.metadata}))
 
             # Inference Loop
@@ -75,14 +76,8 @@ class InferenceServer:
                         if isinstance(val, np.ndarray):
                             if key.startswith('observation.images.'):
                                 val = np.transpose(val.astype(np.float32) / 255.0, (2, 0, 1))
-                            else:
-                                val = val.astype(np.float32)
                             val = val[np.newaxis, ...]
-                            logger.debug('Size of %s: %s', key, val.shape)
                             obs[key] = torch.from_numpy(val).to(self.device)
-                        elif not isinstance(val, str):
-                            logger.debug('Size of %s: %s', key, val.shape)
-                            obs[key] = torch.as_tensor(val).to(self.device)
 
                     action = self.policy.predict_action_chunk(obs)[:, : self.n_action_chunk]
                     action = action.squeeze(0).cpu().numpy()
