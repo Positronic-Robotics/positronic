@@ -8,6 +8,7 @@ from collections import defaultdict
 from collections.abc import Callable
 from contextlib import asynccontextmanager
 from datetime import datetime
+from functools import wraps
 from pathlib import Path
 from typing import Any
 
@@ -41,6 +42,21 @@ app_state: dict[str, object] = {
 
 def _pkg_path(*parts: str) -> str:
     return str(Path(__file__).resolve().parent.joinpath(*parts))
+
+
+def require_dataset(func):
+    """Decorator that checks if dataset is loaded before executing the endpoint."""
+
+    @wraps(func)
+    async def wrapper(*args, **kwargs):
+        if app_state['loading_state']:
+            raise HTTPException(status_code=202, detail='Dataset is loading...')
+        ds: LocalDataset | None = app_state.get('dataset')  # type: ignore[assignment]
+        if ds is None:
+            raise HTTPException(status_code=500, detail='Dataset failed to load')
+        return await func(*args, **kwargs)
+
+    return wrapper
 
 
 def _get_rrd_cache_path(episode_id: int) -> str:
@@ -87,12 +103,9 @@ async def index(request: Request):
 
 
 @app.get('/episode/{episode_id}', response_class=HTMLResponse)
+@require_dataset
 async def episode_viewer(request: Request, episode_id: int):
-    if app_state['loading_state']:
-        raise HTTPException(status_code=202, detail='Dataset is still loading. Please wait...')
-    ds: LocalDataset | None = app_state.get('dataset')  # type: ignore[assignment]
-    if ds is None:
-        raise HTTPException(status_code=500, detail='Dataset failed to load')
+    ds = app_state.get('dataset')
 
     try:
         episode = ds[episode_id]
@@ -130,12 +143,9 @@ async def episode_viewer(request: Request, episode_id: int):
 
 
 @app.get('/api/dataset_info')
+@require_dataset
 async def api_dataset_info():
-    if app_state['loading_state']:
-        raise HTTPException(status_code=202, detail='Dataset is loading...')
-    ds: LocalDataset | None = app_state.get('dataset')  # type: ignore[assignment]
-    if ds is None:
-        raise HTTPException(status_code=500, detail='Dataset failed to load')
+    ds = app_state.get('dataset')
     return {'root': app_state['root'], 'num_episodes': len(ds)}
 
 
@@ -163,13 +173,9 @@ def parse_table_cfg(table_cfg: dict[str, Any]) -> tuple:
 
 
 @app.get('/api/episodes')
+@require_dataset
 async def api_episodes():
-    if app_state['loading_state']:
-        raise HTTPException(status_code=202, detail='Dataset is loading...')
-    ds: LocalDataset | None = app_state.get('dataset')  # type: ignore[assignment]
-    if ds is None:
-        raise HTTPException(status_code=500, detail='Dataset failed to load')
-
+    ds = app_state.get('dataset')
     config = app_state['episode_table_cfg']
     columns, formatters, defaults = parse_table_cfg(config)
     ep_it = ({'__meta__': ep.meta, '__duration__': ep.duration_ns / 1e9, **ep.static} for ep in ds)
@@ -178,13 +184,9 @@ async def api_episodes():
 
 
 @app.get('/api/groups')
+@require_dataset
 async def api_groups():
-    if app_state['loading_state']:
-        raise HTTPException(status_code=202, detail='Dataset is loading...')
-    ds: LocalDataset | None = app_state.get('dataset')
-    if ds is None:
-        raise HTTPException(status_code=500, detail='Dataset failed to load')
-
+    ds = app_state.get('dataset')
     group_key, group_fn, format_table = app_state.get('group_table_cfg')
     columns, formatters, defaults = parse_table_cfg(format_table)
 
@@ -214,13 +216,9 @@ async def api_dataset_status():
 
 
 @app.get('/api/episode_rrd/{episode_id}')
+@require_dataset
 async def api_episode_rrd(episode_id: int):
-    if app_state['loading_state']:
-        raise HTTPException(status_code=202, detail='Dataset is still loading')
-    ds: LocalDataset | None = app_state.get('dataset')  # type: ignore[assignment]
-    if ds is None:
-        raise HTTPException(status_code=500, detail='Dataset failed to load')
-
+    ds = app_state.get('dataset')
     cache_path = _get_rrd_cache_path(episode_id)
     max_resolution: int = app_state.get('max_resolution')  # type: ignore[assignment]
 
