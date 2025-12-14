@@ -1,6 +1,7 @@
 const filtersState = {
   sort: { columnIndex: null, direction: 'desc' },
   filters: {},
+  serverFilters: {},
 };
 let filtersData = {};
 let loadingCheckInterval = null;
@@ -32,9 +33,10 @@ async function checkDatasetStatus() {
       datasetLoadingStatus.classList.remove('show');
       loadDatasetInfo();
 
-      const { episodes, columns } = await loadEpisodes();
+      const { episodes, columns, group_filters: groupFilters } = await loadEpisodes();
       filtersData = getFiltersData(episodes, columns);
-      renderFilters(episodes, columns);
+      renderServerFilters(groupFilters);
+      renderClientFilters(episodes, columns);
       renderEpisodesTableHeader(episodes, columns);
       populateEpisodesTable(episodes, columns);
       episodesContainer.removeChild(episodesLoadingStatus);
@@ -71,18 +73,21 @@ async function loadDatasetInfo() {
   }
 }
 
-async function loadEpisodes() {
+async function loadEpisodes(filters = {}) {
   try {
-    const endpoint = window.API_ENDPOINT || '/api/episodes';
+    const endpoint = new URL(window.API_ENDPOINT || '/api/episodes', window.location.origin);
+
+    Object.entries(filters).forEach(([key, value]) => {
+      endpoint.searchParams.append(key, value);
+    });
+
     const response = await fetch(endpoint);
     if (response.status === 202) {
       checkDatasetStatus();
       return;
     }
 
-    const { episodes, columns } = await response.json();
-
-    return { episodes, columns };
+    return await response.json();
   } catch (error) {
     console.error('Error loading episodes:', error);
     document.getElementById('episodes-container').innerHTML =
@@ -138,47 +143,91 @@ function renderEpisodesTableHeader(episodes, columns) {
   }
 }
 
-function renderFilters(episodes, columns) {
+function renderServerFilters(groupFilters) {
+  if (!groupFilters) return;
+  const controlsBar = document.querySelector('.controls-bar');
+
+  for (const [filterKey, filterData] of Object.entries(groupFilters)) {
+    const options = [createFilterOption('-1', 'All')];
+
+    for (const value of filterData.values) {
+      options.push(createFilterOption(value, value));
+    }
+
+    const filterContainer = createFilter({
+      filterId: `filter-${filterKey}`,
+      label: filterData.label,
+      options: options,
+      onChange: async (event) => {
+        if (event.target.value === '-1') {
+          delete filtersState.serverFilters[filterKey];
+        } else {
+          filtersState.serverFilters[filterKey] = event.target.value;
+        }
+
+        const { episodes, columns } = await loadEpisodes(filtersState.serverFilters);
+        populateEpisodesTable(episodes, columns);
+      },
+    });
+
+    controlsBar.appendChild(filterContainer);
+  }
+}
+
+function renderClientFilters(episodes, columns) {
   const controlsBar = document.querySelector('.controls-bar');
 
   for (const [filterIndex, filter] of Object.entries(filtersData)) {
-    const filterId = `filter-${filterIndex}`;
-    const filterContainer = document.createElement('div');
-    filterContainer.classList.add('control-group', 'control-group--grow');
+    const options = [createFilterOption('-1', 'All')];
 
-    const labelElement = document.createElement('label');
-    labelElement.htmlFor = filterId;
-    labelElement.textContent = columns[filterIndex].label;
-    filterContainer.appendChild(labelElement);
-
-    const select = document.createElement('select');
-    select.id = filterId;
-    select.addEventListener('change', (event) => {
-      if (event.target.value === '-1') {
-        delete filtersState.filters[filterIndex];
-      } else {
-        filtersState.filters[filterIndex] = event.target.value;
-      }
-
-      populateEpisodesTable(episodes, columns);
-    });
-
-    select.appendChild(createOption('-1', 'All'));
     for (const [index, value] of filter.entries()) {
       const label = columns[filterIndex].renderer?.options[value]?.label ?? value;
-      select.appendChild(createOption(index, label));
+      options.push(createFilterOption(index, label));
     }
 
-    filterContainer.appendChild(select);
+    const filterContainer = createFilter({
+      filterId: `filter-${filterIndex}`,
+      label: columns[filterIndex].label,
+      options: options,
+      onChange: (event) => {
+        if (event.target.value === '-1') {
+          delete filtersState.filters[filterIndex];
+        } else {
+          filtersState.filters[filterIndex] = event.target.value;
+        }
+
+        populateEpisodesTable(episodes, columns);
+      },
+    });
+
     controlsBar.appendChild(filterContainer);
   }
+}
 
-  function createOption(value, label) {
-    const option = document.createElement('option');
-    option.value = value;
-    option.textContent = label;
-    return option;
-  }
+function createFilter({ filterId, label, options, onChange }) {
+  const filterContainer = document.createElement('div');
+  filterContainer.classList.add('control-group', 'control-group--grow');
+
+  const labelElement = document.createElement('label');
+  labelElement.htmlFor = filterId;
+  labelElement.textContent = label;
+  filterContainer.appendChild(labelElement);
+
+  const select = document.createElement('select');
+  select.id = filterId;
+  select.addEventListener('change', onChange);
+  select.append(...options);
+
+  filterContainer.appendChild(select);
+
+  return filterContainer;
+}
+
+function createFilterOption(value, label) {
+  const option = document.createElement('option');
+  option.value = value;
+  option.textContent = label;
+  return option;
 }
 
 function getFiltersData(episodes, columns) {
