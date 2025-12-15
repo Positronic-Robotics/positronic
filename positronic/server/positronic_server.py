@@ -201,17 +201,12 @@ async def api_groups(request: Request):
     group_filters = {key: {'label': label or key, 'values': set()} for key, label in group_filter_keys.items()}
     for episode in ds:
         # Apply filters
-        if active_filters:
-            match = all(
-                episode.static[filter_key] == filter_value for filter_key, filter_value in active_filters.items()
-            )
-            if not match:
-                continue
+        match = all(episode.static[key] == value for key, value in active_filters.items())
+        if match:
+            groups[episode.static[group_key]].append(episode)
 
-        groups[episode.static[group_key]].append(episode)
-
-        for filter_key in group_filter_keys:
-            group_filters[filter_key]['values'].add(episode.static.get(filter_key))
+            for filter_key in group_filter_keys:
+                group_filters[filter_key]['values'].add(episode.static.get(filter_key))
 
     rows = [{group_key: key, '__meta__': {'group': key}, **group_fn(group)} for key, group in groups.items()]
     episodes = get_episodes_list(rows, format_table.keys(), formatters=formatters, defaults=defaults)
