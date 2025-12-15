@@ -44,6 +44,13 @@ class InferenceCommand:
 
 
 class Inference(pimm.ControlSystem):
+    """
+    Control system that handles start/stop/reset commands and runs the policy at a fixed rate by encoding
+    inputs, decoding actions to robot/gripper commands, and exposing run metadata.
+
+    Supposed to be run in foreground of a World.
+    """
+
     def __init__(
         self,
         observation_encoder: ObservationEncoder,
@@ -137,3 +144,5 @@ class Inference(pimm.ControlSystem):
                 continue
             finally:
                 yield pimm.Sleep(rate_limiter.wait_time())
+
+        self.policy.close()

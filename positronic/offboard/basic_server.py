@@ -3,13 +3,14 @@ import logging
 import traceback
 
 import configuronic as cfn
+import pos3
 import websockets
 from websockets.asyncio.server import serve
 
 from positronic.offboard.serialisation import deserialise, serialise
+from positronic.utils.logging import init_logging
 
 # Configure logging
-logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
@@ -86,4 +87,6 @@ def main(policy, port: int, host: str):
 
 
 if __name__ == '__main__':
-    cfn.cli(main)
+    init_logging()
+    with pos3.mirror():
+        cfn.cli(main)

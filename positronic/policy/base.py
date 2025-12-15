@@ -20,6 +20,10 @@ class Policy(ABC):
         """Returns metadata about the policy configuration."""
         return {}
 
+    def close(self):
+        """Closes the policy and releases any resources."""
+        return None
+
 
 class SampledPolicy(Policy):
     """Randomly selects a policy from a list on each reset."""

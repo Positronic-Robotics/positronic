@@ -1,6 +1,4 @@
-import contextlib
 import logging
-from collections.abc import Generator
 from typing import Any
 
 from websockets.sync.client import connect
@@ -48,16 +46,16 @@ class InferenceSession:
 
         return response['result']
 
+    def close(self):
+        self._websocket.close()
+
 
 class InferenceClient:
     def __init__(self, host: str, port: int):
         self.uri = f'ws://{host}:{port}'
 
-    @contextlib.contextmanager
-    def start_session(self) -> Generator[InferenceSession, None, None]:
+    def new_session(self) -> InferenceSession:
         """
-        Starts a new inference session.
+        Creates a new inference session.
         """
-        with connect(self.uri) as websocket:
-            session = InferenceSession(websocket)
-            yield session
+        return InferenceSession(connect(self.uri))

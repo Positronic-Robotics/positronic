@@ -30,7 +30,7 @@ def test_remote_policy_lifecycle(inference_server, mock_policy):
     assert mock_policy.reset.call_count == 2
 
     # Explicitly close to ensure clean server shutdown
-    policy._close_session()
+    policy.close()
 
 
 def test_remote_policy_chunking(inference_server):
@@ -51,8 +51,8 @@ def test_remote_policy_chunking(inference_server):
     # Replace the real session with our mock
     # Note: policy.session is set by reset(), which uses a context manager.
     # We override it manually for this specific white-box test.
-    policy.session = mock_session
-    policy.action_queue.clear()  # Ensure clean state
+    policy._session = mock_session
+    policy._action_queue.clear()  # Ensure clean state
 
     # 1. First call: Should trigger network call and buffer 3 actions
     action1 = policy.select_action({'obs': 1})
@@ -77,4 +77,4 @@ def test_remote_policy_chunking(inference_server):
     assert action4 == {'b': 1}
     assert mock_session.infer.call_count == 2
 
-    policy._close_session()
+    policy.close()

@@ -77,6 +77,10 @@ class SpyPolicy:
         self.last_obs = obs
         return {'action': self.action}
 
+    def close(self) -> None:
+        """Tests rely on Inference calling policy.close(); provide no-op."""
+        return None
+
 
 DEFAULT_STUB_POLICY_ACTION = np.array([[0.4, 0.5, 0.6, 1.0, 0.0, 0.0, 0.0, 0.33]], dtype=np.float32)
 
@@ -100,6 +104,10 @@ class StubPolicy:
 
     def reset(self) -> None:
         self.reset_calls += 1
+
+    def close(self) -> None:
+        """Tests rely on Inference calling policy.close(); provide no-op."""
+        return None
 
 
 def make_stub_observation_encoder() -> StubStateEncoder:
