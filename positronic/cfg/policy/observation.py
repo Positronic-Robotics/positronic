@@ -76,24 +76,13 @@ eepose_grip_joints = general.override(
     groot_video_mappings={'ego_view': 'observation.images.left', 'side_image': 'observation.images.side'},
 )
 
-
-eepose_mujoco = eepose_grip.override(
-    image_mappings={'observation.images.left': 'image.handcam_left', 'observation.images.side': 'image.back_view'}
-)
-joints_mujoco = joints_grip.override(
-    image_mappings={'observation.images.left': 'image.handcam_left', 'observation.images.side': 'image.back_view'}
-)
-eepose_joints_mujoco = eepose_grip_joints.override(
-    image_mappings={'observation.images.left': 'image.handcam_left', 'observation.images.side': 'image.back_view'}
-)
-
-eepose_real = eepose_grip.override(
+eepose = eepose_grip.override(
     image_mappings={'observation.images.left': 'image.wrist', 'observation.images.side': 'image.exterior'}
 )
-joints_real = joints_grip.override(
+joints = joints_grip.override(
     image_mappings={'observation.images.left': 'image.wrist', 'observation.images.side': 'image.exterior'}
 )
-eepose_q_real = eepose_grip_joints.override(
+eepose_q = eepose_grip_joints.override(
     image_mappings={'observation.images.left': 'image.wrist', 'observation.images.side': 'image.exterior'}
 )
 
@@ -127,9 +116,6 @@ def openpi_droid(exterior_camera: str, wrist_camera: str, image_size: tuple[int,
 groot_ee_absolute = eepose_grip.override(
     image_mappings={'observation.images.exterior': 'image.exterior', 'observation.images.wrist': 'image.wrist'},
     groot_video_mappings={'exterior_image_1': 'observation.images.exterior', 'wrist_image': 'observation.images.wrist'},
-)
-groot_ee_absolute_mujoco = groot_ee_absolute.override(
-    image_mappings={'observation.images.exterior': 'image.back_view', 'observation.images.wrist': 'image.handcam_left'}
 )
 
 groot_ee_q = eepose_grip_joints.override(

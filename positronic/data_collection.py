@@ -244,10 +244,10 @@ def main(
     mujoco_model_path=package_assets_path('assets/mujoco/franka_table.xml'),
     webxr=positronic.cfg.webxr.oculus,
     cameras={
-        'image.handcam_left': 'handcam_left_ph',
+        'image.wrist': 'handcam_left_ph',
+        'image.exterior': 'back_view_ph',
         'image.handcam_right': 'handcam_right_ph',
-        'image.back_view': 'back_view_ph',
-        'image.wrist': 'wrist_cam_ph',
+        'image.wrist_2': 'wrist_cam_ph',
     },
     sound=positronic.cfg.sound.sound,
     operator_position=OperatorPosition.BACK,

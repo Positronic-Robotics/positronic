@@ -84,16 +84,25 @@ class Rename(EpisodeTransform):
     Only renamed keys are included in the output episode.
 
     Example:
-        # Rename 'robot_state.q' to 'robot_joints' and 'image.wrist' to 'image.handcam'
-        Rename({'robot_joints': 'robot_state.q', 'image.handcam': 'image.wrist'})
+        # Keyword form (only works for identifier-like names):
+        Rename(state='robot_state.q', handcam='image.wrist')
+
+        # For keys that are not valid Python identifiers (e.g. contain dots),
+        # use dict expansion. The mapping is new_key='old_key' (output -> input):
+        Rename(**{'robot_state.q': 'robot_state.joints', 'image.handcam': 'image.wrist'})
     """
 
-    def __init__(self, mapping: dict[str, str]):
-        """
+    def __init__(self, **mapping: str):
+        """Create a rename mapping for episode keys.
+
         Args:
-            mapping: Dictionary mapping new_key -> old_key (output key -> input key)
+            **mapping: Keyword arguments mapping ``new_key`` -> ``old_key`` (output key -> input key).
+                For keys that are not valid Python identifiers (like names containing dots),
+                pass them via dict expansion: ``Rename(**{'a.b': 'c.d'})``.
         """
-        self._mapping = mapping
+        if not mapping:
+            raise ValueError('Rename requires at least one mapping entry')
+        self._mapping: dict[str, str] = dict(mapping)
 
     def __call__(self, episode: Episode) -> Episode:
         res = {k: episode[v] for k, v in self._mapping.items()}

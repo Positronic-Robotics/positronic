@@ -74,7 +74,6 @@ class Inference(pimm.ControlSystem):
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Sleep]:  # noqa: C901
         running = False
 
-        # TODO: We should emit new commands per frame, not per inference fps
         rate_limiter = pimm.RateLimiter(clock, hz=self.inference_fps)
 
         while not should_stop.value:

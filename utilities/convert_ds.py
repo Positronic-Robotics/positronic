@@ -50,7 +50,7 @@ def update_v0_1_0(path: str):
                 'robot_state.ee_pose': Concat('robot_position_translation', 'robot_position_quaternion'),
                 'task': FromValue('Pick up the green cube and place it on the red cube.'),
             }),
-            Rename({
+            Rename(**{
                 'robot_state.q': 'robot_state.joints',
                 'robot_state.dq': 'robot_state.joints_velocity',
                 'image.wrist': 'image.handcam_left',

@@ -152,8 +152,6 @@ def main(
     robot_arm: pimm.ControlSystem,
     gripper: pimm.ControlSystem,
     cameras: dict[str, pimm.ControlSystem],
-    # observation_encoder: ObservationEncoder,
-    # action_decoder: ActionDecoder,
     policy,
     driver: Callable,
     policy_fps: int = 15,
@@ -187,8 +185,6 @@ def main(
 
 def main_sim(
     mujoco_model_path: str,
-    # observation_encoder: ObservationEncoder,
-    # action_decoder: ActionDecoder,
     policy,
     loaders: Sequence[MujocoSceneTransform],
     camera_fps: int,
@@ -243,7 +239,9 @@ main_sim_cfg = cfn.Config(
     camera_fps=15,
     policy_fps=15,
     driver=timed.override(simulation_time=15, task='pick up the green cube and put in on top of the red cube'),
-    camera_dict={'image.handcam_left': 'handcam_left_ph', 'image.back_view': 'back_view_ph'},
+    # We use 3 cameras not because we need it, but because Mujoco does not render
+    # the second image when using only 2 cameras
+    camera_dict={'image.wrist': 'handcam_left_ph', 'image.exterior': 'back_view_ph', 'image.agent_view': 'agentview'},
     observers={
         'box_distance': BodyDistance('box_0_body', 'box_1_body'),
         'stacking_success': StackingSuccess('box_0_body', 'box_1_body', 'hand_ph'),
@@ -255,16 +253,10 @@ main_sim_openpi_positronic = main_sim_cfg.override(
         policy=policy_cfg.openpi,
         observation=positronic.cfg.policy.observation.openpi_positronic,
         action=positronic.cfg.policy.action.absolute_position,
-    ),
-    # We use 3 cameras not because we need it, but because Mujoco does not render
-    # the second image when using only 2 cameras
-    camera_dict={'image.wrist': 'handcam_left_ph', 'image.exterior': 'back_view_ph', 'image.agent_view': 'agentview'},
+    )
 )
 
 main_sim_openpi_droid = main_sim_cfg.override(
-    # We use 3 cameras not because we need it, but because Mujoco does not render the second image when using
-    # only 2 cameras.
-    camera_dict={'image.wrist': 'handcam_back_ph', 'image.exterior': 'back_view_ph', 'image.agent_view': 'agentview'},
     policy=policy_cfg.wrapped.override(
         base=policy_cfg.droid,
         observation=positronic.cfg.policy.observation.openpi_droid,
@@ -276,16 +268,9 @@ main_sim_openpi_droid = main_sim_cfg.override(
 main_sim_act = main_sim_cfg.override(
     policy=policy_cfg.wrapped.override(
         base=policy_cfg.act,
-        observation=positronic.cfg.policy.observation.eepose_mujoco,
+        observation=positronic.cfg.policy.observation.eepose,
         action=positronic.cfg.policy.action.absolute_position,
-    ),
-    # We use 3 cameras not because we need it, but because Mujoco does not render
-    # the second image when using only 2 cameras
-    camera_dict={
-        'image.handcam_left': 'handcam_left_ph',
-        'image.back_view': 'back_view_ph',
-        'image.agent_view': 'agentview',
-    },
+    )
 )
 
 openpi_droid = cfn.Config(
@@ -337,7 +322,7 @@ def _internal_main():
         'real_openpi_positronic': openpi_positronic,
         'real_act': openpi_positronic.override(**{
             'policy.base': policy_cfg.act,
-            'policy.observation': positronic.cfg.policy.observation.eepose_real.override(
+            'policy.observation': positronic.cfg.policy.observation.eepose.override(
                 image_mappings={
                     'observation.images.wrist': 'image.wrist',
                     'observation.images.exterior': 'image.exterior',

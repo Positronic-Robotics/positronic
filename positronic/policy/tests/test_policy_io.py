@@ -65,7 +65,9 @@ def test_absolute_position_action_encode_decode_quat():
     assert vec.shape == (8,)  # 4 quat + 3 trans + 1 grip
     assert vec.dtype == np.float32
 
-    command, target_grip = act.decode({'action': vec}, inputs={})
+    decoded = act.decode({'action': vec}, inputs={})
+    command = cmd_module.from_wire(decoded['robot_command'])
+    target_grip = decoded['target_grip']
     assert isinstance(command, cmd_module.CartesianPosition)
     np.testing.assert_allclose(command.pose.translation, t[0], atol=1e-6)
     np.testing.assert_allclose(command.pose.rotation.as_quat, q[0].as_quat, atol=1e-6)
@@ -98,9 +100,9 @@ def test_relative_target_position_action_encode_decode_quat():
     np.testing.assert_allclose(vec[4:7], t_tgt[0] - t_cur[0], atol=1e-6)
     assert np.isclose(vec[7], g_tgt[0])
 
-    command, target_grip = act.decode(
-        {'action': vec}, inputs={'robot_state.ee_pose': np.concatenate([t_cur[0], q_cur[0].as_quat])}
-    )
+    decoded = act.decode({'action': vec}, inputs={'robot_state.ee_pose': np.concatenate([t_cur[0], q_cur[0].as_quat])})
+    command = cmd_module.from_wire(decoded['robot_command'])
+    target_grip = decoded['target_grip']
     assert isinstance(command, cmd_module.CartesianPosition)
     # Decode applies diff to current translation
     np.testing.assert_allclose(command.pose.translation, t_cur[0] + vec[4:7], atol=1e-6)
@@ -121,7 +123,9 @@ def test_absolute_joints_action_encode_decode():
     assert vec.shape == (8,)  # 7 joints + 1 grip
     assert vec.dtype == np.float32
 
-    command, target_grip = act.decode(vec, inputs={})
+    decoded = act.decode(vec, {})
+    command = cmd_module.from_wire(decoded['robot_command'])
+    target_grip = decoded['target_grip']
     assert isinstance(command, cmd_module.JointPosition)
     np.testing.assert_allclose(command.positions, joints[0], atol=1e-6)
     assert np.isclose(target_grip, g[0])

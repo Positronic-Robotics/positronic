@@ -13,7 +13,7 @@ from positronic.utils import s3 as pos3
 
 ACT_META = {
     'inference.policy.name': 'act',
-    'inference.observation.name': 'eepose_real',
+    'inference.observation.name': 'eepose',
     'inference.action.name': 'absolute_position',
     'inference.observation.lerobot_features': {
         'observation.state': {'shape': (8,), 'names': ['robot_state.ee_pose', 'grip'], 'dtype': 'float32'},

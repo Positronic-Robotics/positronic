@@ -5,93 +5,44 @@ import pytest
 
 import pimm
 from pimm.tests.testing import MockClock
-from positronic import geom
 from positronic.drivers import roboarm
 from positronic.drivers.roboarm import RobotStatus
+from positronic.drivers.roboarm.command import CartesianPosition, Reset, to_wire
+from positronic.geom import Rotation, Transform3D
 from positronic.policy.inference import Inference, InferenceCommand
 from positronic.tests.testing_coutils import ManualDriver, drive_scheduler
 
 
-class StubStateEncoder:
-    def __init__(self) -> None:
-        self.last_inputs: dict[str, object] | None = None
-        self.last_image_keys: list[str] = []
-        self.meta: dict[str, object] = {}
-
-    def encode(self, inputs: dict[str, object]) -> dict[str, object]:
-        self.last_inputs = inputs
-        self.last_image_keys = sorted([key for key in inputs if key.startswith('image.')])
-        pose = inputs['robot_state.ee_pose']
-        translation = pose[:3]
-        quaternion = pose[3:7]
-        return {
-            'vision': np.array([[1.0, 2.0]], dtype=np.float32),
-            'robot_translation': translation,
-            'robot_quaternion': quaternion,
-            'grip_value': inputs['grip'],
-        }
-
-
-class StubActionDecoder:
-    def __init__(self) -> None:
-        self.last_action: np.ndarray | None = None
-        self.last_inputs: dict[str, object] | None = None
-        self.pose = geom.Transform3D(
-            translation=np.array([0.4, 0.5, 0.6], dtype=np.float32), rotation=geom.Rotation.identity
-        )
-        self.grip = np.array(0.33, dtype=np.float32)
-        self.meta: dict[str, object] = {}
-
-    def decode(self, action: dict[str, object], inputs: dict[str, object]) -> tuple[roboarm.command.CommandType, float]:
-        action_vector = action['action']
-        self.last_action = np.copy(action_vector)
-        self.last_inputs = inputs
-        decoded = np.asarray(action_vector, dtype=np.float32).reshape(-1)
-
-        translation = self.pose.translation
-        if decoded.size >= 3:
-            translation = decoded[:3]
-
-        rotation = self.pose.rotation
-        if decoded.size >= 7:
-            quaternion = decoded[3:7]
-            norm = np.linalg.norm(quaternion)
-            if norm > 0:
-                rotation = geom.Rotation.from_quat(quaternion / norm)
-
-        if decoded.size >= 8:
-            self.grip = np.array(decoded[7], dtype=np.float32)
-        elif decoded.size >= 4:
-            self.grip = np.array(decoded[3], dtype=np.float32)
-
-        self.pose = geom.Transform3D(translation=np.array(translation, dtype=np.float32), rotation=rotation)
-        return (roboarm.command.CartesianPosition(pose=self.pose), float(self.grip))
-
-
 class SpyPolicy:
-    def __init__(self, action: np.ndarray) -> None:
-        self.action = action
+    def __init__(self, command: roboarm.command.CommandType | None = None, target_grip: float = 0.33) -> None:
+        if command is None:
+            pose = Transform3D(translation=np.array([0.4, 0.5, 0.6], dtype=np.float32), rotation=Rotation.identity)
+            command = CartesianPosition(pose=pose)
+        self.command = command
+        self.target_grip = float(target_grip)
         self.last_obs: dict[str, object] | None = None
 
     def select_action(self, obs: dict[str, object]) -> dict[str, object]:
         self.last_obs = obs
-        return {'action': self.action}
+        return {'robot_command': to_wire(self.command), 'target_grip': self.target_grip}
 
     def close(self) -> None:
         """Tests rely on Inference calling policy.close(); provide no-op."""
         return None
 
 
-DEFAULT_STUB_POLICY_ACTION = np.array([[0.4, 0.5, 0.6, 1.0, 0.0, 0.0, 0.0, 0.33]], dtype=np.float32)
-
-
 class StubPolicy:
-    def __init__(self, action: np.ndarray | None = None) -> None:
-        if action is None:
-            action = DEFAULT_STUB_POLICY_ACTION.copy()
-        if action.ndim == 1:
-            action = action[np.newaxis, :]
-        self.action = action
+    """Reusable policy stub for tests.
+
+    Compatible with `positronic.policy.inference.Inference`: returns wire-format robot commands + target grip.
+    """
+
+    def __init__(self, command: roboarm.command.CommandType | None = None, target_grip: float = 0.33) -> None:
+        if command is None:
+            pose = Transform3D(translation=np.array([0.4, 0.5, 0.6], dtype=np.float32), rotation=Rotation.identity)
+            command = CartesianPosition(pose=pose)
+        self.command = command
+        self.target_grip = float(target_grip)
         self.last_obs: dict[str, object] | None = None
         self.observations: list[dict[str, object]] = []
         self.reset_calls = 0
@@ -100,7 +51,7 @@ class StubPolicy:
     def select_action(self, obs: dict[str, object]) -> dict[str, object]:
         self.last_obs = obs
         self.observations.append(obs)
-        return {'action': self.action}
+        return {'robot_command': to_wire(self.command), 'target_grip': self.target_grip}
 
     def reset(self) -> None:
         self.reset_calls += 1
@@ -110,17 +61,9 @@ class StubPolicy:
         return None
 
 
-def make_stub_observation_encoder() -> StubStateEncoder:
-    return StubStateEncoder()
-
-
-def make_stub_action_decoder() -> StubActionDecoder:
-    return StubActionDecoder()
-
-
 class FakeRobotState:
     def __init__(self, translation: np.ndarray, joints: np.ndarray, status: RobotStatus) -> None:
-        self.ee_pose = geom.Transform3D(translation=translation, rotation=geom.Rotation.identity)
+        self.ee_pose = Transform3D(translation=translation, rotation=Rotation.identity)
         self.q = joints
         self.dq = np.zeros_like(joints)
         self.status = status
@@ -153,11 +96,9 @@ def emit_ready_payload(frame_emitter, robot_emitter, grip_emitter, robot_state):
 
 @pytest.mark.timeout(3.0)
 def test_inference_emits_cartesian_move(world, clock):
-    encoder = StubStateEncoder()
-    decoder = StubActionDecoder()
-    policy = SpyPolicy(action=np.array([[0.1, 0.2, 0.3, 0.4]], dtype=np.float32))
-
-    inference = Inference(encoder, decoder, policy, inference_fps=15)
+    pose = Transform3D(translation=np.array([0.4, 0.5, 0.6], dtype=np.float32), rotation=Rotation.identity)
+    policy = SpyPolicy(command=CartesianPosition(pose=pose), target_grip=0.33)
+    inference = Inference(policy, inference_fps=15)
 
     # Wire inference interfaces so we can inspect the produced commands and grip targets.
     frame_em = world.pair(inference.frames['image.cam'])
@@ -181,48 +122,34 @@ def test_inference_emits_cartesian_move(world, clock):
 
     assert policy.last_obs is not None
     obs = policy.last_obs
-    np.testing.assert_allclose(obs['vision'], np.array([[1.0, 2.0]], dtype=np.float32))
-    np.testing.assert_allclose(obs['robot_translation'], robot_state.ee_pose.translation)
-    np.testing.assert_allclose(obs['robot_quaternion'], robot_state.ee_pose.rotation.as_quat)
-    assert obs['grip_value'] == pytest.approx(0.25)
-    assert obs['task'] == 'stack-blocks'
-
-    assert encoder.last_inputs is not None
-    inputs = encoder.last_inputs
-    assert 'image.cam' in inputs
+    assert 'image.cam' in obs
     expected_pose = np.concatenate([robot_state.ee_pose.translation, robot_state.ee_pose.rotation.as_quat])
-    np.testing.assert_allclose(inputs['robot_state.ee_pose'], expected_pose)
-    np.testing.assert_allclose(inputs['robot_state.q'], robot_state.q)
-    np.testing.assert_allclose(inputs['robot_state.dq'], np.zeros_like(robot_state.q))
-
-    assert decoder.last_action is not None
-    assert decoder.last_inputs is not None
-    np.testing.assert_allclose(decoder.last_action, np.array([[0.1, 0.2, 0.3, 0.4]], dtype=np.float32))
-    np.testing.assert_allclose(decoder.last_inputs['robot_state.ee_pose'], expected_pose)
-    np.testing.assert_allclose(decoder.last_inputs['robot_state.q'], robot_state.q)
+    np.testing.assert_allclose(obs['robot_state.ee_pose'], expected_pose)
+    np.testing.assert_allclose(obs['robot_state.q'], robot_state.q)
+    np.testing.assert_allclose(obs['robot_state.dq'], np.zeros_like(robot_state.q))
+    assert obs['grip'] == pytest.approx(0.25)
+    assert obs['task'] == 'stack-blocks'
 
     command_msg = command_rx.read()
     assert command_msg is not None
     command = command_msg.data
     assert isinstance(command, roboarm.command.CartesianPosition)
-    np.testing.assert_allclose(command.pose.translation, decoder.pose.translation)
-    np.testing.assert_allclose(command.pose.rotation.as_quat, decoder.pose.rotation.as_quat)
+    np.testing.assert_allclose(command.pose.translation, pose.translation)
+    np.testing.assert_allclose(command.pose.rotation.as_quat, pose.rotation.as_quat)
 
     grip_msg = grip_rx.read()
     assert grip_msg is not None
-    assert grip_msg.data == pytest.approx(float(decoder.grip))
+    assert grip_msg.data == pytest.approx(0.33)
 
 
 @pytest.mark.timeout(3.0)
 def test_inference_waits_for_complete_inputs(world, clock):
-    encoder = StubStateEncoder()
-    decoder = StubActionDecoder()
-    policy = SpyPolicy(action=np.array([[0.5, 0.6, 0.7, 0.8]], dtype=np.float32))
-
-    inference = Inference(encoder, decoder, policy, inference_fps=15)
+    pose = Transform3D(translation=np.array([0.4, 0.5, 0.6], dtype=np.float32), rotation=Rotation.identity)
+    policy = SpyPolicy(command=CartesianPosition(pose=pose), target_grip=0.33)
+    inference = Inference(policy, inference_fps=15)
 
     # Keep handles to the control system IO so we can drip feed partial data.
-    frame_em = world.pair(inference.frames['cam'])
+    frame_em = world.pair(inference.frames['image.cam'])
     robot_em = world.pair(inference.robot_state)
     grip_em = world.pair(inference.gripper_state)
     command_em = world.pair(inference.command)
@@ -238,11 +165,12 @@ def test_inference_waits_for_complete_inputs(world, clock):
         assert grip_rx.read() is None
         assert policy.last_obs is None
 
-    # First send an empty frame, then the full payload and ensure only the latter produces actions.
+    # First send robot/grip without a frame (inference should block), then the full payload.
     driver = ManualDriver([
         (partial(command_em.emit, InferenceCommand.START(task='dummy-task')), 0.0),
-        (partial(frame_em.emit, pimm.shared_memory.NumpySMAdapter((0, 0, 0), np.uint8)), 0.01),
-        (assert_no_outputs, 0.005),
+        (partial(robot_em.emit, robot_state), 0.01),
+        (partial(grip_em.emit, 0.25), 0.0),
+        (assert_no_outputs, 0.005),  # still missing a frame
         (partial(emit_ready_payload, frame_em, robot_em, grip_em, robot_state), 0.01),
         (None, 0.05),
     ])
@@ -256,12 +184,37 @@ def test_inference_waits_for_complete_inputs(world, clock):
     command_msg = command_rx.read()
     assert command_msg is not None
     assert isinstance(command_msg.data, roboarm.command.CartesianPosition)
-    np.testing.assert_allclose(command_msg.data.pose.translation, decoder.pose.translation)
+    np.testing.assert_allclose(command_msg.data.pose.translation, pose.translation)
 
     grip_msg = grip_rx.read()
     assert grip_msg is not None
-    assert grip_msg.data == pytest.approx(float(decoder.grip))
+    assert grip_msg.data == pytest.approx(0.33)
 
     # Subsequent reads return the last value, so identity equality signals no new messages.
     assert command_rx.read() is command_msg
     assert grip_rx.read() is grip_msg
+
+
+@pytest.mark.timeout(3.0)
+def test_inference_reset_emits_reset_and_calls_policy_reset(world, clock):
+    policy = StubPolicy()
+    inference = Inference(policy, inference_fps=15)
+
+    command_em = world.pair(inference.command)
+    command_rx = world.pair(inference.robot_commands)
+    grip_rx = world.pair(inference.target_grip)
+
+    driver = ManualDriver([(partial(command_em.emit, InferenceCommand.RESET()), 0.0), (None, 0.01)])
+
+    scheduler = world.start([inference, driver])
+    drive_scheduler(scheduler, clock=clock, steps=10)
+
+    cmd_msg = command_rx.read()
+    assert cmd_msg is not None
+    assert isinstance(cmd_msg.data, Reset)
+
+    grip_msg = grip_rx.read()
+    assert grip_msg is not None
+    assert grip_msg.data == pytest.approx(0.0)
+
+    assert policy.reset_calls == 1

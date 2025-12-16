@@ -79,7 +79,7 @@ def parse_episodes(episodes: int | list[int] | str, dataset: Dataset) -> list[in
 
 @cfn.config(
     dataset=positronic.cfg.dataset.local_all,
-    cameras={'image.handcam_left': 'handcam_left_ph', 'image.wrist': 'wrist_cam_ph', 'image.back_view': 'back_view_ph'},
+    cameras={'image.wrist': 'handcam_left_ph', 'image.wrist_2': 'wrist_cam_ph', 'image.exterior': 'back_view_ph'},
     mujoco_model_path=package_assets_path('assets/mujoco/franka_table.xml'),
     loaders=positronic.cfg.simulator.stack_cubes_loaders,
 )

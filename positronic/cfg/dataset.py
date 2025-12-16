@@ -37,7 +37,7 @@ def group(transforms: list[EpisodeTransform]):
     return Group(*transforms)
 
 
-@cfn.config(base=local_all, observation=observation.eepose_mujoco, action=action.absolute_position, task=None)
+@cfn.config(base=local_all, observation=observation.eepose, action=action.absolute_position, task=None)
 def encoded(base, observation, action, task):
     """Load datasets with encoded observation/action and optional task label."""
 

@@ -417,7 +417,7 @@ Each transform is responsible for defining which keys are available in the outpu
 
 - **`Derive(**functions)`**: Create new keys by applying functions to the input episode. Each keyword argument maps an output key to a function `(Episode) -> Signal | Any`.
 - **`Group(*transforms)`**: Apply multiple transforms in parallel to the same input episode and merge their results. If transforms produce overlapping keys, the first transform takes precedence.
-- **`Rename(mapping)`**: Rename episode keys according to a dictionary mapping `new_key -> old_key`. Only renamed keys are included.
+- **`Rename(**mapping)`**: Rename episode keys according to `new_key='old_key'` (output -> input). Only renamed keys are included. For non-identifier keys, pass via dict expansion: `Rename(**{'a.b': 'c.d'})`.
 - **`Identity(*keys)`**: Select specific keys to keep, or pass through the entire episode unchanged if no keys are specified.
 
 Helper callables (used within `Derive`):

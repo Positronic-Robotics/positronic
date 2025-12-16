@@ -14,6 +14,7 @@ from positronic.dataset import Episode, Signal
 from positronic.dataset.local_dataset import load_all_datasets
 from positronic.dataset.transforms import TransformedDataset
 from positronic.dataset.transforms.episode import Concat, Derive, FromValue, Group, Identity, Rename
+from positronic.policy import Policy
 
 from . import dataset, policy
 
@@ -70,7 +71,7 @@ old_to_new = dataset.group.override(
             'robot_state.ee_pose': Concat('robot_position_translation', 'robot_position_quaternion'),
             'task': FromValue('Pick up the green cube and place it on the red cube.'),
         }),
-        Rename({
+        Rename(**{
             'robot_state.q': 'robot_joints',
             'robot_state.dq': 'robot_joints_velocity',
             'image.wrist': 'image.handcam_left',
@@ -90,7 +91,7 @@ pnp_sim = dataset.transform.override(
         dataset.group.override(
             transforms=[
                 Derive(task=FromValue('Pick up objects from the red tote and place them in the green tote.')),
-                Rename({'image.exterior': 'image.back_view'}),
+                Rename(**{'image.exterior': 'image.back_view'}),
                 Identity(),
             ]
         )
@@ -98,17 +99,17 @@ pnp_sim = dataset.transform.override(
 )
 
 droid_openpi_ft = dataset.encoded.override(
-    base=droid_ds, observation=policy.observation.eepose_real, action=policy.action.absolute_position
+    base=droid_ds, observation=policy.observation.eepose, action=policy.action.absolute_position
 )
 sim_stack_openpi_ft = dataset.encoded.override(
-    base=legacy_sim, observation=policy.observation.eepose_real, action=policy.action.absolute_position
+    base=legacy_sim, observation=policy.observation.eepose, action=policy.action.absolute_position
 )
 sim_pnp_openpi_ft = dataset.encoded.override(
-    base=pnp_sim, observation=policy.observation.eepose_real, action=policy.action.absolute_position
+    base=pnp_sim, observation=policy.observation.eepose, action=policy.action.absolute_position
 )
 full_openpi_ft = dataset.encoded.override(
     base=dataset.concat_ds.override(datasets=[droid_ds, legacy_sim, pnp_sim]),
-    observation=policy.observation.eepose_real,
+    observation=policy.observation.eepose,
     action=policy.action.absolute_position,
 )
 
@@ -175,3 +176,10 @@ def sim_metrics():
     return Group(
         Derive(success=success, success_time=success_time, max_stacking_success=max_stacking_success), Identity()
     )
+
+
+@cfn.config(policies=[])
+def real_sampled(policies: list[Policy]):
+    from positronic.policy import SampledPolicy
+
+    return SampledPolicy(*policies)

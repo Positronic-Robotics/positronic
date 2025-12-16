@@ -6,7 +6,7 @@ import tqdm
 import positronic.cfg.simulator
 from positronic.dataset.local_dataset import LocalDataset
 from positronic.inference import main_sim, timed
-from positronic.policy.tests.test_inference import StubPolicy, make_stub_action_decoder, make_stub_observation_encoder
+from positronic.policy.tests.test_inference import StubPolicy
 
 
 # This integration test intentionally exercises the current `main_sim` wiring end-to-end.
@@ -47,11 +47,9 @@ def test_main_sim_emits_commands_and_records_dataset(tmp_path, monkeypatch):
 
     monkeypatch.setattr('positronic.simulator.mujoco.sim.mj.Renderer', FakeRenderer)
 
-    observation_encoder = make_stub_observation_encoder()
-    action_decoder = make_stub_action_decoder()
     policy = StubPolicy()
 
-    camera_dict = {'image.handcam_left': 'handcam_left_ph'}
+    camera_dict = {'image.wrist': 'handcam_left_ph'}
     loaders = positronic.cfg.simulator.stack_cubes_loaders()
     for idx, loader in enumerate(loaders):
         if idx in (2, 4):
@@ -60,8 +58,6 @@ def test_main_sim_emits_commands_and_records_dataset(tmp_path, monkeypatch):
     with pos3.mirror():
         main_sim(
             mujoco_model_path='positronic/assets/mujoco/franka_table.xml',
-            observation_encoder=observation_encoder,
-            action_decoder=action_decoder,
             policy=policy,
             loaders=loaders,
             camera_fps=10,
@@ -78,11 +74,9 @@ def test_main_sim_emits_commands_and_records_dataset(tmp_path, monkeypatch):
     signals = episode.signals
     assert 'robot_commands.pose' in signals
     assert 'target_grip' in signals
+    assert 'image.wrist' in signals
 
-    camera_signals = [name for name in signals if 'handcam_left' in name]
-    assert camera_signals, f'Expected camera signal for handcam_left, found keys: {list(signals)}'
-    camera_signal = signals[camera_signals[0]]
-    camera_samples = list(camera_signal)
+    camera_samples = list(signals['image.wrist'])
     assert camera_samples, 'Camera signal for handcam_left is empty'
     first_image, _ = camera_samples[0]
     assert isinstance(first_image, np.ndarray)
@@ -104,7 +98,6 @@ def test_main_sim_emits_commands_and_records_dataset(tmp_path, monkeypatch):
 
     assert policy.observations, 'Policy did not receive any observations'
     last_obs = policy.observations[-1]
-    assert isinstance(last_obs['vision'], np.ndarray)
-    assert last_obs['vision'].shape[0] == 1
-    assert observation_encoder.last_inputs is not None
-    assert any('handcam_left' in key for key in observation_encoder.last_image_keys)
+    assert isinstance(last_obs['image.wrist'], np.ndarray)
+    assert 'robot_state.ee_pose' in last_obs
+    assert 'task' in last_obs

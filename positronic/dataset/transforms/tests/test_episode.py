@@ -139,8 +139,8 @@ def test_rename_transform(sig_simple):
     ep = EpisodeContainer(data={'s': sig_simple, 'id': 42, 'note': 'test'})
 
     # Rename 's' to 'signal' and 'id' to 'identifier'
-    # Mapping format: new_key -> old_key
-    tf = Rename(mapping={'signal': 's', 'identifier': 'id'})
+    # Mapping format: new_key='old_key'
+    tf = Rename(signal='s', identifier='id')
     renamed = tf(ep)
 
     # Only renamed keys should be present

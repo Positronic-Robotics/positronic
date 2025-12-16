@@ -12,7 +12,7 @@ Positronic datasets must be converted into the LeRobot format to be consumed by 
 ```bash
 docker compose run --rm -v ~/datasets:/data positronic-to-lerobot convert \
   --dataset=@positronic.cfg.dataset.encoded \
-  --dataset.observation=.eepose_mujoco \
+  --dataset.observation=.eepose \
   --dataset.action=.absolute_position \
   --dataset.task='Pick up the green cube and place it on the red cube.' \
   --dataset.base.path=/data/my_raw_data \
