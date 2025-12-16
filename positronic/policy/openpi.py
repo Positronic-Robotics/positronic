@@ -1,6 +1,5 @@
 import time
 from collections import deque
-from collections.abc import Mapping
 from typing import Any
 
 import numpy as np
@@ -19,10 +18,11 @@ class OpenPIRemotePolicy(Policy):
         self.start_time = None
         self.last_log_time = None
 
-    def select_action(self, obs: Mapping[str, Any]) -> dict[str, Any]:
+    def select_action(self, inputs: dict[str, Any]) -> dict[str, Any]:
         if self.start_time is None:
             self.start_time = time.monotonic()
 
+        obs = inputs.copy()
         if len(self.action_queue) == 0:
             if 'task' in obs:
                 obs['prompt'] = obs['task']

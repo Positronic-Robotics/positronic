@@ -1,5 +1,6 @@
 import random
 from abc import ABC, abstractmethod
+from collections.abc import Callable
 from typing import Any
 
 
@@ -23,6 +24,54 @@ class Policy(ABC):
     def close(self):
         """Closes the policy and releases any resources."""
         return None
+
+
+class EncodedPolicy(Policy):
+    """A policy that encodes the observation before selecting an action."""
+
+    def __init__(self, policy: Policy, encoder: Callable[[dict[str, Any]], dict[str, Any]], extra_meta=None):
+        self._policy = policy
+        self._encoder = encoder
+        self._extra_meta = extra_meta or {}
+
+    def select_action(self, obs: dict[str, Any]) -> dict[str, Any]:
+        encoded_obs = self._encoder(obs)
+        return self._policy.select_action(encoded_obs)
+
+    def reset(self):
+        self._policy.reset()
+
+    @property
+    def meta(self) -> dict[str, Any]:
+        return self._policy.meta | self._extra_meta
+
+    def close(self):
+        self._policy.close()
+
+
+class DecodedPolicy(Policy):
+    """A policy that decodes the action after selecting it from the policy."""
+
+    def __init__(
+        self, policy: Policy, decoder: Callable[[dict[str, Any], dict[str, Any]], dict[str, Any]], extra_meta=None
+    ):
+        self._policy = policy
+        self._decoder = decoder
+        self._extra_meta = extra_meta or {}
+
+    def select_action(self, obs: dict[str, Any]) -> dict[str, Any]:
+        action = self._policy.select_action(obs)
+        return self._decoder(action, obs)
+
+    def reset(self):
+        self._policy.reset()
+
+    @property
+    def meta(self) -> dict[str, Any]:
+        return self._policy.meta | self._extra_meta
+
+    def close(self):
+        self._policy.close()
 
 
 class SampledPolicy(Policy):

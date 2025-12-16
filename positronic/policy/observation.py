@@ -47,6 +47,9 @@ class ObservationEncoder(Derive):
 
         obs: dict[str, Any] = {}
 
+        if 'task' in inputs:
+            obs['task'] = inputs['task']
+
         # Encode images
         for out_name, (input_key, (width, height)) in self._image_configs.items():
             if input_key not in inputs:

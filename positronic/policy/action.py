@@ -44,7 +44,7 @@ class ActionDecoder(Derive):
         pass
 
     @abstractmethod
-    def decode(self, action: dict[str, Any], inputs: dict[str, np.ndarray]) -> tuple[command.CommandType, float]:
+    def decode(self, action: dict[str, Any], inputs: dict[str, np.ndarray]) -> dict[str, Any]:
         """Decode action dictionary into a robot command and target grip value.
 
         Args:
@@ -53,8 +53,8 @@ class ActionDecoder(Derive):
             inputs: Dictionary of input signals (e.g., robot state)
 
         Returns:
-            tuple: (robot_command, target_grip) where robot_command is a roboarm.command type
-                   and target_grip is a float
+            dict: Dictionary containing 'robot_command' and 'target_grip' keys
+                   where 'robot_command' is a roboarm.command type and 'target_grip' is a float
         """
         pass
 
@@ -76,11 +76,11 @@ class AbsolutePositionAction(RotationTranslationGripAction):
         pose = transforms.recode_transform(RotRep.QUAT, self.rot_rep, pose)
         return transforms.concat(pose, episode[self.tgt_grip_key], dtype=np.float32)
 
-    def decode(self, action: dict[str, Any], inputs: dict[str, np.ndarray]) -> tuple[command.CommandType, float]:
+    def decode(self, action: dict[str, Any], inputs: dict[str, np.ndarray]) -> dict[str, Any]:
         action_vector = action['action']
         target_pose = geom.Transform3D.from_vector(action_vector[:-1], self.rot_rep)
         target_grip = action_vector[-1].item()
-        return (command.CartesianPosition(pose=target_pose), target_grip)
+        return {'robot_command': command.CartesianPosition(pose=target_pose), 'target_grip': target_grip}
 
 
 class AbsoluteJointsAction(ActionDecoder):
@@ -101,13 +101,13 @@ class AbsoluteJointsAction(ActionDecoder):
         joints = episode[self.tgt_joints_key]
         return transforms.concat(joints, episode[self.tgt_grip_key], dtype=np.float32)
 
-    def decode(self, action_vector: np.ndarray, inputs: dict[str, np.ndarray]) -> tuple[command.CommandType, float]:
+    def decode(self, action_vector: np.ndarray, _inputs: dict[str, np.ndarray]) -> dict[str, Any]:
         if action_vector.shape[-1] != self.num_joints + 1:
             raise ValueError(f'Expected action vector of size {self.num_joints + 1}, got {action_vector.shape[-1]}')
 
         joint_positions = action_vector[: self.num_joints]
         target_grip = action_vector[-1].item()
-        return (command.JointPosition(positions=joint_positions), target_grip)
+        return {'robot_command': command.JointPosition(positions=joint_positions), 'target_grip': target_grip}
 
 
 class RelativeTargetPositionAction(RotationTranslationGripAction):
@@ -144,7 +144,7 @@ class RelativeTargetPositionAction(RotationTranslationGripAction):
 
         return transforms.concat(rotations, translations, grips, dtype=np.float32)
 
-    def decode(self, action: dict[str, Any], inputs: dict[str, np.ndarray]) -> tuple[command.CommandType, float]:
+    def decode(self, action: dict[str, Any], inputs: dict[str, np.ndarray]) -> dict[str, Any]:
         print(action)
         action_vector = action['action']
         rotation = action_vector[: self.rot_rep.size].reshape(self.rot_rep.shape)
@@ -158,7 +158,7 @@ class RelativeTargetPositionAction(RotationTranslationGripAction):
 
         target_pose = geom.Transform3D(translation=tr_add, rotation=rot_mul)
         target_grip = action_vector[self.rot_rep.size + 3].item()
-        return (command.CartesianPosition(pose=target_pose), target_grip)
+        return {'robot_command': command.CartesianPosition(pose=target_pose), 'target_grip': target_grip}
 
 
 class JointDeltaAction(ActionDecoder):
@@ -179,7 +179,7 @@ class JointDeltaAction(ActionDecoder):
     def encode_episode(self, episode: Episode) -> Signal[np.ndarray]:
         raise NotImplementedError('JointVelocityAction is not supposed for training yet')
 
-    def decode(self, action: dict[str, Any], inputs: dict[str, np.ndarray]) -> tuple[command.CommandType, float]:
+    def decode(self, action: dict[str, Any], _inputs: dict[str, np.ndarray]) -> dict[str, Any]:
         action_vector = action['action']
         if action_vector.shape[-1] != self.num_joints + 1:
             raise ValueError(f'Expected action vector of size {self.num_joints + 1}, got {action_vector.shape[-1]}')
@@ -192,17 +192,17 @@ class JointDeltaAction(ActionDecoder):
         if max_vel_norm > 1.0:
             velocities = velocities / max_vel_norm
 
-        return (command.JointDelta(velocities=velocities * self.MAX_JOINT_DELTA), grip)
+        return {'robot_command': command.JointDelta(velocities=velocities * self.MAX_JOINT_DELTA), 'target_grip': grip}
 
 
 class GrootActionDecoder(AbsolutePositionAction):
     def __init__(self):
         super().__init__('fake', 'fake')
 
-    def decode(self, action, inputs):
+    def decode(self, action: dict[str, Any], _inputs: dict[str, np.ndarray]) -> dict[str, Any]:
         target_pose = geom.Transform3D(
             action['action.target_robot_position_translation'],
             geom.Rotation.from_quat(action['action.target_robot_position_quaternion']),
         )
         target_grip = action['action.target_grip'].item()
-        return (command.CartesianPosition(pose=target_pose), target_grip)
+        return {'robot_command': command.CartesianPosition(pose=target_pose), 'target_grip': target_grip}

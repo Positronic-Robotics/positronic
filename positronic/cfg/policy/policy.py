@@ -1,7 +1,10 @@
 import configuronic as cfn
 import pos3
 
+from positronic.policy import Policy
+from positronic.policy.action import ActionDecoder
 from positronic.policy.lerobot import LerobotPolicy
+from positronic.policy.observation import ObservationEncoder
 
 
 @cfn.config(use_temporal_ensembler=False)
@@ -49,6 +52,19 @@ def groot(host: str = 'localhost', port: int = 9000, timeout_ms: int = 15000, n_
     from positronic.policy.gr00t import Gr00tPolicy
 
     return Gr00tPolicy(host, port, timeout_ms, n_action_steps)
+
+
+@cfn.config(observation=None, action=None)
+def wrapped(base: Policy, observation: ObservationEncoder | None, action: ActionDecoder | None):
+    from positronic.policy.base import DecodedPolicy, EncodedPolicy
+
+    if action is not None:
+        meta = {f'action.{k}': v for k, v in action.meta.items()}
+        base = DecodedPolicy(base, action.decode, extra_meta=meta)
+    if observation is not None:
+        meta = {f'observation.{k}': v for k, v in observation.meta.items()}
+        base = EncodedPolicy(base, observation.encode, extra_meta=meta)
+    return base
 
 
 @cfn.config(weights=None)
