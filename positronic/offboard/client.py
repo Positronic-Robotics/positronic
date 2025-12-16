@@ -34,6 +34,9 @@ class InferenceSession:
     def infer(self, obs: dict[str, Any]) -> dict[str, Any]:
         """
         Send an observation and get an action.
+
+        Both `obs` and the returned action must be wire-serializable: plain-data containers and
+        scalars, plus numeric numpy arrays/scalars. Do not pass arbitrary Python objects.
         """
         if self._metadata is None:
             self._metadata = self._handshake()

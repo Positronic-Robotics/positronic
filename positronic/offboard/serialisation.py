@@ -3,6 +3,19 @@ import functools
 import msgpack
 import numpy as np
 
+"""
+Offboard wire serialization helpers.
+
+This protocol intentionally supports only transport-friendly ("wire-serializable") values:
+- built-in scalars: `str`, `int`, `float`, `bool`, `None`
+- containers: `dict` / `list` / `tuple` recursively composed of supported values
+- numeric numpy values: `numpy.ndarray` and `numpy` scalar types
+
+Avoid sending arbitrary Python objects across the wire. If you need to transmit domain objects
+(e.g., robot commands), transmit a plain-data representation (for example a tagged dict) and
+reconstruct objects at the boundary.
+"""
+
 
 def pack_numpy(obj):
     if (isinstance(obj, np.ndarray | np.generic)) and obj.dtype.kind in ('V', 'O', 'c'):

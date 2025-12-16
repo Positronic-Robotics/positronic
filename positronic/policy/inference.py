@@ -115,7 +115,8 @@ class Inference(pimm.ControlSystem):
                 start = time.monotonic()
                 inputs.update(self.context)
                 commands = self.policy.select_action(inputs)
-                roboarm_command, target_grip = commands['robot_command'], commands['target_grip']
+                roboarm_command = roboarm.command.from_wire(commands['robot_command'])
+                target_grip = commands['target_grip']
 
                 duration = time.monotonic() - start
                 if self.simulate_timeout:

@@ -80,7 +80,10 @@ class AbsolutePositionAction(RotationTranslationGripAction):
         action_vector = action['action']
         target_pose = geom.Transform3D.from_vector(action_vector[:-1], self.rot_rep)
         target_grip = action_vector[-1].item()
-        return {'robot_command': command.CartesianPosition(pose=target_pose), 'target_grip': target_grip}
+        return {
+            'robot_command': command.to_wire(command.CartesianPosition(pose=target_pose)),
+            'target_grip': target_grip,
+        }
 
 
 class AbsoluteJointsAction(ActionDecoder):
@@ -107,7 +110,10 @@ class AbsoluteJointsAction(ActionDecoder):
 
         joint_positions = action_vector[: self.num_joints]
         target_grip = action_vector[-1].item()
-        return {'robot_command': command.JointPosition(positions=joint_positions), 'target_grip': target_grip}
+        return {
+            'robot_command': command.to_wire(command.JointPosition(positions=joint_positions)),
+            'target_grip': target_grip,
+        }
 
 
 class RelativeTargetPositionAction(RotationTranslationGripAction):
@@ -158,7 +164,10 @@ class RelativeTargetPositionAction(RotationTranslationGripAction):
 
         target_pose = geom.Transform3D(translation=tr_add, rotation=rot_mul)
         target_grip = action_vector[self.rot_rep.size + 3].item()
-        return {'robot_command': command.CartesianPosition(pose=target_pose), 'target_grip': target_grip}
+        return {
+            'robot_command': command.to_wire(command.CartesianPosition(pose=target_pose)),
+            'target_grip': target_grip,
+        }
 
 
 class JointDeltaAction(ActionDecoder):
@@ -192,7 +201,10 @@ class JointDeltaAction(ActionDecoder):
         if max_vel_norm > 1.0:
             velocities = velocities / max_vel_norm
 
-        return {'robot_command': command.JointDelta(velocities=velocities * self.MAX_JOINT_DELTA), 'target_grip': grip}
+        return {
+            'robot_command': command.to_wire(command.JointDelta(velocities=velocities * self.MAX_JOINT_DELTA)),
+            'target_grip': grip,
+        }
 
 
 class GrootActionDecoder(AbsolutePositionAction):
@@ -205,4 +217,7 @@ class GrootActionDecoder(AbsolutePositionAction):
             geom.Rotation.from_quat(action['action.target_robot_position_quaternion']),
         )
         target_grip = action['action.target_grip'].item()
-        return {'robot_command': command.CartesianPosition(pose=target_pose), 'target_grip': target_grip}
+        return {
+            'robot_command': command.to_wire(command.CartesianPosition(pose=target_pose)),
+            'target_grip': target_grip,
+        }

@@ -9,7 +9,18 @@ class Policy(ABC):
 
     @abstractmethod
     def select_action(self, obs: dict[str, Any]) -> dict[str, Any]:
-        """Computes an action for the given observation."""
+        """Computes an action for the given observation.
+
+        **Plain-data contract**
+        Policies should accept and return only "plain" data structures:
+        - built-in scalars: `str`, `int`, `float`, `bool`, `None`
+        - containers: `dict` / `list` / `tuple` recursively composed of supported values
+        - numeric numpy values: `numpy.ndarray` and `numpy` scalar types
+
+        Avoid returning arbitrary Python objects (custom classes, sockets, file handles, etc.).
+        Keeping inputs/outputs as plain data makes policies easy to compose (wrappers/ensemblers),
+        record/replay, and run in different execution contexts.
+        """
         pass
 
     def reset(self):
