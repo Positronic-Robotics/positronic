@@ -345,7 +345,7 @@ def main(
     reset_cache: bool = False,
     max_resolution: int = 640,
     ep_table_cfg: TableConfig | None = None,
-    group_table: tuple[str, Callable[[list[Any]], dict[str, Any]], TableConfig] | None = None,
+    group_table: tuple[str, Callable[[list[Episode]], dict[str, Any]], TableConfig, dict[str, str]] | None = None,
 ):
     """Visualize a Dataset with Rerun.
 
