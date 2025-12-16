@@ -136,7 +136,10 @@ services:
     volumes:
       - ${CACHE_ROOT:-${HOME}}/.cache:/root/.cache
       - ${CACHE_ROOT:-${HOME}}/.aws:/root/.aws:ro
-      - ${CACHE_ROOT:-${HOME}}/.local/share/uv:/root/.local/share/uv
+      # NOTE: Do NOT mount `/root/.local/share/uv` for gr00t images.
+      # gr00t's `/.venv/bin/python` is a symlink into the image's own uv-managed CPython under
+      # `/root/.local/share/uv/python/...`. Bind-mounting the host uv dir can hide that target and
+      # make `/.venv/bin/python` fail with ENOENT.
 
     # Set HOME inside container to match the mount expectations
     environment:
