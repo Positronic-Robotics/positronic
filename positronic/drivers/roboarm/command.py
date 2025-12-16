@@ -49,7 +49,7 @@ def to_wire(command: CommandType) -> dict[str, Any]:
         case Reset():
             return {'type': command.TYPE}
         case CartesianPosition(pose):
-            return {'type': command.TYPE, 'pose': pose.as_vector(geom.Rotation.Representation.QUAT)}
+            return {'type': command.TYPE, 'pose': pose.as_vector(geom.Rotation.Representation.ROTATION_MATRIX)}
         case JointPosition(positions):
             return {'type': command.TYPE, 'positions': positions}
         case JointDelta(velocities):
@@ -61,7 +61,9 @@ def from_wire(wire: dict[str, Any]) -> CommandType:
         case 'reset':
             return Reset()
         case 'cartesian_pos':
-            return CartesianPosition(pose=geom.Transform3D.from_vector(wire['pose']))
+            return CartesianPosition(
+                pose=geom.Transform3D.from_vector(wire['pose'], geom.Rotation.Representation.ROTATION_MATRIX)
+            )
         case 'joint_pos':
             return JointPosition(positions=wire['positions'])
         case 'joint_delta':

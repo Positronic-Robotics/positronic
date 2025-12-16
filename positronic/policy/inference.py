@@ -7,7 +7,7 @@ from typing import Any
 import pimm
 from positronic.dataset.ds_writer_agent import Serializers
 from positronic.drivers import roboarm
-from positronic.utils import flatten_dict
+from positronic.utils import flatten_dict, frozen_view
 
 
 class InferenceCommandType(Enum):
@@ -114,7 +114,7 @@ class Inference(pimm.ControlSystem):
 
                 start = time.monotonic()
                 inputs.update(self.context)
-                commands = self.policy.select_action(inputs)
+                commands = self.policy.select_action(frozen_view(inputs))
                 roboarm_command = roboarm.command.from_wire(commands['robot_command'])
                 target_grip = commands['target_grip']
 

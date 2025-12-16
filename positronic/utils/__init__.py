@@ -10,6 +10,7 @@ from pathlib import Path
 import yaml
 
 from positronic import __file__ as pkg_init_file
+from positronic.utils.frozen_dict import frozen_keys_dict, frozen_view
 from positronic.utils.git import get_git_diff, get_git_state
 
 

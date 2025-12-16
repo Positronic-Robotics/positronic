@@ -1,4 +1,3 @@
-import collections.abc as cabc
 import logging
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -11,6 +10,7 @@ import pimm
 from positronic import geom
 from positronic.drivers.roboarm import RobotStatus, State
 from positronic.drivers.roboarm.command import CartesianPosition, CommandType, JointDelta, JointPosition, Reset
+from positronic.utils import frozen_keys_dict
 
 from .dataset import DatasetWriter
 from .episode import EpisodeWriter
@@ -169,7 +169,7 @@ class DsWriterAgent(pimm.ControlSystem):
 
     @property
     def inputs(self) -> dict[str, pimm.ControlSystemReceiver[Any]]:
-        return _KeyFrozenMapping(self._inputs)
+        return frozen_keys_dict(self._inputs)
 
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock):
         """Main loop: process commands and append updated inputs to the episode.
@@ -259,40 +259,3 @@ class DsWriterAgent(pimm.ControlSystem):
                 else:
                     logger.warning('Episode not started, ignoring suspend command')
         return ep_writer, ep_counter, suspended
-
-
-class _KeyFrozenMapping(cabc.MutableMapping):
-    """Mapping wrapper that freezes the set of keys but allows updating values.
-
-    Note: The Python stdlib has no built-in mapping that allows mutating
-    values while preventing key additions/removals. `MappingProxyType` makes
-    the entire mapping read-only, which isn't suitable here, so we provide a
-    minimal wrapper to enforce "frozen keys, mutable values".
-
-    - Setting a value for an existing key is allowed and updates the backing dict.
-    - Adding a new key raises TypeError.
-    - Deleting any key raises TypeError.
-    """
-
-    def __init__(self, backing: dict[str, Any]):
-        self._backing = backing
-
-    def __getitem__(self, key):
-        return self._backing[key]
-
-    def __setitem__(self, key, value):
-        if key not in self._backing:
-            raise TypeError('inputs keys are frozen; cannot add new key')
-        self._backing[key] = value
-
-    def __delitem__(self, key):
-        raise TypeError('inputs keys are frozen; cannot delete keys')
-
-    def __iter__(self):
-        return iter(self._backing)
-
-    def __len__(self):
-        return len(self._backing)
-
-    def __repr__(self) -> str:
-        return f'KeyFrozenMapping({self._backing!r})'
