@@ -5,6 +5,8 @@ from pathlib import Path
 import configuronic as cfn
 import pos3
 
+from positronic.utils import get_latest_checkpoint
+
 
 @cfn.config(checkpoint=None, groot_venv_path='/.venv/', port=9000, data_config='oxe_droid')
 def main(checkpoints_dir: str, checkpoint: str | None, port: int, groot_venv_path: str, data_config: str):
@@ -13,18 +15,7 @@ def main(checkpoints_dir: str, checkpoint: str | None, port: int, groot_venv_pat
 
     with pos3.mirror():
         if checkpoint is None:
-            # Find the directories whose names are numeric and pick the maximum
-            checkpoint_nums = []
-            children = []
-            for child in pos3.ls(checkpoints_dir, recursive=False):
-                name = child.rstrip('/').split('/')[-1]
-                children.append(name)
-                if name.startswith('checkpoint-'):
-                    checkpoint_nums.append(int(name[len('checkpoint-') :]))
-            if checkpoint_nums:
-                checkpoint = 'checkpoint-' + str(max(checkpoint_nums))
-            else:
-                raise ValueError(f'No checkpoint found in {checkpoints_dir}. Available files: {children}')
+            checkpoint = get_latest_checkpoint(checkpoints_dir, 'checkpoint-')
         else:
             checkpoint = 'checkpoint-' + str(checkpoint)
 

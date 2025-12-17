@@ -1,3 +1,5 @@
+from functools import partial
+
 import configuronic as cfn
 import pos3
 
@@ -7,6 +9,7 @@ from positronic.policy import Policy
 from positronic.policy.action import ActionDecoder
 from positronic.policy.lerobot import LerobotPolicy
 from positronic.policy.observation import ObservationEncoder
+from positronic.utils import get_latest_checkpoint
 
 
 @cfn.config()
@@ -30,12 +33,18 @@ def wrapped(base: Policy, observation: ObservationEncoder | None, action: Action
     return base
 
 
-@cfn.config(use_temporal_ensembler=False)
-def act(checkpoint_path: str, use_temporal_ensembler: bool, n_action_steps: int | None = None, device=None):
-    def factory():
+@cfn.config(checkpoint=None, use_temporal_ensembler=False)
+def act(
+    checkpoints_dir: str,
+    checkpoint: str | None,
+    use_temporal_ensembler: bool,
+    n_action_steps: int | None = None,
+    device=None,
+):
+    def factory(fully_specified_checkpoint_dir: str):
         from lerobot.policies.act.modeling_act import ACTPolicy, ACTTemporalEnsembler
 
-        policy = ACTPolicy.from_pretrained(pos3.download(checkpoint_path), strict=True)
+        policy = ACTPolicy.from_pretrained(pos3.download(fully_specified_checkpoint_dir), strict=True)
 
         if use_temporal_ensembler:
             policy.config.n_action_steps = 1
@@ -46,7 +55,18 @@ def act(checkpoint_path: str, use_temporal_ensembler: bool, n_action_steps: int 
             policy.config.n_action_steps = n_action_steps
         return policy
 
-    return LerobotPolicy(factory, device, extra_meta={'type': 'act', 'checkpoint_path': checkpoint_path})
+    checkpoints_dir = checkpoints_dir.rstrip('/') + '/checkpoints/'
+    if checkpoint is None:
+        checkpoint = get_latest_checkpoint(checkpoints_dir)
+    else:
+        checkpoint = str(checkpoint).strip('/')
+
+    fully_specified_checkpoint_dir = checkpoints_dir.rstrip('/') + '/' + checkpoint + '/pretrained_model/'
+    return LerobotPolicy(
+        partial(factory, fully_specified_checkpoint_dir),
+        device,
+        extra_meta={'type': 'act', 'checkpoint_path': fully_specified_checkpoint_dir},
+    )
 
 
 @cfn.config()

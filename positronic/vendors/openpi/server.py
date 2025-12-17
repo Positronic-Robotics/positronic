@@ -6,6 +6,8 @@ from pathlib import Path
 import configuronic as cfn
 import pos3
 
+from positronic.utils import get_latest_checkpoint
+
 
 @cfn.config(config_name='pi05_positronic_lowmem', checkpoint=None, port=None, extra_args=[])
 def main(config_name: str, checkpoints_dir: str, checkpoint, port: int, extra_args: list[str]):
@@ -14,17 +16,7 @@ def main(config_name: str, checkpoints_dir: str, checkpoint, port: int, extra_ar
 
     with pos3.mirror():
         if checkpoint is None:
-            # Find the directories whose names are numeric and pick the maximum
-            checkpoint_nums = []
-            for child in pos3.ls(checkpoints_dir, recursive=False):
-                # Remove trailing slash, get the last part
-                name = child.rstrip('/').split('/')[-1]
-                if name.isdigit():
-                    checkpoint_nums.append(int(name))
-            if checkpoint_nums:
-                checkpoint = str(max(checkpoint_nums))
-            else:
-                raise ValueError(f'No checkpoint found in {checkpoints_dir}')
+            checkpoint = get_latest_checkpoint(checkpoints_dir)
         else:
             checkpoint = str(checkpoint)
 
