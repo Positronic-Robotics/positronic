@@ -119,8 +119,8 @@ def sample(origins: list[cfn.Config], weights: list[float] | None):
     return SampledPolicy(*origins, weights=weights)
 
 
-@cfn.config(host='localhost', port=8000)
-def remote(host: str, port: int):
+@cfn.config(host='localhost', port=8000, resize=640)
+def remote(host: str, port: int, resize: int | None = None):
     from positronic.policy.remote import RemotePolicy
 
     return RemotePolicy(host, port)

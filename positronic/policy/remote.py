@@ -1,6 +1,9 @@
 from collections import deque
 from typing import Any
 
+import numpy as np
+from PIL import Image as PilImage
+
 from positronic.offboard.client import InferenceClient, InferenceSession
 from positronic.utils import flatten_dict
 
@@ -13,10 +16,11 @@ class RemotePolicy(Policy):
     Positronic Inference Protocol.
     """
 
-    def __init__(self, host: str, port: int):
+    def __init__(self, host: str, port: int, resize: int | None = None):
         self._client = InferenceClient(host, port)
         self._session: InferenceSession | None = None
         self._action_queue = deque()
+        self._resize = resize
 
     def reset(self):
         """
@@ -25,6 +29,30 @@ class RemotePolicy(Policy):
         self._action_queue.clear()
         self.close()
         self._session = self._client.new_session()
+
+    @staticmethod
+    def _resize_if_needed(image: np.ndarray, max_resolution: int) -> np.ndarray:
+        height, width = image.shape[:2]
+        scale = min(1, max_resolution / max(width, height))
+        max_width, max_height = int(width * scale), int(height * scale)
+
+        # Downscale if needed
+        if width != max_width or height != max_height:
+            new_size = max_width, max_height
+            return np.array(PilImage.fromarray(image).resize(new_size, resample=PilImage.Resampling.BILINEAR))
+        return image
+
+    def _prepare_obs(self, obs: dict[str, Any]) -> dict[str, Any]:
+        if self._resize is None:
+            return obs
+
+        result = {}
+        for key, value in obs.items():
+            if isinstance(value, np.ndarray) and value.ndim == 3 and value.shape[2] == 3:
+                result[key] = self._resize_if_needed(value, self._resize)
+            else:
+                result[key] = value
+        return result
 
     def select_action(self, obs: dict[str, Any]) -> dict[str, Any]:
         """
@@ -35,7 +63,7 @@ class RemotePolicy(Policy):
             self.reset()
 
         if len(self._action_queue) == 0:
-            result = self._session.infer(obs)
+            result = self._session.infer(self._prepare_obs(obs))
             if isinstance(result, list | tuple):
                 self._action_queue.extend(result)
             else:
