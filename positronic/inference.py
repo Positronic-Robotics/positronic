@@ -234,7 +234,7 @@ def main_sim(
 main_sim_cfg = cfn.Config(
     main_sim,
     mujoco_model_path=package_assets_path('assets/mujoco/franka_table.xml'),
-    policy=policy_cfg.wrapped,
+    policy=policy_cfg.placeholder,
     loaders=positronic.cfg.simulator.stack_cubes_loaders,
     camera_fps=15,
     policy_fps=15,
@@ -248,32 +248,8 @@ main_sim_cfg = cfn.Config(
     },
 )
 
-main_sim_openpi_positronic = main_sim_cfg.override(
-    policy=policy_cfg.wrapped.override(
-        policy=policy_cfg.openpi,
-        observation=positronic.cfg.policy.observation.openpi_positronic,
-        action=positronic.cfg.policy.action.absolute_position,
-    )
-)
 
-main_sim_openpi_droid = main_sim_cfg.override(
-    policy=policy_cfg.wrapped.override(
-        base=policy_cfg.droid,
-        observation=positronic.cfg.policy.observation.openpi_droid,
-        action=positronic.cfg.policy.action.joint_delta,
-    ),
-    policy_fps=15,
-)
-
-main_sim_act = main_sim_cfg.override(
-    policy=policy_cfg.wrapped.override(
-        base=policy_cfg.act,
-        observation=positronic.cfg.policy.observation.eepose,
-        action=positronic.cfg.policy.action.absolute_position,
-    )
-)
-
-openpi_droid = cfn.Config(
+droid_setup = cfn.Config(
     main,
     robot_arm=positronic.cfg.hardware.roboarm.franka_droid,
     gripper=positronic.cfg.hardware.gripper.robotiq,
@@ -285,27 +261,9 @@ openpi_droid = cfn.Config(
             view='left', resolution='hd720', fps=30, image_enhancement=True
         ),
     },
-    policy=policy_cfg.wrapped.override(
-        base=policy_cfg.droid,
-        observation=positronic.cfg.policy.observation.openpi_droid,
-        action=positronic.cfg.policy.action.joint_delta,
-    ),
     driver=keyboard,
+    policy=policy_cfg.placeholder,
     policy_fps=15,
-)
-
-openpi_positronic = openpi_droid.override(**{
-    'policy.observation': positronic.cfg.policy.observation.openpi_positronic,
-    'policy.action': positronic.cfg.policy.action.absolute_position,
-})
-
-sim_groot = main_sim_cfg.override(
-    policy=policy_cfg.wrapped.override(
-        base=policy_cfg.groot,
-        observation=positronic.cfg.policy.observation.groot_infer,
-        action=positronic.cfg.policy.action.groot_infer,
-    ),
-    camera_dict={'image.wrist': 'handcam_left_ph', 'image.exterior': 'back_view_ph', 'image.agent_view': 'agentview'},
 )
 
 
@@ -314,38 +272,9 @@ sim_groot = main_sim_cfg.override(
 def _internal_main():
     init_logging()
     cfn.cli({
-        'sim_act': main_sim_act,
-        'sim_openpi_positronic': main_sim_openpi_positronic,
-        'sim_openpi_droid': main_sim_openpi_droid,
-        'sim_groot': sim_groot,
-        'real_openpi_droid': openpi_droid,
-        'real_openpi_positronic': openpi_positronic,
-        'real_act': openpi_positronic.override(**{
-            'policy.base': policy_cfg.act,
-            'policy.observation': positronic.cfg.policy.observation.eepose.override(
-                image_mappings={
-                    'observation.images.wrist': 'image.wrist',
-                    'observation.images.exterior': 'image.exterior',
-                }
-            ),
-            'policy.action': positronic.cfg.policy.action.absolute_position,
-        }),
-        'real_groot': openpi_droid.override(**{
-            'policy.base': policy_cfg.groot,
-            'policy.observation': positronic.cfg.policy.observation.groot_infer,
-            'policy.action': positronic.cfg.policy.action.groot_infer,
-        }),
-        'sim_pnp_act': main_sim_act.override(
-            loaders=positronic.cfg.simulator.multi_tote_loaders,
-            observers={},
-            **{'driver.task': 'Pick up objects from the red tote and place them in the green tote'},
-        ),
-        'sim_pnp_openpi': main_sim_openpi_positronic.override(
-            loaders=positronic.cfg.simulator.multi_tote_loaders,
-            observers={},
-            **{'driver.task': 'Pick up objects from the red tote and place them in the green tote'},
-        ),
-        'sim_pnp_groot': sim_groot.override(
+        'sim': main_sim_cfg,
+        'real': droid_setup,
+        'sim_pnp': main_sim_cfg.override(
             loaders=positronic.cfg.simulator.multi_tote_loaders,
             observers={},
             **{'driver.task': 'Pick up objects from the red tote and place them in the green tote'},
