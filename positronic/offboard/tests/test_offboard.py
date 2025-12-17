@@ -1,4 +1,7 @@
+from types import MappingProxyType
+
 from positronic.offboard.client import InferenceClient
+from positronic.offboard.serialisation import deserialise, serialise
 
 
 def test_inference_client_connect_and_infer(inference_server, mock_policy):
@@ -35,3 +38,14 @@ def test_inference_client_reset(inference_server, mock_policy):
     session.close()
 
     assert mock_policy.reset.call_count == 2
+
+
+def test_wire_serialisation_accepts_mappingproxy():
+    backing = {'a': 1, 'b': {'c': 2}}
+    frozen = MappingProxyType(backing)
+    payload = {'obs': frozen}
+
+    round_trip = deserialise(serialise(payload))
+
+    # mappingproxy is normalized to a plain dict for the wire.
+    assert round_trip == {'obs': {'a': 1, 'b': {'c': 2}}}

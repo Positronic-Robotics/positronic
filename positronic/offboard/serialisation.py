@@ -1,3 +1,4 @@
+import collections.abc as cabc
 import functools
 
 import msgpack
@@ -18,6 +19,12 @@ reconstruct objects at the boundary.
 
 
 def pack_numpy(obj):
+    # Accept any Mapping (e.g. MappingProxyType) and normalize to a plain dict
+    # before msgpack sees it. This keeps internal "frozen view" protections
+    # while ensuring the wire format stays transport-friendly.
+    if isinstance(obj, cabc.Mapping):
+        return dict(obj)
+
     if (isinstance(obj, np.ndarray | np.generic)) and obj.dtype.kind in ('V', 'O', 'c'):
         raise ValueError(f'Unsupported dtype: {obj.dtype}')
 
