@@ -14,7 +14,6 @@ from positronic.dataset import Episode, Signal
 from positronic.dataset.local_dataset import load_all_datasets
 from positronic.dataset.transforms import TransformedDataset
 from positronic.dataset.transforms.episode import Concat, Derive, FromValue, Group, Identity, Rename
-from positronic.policy import Policy
 
 from . import dataset, policy
 
@@ -178,8 +177,19 @@ def sim_metrics():
     )
 
 
-@cfn.config(policies=[])
-def real_sampled(policies: list[Policy]):
-    from positronic.policy import SampledPolicy
+act_latest = policy.policy.act_absolute.override(**{
+    'base.checkpoints_dir': 's3://checkpoints/full_ft/act/021225/',
+    'base.n_action_steps': 15,
+})
+act_q_latest = policy.policy.act_absolute.override(**{
+    'base.checkpoints_dir': 's3://checkpoints/full_ft_q/act/031225/',
+    'observation': policy.observation.eepose_q,
+    'base.n_action_steps': 15,
+})
+openpi = policy.policy.openpi_positronic.copy()
+openpi_q = openpi.override(observation=policy.observation.openpi_eeq)
 
-    return SampledPolicy(*policies)
+groot = policy.policy.groot_ee.copy()
+groot_q = policy.policy.groot_ee_q.copy()
+
+sample = policy.policy.sample.copy()
