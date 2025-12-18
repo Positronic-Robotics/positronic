@@ -22,15 +22,20 @@ def placeholder():
 
 @cfn.config(observation=None, action=None)
 def wrapped(base: Policy, observation: ObservationEncoder | None, action: ActionDecoder | None):
-    from positronic.policy.base import DecodedPolicy, EncodedPolicy
+    from positronic.policy.base import DecodedEncodedPolicy
 
+    extra_meta: dict[str, object] = {}
     if action is not None:
-        meta = {f'action.{k}': v for k, v in action.meta.items()}
-        base = DecodedPolicy(base, action.decode, extra_meta=meta)
+        extra_meta |= {f'action.{k}': v for k, v in action.meta.items()}
     if observation is not None:
-        meta = {f'observation.{k}': v for k, v in observation.meta.items()}
-        base = EncodedPolicy(base, observation.encode, extra_meta=meta)
-    return base
+        extra_meta |= {f'observation.{k}': v for k, v in observation.meta.items()}
+
+    return DecodedEncodedPolicy(
+        base,
+        encoder=None if observation is None else observation.encode,
+        decoder=None if action is None else action.decode,
+        extra_meta=extra_meta,
+    )
 
 
 @cfn.config(checkpoint=None, use_temporal_ensembler=False)

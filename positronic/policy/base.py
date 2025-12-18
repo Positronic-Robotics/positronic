@@ -37,42 +37,38 @@ class Policy(ABC):
         return None
 
 
-class EncodedPolicy(Policy):
-    """A policy that encodes the observation before selecting an action."""
+class DecodedEncodedPolicy(Policy):
+    """A policy wrapper that optionally encodes observations and decodes actions.
 
-    def __init__(self, policy: Policy, encoder: Callable[[dict[str, Any]], dict[str, Any]], extra_meta=None):
-        self._policy = policy
-        self._encoder = encoder
-        self._extra_meta = extra_meta or {}
-
-    def select_action(self, obs: dict[str, Any]) -> dict[str, Any]:
-        encoded_obs = self._encoder(obs)
-        return self._policy.select_action(encoded_obs)
-
-    def reset(self):
-        self._policy.reset()
-
-    @property
-    def meta(self) -> dict[str, Any]:
-        return self._policy.meta | self._extra_meta
-
-    def close(self):
-        self._policy.close()
-
-
-class DecodedPolicy(Policy):
-    """A policy that decodes the action after selecting it from the policy."""
+    **Important**: `decoder(action, obs)` is called with original observation.
+    """
 
     def __init__(
-        self, policy: Policy, decoder: Callable[[dict[str, Any], dict[str, Any]], dict[str, Any]], extra_meta=None
+        self,
+        policy: Policy,
+        encoder: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
+        decoder: Callable[[dict[str, Any], dict[str, Any]], dict[str, Any]] | None = None,
+        extra_meta=None,
     ):
         self._policy = policy
+        self._encoder = encoder
         self._decoder = decoder
         self._extra_meta = extra_meta or {}
 
+    def _encode(self, obs: dict[str, Any]) -> dict[str, Any]:
+        if self._encoder:
+            return self._encoder(obs)
+        return obs
+
+    def _decode(self, action: dict[str, Any], obs: dict[str, Any]) -> dict[str, Any]:
+        if self._decoder:
+            return self._decoder(action, obs)
+        return action
+
     def select_action(self, obs: dict[str, Any]) -> dict[str, Any]:
-        action = self._policy.select_action(obs)
-        return self._decoder(action, obs)
+        encoded_obs = self._encode(obs)
+        action = self._policy.select_action(encoded_obs)
+        return self._decode(action, obs)
 
     def reset(self):
         self._policy.reset()
