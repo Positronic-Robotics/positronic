@@ -93,7 +93,9 @@ class SampledPolicy(Policy):
         self._current_policy = self._select_policy()
 
     def _select_policy(self) -> Policy:
-        return random.choices(self._policies, self._weights)[0]
+        index = random.choices(range(len(self._policies)), self._weights)[0]
+        print(f'>>>> {index} out of {self._weights} <<<<')
+        return self._policies[index]
 
     def select_action(self, obs: dict[str, Any]) -> dict[str, Any] | list[dict[str, Any]]:
         return self._current_policy.select_action(obs)
@@ -106,4 +108,5 @@ class SampledPolicy(Policy):
     @property
     def meta(self) -> dict[str, Any]:
         """Returns the metadata of the currently active sub-policy."""
+        print(f'++++ {self._current_policy.meta} ++++')
         return self._current_policy.meta

@@ -2,12 +2,12 @@ import random
 
 import configuronic as cfn
 import numpy as np
+import pos3
 
 import pimm
 from positronic import geom
 from positronic.dataset.ds_writer_agent import DsWriterAgent, DsWriterCommand, Serializers, TimeMode
 from positronic.dataset.local_dataset import LocalDatasetWriter
-from positronic.utils import s3 as pos3
 
 # --- Metadata Templates ---
 
@@ -61,6 +61,11 @@ TASKS = [
 
 META_MAP = {'act': ACT_META, 'openpi': OPENPI_META, 'groot': GROOT_META}
 
+# Fake eval outcomes (kept in sync with UI options in `positronic/gui/eval.py`)
+FAILURE_OUTCOMES = ('Fail', 'Stalled', 'Ran out of time', 'Safety', 'System')
+# Weights are relative probabilities when an episode is not a success.
+FAILURE_OUTCOME_WEIGHTS = (0.25, 0.35, 0.20, 0.10, 0.10)
+
 
 class FakeGenerator(pimm.ControlSystem):
     def __init__(
@@ -109,10 +114,12 @@ class FakeGenerator(pimm.ControlSystem):
                 successful_items = total_items
                 notes = ''
             else:
-                # Randomly choose a failure mode
-                outcome = random.choices(['Stalled', 'Ran out of time', 'Safety', 'System'], [0.5, 0.3, 0.1, 0.1])[0]
+                # Randomly choose a failure mode (includes explicit "Fail")
+                outcome = random.choices(FAILURE_OUTCOMES, FAILURE_OUTCOME_WEIGHTS)[0]
                 successful_items = random.randint(0, total_items - 1)
-                if outcome == 'Stalled':
+                if outcome == 'Fail':
+                    notes = 'Task failed'
+                elif outcome == 'Stalled':
                     notes = 'Robot stalled'
                 elif outcome == 'Safety':
                     notes = 'Safety violation'

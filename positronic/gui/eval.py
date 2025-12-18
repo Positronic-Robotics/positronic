@@ -101,6 +101,12 @@ class EvalUI(pimm.ControlSystem):
                 dpg.add_theme_color(dpg.mvThemeCol_ButtonHovered, (170, 0, 0))
                 dpg.add_theme_color(dpg.mvThemeCol_ButtonActive, (130, 0, 0))
 
+        with dpg.theme(tag='fail_theme'):
+            with dpg.theme_component(dpg.mvButton):
+                dpg.add_theme_color(dpg.mvThemeCol_Button, (170, 60, 0))
+                dpg.add_theme_color(dpg.mvThemeCol_ButtonHovered, (190, 70, 0))
+                dpg.add_theme_color(dpg.mvThemeCol_ButtonActive, (150, 55, 0))
+
         with dpg.theme(tag='system_theme'):
             with dpg.theme_component(dpg.mvButton):
                 dpg.add_theme_color(dpg.mvThemeCol_Button, (80, 80, 80))
@@ -122,6 +128,13 @@ class EvalUI(pimm.ControlSystem):
             )
             dpg.bind_item_theme(btn_finished, 'finished_theme')
             self._register(btn_finished, [State.RUNNING])
+
+            dpg.add_spacer(width=self.size(5))
+            btn_fail = dpg.add_button(
+                label='Fail', callback=lambda: self.stop_run('Fail'), width=self.size(80), height=self.size(32)
+            )
+            dpg.bind_item_theme(btn_fail, 'fail_theme')
+            self._register(btn_fail, [State.RUNNING])
 
             dpg.add_spacer(width=self.size(5))
             btn_stall = dpg.add_button(
@@ -169,7 +182,10 @@ class EvalUI(pimm.ControlSystem):
                 self._register(
                     dpg.add_input_int(
                         label='Total items',
+                        default_value=1,
                         step=1,
+                        min_value=1,
+                        min_clamped=True,
                         width=self.size(100),
                         tag='total_items_input',
                         callback=self.validate_items_callback,
@@ -181,7 +197,10 @@ class EvalUI(pimm.ControlSystem):
                 self._register(
                     dpg.add_input_int(
                         label='Successful items',
+                        default_value=0,
                         step=1,
+                        min_value=0,
+                        min_clamped=True,
                         width=self.size(100),
                         tag='successful_items_input',
                         callback=self.validate_items_callback,
@@ -226,7 +245,7 @@ class EvalUI(pimm.ControlSystem):
         dpg.add_text('Outcome')
         self._register(
             dpg.add_radio_button(
-                items=['Success', 'Stalled', 'Ran out of time', 'Safety', 'System'],
+                items=['Success', 'Fail', 'Stalled', 'Ran out of time', 'Safety', 'System'],
                 default_value='Success',
                 tag='outcome_radio',
             ),
@@ -415,6 +434,14 @@ class EvalUI(pimm.ControlSystem):
     def validate_items_callback(self, sender, app_data):
         total = dpg.get_value('total_items_input')
         successful = dpg.get_value('successful_items_input')
+
+        if total < 1:
+            total = 1
+            dpg.set_value('total_items_input', total)
+
+        if successful < 0:
+            successful = 0
+            dpg.set_value('successful_items_input', successful)
 
         if successful > total:
             dpg.set_value('successful_items_input', total)
