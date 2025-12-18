@@ -123,4 +123,4 @@ def sample(origins: list[cfn.Config], weights: list[float] | None):
 def remote(host: str, port: int, resize: int | None = None):
     from positronic.policy.remote import RemotePolicy
 
-    return RemotePolicy(host, port)
+    return RemotePolicy(host, port, resize)

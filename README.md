@@ -287,14 +287,18 @@ Replay checkpoints through the [Inference script](positronic/inference.py) to te
 Run the trained policy in MuJoCo, record diagnostics, and optionally stream a GUI:
 
 ```bash
-positronic-inference sim_act \
-    --policy.checkpoint_path=~/datasets/lerobot/stack_cubes/checkpoints/last/pretrained_model \
+positronic-inference sim \
+    --policy=@positronic.cfg.policy.policy.act_absolute \
+    --policy.base.checkpoints_dir=~/datasets/lerobot/stack_cubes/runs/outputs/train/<run_id> \
+    --policy.base.checkpoint=<checkpoint_id> \
     --driver.simulation_time=60 \
     --driver.show_gui=True \
     --output_dir=~/datasets/inference_logs/stack_cubes_act
 ```
 
-S3 inputs/outputs: `--policy.checkpoint_path` and `--output_dir` can point at S3; artifacts are downloaded to a cache and results synced back automatically.
+Notes:
+- `--policy.base.checkpoint` is optional; if omitted, Positronic will load the latest available checkpoint under `.../checkpoints/`.
+- S3 inputs/outputs: `--policy.base.checkpoints_dir` and `--output_dir` can point at S3; artifacts are downloaded to a cache and results synced back automatically.
 
 The [Inference script](positronic/inference.py) wires the MuJoCo scene, [Observation encoders](positronic/cfg/policy/observation.py), and [Action decoder](positronic/cfg/policy/action.py). Passing `--output_dir` enables another `DsWriterAgent` so the run can be replayed in the dataset viewer.
 
@@ -365,12 +369,12 @@ Our plans evolve with your feedback. Highlights for the next milestones:
 
 - **Delivered**
   - **Policy presets for $\pi_{0.5}$ and GR00T.** We have shipped full support for both architectures (see [Supported Foundation Models](#supported-foundation-models)).
+  - **Remote inference primitives.** Run policies on a different machine via remote policy wrappers and inference servers.
 - **Short term**
   - **Automated evaluation harness.** Extend [Inference script](positronic/inference.py) and the MuJoCo loaders in [MuJoCo transform helpers](positronic/simulator/mujoco/transforms.py) to score new checkpoints automatically on curated scenarios.
   - **Richer Positronic Server.** Teach [Positronic Server](positronic/server/positronic_server.py) to surface static/meta fields, and offer annotation + filtering flows for rapid triage.
   - **PyTorch bridging layer.** Provide a native adapter on top of [Positronic dataset library](positronic/dataset/README.md) so training scripts can stream tensors without an intermediate export.
   - **Direct LeRobot integration.** Let [LeRobot training driver](positronic/training/lerobot_train.py) read Positronic datasets directly, retiring the temporary [LeRobot conversion helper](positronic/training/to_lerobot.py) conversion.
-  - **Remote inference primitives.** Add network-friendly transports to [Inference script](positronic/inference.py) so policies can live on a different machine than the robot.
 - **Medium term**
   - **SO101 leader support.** Promote SO101 from follower mode to a first-class leader arm in [Hardware configs](positronic/cfg/hardware).
   - **New operator inputs.** Ship keyboard and gamepad controllers inside [Drivers package](positronic/drivers) for quick teleop on commodity hardware.

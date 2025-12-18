@@ -4,6 +4,8 @@ This guide details the end-to-end workflow for training and deploying GR00T mode
 
 > All `docker compose` commands below assume you are in the [`docker`](https://github.com/Positronic-Robotics/positronic/tree/main/docker) directory (`cd docker`)
 
+> Note: if you customize compose volumes, **do not bind-mount** host `~/.local/share/uv` into `/root/.local/share/uv` for GR00T containers. The GR00T image may rely on uv-managed CPython inside the image, and the bind mount can hide that path and break `/.venv/bin/python` with `ENOENT`.
+
 ## 1. Prepare Data
 
 Positronic datasets must be converted into the LeRobot format to be consumed by the GR00T training pipeline. Use the `positronic-to-lerobot` service for this conversion.

@@ -41,8 +41,12 @@ class InferenceSession:
         if self._metadata is None:
             self._metadata = self._handshake()
 
-        self._websocket.send(serialise(obs))
+        serialised = serialise(obs)
+        logger.debug('Size of serialised obs: %1.f KiB', len(serialised) / 1024)
+
+        self._websocket.send(serialised)
         response = deserialise(self._websocket.recv())
+        logger.debug('Size of deserialised response: %1.f KiB', len(response) / 1024)
 
         if isinstance(response, dict) and 'error' in response:
             raise RuntimeError(f'Server error: {response["error"]}')

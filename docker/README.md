@@ -39,3 +39,8 @@ Now you are ready to build our Docker.
 ```bash
 docker/build.sh
 ```
+
+## GR00T containers: uv mount caveat
+
+If you customize `docker-compose.yml` volumes, **do not bind-mount** your host `~/.local/share/uv` into `/root/.local/share/uv` for `positro/gr00t` images.
+GR00T's `/.venv/bin/python` can be a symlink into the image's own uv-managed CPython under `/root/.local/share/uv/python/...`, and the bind mount can hide that target and cause `/.venv/bin/python` to fail with `ENOENT`.
