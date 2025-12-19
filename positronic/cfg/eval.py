@@ -27,29 +27,30 @@ def model(ep: Episode) -> str:
             return 'Open PI 0.5'
 
 
-def ckpt(ep: Episode) -> str:
-    match ep['inference.policy.type']:
-        case 'act':
-            path = ep['inference.policy.checkpoint_path']
-            path = path.split('/checkpoints/', 1)[1]
-            # Path to ckpt id: full_ft_q/act/031225/checkpoints/300000/pretrained_model/ -> full_ft_q–031225–300000
-            parts = path.split('/')
-            if len(parts) >= 5:
-                path = f'{parts[0]}–{parts[2]}–{parts[4]}'
-            return path
-        case 'groot':
-            raise NotImplementedError('Gr00t is not supported yet')
-        case 'openpi':
-            if 'inference.policy.checkpoint_path' in ep:
-                path = ep['inference.policy.checkpoint_path']
-            else:
-                path = ep['inference.policy.server.directory']
-            path = path.split('/checkpoints/', 1)[1]
-            # Transform path to ckpt id: full_ft/openpi/pi05_positronic_lowmem/061025/119999 -> full_ft–061025–119999
-            parts = path.split('/')
-            if len(parts) >= 3:
-                path = f'{parts[0]}–{parts[-2]}–{parts[-1]}'
-            return path
+def ckpt(ep: Episode) -> str | None:
+    try:
+        match ep['inference.policy.type']:
+            case 'act':
+                path = ep['inference.policy.checkpoint_path'].split('/checkpoints/', 1)[1]
+                # Path to ckpt id: full_ft_q/act/031225/checkpoints/300000/pretrained_model/ -> full_ft_q\031225\300000
+                parts = path.split('/')
+                if len(parts) >= 5:
+                    path = f'{parts[0]}\\{parts[2]}\\{parts[4]}'
+                return path
+            case 'openpi':
+                if 'inference.policy.checkpoint_path' in ep:
+                    path = ep['inference.policy.checkpoint_path']
+                else:
+                    path = ep['inference.policy.server.directory']
+                path = path.split('/checkpoints/', 1)[1]
+                # Path to ckpt id: full_ft/openpi/pi05_positronic_lowmem/061025/119999 -> full_ft\061025\119999
+                parts = path.split('/')
+                if len(parts) >= 3:
+                    path = f'{parts[0]}\\{parts[-2]}\\{parts[-1]}'
+                return path
+        return ''
+    except Exception:
+        return ''
 
 
 def units(ep: Episode) -> str:
@@ -115,9 +116,13 @@ def eval_table():
     }
 
 
+LABELS = {'model': 'Model', 'task_code': 'Task', 'checkpoint': 'Checkpoint'}
+
+
 @cfn.config()
-def model_task_table():
-    group_key = 'model', 'task_code', 'checkpoint'
+def grouped_table(group_keys: tuple[str, ...] | str):
+    if isinstance(group_keys, str):
+        group_keys = (group_keys,)
 
     def group_fn(episodes: list[Episode]):
         duration, suc_items, total_items, assists = 0, 0, 0, 0
@@ -127,28 +132,41 @@ def model_task_table():
             total_items += ep['eval.total_items']
             assists += ep['eval.outcome'] != 'Success'
 
-        return {
-            'model': episodes[0]['model'],
-            'task_code': episodes[0]['task_code'],
-            'checkpoint': episodes[0]['checkpoint'],
+        result = {key: episodes[0][key] for key in group_keys}
+        result.update({
             'UPH': suc_items / (duration / 3600),
             'Success': 100 * suc_items / total_items,
             'MTBF/A': (duration / assists) if assists > 0 else None,
             'Assists': assists,
             'count': len(episodes),
-        }
+        })
+        return result
 
-    format_table = {
-        'model': {'label': 'Model'},
-        'task_code': {'label': 'Task'},
-        'checkpoint': {'label': 'Checkpoint'},
+    format_table = {**{key: {'label': LABELS[key]} for key in group_keys}}
+    format_table.update({
         'count': {'label': 'Count'},
         'UPH': {'format': '%.1f'},
         'Success': {'format': '%.2f%%'},
         'MTBF/A': {'format': '%.1f sec', 'default': '-'},
         'Assists': {'format': '%d'},
-    }
+    })
 
-    group_filter_keys = {'model': 'Model', 'task_code': 'Task'}
+    group_filter_keys = {key: LABELS[key] for key in group_keys}
+    return group_keys, group_fn, format_table, group_filter_keys
 
-    return group_key, group_fn, format_table, group_filter_keys
+
+# Set of group configurations for evaluation server:
+# uv run positronic-server \
+#   --dataset=@positronic.cfg.eval.ds \
+#   --dataset.base.path /Users/vertix/.cache/positronic/s3/inference/real/191225/ \
+#   --port=5001 \
+#   --ep_table_cfg=@positronic.cfg.eval.eval_table \
+#   --group_tables.models=@positronic.cfg.eval.model_table \
+#   --group_tables.model_task=@positronic.cfg.eval.model_task_table \
+#   --group_tables.model_ckpt_task=@positronic.cfg.eval.model_chkpt_task_table \
+#   --group_tables.model_ckpt=@positronic.cfg.eval.model_chkpt_table
+
+model_table = grouped_table.override(group_keys='model')
+model_task_table = grouped_table.override(group_keys=('model', 'task_code'))
+model_chkpt_table = grouped_table.override(group_keys=('model', 'checkpoint'))
+model_chkpt_task_table = grouped_table.override(group_keys=('model', 'checkpoint', 'task_code'))

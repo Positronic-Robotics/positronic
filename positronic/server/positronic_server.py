@@ -37,6 +37,7 @@ app_state: dict[str, object] = {
     'cache_dir': '',
     'episode_keys': {},
     'max_resolution': 640,
+    'group_tables_cfg': {},
 }
 
 
@@ -184,14 +185,18 @@ async def api_episodes():
 
 
 def _group_id(episode: Episode, group_keys: tuple[str, ...]) -> tuple[Any, ...]:
-    return tuple(episode.static[k] for k in group_keys)
+    return tuple(episode.static.get(k) for k in group_keys)
 
 
-@app.get('/api/groups')
+@app.get('/api/groups/{suffix}')
 @require_dataset
-async def api_groups(request: Request):
+async def api_groups(request: Request, suffix: str):
     ds = app_state.get('dataset')
-    group_keys, group_fn, format_table, group_filter_keys = app_state.get('group_table_cfg')
+    group_tables = app_state.get('group_tables_cfg', {})
+    if not isinstance(group_tables, dict) or suffix not in group_tables:
+        raise HTTPException(status_code=404, detail=f'Group configuration "{suffix}" not found')
+
+    group_keys, group_fn, format_table, group_filter_keys = group_tables[suffix]
     if isinstance(group_keys, str):
         group_keys = (group_keys,)
 
@@ -227,10 +232,10 @@ async def api_groups(request: Request):
     return {'columns': columns, 'episodes': episodes, 'group_filters': group_filters}
 
 
-@app.get('/grouped', response_class=HTMLResponse)
-async def grouped_view(request: Request):
+@app.get('/groups/{suffix}', response_class=HTMLResponse)
+async def grouped_view(request: Request, suffix: str):
     return templates.TemplateResponse(
-        'grouped.html', {'request': request, 'repo_id': app_state['root'], 'api_endpoint': '/api/groups'}
+        'grouped.html', {'request': request, 'repo_id': app_state['root'], 'api_endpoint': f'/api/groups/{suffix}'}
     )
 
 
@@ -322,7 +327,9 @@ def model_perf_table():
     return group_key, group_fn, format_table, group_filter_keys
 
 
-@cfn.config(dataset=positronic.cfg.dataset.local_all, ep_table_cfg=default_table, group_table=model_perf_table)
+@cfn.config(
+    dataset=positronic.cfg.dataset.local_all, ep_table_cfg=default_table, group_tables={'models': model_perf_table}
+)
 def main(
     dataset: Dataset,
     cache_dir: str = os.path.expanduser('~/.cache/positronic/server/'),
@@ -332,7 +339,7 @@ def main(
     reset_cache: bool = False,
     max_resolution: int = 640,
     ep_table_cfg: TableConfig | None = None,
-    group_table: tuple[tuple[str, ...], Callable, TableConfig, dict[str, str]] | None = None,
+    group_tables: dict[str, tuple[tuple[str, ...], Callable, TableConfig, dict[str, str]]] | None = None,
 ):
     """Visualize a Dataset with Rerun.
 
@@ -382,7 +389,7 @@ def main(
     app_state['cache_dir'] = cache_dir
     app_state['loading_state'] = True
     app_state['episode_table_cfg'] = ep_table_cfg or {}
-    app_state['group_table_cfg'] = group_table
+    app_state['group_tables_cfg'] = group_tables or {}
     app_state['max_resolution'] = max_resolution
 
     if reset_cache and os.path.exists(cache_dir):
