@@ -4,6 +4,7 @@ import heapq
 import logging
 import multiprocessing as mp
 import multiprocessing.shared_memory
+import os
 import sys
 import time
 import traceback
@@ -433,13 +434,20 @@ class World:
     """Utility class to bind and run control loops."""
 
     def __init__(self, clock: Clock | None = None):
+        # Enforce "spawn" multiprocessing context. This makes process boundaries explicit:
+        # background control systems must be picklable, and fork-only implicit state sharing
+        # is disallowed (catching many cross-process foot-guns early).
+        self._mp_ctx = mp.get_context('spawn')
+
         # TODO: stop_signal should be a shared variable, since we should be able to track if background
         # processes are still running
         self._clock = clock or SystemClock()
 
-        self._stop_event = mp.Event()
+        self._stop_event = self._mp_ctx.Event()
         self.background_processes = []
-        self._manager = mp.Manager()
+        # Use a spawn-context manager so queues/values behave synchronously even
+        # when used in a single process (tests rely on immediate read after emit).
+        self._manager = self._mp_ctx.Manager()
         self._cleanup_emitters_readers = []
         self.entered = False
         self._connections = []
@@ -688,10 +696,22 @@ class World:
             else:
                 name = getattr(bg_loop, '__name__', 'anonymous')
             # TODO: now we allow only real clock, change clock to a Emitter?
-            p = mp.Process(
+            p = self._mp_ctx.Process(
                 target=_bg_wrapper, args=(bg_loop, self._stop_event, SystemClock(), name), daemon=True, name=name
             )
-            p.start()
+            try:
+                p.start()
+            except Exception as e:
+                # With spawn, starting a subprocess requires all arguments (incl. bg_loop)
+                # to be picklable. Provide a clearer error than "can't pickle local object".
+                raise RuntimeError(
+                    f'Failed to spawn background process for {name!r}. '
+                    f'Current pid={os.getpid()}. '
+                    'Background control systems must be picklable under spawn. '
+                    'If you captured closures, lambdas, bound methods with non-picklable state, '
+                    'or hold OS resources (e.g. sockets/GUI handles), refactor to construct them '
+                    'inside the background process or run them in the main process.'
+                ) from e
             self.background_processes.append(p)
             logging.info(f'Started background process {name} (pid {p.pid})')
 

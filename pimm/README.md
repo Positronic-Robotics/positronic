@@ -68,6 +68,10 @@ things happened under the hood:
 - `world.connect(...)` recorded that the sensor feeds the logger. Later, `world.start`
   noticed they run in different processes (the sensor goes to the background) and
   automatically chose a multiprocessing queue for that connection.
+- Background control systems are spawned using Python's **spawn** multiprocessing
+  context. This makes process boundaries explicit and helps catch "it worked under
+  fork" foot-guns, but it also means background control systems (and anything they
+  capture) must be **picklable**.
 - The loop returned by `world.start(...)` schedules the logger in the main process
   and forwards `Sleep` values so you can decide how to wait (here we simply
   `time.sleep`).
@@ -189,9 +193,10 @@ The `World` runtime plays three roles:
    `receiver_wrapper` hooks let you decorate signals (rate limiting, logging,
    transforms) at bind time.
 2. **Scheduler.** `world.start(main, background=None)` starts the chosen control
-   systems, spawns background ones in daemon processes, and returns an iterator of
-   `Sleep` commands for the main-process group. If you prefer a convenience wrapper
-   you can call `world.run(*main_loops)` instead.
+   systems, spawns background ones in daemon processes (via the **spawn**
+   multiprocessing context), and returns an iterator of `Sleep` commands for the
+   main-process group. If you prefer a convenience wrapper you can call
+   `world.run(*main_loops)` instead.
 3. **Lifecycle manager.** Entering the `with pimm.World()` block creates shared
    resources; exiting it cleans up queues, shared-memory buffers, and background
    processes even if exceptions occur.
