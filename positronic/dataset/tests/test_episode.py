@@ -2,7 +2,7 @@ import numpy as np
 import pyarrow.parquet as pq
 import pytest
 
-from positronic.dataset.local_dataset import DiskEpisode, DiskEpisodeWriter
+from positronic.dataset.local_dataset import UNFINISHED_MARKER, DiskEpisode, DiskEpisodeWriter
 from positronic.dataset.tests.test_video import assert_frames_equal, create_frame
 
 
@@ -126,6 +126,24 @@ def test_episode_meta_written_and_exposed(tmp_path):
         git = m['writer']['git']
         assert isinstance(git, dict)
         assert {'commit', 'branch', 'dirty'}.issubset(git.keys())
+
+
+def test_episode_writer_marks_unfinished_and_clears_on_close(tmp_path):
+    ep_dir = tmp_path / 'ep_unfinished'
+    with DiskEpisodeWriter(ep_dir) as w:
+        marker = ep_dir / UNFINISHED_MARKER
+        assert marker.exists()
+        w.set_static('id', 1)
+
+    assert not (ep_dir / UNFINISHED_MARKER).exists()
+
+
+def test_episode_reader_rejects_unfinished(tmp_path):
+    ep_dir = tmp_path / 'ep_incomplete'
+    ep_dir.mkdir()
+    (ep_dir / UNFINISHED_MARKER).write_text('unfinished', encoding='utf-8')
+    with pytest.raises(ValueError, match='unfinished episode'):
+        DiskEpisode(ep_dir)
 
 
 def test_episode_static_numpy_arrays_rejected(tmp_path):

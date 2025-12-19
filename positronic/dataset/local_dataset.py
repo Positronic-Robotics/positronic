@@ -23,6 +23,8 @@ from .signal import Signal
 from .vector import SimpleSignal, SimpleSignalWriter
 from .video import VideoSignal, VideoSignalWriter
 
+UNFINISHED_MARKER = '.unfinished'
+
 
 def _is_valid_static_value(value: Any) -> bool:
     if isinstance(value, str | int | float | bool):
@@ -45,6 +47,17 @@ def _ensure_block_dir(root: Path, episode_id: int) -> Path:
     block_dir = root / f'{block_start:012d}'
     block_dir.mkdir(parents=True, exist_ok=True)
     return block_dir
+
+
+def _mark_unfinished(path: Path) -> None:
+    marker = path / UNFINISHED_MARKER
+    marker.write_text('unfinished', encoding='utf-8')
+
+
+def _clear_unfinished(path: Path) -> None:
+    marker = path / UNFINISHED_MARKER
+    with suppress(FileNotFoundError):
+        marker.unlink()
 
 
 @lru_cache(maxsize=1)
@@ -73,6 +86,7 @@ class DiskEpisodeWriter(EpisodeWriter):
         assert not self._path.exists(), f'Writing to existing directory {self._path}'
         # Create the episode directory for output files
         self._path.mkdir(parents=True, exist_ok=False)
+        _mark_unfinished(self._path)
 
         self._writers: dict[str, SimpleSignalWriter | VideoSignalWriter] = {}
         # Accumulated static items to be stored in a single static.json
@@ -178,6 +192,8 @@ class DiskEpisodeWriter(EpisodeWriter):
         with (self._path / 'meta.json').open('w', encoding='utf-8') as f:
             json.dump(self._meta, f, indent=2)
 
+        _clear_unfinished(self._path)
+
         if exc_type is None and not self._aborted and self._on_close is not None:
             self._on_close(self)
 
@@ -214,6 +230,8 @@ class DiskEpisode(Episode):
         - Defers loading of signal data, static items, and meta until accessed.
         - Prepares lightweight factories for signals discovered on disk.
         """
+        if (directory / UNFINISHED_MARKER).exists():
+            raise ValueError(f'Cannot read unfinished episode at {directory}')
         self._dir = directory
         # Lazy containers
         self._signals: dict[str, Signal[Any]] = {}
@@ -364,6 +382,8 @@ class LocalDataset(Dataset):
             return
         for block_dir in sorted([p for p in self.root.iterdir() if _is_numeric_dir(p)], key=lambda p: p.name):
             for ep_dir in sorted([p for p in block_dir.iterdir() if _is_numeric_dir(p)], key=lambda p: p.name):
+                if (ep_dir / UNFINISHED_MARKER).exists():
+                    continue
                 ep_id = int(ep_dir.name)
                 self._episodes.append((ep_id, ep_dir))
 

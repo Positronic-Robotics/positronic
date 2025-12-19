@@ -5,7 +5,7 @@ import pytest
 
 from positronic.dataset import Episode
 from positronic.dataset.dataset import ConcatDataset
-from positronic.dataset.local_dataset import LocalDataset, LocalDatasetWriter, load_all_datasets
+from positronic.dataset.local_dataset import UNFINISHED_MARKER, LocalDataset, LocalDatasetWriter, load_all_datasets
 
 
 def test_local_dataset_writer_creates_structure_and_persists(tmp_path):
@@ -62,6 +62,22 @@ def test_local_dataset_writer_appends_existing(tmp_path):
     block_dir = root / '000000000000'
     assert (block_dir / '000000000000').exists()
     assert (block_dir / '000000000001').exists()
+
+
+def test_local_dataset_ignores_unfinished_episodes(tmp_path):
+    root = tmp_path / 'ds'
+    with LocalDatasetWriter(root) as w:
+        with w.new_episode() as ew:
+            ew.set_static('id', 0)
+
+    writer = LocalDatasetWriter(root)
+    unfinished = writer.new_episode()
+    marker = unfinished.path / UNFINISHED_MARKER
+    assert marker.exists()
+
+    ds = LocalDataset(root)
+    assert len(ds) == 1
+    assert ds[0]['id'] == 0
 
 
 def test_local_dataset_handles_block_rollover(tmp_path):
