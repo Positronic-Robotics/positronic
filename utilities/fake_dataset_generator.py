@@ -12,7 +12,7 @@ from positronic.utils import s3 as pos3
 # --- Metadata Templates ---
 
 ACT_META = {
-    'inference.policy.name': 'act',
+    'inference.policy.type': 'act',
     'inference.observation.name': 'eepose',
     'inference.action.name': 'absolute_position',
     'inference.observation.lerobot_features': {
@@ -24,7 +24,7 @@ ACT_META = {
 }
 
 GROOT_META = {
-    'inference.policy.name': 'groot',
+    'inference.policy.type': 'groot',
     'inference.observation.name': 'groot_ee_absolute',
     'inference.action.name': 'absolute_position',
     'inference.observation.gr00t_modality': {
@@ -48,7 +48,7 @@ GROOT_META = {
 }
 
 OPENPI_META = {
-    'inference.policy.name': 'openpi',
+    'inference.policy.type': 'openpi',
     'inference.observation.name': 'openpi_positronic',
     'inference.action.name': 'absolute_position',
 }

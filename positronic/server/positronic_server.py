@@ -183,11 +183,22 @@ async def api_episodes():
     return {'columns': columns, 'episodes': episodes}
 
 
+def _group_id(episode: Episode, group_keys: tuple[str, ...]) -> tuple[Any, ...]:
+    return tuple(episode.static[k] for k in group_keys)
+
+
 @app.get('/api/groups')
 @require_dataset
 async def api_groups(request: Request):
     ds = app_state.get('dataset')
-    group_key, group_fn, format_table, group_filter_keys = app_state.get('group_table_cfg')
+    group_keys, group_fn, format_table, group_filter_keys = app_state.get('group_table_cfg')
+    if isinstance(group_keys, str):
+        group_keys = (group_keys,)
+
+    # Ensure group keys are visible in the output table
+    for k in group_keys:
+        assert k in format_table, f'Group key {k} not found in format_table'
+
     columns, formatters, defaults = parse_table_cfg(format_table)
 
     # Take only those query parameters that are in group_filter_keys
@@ -203,14 +214,16 @@ async def api_groups(request: Request):
         # Apply filters
         match = all(episode.static[key] == value for key, value in active_filters.items())
         if match:
-            groups[episode.static[group_key]].append(episode)
-
+            groups[_group_id(episode, group_keys)].append(episode)
             for filter_key in group_filter_keys:
                 group_filters[filter_key]['values'].add(episode.static.get(filter_key))
 
-    rows = [{group_key: key, '__meta__': {'group': key}, **group_fn(group)} for key, group in groups.items()]
-    episodes = get_episodes_list(rows, format_table.keys(), formatters=formatters, defaults=defaults)
+    rows = []
+    for group_id, episodes in groups.items():
+        key_fields = {k: group_id[i] for i, k in enumerate(group_keys)}
+        rows.append({**key_fields, '__meta__': {'group': key_fields}, **group_fn(episodes)})
 
+    episodes = get_episodes_list(rows, format_table.keys(), formatters=formatters, defaults=defaults)
     return {'columns': columns, 'episodes': episodes, 'group_filters': group_filters}
 
 
@@ -277,34 +290,6 @@ def default_table() -> TableConfig:
 
 
 @cfn.config()
-def eval_table() -> TableConfig:
-    return {
-        'task_code': {'label': 'Task', 'filter': True},
-        'model': {'label': 'Model', 'filter': True},
-        'units': {'label': 'Units'},
-        'uph': {'label': 'UPH', 'format': '%.1f'},
-        'success': {'label': 'Success', 'format': '%.1f%%'},
-        'started': {'label': 'Started', 'format': '%Y-%m-%d %H:%M:%S'},
-        'eval.outcome': {
-            'label': 'Status',
-            'filter': True,
-            'renderer': {
-                'type': 'badge',
-                'options': {
-                    # TODO: Currently the filter happens by original data, not the rendered value
-                    'Success': {'label': 'Pass', 'variant': 'success'},
-                    'Stalled': {'label': 'Fail', 'variant': 'warning'},
-                    'Ran out of time': {'label': 'Fail', 'variant': 'warning'},
-                    'System': {'label': 'Fail', 'variant': 'warning'},
-                    'Safety': {'label': 'Safety violation', 'variant': 'danger'},
-                },
-            },
-        },
-        '__duration__': {'label': 'Duration', 'format': '%.1f sec'},
-    }
-
-
-@cfn.config()
 def model_perf_table():
     group_key = 'model'
 
@@ -321,10 +306,12 @@ def model_perf_table():
             'UPH': suc_items / (duration / 3600),
             'Success': 100 * suc_items / total_items,
             'MTBF/A': (duration / assists) if assists > 0 else None,
+            'count': len(episodes),
         }
 
     format_table = {
         'model': {'label': 'Model'},
+        'count': {'label': 'Count'},
         'UPH': {'format': '%.1f'},
         'Success': {'format': '%.2f%%'},
         'MTBF/A': {'format': '%.1f sec', 'default': '-'},
@@ -345,7 +332,7 @@ def main(
     reset_cache: bool = False,
     max_resolution: int = 640,
     ep_table_cfg: TableConfig | None = None,
-    group_table: tuple[str, Callable[[list[Episode]], dict[str, Any]], TableConfig, dict[str, str]] | None = None,
+    group_table: tuple[tuple[str, ...], Callable, TableConfig, dict[str, str]] | None = None,
 ):
     """Visualize a Dataset with Rerun.
 
