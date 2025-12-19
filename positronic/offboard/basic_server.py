@@ -87,6 +87,6 @@ def main(policy, port: int, host: str):
 
 
 if __name__ == '__main__':
-    init_logging()
+    init_logging(logging.INFO)
     with pos3.mirror():
         cfn.cli(main)
