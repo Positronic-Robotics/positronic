@@ -12,8 +12,6 @@ import pimm
 import positronic.cfg.hardware.camera
 import positronic.cfg.hardware.gripper
 import positronic.cfg.hardware.roboarm
-import positronic.cfg.policy.action
-import positronic.cfg.policy.observation
 import positronic.cfg.policy.policy as policy_cfg
 import positronic.cfg.simulator
 from positronic import utils, wire
@@ -30,24 +28,35 @@ from positronic.utils import package_assets_path
 from positronic.utils.logging import init_logging
 
 
-class MetadataInjector:
+class DsWriterCommandMetaBridge(pimm.ControlSystem):
+    """Runs in main process: injects inference meta into START commands.
+
+    This avoids computing metadata inside background GUI processes, which would
+    otherwise use a spawned copy of `Inference`/policy and can log stale
+    or wrong policy meta when policies metadata is resampled in the main process.
+    """
+
     def __init__(self, meta_provider: Callable[[], dict[str, Any]]):
         self.meta_provider = meta_provider
+        self.in_cmd = pimm.ControlSystemReceiver[DsWriterCommand](self, default=None, maxsize=10)
+        self.out_cmd = pimm.ControlSystemEmitter(self)
 
-    def __call__(self, cmd: DsWriterCommand) -> DsWriterCommand:
-        if cmd.type == DsWriterCommand.START(None).type:
-            # Merge inference metadata into the start command
-            # Note: cmd.static_data from UI takes precedence if keys collide?
-            # Actually usually we want system config (inference.meta) + user input (task)
-            new_static = self.meta_provider()
-            new_static.update(cmd.static_data)
-            return DsWriterCommand(cmd.type, new_static)
-        return cmd
+    def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock):
+        while not should_stop.value:
+            msg = self.in_cmd.read()
+            if msg is not None and msg.updated and msg.data is not None:
+                cmd = msg.data
+                out = None
+                if cmd.type == DsWriterCommand.START(None).type:
+                    meta = (cmd.static_data or {}) | self.meta_provider()
+                    out = DsWriterCommand(cmd.type, meta)
+
+                self.out_cmd.emit(out if out is not None else cmd)
+            yield pimm.Pass()
 
 
 class KeyboardHanlder:
-    def __init__(self, meta_provider: Callable[[], dict[str, Any]], task: str | None = None):
-        self.meta_provider = meta_provider
+    def __init__(self, task: str | None = None):
         self.task = task
 
     def inference_command(self, key: str) -> InferenceCommand | None:
@@ -64,9 +73,7 @@ class KeyboardHanlder:
 
     def ds_writer_command(self, key: str) -> DsWriterCommand | None:
         if key == 's':
-            meta = self.meta_provider()
-            if self.task:
-                meta['task'] = self.task
+            meta = {'task': self.task} if self.task else {}
             return DsWriterCommand.START(meta)
         elif key == 'p':
             return DsWriterCommand.STOP()
@@ -78,27 +85,18 @@ class KeyboardHanlder:
 class TimedDriver(pimm.ControlSystem):
     """Control system that orchestrates inference episodes by sending start/stop commands."""
 
-    def __init__(
-        self,
-        num_iterations: int,
-        simulation_time: float,
-        meta_provider: Callable[[], dict[str, Any]],
-        task: str | None = None,
-    ):
+    def __init__(self, num_iterations: int, simulation_time: float, task: str | None = None):
         self.num_iterations = num_iterations
         self.simulation_time = simulation_time
         self.ds_commands = pimm.ControlSystemEmitter(self)
         self.inf_commands = pimm.ControlSystemEmitter(self)
-        self.meta_provider = meta_provider
         self.task = task
 
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock):
         for i in range(self.num_iterations):
-            meta = self.meta_provider()
-            meta['simulation.iteration'] = i
+            meta = {'simulation.iteration': str(i), 'simulation.total_iterations': str(self.num_iterations)}
             if self.task:
                 meta['task'] = self.task
-
             self.ds_commands.emit(DsWriterCommand.START(meta))
             self.inf_commands.emit(InferenceCommand.START(task=self.task))
             yield pimm.Sleep(self.simulation_time)
@@ -109,43 +107,28 @@ class TimedDriver(pimm.ControlSystem):
 
 @cfn.config(ui_scale=1)
 def eval_ui(ui_scale):
-    def _internal(meta_provider):
-        gui = EvalUI(ui_scale=ui_scale)
-
-        return (
-            gui,
-            (gui.inference_command, lambda x: x),
-            (gui.ds_writer_command, pimm.map(MetadataInjector(meta_provider))),
-            [],
-        )
-
-    return _internal
+    gui = EvalUI(ui_scale=ui_scale)
+    return gui, (gui.inference_command, pimm.utils.identity), (gui.ds_writer_command, pimm.utils.identity), []
 
 
 @cfn.config(show_gui=False)
 def keyboard(show_gui, task):
-    def _internal(meta_provider):
-        keyboard = KeyboardControl()
-        keyboard_handler = KeyboardHanlder(meta_provider=meta_provider, task=task)
-        print('Keyboard controls: [s]tart, sto[p], [r]eset')
-        return (
-            None if not show_gui else DearpyguiUi(),
-            (keyboard.keyboard_inputs, pimm.map(keyboard_handler.inference_command)),
-            (keyboard.keyboard_inputs, pimm.map(keyboard_handler.ds_writer_command)),
-            [keyboard],
-        )
-
-    return _internal
+    keyboard = KeyboardControl(quit_key='q')
+    keyboard_handler = KeyboardHanlder(task=task)
+    print('Keyboard controls: [s]tart, sto[p], [r]eset, [q]uit')
+    return (
+        None if not show_gui else DearpyguiUi(),
+        (keyboard.keyboard_inputs, pimm.map(keyboard_handler.inference_command)),
+        (keyboard.keyboard_inputs, pimm.map(keyboard_handler.ds_writer_command)),
+        [keyboard],
+    )
 
 
 @cfn.config(num_iterations=1, simulation_time=15, show_gui=False)
 def timed(num_iterations, simulation_time, show_gui, task):
-    def _internal(meta_provider):
-        gui = None if not show_gui else DearpyguiUi()
-        driver = TimedDriver(num_iterations, simulation_time, meta_provider, task=task)
-        return gui, (driver.inf_commands, lambda x: x), (driver.ds_commands, lambda x: x), [driver]
-
-    return _internal
+    gui = None if not show_gui else DearpyguiUi()
+    driver = TimedDriver(num_iterations, simulation_time, task=task)
+    return gui, (driver.inf_commands, pimm.utils.identity), (driver.ds_commands, pimm.utils.identity), [driver]
 
 
 def main(
@@ -153,7 +136,7 @@ def main(
     gripper: pimm.ControlSystem,
     cameras: dict[str, pimm.ControlSystem],
     policy,
-    driver: Callable,
+    driver: tuple,
     policy_fps: int = 15,
     output_dir: str | Path | None = None,
 ):
@@ -164,8 +147,7 @@ def main(
     camera_instances = cameras
     camera_emitters = {name: cam.frame for name, cam in camera_instances.items()}
 
-    gui, inference_emitter, ds_writer_emitter, foreground_cs = driver(inference.meta)
-
+    gui, inference_emitter, ds_writer_emitter, foreground_cs = driver
     if output_dir is not None:
         output_dir = pos3.sync(output_dir, sync_on_error=True)
         utils.save_run_metadata(output_dir, patterns=['*.py', '*.toml'])
@@ -173,13 +155,17 @@ def main(
     writer_cm = LocalDatasetWriter(output_dir) if output_dir is not None else nullcontext(None)
     with writer_cm as dataset_writer, pimm.World() as world:
         ds_agent = wire.wire(world, inference, dataset_writer, camera_emitters, robot_arm, gripper, gui, TimeMode.CLOCK)
+        ds_bridge = None
         world.connect(inference_emitter[0], inference.command, emitter_wrapper=inference_emitter[1])
         if ds_agent is not None:
-            world.connect(ds_writer_emitter[0], ds_agent.command, emitter_wrapper=ds_writer_emitter[1])
+            ds_bridge = DsWriterCommandMetaBridge(inference.meta)
+            world.connect(ds_writer_emitter[0], ds_bridge.in_cmd, emitter_wrapper=ds_writer_emitter[1])
+            world.connect(ds_bridge.out_cmd, ds_agent.command)
 
         bg_cs = [*camera_instances.values(), robot_arm, gripper, ds_agent, gui]
 
-        for cmd in world.start([inference] + foreground_cs, bg_cs):
+        main_cs = [inference, ds_bridge, *foreground_cs]
+        for cmd in world.start(main_cs, bg_cs):
             time.sleep(cmd.seconds)
 
 
@@ -189,7 +175,7 @@ def main_sim(
     loaders: Sequence[MujocoSceneTransform],
     camera_fps: int,
     policy_fps: int,
-    driver: Callable,
+    driver: tuple,
     camera_dict: Mapping[str, str],
     output_dir: str | Path | None = None,
     simulate_timeout: bool = False,
@@ -207,10 +193,7 @@ def main_sim(
 
     sim_meta = {'simulation.mujoco_model_path': mujoco_model_path}
 
-    def meta_provider():
-        return sim_meta.copy() | inference.meta()
-
-    gui, inference_emitter, ds_writer_emitter, foreground_cs = driver(meta_provider)
+    gui, inference_emitter, ds_writer_emitter, foreground_cs = driver
 
     if output_dir is not None:
         output_dir = pos3.sync(output_dir, sync_on_error=True)
@@ -219,15 +202,19 @@ def main_sim(
     writer_cm = LocalDatasetWriter(output_dir) if output_dir is not None else nullcontext(None)
     with writer_cm as dataset_writer, pimm.World(clock=sim) as world:
         ds_agent = wire.wire(world, inference, dataset_writer, cameras, robot_arm, gripper, gui, TimeMode.MESSAGE)
+        ds_bridge = DsWriterCommandMetaBridge(lambda: sim_meta.copy() | inference.meta())
         if ds_agent is not None:
             for observer_name in observers.keys():
                 ds_agent.add_signal(observer_name)
                 world.connect(sim.observations[observer_name], ds_agent.inputs[observer_name])
         world.connect(inference_emitter[0], inference.command, emitter_wrapper=inference_emitter[1])
         if ds_agent is not None:
-            world.connect(ds_writer_emitter[0], ds_agent.command, emitter_wrapper=ds_writer_emitter[1])
+            # Note: do NOT use ds_writer_emitter wrapper here. In eval_ui it may run in a
+            # background process and inject stale `inference.*` metadata.
+            world.connect(ds_writer_emitter[0], ds_bridge.in_cmd, emitter_wrapper=ds_writer_emitter[1])
+            world.connect(ds_bridge.out_cmd, ds_agent.command)
 
-        for _ in world.start([*foreground_cs, *control_systems, ds_agent], gui):
+        for _ in world.start([*foreground_cs, *control_systems, ds_agent, ds_bridge], gui):
             pass
 
 
