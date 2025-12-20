@@ -298,16 +298,16 @@ def default_table() -> TableConfig:
     }
 
 
-@cfn.config(dataset=positronic.cfg.dataset.local_all, ep_table_cfg=default_table)
+@cfn.config(dataset=positronic.cfg.dataset.local_all, ep_table_cfg=default_table, max_resolution=640)
 def main(
     dataset: Dataset,
     ep_table_cfg: TableConfig | None,
+    max_resolution: int,
     cache_dir: str = os.path.expanduser('~/.cache/positronic/server/'),
     host: str = '0.0.0.0',
     port: int = 5000,
     debug: bool = False,
     reset_cache: bool = False,
-    max_resolution: int = 640,
     group_tables: dict[str, tuple[tuple[str, ...], Callable, TableConfig, dict[str, str]]] | None = None,
 ):
     """Visualize a Dataset with Rerun.
