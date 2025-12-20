@@ -194,7 +194,10 @@ async def api_groups(request: Request, suffix: str):
     ds = app_state.get('dataset')
     group_tables = app_state.get('group_tables_cfg', {})
     if not isinstance(group_tables, dict) or suffix not in group_tables:
-        raise HTTPException(status_code=404, detail=f'Group configuration "{suffix}" not found')
+        raise HTTPException(
+            status_code=404,
+            detail=f'Group configuration "{suffix}" not found, available: {", ".join(group_tables.keys())}',
+        )
 
     group_keys, group_fn, format_table, group_filter_keys = group_tables[suffix]
     if isinstance(group_keys, str):
@@ -291,54 +294,20 @@ def default_table() -> TableConfig:
         '__index__': {'label': '#', 'format': '%d'},
         '__duration__': {'label': 'Duration', 'format': '%.2f sec'},
         'task': {'label': 'Task', 'filter': True},
+        'started': {'label': 'Started', 'format': '%Y-%m-%d %H:%M'},
     }
 
 
-@cfn.config()
-def model_perf_table():
-    group_key = 'model'
-
-    def group_fn(episodes: list[Episode]) -> dict[str, Any]:
-        duration, suc_items, total_items, assists = 0, 0, 0, 0
-        for ep in episodes:
-            duration += ep['eval.duration']
-            suc_items += ep['eval.successful_items']
-            total_items += ep['eval.total_items']
-            assists += ep['eval.outcome'] == 'Success'
-
-        return {
-            'model': episodes[0]['model'],
-            'UPH': suc_items / (duration / 3600),
-            'Success': 100 * suc_items / total_items,
-            'MTBF/A': (duration / assists) if assists > 0 else None,
-            'count': len(episodes),
-        }
-
-    format_table = {
-        'model': {'label': 'Model'},
-        'count': {'label': 'Count'},
-        'UPH': {'format': '%.1f'},
-        'Success': {'format': '%.2f%%'},
-        'MTBF/A': {'format': '%.1f sec', 'default': '-'},
-    }
-
-    group_filter_keys = {'task_code': 'Task'}
-
-    return group_key, group_fn, format_table, group_filter_keys
-
-
-@cfn.config(
-    dataset=positronic.cfg.dataset.local_all, ep_table_cfg=default_table, group_tables={'models': model_perf_table}
-)
+@cfn.config(dataset=positronic.cfg.dataset.local_all, ep_table_cfg=default_table)
 def main(
     dataset: Dataset,
+    ep_table_cfg: TableConfig | None,
     cache_dir: str = os.path.expanduser('~/.cache/positronic/server/'),
     host: str = '0.0.0.0',
     port: int = 5000,
     debug: bool = False,
     reset_cache: bool = False,
     max_resolution: int = 640,
-    ep_table_cfg: TableConfig | None = None,
     group_tables: dict[str, tuple[tuple[str, ...], Callable, TableConfig, dict[str, str]]] | None = None,
 ):
     """Visualize a Dataset with Rerun.

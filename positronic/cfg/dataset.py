@@ -2,6 +2,8 @@
 Utility configurations for constructing datasets.
 """
 
+from typing import Any
+
 import configuronic as cfn
 import pos3
 
@@ -28,8 +30,8 @@ def concat_ds(datasets: list[Dataset]):
 
 
 @cfn.config(transforms=[])
-def transform(base: Dataset, transforms: list[EpisodeTransform]):
-    return TransformedDataset(base, *transforms)
+def transform(base: Dataset, transforms: list[EpisodeTransform], extra_meta: dict[str, Any] = None):
+    return TransformedDataset(base, *transforms, extra_meta=extra_meta)
 
 
 @cfn.config()

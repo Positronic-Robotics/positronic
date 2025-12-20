@@ -6,6 +6,8 @@
 #     --dataset.base.root=../datasets/droid/
 # ```
 
+from datetime import datetime
+
 import configuronic as cfn
 import numpy as np
 import pos3
@@ -193,3 +195,34 @@ groot = policy.policy.groot_ee.copy()
 groot_q = policy.policy.groot_ee_q.copy()
 
 sample = policy.policy.sample.copy()
+
+
+training_ds = dataset.transform.override(
+    base=droid_ds,
+    transforms=[
+        dataset.group.override(
+            transforms=[Identity(), Derive(started=lambda ep: datetime.fromtimestamp(ep.meta['created_ts_ns'] / 1e9))]
+        )
+    ],
+    extra_meta={'name': 'PhAIL Finetuning Dataset'},
+)
+
+
+@cfn.config()
+def grouped_task():
+    def group_fn(episodes: list[Episode]):
+        duration = 0
+        for ep in episodes:
+            duration += ep.duration_ns / 1e9 / 3600
+
+        result = {'task': episodes[0]['task']}
+        result.update({'duration': duration, 'count': len(episodes)})
+        return result
+
+    format_table = {
+        'task': {'label': 'Task'},
+        'duration': {'label': 'Duration', 'format': '%.2f hours'},
+        'count': {'label': 'Count'},
+    }
+
+    return 'task', group_fn, format_table, {}

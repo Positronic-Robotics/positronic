@@ -10,9 +10,10 @@ from .episode import EpisodeTransform, TransformedEpisode
 class TransformedDataset(Dataset):
     """Transform a dataset into a new view of the dataset."""
 
-    def __init__(self, dataset: Dataset, *transforms: EpisodeTransform):
+    def __init__(self, dataset: Dataset, *transforms: EpisodeTransform, extra_meta: dict[str, Any] = None):
         self._dataset = dataset
         self._transforms = transforms
+        self._extra_meta = extra_meta or {}
 
     def __len__(self) -> int:
         return len(self._dataset)
@@ -22,7 +23,7 @@ class TransformedDataset(Dataset):
 
     @property
     def meta(self) -> dict[str, Any]:
-        result = self._dataset.meta.copy()
+        result = self._dataset.meta.copy() | self._extra_meta
         for tf in self._transforms:
             result = merge_dicts(result, tf.meta)
         return result

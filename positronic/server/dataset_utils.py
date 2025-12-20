@@ -207,6 +207,9 @@ def stream_episode_rrd(ds: Dataset, episode_id: int, max_resolution: int) -> Ite
 def get_dataset_root(dataset: Dataset) -> str | None:
     """Try to extract root path from Dataset type."""
 
+    if 'name' in dataset.meta:
+        return dataset.meta['name']
+
     if isinstance(dataset, LocalDataset):
         return str(dataset.root)
 
