@@ -1,6 +1,5 @@
 import io
 import json
-from collections import deque
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
@@ -9,8 +8,6 @@ import msgpack
 import numpy as np
 import zmq
 from pydantic import BaseModel
-
-from positronic.utils import flatten_dict
 
 from . import Policy
 
@@ -232,32 +229,32 @@ class ExternalRobotInferenceClient(BaseInferenceClient):
 class Gr00tPolicy(Policy):
     def __init__(self, host: str = 'localhost', port: int = 9000, timeout_ms: int = 15000, n_action_steps=None):
         self._client = ExternalRobotInferenceClient(host, port, timeout_ms)
-        self._cache = {}
-        self._observation = {}
         self.server_metadata = None
         self.n_action_steps = n_action_steps
 
-    def select_action(self, obs: dict[str, Any]) -> dict[str, Any]:
-        if not self._cache or any(not v for v in self._cache.values()):
-            self._observation = flatten_dict(obs, 'observation.')
-            for k in obs:
-                v = obs[k]
-                if isinstance(v, np.ndarray):
-                    obs[k] = np.expand_dims(v, axis=0)
-                    if np.issubdtype(obs[k].dtype, np.floating):
-                        obs[k] = obs[k].astype(np.float64)
-                else:
-                    v = [v]
-                    if isinstance(v[0], np.floating):
-                        v = np.array(v).astype(np.float64)
-                    obs[k] = v
-            result = self._client.get_action(obs)
-            assert isinstance(result, dict), f'Expected dictionary, got {type(result)}'
+    def select_action(self, obs: dict[str, Any]) -> dict[str, Any] | list[dict[str, Any]]:
+        for k in obs:
+            v = obs[k]
+            if isinstance(v, np.ndarray):
+                obs[k] = np.expand_dims(v, axis=0)
+                if np.issubdtype(obs[k].dtype, np.floating):
+                    obs[k] = obs[k].astype(np.float64)
+            else:
+                v = [v]
+                if isinstance(v[0], np.floating):
+                    v = np.array(v).astype(np.float64)
+                obs[k] = v
+        result = self._client.get_action(obs)
+        assert isinstance(result, dict), f'Expected dictionary, got {type(result)}'
 
-            self._cache = {k: deque(v[: self.n_action_steps]) for k, v in result.items()}
+        lengths = {len(v) for v in result.values()}
+        assert len(lengths) == 1, f'All values in result must have the same length, got {lengths}'
+        length = lengths.pop()
+        if self.n_action_steps is not None:
+            length = min(length, self.n_action_steps)
 
-        result = {k: v.popleft() for k, v in self._cache.items()}
-        return result | self._observation
+        # "Transpose" the result
+        return [{k: v[i] for k, v in result.items()} for i in range(length)]
 
     @property
     def meta(self) -> dict[str, Any]:

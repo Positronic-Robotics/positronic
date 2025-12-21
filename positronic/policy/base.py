@@ -8,7 +8,7 @@ class Policy(ABC):
     """Abstract base class for all policies."""
 
     @abstractmethod
-    def select_action(self, obs: dict[str, Any]) -> dict[str, Any]:
+    def select_action(self, obs: dict[str, Any]) -> dict[str, Any] | list[dict[str, Any]]:
         """Computes an action for the given observation.
 
         **Plain-data contract**
@@ -65,9 +65,11 @@ class DecodedEncodedPolicy(Policy):
             return self._decoder(action, obs)
         return action
 
-    def select_action(self, obs: dict[str, Any]) -> dict[str, Any]:
+    def select_action(self, obs: dict[str, Any]) -> dict[str, Any] | list[dict[str, Any]]:
         encoded_obs = self._encode(obs)
         action = self._policy.select_action(encoded_obs)
+        if isinstance(action, list):
+            return [self._decode(a, obs) for a in action]
         return self._decode(action, obs)
 
     def reset(self):
@@ -92,7 +94,7 @@ class SampledPolicy(Policy):
     def _select_policy(self) -> Policy:
         return random.choices(self._policies, self._weights)[0]
 
-    def select_action(self, obs: dict[str, Any]) -> dict[str, Any]:
+    def select_action(self, obs: dict[str, Any]) -> dict[str, Any] | list[dict[str, Any]]:
         return self._current_policy.select_action(obs)
 
     def reset(self):

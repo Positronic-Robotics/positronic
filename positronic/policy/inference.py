@@ -1,4 +1,6 @@
+import logging
 import time
+from collections import deque
 from collections.abc import Iterator
 from dataclasses import dataclass
 from enum import Enum
@@ -75,6 +77,7 @@ class Inference(pimm.ControlSystem):
         running = False
 
         rate_limiter = pimm.RateLimiter(clock, hz=self.inference_fps)
+        commands_queue = deque()
 
         while not should_stop.value:
             command_msg = self.command.read()
@@ -97,30 +100,40 @@ class Inference(pimm.ControlSystem):
                 if not running:
                     continue
 
-                robot_state = self.robot_state.value
-                inputs = {
-                    'robot_state.q': robot_state.q,
-                    'robot_state.dq': robot_state.dq,
-                    'robot_state.ee_pose': Serializers.transform_3d(robot_state.ee_pose),
-                    'grip': self.gripper_state.value,
-                }
-                frame_messages = {k: v.value for k, v in self.frames.items()}
-                # Extract array from NumpySMAdapter
-                images = {k: v.array for k, v in frame_messages.items()}
-                if len(images) != len(self.frames):
-                    continue
-                inputs.update(images)
+                if not commands_queue:
+                    robot_state = self.robot_state.value
+                    inputs = {
+                        'robot_state.q': robot_state.q,
+                        'robot_state.dq': robot_state.dq,
+                        'robot_state.ee_pose': Serializers.transform_3d(robot_state.ee_pose),
+                        'grip': self.gripper_state.value,
+                    }
+                    frame_messages = {k: v.value for k, v in self.frames.items()}
+                    # Extract array from NumpySMAdapter
+                    images = {k: v.array for k, v in frame_messages.items()}
+                    if len(images) != len(self.frames):
+                        continue
+                    inputs.update(images)
 
-                start = time.monotonic()
-                inputs.update(self.context)
-                commands = self.policy.select_action(frozen_view(inputs))
-                roboarm_command = roboarm.command.from_wire(commands['robot_command'])
-                target_grip = commands['target_grip']
+                    start = time.monotonic()
+                    inputs.update(self.context)
+                    commands = self.policy.select_action(frozen_view(inputs))
+                    if not isinstance(commands, list):
+                        commands = [commands]
 
-                duration = time.monotonic() - start
-                if self.simulate_timeout:
-                    yield pimm.Sleep(duration)
+                    for command in commands:
+                        roboarm_command = roboarm.command.from_wire(command['robot_command'])
+                        target_grip = command['target_grip']
+                        commands_queue.append((roboarm_command, target_grip))
 
+                    if self.simulate_timeout:
+                        yield pimm.Sleep(time.monotonic() - start)
+
+                if not commands_queue:
+                    logging.error('Policy returned no commands, exiting inference')
+                    return
+
+                roboarm_command, target_grip = commands_queue.popleft()
                 self.robot_commands.emit(roboarm_command)
                 self.target_grip.emit(target_grip)
             except pimm.NoValueException:

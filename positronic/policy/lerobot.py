@@ -34,6 +34,7 @@ class LerobotPolicy(Policy):
         self.factory = policy_factory
         self.original = None
         self.target_device = device
+        self.n_action_chunk = None
 
         # We initialize on CPU to ensure the policy is pickleable when passed to a subprocess.
         # The model will be moved to the target device (e.g. MPS/CUDA) lazily on the first inference call.
@@ -48,7 +49,7 @@ class LerobotPolicy(Policy):
             self.original.to(self.target_device)
         return self.original
 
-    def select_action(self, obs: dict[str, Any]) -> dict[str, Any]:
+    def select_action(self, obs: dict[str, Any]) -> dict[str, Any] | list[dict[str, Any]]:
         policy = self._policy
 
         obs_int = {}
@@ -63,8 +64,9 @@ class LerobotPolicy(Policy):
             else:
                 obs_int[key] = torch.as_tensor(val).to(self.target_device)
 
-        action = policy.select_action(obs_int).squeeze(0).cpu().numpy()
-        return {'action': action}
+        action = policy.predict_action_chunk(obs_int)[:, : self.n_action_chunk]
+        action = action.squeeze(0).cpu().numpy()
+        return [{'action': a} for a in action]
 
     def reset(self):
         self._policy.reset()
