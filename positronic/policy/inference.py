@@ -82,6 +82,7 @@ class Inference(pimm.ControlSystem):
         while not should_stop.value:
             command_msg = self.command.read()
             if command_msg.updated:
+                commands_queue.clear()
                 match command_msg.data.type:
                     case InferenceCommandType.START:
                         running = True

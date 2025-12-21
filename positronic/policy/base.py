@@ -69,6 +69,7 @@ class DecodedEncodedPolicy(Policy):
         encoded_obs = self._encode(obs)
         action = self._policy.select_action(encoded_obs)
         if isinstance(action, list):
+            # NOTE: Decoding happens relative to the original observation!
             return [self._decode(a, obs) for a in action]
         return self._decode(action, obs)
 

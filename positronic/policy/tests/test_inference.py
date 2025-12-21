@@ -218,3 +218,137 @@ def test_inference_reset_emits_reset_and_calls_policy_reset(world, clock):
     assert grip_msg.data == pytest.approx(0.0)
 
     assert policy.reset_calls == 1
+
+
+@pytest.mark.timeout(3.0)
+def test_inference_clears_queue_on_reset_stepwise(world, clock):
+    """Verify that RESET clears any pending actions in the queue (stepwise check)."""
+    pose = Transform3D(translation=np.array([0.4, 0.5, 0.6], dtype=np.float32), rotation=Rotation.identity)
+
+    class ChunkPolicy(StubPolicy):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            self.counter = 0
+
+        def select_action(self, obs):
+            self.counter += 1
+            # Return chunk of 10 actions to ensure queue is not drained
+            # Grips will be: 100, 101, ... 109 then 200, 201 ...
+            return [
+                {'robot_command': to_wire(self.command), 'target_grip': self.counter * 100.0 + i} for i in range(10)
+            ]
+
+    policy = ChunkPolicy(command=CartesianPosition(pose=pose))
+    inference = Inference(policy, inference_fps=10)
+
+    frame_em = world.pair(inference.frames['image.cam'])
+    robot_em = world.pair(inference.robot_state)
+    grip_em = world.pair(inference.gripper_state)
+    command_em = world.pair(inference.command)
+    grip_rx = world.pair(inference.target_grip)
+
+    robot_state = make_robot_state([0.1, 0.2, 0.3], [0.4, 0.5, 0.6])
+
+    scheduler = world.start([inference])
+
+    # 1. START
+    command_em.emit(InferenceCommand.START(task='test'))
+    drive_scheduler(scheduler, clock=clock, steps=1)
+
+    # 2. Emit Inputs -> Policy returns chunk 1 [100 ... 109]
+    emit_ready_payload(frame_em, robot_em, grip_em, robot_state)
+
+    # Run enough steps to consume SOME but NOT ALL of current chunk
+    # e.g. 3 steps -> emits 100, 101, 102. Queue has 103..109
+    drive_scheduler(scheduler, clock=clock, steps=3)
+
+    # Verify we are consuming the chunk
+    val = grip_rx.read().data
+    assert 100.0 <= val < 109.0, f'Expected value in chunk 1 range, got {val}'
+    assert val > 100.0, 'Should have advanced past first element'
+
+    # 3. RESET
+    command_em.emit(InferenceCommand.RESET())
+    drive_scheduler(scheduler, clock=clock, steps=2)
+
+    # Verify Reset emitted (grip 0.0)
+    val = grip_rx.read().data
+    assert val == 0.0, f'Expected 0.0 (Reset), got {val}'
+
+    # 4. START again
+    command_em.emit(InferenceCommand.START(task='test'))
+    # 5. Emit Inputs -> Policy returns chunk 2 [200 ... 209]
+    emit_ready_payload(frame_em, robot_em, grip_em, robot_state)
+
+    # Run 2 steps: 1 to process inputs, 1 to emit first action of NEW chunk
+    drive_scheduler(scheduler, clock=clock, steps=2)
+
+    # 6. Check emission.
+    # If queue cleared: should be 200.0 (first of new chunk)
+    # If queue persisted: would be ~103.0 (next of unused old chunk)
+    val = grip_rx.read().data
+    assert val >= 200.0, f'Expected >= 200.0 (Start of New Chunk), got {val}. Queue clearing failed!'
+
+
+@pytest.mark.timeout(3.0)
+def test_inference_clears_queue_on_start_stepwise(world, clock):
+    """Verify that START clears any pending actions in the queue."""
+    pose = Transform3D(translation=np.array([0.4, 0.5, 0.6], dtype=np.float32), rotation=Rotation.identity)
+
+    class ChunkPolicy(StubPolicy):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            self.counter = 0
+
+        def select_action(self, obs):
+            self.counter += 1
+            # Return chunk of 10 actions
+            return [
+                {'robot_command': to_wire(self.command), 'target_grip': self.counter * 100.0 + i} for i in range(10)
+            ]
+
+    policy = ChunkPolicy(command=CartesianPosition(pose=pose))
+    inference = Inference(policy, inference_fps=10)
+
+    frame_em = world.pair(inference.frames['image.cam'])
+    robot_em = world.pair(inference.robot_state)
+    grip_em = world.pair(inference.gripper_state)
+    command_em = world.pair(inference.command)
+    grip_rx = world.pair(inference.target_grip)
+
+    robot_state = make_robot_state([0.1, 0.2, 0.3], [0.4, 0.5, 0.6])
+
+    scheduler = world.start([inference])
+
+    # 1. START
+    command_em.emit(InferenceCommand.START(task='test'))
+    drive_scheduler(scheduler, clock=clock, steps=1)
+
+    # 2. Emit Inputs -> Policy returns chunk 1 [100 ... 109]
+    emit_ready_payload(frame_em, robot_em, grip_em, robot_state)
+
+    # Run enough steps to consume SOME but NOT ALL of current chunk
+    # e.g. 3 steps -> emits 100, 101, 102. Queue has 103..109
+    drive_scheduler(scheduler, clock=clock, steps=3)
+
+    # Verify recent emission is from chunk 1
+    val = grip_rx.read().data
+    assert 100.0 <= val < 109.0
+
+    # 3. START again (Restarting while running)
+    command_em.emit(InferenceCommand.START(task='test-restart'))
+    # This should clear the queue.
+    # We drive 1 step to process the command.
+    drive_scheduler(scheduler, clock=clock, steps=1)
+
+    # 4. Emit Inputs -> Policy returns chunk 2 [200 ... 209]
+    emit_ready_payload(frame_em, robot_em, grip_em, robot_state)
+
+    # Run 2 steps: 1 to select action (replenish queue), 1 to emit
+    drive_scheduler(scheduler, clock=clock, steps=2)
+
+    # 5. Check emission.
+    # If queue cleared: should be 200.0 (first of new chunk)
+    # If queue persisted: would be ~103.0 (remnant of chunk 1)
+    val = grip_rx.read().data
+    assert val >= 200.0, f'Expected >= 200.0 (Start of New Chunk), got {val}. Queue clearing on START failed!'
