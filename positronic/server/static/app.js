@@ -5,6 +5,7 @@ const filtersState = {
 };
 let filtersData = {};
 let loadingCheckInterval = null;
+let currentEpisodes = [];
 
 async function checkDatasetStatus() {
   try {
@@ -34,11 +35,12 @@ async function checkDatasetStatus() {
       loadDatasetInfo();
 
       const { episodes, columns, group_filters: groupFilters } = await loadEpisodes();
+      currentEpisodes = episodes;
       filtersData = getFiltersData(episodes, columns);
       renderServerFilters(groupFilters);
-      renderClientFilters(episodes, columns);
-      renderEpisodesTableHeader(episodes, columns);
-      populateEpisodesTable(episodes, columns);
+      renderClientFilters(columns);
+      renderEpisodesTableHeader(columns);
+      populateEpisodesTable(columns);
       episodesContainer.removeChild(episodesLoadingStatus);
       episodesTable.classList.remove('hidden');
     } else {
@@ -107,7 +109,7 @@ function createTableCell(content, isHeader = false) {
   return episodeCell;
 }
 
-function renderEpisodesTableHeader(episodes, columns) {
+function renderEpisodesTableHeader(columns) {
   const headerRow = document.querySelector('.episodes-table thead tr');
   const headerColumns = [];
   const sortState = filtersState.sort;
@@ -139,7 +141,7 @@ function renderEpisodesTableHeader(episodes, columns) {
 
     headerColumn.classList.add(`sorted-${sortState.direction}`);
 
-    populateEpisodesTable(episodes, columns);
+    populateEpisodesTable(columns);
   }
 }
 
@@ -166,7 +168,8 @@ function renderServerFilters(groupFilters) {
         }
 
         const { episodes, columns } = await loadEpisodes(filtersState.serverFilters);
-        populateEpisodesTable(episodes, columns);
+        currentEpisodes = episodes;
+        populateEpisodesTable(columns);
       },
     });
 
@@ -174,7 +177,7 @@ function renderServerFilters(groupFilters) {
   }
 }
 
-function renderClientFilters(episodes, columns) {
+function renderClientFilters(columns) {
   const controlsBar = document.querySelector('.controls-bar');
 
   for (const [filterIndex, filter] of Object.entries(filtersData)) {
@@ -196,7 +199,7 @@ function renderClientFilters(episodes, columns) {
           filtersState.filters[filterIndex] = event.target.value;
         }
 
-        populateEpisodesTable(episodes, columns);
+        populateEpisodesTable(columns);
       },
     });
 
@@ -251,21 +254,9 @@ function getFiltersData(episodes, columns) {
   return filtersData;
 }
 
-function filterEpisodes(columnIndex, selectedValue) {
-  if (selectedValue === '') {
-    filteredEpisodes = filteredEpisodes;
-  } else {
-    filteredEpisodes = filteredEpisodes.filter(
-      (episode) => String(episode[columnIndex]) === selectedValue
-    );
-  }
-
-  populateEpisodesTable(filteredEpisodes, columns);
-}
-
-function populateEpisodesTable(episodes, columns) {
+function populateEpisodesTable(columns) {
   const tableBody = document.querySelector('.episodes-table tbody');
-  const filteredEpisodes = getFilteredEpisodes(episodes);
+  const filteredEpisodes = getFilteredEpisodes(currentEpisodes);
 
   tableBody.innerHTML = '';
   for (const [episodeIndex, episodeData] of filteredEpisodes) {
