@@ -70,7 +70,7 @@ body {
   font-family: var(--font-body);
   font-size: 16px;
   line-height: 1.6;
-  overflow-y: scroll;
+  overflow: hidden scroll;
   -webkit-font-smoothing: antialiased;
 }
 
@@ -179,6 +179,7 @@ button {
 /* Table */
 .table-wrapper {
   width: 100%;
+  overflow-x: auto;
 }
 
 .table-wrapper--dense {
