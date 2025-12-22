@@ -21,6 +21,7 @@ SLCamera = cast(Any | None, _optional_import('positronic.drivers.camera.zed', 'S
 LinuxVideo = cast(Any | None, _optional_import('positronic.drivers.camera.linux_video', 'LinuxVideo'))
 OpenCVCamera = cast(Any | None, _optional_import('positronic.drivers.camera.opencv', 'OpenCVCamera'))
 LuxonisCamera = cast(Any | None, _optional_import('positronic.drivers.camera.luxonis', 'LuxonisCamera'))
+SoundSystem = cast(Any | None, _optional_import('positronic.drivers.sound', 'SoundSystem'))
 
 
 def _make_linux_video() -> ControlSystem:
@@ -74,3 +75,14 @@ def test_camera_drivers_are_picklable(factory: Callable[[], ControlSystem]):
     cam = factory()
     assert isinstance(cam, ControlSystem)
     pickle.dumps(cam)
+
+
+def test_sound_system_level_to_frequency_clamps_extreme_values():
+    if SoundSystem is None:
+        pytest.skip('sound dependencies are not available')
+
+    sound = SoundSystem()
+    # Extremely large level should not overflow (regression for pow overflow).
+    master_volume, frequency = sound._level_to_frequency(1e300)
+    assert master_volume == sound.enable_master_volume
+    assert 0.0 < frequency < sound.sample_rate / 2.0

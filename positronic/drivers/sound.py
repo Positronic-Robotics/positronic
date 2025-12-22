@@ -1,4 +1,5 @@
 import logging
+import math
 import wave
 from collections.abc import Iterator
 
@@ -38,19 +39,33 @@ class SoundSystem(pimm.ControlSystem):
         self.enable_master_volume = master_volume
         self.output_device_index = output_device_index
 
+        nyquist = self.sample_rate / 2.0
+        max_freq = nyquist * 0.95
+        self.max_octave = math.log2(max_freq / self.base_frequency) if max_freq > self.base_frequency else 0.0
+
         self.active = True
         self.current_phase = 0.0
         self.level: pimm.SignalReceiver[float] = pimm.ControlSystemReceiver(self, default=0.0)
         self.wav_path: pimm.SignalReceiver[str] = pimm.ControlSystemReceiver(self, default='')
 
     def _level_to_frequency(self, level: float | None) -> tuple[float, float]:
-        if level is None or level < self.enable_threshold:
+        if level is None:
             return 0.0, self.base_frequency
-        else:
-            level = float(level) - self.enable_threshold
-            octave = level / self.raise_octave_each
-            frequency = self.base_frequency * (2**octave)
-            return self.enable_master_volume, frequency
+
+        level_f = float(level)
+        if not math.isfinite(level_f) or level_f < self.enable_threshold:
+            return 0.0, self.base_frequency
+
+        level_f = level_f - self.enable_threshold
+        if self.raise_octave_each <= 0.0 or self.base_frequency <= 0.0:
+            return 0.0, self.base_frequency
+
+        octave = level_f / self.raise_octave_each
+
+        # Clamp to avoid numeric overflow and audio aliasing.
+        octave = min(octave, self.max_octave)
+        frequency = self.base_frequency * math.pow(2.0, octave)
+        return self.enable_master_volume, frequency
 
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Sleep]:
         p = pyaudio.PyAudio()
@@ -67,7 +82,8 @@ class SoundSystem(pimm.ControlSystem):
 
         while not should_stop.value:
             path_msg = self.wav_path.read()
-            if path_msg.updated:
+            if path_msg is not None and path_msg.updated:
+                assert path_msg.data is not None, 'Wav path must be provided'
                 logging.info('Playing %s', path_msg.data)
                 audio_files[file_idx] = wave.open(path_msg.data, 'rb')
                 assert audio_files[file_idx].getframerate() == 44100, 'Only 44100Hz wav files are currently supported'
