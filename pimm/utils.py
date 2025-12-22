@@ -21,14 +21,14 @@ class MapSignalReceiver(SignalReceiver[T]):
     like it didn't see the filtered message.
     """
 
-    def __init__(self, reader: SignalReceiver[T], func: Callable[[T], T | None]):
-        self.reader = reader
+    def __init__(self, receiver: SignalReceiver[T], func: Callable[[T], T | None]):
+        self.receiver = receiver
         self.func = func
 
         self.last_message: Message[T] | None = None
 
     def read(self):
-        orig_message = self.reader.read()
+        orig_message = self.receiver.read()
         if orig_message is None:
             return None
 
@@ -40,6 +40,9 @@ class MapSignalReceiver(SignalReceiver[T]):
 
         self.last_message = Message(transformed_data, orig_message.ts, orig_message.updated)
         return self.last_message
+
+    def _bind(self, receiver: SignalReceiver[T]):
+        self.receiver = receiver
 
 
 class MapSignalEmitter(SignalEmitter[T]):

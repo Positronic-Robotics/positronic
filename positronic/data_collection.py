@@ -188,7 +188,7 @@ def _wire(
 
     if sound is not None:
         world.connect(data_collection.sound, sound.wav_path)
-        world.connect(robot_arm.state, sound.level, emitter_wrapper=pimm.map(_wrench_to_level))
+        world.connect(robot_arm.state, sound.level, receiver_wrapper=pimm.map(_wrench_to_level))
 
     if ds_agent is not None:
         ds_agent.add_signal('controller_positions', controller_positions_serializer)

@@ -408,7 +408,11 @@ class TestWorldControlSystems:
             wrapper.assert_not_called()
 
             world.start(system)
-            wrapper.assert_called_once_with(system.receiver)
+            # receiver_wrapper is applied to the underlying transport receiver before
+            # it is bound into the logical ControlSystemReceiver.
+            assert wrapper.call_count == 1
+            (wrapped_receiver,), _ = wrapper.call_args
+            assert isinstance(wrapped_receiver, SignalReceiver)
 
             sent_ts = 123_456_789
             mirrored.emit('payload', ts=sent_ts)
@@ -1136,4 +1140,3 @@ class TestEmitterDict:
 
             # Fake connection should not deliver data
             assert consumer1.receiver.read() is None
-

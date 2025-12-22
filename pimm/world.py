@@ -634,36 +634,37 @@ class World:
 
         system_clock = SystemClock()
         local_connections, mp_connections = [], []
-        for emitter, receiver, emitter_wrapper, receiver_wrapper in self._connections:
+        for emitter, receiver, emitter_wrp, receiver_wrp in self._connections:
             if emitter.owner in local_cs and receiver.owner in local_cs:
-                local_connections.append((emitter, emitter_wrapper, receiver_wrapper(receiver), receiver.maxsize, None))
+                local_connections.append((emitter, emitter_wrp, receiver, receiver_wrp, receiver.maxsize, None))
             elif emitter.owner not in all_cs:
                 raise ValueError(f'Emitter {emitter.owner} is not in any control system')
             elif receiver.owner not in all_cs:
                 raise ValueError(f'Receiver {receiver.owner} is not in any control system')
             else:
                 clock = None if emitter.owner in local_cs else system_clock
-                mp_connections.append((emitter, emitter_wrapper, receiver_wrapper(receiver), receiver.maxsize, clock))
+                mp_connections.append((emitter, emitter_wrp, receiver, receiver_wrp, receiver.maxsize, clock))
 
-        for emitter, emitter_wrapper, receiver, maxsize, _clock in local_connections:
+        for emitter, emitter_wrp, receiver, receiver_wrp, maxsize, _clock in local_connections:
             kwargs = {'maxsize': maxsize} if maxsize is not None else {}
             em, re = self.local_pipe(**kwargs)
-            emitter._bind(emitter_wrapper(em))
-            receiver._bind(re)
+            emitter._bind(emitter_wrp(em))
+            # Wrap the underlying transport receiver before binding it into the logical receiver.
+            receiver._bind(receiver_wrp(re))
 
         # Interprocess connection handling
         grouped_mp_connections = defaultdict(list)
-        for emitter, emitter_wrapper, receiver, maxsize, clock in mp_connections:
-            grouped_mp_connections[emitter].append((emitter_wrapper, receiver, maxsize, clock))
+        for emitter, emitter_wrp, receiver, receiver_wrp, maxsize, clock in mp_connections:
+            grouped_mp_connections[emitter].append((emitter_wrp, receiver_wrp, receiver, maxsize, clock))
 
         for emitter_logical, receivers_logical in grouped_mp_connections.items():
             # When emitter lives in a different process, we use system clock to timestamp messages, otherwise we will
             # have to serialise our local clock to the other process, which is not what we want.
             num_receivers = len(receivers_logical)
-            emitter_wrapper, _, maxsize, clock = receivers_logical[0]  # parameters the same for all receivers
+            emitter_wrp, _, _, maxsize, clock = receivers_logical[0]  # parameters the same for all receivers
 
-            for wrapper, _, _, _ in receivers_logical[1:]:
-                if wrapper != emitter_wrapper:
+            for wrapper, _, _, _, _ in receivers_logical[1:]:
+                if wrapper != emitter_wrp:
                     raise ValueError(
                         f'Conflicting emitter wrappers detected for emitter owned by '
                         f"'{type(emitter_logical.owner).__name__}'. "
@@ -674,13 +675,14 @@ class World:
             kwargs = {'maxsize': maxsize} if maxsize is not None else {}
             emitter_physical, receivers_physical = self.mp_pipes(clock=clock, num_receivers=num_receivers, **kwargs)
 
-            emitter_logical._bind(emitter_wrapper(emitter_physical))
+            emitter_logical._bind(emitter_wrp(emitter_physical))
 
             if not isinstance(receivers_physical, list):
                 receivers_physical = [receivers_physical]
 
-            for (_, logical, _, _), physical in zip(receivers_logical, receivers_physical, strict=True):
-                logical._bind(physical)
+            for (_, receiver_wrp, logical, _, _), physical in zip(receivers_logical, receivers_physical, strict=True):
+                # Wrap the underlying transport receiver before binding it into the logical receiver.
+                logical._bind(receiver_wrp(physical))
 
         self.start_in_subprocess(*[cs.run for cs in background])
         return self.interleave(*[cs.run for cs in main_process])
