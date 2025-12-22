@@ -47,6 +47,6 @@ def encoded(base, observation, action, task):
     if task is not None:
         tfs.append(Derive(task=lambda _ep: task))
     else:
-        tfs.append(Identity('task'))
+        tfs.append(Identity(select=['task']))
 
     return TransformedDataset(base, Group(*tfs))

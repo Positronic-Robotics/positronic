@@ -44,7 +44,10 @@ class Derive(EpisodeTransform):
         # TODO: Should we lazy-fy this?
         data = {}
         for name, fn in self._transforms.items():
-            res = fn(episode)
+            try:
+                res = fn(episode)
+            except Exception as e:
+                raise ValueError(f'Failed to apply transform {name} to episode {episode.meta}.') from e
             if res is not None:
                 data[name] = res
 
@@ -117,17 +120,27 @@ class Identity(EpisodeTransform):
         Identity()  # Pass through all keys unchanged
     """
 
-    def __init__(self, *features: str):
+    def __init__(self, select: list[str] = None, remove: list[str] = None):
         """
         Args:
-            *features: Keys to include. If empty, returns the original episode unchanged.
+            select: Keys to include. If empty, returns the original episode unchanged.
+            remove: Keys to exclude.
         """
-        self._features = set(features)
+        self._select = set(select or [])
+        self._remove = set(remove or [])
 
     def __call__(self, episode: Episode) -> Episode:
-        if not self._features:
+        if not self._select and not self._remove:
             return episode
-        return EpisodeContainer({k: episode[k] for k in self._features}, episode.meta)
+
+        container = {}
+        for k, v in episode.items():
+            if k in self._remove:
+                continue
+            if self._select and k not in self._select:
+                continue
+            container[k] = v
+        return EpisodeContainer(container, episode.meta)
 
 
 class Concat:

@@ -162,7 +162,7 @@ def test_identity_transform(sig_simple):
     ep = EpisodeContainer(data={'s': sig_simple, 'id': 42, 'note': 'test', 'extra': 'skip'})
 
     # Select only 's' and 'id'
-    tf = Identity('s', 'id')
+    tf = Identity(select=['s', 'id'])
     selected = tf(ep)
 
     assert set(selected.keys()) == {'s', 'id'}
@@ -238,3 +238,21 @@ def test_derive_filters_none(sig_simple):
     assert 'skipped' not in transformed.keys()
     with pytest.raises(KeyError):
         _ = transformed['skipped']
+
+
+def test_identity_transform_remove(sig_simple):
+    """Test Identity transform that removes specific keys."""
+    ep = EpisodeContainer(data={'s': sig_simple, 'id': 42, 'note': 'test', 'extra': 'skip'})
+
+    # Remove 'note' and 'extra'
+    tf = Identity(remove=['note', 'extra'])
+    selected = tf(ep)
+
+    assert set(selected.keys()) == {'s', 'id'}
+    assert [v for v, _ in selected['s']] == [v for v, _ in ep['s']]
+    assert selected['id'] == 42
+
+    with pytest.raises(KeyError):
+        _ = selected['note']
+    with pytest.raises(KeyError):
+        _ = selected['extra']
