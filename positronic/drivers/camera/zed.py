@@ -39,24 +39,18 @@ class SLCamera(pimm.ControlSystem):
             max_recovery_time_sec: (float) Maximum time to wait for camera recovery. If exceeded, will stop the camera.
         """
         super().__init__()
-        self.init_params = sl.InitParameters()
-        self.init_params.camera_resolution = getattr(sl.RESOLUTION, resolution.upper())
-        if fps is not None:
-            self.init_params.camera_fps = fps
-        if serial_number is not None:
-            inpt = sl.InputType()
-            inpt.set_from_serial_number(serial_number)
-            self.init_params.input = inpt
-
-        self.view = getattr(sl.VIEW, view.upper())
-        self.init_params.depth_mode = getattr(sl.DEPTH_MODE, depth_mode.upper())
-        self.init_params.coordinate_units = sl.UNIT.METER
-        self.init_params.sdk_verbose = 1
-        self.init_params.enable_image_enhancement = image_enhancement
-        self.init_params.async_grab_camera_recovery = True
+        # IMPORTANT: This control system may be spawned under multiprocessing "spawn".
+        # Keep only plain-Python config on self so the instance is picklable; construct
+        # pyzed objects inside `run()`.
+        self._serial_number = serial_number
+        self._fps = fps
+        self._view_name = view
+        self._resolution_name = resolution
+        self._depth_mode_name = depth_mode
+        self._image_enhancement = image_enhancement
+        self._depth_mask_requested = depth_mask
 
         self.max_depth = max_depth
-        self.depth_mask_enabled = self.init_params.depth_mode != sl.DEPTH_MODE.NONE and depth_mask
         self.max_recovery_time_sec = max_recovery_time_sec
 
         # Main frame channel (always present)
@@ -75,21 +69,40 @@ class SLCamera(pimm.ControlSystem):
         TIME_REF_IMAGE = sl.TIME_REFERENCE.IMAGE
         fps_counter = pimm.utils.RateCounter('Camera')
 
+        init_params = sl.InitParameters()
+        init_params.camera_resolution = getattr(sl.RESOLUTION, self._resolution_name.upper())
+        if self._fps is not None:
+            init_params.camera_fps = self._fps
+        if self._serial_number is not None:
+            inpt = sl.InputType()
+            inpt.set_from_serial_number(self._serial_number)
+            init_params.input = inpt
+
+        view = getattr(sl.VIEW, self._view_name.upper())
+        depth_mode = getattr(sl.DEPTH_MODE, self._depth_mode_name.upper())
+        init_params.depth_mode = depth_mode
+        init_params.coordinate_units = sl.UNIT.METER
+        init_params.sdk_verbose = 1
+        init_params.enable_image_enhancement = self._image_enhancement
+        init_params.async_grab_camera_recovery = True
+
+        depth_mask_enabled = depth_mode != sl.DEPTH_MODE.NONE and self._depth_mask_requested
+
         # Runtime validation: check if depth channels are connected but not enabled
-        if self.depth.num_bound > 0 and self.init_params.depth_mode == sl.DEPTH_MODE.NONE:
+        if self.depth.num_bound > 0 and depth_mode == sl.DEPTH_MODE.NONE:
             raise RuntimeError(
                 'depth channel is connected but depth_mode is "none". '
                 'Set depth_mode to "near", "far", "high", or "ultra" to enable depth.'
             )
 
-        if self.depth_mask.num_bound > 0 and not self.depth_mask_enabled:
+        if self.depth_mask.num_bound > 0 and not depth_mask_enabled:
             raise RuntimeError(
                 'depth_mask channel is connected but depth_mask parameter is False. '
                 'Set depth_mask=True to enable depth mask output.'
             )
 
         zed = sl.Camera()
-        error_code = zed.open(self.init_params)
+        error_code = zed.open(init_params)
         if error_code != SUCCESS:
             logging.error(f'Failed to open camera: {error_code}')
             return
@@ -114,7 +127,7 @@ class SLCamera(pimm.ControlSystem):
 
             image = sl.Mat()
             ts_s = zed.get_timestamp(TIME_REF_IMAGE).get_nanoseconds() / 1e9
-            if zed.retrieve_image(image, self.view) == SUCCESS:
+            if zed.retrieve_image(image, view) == SUCCESS:
                 # The images are in BGRA format, convert to RGB
                 np_image = image.get_data()[:, :, [2, 1, 0]]
 
@@ -125,7 +138,7 @@ class SLCamera(pimm.ControlSystem):
                 self.frame.emit(self._frame_adapter, ts=ts_s)
 
                 # Handle depth if enabled and connected
-                if self.init_params.depth_mode != sl.DEPTH_MODE.NONE:
+                if depth_mode != sl.DEPTH_MODE.NONE:
                     # Only retrieve depth data if at least one depth channel is connected
                     if self.depth.num_bound > 0 or self.depth_mask.num_bound > 0:
                         depth = sl.Mat()
