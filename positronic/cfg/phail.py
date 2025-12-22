@@ -18,6 +18,11 @@ from positronic.dataset.transforms import TransformedDataset
 from positronic.dataset.transforms.episode import Concat, Derive, FromValue, Group, Identity, Rename
 
 from . import dataset, policy
+from . import eval as eval_cfg
+
+TOWELS_TASK = 'Pick all the towels one by one from transparent tote and place them into the large grey tote.'
+SPOONS_TASK = 'Pick all the wooden spoons one by one from transparent tote and place them into the large grey tote.'
+SCISSORS_TASK = 'Pick all the scissors one by one from transparent tote and place them into the large grey tote.'
 
 
 @cfn.config(path='s3://raw/droid/')
@@ -25,42 +30,11 @@ def droid_ds(path):
     root = pos3.download(path)
 
     towels = load_all_datasets(root / 'towels')
-    towels = TransformedDataset(
-        towels,
-        Group(
-            Derive(
-                task=FromValue(
-                    'Pick all the towels one by one from transparent tote and place them into the large grey tote.'
-                )
-            ),
-            Identity(),
-        ),
-    )
+    towels = TransformedDataset(towels, Group(Derive(task=FromValue(TOWELS_TASK)), Identity()))
     spoons = load_all_datasets(root / 'spoons')
-    spoons = TransformedDataset(
-        spoons,
-        Group(
-            Derive(
-                task=FromValue(
-                    'Pick all the wooden spoons one by one from transparent tote '
-                    'and place them into the large grey tote.'
-                )
-            ),
-            Identity(),
-        ),
-    )
+    spoons = TransformedDataset(spoons, Group(Derive(task=FromValue(SPOONS_TASK)), Identity()))
     scissors = load_all_datasets(root / 'scisors')
-    scissors = TransformedDataset(
-        scissors,
-        Group(
-            Derive(
-                task=FromValue(
-                    'Pick all the scissors one by one from transparent tote and place them into the large grey tote.'
-                )
-            ),
-            Identity(),
-        ),
-    )
+    scissors = TransformedDataset(scissors, Group(Derive(task=FromValue(SCISSORS_TASK)), Identity()))
     return towels + spoons + scissors
 
 
@@ -78,7 +52,7 @@ old_to_new = dataset.group.override(
             'image.wrist': 'image.handcam_left',
             'image.exterior': 'image.back_view',
         }),
-        Identity('grip', 'target_grip', 'mjSTATE_FULLPHYSICS', 'mjSTATE_INTEGRATION', 'mjSTATE_WARMSTART'),
+        Identity(select=['grip', 'target_grip', 'mjSTATE_FULLPHYSICS', 'mjSTATE_INTEGRATION', 'mjSTATE_WARMSTART']),
     ]
 )
 
@@ -202,6 +176,9 @@ def calculate_units(episode: Episode) -> int:
 
     This function is vibe-coded with Gemini 3 Pro (High). It works fine as a heuristic.
     """
+    if episode['task'] == SCISSORS_TASK:
+        return 10
+
     if 'target_grip' in episode.signals:
         grip_sig = episode.signals['target_grip']
     elif 'grip' in episode.signals:
@@ -284,12 +261,38 @@ ft_ds = dataset.transform.override(
         dataset.group.override(
             transforms=[
                 Identity(),
-                Derive(started=lambda ep: datetime.fromtimestamp(ep.meta['created_ts_ns'] / 1e9)),
-                Derive(uph=uph),
+                Derive(started=lambda ep: datetime.fromtimestamp(ep.meta['created_ts_ns'] / 1e9), uph=uph),
             ]
         )
     ],
     extra_meta={'name': 'PhAIL Finetuning Dataset'},
+)
+
+
+ft_eval_ds = dataset.transform.override(
+    base=dataset.transform.override(
+        base=ft_ds,
+        transforms=[
+            Identity(remove=['units']),
+            Rename(**{'eval.successful_items': 'units', 'eval.total_items': 'units'}),
+        ],
+    ),
+    transforms=[
+        dataset.group.override(
+            transforms=[
+                Identity(),
+                Derive(
+                    task_code=eval_cfg.task_code,
+                    model=FromValue('Teleoperated by Human'),
+                    units=eval_cfg.units,
+                    uph=eval_cfg.uph,
+                    checkpoint=FromValue(''),
+                    success=FromValue(100),
+                    started=eval_cfg.started,
+                ),
+            ]
+        )
+    ],
 )
 
 
