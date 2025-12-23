@@ -1,4 +1,3 @@
-from collections.abc import Callable
 from typing import Any
 
 import numpy as np
@@ -25,33 +24,12 @@ def _detect_device() -> str:
 
 
 class LerobotPolicy(Policy):
-    def __init__(
-        self,
-        policy_factory: Callable[[], PreTrainedPolicy],
-        device: str | None = None,
-        extra_meta: dict[str, Any] | None = None,
-    ):
-        self.factory = policy_factory
-        self.original = None
-        self.target_device = device
-        self.n_action_chunk = None
-
-        # We initialize on CPU to ensure the policy is pickleable when passed to a subprocess.
-        # The model will be moved to the target device (e.g. MPS/CUDA) lazily on the first inference call.
-        self.device = 'cpu'
+    def __init__(self, policy: PreTrainedPolicy, device: str | None = None, extra_meta: dict[str, Any] | None = None):
+        self._device = device or _detect_device()
+        self._policy = policy.to(self._device)
         self.extra_meta = extra_meta or {}
 
-    @property
-    def _policy(self) -> PreTrainedPolicy:
-        if self.original is None:
-            self.original = self.factory()
-            self.target_device = self.target_device or _detect_device()
-            self.original.to(self.target_device)
-        return self.original
-
     def select_action(self, obs: dict[str, Any]) -> dict[str, Any] | list[dict[str, Any]]:
-        policy = self._policy
-
         obs_int = {}
         for key, val in obs.items():
             if key == 'task':
@@ -60,11 +38,11 @@ class LerobotPolicy(Policy):
                 if key.startswith('observation.images.'):
                     val = np.transpose(val.astype(np.float32) / 255.0, (2, 0, 1))
                 val = val[np.newaxis, ...]
-                obs_int[key] = torch.from_numpy(val).to(self.target_device)
+                obs_int[key] = torch.from_numpy(val).to(self._device)
             else:
-                obs_int[key] = torch.as_tensor(val).to(self.target_device)
+                obs_int[key] = torch.as_tensor(val).to(self._device)
 
-        action = policy.predict_action_chunk(obs_int)[:, : self.n_action_chunk]
+        action = self._policy.predict_action_chunk(obs_int)
         action = action.squeeze(0).cpu().numpy()
         return [{'action': a} for a in action]
 

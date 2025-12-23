@@ -1,5 +1,3 @@
-from functools import partial
-
 import configuronic as cfn
 import pos3
 
@@ -38,27 +36,9 @@ def wrapped(base: Policy, observation: ObservationEncoder | None, action: Action
     )
 
 
-@cfn.config(checkpoint=None, use_temporal_ensembler=False)
-def act(
-    checkpoints_dir: str,
-    checkpoint: str | None,
-    use_temporal_ensembler: bool,
-    n_action_steps: int | None = None,
-    device=None,
-):
-    def factory(fully_specified_checkpoint_dir: str):
-        from lerobot.policies.act.modeling_act import ACTPolicy, ACTTemporalEnsembler
-
-        policy = ACTPolicy.from_pretrained(pos3.download(fully_specified_checkpoint_dir), strict=True)
-
-        if use_temporal_ensembler:
-            policy.config.n_action_steps = 1
-            policy.config.temporal_ensemble_coeff = 0.01
-            policy.temporal_ensembler = ACTTemporalEnsembler(0.01, policy.config.chunk_size)
-
-        if n_action_steps is not None:
-            policy.config.n_action_steps = n_action_steps
-        return policy
+@cfn.config(checkpoint=None)
+def act(checkpoints_dir: str, checkpoint: str | None, n_action_steps: int | None = None, device=None):
+    from lerobot.policies.act.modeling_act import ACTPolicy
 
     checkpoints_dir = checkpoints_dir.rstrip('/') + '/checkpoints/'
     if checkpoint is None:
@@ -67,21 +47,19 @@ def act(
         checkpoint = str(checkpoint).strip('/')
 
     fully_specified_checkpoint_dir = checkpoints_dir.rstrip('/') + '/' + checkpoint + '/pretrained_model/'
-    return LerobotPolicy(
-        partial(factory, fully_specified_checkpoint_dir),
-        device,
-        extra_meta={'type': 'act', 'checkpoint_path': fully_specified_checkpoint_dir},
-    )
+    policy = ACTPolicy.from_pretrained(pos3.download(fully_specified_checkpoint_dir), strict=True)
+    if n_action_steps is not None:
+        policy.config.n_action_steps = n_action_steps
+
+    return LerobotPolicy(policy, device, extra_meta={'type': 'act', 'checkpoint_path': fully_specified_checkpoint_dir})
 
 
 @cfn.config()
 def diffusion(checkpoint_path: str, device: str | None = None):
     from lerobot.policies.diffusion.modeling_diffusion import DiffusionPolicy
 
-    def factory():
-        return DiffusionPolicy.from_pretrained(pos3.download(checkpoint_path), local_files_only=True, strict=True)
-
-    return LerobotPolicy(factory, device, extra_meta={'type': 'diffusion', 'checkpoint_path': checkpoint_path})
+    policy = DiffusionPolicy.from_pretrained(pos3.download(checkpoint_path), local_files_only=True, strict=True)
+    return LerobotPolicy(policy, device, extra_meta={'type': 'diffusion', 'checkpoint_path': checkpoint_path})
 
 
 act_absolute = wrapped.override(base=act, observation=obs_cfg.eepose, action=act_cfg.absolute_position)

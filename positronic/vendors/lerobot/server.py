@@ -1,10 +1,11 @@
 import asyncio
 import logging
 import traceback
+from collections.abc import Callable
+from pathlib import Path
 from typing import Any
 
 import configuronic as cfn
-import numpy as np
 import pos3
 import torch
 import websockets
@@ -12,7 +13,12 @@ from lerobot.policies.act.modeling_act import ACTPolicy
 from lerobot.policies.pretrained import PreTrainedPolicy
 from websockets.asyncio.server import serve
 
+from positronic.cfg.policy import action as act_cfg
+from positronic.cfg.policy import observation as obs_cfg
 from positronic.offboard.serialisation import deserialise, serialise
+from positronic.policy import DecodedEncodedPolicy, Policy
+from positronic.policy.lerobot import LerobotPolicy
+from positronic.utils import get_latest_checkpoint
 from positronic.utils.logging import init_logging
 
 logger = logging.getLogger(__name__)
@@ -37,24 +43,52 @@ def _detect_device() -> str:
 class InferenceServer:
     def __init__(
         self,
-        port: int,
-        policy: PreTrainedPolicy,
-        n_action_chunk: int | None = None,
-        metadata: dict[str, Any] | None = None,
+        policy_factory: Callable[[str], PreTrainedPolicy],
+        observation_encoder,
+        action_decoder,
+        checkpoints_dir: str | Path,
+        checkpoint: str | None = None,
         host: str = '0.0.0.0',
+        port: int = 8000,
+        metadata: dict[str, Any] | None = None,
         device: str | None = None,
     ):
-        self.policy = policy
-        self.n_action_chunk = n_action_chunk
-        self.metadata = metadata or {}
+        self.policy_factory = policy_factory
+        self.observation_encoder = observation_encoder
+        self.action_decoder = action_decoder
+        self.checkpoints_dir = checkpoints_dir
+        self.checkpoint = checkpoint
         self.host = host
         self.port = port
         self.device = device or _detect_device()
 
-        extra_meta = {'host': host, 'port': port, 'device': self.device}
-        if n_action_chunk is not None:
-            extra_meta['n_action_chunk'] = n_action_chunk
-        self.metadata.update(extra_meta)
+        self.metadata = metadata or {}
+        self.metadata.update(host=host, port=port, device=self.device)
+
+        checkpoint_path = self._checkpoint_path()
+        self.policy = self._policy(checkpoint_path)
+
+    def _policy(self, checkpoint_path: str) -> Policy:
+        base_meta = {'checkpoint_path': checkpoint_path}
+        # Preserve caller-provided metadata (host/port/device/etc.) in the policy meta.
+        base_meta.update(self.metadata)
+        policy = self.policy_factory(checkpoint_path)
+        if hasattr(policy, 'metadata'):
+            base_meta.update(policy.metadata)
+        base = LerobotPolicy(policy, self.device)
+
+        return DecodedEncodedPolicy(
+            base, encoder=self.observation_encoder.encode, decoder=self.action_decoder.decode, extra_meta=base_meta
+        )
+
+    def _checkpoint_path(self) -> str:
+        checkpoints_dir = str(self.checkpoints_dir).rstrip('/') + '/checkpoints/'
+        if self.checkpoint is None:
+            checkpoint = get_latest_checkpoint(checkpoints_dir)
+        else:
+            checkpoint = str(self.checkpoint).strip('/')
+
+        return checkpoints_dir.rstrip('/') + '/' + checkpoint + '/pretrained_model/'
 
     async def _handler(self, websocket):
         peer = websocket.remote_address
@@ -64,24 +98,13 @@ class InferenceServer:
             self.policy.reset()
 
             # Send Metadata
-            logger.info(f'Sending metadata: {self.metadata}')
-            await websocket.send(serialise({'meta': self.metadata}))
+            await websocket.send(serialise({'meta': self.policy.meta}))
 
             # Inference Loop
             async for message in websocket:
                 try:
                     obs = deserialise(message)
-                    logger.info('Parsed message')
-                    for key, val in obs.items():
-                        if isinstance(val, np.ndarray):
-                            if key.startswith('observation.images.'):
-                                val = np.transpose(val.astype(np.float32) / 255.0, (2, 0, 1))
-                            val = val[np.newaxis, ...]
-                            obs[key] = torch.from_numpy(val).to(self.device)
-
-                    action = self.policy.predict_action_chunk(obs)[:, : self.n_action_chunk]
-                    action = action.squeeze(0).cpu().numpy()
-                    action = [{'action': a} for a in action]
+                    action = self.policy.select_action(obs)
                     await websocket.send(serialise({'result': action}))
 
                 except Exception as e:
@@ -102,20 +125,36 @@ class InferenceServer:
             await asyncio.get_running_loop().create_future()  # Run forever
 
 
-@cfn.config()
-def act(checkpoint_path: str):
-    path = pos3.download(checkpoint_path)
-    policy = ACTPolicy.from_pretrained(path, strict=True)
+def act(checkpoint_path: str) -> PreTrainedPolicy:
+    policy = ACTPolicy.from_pretrained(checkpoint_path, strict=True)
     policy.metadata = {'type': 'act', 'checkpoint_path': checkpoint_path}
     return policy
 
 
-@cfn.config(policy=act, port=8000, host='0.0.0.0', n_action_chunk=None)
-def main(policy: PreTrainedPolicy, n_action_chunk: int | None, port: int, host: str):
+@cfn.config(
+    policy_factory=act,
+    observation_encoder=obs_cfg.eepose,
+    action_decoder=act_cfg.absolute_position,
+    checkpoint=None,
+    port=8000,
+    host='0.0.0.0',
+)
+def main(
+    policy_factory: Callable[[str], PreTrainedPolicy],
+    checkpoints_dir: str,
+    checkpoint: str | None,
+    observation_encoder,
+    action_decoder,
+    port: int,
+    host: str,
+):
     """
     Starts the inference server with the given policy.
     """
-    server = InferenceServer(port, policy, n_action_chunk, policy.metadata, host)
+    checkpoints_dir = str(pos3.download(checkpoints_dir))
+    server = InferenceServer(
+        policy_factory, observation_encoder, action_decoder, checkpoints_dir, checkpoint, host=host, port=port
+    )
     try:
         asyncio.run(server.serve())
     except KeyboardInterrupt:

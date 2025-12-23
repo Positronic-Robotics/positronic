@@ -225,7 +225,7 @@ main_sim_cfg = cfn.Config(
     loaders=positronic.cfg.simulator.stack_cubes_loaders,
     camera_fps=15,
     policy_fps=15,
-    driver=timed.override(simulation_time=15, task='pick up the green cube and put in on top of the red cube'),
+    driver=timed.override(simulation_time=15, task='Pick up the green cube and place it on the red cube.'),
     # We use 3 cameras not because we need it, but because Mujoco does not render
     # the second image when using only 2 cameras
     camera_dict={'image.wrist': 'handcam_left_ph', 'image.exterior': 'back_view_ph', 'image.agent_view': 'agentview'},
@@ -264,7 +264,7 @@ def _internal_main():
         'sim_pnp': main_sim_cfg.override(
             loaders=positronic.cfg.simulator.multi_tote_loaders,
             observers={},
-            **{'driver.task': 'Pick up objects from the red tote and place them in the green tote'},
+            **{'driver.task': 'Pick up objects from the red tote and place them in the green tote.'},
         ),
     })
 

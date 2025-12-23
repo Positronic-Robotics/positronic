@@ -97,8 +97,9 @@ testpaths = [
     "pimm/tests",
     "positronic/dataset/tests",
     "positronic/geom/tests",
-    "positronic/tests",
+    "positronic/offboard/tests",
     "positronic/policy/tests",
+    "positronic/tests",
     "positronic/utils/s3/tests",
 ]
 python_files = ["test_*.py", "*_test.py"]
