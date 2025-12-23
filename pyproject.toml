@@ -100,7 +100,7 @@ testpaths = [
     "positronic/offboard/tests",
     "positronic/policy/tests",
     "positronic/tests",
-    "positronic/utils/s3/tests",
+    "positronic/utils/tests",
 ]
 python_files = ["test_*.py", "*_test.py"]
 addopts = [
