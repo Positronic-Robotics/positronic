@@ -6,7 +6,7 @@ build-backend = "setuptools.build_meta"
 name = "positronic"
 version = "0.1.1"
 description = "Positronic robotics project"
-requires-python = ">=3.11"
+requires-python = ">=3.11, <3.12"
 readme = { file = "README.md", content-type = "text/markdown" }
 license = { file = "LICENSE" }
 classifiers = [
@@ -31,7 +31,8 @@ dependencies = [
     "numpy",
     "opencv-python-headless",
     "openpi-client",
-    "pos3==0.1.0rc1",
+    "plotly>=6.5.0",
+    "pos3==0.1.0",
     "pyarrow",
     "pydantic",
     "pyturbojpeg",
