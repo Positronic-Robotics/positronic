@@ -298,7 +298,7 @@ def default_table() -> TableConfig:
     }
 
 
-@cfn.config(dataset=positronic.cfg.dataset.local_all, ep_table_cfg=default_table, max_resolution=640)
+@cfn.config(dataset=positronic.cfg.dataset.local_all, ep_table_cfg=default_table, max_resolution=640, group_tables=None)
 def main(
     dataset: Dataset,
     ep_table_cfg: TableConfig | None,

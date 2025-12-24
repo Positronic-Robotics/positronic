@@ -95,6 +95,7 @@ subdirectory = "packages/openpi-client"
 [tool.pytest.ini_options]
 testpaths = [
     "pimm/tests",
+    "positronic/cfg/tests",
     "positronic/dataset/tests",
     "positronic/geom/tests",
     "positronic/offboard/tests",

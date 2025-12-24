@@ -66,6 +66,15 @@ class Signal(Sequence[tuple[T, int]], ABC, Generic[T]):
 
     Implementations must provide only a minimal abstract interface; all indexing
     and time semantics are implemented in this base class.
+
+    The base class assumes a *time-ordered* underlying record stream:
+    - Each record is a pair: (value, timestamp_ns).
+    - Timestamps are integer nanoseconds and are **monotonically non-decreasing**
+      with increasing record index.
+    - Random access is supported through the protected methods below; the public
+      API (`__getitem__`, `time[...]`, `keys()`, `values()`) is implemented in
+      terms of those methods and therefore inherits their correctness
+      requirements.
     """
 
     @abstractmethod
@@ -76,14 +85,74 @@ class Signal(Sequence[tuple[T, int]], ABC, Generic[T]):
 
     @abstractmethod
     def _ts_at(self, indices: IndicesLike) -> Sequence[int] | np.ndarray:
+        """Return timestamps for the requested *record indices*.
+
+        This is the timestamp backend used by the base class to implement:
+        - `keys()`
+        - integer/slice/array indexing (`__getitem__`)
+        - time-based indexing (`time[...]`)
+
+        Implementations must follow these rules:
+        - **Input**: `indices` is either a `slice`, a sequence/array of ints, or
+          a numpy integer array (see `IndicesLike`). Indices are *record indices*
+          (0-based), not timestamps.
+        - **Output**: a 1D sequence/array of integer timestamps (nanoseconds)
+          aligned with the request. For array-like indices, the output length
+          must match `len(indices)`; for a slice, it must match the slice span.
+        - **Ordering**: when indices are in increasing order, returned
+          timestamps must be non-decreasing.
+        - **Bounds**: the base class validates bounds for public indexing
+          paths; implementations may assume indices are valid.
+
+        Returning a numpy array is recommended for efficiency, but not required.
+        """
         raise NotImplementedError
 
     @abstractmethod
     def _values_at(self, indices: IndicesLike) -> Sequence[T]:
+        """Return values for the requested *record indices*.
+
+        This is the value backend used by the base class to implement:
+        - `values()`
+        - integer/slice/array indexing (`__getitem__`)
+        - metadata inference (`meta`) when not overridden
+
+        Implementations must follow these rules:
+        - **Input**: same indexing contract as `_ts_at` (`IndicesLike`).
+        - **Output**: a sequence of values aligned with the request. For
+          array-like indices, the output length must match `len(indices)`; for a
+          slice, it must match the slice span.
+        - **Stability**: repeated calls with the same indices must return values
+          corresponding to the same records (i.e., the signal is conceptually
+          immutable for readers).
+        - **Bounds**: as with `_ts_at`, public indexing does bounds checks; the
+          implementation can assume valid indices.
+        """
         raise NotImplementedError
 
     @abstractmethod
     def _search_ts(self, ts_array: RealNumericArrayLike) -> IndicesLike:
+        """Map timestamps to record indices by searching in the signal timeline.
+
+        The base class uses this method to implement time-based indexing via
+        `signal.time[...]`:
+        - For a timestamp `t`, we want the most recent record at or before `t`.
+
+        Implementations must follow these rules:
+        - **Input**: `ts_array` is array-like (python sequence or numpy array) of
+          real numeric timestamps (ints/floats). Timestamps are in the same
+          units as stored keys (nanoseconds).
+        - **Output**: an integer index (or an array of integer indices) of the
+          same shape/length as the input where each element is:
+          - the greatest record index `i` such that `keys()[i] <= t`, or
+          - `-1` if `t` precedes the first record.
+        - **Monotonicity**: if `ts_array` is non-decreasing, the returned
+          indices must be non-decreasing.
+        - **Empty signal**: should return `-1` (or an array of `-1`s) for all
+          queries.
+
+        A typical implementation is `np.searchsorted(keys, ts_array, "right") - 1`.
+        """
         raise NotImplementedError
 
     # Public API
@@ -135,6 +204,14 @@ class Signal(Sequence[tuple[T, int]], ABC, Generic[T]):
     @property
     def time(self) -> TimeIndexerLike[T]:
         return _SignalViewTime(self)
+
+    @final
+    def values(self) -> Sequence[T]:
+        return self._values_at(slice(None))
+
+    @final
+    def keys(self) -> Sequence[int]:
+        return self._ts_at(slice(None))
 
     @final
     def __getitem__(self, index_or_slice: int | IndicesLike) -> Union[tuple[T, int], 'Signal[T]']:
