@@ -52,3 +52,9 @@ class LerobotPolicy(Policy):
     @property
     def meta(self) -> dict[str, Any]:
         return self.extra_meta.copy()
+
+    def close(self):
+        if self._policy is not None:
+            self._policy.to('cpu')
+            del self._policy
+            self._policy = None

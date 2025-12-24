@@ -35,7 +35,7 @@ class InferenceServer:
         self.app.websocket('/api/v1/session/{model_id}')(self.websocket_endpoint)
 
     async def get_models(self):
-        return list(self.policy_registry.keys())
+        return {'models': list(self.policy_registry.keys())}
 
     async def websocket_endpoint(self, websocket: WebSocket, model_id: str | None = None):
         await websocket.accept()

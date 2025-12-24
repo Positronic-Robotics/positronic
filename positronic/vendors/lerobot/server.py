@@ -8,17 +8,17 @@ from typing import Any
 import configuronic as cfn
 import pos3
 import torch
-import websockets
+import uvicorn
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from lerobot.policies.act.modeling_act import ACTPolicy
 from lerobot.policies.pretrained import PreTrainedPolicy
-from websockets.asyncio.server import serve
 
 from positronic.cfg.policy import action as act_cfg
 from positronic.cfg.policy import observation as obs_cfg
 from positronic.offboard.serialisation import deserialise, serialise
 from positronic.policy import DecodedEncodedPolicy, Policy
 from positronic.policy.lerobot import LerobotPolicy
-from positronic.utils import get_latest_checkpoint
+from positronic.utils.checkpoints import get_latest_checkpoint, list_checkpoints
 from positronic.utils.logging import init_logging
 
 logger = logging.getLogger(__name__)
@@ -40,6 +40,48 @@ def _detect_device() -> str:
     return 'cpu'
 
 
+class _PolicyManager:
+    """
+    Manages the lifecycle of a single active policy.
+    Ensures that only one policy is loaded at a time.
+    Waits for all active sessions to finish before switching policies.
+    """
+
+    def __init__(self, loader: Callable[[str], Policy]):
+        self.loader = loader
+        self.current_checkpoint_id: str | None = None
+        self.current_policy: Policy | None = None
+        self.active_sessions: int = 0
+        self._lock = asyncio.Lock()
+        self._condition = asyncio.Condition(self._lock)
+
+    async def get_policy(self, checkpoint_id: str) -> Policy:
+        async with self._lock:
+            if self.current_checkpoint_id != checkpoint_id:
+                logger.info(f'Switching policy from {self.current_checkpoint_id} to {checkpoint_id}')
+
+                while self.active_sessions > 0:  # Wait for all active sessions to finish
+                    logger.info(f'Waiting for {self.active_sessions} sessions to finish...')
+                    await self._condition.wait()
+
+                if self.current_policy:
+                    logger.info('Unloading current policy')
+                    self.current_policy.close()
+
+                logger.info(f'Loading policy {checkpoint_id}')
+                self.current_policy = self.loader(checkpoint_id)
+                self.current_checkpoint_id = checkpoint_id
+
+            self.active_sessions += 1
+            return self.current_policy
+
+    async def release_session(self):
+        async with self._lock:
+            self.active_sessions -= 1
+            if self.active_sessions == 0:
+                self._condition.notify_all()
+
+
 class InferenceServer:
     def __init__(
         self,
@@ -56,8 +98,7 @@ class InferenceServer:
         self.policy_factory = policy_factory
         self.observation_encoder = observation_encoder
         self.action_decoder = action_decoder
-        self.checkpoints_dir = checkpoints_dir
-        self.checkpoint = checkpoint
+        self.checkpoints_dir = str(checkpoints_dir).rstrip('/') + '/checkpoints'
         self.host = host
         self.port = port
         self.device = device or _detect_device()
@@ -65,64 +106,86 @@ class InferenceServer:
         self.metadata = metadata or {}
         self.metadata.update(host=host, port=port, device=self.device)
 
-        checkpoint_path = self._checkpoint_path()
-        self.policy = self._policy(checkpoint_path)
+        # Initialize Policy Manager
+        self.policy_manager = _PolicyManager(self._load_policy)
 
-    def _policy(self, checkpoint_path: str) -> Policy:
-        base_meta = {'checkpoint_path': checkpoint_path}
-        # Preserve caller-provided metadata (host/port/device/etc.) in the policy meta.
-        base_meta.update(self.metadata)
+        # Initialize FastAPI
+        self.app = FastAPI()
+        self.app.get('/api/v1/models')(self.get_models)
+        self.app.websocket('/api/v1/session')(self.websocket_endpoint)
+        self.app.websocket('/api/v1/session/{checkpoint_id}')(self.websocket_endpoint)
+
+    def _load_policy(self, checkpoint_id: str) -> Policy:
+        checkpoint_path = f'{self.checkpoints_dir}/{checkpoint_id}/pretrained_model'
+        logger.info(f'Loading checkpoint from {checkpoint_path}')
+
+        base_meta = {'checkpoint_path': checkpoint_path, **self.metadata}
         policy = self.policy_factory(checkpoint_path)
-        if hasattr(policy, 'metadata'):
+        if hasattr(policy, 'metadata') and policy.metadata:
             base_meta.update(policy.metadata)
-        base = LerobotPolicy(policy, self.device)
 
+        base = LerobotPolicy(policy, self.device)
         return DecodedEncodedPolicy(
             base, encoder=self.observation_encoder.encode, decoder=self.action_decoder.decode, extra_meta=base_meta
         )
 
-    def _checkpoint_path(self) -> str:
-        checkpoints_dir = str(self.checkpoints_dir).rstrip('/') + '/checkpoints/'
-        if self.checkpoint is None:
-            checkpoint = get_latest_checkpoint(checkpoints_dir)
-        else:
-            checkpoint = str(self.checkpoint).strip('/')
+    async def get_models(self):
+        try:
+            return {'models': list_checkpoints(self.checkpoints_dir)}
+        except Exception:
+            logger.exception('Failed to list checkpoints.')
+            return {'models': []}
 
-        return checkpoints_dir.rstrip('/') + '/' + checkpoint + '/pretrained_model/'
+    async def websocket_endpoint(self, websocket: WebSocket, checkpoint_id: str | None = None):
+        await websocket.accept()
 
-    async def _handler(self, websocket):
-        peer = websocket.remote_address
-        logger.info(f'Connected to {peer}')
+        # Resolve checkpoint ID
+        if not checkpoint_id:
+            try:
+                checkpoint_id = get_latest_checkpoint(self.checkpoints_dir)
+                logger.info(f'Using latest checkpoint: {checkpoint_id}')
+            except Exception:
+                logger.exception('Failed to get latest checkpoint.')
+                await websocket.close(code=1008, reason='No checkpoints available')
+                return
+
+        logger.info(f'Connected to {websocket.client} requesting {checkpoint_id}')
 
         try:
-            self.policy.reset()
+            # Request policy from manager (may wait for other sessions)
+            policy = await self.policy_manager.get_policy(checkpoint_id)
 
-            # Send Metadata
-            await websocket.send(serialise({'meta': self.policy.meta}))
+            try:
+                policy.reset()
+                await websocket.send_bytes(serialise({'meta': policy.meta}))  # Send Metadata
 
-            # Inference Loop
-            async for message in websocket:
+                # Inference Loop
                 try:
-                    obs = deserialise(message)
-                    action = self.policy.select_action(obs)
-                    await websocket.send(serialise({'result': action}))
+                    while True:
+                        message = await websocket.receive_bytes()
+                        try:
+                            obs = deserialise(message)
+                            action = policy.select_action(obs)
+                            await websocket.send_bytes(serialise({'result': action}))
+                        except Exception as e:
+                            logger.error(f'Error processing message: {e}')
+                            error_response = {'error': str(e)}
+                            await websocket.send_bytes(serialise(error_response))
+                except WebSocketDisconnect:
+                    logger.info('Client disconnected')
 
-                except Exception as e:
-                    logger.error(f'Error processing message from {peer}: {e}')
-                    logger.debug(traceback.format_exc())
-                    error_response = {'error': str(e)}
-                    await websocket.send(serialise(error_response))
+            finally:
+                # Release session when done
+                await self.policy_manager.release_session()
 
-        except websockets.exceptions.ConnectionClosed:
-            logger.info(f'Connection closed for {peer}')
-        except Exception as e:
-            logger.error(f'Unexpected error for {peer}: {e}')
+        except (WebSocketDisconnect, Exception) as e:
+            logger.info(f'Connection closed: {e}')
             logger.debug(traceback.format_exc())
 
-    async def serve(self):
-        async with serve(self._handler, self.host, self.port):
-            logger.info(f'Server started on ws://{self.host}:{self.port}')
-            await asyncio.get_running_loop().create_future()  # Run forever
+    def serve(self):
+        config = uvicorn.Config(self.app, host=self.host, port=self.port, log_level='info')
+        server = uvicorn.Server(config)
+        return server.serve()
 
 
 def act(checkpoint_path: str) -> PreTrainedPolicy:
