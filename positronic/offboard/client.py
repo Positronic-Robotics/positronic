@@ -59,7 +59,7 @@ class InferenceSession:
 
 class InferenceClient:
     def __init__(self, host: str, port: int):
-        self.uri = f'ws://{host}:{port}'
+        self.uri = f'ws://{host}:{port}/api/v1/session'
 
     def new_session(self) -> InferenceSession:
         """

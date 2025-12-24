@@ -1,11 +1,13 @@
 import asyncio
 import logging
 import traceback
+from collections.abc import Callable
+from typing import Any
 
 import configuronic as cfn
 import pos3
-import websockets
-from websockets.asyncio.server import serve
+import uvicorn
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 
 from positronic.offboard.serialisation import deserialise, serialise
 from positronic.utils.logging import init_logging
@@ -15,61 +17,70 @@ logger = logging.getLogger(__name__)
 
 
 class InferenceServer:
-    def __init__(self, policy, host: str, port: int):
+    def __init__(self, policy_registry: dict[str, Callable[[], Any]], host: str, port: int):
         """
-        A basic server implementation for running inference with a given policy.
-        This server does not support chunking, as the Policy class itself does not,
-        leading to potentially higher traffic between the client and server compared to an ideal, chunking-aware setup.
+        A basic server implementation for running inference with multiple policies.
+        Serve policies based on the request path.
         """
-        self.policy = policy
+        self.policy_registry = policy_registry
         self.host = host
         self.port = port
+        self.app = FastAPI()
 
-    async def _handler(self, websocket):
-        """
-        Handles the WebSocket connection.
-        Protocol:
-            1. Server calls policy.reset()
-            2. Server sends policy.meta (packed)
-            3. Server enters loop:
-                - Recv obs (packed)
-                - Call policy.select_action(obs)
-                - Send action (packed)
-        """
-        peer = websocket.remote_address
-        logger.info(f'Connected to {peer}')
+        self.default_key = next(iter(self.policy_registry))
+
+        # Register routes
+        self.app.get('/api/v1/models')(self.get_models)
+        self.app.websocket('/api/v1/session')(self.websocket_endpoint)
+        self.app.websocket('/api/v1/session/{model_id}')(self.websocket_endpoint)
+
+    async def get_models(self):
+        return list(self.policy_registry.keys())
+
+    async def websocket_endpoint(self, websocket: WebSocket, model_id: str | None = None):
+        await websocket.accept()
+        logger.info(f'Connected to {websocket.client} requesting {model_id or "default"}')
+
+        # Resolve policy
+        if not model_id:
+            policy_factory = self.policy_registry[self.default_key]
+            logger.info(f'Using default policy: {self.default_key}')
+        elif model_id in self.policy_registry:
+            policy_factory = self.policy_registry[model_id]
+        else:
+            logger.error(f'Policy not found: {model_id}')
+            # Reject connection with specific code
+            await websocket.close(code=1008, reason='Policy not found')
+            return
 
         try:
-            self.policy.reset()
+            policy = policy_factory()
+            policy.reset()
 
             # Send Metadata
-            await websocket.send(serialise({'meta': self.policy.meta}))
+            await websocket.send_bytes(serialise({'meta': policy.meta}))
 
             # Inference Loop
-            async for message in websocket:
+            async for message in websocket.iter_bytes():
                 try:
                     obs = deserialise(message)
-                    action = self.policy.select_action(obs)
-                    await websocket.send(serialise({'result': action}))
+                    action = policy.select_action(obs)
+                    await websocket.send_bytes(serialise({'result': action}))
 
                 except Exception as e:
-                    logger.error(f'Error processing message from {peer}: {e}')
+                    logger.error(f'Error processing message: {e}')
                     logger.debug(traceback.format_exc())
-                    # Send error as a string message or a special error dict
-                    # For simple protocol, we might just close or send error dict
                     error_response = {'error': str(e)}
-                    await websocket.send(serialise(error_response))
+                    await websocket.send_bytes(serialise(error_response))
 
-        except websockets.exceptions.ConnectionClosed:
-            logger.info(f'Connection closed for {peer}')
-        except Exception as e:
-            logger.error(f'Unexpected error for {peer}: {e}')
+        except (WebSocketDisconnect, Exception) as e:
+            logger.info(f'Connection closed: {e}')
             logger.debug(traceback.format_exc())
 
-    async def serve(self):
-        async with serve(self._handler, self.host, self.port):
-            logger.info(f'Server started on ws://{self.host}:{self.port}')
-            await asyncio.get_running_loop().create_future()  # Run forever
+    def serve(self):
+        config = uvicorn.Config(self.app, host=self.host, port=self.port, log_level='info')
+        server = uvicorn.Server(config)
+        return server.serve()
 
 
 @cfn.config(port=8000, host='0.0.0.0')
@@ -77,9 +88,11 @@ def main(policy, port: int, host: str):
     """
     Starts the inference server with the given policy.
     """
-    server = InferenceServer(policy, host, port)
+    # Wrap single policy in a registry for backward compatibility
+    registry = {'default': lambda: policy}
+    server = InferenceServer(registry, host, port)
 
-    # We need to run the async loop
+    # Run the server
     try:
         asyncio.run(server.serve())
     except KeyboardInterrupt:
