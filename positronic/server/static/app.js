@@ -40,6 +40,7 @@ async function checkDatasetStatus() {
       renderServerFilters(groupFilters);
       renderClientFilters(columns);
       renderEpisodesTableHeader(columns);
+      setFiltersStateFromURL(columns);
       populateEpisodesTable(columns);
       episodesContainer.removeChild(episodesLoadingStatus);
       episodesTable.classList.remove('hidden');
@@ -180,23 +181,24 @@ function renderServerFilters(groupFilters) {
 function renderClientFilters(columns) {
   const controlsBar = document.querySelector('.controls-bar');
 
-  for (const [filterIndex, filter] of Object.entries(filtersData)) {
+  for (const [filterKey, filter] of Object.entries(filtersData)) {
+    const column = columns.find((col) => col.key === filterKey);
     const options = [createFilterOption('-1', 'All')];
 
     for (const [index, value] of filter.entries()) {
-      const label = columns[filterIndex].renderer?.options[value]?.label ?? value;
-      options.push(createFilterOption(index, label));
+      const label = column.renderer?.options[value]?.label ?? value;
+      options.push(createFilterOption(value, label));
     }
 
     const filterContainer = createFilter({
-      filterId: `filter-${filterIndex}`,
-      label: columns[filterIndex].label,
+      filterId: `filter-${filterKey}`,
+      label: column.label,
       options: options,
       onChange: (event) => {
         if (event.target.value === '-1') {
-          delete filtersState.filters[filterIndex];
+          delete filtersState.filters[filterKey];
         } else {
-          filtersState.filters[filterIndex] = event.target.value;
+          filtersState.filters[filterKey] = event.target.value;
         }
 
         populateEpisodesTable(columns);
@@ -248,18 +250,32 @@ function getFiltersData(episodes, columns) {
       columnData.add(String(value));
     }
 
-    filtersData[index] = Array.from(columnData);
+    filtersData[column.key] = Array.from(columnData);
   }
 
   return filtersData;
 }
 
+function setFiltersStateFromURL(columns) {
+  const urlParams = new URLSearchParams(window.location.search);
+  for (const [key, value] of urlParams.entries()) {
+    if (filtersData[key]?.find((filterValue) => filterValue === value)) {
+      filtersState.filters[key] = value;
+      const filterSelect = document.getElementById(`filter-${key}`);
+
+      if (filterSelect) {
+        filterSelect.value = value;
+      }
+    }
+  }
+}
+
 function populateEpisodesTable(columns) {
   const tableBody = document.querySelector('.episodes-table tbody');
-  const filteredEpisodes = getFilteredEpisodes(currentEpisodes);
+  const filteredEpisodes = getFilteredEpisodes(columns, currentEpisodes);
 
   tableBody.innerHTML = '';
-  for (const [episodeIndex, episodeData] of filteredEpisodes) {
+  for (const [episodeIndex, episodeData, groupFilters] of filteredEpisodes) {
     const row = document.createElement('tr');
 
     for (const [index, entity] of episodeData.entries()) {
@@ -267,13 +283,17 @@ function populateEpisodesTable(columns) {
     }
 
     const viewCell = createTableCell('');
-    if (window.SHOW_VIEW_LINK !== false) {
-      const viewLink = document.createElement('a');
-      viewLink.className = 'btn btn-primary btn-small';
+    const viewLink = document.createElement('a');
+    viewLink.className = 'btn btn-primary btn-small';
+    if (window.IS_GROUPED_TABLE) {
+      const filters = { ...groupFilters, ...filtersState.filters };
+      const urlParams = new URLSearchParams(filters);
+      viewLink.href = `/?${urlParams.toString()}`;
+    } else {
       viewLink.href = `/episode/${episodeIndex}`;
-      viewLink.textContent = 'View';
-      viewCell.appendChild(viewLink);
     }
+    viewLink.textContent = 'View';
+    viewCell.appendChild(viewLink);
     row.appendChild(viewCell);
 
     tableBody.appendChild(row);
@@ -310,13 +330,14 @@ function populateEpisodesTable(columns) {
   }
 }
 
-function getFilteredEpisodes(episodes) {
+function getFilteredEpisodes(columns, episodes) {
   const { sort: sortState, filters } = filtersState;
   let filteredEpisodes = episodes.slice();
 
   filteredEpisodes = filteredEpisodes.filter(([episodeIndex, episodeData]) => {
-    return Object.entries(filters).every(([columnIndex, valueIndex]) => {
-      return String(episodeData[columnIndex]) === filtersData[columnIndex][valueIndex];
+    return Object.entries(filters).every(([filterKey, value]) => {
+      const columnIndex = columns.findIndex((column) => column.key === filterKey);
+      return String(episodeData[columnIndex]) === value;
     });
   });
 
