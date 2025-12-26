@@ -70,7 +70,7 @@ body {
   font-family: var(--font-body);
   font-size: 16px;
   line-height: 1.6;
-  overflow: hidden scroll;
+  overflow: hidden;
   -webkit-font-smoothing: antialiased;
 }
 
@@ -90,6 +90,7 @@ button {
   flex-direction: column;
   width: 100%;
   max-width: 90rem;
+  max-height: 100dvh;
   padding: 2.5rem 1.5rem 3rem;
   margin: 0 auto;
 }
@@ -135,6 +136,13 @@ button {
   padding: 1.75rem 1.6rem;
 }
 
+.card--table {
+  display: flex;
+  flex: 1 1 auto;
+  min-height: 0;
+  flex-direction: column;
+}
+
 .card-header {
   display: flex;
   justify-content: space-between;
@@ -178,14 +186,20 @@ button {
 
 /* Table */
 .table-wrapper {
-  width: 100%;
-  overflow-x: auto;
+  flex: 0 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
 }
 
 .table-wrapper--dense {
   border-radius: var(--radius-lg);
   border: 1px solid var(--border-subtle);
   background: rgba(15, 23, 42, 0.4);
+}
+
+.overflow-wrapper {
+  overflow: auto;
 }
 
 table {
@@ -612,6 +626,10 @@ select:focus-visible {
 }
 ::-webkit-scrollbar-thumb:hover {
   background: var(--navbar-background-color-hover);
+}
+
+::-webkit-scrollbar-corner {
+  background: var(--scrollbar-background-color);
 }
 
 .episode-container {

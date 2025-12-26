@@ -21,7 +21,6 @@ async function checkDatasetStatus() {
     if (status.loading) {
       datasetLoadingStatus.classList.add('show');
       datasetStats.innerHTML = 'Checking dataset status...';
-      episodesContainer.innerHTML = '<div class="loading">Waiting for dataset to load...</div>';
 
       if (!loadingCheckInterval) {
         loadingCheckInterval = setInterval(checkDatasetStatus, 2000);
@@ -41,7 +40,7 @@ async function checkDatasetStatus() {
       renderClientFilters(columns);
       renderEpisodesTableHeader(columns);
       populateEpisodesTable(columns);
-      episodesContainer.removeChild(episodesLoadingStatus);
+      episodesLoadingStatus.remove();
       episodesTable.classList.remove('hidden');
     } else {
       if (loadingCheckInterval) {
