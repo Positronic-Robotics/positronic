@@ -157,6 +157,7 @@ def parse_table_cfg(table_cfg: dict[str, Any]) -> tuple:
     for key, value in table_cfg.items():
         column = {}
         if isinstance(value, dict):
+            column['key'] = key
             column['label'] = value.get('label', key)
             formatters[key] = value.get('format')
             defaults[key] = value.get('default')

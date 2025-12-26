@@ -39,8 +39,14 @@ def get_episodes_list(
     for idx, ep in enumerate(ds):
         try:
             mapping = {'__index__': idx + 1, **ep}
-            row = [_format_value(mapping.get(key), formatters.get(key), defaults.get(key)) for key in keys]
-            result.append([idx, row])
+            episode_data = [_format_value(mapping.get(key), formatters.get(key), defaults.get(key)) for key in keys]
+            row = [idx, episode_data]
+
+            # Include group metadata if available for using it in URL
+            if ep.get('__meta__') and 'group' in ep['__meta__']:
+                row.append(ep['__meta__']['group'])
+
+            result.append(row)
         except Exception as e:
             raise Exception(f'Error getting episode {idx}: {ep.get("__meta__", {})}') from e
     return result
