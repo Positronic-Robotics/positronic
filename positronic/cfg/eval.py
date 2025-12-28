@@ -181,10 +181,12 @@ def grouped_table(group_keys: tuple[str, ...] | str):
 #   --dataset.base.path /Users/vertix/.cache/positronic/s3/inference/real/191225/ \
 #   --port=5001 \
 #   --ep_table_cfg=@positronic.cfg.eval.eval_table \
-#   --group_tables.models=@positronic.cfg.eval.model_table \
-#   --group_tables.model_task=@positronic.cfg.eval.model_task_table \
-#   --group_tables.model_ckpt_task=@positronic.cfg.eval.model_chkpt_task_table \
-#   --group_tables.model_ckpt=@positronic.cfg.eval.model_chkpt_table
+#   --group_tables='{ \
+#       "models": "@positronic.cfg.eval.model_table", \
+#       "model_task": "@positronic.cfg.eval.model_task_table", \
+#       "model_ckpt_task": "@positronic.cfg.eval.model_chkpt_task_table", \
+#       "model_ckpt": "@positronic.cfg.eval.model_chkpt_table" \
+#    }'
 
 model_table = grouped_table.override(group_keys='model')
 model_task_table = grouped_table.override(group_keys=('model', 'task_code'))
