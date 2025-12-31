@@ -59,10 +59,11 @@ class InferenceSession:
 
 class InferenceClient:
     def __init__(self, host: str, port: int):
-        self.uri = f'ws://{host}:{port}/api/v1/session'
+        self.base_uri = f'ws://{host}:{port}/api/v1/session'
 
-    def new_session(self) -> InferenceSession:
+    def new_session(self, model_id: str | None = None) -> InferenceSession:
         """
         Creates a new inference session.
         """
-        return InferenceSession(connect(self.uri))
+        uri = self.base_uri if model_id is None else f'{self.base_uri}/{model_id}'
+        return InferenceSession(connect(uri))

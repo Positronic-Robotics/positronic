@@ -99,6 +99,7 @@ class InferenceServer:
         self.observation_encoder = observation_encoder
         self.action_decoder = action_decoder
         self.checkpoints_dir = str(checkpoints_dir).rstrip('/') + '/checkpoints'
+        self.checkpoint = checkpoint
         self.host = host
         self.port = port
         self.device = device or _detect_device()
@@ -141,13 +142,22 @@ class InferenceServer:
 
         # Resolve checkpoint ID
         if not checkpoint_id:
-            try:
-                checkpoint_id = get_latest_checkpoint(self.checkpoints_dir)
-                logger.info(f'Using latest checkpoint: {checkpoint_id}')
-            except Exception:
-                logger.exception('Failed to get latest checkpoint.')
-                await websocket.close(code=1008, reason='No checkpoints available')
-                return
+            if self.checkpoint:
+                checkpoint_id = str(self.checkpoint).strip('/')
+                available = list_checkpoints(self.checkpoints_dir)
+                if checkpoint_id not in available:
+                    logger.error('Configured checkpoint not found: %s', checkpoint_id)
+                    await websocket.close(code=1008, reason='Configured checkpoint not found')
+                    return
+                logger.info(f'Using configured checkpoint: {checkpoint_id}')
+            else:
+                try:
+                    checkpoint_id = get_latest_checkpoint(self.checkpoints_dir)
+                    logger.info(f'Using latest checkpoint: {checkpoint_id}')
+                except Exception:
+                    logger.exception('Failed to get latest checkpoint.')
+                    await websocket.close(code=1008, reason='No checkpoints available')
+                    return
 
         logger.info(f'Connected to {websocket.client} requesting {checkpoint_id}')
 
