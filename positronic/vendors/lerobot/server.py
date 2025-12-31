@@ -137,27 +137,44 @@ class InferenceServer:
             logger.exception('Failed to list checkpoints.')
             return {'models': []}
 
+    async def _resolve_checkpoint_id(self, websocket: WebSocket, checkpoint_id: str | None) -> str | None:
+        if checkpoint_id:
+            available = list_checkpoints(self.checkpoints_dir)
+            if checkpoint_id not in available:
+                logger.error('Checkpoint not found: %s', checkpoint_id)
+                await websocket.send_bytes(serialise({'error': 'Checkpoint not found'}))
+                await websocket.close(code=1008, reason='Checkpoint not found')
+                return None
+
+            return checkpoint_id
+
+        if self.checkpoint:
+            checkpoint_id = str(self.checkpoint).strip('/')
+            available = list_checkpoints(self.checkpoints_dir)
+            if checkpoint_id not in available:
+                logger.error('Configured checkpoint not found: %s', checkpoint_id)
+                await websocket.send_bytes(serialise({'error': 'Configured checkpoint not found'}))
+                await websocket.close(code=1008, reason='Configured checkpoint not found')
+                return None
+
+            logger.info(f'Using configured checkpoint: {checkpoint_id}')
+            return checkpoint_id
+
+        try:
+            checkpoint_id = get_latest_checkpoint(self.checkpoints_dir)
+            logger.info(f'Using latest checkpoint: {checkpoint_id}')
+            return checkpoint_id
+        except Exception:
+            logger.exception('Failed to get latest checkpoint.')
+            await websocket.close(code=1008, reason='No checkpoints available')
+            return None
+
     async def websocket_endpoint(self, websocket: WebSocket, checkpoint_id: str | None = None):
         await websocket.accept()
 
-        # Resolve checkpoint ID
+        checkpoint_id = await self._resolve_checkpoint_id(websocket, checkpoint_id)
         if not checkpoint_id:
-            if self.checkpoint:
-                checkpoint_id = str(self.checkpoint).strip('/')
-                available = list_checkpoints(self.checkpoints_dir)
-                if checkpoint_id not in available:
-                    logger.error('Configured checkpoint not found: %s', checkpoint_id)
-                    await websocket.close(code=1008, reason='Configured checkpoint not found')
-                    return
-                logger.info(f'Using configured checkpoint: {checkpoint_id}')
-            else:
-                try:
-                    checkpoint_id = get_latest_checkpoint(self.checkpoints_dir)
-                    logger.info(f'Using latest checkpoint: {checkpoint_id}')
-                except Exception:
-                    logger.exception('Failed to get latest checkpoint.')
-                    await websocket.close(code=1008, reason='No checkpoints available')
-                    return
+            return
 
         logger.info(f'Connected to {websocket.client} requesting {checkpoint_id}')
 

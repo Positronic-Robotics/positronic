@@ -20,12 +20,21 @@ class _PassthroughCodec:
 class _DummyWebSocket:
     def __init__(self):
         self.client = ('test', 0)
+        self.events = []
         self.accept = AsyncMock()
-        self.send_bytes = AsyncMock()
-        self.close = AsyncMock()
+        self._send_bytes = AsyncMock()
+        self._close = AsyncMock()
 
     async def receive_bytes(self):
         raise WebSocketDisconnect()
+
+    async def send_bytes(self, payload):
+        self.events.append('send_bytes')
+        await self._send_bytes(payload)
+
+    async def close(self, **kwargs):
+        self.events.append('close')
+        await self._close(**kwargs)
 
 
 def test_inference_client_connect_and_infer(inference_server, mock_policy):
@@ -76,6 +85,14 @@ def test_inference_client_selects_model_id(multi_policy_server):
     finally:
         default_session.close()
 
+    alpha_session = client.new_session('alpha')
+    try:
+        assert alpha_session.metadata['model_name'] == 'alpha'
+        action = alpha_session.infer({'obs': 'alpha'})
+        assert action['action_data'] == ['alpha']
+    finally:
+        alpha_session.close()
+
     beta_session = client.new_session('beta')
     try:
         assert beta_session.metadata['model_name'] == 'beta'
@@ -84,8 +101,9 @@ def test_inference_client_selects_model_id(multi_policy_server):
     finally:
         beta_session.close()
 
-    policies['alpha'].select_action.assert_called_with({'obs': 'default'})
-    policies['beta'].select_action.assert_called_with({'obs': 'beta'})
+    policies['alpha'].select_action.assert_any_call({'obs': 'alpha'})
+    policies['beta'].select_action.assert_any_call({'obs': 'beta'})
+    policies['alpha'].select_action.assert_any_call({'obs': 'default'})
 
 
 def test_wire_serialisation_accepts_mappingproxy():
@@ -127,3 +145,51 @@ async def test_lerobot_server_uses_configured_checkpoint(monkeypatch):
 
     assert requested['checkpoint_id'] == '42'
     server.policy_manager.release_session.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_lerobot_server_reports_missing_checkpoint(monkeypatch):
+    monkeypatch.setattr(lerobot_server, 'list_checkpoints', lambda _path: ['41'])
+
+    server = lerobot_server.InferenceServer(
+        policy_factory=lambda _checkpoint: MagicMock(),
+        observation_encoder=_PassthroughCodec(),
+        action_decoder=_PassthroughCodec(),
+        checkpoints_dir='s3://bucket/exp',
+        checkpoint='42',
+    )
+    server.policy_manager.get_policy = AsyncMock()
+    server.policy_manager.release_session = AsyncMock()
+
+    websocket = _DummyWebSocket()
+    await server.websocket_endpoint(websocket)
+
+    assert websocket.events == ['send_bytes', 'close']
+    error_payload = websocket._send_bytes.await_args.args[0]
+    assert deserialise(error_payload) == {'error': 'Configured checkpoint not found'}
+    server.policy_manager.get_policy.assert_not_called()
+    server.policy_manager.release_session.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_lerobot_server_reports_unknown_checkpoint_id(monkeypatch):
+    monkeypatch.setattr(lerobot_server, 'list_checkpoints', lambda _path: ['41'])
+
+    server = lerobot_server.InferenceServer(
+        policy_factory=lambda _checkpoint: MagicMock(),
+        observation_encoder=_PassthroughCodec(),
+        action_decoder=_PassthroughCodec(),
+        checkpoints_dir='s3://bucket/exp',
+        checkpoint=None,
+    )
+    server.policy_manager.get_policy = AsyncMock()
+    server.policy_manager.release_session = AsyncMock()
+
+    websocket = _DummyWebSocket()
+    await server.websocket_endpoint(websocket, checkpoint_id='42')
+
+    assert websocket.events == ['send_bytes', 'close']
+    error_payload = websocket._send_bytes.await_args.args[0]
+    assert deserialise(error_payload) == {'error': 'Checkpoint not found'}
+    server.policy_manager.get_policy.assert_not_called()
+    server.policy_manager.release_session.assert_not_called()

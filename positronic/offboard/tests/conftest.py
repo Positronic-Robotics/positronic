@@ -2,6 +2,7 @@ import asyncio
 import socket
 import threading
 import time
+from collections import OrderedDict
 from collections.abc import Generator
 from unittest.mock import MagicMock
 
@@ -86,7 +87,10 @@ def multi_policy_server(
 ) -> Generator[tuple[str, int, dict[str, MagicMock]], None, None]:
     port = find_free_port()
     host = 'localhost'
-    registry = {name: (lambda policy=policy: policy) for name, policy in mock_policy_registry.items()}
+    registry = OrderedDict((
+        ('alpha', (lambda policy=mock_policy_registry['alpha']: policy)),
+        ('beta', (lambda policy=mock_policy_registry['beta']: policy)),
+    ))
     server = InferenceServer(registry, host, port)
 
     server_loop = asyncio.new_event_loop()
