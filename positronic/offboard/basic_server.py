@@ -1,6 +1,5 @@
 import asyncio
 import logging
-import random
 import traceback
 from collections.abc import Callable
 from typing import Any
@@ -45,16 +44,13 @@ class InferenceServer:
     async def get_models(self):
         return {'models': list(self.policy_registry.keys())}
 
-    def _get_default_policy(self):
-        return random.choice(list(self.policy_registry.values()))
-
     async def websocket_endpoint(self, websocket: WebSocket, model_id: str | None = None):
         await websocket.accept()
         logger.info(f'Connected to {websocket.client} requesting {model_id or "default"}')
 
         # Resolve policy
         if not model_id:
-            policy_factory = self._get_default_policy()
+            policy_factory = self.policy_registry[self.default_key]
         elif model_id in self.policy_registry:
             policy_factory = self.policy_registry[model_id]
         else:
