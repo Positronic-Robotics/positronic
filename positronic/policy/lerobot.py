@@ -58,3 +58,5 @@ class LerobotPolicy(Policy):
             self._policy.to('cpu')
             del self._policy
             self._policy = None
+            if self.device.startswith('cuda'):
+                torch.cuda.empty_cache()
