@@ -131,6 +131,43 @@ class TestTransform3D(unittest.TestCase):
         np.testing.assert_array_almost_equal(reconstructed.translation, translation)
         np.testing.assert_array_almost_equal(reconstructed.rotation.as_quat, rotation.as_quat)
 
+    def test_as_vector_with_rot6d_representation(self):
+        translation = np.array([0.1, 0.2, -0.3])
+        rotation = Rotation.from_quat([0.7071068, 0.0, 0.7071068, 0.0])  # 90 degrees around y-axis
+        transform = Transform3D(translation, rotation)
+
+        vec = transform.as_vector(Rotation.Representation.ROT6D)
+
+        self.assertEqual(vec.shape, (9,))  # 3 translation + 6 rot6d
+        np.testing.assert_array_equal(vec[:3], translation)
+        np.testing.assert_array_almost_equal(vec[3:], rotation.as_rot6d)
+
+    def test_from_vector_recreates_transform_for_rot6d_representation(self):
+        translation = np.array([-0.5, 0.8, 0.25])
+        rotation = Rotation.from_quat([0.7071068, 0.0, 0.7071068, 0.0])  # 90 degrees around y-axis
+        transform = Transform3D(translation, rotation)
+
+        vec = transform.as_vector(Rotation.Representation.ROT6D)
+        reconstructed = Transform3D.from_vector(vec, Rotation.Representation.ROT6D)
+
+        np.testing.assert_array_almost_equal(reconstructed.translation, translation)
+        np.testing.assert_array_almost_equal(reconstructed.rotation.as_rotation_matrix, rotation.as_rotation_matrix)
+
+    def test_rot6d_vector_roundtrip_various_rotations(self):
+        test_cases = [
+            ([1.0, 2.0, 3.0], [1.0, 0.0, 0.0, 0.0]),  # Identity
+            ([0.0, 0.0, 0.0], [0.7071, 0.7071, 0.0, 0.0]),  # 90 deg x
+            ([-1.0, 5.0, 2.0], [0.5, 0.5, 0.5, 0.5]),  # Combined
+        ]
+        for trans, quat in test_cases:
+            transform = Transform3D(np.array(trans), Rotation.from_quat(quat))
+            vec = transform.as_vector(Rotation.Representation.ROT6D)
+            reconstructed = Transform3D.from_vector(vec, Rotation.Representation.ROT6D)
+            np.testing.assert_array_almost_equal(reconstructed.translation, trans, decimal=4)
+            np.testing.assert_array_almost_equal(
+                reconstructed.rotation.as_rotation_matrix, transform.rotation.as_rotation_matrix, decimal=4
+            )
+
 
 class TestRotation(unittest.TestCase):
     def test_mul(self):
@@ -224,6 +261,93 @@ class TestRotation(unittest.TestCase):
     def test_to_representation_rotvec_same_as_as_rotvec(self):
         q = Rotation.from_quat([0.7071, 0.7071, 0, 0])  # 90 degrees rotation around x-axis
         np.testing.assert_array_almost_equal(q.as_rotvec, q.to(Rotation.Representation.ROTVEC), decimal=4)
+
+    # --- ROT6D representation tests ---
+
+    def test_as_rot6d_identity_returns_first_two_rows_of_identity(self):
+        q = Rotation.from_quat([1.0, 0.0, 0.0, 0.0])  # Identity rotation
+        rot6d = q.as_rot6d
+        expected = np.array([1.0, 0.0, 0.0, 0.0, 1.0, 0.0])  # First two rows of identity matrix
+        np.testing.assert_array_almost_equal(rot6d, expected)
+
+    def test_as_rot6d_90deg_x_axis_returns_correct_representation(self):
+        q = Rotation.from_quat([0.7071, 0.7071, 0, 0])  # 90 degrees around x-axis
+        rot6d = q.as_rot6d
+        # Rotation matrix for 90 deg around x: [[1,0,0], [0,0,-1], [0,1,0]]
+        expected = np.array([1.0, 0.0, 0.0, 0.0, 0.0, -1.0])
+        np.testing.assert_array_almost_equal(rot6d, expected, decimal=4)
+
+    def test_as_rot6d_90deg_z_axis_returns_correct_representation(self):
+        # 90 deg around z-axis: quat = (cos(45°), 0, 0, sin(45°))
+        q = Rotation.from_quat([0.7071, 0.0, 0.0, 0.7071])
+        rot6d = q.as_rot6d
+        # Rotation matrix for 90 deg around z: [[0,-1,0], [1,0,0], [0,0,1]]
+        expected = np.array([0.0, -1.0, 0.0, 1.0, 0.0, 0.0])
+        np.testing.assert_array_almost_equal(rot6d, expected, decimal=4)
+
+    def test_from_rot6d_identity_returns_identity_rotation(self):
+        rot6d = np.array([1.0, 0.0, 0.0, 0.0, 1.0, 0.0])
+        q = Rotation.from_rot6d(rot6d)
+        expected = Rotation.from_quat([1.0, 0.0, 0.0, 0.0])
+        np.testing.assert_array_almost_equal(q.as_quat, expected.as_quat)
+
+    def test_from_rot6d_90deg_x_axis_returns_correct_rotation(self):
+        # First two rows of 90 deg x-axis rotation matrix
+        rot6d = np.array([1.0, 0.0, 0.0, 0.0, 0.0, -1.0])
+        q = Rotation.from_rot6d(rot6d)
+        expected = Rotation.from_quat([0.7071, 0.7071, 0.0, 0.0])
+        np.testing.assert_array_almost_equal(q.as_quat, expected.as_quat, decimal=4)
+
+    def test_from_rot6d_with_unnormalized_input_still_works(self):
+        # Gram-Schmidt should normalize - use scaled vectors
+        rot6d = np.array([2.0, 0.0, 0.0, 0.0, 2.0, 0.0])  # Scaled identity
+        q = Rotation.from_rot6d(rot6d)
+        expected = Rotation.from_quat([1.0, 0.0, 0.0, 0.0])
+        np.testing.assert_array_almost_equal(q.as_quat, expected.as_quat)
+
+    def test_from_rot6d_with_non_orthogonal_input_orthogonalizes(self):
+        # Input vectors that aren't perfectly orthogonal
+        rot6d = np.array([1.0, 0.1, 0.0, 0.1, 1.0, 0.0])  # Slightly non-orthogonal
+        q = Rotation.from_rot6d(rot6d)
+        # Result should be a valid rotation (orthogonal matrix)
+        R = q.as_rotation_matrix
+        np.testing.assert_array_almost_equal(R @ R.T, np.eye(3), decimal=6)
+        np.testing.assert_almost_equal(np.linalg.det(R), 1.0, decimal=6)
+
+    def test_rot6d_conversion_cycle_consistency(self):
+        # Start with a quaternion, convert to rot6d and back
+        original_quat = np.array([0.5, 0.5, 0.5, 0.5])  # Normalized quaternion
+        q = Rotation.from_quat(original_quat)
+        rot6d = q.as_rot6d
+        q_recovered = Rotation.from_rot6d(rot6d)
+        np.testing.assert_array_almost_equal(q.as_rotation_matrix, q_recovered.as_rotation_matrix, decimal=6)
+
+    def test_rot6d_roundtrip_preserves_rotation_matrix(self):
+        # Various test rotations
+        test_quats = [
+            [1.0, 0.0, 0.0, 0.0],  # Identity
+            [0.7071, 0.7071, 0.0, 0.0],  # 90 deg x
+            [0.7071, 0.0, 0.7071, 0.0],  # 90 deg y
+            [0.7071, 0.0, 0.0, 0.7071],  # 90 deg z
+            [0.5, 0.5, 0.5, 0.5],  # Combined rotation
+        ]
+        for quat in test_quats:
+            q = Rotation.from_quat(quat)
+            rot6d = q.as_rot6d
+            q_recovered = Rotation.from_rot6d(rot6d)
+            np.testing.assert_array_almost_equal(q.as_rotation_matrix, q_recovered.as_rotation_matrix, decimal=6)
+
+    def test_to_representation_rot6d_same_as_as_rot6d(self):
+        q = Rotation.from_quat([0.7071, 0.7071, 0, 0])  # 90 degrees rotation around x-axis
+        np.testing.assert_array_almost_equal(q.as_rot6d, q.to(Rotation.Representation.ROT6D), decimal=4)
+
+    def test_create_from_rot6d_same_as_from_rot6d(self):
+        rot6d = np.array([1.0, 0.0, 0.0, 0.0, 0.0, -1.0])  # 90 deg x-axis
+        q = Rotation.create_from(rot6d, Rotation.Representation.ROT6D)
+        np.testing.assert_array_almost_equal(q.as_quat, Rotation.from_rot6d(rot6d).as_quat, decimal=4)
+
+    def test_rot6d_representation_shape_is_6(self):
+        self.assertEqual(Rotation.Representation.ROT6D.shape, 6)
 
     def test_create_from_euler_same_as_from_euler(self):
         euler = np.array([np.pi / 2, 0, 0])  # 90 degrees rotation around x-axis
