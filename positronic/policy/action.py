@@ -208,15 +208,21 @@ class JointDeltaAction(ActionDecoder):
 
 
 class GrootActionDecoder(AbsolutePositionAction):
+    """Decodes GR00T N1.6 action output to robot commands.
+
+    N1.6 returns actions with keys like 'target_robot_position_translation' (no prefix).
+    Each value has shape (D,) for a single time step.
+    """
+
     def __init__(self):
         super().__init__('fake', 'fake')
 
     def decode(self, action: dict[str, Any], _inputs: dict[str, np.ndarray]) -> dict[str, Any]:
         target_pose = geom.Transform3D(
-            action['action.target_robot_position_translation'],
-            geom.Rotation.from_quat(action['action.target_robot_position_quaternion']),
+            action['target_robot_position_translation'],
+            geom.Rotation.from_quat(action['target_robot_position_quaternion']),
         )
-        target_grip = action['action.target_grip'].item()
+        target_grip = action['target_grip'].item()
         return {
             'robot_command': command.to_wire(command.CartesianPosition(pose=target_pose)),
             'target_grip': target_grip,

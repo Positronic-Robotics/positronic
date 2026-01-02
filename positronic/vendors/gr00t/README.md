@@ -1,10 +1,10 @@
-# GR00T Workflow in Positronic
+# GR00T N1.6 Workflow in Positronic
 
-This guide details the end-to-end workflow for training and deploying GR00T models using the Positronic stack. The pipeline leverages Docker for reproducibility and supports both local directories and S3 for data storage. This integration relies on [our fork of GR00T](https://github.com/Positronic-Robotics/gr00t) (note main-positronic branch).
+This guide details the end-to-end workflow for training and deploying GR00T N1.6 models using the Positronic stack. The pipeline leverages Docker for reproducibility and supports both local directories and S3 for data storage. This integration relies on [our fork of GR00T](https://github.com/Positronic-Robotics/gr00t).
 
 > All `docker compose` commands below assume you are in the [`docker`](https://github.com/Positronic-Robotics/positronic/tree/main/docker) directory (`cd docker`)
 
-> Note: if you customize compose volumes, **do not bind-mount** host `~/.local/share/uv` into `/root/.local/share/uv` for GR00T containers. The GR00T image may rely on uv-managed CPython inside the image, and the bind mount can hide that path and break `/.venv/bin/python` with `ENOENT`.
+> Note: if you customize compose volumes, **do not bind-mount** host `~/.local/share/uv` into `/root/.local/share/uv` for GR00T containers. The GR00T image uses a pre-built Python 3.10 venv at `/.venv/`, and the bind mount can hide that path and break `/.venv/bin/python` with `ENOENT`.
 
 ## 1. Prepare Data
 
@@ -40,17 +40,20 @@ docker compose run --rm -v ~/datasets:/data -v ~/checkpoints:/checkpoints groot-
 ```
 
 **Common Parameters:**
-- `--data_config`: The data configuration to use (default: `ee_absolute`).
+- `--modality_config`: The modality configuration to use. Options: `ee` (default, EE pose control), `ee_q` (EE pose + joint feedback). Can also be a path to a custom config file.
 - `--exp_name`: Unique name for this run.
 - `--num_train_steps`: Total training steps (optional).
+- `--learning_rate`: Override default learning rate (optional).
+- `--save_steps`: Checkpoint save interval (optional).
+- `--num_workers`: Number of dataloader workers (optional).
 - `--resume`: Set to `True` to resume an existing run.
 - `--output_path`: Destination for checkpoints and logs.
 
-If you want your run to report to wandb, add `docker/.env.wandb` containing your `WANDB_API_KEY`.
+WandB logging is enabled by default. Add `docker/.env.wandb` containing your `WANDB_API_KEY`.
 
 ## 3. Serve Inference
 
-To serve the trained model, launch the `groot-server`. This exposes the policy via ZeroMQ or HTTP. The model can be served from the machine with 8GB of GPU memory.
+To serve the trained model, launch the `groot-server`. This exposes the policy via ZeroMQ. The model can be served from a machine with 8GB of GPU memory.
 
 **Command:**
 ```bash
@@ -58,8 +61,10 @@ docker compose run --rm --service-ports -v ~/checkpoints:/checkpoints groot-serv
   --checkpoints_dir=/checkpoints/groot/experiment_v1/
 ```
 
+**Parameters:**
 - `--checkpoints_dir`: Full path to the experiment directory containing checkpoints.
 - `--checkpoint`: (Optional) Specific checkpoint ID (e.g., `50000`). If omitted, loads the latest `checkpoint-N` folder.
+- `--modality_config`: (Optional) Modality config to use. Options: `ee` (default), `ee_q`. Must match the config used during training.
 - `--port`: (Optional) Port to serve on (default: 9000).
 
 ## 4. Run Inference

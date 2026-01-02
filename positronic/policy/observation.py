@@ -79,40 +79,79 @@ class ObservationEncoder(Derive):
         return obs
 
 
-# TODO: Refactor this, probably we need to have a separate class for Groot related encoders
-# that know how to encode in dataset and in inference times
+# GR00T N1.6 Observation Encoders
+# These encode observations into the nested format expected by N1.6 PolicyServer:
+# {
+#     'video': {key: np.ndarray[uint8, (B, T, H, W, C)]},
+#     'state': {key: np.ndarray[float32, (B, T, D)]},
+#     'language': {key: list[list[str]]},  # (B, T)
+# }
+
+
 class GrootInferenceObservationEncoder(ObservationEncoder):
+    """Encodes observations for GR00T N1.6 inference (EE pose control)."""
+
     def __init__(self):
         state = {'observation.state': ['robot_state.ee_pose', 'grip']}
-        images = {
-            'video.wrist_image': ('image.wrist', (224, 224)),
-            'video.exterior_image_1': ('image.exterior', (224, 224)),
-        }
+        images = {'wrist_image': ('image.wrist', (224, 224)), 'exterior_image_1': ('image.exterior', (224, 224))}
         super().__init__(state, images)
 
     def encode(self, inputs: dict[str, Any]) -> dict[str, Any]:
         obs = super().encode(inputs)
-        state = obs.pop('observation.state')
-        obs['state.robot_position_translation'] = state[:3]
-        obs['state.robot_position_quaternion'] = state[3:7]
-        obs['state.grip'] = state[7:8]
-        return obs
+
+        # Extract state components
+        state = obs.pop('observation.state').astype(np.float32)
+        translation = state[:3]
+        quaternion = state[3:7]
+        grip = state[7:8]
+
+        # Build N1.6 nested structure with proper shapes and dtypes
+        # Video: (H, W, C) -> (B=1, T=1, H, W, C), dtype=uint8
+        # State: (D,) -> (B=1, T=1, D), dtype=float32
+        # Language: str -> [[str]] (B=1, T=1)
+        return {
+            'video': {
+                'wrist_image': obs['wrist_image'][np.newaxis, np.newaxis, ...],
+                'exterior_image_1': obs['exterior_image_1'][np.newaxis, np.newaxis, ...],
+            },
+            'state': {
+                'robot_position_translation': translation[np.newaxis, np.newaxis, ...],
+                'robot_position_quaternion': quaternion[np.newaxis, np.newaxis, ...],
+                'grip': grip[np.newaxis, np.newaxis, ...],
+            },
+            'language': {'annotation.language.language_instruction': [[inputs.get('task', '')]]},
+        }
 
 
 class GrootEE_QObservationEncoder(ObservationEncoder):
+    """Encodes observations for GR00T N1.6 inference (EE pose + joint position)."""
+
     def __init__(self):
         state = {'observation.state': ['robot_state.ee_pose', 'grip', 'robot_state.q']}
-        images = {
-            'video.wrist_image': ('image.wrist', (224, 224)),
-            'video.exterior_image_1': ('image.exterior', (224, 224)),
-        }
+        images = {'wrist_image': ('image.wrist', (224, 224)), 'exterior_image_1': ('image.exterior', (224, 224))}
         super().__init__(state, images)
 
     def encode(self, inputs: dict[str, Any]) -> dict[str, Any]:
         obs = super().encode(inputs)
-        state = obs.pop('observation.state')
-        obs['state.robot_position_translation'] = state[:3]
-        obs['state.robot_position_quaternion'] = state[3:7]
-        obs['state.grip'] = state[7:8]
-        obs['state.joint_position'] = state[8:]
-        return obs
+
+        # Extract state components
+        state = obs.pop('observation.state').astype(np.float32)
+        translation = state[:3]
+        quaternion = state[3:7]
+        grip = state[7:8]
+        joint_position = state[8:]
+
+        # Build N1.6 nested structure
+        return {
+            'video': {
+                'wrist_image': obs['wrist_image'][np.newaxis, np.newaxis, ...],
+                'exterior_image_1': obs['exterior_image_1'][np.newaxis, np.newaxis, ...],
+            },
+            'state': {
+                'robot_position_translation': translation[np.newaxis, np.newaxis, ...],
+                'robot_position_quaternion': quaternion[np.newaxis, np.newaxis, ...],
+                'grip': grip[np.newaxis, np.newaxis, ...],
+                'joint_position': joint_position[np.newaxis, np.newaxis, ...],
+            },
+            'language': {'annotation.language.language_instruction': [[inputs.get('task', '')]]},
+        }

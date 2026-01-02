@@ -7,10 +7,6 @@ WORKDIR /positronic
 # Copy the positronic repository
 COPY . /positronic
 
-# Install the project so runtime metadata (e.g. importlib.metadata) is present.
-RUN --mount=type=cache,target=/root/.cache/uv \
-    uv pip install --no-deps .
-
 # Set Python path to include source root and gr00t
 ENV PYTHONPATH=/positronic:/gr00t
 
