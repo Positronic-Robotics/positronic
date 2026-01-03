@@ -1,40 +1,19 @@
 import configuronic as cfn
 
+from positronic import geom
 from positronic.policy.observation import ObservationEncoder
 
 
 @cfn.config()
 def general(
-    state_name: str,
-    state_features: dict[str, int],
-    image_mappings: dict[str, str],
-    image_size: tuple[int, int],
-    groot_state: dict[str, int | tuple[int, str]] | None,
-    groot_video_mappings: dict[str, str] | None,
+    state_name: str, state_features: dict[str, int], image_mappings: dict[str, str], image_size: tuple[int, int]
 ):
-    groot_video_mappings = groot_video_mappings or {}
+    """General observation encoder for non-GR00T policies (OpenPI, ACT, etc.)."""
     state_dict = {state_name: list(state_features.keys())}
-
     images = {k: (v, image_size) for k, v in image_mappings.items()}
     result = ObservationEncoder(state=state_dict, images=images)
-    result.meta.setdefault('gr00t_modality', {'state': {}, 'video': {}})
 
     state_dim = sum(state_features.values())
-    groot_state = groot_state or state_features.copy()
-    groot_dims = sum(v[0] if isinstance(v, tuple) else v for v in groot_state.values())
-    assert groot_dims == state_dim, f'Groot state dimensions do not match state dimensions: {groot_dims} != {state_dim}'
-
-    i = 0
-    for k, v in groot_state.items():
-        if isinstance(v, tuple):
-            v, rotation_type = v
-            result.meta['gr00t_modality']['state'][k] = {'start': i, 'end': i + v, 'rotation_type': rotation_type}
-        else:
-            result.meta['gr00t_modality']['state'][k] = {'start': i, 'end': i + v}
-        i += v
-    if groot_video_mappings:
-        result.meta['gr00t_modality']['video'] = {k: {'original_key': v} for k, v in groot_video_mappings.items()}
-
     lerobot_features = {state_name: {'shape': (state_dim,), 'names': list(state_features.keys()), 'dtype': 'float32'}}
     for out_name, (_input_key, (width, height)) in result._image_configs.items():
         lerobot_features[out_name] = {
@@ -48,32 +27,17 @@ def general(
 
 
 eepose_grip = general.override(
-    state_name='observation.state',
-    state_features={'robot_state.ee_pose': 7, 'grip': 1},
-    image_size=(224, 224),
-    groot_state={'robot_position_translation': 3, 'robot_position_quaternion': (4, 'quaternion'), 'grip': 1},
-    groot_video_mappings={'ego_view': 'observation.images.left', 'side_image': 'observation.images.side'},
+    state_name='observation.state', state_features={'robot_state.ee_pose': 7, 'grip': 1}, image_size=(224, 224)
 )
 
 joints_grip = general.override(
-    state_name='observation.state',
-    state_features={'robot_state.q': 7, 'grip': 1},
-    image_size=(224, 224),
-    groot_state={'robot_joints': 7, 'grip': 1},
-    groot_video_mappings={'ego_view': 'observation.images.left', 'side_image': 'observation.images.side'},
+    state_name='observation.state', state_features={'robot_state.q': 7, 'grip': 1}, image_size=(224, 224)
 )
 
 eepose_grip_joints = general.override(
     state_name='observation.state',
     state_features={'robot_state.ee_pose': 7, 'grip': 1, 'robot_state.q': 7},
     image_size=(224, 224),
-    groot_state={
-        'robot_position_translation': 3,
-        'robot_position_quaternion': (4, 'quaternion'),
-        'grip': 1,
-        'joint_position': 7,
-    },
-    groot_video_mappings={'ego_view': 'observation.images.left', 'side_image': 'observation.images.side'},
 )
 
 eepose = eepose_grip.override(
@@ -89,15 +53,11 @@ eepose_q = eepose_grip_joints.override(
 openpi_positronic = eepose_grip.override(
     state_name='observation/state',
     image_mappings={'observation/wrist_image': 'image.wrist', 'observation/image': 'image.exterior'},
-    groot_state=None,
-    groot_video_mappings=None,
 )
 
 openpi_eeq = eepose_grip_joints.override(
     state_name='observation/state',
     image_mappings={'observation/wrist_image': 'image.wrist', 'observation/image': 'image.exterior'},
-    groot_state=None,
-    groot_video_mappings=None,
 )
 
 
@@ -113,35 +73,54 @@ def openpi_droid(exterior_camera: str, wrist_camera: str, image_size: tuple[int,
     )
 
 
-groot_ee_absolute = eepose_grip.override(
-    image_mappings={'observation.images.exterior': 'image.exterior', 'observation.images.wrist': 'image.wrist'},
-    groot_video_mappings={'exterior_image_1': 'observation.images.exterior', 'wrist_image': 'observation.images.wrist'},
-)
-
-groot_ee_q = eepose_grip_joints.override(
-    image_mappings={'observation.images.exterior': 'image.exterior', 'observation.images.wrist': 'image.wrist'},
-    groot_video_mappings={'exterior_image_1': 'observation.images.exterior', 'wrist_image': 'observation.images.wrist'},
-)
-groot_oxe_droid = eepose_grip.override(
-    image_mappings={'observation.images.exterior': 'image.exterior', 'observation.images.wrist': 'image.wrist'},
-    groot_state={'eef_position': 3, 'eef_rotation': (4, 'quaternion'), 'gripper_position': 1},
-    groot_video_mappings={
-        'exterior_image_1': 'observation.images.exterior',
-        'exterior_image_2': 'observation.images.exterior',
-        'wrist_image': 'observation.images.wrist',
-    },
-)
+# =============================================================================
+# Unified GR00T observation encoder (works for both training and inference)
+# =============================================================================
 
 
-@cfn.config()
-def groot_infer():
-    from positronic.policy.observation import GrootInferenceObservationEncoder
+@cfn.config(rotation_rep=None, include_joints=False)
+def groot(rotation_rep: str | None, include_joints: bool):
+    """Unified GR00T N1.6 observation encoder for training and inference.
 
-    return GrootInferenceObservationEncoder()
+    Always outputs:
+        - ee_pose: 7D (xyz+quat) by default, or converted if rotation_rep specified
+        - grip: 1D gripper state
+        - joint_position: 7D (if include_joints=True)
+        - wrist_image, exterior_image_1: (224, 224, 3) images
+    """
+    from positronic.policy.observation import GrootObservationEncoder
+
+    rot_rep = geom.Rotation.Representation(rotation_rep) if rotation_rep else None
+    ee_dim = rot_rep.shape + 3 if rot_rep else 7  # 3 for xyz translation
+    encoder = GrootObservationEncoder(rotation_rep=rot_rep, include_joints=include_joints)
+
+    # Set metadata for dataset generation
+    state_meta = {'ee_pose': {'start': 0, 'end': ee_dim}, 'grip': {'start': ee_dim, 'end': ee_dim + 1}}
+    state_dim = ee_dim + 1
+    if include_joints:
+        state_meta['joint_position'] = {'start': state_dim, 'end': state_dim + 7}
+        state_dim += 7
+
+    encoder.meta['gr00t_modality'] = {
+        'state': state_meta,
+        'video': {
+            'exterior_image_1': {'original_key': 'exterior_image_1'},
+            'wrist_image': {'original_key': 'wrist_image'},
+        },
+    }
+    encoder.meta['lerobot_features'] = {
+        'ee_pose': {'shape': (ee_dim,), 'dtype': 'float32'},
+        'grip': {'shape': (1,), 'dtype': 'float32'},
+        'wrist_image': {'shape': (224, 224, 3), 'dtype': 'video'},
+        'exterior_image_1': {'shape': (224, 224, 3), 'dtype': 'video'},
+    }
+    if include_joints:
+        encoder.meta['lerobot_features']['joint_position'] = {'shape': (7,), 'dtype': 'float32'}
+
+    return encoder
 
 
-@cfn.config()
-def groot_ee_q_infer():
-    from positronic.policy.observation import GrootEE_QObservationEncoder
-
-    return GrootEE_QObservationEncoder()
+groot_ee_absolute = groot.copy()
+groot_rot6d = groot.override(rotation_rep='rot6d')
+groot_joints = groot.override(include_joints=True)
+groot_rot6d_joints = groot_rot6d.override(include_joints=True)

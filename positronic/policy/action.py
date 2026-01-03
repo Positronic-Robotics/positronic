@@ -207,22 +207,42 @@ class JointDeltaAction(ActionDecoder):
         }
 
 
-class GrootActionDecoder(AbsolutePositionAction):
-    """Decodes GR00T N1.6 action output to robot commands.
+class GrootActionDecoder(ActionDecoder):
+    """Unified GR00T action decoder for training and inference.
 
-    N1.6 returns actions with keys like 'target_robot_position_translation' (no prefix).
-    Each value has shape (D,) for a single time step.
+    For training (encode_episode): reads from episode and outputs action vector.
+    For inference (decode): converts GR00T output to robot commands.
+
+    Uses unified keys: ee_pose (7D or 9D) and grip (1D).
+
+    Args:
+        rotation_rep: Target rotation representation. None keeps QUAT (7D ee_pose).
+        tgt_ee_pose_key: Episode key for target end-effector pose.
+        tgt_grip_key: Episode key for target gripper position.
     """
 
-    def __init__(self):
-        super().__init__('fake', 'fake')
+    def __init__(
+        self,
+        rotation_rep: RotRep | None = None,
+        tgt_ee_pose_key: str = 'robot_commands.pose',
+        tgt_grip_key: str = 'target_grip',
+    ):
+        super().__init__()
+        self._rotation_rep = rotation_rep if rotation_rep else RotRep.QUAT
+        self._tgt_ee_pose_key = tgt_ee_pose_key
+        self._tgt_grip_key = tgt_grip_key
 
+    # --- Training: Episode -> action vector ---
+    def encode_episode(self, episode: Episode) -> Signal[np.ndarray]:
+        pose = episode[self._tgt_ee_pose_key]
+        pose = transforms.recode_transform(RotRep.QUAT, self._rotation_rep, pose)
+        return transforms.concat(pose, episode[self._tgt_grip_key], dtype=np.float32)
+
+    # --- Inference: GR00T output -> robot command ---
     def decode(self, action: dict[str, Any], _inputs: dict[str, np.ndarray]) -> dict[str, Any]:
-        target_pose = geom.Transform3D(
-            action['target_robot_position_translation'],
-            geom.Rotation.from_quat(action['target_robot_position_quaternion']),
-        )
-        target_grip = action['target_grip'].item()
+        ee_pose = action['ee_pose']
+        target_pose = geom.Transform3D.from_vector(ee_pose, self._rotation_rep)
+        target_grip = action['grip'].item()
         return {
             'robot_command': command.to_wire(command.CartesianPosition(pose=target_pose)),
             'target_grip': target_grip,

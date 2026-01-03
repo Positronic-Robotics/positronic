@@ -88,8 +88,10 @@ def groot_remote(host: str = 'localhost', port: int = 9000, timeout_ms: int = 15
     return Gr00tPolicy(host, port, timeout_ms, n_action_steps)
 
 
-groot_ee = wrapped.override(base=groot_remote, observation=obs_cfg.groot_infer, action=act_cfg.groot_infer)
-groot_ee_q = groot_ee.override(observation=obs_cfg.groot_ee_q_infer)
+groot_ee = wrapped.override(base=groot_remote, observation=obs_cfg.groot, action=act_cfg.groot)
+groot_ee_joints = groot_ee.override(observation=obs_cfg.groot_joints)
+groot_ee_rot6d = groot_ee.override(observation=obs_cfg.groot_rot6d, action=act_cfg.groot_rot6d)
+groot_ee_rot6d_joints = groot_ee.override(observation=obs_cfg.groot_rot6d_joints, action=act_cfg.groot_rot6d)
 
 
 @cfn.config(weights=None)

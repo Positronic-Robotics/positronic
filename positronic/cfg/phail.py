@@ -89,18 +89,18 @@ full_openpi_ft = dataset.encoded.override(
 )
 
 droid_groot_ft = dataset.encoded.override(
-    base=droid_ds, observation=policy.observation.groot_ee_absolute, action=policy.action.absolute_position
+    base=droid_ds, observation=policy.observation.groot_ee_absolute, action=policy.action.groot
 )
 sim_stack_groot_ft = dataset.encoded.override(
-    base=legacy_sim, observation=policy.observation.groot_ee_absolute, action=policy.action.absolute_position
+    base=legacy_sim, observation=policy.observation.groot_ee_absolute, action=policy.action.groot
 )
 sim_pnp_groot_ft = dataset.encoded.override(
-    base=pnp_sim, observation=policy.observation.groot_ee_absolute, action=policy.action.absolute_position
+    base=pnp_sim, observation=policy.observation.groot_ee_absolute, action=policy.action.groot
 )
 full_groot_ft = dataset.encoded.override(
     base=dataset.concat_ds.override(datasets=[droid_ds, legacy_sim, pnp_sim]),
     observation=policy.observation.groot_ee_absolute,
-    action=policy.action.absolute_position,
+    action=policy.action.groot,
 )
 
 act_latest = policy.policy.act_absolute.override(**{
@@ -115,8 +115,8 @@ act_q_latest = policy.policy.act_absolute.override(**{
 openpi = policy.policy.openpi_positronic.copy()
 openpi_q = openpi.override(observation=policy.observation.openpi_eeq)
 
-groot = policy.policy.groot_ee.copy()
-groot_q = policy.policy.groot_ee_q.copy()
+groot_ee = policy.policy.groot_ee.copy()
+groot_eeq = policy.policy.groot_ee_joints.copy()
 
 sample = policy.policy.sample.copy()
 

@@ -4,10 +4,14 @@ from typing import Any
 import numpy as np
 from PIL import Image as PilImage
 
+from positronic import geom
 from positronic.dataset import Signal, transforms
+from positronic.dataset import transforms as tf
 from positronic.dataset.episode import Episode
 from positronic.dataset.transforms import image
 from positronic.dataset.transforms.episode import Derive
+
+ROT_REP = geom.Rotation.Representation
 
 
 class ObservationEncoder(Derive):
@@ -79,79 +83,134 @@ class ObservationEncoder(Derive):
         return obs
 
 
-# GR00T N1.6 Observation Encoders
-# These encode observations into the nested format expected by N1.6 PolicyServer:
-# {
-#     'video': {key: np.ndarray[uint8, (B, T, H, W, C)]},
-#     'state': {key: np.ndarray[float32, (B, T, D)]},
-#     'language': {key: list[list[str]]},  # (B, T)
-# }
+class GrootObservationEncoder(Derive):
+    """Unified observation encoder for GR00T N1.6 training and inference.
 
+    For training (__call__): outputs flat dict with separate keys for each state component.
+    For inference (encode): outputs nested GR00T format for PolicyServer.
 
-class GrootInferenceObservationEncoder(ObservationEncoder):
-    """Encodes observations for GR00T N1.6 inference (EE pose control)."""
+    State keys output:
+        - ee_pose: 7D (xyz+quat) by default, or 9D (xyz+rot6d) if rotation_rep=ROT6D
+        - grip: 1D gripper state
+        - joint_position: 7D joint positions (if include_joints=True)
 
-    def __init__(self):
-        state = {'observation.state': ['robot_state.ee_pose', 'grip']}
-        images = {'wrist_image': ('image.wrist', (224, 224)), 'exterior_image_1': ('image.exterior', (224, 224))}
-        super().__init__(state, images)
+    Video keys output:
+        - wrist_image: (H, W, 3) uint8
+        - exterior_image_1: (H, W, 3) uint8
 
-    def encode(self, inputs: dict[str, Any]) -> dict[str, Any]:
-        obs = super().encode(inputs)
+    Args:
+        rotation_rep: Target rotation representation. None keeps original (QUAT).
+        include_joints: If True, include joint_position in output.
+        image_size: Output image size as (width, height).
+        exterior_camera: Episode key for exterior camera.
+        wrist_camera: Episode key for wrist camera.
+    """
 
-        # Extract state components
-        state = obs.pop('observation.state').astype(np.float32)
-        translation = state[:3]
-        quaternion = state[3:7]
-        grip = state[7:8]
+    def __init__(
+        self,
+        rotation_rep: ROT_REP | None = None,
+        include_joints: bool = False,
+        image_size: tuple[int, int] = (224, 224),
+        exterior_camera: str = 'image.exterior',
+        wrist_camera: str = 'image.wrist',
+    ):
+        self._rotation_rep = rotation_rep
+        self._include_joints = include_joints
+        self._image_size = image_size
+        self._exterior_camera = exterior_camera
+        self._wrist_camera = wrist_camera
 
-        # Build N1.6 nested structure with proper shapes and dtypes
-        # Video: (H, W, C) -> (B=1, T=1, H, W, C), dtype=uint8
-        # State: (D,) -> (B=1, T=1, D), dtype=float32
-        # Language: str -> [[str]] (B=1, T=1)
-        return {
-            'video': {
-                'wrist_image': obs['wrist_image'][np.newaxis, np.newaxis, ...],
-                'exterior_image_1': obs['exterior_image_1'][np.newaxis, np.newaxis, ...],
-            },
-            'state': {
-                'robot_position_translation': translation[np.newaxis, np.newaxis, ...],
-                'robot_position_quaternion': quaternion[np.newaxis, np.newaxis, ...],
-                'grip': grip[np.newaxis, np.newaxis, ...],
-            },
-            'language': {'annotation.language.language_instruction': [[inputs.get('task', '')]]},
+        # Define transforms for training (derive from Episode)
+        derive_transforms = {
+            'ee_pose': self._derive_ee_pose,
+            'grip': self._derive_grip,
+            'wrist_image': partial(self._derive_image, wrist_camera),
+            'exterior_image_1': partial(self._derive_image, exterior_camera),
         }
+        if include_joints:
+            derive_transforms['joint_position'] = self._derive_joints
 
+        super().__init__(**derive_transforms)
+        self._metadata: dict[str, Any] = {}
 
-class GrootEE_QObservationEncoder(ObservationEncoder):
-    """Encodes observations for GR00T N1.6 inference (EE pose + joint position)."""
+    @property
+    def meta(self) -> dict[str, Any]:
+        return self._metadata
 
-    def __init__(self):
-        state = {'observation.state': ['robot_state.ee_pose', 'grip', 'robot_state.q']}
-        images = {'wrist_image': ('image.wrist', (224, 224)), 'exterior_image_1': ('image.exterior', (224, 224))}
-        super().__init__(state, images)
+    @meta.setter
+    def meta(self, value: dict[str, Any]):
+        self._metadata = value
+
+    # --- Training transforms (Episode -> Signal) ---
+
+    def _derive_ee_pose(self, episode: Episode) -> Signal[Any]:
+        pose = episode['robot_state.ee_pose']  # 7D xyz+quat
+        if self._rotation_rep is not None:
+            pose = tf.recode_transform(ROT_REP.QUAT, self._rotation_rep, pose)
+        return tf.astype(pose, np.float32)
+
+    def _derive_grip(self, episode: Episode) -> Signal[Any]:
+        # Reshape scalar grip values to (1,) arrays for LeRobot compatibility
+        def reshape_to_1d(values):
+            arr = np.asarray(values, dtype=np.float32)
+            return arr.reshape(-1, 1)
+
+        return transforms.Elementwise(episode['grip'], reshape_to_1d)
+
+    def _derive_joints(self, episode: Episode) -> Signal[Any]:
+        return tf.astype(episode['robot_state.q'], np.float32)
+
+    def _derive_image(self, input_key: str, episode: Episode) -> Signal[Any]:
+        w, h = self._image_size
+        return image.resize_with_pad(w, h, signal=episode[input_key])
+
+    # --- Inference encoding (raw inputs -> GR00T nested format) ---
+
+    def _encode_ee_pose(self, inputs: dict[str, Any]) -> np.ndarray:
+        """Encode ee_pose from raw robot inputs."""
+        pose = np.asarray(inputs['robot_state.ee_pose'], dtype=np.float32).reshape(-1)
+        if self._rotation_rep is not None:
+            pose = geom.Transform3D.from_vector(pose, ROT_REP.QUAT).as_vector(self._rotation_rep)
+        return pose
+
+    def _encode_image(self, input_key: str, inputs: dict[str, Any]) -> np.ndarray:
+        """Encode image from raw inputs."""
+        frame = inputs[input_key]
+        if not isinstance(frame, np.ndarray):
+            frame = np.asarray(frame)
+        w, h = self._image_size
+        return image.resize_with_pad_per_frame(w, h, PilImage.Resampling.BILINEAR, frame)
 
     def encode(self, inputs: dict[str, Any]) -> dict[str, Any]:
-        obs = super().encode(inputs)
+        """Encode raw robot inputs into GR00T N1.6 nested format for inference.
 
-        # Extract state components
-        state = obs.pop('observation.state').astype(np.float32)
-        translation = state[:3]
-        quaternion = state[3:7]
-        grip = state[7:8]
-        joint_position = state[8:]
+        Args:
+            inputs: Dict with keys: robot_state.ee_pose, grip, robot_state.q (optional),
+                   image.wrist, image.exterior, task (optional).
 
-        # Build N1.6 nested structure
+        Returns:
+            Nested dict with structure:
+            {
+                'video': {key: (1, 1, H, W, 3) uint8},
+                'state': {key: (1, 1, D) float32},
+                'language': {'annotation.language.language_instruction': [[str]]}
+            }
+        """
+        # Encode state
+        ee_pose = self._encode_ee_pose(inputs)
+        grip = np.asarray(inputs['grip'], dtype=np.float32).reshape(-1)
+
+        state_dict = {'ee_pose': ee_pose[np.newaxis, np.newaxis, ...], 'grip': grip[np.newaxis, np.newaxis, ...]}
+
+        if self._include_joints:
+            joints = np.asarray(inputs['robot_state.q'], dtype=np.float32).reshape(-1)
+            state_dict['joint_position'] = joints[np.newaxis, np.newaxis, ...]
+
         return {
             'video': {
-                'wrist_image': obs['wrist_image'][np.newaxis, np.newaxis, ...],
-                'exterior_image_1': obs['exterior_image_1'][np.newaxis, np.newaxis, ...],
+                'wrist_image': self._encode_image(self._wrist_camera, inputs)[np.newaxis, np.newaxis, ...],
+                'exterior_image_1': self._encode_image(self._exterior_camera, inputs)[np.newaxis, np.newaxis, ...],
             },
-            'state': {
-                'robot_position_translation': translation[np.newaxis, np.newaxis, ...],
-                'robot_position_quaternion': quaternion[np.newaxis, np.newaxis, ...],
-                'grip': grip[np.newaxis, np.newaxis, ...],
-                'joint_position': joint_position[np.newaxis, np.newaxis, ...],
-            },
+            'state': state_dict,
             'language': {'annotation.language.language_instruction': [[inputs.get('task', '')]]},
         }
