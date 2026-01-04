@@ -95,11 +95,14 @@ def groot(rotation_rep: str | None, include_joints: bool):
     encoder = GrootObservationEncoder(rotation_rep=rot_rep, include_joints=include_joints)
 
     # Set metadata for dataset generation
-    state_meta = {'ee_pose': {'start': 0, 'end': ee_dim}, 'grip': {'start': ee_dim, 'end': ee_dim + 1}}
-    state_dim = ee_dim + 1
+    # Each state key is stored as a separate column, so original_key points to the column
+    # and start/end are indices within that column (not a packed observation.state)
+    state_meta = {
+        'ee_pose': {'start': 0, 'end': ee_dim, 'original_key': 'ee_pose'},
+        'grip': {'start': 0, 'end': 1, 'original_key': 'grip'},
+    }
     if include_joints:
-        state_meta['joint_position'] = {'start': state_dim, 'end': state_dim + 7}
-        state_dim += 7
+        state_meta['joint_position'] = {'start': 0, 'end': 7, 'original_key': 'joint_position'}
 
     encoder.meta['gr00t_modality'] = {
         'state': state_meta,
