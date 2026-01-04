@@ -170,7 +170,7 @@ class GrootObservationEncoder(Derive):
         """Encode ee_pose from raw robot inputs."""
         pose = np.asarray(inputs['robot_state.ee_pose'], dtype=np.float32).reshape(-1)
         if self._rotation_rep is not None:
-            pose = geom.Transform3D.from_vector(pose, ROT_REP.QUAT).as_vector(self._rotation_rep)
+            pose = geom.Transform3D.from_vector(pose, ROT_REP.QUAT).as_vector(self._rotation_rep).astype(np.float32)
         return pose
 
     def _encode_image(self, input_key: str, inputs: dict[str, Any]) -> np.ndarray:
