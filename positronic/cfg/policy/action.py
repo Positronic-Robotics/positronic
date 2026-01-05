@@ -7,15 +7,30 @@ RotRep = geom.Rotation.Representation
 
 @cfn.config(rotation_rep=None, tgt_ee_pose_key='robot_commands.pose', tgt_grip_key='target_grip')
 def absolute_position(rotation_rep: str | None, tgt_ee_pose_key: str, tgt_grip_key: str):
-    """Unified GR00T action decoder for training and inference.
+    """Absolute position action decoder for ACT/OpenPI.
 
-    Args:
-        rotation_rep: Target rotation representation (e.g., 'rot6d'). None keeps QUAT (7D).
+    Decodes from {'action': vector} format.
+    """
+    from positronic.policy.action import AbsolutePositionAction
+
+    rot_rep = RotRep(rotation_rep) if rotation_rep else RotRep.QUAT
+    ee_dim = rot_rep.shape + 3
+
+    result = AbsolutePositionAction(tgt_ee_pose_key, tgt_grip_key, rotation_representation=rot_rep)
+    result.meta['lerobot_features'] = {'action': {'shape': (ee_dim + 1,), 'names': ['actions'], 'dtype': 'float32'}}
+    return result
+
+
+@cfn.config(rotation_rep=None, tgt_ee_pose_key='robot_commands.pose', tgt_grip_key='target_grip')
+def groot_absolute(rotation_rep: str | None, tgt_ee_pose_key: str, tgt_grip_key: str):
+    """GR00T action decoder for training and inference.
+
+    Decodes from {'ee_pose': ..., 'grip': ...} format.
     """
     from positronic.policy.action import GrootActionDecoder
 
     rot_rep = RotRep(rotation_rep) if rotation_rep else None
-    ee_dim = (rot_rep.shape if rot_rep else 4) + 3  # 3 for xyz translation
+    ee_dim = (rot_rep.shape if rot_rep else 4) + 3
 
     result = GrootActionDecoder(rotation_rep=rot_rep, tgt_ee_pose_key=tgt_ee_pose_key, tgt_grip_key=tgt_grip_key)
     result.meta['gr00t_modality'] = {
@@ -25,7 +40,7 @@ def absolute_position(rotation_rep: str | None, tgt_ee_pose_key: str, tgt_grip_k
     return result
 
 
-groot = absolute_position.copy()
+groot = groot_absolute.copy()
 groot_rot6d = groot.override(rotation_rep='rot6d')
 
 # TODO: We currently don't support absolute joint control, as collected datasets use cartesian control
