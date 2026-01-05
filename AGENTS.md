@@ -26,3 +26,12 @@ Positronic is a Python-native toolkit for ML-driven robotics covering the full l
 ## Testing
 - Don't add new test files unless explicitly asked
 - Never import inside test functions; add imports at the top of the file
+
+## Available skills
+- `/remote-training` — Manage Nebius VMs, Docker images, training jobs, inference servers
+- `/push-pr` — Push branch to origin and create PR to upstream with proper workflow
+
+## Related repositories
+- `../gr00t` — GR00T model configs and training (Positronic-Robotics/gr00t)
+- `../openpi` — OpenPI model integration
+- `../internal` — Internal scripts and infrastructure
