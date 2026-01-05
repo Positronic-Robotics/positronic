@@ -361,15 +361,26 @@ class Rotation(metaclass=RotationMeta):
 
         Returns:
             Rotation object representing the same rotation
+
+        Raises:
+            ValueError: If input vectors are zero-length or colinear
         """
         rot6d = np.asarray(rot6d)
         a1 = rot6d[:3]
         a2 = rot6d[3:6]
 
-        # Gram-Schmidt orthogonalization
-        b1 = a1 / np.linalg.norm(a1)
+        # Gram-Schmidt orthogonalization with degenerate input checks
+        norm_a1 = np.linalg.norm(a1)
+        if norm_a1 < 1e-10:
+            raise ValueError('rot6d first vector has near-zero norm, cannot normalize')
+        b1 = a1 / norm_a1
+
         b2 = a2 - np.dot(b1, a2) * b1
-        b2 = b2 / np.linalg.norm(b2)
+        norm_b2 = np.linalg.norm(b2)
+        if norm_b2 < 1e-10:
+            raise ValueError('rot6d vectors are colinear, cannot construct orthonormal basis')
+        b2 = b2 / norm_b2
+
         b3 = np.cross(b1, b2)
 
         R = np.stack([b1, b2, b3], axis=0)

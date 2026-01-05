@@ -78,3 +78,34 @@ Follow the project's commit message conventions:
 ## After PR Creation
 
 Show the PR URL so user can review it.
+
+## Handling PR Review Comments
+
+**IMPORTANT: Analysis first, no code changes until approved.**
+
+When PR comments arrive (from bots or humans):
+
+1. **Fetch and display the comments**:
+   ```bash
+   gh api repos/OWNER/REPO/pulls/NUMBER/comments
+   ```
+
+2. **Analyze each comment** - provide opinion on:
+   - Is the concern valid?
+   - Does it apply to our use case?
+   - What's the priority (critical / nice-to-have / not applicable)?
+   - Is there context (previous commits, design decisions) that explains the current code?
+
+3. **Check conversation history** - the code may be intentional:
+   - Look at relevant commits: `git show COMMIT_HASH`
+   - Check if there's reasoning in commit messages or code comments
+   - Consider the broader architecture and data flow
+
+4. **Present findings to user** - do NOT make code changes until user approves
+
+5. **If changes are needed**, discuss the approach first, then implement
+
+This prevents:
+- Blindly "fixing" intentional design decisions
+- Breaking working code based on misunderstood context
+- Wasting time on changes that aren't needed

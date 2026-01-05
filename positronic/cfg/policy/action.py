@@ -14,7 +14,7 @@ def absolute_position(rotation_rep: str | None, tgt_ee_pose_key: str, tgt_grip_k
     from positronic.policy.action import AbsolutePositionAction
 
     rot_rep = RotRep(rotation_rep) if rotation_rep else RotRep.QUAT
-    ee_dim = rot_rep.shape + 3
+    ee_dim = rot_rep.size + 3
 
     result = AbsolutePositionAction(tgt_ee_pose_key, tgt_grip_key, rotation_representation=rot_rep)
     result.meta['lerobot_features'] = {'action': {'shape': (ee_dim + 1,), 'names': ['actions'], 'dtype': 'float32'}}
@@ -30,7 +30,7 @@ def groot_absolute(rotation_rep: str | None, tgt_ee_pose_key: str, tgt_grip_key:
     from positronic.policy.action import GrootActionDecoder
 
     rot_rep = RotRep(rotation_rep) if rotation_rep else None
-    ee_dim = (rot_rep.shape if rot_rep else 4) + 3
+    ee_dim = (rot_rep.size if rot_rep else 4) + 3
 
     result = GrootActionDecoder(rotation_rep=rot_rep, tgt_ee_pose_key=tgt_ee_pose_key, tgt_grip_key=tgt_grip_key)
     result.meta['gr00t_modality'] = {

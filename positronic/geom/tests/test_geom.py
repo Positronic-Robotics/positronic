@@ -383,6 +383,8 @@ class TestRotation(unittest.TestCase):
                     data = np.array([0.0, 0.0, 0.0, 1.0])
                 case Rotation.Representation.ROTATION_MATRIX:
                     data = np.eye(3)
+                case Rotation.Representation.ROT6D:
+                    data = np.array([1.0, 0.0, 0.0, 0.0, 1.0, 0.0])  # Identity rotation
                 case _:
                     data = np.zeros(representation.shape)
             self.assertIsNotNone(Rotation.create_from(data, representation))
