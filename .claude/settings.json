@@ -24,6 +24,7 @@
       "Bash(gh pr:*)",
       "Bash(gh api:*)",
       "Skill(remote-training)",
+      "Skill(push-pr)",
       "Bash(../internal/scripts/start.sh:*)",
       "Bash(nebius:*)",
       "Bash(curl:*)"
