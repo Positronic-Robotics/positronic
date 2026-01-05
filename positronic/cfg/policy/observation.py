@@ -91,7 +91,7 @@ def groot(rotation_rep: str | None, include_joints: bool):
     from positronic.policy.observation import GrootObservationEncoder
 
     rot_rep = geom.Rotation.Representation(rotation_rep) if rotation_rep else None
-    ee_dim = rot_rep.shape + 3 if rot_rep else 7  # 3 for xyz translation
+    ee_dim = rot_rep.size + 3 if rot_rep else 7  # 3 for xyz translation
     encoder = GrootObservationEncoder(rotation_rep=rot_rep, include_joints=include_joints)
 
     # Set metadata for dataset generation
