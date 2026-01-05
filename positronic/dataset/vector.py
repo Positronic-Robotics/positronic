@@ -33,7 +33,11 @@ class SimpleSignal(Signal[T]):
         if self._data is None:
             table = pq.read_table(self.filepath)
             self._timestamps = table['timestamp'].to_numpy()
-            self._values = table['value'].to_numpy()
+            values = table['value'].to_numpy()
+            # Stack object arrays of numeric arrays into proper 2D arrays
+            if values.dtype == object and len(values) > 0 and isinstance(values[0], np.ndarray):
+                values = np.stack(values)
+            self._values = values
             self._data = table
 
     def __len__(self) -> int:
