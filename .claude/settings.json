@@ -22,7 +22,11 @@
       "Bash(git remote:*)",
       "Bash(uv run:*)",
       "Bash(gh pr:*)",
-      "Bash(gh api:*)"
+      "Bash(gh api:*)",
+      "Skill(remote-training)",
+      "Bash(../internal/scripts/start.sh:*)",
+      "Bash(nebius:*)",
+      "Bash(curl:*)"
     ]
   },
   "hooks": {
