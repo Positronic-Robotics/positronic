@@ -23,6 +23,7 @@ dependencies = [
     "dm_control",
     "fastapi",
     "fire",
+    "httpx",
     "imageio[ffmpeg]",
     "lerobot>=0.3.3", # TODO: Get rid of this, move all usages to standalone scripts
     "msgpack",

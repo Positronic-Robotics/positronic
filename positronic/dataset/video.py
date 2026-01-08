@@ -1,3 +1,4 @@
+import struct
 from collections import defaultdict, deque
 from collections.abc import Iterator, Sequence
 from functools import lru_cache
@@ -327,3 +328,40 @@ class VideoSignal(Signal[np.ndarray]):
             raise ValueError('Signal is empty')
         base = super().meta
         return SignalMeta(dtype=base.dtype, shape=base.shape, kind=Kind.IMAGE)
+
+    # SupportsEncodedRepresentation protocol implementation
+
+    @property
+    def encoding_format(self) -> str:
+        """Format identifier for video encoded representation."""
+        return 'positronic.video.v1'
+
+    def iter_encoded_chunks(self) -> Iterator[bytes]:
+        """Stream video + timestamps as a simple container format.
+
+        Format v1:
+          - 8 bytes: video file size (uint64 little-endian)
+          - N bytes: video file content (raw H.264/MP4)
+          - 8 bytes: Arrow IPC size (uint64 little-endian)
+          - M bytes: Arrow IPC stream (timestamps table)
+
+        The Arrow table contains 'ts_ns' column and any extra timeline columns.
+        Using Arrow IPC format (not parquet) to decouple from storage format.
+        """
+
+        # Stream video file
+        video_size = self.video_path.stat().st_size
+        yield struct.pack('<Q', video_size)
+        with open(self.video_path, 'rb') as f:
+            while chunk := f.read(64 * 1024):
+                yield chunk
+
+        # Read timestamps from parquet, serialize as Arrow IPC
+        frames_table = pq.read_table(self.frames_index_path)
+        sink = pa.BufferOutputStream()
+        with pa.ipc.new_stream(sink, frames_table.schema) as writer:
+            writer.write_table(frames_table)
+        arrow_bytes = sink.getvalue().to_pybytes()
+
+        yield struct.pack('<Q', len(arrow_bytes))
+        yield arrow_bytes

@@ -1,5 +1,5 @@
 from abc import ABC, abstractmethod
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
 from collections.abc import Sequence as SequenceABC
 from contextlib import AbstractContextManager
 from dataclasses import dataclass
@@ -368,3 +368,33 @@ class SignalWriter(AbstractContextManager, ABC, Generic[T]):
     @abstractmethod
     def abort(self) -> None:
         pass
+
+
+@runtime_checkable
+class SupportsEncodedRepresentation(Protocol):
+    """Protocol for signals with a raw/encoded representation distinct from decoded values.
+
+    Signals that use lossy encoding (e.g., video, compressed audio) can implement this
+    protocol to expose their raw encoded data for efficient transfer without re-encoding.
+    This is modality-agnostic - any signal type with lossy encoding can implement it.
+    """
+
+    @property
+    def encoding_format(self) -> str:
+        """Format identifier for the encoded representation.
+
+        Returns a versioned string like 'positronic.video.v1' that identifies
+        both the type of encoding and its wire format version.
+        """
+        ...
+
+    def iter_encoded_chunks(self) -> Iterator[bytes]:
+        """Stream all encoded data as opaque bytes.
+
+        The format of the bytes is defined by `encoding_format`. Receivers must
+        parse the stream according to the format version.
+
+        Yields:
+            Chunks of raw encoded bytes.
+        """
+        ...
