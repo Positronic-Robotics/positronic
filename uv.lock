@@ -2645,15 +2645,15 @@ wheels = [
 
 [[package]]
 name = "pos3"
-version = "0.1.0"
+version = "0.2.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "boto3" },
     { name = "tqdm" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/86/7c/11f19aaa350b46d21b3bf539d6de7f8dfc9c52551df057caa0fe918f8e0a/pos3-0.1.0.tar.gz", hash = "sha256:3b76cb3ed96b81c12e8c16100700154dfb10cfca141118cdd4368e631312899d", size = 17433, upload-time = "2025-12-10T11:10:27.982Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/3b/bb/71ab2eff6adb1a9a88a7fa6129c459d28326225d47efff46b1385bac0c0e/pos3-0.2.0.tar.gz", hash = "sha256:9bb97aa63d423408fc0963040413418613418a12bf55d643f5f8facaa1a00ceb", size = 25449, upload-time = "2026-01-07T19:20:47.536Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/57/f0/973a82ceaf52513ef9a26e76db4e08468eb57bc5c0d168e76b6ec356f591/pos3-0.1.0-py3-none-any.whl", hash = "sha256:5aecb35a7ec790cb263b82bb2ea9a48f7b1bcf31f4642f67d0411f8333b1eb45", size = 11001, upload-time = "2025-12-10T11:10:27.005Z" },
+    { url = "https://files.pythonhosted.org/packages/3c/c4/09dce87293d841e9ac3e15bb94548edc22b349c63df549f6b9b6678c3a45/pos3-0.2.0-py3-none-any.whl", hash = "sha256:c9bf6a5e414510378932a8e4a2c74cbb262ce9058afd45a3eb8edb675e9fb17e", size = 17144, upload-time = "2026-01-07T19:20:46.695Z" },
 ]
 
 [[package]]
@@ -2750,7 +2750,7 @@ requires-dist = [
     { name = "pinocchio", marker = "extra == 'hardware'" },
     { name = "placo", marker = "extra == 'hardware'" },
     { name = "plotly", specifier = ">=6.5.0" },
-    { name = "pos3", specifier = "==0.1.0" },
+    { name = "pos3", specifier = ">=0.2.0" },
     { name = "positronic-franka", marker = "sys_platform == 'linux' and extra == 'hardware'", specifier = ">=0.3.0" },
     { name = "pre-commit", marker = "extra == 'dev'" },
     { name = "pyarrow" },

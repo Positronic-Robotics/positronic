@@ -6,6 +6,7 @@ from typing import Any
 
 import configuronic as cfn
 import pos3
+from pos3 import Profile
 
 from positronic.cfg.policy import action, observation
 from positronic.dataset.dataset import ConcatDataset, Dataset
@@ -13,15 +14,19 @@ from positronic.dataset.local_dataset import LocalDataset, load_all_datasets
 from positronic.dataset.transforms import TransformedDataset
 from positronic.dataset.transforms.episode import Derive, EpisodeTransform, Group, Identity
 
+PUBLIC = Profile(
+    local_name='positronic-public', endpoint='https://storage.eu-north1.nebius.cloud', public=True, region='eu-north1'
+)
+
 
 @cfn.config()
-def local(path: str):
-    return LocalDataset(pos3.download(path))
+def local(path: str, profile: Profile | None = None):
+    return LocalDataset(pos3.download(path, profile=profile))
 
 
 @cfn.config()
-def local_all(path: str):
-    return load_all_datasets(pos3.download(path))
+def local_all(path: str, profile: Profile | None = None):
+    return load_all_datasets(pos3.download(path, profile=profile))
 
 
 @cfn.config()

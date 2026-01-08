@@ -25,15 +25,15 @@ SPOONS_TASK = 'Pick all the wooden spoons one by one from transparent tote and p
 SCISSORS_TASK = 'Pick all the scissors one by one from transparent tote and place them into the large grey tote.'
 
 
-@cfn.config(path='s3://raw/droid/')
+@cfn.config(path='s3://positronic-public/raw/droid/')
 def droid_ds(path):
-    root = pos3.download(path)
+    root = pos3.download(path, profile=dataset.PUBLIC)
 
     towels = load_all_datasets(root / 'towels')
     towels = TransformedDataset(towels, Group(Derive(task=FromValue(TOWELS_TASK)), Identity()))
     spoons = load_all_datasets(root / 'spoons')
     spoons = TransformedDataset(spoons, Group(Derive(task=FromValue(SPOONS_TASK)), Identity()))
-    scissors = load_all_datasets(root / 'scisors')
+    scissors = load_all_datasets(root / 'scissors')
     scissors = TransformedDataset(scissors, Group(Derive(task=FromValue(SCISSORS_TASK)), Identity()))
     return towels + spoons + scissors
 
@@ -56,10 +56,10 @@ old_to_new = dataset.group.override(
     ]
 )
 
-legacy_sim_raw = dataset.local.override(path='s3://raw/sim-cubes/luzan/')
-legacy_sim = dataset.transform.override(base=legacy_sim_raw, transforms=[old_to_new])
+cubes_sim_raw = dataset.local.override(path='s3://positronic-public/raw/sim/cubes/', profile=dataset.PUBLIC)
+cubes_sim = dataset.transform.override(base=cubes_sim_raw, transforms=[old_to_new])
 
-pnp_sim_raw = dataset.local.override(path='s3://raw/sim_pnp/')
+pnp_sim_raw = dataset.local.override(path='s3://positronic-public/raw/sim/pnp/', profile=dataset.PUBLIC)
 pnp_sim = dataset.transform.override(
     base=pnp_sim_raw,
     transforms=[
@@ -77,13 +77,13 @@ droid_openpi_ft = dataset.encoded.override(
     base=droid_ds, observation=policy.observation.eepose, action=policy.action.absolute_position
 )
 sim_stack_openpi_ft = dataset.encoded.override(
-    base=legacy_sim, observation=policy.observation.eepose, action=policy.action.absolute_position
+    base=cubes_sim, observation=policy.observation.eepose, action=policy.action.absolute_position
 )
 sim_pnp_openpi_ft = dataset.encoded.override(
     base=pnp_sim, observation=policy.observation.eepose, action=policy.action.absolute_position
 )
 full_openpi_ft = dataset.encoded.override(
-    base=dataset.concat_ds.override(datasets=[droid_ds, legacy_sim, pnp_sim]),
+    base=dataset.concat_ds.override(datasets=[droid_ds, cubes_sim, pnp_sim]),
     observation=policy.observation.eepose,
     action=policy.action.absolute_position,
 )
@@ -92,13 +92,13 @@ droid_groot_ft = dataset.encoded.override(
     base=droid_ds, observation=policy.observation.groot_ee_absolute, action=policy.action.groot
 )
 sim_stack_groot_ft = dataset.encoded.override(
-    base=legacy_sim, observation=policy.observation.groot_ee_absolute, action=policy.action.groot
+    base=cubes_sim, observation=policy.observation.groot_ee_absolute, action=policy.action.groot
 )
 sim_pnp_groot_ft = dataset.encoded.override(
     base=pnp_sim, observation=policy.observation.groot_ee_absolute, action=policy.action.groot
 )
 full_groot_ft = dataset.encoded.override(
-    base=dataset.concat_ds.override(datasets=[droid_ds, legacy_sim, pnp_sim]),
+    base=dataset.concat_ds.override(datasets=[droid_ds, cubes_sim, pnp_sim]),
     observation=policy.observation.groot_ee_absolute,
     action=policy.action.groot,
 )

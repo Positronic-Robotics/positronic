@@ -33,7 +33,7 @@ dependencies = [
     "opencv-python-headless",
     "openpi-client",
     "plotly>=6.5.0",
-    "pos3==0.1.0",
+    "pos3>=0.2.0",
     "pyarrow",
     "pydantic",
     "pyturbojpeg",
