@@ -4,7 +4,7 @@ from typing import Any
 from websockets.sync.client import connect
 from websockets.sync.connection import Connection
 
-from .serialisation import deserialise, serialise
+from positronic.utils.serialization import deserialise, serialise
 
 logger = logging.getLogger(__name__)
 

@@ -9,8 +9,8 @@ import pos3
 import uvicorn
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 
-from positronic.offboard.serialisation import deserialise, serialise
 from positronic.utils.logging import init_logging
+from positronic.utils.serialization import deserialise, serialise
 
 # Configure logging
 logger = logging.getLogger(__name__)

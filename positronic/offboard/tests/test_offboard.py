@@ -5,7 +5,7 @@ import pytest
 from fastapi import WebSocketDisconnect
 
 from positronic.offboard.client import InferenceClient
-from positronic.offboard.serialisation import deserialise, serialise
+from positronic.utils.serialization import deserialise, serialise
 from positronic.vendors.lerobot import server as lerobot_server
 
 

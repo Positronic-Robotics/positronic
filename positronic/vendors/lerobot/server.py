@@ -15,11 +15,11 @@ from lerobot.policies.pretrained import PreTrainedPolicy
 
 from positronic.cfg.policy import action as act_cfg
 from positronic.cfg.policy import observation as obs_cfg
-from positronic.offboard.serialisation import deserialise, serialise
 from positronic.policy import DecodedEncodedPolicy, Policy
 from positronic.policy.lerobot import LerobotPolicy
 from positronic.utils.checkpoints import get_latest_checkpoint, list_checkpoints
 from positronic.utils.logging import init_logging
+from positronic.utils.serialization import deserialise, serialise
 
 logger = logging.getLogger(__name__)
 
