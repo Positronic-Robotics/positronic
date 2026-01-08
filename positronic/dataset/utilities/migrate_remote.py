@@ -25,9 +25,7 @@ from positronic.dataset.remote import RemoteDataset
 
 def migrate_remote_dataset(source_url: str, dest_path: Path) -> None:
     """Download a remote dataset to local storage without quality loss."""
-    remote_ds = RemoteDataset(source_url)
-
-    with LocalDatasetWriter(dest_path) as writer:
+    with RemoteDataset(source_url) as remote_ds, LocalDatasetWriter(dest_path) as writer:
         for episode in tqdm.tqdm(remote_ds, total=len(remote_ds), desc='Migrating'):
             with writer.new_episode() as ew:
                 for key, value in episode.static.items():
