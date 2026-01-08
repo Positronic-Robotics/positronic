@@ -54,7 +54,7 @@ Signal implements `Sequence[(T, int)]` (iterable, indexable). We support three k
 T = TypeVar('T')  # The type of the data we manage
 
 IndicesLike = slice | Sequence[int] | np.ndarray
-RealNumericArrayLike = Sequence[int] | Sequence[float] | np.ndarray
+RealNumericArrayLike = Sequence[int] | np.ndarray
 
 class Signal[T]:
     # Minimal abstract interface (implementations must provide):

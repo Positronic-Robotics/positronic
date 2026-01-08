@@ -199,11 +199,9 @@ class TestVideoInterface:
         empty = sig._search_ts(np.array([], dtype=np.int64))
         assert isinstance(empty, np.ndarray)
         assert empty.size == 0
-        # Accept float array; floor index for one element
-        idx = sig._search_ts(np.array([999.9, 1000.0, 1000.1], dtype=np.float64))
+        idx = sig._search_ts(np.array([999, 1000, 1001], dtype=np.int64))
         assert np.array_equal(idx, np.array([-1, 0, 0]))
-        # Accept scalar float via list-like
-        assert sig._search_ts([1000.0])[0] == 0
+        assert sig._search_ts([1000])[0] == 0
 
 
 class TestVideoExtraTimelines:

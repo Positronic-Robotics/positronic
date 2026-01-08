@@ -12,7 +12,7 @@ import numpy as np
 T = TypeVar('T')
 
 IndicesLike: TypeAlias = slice | Sequence[int] | np.ndarray
-RealNumericArrayLike: TypeAlias = Sequence[int] | Sequence[float] | np.ndarray
+RealNumericArrayLike: TypeAlias = Sequence[int] | np.ndarray
 
 
 def is_realnum_dtype(dtype) -> bool:
