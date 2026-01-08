@@ -46,7 +46,7 @@ def episode_info(index: int):
         signals_meta[name] = {
             'length': len(sig),
             'kind': sig.kind.value,
-            'dtype': str(sig.dtype),
+            'dtype': np.dtype(sig.dtype).str,
             'shape': list(sig.shape) if sig.shape else [],
             'encoding_format': sig.encoding_format if supports_encoded else None,
         }
