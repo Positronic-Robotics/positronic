@@ -27,6 +27,12 @@ Positronic is a Python-native toolkit for ML-driven robotics covering the full l
 - Don't add new test files unless explicitly asked
 - Never import inside test functions; add imports at the top of the file
 
+## Commit messages
+- Short, imperative sentences (e.g., "Fix wrong type", not "Fixed wrong type")
+- Use backticks for code references (e.g., "Fix `RemoteDataset` connection leak")
+- No trailing period for short messages
+- No Claude/AI attribution
+
 ## Available skills
 - `/remote-training` — Manage Nebius VMs, Docker images, training jobs, inference servers
 - `/push-pr` — Push branch to origin and create PR to upstream with proper workflow
