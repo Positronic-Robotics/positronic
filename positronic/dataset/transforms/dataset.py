@@ -14,12 +14,15 @@ class TransformedDataset(Dataset):
         self._dataset = dataset
         self._transforms = transforms
         self._extra_meta = extra_meta or {}
+        self._episode_cache: dict[int, Episode] = {}
 
     def __len__(self) -> int:
         return len(self._dataset)
 
     def _get_episode(self, index: int) -> Episode:
-        return TransformedEpisode(self._dataset[index], *self._transforms)
+        if index not in self._episode_cache:
+            self._episode_cache[index] = TransformedEpisode(self._dataset[index], *self._transforms)
+        return self._episode_cache[index]
 
     @property
     def meta(self) -> dict[str, Any]:

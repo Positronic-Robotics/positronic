@@ -24,11 +24,43 @@ class EpisodeTransform(ABC):
         return {}
 
 
+class _LazyDeriveEpisode(Episode):
+    """Episode that computes derived values lazily on first access."""
+
+    def __init__(self, base: Episode, transforms: dict[str, Callable[[Episode], Any]]):
+        self._base = base
+        self._transforms = transforms
+        self._computed: dict[str, Any] = {}
+
+    def __iter__(self) -> Iterator[str]:
+        yield from self._transforms.keys()
+
+    def __len__(self) -> int:
+        return len(self._transforms)
+
+    def __getitem__(self, name: str) -> Any:
+        if name not in self._transforms:
+            raise KeyError(name)
+        if name not in self._computed:
+            fn = self._transforms[name]
+            try:
+                res = fn(self._base)
+            except Exception as e:
+                raise ValueError(f'Failed to apply transform {name} to episode {self._base.meta}.') from e
+            if res is not None:
+                self._computed[name] = res
+        return self._computed[name]
+
+    @property
+    def meta(self) -> dict:
+        return self._base.meta
+
+
 class Derive(EpisodeTransform):
     """Derive new episode keys by applying functions to the input episode.
 
     Each keyword argument maps an output key name to a function that takes an Episode
-    and returns either a Signal or a static value.
+    and returns either a Signal or a static value. Values are computed lazily on first access.
 
     Example:
         Derive(
@@ -41,23 +73,44 @@ class Derive(EpisodeTransform):
         self._transforms = transforms
 
     def __call__(self, episode: Episode) -> Episode:
-        # TODO: Should we lazy-fy this?
-        data = {}
-        for name, fn in self._transforms.items():
-            try:
-                res = fn(episode)
-            except Exception as e:
-                raise ValueError(f'Failed to apply transform {name} to episode {episode.meta}.') from e
-            if res is not None:
-                data[name] = res
+        return _LazyDeriveEpisode(episode, self._transforms)
 
-        return EpisodeContainer(data, episode.meta)
+
+class _LazyMergedEpisode(Episode):
+    """Episode that lazily merges results from multiple episodes."""
+
+    def __init__(self, episodes: tuple[Episode, ...], meta: dict):
+        self._episodes = episodes  # First takes precedence
+        self._meta = meta
+
+    def __iter__(self) -> Iterator[str]:
+        seen: set[str] = set()
+        for ep in self._episodes:
+            for k in ep:
+                if k not in seen:
+                    seen.add(k)
+                    yield k
+
+    def __len__(self) -> int:
+        return len({k for ep in self._episodes for k in ep})
+
+    def __getitem__(self, name: str) -> Any:
+        for ep in self._episodes:
+            try:
+                return ep[name]
+            except KeyError:
+                continue
+        raise KeyError(name)
+
+    @property
+    def meta(self) -> dict:
+        return self._meta
 
 
 class Group(EpisodeTransform):
     """Group multiple transforms into a single transform for parallel application.
 
-    Applies all transforms to the same input episode and merges their results.
+    Applies all transforms to the same input episode and merges their results lazily.
     If transforms produce overlapping keys, the first transform in the list takes precedence.
 
     Example:
@@ -68,10 +121,8 @@ class Group(EpisodeTransform):
         self._transforms = tuple(transforms)
 
     def __call__(self, episode: Episode) -> Episode:
-        res = {}
-        for tf in reversed(self._transforms):
-            res.update(tf(episode))
-        return EpisodeContainer(res, episode.meta)
+        results = tuple(tf(episode) for tf in self._transforms)
+        return _LazyMergedEpisode(results, episode.meta)
 
     @property
     def meta(self) -> dict[str, Any]:
@@ -79,6 +130,29 @@ class Group(EpisodeTransform):
         for tf in reversed(self._transforms):
             result = merge_dicts(result, tf.meta)
         return result
+
+
+class Eager(EpisodeTransform):
+    """Force eager evaluation of a wrapped transform.
+
+    Use this when you want to ensure all values are computed upfront,
+    for example when debugging or when you know all values will be accessed.
+
+    Example:
+        Eager(Derive(task=FromValue('...'), units=calculate_units))
+    """
+
+    def __init__(self, transform: EpisodeTransform):
+        self._transform = transform
+
+    def __call__(self, episode: Episode) -> Episode:
+        lazy_result = self._transform(episode)
+        # Force evaluation by accessing all keys
+        return EpisodeContainer({k: lazy_result[k] for k in lazy_result}, lazy_result.meta)
+
+    @property
+    def meta(self) -> dict[str, Any]:
+        return self._transform.meta
 
 
 class Rename(EpisodeTransform):
