@@ -315,8 +315,10 @@ def sim_episodes_perf():
 
         result = {
             'checkpoint': episodes[0]['checkpoint'],
-            'max_stacking_success': np.mean([ep['max_stacking_success'] for ep in episodes]),
-            'box_distance_progress': np.mean([ep.get('box_distance_progress', 0) for ep in episodes]),
+            'max_stacking_success': np.mean([v for ep in episodes if (v := ep['max_stacking_success']) is not None]),
+            'box_distance_progress': np.mean(
+                [v for ep in episodes if (v := ep['box_distance_progress']) is not None] or [0]
+            ),
             'movement': np.mean([ep['movement'] for ep in episodes]),
             'count': count,
         }

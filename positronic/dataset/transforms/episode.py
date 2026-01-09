@@ -44,11 +44,9 @@ class _LazyDeriveEpisode(Episode):
         if name not in self._computed:
             fn = self._transforms[name]
             try:
-                res = fn(self._base)
+                self._computed[name] = fn(self._base)
             except Exception as e:
                 raise ValueError(f'Failed to apply transform {name} to episode {self._base.meta}.') from e
-            if res is not None:
-                self._computed[name] = res
         return self._computed[name]
 
     @property
