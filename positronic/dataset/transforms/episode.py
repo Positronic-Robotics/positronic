@@ -102,7 +102,7 @@ class _LazyMergedEpisode(Episode):
 
     @property
     def meta(self) -> dict:
-        return self._meta
+        return self._meta.copy()
 
 
 class Group(EpisodeTransform):
