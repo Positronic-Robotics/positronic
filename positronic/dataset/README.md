@@ -415,10 +415,11 @@ class EpisodeTransform(ABC):
 
 Each transform is responsible for defining which keys are available in the output `Episode`. The library provides several built-in transforms:
 
-- **`Derive(**functions)`**: Create new keys by applying functions to the input episode. Each keyword argument maps an output key to a function `(Episode) -> Signal | Any`.
-- **`Group(*transforms)`**: Apply multiple transforms in parallel to the same input episode and merge their results. If transforms produce overlapping keys, the first transform takes precedence.
+- **`Derive(**functions)`**: Create new keys by applying functions to the input episode. Each keyword argument maps an output key to a function `(Episode) -> Signal | Any`. Values are computed lazily on first access per key.
+- **`Group(*transforms)`**: Apply multiple transforms in parallel to the same input episode and merge their results lazily. If transforms produce overlapping keys, the first transform takes precedence.
 - **`Rename(**mapping)`**: Rename episode keys according to `new_key='old_key'` (output -> input). Only renamed keys are included. For non-identifier keys, pass via dict expansion: `Rename(**{'a.b': 'c.d'})`.
 - **`Identity(*keys)`**: Select specific keys to keep, or pass through the entire episode unchanged if no keys are specified.
+- **`Eager(transform)`**: Force eager evaluation of a wrapped transform. Use when you want all values computed upfront (e.g., for debugging or when you know all values will be accessed).
 
 Helper callables (used within `Derive`):
 - **`Concat(*keys)`**: Concatenate multiple signals into a single array signal.

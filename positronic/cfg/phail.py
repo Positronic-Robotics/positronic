@@ -223,8 +223,7 @@ ft_eval_ds = dataset.transform.override(
     base=dataset.transform.override(
         base=ft_ds,
         transforms=[
-            Identity(remove=['units']),
-            Rename(**{'eval.successful_items': 'units', 'eval.total_items': 'units'}),
+            Group(Identity(remove=['units']), Rename(**{'eval.successful_items': 'units', 'eval.total_items': 'units'}))
         ],
     ),
     transforms=[

@@ -52,7 +52,6 @@ class Episode(ABC, Mapping[str, Any]):
     - __len__ - return the number of keys
     """
 
-    # TODO: Replace meta with static data starting with 'meta.' prefix.
     @property
     @abstractmethod
     def meta(self) -> dict:
