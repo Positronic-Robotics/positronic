@@ -82,7 +82,7 @@ class PolicyClient:
         try:
             self.call_endpoint('ping', requires_input=False)
             return True
-        except zmq.error.ZMQError:
+        except (zmq.error.ZMQError, RuntimeError):
             self._init_socket()
             return False
 
