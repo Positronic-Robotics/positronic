@@ -165,4 +165,4 @@ services:
     image: positro/gr00t:latest
     entrypoint: ["uv", "run", "--python", "3.11", "python", "-m", "positronic.vendors.gr00t.server"]
     ports:
-      - "9000:9000"
+      - "8000:8000"

@@ -195,9 +195,12 @@ docker --context vm-train compose run --rm --pull=always openpi-train \
 ```bash
 docker compose run --rm --service-ports groot-server \
   --checkpoints_dir=s3://checkpoints/sim_ft/groot_rot6d_q/040126/ \
-  --modality_config=ee_rot6d_q \
-  --port=9000
+  --observation_encoder=.groot_rot6d_joints \
+  --action_decoder=.groot_rot6d \
+  --modality_config=ee_rot6d_q
 ```
+
+The server exposes a WebSocket API on port 8000 (same as lerobot-server for interchangeability).
 
 ### OpenPI Server (requires H100)
 
@@ -215,12 +218,15 @@ docker compose run --rm --service-ports lerobot-server \
 
 ## Inference Client
 
+All servers (GR00T, LeRobot, OpenPI) now expose the same WebSocket API on port 8000, so the client uses the same `.remote` policy config.
+
 ### With GUI (requires display)
 
 ```bash
 uv run positronic-inference sim \
-  --policy=.groot_ee_rot6d_joints \
-  --policy.base.host=desktop \
+  --policy=.remote \
+  --policy.host=desktop \
+  --policy.port=8000 \
   --driver.show_gui
 ```
 
@@ -228,22 +234,20 @@ uv run positronic-inference sim \
 
 ```bash
 MUJOCO_GL=egl uv run positronic-inference sim \
-  --policy=.groot_ee_rot6d_joints \
-  --policy.base.host=desktop \
+  --policy=.remote \
+  --policy.host=desktop \
+  --policy.port=8000 \
   --driver.show_gui=False \
   --driver.simulation_time=10
 ```
 
-### Client-Server Config Mapping
+### Server Types
 
-| Server Modality | Client Policy Config |
-|-----------------|---------------------|
-| `ee_rot6d_q` | `groot_ee_rot6d_joints` |
-| `ee_rot6d_q_rel` | `groot_ee_rot6d_joints` |
-| `ee_q` | `groot_ee_joints` |
-| `ee` | `groot_ee` |
-| OpenPI | `openpi_positronic` |
-| LeRobot ACT | `act_absolute` |
+| Server Type | Encoder/Decoder Config | Notes |
+|-------------|------------------------|-------|
+| GR00T | `--observation_encoder=.groot_rot6d_joints --action_decoder=.groot_rot6d` | Matches `modality_config=ee_rot6d_q` |
+| LeRobot ACT | `--observation_encoder=.eepose --action_decoder=.absolute_position` | Default configs |
+| OpenPI | Uses internal encoding | No encoder/decoder args needed |
 
 ## Monitoring Background Jobs
 
