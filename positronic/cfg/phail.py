@@ -115,9 +115,6 @@ act_q_latest = policy.policy.act_absolute.override(**{
 openpi = policy.policy.openpi_positronic.copy()
 openpi_q = openpi.override(observation=policy.observation.openpi_eeq)
 
-groot_ee = policy.policy.groot_ee.copy()
-groot_eeq = policy.policy.groot_ee_joints.copy()
-
 sample = policy.policy.sample.copy()
 
 

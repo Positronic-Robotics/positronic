@@ -338,11 +338,8 @@ class InferenceServer:
 
     def startup(self):
         """Start the subprocess on server startup."""
-        try:
-            checkpoint_id = self._resolve_checkpoint_id(None)
-            self._ensure_subprocess(checkpoint_id)
-        except Exception:
-            logger.exception('Failed to start subprocess on startup')
+        checkpoint_id = self._resolve_checkpoint_id(None)
+        self._ensure_subprocess(checkpoint_id)
 
     def shutdown(self):
         """Clean up subprocess on server shutdown."""
