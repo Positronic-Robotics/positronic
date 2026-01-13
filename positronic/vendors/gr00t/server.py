@@ -171,7 +171,8 @@ class Gr00tSubprocess:
         client.close()
         raise RuntimeError(f'gr00t subprocess did not become ready within {timeout}s')
 
-    def get_client(self) -> PolicyClient:
+    @property
+    def client(self) -> PolicyClient:
         if self._client is None:
             self._client = PolicyClient(host='127.0.0.1', port=self.zmq_port, timeout_ms=15000)
         return self._client
@@ -243,28 +244,44 @@ class InferenceServer:
 
         return get_latest_checkpoint(self.checkpoints_dir, 'checkpoint-')
 
-    def _ensure_subprocess(self, checkpoint_id: str):
-        if self.current_checkpoint_id == checkpoint_id and self.subprocess is not None:
-            return
+    def _get_subprocess(self, checkpoint_id: str | None) -> tuple[Gr00tSubprocess, dict]:
+        """Ensure subprocess is running with the specified checkpoint.
+
+        Returns:
+            Tuple of (subprocess, metadata_dict)
+
+        Raises:
+            ValueError: If checkpoint_id is invalid or not found
+        """
+        resolved_id = self._resolve_checkpoint_id(checkpoint_id)
+
+        available = list_checkpoints(self.checkpoints_dir, prefix='checkpoint-')
+        if resolved_id not in available:
+            raise ValueError(f'Checkpoint not found: {resolved_id}')
+
+        if self.current_checkpoint_id == resolved_id and self.subprocess is not None:
+            return self.subprocess, {'checkpoint_id': resolved_id, 'checkpoint_path': self.current_checkpoint_dir}
 
         if self.subprocess is not None:
             logger.info(f'Stopping subprocess for checkpoint {self.current_checkpoint_id}')
             self.subprocess.stop()
 
-        logger.info(f'Loading checkpoint {checkpoint_id}')
-        checkpoint_path = f'{self.checkpoints_dir}/{checkpoint_id}'
+        logger.info(f'Loading checkpoint {resolved_id}')
+        checkpoint_path = f'{self.checkpoints_dir}/{resolved_id}'
         checkpoint_dir = pos3.download(checkpoint_path, exclude=['optimizer.pt'])
 
-        logger.info(f'Starting subprocess for checkpoint {checkpoint_id}')
-        self.subprocess = Gr00tSubprocess(
+        logger.info(f'Starting subprocess for checkpoint {resolved_id}')
+        subprocess = Gr00tSubprocess(
             checkpoint_dir=str(checkpoint_dir),
             modality_config_path=self.modality_config_path,
             groot_venv_path=self.groot_venv_path,
             zmq_port=self.zmq_port,
         )
-        self.subprocess.start()
-        self.current_checkpoint_id = checkpoint_id
+        subprocess.start()
+        self.subprocess = subprocess
+        self.current_checkpoint_id = resolved_id
         self.current_checkpoint_dir = str(checkpoint_dir)
+        return subprocess, {'checkpoint_id': resolved_id, 'checkpoint_path': str(checkpoint_dir)}
 
     async def get_models(self):
         try:
@@ -278,37 +295,26 @@ class InferenceServer:
         await websocket.accept()
 
         try:
-            checkpoint_id = self._resolve_checkpoint_id(checkpoint_id)
-            available = list_checkpoints(self.checkpoints_dir, prefix='checkpoint-')
-            if checkpoint_id not in available:
-                logger.error('Checkpoint not found: %s', checkpoint_id)
-                await websocket.send_bytes(serialise({'error': 'Checkpoint not found'}))
-                await websocket.close(code=1008, reason='Checkpoint not found')
-                return
+            subprocess, checkpoint_meta = self._get_subprocess(checkpoint_id)
+            meta = {**self.metadata, **checkpoint_meta}
+            await websocket.send_bytes(serialise({'meta': meta}))
         except Exception as e:
-            logger.exception('Failed to resolve checkpoint.')
+            logger.error(f'Failed to load checkpoint: {e}')
             await websocket.send_bytes(serialise({'error': str(e)}))
-            await websocket.close(code=1008, reason='Failed to resolve checkpoint')
+            await websocket.close(code=1008, reason=str(e)[:100])
             return
 
-        logger.info(f'Connected from {websocket.client} requesting {checkpoint_id}')
+        logger.info(f'Connected requesting {checkpoint_id}')
 
         try:
-            self._ensure_subprocess(checkpoint_id)
-            client = self.subprocess.get_client()
-
-            meta = {**self.metadata, 'checkpoint_id': checkpoint_id, 'checkpoint_path': self.current_checkpoint_dir}
-            await websocket.send_bytes(serialise({'meta': meta}))
-
-            client.reset()
-
+            subprocess.client.reset()
             try:
                 while True:
                     message = await websocket.receive_bytes()
                     try:
                         raw_obs = deserialise(message)
                         encoded_obs = self.observation_encoder.encode(raw_obs)
-                        action_response, _info = client.get_action(encoded_obs)
+                        action_response, _info = subprocess.client.get_action(encoded_obs)
 
                         action = {k: v[0] for k, v in action_response.items()}
                         lengths = {len(v) for v in action.values()}
@@ -339,8 +345,7 @@ class InferenceServer:
 
     def startup(self):
         """Start the subprocess on server startup."""
-        checkpoint_id = self._resolve_checkpoint_id(None)
-        self._ensure_subprocess(checkpoint_id)
+        self._get_subprocess(None)
 
     def shutdown(self):
         """Clean up subprocess on server shutdown."""
