@@ -312,6 +312,7 @@ class InferenceServer:
 
                         action = {k: v[0] for k, v in action_response.items()}
                         lengths = {len(v) for v in action.values()}
+                        assert len(lengths) == 1, f'All values in action must have the same length, got {lengths}'
                         time_horizon = lengths.pop()
 
                         decoded_actions = []
