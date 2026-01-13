@@ -55,21 +55,34 @@ WandB logging is enabled by default. Add `docker/.env.wandb` containing your `WA
 
 To serve the trained model, launch the `groot-server`. This exposes a WebSocket API (same interface as lerobot-server) on port 8000. The model can be served from a machine with 8GB of GPU memory.
 
-**Command:**
+**Command (with pre-configured variant):**
 ```bash
 docker compose run --rm --service-ports -v ~/checkpoints:/checkpoints groot-server \
+  ee_rot6d_joints \
+  --checkpoints_dir=/checkpoints/groot/experiment_v1/
+```
+
+**Available pre-configured variants:**
+- `ee`: End-effector pose (quaternion)
+- `ee_joints`: EE pose + joint feedback
+- `ee_rot6d`: EE pose (6D rotation)
+- `ee_rot6d_joints`: 6D rotation + joint feedback
+- `ee_rot6d_rel`: 6D rotation, relative actions
+- `ee_rot6d_joints_rel`: 6D rotation + joints, relative actions
+
+**Alternative (explicit encoder/decoder):**
+```bash
+docker compose run --rm --service-ports -v ~/checkpoints:/checkpoints groot-server \
+  server \
   --checkpoints_dir=/checkpoints/groot/experiment_v1/ \
-  --observation_encoder=.groot \
-  --action_decoder=.groot \
-  --modality_config=ee
+  --observation_encoder=.groot_rot6d_joints \
+  --action_decoder=.groot_rot6d \
+  --modality_config=ee_rot6d_q
 ```
 
 **Parameters:**
 - `--checkpoints_dir`: Full path to the experiment directory containing checkpoints.
 - `--checkpoint`: (Optional) Specific checkpoint ID (e.g., `50000`). If omitted, loads the latest `checkpoint-N` folder.
-- `--observation_encoder`: Observation encoder config. Options: `.groot`, `.groot_joints`, `.groot_rot6d`, `.groot_rot6d_joints`.
-- `--action_decoder`: Action decoder config. Options: `.groot`, `.groot_rot6d`.
-- `--modality_config`: Modality config for the gr00t model. Must match training config.
 - `--port`: (Optional) Port to serve on (default: 8000).
 
 **Endpoints:**

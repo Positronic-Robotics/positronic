@@ -361,7 +361,7 @@ class InferenceServer:
     groot_venv_path='/.venv/',
     modality_config='ee',
 )
-def main(
+def server(
     observation_encoder: GrootObservationEncoder,
     action_decoder: ActionDecoder,
     checkpoints_dir: str,
@@ -390,6 +390,31 @@ def main(
             server.shutdown()
 
 
+# Pre-configured server variants matching previous policy configs
+ee = server.copy()
+ee_joints = server.override(observation_encoder=obs_cfg.groot_joints, modality_config='ee_q')
+ee_rot6d = server.override(
+    observation_encoder=obs_cfg.groot_rot6d, action_decoder=act_cfg.groot_rot6d, modality_config='ee_rot6d'
+)
+ee_rot6d_joints = server.override(
+    observation_encoder=obs_cfg.groot_rot6d_joints, action_decoder=act_cfg.groot_rot6d, modality_config='ee_rot6d_q'
+)
+ee_rot6d_rel = server.override(
+    observation_encoder=obs_cfg.groot_rot6d, action_decoder=act_cfg.groot_rot6d, modality_config='ee_rot6d_rel'
+)
+ee_rot6d_joints_rel = server.override(
+    observation_encoder=obs_cfg.groot_rot6d_joints, action_decoder=act_cfg.groot_rot6d, modality_config='ee_rot6d_q_rel'
+)
+
+
 if __name__ == '__main__':
     init_logging()
-    cfn.cli(main)
+    cfn.cli({
+        'server': server,
+        'ee': ee,
+        'ee_joints': ee_joints,
+        'ee_rot6d': ee_rot6d,
+        'ee_rot6d_joints': ee_rot6d_joints,
+        'ee_rot6d_rel': ee_rot6d_rel,
+        'ee_rot6d_joints_rel': ee_rot6d_joints_rel,
+    })

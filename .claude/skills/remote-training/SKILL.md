@@ -194,11 +194,11 @@ docker --context vm-train compose run --rm --pull=always openpi-train \
 
 ```bash
 docker compose run --rm --service-ports groot-server \
-  --checkpoints_dir=s3://checkpoints/sim_ft/groot_rot6d_q/040126/ \
-  --observation_encoder=.groot_rot6d_joints \
-  --action_decoder=.groot_rot6d \
-  --modality_config=ee_rot6d_q
+  ee_rot6d_joints \
+  --checkpoints_dir=s3://checkpoints/sim_ft/groot_rot6d_q/040126/
 ```
+
+**Available variants:** `ee`, `ee_joints`, `ee_rot6d`, `ee_rot6d_joints`, `ee_rot6d_rel`, `ee_rot6d_joints_rel`
 
 The server exposes a WebSocket API on port 8000 (same as lerobot-server for interchangeability).
 
