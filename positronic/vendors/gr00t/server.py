@@ -284,12 +284,8 @@ class InferenceServer:
         return subprocess, {'checkpoint_id': resolved_id, 'checkpoint_path': str(checkpoint_dir)}
 
     async def get_models(self):
-        try:
-            checkpoints = list_checkpoints(self.checkpoints_dir, prefix='checkpoint-')
-            return {'models': checkpoints}
-        except Exception:
-            logger.exception('Failed to list checkpoints.')
-            return {'models': []}
+        checkpoints = list_checkpoints(self.checkpoints_dir, prefix='checkpoint-')
+        return {'models': checkpoints}
 
     async def websocket_endpoint(self, websocket: WebSocket, checkpoint_id: str | None = None):
         await websocket.accept()
