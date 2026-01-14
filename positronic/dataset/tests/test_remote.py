@@ -6,6 +6,7 @@ import threading
 import time
 
 import numpy as np
+import pos3
 import pytest
 import uvicorn
 from fastapi.testclient import TestClient
@@ -264,7 +265,8 @@ def test_migrate_remote_dataset_numeric_only(tmp_path):
             time.sleep(0.1)
 
     try:
-        migrate_remote_dataset(f'http://127.0.0.1:{port}', dest_root)
+        with pos3.mirror():
+            migrate_remote_dataset(f'http://127.0.0.1:{port}', str(dest_root))
     finally:
         server.should_exit = True
         thread.join(timeout=2)
@@ -281,7 +283,8 @@ def test_migrate_remote_dataset_with_video(running_server, tmp_path):
     """Test migration preserves video without re-encoding."""
     dest_root = tmp_path / 'migrated'
 
-    migrate_remote_dataset(running_server, dest_root)
+    with pos3.mirror():
+        migrate_remote_dataset(running_server, str(dest_root))
 
     dest_ds = LocalDataset(dest_root)
     assert len(dest_ds) == 2
