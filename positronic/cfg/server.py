@@ -4,12 +4,16 @@ from datetime import datetime
 
 import configuronic as cfn
 import numpy as np
+import pos3
 
 from positronic.dataset import Episode
 from positronic.dataset.transforms.episode import Derive, FromValue, Group, Identity, Rename
+from positronic.server.positronic_server import main as server_main
+from positronic.utils.logging import init_logging
 
 from . import ds
 from . import eval as eval_cfg
+from .ds import internal
 
 # Task constants
 TOWELS_TASK = 'Pick all the towels one by one from transparent tote and place them into the large grey tote.'
@@ -99,10 +103,9 @@ def uph(ep: Episode) -> float | None:
     return items / (ep.duration_ns / 1e9 / 3600)
 
 
-ft_ds = ds.transform.override(
+finetune_ds = ds.transform.override(
     base=ds.transform.override(
-        base=ds.internal.droid_ds,
-        transforms=[ds.group.override(transforms=[Identity(), Derive(units=calculate_units)])],
+        base=internal.droid_ds, transforms=[ds.group.override(transforms=[Identity(), Derive(units=calculate_units)])]
     ),
     transforms=[
         ds.group.override(
@@ -118,7 +121,7 @@ ft_ds = ds.transform.override(
 
 ft_eval_ds = ds.transform.override(
     base=ds.transform.override(
-        base=ft_ds,
+        base=finetune_ds,
         transforms=[
             Group(Identity(remove=['units']), Rename(**{'eval.successful_items': 'units', 'eval.total_items': 'units'}))
         ],
@@ -143,10 +146,10 @@ ft_eval_ds = ds.transform.override(
 
 
 @cfn.config()
-def ft_ep_table():
+def finetune_episodes_table():
     return {
         '__index__': {'label': '#', 'format': '%d'},
-        '__duration__': {'label': 'Duration', 'format': '%.2f sec'},
+        '__duration__': {'label': 'Duration', 'format': '%.0f sec'},
         'task': {'label': 'Task', 'filter': True},
         'units': {'label': 'Units'},
         'uph': {'label': 'UPH', 'format': '%.1f'},
@@ -155,7 +158,7 @@ def ft_ep_table():
 
 
 @cfn.config()
-def ft_by_task():
+def finetune_group_by_task():
     def group_fn(episodes: list[Episode]):
         duration, units = 0, 0
         for ep in episodes:
@@ -174,3 +177,13 @@ def ft_by_task():
     }
 
     return 'task', group_fn, format_table, {}
+
+
+finetune_server = server_main.override(
+    dataset=finetune_ds, ep_table_cfg=finetune_episodes_table, group_tables={'tasks': finetune_group_by_task}
+)
+
+if __name__ == '__main__':
+    with pos3.mirror():
+        init_logging()
+        cfn.cli(finetune_server)

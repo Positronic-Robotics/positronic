@@ -295,7 +295,6 @@ def default_table() -> TableConfig:
         '__index__': {'label': '#', 'format': '%d'},
         '__duration__': {'label': 'Duration', 'format': '%.2f sec'},
         'task': {'label': 'Task', 'filter': True},
-        'started': {'label': 'Started', 'format': '%Y-%m-%d %H:%M'},
     }
 
 

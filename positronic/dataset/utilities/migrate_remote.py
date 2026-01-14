@@ -10,6 +10,99 @@ Example:
 
     python -m positronic.dataset.utilities.migrate_remote \\
         --source_url=http://localhost:8080 --dest_path=s3://bucket/path
+
+TODO: Fix episode creation timestamp preservation (for future PR)
+======================================================================
+
+PROBLEM:
+    The `created_ts_ns` field in episode metadata gets overwritten during migration with the
+    migration timestamp instead of preserving the original data collection timestamp. This
+    causes the server visualization (cfg/server.py) to show migration time instead of the
+    actual episode creation time.
+
+    Example:
+    - Original (s3://raw/droid/towels/...): created_ts_ns = 1760091240100852093 (Oct 10, 2025)
+    - Migrated (s3://positronic-public/...): created_ts_ns = 1768326957281971891 (Jan 13, 2026)
+
+ROOT CAUSE:
+    1. This migration script only copies static data (line 43-44), not metadata
+    2. LocalDatasetWriter.new_episode() creates DiskEpisodeWriter which ALWAYS sets
+       created_ts_ns to time.time_ns() (local_dataset.py:99)
+    3. There's no API to preserve original metadata during episode creation
+
+IMPACT:
+    - Server UI shows incorrect "started" time for all migrated episodes
+    - Historical analysis of data collection sessions is inaccurate
+    - Episode provenance is lost
+
+SOLUTION (Multi-step fix):
+
+    Step 1: Fix data collection at the source (data_collection.py)
+    ----------------------------------------------------------------
+    - Modify data_collection.py:216 (static_getter function) to include episode start time
+    - Change from: lambda: {'task': task}
+    - Change to: lambda: {'task': task, 'started_ts_ns': time.time_ns()}
+    - This ensures all NEW episodes have creation time in static data
+
+    Step 2: Update migration script (this file)
+    --------------------------------------------
+    - Add preservation of original created_ts_ns from episode.meta to static data:
+
+        for key, value in episode.static.items():
+            ew.set_static(key, value)
+
+        # Preserve original creation timestamp in static data
+        if 'started_ts_ns' not in episode.static and 'created_ts_ns' in episode.meta:
+            ew.set_static('started_ts_ns', episode.meta['created_ts_ns'])
+
+    Step 3: Update internal dataset configs (cfg/ds/internal.py)
+    ------------------------------------------------------------
+    - Add a derive transform to ensure 'started_ts_ns' exists for all episodes
+    - For episodes from old migrations (only have meta.created_ts_ns), derive from meta
+    - For episodes from new data collection (have static.started_ts_ns), use that
+    - Example:
+
+        def _ensure_started_ts(ep: Episode) -> int:
+            # Prefer static (new format) over meta (migration artifact)
+            return ep.static.get('started_ts_ns', ep.meta.get('created_ts_ns'))
+
+        droid_ds = TransformedDataset(
+            base_dataset,
+            Group(Derive(started_ts_ns=_ensure_started_ts), Identity())
+        )
+
+    Step 4: Update server config (cfg/server.py)
+    ---------------------------------------------
+    - Change from: datetime.fromtimestamp(ep.meta['created_ts_ns'] / 1e9)
+    - Change to: datetime.fromtimestamp(ep['started_ts_ns'] / 1e9)
+    - This uses the derived field which has correct timestamp regardless of source
+
+    Step 5: Re-run all migrations
+    ------------------------------
+    - Re-migrate all 3 public datasets (phail, sim-stack-cubes, sim-pick-place)
+    - Upload to s3://positronic-public/datasets/ to replace current data
+    - Verify that migrated episodes have correct started_ts_ns in static.json
+
+    Step 6: Update migration documentation
+    ---------------------------------------
+    - Update cfg/ds/phail.py docstrings to note that started_ts_ns is preserved
+    - Document that new datasets should include started_ts_ns in static at collection time
+
+VERIFICATION:
+    After implementing above steps, verify:
+    1. New data collection includes started_ts_ns in static.json
+    2. Migration preserves started_ts_ns in static.json
+    3. Internal configs derive started_ts_ns correctly (static > meta fallback)
+    4. Server displays correct episode creation times
+    5. Old episodes (pre-fix) still work via meta fallback
+
+FILES TO MODIFY:
+    - positronic/data_collection.py (Step 1)
+    - positronic/dataset/utilities/migrate_remote.py (Step 2)
+    - positronic/cfg/ds/internal.py (Step 3)
+    - positronic/cfg/server.py (Step 4)
+    - Run migration scripts for Step 5
+    - Update cfg/ds/phail.py docstrings (Step 6)
 """
 
 from __future__ import annotations
