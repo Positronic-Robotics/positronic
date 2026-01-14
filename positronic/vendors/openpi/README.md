@@ -11,16 +11,13 @@ Positronic datasets must be converted into the LeRobot format to be consumed by 
 **Command:**
 ```bash
 docker compose run --rm -v ~/datasets:/data positronic-to-lerobot convert \
-  --dataset=@positronic.cfg.dataset.encoded \
-  --dataset.observation=.eepose \
-  --dataset.action=.absolute_position \
-  --dataset.task='Pick up the green cube and place it on the red cube.' \
+  --dataset=@positronic.cfg.ds.internal.droid_openpi_ft \
   --dataset.base.path=/data/my_raw_data \
   --output_dir=/data/my_lerobot_data \
   --fps=15
 ```
 
-- `--dataset`: The dataset configuration. `@positronic.cfg.dataset.encoded` provides the structure.
+- `--dataset`: The dataset configuration. See [Dataset config modules](../../cfg/ds/) for available configs.
 - `--dataset.observation` and `--dataset.action` define how the Positronic dataset gets converted to LeRobot format. Our OpenPI configuration expects state and action in absolute end effector cooridantes.
 - `--dataset.task`: The task description for the dataset.
 - `--dataset.base.path`: Path to your raw Positronic dataset (collected via `positronic-data-collection`).

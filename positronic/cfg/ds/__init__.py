@@ -8,11 +8,10 @@ import configuronic as cfn
 import pos3
 from pos3 import Profile
 
-from positronic.cfg.policy import action, observation
 from positronic.dataset.dataset import ConcatDataset, Dataset
 from positronic.dataset.local_dataset import LocalDataset, load_all_datasets
 from positronic.dataset.transforms import TransformedDataset
-from positronic.dataset.transforms.episode import Derive, EpisodeTransform, Group, Identity
+from positronic.dataset.transforms.episode import EpisodeTransform, Group
 
 PUBLIC = Profile(
     local_name='positronic-public', endpoint='https://storage.eu-north1.nebius.cloud', public=True, region='eu-north1'
@@ -42,16 +41,3 @@ def transform(base: Dataset, transforms: list[EpisodeTransform], extra_meta: dic
 @cfn.config()
 def group(transforms: list[EpisodeTransform]):
     return Group(*transforms)
-
-
-@cfn.config(base=local_all, observation=observation.eepose, action=action.absolute_position, task=None)
-def encoded(base, observation, action, task):
-    """Load datasets with encoded observation/action and optional task label."""
-
-    tfs = [observation, action]
-    if task is not None:
-        tfs.append(Derive(task=lambda _ep: task))
-    else:
-        tfs.append(Identity(select=['task']))
-
-    return TransformedDataset(base, Group(*tfs))

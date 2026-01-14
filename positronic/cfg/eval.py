@@ -3,7 +3,7 @@ from datetime import datetime
 import configuronic as cfn
 import numpy as np
 
-import positronic.cfg.dataset as base_cfg
+import positronic.cfg.ds as base_cfg
 from positronic.dataset.episode import Episode
 from positronic.dataset.transforms.episode import Derive, Group, Identity
 

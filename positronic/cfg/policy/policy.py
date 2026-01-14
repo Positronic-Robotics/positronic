@@ -96,3 +96,19 @@ def remote(host: str, port: int, resize: int | None = None):
     from positronic.policy.remote import RemotePolicy
 
     return RemotePolicy(host, port, resize)
+
+
+# Pre-configured policy instances
+act_latest = act_absolute.override(**{
+    'base.checkpoints_dir': 's3://checkpoints/full_ft/act/021225/',
+    'base.n_action_steps': 15,
+})
+act_q_latest = act_absolute.override(**{
+    'base.checkpoints_dir': 's3://checkpoints/full_ft_q/act/031225/',
+    'observation': obs_cfg.eepose_q,
+    'base.n_action_steps': 15,
+})
+
+# TODO: Migrate to the remote server as well.
+openpi = openpi_positronic.copy()
+openpi_q = openpi.override(observation=obs_cfg.openpi_eeq)

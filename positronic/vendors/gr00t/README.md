@@ -22,7 +22,7 @@ docker compose run --rm -v ~/datasets:/data positronic-to-lerobot convert \
   --fps=15
 ```
 
-- `--dataset`: The dataset configuration. `@positronic.cfg.dataset.encoded` provides the structure.
+- `--dataset`: The dataset configuration. See [Dataset config modules](../../cfg/ds/) for available configs.
 - `--dataset.observation`: Use `.groot_ee_absolute` to match GR00T's expected observation input.
 - `--dataset.base.path`: Container-side path to your raw Positronic dataset (mounted via `-v`).
 - `--output_dir`: Destination for the converted LeRobot dataset.

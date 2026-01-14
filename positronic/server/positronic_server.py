@@ -22,7 +22,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from starlette.requests import Request
 
-import positronic.cfg.dataset
+import positronic.cfg.ds
 from positronic import utils
 from positronic.dataset import Dataset, Episode
 from positronic.dataset.local_dataset import LocalDataset
@@ -299,7 +299,7 @@ def default_table() -> TableConfig:
     }
 
 
-@cfn.config(dataset=positronic.cfg.dataset.local_all, ep_table_cfg=default_table, max_resolution=640, group_tables=None)
+@cfn.config(dataset=positronic.cfg.ds.local_all, ep_table_cfg=default_table, max_resolution=640, group_tables=None)
 def main(
     dataset: Dataset,
     ep_table_cfg: TableConfig | None,

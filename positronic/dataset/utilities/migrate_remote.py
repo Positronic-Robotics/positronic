@@ -35,8 +35,15 @@ def migrate_remote_dataset(source_url: str, dest_path: Path) -> None:
                     if signal.encoding_format is not None:
                         _write_encoded_signal(signal, ew.path, key)
                     else:
-                        for value, ts in signal:
-                            ew.append(key, value, ts)
+                        # Batch fetch in chunks to avoid memory pressure
+                        chunk_size = 10_000
+                        for i in range(0, len(signal), chunk_size):
+                            end = min(i + chunk_size, len(signal))
+                            indices = list(range(i, end))
+                            values = signal._values_at(indices)
+                            timestamps = signal._ts_at(indices)
+                            for value, ts in zip(values, timestamps, strict=True):
+                                ew.append(key, value, ts)
 
 
 def _write_encoded_signal(signal, episode_path: Path, signal_name: str) -> None:

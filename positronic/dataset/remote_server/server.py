@@ -12,7 +12,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
-import positronic.cfg.dataset
+import positronic.cfg.ds
 from positronic.dataset import Dataset
 from positronic.dataset.signal import SupportsEncodedRepresentation
 from positronic.utils.logging import init_logging
@@ -129,7 +129,7 @@ def _parse_indices(req: IndicesRequest) -> slice | np.ndarray:
     return slice(None)
 
 
-@cfn.config(dataset=positronic.cfg.dataset.local_all, host='0.0.0.0', port=8080, debug=False)
+@cfn.config(dataset=positronic.cfg.ds.local_all, host='0.0.0.0', port=8080, debug=False)
 def main(dataset: Dataset, host: str, port: int, debug: bool):
     """Start the dataset server."""
     global _dataset

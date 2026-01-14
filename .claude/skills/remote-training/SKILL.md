@@ -121,7 +121,7 @@ From `docker/` directory (can run on `desktop`):
 
 ```bash
 docker compose run --rm --pull always positronic-to-lerobot convert \
-  --dataset=@positronic.cfg.phail.sim_stack_groot_ft \
+  --dataset=@positronic.cfg.ds.internal.sim_stack_groot_ft \
   --dataset.observation=.groot_rot6d_joints \
   --dataset.action=.groot_rot6d \
   --output_dir=s3://interim/sim_ft/groot_rot6d_q/ \
