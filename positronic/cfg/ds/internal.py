@@ -25,18 +25,34 @@ SPOONS_TASK = 'Pick all the wooden spoons one by one from transparent tote and p
 SCISSORS_TASK = 'Pick all the scissors one by one from transparent tote and place them into the large grey tote.'
 
 
-@cfn.config(path='s3://raw/droid/')
-def droid_ds(path):
+@cfn.config(path='s3://raw/droid/', recovery_all=True, recovery_towels=True)
+def droid_ds(path, recovery_all, recovery_towels):
     """Internal DROID dataset with task label transforms."""
     root = pos3.download(path)
 
-    towels = load_all_datasets(root / 'towels')
-    towels = TransformedDataset(towels, Group(Derive(task=FromValue(TOWELS_TASK)), Identity()))
-    spoons = load_all_datasets(root / 'spoons')
-    spoons = TransformedDataset(spoons, Group(Derive(task=FromValue(SPOONS_TASK)), Identity()))
-    scissors = load_all_datasets(root / 'scisors')
-    scissors = TransformedDataset(scissors, Group(Derive(task=FromValue(SCISSORS_TASK)), Identity()))
-    return towels + spoons + scissors
+    datasets = [
+        TransformedDataset(load_all_datasets(root / 'towels'), Group(Derive(task=FromValue(TOWELS_TASK)), Identity())),
+        TransformedDataset(load_all_datasets(root / 'spoons'), Group(Derive(task=FromValue(SPOONS_TASK)), Identity())),
+        TransformedDataset(
+            # TODO: This is typo, it was done when the we started collecting the dataset, and now we are not fixing it.
+            load_all_datasets(root / 'scisors'),
+            Group(Derive(task=FromValue(SCISSORS_TASK)), Identity()),
+        ),
+    ]
+    if recovery_towels:
+        datasets.append(
+            TransformedDataset(
+                load_all_datasets(root / 'recovery_towels/'), Group(Derive(task=FromValue(TOWELS_TASK)), Identity())
+            )
+        )
+    if recovery_all:
+        for task in [TOWELS_TASK, SPOONS_TASK, SCISSORS_TASK]:
+            datasets.append(
+                TransformedDataset(
+                    load_all_datasets(root / 'recovery/'), Group(Derive(task=FromValue(task)), Identity())
+                )
+            )
+    return concat_ds.override(datasets=datasets)
 
 
 # Signal transformations for sim datasets
