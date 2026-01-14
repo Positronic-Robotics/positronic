@@ -6,22 +6,22 @@ This guide details the end-to-end workflow for training and deploying OpenPI mod
 
 ## 1. Prepare Data
 
-Positronic datasets must be converted into the LeRobot format to be consumed by the OpenPI training pipeline. Use the `positronic-to-lerobot` service for this conversion.
+Positronic datasets must be converted into the LeRobot format using an OpenPI codec (observation encoder + action decoder pair).
 
 **Command:**
 ```bash
 docker compose run --rm -v ~/datasets:/data positronic-to-lerobot convert \
-  --dataset=@positronic.cfg.ds.internal.droid_openpi_ft \
-  --dataset.base.path=/data/my_raw_data \
+  --dataset.dataset=.internal.droid \
+  --dataset.codec=@positronic.vendors.openpi.codecs.eepose_absolute \
   --output_dir=/data/my_lerobot_data \
   --fps=15
 ```
 
-- `--dataset`: The dataset configuration. See [Dataset config modules](../../cfg/ds/) for available configs.
-- `--dataset.observation` and `--dataset.action` define how the Positronic dataset gets converted to LeRobot format. Our OpenPI configuration expects state and action in absolute end effector cooridantes.
-- `--dataset.task`: The task description for the dataset.
-- `--dataset.base.path`: Path to your raw Positronic dataset (collected via `positronic-data-collection`).
-- `--output_dir`: Destination for the converted LeRobot dataset (can be local or `s3://bucket/path`).
+**Parameters:**
+- `--dataset.dataset`: The raw dataset configuration (e.g., `.internal.droid`, `.internal.sim_stack`)
+- `--dataset.codec`: OpenPI codec that defines observation/action encoding (`@positronic.vendors.openpi.codecs.eepose_absolute`)
+- `--output_dir`: Destination for the converted LeRobot dataset (can be local or `s3://bucket/path`)
+- `--fps`: Target frames per second for the converted dataset
 
 ## 2. Generate Assets
 

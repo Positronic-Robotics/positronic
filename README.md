@@ -240,24 +240,37 @@ We will support curation mode in the future releases.
 
 Use the [LeRobot conversion helper](positronic/training/to_lerobot.py) until native training lands.
 
-S3 inputs/outputs work the same: point `--dataset.path` or `--output_dir` at S3 URLs to download data locally and upload results on completion.
+S3 inputs/outputs work the same: point `--dataset.dataset` or `--output_dir` at S3 URLs to download data locally and upload results on completion.
 
-Until training scripts consume Positronic datasets directly, convert curated runs into LeRobot format:
+Until training scripts consume Positronic datasets directly, convert curated runs into LeRobot format using a codec (observation encoder + action decoder pair):
 
 ```bash
 positronic-to-lerobot convert \
-    --dataset.path=~/datasets/stack_cubes_raw \
+    --dataset.dataset=.local \
+    --dataset.dataset.path=~/datasets/stack_cubes_raw \
+    --dataset.codec=@positronic.vendors.lerobot.codecs.eepose_absolute \
     --output_dir=~/datasets/lerobot/stack_cubes \
     --task="pick up the green cube and place it on the red cube" \
     --fps=30
 ```
 
-The converter reads your data through dataset configs (see [Dataset config modules](positronic/cfg/ds/)), applies the same observation/action transforms used at inference time, and writes a `LeRobotDataset`. Re-run the command whenever you tweak transforms or add new episodes. To extend an existing LeRobot dataset:
+**Parameters:**
+- `--dataset.dataset`: Dataset configuration (`.local` for local directories, or internal configs like `.internal.droid`)
+- `--dataset.codec`: Codec defining observation/action encoding (e.g., `@positronic.vendors.lerobot.codecs.eepose_absolute`)
+- `--output_dir`: Destination for the converted LeRobot dataset
+- `--task`: Task description to embed in the dataset
+- `--fps`: Target frames per second
+
+The converter reads your data through dataset configs (see [Dataset config modules](positronic/cfg/ds/)), applies the codec transforms, and writes a `LeRobotDataset`. For foundation models like GR00T or OpenPI, use their vendor-specific codecs (see [GR00T README](positronic/vendors/gr00t/README.md) and [OpenPI README](positronic/vendors/openpi/README.md)).
+
+To extend an existing LeRobot dataset:
 
 ```bash
 positronic-to-lerobot append \
     --output_dir=~/datasets/lerobot/stack_cubes \
-    --dataset.path=~/datasets/stack_cubes_new \
+    --dataset.dataset=.local \
+    --dataset.dataset.path=~/datasets/stack_cubes_new \
+    --dataset.codec=@positronic.vendors.lerobot.codecs.eepose_absolute \
     --fps=30
 ```
 
