@@ -16,14 +16,10 @@ import uvicorn
 import zmq
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 
-from positronic.cfg.policy import action as act_cfg
-from positronic.cfg.policy import observation as obs_cfg
-from positronic.policy.action import ActionDecoder
-from positronic.policy.observation import GrootObservationEncoder
 from positronic.utils.checkpoints import get_latest_checkpoint, list_checkpoints
 from positronic.utils.logging import init_logging
 from positronic.utils.serialization import deserialise, serialise
-from positronic.vendors.gr00t import MODALITY_CONFIGS
+from positronic.vendors.gr00t import MODALITY_CONFIGS, codecs
 
 logger = logging.getLogger(__name__)
 
@@ -199,8 +195,7 @@ class Gr00tSubprocess:
 class InferenceServer:
     def __init__(
         self,
-        observation_encoder: GrootObservationEncoder,
-        action_decoder: ActionDecoder,
+        codec: dict,
         checkpoints_dir: str,
         checkpoint: str | None,
         modality_config: str,
@@ -209,8 +204,8 @@ class InferenceServer:
         port: int = 8000,
         zmq_port: int = 5555,
     ):
-        self.observation_encoder = observation_encoder
-        self.action_decoder = action_decoder
+        self.observation_encoder = codec['observation']
+        self.action_decoder = codec['action']
         self.checkpoints_dir = checkpoints_dir.rstrip('/')
         self.checkpoint = checkpoint
         self.modality_config = modality_config
@@ -225,10 +220,10 @@ class InferenceServer:
         self.current_checkpoint_dir: str | None = None
 
         self.metadata = {'host': host, 'port': port, 'type': 'groot', 'modality_config': modality_config}
-        if hasattr(observation_encoder, 'meta'):
-            self.metadata.update({f'observation.{k}': v for k, v in observation_encoder.meta.items()})
-        if hasattr(action_decoder, 'meta'):
-            self.metadata.update({f'action.{k}': v for k, v in action_decoder.meta.items()})
+        if hasattr(self.observation_encoder, 'meta'):
+            self.metadata.update({f'observation.{k}': v for k, v in self.observation_encoder.meta.items()})
+        if hasattr(self.action_decoder, 'meta'):
+            self.metadata.update({f'action.{k}': v for k, v in self.action_decoder.meta.items()})
 
         self.app = FastAPI()
         self.app.get('/api/v1/models')(self.get_models)
@@ -354,28 +349,15 @@ class InferenceServer:
         return server.serve()
 
 
-@cfn.config(
-    observation_encoder=obs_cfg.groot,
-    action_decoder=act_cfg.groot,
-    checkpoint=None,
-    port=8000,
-    groot_venv_path='/.venv/',
-    modality_config='ee',
-)
+@cfn.config(codec=codecs.ee_absolute, checkpoint=None, port=8000, groot_venv_path='/.venv/', modality_config='ee')
 def server(
-    observation_encoder: GrootObservationEncoder,
-    action_decoder: ActionDecoder,
-    checkpoints_dir: str,
-    checkpoint: str | None,
-    port: int,
-    groot_venv_path: str,
-    modality_config: str,
+    codec: dict, checkpoints_dir: str, checkpoint: str | None, port: int, groot_venv_path: str, modality_config: str
 ):
     """Starts the GR00T inference server with encoding/decoding."""
+
     with pos3.mirror():
         server = InferenceServer(
-            observation_encoder=observation_encoder,
-            action_decoder=action_decoder,
+            codec=codec,
             checkpoints_dir=checkpoints_dir,
             checkpoint=checkpoint,
             modality_config=modality_config,
@@ -391,21 +373,13 @@ def server(
             server.shutdown()
 
 
-# Pre-configured server variants matching previous policy configs
-ee = server.copy()
-ee_joints = server.override(observation_encoder=obs_cfg.groot_joints, modality_config='ee_q')
-ee_rot6d = server.override(
-    observation_encoder=obs_cfg.groot_rot6d, action_decoder=act_cfg.groot_rot6d, modality_config='ee_rot6d'
-)
-ee_rot6d_joints = server.override(
-    observation_encoder=obs_cfg.groot_rot6d_joints, action_decoder=act_cfg.groot_rot6d, modality_config='ee_rot6d_q'
-)
-ee_rot6d_rel = server.override(
-    observation_encoder=obs_cfg.groot_rot6d, action_decoder=act_cfg.groot_rot6d, modality_config='ee_rot6d_rel'
-)
-ee_rot6d_joints_rel = server.override(
-    observation_encoder=obs_cfg.groot_rot6d_joints, action_decoder=act_cfg.groot_rot6d, modality_config='ee_rot6d_q_rel'
-)
+# Pre-configured server variants matching GR00T modality configs
+ee = server.copy()  # Uses default codec=codecs.ee_absolute, modality='ee'
+ee_joints = server.override(codec=codecs.ee_joints, modality_config='ee_q')
+ee_rot6d = server.override(codec=codecs.ee_rot6d, modality_config='ee_rot6d')
+ee_rot6d_joints = server.override(codec=codecs.ee_rot6d_joints, modality_config='ee_rot6d_q')
+ee_rot6d_rel = server.override(codec=codecs.ee_rot6d, modality_config='ee_rot6d_rel')
+ee_rot6d_joints_rel = server.override(codec=codecs.ee_rot6d_joints, modality_config='ee_rot6d_q_rel')
 
 
 if __name__ == '__main__':

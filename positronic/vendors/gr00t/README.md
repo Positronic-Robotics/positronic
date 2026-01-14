@@ -8,24 +8,37 @@ This guide details the end-to-end workflow for training and deploying GR00T N1.6
 
 ## 1. Prepare Data
 
-Positronic datasets must be converted into the LeRobot format to be consumed by the GR00T training pipeline. Use the `positronic-to-lerobot` service for this conversion.
+Positronic datasets must be converted into LeRobot format using a GR00T codec (observation encoder + action decoder pair).
 
 **Command:**
 ```bash
 docker compose run --rm -v ~/datasets:/data positronic-to-lerobot convert \
-  --dataset=.encoded \
-  --dataset.observation=.groot_ee_absolute \
-  --dataset.action=.absolute_position \
-  --dataset.task='Pick up the green cube and place it on the red cube.' \
-  --dataset.base.path=/data/my_raw_data \
+  --dataset.dataset=.internal.droid \
+  --dataset.codec=@positronic.vendors.gr00t.codecs.ee_absolute \
   --output_dir=/data/my_lerobot_data \
   --fps=15
 ```
 
-- `--dataset`: The dataset configuration. See [Dataset config modules](../../cfg/ds/) for available configs.
-- `--dataset.observation`: Use `.groot_ee_absolute` to match GR00T's expected observation input.
-- `--dataset.base.path`: Container-side path to your raw Positronic dataset (mounted via `-v`).
-- `--output_dir`: Destination for the converted LeRobot dataset.
+**Available GR00T codecs:**
+- `@positronic.vendors.gr00t.codecs.ee_absolute` - EE pose (quaternion) → modality='ee'
+- `@positronic.vendors.gr00t.codecs.ee_rot6d` - EE pose (rot6d) → modality='ee_rot6d'
+- `@positronic.vendors.gr00t.codecs.ee_joints` - EE pose + joints → modality='ee_q'
+- `@positronic.vendors.gr00t.codecs.ee_rot6d_joints` - EE pose (rot6d) + joints → modality='ee_rot6d_q'
+
+**Raw datasets available:**
+- `.internal.droid` - DROID hardware collection
+- `.internal.sim_stack` - Sim cube stacking
+- `.internal.sim_pnp` - Sim pick and place
+- `.internal.full` - Combined DROID + sim datasets
+- `.internal.full_recovery` - Full with recovery data
+
+**Codec must match training modality_config:**
+| Codec | Modality Config |
+|-------|----------------|
+| `ee_absolute` | `ee` |
+| `ee_rot6d` | `ee_rot6d` |
+| `ee_joints` | `ee_q` |
+| `ee_rot6d_joints` | `ee_rot6d_q` |
 
 ## 2. Train Model
 
@@ -70,13 +83,12 @@ docker compose run --rm --service-ports -v ~/checkpoints:/checkpoints groot-serv
 - `ee_rot6d_rel`: 6D rotation, relative actions
 - `ee_rot6d_joints_rel`: 6D rotation + joints, relative actions
 
-**Alternative (explicit encoder/decoder):**
+**Alternative (explicit codec):**
 ```bash
 docker compose run --rm --service-ports -v ~/checkpoints:/checkpoints groot-server \
   server \
   --checkpoints_dir=/checkpoints/groot/experiment_v1/ \
-  --observation_encoder=.groot_rot6d_joints \
-  --action_decoder=.groot_rot6d \
+  --codec=@positronic.vendors.gr00t.codecs.ee_rot6d_joints \
   --modality_config=ee_rot6d_q
 ```
 

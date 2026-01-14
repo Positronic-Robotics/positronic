@@ -30,6 +30,7 @@ import tqdm
 from lerobot.datasets.lerobot_dataset import LeRobotDataset
 
 from positronic import utils
+from positronic.cfg.ds import apply_codec
 from positronic.dataset import Dataset
 from positronic.utils.logging import init_logging
 
@@ -113,7 +114,7 @@ def append_data_to_dataset(lr_dataset: LeRobotDataset, p_dataset: Dataset, fps, 
     logging.info(f'Total length of the dataset: {seconds_to_str(total_length_sec)}')
 
 
-@cfn.config(video=True)
+@cfn.config(video=True, dataset=apply_codec)
 def convert_to_lerobot_dataset(output_dir: str, fps: int, video: bool, dataset: Dataset, task=None):
     output_dir = pos3.sync(output_dir, interval=None, sync_on_error=False)
     assert dataset.meta['lerobot_features'] is not None, "dataset.meta['lerobot_features'] is required"
@@ -142,7 +143,7 @@ def convert_to_lerobot_dataset(output_dir: str, fps: int, video: bool, dataset: 
     logging.info(f'Dataset converted and saved to {output_dir}')
 
 
-@cfn.config()
+@cfn.config(dataset=apply_codec)
 def append_data_to_lerobot_dataset(output_dir: str, dataset: Dataset, fps: int, task=None):
     output_dir = pos3.sync(output_dir, interval=None, sync_on_error=False)
     lr_dataset = LeRobotDataset(repo_id='local', root=output_dir)

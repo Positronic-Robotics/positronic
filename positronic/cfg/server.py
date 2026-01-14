@@ -105,7 +105,7 @@ def uph(ep: Episode) -> float | None:
 
 finetune_ds = ds.transform.override(
     base=ds.transform.override(
-        base=internal.droid_ds, transforms=[ds.group.override(transforms=[Identity(), Derive(units=calculate_units)])]
+        base=internal.droid, transforms=[ds.group.override(transforms=[Identity(), Derive(units=calculate_units)])]
     ),
     transforms=[
         ds.group.override(

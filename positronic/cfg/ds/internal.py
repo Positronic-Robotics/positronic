@@ -25,8 +25,8 @@ SPOONS_TASK = 'Pick all the wooden spoons one by one from transparent tote and p
 SCISSORS_TASK = 'Pick all the scissors one by one from transparent tote and place them into the large grey tote.'
 
 
-@cfn.config(path='s3://raw/droid/', recovery_all=True, recovery_towels=True)
-def droid_ds(path, recovery_all, recovery_towels):
+@cfn.config(path='s3://raw/droid/', recovery_all=False, recovery_towels=False)
+def droid(path, recovery_all, recovery_towels):
     """Internal DROID dataset with task label transforms."""
     root = pos3.download(path)
 
@@ -72,12 +72,10 @@ old_to_new = Group(
     Identity(select=['grip', 'target_grip', 'mjSTATE_FULLPHYSICS', 'mjSTATE_INTEGRATION', 'mjSTATE_WARMSTART']),
 )
 
-cubes_sim_raw = local.override(path='s3://raw/sim-cubes/luzan/')
-cubes_sim = transform.override(base=cubes_sim_raw, transforms=[old_to_new])
+sim_stack = transform.override(base=local.override(path='s3://raw/sim-cubes/luzan/'), transforms=[old_to_new])
 
-pnp_sim_raw = local.override(path='s3://raw/sim_pnp/')
-pnp_sim = transform.override(
-    base=pnp_sim_raw,
+sim_pnp = transform.override(
+    base=local.override(path='s3://raw/sim_pnp/'),
     transforms=[
         Group(
             Derive(task=FromValue('Pick up objects from the red tote and place them in the green tote.')),
@@ -86,6 +84,12 @@ pnp_sim = transform.override(
         )
     ],
 )
+
+
+droid_recovery = droid.override(recovery_all=True, recovery_towels=True)
+sim = concat_ds.override(datasets=[sim_stack, sim_pnp])
+full_recovery = concat_ds.override(datasets=[droid_recovery, sim])
+full = concat_ds.override(datasets=[droid, sim])
 
 
 # Encoded helper (inline to avoid circular deps)
@@ -101,44 +105,21 @@ def _encoded(base, observation_cfg, action_cfg, task=None):
 # OpenPI encoded variants (based on INTERNAL datasets)
 @cfn.config()
 def droid_openpi_ft():
-    return _encoded(droid_ds, observation.eepose, action.absolute_position)
+    return _encoded(droid, observation.eepose, action.absolute_position)
 
 
 @cfn.config()
 def sim_stack_openpi_ft():
-    return _encoded(cubes_sim, observation.eepose, action.absolute_position)
+    return _encoded(sim_stack, observation.eepose, action.absolute_position)
 
 
 @cfn.config()
 def sim_pnp_openpi_ft():
-    return _encoded(pnp_sim, observation.eepose, action.absolute_position)
+    return _encoded(sim_pnp, observation.eepose, action.absolute_position)
 
 
 @cfn.config()
 def full_openpi_ft():
     return _encoded(
-        concat_ds.override(datasets=[droid_ds, cubes_sim, pnp_sim]), observation.eepose, action.absolute_position
-    )
-
-
-# GR00T encoded variants (based on INTERNAL datasets)
-@cfn.config()
-def droid_groot_ft():
-    return _encoded(droid_ds, observation.groot_ee_absolute, action.groot)
-
-
-@cfn.config()
-def sim_stack_groot_ft():
-    return _encoded(cubes_sim, observation.groot_ee_absolute, action.groot)
-
-
-@cfn.config()
-def sim_pnp_groot_ft():
-    return _encoded(pnp_sim, observation.groot_ee_absolute, action.groot)
-
-
-@cfn.config()
-def full_groot_ft():
-    return _encoded(
-        concat_ds.override(datasets=[droid_ds, cubes_sim, pnp_sim]), observation.groot_ee_absolute, action.groot
+        concat_ds.override(datasets=[droid, sim_stack, sim_pnp]), observation.eepose, action.absolute_position
     )

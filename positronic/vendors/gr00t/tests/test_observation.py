@@ -4,7 +4,7 @@ import numpy as np
 import pytest
 
 from positronic import geom
-from positronic.policy.observation import GrootObservationEncoder
+from positronic.vendors.gr00t.codecs import GrootObservationEncoder
 
 ROT_REP = geom.Rotation.Representation
 
