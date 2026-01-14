@@ -1,4 +1,4 @@
-"""Migrate dataset from remote server to local storage.
+"""Migrate dataset from remote server to local or S3 storage.
 
 NOTE: This script writes directly to the episode directory, bypassing the normal EpisodeWriter.
 It is tied to the current storage format of the library. If the storage format changes, this
@@ -7,6 +7,9 @@ script must be updated accordingly.
 Example:
     python -m positronic.dataset.utilities.migrate_remote \\
         --source_url=http://localhost:8080 --dest_path=/path/to/output
+
+    python -m positronic.dataset.utilities.migrate_remote \\
+        --source_url=http://localhost:8080 --dest_path=s3://bucket/path
 """
 
 from __future__ import annotations
@@ -15,6 +18,7 @@ import struct
 from collections.abc import Iterator
 from pathlib import Path
 
+import pos3
 import pyarrow as pa
 import pyarrow.parquet as pq
 import tqdm
@@ -23,9 +27,17 @@ from positronic.dataset.local_dataset import LocalDatasetWriter
 from positronic.dataset.remote import RemoteDataset
 
 
-def migrate_remote_dataset(source_url: str, dest_path: Path) -> None:
-    """Download a remote dataset to local storage without quality loss."""
-    with RemoteDataset(source_url) as remote_ds, LocalDatasetWriter(dest_path) as writer:
+def migrate_remote_dataset(source_url: str, dest_path: str) -> None:
+    """Download a remote dataset to local or S3 storage without quality loss.
+
+    Args:
+        source_url: URL of the remote dataset server
+        dest_path: Local path or S3 path (s3://bucket/path) for output
+    """
+    # pos3 handles both local and S3 paths
+    resolved_path = pos3.upload(dest_path, sync_on_error=True, interval=None)
+
+    with RemoteDataset(source_url) as remote_ds, LocalDatasetWriter(resolved_path) as writer:
         for episode in tqdm.tqdm(remote_ds, total=len(remote_ds), desc='Migrating'):
             with writer.new_episode() as ew:
                 for key, value in episode.static.items():
@@ -86,6 +98,7 @@ if __name__ == '__main__':
 
     @cfn.config()
     def main(source_url: str, dest_path: str):
-        migrate_remote_dataset(source_url, Path(dest_path))
+        with pos3.mirror():
+            migrate_remote_dataset(source_url, dest_path)
 
     cfn.cli(main)
