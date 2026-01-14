@@ -38,14 +38,25 @@ This skill pushes the current branch to origin (fork) and creates a PR to upstre
 ## Commit Message Style
 
 Follow the project's commit message conventions:
+- **CRITICAL: Never mention AI/Claude/assistant** - no "Co-Authored-By" or AI attribution
+- **Keep messages concise** - prefer one-line summary, use body only when necessary
 - Short, imperative sentences (e.g., "Fix wrong type", "Add feature X")
 - Use backticks for code references (e.g., "Unify `GrootActionDecoder` and `GrootObservationEncoder`")
 - No trailing period for short messages
-- Examples from this repo:
+
+**Good examples from this repo:**
   - `Avoid loading object dtype in SimpleSignal`
   - `Fix groot metadata so that lerobot dataset can work with multiple keys`
   - `6D rotation representation`
   - `Unify GR00T action decoding and observation encoding`
+  - `Add chunked batching to migrate_remote`
+  - `Fix cfg/server.py imports and refactor dataset docstrings`
+
+**What NOT to do:**
+  - ❌ Don't list every single change in the message body
+  - ❌ Don't add "Co-Authored-By: Claude" or any AI attribution
+  - ❌ Don't use vague corporate-speak ("improve maintainability", "enhance code quality")
+  - ❌ Don't write multi-paragraph explanations in commit message
 
 ## Analyzing Changes for PR
 
