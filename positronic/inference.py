@@ -12,7 +12,7 @@ import pimm
 import positronic.cfg.hardware.camera
 import positronic.cfg.hardware.gripper
 import positronic.cfg.hardware.roboarm
-import positronic.cfg.policy.policy as policy_cfg
+import positronic.cfg.policy as policy_cfg
 import positronic.cfg.simulator
 from positronic import utils, wire
 from positronic.dataset.ds_writer_agent import DsWriterCommand, TimeMode

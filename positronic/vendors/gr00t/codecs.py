@@ -14,6 +14,7 @@ import numpy as np
 from PIL import Image as PilImage
 
 from positronic import geom
+from positronic.cfg import codecs
 from positronic.dataset import transforms
 from positronic.dataset import transforms as tf
 from positronic.dataset.episode import Episode
@@ -276,43 +277,19 @@ def action(rotation_rep: str | None, tgt_ee_pose_key: str, tgt_grip_key: str):
 # ===== Combined Codec Configs (observation + action pairs) =====
 
 
-@cfn.config()
-def ee_absolute():
-    """GR00T codec: EE pose (quaternion) + absolute actions.
+# GR00T codec variants using base codec config
+ee_absolute = codecs.codec.override(
+    observation=observation(rotation_rep=None, include_joints=False), action=action(rotation_rep=None)
+)
 
-    Modality config: 'ee'
-    """
-    return {'observation': observation(rotation_rep=None, include_joints=False), 'action': action(rotation_rep=None)}
+ee_rot6d = codecs.codec.override(
+    observation=observation(rotation_rep='rot6d', include_joints=False), action=action(rotation_rep='rot6d')
+)
 
+ee_joints = codecs.codec.override(
+    observation=observation(rotation_rep=None, include_joints=True), action=action(rotation_rep=None)
+)
 
-@cfn.config()
-def ee_rot6d():
-    """GR00T codec: EE pose (rot6d) + rot6d actions.
-
-    Modality config: 'ee_rot6d'
-    """
-    return {
-        'observation': observation(rotation_rep='rot6d', include_joints=False),
-        'action': action(rotation_rep='rot6d'),
-    }
-
-
-@cfn.config()
-def ee_joints():
-    """GR00T codec: EE pose + joints + absolute actions.
-
-    Modality config: 'ee_q'
-    """
-    return {'observation': observation(rotation_rep=None, include_joints=True), 'action': action(rotation_rep=None)}
-
-
-@cfn.config()
-def ee_rot6d_joints():
-    """GR00T codec: EE pose (rot6d) + joints + rot6d actions.
-
-    Modality config: 'ee_rot6d_q'
-    """
-    return {
-        'observation': observation(rotation_rep='rot6d', include_joints=True),
-        'action': action(rotation_rep='rot6d'),
-    }
+ee_rot6d_joints = codecs.codec.override(
+    observation=observation(rotation_rep='rot6d', include_joints=True), action=action(rotation_rep='rot6d')
+)
