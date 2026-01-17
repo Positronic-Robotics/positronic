@@ -13,13 +13,12 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from lerobot.policies.act.modeling_act import ACTPolicy
 from lerobot.policies.pretrained import PreTrainedPolicy
 
-from positronic.cfg.policy import action as act_cfg
-from positronic.cfg.policy import observation as obs_cfg
-from positronic.policy import DecodedEncodedPolicy, Policy
+from positronic.policy import Codec, DecodedEncodedPolicy, Policy
 from positronic.policy.lerobot import LerobotPolicy
 from positronic.utils.checkpoints import get_latest_checkpoint, list_checkpoints
 from positronic.utils.logging import init_logging
 from positronic.utils.serialization import deserialise, serialise
+from positronic.vendors.lerobot import codecs as lerobot_codecs
 
 logger = logging.getLogger(__name__)
 
@@ -86,8 +85,7 @@ class InferenceServer:
     def __init__(
         self,
         policy_factory: Callable[[str], PreTrainedPolicy],
-        observation_encoder,
-        action_decoder,
+        codec: Codec,
         checkpoints_dir: str | Path,
         checkpoint: str | None = None,
         host: str = '0.0.0.0',
@@ -96,8 +94,7 @@ class InferenceServer:
         device: str | None = None,
     ):
         self.policy_factory = policy_factory
-        self.observation_encoder = observation_encoder
-        self.action_decoder = action_decoder
+        self.codec = codec
         self.checkpoints_dir = str(checkpoints_dir).rstrip('/') + '/checkpoints'
         self.checkpoint = checkpoint
         self.host = host
@@ -127,7 +124,7 @@ class InferenceServer:
 
         base = LerobotPolicy(policy, self.device)
         return DecodedEncodedPolicy(
-            base, encoder=self.observation_encoder.encode, decoder=self.action_decoder.decode, extra_meta=base_meta
+            base, encoder=self.codec.observation.encode, decoder=self.codec.action.decode, extra_meta=base_meta
         )
 
     async def get_models(self):
@@ -221,20 +218,12 @@ def act(checkpoint_path: str) -> PreTrainedPolicy:
     return policy
 
 
-@cfn.config(
-    policy_factory=act,
-    observation_encoder=obs_cfg.eepose,
-    action_decoder=act_cfg.absolute_position,
-    checkpoint=None,
-    port=8000,
-    host='0.0.0.0',
-)
+@cfn.config(policy_factory=act, codec=lerobot_codecs.eepose_absolute, checkpoint=None, port=8000, host='0.0.0.0')
 def main(
     policy_factory: Callable[[str], PreTrainedPolicy],
     checkpoints_dir: str,
     checkpoint: str | None,
-    observation_encoder,
-    action_decoder,
+    codec,
     port: int,
     host: str,
 ):
@@ -242,9 +231,7 @@ def main(
     Starts the inference server with the given policy.
     """
     checkpoints_dir = str(pos3.download(checkpoints_dir))
-    server = InferenceServer(
-        policy_factory, observation_encoder, action_decoder, checkpoints_dir, checkpoint, host=host, port=port
-    )
+    server = InferenceServer(policy_factory, codec, checkpoints_dir, checkpoint, host=host, port=port)
     try:
         asyncio.run(server.serve())
     except KeyboardInterrupt:

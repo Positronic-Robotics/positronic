@@ -1,7 +1,19 @@
 import random
 from abc import ABC, abstractmethod
 from collections.abc import Callable
+from dataclasses import dataclass
 from typing import Any
+
+from positronic.policy.action import ActionDecoder
+from positronic.policy.observation import ObservationEncoder
+
+
+@dataclass
+class Codec:
+    """Pair of observation encoder and action decoder."""
+
+    observation: ObservationEncoder
+    action: ActionDecoder
 
 
 class Policy(ABC):

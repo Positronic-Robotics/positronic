@@ -301,7 +301,7 @@ Run the trained policy in MuJoCo, record diagnostics, and optionally stream a GU
 
 ```bash
 positronic-inference sim \
-    --policy=@positronic.cfg.policy.policy.act_absolute \
+    --policy=@positronic.cfg.policy.act_absolute \
     --policy.base.checkpoints_dir=~/datasets/lerobot/stack_cubes/runs/outputs/train/<run_id> \
     --policy.base.checkpoint=<checkpoint_id> \
     --driver.simulation_time=60 \
@@ -313,7 +313,7 @@ Notes:
 - `--policy.base.checkpoint` is optional; if omitted, Positronic will load the latest available checkpoint under `.../checkpoints/`.
 - S3 inputs/outputs: `--policy.base.checkpoints_dir` and `--output_dir` can point at S3; artifacts are downloaded to a cache and results synced back automatically.
 
-The [Inference script](positronic/inference.py) wires the MuJoCo scene, [Observation encoders](positronic/cfg/policy/observation.py), and [Action decoder](positronic/cfg/policy/action.py). Passing `--output_dir` enables another `DsWriterAgent` so the run can be replayed in the dataset viewer.
+The [Inference script](positronic/inference.py) wires the configured [Policy](positronic/cfg/policy.py) (which typically wraps a model with an [Observation encoder](positronic/cfg/codecs.py) and [Action decoder](positronic/cfg/codecs.py)) to the MuJoCo scene or real hardware. Passing `--output_dir` enables another `DsWriterAgent` so the run can be replayed in the dataset viewer.
 
 ---
 

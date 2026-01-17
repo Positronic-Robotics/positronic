@@ -16,12 +16,29 @@ Positronic is a Python-native toolkit for ML-driven robotics covering the full l
 - Don't add comments, docstrings, or type annotations to code you didn't change
 - Ask clarifying questions when requirements are ambiguous instead of guessing
 
+## ⚠️ CRITICAL: Always use `uv run` for Python commands
+
+**NEVER run Python directly** (`python`, `python3`, `python -m`). **ALWAYS use `uv run python`** instead.
+
+❌ **WRONG:** `python script.py`, `python3 -m pytest`, `python -c "import foo"`
+✅ **CORRECT:** `uv run python script.py`, `uv run pytest`, `uv run python -c "import foo"`
+
+This applies to:
+- Running Python scripts
+- Running tests with pytest
+- Syntax checks with `python -m py_compile`
+- Importing modules
+- Any Python execution whatsoever
+
+**Why:** This project uses uv for dependency management. Running Python directly bypasses the virtual environment and will cause import errors or use wrong package versions.
+
 ## Commands
 - Run tests: `uv run pytest --no-cov`
 - Run single test file: `uv run pytest path/to/test_file.py --no-cov`
 - Lint: `uv run ruff check --fix .`
 - Format: `uv run ruff format .`
 - Run any Python: `uv run python script.py`
+- Syntax check: `uv run python -m py_compile file.py`
 
 ## Testing
 - Don't add new test files unless explicitly asked

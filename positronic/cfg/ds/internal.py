@@ -12,7 +12,6 @@ These datasets remain on the private s3://raw/ bucket and include:
 import configuronic as cfn
 import pos3
 
-from positronic.cfg.policy import action, observation
 from positronic.dataset.local_dataset import load_all_datasets
 from positronic.dataset.transforms import TransformedDataset
 from positronic.dataset.transforms.episode import Concat, Derive, FromValue, Group, Identity, Rename
@@ -90,36 +89,3 @@ droid_recovery = droid.override(recovery_all=True, recovery_towels=True)
 sim = concat_ds.override(datasets=[sim_stack, sim_pnp])
 full_recovery = concat_ds.override(datasets=[droid_recovery, sim])
 full = concat_ds.override(datasets=[droid, sim])
-
-
-# Encoded helper (inline to avoid circular deps)
-def _encoded(base, observation_cfg, action_cfg, task=None):
-    tfs = [observation_cfg, action_cfg]
-    if task is not None:
-        tfs.append(Derive(task=lambda _ep: task))
-    else:
-        tfs.append(Identity(select=['task']))
-    return TransformedDataset(base, Group(*tfs))
-
-
-# OpenPI encoded variants (based on INTERNAL datasets)
-@cfn.config()
-def droid_openpi_ft():
-    return _encoded(droid, observation.eepose, action.absolute_position)
-
-
-@cfn.config()
-def sim_stack_openpi_ft():
-    return _encoded(sim_stack, observation.eepose, action.absolute_position)
-
-
-@cfn.config()
-def sim_pnp_openpi_ft():
-    return _encoded(sim_pnp, observation.eepose, action.absolute_position)
-
-
-@cfn.config()
-def full_openpi_ft():
-    return _encoded(
-        concat_ds.override(datasets=[droid, sim_stack, sim_pnp]), observation.eepose, action.absolute_position
-    )

@@ -1,8 +1,7 @@
 import configuronic as cfn
 import pos3
 
-from positronic.cfg.policy import action as act_cfg
-from positronic.cfg.policy import observation as obs_cfg
+from positronic.cfg import codecs
 from positronic.policy import Policy
 from positronic.policy.action import ActionDecoder
 from positronic.policy.lerobot import LerobotPolicy
@@ -62,23 +61,7 @@ def diffusion(checkpoint_path: str, device: str | None = None):
     return LerobotPolicy(policy, device, extra_meta={'type': 'diffusion', 'checkpoint_path': checkpoint_path})
 
 
-act_absolute = wrapped.override(base=act, observation=obs_cfg.eepose, action=act_cfg.absolute_position)
-
-
-@cfn.config(host='localhost', port=8000, n_action_steps=None)
-def openpi_remote(host: str, port: int, n_action_steps: int | None):
-    """PI0/PI0.5 policy with Cartesian control."""
-    from positronic.policy.openpi import OpenPIRemotePolicy
-
-    return OpenPIRemotePolicy(host, port, n_action_steps)
-
-
-openpi_positronic = wrapped.override(
-    base=openpi_remote, observation=obs_cfg.openpi_positronic, action=act_cfg.absolute_position
-)
-openpi_droid = wrapped.override(
-    base=openpi_remote.override(n_action_steps=15), observation=obs_cfg.openpi_droid, action=act_cfg.joint_delta
-)
+act_absolute = wrapped.override(base=act, observation=codecs.eepose, action=codecs.absolute_position)
 
 
 @cfn.config(weights=None)
@@ -105,10 +88,6 @@ act_latest = act_absolute.override(**{
 })
 act_q_latest = act_absolute.override(**{
     'base.checkpoints_dir': 's3://checkpoints/full_ft_q/act/031225/',
-    'observation': obs_cfg.eepose_q,
+    'observation': codecs.eepose_q,
     'base.n_action_steps': 15,
 })
-
-# TODO: Migrate to the remote server as well.
-openpi = openpi_positronic.copy()
-openpi_q = openpi.override(observation=obs_cfg.openpi_eeq)

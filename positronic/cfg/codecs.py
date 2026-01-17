@@ -1,6 +1,17 @@
+"""Configuration for policies codecs (observation encoders and action decoders)."""
+
 import configuronic as cfn
 
+from positronic import geom
 from positronic.policy.observation import ObservationEncoder
+
+
+@cfn.config()
+def codec(observation, action):
+    """Base codec config that pairs an observation encoder with an action decoder."""
+    from positronic.policy import Codec
+
+    return Codec(observation=observation, action=action)
 
 
 @cfn.config()
@@ -49,24 +60,37 @@ eepose_q = eepose_grip_joints.override(
     image_mappings={'observation.images.left': 'image.wrist', 'observation.images.side': 'image.exterior'}
 )
 
-openpi_positronic = eepose_grip.override(
-    state_name='observation/state',
-    image_mappings={'observation/wrist_image': 'image.wrist', 'observation/image': 'image.exterior'},
-)
 
-openpi_eeq = eepose_grip_joints.override(
-    state_name='observation/state',
-    image_mappings={'observation/wrist_image': 'image.wrist', 'observation/image': 'image.exterior'},
-)
+RotRep = geom.Rotation.Representation
 
 
-@cfn.config(exterior_camera='image.exterior', wrist_camera='image.wrist', image_size=(224, 224))
-def openpi_droid(exterior_camera: str, wrist_camera: str, image_size: tuple[int, int]):
-    """DROID observation encoder using joint positions."""
-    return ObservationEncoder(
-        state={'observation/joint_position': ['robot_state.q'], 'observation/gripper_position': ['grip']},
-        images={
-            'observation/wrist_image_left': (wrist_camera, image_size),
-            'observation/exterior_image_1_left': (exterior_camera, image_size),
-        },
-    )
+@cfn.config(rotation_rep=None, tgt_ee_pose_key='robot_commands.pose', tgt_grip_key='target_grip')
+def absolute_position(rotation_rep: str | None, tgt_ee_pose_key: str, tgt_grip_key: str):
+    """Absolute position action decoder for ACT/OpenPI.
+
+    Decodes from {'action': vector} format.
+    """
+    from positronic.policy.action import AbsolutePositionAction
+
+    rot_rep = RotRep(rotation_rep) if rotation_rep else RotRep.QUAT
+    ee_dim = rot_rep.size + 3
+
+    result = AbsolutePositionAction(tgt_ee_pose_key, tgt_grip_key, rotation_representation=rot_rep)
+    result.meta['lerobot_features'] = {'action': {'shape': (ee_dim + 1,), 'names': ['actions'], 'dtype': 'float32'}}
+    return result
+
+
+# TODO: We currently don't support absolute joint control, as collected datasets use cartesian control
+# Two potential solutions:
+# * Have a transform that computes IK (cartesian -> joint)
+# * As most controllers do IK themselves, log target joints in the data collection
+
+
+@cfn.config(num_joints=7)
+def joint_delta(num_joints: int):
+    from positronic.policy.action import JointDeltaAction
+
+    result = JointDeltaAction(num_joints=num_joints)
+    result.meta['lerobot_features'] = {'action': {'shape': (num_joints + 1,), 'names': ['actions'], 'dtype': 'float32'}}
+
+    return result
