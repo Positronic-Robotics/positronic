@@ -16,6 +16,7 @@ import uvicorn
 import zmq
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 
+from positronic.policy import Codec
 from positronic.utils.checkpoints import get_latest_checkpoint, list_checkpoints
 from positronic.utils.logging import init_logging
 from positronic.utils.serialization import deserialise, serialise
@@ -195,7 +196,7 @@ class Gr00tSubprocess:
 class InferenceServer:
     def __init__(
         self,
-        codec: dict,
+        codec: Codec,
         checkpoints_dir: str,
         checkpoint: str | None,
         modality_config: str,
@@ -204,8 +205,7 @@ class InferenceServer:
         port: int = 8000,
         zmq_port: int = 5555,
     ):
-        self.observation_encoder = codec['observation']
-        self.action_decoder = codec['action']
+        self.codec = codec
         self.checkpoints_dir = checkpoints_dir.rstrip('/')
         self.checkpoint = checkpoint
         self.modality_config = modality_config
@@ -220,10 +220,10 @@ class InferenceServer:
         self.current_checkpoint_dir: str | None = None
 
         self.metadata = {'host': host, 'port': port, 'type': 'groot', 'modality_config': modality_config}
-        if hasattr(self.observation_encoder, 'meta'):
-            self.metadata.update({f'observation.{k}': v for k, v in self.observation_encoder.meta.items()})
-        if hasattr(self.action_decoder, 'meta'):
-            self.metadata.update({f'action.{k}': v for k, v in self.action_decoder.meta.items()})
+        if hasattr(self.codec.observation, 'meta'):
+            self.metadata.update({f'observation.{k}': v for k, v in self.codec.observation.meta.items()})
+        if hasattr(self.codec.action, 'meta'):
+            self.metadata.update({f'action.{k}': v for k, v in self.codec.action.meta.items()})
 
         self.app = FastAPI()
         self.app.get('/api/v1/models')(self.get_models)
@@ -304,7 +304,7 @@ class InferenceServer:
                     message = await websocket.receive_bytes()
                     try:
                         raw_obs = deserialise(message)
-                        encoded_obs = self.observation_encoder.encode(raw_obs)
+                        encoded_obs = self.codec.observation.encode(raw_obs)
                         action_response, _info = subprocess.client.get_action(encoded_obs)
 
                         action = {k: v[0] for k, v in action_response.items()}
@@ -315,7 +315,7 @@ class InferenceServer:
                         decoded_actions = []
                         for i in range(time_horizon):
                             step_action = {k: v[i] for k, v in action.items()}
-                            decoded = self.action_decoder.decode(step_action, raw_obs)
+                            decoded = self.codec.action.decode(step_action, raw_obs)
                             decoded_actions.append(decoded)
 
                         await websocket.send_bytes(serialise({'result': decoded_actions}))
@@ -351,7 +351,7 @@ class InferenceServer:
 
 @cfn.config(codec=codecs.ee_absolute, checkpoint=None, port=8000, groot_venv_path='/.venv/', modality_config='ee')
 def server(
-    codec: dict, checkpoints_dir: str, checkpoint: str | None, port: int, groot_venv_path: str, modality_config: str
+    codec: Codec, checkpoints_dir: str, checkpoint: str | None, port: int, groot_venv_path: str, modality_config: str
 ):
     """Starts the GR00T inference server with encoding/decoding."""
 

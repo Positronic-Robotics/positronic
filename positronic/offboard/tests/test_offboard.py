@@ -9,12 +9,20 @@ from positronic.utils.serialization import deserialise, serialise
 from positronic.vendors.lerobot import server as lerobot_server
 
 
-class _PassthroughCodec:
+class _PassthroughEncoder:
     def encode(self, obs):
         return obs
 
-    def decode(self, action):
+
+class _PassthroughDecoder:
+    def decode(self, action, obs=None):
         return action
+
+
+class _PassthroughCodec:
+    def __init__(self):
+        self.observation = _PassthroughEncoder()
+        self.action = _PassthroughDecoder()
 
 
 class _DummyWebSocket:
@@ -123,8 +131,7 @@ async def test_lerobot_server_uses_configured_checkpoint(monkeypatch):
 
     server = lerobot_server.InferenceServer(
         policy_factory=lambda _checkpoint: MagicMock(),
-        observation_encoder=_PassthroughCodec(),
-        action_decoder=_PassthroughCodec(),
+        codec=_PassthroughCodec(),
         checkpoints_dir='s3://bucket/exp',
         checkpoint='42',
     )
@@ -153,8 +160,7 @@ async def test_lerobot_server_reports_missing_checkpoint(monkeypatch):
 
     server = lerobot_server.InferenceServer(
         policy_factory=lambda _checkpoint: MagicMock(),
-        observation_encoder=_PassthroughCodec(),
-        action_decoder=_PassthroughCodec(),
+        codec=_PassthroughCodec(),
         checkpoints_dir='s3://bucket/exp',
         checkpoint='42',
     )
@@ -177,8 +183,7 @@ async def test_lerobot_server_reports_unknown_checkpoint_id(monkeypatch):
 
     server = lerobot_server.InferenceServer(
         policy_factory=lambda _checkpoint: MagicMock(),
-        observation_encoder=_PassthroughCodec(),
-        action_decoder=_PassthroughCodec(),
+        codec=_PassthroughCodec(),
         checkpoints_dir='s3://bucket/exp',
         checkpoint=None,
     )
