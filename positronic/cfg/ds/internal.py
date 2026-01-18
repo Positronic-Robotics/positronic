@@ -12,6 +12,7 @@ These datasets remain on the private s3://raw/ bucket and include:
 import configuronic as cfn
 import pos3
 
+from positronic.dataset.dataset import ConcatDataset
 from positronic.dataset.local_dataset import load_all_datasets
 from positronic.dataset.transforms import TransformedDataset
 from positronic.dataset.transforms.episode import Concat, Derive, FromValue, Group, Identity, Rename
@@ -51,7 +52,7 @@ def droid(path, recovery_all, recovery_towels):
                     load_all_datasets(root / 'recovery/'), Group(Derive(task=FromValue(task)), Identity())
                 )
             )
-    return concat_ds.override(datasets=datasets)
+    return ConcatDataset(*datasets)
 
 
 # Signal transformations for sim datasets
