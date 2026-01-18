@@ -61,5 +61,5 @@ def apply_codec(dataset: Dataset, codec: dict):
           --dataset.codec=@positronic.vendors.gr00t.codecs.ee_absolute \\
           --output_dir=/data/lerobot_dataset
     """
-    transform = Group(codec['observation'], codec['action'], Identity(select=['task']))
+    transform = Group(codec.observation, codec.action, Identity(select=['task']))
     return TransformedDataset(dataset, transform)
