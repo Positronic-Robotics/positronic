@@ -61,9 +61,13 @@ class InferenceClient:
     def __init__(self, host: str, port: int):
         self.base_uri = f'ws://{host}:{port}/api/v1/session'
 
-    def new_session(self, model_id: str | None = None) -> InferenceSession:
+    def new_session(self, model_id: str | None = None, open_timeout: float = 120.0) -> InferenceSession:
         """
         Creates a new inference session.
+
+        Args:
+            model_id: Optional model ID to connect to
+            open_timeout: Timeout for WebSocket handshake in seconds (default: 120s)
         """
         uri = self.base_uri if model_id is None else f'{self.base_uri}/{model_id}'
-        return InferenceSession(connect(uri))
+        return InferenceSession(connect(uri, open_timeout=open_timeout))

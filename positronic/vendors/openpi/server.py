@@ -11,7 +11,7 @@ import configuronic as cfn
 import pos3
 import uvicorn
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
-from openpi_client import WebsocketClientPolicy
+from openpi_client.websocket_client_policy import WebsocketClientPolicy
 
 from positronic.policy import Codec
 from positronic.utils.checkpoints import get_latest_checkpoint, list_checkpoints
@@ -50,16 +50,15 @@ class OpenpiSubprocess:
         """Start the OpenPI serve_policy.py subprocess."""
         command = [self.uv_path, 'run', '--frozen', '--project', str(self.openpi_root), '--']
         command.extend(['python', 'scripts/serve_policy.py'])
+        command.extend(['--port', str(self.ws_port)])
         command.extend(['policy:checkpoint'])
         command.extend(['--policy.config', self.config_name])
         command.extend(['--policy.dir', str(self.checkpoint_dir)])
-        command.extend(['--port', str(self.ws_port)])
 
         env = os.environ.copy()
         logger.info(f'Starting OpenPI subprocess: {" ".join(command)}')
-        self.process = subprocess.Popen(
-            command, env=env, cwd=str(self.openpi_root), stdout=subprocess.PIPE, stderr=subprocess.PIPE
-        )
+        # Don't pipe stdout/stderr so we can see the output
+        self.process = subprocess.Popen(command, env=env, cwd=str(self.openpi_root))
 
         self._wait_for_ready()
 
@@ -124,7 +123,7 @@ class InferenceServer:
         metadata: dict[str, Any] | None = None,
     ):
         self.codec = codec
-        self.checkpoints_dir = str(checkpoints_dir).rstrip('/') + '/checkpoints'
+        self.checkpoints_dir = str(checkpoints_dir).rstrip('/')
         self.config_name = config_name
         self.checkpoint = checkpoint
         self.host = host
@@ -180,8 +179,7 @@ class InferenceServer:
         async with self._subprocess_lock:
             if checkpoint_id not in self._subprocesses:
                 # Download checkpoint if needed
-                with pos3.mirror():
-                    checkpoint_dir = pos3.download(f'{self.checkpoints_dir}/{checkpoint_id}')
+                checkpoint_dir = pos3.download(f'{self.checkpoints_dir}/{checkpoint_id}')
 
                 logger.info(f'Starting OpenPI subprocess for checkpoint {checkpoint_id}')
                 subprocess_obj = OpenpiSubprocess(
@@ -228,15 +226,20 @@ class InferenceServer:
                     # Forward to OpenPI subprocess
                     openpi_response = subprocess_obj.client.infer(encoded_obs)
 
-                    # Decode action using codec
-                    decoded_action = self.codec.action.decode(openpi_response['action'], raw_obs)
+                    # Decode actions using codec
+                    # OpenPI returns actions with shape (action_horizon, action_dim),
+                    # decode each timestep in the action horizon
+                    decoded_actions = [
+                        self.codec.action.decode({'action': step_action}, raw_obs)
+                        for step_action in openpi_response['actions']
+                    ]
 
                     # Send to client
-                    await websocket.send_bytes(serialise({'result': decoded_action}))
+                    await websocket.send_bytes(serialise({'result': decoded_actions}))
 
                 except Exception as e:
                     logger.error(f'Error processing message: {e}')
-                    logger.debug(traceback.format_exc())
+                    logger.error(traceback.format_exc())
                     error_response = {'error': str(e)}
                     await websocket.send_bytes(serialise(error_response))
 
@@ -248,7 +251,7 @@ class InferenceServer:
         """Start the uvicorn server."""
         config = uvicorn.Config(self.app, host=self.host, port=self.port, log_level='info')
         server = uvicorn.Server(config)
-        return server.serve()
+        asyncio.run(server.serve())
 
     def shutdown(self):
         """Shutdown all subprocesses."""
@@ -274,7 +277,7 @@ def server(
     codec, checkpoints_dir: str, config_name: str, checkpoint: str | None, host: str, port: int, openpi_ws_port: int
 ):
     """Main OpenPI inference server config."""
-    return InferenceServer(
+    InferenceServer(
         codec=codec,
         checkpoints_dir=checkpoints_dir,
         config_name=config_name,
@@ -282,23 +285,24 @@ def server(
         host=host,
         port=port,
         openpi_ws_port=openpi_ws_port,
-    )
+    ).serve()
 
 
 # Pre-configured server variants using .copy() and .override()
-eepose_absolute = server.copy().override(codec=codecs.eepose_absolute)
-openpi_positronic = server.copy().override(codec=codecs.openpi_positronic)
-droid = server.copy().override(codec=codecs.droid)
-eepose_q = server.copy().override(codec=codecs.eepose_q)
-joints = server.copy().override(codec=codecs.joints)
+eepose_absolute = server.override(codec=codecs.eepose_absolute)
+openpi_positronic = server.override(codec=codecs.openpi_positronic)
+droid = server.override(codec=codecs.droid)
+eepose_q = server.override(codec=codecs.eepose_q)
+joints = server.override(codec=codecs.joints)
 
 
 if __name__ == '__main__':
     init_logging()
-    cfn.cli({
-        'eepose_absolute': eepose_absolute,
-        'openpi_positronic': openpi_positronic,
-        'droid': droid,
-        'eepose_q': eepose_q,
-        'joints': joints,
-    })
+    with pos3.mirror():
+        cfn.cli({
+            'eepose_absolute': eepose_absolute,
+            'openpi_positronic': openpi_positronic,
+            'droid': droid,
+            'eepose_q': eepose_q,
+            'joints': joints,
+        })

@@ -50,8 +50,10 @@ class ObservationEncoder(Derive):
 
         obs: dict[str, Any] = {}
 
+        # TODO: parametrize encoder to define where to put task
         if 'task' in inputs:
             obs['task'] = inputs['task']
+            obs['prompt'] = inputs['task']  # OpenPI expects prompt field
 
         # Encode images
         for out_name, (input_key, (width, height)) in self._image_configs.items():
@@ -80,6 +82,3 @@ class ObservationEncoder(Derive):
                 state_vec = np.empty((0,), dtype=np.float32)
             obs[out_name] = state_vec
         return obs
-
-
-# GrootObservationEncoder moved to positronic.vendors.gr00t.codecs
