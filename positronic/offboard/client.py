@@ -14,16 +14,55 @@ class InferenceSession:
         self._websocket = websocket
         self._metadata = None
 
-    def _handshake(self) -> dict[str, Any]:
-        """Receive metadata from the server immediately after connection."""
+    def _handshake(self, timeout_per_message: float = 30.0) -> dict[str, Any]:
+        """Receive status updates until server is ready.
+
+        Args:
+            timeout_per_message: Timeout for each individual message (default: 30s).
+                               Server must send updates at least this frequently.
+        """
         try:
-            response = deserialise(self._websocket.recv())
-            if 'error' in response:
-                raise RuntimeError(f'Server error: {response["error"]}')
-            return response['meta']
+            while True:
+                # Set timeout for this recv() call
+                self._websocket.socket.settimeout(timeout_per_message)
+                response = deserialise(self._websocket.recv())
+
+                # Check for error response
+                if 'error' in response:
+                    raise RuntimeError(f'Server error: {response["error"]}')
+
+                # Handle status messages
+                status = response.get('status')
+
+                if status == 'ready':
+                    # Final message - return metadata
+                    return response['meta']
+
+                elif status in ('waiting', 'loading'):
+                    # Progress update - log and continue waiting
+                    message = response.get('message', status)
+                    logger.info(f'Server status: [{status}] {message}')
+                    continue
+
+                elif status == 'error':
+                    # Explicit error status
+                    raise RuntimeError(f'Server error: {response.get("error", "Unknown error")}')
+
+                else:
+                    # Unexpected response format
+                    raise RuntimeError(f'Unexpected server response: {response}')
+
+        except TimeoutError:
+            raise TimeoutError(
+                f'Server did not send status update within {timeout_per_message}s. '
+                f'Server may have crashed or model loading is taking too long without progress updates.'
+            ) from None
         except Exception as e:
             logger.error(f'Failed to handshake with server: {e}')
             raise
+        finally:
+            # Reset to blocking mode for inference loop
+            self._websocket.socket.settimeout(None)
 
     @property
     def metadata(self) -> dict[str, Any]:
@@ -61,13 +100,15 @@ class InferenceClient:
     def __init__(self, host: str, port: int):
         self.base_uri = f'ws://{host}:{port}/api/v1/session'
 
-    def new_session(self, model_id: str | None = None, open_timeout: float = 120.0) -> InferenceSession:
+    def new_session(self, model_id: str | None = None, open_timeout: float = 10.0) -> InferenceSession:
         """
         Creates a new inference session.
 
         Args:
             model_id: Optional model ID to connect to
-            open_timeout: Timeout for WebSocket handshake in seconds (default: 120s)
+            open_timeout: Timeout for initial WebSocket connection (default: 10s).
+                        This only covers TCP/HTTP handshake, not model loading.
+                        Model loading timeout is controlled by per-message timeout in handshake.
         """
         uri = self.base_uri if model_id is None else f'{self.base_uri}/{model_id}'
         return InferenceSession(connect(uri, open_timeout=open_timeout))

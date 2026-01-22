@@ -108,6 +108,38 @@ class OpenpiSubprocess:
 ###########################################################################################
 
 
+async def _wait_for_subprocess_ready(subprocess: OpenpiSubprocess, websocket: WebSocket, max_wait: float = 300.0):
+    """Wait for OpenPI subprocess to be ready, sending periodic status updates."""
+    start_time = time.time()
+    last_update_time = start_time
+    update_interval = 5.0  # Send status update every 5 seconds
+
+    while time.time() - start_time < max_wait:
+        elapsed = int(time.time() - start_time)
+
+        # Send status update every 5 seconds
+        if time.time() - last_update_time >= update_interval:
+            await websocket.send_bytes(
+                serialise({'status': 'loading', 'message': f'Starting OpenPI subprocess... ({elapsed}s elapsed)'})
+            )
+            last_update_time = time.time()
+
+        # Check if process crashed
+        if subprocess.process.poll() is not None:
+            raise RuntimeError(f'OpenPI subprocess exited with code {subprocess.process.returncode}')
+
+        # Try to connect to check if ready
+        try:
+            WebsocketClientPolicy(host='127.0.0.1', port=subprocess.ws_port)
+            logger.info(f'OpenPI subprocess ready after {elapsed}s')
+            return
+        except Exception:
+            await asyncio.sleep(1.0)
+            continue
+
+    raise RuntimeError(f'OpenPI subprocess did not become ready within {max_wait}s')
+
+
 class InferenceServer:
     """FastAPI server that wraps OpenPI subprocess and provides unified API."""
 
@@ -156,8 +188,9 @@ class InferenceServer:
         if checkpoint_id:
             available = list_checkpoints(self.checkpoints_dir)
             if checkpoint_id not in available:
-                logger.error('Checkpoint not found: %s', checkpoint_id)
-                await websocket.send_bytes(serialise({'error': 'Checkpoint not found'}))
+                error_msg = f'Checkpoint not found: {checkpoint_id}. Available: {available}'
+                logger.error(error_msg)
+                await websocket.send_bytes(serialise({'status': 'error', 'error': error_msg}))
                 await websocket.close(code=1008, reason='Checkpoint not found')
                 return None
             return checkpoint_id
@@ -169,23 +202,54 @@ class InferenceServer:
         try:
             return get_latest_checkpoint(self.checkpoints_dir)
         except Exception as e:
-            logger.exception('Failed to resolve checkpoint')
-            await websocket.send_bytes(serialise({'error': f'No checkpoint available: {e}'}))
+            error_msg = f'No checkpoint available in {self.checkpoints_dir}: {e}'
+            logger.exception(error_msg)
+            await websocket.send_bytes(serialise({'status': 'error', 'error': error_msg}))
             await websocket.close(code=1008, reason='No checkpoint available')
             return None
 
-    async def _get_subprocess(self, checkpoint_id: str) -> OpenpiSubprocess:
-        """Get or create subprocess for checkpoint."""
+    async def _get_subprocess(self, checkpoint_id: str, websocket: WebSocket) -> OpenpiSubprocess:
+        """Get or create subprocess for checkpoint, sending status updates."""
         async with self._subprocess_lock:
             if checkpoint_id not in self._subprocesses:
+                # Send loading status for checkpoint download
+                await websocket.send_bytes(
+                    serialise({'status': 'loading', 'message': f'Downloading checkpoint {checkpoint_id}...'})
+                )
+
                 # Download checkpoint if needed
                 checkpoint_dir = pos3.download(f'{self.checkpoints_dir}/{checkpoint_id}')
+
+                # Send loading status for subprocess startup
+                await websocket.send_bytes(serialise({'status': 'loading', 'message': 'Starting OpenPI subprocess...'}))
 
                 logger.info(f'Starting OpenPI subprocess for checkpoint {checkpoint_id}')
                 subprocess_obj = OpenpiSubprocess(
                     checkpoint_dir=checkpoint_dir, config_name=self.config_name, ws_port=self.openpi_ws_port
                 )
-                subprocess_obj.start()
+
+                # Start subprocess without waiting (manually duplicate start logic to avoid sync _wait_for_ready)
+                command = [
+                    subprocess_obj.uv_path,
+                    'run',
+                    '--frozen',
+                    '--project',
+                    str(subprocess_obj.openpi_root),
+                    '--',
+                ]
+                command.extend(['python', 'scripts/serve_policy.py'])
+                command.extend(['--port', str(subprocess_obj.ws_port)])
+                command.extend(['policy:checkpoint'])
+                command.extend(['--policy.config', subprocess_obj.config_name])
+                command.extend(['--policy.dir', str(subprocess_obj.checkpoint_dir)])
+
+                env = os.environ.copy()
+                logger.info(f'Starting OpenPI subprocess: {" ".join(command)}')
+                subprocess_obj.process = subprocess.Popen(command, env=env, cwd=str(subprocess_obj.openpi_root))
+
+                # Wait for subprocess to be ready with periodic status updates
+                await _wait_for_subprocess_ready(subprocess_obj, websocket)
+
                 self._subprocesses[checkpoint_id] = subprocess_obj
 
             return self._subprocesses[checkpoint_id]
@@ -201,10 +265,10 @@ class InferenceServer:
             return
 
         try:
-            # Get or start subprocess
-            subprocess_obj = await self._get_subprocess(resolved_checkpoint_id)
+            # Get or start subprocess (sends status updates internally)
+            subprocess_obj = await self._get_subprocess(resolved_checkpoint_id, websocket)
 
-            # Send metadata
+            # Send ready with metadata
             meta = {**self.metadata, 'checkpoint_id': resolved_checkpoint_id}
             # Add codec metadata if available
             if hasattr(self.codec.observation, 'meta'):
@@ -212,7 +276,7 @@ class InferenceServer:
             if hasattr(self.codec.action, 'meta'):
                 meta.update(self.codec.action.meta)
 
-            await websocket.send_bytes(serialise({'meta': meta}))
+            await websocket.send_bytes(serialise({'status': 'ready', 'meta': meta}))
 
             # Inference loop
             async for message in websocket.iter_bytes():

@@ -138,7 +138,7 @@ async def test_lerobot_server_uses_configured_checkpoint(monkeypatch):
 
     requested = {}
 
-    async def fake_get_policy(checkpoint_id: str):
+    async def fake_get_policy(checkpoint_id: str, websocket):
         requested['checkpoint_id'] = checkpoint_id
         policy = MagicMock()
         policy.meta = {'model_name': 'test'}
@@ -172,7 +172,10 @@ async def test_lerobot_server_reports_missing_checkpoint(monkeypatch):
 
     assert websocket.events == ['send_bytes', 'close']
     error_payload = websocket._send_bytes.await_args.args[0]
-    assert deserialise(error_payload) == {'error': 'Configured checkpoint not found'}
+    error_response = deserialise(error_payload)
+    assert error_response['status'] == 'error'
+    assert 'Configured checkpoint not found: 42' in error_response['error']
+    assert "Available: ['41']" in error_response['error']
     server.policy_manager.get_policy.assert_not_called()
     server.policy_manager.release_session.assert_not_called()
 
@@ -195,6 +198,9 @@ async def test_lerobot_server_reports_unknown_checkpoint_id(monkeypatch):
 
     assert websocket.events == ['send_bytes', 'close']
     error_payload = websocket._send_bytes.await_args.args[0]
-    assert deserialise(error_payload) == {'error': 'Checkpoint not found'}
+    error_response = deserialise(error_payload)
+    assert error_response['status'] == 'error'
+    assert 'Checkpoint not found: 42' in error_response['error']
+    assert "Available: ['41']" in error_response['error']
     server.policy_manager.get_policy.assert_not_called()
     server.policy_manager.release_session.assert_not_called()

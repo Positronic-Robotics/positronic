@@ -55,16 +55,20 @@ class InferenceServer:
             policy_factory = self.policy_registry[model_id]
         else:
             logger.error(f'Policy not found: {model_id}')
-            # Reject connection with specific code
+            # Send error status
+            await websocket.send_bytes(serialise({'status': 'error', 'error': f'Policy not found: {model_id}'}))
             await websocket.close(code=1008, reason='Policy not found')
             return
 
         try:
+            # Send loading status before blocking operation
+            await websocket.send_bytes(serialise({'status': 'loading', 'message': 'Loading policy...'}))
+
             policy = policy_factory()
             policy.reset()
 
-            # Send Metadata
-            await websocket.send_bytes(serialise({'meta': policy.meta}))
+            # Send ready with metadata
+            await websocket.send_bytes(serialise({'status': 'ready', 'meta': policy.meta}))
 
             # Inference Loop
             async for message in websocket.iter_bytes():

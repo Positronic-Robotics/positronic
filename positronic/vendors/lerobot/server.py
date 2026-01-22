@@ -54,18 +54,32 @@ class _PolicyManager:
         self._lock = asyncio.Lock()
         self._condition = asyncio.Condition(self._lock)
 
-    async def get_policy(self, checkpoint_id: str) -> Policy:
+    async def get_policy(self, checkpoint_id: str, websocket: WebSocket) -> Policy:
         async with self._lock:
             if self.current_checkpoint_id != checkpoint_id:
                 logger.info(f'Switching policy from {self.current_checkpoint_id} to {checkpoint_id}')
 
-                while self.active_sessions > 0:  # Wait for all active sessions to finish
-                    logger.info(f'Waiting for {self.active_sessions} sessions to finish...')
-                    await self._condition.wait()
+                # Send waiting status while sessions are active
+                while self.active_sessions > 0:
+                    message = f'Waiting for {self.active_sessions} active session(s) to finish...'
+                    logger.info(message)
+                    await websocket.send_bytes(serialise({'status': 'waiting', 'message': message}))
+
+                    try:
+                        # Wait with timeout so we can send periodic updates
+                        await asyncio.wait_for(self._condition.wait(), timeout=5.0)
+                    except TimeoutError:
+                        # Timeout is expected - send another update
+                        continue
 
                 if self.current_policy:
                     logger.info('Unloading current policy')
                     self.current_policy.close()
+
+                # Send loading status before blocking load operation
+                await websocket.send_bytes(
+                    serialise({'status': 'loading', 'message': f'Loading checkpoint {checkpoint_id}...'})
+                )
 
                 logger.info(f'Loading policy {checkpoint_id}')
                 self.current_policy = self.loader(checkpoint_id)
@@ -138,8 +152,9 @@ class InferenceServer:
         if checkpoint_id:
             available = list_checkpoints(self.checkpoints_dir)
             if checkpoint_id not in available:
-                logger.error('Checkpoint not found: %s', checkpoint_id)
-                await websocket.send_bytes(serialise({'error': 'Checkpoint not found'}))
+                error_msg = f'Checkpoint not found: {checkpoint_id}. Available: {available}'
+                logger.error(error_msg)
+                await websocket.send_bytes(serialise({'status': 'error', 'error': error_msg}))
                 await websocket.close(code=1008, reason='Checkpoint not found')
                 return None
 
@@ -149,8 +164,9 @@ class InferenceServer:
             checkpoint_id = str(self.checkpoint).strip('/')
             available = list_checkpoints(self.checkpoints_dir)
             if checkpoint_id not in available:
-                logger.error('Configured checkpoint not found: %s', checkpoint_id)
-                await websocket.send_bytes(serialise({'error': 'Configured checkpoint not found'}))
+                error_msg = f'Configured checkpoint not found: {checkpoint_id}. Available: {available}'
+                logger.error(error_msg)
+                await websocket.send_bytes(serialise({'status': 'error', 'error': error_msg}))
                 await websocket.close(code=1008, reason='Configured checkpoint not found')
                 return None
 
@@ -162,7 +178,9 @@ class InferenceServer:
             logger.info(f'Using latest checkpoint: {checkpoint_id}')
             return checkpoint_id
         except Exception:
-            logger.exception('Failed to get latest checkpoint.')
+            error_msg = f'No checkpoints found in {self.checkpoints_dir}'
+            logger.exception(error_msg)
+            await websocket.send_bytes(serialise({'status': 'error', 'error': error_msg}))
             await websocket.close(code=1008, reason='No checkpoints available')
             return None
 
@@ -176,12 +194,14 @@ class InferenceServer:
         logger.info(f'Connected to {websocket.client} requesting {checkpoint_id}')
 
         try:
-            # Request policy from manager (may wait for other sessions)
-            policy = await self.policy_manager.get_policy(checkpoint_id)
+            # Request policy from manager (may wait for other sessions, sends status updates)
+            policy = await self.policy_manager.get_policy(checkpoint_id, websocket)
 
             try:
                 policy.reset()
-                await websocket.send_bytes(serialise({'meta': policy.meta}))  # Send Metadata
+
+                # Send ready with metadata
+                await websocket.send_bytes(serialise({'status': 'ready', 'meta': policy.meta}))
 
                 # Inference Loop
                 try:
