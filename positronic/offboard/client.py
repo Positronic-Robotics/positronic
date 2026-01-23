@@ -12,7 +12,7 @@ logger = logging.getLogger(__name__)
 class InferenceSession:
     def __init__(self, websocket: Connection):
         self._websocket = websocket
-        self._metadata = None
+        self._metadata = self._handshake()
 
     def _handshake(self, timeout_per_message: float = 30.0) -> dict[str, Any]:
         """Receive status updates until server is ready.
@@ -50,8 +50,6 @@ class InferenceSession:
 
     @property
     def metadata(self) -> dict[str, Any]:
-        if self._metadata is None:
-            self._metadata = self._handshake()
         return self._metadata
 
     def infer(self, obs: dict[str, Any]) -> dict[str, Any]:
@@ -61,9 +59,6 @@ class InferenceSession:
         Both `obs` and the returned action must be wire-serializable: plain-data containers and
         scalars, plus numeric numpy arrays/scalars. Do not pass arbitrary Python objects.
         """
-        if self._metadata is None:
-            self._metadata = self._handshake()
-
         serialised = serialise(obs)
         logger.debug('Size of serialised obs: %1.f KiB', len(serialised) / 1024)
 

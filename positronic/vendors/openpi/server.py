@@ -273,7 +273,8 @@ class InferenceServer:
                     # Encode observation using codec
                     encoded_obs = self.codec.observation.encode(raw_obs)
 
-                    # Forward to OpenPI subprocess
+                    # TODO: Wrap in asyncio.to_thread() to avoid blocking the async loop
+                    # during concurrent sessions. Currently not an issue for single-client use.
                     openpi_response = subprocess_obj.client.infer(encoded_obs)
 
                     # Decode actions using codec
