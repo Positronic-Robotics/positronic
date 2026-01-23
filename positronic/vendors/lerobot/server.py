@@ -96,6 +96,20 @@ class _PolicyManager:
 
 
 class InferenceServer:
+    """LeRobot inference server with singleton policy manager.
+
+    This server loads policies synchronously (in-process), which means checkpoint
+    loading should be reasonably fast (<20s) to avoid WebSocket keepalive timeouts.
+
+    For very large checkpoints or slow S3 downloads, consider:
+    - Pre-downloading checkpoints to local storage
+    - Using a subprocess-based server with periodic status updates
+    - Implementing async checkpoint download (see positronic.offboard.server_utils)
+
+    The server enforces a single active policy at a time, queueing new requests
+    until the current policy is unloaded.
+    """
+
     def __init__(
         self,
         policy_factory: Callable[[str], PreTrainedPolicy],

@@ -13,6 +13,7 @@ import uvicorn
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from openpi_client.websocket_client_policy import WebsocketClientPolicy
 
+from positronic.offboard.server_utils import monitor_async_task, wait_for_subprocess_ready
 from positronic.policy import Codec
 from positronic.utils.checkpoints import get_latest_checkpoint, list_checkpoints
 from positronic.utils.logging import init_logging
@@ -62,6 +63,21 @@ class OpenpiSubprocess:
 
         self._wait_for_ready()
 
+    def _check_ready(self) -> bool:
+        """Check if OpenPI subprocess is ready by attempting connection."""
+        try:
+            WebsocketClientPolicy(host='127.0.0.1', port=self.ws_port)
+            return True
+        except Exception:
+            return False
+
+    def _check_crashed(self) -> tuple[bool, int | None]:
+        """Check if subprocess has crashed."""
+        if self.process is None:
+            return False, None
+        exit_code = self.process.poll()
+        return exit_code is not None, exit_code
+
     def _wait_for_ready(self, timeout: float = 300.0, poll_interval: float = 1.0):
         """Wait for the OpenPI server to be ready by connecting to it."""
         start_time = time.time()
@@ -81,6 +97,27 @@ class OpenpiSubprocess:
                 time.sleep(poll_interval)
 
         raise RuntimeError(f'OpenPI subprocess did not become ready within {timeout}s')
+
+    async def start_async(self, websocket: WebSocket | None = None):
+        """Start the OpenPI subprocess asynchronously with optional status updates."""
+        command = [self.uv_path, 'run', '--frozen', '--project', str(self.openpi_root), '--']
+        command.extend(['python', 'scripts/serve_policy.py'])
+        command.extend(['--port', str(self.ws_port)])
+        command.extend(['policy:checkpoint'])
+        command.extend(['--policy.config', self.config_name])
+        command.extend(['--policy.dir', str(self.checkpoint_dir)])
+
+        env = os.environ.copy()
+        logger.info(f'Starting OpenPI subprocess: {" ".join(command)}')
+        self.process = subprocess.Popen(command, env=env, cwd=str(self.openpi_root))
+
+        await wait_for_subprocess_ready(
+            check_ready=self._check_ready,
+            check_crashed=self._check_crashed,
+            description='OpenPI subprocess',
+            websocket=websocket,
+            max_wait=300.0,
+        )
 
     @property
     def client(self) -> WebsocketClientPolicy:
@@ -106,38 +143,6 @@ class OpenpiSubprocess:
 ###########################################################################################
 # FastAPI Inference Server
 ###########################################################################################
-
-
-async def _wait_for_subprocess_ready(subprocess: OpenpiSubprocess, websocket: WebSocket, max_wait: float = 300.0):
-    """Wait for OpenPI subprocess to be ready, sending periodic status updates."""
-    start_time = time.time()
-    last_update_time = start_time
-    update_interval = 5.0  # Send status update every 5 seconds
-
-    while time.time() - start_time < max_wait:
-        elapsed = int(time.time() - start_time)
-
-        # Send status update every 5 seconds
-        if time.time() - last_update_time >= update_interval:
-            await websocket.send_bytes(
-                serialise({'status': 'loading', 'message': f'Starting OpenPI subprocess... ({elapsed}s elapsed)'})
-            )
-            last_update_time = time.time()
-
-        # Check if process crashed
-        if subprocess.process.poll() is not None:
-            raise RuntimeError(f'OpenPI subprocess exited with code {subprocess.process.returncode}')
-
-        # Try to connect to check if ready
-        try:
-            WebsocketClientPolicy(host='127.0.0.1', port=subprocess.ws_port)
-            logger.info(f'OpenPI subprocess ready after {elapsed}s')
-            return
-        except Exception:
-            await asyncio.sleep(1.0)
-            continue
-
-    raise RuntimeError(f'OpenPI subprocess did not become ready within {max_wait}s')
 
 
 class InferenceServer:
@@ -212,13 +217,13 @@ class InferenceServer:
         """Get or create subprocess for checkpoint, sending status updates."""
         async with self._subprocess_lock:
             if checkpoint_id not in self._subprocesses:
-                # Send loading status for checkpoint download
-                await websocket.send_bytes(
-                    serialise({'status': 'loading', 'message': f'Downloading checkpoint {checkpoint_id}...'})
+                # Download checkpoint in thread with periodic status updates
+                checkpoint_path = f'{self.checkpoints_dir}/{checkpoint_id}'
+                download_task = asyncio.create_task(asyncio.to_thread(pos3.download, checkpoint_path))
+                await monitor_async_task(
+                    download_task, description=f'Downloading checkpoint {checkpoint_id}', websocket=websocket
                 )
-
-                # Download checkpoint if needed
-                checkpoint_dir = pos3.download(f'{self.checkpoints_dir}/{checkpoint_id}')
+                checkpoint_dir = download_task.result()
 
                 # Send loading status for subprocess startup
                 await websocket.send_bytes(serialise({'status': 'loading', 'message': 'Starting OpenPI subprocess...'}))
@@ -228,27 +233,8 @@ class InferenceServer:
                     checkpoint_dir=checkpoint_dir, config_name=self.config_name, ws_port=self.openpi_ws_port
                 )
 
-                # Start subprocess without waiting (manually duplicate start logic to avoid sync _wait_for_ready)
-                command = [
-                    subprocess_obj.uv_path,
-                    'run',
-                    '--frozen',
-                    '--project',
-                    str(subprocess_obj.openpi_root),
-                    '--',
-                ]
-                command.extend(['python', 'scripts/serve_policy.py'])
-                command.extend(['--port', str(subprocess_obj.ws_port)])
-                command.extend(['policy:checkpoint'])
-                command.extend(['--policy.config', subprocess_obj.config_name])
-                command.extend(['--policy.dir', str(subprocess_obj.checkpoint_dir)])
-
-                env = os.environ.copy()
-                logger.info(f'Starting OpenPI subprocess: {" ".join(command)}')
-                subprocess_obj.process = subprocess.Popen(command, env=env, cwd=str(subprocess_obj.openpi_root))
-
-                # Wait for subprocess to be ready with periodic status updates
-                await _wait_for_subprocess_ready(subprocess_obj, websocket)
+                # Start subprocess with periodic status updates
+                await subprocess_obj.start_async(websocket=websocket)
 
                 self._subprocesses[checkpoint_id] = subprocess_obj
 

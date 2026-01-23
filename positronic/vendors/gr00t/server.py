@@ -6,7 +6,6 @@ import subprocess
 import time
 import traceback
 from pathlib import Path
-from subprocess import Popen
 from typing import Any
 
 import configuronic as cfn
@@ -17,6 +16,7 @@ import uvicorn
 import zmq
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 
+from positronic.offboard.server_utils import monitor_async_task, wait_for_subprocess_ready
 from positronic.policy import Codec
 from positronic.utils.checkpoints import get_latest_checkpoint, list_checkpoints
 from positronic.utils.logging import init_logging
@@ -150,6 +150,13 @@ class Gr00tSubprocess:
 
         self._wait_for_ready()
 
+    def _check_crashed(self) -> tuple[bool, int | None]:
+        """Check if subprocess has crashed."""
+        if self.process is None:
+            return False, None
+        exit_code = self.process.poll()
+        return exit_code is not None, exit_code
+
     def _wait_for_ready(self, timeout: float = 120.0, poll_interval: float = 1.0):
         """Wait for the gr00t server to be ready by polling with ping."""
         client = PolicyClient(host='127.0.0.1', port=self.zmq_port, timeout_ms=2000)
@@ -168,6 +175,35 @@ class Gr00tSubprocess:
 
         client.close()
         raise RuntimeError(f'gr00t subprocess did not become ready within {timeout}s')
+
+    async def start_async(self, websocket: WebSocket | None = None):
+        """Start the gr00t subprocess asynchronously with optional status updates."""
+        groot_root = Path(__file__).parents[4] / 'gr00t'
+        python_bin = str(Path(self.groot_venv_path) / 'bin' / 'python')
+
+        command = [python_bin, 'gr00t/eval/run_gr00t_server.py']
+        command.extend(['--model_path', str(self.checkpoint_dir)])
+        command.extend(['--embodiment_tag', 'NEW_EMBODIMENT'])
+        command.extend(['--modality_config_path', self.modality_config_path])
+        command.extend(['--host', '127.0.0.1'])
+        command.extend(['--port', str(self.zmq_port)])
+
+        env = os.environ.copy()
+        logger.info(f'Starting gr00t subprocess: {" ".join(command)}')
+        self.process = subprocess.Popen(command, env=env, cwd=str(groot_root))
+
+        # Use a temporary client for readiness check
+        client = PolicyClient(host='127.0.0.1', port=self.zmq_port, timeout_ms=2000)
+        try:
+            await wait_for_subprocess_ready(
+                check_ready=client.ping,
+                check_crashed=self._check_crashed,
+                description='GR00T subprocess',
+                websocket=websocket,
+                max_wait=120.0,
+            )
+        finally:
+            client.close()
 
     @property
     def client(self) -> PolicyClient:
@@ -192,40 +228,6 @@ class Gr00tSubprocess:
 ###########################################################################################
 # FastAPI Inference Server
 ###########################################################################################
-
-
-async def _wait_for_subprocess_ready(subprocess: Gr00tSubprocess, websocket: WebSocket, max_wait: float = 120.0):
-    """Wait for GR00T subprocess to be ready, sending periodic status updates."""
-    client = PolicyClient(host='127.0.0.1', port=subprocess.zmq_port, timeout_ms=2000)
-    start_time = time.time()
-    last_update_time = start_time
-    update_interval = 5.0  # Send status update every 5 seconds
-
-    try:
-        while time.time() - start_time < max_wait:
-            elapsed = int(time.time() - start_time)
-
-            # Send status update every 5 seconds
-            if time.time() - last_update_time >= update_interval:
-                await websocket.send_bytes(
-                    serialise({'status': 'loading', 'message': f'Starting GR00T subprocess... ({elapsed}s elapsed)'})
-                )
-                last_update_time = time.time()
-
-            # Check if process crashed
-            if subprocess.process.poll() is not None:
-                raise RuntimeError(f'GR00T subprocess exited with code {subprocess.process.returncode}')
-
-            # Check if ready
-            if client.ping():
-                logger.info(f'GR00T subprocess ready after {elapsed}s')
-                return
-
-            await asyncio.sleep(1.0)
-
-        raise RuntimeError(f'GR00T subprocess did not become ready within {max_wait}s')
-    finally:
-        client.close()
 
 
 class InferenceServer:
@@ -310,7 +312,13 @@ class InferenceServer:
 
         logger.info(f'Loading checkpoint {resolved_id}')
         checkpoint_path = f'{self.checkpoints_dir}/{resolved_id}'
-        checkpoint_dir = pos3.download(checkpoint_path, exclude=['optimizer.pt'])
+
+        # Download checkpoint in thread with periodic status updates
+        download_task = asyncio.create_task(asyncio.to_thread(pos3.download, checkpoint_path, exclude=['optimizer.pt']))
+        await monitor_async_task(
+            download_task, description=f'Downloading checkpoint {resolved_id}', websocket=websocket
+        )
+        checkpoint_dir = download_task.result()
 
         # Send loading status for subprocess startup
         if websocket:
@@ -324,27 +332,8 @@ class InferenceServer:
             zmq_port=self.zmq_port,
         )
 
-        # Start subprocess without waiting (manually duplicate start logic to avoid sync _wait_for_ready)
-        groot_root = Path(__file__).parents[4] / 'gr00t'
-        python_bin = str(Path(subprocess_obj.groot_venv_path) / 'bin' / 'python')
-
-        command = [python_bin, 'gr00t/eval/run_gr00t_server.py']
-        command.extend(['--model_path', str(subprocess_obj.checkpoint_dir)])
-        command.extend(['--embodiment_tag', 'NEW_EMBODIMENT'])
-        command.extend(['--modality_config_path', subprocess_obj.modality_config_path])
-        command.extend(['--host', '127.0.0.1'])
-        command.extend(['--port', str(subprocess_obj.zmq_port)])
-
-        env = os.environ.copy()
-        logger.info(f'Starting gr00t subprocess: {" ".join(command)}')
-        subprocess_obj.process = Popen(command, env=env, cwd=str(groot_root))
-
-        # Wait for subprocess to be ready with periodic status updates
-        if websocket:
-            await _wait_for_subprocess_ready(subprocess_obj, websocket)
-        else:
-            # Fallback to sync wait when no websocket (e.g., startup)
-            subprocess_obj._wait_for_ready()
+        # Start subprocess with periodic status updates (if websocket provided)
+        await subprocess_obj.start_async(websocket=websocket)
 
         self.subprocess = subprocess_obj
         self.current_checkpoint_id = resolved_id

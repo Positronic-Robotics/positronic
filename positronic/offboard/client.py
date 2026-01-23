@@ -23,45 +23,29 @@ class InferenceSession:
         """
         try:
             while True:
-                # Set timeout for this recv() call
                 self._websocket.socket.settimeout(timeout_per_message)
                 response = deserialise(self._websocket.recv())
-
-                # Check for error response
-                if 'error' in response:
-                    raise RuntimeError(f'Server error: {response["error"]}')
-
-                # Handle status messages
                 status = response.get('status')
 
                 if status == 'ready':
-                    # Final message - return metadata
                     return response['meta']
 
-                elif status in ('waiting', 'loading'):
-                    # Progress update - log and continue waiting
+                if status in ('waiting', 'loading'):
                     message = response.get('message', status)
                     logger.info(f'Server status: [{status}] {message}')
                     continue
 
-                elif status == 'error':
-                    # Explicit error status
+                if status == 'error' or 'error' in response:
                     raise RuntimeError(f'Server error: {response.get("error", "Unknown error")}')
 
-                else:
-                    # Unexpected response format
-                    raise RuntimeError(f'Unexpected server response: {response}')
+                raise RuntimeError(f'Unexpected server response: {response}')
 
         except TimeoutError:
             raise TimeoutError(
                 f'Server did not send status update within {timeout_per_message}s. '
                 f'Server may have crashed or model loading is taking too long without progress updates.'
             ) from None
-        except Exception as e:
-            logger.error(f'Failed to handshake with server: {e}')
-            raise
         finally:
-            # Reset to blocking mode for inference loop
             self._websocket.socket.settimeout(None)
 
     @property
