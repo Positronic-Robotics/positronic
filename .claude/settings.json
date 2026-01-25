@@ -27,7 +27,6 @@
       "Skill(push-pr)",
       "Bash(../internal/scripts/start.sh:*)",
       "Bash(nebius:*)",
-      "Bash",
       "Bash(curl:*)"
     ]
   },
