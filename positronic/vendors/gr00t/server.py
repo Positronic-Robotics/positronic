@@ -176,8 +176,12 @@ class Gr00tSubprocess:
         client.close()
         raise RuntimeError(f'gr00t subprocess did not become ready within {timeout}s')
 
-    async def start_async(self, websocket: WebSocket | None = None):
-        """Start the gr00t subprocess asynchronously with optional status updates."""
+    async def start_async(self, on_progress=None):
+        """Start the gr00t subprocess asynchronously with optional progress reporting.
+
+        Args:
+            on_progress: Optional async callback for progress updates.
+        """
         groot_root = Path(__file__).parents[4] / 'gr00t'
         python_bin = str(Path(self.groot_venv_path) / 'bin' / 'python')
 
@@ -199,7 +203,7 @@ class Gr00tSubprocess:
                 check_ready=client.ping,
                 check_crashed=self._check_crashed,
                 description='GR00T subprocess',
-                websocket=websocket,
+                on_progress=on_progress,
                 max_wait=120.0,
             )
         finally:
@@ -291,6 +295,11 @@ class InferenceServer:
         Raises:
             ValueError: If checkpoint_id is invalid or not found
         """
+
+        async def send_progress(msg: str):
+            if websocket is not None:
+                await websocket.send_bytes(serialise({'status': 'loading', 'message': msg}))
+
         resolved_id = self._resolve_checkpoint_id(checkpoint_id)
 
         available = list_checkpoints(self.checkpoints_dir, prefix='checkpoint-')
@@ -304,25 +313,15 @@ class InferenceServer:
             logger.info(f'Stopping subprocess for checkpoint {self.current_checkpoint_id}')
             self.subprocess.stop()
 
-        # Send loading status for checkpoint download
-        if websocket:
-            await websocket.send_bytes(
-                serialise({'status': 'loading', 'message': f'Downloading checkpoint {resolved_id}...'})
-            )
-
         logger.info(f'Loading checkpoint {resolved_id}')
         checkpoint_path = f'{self.checkpoints_dir}/{resolved_id}'
 
-        # Download checkpoint in thread with periodic status updates
+        # Download checkpoint in thread with periodic progress updates
         download_task = asyncio.create_task(asyncio.to_thread(pos3.download, checkpoint_path, exclude=['optimizer.pt']))
         await monitor_async_task(
-            download_task, description=f'Downloading checkpoint {resolved_id}', websocket=websocket
+            download_task, description=f'Downloading checkpoint {resolved_id}', on_progress=send_progress
         )
         checkpoint_dir = download_task.result()
-
-        # Send loading status for subprocess startup
-        if websocket:
-            await websocket.send_bytes(serialise({'status': 'loading', 'message': 'Starting GR00T subprocess...'}))
 
         logger.info(f'Starting subprocess for checkpoint {resolved_id}')
         subprocess_obj = Gr00tSubprocess(
@@ -332,8 +331,8 @@ class InferenceServer:
             zmq_port=self.zmq_port,
         )
 
-        # Start subprocess with periodic status updates (if websocket provided)
-        await subprocess_obj.start_async(websocket=websocket)
+        # Start subprocess with periodic progress updates (if websocket provided)
+        await subprocess_obj.start_async(on_progress=send_progress)
 
         self.subprocess = subprocess_obj
         self.current_checkpoint_id = resolved_id

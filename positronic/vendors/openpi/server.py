@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import os
+import socket
 import subprocess
 import time
 import traceback
@@ -64,11 +65,11 @@ class OpenpiSubprocess:
         self._wait_for_ready()
 
     def _check_ready(self) -> bool:
-        """Check if OpenPI subprocess is ready by attempting connection."""
+        """Check if OpenPI subprocess is ready by checking if port is accepting connections."""
         try:
-            WebsocketClientPolicy(host='127.0.0.1', port=self.ws_port)
-            return True
-        except Exception:
+            with socket.create_connection(('127.0.0.1', self.ws_port), timeout=1.0):
+                return True
+        except (ConnectionRefusedError, OSError, TimeoutError):
             return False
 
     def _check_crashed(self) -> tuple[bool, int | None]:
@@ -98,8 +99,12 @@ class OpenpiSubprocess:
 
         raise RuntimeError(f'OpenPI subprocess did not become ready within {timeout}s')
 
-    async def start_async(self, websocket: WebSocket | None = None):
-        """Start the OpenPI subprocess asynchronously with optional status updates."""
+    async def start_async(self, on_progress=None):
+        """Start the OpenPI subprocess asynchronously with optional progress reporting.
+
+        Args:
+            on_progress: Optional async callback for progress updates.
+        """
         command = [self.uv_path, 'run', '--frozen', '--project', str(self.openpi_root), '--']
         command.extend(['python', 'scripts/serve_policy.py'])
         command.extend(['--port', str(self.ws_port)])
@@ -115,7 +120,7 @@ class OpenpiSubprocess:
             check_ready=self._check_ready,
             check_crashed=self._check_crashed,
             description='OpenPI subprocess',
-            websocket=websocket,
+            on_progress=on_progress,
             max_wait=300.0,
         )
 
@@ -215,26 +220,27 @@ class InferenceServer:
 
     async def _get_subprocess(self, checkpoint_id: str, websocket: WebSocket) -> OpenpiSubprocess:
         """Get or create subprocess for checkpoint, sending status updates."""
+
+        async def send_progress(msg: str):
+            await websocket.send_bytes(serialise({'status': 'loading', 'message': msg}))
+
         async with self._subprocess_lock:
             if checkpoint_id not in self._subprocesses:
-                # Download checkpoint in thread with periodic status updates
+                # Download checkpoint in thread with periodic progress updates
                 checkpoint_path = f'{self.checkpoints_dir}/{checkpoint_id}'
                 download_task = asyncio.create_task(asyncio.to_thread(pos3.download, checkpoint_path))
                 await monitor_async_task(
-                    download_task, description=f'Downloading checkpoint {checkpoint_id}', websocket=websocket
+                    download_task, description=f'Downloading checkpoint {checkpoint_id}', on_progress=send_progress
                 )
                 checkpoint_dir = download_task.result()
-
-                # Send loading status for subprocess startup
-                await websocket.send_bytes(serialise({'status': 'loading', 'message': 'Starting OpenPI subprocess...'}))
 
                 logger.info(f'Starting OpenPI subprocess for checkpoint {checkpoint_id}')
                 subprocess_obj = OpenpiSubprocess(
                     checkpoint_dir=checkpoint_dir, config_name=self.config_name, ws_port=self.openpi_ws_port
                 )
 
-                # Start subprocess with periodic status updates
-                await subprocess_obj.start_async(websocket=websocket)
+                # Start subprocess with periodic progress updates
+                await subprocess_obj.start_async(on_progress=send_progress)
 
                 self._subprocesses[checkpoint_id] = subprocess_obj
 
