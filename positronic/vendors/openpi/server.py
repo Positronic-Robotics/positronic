@@ -188,7 +188,10 @@ class InferenceServer:
     async def get_models(self):
         """Return list of available checkpoints."""
         try:
-            return {'models': list_checkpoints(self.checkpoints_dir)}
+            checkpoints = list_checkpoints(self.checkpoints_dir)
+            normalized = [int(cp) for cp in checkpoints if cp.isdigit()]
+            normalized.sort()
+            return {'models': [str(n) for n in normalized]}
         except Exception:
             logger.exception('Failed to list checkpoints.')
             return {'models': []}
@@ -197,13 +200,18 @@ class InferenceServer:
         """Resolve checkpoint ID from parameter, config, or latest."""
         if checkpoint_id:
             available = list_checkpoints(self.checkpoints_dir)
-            if checkpoint_id not in available:
-                error_msg = f'Checkpoint not found: {checkpoint_id}. Available: {available}'
-                logger.error(error_msg)
-                await websocket.send_bytes(serialise({'status': 'error', 'error': error_msg}))
-                await websocket.close(code=1008, reason='Checkpoint not found')
-                return None
-            return checkpoint_id
+
+            if checkpoint_id.isdigit():
+                target_int = int(checkpoint_id)
+                for cp in available:
+                    if cp.isdigit() and int(cp) == target_int:
+                        return cp
+
+            error_msg = f'Checkpoint not found or invalid ID: {checkpoint_id}.'
+            logger.error(error_msg)
+            await websocket.send_bytes(serialise({'status': 'error', 'error': error_msg}))
+            await websocket.close(code=1008, reason='Checkpoint not found')
+            return None
 
         # Use configured checkpoint or latest
         if self.checkpoint:

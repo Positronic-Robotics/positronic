@@ -100,5 +100,4 @@ class InferenceClient:
         """List available models from the server."""
         response = httpx.get(f'{self.api_url}/models')
         response.raise_for_status()
-        data = response.json()
-        return data['models']
+        return response.json()['models']

@@ -30,7 +30,7 @@ def _build_inference_command(
         f'--policy.host={host}',
         f'--policy.port={port}',
         f'--policy.model_id={model_id}',
-        f'--output_dir={output_dir}/{model_id}',
+        f'--output_dir={output_dir}',
         *extra_args,
     ]
     return cmd

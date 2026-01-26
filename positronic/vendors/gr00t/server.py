@@ -273,7 +273,8 @@ class InferenceServer:
 
     def _resolve_checkpoint_id(self, checkpoint_id: str | None) -> str:
         if checkpoint_id:
-            return checkpoint_id
+            # API ID is a number, map to directory name
+            return f'checkpoint-{checkpoint_id}'
 
         if self.checkpoint:
             return 'checkpoint-' + str(self.checkpoint).strip('/')
@@ -286,7 +287,7 @@ class InferenceServer:
         """Ensure subprocess is running with the specified checkpoint.
 
         Args:
-            checkpoint_id: Checkpoint to load
+            checkpoint_id: Checkpoint to load (must be numeric ID)
             websocket: Optional WebSocket to send status updates to
 
         Returns:
@@ -300,30 +301,35 @@ class InferenceServer:
             if websocket is not None:
                 await websocket.send_bytes(serialise({'status': 'loading', 'message': msg}))
 
-        resolved_id = self._resolve_checkpoint_id(checkpoint_id)
+        resolved_path_id = self._resolve_checkpoint_id(checkpoint_id)
 
         available = list_checkpoints(self.checkpoints_dir, prefix='checkpoint-')
-        if resolved_id not in available:
-            raise ValueError(f'Checkpoint not found: {resolved_id}')
+        if resolved_path_id not in available:
+            raise ValueError(f'Checkpoint not found: {resolved_path_id}')
 
-        if self.current_checkpoint_id == resolved_id and self.subprocess is not None:
-            return self.subprocess, {'checkpoint_id': resolved_id, 'checkpoint_path': self.current_checkpoint_dir}
+        # Normalize ID for metadata if it's a checkpoint path
+        normalized_id = resolved_path_id.replace('checkpoint-', '')
+        if normalized_id.isdigit():
+            normalized_id = str(int(normalized_id))
+
+        if self.current_checkpoint_id == resolved_path_id and self.subprocess is not None:
+            return self.subprocess, {'checkpoint_id': normalized_id, 'checkpoint_path': self.current_checkpoint_dir}
 
         if self.subprocess is not None:
             logger.info(f'Stopping subprocess for checkpoint {self.current_checkpoint_id}')
             self.subprocess.stop()
 
-        logger.info(f'Loading checkpoint {resolved_id}')
-        checkpoint_path = f'{self.checkpoints_dir}/{resolved_id}'
+        logger.info(f'Loading checkpoint {resolved_path_id}')
+        checkpoint_path = f'{self.checkpoints_dir}/{resolved_path_id}'
 
         # Download checkpoint in thread with periodic progress updates
         download_task = asyncio.create_task(asyncio.to_thread(pos3.download, checkpoint_path, exclude=['optimizer.pt']))
         await monitor_async_task(
-            download_task, description=f'Downloading checkpoint {resolved_id}', on_progress=send_progress
+            download_task, description=f'Downloading checkpoint {resolved_path_id}', on_progress=send_progress
         )
         checkpoint_dir = download_task.result()
 
-        logger.info(f'Starting subprocess for checkpoint {resolved_id}')
+        logger.info(f'Starting subprocess for checkpoint {resolved_path_id}')
         subprocess_obj = Gr00tSubprocess(
             checkpoint_dir=str(checkpoint_dir),
             modality_config_path=self.modality_config_path,
@@ -335,13 +341,16 @@ class InferenceServer:
         await subprocess_obj.start_async(on_progress=send_progress)
 
         self.subprocess = subprocess_obj
-        self.current_checkpoint_id = resolved_id
+        self.current_checkpoint_id = resolved_path_id
         self.current_checkpoint_dir = str(checkpoint_dir)
-        return subprocess_obj, {'checkpoint_id': resolved_id, 'checkpoint_path': str(checkpoint_dir)}
+        return subprocess_obj, {'checkpoint_id': normalized_id, 'checkpoint_path': str(checkpoint_dir)}
 
     async def get_models(self):
         checkpoints = list_checkpoints(self.checkpoints_dir, prefix='checkpoint-')
-        return {'models': checkpoints}
+        normalized = sorted(
+            int(cp.replace('checkpoint-', '')) for cp in checkpoints if cp.replace('checkpoint-', '').isdigit()
+        )
+        return {'models': [str(n) for n in normalized]}
 
     async def websocket_endpoint(self, websocket: WebSocket, checkpoint_id: str | None = None):
         await websocket.accept()
