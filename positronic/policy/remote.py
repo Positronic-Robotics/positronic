@@ -15,17 +15,18 @@ class RemotePolicy(Policy):
     Positronic Inference Protocol.
     """
 
-    def __init__(self, host: str, port: int, resize: int | None = None):
+    def __init__(self, host: str, port: int, resize: int | None = None, model_id: str | None = None):
         self._client = InferenceClient(host, port)
         self.__session: InferenceSession | None = None
         self._resize = resize
+        self._model_id = model_id
 
     def reset(self):
         """
         Resets the policy by starting a new session with the server.
         """
         self.close()
-        self.__session = self._client.new_session()
+        self.__session = self._client.new_session(model_id=self._model_id)
 
     @property
     def _session(self) -> InferenceSession:

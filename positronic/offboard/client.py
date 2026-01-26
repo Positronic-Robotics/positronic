@@ -1,6 +1,7 @@
 import logging
 from typing import Any
 
+import httpx
 from websockets.sync.client import connect
 from websockets.sync.connection import Connection
 
@@ -77,7 +78,10 @@ class InferenceSession:
 
 class InferenceClient:
     def __init__(self, host: str, port: int):
+        self.host = host
+        self.port = port
         self.base_uri = f'ws://{host}:{port}/api/v1/session'
+        self.api_url = f'http://{host}:{port}/api/v1'
 
     def new_session(self, model_id: str | None = None, open_timeout: float = 10.0) -> InferenceSession:
         """
@@ -91,3 +95,10 @@ class InferenceClient:
         """
         uri = self.base_uri if model_id is None else f'{self.base_uri}/{model_id}'
         return InferenceSession(connect(uri, open_timeout=open_timeout))
+
+    def list_models(self) -> list[str]:
+        """List available models from the server."""
+        response = httpx.get(f'{self.api_url}/models')
+        response.raise_for_status()
+        data = response.json()
+        return data['models']
