@@ -23,7 +23,7 @@ def task_code(ep: Episode) -> str:
 def model(ep: Episode) -> str:
     match ep['inference.policy.type']:
         case 'act':
-            return 'Action Chunking Trasnformer'
+            return 'Action Chunking Transformer'
         case 'groot':
             return 'Nvidia Gr00t'
         case 'openpi':
