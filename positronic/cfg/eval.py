@@ -85,133 +85,146 @@ def ckpt(ep: Episode) -> str | None:
         return ''
 
 
-def units(ep: Episode) -> str:
-    return f'{ep["eval.successful_items"]}/{ep["eval.total_items"]}'
-
-
-def uph(ep: Episode) -> float | None:
-    items = ep['eval.successful_items']
-    if items == 0:
-        return None
-    return items / (ep.duration_ns / 1e9 / 3600)
-
-
 def started(ep: Episode) -> datetime:
     return datetime.fromtimestamp(ep.meta['created_ts_ns'] / 1e9)
 
 
-ds = base_cfg.transform.override(
+########################
+# Unified configs (real + sim)
+########################
+
+
+def is_sim_episode(ep: Episode) -> bool:
+    return 'stacking_success' in ep
+
+
+def unified_success_bool(ep: Episode) -> bool:
+    if 'eval.outcome' in ep:
+        return ep['eval.outcome'] == 'Success'
+    if 'stacking_success' in ep:
+        return success(ep)
+    return False
+
+
+def unified_units_display(ep: Episode) -> str:
+    if 'eval.successful_items' in ep:
+        return f'{ep["eval.successful_items"]}/{ep["eval.total_items"]}'
+    if 'stacking_success' in ep:
+        return str(1 if success(ep) else 0)
+    return '-'
+
+
+def unified_uph(ep: Episode) -> float | None:
+    duration_hours = ep.duration_ns / 1e9 / 3600
+    if 'eval.successful_items' in ep:
+        items = ep['eval.successful_items']
+        if items == 0:
+            return None
+        return items / duration_hours
+    if 'stacking_success' in ep:
+        if success(ep):
+            return 1 / duration_hours
+        return None
+    return None
+
+
+def unified_success_rate(ep: Episode) -> float:
+    if 'eval.successful_items' in ep:
+        return 100 * ep['eval.successful_items'] / ep['eval.total_items']
+    if 'stacking_success' in ep:
+        return 100.0 if success(ep) else 0.0
+    return 0.0
+
+
+episodes = base_cfg.transform.override(
     base=base_cfg.local,
     transforms=[
-        base_cfg.group.override(
-            transforms=[
-                Identity(),
-                Derive(
-                    task_code=task_code,
-                    model=model,
-                    units=units,
-                    uph=uph,
-                    checkpoint=ckpt,
-                    success=lambda ep: 100 * ep['eval.successful_items'] / ep['eval.total_items'],
-                    started=started,
-                ),
-            ]
+        Group(
+            Identity(),
+            Derive(
+                task_code=task_code,
+                model=model,
+                checkpoint=ckpt,
+                is_sim=is_sim_episode,
+                success_bool=unified_success_bool,
+                units_display=unified_units_display,
+                uph=unified_uph,
+                success_rate=unified_success_rate,
+                started=started,
+            ),
         )
     ],
 )
 
 
 @cfn.config()
-def eval_table():
+def episodes_table():
     return {
         '__index__': {'label': '#', 'format': '%d'},
+        '__duration__': {'label': 'Duration', 'format': '%.1f sec'},
         'task_code': {'label': 'Task', 'filter': True},
         'model': {'label': 'Model', 'filter': True},
-        'checkpoint': {'label': 'Checkpoint'},
-        'units': {'label': 'Units'},
-        'uph': {'label': 'UPH', 'format': '%.1f'},
-        'success': {'label': 'Success', 'format': '%.1f%%'},
-        'started': {'label': 'Started', 'format': '%Y-%m-%d %H:%M:%S'},
-        'eval.outcome': {
-            'label': 'Status',
-            'filter': True,
+        'checkpoint': {'label': 'Checkpoint', 'filter': True},
+        'success_bool': {
+            'label': 'Pass',
             'renderer': {
                 'type': 'badge',
                 'options': {
-                    # TODO: Currently the filter happens by original data, not the rendered value
-                    'Success': {'label': 'Pass', 'variant': 'success'},
-                    'Stalled': {'label': 'Fail', 'variant': 'warning'},
-                    'Fail': {'label': 'Fail', 'variant': 'warning'},
-                    'Ran out of time': {'label': 'Fail', 'variant': 'warning'},
-                    'System': {'label': 'Fail', 'variant': 'warning'},
-                    'Safety': {'label': 'Safety violation', 'variant': 'danger'},
+                    True: {'label': 'Pass', 'variant': 'success'},
+                    False: {'label': 'Fail', 'variant': 'danger'},
                 },
             },
         },
-        '__duration__': {'label': 'Duration', 'format': '%.1f sec'},
+        'units_display': {'label': 'Units'},
+        'uph': {'label': 'UPH', 'format': '%.1f', 'default': '-'},
+        'success_rate': {'label': 'Success', 'format': '%.1f%%'},
+        'started': {'label': 'Started', 'format': '%Y-%m-%d %H:%M:%S'},
     }
 
 
-LABELS = {'model': 'Model', 'task_code': 'Task', 'checkpoint': 'Checkpoint'}
-
-
 @cfn.config()
-def grouped_table(group_keys: tuple[str, ...] | str):
-    if isinstance(group_keys, str):
-        group_keys = (group_keys,)
-
+def checkpoint_table():
     def group_fn(episodes: list[Episode]):
-        duration, suc_items, total_items, assists = 0, 0, 0, 0
-        for ep in episodes:
-            duration += ep['eval.duration']
-            suc_items += ep['eval.successful_items']
-            total_items += ep['eval.total_items']
-            assists += ep['eval.outcome'] != 'Success'
+        count = len(episodes)
+        total_duration = sum(ep.duration_ns / 1e9 for ep in episodes)
 
-        result = {key: episodes[0][key] for key in group_keys}
-        result.update({
-            'UPH': suc_items / (duration / 3600),
-            'Success': 100 * suc_items / total_items,
-            'MTBF/A': (duration / assists) if assists > 0 else None,
-            'Assists': assists,
-            'count': len(episodes),
-        })
-        return result
+        if 'stacking_success' in episodes[0]:
+            successful_count = sum(1 for ep in episodes if success(ep))
+            total_units = successful_count
+            failed_count = count - successful_count
+            success_rate = 100 * successful_count / count if count > 0 else 0
+        else:
+            total_units = sum(ep.get('eval.successful_items', 0) for ep in episodes)
+            total_possible = sum(ep.get('eval.total_items', 0) for ep in episodes)
+            success_rate = 100 * total_units / total_possible if total_possible > 0 else 0
+            failed_count = sum(1 for ep in episodes if ep.get('eval.outcome') != 'Success')
 
-    format_table = {**{key: {'label': LABELS[key]} for key in group_keys}}
-    format_table.update({
-        'count': {'label': 'Count'},
-        'UPH': {'format': '%.1f'},
-        'Success': {'format': '%.2f%%'},
-        'MTBF/A': {'format': '%.1f sec', 'default': '-'},
-        'Assists': {'format': '%d'},
-    })
+        return {
+            'checkpoint': episodes[0]['checkpoint'],
+            'model': episodes[0]['model'],
+            'count': count,
+            'UPH': total_units / (total_duration / 3600) if total_duration > 0 else 0,
+            'success_rate': success_rate,
+            'MTBF': total_duration / failed_count if failed_count > 0 else None,
+            'failures': failed_count,
+        }
 
-    group_filter_keys = {key: LABELS[key] for key in group_keys}
-    return group_keys, group_fn, format_table, group_filter_keys
+    format_table = {
+        'model': {'label': 'Model'},
+        'checkpoint': {'label': 'Checkpoint'},
+        'count': {'label': 'Runs', 'format': '%d'},
+        'UPH': {'label': 'UPH', 'format': '%.1f'},
+        'success_rate': {'label': 'Success', 'format': '%.1f%%'},
+        'MTBF': {'label': 'MTBF', 'format': '%.1f sec', 'default': '-'},
+        'failures': {'label': 'Failures', 'format': '%d'},
+    }
 
-
-# Set of group configurations for evaluation server:
-# uv run positronic-server \
-#   --dataset=@positronic.cfg.eval.ds \
-#   --dataset.base.path /Users/vertix/.cache/positronic/s3/inference/real/191225/ \
-#   --port=5001 \
-#   --ep_table_cfg=@positronic.cfg.eval.eval_table \
-#   --group_tables='{ \
-#       "models": "@positronic.cfg.eval.model_table", \
-#       "model_task": "@positronic.cfg.eval.model_task_table", \
-#       "model_ckpt_task": "@positronic.cfg.eval.model_chkpt_task_table", \
-#       "model_ckpt": "@positronic.cfg.eval.model_chkpt_table" \
-#    }'
-
-model_table = grouped_table.override(group_keys='model')
-model_task_table = grouped_table.override(group_keys=('model', 'task_code'))
-model_chkpt_table = grouped_table.override(group_keys=('model', 'checkpoint'))
-model_chkpt_task_table = grouped_table.override(group_keys=('model', 'checkpoint', 'task_code'))
+    group_filter_keys = {'checkpoint': 'Checkpoint', 'model': 'Model'}
+    return ('model', 'checkpoint'), group_fn, format_table, group_filter_keys
 
 
 ########################
-# Simulator evaluation #
+# Extended simulator evaluation #
 ########################
 
 
@@ -225,36 +238,62 @@ def max_stacking_success(episode: Episode) -> float | None:
 
 
 def success(episode: Episode) -> bool:
+    """Check if stacking_success reached 1.0 and stayed there for at least 0.5 seconds."""
     if 'stacking_success' not in episode:
         return False
     success_signal = episode['stacking_success']
     if len(success_signal) == 0:
         return False
 
-    two_sec = 2 * 1e9
-    end = success_signal.time[success_signal.last_ts - two_sec :]
-    return len(end) > 0 and all(v == 1.0 for v, _ in end)
+    threshold_ns = int(0.5 * 1e9)  # 0.5 seconds in nanoseconds
+
+    # Find all stretches where value == 1.0
+    in_success = False
+    success_start_ts = None
+
+    for value, timestamp in success_signal:
+        if value == 1.0:
+            if not in_success:
+                in_success = True
+                success_start_ts = timestamp
+            else:
+                # Check if we've been at 1.0 for at least threshold_ns
+                if timestamp - success_start_ts >= threshold_ns:
+                    return True
+        else:
+            in_success = False
+            success_start_ts = None
+
+    return False
 
 
 def success_time(episode: Episode) -> float | None:
+    """Return the time (seconds from episode start) when success was achieved (held 1.0 for 0.5s)."""
     if 'stacking_success' not in episode:
         return None
     success_signal = episode['stacking_success']
-    if len(success_signal) == 0 or success_signal[-1][0] != 1.0:
+    if len(success_signal) == 0:
         return None
 
-    # Compute moment when success_signal becomes and stays 1.0 at the end
-    values = np.zeros(len(success_signal), dtype=np.float32)
-    times = np.zeros(len(success_signal), dtype=np.int64)
-    for i, (v, t) in enumerate(success_signal):
-        values[i], times[i] = v, t
+    threshold_ns = int(0.5 * 1e9)  # 0.5 seconds in nanoseconds
+    in_success = False
+    success_start_ts = None
 
-    # Find the last moment when value is not 1.0
-    idx_not_1 = np.where(values != 1.0)[0]
-    if len(idx_not_1) == 0:
-        return 0
-    last_not_1 = idx_not_1[-1]
-    return (times[last_not_1 + 1].item() - episode.start_ts) / 1e9
+    for value, timestamp in success_signal:
+        if value == 1.0:
+            if not in_success:
+                in_success = True
+                success_start_ts = timestamp
+            else:
+                # Check if we've been at 1.0 for at least threshold_ns
+                if timestamp - success_start_ts >= threshold_ns:
+                    # Return the time when threshold was reached
+                    return (timestamp - episode.start_ts) / 1e9
+        else:
+            in_success = False
+            success_start_ts = None
+
+    return None
 
 
 def box_distance_progress(episode: Episode) -> float | None:
@@ -283,6 +322,19 @@ def ee_pose_movement(episode: Episode) -> float | None:
     return result
 
 
+def units_sim(episode: Episode) -> int:
+    """Number of successful stacks (1 if success, 0 otherwise)."""
+    return 1 if success(episode) else 0
+
+
+def uph_sim(episode: Episode) -> float | None:
+    """Units per hour for simulation (UPH = units / (duration / 3600))."""
+    u = units_sim(episode)
+    if u == 0:
+        return None
+    return u / (episode.duration_ns / 1e9 / 3600)
+
+
 sim_episodes = base_cfg.transform.override(
     base=base_cfg.local,
     transforms=[
@@ -295,6 +347,8 @@ sim_episodes = base_cfg.transform.override(
                 success_time=success_time,
                 box_distance_progress=box_distance_progress,
                 movement=ee_pose_movement,
+                units=units_sim,
+                uph=uph_sim,
             ),
         )
     ],
@@ -306,8 +360,7 @@ def sim_episodes_table():
     return {
         '__index__': {'label': '#', 'format': '%d'},
         '__duration__': {'label': 'Duration', 'format': '%.2f sec'},
-        'checkpoint': {'label': 'CKPT'},
-        'max_stacking_success': {'label': 'Max Success', 'format': '%.2f'},
+        'checkpoint': {'label': 'CKPT', 'filter': True},
         'success': {
             'label': 'Pass',
             'renderer': {
@@ -318,36 +371,115 @@ def sim_episodes_table():
                 },
             },
         },
-        'success_time': {'label': 'Time', 'format': '%.1f sec'},
-        'box_distance_progress': {'label': 'Box progress', 'format': '%.1f%%'},
+        'success_time': {'label': 'Success Time', 'format': '%.1f sec', 'default': '-'},
+        'units': {'label': 'Units', 'format': '%d'},
+        'uph': {'label': 'UPH', 'format': '%.1f', 'default': '-'},
+        'max_stacking_success': {'label': 'Max Success', 'format': '%.2f'},
+        'box_distance_progress': {'label': 'Box Progress', 'format': '%.1f%%', 'default': '-'},
         'movement': {'label': 'Movement', 'format': '%.2f'},
     }
 
 
 @cfn.config()
-def sim_episodes_perf():
+def sim_checkpoint_table():
+    """Grouped table by checkpoint with UPH and MTBF metrics."""
+
     def group_fn(episodes: list[Episode]):
         count = len(episodes)
+        total_duration = sum(ep.duration_ns / 1e9 for ep in episodes)
+        successful = [ep for ep in episodes if ep['success']]
+        failed = [ep for ep in episodes if not ep['success']]
+
+        successful_count = len(successful)
+        failed_count = len(failed)
+
+        # UPH: total units / (total duration in hours)
+        total_units = sum(ep['units'] for ep in episodes)
+        uph_value = total_units / (total_duration / 3600) if total_duration > 0 else 0
+
+        # MTBF: total duration / number of failures
+        mtbf_value = total_duration / failed_count if failed_count > 0 else None
+
+        # Success rate
+        success_rate = 100 * successful_count / count if count > 0 else 0
+
+        # Average time to success (for successful episodes only)
+        success_times = [ep['success_time'] for ep in successful if ep['success_time'] is not None]
+        avg_success_time = np.mean(success_times) if success_times else None
+
+        # Average max stacking success
+        max_successes = [ep['max_stacking_success'] for ep in episodes if ep['max_stacking_success'] is not None]
+        avg_max_success = np.mean(max_successes) if max_successes else None
 
         result = {
             'checkpoint': episodes[0]['checkpoint'],
-            'max_stacking_success': np.mean(
-                [v for ep in episodes if (v := ep['max_stacking_success']) is not None] or [0]
-            ),
-            'box_distance_progress': np.mean(
-                [v for ep in episodes if (v := ep['box_distance_progress']) is not None] or [0]
-            ),
-            'movement': np.mean([ep['movement'] for ep in episodes]),
             'count': count,
+            'UPH': uph_value,
+            'success_rate': success_rate,
+            'MTBF': mtbf_value,
+            'avg_success_time': avg_success_time,
+            'avg_max_success': avg_max_success,
+            'failures': failed_count,
         }
         return result
 
     format_table = {
-        'checkpoint': {'label': 'CKPT'},
-        'count': {'label': 'Count'},
-        'max_stacking_success': {'label': 'Max Success', 'format': '%.2f'},
-        'box_distance_progress': {'label': 'Box progress', 'format': '%.1f%%'},
-        'movement': {'label': 'Movement', 'format': '%.2f'},
+        'checkpoint': {'label': 'Checkpoint'},
+        'count': {'label': 'Runs', 'format': '%d'},
+        'UPH': {'label': 'UPH', 'format': '%.1f'},
+        'success_rate': {'label': 'Success', 'format': '%.1f%%'},
+        'MTBF': {'label': 'MTBF', 'format': '%.1f sec', 'default': '-'},
+        'avg_success_time': {'label': 'Avg Time', 'format': '%.1f sec', 'default': '-'},
+        'avg_max_success': {'label': 'Avg Max', 'format': '%.2f', 'default': '-'},
+        'failures': {'label': 'Failures', 'format': '%d'},
     }
 
-    return 'checkpoint', group_fn, format_table, {}
+    group_filter_keys = {'checkpoint': 'Checkpoint'}
+    return 'checkpoint', group_fn, format_table, group_filter_keys
+
+
+# ========================================================================================
+# USAGE EXAMPLES
+# ========================================================================================
+
+# Unified config (works for both real and sim):
+#
+# For simulation validation:
+#   uv run positronic-server \
+#     --dataset=@positronic.cfg.eval.episodes \
+#     --dataset.base.path=/tmp/sim_validation \
+#     --port=5001 \
+#     --ep_table_cfg=@positronic.cfg.eval.episodes_table \
+#     --group_tables='{"checkpoints": "@positronic.cfg.eval.checkpoint_table"}'
+#
+# For real robot evaluation:
+#   uv run positronic-server \
+#     --dataset=@positronic.cfg.eval.episodes \
+#     --dataset.base.path=s3://inference/real/191225/ \
+#     --port=5001 \
+#     --ep_table_cfg=@positronic.cfg.eval.episodes_table \
+#     --group_tables='{"checkpoints": "@positronic.cfg.eval.checkpoint_table"}'
+#
+# Navigate to:
+#   - Episodes: http://localhost:5001/
+#   - Checkpoint comparison: http://localhost:5001/groups/checkpoints
+#
+# Displays: UPH, Success Rate, MTBF, Pass/Fail badges
+# Auto-detects real vs sim episodes and computes metrics accordingly
+
+# ========================================================================================
+
+# Extended sim config (detailed sim analysis with additional metrics):
+#
+#   uv run positronic-server \
+#     --dataset=@positronic.cfg.eval.sim_episodes \
+#     --dataset.base.path=/tmp/sim_validation \
+#     --port=5001 \
+#     --ep_table_cfg=@positronic.cfg.eval.sim_episodes_table \
+#     --group_tables='{"checkpoints": "@positronic.cfg.eval.sim_checkpoint_table"}'
+#
+# Navigate to:
+#   - Episodes: http://localhost:5001/
+#   - Checkpoint comparison: http://localhost:5001/groups/checkpoints
+#
+# Additional sim metrics: Success Time, Max Stacking Success, Box Distance Progress, Movement
