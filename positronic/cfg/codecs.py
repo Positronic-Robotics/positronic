@@ -16,12 +16,16 @@ def codec(observation, action):
 
 @cfn.config()
 def general(
-    state_name: str, state_features: dict[str, int], image_mappings: dict[str, str], image_size: tuple[int, int]
+    state_name: str,
+    state_features: dict[str, int],
+    image_mappings: dict[str, str],
+    image_size: tuple[int, int],
+    task_field: str | None = 'task',
 ):
     """General observation encoder for non-GR00T policies (OpenPI, ACT, etc.)."""
     state_dict = {state_name: list(state_features.keys())}
     images = {k: (v, image_size) for k, v in image_mappings.items()}
-    result = ObservationEncoder(state=state_dict, images=images)
+    result = ObservationEncoder(state=state_dict, images=images, task_field=task_field)
 
     state_dim = sum(state_features.values())
     lerobot_features = {state_name: {'shape': (state_dim,), 'names': list(state_features.keys()), 'dtype': 'float32'}}

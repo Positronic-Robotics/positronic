@@ -13,24 +13,22 @@ Positronic datasets must be converted into LeRobot format using a GR00T codec (o
 **Command:**
 ```bash
 docker compose run --rm -v ~/datasets:/data positronic-to-lerobot convert \
-  --dataset.dataset=.internal.droid \
+  --dataset.dataset=@positronic.cfg.ds.phail.phail \
   --dataset.codec=@positronic.vendors.gr00t.codecs.ee_absolute \
   --output_dir=/data/my_lerobot_data \
   --fps=15
 ```
+
+**Available public datasets:**
+- `@positronic.cfg.ds.phail.phail` - DROID teleoperation data (12GB, 352 episodes)
+- `@positronic.cfg.ds.phail.sim_stack_cubes` - Simulated cube stacking (499MB, 317 episodes)
+- `@positronic.cfg.ds.phail.sim_pick_place` - Simulated pick-and-place (1.3GB, 214 episodes)
 
 **Available GR00T codecs:**
 - `@positronic.vendors.gr00t.codecs.ee_absolute` - EE pose (quaternion) → modality='ee'
 - `@positronic.vendors.gr00t.codecs.ee_rot6d` - EE pose (rot6d) → modality='ee_rot6d'
 - `@positronic.vendors.gr00t.codecs.ee_joints` - EE pose + joints → modality='ee_q'
 - `@positronic.vendors.gr00t.codecs.ee_rot6d_joints` - EE pose (rot6d) + joints → modality='ee_rot6d_q'
-
-**Raw datasets available:**
-- `.internal.droid` - DROID hardware collection
-- `.internal.sim_stack` - Sim cube stacking
-- `.internal.sim_pnp` - Sim pick and place
-- `.internal.full` - Combined DROID + sim datasets
-- `.internal.full_recovery` - Full with recovery data
 
 **Codec must match training modality_config:**
 | Codec | Modality Config |

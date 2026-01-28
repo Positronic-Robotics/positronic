@@ -52,7 +52,6 @@ dependencies = [
 positronic-server="positronic.server.positronic_server:_internal_main"
 positronic-inference="positronic.inference:_internal_main"
 positronic-to-lerobot="positronic.training.to_lerobot:_internal_main"
-positronic-train="positronic.training.lerobot_train:_internal_main"
 positronic-data-collection="positronic.data_collection:_internal_main"
 
 

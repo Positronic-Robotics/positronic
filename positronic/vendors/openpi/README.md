@@ -28,11 +28,16 @@ Positronic datasets must be converted into the LeRobot format using an OpenPI co
 **Command:**
 ```bash
 docker compose run --rm -v ~/datasets:/data positronic-to-lerobot convert \
-  --dataset.dataset=.internal.droid \
+  --dataset.dataset=@positronic.cfg.ds.phail.phail \
   --dataset.codec=@positronic.vendors.openpi.codecs.droid \
   --output_dir=/data/my_lerobot_data \
   --fps=15
 ```
+
+**Available public datasets:**
+- `@positronic.cfg.ds.phail.phail` - DROID teleoperation data (12GB, 352 episodes)
+- `@positronic.cfg.ds.phail.sim_stack_cubes` - Simulated cube stacking (499MB, 317 episodes)
+- `@positronic.cfg.ds.phail.sim_pick_place` - Simulated pick-and-place (1.3GB, 214 episodes)
 
 **Examples for different codecs:**
 ```bash
@@ -47,7 +52,7 @@ docker compose run --rm -v ~/datasets:/data positronic-to-lerobot convert \
 ```
 
 **Parameters:**
-- `--dataset.dataset`: The raw dataset configuration (e.g., `.internal.droid`, `.internal.sim_stack`)
+- `--dataset.dataset`: The raw dataset configuration (see available datasets above)
 - `--dataset.codec`: OpenPI codec that defines observation/action encoding (see table above)
 - `--output_dir`: Destination for the converted LeRobot dataset (can be local or `s3://bucket/path`)
 - `--fps`: Target frames per second for the converted dataset

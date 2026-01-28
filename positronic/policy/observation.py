@@ -14,19 +14,26 @@ ROT_REP = geom.Rotation.Representation
 
 
 class ObservationEncoder(Derive):
-    def __init__(self, state: dict[str, list[str]], images: dict[str, tuple[str, tuple[int, int]]]):
+    def __init__(
+        self,
+        state: dict[str, list[str]],
+        images: dict[str, tuple[str, tuple[int, int]]],
+        task_field: str | None = 'task',
+    ):
         """
         Build an observation encoder.
 
         Args:
             state: mapping from output state key to an ordered list of episode keys to concatenate.
             images: mapping from output image name to tuple (input_key, (width, height)).
+            task_field: name of the field to store task string ('task', 'prompt', etc.), or None to disable.
         """
         transforms = {k: partial(self.encode_state, k) for k in state.keys()}
         transforms.update({k: partial(self.encode_image, k) for k in images.keys()})
         super().__init__(**transforms)
         self._state = state
         self._image_configs = images
+        self._task_field = task_field
         self._metadata = {}
 
     @property
@@ -50,10 +57,9 @@ class ObservationEncoder(Derive):
 
         obs: dict[str, Any] = {}
 
-        # TODO: parametrize encoder to define where to put task
-        if 'task' in inputs:
-            obs['task'] = inputs['task']
-            obs['prompt'] = inputs['task']  # OpenPI expects prompt field
+        # Store task string in the configured field (e.g., 'task' for LeRobot, 'prompt' for OpenPI)
+        if self._task_field and 'task' in inputs:
+            obs[self._task_field] = inputs['task']
 
         # Encode images
         for out_name, (input_key, (width, height)) in self._image_configs.items():

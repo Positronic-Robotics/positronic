@@ -48,6 +48,24 @@ def test_observation_encode_missing_state_inputs_raise():
         enc.encode({})
 
 
+def test_observation_encode_task_field_parameter():
+    """Test that task_field parameter controls which field task string is stored in."""
+    # Default: task_field='task'
+    enc_task = ObservationEncoder(state={'observation.state': ['a']}, images={})
+    obs_task = enc_task.encode({'a': 1.0, 'task': 'test_task'})
+    assert obs_task['task'] == 'test_task' and 'prompt' not in obs_task
+
+    # OpenPI: task_field='prompt'
+    enc_prompt = ObservationEncoder(state={'observation.state': ['a']}, images={}, task_field='prompt')
+    obs_prompt = enc_prompt.encode({'a': 1.0, 'task': 'test_task'})
+    assert obs_prompt['prompt'] == 'test_task' and 'task' not in obs_prompt
+
+    # Disabled: task_field=None
+    enc_none = ObservationEncoder(state={'observation.state': ['a']}, images={}, task_field=None)
+    obs_none = enc_none.encode({'a': 1.0, 'task': 'test_task'})
+    assert 'task' not in obs_none and 'prompt' not in obs_none
+
+
 def test_absolute_position_action_encode_decode_quat():
     # Identity rotation, known translation/grip
     ts = [1000, 2000]

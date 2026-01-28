@@ -10,11 +10,13 @@ from positronic.policy.observation import ObservationEncoder
 openpi_positronic_obs = codecs.eepose_grip.override(
     state_name='observation/state',
     image_mappings={'observation/wrist_image': 'image.wrist', 'observation/image': 'image.exterior'},
+    task_field='prompt',  # OpenPI expects 'prompt' field
 )
 
 openpi_eeq_obs = codecs.eepose_grip_joints.override(
     state_name='observation/state',
     image_mappings={'observation/wrist_image': 'image.wrist', 'observation/image': 'image.exterior'},
+    task_field='prompt',  # OpenPI expects 'prompt' field
 )
 
 
@@ -27,6 +29,7 @@ def openpi_droid_obs(exterior_camera: str, wrist_camera: str, image_size: tuple[
             'observation/wrist_image_left': (wrist_camera, image_size),
             'observation/exterior_image_1_left': (exterior_camera, image_size),
         },
+        task_field='prompt',  # OpenPI expects 'prompt' field
     )
 
 
