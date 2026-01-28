@@ -83,7 +83,7 @@ services:
   lerobot-train:
     <<: *positronic-common
     container_name: lerobot-train
-    entrypoint: ["uv", "run", "--python", "3.11", "positronic-train"]
+    entrypoint: ["uv", "run", "--python", "3.11", "python", "-m", "positronic.vendors.lerobot.train"]
 
   lerobot-server:
     <<: *positronic-common
