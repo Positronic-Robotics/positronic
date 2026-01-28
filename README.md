@@ -82,8 +82,9 @@ After installation, the following command-line scripts will be available:
 - `positronic-data-collection` — collect demonstrations in simulation or on hardware
 - `positronic-server` — browse and inspect datasets
 - `positronic-to-lerobot` — convert datasets to LeRobot format
-- `positronic-train` — train policies using LeRobot
 - `positronic-inference` — run trained policies in simulation or on hardware
+
+For training, use vendor-specific Docker services (see [LeRobot](positronic/vendors/lerobot/README.md), [GR00T](positronic/vendors/gr00t/README.md), [OpenPI](positronic/vendors/openpi/README.md)).
 
 All commands work both inside an activated virtual environment and with `uv run` prefix (e.g., `uv run positronic-server`).
 
@@ -103,7 +104,7 @@ cd positronic
 - [`pimm`](pimm/README.md) — immediate-mode runtime for building control systems. Handy references: [README](pimm/README.md), [Data collection script](positronic/data_collection.py), [Inference script](positronic/inference.py).
 - [Positronic dataset library](positronic/dataset/README.md) — dataset writer/reader, transforms, and streaming agent.
 - [Positronic server](positronic/server/positronic_server.py) — FastAPI + Rerun viewer for inspecting recordings. Run via `positronic-server`.
-- [Training scripts](positronic/training) — scripts for converting datasets (`positronic-to-lerobot`) and running LeRobot pipelines (`positronic-train`) while native Positronic training is being finalised.
+- [Training scripts](positronic/training) — scripts for converting datasets (`positronic-to-lerobot`). For training, see vendor-specific workflows: [LeRobot](positronic/vendors/lerobot/README.md), [GR00T](positronic/vendors/gr00t/README.md), [OpenPI](positronic/vendors/openpi/README.md).
 - [Drivers package](positronic/drivers) — hardware definitions, WebXR frontends, simulator loaders, and [Config presets](positronic/cfg) ready to override per project.
 - [S3 helpers](positronic/utils/s3/README.md) — `@s3` Mirror/Download/Upload utilities for S3 **inputs and outputs** (e.g., pull datasets from S3, push checkpoints/logs back), with local caching used by the CLIs.
 
@@ -278,20 +279,23 @@ Keep the original Positronic datasets — once native training lands you will no
 
 ### 5. Train a policy
 
-Run the [LeRobot training driver](positronic/training/lerobot_train.py) with Positronic configs.
+Training is handled through vendor-specific Docker services. Each vendor (LeRobot, GR00T, OpenPI) has its own optimized training workflow.
 
-Train an ACT policy using LeRobot’s pipeline configured for Positronic observations and actions:
+**LeRobot ACT training** (from the `docker/` directory):
 
 ```bash
-positronic-train \
+docker compose run --rm lerobot-train \
     --dataset_root=~/datasets/lerobot/stack_cubes \
     --run_name=stack_cubes_act \
-    --output_dir=~/datasets/lerobot/stack_cubes/runs
+    --output_dir=~/checkpoints/lerobot/
 ```
 
 S3 inputs/outputs: `--dataset_root` and `--output_dir` accept S3 URLs; data is cached locally and checkpoints/logs sync back via `@s3`.
 
-Checkpoints and logs are written under `outputs/train/<timestamp>_<job_name>/`. Adjust the [training script](positronic/training/lerobot_train.py) to change architectures, backbones, or devices. When Positronic-first training is ready you will point the trainer at the raw dataset instead.
+For detailed training instructions, see the vendor-specific guides:
+- [LeRobot ACT](positronic/vendors/lerobot/README.md) — single-task Action Chunking Transformer
+- [GR00T](positronic/vendors/gr00t/README.md) — NVIDIA's generalist robot policy
+- [OpenPI](positronic/vendors/openpi/README.md) — π₀.₅ foundation model
 
 ### 6. Validate policies
 
@@ -387,7 +391,7 @@ Our plans evolve with your feedback. Highlights for the next milestones:
   - **Automated evaluation harness.** Extend [Inference script](positronic/inference.py) and the MuJoCo loaders in [MuJoCo transform helpers](positronic/simulator/mujoco/transforms.py) to score new checkpoints automatically on curated scenarios.
   - **Richer Positronic Server.** Teach [Positronic Server](positronic/server/positronic_server.py) to surface static/meta fields, and offer annotation + filtering flows for rapid triage.
   - **PyTorch bridging layer.** Provide a native adapter on top of [Positronic dataset library](positronic/dataset/README.md) so training scripts can stream tensors without an intermediate export.
-  - **Direct LeRobot integration.** Let [LeRobot training driver](positronic/training/lerobot_train.py) read Positronic datasets directly, retiring the temporary [LeRobot conversion helper](positronic/training/to_lerobot.py) conversion.
+  - **Direct LeRobot integration.** Let training scripts read Positronic datasets directly, retiring the temporary [LeRobot conversion helper](positronic/training/to_lerobot.py) conversion.
 - **Medium term**
   - **SO101 leader support.** Promote SO101 from follower mode to a first-class leader arm in [Hardware configs](positronic/cfg/hardware).
   - **New operator inputs.** Ship keyboard and gamepad controllers inside [Drivers package](positronic/drivers) for quick teleop on commodity hardware.
