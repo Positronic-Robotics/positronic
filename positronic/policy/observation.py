@@ -87,7 +87,11 @@ class SimpleObservationEncoder(ObservationEncoder):
             obs[out_name] = image.resize_with_pad_per_frame(width, height, PilImage.Resampling.BILINEAR, frame)
 
         for out_name, feature_names in self._state.items():
-            parts = [np.asarray(inputs[f], dtype=np.float32).reshape(-1) for f in feature_names if f in inputs]
+            parts = []
+            for f in feature_names:
+                if f not in inputs:
+                    raise KeyError(f"Missing state input '{f}' for '{out_name}', available keys: {list(inputs.keys())}")
+                parts.append(np.asarray(inputs[f], dtype=np.float32).reshape(-1))
             obs[out_name] = np.concatenate(parts) if parts else np.empty((0,), dtype=np.float32)
 
         return obs
