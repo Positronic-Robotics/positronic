@@ -49,7 +49,7 @@ GROOT_META = {
 
 OPENPI_META = {
     'inference.policy.type': 'openpi',
-    'inference.observation.name': 'openpi_positronic',
+    'inference.observation.name': 'eepose',
     'inference.action.name': 'absolute_position',
 }
 

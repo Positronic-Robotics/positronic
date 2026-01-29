@@ -48,19 +48,32 @@ class OpenpiSubprocess:
         self.process: subprocess.Popen | None = None
         self._client: WebsocketClientPolicy | None = None
 
+    def _build_command(self) -> list[str]:
+        """Build the command to start serve_policy.py."""
+        return [
+            self.uv_path,
+            'run',
+            '--frozen',
+            '--project',
+            str(self.openpi_root),
+            '--',
+            'python',
+            'scripts/serve_policy.py',
+            '--port',
+            str(self.ws_port),
+            'policy:checkpoint',
+            '--policy.config',
+            self.config_name,
+            '--policy.dir',
+            str(self.checkpoint_dir),
+        ]
+
     def start(self):
         """Start the OpenPI serve_policy.py subprocess."""
-        command = [self.uv_path, 'run', '--frozen', '--project', str(self.openpi_root), '--']
-        command.extend(['python', 'scripts/serve_policy.py'])
-        command.extend(['--port', str(self.ws_port)])
-        command.extend(['policy:checkpoint'])
-        command.extend(['--policy.config', self.config_name])
-        command.extend(['--policy.dir', str(self.checkpoint_dir)])
-
-        env = os.environ.copy()
+        command = self._build_command()
         logger.info(f'Starting OpenPI subprocess: {" ".join(command)}')
         # Don't pipe stdout/stderr so we can see the output
-        self.process = subprocess.Popen(command, env=env, cwd=str(self.openpi_root))
+        self.process = subprocess.Popen(command, env=os.environ.copy(), cwd=str(self.openpi_root))
 
         self._wait_for_ready()
 
@@ -105,16 +118,9 @@ class OpenpiSubprocess:
         Args:
             on_progress: Optional async callback for progress updates.
         """
-        command = [self.uv_path, 'run', '--frozen', '--project', str(self.openpi_root), '--']
-        command.extend(['python', 'scripts/serve_policy.py'])
-        command.extend(['--port', str(self.ws_port)])
-        command.extend(['policy:checkpoint'])
-        command.extend(['--policy.config', self.config_name])
-        command.extend(['--policy.dir', str(self.checkpoint_dir)])
-
-        env = os.environ.copy()
+        command = self._build_command()
         logger.info(f'Starting OpenPI subprocess: {" ".join(command)}')
-        self.process = subprocess.Popen(command, env=env, cwd=str(self.openpi_root))
+        self.process = subprocess.Popen(command, env=os.environ.copy(), cwd=str(self.openpi_root))
 
         await wait_for_subprocess_ready(
             check_ready=self._check_ready,
@@ -128,7 +134,9 @@ class OpenpiSubprocess:
     def client(self) -> WebsocketClientPolicy:
         """Get or create WebSocket client for inference."""
         if self._client is None:
+            logger.info(f'Creating WebSocket client to OpenPI subprocess on port {self.ws_port}...')
             self._client = WebsocketClientPolicy(host='127.0.0.1', port=self.ws_port)
+            logger.info('WebSocket client created successfully')
         return self._client
 
     def stop(self):
@@ -301,6 +309,7 @@ class InferenceServer:
 
                     # Send to client
                     await websocket.send_bytes(serialise({'result': decoded_actions}))
+                    logger.info(f'Sent {len(decoded_actions)} actions to client')
 
                 except Exception as e:
                     logger.error(f'Error processing message: {e}')
@@ -326,11 +335,12 @@ class InferenceServer:
 
 
 ###########################################################################################
-# Pre-configured server variants
+# Server config
 ###########################################################################################
 
 
 @cfn.config(
+    codec=codecs.eepose,
     checkpoints_dir='',
     config_name='pi05_positronic_lowmem',
     checkpoint=None,
@@ -341,7 +351,21 @@ class InferenceServer:
 def server(
     codec, checkpoints_dir: str, config_name: str, checkpoint: str | None, host: str, port: int, openpi_ws_port: int
 ):
-    """Main OpenPI inference server config."""
+    """OpenPI inference server.
+
+    Args:
+        codec: Codec config for observation encoding and action decoding.
+            Available codecs:
+            - @positronic.vendors.openpi.codecs.eepose (default, EE pose + grip)
+            - @positronic.vendors.openpi.codecs.eepose_q (EE pose + grip + joints)
+            - @positronic.vendors.openpi.codecs.droid (for pretrained DROID models)
+        checkpoints_dir: Directory containing model checkpoints.
+        config_name: OpenPI config name (default: pi05_positronic_lowmem).
+        checkpoint: Specific checkpoint to load (optional, defaults to latest).
+        host: Server host address.
+        port: Server port.
+        openpi_ws_port: Internal WebSocket port for OpenPI subprocess.
+    """
     InferenceServer(
         codec=codec,
         checkpoints_dir=checkpoints_dir,
@@ -353,21 +377,7 @@ def server(
     ).serve()
 
 
-# Pre-configured server variants using .copy() and .override()
-eepose_absolute = server.override(codec=codecs.eepose_absolute)
-openpi_positronic = server.override(codec=codecs.openpi_positronic)
-droid = server.override(codec=codecs.droid)
-eepose_q = server.override(codec=codecs.eepose_q)
-joints = server.override(codec=codecs.joints)
-
-
 if __name__ == '__main__':
     init_logging()
     with pos3.mirror():
-        cfn.cli({
-            'eepose_absolute': eepose_absolute,
-            'openpi_positronic': openpi_positronic,
-            'droid': droid,
-            'eepose_q': eepose_q,
-            'joints': joints,
-        })
+        cfn.cli(server)

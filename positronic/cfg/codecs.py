@@ -3,7 +3,7 @@
 import configuronic as cfn
 
 from positronic import geom
-from positronic.policy.observation import ObservationEncoder
+from positronic.policy.observation import SimpleObservationEncoder
 
 
 @cfn.config()
@@ -25,7 +25,7 @@ def general(
     """General observation encoder for non-GR00T policies (OpenPI, ACT, etc.)."""
     state_dict = {state_name: list(state_features.keys())}
     images = {k: (v, image_size) for k, v in image_mappings.items()}
-    result = ObservationEncoder(state=state_dict, images=images, task_field=task_field)
+    result = SimpleObservationEncoder(state=state_dict, images=images, task_field=task_field)
 
     state_dim = sum(state_features.values())
     lerobot_features = {state_name: {'shape': (state_dim,), 'names': list(state_features.keys()), 'dtype': 'float32'}}

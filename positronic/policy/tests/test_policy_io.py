@@ -6,7 +6,7 @@ from positronic.dataset.episode import EpisodeContainer
 from positronic.dataset.tests.utils import DummySignal
 from positronic.geom import Rotation
 from positronic.policy.action import AbsoluteJointsAction, AbsolutePositionAction, RelativeTargetPositionAction
-from positronic.policy.observation import ObservationEncoder
+from positronic.policy.observation import SimpleObservationEncoder
 
 
 def test_observation_encode_images_and_state_shapes():
@@ -14,7 +14,7 @@ def test_observation_encode_images_and_state_shapes():
     h, w = 6, 8
     img = np.full((h, w, 3), 255, dtype=np.uint8)
 
-    enc = ObservationEncoder(
+    enc = SimpleObservationEncoder(
         state={'observation.state': ['a', 'b']}, images={'observation.images.left': ('left.image', (w, h))}
     )
     obs = enc.encode({'left.image': img, 'a': [1, 2], 'b': 3.0})
@@ -32,7 +32,7 @@ def test_observation_encode_images_and_state_shapes():
 
 
 def test_observation_encode_missing_or_bad_images_raise():
-    enc = ObservationEncoder(
+    enc = SimpleObservationEncoder(
         state={'observation.state': []}, images={'observation.images.left': ('left.image', (8, 6))}
     )
     with pytest.raises(KeyError):  # Missing key
@@ -43,7 +43,7 @@ def test_observation_encode_missing_or_bad_images_raise():
 
 
 def test_observation_encode_missing_state_inputs_raise():
-    enc = ObservationEncoder(state={'observation.state': ['missing']}, images={})
+    enc = SimpleObservationEncoder(state={'observation.state': ['missing']}, images={})
     with pytest.raises(KeyError):
         enc.encode({})
 
@@ -51,17 +51,17 @@ def test_observation_encode_missing_state_inputs_raise():
 def test_observation_encode_task_field_parameter():
     """Test that task_field parameter controls which field task string is stored in."""
     # Default: task_field='task'
-    enc_task = ObservationEncoder(state={'observation.state': ['a']}, images={})
+    enc_task = SimpleObservationEncoder(state={'observation.state': ['a']}, images={})
     obs_task = enc_task.encode({'a': 1.0, 'task': 'test_task'})
     assert obs_task['task'] == 'test_task' and 'prompt' not in obs_task
 
     # OpenPI: task_field='prompt'
-    enc_prompt = ObservationEncoder(state={'observation.state': ['a']}, images={}, task_field='prompt')
+    enc_prompt = SimpleObservationEncoder(state={'observation.state': ['a']}, images={}, task_field='prompt')
     obs_prompt = enc_prompt.encode({'a': 1.0, 'task': 'test_task'})
     assert obs_prompt['prompt'] == 'test_task' and 'task' not in obs_prompt
 
     # Disabled: task_field=None
-    enc_none = ObservationEncoder(state={'observation.state': ['a']}, images={}, task_field=None)
+    enc_none = SimpleObservationEncoder(state={'observation.state': ['a']}, images={}, task_field=None)
     obs_none = enc_none.encode({'a': 1.0, 'task': 'test_task'})
     assert 'task' not in obs_none and 'prompt' not in obs_none
 

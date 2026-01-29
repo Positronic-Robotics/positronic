@@ -10,16 +10,14 @@ OpenPI supports multiple codecs (observation encoder + action decoder pairs) for
 
 | Codec | Observation | Action | Use Case |
 |-------|-------------|--------|----------|
-| `eepose_absolute` | EE pose + grip | Absolute position | Default codec for LeRobot/ACT-style policies |
-| `openpi_positronic` | EE pose + grip (OpenPI format) | Absolute position | OpenPI policies trained with positronic config |
-| `droid` | Joint positions + grip | Joint delta (velocity) | DROID dataset compatibility |
+| `eepose` | EE pose + grip | Absolute position | Default codec for training and inference |
 | `eepose_q` | EE pose + grip + joints | Absolute position | Combined feedback for better performance |
-| `joints` | Joint positions + grip | Absolute position | Joint-space observations with task-space control |
+| `droid` | Joint positions + grip | Joint delta (velocity) | Inference with pretrained DROID models |
 
-**Key differences:**
-- **`eepose_absolute`** vs **`openpi_positronic`**: Same semantic content, different key format (`observation.state` vs `observation/state`)
-- **`droid`**: Uses joint delta actions instead of absolute position (critical for DROID dataset)
-- **`eepose_q`**: Includes both EE pose and joint positions in observation for richer feedback
+**Key notes:**
+- **`eepose`**: The primary codec. Handles both training data generation (LeRobot format) and inference (OpenPI format) automatically.
+- **`eepose_q`**: Same as `eepose` but includes joint positions (`q`) in the observation for richer state feedback.
+- **`droid`**: Inference-only codec for using pretrained DROID checkpoints. Uses joint delta actions instead of absolute position.
 
 ## 1. Prepare Data
 
@@ -29,7 +27,7 @@ Positronic datasets must be converted into the LeRobot format using an OpenPI co
 ```bash
 docker compose run --rm -v ~/datasets:/data positronic-to-lerobot convert \
   --dataset.dataset=@positronic.cfg.ds.phail.phail \
-  --dataset.codec=@positronic.vendors.openpi.codecs.droid \
+  --dataset.codec=@positronic.vendors.openpi.codecs.eepose \
   --output_dir=/data/my_lerobot_data \
   --fps=15
 ```
@@ -41,13 +39,10 @@ docker compose run --rm -v ~/datasets:/data positronic-to-lerobot convert \
 
 **Examples for different codecs:**
 ```bash
-# Default codec (EE pose + grip → absolute position)
---dataset.codec=@positronic.vendors.openpi.codecs.eepose_absolute
+# Default codec (EE pose + grip -> absolute position)
+--dataset.codec=@positronic.vendors.openpi.codecs.eepose
 
-# DROID dataset (joint positions → joint delta)
---dataset.codec=@positronic.vendors.openpi.codecs.droid
-
-# Combined feedback (EE pose + joints → absolute position)
+# Combined feedback (EE pose + grip + joints -> absolute position)
 --dataset.codec=@positronic.vendors.openpi.codecs.eepose_q
 ```
 
@@ -100,32 +95,25 @@ The OpenPI inference server wraps the OpenPI policy in a FastAPI server that pro
 
 ### Starting the Server
 
-The server supports multiple codec variants as pre-configured commands:
-
 ```bash
-# Default codec (eepose_absolute)
+# Default codec (eepose)
 docker compose run --rm --service-ports -v ~/checkpoints:/checkpoints openpi-server \
-  eepose_absolute \
   --checkpoints_dir=/checkpoints/openpi/pi05_positronic_lowmem/experiment_v1/
 
-# OpenPI positronic codec
+# With joint feedback
 docker compose run --rm --service-ports -v ~/checkpoints:/checkpoints openpi-server \
-  openpi_positronic \
+  --codec=@positronic.vendors.openpi.codecs.eepose_q \
   --checkpoints_dir=/checkpoints/openpi/pi05_positronic_lowmem/experiment_v1/
 
-# DROID codec (joint delta actions)
+# DROID codec (for pretrained DROID models)
 docker compose run --rm --service-ports -v ~/checkpoints:/checkpoints openpi-server \
-  droid \
+  --codec=@positronic.vendors.openpi.codecs.droid \
+  --config_name=pi05_droid \
   --checkpoints_dir=/checkpoints/openpi/pi05_droid/experiment_v1/
-
-# Combined feedback (EE pose + joints)
-docker compose run --rm --service-ports -v ~/checkpoints:/checkpoints openpi-server \
-  eepose_q \
-  --checkpoints_dir=/checkpoints/openpi/pi05_positronic_lowmem/experiment_v1/
 ```
 
 **Parameters:**
-- `<codec_variant>`: One of `eepose_absolute`, `openpi_positronic`, `droid`, `eepose_q`, `joints`
+- `--codec`: Codec for observation/action encoding (default: `@positronic.vendors.openpi.codecs.eepose`)
 - `--checkpoints_dir`: Full path to the experiment directory containing checkpoints
 - `--checkpoint`: (Optional) Specific checkpoint step to load. If omitted, loads the latest checkpoint
 - `--config_name`: (Optional) OpenPI config name (default: `pi05_positronic_lowmem`)
@@ -238,8 +226,8 @@ uv run positronic-inference \
 
 **Solutions:**
 1. Verify codec matches the model training config:
+   - Positronic models need `eepose` codec (default)
    - DROID models need `droid` codec (joint delta actions)
-   - Positronic models need `openpi_positronic` codec
 2. Check observation format matches codec requirements
 3. Verify image shapes are correct (will be resized to 224x224)
 4. Check action space dimensions match expected values
@@ -253,13 +241,3 @@ uv run positronic-inference \
 2. Check available GPU memory (OpenPI requires ~8GB VRAM)
 3. Increase timeout by modifying `_wait_for_ready(timeout=...)` in server.py
 4. Check OpenPI subprocess logs for slow operations
-
-### Migration from old server
-
-**Problem:** Need to migrate from old `main()` subprocess wrapper to new FastAPI server
-
-**Solutions:**
-1. Old wrapper still works for local use: `uv run positronic/vendors/openpi/server.py main ...`
-2. New server provides unified API: use pre-configured variants (`eepose_absolute`, `droid`, etc.)
-3. Update docker-compose.yml to use new server format
-4. See "Starting the Server" section for examples

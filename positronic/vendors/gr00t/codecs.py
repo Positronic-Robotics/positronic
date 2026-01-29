@@ -20,9 +20,9 @@ from positronic.dataset import transforms as tf
 from positronic.dataset.episode import Episode
 from positronic.dataset.signal import Signal
 from positronic.dataset.transforms import image
-from positronic.dataset.transforms.episode import Derive
 from positronic.drivers.roboarm import command
 from positronic.policy.action import ActionDecoder
+from positronic.policy.observation import ObservationEncoder
 
 RotRep = geom.Rotation.Representation
 ROT_REP = geom.Rotation.Representation
@@ -31,7 +31,7 @@ ROT_REP = geom.Rotation.Representation
 # ===== Implementation Classes =====
 
 
-class GrootObservationEncoder(Derive):
+class GrootObservationEncoder(ObservationEncoder):
     """Unified observation encoder for GR00T N1.6 training and inference.
 
     For training (__call__): outputs flat dict with separate keys for each state component.
