@@ -64,8 +64,8 @@ body {
 
 body {
   min-height: 100vh;
-  background: radial-gradient(circle at top right, rgba(177, 231, 79, 0.06), transparent 55%),
-    radial-gradient(circle at bottom left, #0f141f, #0a0f1a 65%);
+  background: radial-gradient(circle at 100% 0%, rgba(177, 231, 79, 0.06), rgba(0, 0, 0, 0) 55%),
+    radial-gradient(circle at 0% 100%, rgb(15, 20, 31), rgb(10, 15, 26) 65%);
   color: var(--text-primary);
   font-family: var(--font-body);
   font-size: 16px;
