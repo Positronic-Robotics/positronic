@@ -1,120 +1,170 @@
-# GR00T N1.6 Workflow in Positronic
+# GR00T in Positronic
 
-This guide details the end-to-end workflow for training and deploying GR00T N1.6 models using the Positronic stack. The pipeline leverages Docker for reproducibility and supports both local directories and S3 for data storage. This integration relies on [our fork of GR00T](https://github.com/Positronic-Robotics/gr00t).
+## What is GR00T?
 
-> All `docker compose` commands below assume you are in the [`docker`](https://github.com/Positronic-Robotics/positronic/tree/main/docker) directory (`cd docker`)
+cGR00T is [NVIDIA's](https://developer.nvidia.com/isaac/groot) generalist robot foundation model for versatile robot control.
 
-> Note: if you customize compose volumes, **do not bind-mount** host `~/.local/share/uv` into `/root/.local/share/uv` for GR00T containers. The GR00T image uses a pre-built Python 3.10 venv at `/.venv/`, and the bind mount can hide that path and break `/.venv/bin/python` with `ENOENT`.
+Positronic provides first-class support for GR00T including:
+- Training on single capable server GPU (~50GB)
+- Inference on smaller GPU (~7.5GB, can run closer to robot)
+- Relative modalities support (uses same codecs, different groot model internally to match OpenPI's relative actions by default)
+- Unified inference API compatible with all Positronic hardware
+- Integration with our fork: [Positronic-Robotics/gr00t](https://github.com/Positronic-Robotics/gr00t), kept up to date with upstream
 
-## 1. Prepare Data
+See [Model Selection Guide](../../docs/model-selection.md) for comparison with other options.
 
-Positronic datasets must be converted into LeRobot format using a GR00T codec (observation encoder + action decoder pair).
+## Hardware Requirements
 
-**Command:**
+| Phase | Requirement | Notes |
+|-------|-------------|-------|
+| **Training** | capable sever GPU (~50GB) | NVIDIA's training config optimized for a single capable GPU |
+| **Inference** | GPU (~7.5GB) | RTX 4070, A10, or better (can run on robot) |
+| **Training Time** | 0.5-2 days | Typical for GR00T |
+
+## Quick Start
+
 ```bash
-docker compose run --rm -v ~/datasets:/data positronic-to-lerobot convert \
-  --dataset.dataset=@positronic.cfg.ds.phail.phail \
-  --dataset.codec=@positronic.vendors.gr00t.codecs.ee_absolute \
-  --output_dir=/data/my_lerobot_data \
+# 1. Convert dataset
+cd docker && docker compose run --rm positronic-to-lerobot convert \
+  --dataset.dataset.path=~/datasets/my_task_raw \
+  --dataset.codec=@positronic.vendors.gr00t.codecs.ee_rot6d_joints \
+  --output_dir=~/datasets/groot/my_task \
   --fps=15
+
+# 2. Train
+cd docker && docker compose run --rm groot-train \
+  --input_path=~/datasets/groot/my_task \
+  --output_path=~/checkpoints/groot \
+  --exp_name=my_task_v1 \
+  --modality_config=ee_rot6d_q
+
+# 3. Serve
+cd docker && docker compose run --rm --service-ports groot-server \
+  ee_rot6d_joints \
+  --checkpoints_dir=~/checkpoints/groot/my_task_v1/
+
+# 4. Run inference
+uv run positronic-inference sim \
+  --policy=.remote \
+  --policy.host=localhost \
+  --driver.show_gui=True
 ```
 
-**Available public datasets:**
-- `@positronic.cfg.ds.phail.phail` - DROID teleoperation data (12GB, 352 episodes)
-- `@positronic.cfg.ds.phail.sim_stack_cubes` - Simulated cube stacking (499MB, 317 episodes)
-- `@positronic.cfg.ds.phail.sim_pick_place` - Simulated pick-and-place (1.3GB, 214 episodes)
+See [Training Workflow](../../docs/training-workflow.md) for detailed step-by-step instructions.
 
-**Available GR00T codecs:**
-- `@positronic.vendors.gr00t.codecs.ee_absolute` - EE pose (quaternion) → modality='ee'
-- `@positronic.vendors.gr00t.codecs.ee_rot6d` - EE pose (rot6d) → modality='ee_rot6d'
-- `@positronic.vendors.gr00t.codecs.ee_joints` - EE pose + joints → modality='ee_q'
-- `@positronic.vendors.gr00t.codecs.ee_rot6d_joints` - EE pose (rot6d) + joints → modality='ee_rot6d_q'
+## Available Codecs
 
-**Codec must match training modality_config:**
-| Codec | Modality Config |
-|-------|----------------|
+GR00T supports multiple codecs with different rotation representations and observation spaces.
+
+| Codec | Observation | Action | Modality Config | Use Case |
+|-------|-------------|--------|-----------------|----------|
+| `ee_absolute` | EE pose (quat) + grip + images | Absolute EE position (quat) + grip | `ee` | Default EE control, quaternion rotation |
+| `ee_rot6d` | EE pose (rot6d) + grip + images | Absolute EE position (rot6d) + grip | `ee_rot6d` | 6D rotation representation |
+| `ee_joints` | EE pose + joints + grip + images | Absolute EE position + grip | `ee_q` | Combined EE + joint feedback |
+| `ee_rot6d_joints` | EE pose (rot6d) + joints + grip + images | Absolute EE position (rot6d) + grip | `ee_rot6d_q` | 6D rotation + joint feedback (recommended) |
+
+**Key features:**
+- **Rotation representations**: Quaternion (4D) vs rot6d (6D continuous)
+- **Joint feedback**: Optional joint position observations for richer state representation
+- Images automatically resized to 224x224
+- Sets `gr00t_modality` metadata for training compatibility
+
+**Codec must match modality config during training:**
+
+| Codec | Training Modality |
+|-------|-------------------|
 | `ee_absolute` | `ee` |
 | `ee_rot6d` | `ee_rot6d` |
 | `ee_joints` | `ee_q` |
 | `ee_rot6d_joints` | `ee_rot6d_q` |
 
-## 2. Train Model
+**Recommendation:** Use `ee_rot6d_joints` for best performance (6D rotation is continuous, joint feedback improves learning).
 
-Run the training job using the `groot-train` service. We use one H100 machine to train the model.
+See [Codecs Guide](../../docs/codecs.md) for comprehensive codec documentation.
 
-**Command:**
+## Configuration Reference
+
+### Training Configuration
+
+**Common parameters:**
+
+| Parameter | Description | Default | Example |
+|-----------|-------------|---------|---------|
+| `--modality_config` | Modality configuration (must match codec) | `ee` | `ee_rot6d_q` |
+| `--exp_name` | Experiment name (unique ID) | Required | `my_task_v1` |
+| `--num_train_steps` | Total training steps | Config default | `100000` |
+| `--learning_rate` | Override learning rate | Config default | `1e-4` |
+| `--save_steps` | Checkpoint save interval | Config default | `10000` |
+| `--num_workers` | Dataloader workers | Config default | `8` |
+| `--resume` | Resume from existing checkpoint | `False` | `True` |
+| `--output_path` | Checkpoint destination | Required | `~/checkpoints/groot` |
+
+**WandB logging:** Enabled by default if `WANDB_API_KEY` is set in `docker/.env.wandb`.
+
+### Inference Server Configuration
+
+GR00T server uses pre-configured variants that combine codec and modality configuration:
+
 ```bash
-docker compose run --rm -v ~/datasets:/data -v ~/checkpoints:/checkpoints groot-train \
-  --input_path=/data/my_lerobot_data \
-  --output_path=/checkpoints/groot \
-  --exp_name=experiment_v1
-```
-
-**Common Parameters:**
-- `--modality_config`: The modality configuration to use. Options: `ee` (default, EE pose control), `ee_q` (EE pose + joint feedback). Can also be a path to a custom config file.
-- `--exp_name`: Unique name for this run.
-- `--num_train_steps`: Total training steps (optional).
-- `--learning_rate`: Override default learning rate (optional).
-- `--save_steps`: Checkpoint save interval (optional).
-- `--num_workers`: Number of dataloader workers (optional).
-- `--resume`: Set to `True` to resume an existing run.
-- `--output_path`: Destination for checkpoints and logs.
-
-WandB logging is enabled by default. Add `docker/.env.wandb` containing your `WANDB_API_KEY`.
-
-## 3. Serve Inference
-
-To serve the trained model, launch the `groot-server`. This exposes a WebSocket API (same interface as lerobot-server) on port 8000. The model can be served from a machine with 8GB of GPU memory.
-
-**Command (with pre-configured variant):**
-```bash
-docker compose run --rm --service-ports -v ~/checkpoints:/checkpoints groot-server \
+cd docker && docker compose run --rm --service-ports groot-server \
   ee_rot6d_joints \
-  --checkpoints_dir=/checkpoints/groot/experiment_v1/
+  --checkpoints_dir=~/checkpoints/groot/my_task_v1/ \
+  --port=8000
 ```
 
-**Available pre-configured variants:**
-- `ee`: End-effector pose (quaternion)
-- `ee_joints`: EE pose + joint feedback
-- `ee_rot6d`: EE pose (6D rotation)
-- `ee_rot6d_joints`: 6D rotation + joint feedback
-- `ee_rot6d_rel`: 6D rotation, relative actions
-- `ee_rot6d_joints_rel`: 6D rotation + joints, relative actions
+**Available variants:**
+- `ee` - End-effector pose (quaternion)
+- `ee_joints` - End-effector pose + joint positions (quaternion)
+- `ee_rot6d` - End-effector pose (rot6d)
+- `ee_rot6d_joints` - End-effector pose + joint positions (rot6d, recommended)
+- `ee_rot6d_rel` - End-effector pose (rot6d, relative actions)
+- `ee_rot6d_joints_rel` - End-effector pose + joint positions (rot6d, relative actions)
 
-**Alternative (explicit codec):**
+**Server parameters:**
+
+| Parameter | Description | Default | Example |
+|-----------|-------------|---------|---------|
+| `variant` | Pre-configured variant (positional arg) | Required | `ee_rot6d_joints` |
+| `--checkpoints_dir` | Experiment directory (contains `checkpoint-N` folders) | Required | `~/checkpoints/groot/my_task_v1/` |
+| `--checkpoint` | Specific checkpoint ID | Latest | `10000`, `50000` |
+| `--port` | Server port | `8000` | `8001` |
+
+## Troubleshooting
+
+### GR00T Modality Mismatch
+
+**Problem:** Training or inference fails with modality-related errors
+
+**Cause:** Codec and modality config don't match
+
+**Solution:** Use the correct pairing (see table in [Available Codecs](#available-codecs)):
+
 ```bash
-docker compose run --rm --service-ports -v ~/checkpoints:/checkpoints groot-server \
-  server \
-  --checkpoints_dir=/checkpoints/groot/experiment_v1/ \
-  --codec=@positronic.vendors.gr00t.codecs.ee_rot6d_joints \
-  --modality_config=ee_rot6d_q
+# Codec: ee_rot6d_joints → Modality: ee_rot6d_q
+
+# Training
+cd docker && docker compose run --rm groot-train \
+  --modality_config=ee_rot6d_q \
+  --input_path=~/datasets/groot/my_task  # (converted with ee_rot6d_joints codec)
+
+# Inference (use matching variant)
+cd docker && docker compose run --rm --service-ports groot-server \
+  ee_rot6d_joints \
+  --checkpoints_dir=~/checkpoints/groot/my_task_v1/
 ```
 
-**Parameters:**
-- `--checkpoints_dir`: Full path to the experiment directory containing checkpoints.
-- `--checkpoint`: (Optional) Specific checkpoint ID (e.g., `50000`). If omitted, loads the latest `checkpoint-N` folder.
-- `--port`: (Optional) Port to serve on (default: 8000).
+## See Also
 
-**Endpoints:**
-- `GET /api/v1/models` - List available checkpoints
-- `WebSocket /api/v1/session` - Inference session (uses latest checkpoint)
-- `WebSocket /api/v1/session/{checkpoint_id}` - Inference with specific checkpoint
+**Positronic Documentation:**
+- [Model Selection Guide](../../docs/model-selection.md) — When to use GR00T vs OpenPI vs LeRobot
+- [Codecs Guide](../../docs/codecs.md) — Understanding observation/action encoding
+- [Training Workflow](../../docs/training-workflow.md) — Unified training steps across all models
+- [Inference Guide](../../docs/inference.md) — Deployment and evaluation patterns
 
-## 4. Run Inference
+**Other Models:**
+- [OpenPI (π₀.₅)](../openpi/README.md) — Recommended for most tasks, most capable foundation model
+- [LeRobot ACT](../lerobot/README.md) — Single-task transformer, fast training
 
-To evaluate the policy with a visual interface, run the inference client locally. The client uses the same `.remote` policy for all server types (GR00T, LeRobot, OpenPI).
-
-**Command:**
-```bash
-uv run positronic-inference sim \
-  --driver.simulation_time=20 \
-  --driver.show_gui=True \
-  --output_dir=~/datasets/inference_logs \
-  --policy=.remote \
-  --policy.host=vm-h100 \
-  --policy.port=8000
-```
-
-- `--policy=.remote`: The remote policy client (WebSocket).
-- `--policy.host`: The machine that runs the inference server.
-- `--policy.port`: The port that the inference server exposes (default: 8000).
+**External:**
+- [NVIDIA GR00T](https://developer.nvidia.com/isaac/groot) — Official GR00T page
+- [Positronic GR00T Fork](https://github.com/Positronic-Robotics/gr00t) — Our integration repository

@@ -1,176 +1,143 @@
-# LeRobot ACT Workflow in Positronic
+# LeRobot ACT in Positronic
 
-This guide details the end-to-end workflow for training and deploying LeRobot ACT (Action Chunking Transformer) policies using the Positronic stack. The pipeline leverages Docker for reproducibility and supports both local directories and S3 for data storage.
+## What is LeRobot ACT?
 
-> All `docker compose` commands below assume you are in the [`docker`](https://github.com/Positronic-Robotics/positronic/tree/main/docker) directory (`cd docker`)
+LeRobot ACT (Action Chunking Transformer) is a single-task imitation learning model from [HuggingFace LeRobot](https://github.com/huggingface/lerobot). Based on the [ACT paper](https://arxiv.org/abs/2304.13705) (foundational work in recent ML robotics), it's designed for efficient learning on focused manipulation tasks, offering excellent performance with modest hardware requirements and fast training times.
+
+ACT uses action chunking to output sequences of future actions, enabling smooth execution and reducing compounding errors. This makes it particularly effective for precise manipulation tasks where consistency and repeatability are critical.
+
+## Standing on LeRobot's Shoulders
+
+**We use HuggingFace LeRobot's training scripts and workflows.** LeRobot provides battle-tested implementations of imitation learning algorithms and a strong open-source community.
+
+Positronic adds the operational infrastructure LeRobot doesn't focus on:
+- **Data ops**: Format-agnostic dataset storage, codec projection, multi-rate recording
+- **Hardware integration**: Drivers for Franka, Kinova, SO101, DROID; WebXR teleoperation
+- **Unified inference**: Vendor-agnostic API for deploying LeRobot alongside GR00T and OpenPI
+- **Lifecycle management**: Curation tools, iteration workflows, monitoring
+
+**LeRobot**: Training-centric. Fast experiments on reference hardware and public datasets.
+**Positronic**: Lifecycle-centric. Adds infrastructure for hardware integration and lifecycle management.
+
+**Roadmap**: Support all LeRobot models.
+
+
+See [Model Selection Guide](../../docs/model-selection.md) for comparison.
+
+## Hardware Requirements
+
+| Phase | Requirement | Notes |
+|-------|-------------|-------|
+| **Training** | Consumer GPU (RTX 3090, 4090) | 16GB+ VRAM recommended, 8GB minimum |
+| **Inference** | Consumer GPU (4GB+) | RTX 3060, 4060, or similar |
+| **Development** | CPU acceptable | For testing (slower inference) |
+
+## Quick Start
+
+```bash
+# 1. Convert dataset
+cd docker && docker compose run --rm positronic-to-lerobot convert \
+  --dataset.dataset.path=~/datasets/my_task_raw \
+  --dataset.codec=@positronic.vendors.lerobot.codecs.eepose_absolute \
+  --output_dir=~/datasets/lerobot/my_task \
+  --fps=30
+
+# 2. Train
+cd docker && docker compose run --rm lerobot-train \
+  --input_path=~/datasets/lerobot/my_task \
+  --exp_name=my_task_v1 \
+  --output_dir=~/checkpoints/lerobot/ \
+  --num_train_steps=50000 \
+  --save_freq=10000
+
+# 3. Serve
+cd docker && docker compose run --rm --service-ports lerobot-server \
+  --checkpoints_dir=~/checkpoints/lerobot/my_task_v1/ \
+  --codec=@positronic.vendors.lerobot.codecs.eepose_absolute
+
+# 4. Run inference
+uv run positronic-inference sim \
+  --policy=.remote \
+  --policy.host=localhost \
+  --driver.show_gui=True
+```
+
+See [Training Workflow](../../docs/training-workflow.md) for detailed step-by-step instructions.
 
 ## Available Codecs
 
-LeRobot supports multiple codecs (observation encoder + action decoder pairs):
+LeRobot supports two primary codecs for different observation/action configurations.
 
 | Codec | Observation | Action | Use Case |
 |-------|-------------|--------|----------|
-| `eepose_absolute` | EE pose + grip | Absolute position | Default codec for end-effector control |
-| `joints_absolute` | Joint positions + grip | Absolute position | Joint-space observations with task-space control |
+| `eepose_absolute` | EE pose (7D quat) + grip (1D) + images | Absolute EE position (7D quat) + grip | Default codec for end-effector control, task-space manipulation |
+| `joints_absolute` | Joint positions (7D) + grip (1D) + images | Absolute EE position (7D quat) + grip | Joint-space observations with task-space control |
 
-**Key differences:**
-- **`eepose_absolute`**: Uses end-effector pose (position + quaternion) + gripper state
-- **`joints_absolute`**: Uses joint positions + gripper state
+**Key features:**
+- Uses `task_field='task'` (LerobotPolicy filters this before passing to ACT)
+- Images resized to 480x480
+- Quaternion rotation representation (7D)
+- Absolute action space (not delta)
 
-## 1. Prepare Data
+**Choosing a codec:**
+- **Most tasks**: Use `eepose_absolute` (task-space observations and control)
+- **Want joint feedback**: Use `joints_absolute` (may improve performance with joint position information)
 
-Positronic datasets must be converted into LeRobot format using a codec.
+See [Codecs Guide](../../docs/codecs.md) for comprehensive codec documentation.
 
-**Command:**
+## Configuration Reference
+
+### Training Configuration
+
+**Common parameters:**
+
+| Parameter | Description | Default | Example |
+|-----------|-------------|---------|---------|
+| `--codec` | Override codec | `eepose_absolute` | `joints_absolute` |
+| `--exp_name` | Experiment name (unique ID) | Required | `my_task_v1` |
+| `--num_train_steps` | Total training steps | `50000` | `100000` |
+| `--save_freq` | Checkpoint save interval | `10000` | `5000` |
+| `--resume` | Resume from existing checkpoint | `False` | `True` |
+| `--output_dir` | Checkpoint destination | Required | `~/checkpoints/lerobot/` |
+
+**WandB logging:** Enabled by default if `WANDB_API_KEY` is set in `docker/.env.wandb`.
+
+### Inference Server Configuration
+
 ```bash
-docker compose run --rm positronic-to-lerobot convert \
-  --dataset.dataset=@positronic.cfg.ds.phail.sim_stack_cubes \
-  --dataset.codec=@positronic.vendors.lerobot.codecs.eepose_absolute \
-  --output_dir=s3://interim/sim_stack_cubes/lerobot/eepose_absolute/ \
-  --fps=15
-```
-
-**Available public datasets:**
-- `@positronic.cfg.ds.phail.phail` - DROID teleoperation data (12GB, 352 episodes)
-- `@positronic.cfg.ds.phail.sim_stack_cubes` - Simulated cube stacking (499MB, 317 episodes)
-- `@positronic.cfg.ds.phail.sim_pick_place` - Simulated pick-and-place (1.3GB, 214 episodes)
-
-**Parameters:**
-- `--dataset.dataset`: The raw dataset configuration (see available datasets above)
-- `--dataset.codec`: LeRobot codec that defines observation/action encoding (see table above)
-- `--output_dir`: Destination for the converted LeRobot dataset (can be local or `s3://bucket/path`)
-- `--fps`: Target frames per second for the converted dataset
-
-**Standard path pattern:** `s3://interim/{dataset}/{vendor}/{codec}/`
-
-Example: `s3://interim/sim_stack_cubes/lerobot/eepose_absolute/`
-
-## 2. Train Model
-
-Run the training job using the `lerobot-train` service.
-
-**Command:**
-```bash
-docker compose run --rm lerobot-train \
-  --dataset_root=s3://interim/sim_stack_cubes/lerobot/eepose_absolute/ \
-  --run_name=experiment_v1 \
-  --output_dir=s3://checkpoints/lerobot/ \
-  --steps=50000 \
-  --save_freq=10000
-```
-
-**Common Parameters:**
-- `--codec`: Override the codec (default: `@positronic.vendors.lerobot.codecs.eepose_absolute`)
-- `--run_name`: Unique name for this run
-- `--steps`: Total training steps
-- `--save_freq`: Checkpoint save interval
-- `--resume`: Set to `True` to resume an existing run
-- `--output_dir`: Destination for checkpoints and logs
-
-**Example with different codec:**
-```bash
-docker compose run --rm lerobot-train \
-  --dataset_root=s3://interim/sim_stack_cubes/lerobot/joints_absolute/ \
-  --run_name=experiment_joints \
-  --output_dir=s3://checkpoints/lerobot/ \
-  --codec=@positronic.vendors.lerobot.codecs.joints_absolute \
-  --steps=50000
-```
-
-WandB logging is enabled by default if `WANDB_API_KEY` is set. Add `docker/.env.wandb` containing your `WANDB_API_KEY`.
-
-## 3. Serve Inference
-
-To serve the trained model, launch the `lerobot-server`. This exposes a WebSocket API (same interface as GR00T/OpenPI servers) on port 8000.
-
-**Command:**
-```bash
-docker compose run --rm --service-ports lerobot-server \
-  --checkpoints_dir=s3://checkpoints/lerobot/experiment_v1/ \
+cd docker && docker compose run --rm --service-ports lerobot-server \
+  --checkpoints_dir=~/checkpoints/lerobot/my_task_v1/ \
   --codec=@positronic.vendors.lerobot.codecs.eepose_absolute \
   --port=8000 \
   --host=0.0.0.0
 ```
 
-**Parameters:**
-- `--checkpoints_dir`: Full path to the experiment directory containing checkpoints
-- `--checkpoint`: (Optional) Specific checkpoint step to load (e.g., `10000`). If omitted, loads the latest checkpoint
-- `--codec`: Codec used during training (must match training codec)
-- `--port`: (Optional) Port to serve on (default: 8000)
-- `--host`: (Optional) Host to bind to (default: 0.0.0.0)
+**Server parameters:**
 
-**Endpoints:**
-- `GET /api/v1/models` - List available checkpoints
-- `WebSocket /api/v1/session` - Inference session (uses latest checkpoint)
-- `WebSocket /api/v1/session/{checkpoint_id}` - Inference with specific checkpoint
-
-## 4. Run Inference
-
-To evaluate the policy with a visual interface, run the inference client locally. The client uses the same `.remote` policy for all server types (GR00T, LeRobot, OpenPI).
-
-**Command:**
-```bash
-uv run positronic-inference sim \
-  --driver.simulation_time=20 \
-  --driver.show_gui=True \
-  --output_dir=~/datasets/inference_logs \
-  --policy=.remote \
-  --policy.host=desktop \
-  --policy.port=8000
-```
-
-- `--policy=.remote`: The remote policy client (WebSocket)
-- `--policy.host`: The machine that runs the inference server
-- `--policy.port`: The port that the inference server exposes (default: 8000)
-
-## Architecture Notes
-
-### LeRobot vs GR00T/OpenPI
-
-LeRobot intentionally differs from GR00T/OpenPI in architecture:
-
-| Component | GR00T/OpenPI | LeRobot |
-|-----------|--------------|---------|
-| **Server** | Subprocess-based | In-process (faster loading) |
-| **Training** | Subprocess wrapper | Direct integration |
-
-This is appropriate because:
-- LeRobot ACT policies load quickly (<20s)
-- Direct integration allows better error handling
-- In-process training provides better control flow
-
-### Task Field Handling
-
-LeRobot ACT policies do NOT support task conditioning (single-task models). The observation encoder uses `task_field='task'` by default, but the LerobotPolicy filters out this field before passing observations to the ACT model.
-
-For multi-task models (like OpenPI), use `task_field='prompt'` in the codec configuration.
+| Parameter | Description | Default | Example |
+|-----------|-------------|---------|---------|
+| `--checkpoints_dir` | Experiment directory (contains `checkpoints/` folder) | Required | `~/checkpoints/lerobot/my_task_v1/` |
+| `--checkpoint` | Specific checkpoint step | Latest | `10000`, `20000` |
+| `--codec` | Codec (must match training) | `eepose_absolute` | `joints_absolute` |
+| `--port` | Server port | `8000` | `8001` |
+| `--host` | Server host | `0.0.0.0` | Binds to all interfaces |
 
 ## Troubleshooting
 
-### Training fails with "invalid data type 'str'" error
+See vendor-specific guides and [Model Selection Guide](../../docs/model-selection.md) for issues.
 
-**Problem:** ACT policies receive string fields (task, prompt) that they cannot process.
+## See Also
 
-**Solution:** This should be fixed in the current version. Ensure you're using the latest code where:
-1. LeRobot codecs use `task_field='task'` (default)
-2. OpenPI codecs use `task_field='prompt'`
-3. LerobotPolicy filters out `task` field before passing to ACT
+**Positronic Documentation:**
+- [Model Selection Guide](../../docs/model-selection.md) — When to use LeRobot vs GR00T vs OpenPI
+- [Codecs Guide](../../docs/codecs.md) — Understanding observation/action encoding
+- [Training Workflow](../../docs/training-workflow.md) — Unified training steps across all models
+- [Inference Guide](../../docs/inference.md) — Deployment and evaluation patterns
 
-### Server fails to load checkpoint
+**Other Models:**
+- [OpenPI (π₀.₅)](../openpi/README.md) — Recommended for most tasks, most capable foundation model
+- [GR00T](../groot/README.md) — NVIDIA's generalist robot policy
 
-**Problem:** Server returns "Checkpoint not found" error.
-
-**Solutions:**
-1. Run `curl http://localhost:8000/api/v1/models` to see available checkpoints
-2. Verify `--checkpoints_dir` path is correct (should end with experiment directory)
-3. Check checkpoint directory structure: `checkpoints/<step>/pretrained_model/`
-4. If using specific checkpoint, verify the checkpoint ID exists
-
-### Codec mismatch error
-
-**Problem:** Inference fails with shape or feature mismatch errors.
-
-**Solution:** Ensure the codec used for inference matches the codec used during training. Check:
-1. Training dataset codec: `s3://interim/{dataset}/lerobot/{codec}/`
-2. Training command codec: `--codec=@positronic.vendors.lerobot.codecs.{codec}`
-3. Server codec: Must match training codec exactly
+**External:**
+- [HuggingFace LeRobot](https://github.com/huggingface/lerobot) — Official LeRobot repository
+- [LeRobot Documentation](https://huggingface.co/docs/lerobot) — Training algorithms and datasets

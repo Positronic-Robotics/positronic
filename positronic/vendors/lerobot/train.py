@@ -4,14 +4,14 @@ LeRobot training script using ACT policy.
 Example:
     # Train with default codec (eepose_absolute)
     cd docker && docker compose run --rm lerobot-train \\
-      --dataset_root=s3://interim/sim_stack/lerobot/eepose_absolute/ \\
-      --run_name=my_experiment \\
+      --input_path=s3://interim/sim_stack/lerobot/eepose_absolute/ \\
+      --exp_name=my_experiment \\
       --output_dir=s3://checkpoints/lerobot/
 
     # Override codec
     cd docker && docker compose run --rm lerobot-train \\
-      --dataset_root=s3://interim/sim_stack/lerobot/joints_absolute/ \\
-      --run_name=my_experiment \\
+      --input_path=s3://interim/sim_stack/lerobot/joints_absolute/ \\
+      --exp_name=my_experiment \\
       --codec=@positronic.vendors.lerobot.codecs.joints_absolute \\
       --output_dir=s3://checkpoints/lerobot/
 """
@@ -132,9 +132,9 @@ def _update_config(cfg: TrainPipelineConfig, **cfg_kwargs):
             raise AttributeError(f'Could not update config for {k}') from e
 
 
-@cfn.config(codec=lerobot_codecs.eepose_absolute)
+@cfn.config(codec=lerobot_codecs.eepose_absolute, num_train_steps=None)
 @pos3.with_mirror()
-def train(dataset_root: str, run_name: str, output_dir: str, codec: Codec, **cfg_kwargs):
+def train(input_path: str, exp_name: str, output_dir: str, codec: Codec, num_train_steps: int | None, **cfg_kwargs):
     # Handle codec passed as string (e.g., from CLI)
     if isinstance(codec, str):
         parts = codec.split('.')
@@ -144,22 +144,27 @@ def train(dataset_root: str, run_name: str, output_dir: str, codec: Codec, **cfg
 
     base_config = str(Path(__file__).resolve().parent.joinpath('train_config.json'))
     assert Path(base_config).is_file(), f'Base config file {base_config} does not exist.'
-    run_name = str(run_name)
+    exp_name = str(exp_name)
     cfg = TrainPipelineConfig.from_pretrained(base_config)
     cfg.env = build_env_config_from_codec(codec)
 
     if os.getenv('WANDB_API_KEY'):
         cfg.wandb.enable = True
         cfg.wandb.project = 'lerobot-train'
-        cfg.wandb.run_id = run_name
+        cfg.wandb.run_id = exp_name
         cfg.wandb.disable_artifact = True
 
-    cfg.job_name = run_name
-    cfg.dataset.root = str(pos3.download(dataset_root))
+    cfg.job_name = exp_name
+    cfg.dataset.root = str(pos3.download(input_path))
     cfg.dataset.repo_id = 'local'
     cfg.eval_freq = 0
     cfg.policy.push_to_hub = False
-    cfg.output_dir = pos3.sync(output_dir, exclude=[f'{run_name}/wandb/*']) / run_name
+    cfg.output_dir = pos3.sync(output_dir, exclude=[f'{exp_name}/wandb/*']) / exp_name
+
+    # Set training steps if provided
+    if num_train_steps is not None:
+        cfg.steps = num_train_steps
+
     _update_config(cfg, **cfg_kwargs)
 
     if cfg.resume:

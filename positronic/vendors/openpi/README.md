@@ -1,243 +1,150 @@
-# OpenPI Workflow in Positronic
+# OpenPI (π₀.₅) in Positronic
 
-This guide details the end-to-end workflow for training and deploying OpenPI models using the Positronic stack. The pipeline leverages Docker for reproducibility and supports both local directories and S3 for data storage. This integration relies on [our fork of OpenPI](https://github.com/Positronic-Robotics/openpi) (branch `main-positronic`). The default training configuration is `pi05_positronic_lowmem`, which is LoRA that works with single H100 machine.
+## What is OpenPI?
 
-> All `docker compose` commands below assume you are in the [`docker`](https://github.com/Positronic-Robotics/positronic/tree/main/docker) directory (`cd docker`)
+OpenPI (π₀.₅) is a foundation model for robotics trained by [Physical Intelligence](https://www.physicalintelligence.company/) on diverse manipulation tasks. It represents the most capable robotic foundation model, offering strong generalization across different manipulation scenarios.
+
+Positronic provides first-class support for OpenPI including:
+- Optimized training configuration for single capable GPU (LoRA-based, ~78GB)
+- Inference support (~62GB, likely cloud deployment)
+- Multiple codec variants for different robot platforms
+- Unified inference API compatible with all Positronic hardware
+- Integration with our fork: [Positronic-Robotics/openpi](https://github.com/Positronic-Robotics/openpi), kept up to date with upstream
+
+See [Model Selection Guide](../../docs/model-selection.md) for model comparison.
+
+## Hardware Requirements
+
+| Phase | Requirement | Notes |
+|-------|-------------|-------|
+| **Training** | capable server GPU (~78GB) | LoRA config (`pi05_positronic_lowmem`) fits on a single capable GPU |
+| **Inference** | GPU (~62GB) | Likely cloud deployment (e.g., capable GPU) |
+| **Training Time** | Multiple days | Typical for OpenPI |
+
+## Quick Start
+
+```bash
+# 1. Convert dataset
+cd docker && docker compose run --rm positronic-to-lerobot convert \
+  --dataset.dataset.path=~/datasets/my_task_raw \
+  --dataset.codec=@positronic.vendors.openpi.codecs.eepose_absolute \
+  --output_dir=~/datasets/openpi/my_task \
+  --fps=15
+
+# 2. Generate assets (required for OpenPI)
+cd docker && docker compose run --rm openpi-stats \
+  --input_path=~/datasets/openpi/my_task \
+  --output_path=~/datasets/openpi_assets
+
+# 3. Train
+cd docker && docker compose run --rm openpi-train \
+  --input_path=~/datasets/openpi/my_task \
+  --stats_path=~/datasets/openpi_assets/assets/ \
+  --output_path=~/checkpoints/openpi \
+  --exp_name=my_task_v1 \
+  --config_name=pi05_positronic_lowmem
+
+# 4. Serve
+cd docker && docker compose run --rm --service-ports openpi-server \
+  --checkpoints_dir=~/checkpoints/openpi/pi05_positronic_lowmem/my_task_v1/ \
+  --codec=@positronic.vendors.openpi.codecs.eepose_absolute
+
+# 5. Run inference
+uv run positronic-inference sim \
+  --policy=.remote \
+  --policy.host=localhost \
+  --driver.show_gui=True
+```
+
+See [Training Workflow](../../docs/training-workflow.md) for detailed step-by-step instructions.
 
 ## Available Codecs
 
-OpenPI supports multiple codecs (observation encoder + action decoder pairs) for different use cases:
+OpenPI supports multiple codecs for different robot platforms and observation/action formats.
 
 | Codec | Observation | Action | Use Case |
 |-------|-------------|--------|----------|
-| `eepose` | EE pose + grip | Absolute position | Default codec for training and inference |
-| `eepose_q` | EE pose + grip + joints | Absolute position | Combined feedback for better performance |
-| `droid` | Joint positions + grip | Joint delta (velocity) | Inference with pretrained DROID models |
+| `eepose_absolute` | EE pose (7D quat) + grip + images | Absolute EE position (7D) | Default for Positronic datasets, task-space control |
+| `openpi_positronic` | EE pose (OpenPI format) + grip + images | Absolute EE position (7D) | OpenPI-native key format |
+| `droid` | Joint positions + grip + images | Joint delta (velocity) | DROID dataset compatibility, joint-space control |
+| `eepose_q` | EE pose + joints + grip + images | Absolute EE position (7D) | Combined feedback (richer observations) |
+| `joints` | Joint positions + grip + images | Absolute EE position (7D) | Joint observations, task-space control |
 
-**Key notes:**
-- **`eepose`**: The primary codec. Handles both training data generation (LeRobot format) and inference (OpenPI format) automatically.
-- **`eepose_q`**: Same as `eepose` but includes joint positions (`q`) in the observation for richer state feedback.
-- **`droid`**: Inference-only codec for using pretrained DROID checkpoints. Uses joint delta actions instead of absolute position.
+**Key differences:**
+- **`eepose_absolute` vs `openpi_positronic`**: Same semantics, different key format (`observation.state` vs `observation/state`)
+- **`droid`**: For inference with existing DROID datasets (joint-based observations, delta actions). Use for evaluation, not training from scratch.
+- **`eepose_q`**: Includes both EE pose and joint positions for richer feedback
 
-## 1. Prepare Data
+**Choosing a codec:**
+- **Positronic datasets (simulated/hardware)**: Use `eepose_absolute`
+- **DROID dataset**: Use `droid` codec (joint-based observations, delta actions)
+- **Want joint feedback**: Use `eepose_q` (may improve performance)
 
-Positronic datasets must be converted into the LeRobot format using an OpenPI codec.
+See [Codecs Guide](../../docs/codecs.md) for comprehensive codec documentation.
 
-**Command:**
-```bash
-docker compose run --rm -v ~/datasets:/data positronic-to-lerobot convert \
-  --dataset.dataset=@positronic.cfg.ds.phail.phail \
-  --dataset.codec=@positronic.vendors.openpi.codecs.eepose \
-  --output_dir=/data/my_lerobot_data \
-  --fps=15
-```
+## Configuration Reference
 
-**Available public datasets:**
-- `@positronic.cfg.ds.phail.phail` - DROID teleoperation data (12GB, 352 episodes)
-- `@positronic.cfg.ds.phail.sim_stack_cubes` - Simulated cube stacking (499MB, 317 episodes)
-- `@positronic.cfg.ds.phail.sim_pick_place` - Simulated pick-and-place (1.3GB, 214 episodes)
+### Training Configuration
 
-**Examples for different codecs:**
-```bash
-# Default codec (EE pose + grip -> absolute position)
---dataset.codec=@positronic.vendors.openpi.codecs.eepose
+Default config: `pi05_positronic_lowmem` (LoRA-based, fits on 1x H100 GPU)
 
-# Combined feedback (EE pose + grip + joints -> absolute position)
---dataset.codec=@positronic.vendors.openpi.codecs.eepose_q
-```
+**Common parameters:**
 
-**Parameters:**
-- `--dataset.dataset`: The raw dataset configuration (see available datasets above)
-- `--dataset.codec`: OpenPI codec that defines observation/action encoding (see table above)
-- `--output_dir`: Destination for the converted LeRobot dataset (can be local or `s3://bucket/path`)
-- `--fps`: Target frames per second for the converted dataset
+| Parameter | Description | Default | Example |
+|-----------|-------------|---------|---------|
+| `--config_name` | OpenPI training config | `pi05_positronic_lowmem` | `pi05_droid` |
+| `--exp_name` | Experiment name (unique ID) | Required | `my_task_v1` |
+| `--num_train_steps` | Total training steps | Config default | `100000` |
+| `--resume` | Resume from existing checkpoint | `False` | `True` |
+| `--stats_path` | Path to generated assets | Required | `~/datasets/openpi_assets/assets/` |
+| `--output_path` | Checkpoint destination | Required | `~/checkpoints/openpi` |
 
-## 2. Generate Assets
+**WandB logging:** Enabled by default if `WANDB_API_KEY` is set in `docker/.env.wandb`.
 
-Before training, you must compute dataset statistics (normalization constants). The `openpi-stats` service handles this.
-
-**Command:**
-```bash
-docker compose run --rm -v ~/datasets:/data openpi-stats \
-  --input_path=/data/my_lerobot_data \
-  --output_path=/data/openpi_assets
-```
-
-- `--input_path`: The directory containing the LeRobot dataset (from step 1).
-- `--output_path`: Destination for the computed assets.
-
-## 3. Train Model
-
-Run the training job using the `openpi-train` service. You can customize the training process with various arguments provided [by training script](train.py).
-
-**Command:**
-```bash
-docker compose run --rm -v ~/datasets:/data -v ~/checkpoints:/checkpoints openpi-train \
-  --input_path=/data/my_lerobot_data \
-  --stats_path=/data/openpi_assets/assets/ \
-  --output_path=/checkpoints/openpi \
-  --exp_name=experiment_v1
-```
-
-**Common Parameters:**
-- `--config_name`: The OpenPI config to use (default: `pi05_positronic_lowmem`).
-- `--exp_name`: Unique name for this run.
-- `--num_train_steps`: Total training steps (optional).
-- `--resume`: Set to `True` to resume an existing run from the same experiment directory.
-- `--stats_path`: Path to the generated assets (must end in `.../assets/`).
-- `--output_path`: Destination for checkpoints and logs.
-
-If you want your run to report to wandb, add `docker/.env.wandb` containing your `WANDB_API_KEY`.
-
-## 4. Serve Inference
-
-The OpenPI inference server wraps the OpenPI policy in a FastAPI server that provides a unified API across all vendors (GR00T, LeRobot, OpenPI). The server manages the OpenPI subprocess and handles observation encoding/action decoding.
-
-### Starting the Server
+### Inference Server Configuration
 
 ```bash
-# Default codec (eepose)
-docker compose run --rm --service-ports -v ~/checkpoints:/checkpoints openpi-server \
-  --checkpoints_dir=/checkpoints/openpi/pi05_positronic_lowmem/experiment_v1/
-
-# With joint feedback
-docker compose run --rm --service-ports -v ~/checkpoints:/checkpoints openpi-server \
-  --codec=@positronic.vendors.openpi.codecs.eepose_q \
-  --checkpoints_dir=/checkpoints/openpi/pi05_positronic_lowmem/experiment_v1/
-
-# DROID codec (for pretrained DROID models)
-docker compose run --rm --service-ports -v ~/checkpoints:/checkpoints openpi-server \
-  --codec=@positronic.vendors.openpi.codecs.droid \
-  --config_name=pi05_droid \
-  --checkpoints_dir=/checkpoints/openpi/pi05_droid/experiment_v1/
+cd docker && docker compose run --rm --service-ports openpi-server \
+  --checkpoints_dir=~/checkpoints/openpi/pi05_positronic_lowmem/my_task_v1/ \
+  --codec=@positronic.vendors.openpi.codecs.eepose_absolute \
+  --config_name=pi05_positronic_lowmem \
+  --port=8000
 ```
 
-**Parameters:**
-- `--codec`: Codec for observation/action encoding (default: `@positronic.vendors.openpi.codecs.eepose`)
-- `--checkpoints_dir`: Full path to the experiment directory containing checkpoints
-- `--checkpoint`: (Optional) Specific checkpoint step to load. If omitted, loads the latest checkpoint
-- `--config_name`: (Optional) OpenPI config name (default: `pi05_positronic_lowmem`)
-- `--port`: (Optional) Port to serve on (default: 8000)
-- `--openpi_ws_port`: (Optional) Internal port for OpenPI subprocess (default: 8001)
+**Server parameters:**
 
-### API Endpoints
-
-The server exposes the following endpoints:
-
-**GET `/api/v1/models`**
-- Returns list of available checkpoints
-- Response: `{"models": ["checkpoint-1000", "checkpoint-2000", ...]}`
-
-**WebSocket `/api/v1/session`**
-- Default session (uses latest checkpoint)
-- Sends metadata on connection, then enters inference loop
-- Client sends serialized observations, server responds with serialized actions
-
-**WebSocket `/api/v1/session/{checkpoint_id}`**
-- Session with specific checkpoint
-- Same protocol as default session
-
-**Message Protocol:**
-1. Client connects to WebSocket
-2. Server sends: `{'meta': {...}}` (checkpoint info, codec metadata)
-3. For each inference step:
-   - Client sends: serialized observation dict
-   - Server responds: `{'result': action_dict}` or `{'error': error_message}`
-
-### Example Client Connection
-
-```python
-from websockets.sync.client import connect
-from positronic.utils.serialization import serialise, deserialise
-
-# Connect to server
-ws = connect('ws://localhost:8000/api/v1/session')
-
-# Receive metadata
-metadata = deserialise(ws.recv())
-print(f"Connected to checkpoint: {metadata['meta']['checkpoint_id']}")
-
-# Send observation and receive action
-observation = {
-    'robot_state.ee_pose': [0.1, 0.2, 0.3, 0, 0, 0, 1],
-    'grip': [0.5],
-    'image.wrist': wrist_image,
-    'image.exterior': exterior_image,
-}
-ws.send(serialise(observation))
-response = deserialise(ws.recv())
-action = response['result']
-```
-
-## 5. Run Inference
-
-To evaluate the policy with a visual interface, run the inference client locally.
-
-**Command:**
-```bash
-uv run positronic-inference \
-  sim_openpi_positronic \
-  --driver.simulation_time=20 \
-  --driver.show_gui=True \
-  --output_dir=~/datasets/inference_logs \
-  --policy.host=vm-h100 \
-  --policy.port=8000
-```
-
-- `sim_openpi_positronic`: The inference configuration preset.
-- `--policy.host`: The machine that runs the inference server.
-- `--policy.port`: The port that the inference server exposes.
+| Parameter | Description | Default | Example |
+|-----------|-------------|---------|---------|
+| `--checkpoints_dir` | Experiment directory (contains `checkpoint-N` folders) | Required | `~/checkpoints/openpi/.../my_task_v1/` |
+| `--checkpoint` | Specific checkpoint step | Latest | `10000`, `50000` |
+| `--codec` | Codec (must match training) | Based on variant | `@positronic.vendors.openpi.codecs.eepose_absolute` |
+| `--config_name` | OpenPI config name | `pi05_positronic_lowmem` | Same as training |
+| `--port` | Server port | `8000` | `8001` |
+| `--openpi_ws_port` | Internal OpenPI subprocess port | `8001` | `8002` |
 
 ## Troubleshooting
 
-### Server fails to start
+### Server Fails to Start
 
 **Problem:** Server exits with "OpenPI subprocess exited with code 1"
 
 **Solutions:**
-1. Check checkpoint directory exists and contains valid checkpoint files
-2. Verify config_name matches the training config used
-3. Check OpenPI subprocess logs for dependency issues
-4. Ensure OpenPI repository is available at `../openpi/` (sibling directory)
+1. Verify checkpoint directory exists and contains `checkpoint-N/` folders
+2. Check `--config_name` matches the training config used
+3. Ensure OpenPI repository is available at `../openpi/` (sibling directory)
 
-### WebSocket connection refused
+## See Also
 
-**Problem:** Client cannot connect to server WebSocket endpoint
+**Positronic Documentation:**
+- [Model Selection Guide](../../docs/model-selection.md) — When to use OpenPI vs GR00T vs LeRobot
+- [Codecs Guide](../../docs/codecs.md) — Understanding observation/action encoding
+- [Training Workflow](../../docs/training-workflow.md) — Unified training steps across all models
+- [Inference Guide](../../docs/inference.md) — Deployment and evaluation patterns
 
-**Solutions:**
-1. Verify server is running with `--service-ports` flag (exposes port 8000)
-2. Check firewall settings allow connections on port 8000
-3. Try `curl http://localhost:8000/api/v1/models` to verify server is responsive
-4. Check server logs for startup errors
+**Other Models:**
+- [GR00T](../groot/README.md) — NVIDIA's generalist robot policy
+- [LeRobot ACT](../lerobot/README.md) — Single-task transformer
 
-### Checkpoint not found
-
-**Problem:** Server returns "Checkpoint not found" error
-
-**Solutions:**
-1. Run `curl http://localhost:8000/api/v1/models` to see available checkpoints
-2. Verify `--checkpoints_dir` path is correct (should end with experiment directory)
-3. Check checkpoint directory structure: `checkpoints/<checkpoint-id>/`
-4. If using specific checkpoint, verify the checkpoint ID exists
-
-### Action decoding fails
-
-**Problem:** Server returns error during action decoding
-
-**Solutions:**
-1. Verify codec matches the model training config:
-   - Positronic models need `eepose` codec (default)
-   - DROID models need `droid` codec (joint delta actions)
-2. Check observation format matches codec requirements
-3. Verify image shapes are correct (will be resized to 224x224)
-4. Check action space dimensions match expected values
-
-### Subprocess startup timeout
-
-**Problem:** "OpenPI subprocess did not become ready within 120s"
-
-**Solutions:**
-1. First startup may be slow (model download, loading weights)
-2. Check available GPU memory (OpenPI requires ~8GB VRAM)
-3. Increase timeout by modifying `_wait_for_ready(timeout=...)` in server.py
-4. Check OpenPI subprocess logs for slow operations
+**External:**
+- [Physical Intelligence](https://www.physicalintelligence.company/) — OpenPI creators
+- [Positronic OpenPI Fork](https://github.com/Positronic-Robotics/openpi) — Our integration branch
