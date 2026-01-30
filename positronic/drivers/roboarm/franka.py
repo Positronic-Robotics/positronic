@@ -79,16 +79,21 @@ class Robot(pimm.ControlSystem):
         *,
         relative_dynamics_factor=0.2,
         home_joints: list[float] | None = None,
+        home_joints_variation: list[float] | None = None,
         load: tuple | None = None,
     ) -> None:
         """
         :param ip: IP address of the robot.
         :param relative_dynamics_factor: Relative dynamics factor in [0, 1]. Smaller values are more conservative.
         :param home_joints: Joints of "reset" position.
+        :param home_joints_variation: Max random deviation per joint in radians. Set to [0]*7 to disable.
         """
         self._ip = ip
         self._relative_dynamics_factor = relative_dynamics_factor
         self._home_joints = home_joints if home_joints is not None else [0.0, -0.31, 0.0, -1.65, 0.0, 1.522, 0.0]
+        self._home_joints_variation = (
+            home_joints_variation if home_joints_variation is not None else [0.03, 0.05, 0.08, 0.08, 0.10, 0.10, 0.10]
+        )
         self.commands: pimm.SignalReceiver = pimm.ControlSystemReceiver(self, default=None)
         self.state: pimm.SignalEmitter = pimm.ControlSystemEmitter(self)
         self._load = load
@@ -122,7 +127,13 @@ class Robot(pimm.ControlSystem):
         robot_state._start_reset()
         self.state.emit(robot_state)
 
-        robot.set_target_joints(np.asarray(self._home_joints, dtype=np.float64), asynchronous=False)
+        target = np.asarray(self._home_joints, dtype=np.float64)
+        if any(v > 0 for v in self._home_joints_variation):
+            variation = np.random.uniform(
+                -np.asarray(self._home_joints_variation), np.asarray(self._home_joints_variation)
+            )
+            target = target + variation
+        robot.set_target_joints(target, asynchronous=False)
 
         robot_state._finish_reset()
         self.state.emit(robot_state)
