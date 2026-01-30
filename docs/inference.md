@@ -58,15 +58,15 @@ Use local when latency is critical (<50ms), robot has built-in GPU, or offline o
 
 ## Inference Drivers
 
-Positronic provides three drivers for managing inference episodes (see `positronic/inference.py`):
+Positronic provides three drivers for managing inference episodes (see [`positronic/inference.py`](../positronic/inference.py)):
 
 **Timed driver (automatic):** Runs inference automatically for a fixed duration per episode. Specify `--driver.simulation_time=60` (seconds per episode) and `--driver.num_iterations=10` (number of episodes). Useful for batch evaluation without manual intervention.
 
-**Keyboard driver (manual):** Control inference with keyboard. Press `s` to start episode, `p` to stop and save, `r` to reset without saving, `q` to quit. Specify `--driver=keyboard` and optionally `--driver.show_gui=True` for DearPyGui visualization. Useful for manual evaluation and debugging.
+**Keyboard driver (manual):** Control inference with keyboard. Press `s` to start episode, `p` to stop and save, `r` to reset without saving, `q` to quit. Specify `--driver=.keyboard` and optionally `--driver.show_gui=True` for DearPyGui visualization. Useful for manual evaluation and debugging.
 
-**Eval UI driver:** Dedicated evaluation interface for policy assessment. Specify `--driver=eval_ui` for graphical controls and metrics visualization. Useful for systematic policy evaluation with visual feedback.
+**Eval UI driver:** Dedicated evaluation interface for policy assessment. Specify `--driver=.eval_ui` for graphical controls and metrics visualization. Useful for systematic policy evaluation with visual feedback.
 
-Default driver is `timed` with 15 seconds simulation time. Override with `--driver=keyboard` or `--driver=eval_ui` as needed.
+Default driver is `timed` with 15 seconds simulation time. Override with `--driver=.keyboard` or `--driver=.eval_ui` as needed.
 
 ## Recording and Replay
 
@@ -76,7 +76,7 @@ Replay recorded runs: `uv run positronic-server --dataset.path=~/datasets/infere
 
 ## Evaluation Workflow
 
-Run inference with recording, review in Positronic server, score manually (success/partial/failure), repeat for 10-50 trials, calculate success rate and note common failure modes. Compare checkpoints by running inference with different `--policy.model_id` values. For batch evaluation, use `utilities/validate_server.py`.
+Run inference with recording, review in Positronic server, score manually (success/partial/failure), repeat for 10-50 trials, calculate success rate and note common failure modes. Compare checkpoints by running inference with different `--policy.model_id` values. For batch evaluation, use [`utilities/validate_server.py`](../utilities/validate_server.py).
 
 **Iteration:** Evaluate checkpoint → identify failures in server → collect targeted demos for failure modes → append to dataset → retrain → re-evaluate. Convergence typically occurs after 3-5 iterations.
 

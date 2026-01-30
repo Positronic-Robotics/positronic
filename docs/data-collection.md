@@ -50,14 +50,6 @@ Open Oculus Browser, navigate to `https://<host-ip>:5005/`. Browser shows "Dange
 
 **Controls:** Right B (start/stop recording), Right A (toggle tracking), Right stick press (abort/reset), Right trigger (gripper).
 
-**Optional video streaming:**
-```bash
-uv run positronic-data-collection sim \
-    --output_dir=~/datasets/my_task \
-    --webxr=.oculus \
-    --stream_video_to_webxr=wrist_camera
-```
-
 ## Collection Workflow
 
 Press **Track** (or Right A) to enable controller. Press **Record** (or Right B) to start episode. Perform task (e.g., grasp cube, move, place). Press **Record** again to save. Press **Reset** (or Right stick press) to randomize scene and start next episode. Press **Reset** during recording to abort and discard.
@@ -88,7 +80,6 @@ Requires Franka Panda with FCI, gripper, cameras. Install extras: `uv sync --fro
 | `--webxr` | Teleoperation | `.iphone`, `.android`, `.oculus`, `None` |
 | `--sound` | Audio feedback | `None` (disable), default (enable) |
 | `--operator_position` | Camera viewpoint | `.FRONT`, `.BACK`, `.LEFT`, `.RIGHT` |
-| `--stream_video_to_webxr` | VR camera feed | `wrist_camera` |
 
 **S3 support:** Positronic relies on [pos3](https://github.com/Positronic-Robotics/pos3) for S3 integration. Data is cached locally and synced automatically.
 

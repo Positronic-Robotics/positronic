@@ -17,7 +17,7 @@ Positronic uses codecs to project raw data to any model format. Record once, try
 
 ### LeRobot Codecs
 
-See `positronic/vendors/lerobot/codecs.py` for implementation.
+See [`positronic/vendors/lerobot/codecs.py`](../positronic/vendors/lerobot/codecs.py) for implementation.
 
 | Codec | Observation | Action |
 |-------|-------------|--------|
@@ -32,7 +32,7 @@ cd docker && docker compose run --rm positronic-to-lerobot convert \
 
 ### GR00T Codecs
 
-See `positronic/vendors/gr00t/codecs.py` for implementation.
+See [`positronic/vendors/gr00t/codecs.py`](../positronic/vendors/gr00t/codecs.py) for implementation.
 
 | Codec | Observation | Action | Modality Configs |
 |-------|-------------|--------|------------------|
@@ -57,7 +57,7 @@ cd docker && docker compose run --rm groot-train \
 
 ### OpenPI Codecs
 
-See `positronic/vendors/openpi/codecs.py` for implementation.
+See [`positronic/vendors/openpi/codecs.py`](../positronic/vendors/openpi/codecs.py) for implementation.
 
 | Codec | Observation | Action |
 |-------|-------------|--------|

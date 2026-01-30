@@ -97,7 +97,7 @@ cd docker && docker compose run --rm positronic-to-lerobot append \
 
 ## Step 2: Train Model
 
-Run the training job using vendor-specific Docker services. All services are defined in `docker-compose.yml` in the `docker/` directory.
+Run the training job using vendor-specific Docker services. All services are defined in [`docker/docker-compose.yml`](../docker/docker-compose.yml).
 
 ### LeRobot Training
 
