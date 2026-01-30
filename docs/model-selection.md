@@ -60,7 +60,7 @@ Positronic supports three foundation models with different capabilities and reso
 **Strengths:**
 - Fast training (several hours on consumer GPUs)
 - Efficient inference on consumer hardware
-- Excellent for well-defined, focused tasks
+- Easy and quick to get started
 - Rapid iteration cycles
 - LeRobot ecosystem, cheaper models, bigger community
 

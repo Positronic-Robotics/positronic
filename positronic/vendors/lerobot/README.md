@@ -6,22 +6,6 @@ LeRobot ACT (Action Chunking Transformer) is a single-task imitation learning mo
 
 ACT uses action chunking to output sequences of future actions, enabling smooth execution and reducing compounding errors. This makes it particularly effective for precise manipulation tasks where consistency and repeatability are critical.
 
-## Standing on LeRobot's Shoulders
-
-**We use HuggingFace LeRobot's training scripts and workflows.** LeRobot provides battle-tested implementations of imitation learning algorithms and a strong open-source community.
-
-Positronic adds the operational infrastructure LeRobot doesn't focus on:
-- **Data ops**: Format-agnostic dataset storage, codec projection, multi-rate recording
-- **Hardware integration**: Drivers for Franka, Kinova, SO101, DROID; WebXR teleoperation
-- **Unified inference**: Vendor-agnostic API for deploying LeRobot alongside GR00T and OpenPI
-- **Lifecycle management**: Curation tools, iteration workflows, monitoring
-
-**LeRobot**: Training-centric. Fast experiments on reference hardware and public datasets.
-**Positronic**: Lifecycle-centric. Adds infrastructure for hardware integration and lifecycle management.
-
-**Roadmap**: Support all LeRobot models.
-
-
 See [Model Selection Guide](../../docs/model-selection.md) for comparison.
 
 ## Hardware Requirements
