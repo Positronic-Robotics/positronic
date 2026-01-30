@@ -66,7 +66,7 @@ See the [Codecs Guide](codecs.md) for detailed codec documentation.
 |-------|---------------|
 | **LeRobot ACT** | `eepose_absolute`, `joints_absolute` |
 | **GR00T** | `ee_rot6d_joints`, `ee_absolute`, `ee_joints` |
-| **OpenPI** | `eepose_absolute`, `openpi_positronic`, `droid`, `eepose_q` |
+| **OpenPI** | `eepose`, `eepose_q`, `droid` |
 
 ### S3 Support
 
@@ -189,7 +189,7 @@ cd docker && docker compose run --rm --service-ports groot-server \
 ```bash
 cd docker && docker compose run --rm --service-ports openpi-server \
   --checkpoints_dir=~/checkpoints/openpi/pi05_positronic_lowmem/experiment_v1/ \
-  --codec=@positronic.vendors.openpi.codecs.eepose_absolute
+  --codec=@positronic.vendors.openpi.codecs.eepose
 ```
 
 ### Server Parameters
@@ -271,7 +271,7 @@ cd docker && docker compose run --rm positronic-to-lerobot convert \
 
 cd docker && docker compose run --rm positronic-to-lerobot convert \
   --dataset.dataset.path=~/datasets/my_task \
-  --dataset.codec=@positronic.vendors.openpi.codecs.eepose_absolute \
+  --dataset.codec=@positronic.vendors.openpi.codecs.eepose \
   --output_dir=~/datasets/openpi/my_task
 
 # Train all models (can run in parallel)
