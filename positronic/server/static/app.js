@@ -287,7 +287,8 @@ function populateEpisodesTable(columns) {
     if (window.IS_GROUPED_TABLE) {
       const filters = { ...groupFilters, ...filtersState.filters };
       const urlParams = new URLSearchParams(filters);
-      viewLink.href = `/?${urlParams.toString()}`;
+      const episodesUrl = window.EPISODES_URL || '/';
+      viewLink.href = `${episodesUrl}?${urlParams.toString()}`;
     } else {
       viewLink.href = `/episode/${episodeIndex}`;
     }

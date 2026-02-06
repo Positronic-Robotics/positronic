@@ -26,7 +26,17 @@ To migrate a dataset from internal s3://raw/ to public s3://positronic-public/:
 See internal configs (cfg/ds/internal.py) for source dataset definitions.
 """
 
-from . import PUBLIC, local, local_all
+from datetime import datetime
+
+import configuronic as cfn
+import pos3
+
+from positronic.dataset import Episode
+from positronic.dataset.transforms.episode import Derive, Identity
+from positronic.server.positronic_server import main as server_main
+from positronic.utils.logging import init_logging
+
+from . import PUBLIC, group, local, local_all, transform
 
 # DROID teleoperation data for PhAIL tasks (towels, spoons, scissors)
 # Migrated from: @positronic.cfg.ds.internal.droid
@@ -42,3 +52,55 @@ sim_stack_cubes = local.override(path='s3://positronic-public/datasets/sim-stack
 # Migrated from: @positronic.cfg.ds.internal.sim_pnp
 # Size: 1.3GB, 214 episodes with transforms baked in
 sim_pick_place = local.override(path='s3://positronic-public/datasets/sim-pick-place/', profile=PUBLIC)
+
+
+# =============================================================================
+# Server configuration for visualizing public PhAIL dataset
+# No AWS credentials required - dataset is publicly accessible
+# =============================================================================
+
+
+@cfn.config()
+def episodes_table():
+    return {
+        '__index__': {'label': '#', 'format': '%d'},
+        '__duration__': {'label': 'Duration', 'format': '%.0f sec'},
+        'task': {'label': 'Task', 'filter': True},
+        'started': {'label': 'Started', 'format': '%Y-%m-%d %H:%M'},
+    }
+
+
+@cfn.config()
+def group_by_task():
+    def group_fn(episodes: list[Episode]):
+        duration = sum(ep.duration_ns / 1e9 / 3600 for ep in episodes)
+        return {'task': episodes[0]['task'], 'duration': duration, 'count': len(episodes)}
+
+    format_table = {
+        'task': {'label': 'Task'},
+        'duration': {'label': 'Duration', 'format': '%.2f hours'},
+        'count': {'label': 'Count'},
+    }
+
+    return 'task', group_fn, format_table, {}
+
+
+phail_with_started = transform.override(
+    base=phail,
+    transforms=[
+        group.override(
+            transforms=[Identity(), Derive(started=lambda ep: datetime.fromtimestamp(ep.meta['created_ts_ns'] / 1e9))]
+        )
+    ],
+    extra_meta={'name': 'PhAIL Public Dataset'},
+)
+
+server = server_main.override(
+    dataset=phail_with_started, ep_table_cfg=episodes_table, group_tables={'tasks': group_by_task}, home_page='tasks'
+)
+
+
+if __name__ == '__main__':
+    with pos3.mirror():
+        init_logging()
+        cfn.cli(server)

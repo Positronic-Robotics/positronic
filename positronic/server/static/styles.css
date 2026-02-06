@@ -764,3 +764,38 @@ table.root-table > tbody > tr > td:first-child {
 .hidden {
   display: none;
 }
+
+/* Site Navigation */
+
+.site-nav {
+  display: flex;
+  gap: 0.5rem;
+  padding: 0.75rem 1.5rem;
+  background: var(--bg-surface);
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.nav-link {
+  padding: 0.5rem 1rem;
+  color: var(--text-muted);
+  text-decoration: none;
+  font-size: 0.875rem;
+  font-weight: 500;
+  border-radius: var(--radius-md);
+  transition: color 0.15s, background 0.15s;
+}
+
+.nav-link:hover {
+  color: var(--text-primary);
+  background: var(--bg-elevated);
+}
+
+.nav-link--active {
+  color: var(--accent);
+  background: var(--accent-muted);
+}
+
+.nav-link--active:hover {
+  color: var(--accent);
+  background: var(--accent-soft);
+}

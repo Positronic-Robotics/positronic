@@ -89,6 +89,21 @@ def started(ep: Episode) -> datetime:
     return datetime.fromtimestamp(ep.meta['created_ts_ns'] / 1e9)
 
 
+def units(ep: Episode) -> int | None:
+    if 'eval.successful_items' in ep:
+        return ep['eval.successful_items']
+    if 'units' in ep:
+        return ep['units']
+    return None
+
+
+def uph(ep: Episode) -> float | None:
+    u = units(ep)
+    if not u:
+        return None
+    return u / (ep.duration_ns / 1e9 / 3600)
+
+
 ########################
 # Unified configs (real + sim)
 ########################

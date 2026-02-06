@@ -14,7 +14,15 @@
 </head>
 <body>
     <div id="app-shell">
-      {% block navbar %}{% endblock %}
+      {% block navbar %}
+      {% if nav_items and nav_items|length > 1 %}
+      <nav class="site-nav">
+        {% for item in nav_items %}
+        <a href="{{ item.url }}" class="nav-link{% if current_page == item.name %} nav-link--active{% endif %}">{{ item.label }}</a>
+        {% endfor %}
+      </nav>
+      {% endif %}
+      {% endblock %}
       {% block content %}{% endblock %}
     </div>
 

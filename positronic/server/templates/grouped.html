@@ -8,6 +8,7 @@
 <script>
     window.API_ENDPOINT = "{{ api_endpoint }}";
     window.IS_GROUPED_TABLE = true;
+    window.EPISODES_URL = "{{ episodes_url | default('/') }}";
     checkDatasetStatus();
 </script>
 {% endblock %}

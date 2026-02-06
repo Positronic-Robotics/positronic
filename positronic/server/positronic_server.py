@@ -38,6 +38,7 @@ app_state: dict[str, object] = {
     'episode_keys': {},
     'max_resolution': 640,
     'group_tables_cfg': {},
+    'home_page': None,  # None = episodes, or group name like 'tasks'
 }
 
 
@@ -98,9 +99,66 @@ def _iter_file_chunks(path: str, *, chunk_size: int = 128 * 1024):
             yield chunk
 
 
+def _get_nav_context() -> dict[str, Any]:
+    """Build navigation context for templates."""
+    home_page = app_state.get('home_page')
+    group_tables = app_state.get('group_tables_cfg', {})
+
+    nav_items = []
+    episodes_url = '/episodes' if home_page else '/'
+
+    # If home_page is set, it goes first
+    if home_page and home_page in group_tables:
+        label = home_page.replace('_', ' ').title()
+        nav_items.append({'name': home_page, 'url': '/', 'label': label})
+
+    # Other group links
+    for group_name in group_tables.keys():
+        if group_name == home_page:
+            continue  # Already added as home
+        url = f'/groups/{group_name}'
+        label = group_name.replace('_', ' ').title()
+        nav_items.append({'name': group_name, 'url': url, 'label': label})
+
+    # Episodes link last (unless it's the home page)
+    if home_page:
+        nav_items.append({'name': 'episodes', 'url': episodes_url, 'label': 'Episodes'})
+    else:
+        # Episodes is home, insert at beginning
+        nav_items.insert(0, {'name': 'episodes', 'url': '/', 'label': 'Episodes'})
+
+    return {'nav_items': nav_items, 'home_page': home_page, 'episodes_url': episodes_url}
+
+
 @app.get('/', response_class=HTMLResponse)
 async def index(request: Request):
-    return templates.TemplateResponse('index.html', {'request': request, 'repo_id': app_state['root']})
+    home_page = app_state.get('home_page')
+    if home_page:
+        # Render group view as home page
+        return templates.TemplateResponse(
+            'grouped.html',
+            {
+                'request': request,
+                'repo_id': app_state['root'],
+                'api_endpoint': f'/api/groups/{home_page}',
+                **_get_nav_context(),
+                'current_page': home_page,
+            },
+        )
+    # Default: render episodes
+    return templates.TemplateResponse(
+        'index.html',
+        {'request': request, 'repo_id': app_state['root'], **_get_nav_context(), 'current_page': 'episodes'},
+    )
+
+
+@app.get('/episodes', response_class=HTMLResponse)
+async def episodes_view(request: Request):
+    """Episodes list view (used when home_page is set to a group)."""
+    return templates.TemplateResponse(
+        'index.html',
+        {'request': request, 'repo_id': app_state['root'], **_get_nav_context(), 'current_page': 'episodes'},
+    )
 
 
 @app.get('/episode/{episode_id}', response_class=HTMLResponse)
@@ -239,7 +297,14 @@ async def api_groups(request: Request, suffix: str):
 @app.get('/groups/{suffix}', response_class=HTMLResponse)
 async def grouped_view(request: Request, suffix: str):
     return templates.TemplateResponse(
-        'grouped.html', {'request': request, 'repo_id': app_state['root'], 'api_endpoint': f'/api/groups/{suffix}'}
+        'grouped.html',
+        {
+            'request': request,
+            'repo_id': app_state['root'],
+            'api_endpoint': f'/api/groups/{suffix}',
+            **_get_nav_context(),
+            'current_page': suffix,
+        },
     )
 
 
@@ -309,6 +374,7 @@ def main(
     debug: bool = False,
     reset_cache: bool = False,
     group_tables: dict[str, tuple[tuple[str, ...], Callable, TableConfig, dict[str, str]]] | None = None,
+    home_page: str | None = None,
 ):
     """Visualize a Dataset with Rerun.
 
@@ -360,6 +426,7 @@ def main(
     app_state['episode_table_cfg'] = ep_table_cfg or {}
     app_state['group_tables_cfg'] = group_tables or {}
     app_state['max_resolution'] = max_resolution
+    app_state['home_page'] = home_page
 
     if reset_cache and os.path.exists(cache_dir):
         logging.info(f'Clearing RRD cache directory: {os.path.abspath(cache_dir)}')
