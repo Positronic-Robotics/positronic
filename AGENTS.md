@@ -40,9 +40,12 @@ This applies to:
 - Run any Python: `uv run python script.py`
 - Syntax check: `uv run python -m py_compile file.py`
 
+## Code style
+- No imports inside functions/methods; always place imports at the top of the file
+- Exception: circular dependencies or truly unavoidable cases
+
 ## Testing
 - Don't add new test files unless explicitly asked
-- Never import inside test functions; add imports at the top of the file
 
 ## Commit messages
 - Short, imperative sentences (e.g., "Fix wrong type", not "Fixed wrong type")

@@ -1,6 +1,7 @@
 import json
 
 import numpy as np
+import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 
@@ -507,3 +508,43 @@ class TestLazyMetaProperties:
         size2 = meta2['size_mb']
 
         assert size1 == size2
+
+    def test_created_ts_ns_preserved(self, tmp_path):
+        """Test that created_ts_ns parameter is preserved in meta.json."""
+        ep_dir = tmp_path / 'ep_created'
+        original_ts = 1234567890123456789
+
+        with DiskEpisodeWriter(ep_dir, created_ts_ns=original_ts) as w:
+            w.append('a', 1, 1000)
+
+        ep = DiskEpisode(ep_dir)
+        assert ep.meta['created_ts_ns'] == original_ts
+
+    def test_duration_computed_from_scanned_files(self, tmp_path):
+        """Test that duration is computed by scanning parquet files for raw writes."""
+        ep_dir = tmp_path / 'ep_scan'
+
+        with DiskEpisodeWriter(ep_dir):
+            # Write a parquet file directly (simulating migration's raw write)
+            timestamps = [1000, 2000, 5000]
+            table = pa.table({'timestamp': timestamps, 'value': [1, 2, 3]})
+            pq.write_table(table, ep_dir / 'signal.parquet')
+
+        # Duration should be computed from scanned file
+        ep = DiskEpisode(ep_dir)
+        assert ep.duration_ns == 4000  # 5000 - 1000
+
+    def test_duration_computed_from_frames_parquet(self, tmp_path):
+        """Test that duration is computed from .frames.parquet files (video signals)."""
+        ep_dir = tmp_path / 'ep_video_scan'
+
+        with DiskEpisodeWriter(ep_dir):
+            # Write a frames parquet file directly (simulating video migration)
+            timestamps = [2000, 3000, 8000]
+            table = pa.table({'ts_ns': timestamps})
+            pq.write_table(table, ep_dir / 'cam.frames.parquet')
+            # Also need to create dummy video file for completeness
+            (ep_dir / 'cam.mp4').write_bytes(b'dummy')
+
+        ep = DiskEpisode(ep_dir)
+        assert ep.duration_ns == 6000  # 8000 - 2000

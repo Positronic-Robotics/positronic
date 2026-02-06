@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
+import pyarrow.parquet as pq
 
 from positronic.utils.git import get_git_state
 from positronic.utils.lazy_dict import LazyDict
@@ -77,11 +78,20 @@ def _cached_env_writer_info() -> dict:
 class DiskEpisodeWriter(EpisodeWriter):
     """Writer for recording episode data containing multiple signals."""
 
-    def __init__(self, directory: Path, *, on_close: Callable[[DiskEpisodeWriter], None] | None = None) -> None:
+    def __init__(
+        self,
+        directory: Path,
+        *,
+        on_close: Callable[[DiskEpisodeWriter], None] | None = None,
+        created_ts_ns: int | None = None,
+    ) -> None:
         """Initialize episode writer.
 
         Args:
             directory: Directory to write episode data to (must not exist)
+            on_close: Optional callback invoked after successful episode close
+            created_ts_ns: Optional creation timestamp (defaults to current time).
+                Use this to preserve original creation time during migration.
         """
         self._path = directory
         assert not self._path.exists(), f'Writing to existing directory {self._path}'
@@ -95,12 +105,9 @@ class DiskEpisodeWriter(EpisodeWriter):
         self._finished = False
         self._aborted = False
         self._on_close = on_close
-        # Track timestamps for duration computation
-        self._first_ts: int | None = None
-        self._last_ts: int | None = None
 
         # Write system metadata immediately
-        self._meta = {'schema_version': EPISODE_SCHEMA_VERSION, 'created_ts_ns': time.time_ns()}
+        self._meta = {'schema_version': EPISODE_SCHEMA_VERSION, 'created_ts_ns': created_ts_ns or time.time_ns()}
         self._meta['writer'] = _cached_env_writer_info()
         self._meta['writer']['name'] = f'{self.__class__.__module__}.{self.__class__.__qualname__}'
         self._meta['path'] = str(self._path.resolve(strict=True))
@@ -138,12 +145,6 @@ class DiskEpisodeWriter(EpisodeWriter):
 
         self._writers[signal_name].append(data, ts_ns, extra_ts)
 
-        # Track timestamps for duration computation
-        if self._first_ts is None or ts_ns < self._first_ts:
-            self._first_ts = ts_ns
-        if self._last_ts is None or ts_ns > self._last_ts:
-            self._last_ts = ts_ns
-
     def set_static(self, name: str, data: Any) -> None:
         """Set a static (non-time-varying) item by key for this episode.
 
@@ -173,6 +174,37 @@ class DiskEpisodeWriter(EpisodeWriter):
             )
         self._static_items[name] = data
 
+    def _scan_timestamps(self) -> tuple[int | None, int | None]:
+        """Scan parquet files for min/max timestamps."""
+        first_ts: int | None = None
+        last_ts: int | None = None
+
+        for parquet_file in self._path.glob('*.parquet'):
+            try:
+                schema = pq.read_schema(parquet_file)
+                # Vector signals use 'timestamp', video frames use 'ts_ns'
+                if 'timestamp' in schema.names:
+                    col_name = 'timestamp'
+                elif 'ts_ns' in schema.names:
+                    col_name = 'ts_ns'
+                else:
+                    continue
+
+                table = pq.read_table(parquet_file, columns=[col_name])
+                timestamps = table[col_name].to_pylist()
+                if not timestamps:
+                    continue
+
+                file_first, file_last = min(timestamps), max(timestamps)
+                if first_ts is None or file_first < first_ts:
+                    first_ts = file_first
+                if last_ts is None or file_last > last_ts:
+                    last_ts = file_last
+            except Exception:
+                continue
+
+        return first_ts, last_ts
+
     def __exit__(self, exc_type, exc, tb) -> None:
         """Finalize all signal writers and persist static items on context exit."""
         if exc_type is not None and not self._aborted:
@@ -193,9 +225,10 @@ class DiskEpisodeWriter(EpisodeWriter):
             return
         self._finished = True
 
-        # Compute and store duration
-        if self._first_ts is not None and self._last_ts is not None:
-            self._meta['duration_ns'] = int(self._last_ts - self._first_ts)
+        # Compute duration by scanning parquet files
+        first_ts, last_ts = self._scan_timestamps()
+        if first_ts is not None and last_ts is not None:
+            self._meta['duration_ns'] = int(last_ts - first_ts)
 
         # Write all static items into a single static.json
         episode_json = self._path / 'static.json'
@@ -208,7 +241,7 @@ class DiskEpisodeWriter(EpisodeWriter):
 
         _clear_unfinished(self._path)
 
-        if exc_type is None and not self._aborted and self._on_close is not None:
+        if exc_type is None and self._on_close is not None:
             self._on_close(self)
 
     def abort(self) -> None:
@@ -456,7 +489,13 @@ class LocalDatasetWriter(DatasetWriter):
                     max_id = eid
         return max_id + 1
 
-    def new_episode(self) -> DiskEpisodeWriter:
+    def new_episode(self, *, created_ts_ns: int | None = None) -> DiskEpisodeWriter:
+        """Create a new episode writer.
+
+        Args:
+            created_ts_ns: Optional creation timestamp (defaults to current time).
+                Use this to preserve original creation time during migration.
+        """
         eid = self._next_episode_id
         self._next_episode_id += 1  # Reserve id immediately
 
@@ -465,7 +504,7 @@ class LocalDatasetWriter(DatasetWriter):
         # responsible for creating it and expects it to not exist yet.
         ep_dir = block_dir / f'{eid:012d}'
 
-        writer = DiskEpisodeWriter(ep_dir)
+        writer = DiskEpisodeWriter(ep_dir, created_ts_ns=created_ts_ns)
         return writer
 
     def __exit__(self, exc_type, exc, tb) -> None:

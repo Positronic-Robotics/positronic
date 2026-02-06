@@ -132,7 +132,9 @@ def migrate_remote_dataset(source_url: str, dest_path: str) -> None:
 
     with RemoteDataset(source_url) as remote_ds, LocalDatasetWriter(resolved_path) as writer:
         for episode in tqdm.tqdm(remote_ds, total=len(remote_ds), desc='Migrating'):
-            with writer.new_episode() as ew:
+            # Preserve original creation timestamp
+            created_ts_ns = episode.meta.get('created_ts_ns')
+            with writer.new_episode(created_ts_ns=created_ts_ns) as ew:
                 for key, value in episode.static.items():
                     ew.set_static(key, value)
 
