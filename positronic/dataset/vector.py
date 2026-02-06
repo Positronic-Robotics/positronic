@@ -23,38 +23,41 @@ class SimpleSignal(Signal[T]):
     def __init__(self, filepath: Path):
         """Initialize Signal reader from a parquet file."""
         self.filepath = filepath
-        self._data: pa.Table | None = None
-        # Initialize with empty arrays to satisfy type checkers; real data is loaded lazily
-        self._timestamps: np.ndarray = np.empty(0, dtype=np.int64)
-        self._values: np.ndarray = np.empty(0, dtype=object)
+        self._timestamps: np.ndarray | None = None
+        self._values: np.ndarray | None = None
 
-    def _load_data(self):
-        """Lazily load parquet data into memory as numpy arrays."""
-        if self._data is None:
+    def _load_timestamps(self):
+        """Load only the timestamp column — cheap, no value decoding."""
+        if self._timestamps is None:
+            self._timestamps = pq.read_table(self.filepath, columns=['timestamp'])['timestamp'].to_numpy()
+
+    def _load_values(self):
+        """Load values (and timestamps if not yet loaded). Expensive for vector data due to np.stack."""
+        if self._values is None:
             table = pq.read_table(self.filepath)
-            self._timestamps = table['timestamp'].to_numpy()
+            if self._timestamps is None:
+                self._timestamps = table['timestamp'].to_numpy()
             values = table['value'].to_numpy()
             # Stack object arrays of numeric arrays into proper 2D arrays
             if values.dtype == object and len(values) > 0 and isinstance(values[0], np.ndarray):
                 values = np.stack(values)
             self._values = values
-            self._data = table
 
     def __len__(self) -> int:
         """Returns the number of records in the signal."""
-        self._load_data()
+        self._load_timestamps()
         return len(self._timestamps)
 
     def _ts_at(self, index_or_indices: IndicesLike) -> Sequence[int] | np.ndarray:
-        self._load_data()
+        self._load_timestamps()
         return self._timestamps[index_or_indices]
 
     def _values_at(self, index_or_indices: IndicesLike) -> Sequence[T]:
-        self._load_data()
+        self._load_values()
         return self._values[index_or_indices]
 
     def _search_ts(self, ts_or_array: RealNumericArrayLike) -> IndicesLike:
-        self._load_data()
+        self._load_timestamps()
         req = np.asarray(ts_or_array)
         if req.size == 0:
             return np.array([], dtype=np.int64)
