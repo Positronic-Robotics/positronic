@@ -4,7 +4,7 @@
     {% block head %}
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Positronic Server – {% block title %}{% endblock %}</title>
+    <title>{% block title_prefix %}Positronic Server{% endblock %} – {% block title %}{% endblock %}</title>
     <meta
       name="description"
       content="{% block description %}{% endblock %}"
@@ -16,6 +16,7 @@
     <div id="app-shell">
       {% block navbar %}{% endblock %}
       {% block content %}{% endblock %}
+      {% block footer %}{% endblock %}
     </div>
 
     <script src="/static/app.js"></script>
