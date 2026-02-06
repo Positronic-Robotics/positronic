@@ -160,6 +160,7 @@ cython_debug/
 
 # VSCode
 .vscode/
+*.code-workspace
 
 # Environment variables
 .env*

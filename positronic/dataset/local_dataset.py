@@ -16,6 +16,7 @@ from typing import Any
 import numpy as np
 
 from positronic.utils.git import get_git_state
+from positronic.utils.lazy_dict import LazyDict
 
 from .dataset import ConcatDataset, Dataset, DatasetWriter
 from .episode import EPISODE_SCHEMA_VERSION, SIGNAL_FACTORY_T, Episode, EpisodeWriter, T
@@ -94,6 +95,9 @@ class DiskEpisodeWriter(EpisodeWriter):
         self._finished = False
         self._aborted = False
         self._on_close = on_close
+        # Track timestamps for duration computation
+        self._first_ts: int | None = None
+        self._last_ts: int | None = None
 
         # Write system metadata immediately
         self._meta = {'schema_version': EPISODE_SCHEMA_VERSION, 'created_ts_ns': time.time_ns()}
@@ -133,6 +137,12 @@ class DiskEpisodeWriter(EpisodeWriter):
                 self._writers[signal_name] = SimpleSignalWriter(self._path / f'{signal_name}.parquet')
 
         self._writers[signal_name].append(data, ts_ns, extra_ts)
+
+        # Track timestamps for duration computation
+        if self._first_ts is None or ts_ns < self._first_ts:
+            self._first_ts = ts_ns
+        if self._last_ts is None or ts_ns > self._last_ts:
+            self._last_ts = ts_ns
 
     def set_static(self, name: str, data: Any) -> None:
         """Set a static (non-time-varying) item by key for this episode.
@@ -182,6 +192,10 @@ class DiskEpisodeWriter(EpisodeWriter):
         if self._aborted:
             return
         self._finished = True
+
+        # Compute and store duration
+        if self._first_ts is not None and self._last_ts is not None:
+            self._meta['duration_ns'] = int(self._last_ts - self._first_ts)
 
         # Write all static items into a single static.json
         episode_json = self._path / 'static.json'
@@ -317,6 +331,15 @@ class DiskEpisode(Episode):
         available = list(self._signal_factories.keys()) + list(self._static_data.keys())
         raise KeyError(f"'{name}' not found in episode {self._dir}. Available keys: {', '.join(available)}")
 
+    def _compute_size_mb(self) -> float:
+        """Compute total size of episode directory in MB."""
+        size_bytes = 0
+        with suppress(OSError):
+            for entry in self._dir.rglob('*'):
+                if entry.is_file():
+                    size_bytes += entry.stat().st_size
+        return size_bytes / (1024 * 1024)
+
     @property
     def meta(self) -> dict:
         if self._meta is None:
@@ -330,15 +353,22 @@ class DiskEpisode(Episode):
                             meta.update(meta_data)
                     except Exception:
                         pass
-            self._meta = meta
-            self._meta['path'] = str(self._dir.expanduser().resolve(strict=False))
-            size_bytes = 0
-            with suppress(OSError):
-                for entry in self._dir.rglob('*'):
-                    if entry.is_file():
-                        size_bytes += entry.stat().st_size
-            self._meta['size_mb'] = size_bytes / (1024 * 1024)
+            meta['path'] = str(self._dir.expanduser().resolve(strict=False))
+
+            # Build lazy getters for expensive properties not already in meta
+            lazy_getters: dict[str, Any] = {}
+            if 'size_mb' not in meta:
+                lazy_getters['size_mb'] = self._compute_size_mb
+            if 'duration_ns' not in meta:
+                # Use base class implementation (loads all signals - expensive)
+                lazy_getters['duration_ns'] = lambda: Episode.duration_ns.fget(self)
+
+            self._meta = LazyDict(meta, lazy_getters)
         return self._meta.copy()
+
+    @property
+    def duration_ns(self):
+        return self.meta['duration_ns']
 
     @property
     def signals(self) -> dict[str, Signal[Any]]:
