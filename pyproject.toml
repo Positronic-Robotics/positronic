@@ -17,7 +17,7 @@ classifiers = [
 dependencies = [
     "av",
     "coloredlogs>=15.0.1",
-    "configuronic",
+    "configuronic>=0.3.1",
     "cvxopt",
     "dearpygui",
     "dm_control",
