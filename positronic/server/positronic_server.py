@@ -24,7 +24,7 @@ from starlette.requests import Request
 
 import positronic.cfg.ds
 from positronic import utils
-from positronic.dataset import Dataset, Episode
+from positronic.dataset import CachedDataset, Dataset, Episode
 from positronic.dataset.local_dataset import LocalDataset
 from positronic.server.dataset_utils import get_dataset_root, get_episodes_list, stream_episode_rrd
 from positronic.utils.logging import init_logging
@@ -438,7 +438,7 @@ def main(
 
     def load_dataset():
         try:
-            ds = dataset
+            ds = CachedDataset(dataset)
             logging.info(f'Dataset loaded. Episodes: {len(ds)}')
             app_state['dataset'] = ds
             app_state['loading_state'] = False

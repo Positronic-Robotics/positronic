@@ -445,7 +445,6 @@ class LocalDataset(Dataset):
                 f'Dataset directory {self.root} does not exist. Check that the path is correct and accessible.'
             )
         self._episodes: list[tuple[int, Path]] = []
-        self._episode_cache: dict[int, DiskEpisode] = {}
         self._build_episode_list()
 
     def _build_episode_list(self) -> None:
@@ -468,11 +467,7 @@ class LocalDataset(Dataset):
     def _get_episode(self, index: int) -> DiskEpisode:
         if not (0 <= index < len(self)):
             raise IndexError(f'Index {index} out of range for {self.root} dataset with {len(self)} episodes')
-        ep = self._episode_cache.get(index)
-        if ep is None:
-            ep = DiskEpisode(self._episodes[index][1])
-            self._episode_cache[index] = ep
-        return ep
+        return DiskEpisode(self._episodes[index][1])
 
 
 class LocalDatasetWriter(DatasetWriter):

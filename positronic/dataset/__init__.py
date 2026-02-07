@@ -1,4 +1,4 @@
-from .dataset import Dataset, DatasetWriter
+from .dataset import CachedDataset, Dataset, DatasetWriter
 from .episode import Episode, EpisodeWriter
 from .signal import IndicesLike, RealNumericArrayLike, Signal, SignalWriter, is_realnum_dtype
 
@@ -10,6 +10,7 @@ __all__ = [
     'is_realnum_dtype',
     'Episode',
     'EpisodeWriter',
+    'CachedDataset',
     'Dataset',
     'DatasetWriter',
 ]

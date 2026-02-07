@@ -83,6 +83,28 @@ class Dataset(ABC, collections.abc.Sequence[Episode]):
         return NotImplemented
 
 
+class CachedDataset(Dataset):
+    """Dataset wrapper that caches episodes for repeated access."""
+
+    def __init__(self, dataset: Dataset):
+        self._dataset = dataset
+        self._cache: dict[int, Episode] = {}
+
+    def __len__(self) -> int:
+        return len(self._dataset)
+
+    def _get_episode(self, index: int) -> Episode:
+        ep = self._cache.get(index)
+        if ep is None:
+            ep = self._dataset[index]
+            self._cache[index] = ep
+        return ep
+
+    @property
+    def meta(self) -> dict[str, Any]:
+        return self._dataset.meta
+
+
 class ConcatDataset(Dataset):
     """Concatenate two datasets together."""
 
