@@ -13,6 +13,10 @@ Traditional workflows lock you into a single format. Different models expect dif
 
 Positronic uses codecs to project raw data to any model format. Record once, try different state representations (joint space vs EE space, with/without joint feedback) and action formats (absolute vs delta) on identical raw data. See [Dataset Library](../positronic/dataset/README.md) for details on transforms and lazy evaluation.
 
+## Target vs Trajectory Codecs
+
+By default, codecs use **commanded** targets (`robot_commands.pose`, `target_grip`) as action labels — "what the controller was told to do". The `_traj` variants use the **actual** robot trajectory (`robot_state.ee_pose`, `grip`) — "what the robot actually did". This lets you compare training on commanded vs observed actions using identical raw data.
+
 ## Available Codecs by Vendor
 
 ### LeRobot Codecs
@@ -23,6 +27,8 @@ See [`positronic/vendors/lerobot/codecs.py`](../positronic/vendors/lerobot/codec
 |-------|-------------|--------|
 | `eepose_absolute` | EE pose (7D quat) + grip + images (480x480) | Absolute EE position (7D quat) + grip |
 | `joints_absolute` | Joint positions (7D) + grip + images | Absolute EE position (7D quat) + grip |
+| `eepose_absolute_traj` | EE pose (7D quat) + grip + images (480x480) | Absolute EE trajectory (7D quat) + grip |
+| `joints_absolute_traj` | Joint positions (7D) + grip + images | Absolute EE trajectory (7D quat) + grip |
 
 ```bash
 cd docker && docker compose run --rm positronic-to-lerobot convert \
@@ -40,6 +46,10 @@ See [`positronic/vendors/gr00t/codecs.py`](../positronic/vendors/gr00t/codecs.py
 | `ee_rot6d` | EE pose (rot6d) + grip + images | Absolute EE position (rot6d) + grip | `ee_rot6d`, `ee_rot6d_rel` |
 | `ee_joints` | EE pose + joints + grip + images | Absolute EE position + grip | `ee_q`, `ee_q_rel` |
 | `ee_rot6d_joints` | EE pose (rot6d) + joints + grip + images | Absolute EE position (rot6d) + grip | `ee_rot6d_q`, `ee_rot6d_q_rel` |
+| `ee_absolute_traj` | EE pose (quat) + grip + images | Absolute EE trajectory (quat) + grip | `ee`, `ee_rel` |
+| `ee_rot6d_traj` | EE pose (rot6d) + grip + images | Absolute EE trajectory (rot6d) + grip | `ee_rot6d`, `ee_rot6d_rel` |
+| `ee_joints_traj` | EE pose + joints + grip + images | Absolute EE trajectory + grip | `ee_q`, `ee_q_rel` |
+| `ee_rot6d_joints_traj` | EE pose (rot6d) + joints + grip + images | Absolute EE trajectory (rot6d) + grip | `ee_rot6d_q`, `ee_rot6d_q_rel` |
 
 Some codecs support both absolute and relative modality configs (e.g., `ee_absolute` works with `ee` or `ee_rel`). Codec must match modality config during training.
 
@@ -63,6 +73,8 @@ See [`positronic/vendors/openpi/codecs.py`](../positronic/vendors/openpi/codecs.
 |-------|-------------|--------|
 | `eepose` | EE pose (7D quat) + grip + images (224x224) | Absolute EE position (7D) |
 | `eepose_q` | EE pose + joints (7D) + grip + images | Absolute EE position (7D) |
+| `eepose_traj` | EE pose (7D quat) + grip + images (224x224) | Absolute EE trajectory (7D) |
+| `eepose_q_traj` | EE pose + joints (7D) + grip + images | Absolute EE trajectory (7D) |
 | `droid` | Joint positions (7D) + grip + images | Joint delta (velocity) |
 
 `droid` codec is inference-only for use with pretrained DROID models (not for training).

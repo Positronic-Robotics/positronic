@@ -304,3 +304,24 @@ ee_joints = codecs.codec.override(
 ee_rot6d_joints = codecs.codec.override(
     observation=observation(rotation_rep='rot6d', include_joints=True), action=action(rotation_rep='rot6d')
 )
+
+# Trajectory variants: use actual robot trajectory as action target instead of commanded targets
+ee_absolute_traj = codecs.codec.override(
+    observation=observation(rotation_rep=None, include_joints=False),
+    action=action(rotation_rep=None, tgt_ee_pose_key='robot_state.ee_pose', tgt_grip_key='grip'),
+)
+
+ee_rot6d_traj = codecs.codec.override(
+    observation=observation(rotation_rep='rot6d', include_joints=False),
+    action=action(rotation_rep='rot6d', tgt_ee_pose_key='robot_state.ee_pose', tgt_grip_key='grip'),
+)
+
+ee_joints_traj = codecs.codec.override(
+    observation=observation(rotation_rep=None, include_joints=True),
+    action=action(rotation_rep=None, tgt_ee_pose_key='robot_state.ee_pose', tgt_grip_key='grip'),
+)
+
+ee_rot6d_joints_traj = codecs.codec.override(
+    observation=observation(rotation_rep='rot6d', include_joints=True),
+    action=action(rotation_rep='rot6d', tgt_ee_pose_key='robot_state.ee_pose', tgt_grip_key='grip'),
+)

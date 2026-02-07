@@ -178,5 +178,16 @@ eepose = codecs.codec.override(observation=eepose_observation, action=codecs.abs
 # EE pose + grip + joint positions -> absolute position
 eepose_q = codecs.codec.override(observation=eepose_q_observation, action=codecs.absolute_position(rotation_rep=None))
 
+# Trajectory variants: use actual robot trajectory as action target instead of commanded targets
+eepose_traj = codecs.codec.override(
+    observation=eepose_observation,
+    action=codecs.absolute_position(rotation_rep=None, tgt_ee_pose_key='robot_state.ee_pose', tgt_grip_key='grip'),
+)
+
+eepose_q_traj = codecs.codec.override(
+    observation=eepose_q_observation,
+    action=codecs.absolute_position(rotation_rep=None, tgt_ee_pose_key='robot_state.ee_pose', tgt_grip_key='grip'),
+)
+
 # DROID codec for inference with pretrained DROID models (inference-only)
 droid = codecs.codec.override(observation=droid_observation, action=codecs.joint_delta(num_joints=7))
