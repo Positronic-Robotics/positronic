@@ -174,6 +174,16 @@ class TestGrootObservationEncoder:
         assert result['video']['wrist_image'].shape == (1, 1, 128, 128, 3)
         assert result['video']['exterior_image_1'].shape == (1, 1, 128, 128, 3)
 
+    @pytest.mark.parametrize(
+        'rotation_rep, include_joints', [(None, False), (ROT_REP.ROT6D, False), (None, True), (ROT_REP.ROT6D, True)]
+    )
+    def test_dummy_input_roundtrip(self, rotation_rep, include_joints):
+        """Test that encode(dummy_input()) succeeds for all encoder variants."""
+        encoder = GrootObservationEncoder(rotation_rep=rotation_rep, include_joints=include_joints)
+        result = encoder.encode(encoder.dummy_input())
+        assert 'video' in result
+        assert 'state' in result
+
     def test_custom_camera_keys(self, sample_inputs):
         """Test custom camera key mapping."""
         sample_inputs['cam1'] = sample_inputs.pop('image.wrist')
