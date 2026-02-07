@@ -107,6 +107,7 @@ class DiskEpisodeWriter(EpisodeWriter):
         self._on_close = on_close
 
         # Write system metadata immediately
+        # NB: falsy created_ts_ns (including 0) defaults to current time — epoch 0 is not a valid episode timestamp
         self._meta = {'schema_version': EPISODE_SCHEMA_VERSION, 'created_ts_ns': created_ts_ns or time.time_ns()}
         self._meta['writer'] = _cached_env_writer_info()
         self._meta['writer']['name'] = f'{self.__class__.__module__}.{self.__class__.__qualname__}'

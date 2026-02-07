@@ -128,6 +128,42 @@ def test_lazy_dict_multiple_lazy_keys():
     assert calls['y'] == 1
 
 
+def test_lazy_dict_iter_includes_lazy():
+    """Test that iterating includes lazy keys without computing them."""
+    call_count = [0]
+    d = LazyDict({'a': 1}, {'b': lambda: (call_count.__setitem__(0, call_count[0] + 1), 2)[1]})
+
+    keys = list(d)
+    assert set(keys) == {'a', 'b'}
+    assert call_count[0] == 0  # Iteration does not trigger computation
+
+
+def test_lazy_dict_len_includes_lazy():
+    """Test that len() counts lazy keys."""
+    d = LazyDict({'a': 1}, {'b': lambda: 2, 'c': lambda: 3})
+    assert len(d) == 3
+
+
+def test_lazy_dict_items_includes_lazy():
+    """Test that items() includes lazy keys and triggers computation."""
+    d = LazyDict({'a': 1}, {'b': lambda: 2})
+    result = dict(d.items())
+    assert result == {'a': 1, 'b': 2}
+
+
+def test_lazy_dict_values_includes_lazy():
+    """Test that values() includes lazy values and triggers computation."""
+    d = LazyDict({}, {'x': lambda: 10})
+    assert list(d.values()) == [10]
+
+
+def test_lazy_dict_dict_conversion():
+    """Test that dict(lazy_dict) includes all keys."""
+    d = LazyDict({'a': 1}, {'b': lambda: 2})
+    plain = dict(d)
+    assert plain == {'a': 1, 'b': 2}
+
+
 def test_lazy_dict_copy_partial_evaluation():
     """Test copy when some lazy keys are evaluated and some are not."""
     calls = {'a': 0, 'b': 0}
