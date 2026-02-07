@@ -23,7 +23,7 @@ def general(
     task_field: str | None = 'task',
 ):
     """General observation encoder for non-GR00T policies (OpenPI, ACT, etc.)."""
-    state_dict = {state_name: list(state_features.keys())}
+    state_dict = {state_name: state_features}
     images = {k: (v, image_size) for k, v in image_mappings.items()}
     result = SimpleObservationEncoder(state=state_dict, images=images, task_field=task_field)
 

@@ -406,19 +406,42 @@ class InferenceServer:
             except Exception:
                 pass
 
-    async def startup(self):
+    async def _startup(self):
         """Start the subprocess on server startup."""
         await self._get_subprocess(None, websocket=None)
+        await self._warmup()
 
-    def shutdown(self):
+    async def _warmup(self):
+        """Run one warmup inference to trigger JIT compilation."""
+        try:
+            logger.info('Running warmup inference...')
+            dummy = self.codec.observation.dummy_input()
+            encoded = self.codec.observation.encode(dummy)
+            await asyncio.to_thread(self.subprocess.client.reset)
+            await asyncio.to_thread(self.subprocess.client.get_action, encoded)
+            logger.info('Warmup inference complete')
+        except Exception:
+            logger.warning('Warmup inference failed (non-fatal)', exc_info=True)
+
+    def _shutdown(self):
         """Clean up subprocess on server shutdown."""
         if self.subprocess is not None:
             self.subprocess.stop()
 
     def serve(self):
-        config = uvicorn.Config(self.app, host=self.host, port=self.port, log_level='info')
-        server = uvicorn.Server(config)
-        return server.serve()
+        """Start the server: pre-load model, warm up, then serve requests."""
+
+        async def _run():
+            await self._startup()
+            config = uvicorn.Config(self.app, host=self.host, port=self.port, log_level='info')
+            await uvicorn.Server(config).serve()
+
+        try:
+            asyncio.run(_run())
+        except KeyboardInterrupt:
+            logger.info('Server stopped by user')
+        finally:
+            self._shutdown()
 
 
 @cfn.config(codec=codecs.ee_absolute, checkpoint=None, port=8000, groot_venv_path='/.venv/', modality_config='ee')
@@ -428,21 +451,14 @@ def server(
     """Starts the GR00T inference server with encoding/decoding."""
 
     with pos3.mirror():
-        server = InferenceServer(
+        InferenceServer(
             codec=codec,
             checkpoints_dir=checkpoints_dir,
             checkpoint=checkpoint,
             modality_config=modality_config,
             groot_venv_path=groot_venv_path,
             port=port,
-        )
-        asyncio.run(server.startup())
-        try:
-            asyncio.run(server.serve())
-        except KeyboardInterrupt:
-            logger.info('Server stopped by user')
-        finally:
-            server.shutdown()
+        ).serve()
 
 
 # Pre-configured server variants matching GR00T modality configs

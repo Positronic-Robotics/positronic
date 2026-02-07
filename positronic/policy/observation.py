@@ -29,19 +29,24 @@ class ObservationEncoder(Derive, ABC):
         """Encode raw robot inputs into observation dict for inference."""
         ...
 
+    @abstractmethod
+    def dummy_input(self) -> dict[str, Any]:
+        """Generate dummy inputs matching the expected format."""
+        ...
+
 
 class SimpleObservationEncoder(ObservationEncoder):
     """Configurable observation encoder that uses the same keys for training and inference.
 
     Args:
-        state: mapping from output state key to an ordered list of episode keys to concatenate.
+        state: mapping from output state key to an ordered dict of {episode_key: dim} to concatenate.
         images: mapping from output image name to tuple (input_key, (width, height)).
         task_field: name of the field to store task string ('task', 'prompt', etc.), or None to disable.
     """
 
     def __init__(
         self,
-        state: dict[str, list[str]],
+        state: dict[str, dict[str, int]],
         images: dict[str, tuple[str, tuple[int, int]]],
         task_field: str | None = 'task',
     ):
@@ -95,3 +100,12 @@ class SimpleObservationEncoder(ObservationEncoder):
             obs[out_name] = np.concatenate(parts) if parts else np.empty((0,), dtype=np.float32)
 
         return obs
+
+    def dummy_input(self) -> dict[str, Any]:
+        dummy: dict[str, Any] = {}
+        for features in self._state.values():
+            for key, dim in features.items():
+                dummy[key] = np.zeros(dim, dtype=np.float32)
+        for _out_name, (input_key, (width, height)) in self._image_configs.items():
+            dummy[input_key] = np.zeros((height, width, 3), dtype=np.uint8)
+        return dummy

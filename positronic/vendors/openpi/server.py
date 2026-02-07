@@ -321,17 +321,55 @@ class InferenceServer:
             logger.info(f'Connection closed: {e}')
             logger.debug(traceback.format_exc())
 
-    def serve(self):
-        """Start the uvicorn server."""
-        config = uvicorn.Config(self.app, host=self.host, port=self.port, log_level='info')
-        server = uvicorn.Server(config)
-        asyncio.run(server.serve())
+    async def _startup(self):
+        """Pre-load the default checkpoint and start the subprocess before accepting connections."""
+        checkpoint_id = self.checkpoint
+        if not checkpoint_id:
+            checkpoint_id = get_latest_checkpoint(self.checkpoints_dir)
 
-    def shutdown(self):
+        checkpoint_path = f'{self.checkpoints_dir}/{checkpoint_id}'
+        logger.info(f'Pre-loading checkpoint {checkpoint_id}')
+        checkpoint_dir = await asyncio.to_thread(pos3.download, checkpoint_path)
+
+        subprocess_obj = OpenpiSubprocess(
+            checkpoint_dir=checkpoint_dir, config_name=self.config_name, ws_port=self.openpi_ws_port
+        )
+        await subprocess_obj.start_async()
+        self._subprocesses[checkpoint_id] = subprocess_obj
+
+        await self._warmup(subprocess_obj)
+
+    async def _warmup(self, subprocess_obj: OpenpiSubprocess):
+        """Run one warmup inference to trigger JIT compilation."""
+        try:
+            logger.info('Running warmup inference...')
+            dummy = self.codec.observation.dummy_input()
+            encoded = self.codec.observation.encode(dummy)
+            await asyncio.to_thread(subprocess_obj.client.infer, encoded)
+            logger.info('Warmup inference complete')
+        except Exception:
+            logger.warning('Warmup inference failed (non-fatal)', exc_info=True)
+
+    def _shutdown(self):
         """Shutdown all subprocesses."""
         for subprocess_obj in self._subprocesses.values():
             subprocess_obj.stop()
         self._subprocesses.clear()
+
+    def serve(self):
+        """Start the server: pre-load model, warm up, then serve requests."""
+
+        async def _run():
+            await self._startup()
+            config = uvicorn.Config(self.app, host=self.host, port=self.port, log_level='info')
+            await uvicorn.Server(config).serve()
+
+        try:
+            asyncio.run(_run())
+        except KeyboardInterrupt:
+            logger.info('Server stopped by user')
+        finally:
+            self._shutdown()
 
 
 ###########################################################################################

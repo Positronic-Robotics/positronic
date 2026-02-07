@@ -129,6 +129,17 @@ class GrootObservationEncoder(ObservationEncoder):
         w, h = self._image_size
         return image.resize_with_pad_per_frame(w, h, PilImage.Resampling.BILINEAR, frame)
 
+    def dummy_input(self) -> dict[str, Any]:
+        dummy: dict[str, Any] = {}
+        dummy['robot_state.ee_pose'] = np.zeros(7, dtype=np.float32)  # always raw QUAT input
+        dummy['grip'] = np.zeros(1, dtype=np.float32)
+        if self._include_joints:
+            dummy['robot_state.q'] = np.zeros(7, dtype=np.float32)
+        w, h = self._image_size
+        dummy[self._wrist_camera] = np.zeros((h, w, 3), dtype=np.uint8)
+        dummy[self._exterior_camera] = np.zeros((h, w, 3), dtype=np.uint8)
+        return dummy
+
     def encode(self, inputs: dict[str, Any]) -> dict[str, Any]:
         """Encode raw robot inputs into GR00T N1.6 nested format for inference.
 
