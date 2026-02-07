@@ -131,7 +131,7 @@ class GrootObservationEncoder(ObservationEncoder):
 
     def dummy_input(self) -> dict[str, Any]:
         dummy: dict[str, Any] = {}
-        dummy['robot_state.ee_pose'] = np.zeros(7, dtype=np.float32)  # always raw QUAT input
+        dummy['robot_state.ee_pose'] = np.array([0, 0, 0, 0, 0, 0, 1], dtype=np.float32)  # identity QUAT
         dummy['grip'] = np.zeros(1, dtype=np.float32)
         if self._include_joints:
             dummy['robot_state.q'] = np.zeros(7, dtype=np.float32)
