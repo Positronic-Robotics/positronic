@@ -1,4 +1,4 @@
-from positronic.utils.lazy_dict import LazyDict
+from positronic.utils.lazy import LazyDict
 
 
 def test_lazy_dict_basic_access():

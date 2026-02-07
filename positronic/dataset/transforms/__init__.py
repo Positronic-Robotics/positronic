@@ -1,12 +1,13 @@
 """Dataset transformation utilities."""
 
+from positronic.utils.lazy import LazySequence, lazy_sequence
+
 from .dataset import TransformedDataset
 from .episode import EpisodeTransform, TransformedEpisode
 from .signals import (
     Elementwise,
     IndexOffsets,
     Join,
-    LazySequence,
     TimeOffsets,
     astype,
     concat,
@@ -23,6 +24,7 @@ __all__ = [
     'TimeOffsets',
     'Join',
     'LazySequence',
+    'lazy_sequence',
     'concat',
     'astype',
     'pairwise',

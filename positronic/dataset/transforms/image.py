@@ -5,8 +5,10 @@ import cv2
 import numpy as np
 from PIL import Image as PilImage
 
+from positronic.utils.lazy import LazySequence
+
 from ..signal import Signal
-from .signals import Elementwise, LazySequence
+from .signals import Elementwise
 
 
 def resize(

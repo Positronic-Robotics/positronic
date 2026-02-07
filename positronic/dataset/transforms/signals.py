@@ -5,6 +5,7 @@ from typing import Any, TypeVar
 import numpy as np
 
 from positronic import geom
+from positronic.utils.lazy import LazySequence, lazy_sequence
 
 from ..signal import IndicesLike, RealNumericArrayLike, Signal
 
@@ -353,31 +354,6 @@ class Join(Signal[tuple]):
         self._compute_bounds()
         assert self._union_ts is not None
         return np.searchsorted(self._union_ts, ts_array, side='right') - 1
-
-
-class LazySequence(Sequence[U]):
-    """Lazy, indexable view that applies `fn` on element access.
-
-    - Supports `len()` and integer indexing.
-    - Slicing returns another lazy view without materializing elements.
-    """
-
-    def __init__(self, seq: Sequence[T], fn: Callable[[T], U]) -> None:
-        self._seq = seq
-        self._fn = fn
-
-    def __len__(self) -> int:
-        return len(self._seq)
-
-    def __getitem__(self, index: int | slice) -> U | 'LazySequence[U]':
-        if isinstance(index, slice):
-            return LazySequence(self._seq[index], self._fn)
-        return self._fn(self._seq[int(index)])
-
-
-def lazy_sequence(fn: Callable[[T], U]) -> Callable[[Sequence[T]], Sequence[U]]:
-    """Decorator that wraps an elementwise transform into a lazy sequence transform."""
-    return partial(LazySequence, fn=fn)
 
 
 def _concat_per_frame(dtype: np.dtype | None, x: Sequence[tuple]) -> np.ndarray:

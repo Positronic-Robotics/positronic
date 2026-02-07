@@ -17,7 +17,7 @@ import numpy as np
 import pyarrow.parquet as pq
 
 from positronic.utils.git import get_git_state
-from positronic.utils.lazy_dict import LazyDict
+from positronic.utils.lazy import LazyDict
 
 from .dataset import ConcatDataset, Dataset, DatasetWriter
 from .episode import EPISODE_SCHEMA_VERSION, SIGNAL_FACTORY_T, Episode, EpisodeWriter, T

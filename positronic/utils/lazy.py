@@ -1,6 +1,11 @@
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
+from functools import partial
+from typing import TypeVar
+
+T = TypeVar('T')
+U = TypeVar('U')
 
 
 class LazyDict(dict):
@@ -98,3 +103,28 @@ class LazyDict(dict):
         eager_data = {k: dict.__getitem__(self, k) for k in dict.__iter__(self)}
         unevaluated = {k: v for k, v in self._lazy_getters.items() if k not in eager_data}
         return LazyDict(eager_data, unevaluated)
+
+
+class LazySequence(Sequence[U]):
+    """Lazy, indexable view that applies `fn` on element access.
+
+    - Supports `len()` and integer indexing.
+    - Slicing returns another lazy view without materializing elements.
+    """
+
+    def __init__(self, seq: Sequence[T], fn: Callable[[T], U]) -> None:
+        self._seq = seq
+        self._fn = fn
+
+    def __len__(self) -> int:
+        return len(self._seq)
+
+    def __getitem__(self, index: int | slice) -> U | LazySequence[U]:
+        if isinstance(index, slice):
+            return LazySequence(self._seq[index], self._fn)
+        return self._fn(self._seq[int(index)])
+
+
+def lazy_sequence(fn: Callable[[T], U]) -> Callable[[Sequence[T]], Sequence[U]]:
+    """Decorator that wraps an elementwise transform into a lazy sequence transform."""
+    return partial(LazySequence, fn=fn)
