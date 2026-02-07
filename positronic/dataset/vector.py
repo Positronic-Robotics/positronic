@@ -25,11 +25,39 @@ class SimpleSignal(Signal[T]):
         self.filepath = filepath
         self._timestamps: np.ndarray | None = None
         self._values: np.ndarray | None = None
+        self._bounds: tuple[int, int, int] | None = None  # (first_ts, last_ts, num_rows)
+
+    def _load_bounds(self):
+        """Load signal bounds from parquet row-group statistics (reads only the file footer)."""
+        if self._bounds is not None:
+            return
+        if self._timestamps is not None:
+            n = len(self._timestamps)
+            self._bounds = (int(self._timestamps[0]), int(self._timestamps[-1]), n) if n else (0, 0, 0)
+            return
+        md = pq.read_metadata(self.filepath)
+        if md.num_rows == 0:
+            self._bounds = (0, 0, 0)
+            return
+        rg0 = md.row_group(0)
+        for j in range(rg0.num_columns):
+            col = rg0.column(j)
+            if col.path_in_schema == 'timestamp' and col.statistics and col.statistics.has_min_max:
+                last_rg = md.row_group(md.num_row_groups - 1)
+                self._bounds = (int(col.statistics.min), int(last_rg.column(j).statistics.max), md.num_rows)
+                return
+        # Statistics unavailable — fall back to reading the timestamp column
+        self._load_timestamps()
+        n = len(self._timestamps)
+        self._bounds = (int(self._timestamps[0]), int(self._timestamps[-1]), n) if n else (0, 0, 0)
 
     def _load_timestamps(self):
-        """Load only the timestamp column — cheap, no value decoding."""
+        """Load the full timestamp column (needed for indexing and search)."""
         if self._timestamps is None:
             self._timestamps = pq.read_table(self.filepath, columns=['timestamp'])['timestamp'].to_numpy()
+            if self._bounds is None:
+                n = len(self._timestamps)
+                self._bounds = (int(self._timestamps[0]), int(self._timestamps[-1]), n) if n else (0, 0, 0)
 
     def _load_values(self):
         """Load values (and timestamps if not yet loaded). Expensive for vector data due to np.stack."""
@@ -45,8 +73,22 @@ class SimpleSignal(Signal[T]):
 
     def __len__(self) -> int:
         """Returns the number of records in the signal."""
-        self._load_timestamps()
-        return len(self._timestamps)
+        self._load_bounds()
+        return self._bounds[2]
+
+    @property
+    def start_ts(self) -> int:
+        self._load_bounds()
+        if self._bounds[2] == 0:
+            raise ValueError('Signal is empty')
+        return self._bounds[0]
+
+    @property
+    def last_ts(self) -> int:
+        self._load_bounds()
+        if self._bounds[2] == 0:
+            raise ValueError('Signal is empty')
+        return self._bounds[1]
 
     def _ts_at(self, index_or_indices: IndicesLike) -> Sequence[int] | np.ndarray:
         self._load_timestamps()

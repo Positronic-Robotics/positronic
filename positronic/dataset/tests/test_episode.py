@@ -409,19 +409,20 @@ class TestLazyMetaProperties:
         with (ep_dir / 'meta.json').open('r') as f:
             stored_meta = json.load(f)
         assert 'duration_ns' in stored_meta
-        assert stored_meta['duration_ns'] == 5000 - 1000  # last - first
+        assert stored_meta['duration_ns'] == 5000 - 1500  # max(last_ts) - max(start_ts)
 
     def test_duration_ns_read_from_meta(self, tmp_path):
-        """Test that duration_ns is read from meta (fast path)."""
+        """Test that duration_ns uses cached value from meta.json (fast path)."""
         ep_dir = tmp_path / 'ep_duration_read'
         with DiskEpisodeWriter(ep_dir) as w:
             w.append('a', 1, 1000)
             w.append('a', 2, 3000)
 
         ep = DiskEpisode(ep_dir)
-        # Access duration_ns - should come from meta, not compute from signals
+        # duration_ns should come from meta.json cache, not compute from signals
         assert ep.duration_ns == 2000
-        assert ep.meta['duration_ns'] == 2000
+        # But duration_ns is NOT exposed through meta (it's a first-class Episode property)
+        assert 'duration_ns' not in ep.meta
 
     def test_duration_ns_fallback_for_old_episodes(self, tmp_path):
         """Test that duration_ns falls back to computing from signals for old episodes."""
@@ -470,25 +471,18 @@ class TestLazyMetaProperties:
             w.append('a', 1, 1000)
             w.append('a', 2, 2000)
 
-        # Remove duration_ns to test lazy fallback
-        meta_path = ep_dir / 'meta.json'
-        with meta_path.open('r') as f:
-            meta = json.load(f)
-        del meta['duration_ns']
-        with meta_path.open('w') as f:
-            json.dump(meta, f)
-
         ep = DiskEpisode(ep_dir)
         # Get a copy of meta
         meta_copy = ep.meta
 
-        # Keys should include lazy properties
+        # size_mb should be available (lazy) but duration_ns should NOT be in meta
         assert 'size_mb' in meta_copy
-        assert 'duration_ns' in meta_copy
+        assert 'duration_ns' not in meta_copy
 
-        # Accessing should work
+        # Accessing size_mb should work
         assert meta_copy['size_mb'] > 0
-        assert meta_copy['duration_ns'] == 1000  # 2000 - 1000
+        # duration_ns is accessed as an Episode property
+        assert ep.duration_ns == 1000  # 2000 - 1000
 
     def test_multiple_meta_accesses_cache_lazy_values(self, tmp_path):
         """Test that lazy values are cached after first computation."""

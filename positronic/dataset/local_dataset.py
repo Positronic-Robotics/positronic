@@ -196,7 +196,7 @@ class DiskEpisodeWriter(EpisodeWriter):
                     continue
 
                 file_first, file_last = min(timestamps), max(timestamps)
-                if first_ts is None or file_first < first_ts:
+                if first_ts is None or file_first > first_ts:
                     first_ts = file_first
                 if last_ts is None or file_last > last_ts:
                     last_ts = file_last
@@ -285,6 +285,7 @@ class DiskEpisode(Episode):
         self._signal_factories: dict[str, SIGNAL_FACTORY_T] = {}
         self._static: dict[str, Any] | None = None
         self._meta: dict[str, Any] | None = None
+        self._cached_duration_ns: int | None = None
 
         # Discover available signal files but do not instantiate readers yet
         used_names: set[str] = set()
@@ -386,22 +387,28 @@ class DiskEpisode(Episode):
                             meta.update(meta_data)
                     except Exception:
                         pass
+
+            # duration_ns is a first-class Episode property, not meta.
+            # Extract it as a private cache for DiskEpisode.duration_ns.
+            self._cached_duration_ns = meta.pop('duration_ns', None)
+
             meta['path'] = str(self._dir.expanduser().resolve(strict=False))
 
-            # Build lazy getters for expensive properties not already in meta
             lazy_getters: dict[str, Any] = {}
             if 'size_mb' not in meta:
                 lazy_getters['size_mb'] = self._compute_size_mb
-            if 'duration_ns' not in meta:
-                # Use base class implementation (loads all signals - expensive)
-                lazy_getters['duration_ns'] = lambda: Episode.duration_ns.fget(self)
 
             self._meta = LazyDict(meta, lazy_getters)
         return self._meta.copy()
 
     @property
     def duration_ns(self):
-        return self.meta['duration_ns']
+        # Fast path: use cached value from meta.json (written at recording time)
+        _ = self.meta  # ensure meta is loaded
+        if self._cached_duration_ns is not None:
+            return self._cached_duration_ns
+        # Fallback: compute from signals (expensive, for old episodes without cached value)
+        return super().duration_ns
 
     @property
     def signals(self) -> dict[str, Signal[Any]]:
@@ -437,6 +444,7 @@ class LocalDataset(Dataset):
                 f'Dataset directory {self.root} does not exist. Check that the path is correct and accessible.'
             )
         self._episodes: list[tuple[int, Path]] = []
+        self._episode_cache: dict[int, DiskEpisode] = {}
         self._build_episode_list()
 
     def _build_episode_list(self) -> None:
@@ -459,7 +467,11 @@ class LocalDataset(Dataset):
     def _get_episode(self, index: int) -> DiskEpisode:
         if not (0 <= index < len(self)):
             raise IndexError(f'Index {index} out of range for {self.root} dataset with {len(self)} episodes')
-        return DiskEpisode(self._episodes[index][1])
+        ep = self._episode_cache.get(index)
+        if ep is None:
+            ep = DiskEpisode(self._episodes[index][1])
+            self._episode_cache[index] = ep
+        return ep
 
 
 class LocalDatasetWriter(DatasetWriter):
