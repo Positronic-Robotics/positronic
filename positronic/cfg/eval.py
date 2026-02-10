@@ -2,10 +2,13 @@ from datetime import datetime
 
 import configuronic as cfn
 import numpy as np
+import pos3
 
 import positronic.cfg.ds as base_cfg
 from positronic.dataset.episode import Episode
 from positronic.dataset.transforms.episode import Derive, Group, Identity
+from positronic.server.positronic_server import main as server_main
+from positronic.utils.logging import init_logging
 
 
 def task_code(ep: Episode) -> str:
@@ -468,47 +471,33 @@ def sim_checkpoint_table():
 
 
 # ========================================================================================
-# USAGE EXAMPLES
+# Pre-configured servers
+# ========================================================================================
+#
+# Sim evaluation:
+#   uv run python -m positronic.cfg.eval sim --dataset.base.path=s3://inference/sim_stack_validation/090226/
+#
+# Real (unified) evaluation:
+#   uv run python -m positronic.cfg.eval real --dataset.base.path=s3://inference/real/191225/
 # ========================================================================================
 
-# Unified config (works for both real and sim):
-#
-# For simulation validation:
-#   uv run positronic-server \
-#     --dataset=@positronic.cfg.eval.episodes \
-#     --dataset.base.path=/tmp/sim_validation \
-#     --port=5001 \
-#     --ep_table_cfg=@positronic.cfg.eval.episodes_table \
-#     --group_tables='{"checkpoints": "@positronic.cfg.eval.checkpoint_table"}'
-#
-# For real robot evaluation:
-#   uv run positronic-server \
-#     --dataset=@positronic.cfg.eval.episodes \
-#     --dataset.base.path=s3://inference/real/191225/ \
-#     --port=5001 \
-#     --ep_table_cfg=@positronic.cfg.eval.episodes_table \
-#     --group_tables='{"checkpoints": "@positronic.cfg.eval.checkpoint_table"}'
-#
-# Navigate to:
-#   - Episodes: http://localhost:5001/
-#   - Checkpoint comparison: http://localhost:5001/groups/checkpoints
-#
-# Displays: UPH, Success Rate, MTBF, Pass/Fail badges
-# Auto-detects real vs sim episodes and computes metrics accordingly
+server = server_main.override(
+    dataset=episodes,
+    ep_table_cfg=episodes_table,
+    group_tables={'checkpoints': checkpoint_table},
+    home_page='checkpoints',
+    port=5001,
+)
 
-# ========================================================================================
+sim_server = server_main.override(
+    dataset=sim_episodes,
+    ep_table_cfg=sim_episodes_table,
+    group_tables={'checkpoints': sim_checkpoint_table},
+    home_page='checkpoints',
+    port=5001,
+)
 
-# Extended sim config (detailed sim analysis with additional metrics):
-#
-#   uv run positronic-server \
-#     --dataset=@positronic.cfg.eval.sim_episodes \
-#     --dataset.base.path=/tmp/sim_validation \
-#     --port=5001 \
-#     --ep_table_cfg=@positronic.cfg.eval.sim_episodes_table \
-#     --group_tables='{"checkpoints": "@positronic.cfg.eval.sim_checkpoint_table"}'
-#
-# Navigate to:
-#   - Episodes: http://localhost:5001/
-#   - Checkpoint comparison: http://localhost:5001/groups/checkpoints
-#
-# Additional sim metrics: Success Time, Max Stacking Success, Box Distance Progress, Movement
+if __name__ == '__main__':
+    init_logging()
+    with pos3.mirror():
+        cfn.cli({'sim': sim_server, 'real': server})
