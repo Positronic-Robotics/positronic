@@ -16,70 +16,79 @@ def task_code(ep: Episode) -> str:
             return 'Wooden spoons'
         case 'Pick all the scissors one by one from transparent tote and place them into the large grey tote.':
             return 'Scissors'
+        case 'Pick all the batteries one by one from transparent tote and place them into the large grey tote.':
+            return 'Batteries'
         case _:
             return ''
+
+
+def _model_label_from_path(model_type: str, checkpoint_path: str) -> str | None:
+    """Extract a model label from a checkpoint path like .../checkpoints/sim_stack/groot/ee_rot6d/..."""
+    if not checkpoint_path or '/checkpoints/' not in checkpoint_path:
+        return None
+    parts = [p for p in checkpoint_path.split('/checkpoints/')[-1].split('/') if p]
+    if len(parts) >= 3:
+        return f'{model_type}:{parts[-3]}'
+    return None
 
 
 def model(ep: Episode) -> str:
-    match ep['inference.policy.type']:
-        case 'act':
-            return 'Action Chunking Transformer'
-        case 'groot':
-            return 'Nvidia Gr00t'
-        case 'openpi':
-            return 'Open PI 0.5'
-        case 'remote':
-            # For remote policies, use the server type
-            server_type = ep.get('inference.policy.server.type', '')
-            match server_type:
-                case 'groot':
-                    return 'Nvidia Gr00t'
-                case 'act':
-                    return 'Action Chunking Transformer'
-                case 'openpi':
-                    return 'Open PI 0.5'
-                case _:
-                    return server_type if server_type else ''
-        case _:
-            return ''
+    policy_type = ep.get('inference.policy.type', '')
+
+    if policy_type == 'remote':
+        server_type = ep.get('inference.policy.server.type', '')
+        path_label = _model_label_from_path(server_type, ep.get('inference.policy.server.checkpoint_path', ''))
+        if path_label:
+            return path_label
+        return server_type or ''
+
+    if policy_type:
+        path_label = _model_label_from_path(policy_type, ep.get('inference.policy.checkpoint_path', ''))
+        if path_label:
+            return path_label
+        return policy_type
+
+    return ''
+
+
+def _split_path(path: str) -> list[str]:
+    return [p for p in path.strip('/').split('/') if p]
+
+
+def _ckpt_act(ep: Episode) -> str:
+    raw_path = ep['inference.policy.checkpoint_path']
+    # Path to ckpt id: full_ft_q/act/031225/checkpoints/300000/pretrained_model/ -> full_ft_q\031225\300000
+    parts = _split_path(raw_path)
+    chkpt_idxs = [i for i, p in enumerate(parts) if p == 'checkpoints']
+    if chkpt_idxs:
+        idx = chkpt_idxs[-1]
+        dataset = parts[idx - 3] if idx >= 3 else None
+        experiment = parts[idx - 1] if idx >= 1 else None
+        step = parts[idx + 1] if idx + 1 < len(parts) else None
+        if dataset is not None and experiment is not None and step is not None:
+            return f'{dataset}\\{experiment}\\{step}'
+    # Fallback: keep legacy behavior if path doesn't match the expected structure.
+    return raw_path.split('/checkpoints/')[-1]
+
+
+def _ckpt_remote(ep: Episode) -> str:
+    checkpoint_id = ep.get('inference.policy.server.checkpoint_id', '')
+    if checkpoint_id:
+        return str(checkpoint_id)
+    raw_path = ep.get('inference.policy.server.checkpoint_path', '')
+    if raw_path:
+        step = _split_path(raw_path)[-1].removeprefix('checkpoint-')
+        return step
+    return ''
 
 
 def ckpt(ep: Episode) -> str | None:
-    def _split_path(path: str) -> list[str]:
-        return [p for p in path.strip('/').split('/') if p]
-
     try:
-        match ep['inference.policy.type']:
+        match ep.get('inference.policy.type', ''):
             case 'act':
-                raw_path = ep['inference.policy.checkpoint_path']
-                # Path to ckpt id: full_ft_q/act/031225/checkpoints/300000/pretrained_model/ -> full_ft_q\031225\300000
-                parts = _split_path(raw_path)
-                chkpt_idxs = [i for i, p in enumerate(parts) if p == 'checkpoints']
-                if chkpt_idxs:
-                    idx = chkpt_idxs[-1]
-                    dataset = parts[idx - 3] if idx >= 3 else None
-                    experiment = parts[idx - 1] if idx >= 1 else None
-                    step = parts[idx + 1] if idx + 1 < len(parts) else None
-                    if dataset is not None and experiment is not None and step is not None:
-                        return f'{dataset}\\{experiment}\\{step}'
-
-                # Fallback: keep legacy behavior if path doesn't match the expected structure.
-                return raw_path.split('/checkpoints/')[-1]
-            case 'openpi':
-                if 'inference.policy.checkpoint_path' in ep:
-                    raw_path = ep['inference.policy.checkpoint_path']
-                else:
-                    raw_path = ep['inference.policy.server.directory']
-                raw_path = raw_path.split('/checkpoints/')[-1]
-                # Path to ckpt id: full_ft/openpi/pi05_positronic_lowmem/061025/119999 -> full_ft\061025\119999
-                parts = _split_path(raw_path)
-                if len(parts) >= 3:
-                    return f'{parts[0]}\\{parts[-2]}\\{parts[-1]}'
-                return raw_path
+                return _ckpt_act(ep)
             case 'remote':
-                # For remote policies, use checkpoint_id from server config
-                checkpoint_id = ep.get('inference.policy.server.checkpoint_id', '')
-                return str(checkpoint_id) if checkpoint_id else ''
+                return _ckpt_remote(ep)
         return ''
     except Exception:
         return ''
@@ -327,6 +336,8 @@ def box_distance_progress(episode: Episode) -> float | None:
 
 
 def ee_pose_movement(episode: Episode) -> float | None:
+    if 'robot_state.ee_pose' not in episode:
+        return None
     signal_values = episode['robot_state.ee_pose'].values()
     result = 0.0
     prev_translation = signal_values[0][:3]
@@ -356,6 +367,7 @@ sim_episodes = base_cfg.transform.override(
         Group(
             Identity(),
             Derive(
+                model=model,
                 checkpoint=ckpt,
                 max_stacking_success=max_stacking_success,
                 success=success,
@@ -427,6 +439,7 @@ def sim_checkpoint_table():
         avg_max_success = np.mean(max_successes) if max_successes else None
 
         result = {
+            'model': episodes[0]['model'],
             'checkpoint': episodes[0]['checkpoint'],
             'count': count,
             'UPH': uph_value,
@@ -439,6 +452,7 @@ def sim_checkpoint_table():
         return result
 
     format_table = {
+        'model': {'label': 'Model'},
         'checkpoint': {'label': 'Checkpoint'},
         'count': {'label': 'Runs', 'format': '%d'},
         'UPH': {'label': 'UPH', 'format': '%.1f'},
@@ -449,8 +463,8 @@ def sim_checkpoint_table():
         'failures': {'label': 'Failures', 'format': '%d'},
     }
 
-    group_filter_keys = {'checkpoint': 'Checkpoint'}
-    return 'checkpoint', group_fn, format_table, group_filter_keys
+    group_filter_keys = {'model': 'Model', 'checkpoint': 'Checkpoint'}
+    return ('model', 'checkpoint'), group_fn, format_table, group_filter_keys
 
 
 # ========================================================================================

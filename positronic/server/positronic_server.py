@@ -82,7 +82,6 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(lifespan=lifespan)
 
-
 # Static files and templates (packaged relative to this file)
 _static_dir = _pkg_path('static')
 _templates_dir = _pkg_path('templates')
@@ -234,11 +233,16 @@ def parse_table_cfg(table_cfg: dict[str, Any]) -> tuple:
 
 @app.get('/api/episodes')
 @require_dataset
-async def api_episodes():
+async def api_episodes(request: Request):
     ds = app_state.get('dataset')
     config = app_state['episode_table_cfg']
     columns, formatters, defaults = parse_table_cfg(config)
-    ep_it = ({'__meta__': ep.meta, '__duration__': ep.duration_ns / 1e9, **ep.static} for ep in ds)
+    filters = {k: v for k, v in request.query_params.items() if v}
+
+    def matches(ep: Episode) -> bool:
+        return filters is None or all(str(ep.static.get(k)) == v for k, v in filters.items())
+
+    ep_it = ({'__meta__': ep.meta, '__duration__': ep.duration_ns / 1e9, **ep.static} for ep in ds if matches(ep))
     episodes = get_episodes_list(ep_it, config.keys(), formatters=formatters, defaults=defaults)
     return {'columns': columns, 'episodes': episodes}
 
