@@ -19,8 +19,8 @@ jobs:
         enable-cache: true
     - name: Set up Python
       run: uv venv --python 3.11
-    - name: Install dev tools from lock
-      run: uv sync --frozen --extra dev
+    - name: Install dev tools
+      run: uv sync --extra dev
     - name: Run Ruff linter
       run: |
         # Only check Python files that have changed
