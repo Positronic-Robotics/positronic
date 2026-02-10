@@ -33,7 +33,9 @@ async function checkDatasetStatus() {
       datasetLoadingStatus.classList.remove('show');
       loadDatasetInfo();
 
-      const { episodes, columns, group_filters: groupFilters } = await loadEpisodes();
+      const urlFilters = Object.fromEntries(new URLSearchParams(window.location.search));
+      filtersState.serverFilters = { ...filtersState.serverFilters, ...urlFilters };
+      const { episodes, columns, group_filters: groupFilters } = await loadEpisodes(filtersState.serverFilters);
       currentEpisodes = episodes;
       filtersData = getFiltersData(episodes, columns);
       renderServerFilters(groupFilters);

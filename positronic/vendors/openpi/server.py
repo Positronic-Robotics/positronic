@@ -181,7 +181,9 @@ class InferenceServer:
         self.openpi_ws_port = openpi_ws_port
 
         self.metadata = metadata or {}
-        self.metadata.update(host=host, port=port, config_name=config_name)
+        self.metadata.update(
+            type='openpi', host=host, port=port, config_name=config_name, checkpoint_path=str(checkpoints_dir)
+        )
 
         # Active subprocess per checkpoint
         self._subprocesses: dict[str, OpenpiSubprocess] = {}
