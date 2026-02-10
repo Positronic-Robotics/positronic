@@ -25,7 +25,7 @@ dependencies = [
     "fire",
     "httpx",
     "imageio[ffmpeg]",
-    "lerobot>=0.3.3", # TODO: Get rid of this, move all usages to standalone scripts
+    "lerobot==0.3.3", # TODO: Get rid of this, move all usages to standalone scripts
     "msgpack",
     "mujoco",
     "numba>=0.57",
