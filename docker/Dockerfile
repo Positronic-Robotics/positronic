@@ -53,10 +53,10 @@ ENV LD_LIBRARY_PATH=/usr/local/lib:$LD_LIBRARY_PATH
 ENV PIP_DEFAULT_TIMEOUT=600
 ENV UV_HTTP_TIMEOUT=600
 
-# Copy project metadata and lock for reproducible deps
-COPY pyproject.toml uv.lock .
+# Copy project metadata for deps
+COPY pyproject.toml .
 RUN --mount=type=cache,target=/root/.cache/uv \
-    uv sync --frozen --no-dev --extra hardware --no-install-project
+    uv sync --no-dev --extra hardware --no-install-project
 
 WORKDIR /positronic
 
