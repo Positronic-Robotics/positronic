@@ -138,6 +138,7 @@ class GrootObservationEncoder(ObservationEncoder):
         w, h = self._image_size
         dummy[self._wrist_camera] = np.zeros((h, w, 3), dtype=np.uint8)
         dummy[self._exterior_camera] = np.zeros((h, w, 3), dtype=np.uint8)
+        dummy['task'] = 'warmup'
         return dummy
 
     def encode(self, inputs: dict[str, Any]) -> dict[str, Any]:
