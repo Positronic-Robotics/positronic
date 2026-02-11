@@ -117,12 +117,22 @@ class RateLimiter:
         self._next_time = None
 
     def wait_time(self) -> float:
-        """Wait if necessary to enforce the rate limit."""
+        """Return seconds to sleep before the next tick.
+
+        Advances the internal deadline on every call so that each call
+        consumes exactly one interval slot.  If the caller falls behind
+        (e.g. work took longer than the interval), the deadline is
+        fast-forwarded to the next future slot.
+        """
         now = self._clock.now()
-        if self._next_time is not None and now < self._next_time:
-            return self._next_time - now
-        self._next_time = now + self._interval
-        return 0.0
+        if self._next_time is None:
+            self._next_time = now + self._interval
+            return 0.0
+        wait = max(0.0, self._next_time - now)
+        self._next_time += self._interval
+        if self._next_time < now:
+            self._next_time = now + self._interval
+        return wait
 
 
 class RateCounter:

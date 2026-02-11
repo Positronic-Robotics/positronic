@@ -260,7 +260,13 @@ class InferenceServer:
         self.current_checkpoint_id: str | None = None
         self.current_checkpoint_dir: str | None = None
 
-        self.metadata = {'host': host, 'port': port, 'type': 'groot', 'modality_config': modality_config}
+        self.metadata = {
+            'host': host,
+            'port': port,
+            'type': 'groot',
+            'modality_config': modality_config,
+            'experiment_name': checkpoints_dir.rstrip('/').split('/')[-1] or '',
+        }
         if hasattr(self.codec.observation, 'meta'):
             self.metadata.update({f'observation.{k}': v for k, v in self.codec.observation.meta.items()})
         if hasattr(self.codec.action, 'meta'):

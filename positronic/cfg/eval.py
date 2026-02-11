@@ -60,18 +60,13 @@ def _split_path(path: str) -> list[str]:
 
 def _ckpt_act(ep: Episode) -> str:
     raw_path = ep['inference.policy.checkpoint_path']
-    # Path to ckpt id: full_ft_q/act/031225/checkpoints/300000/pretrained_model/ -> full_ft_q\031225\300000
     parts = _split_path(raw_path)
     chkpt_idxs = [i for i, p in enumerate(parts) if p == 'checkpoints']
     if chkpt_idxs:
         idx = chkpt_idxs[-1]
-        dataset = parts[idx - 3] if idx >= 3 else None
-        experiment = parts[idx - 1] if idx >= 1 else None
-        step = parts[idx + 1] if idx + 1 < len(parts) else None
-        if dataset is not None and experiment is not None and step is not None:
-            return f'{dataset}\\{experiment}\\{step}'
-    # Fallback: keep legacy behavior if path doesn't match the expected structure.
-    return raw_path.split('/checkpoints/')[-1]
+        if idx + 1 < len(parts):
+            return parts[idx + 1]
+    return raw_path
 
 
 def _ckpt_remote(ep: Episode) -> str:
@@ -80,8 +75,10 @@ def _ckpt_remote(ep: Episode) -> str:
         return str(checkpoint_id)
     raw_path = ep.get('inference.policy.server.checkpoint_path', '')
     if raw_path:
-        step = _split_path(raw_path)[-1].removeprefix('checkpoint-')
-        return step
+        parts = _split_path(raw_path)
+        if parts[-1] == 'pretrained_model' and len(parts) >= 2:
+            return parts[-2]
+        return parts[-1].removeprefix('checkpoint-')
     return ''
 
 
@@ -365,7 +362,7 @@ def uph_sim(episode: Episode) -> float | None:
 
 
 sim_episodes = base_cfg.transform.override(
-    base=base_cfg.local,
+    base=base_cfg.local_all,
     transforms=[
         Group(
             Identity(),

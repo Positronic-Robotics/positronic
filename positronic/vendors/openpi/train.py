@@ -8,6 +8,7 @@ import configuronic as cfn
 import pos3
 
 from positronic import utils
+from positronic.vendors.openpi import ensure_paligemma_tokenizer
 
 
 @cfn.config(config_name='pi05_positronic_lowmem', resume=False, num_train_steps=None, extra_args=[])
@@ -56,4 +57,5 @@ def main(
 
 
 if __name__ == '__main__':
+    ensure_paligemma_tokenizer()
     cfn.cli(main)

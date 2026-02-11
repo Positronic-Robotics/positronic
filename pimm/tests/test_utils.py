@@ -321,25 +321,25 @@ class TestRateLimiter:
         wait_time2 = rate_limiter.wait_time()
         assert wait_time2 == 0.0
 
-    def test_multiple_calls_timing_behavior(self):
-        """Test multiple calls and their timing behavior."""
+    def test_each_call_consumes_one_slot(self):
+        """Each wait_time() call consumes one interval slot."""
         mock_clock = Mock(spec=Clock)
         rate_limiter = RateLimiter(mock_clock, every_sec=1.0)
 
-        # First call
+        # First call consumes slot 1 → immediate
         mock_clock.now.return_value = 100.0
         assert rate_limiter.wait_time() == 0.0
 
-        # Second call - within interval
+        # Second call at t=100.3 consumes slot 2 (deadline 101.0)
         mock_clock.now.return_value = 100.3
         assert abs(rate_limiter.wait_time() - 0.7) < 1e-10
 
-        # Third call - still within interval from first call
-        mock_clock.now.return_value = 100.5
-        assert abs(rate_limiter.wait_time() - 0.5) < 1e-10
+        # Third call at t=101.0 consumes slot 3 (deadline 102.0)
+        mock_clock.now.return_value = 101.0
+        assert abs(rate_limiter.wait_time() - 1.0) < 1e-10
 
-        # Fourth call - after interval
-        mock_clock.now.return_value = 101.2
+        # Fourth call when behind (t=103.5) → fast-forward, no wait
+        mock_clock.now.return_value = 103.5
         assert rate_limiter.wait_time() == 0.0
 
     def test_hz_parameter_different_frequencies(self):
@@ -369,47 +369,37 @@ class TestRateLimiter:
         mock_clock.now.return_value = 50.0
         assert rate_limiter.wait_time() == 0.0
 
-        # Second call - just before interval
+        # Simulate: sleep 0, do work, now at 50.009
         mock_clock.now.return_value = 50.009
         wait_time = rate_limiter.wait_time()
-        assert abs(wait_time - 0.001) < 1e-10  # Very close to 0.001
+        assert abs(wait_time - 0.001) < 1e-10
 
-        # Third call - just after interval
-        mock_clock.now.return_value = 50.011
-        assert rate_limiter.wait_time() == 0.0
+        # Simulate: sleep 0.001, do work, now at 50.012 → slot 3 deadline is 50.02
+        mock_clock.now.return_value = 50.012
+        wait_time = rate_limiter.wait_time()
+        assert abs(wait_time - 0.008) < 1e-10
 
     def test_no_pairing_in_inference_loop(self):
-        """Regression: wait_time() in a loop with work between calls must not pair ticks."""
+        """Regression: one wait_time() call per loop iteration → one command per interval.
+
+        Simulates the inference loop pattern: work(2ms) → sleep(wait_time()).
+        Each call must return a positive wait (except the first), ensuring
+        exactly one emission per interval with no 0ms/67ms alternation.
+        """
         mock_clock = Mock(spec=Clock)
         rate_limiter = RateLimiter(mock_clock, every_sec=0.010)
-        ticks_consumed = 0
+        work_duration = 0.002
+        waits = []
 
-        # Tick 1: first call consumes immediately
-        mock_clock.now.return_value = 0.0
-        wt = rate_limiter.wait_time()
-        assert wt == 0.0
-        ticks_consumed += 1
+        t = 0.0
+        for _ in range(5):
+            mock_clock.now.return_value = t
+            wt = rate_limiter.wait_time()
+            waits.append(wt)
+            t += wt + work_duration  # sleep then work
 
-        # Simulate 2ms of work
-        mock_clock.now.return_value = 0.002
-        wt = rate_limiter.wait_time()
-        assert wt > 0.0, 'Should wait, not consume a second tick'
-
-        # Advance to fulfill the wait (0ms + 10ms interval = 10ms deadline)
-        mock_clock.now.return_value = 0.002 + wt
-        wt = rate_limiter.wait_time()
-        assert wt == 0.0
-        ticks_consumed += 1
-
-        # Simulate 2ms of work again
-        mock_clock.now.return_value = 0.012 + 0.002
-        wt = rate_limiter.wait_time()
-        assert wt > 0.0, 'Should wait, not consume a third tick'
-
-        # Advance to fulfill the wait
-        mock_clock.now.return_value = 0.014 + wt
-        wt = rate_limiter.wait_time()
-        assert wt == 0.0
-        ticks_consumed += 1
-
-        assert ticks_consumed == 3
+        # First call is immediate, all subsequent calls return positive wait
+        assert waits[0] == 0.0
+        for i in range(1, len(waits)):
+            assert waits[i] > 0, f'Tick {i} returned 0 — would cause pairing'
+            assert abs(waits[i] - 0.008) < 1e-10, f'Expected ~8ms wait, got {waits[i] * 1000:.1f}ms'

@@ -130,7 +130,12 @@ class InferenceServer:
         self.device = device or _detect_device()
 
         self.metadata = metadata or {}
-        self.metadata.update(host=host, port=port, device=self.device)
+        self.metadata.update(
+            host=host,
+            port=port,
+            device=self.device,
+            experiment_name=str(checkpoints_dir).rstrip('/').split('/')[-1] or '',
+        )
 
         # Initialize Policy Manager
         self.policy_manager = _PolicyManager(self._load_policy)
@@ -145,7 +150,7 @@ class InferenceServer:
         checkpoint_path = f'{self.checkpoints_dir}/{checkpoint_id}/pretrained_model'
         logger.info(f'Loading checkpoint from {checkpoint_path}')
 
-        base_meta = {'checkpoint_path': checkpoint_path, **self.metadata}
+        base_meta = {'checkpoint_id': checkpoint_id, 'checkpoint_path': checkpoint_path, **self.metadata}
         policy = self.policy_factory(checkpoint_path)
         if hasattr(policy, 'metadata') and policy.metadata:
             base_meta.update(policy.metadata)

@@ -7,7 +7,7 @@ def test_ckpt_act_resolves_comment_example_path():
         'inference.policy.type': 'act',
         'inference.policy.checkpoint_path': 'full_ft_q/act/031225/checkpoints/300000/pretrained_model/',
     })
-    assert ckpt(ep) == 'full_ft_q\\031225\\300000'
+    assert ckpt(ep) == '300000'
 
 
 def test_ckpt_remote_resolves_checkpoint_id():
@@ -21,3 +21,11 @@ def test_ckpt_remote_resolves_checkpoint_path():
         'inference.policy.server.checkpoint_path': '/checkpoints/experiment/checkpoint-30000',
     })
     assert ckpt(ep) == '30000'
+
+
+def test_ckpt_remote_resolves_lerobot_pretrained_model_path():
+    ep = EpisodeContainer({
+        'inference.policy.type': 'remote',
+        'inference.policy.server.checkpoint_path': 'checkpoints/050000/pretrained_model',
+    })
+    assert ckpt(ep) == '050000'

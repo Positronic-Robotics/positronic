@@ -19,7 +19,7 @@ from positronic.policy import Codec
 from positronic.utils.checkpoints import get_latest_checkpoint, list_checkpoints
 from positronic.utils.logging import init_logging
 from positronic.utils.serialization import deserialise, serialise
-from positronic.vendors.openpi import codecs
+from positronic.vendors.openpi import codecs, ensure_paligemma_tokenizer
 
 logger = logging.getLogger(__name__)
 
@@ -182,7 +182,12 @@ class InferenceServer:
 
         self.metadata = metadata or {}
         self.metadata.update(
-            type='openpi', host=host, port=port, config_name=config_name, checkpoint_path=str(checkpoints_dir)
+            type='openpi',
+            host=host,
+            port=port,
+            config_name=config_name,
+            checkpoint_path=str(checkpoints_dir),
+            experiment_name=str(checkpoints_dir).rstrip('/').split('/')[-1] or '',
         )
 
         # Active subprocess per checkpoint
@@ -419,5 +424,6 @@ def server(
 
 if __name__ == '__main__':
     init_logging()
+    ensure_paligemma_tokenizer()
     with pos3.mirror():
         cfn.cli(server)
