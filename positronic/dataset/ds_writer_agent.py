@@ -76,6 +76,31 @@ class DsWriterCommand:
 Serializer = Callable[[Any], Any | dict[str, Any]]
 
 
+class StatefulSerializer:
+    """Base for serializers registered with ``DsWriterAgent``.
+
+    ``reset`` is called automatically at the start of each episode.
+    The default implementation is a no-op, suitable for pure serializers.
+    Subclasses that maintain per-episode state should override ``reset``.
+    """
+
+    def reset(self) -> None:
+        pass
+
+    def __call__(self, value: Any) -> Any | dict[str, Any]:
+        raise NotImplementedError
+
+
+class _PureSerializer(StatefulSerializer):
+    """Wraps a plain callable so every serializer has a uniform interface."""
+
+    def __init__(self, fn: Callable[[Any], Any | dict[str, Any]]):
+        self._fn = fn
+
+    def __call__(self, value: Any) -> Any | dict[str, Any]:
+        return self._fn(value)
+
+
 class Serializers:
     """Namespace of built-in serializers for convenience.
 
@@ -92,6 +117,26 @@ class Serializers:
     def transform_3d(x: geom.Transform3D) -> np.ndarray:
         """Serialize a Transform3D into a 7D vector [tx, ty, tz, qx, qy, qz, qw]."""
         return x.as_vector(geom.Rotation.Representation.QUAT)
+
+    class ContinuousTransform3D(StatefulSerializer):
+        """Stateful serializer that canonicalises quaternion signs for temporal continuity.
+
+        Each quaternion is flipped to the sign closest to the previous frame,
+        avoiding arbitrary sign jumps from the double-cover ambiguity.
+        """
+
+        def __init__(self):
+            self._prev: geom.Rotation | None = None
+
+        def reset(self):
+            self._prev = None
+
+        def __call__(self, x: geom.Transform3D) -> np.ndarray:
+            rotation = x.rotation
+            if self._prev is not None:
+                rotation = rotation.closest_to(self._prev)
+            self._prev = rotation
+            return geom.Transform3D(x.translation, rotation).as_vector(geom.Rotation.Representation.QUAT)
 
     @staticmethod
     def robot_state(state: State) -> dict[str, np.ndarray] | None:
@@ -160,11 +205,13 @@ class DsWriterAgent(pimm.ControlSystem):
         self.command = pimm.ControlSystemReceiver[DsWriterCommand](self, default=None)
 
         self._inputs: dict[str, pimm.ControlSystemReceiver[Any]] = {}
-        self._serializers: dict[str, Callable[[Any], Any | dict[str, Any]]] = {}
+        self._serializers: dict[str, StatefulSerializer] = {}
 
-    def add_signal(self, name: str, serializer: Serializer | None = None):
+    def add_signal(self, name: str, serializer: Serializer | StatefulSerializer | None = None):
         self._inputs[name] = pimm.ControlSystemReceiver[Any](self, default=None)
         if serializer is not None:
+            if not isinstance(serializer, StatefulSerializer):
+                serializer = _PureSerializer(serializer)
             self._serializers[name] = serializer
 
     @property
@@ -227,6 +274,8 @@ class DsWriterAgent(pimm.ControlSystem):
                 if ep_writer is None:
                     ep_counter += 1
                     logger.info(f'DsWriterAgent: [START] Episode {ep_counter}')
+                    for ser in self._serializers.values():
+                        ser.reset()
                     ep_writer = self.ds_writer.new_episode()
                     for k, v in cmd.static_data.items():
                         ep_writer.set_static(k, v)

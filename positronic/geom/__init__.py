@@ -493,6 +493,18 @@ class Rotation(metaclass=RotationMeta):
 
         return np.array([roll, pitch, yaw])
 
+    def closest_to(self, reference: Rotation) -> Rotation:
+        """Return the equivalent quaternion representation closest to *reference*.
+
+        Quaternions have double cover: q and -q represent the same rotation.
+        This picks the sign that minimises the L2 distance to *reference*.
+        """
+        if np.dot(self._quat, reference._quat) < 0:
+            obj = object.__new__(Rotation)
+            obj._quat = -self._quat
+            return obj
+        return self
+
     @property
     def as_quat(self) -> np.ndarray:
         """

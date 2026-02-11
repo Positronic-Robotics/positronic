@@ -43,6 +43,7 @@ This applies to:
 ## Code style
 - No imports inside functions/methods; always place imports at the top of the file
 - Exception: circular dependencies or truly unavoidable cases
+- No `hasattr`/`getattr` hacks for type dispatch; use `isinstance` with proper base classes or protocols
 
 ## Testing
 - Don't add new test files unless explicitly asked

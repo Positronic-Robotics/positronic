@@ -109,19 +109,19 @@ class RateLimiter:
         """
         assert (every_sec is None) ^ (hz is None), 'Exactly one of every_sec or hz must be provided'
         self._clock = clock
-        self._last_time = None
+        self._next_time = None
         self._interval = every_sec if every_sec is not None else 1.0 / hz  # type: ignore
 
     def reset(self):
         """Reset the rate limiter."""
-        self._last_time = None
+        self._next_time = None
 
     def wait_time(self) -> float:
         """Wait if necessary to enforce the rate limit."""
         now = self._clock.now()
-        if self._last_time is not None and now - self._last_time < self._interval:
-            return self._interval - (now - self._last_time)
-        self._last_time = now
+        if self._next_time is not None and now < self._next_time:
+            return self._next_time - now
+        self._next_time = now + self._interval
         return 0.0
 
 

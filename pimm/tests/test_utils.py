@@ -377,3 +377,39 @@ class TestRateLimiter:
         # Third call - just after interval
         mock_clock.now.return_value = 50.011
         assert rate_limiter.wait_time() == 0.0
+
+    def test_no_pairing_in_inference_loop(self):
+        """Regression: wait_time() in a loop with work between calls must not pair ticks."""
+        mock_clock = Mock(spec=Clock)
+        rate_limiter = RateLimiter(mock_clock, every_sec=0.010)
+        ticks_consumed = 0
+
+        # Tick 1: first call consumes immediately
+        mock_clock.now.return_value = 0.0
+        wt = rate_limiter.wait_time()
+        assert wt == 0.0
+        ticks_consumed += 1
+
+        # Simulate 2ms of work
+        mock_clock.now.return_value = 0.002
+        wt = rate_limiter.wait_time()
+        assert wt > 0.0, 'Should wait, not consume a second tick'
+
+        # Advance to fulfill the wait (0ms + 10ms interval = 10ms deadline)
+        mock_clock.now.return_value = 0.002 + wt
+        wt = rate_limiter.wait_time()
+        assert wt == 0.0
+        ticks_consumed += 1
+
+        # Simulate 2ms of work again
+        mock_clock.now.return_value = 0.012 + 0.002
+        wt = rate_limiter.wait_time()
+        assert wt > 0.0, 'Should wait, not consume a third tick'
+
+        # Advance to fulfill the wait
+        mock_clock.now.return_value = 0.014 + wt
+        wt = rate_limiter.wait_time()
+        assert wt == 0.0
+        ticks_consumed += 1
+
+        assert ticks_consumed == 3
