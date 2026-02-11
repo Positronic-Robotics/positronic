@@ -242,7 +242,11 @@ async def api_episodes(request: Request):
     def matches(ep: Episode) -> bool:
         return filters is None or all(str(ep.static.get(k)) == v for k, v in filters.items())
 
-    ep_it = ({'__meta__': ep.meta, '__duration__': ep.duration_ns / 1e9, **ep.static} for ep in ds if matches(ep))
+    ep_it = (
+        {'__episode_index__': i, '__meta__': ep.meta, '__duration__': ep.duration_ns / 1e9, **ep.static}
+        for i, ep in enumerate(ds)
+        if matches(ep)
+    )
     episodes = get_episodes_list(ep_it, config.keys(), formatters=formatters, defaults=defaults)
     return {'columns': columns, 'episodes': episodes}
 

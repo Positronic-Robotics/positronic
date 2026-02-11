@@ -38,9 +38,10 @@ def get_episodes_list(
     result = []
     for idx, ep in enumerate(ds):
         try:
+            episode_index = ep.pop('__episode_index__', idx)
             mapping = {'__index__': idx + 1, **ep}
             episode_data = [_format_value(mapping.get(key), formatters.get(key), defaults.get(key)) for key in keys]
-            row = [idx, episode_data]
+            row = [episode_index, episode_data]
 
             # Include group metadata if available for using it in URL
             if ep.get('__meta__') and 'group' in ep['__meta__']:
