@@ -2,7 +2,7 @@ import unittest
 
 import numpy as np
 
-from positronic.geom import Rotation, Transform3D, degrees_to_radians, radians_to_degrees
+from positronic.geom import Rotation, Transform3D, degrees_to_radians, quat_closest, radians_to_degrees
 
 
 class TestTransform3D(unittest.TestCase):
@@ -398,29 +398,29 @@ class TestRotation(unittest.TestCase):
             q = Rotation.from_quat([0.7071, 0.7071, 0, 0])  # 90 degrees rotation around x-axis
             self.assertIsNotNone(q.to(representation))
 
-    def test_closest_to(self):
+    def test_quat_closest(self):
         q = Rotation.from_quat([0.7071, 0.7071, 0, 0])
         neg_q = Rotation.from_quat([-0.7071, -0.7071, 0, 0])
 
         # Flips sign when dot product is negative
-        result = neg_q.closest_to(q)
+        result = quat_closest(neg_q, q)
         np.testing.assert_array_almost_equal(result.as_quat, q.as_quat, decimal=4)
 
         # No flip when dot product is already positive
-        result = q.closest_to(q)
+        result = quat_closest(q, q)
         np.testing.assert_array_almost_equal(result.as_quat, q.as_quat, decimal=4)
 
         # Rotation matrix is preserved regardless of flip
-        np.testing.assert_array_almost_equal(neg_q.closest_to(q).as_rotation_matrix, q.as_rotation_matrix)
+        np.testing.assert_array_almost_equal(quat_closest(neg_q, q).as_rotation_matrix, q.as_rotation_matrix)
 
-        # Temporal continuity: sequential closest_to eliminates sign jumps
+        # Temporal continuity: sequential quat_closest eliminates sign jumps
         angles = np.linspace(0, np.pi, 20)
         quats = [Rotation.from_euler([a, 0, 0]) for a in angles]
         for i in range(1, len(quats), 2):
             quats[i] = Rotation.from_quat(-quats[i].as_quat)
         corrected = [quats[0]]
         for i in range(1, len(quats)):
-            corrected.append(quats[i].closest_to(corrected[-1]))
+            corrected.append(quat_closest(quats[i], corrected[-1]))
         for i in range(1, len(corrected)):
             self.assertGreaterEqual(np.dot(corrected[i].as_quat, corrected[i - 1].as_quat), 0)
 

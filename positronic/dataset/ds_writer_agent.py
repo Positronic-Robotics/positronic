@@ -134,7 +134,7 @@ class Serializers:
         def __call__(self, x: geom.Transform3D) -> np.ndarray:
             rotation = x.rotation
             if self._prev is not None:
-                rotation = rotation.closest_to(self._prev)
+                rotation = geom.quat_closest(rotation, self._prev)
             self._prev = rotation
             return geom.Transform3D(x.translation, rotation).as_vector(geom.Rotation.Representation.QUAT)
 
