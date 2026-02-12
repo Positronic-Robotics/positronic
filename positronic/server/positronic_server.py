@@ -5,8 +5,8 @@ import os
 import shutil
 import threading
 from collections import defaultdict
-from collections.abc import Callable
 from contextlib import asynccontextmanager
+from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from functools import wraps
 from pathlib import Path
@@ -207,25 +207,88 @@ async def api_dataset_info():
     return {'root': app_state['root'], 'num_episodes': len(ds)}
 
 
-def parse_table_cfg(table_cfg: dict[str, Any]) -> tuple:
+@dataclass
+class RendererConfig:
+    """Custom cell renderer sent to the frontend.
+
+    Attributes:
+        type: Renderer type dispatched in app.js — ``'badge'`` or ``'icon'``.
+        options: Value-keyed mapping. For badges: ``{value: {'label', 'variant'}}``.
+            For icons: ``{value: {'src', 'label?'}}``.
+    """
+
+    type: str
+    options: dict = field(default_factory=dict)
+
+
+@dataclass
+class ColumnConfig:
+    """Column definition for an episodes or grouped table.
+
+    Attributes:
+        label: Header text shown in the table.
+        format: Printf-style format string, e.g. ``'%.1f'``, ``'%Y-%m-%d %H:%M'``.
+        default: Fallback value when the cell is None/missing.
+        renderer: Optional custom renderer (badge, icon, …).
+        filter: Whether to show a client-side filter dropdown for this column.
+    """
+
+    label: str
+    format: str | None = None
+    default: Any = None
+    renderer: RendererConfig | None = None
+    filter: bool = False
+
+
+@dataclass
+class SortConfig:
+    """Default sort order for a table.
+
+    Attributes:
+        column: Column key to sort by.
+        direction: ``'asc'`` or ``'desc'``.
+    """
+
+    column: str
+    direction: str = 'desc'
+
+
+TableConfig = dict[str, ColumnConfig]
+
+
+@dataclass
+class GroupTableConfig:
+    """Configuration for a grouped table view (e.g. leaderboard).
+
+    Attributes:
+        group_keys: Column key(s) to group episodes by. A single string or tuple of strings.
+        group_fn: Aggregation function that takes a list of episodes and returns a row dict.
+        format_table: Column definitions for the output table.
+        group_filter_keys: Server-side filter dropdowns — maps column key to display label.
+        default_sort: Initial sort order applied on first page load.
+    """
+
+    group_keys: str | tuple[str, ...]
+    group_fn: Any  # Callable[[list[Episode]], dict]
+    format_table: TableConfig
+    group_filter_keys: dict[str, str] = field(default_factory=dict)
+    default_sort: SortConfig | None = None
+
+
+def parse_table_cfg(table_cfg: TableConfig) -> tuple:
     columns = []
     formatters = {}
     defaults = {}
-    for key, value in table_cfg.items():
-        column = {}
-        if isinstance(value, dict):
-            column['key'] = key
-            column['label'] = value.get('label', key)
-            formatters[key] = value.get('format')
-            defaults[key] = value.get('default')
+    for key, cfg in table_cfg.items():
+        column: dict[str, Any] = {'key': key, 'label': cfg.label}
+        formatters[key] = cfg.format
+        defaults[key] = cfg.default
 
-            if 'renderer' in value:
-                column['renderer'] = value['renderer']
+        if cfg.renderer:
+            column['renderer'] = asdict(cfg.renderer)
 
-            if 'filter' in value:
-                column['filter'] = value['filter']
-        else:
-            column['label'] = value or key
+        if cfg.filter:
+            column['filter'] = cfg.filter
 
         columns.append(column)
     return columns, formatters, defaults
@@ -266,40 +329,42 @@ async def api_groups(request: Request, suffix: str):
             detail=f'Group configuration "{suffix}" not found, available: {", ".join(group_tables.keys())}',
         )
 
-    group_keys, group_fn, format_table, group_filter_keys = group_tables[suffix]
-    if isinstance(group_keys, str):
-        group_keys = (group_keys,)
+    cfg = group_tables[suffix]
+    group_keys = (cfg.group_keys,) if isinstance(cfg.group_keys, str) else cfg.group_keys
 
     # Ensure group keys are visible in the output table
     for k in group_keys:
-        assert k in format_table, f'Group key {k} not found in format_table'
+        assert k in cfg.format_table, f'Group key {k} not found in format_table'
 
-    columns, formatters, defaults = parse_table_cfg(format_table)
+    columns, formatters, defaults = parse_table_cfg(cfg.format_table)
 
     # Take only those query parameters that are in group_filter_keys
     active_filters = {}
-    for filter_key in group_filter_keys:
+    for filter_key in cfg.group_filter_keys:
         filter_value = request.query_params.get(filter_key)
         if filter_value:
             active_filters[filter_key] = filter_value
 
     groups = defaultdict(list)
-    group_filters = {key: {'label': label or key, 'values': set()} for key, label in group_filter_keys.items()}
+    group_filters = {key: {'label': label or key, 'values': set()} for key, label in cfg.group_filter_keys.items()}
     for episode in ds:
         # Apply filters
         match = all(episode.static[key] == value for key, value in active_filters.items())
         if match:
             groups[_group_id(episode, group_keys)].append(episode)
-            for filter_key in group_filter_keys:
+            for filter_key in cfg.group_filter_keys:
                 group_filters[filter_key]['values'].add(episode.static.get(filter_key))
 
     rows = []
     for group_id, episodes in groups.items():
         key_fields = {k: group_id[i] for i, k in enumerate(group_keys)}
-        rows.append({**key_fields, '__meta__': {'group': key_fields}, **group_fn(episodes)})
+        rows.append({**key_fields, '__meta__': {'group': key_fields}, **cfg.group_fn(episodes)})
 
-    episodes = get_episodes_list(rows, format_table.keys(), formatters=formatters, defaults=defaults)
-    return {'columns': columns, 'episodes': episodes, 'group_filters': group_filters}
+    episodes = get_episodes_list(rows, cfg.format_table.keys(), formatters=formatters, defaults=defaults)
+    result = {'columns': columns, 'episodes': episodes, 'group_filters': group_filters}
+    if cfg.default_sort:
+        result['default_sort'] = asdict(cfg.default_sort)
+    return result
 
 
 @app.get('/groups/{suffix}', response_class=HTMLResponse)
@@ -359,15 +424,12 @@ async def api_episode_rrd(episode_id: int):
     )
 
 
-TableConfig = dict[str, dict[str, Any]]
-
-
 @cfn.config()
 def default_table() -> TableConfig:
     return {
-        '__index__': {'label': '#', 'format': '%d'},
-        '__duration__': {'label': 'Duration', 'format': '%.2f sec'},
-        'task': {'label': 'Task', 'filter': True},
+        '__index__': ColumnConfig(label='#', format='%d'),
+        '__duration__': ColumnConfig(label='Duration', format='%.2f sec'),
+        'task': ColumnConfig(label='Task', filter=True),
     }
 
 
@@ -381,7 +443,7 @@ def main(
     port: int = 5000,
     debug: bool = False,
     reset_cache: bool = False,
-    group_tables: dict[str, tuple[tuple[str, ...], Callable, TableConfig, dict[str, str]]] | None = None,
+    group_tables: dict[str, GroupTableConfig] | None = None,
     home_page: str | None = None,
 ):
     """Visualize a Dataset with Rerun.
@@ -423,6 +485,7 @@ def main(
                     },
                 },
             }
+        group_tables: Mapping of group name to GroupTableConfig
     """
     root = get_dataset_root(dataset) or 'unknown_dataset'
     deb_level = logging.DEBUG if debug else logging.INFO

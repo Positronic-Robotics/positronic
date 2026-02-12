@@ -8,6 +8,8 @@ import pos3
 
 from positronic.dataset import Episode
 from positronic.dataset.transforms.episode import Derive, FromValue, Group, Identity, Rename
+from positronic.server.positronic_server import ColumnConfig as C
+from positronic.server.positronic_server import GroupTableConfig
 from positronic.server.positronic_server import main as server_main
 from positronic.utils.logging import init_logging
 
@@ -148,12 +150,12 @@ ft_eval_ds = ds.transform.override(
 @cfn.config()
 def finetune_episodes_table():
     return {
-        '__index__': {'label': '#', 'format': '%d'},
-        '__duration__': {'label': 'Duration', 'format': '%.0f sec'},
-        'task': {'label': 'Task', 'filter': True},
-        'units': {'label': 'Units'},
-        'uph': {'label': 'UPH', 'format': '%.1f'},
-        'started': {'label': 'Started', 'format': '%Y-%m-%d %H:%M'},
+        '__index__': C(label='#', format='%d'),
+        '__duration__': C(label='Duration', format='%.0f sec'),
+        'task': C(label='Task', filter=True),
+        'units': C(label='Units'),
+        'uph': C(label='UPH', format='%.1f'),
+        'started': C(label='Started', format='%Y-%m-%d %H:%M'),
     }
 
 
@@ -170,13 +172,13 @@ def finetune_group_by_task():
         return result
 
     format_table = {
-        'task': {'label': 'Task'},
-        'duration': {'label': 'Duration', 'format': '%.2f hours'},
-        'uph': {'label': 'UPH', 'format': '%.1f'},
-        'count': {'label': 'Count'},
+        'task': C(label='Task'),
+        'duration': C(label='Duration', format='%.2f hours'),
+        'uph': C(label='UPH', format='%.1f'),
+        'count': C(label='Count'),
     }
 
-    return 'task', group_fn, format_table, {}
+    return GroupTableConfig(group_keys='task', group_fn=group_fn, format_table=format_table)
 
 
 finetune_server = server_main.override(

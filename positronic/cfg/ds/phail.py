@@ -33,6 +33,8 @@ import pos3
 
 from positronic.dataset import Episode
 from positronic.dataset.transforms.episode import Derive, Identity
+from positronic.server.positronic_server import ColumnConfig as C
+from positronic.server.positronic_server import GroupTableConfig
 from positronic.server.positronic_server import main as server_main
 from positronic.utils.logging import init_logging
 
@@ -63,10 +65,10 @@ sim_pick_place = local.override(path='s3://positronic-public/datasets/sim-pick-p
 @cfn.config()
 def episodes_table():
     return {
-        '__index__': {'label': '#', 'format': '%d'},
-        '__duration__': {'label': 'Duration', 'format': '%.0f sec'},
-        'task': {'label': 'Task', 'filter': True},
-        'started': {'label': 'Started', 'format': '%Y-%m-%d %H:%M'},
+        '__index__': C(label='#', format='%d'),
+        '__duration__': C(label='Duration', format='%.0f sec'),
+        'task': C(label='Task', filter=True),
+        'started': C(label='Started', format='%Y-%m-%d %H:%M'),
     }
 
 
@@ -77,12 +79,12 @@ def group_by_task():
         return {'task': episodes[0]['task'], 'duration': duration, 'count': len(episodes)}
 
     format_table = {
-        'task': {'label': 'Task'},
-        'duration': {'label': 'Duration', 'format': '%.2f hours'},
-        'count': {'label': 'Count'},
+        'task': C(label='Task'),
+        'duration': C(label='Duration', format='%.2f hours'),
+        'count': C(label='Count'),
     }
 
-    return 'task', group_fn, format_table, {}
+    return GroupTableConfig(group_keys='task', group_fn=group_fn, format_table=format_table)
 
 
 phail_with_started = transform.override(

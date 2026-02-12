@@ -7,6 +7,8 @@ import pos3
 import positronic.cfg.ds as base_cfg
 from positronic.dataset.episode import Episode
 from positronic.dataset.transforms.episode import Derive, Group, Identity
+from positronic.server.positronic_server import ColumnConfig as C
+from positronic.server.positronic_server import GroupTableConfig, RendererConfig
 from positronic.server.positronic_server import main as server_main
 from positronic.utils.logging import init_logging
 
@@ -184,25 +186,22 @@ episodes = base_cfg.transform.override(
 @cfn.config()
 def episodes_table():
     return {
-        '__index__': {'label': '#', 'format': '%d'},
-        '__duration__': {'label': 'Duration', 'format': '%.1f sec'},
-        'task_code': {'label': 'Task', 'filter': True},
-        'model': {'label': 'Model', 'filter': True},
-        'checkpoint': {'label': 'Checkpoint', 'filter': True},
-        'success_bool': {
-            'label': 'Pass',
-            'renderer': {
-                'type': 'badge',
-                'options': {
-                    True: {'label': 'Pass', 'variant': 'success'},
-                    False: {'label': 'Fail', 'variant': 'danger'},
-                },
-            },
-        },
-        'units_display': {'label': 'Units'},
-        'uph': {'label': 'UPH', 'format': '%.1f', 'default': '-'},
-        'success_rate': {'label': 'Success', 'format': '%.1f%%'},
-        'started': {'label': 'Started', 'format': '%Y-%m-%d %H:%M:%S'},
+        '__index__': C(label='#', format='%d'),
+        '__duration__': C(label='Duration', format='%.1f sec'),
+        'task_code': C(label='Task', filter=True),
+        'model': C(label='Model', filter=True),
+        'checkpoint': C(label='Checkpoint', filter=True),
+        'success_bool': C(
+            label='Pass',
+            renderer=RendererConfig(
+                type='badge',
+                options={True: {'label': 'Pass', 'variant': 'success'}, False: {'label': 'Fail', 'variant': 'danger'}},
+            ),
+        ),
+        'units_display': C(label='Units'),
+        'uph': C(label='UPH', format='%.1f', default='-'),
+        'success_rate': C(label='Success', format='%.1f%%'),
+        'started': C(label='Started', format='%Y-%m-%d %H:%M:%S'),
     }
 
 
@@ -234,17 +233,21 @@ def checkpoint_table():
         }
 
     format_table = {
-        'model': {'label': 'Model'},
-        'checkpoint': {'label': 'Checkpoint'},
-        'count': {'label': 'Runs', 'format': '%d'},
-        'UPH': {'label': 'UPH', 'format': '%.1f'},
-        'success_rate': {'label': 'Success', 'format': '%.1f%%'},
-        'MTBF': {'label': 'MTBF', 'format': '%.1f sec', 'default': '-'},
-        'failures': {'label': 'Failures', 'format': '%d'},
+        'model': C(label='Model'),
+        'checkpoint': C(label='Checkpoint'),
+        'count': C(label='Runs', format='%d'),
+        'UPH': C(label='UPH', format='%.1f'),
+        'success_rate': C(label='Success', format='%.1f%%'),
+        'MTBF': C(label='MTBF', format='%.1f sec', default='-'),
+        'failures': C(label='Failures', format='%d'),
     }
 
-    group_filter_keys = {'checkpoint': 'Checkpoint', 'model': 'Model'}
-    return ('model', 'checkpoint'), group_fn, format_table, group_filter_keys
+    return GroupTableConfig(
+        group_keys=('model', 'checkpoint'),
+        group_fn=group_fn,
+        format_table=format_table,
+        group_filter_keys={'checkpoint': 'Checkpoint', 'model': 'Model'},
+    )
 
 
 ########################
@@ -379,25 +382,22 @@ sim_episodes = base_cfg.transform.override(
 @cfn.config()
 def sim_episodes_table():
     return {
-        '__index__': {'label': '#', 'format': '%d'},
-        '__duration__': {'label': 'Duration', 'format': '%.2f sec'},
-        'checkpoint': {'label': 'CKPT', 'filter': True},
-        'success': {
-            'label': 'Pass',
-            'renderer': {
-                'type': 'badge',
-                'options': {
-                    True: {'label': 'Pass', 'variant': 'success'},
-                    False: {'label': 'Fail', 'variant': 'danger'},
-                },
-            },
-        },
-        'success_time': {'label': 'Success Time', 'format': '%.1f sec', 'default': '-'},
-        'units': {'label': 'Units', 'format': '%d'},
-        'uph': {'label': 'UPH', 'format': '%.1f', 'default': '-'},
-        'max_stacking_success': {'label': 'Max Success', 'format': '%.2f'},
-        'box_distance_progress': {'label': 'Box Progress', 'format': '%.1f%%', 'default': '-'},
-        'movement': {'label': 'Movement', 'format': '%.2f'},
+        '__index__': C(label='#', format='%d'),
+        '__duration__': C(label='Duration', format='%.2f sec'),
+        'checkpoint': C(label='CKPT', filter=True),
+        'success': C(
+            label='Pass',
+            renderer=RendererConfig(
+                type='badge',
+                options={True: {'label': 'Pass', 'variant': 'success'}, False: {'label': 'Fail', 'variant': 'danger'}},
+            ),
+        ),
+        'success_time': C(label='Success Time', format='%.1f sec', default='-'),
+        'units': C(label='Units', format='%d'),
+        'uph': C(label='UPH', format='%.1f', default='-'),
+        'max_stacking_success': C(label='Max Success', format='%.2f'),
+        'box_distance_progress': C(label='Box Progress', format='%.1f%%', default='-'),
+        'movement': C(label='Movement', format='%.2f'),
     }
 
 
@@ -446,19 +446,23 @@ def sim_checkpoint_table():
         return result
 
     format_table = {
-        'model': {'label': 'Model'},
-        'checkpoint': {'label': 'Checkpoint'},
-        'count': {'label': 'Runs', 'format': '%d'},
-        'UPH': {'label': 'UPH', 'format': '%.1f'},
-        'success_rate': {'label': 'Success', 'format': '%.1f%%'},
-        'MTBF': {'label': 'MTBF', 'format': '%.1f sec', 'default': '-'},
-        'avg_success_time': {'label': 'Avg Time', 'format': '%.1f sec', 'default': '-'},
-        'avg_max_success': {'label': 'Avg Max', 'format': '%.2f', 'default': '-'},
-        'failures': {'label': 'Failures', 'format': '%d'},
+        'model': C(label='Model'),
+        'checkpoint': C(label='Checkpoint'),
+        'count': C(label='Runs', format='%d'),
+        'UPH': C(label='UPH', format='%.1f'),
+        'success_rate': C(label='Success', format='%.1f%%'),
+        'MTBF': C(label='MTBF', format='%.1f sec', default='-'),
+        'avg_success_time': C(label='Avg Time', format='%.1f sec', default='-'),
+        'avg_max_success': C(label='Avg Max', format='%.2f', default='-'),
+        'failures': C(label='Failures', format='%d'),
     }
 
-    group_filter_keys = {'model': 'Model', 'checkpoint': 'Checkpoint'}
-    return ('model', 'checkpoint'), group_fn, format_table, group_filter_keys
+    return GroupTableConfig(
+        group_keys=('model', 'checkpoint'),
+        group_fn=group_fn,
+        format_table=format_table,
+        group_filter_keys={'model': 'Model', 'checkpoint': 'Checkpoint'},
+    )
 
 
 # ========================================================================================
