@@ -304,7 +304,7 @@ function populateEpisodesTable(columns) {
     } else {
       viewLink.href = `/episode/${episodeIndex}`;
     }
-    viewLink.textContent = 'View';
+    viewLink.textContent = window.VIEW_LABEL || 'View';
     viewCell.appendChild(viewLink);
     row.appendChild(viewCell);
 
