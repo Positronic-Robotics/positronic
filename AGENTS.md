@@ -54,6 +54,11 @@ This applies to:
 - No trailing period for short messages
 - No Claude/AI attribution
 
+## Infrastructure
+- Machines, Docker contexts and images: `docker/CONTEXTS.md`
+- Model-specific workflows: `positronic/vendors/{lerobot,gr00t,openpi}/README.md`
+- Reconstructing previous runs: read `run_metadata_*.yaml` and episode `static.json` from output directory
+
 ## Available skills
 - `/remote-training` — Manage Nebius VMs, Docker images, training jobs, inference servers
 - `/push-pr` — Push branch to origin and create PR to upstream with proper workflow
