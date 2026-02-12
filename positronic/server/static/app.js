@@ -35,9 +35,15 @@ async function checkDatasetStatus() {
 
       const urlFilters = Object.fromEntries(new URLSearchParams(window.location.search));
       filtersState.serverFilters = { ...filtersState.serverFilters, ...urlFilters };
-      const { episodes, columns, group_filters: groupFilters } = await loadEpisodes(filtersState.serverFilters);
+      const { episodes, columns, group_filters: groupFilters, default_sort: defaultSort } = await loadEpisodes(filtersState.serverFilters);
       currentEpisodes = episodes;
       filtersData = getFiltersData(episodes, columns);
+      if (defaultSort) {
+        const sortIndex = columns.findIndex((c) => c.key === defaultSort.column);
+        if (sortIndex !== -1) {
+          filtersState.sort = { columnIndex: String(sortIndex), direction: defaultSort.direction || 'desc' };
+        }
+      }
       renderServerFilters(groupFilters);
       renderClientFilters(columns);
       renderEpisodesTableHeader(columns);
@@ -126,6 +132,10 @@ function renderEpisodesTableHeader(columns) {
   }
 
   headerRow.prepend(...headerColumns);
+
+  if (sortState.columnIndex !== null) {
+    headerColumns[sortState.columnIndex]?.classList.add(`sorted-${sortState.direction}`);
+  }
 
   function sortByColumnHandler(event) {
     const headerColumn = event.currentTarget;
