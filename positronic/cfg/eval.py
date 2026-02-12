@@ -261,29 +261,26 @@ def max_stacking_success(episode: Episode) -> float | None:
     return max(v for v, _ in success_signal)
 
 
-def success(episode: Episode) -> bool:
-    """Check if stacking_success reached 1.0 and stayed there for at least 0.5 seconds."""
+def success(episode: Episode, score_threshold: float = 0.95) -> bool:
+    """Check if stacking_success reached score_threshold and stayed there for at least 0.5 seconds."""
     if 'stacking_success' not in episode:
         return False
     success_signal = episode['stacking_success']
     if len(success_signal) == 0:
         return False
 
-    threshold_ns = int(0.5 * 1e9)  # 0.5 seconds in nanoseconds
+    threshold_ns = int(0.25 * 1e9)  # 0.25 seconds in nanoseconds
 
-    # Find all stretches where value == 1.0
     in_success = False
     success_start_ts = None
 
     for value, timestamp in success_signal:
-        if value == 1.0:
+        if value >= score_threshold:
             if not in_success:
                 in_success = True
                 success_start_ts = timestamp
-            else:
-                # Check if we've been at 1.0 for at least threshold_ns
-                if timestamp - success_start_ts >= threshold_ns:
-                    return True
+            elif timestamp - success_start_ts >= threshold_ns:
+                return True
         else:
             in_success = False
             success_start_ts = None
@@ -291,28 +288,25 @@ def success(episode: Episode) -> bool:
     return False
 
 
-def success_time(episode: Episode) -> float | None:
-    """Return the time (seconds from episode start) when success was achieved (held 1.0 for 0.5s)."""
+def success_time(episode: Episode, score_threshold: float = 0.95) -> float | None:
+    """Return the time (seconds from episode start) when success was achieved (held score_threshold for 0.25s)."""
     if 'stacking_success' not in episode:
         return None
     success_signal = episode['stacking_success']
     if len(success_signal) == 0:
         return None
 
-    threshold_ns = int(0.5 * 1e9)  # 0.5 seconds in nanoseconds
+    threshold_ns = int(0.25 * 1e9)  # 0.25 seconds in nanoseconds
     in_success = False
     success_start_ts = None
 
     for value, timestamp in success_signal:
-        if value == 1.0:
+        if value >= score_threshold:
             if not in_success:
                 in_success = True
                 success_start_ts = timestamp
-            else:
-                # Check if we've been at 1.0 for at least threshold_ns
-                if timestamp - success_start_ts >= threshold_ns:
-                    # Return the time when threshold was reached
-                    return (timestamp - episode.start_ts) / 1e9
+            elif timestamp - success_start_ts >= threshold_ns:
+                return (timestamp - episode.start_ts) / 1e9
         else:
             in_success = False
             success_start_ts = None
