@@ -305,10 +305,33 @@ function populateEpisodesTable(columns) {
     if (column.renderer?.type === 'badge') {
       return createBadge(entity, column.renderer.options?.[entity]);
     }
+    if (column.renderer?.type === 'icon') {
+      return createIconCell(entity, column.renderer.options);
+    }
 
     const value = Array.isArray(entity) ? entity[1] : entity;
 
     return value ?? '';
+  }
+
+  function createIconCell(value, options) {
+    if (value === null || value === undefined) return '';
+    const text = Array.isArray(value) ? value[1] : String(value);
+    const raw = Array.isArray(value) ? value[0] : value;
+    const cfg = options?.[raw];
+    const container = document.createElement('span');
+    container.classList.add('cell-with-icon');
+    if (cfg?.src) {
+      const img = document.createElement('img');
+      img.src = cfg.src;
+      img.alt = '';
+      img.classList.add('cell-icon');
+      container.appendChild(img);
+    }
+    const span = document.createElement('span');
+    span.textContent = cfg?.label ?? text;
+    container.appendChild(span);
+    return container;
   }
 
   function createBadge(value, options) {

@@ -337,6 +337,10 @@ tbody tr.lb-row--baseline:hover {
   border: 1px solid rgba(248, 113, 113, 0.3);
 }
 
+/* Icon cells */
+.cell-with-icon { display: inline-flex; align-items: center; }
+.cell-icon { width: 18px; height: 18px; object-fit: contain; margin-right: 0.6rem; }
+
 /* Buttons */
 .btn {
   display: inline-flex;
