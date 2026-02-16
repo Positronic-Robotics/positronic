@@ -79,8 +79,9 @@ def absolute_position(rotation_rep: str | None, tgt_ee_pose_key: str, tgt_grip_k
     rot_rep = RotRep(rotation_rep) if rotation_rep else RotRep.QUAT
     ee_dim = rot_rep.size + 3
 
-    result = AbsolutePositionAction(tgt_ee_pose_key, tgt_grip_key, rotation_representation=rot_rep)
-    result.action_horizon = action_horizon
+    result = AbsolutePositionAction(
+        tgt_ee_pose_key, tgt_grip_key, rotation_representation=rot_rep, action_horizon=action_horizon
+    )
     result.meta['lerobot_features'] = {'action': {'shape': (ee_dim + 1,), 'names': ['actions'], 'dtype': 'float32'}}
     return result
 
@@ -95,8 +96,7 @@ def absolute_position(rotation_rep: str | None, tgt_ee_pose_key: str, tgt_grip_k
 def joint_delta(num_joints: int, action_horizon: int | None):
     from positronic.policy.action import JointDeltaAction
 
-    result = JointDeltaAction(num_joints=num_joints)
-    result.action_horizon = action_horizon
+    result = JointDeltaAction(num_joints=num_joints, action_horizon=action_horizon)
     result.meta['lerobot_features'] = {'action': {'shape': (num_joints + 1,), 'names': ['actions'], 'dtype': 'float32'}}
 
     return result

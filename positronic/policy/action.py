@@ -63,14 +63,20 @@ class ActionDecoder(Derive):
 
 
 class RotationTranslationGripAction(ActionDecoder, abc.ABC):
-    def __init__(self, rotation_representation: RotRep | str = RotRep.QUAT):
-        super().__init__()
+    def __init__(self, rotation_representation: RotRep | str = RotRep.QUAT, action_horizon: int | None = None):
+        super().__init__(action_horizon=action_horizon)
         self.rot_rep = RotRep(rotation_representation)
 
 
 class AbsolutePositionAction(RotationTranslationGripAction):
-    def __init__(self, tgt_ee_pose_key: str, tgt_grip_key: str, rotation_representation: RotRep | str = RotRep.QUAT):
-        super().__init__(rotation_representation)
+    def __init__(
+        self,
+        tgt_ee_pose_key: str,
+        tgt_grip_key: str,
+        rotation_representation: RotRep | str = RotRep.QUAT,
+        action_horizon: int | None = None,
+    ):
+        super().__init__(rotation_representation, action_horizon=action_horizon)
         self.tgt_ee_pose_key = tgt_ee_pose_key
         self.tgt_grip_key = tgt_grip_key
 
@@ -184,8 +190,8 @@ class JointDeltaAction(ActionDecoder):
     MAX_JOINT_DELTA = RELATIVE_MAX_JOIN_DELTA.max()
     MAX_JONIT_VEL = RELATIVE_MAX_JOIN_DELTA / MAX_JOINT_DELTA
 
-    def __init__(self, num_joints: int = 7):
-        super().__init__()
+    def __init__(self, num_joints: int = 7, action_horizon: int | None = None):
+        super().__init__(action_horizon=action_horizon)
         self.num_joints = num_joints
 
     def encode_episode(self, episode: Episode) -> Signal[np.ndarray]:

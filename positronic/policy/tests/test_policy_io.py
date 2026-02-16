@@ -151,8 +151,6 @@ def test_absolute_joints_action_encode_decode():
 
 
 class _ChunkPolicy(Policy):
-    """Returns a fixed list of actions per call."""
-
     def __init__(self, actions: list[dict]):
         self._actions = actions
 
