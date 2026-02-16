@@ -137,11 +137,10 @@ def main(
     cameras: dict[str, pimm.ControlSystem],
     policy,
     driver: tuple,
-    policy_fps: int = 15,
     output_dir: str | Path | None = None,
 ):
     """Runs inference on real hardware."""
-    inference = Inference(policy, policy_fps)
+    inference = Inference(policy)
 
     # Convert camera instances to emitters for wire()
     camera_instances = cameras
@@ -174,7 +173,6 @@ def main_sim(
     policy,
     loaders: Sequence[MujocoSceneTransform],
     camera_fps: int,
-    policy_fps: int,
     driver: tuple,
     camera_dict: Mapping[str, str],
     output_dir: str | Path | None = None,
@@ -188,7 +186,7 @@ def main_sim(
     mujoco_cameras = MujocoCameras(sim.model, sim.data, resolution=(320, 240), fps=camera_fps)
     # Map signal names to emitters for wire()
     cameras = {name: mujoco_cameras.cameras[orig_name] for name, orig_name in camera_dict.items()}
-    inference = Inference(policy, policy_fps, simulate_timeout=simulate_timeout)
+    inference = Inference(policy, simulate_timeout=simulate_timeout)
     control_systems = [mujoco_cameras, sim, robot_arm, gripper, inference]
 
     sim_meta = {'simulation.mujoco_model_path': mujoco_model_path}
@@ -224,7 +222,6 @@ main_sim_cfg = cfn.Config(
     policy=policy_cfg.placeholder,
     loaders=positronic.cfg.simulator.stack_cubes_loaders,
     camera_fps=15,
-    policy_fps=15,
     driver=timed.override(simulation_time=15, task='Pick up the green cube and place it on the red cube.'),
     # We use 3 cameras not because we need it, but because Mujoco does not render
     # the second image when using only 2 cameras
@@ -250,7 +247,6 @@ droid_setup = cfn.Config(
     },
     driver=keyboard,
     policy=policy_cfg.placeholder,
-    policy_fps=15,
 )
 
 

@@ -389,13 +389,16 @@ class InferenceServer:
                         lengths = {len(v) for v in action.values()}
                         assert len(lengths) == 1, f'All values in action must have the same length, got {lengths}'
                         time_horizon = lengths.pop()
+                        dt = 1.0 / self.codec.action.action_fps
                         if self.codec.action.action_horizon is not None:
-                            time_horizon = min(time_horizon, self.codec.action.action_horizon)
+                            max_count = round(self.codec.action.action_horizon * self.codec.action.action_fps)
+                            time_horizon = min(time_horizon, max_count)
 
                         decoded_actions = []
                         for i in range(time_horizon):
                             step_action = {k: v[i] for k, v in action.items()}
                             decoded = self.codec.action.decode(step_action, raw_obs)
+                            decoded['timestamp'] = i * dt
                             decoded_actions.append(decoded)
 
                         await websocket.send_bytes(serialise({'result': decoded_actions}))

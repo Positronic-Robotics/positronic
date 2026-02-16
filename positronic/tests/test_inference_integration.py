@@ -61,7 +61,6 @@ def test_main_sim_emits_commands_and_records_dataset(tmp_path, monkeypatch):
             policy=policy,
             loaders=loaders,
             camera_fps=10,
-            policy_fps=10,
             driver=timed.override(simulation_time=0.4, task='integration-test', show_gui=False, num_iterations=1)(),
             camera_dict=camera_dict,
             output_dir=str(tmp_path),

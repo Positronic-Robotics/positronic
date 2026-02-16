@@ -68,8 +68,16 @@ eepose_q = eepose_grip_joints.override(
 RotRep = geom.Rotation.Representation
 
 
-@cfn.config(rotation_rep=None, tgt_ee_pose_key='robot_commands.pose', tgt_grip_key='target_grip', action_horizon=None)
-def absolute_position(rotation_rep: str | None, tgt_ee_pose_key: str, tgt_grip_key: str, action_horizon: int | None):
+@cfn.config(
+    rotation_rep=None,
+    tgt_ee_pose_key='robot_commands.pose',
+    tgt_grip_key='target_grip',
+    action_horizon=None,
+    action_fps=15.0,
+)
+def absolute_position(
+    rotation_rep: str | None, tgt_ee_pose_key: str, tgt_grip_key: str, action_horizon: float | None, action_fps: float
+):
     """Absolute position action decoder for ACT/OpenPI.
 
     Decodes from {'action': vector} format.
@@ -80,7 +88,11 @@ def absolute_position(rotation_rep: str | None, tgt_ee_pose_key: str, tgt_grip_k
     ee_dim = rot_rep.size + 3
 
     result = AbsolutePositionAction(
-        tgt_ee_pose_key, tgt_grip_key, rotation_representation=rot_rep, action_horizon=action_horizon
+        tgt_ee_pose_key,
+        tgt_grip_key,
+        rotation_representation=rot_rep,
+        action_fps=action_fps,
+        action_horizon=action_horizon,
     )
     result.meta['lerobot_features'] = {'action': {'shape': (ee_dim + 1,), 'names': ['actions'], 'dtype': 'float32'}}
     return result
@@ -92,11 +104,11 @@ def absolute_position(rotation_rep: str | None, tgt_ee_pose_key: str, tgt_grip_k
 # * As most controllers do IK themselves, log target joints in the data collection
 
 
-@cfn.config(num_joints=7, action_horizon=None)
-def joint_delta(num_joints: int, action_horizon: int | None):
+@cfn.config(num_joints=7, action_horizon=None, action_fps=15.0)
+def joint_delta(num_joints: int, action_horizon: float | None, action_fps: float):
     from positronic.policy.action import JointDeltaAction
 
-    result = JointDeltaAction(num_joints=num_joints, action_horizon=action_horizon)
+    result = JointDeltaAction(num_joints=num_joints, action_fps=action_fps, action_horizon=action_horizon)
     result.meta['lerobot_features'] = {'action': {'shape': (num_joints + 1,), 'names': ['actions'], 'dtype': 'float32'}}
 
     return result

@@ -61,13 +61,15 @@ class DecodedEncodedPolicy(Policy):
         encoder: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
         decoder: Callable[[dict[str, Any], dict[str, Any]], dict[str, Any]] | None = None,
         extra_meta=None,
-        action_horizon: int | None = None,
+        action_horizon: float | None = None,
+        action_fps: float | None = None,
     ):
         self._policy = policy
         self._encoder = encoder
         self._decoder = decoder
         self._extra_meta = extra_meta or {}
         self._action_horizon = action_horizon
+        self._action_fps = action_fps
 
     def _encode(self, obs: dict[str, Any]) -> dict[str, Any]:
         if self._encoder:
@@ -83,11 +85,20 @@ class DecodedEncodedPolicy(Policy):
         encoded_obs = self._encode(obs)
         action = self._policy.select_action(encoded_obs)
         if isinstance(action, list):
-            if self._action_horizon is not None:
-                action = action[: self._action_horizon]
+            if self._action_horizon is not None and self._action_fps is not None:
+                max_count = round(self._action_horizon * self._action_fps)
+                action = action[:max_count]
             # NOTE: Decoding happens relative to the original observation!
-            return [self._decode(a, obs) for a in action]
-        return self._decode(action, obs)
+            decoded = [self._decode(a, obs) for a in action]
+            if self._action_fps is not None:
+                dt = 1.0 / self._action_fps
+                for i, d in enumerate(decoded):
+                    d['timestamp'] = i * dt
+            return decoded
+        decoded = self._decode(action, obs)
+        if self._action_fps is not None:
+            decoded['timestamp'] = 0.0
+        return decoded
 
     def reset(self):
         self._policy.reset()

@@ -165,6 +165,7 @@ class InferenceServer:
             decoder=self.codec.action.decode,
             extra_meta=base_meta,
             action_horizon=self.codec.action.action_horizon,
+            action_fps=self.codec.action.action_fps,
         )
 
     async def get_models(self):

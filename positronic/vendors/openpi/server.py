@@ -310,10 +310,13 @@ class InferenceServer:
                     # OpenPI returns actions with shape (action_horizon, action_dim),
                     # decode each timestep in the action horizon
                     actions = openpi_response['actions']
+                    dt = 1.0 / self.codec.action.action_fps
                     if self.codec.action.action_horizon is not None:
-                        actions = actions[: self.codec.action.action_horizon]
+                        max_count = round(self.codec.action.action_horizon * self.codec.action.action_fps)
+                        actions = actions[:max_count]
                     decoded_actions = [
-                        self.codec.action.decode({'action': step_action}, raw_obs) for step_action in actions
+                        self.codec.action.decode({'action': a}, raw_obs) | {'timestamp': i * dt}
+                        for i, a in enumerate(actions)
                     ]
 
                     # Send to client

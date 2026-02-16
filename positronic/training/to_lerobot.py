@@ -114,8 +114,11 @@ def append_data_to_dataset(lr_dataset: LeRobotDataset, p_dataset: Dataset, fps, 
     logging.info(f'Total length of the dataset: {seconds_to_str(total_length_sec)}')
 
 
-@cfn.config(video=True, dataset=apply_codec)
-def convert_to_lerobot_dataset(output_dir: str, fps: int, video: bool, dataset: Dataset, task=None):
+@cfn.config(video=True, dataset=apply_codec, fps=None)
+def convert_to_lerobot_dataset(output_dir: str, fps: int | None, video: bool, dataset: Dataset, task=None):
+    if fps is None:
+        assert 'action_fps' in dataset.meta, "--fps not provided and dataset has no 'action_fps' metadata"
+        fps = int(dataset.meta['action_fps'])
     output_dir = pos3.sync(output_dir, interval=None, sync_on_error=False)
     assert dataset.meta['lerobot_features'] is not None, "dataset.meta['lerobot_features'] is required"
 
@@ -143,8 +146,11 @@ def convert_to_lerobot_dataset(output_dir: str, fps: int, video: bool, dataset: 
     logging.info(f'Dataset converted and saved to {output_dir}')
 
 
-@cfn.config(dataset=apply_codec)
-def append_data_to_lerobot_dataset(output_dir: str, dataset: Dataset, fps: int, task=None):
+@cfn.config(dataset=apply_codec, fps=None)
+def append_data_to_lerobot_dataset(output_dir: str, dataset: Dataset, fps: int | None, task=None):
+    if fps is None:
+        assert 'action_fps' in dataset.meta, "--fps not provided and dataset has no 'action_fps' metadata"
+        fps = int(dataset.meta['action_fps'])
     output_dir = pos3.sync(output_dir, interval=None, sync_on_error=False)
     lr_dataset = LeRobotDataset(repo_id='local', root=output_dir)
 

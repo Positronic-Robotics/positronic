@@ -51,12 +51,11 @@ class PositronicEnvConfig(EnvConfig):
         return {}
 
 
-def build_env_config_from_codec(codec: Codec, fps: int = 15) -> PositronicEnvConfig:
+def build_env_config_from_codec(codec: Codec) -> PositronicEnvConfig:
     """Build PositronicEnvConfig from codec metadata with validation.
 
     Args:
         codec: Codec instance with observation and action encoders
-        fps: Frames per second for the environment
 
     Returns:
         PositronicEnvConfig with features derived from codec metadata
@@ -64,6 +63,7 @@ def build_env_config_from_codec(codec: Codec, fps: int = 15) -> PositronicEnvCon
     Raises:
         ValueError: If codec metadata is missing or invalid
     """
+    fps = int(codec.action.action_fps)
     # Validate codec has required metadata
     if not hasattr(codec.observation, 'meta') or 'lerobot_features' not in codec.observation.meta:
         raise ValueError(

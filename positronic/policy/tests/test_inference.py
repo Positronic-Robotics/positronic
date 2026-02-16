@@ -98,7 +98,7 @@ def emit_ready_payload(frame_emitter, robot_emitter, grip_emitter, robot_state):
 def test_inference_emits_cartesian_move(world, clock):
     pose = Transform3D(translation=np.array([0.4, 0.5, 0.6], dtype=np.float32), rotation=Rotation.identity)
     policy = SpyPolicy(command=CartesianPosition(pose=pose), target_grip=0.33)
-    inference = Inference(policy, inference_fps=15)
+    inference = Inference(policy)
 
     # Wire inference interfaces so we can inspect the produced commands and grip targets.
     frame_em = world.pair(inference.frames['image.cam'])
@@ -146,7 +146,7 @@ def test_inference_emits_cartesian_move(world, clock):
 def test_inference_waits_for_complete_inputs(world, clock):
     pose = Transform3D(translation=np.array([0.4, 0.5, 0.6], dtype=np.float32), rotation=Rotation.identity)
     policy = SpyPolicy(command=CartesianPosition(pose=pose), target_grip=0.33)
-    inference = Inference(policy, inference_fps=15)
+    inference = Inference(policy)
 
     # Keep handles to the control system IO so we can drip feed partial data.
     frame_em = world.pair(inference.frames['image.cam'])
@@ -166,13 +166,15 @@ def test_inference_waits_for_complete_inputs(world, clock):
         assert policy.last_obs is None
 
     # First send robot/grip without a frame (inference should block), then the full payload.
+    # All sleeps are 0.0 so the priority-queue scheduler alternates fairly between
+    # Inference (which yields Pass) and ManualDriver.
     driver = ManualDriver([
         (partial(command_em.emit, InferenceCommand.START(task='dummy-task')), 0.0),
-        (partial(robot_em.emit, robot_state), 0.01),
+        (partial(robot_em.emit, robot_state), 0.0),
         (partial(grip_em.emit, 0.25), 0.0),
-        (assert_no_outputs, 0.005),  # still missing a frame
-        (partial(emit_ready_payload, frame_em, robot_em, grip_em, robot_state), 0.01),
-        (None, 0.05),
+        (assert_no_outputs, 0.0),  # still missing a frame
+        (partial(emit_ready_payload, frame_em, robot_em, grip_em, robot_state), 0.0),
+        (None, 0.0),
     ])
 
     scheduler = world.start([inference, driver])
@@ -198,7 +200,7 @@ def test_inference_waits_for_complete_inputs(world, clock):
 @pytest.mark.timeout(3.0)
 def test_inference_reset_emits_reset_and_calls_policy_reset(world, clock):
     policy = StubPolicy()
-    inference = Inference(policy, inference_fps=15)
+    inference = Inference(policy)
 
     command_em = world.pair(inference.command)
     command_rx = world.pair(inference.robot_commands)
@@ -239,7 +241,7 @@ def test_inference_clears_queue_on_reset_stepwise(world, clock):
             ]
 
     policy = ChunkPolicy(command=CartesianPosition(pose=pose))
-    inference = Inference(policy, inference_fps=10)
+    inference = Inference(policy)
 
     frame_em = world.pair(inference.frames['image.cam'])
     robot_em = world.pair(inference.robot_state)
@@ -308,7 +310,7 @@ def test_inference_clears_queue_on_start_stepwise(world, clock):
             ]
 
     policy = ChunkPolicy(command=CartesianPosition(pose=pose))
-    inference = Inference(policy, inference_fps=10)
+    inference = Inference(policy)
 
     frame_em = world.pair(inference.frames['image.cam'])
     robot_em = world.pair(inference.robot_state)

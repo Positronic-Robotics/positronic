@@ -78,7 +78,7 @@ def test_absolute_position_action_encode_decode_quat():
 
     ep = EpisodeContainer({'robot_commands.pose': DummySignal(ts, pose), 'target_grip': DummySignal(ts, g)})
 
-    act = AbsolutePositionAction('robot_commands.pose', 'target_grip', Rotation.Representation.QUAT)
+    act = AbsolutePositionAction('robot_commands.pose', 'target_grip', Rotation.Representation.QUAT, action_fps=30.0)
     sig = act.encode_episode(ep)
     vec = list(sig)[0][0]
     assert vec.shape == (8,)  # 4 quat + 3 trans + 1 grip
@@ -111,7 +111,7 @@ def test_relative_target_position_action_encode_decode_quat():
         'target_grip': DummySignal(ts, g_tgt),
     })
 
-    act = RelativeTargetPositionAction(Rotation.Representation.QUAT)
+    act = RelativeTargetPositionAction(Rotation.Representation.QUAT, action_fps=30.0)
     vec = list(act.encode_episode(ep))[0][0]
     # First 4 should match target quaternion since current is identity
     np.testing.assert_allclose(vec[:4], q_tgt[0].as_quat, atol=1e-6)
@@ -136,7 +136,7 @@ def test_absolute_joints_action_encode_decode():
 
     ep = EpisodeContainer({'robot_commands.joints': DummySignal(ts, joints), 'target_grip': DummySignal(ts, g)})
 
-    act = AbsoluteJointsAction('robot_commands.joints', 'target_grip', num_joints=7)
+    act = AbsoluteJointsAction('robot_commands.joints', 'target_grip', num_joints=7, action_fps=30.0)
     sig = act.encode_episode(ep)
     vec = list(sig)[0][0]
     assert vec.shape == (8,)  # 7 joints + 1 grip
@@ -170,20 +170,64 @@ class _ChunkPolicy(Policy):
 
 def test_action_horizon_truncates_chunk():
     actions = [{'v': i} for i in range(10)]
-    policy = DecodedEncodedPolicy(_ChunkPolicy(actions), action_horizon=3)
+    # action_horizon=0.1s at action_fps=30 -> 3 actions
+    policy = DecodedEncodedPolicy(_ChunkPolicy(actions), action_horizon=0.1, action_fps=30.0)
     result = policy.select_action({})
-    assert result == [{'v': 0}, {'v': 1}, {'v': 2}]
+    assert [r['v'] for r in result] == [0, 1, 2]
 
 
 def test_action_horizon_none_returns_full_chunk():
     actions = [{'v': i} for i in range(5)]
-    policy = DecodedEncodedPolicy(_ChunkPolicy(actions))
+    policy = DecodedEncodedPolicy(_ChunkPolicy(actions), action_fps=30.0)
     result = policy.select_action({})
     assert len(result) == 5
 
 
 def test_action_horizon_larger_than_chunk():
     actions = [{'v': i} for i in range(3)]
-    policy = DecodedEncodedPolicy(_ChunkPolicy(actions), action_horizon=100)
+    # action_horizon=10s at action_fps=10 -> 100 actions max, but only 3 available
+    policy = DecodedEncodedPolicy(_ChunkPolicy(actions), action_horizon=10.0, action_fps=10.0)
     result = policy.select_action({})
     assert len(result) == 3
+
+
+def test_timestamps_embedded_in_actions():
+    actions = [{'v': i} for i in range(4)]
+    policy = DecodedEncodedPolicy(_ChunkPolicy(actions), action_fps=10.0)
+    result = policy.select_action({})
+    assert len(result) == 4
+    for i, action in enumerate(result):
+        assert action['timestamp'] == pytest.approx(i * 0.1)
+
+
+def test_action_horizon_seconds_truncates():
+    actions = [{'v': i} for i in range(100)]
+    # 0.1s at 30fps -> 3 actions
+    policy = DecodedEncodedPolicy(_ChunkPolicy(actions), action_horizon=0.1, action_fps=30.0)
+    result = policy.select_action({})
+    assert len(result) == 3
+    dt = 1.0 / 30.0
+    for i, action in enumerate(result):
+        assert action['timestamp'] == pytest.approx(i * dt)
+
+
+def test_single_action_has_zero_timestamp():
+    class _SinglePolicy(Policy):
+        def select_action(self, obs):
+            return {'v': 42}
+
+        def reset(self):
+            pass
+
+        @property
+        def meta(self):
+            return {}
+
+        def close(self):
+            pass
+
+    policy = DecodedEncodedPolicy(_SinglePolicy(), action_fps=15.0)
+    result = policy.select_action({})
+    assert isinstance(result, dict)
+    assert result['timestamp'] == 0.0
+    assert result['v'] == 42

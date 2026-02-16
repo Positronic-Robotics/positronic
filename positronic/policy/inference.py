@@ -45,15 +45,14 @@ class InferenceCommand:
 
 class Inference(pimm.ControlSystem):
     """
-    Control system that handles start/stop/reset commands and runs the policy at a fixed rate by encoding
-    inputs, decoding actions to robot/gripper commands, and exposing run metadata.
+    Control system that handles start/stop/reset commands, runs the policy, and emits
+    actions according to their embedded timestamps.
 
     Supposed to be run in foreground of a World.
     """
 
-    def __init__(self, policy, inference_fps: int = 30, simulate_timeout: bool = False):
+    def __init__(self, policy, simulate_timeout: bool = False):
         self.policy = policy
-        self.inference_fps = inference_fps
         self.context: dict[str, Any] = {}
         self.simulate_timeout = simulate_timeout
 
@@ -66,7 +65,7 @@ class Inference(pimm.ControlSystem):
         self.command = pimm.ControlSystemReceiver[InferenceCommand](self, default=None, maxsize=3)
 
     def meta(self) -> dict[str, Any]:
-        result = {'inference.policy_fps': self.inference_fps, 'inference.simulate_timeout': self.simulate_timeout}
+        result = {'inference.simulate_timeout': self.simulate_timeout}
         for k, v in flatten_dict(self.context).items():
             result[f'inference.context.{k}'] = v
         for k, v in flatten_dict(self.policy.meta).items():
@@ -75,8 +74,6 @@ class Inference(pimm.ControlSystem):
 
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Sleep]:  # noqa: C901
         running = False
-
-        rate_limiter = pimm.RateLimiter(clock, hz=self.inference_fps)
         commands_queue = deque()
 
         while not should_stop.value:
@@ -87,7 +84,6 @@ class Inference(pimm.ControlSystem):
                     case InferenceCommandType.START:
                         running = True
                         self.context = command_msg.data.payload or {}
-                        rate_limiter.reset()
                     case InferenceCommandType.STOP:
                         running = False
                     case InferenceCommandType.RESET:
@@ -99,6 +95,7 @@ class Inference(pimm.ControlSystem):
 
             try:
                 if not running:
+                    yield pimm.Pass()
                     continue
 
                 if not commands_queue:
@@ -113,33 +110,43 @@ class Inference(pimm.ControlSystem):
                     # Extract array from NumpySMAdapter
                     images = {k: v.array for k, v in frame_messages.items()}
                     if len(images) != len(self.frames):
+                        yield pimm.Pass()
                         continue
                     inputs.update(images)
 
-                    start = time.monotonic()
+                    wall_start = time.monotonic()
                     inputs.update(self.context)
                     commands = self.policy.select_action(frozen_view(inputs))
                     if not isinstance(commands, list):
                         commands = [commands]
 
-                    for command in commands:
-                        roboarm_command = roboarm.command.from_wire(command['robot_command'])
-                        target_grip = command['target_grip']
-                        commands_queue.append((roboarm_command, target_grip))
-
                     if self.simulate_timeout:
-                        yield pimm.Sleep(time.monotonic() - start)
+                        yield pimm.Sleep(time.monotonic() - wall_start)
+
+                    prediction_time = clock.now()
+                    for cmd in commands:
+                        roboarm_cmd = roboarm.command.from_wire(cmd['robot_command'])
+                        target_grip = cmd['target_grip']
+                        timestamp = cmd.get('timestamp', 0.0)
+                        commands_queue.append((roboarm_cmd, target_grip, prediction_time + timestamp))
 
                 if not commands_queue:
                     logging.error('Policy returned no commands, exiting inference')
                     return
 
-                roboarm_command, target_grip = commands_queue.popleft()
-                self.robot_commands.emit(roboarm_command)
+                # Wait until next action is due
+                _, _, scheduled_time = commands_queue[0]
+                wait = max(0.0, scheduled_time - clock.now())
+                if wait > 0:
+                    yield pimm.Sleep(wait)
+                    continue
+
+                roboarm_cmd, target_grip, _ = commands_queue.popleft()
+                self.robot_commands.emit(roboarm_cmd)
                 self.target_grip.emit(target_grip)
+                yield pimm.Pass()
+
             except pimm.NoValueException:
-                continue
-            finally:
-                yield pimm.Sleep(rate_limiter.wait_time())
+                yield pimm.Pass()
 
         self.policy.close()
