@@ -42,6 +42,7 @@ dependencies = [
     "robosuite",
     "ruckig",
     "scipy",
+    "timm",
     "torch",
     "uvicorn[standard]",
     "websockets>=15.0.1",

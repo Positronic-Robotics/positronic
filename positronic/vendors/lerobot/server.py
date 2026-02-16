@@ -19,6 +19,9 @@ from positronic.utils.checkpoints import get_latest_checkpoint, list_checkpoints
 from positronic.utils.logging import init_logging
 from positronic.utils.serialization import deserialise, serialise
 from positronic.vendors.lerobot import codecs as lerobot_codecs
+from positronic.vendors.lerobot.backbone import register_all
+
+register_all()
 
 logger = logging.getLogger(__name__)
 

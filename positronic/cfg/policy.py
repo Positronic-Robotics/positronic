@@ -39,6 +39,10 @@ def wrapped(base: Policy, observation: ObservationEncoder | None, action: Action
 def act(checkpoints_dir: str, checkpoint: str | None, n_action_steps: int | None = None, device=None):
     from lerobot.policies.act.modeling_act import ACTPolicy
 
+    from positronic.vendors.lerobot.backbone import register_all
+
+    register_all()
+
     checkpoints_dir = checkpoints_dir.rstrip('/') + '/checkpoints/'
     if checkpoint is None:
         checkpoint = get_latest_checkpoint(checkpoints_dir)

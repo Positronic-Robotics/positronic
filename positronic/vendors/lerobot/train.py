@@ -34,6 +34,7 @@ from positronic import utils
 from positronic.policy import Codec
 from positronic.utils.logging import init_logging
 from positronic.vendors.lerobot import codecs as lerobot_codecs
+from positronic.vendors.lerobot.backbone import BACKBONES
 
 
 @EnvConfig.register_subclass('positronic')
@@ -132,9 +133,17 @@ def _update_config(cfg: TrainPipelineConfig, **cfg_kwargs):
             raise AttributeError(f'Could not update config for {k}') from e
 
 
-@cfn.config(codec=lerobot_codecs.eepose_absolute, num_train_steps=None)
+@cfn.config(codec=lerobot_codecs.eepose_absolute, num_train_steps=None, backbone=None)
 @pos3.with_mirror()
-def train(input_path: str, exp_name: str, output_dir: str, codec: Codec, num_train_steps: int | None, **cfg_kwargs):
+def train(
+    input_path: str,
+    exp_name: str,
+    output_dir: str,
+    codec: Codec,
+    num_train_steps: int | None,
+    backbone: str | None,
+    **cfg_kwargs,
+):
     # Handle codec passed as string (e.g., from CLI)
     if isinstance(codec, str):
         parts = codec.split('.')
@@ -146,6 +155,14 @@ def train(input_path: str, exp_name: str, output_dir: str, codec: Codec, num_tra
     assert Path(base_config).is_file(), f'Base config file {base_config} does not exist.'
     exp_name = str(exp_name)
     cfg = TrainPipelineConfig.from_pretrained(base_config)
+
+    if backbone is not None:
+        if backbone not in BACKBONES:
+            raise ValueError(f"Unknown backbone '{backbone}'. Available: {list(BACKBONES.keys())}")
+        bb_name, bb_weights, _ = BACKBONES[backbone]
+        cfg.policy.vision_backbone = bb_name
+        cfg.policy.pretrained_backbone_weights = bb_weights
+
     cfg.env = build_env_config_from_codec(codec)
 
     if os.getenv('WANDB_API_KEY'):
