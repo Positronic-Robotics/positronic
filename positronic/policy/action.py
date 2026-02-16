@@ -34,6 +34,8 @@ class ActionDecoder(Derive):
 
     @property
     def meta(self) -> dict[str, Any]:
+        if self.action_horizon is not None:
+            return {**self._metadata, 'action_horizon': self.action_horizon}
         return self._metadata
 
     @meta.setter

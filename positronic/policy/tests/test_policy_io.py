@@ -6,6 +6,7 @@ from positronic.dataset.episode import EpisodeContainer
 from positronic.dataset.tests.utils import DummySignal
 from positronic.geom import Rotation
 from positronic.policy.action import AbsoluteJointsAction, AbsolutePositionAction, RelativeTargetPositionAction
+from positronic.policy.base import DecodedEncodedPolicy, Policy
 from positronic.policy.observation import SimpleObservationEncoder
 
 
@@ -147,3 +148,44 @@ def test_absolute_joints_action_encode_decode():
     assert isinstance(command, cmd_module.JointPosition)
     np.testing.assert_allclose(command.positions, joints[0], atol=1e-6)
     assert np.isclose(target_grip, g[0])
+
+
+class _ChunkPolicy(Policy):
+    """Returns a fixed list of actions per call."""
+
+    def __init__(self, actions: list[dict]):
+        self._actions = actions
+
+    def select_action(self, obs):
+        return list(self._actions)
+
+    def reset(self):
+        pass
+
+    @property
+    def meta(self):
+        return {}
+
+    def close(self):
+        pass
+
+
+def test_action_horizon_truncates_chunk():
+    actions = [{'v': i} for i in range(10)]
+    policy = DecodedEncodedPolicy(_ChunkPolicy(actions), action_horizon=3)
+    result = policy.select_action({})
+    assert result == [{'v': 0}, {'v': 1}, {'v': 2}]
+
+
+def test_action_horizon_none_returns_full_chunk():
+    actions = [{'v': i} for i in range(5)]
+    policy = DecodedEncodedPolicy(_ChunkPolicy(actions))
+    result = policy.select_action({})
+    assert len(result) == 5
+
+
+def test_action_horizon_larger_than_chunk():
+    actions = [{'v': i} for i in range(3)]
+    policy = DecodedEncodedPolicy(_ChunkPolicy(actions), action_horizon=100)
+    result = policy.select_action({})
+    assert len(result) == 3
