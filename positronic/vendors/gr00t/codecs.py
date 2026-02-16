@@ -263,8 +263,8 @@ def observation(rotation_rep: str | None, include_joints: bool):
     return encoder
 
 
-@cfn.config(rotation_rep=None, tgt_ee_pose_key='robot_commands.pose', tgt_grip_key='target_grip')
-def action(rotation_rep: str | None, tgt_ee_pose_key: str, tgt_grip_key: str):
+@cfn.config(rotation_rep=None, tgt_ee_pose_key='robot_commands.pose', tgt_grip_key='target_grip', action_horizon=None)
+def action(rotation_rep: str | None, tgt_ee_pose_key: str, tgt_grip_key: str, action_horizon: int | None):
     """GR00T action decoder.
 
     Decodes from {'ee_pose': ..., 'grip': ...} format.
@@ -274,11 +274,13 @@ def action(rotation_rep: str | None, tgt_ee_pose_key: str, tgt_grip_key: str):
         rotation_rep: Rotation representation ('rot6d' or None for quaternion)
         tgt_ee_pose_key: Episode key for target pose
         tgt_grip_key: Episode key for target gripper position
+        action_horizon: Max actions to execute per prediction (None = use all)
     """
     rot_rep = RotRep(rotation_rep) if rotation_rep else None
     ee_dim = (rot_rep.size if rot_rep else 4) + 3
 
     result = GrootActionDecoder(rotation_rep=rot_rep, tgt_ee_pose_key=tgt_ee_pose_key, tgt_grip_key=tgt_grip_key)
+    result.action_horizon = action_horizon
     result.meta['gr00t_modality'] = {
         'action': {'ee_pose': {'start': 0, 'end': ee_dim}, 'grip': {'start': ee_dim, 'end': ee_dim + 1}}
     }

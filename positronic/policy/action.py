@@ -27,9 +27,10 @@ def _relative_rot_vec(q_current: np.ndarray, q_target: np.ndarray, representatio
 
 
 class ActionDecoder(Derive):
-    def __init__(self):
+    def __init__(self, action_horizon: int | None = None):
         super().__init__(action=self.encode_episode)
         self._metadata = {}
+        self.action_horizon = action_horizon
 
     @property
     def meta(self) -> dict[str, Any]:

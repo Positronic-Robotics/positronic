@@ -309,9 +309,11 @@ class InferenceServer:
                     # Decode actions using codec
                     # OpenPI returns actions with shape (action_horizon, action_dim),
                     # decode each timestep in the action horizon
+                    actions = openpi_response['actions']
+                    if self.codec.action.action_horizon is not None:
+                        actions = actions[: self.codec.action.action_horizon]
                     decoded_actions = [
-                        self.codec.action.decode({'action': step_action}, raw_obs)
-                        for step_action in openpi_response['actions']
+                        self.codec.action.decode({'action': step_action}, raw_obs) for step_action in actions
                     ]
 
                     # Send to client

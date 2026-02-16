@@ -389,6 +389,8 @@ class InferenceServer:
                         lengths = {len(v) for v in action.values()}
                         assert len(lengths) == 1, f'All values in action must have the same length, got {lengths}'
                         time_horizon = lengths.pop()
+                        if self.codec.action.action_horizon is not None:
+                            time_horizon = min(time_horizon, self.codec.action.action_horizon)
 
                         decoded_actions = []
                         for i in range(time_horizon):

@@ -160,7 +160,11 @@ class InferenceServer:
 
         base = LerobotPolicy(policy, self.device)
         return DecodedEncodedPolicy(
-            base, encoder=self.codec.observation.encode, decoder=self.codec.action.decode, extra_meta=base_meta
+            base,
+            encoder=self.codec.observation.encode,
+            decoder=self.codec.action.decode,
+            extra_meta=base_meta,
+            action_horizon=self.codec.action.action_horizon,
         )
 
     async def get_models(self):
