@@ -197,9 +197,9 @@ class GrootActionDecoder(ActionDecoder):
         tgt_grip_key: str = 'target_grip',
         *,
         action_fps: float,
-        action_horizon: float | None = None,
+        action_horizon_sec: float | None = None,
     ):
-        super().__init__(action_fps=action_fps, action_horizon=action_horizon)
+        super().__init__(action_fps=action_fps, action_horizon_sec=action_horizon_sec)
         self._rotation_rep = rotation_rep if rotation_rep else RotRep.QUAT
         self._tgt_ee_pose_key = tgt_ee_pose_key
         self._tgt_grip_key = tgt_grip_key
@@ -270,11 +270,15 @@ def observation(rotation_rep: str | None, include_joints: bool):
     rotation_rep=None,
     tgt_ee_pose_key='robot_commands.pose',
     tgt_grip_key='target_grip',
-    action_horizon=1.0,
+    action_horizon_sec=1.0,
     action_fps=15.0,
 )
 def action(
-    rotation_rep: str | None, tgt_ee_pose_key: str, tgt_grip_key: str, action_horizon: float | None, action_fps: float
+    rotation_rep: str | None,
+    tgt_ee_pose_key: str,
+    tgt_grip_key: str,
+    action_horizon_sec: float | None,
+    action_fps: float,
 ):
     """GR00T action decoder.
 
@@ -285,7 +289,7 @@ def action(
         rotation_rep: Rotation representation ('rot6d' or None for quaternion)
         tgt_ee_pose_key: Episode key for target pose
         tgt_grip_key: Episode key for target gripper position
-        action_horizon: Max time in seconds to execute per prediction (None = use all)
+        action_horizon_sec: Max time in seconds to execute per prediction (None = use all)
         action_fps: Action frequency in Hz
     """
     rot_rep = RotRep(rotation_rep) if rotation_rep else None
@@ -296,7 +300,7 @@ def action(
         tgt_ee_pose_key=tgt_ee_pose_key,
         tgt_grip_key=tgt_grip_key,
         action_fps=action_fps,
-        action_horizon=action_horizon,
+        action_horizon_sec=action_horizon_sec,
     )
     result.meta['gr00t_modality'] = {
         'action': {'ee_pose': {'start': 0, 'end': ee_dim}, 'grip': {'start': ee_dim, 'end': ee_dim + 1}}

@@ -72,11 +72,15 @@ RotRep = geom.Rotation.Representation
     rotation_rep=None,
     tgt_ee_pose_key='robot_commands.pose',
     tgt_grip_key='target_grip',
-    action_horizon=1.0,
+    action_horizon_sec=1.0,
     action_fps=15.0,
 )
 def absolute_position(
-    rotation_rep: str | None, tgt_ee_pose_key: str, tgt_grip_key: str, action_horizon: float | None, action_fps: float
+    rotation_rep: str | None,
+    tgt_ee_pose_key: str,
+    tgt_grip_key: str,
+    action_horizon_sec: float | None,
+    action_fps: float,
 ):
     """Absolute position action decoder for ACT/OpenPI.
 
@@ -92,7 +96,7 @@ def absolute_position(
         tgt_grip_key,
         rotation_representation=rot_rep,
         action_fps=action_fps,
-        action_horizon=action_horizon,
+        action_horizon_sec=action_horizon_sec,
     )
     result.meta['lerobot_features'] = {'action': {'shape': (ee_dim + 1,), 'names': ['actions'], 'dtype': 'float32'}}
     return result
@@ -104,11 +108,11 @@ def absolute_position(
 # * As most controllers do IK themselves, log target joints in the data collection
 
 
-@cfn.config(num_joints=7, action_horizon=1.0, action_fps=15.0)
-def joint_delta(num_joints: int, action_horizon: float | None, action_fps: float):
+@cfn.config(num_joints=7, action_horizon_sec=1.0, action_fps=15.0)
+def joint_delta(num_joints: int, action_horizon_sec: float | None, action_fps: float):
     from positronic.policy.action import JointDeltaAction
 
-    result = JointDeltaAction(num_joints=num_joints, action_fps=action_fps, action_horizon=action_horizon)
+    result = JointDeltaAction(num_joints=num_joints, action_fps=action_fps, action_horizon_sec=action_horizon_sec)
     result.meta['lerobot_features'] = {'action': {'shape': (num_joints + 1,), 'names': ['actions'], 'dtype': 'float32'}}
 
     return result

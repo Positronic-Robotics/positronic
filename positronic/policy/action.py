@@ -27,17 +27,17 @@ def _relative_rot_vec(q_current: np.ndarray, q_target: np.ndarray, representatio
 
 
 class ActionDecoder(Derive):
-    def __init__(self, *, action_fps: float, action_horizon: float | None = None):
+    def __init__(self, *, action_fps: float, action_horizon_sec: float | None = None):
         super().__init__(action=self.encode_episode)
         self._metadata = {}
         self.action_fps = action_fps
-        self.action_horizon = action_horizon
+        self.action_horizon_sec = action_horizon_sec
 
     @property
     def meta(self) -> dict[str, Any]:
         result = {**self._metadata, 'action_fps': self.action_fps}
-        if self.action_horizon is not None:
-            result['action_horizon'] = self.action_horizon
+        if self.action_horizon_sec is not None:
+            result['action_horizon_sec'] = self.action_horizon_sec
         return result
 
     @meta.setter
@@ -70,9 +70,9 @@ class RotationTranslationGripAction(ActionDecoder, abc.ABC):
         rotation_representation: RotRep | str = RotRep.QUAT,
         *,
         action_fps: float,
-        action_horizon: float | None = None,
+        action_horizon_sec: float | None = None,
     ):
-        super().__init__(action_fps=action_fps, action_horizon=action_horizon)
+        super().__init__(action_fps=action_fps, action_horizon_sec=action_horizon_sec)
         self.rot_rep = RotRep(rotation_representation)
 
 
@@ -84,9 +84,9 @@ class AbsolutePositionAction(RotationTranslationGripAction):
         rotation_representation: RotRep | str = RotRep.QUAT,
         *,
         action_fps: float,
-        action_horizon: float | None = None,
+        action_horizon_sec: float | None = None,
     ):
-        super().__init__(rotation_representation, action_fps=action_fps, action_horizon=action_horizon)
+        super().__init__(rotation_representation, action_fps=action_fps, action_horizon_sec=action_horizon_sec)
         self.tgt_ee_pose_key = tgt_ee_pose_key
         self.tgt_grip_key = tgt_grip_key
 
@@ -149,9 +149,9 @@ class RelativeTargetPositionAction(RotationTranslationGripAction):
         target_grip_key: str = 'target_grip',
         *,
         action_fps: float,
-        action_horizon: float | None = None,
+        action_horizon_sec: float | None = None,
     ):
-        super().__init__(rotation_representation, action_fps=action_fps, action_horizon=action_horizon)
+        super().__init__(rotation_representation, action_fps=action_fps, action_horizon_sec=action_horizon_sec)
         self.robot_pose_key = robot_pose_key
         self.target_pose_key = target_pose_key
         self.target_grip_key = target_grip_key
@@ -208,8 +208,8 @@ class JointDeltaAction(ActionDecoder):
     MAX_JOINT_DELTA = RELATIVE_MAX_JOIN_DELTA.max()
     MAX_JONIT_VEL = RELATIVE_MAX_JOIN_DELTA / MAX_JOINT_DELTA
 
-    def __init__(self, num_joints: int = 7, *, action_fps: float, action_horizon: float | None = None):
-        super().__init__(action_fps=action_fps, action_horizon=action_horizon)
+    def __init__(self, num_joints: int = 7, *, action_fps: float, action_horizon_sec: float | None = None):
+        super().__init__(action_fps=action_fps, action_horizon_sec=action_horizon_sec)
         self.num_joints = num_joints
 
     def encode_episode(self, episode: Episode) -> Signal[np.ndarray]:

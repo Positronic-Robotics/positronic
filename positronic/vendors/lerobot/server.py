@@ -164,7 +164,7 @@ class InferenceServer:
             encoder=self.codec.observation.encode,
             decoder=self.codec.action.decode,
             extra_meta=base_meta,
-            action_horizon=self.codec.action.action_horizon,
+            action_horizon_sec=self.codec.action.action_horizon_sec,
             action_fps=self.codec.action.action_fps,
         )
 

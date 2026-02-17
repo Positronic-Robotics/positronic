@@ -168,25 +168,25 @@ class _ChunkPolicy(Policy):
         pass
 
 
-def test_action_horizon_truncates_chunk():
+def test_action_horizon_sec_truncates_chunk():
     actions = [{'v': i} for i in range(10)]
-    # action_horizon=0.1s at action_fps=30 -> 3 actions
-    policy = DecodedEncodedPolicy(_ChunkPolicy(actions), action_horizon=0.1, action_fps=30.0)
+    # action_horizon_sec=0.1s at action_fps=30 -> 3 actions
+    policy = DecodedEncodedPolicy(_ChunkPolicy(actions), action_horizon_sec=0.1, action_fps=30.0)
     result = policy.select_action({})
     assert [r['v'] for r in result] == [0, 1, 2]
 
 
-def test_action_horizon_none_returns_full_chunk():
+def test_action_horizon_sec_none_returns_full_chunk():
     actions = [{'v': i} for i in range(5)]
     policy = DecodedEncodedPolicy(_ChunkPolicy(actions), action_fps=30.0)
     result = policy.select_action({})
     assert len(result) == 5
 
 
-def test_action_horizon_larger_than_chunk():
+def test_action_horizon_sec_larger_than_chunk():
     actions = [{'v': i} for i in range(3)]
-    # action_horizon=10s at action_fps=10 -> 100 actions max, but only 3 available
-    policy = DecodedEncodedPolicy(_ChunkPolicy(actions), action_horizon=10.0, action_fps=10.0)
+    # action_horizon_sec=10s at action_fps=10 -> 100 actions max, but only 3 available
+    policy = DecodedEncodedPolicy(_ChunkPolicy(actions), action_horizon_sec=10.0, action_fps=10.0)
     result = policy.select_action({})
     assert len(result) == 3
 
@@ -200,10 +200,10 @@ def test_timestamps_embedded_in_actions():
         assert action['timestamp'] == pytest.approx(i * 0.1)
 
 
-def test_action_horizon_seconds_truncates():
+def test_action_horizon_sec_seconds_truncates():
     actions = [{'v': i} for i in range(100)]
     # 0.1s at 30fps -> 3 actions
-    policy = DecodedEncodedPolicy(_ChunkPolicy(actions), action_horizon=0.1, action_fps=30.0)
+    policy = DecodedEncodedPolicy(_ChunkPolicy(actions), action_horizon_sec=0.1, action_fps=30.0)
     result = policy.select_action({})
     assert len(result) == 3
     dt = 1.0 / 30.0

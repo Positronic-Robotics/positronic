@@ -32,7 +32,7 @@ def wrapped(base: Policy, observation: ObservationEncoder | None, action: Action
         encoder=None if observation is None else observation.encode,
         decoder=None if action is None else action.decode,
         extra_meta=extra_meta,
-        action_horizon=action.action_horizon if action is not None else None,
+        action_horizon_sec=action.action_horizon_sec if action is not None else None,
         action_fps=action.action_fps if action is not None else None,
     )
 

@@ -61,14 +61,14 @@ class DecodedEncodedPolicy(Policy):
         encoder: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
         decoder: Callable[[dict[str, Any], dict[str, Any]], dict[str, Any]] | None = None,
         extra_meta=None,
-        action_horizon: float | None = None,
+        action_horizon_sec: float | None = None,
         action_fps: float | None = None,
     ):
         self._policy = policy
         self._encoder = encoder
         self._decoder = decoder
         self._extra_meta = extra_meta or {}
-        self._action_horizon = action_horizon
+        self._action_horizon_sec = action_horizon_sec
         self._action_fps = action_fps
 
     def _encode(self, obs: dict[str, Any]) -> dict[str, Any]:
@@ -85,8 +85,8 @@ class DecodedEncodedPolicy(Policy):
         encoded_obs = self._encode(obs)
         action = self._policy.select_action(encoded_obs)
         if isinstance(action, list):
-            if self._action_horizon is not None and self._action_fps is not None:
-                max_count = round(self._action_horizon * self._action_fps)
+            if self._action_horizon_sec is not None and self._action_fps is not None:
+                max_count = round(self._action_horizon_sec * self._action_fps)
                 action = action[:max_count]
             # NOTE: Decoding happens relative to the original observation!
             decoded = [self._decode(a, obs) for a in action]
@@ -108,8 +108,8 @@ class DecodedEncodedPolicy(Policy):
         result = self._policy.meta | self._extra_meta
         if self._action_fps is not None:
             result['action_fps'] = self._action_fps
-        if self._action_horizon is not None:
-            result['action_horizon'] = self._action_horizon
+        if self._action_horizon_sec is not None:
+            result['action_horizon_sec'] = self._action_horizon_sec
         return result
 
     def close(self):

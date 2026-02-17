@@ -71,6 +71,30 @@ If you modify code in `../gr00t` or `../openpi`:
 
 ## VM Machine Management
 
+**IMPORTANT**: Before using any VM, always check if it is already running a job. Never assume a machine is free. For experiments and validation runs, start a fresh VM rather than reusing one that may be occupied.
+
+### Selecting a Machine
+
+1. Check which VMs are reachable and what they're running:
+   ```bash
+   # Check connectivity
+   ssh -o ConnectTimeout=5 vertix@vm-train 'echo connected' 2>&1
+   ssh -o ConnectTimeout=5 vertix@vm-train2 'echo connected' 2>&1
+   ssh -o ConnectTimeout=5 vertix@vm-train3 'echo connected' 2>&1
+
+   # Check running containers on reachable VMs
+   docker --context vm-train ps 2>/dev/null
+   docker --context vm-train2 ps 2>/dev/null
+   docker --context vm-train3 ps 2>/dev/null
+   ```
+
+2. If a VM has running containers, it is **taken** — pick a different one or start a stopped VM.
+
+3. If no free VM is available, start one that is currently stopped:
+   ```bash
+   ../internal/scripts/start.sh train   # or train2, train3
+   ```
+
 ### Start a VM
 
 ```bash
@@ -80,14 +104,6 @@ If you modify code in `../gr00t` or `../openpi`:
 ```
 
 **Note**: Requires Nebius CLI authentication. Must be run from a terminal with browser access for OAuth flow.
-
-### Check VM Status
-
-```bash
-ssh -o ConnectTimeout=5 vertix@vm-train 'echo connected'
-ssh -o ConnectTimeout=5 vertix@vm-train2 'echo connected'
-ssh -o ConnectTimeout=5 vertix@vm-train3 'echo connected'
-```
 
 ### Docker Contexts
 
@@ -248,6 +264,64 @@ MUJOCO_GL=egl uv run positronic-inference sim \
 | GR00T | `--observation_encoder=.groot_rot6d_joints --action_decoder=.groot_rot6d` | Matches `modality_config=ee_rot6d_q` |
 | LeRobot ACT | `--observation_encoder=.eepose --action_decoder=.absolute_position` | Default configs |
 | OpenPI | Uses internal encoding | No encoder/decoder args needed |
+
+## Sim Eval End-to-End
+
+Full workflow: start inference server → run sim episodes → view results.
+
+### 1. Start LeRobot inference server (on GPU machine)
+
+```bash
+CACHE_ROOT=/home/vertix docker --context <machine> compose run -d --rm --pull always --service-ports lerobot-server \
+  --checkpoints_dir=s3://checkpoints/<path_to_experiment>/
+```
+
+**Important**: Use `CACHE_ROOT=/home/vertix` when targeting remote Docker contexts (notebook, vm-train, etc.) because `$HOME` expands to the local Mac path, but volume mounts must reference paths on the remote host.
+
+Wait for the server to be ready by checking logs:
+```bash
+docker --context <machine> logs --tail 5 <container_id>
+# Look for: "Uvicorn running on http://0.0.0.0:8000"
+```
+
+### 2. Run sim inference (on same or different GPU machine)
+
+```bash
+CACHE_ROOT=/home/vertix docker --context <machine> compose run --rm --pull always positronic-inference \
+  sim \
+  --policy=.remote \
+  --policy.host=<server_machine> \
+  --policy.port=8000 \
+  --driver.num_iterations=50 \
+  --driver.simulation_time=30 \
+  --output_dir=s3://inference/sim_stack_validation/<run_name>/<model_type>
+```
+
+### 3. View results (locally)
+
+Use the eval server (not `positronic-server` directly) to get grouping by model/checkpoint with success rates, UPH, and MTBF:
+
+```bash
+uv run python -m positronic.cfg.eval sim \
+  --dataset.base.path=s3://inference/sim_stack_validation/<run_name> \
+  --reset_cache
+```
+
+**Note**: Always use `--reset_cache` to clear stale RRD files from previous runs.
+
+Opens on http://localhost:5001. The path should point to the parent directory containing model subdirs (e.g., `170226`, not `170226/lerobot`). Episodes are grouped by model and checkpoint on the home page.
+
+### 4. Clean up: stop the inference server
+
+```bash
+docker --context <machine> stop <container_id>
+```
+
+### Naming convention
+
+Inference results go to `s3://inference/sim_stack_validation/<DDMMYY[-suffix]>/<model_type>/` where:
+- `<DDMMYY[-suffix]>` — date with optional descriptor (e.g., `160226-dinov3`)
+- `<model_type>` — `lerobot`, `groot`, or `openpi`
 
 ## Monitoring Background Jobs
 

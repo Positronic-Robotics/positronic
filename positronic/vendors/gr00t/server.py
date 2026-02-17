@@ -390,8 +390,8 @@ class InferenceServer:
                         assert len(lengths) == 1, f'All values in action must have the same length, got {lengths}'
                         time_horizon = lengths.pop()
                         dt = 1.0 / self.codec.action.action_fps
-                        if self.codec.action.action_horizon is not None:
-                            max_count = round(self.codec.action.action_horizon * self.codec.action.action_fps)
+                        if self.codec.action.action_horizon_sec is not None:
+                            max_count = round(self.codec.action.action_horizon_sec * self.codec.action.action_fps)
                             time_horizon = min(time_horizon, max_count)
 
                         decoded_actions = []

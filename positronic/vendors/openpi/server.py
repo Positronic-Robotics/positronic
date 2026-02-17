@@ -307,12 +307,12 @@ class InferenceServer:
                     openpi_response = subprocess_obj.client.infer(encoded_obs)
 
                     # Decode actions using codec
-                    # OpenPI returns actions with shape (action_horizon, action_dim),
-                    # decode each timestep in the action horizon
+                    # OpenPI returns actions with shape (chunk_size, action_dim),
+                    # decode each timestep and truncate to action_horizon_sec
                     actions = openpi_response['actions']
                     dt = 1.0 / self.codec.action.action_fps
-                    if self.codec.action.action_horizon is not None:
-                        max_count = round(self.codec.action.action_horizon * self.codec.action.action_fps)
+                    if self.codec.action.action_horizon_sec is not None:
+                        max_count = round(self.codec.action.action_horizon_sec * self.codec.action.action_fps)
                         actions = actions[:max_count]
                     decoded_actions = [
                         self.codec.action.decode({'action': a}, raw_obs) | {'timestamp': i * dt}
