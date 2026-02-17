@@ -98,13 +98,6 @@ class Inference(pimm.ControlSystem):
                     yield pimm.Pass()
                     continue
 
-                robot_state = self.robot_state.value
-                if robot_state.status == roboarm.RobotStatus.ERROR:
-                    commands_queue.clear()
-                    self.robot_commands.emit(roboarm.command.Recover())
-                    yield pimm.Pass()
-                    continue
-
                 if not commands_queue:
                     robot_state = self.robot_state.value
                     inputs = {

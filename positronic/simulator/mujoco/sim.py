@@ -197,12 +197,6 @@ class MujocoFrankaState(State, pimm.shared_memory.NumpySMAdapter):
     def status(self) -> RobotStatus:
         return RobotStatus(int(self.array[14 + 7]))
 
-    def set_error(self):
-        self.array[14 + 7] = RobotStatus.ERROR.value
-
-    def clear_error(self):
-        self.array[14 + 7] = RobotStatus.AVAILABLE.value
-
     def encode(self, q, dq, ee_pose):
         self.array[:7] = q
         self.array[7:14] = dq
@@ -227,26 +221,20 @@ class MujocoFranka(pimm.ControlSystem):
         state = MujocoFrankaState()
 
         while not should_stop.value:
+            # TODO: still a copy here
             state.encode(self.q, self.dq, self.ee_pose)
+            # command, is_updated = commands.value
             cmd_msg = self.commands.read()
             if cmd_msg.updated:
                 match cmd_msg.data:
                     case roboarm_command.CartesianPosition(pose=pose):
-                        q = self._recalculate_ik(pose)
-                        if q is not None:
-                            self.set_actuator_values(q)
-                        else:
-                            logger.warning(f'IK failed for ee_pose: {pose}')
-                            state.set_error()
+                        self.set_ee_pose(pose)
                     case roboarm_command.JointPosition(positions=positions):
                         self.set_actuator_values(positions)
                     case roboarm_command.JointDelta(velocities=delta):
                         self.set_actuator_values(self.q + delta)
                     case roboarm_command.Reset():
                         self.sim.reset()
-                        state.clear_error()
-                    case roboarm_command.Recover():
-                        state.clear_error()
                     case _:
                         raise ValueError(f'Unknown command type: {type(cmd_msg.data)}')
 
@@ -286,6 +274,13 @@ class MujocoFranka(pimm.ControlSystem):
     def set_actuator_values(self, actuator_values: np.ndarray):
         for i in range(7):
             self.sim.data.actuator(self.actuator_names[i]).ctrl = actuator_values[i]
+
+    def set_ee_pose(self, ee_pose: geom.Transform3D):
+        q = self._recalculate_ik(ee_pose)
+        if q is not None:
+            self.set_actuator_values(q)
+        else:
+            logger.warning(f'Failed to calculate IK for ee_pose: {ee_pose}')
 
     def _xmat_to_quat(self, xmat: np.ndarray) -> np.ndarray:
         site_quat = np.empty(4)

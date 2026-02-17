@@ -118,29 +118,14 @@ class DataCollectionController(pimm.ControlSystem):
         start_wav_path = 'positronic/assets/sounds/recording-has-started.wav'
         end_wav_path = 'positronic/assets/sounds/recording-has-stopped.wav'
         abort_wav_path = 'positronic/assets/sounds/recording-has-been-aborted.wav'
-        error_wav_path = 'positronic/assets/sounds/error-occurred.wav'
 
         tracker = _Tracker(self.operator_position)
         button_handler = ButtonHandler()
 
         recording = False
-        was_in_error = False
 
         while not should_stop.value:
             try:
-                try:
-                    robot_state = self.robot_state.value
-                    if robot_state.status == roboarm.RobotStatus.ERROR:
-                        if not was_in_error:
-                            self.sound.emit(error_wav_path)
-                            was_in_error = True
-                        self.robot_commands.emit(roboarm.command.Recover())
-                        yield pimm.Sleep(0.001)
-                        continue
-                    was_in_error = False
-                except pimm.NoValueException:
-                    pass
-
                 _parse_buttons(self.buttons_receiver.value, button_handler)
                 if button_handler.just_pressed('right_B'):
                     op = DsWriterCommandType.START_EPISODE if not recording else DsWriterCommandType.STOP_EPISODE

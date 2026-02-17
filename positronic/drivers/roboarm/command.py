@@ -18,13 +18,6 @@ class Reset:
 
 
 @dataclass
-class Recover:
-    """Recover the robot from an error state."""
-
-    TYPE = 'recover'
-
-
-@dataclass
 class CartesianPosition:
     """Move the robot end-effector to the given pose."""
 
@@ -48,14 +41,12 @@ class JointDelta:
     velocities: np.ndarray
 
 
-CommandType = Reset | Recover | CartesianPosition | JointPosition | JointDelta
+CommandType = Reset | CartesianPosition | JointPosition | JointDelta
 
 
 def to_wire(command: CommandType) -> dict[str, Any]:
     match command:
         case Reset():
-            return {'type': command.TYPE}
-        case Recover():
             return {'type': command.TYPE}
         case CartesianPosition(pose):
             return {'type': command.TYPE, 'pose': pose.as_vector(geom.Rotation.Representation.ROTATION_MATRIX)}
@@ -69,8 +60,6 @@ def from_wire(wire: dict[str, Any]) -> CommandType:
     match wire['type']:
         case 'reset':
             return Reset()
-        case 'recover':
-            return Recover()
         case 'cartesian_pos':
             return CartesianPosition(
                 pose=geom.Transform3D.from_vector(wire['pose'], geom.Rotation.Representation.ROTATION_MATRIX)

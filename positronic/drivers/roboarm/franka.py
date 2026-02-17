@@ -150,30 +150,9 @@ class Robot(pimm.ControlSystem):
 
         self._reset(robot, robot_state)
 
-        in_error = False
         while not should_stop.value:
             st = robot.state()
-            robot_state.encode(st)
-            self.state.emit(robot_state)
-
             cmd_msg = self.commands.read()
-            if st.error != 0:
-                if not in_error:
-                    logging.warning(f'Robot error: {st.error_message}')
-                    in_error = True
-                if cmd_msg.updated:
-                    match cmd_msg.data:
-                        case command.Recover():
-                            robot.recover_from_errors()
-                        case command.Reset():
-                            robot.recover_from_errors()
-                            self._reset(robot, robot_state)
-                            in_error = False
-                            continue
-                yield pimm.Sleep(rate_limiter.wait_time())
-                continue
-            in_error = False
-
             if cmd_msg.updated:
                 match cmd_msg.data:
                     case command.Reset():
@@ -187,10 +166,14 @@ class Robot(pimm.ControlSystem):
                         robot.set_target_joints(positions)
                     case command.JointDelta(velocities=joint_delta):
                         robot.set_target_joints(st.q + joint_delta)
-                    case command.Recover():
-                        pass
                     case _:
                         raise NotImplementedError(f'Unsupported command {cmd_msg.data}')
+
+            robot_state.encode(st)
+            self.state.emit(robot_state)
+            if st.error != 0:
+                logging.warning(f'Error {st.error} occurred, recovering')
+                robot.recover_from_errors()
 
             yield pimm.Sleep(rate_limiter.wait_time())
 

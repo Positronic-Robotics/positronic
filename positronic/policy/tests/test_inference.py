@@ -5,11 +5,9 @@ import pytest
 
 import pimm
 from pimm.tests.testing import MockClock
-from positronic.dataset.ds_writer_agent import Serializers
 from positronic.drivers import roboarm
 from positronic.drivers.roboarm import RobotStatus
-from positronic.drivers.roboarm.command import CartesianPosition, Recover, Reset, to_wire
-from positronic.drivers.roboarm.command import from_wire as cmd_from_wire
+from positronic.drivers.roboarm.command import CartesianPosition, Reset, to_wire
 from positronic.geom import Rotation, Transform3D
 from positronic.policy.inference import Inference, InferenceCommand
 from positronic.tests.testing_coutils import ManualDriver, drive_scheduler
@@ -356,126 +354,3 @@ def test_inference_clears_queue_on_start_stepwise(world, clock):
     # If queue persisted: would be ~103.0 (remnant of chunk 1)
     val = grip_rx.read().data
     assert val >= 200.0, f'Expected >= 200.0 (Start of New Chunk), got {val}. Queue clearing on START failed!'
-
-
-@pytest.mark.timeout(3.0)
-def test_inference_recovers_from_error(world, clock):
-    """Verify that inference detects ERROR, clears queue, sends Recover, and resumes after recovery."""
-    policy = StubPolicy()
-    inference = Inference(policy)
-
-    frame_em = world.pair(inference.frames['image.cam'])
-    robot_em = world.pair(inference.robot_state)
-    grip_em = world.pair(inference.gripper_state)
-    command_em = world.pair(inference.command)
-    command_rx = world.pair(inference.robot_commands)
-
-    robot_state_ok = make_robot_state([0.1, 0.2, 0.3], [0.4, 0.5, 0.6], status=RobotStatus.AVAILABLE)
-    robot_state_err = make_robot_state([0.1, 0.2, 0.3], [0.4, 0.5, 0.6], status=RobotStatus.ERROR)
-
-    scheduler = world.start([inference])
-
-    # 1. START inference
-    command_em.emit(InferenceCommand.START(task='test'))
-    drive_scheduler(scheduler, clock=clock, steps=1)
-
-    # 2. Emit ERROR state
-    emit_ready_payload(frame_em, robot_em, grip_em, robot_state_err)
-    drive_scheduler(scheduler, clock=clock, steps=2)
-
-    # Should have emitted a Recover command
-    cmd_msg = command_rx.read()
-    assert cmd_msg is not None
-    assert isinstance(cmd_msg.data, Recover)
-
-    # Policy should NOT have been called (only obs count = 0)
-    assert len(policy.observations) == 0
-
-    # 3. Now emit AVAILABLE state — inference should resume and call policy
-    emit_ready_payload(frame_em, robot_em, grip_em, robot_state_ok)
-    drive_scheduler(scheduler, clock=clock, steps=3)
-
-    assert len(policy.observations) > 0
-
-
-@pytest.mark.timeout(3.0)
-def test_inference_error_clears_pending_actions(world, clock):
-    """Verify that ERROR clears any pending actions in the queue."""
-    pose = Transform3D(translation=np.array([0.4, 0.5, 0.6], dtype=np.float32), rotation=Rotation.identity)
-
-    class ChunkPolicy(StubPolicy):
-        def __init__(self, *args, **kwargs):
-            super().__init__(*args, **kwargs)
-            self.counter = 0
-
-        def select_action(self, obs):
-            self.counter += 1
-            return [
-                {'robot_command': to_wire(self.command), 'target_grip': self.counter * 100.0 + i} for i in range(10)
-            ]
-
-    policy = ChunkPolicy(command=CartesianPosition(pose=pose))
-    inference = Inference(policy)
-
-    frame_em = world.pair(inference.frames['image.cam'])
-    robot_em = world.pair(inference.robot_state)
-    grip_em = world.pair(inference.gripper_state)
-    command_em = world.pair(inference.command)
-    command_rx = world.pair(inference.robot_commands)
-    grip_rx = world.pair(inference.target_grip)
-
-    robot_state_ok = make_robot_state([0.1, 0.2, 0.3], [0.4, 0.5, 0.6], status=RobotStatus.AVAILABLE)
-    robot_state_err = make_robot_state([0.1, 0.2, 0.3], [0.4, 0.5, 0.6], status=RobotStatus.ERROR)
-
-    scheduler = world.start([inference])
-
-    # 1. START + emit inputs -> policy returns chunk 1 [100..109]
-    command_em.emit(InferenceCommand.START(task='test'))
-    drive_scheduler(scheduler, clock=clock, steps=1)
-    emit_ready_payload(frame_em, robot_em, grip_em, robot_state_ok)
-    drive_scheduler(scheduler, clock=clock, steps=3)
-
-    # Verify consuming chunk 1
-    val = grip_rx.read().data
-    assert 100.0 <= val < 110.0
-
-    # 2. Switch to ERROR state
-    robot_em.emit(robot_state_err)
-    drive_scheduler(scheduler, clock=clock, steps=2)
-
-    # Should have sent Recover
-    cmd_msg = command_rx.read()
-    assert isinstance(cmd_msg.data, Recover)
-
-    # 3. Switch back to AVAILABLE -> policy called again with chunk 2 [200..209]
-    emit_ready_payload(frame_em, robot_em, grip_em, robot_state_ok)
-    drive_scheduler(scheduler, clock=clock, steps=3)
-
-    val = grip_rx.read().data
-    assert val >= 200.0, f'Expected >= 200.0 (fresh chunk after error recovery), got {val}'
-
-
-def test_recover_command_wire_roundtrip():
-    """Verify Recover command serializes and deserializes correctly."""
-    original = Recover()
-    wire = to_wire(original)
-    assert wire == {'type': 'recover'}
-    restored = cmd_from_wire(wire)
-    assert isinstance(restored, Recover)
-
-
-def test_robot_state_serializer_records_error():
-    """Verify Serializers.robot_state() includes .error field."""
-    state_ok = make_robot_state([0.1, 0.2, 0.3], [0.4, 0.5, 0.6], status=RobotStatus.AVAILABLE)
-    result = Serializers.robot_state(state_ok)
-    assert result is not None
-    assert result['.error'] == 0
-
-    state_err = make_robot_state([0.1, 0.2, 0.3], [0.4, 0.5, 0.6], status=RobotStatus.ERROR)
-    result = Serializers.robot_state(state_err)
-    assert result is not None
-    assert result['.error'] == 1
-
-    state_reset = make_robot_state([0.1, 0.2, 0.3], [0.4, 0.5, 0.6], status=RobotStatus.RESETTING)
-    result = Serializers.robot_state(state_reset)
-    assert result is None
