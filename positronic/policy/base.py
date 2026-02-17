@@ -105,7 +105,12 @@ class DecodedEncodedPolicy(Policy):
 
     @property
     def meta(self) -> dict[str, Any]:
-        return self._policy.meta | self._extra_meta
+        result = self._policy.meta | self._extra_meta
+        if self._action_fps is not None:
+            result['action_fps'] = self._action_fps
+        if self._action_horizon is not None:
+            result['action_horizon'] = self._action_horizon
+        return result
 
     def close(self):
         self._policy.close()
