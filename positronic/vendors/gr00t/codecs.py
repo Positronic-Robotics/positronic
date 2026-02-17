@@ -270,7 +270,7 @@ def observation(rotation_rep: str | None, include_joints: bool):
     rotation_rep=None,
     tgt_ee_pose_key='robot_commands.pose',
     tgt_grip_key='target_grip',
-    action_horizon=None,
+    action_horizon=1.0,
     action_fps=15.0,
 )
 def action(

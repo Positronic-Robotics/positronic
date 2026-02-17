@@ -72,7 +72,7 @@ RotRep = geom.Rotation.Representation
     rotation_rep=None,
     tgt_ee_pose_key='robot_commands.pose',
     tgt_grip_key='target_grip',
-    action_horizon=None,
+    action_horizon=1.0,
     action_fps=15.0,
 )
 def absolute_position(
@@ -104,7 +104,7 @@ def absolute_position(
 # * As most controllers do IK themselves, log target joints in the data collection
 
 
-@cfn.config(num_joints=7, action_horizon=None, action_fps=15.0)
+@cfn.config(num_joints=7, action_horizon=1.0, action_fps=15.0)
 def joint_delta(num_joints: int, action_horizon: float | None, action_fps: float):
     from positronic.policy.action import JointDeltaAction
 
