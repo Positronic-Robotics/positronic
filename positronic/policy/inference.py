@@ -12,6 +12,10 @@ from positronic.drivers import roboarm
 from positronic.utils import flatten_dict, frozen_view
 
 
+def _check_error(is_error, was_error):
+    return is_error, is_error and not was_error
+
+
 class InferenceCommandType(Enum):
     """Commands for the inference."""
 
@@ -75,6 +79,7 @@ class Inference(pimm.ControlSystem):
 
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Sleep]:  # noqa: C901
         running = False
+        in_error = False
 
         rate_limiter = pimm.RateLimiter(clock, hz=self.inference_fps)
         commands_queue = deque()
@@ -83,6 +88,7 @@ class Inference(pimm.ControlSystem):
             command_msg = self.command.read()
             if command_msg.updated:
                 commands_queue.clear()
+                in_error = False
                 match command_msg.data.type:
                     case InferenceCommandType.START:
                         running = True
@@ -99,6 +105,15 @@ class Inference(pimm.ControlSystem):
 
             try:
                 if not running:
+                    continue
+
+                in_error, entered_error = _check_error(
+                    self.robot_state.value.status == roboarm.RobotStatus.ERROR, in_error
+                )
+                if entered_error:
+                    commands_queue.clear()
+                    self.robot_commands.emit(roboarm.command.Recover())
+                if in_error:
                     continue
 
                 if not commands_queue:

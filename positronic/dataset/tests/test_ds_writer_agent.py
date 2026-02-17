@@ -386,7 +386,7 @@ def test_robot_state_serializer_drops_reset_and_emits_components(world, clock):
     w = ds.created[-1]
     items = {name: val for (name, val, _, _) in w.appends}
     # Should not contain any data from RESETTING
-    assert set(items.keys()) == {'robot_state.q', 'robot_state.dq', 'robot_state.ee_pose'}
+    assert set(items.keys()) == {'robot_state.q', 'robot_state.dq', 'robot_state.ee_pose', 'robot_state.error'}
     np.testing.assert_allclose(items['robot_state.q'], q)
     np.testing.assert_allclose(items['robot_state.dq'], dq)
     np.testing.assert_allclose(items['robot_state.ee_pose'], np.concatenate([t, geom.Rotation.identity.as_quat]))

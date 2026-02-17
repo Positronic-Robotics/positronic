@@ -50,6 +50,10 @@ def _parse_buttons(buttons: dict, button_handler: ButtonHandler):
         button_handler.update_buttons(mapping)
 
 
+def _check_error(is_error, was_error):
+    return is_error, is_error and not was_error
+
+
 class _Tracker:
     on = False
     _offset = geom.Transform3D()
@@ -118,11 +122,13 @@ class DataCollectionController(pimm.ControlSystem):
         start_wav_path = 'positronic/assets/sounds/recording-has-started.wav'
         end_wav_path = 'positronic/assets/sounds/recording-has-stopped.wav'
         abort_wav_path = 'positronic/assets/sounds/recording-has-been-aborted.wav'
+        error_wav_path = 'positronic/assets/sounds/error-occurred.wav'
 
         tracker = _Tracker(self.operator_position)
         button_handler = ButtonHandler()
 
         recording = False
+        in_error = False
 
         while not should_stop.value:
             try:
@@ -151,7 +157,15 @@ class DataCollectionController(pimm.ControlSystem):
                 cp_msg = self.controller_positions.read()
                 if cp_msg.updated:
                     target_robot_pos = tracker.update(cp_msg.data['right'])
-                    if tracker.on:  # Don't spam the robot with commands.
+
+                if tracker.on:
+                    in_error, entered_error = _check_error(
+                        self.robot_state.value.status == roboarm.RobotStatus.ERROR, in_error
+                    )
+                    if entered_error:
+                        self.sound.emit(error_wav_path)
+                        self.robot_commands.emit(roboarm.command.Recover())
+                    elif not in_error and cp_msg.updated:
                         self.robot_commands.emit(roboarm.command.CartesianPosition(target_robot_pos))
 
                 yield pimm.Sleep(0.001)

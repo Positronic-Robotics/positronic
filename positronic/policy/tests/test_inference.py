@@ -5,9 +5,10 @@ import pytest
 
 import pimm
 from pimm.tests.testing import MockClock
+from positronic.dataset.ds_writer_agent import Serializers
 from positronic.drivers import roboarm
 from positronic.drivers.roboarm import RobotStatus
-from positronic.drivers.roboarm.command import CartesianPosition, Reset, to_wire
+from positronic.drivers.roboarm.command import CartesianPosition, Recover, Reset, from_wire, to_wire
 from positronic.geom import Rotation, Transform3D
 from positronic.policy.inference import Inference, InferenceCommand
 from positronic.tests.testing_coutils import ManualDriver, drive_scheduler
@@ -59,6 +60,18 @@ class StubPolicy:
     def close(self) -> None:
         """Tests rely on Inference calling policy.close(); provide no-op."""
         return None
+
+
+class ChunkPolicy(StubPolicy):
+    """Policy that returns chunks of 10 actions with grip values encoding the chunk number."""
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.counter = 0
+
+    def select_action(self, obs):
+        self.counter += 1
+        return [{'robot_command': to_wire(self.command), 'target_grip': self.counter * 100.0 + i} for i in range(10)]
 
 
 class FakeRobotState:
@@ -223,22 +236,7 @@ def test_inference_reset_emits_reset_and_calls_policy_reset(world, clock):
 @pytest.mark.timeout(3.0)
 def test_inference_clears_queue_on_reset_stepwise(world, clock):
     """Verify that RESET clears any pending actions in the queue (stepwise check)."""
-    pose = Transform3D(translation=np.array([0.4, 0.5, 0.6], dtype=np.float32), rotation=Rotation.identity)
-
-    class ChunkPolicy(StubPolicy):
-        def __init__(self, *args, **kwargs):
-            super().__init__(*args, **kwargs)
-            self.counter = 0
-
-        def select_action(self, obs):
-            self.counter += 1
-            # Return chunk of 10 actions to ensure queue is not drained
-            # Grips will be: 100, 101, ... 109 then 200, 201 ...
-            return [
-                {'robot_command': to_wire(self.command), 'target_grip': self.counter * 100.0 + i} for i in range(10)
-            ]
-
-    policy = ChunkPolicy(command=CartesianPosition(pose=pose))
+    policy = ChunkPolicy()
     inference = Inference(policy, inference_fps=10)
 
     frame_em = world.pair(inference.frames['image.cam'])
@@ -293,21 +291,7 @@ def test_inference_clears_queue_on_reset_stepwise(world, clock):
 @pytest.mark.timeout(3.0)
 def test_inference_clears_queue_on_start_stepwise(world, clock):
     """Verify that START clears any pending actions in the queue."""
-    pose = Transform3D(translation=np.array([0.4, 0.5, 0.6], dtype=np.float32), rotation=Rotation.identity)
-
-    class ChunkPolicy(StubPolicy):
-        def __init__(self, *args, **kwargs):
-            super().__init__(*args, **kwargs)
-            self.counter = 0
-
-        def select_action(self, obs):
-            self.counter += 1
-            # Return chunk of 10 actions
-            return [
-                {'robot_command': to_wire(self.command), 'target_grip': self.counter * 100.0 + i} for i in range(10)
-            ]
-
-    policy = ChunkPolicy(command=CartesianPosition(pose=pose))
+    policy = ChunkPolicy()
     inference = Inference(policy, inference_fps=10)
 
     frame_em = world.pair(inference.frames['image.cam'])
@@ -352,3 +336,58 @@ def test_inference_clears_queue_on_start_stepwise(world, clock):
     # If queue persisted: would be ~103.0 (remnant of chunk 1)
     val = grip_rx.read().data
     assert val >= 200.0, f'Expected >= 200.0 (Start of New Chunk), got {val}. Queue clearing on START failed!'
+
+
+@pytest.mark.timeout(3.0)
+def test_inference_recovers_from_error(world, clock):
+    """ERROR clears pending actions, emits Recover, skips policy; AVAILABLE resumes with fresh chunk."""
+    policy = ChunkPolicy()
+    inference = Inference(policy)
+
+    frame_em = world.pair(inference.frames['image.cam'])
+    robot_em = world.pair(inference.robot_state)
+    grip_em = world.pair(inference.gripper_state)
+    command_em = world.pair(inference.command)
+    command_rx = world.pair(inference.robot_commands)
+    grip_rx = world.pair(inference.target_grip)
+
+    state_ok = make_robot_state([0.1, 0.2, 0.3], [0.4, 0.5, 0.6], status=RobotStatus.AVAILABLE)
+    state_err = make_robot_state([0.1, 0.2, 0.3], [0.4, 0.5, 0.6], status=RobotStatus.ERROR)
+
+    scheduler = world.start([inference])
+
+    # Start and consume a few actions from chunk 1 [100..109]
+    command_em.emit(InferenceCommand.START(task='test'))
+    drive_scheduler(scheduler, clock=clock, steps=1)
+    emit_ready_payload(frame_em, robot_em, grip_em, state_ok)
+    drive_scheduler(scheduler, clock=clock, steps=3)
+    assert 100.0 <= grip_rx.read().data < 110.0
+
+    # Switch to ERROR — should send Recover, not call policy
+    obs_before = len(policy.observations)
+    robot_em.emit(state_err)
+    drive_scheduler(scheduler, clock=clock, steps=2)
+    assert isinstance(command_rx.read().data, Recover)
+    assert len(policy.observations) == obs_before
+
+    # Switch back to AVAILABLE — fresh chunk 2 [200..209]
+    emit_ready_payload(frame_em, robot_em, grip_em, state_ok)
+    drive_scheduler(scheduler, clock=clock, steps=3)
+    assert grip_rx.read().data >= 200.0
+
+
+def test_recover_command_wire_roundtrip():
+    wire = to_wire(Recover())
+    assert wire == {'type': 'recover'}
+    assert isinstance(from_wire(wire), Recover)
+
+
+@pytest.mark.parametrize('status, expected_error', [(RobotStatus.AVAILABLE, 0), (RobotStatus.ERROR, 1)])
+def test_robot_state_serializer_records_error(status, expected_error):
+    state = make_robot_state([0.1, 0.2, 0.3], [0.4, 0.5, 0.6], status=status)
+    assert Serializers.robot_state(state)['.error'] == expected_error
+
+
+def test_robot_state_serializer_drops_resetting():
+    state = make_robot_state([0.1, 0.2, 0.3], [0.4, 0.5, 0.6], status=RobotStatus.RESETTING)
+    assert Serializers.robot_state(state) is None

@@ -21,6 +21,15 @@ from positronic import geom
 from . import RobotStatus, State, command
 
 
+def _recover_if_needed(robot, in_error):
+    if in_error:
+        robot.recover_from_errors()
+
+
+def _check_error(is_error, was_error):
+    return is_error, is_error and not was_error
+
+
 class FrankaState(State, pimm.shared_memory.NumpySMAdapter):
     Q_OFFSET = 0
     DQ_OFFSET = Q_OFFSET + 7
@@ -150,14 +159,27 @@ class Robot(pimm.ControlSystem):
 
         self._reset(robot, robot_state)
 
+        in_error = False
         while not should_stop.value:
             st = robot.state()
+            robot_state.encode(st)
+            self.state.emit(robot_state)
+
+            in_error, entered_error = _check_error(st.error != 0, in_error)
+            if entered_error:
+                logging.warning(f'Robot error: {st.error_message}')
+
             cmd_msg = self.commands.read()
             if cmd_msg.updated:
                 match cmd_msg.data:
                     case command.Reset():
+                        _recover_if_needed(robot, in_error)
                         self._reset(robot, robot_state)
                         continue
+                    case command.Recover():
+                        _recover_if_needed(robot, in_error)
+                    case _ if in_error:
+                        pass
                     case command.CartesianPosition(pose):
                         target_pose_wxyz = np.asarray([*pose.translation, *pose.rotation.as_quat])
                         ik_solution = robot.inverse_kinematics_with_limits(target_pose_wxyz)
@@ -168,12 +190,6 @@ class Robot(pimm.ControlSystem):
                         robot.set_target_joints(st.q + joint_delta)
                     case _:
                         raise NotImplementedError(f'Unsupported command {cmd_msg.data}')
-
-            robot_state.encode(st)
-            self.state.emit(robot_state)
-            if st.error != 0:
-                logging.warning(f'Error {st.error} occurred, recovering')
-                robot.recover_from_errors()
 
             yield pimm.Sleep(rate_limiter.wait_time())
 
