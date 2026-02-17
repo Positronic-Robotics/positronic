@@ -249,6 +249,59 @@ MUJOCO_GL=egl uv run positronic-inference sim \
 | LeRobot ACT | `--observation_encoder=.eepose --action_decoder=.absolute_position` | Default configs |
 | OpenPI | Uses internal encoding | No encoder/decoder args needed |
 
+## Sim Eval End-to-End
+
+Full workflow: start inference server → run sim episodes → view results.
+
+### 1. Start LeRobot inference server (on GPU machine)
+
+```bash
+CACHE_ROOT=/home/vertix docker --context <machine> compose run -d --rm --pull always --service-ports lerobot-server \
+  --checkpoints_dir=s3://checkpoints/<path_to_experiment>/
+```
+
+**Important**: Use `CACHE_ROOT=/home/vertix` when targeting remote Docker contexts (notebook, vm-train, etc.) because `$HOME` expands to the local Mac path, but volume mounts must reference paths on the remote host.
+
+Wait for the server to be ready by checking logs:
+```bash
+docker --context <machine> logs --tail 5 <container_id>
+# Look for: "Uvicorn running on http://0.0.0.0:8000"
+```
+
+### 2. Run sim inference (on same or different GPU machine)
+
+```bash
+CACHE_ROOT=/home/vertix docker --context <machine> compose run --rm --pull always positronic-inference \
+  sim \
+  --policy=.remote \
+  --policy.host=<server_machine> \
+  --policy.port=8000 \
+  --driver.num_iterations=50 \
+  --driver.simulation_time=30 \
+  --output_dir=s3://inference/sim_stack_validation/<run_name>/<model_type>
+```
+
+### 3. View results (locally)
+
+```bash
+uv run python -m positronic.cfg.eval sim \
+  --dataset.base.path=s3://inference/sim_stack_validation/<run_name>
+```
+
+Opens on http://localhost:5001. The path should point to the parent directory containing model subdirs (e.g., `160226-dinov3`, not `160226-dinov3/lerobot`).
+
+### 4. Clean up: stop the inference server
+
+```bash
+docker --context <machine> stop <container_id>
+```
+
+### Naming convention
+
+Inference results go to `s3://inference/sim_stack_validation/<DDMMYY[-suffix]>/<model_type>/` where:
+- `<DDMMYY[-suffix]>` — date with optional descriptor (e.g., `160226-dinov3`)
+- `<model_type>` — `lerobot`, `groot`, or `openpi`
+
 ## Monitoring Background Jobs
 
 When running jobs in background:
