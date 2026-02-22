@@ -300,8 +300,25 @@ class RecordingCodec(Codec):
         return self._inner.meta
 
     def wrap(self, policy: Policy) -> Policy:
-        self.new_episode()
-        return super().wrap(policy)
+        wrapped = super().wrap(policy)
+        codec = self
+
+        class _Ep(Policy):
+            def select_action(self, obs):
+                return wrapped.select_action(obs)
+
+            def reset(self):
+                codec.new_episode()
+                wrapped.reset()
+
+            @property
+            def meta(self):
+                return wrapped.meta
+
+            def close(self):
+                wrapped.close()
+
+        return _Ep()
 
     def dummy_encoded(self, data=None):
         return self._inner.dummy_encoded(data)
