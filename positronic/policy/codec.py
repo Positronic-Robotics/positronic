@@ -5,6 +5,7 @@ Codecs compose via ``|``: ``observation_codec | action_codec | timing`` produces
 codec that encodes left-to-right and decodes right-to-left.
 """
 
+import itertools
 import time
 from abc import ABC, abstractmethod
 from pathlib import Path
@@ -205,18 +206,16 @@ def _build_blueprint(image_paths: list[str], numeric_paths: list[str]) -> rrb.Bl
     return rrb.Blueprint(rrb.Grid(*grid_items))
 
 
-class RecordingCodec(Codec):
-    """Transparent ``Codec`` wrapper that logs the encode/decode cycle to per-episode ``.rrd`` files.
+class _RecordingSession(Codec):
+    """Per-session codec that logs the encode/decode cycle to a single ``.rrd`` file.
 
-    Each ``reset()`` on the wrapped policy starts a new ``.rrd`` recording.
+    Created by ``RecordingCodec._new_session()`` — one per episode, with independent state.
     """
 
-    def __init__(self, inner: Codec, recording_dir: str | Path):
+    def __init__(self, inner: Codec, rec: Any, *, action_fps: float):
         self._inner = inner
-        self._dir = Path(recording_dir)
-        self._dir.mkdir(parents=True, exist_ok=True)
-        self._action_fps: float = inner.meta.get('action_fps', 15.0)
-        self._counter = 0
+        self._rec = rec
+        self._action_fps = action_fps
         self._step = 0
         # Stashed between encode() and decode() — _WrappedPolicy calls them sequentially
         self._time_ns: int = 0
@@ -224,16 +223,6 @@ class RecordingCodec(Codec):
         # Accumulated across encode+decode; used once at step 0 to build the blueprint
         self._image_paths: list[str] = []
         self._numeric_paths: list[str] = []
-        self.new_episode()
-
-    def new_episode(self):
-        """Start recording a new episode."""
-        self._counter += 1
-        self._rec = rr.new_recording(application_id='positronic_inference')
-        self._rec.save(str(self._dir / f'episode_{self._counter:04d}.rrd'))
-        self._step = 0
-        self._image_paths.clear()
-        self._numeric_paths.clear()
 
     def _set_timelines(self, time_ns: int, inference_time_ns: int | None):
         set_timeline_time('wall_time', time_ns)
@@ -303,30 +292,73 @@ class RecordingCodec(Codec):
     def meta(self):
         return self._inner.meta
 
+    def dummy_encoded(self, data=None):
+        return self._inner.dummy_encoded(data)
+
+
+class RecordingCodec(Codec):
+    """Transparent ``Codec`` wrapper that logs the encode/decode cycle to per-episode ``.rrd`` files.
+
+    Each ``reset()`` on the wrapped policy creates a ``_RecordingSession`` with independent
+    state, so concurrent sessions don't interfere with each other.
+    """
+
+    def __init__(self, inner: Codec, recording_dir: str | Path):
+        self._inner = inner
+        self._dir = Path(recording_dir)
+        self._dir.mkdir(parents=True, exist_ok=True)
+        self._action_fps: float = inner.meta.get('action_fps', 15.0)
+        self._counter = itertools.count(1)
+
+    def _new_session(self) -> _RecordingSession:
+        episode_num = next(self._counter)
+        rec = rr.new_recording(application_id='positronic_inference')
+        rec.save(str(self._dir / f'episode_{episode_num:04d}.rrd'))
+        return _RecordingSession(self._inner, rec, action_fps=self._action_fps)
+
+    def encode(self, data: dict) -> dict:
+        return self._inner.encode(data)
+
+    def decode(self, data, *, context=None):
+        return self._inner.decode(data, context=context)
+
+    @property
+    def training_encoder(self):
+        return self._inner.training_encoder
+
+    @property
+    def meta(self):
+        return self._inner.meta
+
     def wrap(self, policy: Policy) -> Policy:
-        return _RecordingPolicy(super().wrap(policy), self)
+        return _RecordingPolicy(policy, self)
 
     def dummy_encoded(self, data=None):
         return self._inner.dummy_encoded(data)
 
 
 class _RecordingPolicy(Policy):
-    """Policy wrapper that starts a new recording episode on each ``reset()``."""
+    """Policy wrapper that creates a fresh ``_RecordingSession`` on each ``reset()``."""
 
-    def __init__(self, wrapped: Policy, codec: RecordingCodec):
-        self._wrapped = wrapped
+    def __init__(self, policy: Policy, codec: RecordingCodec):
+        self._policy = policy
         self._codec = codec
+        self._active: Policy | None = None
 
     def select_action(self, obs):
-        return self._wrapped.select_action(obs)
+        return self._active.select_action(obs)
 
     def reset(self):
-        self._codec.new_episode()
-        self._wrapped.reset()
+        session = self._codec._new_session()
+        self._active = _WrappedPolicy(self._policy, session)
+        self._active.reset()
 
     @property
     def meta(self):
-        return self._wrapped.meta
+        if self._active:
+            return self._active.meta
+        return self._codec.meta
 
     def close(self):
-        self._wrapped.close()
+        if self._active:
+            self._active.close()
