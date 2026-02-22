@@ -68,6 +68,14 @@ def absolute_pos_action(rotation_rep: str | None, tgt_ee_pose_key: str, tgt_grip
 
 
 @cfn.config(num_joints=7)
+def absolute_joints_action(tgt_joints_key: str, tgt_grip_key: str, num_joints: int):
+    """Absolute joint position action codec."""
+    from positronic.policy.action import AbsoluteJointsAction
+
+    return AbsoluteJointsAction(tgt_joints_key, tgt_grip_key, num_joints=num_joints)
+
+
+@cfn.config(num_joints=7)
 def joint_delta_action(num_joints: int):
     from positronic.policy.action import JointDeltaAction
 

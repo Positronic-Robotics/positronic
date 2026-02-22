@@ -13,3 +13,10 @@ _traj = {
 }
 eepose_absolute_traj = eepose_absolute.override(**_traj)
 joints_absolute_traj = joints_absolute.override(**_traj)
+
+# Pure joint-based trajectory variant (no commanded joint targets in recordings)
+joints_traj = codecs.compose.override(
+    obs=codecs.joints_obs,
+    action=codecs.absolute_joints_action,
+    **{'action.tgt_joints_key': 'robot_state.q', 'action.tgt_grip_key': 'grip', 'binarize_grip_keys': ('grip',)},
+)

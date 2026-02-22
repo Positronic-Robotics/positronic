@@ -152,4 +152,12 @@ _traj = {
 eepose_traj = eepose.override(**_traj)
 eepose_q_traj = eepose_q.override(**_traj)
 
+# Pure joint-based trajectory variant (no commanded joint targets in recordings)
+joints_obs = observation.override(state_features={'robot_state.q': 7, 'grip': 1})
+joints_traj = codecs.compose.override(
+    obs=joints_obs,
+    action=codecs.absolute_joints_action,
+    **{'action.tgt_joints_key': 'robot_state.q', 'action.tgt_grip_key': 'grip', 'binarize_grip_keys': ('grip',)},
+)
+
 droid = codecs.compose.override(obs=droid_obs, action=codecs.joint_delta_action)

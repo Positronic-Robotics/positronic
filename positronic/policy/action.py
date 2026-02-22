@@ -53,9 +53,7 @@ class AbsolutePositionAction(Codec):
 
 
 class AbsoluteJointsAction(Codec):
-    def __init__(
-        self, tgt_joints_key: str = 'robot_commands.joints', tgt_grip_key: str = 'target_grip', num_joints: int = 7
-    ):
+    def __init__(self, tgt_joints_key: str, tgt_grip_key: str, num_joints: int = 7):
         self.tgt_joints_key = tgt_joints_key
         self.tgt_grip_key = tgt_grip_key
         self.num_joints = num_joints
