@@ -216,7 +216,6 @@ class RecordingCodec(Codec):
         self._dir = Path(recording_dir)
         self._dir.mkdir(parents=True, exist_ok=True)
         self._action_fps: float = inner.meta.get('action_fps', 15.0)
-        self._rec: Any = None  # set by new_episode(), scopes all rr.log calls
         self._counter = 0
         self._step = 0
         # Stashed between encode() and decode() — _WrappedPolicy calls them sequentially
@@ -225,6 +224,7 @@ class RecordingCodec(Codec):
         # Accumulated across encode+decode; used once at step 0 to build the blueprint
         self._image_paths: list[str] = []
         self._numeric_paths: list[str] = []
+        self.new_episode()
 
     def new_episode(self):
         """Start recording a new episode."""
@@ -304,25 +304,29 @@ class RecordingCodec(Codec):
         return self._inner.meta
 
     def wrap(self, policy: Policy) -> Policy:
-        wrapped = super().wrap(policy)
-        codec = self
-
-        class _Ep(Policy):
-            def select_action(self, obs):
-                return wrapped.select_action(obs)
-
-            def reset(self):
-                codec.new_episode()
-                wrapped.reset()
-
-            @property
-            def meta(self):
-                return wrapped.meta
-
-            def close(self):
-                wrapped.close()
-
-        return _Ep()
+        return _RecordingPolicy(super().wrap(policy), self)
 
     def dummy_encoded(self, data=None):
         return self._inner.dummy_encoded(data)
+
+
+class _RecordingPolicy(Policy):
+    """Policy wrapper that starts a new recording episode on each ``reset()``."""
+
+    def __init__(self, wrapped: Policy, codec: RecordingCodec):
+        self._wrapped = wrapped
+        self._codec = codec
+
+    def select_action(self, obs):
+        return self._wrapped.select_action(obs)
+
+    def reset(self):
+        self._codec.new_episode()
+        self._wrapped.reset()
+
+    @property
+    def meta(self):
+        return self._wrapped.meta
+
+    def close(self):
+        self._wrapped.close()

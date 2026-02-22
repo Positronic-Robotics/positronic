@@ -311,6 +311,7 @@ class InferenceServer:
             await websocket.send_bytes(serialise({'status': 'ready', 'meta': meta}))
 
             policy = self.codec.wrap(OpenpiPolicy(subprocess_obj.client))
+            policy.reset()
 
             # Inference loop
             async for message in websocket.iter_bytes():
