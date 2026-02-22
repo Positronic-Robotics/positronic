@@ -32,13 +32,16 @@ import configuronic as cfn
 import pos3
 
 from positronic.dataset import Episode
-from positronic.dataset.transforms.episode import Derive, Identity
+from positronic.dataset.dataset import ConcatDataset, Dataset, FilterDataset
+from positronic.dataset.transforms import TransformedDataset
+from positronic.dataset.transforms.episode import Derive, FromValue, Group, Identity
 from positronic.server.positronic_server import ColumnConfig as C
 from positronic.server.positronic_server import GroupTableConfig
 from positronic.server.positronic_server import main as server_main
 from positronic.utils.logging import init_logging
 
 from . import PUBLIC, group, local, local_all, transform
+from .internal import ALL_TASKS, RECOVERY_TASK
 
 # DROID teleoperation data for PhAIL tasks (towels, spoons, scissors)
 # Migrated from: @positronic.cfg.ds.internal.droid
@@ -54,6 +57,24 @@ sim_stack_cubes = local.override(path='s3://positronic-public/datasets/sim-stack
 # Migrated from: @positronic.cfg.ds.internal.sim_pnp
 # Size: 1.3GB, 214 episodes with transforms baked in
 sim_pick_place = local.override(path='s3://positronic-public/datasets/sim-pick-place/', profile=PUBLIC)
+
+
+@cfn.config()
+def _duplicate_recovery(base: Dataset):
+    """Duplicate recovery episodes for every real task."""
+
+    def is_recovery(ep):
+        return ep['task'] == RECOVERY_TASK
+
+    non_recovery = FilterDataset(base, lambda ep: not is_recovery(ep))
+    recovery = FilterDataset(base, is_recovery)
+    datasets: list[Dataset] = [non_recovery]
+    for task in ALL_TASKS:
+        datasets.append(TransformedDataset(recovery, Group(Derive(task=FromValue(task)), Identity())))
+    return ConcatDataset(*datasets)
+
+
+phail_recovery = _duplicate_recovery.override(base=phail)
 
 
 # =============================================================================
