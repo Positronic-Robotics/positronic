@@ -7,7 +7,7 @@ from PIL import Image as PilImage
 from positronic.dataset import Signal, transforms
 from positronic.dataset.episode import Episode
 from positronic.dataset.transforms import image
-from positronic.dataset.transforms.episode import Derive
+from positronic.dataset.transforms.episode import Derive, Group, Identity
 from positronic.policy.codec import Codec, lerobot_image, lerobot_state
 
 
@@ -96,4 +96,4 @@ class ObservationCodec(Codec):
 
     @property
     def training_encoder(self):
-        return Derive(meta=self._training_meta, **self._derive_transforms)
+        return Group(Derive(meta=self._training_meta, **self._derive_transforms), Identity())

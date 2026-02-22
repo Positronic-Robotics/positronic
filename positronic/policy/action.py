@@ -6,7 +6,7 @@ from positronic import geom
 from positronic.dataset import transforms
 from positronic.dataset.episode import Episode
 from positronic.dataset.signal import Signal
-from positronic.dataset.transforms.episode import Derive
+from positronic.dataset.transforms.episode import Derive, Group, Identity
 from positronic.drivers.roboarm import command
 from positronic.policy.codec import Codec, lerobot_action
 
@@ -52,7 +52,7 @@ class AbsolutePositionAction(Codec):
 
     @property
     def training_encoder(self):
-        return Derive(meta=self._training_meta, action=self._encode_episode)
+        return Group(Derive(meta=self._training_meta, action=self._encode_episode), Identity())
 
 
 class AbsoluteJointsAction(Codec):
@@ -86,7 +86,7 @@ class AbsoluteJointsAction(Codec):
 
     @property
     def training_encoder(self):
-        return Derive(meta=self._training_meta, action=self._encode_episode)
+        return Group(Derive(meta=self._training_meta, action=self._encode_episode), Identity())
 
 
 class RelativePositionAction(Codec):
@@ -146,7 +146,7 @@ class RelativePositionAction(Codec):
 
     @property
     def training_encoder(self):
-        return Derive(meta=self._training_meta, action=self._encode_episode)
+        return Group(Derive(meta=self._training_meta, action=self._encode_episode), Identity())
 
 
 class JointDeltaAction(Codec):

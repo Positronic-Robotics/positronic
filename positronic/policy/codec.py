@@ -15,7 +15,7 @@ import numpy as np
 import rerun as rr
 import rerun.blueprint as rrb
 
-from positronic.dataset.transforms.episode import Derive, EpisodeTransform, Group
+from positronic.dataset.transforms.episode import EpisodeTransform, Identity
 from positronic.policy.base import Policy
 from positronic.utils import merge_dicts
 from positronic.utils.rerun_compat import log_numeric_series, set_timeline_sequence, set_timeline_time
@@ -68,7 +68,7 @@ class Codec(ABC):
 
     @property
     def training_encoder(self) -> EpisodeTransform:
-        return Derive()
+        return Identity()
 
     @property
     def meta(self) -> dict:
@@ -107,7 +107,7 @@ class _ComposedCodec(Codec):
 
     @property
     def training_encoder(self):
-        return Group(self._left.training_encoder, self._right.training_encoder)
+        return self._left.training_encoder | self._right.training_encoder
 
     @property
     def meta(self):
@@ -153,7 +153,7 @@ class ActionTiming(Codec):
 
     @property
     def training_encoder(self) -> EpisodeTransform:
-        return Derive(meta=self.meta)
+        return Identity(meta=self.meta)
 
     @property
     def meta(self):

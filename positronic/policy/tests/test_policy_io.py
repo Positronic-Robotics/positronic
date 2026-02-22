@@ -281,3 +281,51 @@ def test_timestamps_survive_action_decoder_composition():
         assert 'target_grip' in action
         assert 'timestamp' in action, f'Action {i} missing timestamp — stripped by action decoder'
         assert action['timestamp'] == pytest.approx(i / 15.0)
+
+
+def test_composed_training_encoder_chains_sequentially():
+    """Composed codec training_encoder chains left-to-right, each seeing previous output."""
+    ts = [1000, 2000]
+    joints = [np.array([0.1, -0.2, 0.3, 0.4, -0.5, 0.6, 0.7], dtype=np.float32) for _ in ts]
+    grip = [0.5, 0.6]
+    img = [np.zeros((4, 4, 3), dtype=np.uint8) for _ in ts]
+
+    ep = EpisodeContainer({
+        'robot_state.q': DummySignal(ts, joints),
+        'grip': DummySignal(ts, grip),
+        'robot_commands.joints': DummySignal(ts, joints),
+        'target_grip': DummySignal(ts, grip),
+        'image.wrist': DummySignal(ts, img),
+        'image.exterior': DummySignal(ts, img),
+        'task': 'test',
+    })
+
+    obs = ObservationCodec(
+        state={'observation.state': {'robot_state.q': 7, 'grip': 1}},
+        images={'observation.images.left': ('image.wrist', (4, 4))},
+    )
+    action = AbsoluteJointsAction('robot_commands.joints', 'target_grip', num_joints=7)
+    timing = ActionTiming(fps=15.0)
+    composed = timing | obs | action
+
+    encoder = composed.training_encoder
+    result = encoder(ep)
+
+    # Observation codec's derived keys
+    assert 'observation.state' in result
+    assert 'observation.images.left' in result
+
+    # Action codec's derived key — must be accessible (reads target_grip from base episode)
+    assert 'action' in result
+    vec = list(result['action'])[0][0]
+    assert vec.shape == (8,)
+    np.testing.assert_allclose(vec[:7], joints[0], atol=1e-6)
+    np.testing.assert_allclose(vec[7], grip[0], atol=1e-6)
+
+    # Base episode keys should pass through
+    assert 'target_grip' in result
+    assert 'robot_commands.joints' in result
+
+    # Meta should merge from all codecs
+    assert encoder.meta.get('action_fps') == 15.0
+    assert 'lerobot_features' in encoder.meta

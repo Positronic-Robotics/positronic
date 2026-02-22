@@ -14,7 +14,7 @@ from positronic.dataset import transforms as tf
 from positronic.dataset.episode import Episode
 from positronic.dataset.signal import Signal
 from positronic.dataset.transforms import image
-from positronic.dataset.transforms.episode import Derive
+from positronic.dataset.transforms.episode import Derive, Group, Identity
 from positronic.drivers.roboarm import command
 from positronic.policy.codec import Codec, lerobot_action, lerobot_image, lerobot_state
 
@@ -185,7 +185,7 @@ class GrootCodec(Codec):
 
     @property
     def training_encoder(self):
-        return Derive(meta=self._training_meta, **self._derive_transforms)
+        return Group(Derive(meta=self._training_meta, **self._derive_transforms), Identity())
 
 
 @cfn.config(rotation_rep=None, include_joints=False, tgt_ee_pose_key='robot_commands.pose', tgt_grip_key='target_grip')
