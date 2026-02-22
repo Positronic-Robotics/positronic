@@ -7,7 +7,7 @@ from positronic.dataset.tests.utils import DummySignal
 from positronic.geom import Rotation
 from positronic.policy.action import AbsoluteJointsAction, AbsolutePositionAction, RelativePositionAction
 from positronic.policy.base import Policy
-from positronic.policy.codec import ActionTiming, Codec
+from positronic.policy.codec import ActionTiming, BinarizeGripInference, BinarizeGripTraining, Codec
 from positronic.policy.observation import ObservationCodec
 
 
@@ -329,3 +329,54 @@ def test_composed_training_encoder_chains_sequentially():
     # Meta should merge from all codecs
     assert encoder.meta.get('action_fps') == 15.0
     assert 'lerobot_features' in encoder.meta
+
+
+def test_binarize_grip_inference():
+    binarize = BinarizeGripInference()
+    assert binarize._decode_single({'target_grip': 0.3}, None) == {'target_grip': 0.0}
+    assert binarize._decode_single({'target_grip': 0.7}, None) == {'target_grip': 1.0}
+    assert binarize._decode_single({'target_grip': 0.5}, None) == {'target_grip': 0.0}
+
+    binarize_low = BinarizeGripInference(threshold=0.3)
+    assert binarize_low._decode_single({'target_grip': 0.4}, None) == {'target_grip': 1.0}
+
+
+def test_binarize_grip_training():
+    ts = [1000, 2000]
+    ep = EpisodeContainer({'grip': DummySignal(ts, [0.3, 0.8]), 'target_grip': DummySignal(ts, [0.7, 0.2])})
+
+    binarize = BinarizeGripTraining(('grip', 'target_grip'))
+    result = binarize.training_encoder(ep)
+    grip_vals = [v for v, _ in result['grip']]
+    tgt_vals = [v for v, _ in result['target_grip']]
+    np.testing.assert_array_equal(grip_vals, [0.0, 1.0])
+    np.testing.assert_array_equal(tgt_vals, [1.0, 0.0])
+
+
+def test_binarize_grip_training_respects_threshold():
+    ts = [1000]
+    ep = EpisodeContainer({'grip': DummySignal(ts, [0.4]), 'target_grip': DummySignal(ts, [0.4])})
+
+    keys = ('grip', 'target_grip')
+    default = BinarizeGripTraining(keys)
+    result = default.training_encoder(ep)
+    assert list(result['grip'])[0][0] == pytest.approx(0.0)
+
+    low = BinarizeGripTraining(keys, threshold=0.3)
+    result = low.training_encoder(ep)
+    assert list(result['grip'])[0][0] == pytest.approx(1.0)
+
+
+def test_binarize_grip_training_composed_with_action_codec():
+    ts = [1000]
+    joints = [np.array([0.1, -0.2, 0.3, 0.4, -0.5, 0.6, 0.7], dtype=np.float32)]
+
+    ep = EpisodeContainer({'robot_commands.joints': DummySignal(ts, joints), 'target_grip': DummySignal(ts, [0.7])})
+
+    binarize = BinarizeGripTraining(('grip', 'target_grip'))
+    action = AbsoluteJointsAction('robot_commands.joints', 'target_grip', num_joints=7)
+    composed = binarize | action
+
+    result = composed.training_encoder(ep)
+    vec = list(result['action'])[0][0]
+    assert vec[-1] == pytest.approx(1.0)

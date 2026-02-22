@@ -33,9 +33,6 @@ class AbsolutePositionAction(Codec):
         ee_dim = self.rot_rep.size + 3
         self._training_meta = {'lerobot_features': {'action': lerobot_action(ee_dim + 1)}}
 
-    def encode(self, data):
-        return data
-
     def _decode_single(self, data: dict, context: dict | None) -> dict:
         action_vector = data['action']
         target_pose = geom.Transform3D.from_vector(action_vector[:-1], self.rot_rep)
@@ -64,9 +61,6 @@ class AbsoluteJointsAction(Codec):
         self.num_joints = num_joints
 
         self._training_meta = {'lerobot_features': {'action': lerobot_action(num_joints + 1)}}
-
-    def encode(self, data):
-        return data
 
     def _decode_single(self, data: dict, context: dict | None) -> dict:
         action_vector = data['action']
@@ -104,9 +98,6 @@ class RelativePositionAction(Codec):
 
         ee_dim = self.rot_rep.size + 3
         self._training_meta = {'lerobot_features': {'action': lerobot_action(ee_dim + 1)}}
-
-    def encode(self, data):
-        return data
 
     def _decode_single(self, data: dict, context: dict | None) -> dict:
         action_vector = data['action']
@@ -160,9 +151,6 @@ class JointDeltaAction(Codec):
         self.num_joints = num_joints
 
         self._training_meta = {'lerobot_features': {'action': lerobot_action(num_joints + 1)}}
-
-    def encode(self, data):
-        return data
 
     def _decode_single(self, data: dict, context: dict | None) -> dict:
         action_vector = data['action']
