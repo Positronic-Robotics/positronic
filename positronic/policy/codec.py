@@ -5,12 +5,19 @@ Codecs compose via ``|``: ``observation_codec | action_codec | timing`` produces
 codec that encodes left-to-right and decodes right-to-left.
 """
 
+import time
 from abc import ABC, abstractmethod
+from pathlib import Path
 from typing import Any, final
+
+import numpy as np
+import rerun as rr
+import rerun.blueprint as rrb
 
 from positronic.dataset.transforms.episode import Derive, EpisodeTransform, Group
 from positronic.policy.base import Policy
 from positronic.utils import merge_dicts
+from positronic.utils.rerun_compat import log_numeric_series, set_timeline_sequence, set_timeline_time
 
 
 def lerobot_state(dim: int, names: list[str] | None = None) -> dict[str, Any]:
@@ -76,7 +83,6 @@ class Codec(ABC):
         """
         return data or {}
 
-    @final
     def wrap(self, policy: Policy) -> Policy:
         return _WrappedPolicy(policy, self)
 
@@ -177,3 +183,125 @@ class _WrappedPolicy(Policy):
 
     def close(self):
         self._policy.close()
+
+
+def _squeeze_batch(arr: np.ndarray) -> np.ndarray:
+    """Remove leading size-1 dims from a potential image array."""
+    while arr.ndim > 3 and arr.shape[0] == 1:
+        arr = arr[0]
+    return arr
+
+
+def _build_blueprint(image_paths: list[str], numeric_paths: list[str]) -> rrb.Blueprint | None:
+    if not image_paths and not numeric_paths:
+        return None
+    image_views = [rrb.Spatial2DView(name=p.rsplit('/', 1)[-1], origin=p) for p in image_paths]
+    numeric_views = [rrb.TimeSeriesView(name=p.rsplit('/', 1)[-1], origin=p) for p in numeric_paths]
+    grid_items: list[Any] = []
+    if image_views:
+        grid_items.append(rrb.Grid(*image_views))
+    if numeric_views:
+        grid_items.append(rrb.Grid(*numeric_views))
+    return rrb.Blueprint(rrb.Grid(*grid_items))
+
+
+class RecordingCodec(Codec):
+    """Transparent ``Codec`` wrapper that logs the encode/decode cycle to per-episode ``.rrd`` files.
+
+    Call ``new_episode()`` before each inference session to start a fresh recording.
+    """
+
+    def __init__(self, inner: Codec, recording_dir: str | Path):
+        self._inner = inner
+        self._dir = Path(recording_dir)
+        self._dir.mkdir(parents=True, exist_ok=True)
+        self._action_fps: float = inner.meta.get('action_fps', 15.0)
+        self._rec: Any = None
+        self._counter = 0
+        self._step = 0
+        self._time_ns: int = 0
+        self._inference_time_ns: int | None = None
+        self._image_paths: list[str] = []
+        self._numeric_paths: list[str] = []
+
+    def new_episode(self):
+        """Start recording a new episode."""
+        self._counter += 1
+        self._rec = rr.new_recording(application_id='positronic_inference')
+        self._rec.save(str(self._dir / f'episode_{self._counter:04d}.rrd'))
+        self._step = 0
+        self._image_paths.clear()
+        self._numeric_paths.clear()
+
+    def _set_timelines(self, time_ns: int, inference_time_ns: int | None):
+        set_timeline_time('wall_time', time_ns)
+        if inference_time_ns is not None:
+            set_timeline_time('inference_time', inference_time_ns)
+        set_timeline_sequence('step', self._step)
+
+    def _log(self, prefix: str, data: dict):
+        """Recursively log *data* under *prefix*, accumulating entity paths."""
+        for key, value in data.items():
+            if (key.startswith('__') and key.endswith('__')) or isinstance(value, str):
+                continue
+            if isinstance(value, dict):
+                self._log(f'{prefix}/{key}', value)
+            elif isinstance(value, np.ndarray):
+                squeezed = _squeeze_batch(value)
+                if squeezed.ndim == 3 and squeezed.shape[-1] == 3:
+                    path = f'{prefix}/image/{key}'
+                    rr.log(path, rr.Image(squeezed).compress())
+                    self._image_paths.append(path)
+                else:
+                    log_numeric_series(f'{prefix}/{key}', value)
+                    self._numeric_paths.append(f'{prefix}/{key}')
+            elif isinstance(value, int | float | np.integer | np.floating):
+                log_numeric_series(f'{prefix}/{key}', value)
+                self._numeric_paths.append(f'{prefix}/{key}')
+
+    def _send_blueprint(self):
+        bp = _build_blueprint(list(dict.fromkeys(self._image_paths)), list(dict.fromkeys(self._numeric_paths)))
+        if bp is not None:
+            rr.send_blueprint(bp)
+
+    def encode(self, data: dict) -> dict:
+        self._time_ns = data.get('__time_ns__', time.time_ns())
+        self._inference_time_ns = data.get('__inference_time_ns__')
+        encoded = self._inner.encode(data)
+        with self._rec:
+            self._set_timelines(self._time_ns, self._inference_time_ns)
+            self._log('input', data)
+            self._log('encoded', encoded)
+        return encoded
+
+    def decode(self, data, *, context=None):
+        decoded = self._inner.decode(data, context=context)
+        actions = data if isinstance(data, list) else [data]
+        first_decoded = decoded[0] if isinstance(decoded, list) else decoded
+        dt_ns = int(1e9 / self._action_fps)
+        with self._rec:
+            for i, action in enumerate(actions):
+                inf_t = self._inference_time_ns + i * dt_ns if self._inference_time_ns is not None else None
+                self._set_timelines(self._time_ns + i * dt_ns, inf_t)
+                self._log('model', action)
+            self._set_timelines(self._time_ns, self._inference_time_ns)
+            self._log('decoded', first_decoded)
+            if self._step == 0:
+                self._send_blueprint()
+        self._step += 1
+        return decoded
+
+    @property
+    def training_encoder(self):
+        return self._inner.training_encoder
+
+    @property
+    def meta(self):
+        return self._inner.meta
+
+    def wrap(self, policy: Policy) -> Policy:
+        self.new_episode()
+        return super().wrap(policy)
+
+    def dummy_encoded(self, data=None):
+        return self._inner.dummy_encoded(data)

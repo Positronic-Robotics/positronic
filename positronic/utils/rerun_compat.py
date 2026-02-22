@@ -87,3 +87,11 @@ def set_timeline_time(timeline: str, timestamp: Any) -> None:
     if hasattr(rr, 'set_time_sequence'):
         rr.set_time_sequence(timeline, ts_ns)
         return
+
+
+def set_timeline_sequence(timeline: str, value: int) -> None:
+    """Set *timeline* to an integer sequence value, handling API differences."""
+    if hasattr(rr.time, 'set_sequence'):
+        rr.time.set_sequence(timeline, value)
+    elif hasattr(rr, 'set_time_sequence'):
+        rr.set_time_sequence(timeline, value)

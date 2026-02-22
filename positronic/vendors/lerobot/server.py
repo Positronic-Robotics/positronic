@@ -13,7 +13,7 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from lerobot.policies.act.modeling_act import ACTPolicy
 from lerobot.policies.pretrained import PreTrainedPolicy
 
-from positronic.policy import Codec, Policy
+from positronic.policy import Codec, Policy, RecordingCodec
 from positronic.policy.lerobot import LerobotPolicy
 from positronic.utils.checkpoints import get_latest_checkpoint, list_checkpoints
 from positronic.utils.logging import init_logging
@@ -123,6 +123,7 @@ class InferenceServer:
         port: int = 8000,
         metadata: dict[str, Any] | None = None,
         device: str | None = None,
+        recording_dir: str | None = None,
     ):
         self.policy_factory = policy_factory
         self.codec = codec
@@ -131,6 +132,8 @@ class InferenceServer:
         self.host = host
         self.port = port
         self.device = device or _detect_device()
+        if recording_dir:
+            self.codec = RecordingCodec(self.codec, pos3.sync(recording_dir))
 
         self.metadata = metadata or {}
         self.metadata.update(
@@ -140,7 +143,7 @@ class InferenceServer:
             experiment_name=str(checkpoints_dir).rstrip('/').split('/')[-1] or '',
         )
 
-        # Initialize Policy Manager
+        # Initialize Policy Manager (loads base policy without codec wrapping)
         self.policy_manager = _PolicyManager(self._load_policy)
 
         # Initialize FastAPI
@@ -158,8 +161,7 @@ class InferenceServer:
         if hasattr(policy, 'metadata') and policy.metadata:
             base_meta.update(policy.metadata)
 
-        base = LerobotPolicy(policy, self.device, extra_meta=base_meta)
-        return self.codec.wrap(base)
+        return LerobotPolicy(policy, self.device, extra_meta=base_meta)
 
     async def get_models(self):
         try:
@@ -214,16 +216,11 @@ class InferenceServer:
         logger.info(f'Connected to {websocket.client} requesting {checkpoint_id}')
 
         try:
-            # Request policy from manager (may wait for other sessions, sends status updates)
-            policy = await self.policy_manager.get_policy(checkpoint_id, websocket)
-
+            base_policy = await self.policy_manager.get_policy(checkpoint_id, websocket)
             try:
+                policy = self.codec.wrap(base_policy)
                 policy.reset()
-
-                # Send ready with metadata
                 await websocket.send_bytes(serialise({'status': 'ready', 'meta': policy.meta}))
-
-                # Inference Loop
                 try:
                     while True:
                         message = await websocket.receive_bytes()
@@ -233,15 +230,11 @@ class InferenceServer:
                             await websocket.send_bytes(serialise({'result': action}))
                         except Exception as e:
                             logger.error(f'Error processing message: {e}')
-                            error_response = {'error': str(e)}
-                            await websocket.send_bytes(serialise(error_response))
+                            await websocket.send_bytes(serialise({'error': str(e)}))
                 except WebSocketDisconnect:
                     logger.info('Client disconnected')
-
             finally:
-                # Release session when done
                 await self.policy_manager.release_session()
-
         except (WebSocketDisconnect, Exception) as e:
             logger.info(f'Connection closed: {e}')
             logger.debug(traceback.format_exc())
@@ -258,7 +251,14 @@ def act(checkpoint_path: str) -> PreTrainedPolicy:
     return policy
 
 
-@cfn.config(policy_factory=act, codec=lerobot_codecs.eepose_absolute, checkpoint=None, port=8000, host='0.0.0.0')
+@cfn.config(
+    policy_factory=act,
+    codec=lerobot_codecs.eepose_absolute,
+    checkpoint=None,
+    port=8000,
+    host='0.0.0.0',
+    recording_dir=None,
+)
 def main(
     policy_factory: Callable[[str], PreTrainedPolicy],
     checkpoints_dir: str,
@@ -266,12 +266,15 @@ def main(
     codec,
     port: int,
     host: str,
+    recording_dir: str | None,
 ):
     """
     Starts the inference server with the given policy.
     """
     checkpoints_dir = str(pos3.download(checkpoints_dir))
-    server = InferenceServer(policy_factory, codec, checkpoints_dir, checkpoint, host=host, port=port)
+    server = InferenceServer(
+        policy_factory, codec, checkpoints_dir, checkpoint, host=host, port=port, recording_dir=recording_dir
+    )
     try:
         asyncio.run(server.serve())
     except KeyboardInterrupt:

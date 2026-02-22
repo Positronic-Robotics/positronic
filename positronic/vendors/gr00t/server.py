@@ -17,7 +17,7 @@ import zmq
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 
 from positronic.offboard.server_utils import monitor_async_task, wait_for_subprocess_ready
-from positronic.policy import Codec, Policy
+from positronic.policy import Codec, Policy, RecordingCodec
 from positronic.utils.checkpoints import get_latest_checkpoint, list_checkpoints
 from positronic.utils.logging import init_logging
 from positronic.utils.serialization import deserialise, serialise
@@ -268,6 +268,7 @@ class InferenceServer:
         host: str = '0.0.0.0',
         port: int = 8000,
         zmq_port: int = 5555,
+        recording_dir: str | None = None,
     ):
         self.codec = codec
         self.checkpoints_dir = checkpoints_dir.rstrip('/')
@@ -278,6 +279,8 @@ class InferenceServer:
         self.host = host
         self.port = port
         self.zmq_port = zmq_port
+        if recording_dir:
+            self.codec = RecordingCodec(self.codec, pos3.sync(recording_dir))
 
         self.subprocess: Gr00tSubprocess | None = None
         self.current_checkpoint_id: str | None = None
@@ -455,9 +458,22 @@ class InferenceServer:
             self._shutdown()
 
 
-@cfn.config(codec=codecs.ee_absolute, checkpoint=None, port=8000, groot_venv_path='/.venv/', modality_config='ee')
+@cfn.config(
+    codec=codecs.ee_absolute,
+    checkpoint=None,
+    port=8000,
+    groot_venv_path='/.venv/',
+    modality_config='ee',
+    recording_dir=None,
+)
 def server(
-    codec: Codec, checkpoints_dir: str, checkpoint: str | None, port: int, groot_venv_path: str, modality_config: str
+    codec: Codec,
+    checkpoints_dir: str,
+    checkpoint: str | None,
+    port: int,
+    groot_venv_path: str,
+    modality_config: str,
+    recording_dir: str | None,
 ):
     """Starts the GR00T inference server with encoding/decoding."""
 
@@ -469,6 +485,7 @@ def server(
             modality_config=modality_config,
             groot_venv_path=groot_venv_path,
             port=port,
+            recording_dir=recording_dir,
         ).serve()
 
 
