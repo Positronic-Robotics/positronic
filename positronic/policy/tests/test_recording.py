@@ -1,4 +1,5 @@
 import numpy as np
+import pytest
 import rerun as rr
 
 from positronic.policy.base import Policy
@@ -81,6 +82,12 @@ def test_recording_codec_delegates(tmp_path):
     assert codec.decode([{'a': 1}, {'b': 2}]) == [{'a': 1, 'decoded': True}, {'b': 2, 'decoded': True}]
     assert codec.meta == {'action_fps': 30.0, 'custom': 'val'}
     assert codec.dummy_encoded() == {'dummy': True}
+
+
+def test_recording_policy_select_action_before_reset(tmp_path):
+    policy = _make_codec(tmp_path).wrap(_TrackingPolicy())
+    with pytest.raises(RuntimeError, match='reset'):
+        policy.select_action({'x': 1.0})
 
 
 def test_recording_policy_reset_creates_rrd_files(tmp_path):
@@ -177,11 +184,13 @@ def test_session_log_filtering(tmp_path):
         'task': 'pick up the cube',
         'camera': np.zeros((4, 4, 3), dtype=np.uint8),
         'joint_pos': np.array([1.0, 2.0], dtype=np.float32),
+        'joints_list': [0.1, 0.2, 0.3],
         'grip': 0.5,
     })
 
     assert any('image' in p for p in session._image_paths)
     assert any('joint_pos' in p or 'grip' in p for p in session._numeric_paths)
+    assert any('joints_list' in p for p in session._numeric_paths)
 
     all_paths = session._image_paths + session._numeric_paths
     assert not any('__wall_time_ns__' in p for p in all_paths)

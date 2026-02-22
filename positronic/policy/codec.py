@@ -246,6 +246,13 @@ class _RecordingSession(Codec):
                 else:
                     log_numeric_series(f'{prefix}/{key}', value)
                     self._numeric_paths.append(f'{prefix}/{key}')
+            elif isinstance(value, list | tuple):
+                try:
+                    arr = np.asarray(value, dtype=np.float64)
+                    log_numeric_series(f'{prefix}/{key}', arr)
+                    self._numeric_paths.append(f'{prefix}/{key}')
+                except (TypeError, ValueError):
+                    pass
             elif isinstance(value, int | float | np.integer | np.floating):
                 log_numeric_series(f'{prefix}/{key}', value)
                 self._numeric_paths.append(f'{prefix}/{key}')
@@ -346,6 +353,8 @@ class _RecordingPolicy(Policy):
         self._active: Policy | None = None
 
     def select_action(self, obs):
+        if self._active is None:
+            raise RuntimeError('reset() must be called before select_action()')
         return self._active.select_action(obs)
 
     def reset(self):
