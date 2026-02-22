@@ -1,16 +1,16 @@
-"""Tests for GrootCodec."""
+"""Tests for GrootObservationCodec."""
 
 import numpy as np
 import pytest
 
 from positronic import geom
-from positronic.vendors.gr00t.codecs import GrootCodec
+from positronic.vendors.gr00t.codecs import GrootObservationCodec
 
 RotRep = geom.Rotation.Representation
 
 
-class TestGrootCodec:
-    """Tests for GrootCodec training and inference modes."""
+class TestGrootObservationCodec:
+    """Tests for GrootObservationCodec training and inference modes."""
 
     @pytest.fixture
     def sample_inputs(self):
@@ -28,7 +28,7 @@ class TestGrootCodec:
 
     def test_encode_basic(self, sample_inputs):
         """Test basic inference encoding without rotation conversion."""
-        codec = GrootCodec(rotation_rep=None, include_joints=False)
+        codec = GrootObservationCodec(rotation_rep=None, include_joints=False)
         result = codec.encode(sample_inputs)
 
         assert 'video' in result
@@ -50,7 +50,7 @@ class TestGrootCodec:
 
     def test_encode_with_rot6d(self, sample_inputs):
         """Test inference encoding with rot6d conversion."""
-        codec = GrootCodec(rotation_rep=RotRep.ROT6D, include_joints=False)
+        codec = GrootObservationCodec(rotation_rep=RotRep.ROT6D, include_joints=False)
         result = codec.encode(sample_inputs)
 
         assert result['state']['ee_pose'].shape == (1, 1, 9)
@@ -63,7 +63,7 @@ class TestGrootCodec:
 
     def test_encode_with_joints(self, sample_inputs):
         """Test inference encoding with joint positions."""
-        codec = GrootCodec(rotation_rep=None, include_joints=True)
+        codec = GrootObservationCodec(rotation_rep=None, include_joints=True)
         result = codec.encode(sample_inputs)
 
         assert 'joint_position' in result['state']
@@ -72,7 +72,7 @@ class TestGrootCodec:
 
     def test_encode_with_rot6d_and_joints(self, sample_inputs):
         """Test inference encoding with both rot6d and joints."""
-        codec = GrootCodec(rotation_rep=RotRep.ROT6D, include_joints=True)
+        codec = GrootObservationCodec(rotation_rep=RotRep.ROT6D, include_joints=True)
         result = codec.encode(sample_inputs)
 
         assert result['state']['ee_pose'].shape == (1, 1, 9)
@@ -82,7 +82,7 @@ class TestGrootCodec:
     def test_encode_missing_task(self, sample_inputs):
         """Test inference encoding handles missing task gracefully."""
         del sample_inputs['task']
-        codec = GrootCodec()
+        codec = GrootObservationCodec()
         result = codec.encode(sample_inputs)
 
         assert result['language']['annotation.language.language_instruction'] == [['']]
@@ -93,7 +93,7 @@ class TestGrootCodec:
         """Test rot6d conversion with identity quaternion."""
         sample_inputs['robot_state.ee_pose'] = np.array([1.0, 2.0, 3.0, 1.0, 0.0, 0.0, 0.0])
 
-        codec = GrootCodec(rotation_rep=RotRep.ROT6D)
+        codec = GrootObservationCodec(rotation_rep=RotRep.ROT6D)
         result = codec.encode(sample_inputs)
 
         ee_pose = result['state']['ee_pose'][0, 0]
@@ -105,7 +105,7 @@ class TestGrootCodec:
         quat = np.array([0.0, 0.0, np.sin(np.pi / 4), np.cos(np.pi / 4)])
         sample_inputs['robot_state.ee_pose'] = np.array([1.0, 2.0, 3.0, *quat])
 
-        codec = GrootCodec(rotation_rep=RotRep.ROT6D)
+        codec = GrootObservationCodec(rotation_rep=RotRep.ROT6D)
         result = codec.encode(sample_inputs)
 
         ee_pose = result['state']['ee_pose'][0, 0]
@@ -116,14 +116,14 @@ class TestGrootCodec:
 
     def test_output_keys_basic(self):
         """Test that codec outputs correct keys for training."""
-        codec = GrootCodec(rotation_rep=None, include_joints=False)
+        codec = GrootObservationCodec(rotation_rep=None, include_joints=False)
 
-        expected = {'ee_pose', 'grip', 'wrist_image', 'exterior_image_1', 'action', 'task'}
+        expected = {'ee_pose', 'grip', 'wrist_image', 'exterior_image_1', 'task'}
         assert set(codec._derive_transforms.keys()) == expected
 
     def test_output_keys_with_joints(self):
         """Test that codec includes joint_position when enabled."""
-        codec = GrootCodec(rotation_rep=RotRep.ROT6D, include_joints=True)
+        codec = GrootObservationCodec(rotation_rep=RotRep.ROT6D, include_joints=True)
 
         assert 'joint_position' in codec._derive_transforms
 
@@ -131,23 +131,21 @@ class TestGrootCodec:
 
     def test_training_meta(self):
         """Test that training metadata is computed from constructor params."""
-        codec = GrootCodec(rotation_rep=RotRep.ROT6D, include_joints=True)
+        codec = GrootObservationCodec(rotation_rep=RotRep.ROT6D, include_joints=True)
         meta = codec._training_meta
 
         assert 'gr00t_modality' in meta
         assert 'lerobot_features' in meta
         assert 'joint_position' in meta['lerobot_features']
         assert meta['lerobot_features']['ee_pose']['shape'] == (9,)
-        assert meta['lerobot_features']['action']['shape'] == (10,)  # rot6d(6) + xyz(3) + grip(1)
 
     def test_training_meta_no_joints(self):
         """Test that training metadata excludes joints when not enabled."""
-        codec = GrootCodec(rotation_rep=None, include_joints=False)
+        codec = GrootObservationCodec(rotation_rep=None, include_joints=False)
         meta = codec._training_meta
 
         assert 'joint_position' not in meta['lerobot_features']
         assert meta['lerobot_features']['ee_pose']['shape'] == (7,)
-        assert meta['lerobot_features']['action']['shape'] == (8,)  # quat(4) + xyz(3) + grip(1)
 
     # --- Edge cases ---
 
@@ -155,14 +153,14 @@ class TestGrootCodec:
         """Test that non-square images are properly resized with padding."""
         sample_inputs['image.wrist'] = np.random.randint(0, 255, (100, 200, 3), dtype=np.uint8)
 
-        codec = GrootCodec()
+        codec = GrootObservationCodec()
         result = codec.encode(sample_inputs)
 
         assert result['video']['wrist_image'].shape == (1, 1, 224, 224, 3)
 
     def test_custom_image_size(self, sample_inputs):
         """Test custom image size."""
-        codec = GrootCodec(image_size=(128, 128))
+        codec = GrootObservationCodec(image_size=(128, 128))
         result = codec.encode(sample_inputs)
 
         assert result['video']['wrist_image'].shape == (1, 1, 128, 128, 3)
@@ -173,7 +171,7 @@ class TestGrootCodec:
     )
     def test_dummy_encoded_shape(self, rotation_rep, include_joints):
         """Test that dummy_encoded() produces valid encoded observations for all variants."""
-        codec = GrootCodec(rotation_rep=rotation_rep, include_joints=include_joints)
+        codec = GrootObservationCodec(rotation_rep=rotation_rep, include_joints=include_joints)
         result = codec.dummy_encoded()
         assert 'video' in result
         assert 'state' in result
@@ -184,7 +182,7 @@ class TestGrootCodec:
         sample_inputs['cam1'] = sample_inputs.pop('image.wrist')
         sample_inputs['cam2'] = sample_inputs.pop('image.exterior')
 
-        codec = GrootCodec(wrist_camera='cam1', exterior_camera='cam2')
+        codec = GrootObservationCodec(wrist_camera='cam1', exterior_camera='cam2')
         result = codec.encode(sample_inputs)
 
         assert result['video']['wrist_image'].shape == (1, 1, 224, 224, 3)

@@ -127,8 +127,8 @@ def observation(state_features: dict[str, int], exterior_camera: str, wrist_came
     )
 
 
-eepose_obs = observation
-eepose_q_obs = observation.override(state_features={'robot_state.ee_pose': 7, 'grip': 1, 'robot_state.q': 7})
+ee_obs = observation
+ee_joints_obs = observation.override(state_features={'robot_state.ee_pose': 7, 'grip': 1, 'robot_state.q': 7})
 
 droid_obs = codecs.general_obs.override(
     state_name='observation/joint_position',
@@ -141,23 +141,18 @@ droid_obs = codecs.general_obs.override(
     task_field='prompt',
 )
 
-eepose = codecs.compose.override(obs=eepose_obs, action=codecs.absolute_pos_action)
-eepose_q = eepose.override(obs=eepose_q_obs)
+ee = codecs.compose.override(obs=ee_obs, action=codecs.absolute_pos_action)
+ee_joints = ee.override(obs=ee_joints_obs)
 
-_traj = {
-    'action.tgt_ee_pose_key': 'robot_state.ee_pose',
-    'action.tgt_grip_key': 'grip',
-    'binarize_grip_keys': ('grip',),
-}
-eepose_traj = eepose.override(**_traj)
-eepose_q_traj = eepose_q.override(**_traj)
+ee_traj = ee.override(action=codecs.traj_ee_action, binarize_grip=('grip',))
+ee_joints_traj = ee_joints.override(action=codecs.traj_ee_action, binarize_grip=('grip',))
 
 # Pure joint-based trajectory variant (no commanded joint targets in recordings)
 joints_obs = observation.override(state_features={'robot_state.q': 7, 'grip': 1})
 joints_traj = codecs.compose.override(
     obs=joints_obs,
-    action=codecs.absolute_joints_action,
-    **{'action.tgt_joints_key': 'robot_state.q', 'action.tgt_grip_key': 'grip', 'binarize_grip_keys': ('grip',)},
+    action=codecs.absolute_joints_action.override(tgt_joints_key='robot_state.q', tgt_grip_key='grip'),
+    binarize_grip=('grip',),
 )
 
 droid = codecs.compose.override(obs=droid_obs, action=codecs.joint_delta_action)

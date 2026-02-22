@@ -251,14 +251,7 @@ def act(checkpoint_path: str) -> PreTrainedPolicy:
     return policy
 
 
-@cfn.config(
-    policy_factory=act,
-    codec=lerobot_codecs.eepose_absolute,
-    checkpoint=None,
-    port=8000,
-    host='0.0.0.0',
-    recording_dir=None,
-)
+@cfn.config(policy_factory=act, codec=lerobot_codecs.ee, checkpoint=None, port=8000, host='0.0.0.0', recording_dir=None)
 def main(
     policy_factory: Callable[[str], PreTrainedPolicy],
     checkpoints_dir: str,
