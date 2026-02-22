@@ -2,7 +2,7 @@
 LeRobot training script using ACT policy.
 
 Example:
-    # Train with default codec (eepose)
+    # Train with default codec (ee)
     cd docker && docker compose run --rm lerobot-train \\
       --input_path=s3://interim/sim_stack/lerobot/eepose_absolute/ \\
       --exp_name=my_experiment \\

@@ -491,7 +491,7 @@ def server(
 
 # Pre-configured server variants matching GR00T modality configs
 ee = server.copy()  # Uses default codec=codecs.ee_quat, modality='ee'
-ee_joints = server.override(codec=codecs.ee_joints, modality_config='ee_q')
+ee_joints = server.override(codec=codecs.ee_quat_joints, modality_config='ee_q')
 ee_rot6d = server.override(codec=codecs.ee_rot6d, modality_config='ee_rot6d')
 ee_rot6d_joints = server.override(codec=codecs.ee_rot6d_joints, modality_config='ee_rot6d_q')
 ee_rot6d_rel = server.override(codec=codecs.ee_rot6d, modality_config='ee_rot6d_rel')
