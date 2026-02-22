@@ -193,6 +193,27 @@ def _squeeze_batch(arr: np.ndarray) -> np.ndarray:
     return arr
 
 
+def _as_image(value: Any) -> np.ndarray | None:
+    """Return squeezed RGB array if *value* looks like an image, else None."""
+    if not isinstance(value, np.ndarray):
+        return None
+    squeezed = _squeeze_batch(value)
+    if squeezed.ndim == 3 and squeezed.shape[-1] == 3:
+        return squeezed
+    return None
+
+
+def _as_numeric(value: Any) -> Any | None:
+    """Return a loggable numeric form of *value*, or None if not numeric."""
+    if isinstance(value, np.ndarray | int | float | np.integer | np.floating):
+        return value
+    if isinstance(value, list | tuple):
+        arr = np.asarray(value)
+        if np.issubdtype(arr.dtype, np.number):
+            return arr.astype(np.float64)
+    return None
+
+
 def _build_blueprint(image_paths: list[str], numeric_paths: list[str]) -> rrb.Blueprint | None:
     if not image_paths and not numeric_paths:
         return None
@@ -235,27 +256,16 @@ class _RecordingSession(Codec):
         for key, value in data.items():
             if (key.startswith('__') and key.endswith('__')) or isinstance(value, str):
                 continue
+            path = f'{prefix}/{key}'
             if isinstance(value, dict):
-                self._log(f'{prefix}/{key}', value)
-            elif isinstance(value, np.ndarray):
-                squeezed = _squeeze_batch(value)
-                if squeezed.ndim == 3 and squeezed.shape[-1] == 3:
-                    path = f'{prefix}/image/{key}'
-                    rr.log(path, rr.Image(squeezed).compress())
-                    self._image_paths.append(path)
-                else:
-                    log_numeric_series(f'{prefix}/{key}', value)
-                    self._numeric_paths.append(f'{prefix}/{key}')
-            elif isinstance(value, list | tuple):
-                try:
-                    arr = np.asarray(value, dtype=np.float64)
-                    log_numeric_series(f'{prefix}/{key}', arr)
-                    self._numeric_paths.append(f'{prefix}/{key}')
-                except (TypeError, ValueError):
-                    pass
-            elif isinstance(value, int | float | np.integer | np.floating):
-                log_numeric_series(f'{prefix}/{key}', value)
-                self._numeric_paths.append(f'{prefix}/{key}')
+                self._log(path, value)
+            elif (img := _as_image(value)) is not None:
+                img_path = f'{prefix}/image/{key}'
+                rr.log(img_path, rr.Image(img).compress())
+                self._image_paths.append(img_path)
+            elif (num := _as_numeric(value)) is not None:
+                log_numeric_series(path, num)
+                self._numeric_paths.append(path)
 
     def _send_blueprint(self):
         # Deduplicate: _log appends on every step, but entity paths are stable after step 0
@@ -364,10 +374,10 @@ class _RecordingPolicy(Policy):
 
     @property
     def meta(self):
-        if self._active:
+        if self._active is not None:
             return self._active.meta
         return self._codec.meta
 
     def close(self):
-        if self._active:
+        if self._active is not None:
             self._active.close()
