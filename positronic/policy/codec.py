@@ -208,7 +208,7 @@ def _build_blueprint(image_paths: list[str], numeric_paths: list[str]) -> rrb.Bl
 class RecordingCodec(Codec):
     """Transparent ``Codec`` wrapper that logs the encode/decode cycle to per-episode ``.rrd`` files.
 
-    Call ``new_episode()`` before each inference session to start a fresh recording.
+    Each ``reset()`` on the wrapped policy starts a new ``.rrd`` recording.
     """
 
     def __init__(self, inner: Codec, recording_dir: str | Path):
@@ -216,11 +216,13 @@ class RecordingCodec(Codec):
         self._dir = Path(recording_dir)
         self._dir.mkdir(parents=True, exist_ok=True)
         self._action_fps: float = inner.meta.get('action_fps', 15.0)
-        self._rec: Any = None
+        self._rec: Any = None  # set by new_episode(), scopes all rr.log calls
         self._counter = 0
         self._step = 0
+        # Stashed between encode() and decode() — _WrappedPolicy calls them sequentially
         self._time_ns: int = 0
         self._inference_time_ns: int | None = None
+        # Accumulated across encode+decode; used once at step 0 to build the blueprint
         self._image_paths: list[str] = []
         self._numeric_paths: list[str] = []
 
@@ -260,12 +262,14 @@ class RecordingCodec(Codec):
                 self._numeric_paths.append(f'{prefix}/{key}')
 
     def _send_blueprint(self):
+        # Deduplicate: _log appends on every step, but entity paths are stable after step 0
         bp = _build_blueprint(list(dict.fromkeys(self._image_paths)), list(dict.fromkeys(self._numeric_paths)))
         if bp is not None:
             rr.send_blueprint(bp)
 
     def encode(self, data: dict) -> dict:
-        self._time_ns = data.get('__time_ns__', time.time_ns())
+        # __wall_time_ns__ / __inference_time_ns__ injected by Inference.run(); ignored by inner codecs
+        self._time_ns = data.get('__wall_time_ns__', time.time_ns())
         self._inference_time_ns = data.get('__inference_time_ns__')
         encoded = self._inner.encode(data)
         with self._rec:
@@ -277,15 +281,15 @@ class RecordingCodec(Codec):
     def decode(self, data, *, context=None):
         decoded = self._inner.decode(data, context=context)
         actions = data if isinstance(data, list) else [data]
-        first_decoded = decoded[0] if isinstance(decoded, list) else decoded
+        decoded_list = decoded if isinstance(decoded, list) else [decoded]
         dt_ns = int(1e9 / self._action_fps)
         with self._rec:
-            for i, action in enumerate(actions):
+            # Log raw and decoded actions at future timestamps (one per chunk step)
+            for i, (action, dec) in enumerate(zip(actions, decoded_list, strict=False)):
                 inf_t = self._inference_time_ns + i * dt_ns if self._inference_time_ns is not None else None
                 self._set_timelines(self._time_ns + i * dt_ns, inf_t)
                 self._log('model', action)
-            self._set_timelines(self._time_ns, self._inference_time_ns)
-            self._log('decoded', first_decoded)
+                self._log('decoded', dec)
             if self._step == 0:
                 self._send_blueprint()
         self._step += 1

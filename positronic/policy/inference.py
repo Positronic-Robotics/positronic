@@ -123,7 +123,7 @@ class Inference(pimm.ControlSystem):
                     inputs.update(images)
 
                     wall_start = time.monotonic()
-                    inputs['__time_ns__'] = time.time_ns()
+                    inputs['__wall_time_ns__'] = time.time_ns()
                     inputs['__inference_time_ns__'] = clock.now_ns()
                     inputs.update(self.context)
                     commands = self.policy.select_action(frozen_view(inputs))
