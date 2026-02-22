@@ -202,7 +202,7 @@ ee_joints = ee_absolute.override(**{'obs.include_joints': True})
 ee_rot6d = ee_absolute.override(**{'obs.rotation_rep': 'rot6d'})
 ee_rot6d_joints = ee_absolute.override(**{'obs.rotation_rep': 'rot6d', 'obs.include_joints': True})
 
-_traj = {'obs.tgt_ee_pose_key': 'robot_state.ee_pose', 'obs.tgt_grip_key': 'grip'}
+_traj = {'obs.tgt_ee_pose_key': 'robot_state.ee_pose', 'obs.tgt_grip_key': 'grip', 'binarize_grip_keys': ('grip',)}
 ee_absolute_traj = ee_absolute.override(**_traj)
 ee_rot6d_traj = ee_rot6d.override(**_traj)
 ee_joints_traj = ee_joints.override(**_traj)

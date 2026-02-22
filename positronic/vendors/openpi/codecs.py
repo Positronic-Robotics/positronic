@@ -144,7 +144,11 @@ droid_obs = codecs.general_obs.override(
 eepose = codecs.compose.override(obs=eepose_obs, action=codecs.absolute_pos_action)
 eepose_q = eepose.override(obs=eepose_q_obs)
 
-_traj = {'action.tgt_ee_pose_key': 'robot_state.ee_pose', 'action.tgt_grip_key': 'grip'}
+_traj = {
+    'action.tgt_ee_pose_key': 'robot_state.ee_pose',
+    'action.tgt_grip_key': 'grip',
+    'binarize_grip_keys': ('grip',),
+}
 eepose_traj = eepose.override(**_traj)
 eepose_q_traj = eepose_q.override(**_traj)
 

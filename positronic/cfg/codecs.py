@@ -47,12 +47,14 @@ eepose_q_obs = eepose_grip_joints_obs.override(
 )
 
 
-@cfn.config(action_fps=15.0, action_horizon_sec=1.0, action=None)
-def compose(obs, action, action_fps: float, action_horizon_sec: float | None):
+@cfn.config(action_fps=15.0, action_horizon_sec=1.0, action=None, binarize_grip_keys=())
+def compose(obs, action, action_fps: float, action_horizon_sec: float | None, binarize_grip_keys: tuple[str, ...]):
     """Compose observation and action codecs with timing via ``|``."""
-    from positronic.policy.codec import ActionTiming
+    from positronic.policy.codec import ActionTiming, BinarizeGripInference, BinarizeGripTraining
 
     result = obs if action is None else obs | action
+    if binarize_grip_keys:
+        result = BinarizeGripTraining(binarize_grip_keys) | BinarizeGripInference() | result
     return ActionTiming(fps=action_fps, horizon_sec=action_horizon_sec) | result
 
 
