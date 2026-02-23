@@ -496,3 +496,41 @@ def test_operator_precedence():
     assert result['encoded_by_a'] is True
     assert result['encoded_by_b'] is True
     assert result['encoded_by_c'] is True
+
+
+def test_groot_ee_codec_decodes_modality_keyed_actions():
+    """GR00T ee_quat codec decodes modality-keyed model output into robot commands.
+
+    GR00T models return ``{'ee_pose': ..., 'grip': ...}`` per action step,
+    not a flat ``action`` vector. The codec chain must convert this format.
+    """
+    from positronic.vendors.gr00t.codecs import ee_quat
+
+    codec = ee_quat()
+
+    # Simulate GR00T model output: list of modality-keyed dicts (one per action step)
+    ee_pose = np.concatenate([Rotation.identity.as_quat, [0.1, 0.2, 0.3]]).astype(np.float32)
+    model_output = [{'ee_pose': ee_pose, 'grip': np.float32(0.5)} for _ in range(3)]
+
+    decoded = codec.decode(model_output)
+    assert len(decoded) == 3
+    for d in decoded:
+        assert 'robot_command' in d
+        assert 'target_grip' in d
+        assert 'timestamp' in d
+
+
+def test_groot_joints_codec_decodes_modality_keyed_actions():
+    """GR00T joints_traj codec decodes joint_position-keyed model output."""
+    from positronic.vendors.gr00t.codecs import joints_traj
+
+    codec = joints_traj()
+
+    joint_pos = np.array([0.1, -0.2, 0.3, 0.4, -0.5, 0.6, 0.7], dtype=np.float32)
+    model_output = [{'joint_position': joint_pos, 'grip': np.float32(0.8)} for _ in range(3)]
+
+    decoded = codec.decode(model_output)
+    assert len(decoded) == 3
+    for d in decoded:
+        assert 'robot_command' in d
+        assert 'target_grip' in d

@@ -164,16 +164,24 @@ class GrootObservationCodec(Codec):
 
 
 class _GrootActionModality(Codec):
-    """Adds ``gr00t_modality.action`` metadata to the training pipeline."""
+    """Bridges GR00T modality-keyed actions and flat action vectors.
 
-    def __init__(self, modality: dict[str, Any]):
+    Training: adds ``gr00t_modality.action`` metadata.
+    Inference decode: converts GR00T's ``{action_key: ..., 'grip': ...}`` output
+    into ``{'action': flat_vector}`` so the downstream action decoder can read it.
+    """
+
+    def __init__(self, modality: dict[str, Any], action_key: str):
         self._training_meta = {'gr00t_modality': {'action': modality}}
+        self._action_key = action_key
 
     def encode(self, data):
         return data
 
     def _decode_single(self, data: dict, context: dict | None) -> dict:
-        return data
+        action_part = np.asarray(data[self._action_key], dtype=np.float32).reshape(-1)
+        grip_part = np.asarray(data['grip'], dtype=np.float32).reshape(-1)
+        return {'action': np.concatenate([action_part, grip_part])}
 
     @property
     def training_encoder(self):
@@ -191,13 +199,15 @@ def groot_obs(rotation_rep: str | None, include_joints: bool, include_ee_pose: b
 
 @cfn.config(action_key='ee_pose', action_dim=7)
 def groot_action(base, action_key: str, action_dim: int):
-    """Wrap an action codec with GR00T modality metadata."""
-    return (
-        _GrootActionModality({
-            action_key: {'start': 0, 'end': action_dim},
-            'grip': {'start': action_dim, 'end': action_dim + 1},
-        })
-        | base
+    """Wrap an action codec with GR00T modality metadata and decode adapter.
+
+    Composition is ``base | _GrootActionModality`` so that on decode (right-to-left)
+    the modality adapter runs first, converting GR00T's modality-keyed output
+    into a flat ``action`` vector that ``base`` can decode.
+    """
+    return base | _GrootActionModality(
+        {action_key: {'start': 0, 'end': action_dim}, 'grip': {'start': action_dim, 'end': action_dim + 1}},
+        action_key=action_key,
     )
 
 
