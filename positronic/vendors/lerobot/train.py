@@ -12,7 +12,7 @@ Example:
     cd docker && docker compose run --rm lerobot-train \\
       --input_path=s3://interim/sim_stack/lerobot/joints_absolute/ \\
       --exp_name=my_experiment \\
-      --codec=@positronic.vendors.lerobot.codecs.joints_traj \\
+      --codec=@positronic.vendors.lerobot.codecs.joints \\
       --output_dir=s3://checkpoints/lerobot/
 """
 
