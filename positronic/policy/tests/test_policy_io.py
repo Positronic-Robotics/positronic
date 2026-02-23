@@ -2,6 +2,7 @@ import numpy as np
 import pytest
 
 import positronic.drivers.roboarm.command as cmd_module
+from positronic.cfg.codecs import compose
 from positronic.dataset.episode import EpisodeContainer
 from positronic.dataset.tests.utils import DummySignal
 from positronic.geom import Rotation
@@ -283,8 +284,8 @@ def test_timestamps_survive_action_decoder_composition():
         assert action['timestamp'] == pytest.approx(i / 15.0)
 
 
-def test_composed_training_encoder_chains_sequentially():
-    """Composed codec training_encoder chains left-to-right, each seeing previous output."""
+def test_composed_training_encoder_uses_parallel():
+    """``timing | (obs & action)`` training encoder produces only derived keys, no originals."""
     ts = [1000, 2000]
     joints = [np.array([0.1, -0.2, 0.3, 0.4, -0.5, 0.6, 0.7], dtype=np.float32) for _ in ts]
     grip = [0.5, 0.6]
@@ -306,7 +307,7 @@ def test_composed_training_encoder_chains_sequentially():
     )
     action = AbsoluteJointsAction('robot_commands.joints', 'target_grip', num_joints=7)
     timing = ActionTiming(fps=15.0)
-    composed = timing | obs | action
+    composed = timing | (obs & action)
 
     encoder = composed.training_encoder
     result = encoder(ep)
@@ -322,9 +323,9 @@ def test_composed_training_encoder_chains_sequentially():
     np.testing.assert_allclose(vec[:7], joints[0], atol=1e-6)
     np.testing.assert_allclose(vec[7], grip[0], atol=1e-6)
 
-    # Base episode keys should pass through
-    assert 'target_grip' in result
-    assert 'robot_commands.joints' in result
+    # Original episode keys should NOT appear (no Identity pass-through)
+    assert 'target_grip' not in result
+    assert 'robot_commands.joints' not in result
 
     # Meta should merge from all codecs
     assert encoder.meta.get('action_fps') == 15.0
@@ -380,3 +381,118 @@ def test_binarize_grip_training_composed_with_action_codec():
     result = composed.training_encoder(ep)
     vec = list(result['action'])[0][0]
     assert vec[-1] == pytest.approx(1.0)
+
+
+def test_parallel_codec_encode_merges_outputs():
+    """``obs & action`` encode produces only obs keys (action returns {})."""
+    obs = ObservationCodec(state={'observation.state': {'a': 1}}, images={}, task_field=None)
+    action = AbsolutePositionAction('x', 'y')
+    composed = obs & action
+    result = composed.encode({'a': 1.0})
+    assert 'observation.state' in result
+    # Action codec returns {} from encode — no passthrough leakage
+    assert set(result.keys()) == {'observation.state'}
+
+
+def test_parallel_codec_decode_merges_outputs():
+    """``obs & action`` decode produces only action-decoded keys (obs returns {})."""
+    obs = ObservationCodec(state={'observation.state': {'a': 1}}, images={})
+    action = AbsolutePositionAction('x', 'y')
+    composed = obs & action
+
+    raw_action = np.zeros(8, dtype=np.float32)
+    raw_action[:4] = Rotation.identity.as_quat  # valid quaternion
+    raw_action[4:7] = [0.1, 0.2, 0.3]
+    raw_action[7] = 0.5
+    result = composed.decode({'action': raw_action})
+    # Obs returns {} from decode, action returns decoded keys
+    assert 'robot_command' in result
+    assert 'target_grip' in result
+    assert 'action' not in result
+
+
+def test_sequential_into_parallel_training():
+    """``binarize | (obs & action)`` — binarize modifies grip seen by both."""
+    ts = [1000]
+    joints = [np.array([0.1, -0.2, 0.3, 0.4, -0.5, 0.6, 0.7], dtype=np.float32)]
+
+    ep = EpisodeContainer({
+        'robot_state.q': DummySignal(ts, joints),
+        'grip': DummySignal(ts, [0.7]),
+        'robot_commands.joints': DummySignal(ts, joints),
+        'target_grip': DummySignal(ts, [0.3]),
+        'image.wrist': DummySignal(ts, [np.zeros((4, 4, 3), dtype=np.uint8)]),
+        'image.exterior': DummySignal(ts, [np.zeros((4, 4, 3), dtype=np.uint8)]),
+    })
+
+    obs = ObservationCodec(
+        state={'observation.state': {'robot_state.q': 7, 'grip': 1}},
+        images={'observation.images.left': ('image.wrist', (4, 4))},
+        task_field=None,
+    )
+    action = AbsoluteJointsAction('robot_commands.joints', 'target_grip', num_joints=7)
+    binarize = BinarizeGripTraining(('grip', 'target_grip'))
+    composed = binarize | (obs & action)
+
+    result = composed.training_encoder(ep)
+
+    # Binarize runs first — grip (0.7 > 0.5 → 1.0), target_grip (0.3 ≤ 0.5 → 0.0)
+    # Action encoder reads binarized target_grip
+    vec = list(result['action'])[0][0]
+    assert vec[-1] == pytest.approx(0.0)
+
+    # Obs encoder reads binarized grip in observation.state
+    state = list(result['observation.state'])[0][0]
+    assert state[-1] == pytest.approx(1.0)
+
+
+def test_compose_training_encoder_produces_only_derived_keys():
+    """Composed codec training encoder must not leak original episode keys into the output."""
+    ts = [1000, 2000]
+    joints = [np.array([0.1, -0.2, 0.3, 0.4, -0.5, 0.6, 0.7], dtype=np.float32) for _ in ts]
+    grip = [0.5, 0.6]
+    img = [np.zeros((4, 4, 3), dtype=np.uint8) for _ in ts]
+
+    ep = EpisodeContainer({
+        'robot_state.q': DummySignal(ts, joints),
+        'grip': DummySignal(ts, grip),
+        'robot_commands.joints': DummySignal(ts, joints),
+        'target_grip': DummySignal(ts, grip),
+        'image.wrist': DummySignal(ts, img),
+        'image.exterior': DummySignal(ts, img),
+        'task': 'test',
+    })
+
+    codec = compose(
+        obs=ObservationCodec(
+            state={'observation.state': {'robot_state.q': 7, 'grip': 1}},
+            images={'observation.images.left': ('image.wrist', (4, 4))},
+        ),
+        action=AbsoluteJointsAction('robot_commands.joints', 'target_grip', num_joints=7),
+    )
+
+    result = codec.training_encoder(ep)
+
+    # Derived keys present
+    assert 'observation.state' in result
+    assert 'action' in result
+
+    # Original episode keys must NOT leak through — this fails if compose uses | instead of &
+    assert 'target_grip' not in result
+    assert 'robot_commands.joints' not in result
+    assert 'robot_state.q' not in result
+    assert 'grip' not in result
+
+
+def test_operator_precedence():
+    """``a | b & c`` binds as ``a | (b & c)`` — & has higher precedence than |."""
+    a = _PassthroughCodec('a')
+    b = _PassthroughCodec('b')
+    c = _PassthroughCodec('c')
+
+    composed = a | b & c
+    result = composed.encode({})
+    # a encodes first (sequential |), then b & c both see a's output (parallel &)
+    assert result['encoded_by_a'] is True
+    assert result['encoded_by_b'] is True
+    assert result['encoded_by_c'] is True

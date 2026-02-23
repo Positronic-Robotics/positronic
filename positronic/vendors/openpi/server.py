@@ -383,7 +383,7 @@ class InferenceServer:
 
 
 @cfn.config(
-    codec=codecs.eepose,
+    codec=codecs.ee,
     checkpoints_dir='',
     config_name='pi05_positronic_lowmem',
     checkpoint=None,
@@ -407,8 +407,8 @@ def server(
     Args:
         codec: Codec config for observation encoding and action decoding.
             Available codecs:
-            - @positronic.vendors.openpi.codecs.eepose (default, EE pose + grip)
-            - @positronic.vendors.openpi.codecs.eepose_q (EE pose + grip + joints)
+            - @positronic.vendors.openpi.codecs.ee (default, EE pose + grip)
+            - @positronic.vendors.openpi.codecs.ee_joints (EE pose + grip + joints)
             - @positronic.vendors.openpi.codecs.droid (for pretrained DROID models)
         checkpoints_dir: Directory containing model checkpoints.
         config_name: OpenPI config name (default: pi05_positronic_lowmem).

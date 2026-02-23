@@ -7,7 +7,7 @@ from PIL import Image as PilImage
 from positronic.dataset import Signal, transforms
 from positronic.dataset.episode import Episode
 from positronic.dataset.transforms import image
-from positronic.dataset.transforms.episode import Derive, Group, Identity
+from positronic.dataset.transforms.episode import Derive
 from positronic.policy.codec import Codec, lerobot_image, lerobot_state
 
 
@@ -50,6 +50,9 @@ class ObservationCodec(Codec):
     def _derive_image(self, out_name: str, episode: Episode) -> Signal[Any]:
         input_key, (width, height) = self._image_configs[out_name]
         return image.resize_with_pad(width, height, signal=episode[input_key])
+
+    def _decode_single(self, data: dict, context: dict | None) -> dict:
+        return {}
 
     def encode(self, inputs: dict[str, Any]) -> dict[str, Any]:
         obs: dict[str, Any] = {}
@@ -96,4 +99,4 @@ class ObservationCodec(Codec):
 
     @property
     def training_encoder(self):
-        return Group(Derive(meta=self._training_meta, **self._derive_transforms), Identity())
+        return Derive(meta=self._training_meta, **self._derive_transforms)

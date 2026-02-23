@@ -26,7 +26,7 @@ from positronic.cfg import codecs
 from positronic.dataset import Signal, transforms
 from positronic.dataset.episode import Episode
 from positronic.dataset.transforms import image
-from positronic.dataset.transforms.episode import Derive, Group, Identity
+from positronic.dataset.transforms.episode import Derive
 from positronic.policy.codec import Codec, lerobot_image, lerobot_state
 
 
@@ -68,6 +68,9 @@ class OpenpiObservationCodec(Codec):
     def _derive_image(self, input_key: str, episode: Episode) -> Signal[Any]:
         w, h = self._image_size
         return image.resize_with_pad(w, h, signal=episode[input_key])
+
+    def _decode_single(self, data: dict, context: dict | None) -> dict:
+        return {}
 
     def encode(self, inputs: dict[str, Any]) -> dict[str, Any]:
         state_parts: list[np.ndarray] = []
@@ -111,7 +114,7 @@ class OpenpiObservationCodec(Codec):
 
     @property
     def training_encoder(self):
-        return Group(Derive(meta=self._training_meta, **self._derive_transforms), Identity())
+        return Derive(meta=self._training_meta, **self._derive_transforms)
 
 
 @cfn.config(

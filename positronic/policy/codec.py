@@ -1,8 +1,12 @@
 """Composable codec for encoding observations and decoding actions.
 
 A Codec pairs an observation encoder (for training and inference) with an action decoder.
-Codecs compose via ``|``: ``observation_codec | action_codec | timing`` produces a single
-codec that encodes left-to-right and decodes right-to-left.
+Two composition operators:
+
+- ``|`` (sequential): left's output feeds into right. Use for codecs that modify data
+  before others see it (e.g. BinarizeGrip before observation/action encoders).
+- ``&`` (parallel): both see the same input, outputs merged. Use for independent codecs
+  (e.g. observation encoder & action decoder).
 """
 
 import itertools
@@ -56,7 +60,7 @@ class Codec:
     """
 
     def encode(self, data: dict) -> dict:
-        return data
+        return {}
 
     def decode(self, data, *, context=None):
         if isinstance(data, list):
@@ -64,11 +68,11 @@ class Codec:
         return self._decode_single(data, context)
 
     def _decode_single(self, data: dict, context: dict | None) -> dict:
-        return data
+        return {}
 
     @property
     def training_encoder(self) -> EpisodeTransform:
-        return Identity()
+        return Derive()
 
     @property
     def meta(self) -> dict:
@@ -90,6 +94,10 @@ class Codec:
     @final
     def __or__(self, other: 'Codec') -> 'Codec':
         return _ComposedCodec(self, other)
+
+    @final
+    def __and__(self, other: 'Codec') -> 'Codec':
+        return _ParallelCodec(self, other)
 
 
 class _ComposedCodec(Codec):
@@ -120,6 +128,38 @@ class _ComposedCodec(Codec):
         return self._right.dummy_encoded(self._left.dummy_encoded(data))
 
 
+class _ParallelCodec(Codec):
+    """Two codecs composed via ``&``. Both see the same input, outputs merged."""
+
+    def __init__(self, left: Codec, right: Codec):
+        self._left = left
+        self._right = right
+
+    def encode(self, data):
+        return {**self._left.encode(data), **self._right.encode(data)}
+
+    def decode(self, data, *, context=None):
+        left_out = self._left.decode(data, context=context)
+        right_out = self._right.decode(data, context=context)
+        if isinstance(data, list):
+            return [{**lf, **rt} for lf, rt in zip(left_out, right_out, strict=True)]
+        return {**left_out, **right_out}
+
+    @property
+    def training_encoder(self):
+        return self._left.training_encoder & self._right.training_encoder
+
+    @property
+    def meta(self):
+        result: dict[str, Any] = {}
+        merge_dicts(result, self._left.meta)
+        merge_dicts(result, self._right.meta)
+        return result
+
+    def dummy_encoded(self, data=None):
+        return {**self._left.dummy_encoded(data), **self._right.dummy_encoded(data)}
+
+
 class ActionTiming(Codec):
     """Attaches timings to decoded actions and truncates action sequences to a specified horizon.
 
@@ -136,6 +176,9 @@ class ActionTiming(Codec):
     def __init__(self, *, fps: float, horizon_sec: float | None = None):
         self._fps = fps
         self._horizon_sec = horizon_sec
+
+    def encode(self, data):
+        return data
 
     def decode(self, data, *, context=None):
         if isinstance(data, list):
@@ -167,12 +210,18 @@ class BinarizeGripTraining(Codec):
     else 0.0) so the model learns to predict binary grip. Compose to the left of
     obs/action codecs::
 
-        timing | BinarizeGripTraining(('grip', 'target_grip')) | obs | action
+        timing | BinarizeGripTraining(('grip', 'target_grip')) | BinarizeGripInference() | obs & action
     """
 
     def __init__(self, keys: tuple[str, ...], threshold: float = 0.5):
         self._keys = keys
         self._threshold = threshold
+
+    def encode(self, data):
+        return data
+
+    def _decode_single(self, data: dict, context: dict | None) -> dict:
+        return data
 
     @property
     def training_encoder(self) -> EpisodeTransform:
@@ -195,11 +244,18 @@ class BinarizeGripInference(Codec):
 
     Compose to the left of action codecs so it runs after action decoding::
 
-        timing | BinarizeGripInference() | obs | action
+        timing | BinarizeGripInference() | obs & action
     """
 
     def __init__(self, threshold: float = 0.5):
         self._threshold = threshold
+
+    def encode(self, data):
+        return data
+
+    @property
+    def training_encoder(self) -> EpisodeTransform:
+        return Identity()
 
     def _decode_single(self, data: dict, context: dict | None) -> dict:
         if 'target_grip' in data:

@@ -14,7 +14,7 @@ from positronic.dataset import transforms as tf
 from positronic.dataset.episode import Episode
 from positronic.dataset.signal import Signal
 from positronic.dataset.transforms import image
-from positronic.dataset.transforms.episode import Derive, Group, Identity
+from positronic.dataset.transforms.episode import Derive, Identity
 from positronic.policy.codec import Codec, lerobot_image, lerobot_state
 
 RotRep = geom.Rotation.Representation
@@ -131,6 +131,9 @@ class GrootObservationCodec(Codec):
             'language': {'annotation.language.language_instruction': [['warmup']]},
         }
 
+    def _decode_single(self, data: dict, context: dict | None) -> dict:
+        return {}
+
     def encode(self, inputs: dict[str, Any]) -> dict[str, Any]:
         grip = np.asarray(inputs['grip'], dtype=np.float32).reshape(-1)
         state_dict: dict[str, Any] = {'grip': grip[np.newaxis, np.newaxis, ...]}
@@ -157,7 +160,7 @@ class GrootObservationCodec(Codec):
 
     @property
     def training_encoder(self):
-        return Group(Derive(meta=self._training_meta, **self._derive_transforms), Identity())
+        return Derive(meta=self._training_meta, **self._derive_transforms)
 
 
 class _GrootActionModality(Codec):
@@ -165,6 +168,12 @@ class _GrootActionModality(Codec):
 
     def __init__(self, modality: dict[str, Any]):
         self._training_meta = {'gr00t_modality': {'action': modality}}
+
+    def encode(self, data):
+        return data
+
+    def _decode_single(self, data: dict, context: dict | None) -> dict:
+        return data
 
     @property
     def training_encoder(self):
