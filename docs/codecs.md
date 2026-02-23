@@ -2,7 +2,12 @@
 
 A **codec** transforms raw robot data to model-specific formats. Each codec implements `encode()` (raw observations → model input) and `decode()` (model output → robot commands), used at both training and inference time.
 
-Codecs compose via the `|` operator: `observation_codec | action_codec | timing` produces a single codec that encodes left-to-right and decodes right-to-left. This lets you mix and match observation encoders, action decoders, and timing independently.
+Codecs compose via two operators:
+
+- `|` (sequential): left's output feeds into right. Use for codecs that modify data before others see it (e.g. grip binarization before observation/action encoders).
+- `&` (parallel): both see the same input, outputs merged. Use for independent codecs (e.g. observation encoder & action decoder).
+
+The standard layout is `ActionTiming | BinarizeGrip | obs & action`.
 
 Codecs enable **store once, use everywhere** – record demonstrations once, then project the same raw data to different model formats (LeRobot, GR00T, OpenPI) without re-recording.
 
@@ -16,6 +21,8 @@ Positronic uses codecs to project raw data to any model format. Record once, try
 
 By default, codecs use **commanded** targets (`robot_commands.pose`, `target_grip`) as action labels — "what the controller was told to do". The `_traj` variants use the **actual** robot trajectory (`robot_state.ee_pose`, `grip`) — "what the robot actually did". This lets you compare training on commanded vs observed actions using identical raw data.
 
+Trajectory codecs automatically binarize grip signals (threshold at 0.5) since observed grip values are continuous but the model should learn discrete open/close.
+
 ## Available Codecs by Vendor
 
 ### LeRobot Codecs
@@ -24,14 +31,14 @@ See [`positronic/vendors/lerobot/codecs.py`](../positronic/vendors/lerobot/codec
 
 | Codec | Observation | Action |
 |-------|-------------|--------|
-| `eepose_absolute` | EE pose (7D quat) + grip + images (480x480) | Absolute EE position (7D quat) + grip |
-| `joints_absolute` | Joint positions (7D) + grip + images | Absolute EE position (7D quat) + grip |
-| `eepose_absolute_traj` | EE pose (7D quat) + grip + images (480x480) | Absolute EE trajectory (7D quat) + grip |
-| `joints_absolute_traj` | Joint positions (7D) + grip + images | Absolute EE trajectory (7D quat) + grip |
+| `ee` | EE pose (7D quat) + grip + images (480x480) | Absolute EE position (7D quat) + grip |
+| `joints` | Joint positions (7D) + grip + images | Absolute EE position (7D quat) + grip |
+| `ee_traj` | EE pose (7D quat) + grip + images (480x480) | Absolute EE trajectory (7D quat) + grip (binarized) |
+| `joints_traj` | Joint positions (7D) + grip + images | Absolute joint trajectory (7D) + grip (binarized) |
 
 ```bash
 cd docker && docker compose run --rm positronic-to-lerobot convert \
-  --dataset.codec=@positronic.vendors.lerobot.codecs.eepose_absolute \
+  --dataset.codec=@positronic.vendors.lerobot.codecs.ee \
   --output_dir=~/datasets/lerobot/my_task
 ```
 
@@ -41,16 +48,17 @@ See [`positronic/vendors/gr00t/codecs.py`](../positronic/vendors/gr00t/codecs.py
 
 | Codec | Observation | Action | Modality Configs |
 |-------|-------------|--------|------------------|
-| `ee_absolute` | EE pose (quat) + grip + images (224x224) | Absolute EE position (quat) + grip | `ee`, `ee_rel` |
+| `ee_quat` | EE pose (quat) + grip + images (224x224) | Absolute EE position (quat) + grip | `ee`, `ee_rel` |
 | `ee_rot6d` | EE pose (rot6d) + grip + images | Absolute EE position (rot6d) + grip | `ee_rot6d`, `ee_rot6d_rel` |
-| `ee_joints` | EE pose + joints + grip + images | Absolute EE position + grip | `ee_q`, `ee_q_rel` |
+| `ee_quat_joints` | EE pose + joints + grip + images | Absolute EE position + grip | `ee_q`, `ee_q_rel` |
 | `ee_rot6d_joints` | EE pose (rot6d) + joints + grip + images | Absolute EE position (rot6d) + grip | `ee_rot6d_q`, `ee_rot6d_q_rel` |
-| `ee_absolute_traj` | EE pose (quat) + grip + images | Absolute EE trajectory (quat) + grip | `ee`, `ee_rel` |
-| `ee_rot6d_traj` | EE pose (rot6d) + grip + images | Absolute EE trajectory (rot6d) + grip | `ee_rot6d`, `ee_rot6d_rel` |
-| `ee_joints_traj` | EE pose + joints + grip + images | Absolute EE trajectory + grip | `ee_q`, `ee_q_rel` |
-| `ee_rot6d_joints_traj` | EE pose (rot6d) + joints + grip + images | Absolute EE trajectory (rot6d) + grip | `ee_rot6d_q`, `ee_rot6d_q_rel` |
+| `ee_quat_traj` | EE pose (quat) + grip + images | Absolute EE trajectory (quat) + grip (binarized) | `ee`, `ee_rel` |
+| `ee_rot6d_traj` | EE pose (rot6d) + grip + images | Absolute EE trajectory (rot6d) + grip (binarized) | `ee_rot6d`, `ee_rot6d_rel` |
+| `ee_quat_joints_traj` | EE pose + joints + grip + images | Absolute EE trajectory + grip (binarized) | `ee_q`, `ee_q_rel` |
+| `ee_rot6d_joints_traj` | EE pose (rot6d) + joints + grip + images | Absolute EE trajectory (rot6d) + grip (binarized) | `ee_rot6d_q`, `ee_rot6d_q_rel` |
+| `joints_traj` | Joints + grip + images (no EE pose) | Absolute joint trajectory + grip (binarized) | — |
 
-Some codecs support both absolute and relative modality configs (e.g., `ee_absolute` works with `ee` or `ee_rel`). Codec must match modality config during training.
+Codec must match modality config during training.
 
 ```bash
 # Convert with codec
@@ -70,17 +78,18 @@ See [`positronic/vendors/openpi/codecs.py`](../positronic/vendors/openpi/codecs.
 
 | Codec | Observation | Action |
 |-------|-------------|--------|
-| `eepose` | EE pose (7D quat) + grip + images (224x224) | Absolute EE position (7D) |
-| `eepose_q` | EE pose + joints (7D) + grip + images | Absolute EE position (7D) |
-| `eepose_traj` | EE pose (7D quat) + grip + images (224x224) | Absolute EE trajectory (7D) |
-| `eepose_q_traj` | EE pose + joints (7D) + grip + images | Absolute EE trajectory (7D) |
+| `ee` | EE pose (7D quat) + grip + images (224x224) | Absolute EE position (7D) |
+| `ee_joints` | EE pose + joints (7D) + grip + images | Absolute EE position (7D) |
+| `ee_traj` | EE pose (7D quat) + grip + images (224x224) | Absolute EE trajectory (7D) + grip (binarized) |
+| `ee_joints_traj` | EE pose + joints (7D) + grip + images | Absolute EE trajectory (7D) + grip (binarized) |
+| `joints_traj` | Joints (7D) + grip + images | Absolute joint trajectory (7D) + grip (binarized) |
 | `droid` | Joint positions (7D) + grip + images | Joint delta (velocity) |
 
 `droid` codec is inference-only for use with pretrained DROID models (not for training).
 
 ```bash
 cd docker && docker compose run --rm positronic-to-lerobot convert \
-  --dataset.codec=@positronic.vendors.openpi.codecs.eepose \
+  --dataset.codec=@positronic.vendors.openpi.codecs.ee \
   --output_dir=~/datasets/openpi/my_task
 ```
 
@@ -99,16 +108,16 @@ Positronic aims to represent the same action and state space across different mo
 ```bash
 # Training
 cd docker && docker compose run --rm positronic-to-lerobot convert \
-  --dataset.codec=@positronic.vendors.lerobot.codecs.eepose_absolute
+  --dataset.codec=@positronic.vendors.lerobot.codecs.ee
 
 # Inference must match
 cd docker && docker compose run --rm lerobot-server \
-  --codec=@positronic.vendors.lerobot.codecs.eepose_absolute
+  --codec=@positronic.vendors.lerobot.codecs.ee
 ```
 
 ## Writing Custom Codecs
 
-Subclass `positronic.policy.codec.Codec` and implement `encode()` and optionally `_decode_single()`. Codecs that only transform observations leave `_decode_single()` as the default pass-through; codecs that only decode actions leave `encode()` as pass-through. Compose them with `|` to build a full pipeline. See existing implementations in vendor codec files for reference patterns.
+Subclass `positronic.policy.codec.Codec` and implement `encode()` and/or `_decode_single()`. The base class returns `{}` from both — observation codecs override `encode()`, action codecs override `_decode_single()`. Middleware codecs that pass data through (like `BinarizeGrip`) must explicitly `return data`. Compose observation and action codecs with `&`, chain middleware with `|`. See existing implementations in vendor codec files for reference patterns.
 
 ## See Also
 

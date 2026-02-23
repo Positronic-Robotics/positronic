@@ -21,7 +21,7 @@ Convert your Positronic dataset into the model's expected format using a codec.
 cd docker && docker compose run --rm positronic-to-lerobot convert \
   --dataset.dataset=.local \
   --dataset.dataset.path=~/datasets/stack_cubes_raw \
-  --dataset.codec=@positronic.vendors.lerobot.codecs.eepose_absolute \
+  --dataset.codec=@positronic.vendors.lerobot.codecs.ee \
   --output_dir=~/datasets/lerobot/stack_cubes \
   --fps=30
 ```
@@ -32,7 +32,7 @@ cd docker && docker compose run --rm positronic-to-lerobot convert \
 |-----------|-------------|---------|
 | `--dataset.dataset` | Dataset configuration | `.local` for local directories, `@positronic.cfg.ds.phail.phail` for public datasets |
 | `--dataset.dataset.path` | Path to raw Positronic dataset (only for `.local`, not needed for phail datasets) | `~/datasets/stack_cubes_raw` |
-| `--dataset.codec` | Codec for observation/action encoding | `@positronic.vendors.lerobot.codecs.eepose_absolute` |
+| `--dataset.codec` | Codec for observation/action encoding | `@positronic.vendors.lerobot.codecs.ee` |
 | `--output_dir` | Destination for converted dataset | `~/datasets/lerobot/stack_cubes` or `s3://bucket/path` |
 | `--fps` | Target frames per second | `15`, `30` |
 | `--task` | (Optional) Task description to embed | `"pick up the green cube"` |
@@ -51,7 +51,7 @@ cd docker && docker compose run --rm positronic-to-lerobot convert \
 ```bash
 cd docker && docker compose run --rm positronic-to-lerobot convert \
   --dataset.dataset=@positronic.cfg.ds.phail.sim_stack_cubes \
-  --dataset.codec=@positronic.vendors.lerobot.codecs.eepose_absolute \
+  --dataset.codec=@positronic.vendors.lerobot.codecs.ee \
   --output_dir=~/datasets/lerobot/sim_stack_cubes \
   --fps=15
 ```
@@ -64,9 +64,9 @@ See the [Codecs Guide](codecs.md) for detailed codec documentation.
 
 | Model | Common Codecs |
 |-------|---------------|
-| **LeRobot ACT** | `eepose_absolute`, `joints_absolute` |
-| **GR00T** | `ee_rot6d_joints`, `ee_absolute`, `ee_joints` |
-| **OpenPI** | `eepose`, `eepose_q`, `droid` |
+| **LeRobot ACT** | `ee`, `joints`, `ee_traj`, `joints_traj` |
+| **GR00T** | `ee_rot6d_joints`, `ee_quat`, `ee_quat_joints` |
+| **OpenPI** | `ee`, `ee_joints`, `droid` |
 
 ### S3 Support
 
@@ -76,7 +76,7 @@ Both input and output paths support S3 URLs. Data is cached locally and synced a
 cd docker && docker compose run --rm positronic-to-lerobot convert \
   --dataset.dataset.path=s3://bucket/raw_data/stack_cubes \
   --output_dir=s3://bucket/converted/lerobot/stack_cubes \
-  --dataset.codec=@positronic.vendors.lerobot.codecs.eepose_absolute \
+  --dataset.codec=@positronic.vendors.lerobot.codecs.ee \
   --fps=30
 ```
 
@@ -89,7 +89,7 @@ cd docker && docker compose run --rm positronic-to-lerobot append \
   --output_dir=~/datasets/lerobot/stack_cubes \
   --dataset.dataset=.local \
   --dataset.dataset.path=~/datasets/stack_cubes_new \
-  --dataset.codec=@positronic.vendors.lerobot.codecs.eepose_absolute \
+  --dataset.codec=@positronic.vendors.lerobot.codecs.ee \
   --fps=30
 ```
 
@@ -172,7 +172,7 @@ Start an inference server that exposes a unified WebSocket API. All vendors impl
 ```bash
 cd docker && docker compose run --rm --service-ports lerobot-server \
   --checkpoints_dir=~/checkpoints/lerobot/experiment_v1/ \
-  --codec=@positronic.vendors.lerobot.codecs.eepose_absolute \
+  --codec=@positronic.vendors.lerobot.codecs.ee \
   --port=8000
 ```
 
@@ -189,7 +189,7 @@ cd docker && docker compose run --rm --service-ports groot-server \
 ```bash
 cd docker && docker compose run --rm --service-ports openpi-server \
   --checkpoints_dir=~/checkpoints/openpi/pi05_positronic_lowmem/experiment_v1/ \
-  --codec=@positronic.vendors.openpi.codecs.eepose
+  --codec=@positronic.vendors.openpi.codecs.ee
 ```
 
 ### Server Parameters
@@ -198,7 +198,7 @@ cd docker && docker compose run --rm --service-ports openpi-server \
 |-----------|-------------|---------|
 | `--checkpoints_dir` | Path to experiment directory (contains checkpoint folders) | `~/checkpoints/lerobot/experiment_v1/` |
 | `--checkpoint` | (Optional) Specific checkpoint ID to load | `10000`, `20000` |
-| `--codec` | Codec (must match training) | `@positronic.vendors.lerobot.codecs.eepose_absolute` |
+| `--codec` | Codec (must match training) | `@positronic.vendors.lerobot.codecs.ee` |
 | `--port` | Server port | `8000` (default) |
 | `--host` | Server host | `0.0.0.0` (default, binds to all interfaces) |
 
@@ -234,7 +234,7 @@ uv run positronic-server --dataset.path=~/datasets/my_task
 # 3. Bake dataset into LeRobot format
 cd docker && docker compose run --rm positronic-to-lerobot convert \
   --dataset.dataset.path=~/datasets/my_task \
-  --dataset.codec=@positronic.vendors.lerobot.codecs.eepose_absolute \
+  --dataset.codec=@positronic.vendors.lerobot.codecs.ee \
   --output_dir=~/datasets/lerobot/my_task \
   --fps=30
 
@@ -248,7 +248,7 @@ cd docker && docker compose run --rm lerobot-train \
 # 5. Evaluate
 cd docker && docker compose run --rm --service-ports lerobot-server \
   --checkpoints_dir=~/checkpoints/lerobot/baseline_v1/ \
-  --codec=@positronic.vendors.lerobot.codecs.eepose_absolute &
+  --codec=@positronic.vendors.lerobot.codecs.ee &
 
 uv run positronic-inference sim \
   --policy=.remote \
@@ -261,7 +261,7 @@ uv run positronic-inference sim \
 # Convert same dataset for all models
 cd docker && docker compose run --rm positronic-to-lerobot convert \
   --dataset.dataset.path=~/datasets/my_task \
-  --dataset.codec=@positronic.vendors.lerobot.codecs.eepose_absolute \
+  --dataset.codec=@positronic.vendors.lerobot.codecs.ee \
   --output_dir=~/datasets/lerobot/my_task
 
 cd docker && docker compose run --rm positronic-to-lerobot convert \
@@ -271,7 +271,7 @@ cd docker && docker compose run --rm positronic-to-lerobot convert \
 
 cd docker && docker compose run --rm positronic-to-lerobot convert \
   --dataset.dataset.path=~/datasets/my_task \
-  --dataset.codec=@positronic.vendors.openpi.codecs.eepose \
+  --dataset.codec=@positronic.vendors.openpi.codecs.ee \
   --output_dir=~/datasets/openpi/my_task
 
 # Train all models (can run in parallel)
