@@ -288,7 +288,7 @@ uv sync --frozen --extra dev  # install core + dev tooling
 Install pre-commit hooks (one-time setup):
 
 ```bash
-pre-commit install --hook-type pre-commit --hook-type commit-msg
+pre-commit install --hook-type pre-commit --hook-type commit-msg --hook-type post-commit
 ```
 
 ### Daily Development
