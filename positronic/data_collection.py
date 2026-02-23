@@ -238,6 +238,8 @@ def main(
         _wire(world, ds_agent, data_collection, webxr, robot_arm, sound)
 
         bg_cs = [webxr, *camera_instances.values(), ds_agent, robot_arm, gripper, sound]
+        # Deduplicate in case robot_arm and gripper are the same object (e.g., SO101)
+        bg_cs = list(dict.fromkeys(bg_cs))
 
         if stream_video_to_webxr is not None:
             world.connect(
@@ -344,8 +346,56 @@ main_cfg = cfn.Config(
     cameras={'image.right': positronic.cfg.hardware.camera.arducam_right},
 )
 def so101cfg(robot_arm, **kwargs):
-    """Runs data collection on SO101 robot"""
+    """Runs data collection on SO101 robot with WebXR teleoperation"""
     main(robot_arm=robot_arm, gripper=robot_arm, **kwargs)
+
+
+def main_leader_follower(
+    robot_arm: pimm.ControlSystem,
+    leader_follower: pimm.ControlSystem,
+    sound: pimm.ControlSystem | None,
+    cameras: dict[str, pimm.ControlSystem] | None,
+    output_dir: str | None = None,
+    task: str | None = None,
+):
+    """Runs data collection with leader-follower teleoperation."""
+    camera_instances = cameras or {}
+    camera_emitters = {name: cam.frame for name, cam in camera_instances.items()}
+
+    writer_cm = (
+        LocalDatasetWriter(pos3.sync(output_dir, sync_on_error=True)) if output_dir is not None else nullcontext()
+    )
+    with writer_cm as dataset_writer, pimm.World() as world:
+        ds_agent = wire.wire(world, leader_follower, dataset_writer, camera_emitters, robot_arm, robot_arm, None)
+
+        # Wire leader_follower to ds_agent for recording control
+        if ds_agent is not None:
+            world.connect(leader_follower.ds_agent_commands, ds_agent.command)
+
+        # Wire sound feedback
+        if sound is not None:
+            world.connect(leader_follower.sound, sound.wav_path)
+
+        bg_cs = [ds_agent, robot_arm, sound, *camera_instances.values()]
+        bg_cs = list(dict.fromkeys(bg_cs))
+
+        lf_steps = iter(world.start(leader_follower, bg_cs))
+        while not world.should_stop:
+            try:
+                time.sleep(next(lf_steps).seconds)
+            except StopIteration:
+                break
+
+
+@cfn.config(
+    robot_arm=positronic.cfg.hardware.roboarm.so101,
+    leader_follower=positronic.cfg.hardware.roboarm.so101_leader_follower,
+    sound=positronic.cfg.sound.sound,
+    cameras={'image.right': positronic.cfg.hardware.camera.arducam_right},
+)
+def so101_leader(robot_arm, leader_follower, **kwargs):
+    """Runs data collection on SO101 with leader arm teleoperation"""
+    main_leader_follower(robot_arm=robot_arm, leader_follower=leader_follower, **kwargs)
 
 
 droid = cfn.Config(
@@ -368,6 +418,7 @@ def _internal_main():
     cfn.cli({
         'real': main_cfg,
         'so101': so101cfg,
+        'so101_leader': so101_leader,
         'sim': main_sim,
         'sim_pnp': main_sim.override(loaders=positronic.cfg.simulator.multi_tote_loaders),
         'droid': droid,

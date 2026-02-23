@@ -172,6 +172,7 @@ Loads the MuJoCo scene, starts the DearPyGui UI, and records episodes into the l
 ```bash
 uv run positronic-data-collection real  --output_dir=~/datasets/franka_kitchen
 uv run positronic-data-collection so101 --output_dir=~/datasets/so101_runs
+uv run positronic-data-collection so101_leader --output_dir=~/datasets/so101_runs
 uv run positronic-data-collection droid --output_dir=~/datasets/droid_runs
 ```
 
@@ -333,11 +334,11 @@ Our plans evolve with your feedback. Highlights for the next milestones:
   - **Policy presets for π₀.₅ and GR00T.** Full support for both architectures.
   - **Remote inference primitives.** Run policies on different machines via unified WebSocket API.
   - **Batch evaluation harness.** `utilities/validate_server.py` for automated checkpoint scoring.
+  - **SO101 leader support.** Leader-follower teleoperation for SO101 robot arm.
 - **Short term**
   - **Richer Positronic Server.** Surface metadata fields, annotation, and filtering flows for rapid triage.
   - **Direct Positronic Dataset integration.** Native adapter for training scripts to stream tensors directly from Positronic datasets.
 - **Medium term**
-  - **SO101 leader support.** Promote SO101 from follower mode to first-class leader arm.
   - **New operator inputs.** Keyboard and gamepad controllers for quick teleop.
   - **Streaming datasets.** Cloud-ready dataset backend for long-running collection jobs.
   - **Community hardware.** Continue adding camera, gripper, and arm drivers requested by adopters.

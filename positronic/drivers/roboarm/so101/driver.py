@@ -47,8 +47,9 @@ class Robot(pimm.ControlSystem):
     def __init__(self, motor_bus: MotorBus, home_joints: list[float] | None = None):
         self.motor_bus = motor_bus
         self.mujoco_model_path = 'positronic/drivers/roboarm/so101/so101.xml'
-        self.kinematic = Kinematics('positronic/drivers/roboarm/so101/so101.urdf', 'gripper_frame_joint')
-        self.joint_limits = self.kinematic.joint_limits
+        self._urdf_path = 'positronic/drivers/roboarm/so101/so101.urdf'
+        self._target_frame = 'gripper_frame_joint'
+        self._kinematic: Kinematics | None = None
         self.home_joints = home_joints if home_joints is not None else [0.0, 0.0, 0.0, 0.0, 0.0]
         self.commands: pimm.SignalReceiver[roboarm_command.CommandType] = pimm.ControlSystemReceiver(self, default=None)
         self.target_grip: pimm.SignalReceiver[float] = pimm.ControlSystemReceiver(self, default=0.0)
@@ -60,8 +61,20 @@ class Robot(pimm.ControlSystem):
         print('Warning: Proper dq units is not implemented for SO101!')
         print('================================================================')
 
+    @property
+    def kinematic(self) -> Kinematics:
+        if self._kinematic is None:
+            self._kinematic = Kinematics(self._urdf_path, self._target_frame)
+        return self._kinematic
+
+    @property
+    def joint_limits(self) -> np.ndarray:
+        return self.kinematic.joint_limits
+
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Sleep]:
         self.motor_bus.connect()
+        # Initialize kinematics in the subprocess (placo.RobotWrapper is not picklable)
+        _ = self.kinematic
 
         rate_limit = pimm.RateLimiter(hz=1000, clock=clock)
         state = SO101State()
@@ -80,6 +93,9 @@ class Robot(pimm.ControlSystem):
                     case roboarm_command.JointPosition(qpos):
                         q_norm = self.rad_to_norm(qpos)
                         q_with_gripper = np.concatenate([q_norm, [self.target_grip.value]])
+                        self.motor_bus.set_target_position(q_with_gripper)
+                    case roboarm_command.NormalizedJointPosition(qpos):
+                        q_with_gripper = np.concatenate([qpos, [self.target_grip.value]])
                         self.motor_bus.set_target_position(q_with_gripper)
                     case _:
                         raise ValueError(f'Unknown command: {cmd_msg.data}')

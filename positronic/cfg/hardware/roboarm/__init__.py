@@ -27,3 +27,10 @@ def so101(motor_bus):
     from positronic.drivers.roboarm.so101.driver import Robot
 
     return Robot(motor_bus=motor_bus)
+
+
+@cfn.config(leader_bus=positronic.cfg.hardware.motors.so101_leader)
+def so101_leader_follower(leader_bus):
+    from positronic.drivers.roboarm.so101.leader_follower import LeaderFollower
+
+    return LeaderFollower(leader_bus=leader_bus)
