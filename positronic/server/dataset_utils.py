@@ -1,4 +1,4 @@
-"""Dataset utilities for Positronic dataset visualization (images-only)."""
+"""Dataset utilities for Positronic dataset visualization."""
 
 import heapq
 import logging
@@ -17,6 +17,51 @@ from positronic.dataset.local_dataset import LocalDataset
 from positronic.dataset.signal import Kind
 from positronic.dataset.transforms import TransformedDataset
 from positronic.utils.rerun_compat import flatten_numeric, log_numeric_series, log_series_styles, set_timeline_time
+
+_POSE_SUFFIXES = ('.pose', '.ee_pose')
+_POSE_COLORS = {
+    'command': [255, 100, 50],  # orange — commanded trajectory
+    'state': [50, 200, 255],  # cyan — actual/state trajectory
+    'default': [180, 180, 180],  # gray fallback
+}
+
+
+def _is_pose_signal(name: str, dim: int) -> bool:
+    """Return True if the signal looks like a 7D ee pose (tx, ty, tz, qx, qy, qz, qw)."""
+    return dim == 7 and any(name.endswith(s) for s in _POSE_SUFFIXES)
+
+
+def _pose_color(name: str) -> list[int]:
+    prefix = name.split('.')[0] if '.' in name else name
+    if prefix.endswith('commands'):
+        return _POSE_COLORS['command']
+    if prefix.endswith('state'):
+        return _POSE_COLORS['state']
+    return _POSE_COLORS['default']
+
+
+_TRAIL_FADE_NS = 5_000_000_000  # 5-second window of full visibility
+
+
+def _log_trajectory_trail(
+    entity_path: str, positions: list[list[float]], timestamps_ns: list[int], base_rgb: list[int]
+) -> None:
+    """Log trajectory as per-segment line strips with time-based fade.
+
+    Segments within the last 5 s are bright (alpha scales up to 255).
+    Older segments drop to near-transparent (alpha ~15).
+    """
+    if len(positions) < 2:
+        return
+    now = timestamps_ns[-1]
+    segments = []
+    colors = []
+    for a, b, ts in zip(positions, positions[1:], timestamps_ns[1:], strict=False):
+        segments.append([a, b])
+        age = now - ts
+        alpha = 15 if age >= _TRAIL_FADE_NS else int(15 + 240 * (1.0 - age / _TRAIL_FADE_NS))
+        colors.append([*base_rgb, alpha])
+    rr.log(entity_path, rr.LineStrips3D(segments, colors=colors))
 
 
 def _format_value(value: Any, formatter: str | None, default: Any) -> Any:
@@ -53,14 +98,16 @@ def get_episodes_list(
     return result
 
 
-def _collect_signal_groups(ep: Episode) -> tuple[list[str], list[str], dict[str, int]]:
-    """Return (video_names, signal_names, signal_dims) for an episode.
+def _collect_signal_groups(ep: Episode) -> tuple[list[str], list[str], dict[str, int], list[str]]:
+    """Return (video_names, signal_names, signal_dims, pose_names) for an episode.
 
     signal_dims gives the number of plotted series per non-video signal (1 for scalar).
+    pose_names is the subset of signal_names identified as 7D ee pose vectors.
     """
     video_names: list[str] = []
     signal_names: list[str] = []
     signal_dims: dict[str, int] = {}
+    pose_names: list[str] = []
     for name, sig in ep.signals.items():
         if sig.kind == Kind.IMAGE:
             try:
@@ -81,10 +128,14 @@ def _collect_signal_groups(ep: Episode) -> tuple[list[str], list[str], dict[str,
                     signal_dims[name] = int(arr.size) if arr is not None else 1
             except Exception:
                 signal_dims[name] = 1
-    return video_names, signal_names, signal_dims
+            if _is_pose_signal(name, signal_dims[name]):
+                pose_names.append(name)
+    return video_names, signal_names, signal_dims, pose_names
 
 
-def _build_blueprint(video_names: list[str], signal_names: list[str], signal_dims: dict[str, int]) -> rrb.Blueprint:
+def _build_blueprint(
+    video_names: list[str], signal_names: list[str], signal_dims: dict[str, int], pose_names: list[str]
+) -> rrb.Blueprint:
     image_views = [rrb.Spatial2DView(name=k, origin=f'/{k}') for k in video_names]
 
     per_signal_views = []
@@ -96,17 +147,23 @@ def _build_blueprint(video_names: list[str], signal_names: list[str], signal_dim
         )
 
     grid_items = []
+    column_shares = []
     if per_signal_views:
         grid_items.append(rrb.Grid(*per_signal_views))
+        column_shares.append(1)
+    if pose_names:
+        grid_items.append(rrb.Spatial3DView(name='3D Trajectory', origin='/3d'))
+        column_shares.append(1)
     if image_views:
         grid_items.append(rrb.Grid(*image_views))
+        column_shares.append(2)
 
     return rrb.Blueprint(
         rrb.BlueprintPanel(state=rrb.PanelState.Hidden),
         rrb.SelectionPanel(state=rrb.PanelState.Hidden),
         rrb.TopPanel(state=rrb.PanelState.Expanded),
         rrb.TimePanel(state=rrb.PanelState.Collapsed),
-        rrb.Grid(*grid_items, column_shares=[1, 2]),
+        rrb.Grid(*grid_items, column_shares=column_shares),
     )
 
 
@@ -193,17 +250,32 @@ def stream_episode_rrd(ds: Dataset, episode_id: int, max_resolution: int) -> Ite
     drainer = _BinaryStreamDrainer(rec.binary_stream(), min_bytes=2**20)
 
     with rec:
-        video_names, signal_names, signal_dims = _collect_signal_groups(ep)
-        rr.send_blueprint(_build_blueprint(video_names, signal_names, signal_dims))
+        video_names, signal_names, signal_dims, pose_names = _collect_signal_groups(ep)
+        rr.send_blueprint(_build_blueprint(video_names, signal_names, signal_dims, pose_names))
         yield from drainer.drain()
 
         _setup_series_names(ep, signal_names)
         yield from drainer.drain()
 
+        pose_set = set(pose_names)
+        pose_positions: dict[str, list[list[float]]] = {name: [] for name in pose_names}
+        pose_timestamps: dict[str, list[int]] = {name: [] for name in pose_names}
+        pose_colors = {name: _pose_color(name) for name in pose_names}
+
         for kind, key, payload, ts_ns in _episode_log_entries(ep, video_names, signal_names):
             set_timeline_time('time', ts_ns)
             if kind == 'numeric':
                 log_numeric_series(f'/signals/{key}', payload)
+                if key in pose_set:
+                    arr = flatten_numeric(payload)
+                    if arr is not None and arr.size == 7:
+                        pos = arr[:3].tolist()
+                        rr.log(f'/3d/{key}', rr.Points3D([pos], colors=[pose_colors[key]], radii=[0.01]))
+                        pose_positions[key].append(pos)
+                        pose_timestamps[key].append(ts_ns)
+                        _log_trajectory_trail(
+                            f'/3d/{key}/trail', pose_positions[key], pose_timestamps[key], pose_colors[key]
+                        )
             else:
                 rr.log(key, rr.Image(resize_if_needed(payload, max_resolution)).compress())
             yield from drainer.drain()
