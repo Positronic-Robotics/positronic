@@ -24,7 +24,7 @@ See [Model Selection Guide](../../docs/model-selection.md) for comparison with o
 ## Quick Start
 
 ```bash
-# 1. Convert dataset
+# 1. Convert dataset (output_dir supports both local paths and s3://)
 cd docker && docker compose run --rm positronic-to-lerobot convert \
   --dataset.dataset.path=~/datasets/my_task_raw \
   --dataset.codec=@positronic.vendors.gr00t.codecs.ee_rot6d_joints \

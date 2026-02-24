@@ -136,12 +136,13 @@ docker --context vm-train2 ps         # Check containers on vm-train2
 From `docker/` directory (can run on `desktop`):
 
 ```bash
-docker compose run --rm --pull always positronic-to-lerobot convert \
-  --dataset=@positronic.cfg.ds.apply_codec \
+CACHE_ROOT=/home/vertix docker --context desktop compose run --rm --pull always positronic-to-lerobot convert \
   --dataset.dataset=@positronic.cfg.ds.phail.phail \
   --dataset.codec=@positronic.vendors.gr00t.codecs.ee_rot6d_joints \
   --output_dir=s3://interim/phail/groot/ee_rot6d_joints/
 ```
+
+> **Note**: `CACHE_ROOT=/home/vertix` is needed when running from Mac — `$HOME` expands locally to `/Users/vertix`, but volume mounts must reference the remote host's paths. Harmless on Linux.
 
 ### Available Codecs
 
