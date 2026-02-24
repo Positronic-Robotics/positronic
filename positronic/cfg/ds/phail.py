@@ -76,6 +76,13 @@ def _duplicate_recovery(base: Dataset):
 
 phail_recovery = _duplicate_recovery.override(base=phail)
 
+# Unified single-task variant: all episodes (including recovery) share one generic instruction.
+# Recovery episodes appear once (not duplicated per task).
+UNIFIED_TASK = 'Pick all the items one by one from transparent tote and place them into the large grey tote.'
+phail_unified = transform.override(
+    base=phail, transforms=[group.override(transforms=[Derive(task=FromValue(UNIFIED_TASK)), Identity()])]
+)
+
 
 # =============================================================================
 # Server configuration for visualizing public PhAIL dataset
