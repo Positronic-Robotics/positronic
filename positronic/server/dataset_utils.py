@@ -21,7 +21,7 @@ from positronic.utils.rerun_compat import flatten_numeric, log_numeric_series, l
 
 _POSE_SUFFIXES = ('.pose', '.ee_pose')
 _POSE_COLORS = {
-    'command': [255, 100, 50],  # orange — commanded trajectory
+    'commands': [255, 100, 50],  # orange — commanded trajectory
     'state': [50, 200, 255],  # cyan — actual/state trajectory
     'default': [180, 180, 180],  # gray fallback
 }
@@ -34,10 +34,9 @@ def _is_pose_signal(name: str, dim: int) -> bool:
 
 def _pose_color(name: str) -> list[int]:
     prefix = name.split('.')[0] if '.' in name else name
-    if prefix.endswith('commands'):
-        return _POSE_COLORS['command']
-    if prefix.endswith('state'):
-        return _POSE_COLORS['state']
+    for suffix, color in _POSE_COLORS.items():
+        if prefix.endswith(suffix):
+            return color
     return _POSE_COLORS['default']
 
 
