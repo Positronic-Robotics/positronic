@@ -23,8 +23,7 @@ See [Model Selection Guide](../../docs/model-selection.md) for comparison.
 cd docker && docker compose run --rm positronic-to-lerobot convert \
   --dataset.dataset.path=~/datasets/my_task_raw \
   --dataset.codec=@positronic.vendors.lerobot.codecs.ee \
-  --output_dir=~/datasets/lerobot/my_task \
-  --fps=30
+  --output_dir=~/datasets/lerobot/my_task
 
 # 2. Train
 cd docker && docker compose run --rm lerobot-train \

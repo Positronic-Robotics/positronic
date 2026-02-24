@@ -32,8 +32,7 @@ Positronic datasets must be converted into the LeRobot format using an OpenPI co
 docker compose run --rm -v ~/datasets:/data positronic-to-lerobot convert \
   --dataset.dataset=@positronic.cfg.ds.phail.phail \
   --dataset.codec=@positronic.vendors.openpi.codecs.ee \
-  --output_dir=/data/my_lerobot_data \
-  --fps=15
+  --output_dir=/data/my_lerobot_data
 ```
 
 **Available public datasets:**
@@ -54,7 +53,7 @@ docker compose run --rm -v ~/datasets:/data positronic-to-lerobot convert \
 - `--dataset.dataset`: The raw dataset configuration (see available datasets above)
 - `--dataset.codec`: OpenPI codec that defines observation/action encoding (see table above)
 - `--output_dir`: Destination for the converted LeRobot dataset (can be local or `s3://bucket/path`)
-- `--fps`: Target frames per second for the converted dataset
+- `--fps`: (Optional) Override frames per second (defaults to codec's `action_fps`)
 
 ## 2. Generate Assets
 

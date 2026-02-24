@@ -7,14 +7,12 @@ Examples:
 - Convert to a new LeRobot dataset
   positronic-to-lerobot convert \
     --dataset.path=/path/to/local_dataset \
-    --output_dir=/path/to/lerobot_ds \
-    --fps=30
+    --output_dir=/path/to/lerobot_ds
 
 - Append to an existing LeRobot dataset
   positronic-to-lerobot append \
     --output_dir=/path/to/lerobot_ds \
-    --dataset.path=/path/to/local_dataset \
-    --fps=30
+    --dataset.path=/path/to/local_dataset
 """
 
 import json

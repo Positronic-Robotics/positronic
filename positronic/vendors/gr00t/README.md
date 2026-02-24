@@ -28,8 +28,7 @@ See [Model Selection Guide](../../docs/model-selection.md) for comparison with o
 cd docker && docker compose run --rm positronic-to-lerobot convert \
   --dataset.dataset.path=~/datasets/my_task_raw \
   --dataset.codec=@positronic.vendors.gr00t.codecs.ee_rot6d_joints \
-  --output_dir=~/datasets/groot/my_task \
-  --fps=15
+  --output_dir=~/datasets/groot/my_task
 
 # 2. Train
 cd docker && docker compose run --rm groot-train \

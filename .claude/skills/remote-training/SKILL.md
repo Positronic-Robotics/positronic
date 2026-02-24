@@ -137,10 +137,10 @@ From `docker/` directory (can run on `desktop`):
 
 ```bash
 docker compose run --rm --pull always positronic-to-lerobot convert \
-  --dataset=@positronic.cfg.ds.internal.sim_stack_groot_ft \
+  --dataset=@positronic.cfg.ds.apply_codec \
+  --dataset.dataset=@positronic.cfg.ds.phail.phail \
   --dataset.codec=@positronic.vendors.gr00t.codecs.ee_rot6d_joints \
-  --output_dir=s3://interim/sim_ft/groot_rot6d_q/ \
-  --fps=15
+  --output_dir=s3://interim/phail/groot/ee_rot6d_joints/
 ```
 
 ### Available Codecs

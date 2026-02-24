@@ -207,8 +207,7 @@ cd docker && docker compose run --rm positronic-to-lerobot convert \
     --dataset.dataset.path=~/datasets/stack_cubes_raw \
     --dataset.codec=@positronic.vendors.openpi.codecs.ee \
     --output_dir=~/datasets/lerobot/stack_cubes \
-    --task="pick up the green cube and place it on the red cube" \
-    --fps=30
+    --task="pick up the green cube and place it on the red cube"
 ```
 
 **Train using vendor-specific workflows:**

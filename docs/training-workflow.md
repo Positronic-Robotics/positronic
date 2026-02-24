@@ -22,8 +22,7 @@ cd docker && docker compose run --rm positronic-to-lerobot convert \
   --dataset.dataset=.local \
   --dataset.dataset.path=~/datasets/stack_cubes_raw \
   --dataset.codec=@positronic.vendors.lerobot.codecs.ee \
-  --output_dir=~/datasets/lerobot/stack_cubes \
-  --fps=30
+  --output_dir=~/datasets/lerobot/stack_cubes
 ```
 
 ### Parameters Explained
@@ -34,7 +33,6 @@ cd docker && docker compose run --rm positronic-to-lerobot convert \
 | `--dataset.dataset.path` | Path to raw Positronic dataset (only for `.local`, not needed for phail datasets) | `~/datasets/stack_cubes_raw` |
 | `--dataset.codec` | Codec for observation/action encoding | `@positronic.vendors.lerobot.codecs.ee` |
 | `--output_dir` | Destination for converted dataset | `~/datasets/lerobot/stack_cubes` or `s3://bucket/path` |
-| `--fps` | Target frames per second | `15`, `30` |
 | `--task` | (Optional) Task description to embed | `"pick up the green cube"` |
 
 **Note:** `--dataset.dataset.path` is only required when providing your own local datasets (with `--dataset.dataset=.local`). For available phail datasets (like `@positronic.cfg.ds.phail.sim_stack_cubes`), this parameter is not needed.
@@ -52,8 +50,7 @@ cd docker && docker compose run --rm positronic-to-lerobot convert \
 cd docker && docker compose run --rm positronic-to-lerobot convert \
   --dataset.dataset=@positronic.cfg.ds.phail.sim_stack_cubes \
   --dataset.codec=@positronic.vendors.lerobot.codecs.ee \
-  --output_dir=~/datasets/lerobot/sim_stack_cubes \
-  --fps=15
+  --output_dir=~/datasets/lerobot/sim_stack_cubes
 ```
 
 ### Choosing a Codec
@@ -76,8 +73,7 @@ Both input and output paths support S3 URLs. Data is cached locally and synced a
 cd docker && docker compose run --rm positronic-to-lerobot convert \
   --dataset.dataset.path=s3://bucket/raw_data/stack_cubes \
   --output_dir=s3://bucket/converted/lerobot/stack_cubes \
-  --dataset.codec=@positronic.vendors.lerobot.codecs.ee \
-  --fps=30
+  --dataset.codec=@positronic.vendors.lerobot.codecs.ee
 ```
 
 ### Appending to Existing Datasets
@@ -89,8 +85,7 @@ cd docker && docker compose run --rm positronic-to-lerobot append \
   --output_dir=~/datasets/lerobot/stack_cubes \
   --dataset.dataset=.local \
   --dataset.dataset.path=~/datasets/stack_cubes_new \
-  --dataset.codec=@positronic.vendors.lerobot.codecs.ee \
-  --fps=30
+  --dataset.codec=@positronic.vendors.lerobot.codecs.ee
 ```
 
 **Important:** Codec must match the original dataset's codec.
@@ -235,8 +230,7 @@ uv run positronic-server --dataset.path=~/datasets/my_task
 cd docker && docker compose run --rm positronic-to-lerobot convert \
   --dataset.dataset.path=~/datasets/my_task \
   --dataset.codec=@positronic.vendors.lerobot.codecs.ee \
-  --output_dir=~/datasets/lerobot/my_task \
-  --fps=30
+  --output_dir=~/datasets/lerobot/my_task
 
 # 4. Train ACT policy
 cd docker && docker compose run --rm lerobot-train \
