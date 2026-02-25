@@ -1,7 +1,7 @@
 """Dataset utilities for Positronic dataset visualization."""
 
 import logging
-from collections.abc import Iterator
+from collections.abc import Generator, Iterator
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -215,15 +215,17 @@ def _log_video_signals(ep: Episode, signals: EpisodeSignals, drainer: _BinaryStr
         yield from drainer.drain()
 
 
-def _log_numeric_signals(ep: Episode, signals: EpisodeSignals, drainer: _BinaryStreamDrainer) -> Iterator[bytes]:
-    """Log numeric signals and 3D pose visualization via send_columns."""
+def _log_numeric_signals(
+    ep: Episode, signals: EpisodeSignals, drainer: _BinaryStreamDrainer
+) -> Generator[bytes, None, dict[str, tuple[np.ndarray, np.ndarray]]]:
+    """Log numeric time-series via send_columns. Returns pose data for 3D logging."""
     pose_set = set(signals.poses)
+    pose_data: dict[str, tuple[np.ndarray, np.ndarray]] = {}
 
     for key in signals.numerics:
-        sig = ep.signals[key]
         timestamps = []
         values = []
-        for payload, ts_ns in sig:
+        for payload, ts_ns in ep.signals[key]:
             arr = flatten_numeric(payload)
             if arr is not None:
                 timestamps.append(ts_ns)
@@ -250,27 +252,43 @@ def _log_numeric_signals(ep: Episode, signals: EpisodeSignals, drainer: _BinaryS
                     columns=rr.Scalar.columns(scalar=vals[:, i]),
                 )
 
-        # Log 3D pose visualization
-        if key in pose_set and vals.shape[1] == 7:
-            positions = vals[:, :3]
-            color = _pose_color(key)
-            rr.send_columns(
-                f'/3d/{key}',
-                indexes=[rr.TimeNanosColumn('time', ts_arr)],
-                columns=rr.Points3D.columns(
-                    positions=positions, colors=np.tile(color, (len(ts_arr), 1)), radii=np.full(len(ts_arr), 0.01)
-                ),
-            )
-            # Log trajectory trail at periodic intervals so it's visible when scrubbing
-            pos_list = positions.tolist()
-            trail_path = f'/3d/{key}/trail'
-            for i in range(_TRAIL_UPDATE_INTERVAL, len(pos_list), _TRAIL_UPDATE_INTERVAL):
-                set_timeline_time('time', timestamps[i])
-                _log_trajectory_trail(trail_path, pos_list[: i + 1], timestamps[: i + 1], color)
-            # Final trail at last timestamp
-            set_timeline_time('time', timestamps[-1])
-            _log_trajectory_trail(trail_path, pos_list, timestamps, color)
+        if key in pose_set:
+            pose_data[key] = (ts_arr, vals)
 
+        yield from drainer.drain()
+
+    return pose_data
+
+
+def _log_pose_signals(
+    signals: EpisodeSignals, numeric_data: dict[str, tuple[np.ndarray, np.ndarray]], drainer: _BinaryStreamDrainer
+) -> Iterator[bytes]:
+    """Log 3D pose points and trajectory trails."""
+    for key in signals.poses:
+        if key not in numeric_data:
+            continue
+        ts_arr, vals = numeric_data[key]
+        if vals.ndim < 2 or vals.shape[1] != 7:
+            continue
+        positions = vals[:, :3]
+        color = _pose_color(key)
+        rr.send_columns(
+            f'/3d/{key}',
+            indexes=[rr.TimeNanosColumn('time', ts_arr)],
+            columns=rr.Points3D.columns(
+                positions=positions, colors=np.tile(color, (len(ts_arr), 1)), radii=np.full(len(ts_arr), 0.01)
+            ),
+        )
+        # Log trajectory trail at periodic intervals so it's visible when scrubbing
+        pos_list = positions.tolist()
+        timestamps = ts_arr.tolist()
+        trail_path = f'/3d/{key}/trail'
+        for i in range(_TRAIL_UPDATE_INTERVAL, len(pos_list), _TRAIL_UPDATE_INTERVAL):
+            set_timeline_time('time', timestamps[i])
+            _log_trajectory_trail(trail_path, pos_list[: i + 1], timestamps[: i + 1], color)
+        # Final trail at last timestamp
+        set_timeline_time('time', timestamps[-1])
+        _log_trajectory_trail(trail_path, pos_list, timestamps, color)
         yield from drainer.drain()
 
 
@@ -296,7 +314,8 @@ def stream_episode_rrd(ds: Dataset, episode_id: int) -> Iterator[bytes]:
         yield from drainer.drain()
 
         yield from _log_video_signals(ep, signals, drainer)
-        yield from _log_numeric_signals(ep, signals, drainer)
+        pose_data = yield from _log_numeric_signals(ep, signals, drainer)
+        yield from _log_pose_signals(signals, pose_data, drainer)
 
     yield from drainer.drain(force=True)
 
