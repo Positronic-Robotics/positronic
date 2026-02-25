@@ -1,6 +1,5 @@
 """Dataset utilities for Positronic dataset visualization."""
 
-import heapq
 import logging
 from collections.abc import Iterator
 from dataclasses import dataclass
@@ -8,7 +7,6 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-import cv2
 import numpy as np
 import rerun as rr
 import rerun.blueprint as rrb
@@ -174,32 +172,6 @@ def _setup_series_names(signals: EpisodeSignals) -> None:
         log_series_styles(f'/signals/{key}', names, static=True)
 
 
-def _episode_log_entries(ep: Episode, signals: EpisodeSignals):
-    heap: list[tuple[int, int, str, str, Any, Iterator[tuple[Any, int]]]] = []
-
-    def _push(sig_index: int, kind: str, key: str, iterator: Iterator[tuple[Any, int]]):
-        try:
-            payload, ts_ns = next(iterator)
-        except StopIteration:
-            return
-        heapq.heappush(heap, (ts_ns, sig_index, kind, key, payload, iterator))
-
-    iterators: list[tuple[int, str, str, Iterator[tuple[Any, int]]]] = []
-    for idx, key in enumerate(signals.videos):
-        iterators.append((idx, 'video', key, iter(ep.signals[key])))
-    base_idx = len(iterators)
-    for offset, key in enumerate(signals.numerics):
-        iterators.append((base_idx + offset, 'numeric', key, iter(ep.signals[key])))
-
-    for sig_index, kind, key, iterator in iterators:
-        _push(sig_index, kind, key, iterator)
-
-    while heap:
-        ts_ns, sig_index, kind, key, payload, iterator = heapq.heappop(heap)
-        yield (kind, key, payload, ts_ns)
-        _push(sig_index, kind, key, iterator)
-
-
 class _BinaryStreamDrainer:
     def __init__(self, stream: rr.recording_stream.BinaryStream, min_bytes: int):
         self._stream = stream
@@ -233,8 +205,7 @@ def _log_video_signals(ep: Episode, signals: EpisodeSignals, drainer: _BinaryStr
         asset = rr.AssetVideo(contents=video_bytes, media_type='video/mp4')
         rr.log(name, asset, static=True)
 
-        sig._load_timestamps()
-        our_ts = sig._timestamps
+        our_ts = np.asarray(sig.keys())
         frame_pts_ns = asset.read_frame_timestamps_ns()
         rr.send_columns(
             name,
@@ -245,7 +216,7 @@ def _log_video_signals(ep: Episode, signals: EpisodeSignals, drainer: _BinaryStr
 
 
 def _log_numeric_signals(ep: Episode, signals: EpisodeSignals, drainer: _BinaryStreamDrainer) -> Iterator[bytes]:
-    """Log numeric signals via send_columns and return collected pose data."""
+    """Log numeric signals and 3D pose visualization via send_columns."""
     pose_set = set(signals.poses)
 
     for key in signals.numerics:
@@ -304,7 +275,7 @@ def _log_numeric_signals(ep: Episode, signals: EpisodeSignals, drainer: _BinaryS
 
 
 @rr.recording_stream.recording_stream_generator_ctx
-def stream_episode_rrd(ds: Dataset, episode_id: int, max_resolution: int) -> Iterator[bytes]:
+def stream_episode_rrd(ds: Dataset, episode_id: int) -> Iterator[bytes]:
     """Yield an episode RRD as chunks while it is being generated."""
 
     ep = ds[episode_id]
@@ -344,15 +315,3 @@ def get_dataset_root(dataset: Dataset) -> str | None:
         return get_dataset_root(dataset._dataset)
 
     return None
-
-
-def resize_if_needed(image, max_resolution: int):
-    height, width = image.shape[:2]
-    scale = min(1, max_resolution / max(width, height))
-    max_width, max_height = int(width * scale), int(height * scale)
-
-    # Downscale if needed
-    if width != max_width or height != max_height:
-        return cv2.resize(image, (max_width, max_height), interpolation=cv2.INTER_AREA)
-
-    return image

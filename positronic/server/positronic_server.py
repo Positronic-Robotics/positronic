@@ -395,7 +395,6 @@ async def api_dataset_status():
 async def api_episode_rrd(episode_id: int):
     ds = app_state.get('dataset')
     cache_path = _get_rrd_cache_path(episode_id)
-    max_resolution: int = app_state.get('max_resolution')  # type: ignore[assignment]
 
     if os.path.exists(cache_path):
         logging.debug(f'Serving cached RRD for episode {episode_id} from {cache_path}')
@@ -409,7 +408,7 @@ async def api_episode_rrd(episode_id: int):
         success = False
         try:
             with open(cache_path, 'wb') as cache_file:
-                for chunk in stream_episode_rrd(ds, episode_id, max_resolution):
+                for chunk in stream_episode_rrd(ds, episode_id):
                     cache_file.write(chunk)
                     yield chunk
             success = True
