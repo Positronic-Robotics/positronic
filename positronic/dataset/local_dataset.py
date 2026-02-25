@@ -5,6 +5,7 @@ import platform
 import shutil
 import sys
 import time
+import weakref
 from collections import deque
 from collections.abc import Callable, Iterator
 from contextlib import suppress
@@ -282,7 +283,7 @@ class DiskEpisode(Episode):
             raise ValueError(f'Cannot read unfinished episode at {directory}')
         self._dir = directory
         # Lazy containers
-        self._signals: dict[str, Signal[Any]] = {}
+        self._signals: weakref.WeakValueDictionary[str, Signal[Any]] = weakref.WeakValueDictionary()
         self._signal_factories: dict[str, SIGNAL_FACTORY_T] = {}
         self._static: dict[str, Any] | None = None
         self._meta: dict[str, Any] | None = None

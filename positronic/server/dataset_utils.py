@@ -57,6 +57,7 @@ def _infer_dims(sig) -> int:
 
 
 _TRAIL_FADE_NS = 5_000_000_000  # 5-second window of full visibility
+_TRAIL_UPDATE_INTERVAL = 30  # Only re-log full trail every N pose samples
 
 
 def _log_trajectory_trail(
@@ -212,9 +213,8 @@ class _BinaryStreamDrainer:
             self._buffer.extend(chunk)
         # Yield in min_bytes-sized chunks
         while len(self._buffer) >= self._min_bytes:
-            to_yield = self._buffer[: self._min_bytes]
-            yield bytes(to_yield)
-            self._buffer = self._buffer[self._min_bytes :]
+            yield bytes(self._buffer[: self._min_bytes])
+            del self._buffer[: self._min_bytes]
         # On force, yield any remaining bytes
         if force and self._buffer:
             yield bytes(self._buffer)
@@ -258,12 +258,21 @@ def stream_episode_rrd(ds: Dataset, episode_id: int, max_resolution: int) -> Ite
                         rr.log(f'/3d/{key}', rr.Points3D([pos], colors=[pose_colors[key]], radii=[0.01]))
                         pose_positions[key].append(pos)
                         pose_timestamps[key].append(ts_ns)
-                        _log_trajectory_trail(
-                            f'/3d/{key}/trail', pose_positions[key], pose_timestamps[key], pose_colors[key]
-                        )
+                        if len(pose_positions[key]) % _TRAIL_UPDATE_INTERVAL == 0:
+                            _log_trajectory_trail(
+                                f'/3d/{key}/trail', pose_positions[key], pose_timestamps[key], pose_colors[key]
+                            )
             else:
                 rr.log(key, rr.Image(resize_if_needed(payload, max_resolution)).compress())
             yield from drainer.drain()
+
+        # Log final trajectory trail at the last timestamp
+        for name in signals.poses:
+            if len(pose_positions[name]) > 1:
+                set_timeline_time('time', pose_timestamps[name][-1])
+                _log_trajectory_trail(
+                    f'/3d/{name}/trail', pose_positions[name], pose_timestamps[name], pose_colors[name]
+                )
 
     yield from drainer.drain(force=True)
 
