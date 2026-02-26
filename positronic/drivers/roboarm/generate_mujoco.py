@@ -76,10 +76,7 @@ def _add_sites(spec: mj.MjSpec) -> None:
 
 
 def _add_geoms(
-    spec: mj.MjSpec,
-    motor_height: float = 0.05,
-    motor_radius: float = 0.05,
-    link_radius: float = 0.025,
+    spec: mj.MjSpec, motor_height: float = 0.05, motor_radius: float = 0.05, link_radius: float = 0.025
 ) -> None:
     for body in spec.bodies:
         if body.name and 'link' in body.name:

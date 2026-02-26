@@ -14,12 +14,12 @@ from lerobot.policies.act.modeling_act import ACTPolicy
 from lerobot.policies.pretrained import PreTrainedPolicy
 
 from positronic.policy import Codec, Policy
-from positronic.policy.lerobot import LerobotPolicy
 from positronic.utils.checkpoints import get_latest_checkpoint, list_checkpoints
 from positronic.utils.logging import init_logging
 from positronic.utils.serialization import deserialise, serialise
 from positronic.vendors.lerobot import codecs as lerobot_codecs
 from positronic.vendors.lerobot.backbone import register_all
+from positronic.vendors.lerobot.policy import LerobotPolicy
 
 register_all()
 

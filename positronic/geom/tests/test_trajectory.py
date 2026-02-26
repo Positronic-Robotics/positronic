@@ -55,8 +55,7 @@ def start_position():
 
 
 def test_absolute_to_relative_conversion(
-    absolute_trajectory: AbsoluteTrajectory,
-    relative_trajectory: RelativeTrajectory,
+    absolute_trajectory: AbsoluteTrajectory, relative_trajectory: RelativeTrajectory
 ):
     converted_relative_trajectory = absolute_trajectory.to_relative()
 
@@ -67,8 +66,7 @@ def test_absolute_to_relative_conversion(
 
 
 def test_relative_to_absolute_conversion(
-    absolute_trajectory: AbsoluteTrajectory,
-    relative_trajectory: RelativeTrajectory,
+    absolute_trajectory: AbsoluteTrajectory, relative_trajectory: RelativeTrajectory
 ):
     converted_absolute_trajectory = relative_trajectory.to_absolute(absolute_trajectory[0])
 

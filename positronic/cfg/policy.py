@@ -3,7 +3,6 @@ import pos3
 
 from positronic.cfg import codecs
 from positronic.policy import Codec, Policy
-from positronic.policy.lerobot import LerobotPolicy
 from positronic.utils import get_latest_checkpoint
 
 
@@ -27,6 +26,7 @@ def act(checkpoints_dir: str, checkpoint: str | None, n_action_steps: int | None
     from lerobot.policies.act.modeling_act import ACTPolicy
 
     from positronic.vendors.lerobot.backbone import register_all
+    from positronic.vendors.lerobot.policy import LerobotPolicy
 
     register_all()
 

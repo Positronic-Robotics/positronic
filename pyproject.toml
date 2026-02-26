@@ -25,7 +25,6 @@ dependencies = [
     "fire",
     "httpx",
     "imageio[ffmpeg]",
-    "lerobot==0.3.3", # TODO: Get rid of this, move all usages to standalone scripts
     "msgpack",
     "mujoco",
     "numba>=0.57",
@@ -52,7 +51,6 @@ dependencies = [
 [project.scripts]
 positronic-server="positronic.server.positronic_server:_internal_main"
 positronic-inference="positronic.inference:_internal_main"
-positronic-to-lerobot="positronic.training.to_lerobot:_internal_main"
 positronic-data-collection="positronic.data_collection:_internal_main"
 
 
@@ -68,6 +66,9 @@ hardware = [
     "pymodbus",  # For grippers
     "pyserial", # For grippers
     "pyzed; sys_platform == 'linux'",  # ZED camera support
+]
+lerobot_0_3_3 = [
+    "lerobot==0.3.3",
 ]
 dev = [
     "ruff",
@@ -105,6 +106,7 @@ testpaths = [
     "positronic/tests",
     "positronic/utils/tests",
     "positronic/vendors/gr00t/tests",
+    "positronic/vendors/lerobot/tests",
 ]
 python_files = ["test_*.py", "*_test.py"]
 addopts = [
