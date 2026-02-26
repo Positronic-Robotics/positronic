@@ -523,12 +523,12 @@ def main(
     t = threading.Thread(target=load_dataset, daemon=True)
     t.start()
 
+    primary_host = utils.resolve_host_ip()
     ssl_kwargs = {}
     if https:
         ssl_dir = tempfile.mkdtemp(prefix='positronic-ssl-')
         keyfile = os.path.join(ssl_dir, 'key.pem')
         certfile = os.path.join(ssl_dir, 'cert.pem')
-        primary_host = utils.resolve_host_ip()
         subprocess.run(
             [
                 'openssl',
@@ -553,7 +553,6 @@ def main(
         )
         ssl_kwargs = {'ssl_keyfile': keyfile, 'ssl_certfile': certfile}
 
-    primary_host = utils.resolve_host_ip()
     scheme = 'https' if https else 'http'
     logging.info(f'Starting server on {scheme}://{primary_host}:{port}')
     uvicorn.run(app, host=host, port=port, log_level='debug' if debug else 'info', **ssl_kwargs)

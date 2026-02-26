@@ -417,45 +417,42 @@
         }
       }
 
-      function on_app_started(handle) {
-        // Call `handle.destroy()` to stop. Uncomment to quick result:
-        // setTimeout(() => { handle.destroy(); handle.free()) }, 2000)
+      function notifyReady() {
+        if (window.location !== window.parent.location) {
+          window.parent.postMessage("READY", "*");
+        }
+      }
 
+      function on_app_started(handle) {
         console.debug("App started.");
         hide_center_html();
         show_canvas();
-
         window._handle = handle;
 
         const query = new URLSearchParams(window.location.search);
         const seekT = query.get("seek_t");
         const seekTsNs = query.get("seek_ts_ns");
 
-        if (seekT != null || seekTsNs != null) {
-          // Poll for the recording to appear, then seek + pause + notify parent.
-          function trySeek() {
-            const id = handle.get_active_recording_id();
-            if (!id) { setTimeout(trySeek, 50); return; }
-
-            if (seekTsNs != null) {
-              handle.set_time_for_timeline(id, "time", parseFloat(seekTsNs));
-            } else {
-              const range = handle.get_timeline_time_range(id, "time");
-              if (!range) { setTimeout(trySeek, 50); return; }
-              handle.set_time_for_timeline(id, "time", range.min + parseFloat(seekT) * 1e9);
-            }
-            handle.set_playing(id, false);
-
-            if (window.location !== window.parent.location) {
-              window.parent.postMessage("READY", "*");
-            }
-          }
-          trySeek();
-        } else {
-          if (window.location !== window.parent.location) {
-            window.parent.postMessage("READY", "*");
-          }
+        if (seekT == null && seekTsNs == null) {
+          notifyReady();
+          return;
         }
+
+        function poll() {
+          const id = handle.get_active_recording_id();
+          if (!id) { setTimeout(poll, 50); return; }
+
+          if (seekTsNs != null) {
+            handle.set_time_for_timeline(id, "time", parseFloat(seekTsNs));
+          } else {
+            const range = handle.get_timeline_time_range(id, "time");
+            if (!range) { setTimeout(poll, 50); return; }
+            handle.set_time_for_timeline(id, "time", range.min + parseFloat(seekT) * 1e9);
+          }
+          handle.set_playing(id, false);
+          notifyReady();
+        }
+        poll();
       }
 
       function on_wasm_error(error) {
