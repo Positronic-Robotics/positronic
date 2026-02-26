@@ -4,10 +4,7 @@ import pytest
 from fastapi import WebSocketDisconnect
 
 from positronic.utils.serialization import deserialise
-
-lerobot = pytest.importorskip('lerobot')
-
-from positronic.vendors.lerobot import server as lerobot_server  # noqa: E402
+from positronic.vendors.lerobot import server as lerobot_server
 
 
 class _PassthroughEncoder:

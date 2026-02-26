@@ -41,8 +41,6 @@ dependencies = [
     "robosuite",
     "ruckig",
     "scipy",
-    "timm",
-    "torch",
     "uvicorn[standard]",
     "websockets>=15.0.1",
     "zmq",
@@ -69,6 +67,8 @@ hardware = [
 ]
 lerobot_0_3_3 = [
     "lerobot==0.3.3",
+    "timm",
+    "torch",
 ]
 dev = [
     "ruff",

@@ -9,7 +9,38 @@ on:
       - main
 
 jobs:
-  build:
+  core:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Enable caching
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Set up Python
+        run: uv venv --python 3.11
+
+      - name: Install dependencies
+        run: uv sync --extra dev
+
+      - name: "Run tests (coverage: term, html)"
+        env:
+          PYTHONPATH: ${{ env.PYTHONPATH }}:$PWD
+        run: uv run pytest --ignore=positronic/vendors/lerobot/tests --cov-report=html
+
+      - name: Coverage summary (job summary)
+        if: always()
+        run: uv run coverage report -m >> $GITHUB_STEP_SUMMARY
+
+      - name: Upload coverage HTML artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-html-core
+          path: htmlcov
+
+  lerobot:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -24,18 +55,7 @@ jobs:
       - name: Install dependencies
         run: uv sync --extra dev --extra lerobot_0_3_3
 
-      - name: "Run tests (coverage: term, html)"
+      - name: Run lerobot vendor tests
         env:
           PYTHONPATH: ${{ env.PYTHONPATH }}:$PWD
-        run: uv run pytest --cov-report=html
-
-      - name: Coverage summary (job summary)
-        if: always()
-        run: uv run coverage report -m >> $GITHUB_STEP_SUMMARY
-
-      - name: Upload coverage HTML artifact
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: coverage-html
-          path: htmlcov
+        run: uv run pytest positronic/vendors/lerobot/tests --no-cov
