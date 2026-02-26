@@ -91,6 +91,14 @@ app.mount('/static', StaticFiles(directory=_static_dir), name='static')
 templates = Jinja2Templates(directory=_templates_dir)
 
 
+@app.middleware('http')
+async def cache_rerun_assets(request: Request, call_next):
+    response = await call_next(request)
+    if request.url.path.startswith('/static/rerun/'):
+        response.headers['Cache-Control'] = 'public, max-age=31536000, immutable'
+    return response
+
+
 def _iter_file_chunks(path: str, *, chunk_size: int = 128 * 1024):
     with open(path, 'rb') as source:
         while True:

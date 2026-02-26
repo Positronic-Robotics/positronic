@@ -417,12 +417,6 @@
         }
       }
 
-      function notifyReady() {
-        if (window.location !== window.parent.location) {
-          window.parent.postMessage("READY", "*");
-        }
-      }
-
       function on_app_started(handle) {
         console.debug("App started.");
         hide_center_html();
@@ -432,25 +426,17 @@
         const query = new URLSearchParams(window.location.search);
         const seekT = query.get("seek_t");
         const seekTsNs = query.get("seek_ts_ns");
-
-        if (seekT == null && seekTsNs == null) {
-          notifyReady();
-          return;
-        }
+        if (seekT == null && seekTsNs == null) return;
 
         function poll() {
           const id = handle.get_active_recording_id();
           if (!id) { setTimeout(poll, 50); return; }
+          const range = handle.get_timeline_time_range(id, "time");
+          if (!range) { setTimeout(poll, 50); return; }
 
-          if (seekTsNs != null) {
-            handle.set_time_for_timeline(id, "time", parseFloat(seekTsNs));
-          } else {
-            const range = handle.get_timeline_time_range(id, "time");
-            if (!range) { setTimeout(poll, 50); return; }
-            handle.set_time_for_timeline(id, "time", range.min + parseFloat(seekT) * 1e9);
-          }
+          const ts = seekTsNs != null ? parseFloat(seekTsNs) : range.min + parseFloat(seekT) * 1e9;
+          handle.set_time_for_timeline(id, "time", ts);
           handle.set_playing(id, false);
-          notifyReady();
         }
         poll();
       }
