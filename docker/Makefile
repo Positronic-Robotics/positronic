@@ -1,9 +1,10 @@
-.PHONY: all build tag push clean prune help build-training tag-training push-training build-openpi tag-openpi push-openpi build-groot tag-groot push-groot
+.PHONY: all build tag push clean prune help build-training tag-training push-training build-openpi tag-openpi push-openpi build-groot tag-groot push-groot build-dreamzero tag-dreamzero push-dreamzero
 
 # Image configuration
 IMAGE_NAME_TRAINING := positro/positronic
 IMAGE_NAME_OPENPI := positro/openpi
 IMAGE_NAME_GROOT := positro/gr00t
+IMAGE_NAME_DREAMZERO := positro/dreamzero
 IMAGE_NAME_OPENPI_BASE := positro/openpi-base
 
 # Extract version from pyproject.toml (first literal version entry)
@@ -23,6 +24,7 @@ LOCAL_TAG_TRAINING := $(IMAGE_NAME_TRAINING):local
 # Other image tags
 TAG_OPENPI_LATEST := $(IMAGE_NAME_OPENPI):latest
 TAG_GROOT_LATEST := $(IMAGE_NAME_GROOT):latest
+TAG_DREAMZERO_LATEST := $(IMAGE_NAME_DREAMZERO):latest
 
 # OpenPI base image (pulled from registry)
 TAG_OPENPI_BASE := $(IMAGE_NAME_OPENPI_BASE):latest
@@ -66,7 +68,11 @@ build-groot: build-training
 	@echo "Building $(IMAGE_NAME_GROOT)..."
 	docker build --pull --platform linux/amd64 --build-arg BASE_IMAGE=positro/gr00t-base:latest -f Dockerfile.groot -t $(IMAGE_NAME_GROOT):local ..
 
-build: build-training build-openpi build-groot
+build-dreamzero:
+	@echo "Building $(IMAGE_NAME_DREAMZERO)..."
+	docker build --platform linux/amd64 --build-arg BASE_IMAGE=positro/dreamzero-base:latest -f Dockerfile.dreamzero -t $(IMAGE_NAME_DREAMZERO):local ..
+
+build: build-training build-openpi build-groot build-dreamzero
 
 tag-training: build-training
 	@echo "Tagging training image with multiple tags..."
@@ -78,7 +84,7 @@ tag-training: build-training
 	@echo "  - $(TAG_TRAINING_VERSION)"
 	@echo "  - $(TAG_TRAINING_SHA)"
 
-tag: tag-training tag-openpi tag-groot
+tag: tag-training tag-openpi tag-groot tag-dreamzero
 
 push-training: tag-training
 	@echo "Pushing training images to Docker Hub..."
@@ -88,7 +94,7 @@ push-training: tag-training
 	@echo ""
 	@echo "Successfully pushed training images!"
 
-push: push-training push-openpi push-groot
+push: push-training push-openpi push-groot push-dreamzero
 
 tag-openpi: build-openpi
 	@echo "Tagging openpi image..."
@@ -108,6 +114,15 @@ push-groot: tag-groot
 	@echo "Pushing $(IMAGE_NAME_GROOT) to Docker Hub..."
 	docker push $(TAG_GROOT_LATEST)
 
+tag-dreamzero: build-dreamzero
+	@echo "Tagging dreamzero image..."
+	docker tag $(IMAGE_NAME_DREAMZERO):local $(TAG_DREAMZERO_LATEST)
+	@echo "Tagged with: $(TAG_DREAMZERO_LATEST)"
+
+push-dreamzero: tag-dreamzero
+	@echo "Pushing $(IMAGE_NAME_DREAMZERO) to Docker Hub..."
+	docker push $(TAG_DREAMZERO_LATEST)
+
 all: push
 
 clean:
@@ -120,6 +135,8 @@ clean:
 	-docker rmi $(TAG_OPENPI_LATEST)
 	-docker rmi $(IMAGE_NAME_GROOT):local
 	-docker rmi $(TAG_GROOT_LATEST)
+	-docker rmi $(IMAGE_NAME_DREAMZERO):local
+	-docker rmi $(TAG_DREAMZERO_LATEST)
 	@echo "All local images removed."
 
 prune:

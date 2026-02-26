@@ -173,3 +173,43 @@ services:
     entrypoint: ["uv", "run", "--python", "3.11", "python", "-m", "positronic.vendors.gr00t.server"]
     ports:
       - "8000:8000"
+
+  positronic-dreamzero: &dreamzero-common
+    image: positro/dreamzero:latest
+
+    # Enable interactive terminal
+    stdin_open: true
+    tty: true
+
+    # GPU support
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [compute, graphics, utility]
+
+    # Volume mounts
+    volumes:
+      - ${CACHE_ROOT:-${HOME}}/.cache:/root/.cache
+      - ${CACHE_ROOT:-${HOME}}/.aws:/root/.aws:ro
+
+    # Set HOME inside container to match the mount expectations
+    environment:
+      HOME: /root
+
+    env_file:
+      - path: .env.wandb
+        required: false
+
+    working_dir: /positronic
+
+  dreamzero-server:
+    <<: *dreamzero-common
+    container_name: dreamzero-server
+    entrypoint: ["uv", "run", "--python", "3.11", "python", "-m", "positronic.vendors.dreamzero.server"]
+    ports:
+      - "8000:8000"
+    shm_size: 16g
+    ipc: host

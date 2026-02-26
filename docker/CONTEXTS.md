@@ -13,6 +13,7 @@
 | `positro/positronic` | Dataset conversion, LeRobot training/inference |
 | `positro/gr00t` | GR00T training and inference |
 | `positro/openpi` | OpenPI training and inference |
+| `positro/dreamzero` | DreamZero inference (1+ GPU, H100 80GB recommended) |
 
 Build and push all: `make push`
 
