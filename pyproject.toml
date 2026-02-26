@@ -24,13 +24,11 @@ dependencies = [
     "fastapi",
     "fire",
     "httpx",
-    "imageio[ffmpeg]",
     "msgpack",
     "mujoco",
-    "numba>=0.57",
     "numpy",
     "opencv-python-headless",
-    "openpi-client",
+    "openpi-client",  # TODO: move to openpi vendor optional dep
     "plotly>=6.5.0",
     "pos3>=0.2.0",
     "pyarrow",
@@ -43,7 +41,7 @@ dependencies = [
     "scipy",
     "uvicorn[standard]",
     "websockets>=15.0.1",
-    "zmq",
+    "zmq",  # TODO: move to gr00t vendor optional dep
 ]
 
 [project.scripts]
