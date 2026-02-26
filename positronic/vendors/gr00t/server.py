@@ -17,7 +17,7 @@ import zmq
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 
 from positronic.offboard.server_utils import monitor_async_task, wait_for_subprocess_ready
-from positronic.policy import Codec, Policy
+from positronic.policy import Codec, Policy, RecordingCodec
 from positronic.utils.checkpoints import get_latest_checkpoint, list_checkpoints
 from positronic.utils.logging import init_logging
 from positronic.utils.serialization import deserialise, serialise
@@ -260,7 +260,7 @@ class Gr00tPolicy(Policy):
 class InferenceServer:
     def __init__(
         self,
-        codec: Codec,
+        codec: Codec | None,
         checkpoints_dir: str,
         checkpoint: str | None,
         modality_config: str,
@@ -268,6 +268,7 @@ class InferenceServer:
         host: str = '0.0.0.0',
         port: int = 8000,
         zmq_port: int = 5555,
+        recording_dir: str | None = None,
     ):
         self.codec = codec
         self.checkpoints_dir = checkpoints_dir.rstrip('/')
@@ -278,6 +279,8 @@ class InferenceServer:
         self.host = host
         self.port = port
         self.zmq_port = zmq_port
+        if recording_dir:
+            self.codec = RecordingCodec(self.codec, pos3.sync(recording_dir))
 
         self.subprocess: Gr00tSubprocess | None = None
         self.current_checkpoint_id: str | None = None
@@ -384,9 +387,10 @@ class InferenceServer:
         try:
             # Get or start subprocess (sends status updates internally)
             subprocess, checkpoint_meta = await self._get_subprocess(checkpoint_id, websocket)
-
-            # Send ready with metadata
-            meta = {**self.metadata, **checkpoint_meta, **self.codec.meta}
+            base_policy = Gr00tPolicy(subprocess.client)
+            policy = self.codec.wrap(base_policy) if self.codec else base_policy
+            policy.reset()
+            meta = {**self.metadata, **checkpoint_meta, **policy.meta}
             await websocket.send_bytes(serialise({'status': 'ready', 'meta': meta}))
         except Exception as e:
             logger.error(f'Failed to load checkpoint: {e}')
@@ -395,8 +399,6 @@ class InferenceServer:
             return
 
         try:
-            policy = self.codec.wrap(Gr00tPolicy(subprocess.client))
-            policy.reset()
             try:
                 while True:
                     message = await websocket.receive_bytes()
@@ -429,7 +431,8 @@ class InferenceServer:
         try:
             logger.info('Running warmup inference...')
             await asyncio.to_thread(self.subprocess.client.reset)
-            await asyncio.to_thread(self.subprocess.client.get_action, self.codec.dummy_encoded())
+            dummy = self.codec.dummy_encoded() if self.codec else {}
+            await asyncio.to_thread(self.subprocess.client.get_action, dummy)
             logger.info('Warmup inference complete')
         except Exception:
             logger.warning('Warmup inference failed (non-fatal)', exc_info=True)
@@ -455,9 +458,22 @@ class InferenceServer:
             self._shutdown()
 
 
-@cfn.config(codec=codecs.ee_absolute, checkpoint=None, port=8000, groot_venv_path='/.venv/', modality_config='ee')
+@cfn.config(
+    codec=codecs.ee_quat,
+    checkpoint=None,
+    port=8000,
+    groot_venv_path='/.venv/',
+    modality_config='ee',
+    recording_dir=None,
+)
 def server(
-    codec: Codec, checkpoints_dir: str, checkpoint: str | None, port: int, groot_venv_path: str, modality_config: str
+    codec: Codec,
+    checkpoints_dir: str,
+    checkpoint: str | None,
+    port: int,
+    groot_venv_path: str,
+    modality_config: str,
+    recording_dir: str | None,
 ):
     """Starts the GR00T inference server with encoding/decoding."""
 
@@ -469,12 +485,13 @@ def server(
             modality_config=modality_config,
             groot_venv_path=groot_venv_path,
             port=port,
+            recording_dir=recording_dir,
         ).serve()
 
 
 # Pre-configured server variants matching GR00T modality configs
-ee = server.copy()  # Uses default codec=codecs.ee_absolute, modality='ee'
-ee_joints = server.override(codec=codecs.ee_joints, modality_config='ee_q')
+ee = server.copy()  # Uses default codec=codecs.ee_quat, modality='ee'
+ee_joints = server.override(codec=codecs.ee_quat_joints, modality_config='ee_q')
 ee_rot6d = server.override(codec=codecs.ee_rot6d, modality_config='ee_rot6d')
 ee_rot6d_joints = server.override(codec=codecs.ee_rot6d_joints, modality_config='ee_rot6d_q')
 ee_rot6d_rel = server.override(codec=codecs.ee_rot6d, modality_config='ee_rot6d_rel')

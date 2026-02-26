@@ -59,10 +59,17 @@ def sample(origins: list[cfn.Config], weights: list[float] | None):
     return SampledPolicy(*origins, weights=weights)
 
 
-@cfn.config(host='localhost', port=8000, resize=640, model_id=None, horizon_sec=None)
+@cfn.config(host='localhost', port=8000, resize=640, model_id=None, horizon_sec=None, codec=None)
 def remote(
-    host: str, port: int, resize: int | None = None, model_id: str | None = None, horizon_sec: float | None = None
+    host: str,
+    port: int,
+    resize: int | None = None,
+    model_id: str | None = None,
+    horizon_sec: float | None = None,
+    codec: Codec | None = None,
 ):
     from positronic.policy.remote import RemotePolicy
 
-    return RemotePolicy(host, port, resize, model_id=model_id, horizon_sec=horizon_sec)
+    effective_resize = None if codec and codec.meta.get('image_sizes') else resize
+    policy = RemotePolicy(host, port, effective_resize, model_id=model_id, horizon_sec=horizon_sec)
+    return codec.wrap(policy) if codec else policy

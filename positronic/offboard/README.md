@@ -117,7 +117,7 @@ The loop continues until the client closes the connection or the episode ends.
 # LeRobot server
 cd docker && docker compose run --rm --service-ports lerobot-server \
   --checkpoints_dir=~/checkpoints/lerobot/exp_v1 \
-  --codec=@positronic.vendors.lerobot.codecs.eepose_absolute
+  --codec=@positronic.vendors.lerobot.codecs.ee
 
 # GR00T server (swap hardware code stays the same)
 cd docker && docker compose run --rm --service-ports groot-server \

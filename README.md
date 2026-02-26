@@ -193,7 +193,7 @@ To preview exactly what the training will see, pass the same codec configuration
 uv run positronic-server \
     --dataset=@positronic.cfg.ds.local_all \
     --dataset.path=~/datasets/stack_cubes_raw \
-    --dataset.codec=@positronic.vendors.openpi.codecs.eepose \
+    --dataset.codec=@positronic.vendors.openpi.codecs.ee \
     --port=5001
 ```
 
@@ -205,10 +205,9 @@ Convert curated runs using a codec:
 cd docker && docker compose run --rm positronic-to-lerobot convert \
     --dataset.dataset=.local \
     --dataset.dataset.path=~/datasets/stack_cubes_raw \
-    --dataset.codec=@positronic.vendors.openpi.codecs.eepose \
+    --dataset.codec=@positronic.vendors.openpi.codecs.ee \
     --output_dir=~/datasets/lerobot/stack_cubes \
-    --task="pick up the green cube and place it on the red cube" \
-    --fps=30
+    --task="pick up the green cube and place it on the red cube"
 ```
 
 **Train using vendor-specific workflows:**
@@ -246,7 +245,7 @@ uv run positronic-inference sim \
 # On inference server:
 cd docker && docker compose run --rm --service-ports lerobot-server \
     --checkpoints_dir=~/checkpoints/lerobot/<run_id> \
-    --codec=@positronic.vendors.lerobot.codecs.eepose_absolute
+    --codec=@positronic.vendors.lerobot.codecs.ee
 
 # On robot:
 uv run positronic-inference sim \
@@ -288,7 +287,7 @@ uv sync --frozen --extra dev  # install core + dev tooling
 Install pre-commit hooks (one-time setup):
 
 ```bash
-pre-commit install --hook-type pre-commit --hook-type commit-msg
+pre-commit install --hook-type pre-commit --hook-type commit-msg --hook-type post-commit
 ```
 
 ### Daily Development

@@ -27,7 +27,8 @@ repos:
     hooks:
       - id: commit-signature-check
         name: Commit Signature Verification
-        entry: bash -c 'git verify-commit HEAD 2>/dev/null || { echo "WARNING - Commit is not signed. Please configure GPG/SSH signing"; exit 1; }'
+        entry: bash -c 'git cat-file commit HEAD | grep -q "^gpgsig " || { echo "ERROR - Commit is not signed. Do not use --no-gpg-sign"; exit 1; }'
         language: system
         stages: [post-commit]
+        always_run: true
         pass_filenames: false

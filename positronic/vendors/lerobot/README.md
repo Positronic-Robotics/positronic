@@ -19,12 +19,11 @@ See [Model Selection Guide](../../docs/model-selection.md) for comparison.
 ## Quick Start
 
 ```bash
-# 1. Convert dataset
+# 1. Convert dataset (output_dir supports both local paths and s3://)
 cd docker && docker compose run --rm positronic-to-lerobot convert \
   --dataset.dataset.path=~/datasets/my_task_raw \
-  --dataset.codec=@positronic.vendors.lerobot.codecs.eepose_absolute \
-  --output_dir=~/datasets/lerobot/my_task \
-  --fps=30
+  --dataset.codec=@positronic.vendors.lerobot.codecs.ee \
+  --output_dir=~/datasets/lerobot/my_task
 
 # 2. Train
 cd docker && docker compose run --rm lerobot-train \
@@ -37,7 +36,7 @@ cd docker && docker compose run --rm lerobot-train \
 # 3. Serve
 cd docker && docker compose run --rm --service-ports lerobot-server \
   --checkpoints_dir=~/checkpoints/lerobot/my_task_v1/ \
-  --codec=@positronic.vendors.lerobot.codecs.eepose_absolute
+  --codec=@positronic.vendors.lerobot.codecs.ee
 
 # 4. Run inference
 uv run positronic-inference sim \
@@ -54,8 +53,10 @@ LeRobot supports two primary codecs for different observation/action configurati
 
 | Codec | Observation | Action | Use Case |
 |-------|-------------|--------|----------|
-| `eepose_absolute` | EE pose (7D quat) + grip (1D) + images | Absolute EE position (7D quat) + grip | Default codec for end-effector control, task-space manipulation |
-| `joints_absolute` | Joint positions (7D) + grip (1D) + images | Absolute EE position (7D quat) + grip | Joint-space observations with task-space control |
+| `ee` | EE pose (7D quat) + grip (1D) + images | Absolute EE position (7D quat) + grip | Default codec for end-effector control, task-space manipulation |
+| `joints` | Joint positions (7D) + grip (1D) + images | Absolute EE position (7D quat) + grip | Joint-space observations with task-space control |
+| `ee_traj` | EE pose (7D quat) + grip + images | Absolute EE trajectory (7D quat) + grip (binarized) | Training on actual robot trajectory |
+| `joints_traj` | Joint positions (7D) + grip + images | Absolute joint trajectory (7D) + grip (binarized) | Joint-space trajectory training |
 
 **Key features:**
 - Uses `task_field='task'` (LerobotPolicy filters this before passing to ACT)
@@ -64,8 +65,9 @@ LeRobot supports two primary codecs for different observation/action configurati
 - Absolute action space (not delta)
 
 **Choosing a codec:**
-- **Most tasks**: Use `eepose_absolute` (task-space observations and control)
-- **Want joint feedback**: Use `joints_absolute` (may improve performance with joint position information)
+- **Most tasks**: Use `ee` (task-space observations and control)
+- **Want joint feedback**: Use `joints` (may improve performance with joint position information)
+- **Trajectory training**: Use `ee_traj` or `joints_traj` (trains on actual robot trajectory with binarized grip)
 
 See [Codecs Guide](../../docs/codecs.md) for comprehensive codec documentation.
 
@@ -77,7 +79,7 @@ See [Codecs Guide](../../docs/codecs.md) for comprehensive codec documentation.
 
 | Parameter | Description | Default | Example |
 |-----------|-------------|---------|---------|
-| `--codec` | Override codec | `eepose_absolute` | `joints_absolute` |
+| `--codec` | Override codec | `ee` | `joints` |
 | `--exp_name` | Experiment name (unique ID) | Required | `my_task_v1` |
 | `--num_train_steps` | Total training steps | `50000` | `100000` |
 | `--save_freq` | Checkpoint save interval | `10000` | `5000` |
@@ -91,7 +93,7 @@ See [Codecs Guide](../../docs/codecs.md) for comprehensive codec documentation.
 ```bash
 cd docker && docker compose run --rm --service-ports lerobot-server \
   --checkpoints_dir=~/checkpoints/lerobot/my_task_v1/ \
-  --codec=@positronic.vendors.lerobot.codecs.eepose_absolute \
+  --codec=@positronic.vendors.lerobot.codecs.ee \
   --port=8000 \
   --host=0.0.0.0
 ```
@@ -102,7 +104,7 @@ cd docker && docker compose run --rm --service-ports lerobot-server \
 |-----------|-------------|---------|---------|
 | `--checkpoints_dir` | Experiment directory (contains `checkpoints/` folder) | Required | `~/checkpoints/lerobot/my_task_v1/` |
 | `--checkpoint` | Specific checkpoint step | Latest | `10000`, `20000` |
-| `--codec` | Codec (must match training) | `eepose_absolute` | `joints_absolute` |
+| `--codec` | Codec (must match training) | `ee` | `joints` |
 | `--port` | Server port | `8000` | `8001` |
 | `--host` | Server host | `0.0.0.0` | Binds to all interfaces |
 

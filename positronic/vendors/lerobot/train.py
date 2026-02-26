@@ -2,7 +2,7 @@
 LeRobot training script using ACT policy.
 
 Example:
-    # Train with default codec (eepose_absolute)
+    # Train with default codec (ee)
     cd docker && docker compose run --rm lerobot-train \\
       --input_path=s3://interim/sim_stack/lerobot/eepose_absolute/ \\
       --exp_name=my_experiment \\
@@ -12,7 +12,7 @@ Example:
     cd docker && docker compose run --rm lerobot-train \\
       --input_path=s3://interim/sim_stack/lerobot/joints_absolute/ \\
       --exp_name=my_experiment \\
-      --codec=@positronic.vendors.lerobot.codecs.joints_absolute \\
+      --codec=@positronic.vendors.lerobot.codecs.joints \\
       --output_dir=s3://checkpoints/lerobot/
 """
 
@@ -103,7 +103,7 @@ def _update_config(cfg: TrainPipelineConfig, **cfg_kwargs):
             raise AttributeError(f'Could not update config for {k}') from e
 
 
-@cfn.config(codec=lerobot_codecs.eepose_absolute, num_train_steps=None, backbone=None)
+@cfn.config(codec=lerobot_codecs.ee, num_train_steps=None, backbone=None)
 @pos3.with_mirror()
 def train(
     input_path: str,

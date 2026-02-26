@@ -3,6 +3,7 @@ import pyarrow.parquet as pq
 import pytest
 
 from positronic.dataset.signal import Kind
+from positronic.dataset.transforms.signals import diff, norm
 from positronic.dataset.vector import SimpleSignal, SimpleSignalWriter
 
 from .utils import DummySignal
@@ -486,3 +487,47 @@ class TestExtraTimelines:
             with SimpleSignalWriter(fp) as w:
                 w.append(10, 1000)
                 w.append(20, 2000, extra_ts={'producer': 1900})
+
+
+def _make_signal(ts_sec, vals):
+    """Create a DummySignal from timestamps in seconds and a 2D value array."""
+    ts = (np.asarray(ts_sec, dtype=np.float64) * 1e9).astype(np.int64)
+    return DummySignal(ts, np.asarray(vals, dtype=np.float64))
+
+
+class TestDiff:
+    def test_velocity_of_linear_is_constant(self):
+        # f(t) = [t, 2t] → velocity = [1, 2]
+        sig = _make_signal([0, 1, 2, 3, 4], [[0, 0], [1, 2], [2, 4], [3, 6], [4, 8]])
+        vel = diff(sig, dt_sec=1.0)
+        # Centered diff trims 1 from start; last point clamps so skip it
+        vals = np.array(vel._values_at(np.arange(len(vel) - 1)))
+        np.testing.assert_allclose(vals, [[1.0, 2.0]] * len(vals))
+
+    def test_acceleration_of_quadratic_is_constant(self):
+        # f(t) = [t²] → acceleration = [2]
+        t = np.arange(7, dtype=np.float64)
+        sig = _make_signal(t, (t**2).reshape(-1, 1))
+        accel = diff(sig, dt_sec=1.0, order=2)
+        # Trims 1 from start; last point clamps so skip it
+        vals = np.array(accel._values_at(np.arange(len(accel) - 1)))
+        np.testing.assert_allclose(vals, [[2.0]] * len(vals))
+
+    def test_invalid_order_raises(self):
+        sig = _make_signal([0, 1], [[0], [1]])
+        with pytest.raises(ValueError, match='order'):
+            diff(sig, dt_sec=1.0, order=3)
+
+
+class TestNorm:
+    def test_norm_2d(self):
+        sig = _make_signal([0, 1, 2], [[3, 4], [6, 8], [0, 0]])
+        n = norm(sig)
+        vals = np.array(n._values_at(np.arange(3)))
+        np.testing.assert_allclose(vals, [5.0, 10.0, 0.0])
+
+    def test_norm_1d_is_abs(self):
+        sig = _make_signal([0, 1, 2], [[-3], [0], [5]])
+        n = norm(sig)
+        vals = np.array(n._values_at(np.arange(3)))
+        np.testing.assert_allclose(vals, [3.0, 0.0, 5.0])

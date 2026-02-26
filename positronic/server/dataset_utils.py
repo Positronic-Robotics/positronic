@@ -1,13 +1,13 @@
-"""Dataset utilities for Positronic dataset visualization (images-only)."""
+"""Dataset utilities for Positronic dataset visualization."""
 
-import heapq
 import logging
-from collections.abc import Iterator
+from collections.abc import Generator, Iterator
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-import cv2
+import numpy as np
 import rerun as rr
 import rerun.blueprint as rrb
 
@@ -16,7 +16,69 @@ from positronic.dataset.episode import Episode
 from positronic.dataset.local_dataset import LocalDataset
 from positronic.dataset.signal import Kind
 from positronic.dataset.transforms import TransformedDataset
-from positronic.utils.rerun_compat import flatten_numeric, log_numeric_series, log_series_styles, set_timeline_time
+from positronic.dataset.video import VideoSignal
+from positronic.utils.rerun_compat import flatten_numeric, log_series_styles, set_timeline_time
+
+_POSE_SUFFIXES = ('.pose', '.ee_pose')
+_POSE_COLORS = {
+    'commands': [255, 100, 50],  # orange — commanded trajectory
+    'state': [50, 200, 255],  # cyan — actual/state trajectory
+    'default': [180, 180, 180],  # gray fallback
+}
+
+
+def _is_pose_signal(name: str, dim: int) -> bool:
+    """Return True if the signal looks like a 7D ee pose (tx, ty, tz, qx, qy, qz, qw)."""
+    return dim == 7 and any(name.endswith(s) for s in _POSE_SUFFIXES)
+
+
+def _pose_color(name: str) -> list[int]:
+    prefix = name.split('.')[0] if '.' in name else name
+    for suffix, color in _POSE_COLORS.items():
+        if prefix.endswith(suffix):
+            return color
+    return _POSE_COLORS['default']
+
+
+@dataclass
+class EpisodeSignals:
+    videos: list[str]
+    numerics: list[str]
+    dims: dict[str, int]
+    poses: list[str]
+
+
+def _infer_dims(sig) -> int:
+    if len(sig) == 0:
+        return 1
+    val, _ = sig[0]
+    arr = flatten_numeric(val)
+    return int(arr.size) if arr is not None else 1
+
+
+_TRAIL_FADE_NS = 5_000_000_000  # 5-second window of full visibility
+_TRAIL_UPDATE_INTERVAL = 30  # Only re-log full trail every N pose samples
+
+
+def _log_trajectory_trail(entity_path: str, positions: np.ndarray, start: int, base_rgb: list[int]) -> None:
+    """Log trail for positions[start:] only (the recent window)."""
+    window = positions[start:]
+    if len(window) < 2:
+        return
+    segments = np.stack([window[:-1], window[1:]], axis=1)
+    alphas = np.linspace(80, 255, len(segments), dtype=np.uint8)
+    colors = np.column_stack([np.full((len(segments), 3), base_rgb, dtype=np.uint8), alphas[:, None]])
+    rr.log(entity_path, rr.LineStrips3D(segments, colors=colors, radii=0.003))
+
+
+def _log_static_trail(entity_path: str, positions: np.ndarray, base_rgb: list[int]) -> None:
+    """Log the full trajectory as a thin, muted static background."""
+    if len(positions) < 2:
+        return
+    segments = np.stack([positions[:-1], positions[1:]], axis=1)
+    muted = [c // 3 + 40 for c in base_rgb]  # blend toward gray; rerun 3D doesn't do alpha
+    colors = np.tile([*muted, 255], (len(segments), 1)).astype(np.uint8)
+    rr.log(entity_path, rr.LineStrips3D(segments, colors=colors, radii=0.0005), static=True)
 
 
 def _format_value(value: Any, formatter: str | None, default: Any) -> Any:
@@ -53,106 +115,68 @@ def get_episodes_list(
     return result
 
 
-def _collect_signal_groups(ep: Episode) -> tuple[list[str], list[str], dict[str, int]]:
-    """Return (video_names, signal_names, signal_dims) for an episode.
-
-    signal_dims gives the number of plotted series per non-video signal (1 for scalar).
-    """
-    video_names: list[str] = []
-    signal_names: list[str] = []
-    signal_dims: dict[str, int] = {}
+def _collect_signal_groups(ep: Episode) -> EpisodeSignals:
+    signals = EpisodeSignals(videos=[], numerics=[], dims={}, poses=[])
     for name, sig in ep.signals.items():
         if sig.kind == Kind.IMAGE:
             try:
-                frame, _ = sig[0]
-                h, w = frame.shape[:2]
-                video_names.append(name)
+                sig[0]
+                signals.videos.append(name)
             except Exception:
-                continue
-        else:
-            signal_names.append(name)
-            # infer channel count for legend visibility
-            try:
-                if len(sig) == 0:
-                    signal_dims[name] = 1
-                else:
-                    v0, _ = sig[0]
-                    arr = flatten_numeric(v0)
-                    signal_dims[name] = int(arr.size) if arr is not None else 1
-            except Exception:
-                signal_dims[name] = 1
-    return video_names, signal_names, signal_dims
+                pass
+            continue
+
+        signals.numerics.append(name)
+        try:
+            signals.dims[name] = _infer_dims(sig)
+        except Exception:
+            signals.dims[name] = 1
+        if _is_pose_signal(name, signals.dims[name]):
+            signals.poses.append(name)
+    return signals
 
 
-def _build_blueprint(video_names: list[str], signal_names: list[str], signal_dims: dict[str, int]) -> rrb.Blueprint:
-    image_views = [rrb.Spatial2DView(name=k, origin=f'/{k}') for k in video_names]
-
-    per_signal_views = []
-    for sig in signal_names:
-        # Legends visible only if a signal has more than one plotted series
-        show_legend = signal_dims.get(sig, 1) > 1
-        per_signal_views.append(
-            rrb.TimeSeriesView(name=sig, origin=f'/signals/{sig}', plot_legend=rrb.PlotLegend(visible=show_legend))
+def _build_blueprint(signals: EpisodeSignals) -> rrb.Blueprint:
+    image_views = [rrb.Spatial2DView(name=k, origin=f'/{k}') for k in signals.videos]
+    per_signal_views = [
+        rrb.TimeSeriesView(
+            name=sig,
+            origin=f'/signals/{sig}',
+            plot_legend=rrb.PlotLegend(visible=signals.dims.get(sig, 1) > 1),
+            axis_y=rrb.ScalarAxis(zoom_lock=True),
         )
+        for sig in signals.numerics
+    ]
 
-    grid_items = []
-    if per_signal_views:
-        grid_items.append(rrb.Grid(*per_signal_views))
+    # Right column: 3D on top, images below (vertical split)
+    right_items = []
+    if signals.poses:
+        right_items.append(rrb.Spatial3DView(name='3D Trajectory', origin='/3d', background=[30, 30, 30]))
     if image_views:
-        grid_items.append(rrb.Grid(*image_views))
+        right_items.append(rrb.Grid(*image_views))
+
+    columns = []
+    column_shares = []
+    if per_signal_views:
+        columns.append(rrb.Grid(*per_signal_views))
+        column_shares.append(2)
+    if right_items:
+        columns.append(right_items[0] if len(right_items) == 1 else rrb.Vertical(*right_items))
+        column_shares.append(1)
 
     return rrb.Blueprint(
         rrb.BlueprintPanel(state=rrb.PanelState.Hidden),
         rrb.SelectionPanel(state=rrb.PanelState.Hidden),
         rrb.TopPanel(state=rrb.PanelState.Expanded),
         rrb.TimePanel(state=rrb.PanelState.Collapsed),
-        rrb.Grid(*grid_items, column_shares=[1, 2]),
+        rrb.Grid(*columns, column_shares=column_shares),
     )
 
 
-def _setup_series_names(ep: Episode, signal_names: list[str]) -> None:
-    """Log static series metadata with short names ('0','1',...) per signal."""
-    for key in signal_names:
-        try:
-            sig = ep.signals[key]
-            if len(sig) == 0:
-                dims = 1
-            else:
-                val, _ = sig[0]
-                arr = flatten_numeric(val)
-                dims = int(arr.size) if arr is not None else 1
-        except Exception:
-            dims = 1
-        names = [str(i) for i in range(max(1, dims))]
+def _setup_series_names(signals: EpisodeSignals) -> None:
+    for key in signals.numerics:
+        names = [str(i) for i in range(max(1, signals.dims.get(key, 1)))]
         log_series_styles(f'/signals/{key}', names, static=True)
-
-
-def _episode_log_entries(ep: Episode, video_names: list[str], signal_names: list[str]):
-    heap: list[tuple[int, int, str, str, Any, Iterator[tuple[Any, int]]]] = []
-
-    def _push(sig_index: int, kind: str, key: str, iterator: Iterator[tuple[Any, int]]):
-        try:
-            payload, ts_ns = next(iterator)
-        except StopIteration:
-            return
-        heapq.heappush(heap, (ts_ns, sig_index, kind, key, payload, iterator))
-
-    iterators: list[tuple[int, str, str, Iterator[tuple[Any, int]]]] = []
-
-    for idx, key in enumerate(video_names):
-        iterators.append((idx, 'video', key, iter(ep.signals[key])))
-
-    base_idx = len(iterators)
-    for offset, key in enumerate(signal_names):
-        iterators.append((base_idx + offset, 'numeric', key, iter(ep.signals[key])))
-
-    for sig_index, kind, key, iterator in iterators:
-        _push(sig_index, kind, key, iterator)
-
-    while heap:
-        ts_ns, sig_index, kind, key, payload, iterator = heapq.heappop(heap)
-        yield (kind, key, payload, ts_ns)
-        _push(sig_index, kind, key, iterator)
 
 
 class _BinaryStreamDrainer:
@@ -170,17 +194,110 @@ class _BinaryStreamDrainer:
             self._buffer.extend(chunk)
         # Yield in min_bytes-sized chunks
         while len(self._buffer) >= self._min_bytes:
-            to_yield = self._buffer[: self._min_bytes]
-            yield bytes(to_yield)
-            self._buffer = self._buffer[self._min_bytes :]
+            yield bytes(self._buffer[: self._min_bytes])
+            del self._buffer[: self._min_bytes]
         # On force, yield any remaining bytes
         if force and self._buffer:
             yield bytes(self._buffer)
             self._buffer.clear()
 
 
+def _log_video_signals(ep: Episode, signals: EpisodeSignals, drainer: _BinaryStreamDrainer) -> Iterator[bytes]:
+    """Log video signals as AssetVideo + VideoFrameReference (columnar)."""
+    for name in signals.videos:
+        sig = ep.signals[name]
+        if not isinstance(sig, VideoSignal):
+            continue
+        video_bytes = sig.video_path.read_bytes()
+        asset = rr.AssetVideo(contents=video_bytes, media_type='video/mp4')
+        rr.log(name, asset, static=True)
+
+        our_ts = np.asarray(sig.keys())
+        frame_pts_ns = asset.read_frame_timestamps_ns()
+        rr.send_columns(
+            name,
+            indexes=[rr.TimeNanosColumn('time', our_ts)],
+            columns=rr.VideoFrameReference.columns_nanoseconds(frame_pts_ns),
+        )
+        yield from drainer.drain()
+
+
+def _log_numeric_signals(
+    ep: Episode, signals: EpisodeSignals, drainer: _BinaryStreamDrainer
+) -> Generator[bytes, None, dict[str, tuple[np.ndarray, np.ndarray]]]:
+    """Log numeric time-series via send_columns. Returns pose data for 3D logging."""
+    pose_set = set(signals.poses)
+    pose_data: dict[str, tuple[np.ndarray, np.ndarray]] = {}
+
+    for key in signals.numerics:
+        sig = ep.signals[key]
+        if len(sig) == 0:
+            continue
+        ts_arr = np.asarray(sig.keys(), dtype=np.int64)
+        try:
+            vals = np.asarray(sig.values(), dtype=np.float64)
+        except (TypeError, ValueError):
+            continue
+        if vals.ndim == 1:
+            vals = vals.reshape(-1, 1)
+        dim = vals.shape[1]
+
+        if dim == 1:
+            rr.send_columns(
+                f'/signals/{key}',
+                indexes=[rr.TimeNanosColumn('time', ts_arr)],
+                columns=rr.Scalar.columns(scalar=vals.ravel()),
+            )
+        else:
+            for i in range(dim):
+                rr.send_columns(
+                    f'/signals/{key}/{i}',
+                    indexes=[rr.TimeNanosColumn('time', ts_arr)],
+                    columns=rr.Scalar.columns(scalar=vals[:, i]),
+                )
+
+        if key in pose_set:
+            pose_data[key] = (ts_arr, vals)
+
+        yield from drainer.drain()
+
+    return pose_data
+
+
+def _log_pose_signals(
+    signals: EpisodeSignals, numeric_data: dict[str, tuple[np.ndarray, np.ndarray]], drainer: _BinaryStreamDrainer
+) -> Iterator[bytes]:
+    """Log 3D pose points and trajectory trails."""
+    for key in signals.poses:
+        if key not in numeric_data:
+            continue
+        ts_arr, vals = numeric_data[key]
+        if vals.ndim < 2 or vals.shape[1] != 7:
+            continue
+        positions = vals[:, :3]
+        color = _pose_color(key)
+        rr.send_columns(
+            f'/3d/{key}',
+            indexes=[rr.TimeNanosColumn('time', ts_arr)],
+            columns=rr.Points3D.columns(
+                positions=positions, colors=np.tile(color, (len(ts_arr), 1)), radii=np.full(len(ts_arr), 0.01)
+            ),
+        )
+        _log_static_trail(f'/3d/{key}/trail/background', positions, color)
+        active_path = f'/3d/{key}/trail/active'
+        for i in range(_TRAIL_UPDATE_INTERVAL, len(ts_arr), _TRAIL_UPDATE_INTERVAL):
+            set_timeline_time('time', int(ts_arr[i]))
+            win_start = int(np.searchsorted(ts_arr[: i + 1], ts_arr[i] - _TRAIL_FADE_NS))
+            _log_trajectory_trail(active_path, positions[: i + 1], win_start, color)
+        # Final trail at last timestamp
+        set_timeline_time('time', int(ts_arr[-1]))
+        win_start = int(np.searchsorted(ts_arr, ts_arr[-1] - _TRAIL_FADE_NS))
+        _log_trajectory_trail(active_path, positions, win_start, color)
+        yield from drainer.drain()
+
+
 @rr.recording_stream.recording_stream_generator_ctx
-def stream_episode_rrd(ds: Dataset, episode_id: int, max_resolution: int) -> Iterator[bytes]:
+def stream_episode_rrd(ds: Dataset, episode_id: int) -> Iterator[bytes]:
     """Yield an episode RRD as chunks while it is being generated."""
 
     ep = ds[episode_id]
@@ -193,20 +310,17 @@ def stream_episode_rrd(ds: Dataset, episode_id: int, max_resolution: int) -> Ite
     drainer = _BinaryStreamDrainer(rec.binary_stream(), min_bytes=2**20)
 
     with rec:
-        video_names, signal_names, signal_dims = _collect_signal_groups(ep)
-        rr.send_blueprint(_build_blueprint(video_names, signal_names, signal_dims))
+        signals = _collect_signal_groups(ep)
+        rr.send_blueprint(_build_blueprint(signals))
         yield from drainer.drain()
 
-        _setup_series_names(ep, signal_names)
+        _setup_series_names(signals)
         yield from drainer.drain()
 
-        for kind, key, payload, ts_ns in _episode_log_entries(ep, video_names, signal_names):
-            set_timeline_time('time', ts_ns)
-            if kind == 'numeric':
-                log_numeric_series(f'/signals/{key}', payload)
-            else:
-                rr.log(key, rr.Image(resize_if_needed(payload, max_resolution)).compress())
-            yield from drainer.drain()
+        yield from _log_video_signals(ep, signals, drainer)
+        pose_data = yield from _log_numeric_signals(ep, signals, drainer)
+        yield from drainer.drain(force=True)  # flush numerics to client before slow pose trails
+        yield from _log_pose_signals(signals, pose_data, drainer)
 
     yield from drainer.drain(force=True)
 
@@ -225,15 +339,3 @@ def get_dataset_root(dataset: Dataset) -> str | None:
         return get_dataset_root(dataset._dataset)
 
     return None
-
-
-def resize_if_needed(image, max_resolution: int):
-    height, width = image.shape[:2]
-    scale = min(1, max_resolution / max(width, height))
-    max_width, max_height = int(width * scale), int(height * scale)
-
-    # Downscale if needed
-    if width != max_width or height != max_height:
-        return cv2.resize(image, (max_width, max_height), interpolation=cv2.INTER_AREA)
-
-    return image

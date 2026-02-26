@@ -2,10 +2,15 @@
 
 from positronic.cfg import codecs
 
-eepose_absolute = codecs.compose.override(obs=codecs.eepose_obs, action=codecs.absolute_pos_action)
-joints_absolute = eepose_absolute.override(obs=codecs.joints_obs)
+ee = codecs.compose.override(obs=codecs.eepose_obs, action=codecs.absolute_pos_action)
+joints = ee.override(obs=codecs.joints_obs)
 
 # Trajectory variants: use actual robot trajectory as action target instead of commanded targets
-_traj = {'action.tgt_ee_pose_key': 'robot_state.ee_pose', 'action.tgt_grip_key': 'grip'}
-eepose_absolute_traj = eepose_absolute.override(**_traj)
-joints_absolute_traj = joints_absolute.override(**_traj)
+ee_traj = ee.override(action=codecs.traj_ee_action, binarize_grip=('grip',))
+
+# Pure joint-based trajectory variant (no commanded joint targets in recordings)
+joints_traj = codecs.compose.override(
+    obs=codecs.joints_obs,
+    action=codecs.absolute_joints_action.override(tgt_joints_key='robot_state.q', tgt_grip_key='grip'),
+    binarize_grip=('grip',),
+)

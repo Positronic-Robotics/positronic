@@ -7,14 +7,12 @@ Examples:
 - Convert to a new LeRobot dataset
   uv run --extra lerobot_0_3_3 python -m positronic.vendors.lerobot.to_lerobot convert \
     --dataset.path=/path/to/local_dataset \
-    --output_dir=/path/to/lerobot_ds \
-    --fps=30
+    --output_dir=/path/to/lerobot_ds
 
 - Append to an existing LeRobot dataset
   uv run --extra lerobot_0_3_3 python -m positronic.vendors.lerobot.to_lerobot append \
     --output_dir=/path/to/lerobot_ds \
-    --dataset.path=/path/to/local_dataset \
-    --fps=30
+    --dataset.path=/path/to/local_dataset
 """
 
 import json

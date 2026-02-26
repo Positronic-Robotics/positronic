@@ -15,7 +15,7 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from openpi_client.websocket_client_policy import WebsocketClientPolicy
 
 from positronic.offboard.server_utils import monitor_async_task, wait_for_subprocess_ready
-from positronic.policy import Codec, Policy
+from positronic.policy import Codec, Policy, RecordingCodec
 from positronic.utils.checkpoints import get_latest_checkpoint, list_checkpoints
 from positronic.utils.logging import init_logging
 from positronic.utils.serialization import deserialise, serialise
@@ -183,7 +183,7 @@ class InferenceServer:
 
     def __init__(
         self,
-        codec: Codec,
+        codec: Codec | None,
         checkpoints_dir: str | Path,
         config_name: str = 'pi05_positronic_lowmem',
         checkpoint: str | None = None,
@@ -191,6 +191,7 @@ class InferenceServer:
         port: int = 8000,
         openpi_ws_port: int = 8001,
         metadata: dict[str, Any] | None = None,
+        recording_dir: str | None = None,
     ):
         self.codec = codec
         self.checkpoints_dir = str(checkpoints_dir).rstrip('/')
@@ -199,6 +200,8 @@ class InferenceServer:
         self.host = host
         self.port = port
         self.openpi_ws_port = openpi_ws_port
+        if recording_dir:
+            self.codec = RecordingCodec(self.codec, pos3.sync(recording_dir))
 
         self.metadata = metadata or {}
         self.metadata.update(
@@ -302,12 +305,11 @@ class InferenceServer:
         try:
             # Get or start subprocess (sends status updates internally)
             subprocess_obj = await self._get_subprocess(resolved_checkpoint_id, websocket)
-
-            # Send ready with metadata
-            meta = {**self.metadata, 'checkpoint_id': resolved_checkpoint_id, **self.codec.meta}
+            base_policy = OpenpiPolicy(subprocess_obj.client)
+            policy = self.codec.wrap(base_policy) if self.codec else base_policy
+            policy.reset()
+            meta = {**self.metadata, 'checkpoint_id': resolved_checkpoint_id, **policy.meta}
             await websocket.send_bytes(serialise({'status': 'ready', 'meta': meta}))
-
-            policy = self.codec.wrap(OpenpiPolicy(subprocess_obj.client))
 
             # Inference loop
             async for message in websocket.iter_bytes():
@@ -346,7 +348,8 @@ class InferenceServer:
         """Run one warmup inference to trigger JIT compilation."""
         try:
             logger.info('Running warmup inference...')
-            await asyncio.to_thread(subprocess_obj.client.infer, self.codec.dummy_encoded())
+            dummy = self.codec.dummy_encoded() if self.codec else {}
+            await asyncio.to_thread(subprocess_obj.client.infer, dummy)
             logger.info('Warmup inference complete')
         except Exception:
             logger.warning('Warmup inference failed (non-fatal)', exc_info=True)
@@ -379,24 +382,32 @@ class InferenceServer:
 
 
 @cfn.config(
-    codec=codecs.eepose,
+    codec=codecs.ee,
     checkpoints_dir='',
     config_name='pi05_positronic_lowmem',
     checkpoint=None,
     host='0.0.0.0',
     port=8000,
     openpi_ws_port=8001,
+    recording_dir=None,
 )
 def server(
-    codec, checkpoints_dir: str, config_name: str, checkpoint: str | None, host: str, port: int, openpi_ws_port: int
+    codec,
+    checkpoints_dir: str,
+    config_name: str,
+    checkpoint: str | None,
+    host: str,
+    port: int,
+    openpi_ws_port: int,
+    recording_dir: str | None,
 ):
     """OpenPI inference server.
 
     Args:
         codec: Codec config for observation encoding and action decoding.
             Available codecs:
-            - @positronic.vendors.openpi.codecs.eepose (default, EE pose + grip)
-            - @positronic.vendors.openpi.codecs.eepose_q (EE pose + grip + joints)
+            - @positronic.vendors.openpi.codecs.ee (default, EE pose + grip)
+            - @positronic.vendors.openpi.codecs.ee_joints (EE pose + grip + joints)
             - @positronic.vendors.openpi.codecs.droid (for pretrained DROID models)
         checkpoints_dir: Directory containing model checkpoints.
         config_name: OpenPI config name (default: pi05_positronic_lowmem).
@@ -404,6 +415,7 @@ def server(
         host: Server host address.
         port: Server port.
         openpi_ws_port: Internal WebSocket port for OpenPI subprocess.
+        recording_dir: Directory for recording .rrd files (optional, supports S3 paths).
     """
     InferenceServer(
         codec=codec,
@@ -413,6 +425,7 @@ def server(
         host=host,
         port=port,
         openpi_ws_port=openpi_ws_port,
+        recording_dir=recording_dir,
     ).serve()
 
 

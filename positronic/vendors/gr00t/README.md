@@ -24,12 +24,11 @@ See [Model Selection Guide](../../docs/model-selection.md) for comparison with o
 ## Quick Start
 
 ```bash
-# 1. Convert dataset
+# 1. Convert dataset (output_dir supports both local paths and s3://)
 cd docker && docker compose run --rm positronic-to-lerobot convert \
   --dataset.dataset.path=~/datasets/my_task_raw \
   --dataset.codec=@positronic.vendors.gr00t.codecs.ee_rot6d_joints \
-  --output_dir=~/datasets/groot/my_task \
-  --fps=15
+  --output_dir=~/datasets/groot/my_task
 
 # 2. Train
 cd docker && docker compose run --rm groot-train \
@@ -58,9 +57,9 @@ GR00T supports multiple codecs with different rotation representations and obser
 
 | Codec | Observation | Action | Modality Config | Use Case |
 |-------|-------------|--------|-----------------|----------|
-| `ee_absolute` | EE pose (quat) + grip + images | Absolute EE position (quat) + grip | `ee` | Default EE control, quaternion rotation |
+| `ee_quat` | EE pose (quat) + grip + images | Absolute EE position (quat) + grip | `ee` | Default EE control, quaternion rotation |
 | `ee_rot6d` | EE pose (rot6d) + grip + images | Absolute EE position (rot6d) + grip | `ee_rot6d` | 6D rotation representation |
-| `ee_joints` | EE pose + joints + grip + images | Absolute EE position + grip | `ee_q` | Combined EE + joint feedback |
+| `ee_quat_joints` | EE pose + joints + grip + images | Absolute EE position + grip | `ee_q` | Combined EE + joint feedback |
 | `ee_rot6d_joints` | EE pose (rot6d) + joints + grip + images | Absolute EE position (rot6d) + grip | `ee_rot6d_q` | 6D rotation + joint feedback (recommended) |
 
 **Key features:**
@@ -73,9 +72,9 @@ GR00T supports multiple codecs with different rotation representations and obser
 
 | Codec | Training Modality |
 |-------|-------------------|
-| `ee_absolute` | `ee` |
+| `ee_quat` | `ee` |
 | `ee_rot6d` | `ee_rot6d` |
-| `ee_joints` | `ee_q` |
+| `ee_quat_joints` | `ee_q` |
 | `ee_rot6d_joints` | `ee_rot6d_q` |
 
 **Recommendation:** Use `ee_rot6d_joints` for best performance (6D rotation is continuous, joint feedback improves learning).

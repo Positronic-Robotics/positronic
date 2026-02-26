@@ -5,6 +5,7 @@ import platform
 import shutil
 import sys
 import time
+import weakref
 from collections import deque
 from collections.abc import Callable, Iterator
 from contextlib import suppress
@@ -281,8 +282,10 @@ class DiskEpisode(Episode):
         if (directory / UNFINISHED_MARKER).exists():
             raise ValueError(f'Cannot read unfinished episode at {directory}')
         self._dir = directory
-        # Lazy containers
-        self._signals: dict[str, Signal[Any]] = {}
+        # WeakValueDictionary: signals are recreated from factories on demand, so caching
+        # them strongly would leak resources (e.g. VideoSignal holds an open av.Container).
+        # With weak refs, signals stay alive while callers hold them and get GC'd otherwise.
+        self._signals: weakref.WeakValueDictionary[str, Signal[Any]] = weakref.WeakValueDictionary()
         self._signal_factories: dict[str, SIGNAL_FACTORY_T] = {}
         self._static: dict[str, Any] | None = None
         self._meta: dict[str, Any] | None = None

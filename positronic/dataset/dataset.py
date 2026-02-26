@@ -130,3 +130,27 @@ class ConcatDataset(Dataset):
             index -= len(ds)
         # We should never reach here because of the upfront bounds check.
         raise IndexError(f'Index {original_index} out of range for ConcatDataset of length {len(self)}')
+
+
+class FilterDataset(Dataset):
+    """View of a dataset containing only episodes matching a predicate."""
+
+    def __init__(self, dataset: Dataset, predicate: collections.abc.Callable[[Episode], bool]):
+        self._dataset = dataset
+        self._predicate = predicate
+        self._indices: list[int] | None = None
+
+    def _ensure_indices(self) -> list[int]:
+        if self._indices is None:
+            self._indices = [i for i in range(len(self._dataset)) if self._predicate(self._dataset[i])]
+        return self._indices
+
+    def __len__(self) -> int:
+        return len(self._ensure_indices())
+
+    def _get_episode(self, index: int) -> Episode:
+        return self._dataset[self._ensure_indices()[index]]
+
+    @property
+    def meta(self) -> dict[str, Any]:
+        return self._dataset.meta

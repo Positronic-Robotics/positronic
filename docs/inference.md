@@ -11,7 +11,7 @@ Positronic's unified WebSocket protocol connects any hardware to any model (LeRo
 # LeRobot
 cd docker && docker compose run --rm --service-ports lerobot-server \
   --checkpoints_dir=~/checkpoints/lerobot/experiment_v1/ \
-  --codec=@positronic.vendors.lerobot.codecs.eepose_absolute
+  --codec=@positronic.vendors.lerobot.codecs.ee
 
 # GR00T (pre-configured variant)
 cd docker && docker compose run --rm --service-ports groot-server \
@@ -21,7 +21,7 @@ cd docker && docker compose run --rm --service-ports groot-server \
 # OpenPI
 cd docker && docker compose run --rm --service-ports openpi-server \
   --checkpoints_dir=~/checkpoints/openpi/experiment_v1/ \
-  --codec=@positronic.vendors.openpi.codecs.eepose
+  --codec=@positronic.vendors.openpi.codecs.ee
 ```
 
 Check server: `curl http://localhost:8000/api/v1/models` returns available model IDs.
