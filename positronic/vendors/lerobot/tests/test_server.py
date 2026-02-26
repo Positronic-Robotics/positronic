@@ -4,7 +4,10 @@ import pytest
 from fastapi import WebSocketDisconnect
 
 from positronic.utils.serialization import deserialise
-from positronic.vendors.lerobot import server as lerobot_server
+
+pytest.importorskip('torch')
+
+from positronic.vendors.lerobot import server as lerobot_server  # noqa: E402
 
 
 class _PassthroughEncoder:
