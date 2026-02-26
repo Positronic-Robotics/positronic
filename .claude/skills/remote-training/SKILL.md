@@ -152,8 +152,8 @@ CACHE_ROOT=/home/vertix docker --context desktop compose run --rm --pull always 
 | GR00T | `@positronic.vendors.gr00t.codecs.ee_quat_joints` | EE pose + joint positions + grip |
 | GR00T | `@positronic.vendors.gr00t.codecs.ee_rot6d` | EE pose (6D rotation) + grip |
 | GR00T | `@positronic.vendors.gr00t.codecs.ee_rot6d_joints` | 6D rotation + joint positions + grip |
-| LeRobot | `@positronic.vendors.lerobot.codecs.ee` | EE pose (quat) + grip, absolute actions |
-| LeRobot | `@positronic.vendors.lerobot.codecs.joints` | Joint positions + grip, absolute actions |
+| LeRobot | `@positronic.vendors.lerobot_0_3_3.codecs.ee` | EE pose (quat) + grip, absolute actions |
+| LeRobot | `@positronic.vendors.lerobot_0_3_3.codecs.joints` | Joint positions + grip, absolute actions |
 | OpenPI | `@positronic.vendors.openpi.codecs.ee` | EE pose + grip, absolute actions |
 | OpenPI | `@positronic.vendors.openpi.codecs.ee_joints` | EE pose + joints + grip, absolute actions |
 
@@ -259,7 +259,7 @@ MUJOCO_GL=egl uv run positronic-inference sim \
 | Server Type | Codec Config | Notes |
 |-------------|--------------|-------|
 | GR00T | `ee_rot6d_joints` (positional variant arg) | Matches `modality_config=ee_rot6d_q` |
-| LeRobot ACT | `--codec=@positronic.vendors.lerobot.codecs.ee` | Default codec |
+| LeRobot ACT | `--codec=@positronic.vendors.lerobot_0_3_3.codecs.ee` | Default codec |
 | OpenPI | `--codec=@positronic.vendors.openpi.codecs.ee` | Default codec |
 
 ## Sim Eval End-to-End

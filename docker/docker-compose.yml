@@ -78,17 +78,17 @@ services:
   positronic-to-lerobot:
     <<: *positronic-common
     container_name: positronic-to-lerobot
-    entrypoint: ["uv", "run", "--python", "3.11", "--extra", "lerobot_0_3_3", "python", "-m", "positronic.vendors.lerobot.to_lerobot"]
+    entrypoint: ["uv", "run", "--python", "3.11", "--extra", "lerobot_0_3_3", "python", "-m", "positronic.vendors.lerobot_0_3_3.to_lerobot"]
 
   lerobot-train:
     <<: *positronic-common
     container_name: lerobot-train
-    entrypoint: ["uv", "run", "--python", "3.11", "--extra", "lerobot_0_3_3", "python", "-m", "positronic.vendors.lerobot.train"]
+    entrypoint: ["uv", "run", "--python", "3.11", "--extra", "lerobot_0_3_3", "python", "-m", "positronic.vendors.lerobot_0_3_3.train"]
 
   lerobot-server:
     <<: *positronic-common
     container_name: lerobot-server
-    entrypoint: ["uv", "run", "--python", "3.11", "--extra", "lerobot_0_3_3", "python", "-m", "positronic.vendors.lerobot.server"]
+    entrypoint: ["uv", "run", "--python", "3.11", "--extra", "lerobot_0_3_3", "python", "-m", "positronic.vendors.lerobot_0_3_3.server"]
     ports:
       - "8000:8000"
 

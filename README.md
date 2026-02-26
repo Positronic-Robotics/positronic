@@ -73,7 +73,7 @@ Positronic supports state-of-the-art foundation models with first-class workflow
 |-------|-----------|----------|-----------|----------|
 | **[OpenPI (π₀.₅)](positronic/vendors/openpi/README.md)** | Most capable, generalist | Capable GPU (~78GB, LoRA) | Capable GPU (~62GB) | Complex multi-task manipulation |
 | **[GR00T](positronic/vendors/gr00t/README.md)** | Generalist robot policy | Capable GPU (~50GB) | Smaller GPU (~7.5GB) | Logistics and industry applications |
-| **[LeRobot ACT](positronic/vendors/lerobot/README.md)** | Single-task, efficient | Consumer GPU | Consumer GPU | Specific manipulation tasks |
+| **[LeRobot ACT](positronic/vendors/lerobot_0_3_3/README.md)** | Single-task, efficient | Consumer GPU | Consumer GPU | Specific manipulation tasks |
 
 **Recommendation**: Start with ACT if you want something quick and low-cost. Progress to GR00T or OpenPI if you need more capable models. Positronic makes switching easy.
 
@@ -245,7 +245,7 @@ uv run positronic-inference sim \
 # On inference server:
 cd docker && docker compose run --rm --service-ports lerobot-server \
     --checkpoints_dir=~/checkpoints/lerobot/<run_id> \
-    --codec=@positronic.vendors.lerobot.codecs.ee
+    --codec=@positronic.vendors.lerobot_0_3_3.codecs.ee
 
 # On robot:
 uv run positronic-inference sim \
@@ -265,7 +265,7 @@ Monitor performance, collect edge cases, and iterate. See [Inference Guide](docs
 **Model Workflows:**
 - [OpenPI (π₀.₅)](positronic/vendors/openpi/README.md) — Recommended for most tasks
 - [GR00T](positronic/vendors/gr00t/README.md) — NVIDIA's generalist policy
-- [LeRobot ACT](positronic/vendors/lerobot/README.md) — Single-task transformer
+- [LeRobot ACT](positronic/vendors/lerobot_0_3_3/README.md) — Single-task transformer
 
 **Guides:**
 - [Model Selection](docs/model-selection.md) | [Codecs](docs/codecs.md) | [Training](docs/training-workflow.md)

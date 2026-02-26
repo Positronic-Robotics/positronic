@@ -5,12 +5,12 @@ run the tool is from the project environment (virtualenv or `uv run`).
 
 Examples:
 - Convert to a new LeRobot dataset
-  uv run --extra lerobot_0_3_3 python -m positronic.vendors.lerobot.to_lerobot convert \
+  uv run --extra lerobot_0_3_3 python -m positronic.vendors.lerobot_0_3_3.to_lerobot convert \
     --dataset.path=/path/to/local_dataset \
     --output_dir=/path/to/lerobot_ds
 
 - Append to an existing LeRobot dataset
-  uv run --extra lerobot_0_3_3 python -m positronic.vendors.lerobot.to_lerobot append \
+  uv run --extra lerobot_0_3_3 python -m positronic.vendors.lerobot_0_3_3.to_lerobot append \
     --output_dir=/path/to/lerobot_ds \
     --dataset.path=/path/to/local_dataset
 """

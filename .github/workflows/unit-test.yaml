@@ -60,4 +60,4 @@ jobs:
       - name: Run lerobot vendor tests
         env:
           PYTHONPATH: ${{ env.PYTHONPATH }}:$PWD
-        run: uv run pytest positronic/vendors/lerobot/tests --no-cov
+        run: uv run pytest positronic/vendors/lerobot_0_3_3/tests --no-cov

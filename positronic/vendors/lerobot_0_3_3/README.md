@@ -22,7 +22,7 @@ See [Model Selection Guide](../../docs/model-selection.md) for comparison.
 # 1. Convert dataset (output_dir supports both local paths and s3://)
 cd docker && docker compose run --rm positronic-to-lerobot convert \
   --dataset.dataset.path=~/datasets/my_task_raw \
-  --dataset.codec=@positronic.vendors.lerobot.codecs.ee \
+  --dataset.codec=@positronic.vendors.lerobot_0_3_3.codecs.ee \
   --output_dir=~/datasets/lerobot/my_task
 
 # 2. Train
@@ -36,7 +36,7 @@ cd docker && docker compose run --rm lerobot-train \
 # 3. Serve
 cd docker && docker compose run --rm --service-ports lerobot-server \
   --checkpoints_dir=~/checkpoints/lerobot/my_task_v1/ \
-  --codec=@positronic.vendors.lerobot.codecs.ee
+  --codec=@positronic.vendors.lerobot_0_3_3.codecs.ee
 
 # 4. Run inference
 uv run positronic-inference sim \
@@ -93,7 +93,7 @@ See [Codecs Guide](../../docs/codecs.md) for comprehensive codec documentation.
 ```bash
 cd docker && docker compose run --rm --service-ports lerobot-server \
   --checkpoints_dir=~/checkpoints/lerobot/my_task_v1/ \
-  --codec=@positronic.vendors.lerobot.codecs.ee \
+  --codec=@positronic.vendors.lerobot_0_3_3.codecs.ee \
   --port=8000 \
   --host=0.0.0.0
 ```

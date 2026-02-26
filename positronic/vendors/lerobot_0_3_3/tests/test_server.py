@@ -7,7 +7,7 @@ from positronic.utils.serialization import deserialise
 
 pytest.importorskip('torch')
 
-from positronic.vendors.lerobot import server as lerobot_server  # noqa: E402
+from positronic.vendors.lerobot_0_3_3 import server as lerobot_server  # noqa: E402
 
 
 class _PassthroughEncoder:

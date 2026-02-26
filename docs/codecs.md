@@ -27,7 +27,7 @@ Trajectory codecs automatically binarize grip signals (threshold at 0.5) since o
 
 ### LeRobot Codecs
 
-See [`positronic/vendors/lerobot/codecs.py`](../positronic/vendors/lerobot/codecs.py) for implementation.
+See [`positronic/vendors/lerobot_0_3_3/codecs.py`](../positronic/vendors/lerobot_0_3_3/codecs.py) for implementation.
 
 | Codec | Observation | Action |
 |-------|-------------|--------|
@@ -38,7 +38,7 @@ See [`positronic/vendors/lerobot/codecs.py`](../positronic/vendors/lerobot/codec
 
 ```bash
 cd docker && docker compose run --rm positronic-to-lerobot convert \
-  --dataset.codec=@positronic.vendors.lerobot.codecs.ee \
+  --dataset.codec=@positronic.vendors.lerobot_0_3_3.codecs.ee \
   --output_dir=~/datasets/lerobot/my_task
 ```
 
@@ -108,11 +108,11 @@ Positronic aims to represent the same action and state space across different mo
 ```bash
 # Training
 cd docker && docker compose run --rm positronic-to-lerobot convert \
-  --dataset.codec=@positronic.vendors.lerobot.codecs.ee
+  --dataset.codec=@positronic.vendors.lerobot_0_3_3.codecs.ee
 
 # Inference must match
 cd docker && docker compose run --rm lerobot-server \
-  --codec=@positronic.vendors.lerobot.codecs.ee
+  --codec=@positronic.vendors.lerobot_0_3_3.codecs.ee
 ```
 
 ## Writing Custom Codecs
@@ -124,4 +124,4 @@ Subclass `positronic.policy.codec.Codec` and implement `encode()` and/or `_decod
 - [Dataset Library README](../positronic/dataset/README.md) – Raw storage and transforms
 - [Training Workflow](training-workflow.md) – Using codecs in pipeline
 - [Model Selection](model-selection.md) – Choosing models
-- Vendor docs: [LeRobot](../positronic/vendors/lerobot/README.md) | [GR00T](../positronic/vendors/gr00t/README.md) | [OpenPI](../positronic/vendors/openpi/README.md)
+- Vendor docs: [LeRobot](../positronic/vendors/lerobot_0_3_3/README.md) | [GR00T](../positronic/vendors/gr00t/README.md) | [OpenPI](../positronic/vendors/openpi/README.md)

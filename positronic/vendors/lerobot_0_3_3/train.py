@@ -12,7 +12,7 @@ Example:
     cd docker && docker compose run --rm lerobot-train \\
       --input_path=s3://interim/sim_stack/lerobot/joints_absolute/ \\
       --exp_name=my_experiment \\
-      --codec=@positronic.vendors.lerobot.codecs.joints \\
+      --codec=@positronic.vendors.lerobot_0_3_3.codecs.joints \\
       --output_dir=s3://checkpoints/lerobot/
 """
 
@@ -33,8 +33,8 @@ from lerobot.envs.configs import EnvConfig, FeatureType, PolicyFeature
 from positronic import utils
 from positronic.policy import Codec
 from positronic.utils.logging import init_logging
-from positronic.vendors.lerobot import codecs as lerobot_codecs
-from positronic.vendors.lerobot.backbone import BACKBONES
+from positronic.vendors.lerobot_0_3_3 import codecs as lerobot_codecs
+from positronic.vendors.lerobot_0_3_3.backbone import BACKBONES
 
 
 @EnvConfig.register_subclass('positronic')
