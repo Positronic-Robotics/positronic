@@ -145,6 +145,9 @@ def droid_clean(dataset):
 droid_clean = droid_clean.override(dataset=droid)
 
 droid_recovery = droid.override(recovery_all=True, recovery_towels=True, duplicate_recovery=True)
+droid_clean_recovery = droid_clean.override(
+    dataset=droid.override(recovery_all=True, recovery_towels=True, duplicate_recovery=False)
+)
 sim = concat_ds.override(datasets=[sim_stack, sim_pnp])
 full_recovery = concat_ds.override(datasets=[droid_recovery, sim])
 full = concat_ds.override(datasets=[droid, sim])

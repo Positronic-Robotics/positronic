@@ -3,6 +3,8 @@
 import logging
 import os
 import shutil
+import subprocess
+import tempfile
 import threading
 from collections import defaultdict
 from contextlib import asynccontextmanager
@@ -441,6 +443,7 @@ def main(
     host: str = '0.0.0.0',
     port: int = 5000,
     debug: bool = False,
+    https: bool = True,
     reset_cache: bool = False,
     group_tables: dict[str, GroupTableConfig] | None = None,
     home_page: str | None = None,
@@ -520,9 +523,40 @@ def main(
     t = threading.Thread(target=load_dataset, daemon=True)
     t.start()
 
+    ssl_kwargs = {}
+    if https:
+        ssl_dir = tempfile.mkdtemp(prefix='positronic-ssl-')
+        keyfile = os.path.join(ssl_dir, 'key.pem')
+        certfile = os.path.join(ssl_dir, 'cert.pem')
+        primary_host = utils.resolve_host_ip()
+        subprocess.run(
+            [
+                'openssl',
+                'req',
+                '-x509',
+                '-newkey',
+                'rsa:2048',
+                '-keyout',
+                keyfile,
+                '-out',
+                certfile,
+                '-days',
+                '365',
+                '-nodes',
+                '-subj',
+                f'/CN={primary_host}',
+                '-addext',
+                f'subjectAltName=DNS:localhost,IP:{primary_host}',
+            ],
+            check=True,
+            capture_output=True,
+        )
+        ssl_kwargs = {'ssl_keyfile': keyfile, 'ssl_certfile': certfile}
+
     primary_host = utils.resolve_host_ip()
-    logging.info(f'Starting server on http://{primary_host}:{port}')
-    uvicorn.run(app, host=host, port=port, log_level='debug' if debug else 'info')
+    scheme = 'https' if https else 'http'
+    logging.info(f'Starting server on {scheme}://{primary_host}:{port}')
+    uvicorn.run(app, host=host, port=port, log_level='debug' if debug else 'info', **ssl_kwargs)
 
 
 @pos3.with_mirror()

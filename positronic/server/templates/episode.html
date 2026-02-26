@@ -47,10 +47,26 @@ Episode {{ episode_id }} / {{ num_episodes }} - Positronic Dataset Viewer
         const viewerIframe = document.getElementById('viewer-iframe');
         try {
             const rrdUrl = `${window.location.origin}/api/episode_rrd/{{ episode_id }}`;
-            const viewerUrl = `/static/rerun/{{ rerun_version }}/index.html?url=${encodeURIComponent(rrdUrl)}`;
+            let viewerUrl = `/static/rerun/{{ rerun_version }}/index.html?url=${encodeURIComponent(rrdUrl)}&hide_welcome_screen`;
+
+            // Forward time params (?t= or ?ts_ns=) to the viewer iframe
+            const params = new URLSearchParams(window.location.search);
+            const seekT = params.get('t');
+            const seekTsNs = params.get('ts_ns');
+            if (seekTsNs != null) {
+                viewerUrl += `&seek_ts_ns=${encodeURIComponent(seekTsNs)}`;
+            } else if (seekT != null) {
+                viewerUrl += `&seek_t=${encodeURIComponent(seekT)}`;
+            }
+
             viewerIframe.src = viewerUrl;
-            viewerIframe.style.display = 'block';
-            loadingOverlay.style.display = 'none';
+
+            // Keep overlay visible until the viewer signals READY
+            window.addEventListener('message', (e) => {
+                if (e.data === 'READY') {
+                    loadingOverlay.classList.add('fade-out');
+                }
+            });
         } catch (error) {
             console.error('Error loading episode:', error);
             loadingOverlay.innerHTML = `
@@ -105,7 +121,7 @@ Episode {{ episode_id }} / {{ num_episodes }} - Positronic Dataset Viewer
             <div id="loading-overlay" class="loading-overlay">
                 Loading Rerun viewer...
             </div>
-            <iframe id="viewer-iframe" style="display: none;"></iframe>
+            <iframe id="viewer-iframe"></iframe>
         </div>
         <div class="sidebar">
             <div class="resizer sidebar-resizer"></div>
