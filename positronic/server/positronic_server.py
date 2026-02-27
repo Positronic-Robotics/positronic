@@ -1,5 +1,6 @@
 """A FastAPI web server for visualizing Positronic LocalDatasets using Rerun."""
 
+import atexit
 import logging
 import os
 import shutil
@@ -468,6 +469,7 @@ def _generate_self_signed_cert(host: str) -> dict[str, str]:
         check=True,
         capture_output=True,
     )
+    atexit.register(shutil.rmtree, ssl_dir, ignore_errors=True)
     return {'ssl_keyfile': keyfile, 'ssl_certfile': certfile}
 
 
@@ -480,7 +482,7 @@ def main(
     host: str = '0.0.0.0',
     port: int = 5000,
     debug: bool = False,
-    https: bool = True,
+    https: bool = False,
     reset_cache: bool = False,
     group_tables: dict[str, GroupTableConfig] | None = None,
     home_page: str | None = None,
