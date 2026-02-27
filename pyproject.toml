@@ -35,7 +35,7 @@ dependencies = [
     "pydantic",
     "pyturbojpeg",
     "pyyaml",
-    "rerun-sdk~=0.22",
+    "rerun-sdk==0.30.0",
     "robosuite",
     "ruckig",
     "scipy",
@@ -81,6 +81,10 @@ dev = [
     "pytest",
     "rerun-sdk[notebook]",
 ]
+
+[tool.uv]
+# lerobot pins rerun-sdk<0.23; override so the lerobot extra doesn't block resolution
+override-dependencies = ["rerun-sdk==0.30.0"]
 
 [tool.uv.sources.kortex_api]
 url = "https://artifactory.kinovaapps.com/artifactory/generic-local-public/kortex/API/2.7.0/kortex_api-2.7.0.post5-py3-none-any.whl"

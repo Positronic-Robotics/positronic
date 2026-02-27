@@ -58,7 +58,7 @@ def _make_codec(tmp_path, **kw):
 
 def _make_session(tmp_path, *, action_fps=10.0, meta=None):
     inner = _TrackingCodec(meta=meta)
-    rec = rr.new_recording(application_id='test')
+    rec = rr.RecordingStream(application_id='test')
     rec.save(str(tmp_path / 'test.rrd'))
     return _RecordingSession(inner, rec, action_fps=action_fps)
 
@@ -252,7 +252,7 @@ def test_recording_codec_none_inner_wrap(tmp_path):
 
 
 def test_session_none_inner_identity(tmp_path):
-    rec = rr.new_recording(application_id='test')
+    rec = rr.RecordingStream(application_id='test')
     rec.save(str(tmp_path / 'test.rrd'))
     session = _RecordingSession(None, rec, action_fps=10.0)
 
@@ -272,7 +272,7 @@ def test_session_none_inner_identity(tmp_path):
 
 
 def test_session_none_inner_logs_input_and_model_only(tmp_path):
-    rec = rr.new_recording(application_id='test')
+    rec = rr.RecordingStream(application_id='test')
     rec.save(str(tmp_path / 'test.rrd'))
     session = _RecordingSession(None, rec, action_fps=10.0)
 

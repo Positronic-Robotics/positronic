@@ -212,12 +212,12 @@ def _log_video_signals(ep: Episode, signals: EpisodeSignals, drainer: _BinaryStr
         asset = rr.AssetVideo(contents=video_bytes, media_type='video/mp4')
         rr.log(name, asset, static=True)
 
-        our_ts = np.asarray(sig.keys())
-        frame_pts_ns = asset.read_frame_timestamps_ns()
+        our_ts = np.asarray(sig.keys(), dtype='datetime64[ns]')
+        frame_pts_ns = asset.read_frame_timestamps_nanos()
         rr.send_columns(
             name,
-            indexes=[rr.TimeNanosColumn('time', our_ts)],
-            columns=rr.VideoFrameReference.columns_nanoseconds(frame_pts_ns),
+            indexes=[rr.TimeColumn('time', timestamp=our_ts)],
+            columns=rr.VideoFrameReference.columns_nanos(frame_pts_ns),
         )
         yield from drainer.drain()
 
@@ -233,7 +233,7 @@ def _log_numeric_signals(
         sig = ep.signals[key]
         if len(sig) == 0:
             continue
-        ts_arr = np.asarray(sig.keys(), dtype=np.int64)
+        ts_arr = np.asarray(sig.keys(), dtype='datetime64[ns]')
         try:
             vals = np.asarray(sig.values(), dtype=np.float64)
         except (TypeError, ValueError):
@@ -245,15 +245,15 @@ def _log_numeric_signals(
         if dim == 1:
             rr.send_columns(
                 f'/signals/{key}',
-                indexes=[rr.TimeNanosColumn('time', ts_arr)],
-                columns=rr.Scalar.columns(scalar=vals.ravel()),
+                indexes=[rr.TimeColumn('time', timestamp=ts_arr)],
+                columns=rr.Scalars.columns(scalars=vals.ravel()),
             )
         else:
             for i in range(dim):
                 rr.send_columns(
                     f'/signals/{key}/{i}',
-                    indexes=[rr.TimeNanosColumn('time', ts_arr)],
-                    columns=rr.Scalar.columns(scalar=vals[:, i]),
+                    indexes=[rr.TimeColumn('time', timestamp=ts_arr)],
+                    columns=rr.Scalars.columns(scalars=vals[:, i]),
                 )
 
         if key in pose_set:
@@ -278,7 +278,7 @@ def _log_pose_signals(
         color = _pose_color(key)
         rr.send_columns(
             f'/3d/{key}',
-            indexes=[rr.TimeNanosColumn('time', ts_arr)],
+            indexes=[rr.TimeColumn('time', timestamp=ts_arr)],
             columns=rr.Points3D.columns(
                 positions=positions, colors=np.tile(color, (len(ts_arr), 1)), radii=np.full(len(ts_arr), 0.01)
             ),
@@ -306,7 +306,7 @@ def stream_episode_rrd(ds: Dataset, episode_id: int) -> Iterator[bytes]:
     dataset_root = get_dataset_root(ds)
     dataset_name = Path(dataset_root).name if dataset_root else 'unknown'
     recording_id = f'positronic_ds_{dataset_name}_episode_{episode_id}'
-    rec = rr.new_recording(application_id=recording_id)
+    rec = rr.RecordingStream(application_id=recording_id)
     drainer = _BinaryStreamDrainer(rec.binary_stream(), min_bytes=2**20)
 
     with rec:

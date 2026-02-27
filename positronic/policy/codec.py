@@ -430,7 +430,7 @@ class RecordingCodec(Codec):
 
     def _new_session(self) -> _RecordingSession:
         episode_num = next(self._counter)
-        rec = rr.new_recording(application_id='positronic_inference')
+        rec = rr.RecordingStream(application_id='positronic_inference')
         rec.save(str(self._dir / f'episode_{episode_num:04d}.rrd'))
         return _RecordingSession(self._inner, rec, action_fps=self._action_fps)
 

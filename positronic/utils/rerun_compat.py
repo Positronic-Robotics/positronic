@@ -22,38 +22,18 @@ def flatten_numeric(value: Any) -> np.ndarray | None:
 
 
 def log_numeric_series(base_path: str, value: Any) -> None:
-    """Log numeric samples at *base_path* while handling rerun API differences."""
+    """Log numeric samples at *base_path*."""
     arr = flatten_numeric(value)
     if arr is None or arr.size == 0:
         return
-
-    if hasattr(rr, 'Scalars'):
-        rr.log(base_path, rr.Scalars(arr))
-        return
-
-    if arr.size == 1:
-        rr.log(base_path, rr.Scalar(float(arr[0])))
-        return
-
-    for idx, sample in enumerate(arr):
-        rr.log(f'{base_path}/{idx}', rr.Scalar(float(sample)))
+    rr.log(base_path, rr.Scalars(arr))
 
 
 def log_series_styles(base_path: str, names: Sequence[str], *, static: bool = True) -> None:
     """Log per-channel series styling information at *base_path*."""
     if not names:
         return
-
-    if hasattr(rr, 'SeriesLines'):
-        rr.log(base_path, rr.SeriesLines(names=list(names)), static=static)
-        return
-
-    if len(names) == 1:
-        rr.log(base_path, rr.SeriesLine(name=names[0]), static=static)
-        return
-
-    for idx, name in enumerate(names):
-        rr.log(f'{base_path}/{idx}', rr.SeriesLine(name=name), static=static)
+    rr.log(base_path, rr.SeriesLines(names=list(names)), static=static)
 
 
 def _to_nanos(timestamp: Any) -> int | None:
@@ -71,27 +51,13 @@ def _to_nanos(timestamp: Any) -> int | None:
 
 
 def set_timeline_time(timeline: str, timestamp: Any) -> None:
-    """Set *timeline* to *timestamp* while handling API differences."""
+    """Set *timeline* to *timestamp*."""
     ts_ns = _to_nanos(timestamp)
     if ts_ns is None:
         return
-
-    if hasattr(rr.time, 'set_time'):
-        rr.time.set_time(timeline, timestamp=np.datetime64(ts_ns, 'ns'))
-        return
-
-    if hasattr(rr.time, 'set_time_nanos'):
-        rr.time.set_time_nanos(timeline, ts_ns)
-        return
-
-    if hasattr(rr, 'set_time_sequence'):
-        rr.set_time_sequence(timeline, ts_ns)
-        return
+    rr.time.set_time(timeline, timestamp=np.datetime64(ts_ns, 'ns'))
 
 
 def set_timeline_sequence(timeline: str, value: int) -> None:
-    """Set *timeline* to an integer sequence value, handling API differences."""
-    if hasattr(rr.time, 'set_sequence'):
-        rr.time.set_sequence(timeline, value)
-    elif hasattr(rr, 'set_time_sequence'):
-        rr.set_time_sequence(timeline, value)
+    """Set *timeline* to an integer sequence value."""
+    rr.time.set_time(timeline, sequence=value)
