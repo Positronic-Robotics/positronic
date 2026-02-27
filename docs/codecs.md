@@ -25,19 +25,34 @@ Trajectory codecs automatically binarize grip signals (threshold at 0.5) since o
 
 ## Available Codecs by Vendor
 
-### LeRobot Codecs
+### LeRobot Codecs (0.4.x — SmolVLA)
+
+See [`positronic/vendors/lerobot/codecs.py`](../positronic/vendors/lerobot/codecs.py) for implementation.
+
+| Codec | Observation | Action |
+|-------|-------------|--------|
+| `ee` | EE pose (7D quat) + grip + images (512x512) | Absolute EE position (7D quat) + grip |
+| `joints` | Joint positions (7D) + grip + images (512x512) | Absolute EE position (7D quat) + grip |
+
+```bash
+cd docker && docker compose run --rm lerobot-convert convert \
+  --dataset.codec=@positronic.vendors.lerobot.codecs.ee \
+  --output_dir=~/datasets/lerobot/my_task
+```
+
+### LeRobot Codecs (0.3.3 — ACT)
 
 See [`positronic/vendors/lerobot_0_3_3/codecs.py`](../positronic/vendors/lerobot_0_3_3/codecs.py) for implementation.
 
 | Codec | Observation | Action |
 |-------|-------------|--------|
-| `ee` | EE pose (7D quat) + grip + images (480x480) | Absolute EE position (7D quat) + grip |
+| `ee` | EE pose (7D quat) + grip + images (224x224) | Absolute EE position (7D quat) + grip |
 | `joints` | Joint positions (7D) + grip + images | Absolute EE position (7D quat) + grip |
-| `ee_traj` | EE pose (7D quat) + grip + images (480x480) | Absolute EE trajectory (7D quat) + grip (binarized) |
+| `ee_traj` | EE pose (7D quat) + grip + images (224x224) | Absolute EE trajectory (7D quat) + grip (binarized) |
 | `joints_traj` | Joint positions (7D) + grip + images | Absolute joint trajectory (7D) + grip (binarized) |
 
 ```bash
-cd docker && docker compose run --rm positronic-to-lerobot convert \
+cd docker && docker compose run --rm lerobot-0_3_3-convert convert \
   --dataset.codec=@positronic.vendors.lerobot_0_3_3.codecs.ee \
   --output_dir=~/datasets/lerobot/my_task
 ```
@@ -62,7 +77,7 @@ Codec must match modality config during training.
 
 ```bash
 # Convert with codec
-cd docker && docker compose run --rm positronic-to-lerobot convert \
+cd docker && docker compose run --rm lerobot-convert convert \
   --dataset.codec=@positronic.vendors.gr00t.codecs.ee_rot6d_joints \
   --output_dir=~/datasets/groot/my_task
 
@@ -88,7 +103,7 @@ See [`positronic/vendors/openpi/codecs.py`](../positronic/vendors/openpi/codecs.
 `droid` codec is inference-only for use with pretrained DROID models (not for training).
 
 ```bash
-cd docker && docker compose run --rm positronic-to-lerobot convert \
+cd docker && docker compose run --rm lerobot-convert convert \
   --dataset.codec=@positronic.vendors.openpi.codecs.ee \
   --output_dir=~/datasets/openpi/my_task
 ```
@@ -106,13 +121,13 @@ Positronic aims to represent the same action and state space across different mo
 **Solution:** Verify training and inference use identical codec.
 
 ```bash
-# Training
-cd docker && docker compose run --rm positronic-to-lerobot convert \
-  --dataset.codec=@positronic.vendors.lerobot_0_3_3.codecs.ee
+# Training (SmolVLA)
+cd docker && docker compose run --rm lerobot-convert convert \
+  --dataset.codec=@positronic.vendors.lerobot.codecs.ee
 
 # Inference must match
 cd docker && docker compose run --rm lerobot-server \
-  --codec=@positronic.vendors.lerobot_0_3_3.codecs.ee
+  --codec=@positronic.vendors.lerobot.codecs.ee
 ```
 
 ## Writing Custom Codecs
@@ -124,4 +139,4 @@ Subclass `positronic.policy.codec.Codec` and implement `encode()` and/or `_decod
 - [Dataset Library README](../positronic/dataset/README.md) – Raw storage and transforms
 - [Training Workflow](training-workflow.md) – Using codecs in pipeline
 - [Model Selection](model-selection.md) – Choosing models
-- Vendor docs: [LeRobot](../positronic/vendors/lerobot_0_3_3/README.md) | [GR00T](../positronic/vendors/gr00t/README.md) | [OpenPI](../positronic/vendors/openpi/README.md)
+- Vendor docs: [SmolVLA](../positronic/vendors/lerobot/README.md) | [LeRobot ACT](../positronic/vendors/lerobot_0_3_3/README.md) | [GR00T](../positronic/vendors/gr00t/README.md) | [OpenPI](../positronic/vendors/openpi/README.md)

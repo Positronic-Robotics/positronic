@@ -114,10 +114,10 @@ The loop continues until the client closes the connection or the episode ends.
 **Unified API:** All vendors implement the same protocol, so swapping models is as simple as changing the server:
 
 ```bash
-# LeRobot server
+# LeRobot server (SmolVLA — 0.4.x)
 cd docker && docker compose run --rm --service-ports lerobot-server \
   --checkpoints_dir=~/checkpoints/lerobot/exp_v1 \
-  --codec=@positronic.vendors.lerobot_0_3_3.codecs.ee
+  --codec=@positronic.vendors.lerobot.codecs.ee
 
 # GR00T server (swap hardware code stays the same)
 cd docker && docker compose run --rm --service-ports groot-server \
@@ -175,7 +175,8 @@ action = session.infer(observation)
 
 All vendor servers implement Protocol v1:
 
-- **LeRobot**: `positronic.vendors.lerobot_0_3_3.server` - Serves ACT checkpoints with dynamic loading
+- **LeRobot (0.4.x)**: `positronic.vendors.lerobot.server` - Serves SmolVLA/ACT/Diffusion checkpoints (auto-detects policy type)
+- **LeRobot (0.3.3)**: `positronic.vendors.lerobot_0_3_3.server` - Serves ACT checkpoints with dynamic loading
 - **GR00T**: `positronic.vendors.gr00t.server` - Serves GR00T checkpoints with modality config
 - **OpenPI**: `positronic.vendors.openpi.server` - Serves OpenPI checkpoints with config name
 

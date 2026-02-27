@@ -8,8 +8,13 @@ Positronic's unified WebSocket protocol connects any hardware to any model (LeRo
 
 **Start inference server:**
 ```bash
-# LeRobot
+# LeRobot (SmolVLA — 0.4.x)
 cd docker && docker compose run --rm --service-ports lerobot-server \
+  --checkpoints_dir=~/checkpoints/lerobot/experiment_v1/ \
+  --codec=@positronic.vendors.lerobot.codecs.ee
+
+# LeRobot (ACT — 0.3.3)
+cd docker && docker compose run --rm --service-ports lerobot-0_3_3-server \
   --checkpoints_dir=~/checkpoints/lerobot/experiment_v1/ \
   --codec=@positronic.vendors.lerobot_0_3_3.codecs.ee
 
@@ -85,4 +90,4 @@ Run inference with recording, review in Positronic server, score manually (succe
 - [Training Workflow](training-workflow.md) – Preparing data and training
 - [Codecs Guide](codecs.md) – Observation/action encoding
 - [Offboard README](../positronic/offboard/README.md) – WebSocket protocol
-- Vendor guides: [OpenPI](../positronic/vendors/openpi/README.md) | [GR00T](../positronic/vendors/gr00t/README.md) | [LeRobot](../positronic/vendors/lerobot_0_3_3/README.md)
+- Vendor guides: [OpenPI](../positronic/vendors/openpi/README.md) | [GR00T](../positronic/vendors/gr00t/README.md) | [SmolVLA](../positronic/vendors/lerobot/README.md) | [LeRobot ACT](../positronic/vendors/lerobot_0_3_3/README.md)

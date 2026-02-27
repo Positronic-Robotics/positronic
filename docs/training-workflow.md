@@ -18,7 +18,7 @@ Convert your Positronic dataset into the model's expected format using a codec.
 ### Basic Conversion
 
 ```bash
-cd docker && docker compose run --rm positronic-to-lerobot convert \
+cd docker && docker compose run --rm lerobot-0_3_3-convert convert \
   --dataset.dataset=.local \
   --dataset.dataset.path=~/datasets/stack_cubes_raw \
   --dataset.codec=@positronic.vendors.lerobot_0_3_3.codecs.ee \
@@ -47,7 +47,7 @@ cd docker && docker compose run --rm positronic-to-lerobot convert \
 
 **Example:**
 ```bash
-cd docker && docker compose run --rm positronic-to-lerobot convert \
+cd docker && docker compose run --rm lerobot-0_3_3-convert convert \
   --dataset.dataset=@positronic.cfg.ds.phail.sim_stack_cubes \
   --dataset.codec=@positronic.vendors.lerobot_0_3_3.codecs.ee \
   --output_dir=~/datasets/lerobot/sim_stack_cubes
@@ -61,7 +61,8 @@ See the [Codecs Guide](codecs.md) for detailed codec documentation.
 
 | Model | Common Codecs |
 |-------|---------------|
-| **LeRobot ACT** | `ee`, `joints`, `ee_traj`, `joints_traj` |
+| **SmolVLA / LeRobot 0.4.x** | `ee`, `joints` (512x512 images) |
+| **LeRobot ACT (0.3.3)** | `ee`, `joints`, `ee_traj`, `joints_traj` |
 | **GR00T** | `ee_rot6d_joints`, `ee_quat`, `ee_quat_joints` |
 | **OpenPI** | `ee`, `ee_joints`, `droid` |
 
@@ -70,7 +71,7 @@ See the [Codecs Guide](codecs.md) for detailed codec documentation.
 Both input and output paths support S3 URLs. Data is cached locally and synced automatically. Positronic relies on [pos3](https://github.com/Positronic-Robotics/pos3) for S3 integration.
 
 ```bash
-cd docker && docker compose run --rm positronic-to-lerobot convert \
+cd docker && docker compose run --rm lerobot-0_3_3-convert convert \
   --dataset.dataset.path=s3://bucket/raw_data/stack_cubes \
   --output_dir=s3://bucket/converted/lerobot/stack_cubes \
   --dataset.codec=@positronic.vendors.lerobot_0_3_3.codecs.ee
@@ -81,7 +82,7 @@ cd docker && docker compose run --rm positronic-to-lerobot convert \
 To add more data to an existing LeRobot dataset:
 
 ```bash
-cd docker && docker compose run --rm positronic-to-lerobot append \
+cd docker && docker compose run --rm lerobot-0_3_3-convert append \
   --output_dir=~/datasets/lerobot/stack_cubes \
   --dataset.dataset=.local \
   --dataset.dataset.path=~/datasets/stack_cubes_new \
@@ -94,10 +95,20 @@ cd docker && docker compose run --rm positronic-to-lerobot append \
 
 Run the training job using vendor-specific Docker services. All services are defined in [`docker/docker-compose.yml`](../docker/docker-compose.yml).
 
-### LeRobot Training
+### LeRobot Training (SmolVLA — lerobot 0.4.x)
 
 ```bash
 cd docker && docker compose run --rm lerobot-train \
+  --input_path=~/datasets/lerobot/stack_cubes \
+  --exp_name=experiment_v1 \
+  --output_dir=~/checkpoints/lerobot/ \
+  --num_train_steps=50000
+```
+
+### LeRobot Training (ACT — lerobot 0.3.3)
+
+```bash
+cd docker && docker compose run --rm lerobot-0_3_3-train \
   --input_path=~/datasets/lerobot/stack_cubes \
   --exp_name=experiment_v1 \
   --output_dir=~/checkpoints/lerobot/ \
@@ -162,10 +173,19 @@ Start an inference server that exposes a unified WebSocket API. All vendors impl
 
 > **Note:** Use `--service-ports` flag to expose ports from Docker
 
-**LeRobot Server:**
+**LeRobot Server (SmolVLA — lerobot 0.4.x):**
 
 ```bash
 cd docker && docker compose run --rm --service-ports lerobot-server \
+  --checkpoints_dir=~/checkpoints/lerobot/experiment_v1/ \
+  --codec=@positronic.vendors.lerobot.codecs.ee \
+  --port=8000
+```
+
+**LeRobot Server (ACT — lerobot 0.3.3):**
+
+```bash
+cd docker && docker compose run --rm --service-ports lerobot-0_3_3-server \
   --checkpoints_dir=~/checkpoints/lerobot/experiment_v1/ \
   --codec=@positronic.vendors.lerobot_0_3_3.codecs.ee \
   --port=8000
@@ -193,7 +213,7 @@ cd docker && docker compose run --rm --service-ports openpi-server \
 |-----------|-------------|---------|
 | `--checkpoints_dir` | Path to experiment directory (contains checkpoint folders) | `~/checkpoints/lerobot/experiment_v1/` |
 | `--checkpoint` | (Optional) Specific checkpoint ID to load | `10000`, `20000` |
-| `--codec` | Codec (must match training) | `@positronic.vendors.lerobot_0_3_3.codecs.ee` |
+| `--codec` | Codec (must match training) | `@positronic.vendors.lerobot.codecs.ee` |
 | `--port` | Server port | `8000` (default) |
 | `--host` | Server host | `0.0.0.0` (default, binds to all interfaces) |
 
@@ -227,12 +247,12 @@ uv run positronic-data-collection sim --output_dir=~/datasets/my_task
 uv run positronic-server --dataset.path=~/datasets/my_task
 
 # 3. Bake dataset into LeRobot format
-cd docker && docker compose run --rm positronic-to-lerobot convert \
+cd docker && docker compose run --rm lerobot-convert convert \
   --dataset.dataset.path=~/datasets/my_task \
-  --dataset.codec=@positronic.vendors.lerobot_0_3_3.codecs.ee \
+  --dataset.codec=@positronic.vendors.lerobot.codecs.ee \
   --output_dir=~/datasets/lerobot/my_task
 
-# 4. Train ACT policy
+# 4. Train SmolVLA policy
 cd docker && docker compose run --rm lerobot-train \
   --input_path=~/datasets/lerobot/my_task \
   --exp_name=baseline_v1 \
@@ -242,7 +262,7 @@ cd docker && docker compose run --rm lerobot-train \
 # 5. Evaluate
 cd docker && docker compose run --rm --service-ports lerobot-server \
   --checkpoints_dir=~/checkpoints/lerobot/baseline_v1/ \
-  --codec=@positronic.vendors.lerobot_0_3_3.codecs.ee &
+  --codec=@positronic.vendors.lerobot.codecs.ee &
 
 uv run positronic-inference sim \
   --policy=.remote \
@@ -253,17 +273,17 @@ uv run positronic-inference sim \
 
 ```bash
 # Convert same dataset for all models
-cd docker && docker compose run --rm positronic-to-lerobot convert \
+cd docker && docker compose run --rm lerobot-convert convert \
   --dataset.dataset.path=~/datasets/my_task \
-  --dataset.codec=@positronic.vendors.lerobot_0_3_3.codecs.ee \
+  --dataset.codec=@positronic.vendors.lerobot.codecs.ee \
   --output_dir=~/datasets/lerobot/my_task
 
-cd docker && docker compose run --rm positronic-to-lerobot convert \
+cd docker && docker compose run --rm lerobot-convert convert \
   --dataset.dataset.path=~/datasets/my_task \
   --dataset.codec=@positronic.vendors.gr00t.codecs.ee_rot6d_joints \
   --output_dir=~/datasets/groot/my_task
 
-cd docker && docker compose run --rm positronic-to-lerobot convert \
+cd docker && docker compose run --rm lerobot-convert convert \
   --dataset.dataset.path=~/datasets/my_task \
   --dataset.codec=@positronic.vendors.openpi.codecs.ee \
   --output_dir=~/datasets/openpi/my_task
@@ -282,7 +302,8 @@ cd docker && docker compose run --rm openpi-train --input_path=~/datasets/openpi
 - **Model-specific guides:**
   - [OpenPI Workflow](../positronic/vendors/openpi/README.md)
   - [GR00T Workflow](../positronic/vendors/gr00t/README.md)
-  - [LeRobot Workflow](../positronic/vendors/lerobot_0_3_3/README.md)
+  - [SmolVLA / LeRobot 0.4.x](../positronic/vendors/lerobot/README.md)
+  - [LeRobot ACT (0.3.3)](../positronic/vendors/lerobot_0_3_3/README.md)
 
 - **Related documentation:**
   - [Codecs Guide](codecs.md) — Understanding observation encoding and action decoding

@@ -4,19 +4,19 @@ Positronic supports three foundation models with different capabilities and reso
 
 ## Quick Recommendation
 
-**Start with [LeRobot ACT](../positronic/vendors/lerobot_0_3_3/README.md)** if you want something quick and low-cost. Progress to [OpenPI (π₀.₅)](../positronic/vendors/openpi/README.md) or [GR00T](../positronic/vendors/groot/README.md) when you need more capable models. Positronic makes switching easy.
+**Start with [SmolVLA](../positronic/vendors/lerobot/README.md) or [LeRobot ACT](../positronic/vendors/lerobot_0_3_3/README.md)** if you want something quick and low-cost. Progress to [OpenPI (π₀.₅)](../positronic/vendors/openpi/README.md) or [GR00T](../positronic/vendors/groot/README.md) when you need more capable models. Positronic makes switching easy.
 
 ## Detailed Comparison
 
-| Aspect | OpenPI (π₀.₅) | GR00T | LeRobot ACT |
-|--------|---------------|-------|-------------|
-| **Capability** | Most capable, generalist | Generalist | Single-task specialist |
-| **Training Hardware** | capable cloud GPU (~78GB, LoRA) | capable cloud GPU (~50GB) | Consumer GPU (RTX 3090, 4090) |
-| **Training Time** | Multiple days | 0.5-2 days | Several hours |
-| **Inference Hardware** | GPU (~62GB, likely cloud) | GPU (~7.5GB, can run on robot) | Consumer GPU (4GB+) |
-| **Inference Speed** | Moderate | Moderate | Fast |
-| **Best For** | Complex multi-task manipulation, generalization | General robotics tasks | Specific manipulation tasks, fast iteration |
-| **When to Use** | Need generalization, multi-task scenarios, leveraging foundation models | Prefer NVIDIA stack | Single task, resource constraints, rapid experimentation |
+| Aspect | OpenPI (π₀.₅) | GR00T | SmolVLA | LeRobot ACT |
+|--------|---------------|-------|---------|-------------|
+| **Capability** | Most capable, generalist | Generalist | Vision-language-action | Single-task specialist |
+| **Training Hardware** | capable cloud GPU (~78GB, LoRA) | capable cloud GPU (~50GB) | Consumer GPU (RTX 3090, 4090) | Consumer GPU (RTX 3090, 4090) |
+| **Training Time** | Multiple days | 0.5-2 days | Several hours | Several hours |
+| **Inference Hardware** | GPU (~62GB, likely cloud) | GPU (~7.5GB, can run on robot) | Consumer GPU (4GB+) | Consumer GPU (4GB+) |
+| **Inference Speed** | Moderate | Moderate | Moderate | Fast |
+| **Best For** | Complex multi-task manipulation, generalization | General robotics tasks | Language-conditioned manipulation | Specific manipulation tasks, fast iteration |
+| **When to Use** | Need generalization, multi-task scenarios, leveraging foundation models | Prefer NVIDIA stack | Language instructions, VLM backbone | Single task, resource constraints, rapid experimentation |
 
 ## Model Profiles
 
@@ -52,6 +52,23 @@ Positronic supports three foundation models with different capabilities and reso
 
 
 → [GR00T Documentation](../positronic/vendors/gr00t/README.md)
+
+### SmolVLA — Vision-Language-Action Model
+
+**What it is:** A compact vision-language-action model from HuggingFace LeRobot (0.4.x). Combines a VLM backbone with action prediction for language-conditioned manipulation.
+
+**Strengths:**
+- Language-conditioned: specify tasks in natural language
+- VLM backbone enables visual understanding
+- Consumer GPU training and inference
+- Part of the LeRobot ecosystem
+
+**Limitations:**
+- Larger than ACT (VLM backbone)
+- Requires 512x512 images
+
+
+→ [SmolVLA Documentation](../positronic/vendors/lerobot/README.md)
 
 ### LeRobot ACT — Single-Task Transformer
 
@@ -106,10 +123,11 @@ All from the same raw dataset using different codecs.
 
 ### What if I'm not sure which model to use?
 
-Start with **LeRobot ACT**:
+Start with **SmolVLA** or **LeRobot ACT**:
 - Fastest to train and iterate
 - Lowest resource requirements
 - Validates your dataset and task setup
+- SmolVLA adds language conditioning, ACT is simplest
 
 Then progress to **GR00T** or **OpenPI** if you need:
 - Multi-task generalization
@@ -131,6 +149,7 @@ Positronic's architecture is extensible. We'll continue adding foundation models
 
 - [OpenPI Documentation](../positronic/vendors/openpi/README.md)
 - [GR00T Documentation](../positronic/vendors/gr00t/README.md)
+- [SmolVLA Documentation](../positronic/vendors/lerobot/README.md)
 - [LeRobot ACT Documentation](../positronic/vendors/lerobot_0_3_3/README.md)
 - [Codecs Guide](codecs.md) — Understanding observation encoding and action decoding
 - [Training Workflow](training-workflow.md) — Unified training steps across all models
