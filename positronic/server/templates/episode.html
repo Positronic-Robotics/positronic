@@ -49,7 +49,6 @@ Episode {{ episode_id }} / {{ num_episodes }} - Positronic Dataset Viewer
         const viewerUrl = new URL(`/static/rerun/{{ rerun_version }}/index.html`, window.location.origin);
         viewerUrl.searchParams.set('url', rrdUrl);
         viewerUrl.searchParams.set('hide_welcome_screen', '');
-        viewerUrl.searchParams.set('persist', 'false');
         const params = new URLSearchParams(window.location.search);
         if (params.has('ts_ns')) viewerUrl.searchParams.set('seek_ts_ns', params.get('ts_ns'));
         else if (params.has('t')) viewerUrl.searchParams.set('seek_t', params.get('t'));
