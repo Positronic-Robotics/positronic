@@ -87,7 +87,4 @@ t=t.replace( \
   '    args += (\n        window_size,\n    )\n    if _TE_VER >= (2, 12):\n        args += (False,)  # bottom_right_diagonal\n    args += (\n        deterministic,\n        cu_seqlens_q,', 1); \
 open(f,'w').write(t)"
 
-# Pre-download the umt5-xxl tokenizer (used by the model, ~10GB)
-RUN python -c "from transformers import AutoTokenizer; AutoTokenizer.from_pretrained('google/umt5-xxl')"
-
 WORKDIR /dreamzero

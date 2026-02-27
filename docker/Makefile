@@ -1,10 +1,11 @@
-.PHONY: all build tag push clean prune help build-training tag-training push-training build-openpi tag-openpi push-openpi build-groot tag-groot push-groot build-dreamzero tag-dreamzero push-dreamzero
+.PHONY: all build tag push clean prune help build-training tag-training push-training build-openpi tag-openpi push-openpi build-groot tag-groot push-groot build-dreamzero-base push-dreamzero-base build-dreamzero tag-dreamzero push-dreamzero
 
 # Image configuration
 IMAGE_NAME_TRAINING := positro/positronic
 IMAGE_NAME_OPENPI := positro/openpi
 IMAGE_NAME_GROOT := positro/gr00t
 IMAGE_NAME_DREAMZERO := positro/dreamzero
+IMAGE_NAME_DREAMZERO_BASE := positro/dreamzero-base
 IMAGE_NAME_OPENPI_BASE := positro/openpi-base
 
 # Extract version from pyproject.toml (first literal version entry)
@@ -25,6 +26,7 @@ LOCAL_TAG_TRAINING := $(IMAGE_NAME_TRAINING):local
 TAG_OPENPI_LATEST := $(IMAGE_NAME_OPENPI):latest
 TAG_GROOT_LATEST := $(IMAGE_NAME_GROOT):latest
 TAG_DREAMZERO_LATEST := $(IMAGE_NAME_DREAMZERO):latest
+TAG_DREAMZERO_BASE_LATEST := $(IMAGE_NAME_DREAMZERO_BASE):latest
 
 # OpenPI base image (pulled from registry)
 TAG_OPENPI_BASE := $(IMAGE_NAME_OPENPI_BASE):latest
@@ -68,9 +70,17 @@ build-groot: build-training
 	@echo "Building $(IMAGE_NAME_GROOT)..."
 	docker build --pull --platform linux/amd64 --build-arg BASE_IMAGE=positro/gr00t-base:latest -f Dockerfile.groot -t $(IMAGE_NAME_GROOT):local ..
 
-build-dreamzero:
+build-dreamzero-base:
+	@echo "Building $(IMAGE_NAME_DREAMZERO_BASE)..."
+	docker build --platform linux/amd64 -f ../positronic/vendors/dreamzero/Dockerfile -t $(TAG_DREAMZERO_BASE_LATEST) ..
+
+push-dreamzero-base: build-dreamzero-base
+	@echo "Pushing $(IMAGE_NAME_DREAMZERO_BASE) to Docker Hub..."
+	docker push $(TAG_DREAMZERO_BASE_LATEST)
+
+build-dreamzero: build-dreamzero-base
 	@echo "Building $(IMAGE_NAME_DREAMZERO)..."
-	docker build --platform linux/amd64 --build-arg BASE_IMAGE=positro/dreamzero-base:latest -f Dockerfile.dreamzero -t $(IMAGE_NAME_DREAMZERO):local ..
+	docker build --platform linux/amd64 --build-arg BASE_IMAGE=$(TAG_DREAMZERO_BASE_LATEST) -f Dockerfile.dreamzero -t $(IMAGE_NAME_DREAMZERO):local ..
 
 build: build-training build-openpi build-groot build-dreamzero
 
@@ -137,6 +147,7 @@ clean:
 	-docker rmi $(TAG_GROOT_LATEST)
 	-docker rmi $(IMAGE_NAME_DREAMZERO):local
 	-docker rmi $(TAG_DREAMZERO_LATEST)
+	-docker rmi $(TAG_DREAMZERO_BASE_LATEST)
 	@echo "All local images removed."
 
 prune:
