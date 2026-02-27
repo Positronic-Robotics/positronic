@@ -487,6 +487,10 @@ def main(
 ):
     """Visualize a Dataset with Rerun.
 
+    Episode viewer URL params:
+        /episode/<id>?t=<seconds>      — open paused at seconds from episode start
+        /episode/<id>?ts_ns=<nanos>    — open paused at absolute nanosecond timestamp
+
     Args:
         dataset: Dataset to visualize
         cache_dir: Directory to cache generated RRD files

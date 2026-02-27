@@ -42,6 +42,7 @@ Episode {{ episode_id }} / {{ num_episodes }} - Positronic Dataset Viewer
         episodeInput.select();
     });
 
+    // URL params: ?t=<seconds_from_start> or ?ts_ns=<absolute_nanoseconds> to seek on load
     window.addEventListener('load', () => {
         const viewerIframe = document.getElementById('viewer-iframe');
         const rrdUrl = `${window.location.origin}/api/episode_rrd/{{ episode_id }}`;
