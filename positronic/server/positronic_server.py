@@ -442,6 +442,35 @@ def default_table() -> TableConfig:
     }
 
 
+def _generate_self_signed_cert(host: str) -> dict[str, str]:
+    ssl_dir = tempfile.mkdtemp(prefix='positronic-ssl-')
+    keyfile = os.path.join(ssl_dir, 'key.pem')
+    certfile = os.path.join(ssl_dir, 'cert.pem')
+    subprocess.run(
+        [
+            'openssl',
+            'req',
+            '-x509',
+            '-newkey',
+            'rsa:2048',
+            '-keyout',
+            keyfile,
+            '-out',
+            certfile,
+            '-days',
+            '365',
+            '-nodes',
+            '-subj',
+            f'/CN={host}',
+            '-addext',
+            f'subjectAltName=DNS:localhost,IP:{host}',
+        ],
+        check=True,
+        capture_output=True,
+    )
+    return {'ssl_keyfile': keyfile, 'ssl_certfile': certfile}
+
+
 @cfn.config(dataset=positronic.cfg.ds.local_all, ep_table_cfg=default_table, max_resolution=640, group_tables=None)
 def main(
     dataset: Dataset,
@@ -532,35 +561,7 @@ def main(
     t.start()
 
     primary_host = utils.resolve_host_ip()
-    ssl_kwargs = {}
-    if https:
-        ssl_dir = tempfile.mkdtemp(prefix='positronic-ssl-')
-        keyfile = os.path.join(ssl_dir, 'key.pem')
-        certfile = os.path.join(ssl_dir, 'cert.pem')
-        subprocess.run(
-            [
-                'openssl',
-                'req',
-                '-x509',
-                '-newkey',
-                'rsa:2048',
-                '-keyout',
-                keyfile,
-                '-out',
-                certfile,
-                '-days',
-                '365',
-                '-nodes',
-                '-subj',
-                f'/CN={primary_host}',
-                '-addext',
-                f'subjectAltName=DNS:localhost,IP:{primary_host}',
-            ],
-            check=True,
-            capture_output=True,
-        )
-        ssl_kwargs = {'ssl_keyfile': keyfile, 'ssl_certfile': certfile}
-
+    ssl_kwargs = _generate_self_signed_cert(primary_host) if https else {}
     scheme = 'https' if https else 'http'
     logging.info(f'Starting server on {scheme}://{primary_host}:{port}')
     uvicorn.run(app, host=host, port=port, log_level='debug' if debug else 'info', **ssl_kwargs)
