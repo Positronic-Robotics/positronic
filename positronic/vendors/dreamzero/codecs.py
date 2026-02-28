@@ -12,7 +12,7 @@ from positronic.dataset import Signal, transforms
 from positronic.dataset.episode import Episode
 from positronic.dataset.transforms import image
 from positronic.dataset.transforms.episode import Derive
-from positronic.policy.codec import Codec, lerobot_action, lerobot_image, lerobot_state
+from positronic.policy.codec import Codec, lerobot_image, lerobot_state
 
 IMAGE_WIDTH = 320
 IMAGE_HEIGHT = 180
@@ -37,15 +37,11 @@ class DreamZeroObservationCodec(Codec):
         exterior_camera_1: str = 'image.exterior',
         exterior_camera_2: str = 'image.exterior2',
         image_size: tuple[int, int] = (IMAGE_WIDTH, IMAGE_HEIGHT),
-        tgt_joints_key: str = 'robot_commands.joints',
-        tgt_grip_key: str = 'target_grip',
     ):
         self._wrist_camera = wrist_camera
         self._exterior_camera_1 = exterior_camera_1
         self._exterior_camera_2 = exterior_camera_2
         self._image_size = image_size
-        self._tgt_joints_key = tgt_joints_key
-        self._tgt_grip_key = tgt_grip_key
 
         w, h = image_size
         self._derive_transforms: dict[str, Any] = {
@@ -54,7 +50,6 @@ class DreamZeroObservationCodec(Codec):
             'wrist_image': partial(self._derive_image, wrist_camera),
             'exterior_image_1': partial(self._derive_image, exterior_camera_1),
             'exterior_image_2': partial(self._derive_image, exterior_camera_2),
-            'action': self._derive_action,
             'task': lambda ep: ep.get('task', ''),
         }
 
@@ -65,7 +60,6 @@ class DreamZeroObservationCodec(Codec):
                 'wrist_image': lerobot_image(w, h),
                 'exterior_image_1': lerobot_image(w, h),
                 'exterior_image_2': lerobot_image(w, h),
-                'action': lerobot_action(8),  # 7 joints + 1 gripper
             }
         }
 
@@ -78,9 +72,6 @@ class DreamZeroObservationCodec(Codec):
     def _derive_image(self, input_key: str, episode: Episode) -> Signal[Any]:
         w, h = self._image_size
         return image.resize_with_pad(w, h, signal=episode[input_key])
-
-    def _derive_action(self, episode: Episode) -> Signal[np.ndarray]:
-        return transforms.concat(episode[self._tgt_joints_key], episode[self._tgt_grip_key], dtype=np.float32)
 
     def _encode_image(self, input_key: str, inputs: dict[str, Any]) -> np.ndarray:
         w, h = self._image_size
@@ -126,23 +117,11 @@ class DreamZeroObservationCodec(Codec):
         return Derive(meta=self._training_meta, **self._derive_transforms)
 
 
-@cfn.config(
-    wrist_camera='image.wrist',
-    exterior_camera_1='image.exterior',
-    exterior_camera_2='image.exterior2',
-    tgt_joints_key='robot_commands.joints',
-    tgt_grip_key='target_grip',
-)
-def dreamzero_obs(
-    wrist_camera: str, exterior_camera_1: str, exterior_camera_2: str, tgt_joints_key: str, tgt_grip_key: str
-):
+@cfn.config(wrist_camera='image.wrist', exterior_camera_1='image.exterior', exterior_camera_2='image.exterior2')
+def dreamzero_obs(wrist_camera: str, exterior_camera_1: str, exterior_camera_2: str):
     """DreamZero observation codec (3 cameras + joint state)."""
     return DreamZeroObservationCodec(
-        wrist_camera=wrist_camera,
-        exterior_camera_1=exterior_camera_1,
-        exterior_camera_2=exterior_camera_2,
-        tgt_joints_key=tgt_joints_key,
-        tgt_grip_key=tgt_grip_key,
+        wrist_camera=wrist_camera, exterior_camera_1=exterior_camera_1, exterior_camera_2=exterior_camera_2
     )
 
 

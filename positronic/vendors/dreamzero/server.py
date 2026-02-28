@@ -216,6 +216,7 @@ class InferenceServer:
         self.roboarena_port = roboarena_port
         self.enable_dit_cache = enable_dit_cache
         self.subprocess: DreamZeroSubprocess | None = None
+        self._subprocess_lock = asyncio.Lock()
 
         self.metadata = {
             'host': host,
@@ -234,24 +235,25 @@ class InferenceServer:
             if websocket is not None:
                 await websocket.send_bytes(serialise({'status': 'loading', 'message': msg}))
 
-        if self.subprocess is not None:
-            return self.subprocess
+        async with self._subprocess_lock:
+            if self.subprocess is not None:
+                return self.subprocess
 
-        download_task = asyncio.create_task(asyncio.to_thread(_download_checkpoint, self.model_path))
-        await monitor_async_task(
-            download_task, description='Downloading DreamZero checkpoint', on_progress=send_progress
-        )
+            download_task = asyncio.create_task(asyncio.to_thread(_download_checkpoint, self.model_path))
+            await monitor_async_task(
+                download_task, description='Downloading DreamZero checkpoint', on_progress=send_progress
+            )
 
-        logger.info(f'Starting DreamZero subprocess with {self.num_gpus} GPUs')
-        sp = DreamZeroSubprocess(
-            model_path=str(download_task.result()),
-            num_gpus=self.num_gpus,
-            roboarena_port=self.roboarena_port,
-            enable_dit_cache=self.enable_dit_cache,
-        )
-        await sp.start_async(on_progress=send_progress)
-        self.subprocess = sp
-        return sp
+            logger.info(f'Starting DreamZero subprocess with {self.num_gpus} GPUs')
+            sp = DreamZeroSubprocess(
+                model_path=str(download_task.result()),
+                num_gpus=self.num_gpus,
+                roboarena_port=self.roboarena_port,
+                enable_dit_cache=self.enable_dit_cache,
+            )
+            await sp.start_async(on_progress=send_progress)
+            self.subprocess = sp
+            return sp
 
     async def get_models(self):
         return {'models': [self.model_path]}
