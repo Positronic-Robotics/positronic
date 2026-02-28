@@ -48,7 +48,15 @@ class JointDelta:
     velocities: np.ndarray
 
 
-CommandType = Reset | Recover | CartesianPosition | JointPosition | JointDelta
+@dataclass
+class NormalizedJointPosition:
+    """Move the robot joints to normalized [0,1] positions (for direct motor control)."""
+
+    TYPE = 'normalized_joint_pos'
+    positions: np.ndarray
+
+
+CommandType = Reset | Recover | CartesianPosition | JointPosition | JointDelta | NormalizedJointPosition
 
 
 def to_wire(command: CommandType) -> dict[str, Any]:
@@ -61,6 +69,8 @@ def to_wire(command: CommandType) -> dict[str, Any]:
             return {'type': command.TYPE, 'positions': positions}
         case JointDelta(velocities):
             return {'type': command.TYPE, 'velocities': velocities}
+        case NormalizedJointPosition(positions):
+            return {'type': command.TYPE, 'positions': positions}
 
 
 def from_wire(wire: dict[str, Any]) -> CommandType:
@@ -77,5 +87,7 @@ def from_wire(wire: dict[str, Any]) -> CommandType:
             return JointPosition(positions=wire['positions'])
         case 'joint_delta':
             return JointDelta(velocities=wire['velocities'])
+        case 'normalized_joint_pos':
+            return NormalizedJointPosition(positions=wire['positions'])
         case _:
             raise ValueError(f'Unknown command type: {wire["type"]}')
