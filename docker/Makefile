@@ -78,7 +78,7 @@ push-dreamzero-base: build-dreamzero-base
 	@echo "Pushing $(IMAGE_NAME_DREAMZERO_BASE) to Docker Hub..."
 	docker push $(TAG_DREAMZERO_BASE_LATEST)
 
-build-dreamzero: build-dreamzero-base
+build-dreamzero:
 	@echo "Building $(IMAGE_NAME_DREAMZERO)..."
 	docker build --platform linux/amd64 --build-arg BASE_IMAGE=$(TAG_DREAMZERO_BASE_LATEST) -f Dockerfile.dreamzero -t $(IMAGE_NAME_DREAMZERO):local ..
 

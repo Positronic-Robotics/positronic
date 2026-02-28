@@ -31,10 +31,19 @@ DREAMZERO_VENV = Path('/.venv')
 
 def _download_checkpoint(model_path: str) -> Path:
     if '/' in model_path and not Path(model_path).exists():
-        from huggingface_hub import snapshot_download
-
         logger.info(f'Downloading checkpoint from HuggingFace: {model_path}')
-        return Path(snapshot_download(repo_id=model_path))
+        # huggingface_hub lives in the DreamZero base venv, not the positronic venv
+        result = subprocess.run(
+            [
+                str(DREAMZERO_VENV / 'bin' / 'python'),
+                '-c',
+                f'from huggingface_hub import snapshot_download; print(snapshot_download("{model_path}"))',
+            ],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        return Path(result.stdout.strip())
     return Path(model_path)
 
 
@@ -315,4 +324,4 @@ def server(codec: Codec, model_path: str, num_gpus: int, port: int, enable_dit_c
 
 if __name__ == '__main__':
     init_logging()
-    cfn.cli({'server': server})
+    cfn.cli(server)
