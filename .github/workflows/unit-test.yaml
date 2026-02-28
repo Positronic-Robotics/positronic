@@ -61,3 +61,23 @@ jobs:
         env:
           PYTHONPATH: ${{ env.PYTHONPATH }}:$PWD
         run: uv run pytest positronic/vendors/lerobot_0_3_3/tests --no-cov
+
+  lerobot-latest:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Enable caching
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Set up Python
+        run: uv venv --python 3.11
+
+      - name: Install dependencies
+        run: uv sync --extra dev --extra lerobot
+
+      - name: Run lerobot vendor tests
+        env:
+          PYTHONPATH: ${{ env.PYTHONPATH }}:$PWD
+        run: uv run pytest positronic/vendors/lerobot/tests --no-cov

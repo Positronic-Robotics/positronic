@@ -73,9 +73,10 @@ Positronic supports state-of-the-art foundation models with first-class workflow
 |-------|-----------|----------|-----------|----------|
 | **[OpenPI (π₀.₅)](positronic/vendors/openpi/README.md)** | Most capable, generalist | Capable GPU (~78GB, LoRA) | Capable GPU (~62GB) | Complex multi-task manipulation |
 | **[GR00T](positronic/vendors/gr00t/README.md)** | Generalist robot policy | Capable GPU (~50GB) | Smaller GPU (~7.5GB) | Logistics and industry applications |
+| **[SmolVLA](positronic/vendors/lerobot/README.md)** | Vision-language-action | Consumer GPU | Consumer GPU | Language-conditioned manipulation |
 | **[LeRobot ACT](positronic/vendors/lerobot_0_3_3/README.md)** | Single-task, efficient | Consumer GPU | Consumer GPU | Specific manipulation tasks |
 
-**Recommendation**: Start with ACT if you want something quick and low-cost. Progress to GR00T or OpenPI if you need more capable models. Positronic makes switching easy.
+**Recommendation**: Start with SmolVLA or ACT if you want something quick and low-cost. Progress to GR00T or OpenPI if you need more capable models. Positronic makes switching easy.
 
 ### Why Multiple Vendors?
 
@@ -119,7 +120,7 @@ uv sync --frozen --extra hardware
 After installation, the following command-line scripts will be available:
 - `positronic-data-collection`: Collect demonstrations in simulation or on hardware
 - `positronic-server`: Browse and inspect datasets
-- `positronic-to-lerobot`: Convert datasets to model format
+- `lerobot-convert` (Docker): Convert datasets to model format
 - `positronic-inference`: Run trained policies in simulation or on hardware
 
 All commands work both inside an activated virtual environment and with `uv run` prefix (e.g., `uv run positronic-server`).
@@ -202,10 +203,10 @@ uv run positronic-server \
 Convert curated runs using a codec:
 
 ```bash
-cd docker && docker compose run --rm positronic-to-lerobot convert \
+cd docker && docker compose run --rm lerobot-convert convert \
     --dataset.dataset=.local \
     --dataset.dataset.path=~/datasets/stack_cubes_raw \
-    --dataset.codec=@positronic.vendors.openpi.codecs.ee \
+    --dataset.codec=@positronic.vendors.lerobot.codecs.ee \
     --output_dir=~/datasets/lerobot/stack_cubes \
     --task="pick up the green cube and place it on the red cube"
 ```
@@ -265,6 +266,7 @@ Monitor performance, collect edge cases, and iterate. See [Inference Guide](docs
 **Model Workflows:**
 - [OpenPI (π₀.₅)](positronic/vendors/openpi/README.md) — Recommended for most tasks
 - [GR00T](positronic/vendors/gr00t/README.md) — NVIDIA's generalist policy
+- [SmolVLA / LeRobot 0.4.x](positronic/vendors/lerobot/README.md) — Vision-language-action
 - [LeRobot ACT](positronic/vendors/lerobot_0_3_3/README.md) — Single-task transformer
 
 **Guides:**

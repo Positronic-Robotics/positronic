@@ -68,6 +68,10 @@ lerobot_0_3_3 = [
     "timm",
     "torch",
 ]
+lerobot = [
+    "lerobot[smolvla]==0.4.3",
+    "torch",
+]
 dev = [
     "ruff",
     "pre-commit",
@@ -86,6 +90,12 @@ dev = [
 # lerobot_0_3_3 extra pulls in lerobot==0.3.3 which declares rerun-sdk<0.23,
 # but our usage of lerobot doesn't need rerun — override to unblock resolution.
 override-dependencies = ["rerun-sdk==0.30.0"]
+conflicts = [
+    [
+        {extra = "lerobot"},
+        {extra = "lerobot-0-3-3"},
+    ],
+]
 
 [tool.uv.sources.kortex_api]
 url = "https://artifactory.kinovaapps.com/artifactory/generic-local-public/kortex/API/2.7.0/kortex_api-2.7.0.post5-py3-none-any.whl"
@@ -110,6 +120,7 @@ testpaths = [
     "positronic/utils/tests",
     "positronic/vendors/gr00t/tests",
     "positronic/vendors/lerobot_0_3_3/tests",
+    "positronic/vendors/lerobot/tests",
 ]
 python_files = ["test_*.py", "*_test.py"]
 addopts = [
