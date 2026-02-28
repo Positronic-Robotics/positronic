@@ -22,6 +22,11 @@ class Policy(ABC):
         """
         pass
 
+    # TODO: Add `dummy_input() -> dict | None` method here. Each vendor Policy subclass
+    # (Gr00tPolicy, OpenpiPolicy, DreamZeroPolicy) knows its model's expected input format
+    # and can provide a zero-filled dummy for warmup. This removes the need for
+    # `Codec.dummy_encoded()` and lets servers warm up without requiring a codec.
+
     def reset(self):
         """Resets the policy state."""
         return None

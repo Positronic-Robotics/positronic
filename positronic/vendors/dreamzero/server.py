@@ -47,6 +47,8 @@ def _download_checkpoint(model_path: str) -> Path:
     return Path(model_path)
 
 
+# TODO: Extract RoboarenaClient to positronic/offboard/ — roboarena is a cross-vendor
+# standard (used by DreamZero, potentially GR00T N2, etc.) and other vendors may need it.
 class RoboarenaClient:
     """Client for DreamZero's roboarena WebSocket server.
 
@@ -192,10 +194,13 @@ class DreamZeroPolicy(Policy):
         self._session_id = str(uuid.uuid4())
 
 
+# TODO: Extract common InferenceServer base class from gr00t, openpi, and dreamzero servers.
+# The FastAPI app, WebSocket inference loop, subprocess lifecycle, warmup, and serve() are
+# ~80% identical. Vendor-specific parts: subprocess command, wire protocol, checkpoint management.
 class InferenceServer:
     def __init__(
         self,
-        codec: Codec,
+        codec: Codec | None,
         model_path: str,
         num_gpus: int = 1,
         host: str = '0.0.0.0',
@@ -257,7 +262,7 @@ class InferenceServer:
 
         try:
             subprocess_obj = await self._get_subprocess(websocket)
-            meta = {**self.metadata, **self.codec.meta}
+            meta = {**self.metadata, **(self.codec.meta if self.codec else {})}
             await websocket.send_bytes(serialise({'status': 'ready', 'meta': meta}))
         except Exception as e:
             logger.error(f'Failed to start subprocess: {e}', exc_info=True)
@@ -267,7 +272,8 @@ class InferenceServer:
 
         client = RoboarenaClient(port=subprocess_obj.roboarena_port)
         client.connect()
-        policy = self.codec.wrap(DreamZeroPolicy(client))
+        base_policy = DreamZeroPolicy(client)
+        policy = self.codec.wrap(base_policy) if self.codec else base_policy
         policy.reset()
 
         try:
@@ -293,7 +299,8 @@ class InferenceServer:
         client.connect()
         policy = DreamZeroPolicy(client)
         policy.reset()
-        await asyncio.to_thread(policy.select_action, self.codec.dummy_encoded())
+        dummy = self.codec.dummy_encoded() if self.codec else {}
+        await asyncio.to_thread(policy.select_action, dummy)
         logger.info('Warmup inference complete')
 
     def _shutdown(self):
@@ -315,7 +322,7 @@ class InferenceServer:
 
 
 @cfn.config(codec=codecs.joints, model_path=DEFAULT_HF_REPO, num_gpus=1, port=8000, enable_dit_cache=True)
-def server(codec: Codec, model_path: str, num_gpus: int, port: int, enable_dit_cache: bool):
+def server(codec: Codec | None, model_path: str, num_gpus: int, port: int, enable_dit_cache: bool):
     """Starts the DreamZero inference server."""
     InferenceServer(
         codec=codec, model_path=model_path, num_gpus=num_gpus, port=port, enable_dit_cache=enable_dit_cache

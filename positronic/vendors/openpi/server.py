@@ -178,6 +178,9 @@ class OpenpiPolicy(Policy):
 ###########################################################################################
 
 
+# TODO: Extract common InferenceServer base class from gr00t, openpi, and dreamzero servers.
+# The FastAPI app, WebSocket inference loop, subprocess lifecycle, warmup, and serve() are
+# ~80% identical. Vendor-specific parts: subprocess command, wire protocol, checkpoint management.
 class InferenceServer:
     """FastAPI server that wraps OpenPI subprocess and provides unified API."""
 
