@@ -101,6 +101,8 @@ services:
   lerobot-train:
     <<: *positronic-common
     container_name: lerobot-train
+    shm_size: 8g
+    ipc: host
     entrypoint: ["uv", "run", "--python", "3.11", "--extra", "lerobot", "python", "-m",
                  "positronic.vendors.lerobot.train"]
 

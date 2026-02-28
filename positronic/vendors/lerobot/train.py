@@ -11,8 +11,6 @@ Example:
 import logging
 import os
 import sys
-import threading
-import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -159,20 +157,12 @@ def train(
         else:
             logging.critical(f'Checkpoints directory {checkpoints_dir} does not exist')
 
-    def _save_metadata_delayed():
-        for _ in range(60):
-            if Path(cfg.output_dir).exists():
-                utils.save_run_metadata(Path(cfg.output_dir), patterns=['*.py', '*.toml'])
-                return
-            time.sleep(5)
-        logging.warning(f'Timed out waiting for output directory {cfg.output_dir} to be created')
-
-    threading.Thread(target=_save_metadata_delayed, daemon=True).start()
-
     logging.info('Starting training...')
     from lerobot.scripts.lerobot_train import train as lerobot_train
 
     lerobot_train(cfg)
+
+    utils.save_run_metadata(Path(cfg.output_dir), patterns=['*.py', '*.toml'])
     logging.info('Training finished.')
 
 
