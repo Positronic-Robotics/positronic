@@ -7,11 +7,7 @@ PROTOCOL_VERSION = 0
 TIMEOUT_MS = 1000
 
 # Sign-Magnitude encoding bits
-STS_SMS_SERIES_ENCODINGS_TABLE = {
-    'Homing_Offset': 11,
-    'Goal_Velocity': 15,
-    'Present_Velocity': 15,
-}
+STS_SMS_SERIES_ENCODINGS_TABLE = {'Homing_Offset': 11, 'Goal_Velocity': 15, 'Present_Velocity': 15}
 
 STS_SMS_SERIES_CONTROL_TABLE = {
     # EPROM
@@ -174,14 +170,9 @@ def convert_to_bytes(value, n_bytes):
     # Note: No need to convert back into unsigned int, since this byte preprocessing
     # already handles it for us.
     if n_bytes == 1:
-        data = [
-            scs.SCS_LOBYTE(scs.SCS_LOWORD(value)),
-        ]
+        data = [scs.SCS_LOBYTE(scs.SCS_LOWORD(value))]
     elif n_bytes == 2:
-        data = [
-            scs.SCS_LOBYTE(scs.SCS_LOWORD(value)),
-            scs.SCS_HIBYTE(scs.SCS_LOWORD(value)),
-        ]
+        data = [scs.SCS_LOBYTE(scs.SCS_LOWORD(value)), scs.SCS_HIBYTE(scs.SCS_LOWORD(value))]
     elif n_bytes == 4:
         data = [
             scs.SCS_LOBYTE(scs.SCS_LOWORD(value)),

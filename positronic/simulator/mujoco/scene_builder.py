@@ -79,9 +79,7 @@ def extract_assets(spec: mujoco.MjSpec, parent_dir: str | None = None) -> dict[s
 
 # TODO: In theory this could be implemented via series of scene transformations. But this is a bit of a pain. :_)
 def generate_scene(
-    table_height: RANGE_OR_VALUE = 0.3,
-    table_size: tuple[float, float, float] = (0.4, 0.6, 0.05),
-    portable: bool = True,
+    table_height: RANGE_OR_VALUE = 0.3, table_size: tuple[float, float, float] = (0.4, 0.6, 0.05), portable: bool = True
 ) -> mujoco.MjModel:
     table_height = random_range(table_height)
     table_offset = (-0.3, 0, table_height)
@@ -89,9 +87,7 @@ def generate_scene(
     # Create base world with table
     world = robosuite.models.MujocoWorldBase()
     mujoco_arena = robosuite.models.arenas.TableArena(
-        table_full_size=table_size,
-        table_friction=(1, 0.005, 0.0001),
-        table_offset=table_offset,
+        table_full_size=table_size, table_friction=(1, 0.005, 0.0001), table_offset=table_offset
     )
     mujoco_arena.set_origin([0.8, 0, 0])
     world.merge(mujoco_arena)

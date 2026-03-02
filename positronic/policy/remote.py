@@ -72,11 +72,11 @@ class RemotePolicy(Policy):
         for key, value in obs.items():
             if isinstance(value, np.ndarray) and value.ndim == 3 and value.shape[2] == 3:
                 target = self._image_sizes.get(key, self._default_image_size)
-                if target is not None:
-                    value = self._resize_to(value, *target)
-                elif self._resize is not None:
+                r = self._resize or 0
+                tw, th = target or (r, r)
+                if tw > 0 and th > 0:
                     h, w = value.shape[:2]
-                    scale = min(1, self._resize / max(w, h))
+                    scale = min(1.0, tw / w, th / h)
                     value = self._resize_to(value, int(w * scale), int(h * scale))
             result[key] = value
         return result

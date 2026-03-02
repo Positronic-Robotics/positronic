@@ -73,7 +73,7 @@ Positronic supports state-of-the-art foundation models with first-class workflow
 |-------|-----------|----------|-----------|----------|
 | **[OpenPI (π₀.₅)](positronic/vendors/openpi/README.md)** | Most capable, generalist | Capable GPU (~78GB, LoRA) | Capable GPU (~62GB) | Complex multi-task manipulation |
 | **[GR00T](positronic/vendors/gr00t/README.md)** | Generalist robot policy | Capable GPU (~50GB) | Smaller GPU (~7.5GB) | Logistics and industry applications |
-| **[LeRobot ACT](positronic/vendors/lerobot/README.md)** | Single-task, efficient | Consumer GPU | Consumer GPU | Specific manipulation tasks |
+| **[LeRobot ACT](positronic/vendors/lerobot_0_3_3/README.md)** | Single-task, efficient | Consumer GPU | Consumer GPU | Specific manipulation tasks |
 
 **Recommendation**: Start with ACT if you want something quick and low-cost. Progress to GR00T or OpenPI if you need more capable models. Positronic makes switching easy.
 
@@ -193,7 +193,7 @@ To preview exactly what the training will see, pass the same codec configuration
 uv run positronic-server \
     --dataset=@positronic.cfg.ds.local_all \
     --dataset.path=~/datasets/stack_cubes_raw \
-    --dataset.codec=@positronic.vendors.openpi.codecs.eepose \
+    --dataset.codec=@positronic.vendors.openpi.codecs.ee \
     --port=5001
 ```
 
@@ -205,10 +205,9 @@ Convert curated runs using a codec:
 cd docker && docker compose run --rm positronic-to-lerobot convert \
     --dataset.dataset=.local \
     --dataset.dataset.path=~/datasets/stack_cubes_raw \
-    --dataset.codec=@positronic.vendors.openpi.codecs.eepose \
+    --dataset.codec=@positronic.vendors.openpi.codecs.ee \
     --output_dir=~/datasets/lerobot/stack_cubes \
-    --task="pick up the green cube and place it on the red cube" \
-    --fps=30
+    --task="pick up the green cube and place it on the red cube"
 ```
 
 **Train using vendor-specific workflows:**
@@ -246,7 +245,7 @@ uv run positronic-inference sim \
 # On inference server:
 cd docker && docker compose run --rm --service-ports lerobot-server \
     --checkpoints_dir=~/checkpoints/lerobot/<run_id> \
-    --codec=@positronic.vendors.lerobot.codecs.eepose_absolute
+    --codec=@positronic.vendors.lerobot_0_3_3.codecs.ee
 
 # On robot:
 uv run positronic-inference sim \
@@ -266,7 +265,7 @@ Monitor performance, collect edge cases, and iterate. See [Inference Guide](docs
 **Model Workflows:**
 - [OpenPI (π₀.₅)](positronic/vendors/openpi/README.md) — Recommended for most tasks
 - [GR00T](positronic/vendors/gr00t/README.md) — NVIDIA's generalist policy
-- [LeRobot ACT](positronic/vendors/lerobot/README.md) — Single-task transformer
+- [LeRobot ACT](positronic/vendors/lerobot_0_3_3/README.md) — Single-task transformer
 
 **Guides:**
 - [Model Selection](docs/model-selection.md) | [Codecs](docs/codecs.md) | [Training](docs/training-workflow.md)
@@ -288,7 +287,7 @@ uv sync --frozen --extra dev  # install core + dev tooling
 Install pre-commit hooks (one-time setup):
 
 ```bash
-pre-commit install --hook-type pre-commit --hook-type commit-msg
+pre-commit install --hook-type pre-commit --hook-type commit-msg --hook-type post-commit
 ```
 
 ### Daily Development

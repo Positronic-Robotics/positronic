@@ -58,7 +58,7 @@ def apply_codec(dataset: Dataset, codec):
         positronic-to-lerobot convert \\
           --dataset=@positronic.cfg.ds.apply_codec \\
           --dataset.dataset=.internal.droid \\
-          --dataset.codec=@positronic.vendors.gr00t.codecs.ee_absolute \\
+          --dataset.codec=@positronic.vendors.gr00t.codecs.ee_quat \\
           --output_dir=/data/lerobot_dataset
     """
     return TransformedDataset(dataset, codec.training_encoder)

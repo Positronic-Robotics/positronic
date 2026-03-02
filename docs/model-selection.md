@@ -4,7 +4,7 @@ Positronic supports three foundation models with different capabilities and reso
 
 ## Quick Recommendation
 
-**Start with [LeRobot ACT](../positronic/vendors/lerobot/README.md)** if you want something quick and low-cost. Progress to [OpenPI (π₀.₅)](../positronic/vendors/openpi/README.md) or [GR00T](../positronic/vendors/groot/README.md) when you need more capable models. Positronic makes switching easy.
+**Start with [LeRobot ACT](../positronic/vendors/lerobot_0_3_3/README.md)** if you want something quick and low-cost. Progress to [OpenPI (π₀.₅)](../positronic/vendors/openpi/README.md) or [GR00T](../positronic/vendors/groot/README.md) when you need more capable models. Positronic makes switching easy.
 
 ## Detailed Comparison
 
@@ -69,7 +69,7 @@ Positronic supports three foundation models with different capabilities and reso
 - Less generalization than foundation models
 
 
-→ [LeRobot ACT Documentation](../positronic/vendors/lerobot/README.md)
+→ [LeRobot ACT Documentation](../positronic/vendors/lerobot_0_3_3/README.md)
 
 ## Implementation Notes
 
@@ -131,6 +131,6 @@ Positronic's architecture is extensible. We'll continue adding foundation models
 
 - [OpenPI Documentation](../positronic/vendors/openpi/README.md)
 - [GR00T Documentation](../positronic/vendors/gr00t/README.md)
-- [LeRobot ACT Documentation](../positronic/vendors/lerobot/README.md)
+- [LeRobot ACT Documentation](../positronic/vendors/lerobot_0_3_3/README.md)
 - [Codecs Guide](codecs.md) — Understanding observation encoding and action decoding
 - [Training Workflow](training-workflow.md) — Unified training steps across all models

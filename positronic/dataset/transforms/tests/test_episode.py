@@ -239,6 +239,41 @@ def test_derive_none_value(sig_simple):
     assert transformed['none_value'] is None
 
 
+def test_and_operator_parallel_composition():
+    """``&`` applies both transforms to the same input and merges — no input key leakage."""
+    ep = EpisodeContainer({'x': 1, 'y': 2})
+    combined = Derive(a=lambda ep: ep['x'] + 10) & Derive(b=lambda ep: ep['y'] + 20)
+    result = combined(ep)
+    assert set(result.keys()) == {'a', 'b'}
+    assert result['a'] == 11
+    assert result['b'] == 22
+
+
+def test_or_operator_sequential_composition():
+    """``|`` chains transforms: second sees first's output."""
+    ep = EpisodeContainer({'x': 1})
+    chained = Derive(y=lambda ep: ep['x'] + 10) | Derive(z=lambda ep: ep['y'] + 100)
+    result = chained(ep)
+    # Second Derive sees first's output (y=11), so z=111
+    assert set(result.keys()) == {'z'}
+    assert result['z'] == 111
+
+
+def test_mixed_and_or_composition(sig_simple):
+    """``modify | (derive_a & derive_b)`` chains a modification then groups."""
+    ep = EpisodeContainer({'x': sig_simple, 'y': 5})
+    # Derive overrides x; Group merges with Identity pass-through (Derive first = takes precedence)
+    modify = Group(Derive(x=lambda ep: Elementwise(ep['x'], lambda seq: np.asarray(seq) * 2)), Identity())
+    derive_a = Derive(a=lambda ep: [v for v, _ in ep['x']])
+    derive_b = Derive(b=lambda ep: ep['y'] + 100)
+    composed = modify | (derive_a & derive_b)
+    result = composed(ep)
+    assert set(result.keys()) == {'a', 'b'}
+    # derive_a sees modified x (doubled)
+    assert result['a'] == [20, 40, 60, 80, 100]
+    assert result['b'] == 105
+
+
 def test_identity_transform_remove(sig_simple):
     """Test Identity transform that removes specific keys."""
     ep = EpisodeContainer(data={'s': sig_simple, 'id': 42, 'note': 'test', 'extra': 'skip'})

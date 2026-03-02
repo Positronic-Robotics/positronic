@@ -27,6 +27,10 @@ class EpisodeTransform(ABC):
     def __or__(self, other: 'EpisodeTransform') -> 'EpisodeTransform':
         return _ChainedTransform(self, other)
 
+    @final
+    def __and__(self, other: 'EpisodeTransform') -> 'EpisodeTransform':
+        return Group(self, other)
+
 
 class _ChainedTransform(EpisodeTransform):
     """Sequential composition of two transforms: left runs first, right runs on left's output."""

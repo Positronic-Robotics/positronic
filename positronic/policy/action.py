@@ -34,7 +34,7 @@ class AbsolutePositionAction(Codec):
         self._training_meta = {'lerobot_features': {'action': lerobot_action(ee_dim + 1)}}
 
     def encode(self, data):
-        return data
+        return {}
 
     def _decode_single(self, data: dict, context: dict | None) -> dict:
         action_vector = data['action']
@@ -56,9 +56,7 @@ class AbsolutePositionAction(Codec):
 
 
 class AbsoluteJointsAction(Codec):
-    def __init__(
-        self, tgt_joints_key: str = 'robot_commands.joints', tgt_grip_key: str = 'target_grip', num_joints: int = 7
-    ):
+    def __init__(self, tgt_joints_key: str, tgt_grip_key: str, num_joints: int = 7):
         self.tgt_joints_key = tgt_joints_key
         self.tgt_grip_key = tgt_grip_key
         self.num_joints = num_joints
@@ -66,7 +64,7 @@ class AbsoluteJointsAction(Codec):
         self._training_meta = {'lerobot_features': {'action': lerobot_action(num_joints + 1)}}
 
     def encode(self, data):
-        return data
+        return {}
 
     def _decode_single(self, data: dict, context: dict | None) -> dict:
         action_vector = data['action']
@@ -106,7 +104,7 @@ class RelativePositionAction(Codec):
         self._training_meta = {'lerobot_features': {'action': lerobot_action(ee_dim + 1)}}
 
     def encode(self, data):
-        return data
+        return {}
 
     def _decode_single(self, data: dict, context: dict | None) -> dict:
         action_vector = data['action']
@@ -162,7 +160,7 @@ class JointDeltaAction(Codec):
         self._training_meta = {'lerobot_features': {'action': lerobot_action(num_joints + 1)}}
 
     def encode(self, data):
-        return data
+        return {}
 
     def _decode_single(self, data: dict, context: dict | None) -> dict:
         action_vector = data['action']

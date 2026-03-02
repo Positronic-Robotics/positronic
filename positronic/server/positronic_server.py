@@ -1,8 +1,11 @@
 """A FastAPI web server for visualizing Positronic LocalDatasets using Rerun."""
 
+import atexit
 import logging
 import os
 import shutil
+import subprocess
+import tempfile
 import threading
 from collections import defaultdict
 from contextlib import asynccontextmanager
@@ -87,6 +90,14 @@ _static_dir = _pkg_path('static')
 _templates_dir = _pkg_path('templates')
 app.mount('/static', StaticFiles(directory=_static_dir), name='static')
 templates = Jinja2Templates(directory=_templates_dir)
+
+
+@app.middleware('http')
+async def cache_rerun_assets(request: Request, call_next):
+    response = await call_next(request)
+    if request.url.path.startswith('/static/rerun/'):
+        response.headers['Cache-Control'] = 'public, max-age=31536000, immutable'
+    return response
 
 
 def _iter_file_chunks(path: str, *, chunk_size: int = 128 * 1024):
@@ -395,7 +406,6 @@ async def api_dataset_status():
 async def api_episode_rrd(episode_id: int):
     ds = app_state.get('dataset')
     cache_path = _get_rrd_cache_path(episode_id)
-    max_resolution: int = app_state.get('max_resolution')  # type: ignore[assignment]
 
     if os.path.exists(cache_path):
         logging.debug(f'Serving cached RRD for episode {episode_id} from {cache_path}')
@@ -409,7 +419,7 @@ async def api_episode_rrd(episode_id: int):
         success = False
         try:
             with open(cache_path, 'wb') as cache_file:
-                for chunk in stream_episode_rrd(ds, episode_id, max_resolution):
+                for chunk in stream_episode_rrd(ds, episode_id):
                     cache_file.write(chunk)
                     yield chunk
             success = True
@@ -433,6 +443,36 @@ def default_table() -> TableConfig:
     }
 
 
+def _generate_self_signed_cert(host: str) -> dict[str, str]:
+    ssl_dir = tempfile.mkdtemp(prefix='positronic-ssl-')
+    keyfile = os.path.join(ssl_dir, 'key.pem')
+    certfile = os.path.join(ssl_dir, 'cert.pem')
+    subprocess.run(
+        [
+            'openssl',
+            'req',
+            '-x509',
+            '-newkey',
+            'rsa:2048',
+            '-keyout',
+            keyfile,
+            '-out',
+            certfile,
+            '-days',
+            '365',
+            '-nodes',
+            '-subj',
+            f'/CN={host}',
+            '-addext',
+            f'subjectAltName=DNS:localhost,IP:{host}',
+        ],
+        check=True,
+        capture_output=True,
+    )
+    atexit.register(shutil.rmtree, ssl_dir, ignore_errors=True)
+    return {'ssl_keyfile': keyfile, 'ssl_certfile': certfile}
+
+
 @cfn.config(dataset=positronic.cfg.ds.local_all, ep_table_cfg=default_table, max_resolution=640, group_tables=None)
 def main(
     dataset: Dataset,
@@ -442,11 +482,16 @@ def main(
     host: str = '0.0.0.0',
     port: int = 5000,
     debug: bool = False,
+    https: bool = False,
     reset_cache: bool = False,
     group_tables: dict[str, GroupTableConfig] | None = None,
     home_page: str | None = None,
 ):
     """Visualize a Dataset with Rerun.
+
+    Episode viewer URL params:
+        /episode/<id>?t=<seconds>      — open paused at seconds from episode start
+        /episode/<id>?ts_ns=<nanos>    — open paused at absolute nanosecond timestamp
 
     Args:
         dataset: Dataset to visualize
@@ -522,8 +567,10 @@ def main(
     t.start()
 
     primary_host = utils.resolve_host_ip()
-    logging.info(f'Starting server on http://{primary_host}:{port}')
-    uvicorn.run(app, host=host, port=port, log_level='debug' if debug else 'info')
+    ssl_kwargs = _generate_self_signed_cert(primary_host) if https else {}
+    scheme = 'https' if https else 'http'
+    logging.info(f'Starting server on {scheme}://{primary_host}:{port}')
+    uvicorn.run(app, host=host, port=port, log_level='debug' if debug else 'info', **ssl_kwargs)
 
 
 @pos3.with_mirror()

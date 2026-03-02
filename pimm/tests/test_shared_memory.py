@@ -378,7 +378,7 @@ class TestBroadcastCommunication:
             assert all(r.read() is None for r in readers)
 
             # Emit data (regular Python object, not SMCompliant)
-            data = {"value": 42, "name": "test"}
+            data = {'value': 42, 'name': 'test'}
             emitter.emit(data, ts=100)
 
             # All readers should receive the same data
@@ -386,10 +386,10 @@ class TestBroadcastCommunication:
             assert all(msg is not None for msg in messages)
             assert all(msg.ts == 100 for msg in messages)
             assert all(msg.updated is True for msg in messages)
-            assert all(msg.data == {"value": 42, "name": "test"} for msg in messages)
+            assert all(msg.data == {'value': 42, 'name': 'test'} for msg in messages)
 
             # Emit again with different data
-            data2 = {"value": 99, "name": "updated"}
+            data2 = {'value': 99, 'name': 'updated'}
             emitter.emit(data2, ts=200)
 
             # All readers should see the new data
@@ -397,7 +397,7 @@ class TestBroadcastCommunication:
             assert all(msg is not None for msg in messages)
             assert all(msg.ts == 200 for msg in messages)
             assert all(msg.updated is True for msg in messages)
-            assert all(msg.data == {"value": 99, "name": "updated"} for msg in messages)
+            assert all(msg.data == {'value': 99, 'name': 'updated'} for msg in messages)
 
     def test_broadcast_independent_reader_states(self):
         """Test that each receiver maintains independent read state."""
@@ -461,13 +461,13 @@ class TestConnectOneToOne:
             assert not reader.uses_shared_memory
 
             # Test basic communication
-            data = {"status": "active", "count": 123}
+            data = {'status': 'active', 'count': 123}
             emitter.emit(data, ts=400)
 
             message = reader.read()
             assert message is not None
             assert message.ts == 400
-            assert message.data == {"status": "active", "count": 123}
+            assert message.data == {'status': 'active', 'count': 123}
 
     def test_default_num_receivers_is_one(self):
         """Test that num_receivers defaults to 1."""
@@ -487,6 +487,3 @@ class TestConnectOneToOne:
             assert message is not None
             assert message.ts == 500
             assert np.allclose(message.data.array, [99.0])
-
-
-

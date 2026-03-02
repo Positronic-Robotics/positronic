@@ -31,6 +31,18 @@
     ]
   },
   "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "jq -r '.tool_input.command' | grep -q -- '--amend' && echo 'BLOCKED: Never amend commits, create new ones instead' >&2 && exit 1; exit 0",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
     "PostToolUse": [
       {
         "matcher": "Edit|Write",

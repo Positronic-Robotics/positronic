@@ -108,9 +108,7 @@ def parallel_axis_theorem(I_cm, mass, displacement):
 
 
 def calculate_composite_inertia(
-    motor_params: MotorParameters,
-    link_params: LinkParameters,
-    link_offset: float,
+    motor_params: MotorParameters, link_params: LinkParameters, link_offset: float
 ) -> tuple[np.ndarray, float, np.ndarray]:
     """
     Calculate composite inertia for motor + link combination.
@@ -164,10 +162,7 @@ class URDFGenerator:
         self.root = ET.Element('robot', name=robot_name)
 
     def _add_link(
-        self,
-        link_name: str,
-        motor_params: MotorParameters,
-        link_params: LinkParameters | None = None,
+        self, link_name: str, motor_params: MotorParameters, link_params: LinkParameters | None = None
     ) -> None:
         """
         Add a link element to the URDF.
@@ -242,10 +237,7 @@ class URDFGenerator:
 
         # Limits
         ET.SubElement(
-            joint_elem,
-            'limit',
-            effort=f'{joint_config.effort_limit}',
-            velocity=f'{joint_config.velocity_limit}',
+            joint_elem, 'limit', effort=f'{joint_config.effort_limit}', velocity=f'{joint_config.velocity_limit}'
         )
 
     def generate_serial_arm(

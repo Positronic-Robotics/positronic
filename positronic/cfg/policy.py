@@ -3,7 +3,6 @@ import pos3
 
 from positronic.cfg import codecs
 from positronic.policy import Codec, Policy
-from positronic.policy.lerobot import LerobotPolicy
 from positronic.utils import get_latest_checkpoint
 
 
@@ -26,7 +25,8 @@ def wrapped(base: Policy, codec: Codec | None):
 def act(checkpoints_dir: str, checkpoint: str | None, n_action_steps: int | None = None, device=None):
     from lerobot.policies.act.modeling_act import ACTPolicy
 
-    from positronic.vendors.lerobot.backbone import register_all
+    from positronic.vendors.lerobot_0_3_3.backbone import register_all
+    from positronic.vendors.lerobot_0_3_3.policy import LerobotPolicy
 
     register_all()
 
@@ -59,10 +59,17 @@ def sample(origins: list[cfn.Config], weights: list[float] | None):
     return SampledPolicy(*origins, weights=weights)
 
 
-@cfn.config(host='localhost', port=8000, resize=640, model_id=None, horizon_sec=None)
+@cfn.config(host='localhost', port=8000, resize=640, model_id=None, horizon_sec=None, codec=None)
 def remote(
-    host: str, port: int, resize: int | None = None, model_id: str | None = None, horizon_sec: float | None = None
+    host: str,
+    port: int,
+    resize: int | None = None,
+    model_id: str | None = None,
+    horizon_sec: float | None = None,
+    codec: Codec | None = None,
 ):
     from positronic.policy.remote import RemotePolicy
 
-    return RemotePolicy(host, port, resize, model_id=model_id, horizon_sec=horizon_sec)
+    effective_resize = None if codec and codec.meta.get('image_sizes') else resize
+    policy = RemotePolicy(host, port, effective_resize, model_id=model_id, horizon_sec=horizon_sec)
+    return codec.wrap(policy) if codec else policy

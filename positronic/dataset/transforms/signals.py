@@ -12,6 +12,14 @@ from ..signal import IndicesLike, RealNumericArrayLike, Signal
 T = TypeVar('T')
 U = TypeVar('U')
 
+
+def _as_indices(indices: IndicesLike, n: int) -> np.ndarray:
+    """Normalize IndicesLike to a concrete int64 array (handles slice)."""
+    if isinstance(indices, slice):
+        return np.arange(*indices.indices(n), dtype=np.int64)
+    return np.asarray(indices, dtype=np.int64)
+
+
 RotRep = geom.Rotation.Representation
 NpSignal = Signal[np.ndarray]
 
@@ -101,11 +109,11 @@ class IndexOffsets(Signal[tuple]):
         return n - 1 - max(0, self._max_off)
 
     def _ts_at(self, indices: IndicesLike) -> Sequence[int] | np.ndarray:
-        base = np.asarray(indices, dtype=np.int64) + self._base_start()
+        base = _as_indices(indices, len(self)) + self._base_start()
         return self._signal._ts_at(base)
 
     def _values_at(self, indices: IndicesLike):
-        base = np.asarray(indices, dtype=np.int64) + self._base_start()
+        base = _as_indices(indices, len(self)) + self._base_start()
         vals_parts = []
         ts_parts = []
         for off in self._offs:
@@ -116,6 +124,8 @@ class IndexOffsets(Signal[tuple]):
 
         n = len(self._offs)
         if not self._include_ref_ts:
+            # TODO: same as TimeOffsets — return np.stack(vals_parts, axis=1) once the
+            # Signal contract allows stacked ndarrays from _values_at.
             return list(zip(*vals_parts, strict=False)) if n > 1 else vals_parts[0]
         else:
             if n == 1:
@@ -209,7 +219,7 @@ class TimeOffsets(Signal[tuple]):
 
     def _ts_at(self, indices: IndicesLike) -> Sequence[int] | np.ndarray:
         self._compute_bounds()
-        idxs = np.asarray(indices, dtype=np.int64)
+        idxs = _as_indices(indices, len(self))
         if self._start_offset == 0:
             return self._signal._ts_at(idxs)
         else:
@@ -217,7 +227,7 @@ class TimeOffsets(Signal[tuple]):
 
     def _values_at(self, indices: IndicesLike):
         self._compute_bounds()
-        base = np.asarray(indices, dtype=np.int64)
+        base = _as_indices(indices, len(self))
         if self._start_offset > 0:
             base = base + self._start_offset
         ref_ts = np.asarray(self._signal._ts_at(base), dtype=np.int64)
@@ -233,6 +243,10 @@ class TimeOffsets(Signal[tuple]):
 
         n = len(self._deltas)
         if not self._include_ref_ts:
+            # TODO: vals_parts are already batched arrays — zip tears them into per-row
+            # tuples that downstream Elementwise fns often reassemble with np.array().
+            # Return np.stack(vals_parts, axis=1) instead once the Signal contract is
+            # extended to allow _values_at to return stacked ndarrays.
             return list(zip(*vals_parts, strict=False)) if n > 1 else vals_parts[0]
 
         if n == 1:
@@ -334,7 +348,7 @@ class Join(Signal[tuple]):
 
     def _ts_at(self, indices: IndicesLike) -> Sequence[int] | np.ndarray:
         self._compute_bounds()
-        idxs = np.asarray(indices)
+        idxs = _as_indices(indices, len(self))
         return self._union_ts[idxs]
 
     def _values_at(self, indices: IndicesLike):
@@ -345,6 +359,8 @@ class Join(Signal[tuple]):
         tss_all = [s._ts_at(idx) for s, idx in zip(self._signals, idx_all, strict=False)]
 
         if not self._include_ref_ts:
+            # TODO: same as TimeOffsets — return np.stack(vals_all, axis=1) once the
+            # Signal contract allows stacked ndarrays from _values_at.
             return [tuple(row) for row in zip(*vals_all, strict=False)]
         else:
             ts_mat = np.stack([np.asarray(t, dtype=np.int64) for t in tss_all], axis=1)
@@ -419,6 +435,84 @@ def view(signal: NpSignal, slice: slice) -> NpSignal:
         return LazySequence(x, lambda v: v[slice])
 
     return Elementwise(signal, fn)
+
+
+def diff(signal: NpSignal, dt_sec: float, order: int = 1) -> NpSignal:
+    """Centered finite-difference derivative of a vector signal.
+
+    Args:
+        signal: Input signal with ndarray values of shape (dim,).
+        dt_sec: Time window in seconds for the finite difference stencil.
+        order: Derivative order. 1 = velocity, 2 = acceleration.
+
+    Returns:
+        Signal of per-frame derivative vectors (same dim as input).
+        order=1: (f(t+dt) - f(t-dt)) / 2dt
+        order=2: (f(t-dt) - 2f(t) + f(t+dt)) / dt²
+    """
+    if order < 1 or order > 2:
+        raise ValueError(f'diff supports order 1 or 2, got {order}')
+    dt_ns = int(dt_sec * 1e9)
+
+    if order == 1:
+
+        def fn(pairs):
+            arr = np.array(pairs)  # (batch, 2, dim)
+            return (arr[:, 1] - arr[:, 0]) / (2 * dt_sec)
+
+        return Elementwise(TimeOffsets(signal, -dt_ns, dt_ns), fn)
+    else:
+
+        def fn(triples):
+            arr = np.array(triples)  # (batch, 3, dim)
+            return (arr[:, 2] - 2 * arr[:, 1] + arr[:, 0]) / (dt_sec * dt_sec)
+
+        return Elementwise(TimeOffsets(signal, -dt_ns, 0, dt_ns), fn)
+
+
+def norm(signal: NpSignal) -> NpSignal:
+    """Per-frame L2 norm. Signal[ndarray(dim,)] → Signal[scalar]."""
+
+    def fn(vals):
+        arr = np.array(vals)
+        if arr.ndim == 1:
+            return np.abs(arr)
+        return np.linalg.norm(arr, axis=-1)
+
+    return Elementwise(signal, fn)
+
+
+# ---------------------------------------------------------------------------
+# Scalar aggregators — reduce a Signal to a single value
+# ---------------------------------------------------------------------------
+
+
+def _signal_values(signal: Signal) -> np.ndarray:
+    """Extract all values from a Signal as a numpy array."""
+    n = len(signal)
+    if n == 0:
+        return np.array([])
+    return np.array(signal._values_at(np.arange(n)))
+
+
+def agg_max(signal: Signal) -> float:
+    """Maximum value across all frames."""
+    return float(np.max(_signal_values(signal)))
+
+
+def agg_mean(signal: Signal) -> float:
+    """Mean value across all frames."""
+    return float(np.mean(_signal_values(signal)))
+
+
+def agg_percentile(signal: Signal, q: float) -> float:
+    """q-th percentile across all frames (q in 0..100)."""
+    return float(np.percentile(_signal_values(signal), q))
+
+
+def agg_fraction_true(signal: Signal) -> float:
+    """For boolean signals: fraction of True values."""
+    return float(np.mean(_signal_values(signal)))
 
 
 class _PairwiseMap:

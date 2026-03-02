@@ -42,18 +42,25 @@ eepose_obs = eepose_grip_obs.override(
 joints_obs = joints_grip_obs.override(
     image_mappings={'observation.images.left': 'image.wrist', 'observation.images.side': 'image.exterior'}
 )
-eepose_q_obs = eepose_grip_joints_obs.override(
+eepose_joints_obs = eepose_grip_joints_obs.override(
     image_mappings={'observation.images.left': 'image.wrist', 'observation.images.side': 'image.exterior'}
 )
 
 
-@cfn.config(action_fps=15.0, action_horizon_sec=1.0, action=None)
-def compose(obs, action, action_fps: float, action_horizon_sec: float | None):
-    """Compose observation and action codecs with timing via ``|``."""
-    from positronic.policy.codec import ActionTiming
+@cfn.config(fps=15.0, horizon=1.0, binarize_grip=None)
+def compose(obs, action, fps: float, horizon: float | None, binarize_grip: tuple[str, ...] | None):
+    """Compose observation and action codecs with timing and optional grip binarization.
 
-    result = obs if action is None else obs | action
-    return ActionTiming(fps=action_fps, horizon_sec=action_horizon_sec) | result
+    Layout::
+
+        ActionTiming | [BinarizeGripTraining | BinarizeGripInference] | obs & action
+    """
+    from positronic.policy.codec import ActionTiming, BinarizeGripInference, BinarizeGripTraining
+
+    result = obs & action
+    if binarize_grip:
+        result = BinarizeGripTraining(binarize_grip) | BinarizeGripInference() | result
+    return ActionTiming(fps=fps, horizon_sec=horizon) | result
 
 
 @cfn.config(rotation_rep=None, tgt_ee_pose_key='robot_commands.pose', tgt_grip_key='target_grip')
@@ -66,7 +73,18 @@ def absolute_pos_action(rotation_rep: str | None, tgt_ee_pose_key: str, tgt_grip
 
 
 @cfn.config(num_joints=7)
+def absolute_joints_action(tgt_joints_key: str, tgt_grip_key: str, num_joints: int):
+    """Absolute joint position action codec."""
+    from positronic.policy.action import AbsoluteJointsAction
+
+    return AbsoluteJointsAction(tgt_joints_key, tgt_grip_key, num_joints=num_joints)
+
+
+@cfn.config(num_joints=7)
 def joint_delta_action(num_joints: int):
     from positronic.policy.action import JointDeltaAction
 
     return JointDeltaAction(num_joints=num_joints)
+
+
+traj_ee_action = absolute_pos_action.override(tgt_ee_pose_key='robot_state.ee_pose', tgt_grip_key='grip')

@@ -54,7 +54,7 @@ We use pre-commit hooks to ensure code quality and enforce policies.
 
 ```bash
 uv pip install pre-commit
-pre-commit install --hook-type pre-commit --hook-type commit-msg
+pre-commit install --hook-type pre-commit --hook-type commit-msg --hook-type post-commit
 ```
 
 This will automatically run checks before each commit, including:
@@ -87,7 +87,7 @@ pre-commit run --all-files
 4. Install pre-commit hooks:
    ```bash
    uv pip install pre-commit
-   pre-commit install --hook-type pre-commit --hook-type commit-msg
+   pre-commit install --hook-type pre-commit --hook-type commit-msg --hook-type post-commit
    ```
 
 5. Make your changes and ensure they pass all checks:

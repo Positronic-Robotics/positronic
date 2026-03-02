@@ -1,0 +1,14 @@
+ARG BASE_IMAGE=positro/dreamzero-base:latest
+FROM ${BASE_IMAGE}
+
+# Set working directory
+WORKDIR /positronic
+
+# Copy the positronic repository
+COPY . /positronic
+
+# Set Python path to include source root and dreamzero
+ENV PYTHONPATH=/positronic:/dreamzero
+
+# Default command
+CMD ["bash"]
