@@ -222,6 +222,9 @@ class InferenceServer(VendorServer):
         }
 
     async def resolve_model(self, model_id: str | None, websocket: WebSocket | None) -> tuple[Any, dict]:
+        if model_id is not None and model_id != self.model_path:
+            raise ValueError(f'Unknown model: {model_id}. Available: {self.model_path}')
+
         send_progress = self._progress_sender(websocket)
 
         async with self._subprocess_lock:
