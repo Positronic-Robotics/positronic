@@ -12,17 +12,16 @@ VERSION := $(shell sed -n 's/^version = "\([^"]*\)"/\1/p' ../pyproject.toml | he
 # Get git commit SHA (short)
 GIT_SHA := $(shell git rev-parse --short HEAD 2>/dev/null || echo "unknown")
 
+# Branch name sanitized for Docker tags (replace / with -)
+BRANCH := $(shell git rev-parse --abbrev-ref HEAD 2>/dev/null | tr '/' '-')
+
+# IMAGE_TAG: branch name locally, overridable via `make push IMAGE_TAG=foo`
+IMAGE_TAG ?= $(BRANCH)
+
 REGISTRY_URL ?= docker.io
 
-# Image tags for training
-TAG_TRAINING_LATEST := $(IMAGE_NAME_TRAINING):latest
-TAG_TRAINING_VERSION := $(IMAGE_NAME_TRAINING):v$(VERSION)
-TAG_TRAINING_SHA := $(IMAGE_NAME_TRAINING):$(GIT_SHA)
+# Local build tags
 LOCAL_TAG_TRAINING := $(IMAGE_NAME_TRAINING):local
-
-# Other image tags
-TAG_OPENPI_LATEST := $(IMAGE_NAME_OPENPI):latest
-TAG_GROOT_LATEST := $(IMAGE_NAME_GROOT):latest
 
 # OpenPI base image (pulled from registry)
 TAG_OPENPI_BASE := $(IMAGE_NAME_OPENPI_BASE):latest
@@ -34,6 +33,7 @@ help:
 	@echo "  Training Image: $(IMAGE_NAME_TRAINING)"
 	@echo "  Version:        $(VERSION)"
 	@echo "  Git SHA:        $(GIT_SHA)"
+	@echo "  Image Tag:      $(IMAGE_TAG)"
 	@echo ""
 	@echo "Targets:"
 	@echo "  make build-training  Build the training image"
@@ -49,6 +49,8 @@ help:
 	@echo "  make clean           Remove all local images"
 	@echo "  make prune           Remove dangling/unused Docker images"
 	@echo "  make help            Show this help message"
+	@echo ""
+	@echo "Override image tag: make push IMAGE_TAG=my-feature"
 
 build-training:
 	@echo "Building $(IMAGE_NAME_TRAINING) with source code baked in..."
@@ -69,57 +71,80 @@ build-groot: build-training
 build: build-training build-openpi build-groot
 
 tag-training: build-training
-	@echo "Tagging training image with multiple tags..."
-	docker tag $(LOCAL_TAG_TRAINING) $(TAG_TRAINING_LATEST)
-	docker tag $(LOCAL_TAG_TRAINING) $(TAG_TRAINING_VERSION)
-	docker tag $(LOCAL_TAG_TRAINING) $(TAG_TRAINING_SHA)
-	@echo "Tagged with:"
-	@echo "  - $(TAG_TRAINING_LATEST)"
-	@echo "  - $(TAG_TRAINING_VERSION)"
-	@echo "  - $(TAG_TRAINING_SHA)"
+	@echo "Tagging training image..."
+	docker tag $(LOCAL_TAG_TRAINING) $(IMAGE_NAME_TRAINING):$(IMAGE_TAG)
+	docker tag $(LOCAL_TAG_TRAINING) $(IMAGE_NAME_TRAINING):$(GIT_SHA)
+ifdef CI
+	docker tag $(LOCAL_TAG_TRAINING) $(IMAGE_NAME_TRAINING):latest
+	docker tag $(LOCAL_TAG_TRAINING) $(IMAGE_NAME_TRAINING):v$(VERSION)
+endif
+	@echo "Tagged: $(IMAGE_TAG), $(GIT_SHA)"
+
+tag-openpi: build-openpi
+	@echo "Tagging openpi image..."
+	docker tag $(IMAGE_NAME_OPENPI):local $(IMAGE_NAME_OPENPI):$(IMAGE_TAG)
+	docker tag $(IMAGE_NAME_OPENPI):local $(IMAGE_NAME_OPENPI):$(GIT_SHA)
+ifdef CI
+	docker tag $(IMAGE_NAME_OPENPI):local $(IMAGE_NAME_OPENPI):latest
+endif
+	@echo "Tagged: $(IMAGE_TAG), $(GIT_SHA)"
+
+tag-groot: build-groot
+	@echo "Tagging groot image..."
+	docker tag $(IMAGE_NAME_GROOT):local $(IMAGE_NAME_GROOT):$(IMAGE_TAG)
+	docker tag $(IMAGE_NAME_GROOT):local $(IMAGE_NAME_GROOT):$(GIT_SHA)
+ifdef CI
+	docker tag $(IMAGE_NAME_GROOT):local $(IMAGE_NAME_GROOT):latest
+endif
+	@echo "Tagged: $(IMAGE_TAG), $(GIT_SHA)"
 
 tag: tag-training tag-openpi tag-groot
 
 push-training: tag-training
 	@echo "Pushing training images to Docker Hub..."
-	docker push $(TAG_TRAINING_LATEST)
-	docker push $(TAG_TRAINING_VERSION)
-	docker push $(TAG_TRAINING_SHA)
+	docker push $(IMAGE_NAME_TRAINING):$(IMAGE_TAG)
+	docker push $(IMAGE_NAME_TRAINING):$(GIT_SHA)
+ifdef CI
+	docker push $(IMAGE_NAME_TRAINING):latest
+	docker push $(IMAGE_NAME_TRAINING):v$(VERSION)
+endif
+	@echo "IMAGE_TAG=$(IMAGE_TAG)" > .env
 	@echo ""
 	@echo "Successfully pushed training images!"
 
-push: push-training push-openpi push-groot
-
-tag-openpi: build-openpi
-	@echo "Tagging openpi image..."
-	docker tag $(IMAGE_NAME_OPENPI):local $(TAG_OPENPI_LATEST)
-	@echo "Tagged with: $(TAG_OPENPI_LATEST)"
-
 push-openpi: tag-openpi
 	@echo "Pushing $(IMAGE_NAME_OPENPI) to Docker Hub..."
-	docker push $(TAG_OPENPI_LATEST)
-
-tag-groot: build-groot
-	@echo "Tagging groot image..."
-	docker tag $(IMAGE_NAME_GROOT):local $(TAG_GROOT_LATEST)
-	@echo "Tagged with: $(TAG_GROOT_LATEST)"
+	docker push $(IMAGE_NAME_OPENPI):$(IMAGE_TAG)
+	docker push $(IMAGE_NAME_OPENPI):$(GIT_SHA)
+ifdef CI
+	docker push $(IMAGE_NAME_OPENPI):latest
+endif
+	@echo "IMAGE_TAG=$(IMAGE_TAG)" > .env
 
 push-groot: tag-groot
 	@echo "Pushing $(IMAGE_NAME_GROOT) to Docker Hub..."
-	docker push $(TAG_GROOT_LATEST)
+	docker push $(IMAGE_NAME_GROOT):$(IMAGE_TAG)
+	docker push $(IMAGE_NAME_GROOT):$(GIT_SHA)
+ifdef CI
+	docker push $(IMAGE_NAME_GROOT):latest
+endif
+	@echo "IMAGE_TAG=$(IMAGE_TAG)" > .env
+
+push: push-training push-openpi push-groot
 
 all: push
 
 clean:
 	@echo "Removing all local images..."
 	-docker rmi $(LOCAL_TAG_TRAINING)
-	-docker rmi $(TAG_TRAINING_LATEST)
-	-docker rmi $(TAG_TRAINING_VERSION)
-	-docker rmi $(TAG_TRAINING_SHA)
+	-docker rmi $(IMAGE_NAME_TRAINING):$(IMAGE_TAG)
+	-docker rmi $(IMAGE_NAME_TRAINING):$(GIT_SHA)
 	-docker rmi $(IMAGE_NAME_OPENPI):local
-	-docker rmi $(TAG_OPENPI_LATEST)
+	-docker rmi $(IMAGE_NAME_OPENPI):$(IMAGE_TAG)
+	-docker rmi $(IMAGE_NAME_OPENPI):$(GIT_SHA)
 	-docker rmi $(IMAGE_NAME_GROOT):local
-	-docker rmi $(TAG_GROOT_LATEST)
+	-docker rmi $(IMAGE_NAME_GROOT):$(IMAGE_TAG)
+	-docker rmi $(IMAGE_NAME_GROOT):$(GIT_SHA)
 	@echo "All local images removed."
 
 prune:

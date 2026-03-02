@@ -1,6 +1,6 @@
 services:
   positronic-training-base: &positronic-common
-    image: positro/positronic:latest
+    image: positro/positronic:${IMAGE_TAG:-latest}
 
     # Enable interactive terminal
     stdin_open: true
@@ -32,7 +32,7 @@ services:
     working_dir: /positronic
 
   positronic: &openpi-common
-    image: positro/openpi:latest
+    image: positro/openpi:${IMAGE_TAG:-latest}
 
     # Enable interactive terminal
     stdin_open: true
@@ -124,7 +124,7 @@ services:
       - "8001:8000"
 
   positronic-groot: &groot-common
-    image: positro/gr00t:latest
+    image: positro/gr00t:${IMAGE_TAG:-latest}
 
     # Enable interactive terminal
     stdin_open: true
@@ -161,7 +161,6 @@ services:
   groot-train:
     <<: *groot-common
     container_name: groot-train
-    image: positro/gr00t:latest
     shm_size: 8g
     ipc: host  # Enable shared memory access for training
     entrypoint: ["uv", "run", "--python", "3.11", "python", "-m", "positronic.vendors.gr00t.train"]
@@ -169,7 +168,6 @@ services:
   groot-server: &groot-server-common
     <<: *groot-common
     container_name: groot-server
-    image: positro/gr00t:latest
     entrypoint: ["uv", "run", "--python", "3.11", "python", "-m", "positronic.vendors.gr00t.server"]
     ports:
       - "8000:8000"

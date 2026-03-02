@@ -33,4 +33,4 @@ jobs:
       - name: Build and Push
         working-directory: docker
         run: |
-          make push
+          make push IMAGE_TAG=main
