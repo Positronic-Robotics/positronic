@@ -77,7 +77,7 @@ Codec must match modality config during training.
 
 ```bash
 # Convert with codec
-cd docker && docker compose run --rm lerobot-convert convert \
+cd docker && docker compose run --rm lerobot-0_3_3-convert convert \
   --dataset.codec=@positronic.vendors.gr00t.codecs.ee_rot6d_joints \
   --output_dir=~/datasets/groot/my_task
 
@@ -103,7 +103,7 @@ See [`positronic/vendors/openpi/codecs.py`](../positronic/vendors/openpi/codecs.
 `droid` codec is inference-only for use with pretrained DROID models (not for training).
 
 ```bash
-cd docker && docker compose run --rm lerobot-convert convert \
+cd docker && docker compose run --rm lerobot-0_3_3-convert convert \
   --dataset.codec=@positronic.vendors.openpi.codecs.ee \
   --output_dir=~/datasets/openpi/my_task
 ```

@@ -29,7 +29,7 @@ Positronic datasets must be converted into the LeRobot format using an OpenPI co
 
 **Command:**
 ```bash
-docker compose run --rm -v ~/datasets:/data lerobot-convert convert \
+docker compose run --rm -v ~/datasets:/data lerobot-0_3_3-convert convert \
   --dataset.dataset=@positronic.cfg.ds.phail.phail \
   --dataset.codec=@positronic.vendors.openpi.codecs.ee \
   --output_dir=/data/my_lerobot_data

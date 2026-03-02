@@ -278,12 +278,12 @@ cd docker && docker compose run --rm lerobot-convert convert \
   --dataset.codec=@positronic.vendors.lerobot.codecs.ee \
   --output_dir=~/datasets/lerobot/my_task
 
-cd docker && docker compose run --rm lerobot-convert convert \
+cd docker && docker compose run --rm lerobot-0_3_3-convert convert \
   --dataset.dataset.path=~/datasets/my_task \
   --dataset.codec=@positronic.vendors.gr00t.codecs.ee_rot6d_joints \
   --output_dir=~/datasets/groot/my_task
 
-cd docker && docker compose run --rm lerobot-convert convert \
+cd docker && docker compose run --rm lerobot-0_3_3-convert convert \
   --dataset.dataset.path=~/datasets/my_task \
   --dataset.codec=@positronic.vendors.openpi.codecs.ee \
   --output_dir=~/datasets/openpi/my_task
