@@ -11,13 +11,12 @@ from typing import Any
 
 import configuronic as cfn
 import numpy as np
-import uvicorn
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import WebSocket
 
 from positronic.offboard.server_utils import monitor_async_task, wait_for_subprocess_ready
+from positronic.offboard.vendor_server import VendorServer
 from positronic.policy import Codec, Policy
 from positronic.utils.logging import init_logging
-from positronic.utils.serialization import deserialise, serialise
 from positronic.vendors.dreamzero import codecs
 
 logger = logging.getLogger(__name__)
@@ -194,10 +193,7 @@ class DreamZeroPolicy(Policy):
         self._session_id = str(uuid.uuid4())
 
 
-# TODO: Extract common InferenceServer base class from gr00t, openpi, and dreamzero servers.
-# The FastAPI app, WebSocket inference loop, subprocess lifecycle, warmup, and serve() are
-# ~80% identical. Vendor-specific parts: subprocess command, wire protocol, checkpoint management.
-class InferenceServer:
+class InferenceServer(VendorServer):
     def __init__(
         self,
         codec: Codec | None,
@@ -207,12 +203,11 @@ class InferenceServer:
         port: int = 8000,
         roboarena_port: int = 1234,
         enable_dit_cache: bool = True,
+        recording_dir: str | None = None,
     ):
-        self.codec = codec
+        super().__init__(codec=codec, host=host, port=port, recording_dir=recording_dir)
         self.model_path = model_path
         self.num_gpus = num_gpus
-        self.host = host
-        self.port = port
         self.roboarena_port = roboarena_port
         self.enable_dit_cache = enable_dit_cache
         self.subprocess: DreamZeroSubprocess | None = None
@@ -226,18 +221,12 @@ class InferenceServer:
             'num_gpus': num_gpus,
         }
 
-        self.app = FastAPI()
-        self.app.get('/api/v1/models')(self.get_models)
-        self.app.websocket('/api/v1/session')(self.websocket_endpoint)
-
-    async def _get_subprocess(self, websocket: WebSocket | None = None) -> DreamZeroSubprocess:
-        async def send_progress(msg: str):
-            if websocket is not None:
-                await websocket.send_bytes(serialise({'status': 'loading', 'message': msg}))
+    async def resolve_model(self, checkpoint_id: str | None, websocket: WebSocket | None) -> tuple[Any, dict]:
+        send_progress = self._progress_sender(websocket)
 
         async with self._subprocess_lock:
             if self.subprocess is not None:
-                return self.subprocess
+                return self.subprocess, {}
 
             download_task = asyncio.create_task(asyncio.to_thread(_download_checkpoint, self.model_path))
             await monitor_async_task(
@@ -253,81 +242,35 @@ class InferenceServer:
             )
             await sp.start_async(on_progress=send_progress)
             self.subprocess = sp
-            return sp
+            return sp, {}
 
-    async def get_models(self):
+    def create_policy(self, model_handle: Any) -> Policy:
+        client = RoboarenaClient(port=model_handle.roboarena_port)
+        client.connect()
+        return DreamZeroPolicy(client)
+
+    async def get_models(self) -> dict:
         return {'models': [self.model_path]}
 
-    async def websocket_endpoint(self, websocket: WebSocket):
-        await websocket.accept()
-        logger.info(f'Connected to {websocket.client}')
-
-        try:
-            subprocess_obj = await self._get_subprocess(websocket)
-            meta = {**self.metadata, **(self.codec.meta if self.codec else {})}
-            await websocket.send_bytes(serialise({'status': 'ready', 'meta': meta}))
-        except Exception as e:
-            logger.error(f'Failed to start subprocess: {e}', exc_info=True)
-            await websocket.send_bytes(serialise({'status': 'error', 'error': str(e)}))
-            await websocket.close(code=1008, reason=str(e)[:100])
-            return
-
-        client = RoboarenaClient(port=subprocess_obj.roboarena_port)
-        client.connect()
-        base_policy = DreamZeroPolicy(client)
-        policy = self.codec.wrap(base_policy) if self.codec else base_policy
-        policy.reset()
-
-        try:
-            while True:
-                message = await websocket.receive_bytes()
-                try:
-                    raw_obs = deserialise(message)
-                    actions = policy.select_action(raw_obs)
-                    await websocket.send_bytes(serialise({'result': actions}))
-                except Exception as e:
-                    logger.error(f'Error processing message: {e}', exc_info=True)
-                    await websocket.send_bytes(serialise({'error': str(e)}))
-        except WebSocketDisconnect:
-            logger.info('Client disconnected')
-
-    async def _startup(self):
-        await self._get_subprocess(websocket=None)
-        await self._warmup()
-
-    async def _warmup(self):
-        logger.info('Running warmup inference...')
-        client = RoboarenaClient(port=self.subprocess.roboarena_port)
-        client.connect()
-        policy = DreamZeroPolicy(client)
-        policy.reset()
-        dummy = self.codec.dummy_encoded() if self.codec else {}
-        await asyncio.to_thread(policy.select_action, dummy)
-        logger.info('Warmup inference complete')
-
-    def _shutdown(self):
+    def shutdown_model(self):
         if self.subprocess is not None:
             self.subprocess.stop()
 
-    def serve(self):
-        async def _run():
-            await self._startup()
-            config = uvicorn.Config(self.app, host=self.host, port=self.port, log_level='info')
-            await uvicorn.Server(config).serve()
 
-        try:
-            asyncio.run(_run())
-        except KeyboardInterrupt:
-            logger.info('Server stopped by user')
-        finally:
-            self._shutdown()
-
-
-@cfn.config(codec=codecs.joints, model_path=DEFAULT_HF_REPO, num_gpus=1, port=8000, enable_dit_cache=True)
-def server(codec: Codec | None, model_path: str, num_gpus: int, port: int, enable_dit_cache: bool):
+@cfn.config(
+    codec=codecs.joints, model_path=DEFAULT_HF_REPO, num_gpus=1, port=8000, enable_dit_cache=True, recording_dir=None
+)
+def server(
+    codec: Codec | None, model_path: str, num_gpus: int, port: int, enable_dit_cache: bool, recording_dir: str | None
+):
     """Starts the DreamZero inference server."""
     InferenceServer(
-        codec=codec, model_path=model_path, num_gpus=num_gpus, port=port, enable_dit_cache=enable_dit_cache
+        codec=codec,
+        model_path=model_path,
+        num_gpus=num_gpus,
+        port=port,
+        enable_dit_cache=enable_dit_cache,
+        recording_dir=recording_dir,
     ).serve()
 
 

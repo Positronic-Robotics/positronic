@@ -1,0 +1,142 @@
+"""Base class for vendor inference servers (GR00T, OpenPI, DreamZero, LeRobot)."""
+
+import asyncio
+import logging
+from abc import ABC, abstractmethod
+from typing import Any
+
+import pos3
+import uvicorn
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+
+from positronic.policy import Codec, Policy, RecordingCodec
+from positronic.utils.serialization import deserialise, serialise
+
+logger = logging.getLogger(__name__)
+
+
+class VendorServer(ABC):
+    """Base class for vendor inference servers.
+
+    Provides the FastAPI app, WebSocket inference loop, codec wrapping,
+    startup/warmup lifecycle, and serve entrypoint. Subclasses implement
+    three hooks:
+
+        resolve_model(checkpoint_id, websocket) → (handle, extra_meta)
+        create_policy(handle) → Policy
+        get_models() → dict
+
+    Optional overrides: warmup(), shutdown_model(), release_policy().
+
+    The WebSocket session flow is:
+        accept → resolve_model → create_policy → codec.wrap → reset → inference loop
+
+    On startup (before accepting connections):
+        resolve_model(None) → create_policy → reset → warmup
+    """
+
+    def __init__(self, codec: Codec | None, host: str = '0.0.0.0', port: int = 8000, recording_dir: str | None = None):
+        self.codec = codec
+        self.host = host
+        self.port = port
+        if recording_dir:
+            self.codec = RecordingCodec(self.codec, pos3.sync(recording_dir))
+
+        self.metadata: dict[str, Any] = {}
+
+        self.app = FastAPI()
+        self.app.get('/api/v1/models')(self.get_models)
+        self.app.websocket('/api/v1/session')(self.websocket_endpoint)
+        self.app.websocket('/api/v1/session/{checkpoint_id}')(self.websocket_endpoint)
+
+    @abstractmethod
+    async def resolve_model(self, checkpoint_id: str | None, websocket: WebSocket | None) -> tuple[Any, dict]:
+        """Ensure model/subprocess is running. Return (handle, extra_metadata)."""
+
+    @abstractmethod
+    def create_policy(self, model_handle: Any) -> Policy:
+        """Wrap vendor client into a Policy. No codec — base handles that."""
+
+    @abstractmethod
+    async def get_models(self) -> dict:
+        """Return available models."""
+
+    async def warmup(self, policy: Policy):
+        """Run one warmup inference. Default uses codec.dummy_encoded(). Non-fatal on failure."""
+        try:
+            logger.info('Running warmup inference...')
+            dummy = self.codec.dummy_encoded() if self.codec else {}
+            await asyncio.to_thread(policy.select_action, dummy)
+            logger.info('Warmup inference complete')
+        except Exception:
+            logger.warning('Warmup inference failed (non-fatal)', exc_info=True)
+
+    def shutdown_model(self):  # noqa: B027
+        """Called on server shutdown. Default: no-op."""
+
+    async def release_policy(self, model_handle: Any):  # noqa: B027
+        """Called when a WebSocket session ends. Default: no-op."""
+
+    @staticmethod
+    def _progress_sender(websocket: WebSocket | None):
+        async def send_progress(msg: str):
+            if websocket is not None:
+                await websocket.send_bytes(serialise({'status': 'loading', 'message': msg}))
+
+        return send_progress
+
+    async def websocket_endpoint(self, websocket: WebSocket, checkpoint_id: str | None = None):
+        await websocket.accept()
+        logger.info(f'Connected to {websocket.client} requesting {checkpoint_id or "default"}')
+
+        model_handle = None
+        try:
+            model_handle, extra_meta = await self.resolve_model(checkpoint_id, websocket)
+            base_policy = self.create_policy(model_handle)
+            policy = self.codec.wrap(base_policy) if self.codec else base_policy
+            policy.reset()
+            meta = {**self.metadata, **extra_meta, **policy.meta}
+            await websocket.send_bytes(serialise({'status': 'ready', 'meta': meta}))
+
+            try:
+                while True:
+                    message = await websocket.receive_bytes()
+                    try:
+                        raw_obs = deserialise(message)
+                        actions = policy.select_action(raw_obs)
+                        await websocket.send_bytes(serialise({'result': actions}))
+                    except Exception as e:
+                        logger.error(f'Error processing message: {e}', exc_info=True)
+                        await websocket.send_bytes(serialise({'error': str(e)}))
+            except WebSocketDisconnect:
+                logger.info('Client disconnected')
+
+        except Exception as e:
+            logger.error(f'Failed session: {e}', exc_info=True)
+            try:
+                await websocket.send_bytes(serialise({'status': 'error', 'error': str(e)}))
+                await websocket.close(code=1008, reason=str(e)[:100])
+            except Exception:
+                logger.debug('Failed to send error to client', exc_info=True)
+        finally:
+            if model_handle is not None:
+                await self.release_policy(model_handle)
+
+    async def _startup(self):
+        model_handle, _meta = await self.resolve_model(None, websocket=None)
+        policy = self.create_policy(model_handle)
+        policy.reset()
+        await self.warmup(policy)
+
+    def serve(self):
+        async def _run():
+            await self._startup()
+            config = uvicorn.Config(self.app, host=self.host, port=self.port, log_level='info')
+            await uvicorn.Server(config).serve()
+
+        try:
+            asyncio.run(_run())
+        except KeyboardInterrupt:
+            logger.info('Server stopped by user')
+        finally:
+            self.shutdown_model()

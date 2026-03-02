@@ -4,21 +4,19 @@ import os
 import socket
 import subprocess
 import time
-import traceback
 from pathlib import Path
 from typing import Any
 
 import configuronic as cfn
 import pos3
-import uvicorn
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import WebSocket
 from openpi_client.websocket_client_policy import WebsocketClientPolicy
 
 from positronic.offboard.server_utils import monitor_async_task, wait_for_subprocess_ready
-from positronic.policy import Codec, Policy, RecordingCodec
+from positronic.offboard.vendor_server import VendorServer
+from positronic.policy import Codec, Policy
 from positronic.utils.checkpoints import get_latest_checkpoint, list_checkpoints
 from positronic.utils.logging import init_logging
-from positronic.utils.serialization import deserialise, serialise
 from positronic.vendors.openpi import codecs, ensure_paligemma_tokenizer
 
 logger = logging.getLogger(__name__)
@@ -178,10 +176,7 @@ class OpenpiPolicy(Policy):
 ###########################################################################################
 
 
-# TODO: Extract common InferenceServer base class from gr00t, openpi, and dreamzero servers.
-# The FastAPI app, WebSocket inference loop, subprocess lifecycle, warmup, and serve() are
-# ~80% identical. Vendor-specific parts: subprocess command, wire protocol, checkpoint management.
-class InferenceServer:
+class InferenceServer(VendorServer):
     """FastAPI server that wraps OpenPI subprocess and provides unified API."""
 
     def __init__(
@@ -196,15 +191,11 @@ class InferenceServer:
         metadata: dict[str, Any] | None = None,
         recording_dir: str | None = None,
     ):
-        self.codec = codec
+        super().__init__(codec=codec, host=host, port=port, recording_dir=recording_dir)
         self.checkpoints_dir = str(checkpoints_dir).rstrip('/')
         self.config_name = config_name
         self.checkpoint = checkpoint
-        self.host = host
-        self.port = port
         self.openpi_ws_port = openpi_ws_port
-        if recording_dir:
-            self.codec = RecordingCodec(self.codec, pos3.sync(recording_dir))
 
         self.metadata = metadata or {}
         self.metadata.update(
@@ -216,18 +207,50 @@ class InferenceServer:
             experiment_name=str(checkpoints_dir).rstrip('/').split('/')[-1] or '',
         )
 
-        # Active subprocess per checkpoint
         self._subprocesses: dict[str, OpenpiSubprocess] = {}
         self._subprocess_lock = asyncio.Lock()
 
-        # Initialize FastAPI
-        self.app = FastAPI()
-        self.app.get('/api/v1/models')(self.get_models)
-        self.app.websocket('/api/v1/session')(self.websocket_endpoint)
-        self.app.websocket('/api/v1/session/{checkpoint_id}')(self.websocket_endpoint)
+    def _resolve_checkpoint_id(self, checkpoint_id: str | None) -> str:
+        if checkpoint_id:
+            available = list_checkpoints(self.checkpoints_dir)
+            if checkpoint_id.isdigit():
+                target_int = int(checkpoint_id)
+                for cp in available:
+                    if cp.isdigit() and int(cp) == target_int:
+                        return cp
+            raise ValueError(f'Checkpoint not found or invalid ID: {checkpoint_id}.')
 
-    async def get_models(self):
-        """Return list of available checkpoints."""
+        if self.checkpoint:
+            return self.checkpoint
+
+        return get_latest_checkpoint(self.checkpoints_dir)
+
+    async def resolve_model(self, checkpoint_id: str | None, websocket: WebSocket | None) -> tuple[Any, dict]:
+        send_progress = self._progress_sender(websocket)
+        resolved_id = self._resolve_checkpoint_id(checkpoint_id)
+
+        async with self._subprocess_lock:
+            if resolved_id not in self._subprocesses:
+                checkpoint_path = f'{self.checkpoints_dir}/{resolved_id}'
+                download_task = asyncio.create_task(asyncio.to_thread(pos3.download, checkpoint_path))
+                await monitor_async_task(
+                    download_task, description=f'Downloading checkpoint {resolved_id}', on_progress=send_progress
+                )
+                checkpoint_dir = download_task.result()
+
+                logger.info(f'Starting OpenPI subprocess for checkpoint {resolved_id}')
+                subprocess_obj = OpenpiSubprocess(
+                    checkpoint_dir=checkpoint_dir, config_name=self.config_name, ws_port=self.openpi_ws_port
+                )
+                await subprocess_obj.start_async(on_progress=send_progress)
+                self._subprocesses[resolved_id] = subprocess_obj
+
+            return self._subprocesses[resolved_id], {'checkpoint_id': resolved_id}
+
+    def create_policy(self, model_handle: Any) -> Policy:
+        return OpenpiPolicy(model_handle.client)
+
+    async def get_models(self) -> dict:
         try:
             checkpoints = list_checkpoints(self.checkpoints_dir)
             normalized = [int(cp) for cp in checkpoints if cp.isdigit()]
@@ -237,146 +260,10 @@ class InferenceServer:
             logger.exception('Failed to list checkpoints.')
             return {'models': []}
 
-    async def _resolve_checkpoint_id(self, websocket: WebSocket, checkpoint_id: str | None) -> str | None:
-        """Resolve checkpoint ID from parameter, config, or latest."""
-        if checkpoint_id:
-            available = list_checkpoints(self.checkpoints_dir)
-
-            if checkpoint_id.isdigit():
-                target_int = int(checkpoint_id)
-                for cp in available:
-                    if cp.isdigit() and int(cp) == target_int:
-                        return cp
-
-            error_msg = f'Checkpoint not found or invalid ID: {checkpoint_id}.'
-            logger.error(error_msg)
-            await websocket.send_bytes(serialise({'status': 'error', 'error': error_msg}))
-            await websocket.close(code=1008, reason='Checkpoint not found')
-            return None
-
-        # Use configured checkpoint or latest
-        if self.checkpoint:
-            return self.checkpoint
-
-        try:
-            return get_latest_checkpoint(self.checkpoints_dir)
-        except Exception as e:
-            error_msg = f'No checkpoint available in {self.checkpoints_dir}: {e}'
-            logger.exception(error_msg)
-            await websocket.send_bytes(serialise({'status': 'error', 'error': error_msg}))
-            await websocket.close(code=1008, reason='No checkpoint available')
-            return None
-
-    async def _get_subprocess(self, checkpoint_id: str, websocket: WebSocket) -> OpenpiSubprocess:
-        """Get or create subprocess for checkpoint, sending status updates."""
-
-        async def send_progress(msg: str):
-            await websocket.send_bytes(serialise({'status': 'loading', 'message': msg}))
-
-        async with self._subprocess_lock:
-            if checkpoint_id not in self._subprocesses:
-                # Download checkpoint in thread with periodic progress updates
-                checkpoint_path = f'{self.checkpoints_dir}/{checkpoint_id}'
-                download_task = asyncio.create_task(asyncio.to_thread(pos3.download, checkpoint_path))
-                await monitor_async_task(
-                    download_task, description=f'Downloading checkpoint {checkpoint_id}', on_progress=send_progress
-                )
-                checkpoint_dir = download_task.result()
-
-                logger.info(f'Starting OpenPI subprocess for checkpoint {checkpoint_id}')
-                subprocess_obj = OpenpiSubprocess(
-                    checkpoint_dir=checkpoint_dir, config_name=self.config_name, ws_port=self.openpi_ws_port
-                )
-
-                # Start subprocess with periodic progress updates
-                await subprocess_obj.start_async(on_progress=send_progress)
-
-                self._subprocesses[checkpoint_id] = subprocess_obj
-
-            return self._subprocesses[checkpoint_id]
-
-    async def websocket_endpoint(self, websocket: WebSocket, checkpoint_id: str | None = None):
-        """WebSocket endpoint for inference sessions."""
-        await websocket.accept()
-        logger.info(f'Connected to {websocket.client} requesting {checkpoint_id or "default"}')
-
-        # Resolve checkpoint
-        resolved_checkpoint_id = await self._resolve_checkpoint_id(websocket, checkpoint_id)
-        if resolved_checkpoint_id is None:
-            return
-
-        try:
-            # Get or start subprocess (sends status updates internally)
-            subprocess_obj = await self._get_subprocess(resolved_checkpoint_id, websocket)
-            base_policy = OpenpiPolicy(subprocess_obj.client)
-            policy = self.codec.wrap(base_policy) if self.codec else base_policy
-            policy.reset()
-            meta = {**self.metadata, 'checkpoint_id': resolved_checkpoint_id, **policy.meta}
-            await websocket.send_bytes(serialise({'status': 'ready', 'meta': meta}))
-
-            # Inference loop
-            async for message in websocket.iter_bytes():
-                try:
-                    raw_obs = deserialise(message)
-                    actions = policy.select_action(raw_obs)
-                    await websocket.send_bytes(serialise({'result': actions}))
-                except Exception as e:
-                    logger.error(f'Error processing message: {e}')
-                    logger.error(traceback.format_exc())
-                    await websocket.send_bytes(serialise({'error': str(e)}))
-
-        except (WebSocketDisconnect, Exception) as e:
-            logger.info(f'Connection closed: {e}')
-            logger.debug(traceback.format_exc())
-
-    async def _startup(self):
-        """Pre-load the default checkpoint and start the subprocess before accepting connections."""
-        checkpoint_id = self.checkpoint
-        if not checkpoint_id:
-            checkpoint_id = get_latest_checkpoint(self.checkpoints_dir)
-
-        checkpoint_path = f'{self.checkpoints_dir}/{checkpoint_id}'
-        logger.info(f'Pre-loading checkpoint {checkpoint_id}')
-        checkpoint_dir = await asyncio.to_thread(pos3.download, checkpoint_path)
-
-        subprocess_obj = OpenpiSubprocess(
-            checkpoint_dir=checkpoint_dir, config_name=self.config_name, ws_port=self.openpi_ws_port
-        )
-        await subprocess_obj.start_async()
-        self._subprocesses[checkpoint_id] = subprocess_obj
-
-        await self._warmup(subprocess_obj)
-
-    async def _warmup(self, subprocess_obj: OpenpiSubprocess):
-        """Run one warmup inference to trigger JIT compilation."""
-        try:
-            logger.info('Running warmup inference...')
-            dummy = self.codec.dummy_encoded() if self.codec else {}
-            await asyncio.to_thread(subprocess_obj.client.infer, dummy)
-            logger.info('Warmup inference complete')
-        except Exception:
-            logger.warning('Warmup inference failed (non-fatal)', exc_info=True)
-
-    def _shutdown(self):
-        """Shutdown all subprocesses."""
+    def shutdown_model(self):
         for subprocess_obj in self._subprocesses.values():
             subprocess_obj.stop()
         self._subprocesses.clear()
-
-    def serve(self):
-        """Start the server: pre-load model, warm up, then serve requests."""
-
-        async def _run():
-            await self._startup()
-            config = uvicorn.Config(self.app, host=self.host, port=self.port, log_level='info')
-            await uvicorn.Server(config).serve()
-
-        try:
-            asyncio.run(_run())
-        except KeyboardInterrupt:
-            logger.info('Server stopped by user')
-        finally:
-            self._shutdown()
 
 
 ###########################################################################################
