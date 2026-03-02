@@ -225,9 +225,9 @@ class InferenceServer(VendorServer):
 
         return get_latest_checkpoint(self.checkpoints_dir)
 
-    async def resolve_model(self, checkpoint_id: str | None, websocket: WebSocket | None) -> tuple[Any, dict]:
+    async def resolve_model(self, model_id: str | None, websocket: WebSocket | None) -> tuple[Any, dict]:
         send_progress = self._progress_sender(websocket)
-        resolved_id = self._resolve_checkpoint_id(checkpoint_id)
+        resolved_id = self._resolve_checkpoint_id(model_id)
 
         async with self._subprocess_lock:
             if resolved_id not in self._subprocesses:

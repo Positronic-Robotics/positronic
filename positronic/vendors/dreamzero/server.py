@@ -221,7 +221,7 @@ class InferenceServer(VendorServer):
             'num_gpus': num_gpus,
         }
 
-    async def resolve_model(self, checkpoint_id: str | None, websocket: WebSocket | None) -> tuple[Any, dict]:
+    async def resolve_model(self, model_id: str | None, websocket: WebSocket | None) -> tuple[Any, dict]:
         send_progress = self._progress_sender(websocket)
 
         async with self._subprocess_lock:

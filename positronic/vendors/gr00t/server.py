@@ -297,10 +297,10 @@ class InferenceServer(VendorServer):
 
         return get_latest_checkpoint(self.checkpoints_dir, 'checkpoint-')
 
-    async def resolve_model(self, checkpoint_id: str | None, websocket: WebSocket | None) -> tuple[Any, dict]:
+    async def resolve_model(self, model_id: str | None, websocket: WebSocket | None) -> tuple[Any, dict]:
         send_progress = self._progress_sender(websocket)
 
-        resolved_path_id = self._resolve_checkpoint_id(checkpoint_id)
+        resolved_path_id = self._resolve_checkpoint_id(model_id)
 
         available = list_checkpoints(self.checkpoints_dir, prefix='checkpoint-')
         if resolved_path_id not in available:

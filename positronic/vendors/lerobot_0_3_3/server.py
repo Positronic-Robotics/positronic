@@ -166,8 +166,8 @@ class InferenceServer(VendorServer):
         logger.info(f'Using latest checkpoint: {checkpoint_id}')
         return checkpoint_id
 
-    async def resolve_model(self, checkpoint_id: str | None, websocket: WebSocket | None) -> tuple[Any, dict]:
-        resolved_id = self._resolve_checkpoint_id(checkpoint_id)
+    async def resolve_model(self, model_id: str | None, websocket: WebSocket | None) -> tuple[Any, dict]:
+        resolved_id = self._resolve_checkpoint_id(model_id)
         policy = await self.policy_manager.get_policy(resolved_id, websocket)
         return policy, {'checkpoint_id': resolved_id}
 

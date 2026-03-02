@@ -115,7 +115,7 @@ async def test_lerobot_server_reports_unknown_checkpoint_id(monkeypatch):
     server.policy_manager.release_session = AsyncMock()
 
     websocket = _DummyWebSocket()
-    await server.websocket_endpoint(websocket, checkpoint_id='42')
+    await server.websocket_endpoint(websocket, model_id='42')
 
     assert websocket.events == ['send_bytes', 'close']
     error_payload = websocket._send_bytes.await_args.args[0]

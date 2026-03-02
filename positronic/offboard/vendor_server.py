@@ -22,7 +22,7 @@ class VendorServer(ABC):
     startup/warmup lifecycle, and serve entrypoint. Subclasses implement
     three hooks:
 
-        resolve_model(checkpoint_id, websocket) → (handle, extra_meta)
+        resolve_model(model_id, websocket) → (handle, extra_meta)
         create_policy(handle) → Policy
         get_models() → dict
 
@@ -47,10 +47,10 @@ class VendorServer(ABC):
         self.app = FastAPI()
         self.app.get('/api/v1/models')(self.get_models)
         self.app.websocket('/api/v1/session')(self.websocket_endpoint)
-        self.app.websocket('/api/v1/session/{checkpoint_id}')(self.websocket_endpoint)
+        self.app.websocket('/api/v1/session/{model_id}')(self.websocket_endpoint)
 
     @abstractmethod
-    async def resolve_model(self, checkpoint_id: str | None, websocket: WebSocket | None) -> tuple[Any, dict]:
+    async def resolve_model(self, model_id: str | None, websocket: WebSocket | None) -> tuple[Any, dict]:
         """Ensure model/subprocess is running. Return (handle, extra_metadata)."""
 
     @abstractmethod
@@ -63,10 +63,11 @@ class VendorServer(ABC):
 
     async def warmup(self, policy: Policy):
         """Run one warmup inference. Default uses codec.dummy_encoded(). Non-fatal on failure."""
+        if not self.codec:
+            return
         try:
             logger.info('Running warmup inference...')
-            dummy = self.codec.dummy_encoded() if self.codec else {}
-            await asyncio.to_thread(policy.select_action, dummy)
+            await asyncio.to_thread(policy.select_action, self.codec.dummy_encoded())
             logger.info('Warmup inference complete')
         except Exception:
             logger.warning('Warmup inference failed (non-fatal)', exc_info=True)
@@ -85,13 +86,13 @@ class VendorServer(ABC):
 
         return send_progress
 
-    async def websocket_endpoint(self, websocket: WebSocket, checkpoint_id: str | None = None):
+    async def websocket_endpoint(self, websocket: WebSocket, model_id: str | None = None):
         await websocket.accept()
-        logger.info(f'Connected to {websocket.client} requesting {checkpoint_id or "default"}')
+        logger.info(f'Connected to {websocket.client} requesting {model_id or "default"}')
 
         model_handle = None
         try:
-            model_handle, extra_meta = await self.resolve_model(checkpoint_id, websocket)
+            model_handle, extra_meta = await self.resolve_model(model_id, websocket)
             base_policy = self.create_policy(model_handle)
             policy = self.codec.wrap(base_policy) if self.codec else base_policy
             policy.reset()

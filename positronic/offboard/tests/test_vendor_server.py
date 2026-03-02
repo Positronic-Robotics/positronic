@@ -29,8 +29,8 @@ class _StubVendorServer(VendorServer):
         self.metadata = {'type': 'stub'}
         self.warmup_called = False
 
-    async def resolve_model(self, checkpoint_id, websocket):
-        return 'dummy_handle', {'checkpoint_id': checkpoint_id or 'default'}
+    async def resolve_model(self, model_id, websocket):
+        return 'dummy_handle', {'checkpoint_id': model_id or 'default'}
 
     def create_policy(self, model_handle):
         return self.mock_policy
