@@ -1,6 +1,5 @@
 import asyncio
 import logging
-import traceback
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -8,15 +7,16 @@ from typing import Any
 import configuronic as cfn
 import pos3
 import uvicorn
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import WebSocket
 from lerobot.configs.policies import PreTrainedConfig
 from lerobot.policies.factory import get_policy_class
 from lerobot.policies.pretrained import PreTrainedPolicy
 
-from positronic.policy import Codec, Policy, RecordingCodec
+from positronic.offboard.vendor_server import VendorServer
+from positronic.policy import Codec, Policy
 from positronic.utils.checkpoints import get_latest_checkpoint, list_checkpoints
 from positronic.utils.logging import init_logging
-from positronic.utils.serialization import deserialise, serialise
+from positronic.utils.serialization import serialise
 from positronic.vendors.lerobot import codecs as lerobot_codecs
 from positronic.vendors.lerobot.policy import LerobotPolicy, _detect_device, make_processors
 
@@ -75,7 +75,7 @@ class _PolicyManager:
                 self._condition.notify_all()
 
 
-class InferenceServer:
+class InferenceServer(VendorServer):
     """LeRobot 0.4.x inference server with singleton policy manager.
 
     Auto-detects policy type from checkpoint config and creates the appropriate
@@ -95,15 +95,11 @@ class InferenceServer:
         device: str | None = None,
         recording_dir: str | None = None,
     ):
+        super().__init__(codec=codec, host=host, port=port, recording_dir=recording_dir)
         self.policy_factory = policy_factory
-        self.codec = codec
         self.checkpoints_dir = str(checkpoints_dir).rstrip('/') + '/checkpoints'
         self.checkpoint = checkpoint
-        self.host = host
-        self.port = port
         self.device = device or _detect_device()
-        if recording_dir:
-            self.codec = RecordingCodec(self.codec, pos3.sync(recording_dir))
 
         self.metadata = metadata or {}
         self.metadata.update(
@@ -114,11 +110,6 @@ class InferenceServer:
         )
 
         self.policy_manager = _PolicyManager(self._load_policy)
-
-        self.app = FastAPI()
-        self.app.get('/api/v1/models')(self.get_models)
-        self.app.websocket('/api/v1/session')(self.websocket_endpoint)
-        self.app.websocket('/api/v1/session/{checkpoint_id}')(self.websocket_endpoint)
 
     def _load_policy(self, checkpoint_id: str) -> Policy:
         checkpoint_path = f'{self.checkpoints_dir}/{checkpoint_id}/pretrained_model'
@@ -132,86 +123,55 @@ class InferenceServer:
         preprocessor, postprocessor = make_processors(policy.config, checkpoint_path)
         return LerobotPolicy(policy, preprocessor, postprocessor, self.device, extra_meta=base_meta)
 
-    async def get_models(self):
-        try:
-            return {'models': list_checkpoints(self.checkpoints_dir)}
-        except Exception:
-            logger.exception('Failed to list checkpoints.')
-            return {'models': []}
-
-    async def _resolve_checkpoint_id(self, websocket: WebSocket, checkpoint_id: str | None) -> str | None:
+    def _resolve_checkpoint_id(self, checkpoint_id: str | None) -> str:
         if checkpoint_id:
             available = list_checkpoints(self.checkpoints_dir)
             if checkpoint_id not in available:
-                error_msg = f'Checkpoint not found: {checkpoint_id}. Available: {available}'
-                logger.error(error_msg)
-                await websocket.send_bytes(serialise({'status': 'error', 'error': error_msg}))
-                await websocket.close(code=1008, reason='Checkpoint not found')
-                return None
-
+                raise ValueError(f'Checkpoint not found: {checkpoint_id}. Available: {available}')
             return checkpoint_id
 
         if self.checkpoint:
             checkpoint_id = str(self.checkpoint).strip('/')
             available = list_checkpoints(self.checkpoints_dir)
             if checkpoint_id not in available:
-                error_msg = f'Configured checkpoint not found: {checkpoint_id}. Available: {available}'
-                logger.error(error_msg)
-                await websocket.send_bytes(serialise({'status': 'error', 'error': error_msg}))
-                await websocket.close(code=1008, reason='Configured checkpoint not found')
-                return None
-
+                raise ValueError(f'Configured checkpoint not found: {checkpoint_id}. Available: {available}')
             logger.info(f'Using configured checkpoint: {checkpoint_id}')
             return checkpoint_id
 
+        checkpoint_id = get_latest_checkpoint(self.checkpoints_dir)
+        logger.info(f'Using latest checkpoint: {checkpoint_id}')
+        return checkpoint_id
+
+    async def resolve_model(self, model_id: str | None, websocket: WebSocket | None) -> tuple[Any, dict]:
+        resolved_id = self._resolve_checkpoint_id(model_id)
+        policy = await self.policy_manager.get_policy(resolved_id, websocket)
+        return policy, {'checkpoint_id': resolved_id}
+
+    def create_policy(self, model_handle: Any) -> Policy:
+        return model_handle
+
+    async def get_models(self) -> dict:
         try:
-            checkpoint_id = get_latest_checkpoint(self.checkpoints_dir)
-            logger.info(f'Using latest checkpoint: {checkpoint_id}')
-            return checkpoint_id
+            return {'models': list_checkpoints(self.checkpoints_dir)}
         except Exception:
-            error_msg = f'No checkpoints found in {self.checkpoints_dir}'
-            logger.exception(error_msg)
-            await websocket.send_bytes(serialise({'status': 'error', 'error': error_msg}))
-            await websocket.close(code=1008, reason='No checkpoints available')
-            return None
+            logger.exception('Failed to list checkpoints.')
+            return {'models': []}
 
-    async def websocket_endpoint(self, websocket: WebSocket, checkpoint_id: str | None = None):
-        await websocket.accept()
+    async def release_policy(self, model_handle):
+        await self.policy_manager.release_session()
 
-        checkpoint_id = await self._resolve_checkpoint_id(websocket, checkpoint_id)
-        if not checkpoint_id:
-            return
-
-        logger.info(f'Connected to {websocket.client} requesting {checkpoint_id}')
-
-        try:
-            base_policy = await self.policy_manager.get_policy(checkpoint_id, websocket)
-            try:
-                policy = self.codec.wrap(base_policy) if self.codec else base_policy
-                policy.reset()
-                await websocket.send_bytes(serialise({'status': 'ready', 'meta': policy.meta}))
-                try:
-                    while True:
-                        message = await websocket.receive_bytes()
-                        try:
-                            obs = deserialise(message)
-                            action = policy.select_action(obs)
-                            await websocket.send_bytes(serialise({'result': action}))
-                        except Exception as e:
-                            logger.error(f'Error processing message: {e}')
-                            await websocket.send_bytes(serialise({'error': str(e)}))
-                except WebSocketDisconnect:
-                    logger.info('Client disconnected')
-            finally:
-                await self.policy_manager.release_session()
-        except (WebSocketDisconnect, Exception) as e:
-            logger.info(f'Connection closed: {e}')
-            logger.debug(traceback.format_exc())
+    async def _startup(self):
+        pass
 
     def serve(self):
-        config = uvicorn.Config(self.app, host=self.host, port=self.port, log_level='info')
-        server = uvicorn.Server(config)
-        return server.serve()
+        async def _run():
+            config = uvicorn.Config(self.app, host=self.host, port=self.port, log_level='info')
+            await uvicorn.Server(config).serve()
+
+        try:
+            asyncio.run(_run())
+        except KeyboardInterrupt:
+            logger.info('Server stopped by user')
 
 
 def _default_policy_factory(checkpoint_path: str) -> PreTrainedPolicy:
@@ -238,13 +198,9 @@ def main(
     recording_dir: str | None,
 ):
     checkpoints_dir = str(pos3.download(checkpoints_dir))
-    server = InferenceServer(
+    InferenceServer(
         policy_factory, codec, checkpoints_dir, checkpoint, host=host, port=port, recording_dir=recording_dir
-    )
-    try:
-        asyncio.run(server.serve())
-    except KeyboardInterrupt:
-        logger.info('Server stopped by user')
+    ).serve()
 
 
 if __name__ == '__main__':

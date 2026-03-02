@@ -10,6 +10,7 @@ Example:
 
 import logging
 import os
+import shutil
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -156,6 +157,11 @@ def train(
                 logging.critical(f'No numeric checkpoint directories found in {checkpoints_dir}')
         else:
             logging.critical(f'Checkpoints directory {checkpoints_dir} does not exist')
+
+    # pos3.sync recreates experiment dirs from S3 — remove stale ones so lerobot
+    # doesn't reject a fresh run with FileExistsError.
+    if not cfg.resume and Path(cfg.output_dir).exists():
+        shutil.rmtree(cfg.output_dir)
 
     logging.info('Starting training...')
     from lerobot.scripts.lerobot_train import train as lerobot_train
