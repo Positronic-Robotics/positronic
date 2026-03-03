@@ -18,7 +18,7 @@ from positronic.utils.checkpoints import get_latest_checkpoint, list_checkpoints
 from positronic.utils.logging import init_logging
 from positronic.utils.serialization import serialise
 from positronic.vendors.lerobot import codecs as lerobot_codecs
-from positronic.vendors.lerobot.policy import LerobotPolicy, _detect_device, make_processors
+from positronic.vendors.lerobot.policy import LerobotPolicy, _detect_device
 
 logger = logging.getLogger(__name__)
 
@@ -120,8 +120,7 @@ class InferenceServer(VendorServer):
         if hasattr(policy, 'metadata') and policy.metadata:
             base_meta.update(policy.metadata)
 
-        preprocessor, postprocessor = make_processors(policy.config, checkpoint_path)
-        return LerobotPolicy(policy, preprocessor, postprocessor, self.device, extra_meta=base_meta)
+        return LerobotPolicy(policy, checkpoint_path, self.device, extra_meta=base_meta)
 
     def _resolve_checkpoint_id(self, checkpoint_id: str | None) -> str:
         if checkpoint_id:

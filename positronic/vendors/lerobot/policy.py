@@ -2,6 +2,7 @@ from typing import Any
 
 import numpy as np
 import torch
+from lerobot.policies.factory import make_pre_post_processors
 from lerobot.policies.pretrained import PreTrainedPolicy
 
 from positronic.policy import Policy
@@ -23,26 +24,19 @@ def _detect_device() -> str:
     return 'cpu'
 
 
-def make_processors(config, pretrained_path):
-    """Load preprocessor/postprocessor pipelines from a pretrained checkpoint."""
-    from lerobot.policies.factory import make_pre_post_processors
-
-    return make_pre_post_processors(config, pretrained_path=pretrained_path)
-
-
 class LerobotPolicy(Policy):
     def __init__(
         self,
         policy: PreTrainedPolicy,
-        preprocessor=None,
-        postprocessor=None,
+        checkpoint_path: str,
         device: str | None = None,
         extra_meta: dict[str, Any] | None = None,
     ):
         self._device = device or _detect_device()
         self._policy = policy.to(self._device)
-        self._preprocessor = preprocessor
-        self._postprocessor = postprocessor
+        self._preprocessor, self._postprocessor = make_pre_post_processors(
+            policy.config, pretrained_path=checkpoint_path
+        )
         self.extra_meta = extra_meta or {}
 
     def select_action(self, obs: dict[str, Any]) -> dict[str, Any] | list[dict[str, Any]]:
