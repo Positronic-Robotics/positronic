@@ -9,7 +9,10 @@ from positronic.policy import Policy
 
 
 def _detect_device() -> str:
-    """Select the best available torch device."""
+    """Select the best available torch device.
+
+    Duplicated across lerobot vendors because torch is not a base dependency.
+    """
     if torch.cuda.is_available():
         return 'cuda'
 

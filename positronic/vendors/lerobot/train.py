@@ -164,7 +164,8 @@ def train(
         shutil.rmtree(cfg.output_dir)
 
     logging.info('Starting training...')
-    from lerobot.scripts.lerobot_train import train as lerobot_train
+    # Deferred: lerobot_train triggers heavy CUDA/model registry init on import.
+    from lerobot.scripts.lerobot_train import train as lerobot_train  # noqa: E402
 
     lerobot_train(cfg)
 

@@ -86,9 +86,9 @@ def append_data_to_dataset(lr_dataset: LeRobotDataset, p_dataset: Dataset, fps, 
         for i in range(num_frames):
             frame = {}
             for key, value in ep_dict.items():
-                frame[key] = ep_dict[key]
                 if isinstance(value, AbcSequence | np.ndarray) and len(value) == num_frames:
-                    frame[key] = frame[key][i]
+                    value = value[i]
+                frame[key] = value
 
             ep_task = task if task is not None else frame.get('task', '')
             frame['task'] = ep_task or ''

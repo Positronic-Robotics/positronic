@@ -3,6 +3,7 @@
 import asyncio
 import logging
 from abc import ABC, abstractmethod
+from collections.abc import Callable
 from typing import Any
 
 import pos3
@@ -10,9 +11,83 @@ import uvicorn
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 
 from positronic.policy import Codec, Policy, RecordingCodec
+from positronic.utils.checkpoints import get_latest_checkpoint, list_checkpoints
 from positronic.utils.serialization import deserialise, serialise
 
 logger = logging.getLogger(__name__)
+
+
+class PolicyManager:
+    """Manages the lifecycle of a single active policy.
+
+    Ensures only one policy is loaded at a time. Waits for all active sessions
+    to finish before switching policies.
+    """
+
+    def __init__(self, loader: Callable[[str], Policy]):
+        self.loader = loader
+        self.current_checkpoint_id: str | None = None
+        self.current_policy: Policy | None = None
+        self.active_sessions: int = 0
+        self._lock = asyncio.Lock()
+        self._condition = asyncio.Condition(self._lock)
+
+    async def get_policy(self, checkpoint_id: str, websocket: WebSocket) -> Policy:
+        async with self._lock:
+            if self.current_checkpoint_id != checkpoint_id:
+                logger.info(f'Switching policy from {self.current_checkpoint_id} to {checkpoint_id}')
+
+                while self.active_sessions > 0:
+                    message = f'Waiting for {self.active_sessions} active session(s) to finish...'
+                    logger.info(message)
+                    await websocket.send_bytes(serialise({'status': 'waiting', 'message': message}))
+
+                    try:
+                        await asyncio.wait_for(self._condition.wait(), timeout=5.0)
+                    except TimeoutError:
+                        continue
+
+                if self.current_policy:
+                    logger.info('Unloading current policy')
+                    self.current_policy.close()
+
+                await websocket.send_bytes(
+                    serialise({'status': 'loading', 'message': f'Loading checkpoint {checkpoint_id}...'})
+                )
+
+                logger.info(f'Loading policy {checkpoint_id}')
+                self.current_policy = self.loader(checkpoint_id)
+                self.current_checkpoint_id = checkpoint_id
+
+            self.active_sessions += 1
+            return self.current_policy
+
+    async def release_session(self):
+        async with self._lock:
+            self.active_sessions -= 1
+            if self.active_sessions == 0:
+                self._condition.notify_all()
+
+
+def resolve_checkpoint(checkpoints_dir: str, configured: str | None, requested: str | None) -> str:
+    """Resolve a checkpoint ID from an explicit request, a configured default, or latest available."""
+    if requested:
+        available = list_checkpoints(checkpoints_dir)
+        if requested not in available:
+            raise ValueError(f'Checkpoint not found: {requested}. Available: {available}')
+        return requested
+
+    if configured:
+        checkpoint_id = str(configured).strip('/')
+        available = list_checkpoints(checkpoints_dir)
+        if checkpoint_id not in available:
+            raise ValueError(f'Configured checkpoint not found: {checkpoint_id}. Available: {available}')
+        logger.info(f'Using configured checkpoint: {checkpoint_id}')
+        return checkpoint_id
+
+    checkpoint_id = get_latest_checkpoint(checkpoints_dir)
+    logger.info(f'Using latest checkpoint: {checkpoint_id}')
+    return checkpoint_id
 
 
 class VendorServer(ABC):

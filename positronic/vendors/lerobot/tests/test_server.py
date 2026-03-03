@@ -48,7 +48,7 @@ class _DummyWebSocket:
 
 @pytest.mark.asyncio
 async def test_lerobot_server_uses_configured_checkpoint(monkeypatch):
-    monkeypatch.setattr(lerobot_server, 'list_checkpoints', lambda _path: ['42'])
+    monkeypatch.setattr('positronic.offboard.vendor_server.list_checkpoints', lambda _path: ['42'])
 
     server = lerobot_server.InferenceServer(
         codec=_PassthroughCodec(), checkpoints_dir='s3://bucket/exp', checkpoint='42'
@@ -74,7 +74,7 @@ async def test_lerobot_server_uses_configured_checkpoint(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_lerobot_server_reports_missing_checkpoint(monkeypatch):
-    monkeypatch.setattr(lerobot_server, 'list_checkpoints', lambda _path: ['41'])
+    monkeypatch.setattr('positronic.offboard.vendor_server.list_checkpoints', lambda _path: ['41'])
 
     server = lerobot_server.InferenceServer(
         codec=_PassthroughCodec(), checkpoints_dir='s3://bucket/exp', checkpoint='42'
@@ -97,7 +97,7 @@ async def test_lerobot_server_reports_missing_checkpoint(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_lerobot_server_reports_unknown_checkpoint_id(monkeypatch):
-    monkeypatch.setattr(lerobot_server, 'list_checkpoints', lambda _path: ['41'])
+    monkeypatch.setattr('positronic.offboard.vendor_server.list_checkpoints', lambda _path: ['41'])
 
     server = lerobot_server.InferenceServer(
         codec=_PassthroughCodec(), checkpoints_dir='s3://bucket/exp', checkpoint=None
