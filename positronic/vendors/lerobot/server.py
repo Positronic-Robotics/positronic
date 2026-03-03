@@ -8,9 +8,6 @@ import configuronic as cfn
 import pos3
 import uvicorn
 from fastapi import WebSocket
-from lerobot.configs.policies import PreTrainedConfig
-from lerobot.policies.factory import get_policy_class
-from lerobot.policies.pretrained import PreTrainedPolicy
 
 from positronic.offboard.vendor_server import VendorServer
 from positronic.policy import Codec, Policy
@@ -85,42 +82,33 @@ class InferenceServer(VendorServer):
 
     def __init__(
         self,
-        policy_factory: Callable[[str], PreTrainedPolicy],
         codec: Codec | None,
         checkpoints_dir: str | Path,
         checkpoint: str | None = None,
         host: str = '0.0.0.0',
         port: int = 8000,
-        metadata: dict[str, Any] | None = None,
         device: str | None = None,
         recording_dir: str | None = None,
     ):
         super().__init__(codec=codec, host=host, port=port, recording_dir=recording_dir)
-        self.policy_factory = policy_factory
         self.checkpoints_dir = str(checkpoints_dir).rstrip('/') + '/checkpoints'
         self.checkpoint = checkpoint
         self.device = device or _detect_device()
 
-        self.metadata = metadata or {}
-        self.metadata.update(
-            host=host,
-            port=port,
-            device=self.device,
-            experiment_name=str(checkpoints_dir).rstrip('/').split('/')[-1] or '',
-        )
+        self.metadata = {
+            'host': host,
+            'port': port,
+            'device': self.device,
+            'experiment_name': str(checkpoints_dir).rstrip('/').split('/')[-1] or '',
+        }
 
         self.policy_manager = _PolicyManager(self._load_policy)
 
     def _load_policy(self, checkpoint_id: str) -> Policy:
         checkpoint_path = f'{self.checkpoints_dir}/{checkpoint_id}/pretrained_model'
         logger.info(f'Loading checkpoint from {checkpoint_path}')
-
-        base_meta = {'checkpoint_id': checkpoint_id, 'checkpoint_path': checkpoint_path, **self.metadata}
-        policy = self.policy_factory(checkpoint_path)
-        if hasattr(policy, 'metadata') and policy.metadata:
-            base_meta.update(policy.metadata)
-
-        return LerobotPolicy(policy, checkpoint_path, self.device, extra_meta=base_meta)
+        meta = {'checkpoint_id': checkpoint_id, 'checkpoint_path': checkpoint_path, **self.metadata}
+        return LerobotPolicy(checkpoint_path, self.device, extra_meta=meta)
 
     def _resolve_checkpoint_id(self, checkpoint_id: str | None) -> str:
         if checkpoint_id:
@@ -173,33 +161,10 @@ class InferenceServer(VendorServer):
             logger.info('Server stopped by user')
 
 
-def _default_policy_factory(checkpoint_path: str) -> PreTrainedPolicy:
-    config = PreTrainedConfig.from_pretrained(checkpoint_path)
-    policy_cls = get_policy_class(config.type)
-    return policy_cls.from_pretrained(checkpoint_path)
-
-
-@cfn.config(
-    policy_factory=_default_policy_factory,
-    codec=lerobot_codecs.ee,
-    checkpoint=None,
-    port=8000,
-    host='0.0.0.0',
-    recording_dir=None,
-)
-def main(
-    policy_factory: Callable[[str], PreTrainedPolicy],
-    checkpoints_dir: str,
-    checkpoint: str | None,
-    codec,
-    port: int,
-    host: str,
-    recording_dir: str | None,
-):
+@cfn.config(codec=lerobot_codecs.ee, checkpoint=None, port=8000, host='0.0.0.0', recording_dir=None)
+def main(checkpoints_dir: str, checkpoint: str | None, codec, port: int, host: str, recording_dir: str | None):
     checkpoints_dir = str(pos3.download(checkpoints_dir))
-    InferenceServer(
-        policy_factory, codec, checkpoints_dir, checkpoint, host=host, port=port, recording_dir=recording_dir
-    ).serve()
+    InferenceServer(codec, checkpoints_dir, checkpoint, host=host, port=port, recording_dir=recording_dir).serve()
 
 
 if __name__ == '__main__':

@@ -2,8 +2,8 @@ from typing import Any
 
 import numpy as np
 import torch
-from lerobot.policies.factory import make_pre_post_processors
-from lerobot.policies.pretrained import PreTrainedPolicy
+from lerobot.configs.policies import PreTrainedConfig
+from lerobot.policies.factory import get_policy_class, make_pre_post_processors
 
 from positronic.policy import Policy
 
@@ -25,18 +25,12 @@ def _detect_device() -> str:
 
 
 class LerobotPolicy(Policy):
-    def __init__(
-        self,
-        policy: PreTrainedPolicy,
-        checkpoint_path: str,
-        device: str | None = None,
-        extra_meta: dict[str, Any] | None = None,
-    ):
+    def __init__(self, checkpoint_path: str, device: str | None = None, extra_meta: dict[str, Any] | None = None):
         self._device = device or _detect_device()
-        self._policy = policy.to(self._device)
-        self._preprocessor, self._postprocessor = make_pre_post_processors(
-            policy.config, pretrained_path=checkpoint_path
-        )
+        config = PreTrainedConfig.from_pretrained(checkpoint_path)
+        policy_cls = get_policy_class(config.type)
+        self._policy = policy_cls.from_pretrained(checkpoint_path).to(self._device)
+        self._preprocessor, self._postprocessor = make_pre_post_processors(config, pretrained_path=checkpoint_path)
         self.extra_meta = extra_meta or {}
 
     def select_action(self, obs: dict[str, Any]) -> dict[str, Any] | list[dict[str, Any]]:
