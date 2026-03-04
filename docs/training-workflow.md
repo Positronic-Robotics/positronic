@@ -103,37 +103,14 @@ Run the training job using vendor-specific Docker services. All services are def
 
 ### LeRobot Training (SmolVLA — lerobot 0.4.x)
 
-Positronic supports two LeRobot versions. SmolVLA (0.4.x) is a VLM-based policy with language conditioning; ACT (0.3.3) is a single-task transformer. Both run on consumer GPUs.
-
-**SmolVLA (lerobot 0.4.x)** — convert with `lerobot-convert`, train with `lerobot-train`:
+Positronic ships two LeRobot versions — see [Two LeRobot Versions](#two-lerobot-versions) below for details. Use `lerobot-train` (0.4.x) by default, or `lerobot-0_3_3-train` for ACT on the older version.
 
 ```bash
-cd docker && docker compose run --rm lerobot-convert convert \
-  --dataset.dataset.path=~/datasets/stack_cubes_raw \
-  --dataset.codec=@positronic.vendors.lerobot.codecs.ee \
-  --output_dir=~/datasets/lerobot/stack_cubes
-
 cd docker && docker compose run --rm lerobot-train \
   --input_path=~/datasets/lerobot/stack_cubes \
   --exp_name=experiment_v1 \
   --output_dir=~/checkpoints/lerobot/ \
   --num_train_steps=150000
-```
-
-**ACT (lerobot 0.3.3)** — convert with `lerobot-0_3_3-convert`, train with `lerobot-0_3_3-train`:
-
-```bash
-cd docker && docker compose run --rm lerobot-0_3_3-convert convert \
-  --dataset.dataset.path=~/datasets/stack_cubes_raw \
-  --dataset.codec=@positronic.vendors.lerobot_0_3_3.codecs.ee \
-  --output_dir=~/datasets/lerobot/stack_cubes
-
-cd docker && docker compose run --rm lerobot-0_3_3-train \
-  --input_path=~/datasets/lerobot/stack_cubes \
-  --exp_name=experiment_v1 \
-  --output_dir=~/checkpoints/lerobot/ \
-  --num_train_steps=50000 \
-  --save_freq=10000
 ```
 
 ### GR00T Training
@@ -291,31 +268,47 @@ uv run positronic-inference sim \
 
 ### Multi-Model Comparison
 
+Convert once per model using `lerobot-0_3_3-convert` with the vendor-appropriate codec, then train:
+
 ```bash
-# Convert same dataset for all models
+# SmolVLA (0.4.x) — uses lerobot-convert
 cd docker && docker compose run --rm lerobot-convert convert \
   --dataset.dataset.path=~/datasets/my_task \
   --dataset.codec=@positronic.vendors.lerobot.codecs.ee \
   --output_dir=~/datasets/lerobot/my_task
 
-cd docker && docker compose run --rm lerobot-0_3_3-convert convert \
-  --dataset.dataset.path=~/datasets/my_task \
-  --dataset.codec=@positronic.vendors.gr00t.codecs.ee_rot6d_joints \
-  --output_dir=~/datasets/groot/my_task
-
-cd docker && docker compose run --rm lerobot-0_3_3-convert convert \
-  --dataset.dataset.path=~/datasets/my_task \
-  --dataset.codec=@positronic.vendors.openpi.codecs.ee \
-  --output_dir=~/datasets/openpi/my_task
+# ACT, GR00T, OpenPI — use lerobot-0_3_3-convert
+cd docker && for pair in \
+  "lerobot_0_3_3.codecs.ee ~/datasets/lerobot_act/my_task" \
+  "gr00t.codecs.ee_rot6d_joints ~/datasets/groot/my_task" \
+  "openpi.codecs.ee ~/datasets/openpi/my_task"; do
+  set -- $pair
+  docker compose run --rm lerobot-0_3_3-convert convert \
+    --dataset.dataset.path=~/datasets/my_task \
+    --dataset.codec=@positronic.vendors.$1 \
+    --output_dir=$2
+done
 
 # Train all models (can run in parallel)
 cd docker && docker compose run --rm lerobot-train --input_path=~/datasets/lerobot/my_task ...
 cd docker && docker compose run --rm groot-train --input_path=~/datasets/groot/my_task ...
 cd docker && docker compose run --rm openpi-train --input_path=~/datasets/openpi/my_task ...
 
-# Evaluate all models using same .remote policy
-# (Just swap server, client code unchanged!)
+# Evaluate — just swap server, client code unchanged
 ```
+
+## Two LeRobot Versions
+
+Positronic ships two LeRobot integrations because GR00T and OpenPI training scripts depend on the 0.3.3 dataset format:
+
+| | LeRobot 0.4.x | LeRobot 0.3.3 |
+|---|---|---|
+| **Convert** | `lerobot-convert` | `lerobot-0_3_3-convert` |
+| **Train** | `lerobot-train` | `lerobot-0_3_3-train` |
+| **Serve** | `lerobot-server` | `lerobot-0_3_3-server` |
+| **Codecs** | `@positronic.vendors.lerobot.codecs.*` | `@positronic.vendors.lerobot_0_3_3.codecs.*` |
+
+Use `lerobot-convert` for 0.4.x training, `lerobot-0_3_3-convert` for everything else (0.3.3 training, GR00T, OpenPI).
 
 ## See Also
 
