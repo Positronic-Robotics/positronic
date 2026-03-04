@@ -11,7 +11,7 @@ Example:
 import logging
 import os
 import shutil
-import sys
+import sys  # noqa: F401 — used in resume path to set sys.argv for lerobot's parser
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -133,6 +133,7 @@ def train(
         output_dir=output_path,
         job_name=exp_name,
         eval_freq=0,
+        log_freq=50,
         steps=num_train_steps if num_train_steps is not None else 100_000,
     )
 
@@ -146,17 +147,27 @@ def train(
 
     if cfg.resume:
         checkpoints_dir = Path(cfg.output_dir) / 'checkpoints'
-        if checkpoints_dir.exists():
-            checkpoint_dirs = [d for d in checkpoints_dir.iterdir() if d.is_dir() and d.name.isdigit()]
-            if checkpoint_dirs:
-                latest_checkpoint = max(checkpoint_dirs, key=lambda d: int(d.name))
-                config_path = latest_checkpoint / 'pretrained_model' / 'train_config.json'
-                logging.info(f'Resuming run. Automatically setting config_path to {config_path}')
-                sys.argv.append(f'--config_path={config_path}')
-            else:
-                logging.critical(f'No numeric checkpoint directories found in {checkpoints_dir}')
-        else:
-            logging.critical(f'Checkpoints directory {checkpoints_dir} does not exist')
+        if not checkpoints_dir.exists():
+            raise RuntimeError(f'Checkpoints directory {checkpoints_dir} does not exist')
+        checkpoint_dirs = [d for d in checkpoints_dir.iterdir() if d.is_dir() and d.name.isdigit()]
+        if not checkpoint_dirs:
+            raise RuntimeError(f'No numeric checkpoint directories found in {checkpoints_dir}')
+        latest_checkpoint = max(checkpoint_dirs, key=lambda d: int(d.name))
+        config_path = str(latest_checkpoint / 'pretrained_model' / 'train_config.json')
+        logging.info(f'Resuming from {config_path}')
+        # Load full config from checkpoint (includes optimizer, scheduler, etc.)
+        # then override the fields we want to change.
+        cfg = TrainPipelineConfig.from_pretrained(config_path)
+        cfg.resume = True
+        cfg.output_dir = output_path
+        cfg.steps = num_train_steps if num_train_steps is not None else cfg.steps
+        # lerobot's validate() reads --config_path from sys.argv to locate the checkpoint dir.
+        sys.argv.append(f'--config_path={config_path}')
+        if os.getenv('WANDB_API_KEY'):
+            cfg.wandb.enable = True
+            cfg.wandb.project = 'lerobot-train'
+            cfg.wandb.run_id = exp_name
+            cfg.wandb.disable_artifact = True
 
     # pos3.sync recreates experiment dirs from S3 — remove stale ones so lerobot
     # doesn't reject a fresh run with FileExistsError.
