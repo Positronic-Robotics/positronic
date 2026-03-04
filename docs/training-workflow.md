@@ -15,6 +15,12 @@ All vendors (LeRobot, GR00T, OpenPI) follow the same 4-step workflow in Positron
 
 Convert your Positronic dataset into the model's expected format using a codec.
 
+**Which conversion service to use:**
+- `lerobot-convert` — for LeRobot 0.4.x training (SmolVLA)
+- `lerobot-0_3_3-convert` — for LeRobot 0.3.3 (ACT), GR00T, and OpenPI training
+
+GR00T and OpenPI training scripts expect the 0.3.3 LeRobot dataset format, so they use `lerobot-0_3_3-convert` even though the resulting data feeds into non-LeRobot trainers.
+
 ### Basic Conversion
 
 ```bash
@@ -97,17 +103,31 @@ Run the training job using vendor-specific Docker services. All services are def
 
 ### LeRobot Training (SmolVLA — lerobot 0.4.x)
 
+Positronic supports two LeRobot versions. SmolVLA (0.4.x) is a VLM-based policy with language conditioning; ACT (0.3.3) is a single-task transformer. Both run on consumer GPUs.
+
+**SmolVLA (lerobot 0.4.x)** — convert with `lerobot-convert`, train with `lerobot-train`:
+
 ```bash
+cd docker && docker compose run --rm lerobot-convert convert \
+  --dataset.dataset.path=~/datasets/stack_cubes_raw \
+  --dataset.codec=@positronic.vendors.lerobot.codecs.ee \
+  --output_dir=~/datasets/lerobot/stack_cubes
+
 cd docker && docker compose run --rm lerobot-train \
   --input_path=~/datasets/lerobot/stack_cubes \
   --exp_name=experiment_v1 \
   --output_dir=~/checkpoints/lerobot/ \
-  --num_train_steps=50000
+  --num_train_steps=150000
 ```
 
-### LeRobot Training (ACT — lerobot 0.3.3)
+**ACT (lerobot 0.3.3)** — convert with `lerobot-0_3_3-convert`, train with `lerobot-0_3_3-train`:
 
 ```bash
+cd docker && docker compose run --rm lerobot-0_3_3-convert convert \
+  --dataset.dataset.path=~/datasets/stack_cubes_raw \
+  --dataset.codec=@positronic.vendors.lerobot_0_3_3.codecs.ee \
+  --output_dir=~/datasets/lerobot/stack_cubes
+
 cd docker && docker compose run --rm lerobot-0_3_3-train \
   --input_path=~/datasets/lerobot/stack_cubes \
   --exp_name=experiment_v1 \
@@ -176,7 +196,7 @@ Start an inference server that exposes a unified WebSocket API. All vendors impl
 **LeRobot Server (SmolVLA — lerobot 0.4.x):**
 
 ```bash
-cd docker && docker compose run --rm --service-ports lerobot-server \
+cd docker && docker compose run --rm --service-ports lerobot-0_3_3-server \
   --checkpoints_dir=~/checkpoints/lerobot/experiment_v1/ \
   --codec=@positronic.vendors.lerobot.codecs.ee \
   --port=8000
@@ -260,7 +280,7 @@ cd docker && docker compose run --rm lerobot-train \
   --num_train_steps=50000
 
 # 5. Evaluate
-cd docker && docker compose run --rm --service-ports lerobot-server \
+cd docker && docker compose run --rm --service-ports lerobot-0_3_3-server \
   --checkpoints_dir=~/checkpoints/lerobot/baseline_v1/ \
   --codec=@positronic.vendors.lerobot.codecs.ee &
 

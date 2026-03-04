@@ -73,10 +73,19 @@ Positronic supports state-of-the-art foundation models with first-class workflow
 |-------|-----------|----------|-----------|----------|
 | **[OpenPI (π₀.₅)](positronic/vendors/openpi/README.md)** | Most capable, generalist | Capable GPU (~78GB, LoRA) | Capable GPU (~62GB) | Complex multi-task manipulation |
 | **[GR00T](positronic/vendors/gr00t/README.md)** | Generalist robot policy | Capable GPU (~50GB) | Smaller GPU (~7.5GB) | Logistics and industry applications |
-| **[SmolVLA](positronic/vendors/lerobot/README.md)** | Vision-language-action | Consumer GPU | Consumer GPU | Language-conditioned manipulation |
+| **[LeRobot SmolVLA](positronic/vendors/lerobot/README.md)** | VLM-based, multi-task | Consumer GPU | Consumer GPU | Multi-task manipulation with language |
 | **[LeRobot ACT](positronic/vendors/lerobot_0_3_3/README.md)** | Single-task, efficient | Consumer GPU | Consumer GPU | Specific manipulation tasks |
 
 **Recommendation**: Start with SmolVLA or ACT if you want something quick and low-cost. Progress to GR00T or OpenPI if you need more capable models. Positronic makes switching easy.
+
+### Two LeRobot Versions
+
+Positronic ships two LeRobot integrations because the ecosystem straddles a format transition:
+
+- **LeRobot 0.4.x** (`lerobot-train`, `lerobot-server`, `lerobot-convert`) — latest version with SmolVLA, Diffusion, and ACT support. Uses its own dataset format.
+- **LeRobot 0.3.3** (`lerobot-0_3_3-train`, `lerobot-0_3_3-server`, `lerobot-0_3_3-convert`) — stable ACT training. Also provides dataset conversion for **all other vendors** (GR00T, OpenPI) since their training scripts expect the 0.3.3 LeRobot dataset format.
+
+Use `lerobot-convert` for 0.4.x training, `lerobot-0_3_3-convert` for everything else (0.3.3, GR00T, OpenPI).
 
 ### Why Multiple Vendors?
 
@@ -120,7 +129,7 @@ uv sync --frozen --extra hardware
 After installation, the following command-line scripts will be available:
 - `positronic-data-collection`: Collect demonstrations in simulation or on hardware
 - `positronic-server`: Browse and inspect datasets
-- `lerobot-convert` (Docker): Convert datasets to model format
+- `lerobot-0_3_3-convert`: Convert datasets to model format
 - `positronic-inference`: Run trained policies in simulation or on hardware
 
 All commands work both inside an activated virtual environment and with `uv run` prefix (e.g., `uv run positronic-server`).
@@ -203,7 +212,7 @@ uv run positronic-server \
 Convert curated runs using a codec:
 
 ```bash
-cd docker && docker compose run --rm lerobot-convert convert \
+cd docker && docker compose run --rm lerobot-0_3_3-convert convert \
     --dataset.dataset=.local \
     --dataset.dataset.path=~/datasets/stack_cubes_raw \
     --dataset.codec=@positronic.vendors.lerobot.codecs.ee \
@@ -244,7 +253,7 @@ uv run positronic-inference sim \
 
 ```bash
 # On inference server:
-cd docker && docker compose run --rm --service-ports lerobot-server \
+cd docker && docker compose run --rm --service-ports lerobot-0_3_3-server \
     --checkpoints_dir=~/checkpoints/lerobot/<run_id> \
     --codec=@positronic.vendors.lerobot_0_3_3.codecs.ee
 

@@ -121,13 +121,21 @@ Positronic aims to represent the same action and state space across different mo
 **Solution:** Verify training and inference use identical codec.
 
 ```bash
-# Training (SmolVLA)
+# Training (SmolVLA — 0.4.x)
 cd docker && docker compose run --rm lerobot-convert convert \
   --dataset.codec=@positronic.vendors.lerobot.codecs.ee
 
 # Inference must match
-cd docker && docker compose run --rm lerobot-server \
+cd docker && docker compose run --rm --service-ports lerobot-server \
   --codec=@positronic.vendors.lerobot.codecs.ee
+
+# Training (ACT — 0.3.3)
+cd docker && docker compose run --rm lerobot-0_3_3-convert convert \
+  --dataset.codec=@positronic.vendors.lerobot_0_3_3.codecs.ee
+
+# Inference must match
+cd docker && docker compose run --rm --service-ports lerobot-0_3_3-server \
+  --codec=@positronic.vendors.lerobot_0_3_3.codecs.ee
 ```
 
 ## Writing Custom Codecs
