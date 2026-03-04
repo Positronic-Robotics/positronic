@@ -9,6 +9,58 @@ description: Manages remote training infrastructure on Nebius VMs. Use for build
 
 This skill manages the Positronic training infrastructure on Nebius GPU VMs. It covers Docker image management, VM lifecycle, training jobs, dataset generation, and inference server deployment.
 
+## S3 Convention and Current State
+
+All artifacts follow a consistent path structure:
+
+```
+s3://interim/{dataset}/{vendor}/{codec}/          — converted LeRobot datasets
+s3://checkpoints/{dataset}/{vendor}/{codec_or_experiment}/  — training output
+s3://inference/{dataset}/{date_or_exp}/{vendor}/  — inference eval results
+```
+
+To discover available artifacts, list S3:
+```bash
+aws s3 ls s3://interim/{dataset}/{vendor}/ --endpoint-url=https://storage.eu-north1.nebius.cloud
+aws s3 ls s3://checkpoints/{dataset}/{vendor}/ --endpoint-url=https://storage.eu-north1.nebius.cloud
+```
+
+Use `get_latest_checkpoint()` from `positronic.utils.checkpoints` to find the best step within an experiment. Every training/conversion/inference run writes `run_metadata_*.yaml` with the full CLI command — read it to reconstruct the pipeline.
+
+### Automated Testing (sim_stack)
+
+Use `sim_stack` for automated sim eval — quick to convert, train, and evaluate.
+
+| Vendor | Default Codec | Interim | Latest Checkpoint |
+|--------|--------------|---------|-------------------|
+| groot | `ee_rot6d` | `s3://interim/sim_stack/groot/ee_rot6d/` | `s3://checkpoints/sim_stack/groot/ee_rot6d/230226/` |
+| lerobot | `ee` | `s3://interim/sim_stack/lerobot/ee/` | `s3://checkpoints/sim_stack/lerobot/230226-ee/` |
+| openpi | `ee` | `s3://interim/sim_stack/openpi/ee/` | `s3://checkpoints/sim_stack/openpi/ee/pi05_positronic_lowmem/230226/` |
+
+Other codecs available in interim (discoverable via S3 listing): `ee_rot6d_joints`, `ee_rot6d_traj`, `joints_traj` (groot); `ee_traj`, `joints_traj` (lerobot); `ee_joints`, `ee_traj`, `joints_traj` (openpi).
+
+### Production (phail_recovery)
+
+| Vendor | Default Codec | Interim | Latest Checkpoint |
+|--------|--------------|---------|-------------------|
+| groot | `ee_rot6d` | `s3://interim/phail_recovery/groot/ee_rot6d/` | `s3://checkpoints/phail_recovery/groot/phail_r_ee6_rel_240226/` |
+
+### Default Codecs per Vendor
+
+| Vendor | Default Codec | Configuronic Reference | GR00T Modality Config |
+|--------|--------------|----------------------|----------------------|
+| groot | `ee_rot6d` | `@positronic.vendors.gr00t.codecs.ee_rot6d` | `ee_rot6d` |
+| lerobot | `ee` | `@positronic.vendors.lerobot_0_3_3.codecs.ee` | — |
+| openpi | `ee` | `@positronic.vendors.openpi.codecs.ee` | — |
+
+### Datasets
+
+| Purpose | Dataset Config | Description |
+|---------|---------------|-------------|
+| Automated testing | `@positronic.cfg.ds.phail.sim_stack_cubes` | Simulated cube stacking (317 eps, 499MB) |
+| Production | `@positronic.cfg.ds.phail.phail_recovery` | Real DROID data with recovery episodes |
+| Production (unified) | `@positronic.cfg.ds.phail.phail_unified` | Single-task instruction variant |
+
 ## Prerequisites
 
 - Docker contexts configured for VMs: `vm-train`, `vm-train2`, `vm-train3`
@@ -38,6 +90,15 @@ This skill manages the Positronic training infrastructure on Nebius GPU VMs. It 
 | `positro/gr00t-base` | `gr00t/docker/` | - | Base image for GR00T |
 | `positro/openpi` | `positronic/docker/` | `positro/openpi-base` | OpenPI training and inference |
 | `positro/openpi-base` | `openpi/docker/` | - | Base image for OpenPI |
+| `positro/dreamzero` | `positronic/docker/` | `positro/dreamzero-base` | DreamZero inference |
+
+### Image Tags
+
+Images are tagged by branch name. `make push` in `docker/` auto-derives the tag from the current git branch and writes `docker/.env` so `docker compose` picks it up automatically.
+
+- **CI (main):** `:latest`, `:v<VERSION>`, `:<sha>`
+- **Local branches:** `:<branch-name>`, `:<sha>`
+- Override: `make push IMAGE_TAG=my-feature`
 
 ### Build Order for Cross-Repo Changes
 
@@ -137,12 +198,14 @@ From `docker/` directory (can run on `desktop`):
 
 ```bash
 CACHE_ROOT=/home/vertix docker --context desktop compose run --rm --pull always lerobot-convert convert \
-  --dataset.dataset=@positronic.cfg.ds.phail.phail \
-  --dataset.codec=@positronic.vendors.gr00t.codecs.ee_rot6d_joints \
-  --output_dir=s3://interim/phail/groot/ee_rot6d_joints/
+  --dataset.dataset=@positronic.cfg.ds.phail.sim_stack_cubes \
+  --dataset.codec=@positronic.vendors.gr00t.codecs.ee_rot6d \
+  --output_dir=s3://interim/sim_stack/groot/ee_rot6d/
 ```
 
 > **Note**: `CACHE_ROOT=/home/vertix` is needed when running from Mac — `$HOME` expands locally to `/Users/vertix`, but volume mounts must reference the remote host's paths. Harmless on Linux.
+
+The output path follows: `s3://interim/{dataset}/{vendor}/{codec}/`
 
 ### Available Codecs
 
@@ -165,13 +228,13 @@ From `docker/` directory, on H100 VM:
 
 ```bash
 docker --context vm-train compose run --rm --pull=always groot-train \
-  --input_path=s3://interim/sim_ft/groot_rot6d_q/ \
-  --output_path=s3://checkpoints/sim_ft/groot_rot6d_q/ \
+  --input_path=s3://interim/sim_stack/groot/ee_rot6d/ \
+  --output_path=s3://checkpoints/sim_stack/groot/ee_rot6d/ \
   --exp_name=YYMMDD \
   --num_train_steps=20000 \
   --save_steps=2000 \
   --num_workers=4 \
-  --modality_config=ee_rot6d_q
+  --modality_config=ee_rot6d
 ```
 
 ### GR00T Modality Configs
@@ -191,16 +254,16 @@ From `docker/` directory, on H100 VM:
 
 ```bash
 # 1. Generate stats (can run on desktop)
-docker compose run --rm openpi-stats \
-  --input_path=s3://interim/my_lerobot_data \
-  --output_path=s3://interim/openpi_assets
+CACHE_ROOT=/home/vertix docker --context desktop compose run --rm --pull always openpi-stats \
+  --input_path=s3://interim/sim_stack/openpi/ee/ \
+  --output_path=s3://interim/sim_stack/openpi/stats/
 
 # 2. Train (requires H100)
 docker --context vm-train compose run --rm --pull=always openpi-train \
-  --input_path=s3://interim/my_lerobot_data \
-  --stats_path=s3://interim/openpi_assets/assets/ \
-  --output_path=s3://checkpoints/openpi \
-  --exp_name=experiment_v1
+  --input_path=s3://interim/sim_stack/openpi/ee/ \
+  --stats_path=s3://interim/sim_stack/openpi/stats/assets/ \
+  --output_path=s3://checkpoints/sim_stack/openpi/ee/ \
+  --exp_name=YYMMDD
 ```
 
 ## Inference Servers
@@ -208,9 +271,9 @@ docker --context vm-train compose run --rm --pull=always openpi-train \
 ### GR00T Server (requires GPU)
 
 ```bash
-docker compose run --rm --service-ports groot-server \
-  ee_rot6d_joints \
-  --checkpoints_dir=s3://checkpoints/sim_ft/groot_rot6d_q/040126/
+CACHE_ROOT=/home/vertix docker --context desktop compose run --rm --pull always --service-ports groot-server \
+  ee_rot6d \
+  --checkpoints_dir=s3://checkpoints/sim_stack/groot/ee_rot6d/230226/
 ```
 
 **Available variants:** `ee`, `ee_joints`, `ee_rot6d`, `ee_rot6d_joints`, `ee_rot6d_rel`, `ee_rot6d_joints_rel`
@@ -220,22 +283,22 @@ The server exposes a WebSocket API on port 8000 (same as lerobot-server for inte
 ### OpenPI Server (requires H100)
 
 ```bash
-docker --context vm-train compose run --rm --service-ports openpi-server \
-  --checkpoints_dir=s3://checkpoints/openpi/pi05_positronic_lowmem/experiment_v1/
+docker --context vm-train compose run --rm --pull always --service-ports openpi-server \
+  --checkpoints_dir=s3://checkpoints/sim_stack/openpi/ee/pi05_positronic_lowmem/230226/
 ```
 
 ### LeRobot Server (SmolVLA — 0.4.x, can run on desktop)
 
 ```bash
-docker compose run --rm --service-ports lerobot-server \
-  --checkpoints_dir=s3://checkpoints/lerobot/experiment_v1/
+CACHE_ROOT=/home/vertix docker --context desktop compose run --rm --pull always --service-ports lerobot-server \
+  --checkpoints_dir=s3://checkpoints/sim_stack/lerobot/230226-ee/
 ```
 
 ### LeRobot/ACT Server (0.3.3, can run on desktop)
 
 ```bash
-docker compose run --rm --service-ports lerobot-0_3_3-server \
-  --checkpoints_dir=s3://checkpoints/act/experiment_v1/
+CACHE_ROOT=/home/vertix docker --context desktop compose run --rm --pull always --service-ports lerobot-0_3_3-server \
+  --checkpoints_dir=s3://checkpoints/sim_stack/lerobot/230226-ee/
 ```
 
 ## Inference Client
@@ -267,7 +330,7 @@ MUJOCO_GL=egl uv run positronic-inference sim \
 
 | Server Type | Codec Config | Notes |
 |-------------|--------------|-------|
-| GR00T | `ee_rot6d_joints` (positional variant arg) | Matches `modality_config=ee_rot6d_q` |
+| GR00T | `ee_rot6d` (positional variant arg) | Matches `modality_config=ee_rot6d` |
 | LeRobot (0.4.x) | `--codec=@positronic.vendors.lerobot.codecs.ee` | Default codec |
 | LeRobot ACT (0.3.3) | `--codec=@positronic.vendors.lerobot_0_3_3.codecs.ee` | Default codec |
 | OpenPI | `--codec=@positronic.vendors.openpi.codecs.ee` | Default codec |
@@ -276,11 +339,17 @@ MUJOCO_GL=egl uv run positronic-inference sim \
 
 Full workflow: start inference server → run sim episodes → view results.
 
-### 1. Start LeRobot inference server (on GPU machine)
+### 1. Start inference server (on GPU machine)
 
 ```bash
+# Example with LeRobot (can run on desktop):
 CACHE_ROOT=/home/vertix docker --context <machine> compose run -d --rm --pull always --service-ports lerobot-server \
-  --checkpoints_dir=s3://checkpoints/<path_to_experiment>/
+  --checkpoints_dir=s3://checkpoints/sim_stack/lerobot/230226-ee/
+
+# Example with GR00T (desktop or H100):
+CACHE_ROOT=/home/vertix docker --context <machine> compose run -d --rm --pull always --service-ports groot-server \
+  ee_rot6d \
+  --checkpoints_dir=s3://checkpoints/sim_stack/groot/ee_rot6d/230226/
 ```
 
 **Important**: Use `CACHE_ROOT=/home/vertix` when targeting remote Docker contexts (notebook, vm-train, etc.) because `$HOME` expands to the local Mac path, but volume mounts must reference paths on the remote host.
@@ -328,7 +397,7 @@ docker --context <machine> stop <container_id>
 
 Inference results go to `s3://inference/sim_stack_validation/<DDMMYY[-suffix]>/<model_type>/` where:
 - `<DDMMYY[-suffix]>` — date with optional descriptor (e.g., `160226-dinov3`)
-- `<model_type>` — `lerobot`, `groot`, or `openpi`
+- `<model_type>` — `lerobot`, `groot`, `openpi`, or `dreamzero`
 
 ## Monitoring Background Jobs
 

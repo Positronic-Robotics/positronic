@@ -101,7 +101,7 @@ def get_episodes_list(
     for idx, ep in enumerate(ds):
         try:
             episode_index = ep.pop('__episode_index__', idx)
-            mapping = {'__index__': idx + 1, **ep}
+            mapping = {'__index__': episode_index, **ep}
             episode_data = [_format_value(mapping.get(key), formatters.get(key), defaults.get(key)) for key in keys]
             row = [episode_index, episode_data]
 

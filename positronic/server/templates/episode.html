@@ -13,6 +13,76 @@ Episode {{ episode_id }} / {{ num_episodes }} - Positronic Dataset Viewer
     });
 </script>
 
+<!-- Filtered episode navigation via sessionStorage.
+     When users arrive from the episodes table, the table stores the current filtered
+     episode ID list and referrer URL in sessionStorage. This lets prev/next cycle through
+     only the filtered subset. This state is ephemeral — it doesn't survive a page refresh
+     or a shared/bookmarked link, which is acceptable for transient filter UI state. The
+     "proper" alternative would be server-side: the /episode/{id} endpoint accepts filter
+     query params (reusing the existing matches() helper from /api/episodes), computes the
+     filtered list, and passes prev_episode_id/next_episode_id/filtered_count/filtered_index
+     in the template context. That gives stable URLs but requires server and template changes. -->
+<script>
+    let filteredIds = (function() {
+        const raw = sessionStorage.getItem('filteredEpisodeIds');
+        if (!raw) return null;
+
+        let ids;
+        try { ids = JSON.parse(raw); } catch { return null; }
+        const currentId = {{ episode_id }};
+        if (!Array.isArray(ids) || ids.indexOf(currentId) === -1) return null;
+
+        const nav = document.getElementById('episode-nav');
+        const input = document.getElementById('episode-input');
+        const currentIndex = ids.indexOf(currentId);
+
+        // Switch to filtered mode: input shows 1-based position, not episode ID
+        nav.classList.add('episode-nav--filtered');
+        input.value = currentIndex + 1;
+        input.dataset.original = currentIndex + 1;
+        input.maxLength = String(ids.length).length;
+
+        const prevId = ids[(currentIndex - 1 + ids.length) % ids.length];
+        const nextId = ids[(currentIndex + 1) % ids.length];
+        document.getElementById('prev-btn').onclick = () => { window.location.href = `/episode/${prevId}`; };
+        document.getElementById('next-btn').onclick = () => { window.location.href = `/episode/${nextId}`; };
+        document.getElementById('episode-count').textContent = ` / ${ids.length}`;
+
+        // Add dismiss × and "Filtered" badge inside the nav bar, before "Ep."
+        const badge = document.createElement('span');
+        badge.className = 'filter-label';
+        badge.textContent = 'Filtered';
+
+        const dismiss = document.createElement('button');
+        dismiss.className = 'filter-dismiss';
+        dismiss.textContent = '\u00d7';
+        dismiss.onclick = () => {
+            sessionStorage.removeItem('filteredEpisodeIds');
+            sessionStorage.removeItem('episodesReferrerUrl');
+            nav.classList.remove('episode-nav--filtered');
+            input.value = currentId;
+            input.dataset.original = currentId;
+            input.maxLength = String({{ num_episodes }}).length;
+            document.getElementById('episode-count').textContent = ' / {{ num_episodes }}';
+            document.getElementById('prev-btn').onclick = () => { window.location.href = `/episode/{{ (episode_id - 1) % num_episodes }}`; };
+            document.getElementById('next-btn').onclick = () => { window.location.href = `/episode/{{ (episode_id + 1) % num_episodes }}`; };
+            document.getElementById('breadcrumb-root').href = '/';
+            filteredIds = null;
+            dismiss.remove();
+            badge.remove();
+        };
+        nav.prepend(badge);
+        nav.prepend(dismiss);
+
+        const referrerUrl = sessionStorage.getItem('episodesReferrerUrl');
+        if (referrerUrl) {
+            document.getElementById('breadcrumb-root').href = referrerUrl;
+        }
+
+        return ids;
+    })();
+</script>
+
 <script>
     const episodeForm = document.getElementById('episode-form');
     const episodeInput = document.getElementById('episode-input');
@@ -24,17 +94,32 @@ Episode {{ episode_id }} / {{ num_episodes }} - Positronic Dataset Viewer
     episodeForm.addEventListener('submit', (e) => {
         e.preventDefault();
         const value = parseInt(episodeInput.value);
-        if (isNaN(value) || value < 0 || value >= maxEpisodes) {
-            episodeInput.value = episodeInput.dataset.original;
-            return;
+        if (filteredIds) {
+            // In filtered mode, input is 1-based position
+            if (isNaN(value) || value < 1 || value > filteredIds.length) {
+                episodeInput.value = episodeInput.dataset.original;
+                return;
+            }
+            window.location.href = `/episode/${filteredIds[value - 1]}`;
+        } else {
+            if (isNaN(value) || value < 0 || value >= maxEpisodes) {
+                episodeInput.value = episodeInput.dataset.original;
+                return;
+            }
+            window.location.href = `/episode/${value}`;
         }
-        window.location.href = `/episode/${value}`;
     });
 
     episodeInput.addEventListener('blur', () => {
         const value = parseInt(episodeInput.value);
-        if (isNaN(value) || value < 0 || value >= maxEpisodes) {
-            episodeInput.value = episodeInput.dataset.original;
+        if (filteredIds) {
+            if (isNaN(value) || value < 1 || value > filteredIds.length) {
+                episodeInput.value = episodeInput.dataset.original;
+            }
+        } else {
+            if (isNaN(value) || value < 0 || value >= maxEpisodes) {
+                episodeInput.value = episodeInput.dataset.original;
+            }
         }
     });
 
@@ -61,18 +146,20 @@ Episode {{ episode_id }} / {{ num_episodes }} - Positronic Dataset Viewer
 <main class="main main--full-screen">
     <div class="header">
         <div class="breadcrumbs">
-            <a href="/" class="breadcrumb-link">{{ repo_id }}</a>
+            <a href="/" class="breadcrumb-link" id="breadcrumb-root">{{ repo_id }}</a>
             <span class="breadcrumb-separator">›</span>
-            <span class="breadcrumb-text">Ep. </span>
-            <button onclick="window.location.href='/episode/{{ (episode_id - 1) % num_episodes }}'"
-                class="btn btn-ghost" title="Previous episode">&lt;</button>
-            <form id="episode-form" class="episode-form" style="display: inline; margin: 0;">
-                <input type="text" id="episode-input" class="episode-input" value="{{ episode_id }}"
-                    data-original="{{ episode_id }}" maxlength="{{ num_episodes|string|length }}">
-            </form>
-            <button onclick="window.location.href='/episode/{{ (episode_id + 1) % num_episodes }}'"
-                class="btn btn-ghost" title="Next episode">&gt;</button>
-            <span class="breadcrumb-text"> / {{ num_episodes }}</span>
+            <span id="episode-nav" class="episode-nav">
+                <span class="breadcrumb-text">Ep. </span>
+                <button id="prev-btn" onclick="window.location.href='/episode/{{ (episode_id - 1) % num_episodes }}'"
+                    class="btn btn-ghost" title="Previous episode">&lt;</button>
+                <form id="episode-form" class="episode-form" style="display: inline; margin: 0;">
+                    <input type="text" id="episode-input" class="episode-input" value="{{ episode_id }}"
+                        data-original="{{ episode_id }}" maxlength="{{ num_episodes|string|length }}">
+                </form>
+                <button id="next-btn" onclick="window.location.href='/episode/{{ (episode_id + 1) % num_episodes }}'"
+                    class="btn btn-ghost" title="Next episode">&gt;</button>
+                <span class="breadcrumb-text" id="episode-count"> / {{ num_episodes }}</span>
+            </span>
             {% if task %}<span class="task-description"> : {{ task }}</span>{% endif %}
         </div>
     </div>

@@ -311,6 +311,19 @@ function populateEpisodesTable(columns) {
     tableBody.appendChild(row);
   }
 
+  // Store filtered episode IDs so the episode viewer can navigate within the filtered subset
+  if (!window.IS_GROUPED_TABLE) {
+    const hasFilters = Object.keys(filtersState.serverFilters).length > 0 ||
+      filteredEpisodes.length < currentEpisodes.length;
+    if (hasFilters) {
+      sessionStorage.setItem('filteredEpisodeIds', JSON.stringify(filteredEpisodes.map(([id]) => id)));
+      sessionStorage.setItem('episodesReferrerUrl', window.location.href);
+    } else {
+      sessionStorage.removeItem('filteredEpisodeIds');
+      sessionStorage.removeItem('episodesReferrerUrl');
+    }
+  }
+
   function getCellValue(entity, column) {
     if (column.renderer?.type === 'badge') {
       return createBadge(entity, column.renderer.options?.[entity]);
