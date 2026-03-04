@@ -33,7 +33,7 @@ dependencies = [
     "pos3>=0.2.0",
     "pyarrow",
     "pydantic",
-    "pyturbojpeg",
+    "pyturbojpeg<2",
     "pyyaml",
     "rerun-sdk==0.30.0",
     "robosuite",

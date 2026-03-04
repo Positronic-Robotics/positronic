@@ -202,11 +202,13 @@ def _wire(
 
     if sound is not None:
         world.connect(data_collection.sound, sound.wav_path)
-        world.connect(robot_arm.state, sound.level, receiver_wrapper=pimm.map(_wrench_to_level))
+        if robot_arm is not None:
+            world.connect(robot_arm.state, sound.level, receiver_wrapper=pimm.map(_wrench_to_level))
 
     if ds_agent is not None:
-        ds_agent.add_signal('controller_positions', controller_positions_serializer)
-        world.connect(webxr.controller_positions, ds_agent.inputs['controller_positions'])
+        if robot_arm is not None:
+            ds_agent.add_signal('controller_positions', controller_positions_serializer)
+            world.connect(webxr.controller_positions, ds_agent.inputs['controller_positions'])
         world.connect(data_collection.ds_agent_commands, ds_agent.command)
 
     return ds_agent
@@ -362,6 +364,17 @@ droid = cfn.Config(
 )
 
 
+human = cfn.Config(
+    main,
+    robot_arm=None,
+    gripper=None,
+    webxr=positronic.cfg.webxr.oculus,
+    sound=positronic.cfg.sound.sound,
+    cameras={'image.exterior': positronic.cfg.hardware.camera.zed_2i.override(view='left', resolution='hd720', fps=30)},
+    operator_position=OperatorPosition.BACK,
+)
+
+
 @pos3.with_mirror()
 def _internal_main():
     init_logging()
@@ -371,6 +384,7 @@ def _internal_main():
         'sim': main_sim,
         'sim_pnp': main_sim.override(loaders=positronic.cfg.simulator.multi_tote_loaders),
         'droid': droid,
+        'human': human,
     })
 
 

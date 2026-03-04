@@ -75,9 +75,9 @@ def remote(
     return codec.wrap(policy) if codec else policy
 
 
-@cfn.config(port=8000, weight=1.0, model_id=None, resize=640, horizon_sec=None, codec=None)
+@cfn.config(host=None, port=8000, weight=1.0, model_id=None, resize=640, horizon_sec=None, codec=None)
 def weighted_remote(
-    host: str,
+    host: str | None,
     port: int,
     weight: float,
     model_id: str | None,
@@ -85,6 +85,9 @@ def weighted_remote(
     horizon_sec: float | None,
     codec: Codec | None = None,
 ):
+    if host is None:
+        return None
+
     from positronic.policy.remote import RemotePolicy
 
     effective_resize = None if codec and codec.meta.get('image_sizes') else resize
@@ -92,11 +95,13 @@ def weighted_remote(
     return (codec.wrap(policy) if codec else policy), weight
 
 
-@cfn.config(groot=weighted_remote, openpi=weighted_remote, act=weighted_remote)
-def production(groot, openpi, act):
+@cfn.config(groot=weighted_remote, openpi=weighted_remote, act=weighted_remote, extra=None)
+def production(groot, openpi, act, extra):
     from positronic.policy import SampledPolicy
 
     entries = [e for e in [groot, openpi, act] if e is not None]
+    if extra:
+        entries.extend(e for e in extra if e is not None)
     if not entries:
         raise ValueError('At least one vendor policy must be enabled')
     policies, weights = zip(*entries, strict=False)

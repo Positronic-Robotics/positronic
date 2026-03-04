@@ -279,9 +279,11 @@ def _log_pose_signals(
         rr.send_columns(
             f'/3d/{key}',
             indexes=[rr.TimeColumn('time', timestamp=ts_arr)],
-            columns=rr.Points3D.columns(
-                positions=positions, colors=np.tile(color, (len(ts_arr), 1)), radii=np.full(len(ts_arr), 0.01)
-            ),
+            columns=[
+                *rr.Points3D.columns(positions=positions).partition([1] * len(ts_arr)),
+                *rr.Points3D.columns(colors=np.tile(color, (len(ts_arr), 1))).partition([1] * len(ts_arr)),
+                *rr.Points3D.columns(radii=np.full(len(ts_arr), 0.01)),
+            ],
         )
         _log_static_trail(f'/3d/{key}/trail/background', positions, color)
         active_path = f'/3d/{key}/trail/active'

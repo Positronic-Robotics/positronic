@@ -214,9 +214,9 @@ class EvalUI(pimm.ControlSystem):
                     tag='total_items_input',
                     callback=self.validate_items_callback,
                 ),
-                [State.WAITING],
+                [State.WAITING, State.REVIEWING],
             )
-            dpg.add_spacer(width=self.size(5))
+            dpg.add_spacer(width=self.size(20))
             self._register(
                 dpg.add_input_int(
                     label='Successful',
@@ -438,6 +438,7 @@ class EvalUI(pimm.ControlSystem):
 
         # Emit commands
         self.ds_writer_command.emit(DsWriterCommand.STOP(static_data=data))
+        self.inference_command.emit(InferenceCommand.RESET())
 
     def cancel(self, sender=None, app_data=None):
         if self.state != State.REVIEWING:
@@ -450,6 +451,7 @@ class EvalUI(pimm.ControlSystem):
 
         # Emit commands
         self.ds_writer_command.emit(DsWriterCommand.ABORT())
+        self.inference_command.emit(InferenceCommand.RESET())
 
     # --- Callbacks ---
 
@@ -458,8 +460,8 @@ class EvalUI(pimm.ControlSystem):
         if self.state != State.WAITING:
             return
 
-        # We need to update UI to ensure the new custom input gets correct state
-        self.update_ui(task_value=app_data)
+        # Only pass task_value when the task radio itself changed
+        self.update_ui(task_value=app_data if sender == 'task_radio' else None)
 
     def cap_callback(self, sender, app_data):
         self.cap_per_item = app_data
@@ -522,16 +524,11 @@ class EvalUI(pimm.ControlSystem):
             dpg.set_value('successful_items_input', 0)
             dpg.set_value('notes_input', '')
 
-        # Update total run cap text
+        # Update time text
         total_items = dpg.get_value('total_items_input')
         total_seconds = total_items * self.cap_per_item
-        mins = total_seconds // 60
-        secs = total_seconds % 60
-        if mins > 0:
-            text = f'Total run cap: {mins} min {secs} sec'
-        else:
-            text = f'Total run cap: {secs} sec'
-        dpg.set_value('total_run_cap_text', text)
+        cap_text = f'{total_seconds // 60}:{total_seconds % 60:02d}'
+        dpg.set_value('total_run_cap_text', f'Cap: {cap_text}')
 
     # --- Control System Run Loop ---
 
@@ -584,10 +581,13 @@ class EvalUI(pimm.ControlSystem):
         self.update_ui()
 
         while not should_stop.value and dpg.is_dearpygui_running():
-            # Check for time limit
+            # Check for time limit and update elapsed display
             if self.state == State.RUNNING and self.run_start_time:
                 elapsed = self.clock.now() - self.run_start_time
                 total_cap = dpg.get_value('total_items_input') * self.cap_per_item
+                elapsed_int = int(elapsed)
+                cap_text = f'{total_cap // 60}:{total_cap % 60:02d}'
+                dpg.set_value('total_run_cap_text', f'{elapsed_int // 60}:{elapsed_int % 60:02d} / {cap_text}')
                 if elapsed > total_cap:
                     self.stop_run('Ran out of time')
 

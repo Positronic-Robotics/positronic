@@ -4,12 +4,28 @@ import positronic.cfg.hardware.motors
 
 
 @cfn.config(
-    ip='172.168.0.2', relative_dynamics_factor=0.2, home_joints=[0.0, -0.31, 0.0, -1.65, 0.0, 1.522, 0.0], load=None
+    ip='172.168.0.2',
+    relative_dynamics_factor=0.2,
+    home_joints=[0.0, -0.31, 0.0, -1.65, 0.0, 1.522, 0.0],
+    load=None,
+    collision_coeff=2.0,
 )
-def franka(ip: str, relative_dynamics_factor: float, home_joints: list[float], load: tuple | None = None):
+def franka(
+    ip: str,
+    relative_dynamics_factor: float,
+    home_joints: list[float],
+    load: tuple | None = None,
+    collision_coeff: float = 2.0,
+):
     from positronic.drivers.roboarm import franka  # noqa: F401
 
-    return franka.Robot(ip=ip, relative_dynamics_factor=relative_dynamics_factor, home_joints=home_joints, load=load)
+    return franka.Robot(
+        ip=ip,
+        relative_dynamics_factor=relative_dynamics_factor,
+        home_joints=home_joints,
+        load=load,
+        collision_coeff=collision_coeff,
+    )
 
 
 franka_droid = franka.override(load=(0.9, [0.0, 0.0, 0.057], [0.002768, 0, 0, 0, 0.003149, 0, 0, 0, 0.000564]))

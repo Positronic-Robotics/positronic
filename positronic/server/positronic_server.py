@@ -482,7 +482,7 @@ def main(
     host: str = '0.0.0.0',
     port: int = 5000,
     debug: bool = False,
-    https: bool = False,
+    https: bool = True,
     reset_cache: bool = False,
     group_tables: dict[str, GroupTableConfig] | None = None,
     home_page: str | None = None,

@@ -140,7 +140,6 @@ def train(
     if os.getenv('WANDB_API_KEY'):
         cfg.wandb.enable = True
         cfg.wandb.project = 'lerobot-train'
-        cfg.wandb.run_id = exp_name
         cfg.wandb.disable_artifact = True
 
     _update_config(cfg, **cfg_kwargs)
