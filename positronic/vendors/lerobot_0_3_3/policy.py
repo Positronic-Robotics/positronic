@@ -58,7 +58,6 @@ class LerobotPolicy(Policy):
 
     def close(self):
         if self._policy is not None:
-            self._policy.to('cpu')
             del self._policy
             self._policy = None
             if self._device.startswith('cuda'):
