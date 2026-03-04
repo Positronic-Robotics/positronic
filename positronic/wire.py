@@ -37,8 +37,6 @@ def wire(
 
         for signal_name, emitter in cameras.items():
             world.connect(emitter, ds_agent.inputs[signal_name])
-        # Controller positions must be binded outside of this function
-        # TODO: DS commands must be binded outside of this function
         if robot_arm is not None:
             world.connect(policy.robot_commands, ds_agent.inputs['robot_commands'])
             world.connect(policy.target_grip, ds_agent.inputs['target_grip'])
