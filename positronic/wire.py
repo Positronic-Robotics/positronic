@@ -30,18 +30,19 @@ def wire(
         for signal_name in cameras.keys():
             ds_agent.add_signal(signal_name, Serializers.camera_images)
         if robot_arm is not None:
-            ds_agent.add_signal('target_grip')
             ds_agent.add_signal('robot_commands', Serializers.robot_command)
             ds_agent.add_signal('robot_state', Serializers.robot_state)
+        if gripper is not None:
+            ds_agent.add_signal('target_grip')
             ds_agent.add_signal('grip')
 
         for signal_name, emitter in cameras.items():
             world.connect(emitter, ds_agent.inputs[signal_name])
         if robot_arm is not None:
             world.connect(policy.robot_commands, ds_agent.inputs['robot_commands'])
-            world.connect(policy.target_grip, ds_agent.inputs['target_grip'])
             world.connect(robot_arm.state, ds_agent.inputs['robot_state'])
         if gripper is not None:
+            world.connect(policy.target_grip, ds_agent.inputs['target_grip'])
             world.connect(gripper.grip, ds_agent.inputs['grip'])
 
     if gui is not None:
