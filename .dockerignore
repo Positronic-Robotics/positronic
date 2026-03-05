@@ -19,9 +19,12 @@ venv
 env
 ENV
 
-# IDEs
+# IDEs and tools
 .vscode
 .idea
+.claude
+.ruff_cache
+.cursor
 *.swp
 *.swo
 *~
