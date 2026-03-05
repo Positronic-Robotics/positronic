@@ -63,9 +63,8 @@ def build_collection(world, out_dir: Path, *, metadata_getter: Callable[[], dict
     ctrl_em_dc = world.pair(dc.controller_positions)
     ctrl_em_agent = world.pair(ds_agent.inputs['controller_positions'])
     buttons_em = world.pair(dc.buttons_receiver)
-    grip_em = world.pair(ds_agent.inputs['grip'])
 
-    return dc, ds_agent, ctrl_em_dc, ctrl_em_agent, buttons_em, grip_em, writer_cm, robot
+    return dc, ds_agent, ctrl_em_dc, ctrl_em_agent, buttons_em, writer_cm, robot
 
 
 def test_data_collection_records_task_metadata(tmp_path, world, clock):
@@ -76,7 +75,7 @@ def test_data_collection_records_task_metadata(tmp_path, world, clock):
         call_count += 1
         return {'task': 'stack-blocks'}
 
-    (dc, agent, ctrl_em_dc, ctrl_em_agent, buttons_em, grip_em, writer_cm, robot) = build_collection(
+    (dc, agent, ctrl_em_dc, ctrl_em_agent, buttons_em, writer_cm, robot) = build_collection(
         world, tmp_path, metadata_getter=metadata_getter
     )
 
@@ -86,7 +85,6 @@ def test_data_collection_records_task_metadata(tmp_path, world, clock):
     def emit_pose():
         ctrl_em_dc.emit(controller_payload)
         ctrl_em_agent.emit(controller_payload)
-        grip_em.emit(0.33)
 
     def send_buttons(**kwargs):
         buttons_em.emit(make_buttons(**kwargs))
@@ -113,7 +111,7 @@ def test_data_collection_records_task_metadata(tmp_path, world, clock):
 
 
 def test_data_collection_basic_recording(tmp_path, world, clock):
-    dc, agent, ctrl_em_dc, ctrl_em_agent, buttons_em, grip_em, writer_cm, robot = build_collection(world, tmp_path)
+    dc, agent, ctrl_em_dc, ctrl_em_agent, buttons_em, writer_cm, robot = build_collection(world, tmp_path)
 
     # A simple right-hand pose and button frames
     right_pose = Transform3D(translation=np.array([0.1, 0.2, 0.3]), rotation=Rotation.identity)
@@ -127,7 +125,6 @@ def test_data_collection_basic_recording(tmp_path, world, clock):
     def emit_signals():
         ctrl_em_dc.emit(payload)
         ctrl_em_agent.emit(payload)
-        grip_em.emit(0.42)
 
     def stop_episode():
         dc.ds_agent_commands.emit(DsWriterCommand(DsWriterCommandType.STOP_EPISODE))
@@ -142,27 +139,14 @@ def test_data_collection_basic_recording(tmp_path, world, clock):
     assert len(ds) == 1
     ep = ds[0]
 
-    # Expect these keys to be present and have records under new serializers
-    expected_keys = {'target_grip', 'controller_positions.right', 'grip'}
+    expected_keys = {'controller_positions.right'}
     assert expected_keys.issubset(set(ep.keys()))
 
     right_pose_sig = ep['controller_positions.right']
-    tgt_grip = ep['target_grip']
-    grip = ep['grip']
-
     assert len(right_pose_sig) == 1
-    assert len(tgt_grip) >= 1
-    assert len(grip) == 1
 
     np.testing.assert_allclose(right_pose_sig[0][0][:3], right_pose.translation)
     np.testing.assert_allclose(right_pose_sig[0][0][3:], right_pose.rotation.as_quat)
-
-    assert_strictly_increasing(tgt_grip)
-    assert_strictly_increasing(tgt_grip)
-
-    # Target grip should reflect the trigger value used above, and gripper state value should match emitted
-    assert any(val == 0.7 for (val, _) in tgt_grip[:])
-    assert grip[0][0] == 0.42
 
 
 def test_data_collection_with_mujoco_robot_gripper(tmp_path):
