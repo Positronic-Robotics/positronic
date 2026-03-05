@@ -11,6 +11,7 @@ from typing import Any
 
 import configuronic as cfn
 import numpy as np
+import pos3
 from fastapi import WebSocket
 
 from positronic.offboard.server_utils import monitor_async_task, wait_for_subprocess_ready
@@ -26,9 +27,55 @@ DEFAULT_HF_REPO = 'GEAR-Dreams/DreamZero-DROID'
 DREAMZERO_ROOT = Path('/dreamzero')
 DREAMZERO_SCRIPT = DREAMZERO_ROOT / 'socket_test_optimized_AR.py'
 DREAMZERO_VENV = Path('/.venv')
+CACHE_DIR = Path('/root/.cache/dreamzero')
+
+WAN_REPO = 'Wan-AI/Wan2.1-I2V-14B-480P'
+UMT5_REPO = 'google/umt5-xxl'
+
+
+def _download_base_weights():
+    """Download Wan2.1-I2V-14B-480P and umt5-xxl tokenizer to persistent cache."""
+    python = str(DREAMZERO_VENV / 'bin' / 'python')
+    CACHE_DIR.mkdir(parents=True, exist_ok=True)
+
+    wan_dir = CACHE_DIR / 'Wan2.1-I2V-14B-480P'
+    umt5_dir = CACHE_DIR / 'umt5-xxl'
+
+    if not wan_dir.exists():
+        logger.info(f'Downloading {WAN_REPO} to {wan_dir}...')
+        subprocess.run(
+            [
+                python,
+                '-c',
+                f'from huggingface_hub import snapshot_download; '
+                f'snapshot_download("{WAN_REPO}", local_dir="{wan_dir}")',
+            ],
+            check=True,
+        )
+    else:
+        logger.info(f'Base weights already cached at {wan_dir}')
+
+    if not umt5_dir.exists():
+        logger.info(f'Downloading {UMT5_REPO} to {umt5_dir}...')
+        subprocess.run(
+            [
+                python,
+                '-c',
+                f'from huggingface_hub import snapshot_download; '
+                f'snapshot_download("{UMT5_REPO}", local_dir="{umt5_dir}")',
+            ],
+            check=True,
+        )
+    else:
+        logger.info(f'Tokenizer already cached at {umt5_dir}')
+
+    return wan_dir, umt5_dir
 
 
 def _download_checkpoint(model_path: str) -> Path:
+    if model_path.startswith('s3://'):
+        logger.info(f'Downloading checkpoint from S3: {model_path}')
+        return pos3.download(model_path)
     if '/' in model_path and not Path(model_path).exists():
         logger.info(f'Downloading checkpoint from HuggingFace: {model_path}')
         # huggingface_hub lives in the DreamZero base venv, not the positronic venv
@@ -161,7 +208,7 @@ class DreamZeroSubprocess:
             check_crashed=self._check_crashed,
             description='DreamZero subprocess',
             on_progress=on_progress,
-            max_wait=600.0,
+            max_wait=1200.0,
         )
 
     def stop(self):
@@ -236,6 +283,11 @@ class InferenceServer(VendorServer):
                 download_task, description='Downloading DreamZero checkpoint', on_progress=send_progress
             )
 
+            base_weights_task = asyncio.create_task(asyncio.to_thread(_download_base_weights))
+            await monitor_async_task(
+                base_weights_task, description='Downloading base weights', on_progress=send_progress
+            )
+
             logger.info(f'Starting DreamZero subprocess with {self.num_gpus} GPUs')
             sp = DreamZeroSubprocess(
                 model_path=str(download_task.result()),
@@ -267,14 +319,15 @@ def server(
     codec: Codec | None, model_path: str, num_gpus: int, port: int, enable_dit_cache: bool, recording_dir: str | None
 ):
     """Starts the DreamZero inference server."""
-    InferenceServer(
-        codec=codec,
-        model_path=model_path,
-        num_gpus=num_gpus,
-        port=port,
-        enable_dit_cache=enable_dit_cache,
-        recording_dir=recording_dir,
-    ).serve()
+    with pos3.mirror():
+        InferenceServer(
+            codec=codec,
+            model_path=model_path,
+            num_gpus=num_gpus,
+            port=port,
+            enable_dit_cache=enable_dit_cache,
+            recording_dir=recording_dir,
+        ).serve()
 
 
 if __name__ == '__main__':

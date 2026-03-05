@@ -233,3 +233,10 @@ services:
       - "8000:8000"
     shm_size: 16g
     ipc: host
+
+  dreamzero-train:
+    <<: *dreamzero-common
+    container_name: dreamzero-train
+    shm_size: 16g
+    ipc: host
+    entrypoint: ["uv", "run", "--python", "3.11", "python", "-m", "positronic.vendors.dreamzero.train"]

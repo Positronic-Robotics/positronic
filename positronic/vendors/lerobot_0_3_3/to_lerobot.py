@@ -135,7 +135,7 @@ def convert_to_lerobot_dataset(output_dir: str, fps: int | None, video: bool, da
     if 'gr00t_modality' in dataset.meta:
         modality = dataset.meta.get('gr00t_modality')
         if modality is not None:
-            modality['annotation'] = {'language.language_instruction': {'original_key': 'task_index'}}
+            modality.setdefault('annotation', {'language.language_instruction': {'original_key': 'task_index'}})
             modality_path = output_dir / 'meta' / 'modality.json'
             with modality_path.open('w', encoding='utf-8') as f:
                 json.dump(modality, f, indent=2)
@@ -158,7 +158,7 @@ def append_data_to_lerobot_dataset(output_dir: str, dataset: Dataset, fps: int |
     lr_modality_path = output_dir / 'meta' / 'modality.json'
     ds_modality = dataset.meta.get('gr00t_modality', None)
     if ds_modality is not None:
-        ds_modality['annotation'] = {'language.language_instruction': {'original_key': 'task_index'}}
+        ds_modality.setdefault('annotation', {'language.language_instruction': {'original_key': 'task_index'}})
     if lr_modality_path.exists():
         with lr_modality_path.open(encoding='utf-8') as f:
             lr_modality = json.load(f)

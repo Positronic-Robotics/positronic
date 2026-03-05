@@ -37,7 +37,7 @@ First start downloads the 14B checkpoint via HuggingFace (~10-20 min). Subsequen
 | Codec | Observation | Action | Use Case |
 |-------|-------------|--------|----------|
 | `joints` | Joint positions + grip + 3 cameras | Absolute joint position | Default for DROID checkpoint |
-| `joints_traj` | Same | Trajectory (recorded state) | Training data from recorded trajectories |
+| `joints_traj` | Same (320×176) | Trajectory (recorded state) | Training data conversion and trajectory inference |
 
 ## Technical Details
 
