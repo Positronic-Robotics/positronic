@@ -3,6 +3,7 @@ from unittest.mock import MagicMock
 import numpy as np
 
 from positronic.policy import RemotePolicy
+from positronic.policy.base import SampledPolicy
 
 
 def _mock_session(metadata=None):
@@ -196,3 +197,70 @@ def test_remote_policy_chunking(inference_server):
     assert mock_session.infer.call_count == 2
 
     policy.close()
+
+
+class TestMetaRecording:
+    """Regression: server metadata must always be captured in RemotePolicy.meta.
+
+    A dirty change on the notebook replaced ``self._session.metadata`` (lazy init via
+    property) with ``self.__session is not None`` (bypasses lazy init).  When meta() was
+    called before reset(), no server metadata was recorded — 5 episodes got "unknown" model.
+
+    These tests would FAIL with the buggy pattern and PASS with the current code.
+    """
+
+    def test_meta_before_reset_returns_server_metadata(self, inference_server):
+        """RemotePolicy.meta must return server metadata without prior reset().
+
+        Production flow: DsWriterCommandMetaBridge calls inference.meta() on START,
+        which calls policy.meta before any RESET command is issued.
+        """
+        host, port = inference_server
+        policy = RemotePolicy(host, port)
+
+        # No reset() — call meta directly
+        meta = policy.meta
+
+        assert meta['type'] == 'remote'
+        assert meta['server.model_name'] == 'test_model'
+
+        policy.close()
+
+    def test_sampled_policy_meta_before_reset(self, inference_server):
+        """SampledPolicy wrapping RemotePolicy must capture server metadata without reset().
+
+        SampledPolicy.__init__ picks a sub-policy but does NOT call reset() on it.
+        When DsWriterCommandMetaBridge calls meta() on the first START, the lazy init
+        in RemotePolicy._session must trigger a connection and capture server metadata.
+        """
+        host, port = inference_server
+        remote = RemotePolicy(host, port)
+        sampled = SampledPolicy(remote)
+
+        meta = sampled.meta
+
+        assert meta['type'] == 'remote'
+        assert meta['server.model_name'] == 'test_model'
+
+        remote.close()
+
+    def test_bypassing_lazy_init_loses_metadata(self):
+        """Demonstrates the exact bug: __session check bypasses lazy init.
+
+        The dirty code did:
+            if self.__session is not None:
+                result['server'] = self.__session.metadata
+        Instead of:
+            result['server'] = self._session.metadata  # triggers lazy init
+        """
+        policy = RemotePolicy('localhost', 0)
+
+        # Before any reset(), __session is None
+        assert policy._RemotePolicy__session is None
+
+        # Buggy pattern: check __session directly → no metadata captured
+        buggy_meta = {'type': 'remote'}
+        if policy._RemotePolicy__session is not None:
+            buggy_meta['server'] = policy._RemotePolicy__session.metadata
+
+        assert 'server' not in buggy_meta  # Bug: server metadata lost!
