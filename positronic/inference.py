@@ -228,7 +228,7 @@ main_sim_cfg = cfn.Config(
     camera_dict={'image.wrist': 'handcam_left_ph', 'image.exterior': 'back_view_ph', 'image.agent_view': 'agentview'},
     observers={
         'box_distance': BodyDistance('box_0_body', 'box_1_body'),
-        'stacking_success': StackingSuccess('box_0_body', 'box_1_body', 'hand_ph', full_report=True),
+        'stacking_success': StackingSuccess('box_0_body', 'box_1_body', 'hand_ph'),
     },
 )
 

@@ -22,6 +22,7 @@ dependencies = [
     "dearpygui",
     "dm_control",
     "fastapi",
+    "jinja2",  # Required by starlette's Jinja2Templates (optional dep of fastapi)
     "fire",
     "httpx",
     "msgpack",
