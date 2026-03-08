@@ -14,11 +14,13 @@ from positronic.vendors.dreamzero.server import DREAMZERO_ROOT, DREAMZERO_VENV, 
     num_gpus=1,
     max_steps=100,
     learning_rate=1e-5,
+    weight_decay=1e-5,
     save_steps=1000,
     batch_size=1,
     gradient_accumulation_steps=1,
     warmup_ratio=0.05,
-    dataloader_num_workers=10,
+    dataloader_num_workers=1,
+    deepspeed=None,
     resume=False,
     extra_args=[],
 )
@@ -29,11 +31,13 @@ def main(
     num_gpus: int,
     max_steps: int,
     learning_rate: float,
+    weight_decay: float,
     save_steps: int,
     batch_size: int,
     gradient_accumulation_steps: int,
     warmup_ratio: float,
     dataloader_num_workers: int,
+    deepspeed: str | None,
     resume: bool,
     extra_args: list[str],
 ):
@@ -74,11 +78,12 @@ def main(
             f'per_device_train_batch_size={batch_size}',
             f'gradient_accumulation_steps={gradient_accumulation_steps}',
             f'dataloader_num_workers={dataloader_num_workers}',
+            'dataloader_pin_memory=false',
             'bf16=true',
             'tf32=true',
-            f'training_args.deepspeed={DREAMZERO_ROOT}/groot/vla/configs/deepspeed/zero2.json',
             f'training_args.learning_rate={learning_rate}',
             f'training_args.warmup_ratio={warmup_ratio}',
+            f'weight_decay={weight_decay}',
             f'max_steps={max_steps}',
             f'save_steps={save_steps}',
             f'output_dir={output_dir}',
@@ -90,6 +95,8 @@ def main(
             f'vae_pretrained_path={wan_dir}/Wan2.1_VAE.pth',
             f'tokenizer_path={umt5_dir}',
         ]
+        if deepspeed is not None:
+            command.append(f'training_args.deepspeed={deepspeed}')
         command.extend(extra_args)
 
         env = os.environ.copy()
@@ -101,5 +108,34 @@ def main(
         subprocess.run(command, check=True, cwd=str(DREAMZERO_ROOT), env=env)
 
 
+# h100x1: DeepSpeed ZeRO-2 is required — the 14B model doesn't fit on a single H100 without it.
+# However, on 1 GPU ZeRO-2 can't shard optimizer state, so DeepSpeed's native checkpoint save
+# writes the full frozen model (~91GB) in a single torch.save() call that hits PyTorch's ZIP64
+# bug. We tried exclude_frozen_parameters=True (reduces to ~1.7GB) but DeepSpeed's
+# load_checkpoint doesn't support loading checkpoints saved with exclude_frozen_parameters,
+# making resume fail with missing keys.
+#
+# Workaround: training_args.save_only_model=true skips DeepSpeed's checkpoint entirely. The
+# LoRA adapter (217MB model.safetensors) is still saved by save_lora_only. On resume, LoRA
+# weights are loaded but optimizer state (Adam momentum/variance) resets — this is recoverable
+# within ~100 steps for LoRA fine-tuning.
+#
+# h100x8: ZeRO-2 shards across 8 GPUs (~12GB per shard), no ZIP64 issue. Full DeepSpeed
+# checkpoints are saved, so resume restores optimizer state exactly.
+h100x1 = main.override(
+    num_gpus=1,
+    batch_size=1,
+    gradient_accumulation_steps=8,
+    deepspeed=f'{DREAMZERO_ROOT}/groot/vla/configs/deepspeed/zero2.json',
+    extra_args=['+training_args.save_only_model=true'],
+)
+h100x8 = main.override(
+    num_gpus=8,
+    batch_size=1,
+    gradient_accumulation_steps=1,
+    deepspeed=f'{DREAMZERO_ROOT}/groot/vla/configs/deepspeed/zero2.json',
+)
+
+
 if __name__ == '__main__':
-    cfn.cli(main)
+    cfn.cli({'h100x1': h100x1, 'h100x8': h100x8})

@@ -86,8 +86,8 @@ class DreamZeroObservationCodec(Codec):
             lerobot_features['action.joint_position'] = lerobot_state(7)
             lerobot_features['action.gripper_position'] = lerobot_state(1)
             gr00t_modality['action'] = {
-                'joint_position': {'start': 0, 'end': 7},
-                'gripper_position': {'start': 0, 'end': 1},
+                'joint_position': {'start': 0, 'end': 7, 'original_key': 'action.joint_position'},
+                'gripper_position': {'start': 0, 'end': 1, 'original_key': 'action.gripper_position'},
             }
 
         self._training_meta: dict[str, Any] = {'lerobot_features': lerobot_features, 'gr00t_modality': gr00t_modality}
