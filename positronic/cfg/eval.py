@@ -481,10 +481,7 @@ FIXED_ITEM_COUNTS = {internal.SCISSORS_TASK: 10, internal.BATTERIES_TASK: 8}
 
 
 def calculate_units(episode: Episode) -> int:
-    """Estimates the number of pick-and-place operations.
-
-    This function is vibe-coded with Gemini 3 Pro (High). It works fine as a heuristic.
-    """
+    """Estimates the number of pick-and-place operations. Vibe-coded heuristic."""
     if episode['task'] in FIXED_ITEM_COUNTS:
         return FIXED_ITEM_COUNTS[episode['task']]
 
@@ -545,9 +542,10 @@ def calculate_units(episode: Episode) -> int:
 # PhAIL benchmark (real robot bin-to-bin picking evaluation)
 # ========================================================================================
 
+HUMAN_MODEL = 'Human'
 TELEOP_MODEL = 'Robot teleoperated by Human'
 
-PHAIL_MODEL_DISPLAY = {'openpi': 'Compass', 'groot': 'Sequoia', 'act': 'Maestro', 'human': 'Human'}
+PHAIL_MODEL_DISPLAY = {'openpi': 'Compass', 'groot': 'Sequoia', 'act': 'Maestro', 'human': HUMAN_MODEL}
 
 PHAIL_MODEL_ICON = RendererConfig(
     type='icon',
@@ -555,7 +553,7 @@ PHAIL_MODEL_ICON = RendererConfig(
         'Compass': {'src': '/static/icons/compass.svg'},
         'Sequoia': {'src': '/static/icons/sequoia.svg'},
         'Maestro': {'src': '/static/icons/maestro.svg'},
-        'Human': {'src': '/static/icons/human.svg'},
+        HUMAN_MODEL: {'src': '/static/icons/human.svg'},
         TELEOP_MODEL: {'src': '/static/icons/teleop.svg'},
     },
 )
@@ -619,7 +617,7 @@ _phail_derives = Derive(
 )
 
 phail_inference = base_cfg.transform.override(
-    base=base_cfg.local_all,
+    base=base_cfg.local_all.override(path='s3://inference/phail_final/'),
     transforms=[
         Group(
             Identity(
@@ -668,7 +666,7 @@ phail_human = base_cfg.transform.override(
             Identity(),
             Derive(**{
                 **_PHAIL_BASELINE,
-                'model': FromValue('Human'),
+                'model': FromValue(HUMAN_MODEL),
                 'eval.successful_items': FromValue(8),
                 'eval.total_items': FromValue(8),
                 'units': FromValue('8/8'),
@@ -733,7 +731,7 @@ def phail_leaderboard():
             'count': count,
             'UPH': total_items / (total_duration / 3600) if total_duration > 0 else None,
             'completion': completion,
-            'MTBF': total_duration / failed_count if failed_count > 0 else None,
+            'MTBF': total_duration / failed_count / 60 if failed_count > 0 else None,
         }
 
     format_table = {
@@ -742,7 +740,7 @@ def phail_leaderboard():
         'UPH': C(label='UPH', subtitle='Units Per Hour', format='%.1f', align='right'),
         'completion': C(label='Done %', subtitle='Completed / Total Operations', format='%.1f%%', align='right'),
         'MTBF': C(
-            label='MTBF/A', subtitle='Mean Time Between Failures/Assists', format='%.0f sec', default='-', align='right'
+            label='MTBF/A', subtitle='Mean Time Between Failures/Assists', format='%.1f min', default='-', align='right'
         ),
     }
 
