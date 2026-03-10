@@ -766,7 +766,7 @@ def phail_leaderboard():
 #   uv run python -m positronic.cfg.eval real --dataset.base.path=s3://inference/real/191225/
 #
 # PhAIL benchmark:
-#   uv run python -m positronic.cfg.eval phail --dataset.base.path=s3://inference/phail_final/
+#   uv run python -m positronic.cfg.eval phail --dataset.datasets.0.base.path=s3://inference/phail_final/
 # ========================================================================================
 
 server = server_main.override(
