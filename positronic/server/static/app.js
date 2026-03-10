@@ -359,7 +359,7 @@ function populateEpisodesTable(columns) {
     const viewLink = document.createElement('a');
     viewLink.className = 'btn btn-primary btn-small';
     if (window.IS_GROUPED_TABLE) {
-      const filters = { ...groupFilters, ...filtersState.filters };
+      const filters = { ...groupFilters, ...filtersState.serverFilters, ...filtersState.filters };
       const urlParams = new URLSearchParams(filters);
       const episodesUrl = window.EPISODES_URL || '/';
       viewLink.href = `${episodesUrl}?${urlParams.toString()}`;
