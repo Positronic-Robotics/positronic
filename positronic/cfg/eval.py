@@ -403,17 +403,18 @@ def sim_episodes_table():
     }
 
 
+def _effective_duration(key: str, ep: Episode) -> float:
+    t = ep.get(key)
+    return t if t is not None else ep.duration_ns / 1e9
+
+
 @cfn.config()
 def sim_checkpoint_table():
     """Grouped table by checkpoint with UPH and MTBF metrics."""
 
-    def _effective_duration(ep):
-        t = ep['success_time']
-        return t if t is not None else ep.duration_ns / 1e9
-
     def group_fn(episodes: list[Episode]):
         count = len(episodes)
-        total_duration = sum(_effective_duration(ep) for ep in episodes)
+        total_duration = sum(_effective_duration('success_time', ep) for ep in episodes)
         successful = [ep for ep in episodes if ep['success']]
         failed = [ep for ep in episodes if not ep['success']]
 
@@ -488,52 +489,27 @@ PHAIL_MODEL_ICON = RendererConfig(
 PHAIL_OUTCOME_BADGE = RendererConfig(
     type='badge',
     options={
-        'pass': {'label': 'Pass', 'variant': 'success'},
-        'fail': {'label': 'Fail', 'variant': 'danger'},
-        'safety': {'label': 'Safety', 'variant': 'warning'},
+        'Success': {'label': 'Pass', 'variant': 'success'},
+        'Fail': {'label': 'Fail', 'variant': 'danger'},
+        'Stalled': {'label': 'Fail', 'variant': 'danger'},
+        'Ran out of time': {'label': 'Fail', 'variant': 'danger'},
+        'Safety': {'label': 'Safety', 'variant': 'warning'},
     },
 )
 
 
 def phail_model(ep: Episode) -> str:
-    server_type = ep.get('inference.policy.server.type', '')
-    return PHAIL_MODEL_DISPLAY.get(server_type, server_type)
+    return PHAIL_MODEL_DISPLAY.get(ep.get('inference.policy.server.type', ''), '')
 
 
-def phail_task(ep: Episode) -> str:
-    obj = ep.get('eval.object', '')
-    return f'Pick-and-place: {obj}' if obj else ''
-
-
-def phail_equipment(ep: Episode) -> str:
-    return 'DROID'
-
-
-def phail_outcome(ep: Episode) -> str:
-    outcome = ep.get('eval.outcome', '')
-    if outcome == 'Success':
-        return 'pass'
-    if outcome == 'Safety':
-        return 'safety'
-    return 'fail'
-
-
-def phail_success_bool(ep: Episode) -> bool:
-    return ep.get('eval.outcome') == 'Success'
-
-
-def phail_completion_rate(ep: Episode) -> float:
+def phail_completion(ep: Episode) -> float:
     s = ep.get('eval.successful_items', 0)
     t = ep.get('eval.total_items', 0)
     return 100 * s / t if t else 0.0
 
 
-def phail_units_display(ep: Episode) -> str:
+def phail_units(ep: Episode) -> str:
     return f'{ep.get("eval.successful_items", 0)}/{ep.get("eval.total_items", 0)}'
-
-
-def phail_uph_time(ep: Episode) -> float | None:
-    return ep.get('eval.duration')
 
 
 def phail_uph(ep: Episode) -> float | None:
@@ -552,15 +528,11 @@ phail_episodes = base_cfg.transform.override(
         Group(
             Identity(),
             Derive(
-                task_code=phail_task,
                 model=phail_model,
-                equipment=phail_equipment,
-                outcome=phail_outcome,
-                success_bool=phail_success_bool,
-                units_display=phail_units_display,
-                uph_time=phail_uph_time,
+                equipment=lambda ep: 'DROID',
+                units=phail_units,
                 uph=phail_uph,
-                completion_rate=phail_completion_rate,
+                completion=phail_completion,
                 started=started,
             ),
         )
@@ -573,44 +545,37 @@ def phail_episodes_table():
     return {
         '__index__': C(label='#', format='%d'),
         'model': C(label='Model', filter=True, renderer=PHAIL_MODEL_ICON),
-        'task_code': C(label='Task', filter=True),
+        'eval.object': C(label='Task', filter=True),
         'started': C(label='Started', format='%Y-%m-%d %H:%M'),
-        'units_display': C(label='Units', align='right'),
+        'units': C(label='Units', align='right'),
         'uph': C(label='UPH', subtitle='Units Per Hour', format='%.1f', default='-', align='right'),
-        'completion_rate': C(label='Done %', subtitle='Completed / Total Operations', format='%.1f%%', align='right'),
-        'outcome': C(label='Status', renderer=PHAIL_OUTCOME_BADGE, align='center'),
+        'completion': C(label='Done %', subtitle='Completed / Total Operations', format='%.1f%%', align='right'),
+        'eval.outcome': C(label='Status', renderer=PHAIL_OUTCOME_BADGE, align='center'),
     }
 
 
 @cfn.config()
 def phail_leaderboard():
-    def _effective_duration(ep):
-        t = ep['uph_time']
-        return t if t is not None else ep.duration_ns / 1e9
-
     def group_fn(episodes: list[Episode]):
         count = len(episodes)
-        total_duration = sum(_effective_duration(ep) for ep in episodes)
+        total_duration = sum(_effective_duration('eval.duration', ep) for ep in episodes)
         total_items = sum(ep.get('eval.successful_items', 0) for ep in episodes)
-        successful_count = sum(1 for ep in episodes if ep['success_bool'])
-        failed_count = count - successful_count
+        failed_count = sum(1 for ep in episodes if ep.get('eval.outcome') != 'Success')
         total_possible = sum(ep.get('eval.total_items', 0) for ep in episodes)
-        completion_rate = 100 * total_items / total_possible if total_possible > 0 else 0
+        completion = 100 * total_items / total_possible if total_possible > 0 else 0
 
         return {
             'model': episodes[0]['model'],
-            'equipment': episodes[0].get('equipment', 'DROID'),
-            'task_code': episodes[0].get('task_code', ''),
             'count': count,
             'UPH': total_items / (total_duration / 3600) if total_duration > 0 else 0,
-            'completion_rate': completion_rate,
+            'completion': completion,
             'MTBF': total_duration / failed_count if failed_count > 0 else None,
         }
 
     format_table = {
         'model': C(label='Model', renderer=PHAIL_MODEL_ICON),
         'UPH': C(label='UPH', subtitle='Units Per Hour', format='%.1f', align='right'),
-        'completion_rate': C(label='Done %', subtitle='Completed / Total Operations', format='%.1f%%', align='right'),
+        'completion': C(label='Done %', subtitle='Completed / Total Operations', format='%.1f%%', align='right'),
         'MTBF': C(
             label='MTBF/A', subtitle='Mean Time Between Failures/Assists', format='%.0f sec', default='-', align='right'
         ),
@@ -620,7 +585,7 @@ def phail_leaderboard():
         group_keys='model',
         group_fn=group_fn,
         format_table=format_table,
-        group_filter_keys={'equipment': 'Equipment', 'task_code': 'Task'},
+        group_filter_keys={'equipment': 'Equipment', 'eval.object': 'Task'},
         default_sort=SortConfig(column='UPH'),
     )
 

@@ -12,19 +12,16 @@ These datasets remain on the private s3://raw/ bucket and include:
 import configuronic as cfn
 import pos3
 
-from positronic.cfg.eval import started
-from positronic.dataset import Episode
 from positronic.dataset.dataset import ConcatDataset, FilterDataset
 from positronic.dataset.local_dataset import load_all_datasets
 from positronic.dataset.transforms import TransformedDataset, agg_fraction_true, agg_max, agg_percentile
 from positronic.dataset.transforms.episode import Concat, Derive, FromValue, Group, Identity, Rename
 from positronic.dataset.transforms.quality import cmd_lag, cmd_velocity, idle_mask, jerk
 from positronic.server.positronic_server import ColumnConfig as C
-from positronic.server.positronic_server import GroupTableConfig, RendererConfig, SortConfig
 from positronic.server.positronic_server import main as server_main
 from positronic.utils.logging import init_logging
 
-from . import concat_ds, group, local, local_all, transform
+from . import concat_ds, local, transform
 
 # Task constants
 TOWELS_TASK = 'Pick all the towels one by one from transparent tote and place them into the large grey tote.'
@@ -156,166 +153,6 @@ full = concat_ds.override(datasets=[droid, sim])
 
 
 # =============================================================================
-# PhAIL production evaluation — derived metrics and visualization server
-# =============================================================================
-
-
-TASK_CODES = {
-    TOWELS_TASK: 'Towels',
-    SPOONS_TASK: 'Wooden spoons',
-    SCISSORS_TASK: 'Scissors',
-    BATTERIES_TASK: 'Batteries',
-}
-
-
-def phail_task_code(ep: Episode) -> str:
-    obj = ep.get('eval.object', '')
-    if obj:
-        return obj
-    return TASK_CODES.get(ep.get('task', ''), ep.get('task', ''))
-
-
-HOST_TO_MODEL = {'desktop': 'groot', 'vm-openpi': 'openpi', 'localhost': 'act'}
-
-
-def phail_model(ep: Episode) -> str:
-    policy_type = ep.get('inference.policy.type', '')
-    if policy_type == 'remote':
-        server_type = ep.get('inference.policy.server.type', '')
-        if server_type:
-            return server_type
-        return HOST_TO_MODEL.get(ep.get('inference.policy.host', ''), 'unknown')
-    return policy_type or 'unknown'
-
-
-def outcome_category(ep: Episode) -> str:
-    """Map eval outcomes to display categories: Success, Fail, Safety, System."""
-    raw = ep.get('eval.outcome', '')
-    if raw == 'Success':
-        return 'Success'
-    if raw in ('Fail', 'Stalled', 'Ran out of time'):
-        return 'Fail'
-    if raw == 'Safety':
-        return 'Safety'
-    return 'System'
-
-
-def units_display(ep: Episode) -> str:
-    items = ep.get('eval.successful_items')
-    total = ep.get('eval.total_items')
-    if items is not None and total is not None:
-        return f'{items}/{total}'
-    return '-'
-
-
-def success_rate(ep: Episode) -> float:
-    items = ep.get('eval.successful_items', 0)
-    total = ep.get('eval.total_items', 0)
-    if total == 0:
-        return 0.0
-    return 100 * items / total
-
-
-def uph(ep: Episode) -> float | None:
-    items = ep.get('eval.successful_items', 0)
-    if items == 0:
-        return None
-    return items / (ep.duration_ns / 1e9 / 3600)
-
-
-OUTCOME_RENDERER = RendererConfig(
-    type='badge',
-    options={
-        'Success': {'label': 'Success', 'variant': 'success'},
-        'Fail': {'label': 'Fail', 'variant': 'warning'},
-        'Safety': {'label': 'Safety', 'variant': 'danger'},
-        'System': {'label': 'System', 'variant': 'secondary'},
-    },
-)
-
-
-phail_episodes = transform.override(
-    base=local_all,
-    transforms=[
-        group.override(
-            transforms=[
-                Identity(),
-                Derive(
-                    task_code=phail_task_code,
-                    model=phail_model,
-                    outcome=outcome_category,
-                    units_display=units_display,
-                    uph=uph,
-                    success_rate=success_rate,
-                    started=started,
-                ),
-            ]
-        )
-    ],
-)
-
-
-@cfn.config()
-def phail_episodes_table():
-    return {
-        '__index__': C(label='#', format='%d'),
-        '__duration__': C(label='Duration', format='%.1f sec'),
-        'task_code': C(label='Task', filter=True),
-        'model': C(label='Model', filter=True),
-        'outcome': C(label='Outcome', filter=True, renderer=OUTCOME_RENDERER),
-        'units_display': C(label='Units'),
-        'uph': C(label='UPH', format='%.1f', default='-'),
-        'success_rate': C(label='Success', format='%.1f%%'),
-        'started': C(label='Started', format='%Y-%m-%d %H:%M:%S'),
-    }
-
-
-@cfn.config()
-def phail_leaderboard():
-    def group_fn(episodes: list[Episode]):
-        count = len(episodes)
-        total_duration = sum(ep.duration_ns / 1e9 for ep in episodes)
-        total_units = sum(ep.get('eval.successful_items', 0) for ep in episodes)
-        total_possible = sum(ep.get('eval.total_items', 0) for ep in episodes)
-        sr = 100 * total_units / total_possible if total_possible > 0 else 0
-        failed_count = sum(1 for ep in episodes if ep['outcome'] != 'Success')
-
-        return {
-            'model': episodes[0]['model'],
-            'task_code': episodes[0]['task_code'],
-            'count': count,
-            'UPH': total_units / (total_duration / 3600) if total_duration > 0 else 0,
-            'success_rate': sr,
-            'MTBF': total_duration / failed_count if failed_count > 0 else None,
-        }
-
-    format_table = {
-        'model': C(label='Model'),
-        'count': C(label='Runs', format='%d'),
-        'UPH': C(label='UPH', format='%.1f'),
-        'success_rate': C(label='Success', format='%.1f%%'),
-        'MTBF': C(label='MTBF', format='%.1f sec', default='-'),
-    }
-
-    return GroupTableConfig(
-        group_keys=('model',),
-        group_fn=group_fn,
-        format_table=format_table,
-        group_filter_keys={'task_code': 'Task'},
-        default_sort=SortConfig(column='UPH'),
-    )
-
-
-phail_server = server_main.override(
-    dataset=phail_episodes,
-    ep_table_cfg=phail_episodes_table,
-    group_tables={'leaderboard': phail_leaderboard},
-    home_page='leaderboard',
-    port=5001,
-)
-
-
-# =============================================================================
 # Quality signal debugging server for internal DROID dataset
 # =============================================================================
 
@@ -357,4 +194,4 @@ droid_debug = server_main.override(
 if __name__ == '__main__':
     init_logging()
     with pos3.mirror():
-        cfn.cli({'phail': phail_server, 'droid_debug': droid_debug})
+        cfn.cli(droid_debug)
