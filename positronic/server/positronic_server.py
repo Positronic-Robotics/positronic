@@ -20,7 +20,7 @@ import pos3
 import rerun as rr
 import uvicorn
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import HTMLResponse, StreamingResponse
+from fastapi.responses import HTMLResponse, RedirectResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from starlette.requests import Request
@@ -245,10 +245,12 @@ class ColumnConfig:
     """
 
     label: str
+    subtitle: str | None = None
     format: str | None = None
     default: Any = None
     renderer: RendererConfig | None = None
     filter: bool = False
+    align: str | None = None
 
 
 @dataclass
@@ -294,6 +296,12 @@ def parse_table_cfg(table_cfg: TableConfig) -> tuple:
         column: dict[str, Any] = {'key': key, 'label': cfg.label}
         formatters[key] = cfg.format
         defaults[key] = cfg.default
+
+        if cfg.subtitle:
+            column['subtitle'] = cfg.subtitle
+
+        if cfg.align:
+            column['align'] = cfg.align
 
         if cfg.renderer:
             column['renderer'] = asdict(cfg.renderer)
@@ -359,12 +367,13 @@ async def api_groups(request: Request, suffix: str):
     groups = defaultdict(list)
     group_filters = {key: {'label': label or key, 'values': set()} for key, label in cfg.group_filter_keys.items()}
     for episode in ds:
-        # Apply filters
+        # Always collect all filter values regardless of active filters
+        for filter_key in cfg.group_filter_keys:
+            group_filters[filter_key]['values'].add(episode.static.get(filter_key))
+        # Apply filters for grouping
         match = all(episode.static[key] == value for key, value in active_filters.items())
         if match:
             groups[_group_id(episode, group_keys)].append(episode)
-            for filter_key in cfg.group_filter_keys:
-                group_filters[filter_key]['values'].add(episode.static.get(filter_key))
 
     rows = []
     for group_id, episodes in groups.items():
@@ -441,6 +450,28 @@ def default_table() -> TableConfig:
         '__duration__': ColumnConfig(label='Duration', format='%.2f sec'),
         'task': ColumnConfig(label='Task', filter=True),
     }
+
+
+def _start_http_redirect(host: str, https_port: int, primary_host: str):
+    """Start a background HTTP server that redirects all requests to HTTPS."""
+    redirect_app = FastAPI()
+
+    @redirect_app.api_route('/{path:path}', methods=['GET', 'HEAD', 'POST', 'PUT', 'DELETE', 'PATCH'])
+    async def redirect_to_https(request: Request, path: str):
+        target = f'https://{primary_host}:{https_port}/{path}'
+        if request.url.query:
+            target += f'?{request.url.query}'
+        return RedirectResponse(url=target, status_code=301)
+
+    http_port = https_port + 1
+    logging.info(f'Starting HTTP->HTTPS redirect on http://{primary_host}:{http_port}')
+    t = threading.Thread(
+        target=uvicorn.run,
+        args=(redirect_app,),
+        kwargs={'host': host, 'port': http_port, 'log_level': 'warning'},
+        daemon=True,
+    )
+    t.start()
 
 
 def _generate_self_signed_cert(host: str) -> dict[str, str]:
@@ -570,6 +601,10 @@ def main(
     ssl_kwargs = _generate_self_signed_cert(primary_host) if https else {}
     scheme = 'https' if https else 'http'
     logging.info(f'Starting server on {scheme}://{primary_host}:{port}')
+
+    if https:
+        _start_http_redirect(host, port, primary_host)
+
     uvicorn.run(app, host=host, port=port, log_level='debug' if debug else 'info', **ssl_kwargs)
 
 

@@ -215,7 +215,7 @@ thead {
 
 th,
 td {
-  padding: 0.75rem 0.75rem;
+  padding: 0.75rem 2.1rem 0.75rem 0.75rem;
   text-align: left;
   white-space: nowrap;
 }
@@ -237,6 +237,47 @@ th:last-child {
   border-top-right-radius: var(--radius-lg);
 }
 
+.column-info {
+  position: absolute;
+  right: 0.8rem;
+  top: 50%;
+  transform: translateY(-50%);
+  cursor: pointer;
+  font-size: 0.85rem;
+  color: var(--text-muted);
+}
+
+.column-info:hover {
+  color: var(--text-secondary);
+}
+
+.column-info::after {
+  content: attr(data-tooltip);
+  position: absolute;
+  top: calc(100% + 0.5rem);
+  left: 50%;
+  transform: translateX(-50%);
+  background: var(--bg-elevated);
+  color: var(--text-primary);
+  border: 1px solid var(--border-subtle);
+  border-radius: 0.375rem;
+  padding: 0.4rem 0.65rem;
+  font-size: 0.78rem;
+  font-weight: 400;
+  text-transform: none;
+  letter-spacing: 0;
+  white-space: nowrap;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.15s ease;
+  z-index: 10;
+}
+
+.column-info:hover::after,
+.column-info.active::after {
+  opacity: 1;
+}
+
 th.sortable {
   cursor: pointer;
   user-select: none;
@@ -250,11 +291,12 @@ th.sortable:hover {
 
 th.sortable::after {
   content: '';
-  display: inline-block;
+  position: absolute;
+  right: 0.15rem;
+  top: 50%;
+  transform: translateY(-50%);
   width: 0;
   height: 0;
-  margin-left: 0.4rem;
-  vertical-align: middle;
   border-left: 4px solid transparent;
   border-right: 4px solid transparent;
   opacity: 0.3;
@@ -273,6 +315,7 @@ th.sortable.sorted-desc::after {
   border-top: 5px solid currentColor;
   opacity: 0.9;
 }
+
 
 tbody tr:nth-child(every) {
   /* noop, just to avoid accidental dense styling */

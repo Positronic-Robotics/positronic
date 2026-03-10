@@ -8,7 +8,7 @@ import positronic.cfg.ds as base_cfg
 from positronic.dataset.episode import Episode
 from positronic.dataset.transforms.episode import Derive, Group, Identity
 from positronic.server.positronic_server import ColumnConfig as C
-from positronic.server.positronic_server import GroupTableConfig, RendererConfig
+from positronic.server.positronic_server import GroupTableConfig, RendererConfig, SortConfig
 from positronic.server.positronic_server import main as server_main
 from positronic.utils.logging import init_logging
 
@@ -471,6 +471,161 @@ def sim_checkpoint_table():
 
 
 # ========================================================================================
+# PhAIL benchmark (real robot bin-to-bin picking evaluation)
+# ========================================================================================
+
+PHAIL_MODEL_DISPLAY = {'openpi': 'Compass', 'groot': 'Sequoia', 'act': 'Maestro'}
+
+PHAIL_MODEL_ICON = RendererConfig(
+    type='icon',
+    options={
+        'Compass': {'src': '/static/icons/compass.svg'},
+        'Sequoia': {'src': '/static/icons/sequoia.svg'},
+        'Maestro': {'src': '/static/icons/maestro.svg'},
+    },
+)
+
+PHAIL_OUTCOME_BADGE = RendererConfig(
+    type='badge',
+    options={
+        'pass': {'label': 'Pass', 'variant': 'success'},
+        'fail': {'label': 'Fail', 'variant': 'danger'},
+        'safety': {'label': 'Safety', 'variant': 'warning'},
+    },
+)
+
+
+def phail_model(ep: Episode) -> str:
+    server_type = ep.get('inference.policy.server.type', '')
+    return PHAIL_MODEL_DISPLAY.get(server_type, server_type)
+
+
+def phail_task(ep: Episode) -> str:
+    obj = ep.get('eval.object', '')
+    return f'Pick-and-place: {obj}' if obj else ''
+
+
+def phail_equipment(ep: Episode) -> str:
+    return 'DROID'
+
+
+def phail_outcome(ep: Episode) -> str:
+    outcome = ep.get('eval.outcome', '')
+    if outcome == 'Success':
+        return 'pass'
+    if outcome == 'Safety':
+        return 'safety'
+    return 'fail'
+
+
+def phail_success_bool(ep: Episode) -> bool:
+    return ep.get('eval.outcome') == 'Success'
+
+
+def phail_completion_rate(ep: Episode) -> float:
+    s = ep.get('eval.successful_items', 0)
+    t = ep.get('eval.total_items', 0)
+    return 100 * s / t if t else 0.0
+
+
+def phail_units_display(ep: Episode) -> str:
+    return f'{ep.get("eval.successful_items", 0)}/{ep.get("eval.total_items", 0)}'
+
+
+def phail_uph_time(ep: Episode) -> float | None:
+    return ep.get('eval.duration')
+
+
+def phail_uph(ep: Episode) -> float | None:
+    items = ep.get('eval.successful_items', 0)
+    if not items:
+        return None
+    duration = ep.get('eval.duration', 0)
+    if not duration:
+        return None
+    return items / (duration / 3600)
+
+
+phail_episodes = base_cfg.transform.override(
+    base=base_cfg.local_all,
+    transforms=[
+        Group(
+            Identity(),
+            Derive(
+                task_code=phail_task,
+                model=phail_model,
+                equipment=phail_equipment,
+                outcome=phail_outcome,
+                success_bool=phail_success_bool,
+                units_display=phail_units_display,
+                uph_time=phail_uph_time,
+                uph=phail_uph,
+                completion_rate=phail_completion_rate,
+                started=started,
+            ),
+        )
+    ],
+)
+
+
+@cfn.config()
+def phail_episodes_table():
+    return {
+        '__index__': C(label='#', format='%d'),
+        'model': C(label='Model', filter=True, renderer=PHAIL_MODEL_ICON),
+        'task_code': C(label='Task', filter=True),
+        'started': C(label='Started', format='%Y-%m-%d %H:%M'),
+        'units_display': C(label='Units', align='right'),
+        'uph': C(label='UPH', subtitle='Units Per Hour', format='%.1f', default='-', align='right'),
+        'completion_rate': C(label='Done %', subtitle='Completed / Total Operations', format='%.1f%%', align='right'),
+        'outcome': C(label='Status', renderer=PHAIL_OUTCOME_BADGE, align='center'),
+    }
+
+
+@cfn.config()
+def phail_leaderboard():
+    def _effective_duration(ep):
+        t = ep['uph_time']
+        return t if t is not None else ep.duration_ns / 1e9
+
+    def group_fn(episodes: list[Episode]):
+        count = len(episodes)
+        total_duration = sum(_effective_duration(ep) for ep in episodes)
+        total_items = sum(ep.get('eval.successful_items', 0) for ep in episodes)
+        successful_count = sum(1 for ep in episodes if ep['success_bool'])
+        failed_count = count - successful_count
+        total_possible = sum(ep.get('eval.total_items', 0) for ep in episodes)
+        completion_rate = 100 * total_items / total_possible if total_possible > 0 else 0
+
+        return {
+            'model': episodes[0]['model'],
+            'equipment': episodes[0].get('equipment', 'DROID'),
+            'task_code': episodes[0].get('task_code', ''),
+            'count': count,
+            'UPH': total_items / (total_duration / 3600) if total_duration > 0 else 0,
+            'completion_rate': completion_rate,
+            'MTBF': total_duration / failed_count if failed_count > 0 else None,
+        }
+
+    format_table = {
+        'model': C(label='Model', renderer=PHAIL_MODEL_ICON),
+        'UPH': C(label='UPH', subtitle='Units Per Hour', format='%.1f', align='right'),
+        'completion_rate': C(label='Done %', subtitle='Completed / Total Operations', format='%.1f%%', align='right'),
+        'MTBF': C(
+            label='MTBF/A', subtitle='Mean Time Between Failures/Assists', format='%.0f sec', default='-', align='right'
+        ),
+    }
+
+    return GroupTableConfig(
+        group_keys='model',
+        group_fn=group_fn,
+        format_table=format_table,
+        group_filter_keys={'equipment': 'Equipment', 'task_code': 'Task'},
+        default_sort=SortConfig(column='UPH'),
+    )
+
+
+# ========================================================================================
 # Pre-configured servers
 # ========================================================================================
 #
@@ -479,6 +634,9 @@ def sim_checkpoint_table():
 #
 # Real (unified) evaluation:
 #   uv run python -m positronic.cfg.eval real --dataset.base.path=s3://inference/real/191225/
+#
+# PhAIL benchmark:
+#   uv run python -m positronic.cfg.eval phail --dataset.base.path=s3://inference/phail_final/
 # ========================================================================================
 
 server = server_main.override(
@@ -497,7 +655,15 @@ sim_server = server_main.override(
     port=5001,
 )
 
+phail_server = server_main.override(
+    dataset=phail_episodes,
+    ep_table_cfg=phail_episodes_table,
+    group_tables={'leaderboard': phail_leaderboard},
+    home_page='leaderboard',
+    port=5001,
+)
+
 if __name__ == '__main__':
     init_logging()
     with pos3.mirror():
-        cfn.cli({'sim': sim_server, 'real': server})
+        cfn.cli({'sim': sim_server, 'real': server, 'phail': phail_server})

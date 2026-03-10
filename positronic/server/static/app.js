@@ -7,6 +7,10 @@ let filtersData = {};
 let loadingCheckInterval = null;
 let currentEpisodes = [];
 
+document.addEventListener('click', () => {
+  document.querySelectorAll('.column-info.active').forEach(el => el.classList.remove('active'));
+});
+
 async function checkDatasetStatus() {
   try {
     const response = await fetch('/api/dataset_status');
@@ -33,9 +37,25 @@ async function checkDatasetStatus() {
       datasetLoadingStatus.classList.remove('show');
       loadDatasetInfo();
 
+      // First load without filters to discover server-side filter keys
+      const { episodes: initEpisodes, columns, group_filters: groupFilters, default_sort: defaultSort } = await loadEpisodes({});
+
+      // Split URL params: server-side filter keys go to serverFilters, rest handled client-side
       const urlFilters = Object.fromEntries(new URLSearchParams(window.location.search));
-      filtersState.serverFilters = { ...filtersState.serverFilters, ...urlFilters };
-      const { episodes, columns, group_filters: groupFilters, default_sort: defaultSort } = await loadEpisodes(filtersState.serverFilters);
+      const serverFilterKeys = groupFilters ? new Set(Object.keys(groupFilters)) : new Set();
+      for (const [key, value] of Object.entries(urlFilters)) {
+        if (serverFilterKeys.has(key)) {
+          filtersState.serverFilters[key] = value;
+        }
+      }
+
+      // Re-fetch with server filters if any were set
+      let episodes = initEpisodes;
+      if (Object.keys(filtersState.serverFilters).length > 0) {
+        const result = await loadEpisodes(filtersState.serverFilters);
+        episodes = result.episodes;
+      }
+
       currentEpisodes = episodes;
       filtersData = getFiltersData(episodes, columns);
       if (defaultSort) {
@@ -122,9 +142,27 @@ function renderEpisodesTableHeader(columns) {
   const headerColumns = [];
   const sortState = filtersState.sort;
 
-  for (const [columnIndex, { label }] of Object.entries(columns)) {
-    const headerColumn = createTableCell(label, true);
+  for (const [columnIndex, { label, subtitle, align }] of Object.entries(columns)) {
+    let content;
+    if (subtitle) {
+      content = document.createElement('span');
+      content.textContent = label;
+      const info = document.createElement('span');
+      info.className = 'column-info';
+      info.textContent = '\u24D8';
+      info.dataset.tooltip = subtitle;
+      info.addEventListener('click', (e) => {
+        e.stopPropagation();
+        document.querySelectorAll('.column-info.active').forEach(el => {
+          if (el !== info) el.classList.remove('active');
+        });
+        info.classList.toggle('active');
+      });
+      content.appendChild(info);
+    }
+    const headerColumn = createTableCell(content || label, true);
     headerColumn.classList.add('sortable');
+    if (align) headerColumn.style.textAlign = align;
     headerColumn.dataset.sort = columnIndex;
     headerColumns.push(headerColumn);
 
@@ -179,11 +217,21 @@ function renderServerFilters(groupFilters) {
           filtersState.serverFilters[filterKey] = event.target.value;
         }
 
+        // Update URL to reflect current filters
+        const url = new URL(window.location);
+        url.search = new URLSearchParams({...filtersState.serverFilters, ...filtersState.filters}).toString();
+        window.history.replaceState({}, '', url);
+
         const { episodes, columns } = await loadEpisodes(filtersState.serverFilters);
         currentEpisodes = episodes;
         populateEpisodesTable(columns);
       },
     });
+
+    // Pre-select dropdown if URL had this filter
+    if (filtersState.serverFilters[filterKey]) {
+      filterContainer.querySelector('select').value = filtersState.serverFilters[filterKey];
+    }
 
     controlsBar.appendChild(filterContainer);
   }
@@ -212,9 +260,21 @@ function renderClientFilters(columns) {
           filtersState.filters[filterKey] = event.target.value;
         }
 
+        // Update URL to reflect current filters
+        const url = new URL(window.location);
+        url.search = new URLSearchParams({...filtersState.serverFilters, ...filtersState.filters}).toString();
+        window.history.replaceState({}, '', url);
+
         populateEpisodesTable(columns);
       },
     });
+
+    // Pre-select dropdown from URL params
+    const urlValue = new URLSearchParams(window.location.search).get(filterKey);
+    if (urlValue && filter.includes(urlValue)) {
+      filtersState.filters[filterKey] = urlValue;
+      filterContainer.querySelector('select').value = urlValue;
+    }
 
     controlsBar.appendChild(filterContainer);
   }
@@ -290,7 +350,9 @@ function populateEpisodesTable(columns) {
     const row = document.createElement('tr');
 
     for (const [index, entity] of episodeData.entries()) {
-      row.appendChild(createTableCell(getCellValue(entity, columns[index])));
+      const cell = createTableCell(getCellValue(entity, columns[index]));
+      if (columns[index].align) cell.style.textAlign = columns[index].align;
+      row.appendChild(cell);
     }
 
     const viewCell = createTableCell('');
