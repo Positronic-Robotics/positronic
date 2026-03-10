@@ -3,7 +3,6 @@
 from datetime import datetime
 
 import configuronic as cfn
-import numpy as np
 import pos3
 
 from positronic.dataset import Episode
@@ -16,86 +15,7 @@ from positronic.utils.logging import init_logging
 from . import ds
 from . import eval as eval_cfg
 from .ds import internal
-
-# Task constants
-TOWELS_TASK = 'Pick all the towels one by one from transparent tote and place them into the large grey tote.'
-SPOONS_TASK = 'Pick all the wooden spoons one by one from transparent tote and place them into the large grey tote.'
-SCISSORS_TASK = 'Pick all the scissors one by one from transparent tote and place them into the large grey tote.'
-
-
-def calculate_units(episode: Episode) -> int:
-    """Estimates the number of pick-and-place operations.
-
-    This function is vibe-coded with Gemini 3 Pro (High). It works fine as a heuristic.
-    """
-    if episode['task'] == SCISSORS_TASK:
-        return 10
-
-    if 'target_grip' in episode.signals:
-        grip_sig = episode.signals['target_grip']
-    elif 'grip' in episode.signals:
-        grip_sig = episode.signals['grip']
-    else:
-        return 0
-
-    if 'robot_state.ee_pose' in episode.signals:
-        pose_sig = episode.signals['robot_state.ee_pose']
-    else:
-        return 0
-
-    # Sample signals at 10Hz to reduce noise and computation
-    times = np.arange(episode.start_ts, episode.last_ts, int(1e8))
-    if len(times) == 0:
-        return 0
-
-    grip_vals = np.array([v for v, _ in grip_sig.time[times]])
-    pose_vals = np.array([v for v, _ in pose_sig.time[times]])
-    x_vals = pose_vals[:, 0]
-    y_vals = pose_vals[:, 1]
-    z_vals = pose_vals[:, 2]
-
-    # Heuristic: Binarize grip based on midpoint threshold
-    threshold = (grip_vals.max() + grip_vals.min()) / 2
-
-    units = 0
-    state = 'OPEN'
-    # Initial state
-    if grip_vals[0] < threshold:
-        state = 'CLOSED'
-
-    min_z_holding = np.inf
-    max_z_holding = -np.inf
-    pick_x, pick_y = 0.0, 0.0
-
-    lift_threshold = 0.05  # 5cm
-    dist_threshold = 0.15  # 15cm
-
-    for i in range(1, len(grip_vals)):
-        val = grip_vals[i]
-        x, y, z = x_vals[i], y_vals[i], z_vals[i]
-        is_closed = val < threshold
-
-        if state == 'OPEN':
-            if is_closed:
-                state = 'CLOSED'
-                min_z_holding = z
-                max_z_holding = z
-                pick_x, pick_y = x, y
-        elif state == 'CLOSED':
-            max_z_holding = max(max_z_holding, z)
-            min_z_holding = min(min_z_holding, z)
-            if not is_closed:  # Drop event
-                state = 'OPEN'
-                amplitude = max_z_holding - min_z_holding
-
-                dx = x - pick_x
-                dy = y - pick_y
-                dist = np.sqrt(dx * dx + dy * dy)
-
-                if amplitude > lift_threshold and dist > dist_threshold:
-                    units += 1
-
-    return units
+from .eval import calculate_units
 
 
 def uph(ep: Episode) -> float | None:

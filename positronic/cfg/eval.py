@@ -1,10 +1,12 @@
 from datetime import datetime
+from functools import partial
 
 import configuronic as cfn
 import numpy as np
 import pos3
 
 import positronic.cfg.ds as base_cfg
+from positronic.cfg.ds import internal
 from positronic.dataset.episode import Episode
 from positronic.dataset.transforms.episode import Derive, FromValue, Group, Identity
 from positronic.server.positronic_server import ColumnConfig as C
@@ -472,8 +474,78 @@ def sim_checkpoint_table():
 
 
 # ========================================================================================
+# Pick-and-place item counting
+# ========================================================================================
+
+FIXED_ITEM_COUNTS = {internal.SCISSORS_TASK: 10, internal.BATTERIES_TASK: 8}
+
+
+def calculate_units(episode: Episode) -> int:
+    """Estimates the number of pick-and-place operations.
+
+    This function is vibe-coded with Gemini 3 Pro (High). It works fine as a heuristic.
+    """
+    if episode['task'] in FIXED_ITEM_COUNTS:
+        return FIXED_ITEM_COUNTS[episode['task']]
+
+    if 'target_grip' in episode.signals:
+        grip_sig = episode.signals['target_grip']
+    elif 'grip' in episode.signals:
+        grip_sig = episode.signals['grip']
+    else:
+        return 0
+
+    if 'robot_state.ee_pose' not in episode.signals:
+        return 0
+
+    pose_sig = episode.signals['robot_state.ee_pose']
+
+    # Sample signals at 10Hz to reduce noise and computation
+    times = np.arange(episode.start_ts, episode.last_ts, int(1e8))
+    if len(times) == 0:
+        return 0
+
+    grip_vals = np.array([v for v, _ in grip_sig.time[times]])
+    pose_vals = np.array([v for v, _ in pose_sig.time[times]])
+    x_vals, y_vals, z_vals = pose_vals[:, 0], pose_vals[:, 1], pose_vals[:, 2]
+
+    threshold = (grip_vals.max() + grip_vals.min()) / 2
+    units = 0
+    state = 'CLOSED' if grip_vals[0] < threshold else 'OPEN'
+    min_z_holding = np.inf
+    max_z_holding = -np.inf
+    pick_x, pick_y = 0.0, 0.0
+
+    for i in range(1, len(grip_vals)):
+        val = grip_vals[i]
+        x, y, z = x_vals[i], y_vals[i], z_vals[i]
+        is_closed = val < threshold
+
+        if state == 'OPEN':
+            if is_closed:
+                state = 'CLOSED'
+                min_z_holding = z
+                max_z_holding = z
+                pick_x, pick_y = x, y
+        elif state == 'CLOSED':
+            max_z_holding = max(max_z_holding, z)
+            min_z_holding = min(min_z_holding, z)
+            if not is_closed:
+                state = 'OPEN'
+                amplitude = max_z_holding - min_z_holding
+                dx, dy = x - pick_x, y - pick_y
+                dist = np.sqrt(dx * dx + dy * dy)
+                if amplitude > 0.05 and dist > 0.15:
+                    units += 1
+
+    return units
+
+
+# ========================================================================================
 # PhAIL benchmark (real robot bin-to-bin picking evaluation)
 # ========================================================================================
+
+TELEOP_MODEL = 'Robot teleoperated by Human'
 
 PHAIL_MODEL_DISPLAY = {'openpi': 'Compass', 'groot': 'Sequoia', 'act': 'Maestro', 'human': 'Human'}
 
@@ -484,6 +556,7 @@ PHAIL_MODEL_ICON = RendererConfig(
         'Sequoia': {'src': '/static/icons/sequoia.svg'},
         'Maestro': {'src': '/static/icons/maestro.svg'},
         'Human': {'src': '/static/icons/human.svg'},
+        TELEOP_MODEL: {'src': '/static/icons/teleop.svg'},
     },
 )
 
@@ -549,7 +622,19 @@ phail_inference = base_cfg.transform.override(
     base=base_cfg.local_all,
     transforms=[
         Group(
-            Identity(remove=['robot_commands.reset', 'eval.object']),
+            Identity(
+                remove=[
+                    'robot_commands.reset',
+                    'eval.object',
+                    'inference.policy.port',
+                    'inference.policy.host',
+                    'inference.policy.server.checkpoint_id',
+                    'inference.policy.server.config_name',
+                    'inference.policy.server.experiment_name',
+                    'inference.policy.server.type',
+                    'inference.policy.type',
+                ]
+            ),
             _phail_derives,
             Derive(**{'eval.object': _phail_task_label}),
         )
@@ -557,35 +642,64 @@ phail_inference = base_cfg.transform.override(
 )
 
 
+# Shared derives for baseline datasets (human and teleop) where all episodes are successful.
+def _baseline_uph(ep: Episode, items: int) -> float | None:
+    if not items:
+        return None
+    return items / (ep.duration_ns / 1e9 / 3600)
+
+
+_PHAIL_BASELINE = {
+    'status': FromValue('Pass'),
+    'equipment': FromValue('DROID'),
+    'eval.object': _phail_task_label,
+    'eval.outcome': FromValue('Success'),
+    'completion': FromValue(100.0),
+    'started': started,
+}
+
 # Human baseline: 40 episodes from s3://raw/human (10 per object, 8 items each, all success).
-# These episodes lack eval.* and inference.* fields, so we set final values directly.
-def _human_uph(ep: Episode) -> float:
-    return 8 / (ep.duration_ns / 1e9 / 3600)
-
-
 phail_human = base_cfg.transform.override(
     base=base_cfg.local_all.override(path='s3://raw/human'),
     transforms=[
         Group(
             Identity(),
             Derive(**{
+                **_PHAIL_BASELINE,
                 'model': FromValue('Human'),
-                'status': FromValue('Pass'),
-                'equipment': FromValue('DROID'),
-                'eval.object': _phail_task_label,
-                'eval.outcome': FromValue('Success'),
                 'eval.successful_items': FromValue(8),
                 'eval.total_items': FromValue(8),
                 'units': FromValue('8/8'),
-                'uph': _human_uph,
-                'completion': FromValue(100.0),
-                'started': started,
+                'uph': partial(_baseline_uph, items=8),
             }),
         )
     ],
 )
 
-phail_episodes = base_cfg.concat_ds.override(datasets=[phail_inference, phail_human])
+# DROID teleoperation data: robot controlled by human via VR controller.
+# Two-step transform: first compute item counts from grip signals, then derive phail fields.
+_teleop_with_items = base_cfg.transform.override(
+    base=internal.droid, transforms=[Group(Derive(item_count=calculate_units), Identity())]
+)
+
+phail_teleop = base_cfg.transform.override(
+    base=_teleop_with_items,
+    transforms=[
+        Group(
+            Identity(),
+            Derive(**{
+                **_PHAIL_BASELINE,
+                'model': FromValue(TELEOP_MODEL),
+                'eval.successful_items': lambda ep: ep['item_count'],
+                'eval.total_items': lambda ep: ep['item_count'],
+                'units': lambda ep: f'{ep["item_count"]}/{ep["item_count"]}',
+                'uph': lambda ep: _baseline_uph(ep, ep['item_count']),
+            }),
+        )
+    ],
+)
+
+phail_episodes = base_cfg.concat_ds.override(datasets=[phail_inference, phail_human, phail_teleop])
 
 
 @cfn.config()
