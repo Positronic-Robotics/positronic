@@ -461,7 +461,7 @@ def _start_http_redirect(host: str, https_port: int, primary_host: str):
         target = f'https://{primary_host}:{https_port}/{path}'
         if request.url.query:
             target += f'?{request.url.query}'
-        return RedirectResponse(url=target, status_code=301)
+        return RedirectResponse(url=target, status_code=307)
 
     http_port = https_port + 1
     logging.info(f'Starting HTTP->HTTPS redirect on http://{primary_host}:{http_port}')
