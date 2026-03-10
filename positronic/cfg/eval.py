@@ -6,7 +6,7 @@ import pos3
 
 import positronic.cfg.ds as base_cfg
 from positronic.dataset.episode import Episode
-from positronic.dataset.transforms.episode import Derive, Group, Identity
+from positronic.dataset.transforms.episode import Derive, FromValue, Group, Identity
 from positronic.server.positronic_server import ColumnConfig as C
 from positronic.server.positronic_server import GroupTableConfig, RendererConfig, SortConfig
 from positronic.server.positronic_server import main as server_main
@@ -489,10 +489,8 @@ PHAIL_MODEL_ICON = RendererConfig(
 PHAIL_OUTCOME_BADGE = RendererConfig(
     type='badge',
     options={
-        'Success': {'label': 'Pass', 'variant': 'success'},
+        'Pass': {'label': 'Pass', 'variant': 'success'},
         'Fail': {'label': 'Fail', 'variant': 'danger'},
-        'Stalled': {'label': 'Fail', 'variant': 'danger'},
-        'Ran out of time': {'label': 'Fail', 'variant': 'danger'},
         'Safety': {'label': 'Safety', 'variant': 'warning'},
     },
 )
@@ -500,6 +498,15 @@ PHAIL_OUTCOME_BADGE = RendererConfig(
 
 def phail_model(ep: Episode) -> str:
     return PHAIL_MODEL_DISPLAY.get(ep.get('inference.policy.server.type', ''), '')
+
+
+def phail_status(ep: Episode) -> str:
+    outcome = ep.get('eval.outcome', '')
+    if outcome == 'Success':
+        return 'Pass'
+    if outcome == 'Safety':
+        return 'Safety'
+    return 'Fail'
 
 
 def phail_completion(ep: Episode) -> float:
@@ -529,7 +536,8 @@ phail_episodes = base_cfg.transform.override(
             Identity(),
             Derive(
                 model=phail_model,
-                equipment=lambda ep: 'DROID',
+                status=phail_status,
+                equipment=FromValue('DROID'),
                 units=phail_units,
                 uph=phail_uph,
                 completion=phail_completion,
@@ -550,7 +558,7 @@ def phail_episodes_table():
         'units': C(label='Units', align='right'),
         'uph': C(label='UPH', subtitle='Units Per Hour', format='%.1f', default='-', align='right'),
         'completion': C(label='Done %', subtitle='Completed / Total Operations', format='%.1f%%', align='right'),
-        'eval.outcome': C(label='Status', renderer=PHAIL_OUTCOME_BADGE, align='center'),
+        'status': C(label='Status', renderer=PHAIL_OUTCOME_BADGE, align='center'),
     }
 
 
@@ -560,14 +568,14 @@ def phail_leaderboard():
         count = len(episodes)
         total_duration = sum(_effective_duration('eval.duration', ep) for ep in episodes)
         total_items = sum(ep.get('eval.successful_items', 0) for ep in episodes)
-        failed_count = sum(1 for ep in episodes if ep.get('eval.outcome') != 'Success')
+        failed_count = sum(1 for ep in episodes if ep['status'] != 'Pass')
         total_possible = sum(ep.get('eval.total_items', 0) for ep in episodes)
         completion = 100 * total_items / total_possible if total_possible > 0 else 0
 
         return {
             'model': episodes[0]['model'],
             'count': count,
-            'UPH': total_items / (total_duration / 3600) if total_duration > 0 else 0,
+            'UPH': total_items / (total_duration / 3600) if total_duration > 0 else None,
             'completion': completion,
             'MTBF': total_duration / failed_count if failed_count > 0 else None,
         }

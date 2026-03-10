@@ -1,3 +1,62 @@
+// Positronic Dataset Viewer — frontend for positronic_server.py
+//
+// Pages
+// -----
+// The server renders three page types from Jinja templates:
+//   index.html    — flat episode list (default home page)
+//   grouped.html  — aggregated table (e.g. leaderboard), set via home_page config
+//   episode.html  — single episode with Rerun viewer + static data sidebar
+//
+// Templates set window globals before this script's DOMContentLoaded fires:
+//   window.API_ENDPOINT   — override for /api/episodes (grouped.html sets /api/groups/{name})
+//   window.IS_GROUPED_TABLE — true on grouped.html, changes View link behavior
+//   window.EPISODES_URL   — where View links point on grouped pages
+//   window.VIEW_LABEL     — button text override
+//
+// Data flow
+// ---------
+// On DOMContentLoaded, initEpisodesTable() runs:
+//   1. Polls /api/dataset_status until the server finishes loading the dataset
+//   2. Calls loadEpisodes({}) → fetches from API_ENDPOINT (default /api/episodes)
+//      Response shape: { columns, episodes, group_filters?, default_sort? }
+//        columns:  array of {key, label, filter?, renderer?, align?, subtitle?}
+//        episodes: array of [episodeId, [cell0, cell1, ...], groupFilters?]
+//          Each cell is either a scalar (string/number) or [sortValue, displayValue]
+//        group_filters: {filterKey: {label, values[]}} — only for grouped tables
+//   3. Parses URL query params → splits into serverFilters vs clientFilters
+//   4. If serverFilters found, re-fetches with those params
+//   5. Renders filter dropdowns, table header, and table body
+//
+// Filters
+// -------
+// Server filters (state.serverFilters):
+//   Defined by GroupTableConfig.group_filter_keys on the Python side. Changing one
+//   re-fetches from the server — needed for grouped tables where aggregation must
+//   happen server-side. On flat episode tables, these come from URL params that
+//   match group_filter_keys (e.g. ?equipment=DROID).
+//
+// Client filters (state.filters):
+//   Columns with filter:true in the table config. buildFiltersData() collects unique
+//   values per column from loaded episodes. Changing one just re-runs populateTable()
+//   which calls getFilteredEpisodes() to hide non-matching rows — no server round-trip.
+//
+// Both are synced to the URL via syncURL() so filtered views can be shared/bookmarked.
+//
+// Cell rendering
+// --------------
+// Each cell value can be a plain scalar or [sortValue, displayValue] tuple.
+// Columns may have a renderer config (from Python RendererConfig):
+//   'badge' — colored label (e.g. Pass/Fail), options map raw value → {label, variant}
+//   'icon'  — image + text, options map raw value → {src, label?}
+// Without a renderer, the display value (or scalar) is shown as plain text.
+//
+// Episode detail page
+// -------------------
+// episode.html calls initializeSidebar(staticData) with the episode's static JSON.
+// This renders a collapsible key-value tree in the sidebar panel.
+// initSidebar() (called on every page) handles sidebar resize/toggle/scroll state,
+// persisted in localStorage. It no-ops on pages without a .sidebar element.
+
 // ---------------------------------------------------------------------------
 // State
 // ---------------------------------------------------------------------------
