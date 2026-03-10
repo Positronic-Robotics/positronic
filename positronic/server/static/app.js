@@ -1,146 +1,257 @@
-const filtersState = {
+// ---------------------------------------------------------------------------
+// State
+// ---------------------------------------------------------------------------
+
+const state = {
   sort: { columnIndex: null, direction: 'desc' },
-  filters: {},
-  serverFilters: {},
+  filters: {},           // client-side column filters
+  serverFilters: {},     // server-side group filters (sent to /api/episodes)
+  episodes: [],          // current episode data
+  columns: [],           // column definitions from server
+  filtersData: {},       // unique values per filterable column
 };
-let filtersData = {};
-let loadingCheckInterval = null;
-let currentEpisodes = [];
 
-document.addEventListener('click', () => {
-  document.querySelectorAll('.column-info.active').forEach(el => el.classList.remove('active'));
-});
+// ---------------------------------------------------------------------------
+// Data fetching
+// ---------------------------------------------------------------------------
 
-async function checkDatasetStatus() {
-  try {
-    const response = await fetch('/api/dataset_status');
-    const status = await response.json();
-
-    const datasetStats = document.getElementById('dataset-stats');
-    const episodesContainer = document.getElementById('episodes-container');
-    const episodesTable = episodesContainer.querySelector('.episodes-table');
-    const datasetLoadingStatus = document.getElementById('loading-status');
-    const episodesLoadingStatus = episodesContainer.querySelector('.loading');
-
-    if (status.loading) {
-      datasetLoadingStatus.classList.add('show');
-      datasetStats.innerHTML = 'Checking dataset status...';
-
-      if (!loadingCheckInterval) {
-        loadingCheckInterval = setInterval(checkDatasetStatus, 2000);
-      }
-    } else if (status.loaded) {
-      if (loadingCheckInterval) {
-        clearInterval(loadingCheckInterval);
-        loadingCheckInterval = null;
-      }
-      datasetLoadingStatus.classList.remove('show');
-      loadDatasetInfo();
-
-      // First load without filters to discover server-side filter keys
-      const { episodes: initEpisodes, columns, group_filters: groupFilters, default_sort: defaultSort } = await loadEpisodes({});
-
-      // Split URL params: server-side filter keys go to serverFilters, rest handled client-side
-      const urlFilters = Object.fromEntries(new URLSearchParams(window.location.search));
-      const serverFilterKeys = groupFilters ? new Set(Object.keys(groupFilters)) : new Set();
-      for (const [key, value] of Object.entries(urlFilters)) {
-        if (serverFilterKeys.has(key)) {
-          filtersState.serverFilters[key] = value;
-        }
-      }
-
-      // Re-fetch with server filters if any were set
-      let episodes = initEpisodes;
-      if (Object.keys(filtersState.serverFilters).length > 0) {
-        const result = await loadEpisodes(filtersState.serverFilters);
-        episodes = result.episodes;
-      }
-
-      currentEpisodes = episodes;
-      filtersData = getFiltersData(episodes, columns);
-      if (defaultSort) {
-        const sortIndex = columns.findIndex((c) => c.key === defaultSort.column);
-        if (sortIndex !== -1) {
-          filtersState.sort = { columnIndex: String(sortIndex), direction: defaultSort.direction || 'desc' };
-        }
-      }
-      renderServerFilters(groupFilters);
-      renderClientFilters(columns);
-      renderEpisodesTableHeader(columns);
-      setFiltersStateFromURL(columns);
-      populateEpisodesTable(columns);
-      episodesLoadingStatus.remove();
-      episodesTable.classList.remove('hidden');
-    } else {
-      if (loadingCheckInterval) {
-        clearInterval(loadingCheckInterval);
-        loadingCheckInterval = null;
-      }
-      datasetLoadingStatus.classList.remove('show');
-      datasetStats.innerHTML = '<span class="error-message">Failed to load dataset</span>';
-      episodesContainer.innerHTML =
-        '<div class="loading error-message">Dataset loading failed</div>';
-    }
-  } catch (error) {
-    console.error('Error checking dataset status:', error);
-  }
+async function fetchJSON(url) {
+  const response = await fetch(url);
+  if (response.status === 202) return null;  // dataset still loading
+  return response.json();
 }
 
 async function loadDatasetInfo() {
-  try {
-    const response = await fetch('/api/dataset_info');
-    if (response.status === 202) {
-      checkDatasetStatus();
-      return;
-    }
-
-    const data = await response.json();
-
-    const statsDiv = document.getElementById('dataset-stats');
-    statsDiv.innerHTML = `<p><strong>${data.num_episodes}</strong> episodes.</p>`;
-  } catch (error) {
-    console.error('Error loading dataset info:', error);
-  }
+  const data = await fetchJSON('/api/dataset_info');
+  if (!data) return;
+  document.getElementById('dataset-stats').innerHTML =
+    `<p><strong>${data.num_episodes}</strong> episodes.</p>`;
 }
 
 async function loadEpisodes(filters = {}) {
-  try {
-    const endpoint = new URL(window.API_ENDPOINT || '/api/episodes', window.location.origin);
+  const endpoint = new URL(window.API_ENDPOINT || '/api/episodes', window.location.origin);
+  for (const [key, value] of Object.entries(filters)) {
+    endpoint.searchParams.append(key, value);
+  }
+  return fetchJSON(endpoint);
+}
 
-    Object.entries(filters).forEach(([key, value]) => {
-      endpoint.searchParams.append(key, value);
-    });
+// ---------------------------------------------------------------------------
+// URL sync
+// ---------------------------------------------------------------------------
 
-    const response = await fetch(endpoint);
-    if (response.status === 202) {
-      checkDatasetStatus();
+function syncURL() {
+  const url = new URL(window.location);
+  url.search = new URLSearchParams({ ...state.serverFilters, ...state.filters }).toString();
+  window.history.replaceState({}, '', url);
+}
+
+function readFiltersFromURL(serverFilterKeys) {
+  const params = new URLSearchParams(window.location.search);
+  for (const [key, value] of params.entries()) {
+    if (serverFilterKeys.has(key)) {
+      state.serverFilters[key] = value;
+    } else if (state.filtersData[key]?.includes(value)) {
+      state.filters[key] = value;
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Initialization
+// ---------------------------------------------------------------------------
+
+async function pollUntilLoaded() {
+  const statusEl = document.getElementById('loading-status');
+  const statsEl = document.getElementById('dataset-stats');
+
+  statusEl.classList.add('show');
+  statsEl.innerHTML = 'Checking dataset status...';
+
+  return new Promise((resolve) => {
+    const interval = setInterval(async () => {
+      const status = await fetchJSON('/api/dataset_status');
+      if (!status || status.loading) return;
+      clearInterval(interval);
+      statusEl.classList.remove('show');
+      resolve(status.loaded);
+    }, 2000);
+  });
+}
+
+async function initEpisodesTable() {
+  const container = document.getElementById('episodes-container');
+  if (!container) return;  // episode detail page has no table
+  const table = container.querySelector('.episodes-table');
+  const loadingEl = container.querySelector('.loading');
+
+  // Check if dataset is ready
+  const status = await fetchJSON('/api/dataset_status');
+  if (!status) return;
+
+  if (status.loading) {
+    const loaded = await pollUntilLoaded();
+    if (!loaded) {
+      document.getElementById('dataset-stats').innerHTML =
+        '<span class="error-message">Failed to load dataset</span>';
+      container.innerHTML = '<div class="loading error-message">Dataset loading failed</div>';
       return;
     }
-
-    return await response.json();
-  } catch (error) {
-    console.error('Error loading episodes:', error);
-    document.getElementById('episodes-container').innerHTML =
-      '<div class="loading">Error loading episodes</div>';
+  } else if (!status.loaded) {
+    document.getElementById('dataset-stats').innerHTML =
+      '<span class="error-message">Failed to load dataset</span>';
+    container.innerHTML = '<div class="loading error-message">Dataset loading failed</div>';
+    return;
   }
-}
 
-function createTableCell(content, isHeader = false) {
-  const episodeCell = document.createElement(isHeader ? 'th' : 'td');
+  loadDatasetInfo();
 
-  if (content instanceof HTMLElement) {
-    episodeCell.appendChild(content);
+  // First fetch discovers server-side filter keys
+  const initial = await loadEpisodes({});
+  if (!initial) return;
+
+  const { columns, group_filters: groupFilters, default_sort: defaultSort } = initial;
+  state.columns = columns;
+  state.filtersData = buildFiltersData(initial.episodes, columns);
+
+  // Parse URL into server/client filters
+  const serverFilterKeys = groupFilters ? new Set(Object.keys(groupFilters)) : new Set();
+  readFiltersFromURL(serverFilterKeys);
+
+  // Re-fetch with server filters if any were set from URL
+  if (Object.keys(state.serverFilters).length > 0) {
+    const filtered = await loadEpisodes(state.serverFilters);
+    state.episodes = filtered ? filtered.episodes : initial.episodes;
   } else {
-    episodeCell.textContent = String(content);
+    state.episodes = initial.episodes;
   }
 
-  return episodeCell;
+  if (defaultSort) {
+    const sortIndex = columns.findIndex((c) => c.key === defaultSort.column);
+    if (sortIndex !== -1) {
+      state.sort = { columnIndex: String(sortIndex), direction: defaultSort.direction || 'desc' };
+    }
+  }
+
+  renderServerFilters(groupFilters);
+  renderClientFilters(columns);
+  renderTableHeader(columns);
+  populateTable(columns);
+
+  loadingEl.remove();
+  table.classList.remove('hidden');
 }
 
-function renderEpisodesTableHeader(columns) {
+// ---------------------------------------------------------------------------
+// Filtering & sorting
+// ---------------------------------------------------------------------------
+
+function buildFiltersData(episodes, columns) {
+  const result = {};
+  for (const [index, column] of Object.entries(columns)) {
+    if (!column.filter) continue;
+    const values = new Set();
+    for (const [, episodeData] of episodes) {
+      const v = episodeData[index];
+      if (v !== null && v !== undefined) values.add(String(v));
+    }
+    result[column.key] = Array.from(values);
+  }
+  return result;
+}
+
+function getFilteredEpisodes(columns) {
+  const { sort: sortState, filters } = state;
+
+  let result = state.episodes.filter(([, episodeData]) =>
+    Object.entries(filters).every(([filterKey, value]) => {
+      const colIdx = columns.findIndex((c) => c.key === filterKey);
+      return String(episodeData[colIdx]) === value;
+    })
+  );
+
+  if (sortState.columnIndex !== null) {
+    result.sort((a, b) => {
+      const aVal = sortableValue(a[1][sortState.columnIndex]);
+      const bVal = sortableValue(b[1][sortState.columnIndex]);
+      if (aVal === bVal) return 0;
+      return sortState.direction === 'asc'
+        ? (aVal < bVal ? -1 : 1)
+        : (aVal > bVal ? -1 : 1);
+    });
+  }
+
+  return result;
+}
+
+function sortableValue(entity) {
+  if (entity === null || entity === undefined) return '';
+  return Array.isArray(entity) ? entity[0] : entity;
+}
+
+// ---------------------------------------------------------------------------
+// Cell rendering
+// ---------------------------------------------------------------------------
+
+function cellValue(entity, column) {
+  if (column.renderer?.type === 'badge') {
+    return renderBadge(entity, column.renderer.options?.[entity]);
+  }
+  if (column.renderer?.type === 'icon') {
+    return renderIcon(entity, column.renderer.options);
+  }
+  const value = Array.isArray(entity) ? entity[1] : entity;
+  return value ?? '';
+}
+
+function renderBadge(value, options) {
+  if (value === null || value === undefined) return '';
+  const VARIANTS = ['success', 'warning', 'danger', 'default'];
+  const span = document.createElement('span');
+  span.classList.add('badge');
+  span.textContent = options?.label ?? String(value);
+  const variant = options?.variant && VARIANTS.includes(options.variant) ? options.variant : 'default';
+  span.classList.add(`badge--${variant}`);
+  return span;
+}
+
+function renderIcon(value, options) {
+  if (value === null || value === undefined) return '';
+  const text = Array.isArray(value) ? value[1] : String(value);
+  const raw = Array.isArray(value) ? value[0] : value;
+  const cfg = options?.[raw];
+  const container = document.createElement('span');
+  container.classList.add('cell-with-icon');
+  if (cfg?.src) {
+    const img = document.createElement('img');
+    img.src = cfg.src;
+    img.alt = '';
+    img.classList.add('cell-icon');
+    container.appendChild(img);
+  }
+  const span = document.createElement('span');
+  span.textContent = cfg?.label ?? text;
+  container.appendChild(span);
+  return container;
+}
+
+// ---------------------------------------------------------------------------
+// Table rendering
+// ---------------------------------------------------------------------------
+
+function createCell(content, isHeader = false) {
+  const cell = document.createElement(isHeader ? 'th' : 'td');
+  if (content instanceof HTMLElement) {
+    cell.appendChild(content);
+  } else {
+    cell.textContent = String(content);
+  }
+  return cell;
+}
+
+function renderTableHeader(columns) {
   const headerRow = document.querySelector('.episodes-table thead tr');
-  const headerColumns = [];
-  const sortState = filtersState.sort;
+  const headerCells = [];
 
   for (const [columnIndex, { label, subtitle, align }] of Object.entries(columns)) {
     let content;
@@ -160,209 +271,60 @@ function renderEpisodesTableHeader(columns) {
       });
       content.appendChild(info);
     }
-    const headerColumn = createTableCell(content || label, true);
-    headerColumn.classList.add('sortable');
-    if (align) headerColumn.style.textAlign = align;
-    headerColumn.dataset.sort = columnIndex;
-    headerColumns.push(headerColumn);
 
-    headerColumn.addEventListener('click', sortByColumnHandler);
+    const th = createCell(content || label, true);
+    th.classList.add('sortable');
+    if (align) th.style.textAlign = align;
+    th.dataset.sort = columnIndex;
+    th.addEventListener('click', () => onSortClick(th, columnIndex, columns));
+    headerCells.push(th);
   }
 
-  headerRow.prepend(...headerColumns);
+  headerRow.prepend(...headerCells);
 
-  if (sortState.columnIndex !== null) {
-    headerColumns[sortState.columnIndex]?.classList.add(`sorted-${sortState.direction}`);
-  }
-
-  function sortByColumnHandler(event) {
-    const headerColumn = event.currentTarget;
-    const columnIndex = headerColumn.dataset.sort;
-    headerRow.querySelectorAll('th.sortable').forEach((th) => {
-      th.classList.remove('sorted-asc', 'sorted-desc');
-    });
-
-    if (sortState.columnIndex === columnIndex) {
-      sortState.direction = sortState.direction === 'desc' ? 'asc' : 'desc';
-    } else {
-      sortState.columnIndex = columnIndex;
-      sortState.direction = 'desc';
-    }
-
-    headerColumn.classList.add(`sorted-${sortState.direction}`);
-
-    populateEpisodesTable(columns);
+  if (state.sort.columnIndex !== null) {
+    headerCells[state.sort.columnIndex]?.classList.add(`sorted-${state.sort.direction}`);
   }
 }
 
-function renderServerFilters(groupFilters) {
-  if (!groupFilters) return;
-  const controlsBar = document.querySelector('.controls-bar');
+function onSortClick(th, columnIndex, columns) {
+  const headerRow = th.parentElement;
+  headerRow.querySelectorAll('th.sortable').forEach((el) => {
+    el.classList.remove('sorted-asc', 'sorted-desc');
+  });
 
-  for (const [filterKey, filterData] of Object.entries(groupFilters)) {
-    const options = [createFilterOption('-1', 'All')];
-
-    for (const value of filterData.values) {
-      options.push(createFilterOption(value, value));
-    }
-
-    const filterContainer = createFilter({
-      filterId: `filter-${filterKey}`,
-      label: filterData.label,
-      options: options,
-      onChange: async (event) => {
-        if (event.target.value === '-1') {
-          delete filtersState.serverFilters[filterKey];
-        } else {
-          filtersState.serverFilters[filterKey] = event.target.value;
-        }
-
-        // Update URL to reflect current filters
-        const url = new URL(window.location);
-        url.search = new URLSearchParams({...filtersState.serverFilters, ...filtersState.filters}).toString();
-        window.history.replaceState({}, '', url);
-
-        const { episodes, columns } = await loadEpisodes(filtersState.serverFilters);
-        currentEpisodes = episodes;
-        populateEpisodesTable(columns);
-      },
-    });
-
-    // Pre-select dropdown if URL had this filter
-    if (filtersState.serverFilters[filterKey]) {
-      filterContainer.querySelector('select').value = filtersState.serverFilters[filterKey];
-    }
-
-    controlsBar.appendChild(filterContainer);
-  }
-}
-
-function renderClientFilters(columns) {
-  const controlsBar = document.querySelector('.controls-bar');
-
-  for (const [filterKey, filter] of Object.entries(filtersData)) {
-    const column = columns.find((col) => col.key === filterKey);
-    const options = [createFilterOption('-1', 'All')];
-
-    for (const [index, value] of filter.entries()) {
-      const label = column.renderer?.options[value]?.label ?? value;
-      options.push(createFilterOption(value, label));
-    }
-
-    const filterContainer = createFilter({
-      filterId: `filter-${filterKey}`,
-      label: column.label,
-      options: options,
-      onChange: (event) => {
-        if (event.target.value === '-1') {
-          delete filtersState.filters[filterKey];
-        } else {
-          filtersState.filters[filterKey] = event.target.value;
-        }
-
-        // Update URL to reflect current filters
-        const url = new URL(window.location);
-        url.search = new URLSearchParams({...filtersState.serverFilters, ...filtersState.filters}).toString();
-        window.history.replaceState({}, '', url);
-
-        populateEpisodesTable(columns);
-      },
-    });
-
-    // Pre-select dropdown from URL params
-    const urlValue = new URLSearchParams(window.location.search).get(filterKey);
-    if (urlValue && filter.includes(urlValue)) {
-      filtersState.filters[filterKey] = urlValue;
-      filterContainer.querySelector('select').value = urlValue;
-    }
-
-    controlsBar.appendChild(filterContainer);
-  }
-}
-
-function createFilter({ filterId, label, options, onChange }) {
-  const filterContainer = document.createElement('div');
-  filterContainer.classList.add('control-group', 'control-group--grow');
-
-  const labelElement = document.createElement('label');
-  labelElement.htmlFor = filterId;
-  labelElement.textContent = label;
-  filterContainer.appendChild(labelElement);
-
-  const select = document.createElement('select');
-  select.id = filterId;
-  select.addEventListener('change', onChange);
-  select.append(...options);
-
-  filterContainer.appendChild(select);
-
-  return filterContainer;
-}
-
-function createFilterOption(value, label) {
-  const option = document.createElement('option');
-  option.value = value;
-  option.textContent = label;
-  return option;
-}
-
-function getFiltersData(episodes, columns) {
-  const filtersData = {};
-
-  for (const [index, column] of Object.entries(columns)) {
-    if (!column.filter) continue;
-
-    const columnData = new Set();
-
-    for (const [episodeIndex, episodeData] of episodes) {
-      const value = episodeData[index];
-      if (value === null || value === undefined) continue;
-
-      columnData.add(String(value));
-    }
-
-    filtersData[column.key] = Array.from(columnData);
+  if (state.sort.columnIndex === columnIndex) {
+    state.sort.direction = state.sort.direction === 'desc' ? 'asc' : 'desc';
+  } else {
+    state.sort.columnIndex = columnIndex;
+    state.sort.direction = 'desc';
   }
 
-  return filtersData;
+  th.classList.add(`sorted-${state.sort.direction}`);
+  populateTable(columns);
 }
 
-function setFiltersStateFromURL(columns) {
-  const urlParams = new URLSearchParams(window.location.search);
-  for (const [key, value] of urlParams.entries()) {
-    if (filtersData[key]?.find((filterValue) => filterValue === value)) {
-      filtersState.filters[key] = value;
-      const filterSelect = document.getElementById(`filter-${key}`);
-
-      if (filterSelect) {
-        filterSelect.value = value;
-      }
-    }
-  }
-}
-
-function populateEpisodesTable(columns) {
+function populateTable(columns) {
   const tableBody = document.querySelector('.episodes-table tbody');
-  const filteredEpisodes = getFilteredEpisodes(columns, currentEpisodes);
+  const filtered = getFilteredEpisodes(columns);
 
   tableBody.innerHTML = '';
-  for (const [episodeIndex, episodeData, groupFilters] of filteredEpisodes) {
+  for (const [episodeIndex, episodeData, groupFilters] of filtered) {
     const row = document.createElement('tr');
 
-    for (const [index, entity] of episodeData.entries()) {
-      const cell = createTableCell(getCellValue(entity, columns[index]));
-      if (columns[index].align) cell.style.textAlign = columns[index].align;
-      row.appendChild(cell);
+    for (const [i, entity] of episodeData.entries()) {
+      const td = createCell(cellValue(entity, columns[i]));
+      if (columns[i].align) td.style.textAlign = columns[i].align;
+      row.appendChild(td);
     }
 
-    const viewCell = createTableCell('');
+    const viewCell = createCell('');
     const viewLink = document.createElement('a');
     viewLink.className = 'btn btn-primary btn-small';
     if (window.IS_GROUPED_TABLE) {
-      const filters = { ...groupFilters, ...filtersState.serverFilters, ...filtersState.filters };
-      const urlParams = new URLSearchParams(filters);
+      const filters = { ...groupFilters, ...state.serverFilters, ...state.filters };
       const episodesUrl = window.EPISODES_URL || '/';
-      viewLink.href = `${episodesUrl}?${urlParams.toString()}`;
+      viewLink.href = `${episodesUrl}?${new URLSearchParams(filters).toString()}`;
     } else {
       viewLink.href = `/episode/${episodeIndex}`;
     }
@@ -373,186 +335,201 @@ function populateEpisodesTable(columns) {
     tableBody.appendChild(row);
   }
 
-  // Store filtered episode IDs so the episode viewer can navigate within the filtered subset
+  // Store filtered episode IDs for episode viewer navigation
   if (!window.IS_GROUPED_TABLE) {
-    const hasFilters = Object.keys(filtersState.serverFilters).length > 0 ||
-      filteredEpisodes.length < currentEpisodes.length;
+    const hasFilters = Object.keys(state.serverFilters).length > 0 ||
+      filtered.length < state.episodes.length;
     if (hasFilters) {
-      sessionStorage.setItem('filteredEpisodeIds', JSON.stringify(filteredEpisodes.map(([id]) => id)));
+      sessionStorage.setItem('filteredEpisodeIds', JSON.stringify(filtered.map(([id]) => id)));
       sessionStorage.setItem('episodesReferrerUrl', window.location.href);
     } else {
       sessionStorage.removeItem('filteredEpisodeIds');
       sessionStorage.removeItem('episodesReferrerUrl');
     }
   }
-
-  function getCellValue(entity, column) {
-    if (column.renderer?.type === 'badge') {
-      return createBadge(entity, column.renderer.options?.[entity]);
-    }
-    if (column.renderer?.type === 'icon') {
-      return createIconCell(entity, column.renderer.options);
-    }
-
-    const value = Array.isArray(entity) ? entity[1] : entity;
-
-    return value ?? '';
-  }
-
-  function createIconCell(value, options) {
-    if (value === null || value === undefined) return '';
-    const text = Array.isArray(value) ? value[1] : String(value);
-    const raw = Array.isArray(value) ? value[0] : value;
-    const cfg = options?.[raw];
-    const container = document.createElement('span');
-    container.classList.add('cell-with-icon');
-    if (cfg?.src) {
-      const img = document.createElement('img');
-      img.src = cfg.src;
-      img.alt = '';
-      img.classList.add('cell-icon');
-      container.appendChild(img);
-    }
-    const span = document.createElement('span');
-    span.textContent = cfg?.label ?? text;
-    container.appendChild(span);
-    return container;
-  }
-
-  function createBadge(value, options) {
-    if (value === null || value === undefined) return '';
-
-    const allowedVariants = ['success', 'warning', 'danger', 'default'];
-    const span = document.createElement('span');
-    span.classList.add('badge');
-    span.textContent = options?.label ?? String(value);
-    let variantClass;
-
-    if (options?.variant && allowedVariants.includes(options.variant)) {
-      variantClass = options.variant;
-    } else {
-      variantClass = 'default';
-    }
-
-    span.classList.add(`badge--${variantClass}`);
-
-    return span;
-  }
 }
 
-function getFilteredEpisodes(columns, episodes) {
-  const { sort: sortState, filters } = filtersState;
-  let filteredEpisodes = episodes.slice();
+// ---------------------------------------------------------------------------
+// Filter controls
+// ---------------------------------------------------------------------------
 
-  filteredEpisodes = filteredEpisodes.filter(([episodeIndex, episodeData]) => {
-    return Object.entries(filters).every(([filterKey, value]) => {
-      const columnIndex = columns.findIndex((column) => column.key === filterKey);
-      return String(episodeData[columnIndex]) === value;
+function createFilterDropdown({ id, label, options, onChange }) {
+  const container = document.createElement('div');
+  container.classList.add('control-group', 'control-group--grow');
+
+  const labelEl = document.createElement('label');
+  labelEl.htmlFor = id;
+  labelEl.textContent = label;
+  container.appendChild(labelEl);
+
+  const select = document.createElement('select');
+  select.id = id;
+  select.addEventListener('change', onChange);
+  select.append(...options);
+  container.appendChild(select);
+
+  return container;
+}
+
+function createOption(value, label) {
+  const option = document.createElement('option');
+  option.value = value;
+  option.textContent = label;
+  return option;
+}
+
+function renderServerFilters(groupFilters) {
+  if (!groupFilters) return;
+  const controlsBar = document.querySelector('.controls-bar');
+
+  for (const [filterKey, filterData] of Object.entries(groupFilters)) {
+    const options = [
+      createOption('-1', 'All'),
+      ...filterData.values.map((v) => createOption(v, v)),
+    ];
+
+    const container = createFilterDropdown({
+      id: `filter-${filterKey}`,
+      label: filterData.label,
+      options,
+      onChange: async (event) => {
+        if (event.target.value === '-1') {
+          delete state.serverFilters[filterKey];
+        } else {
+          state.serverFilters[filterKey] = event.target.value;
+        }
+        syncURL();
+        const result = await loadEpisodes(state.serverFilters);
+        if (result) {
+          state.episodes = result.episodes;
+          populateTable(result.columns);
+        }
+      },
     });
-  });
 
-  if (sortState.columnIndex === null) {
-    return filteredEpisodes;
-  }
-
-  filteredEpisodes.sort((a, b) => {
-    const aValue = getSortableValue(a[1][sortState.columnIndex]);
-    const bValue = getSortableValue(b[1][sortState.columnIndex]);
-
-    if (aValue === bValue) return 0;
-
-    if (sortState.direction === 'asc') {
-      return aValue < bValue ? -1 : 1;
-    } else {
-      return aValue > bValue ? -1 : 1;
+    if (state.serverFilters[filterKey]) {
+      container.querySelector('select').value = state.serverFilters[filterKey];
     }
-  });
 
-  return filteredEpisodes;
-
-  function getSortableValue(entity) {
-    if (entity === null || entity === undefined) return '';
-
-    const value = Array.isArray(entity) ? entity[0] : entity;
-
-    return value;
+    controlsBar.appendChild(container);
   }
 }
+
+function renderClientFilters(columns) {
+  const controlsBar = document.querySelector('.controls-bar');
+
+  for (const [filterKey, values] of Object.entries(state.filtersData)) {
+    const column = columns.find((c) => c.key === filterKey);
+    const options = [
+      createOption('-1', 'All'),
+      ...values.map((v) => createOption(v, column.renderer?.options[v]?.label ?? v)),
+    ];
+
+    const container = createFilterDropdown({
+      id: `filter-${filterKey}`,
+      label: column.label,
+      options,
+      onChange: (event) => {
+        if (event.target.value === '-1') {
+          delete state.filters[filterKey];
+        } else {
+          state.filters[filterKey] = event.target.value;
+        }
+        syncURL();
+        populateTable(columns);
+      },
+    });
+
+    // Pre-select from URL
+    if (state.filters[filterKey]) {
+      container.querySelector('select').value = state.filters[filterKey];
+    }
+
+    controlsBar.appendChild(container);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Tooltip dismiss (column info popups)
+// ---------------------------------------------------------------------------
+
+document.addEventListener('click', () => {
+  document.querySelectorAll('.column-info.active').forEach(el => el.classList.remove('active'));
+});
+
+// ---------------------------------------------------------------------------
+// Entry point
+// ---------------------------------------------------------------------------
 
 document.addEventListener('DOMContentLoaded', () => {
-  const sidebarState = loadSidebarState();
-  const sidebarToggler = document.querySelector('.sidebar-toggler');
+  initEpisodesTable().catch((err) => console.error('Failed to initialize:', err));
+  initSidebar();
+});
+
+// ---------------------------------------------------------------------------
+// Sidebar (episode detail page)
+// ---------------------------------------------------------------------------
+
+function initSidebar() {
   const sidebar = document.querySelector('.sidebar');
+  if (!sidebar) return;
+
+  const sidebarToggler = document.querySelector('.sidebar-toggler');
   const sidebarResizer = document.querySelector('.sidebar-resizer');
   const sidebarContent = document.querySelector('.sidebar-content');
   const keyColumnResizer = document.querySelector('.key-column-resizer');
   const episodeViewer = document.getElementById('viewer-container');
-
-  // TODO: Split logic to run page-specific explicitly
-  if (!sidebar) return;
+  const sidebarState = loadSidebarState();
 
   setSidebarWidth(sidebarState.sidebarWidth);
   setKeyColumnWidth(sidebarState.keyColumnWidth);
-  setSidebarScrollTop(sidebarState.scrollTop);
+  sidebarContent.scrollTop = sidebarState.scrollTop;
   toggleSidebar(sidebarState.isExpanded);
 
-  const sidebarResizeHandler = (event) => {
-    event.preventDefault();
-    setSidebarWidth(document.body.clientWidth - event.clientX);
-    saveSidebarState();
-  };
-
-  const keyColumnResizeHandler = (event) => {
-    const offsetX = sidebarState.sidebarWidth - (document.body.clientWidth - event.clientX);
-    const columnWidth = Math.min(Math.max(50, offsetX), sidebarState.sidebarWidth - 50);
-    setKeyColumnWidth(columnWidth);
-    saveSidebarState();
-  };
-
   sidebarToggler.addEventListener('click', () => {
-    const isExpanded = sidebar.classList.contains('expanded');
-    toggleSidebar(!isExpanded);
-    saveSidebarState();
+    toggleSidebar(!sidebar.classList.contains('expanded'));
+    save();
   });
 
-  [
-    { resizer: sidebarResizer, handler: sidebarResizeHandler },
-    { resizer: keyColumnResizer, handler: keyColumnResizeHandler },
-  ].forEach(({ resizer, handler }) => {
-    resizer.addEventListener('mousedown', (event) => {
-      episodeViewer.style.zIndex = -1;
-      sidebar.classList.add('isResizing');
-      document.body.style.userSelect = 'none';
-      document.addEventListener('mousemove', handler);
-
-      document.addEventListener(
-        'mouseup',
-        (event) => {
-          document.removeEventListener('mousemove', handler);
-          episodeViewer.style.zIndex = '';
-          sidebar.classList.remove('isResizing');
-          document.body.style.userSelect = '';
-        },
-        { once: true }
-      );
-    });
+  setupResizer(sidebarResizer, (e) => {
+    setSidebarWidth(document.body.clientWidth - e.clientX);
+    save();
+  });
+  setupResizer(keyColumnResizer, (e) => {
+    const offsetX = sidebarState.sidebarWidth - (document.body.clientWidth - e.clientX);
+    setKeyColumnWidth(Math.min(Math.max(50, offsetX), sidebarState.sidebarWidth - 50));
+    save();
   });
 
   sidebarContent.addEventListener('scroll', () => {
-    const scrollTop = sidebarContent.scrollTop;
-    setSidebarScrollTop(scrollTop);
-    saveSidebarState();
+    sidebarState.scrollTop = sidebarContent.scrollTop;
+    save();
   });
+
+  function setupResizer(resizer, onMove) {
+    resizer.addEventListener('mousedown', () => {
+      episodeViewer.style.zIndex = -1;
+      sidebar.classList.add('isResizing');
+      document.body.style.userSelect = 'none';
+      document.addEventListener('mousemove', onMove);
+      document.addEventListener('mouseup', () => {
+        document.removeEventListener('mousemove', onMove);
+        episodeViewer.style.zIndex = '';
+        sidebar.classList.remove('isResizing');
+        document.body.style.userSelect = '';
+      }, { once: true });
+    });
+  }
 
   function setSidebarWidth(width) {
     sidebarState.sidebarWidth = Math.max(100, width);
     sidebar.style.width = `${sidebarState.sidebarWidth}px`;
   }
 
-  function toggleSidebar(isExpanded) {
-    sidebar.classList.toggle('expanded', isExpanded);
-    sidebar.style.width = isExpanded ? `${sidebarState.sidebarWidth}px` : '0px';
-    sidebarState.isExpanded = isExpanded;
+  function toggleSidebar(expanded) {
+    sidebar.classList.toggle('expanded', expanded);
+    sidebar.style.width = expanded ? `${sidebarState.sidebarWidth}px` : '0px';
+    sidebarState.isExpanded = expanded;
   }
 
   function setKeyColumnWidth(width) {
@@ -560,86 +537,28 @@ document.addEventListener('DOMContentLoaded', () => {
     sidebarState.keyColumnWidth = width;
   }
 
-  function setSidebarScrollTop(scrollTop) {
-    sidebarContent.scrollTop = scrollTop;
-    sidebarState.scrollTop = scrollTop;
-  }
-
-  function saveSidebarState() {
+  function save() {
     localStorage.setItem('sidebarState', JSON.stringify(sidebarState));
   }
+}
 
-  function loadSidebarState() {
-    const defaultState = {
-      isExpanded: false,
-      sidebarWidth: 300,
-      keyColumnWidth: 150,
-      scrollTop: 0,
-    };
-    const savedState = JSON.parse(localStorage.getItem('sidebarState'));
+function loadSidebarState() {
+  const defaults = { isExpanded: false, sidebarWidth: 300, keyColumnWidth: 150, scrollTop: 0 };
+  const saved = JSON.parse(localStorage.getItem('sidebarState'));
+  return { ...defaults, ...saved };
+}
 
-    return { ...defaultState, ...savedState };
-  }
-});
+// ---------------------------------------------------------------------------
+// Sidebar content (static episode metadata)
+// ---------------------------------------------------------------------------
 
 function initializeSidebar(staticData) {
-  const sidebarContent = document.querySelector('.sidebar-content-wrapper tbody');
+  const tbody = document.querySelector('.sidebar-content-wrapper tbody');
 
-  function isNestable(value) {
-    return typeof value === 'object' && value !== null;
-  }
-
-  function renderValue(value, level = 0) {
-    const expandButton = level === 0 ? '<button class="expand-button">▶</button>' : '';
-
-    switch (typeof value) {
-      case 'string':
-        return `"${value}"`;
-      case 'number':
-        return value.toFixed(2).replace(/\.00$/, '');
-      case 'boolean':
-        return `<input type="checkbox" ${value ? 'checked' : ''} onclick="return false" />`;
-
-      case 'object':
-        if (value === null) {
-          return 'null';
-        } else if (Array.isArray(value)) {
-          return expandButton + `[${value.map((item) => renderValue(item, level + 1)).join(', ')}]`;
-        } else {
-          return expandButton + '{...}';
-        }
-      default:
-        return value;
-    }
-  }
-
-  function renderLevel(key, value) {
-    let html = '';
-
-    if (isNestable(value)) {
-      for (const [key, val] of Object.entries(value)) {
-        html += `
-          <tr>
-            <td>${key}</td>
-              <td>
-                ${renderValue(val)}
-                ${isNestable(val) ? `<table><tbody>${renderLevel(key, val)}</tbody></table>` : ''}
-              </td>
-          </tr>
-        `;
-      }
-    } else {
-      html += `<tr><td>${key}</td><td>${renderValue(value)}</td></tr>`;
-    }
-
-    return html;
-  }
-
-  sidebarContent.insertAdjacentHTML('beforeend', renderLevel('', staticData));
+  tbody.insertAdjacentHTML('beforeend', renderLevel('', staticData));
   document.querySelectorAll('.expand-button').forEach((button) => {
     button.addEventListener('click', () => {
       const table = button.parentElement.querySelector('table');
-
       if (table) {
         const isShown = button.dataset.expanded === 'true';
         button.dataset.expanded = !isShown;
@@ -647,4 +566,49 @@ function initializeSidebar(staticData) {
       }
     });
   });
+}
+
+function isNestable(value) {
+  return typeof value === 'object' && value !== null;
+}
+
+function renderValue(value, level = 0) {
+  const expandButton = level === 0 ? '<button class="expand-button">▶</button>' : '';
+
+  switch (typeof value) {
+    case 'string':
+      return `"${value}"`;
+    case 'number':
+      return value.toFixed(2).replace(/\.00$/, '');
+    case 'boolean':
+      return `<input type="checkbox" ${value ? 'checked' : ''} onclick="return false" />`;
+    case 'object':
+      if (value === null) return 'null';
+      if (Array.isArray(value)) {
+        return expandButton + `[${value.map((item) => renderValue(item, level + 1)).join(', ')}]`;
+      }
+      return expandButton + '{...}';
+    default:
+      return value;
+  }
+}
+
+function renderLevel(key, value) {
+  if (!isNestable(value)) {
+    return `<tr><td>${key}</td><td>${renderValue(value)}</td></tr>`;
+  }
+
+  let html = '';
+  for (const [k, val] of Object.entries(value)) {
+    html += `
+      <tr>
+        <td>${k}</td>
+        <td>
+          ${renderValue(val)}
+          ${isNestable(val) ? `<table><tbody>${renderLevel(k, val)}</tbody></table>` : ''}
+        </td>
+      </tr>
+    `;
+  }
+  return html;
 }
