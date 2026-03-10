@@ -21,7 +21,7 @@ from lerobot.configs.default import DatasetConfig
 from lerobot.configs.policies import PreTrainedConfig
 from lerobot.configs.train import TrainPipelineConfig
 from lerobot.envs.configs import EnvConfig, FeatureType, PolicyFeature
-from lerobot.policies.xvla.configuration_xvla import XVLAConfig  # noqa: F401 — registers policy choices
+from lerobot.policies.smolvla.configuration_smolvla import SmolVLAConfig  # noqa: F401 — registers policy
 from lerobot.utils.constants import ACTION, OBS_IMAGES, OBS_STATE
 
 from positronic import utils
@@ -93,15 +93,14 @@ def _update_config(cfg: TrainPipelineConfig, **cfg_kwargs):
             raise AttributeError(f'Could not update config for {k}') from e
 
 
-@cfn.config(codec=lerobot_codecs.ee, base_model='lerobot/smolvla_base', num_train_steps=None)
-@pos3.with_mirror()
-def train(
+def _train(
     input_path: str,
     exp_name: str,
     output_dir: str,
     codec: Codec,
     base_model: str,
     num_train_steps: int | None,
+    batch_size: int,
     **cfg_kwargs,
 ):
     if isinstance(codec, str):
@@ -134,6 +133,7 @@ def train(
         job_name=exp_name,
         eval_freq=0,
         log_freq=10,
+        batch_size=batch_size,
         steps=num_train_steps if num_train_steps is not None else 100_000,
     )
 
@@ -185,9 +185,23 @@ def train(
     logging.info('Training finished.')
 
 
+@cfn.config(codec=lerobot_codecs.ee, base_model='lerobot/smolvla_base', num_train_steps=None, batch_size=64)
+@pos3.with_mirror()
+def train(input_path, exp_name, output_dir, codec, base_model, num_train_steps, batch_size, **cfg_kwargs):
+    _train(input_path, exp_name, output_dir, codec, base_model, num_train_steps, batch_size, **cfg_kwargs)
+
+
+@cfn.config(codec=lerobot_codecs.ee, base_model='lerobot/smolvla_base', num_train_steps=None, batch_size=64)
+@pos3.with_mirror()
+def full_finetune(input_path, exp_name, output_dir, codec, base_model, num_train_steps, batch_size, **cfg_kwargs):
+    cfg_kwargs.setdefault('policy.freeze_vision_encoder', False)
+    cfg_kwargs.setdefault('policy.train_expert_only', False)
+    _train(input_path, exp_name, output_dir, codec, base_model, num_train_steps, batch_size, **cfg_kwargs)
+
+
 def _internal_main():
     init_logging()
-    cfn.cli(train)
+    cfn.cli({'train': train, 'full_finetune': full_finetune})
 
 
 if __name__ == '__main__':
