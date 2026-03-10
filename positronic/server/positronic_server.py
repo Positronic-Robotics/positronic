@@ -458,7 +458,8 @@ def _start_http_redirect(host: str, https_port: int, primary_host: str):
 
     @redirect_app.api_route('/{path:path}', methods=['GET', 'HEAD', 'POST', 'PUT', 'DELETE', 'PATCH'])
     async def redirect_to_https(request: Request, path: str):
-        target = f'https://{primary_host}:{https_port}/{path}'
+        req_host = request.url.hostname or primary_host
+        target = f'https://{req_host}:{https_port}/{path}'
         if request.url.query:
             target += f'?{request.url.query}'
         return RedirectResponse(url=target, status_code=307)
