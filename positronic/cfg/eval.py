@@ -545,7 +545,13 @@ def calculate_units(episode: Episode) -> int:
 HUMAN_MODEL = 'Human'
 TELEOP_MODEL = 'Robot teleoperated by Human'
 
-PHAIL_MODEL_DISPLAY = {'openpi': 'Compass', 'groot': 'Sequoia', 'act': 'Maestro', 'human': HUMAN_MODEL}
+PHAIL_MODEL_DISPLAY = {
+    'openpi': 'Compass',
+    'groot': 'Sequoia',
+    'act': 'Maestro',
+    'human': HUMAN_MODEL,
+    'teleop': TELEOP_MODEL,
+}
 
 PHAIL_MODEL_ICON = RendererConfig(
     type='icon',
