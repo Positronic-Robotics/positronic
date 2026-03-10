@@ -251,6 +251,7 @@ class ColumnConfig:
     renderer: RendererConfig | None = None
     filter: bool = False
     align: str | None = None
+    sortable: bool = True
 
 
 @dataclass
@@ -308,6 +309,9 @@ def parse_table_cfg(table_cfg: TableConfig) -> tuple:
 
         if cfg.filter:
             column['filter'] = cfg.filter
+
+        if not cfg.sortable:
+            column['sortable'] = False
 
         columns.append(column)
     return columns, formatters, defaults

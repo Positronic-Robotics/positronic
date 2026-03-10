@@ -530,6 +530,11 @@ def phail_uph(ep: Episode) -> float | None:
     return items / (duration / 3600)
 
 
+def _phail_task_label(ep: Episode) -> str:
+    obj = task_code(ep)
+    return f'Pick-and-place: {obj}' if obj else ''
+
+
 _phail_derives = Derive(
     model=phail_model,
     status=phail_status,
@@ -541,7 +546,14 @@ _phail_derives = Derive(
 )
 
 phail_inference = base_cfg.transform.override(
-    base=base_cfg.local_all, transforms=[Group(Identity(remove=['robot_commands.reset']), _phail_derives)]
+    base=base_cfg.local_all,
+    transforms=[
+        Group(
+            Identity(remove=['robot_commands.reset', 'eval.object']),
+            _phail_derives,
+            Derive(**{'eval.object': _phail_task_label}),
+        )
+    ],
 )
 
 
@@ -560,7 +572,7 @@ phail_human = base_cfg.transform.override(
                 'model': FromValue('Human'),
                 'status': FromValue('Pass'),
                 'equipment': FromValue('DROID'),
-                'eval.object': task_code,
+                'eval.object': _phail_task_label,
                 'eval.outcome': FromValue('Success'),
                 'eval.successful_items': FromValue(8),
                 'eval.total_items': FromValue(8),
@@ -610,6 +622,7 @@ def phail_leaderboard():
 
     format_table = {
         'model': C(label='Model', renderer=PHAIL_MODEL_ICON),
+        'count': C(label='Runs', format='%d', align='right', sortable=False),
         'UPH': C(label='UPH', subtitle='Units Per Hour', format='%.1f', align='right'),
         'completion': C(label='Done %', subtitle='Completed / Total Operations', format='%.1f%%', align='right'),
         'MTBF': C(

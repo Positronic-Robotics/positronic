@@ -312,7 +312,7 @@ function renderTableHeader(columns) {
   const headerRow = document.querySelector('.episodes-table thead tr');
   const headerCells = [];
 
-  for (const [columnIndex, { label, subtitle, align }] of Object.entries(columns)) {
+  for (const [columnIndex, { label, subtitle, align, sortable }] of Object.entries(columns)) {
     let content;
     if (subtitle) {
       content = document.createElement('span');
@@ -332,10 +332,12 @@ function renderTableHeader(columns) {
     }
 
     const th = createCell(content || label, true);
-    th.classList.add('sortable');
+    if (sortable !== false) {
+      th.classList.add('sortable');
+      th.dataset.sort = columnIndex;
+      th.addEventListener('click', () => onSortClick(th, columnIndex, columns));
+    }
     if (align) th.style.textAlign = align;
-    th.dataset.sort = columnIndex;
-    th.addEventListener('click', () => onSortClick(th, columnIndex, columns));
     headerCells.push(th);
   }
 
