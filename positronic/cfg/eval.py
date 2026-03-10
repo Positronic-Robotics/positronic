@@ -475,7 +475,7 @@ def sim_checkpoint_table():
 # PhAIL benchmark (real robot bin-to-bin picking evaluation)
 # ========================================================================================
 
-PHAIL_MODEL_DISPLAY = {'openpi': 'Compass', 'groot': 'Sequoia', 'act': 'Maestro'}
+PHAIL_MODEL_DISPLAY = {'openpi': 'Compass', 'groot': 'Sequoia', 'act': 'Maestro', 'human': 'Human'}
 
 PHAIL_MODEL_ICON = RendererConfig(
     type='icon',
@@ -483,6 +483,7 @@ PHAIL_MODEL_ICON = RendererConfig(
         'Compass': {'src': '/static/icons/compass.svg'},
         'Sequoia': {'src': '/static/icons/sequoia.svg'},
         'Maestro': {'src': '/static/icons/maestro.svg'},
+        'Human': {'src': '/static/icons/human.svg'},
     },
 )
 
@@ -529,23 +530,50 @@ def phail_uph(ep: Episode) -> float | None:
     return items / (duration / 3600)
 
 
-phail_episodes = base_cfg.transform.override(
-    base=base_cfg.local_all,
+_phail_derives = Derive(
+    model=phail_model,
+    status=phail_status,
+    equipment=FromValue('DROID'),
+    units=phail_units,
+    uph=phail_uph,
+    completion=phail_completion,
+    started=started,
+)
+
+phail_inference = base_cfg.transform.override(
+    base=base_cfg.local_all, transforms=[Group(Identity(remove=['robot_commands.reset']), _phail_derives)]
+)
+
+
+# Human baseline: 40 episodes from s3://raw/human (10 per object, 8 items each, all success).
+# These episodes lack eval.* and inference.* fields, so we set final values directly.
+def _human_uph(ep: Episode) -> float:
+    return 8 / (ep.duration_ns / 1e9 / 3600)
+
+
+phail_human = base_cfg.transform.override(
+    base=base_cfg.local_all.override(path='s3://raw/human'),
     transforms=[
         Group(
             Identity(),
-            Derive(
-                model=phail_model,
-                status=phail_status,
-                equipment=FromValue('DROID'),
-                units=phail_units,
-                uph=phail_uph,
-                completion=phail_completion,
-                started=started,
-            ),
+            Derive(**{
+                'model': FromValue('Human'),
+                'status': FromValue('Pass'),
+                'equipment': FromValue('DROID'),
+                'eval.object': task_code,
+                'eval.outcome': FromValue('Success'),
+                'eval.successful_items': FromValue(8),
+                'eval.total_items': FromValue(8),
+                'units': FromValue('8/8'),
+                'uph': _human_uph,
+                'completion': FromValue(100.0),
+                'started': started,
+            }),
         )
     ],
 )
+
+phail_episodes = base_cfg.concat_ds.override(datasets=[phail_inference, phail_human])
 
 
 @cfn.config()

@@ -443,7 +443,7 @@ tbody tr.lb-row--baseline:hover {
 
 /* Icon cells */
 .cell-with-icon { display: inline-flex; align-items: center; }
-.cell-icon { width: 18px; height: 18px; object-fit: contain; margin-right: 0.6rem; }
+.cell-icon { width: 24px; height: 24px; object-fit: contain; margin-right: 0.6rem; }
 
 /* Buttons */
 .btn {
