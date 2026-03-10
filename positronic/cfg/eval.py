@@ -635,6 +635,8 @@ phail_inference = base_cfg.transform.override(
                     'inference.policy.type',
                 ]
             ),
+            # NOTE: _phail_derives reads inference.policy.server.type from the original episode,
+            # before Identity(remove=...) strips it. Group applies all transforms to the same input.
             _phail_derives,
             Derive(**{'eval.object': _phail_task_label}),
         )
@@ -679,7 +681,7 @@ phail_human = base_cfg.transform.override(
 # DROID teleoperation data: robot controlled by human via VR controller.
 # Two-step transform: first compute item counts from grip signals, then derive phail fields.
 _teleop_with_items = base_cfg.transform.override(
-    base=internal.droid, transforms=[Group(Derive(item_count=calculate_units), Identity())]
+    base=internal.droid_clean, transforms=[Group(Derive(item_count=calculate_units), Identity())]
 )
 
 phail_teleop = base_cfg.transform.override(
