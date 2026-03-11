@@ -545,18 +545,14 @@ def calculate_units(episode: Episode) -> int:
 HUMAN_MODEL = 'Human'
 TELEOP_MODEL = 'Robot teleoperated by Human'
 
-PHAIL_MODEL_DISPLAY = {'openpi': 'OpenPI', 'groot': 'GR00T', 'act': 'ACT', 'human': HUMAN_MODEL, 'teleop': TELEOP_MODEL}
+PHAIL_MODEL_DISPLAY = {
+    'openpi': 'Physical Intelligence Open \u03c0\u2080.\u2085',
+    'groot': 'NVIDIA GR00T N1.6',
+    'act': 'Action Chunking Transformer',
+    'human': HUMAN_MODEL,
+    'teleop': TELEOP_MODEL,
+}
 
-PHAIL_MODEL_ICON = RendererConfig(
-    type='icon',
-    options={
-        'OpenPI': {'src': '/static/icons/openpi.svg'},
-        'GR00T': {'src': '/static/icons/groot.svg'},
-        'ACT': {'src': '/static/icons/act.svg'},
-        HUMAN_MODEL: {'src': '/static/icons/human.svg'},
-        TELEOP_MODEL: {'src': '/static/icons/teleop.svg'},
-    },
-)
 
 PHAIL_OUTCOME_BADGE = RendererConfig(
     type='badge',
@@ -706,7 +702,7 @@ phail_episodes = base_cfg.concat_ds.override(datasets=[phail_inference, phail_hu
 def phail_episodes_table():
     return {
         '__index__': C(label='#', format='%d'),
-        'model': C(label='Model', filter=True, renderer=PHAIL_MODEL_ICON),
+        'model': C(label='Model', filter=True),
         'eval.object': C(label='Task', filter=True),
         'started': C(label='Started', format='%Y-%m-%d %H:%M'),
         'units': C(label='Units', align='right'),
@@ -735,7 +731,7 @@ def phail_leaderboard():
         }
 
     format_table = {
-        'model': C(label='Model', renderer=PHAIL_MODEL_ICON),
+        'model': C(label='Model', filter=True),
         'count': C(label='Runs', format='%d', align='right', sortable=False),
         'UPH': C(label='UPH', subtitle='Units Per Hour', format='%.1f', align='right'),
         'completion': C(label='Done %', subtitle='Completed / Total Operations', format='%.1f%%', align='right'),
