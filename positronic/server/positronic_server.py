@@ -32,6 +32,9 @@ from positronic.dataset.local_dataset import LocalDataset
 from positronic.server.dataset_utils import get_dataset_root, get_episodes_list, stream_episode_rrd
 from positronic.utils.logging import init_logging
 
+# Response cache for api_groups and api_episodes (dataset is immutable once loaded)
+_api_cache: dict[tuple, dict] = {}
+
 # Global app state
 app_state: dict[str, object] = {
     'dataset': None,
@@ -308,6 +311,10 @@ def parse_table_cfg(table_cfg: TableConfig) -> tuple:
 @app.get('/api/episodes')
 @require_dataset
 async def api_episodes(request: Request):
+    cache_key = ('episodes', tuple(sorted(request.query_params.items())))
+    if cache_key in _api_cache:
+        return _api_cache[cache_key]
+
     ds = app_state.get('dataset')
     config = app_state['episode_table_cfg']
     columns, formatters, defaults = parse_table_cfg(config)
@@ -322,7 +329,9 @@ async def api_episodes(request: Request):
         if matches(ep)
     )
     episodes = get_episodes_list(ep_it, config.keys(), formatters=formatters, defaults=defaults)
-    return {'columns': columns, 'episodes': episodes}
+    result = {'columns': columns, 'episodes': episodes}
+    _api_cache[cache_key] = result
+    return result
 
 
 def _group_id(episode: Episode, group_keys: tuple[str, ...]) -> tuple[Any, ...]:
@@ -332,6 +341,10 @@ def _group_id(episode: Episode, group_keys: tuple[str, ...]) -> tuple[Any, ...]:
 @app.get('/api/groups/{suffix}')
 @require_dataset
 async def api_groups(request: Request, suffix: str):
+    cache_key = ('groups', suffix, tuple(sorted(request.query_params.items())))
+    if cache_key in _api_cache:
+        return _api_cache[cache_key]
+
     ds = app_state.get('dataset')
     group_tables = app_state.get('group_tables_cfg', {})
     if not isinstance(group_tables, dict) or suffix not in group_tables:
@@ -375,6 +388,7 @@ async def api_groups(request: Request, suffix: str):
     result = {'columns': columns, 'episodes': episodes, 'group_filters': group_filters}
     if cfg.default_sort:
         result['default_sort'] = asdict(cfg.default_sort)
+    _api_cache[cache_key] = result
     return result
 
 
@@ -557,6 +571,7 @@ def main(
             ds = CachedDataset(dataset)
             logging.info(f'Dataset loaded. Episodes: {len(ds)}')
             app_state['dataset'] = ds
+            _api_cache.clear()
             app_state['loading_state'] = False
         except Exception as e:
             logging.error(f'Failed to load dataset: {e}', exc_info=True)
