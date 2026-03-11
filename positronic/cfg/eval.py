@@ -545,20 +545,14 @@ def calculate_units(episode: Episode) -> int:
 HUMAN_MODEL = 'Human'
 TELEOP_MODEL = 'Robot teleoperated by Human'
 
-PHAIL_MODEL_DISPLAY = {
-    'openpi': 'Compass',
-    'groot': 'Sequoia',
-    'act': 'Maestro',
-    'human': HUMAN_MODEL,
-    'teleop': TELEOP_MODEL,
-}
+PHAIL_MODEL_DISPLAY = {'openpi': 'OpenPI', 'groot': 'GR00T', 'act': 'ACT', 'human': HUMAN_MODEL, 'teleop': TELEOP_MODEL}
 
 PHAIL_MODEL_ICON = RendererConfig(
     type='icon',
     options={
-        'Compass': {'src': '/static/icons/compass.svg'},
-        'Sequoia': {'src': '/static/icons/sequoia.svg'},
-        'Maestro': {'src': '/static/icons/maestro.svg'},
+        'OpenPI': {'src': '/static/icons/openpi.svg'},
+        'GR00T': {'src': '/static/icons/groot.svg'},
+        'ACT': {'src': '/static/icons/act.svg'},
         HUMAN_MODEL: {'src': '/static/icons/human.svg'},
         TELEOP_MODEL: {'src': '/static/icons/teleop.svg'},
     },
