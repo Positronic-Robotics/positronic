@@ -1,0 +1,30 @@
+services:
+  phail-openpi-server:
+    extends:
+      file: docker-compose.yml
+      service: openpi-server
+    container_name: phail-openpi-server
+    pull_policy: always
+    command: ["phail"]
+    ports: !override
+      - "8000:8000"
+
+  phail-groot-server:
+    extends:
+      file: docker-compose.yml
+      service: groot-server
+    container_name: phail-groot-server
+    pull_policy: always
+    command: ["phail"]
+    ports: !override
+      - "8001:8000"
+
+  phail-lerobot-server:
+    extends:
+      file: docker-compose.yml
+      service: lerobot-0_3_3-server
+    container_name: phail-lerobot-server
+    pull_policy: always
+    command: ["phail"]
+    ports: !override
+      - "8002:8000"

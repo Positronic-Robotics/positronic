@@ -142,6 +142,7 @@ services:
 
   openpi-server-8001:
     <<: *openpi-server-common
+    container_name: openpi-server-8001
     ports:
       - "8001:8000"
 

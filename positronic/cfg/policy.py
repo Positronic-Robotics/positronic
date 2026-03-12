@@ -106,3 +106,14 @@ def production(groot, openpi, act, extra):
         raise ValueError('At least one vendor policy must be enabled')
     policies, weights = zip(*entries, strict=False)
     return SampledPolicy(*policies, weights=weights)
+
+
+@cfn.config()
+def phail_single(hostname, w_openpi=1.0, w_groot=1.0, w_act=1.0):
+    from positronic.policy import RemotePolicy, SampledPolicy
+
+    openpi = RemotePolicy(hostname, 8000, resize=640)
+    groot = RemotePolicy(hostname, 8001, resize=640)
+    act = RemotePolicy(hostname, 8002, resize=640)
+
+    return SampledPolicy(openpi, groot, act, weights=[w_openpi, w_groot, w_act])
