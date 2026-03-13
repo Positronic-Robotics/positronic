@@ -7,48 +7,165 @@ Episode {{ episode_id }} / {{ num_episodes }} - Positronic Dataset Viewer
 {% endblock %}
 
 {% block scripts %}
+<script>
+    const RERUN_VERSION = '{{ rerun_version }}';
+    let currentEpisodeId = {{ episode_id }};
+    let maxEpisodes = {{ num_episodes }};
+    let filteredIds = null;
+    let currentRrdUrl = null;
+    let viewerReady = false;
+
+    // SPA navigation: swap RRD data in the running rerun viewer via its JS API.
+    // This keeps the WASM alive — no 35MB re-download/recompile on each episode.
+    async function navigateToEpisode(episodeId, {replace = false} = {}) {
+        const resp = await fetch(`/api/episode/${episodeId}`);
+        if (!resp.ok) return;
+        const data = await resp.json();
+
+        currentEpisodeId = data.episode_id;
+        maxEpisodes = data.num_episodes;
+
+        const viewerIframe = document.getElementById('viewer-iframe');
+        const newRrdUrl = `${window.location.origin}/api/episode_rrd/${currentEpisodeId}`;
+
+        // Try to swap data in the live viewer via its handle API
+        let swapped = false;
+        if (viewerReady) {
+            try {
+                const handle = viewerIframe.contentWindow._handle;
+                if (handle && currentRrdUrl) {
+                    handle.remove_receiver(currentRrdUrl);
+                    handle.add_receiver(newRrdUrl, true);
+                    currentRrdUrl = newRrdUrl;
+                    swapped = true;
+                }
+            } catch (e) {
+                // Cross-origin or handle not available — fall back to iframe reload
+            }
+        }
+
+        if (!swapped) {
+            // Fallback: reload the iframe (first load or if handle unavailable)
+            viewerReady = false;
+            const viewerUrl = new URL(`/static/rerun/${RERUN_VERSION}/index.html`, window.location.origin);
+            viewerUrl.searchParams.set('url', newRrdUrl);
+            viewerUrl.searchParams.set('hide_welcome_screen', '');
+            viewerIframe.src = viewerUrl;
+            currentRrdUrl = newRrdUrl;
+        }
+
+        // Update browser URL
+        const historyState = {episodeId: currentEpisodeId};
+        const url = `/episode/${currentEpisodeId}`;
+        if (replace) history.replaceState(historyState, '', url);
+        else history.pushState(historyState, '', url);
+        document.title = `Episode ${currentEpisodeId} / ${maxEpisodes}`;
+
+        // Update nav controls
+        updateNavControls();
+
+        // Update task
+        const taskEl = document.getElementById('task-description');
+        if (taskEl) taskEl.textContent = data.task ? ` : ${data.task}` : '';
+
+        // Update episode path/size
+        const pathEl = document.getElementById('episode-path-section');
+        if (pathEl) {
+            if (data.episode_path || data.episode_size_mb) {
+                pathEl.style.display = '';
+                const pathValue = pathEl.querySelector('.episode-path-value');
+                const pathLabel = pathEl.querySelector('.episode-path-label');
+                const sizeEl = pathEl.querySelector('.episode-size');
+                if (pathValue && pathLabel) {
+                    if (data.episode_path) { pathValue.textContent = data.episode_path; pathValue.style.display = ''; pathLabel.style.display = ''; }
+                    else { pathValue.style.display = 'none'; pathLabel.style.display = 'none'; }
+                }
+                if (sizeEl) {
+                    if (data.episode_size_mb) { sizeEl.textContent = `(${data.episode_size_mb} MB)`; sizeEl.style.display = ''; }
+                    else { sizeEl.style.display = 'none'; }
+                }
+            } else {
+                pathEl.style.display = 'none';
+            }
+        }
+
+        // Update sidebar
+        initializeSidebar(data.static_data);
+    }
+
+    function updateNavControls() {
+        const input = document.getElementById('episode-input');
+        if (filteredIds) {
+            const idx = filteredIds.indexOf(currentEpisodeId);
+            input.value = idx + 1;
+            input.dataset.original = idx + 1;
+            input.maxLength = String(filteredIds.length).length;
+            document.getElementById('episode-count').textContent = ` / ${filteredIds.length}`;
+        } else {
+            input.value = currentEpisodeId;
+            input.dataset.original = currentEpisodeId;
+            input.maxLength = String(maxEpisodes - 1).length;
+            document.getElementById('episode-count').textContent = ` / ${maxEpisodes}`;
+        }
+    }
+
+    function getPrevEpisodeId() {
+        if (filteredIds) {
+            const idx = filteredIds.indexOf(currentEpisodeId);
+            return filteredIds[(idx - 1 + filteredIds.length) % filteredIds.length];
+        }
+        return (currentEpisodeId - 1 + maxEpisodes) % maxEpisodes;
+    }
+
+    function getNextEpisodeId() {
+        if (filteredIds) {
+            const idx = filteredIds.indexOf(currentEpisodeId);
+            return filteredIds[(idx + 1) % filteredIds.length];
+        }
+        return (currentEpisodeId + 1) % maxEpisodes;
+    }
+
+    // Listen for "READY" from the rerun viewer iframe
+    window.addEventListener('message', (e) => {
+        if (e.data === 'READY') viewerReady = true;
+    });
+
+    // Handle browser back/forward
+    window.addEventListener('popstate', (e) => {
+        if (e.state && e.state.episodeId !== undefined) {
+            navigateToEpisode(e.state.episodeId, {replace: true});
+        }
+    });
+</script>
+
 <script async>
     document.addEventListener('DOMContentLoaded', () => {
         initializeSidebar({{ static_data| tojson | safe }});
     });
 </script>
 
-<!-- Filtered episode navigation via sessionStorage.
-     When users arrive from the episodes table, the table stores the current filtered
-     episode ID list and referrer URL in sessionStorage. This lets prev/next cycle through
-     only the filtered subset. This state is ephemeral — it doesn't survive a page refresh
-     or a shared/bookmarked link, which is acceptable for transient filter UI state. The
-     "proper" alternative would be server-side: the /episode/{id} endpoint accepts filter
-     query params (reusing the existing matches() helper from /api/episodes), computes the
-     filtered list, and passes prev_episode_id/next_episode_id/filtered_count/filtered_index
-     in the template context. That gives stable URLs but requires server and template changes. -->
+<!-- Filtered episode navigation via sessionStorage. -->
 <script>
-    let filteredIds = (function() {
+    (function() {
         const raw = sessionStorage.getItem('filteredEpisodeIds');
-        if (!raw) return null;
+        if (!raw) return;
 
         let ids;
-        try { ids = JSON.parse(raw); } catch { return null; }
-        const currentId = {{ episode_id }};
-        if (!Array.isArray(ids) || ids.indexOf(currentId) === -1) return null;
+        try { ids = JSON.parse(raw); } catch { return; }
+        if (!Array.isArray(ids) || ids.indexOf(currentEpisodeId) === -1) return;
+
+        filteredIds = ids;
 
         const nav = document.getElementById('episode-nav');
         const input = document.getElementById('episode-input');
-        const currentIndex = ids.indexOf(currentId);
+        const currentIndex = ids.indexOf(currentEpisodeId);
 
-        // Switch to filtered mode: input shows 1-based position, not episode ID
         nav.classList.add('episode-nav--filtered');
         input.value = currentIndex + 1;
         input.dataset.original = currentIndex + 1;
         input.maxLength = String(ids.length).length;
-
-        const prevId = ids[(currentIndex - 1 + ids.length) % ids.length];
-        const nextId = ids[(currentIndex + 1) % ids.length];
-        document.getElementById('prev-btn').onclick = () => { window.location.href = `/episode/${prevId}`; };
-        document.getElementById('next-btn').onclick = () => { window.location.href = `/episode/${nextId}`; };
         document.getElementById('episode-count').textContent = ` / ${ids.length}`;
 
-        // Add dismiss × and "Filtered" badge inside the nav bar, before "Ep."
         const badge = document.createElement('span');
         badge.className = 'filter-label';
         badge.textContent = 'Filtered';
@@ -60,14 +177,9 @@ Episode {{ episode_id }} / {{ num_episodes }} - Positronic Dataset Viewer
             sessionStorage.removeItem('filteredEpisodeIds');
             sessionStorage.removeItem('episodesReferrerUrl');
             nav.classList.remove('episode-nav--filtered');
-            input.value = currentId;
-            input.dataset.original = currentId;
-            input.maxLength = String({{ num_episodes }}).length;
-            document.getElementById('episode-count').textContent = ' / {{ num_episodes }}';
-            document.getElementById('prev-btn').onclick = () => { window.location.href = `/episode/{{ (episode_id - 1) % num_episodes }}`; };
-            document.getElementById('next-btn').onclick = () => { window.location.href = `/episode/{{ (episode_id + 1) % num_episodes }}`; };
-            document.getElementById('breadcrumb-root').href = '/';
             filteredIds = null;
+            updateNavControls();
+            document.getElementById('breadcrumb-root').href = '/';
             dismiss.remove();
             badge.remove();
         };
@@ -78,15 +190,12 @@ Episode {{ episode_id }} / {{ num_episodes }} - Positronic Dataset Viewer
         if (referrerUrl) {
             document.getElementById('breadcrumb-root').href = referrerUrl;
         }
-
-        return ids;
     })();
 </script>
 
 <script>
     const episodeForm = document.getElementById('episode-form');
     const episodeInput = document.getElementById('episode-input');
-    const maxEpisodes = {{ num_episodes }};
 
     const maxEpisodeLength = String(maxEpisodes - 1).length;
     episodeInput.style.width = `${maxEpisodeLength + 1.5}ch`;
@@ -95,18 +204,17 @@ Episode {{ episode_id }} / {{ num_episodes }} - Positronic Dataset Viewer
         e.preventDefault();
         const value = parseInt(episodeInput.value);
         if (filteredIds) {
-            // In filtered mode, input is 1-based position
             if (isNaN(value) || value < 1 || value > filteredIds.length) {
                 episodeInput.value = episodeInput.dataset.original;
                 return;
             }
-            window.location.href = `/episode/${filteredIds[value - 1]}`;
+            navigateToEpisode(filteredIds[value - 1]);
         } else {
             if (isNaN(value) || value < 0 || value >= maxEpisodes) {
                 episodeInput.value = episodeInput.dataset.original;
                 return;
             }
-            window.location.href = `/episode/${value}`;
+            navigateToEpisode(value);
         }
     });
 
@@ -127,17 +235,19 @@ Episode {{ episode_id }} / {{ num_episodes }} - Positronic Dataset Viewer
         episodeInput.select();
     });
 
-    // URL params: ?t=<seconds_from_start> or ?ts_ns=<absolute_nanoseconds> to seek on load
+    // Initial load: set iframe src
     window.addEventListener('load', () => {
         const viewerIframe = document.getElementById('viewer-iframe');
-        const rrdUrl = `${window.location.origin}/api/episode_rrd/{{ episode_id }}`;
-        const viewerUrl = new URL(`/static/rerun/{{ rerun_version }}/index.html`, window.location.origin);
-        viewerUrl.searchParams.set('url', rrdUrl);
+        currentRrdUrl = `${window.location.origin}/api/episode_rrd/${currentEpisodeId}`;
+        const viewerUrl = new URL(`/static/rerun/${RERUN_VERSION}/index.html`, window.location.origin);
+        viewerUrl.searchParams.set('url', currentRrdUrl);
         viewerUrl.searchParams.set('hide_welcome_screen', '');
         const params = new URLSearchParams(window.location.search);
         if (params.has('ts_ns')) viewerUrl.searchParams.set('seek_ts_ns', params.get('ts_ns'));
         else if (params.has('t')) viewerUrl.searchParams.set('seek_t', params.get('t'));
         viewerIframe.src = viewerUrl;
+        // Replace initial history entry so popstate works
+        history.replaceState({episodeId: currentEpisodeId}, '');
     });
 </script>
 {% endblock %}
@@ -150,31 +260,25 @@ Episode {{ episode_id }} / {{ num_episodes }} - Positronic Dataset Viewer
             <span class="breadcrumb-separator">›</span>
             <span id="episode-nav" class="episode-nav">
                 <span class="breadcrumb-text">Ep. </span>
-                <button id="prev-btn" onclick="window.location.href='/episode/{{ (episode_id - 1) % num_episodes }}'"
+                <button id="prev-btn" onclick="navigateToEpisode(getPrevEpisodeId())"
                     class="btn btn-ghost" title="Previous episode">&lt;</button>
                 <form id="episode-form" class="episode-form" style="display: inline; margin: 0;">
                     <input type="text" id="episode-input" class="episode-input" value="{{ episode_id }}"
                         data-original="{{ episode_id }}" maxlength="{{ num_episodes|string|length }}">
                 </form>
-                <button id="next-btn" onclick="window.location.href='/episode/{{ (episode_id + 1) % num_episodes }}'"
+                <button id="next-btn" onclick="navigateToEpisode(getNextEpisodeId())"
                     class="btn btn-ghost" title="Next episode">&gt;</button>
                 <span class="breadcrumb-text" id="episode-count"> / {{ num_episodes }}</span>
             </span>
-            {% if task %}<span class="task-description"> : {{ task }}</span>{% endif %}
+            <span class="task-description" id="task-description">{% if task %} : {{ task }}{% endif %}</span>
         </div>
     </div>
     <div class="episode-info-header">
-        {% if episode_path or episode_size_mb %}
-        <div class="episode-path">
-            {% if episode_path %}
-            <span class="episode-path-label">Episode path:</span>
-            <code class="episode-path-value">{{ episode_path }}</code>
-            {% endif %}
-            {% if episode_size_mb %}
-            <span class="episode-size">({{ episode_size_mb }} MB)</span>
-            {% endif %}
+        <div class="episode-path" id="episode-path-section" {% if not episode_path and not episode_size_mb %}style="display:none"{% endif %}>
+            <span class="episode-path-label" {% if not episode_path %}style="display:none"{% endif %}>Episode path:</span>
+            <code class="episode-path-value" {% if not episode_path %}style="display:none"{% endif %}>{{ episode_path or '' }}</code>
+            <span class="episode-size" {% if not episode_size_mb %}style="display:none"{% endif %}>{% if episode_size_mb %}({{ episode_size_mb }} MB){% endif %}</span>
         </div>
-        {% endif %}
 
         <button class="sidebar-toggler btn btn-primary">☰ Static Data</button>
     </div>

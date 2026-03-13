@@ -28,6 +28,7 @@
     </div>
 
     <script src="/static/app.js"></script>
+    <script>if ('serviceWorker' in navigator) navigator.serviceWorker.register('/static/sw.js', {scope: '/static/'});</script>
     {% block scripts %}{% endblock %}
 </body>
 </html>

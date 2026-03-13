@@ -103,6 +103,17 @@ async def cache_rerun_assets(request: Request, call_next):
     return response
 
 
+def _make_serializable(obj):
+    """Ensure obj is JSON serializable (e.g. convert datetime)."""
+    if isinstance(obj, datetime):
+        return obj.isoformat()
+    if isinstance(obj, dict):
+        return {k: _make_serializable(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_make_serializable(v) for v in obj]
+    return obj
+
+
 def _iter_file_chunks(path: str, *, chunk_size: int = 128 * 1024):
     with open(path, 'rb') as source:
         while True:
@@ -187,16 +198,6 @@ async def episode_viewer(request: Request, episode_id: int):
     meta = episode.meta
     size_mb = meta.get('size_mb')
     size_mb_display = f'{size_mb:.2f}' if isinstance(size_mb, int | float) else None
-
-    # Ensure static_data is JSON serializable (e.g. handle datetime)
-    def _make_serializable(obj):
-        if isinstance(obj, datetime):
-            return obj.isoformat()
-        if isinstance(obj, dict):
-            return {k: _make_serializable(v) for k, v in obj.items()}
-        if isinstance(obj, list):
-            return [_make_serializable(v) for v in obj]
-        return obj
 
     return templates.TemplateResponse(
         'episode.html',
@@ -425,6 +426,28 @@ async def api_dataset_status():
         'loading': app_state['loading_state'],
         'loaded': app_state.get('dataset', None) is not None,
         'repo_id': app_state['root'],
+    }
+
+
+@app.get('/api/episode/{episode_id}')
+@require_dataset
+async def api_episode(episode_id: int):
+    ds = app_state.get('dataset')
+    try:
+        episode = ds[episode_id]
+    except IndexError as e:
+        raise HTTPException(status_code=404, detail='Episode not found') from e
+
+    meta = episode.meta
+    size_mb = meta.get('size_mb')
+
+    return {
+        'episode_id': episode_id,
+        'num_episodes': len(ds),
+        'task': episode.static.get('task', None),
+        'episode_path': meta.get('path'),
+        'episode_size_mb': f'{size_mb:.2f}' if isinstance(size_mb, int | float) else None,
+        'static_data': _make_serializable(episode.static),
     }
 
 
