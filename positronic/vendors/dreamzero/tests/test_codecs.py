@@ -14,7 +14,6 @@ class TestDreamZeroObservationCodec:
             'grip': np.array([0.5]),
             'image.wrist': np.random.randint(0, 255, (480, 640, 3), dtype=np.uint8),
             'image.exterior': np.random.randint(0, 255, (480, 640, 3), dtype=np.uint8),
-            'image.exterior2': np.random.randint(0, 255, (480, 640, 3), dtype=np.uint8),
             'task': 'pick up the cube',
         }
 
@@ -50,14 +49,14 @@ class TestDreamZeroObservationCodec:
 
         assert 'prompt' not in result
 
-    def test_encode_missing_third_camera(self, sample_inputs):
-        del sample_inputs['image.exterior2']
+    def test_encode_default_duplicates_exterior(self, sample_inputs):
         codec = DreamZeroObservationCodec()
         result = codec.encode(sample_inputs)
 
-        # Missing camera should be padded with zeros
-        assert result['observation/exterior_image_1_left'].shape == (176, 320, 3)
-        assert np.all(result['observation/exterior_image_1_left'] == 0)
+        # Default exterior_camera_2=None duplicates exterior_camera_1
+        np.testing.assert_array_equal(
+            result['observation/exterior_image_1_left'], result['observation/exterior_image_0_left']
+        )
 
     def test_dummy_encoded_shape(self):
         codec = DreamZeroObservationCodec()
@@ -76,7 +75,7 @@ class TestDreamZeroObservationCodec:
     def test_custom_camera_keys(self, sample_inputs):
         sample_inputs['cam1'] = sample_inputs.pop('image.wrist')
         sample_inputs['cam2'] = sample_inputs.pop('image.exterior')
-        sample_inputs['cam3'] = sample_inputs.pop('image.exterior2')
+        sample_inputs['cam3'] = np.random.randint(0, 255, (480, 640, 3), dtype=np.uint8)
 
         codec = DreamZeroObservationCodec(wrist_camera='cam1', exterior_camera_1='cam2', exterior_camera_2='cam3')
         result = codec.encode(sample_inputs)

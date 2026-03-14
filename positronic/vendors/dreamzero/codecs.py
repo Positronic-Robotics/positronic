@@ -35,27 +35,27 @@ class DreamZeroObservationCodec(Codec):
         self,
         wrist_camera: str = 'image.wrist',
         exterior_camera_1: str = 'image.exterior',
-        exterior_camera_2: str = 'image.exterior2',
+        exterior_camera_2: str | None = None,
         image_size: tuple[int, int] = (IMAGE_WIDTH, IMAGE_HEIGHT),
         action_joints_key: str | None = None,
         action_grip_key: str | None = None,
     ):
         self._wrist_camera = wrist_camera
         self._exterior_camera_1 = exterior_camera_1
-        self._exterior_camera_2 = exterior_camera_2
+        self._exterior_camera_2 = exterior_camera_2 if exterior_camera_2 is not None else exterior_camera_1
         self._image_size = image_size
 
         w, h = image_size
-        self._derive_transforms: dict[str, Any] = {
+        self._derive_transforms = {
             'state.joint_position': self._derive_joint_position,
             'state.gripper_position': self._derive_gripper_position,
             'video.wrist_image_left': partial(self._derive_image, wrist_camera),
             'video.exterior_image_1_left': partial(self._derive_image, exterior_camera_1),
-            'video.exterior_image_2_left': partial(self._derive_image, exterior_camera_2),
+            'video.exterior_image_2_left': partial(self._derive_image, self._exterior_camera_2),
             'task': lambda ep: ep.get('task', ''),
         }
 
-        lerobot_features: dict[str, Any] = {
+        lerobot_features = {
             'state.joint_position': lerobot_state(7),
             'state.gripper_position': lerobot_state(1),
             'video.wrist_image_left': lerobot_image(w, h),
@@ -63,7 +63,7 @@ class DreamZeroObservationCodec(Codec):
             'video.exterior_image_2_left': lerobot_image(w, h),
         }
 
-        gr00t_modality: dict[str, Any] = {
+        gr00t_modality = {
             'state': {
                 'joint_position': {'start': 0, 'end': 7, 'original_key': 'state.joint_position'},
                 'gripper_position': {'start': 0, 'end': 1, 'original_key': 'state.gripper_position'},
@@ -90,7 +90,7 @@ class DreamZeroObservationCodec(Codec):
                 'gripper_position': {'start': 0, 'end': 1, 'original_key': 'action.gripper_position'},
             }
 
-        self._training_meta: dict[str, Any] = {'lerobot_features': lerobot_features, 'gr00t_modality': gr00t_modality}
+        self._training_meta = {'lerobot_features': lerobot_features, 'gr00t_modality': gr00t_modality}
 
     def _derive_joint_position(self, episode: Episode) -> Signal[Any]:
         return transforms.astype(episode['robot_state.q'], np.float32)
@@ -106,9 +106,6 @@ class DreamZeroObservationCodec(Codec):
 
     def _derive_image(self, input_key: str, episode: Episode) -> Signal[Any]:
         w, h = self._image_size
-        if input_key not in episode:
-            ref = episode['robot_state.q']
-            return transforms.Elementwise(ref, lambda _: np.zeros((h, w, 3), dtype=np.uint8))
         return image.resize_with_pad(w, h, signal=episode[input_key])
 
     def _encode_image(self, input_key: str, inputs: dict[str, Any]) -> np.ndarray:
@@ -122,7 +119,7 @@ class DreamZeroObservationCodec(Codec):
         joint_pos = np.asarray(inputs['robot_state.q'], dtype=np.float32).reshape(-1)
         grip = np.asarray(inputs['grip'], dtype=np.float32).reshape(-1)
 
-        obs: dict[str, Any] = {
+        obs = {
             'observation/joint_position': joint_pos,
             'observation/gripper_position': grip,
             'observation/wrist_image_left': self._encode_image(self._wrist_camera, inputs),
@@ -158,7 +155,7 @@ class DreamZeroObservationCodec(Codec):
 @cfn.config(
     wrist_camera='image.wrist',
     exterior_camera_1='image.exterior',
-    exterior_camera_2='image.exterior2',
+    exterior_camera_2=None,
     image_size=(IMAGE_WIDTH, IMAGE_HEIGHT),
     action_joints_key=None,
     action_grip_key=None,
@@ -166,7 +163,7 @@ class DreamZeroObservationCodec(Codec):
 def dreamzero_obs(
     wrist_camera: str,
     exterior_camera_1: str,
-    exterior_camera_2: str,
+    exterior_camera_2: str | None,
     image_size: tuple[int, int],
     action_joints_key: str | None,
     action_grip_key: str | None,
