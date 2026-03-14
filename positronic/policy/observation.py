@@ -17,23 +17,15 @@ class ObservationCodec(Codec):
     Args:
         state: mapping from output state key to an ordered dict of {episode_key: dim} to concatenate.
         images: mapping from output image name to tuple (input_key, (width, height)).
-        task_field: name of the field to store task string ('task', 'prompt', etc.), or None to disable.
     """
 
-    def __init__(
-        self,
-        state: dict[str, dict[str, int]],
-        images: dict[str, tuple[str, tuple[int, int]]],
-        task_field: str | None = 'task',
-    ):
+    def __init__(self, state: dict[str, dict[str, int]], images: dict[str, tuple[str, tuple[int, int]]]):
         self._state = state
         self._image_configs = images
-        self._task_field = task_field
 
         self._derive_transforms = {k: partial(self._derive_state, k) for k in state.keys()}
         self._derive_transforms.update({k: partial(self._derive_image, k) for k in images.keys()})
-        if task_field:
-            self._derive_transforms['task'] = Get('task', '')
+        self._derive_transforms['task'] = Get('task', '')
 
         lerobot_features: dict[str, Any] = {}
         for name, features in state.items():
@@ -57,8 +49,8 @@ class ObservationCodec(Codec):
     def encode(self, inputs: dict[str, Any]) -> dict[str, Any]:
         obs: dict[str, Any] = {}
 
-        if self._task_field and 'task' in inputs:
-            obs[self._task_field] = inputs['task']
+        if 'task' in inputs:
+            obs['task'] = inputs['task']
 
         for out_name, (input_key, (width, height)) in self._image_configs.items():
             if input_key not in inputs:
@@ -87,8 +79,7 @@ class ObservationCodec(Codec):
             obs[out_name] = np.zeros(sum(features.values()), dtype=np.float32)
         for out_name, (_input_key, (width, height)) in self._image_configs.items():
             obs[out_name] = np.zeros((height, width, 3), dtype=np.uint8)
-        if self._task_field:
-            obs[self._task_field] = 'warmup'
+        obs['task'] = 'warmup'
         return obs
 
     @property

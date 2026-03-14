@@ -49,22 +49,13 @@ def test_observation_encode_missing_state_inputs_raise():
         enc.encode({})
 
 
-def test_observation_encode_task_field_parameter():
-    """Test that task_field parameter controls which field task string is stored in."""
-    # Default: task_field='task'
-    enc_task = ObservationCodec(state={'observation.state': ['a']}, images={})
-    obs_task = enc_task.encode({'a': 1.0, 'task': 'test_task'})
-    assert obs_task['task'] == 'test_task' and 'prompt' not in obs_task
+def test_observation_encode_task():
+    enc = ObservationCodec(state={'observation.state': ['a']}, images={})
+    obs = enc.encode({'a': 1.0, 'task': 'test_task'})
+    assert obs['task'] == 'test_task'
 
-    # OpenPI: task_field='prompt'
-    enc_prompt = ObservationCodec(state={'observation.state': ['a']}, images={}, task_field='prompt')
-    obs_prompt = enc_prompt.encode({'a': 1.0, 'task': 'test_task'})
-    assert obs_prompt['prompt'] == 'test_task' and 'task' not in obs_prompt
-
-    # Disabled: task_field=None
-    enc_none = ObservationCodec(state={'observation.state': ['a']}, images={}, task_field=None)
-    obs_none = enc_none.encode({'a': 1.0, 'task': 'test_task'})
-    assert 'task' not in obs_none and 'prompt' not in obs_none
+    obs_no_task = enc.encode({'a': 1.0})
+    assert 'task' not in obs_no_task
 
 
 def test_absolute_position_action_encode_decode_quat():
@@ -385,7 +376,7 @@ def test_binarize_grip_training_composed_with_action_codec():
 
 def test_parallel_codec_encode_merges_outputs():
     """``obs & action`` encode produces only obs keys (action returns {})."""
-    obs = ObservationCodec(state={'observation.state': {'a': 1}}, images={}, task_field=None)
+    obs = ObservationCodec(state={'observation.state': {'a': 1}}, images={})
     action = AbsolutePositionAction('x', 'y')
     composed = obs & action
     result = composed.encode({'a': 1.0})
@@ -428,7 +419,6 @@ def test_sequential_into_parallel_training():
     obs = ObservationCodec(
         state={'observation.state': {'robot_state.q': 7, 'grip': 1}},
         images={'observation.images.left': ('image.wrist', (4, 4))},
-        task_field=None,
     )
     action = AbsoluteJointsAction('robot_commands.joints', 'target_grip', num_joints=7)
     binarize = BinarizeGripTraining(('grip', 'target_grip'))

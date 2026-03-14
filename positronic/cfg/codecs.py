@@ -10,16 +10,12 @@ RotRep = geom.Rotation.Representation
 
 @cfn.config()
 def general_obs(
-    state_name: str,
-    state_features: dict[str, int],
-    image_mappings: dict[str, str],
-    image_size: tuple[int, int],
-    task_field: str | None = 'task',
+    state_name: str, state_features: dict[str, int], image_mappings: dict[str, str], image_size: tuple[int, int]
 ):
     """General observation encoder for non-GR00T policies (OpenPI, ACT, etc.)."""
     state_dict = {state_name: state_features}
     images = {k: (v, image_size) for k, v in image_mappings.items()}
-    return ObservationCodec(state=state_dict, images=images, task_field=task_field)
+    return ObservationCodec(state=state_dict, images=images)
 
 
 eepose_grip_obs = general_obs.override(
