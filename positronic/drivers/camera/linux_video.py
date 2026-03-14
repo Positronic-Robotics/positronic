@@ -17,6 +17,7 @@ class LinuxVideo(pimm.ControlSystem):
         self.pixel_format = pixel_format
         self.fps_counter = pimm.utils.RateCounter(f'LinuxVideo {device_path}')
         self.frame: pimm.SignalEmitter = pimm.ControlSystemEmitter(self)
+        self._frame_adapter = None
 
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Sleep]:
         codec_mapping = {
@@ -72,7 +73,8 @@ class LinuxVideo(pimm.ControlSystem):
                     result = {'image': rgb_data}
 
             if result is not None:
-                self.frame.emit(result)
+                self._frame_adapter = pimm.shared_memory.NumpySMAdapter.lazy_init(result['image'], self._frame_adapter)
+                self.frame.emit(self._frame_adapter)
                 self.fps_counter.tick()
 
             yield pimm.Pass()  # Give control back to the world
