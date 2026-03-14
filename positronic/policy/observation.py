@@ -7,7 +7,7 @@ from PIL import Image as PilImage
 from positronic.dataset import Signal, transforms
 from positronic.dataset.episode import Episode
 from positronic.dataset.transforms import image
-from positronic.dataset.transforms.episode import Derive
+from positronic.dataset.transforms.episode import Derive, Get
 from positronic.policy.codec import Codec, lerobot_image, lerobot_state
 
 
@@ -33,7 +33,7 @@ class ObservationCodec(Codec):
         self._derive_transforms = {k: partial(self._derive_state, k) for k in state.keys()}
         self._derive_transforms.update({k: partial(self._derive_image, k) for k in images.keys()})
         if task_field:
-            self._derive_transforms['task'] = lambda ep: ep['task'] if 'task' in ep else ''
+            self._derive_transforms['task'] = Get('task', '')
 
         lerobot_features: dict[str, Any] = {}
         for name, features in state.items():

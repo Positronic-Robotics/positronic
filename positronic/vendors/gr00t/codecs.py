@@ -14,7 +14,7 @@ from positronic.dataset import transforms as tf
 from positronic.dataset.episode import Episode
 from positronic.dataset.signal import Signal
 from positronic.dataset.transforms import image
-from positronic.dataset.transforms.episode import Derive, Identity
+from positronic.dataset.transforms.episode import Derive, Get, Identity
 from positronic.policy.codec import Codec, lerobot_image, lerobot_state
 
 RotRep = geom.Rotation.Representation
@@ -49,7 +49,7 @@ class GrootObservationCodec(Codec):
             'grip': self._derive_grip,
             'wrist_image': partial(self._derive_image, wrist_camera),
             'exterior_image_1': partial(self._derive_image, exterior_camera),
-            'task': lambda ep: ep['task'] if 'task' in ep else '',
+            'task': Get('task', ''),
         }
 
         state_meta: dict[str, Any] = {'grip': {'start': 0, 'end': 1, 'original_key': 'grip'}}

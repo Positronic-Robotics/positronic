@@ -293,6 +293,24 @@ class FromValue:
         return self._value
 
 
+class Get:
+    """Helper that reads a key from the episode with a default fallback.
+
+    Typically used within Derive to forward a key under a new name,
+    or to provide a default when the key may be missing.
+
+    Example:
+        Derive(task=Get('task', ''))
+    """
+
+    def __init__(self, key: str, default: Any):
+        self._key = key
+        self._default = default
+
+    def __call__(self, episode: Episode) -> Any:
+        return episode[self._key] if self._key in episode else self._default
+
+
 class TransformedEpisode(Episode):
     """Lazily transform an episode into a new view of the episode.
 

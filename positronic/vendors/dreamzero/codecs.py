@@ -11,7 +11,7 @@ from positronic.cfg import codecs
 from positronic.dataset import Signal, transforms
 from positronic.dataset.episode import Episode
 from positronic.dataset.transforms import image
-from positronic.dataset.transforms.episode import Derive
+from positronic.dataset.transforms.episode import Derive, Get
 from positronic.policy.codec import Codec, lerobot_image, lerobot_state
 
 IMAGE_WIDTH = 320
@@ -52,7 +52,7 @@ class DreamZeroObservationCodec(Codec):
             'video.wrist_image_left': partial(self._derive_image, wrist_camera),
             'video.exterior_image_1_left': partial(self._derive_image, exterior_camera_1),
             'video.exterior_image_2_left': partial(self._derive_image, self._exterior_camera_2),
-            'task': lambda ep: ep.get('task', ''),
+            'task': Get('task', ''),
         }
 
         lerobot_features = {
