@@ -93,7 +93,8 @@ def _update_config(cfg: TrainPipelineConfig, **cfg_kwargs):
             raise AttributeError(f'Could not update config for {k}') from e
 
 
-def _train(
+@cfn.config(codec=lerobot_codecs.ee, base_model='lerobot/smolvla_base', num_train_steps=None, batch_size=64)
+def train(
     input_path: str,
     exp_name: str,
     output_dir: str,
@@ -183,11 +184,6 @@ def _train(
 
     utils.save_run_metadata(Path(cfg.output_dir), patterns=['*.py', '*.toml'])
     logging.info('Training finished.')
-
-
-@cfn.config(codec=lerobot_codecs.ee, base_model='lerobot/smolvla_base', num_train_steps=None, batch_size=64)
-def train(input_path, exp_name, output_dir, codec, base_model, num_train_steps, batch_size, **cfg_kwargs):
-    _train(input_path, exp_name, output_dir, codec, base_model, num_train_steps, batch_size, **cfg_kwargs)
 
 
 @pos3.with_mirror()
