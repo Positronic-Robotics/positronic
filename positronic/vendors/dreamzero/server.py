@@ -29,10 +29,6 @@ def _dreamzero_root():
     return Path(__file__).parents[4] / 'dreamzero'
 
 
-def _download_checkpoint(model_path: str) -> Path:
-    return pos3.download(model_path)
-
-
 # TODO: Extract RoboarenaClient to positronic/offboard/ — roboarena is a cross-vendor
 # standard (used by DreamZero, potentially GR00T N2, etc.) and other vendors may need it.
 class RoboarenaClient:
@@ -229,7 +225,7 @@ class InferenceServer(VendorServer):
             if self.subprocess is not None:
                 return self.subprocess, {}
 
-            download_task = asyncio.create_task(asyncio.to_thread(_download_checkpoint, self.model_path))
+            download_task = asyncio.create_task(asyncio.to_thread(pos3.download, self.model_path))
             await monitor_async_task(
                 download_task, description='Downloading DreamZero checkpoint', on_progress=send_progress
             )
