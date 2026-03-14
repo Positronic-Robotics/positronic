@@ -122,68 +122,67 @@ def _train(
     if num_base_cameras > num_dataset_cameras:
         policy.empty_cameras = num_base_cameras - num_dataset_cameras
 
-    with pos3.mirror():
-        dataset_root = str(pos3.download(input_path))
-        output_path = pos3.sync(output_dir, exclude=[f'{exp_name}/wandb/*']) / exp_name
+    dataset_root = str(pos3.download(input_path))
+    output_path = pos3.sync(output_dir, exclude=[f'{exp_name}/wandb/*']) / exp_name
 
-        cfg = TrainPipelineConfig(
-            dataset=DatasetConfig(repo_id='local', root=dataset_root),
-            policy=policy,
-            env=env_config,
-            output_dir=output_path,
-            job_name=exp_name,
-            eval_freq=0,
-            log_freq=10,
-            batch_size=batch_size,
-            steps=num_train_steps if num_train_steps is not None else 100_000,
-        )
+    cfg = TrainPipelineConfig(
+        dataset=DatasetConfig(repo_id='local', root=dataset_root),
+        policy=policy,
+        env=env_config,
+        output_dir=output_path,
+        job_name=exp_name,
+        eval_freq=0,
+        log_freq=10,
+        batch_size=batch_size,
+        steps=num_train_steps if num_train_steps is not None else 100_000,
+    )
 
+    if os.getenv('WANDB_API_KEY'):
+        cfg.wandb.enable = True
+        cfg.wandb.project = 'lerobot-train'
+        cfg.wandb.disable_artifact = True
+
+    _update_config(cfg, **cfg_kwargs)
+
+    if 'policy.scheduler_decay_steps' not in cfg_kwargs:
+        cfg.policy.scheduler_decay_steps = cfg.steps - cfg.policy.scheduler_warmup_steps
+
+    if cfg.resume:
+        checkpoints_dir = Path(cfg.output_dir) / 'checkpoints'
+        if not checkpoints_dir.exists():
+            raise RuntimeError(f'Checkpoints directory {checkpoints_dir} does not exist')
+        checkpoint_dirs = [d for d in checkpoints_dir.iterdir() if d.is_dir() and d.name.isdigit()]
+        if not checkpoint_dirs:
+            raise RuntimeError(f'No numeric checkpoint directories found in {checkpoints_dir}')
+        latest_checkpoint = max(checkpoint_dirs, key=lambda d: int(d.name))
+        config_path = str(latest_checkpoint / 'pretrained_model' / 'train_config.json')
+        logging.info(f'Resuming from {config_path}')
+        # Load full config from checkpoint (includes optimizer, scheduler, etc.)
+        # then override the fields we want to change.
+        cfg = TrainPipelineConfig.from_pretrained(config_path)
+        cfg.resume = True
+        cfg.output_dir = output_path
+        cfg.steps = num_train_steps if num_train_steps is not None else cfg.steps
+        # lerobot's validate() reads --config_path from sys.argv to locate the checkpoint dir.
+        sys.argv.append(f'--config_path={config_path}')
         if os.getenv('WANDB_API_KEY'):
             cfg.wandb.enable = True
             cfg.wandb.project = 'lerobot-train'
             cfg.wandb.disable_artifact = True
 
-        _update_config(cfg, **cfg_kwargs)
+    # pos3.sync recreates experiment dirs from S3 — remove stale ones so lerobot
+    # doesn't reject a fresh run with FileExistsError.
+    if not cfg.resume and Path(cfg.output_dir).exists():
+        shutil.rmtree(cfg.output_dir)
 
-        if 'policy.scheduler_decay_steps' not in cfg_kwargs:
-            cfg.policy.scheduler_decay_steps = cfg.steps - cfg.policy.scheduler_warmup_steps
+    logging.info('Starting training...')
+    # Deferred: lerobot_train triggers heavy CUDA/model registry init on import.
+    from lerobot.scripts.lerobot_train import train as lerobot_train  # noqa: E402
 
-        if cfg.resume:
-            checkpoints_dir = Path(cfg.output_dir) / 'checkpoints'
-            if not checkpoints_dir.exists():
-                raise RuntimeError(f'Checkpoints directory {checkpoints_dir} does not exist')
-            checkpoint_dirs = [d for d in checkpoints_dir.iterdir() if d.is_dir() and d.name.isdigit()]
-            if not checkpoint_dirs:
-                raise RuntimeError(f'No numeric checkpoint directories found in {checkpoints_dir}')
-            latest_checkpoint = max(checkpoint_dirs, key=lambda d: int(d.name))
-            config_path = str(latest_checkpoint / 'pretrained_model' / 'train_config.json')
-            logging.info(f'Resuming from {config_path}')
-            # Load full config from checkpoint (includes optimizer, scheduler, etc.)
-            # then override the fields we want to change.
-            cfg = TrainPipelineConfig.from_pretrained(config_path)
-            cfg.resume = True
-            cfg.output_dir = output_path
-            cfg.steps = num_train_steps if num_train_steps is not None else cfg.steps
-            # lerobot's validate() reads --config_path from sys.argv to locate the checkpoint dir.
-            sys.argv.append(f'--config_path={config_path}')
-            if os.getenv('WANDB_API_KEY'):
-                cfg.wandb.enable = True
-                cfg.wandb.project = 'lerobot-train'
-                cfg.wandb.disable_artifact = True
+    lerobot_train(cfg)
 
-        # pos3.sync recreates experiment dirs from S3 — remove stale ones so lerobot
-        # doesn't reject a fresh run with FileExistsError.
-        if not cfg.resume and Path(cfg.output_dir).exists():
-            shutil.rmtree(cfg.output_dir)
-
-        logging.info('Starting training...')
-        # Deferred: lerobot_train triggers heavy CUDA/model registry init on import.
-        from lerobot.scripts.lerobot_train import train as lerobot_train  # noqa: E402
-
-        lerobot_train(cfg)
-
-        utils.save_run_metadata(Path(cfg.output_dir), patterns=['*.py', '*.toml'])
-        logging.info('Training finished.')
+    utils.save_run_metadata(Path(cfg.output_dir), patterns=['*.py', '*.toml'])
+    logging.info('Training finished.')
 
 
 @cfn.config(codec=lerobot_codecs.ee, base_model='lerobot/smolvla_base', num_train_steps=None, batch_size=64)
@@ -198,6 +197,7 @@ def full_finetune(input_path, exp_name, output_dir, codec, base_model, num_train
     _train(input_path, exp_name, output_dir, codec, base_model, num_train_steps, batch_size, **cfg_kwargs)
 
 
+@pos3.with_mirror()
 def _internal_main():
     init_logging()
     cfn.cli({'train': train, 'full_finetune': full_finetune})
