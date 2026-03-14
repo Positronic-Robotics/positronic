@@ -190,17 +190,13 @@ def train(input_path, exp_name, output_dir, codec, base_model, num_train_steps, 
     _train(input_path, exp_name, output_dir, codec, base_model, num_train_steps, batch_size, **cfg_kwargs)
 
 
-@cfn.config(codec=lerobot_codecs.ee, base_model='lerobot/smolvla_base', num_train_steps=None, batch_size=64)
-def full_finetune(input_path, exp_name, output_dir, codec, base_model, num_train_steps, batch_size, **cfg_kwargs):
-    cfg_kwargs.setdefault('policy.freeze_vision_encoder', False)
-    cfg_kwargs.setdefault('policy.train_expert_only', False)
-    _train(input_path, exp_name, output_dir, codec, base_model, num_train_steps, batch_size, **cfg_kwargs)
-
-
 @pos3.with_mirror()
 def _internal_main():
     init_logging()
-    cfn.cli({'train': train, 'full_finetune': full_finetune})
+    cfn.cli({
+        'train': train,
+        'full_finetune': train.override(**{'policy.freeze_vision_encoder': False, 'policy.train_expert_only': False}),
+    })
 
 
 if __name__ == '__main__':
