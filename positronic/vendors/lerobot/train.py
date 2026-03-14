@@ -1,10 +1,19 @@
 """
 LeRobot 0.4.x training script (SmolVLA default).
 
+Two training modes:
+  train          — expert-only (frozen vision encoder, default)
+  full_finetune  — all parameters trainable (unfrozen vision encoder)
+
 Example:
-    cd docker && docker compose run --rm lerobot-train \\
-      --input_path=s3://interim/sim_stack/lerobot/ee/ \\
+    cd docker && docker compose run --rm lerobot-train train \\
+      --input_path=s3://interim/sim_stack/lerobot_04/ee/ \\
       --exp_name=my_experiment \\
+      --output_dir=s3://checkpoints/lerobot/
+
+    cd docker && docker compose run --rm lerobot-train full_finetune \\
+      --input_path=s3://interim/sim_stack/lerobot_04/ee/ \\
+      --exp_name=my_experiment_ft \\
       --output_dir=s3://checkpoints/lerobot/
 """
 
@@ -156,9 +165,6 @@ def train(
     cfg.policy.train_expert_only = train_expert_only
 
     _update_config(cfg, **cfg_kwargs)
-
-    if 'policy.scheduler_decay_steps' not in cfg_kwargs:
-        cfg.policy.scheduler_decay_steps = cfg.steps - cfg.policy.scheduler_warmup_steps
 
     if cfg.resume:
         checkpoints_dir = Path(cfg.output_dir) / 'checkpoints'

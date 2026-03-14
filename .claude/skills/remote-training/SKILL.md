@@ -121,10 +121,19 @@ CACHE_ROOT=/home/vertix docker --context desktop compose run --rm --pull always 
 ### 2. Train
 
 ```bash
-# LeRobot 0.4.x SmolVLA (desktop)
+# LeRobot 0.4.x SmolVLA — expert-only (desktop)
 CACHE_ROOT=/home/vertix docker --context desktop compose run --rm --pull always lerobot-train \
+  train \
   --input_path=s3://interim/sim_stack/lerobot_04/ee/ \
   --exp_name=smolvla_150k \
+  --output_dir=s3://checkpoints/sim_stack/lerobot_04/ \
+  --num_train_steps=150000
+
+# LeRobot 0.4.x SmolVLA — full finetune (desktop)
+CACHE_ROOT=/home/vertix docker --context desktop compose run --rm --pull always lerobot-train \
+  full_finetune \
+  --input_path=s3://interim/sim_stack/lerobot_04/ee/ \
+  --exp_name=smolvla_ft_150k \
   --output_dir=s3://checkpoints/sim_stack/lerobot_04/ \
   --num_train_steps=150000
 

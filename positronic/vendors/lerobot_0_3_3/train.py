@@ -1,15 +1,15 @@
 """
-LeRobot training script using ACT policy.
+LeRobot 0.3.3 training script using ACT policy.
 
 Example:
     # Train with default codec (ee)
-    cd docker && docker compose run --rm lerobot-train \\
+    cd docker && docker compose run --rm lerobot-0_3_3-train \\
       --input_path=s3://interim/sim_stack/lerobot/eepose_absolute/ \\
       --exp_name=my_experiment \\
       --output_dir=s3://checkpoints/lerobot/
 
     # Override codec
-    cd docker && docker compose run --rm lerobot-train \\
+    cd docker && docker compose run --rm lerobot-0_3_3-train \\
       --input_path=s3://interim/sim_stack/lerobot/joints_absolute/ \\
       --exp_name=my_experiment \\
       --codec=@positronic.vendors.lerobot_0_3_3.codecs.joints \\

@@ -24,10 +24,17 @@ cd docker && docker compose run --rm lerobot-convert convert \
   --output_dir=~/datasets/lerobot/my_task \
   --task="pick up the green cube and place it on the red cube"
 
-# 2. Train (SmolVLA by default)
-cd docker && docker compose run --rm lerobot-train \
+# 2. Train (expert-only by default — frozen vision encoder)
+cd docker && docker compose run --rm lerobot-train train \
   --input_path=~/datasets/lerobot/my_task \
   --exp_name=my_task_v1 \
+  --output_dir=~/checkpoints/lerobot/ \
+  --num_train_steps=50000
+
+# Or full finetune (all parameters trainable)
+cd docker && docker compose run --rm lerobot-train full_finetune \
+  --input_path=~/datasets/lerobot/my_task \
+  --exp_name=my_task_v1_ft \
   --output_dir=~/checkpoints/lerobot/ \
   --num_train_steps=50000
 
@@ -64,12 +71,20 @@ See [Codecs Guide](../../docs/codecs.md) for comprehensive codec documentation.
 
 ### Training Configuration
 
+Two training modes are available:
+
+| Mode | Command | Description |
+|------|---------|-------------|
+| `train` | `lerobot-train train` | Expert-only — frozen vision encoder (default) |
+| `full_finetune` | `lerobot-train full_finetune` | All parameters trainable |
+
 | Parameter | Description | Default | Example |
 |-----------|-------------|---------|---------|
 | `--codec` | Override codec | `ee` | `joints` |
 | `--exp_name` | Experiment name (unique ID) | Required | `my_task_v1` |
 | `--base_model` | Base pretrained model | `lerobot/smolvla_base` | HuggingFace model ID |
 | `--num_train_steps` | Total training steps | `100000` | `50000` |
+| `--batch_size` | Batch size | `64` | `32` |
 | `--resume` | Resume from existing checkpoint | `False` | `True` |
 | `--output_dir` | Checkpoint destination | Required | `~/checkpoints/lerobot/` |
 

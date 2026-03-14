@@ -225,7 +225,7 @@ cd docker && docker compose run --rm lerobot-0_3_3-convert convert \
 Training is handled through Docker services. Example with ACT (fastest baseline):
 
 ```bash
-cd docker && docker compose run --rm lerobot-train \
+cd docker && docker compose run --rm lerobot-train train \
     --input_path=~/datasets/lerobot/stack_cubes \
     --exp_name=stack_cubes_act \
     --output_dir=~/checkpoints/lerobot/

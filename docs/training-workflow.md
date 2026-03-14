@@ -106,9 +106,17 @@ Run the training job using vendor-specific Docker services. All services are def
 Positronic ships two LeRobot versions — see [Two LeRobot Versions](#two-lerobot-versions) below for details. Use `lerobot-train` (0.4.x) by default, or `lerobot-0_3_3-train` for ACT on the older version.
 
 ```bash
-cd docker && docker compose run --rm lerobot-train \
+# Expert-only (frozen vision encoder, default)
+cd docker && docker compose run --rm lerobot-train train \
   --input_path=~/datasets/lerobot/stack_cubes \
   --exp_name=experiment_v1 \
+  --output_dir=~/checkpoints/lerobot/ \
+  --num_train_steps=150000
+
+# Or full finetune (all parameters trainable)
+cd docker && docker compose run --rm lerobot-train full_finetune \
+  --input_path=~/datasets/lerobot/stack_cubes \
+  --exp_name=experiment_v1_ft \
   --output_dir=~/checkpoints/lerobot/ \
   --num_train_steps=150000
 ```
@@ -250,7 +258,7 @@ cd docker && docker compose run --rm lerobot-convert convert \
   --output_dir=~/datasets/lerobot/my_task
 
 # 4. Train SmolVLA policy
-cd docker && docker compose run --rm lerobot-train \
+cd docker && docker compose run --rm lerobot-train train \
   --input_path=~/datasets/lerobot/my_task \
   --exp_name=baseline_v1 \
   --output_dir=~/checkpoints/lerobot/ \
@@ -290,7 +298,7 @@ cd docker && for pair in \
 done
 
 # Train all models (can run in parallel)
-cd docker && docker compose run --rm lerobot-train --input_path=~/datasets/lerobot/my_task ...
+cd docker && docker compose run --rm lerobot-train train --input_path=~/datasets/lerobot/my_task ...
 cd docker && docker compose run --rm groot-train --input_path=~/datasets/groot/my_task ...
 cd docker && docker compose run --rm openpi-train --input_path=~/datasets/openpi/my_task ...
 
