@@ -405,7 +405,7 @@ def main_leader_follower(
     robot_arm=positronic.cfg.hardware.roboarm.so101,
     leader_follower=positronic.cfg.hardware.roboarm.so101_leader_follower,
     sound=positronic.cfg.sound.sound,
-    cameras={'image.right': positronic.cfg.hardware.camera.arducam_right},
+    cameras={'image.right': positronic.cfg.hardware.camera.sonix},
 )
 def so101_leader(robot_arm, leader_follower, **kwargs):
     """Runs data collection on SO101 with leader arm teleoperation"""
