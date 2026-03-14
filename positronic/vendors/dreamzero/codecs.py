@@ -181,8 +181,8 @@ def dreamzero_obs(
 
 # Composed codec: DreamZero observation + absolute joints action + timing
 _action = codecs.absolute_joints_action.override(tgt_joints_key='robot_commands.joints', tgt_grip_key='target_grip')
-joints = codecs.compose.override(obs=dreamzero_obs, action=_action, fps=4.0)
+joints = codecs.compose.override(obs=dreamzero_obs, action=_action, fps=15.0)
 
 _traj_obs = dreamzero_obs.override(action_joints_key='robot_state.q', action_grip_key='grip')
 _traj_action = _action.override(tgt_joints_key='robot_state.q', tgt_grip_key='grip')
-joints_traj = codecs.compose.override(obs=_traj_obs, action=_traj_action, fps=4.0)
+joints_traj = codecs.compose.override(obs=_traj_obs, action=_traj_action, fps=15.0)
