@@ -8,6 +8,7 @@ import pytest
 from positronic.dataset import Episode
 from positronic.dataset.local_dataset import UNFINISHED_MARKER, DiskEpisode, DiskEpisodeWriter
 from positronic.dataset.tests.test_video import assert_frames_equal, create_frame
+from positronic.dataset.transforms.episode import Get
 
 
 def test_episode_writer_and_reader_basic(tmp_path):
@@ -542,3 +543,15 @@ class TestLazyMetaProperties:
 
         ep = DiskEpisode(ep_dir)
         assert ep.duration_ns == 6000  # 8000 - 2000
+
+
+def test_get_returns_value_or_default(tmp_path):
+    ep_dir = tmp_path / 'ep'
+    with DiskEpisodeWriter(ep_dir) as w:
+        w.append('a', 1, 1000)
+        w.set_static('task', 'pick up cube')
+
+    ep = DiskEpisode(ep_dir)
+    assert Get('task', '')(ep) == 'pick up cube'
+    assert Get('missing', 'fallback')(ep) == 'fallback'
+    assert Get('missing', '')(ep) == ''
