@@ -9,52 +9,9 @@ import pos3
 
 from positronic import utils
 
-CACHE_DIR = Path.home() / '.cache' / 'dreamzero'
-WAN_REPO = 'Wan-AI/Wan2.1-I2V-14B-480P'
-UMT5_REPO = 'google/umt5-xxl'
-
 
 def _dreamzero_root():
     return Path(__file__).parents[4] / 'dreamzero'
-
-
-def _download_base_weights(python_bin: str):
-    """Download Wan2.1-I2V-14B-480P and umt5-xxl to persistent cache.
-
-    Training passes explicit paths to these weights as Hydra overrides
-    (dit_version, text_encoder_pretrained_path, etc.), so we need them
-    at known locations rather than relying on HF auto-caching.
-    """
-    CACHE_DIR.mkdir(parents=True, exist_ok=True)
-
-    wan_dir = CACHE_DIR / 'Wan2.1-I2V-14B-480P'
-    umt5_dir = CACHE_DIR / 'umt5-xxl'
-
-    if not wan_dir.exists():
-        print(f'Downloading {WAN_REPO} to {wan_dir}...')
-        subprocess.run(
-            [
-                python_bin,
-                '-c',
-                f'from huggingface_hub import snapshot_download; '
-                f'snapshot_download("{WAN_REPO}", local_dir="{wan_dir}")',
-            ],
-            check=True,
-        )
-
-    if not umt5_dir.exists():
-        print(f'Downloading {UMT5_REPO} to {umt5_dir}...')
-        subprocess.run(
-            [
-                python_bin,
-                '-c',
-                f'from huggingface_hub import snapshot_download; '
-                f'snapshot_download("{UMT5_REPO}", local_dir="{umt5_dir}")',
-            ],
-            check=True,
-        )
-
-    return wan_dir, umt5_dir
 
 
 @cfn.config(
@@ -92,10 +49,7 @@ def main(
 ):
     root = _dreamzero_root()
     venv = Path(dreamzero_venv)
-    python_bin = str(venv / 'bin' / 'python')
     torchrun = str(venv / 'bin' / 'torchrun')
-
-    wan_dir, umt5_dir = _download_base_weights(python_bin)
 
     exp_name = str(exp_name)
     dataset_local_path = pos3.download(input_path)
@@ -141,11 +95,6 @@ def main(
         f'output_dir={output_dir}',
         'save_lora_only=true',
         'save_total_limit=10',
-        f'dit_version={wan_dir}',
-        f'text_encoder_pretrained_path={wan_dir}/models_t5_umt5-xxl-enc-bf16.pth',
-        f'image_encoder_pretrained_path={wan_dir}/models_clip_open-clip-xlm-roberta-large-vit-huge-14.pth',
-        f'vae_pretrained_path={wan_dir}/Wan2.1_VAE.pth',
-        f'tokenizer_path={umt5_dir}',
     ]
     if deepspeed is not None:
         deepspeed_path = str(root / deepspeed) if not Path(deepspeed).is_absolute() else deepspeed

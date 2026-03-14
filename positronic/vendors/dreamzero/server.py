@@ -29,25 +29,8 @@ def _dreamzero_root():
     return Path(__file__).parents[4] / 'dreamzero'
 
 
-def _download_checkpoint(model_path: str, dreamzero_venv: Path) -> Path:
-    if model_path.startswith('s3://'):
-        logger.info(f'Downloading checkpoint from S3: {model_path}')
-        return pos3.download(model_path)
-    if '/' in model_path and not Path(model_path).exists():
-        logger.info(f'Downloading checkpoint from HuggingFace: {model_path}')
-        # huggingface_hub lives in the DreamZero venv, not the positronic venv
-        result = subprocess.run(
-            [
-                str(dreamzero_venv / 'bin' / 'python'),
-                '-c',
-                f'from huggingface_hub import snapshot_download; print(snapshot_download("{model_path}"))',
-            ],
-            capture_output=True,
-            text=True,
-            check=True,
-        )
-        return Path(result.stdout.strip())
-    return Path(model_path)
+def _download_checkpoint(model_path: str) -> Path:
+    return pos3.download(model_path)
 
 
 # TODO: Extract RoboarenaClient to positronic/offboard/ — roboarena is a cross-vendor
@@ -246,9 +229,7 @@ class InferenceServer(VendorServer):
             if self.subprocess is not None:
                 return self.subprocess, {}
 
-            download_task = asyncio.create_task(
-                asyncio.to_thread(_download_checkpoint, self.model_path, self.dreamzero_venv)
-            )
+            download_task = asyncio.create_task(asyncio.to_thread(_download_checkpoint, self.model_path))
             await monitor_async_task(
                 download_task, description='Downloading DreamZero checkpoint', on_progress=send_progress
             )
