@@ -76,6 +76,7 @@ class GrootObservationCodec(Codec):
                     'exterior_image_1': {'original_key': 'exterior_image_1'},
                     'wrist_image': {'original_key': 'wrist_image'},
                 },
+                'annotation': {'language.language_instruction': {'original_key': 'task_index'}},
             },
             'lerobot_features': lerobot_features,
         }
