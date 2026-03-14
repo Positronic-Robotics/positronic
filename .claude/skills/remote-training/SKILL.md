@@ -120,55 +120,24 @@ CACHE_ROOT=/home/vertix docker --context desktop compose run --rm --pull always 
 
 ### 2. Train
 
+Each vendor has a training script at `positronic/vendors/{vendor}/train.py` with usage examples in its docstring. Read the script's docstring for available subcommands and parameters.
+
+General pattern:
+
 ```bash
-# LeRobot 0.4.x SmolVLA — expert-only (desktop)
-CACHE_ROOT=/home/vertix docker --context desktop compose run --rm --pull always lerobot-train \
-  train \
-  --input_path=s3://interim/sim_stack/lerobot_04/ee/ \
-  --exp_name=smolvla_150k \
-  --output_dir=s3://checkpoints/sim_stack/lerobot_04/ \
-  --num_train_steps=150000
-
-# LeRobot 0.4.x SmolVLA — full finetune (desktop)
-CACHE_ROOT=/home/vertix docker --context desktop compose run --rm --pull always lerobot-train \
-  full_finetune \
-  --input_path=s3://interim/sim_stack/lerobot_04/ee/ \
-  --exp_name=smolvla_ft_150k \
-  --output_dir=s3://checkpoints/sim_stack/lerobot_04/ \
-  --num_train_steps=150000
-
-# LeRobot 0.3.3 ACT (desktop)
-CACHE_ROOT=/home/vertix docker --context desktop compose run --rm --pull always lerobot-0_3_3-train \
-  --input_path=s3://interim/sim_stack/lerobot/ee/ \
-  --exp_name=YYMMDD-ee \
-  --output_dir=s3://checkpoints/sim_stack/lerobot/ \
-  --num_train_steps=50000 --save_freq=10000
-
-# GR00T (H100)
-docker --context vm-train compose run --rm --pull=always groot-train \
-  --input_path=s3://interim/sim_stack/groot/ee_rot6d/ \
-  --output_path=s3://checkpoints/sim_stack/groot/ee_rot6d/ \
-  --exp_name=YYMMDD \
-  --num_train_steps=20000 --save_steps=2000 --num_workers=4 \
-  --modality_config=ee_rot6d
-
-# OpenPI (H100) — generate stats first
-CACHE_ROOT=/home/vertix docker --context desktop compose run --rm --pull always openpi-stats \
-  --input_path=s3://interim/sim_stack/openpi/ee/ \
-  --output_path=s3://interim/sim_stack/openpi/stats/
-
-docker --context vm-train compose run --rm --pull=always openpi-train \
-  --input_path=s3://interim/sim_stack/openpi/ee/ \
-  --stats_path=s3://interim/sim_stack/openpi/stats/assets/ \
-  --output_path=s3://checkpoints/sim_stack/openpi/ee/ \
-  --exp_name=YYMMDD
+# From docker/ directory
+[CACHE_ROOT=/home/vertix] docker [--context <machine>] compose run --rm --pull always <service> \
+  [subcommand] --input_path=<interim_path> --exp_name=<name> --output_dir=<checkpoint_path> ...
 ```
 
+| Vendor | Docker service | Machine | Script (read docstring for usage) |
+|--------|---------------|---------|-----------------------------------|
+| LeRobot 0.4.x (SmolVLA) | `lerobot-train` | desktop | `positronic/vendors/lerobot/train.py` |
+| LeRobot 0.3.3 (ACT) | `lerobot-0_3_3-train` | desktop | `positronic/vendors/lerobot_0_3_3/train.py` |
+| GR00T | `groot-train` | H100 | `positronic/vendors/gr00t/train.py` |
+| OpenPI | `openpi-train` (needs `openpi-stats` first) | H100 | `positronic/vendors/openpi/train.py` |
+
 **Resume any training**: add `--resume=true` to the same command.
-
-#### GR00T Modality Configs
-
-Codec must match modality config: `ee_quat`→`ee`, `ee_rot6d`→`ee_rot6d`, `ee_quat_joints`→`ee_q`, `ee_rot6d_joints`→`ee_rot6d_q`. Append `_rel` for relative actions.
 
 ### 3. Start Inference Server
 
