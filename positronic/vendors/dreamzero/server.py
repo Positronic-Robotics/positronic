@@ -24,64 +24,21 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_HF_REPO = 'GEAR-Dreams/DreamZero-DROID'
 
-DREAMZERO_ROOT = Path('/dreamzero')
-DREAMZERO_SCRIPT = DREAMZERO_ROOT / 'socket_test_optimized_AR.py'
-DREAMZERO_VENV = Path('/.venv')
-CACHE_DIR = Path('/root/.cache/dreamzero')
 
-WAN_REPO = 'Wan-AI/Wan2.1-I2V-14B-480P'
-UMT5_REPO = 'google/umt5-xxl'
+def _dreamzero_root():
+    return Path(__file__).parents[4] / 'dreamzero'
 
 
-def _download_base_weights():
-    """Download Wan2.1-I2V-14B-480P and umt5-xxl tokenizer to persistent cache."""
-    python = str(DREAMZERO_VENV / 'bin' / 'python')
-    CACHE_DIR.mkdir(parents=True, exist_ok=True)
-
-    wan_dir = CACHE_DIR / 'Wan2.1-I2V-14B-480P'
-    umt5_dir = CACHE_DIR / 'umt5-xxl'
-
-    if not wan_dir.exists():
-        logger.info(f'Downloading {WAN_REPO} to {wan_dir}...')
-        subprocess.run(
-            [
-                python,
-                '-c',
-                f'from huggingface_hub import snapshot_download; '
-                f'snapshot_download("{WAN_REPO}", local_dir="{wan_dir}")',
-            ],
-            check=True,
-        )
-    else:
-        logger.info(f'Base weights already cached at {wan_dir}')
-
-    if not umt5_dir.exists():
-        logger.info(f'Downloading {UMT5_REPO} to {umt5_dir}...')
-        subprocess.run(
-            [
-                python,
-                '-c',
-                f'from huggingface_hub import snapshot_download; '
-                f'snapshot_download("{UMT5_REPO}", local_dir="{umt5_dir}")',
-            ],
-            check=True,
-        )
-    else:
-        logger.info(f'Tokenizer already cached at {umt5_dir}')
-
-    return wan_dir, umt5_dir
-
-
-def _download_checkpoint(model_path: str) -> Path:
+def _download_checkpoint(model_path: str, dreamzero_venv: Path) -> Path:
     if model_path.startswith('s3://'):
         logger.info(f'Downloading checkpoint from S3: {model_path}')
         return pos3.download(model_path)
     if '/' in model_path and not Path(model_path).exists():
         logger.info(f'Downloading checkpoint from HuggingFace: {model_path}')
-        # huggingface_hub lives in the DreamZero base venv, not the positronic venv
+        # huggingface_hub lives in the DreamZero venv, not the positronic venv
         result = subprocess.run(
             [
-                str(DREAMZERO_VENV / 'bin' / 'python'),
+                str(dreamzero_venv / 'bin' / 'python'),
                 '-c',
                 f'from huggingface_hub import snapshot_download; print(snapshot_download("{model_path}"))',
             ],
@@ -163,19 +120,28 @@ class RoboarenaClient:
 
 
 class DreamZeroSubprocess:
-    def __init__(self, model_path: str, num_gpus: int = 1, roboarena_port: int = 9000, enable_dit_cache: bool = True):
+    def __init__(
+        self,
+        model_path: str,
+        dreamzero_venv: Path,
+        num_gpus: int = 1,
+        roboarena_port: int = 9000,
+        enable_dit_cache: bool = True,
+    ):
         self.model_path = model_path
+        self.dreamzero_venv = dreamzero_venv
         self.num_gpus = num_gpus
         self.roboarena_port = roboarena_port
         self.enable_dit_cache = enable_dit_cache
         self.process: subprocess.Popen | None = None
 
     def _build_command(self) -> list[str]:
-        torchrun = str(DREAMZERO_VENV / 'bin' / 'torchrun')
+        root = _dreamzero_root()
+        torchrun = str(self.dreamzero_venv / 'bin' / 'torchrun')
         command = [
             torchrun,
             f'--nproc_per_node={self.num_gpus}',
-            str(DREAMZERO_SCRIPT),
+            str(root / 'socket_test_optimized_AR.py'),
             '--port',
             str(self.roboarena_port),
             '--model-path',
@@ -189,10 +155,10 @@ class DreamZeroSubprocess:
         command = self._build_command()
         logger.info(f'Starting DreamZero subprocess: {" ".join(command)}')
         env = os.environ.copy()
-        env['VIRTUAL_ENV'] = str(DREAMZERO_VENV)
-        env['PATH'] = f'{DREAMZERO_VENV / "bin"}:{env.get("PATH", "")}'
+        env['VIRTUAL_ENV'] = str(self.dreamzero_venv)
+        env['PATH'] = f'{self.dreamzero_venv / "bin"}:{env.get("PATH", "")}'
         env['TORCH_COMPILE_DISABLE'] = '1'
-        self.process = subprocess.Popen(command, env=env, cwd=str(DREAMZERO_ROOT))
+        self.process = subprocess.Popen(command, env=env, cwd=str(_dreamzero_root()))
 
     def _check_crashed(self) -> tuple[bool, int | None]:
         if self.process is None:
@@ -245,6 +211,7 @@ class InferenceServer(VendorServer):
         self,
         codec: Codec | None,
         model_path: str,
+        dreamzero_venv: str = '/.venv/',
         num_gpus: int = 1,
         host: str = '0.0.0.0',
         port: int = 8000,
@@ -254,6 +221,7 @@ class InferenceServer(VendorServer):
     ):
         super().__init__(codec=codec, host=host, port=port, recording_dir=recording_dir)
         self.model_path = model_path
+        self.dreamzero_venv = Path(dreamzero_venv)
         self.num_gpus = num_gpus
         self.roboarena_port = roboarena_port
         self.enable_dit_cache = enable_dit_cache
@@ -278,19 +246,17 @@ class InferenceServer(VendorServer):
             if self.subprocess is not None:
                 return self.subprocess, {}
 
-            download_task = asyncio.create_task(asyncio.to_thread(_download_checkpoint, self.model_path))
+            download_task = asyncio.create_task(
+                asyncio.to_thread(_download_checkpoint, self.model_path, self.dreamzero_venv)
+            )
             await monitor_async_task(
                 download_task, description='Downloading DreamZero checkpoint', on_progress=send_progress
-            )
-
-            base_weights_task = asyncio.create_task(asyncio.to_thread(_download_base_weights))
-            await monitor_async_task(
-                base_weights_task, description='Downloading base weights', on_progress=send_progress
             )
 
             logger.info(f'Starting DreamZero subprocess with {self.num_gpus} GPUs')
             sp = DreamZeroSubprocess(
                 model_path=str(download_task.result()),
+                dreamzero_venv=self.dreamzero_venv,
                 num_gpus=self.num_gpus,
                 roboarena_port=self.roboarena_port,
                 enable_dit_cache=self.enable_dit_cache,
@@ -313,16 +279,29 @@ class InferenceServer(VendorServer):
 
 
 @cfn.config(
-    codec=codecs.joints, model_path=DEFAULT_HF_REPO, num_gpus=1, port=8000, enable_dit_cache=True, recording_dir=None
+    codec=codecs.joints,
+    model_path=DEFAULT_HF_REPO,
+    dreamzero_venv='/.venv/',
+    num_gpus=1,
+    port=8000,
+    enable_dit_cache=True,
+    recording_dir=None,
 )
 def server(
-    codec: Codec | None, model_path: str, num_gpus: int, port: int, enable_dit_cache: bool, recording_dir: str | None
+    codec: Codec | None,
+    model_path: str,
+    dreamzero_venv: str,
+    num_gpus: int,
+    port: int,
+    enable_dit_cache: bool,
+    recording_dir: str | None,
 ):
     """Starts the DreamZero inference server."""
     with pos3.mirror():
         InferenceServer(
             codec=codec,
             model_path=model_path,
+            dreamzero_venv=dreamzero_venv,
             num_gpus=num_gpus,
             port=port,
             enable_dit_cache=enable_dit_cache,
