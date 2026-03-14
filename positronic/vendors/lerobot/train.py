@@ -93,7 +93,14 @@ def _update_config(cfg: TrainPipelineConfig, **cfg_kwargs):
             raise AttributeError(f'Could not update config for {k}') from e
 
 
-@cfn.config(codec=lerobot_codecs.ee, base_model='lerobot/smolvla_base', num_train_steps=None, batch_size=64)
+@cfn.config(
+    codec=lerobot_codecs.ee,
+    base_model='lerobot/smolvla_base',
+    num_train_steps=None,
+    batch_size=64,
+    freeze_vision_encoder=True,
+    train_expert_only=True,
+)
 def train(
     input_path: str,
     exp_name: str,
@@ -102,6 +109,8 @@ def train(
     base_model: str,
     num_train_steps: int | None,
     batch_size: int,
+    freeze_vision_encoder: bool,
+    train_expert_only: bool,
     **cfg_kwargs,
 ):
     if isinstance(codec, str):
@@ -142,6 +151,9 @@ def train(
         cfg.wandb.enable = True
         cfg.wandb.project = 'lerobot-train'
         cfg.wandb.disable_artifact = True
+
+    cfg.policy.freeze_vision_encoder = freeze_vision_encoder
+    cfg.policy.train_expert_only = train_expert_only
 
     _update_config(cfg, **cfg_kwargs)
 
@@ -189,10 +201,7 @@ def train(
 @pos3.with_mirror()
 def _internal_main():
     init_logging()
-    cfn.cli({
-        'train': train,
-        'full_finetune': train.override(**{'policy.freeze_vision_encoder': False, 'policy.train_expert_only': False}),
-    })
+    cfn.cli({'train': train, 'full_finetune': train.override(freeze_vision_encoder=False, train_expert_only=False)})
 
 
 if __name__ == '__main__':
