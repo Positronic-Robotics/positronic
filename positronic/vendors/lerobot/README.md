@@ -24,8 +24,8 @@ cd docker && docker compose run --rm lerobot-convert convert \
   --output_dir=~/datasets/lerobot/my_task \
   --task="pick up the green cube and place it on the red cube"
 
-# 2. Train (expert-only by default — frozen vision encoder)
-cd docker && docker compose run --rm lerobot-train train \
+# 2. Train (expert-only — frozen vision encoder)
+cd docker && docker compose run --rm lerobot-train expert_only \
   --input_path=~/datasets/lerobot/my_task \
   --exp_name=my_task_v1 \
   --output_dir=~/checkpoints/lerobot/ \
@@ -75,7 +75,7 @@ Two training modes are available:
 
 | Mode | Command | Description |
 |------|---------|-------------|
-| `train` | `lerobot-train train` | Expert-only — frozen vision encoder (default) |
+| `expert_only` | `lerobot-train expert_only` | Frozen vision encoder (default) |
 | `full_finetune` | `lerobot-train full_finetune` | All parameters trainable |
 
 | Parameter | Description | Default | Example |

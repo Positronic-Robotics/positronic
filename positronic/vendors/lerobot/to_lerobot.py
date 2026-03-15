@@ -71,7 +71,7 @@ def _collate_fn(x):
 
 def append_data_to_dataset(lr_dataset: LeRobotDataset, p_dataset: Dataset, fps, task=None, num_workers=16):
     _raise_fd_limit()
-    lr_dataset.start_image_writer(num_processes=num_workers)
+    lr_dataset.start_image_writer(num_processes=0, num_threads=num_workers)
     total_length_sec = 0
 
     episode_dataset = EpisodeDictDataset(p_dataset, fps=fps)
@@ -94,7 +94,7 @@ def append_data_to_dataset(lr_dataset: LeRobotDataset, p_dataset: Dataset, fps, 
             frame['task'] = ep_task or ''
             lr_dataset.add_frame(frame)
 
-        lr_dataset.save_episode()
+        lr_dataset.save_episode(parallel_encoding=False)
     lr_dataset.finalize()
     logging.info(f'Total length of the dataset: {seconds_to_str(total_length_sec)}')
 

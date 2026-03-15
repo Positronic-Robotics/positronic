@@ -2,11 +2,11 @@
 LeRobot 0.4.x training script (SmolVLA default).
 
 Two training modes:
-  train          — expert-only (frozen vision encoder, default)
+  expert_only    — frozen vision encoder (default)
   full_finetune  — all parameters trainable (unfrozen vision encoder)
 
 Example:
-    cd docker && docker compose run --rm lerobot-train train \\
+    cd docker && docker compose run --rm lerobot-train expert_only \\
       --input_path=s3://interim/sim_stack/lerobot_04/ee/ \\
       --exp_name=my_experiment \\
       --output_dir=s3://checkpoints/lerobot/
@@ -107,6 +107,9 @@ def _update_config(cfg: TrainPipelineConfig, **cfg_kwargs):
     base_model='lerobot/smolvla_base',
     num_train_steps=None,
     batch_size=64,
+    # LeRobot default (0.0001) is too tight — video frame timestamps from AV1 encoding
+    # can drift by exactly the tolerance boundary due to float rounding at 15fps.
+    tolerance_s=0.001,
     freeze_vision_encoder=True,
     train_expert_only=True,
 )
@@ -118,6 +121,7 @@ def train(
     base_model: str,
     num_train_steps: int | None,
     batch_size: int,
+    tolerance_s: float,
     freeze_vision_encoder: bool,
     train_expert_only: bool,
     **cfg_kwargs,
@@ -154,6 +158,7 @@ def train(
         log_freq=10,
         batch_size=batch_size,
         steps=num_train_steps if num_train_steps is not None else 100_000,
+        tolerance_s=tolerance_s,
     )
 
     if os.getenv('WANDB_API_KEY'):
@@ -207,7 +212,10 @@ def train(
 @pos3.with_mirror()
 def _internal_main():
     init_logging()
-    cfn.cli({'train': train, 'full_finetune': train.override(freeze_vision_encoder=False, train_expert_only=False)})
+    cfn.cli({
+        'expert_only': train,
+        'full_finetune': train.override(freeze_vision_encoder=False, train_expert_only=False),
+    })
 
 
 if __name__ == '__main__':

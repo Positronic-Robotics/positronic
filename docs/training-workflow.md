@@ -107,7 +107,7 @@ Positronic ships two LeRobot versions — see [Two LeRobot Versions](#two-lerobo
 
 ```bash
 # Expert-only (frozen vision encoder, default)
-cd docker && docker compose run --rm lerobot-train train \
+cd docker && docker compose run --rm lerobot-train expert_only \
   --input_path=~/datasets/lerobot/stack_cubes \
   --exp_name=experiment_v1 \
   --output_dir=~/checkpoints/lerobot/ \
@@ -258,7 +258,7 @@ cd docker && docker compose run --rm lerobot-convert convert \
   --output_dir=~/datasets/lerobot/my_task
 
 # 4. Train SmolVLA policy
-cd docker && docker compose run --rm lerobot-train train \
+cd docker && docker compose run --rm lerobot-train expert_only \
   --input_path=~/datasets/lerobot/my_task \
   --exp_name=baseline_v1 \
   --output_dir=~/checkpoints/lerobot/ \
@@ -298,7 +298,7 @@ cd docker && for pair in \
 done
 
 # Train all models (can run in parallel)
-cd docker && docker compose run --rm lerobot-train train --input_path=~/datasets/lerobot/my_task ...
+cd docker && docker compose run --rm lerobot-train expert_only --input_path=~/datasets/lerobot/my_task ...
 cd docker && docker compose run --rm groot-train --input_path=~/datasets/groot/my_task ...
 cd docker && docker compose run --rm openpi-train --input_path=~/datasets/openpi/my_task ...
 
