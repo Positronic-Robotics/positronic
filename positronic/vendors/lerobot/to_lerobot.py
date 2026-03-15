@@ -71,7 +71,7 @@ def _collate_fn(x):
 
 def append_data_to_dataset(lr_dataset: LeRobotDataset, p_dataset: Dataset, fps, task=None, num_workers=16):
     _raise_fd_limit()
-    lr_dataset.start_image_writer(num_processes=0, num_threads=num_workers)
+    lr_dataset.start_image_writer()
     total_length_sec = 0
 
     episode_dataset = EpisodeDictDataset(p_dataset, fps=fps)
