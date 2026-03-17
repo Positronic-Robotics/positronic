@@ -171,6 +171,9 @@ def train(
 
     _update_config(cfg, **cfg_kwargs)
 
+    if 'policy.scheduler_decay_steps' not in cfg_kwargs:
+        cfg.policy.scheduler_decay_steps = cfg.steps - cfg.policy.scheduler_warmup_steps
+
     if cfg.resume:
         checkpoints_dir = Path(cfg.output_dir) / 'checkpoints'
         if not checkpoints_dir.exists():
