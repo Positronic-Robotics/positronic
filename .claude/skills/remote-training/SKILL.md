@@ -32,6 +32,7 @@ Every run writes `run_metadata_*.yaml` with the full CLI command — read it to 
 
 | Vendor | Codec | Interim | Latest Checkpoint |
 |--------|-------|---------|-------------------|
+| smolvla (0.4.x) | `ee` | `s3://interim/phail_unified/smolvla/ee/` | `s3://checkpoints/phail_unified/smolvla/150315_ft_150k/` |
 | groot | `ee_rot6d` | `s3://interim/phail_unified/groot/ee_rot6d/` | — |
 | lerobot (0.4.x) / SmolVLA | `ee` | — | `s3://checkpoints/phail_unified/smolvla/170316_ee/` |
 | lerobot (0.3.3) | `ee` | `s3://interim/phail_unified/lerobot/ee/` | — |
@@ -140,6 +141,33 @@ General pattern:
 
 **Resume any training**: add `--resume=true` to the same command.
 
+### Figuring Out the Real CLI
+
+**Don't guess subcommands from memory.** Each vendor script defines its own CLI via `cfn.cli()`. To verify the actual interface:
+
+1. **Read the script's `cfn.cli()` call** at the bottom of the file:
+   - `cfn.cli(main)` → no subcommand, pass args directly
+   - `cfn.cli({'serve': main, 'phail': phail})` → requires a subcommand (`serve`, `phail`, etc.)
+2. **Read the `@cfn.config(...)` decorator** on the target function for available parameters and defaults
+3. **Read the script's module docstring** for usage examples
+
+Quick reference of all CLI shapes:
+
+| Script | `cfn.cli()` form | Subcommands |
+|--------|-------------------|-------------|
+| `lerobot/train.py` | `cfn.cli({...})` | `expert_only`, `full_finetune` |
+| `lerobot/server.py` | `cfn.cli(main)` | none |
+| `lerobot/to_lerobot.py` | `cfn.cli({...})` | `convert`, `append` |
+| `lerobot_0_3_3/train.py` | `cfn.cli(train)` | none |
+| `lerobot_0_3_3/server.py` | `cfn.cli({...})` | `serve`, `phail`, `sim_stack` |
+| `lerobot_0_3_3/to_lerobot.py` | `cfn.cli({...})` | `convert`, `append` |
+| `groot/train.py` | `cfn.cli(main)` | none |
+| `groot/server.py` | `cfn.cli({...})` | `serve`, `ee`, `ee_joints`, `ee_rot6d`, `ee_rot6d_joints`, ... |
+| `openpi/train.py` | `cfn.cli(main)` | none |
+| `openpi/server.py` | `cfn.cli({...})` | `serve`, `phail`, `sim_stack` |
+| `dreamzero/train.py` | `cfn.cli({...})` | `h100x1`, `h100x8` |
+| `dreamzero/server.py` | `cfn.cli(server)` | none |
+
 ### 3. Start Inference Server
 
 All servers use subcommands: `serve` for custom checkpoints, or named presets like `phail`, `sim_stack`.
@@ -151,20 +179,19 @@ CACHE_ROOT=/home/vertix docker --context desktop compose run --rm --pull always 
 
 # LeRobot 0.4.x SmolVLA — custom checkpoint (desktop)
 CACHE_ROOT=/home/vertix docker --context desktop compose run --rm --pull always --service-ports lerobot-server \
-  serve \
   --checkpoints_dir=s3://checkpoints/sim_stack/lerobot_04/smolvla_150k/
 
-# LeRobot 0.3.3 ACT (desktop)
+# LeRobot 0.3.3 ACT (desktop) — requires subcommand
 CACHE_ROOT=/home/vertix docker --context desktop compose run --rm --pull always --service-ports lerobot-0_3_3-server \
   serve \
   --checkpoints_dir=s3://checkpoints/sim_stack/lerobot/230226-ee/
 
-# GR00T (desktop or H100)
+# GR00T (desktop or H100) — codec subcommand required
 CACHE_ROOT=/home/vertix docker --context desktop compose run --rm --pull always --service-ports groot-server \
   ee_rot6d \
   --checkpoints_dir=s3://checkpoints/sim_stack/groot/ee_rot6d/230226/
 
-# OpenPI (H100)
+# OpenPI (H100) — requires subcommand
 docker --context vm-train compose run --rm --pull always --service-ports openpi-server \
   serve \
   --checkpoints_dir=s3://checkpoints/sim_stack/openpi/ee/pi05_positronic_lowmem/230226/
@@ -197,8 +224,9 @@ MUJOCO_GL=egl uv run positronic-inference sim \
 
 ```bash
 # 1. Start server in background (-d flag)
+# Check the server script's cfn.cli() to determine if a subcommand is needed (see table above)
 CACHE_ROOT=/home/vertix docker --context <machine> compose run -d --rm --pull always --service-ports <server-service> \
-  <variant> --checkpoints_dir=<checkpoint_path>
+  [subcommand] --checkpoints_dir=<checkpoint_path>
 
 # Wait for ready
 docker --context <machine> logs --tail 5 <container_id>

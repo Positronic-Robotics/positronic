@@ -193,19 +193,27 @@ def train(
             cfg.wandb.enable = True
             cfg.wandb.project = 'lerobot-train'
             cfg.wandb.disable_artifact = True
+            # lerobot hardcodes wandb.init(resume='must') when cfg.resume=True,
+            # which crashes if no previous wandb run exists. Patch to 'allow'.
+            if not (Path(cfg.output_dir) / 'wandb').exists():
+                cfg.wandb.run_id = f'{exp_name}_resume'
+                import wandb
+
+                _real_init = wandb.init
+                wandb.init = lambda *a, **kw: _real_init(*a, **{**kw, 'resume': 'allow'})
 
     # pos3.sync recreates experiment dirs from S3 — remove stale ones so lerobot
     # doesn't reject a fresh run with FileExistsError.
     if not cfg.resume and Path(cfg.output_dir).exists():
         shutil.rmtree(cfg.output_dir)
 
+    utils.save_run_metadata(Path(cfg.output_dir), patterns=['*.py', '*.toml'])
+
     logging.info('Starting training...')
     # Deferred: lerobot_train triggers heavy CUDA/model registry init on import.
     from lerobot.scripts.lerobot_train import train as lerobot_train  # noqa: E402
 
     lerobot_train(cfg)
-
-    utils.save_run_metadata(Path(cfg.output_dir), patterns=['*.py', '*.toml'])
     logging.info('Training finished.')
 
 
