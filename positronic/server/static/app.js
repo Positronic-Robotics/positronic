@@ -47,7 +47,10 @@
 // Each cell value can be a plain scalar or [sortValue, displayValue] tuple.
 // Columns may have a renderer config (from Python RendererConfig):
 //   'badge' — colored label (e.g. Pass/Fail), options map raw value → {label, variant}
-//   'icon'  — image + text, options map raw value → {src, label?}
+//   'icon'  — image + text, options map raw value → {src, label?, tags?, class?}
+//            tags: string[] — rendered as chips below the name
+//            class: string  — CSS class added to the cell (for row styling via tr:has)
+//            _tagStyles (on options root): {tagName: {bg, color, border}} for tag chip colors
 // Without a renderer, the display value (or scalar) is shown as plain text.
 //
 // Episode detail page
@@ -279,19 +282,43 @@ function renderIcon(value, options) {
   const text = Array.isArray(value) ? value[1] : String(value);
   const raw = Array.isArray(value) ? value[0] : value;
   const cfg = options?.[raw];
-  const container = document.createElement('span');
-  container.classList.add('cell-with-icon');
+
+  const nameRow = document.createElement('span');
+  nameRow.classList.add('cell-with-icon');
+  if (cfg?.class) nameRow.classList.add(cfg.class);
   if (cfg?.src) {
     const img = document.createElement('img');
     img.src = cfg.src;
     img.alt = '';
     img.classList.add('cell-icon');
-    container.appendChild(img);
+    nameRow.appendChild(img);
   }
   const span = document.createElement('span');
   span.textContent = cfg?.label ?? text;
-  container.appendChild(span);
-  return container;
+  nameRow.appendChild(span);
+
+  if (!cfg?.tags?.length) return nameRow;
+
+  const wrapper = document.createElement('div');
+  if (cfg.class) wrapper.classList.add(cfg.class);
+  wrapper.appendChild(nameRow);
+
+  const meta = document.createElement('div');
+  meta.className = 'cell-tags';
+  for (const tag of cfg.tags) {
+    const chip = document.createElement('span');
+    chip.className = 'cell-tag';
+    const style = cfg.tagStyles?.[tag] || options?._tagStyles?.[tag];
+    if (style) {
+      chip.style.background = style.bg;
+      chip.style.color = style.color;
+      chip.style.borderColor = style.border;
+    }
+    chip.textContent = tag;
+    meta.appendChild(chip);
+  }
+  wrapper.appendChild(meta);
+  return wrapper;
 }
 
 // ---------------------------------------------------------------------------

@@ -444,6 +444,12 @@ tbody tr.lb-row--baseline:hover {
 /* Icon cells */
 .cell-with-icon { display: inline-flex; align-items: center; }
 .cell-icon { width: 24px; height: 24px; object-fit: contain; margin-right: 0.6rem; }
+.cell-tags { display: flex; flex-wrap: wrap; gap: 0.35rem; margin-top: 0.3rem; }
+.cell-tag {
+  display: inline-flex; align-items: center; padding: 0.1rem 0.4rem;
+  border-radius: 999px; font-size: 0.7rem; border: 1px solid;
+  background: rgba(148, 163, 184, 0.12); color: var(--text-muted); border-color: rgba(148, 163, 184, 0.25);
+}
 
 /* Buttons */
 .btn {

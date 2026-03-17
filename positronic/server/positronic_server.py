@@ -228,7 +228,13 @@ class RendererConfig:
     Attributes:
         type: Renderer type dispatched in app.js — ``'badge'`` or ``'icon'``.
         options: Value-keyed mapping. For badges: ``{value: {'label', 'variant'}}``.
-            For icons: ``{value: {'src', 'label?'}}``.
+            For icons: ``{value: {'src', 'label?', 'tags?', 'class?'}}``.
+            Icon entries may include:
+              - ``tags``: list of string labels rendered as chips below the name.
+              - ``class``: CSS class added to the cell element (useful for row-level
+                styling via ``tr:has(.my-class)``).
+            The reserved key ``'_tagStyles'`` maps tag names to style dicts
+            ``{'bg', 'color', 'border'}`` applied as inline styles on tag chips.
     """
 
     type: str
