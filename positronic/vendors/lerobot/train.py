@@ -21,6 +21,8 @@ import logging
 import os
 import shutil
 import sys  # noqa: F401 — used in resume path to set sys.argv for lerobot's parser
+import threading
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -210,7 +212,18 @@ def train(
     if not cfg.resume and Path(cfg.output_dir).exists():
         shutil.rmtree(cfg.output_dir)
 
-    utils.save_run_metadata(Path(cfg.output_dir), patterns=['*.py', '*.toml'])
+    # Save metadata in a background thread — lerobot rejects pre-existing output dirs,
+    # so we wait for it to create the directory first (same pattern as lerobot_0_3_3).
+    def _save_metadata_delayed():
+        output_path = Path(cfg.output_dir)
+        for _ in range(60):
+            if output_path.exists():
+                utils.save_run_metadata(output_path, patterns=['*.py', '*.toml'])
+                return
+            time.sleep(5)
+        logging.warning(f'Timed out waiting for output directory {output_path} to be created')
+
+    threading.Thread(target=_save_metadata_delayed, daemon=True).start()
 
     logging.info('Starting training...')
     # Deferred: lerobot_train triggers heavy CUDA/model registry init on import.
