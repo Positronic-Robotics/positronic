@@ -1,8 +1,10 @@
 import importlib.metadata
+import logging
 import os
 import platform
 import socket
 import sys
+import threading
 import time
 from datetime import UTC, datetime
 from pathlib import Path
@@ -270,3 +272,23 @@ def save_run_metadata(
         yaml.dump(metadata, f, Dumper=LiteralDumper, default_flow_style=False, sort_keys=False)
 
     return output_path
+
+
+def save_run_metadata_deferred(
+    output_dir: str | Path, patterns: list[str] | None = None, prefix: str = 'run_metadata', timeout: int = 300
+):
+    """Save run metadata in a background thread, waiting for the output directory to be created.
+
+    Useful when the training framework (e.g. lerobot) rejects pre-existing output dirs.
+    """
+    output_path = Path(output_dir)
+
+    def _save():
+        for _ in range(timeout // 5):
+            if output_path.exists():
+                save_run_metadata(output_path, patterns=patterns, prefix=prefix)
+                return
+            time.sleep(5)
+        logging.warning(f'Timed out waiting for output directory {output_path} to be created')
+
+    threading.Thread(target=_save, daemon=True).start()
