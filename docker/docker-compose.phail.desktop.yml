@@ -1,6 +1,6 @@
 # GR00T on desktop (RTX 3060 12GB — GR00T uses ~4.6GB)
 #
-# docker --context desktop compose -f docker-compose.phail.desktop.yml up --pull always
+# docker --context desktop compose -f docker-compose.phail.desktop.yml up
 services:
   phail-groot-server:
     extends:

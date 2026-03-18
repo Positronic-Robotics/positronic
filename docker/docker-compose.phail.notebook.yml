@@ -1,6 +1,6 @@
 # SmolVLA + ACT on notebook (RTX 4060 8GB — fits both models ~2.4GB total)
 #
-# docker --context notebook compose -f docker-compose.phail.notebook.yml up --pull always
+# docker --context notebook compose -f docker-compose.phail.notebook.yml up
 services:
   phail-smolvla-server:
     extends:

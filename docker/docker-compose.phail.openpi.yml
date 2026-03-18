@@ -1,6 +1,6 @@
 # OpenPI on vm-openpi (H100 80GB)
 #
-# docker --context vm-openpi compose -f docker-compose.phail.openpi.yml up --pull always
+# docker --context vm-openpi compose -f docker-compose.phail.openpi.yml up
 services:
   phail-openpi-server:
     extends:
