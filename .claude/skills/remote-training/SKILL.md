@@ -141,33 +141,6 @@ General pattern:
 
 **Resume any training**: add `--resume=true` to the same command.
 
-### Figuring Out the Real CLI
-
-**Don't guess subcommands from memory.** Each vendor script defines its own CLI via `cfn.cli()`. To verify the actual interface:
-
-1. **Read the script's `cfn.cli()` call** at the bottom of the file:
-   - `cfn.cli(main)` → no subcommand, pass args directly
-   - `cfn.cli({'serve': main, 'phail': phail})` → requires a subcommand (`serve`, `phail`, etc.)
-2. **Read the `@cfn.config(...)` decorator** on the target function for available parameters and defaults
-3. **Read the script's module docstring** for usage examples
-
-Quick reference of all CLI shapes:
-
-| Script | `cfn.cli()` form | Subcommands |
-|--------|-------------------|-------------|
-| `lerobot/train.py` | `cfn.cli({...})` | `expert_only`, `full_finetune` |
-| `lerobot/server.py` | `cfn.cli(main)` | none |
-| `lerobot/to_lerobot.py` | `cfn.cli({...})` | `convert`, `append` |
-| `lerobot_0_3_3/train.py` | `cfn.cli(train)` | none |
-| `lerobot_0_3_3/server.py` | `cfn.cli({...})` | `serve`, `phail`, `sim_stack` |
-| `lerobot_0_3_3/to_lerobot.py` | `cfn.cli({...})` | `convert`, `append` |
-| `groot/train.py` | `cfn.cli(main)` | none |
-| `groot/server.py` | `cfn.cli({...})` | `serve`, `ee`, `ee_joints`, `ee_rot6d`, `ee_rot6d_joints`, ... |
-| `openpi/train.py` | `cfn.cli(main)` | none |
-| `openpi/server.py` | `cfn.cli({...})` | `serve`, `phail`, `sim_stack` |
-| `dreamzero/train.py` | `cfn.cli({...})` | `h100x1`, `h100x8` |
-| `dreamzero/server.py` | `cfn.cli(server)` | none |
-
 ### 3. Start Inference Server
 
 All servers use subcommands: `serve` for custom checkpoints, or named presets like `phail`, `sim_stack`.
