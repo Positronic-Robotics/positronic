@@ -258,7 +258,7 @@ def _internal_main():
         'sim': main_sim_cfg,
         'real': droid_setup,
         'phail': droid_setup.override(
-            policy=policy_cfg.production, driver=eval_ui, **{'driver.ui_scale': 3, 'robot_arm.collision_coeff': 2.0}
+            policy=policy_cfg.phail_multiple, driver=eval_ui, **{'driver.ui_scale': 3, 'robot_arm.collision_coeff': 2.0}
         ),
         'sim_pnp': main_sim_cfg.override(
             loaders=positronic.cfg.simulator.multi_tote_loaders,

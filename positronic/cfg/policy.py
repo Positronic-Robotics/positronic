@@ -95,11 +95,11 @@ def weighted_remote(
     return (codec.wrap(policy) if codec else policy), weight
 
 
-@cfn.config(groot=weighted_remote, openpi=weighted_remote, act=weighted_remote, extra=None)
-def production(groot, openpi, act, extra):
+@cfn.config(groot=weighted_remote, openpi=weighted_remote, act=weighted_remote, smolvla=weighted_remote, extra=None)
+def production(groot, openpi, act, smolvla, extra):
     from positronic.policy import SampledPolicy
 
-    entries = [e for e in [groot, openpi, act] if e is not None]
+    entries = [e for e in [groot, openpi, act, smolvla] if e is not None]
     if extra:
         entries.extend(e for e in extra if e is not None)
     if not entries:
@@ -120,11 +120,12 @@ def phail_single(hostname, w_openpi=1.0, w_groot=1.0, w_act=1.0):
 
 
 phail_multiple = production.override(**{
+    'smolvla.host': 'notebook',
+    'smolvla.port': 8000,
+    'act.host': 'notebook',
+    'act.port': 8001,
     'groot.host': 'desktop',
-    'groot.port': 8001,
+    'groot.port': 8000,
     'openpi.host': 'vm-openpi',
     'openpi.port': 8000,
-    'openpi.weight': 0.3,
-    'act.host': 'localhost',
-    'act.port': 8002,
 })

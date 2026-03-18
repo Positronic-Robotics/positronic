@@ -1,0 +1,13 @@
+# OpenPI on vm-openpi (H100 80GB)
+#
+# docker --context vm-openpi compose -f docker-compose.phail.openpi.yml up --pull always
+services:
+  phail-openpi-server:
+    extends:
+      file: docker-compose.yml
+      service: openpi-server
+    container_name: phail-openpi-server
+    pull_policy: always
+    command: ["phail"]
+    ports: !override
+      - "8000:8000"

@@ -1,0 +1,23 @@
+# SmolVLA + ACT on notebook (RTX 4060 8GB — fits both models ~2.4GB total)
+#
+# docker --context notebook compose -f docker-compose.phail.notebook.yml up --pull always
+services:
+  phail-smolvla-server:
+    extends:
+      file: docker-compose.yml
+      service: lerobot-server
+    container_name: phail-smolvla-server
+    pull_policy: always
+    command: ["phail"]
+    ports: !override
+      - "8000:8000"
+
+  phail-act-server:
+    extends:
+      file: docker-compose.yml
+      service: lerobot-0_3_3-server
+    container_name: phail-act-server
+    pull_policy: always
+    command: ["phail"]
+    ports: !override
+      - "8001:8000"
