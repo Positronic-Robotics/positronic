@@ -79,7 +79,13 @@ def main(checkpoints_dir: str, checkpoint: str | None, codec, port: int, host: s
     InferenceServer(codec, checkpoints_dir, checkpoint, host=host, port=port, recording_dir=recording_dir).serve()
 
 
+phail = main.override(
+    checkpoints_dir='s3://checkpoints/phail_unified/smolvla/170316_ee/',
+    recording_dir='s3://inference/phail_unified/server_recordings/smolvla/170316_ee/',
+)
+
+
 if __name__ == '__main__':
     init_logging()
     with pos3.mirror():
-        cfn.cli(main)
+        cfn.cli({'serve': main, 'phail': phail})
