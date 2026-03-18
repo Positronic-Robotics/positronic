@@ -184,6 +184,7 @@ include = [
 positronic = [
   "assets/**",
   "drivers/**/*.xml",
+  "drivers/**/*.urdf",
   "server/static/**",
   "server/templates/**",
 ]
