@@ -47,9 +47,10 @@
 // Each cell value can be a plain scalar or [sortValue, displayValue] tuple.
 // Columns may have a renderer config (from Python RendererConfig):
 //   'badge' — colored label (e.g. Pass/Fail), options map raw value → {label, variant}
-//   'icon'  — image + text, options map raw value → {src, label?, tags?, class?}
+//   'icon'  — image + text, options map raw value → {src, label?, tags?, class?, href?}
 //            tags: string[] — rendered as chips below the name
 //            class: string  — CSS class added to the cell (for row styling via tr:has)
+//            href: string   — makes the name a link; {value} is replaced with the raw value
 //            _tagStyles (on options root): {tagName: {bg, color, border}} for tag chip colors
 // Without a renderer, the display value (or scalar) is shown as plain text.
 //
@@ -293,9 +294,10 @@ function renderIcon(value, options) {
     img.classList.add('cell-icon');
     nameRow.appendChild(img);
   }
-  const span = document.createElement('span');
-  span.textContent = cfg?.label ?? text;
-  nameRow.appendChild(span);
+  const nameEl = cfg?.href ? document.createElement('a') : document.createElement('span');
+  nameEl.textContent = cfg?.label ?? text;
+  if (cfg?.href) nameEl.href = cfg.href.replace('{value}', encodeURIComponent(raw));
+  nameRow.appendChild(nameEl);
 
   if (!cfg?.tags?.length) return nameRow;
 
