@@ -72,12 +72,6 @@ class InferenceServer(VendorServer):
     async def release_policy(self, model_handle):
         await self.policy_manager.release_session()
 
-    # PolicyManager handles lazy loading on first WebSocket connect,
-    # so startup warmup is unnecessary (would load a policy that might
-    # get immediately swapped on first request).
-    async def _startup(self):
-        pass
-
 
 @cfn.config(codec=lerobot_codecs.ee, checkpoint=None, port=8000, host='0.0.0.0', recording_dir=None)
 def main(checkpoints_dir: str, checkpoint: str | None, codec, port: int, host: str, recording_dir: str | None):

@@ -32,7 +32,7 @@ class PolicyManager:
         self._lock = asyncio.Lock()
         self._condition = asyncio.Condition(self._lock)
 
-    async def get_policy(self, checkpoint_id: str, websocket: WebSocket) -> Policy:
+    async def get_policy(self, checkpoint_id: str, websocket: WebSocket | None = None) -> Policy:
         async with self._lock:
             if self.current_checkpoint_id != checkpoint_id:
                 logger.info(f'Switching policy from {self.current_checkpoint_id} to {checkpoint_id}')
@@ -40,7 +40,8 @@ class PolicyManager:
                 while self.active_sessions > 0:
                     message = f'Waiting for {self.active_sessions} active session(s) to finish...'
                     logger.info(message)
-                    await websocket.send_bytes(serialise({'status': 'waiting', 'message': message}))
+                    if websocket:
+                        await websocket.send_bytes(serialise({'status': 'waiting', 'message': message}))
 
                     try:
                         await asyncio.wait_for(self._condition.wait(), timeout=5.0)
@@ -51,15 +52,17 @@ class PolicyManager:
                     logger.info('Unloading current policy')
                     self.current_policy.close()
 
-                await websocket.send_bytes(
-                    serialise({'status': 'loading', 'message': f'Loading checkpoint {checkpoint_id}...'})
-                )
+                if websocket:
+                    await websocket.send_bytes(
+                        serialise({'status': 'loading', 'message': f'Loading checkpoint {checkpoint_id}...'})
+                    )
 
                 logger.info(f'Loading policy {checkpoint_id}')
-                self.current_policy = self.loader(checkpoint_id)
+                self.current_policy = await asyncio.to_thread(self.loader, checkpoint_id)
                 self.current_checkpoint_id = checkpoint_id
 
-            self.active_sessions += 1
+            if websocket:
+                self.active_sessions += 1
             return self.current_policy
 
     async def release_session(self):

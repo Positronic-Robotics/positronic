@@ -89,11 +89,6 @@ class InferenceServer(VendorServer):
     async def release_policy(self, model_handle):
         await self.policy_manager.release_session()
 
-    # PolicyManager handles lazy loading on first WebSocket connect,
-    # so startup warmup is unnecessary.
-    async def _startup(self):
-        pass
-
 
 def act(checkpoint_path: str) -> PreTrainedPolicy:
     policy = ACTPolicy.from_pretrained(checkpoint_path, strict=True)
