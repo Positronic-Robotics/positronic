@@ -33,6 +33,7 @@ Every run writes `run_metadata_*.yaml` with the full CLI command — read it to 
 | Vendor | Codec | Interim | Latest Checkpoint |
 |--------|-------|---------|-------------------|
 | groot | `ee_rot6d` | `s3://interim/phail_unified/groot/ee_rot6d/` | — |
+| lerobot (0.4.x) / SmolVLA | `ee` | — | `s3://checkpoints/phail_unified/smolvla/170316_ee/` |
 | lerobot (0.3.3) | `ee` | `s3://interim/phail_unified/lerobot/ee/` | — |
 | openpi | `ee` | `s3://interim/phail_unified/openpi/ee/` | — |
 
@@ -141,8 +142,14 @@ General pattern:
 
 ### 3. Start Inference Server
 
+All servers use subcommands: `serve` for custom checkpoints, or named presets like `phail`, `sim_stack`.
+
 ```bash
-# LeRobot 0.4.x SmolVLA (desktop)
+# LeRobot 0.4.x SmolVLA — preset (desktop)
+CACHE_ROOT=/home/vertix docker --context desktop compose run --rm --pull always --service-ports lerobot-server \
+  phail
+
+# LeRobot 0.4.x SmolVLA — custom checkpoint (desktop)
 CACHE_ROOT=/home/vertix docker --context desktop compose run --rm --pull always --service-ports lerobot-server \
   serve \
   --checkpoints_dir=s3://checkpoints/sim_stack/lerobot_04/smolvla_150k/
@@ -163,7 +170,14 @@ docker --context vm-train compose run --rm --pull always --service-ports openpi-
   --checkpoints_dir=s3://checkpoints/sim_stack/openpi/ee/pi05_positronic_lowmem/230226/
 ```
 
-All servers expose WebSocket API on port 8000. GR00T/LeRobot servers also accept `phail` and `sim_stack` presets.
+All servers expose WebSocket API on port 8000. Available presets per server:
+
+| Server | Presets |
+|--------|---------|
+| `lerobot-server` | `serve`, `phail` |
+| `lerobot-0_3_3-server` | `serve`, `phail`, `sim_stack` |
+| `groot-server` | `serve`, `ee`, `ee_rot6d`, `phail`, `sim_stack`, ... |
+| `openpi-server` | `serve`, `phail`, `sim_stack` |
 
 ### 4. Run Inference Client
 
