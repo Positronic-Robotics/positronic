@@ -34,7 +34,7 @@ class LerobotPolicy(Policy):
         policy_cls = get_policy_class(config.type)
         self._policy = policy_cls.from_pretrained(checkpoint_path).to(self._device)
         self._preprocessor, self._postprocessor = make_pre_post_processors(config, pretrained_path=checkpoint_path)
-        self.extra_meta = extra_meta or {}
+        self.extra_meta = {**(extra_meta or {}), 'type': config.type}
 
     def select_action(self, obs: dict[str, Any]) -> dict[str, Any] | list[dict[str, Any]]:
         obs_int = {}

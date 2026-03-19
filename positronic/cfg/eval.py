@@ -549,6 +549,7 @@ PHAIL_MODEL_DISPLAY = {
     'openpi': 'Physical Intelligence Open \u03c0\u2080.\u2085',
     'groot': 'NVIDIA GR00T N1.6',
     'act': 'Action Chunking Transformer',
+    'smolvla': 'Hugging Face SmolVLA',
     'human': HUMAN_MODEL,
     'teleop': TELEOP_MODEL,
 }
