@@ -38,6 +38,21 @@ from positronic.policy import Codec
 from positronic.utils.logging import init_logging
 from positronic.vendors.lerobot import codecs as lerobot_codecs
 
+# Workaround: HubMixin.save_pretrained unconditionally deletes config.json before
+# calling _save_pretrained.  When lerobot's save_checkpoint calls both
+# policy.save_pretrained(dir) then cfg.save_pretrained(dir) on the SAME directory,
+# the second call deletes the policy config.json written by the first.
+# Patch cfg's save_pretrained to just write train_config.json without the unlink.
+_orig_save_pretrained = TrainPipelineConfig.save_pretrained
+
+
+def _train_cfg_save_pretrained(self, save_directory, **kwargs):
+    Path(save_directory).mkdir(parents=True, exist_ok=True)
+    self._save_pretrained(Path(save_directory))
+
+
+TrainPipelineConfig.save_pretrained = _train_cfg_save_pretrained
+
 
 @EnvConfig.register_subclass('positronic')
 @dataclass
