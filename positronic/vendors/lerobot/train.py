@@ -42,16 +42,19 @@ from positronic.vendors.lerobot import codecs as lerobot_codecs
 # calling _save_pretrained.  When lerobot's save_checkpoint calls both
 # policy.save_pretrained(dir) then cfg.save_pretrained(dir) on the SAME directory,
 # the second call deletes the policy config.json written by the first.
-# Patch cfg's save_pretrained to just write train_config.json without the unlink.
-_orig_save_pretrained = TrainPipelineConfig.save_pretrained
+# Back up and restore config.json around the original call.
+_orig_cfg_save_pretrained = TrainPipelineConfig.save_pretrained
 
 
-def _train_cfg_save_pretrained(self, save_directory, **kwargs):
-    Path(save_directory).mkdir(parents=True, exist_ok=True)
-    self._save_pretrained(Path(save_directory))
+def _safe_cfg_save_pretrained(self, save_directory, **kwargs):
+    config_path = Path(save_directory) / 'config.json'
+    backup = config_path.read_bytes() if config_path.exists() else None
+    _orig_cfg_save_pretrained(self, save_directory, **kwargs)
+    if backup is not None and not config_path.exists():
+        config_path.write_bytes(backup)
 
 
-TrainPipelineConfig.save_pretrained = _train_cfg_save_pretrained
+TrainPipelineConfig.save_pretrained = _safe_cfg_save_pretrained
 
 
 @EnvConfig.register_subclass('positronic')
