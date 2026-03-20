@@ -644,6 +644,7 @@ function loadSidebarState() {
 
 function initializeSidebar(staticData) {
   const tbody = document.querySelector('.sidebar-content-wrapper tbody');
+  tbody.innerHTML = '';
 
   tbody.insertAdjacentHTML('beforeend', renderLevel('', staticData));
   document.querySelectorAll('.expand-button').forEach((button) => {
