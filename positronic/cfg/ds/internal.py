@@ -32,9 +32,22 @@ SIM_URDF = Path(package_assets_path('assets/mujoco/panda_ik.xml')).read_text()
 REAL_URDF = (Path(__file__).resolve().parents[2] / 'drivers' / 'roboarm' / 'fr3.urdf').read_text()
 
 _JOINT_NAMES = [f'joint{i}' for i in range(1, 8)]
+_POSE_SIGNALS = ['robot_state.ee_pose', 'robot_commands.pose']
 
-_SIM_ROBOT_META = {'urdf': SIM_URDF, 'joint_names': _JOINT_NAMES, 'control_frame': 'end_effector'}
-_REAL_ROBOT_META = {'urdf': REAL_URDF, 'joint_names': _JOINT_NAMES, 'control_frame': 'end_effector'}
+_SIM_ROBOT_META = {
+    'urdf': SIM_URDF,
+    'joint_names': _JOINT_NAMES,
+    'control_frame': 'end_effector',
+    'joint_signal': 'robot_state.q',
+    'pose_signals': _POSE_SIGNALS,
+}
+_REAL_ROBOT_META = {
+    'urdf': REAL_URDF,
+    'joint_names': _JOINT_NAMES,
+    'control_frame': 'end_effector',
+    'joint_signal': 'robot_state.q',
+    'pose_signals': _POSE_SIGNALS,
+}
 
 # Task constants
 TOWELS_TASK = 'Pick all the towels one by one from transparent tote and place them into the large grey tote.'

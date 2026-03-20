@@ -113,7 +113,7 @@ def get_episodes_list(
 def _compute_eye_controls(signals: EpisodeSignals, ep: Episode) -> rrb.EyeControls3D | None:
     """Compute camera view orthogonal to the best-fit plane of all pose trajectories."""
     all_positions = [
-        np.asarray(ep.signals[name].values(), dtype=np.float64)[:, :3] for name in signals.poses if ep.signals[name]
+        np.asarray(ep.signals[name].values(), dtype=np.float32)[:, :3] for name in signals.poses if ep.signals[name]
     ]
     if not all_positions:
         return None
@@ -122,12 +122,10 @@ def _compute_eye_controls(signals: EpisodeSignals, ep: Episode) -> rrb.EyeContro
     centroid = positions.mean(axis=0)
     centered = positions - centroid
     _, _, vh = np.linalg.svd(centered, full_matrices=False)
-    normal = vh[2]  # smallest singular value = plane normal
+    normal = vh[2]
 
-    # Place camera along the normal, at a distance proportional to the trajectory spread
     spread = np.linalg.norm(centered, axis=1).max()
     camera_pos = centroid + normal * spread * 2.0
-
     return rrb.EyeControls3D(position=camera_pos.tolist(), look_target=centroid.tolist())
 
 
@@ -161,7 +159,7 @@ def _group_signals_by_prefix(signals: EpisodeSignals) -> list[tuple[str, list[st
     return list(groups.items())
 
 
-def _build_blueprint(signals: EpisodeSignals, eye_controls: rrb.EyeControls3D | None = None) -> rrb.Blueprint:
+def _build_blueprint(signals: EpisodeSignals, ep: Episode) -> rrb.Blueprint:
     image_views = [rrb.Spatial2DView(name=k, origin=f'/{k}') for k in signals.videos]
 
     def _ts_view(name: str, sig: str) -> rrb.TimeSeriesView:
@@ -176,33 +174,31 @@ def _build_blueprint(signals: EpisodeSignals, eye_controls: rrb.EyeControls3D | 
     series_views = []
     for group_name, sigs in _group_signals_by_prefix(signals):
         if len(sigs) == 1:
-            series_views.append(_ts_view(group_name, sigs[0]))
+            view = _ts_view(group_name, sigs[0])
         else:
-            tab_views = [_ts_view(sig[len(group_name) + 1 :], sig) for sig in sigs]
-            series_views.append(rrb.Tabs(*tab_views, name=group_name))
+            view = rrb.Tabs(*[_ts_view(sig[len(group_name) + 1 :], sig) for sig in sigs], name=group_name)
+        series_views.append(view)
 
     # Top row: images (big) + optional 3D (smaller)
     top_items = []
     if image_views:
         top_items.append(rrb.Grid(*image_views))
     if signals.poses:
+        eye = _compute_eye_controls(signals, ep)
         top_items.append(
             rrb.Spatial3DView(
                 name='3D Trajectory',
                 origin='/3d',
                 background=[30, 30, 30],
                 line_grid=rrb.LineGrid3D(visible=True),
-                eye_controls=eye_controls or rrb.EyeControls3D(),
+                eye_controls=eye or rrb.EyeControls3D(),
             )
         )
 
     rows = []
     row_shares = []
     if top_items:
-        if len(top_items) == 1:
-            rows.append(top_items[0])
-        else:
-            rows.append(rrb.Horizontal(*top_items, column_shares=[3, 1]))
+        rows.append(top_items[0] if len(top_items) == 1 else rrb.Horizontal(*top_items, column_shares=[3, 1]))
         row_shares.append(3)
     if series_views:
         rows.append(rrb.Grid(*series_views))
@@ -217,9 +213,14 @@ def _build_blueprint(signals: EpisodeSignals, eye_controls: rrb.EyeControls3D | 
     )
 
 
-def _setup_series_names(signals: EpisodeSignals) -> None:
+def _setup_series_names(signals: EpisodeSignals, ep: Episode) -> None:
+    joint_signal = ep.static.get('joint_signal')
+    joint_names = ep.static.get('joint_names')
     for key in signals.numerics:
-        names = [str(i) for i in range(max(1, signals.dims.get(key, 1)))]
+        if key == joint_signal and joint_names:
+            names = joint_names
+        else:
+            names = [str(i) for i in range(max(1, signals.dims.get(key, 1)))]
         log_series_styles(f'/signals/{key}', names, static=True)
 
 
@@ -304,7 +305,7 @@ def _log_numeric_signals(
     pose_set = set(signals.poses)
     joint_signal = ep.static.get('joint_signal')
     stash_keys = pose_set | ({joint_signal} if joint_signal else set())
-    pose_data: dict[str, tuple[np.ndarray, np.ndarray]] = {}
+    pose_data = {}
 
     for key in signals.numerics:
         sig = ep.signals[key]
@@ -319,19 +320,12 @@ def _log_numeric_signals(
             vals = vals.reshape(-1, 1)
         dim = vals.shape[1]
 
+        time_idx = [rr.TimeColumn('time', timestamp=ts_arr)]
         if dim == 1:
-            rr.send_columns(
-                f'/signals/{key}',
-                indexes=[rr.TimeColumn('time', timestamp=ts_arr)],
-                columns=rr.Scalars.columns(scalars=vals.ravel()),
-            )
+            rr.send_columns(f'/signals/{key}', indexes=time_idx, columns=rr.Scalars.columns(scalars=vals.ravel()))
         else:
             for i in range(dim):
-                rr.send_columns(
-                    f'/signals/{key}/{i}',
-                    indexes=[rr.TimeColumn('time', timestamp=ts_arr)],
-                    columns=rr.Scalars.columns(scalars=vals[:, i]),
-                )
+                rr.send_columns(f'/signals/{key}/{i}', indexes=time_idx, columns=rr.Scalars.columns(scalars=vals[:, i]))
 
         if key in stash_keys:
             pose_data[key] = (ts_arr, vals)
@@ -387,9 +381,7 @@ def _log_urdf_robot(
     joint_names = ep.static.get('joint_names')
     urdf_str = ep.static.get('urdf')
     meshes = ep.static.get('meshes')
-    if not joint_signal or not joint_names or not urdf_str or not meshes:
-        return None
-    if joint_signal not in numeric_data:
+    if not all((joint_signal, joint_names, urdf_str, meshes)) or joint_signal not in numeric_data:
         return None
     ts_arr, q_vals = numeric_data[joint_signal]
     if q_vals.shape[1] != len(joint_names):
@@ -473,11 +465,10 @@ def stream_episode_rrd(ds: Dataset, episode_id: int) -> Iterator[bytes]:
 
     with rec:
         signals = _collect_signal_groups(ep)
-        eye_controls = _compute_eye_controls(signals, ep)
-        rr.send_blueprint(_build_blueprint(signals, eye_controls))
+        rr.send_blueprint(_build_blueprint(signals, ep))
         yield from drainer.drain()
 
-        _setup_series_names(signals)
+        _setup_series_names(signals, ep)
         yield from drainer.drain()
 
         yield from _log_video_signals(ep, signals, drainer)
