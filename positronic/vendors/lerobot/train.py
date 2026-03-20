@@ -49,9 +49,10 @@ _orig_cfg_save_pretrained = TrainPipelineConfig.save_pretrained
 def _safe_cfg_save_pretrained(self, save_directory, **kwargs):
     config_path = Path(save_directory) / 'config.json'
     backup = config_path.read_bytes() if config_path.exists() else None
-    _orig_cfg_save_pretrained(self, save_directory, **kwargs)
+    result = _orig_cfg_save_pretrained(self, save_directory, **kwargs)
     if backup is not None and not config_path.exists():
         config_path.write_bytes(backup)
+    return result
 
 
 TrainPipelineConfig.save_pretrained = _safe_cfg_save_pretrained
