@@ -2,6 +2,7 @@ import logging
 import time
 import xml.etree.ElementTree as ET
 from collections.abc import Iterator
+from pathlib import Path
 from typing import Any
 
 import numpy as np
@@ -87,16 +88,49 @@ def _revolute_joint_names(urdf_xml):
     return [j.get('name') for j in root.findall('joint') if j.get('type') == 'revolute']
 
 
+_MESH_DIR = Path(__file__).resolve().parent.parent.parent / 'assets/panda_collision'
+
+
+def _inject_visual_meshes(urdf_xml: str) -> tuple[str, dict[str, bytes]]:
+    """Add <visual> elements to URDF links and return the mesh bytes.
+
+    Links that already have <visual> are left unchanged. For links without,
+    a collision STL mesh is added if a matching file exists in the assets.
+    """
+    root = ET.fromstring(urdf_xml)
+    meshes: dict[str, bytes] = {}
+    for link in root.findall('link'):
+        if link.find('visual') is not None:
+            continue
+        name = link.get('name', '')
+        stl_name = f'{name}.stl'
+        stl_path = _MESH_DIR / stl_name
+        if not stl_path.exists():
+            continue
+        meshes[stl_name] = stl_path.read_bytes()
+        visual = ET.SubElement(link, 'visual')
+        geom = ET.SubElement(visual, 'geometry')
+        ET.SubElement(geom, 'mesh').set('filename', stl_name)
+    return ET.tostring(root, encoding='unicode'), meshes
+
+
 class Robot(pimm.ControlSystem):
     @property
     def robot_meta(self) -> dict:
-        """Robot model metadata for IK and dataset storage.
+        """Robot model metadata for IK, dataset storage, and 3D visualization.
 
-        Returns URDF with F_T_EE baked in (appended by positronic-franka),
-        joint names, and control frame — everything needed to run IK offline.
+        Returns URDF with visual meshes baked in, joint names, control frame,
+        and collision mesh bytes — everything needed to run IK and render the
+        robot offline without any package dependencies.
         """
         urdf = self._ensure_robot().get_robot_model()
-        return {'urdf': urdf, 'joint_names': _revolute_joint_names(urdf), 'control_frame': 'end_effector'}
+        urdf_with_visuals, meshes = _inject_visual_meshes(urdf)
+        return {
+            'urdf': urdf_with_visuals,
+            'joint_names': _revolute_joint_names(urdf),
+            'meshes': meshes,
+            'control_frame': 'end_effector',
+        }
 
     def __init__(
         self,

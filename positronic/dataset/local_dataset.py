@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import json
 import platform
 import shutil
@@ -27,6 +28,23 @@ from .vector import SimpleSignal, SimpleSignalWriter
 from .video import VideoSignal, VideoSignalWriter
 
 UNFINISHED_MARKER = '.unfinished'
+
+_BYTES_TAG = '__bytes_b64__'
+
+
+class _StaticEncoder(json.JSONEncoder):
+    """JSON encoder that handles ``bytes`` values via base64."""
+
+    def default(self, o):
+        if isinstance(o, bytes):
+            return {_BYTES_TAG: base64.b64encode(o).decode('ascii')}
+        return super().default(o)
+
+
+def _static_decode_hook(obj: dict) -> Any:
+    if _BYTES_TAG in obj and len(obj) == 1:
+        return base64.b64decode(obj[_BYTES_TAG])
+    return obj
 
 
 def _is_valid_static_value(value: Any) -> bool:
@@ -236,7 +254,7 @@ class DiskEpisodeWriter(EpisodeWriter):
         episode_json = self._path / 'static.json'
         if self._static_items or not episode_json.exists():
             with episode_json.open('w', encoding='utf-8') as f:
-                json.dump(self._static_items, f, indent=2)
+                json.dump(self._static_items, f, indent=2, cls=_StaticEncoder)
 
         with (self._path / 'meta.json').open('w', encoding='utf-8') as f:
             json.dump(self._meta, f, indent=2)
@@ -335,7 +353,7 @@ class DiskEpisode(Episode):
             ep_json = self._dir / 'static.json'
             if ep_json.exists():
                 with ep_json.open('r', encoding='utf-8') as f:
-                    data = json.load(f)
+                    data = json.load(f, object_hook=_static_decode_hook)
                 if isinstance(data, dict):
                     self._static.update(data)
                 else:

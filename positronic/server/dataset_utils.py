@@ -4,6 +4,7 @@ import logging
 import tempfile
 import warnings
 import xml.etree.ElementTree as ET
+from collections import defaultdict
 from collections.abc import Generator, Iterator
 from dataclasses import dataclass
 from datetime import datetime
@@ -13,6 +14,7 @@ from typing import Any
 import numpy as np
 import rerun as rr
 import rerun.blueprint as rrb
+from rerun.urdf import UrdfTree
 
 from positronic.dataset.dataset import Dataset
 from positronic.dataset.episode import Episode
@@ -106,14 +108,9 @@ def get_episodes_list(
 
 def _compute_eye_controls(signals: EpisodeSignals, ep: Episode) -> rrb.EyeControls3D | None:
     """Compute camera view orthogonal to the best-fit plane of all pose trajectories."""
-    all_positions = []
-    for name in signals.poses:
-        sig = ep.signals[name]
-        if len(sig) == 0:
-            continue
-        vals = np.asarray(sig.values(), dtype=np.float64)
-        if vals.ndim == 2 and vals.shape[1] >= 3:
-            all_positions.append(vals[:, :3])
+    all_positions = [
+        np.asarray(ep.signals[name].values(), dtype=np.float64)[:, :3] for name in signals.poses if ep.signals[name]
+    ]
     if not all_positions:
         return None
 
@@ -153,48 +150,30 @@ def _collect_signal_groups(ep: Episode) -> EpisodeSignals:
 
 def _group_signals_by_prefix(signals: EpisodeSignals) -> list[tuple[str, list[str]]]:
     """Group numeric signals by prefix before the first '.'. Preserves insertion order."""
-    groups: dict[str, list[str]] = {}
+    groups: defaultdict[str, list[str]] = defaultdict(list)
     for sig in signals.numerics:
-        prefix = sig.split('.')[0] if '.' in sig else sig
-        groups.setdefault(prefix, []).append(sig)
+        groups[sig.split('.')[0] if '.' in sig else sig].append(sig)
     return list(groups.items())
 
 
 def _build_blueprint(signals: EpisodeSignals, eye_controls: rrb.EyeControls3D | None = None) -> rrb.Blueprint:
     image_views = [rrb.Spatial2DView(name=k, origin=f'/{k}') for k in signals.videos]
 
-    # Show the full episode time range, unlinked from the global time cursor
-    _inf = rr.datatypes.TimeRangeBoundary(inner=None, kind='infinite')
-    full_range = rrb.VisibleTimeRanges(timeline='time', start=_inf, end=_inf)
-    full_axis_x = rrb.TimeAxis(link=rrb.components.LinkAxis.Independent)
+    def _ts_view(name: str, sig: str) -> rrb.TimeSeriesView:
+        return rrb.TimeSeriesView(
+            name=name,
+            origin=f'/signals/{sig}',
+            plot_legend=rrb.PlotLegend(visible=signals.dims.get(sig, 1) > 1),
+            axis_y=rrb.ScalarAxis(zoom_lock=True),
+        )
 
     # Group time series by prefix, each group becomes a Tabs container
     series_views = []
     for group_name, sigs in _group_signals_by_prefix(signals):
         if len(sigs) == 1:
-            sig = sigs[0]
-            series_views.append(
-                rrb.TimeSeriesView(
-                    name=group_name,
-                    origin=f'/signals/{sig}',
-                    plot_legend=rrb.PlotLegend(visible=signals.dims.get(sig, 1) > 1),
-                    axis_x=full_axis_x,
-                    axis_y=rrb.ScalarAxis(zoom_lock=True),
-                    time_ranges=full_range,
-                )
-            )
+            series_views.append(_ts_view(group_name, sigs[0]))
         else:
-            tab_views = [
-                rrb.TimeSeriesView(
-                    name=sig[len(group_name) + 1 :],
-                    origin=f'/signals/{sig}',
-                    plot_legend=rrb.PlotLegend(visible=signals.dims.get(sig, 1) > 1),
-                    axis_x=full_axis_x,
-                    axis_y=rrb.ScalarAxis(zoom_lock=True),
-                    time_ranges=full_range,
-                )
-                for sig in sigs
-            ]
+            tab_views = [_ts_view(sig[len(group_name) + 1 :], sig) for sig in sigs]
             series_views.append(rrb.Tabs(*tab_views, name=group_name))
 
     # Top row: images (big) + optional 3D (smaller)
@@ -357,8 +336,22 @@ def _log_numeric_signals(
     return pose_data
 
 
-def _find_visual_urdf() -> Path | None:
-    """Find Panda URDF with visual meshes from robosuite package data."""
+def _write_urdf_to_dir(urdf_str: str, meshes: dict[str, bytes], dest: Path) -> Path:
+    """Write URDF and mesh files to a directory, rewriting mesh filenames to absolute paths."""
+    root = ET.fromstring(urdf_str)
+    for mesh_el in root.iter('mesh'):
+        filename = mesh_el.get('filename', '')
+        if filename in meshes:
+            mesh_el.set('filename', str(dest / filename))
+    urdf_path = dest / 'robot.urdf'
+    urdf_path.write_text(ET.tostring(root, encoding='unicode'))
+    for name, data in meshes.items():
+        (dest / name).write_bytes(data)
+    return urdf_path
+
+
+def _find_fallback_urdf() -> tuple[str, dict[str, bytes]] | None:
+    """Fallback: build URDF + meshes from robosuite package data (for legacy datasets)."""
     try:
         import robosuite
     except ImportError:
@@ -367,18 +360,20 @@ def _find_visual_urdf() -> Path | None:
     urdf_path = base / 'urdf/panda_arm.urdf'
     if not urdf_path.exists():
         return None
-    return urdf_path
 
-
-def _prepare_visual_urdf(urdf_path: Path) -> str:
-    """Rewrite package:// mesh URIs to absolute paths."""
-    mesh_base = urdf_path.parent.parent
     tree = ET.parse(urdf_path)
-    for mesh in tree.iter('mesh'):
-        filename = mesh.get('filename', '')
+    meshes: dict[str, bytes] = {}
+    for mesh_el in tree.iter('mesh'):
+        filename = mesh_el.get('filename', '')
         if filename.startswith('package://panda_description/'):
-            mesh.set('filename', str(mesh_base / filename.removeprefix('package://panda_description/')))
-    return ET.tostring(tree.getroot(), encoding='unicode')
+            rel = filename.removeprefix('package://panda_description/')
+            rel = rel.replace('meshes/visual/', 'meshes/collision/').replace('.dae', '.stl')
+            stl_path = base / rel
+            if stl_path.exists():
+                stl_name = stl_path.name
+                meshes[stl_name] = stl_path.read_bytes()
+                mesh_el.set('filename', stl_name)
+    return ET.tostring(tree.getroot(), encoding='unicode'), meshes
 
 
 def _animate_joint(joint, q_column: np.ndarray, ts_arr: np.ndarray, prefix: str) -> None:
@@ -402,40 +397,51 @@ def _animate_joint(joint, q_column: np.ndarray, ts_arr: np.ndarray, prefix: str)
     )
 
 
+_URDF_ANIM_HZ = 15
+
+
 def _log_urdf_robot(
     ep: Episode, numeric_data: dict[str, tuple[np.ndarray, np.ndarray]], drainer: _BinaryStreamDrainer
 ) -> Generator[bytes, None, str | None]:
     """Log URDF robot model with animated joint angles. Returns root frame name."""
-    from rerun.urdf import UrdfTree
 
-    joint_names: list[str] | None = ep.static.get('joint_names')
+    joint_names = ep.static.get('joint_names')
     if not joint_names or _JOINT_SIGNAL not in numeric_data:
         return None
     ts_arr, q_vals = numeric_data[_JOINT_SIGNAL]
     if q_vals.shape[1] != len(joint_names):
         return None
 
-    visual_urdf_path = _find_visual_urdf()
-    if visual_urdf_path is None:
-        return None
+    # Get URDF + meshes from episode static data, or fall back to robosuite
+    urdf_str = ep.static.get('urdf')
+    meshes = ep.static.get('meshes')
+    if not urdf_str or not meshes:
+        fallback = _find_fallback_urdf()
+        if fallback is None:
+            return None
+        urdf_str, meshes = fallback
 
-    urdf_str = _prepare_visual_urdf(visual_urdf_path)
     prefix = '/3d/robot'
-    with tempfile.NamedTemporaryFile(suffix='.urdf', mode='w', delete=True) as f:
-        f.write(urdf_str)
-        f.flush()
-        rr.log_file_from_path(f.name, entity_path_prefix=prefix, static=True)
-        tree = UrdfTree.from_file_path(f.name, entity_path_prefix=prefix)
+    with tempfile.TemporaryDirectory() as tmp:
+        urdf_path = _write_urdf_to_dir(urdf_str, meshes, Path(tmp))
+        rr.log_file_from_path(str(urdf_path), entity_path_prefix=prefix, static=True)
+        tree = UrdfTree.from_file_path(str(urdf_path), entity_path_prefix=prefix)
 
     root_frame = tree.root_link().name
     yield from drainer.drain()
+
+    # Downsample to ~15Hz — robot motion is smooth enough, avoids bloating the RRD
+    duration_ns = int(ts_arr[-1]) - int(ts_arr[0])
+    target_samples = max(1, int(_URDF_ANIM_HZ * duration_ns / 1e9))
+    step = max(1, len(ts_arr) // target_samples)
+    ts_ds, q_ds = ts_arr[::step], q_vals[::step]
 
     with warnings.catch_warnings():
         warnings.simplefilter('ignore')
         for j_idx, ep_joint_name in enumerate(joint_names):
             joint = tree.get_joint_by_name(ep_joint_name) or tree.get_joint_by_name(f'panda_{ep_joint_name}')
             if joint is not None:
-                _animate_joint(joint, q_vals[:, j_idx], ts_arr, prefix)
+                _animate_joint(joint, q_ds[:, j_idx], ts_ds, prefix)
                 yield from drainer.drain()
 
     return root_frame
