@@ -2,6 +2,8 @@
 
 import logging
 import tempfile
+import warnings
+import xml.etree.ElementTree as ET
 from collections.abc import Generator, Iterator
 from dataclasses import dataclass
 from datetime import datetime
@@ -20,6 +22,7 @@ from positronic.dataset.transforms import TransformedDataset
 from positronic.dataset.video import VideoSignal
 from positronic.utils.rerun_compat import flatten_numeric, log_series_styles, set_timeline_time
 
+_JOINT_SIGNAL = 'robot_state.q'
 _POSE_SUFFIXES = ('.pose', '.ee_pose')
 _POSE_COLORS = {
     'commands': [255, 100, 50],  # orange — commanded trajectory
@@ -316,7 +319,7 @@ def _log_numeric_signals(
     """Log numeric time-series via send_columns. Returns pose/joint data for 3D logging."""
     pose_set = set(signals.poses)
     has_joints = 'joint_names' in ep.static
-    stash_keys = pose_set | ({'robot_state.q'} if has_joints else set())
+    stash_keys = pose_set | ({_JOINT_SIGNAL} if has_joints else set())
     pose_data: dict[str, tuple[np.ndarray, np.ndarray]] = {}
 
     for key in signals.numerics:
@@ -369,8 +372,6 @@ def _find_visual_urdf() -> Path | None:
 
 def _prepare_visual_urdf(urdf_path: Path) -> str:
     """Rewrite package:// mesh URIs to absolute paths."""
-    import xml.etree.ElementTree as ET
-
     mesh_base = urdf_path.parent.parent
     tree = ET.parse(urdf_path)
     for mesh in tree.iter('mesh'):
@@ -380,6 +381,27 @@ def _prepare_visual_urdf(urdf_path: Path) -> str:
     return ET.tostring(tree.getroot(), encoding='unicode')
 
 
+def _animate_joint(joint, q_column: np.ndarray, ts_arr: np.ndarray, prefix: str) -> None:
+    """Compute and log transforms for a single URDF joint across all timesteps."""
+    n = len(ts_arr)
+    translations = np.empty((n, 3), dtype=np.float64)
+    quaternions = np.empty((n, 4), dtype=np.float64)
+    for i in range(n):
+        t = joint.compute_transform(float(q_column[i]))
+        translations[i] = t.translation.as_arrow_array().to_pylist()[0]
+        quaternions[i] = t.quaternion.as_arrow_array().to_pylist()[0]
+    rr.send_columns(
+        f'{prefix}/{joint.child_link}',
+        indexes=[rr.TimeColumn('time', timestamp=ts_arr)],
+        columns=rr.Transform3D.columns(
+            translation=translations,
+            quaternion=quaternions,
+            child_frame=[joint.child_link] * n,
+            parent_frame=[joint.parent_link] * n,
+        ),
+    )
+
+
 def _log_urdf_robot(
     ep: Episode, numeric_data: dict[str, tuple[np.ndarray, np.ndarray]], drainer: _BinaryStreamDrainer
 ) -> Generator[bytes, None, str | None]:
@@ -387,13 +409,9 @@ def _log_urdf_robot(
     from rerun.urdf import UrdfTree
 
     joint_names: list[str] | None = ep.static.get('joint_names')
-    if not joint_names:
+    if not joint_names or _JOINT_SIGNAL not in numeric_data:
         return None
-
-    q_key = 'robot_state.q'
-    if q_key not in numeric_data:
-        return None
-    ts_arr, q_vals = numeric_data[q_key]
+    ts_arr, q_vals = numeric_data[_JOINT_SIGNAL]
     if q_vals.shape[1] != len(joint_names):
         return None
 
@@ -402,7 +420,6 @@ def _log_urdf_robot(
         return None
 
     urdf_str = _prepare_visual_urdf(visual_urdf_path)
-
     prefix = '/3d/robot'
     with tempfile.NamedTemporaryFile(suffix='.urdf', mode='w', delete=True) as f:
         f.write(urdf_str)
@@ -413,35 +430,13 @@ def _log_urdf_robot(
     root_frame = tree.root_link().name
     yield from drainer.drain()
 
-    # Map episode joint names (e.g. "joint1") to URDF joint names (e.g. "panda_joint1")
-    import warnings
-
     with warnings.catch_warnings():
         warnings.simplefilter('ignore')
         for j_idx, ep_joint_name in enumerate(joint_names):
-            # Try exact name first, then panda_ prefix
             joint = tree.get_joint_by_name(ep_joint_name) or tree.get_joint_by_name(f'panda_{ep_joint_name}')
-            if joint is None:
-                continue
-            entity_path = f'{prefix}/{joint.child_link}'
-            n = len(ts_arr)
-            translations = np.empty((n, 3), dtype=np.float64)
-            quaternions = np.empty((n, 4), dtype=np.float64)
-            for i in range(n):
-                t = joint.compute_transform(float(q_vals[i, j_idx]))
-                translations[i] = t.translation.as_arrow_array().to_pylist()[0]
-                quaternions[i] = t.quaternion.as_arrow_array().to_pylist()[0]
-            rr.send_columns(
-                entity_path,
-                indexes=[rr.TimeColumn('time', timestamp=ts_arr)],
-                columns=rr.Transform3D.columns(
-                    translation=translations,
-                    quaternion=quaternions,
-                    child_frame=[joint.child_link] * n,
-                    parent_frame=[joint.parent_link] * n,
-                ),
-            )
-            yield from drainer.drain()
+            if joint is not None:
+                _animate_joint(joint, q_vals[:, j_idx], ts_arr, prefix)
+                yield from drainer.drain()
 
     return root_frame
 
