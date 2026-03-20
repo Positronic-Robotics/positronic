@@ -1,6 +1,7 @@
 """Dataset utilities for Positronic dataset visualization."""
 
 import logging
+import tempfile
 from collections.abc import Generator, Iterator
 from dataclasses import dataclass
 from datetime import datetime
@@ -56,21 +57,6 @@ def _infer_dims(sig) -> int:
     return int(arr.size) if arr is not None else 1
 
 
-_TRAIL_FADE_NS = 5_000_000_000  # 5-second window of full visibility
-_TRAIL_UPDATE_INTERVAL = 30  # Only re-log full trail every N pose samples
-
-
-def _log_trajectory_trail(entity_path: str, positions: np.ndarray, start: int, base_rgb: list[int]) -> None:
-    """Log trail for positions[start:] only (the recent window)."""
-    window = positions[start:]
-    if len(window) < 2:
-        return
-    segments = np.stack([window[:-1], window[1:]], axis=1)
-    alphas = np.linspace(80, 255, len(segments), dtype=np.uint8)
-    colors = np.column_stack([np.full((len(segments), 3), base_rgb, dtype=np.uint8), alphas[:, None]])
-    rr.log(entity_path, rr.LineStrips3D(segments, colors=colors, radii=0.003))
-
-
 def _log_static_trail(entity_path: str, positions: np.ndarray, base_rgb: list[int]) -> None:
     """Log the full trajectory as a thin, muted static background."""
     if len(positions) < 2:
@@ -115,6 +101,32 @@ def get_episodes_list(
     return result
 
 
+def _compute_eye_controls(signals: EpisodeSignals, ep: Episode) -> rrb.EyeControls3D | None:
+    """Compute camera view orthogonal to the best-fit plane of all pose trajectories."""
+    all_positions = []
+    for name in signals.poses:
+        sig = ep.signals[name]
+        if len(sig) == 0:
+            continue
+        vals = np.asarray(sig.values(), dtype=np.float64)
+        if vals.ndim == 2 and vals.shape[1] >= 3:
+            all_positions.append(vals[:, :3])
+    if not all_positions:
+        return None
+
+    positions = np.concatenate(all_positions)
+    centroid = positions.mean(axis=0)
+    centered = positions - centroid
+    _, _, vh = np.linalg.svd(centered, full_matrices=False)
+    normal = vh[2]  # smallest singular value = plane normal
+
+    # Place camera along the normal, at a distance proportional to the trajectory spread
+    spread = np.linalg.norm(centered, axis=1).max()
+    camera_pos = centroid + normal * spread * 2.0
+
+    return rrb.EyeControls3D(position=camera_pos.tolist(), look_target=centroid.tolist())
+
+
 def _collect_signal_groups(ep: Episode) -> EpisodeSignals:
     signals = EpisodeSignals(videos=[], numerics=[], dims={}, poses=[])
     for name, sig in ep.signals.items():
@@ -136,40 +148,85 @@ def _collect_signal_groups(ep: Episode) -> EpisodeSignals:
     return signals
 
 
-def _build_blueprint(signals: EpisodeSignals) -> rrb.Blueprint:
+def _group_signals_by_prefix(signals: EpisodeSignals) -> list[tuple[str, list[str]]]:
+    """Group numeric signals by prefix before the first '.'. Preserves insertion order."""
+    groups: dict[str, list[str]] = {}
+    for sig in signals.numerics:
+        prefix = sig.split('.')[0] if '.' in sig else sig
+        groups.setdefault(prefix, []).append(sig)
+    return list(groups.items())
+
+
+def _build_blueprint(signals: EpisodeSignals, eye_controls: rrb.EyeControls3D | None = None) -> rrb.Blueprint:
     image_views = [rrb.Spatial2DView(name=k, origin=f'/{k}') for k in signals.videos]
-    per_signal_views = [
-        rrb.TimeSeriesView(
-            name=sig,
-            origin=f'/signals/{sig}',
-            plot_legend=rrb.PlotLegend(visible=signals.dims.get(sig, 1) > 1),
-            axis_y=rrb.ScalarAxis(zoom_lock=True),
-        )
-        for sig in signals.numerics
-    ]
 
-    # Right column: 3D on top, images below (vertical split)
-    right_items = []
-    if signals.poses:
-        right_items.append(rrb.Spatial3DView(name='3D Trajectory', origin='/3d', background=[30, 30, 30]))
+    # Show the full episode time range, unlinked from the global time cursor
+    _inf = rr.datatypes.TimeRangeBoundary(inner=None, kind='infinite')
+    full_range = rrb.VisibleTimeRanges(timeline='time', start=_inf, end=_inf)
+    full_axis_x = rrb.TimeAxis(link=rrb.components.LinkAxis.Independent)
+
+    # Group time series by prefix, each group becomes a Tabs container
+    series_views = []
+    for group_name, sigs in _group_signals_by_prefix(signals):
+        if len(sigs) == 1:
+            sig = sigs[0]
+            series_views.append(
+                rrb.TimeSeriesView(
+                    name=group_name,
+                    origin=f'/signals/{sig}',
+                    plot_legend=rrb.PlotLegend(visible=signals.dims.get(sig, 1) > 1),
+                    axis_x=full_axis_x,
+                    axis_y=rrb.ScalarAxis(zoom_lock=True),
+                    time_ranges=full_range,
+                )
+            )
+        else:
+            tab_views = [
+                rrb.TimeSeriesView(
+                    name=sig[len(group_name) + 1 :],
+                    origin=f'/signals/{sig}',
+                    plot_legend=rrb.PlotLegend(visible=signals.dims.get(sig, 1) > 1),
+                    axis_x=full_axis_x,
+                    axis_y=rrb.ScalarAxis(zoom_lock=True),
+                    time_ranges=full_range,
+                )
+                for sig in sigs
+            ]
+            series_views.append(rrb.Tabs(*tab_views, name=group_name))
+
+    # Top row: images (big) + optional 3D (smaller)
+    top_items = []
     if image_views:
-        right_items.append(rrb.Grid(*image_views))
+        top_items.append(rrb.Grid(*image_views))
+    if signals.poses:
+        top_items.append(
+            rrb.Spatial3DView(
+                name='3D Trajectory',
+                origin='/3d',
+                background=[30, 30, 30],
+                line_grid=rrb.LineGrid3D(visible=True),
+                eye_controls=eye_controls or rrb.EyeControls3D(),
+            )
+        )
 
-    columns = []
-    column_shares = []
-    if per_signal_views:
-        columns.append(rrb.Grid(*per_signal_views))
-        column_shares.append(2)
-    if right_items:
-        columns.append(right_items[0] if len(right_items) == 1 else rrb.Vertical(*right_items))
-        column_shares.append(1)
+    rows = []
+    row_shares = []
+    if top_items:
+        if len(top_items) == 1:
+            rows.append(top_items[0])
+        else:
+            rows.append(rrb.Horizontal(*top_items, column_shares=[3, 1]))
+        row_shares.append(3)
+    if series_views:
+        rows.append(rrb.Grid(*series_views))
+        row_shares.append(1)
 
     return rrb.Blueprint(
         rrb.BlueprintPanel(state=rrb.PanelState.Hidden),
         rrb.SelectionPanel(state=rrb.PanelState.Hidden),
         rrb.TopPanel(state=rrb.PanelState.Expanded),
         rrb.TimePanel(state=rrb.PanelState.Collapsed),
-        rrb.Grid(*columns, column_shares=column_shares),
+        rrb.Vertical(*rows, row_shares=row_shares),
     )
 
 
@@ -256,8 +313,10 @@ def _log_video_signals(ep: Episode, signals: EpisodeSignals, drainer: _BinaryStr
 def _log_numeric_signals(
     ep: Episode, signals: EpisodeSignals, drainer: _BinaryStreamDrainer
 ) -> Generator[bytes, None, dict[str, tuple[np.ndarray, np.ndarray]]]:
-    """Log numeric time-series via send_columns. Returns pose data for 3D logging."""
+    """Log numeric time-series via send_columns. Returns pose/joint data for 3D logging."""
     pose_set = set(signals.poses)
+    has_joints = 'joint_names' in ep.static
+    stash_keys = pose_set | ({'robot_state.q'} if has_joints else set())
     pose_data: dict[str, tuple[np.ndarray, np.ndarray]] = {}
 
     for key in signals.numerics:
@@ -287,7 +346,7 @@ def _log_numeric_signals(
                     columns=rr.Scalars.columns(scalars=vals[:, i]),
                 )
 
-        if key in pose_set:
+        if key in stash_keys:
             pose_data[key] = (ts_arr, vals)
 
         yield from drainer.drain()
@@ -295,10 +354,107 @@ def _log_numeric_signals(
     return pose_data
 
 
+def _find_visual_urdf() -> Path | None:
+    """Find Panda URDF with visual meshes from robosuite package data."""
+    try:
+        import robosuite
+    except ImportError:
+        return None
+    base = Path(robosuite.__file__).parent / 'models/assets/bullet_data/panda_description'
+    urdf_path = base / 'urdf/panda_arm.urdf'
+    if not urdf_path.exists():
+        return None
+    return urdf_path
+
+
+def _prepare_visual_urdf(urdf_path: Path) -> str:
+    """Rewrite package:// mesh URIs to absolute paths."""
+    import xml.etree.ElementTree as ET
+
+    mesh_base = urdf_path.parent.parent
+    tree = ET.parse(urdf_path)
+    for mesh in tree.iter('mesh'):
+        filename = mesh.get('filename', '')
+        if filename.startswith('package://panda_description/'):
+            mesh.set('filename', str(mesh_base / filename.removeprefix('package://panda_description/')))
+    return ET.tostring(tree.getroot(), encoding='unicode')
+
+
+def _log_urdf_robot(
+    ep: Episode, numeric_data: dict[str, tuple[np.ndarray, np.ndarray]], drainer: _BinaryStreamDrainer
+) -> Generator[bytes, None, str | None]:
+    """Log URDF robot model with animated joint angles. Returns root frame name."""
+    from rerun.urdf import UrdfTree
+
+    joint_names: list[str] | None = ep.static.get('joint_names')
+    if not joint_names:
+        return None
+
+    q_key = 'robot_state.q'
+    if q_key not in numeric_data:
+        return None
+    ts_arr, q_vals = numeric_data[q_key]
+    if q_vals.shape[1] != len(joint_names):
+        return None
+
+    visual_urdf_path = _find_visual_urdf()
+    if visual_urdf_path is None:
+        return None
+
+    urdf_str = _prepare_visual_urdf(visual_urdf_path)
+
+    prefix = '/3d/robot'
+    with tempfile.NamedTemporaryFile(suffix='.urdf', mode='w', delete=True) as f:
+        f.write(urdf_str)
+        f.flush()
+        rr.log_file_from_path(f.name, entity_path_prefix=prefix, static=True)
+        tree = UrdfTree.from_file_path(f.name, entity_path_prefix=prefix)
+
+    root_frame = tree.root_link().name
+    yield from drainer.drain()
+
+    # Map episode joint names (e.g. "joint1") to URDF joint names (e.g. "panda_joint1")
+    import warnings
+
+    with warnings.catch_warnings():
+        warnings.simplefilter('ignore')
+        for j_idx, ep_joint_name in enumerate(joint_names):
+            # Try exact name first, then panda_ prefix
+            joint = tree.get_joint_by_name(ep_joint_name) or tree.get_joint_by_name(f'panda_{ep_joint_name}')
+            if joint is None:
+                continue
+            entity_path = f'{prefix}/{joint.child_link}'
+            n = len(ts_arr)
+            translations = np.empty((n, 3), dtype=np.float64)
+            quaternions = np.empty((n, 4), dtype=np.float64)
+            for i in range(n):
+                t = joint.compute_transform(float(q_vals[i, j_idx]))
+                translations[i] = t.translation.as_arrow_array().to_pylist()[0]
+                quaternions[i] = t.quaternion.as_arrow_array().to_pylist()[0]
+            rr.send_columns(
+                entity_path,
+                indexes=[rr.TimeColumn('time', timestamp=ts_arr)],
+                columns=rr.Transform3D.columns(
+                    translation=translations,
+                    quaternion=quaternions,
+                    child_frame=[joint.child_link] * n,
+                    parent_frame=[joint.parent_link] * n,
+                ),
+            )
+            yield from drainer.drain()
+
+    return root_frame
+
+
 def _log_pose_signals(
-    signals: EpisodeSignals, numeric_data: dict[str, tuple[np.ndarray, np.ndarray]], drainer: _BinaryStreamDrainer
+    ep: Episode,
+    signals: EpisodeSignals,
+    numeric_data: dict[str, tuple[np.ndarray, np.ndarray]],
+    drainer: _BinaryStreamDrainer,
 ) -> Iterator[bytes]:
-    """Log 3D pose points and trajectory trails."""
+    """Log 3D pose: static full trajectory + current position ball + optional URDF robot."""
+    root_frame = yield from _log_urdf_robot(ep, numeric_data, drainer)
+
     for key in signals.poses:
         if key not in numeric_data:
             continue
@@ -307,6 +463,14 @@ def _log_pose_signals(
             continue
         positions = vals[:, :3]
         color = _pose_color(key)
+
+        # Connect pose entities to the URDF root frame so they share the same 3D space
+        if root_frame:
+            rr.log(f'/3d/{key}', rr.Transform3D(parent_frame=root_frame), static=True)
+            rr.log(f'/3d/{key}/trail', rr.Transform3D(parent_frame=root_frame), static=True)
+
+        _log_static_trail(f'/3d/{key}/trail', positions, color)
+
         rr.send_columns(
             f'/3d/{key}',
             indexes=[rr.TimeColumn('time', timestamp=ts_arr)],
@@ -316,16 +480,6 @@ def _log_pose_signals(
                 *rr.Points3D.columns(radii=np.full(len(ts_arr), 0.01)),
             ],
         )
-        _log_static_trail(f'/3d/{key}/trail/background', positions, color)
-        active_path = f'/3d/{key}/trail/active'
-        for i in range(_TRAIL_UPDATE_INTERVAL, len(ts_arr), _TRAIL_UPDATE_INTERVAL):
-            set_timeline_time('time', int(ts_arr[i]))
-            win_start = int(np.searchsorted(ts_arr[: i + 1], ts_arr[i] - _TRAIL_FADE_NS))
-            _log_trajectory_trail(active_path, positions[: i + 1], win_start, color)
-        # Final trail at last timestamp
-        set_timeline_time('time', int(ts_arr[-1]))
-        win_start = int(np.searchsorted(ts_arr, ts_arr[-1] - _TRAIL_FADE_NS))
-        _log_trajectory_trail(active_path, positions, win_start, color)
         yield from drainer.drain()
 
 
@@ -344,7 +498,8 @@ def stream_episode_rrd(ds: Dataset, episode_id: int) -> Iterator[bytes]:
 
     with rec:
         signals = _collect_signal_groups(ep)
-        rr.send_blueprint(_build_blueprint(signals))
+        eye_controls = _compute_eye_controls(signals, ep)
+        rr.send_blueprint(_build_blueprint(signals, eye_controls))
         yield from drainer.drain()
 
         _setup_series_names(signals)
@@ -353,7 +508,7 @@ def stream_episode_rrd(ds: Dataset, episode_id: int) -> Iterator[bytes]:
         yield from _log_video_signals(ep, signals, drainer)
         pose_data = yield from _log_numeric_signals(ep, signals, drainer)
         yield from drainer.drain(force=True)  # flush numerics to client before slow pose trails
-        yield from _log_pose_signals(signals, pose_data, drainer)
+        yield from _log_pose_signals(ep, signals, pose_data, drainer)
 
     yield from drainer.drain(force=True)
 
