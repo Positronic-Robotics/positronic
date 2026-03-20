@@ -24,18 +24,22 @@ from positronic.dataset.transforms import TransformedDataset
 from positronic.dataset.video import VideoSignal
 from positronic.utils.rerun_compat import flatten_numeric, log_series_styles, set_timeline_time
 
-_JOINT_SIGNAL = 'robot_state.q'
-_POSE_SUFFIXES = ('.pose', '.ee_pose')
+# TODO: 3D visualization roles (pose_signals, joint_signal) are currently read from episode
+# static data as flat keys. A cleaner long-term solution is signal-level metadata: each Signal
+# would carry a `role` (e.g. 'transform3d', 'joint_position') and optionally a `robot` reference
+# linking it to a robot model in static. This would:
+# - Eliminate the need for pose_signals/joint_signal keys in static
+# - Support multiple robots naturally (each signal references its own model)
+# - Keep semantics with the signal that produces them, not in a parallel list
+# - Require extending SignalMeta (currently dtype/shape/kind) with user-settable fields
+#   and persisting them (parquet metadata or sidecar file)
+# See: positronic/dataset/signal.py — SignalMeta, Kind
+
 _POSE_COLORS = {
     'commands': [255, 100, 50],  # orange — commanded trajectory
     'state': [50, 200, 255],  # cyan — actual/state trajectory
     'default': [180, 180, 180],  # gray fallback
 }
-
-
-def _is_pose_signal(name: str, dim: int) -> bool:
-    """Return True if the signal looks like a 7D ee pose (tx, ty, tz, qx, qy, qz, qw)."""
-    return dim == 7 and any(name.endswith(s) for s in _POSE_SUFFIXES)
 
 
 def _pose_color(name: str) -> list[int]:
@@ -128,6 +132,7 @@ def _compute_eye_controls(signals: EpisodeSignals, ep: Episode) -> rrb.EyeContro
 
 
 def _collect_signal_groups(ep: Episode) -> EpisodeSignals:
+    pose_set = set(ep.static.get('pose_signals', []))
     signals = EpisodeSignals(videos=[], numerics=[], dims={}, poses=[])
     for name, sig in ep.signals.items():
         if sig.kind == Kind.IMAGE:
@@ -143,7 +148,7 @@ def _collect_signal_groups(ep: Episode) -> EpisodeSignals:
             signals.dims[name] = _infer_dims(sig)
         except Exception:
             signals.dims[name] = 1
-        if _is_pose_signal(name, signals.dims[name]):
+        if name in pose_set:
             signals.poses.append(name)
     return signals
 
@@ -297,8 +302,8 @@ def _log_numeric_signals(
 ) -> Generator[bytes, None, dict[str, tuple[np.ndarray, np.ndarray]]]:
     """Log numeric time-series via send_columns. Returns pose/joint data for 3D logging."""
     pose_set = set(signals.poses)
-    has_joints = 'joint_names' in ep.static
-    stash_keys = pose_set | ({_JOINT_SIGNAL} if has_joints else set())
+    joint_signal = ep.static.get('joint_signal')
+    stash_keys = pose_set | ({joint_signal} if joint_signal else set())
     pose_data: dict[str, tuple[np.ndarray, np.ndarray]] = {}
 
     for key in signals.numerics:
@@ -350,32 +355,6 @@ def _write_urdf_to_dir(urdf_str: str, meshes: dict[str, bytes], dest: Path) -> P
     return urdf_path
 
 
-def _find_fallback_urdf() -> tuple[str, dict[str, bytes]] | None:
-    """Fallback: build URDF + meshes from robosuite package data (for legacy datasets)."""
-    try:
-        import robosuite
-    except ImportError:
-        return None
-    base = Path(robosuite.__file__).parent / 'models/assets/bullet_data/panda_description'
-    urdf_path = base / 'urdf/panda_arm.urdf'
-    if not urdf_path.exists():
-        return None
-
-    tree = ET.parse(urdf_path)
-    meshes: dict[str, bytes] = {}
-    for mesh_el in tree.iter('mesh'):
-        filename = mesh_el.get('filename', '')
-        if filename.startswith('package://panda_description/'):
-            rel = filename.removeprefix('package://panda_description/')
-            rel = rel.replace('meshes/visual/', 'meshes/collision/').replace('.dae', '.stl')
-            stl_path = base / rel
-            if stl_path.exists():
-                stl_name = stl_path.name
-                meshes[stl_name] = stl_path.read_bytes()
-                mesh_el.set('filename', stl_name)
-    return ET.tostring(tree.getroot(), encoding='unicode'), meshes
-
-
 def _animate_joint(joint, q_column: np.ndarray, ts_arr: np.ndarray, prefix: str) -> None:
     """Compute and log transforms for a single URDF joint across all timesteps."""
     n = len(ts_arr)
@@ -404,22 +383,17 @@ def _log_urdf_robot(
     ep: Episode, numeric_data: dict[str, tuple[np.ndarray, np.ndarray]], drainer: _BinaryStreamDrainer
 ) -> Generator[bytes, None, str | None]:
     """Log URDF robot model with animated joint angles. Returns root frame name."""
-
+    joint_signal = ep.static.get('joint_signal')
     joint_names = ep.static.get('joint_names')
-    if not joint_names or _JOINT_SIGNAL not in numeric_data:
-        return None
-    ts_arr, q_vals = numeric_data[_JOINT_SIGNAL]
-    if q_vals.shape[1] != len(joint_names):
-        return None
-
-    # Get URDF + meshes from episode static data, or fall back to robosuite
     urdf_str = ep.static.get('urdf')
     meshes = ep.static.get('meshes')
-    if not urdf_str or not meshes:
-        fallback = _find_fallback_urdf()
-        if fallback is None:
-            return None
-        urdf_str, meshes = fallback
+    if not joint_signal or not joint_names or not urdf_str or not meshes:
+        return None
+    if joint_signal not in numeric_data:
+        return None
+    ts_arr, q_vals = numeric_data[joint_signal]
+    if q_vals.shape[1] != len(joint_names):
+        return None
 
     prefix = '/3d/robot'
     with tempfile.TemporaryDirectory() as tmp:
@@ -438,8 +412,8 @@ def _log_urdf_robot(
 
     with warnings.catch_warnings():
         warnings.simplefilter('ignore')
-        for j_idx, ep_joint_name in enumerate(joint_names):
-            joint = tree.get_joint_by_name(ep_joint_name) or tree.get_joint_by_name(f'panda_{ep_joint_name}')
+        for j_idx, name in enumerate(joint_names):
+            joint = tree.get_joint_by_name(name)
             if joint is not None:
                 _animate_joint(joint, q_ds[:, j_idx], ts_ds, prefix)
                 yield from drainer.drain()
