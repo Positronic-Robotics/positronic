@@ -88,7 +88,7 @@ def _revolute_joint_names(urdf_xml):
     return [j.get('name') for j in root.findall('joint') if j.get('type') == 'revolute']
 
 
-_MESH_DIR = Path(__file__).resolve().parent.parent.parent / 'assets/panda_collision'
+_MESH_DIR = Path(__file__).resolve().parent.parent.parent / 'assets/fr3_collision'
 
 
 def _inject_visual_meshes(urdf_xml: str) -> tuple[str, dict[str, bytes]]:
