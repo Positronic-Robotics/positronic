@@ -380,7 +380,7 @@ sim_episodes = base_cfg.transform.override(
                 uph=uph_sim,
             ),
         ),
-        internal.REAL_ROBOT_TRANSFORM,
+        internal.SIM_ROBOT_TRANSFORM,
     ],
 )
 
