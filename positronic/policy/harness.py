@@ -12,41 +12,45 @@ from positronic.drivers import roboarm
 from positronic.utils import flatten_dict, frozen_view
 
 
-class InferenceCommandType(Enum):
-    """Commands for the inference."""
+class DirectiveType(Enum):
+    """Directive types for the harness."""
 
-    START = 'start'
+    RUN = 'run'
     STOP = 'stop'
-    RESET = 'reset'
+    HOME = 'home'
 
 
 @dataclass
-class InferenceCommand:
-    """Command for the inference."""
+class Directive:
+    """Directive from the orchestrator to the harness."""
 
-    type: InferenceCommandType
+    type: DirectiveType
     payload: Any | None = None
 
     @classmethod
-    def START(cls, **kwargs) -> 'InferenceCommand':
-        """Convenience method for creating a START command."""
-        return cls(InferenceCommandType.START, kwargs)
+    def RUN(cls, **kwargs) -> 'Directive':
+        """Begin running the policy with the given context."""
+        return cls(DirectiveType.RUN, kwargs)
 
     @classmethod
-    def STOP(cls) -> 'InferenceCommand':
-        """Convenience method for creating a STOP command."""
-        return cls(InferenceCommandType.STOP, None)
+    def STOP(cls) -> 'Directive':
+        """Stop running the policy; devices hold position."""
+        return cls(DirectiveType.STOP, None)
 
     @classmethod
-    def RESET(cls) -> 'InferenceCommand':
-        """Convenience method for creating a RESET command."""
-        return cls(InferenceCommandType.RESET, None)
+    def HOME(cls, preset: str = 'home') -> 'Directive':
+        """Stop and send devices to a named safe state."""
+        return cls(DirectiveType.HOME, preset)
 
 
-class Inference(pimm.ControlSystem):
+class Harness(pimm.ControlSystem):
     """
-    Control system that handles start/stop/reset commands, runs the policy, and emits
+    Control system that manages device command authority, runs the policy, and emits
     actions according to their embedded timestamps.
+
+    The harness is the single authority for device commands. Both the policy (during
+    episodes) and the orchestrator (between episodes, via HOME) express intent through
+    the harness, which translates to device-specific commands.
 
     Supposed to be run in foreground of a World.
     """
@@ -62,14 +66,14 @@ class Inference(pimm.ControlSystem):
         self.robot_commands = pimm.ControlSystemEmitter(self)
         self.target_grip = pimm.ControlSystemEmitter(self)
 
-        self.command = pimm.ControlSystemReceiver[InferenceCommand](self, default=None, maxsize=3)
+        self.directive = pimm.ControlSystemReceiver[Directive](self, default=None, maxsize=3)
 
     def meta(self) -> dict[str, Any]:
-        result = {'inference.simulate_timeout': self.simulate_timeout}
+        result = {'harness.simulate_timeout': self.simulate_timeout}
         for k, v in flatten_dict(self.context).items():
-            result[f'inference.context.{k}'] = v
+            result[f'harness.context.{k}'] = v
         for k, v in flatten_dict(self.policy.meta).items():
-            result[f'inference.policy.{k}'] = v
+            result[f'harness.policy.{k}'] = v
         return result
 
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Sleep]:  # noqa: C901
@@ -78,20 +82,20 @@ class Inference(pimm.ControlSystem):
         commands_queue = deque()
 
         while not should_stop.value:
-            command_msg = self.command.read()
-            if command_msg.updated:
+            directive_msg = self.directive.read()
+            if directive_msg.updated:
                 commands_queue.clear()
                 in_error = False
-                match command_msg.data.type:
-                    case InferenceCommandType.START:
+                match directive_msg.data.type:
+                    case DirectiveType.RUN:
+                        self.context = directive_msg.data.payload or {}
+                        self.policy.reset(self.context)
                         running = True
-                        self.context = command_msg.data.payload or {}
-                    case InferenceCommandType.STOP:
+                    case DirectiveType.STOP:
                         running = False
-                    case InferenceCommandType.RESET:
+                    case DirectiveType.HOME:
                         self.robot_commands.emit(roboarm.command.Reset())
                         self.target_grip.emit(0.0)
-                        self.policy.reset()
                         running = False
                         yield pimm.Pass()
 
@@ -141,7 +145,7 @@ class Inference(pimm.ControlSystem):
                         commands_queue.append((roboarm_cmd, target_grip, prediction_time + timestamp))
 
                 if not commands_queue:
-                    logging.error('Policy returned no commands, exiting inference')
+                    logging.error('Policy returned no commands, exiting harness')
                     return
 
                 roboarm_cmd, target_grip, scheduled_time = commands_queue.popleft()

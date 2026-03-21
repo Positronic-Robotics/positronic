@@ -44,7 +44,7 @@ class _TrackingPolicy(Policy):
     def select_action(self, obs):
         return list(self._actions)
 
-    def reset(self):
+    def reset(self, context=None):
         self.reset_count += 1
 
     @property

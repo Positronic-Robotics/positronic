@@ -27,7 +27,7 @@ class Policy(ABC):
     # and can provide a zero-filled dummy for warmup. This removes the need for
     # `Codec.dummy_encoded()` and lets servers warm up without requiring a codec.
 
-    def reset(self):
+    def reset(self, context=None):
         """Resets the policy state."""
         return None
 
@@ -56,10 +56,10 @@ class SampledPolicy(Policy):
     def select_action(self, obs: dict[str, Any]) -> dict[str, Any] | list[dict[str, Any]]:
         return self._current_policy.select_action(obs)
 
-    def reset(self):
+    def reset(self, context=None):
         """Resets the policy and selects a new active sub-policy."""
         self._current_policy = self._select_policy()
-        self._current_policy.reset()
+        self._current_policy.reset(context)
 
     @property
     def meta(self) -> dict[str, Any]:

@@ -9,7 +9,7 @@ import numpy as np
 
 import pimm
 from positronic.dataset.ds_writer_agent import DsWriterCommand
-from positronic.policy.inference import InferenceCommand
+from positronic.policy.harness import Directive
 
 
 class State(Enum):
@@ -369,7 +369,7 @@ class EvalUI(pimm.ControlSystem):
             static_data['eval.object'] = obj_value
 
         self.run_start_time = self.clock.now()
-        self.inference_command.emit(InferenceCommand.START(task=task_name))
+        self.inference_command.emit(Directive.RUN(task=task_name))
         self.ds_writer_command.emit(DsWriterCommand.START(static_data=static_data))
 
     def stop_run(self, reason):
@@ -387,7 +387,7 @@ class EvalUI(pimm.ControlSystem):
         self.update_ui()
 
         # Emit commands
-        self.inference_command.emit(InferenceCommand.STOP())
+        self.inference_command.emit(Directive.STOP())
         self.ds_writer_command.emit(DsWriterCommand.SUSPEND())
 
     def stop(self, sender=None, app_data=None):
@@ -405,7 +405,7 @@ class EvalUI(pimm.ControlSystem):
         self.update_ui()
 
         # Emit commands
-        self.inference_command.emit(InferenceCommand.RESET())
+        self.inference_command.emit(Directive.HOME())
 
     def submit(self, sender=None, app_data=None):
         if self.state != State.REVIEWING:
@@ -438,7 +438,7 @@ class EvalUI(pimm.ControlSystem):
 
         # Emit commands
         self.ds_writer_command.emit(DsWriterCommand.STOP(static_data=data))
-        self.inference_command.emit(InferenceCommand.RESET())
+        self.inference_command.emit(Directive.HOME())
 
     def cancel(self, sender=None, app_data=None):
         if self.state != State.REVIEWING:
@@ -451,7 +451,7 @@ class EvalUI(pimm.ControlSystem):
 
         # Emit commands
         self.ds_writer_command.emit(DsWriterCommand.ABORT())
-        self.inference_command.emit(InferenceCommand.RESET())
+        self.inference_command.emit(Directive.HOME())
 
     # --- Callbacks ---
 

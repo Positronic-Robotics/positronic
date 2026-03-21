@@ -38,7 +38,7 @@ class RemotePolicy(Policy):
         self._image_sizes: dict[str, tuple[int, int]] = {}
         self._default_image_size: tuple[int, int] | None = None
 
-    def reset(self):
+    def reset(self, context=None):
         """Resets the policy by starting a new session with the server."""
         self.close()
         self.__session = self._client.new_session(model_id=self._model_id)

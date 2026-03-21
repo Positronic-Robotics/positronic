@@ -5,7 +5,7 @@ from positronic.dataset.ds_writer_agent import DsWriterAgent, Serializers, TimeM
 
 def wire(
     world: pimm.World,
-    policy: pimm.ControlSystem,
+    harness: pimm.ControlSystem,
     dataset_writer: DatasetWriter | None,
     cameras: dict[str, pimm.SignalEmitter] | None,
     robot_arm: pimm.ControlSystem | None,
@@ -14,15 +14,15 @@ def wire(
     time_mode: TimeMode = TimeMode.CLOCK,
 ):
     if robot_arm is not None:
-        world.connect(policy.robot_commands, robot_arm.commands)
-        world.connect(robot_arm.state, policy.robot_state)
+        world.connect(harness.robot_commands, robot_arm.commands)
+        world.connect(robot_arm.state, harness.robot_state)
 
     if gripper is not None:
-        world.connect(policy.target_grip, gripper.target_grip)
-        world.connect(gripper.grip, policy.gripper_state)
+        world.connect(harness.target_grip, gripper.target_grip)
+        world.connect(gripper.grip, harness.gripper_state)
 
     for signal_name, emitter in cameras.items():
-        world.connect(emitter, policy.frames[signal_name])
+        world.connect(emitter, harness.frames[signal_name])
 
     ds_agent = None
     if dataset_writer is not None:
@@ -39,10 +39,10 @@ def wire(
         for signal_name, emitter in cameras.items():
             world.connect(emitter, ds_agent.inputs[signal_name])
         if robot_arm is not None:
-            world.connect(policy.robot_commands, ds_agent.inputs['robot_commands'])
+            world.connect(harness.robot_commands, ds_agent.inputs['robot_commands'])
             world.connect(robot_arm.state, ds_agent.inputs['robot_state'])
         if gripper is not None:
-            world.connect(policy.target_grip, ds_agent.inputs['target_grip'])
+            world.connect(harness.target_grip, ds_agent.inputs['target_grip'])
             world.connect(gripper.grip, ds_agent.inputs['grip'])
 
     if gui is not None:

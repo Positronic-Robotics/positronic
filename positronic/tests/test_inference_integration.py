@@ -6,7 +6,7 @@ import tqdm
 import positronic.cfg.simulator
 from positronic.dataset.local_dataset import LocalDataset
 from positronic.inference import main_sim, timed
-from positronic.policy.tests.test_inference import StubPolicy
+from positronic.policy.tests.test_harness import StubPolicy
 
 
 # This integration test intentionally exercises the current `main_sim` wiring end-to-end.

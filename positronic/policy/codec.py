@@ -276,8 +276,8 @@ class _WrappedPolicy(Policy):
         action = self._policy.select_action(encoded)
         return self._codec.decode(action, context=obs)
 
-    def reset(self):
-        self._policy.reset()
+    def reset(self, context=None):
+        self._policy.reset(context)
 
     @property
     def meta(self):
@@ -470,10 +470,10 @@ class _RecordingPolicy(Policy):
             raise RuntimeError('reset() must be called before select_action()')
         return self._active.select_action(obs)
 
-    def reset(self):
+    def reset(self, context=None):
         session = self._codec._new_session()
         self._active = _WrappedPolicy(self._policy, session)
-        self._active.reset()
+        self._active.reset(context)
 
     @property
     def meta(self):
