@@ -188,12 +188,10 @@ async def episode_viewer(request: Request, episode_id: int):
     size_mb = meta.get('size_mb')
     size_mb_display = f'{size_mb:.2f}' if isinstance(size_mb, int | float) else None
 
-    _DOWNLOAD_THRESHOLD = 1024
-
     def _make_serializable(obj, path=''):
         if isinstance(obj, bytes):
             return {'__download__': f'/api/episode/{episode_id}/static/{path}', 'size': len(obj), 'type': 'bytes'}
-        if isinstance(obj, str) and len(obj) > _DOWNLOAD_THRESHOLD:
+        if isinstance(obj, str) and len(obj) > 1024:
             return {'__download__': f'/api/episode/{episode_id}/static/{path}', 'size': len(obj), 'type': 'text'}
         if isinstance(obj, datetime):
             return obj.isoformat()
