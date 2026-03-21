@@ -34,23 +34,21 @@ REAL_URDF = (Path(__file__).resolve().parents[2] / 'drivers' / 'roboarm' / 'fr3.
 _JOINT_NAMES = [f'joint{i}' for i in range(1, 8)]
 _MESH_DIR = Path(package_assets_path('assets/fr3_collision'))
 
-_SIM_ROBOT_META = {
-    'urdf': SIM_URDF,
-    'joint_names': _JOINT_NAMES,
-    'control_frame': 'end_effector',
-    'joint_signal': 'robot_state.q',
-    'pose_signals': ['robot_state.ee_pose', 'robot_commands.pose'],
+REAL_ROBOT_DEFAULTS = {
+    'urdf': FromValue(REAL_URDF),
+    'joint_names': FromValue(_JOINT_NAMES),
+    'meshes': FromValue({f.name: f.read_bytes() for f in _MESH_DIR.iterdir() if f.suffix == '.stl'}),
+    'control_frame': FromValue('end_effector'),
+    'joint_signal': FromValue('robot_state.q'),
+    'pose_signals': FromValue(['robot_state.ee_pose', 'robot_commands.pose']),
 }
-REAL_ROBOT_META = {
-    'urdf': REAL_URDF,
-    'joint_names': _JOINT_NAMES,
-    'meshes': {f.name: f.read_bytes() for f in _MESH_DIR.iterdir() if f.suffix == '.stl'},
-    'control_frame': 'end_effector',
-    'joint_signal': 'robot_state.q',
-    'pose_signals': ['robot_state.ee_pose', 'robot_commands.pose'],
+SIM_ROBOT_DEFAULTS = {
+    'urdf': FromValue(SIM_URDF),
+    'joint_names': FromValue(_JOINT_NAMES),
+    'control_frame': FromValue('end_effector'),
+    'joint_signal': FromValue('robot_state.q'),
+    'pose_signals': FromValue(['robot_state.ee_pose', 'robot_commands.pose']),
 }
-REAL_ROBOT_DEFAULTS = {k: FromValue(v) for k, v in REAL_ROBOT_META.items()}
-SIM_ROBOT_DEFAULTS = {k: FromValue(v) for k, v in _SIM_ROBOT_META.items()}
 
 # Task constants
 TOWELS_TASK = 'Pick all the towels one by one from transparent tote and place them into the large grey tote.'
