@@ -119,6 +119,8 @@ def _compute_eye_controls(signals: EpisodeSignals, ep: Episode) -> rrb.EyeContro
         return None
 
     positions = np.concatenate(all_positions)
+    if len(positions) < 3:
+        return None
     centroid = positions.mean(axis=0)
     centered = positions - centroid
     _, _, vh = np.linalg.svd(centered, full_matrices=False)
@@ -345,7 +347,8 @@ def _write_urdf_to_dir(urdf_str: str, meshes: dict[str, bytes], dest: Path) -> P
     urdf_path = dest / 'robot.urdf'
     urdf_path.write_text(ET.tostring(root, encoding='unicode'))
     for name, data in meshes.items():
-        (dest / name).write_bytes(data)
+        safe = Path(name).name  # strip any path components
+        (dest / safe).write_bytes(data)
     return urdf_path
 
 

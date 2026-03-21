@@ -48,7 +48,7 @@ def _static_decode_hook(obj: dict) -> Any:
 
 
 def _is_valid_static_value(value: Any) -> bool:
-    if isinstance(value, str | int | float | bool):
+    if isinstance(value, str | int | float | bool | bytes):
         return True
     if isinstance(value, list | tuple):
         return all(_is_valid_static_value(v) for v in value)
