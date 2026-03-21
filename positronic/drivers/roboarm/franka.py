@@ -91,39 +91,26 @@ def _revolute_joint_names(urdf_xml):
 _MESH_DIR = Path(__file__).resolve().parent.parent.parent / 'assets/fr3_collision'
 
 
-def _load_collision_meshes() -> dict[str, bytes]:
-    """Read all STL collision meshes from the assets directory."""
-    return {f.name: f.read_bytes() for f in _MESH_DIR.iterdir() if f.suffix == '.stl'}
-
-
-def _inject_visual_meshes(urdf_xml: str, meshes: dict[str, bytes]) -> str:
-    """Add <visual> elements to URDF links that have matching mesh files."""
-    root = ET.fromstring(urdf_xml)
-    for link in root.findall('link'):
-        if link.find('visual') is not None:
-            continue
-        stl_name = f'{link.get("name", "")}.stl'
-        if stl_name in meshes:
-            visual = ET.SubElement(link, 'visual')
-            geom = ET.SubElement(visual, 'geometry')
-            ET.SubElement(geom, 'mesh').set('filename', stl_name)
-    return ET.tostring(root, encoding='unicode')
-
-
 class Robot(pimm.ControlSystem):
     @property
     def robot_meta(self) -> dict:
         """Robot model metadata for IK, dataset storage, and 3D visualization.
 
         Returns URDF with visual meshes baked in, joint names, control frame,
-        and collision mesh bytes — everything needed to run IK and render the
-        robot offline without any package dependencies.
+        and mesh bytes — everything needed to run IK and render the robot
+        offline without any package dependencies.
         """
-        urdf = self._ensure_robot().get_robot_model()
-        meshes = _load_collision_meshes()
+        urdf_xml = self._ensure_robot().get_robot_model()
+        meshes = {f.name: f.read_bytes() for f in _MESH_DIR.iterdir() if f.suffix == '.stl'}
+        # Inject <visual> elements for links that have matching mesh files
+        root = ET.fromstring(urdf_xml)
+        for link in root.findall('link'):
+            stl = link.get('name', '') + '.stl'
+            if stl in meshes and link.find('visual') is None:
+                ET.SubElement(ET.SubElement(link, 'visual'), 'geometry').append(ET.Element('mesh', filename=stl))
         return {
-            'urdf': _inject_visual_meshes(urdf, meshes),
-            'joint_names': _revolute_joint_names(urdf),
+            'urdf': ET.tostring(root, encoding='unicode'),
+            'joint_names': _revolute_joint_names(urdf_xml),
             'meshes': meshes,
             'control_frame': 'end_effector',
         }

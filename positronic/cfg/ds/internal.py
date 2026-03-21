@@ -9,7 +9,6 @@ These datasets remain on the private s3://raw/ bucket and include:
 - Full combined datasets for multi-task training
 """
 
-import xml.etree.ElementTree as ET
 from pathlib import Path
 
 import configuronic as cfn
@@ -30,27 +29,10 @@ from . import concat_ds, local, transform
 # Robot meta for existing datasets that don't have it stored natively.
 # Future datasets will have per-unit calibrated URDF from Robot.robot_meta.
 SIM_URDF = Path(package_assets_path('assets/mujoco/panda_ik.xml')).read_text()
-_DRIVERS_DIR = Path(__file__).resolve().parents[2] / 'drivers' / 'roboarm'
-REAL_URDF = (_DRIVERS_DIR / 'fr3.urdf').read_text()
+REAL_URDF = (Path(__file__).resolve().parents[2] / 'drivers' / 'roboarm' / 'fr3.urdf').read_text()
 
 _JOINT_NAMES = [f'joint{i}' for i in range(1, 8)]
 _MESH_DIR = Path(package_assets_path('assets/fr3_collision'))
-_FR3_MESHES = {f.name: f.read_bytes() for f in _MESH_DIR.iterdir() if f.suffix == '.stl'}
-
-
-def _inject_visual_meshes(urdf_xml: str, meshes: dict[str, bytes]) -> str:
-    """Add <visual> elements to URDF links that have matching mesh files."""
-    root = ET.fromstring(urdf_xml)
-    for link in root.findall('link'):
-        if link.find('visual') is not None:
-            continue
-        stl_name = f'{link.get("name", "")}.stl'
-        if stl_name in meshes:
-            visual = ET.SubElement(link, 'visual')
-            geom = ET.SubElement(visual, 'geometry')
-            ET.SubElement(geom, 'mesh').set('filename', stl_name)
-    return ET.tostring(root, encoding='unicode')
-
 
 _SIM_ROBOT_META = {
     'urdf': SIM_URDF,
@@ -59,10 +41,10 @@ _SIM_ROBOT_META = {
     'joint_signal': 'robot_state.q',
     'pose_signals': ['robot_state.ee_pose', 'robot_commands.pose'],
 }
-_REAL_ROBOT_META = {
-    'urdf': _inject_visual_meshes(REAL_URDF, _FR3_MESHES),
+REAL_ROBOT_META = {
+    'urdf': REAL_URDF,
     'joint_names': _JOINT_NAMES,
-    'meshes': _FR3_MESHES,
+    'meshes': {f.name: f.read_bytes() for f in _MESH_DIR.iterdir() if f.suffix == '.stl'},
     'control_frame': 'end_effector',
     'joint_signal': 'robot_state.q',
     'pose_signals': ['robot_state.ee_pose', 'robot_commands.pose'],
@@ -121,7 +103,7 @@ def droid(path, recovery_all, recovery_towels, duplicate_recovery):
         else:
             datasets.append(TransformedDataset(recovery_ds, _recovery_transforms(RECOVERY_TASK)))
     return TransformedDataset(
-        ConcatDataset(*datasets), Group(Identity(), Derive(**{k: FromValue(v) for k, v in _REAL_ROBOT_META.items()}))
+        ConcatDataset(*datasets), Group(Identity(), Derive(**{k: FromValue(v) for k, v in REAL_ROBOT_META.items()}))
     )
 
 

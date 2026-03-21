@@ -166,8 +166,11 @@ def unified_success_rate(ep: Episode) -> float:
     return 0.0
 
 
-_VIS_KEYS = ('urdf', 'joint_names', 'meshes', 'joint_signal', 'pose_signals')
-_VIS_DEFAULTS = {k: FromValue(internal._REAL_ROBOT_META[k]) for k in _VIS_KEYS if k in internal._REAL_ROBOT_META}
+_VIS_DEFAULTS = {
+    k: FromValue(v)
+    for k, v in internal.REAL_ROBOT_META.items()
+    if k in ('urdf', 'joint_names', 'meshes', 'joint_signal', 'pose_signals')
+}
 
 episodes = base_cfg.transform.override(
     base=base_cfg.local,
