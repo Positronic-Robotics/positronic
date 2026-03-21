@@ -9,6 +9,7 @@ These datasets remain on the private s3://raw/ bucket and include:
 - Full combined datasets for multi-task training
 """
 
+import xml.etree.ElementTree as ET
 from pathlib import Path
 
 import configuronic as cfn
@@ -36,6 +37,21 @@ _JOINT_NAMES = [f'joint{i}' for i in range(1, 8)]
 _MESH_DIR = Path(package_assets_path('assets/fr3_collision'))
 _FR3_MESHES = {f.name: f.read_bytes() for f in _MESH_DIR.iterdir() if f.suffix == '.stl'}
 
+
+def _inject_visual_meshes(urdf_xml: str, meshes: dict[str, bytes]) -> str:
+    """Add <visual> elements to URDF links that have matching mesh files."""
+    root = ET.fromstring(urdf_xml)
+    for link in root.findall('link'):
+        if link.find('visual') is not None:
+            continue
+        stl_name = f'{link.get("name", "")}.stl'
+        if stl_name in meshes:
+            visual = ET.SubElement(link, 'visual')
+            geom = ET.SubElement(visual, 'geometry')
+            ET.SubElement(geom, 'mesh').set('filename', stl_name)
+    return ET.tostring(root, encoding='unicode')
+
+
 _SIM_ROBOT_META = {
     'urdf': SIM_URDF,
     'joint_names': _JOINT_NAMES,
@@ -44,7 +60,7 @@ _SIM_ROBOT_META = {
     'pose_signals': ['robot_state.ee_pose', 'robot_commands.pose'],
 }
 _REAL_ROBOT_META = {
-    'urdf': REAL_URDF,
+    'urdf': _inject_visual_meshes(REAL_URDF, _FR3_MESHES),
     'joint_names': _JOINT_NAMES,
     'meshes': _FR3_MESHES,
     'control_frame': 'end_effector',
