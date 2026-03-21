@@ -218,9 +218,12 @@ def _build_blueprint(signals: EpisodeSignals, ep: Episode) -> rrb.Blueprint:
 def _setup_series_names(signals: EpisodeSignals, ep: Episode) -> None:
     joint_signal = ep.static.get('joint_signal')
     joint_names = ep.static.get('joint_names')
+    pose_set = set(signals.poses)
     for key in signals.numerics:
         if key == joint_signal and joint_names:
             names = joint_names
+        elif key in pose_set and signals.dims.get(key) == 7:
+            names = ['tx', 'ty', 'tz', 'qx', 'qy', 'qz', 'qw']
         else:
             names = [str(i) for i in range(max(1, signals.dims.get(key, 1)))]
         log_series_styles(f'/signals/{key}', names, static=True)
