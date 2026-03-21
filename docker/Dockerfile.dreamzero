@@ -7,37 +7,56 @@ WORKDIR /positronic
 # Copy the positronic repository
 COPY . /positronic
 
-# Patch DreamZero training to log encoder/decoder weight norms to wandb.
-# We override BaseTrainer.log() to inject norms into the logs dict before
-# it reaches WandbCallback. This is the same place where grad_norm is reported.
+# Patch DreamZero training to log encoder/decoder weight and grad norms to wandb.
+# - register_hook on encoder/decoder params captures grad norms during backward
+#   (DeepSpeed ZeRO-2 clears param.grad before training_step returns)
+# - log(): inject weight norms + cached grad norms into logs dict
+# HF Trainer's rewrite_logs adds "train/" prefix, so "norms/foo" becomes
+# "train/norms/foo" in wandb, which groups them under train > norms.
 RUN <<'PATCH_EOF' python3
 target = '/dreamzero/groot/vla/experiment/base.py'
 code = open(target).read()
 
-# Add a log() override to BaseTrainer that injects encoder/decoder norms.
-# Insert it right after the training_step method.
-log_override = '''
-    def log(self, logs, *args, **kwargs):
-        """Override to inject encoder/decoder weight norms alongside grad_norm."""
-        import torch as _torch
-        model = self.model
-        for name, param in model.named_parameters():
-            for key in ["state_encoder", "action_encoder", "action_decoder"]:
-                if key in name and name.endswith(".W"):
-                    short = name.split("model.")[-1].replace(".", "/")
-                    logs[f"norms/{short}"] = param.float().norm().item()
-        return super().log(logs, *args, **kwargs)
+KEYS = '["state_encoder", "action_encoder", "action_decoder"]'
 
-'''
-
-# Insert before compute_loss
+# 1. Register gradient hooks in train() before training starts.
+#    Hooks fire during backward and store grad norms in a dict on self.
+#    This works even with DeepSpeed which clears param.grad.
 code = code.replace(
-    '    def compute_loss(self, model, inputs',
-    log_override + '    def compute_loss(self, model, inputs',
+    '        trainer.add_callback(LossLoggerCallback(output_path=loss_log_path))',
+
+    '        trainer.add_callback(LossLoggerCallback(output_path=loss_log_path))\n'
+    '        # Register grad hooks for encoder/decoder norm monitoring\n'
+    '        trainer._encoder_grad_norms = {}\n'
+    '        for _n, _p in trainer.model.named_parameters():\n'
+    '            for _k in ' + KEYS + ':\n'
+    '                if _k in _n and _n.endswith(".W"):\n'
+    '                    _short = _n.split("model.")[-1].replace(".", "/")\n'
+    '                    def _hook(grad, name=_short):\n'
+    '                        trainer._encoder_grad_norms[f"norms/{name}_grad"] = grad.float().norm().item()\n'
+    '                    _p.register_hook(_hook)',
+    1
+)
+
+# 2. Add log() override to inject weight norms + cached grad norms
+code = code.replace(
+    '    def compute_loss',
+
+    '    def log(self, logs, *args, **kwargs):\n'
+    '        for _n, _p in self.model.named_parameters():\n'
+    '            for _k in ' + KEYS + ':\n'
+    '                if _k in _n and _n.endswith(".W"):\n'
+    '                    _short = _n.split("model.")[-1].replace(".", "/")\n'
+    '                    logs[f"norms/{_short}"] = _p.float().norm().item()\n'
+    '        for _k, _v in getattr(self, "_encoder_grad_norms", {}).items():\n'
+    '            logs[_k] = _v\n'
+    '        return super().log(logs, *args, **kwargs)\n'
+    '\n'
+    '    def compute_loss',
     1
 )
 open(target, 'w').write(code)
-print('Patched BaseTrainer.log() with encoder/decoder norm monitoring')
+print('Patched BaseTrainer with encoder/decoder weight + grad norm monitoring')
 PATCH_EOF
 
 # Set Python path to include source root and dreamzero
