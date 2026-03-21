@@ -1,4 +1,3 @@
-import logging
 import time
 from collections.abc import Callable, Mapping, Sequence
 from contextlib import nullcontext
@@ -55,30 +54,28 @@ class DsWriterCommandMetaBridge(pimm.ControlSystem):
             yield pimm.Pass()
 
 
-class KeyboardHanlder:
+class KeyboardHandler:
     def __init__(self, task: str | None = None):
         self.task = task
 
     def harness_directive(self, key: str) -> Directive | None:
-        if key == 's':
-            logging.info('Running policy...')
-            return Directive.RUN(task=self.task)
-        elif key == 'p':
-            logging.info('Stopping policy...')
-            return Directive.STOP()
-        elif key == 'r':
-            logging.info('Homing...')
-            return Directive.HOME()
+        match key:
+            case 's':
+                return Directive.RUN(task=self.task)
+            case 'p':
+                return Directive.STOP()
+            case 'r':
+                return Directive.HOME()
         return None
 
     def ds_writer_command(self, key: str) -> DsWriterCommand | None:
-        if key == 's':
-            meta = {'task': self.task} if self.task else {}
-            return DsWriterCommand.START(meta)
-        elif key == 'p':
-            return DsWriterCommand.STOP()
-        elif key == 'r':
-            return DsWriterCommand.ABORT()
+        match key:
+            case 's':
+                return DsWriterCommand.START({'task': self.task} if self.task else {})
+            case 'p':
+                return DsWriterCommand.STOP()
+            case 'r':
+                return DsWriterCommand.ABORT()
         return None
 
 
@@ -108,14 +105,14 @@ class TimedDriver(pimm.ControlSystem):
 @cfn.config(ui_scale=1)
 def eval_ui(ui_scale):
     gui = EvalUI(ui_scale=ui_scale)
-    return gui, (gui.inference_command, pimm.utils.identity), (gui.ds_writer_command, pimm.utils.identity), []
+    return gui, (gui.directive, pimm.utils.identity), (gui.ds_writer_command, pimm.utils.identity), []
 
 
 @cfn.config(show_gui=False)
 def keyboard(show_gui, task):
     keyboard = KeyboardControl(quit_key='q')
-    keyboard_handler = KeyboardHanlder(task=task)
-    print('Keyboard controls: [s]tart, sto[p], [r]eset, [q]uit')
+    keyboard_handler = KeyboardHandler(task=task)
+    print('Keyboard controls: [s]tart, sto[p], [r] home, [q]uit')
     return (
         None if not show_gui else DearpyguiUi(),
         (keyboard.keyboard_inputs, pimm.map(keyboard_handler.harness_directive)),

@@ -42,7 +42,7 @@ class EvalUI(pimm.ControlSystem):
 
         # --- Inputs/Outputs ---
         self.cameras = pimm.ReceiverDict(self, default=None)
-        self.inference_command = pimm.ControlSystemEmitter(self)
+        self.directive = pimm.ControlSystemEmitter(self)
         self.ds_writer_command = pimm.ControlSystemEmitter(self)
 
         # UI State
@@ -369,7 +369,7 @@ class EvalUI(pimm.ControlSystem):
             static_data['eval.object'] = obj_value
 
         self.run_start_time = self.clock.now()
-        self.inference_command.emit(Directive.RUN(task=task_name))
+        self.directive.emit(Directive.RUN(task=task_name))
         self.ds_writer_command.emit(DsWriterCommand.START(static_data=static_data))
 
     def stop_run(self, reason):
@@ -387,7 +387,7 @@ class EvalUI(pimm.ControlSystem):
         self.update_ui()
 
         # Emit commands
-        self.inference_command.emit(Directive.STOP())
+        self.directive.emit(Directive.STOP())
         self.ds_writer_command.emit(DsWriterCommand.SUSPEND())
 
     def stop(self, sender=None, app_data=None):
@@ -405,7 +405,7 @@ class EvalUI(pimm.ControlSystem):
         self.update_ui()
 
         # Emit commands
-        self.inference_command.emit(Directive.HOME())
+        self.directive.emit(Directive.HOME())
 
     def submit(self, sender=None, app_data=None):
         if self.state != State.REVIEWING:
@@ -438,7 +438,7 @@ class EvalUI(pimm.ControlSystem):
 
         # Emit commands
         self.ds_writer_command.emit(DsWriterCommand.STOP(static_data=data))
-        self.inference_command.emit(Directive.HOME())
+        self.directive.emit(Directive.HOME())
 
     def cancel(self, sender=None, app_data=None):
         if self.state != State.REVIEWING:
@@ -451,7 +451,7 @@ class EvalUI(pimm.ControlSystem):
 
         # Emit commands
         self.ds_writer_command.emit(DsWriterCommand.ABORT())
-        self.inference_command.emit(Directive.HOME())
+        self.directive.emit(Directive.HOME())
 
     # --- Callbacks ---
 
