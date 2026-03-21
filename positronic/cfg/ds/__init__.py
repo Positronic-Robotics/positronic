@@ -8,7 +8,7 @@ import configuronic as cfn
 import pos3
 from pos3 import Profile
 
-from positronic.dataset.dataset import ConcatDataset, Dataset
+from positronic.dataset.dataset import ConcatDataset, Dataset, FilterDataset
 from positronic.dataset.local_dataset import LocalDataset, load_all_datasets
 from positronic.dataset.transforms import TransformedDataset
 from positronic.dataset.transforms.episode import EpisodeTransform, Group
@@ -31,6 +31,11 @@ def local_all(path: str, profile: Profile | None = None):
 @cfn.config()
 def concat_ds(datasets: list[Dataset]):
     return ConcatDataset(*datasets)
+
+
+@cfn.config()
+def filter_ds(dataset: Dataset, predicate):
+    return FilterDataset(dataset, predicate)
 
 
 @cfn.config(transforms=[])

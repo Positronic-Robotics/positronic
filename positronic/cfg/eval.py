@@ -600,6 +600,16 @@ def phail_uph(ep: Episode) -> float | None:
     return items / (duration / 3600)
 
 
+def phail_variant(ep: Episode) -> str:
+    exp = ep.get('inference.policy.server.experiment_name', '')
+    ckpt = ep.get('inference.policy.server.checkpoint_id', '')
+    if exp and ckpt:
+        return f'{exp}:{ckpt}'
+    if exp:
+        return exp
+    return ''
+
+
 def _phail_task_label(ep: Episode) -> str:
     obj = task_code(ep)
     return f'Pick-and-place: {obj}' if obj else ''
@@ -607,6 +617,7 @@ def _phail_task_label(ep: Episode) -> str:
 
 _phail_derives = Derive(
     model=phail_model,
+    variant=phail_variant,
     status=phail_status,
     equipment=FromValue('DROID'),
     units=phail_units,
@@ -651,6 +662,7 @@ def _baseline_uph(ep: Episode, items: int) -> float | None:
 
 _PHAIL_BASELINE = {
     'status': FromValue('Pass'),
+    'variant': FromValue(''),
     'equipment': FromValue('DROID'),
     'eval.object': _phail_task_label,
     'eval.outcome': FromValue('Success'),
@@ -703,12 +715,27 @@ phail_teleop = base_cfg.transform.override(
 
 phail_episodes = base_cfg.concat_ds.override(datasets=[phail_inference, phail_human, phail_teleop])
 
+# Curated subset for the public website: one variant per model.
+# Keys are display names from PHAIL_MODEL_DISPLAY.
+PHAIL_PROD_VARIANTS = {PHAIL_MODEL_DISPLAY['groot']: '270226-ee_rot6d_rel:150000'}
+
+
+def _phail_prod_predicate(ep: Episode) -> bool:
+    model_name = ep.get('model', '')
+    if model_name not in PHAIL_PROD_VARIANTS:
+        return True
+    return ep.get('variant', '') == PHAIL_PROD_VARIANTS[model_name]
+
+
+phail_prod_episodes = base_cfg.filter_ds.override(dataset=phail_episodes, predicate=_phail_prod_predicate)
+
 
 @cfn.config()
 def phail_episodes_table():
     return {
         '__index__': C(label='#', format='%d'),
         'model': C(label='Model', filter=True),
+        'variant': C(label='Variant', filter=True),
         'eval.object': C(label='Task', filter=True),
         'started': C(label='Started', format='%Y-%m-%d %H:%M'),
         'units': C(label='Units', align='right'),
@@ -730,6 +757,7 @@ def phail_leaderboard():
 
         return {
             'model': episodes[0]['model'],
+            'variant': episodes[0].get('variant', ''),
             'count': count,
             'UPH': total_items / (total_duration / 3600) if total_duration > 0 else None,
             'completion': completion,
@@ -738,6 +766,7 @@ def phail_leaderboard():
 
     format_table = {
         'model': C(label='Model', filter=True),
+        'variant': C(label='Variant'),
         'count': C(label='Runs', format='%d', align='right', sortable=False),
         'UPH': C(label='UPH', subtitle='Units Per Hour', format='%.1f', align='right'),
         'completion': C(label='Done %', subtitle='Completed / Total Operations', format='%.1f%%', align='right'),
@@ -747,7 +776,7 @@ def phail_leaderboard():
     }
 
     return GroupTableConfig(
-        group_keys='model',
+        group_keys=('model', 'variant'),
         group_fn=group_fn,
         format_table=format_table,
         group_filter_keys={'equipment': 'Equipment', 'eval.object': 'Task'},
