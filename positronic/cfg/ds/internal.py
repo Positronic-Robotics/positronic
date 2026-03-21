@@ -108,7 +108,6 @@ def droid(path, recovery_all, recovery_towels, duplicate_recovery):
 # Signal transformations for sim datasets
 old_to_new = Group(
     Derive(**{
-        'controller_positions.right': Concat('right_controller_translation', 'right_controller_quaternion'),
         'robot_commands.pose': Concat('target_robot_position_translation', 'target_robot_position_quaternion'),
         'robot_state.ee_pose': Concat('robot_position_translation', 'robot_position_quaternion'),
         'task': FromValue('Pick up the green cube and place it on the red cube.'),

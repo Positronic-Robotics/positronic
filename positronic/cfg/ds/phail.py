@@ -49,7 +49,7 @@ from .internal import ALL_TASKS, REAL_ROBOT_DEFAULTS, RECOVERY_TASK, SIM_ROBOT_D
 # TODO: Re-migrate dataset with robot_meta baked in so runtime transforms aren't needed
 phail = transform.override(
     base=local_all.override(path='s3://positronic-public/datasets/phail/', profile=PUBLIC),
-    transforms=[Group(Derive(**REAL_ROBOT_DEFAULTS), Identity())],
+    transforms=[Group(Derive(**REAL_ROBOT_DEFAULTS), Identity(remove=['controller_positions.right']))],
 )
 
 # Simulated cube stacking dataset

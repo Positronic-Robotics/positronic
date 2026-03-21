@@ -126,6 +126,11 @@ def _compute_eye_controls(signals: EpisodeSignals, ep: Episode) -> rrb.EyeContro
     _, _, vh = np.linalg.svd(centered, full_matrices=False)
     normal = vh[2]
 
+    # Pick the normal direction that places the robot base (origin) behind the trajectory
+    # i.e. camera on the opposite side from the base
+    if np.dot(normal, centroid) < 0:
+        normal = -normal
+
     spread = np.linalg.norm(centered, axis=1).max()
     camera_pos = centroid + normal * spread * 2.0
     return rrb.EyeControls3D(position=camera_pos.tolist(), look_target=centroid.tolist())
@@ -220,13 +225,20 @@ def _setup_series_names(signals: EpisodeSignals, ep: Episode) -> None:
     joint_names = ep.static.get('joint_names')
     pose_set = set(signals.poses)
     for key in signals.numerics:
+        dim = signals.dims.get(key, 1)
         if key == joint_signal and joint_names:
             names = joint_names
-        elif key in pose_set and signals.dims.get(key) == 7:
+        elif key in pose_set and dim == 7:
             names = ['tx', 'ty', 'tz', 'qx', 'qy', 'qz', 'qw']
         else:
-            names = [str(i) for i in range(max(1, signals.dims.get(key, 1)))]
-        log_series_styles(f'/signals/{key}', names, static=True)
+            names = None
+        if dim == 1:
+            if names:
+                log_series_styles(f'/signals/{key}', [names[0]], static=True)
+        else:
+            for i in range(dim):
+                label = names[i] if names else str(i)
+                log_series_styles(f'/signals/{key}/{i}', [label], static=True)
 
 
 class _BinaryStreamDrainer:
