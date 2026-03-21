@@ -67,7 +67,7 @@ Positronic provides three drivers for managing inference episodes (see [`positro
 
 **Timed driver (automatic):** Runs inference automatically for a fixed duration per episode. Specify `--driver.simulation_time=60` (seconds per episode) and `--driver.num_iterations=10` (number of episodes). Useful for batch evaluation without manual intervention.
 
-**Keyboard driver (manual):** Control inference with keyboard. Press `s` to start episode, `p` to stop and save, `r` to reset without saving, `q` to quit. Specify `--driver=.keyboard` and optionally `--driver.show_gui=True` for DearPyGui visualization. Useful for manual evaluation and debugging.
+**Keyboard driver (manual):** Control inference with keyboard. Press `s` to start episode, `p` to stop and save, `r` to home the robot, `q` to quit. Specify `--driver=.keyboard` and optionally `--driver.show_gui=True` for DearPyGui visualization. Useful for manual evaluation and debugging.
 
 **Eval UI driver:** Dedicated evaluation interface for policy assessment. Specify `--driver=.eval_ui` for graphical controls and metrics visualization. Useful for systematic policy evaluation with visual feedback.
 

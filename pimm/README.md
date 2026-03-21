@@ -137,7 +137,7 @@ class DataCollectionController(pimm.ControlSystem):
         self.gripper_state = pimm.FakeReceiver(self)  # Optional input
         # ...
 
-class Inference(pimm.ControlSystem):
+class Harness(pimm.ControlSystem):
     def __init__(self):
         self.robot_state = pimm.ControlSystemReceiver(self)
         self.gripper_state = pimm.ControlSystemReceiver(self)  # Required input
@@ -219,7 +219,7 @@ dataset writer's command receiver:
 ```python
 commands = world.pair(ds_agent.command)
 commands.emit(DsWriterCommand(type=DsWriterCommandType.START_EPISODE))
-for sleep in world.start(inference, bg_cs):
+for sleep in world.start(harness, bg_cs):
     time.sleep(sleep.seconds)
 ```
 
