@@ -32,21 +32,20 @@ SIM_URDF = Path(package_assets_path('assets/mujoco/panda_ik.xml')).read_text()
 REAL_URDF = (Path(__file__).resolve().parents[2] / 'drivers' / 'roboarm' / 'fr3.urdf').read_text()
 
 _JOINT_NAMES = [f'joint{i}' for i in range(1, 8)]
-_POSE_SIGNALS = ['robot_state.ee_pose', 'robot_commands.pose']
 
 _SIM_ROBOT_META = {
     'urdf': SIM_URDF,
     'joint_names': _JOINT_NAMES,
     'control_frame': 'end_effector',
     'joint_signal': 'robot_state.q',
-    'pose_signals': _POSE_SIGNALS,
+    'pose_signals': ['robot_state.ee_pose', 'robot_commands.pose'],
 }
 _REAL_ROBOT_META = {
     'urdf': REAL_URDF,
     'joint_names': _JOINT_NAMES,
     'control_frame': 'end_effector',
     'joint_signal': 'robot_state.q',
-    'pose_signals': _POSE_SIGNALS,
+    'pose_signals': ['robot_state.ee_pose', 'robot_commands.pose'],
 }
 
 # Task constants
@@ -102,7 +101,7 @@ def droid(path, recovery_all, recovery_towels, duplicate_recovery):
         else:
             datasets.append(TransformedDataset(recovery_ds, _recovery_transforms(RECOVERY_TASK)))
     return TransformedDataset(
-        ConcatDataset(*datasets), Group(Derive(**{k: FromValue(v) for k, v in _REAL_ROBOT_META.items()}), Identity())
+        ConcatDataset(*datasets), Group(Identity(), Derive(**{k: FromValue(v) for k, v in _REAL_ROBOT_META.items()}))
     )
 
 
