@@ -662,6 +662,12 @@ function isNestable(value) {
   return typeof value === 'object' && value !== null;
 }
 
+function _formatSize(bytes) {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+}
+
 function renderValue(value, level = 0) {
   const expandButton = level === 0 ? '<button class="expand-button">▶</button>' : '';
 
@@ -674,6 +680,10 @@ function renderValue(value, level = 0) {
       return `<input type="checkbox" ${value ? 'checked' : ''} onclick="return false" />`;
     case 'object':
       if (value === null) return 'null';
+      if (value.__download__) {
+        const icon = value.type === 'bytes' ? '📦' : '📄';
+        return `${icon} <a href="${value.__download__}" target="_blank">${_formatSize(value.size)}</a>`;
+      }
       if (Array.isArray(value)) {
         return expandButton + `[${value.map((item) => renderValue(item, level + 1)).join(', ')}]`;
       }

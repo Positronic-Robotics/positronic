@@ -19,7 +19,7 @@ import configuronic as cfn
 import pos3
 import rerun as rr
 import uvicorn
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Response  # noqa: F811
 from fastapi.responses import HTMLResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -188,17 +188,19 @@ async def episode_viewer(request: Request, episode_id: int):
     size_mb = meta.get('size_mb')
     size_mb_display = f'{size_mb:.2f}' if isinstance(size_mb, int | float) else None
 
-    def _make_serializable(obj):
+    _DOWNLOAD_THRESHOLD = 1024
+
+    def _make_serializable(obj, path=''):
         if isinstance(obj, bytes):
-            return None
-        if isinstance(obj, str) and len(obj) > 200:
-            return obj[:200] + '...'
+            return {'__download__': f'/api/episode/{episode_id}/static/{path}', 'size': len(obj), 'type': 'bytes'}
+        if isinstance(obj, str) and len(obj) > _DOWNLOAD_THRESHOLD:
+            return {'__download__': f'/api/episode/{episode_id}/static/{path}', 'size': len(obj), 'type': 'text'}
         if isinstance(obj, datetime):
             return obj.isoformat()
         if isinstance(obj, dict):
-            return {k: v for k, v in ((k, _make_serializable(v)) for k, v in obj.items()) if v is not None}
+            return {k: _make_serializable(v, f'{path}.{k}' if path else k) for k, v in obj.items()}
         if isinstance(obj, list):
-            return [_make_serializable(v) for v in obj]
+            return [_make_serializable(v, path) for v in obj]
         return obj
 
     return templates.TemplateResponse(
@@ -437,6 +439,50 @@ async def api_dataset_status():
         'loaded': app_state.get('dataset', None) is not None,
         'repo_id': app_state['root'],
     }
+
+
+@app.get('/api/episode/{episode_id}/static/{field_path:path}')
+@require_dataset
+async def api_episode_static_field(episode_id: int, field_path: str):
+    ds = app_state.get('dataset')
+    try:
+        episode = ds[episode_id]
+    except IndexError as e:
+        raise HTTPException(status_code=404, detail='Episode not found') from e
+
+    # Navigate dotted path, greedily matching dict keys (handles keys with dots like "link0.stl")
+    value = episode.static
+    remaining = field_path
+    while remaining:
+        if not isinstance(value, dict):
+            raise HTTPException(status_code=404, detail=f'Field not found: {field_path}')
+        # Try the full remaining path first, then progressively shorter prefixes
+        parts = remaining.split('.')
+        matched = False
+        for i in range(len(parts), 0, -1):
+            key = '.'.join(parts[:i])
+            if key in value:
+                value = value[key]
+                remaining = '.'.join(parts[i:])
+                matched = True
+                break
+        if not matched:
+            raise HTTPException(status_code=404, detail=f'Field not found: {field_path}')
+
+    filename = field_path.rsplit('.', 1)[-1] if '.' in field_path else field_path
+    if isinstance(value, bytes):
+        return Response(
+            content=value,
+            media_type='application/octet-stream',
+            headers={'Content-Disposition': f'attachment; filename={filename}'},
+        )
+    if isinstance(value, str):
+        return Response(
+            content=value.encode(),
+            media_type='text/plain; charset=utf-8',
+            headers={'Content-Disposition': f'inline; filename={filename}.txt'},
+        )
+    raise HTTPException(status_code=400, detail=f'Field {field_path} is not downloadable')
 
 
 @app.get('/api/episode_rrd/{episode_id}')
