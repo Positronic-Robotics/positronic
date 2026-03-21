@@ -682,7 +682,7 @@ function renderValue(value, level = 0) {
       if (value === null) return 'null';
       if (value.__download__) {
         const icon = value.type === 'bytes' ? '📦' : '📄';
-        return `${icon} <a href="${value.__download__}" target="_blank">${_formatSize(value.size)}</a>`;
+        return `${icon} <a href="${value.__download__}" target="_blank" style="color:#8cb4ff">${_formatSize(value.size)}</a>`;
       }
       if (Array.isArray(value)) {
         return expandButton + `[${value.map((item) => renderValue(item, level + 1)).join(', ')}]`;
