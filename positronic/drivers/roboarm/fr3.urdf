@@ -1,4 +1,14 @@
 <?xml version="1.0" ?>
+<!-- FR3 URDF with F_T_EE appended by positronic-franka.
+     Used as default for real hardware datasets that don't have robot_meta stored natively.
+     Generated from: Robot('172.168.0.2').get_robot_model() on 2026-03-16.
+
+     Visual meshes added by positronic for 3D visualization in the dataset server.
+     The <visual> elements reference STL filenames (e.g. "link0.stl") that match files in
+     positronic/assets/fr3_collision/. These are Panda collision meshes from robosuite
+     (franka_description package) — FR3 shares the same link geometry as Panda.
+     Added via: xml.etree.ElementTree, iterating links and adding <visual><geometry><mesh>
+     for each link with a matching .stl file in the assets directory. -->
 <robot name="fr3">
   <link name="base">
       </link>
