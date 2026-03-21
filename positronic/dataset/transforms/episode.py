@@ -109,7 +109,9 @@ class _LazyMergedEpisode(Episode):
     """Episode that lazily merges results from multiple episodes."""
 
     def __init__(self, episodes: tuple[Episode, ...], meta: dict):
-        self._episodes = episodes  # First takes precedence
+        # First episode takes precedence for overlapping keys, so
+        # Group(Identity(), Derive(...)) keeps existing values and only fills missing ones.
+        self._episodes = episodes
         self._meta = meta
 
     def __iter__(self) -> Iterator[str]:

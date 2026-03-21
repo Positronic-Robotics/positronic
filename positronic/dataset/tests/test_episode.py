@@ -555,3 +555,29 @@ def test_get_returns_value_or_default(tmp_path):
     assert Get('task', '')(ep) == 'pick up cube'
     assert Get('missing', 'fallback')(ep) == 'fallback'
     assert Get('missing', '')(ep) == ''
+
+
+def test_group_first_transform_takes_precedence(tmp_path):
+    """Group gives precedence to the first transform for overlapping keys.
+
+    This is used to set defaults: Group(Identity(), Derive(x=FromValue('default')))
+    keeps the episode's own value for 'x' if present, fills in the default otherwise.
+    """
+    from positronic.dataset.transforms.episode import Derive, FromValue, Group, Identity
+
+    ep_dir = tmp_path / 'ep'
+    with DiskEpisodeWriter(ep_dir) as w:
+        w.append('sig', 1, 1000)
+        w.set_static('existing', 'original')
+
+    ep = DiskEpisode(ep_dir)
+
+    # Identity first → existing values win, Derive only fills missing
+    result = Group(Identity(), Derive(existing=FromValue('overwritten'), missing=FromValue('filled')))(ep)
+    assert result['existing'] == 'original'
+    assert result['missing'] == 'filled'
+
+    # Derive first → Derive values win over existing
+    result = Group(Derive(existing=FromValue('overwritten'), missing=FromValue('filled')), Identity())(ep)
+    assert result['existing'] == 'overwritten'
+    assert result['missing'] == 'filled'
