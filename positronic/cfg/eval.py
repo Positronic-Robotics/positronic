@@ -166,6 +166,11 @@ def unified_success_rate(ep: Episode) -> float:
     return 0.0
 
 
+_VIS_DEFAULTS = {
+    'pose_signals': FromValue(['robot_state.ee_pose', 'robot_commands.pose']),
+    'joint_signal': FromValue('robot_state.q'),
+}
+
 episodes = base_cfg.transform.override(
     base=base_cfg.local,
     transforms=[
@@ -181,6 +186,7 @@ episodes = base_cfg.transform.override(
                 uph=unified_uph,
                 success_rate=unified_success_rate,
                 started=started,
+                **_VIS_DEFAULTS,
             ),
         )
     ],
@@ -377,6 +383,7 @@ sim_episodes = base_cfg.transform.override(
                 movement=ee_pose_movement,
                 units=units_sim,
                 uph=uph_sim,
+                **_VIS_DEFAULTS,
             ),
         )
     ],
@@ -611,6 +618,7 @@ _phail_derives = Derive(
     uph=phail_uph,
     completion=phail_completion,
     started=started,
+    **_VIS_DEFAULTS,
 )
 
 phail_inference = base_cfg.transform.override(
