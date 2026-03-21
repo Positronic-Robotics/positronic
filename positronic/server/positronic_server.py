@@ -188,12 +188,19 @@ async def episode_viewer(request: Request, episode_id: int):
     size_mb = meta.get('size_mb')
     size_mb_display = f'{size_mb:.2f}' if isinstance(size_mb, int | float) else None
 
-    # Ensure static_data is JSON serializable (e.g. handle datetime)
+    # Ensure static_data is JSON serializable for the sidebar display
+    _SKIP_TYPES = (bytes,)
+    _MAX_STR_LEN = 200
+
     def _make_serializable(obj):
+        if isinstance(obj, _SKIP_TYPES):
+            return None
+        if isinstance(obj, str) and len(obj) > _MAX_STR_LEN:
+            return obj[:_MAX_STR_LEN] + '...'
         if isinstance(obj, datetime):
             return obj.isoformat()
         if isinstance(obj, dict):
-            return {k: _make_serializable(v) for k, v in obj.items()}
+            return {k: v for k, v in ((k, _make_serializable(v)) for k, v in obj.items()) if v is not None}
         if isinstance(obj, list):
             return [_make_serializable(v) for v in obj]
         return obj
