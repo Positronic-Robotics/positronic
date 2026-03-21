@@ -69,11 +69,11 @@ class Harness(pimm.ControlSystem):
         self.directive = pimm.ControlSystemReceiver[Directive](self, default=None, maxsize=3)
 
     def meta(self) -> dict[str, Any]:
-        result = {'harness.simulate_timeout': self.simulate_timeout}
+        result = {'inference.simulate_timeout': self.simulate_timeout}
         for k, v in flatten_dict(self.context).items():
-            result[f'harness.context.{k}'] = v
+            result[f'inference.context.{k}'] = v
         for k, v in flatten_dict(self.policy.meta).items():
-            result[f'harness.policy.{k}'] = v
+            result[f'inference.policy.{k}'] = v
         return result
 
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Sleep]:  # noqa: C901

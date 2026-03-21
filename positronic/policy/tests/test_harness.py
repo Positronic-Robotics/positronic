@@ -28,7 +28,8 @@ class SpyPolicy:
         return {'robot_command': to_wire(self.command), 'target_grip': self.target_grip}
 
     def reset(self, context=None) -> None:
-        pass
+        self.reset_calls = getattr(self, 'reset_calls', 0) + 1
+        self.last_reset_context = context
 
     def close(self) -> None:
         """Tests rely on Harness calling policy.close(); provide no-op."""
@@ -371,6 +372,13 @@ def test_harness_recovers_from_error(world, clock):
     emit_ready_payload(frame_em, robot_em, grip_em, state_ok)
     drive_scheduler(scheduler, clock=clock, steps=3)
     assert grip_rx.read().data >= 200.0
+
+
+def test_directive_preserves_payload():
+    assert Directive.RUN(task='test').payload == {'task': 'test'}
+    assert Directive.STOP().payload is None
+    assert Directive.HOME().payload == 'home'
+    assert Directive.HOME('zeros').payload == 'zeros'
 
 
 def test_recover_command_wire_roundtrip():

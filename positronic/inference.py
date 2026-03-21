@@ -86,7 +86,7 @@ class TimedDriver(pimm.ControlSystem):
         self.num_iterations = num_iterations
         self.simulation_time = simulation_time
         self.ds_commands = pimm.ControlSystemEmitter(self)
-        self.inf_commands = pimm.ControlSystemEmitter(self)
+        self.directives = pimm.ControlSystemEmitter(self)
         self.task = task
 
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock):
@@ -95,10 +95,10 @@ class TimedDriver(pimm.ControlSystem):
             if self.task:
                 meta['task'] = self.task
             self.ds_commands.emit(DsWriterCommand.START(meta))
-            self.inf_commands.emit(Directive.RUN(task=self.task))
+            self.directives.emit(Directive.RUN(task=self.task))
             yield pimm.Sleep(self.simulation_time)
             self.ds_commands.emit(DsWriterCommand.STOP())
-            self.inf_commands.emit(Directive.HOME())
+            self.directives.emit(Directive.HOME())
             yield pimm.Sleep(0.5)  # Let the things propagate
 
 
@@ -125,7 +125,7 @@ def keyboard(show_gui, task):
 def timed(num_iterations, simulation_time, show_gui, task):
     gui = None if not show_gui else DearpyguiUi()
     driver = TimedDriver(num_iterations, simulation_time, task=task)
-    return gui, (driver.inf_commands, pimm.utils.identity), (driver.ds_commands, pimm.utils.identity), [driver]
+    return gui, (driver.directives, pimm.utils.identity), (driver.ds_commands, pimm.utils.identity), [driver]
 
 
 def main(
