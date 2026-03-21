@@ -41,7 +41,7 @@ from positronic.server.positronic_server import main as server_main
 from positronic.utils.logging import init_logging
 
 from . import PUBLIC, group, local, local_all, transform
-from .internal import _SIM_ROBOT_META, ALL_TASKS, REAL_ROBOT_DEFAULTS, RECOVERY_TASK
+from .internal import ALL_TASKS, REAL_ROBOT_DEFAULTS, RECOVERY_TASK, SIM_ROBOT_DEFAULTS
 
 # DROID teleoperation data for PhAIL tasks (towels, spoons, scissors)
 # Migrated from: @positronic.cfg.ds.internal.droid
@@ -57,7 +57,7 @@ phail = transform.override(
 # Size: 499MB, 317 episodes with transforms baked in (ee_pose, robot_joints, task)
 sim_stack_cubes = transform.override(
     base=local.override(path='s3://positronic-public/datasets/sim-stack-cubes/', profile=PUBLIC),
-    transforms=[Group(Derive(**{k: FromValue(v) for k, v in _SIM_ROBOT_META.items()}), Identity())],
+    transforms=[Group(Derive(**SIM_ROBOT_DEFAULTS), Identity())],
 )
 
 # Simulated pick-and-place dataset
@@ -65,7 +65,7 @@ sim_stack_cubes = transform.override(
 # Size: 1.3GB, 214 episodes with transforms baked in
 sim_pick_place = transform.override(
     base=local.override(path='s3://positronic-public/datasets/sim-pick-place/', profile=PUBLIC),
-    transforms=[Group(Derive(**{k: FromValue(v) for k, v in _SIM_ROBOT_META.items()}), Identity())],
+    transforms=[Group(Derive(**SIM_ROBOT_DEFAULTS), Identity())],
 )
 
 

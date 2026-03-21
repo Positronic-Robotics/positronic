@@ -50,6 +50,7 @@ REAL_ROBOT_META = {
     'pose_signals': ['robot_state.ee_pose', 'robot_commands.pose'],
 }
 REAL_ROBOT_DEFAULTS = {k: FromValue(v) for k, v in REAL_ROBOT_META.items()}
+SIM_ROBOT_DEFAULTS = {k: FromValue(v) for k, v in _SIM_ROBOT_META.items()}
 
 # Task constants
 TOWELS_TASK = 'Pick all the towels one by one from transparent tote and place them into the large grey tote.'
@@ -113,7 +114,7 @@ old_to_new = Group(
         'robot_commands.pose': Concat('target_robot_position_translation', 'target_robot_position_quaternion'),
         'robot_state.ee_pose': Concat('robot_position_translation', 'robot_position_quaternion'),
         'task': FromValue('Pick up the green cube and place it on the red cube.'),
-        **{k: FromValue(v) for k, v in _SIM_ROBOT_META.items()},
+        **SIM_ROBOT_DEFAULTS,
     }),
     Rename(**{
         'robot_state.q': 'robot_joints',
@@ -132,7 +133,7 @@ sim_pnp = transform.override(
         Group(
             Derive(
                 task=FromValue('Pick up objects from the red tote and place them in the green tote.'),
-                **{k: FromValue(v) for k, v in _SIM_ROBOT_META.items()},
+                **SIM_ROBOT_DEFAULTS,
             ),
             Rename(**{'image.exterior': 'image.back_view'}),
             Identity(),
