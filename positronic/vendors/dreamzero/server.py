@@ -180,7 +180,7 @@ class DreamZeroPolicy(Policy):
             return [{'action': action_array}]
         return [{'action': action_array[i]} for i in range(action_array.shape[0])]
 
-    def reset(self):
+    def reset(self, context=None):
         self._client.reset(session_id=self._session_id)
         self._session_id = str(uuid.uuid4())
 

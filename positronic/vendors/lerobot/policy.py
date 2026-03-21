@@ -63,7 +63,7 @@ class LerobotPolicy(Policy):
             return [{'action': action}]
         return [{'action': a} for a in action]
 
-    def reset(self):
+    def reset(self, context=None):
         self._policy.reset()
 
     @property

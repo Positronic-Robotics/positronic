@@ -246,7 +246,7 @@ class Gr00tPolicy(Policy):
         time_horizon = lengths.pop()
         return [{k: v[i] for k, v in action.items()} for i in range(time_horizon)]
 
-    def reset(self):
+    def reset(self, context=None):
         self._client.reset()
 
 

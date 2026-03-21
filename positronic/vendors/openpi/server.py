@@ -167,7 +167,7 @@ class OpenpiPolicy(Policy):
         actions = response['actions']
         return [{'action': a} for a in actions]
 
-    def reset(self):
+    def reset(self, context=None):
         self._client.reset()
 
 
