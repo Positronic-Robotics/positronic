@@ -29,9 +29,12 @@ from . import concat_ds, local, transform
 # Robot meta for existing datasets that don't have it stored natively.
 # Future datasets will have per-unit calibrated URDF from Robot.robot_meta.
 SIM_URDF = Path(package_assets_path('assets/mujoco/panda_ik.xml')).read_text()
-REAL_URDF = (Path(__file__).resolve().parents[2] / 'drivers' / 'roboarm' / 'fr3.urdf').read_text()
+_DRIVERS_DIR = Path(__file__).resolve().parents[2] / 'drivers' / 'roboarm'
+REAL_URDF = (_DRIVERS_DIR / 'fr3.urdf').read_text()
 
 _JOINT_NAMES = [f'joint{i}' for i in range(1, 8)]
+_MESH_DIR = Path(package_assets_path('assets/fr3_collision'))
+_FR3_MESHES = {f.name: f.read_bytes() for f in _MESH_DIR.iterdir() if f.suffix == '.stl'}
 
 _SIM_ROBOT_META = {
     'urdf': SIM_URDF,
@@ -43,6 +46,7 @@ _SIM_ROBOT_META = {
 _REAL_ROBOT_META = {
     'urdf': REAL_URDF,
     'joint_names': _JOINT_NAMES,
+    'meshes': _FR3_MESHES,
     'control_frame': 'end_effector',
     'joint_signal': 'robot_state.q',
     'pose_signals': ['robot_state.ee_pose', 'robot_commands.pose'],

@@ -166,10 +166,7 @@ def unified_success_rate(ep: Episode) -> float:
     return 0.0
 
 
-_VIS_DEFAULTS = {
-    'pose_signals': FromValue(['robot_state.ee_pose', 'robot_commands.pose']),
-    'joint_signal': FromValue('robot_state.q'),
-}
+_VIS_DEFAULTS = {k: FromValue(v) for k, v in internal._REAL_ROBOT_META.items()}
 
 episodes = base_cfg.transform.override(
     base=base_cfg.local,
