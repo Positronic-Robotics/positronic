@@ -181,9 +181,9 @@ episodes = base_cfg.transform.override(
                 uph=unified_uph,
                 success_rate=unified_success_rate,
                 started=started,
-                **internal.REAL_ROBOT_DEFAULTS,
             ),
-        )
+        ),
+        internal.REAL_ROBOT_TRANSFORM,
     ],
 )
 
@@ -378,9 +378,9 @@ sim_episodes = base_cfg.transform.override(
                 movement=ee_pose_movement,
                 units=units_sim,
                 uph=uph_sim,
-                **internal.REAL_ROBOT_DEFAULTS,
             ),
-        )
+        ),
+        internal.REAL_ROBOT_TRANSFORM,
     ],
 )
 
@@ -613,7 +613,6 @@ _phail_derives = Derive(
     uph=phail_uph,
     completion=phail_completion,
     started=started,
-    **internal.REAL_ROBOT_DEFAULTS,
 )
 
 phail_inference = base_cfg.transform.override(
@@ -637,7 +636,8 @@ phail_inference = base_cfg.transform.override(
             # before Identity(remove=...) strips it. Group applies all transforms to the same input.
             _phail_derives,
             Derive(**{'eval.object': _phail_task_label}),
-        )
+        ),
+        internal.REAL_ROBOT_TRANSFORM,
     ],
 )
 
@@ -672,7 +672,8 @@ phail_human = base_cfg.transform.override(
                 'units': FromValue('8/8'),
                 'uph': partial(_baseline_uph, items=8),
             }),
-        )
+        ),
+        internal.REAL_ROBOT_TRANSFORM,
     ],
 )
 
@@ -695,7 +696,8 @@ phail_teleop = base_cfg.transform.override(
                 'units': lambda ep: f'{ep["item_count"]}/{ep["item_count"]}',
                 'uph': lambda ep: _baseline_uph(ep, ep['item_count']),
             }),
-        )
+        ),
+        internal.REAL_ROBOT_TRANSFORM,
     ],
 )
 
