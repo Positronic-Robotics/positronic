@@ -151,13 +151,17 @@ def main(
         output_dir = pos3.sync(output_dir, sync_on_error=True)
         utils.save_run_metadata(output_dir, patterns=['*.py', '*.toml'])
 
+    robot_meta = robot_arm.robot_meta
+    robot_meta['joint_signal'] = 'robot_state.q'
+    robot_meta['pose_signals'] = ['robot_state.ee_pose', 'robot_commands.pose']
+
     writer_cm = LocalDatasetWriter(output_dir) if output_dir is not None else nullcontext(None)
     with writer_cm as dataset_writer, pimm.World() as world:
         ds_agent = wire.wire(world, inference, dataset_writer, camera_emitters, robot_arm, gripper, gui, TimeMode.CLOCK)
         ds_bridge = None
         world.connect(inference_emitter[0], inference.command, emitter_wrapper=inference_emitter[1])
         if ds_agent is not None:
-            ds_bridge = DsWriterCommandMetaBridge(inference.meta)
+            ds_bridge = DsWriterCommandMetaBridge(lambda: robot_meta | inference.meta())
             world.connect(ds_writer_emitter[0], ds_bridge.in_cmd, emitter_wrapper=ds_writer_emitter[1])
             world.connect(ds_bridge.out_cmd, ds_agent.command)
 
@@ -189,7 +193,11 @@ def main_sim(
     inference = Inference(policy, simulate_timeout=simulate_timeout)
     control_systems = [mujoco_cameras, sim, robot_arm, gripper, inference]
 
-    sim_meta = {'simulation.mujoco_model_path': mujoco_model_path}
+    sim_meta = {
+        'simulation.mujoco_model_path': mujoco_model_path,
+        'joint_signal': 'robot_state.q',
+        'pose_signals': ['robot_state.ee_pose', 'robot_commands.pose'],
+    }
 
     gui, inference_emitter, ds_writer_emitter, foreground_cs = driver
 

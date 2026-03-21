@@ -234,6 +234,8 @@ def main(
         static['task'] = task
     if robot_arm is not None:
         static.update(robot_arm.robot_meta)
+        static['joint_signal'] = 'robot_state.q'
+        static['pose_signals'] = ['robot_state.ee_pose', 'robot_commands.pose']
     static_getter = (lambda: static) if static else None
     data_collection = DataCollectionController(operator_position.value, metadata_getter=static_getter)
 
@@ -298,6 +300,8 @@ def main_sim(
     def metadata_getter():
         result = {k: v.tolist() for k, v in sim.save_state().items()}
         result.update(robot_arm.robot_meta)
+        result['joint_signal'] = 'robot_state.q'
+        result['pose_signals'] = ['robot_state.ee_pose', 'robot_commands.pose']
         if task is not None:
             result['task'] = task
         return result
