@@ -41,7 +41,7 @@ from positronic.server.positronic_server import main as server_main
 from positronic.utils.logging import init_logging
 
 from . import PUBLIC, group, local, local_all, transform
-from .internal import _SIM_ROBOT_META, ALL_TASKS, REAL_ROBOT_META, RECOVERY_TASK
+from .internal import _SIM_ROBOT_META, ALL_TASKS, REAL_ROBOT_DEFAULTS, RECOVERY_TASK
 
 # DROID teleoperation data for PhAIL tasks (towels, spoons, scissors)
 # Migrated from: @positronic.cfg.ds.internal.droid
@@ -49,7 +49,7 @@ from .internal import _SIM_ROBOT_META, ALL_TASKS, REAL_ROBOT_META, RECOVERY_TASK
 # TODO: Re-migrate dataset with robot_meta baked in so runtime transforms aren't needed
 phail = transform.override(
     base=local_all.override(path='s3://positronic-public/datasets/phail/', profile=PUBLIC),
-    transforms=[Group(Derive(**{k: FromValue(v) for k, v in REAL_ROBOT_META.items()}), Identity())],
+    transforms=[Group(Derive(**REAL_ROBOT_DEFAULTS), Identity())],
 )
 
 # Simulated cube stacking dataset

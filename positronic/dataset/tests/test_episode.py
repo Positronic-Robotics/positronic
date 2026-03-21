@@ -8,7 +8,7 @@ import pytest
 from positronic.dataset import Episode
 from positronic.dataset.local_dataset import UNFINISHED_MARKER, DiskEpisode, DiskEpisodeWriter
 from positronic.dataset.tests.test_video import assert_frames_equal, create_frame
-from positronic.dataset.transforms.episode import Get
+from positronic.dataset.transforms.episode import Derive, FromValue, Get, Group, Identity
 
 
 def test_episode_writer_and_reader_basic(tmp_path):
@@ -563,7 +563,6 @@ def test_group_first_transform_takes_precedence(tmp_path):
     This is used to set defaults: Group(Identity(), Derive(x=FromValue('default')))
     keeps the episode's own value for 'x' if present, fills in the default otherwise.
     """
-    from positronic.dataset.transforms.episode import Derive, FromValue, Group, Identity
 
     ep_dir = tmp_path / 'ep'
     with DiskEpisodeWriter(ep_dir) as w:

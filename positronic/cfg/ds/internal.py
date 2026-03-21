@@ -49,6 +49,7 @@ REAL_ROBOT_META = {
     'joint_signal': 'robot_state.q',
     'pose_signals': ['robot_state.ee_pose', 'robot_commands.pose'],
 }
+REAL_ROBOT_DEFAULTS = {k: FromValue(v) for k, v in REAL_ROBOT_META.items()}
 
 # Task constants
 TOWELS_TASK = 'Pick all the towels one by one from transparent tote and place them into the large grey tote.'
@@ -102,9 +103,7 @@ def droid(path, recovery_all, recovery_towels, duplicate_recovery):
                 datasets.append(TransformedDataset(recovery_ds, _recovery_transforms(task)))
         else:
             datasets.append(TransformedDataset(recovery_ds, _recovery_transforms(RECOVERY_TASK)))
-    return TransformedDataset(
-        ConcatDataset(*datasets), Group(Identity(), Derive(**{k: FromValue(v) for k, v in REAL_ROBOT_META.items()}))
-    )
+    return TransformedDataset(ConcatDataset(*datasets), Group(Identity(), Derive(**REAL_ROBOT_DEFAULTS)))
 
 
 # Signal transformations for sim datasets
