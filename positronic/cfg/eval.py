@@ -715,20 +715,6 @@ phail_teleop = base_cfg.transform.override(
 
 phail_episodes = base_cfg.concat_ds.override(datasets=[phail_inference, phail_human, phail_teleop])
 
-# Curated subset for the public website: one variant per model.
-# Keys are display names from PHAIL_MODEL_DISPLAY.
-PHAIL_PROD_VARIANTS = {PHAIL_MODEL_DISPLAY['groot']: '270226-ee_rot6d_rel:150000'}
-
-
-def _phail_prod_predicate(ep: Episode) -> bool:
-    model_name = ep.get('model', '')
-    if model_name not in PHAIL_PROD_VARIANTS:
-        return True
-    return ep.get('variant', '') == PHAIL_PROD_VARIANTS[model_name]
-
-
-phail_prod_episodes = base_cfg.filter_ds.override(dataset=phail_episodes, predicate=_phail_prod_predicate)
-
 
 @cfn.config()
 def phail_episodes_table():
