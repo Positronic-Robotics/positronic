@@ -11,7 +11,7 @@ def webxr(port: int, frontend: str, use_https: bool, sensitivity: float):
 oculus = webxr.override(frontend='oculus')
 
 # iPhone controller: open http://<server-ip>:5005/ on the phone in XR Browser
-iphone = webxr.override(frontend='iphone', use_https=False, sensitivity=1.0)
+iphone = webxr.override(frontend='iphone', use_https=False, sensitivity=2.0)
 
 # Android phones require https
 android = webxr.override(frontend='iphone', use_https=True, sensitivity=2.0)
