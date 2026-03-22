@@ -128,7 +128,22 @@ class Robot(pimm.ControlSystem):
         urdf_xml = robot.get_robot_model()
         meshes = {f.name: f.read_bytes() for f in _MESH_DIR.iterdir() if f.suffix == '.stl'}
         root = ET.fromstring(urdf_xml)
+        # Rewrite mesh references to bare filenames matching the bundled STL meshes.
+        # The libfranka URDF uses package:// URIs (e.g. package://franka_description/.../link0.dae)
+        # and references .dae visual meshes we don't bundle. Strip unresolvable elements and
+        # normalise remaining refs so the URDF is self-contained — matching the style of
+        # fr3.urdf used by cfg.ds.internal for offline dataset transforms.
         for link in root.findall('link'):
+            for tag in ('visual', 'collision'):
+                for vc_el in list(link.findall(tag)):
+                    mesh_el = vc_el.find('.//mesh')
+                    if mesh_el is None:
+                        continue
+                    basename = Path(mesh_el.get('filename', '')).name
+                    if basename in meshes:
+                        mesh_el.set('filename', basename)
+                    else:
+                        link.remove(vc_el)
             stl = link.get('name', '') + '.stl'
             if stl in meshes and link.find('visual') is None:
                 ET.SubElement(ET.SubElement(link, 'visual'), 'geometry').append(ET.Element('mesh', filename=stl))
