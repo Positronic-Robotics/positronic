@@ -2,6 +2,8 @@ import pimm
 from positronic.dataset import DatasetWriter
 from positronic.dataset.ds_writer_agent import DsWriterAgent, Serializers, TimeMode
 
+ROBOT_STATIC_META = {'joint_signal': 'robot_state.q', 'pose_signals': ['robot_state.ee_pose', 'robot_commands.pose']}
+
 
 def wire(
     world: pimm.World,
@@ -16,6 +18,7 @@ def wire(
     if robot_arm is not None:
         world.connect(harness.robot_commands, robot_arm.commands)
         world.connect(robot_arm.state, harness.robot_state)
+        world.connect(robot_arm.robot_meta, harness.robot_meta_in)
 
     if gripper is not None:
         world.connect(harness.target_grip, gripper.target_grip)

@@ -1,5 +1,5 @@
 import time
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Mapping, Sequence
 from contextlib import nullcontext
 from pathlib import Path
 from typing import Any
@@ -14,7 +14,7 @@ import positronic.cfg.hardware.roboarm
 import positronic.cfg.policy as policy_cfg
 import positronic.cfg.simulator
 from positronic import utils, wire
-from positronic.dataset.ds_writer_agent import DsWriterCommand, TimeMode
+from positronic.dataset.ds_writer_agent import TimeMode
 from positronic.dataset.local_dataset import LocalDatasetWriter
 from positronic.gui.dpg import DearpyguiUi
 from positronic.gui.eval import EvalUI
@@ -25,33 +25,6 @@ from positronic.simulator.mujoco.sim import MujocoCameras, MujocoFranka, MujocoG
 from positronic.simulator.mujoco.transforms import MujocoSceneTransform
 from positronic.utils import package_assets_path
 from positronic.utils.logging import init_logging
-
-
-class DsWriterCommandMetaBridge(pimm.ControlSystem):
-    """Runs in main process: injects harness meta into RUN commands.
-
-    This avoids computing metadata inside background GUI processes, which would
-    otherwise use a spawned copy of `Harness`/policy and can log stale
-    or wrong policy meta when policies metadata is resampled in the main process.
-    """
-
-    def __init__(self, meta_provider: Callable[[], dict[str, Any]]):
-        self.meta_provider = meta_provider
-        self.in_cmd = pimm.ControlSystemReceiver[DsWriterCommand](self, default=None, maxsize=10)
-        self.out_cmd = pimm.ControlSystemEmitter(self)
-
-    def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock):
-        while not should_stop.value:
-            msg = self.in_cmd.read()
-            if msg is not None and msg.updated and msg.data is not None:
-                cmd = msg.data
-                out = None
-                if cmd.type == DsWriterCommand.START(None).type:
-                    meta = (cmd.static_data or {}) | self.meta_provider()
-                    out = DsWriterCommand(cmd.type, meta)
-
-                self.out_cmd.emit(out if out is not None else cmd)
-            yield pimm.Pass()
 
 
 class KeyboardHandler:
@@ -68,24 +41,13 @@ class KeyboardHandler:
                 return Directive.HOME()
         return None
 
-    def ds_writer_command(self, key: str) -> DsWriterCommand | None:
-        match key:
-            case 's':
-                return DsWriterCommand.START({'task': self.task} if self.task else {})
-            case 'p':
-                return DsWriterCommand.STOP()
-            case 'r':
-                return DsWriterCommand.ABORT()
-        return None
-
 
 class TimedDriver(pimm.ControlSystem):
-    """Control system that orchestrates inference episodes by sending start/stop commands."""
+    """Control system that orchestrates inference episodes by sending directives."""
 
     def __init__(self, num_iterations: int, simulation_time: float, task: str | None = None):
         self.num_iterations = num_iterations
         self.simulation_time = simulation_time
-        self.ds_commands = pimm.ControlSystemEmitter(self)
         self.directives = pimm.ControlSystemEmitter(self)
         self.task = task
 
@@ -94,18 +56,16 @@ class TimedDriver(pimm.ControlSystem):
             meta = {'simulation.iteration': str(i), 'simulation.total_iterations': str(self.num_iterations)}
             if self.task:
                 meta['task'] = self.task
-            self.ds_commands.emit(DsWriterCommand.START(meta))
-            self.directives.emit(Directive.RUN(task=self.task))
+            self.directives.emit(Directive.RUN(**meta))
             yield pimm.Sleep(self.simulation_time)
-            self.ds_commands.emit(DsWriterCommand.STOP())
-            self.directives.emit(Directive.HOME())
-            yield pimm.Sleep(0.5)  # Let the things propagate
+            self.directives.emit(Directive.STOP())
+            yield pimm.Sleep(0.5)
 
 
 @cfn.config(ui_scale=1)
 def eval_ui(ui_scale):
     gui = EvalUI(ui_scale=ui_scale)
-    return gui, (gui.directive, pimm.utils.identity), (gui.ds_writer_command, pimm.utils.identity), []
+    return gui, (gui.directive, pimm.utils.identity), []
 
 
 @cfn.config(show_gui=False)
@@ -116,7 +76,6 @@ def keyboard(show_gui, task):
     return (
         None if not show_gui else DearpyguiUi(),
         (keyboard.keyboard_inputs, pimm.map(keyboard_handler.harness_directive)),
-        (keyboard.keyboard_inputs, pimm.map(keyboard_handler.ds_writer_command)),
         [keyboard],
     )
 
@@ -125,7 +84,7 @@ def keyboard(show_gui, task):
 def timed(num_iterations, simulation_time, show_gui, task):
     gui = None if not show_gui else DearpyguiUi()
     driver = TimedDriver(num_iterations, simulation_time, task=task)
-    return gui, (driver.directives, pimm.utils.identity), (driver.ds_commands, pimm.utils.identity), [driver]
+    return gui, (driver.directives, pimm.utils.identity), [driver]
 
 
 def main(
@@ -137,34 +96,25 @@ def main(
     output_dir: str | Path | None = None,
 ):
     """Runs inference on real hardware."""
-    harness = Harness(policy)
+    harness = Harness(policy, static_meta=wire.ROBOT_STATIC_META)
 
-    # Convert camera instances to emitters for wire()
     camera_instances = cameras
     camera_emitters = {name: cam.frame for name, cam in camera_instances.items()}
 
-    gui, harness_emitter, ds_writer_emitter, foreground_cs = driver
+    gui, harness_emitter, foreground_cs = driver
     if output_dir is not None:
         output_dir = pos3.sync(output_dir, sync_on_error=True)
         utils.save_run_metadata(output_dir, patterns=['*.py', '*.toml'])
 
-    robot_meta = robot_arm.robot_meta
-    robot_meta['joint_signal'] = 'robot_state.q'
-    robot_meta['pose_signals'] = ['robot_state.ee_pose', 'robot_commands.pose']
-
     writer_cm = LocalDatasetWriter(output_dir) if output_dir is not None else nullcontext(None)
     with writer_cm as dataset_writer, pimm.World() as world:
         ds_agent = wire.wire(world, harness, dataset_writer, camera_emitters, robot_arm, gripper, gui, TimeMode.CLOCK)
-        ds_bridge = None
         world.connect(harness_emitter[0], harness.directive, emitter_wrapper=harness_emitter[1])
         if ds_agent is not None:
-            ds_bridge = DsWriterCommandMetaBridge(lambda: robot_meta | harness.meta())
-            world.connect(ds_writer_emitter[0], ds_bridge.in_cmd, emitter_wrapper=ds_writer_emitter[1])
-            world.connect(ds_bridge.out_cmd, ds_agent.command)
+            world.connect(harness.ds_command, ds_agent.command)
 
         bg_cs = [*camera_instances.values(), robot_arm, gripper, ds_agent, gui]
-
-        main_cs = [harness, ds_bridge, *foreground_cs]
+        main_cs = [harness, *foreground_cs]
         for cmd in world.start(main_cs, bg_cs):
             time.sleep(cmd.seconds)
 
@@ -185,18 +135,13 @@ def main_sim(
     robot_arm = MujocoFranka(sim, suffix='_ph')
     gripper = MujocoGripper(sim, actuator_name='actuator8_ph', joint_name='finger_joint1_ph')
     mujoco_cameras = MujocoCameras(sim.model, sim.data, resolution=(320, 240), fps=camera_fps)
-    # Map signal names to emitters for wire()
     cameras = {name: mujoco_cameras.cameras[orig_name] for name, orig_name in camera_dict.items()}
-    harness = Harness(policy, simulate_timeout=simulate_timeout)
+
+    static_meta = {'simulation.mujoco_model_path': mujoco_model_path, **wire.ROBOT_STATIC_META}
+    harness = Harness(policy, static_meta=static_meta, simulate_timeout=simulate_timeout)
     control_systems = [mujoco_cameras, sim, robot_arm, gripper, harness]
 
-    sim_meta = {
-        'simulation.mujoco_model_path': mujoco_model_path,
-        'joint_signal': 'robot_state.q',
-        'pose_signals': ['robot_state.ee_pose', 'robot_commands.pose'],
-    }
-
-    gui, harness_emitter, ds_writer_emitter, foreground_cs = driver
+    gui, harness_emitter, foreground_cs = driver
 
     if output_dir is not None:
         output_dir = pos3.sync(output_dir, sync_on_error=True)
@@ -205,19 +150,14 @@ def main_sim(
     writer_cm = LocalDatasetWriter(output_dir) if output_dir is not None else nullcontext(None)
     with writer_cm as dataset_writer, pimm.World(clock=sim) as world:
         ds_agent = wire.wire(world, harness, dataset_writer, cameras, robot_arm, gripper, gui, TimeMode.MESSAGE)
-        ds_bridge = DsWriterCommandMetaBridge(lambda: sim_meta.copy() | harness.meta())
         if ds_agent is not None:
             for observer_name in observers.keys():
                 ds_agent.add_signal(observer_name)
                 world.connect(sim.observations[observer_name], ds_agent.inputs[observer_name])
+            world.connect(harness.ds_command, ds_agent.command)
         world.connect(harness_emitter[0], harness.directive, emitter_wrapper=harness_emitter[1])
-        if ds_agent is not None:
-            # Note: do NOT use ds_writer_emitter wrapper here. In eval_ui it may run in a
-            # background process and inject stale harness metadata.
-            world.connect(ds_writer_emitter[0], ds_bridge.in_cmd, emitter_wrapper=ds_writer_emitter[1])
-            world.connect(ds_bridge.out_cmd, ds_agent.command)
 
-        for _ in world.start([*foreground_cs, *control_systems, ds_agent, ds_bridge], gui):
+        for _ in world.start([*foreground_cs, *control_systems, ds_agent], gui):
             pass
 
 

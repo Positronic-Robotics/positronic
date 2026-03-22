@@ -16,13 +16,7 @@ import positronic.cfg.simulator
 import positronic.cfg.sound
 import positronic.cfg.webxr
 from positronic import geom, wire
-from positronic.dataset.ds_writer_agent import (
-    DsWriterAgent,
-    DsWriterCommand,
-    DsWriterCommandType,
-    Serializers,
-    TimeMode,
-)
+from positronic.dataset.ds_writer_agent import DsWriterAgent, DsWriterCommand, Serializers, TimeMode
 from positronic.dataset.local_dataset import LocalDatasetWriter
 from positronic.drivers import roboarm
 from positronic.drivers.roboarm import State as RoboarmState
@@ -103,14 +97,22 @@ class OperatorPosition(Enum):
 
 
 class DataCollectionController(pimm.ControlSystem):
-    def __init__(self, operator_position: geom.Transform3D | None, metadata_getter: Callable[[], dict] | None = None):
+    def __init__(
+        self,
+        operator_position: geom.Transform3D | None,
+        *,
+        static_meta: dict | None = None,
+        metadata_getter: Callable[[], dict] | None = None,
+    ):
         self.operator_position = operator_position
+        self._static_meta = static_meta or {}
         self.metadata_getter = metadata_getter or (lambda: {})
         self.controller_positions = pimm.ControlSystemReceiver(self, default=None)
         self.buttons_receiver = pimm.ControlSystemReceiver(self)
         self.robot_state = pimm.ControlSystemReceiver(self)
         self.gripper_state = pimm.FakeReceiver(self)  # To make compatible with other "policy" control systems
         self.frames = pimm.ReceiverDict(self, fake=True)
+        self.robot_meta_in = pimm.ControlSystemReceiver(self, default={})
 
         self.robot_commands = pimm.ControlSystemEmitter(self)
         self.target_grip = pimm.ControlSystemEmitter(self)
@@ -134,10 +136,15 @@ class DataCollectionController(pimm.ControlSystem):
             try:
                 _parse_buttons(self.buttons_receiver.value, button_handler)
                 if button_handler.just_pressed('right_B'):
-                    op = DsWriterCommandType.START_EPISODE if not recording else DsWriterCommandType.STOP_EPISODE
-                    meta = self.metadata_getter() if op == DsWriterCommandType.START_EPISODE else {}
-                    self.ds_agent_commands.emit(DsWriterCommand(op, meta))
-                    self.sound.emit(start_wav_path if not recording else end_wav_path)
+                    if not recording:
+                        meta = dict(self._static_meta)
+                        meta.update(self.robot_meta_in.value)
+                        meta.update(self.metadata_getter())
+                        self.ds_agent_commands.emit(DsWriterCommand.START(meta))
+                        self.sound.emit(start_wav_path)
+                    else:
+                        self.ds_agent_commands.emit(DsWriterCommand.STOP())
+                        self.sound.emit(end_wav_path)
                     recording = not recording
                 elif button_handler.just_pressed('right_A'):
                     if tracker.on:
@@ -226,18 +233,14 @@ def main(
     task: str | None = None,
 ):
     """Runs data collection in real hardware."""
-    # Convert camera instances to emitters for wire()
     camera_instances = cameras or {}
     camera_emitters = {name: cam.frame for name, cam in camera_instances.items()}
-    static = {}
+    static_meta = {}
     if task is not None:
-        static['task'] = task
+        static_meta['task'] = task
     if robot_arm is not None:
-        static.update(robot_arm.robot_meta)
-        static['joint_signal'] = 'robot_state.q'
-        static['pose_signals'] = ['robot_state.ee_pose', 'robot_commands.pose']
-    static_getter = (lambda: static) if static else None
-    data_collection = DataCollectionController(operator_position.value, metadata_getter=static_getter)
+        static_meta.update(wire.ROBOT_STATIC_META)
+    data_collection = DataCollectionController(operator_position.value, static_meta=static_meta)
 
     writer_cm = (
         LocalDatasetWriter(pos3.sync(output_dir, sync_on_error=True)) if output_dir is not None else nullcontext()
@@ -297,16 +300,15 @@ def main_sim(
     gui = DearpyguiUi()
     gripper = MujocoGripper(sim, actuator_name='actuator8_ph', joint_name='finger_joint1_ph')
 
-    def metadata_getter():
-        result = {k: v.tolist() for k, v in sim.save_state().items()}
-        result.update(robot_arm.robot_meta)
-        result['joint_signal'] = 'robot_state.q'
-        result['pose_signals'] = ['robot_state.ee_pose', 'robot_commands.pose']
-        if task is not None:
-            result['task'] = task
-        return result
+    static_meta = dict(wire.ROBOT_STATIC_META)
+    if task is not None:
+        static_meta['task'] = task
 
-    data_collection = DataCollectionController(operator_position.value, metadata_getter=metadata_getter)
+    data_collection = DataCollectionController(
+        operator_position.value,
+        static_meta=static_meta,
+        metadata_getter=lambda: {k: v.tolist() for k, v in sim.save_state().items()},
+    )
 
     writer_cm = (
         LocalDatasetWriter(pos3.sync(output_dir, sync_on_error=True)) if output_dir is not None else nullcontext()

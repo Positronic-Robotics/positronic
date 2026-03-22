@@ -224,8 +224,14 @@ class MujocoFranka(pimm.ControlSystem):
 
         self.commands: pimm.SignalReceiver[roboarm_command.CommandType] = pimm.ControlSystemReceiver(self, default=None)
         self.state: pimm.SignalEmitter[MujocoFrankaState] = pimm.ControlSystemEmitter(self)
+        self.robot_meta = pimm.ControlSystemEmitter(self)
 
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock):
+        self.robot_meta.emit({
+            'urdf': Path(package_assets_path('assets/mujoco/panda_ik.xml')).read_text(),
+            'joint_names': [f'joint{i}' for i in range(1, 8)],
+            'control_frame': 'end_effector',
+        })
         state = MujocoFrankaState()
 
         while not should_stop.value:
@@ -269,14 +275,6 @@ class MujocoFranka(pimm.ControlSystem):
             return result.qpos[self.joint_qpos_ids]
 
         return None
-
-    @property
-    def robot_meta(self) -> dict:
-        return {
-            'urdf': Path(package_assets_path('assets/mujoco/panda_ik.xml')).read_text(),
-            'joint_names': [f'joint{i}' for i in range(1, 8)],
-            'control_frame': 'end_effector',
-        }
 
     @property
     def q(self) -> np.ndarray:

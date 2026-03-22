@@ -8,7 +8,6 @@ import dearpygui.dearpygui as dpg
 import numpy as np
 
 import pimm
-from positronic.dataset.ds_writer_agent import DsWriterCommand
 from positronic.policy.harness import Directive
 
 
@@ -43,7 +42,6 @@ class EvalUI(pimm.ControlSystem):
         # --- Inputs/Outputs ---
         self.cameras = pimm.ReceiverDict(self, default=None)
         self.directive = pimm.ControlSystemEmitter(self)
-        self.ds_writer_command = pimm.ControlSystemEmitter(self)
 
         # UI State
         self.element_states: dict[str | int, list[State]] = {}
@@ -357,20 +355,18 @@ class EvalUI(pimm.ControlSystem):
         self.state = State.RUNNING
         self.update_ui()
 
-        # Emit commands
         task_value = dpg.get_value('task_radio')
         task_name = dpg.get_value('custom_input') if task_value == 'Other' else task_value
-        static_data = {'task': task_name}
+        context = {'task': task_name}
 
         if task_value in TASK_TO_OBJECT or task_value == UNIFIED_TASK:
             obj_value = dpg.get_value('object_radio')
             if obj_value == 'Other':
                 obj_value = dpg.get_value('object_custom_input')
-            static_data['eval.object'] = obj_value
+            context['eval.object'] = obj_value
 
         self.run_start_time = self.clock.now()
-        self.directive.emit(Directive.RUN(task=task_name))
-        self.ds_writer_command.emit(DsWriterCommand.START(static_data=static_data))
+        self.directive.emit(Directive.RUN(**context))
 
     def stop_run(self, reason):
         if self.state != State.RUNNING:
@@ -385,10 +381,7 @@ class EvalUI(pimm.ControlSystem):
             dpg.set_value('successful_items_input', total)
 
         self.update_ui()
-
-        # Emit commands
         self.directive.emit(Directive.STOP())
-        self.ds_writer_command.emit(DsWriterCommand.SUSPEND())
 
     def stop(self, sender=None, app_data=None):
         self.stop_run('System')
@@ -435,10 +428,7 @@ class EvalUI(pimm.ControlSystem):
         dpg.set_value('successful_items_input', 0)
         self.state = State.WAITING
         self.update_ui()
-
-        # Emit commands
-        self.ds_writer_command.emit(DsWriterCommand.STOP(static_data=data))
-        self.directive.emit(Directive.HOME())
+        self.directive.emit(Directive.FINISH(**data))
 
     def cancel(self, sender=None, app_data=None):
         if self.state != State.REVIEWING:
@@ -448,9 +438,6 @@ class EvalUI(pimm.ControlSystem):
         dpg.set_value('successful_items_input', 0)
         self.state = State.WAITING
         self.update_ui()
-
-        # Emit commands
-        self.ds_writer_command.emit(DsWriterCommand.ABORT())
         self.directive.emit(Directive.HOME())
 
     # --- Callbacks ---

@@ -5,16 +5,17 @@ import pytest
 
 import pimm
 from pimm.tests.testing import MockClock
-from positronic.dataset.ds_writer_agent import Serializers
+from positronic.dataset.ds_writer_agent import DsWriterCommand, DsWriterCommandType, Serializers
 from positronic.drivers import roboarm
 from positronic.drivers.roboarm import RobotStatus
 from positronic.drivers.roboarm.command import CartesianPosition, Recover, Reset, from_wire, to_wire
 from positronic.geom import Rotation, Transform3D
-from positronic.policy.harness import Directive, Harness
-from positronic.tests.testing_coutils import ManualDriver, drive_scheduler
+from positronic.policy.base import Policy
+from positronic.policy.harness import Directive, DirectiveType, Harness
+from positronic.tests.testing_coutils import ManualDriver, RecordingEmitter, drive_scheduler
 
 
-class SpyPolicy:
+class SpyPolicy(Policy):
     def __init__(self, command: roboarm.command.CommandType | None = None, target_grip: float = 0.33) -> None:
         if command is None:
             pose = Transform3D(translation=np.array([0.4, 0.5, 0.6], dtype=np.float32), rotation=Rotation.identity)
@@ -31,18 +32,19 @@ class SpyPolicy:
         self.reset_calls = getattr(self, 'reset_calls', 0) + 1
         self.last_reset_context = context
 
-    def close(self) -> None:
-        """Tests rely on Harness calling policy.close(); provide no-op."""
-        return None
 
-
-class StubPolicy:
+class StubPolicy(Policy):
     """Reusable policy stub for tests.
 
     Compatible with `positronic.policy.harness.Harness`: returns wire-format robot commands + target grip.
     """
 
-    def __init__(self, command: roboarm.command.CommandType | None = None, target_grip: float = 0.33) -> None:
+    def __init__(
+        self,
+        command: roboarm.command.CommandType | None = None,
+        target_grip: float = 0.33,
+        meta: dict[str, object] | None = None,
+    ) -> None:
         if command is None:
             pose = Transform3D(translation=np.array([0.4, 0.5, 0.6], dtype=np.float32), rotation=Rotation.identity)
             command = CartesianPosition(pose=pose)
@@ -52,7 +54,11 @@ class StubPolicy:
         self.observations: list[dict[str, object]] = []
         self.reset_calls = 0
         self.last_reset_context = None
-        self.meta: dict[str, object] = {}
+        self._meta: dict[str, object] = meta or {}
+
+    @property
+    def meta(self) -> dict[str, object]:
+        return self._meta
 
     def select_action(self, obs: dict[str, object]) -> dict[str, object]:
         self.last_obs = obs
@@ -62,10 +68,6 @@ class StubPolicy:
     def reset(self, context=None) -> None:
         self.reset_calls += 1
         self.last_reset_context = context
-
-    def close(self) -> None:
-        """Tests rely on Harness calling policy.close(); provide no-op."""
-        return None
 
 
 class ChunkPolicy(StubPolicy):
@@ -113,24 +115,42 @@ def emit_ready_payload(frame_emitter, robot_emitter, grip_emitter, robot_state):
     grip_emitter.emit(0.25)
 
 
+def _pair_all(world, harness):
+    """Pair all harness signals and return a dict of test handles."""
+    ds_recorder = RecordingEmitter()
+    harness.ds_command._bind(ds_recorder)
+    return {
+        'frame_em': world.pair(harness.frames['image.cam']),
+        'robot_em': world.pair(harness.robot_state),
+        'grip_em': world.pair(harness.gripper_state),
+        'directive_em': world.pair(harness.directive),
+        'command_rx': world.pair(harness.robot_commands),
+        'grip_rx': world.pair(harness.target_grip),
+        'meta_em': world.pair(harness.robot_meta_in),
+        'ds_recorder': ds_recorder,
+    }
+
+
+def _ds_commands(p) -> list[DsWriterCommand]:
+    return [data for _, data in p['ds_recorder'].emitted]
+
+
+def _ds_types(p) -> list[DsWriterCommandType]:
+    return [cmd.type for cmd in _ds_commands(p)]
+
+
 @pytest.mark.timeout(3.0)
 def test_harness_emits_cartesian_move(world, clock):
     pose = Transform3D(translation=np.array([0.4, 0.5, 0.6], dtype=np.float32), rotation=Rotation.identity)
     policy = SpyPolicy(command=CartesianPosition(pose=pose), target_grip=0.33)
     harness = Harness(policy)
-
-    frame_em = world.pair(harness.frames['image.cam'])
-    robot_em = world.pair(harness.robot_state)
-    grip_em = world.pair(harness.gripper_state)
-    directive_em = world.pair(harness.directive)
-    command_rx = world.pair(harness.robot_commands)
-    grip_rx = world.pair(harness.target_grip)
+    p = _pair_all(world, harness)
 
     robot_state = make_robot_state([0.1, 0.2, 0.3], [0.4, 0.5, 0.6])
 
     driver = ManualDriver([
-        (partial(directive_em.emit, Directive.RUN(task='stack-blocks')), 0.0),
-        (partial(emit_ready_payload, frame_em, robot_em, grip_em, robot_state), 0.01),
+        (partial(p['directive_em'].emit, Directive.RUN(task='stack-blocks')), 0.0),
+        (partial(emit_ready_payload, p['frame_em'], p['robot_em'], p['grip_em'], robot_state), 0.01),
         (None, 0.05),
     ])
 
@@ -147,14 +167,13 @@ def test_harness_emits_cartesian_move(world, clock):
     assert obs['grip'] == pytest.approx(0.25)
     assert obs['task'] == 'stack-blocks'
 
-    command_msg = command_rx.read()
+    command_msg = p['command_rx'].read()
     assert command_msg is not None
-    command = command_msg.data
-    assert isinstance(command, roboarm.command.CartesianPosition)
-    np.testing.assert_allclose(command.pose.translation, pose.translation)
-    np.testing.assert_allclose(command.pose.rotation.as_quat, pose.rotation.as_quat)
+    assert isinstance(command_msg.data, roboarm.command.CartesianPosition)
+    np.testing.assert_allclose(command_msg.data.pose.translation, pose.translation)
+    np.testing.assert_allclose(command_msg.data.pose.rotation.as_quat, pose.rotation.as_quat)
 
-    grip_msg = grip_rx.read()
+    grip_msg = p['grip_rx'].read()
     assert grip_msg is not None
     assert grip_msg.data == pytest.approx(0.33)
 
@@ -164,29 +183,23 @@ def test_harness_waits_for_complete_inputs(world, clock):
     pose = Transform3D(translation=np.array([0.4, 0.5, 0.6], dtype=np.float32), rotation=Rotation.identity)
     policy = SpyPolicy(command=CartesianPosition(pose=pose), target_grip=0.33)
     harness = Harness(policy)
-
-    frame_em = world.pair(harness.frames['image.cam'])
-    robot_em = world.pair(harness.robot_state)
-    grip_em = world.pair(harness.gripper_state)
-    directive_em = world.pair(harness.directive)
-    command_rx = world.pair(harness.robot_commands)
-    grip_rx = world.pair(harness.target_grip)
+    p = _pair_all(world, harness)
 
     assert len(harness.frames) == 1
 
     robot_state = make_robot_state([0.2, 0.0, -0.1], [0.7, 0.1, -0.2])
 
     def assert_no_outputs():
-        assert command_rx.read() is None
-        assert grip_rx.read() is None
+        assert p['command_rx'].read() is None
+        assert p['grip_rx'].read() is None
         assert policy.last_obs is None
 
     driver = ManualDriver([
-        (partial(directive_em.emit, Directive.RUN(task='dummy-task')), 0.01),
-        (partial(robot_em.emit, robot_state), 0.01),
-        (partial(grip_em.emit, 0.25), 0.01),
+        (partial(p['directive_em'].emit, Directive.RUN(task='dummy-task')), 0.01),
+        (partial(p['robot_em'].emit, robot_state), 0.01),
+        (partial(p['grip_em'].emit, 0.25), 0.01),
         (assert_no_outputs, 0.01),  # still missing a frame
-        (partial(emit_ready_payload, frame_em, robot_em, grip_em, robot_state), 0.01),
+        (partial(emit_ready_payload, p['frame_em'], p['robot_em'], p['grip_em'], robot_state), 0.01),
         (None, 0.01),
     ])
 
@@ -195,54 +208,147 @@ def test_harness_waits_for_complete_inputs(world, clock):
 
     assert policy.last_obs is not None
 
-    command_msg = command_rx.read()
+    command_msg = p['command_rx'].read()
     assert command_msg is not None
     assert isinstance(command_msg.data, roboarm.command.CartesianPosition)
     np.testing.assert_allclose(command_msg.data.pose.translation, pose.translation)
 
-    grip_msg = grip_rx.read()
+    grip_msg = p['grip_rx'].read()
     assert grip_msg is not None
     assert grip_msg.data == pytest.approx(0.33)
 
-    assert command_rx.read() is command_msg
-    assert grip_rx.read() is grip_msg
+    assert p['command_rx'].read() is command_msg
+    assert p['grip_rx'].read() is grip_msg
 
 
 @pytest.mark.timeout(3.0)
-def test_home_emits_reset_but_does_not_call_policy_reset(world, clock):
-    policy = StubPolicy()
-    harness = Harness(policy)
+def test_run_emits_ds_start_with_meta(world, clock):
+    policy = StubPolicy(meta={'type': 'stub', 'checkpoint': 'v1'})
+    harness = Harness(policy, static_meta={'joint_signal': 'robot_state.q'})
+    p = _pair_all(world, harness)
 
-    directive_em = world.pair(harness.directive)
-    command_rx = world.pair(harness.robot_commands)
-    grip_rx = world.pair(harness.target_grip)
-
-    driver = ManualDriver([(partial(directive_em.emit, Directive.HOME()), 0.0), (None, 0.01)])
+    driver = ManualDriver([
+        (partial(p['meta_em'].emit, {'urdf': '<robot/>', 'joint_names': ['j1']}), 0.0),
+        (partial(p['directive_em'].emit, Directive.RUN(task='test')), 0.01),
+        (None, 0.02),
+    ])
 
     scheduler = world.start([harness, driver])
-    drive_scheduler(scheduler, clock=clock, steps=10)
+    drive_scheduler(scheduler, clock=clock, steps=15)
 
-    cmd_msg = command_rx.read()
+    starts = [c for c in _ds_commands(p) if c.type == DsWriterCommandType.START_EPISODE]
+    assert len(starts) == 1
+    meta = starts[0].static_data
+    assert meta['joint_signal'] == 'robot_state.q'
+    assert meta['urdf'] == '<robot/>'
+    assert meta['joint_names'] == ['j1']
+    assert meta['inference.policy.type'] == 'stub'
+    assert meta['inference.policy.checkpoint'] == 'v1'
+    assert meta['task'] == 'test'
+
+
+@pytest.mark.timeout(3.0)
+def test_stop_emits_ds_suspend(world, clock):
+    policy = StubPolicy()
+    harness = Harness(policy)
+    p = _pair_all(world, harness)
+
+    driver = ManualDriver([
+        (partial(p['directive_em'].emit, Directive.RUN(task='test')), 0.0),
+        (partial(p['directive_em'].emit, Directive.STOP()), 0.02),
+        (None, 0.02),
+    ])
+
+    scheduler = world.start([harness, driver])
+    drive_scheduler(scheduler, clock=clock, steps=15)
+
+    assert DsWriterCommandType.SUSPEND_EPISODE in _ds_types(p)
+
+
+@pytest.mark.timeout(3.0)
+def test_finish_emits_ds_stop_with_data_and_homes(world, clock):
+    policy = StubPolicy()
+    harness = Harness(policy)
+    p = _pair_all(world, harness)
+
+    driver = ManualDriver([
+        (partial(p['directive_em'].emit, Directive.RUN(task='test')), 0.0),
+        (partial(p['directive_em'].emit, Directive.STOP()), 0.02),
+        (partial(p['directive_em'].emit, Directive.FINISH(outcome='Success', notes='good')), 0.02),
+        (None, 0.02),
+    ])
+
+    scheduler = world.start([harness, driver])
+    drive_scheduler(scheduler, clock=clock, steps=20)
+
+    stops = [c for c in _ds_commands(p) if c.type == DsWriterCommandType.STOP_EPISODE]
+    assert len(stops) == 1
+    assert stops[0].static_data['outcome'] == 'Success'
+    assert stops[0].static_data['notes'] == 'good'
+
+    cmd_msg = p['command_rx'].read()
     assert cmd_msg is not None
     assert isinstance(cmd_msg.data, Reset)
 
-    grip_msg = grip_rx.read()
-    assert grip_msg is not None
-    assert grip_msg.data == pytest.approx(0.0)
 
-    assert policy.reset_calls == 0
+@pytest.mark.timeout(3.0)
+def test_home_aborts_recording_and_homes(world, clock):
+    policy = StubPolicy()
+    harness = Harness(policy)
+    p = _pair_all(world, harness)
+
+    robot_state = make_robot_state([0.1, 0.2, 0.3], [0.4, 0.5, 0.6])
+
+    driver = ManualDriver([
+        (partial(p['directive_em'].emit, Directive.RUN(task='test')), 0.0),
+        (partial(emit_ready_payload, p['frame_em'], p['robot_em'], p['grip_em'], robot_state), 0.01),
+        (partial(p['directive_em'].emit, Directive.HOME()), 0.02),
+        (None, 0.02),
+    ])
+
+    scheduler = world.start([harness, driver])
+    drive_scheduler(scheduler, clock=clock, steps=20)
+
+    assert DsWriterCommandType.ABORT_EPISODE in _ds_types(p)
+
+    cmd_msg = p['command_rx'].read()
+    assert cmd_msg is not None
+    assert isinstance(cmd_msg.data, Reset)
+
+    assert policy.reset_calls == 1  # only from RUN
+
+
+@pytest.mark.timeout(3.0)
+def test_run_from_paused_auto_finalizes(world, clock):
+    policy = StubPolicy()
+    harness = Harness(policy)
+    p = _pair_all(world, harness)
+
+    driver = ManualDriver([
+        (partial(p['directive_em'].emit, Directive.RUN(task='ep1')), 0.0),
+        (partial(p['directive_em'].emit, Directive.STOP()), 0.02),
+        (partial(p['directive_em'].emit, Directive.RUN(task='ep2')), 0.02),
+        (None, 0.02),
+    ])
+
+    scheduler = world.start([harness, driver])
+    drive_scheduler(scheduler, clock=clock, steps=20)
+
+    types = _ds_types(p)
+    # START(ep1), SUSPEND, STOP (auto-finalize), START(ep2), STOP (cleanup)
+    assert types.count(DsWriterCommandType.START_EPISODE) == 2
+    assert types.count(DsWriterCommandType.STOP_EPISODE) == 2  # auto-finalize + cleanup
+    assert types.count(DsWriterCommandType.SUSPEND_EPISODE) == 1
+    assert policy.reset_calls == 2
 
 
 @pytest.mark.timeout(3.0)
 def test_run_calls_policy_reset_with_context(world, clock):
     policy = StubPolicy()
     harness = Harness(policy)
+    p = _pair_all(world, harness)
 
-    directive_em = world.pair(harness.directive)
-    world.pair(harness.robot_commands)
-    world.pair(harness.target_grip)
-
-    driver = ManualDriver([(partial(directive_em.emit, Directive.RUN(task='test-task')), 0.0), (None, 0.01)])
+    driver = ManualDriver([(partial(p['directive_em'].emit, Directive.RUN(task='test-task')), 0.0), (None, 0.01)])
 
     scheduler = world.start([harness, driver])
     drive_scheduler(scheduler, clock=clock, steps=5)
@@ -256,45 +362,32 @@ def test_harness_clears_queue_on_home_stepwise(world, clock):
     """Verify that HOME clears any pending actions in the queue (stepwise check)."""
     policy = ChunkPolicy()
     harness = Harness(policy)
-
-    frame_em = world.pair(harness.frames['image.cam'])
-    robot_em = world.pair(harness.robot_state)
-    grip_em = world.pair(harness.gripper_state)
-    directive_em = world.pair(harness.directive)
-    grip_rx = world.pair(harness.target_grip)
+    p = _pair_all(world, harness)
 
     robot_state = make_robot_state([0.1, 0.2, 0.3], [0.4, 0.5, 0.6])
-
     scheduler = world.start([harness])
 
-    # 1. RUN
-    directive_em.emit(Directive.RUN(task='test'))
+    p['directive_em'].emit(Directive.RUN(task='test'))
     drive_scheduler(scheduler, clock=clock, steps=1)
 
-    # 2. Emit Inputs -> Policy returns chunk 1 [100 ... 109]
-    emit_ready_payload(frame_em, robot_em, grip_em, robot_state)
-
+    emit_ready_payload(p['frame_em'], p['robot_em'], p['grip_em'], robot_state)
     drive_scheduler(scheduler, clock=clock, steps=5)
 
-    val = grip_rx.read().data
+    val = p['grip_rx'].read().data
     assert 100.0 <= val < 109.0, f'Expected value in chunk 1 range, got {val}'
     assert val > 100.0, 'Should have advanced past first element'
 
-    # 3. HOME
-    directive_em.emit(Directive.HOME())
+    p['directive_em'].emit(Directive.HOME())
     drive_scheduler(scheduler, clock=clock, steps=2)
 
-    val = grip_rx.read().data
+    val = p['grip_rx'].read().data
     assert val == 0.0, f'Expected 0.0 (Home), got {val}'
 
-    # 4. RUN again
-    directive_em.emit(Directive.RUN(task='test'))
-    # 5. Emit Inputs -> Policy returns chunk 2 [200 ... 209]
-    emit_ready_payload(frame_em, robot_em, grip_em, robot_state)
-
+    p['directive_em'].emit(Directive.RUN(task='test'))
+    emit_ready_payload(p['frame_em'], p['robot_em'], p['grip_em'], robot_state)
     drive_scheduler(scheduler, clock=clock, steps=4)
 
-    val = grip_rx.read().data
+    val = p['grip_rx'].read().data
     assert val >= 200.0, f'Expected >= 200.0 (Start of New Chunk), got {val}. Queue clearing failed!'
 
 
@@ -303,39 +396,27 @@ def test_harness_clears_queue_on_run_stepwise(world, clock):
     """Verify that RUN clears any pending actions in the queue."""
     policy = ChunkPolicy()
     harness = Harness(policy)
-
-    frame_em = world.pair(harness.frames['image.cam'])
-    robot_em = world.pair(harness.robot_state)
-    grip_em = world.pair(harness.gripper_state)
-    directive_em = world.pair(harness.directive)
-    grip_rx = world.pair(harness.target_grip)
+    p = _pair_all(world, harness)
 
     robot_state = make_robot_state([0.1, 0.2, 0.3], [0.4, 0.5, 0.6])
-
     scheduler = world.start([harness])
 
-    # 1. RUN
-    directive_em.emit(Directive.RUN(task='test'))
+    p['directive_em'].emit(Directive.RUN(task='test'))
     drive_scheduler(scheduler, clock=clock, steps=1)
 
-    # 2. Emit Inputs -> Policy returns chunk 1 [100 ... 109]
-    emit_ready_payload(frame_em, robot_em, grip_em, robot_state)
-
+    emit_ready_payload(p['frame_em'], p['robot_em'], p['grip_em'], robot_state)
     drive_scheduler(scheduler, clock=clock, steps=5)
 
-    val = grip_rx.read().data
+    val = p['grip_rx'].read().data
     assert 100.0 <= val < 109.0
 
-    # 3. RUN again (Restarting while running)
-    directive_em.emit(Directive.RUN(task='test-restart'))
+    p['directive_em'].emit(Directive.RUN(task='test-restart'))
     drive_scheduler(scheduler, clock=clock, steps=1)
 
-    # 4. Emit Inputs -> Policy returns chunk 2 [200 ... 209]
-    emit_ready_payload(frame_em, robot_em, grip_em, robot_state)
-
+    emit_ready_payload(p['frame_em'], p['robot_em'], p['grip_em'], robot_state)
     drive_scheduler(scheduler, clock=clock, steps=4)
 
-    val = grip_rx.read().data
+    val = p['grip_rx'].read().data
     assert val >= 200.0, f'Expected >= 200.0 (Start of New Chunk), got {val}. Queue clearing on RUN failed!'
 
 
@@ -344,41 +425,44 @@ def test_harness_recovers_from_error(world, clock):
     """ERROR clears pending actions, emits Recover, skips policy; AVAILABLE resumes with fresh chunk."""
     policy = ChunkPolicy()
     harness = Harness(policy)
-
-    frame_em = world.pair(harness.frames['image.cam'])
-    robot_em = world.pair(harness.robot_state)
-    grip_em = world.pair(harness.gripper_state)
-    directive_em = world.pair(harness.directive)
-    command_rx = world.pair(harness.robot_commands)
-    grip_rx = world.pair(harness.target_grip)
+    p = _pair_all(world, harness)
 
     state_ok = make_robot_state([0.1, 0.2, 0.3], [0.4, 0.5, 0.6], status=RobotStatus.AVAILABLE)
     state_err = make_robot_state([0.1, 0.2, 0.3], [0.4, 0.5, 0.6], status=RobotStatus.ERROR)
 
     scheduler = world.start([harness])
 
-    directive_em.emit(Directive.RUN(task='test'))
+    p['directive_em'].emit(Directive.RUN(task='test'))
     drive_scheduler(scheduler, clock=clock, steps=1)
-    emit_ready_payload(frame_em, robot_em, grip_em, state_ok)
+    emit_ready_payload(p['frame_em'], p['robot_em'], p['grip_em'], state_ok)
     drive_scheduler(scheduler, clock=clock, steps=3)
-    assert 100.0 <= grip_rx.read().data < 110.0
+    assert 100.0 <= p['grip_rx'].read().data < 110.0
 
     obs_before = len(policy.observations)
-    robot_em.emit(state_err)
+    p['robot_em'].emit(state_err)
     drive_scheduler(scheduler, clock=clock, steps=2)
-    assert isinstance(command_rx.read().data, Recover)
+    assert isinstance(p['command_rx'].read().data, Recover)
     assert len(policy.observations) == obs_before
 
-    emit_ready_payload(frame_em, robot_em, grip_em, state_ok)
+    emit_ready_payload(p['frame_em'], p['robot_em'], p['grip_em'], state_ok)
     drive_scheduler(scheduler, clock=clock, steps=3)
-    assert grip_rx.read().data >= 200.0
+    assert p['grip_rx'].read().data >= 200.0
 
 
 def test_directive_preserves_payload():
     assert Directive.RUN(task='test').payload == {'task': 'test'}
     assert Directive.STOP().payload is None
+    assert Directive.FINISH(outcome='Success').payload == {'outcome': 'Success'}
+    assert Directive.FINISH().payload == {}
     assert Directive.HOME().payload == 'home'
     assert Directive.HOME('zeros').payload == 'zeros'
+
+
+def test_directive_types():
+    assert DirectiveType.RUN.value == 'run'
+    assert DirectiveType.STOP.value == 'stop'
+    assert DirectiveType.FINISH.value == 'finish'
+    assert DirectiveType.HOME.value == 'home'
 
 
 def test_recover_command_wire_roundtrip():

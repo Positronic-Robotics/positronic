@@ -92,29 +92,6 @@ _MESH_DIR = Path(__file__).resolve().parent.parent.parent / 'assets/fr3_collisio
 
 
 class Robot(pimm.ControlSystem):
-    @property
-    def robot_meta(self) -> dict:
-        """Robot model metadata for IK, dataset storage, and 3D visualization.
-
-        Returns URDF with visual meshes baked in, joint names, control frame,
-        and mesh bytes — everything needed to run IK and render the robot
-        offline without any package dependencies.
-        """
-        urdf_xml = self._ensure_robot().get_robot_model()
-        meshes = {f.name: f.read_bytes() for f in _MESH_DIR.iterdir() if f.suffix == '.stl'}
-        # Inject <visual> elements for links that have matching mesh files
-        root = ET.fromstring(urdf_xml)
-        for link in root.findall('link'):
-            stl = link.get('name', '') + '.stl'
-            if stl in meshes and link.find('visual') is None:
-                ET.SubElement(ET.SubElement(link, 'visual'), 'geometry').append(ET.Element('mesh', filename=stl))
-        return {
-            'urdf': ET.tostring(root, encoding='unicode'),
-            'joint_names': _revolute_joint_names(urdf_xml),
-            'meshes': meshes,
-            'control_frame': 'end_effector',
-        }
-
     def __init__(
         self,
         ip: str,
@@ -141,9 +118,26 @@ class Robot(pimm.ControlSystem):
         )
         self.commands: pimm.SignalReceiver = pimm.ControlSystemReceiver(self, default=None)
         self.state: pimm.SignalEmitter = pimm.ControlSystemEmitter(self)
+        self.robot_meta = pimm.ControlSystemEmitter(self)
         self._load = load
         self._collision_coeff = collision_coeff
         self._robot: pf.Robot | None = None
+
+    @staticmethod
+    def _build_robot_meta(robot) -> dict:
+        urdf_xml = robot.get_robot_model()
+        meshes = {f.name: f.read_bytes() for f in _MESH_DIR.iterdir() if f.suffix == '.stl'}
+        root = ET.fromstring(urdf_xml)
+        for link in root.findall('link'):
+            stl = link.get('name', '') + '.stl'
+            if stl in meshes and link.find('visual') is None:
+                ET.SubElement(ET.SubElement(link, 'visual'), 'geometry').append(ET.Element('mesh', filename=stl))
+        return {
+            'urdf': ET.tostring(root, encoding='unicode'),
+            'joint_names': _revolute_joint_names(urdf_xml),
+            'meshes': meshes,
+            'control_frame': 'end_effector',
+        }
 
     def _ensure_robot(self) -> pf.Robot:
         if self._robot is None:
@@ -196,6 +190,7 @@ class Robot(pimm.ControlSystem):
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Sleep]:
         robot = self._ensure_robot()
         self._init_robot(robot)
+        self.robot_meta.emit(Robot._build_robot_meta(robot))
         robot.recover_from_errors()
 
         robot_state = FrankaState()

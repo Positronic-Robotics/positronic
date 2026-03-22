@@ -42,6 +42,7 @@ class DummyRobot(pimm.ControlSystem):
     def __init__(self):
         self.commands = pimm.FakeReceiver(self)
         self.state = pimm.FakeEmitter(self)
+        self.robot_meta = pimm.ControlSystemEmitter(self)
 
     def run(self, should_stop: pimm.SignalReceiver, _clock: pimm.Clock):
         while not should_stop.value:

@@ -49,14 +49,6 @@ _SO101_JOINT_NAMES = ['shoulder_pan', 'shoulder_lift', 'elbow_flex', 'wrist_flex
 
 
 class Robot(pimm.ControlSystem):
-    @property
-    def robot_meta(self) -> dict:
-        return {
-            'urdf': Path(_SO101_URDF_PATH).read_text(),
-            'joint_names': _SO101_JOINT_NAMES,
-            'control_frame': 'gripper_frame_link',
-        }
-
     def __init__(self, motor_bus: MotorBus, home_joints: list[float] | None = None):
         self.motor_bus = motor_bus
         self.mujoco_model_path = 'positronic/drivers/roboarm/so101/so101.xml'
@@ -68,6 +60,7 @@ class Robot(pimm.ControlSystem):
 
         self.grip: pimm.SignalEmitter[float] = pimm.ControlSystemEmitter(self)
         self.state: pimm.SignalEmitter[SO101State] = pimm.ControlSystemEmitter(self)
+        self.robot_meta = pimm.ControlSystemEmitter(self)
 
         print('================================================================')
         print('Warning: Proper dq units is not implemented for SO101!')
@@ -75,6 +68,11 @@ class Robot(pimm.ControlSystem):
 
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Sleep]:
         self.motor_bus.connect()
+        self.robot_meta.emit({
+            'urdf': Path(_SO101_URDF_PATH).read_text(),
+            'joint_names': _SO101_JOINT_NAMES,
+            'control_frame': 'gripper_frame_link',
+        })
 
         rate_limit = pimm.RateLimiter(hz=1000, clock=clock)
         state = SO101State()

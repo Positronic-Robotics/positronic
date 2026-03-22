@@ -33,6 +33,7 @@ class Replay(DsPlayerAgent):
 
         self.robot_state = pimm.FakeReceiver(self)
         self.gripper_state = pimm.FakeReceiver(self)
+        self.robot_meta_in = pimm.FakeReceiver(self)
         self.frames = pimm.ReceiverDict(self, fake=True)
 
     @property
