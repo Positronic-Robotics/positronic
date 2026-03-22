@@ -145,10 +145,8 @@ class Harness(pimm.ControlSystem):
         commands = self.policy.select_action(frozen_view(inputs))
         return commands if isinstance(commands, list) else [commands]
 
-    def _step(
-        self, clock: pimm.Clock, commands_queue: deque, in_error: bool
-    ) -> Generator[pimm.Sleep, None, bool | None]:
-        """Execute one inference step. Returns in_error state, or None to signal exit."""
+    def _step(self, clock: pimm.Clock, commands_queue: deque, in_error: bool) -> Generator[pimm.Sleep, None, bool]:
+        """Execute one inference step. Returns updated in_error state."""
         was_ok = not in_error
         in_error = self.robot_state.value.status == roboarm.RobotStatus.ERROR
         if in_error and was_ok:
@@ -173,8 +171,8 @@ class Harness(pimm.ControlSystem):
                 ))
 
         if not commands_queue:
-            logging.error('Policy returned no commands, exiting harness')
-            return None
+            logging.error('Policy returned no commands')
+            return in_error
 
         roboarm_cmd, target_grip, scheduled_time = commands_queue.popleft()
         yield pimm.Sleep(max(0.0, scheduled_time - clock.now()))
@@ -198,8 +196,6 @@ class Harness(pimm.ControlSystem):
             try:
                 if running:
                     in_error = yield from self._step(clock, commands_queue, in_error)
-                    if in_error is None:
-                        return
             except pimm.NoValueException:
                 pass
             finally:
