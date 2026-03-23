@@ -22,6 +22,7 @@ dependencies = [
     "dearpygui",
     "dm_control",
     "fastapi",
+    "starlette>=1.0.0",
     "jinja2",
     "fire",
     "httpx",

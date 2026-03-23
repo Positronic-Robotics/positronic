@@ -149,9 +149,9 @@ async def index(request: Request):
     if home_page:
         # Render group view as home page
         return templates.TemplateResponse(
+            request,
             'grouped.html',
             {
-                'request': request,
                 'repo_id': app_state['root'],
                 'api_endpoint': f'/api/groups/{home_page}',
                 **_get_nav_context(),
@@ -160,8 +160,7 @@ async def index(request: Request):
         )
     # Default: render episodes
     return templates.TemplateResponse(
-        'index.html',
-        {'request': request, 'repo_id': app_state['root'], **_get_nav_context(), 'current_page': 'episodes'},
+        request, 'index.html', {'repo_id': app_state['root'], **_get_nav_context(), 'current_page': 'episodes'}
     )
 
 
@@ -169,8 +168,7 @@ async def index(request: Request):
 async def episodes_view(request: Request):
     """Episodes list view (used when home_page is set to a group)."""
     return templates.TemplateResponse(
-        'index.html',
-        {'request': request, 'repo_id': app_state['root'], **_get_nav_context(), 'current_page': 'episodes'},
+        request, 'index.html', {'repo_id': app_state['root'], **_get_nav_context(), 'current_page': 'episodes'}
     )
 
 
@@ -202,9 +200,9 @@ async def episode_viewer(request: Request, episode_id: int):
         return obj
 
     return templates.TemplateResponse(
+        request,
         'episode.html',
         {
-            'request': request,
             'episode_id': episode_id,
             'num_episodes': len(ds),
             'rerun_version': rr.__version__,
@@ -419,9 +417,9 @@ async def api_groups(request: Request, suffix: str):
 @app.get('/groups/{suffix}', response_class=HTMLResponse)
 async def grouped_view(request: Request, suffix: str):
     return templates.TemplateResponse(
+        request,
         'grouped.html',
         {
-            'request': request,
             'repo_id': app_state['root'],
             'api_endpoint': f'/api/groups/{suffix}',
             **_get_nav_context(),
