@@ -33,6 +33,7 @@ class LeaderFollower(pimm.ControlSystem):
         self.gripper_state: pimm.SignalReceiver = pimm.FakeReceiver(self)
         self.frames: pimm.ReceiverDict = pimm.ReceiverDict(self, fake=True)
         self.controller_positions: pimm.SignalReceiver = pimm.FakeReceiver(self)
+        self.robot_meta_in: pimm.SignalReceiver = pimm.FakeReceiver(self)
 
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Sleep]:
         from positronic.dataset.ds_writer_agent import DsWriterCommand, DsWriterCommandType
