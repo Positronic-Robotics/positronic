@@ -263,9 +263,30 @@ def stats(output_dir: str, fields: list[str]):
         static = dataset[i].static
         counts[tuple(static.get(f, 'N/A') for f in fields)] += 1
 
+    n = len(fields)
+    subtotals = [0] * n
+    prev_key = None
+
+    def _print_subtotal(level):
+        row = list(prev_key[:level]) + ['Total'] + [''] * (n - level - 1) + [str(subtotals[level])]
+        print('\t'.join(row))
+        subtotals[level] = 0
+
     print('\t'.join(fields + ['count']))
-    for key, count in counts.most_common():
+    for key, count in sorted(counts.items()):
+        if prev_key is not None:
+            change_level = next((i for i in range(n) if key[i] != prev_key[i]), n)
+            for level in range(n - 1, change_level, -1):
+                _print_subtotal(level)
+
         print('\t'.join([*key, str(count)]))
+        for level in range(n):
+            subtotals[level] += count
+        prev_key = key
+
+    if prev_key is not None:
+        for level in range(n - 1, -1, -1):
+            _print_subtotal(level)
 
 
 if __name__ == '__main__':
