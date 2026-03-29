@@ -91,6 +91,8 @@ dev = [
 # lerobot_0_3_3 extra pulls in lerobot==0.3.3 which declares rerun-sdk<0.23,
 # but our usage of lerobot doesn't need rerun — override to unblock resolution.
 override-dependencies = ["rerun-sdk==0.30.0"]
+# cmake 4.3.1 is missing x86_64 Linux wheels on PyPI
+constraint-dependencies = ["cmake<4.3"]
 conflicts = [
     [
         {extra = "lerobot"},
