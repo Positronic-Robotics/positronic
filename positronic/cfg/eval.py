@@ -1,3 +1,4 @@
+from collections import defaultdict
 from datetime import datetime
 from functools import partial
 
@@ -736,17 +737,30 @@ def phail_leaderboard():
     def group_fn(episodes: list[Episode]):
         count = len(episodes)
         total_duration = sum(_effective_duration('eval.duration', ep) for ep in episodes)
-        total_items = sum(ep.get('eval.successful_items', 0) for ep in episodes)
         failed_count = sum(1 for ep in episodes if ep['status'] != 'Pass')
-        total_possible = sum(ep.get('eval.total_items', 0) for ep in episodes)
-        completion = 100 * total_items / total_possible if total_possible > 0 else 0
+
+        # Per-object aggregation: compute UPH and completion per object type, then average equally.
+        by_object: dict[str, list[Episode]] = defaultdict(list)
+        for ep in episodes:
+            by_object[ep['eval.object']].append(ep)
+
+        object_uphs = []
+        object_completions = []
+        for obj_eps in by_object.values():
+            obj_duration = sum(_effective_duration('eval.duration', ep) for ep in obj_eps)
+            obj_items = sum(ep['eval.successful_items'] for ep in obj_eps)
+            obj_possible = sum(ep['eval.total_items'] for ep in obj_eps)
+            if obj_duration > 0:
+                object_uphs.append(obj_items / (obj_duration / 3600))
+            if obj_possible > 0:
+                object_completions.append(100 * obj_items / obj_possible)
 
         return {
             'model': episodes[0]['model'],
             'variant': episodes[0].get('variant', ''),
             'count': count,
-            'UPH': total_items / (total_duration / 3600) if total_duration > 0 else None,
-            'completion': completion,
+            'UPH': sum(object_uphs) / len(object_uphs) if object_uphs else None,
+            'completion': sum(object_completions) / len(object_completions) if object_completions else None,
             'MTBF': total_duration / failed_count / 60 if failed_count > 0 else None,
         }
 
