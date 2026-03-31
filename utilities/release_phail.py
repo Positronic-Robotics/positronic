@@ -34,6 +34,15 @@ PUBLIC_WRITE = dataclasses.replace(PUBLIC, public=False)
 REQUIRED_FIELDS = ['model', 'eval.object', 'eval.successful_items', 'eval.total_items']
 
 
+def _check_dest_empty(dest: str, profile=None):
+    """Raise if destination already contains data."""
+    existing = pos3.ls(dest, profile=profile)
+    if existing:
+        raise SystemExit(
+            f'Destination {dest} already contains {len(existing)} entries. Delete first or use a new path.'
+        )
+
+
 @cfn.config(dataset=eval_cfg.phail_inference_prod, force=False)
 def verify_inference(dataset: Dataset, force: bool):
     """Verify inference episodes for consistency. Raises SystemExit on failure unless force=False."""
@@ -87,12 +96,14 @@ def verify_inference(dataset: Dataset, force: bool):
 @cfn.config(dataset=eval_cfg.phail_teleop_release, dest=f'{DEST_ROOT}/v1.0/training/')
 def training(dataset: Dataset, dest: str):
     """Export fine-tuning dataset (DROID teleoperation with baked eval fields)."""
+    _check_dest_empty(dest, profile=PUBLIC_WRITE)
     migrate_dataset(dataset, dest, profile=PUBLIC_WRITE)
 
 
 @cfn.config(dataset=eval_cfg.phail_inference_prod, dest=f'{DEST_ROOT}/v1.0/inference/')
 def inference(dataset: Dataset, dest: str):
     """Export prod-filtered inference runs."""
+    _check_dest_empty(dest, profile=PUBLIC_WRITE)
     verify_inference(dataset=dataset, force=False)
     migrate_dataset(dataset, dest, profile=PUBLIC_WRITE)
 
@@ -100,6 +111,7 @@ def inference(dataset: Dataset, dest: str):
 @cfn.config(dataset=eval_cfg.phail_human_release, dest=f'{DEST_ROOT}/v1.0/human/')
 def human(dataset: Dataset, dest: str):
     """Export human baseline episodes."""
+    _check_dest_empty(dest, profile=PUBLIC_WRITE)
     migrate_dataset(dataset, dest, profile=PUBLIC_WRITE)
 
 
@@ -116,10 +128,13 @@ def release_all(
 ):
     """Full release: training + inference + human."""
     dest = f'{dest_root}/{version}'
-    migrate_dataset(training_ds, f'{dest}/training/')
+    _check_dest_empty(f'{dest}/training/', profile=PUBLIC_WRITE)
+    _check_dest_empty(f'{dest}/inference/', profile=PUBLIC_WRITE)
+    _check_dest_empty(f'{dest}/human/', profile=PUBLIC_WRITE)
     verify_inference(dataset=inference_ds, force=force)
-    migrate_dataset(inference_ds, f'{dest}/inference/')
-    migrate_dataset(human_ds, f'{dest}/human/')
+    migrate_dataset(training_ds, f'{dest}/training/', profile=PUBLIC_WRITE)
+    migrate_dataset(inference_ds, f'{dest}/inference/', profile=PUBLIC_WRITE)
+    migrate_dataset(human_ds, f'{dest}/human/', profile=PUBLIC_WRITE)
 
 
 if __name__ == '__main__':

@@ -1,5 +1,7 @@
 # DreamZero in Positronic
 
+> **Status: Work in Progress** – DreamZero integration is functional for inference and training but has not been validated in production evaluations. Not included in PhAIL v1.0 results.
+
 ## What is DreamZero?
 
 [DreamZero](https://github.com/dreamzero0/dreamzero) is NVIDIA's 14B-parameter World Action Model that jointly predicts actions and future video frames, enabling zero-shot generalization to new tasks and environments. The pretrained checkpoint (`GEAR-Dreams/DreamZero-DROID`) is trained on the DROID dataset.
@@ -42,7 +44,7 @@ First start downloads the 14B checkpoint via HuggingFace (~10-20 min). Subsequen
 ## Technical Details
 
 - **Action space**: Absolute joint positions (7 DoF) + gripper (1)
-- **Observation**: 3 cameras (2 exterior + 1 wrist) at 320×180 + joint state + language prompt
+- **Observation**: 3 cameras (2 exterior + 1 wrist) at 320×176 + joint state + language prompt
 - **Action horizon**: 24 timesteps per inference
 - **Wire protocol**: roboarena WebSocket + msgpack-numpy
 - **Inference latency**: ~5s on 1× H100 (with DiT caching)

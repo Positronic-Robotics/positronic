@@ -118,7 +118,7 @@ cd docker && docker compose run --rm --service-ports lerobot-server \
 **Other Models:**
 - [LeRobot ACT (0.3.3)](../lerobot_0_3_3/README.md) — Single-task transformer
 - [OpenPI (pi0.5)](../openpi/README.md) — Most capable foundation model
-- [GR00T](../groot/README.md) — NVIDIA's generalist robot policy
+- [GR00T](../gr00t/README.md) — NVIDIA's generalist robot policy
 
 **External:**
 - [HuggingFace LeRobot](https://github.com/huggingface/lerobot) — Official LeRobot repository
