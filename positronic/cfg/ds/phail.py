@@ -1,29 +1,11 @@
-"""Public PhAIL datasets ready for training.
+"""Public PhAIL datasets for training and evaluation.
 
-All datasets are hosted at s3://positronic-public/datasets/ and have transforms
-baked in during migration (no runtime transforms).
+Versioned datasets hosted at s3://positronic-public/datasets/phail/<version>/.
+All transforms (task labels, robot metadata, eval metrics) are baked in during
+migration — no runtime transforms needed.
 
-Migration Process (for future reference):
-------------------------------------------
-To migrate a dataset from internal s3://raw/ to public s3://positronic-public/:
-
-1. Start remote server serving the internal dataset:
-   uv run python -m positronic.dataset.remote_server.server \\
-     --dataset=@positronic.cfg.ds.internal.<INTERNAL_CONFIG> --port=8080
-
-2. Run migration to local staging directory:
-   uv run python -m positronic.dataset.utilities.migrate_remote \\
-     --source_url=http://localhost:8080 \\
-     --dest_path=~/staging/public-datasets/<DATASET_NAME>/
-
-3. Stop the remote server (Ctrl+C)
-
-4. Upload to S3:
-   aws s3 sync ~/staging/public-datasets/<DATASET_NAME>/ \\
-     s3://positronic-public/datasets/<DATASET_NAME>/ \\
-     --endpoint-url=https://storage.eu-north1.nebius.cloud
-
-See internal configs (cfg/ds/internal.py) for source dataset definitions.
+Release process: uv run python utilities/release_phail.py all
+See utilities/release_phail.py for the full migration script.
 """
 
 from datetime import datetime
@@ -32,25 +14,22 @@ import configuronic as cfn
 import pos3
 
 from positronic.dataset import Episode
-from positronic.dataset.dataset import ConcatDataset, Dataset, FilterDataset
-from positronic.dataset.transforms import TransformedDataset
-from positronic.dataset.transforms.episode import Derive, FromValue, Group, Identity
+from positronic.dataset.transforms.episode import Derive, FromValue, Identity
 from positronic.server.positronic_server import ColumnConfig as C
 from positronic.server.positronic_server import GroupTableConfig
 from positronic.server.positronic_server import main as server_main
 from positronic.utils.logging import init_logging
 
 from . import PUBLIC, group, local, local_all, transform
-from .internal import ALL_TASKS, REAL_ROBOT_TRANSFORM, RECOVERY_TASK, SIM_ROBOT_TRANSFORM
+from .internal import SIM_ROBOT_TRANSFORM
 
-# DROID teleoperation data for PhAIL tasks (towels, spoons, scissors)
-# Migrated from: @positronic.cfg.ds.internal.droid
-# Size: 12GB, 352 episodes with task labels baked in static.json
-# TODO: Re-migrate dataset with robot_meta baked in so runtime transforms aren't needed
-phail = transform.override(
-    base=local_all.override(path='s3://positronic-public/datasets/phail/', profile=PUBLIC),
-    transforms=[REAL_ROBOT_TRANSFORM],
-)
+PHAIL_VERSION = 'v1.0'
+_PHAIL_ROOT = f's3://positronic-public/datasets/phail/{PHAIL_VERSION}'
+
+# DROID teleoperation data for PhAIL tasks (towels, spoons, scissors, batteries).
+# Includes baked eval fields (model, status, item counts) so it doubles as the
+# teleoperation baseline in eval_runs without duplicating data on S3.
+phail = local_all.override(path=f'{_PHAIL_ROOT}/training/', profile=PUBLIC)
 
 # Simulated cube stacking dataset
 # Migrated from: @positronic.cfg.ds.internal.sim_stack
@@ -69,22 +48,12 @@ sim_pick_place = transform.override(
 )
 
 
-@cfn.config()
-def _duplicate_recovery(base: Dataset):
-    """Duplicate recovery episodes for every real task."""
+# Evaluation runs (inference only). Servers concat with phail + human for the full leaderboard.
+eval_runs = local_all.override(path=f'{_PHAIL_ROOT}/inference/', profile=PUBLIC)
 
-    def is_recovery(ep):
-        return ep['task'] == RECOVERY_TASK
+# Human baseline: 40 episodes (10 per object, 8 items each, all success).
+human = local_all.override(path=f'{_PHAIL_ROOT}/human/', profile=PUBLIC)
 
-    non_recovery = FilterDataset(base, lambda ep: not is_recovery(ep))
-    recovery = FilterDataset(base, is_recovery)
-    datasets: list[Dataset] = [non_recovery]
-    for task in ALL_TASKS:
-        datasets.append(TransformedDataset(recovery, Group(Derive(task=FromValue(task)), Identity())))
-    return ConcatDataset(*datasets)
-
-
-phail_recovery = _duplicate_recovery.override(base=phail)
 
 # Unified single-task variant: all episodes (including recovery) share one generic instruction.
 # Recovery episodes appear once (not duplicated per task).

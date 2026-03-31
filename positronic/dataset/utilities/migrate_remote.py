@@ -1,8 +1,4 @@
-"""Migrate dataset from remote server to local or S3 storage.
-
-NOTE: This script writes directly to the episode directory, bypassing the normal EpisodeWriter.
-It is tied to the current storage format of the library. If the storage format changes, this
-script must be updated accordingly.
+"""Migrate datasets to local or S3 storage.
 
 Example:
     python -m positronic.dataset.utilities.migrate_remote \\
@@ -10,99 +6,6 @@ Example:
 
     python -m positronic.dataset.utilities.migrate_remote \\
         --source_url=http://localhost:8080 --dest_path=s3://bucket/path
-
-TODO: Fix episode creation timestamp preservation (for future PR)
-======================================================================
-
-PROBLEM:
-    The `created_ts_ns` field in episode metadata gets overwritten during migration with the
-    migration timestamp instead of preserving the original data collection timestamp. This
-    causes the server visualization (cfg/server.py) to show migration time instead of the
-    actual episode creation time.
-
-    Example:
-    - Original (s3://raw/droid/towels/...): created_ts_ns = 1760091240100852093 (Oct 10, 2025)
-    - Migrated (s3://positronic-public/...): created_ts_ns = 1768326957281971891 (Jan 13, 2026)
-
-ROOT CAUSE:
-    1. This migration script only copies static data (line 43-44), not metadata
-    2. LocalDatasetWriter.new_episode() creates DiskEpisodeWriter which ALWAYS sets
-       created_ts_ns to time.time_ns() (local_dataset.py:99)
-    3. There's no API to preserve original metadata during episode creation
-
-IMPACT:
-    - Server UI shows incorrect "started" time for all migrated episodes
-    - Historical analysis of data collection sessions is inaccurate
-    - Episode provenance is lost
-
-SOLUTION (Multi-step fix):
-
-    Step 1: Fix data collection at the source (data_collection.py)
-    ----------------------------------------------------------------
-    - Modify data_collection.py:216 (static_getter function) to include episode start time
-    - Change from: lambda: {'task': task}
-    - Change to: lambda: {'task': task, 'started_ts_ns': time.time_ns()}
-    - This ensures all NEW episodes have creation time in static data
-
-    Step 2: Update migration script (this file)
-    --------------------------------------------
-    - Add preservation of original created_ts_ns from episode.meta to static data:
-
-        for key, value in episode.static.items():
-            ew.set_static(key, value)
-
-        # Preserve original creation timestamp in static data
-        if 'started_ts_ns' not in episode.static and 'created_ts_ns' in episode.meta:
-            ew.set_static('started_ts_ns', episode.meta['created_ts_ns'])
-
-    Step 3: Update internal dataset configs (cfg/ds/internal.py)
-    ------------------------------------------------------------
-    - Add a derive transform to ensure 'started_ts_ns' exists for all episodes
-    - For episodes from old migrations (only have meta.created_ts_ns), derive from meta
-    - For episodes from new data collection (have static.started_ts_ns), use that
-    - Example:
-
-        def _ensure_started_ts(ep: Episode) -> int:
-            # Prefer static (new format) over meta (migration artifact)
-            return ep.static.get('started_ts_ns', ep.meta.get('created_ts_ns'))
-
-        droid_ds = TransformedDataset(
-            base_dataset,
-            Group(Derive(started_ts_ns=_ensure_started_ts), Identity())
-        )
-
-    Step 4: Update server config (cfg/server.py)
-    ---------------------------------------------
-    - Change from: datetime.fromtimestamp(ep.meta['created_ts_ns'] / 1e9)
-    - Change to: datetime.fromtimestamp(ep['started_ts_ns'] / 1e9)
-    - This uses the derived field which has correct timestamp regardless of source
-
-    Step 5: Re-run all migrations
-    ------------------------------
-    - Re-migrate all 3 public datasets (phail, sim-stack-cubes, sim-pick-place)
-    - Upload to s3://positronic-public/datasets/ to replace current data
-    - Verify that migrated episodes have correct started_ts_ns in static.json
-
-    Step 6: Update migration documentation
-    ---------------------------------------
-    - Update cfg/ds/phail.py docstrings to note that started_ts_ns is preserved
-    - Document that new datasets should include started_ts_ns in static at collection time
-
-VERIFICATION:
-    After implementing above steps, verify:
-    1. New data collection includes started_ts_ns in static.json
-    2. Migration preserves started_ts_ns in static.json
-    3. Internal configs derive started_ts_ns correctly (static > meta fallback)
-    4. Server displays correct episode creation times
-    5. Old episodes (pre-fix) still work via meta fallback
-
-FILES TO MODIFY:
-    - positronic/data_collection.py (Step 1)
-    - positronic/dataset/utilities/migrate_remote.py (Step 2)
-    - positronic/cfg/ds/internal.py (Step 3)
-    - positronic/cfg/server.py (Step 4)
-    - Run migration scripts for Step 5
-    - Update cfg/ds/phail.py docstrings (Step 6)
 """
 
 from __future__ import annotations
@@ -116,41 +19,55 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import tqdm
 
+from positronic.dataset.dataset import Dataset
 from positronic.dataset.local_dataset import LocalDatasetWriter
 from positronic.dataset.remote import RemoteDataset
+from positronic.dataset.signal import SupportsEncodedRepresentation
 
 
-def migrate_remote_dataset(source_url: str, dest_path: str) -> None:
-    """Download a remote dataset to local or S3 storage without quality loss.
+def migrate_dataset(source: Dataset, dest_path: str) -> int:
+    """Migrate any dataset to local or S3 storage.
 
-    Args:
-        source_url: URL of the remote dataset server
-        dest_path: Local path or S3 path (s3://bucket/path) for output
+    Signals with encoded representations (e.g. video) are transferred as raw bytes
+    without re-encoding. Static fields are materialized into static.json.
+
+    Returns the number of episodes written.
     """
-    # pos3 handles both local and S3 paths
-    resolved_path = pos3.upload(dest_path, sync_on_error=True, interval=None)
+    resolved_path = pos3.upload(dest_path, sync_on_error=False, interval=None)
+    count = 0
 
-    with RemoteDataset(source_url) as remote_ds, LocalDatasetWriter(resolved_path) as writer:
-        for episode in tqdm.tqdm(remote_ds, total=len(remote_ds), desc='Migrating'):
-            # Preserve original creation timestamp
+    with LocalDatasetWriter(resolved_path) as writer:
+        for episode in tqdm.tqdm(source, total=len(source), desc=f'Migrating → {dest_path}'):
             created_ts_ns = episode.meta.get('created_ts_ns')
             with writer.new_episode(created_ts_ns=created_ts_ns) as ew:
                 for key, value in episode.static.items():
                     ew.set_static(key, value)
 
                 for key, signal in episode.signals.items():
-                    if signal.encoding_format is not None:
+                    if isinstance(signal, SupportsEncodedRepresentation):
                         _write_encoded_signal(signal, ew.path, key)
                     else:
-                        # Batch fetch in chunks to avoid memory pressure
-                        chunk_size = 10_000
-                        for i in range(0, len(signal), chunk_size):
-                            end = min(i + chunk_size, len(signal))
-                            indices = list(range(i, end))
-                            values = signal._values_at(indices)
-                            timestamps = signal._ts_at(indices)
-                            for value, ts in zip(values, timestamps, strict=True):
-                                ew.append(key, value, ts)
+                        _write_raw_signal(signal, ew, key)
+            count += 1
+
+    return count
+
+
+def _write_raw_signal(signal, ew, key: str) -> None:
+    chunk_size = 10_000
+    for i in range(0, len(signal), chunk_size):
+        end = min(i + chunk_size, len(signal))
+        indices = list(range(i, end))
+        values = signal._values_at(indices)
+        timestamps = signal._ts_at(indices)
+        for v, ts in zip(values, timestamps, strict=True):
+            ew.append(key, v, ts)
+
+
+def migrate_remote_dataset(source_url: str, dest_path: str) -> None:
+    """Download a remote dataset to local or S3 storage without quality loss."""
+    with RemoteDataset(source_url) as remote_ds:
+        migrate_dataset(remote_ds, dest_path)
 
 
 def _write_encoded_signal(signal, episode_path: Path, signal_name: str) -> None:

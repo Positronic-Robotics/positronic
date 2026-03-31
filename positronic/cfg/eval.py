@@ -595,7 +595,7 @@ def phail_uph(ep: Episode) -> float | None:
     items = ep.get('eval.successful_items', 0)
     if not items:
         return None
-    duration = ep.get('eval.duration', 0)
+    duration = ep.get('eval.duration') or ep.duration_ns / 1e9
     if not duration:
         return None
     return items / (duration / 3600)
@@ -715,6 +715,83 @@ phail_teleop = base_cfg.transform.override(
 )
 
 phail_episodes = base_cfg.concat_ds.override(datasets=[phail_inference, phail_human, phail_teleop])
+
+
+# =========================================================================================
+# Release configs: source-of-truth fields + robot metadata only.
+# Display fields (model display name, UPH, completion, started) are server-side transforms.
+# =========================================================================================
+
+
+def _raw_model(ep: Episode) -> str:
+    return ep.get('inference.policy.server.type', '')
+
+
+phail_inference_release = base_cfg.transform.override(
+    base=base_cfg.local_all.override(path='s3://inference/phail_final/'),
+    transforms=[
+        Group(
+            Identity(
+                remove=[
+                    'robot_commands.reset',
+                    'inference.policy.port',
+                    'inference.policy.host',
+                    'inference.policy.type',
+                ]
+            ),
+            Derive(model=_raw_model, variant=phail_variant),
+        ),
+        internal.REAL_ROBOT_TRANSFORM,
+    ],
+)
+
+PROD_VARIANTS = {'groot': '270226-ee_rot6d_rel:150000'}
+
+
+def _prod_predicate(ep):
+    model = ep.get('model', '')
+    if model not in PROD_VARIANTS:
+        return True
+    return ep.get('variant', '') == PROD_VARIANTS[model]
+
+
+phail_inference_prod = base_cfg.filter_ds.override(dataset=phail_inference_release, predicate=_prod_predicate)
+
+phail_teleop_release = base_cfg.transform.override(
+    base=_teleop_with_items,
+    transforms=[
+        Group(
+            Identity(),
+            Derive(**{
+                'model': FromValue('teleop'),
+                'variant': FromValue(''),
+                'eval.object': task_code,
+                'eval.outcome': FromValue('Success'),
+                'eval.successful_items': lambda ep: ep['item_count'],
+                'eval.total_items': lambda ep: ep['item_count'],
+            }),
+        ),
+        internal.REAL_ROBOT_TRANSFORM,
+    ],
+)
+
+phail_human_release = base_cfg.transform.override(
+    base=base_cfg.local_all.override(path='s3://raw/human'),
+    transforms=[
+        Group(
+            Identity(),
+            Derive(**{
+                'model': FromValue('human'),
+                'variant': FromValue(''),
+                'eval.object': task_code,
+                'eval.outcome': FromValue('Success'),
+                'eval.successful_items': FromValue(8),
+                'eval.total_items': FromValue(8),
+            }),
+        ),
+        internal.REAL_ROBOT_TRANSFORM,
+    ],
+)
 
 
 @cfn.config()
