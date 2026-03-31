@@ -44,7 +44,7 @@ def migrate_dataset(source: Dataset, dest_path: str) -> int:
                     ew.set_static(key, value)
 
                 for key, signal in episode.signals.items():
-                    if isinstance(signal, SupportsEncodedRepresentation):
+                    if isinstance(signal, SupportsEncodedRepresentation) and signal.encoding_format is not None:
                         _write_encoded_signal(signal, ew.path, key)
                     else:
                         _write_raw_signal(signal, ew, key)

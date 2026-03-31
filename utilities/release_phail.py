@@ -29,9 +29,9 @@ DEST_ROOT = 's3://positronic-public/datasets/phail'
 REQUIRED_FIELDS = ['model', 'eval.object', 'eval.successful_items', 'eval.total_items']
 
 
-@cfn.config(dataset=eval_cfg.phail_inference_prod, force=True)
+@cfn.config(dataset=eval_cfg.phail_inference_prod, force=False)
 def verify_inference(dataset: Dataset, force: bool):
-    """Verify inference episodes for consistency. Raises SystemExit on failure unless force=True."""
+    """Verify inference episodes for consistency. Raises SystemExit on failure unless force=False."""
     issues = []
 
     uph_by_model: dict[str, list[float]] = defaultdict(list)
@@ -75,8 +75,8 @@ def verify_inference(dataset: Dataset, force: bool):
         logging.warning(f'{len(issues)} issues found:')
         for issue in issues:
             logging.warning(issue)
-        if not force:
-            raise SystemExit('Verification failed. Use --force to proceed anyway.')
+        if force:
+            raise SystemExit('Verification failed. Run without --force to proceed with warnings only.')
 
 
 @cfn.config(dataset=eval_cfg.phail_teleop_release, dest=f'{DEST_ROOT}/v1.0/training/')
@@ -85,10 +85,10 @@ def training(dataset: Dataset, dest: str):
     migrate_dataset(dataset, dest)
 
 
-@cfn.config(dataset=eval_cfg.phail_inference_prod, dest=f'{DEST_ROOT}/v1.0/inference/', force=False)
-def inference(dataset: Dataset, dest: str, force: bool):
+@cfn.config(dataset=eval_cfg.phail_inference_prod, dest=f'{DEST_ROOT}/v1.0/inference/')
+def inference(dataset: Dataset, dest: str):
     """Export prod-filtered inference runs."""
-    verify_inference(dataset, force)
+    verify_inference(dataset=dataset, force=False)
     migrate_dataset(dataset, dest)
 
 
