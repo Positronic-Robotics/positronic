@@ -12,6 +12,7 @@ Usage:
     uv run python utilities/release_phail.py verify
 """
 
+import dataclasses
 import logging
 from collections import defaultdict
 
@@ -20,11 +21,15 @@ import numpy as np
 import pos3
 
 from positronic.cfg import eval as eval_cfg
+from positronic.cfg.ds import PUBLIC
 from positronic.dataset.dataset import Dataset
 from positronic.dataset.utilities.migrate_remote import migrate_dataset
 from positronic.utils.logging import init_logging
 
 DEST_ROOT = 's3://positronic-public/datasets/phail'
+
+# Same cache path as PUBLIC (local_name='positronic-public') but with credentials for writing.
+PUBLIC_WRITE = dataclasses.replace(PUBLIC, public=False)
 
 REQUIRED_FIELDS = ['model', 'eval.object', 'eval.successful_items', 'eval.total_items']
 
@@ -82,20 +87,20 @@ def verify_inference(dataset: Dataset, force: bool):
 @cfn.config(dataset=eval_cfg.phail_teleop_release, dest=f'{DEST_ROOT}/v1.0/training/')
 def training(dataset: Dataset, dest: str):
     """Export fine-tuning dataset (DROID teleoperation with baked eval fields)."""
-    migrate_dataset(dataset, dest)
+    migrate_dataset(dataset, dest, profile=PUBLIC_WRITE)
 
 
 @cfn.config(dataset=eval_cfg.phail_inference_prod, dest=f'{DEST_ROOT}/v1.0/inference/')
 def inference(dataset: Dataset, dest: str):
     """Export prod-filtered inference runs."""
     verify_inference(dataset=dataset, force=False)
-    migrate_dataset(dataset, dest)
+    migrate_dataset(dataset, dest, profile=PUBLIC_WRITE)
 
 
 @cfn.config(dataset=eval_cfg.phail_human_release, dest=f'{DEST_ROOT}/v1.0/human/')
 def human(dataset: Dataset, dest: str):
     """Export human baseline episodes."""
-    migrate_dataset(dataset, dest)
+    migrate_dataset(dataset, dest, profile=PUBLIC_WRITE)
 
 
 @cfn.config(

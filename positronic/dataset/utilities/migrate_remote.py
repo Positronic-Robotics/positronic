@@ -25,7 +25,7 @@ from positronic.dataset.remote import RemoteDataset
 from positronic.dataset.signal import SupportsEncodedRepresentation
 
 
-def migrate_dataset(source: Dataset, dest_path: str) -> int:
+def migrate_dataset(source: Dataset, dest_path: str, profile=None) -> int:
     """Migrate any dataset to local or S3 storage.
 
     Signals with encoded representations (e.g. video) are transferred as raw bytes
@@ -33,7 +33,7 @@ def migrate_dataset(source: Dataset, dest_path: str) -> int:
 
     Returns the number of episodes written.
     """
-    resolved_path = pos3.upload(dest_path, sync_on_error=False, interval=None)
+    resolved_path = pos3.upload(dest_path, sync_on_error=False, interval=None, profile=profile)
     count = 0
 
     with LocalDatasetWriter(resolved_path) as writer:
