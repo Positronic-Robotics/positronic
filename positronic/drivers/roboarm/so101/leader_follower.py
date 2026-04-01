@@ -3,6 +3,7 @@ import sys
 from collections.abc import Iterator
 
 import pimm
+from positronic.dataset.ds_writer_agent import DsWriterCommand, DsWriterCommandType
 from positronic.drivers.motors.feetech import MotorBus
 from positronic.drivers.roboarm import command as roboarm_command
 
@@ -36,8 +37,6 @@ class LeaderFollower(pimm.ControlSystem):
         self.robot_meta_in: pimm.SignalReceiver = pimm.FakeReceiver(self)
 
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Sleep]:
-        from positronic.dataset.ds_writer_agent import DsWriterCommand, DsWriterCommandType
-
         start_wav_path = 'positronic/assets/sounds/recording-has-started.wav'
         end_wav_path = 'positronic/assets/sounds/recording-has-stopped.wav'
 
