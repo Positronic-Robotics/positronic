@@ -45,8 +45,8 @@ def so101(motor_bus):
     return Robot(motor_bus=motor_bus)
 
 
-@cfn.config(leader_bus=positronic.cfg.hardware.motors.so101_leader)
-def so101_leader_follower(leader_bus):
-    from positronic.drivers.roboarm.so101.leader_follower import LeaderFollower
+@cfn.config(motor_bus=positronic.cfg.hardware.motors.so101_leader)
+def so101_passive(motor_bus):
+    from positronic.drivers.roboarm.so101.driver import Robot
 
-    return LeaderFollower(leader_bus=leader_bus)
+    return Robot(motor_bus=motor_bus, passive=True)

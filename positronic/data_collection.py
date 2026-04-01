@@ -22,6 +22,7 @@ from positronic.drivers import roboarm
 from positronic.drivers.roboarm import State as RoboarmState
 from positronic.drivers.webxr import WebXR
 from positronic.gui.dpg import DearpyguiUi
+from positronic.gui.keyboard import KeyboardControl
 from positronic.simulator.mujoco.sim import MujocoCameras, MujocoFranka, MujocoGripper, MujocoSim
 from positronic.simulator.mujoco.transforms import MujocoSceneTransform
 from positronic.utils import package_assets_path
@@ -364,52 +365,116 @@ def so101cfg(robot_arm, **kwargs):
     main(robot_arm=robot_arm, gripper=robot_arm, **kwargs)
 
 
+def _state_to_joint_command(state):
+    """Convert a passive robot's state to a JointPosition command (radians)."""
+    return roboarm.command.JointPosition(state.q)
+
+
+def _key_to_ds_command(static_meta):
+    """Return a picklable toggle mapper: 's' toggles START/STOP."""
+    return _KeyToDsCommand(static_meta)
+
+
+class _KeyToDsCommand:
+    def __init__(self, static_meta):
+        self._static_meta = static_meta
+
+    def __call__(self, key):
+        match key:
+            case 's':
+                return DsWriterCommand.START(self._static_meta)
+            case 'p':
+                return DsWriterCommand.STOP()
+        return None
+
+
+def _key_to_sound(key):
+    match key:
+        case 's':
+            return 'positronic/assets/sounds/recording-has-started.wav'
+        case 'p':
+            return 'positronic/assets/sounds/recording-has-stopped.wav'
+    return None
+
+
 def main_leader_follower(
     robot_arm: pimm.ControlSystem,
-    leader_follower: pimm.ControlSystem,
+    leader_arm: pimm.ControlSystem,
     sound: pimm.ControlSystem | None,
     cameras: dict[str, pimm.ControlSystem] | None,
     output_dir: str | None = None,
     task: str | None = None,
 ):
-    """Runs data collection with leader-follower teleoperation."""
+    """Runs data collection with leader-follower teleoperation.
+
+    The leader arm (passive) reads positions and they are forwarded as
+    JointPosition commands to the follower arm (robot_arm).
+    """
     camera_instances = cameras or {}
     camera_emitters = {name: cam.frame for name, cam in camera_instances.items()}
+
+    keyboard = KeyboardControl(quit_key='q')
+    static_meta = {'task': task} if task else {}
+    static_meta['joint_signal'] = 'robot_state.q'
+    static_meta['pose_signals'] = ['robot_state.ee_pose']
+
+    print('Keyboard controls: [s]tart, sto[p], [q]uit')
 
     writer_cm = (
         LocalDatasetWriter(pos3.sync(output_dir, sync_on_error=True)) if output_dir is not None else nullcontext()
     )
     with writer_cm as dataset_writer, pimm.World() as world:
-        ds_agent = wire.wire(world, leader_follower, dataset_writer, camera_emitters, robot_arm, robot_arm, None)
+        # Connect leader -> follower
+        world.connect(leader_arm.state, robot_arm.commands, receiver_wrapper=pimm.map(_state_to_joint_command))
+        world.connect(leader_arm.grip, robot_arm.target_grip)
 
-        # Wire leader_follower to ds_agent for recording control
-        if ds_agent is not None:
-            world.connect(leader_follower.ds_agent_commands, ds_agent.command)
+        # Dataset recording
+        ds_agent = None
+        if dataset_writer is not None:
+            ds_agent = DsWriterAgent(dataset_writer, time_mode=TimeMode.CLOCK)
+            for signal_name in camera_emitters:
+                ds_agent.add_signal(signal_name, Serializers.camera_images)
+            ds_agent.add_signal('robot_commands', Serializers.robot_command)
+            ds_agent.add_signal('robot_state', Serializers.robot_state)
+            ds_agent.add_signal('target_grip')
+            ds_agent.add_signal('grip')
 
-        # Wire sound feedback
+            for signal_name, emitter in camera_emitters.items():
+                world.connect(emitter, ds_agent.inputs[signal_name])
+            world.connect(
+                leader_arm.state, ds_agent.inputs['robot_commands'], receiver_wrapper=pimm.map(_state_to_joint_command)
+            )
+            world.connect(robot_arm.state, ds_agent.inputs['robot_state'])
+            world.connect(leader_arm.grip, ds_agent.inputs['target_grip'])
+            world.connect(robot_arm.grip, ds_agent.inputs['grip'])
+
+            # keyboard → ds_agent is local (both foreground), so emitter_wrapper works
+            world.connect(
+                keyboard.keyboard_inputs, ds_agent.command, emitter_wrapper=pimm.map(_key_to_ds_command(static_meta))
+            )
+
+        # Sound feedback
         if sound is not None:
-            world.connect(leader_follower.sound, sound.wav_path)
+            world.connect(keyboard.keyboard_inputs, sound.wav_path, receiver_wrapper=pimm.map(_key_to_sound))
 
-        bg_cs = [ds_agent, robot_arm, sound, *camera_instances.values()]
-        bg_cs = list(dict.fromkeys(bg_cs))
+        foreground_cs = [keyboard, ds_agent]
+        foreground_cs = [cs for cs in foreground_cs if cs is not None]
+        bg_cs = [leader_arm, robot_arm, sound, *camera_instances.values()]
+        bg_cs = list(dict.fromkeys(filter(None, bg_cs)))
 
-        lf_steps = iter(world.start(leader_follower, bg_cs))
-        while not world.should_stop:
-            try:
-                time.sleep(next(lf_steps).seconds)
-            except StopIteration:
-                break
+        for cmd in world.start(foreground_cs, bg_cs):
+            time.sleep(cmd.seconds)
 
 
 @cfn.config(
     robot_arm=positronic.cfg.hardware.roboarm.so101,
-    leader_follower=positronic.cfg.hardware.roboarm.so101_leader_follower,
+    leader_arm=positronic.cfg.hardware.roboarm.so101_passive,
     sound=positronic.cfg.sound.sound,
     cameras={'image.right': positronic.cfg.hardware.camera.sonix},
 )
-def so101_leader(robot_arm, leader_follower, **kwargs):
+def so101_leader(robot_arm, leader_arm, **kwargs):
     """Runs data collection on SO101 with leader arm teleoperation"""
-    main_leader_follower(robot_arm=robot_arm, leader_follower=leader_follower, **kwargs)
+    main_leader_follower(robot_arm=robot_arm, leader_arm=leader_arm, **kwargs)
 
 
 droid = cfn.Config(
