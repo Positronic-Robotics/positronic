@@ -136,7 +136,7 @@ services:
   openpi-server: &openpi-server-common
     <<: *openpi-common
     container_name: openpi-server
-    entrypoint: ["uv", "run", "--python", "3.11", "python", "-m", "positronic.vendors.openpi.server"]
+    entrypoint: ["uv", "run", "--python", "3.11", "--extra", "openpi", "python", "-m", "positronic.vendors.openpi.server"]
     ports:
       - "8000:8000"
 
