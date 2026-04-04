@@ -16,25 +16,13 @@ class RemotePolicy(Policy):
     expected sizes via ``image_sizes`` in its metadata (see ``Codec.meta``).
     The ``resize`` parameter acts as a fallback when the server does not report
     sizes. Server-reported sizes always take precedence.
-
-    ``horizon_sec`` truncates action chunks on the client side so only actions
-    within the given time window are executed (e.g. ``horizon_sec=0.5`` keeps
-    the first 0.5 s of each chunk). When ``None``, the full chunk is used as-is.
     """
 
-    def __init__(
-        self,
-        host: str,
-        port: int,
-        resize: int | None = None,
-        model_id: str | None = None,
-        horizon_sec: float | None = None,
-    ):
+    def __init__(self, host: str, port: int, resize: int | None = None, model_id: str | None = None):
         self._client = InferenceClient(host, port)
         self.__session: InferenceSession | None = None
         self._resize = resize
         self._model_id = model_id
-        self._horizon_sec = horizon_sec
         self._image_sizes: dict[str, tuple[int, int]] = {}
         self._default_image_size: tuple[int, int] | None = None
 
@@ -82,16 +70,8 @@ class RemotePolicy(Policy):
         return result
 
     def select_action(self, obs: dict[str, Any]) -> dict[str, Any] | list[dict[str, Any]]:
-        """
-        Forwards the observation to the remote server and returns the action.
-        Uses client-side buffering if the server returns a chunk of actions.
-        """
-        # TODO: Remove horizon_sec from RemotePolicy — wrap with ActionHorizon codec instead
-        # (requires splitting ActionTiming into ActionTimestamp + ActionHorizon first).
-        actions = self._session.infer(self._prepare_obs(obs))
-        if self._horizon_sec is not None and isinstance(actions, list):
-            actions = [a for a in actions if a.get('timestamp', 0.0) < self._horizon_sec]
-        return actions
+        """Forwards the observation to the remote server and returns the action."""
+        return self._session.infer(self._prepare_obs(obs))
 
     @property
     def meta(self) -> dict[str, Any]:

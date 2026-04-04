@@ -161,22 +161,16 @@ class _ParallelCodec(Codec):
         return {**self._left.dummy_encoded(data), **self._right.dummy_encoded(data)}
 
 
-class ActionTiming(Codec):
-    """Attaches timings to decoded actions and truncates action sequences to a specified horizon.
+class ActionTimestamp(Codec):
+    """Stamps each decoded action with a ``timestamp`` field derived from fps.
 
-    # TODO: Split into two codecs: ActionTimestamp (stamps actions using fps) and
-    # ActionHorizon (truncates by timestamp < horizon_sec). This lets horizon be
-    # composed independently — e.g. wrapping a RemotePolicy with just ActionHorizon
-    # instead of duplicating truncation logic in RemotePolicy.select_action.
-
-    At inference time, truncates action chunks to ``horizon`` seconds and stamps each action
-    with a ``timestamp`` field. At training time, surfaces ``action_fps`` (and optionally
-    ``action_horizon_sec``) as transform metadata so the training pipeline can read it.
+    For action chunks (lists), assigns ``timestamp = i * (1/fps)`` to each action.
+    For single actions (dicts), assigns ``timestamp = 0.0``.
+    At training time, surfaces ``action_fps`` as transform metadata.
     """
 
-    def __init__(self, *, fps: float, horizon_sec: float | None = None):
+    def __init__(self, *, fps: float):
         self._fps = fps
-        self._horizon_sec = horizon_sec
 
     def encode(self, data):
         return data
@@ -186,8 +180,6 @@ class ActionTiming(Codec):
             dt = 1.0 / self._fps
             for i, d in enumerate(data):
                 d['timestamp'] = i * dt
-            if self._horizon_sec is not None:
-                data = [d for d in data if d['timestamp'] < self._horizon_sec]
             return data
         data['timestamp'] = 0.0
         return data
@@ -198,10 +190,47 @@ class ActionTiming(Codec):
 
     @property
     def meta(self):
-        result = {'action_fps': self._fps}
-        if self._horizon_sec is not None:
-            result['action_horizon_sec'] = self._horizon_sec
-        return result
+        return {'action_fps': self._fps}
+
+
+class ActionHorizon(Codec):
+    """Truncates action chunks to a time horizon.
+
+    Keeps only actions whose ``timestamp`` is strictly less than ``horizon_sec``.
+    Single actions (dicts) pass through unchanged.
+    At training time, surfaces ``action_horizon_sec`` as transform metadata.
+    """
+
+    def __init__(self, horizon_sec: float):
+        self._horizon_sec = horizon_sec
+
+    def encode(self, data):
+        return data
+
+    def decode(self, data, *, context=None):
+        if isinstance(data, list):
+            return [d for d in data if d.get('timestamp', 0.0) < self._horizon_sec]
+        return data
+
+    @property
+    def training_encoder(self) -> EpisodeTransform:
+        return Identity(meta=self.meta)
+
+    @property
+    def meta(self):
+        return {'action_horizon_sec': self._horizon_sec}
+
+
+def ActionTiming(*, fps: float, horizon_sec: float | None = None) -> Codec:
+    """Convenience factory composing ``ActionTimestamp`` and ``ActionHorizon``.
+
+    Equivalent to ``ActionTimestamp(fps=fps) | ActionHorizon(horizon_sec)`` when
+    horizon_sec is set, or just ``ActionTimestamp(fps=fps)`` otherwise.
+    """
+    codec = ActionTimestamp(fps=fps)
+    if horizon_sec is not None:
+        codec = ActionHorizon(horizon_sec) | codec
+    return codec
 
 
 class BinarizeGripTraining(Codec):

@@ -8,7 +8,14 @@ from positronic.dataset.tests.utils import DummySignal
 from positronic.geom import Rotation
 from positronic.policy.action import AbsoluteJointsAction, AbsolutePositionAction, RelativePositionAction
 from positronic.policy.base import Policy
-from positronic.policy.codec import ActionTiming, BinarizeGripInference, BinarizeGripTraining, Codec
+from positronic.policy.codec import (
+    ActionHorizon,
+    ActionTimestamp,
+    ActionTiming,
+    BinarizeGripInference,
+    BinarizeGripTraining,
+    Codec,
+)
 from positronic.policy.observation import ObservationCodec
 
 
@@ -220,6 +227,57 @@ def test_action_horizon_sec_seconds_truncates():
     dt = 1.0 / 30.0
     for i, action in enumerate(result):
         assert action['timestamp'] == pytest.approx(i * dt)
+
+
+def test_action_timestamp_stamps_chunk():
+    actions = [{'v': i} for i in range(4)]
+    codec = ActionTimestamp(fps=10.0)
+    policy = codec.wrap(_ChunkPolicy(actions))
+    result = policy.select_action({})
+    assert len(result) == 4
+    for i, action in enumerate(result):
+        assert action['timestamp'] == pytest.approx(i * 0.1)
+
+
+def test_action_timestamp_single_action():
+    codec = ActionTimestamp(fps=15.0)
+    policy = codec.wrap(_SinglePolicy())
+    result = policy.select_action({})
+    assert isinstance(result, dict)
+    assert result['timestamp'] == 0.0
+
+
+def test_action_timestamp_meta():
+    codec = ActionTimestamp(fps=15.0)
+    assert codec.meta == {'action_fps': 15.0}
+
+
+def test_action_horizon_truncates():
+    actions = [{'v': i, 'timestamp': i * 0.1} for i in range(10)]
+    codec = ActionHorizon(0.3)
+    result = codec.decode(actions)
+    assert [r['v'] for r in result] == [0, 1, 2]
+
+
+def test_action_horizon_passes_single_action():
+    action = {'v': 1, 'timestamp': 0.0}
+    codec = ActionHorizon(0.5)
+    result = codec.decode(action)
+    assert result == {'v': 1, 'timestamp': 0.0}
+
+
+def test_action_horizon_meta():
+    codec = ActionHorizon(1.0)
+    assert codec.meta == {'action_horizon_sec': 1.0}
+
+
+def test_action_timestamp_and_horizon_compose():
+    actions = [{'v': i} for i in range(10)]
+    codec = ActionHorizon(0.3) | ActionTimestamp(fps=10.0)
+    policy = codec.wrap(_ChunkPolicy(actions))
+    result = policy.select_action({})
+    assert len(result) == 3
+    assert [r['v'] for r in result] == [0, 1, 2]
 
 
 def test_single_action_has_zero_timestamp():

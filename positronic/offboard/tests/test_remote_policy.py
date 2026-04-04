@@ -4,6 +4,7 @@ import numpy as np
 
 from positronic.policy import RemotePolicy
 from positronic.policy.base import SampledPolicy
+from positronic.policy.codec import ActionHorizon
 
 
 def _mock_session(metadata=None):
@@ -109,9 +110,9 @@ class TestPrepareObs:
         assert result['flag'] is True
 
 
-class TestHorizonSec:
+class TestActionHorizonWrapping:
     def test_truncates_action_chunks(self):
-        policy = RemotePolicy('localhost', 0, horizon_sec=0.5)
+        policy = RemotePolicy('localhost', 0)
         mock = _mock_session()
         mock.infer.return_value = [
             {'a': 1, 'timestamp': 0.0},
@@ -120,13 +121,14 @@ class TestHorizonSec:
             {'a': 4, 'timestamp': 0.75},
         ]
         policy._RemotePolicy__session = mock
+        wrapped = ActionHorizon(0.5).wrap(policy)
 
-        actions = policy.select_action({})
+        actions = wrapped.select_action({})
         assert len(actions) == 2
         assert actions[0]['timestamp'] == 0.0
         assert actions[1]['timestamp'] == 0.25
 
-    def test_no_truncation_when_none(self):
+    def test_no_truncation_without_horizon(self):
         policy = RemotePolicy('localhost', 0)
         mock = _mock_session()
         mock.infer.return_value = [{'a': 1, 'timestamp': 0.0}, {'a': 2, 'timestamp': 1.0}]
