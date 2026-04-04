@@ -87,10 +87,14 @@ class Robot(pimm.ControlSystem):
             joint_controller.compute_torque(q, dq, tau)
             current_command = np.zeros(api.actuator_count, dtype=np.float32)
 
+            player = command.TrajectoryPlayer()
+
             while not should_stop.value:
                 cmd_msg = self.commands.read()
                 if cmd_msg.updated:
-                    match cmd_msg.data:
+                    player.set(cmd_msg.data)
+                for cmd in player.advance(clock.now()):
+                    match cmd:
                         case command.Reset():
                             joint_controller.set_target_qpos(self.home_joints)
                         case command.CartesianPosition(pose):
@@ -100,7 +104,7 @@ class Robot(pimm.ControlSystem):
                             qpos = np.array(positions, dtype=np.float32)
                             joint_controller.set_target_qpos(qpos)
                         case _:
-                            print(f'Unsuported command: {cmd_msg.data}')
+                            print(f'Unsuported command: {cmd}')
 
                 torque_command = joint_controller.compute_torque(q, dq, tau)
                 np.divide(torque_command, torque_constant, out=current_command)

@@ -87,8 +87,9 @@ class _ApplyAndRecord(RecordingEmitter):
         self._robot_state = robot_state
 
     def emit(self, data, ts=-1):
-        super().emit(data, ts)
-        self._robot_state.apply_command(data)
+        for _t, cmd in data:
+            super().emit(cmd, ts)
+            self._robot_state.apply_command(cmd)
 
 
 def _pair_all(world, harness, robot_state):
@@ -137,11 +138,15 @@ def _run_pipeline():
         scheduler = world.start([harness, driver])
         drive_scheduler(scheduler, clock=clock, steps=500)
 
-    cmd_list = p['cmd_recorder'].emitted
-    grip_list = p['grip_recorder'].emitted
+    cmd_list = p['cmd_recorder'].emitted  # individual commands (unpacked by _ApplyAndRecord)
+    # Grip recorder receives trajectory lists — flatten them
+    grip_list = []
+    for _, traj in p['grip_recorder'].emitted:
+        for _t, grip in traj:
+            grip_list.append(grip)
 
     commands = []
-    for (_cmd_ts, cmd_data), (_grip_ts, grip_data) in zip(cmd_list, grip_list, strict=True):
+    for (_cmd_ts, cmd_data), grip_data in zip(cmd_list, grip_list, strict=True):
         if isinstance(cmd_data, CartesianPosition):
             commands.append({
                 'type': 'cartesian_pos',

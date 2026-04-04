@@ -5,6 +5,7 @@ from collections.abc import Iterator
 import pymodbus.client as ModbusClient
 
 import pimm
+from positronic.drivers.roboarm.command import TrajectoryPlayer
 
 _REG_CMD = 0x03E8
 _REG_IN_POS = 0x07D2
@@ -34,10 +35,14 @@ class Robotiq2F(pimm.ControlSystem):
             client.write_registers(_REG_CMD, [0x0000, 0x0000, 0x0000], device_id=_SLAVE)
             client.write_registers(_REG_CMD, [0x0100, 0x0000, 0x0000], device_id=_SLAVE)
 
+            player = TrajectoryPlayer()
+
             while not should_stop.value:
                 pos_msg = self.target_grip.read()
                 if pos_msg.updated:
-                    pos = int(max(0, min(1, pos_msg.data)) * 255)
+                    player.set(pos_msg.data)
+                for grip in player.advance(clock.now()):
+                    pos = int(max(0, min(1, grip)) * 255)
                     spd = int(max(0, min(255, self.speed.value)))
                     frc = int(max(0, min(255, self.force.value)))
 

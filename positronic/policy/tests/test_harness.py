@@ -139,6 +139,32 @@ def _ds_types(p) -> list[DsWriterCommandType]:
     return [cmd.type for cmd in _ds_commands(p)]
 
 
+def _last_command(p):
+    """Extract the last robot command from the trajectory signal."""
+    msg = p['command_rx'].read()
+    if msg is None or msg.data is None:
+        return None
+    traj = msg.data  # list[tuple[float, CommandType]]
+    return traj[-1][1] if traj else None
+
+
+def _last_grip(p):
+    """Extract the last grip value from the grip trajectory signal."""
+    msg = p['grip_rx'].read()
+    if msg is None or msg.data is None:
+        return None
+    traj = msg.data  # list[tuple[float, float]]
+    return traj[-1][1] if traj else None
+
+
+def _all_grips(p):
+    """Extract all grip values from the grip trajectory signal."""
+    msg = p['grip_rx'].read()
+    if msg is None or msg.data is None:
+        return []
+    return [g for _, g in msg.data]
+
+
 @pytest.mark.timeout(3.0)
 def test_harness_emits_cartesian_move(world, clock):
     pose = Transform3D(translation=np.array([0.4, 0.5, 0.6], dtype=np.float32), rotation=Rotation.identity)
@@ -167,15 +193,12 @@ def test_harness_emits_cartesian_move(world, clock):
     assert obs['grip'] == pytest.approx(0.25)
     assert obs['task'] == 'stack-blocks'
 
-    command_msg = p['command_rx'].read()
-    assert command_msg is not None
-    assert isinstance(command_msg.data, roboarm.command.CartesianPosition)
-    np.testing.assert_allclose(command_msg.data.pose.translation, pose.translation)
-    np.testing.assert_allclose(command_msg.data.pose.rotation.as_quat, pose.rotation.as_quat)
+    cmd = _last_command(p)
+    assert isinstance(cmd, roboarm.command.CartesianPosition)
+    np.testing.assert_allclose(cmd.pose.translation, pose.translation)
+    np.testing.assert_allclose(cmd.pose.rotation.as_quat, pose.rotation.as_quat)
 
-    grip_msg = p['grip_rx'].read()
-    assert grip_msg is not None
-    assert grip_msg.data == pytest.approx(0.33)
+    assert _last_grip(p) == pytest.approx(0.33)
 
 
 @pytest.mark.timeout(3.0)
@@ -208,17 +231,11 @@ def test_harness_waits_for_complete_inputs(world, clock):
 
     assert policy.last_obs is not None
 
-    command_msg = p['command_rx'].read()
-    assert command_msg is not None
-    assert isinstance(command_msg.data, roboarm.command.CartesianPosition)
-    np.testing.assert_allclose(command_msg.data.pose.translation, pose.translation)
+    cmd = _last_command(p)
+    assert isinstance(cmd, roboarm.command.CartesianPosition)
+    np.testing.assert_allclose(cmd.pose.translation, pose.translation)
 
-    grip_msg = p['grip_rx'].read()
-    assert grip_msg is not None
-    assert grip_msg.data == pytest.approx(0.33)
-
-    assert p['command_rx'].read() is command_msg
-    assert p['grip_rx'].read() is grip_msg
+    assert _last_grip(p) == pytest.approx(0.33)
 
 
 @pytest.mark.timeout(3.0)
@@ -286,9 +303,7 @@ def test_finish_emits_ds_stop_with_data_and_homes(world, clock):
     assert stops[0].static_data['outcome'] == 'Success'
     assert stops[0].static_data['notes'] == 'good'
 
-    cmd_msg = p['command_rx'].read()
-    assert cmd_msg is not None
-    assert isinstance(cmd_msg.data, Reset)
+    assert isinstance(_last_command(p), Reset)
 
 
 @pytest.mark.timeout(3.0)
@@ -311,9 +326,7 @@ def test_home_aborts_recording_and_homes(world, clock):
 
     assert DsWriterCommandType.ABORT_EPISODE in _ds_types(p)
 
-    cmd_msg = p['command_rx'].read()
-    assert cmd_msg is not None
-    assert isinstance(cmd_msg.data, Reset)
+    assert isinstance(_last_command(p), Reset)
 
     assert policy.reset_calls == 1  # only from RUN
 
@@ -358,8 +371,8 @@ def test_run_calls_policy_reset_with_context(world, clock):
 
 
 @pytest.mark.timeout(3.0)
-def test_harness_clears_queue_on_home_stepwise(world, clock):
-    """Verify that HOME clears any pending actions in the queue (stepwise check)."""
+def test_harness_clears_trajectory_on_home(world, clock):
+    """Verify that HOME resets trajectory state so next RUN gets a fresh chunk."""
     policy = ChunkPolicy()
     harness = Harness(policy)
     p = _pair_all(world, harness)
@@ -373,27 +386,25 @@ def test_harness_clears_queue_on_home_stepwise(world, clock):
     emit_ready_payload(p['frame_em'], p['robot_em'], p['grip_em'], robot_state)
     drive_scheduler(scheduler, clock=clock, steps=5)
 
-    val = p['grip_rx'].read().data
-    assert 100.0 <= val < 109.0, f'Expected value in chunk 1 range, got {val}'
-    assert val > 100.0, 'Should have advanced past first element'
+    grips = _all_grips(p)
+    assert grips[0] >= 100.0, f'Expected chunk 1, got {grips}'
 
     p['directive_em'].emit(Directive.HOME())
     drive_scheduler(scheduler, clock=clock, steps=2)
 
-    val = p['grip_rx'].read().data
-    assert val == 0.0, f'Expected 0.0 (Home), got {val}'
+    assert _last_grip(p) == 0.0, 'Expected 0.0 (Home)'
 
     p['directive_em'].emit(Directive.RUN(task='test'))
     emit_ready_payload(p['frame_em'], p['robot_em'], p['grip_em'], robot_state)
     drive_scheduler(scheduler, clock=clock, steps=4)
 
-    val = p['grip_rx'].read().data
-    assert val >= 200.0, f'Expected >= 200.0 (Start of New Chunk), got {val}. Queue clearing failed!'
+    grips = _all_grips(p)
+    assert grips[0] >= 200.0, f'Expected chunk 2 (>= 200.0), got {grips}. Trajectory clearing failed!'
 
 
 @pytest.mark.timeout(3.0)
-def test_harness_clears_queue_on_run_stepwise(world, clock):
-    """Verify that RUN clears any pending actions in the queue."""
+def test_harness_clears_trajectory_on_run(world, clock):
+    """Verify that RUN resets trajectory state so a fresh chunk is emitted."""
     policy = ChunkPolicy()
     harness = Harness(policy)
     p = _pair_all(world, harness)
@@ -407,8 +418,8 @@ def test_harness_clears_queue_on_run_stepwise(world, clock):
     emit_ready_payload(p['frame_em'], p['robot_em'], p['grip_em'], robot_state)
     drive_scheduler(scheduler, clock=clock, steps=5)
 
-    val = p['grip_rx'].read().data
-    assert 100.0 <= val < 109.0
+    grips = _all_grips(p)
+    assert grips[0] >= 100.0
 
     p['directive_em'].emit(Directive.RUN(task='test-restart'))
     drive_scheduler(scheduler, clock=clock, steps=1)
@@ -416,13 +427,13 @@ def test_harness_clears_queue_on_run_stepwise(world, clock):
     emit_ready_payload(p['frame_em'], p['robot_em'], p['grip_em'], robot_state)
     drive_scheduler(scheduler, clock=clock, steps=4)
 
-    val = p['grip_rx'].read().data
-    assert val >= 200.0, f'Expected >= 200.0 (Start of New Chunk), got {val}. Queue clearing on RUN failed!'
+    grips = _all_grips(p)
+    assert grips[0] >= 200.0, f'Expected chunk 2 (>= 200.0), got {grips}. Trajectory clearing on RUN failed!'
 
 
 @pytest.mark.timeout(3.0)
 def test_harness_recovers_from_error(world, clock):
-    """ERROR clears pending actions, emits Recover, skips policy; AVAILABLE resumes with fresh chunk."""
+    """ERROR emits Recover trajectory, skips policy; AVAILABLE resumes with fresh chunk."""
     policy = ChunkPolicy()
     harness = Harness(policy)
     p = _pair_all(world, harness)
@@ -436,17 +447,19 @@ def test_harness_recovers_from_error(world, clock):
     drive_scheduler(scheduler, clock=clock, steps=1)
     emit_ready_payload(p['frame_em'], p['robot_em'], p['grip_em'], state_ok)
     drive_scheduler(scheduler, clock=clock, steps=3)
-    assert 100.0 <= p['grip_rx'].read().data < 110.0
+    grips = _all_grips(p)
+    assert grips[0] >= 100.0
 
     obs_before = len(policy.observations)
     p['robot_em'].emit(state_err)
     drive_scheduler(scheduler, clock=clock, steps=2)
-    assert isinstance(p['command_rx'].read().data, Recover)
+    assert isinstance(_last_command(p), Recover)
     assert len(policy.observations) == obs_before
 
     emit_ready_payload(p['frame_em'], p['robot_em'], p['grip_em'], state_ok)
     drive_scheduler(scheduler, clock=clock, steps=3)
-    assert p['grip_rx'].read().data >= 200.0
+    grips = _all_grips(p)
+    assert grips[0] >= 200.0
 
 
 def test_directive_preserves_payload():

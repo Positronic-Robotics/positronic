@@ -63,6 +63,31 @@ def to_wire(command: CommandType) -> dict[str, Any]:
             return {'type': command.TYPE, 'velocities': velocities}
 
 
+class TrajectoryPlayer:
+    """Plays back a timestamped trajectory at the driver's control rate.
+
+    Call ``set()`` when a new trajectory arrives, then ``advance(now)`` each tick
+    to yield all commands whose timestamp has been reached.
+    """
+
+    def __init__(self):
+        self._trajectory: list[tuple[float, Any]] = []
+        self._index: int = 0
+
+    def set(self, trajectory: list[tuple[float, Any]]):
+        self._trajectory = trajectory
+        self._index = 0
+
+    def advance(self, current_time: float):
+        """Yield all commands whose timestamp <= current_time."""
+        while self._index < len(self._trajectory):
+            ts, cmd = self._trajectory[self._index]
+            if ts > current_time:
+                break
+            self._index += 1
+            yield cmd
+
+
 def from_wire(wire: dict[str, Any]) -> CommandType:
     match wire['type']:
         case 'reset':

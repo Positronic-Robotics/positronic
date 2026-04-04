@@ -214,6 +214,8 @@ class Robot(pimm.ControlSystem):
         self._reset(robot, robot_state)
 
         in_error = False
+        player = command.TrajectoryPlayer()
+
         while not should_stop.value:
             st = robot.state()
             robot_state.encode(st)
@@ -225,11 +227,12 @@ class Robot(pimm.ControlSystem):
 
             cmd_msg = self.commands.read()
             if cmd_msg.updated:
-                match cmd_msg.data:
+                player.set(cmd_msg.data)
+            for cmd in player.advance(clock.now()):
+                match cmd:
                     case command.Reset():
                         _recover_if_needed(robot, in_error)
                         self._reset(robot, robot_state)
-                        continue
                     case command.Recover():
                         _recover_if_needed(robot, in_error)
                     case _ if in_error:
@@ -243,7 +246,7 @@ class Robot(pimm.ControlSystem):
                     case command.JointDelta(velocities=joint_delta):
                         robot.set_target_joints(st.q + joint_delta)
                     case _:
-                        raise NotImplementedError(f'Unsupported command {cmd_msg.data}')
+                        raise NotImplementedError(f'Unsupported command {cmd}')
 
             yield pimm.Sleep(rate_limiter.wait_time())
 
