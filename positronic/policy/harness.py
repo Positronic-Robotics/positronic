@@ -139,8 +139,8 @@ class Harness(pimm.ControlSystem):
         if len(images) != len(self.frames):
             return None
         inputs.update(images)
-        inputs['__wall_time_ns__'] = time.time_ns()
-        inputs['__inference_time_ns__'] = clock.now_ns()
+        inputs['wall_time_ns'] = time.time_ns()
+        inputs['inference_time_ns'] = clock.now_ns()
         inputs.update(self.context)
         commands = self.policy.select_action(frozen_view(inputs))
         return commands if isinstance(commands, list) else [commands]
@@ -169,7 +169,7 @@ class Harness(pimm.ControlSystem):
                 commands_queue.append((
                     roboarm.command.from_wire(cmd['robot_command']),
                     cmd['target_grip'],
-                    prediction_time + cmd.get('timestamp', 0.0),
+                    cmd.get('timestamp', prediction_time),
                 ))
 
         if not commands_queue:

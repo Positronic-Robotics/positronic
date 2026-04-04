@@ -133,9 +133,9 @@ def test_session_encode_extracts_wall_time(tmp_path):
     session = _make_session(tmp_path)
     wall_time, inf_time = 1_000_000_000, 500_000_000
 
-    encoded = session.encode({'__wall_time_ns__': wall_time, '__inference_time_ns__': inf_time, 'x': 1.0})
+    encoded = session.encode({'wall_time_ns': wall_time, 'inference_time_ns': inf_time, 'x': 1.0})
 
-    assert encoded == {'__wall_time_ns__': wall_time, '__inference_time_ns__': inf_time, 'x': 1.0, 'encoded': True}
+    assert encoded == {'wall_time_ns': wall_time, 'inference_time_ns': inf_time, 'x': 1.0, 'encoded': True}
     assert session._time_ns == wall_time
     assert session._inference_time_ns == inf_time
 
@@ -181,7 +181,7 @@ def test_session_delegates(tmp_path):
 def test_session_log_filtering(tmp_path):
     session = _make_session(tmp_path)
     session.encode({
-        '__wall_time_ns__': 1_000_000,
+        'wall_time_ns': 1_000_000,
         'task': 'pick up the cube',
         'camera': np.zeros((4, 4, 3), dtype=np.uint8),
         'joint_pos': np.array([1.0, 2.0], dtype=np.float32),
@@ -194,7 +194,7 @@ def test_session_log_filtering(tmp_path):
     assert any('joints_list' in p for p in session._numeric_paths)
 
     all_paths = session._image_paths + session._numeric_paths
-    assert not any('__wall_time_ns__' in p for p in all_paths)
+    assert not any('wall_time_ns' in p for p in all_paths)
     assert not any('task' in p for p in all_paths)
 
 

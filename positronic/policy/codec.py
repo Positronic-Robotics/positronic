@@ -164,8 +164,9 @@ class _ParallelCodec(Codec):
 class ActionTimestamp(Codec):
     """Stamps each decoded action with a ``timestamp`` field derived from fps.
 
-    For action chunks (lists), assigns ``timestamp = i * (1/fps)`` to each action.
-    For single actions (dicts), assigns ``timestamp = 0.0``.
+    When the observation context contains ``inference_time_ns`` (pimm clock
+    nanoseconds), stamps absolute time: ``now + i * (1/fps)``.  Otherwise
+    falls back to relative timestamps: ``i * (1/fps)``.
     At training time, surfaces ``action_fps`` as transform metadata.
     """
 
@@ -176,12 +177,13 @@ class ActionTimestamp(Codec):
         return data
 
     def decode(self, data, *, context=None):
+        now = (context.get('inference_time_ns', 0) / 1e9) if context else 0.0
         if isinstance(data, list):
             dt = 1.0 / self._fps
             for i, d in enumerate(data):
-                d['timestamp'] = i * dt
+                d['timestamp'] = now + i * dt
             return data
-        data['timestamp'] = 0.0
+        data['timestamp'] = now
         return data
 
     @property
@@ -209,7 +211,8 @@ class ActionHorizon(Codec):
 
     def decode(self, data, *, context=None):
         if isinstance(data, list):
-            return [d for d in data if d.get('timestamp', 0.0) < self._horizon_sec]
+            now = (context.get('inference_time_ns', 0) / 1e9) if context else 0.0
+            return [d for d in data if d.get('timestamp', 0.0) - now < self._horizon_sec]
         return data
 
     @property
@@ -384,7 +387,7 @@ class _RecordingSession(Codec):
     def _log(self, prefix: str, data: dict):
         """Recursively log *data* under *prefix*, accumulating entity paths."""
         for key, value in data.items():
-            if (key.startswith('__') and key.endswith('__')) or isinstance(value, str):
+            if key.endswith('_time_ns') or isinstance(value, str):
                 continue
             path = f'{prefix}/{key}'
             if isinstance(value, dict):
@@ -404,9 +407,9 @@ class _RecordingSession(Codec):
             rr.send_blueprint(bp)
 
     def encode(self, data: dict) -> dict:
-        # __wall_time_ns__ / __inference_time_ns__ injected by Inference.run(); ignored by inner codecs
-        self._time_ns = data.get('__wall_time_ns__', time.time_ns())
-        self._inference_time_ns = data.get('__inference_time_ns__')
+        # wall_time_ns / inference_time_ns injected by Inference.run(); ignored by inner codecs
+        self._time_ns = data.get('wall_time_ns', time.time_ns())
+        self._inference_time_ns = data.get('inference_time_ns')
         encoded = self._inner.encode(data) if self._inner else data
         with self._rec:
             self._set_timelines(self._time_ns, self._inference_time_ns)
