@@ -74,8 +74,11 @@ class TrajectoryPlayer:
         self._trajectory: list[tuple[float, Any]] = []
         self._index: int = 0
 
-    def set(self, trajectory: list[tuple[float, Any]]):
-        self._trajectory = trajectory
+    def set(self, data):
+        if isinstance(data, list):
+            self._trajectory = data
+        else:
+            self._trajectory = [(0.0, data)]
         self._index = 0
 
     def advance(self, current_time: float):

@@ -167,9 +167,12 @@ class Harness(pimm.ControlSystem):
         robot_traj = [
             (cmd.get('timestamp', prediction_time), roboarm.command.from_wire(cmd['robot_command'])) for cmd in commands
         ]
-        grip_traj = [(cmd.get('timestamp', prediction_time), cmd['target_grip']) for cmd in commands]
+        grip_traj = [
+            (cmd.get('timestamp', prediction_time), cmd['target_grip']) for cmd in commands if 'target_grip' in cmd
+        ]
         self.robot_commands.emit(robot_traj)
-        self.target_grip.emit(grip_traj)
+        if grip_traj:
+            self.target_grip.emit(grip_traj)
         self._trajectory_end = robot_traj[-1][0] if robot_traj else None
         return in_error
 
