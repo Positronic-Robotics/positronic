@@ -21,7 +21,7 @@ import rerun.blueprint as rrb
 
 from positronic.dataset.transforms import Elementwise
 from positronic.dataset.transforms.episode import Derive, EpisodeTransform, Group, Identity
-from positronic.policy.base import Policy
+from positronic.policy.base import DelegatingPolicy, DelegatingSession, Policy, Session
 from positronic.utils import merge_dicts
 from positronic.utils.rerun_compat import log_numeric_series, set_timeline_sequence, set_timeline_time
 
@@ -93,12 +93,16 @@ class Codec:
         return _WrappedPolicy(policy, self)
 
     @final
-    def __or__(self, other: 'Codec') -> 'Codec':
-        return _ComposedCodec(self, other)
+    def __or__(self, other):
+        if isinstance(other, Codec):
+            return _ComposedCodec(self, other)
+        return NotImplemented
 
     @final
-    def __and__(self, other: 'Codec') -> 'Codec':
-        return _ParallelCodec(self, other)
+    def __and__(self, other):
+        if isinstance(other, Codec):
+            return _ParallelCodec(self, other)
+        return NotImplemented
 
 
 class _ComposedCodec(Codec):
@@ -161,35 +165,32 @@ class _ParallelCodec(Codec):
         return {**self._left.dummy_encoded(data), **self._right.dummy_encoded(data)}
 
 
-class ActionTiming(Codec):
-    """Attaches timings to decoded actions and truncates action sequences to a specified horizon.
+class ActionTimestamp(Codec):
+    """Stamps each decoded action with an absolute ``timestamp``.
 
-    # TODO: Split into two codecs: ActionTimestamp (stamps actions using fps) and
-    # ActionHorizon (truncates by timestamp < horizon_sec). This lets horizon be
-    # composed independently — e.g. wrapping a RemotePolicy with just ActionHorizon
-    # instead of duplicating truncation logic in RemotePolicy.select_action.
+    Reads "now" from the observation context (``inference_time_ns``, nanoseconds)
+    and assigns ``timestamp = now + i * (1/fps)`` to each action in a chunk.
+    Single actions get ``timestamp = now``. This means trajectories carry
+    absolute timestamps — the harness and robot driver use them directly
+    without adding prediction time.
 
-    At inference time, truncates action chunks to ``horizon`` seconds and stamps each action
-    with a ``timestamp`` field. At training time, surfaces ``action_fps`` (and optionally
-    ``action_horizon_sec``) as transform metadata so the training pipeline can read it.
+    At training time, surfaces ``action_fps`` as transform metadata.
     """
 
-    def __init__(self, *, fps: float, horizon_sec: float | None = None):
+    def __init__(self, *, fps: float):
         self._fps = fps
-        self._horizon_sec = horizon_sec
 
     def encode(self, data):
         return data
 
     def decode(self, data, *, context=None):
+        now = context.get('inference_time_ns', 0) / 1e9 if context else 0.0
         if isinstance(data, list):
             dt = 1.0 / self._fps
             for i, d in enumerate(data):
-                d['timestamp'] = i * dt
-            if self._horizon_sec is not None:
-                data = [d for d in data if d['timestamp'] < self._horizon_sec]
+                d['timestamp'] = now + i * dt
             return data
-        data['timestamp'] = 0.0
+        data['timestamp'] = now
         return data
 
     @property
@@ -198,10 +199,49 @@ class ActionTiming(Codec):
 
     @property
     def meta(self):
-        result = {'action_fps': self._fps}
-        if self._horizon_sec is not None:
-            result['action_horizon_sec'] = self._horizon_sec
-        return result
+        return {'action_fps': self._fps}
+
+
+class ActionHorizon(Codec):
+    """Truncates action chunks to a time horizon.
+
+    Keeps only actions whose ``timestamp`` is within ``horizon_sec`` of "now"
+    (read from ``inference_time_ns`` in context). Single actions pass through.
+    At training time, surfaces ``action_horizon_sec`` as transform metadata.
+    """
+
+    def __init__(self, horizon_sec: float):
+        self._horizon_sec = horizon_sec
+
+    def encode(self, data):
+        return data
+
+    def decode(self, data, *, context=None):
+        if isinstance(data, list):
+            now = context.get('inference_time_ns', 0) / 1e9 if context else 0.0
+            cutoff = now + self._horizon_sec
+            return [d for d in data if d.get('timestamp', 0.0) < cutoff]
+        return data
+
+    @property
+    def training_encoder(self) -> EpisodeTransform:
+        return Identity(meta=self.meta)
+
+    @property
+    def meta(self):
+        return {'action_horizon_sec': self._horizon_sec}
+
+
+def ActionTiming(*, fps: float, horizon_sec: float | None = None) -> Codec:
+    """Convenience factory composing ``ActionTimestamp`` and ``ActionHorizon``.
+
+    Equivalent to ``ActionTimestamp(fps=fps) | ActionHorizon(horizon_sec)`` when
+    horizon_sec is set, or just ``ActionTimestamp(fps=fps)`` otherwise.
+    """
+    codec = ActionTimestamp(fps=fps)
+    if horizon_sec is not None:
+        codec = ActionHorizon(horizon_sec) | codec
+    return codec
 
 
 class BinarizeGripTraining(Codec):
@@ -264,27 +304,36 @@ class BinarizeGripInference(Codec):
         return data
 
 
-class _WrappedPolicy(Policy):
-    """Policy wrapped with a codec: encodes observations, decodes actions."""
+class _WrappedSession(DelegatingSession):
+    """Session wrapped with a codec: encodes observations, decodes actions."""
 
-    def __init__(self, policy: Policy, codec: Codec):
-        self._policy = policy
+    def __init__(self, inner: Session, codec: 'Codec'):
+        super().__init__(inner)
         self._codec = codec
 
-    def select_action(self, obs):
+    def __call__(self, obs):
         encoded = self._codec.encode(obs)
-        action = self._policy.select_action(encoded)
+        action = self._inner(encoded)
         return self._codec.decode(action, context=obs)
-
-    def reset(self, context=None):
-        self._policy.reset(context)
 
     @property
     def meta(self):
-        return self._policy.meta | self._codec.meta
+        return self._inner.meta | self._codec.meta
 
-    def close(self):
-        self._policy.close()
+
+class _WrappedPolicy(DelegatingPolicy):
+    """Policy wrapped with a codec: creates codec-wrapped sessions."""
+
+    def __init__(self, policy: Policy, codec: 'Codec'):
+        super().__init__(policy)
+        self._codec = codec
+
+    def new_session(self, context=None):
+        return _WrappedSession(self._inner.new_session(context), self._codec)
+
+    @property
+    def meta(self):
+        return self._inner.meta | self._codec.meta
 
 
 def _squeeze_batch(arr: np.ndarray) -> np.ndarray:
@@ -355,7 +404,7 @@ class _RecordingSession(Codec):
     def _log(self, prefix: str, data: dict):
         """Recursively log *data* under *prefix*, accumulating entity paths."""
         for key, value in data.items():
-            if (key.startswith('__') and key.endswith('__')) or isinstance(value, str):
+            if key.endswith('_time_ns') or isinstance(value, str):
                 continue
             path = f'{prefix}/{key}'
             if isinstance(value, dict):
@@ -375,9 +424,9 @@ class _RecordingSession(Codec):
             rr.send_blueprint(bp)
 
     def encode(self, data: dict) -> dict:
-        # __wall_time_ns__ / __inference_time_ns__ injected by Inference.run(); ignored by inner codecs
-        self._time_ns = data.get('__wall_time_ns__', time.time_ns())
-        self._inference_time_ns = data.get('__inference_time_ns__')
+        # wall_time_ns / inference_time_ns injected by Inference.run(); ignored by inner codecs
+        self._time_ns = data.get('wall_time_ns', time.time_ns())
+        self._inference_time_ns = data.get('inference_time_ns')
         encoded = self._inner.encode(data) if self._inner else data
         with self._rec:
             self._set_timelines(self._time_ns, self._inference_time_ns)
@@ -418,8 +467,8 @@ class _RecordingSession(Codec):
 class RecordingCodec(Codec):
     """Transparent ``Codec`` wrapper that logs the encode/decode cycle to per-episode ``.rrd`` files.
 
-    Each ``reset()`` on the wrapped policy creates a ``_RecordingSession`` with independent
-    state, so concurrent sessions don't interfere with each other.
+    Each ``new_session()`` on the wrapped policy creates a fresh recording codec session
+    with independent state, so concurrent sessions don't interfere with each other.
     """
 
     def __init__(self, inner: Codec | None, recording_dir: str | Path):
@@ -457,30 +506,16 @@ class RecordingCodec(Codec):
         return self._inner.dummy_encoded(data) if self._inner else (data or {})
 
 
-class _RecordingPolicy(Policy):
-    """Policy wrapper that creates a fresh ``_RecordingSession`` on each ``reset()``."""
+class _RecordingPolicy(DelegatingPolicy):
+    """Policy wrapper that creates a fresh ``_RecordingSession`` codec on each ``new_session()``."""
 
     def __init__(self, policy: Policy, codec: RecordingCodec):
-        self._policy = policy
+        super().__init__(policy)
         self._codec = codec
-        self._active: Policy | None = None
 
-    def select_action(self, obs):
-        if self._active is None:
-            raise RuntimeError('reset() must be called before select_action()')
-        return self._active.select_action(obs)
-
-    def reset(self, context=None):
-        session = self._codec._new_session()
-        self._active = _WrappedPolicy(self._policy, session)
-        self._active.reset(context)
+    def new_session(self, context=None):
+        return _WrappedSession(self._inner.new_session(context), self._codec._new_session())
 
     @property
     def meta(self):
-        if self._active is not None:
-            return self._active.meta
-        return self._codec.meta
-
-    def close(self):
-        if self._active is not None:
-            self._active.close()
+        return self._inner.meta | self._codec.meta

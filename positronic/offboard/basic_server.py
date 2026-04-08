@@ -73,21 +73,22 @@ class InferenceServer:
             await websocket.close(code=1008, reason='Policy not found')
             return
 
+        session = None
         try:
             # Send loading status before blocking operation
             await websocket.send_bytes(serialise({'status': 'loading', 'message': 'Loading policy...'}))
 
             policy = policy_factory()
-            policy.reset()
+            session = policy.new_session()
 
             # Send ready with metadata
-            await websocket.send_bytes(serialise({'status': 'ready', 'meta': policy.meta}))
+            await websocket.send_bytes(serialise({'status': 'ready', 'meta': session.meta}))
 
             # Inference Loop
             async for message in websocket.iter_bytes():
                 try:
                     obs = deserialise(message)
-                    action = policy.select_action(obs)
+                    action = session(obs)
                     await websocket.send_bytes(serialise({'result': action}))
 
                 except Exception as e:
@@ -99,6 +100,9 @@ class InferenceServer:
         except (WebSocketDisconnect, Exception) as e:
             logger.info(f'Connection closed: {e}')
             logger.debug(traceback.format_exc())
+        finally:
+            if session is not None:
+                session.close()
 
     def serve(self):
         config = uvicorn.Config(self.app, host=self.host, port=self.port, log_level='info')

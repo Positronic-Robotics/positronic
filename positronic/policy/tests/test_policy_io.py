@@ -7,8 +7,15 @@ from positronic.dataset.episode import EpisodeContainer
 from positronic.dataset.tests.utils import DummySignal
 from positronic.geom import Rotation
 from positronic.policy.action import AbsoluteJointsAction, AbsolutePositionAction, RelativePositionAction
-from positronic.policy.base import Policy
-from positronic.policy.codec import ActionTiming, BinarizeGripInference, BinarizeGripTraining, Codec
+from positronic.policy.base import Policy, Session
+from positronic.policy.codec import (
+    ActionHorizon,
+    ActionTimestamp,
+    ActionTiming,
+    BinarizeGripInference,
+    BinarizeGripTraining,
+    Codec,
+)
 from positronic.policy.observation import ObservationCodec
 
 
@@ -143,17 +150,25 @@ def test_absolute_joints_action_encode_decode():
     assert np.isclose(target_grip, g[0])
 
 
+class _FixedSession(Session):
+    def __init__(self, result):
+        self._result = result
+
+    def __call__(self, obs):
+        return self._result
+
+
 class _ChunkPolicy(Policy):
     def __init__(self, actions: list[dict]):
         self._actions = actions
 
-    def select_action(self, obs):
-        return list(self._actions)
+    def new_session(self, context=None):
+        return _FixedSession(list(self._actions))
 
 
 class _SinglePolicy(Policy):
-    def select_action(self, obs):
-        return {'v': 42}
+    def new_session(self, context=None):
+        return _FixedSession({'v': 42})
 
 
 class _PassthroughCodec(Codec):
@@ -166,8 +181,8 @@ class _PassthroughCodec(Codec):
 
 
 class _MetaPolicy(Policy):
-    def select_action(self, obs):
-        return {}
+    def new_session(self, context=None):
+        return _FixedSession({})
 
     @property
     def meta(self):
@@ -179,7 +194,7 @@ def test_action_horizon_sec_truncates_chunk():
     # action_horizon_sec=0.1s at action_fps=30 -> 3 actions
     codec = ActionTiming(fps=30.0, horizon_sec=0.1)
     policy = codec.wrap(_ChunkPolicy(actions))
-    result = policy.select_action({})
+    result = policy.new_session()({})
     assert [r['v'] for r in result] == [0, 1, 2]
 
 
@@ -187,7 +202,7 @@ def test_action_horizon_sec_none_returns_full_chunk():
     actions = [{'v': i} for i in range(5)]
     codec = ActionTiming(fps=30.0)
     policy = codec.wrap(_ChunkPolicy(actions))
-    result = policy.select_action({})
+    result = policy.new_session()({})
     assert len(result) == 5
 
 
@@ -196,7 +211,7 @@ def test_action_horizon_sec_larger_than_chunk():
     # action_horizon_sec=10s at action_fps=10 -> 100 actions max, but only 3 available
     codec = ActionTiming(fps=10.0, horizon_sec=10.0)
     policy = codec.wrap(_ChunkPolicy(actions))
-    result = policy.select_action({})
+    result = policy.new_session()({})
     assert len(result) == 3
 
 
@@ -204,7 +219,7 @@ def test_timestamps_embedded_in_actions():
     actions = [{'v': i} for i in range(4)]
     codec = ActionTiming(fps=10.0)
     policy = codec.wrap(_ChunkPolicy(actions))
-    result = policy.select_action({})
+    result = policy.new_session()({})
     assert len(result) == 4
     for i, action in enumerate(result):
         assert action['timestamp'] == pytest.approx(i * 0.1)
@@ -215,17 +230,65 @@ def test_action_horizon_sec_seconds_truncates():
     # 0.1s at 30fps -> 3 actions
     codec = ActionTiming(fps=30.0, horizon_sec=0.1)
     policy = codec.wrap(_ChunkPolicy(actions))
-    result = policy.select_action({})
+    result = policy.new_session()({})
     assert len(result) == 3
     dt = 1.0 / 30.0
     for i, action in enumerate(result):
         assert action['timestamp'] == pytest.approx(i * dt)
 
 
+def test_action_timestamp_stamps_chunk():
+    actions = [{'v': i} for i in range(4)]
+    codec = ActionTimestamp(fps=10.0)
+    result = codec.decode(actions)
+    assert len(result) == 4
+    for i, action in enumerate(result):
+        assert action['timestamp'] == pytest.approx(i * 0.1)
+
+
+def test_action_timestamp_single_action():
+    codec = ActionTimestamp(fps=15.0)
+    result = codec.decode({'v': 42})
+    assert result['timestamp'] == 0.0
+
+
+def test_action_timestamp_meta():
+    codec = ActionTimestamp(fps=15.0)
+    assert codec.meta == {'action_fps': 15.0}
+
+
+def test_action_horizon_truncates():
+    actions = [{'v': i, 'timestamp': i * 0.1} for i in range(10)]
+    codec = ActionHorizon(0.3)
+    result = codec.decode(actions)
+    assert [r['v'] for r in result] == [0, 1, 2]
+
+
+def test_action_horizon_passes_single_action():
+    action = {'v': 1, 'timestamp': 0.0}
+    codec = ActionHorizon(0.5)
+    result = codec.decode(action)
+    assert result == {'v': 1, 'timestamp': 0.0}
+
+
+def test_action_horizon_meta():
+    codec = ActionHorizon(1.0)
+    assert codec.meta == {'action_horizon_sec': 1.0}
+
+
+def test_action_timestamp_and_horizon_compose():
+    actions = [{'v': i} for i in range(10)]
+    codec = ActionHorizon(0.3) | ActionTimestamp(fps=10.0)
+    policy = codec.wrap(_ChunkPolicy(actions))
+    result = policy.new_session()({})
+    assert len(result) == 3
+    assert [r['v'] for r in result] == [0, 1, 2]
+
+
 def test_single_action_has_zero_timestamp():
     codec = ActionTiming(fps=15.0)
     policy = codec.wrap(_SinglePolicy())
-    result = policy.select_action({})
+    result = policy.new_session()({})
     assert isinstance(result, dict)
     assert result['timestamp'] == 0.0
     assert result['v'] == 42

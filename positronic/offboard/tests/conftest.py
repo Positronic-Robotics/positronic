@@ -26,26 +26,32 @@ def run_server_in_thread(server: InferenceServer, loop: asyncio.AbstractEventLoo
         loop.close()
 
 
-@pytest.fixture
-def mock_policy() -> MagicMock:
-    """Mock policy for testing."""
+def _make_mock_policy(action, meta):
+    """Create a mock policy with session-based API."""
+    session = MagicMock()
+    session.return_value = action
+    session.meta = meta
+    session.close = MagicMock()
+
     policy = MagicMock()
-    policy.select_action.return_value = {'action_data': [1, 2, 3]}
-    policy.meta = {'model_name': 'test_model'}
+    policy.new_session.return_value = session
+    policy.meta = meta
+    policy._mock_session = session  # expose for assertions
     return policy
 
 
 @pytest.fixture
+def mock_policy() -> MagicMock:
+    """Mock policy for testing."""
+    return _make_mock_policy({'action_data': [1, 2, 3]}, {'model_name': 'test_model'})
+
+
+@pytest.fixture
 def mock_policy_registry() -> dict[str, MagicMock]:
-    policy_alpha = MagicMock()
-    policy_alpha.select_action.return_value = {'action_data': ['alpha']}
-    policy_alpha.meta = {'model_name': 'alpha'}
-
-    policy_beta = MagicMock()
-    policy_beta.select_action.return_value = {'action_data': ['beta']}
-    policy_beta.meta = {'model_name': 'beta'}
-
-    return {'alpha': policy_alpha, 'beta': policy_beta}
+    return {
+        'alpha': _make_mock_policy({'action_data': ['alpha']}, {'model_name': 'alpha'}),
+        'beta': _make_mock_policy({'action_data': ['beta']}, {'model_name': 'beta'}),
+    }
 
 
 @pytest.fixture

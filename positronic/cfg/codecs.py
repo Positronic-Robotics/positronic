@@ -49,14 +49,17 @@ def compose(obs, action, fps: float, horizon: float | None, binarize_grip: tuple
 
     Layout::
 
-        ActionTiming | [BinarizeGripTraining | BinarizeGripInference] | obs & action
+        [ActionHorizon] | ActionTimestamp | [BinarizeGripTraining | BinarizeGripInference] | obs & action
     """
-    from positronic.policy.codec import ActionTiming, BinarizeGripInference, BinarizeGripTraining
+    from positronic.policy.codec import ActionHorizon, ActionTimestamp, BinarizeGripInference, BinarizeGripTraining
 
     result = obs & action
     if binarize_grip:
         result = BinarizeGripTraining(binarize_grip) | BinarizeGripInference() | result
-    return ActionTiming(fps=fps, horizon_sec=horizon) | result
+    result = ActionTimestamp(fps=fps) | result
+    if horizon is not None:
+        result = ActionHorizon(horizon) | result
+    return result
 
 
 @cfn.config(rotation_rep=None, tgt_ee_pose_key='robot_commands.pose', tgt_grip_key='target_grip')

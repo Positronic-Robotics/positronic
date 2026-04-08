@@ -7,7 +7,7 @@ Codecs compose via two operators:
 - `|` (sequential): left's output feeds into right. Use for codecs that modify data before others see it (e.g. grip binarization before observation/action encoders).
 - `&` (parallel): both see the same input, outputs merged. Use for independent codecs (e.g. observation encoder & action decoder).
 
-The standard layout is `ActionTiming | BinarizeGrip | obs & action`.
+The standard layout is `ActionHorizon | ActionTimestamp | BinarizeGrip | obs & action`.
 
 Codecs enable **store once, use everywhere** – record demonstrations once, then project the same raw data to different model formats (LeRobot, GR00T, OpenPI) without re-recording.
 

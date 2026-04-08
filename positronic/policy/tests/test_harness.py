@@ -10,9 +10,18 @@ from positronic.drivers import roboarm
 from positronic.drivers.roboarm import RobotStatus
 from positronic.drivers.roboarm.command import CartesianPosition, Recover, Reset, from_wire, to_wire
 from positronic.geom import Rotation, Transform3D
-from positronic.policy.base import Policy
-from positronic.policy.harness import Directive, DirectiveType, Harness
+from positronic.policy.base import Policy, Session
+from positronic.policy.harness import ChunkedSchedule, Directive, DirectiveType, ErrorRecovery, Harness
 from positronic.tests.testing_coutils import ManualDriver, RecordingEmitter, drive_scheduler
+
+
+class _SpySession(Session):
+    def __init__(self, policy):
+        self._policy = policy
+
+    def __call__(self, obs):
+        self._policy.last_obs = obs
+        return {'robot_command': to_wire(self._policy.command), 'target_grip': self._policy.target_grip}
 
 
 class SpyPolicy(Policy):
@@ -23,21 +32,32 @@ class SpyPolicy(Policy):
         self.command = command
         self.target_grip = float(target_grip)
         self.last_obs: dict[str, object] | None = None
+        self.reset_calls: int = 0
+        self.last_reset_context = None
 
-    def select_action(self, obs: dict[str, object]) -> dict[str, object]:
-        self.last_obs = obs
-        return {'robot_command': to_wire(self.command), 'target_grip': self.target_grip}
-
-    def reset(self, context=None) -> None:
-        self.reset_calls = getattr(self, 'reset_calls', 0) + 1
+    def new_session(self, context=None):
+        self.reset_calls += 1
         self.last_reset_context = context
+        return _SpySession(self)
+
+
+class _StubSession(Session):
+    def __init__(self, policy):
+        self._policy = policy
+        self._meta = dict(policy._meta)
+
+    def __call__(self, obs):
+        self._policy.last_obs = obs
+        self._policy.observations.append(obs)
+        return {'robot_command': to_wire(self._policy.command), 'target_grip': self._policy.target_grip}
+
+    @property
+    def meta(self):
+        return self._meta
 
 
 class StubPolicy(Policy):
-    """Reusable policy stub for tests.
-
-    Compatible with `positronic.policy.harness.Harness`: returns wire-format robot commands + target grip.
-    """
+    """Reusable policy stub for tests."""
 
     def __init__(
         self,
@@ -60,14 +80,22 @@ class StubPolicy(Policy):
     def meta(self) -> dict[str, object]:
         return self._meta
 
-    def select_action(self, obs: dict[str, object]) -> dict[str, object]:
-        self.last_obs = obs
-        self.observations.append(obs)
-        return {'robot_command': to_wire(self.command), 'target_grip': self.target_grip}
-
-    def reset(self, context=None) -> None:
+    def new_session(self, context=None):
         self.reset_calls += 1
         self.last_reset_context = context
+        return _StubSession(self)
+
+
+class _ChunkSession(Session):
+    def __init__(self, policy):
+        self._policy = policy
+
+    def __call__(self, obs):
+        self._policy.counter += 1
+        return [
+            {'robot_command': to_wire(self._policy.command), 'target_grip': self._policy.counter * 100.0 + i}
+            for i in range(10)
+        ]
 
 
 class ChunkPolicy(StubPolicy):
@@ -77,9 +105,10 @@ class ChunkPolicy(StubPolicy):
         super().__init__(*args, **kwargs)
         self.counter = 0
 
-    def select_action(self, obs):
-        self.counter += 1
-        return [{'robot_command': to_wire(self.command), 'target_grip': self.counter * 100.0 + i} for i in range(10)]
+    def new_session(self, context=None):
+        self.reset_calls += 1
+        self.last_reset_context = context
+        return _ChunkSession(self)
 
 
 class FakeRobotState:
@@ -139,11 +168,37 @@ def _ds_types(p) -> list[DsWriterCommandType]:
     return [cmd.type for cmd in _ds_commands(p)]
 
 
+def _last_command(p):
+    """Extract the last robot command from the trajectory signal."""
+    msg = p['command_rx'].read()
+    if msg is None or msg.data is None:
+        return None
+    traj = msg.data  # list[tuple[float, CommandType]]
+    return traj[-1][1] if traj else None
+
+
+def _last_grip(p):
+    """Extract the last grip value from the grip trajectory signal."""
+    msg = p['grip_rx'].read()
+    if msg is None or msg.data is None:
+        return None
+    traj = msg.data  # list[tuple[float, float]]
+    return traj[-1][1] if traj else None
+
+
+def _all_grips(p):
+    """Extract all grip values from the grip trajectory signal."""
+    msg = p['grip_rx'].read()
+    if msg is None or msg.data is None:
+        return []
+    return [g for _, g in msg.data]
+
+
 @pytest.mark.timeout(3.0)
 def test_harness_emits_cartesian_move(world, clock):
     pose = Transform3D(translation=np.array([0.4, 0.5, 0.6], dtype=np.float32), rotation=Rotation.identity)
     policy = SpyPolicy(command=CartesianPosition(pose=pose), target_grip=0.33)
-    harness = Harness(policy)
+    harness = Harness(ChunkedSchedule().wrap(policy))
     p = _pair_all(world, harness)
 
     robot_state = make_robot_state([0.1, 0.2, 0.3], [0.4, 0.5, 0.6])
@@ -167,22 +222,19 @@ def test_harness_emits_cartesian_move(world, clock):
     assert obs['grip'] == pytest.approx(0.25)
     assert obs['task'] == 'stack-blocks'
 
-    command_msg = p['command_rx'].read()
-    assert command_msg is not None
-    assert isinstance(command_msg.data, roboarm.command.CartesianPosition)
-    np.testing.assert_allclose(command_msg.data.pose.translation, pose.translation)
-    np.testing.assert_allclose(command_msg.data.pose.rotation.as_quat, pose.rotation.as_quat)
+    cmd = _last_command(p)
+    assert isinstance(cmd, roboarm.command.CartesianPosition)
+    np.testing.assert_allclose(cmd.pose.translation, pose.translation)
+    np.testing.assert_allclose(cmd.pose.rotation.as_quat, pose.rotation.as_quat)
 
-    grip_msg = p['grip_rx'].read()
-    assert grip_msg is not None
-    assert grip_msg.data == pytest.approx(0.33)
+    assert _last_grip(p) == pytest.approx(0.33)
 
 
 @pytest.mark.timeout(3.0)
 def test_harness_waits_for_complete_inputs(world, clock):
     pose = Transform3D(translation=np.array([0.4, 0.5, 0.6], dtype=np.float32), rotation=Rotation.identity)
     policy = SpyPolicy(command=CartesianPosition(pose=pose), target_grip=0.33)
-    harness = Harness(policy)
+    harness = Harness(ChunkedSchedule().wrap(policy))
     p = _pair_all(world, harness)
 
     assert len(harness.frames) == 1
@@ -208,23 +260,17 @@ def test_harness_waits_for_complete_inputs(world, clock):
 
     assert policy.last_obs is not None
 
-    command_msg = p['command_rx'].read()
-    assert command_msg is not None
-    assert isinstance(command_msg.data, roboarm.command.CartesianPosition)
-    np.testing.assert_allclose(command_msg.data.pose.translation, pose.translation)
+    cmd = _last_command(p)
+    assert isinstance(cmd, roboarm.command.CartesianPosition)
+    np.testing.assert_allclose(cmd.pose.translation, pose.translation)
 
-    grip_msg = p['grip_rx'].read()
-    assert grip_msg is not None
-    assert grip_msg.data == pytest.approx(0.33)
-
-    assert p['command_rx'].read() is command_msg
-    assert p['grip_rx'].read() is grip_msg
+    assert _last_grip(p) == pytest.approx(0.33)
 
 
 @pytest.mark.timeout(3.0)
 def test_run_emits_ds_start_with_meta(world, clock):
     policy = StubPolicy(meta={'type': 'stub', 'checkpoint': 'v1'})
-    harness = Harness(policy, static_meta={'joint_signal': 'robot_state.q'})
+    harness = Harness(ChunkedSchedule().wrap(policy), static_meta={'joint_signal': 'robot_state.q'})
     p = _pair_all(world, harness)
 
     driver = ManualDriver([
@@ -250,7 +296,7 @@ def test_run_emits_ds_start_with_meta(world, clock):
 @pytest.mark.timeout(3.0)
 def test_stop_emits_ds_suspend(world, clock):
     policy = StubPolicy()
-    harness = Harness(policy)
+    harness = Harness(ChunkedSchedule().wrap(policy))
     p = _pair_all(world, harness)
 
     driver = ManualDriver([
@@ -268,7 +314,7 @@ def test_stop_emits_ds_suspend(world, clock):
 @pytest.mark.timeout(3.0)
 def test_finish_emits_ds_stop_with_data_and_homes(world, clock):
     policy = StubPolicy()
-    harness = Harness(policy)
+    harness = Harness(ChunkedSchedule().wrap(policy))
     p = _pair_all(world, harness)
 
     driver = ManualDriver([
@@ -286,15 +332,13 @@ def test_finish_emits_ds_stop_with_data_and_homes(world, clock):
     assert stops[0].static_data['outcome'] == 'Success'
     assert stops[0].static_data['notes'] == 'good'
 
-    cmd_msg = p['command_rx'].read()
-    assert cmd_msg is not None
-    assert isinstance(cmd_msg.data, Reset)
+    assert isinstance(_last_command(p), Reset)
 
 
 @pytest.mark.timeout(3.0)
 def test_home_aborts_recording_and_homes(world, clock):
     policy = StubPolicy()
-    harness = Harness(policy)
+    harness = Harness(ChunkedSchedule().wrap(policy))
     p = _pair_all(world, harness)
 
     robot_state = make_robot_state([0.1, 0.2, 0.3], [0.4, 0.5, 0.6])
@@ -311,9 +355,7 @@ def test_home_aborts_recording_and_homes(world, clock):
 
     assert DsWriterCommandType.ABORT_EPISODE in _ds_types(p)
 
-    cmd_msg = p['command_rx'].read()
-    assert cmd_msg is not None
-    assert isinstance(cmd_msg.data, Reset)
+    assert isinstance(_last_command(p), Reset)
 
     assert policy.reset_calls == 1  # only from RUN
 
@@ -321,7 +363,7 @@ def test_home_aborts_recording_and_homes(world, clock):
 @pytest.mark.timeout(3.0)
 def test_run_from_paused_auto_finalizes(world, clock):
     policy = StubPolicy()
-    harness = Harness(policy)
+    harness = Harness(ChunkedSchedule().wrap(policy))
     p = _pair_all(world, harness)
 
     driver = ManualDriver([
@@ -345,7 +387,7 @@ def test_run_from_paused_auto_finalizes(world, clock):
 @pytest.mark.timeout(3.0)
 def test_run_calls_policy_reset_with_context(world, clock):
     policy = StubPolicy()
-    harness = Harness(policy)
+    harness = Harness(ChunkedSchedule().wrap(policy))
     p = _pair_all(world, harness)
 
     driver = ManualDriver([(partial(p['directive_em'].emit, Directive.RUN(task='test-task')), 0.0), (None, 0.01)])
@@ -358,10 +400,10 @@ def test_run_calls_policy_reset_with_context(world, clock):
 
 
 @pytest.mark.timeout(3.0)
-def test_harness_clears_queue_on_home_stepwise(world, clock):
-    """Verify that HOME clears any pending actions in the queue (stepwise check)."""
+def test_harness_clears_trajectory_on_home(world, clock):
+    """Verify that HOME resets trajectory state so next RUN gets a fresh chunk."""
     policy = ChunkPolicy()
-    harness = Harness(policy)
+    harness = Harness(ChunkedSchedule().wrap(policy))
     p = _pair_all(world, harness)
 
     robot_state = make_robot_state([0.1, 0.2, 0.3], [0.4, 0.5, 0.6])
@@ -373,29 +415,27 @@ def test_harness_clears_queue_on_home_stepwise(world, clock):
     emit_ready_payload(p['frame_em'], p['robot_em'], p['grip_em'], robot_state)
     drive_scheduler(scheduler, clock=clock, steps=5)
 
-    val = p['grip_rx'].read().data
-    assert 100.0 <= val < 109.0, f'Expected value in chunk 1 range, got {val}'
-    assert val > 100.0, 'Should have advanced past first element'
+    grips = _all_grips(p)
+    assert grips[0] >= 100.0, f'Expected chunk 1, got {grips}'
 
     p['directive_em'].emit(Directive.HOME())
     drive_scheduler(scheduler, clock=clock, steps=2)
 
-    val = p['grip_rx'].read().data
-    assert val == 0.0, f'Expected 0.0 (Home), got {val}'
+    assert _last_grip(p) == 0.0, 'Expected 0.0 (Home)'
 
     p['directive_em'].emit(Directive.RUN(task='test'))
     emit_ready_payload(p['frame_em'], p['robot_em'], p['grip_em'], robot_state)
     drive_scheduler(scheduler, clock=clock, steps=4)
 
-    val = p['grip_rx'].read().data
-    assert val >= 200.0, f'Expected >= 200.0 (Start of New Chunk), got {val}. Queue clearing failed!'
+    grips = _all_grips(p)
+    assert grips[0] >= 200.0, f'Expected chunk 2 (>= 200.0), got {grips}. Trajectory clearing failed!'
 
 
 @pytest.mark.timeout(3.0)
-def test_harness_clears_queue_on_run_stepwise(world, clock):
-    """Verify that RUN clears any pending actions in the queue."""
+def test_harness_clears_trajectory_on_run(world, clock):
+    """Verify that RUN resets trajectory state so a fresh chunk is emitted."""
     policy = ChunkPolicy()
-    harness = Harness(policy)
+    harness = Harness(ChunkedSchedule().wrap(policy))
     p = _pair_all(world, harness)
 
     robot_state = make_robot_state([0.1, 0.2, 0.3], [0.4, 0.5, 0.6])
@@ -407,8 +447,8 @@ def test_harness_clears_queue_on_run_stepwise(world, clock):
     emit_ready_payload(p['frame_em'], p['robot_em'], p['grip_em'], robot_state)
     drive_scheduler(scheduler, clock=clock, steps=5)
 
-    val = p['grip_rx'].read().data
-    assert 100.0 <= val < 109.0
+    grips = _all_grips(p)
+    assert grips[0] >= 100.0
 
     p['directive_em'].emit(Directive.RUN(task='test-restart'))
     drive_scheduler(scheduler, clock=clock, steps=1)
@@ -416,15 +456,15 @@ def test_harness_clears_queue_on_run_stepwise(world, clock):
     emit_ready_payload(p['frame_em'], p['robot_em'], p['grip_em'], robot_state)
     drive_scheduler(scheduler, clock=clock, steps=4)
 
-    val = p['grip_rx'].read().data
-    assert val >= 200.0, f'Expected >= 200.0 (Start of New Chunk), got {val}. Queue clearing on RUN failed!'
+    grips = _all_grips(p)
+    assert grips[0] >= 200.0, f'Expected chunk 2 (>= 200.0), got {grips}. Trajectory clearing on RUN failed!'
 
 
 @pytest.mark.timeout(3.0)
 def test_harness_recovers_from_error(world, clock):
-    """ERROR clears pending actions, emits Recover, skips policy; AVAILABLE resumes with fresh chunk."""
+    """ERROR emits Recover trajectory, skips policy; AVAILABLE resumes with fresh chunk."""
     policy = ChunkPolicy()
-    harness = Harness(policy)
+    harness = Harness(ErrorRecovery().wrap(ChunkedSchedule().wrap(policy)))
     p = _pair_all(world, harness)
 
     state_ok = make_robot_state([0.1, 0.2, 0.3], [0.4, 0.5, 0.6], status=RobotStatus.AVAILABLE)
@@ -436,17 +476,19 @@ def test_harness_recovers_from_error(world, clock):
     drive_scheduler(scheduler, clock=clock, steps=1)
     emit_ready_payload(p['frame_em'], p['robot_em'], p['grip_em'], state_ok)
     drive_scheduler(scheduler, clock=clock, steps=3)
-    assert 100.0 <= p['grip_rx'].read().data < 110.0
+    grips = _all_grips(p)
+    assert grips[0] >= 100.0
 
     obs_before = len(policy.observations)
     p['robot_em'].emit(state_err)
     drive_scheduler(scheduler, clock=clock, steps=2)
-    assert isinstance(p['command_rx'].read().data, Recover)
+    assert isinstance(_last_command(p), Recover)
     assert len(policy.observations) == obs_before
 
     emit_ready_payload(p['frame_em'], p['robot_em'], p['grip_em'], state_ok)
     drive_scheduler(scheduler, clock=clock, steps=3)
-    assert p['grip_rx'].read().data >= 200.0
+    grips = _all_grips(p)
+    assert grips[0] >= 200.0
 
 
 def test_directive_preserves_payload():
