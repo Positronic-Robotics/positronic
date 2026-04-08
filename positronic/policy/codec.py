@@ -93,12 +93,16 @@ class Codec:
         return _WrappedPolicy(policy, self)
 
     @final
-    def __or__(self, other: 'Codec') -> 'Codec':
-        return _ComposedCodec(self, other)
+    def __or__(self, other):
+        if isinstance(other, Codec):
+            return _ComposedCodec(self, other)
+        return NotImplemented
 
     @final
-    def __and__(self, other: 'Codec') -> 'Codec':
-        return _ParallelCodec(self, other)
+    def __and__(self, other):
+        if isinstance(other, Codec):
+            return _ParallelCodec(self, other)
+        return NotImplemented
 
 
 class _ComposedCodec(Codec):
@@ -162,11 +166,14 @@ class _ParallelCodec(Codec):
 
 
 class ActionTimestamp(Codec):
-    """Stamps each decoded action with a relative ``timestamp`` field: ``i * (1/fps)``.
+    """Stamps each decoded action with an absolute ``timestamp``.
 
-    For action chunks (lists), assigns ``timestamp = i * (1/fps)`` to each action.
-    For single actions (dicts), assigns ``timestamp = 0.0``.
-    The harness converts these relative timestamps to absolute at emission time.
+    Reads "now" from the observation context (``inference_time_ns``, nanoseconds)
+    and assigns ``timestamp = now + i * (1/fps)`` to each action in a chunk.
+    Single actions get ``timestamp = now``. This means trajectories carry
+    absolute timestamps — the harness and robot driver use them directly
+    without adding prediction time.
+
     At training time, surfaces ``action_fps`` as transform metadata.
     """
 
@@ -177,12 +184,13 @@ class ActionTimestamp(Codec):
         return data
 
     def decode(self, data, *, context=None):
+        now = context.get('inference_time_ns', 0) / 1e9 if context else 0.0
         if isinstance(data, list):
             dt = 1.0 / self._fps
             for i, d in enumerate(data):
-                d['timestamp'] = i * dt
+                d['timestamp'] = now + i * dt
             return data
-        data['timestamp'] = 0.0
+        data['timestamp'] = now
         return data
 
     @property
@@ -197,8 +205,8 @@ class ActionTimestamp(Codec):
 class ActionHorizon(Codec):
     """Truncates action chunks to a time horizon.
 
-    Keeps only actions whose ``timestamp`` is strictly less than ``horizon_sec``.
-    Single actions (dicts) pass through unchanged.
+    Keeps only actions whose ``timestamp`` is within ``horizon_sec`` of "now"
+    (read from ``inference_time_ns`` in context). Single actions pass through.
     At training time, surfaces ``action_horizon_sec`` as transform metadata.
     """
 
@@ -210,7 +218,9 @@ class ActionHorizon(Codec):
 
     def decode(self, data, *, context=None):
         if isinstance(data, list):
-            return [d for d in data if d.get('timestamp', 0.0) < self._horizon_sec]
+            now = context.get('inference_time_ns', 0) / 1e9 if context else 0.0
+            cutoff = now + self._horizon_sec
+            return [d for d in data if d.get('timestamp', 0.0) < cutoff]
         return data
 
     @property

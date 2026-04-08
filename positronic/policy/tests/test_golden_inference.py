@@ -123,7 +123,7 @@ def _run_pipeline():
     wrapped = codec.wrap(policy)
 
     with pimm.World(clock=clock) as world:
-        harness = Harness(ChunkedSchedule(wrapped))
+        harness = Harness(ChunkedSchedule().wrap(wrapped))
         p = _pair_all(world, harness, robot_state)
 
         # Build a script that emits sensors before each inference cycle.

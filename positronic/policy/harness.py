@@ -7,7 +7,7 @@ from typing import Any
 import pimm
 from positronic.dataset.ds_writer_agent import DsWriterCommand, Serializers
 from positronic.drivers import roboarm
-from positronic.policy.base import DelegatingPolicy, DelegatingSession, Session
+from positronic.policy.base import DelegatingPolicy, DelegatingSession, Policy, PolicyWrapper, Session
 from positronic.utils import flatten_dict, frozen_view
 
 
@@ -66,18 +66,27 @@ class _ChunkedSession(DelegatingSession):
             return None
         result = self._inner(obs)
         if result is not None and isinstance(result, list) and result:
-            self._trajectory_end = now + result[-1].get('timestamp', 0.0)
+            self._trajectory_end = result[-1].get('timestamp')
         return result
 
 
-class ChunkedSchedule(DelegatingPolicy):
+class ChunkedSchedule(PolicyWrapper):
     """Wait for current trajectory to finish before calling inner policy again.
 
-    Wraps a policy so that ``new_session`` returns a session that returns
-    ``None`` (meaning "keep executing current trajectory") until the last
-    action's timestamp has been reached.
+    Returns ``None`` (meaning "keep executing current trajectory") until the
+    last action's timestamp has been reached, then calls the inner policy.
+
+    Composable via ``|``::
+
+        pipeline = ErrorRecovery() | ChunkedSchedule() | codec
+        wrapped = pipeline.wrap(model)
     """
 
+    def wrap(self, policy: Policy) -> Policy:
+        return _ChunkedSchedulePolicy(policy)
+
+
+class _ChunkedSchedulePolicy(DelegatingPolicy):
     def new_session(self, context=None):
         return _ChunkedSession(self._inner.new_session(context))
 
@@ -102,13 +111,23 @@ class _ErrorRecoverySession(DelegatingSession):
         return self._inner(obs)
 
 
-class ErrorRecovery(DelegatingPolicy):
+class ErrorRecovery(PolicyWrapper):
     """Wraps a policy to handle robot errors by emitting Recover commands.
 
     On error: emits a single Recover trajectory, then returns None until
     the robot recovers. On recovery: resumes normal inference.
+
+    Composable via ``|``::
+
+        pipeline = ErrorRecovery() | ChunkedSchedule() | codec
+        wrapped = pipeline.wrap(model)
     """
 
+    def wrap(self, policy: Policy) -> Policy:
+        return _ErrorRecoveryPolicy(policy)
+
+
+class _ErrorRecoveryPolicy(DelegatingPolicy):
     def new_session(self, context=None):
         return _ErrorRecoverySession(self._inner.new_session(context))
 
@@ -227,16 +246,8 @@ class Harness(pimm.ControlSystem):
         if commands is None:
             return
 
-        prediction_time = clock.now()
-        robot_traj = [
-            (prediction_time + cmd.get('timestamp', 0.0), roboarm.command.from_wire(cmd['robot_command']))
-            for cmd in commands
-        ]
-        grip_traj = [
-            (prediction_time + cmd.get('timestamp', 0.0), cmd['target_grip'])
-            for cmd in commands
-            if 'target_grip' in cmd
-        ]
+        robot_traj = [(cmd.get('timestamp', 0.0), roboarm.command.from_wire(cmd['robot_command'])) for cmd in commands]
+        grip_traj = [(cmd.get('timestamp', 0.0), cmd['target_grip']) for cmd in commands if 'target_grip' in cmd]
         self.robot_commands.emit(robot_traj)
         if grip_traj:
             self.target_grip.emit(grip_traj)

@@ -125,7 +125,7 @@ def test_sampled_policy_e2e():
     sampler = BalancedSampler(balance=2)
     sampled = SampledPolicy(wrapped_a, wrapped_b, sampler=sampler)
 
-    harness = Harness(ChunkedSchedule(sampled))
+    harness = Harness(ChunkedSchedule().wrap(sampled))
 
     with pimm.World(clock=clock) as world:
         p = _pair_all(world, harness)

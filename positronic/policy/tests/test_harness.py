@@ -198,7 +198,7 @@ def _all_grips(p):
 def test_harness_emits_cartesian_move(world, clock):
     pose = Transform3D(translation=np.array([0.4, 0.5, 0.6], dtype=np.float32), rotation=Rotation.identity)
     policy = SpyPolicy(command=CartesianPosition(pose=pose), target_grip=0.33)
-    harness = Harness(ChunkedSchedule(policy))
+    harness = Harness(ChunkedSchedule().wrap(policy))
     p = _pair_all(world, harness)
 
     robot_state = make_robot_state([0.1, 0.2, 0.3], [0.4, 0.5, 0.6])
@@ -234,7 +234,7 @@ def test_harness_emits_cartesian_move(world, clock):
 def test_harness_waits_for_complete_inputs(world, clock):
     pose = Transform3D(translation=np.array([0.4, 0.5, 0.6], dtype=np.float32), rotation=Rotation.identity)
     policy = SpyPolicy(command=CartesianPosition(pose=pose), target_grip=0.33)
-    harness = Harness(ChunkedSchedule(policy))
+    harness = Harness(ChunkedSchedule().wrap(policy))
     p = _pair_all(world, harness)
 
     assert len(harness.frames) == 1
@@ -270,7 +270,7 @@ def test_harness_waits_for_complete_inputs(world, clock):
 @pytest.mark.timeout(3.0)
 def test_run_emits_ds_start_with_meta(world, clock):
     policy = StubPolicy(meta={'type': 'stub', 'checkpoint': 'v1'})
-    harness = Harness(ChunkedSchedule(policy), static_meta={'joint_signal': 'robot_state.q'})
+    harness = Harness(ChunkedSchedule().wrap(policy), static_meta={'joint_signal': 'robot_state.q'})
     p = _pair_all(world, harness)
 
     driver = ManualDriver([
@@ -296,7 +296,7 @@ def test_run_emits_ds_start_with_meta(world, clock):
 @pytest.mark.timeout(3.0)
 def test_stop_emits_ds_suspend(world, clock):
     policy = StubPolicy()
-    harness = Harness(ChunkedSchedule(policy))
+    harness = Harness(ChunkedSchedule().wrap(policy))
     p = _pair_all(world, harness)
 
     driver = ManualDriver([
@@ -314,7 +314,7 @@ def test_stop_emits_ds_suspend(world, clock):
 @pytest.mark.timeout(3.0)
 def test_finish_emits_ds_stop_with_data_and_homes(world, clock):
     policy = StubPolicy()
-    harness = Harness(ChunkedSchedule(policy))
+    harness = Harness(ChunkedSchedule().wrap(policy))
     p = _pair_all(world, harness)
 
     driver = ManualDriver([
@@ -338,7 +338,7 @@ def test_finish_emits_ds_stop_with_data_and_homes(world, clock):
 @pytest.mark.timeout(3.0)
 def test_home_aborts_recording_and_homes(world, clock):
     policy = StubPolicy()
-    harness = Harness(ChunkedSchedule(policy))
+    harness = Harness(ChunkedSchedule().wrap(policy))
     p = _pair_all(world, harness)
 
     robot_state = make_robot_state([0.1, 0.2, 0.3], [0.4, 0.5, 0.6])
@@ -363,7 +363,7 @@ def test_home_aborts_recording_and_homes(world, clock):
 @pytest.mark.timeout(3.0)
 def test_run_from_paused_auto_finalizes(world, clock):
     policy = StubPolicy()
-    harness = Harness(ChunkedSchedule(policy))
+    harness = Harness(ChunkedSchedule().wrap(policy))
     p = _pair_all(world, harness)
 
     driver = ManualDriver([
@@ -387,7 +387,7 @@ def test_run_from_paused_auto_finalizes(world, clock):
 @pytest.mark.timeout(3.0)
 def test_run_calls_policy_reset_with_context(world, clock):
     policy = StubPolicy()
-    harness = Harness(ChunkedSchedule(policy))
+    harness = Harness(ChunkedSchedule().wrap(policy))
     p = _pair_all(world, harness)
 
     driver = ManualDriver([(partial(p['directive_em'].emit, Directive.RUN(task='test-task')), 0.0), (None, 0.01)])
@@ -403,7 +403,7 @@ def test_run_calls_policy_reset_with_context(world, clock):
 def test_harness_clears_trajectory_on_home(world, clock):
     """Verify that HOME resets trajectory state so next RUN gets a fresh chunk."""
     policy = ChunkPolicy()
-    harness = Harness(ChunkedSchedule(policy))
+    harness = Harness(ChunkedSchedule().wrap(policy))
     p = _pair_all(world, harness)
 
     robot_state = make_robot_state([0.1, 0.2, 0.3], [0.4, 0.5, 0.6])
@@ -435,7 +435,7 @@ def test_harness_clears_trajectory_on_home(world, clock):
 def test_harness_clears_trajectory_on_run(world, clock):
     """Verify that RUN resets trajectory state so a fresh chunk is emitted."""
     policy = ChunkPolicy()
-    harness = Harness(ChunkedSchedule(policy))
+    harness = Harness(ChunkedSchedule().wrap(policy))
     p = _pair_all(world, harness)
 
     robot_state = make_robot_state([0.1, 0.2, 0.3], [0.4, 0.5, 0.6])
@@ -464,7 +464,7 @@ def test_harness_clears_trajectory_on_run(world, clock):
 def test_harness_recovers_from_error(world, clock):
     """ERROR emits Recover trajectory, skips policy; AVAILABLE resumes with fresh chunk."""
     policy = ChunkPolicy()
-    harness = Harness(ErrorRecovery(ChunkedSchedule(policy)))
+    harness = Harness(ErrorRecovery().wrap(ChunkedSchedule().wrap(policy)))
     p = _pair_all(world, harness)
 
     state_ok = make_robot_state([0.1, 0.2, 0.3], [0.4, 0.5, 0.6], status=RobotStatus.AVAILABLE)

@@ -1,7 +1,12 @@
+from __future__ import annotations
+
 from abc import ABC, abstractmethod
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from positronic.policy.sampler import Sampler, UniformSampler
+
+if TYPE_CHECKING:
+    from positronic.policy.codec import Codec
 
 
 class Session(ABC):
@@ -31,11 +36,13 @@ class Session(ABC):
         """Session metadata (may include policy meta + per-session info)."""
         return {}
 
-    def on_episode_complete(self):  # noqa: B027
+    def on_episode_complete(self):
         """Called when the episode using this session is finalized."""
+        return None
 
-    def close(self):  # noqa: B027
+    def close(self):
         """End this session and release per-episode resources."""
+        return None
 
 
 class DelegatingSession(Session):
@@ -98,6 +105,61 @@ class DelegatingPolicy(Policy):
 
     def close(self):
         self._inner.close()
+
+
+class PolicyWrapper(ABC):
+    """Composable wrapper recipe — created without an inner policy, applied via ``wrap()``.
+
+    PolicyWrappers may be stateful, may control flow (skip the inner call),
+    and have no training-time dual. They compose with ``|`` (sequential, left
+    is outermost). Unlike Codecs, they do NOT support ``&`` (parallel).
+
+    ``|`` works across types: ``wrapper | wrapper``, ``wrapper | codec``,
+    and ``codec | wrapper`` all produce a PolicyWrapper pipeline that
+    ``wrap(policy)`` applies right-to-left::
+
+        pipeline = ErrorRecovery() | ChunkedSchedule() | codec
+        wrapped = pipeline.wrap(RemotePolicy(...))
+    """
+
+    @abstractmethod
+    def wrap(self, policy: Policy) -> Policy:
+        """Apply this wrapper to a concrete policy, returning a wrapped Policy."""
+
+    def __or__(self, other: PolicyWrapper | Codec) -> PolicyWrapper:
+        from positronic.policy.codec import Codec  # noqa — circular dep
+
+        mine = self._pipeline_components()
+        if isinstance(other, PolicyWrapper):
+            return _Pipeline((*mine, *other._pipeline_components()))
+        if isinstance(other, Codec):
+            return _Pipeline((*mine, other))
+        return NotImplemented
+
+    def __ror__(self, other: Codec) -> PolicyWrapper:
+        from positronic.policy.codec import Codec  # noqa — circular dep
+
+        if isinstance(other, Codec):
+            return _Pipeline((other, *self._pipeline_components()))
+        return NotImplemented
+
+    def _pipeline_components(self) -> tuple:
+        return (self,)
+
+
+class _Pipeline(PolicyWrapper):
+    """Composed pipeline of wrappers and codecs. Applies right-to-left."""
+
+    def __init__(self, components: tuple):
+        self._components = components
+
+    def wrap(self, policy: Policy) -> Policy:
+        for component in reversed(self._components):
+            policy = component.wrap(policy)
+        return policy
+
+    def _pipeline_components(self) -> tuple:
+        return self._components
 
 
 class _SampledSession(DelegatingSession):
