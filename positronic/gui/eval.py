@@ -19,7 +19,7 @@ class State(Enum):
 
 UNIFIED_TASK = 'Pick all the items one by one from transparent tote and place them into the large grey tote.'
 
-OBJECTS = ['Towels', 'Wooden spoons', 'Scissors', 'Batteries']
+OBJECTS = ['Towels', 'Wooden spoons', 'Scissors', 'Batteries', 'USB-C Boxes', 'USB-C Cables']
 
 TASKS = [
     UNIFIED_TASK,
