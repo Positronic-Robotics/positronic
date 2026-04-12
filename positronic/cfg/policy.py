@@ -145,3 +145,15 @@ phail_multiple = production.override(**{
     'sampler': balanced,
     'sampler.group_fields': ['task', 'eval.object', 'eval.tote_placement', 'eval.external_camera'],
 })
+
+
+spoons_ablation = production.override(**{
+    'groot.host': 'vm-openpi',
+    'groot.port': 8000,
+    'smolvla.host': 'vm-openpi',
+    'smolvla.port': 8001,
+    'act.host': 'vm-openpi',
+    'act.port': 8002,
+    'sampler': balanced,
+    'sampler.group_fields': ['task', 'eval.object', 'eval.tote_placement', 'eval.external_camera'],
+})
