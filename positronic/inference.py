@@ -64,7 +64,7 @@ class TimedDriver(pimm.ControlSystem):
                 meta['task'] = self.task
             self.directives.emit(Directive.RUN(**meta))
             yield pimm.Sleep(self.simulation_time)
-            self.directives.emit(Directive.STOP())
+            self.directives.emit(Directive.FINISH())
             yield pimm.Sleep(0.5)
 
 
