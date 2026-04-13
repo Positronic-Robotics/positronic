@@ -120,9 +120,13 @@ sim_stack = main.override(
     checkpoints_dir='s3://checkpoints/sim_stack/lerobot/230226-ee/',
     recording_dir='s3://inference/sim_stack/server_recordings/lerobot/230226-ee/',
 )
+demo = main.override(checkpoints_dir='s3://positronic-public/checkpoints/sim_stack_cubes/act/')
 
 
 if __name__ == '__main__':
     init_logging()
+    pos3.register_profile(
+        'positronic-public', endpoint='https://storage.eu-north1.nebius.cloud', public=True, region='eu-north1'
+    )
     with pos3.mirror():
-        cfn.cli({'serve': main, 'phail': phail, 'sim_stack': sim_stack})
+        cfn.cli({'serve': main, 'phail': phail, 'sim_stack': sim_stack, 'demo': demo})

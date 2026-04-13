@@ -16,15 +16,13 @@ This guide covers:
 
 ## Run a Reference Model
 
-Start an ACT inference server using a public checkpoint trained on the simulated cube stacking task:
+Start an ACT inference server using a public checkpoint trained on the simulated cube stacking task. No GPU or cloud credentials required:
 
 ```bash
-cd docker && docker compose run --rm --service-ports lerobot-0_3_3-server \
-  serve \
-  --checkpoints_dir=s3://positronic-public/checkpoints/sim_stack_cubes/act/
+cd docker && docker compose run --rm --service-ports lerobot-0_3_3-server demo
 ```
 
-The server downloads the checkpoint (~505MB) and starts a WebSocket API on port 8000. Verify it's ready:
+The server downloads the checkpoint (~505MB) from public storage and starts a WebSocket API on port 8000. Verify it's ready:
 
 ```bash
 curl http://localhost:8000/api/v1/models
