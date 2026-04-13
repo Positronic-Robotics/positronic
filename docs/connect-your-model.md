@@ -16,31 +16,31 @@ This guide covers:
 
 ## Run a Reference Model
 
-Start an ACT inference server using a public checkpoint trained on the simulated cube stacking task. No GPU or cloud credentials required:
+Start an ACT inference server using a public checkpoint trained on the simulated cube stacking task:
 
 ```bash
 cd docker && docker compose run --rm --service-ports lerobot-0_3_3-server demo
 ```
 
-The server downloads the checkpoint (~505MB) from public storage and starts a WebSocket API on port 8000. Verify it's ready:
+The server downloads the checkpoint (~505MB) and starts a WebSocket API on port 8000. The server requires Docker on Linux. Verify it's ready:
 
 ```bash
 curl http://localhost:8000/api/v1/models
 # {"models": ["050000"]}
 ```
 
-In a separate terminal, run inference in MuJoCo simulation:
+In a separate terminal, run inference in MuJoCo simulation. The inference client runs on Mac or Linux:
 
 ```bash
 uv run positronic-inference sim \
-  --policy=.remote --policy.host=localhost --policy.port=8000
+  --policy=.remote --policy.host=<server-host> --policy.port=8000
 ```
 
-The inference client connects to the server, streams observations from the simulator, and executes the returned actions. You should see the Franka arm attempting to stack cubes.
+The client connects to the server, streams observations from the simulator, and executes the returned action chunks. You should see the Franka arm attempting to stack cubes.
 
 ## Observations and Actions
 
-Every timestep, the inference client sends the current robot state to the server and receives an action back. All messages use [msgpack](https://msgpack.org/) with numpy array support (see [Serialization](#serialization) below).
+Every timestep, the inference client sends the current robot state to the server and receives a chunk of actions back. All messages use [msgpack](https://msgpack.org/) with numpy array support (see [Serialization](#serialization) below).
 
 ### Observations (client to server)
 
@@ -58,18 +58,21 @@ Your server receives all fields. Use what your model needs, ignore the rest.
 
 ### Actions (server to client)
 
-The server returns an action dict (or a list of dicts for action chunks):
+The server returns a list of action dicts (an action chunk). The client executes them sequentially at the configured action frequency:
 
 ```python
-{"result": [{"target_pose": array([...]), "target_grip": array([...])}]}
+{"result": [{"robot_command": {...}, "target_grip": 0.04}, ...]}
 ```
 
-| Field | Type | Shape | Description |
-|-------|------|-------|-------------|
-| `target_pose` | float32 | (7,) | Target EE pose: x, y, z, qx, qy, qz, qw |
-| `target_grip` | float32 | (1,) | Target gripper opening |
+The `robot_command` field specifies the control mode:
 
-Return a single action dict for one-step policies, or a list for multi-step action chunks (the client executes them sequentially at the configured action frequency).
+| Command type | Fields | Description |
+|--------------|--------|-------------|
+| `cartesian_pos` | `pose`: float32 (12,) | Target EE pose (position + rotation matrix) |
+| `joint_pos` | `positions`: float32 (7,) | Target joint angles (radians) |
+| `joint_delta` | `velocities`: float32 (7,) | Joint velocity command |
+
+The codec determines which command type the model produces (see below).
 
 ## Codecs: State and Action Representations
 
@@ -159,11 +162,14 @@ class MyPolicy(Policy):
         images = obs['exterior_image']
         ee = obs['ee_pose']
 
-        # Run your model
-        predicted_pose = self._model.predict(images, ee)
+        # Run your model, get a list of predicted poses
+        predicted_poses = self._model.predict(images, ee)
 
-        # Return raw action format
-        return {'target_pose': predicted_pose, 'target_grip': obs['grip']}
+        # Return action chunk: list of commands
+        return [
+            {'robot_command': {'type': 'cartesian_pos', 'pose': pose}, 'target_grip': 0.04}
+            for pose in predicted_poses
+        ]
 
     def reset(self, context=None):
         pass
