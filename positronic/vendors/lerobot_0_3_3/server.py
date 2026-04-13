@@ -120,13 +120,18 @@ sim_stack = main.override(
     checkpoints_dir='s3://checkpoints/sim_stack/lerobot/230226-ee/',
     recording_dir='s3://inference/sim_stack/server_recordings/lerobot/230226-ee/',
 )
-demo = main.override(checkpoints_dir='s3://positronic-public/checkpoints/sim_stack_cubes/act/')
+_DEMO_CHECKPOINT = 's3://positronic-public/checkpoints/sim_stack_cubes/act/'
+
+
+@cfn.config(policy_factory=act, codec=lerobot_codecs.ee, checkpoint=None, port=8000, host='0.0.0.0')
+def demo(policy_factory, checkpoint, codec, port, host):
+    from positronic.cfg.ds import PUBLIC
+
+    checkpoints_dir = str(pos3.download(_DEMO_CHECKPOINT, profile=PUBLIC))
+    InferenceServer(policy_factory, codec, checkpoints_dir, checkpoint, host=host, port=port).serve()
 
 
 if __name__ == '__main__':
     init_logging()
-    pos3.register_profile(
-        'positronic-public', endpoint='https://storage.eu-north1.nebius.cloud', public=True, region='eu-north1'
-    )
     with pos3.mirror():
         cfn.cli({'serve': main, 'phail': phail, 'sim_stack': sim_stack, 'demo': demo})
