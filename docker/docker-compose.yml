@@ -1,6 +1,7 @@
 services:
   positronic-training-base: &positronic-common
     image: positro/positronic:${IMAGE_TAG:-latest}
+    pull_policy: always
 
     # Enable interactive terminal
     stdin_open: true
