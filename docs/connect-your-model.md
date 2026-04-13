@@ -33,10 +33,19 @@ In a separate terminal, run inference in MuJoCo simulation. The inference client
 
 ```bash
 uv run positronic-inference sim \
-  --policy=.remote --policy.host=<server-host> --policy.port=8000
+  --policy=.remote --policy.host=<server-host> --policy.port=8000 \
+  --driver.show_gui=True \
+  --output_dir=~/datasets/demo_run
 ```
 
-The client connects to the server, streams observations from the simulator, and executes the returned action chunks. You should see the Franka arm attempting to stack cubes.
+The MuJoCo window shows the Franka arm executing the policy in real time. The `--output_dir` flag records all episodes (robot state, camera feeds, actions) for later review.
+
+Browse recorded episodes with:
+
+```bash
+uv run positronic-server --dataset.path=~/datasets/demo_run --port=5001
+# Open http://localhost:5001
+```
 
 ## Observations and Actions
 
