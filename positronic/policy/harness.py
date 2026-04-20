@@ -61,12 +61,12 @@ class _ChunkedSession(DelegatingSession):
         self._trajectory_end: float | None = None
 
     def __call__(self, obs):
-        now = obs.get('inference_time_ns', 0) / 1e9
+        now = obs['inference_time_ns'] / 1e9
         if self._trajectory_end is not None and now < self._trajectory_end:
             return None
         result = self._inner(obs)
-        if result is not None and isinstance(result, list) and result:
-            self._trajectory_end = result[-1].get('timestamp')
+        if result is not None and result:
+            self._trajectory_end = result[-1]['timestamp']
         return result
 
 
@@ -99,13 +99,13 @@ class _ErrorRecoverySession(DelegatingSession):
         self._in_error = False
 
     def __call__(self, obs):
-        status = obs.get('robot_state.status', roboarm.RobotStatus.AVAILABLE)
         was_ok = not self._in_error
-        self._in_error = status == roboarm.RobotStatus.ERROR
+        self._in_error = obs['robot_state.status'] == roboarm.RobotStatus.ERROR
 
         if self._in_error:
             if was_ok:
-                return [{'robot_command': roboarm.command.to_wire(roboarm.command.Recover())}]
+                now = obs['inference_time_ns'] / 1e9
+                return [{'robot_command': roboarm.command.to_wire(roboarm.command.Recover()), 'timestamp': now}]
             return None
 
         return self._inner(obs)
@@ -132,9 +132,41 @@ class _ErrorRecoveryPolicy(DelegatingPolicy):
         return _ErrorRecoverySession(self._inner.new_session(context))
 
 
+class _PackSession(DelegatingSession):
+    """Converts action dicts → (robot_commands, grip) tuple trajectories."""
+
+    def __call__(self, obs):
+        result = self._inner(obs)
+        if result is None:
+            return None
+        actions = result if isinstance(result, list) else [result]
+        robot_traj = [(cmd['timestamp'], roboarm.command.from_wire(cmd['robot_command'])) for cmd in actions]
+        grip_traj = [(cmd['timestamp'], cmd['target_grip']) for cmd in actions if 'target_grip' in cmd]
+        return robot_traj, grip_traj
+
+
+class PackTrajectory(PolicyWrapper):
+    """Converts session output (action dicts) into driver-ready tuple trajectories.
+
+    Output is ``(robot_commands, grip)`` where each is ``list[tuple[float, T]]``.
+    Actions without ``target_grip`` (e.g. Recover) contribute nothing to the grip
+    trajectory — an empty grip trajectory means "stop commanding grip".
+    """
+
+    def wrap(self, policy: Policy) -> Policy:
+        return _PackTrajectoryPolicy(policy)
+
+
+class _PackTrajectoryPolicy(DelegatingPolicy):
+    def new_session(self, context=None):
+        return _PackSession(self._inner.new_session(context))
+
+
 # ---------------------------------------------------------------------------
 # Harness — truly stupid: directives + session call + emit
 # ---------------------------------------------------------------------------
+
+DEFAULT_WRAPPERS = PackTrajectory() | ErrorRecovery() | ChunkedSchedule()
 
 
 class Harness(pimm.ControlSystem):
@@ -144,10 +176,16 @@ class Harness(pimm.ControlSystem):
     All inference intelligence (scheduling, error recovery, blending) lives in
     the policy/session layer — the harness just calls the session and emits
     whatever comes back.
+
+    By default, wraps the given policy with ``PackTrajectory | ErrorRecovery |
+    ChunkedSchedule``. Pass ``wrap=None`` to skip auto-wrapping (if you've
+    already composed your own pipeline).
     """
 
-    def __init__(self, policy, *, static_meta: dict[str, Any] | None = None):
-        self.policy = policy
+    def __init__(
+        self, policy, *, static_meta: dict[str, Any] | None = None, wrap: PolicyWrapper | None = DEFAULT_WRAPPERS
+    ):
+        self.policy = wrap.wrap(policy) if wrap is not None else policy
         self.context: dict[str, Any] = {}
         self._static_meta = static_meta or {}
         self._session: Session | None = None
@@ -217,8 +255,8 @@ class Harness(pimm.ControlSystem):
             case _:
                 raise ValueError(f'Unknown directive type: {directive.type}')
 
-    def _infer(self, clock: pimm.Clock) -> list[dict[str, Any]] | None:
-        """Read sensors, call session, return commands or None."""
+    def _build_obs(self, clock: pimm.Clock) -> dict[str, Any] | None:
+        """Read sensors and build observation dict. Returns None if not ready."""
         robot_state = self.robot_state.value
         inputs = {
             'robot_state.q': robot_state.q,
@@ -235,22 +273,19 @@ class Harness(pimm.ControlSystem):
         inputs['wall_time_ns'] = time.time_ns()
         inputs['inference_time_ns'] = clock.now_ns()
         inputs.update(self.context)
-        result = self._session(frozen_view(inputs))
-        if result is None:
-            return None
-        return result if isinstance(result, list) else [result]
+        return inputs
 
     def _step(self, clock: pimm.Clock) -> None:
-        """Call session and emit trajectory. That's it."""
-        commands = self._infer(clock)
-        if commands is None:
+        """Build obs, call session, emit trajectories."""
+        obs = self._build_obs(clock)
+        if obs is None:
             return
-
-        robot_traj = [(cmd.get('timestamp', 0.0), roboarm.command.from_wire(cmd['robot_command'])) for cmd in commands]
-        grip_traj = [(cmd.get('timestamp', 0.0), cmd['target_grip']) for cmd in commands if 'target_grip' in cmd]
+        result = self._session(frozen_view(obs))
+        if result is None:
+            return
+        robot_traj, grip_traj = result
         self.robot_commands.emit(robot_traj)
-        if grip_traj:
-            self.target_grip.emit(grip_traj)
+        self.target_grip.emit(grip_traj)
 
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Sleep]:
         running = False

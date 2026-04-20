@@ -169,10 +169,9 @@ class ActionTimestamp(Codec):
     """Stamps each decoded action with an absolute ``timestamp``.
 
     Reads "now" from the observation context (``inference_time_ns``, nanoseconds)
-    and assigns ``timestamp = now + i * (1/fps)`` to each action in a chunk.
-    Single actions get ``timestamp = now``. This means trajectories carry
-    absolute timestamps — the harness and robot driver use them directly
-    without adding prediction time.
+    and assigns ``timestamp = now + i * (1/fps)``. Trajectories carry absolute
+    timestamps — the harness and robot driver use them directly without adding
+    prediction time.
 
     At training time, surfaces ``action_fps`` as transform metadata.
     """
@@ -184,7 +183,7 @@ class ActionTimestamp(Codec):
         return data
 
     def decode(self, data, *, context=None):
-        now = context.get('inference_time_ns', 0) / 1e9 if context else 0.0
+        now = context['inference_time_ns'] / 1e9
         if isinstance(data, list):
             dt = 1.0 / self._fps
             for i, d in enumerate(data):
@@ -218,9 +217,8 @@ class ActionHorizon(Codec):
 
     def decode(self, data, *, context=None):
         if isinstance(data, list):
-            now = context.get('inference_time_ns', 0) / 1e9 if context else 0.0
-            cutoff = now + self._horizon_sec
-            return [d for d in data if d.get('timestamp', 0.0) < cutoff]
+            cutoff = context['inference_time_ns'] / 1e9 + self._horizon_sec
+            return [d for d in data if d['timestamp'] < cutoff]
         return data
 
     @property

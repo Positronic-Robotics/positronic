@@ -91,7 +91,7 @@ class TestActionHorizonWrapping:
         wrapped = ActionHorizon(0.5).wrap(policy)
 
         session = wrapped.new_session()
-        actions = session({})
+        actions = session({'inference_time_ns': 0})
         assert len(actions) == 2
         assert actions[0]['timestamp'] == 0.0
         assert actions[1]['timestamp'] == 0.25

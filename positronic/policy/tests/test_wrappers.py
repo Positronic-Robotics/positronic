@@ -55,8 +55,9 @@ class TestChunkedSchedule:
         assert result is not None
         assert inner._session.call_count == 2
 
-    def test_no_timestamp_means_immediate_refire(self):
-        policy = ChunkedSchedule().wrap(_ConstPolicy([{'v': 1}]))
+    def test_single_action_refires_immediately_after(self):
+        """Single action at now → trajectory_end = now → next tick re-infers."""
+        policy = ChunkedSchedule().wrap(_ConstPolicy([{'v': 1, 'timestamp': 1.0}]))
         session = policy.new_session()
         session(_obs(now_sec=1.0))
         result = session(_obs(now_sec=1.01))
@@ -128,10 +129,11 @@ class TestPipelineComposition:
     def test_wrapper_pipe_wrapper(self):
         pipeline = ErrorRecovery() | ChunkedSchedule()
         assert isinstance(pipeline, PolicyWrapper)
-        policy = pipeline.wrap(_ConstPolicy([{'v': 1}]))
+        policy = pipeline.wrap(_ConstPolicy([{'v': 1, 'timestamp': 1.0}]))
         session = policy.new_session()
-        result = session(_obs(status=RobotStatus.AVAILABLE))
-        assert result == [{'v': 1}]
+        result = session(_obs(now_sec=1.0, status=RobotStatus.AVAILABLE))
+        assert result is not None
+        assert result[0]['v'] == 1
 
     def test_wrapper_pipe_codec(self):
         codec = ActionTimestamp(fps=10.0)
@@ -147,7 +149,7 @@ class TestPipelineComposition:
         codec = ActionTimestamp(fps=10.0)
         pipeline = codec | ChunkedSchedule()
         assert isinstance(pipeline, PolicyWrapper)
-        policy = pipeline.wrap(_ConstPolicy([{'action': 'test'}]))
+        policy = pipeline.wrap(_ConstPolicy([{'action': 'test', 'timestamp': 1.0}]))
         session = policy.new_session()
         result = session(_obs(now_sec=1.0))
         assert result is not None

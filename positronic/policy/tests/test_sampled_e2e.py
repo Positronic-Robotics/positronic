@@ -21,7 +21,7 @@ from positronic.drivers.roboarm.command import CartesianPosition, to_wire
 from positronic.geom import Rotation, Transform3D
 from positronic.policy.base import Policy, SampledPolicy, Session
 from positronic.policy.codec import ActionTiming
-from positronic.policy.harness import ChunkedSchedule, Directive, Harness
+from positronic.policy.harness import Directive, Harness
 from positronic.policy.sampler import BalancedSampler
 from positronic.tests.testing_coutils import ManualDriver, RecordingEmitter, drive_scheduler
 
@@ -125,7 +125,7 @@ def test_sampled_policy_e2e():
     sampler = BalancedSampler(balance=2)
     sampled = SampledPolicy(wrapped_a, wrapped_b, sampler=sampler)
 
-    harness = Harness(ChunkedSchedule().wrap(sampled))
+    harness = Harness(sampled)
 
     with pimm.World(clock=clock) as world:
         p = _pair_all(world, harness)

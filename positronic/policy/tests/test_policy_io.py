@@ -189,12 +189,15 @@ class _MetaPolicy(Policy):
         return {'base_key': 'base_value'}
 
 
+_T0_OBS = {'inference_time_ns': 0}
+
+
 def test_action_horizon_sec_truncates_chunk():
     actions = [{'v': i} for i in range(10)]
     # action_horizon_sec=0.1s at action_fps=30 -> 3 actions
     codec = ActionTiming(fps=30.0, horizon_sec=0.1)
     policy = codec.wrap(_ChunkPolicy(actions))
-    result = policy.new_session()({})
+    result = policy.new_session()(_T0_OBS)
     assert [r['v'] for r in result] == [0, 1, 2]
 
 
@@ -202,7 +205,7 @@ def test_action_horizon_sec_none_returns_full_chunk():
     actions = [{'v': i} for i in range(5)]
     codec = ActionTiming(fps=30.0)
     policy = codec.wrap(_ChunkPolicy(actions))
-    result = policy.new_session()({})
+    result = policy.new_session()(_T0_OBS)
     assert len(result) == 5
 
 
@@ -211,7 +214,7 @@ def test_action_horizon_sec_larger_than_chunk():
     # action_horizon_sec=10s at action_fps=10 -> 100 actions max, but only 3 available
     codec = ActionTiming(fps=10.0, horizon_sec=10.0)
     policy = codec.wrap(_ChunkPolicy(actions))
-    result = policy.new_session()({})
+    result = policy.new_session()(_T0_OBS)
     assert len(result) == 3
 
 
@@ -219,7 +222,7 @@ def test_timestamps_embedded_in_actions():
     actions = [{'v': i} for i in range(4)]
     codec = ActionTiming(fps=10.0)
     policy = codec.wrap(_ChunkPolicy(actions))
-    result = policy.new_session()({})
+    result = policy.new_session()(_T0_OBS)
     assert len(result) == 4
     for i, action in enumerate(result):
         assert action['timestamp'] == pytest.approx(i * 0.1)
@@ -230,7 +233,7 @@ def test_action_horizon_sec_seconds_truncates():
     # 0.1s at 30fps -> 3 actions
     codec = ActionTiming(fps=30.0, horizon_sec=0.1)
     policy = codec.wrap(_ChunkPolicy(actions))
-    result = policy.new_session()({})
+    result = policy.new_session()(_T0_OBS)
     assert len(result) == 3
     dt = 1.0 / 30.0
     for i, action in enumerate(result):
@@ -240,7 +243,7 @@ def test_action_horizon_sec_seconds_truncates():
 def test_action_timestamp_stamps_chunk():
     actions = [{'v': i} for i in range(4)]
     codec = ActionTimestamp(fps=10.0)
-    result = codec.decode(actions)
+    result = codec.decode(actions, context=_T0_OBS)
     assert len(result) == 4
     for i, action in enumerate(result):
         assert action['timestamp'] == pytest.approx(i * 0.1)
@@ -248,7 +251,7 @@ def test_action_timestamp_stamps_chunk():
 
 def test_action_timestamp_single_action():
     codec = ActionTimestamp(fps=15.0)
-    result = codec.decode({'v': 42})
+    result = codec.decode({'v': 42}, context=_T0_OBS)
     assert result['timestamp'] == 0.0
 
 
@@ -260,14 +263,14 @@ def test_action_timestamp_meta():
 def test_action_horizon_truncates():
     actions = [{'v': i, 'timestamp': i * 0.1} for i in range(10)]
     codec = ActionHorizon(0.3)
-    result = codec.decode(actions)
+    result = codec.decode(actions, context=_T0_OBS)
     assert [r['v'] for r in result] == [0, 1, 2]
 
 
 def test_action_horizon_passes_single_action():
     action = {'v': 1, 'timestamp': 0.0}
     codec = ActionHorizon(0.5)
-    result = codec.decode(action)
+    result = codec.decode(action, context=_T0_OBS)
     assert result == {'v': 1, 'timestamp': 0.0}
 
 
@@ -280,7 +283,7 @@ def test_action_timestamp_and_horizon_compose():
     actions = [{'v': i} for i in range(10)]
     codec = ActionHorizon(0.3) | ActionTimestamp(fps=10.0)
     policy = codec.wrap(_ChunkPolicy(actions))
-    result = policy.new_session()({})
+    result = policy.new_session()(_T0_OBS)
     assert len(result) == 3
     assert [r['v'] for r in result] == [0, 1, 2]
 
@@ -288,7 +291,7 @@ def test_action_timestamp_and_horizon_compose():
 def test_single_action_has_zero_timestamp():
     codec = ActionTiming(fps=15.0)
     policy = codec.wrap(_SinglePolicy())
-    result = policy.new_session()({})
+    result = policy.new_session()(_T0_OBS)
     assert isinstance(result, dict)
     assert result['timestamp'] == 0.0
     assert result['v'] == 42
@@ -328,7 +331,7 @@ def test_timestamps_survive_action_decoder_composition():
     raw_action[7] = 0.5
 
     raw_chunk = [{'action': raw_action} for _ in range(5)]
-    decoded = composed.decode(raw_chunk)
+    decoded = composed.decode(raw_chunk, context=_T0_OBS)
 
     assert len(decoded) == 5
     for i, action in enumerate(decoded):
@@ -565,7 +568,7 @@ def test_groot_ee_codec_decodes_modality_keyed_actions():
     ee_pose = np.concatenate([Rotation.identity.as_quat, [0.1, 0.2, 0.3]]).astype(np.float32)
     model_output = [{'ee_pose': ee_pose, 'grip': np.float32(0.5)} for _ in range(3)]
 
-    decoded = codec.decode(model_output)
+    decoded = codec.decode(model_output, context=_T0_OBS)
     assert len(decoded) == 3
     for d in decoded:
         assert 'robot_command' in d
@@ -582,7 +585,7 @@ def test_groot_joints_codec_decodes_modality_keyed_actions():
     joint_pos = np.array([0.1, -0.2, 0.3, 0.4, -0.5, 0.6, 0.7], dtype=np.float32)
     model_output = [{'joint_position': joint_pos, 'grip': np.float32(0.8)} for _ in range(3)]
 
-    decoded = codec.decode(model_output)
+    decoded = codec.decode(model_output, context=_T0_OBS)
     assert len(decoded) == 3
     for d in decoded:
         assert 'robot_command' in d

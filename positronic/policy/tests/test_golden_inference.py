@@ -24,7 +24,7 @@ from positronic.drivers.roboarm.command import CartesianPosition, to_wire
 from positronic.geom import Rotation, Transform3D
 from positronic.policy.base import Policy, Session
 from positronic.policy.codec import ActionTiming
-from positronic.policy.harness import ChunkedSchedule, Directive, Harness
+from positronic.policy.harness import Directive, Harness
 from positronic.tests.testing_coutils import ManualDriver, RecordingEmitter, drive_scheduler
 
 GOLDEN_FILE = Path(__file__).parent / 'golden_inference.json'
@@ -123,7 +123,7 @@ def _run_pipeline():
     wrapped = codec.wrap(policy)
 
     with pimm.World(clock=clock) as world:
-        harness = Harness(ChunkedSchedule().wrap(wrapped))
+        harness = Harness(wrapped)
         p = _pair_all(world, harness, robot_state)
 
         # Build a script that emits sensors before each inference cycle.
