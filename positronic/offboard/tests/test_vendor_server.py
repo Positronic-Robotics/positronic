@@ -10,7 +10,7 @@ import uvicorn
 
 from positronic.offboard.client import InferenceClient
 from positronic.offboard.vendor_server import VendorServer
-from positronic.policy import Codec, Policy
+from positronic.policy import Codec
 
 
 def find_free_port() -> int:
@@ -22,10 +22,14 @@ def find_free_port() -> int:
 class _StubVendorServer(VendorServer):
     def __init__(self, codec=None, **kwargs):
         super().__init__(codec=codec, **kwargs)
-        self.mock_policy = MagicMock(spec=Policy)
-        self.mock_policy.select_action.return_value = [{'action': [1, 2, 3]}]
-        self.mock_policy.meta = {'model_name': 'stub'}
-        self.mock_policy.reset.return_value = None
+        self.mock_session = MagicMock()
+        self.mock_session.return_value = [{'action': [1, 2, 3]}]
+        self.mock_session.meta = {'model_name': 'stub'}
+        self.mock_session.close = MagicMock()
+
+        self.mock_policy = MagicMock()
+        self.mock_policy.new_session.return_value = self.mock_session
+        self.mock_policy.meta = {}
         self.metadata = {'type': 'stub'}
         self.warmup_called = False
 
@@ -77,7 +81,7 @@ def test_full_inference_cycle(stub_server):
         obs = {'image': 'test'}
         result = session.infer(obs)
         assert result == [{'action': [1, 2, 3]}]
-        server.mock_policy.select_action.assert_called_with(obs)
+        server.mock_session.assert_called_with(obs)
     finally:
         session.close()
 

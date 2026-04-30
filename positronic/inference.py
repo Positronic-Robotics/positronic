@@ -16,7 +16,7 @@ import positronic.cfg.hardware.roboarm
 import positronic.cfg.policy as policy_cfg
 import positronic.cfg.simulator
 from positronic import utils, wire
-from positronic.dataset.ds_writer_agent import DsWriterCommandType, TimeMode
+from positronic.dataset.ds_writer_agent import TimeMode
 from positronic.dataset.local_dataset import LocalDatasetWriter, load_all_datasets
 from positronic.gui.dpg import DearpyguiUi
 from positronic.gui.eval import EvalUI
@@ -114,17 +114,10 @@ def _seed_sampler(policy, output_dir: Path):
 
 
 def _connect_ds_command(world, harness, ds_agent, policy):
-    """Connect harness.ds_command to ds_agent, with optional sampler tap."""
+    """Connect harness.ds_command to ds_agent."""
     if ds_agent is None:
         return
-
-    def _tap(cmd):
-        if cmd.type is DsWriterCommandType.STOP_EPISODE:
-            policy.count_current()
-        return cmd
-
-    wrapper = pimm.map(_tap) if isinstance(policy, SampledPolicy) else pimm.utils.identity
-    world.connect(harness.ds_command, ds_agent.command, emitter_wrapper=wrapper)
+    world.connect(harness.ds_command, ds_agent.command)
 
 
 def main(
@@ -167,7 +160,6 @@ def main_sim(
     driver: tuple,
     camera_dict: Mapping[str, str],
     output_dir: str | Path | None = None,
-    simulate_timeout: bool = False,
     observers: Mapping[str, Any] | None = None,
 ):
     observers = observers or {}
@@ -178,7 +170,7 @@ def main_sim(
     cameras = {name: mujoco_cameras.cameras[orig_name] for name, orig_name in camera_dict.items()}
 
     static_meta = {'simulation.mujoco_model_path': mujoco_model_path, **wire.ROBOT_STATIC_META}
-    harness = Harness(policy, static_meta=static_meta, simulate_timeout=simulate_timeout)
+    harness = Harness(policy, static_meta=static_meta)
     control_systems = [mujoco_cameras, sim, robot_arm, gripper, harness]
 
     gui, harness_emitter, foreground_cs = driver

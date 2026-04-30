@@ -1,6 +1,4 @@
-import logging
 import time
-from collections import deque
 from collections.abc import Generator, Iterator
 from dataclasses import dataclass
 from enum import Enum
@@ -9,6 +7,7 @@ from typing import Any
 import pimm
 from positronic.dataset.ds_writer_agent import DsWriterCommand, Serializers
 from positronic.drivers import roboarm
+from positronic.policy.base import DelegatingPolicy, DelegatingSession, Policy, PolicyWrapper, Session
 from positronic.utils import flatten_dict, frozen_view
 
 
@@ -49,23 +48,109 @@ class Directive:
         return cls(DirectiveType.HOME, preset)
 
 
+# ---------------------------------------------------------------------------
+# Policy wrappers — composable concerns extracted from the harness
+# ---------------------------------------------------------------------------
+
+
+class _ChunkedSession(DelegatingSession):
+    """Calls inner session only when the previous trajectory has been consumed."""
+
+    def __init__(self, inner: Session):
+        super().__init__(inner)
+        self._trajectory_end: float | None = None
+
+    def __call__(self, obs):
+        now = obs.get('inference_time_ns', 0) / 1e9
+        if self._trajectory_end is not None and now < self._trajectory_end:
+            return None
+        result = self._inner(obs)
+        if result is not None and isinstance(result, list) and result:
+            self._trajectory_end = result[-1].get('timestamp')
+        return result
+
+
+class ChunkedSchedule(PolicyWrapper):
+    """Wait for current trajectory to finish before calling inner policy again.
+
+    Returns ``None`` (meaning "keep executing current trajectory") until the
+    last action's timestamp has been reached, then calls the inner policy.
+
+    Composable via ``|``::
+
+        pipeline = ErrorRecovery() | ChunkedSchedule() | codec
+        wrapped = pipeline.wrap(model)
+    """
+
+    def wrap(self, policy: Policy) -> Policy:
+        return _ChunkedSchedulePolicy(policy)
+
+
+class _ChunkedSchedulePolicy(DelegatingPolicy):
+    def new_session(self, context=None):
+        return _ChunkedSession(self._inner.new_session(context))
+
+
+class _ErrorRecoverySession(DelegatingSession):
+    """Emits Recover trajectory on robot error, delegates otherwise."""
+
+    def __init__(self, inner: Session):
+        super().__init__(inner)
+        self._in_error = False
+
+    def __call__(self, obs):
+        status = obs.get('robot_state.status', roboarm.RobotStatus.AVAILABLE)
+        was_ok = not self._in_error
+        self._in_error = status == roboarm.RobotStatus.ERROR
+
+        if self._in_error:
+            if was_ok:
+                return [{'robot_command': roboarm.command.to_wire(roboarm.command.Recover())}]
+            return None
+
+        return self._inner(obs)
+
+
+class ErrorRecovery(PolicyWrapper):
+    """Wraps a policy to handle robot errors by emitting Recover commands.
+
+    On error: emits a single Recover trajectory, then returns None until
+    the robot recovers. On recovery: resumes normal inference.
+
+    Composable via ``|``::
+
+        pipeline = ErrorRecovery() | ChunkedSchedule() | codec
+        wrapped = pipeline.wrap(model)
+    """
+
+    def wrap(self, policy: Policy) -> Policy:
+        return _ErrorRecoveryPolicy(policy)
+
+
+class _ErrorRecoveryPolicy(DelegatingPolicy):
+    def new_session(self, context=None):
+        return _ErrorRecoverySession(self._inner.new_session(context))
+
+
+# ---------------------------------------------------------------------------
+# Harness — truly stupid: directives + session call + emit
+# ---------------------------------------------------------------------------
+
+
 class Harness(pimm.ControlSystem):
-    """
-    Control system that manages device commands, episode recording, and policy execution.
+    """Control system that manages episode lifecycle and forwards trajectories to drivers.
 
-    The harness is the single authority for device commands and episode lifecycle.
-    It translates high-level directives into device commands and dataset recording
-    commands. Both the policy (during episodes) and the orchestrator (between
-    episodes) express intent through directives.
-
-    Supposed to be run in foreground of a World.
+    The harness handles directives (RUN/STOP/FINISH/HOME) and dataset recording.
+    All inference intelligence (scheduling, error recovery, blending) lives in
+    the policy/session layer — the harness just calls the session and emits
+    whatever comes back.
     """
 
-    def __init__(self, policy, *, static_meta: dict[str, Any] | None = None, simulate_timeout: bool = False):
+    def __init__(self, policy, *, static_meta: dict[str, Any] | None = None):
         self.policy = policy
         self.context: dict[str, Any] = {}
-        self.simulate_timeout = simulate_timeout
         self._static_meta = static_meta or {}
+        self._session: Session | None = None
 
         self.frames = pimm.ReceiverDict(self)
         self.robot_state = pimm.ControlSystemReceiver(self)
@@ -80,28 +165,33 @@ class Harness(pimm.ControlSystem):
     def _build_episode_meta(self, context: dict[str, Any]) -> dict[str, Any]:
         meta = dict(self._static_meta)
         meta.update(self.robot_meta_in.value)
-        meta['inference.simulate_timeout'] = self.simulate_timeout
-        for k, v in flatten_dict(self.policy.meta).items():
+        session_meta = self._session.meta if self._session else self.policy.meta
+        for k, v in flatten_dict(session_meta).items():
             meta[f'inference.policy.{k}'] = v
         meta.update(context)
         return meta
 
-    def _home(self):
-        self.robot_commands.emit(roboarm.command.Reset())
-        self.target_grip.emit(0.0)
+    def _home(self, clock):
+        now = clock.now()
+        self.robot_commands.emit([(now, roboarm.command.Reset())])
+        self.target_grip.emit([(now, 0.0)])
 
     def _handle_directive(
-        self, directive: Directive, recording: bool
+        self, directive: Directive, clock: pimm.Clock, recording: bool
     ) -> Generator[pimm.Sleep, None, tuple[bool, bool]]:
         """Handle a directive, yielding any necessary pauses. Returns (running, recording)."""
         match directive.type:
             case DirectiveType.RUN:
                 if recording:
+                    if self._session:
+                        self._session.on_episode_complete()
                     self.ds_command.emit(DsWriterCommand.STOP())
-                    self._home()
+                    self._home(clock)
                     yield pimm.Pass()
                 self.context = directive.payload or {}
-                self.policy.reset(self.context)
+                if self._session:
+                    self._session.close()
+                self._session = self.policy.new_session(self.context)
                 self.ds_command.emit(DsWriterCommand.START(self._build_episode_meta(self.context)))
                 return True, True
             case DirectiveType.STOP:
@@ -110,28 +200,31 @@ class Harness(pimm.ControlSystem):
                 return False, recording
             case DirectiveType.FINISH:
                 if recording:
+                    if self._session:
+                        self._session.on_episode_complete()
                     self.ds_command.emit(DsWriterCommand.STOP(directive.payload or {}))
                     recording = False
-                self._home()
+                self._home(clock)
                 yield pimm.Pass()
                 return False, recording
             case DirectiveType.HOME:
                 if recording:
                     self.ds_command.emit(DsWriterCommand.ABORT())
                     recording = False
-                self._home()
+                self._home(clock)
                 yield pimm.Pass()
                 return False, recording
             case _:
                 raise ValueError(f'Unknown directive type: {directive.type}')
 
     def _infer(self, clock: pimm.Clock) -> list[dict[str, Any]] | None:
-        """Read sensors and run policy inference. Returns commands or None if not ready."""
+        """Read sensors, call session, return commands or None."""
         robot_state = self.robot_state.value
         inputs = {
             'robot_state.q': robot_state.q,
             'robot_state.dq': robot_state.dq,
             'robot_state.ee_pose': Serializers.transform_3d(robot_state.ee_pose),
+            'robot_state.status': robot_state.status,
             'grip': self.gripper_state.value,
         }
         frame_messages = {k: v.value for k, v in self.frames.items()}
@@ -139,68 +232,47 @@ class Harness(pimm.ControlSystem):
         if len(images) != len(self.frames):
             return None
         inputs.update(images)
-        inputs['__wall_time_ns__'] = time.time_ns()
-        inputs['__inference_time_ns__'] = clock.now_ns()
+        inputs['wall_time_ns'] = time.time_ns()
+        inputs['inference_time_ns'] = clock.now_ns()
         inputs.update(self.context)
-        commands = self.policy.select_action(frozen_view(inputs))
-        return commands if isinstance(commands, list) else [commands]
+        result = self._session(frozen_view(inputs))
+        if result is None:
+            return None
+        return result if isinstance(result, list) else [result]
 
-    def _step(self, clock: pimm.Clock, commands_queue: deque, in_error: bool) -> Generator[pimm.Sleep, None, bool]:
-        """Execute one inference step. Returns updated in_error state."""
-        was_ok = not in_error
-        in_error = self.robot_state.value.status == roboarm.RobotStatus.ERROR
-        if in_error and was_ok:
-            commands_queue.clear()
-            self.robot_commands.emit(roboarm.command.Recover())
-        if in_error:
-            return True
+    def _step(self, clock: pimm.Clock) -> None:
+        """Call session and emit trajectory. That's it."""
+        commands = self._infer(clock)
+        if commands is None:
+            return
 
-        if not commands_queue:
-            wall_start = time.monotonic()
-            commands = self._infer(clock)
-            if commands is None:
-                return False
-            if self.simulate_timeout:
-                yield pimm.Sleep(time.monotonic() - wall_start)
-            prediction_time = clock.now()
-            for cmd in commands:
-                commands_queue.append((
-                    roboarm.command.from_wire(cmd['robot_command']),
-                    cmd['target_grip'],
-                    prediction_time + cmd.get('timestamp', 0.0),
-                ))
-
-        if not commands_queue:
-            logging.error('Policy returned no commands')
-            return in_error
-
-        roboarm_cmd, target_grip, scheduled_time = commands_queue.popleft()
-        yield pimm.Sleep(max(0.0, scheduled_time - clock.now()))
-        self.robot_commands.emit(roboarm_cmd)
-        self.target_grip.emit(target_grip)
-        return in_error
+        robot_traj = [(cmd.get('timestamp', 0.0), roboarm.command.from_wire(cmd['robot_command'])) for cmd in commands]
+        grip_traj = [(cmd.get('timestamp', 0.0), cmd['target_grip']) for cmd in commands if 'target_grip' in cmd]
+        self.robot_commands.emit(robot_traj)
+        if grip_traj:
+            self.target_grip.emit(grip_traj)
 
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Sleep]:
         running = False
         recording = False
-        in_error = False
-        commands_queue = deque()
 
         while not should_stop.value:
             directive_msg = self.directive.read()
             if directive_msg.updated:
-                commands_queue.clear()
-                in_error = False
-                running, recording = yield from self._handle_directive(directive_msg.data, recording)
+                running, recording = yield from self._handle_directive(directive_msg.data, clock, recording)
 
             try:
                 if running:
-                    in_error = yield from self._step(clock, commands_queue, in_error)
+                    self._step(clock)
             except pimm.NoValueException:
                 pass
             finally:
                 yield pimm.Sleep(0.01)
 
         if recording:
+            if self._session:
+                self._session.on_episode_complete()
             self.ds_command.emit(DsWriterCommand.STOP())
+        if self._session:
+            self._session.close()
         self.policy.close()

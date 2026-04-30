@@ -226,6 +226,27 @@ class MujocoFranka(pimm.ControlSystem):
         self.state: pimm.SignalEmitter[MujocoFrankaState] = pimm.ControlSystemEmitter(self)
         self.robot_meta = pimm.ControlSystemEmitter(self)
 
+    def _apply_command(self, cmd, state: MujocoFrankaState):
+        match cmd:
+            case roboarm_command.CartesianPosition(pose=pose):
+                q = self._recalculate_ik(pose)
+                if q is not None:
+                    self.set_actuator_values(q)
+                else:
+                    logger.warning(f'IK failed for ee_pose: {pose}')
+                    state.set_error()
+            case roboarm_command.JointPosition(positions=positions):
+                self.set_actuator_values(positions)
+            case roboarm_command.JointDelta(velocities=delta):
+                self.set_actuator_values(self.q + delta)
+            case roboarm_command.Reset():
+                self.sim.reset()
+                state.clear_error()
+            case roboarm_command.Recover():
+                state.clear_error()
+            case _:
+                raise ValueError(f'Unknown command type: {type(cmd)}')
+
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock):
         self.robot_meta.emit({
             'urdf': Path(package_assets_path('assets/mujoco/panda_ik.xml')).read_text(),
@@ -233,30 +254,15 @@ class MujocoFranka(pimm.ControlSystem):
             'control_frame': 'end_effector',
         })
         state = MujocoFrankaState()
+        player = roboarm_command.TrajectoryPlayer()
 
         while not should_stop.value:
             state.encode(self.q, self.dq, self.ee_pose)
             cmd_msg = self.commands.read()
             if cmd_msg.updated:
-                match cmd_msg.data:
-                    case roboarm_command.CartesianPosition(pose=pose):
-                        q = self._recalculate_ik(pose)
-                        if q is not None:
-                            self.set_actuator_values(q)
-                        else:
-                            logger.warning(f'IK failed for ee_pose: {pose}')
-                            state.set_error()
-                    case roboarm_command.JointPosition(positions=positions):
-                        self.set_actuator_values(positions)
-                    case roboarm_command.JointDelta(velocities=delta):
-                        self.set_actuator_values(self.q + delta)
-                    case roboarm_command.Reset():
-                        self.sim.reset()
-                        state.clear_error()
-                    case roboarm_command.Recover():
-                        state.clear_error()
-                    case _:
-                        raise ValueError(f'Unknown command type: {type(cmd_msg.data)}')
+                player.set(cmd_msg.data)
+            for cmd in player.advance(clock.now()):
+                self._apply_command(cmd, state)
 
             self.state.emit(state)
             yield pimm.Pass()
@@ -311,9 +317,16 @@ class MujocoGripper(pimm.ControlSystem):
         self.grip: pimm.SignalEmitter = pimm.ControlSystemEmitter(self)
 
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock):
+        player = roboarm_command.TrajectoryPlayer()
+        last_grip = 0.0
+
         while not should_stop.value:
-            target_grip = self.target_grip.value
-            self.set_target_grip(target_grip)
+            msg = self.target_grip.read()
+            if msg.updated:
+                player.set(msg.data)
+            for grip in player.advance(clock.now()):
+                last_grip = grip
+            self.set_target_grip(last_grip)
 
             current_grip = self.sim.data.joint(self.joint_name).qpos.item()
             self.grip.emit(self._normalize_current_grip(current_grip))

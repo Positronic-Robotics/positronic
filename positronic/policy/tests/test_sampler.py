@@ -1,19 +1,31 @@
 from typing import Any
 
-from positronic.policy.base import Policy, SampledPolicy
+from positronic.policy.base import Policy, SampledPolicy, Session
 from positronic.policy.sampler import BalancedSampler, UniformSampler
 
 
-class StubPolicy(Policy):
-    def __init__(self, meta: dict[str, Any] | None = None):
+class _StubSession(Session):
+    def __init__(self, action=None, meta=None):
+        self._action = action or {}
         self._meta = meta or {}
-        self.reset_count = 0
 
-    def select_action(self, obs):
-        return {}
+    def __call__(self, obs):
+        return self._action
 
-    def reset(self, context=None):
-        self.reset_count += 1
+    @property
+    def meta(self):
+        return self._meta
+
+
+class StubPolicy(Policy):
+    def __init__(self, meta: dict[str, Any] | None = None, action=None):
+        self._meta = meta or {}
+        self._action = action
+        self.session_count = 0
+
+    def new_session(self, context=None):
+        self.session_count += 1
+        return _StubSession(self._action, self._meta)
 
     @property
     def meta(self):
@@ -120,7 +132,7 @@ def test_sampled_policy_discovers_keys_from_meta():
     p1 = StubPolicy(meta={'ckpt': '/path/a'})
     p2 = StubPolicy(meta={'ckpt': '/path/b'})
     sampled = SampledPolicy(p1, p2, key_field='ckpt')
-    sampled.reset({})
+    sampled.new_session({})
     assert sampled._keys == ('/path/a', '/path/b')
 
 
@@ -131,9 +143,9 @@ def test_sampled_policy_delegates_to_sampler():
     sampler = UniformSampler(weights={'/path/a': 0.0, '/path/b': 1.0})
     sampled = SampledPolicy(p1, p2, sampler=sampler, key_field='ckpt')
     for _ in range(10):
-        sampled.reset({})
-    assert p1.reset_count == 0
-    assert p2.reset_count == 10
+        sampled.new_session({})
+    assert p1.session_count == 0
+    assert p2.session_count == 10
 
 
 def test_sampled_policy_backward_compat_weights_only():
@@ -141,24 +153,24 @@ def test_sampled_policy_backward_compat_weights_only():
     p2 = StubPolicy(meta={'ckpt': 'b'})
     sampled = SampledPolicy(p1, p2, weights=[0.0, 1.0], key_field='ckpt')
     for _ in range(10):
-        sampled.reset({})
-    assert p1.reset_count == 0
-    assert p2.reset_count == 10
+        sampled.new_session({})
+    assert p1.session_count == 0
+    assert p2.session_count == 10
 
 
-def test_sampled_policy_meta_returns_active_sub_policy():
+def test_sampled_policy_session_meta_returns_active_sub_policy():
     p1 = StubPolicy(meta={'ckpt': 'a', 'type': 'act'})
     p2 = StubPolicy(meta={'ckpt': 'b', 'type': 'groot'})
     sampled = SampledPolicy(p1, p2, sampler=UniformSampler(weights={'a': 0.0, 'b': 1.0}), key_field='ckpt')
-    sampled.reset({})
-    assert sampled.meta == {'ckpt': 'b', 'type': 'groot'}
+    session = sampled.new_session({})
+    assert session.meta == {'ckpt': 'b', 'type': 'groot'}
 
 
 def test_sampled_policy_fallback_key_when_meta_missing():
     p1 = StubPolicy(meta={})
     p2 = StubPolicy(meta={'ckpt': 'b'})
     sampled = SampledPolicy(p1, p2, key_field='ckpt')
-    sampled.reset({})
+    sampled.new_session({})
     # p1 has no 'ckpt' in meta → falls back to str(index) = '0'
     assert sampled._keys[0] == '0'
     assert sampled._keys[1] == 'b'
@@ -175,36 +187,16 @@ def test_sampled_policy_with_balanced_sampler():
         sampler.count('a', {})
 
     # Now sample many times — 'b' should be strongly favored
-    p1.reset_count = 0
-    p2.reset_count = 0
+    p1.session_count = 0
+    p2.session_count = 0
     for _ in range(50):
-        sampled.reset({})
-    assert p2.reset_count > p1.reset_count
-
-
-def test_sampled_policy_current_key_tracks_selection():
-    p1 = StubPolicy(meta={'ckpt': 'a'})
-    p2 = StubPolicy(meta={'ckpt': 'b'})
-    sampled = SampledPolicy(p1, p2, sampler=UniformSampler(weights={'a': 0.0, 'b': 1.0}), key_field='ckpt')
-    assert sampled._current_key is None
-    sampled.reset({})
-    assert sampled._current_key == 'b'
+        sampled.new_session({})
+    assert p2.session_count > p1.session_count
 
 
 def test_sampled_policy_select_action_delegates():
-    class ActionPolicy(Policy):
-        def __init__(self, action):
-            self._action = action
-
-        def select_action(self, obs):
-            return self._action
-
-        @property
-        def meta(self):
-            return {'ckpt': self._action['id']}
-
-    p1 = ActionPolicy({'id': 'a', 'value': 1})
-    p2 = ActionPolicy({'id': 'b', 'value': 2})
+    p1 = StubPolicy(meta={'ckpt': 'a'}, action={'id': 'a', 'value': 1})
+    p2 = StubPolicy(meta={'ckpt': 'b'}, action={'id': 'b', 'value': 2})
     sampled = SampledPolicy(p1, p2, sampler=UniformSampler(weights={'a': 0.0, 'b': 1.0}), key_field='ckpt')
-    sampled.reset({})
-    assert sampled.select_action({}) == {'id': 'b', 'value': 2}
+    session = sampled.new_session({})
+    assert session({}) == {'id': 'b', 'value': 2}

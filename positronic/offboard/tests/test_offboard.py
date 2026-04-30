@@ -19,25 +19,25 @@ def test_inference_client_connect_and_infer(inference_server, mock_policy):
         action = session.infer(obs)
 
         assert action['action_data'] == [1, 2, 3]
-        mock_policy.select_action.assert_called_with(obs)
+        mock_policy._mock_session.assert_called_with(obs)
     finally:
         session.close()
 
 
-def test_inference_client_reset(inference_server, mock_policy):
-    """Test that starting a new session calls reset on the policy."""
+def test_inference_client_new_session(inference_server, mock_policy):
+    """Test that starting a new session calls new_session on the policy."""
     host, port = inference_server
     client = InferenceClient(host, port)
 
-    # First session (Reset #1)
+    # First session
     session = client.new_session()
     session.close()
 
-    # Second session (Reset #2)
+    # Second session
     session = client.new_session()
     session.close()
 
-    assert mock_policy.reset.call_count == 2
+    assert mock_policy.new_session.call_count == 2
 
 
 def test_inference_client_selects_model_id(multi_policy_server):
@@ -68,9 +68,9 @@ def test_inference_client_selects_model_id(multi_policy_server):
     finally:
         beta_session.close()
 
-    policies['alpha'].select_action.assert_any_call({'obs': 'alpha'})
-    policies['beta'].select_action.assert_any_call({'obs': 'beta'})
-    policies['alpha'].select_action.assert_any_call({'obs': 'default'})
+    policies['alpha']._mock_session.assert_any_call({'obs': 'alpha'})
+    policies['beta']._mock_session.assert_any_call({'obs': 'beta'})
+    policies['alpha']._mock_session.assert_any_call({'obs': 'default'})
 
 
 def test_wire_serialisation_accepts_mappingproxy():
