@@ -16,8 +16,11 @@ follow in an upcoming change.
 
 ## One-time setup
 
-Create three MysteryBox secrets that the training job will reference by name. AWS keys are read
-from your local `~/.aws/credentials`; the WandB key from `docker/.env.wandb`.
+Create four MysteryBox secrets that the jobs will reference by name. AWS keys are read from
+your local `~/.aws/credentials`; the WandB key from `docker/.env.wandb`. The first three are
+single-key payloads consumed via `--env-secret`. The fourth is a two-key payload consumed by
+`--volume` for Mountpoint-S3 authentication (Nebius requires the keys to be named
+`S3_ACCESS_KEY_ID` / `S3_SECRET_ACCESS_KEY`).
 
 ```bash
 PARENT_ID=project-e00f38wexevrr52b8j  # adjust to your own project
@@ -46,6 +49,15 @@ nebius mysterybox secret create \
   --secret-version-payload "$(jq -nc \
     --arg v "$(grep -E '^WANDB_API_KEY=' docker/.env.wandb | cut -d= -f2-)" \
     '[{key:"WANDB_API_KEY",string_value:$v}]')"
+
+nebius mysterybox secret create \
+  --parent-id "$PARENT_ID" \
+  --name positronic-serverless-s3-creds \
+  --description "S3 credentials for serverless --volume Mountpoint-S3 mounts" \
+  --secret-version-payload "$(jq -nc \
+    --arg k "$(aws configure get aws_access_key_id --profile "$AWS_PROFILE_FOR_S3")" \
+    --arg s "$(aws configure get aws_secret_access_key --profile "$AWS_PROFILE_FOR_S3")" \
+    '[{key:"S3_ACCESS_KEY_ID",string_value:$k},{key:"S3_SECRET_ACCESS_KEY",string_value:$s}]')"
 ```
 
 The names matter — `train.sh` references the secrets by name. If a secret with one of these
@@ -82,7 +94,11 @@ The output path is what you pass to `train.sh --input_path=...` next.
 ## Train ACT
 
 `train.sh` runs `python -m positronic.vendors.lerobot_0_3_3.train` inside a Nebius Job on H100
-(`gpu-h100-sxm`, `1gpu-16vcpu-200gb`).
+(`gpu-h100-sxm`, `1gpu-16vcpu-200gb`). The bucket from `--input_path=s3://...` is mounted with
+[Mountpoint-S3](https://docs.nebius.com/object-storage/interfaces/mountpoint-s3) at `/mnt/input`
+(read-only) so the dataset is streamed on demand instead of being downloaded into local cache.
+`--output_dir` stays an `s3://` URL handled by `pos3` — LeRobot's checkpoint saver uses
+symlinks, which Mountpoint-S3 does not support.
 
 Example: train ACT on the converted `sim_stack_cubes` dataset from the previous step:
 
