@@ -1,12 +1,14 @@
 # Nebius Serverless Workflow
 
-Run Positronic training on [Nebius Serverless Jobs](https://docs.nebius.com/serverless/jobs/manage)
-instead of provisioning a GPU VM. Same containers, same training scripts, no VM lifecycle to
-manage and no idle compute cost.
+Run the full Positronic training and inference workflow on
+[Nebius Serverless](https://docs.nebius.com/serverless) — Jobs for batch work (data conversion,
+training) and Endpoints for HTTP inference servers. Same containers, same scripts, no VM
+lifecycle to manage and no idle compute cost.
 
-This page mirrors **Steps 1 (Convert) and 2 (Train)** of
-[docs/training-workflow.md](../../docs/training-workflow.md). Step 3 (inference serving) will
-follow in an upcoming change.
+This page mirrors all three cloud-side steps of
+[docs/training-workflow.md](../../docs/training-workflow.md): Convert, Train, Serve. Step 4
+(running inference from your robot or simulator against the served policy) is unchanged — see
+[docs/inference.md](../../docs/inference.md).
 
 ## Prerequisites
 
@@ -60,8 +62,8 @@ nebius mysterybox secret create \
     '[{key:"S3_ACCESS_KEY_ID",string_value:$k},{key:"S3_SECRET_ACCESS_KEY",string_value:$s}]')"
 ```
 
-The names matter — `train.sh` references the secrets by name. If a secret with one of these
-names already exists, the create call fails; skip it.
+The names matter — `convert.sh`, `train.sh`, and `serve.sh` reference the secrets by name. If a
+secret with one of these names already exists, the create call fails; skip it.
 
 ## Convert a Positronic dataset to LeRobot 0.3.3 format
 
@@ -140,6 +142,57 @@ Expected layout: `checkpoints/<step>/pretrained_model/{config.json,model.safeten
 an empty `wandb/` placeholder. Live WandB metrics flow to your account directly via the API
 key — they aren't synced to S3.
 
+## Serve a checkpoint as an HTTP endpoint
+
+`serve.sh` creates a [Nebius Serverless Endpoint](https://docs.nebius.com/serverless/endpoints/manage)
+running `python -m positronic.vendors.lerobot_0_3_3.server` on H100, with a public static IP on
+port 8000. Endpoints don't have managed DNS yet, so the IP is the contact address — it's stable
+across endpoint stop/start, but new endpoints get new IPs.
+
+Take a unique endpoint name as the first argument; remaining arguments forward to the server CLI.
+Example using the public ACT demo checkpoint at `s3://positronic-public/checkpoints/sim_stack_cubes/act/`:
+
+```bash
+bash workflows/nebius/serve.sh my-act-demo demo
+```
+
+Or against your own trained checkpoint:
+
+```bash
+bash workflows/nebius/serve.sh act-server serve \
+  --checkpoints_dir=s3://<your-bucket>/checkpoints/lerobot/<exp_name>/
+```
+
+`serve.sh` blocks until the public IP is allocated (typically <1 min), then prints a banner with
+the URL, endpoint ID, and the commands to follow logs and tear down. The container takes another
+~10–15 min to finish `uv sync` and load the model into GPU memory; once `INFO Started server
+process` appears in `nebius ai endpoint logs`, sanity-check with:
+
+```bash
+curl http://<endpoint-ip>:8000/api/v1/models
+# → {"models": ["050000"]}
+```
+
+Run inference from your laptop or robot host using the existing `positronic-inference` CLI
+([docs/inference.md](../../docs/inference.md)):
+
+```bash
+uv run positronic-inference sim \
+  --policy=.remote \
+  --policy.host=<endpoint-ip> \
+  --policy.port=8000 \
+  --output_dir=.data/inference/<run-name>/
+```
+
+When you're done, `stop.sh` deletes the endpoint and releases the public IP:
+
+```bash
+bash workflows/nebius/stop.sh my-act-demo
+```
+
+To pause an endpoint without releasing its static IP (useful if you want to reuse the same IP
+later), use `nebius ai endpoint stop <id>` directly — `start` resumes it.
+
 ## What changed vs. running on a VM
 
 | Concern | VM flow | Serverless Job |
@@ -154,18 +207,13 @@ Trade fast cold-starts for zero idle cost and zero VM administration.
 
 ## Configuration
 
-`train.sh` reads two environment variables, both with defaults pointing at the Positronic
+All scripts read two environment variables, both with defaults pointing at the Positronic
 project:
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `NEBIUS_PARENT_ID` | `project-e00f38wexevrr52b8j` | Nebius project to create the job in |
-| `NEBIUS_SUBNET_ID` | `vpcsubnet-e00pk1j1x6hjmr4m92` | VPC subnet for the job's compute instance |
+| `NEBIUS_PARENT_ID` | `project-e00f38wexevrr52b8j` | Nebius project to create the job/endpoint in |
+| `NEBIUS_SUBNET_ID` | `vpcsubnet-e00pk1j1x6hjmr4m92` | VPC subnet for the compute instance |
 
-Other operational settings (image, GPU platform/preset, MysteryBox secret names, S3 endpoint
-URL, region) are hardcoded — change them by editing `train.sh` directly.
-
-## Coming next
-
-- **Inference serving** — currently a long-running `lerobot-0_3_3-server` container on a GPU VM.
-  Next phase explores serving via a Nebius Serverless Endpoint.
+Other operational settings (image, platform/preset, MysteryBox secret names, S3 endpoint URL,
+region) are hardcoded — change them by editing the script directly.
