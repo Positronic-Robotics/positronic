@@ -755,8 +755,28 @@ def _prod_predicate(ep):
     return ep.get('variant', '') == PROD_VARIANTS[model]
 
 
+# AUDIT-CORRECTED EPISODES — manual edits to static.json on both private and
+# public S3 (audit captured wrong eval.* fields; fixed in place rather than
+# adding a transform). Re-running release_phail.py inference will OVERWRITE
+# these corrections unless the same edit is re-applied. Keep this list:
+#   - public 000000000000/000000000338 (private 100326/000000000000/000000000021):
+#     eval.successful_items 0 → 2 (audit missed 2 successful placements; ACT/Scissors).
+#   - public 000000000000/000000000285 (private 050326/000000000000/000000000015):
+#     eval.object 'Towels' → 'Wooden spoons' (operator selected wrong task at record time;
+#     content is wooden spoons; task field intentionally left as recorded).
 phail_inference_prod = base_cfg.filter_ds.override(dataset=phail_inference_release, predicate=_prod_predicate)
 
+# TELEOP HEURISTIC OVER-COUNTS — calculate_units (line ~486) returns
+# FIXED_ITEM_COUNTS[BATTERIES_TASK]=8 for every Batteries teleop episode, but
+# manual review found episodes that actually contain only 7 batteries. The
+# heuristic does not look inside the video; it just trusts the task label.
+# eval.successful_items / eval.total_items end up at 8/8 ('Success') instead
+# of 7/7, so totals across the teleop split are inflated. Documented for now,
+# not yet patched — see EPISODE_ITEM_COUNT_OVERRIDES if/when added.
+#   - public training 000000000000/000000000380 (private raw/droid/batteries/310126/000000000000/000000000001):
+#     manual count = 7 batteries, heuristic = 8.
+#   - public training 000000000000/000000000408 (private raw/droid/batteries/310126/000000000000/000000000037):
+#     manual count = 7 batteries, heuristic = 8.
 phail_teleop_release = base_cfg.transform.override(
     base=_teleop_with_items,
     transforms=[
