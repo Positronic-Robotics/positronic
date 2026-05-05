@@ -95,6 +95,8 @@ if [ "$VENDOR" = "openpi" ]; then
   # Sibling of the dataset (see convert.sh — pos3 forbids upload-inside-download).
   STATS_PATH="${DATASET_DIR%/}"
   STATS_PATH="${STATS_PATH%/*}/stats/"
+  # train consumes the assets subdirectory that openpi.stats writes inside STATS_PATH.
+  STATS_TRAIN_INPUT="${STATS_PATH}assets/"
 fi
 
 # ---- 2. Train (200 short steps; goal is wiring, not loss) ----
@@ -119,7 +121,7 @@ case "$VENDOR" in
   openpi)
     TRAIN_OUT=$(bash "$SCRIPT_DIR/train.sh" openpi \
       "--input_path=$DATASET_DIR" \
-      "--stats_path=$STATS_PATH" \
+      "--stats_path=$STATS_TRAIN_INPUT" \
       "--output_path=$CKPT_DIR" \
       "--exp_name=$EXP_NAME" \
       --num_train_steps=500 2>&1)

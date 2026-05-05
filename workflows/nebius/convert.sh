@@ -156,7 +156,7 @@ nebius ai job create \
 
 cat <<EOM
 
-Stats output will land at: ${STATS_PATH}
+Stats output will land at: ${STATS_PATH} (with assets in ${STATS_PATH}assets/)
 When training, pass:
-  --input_path=${OUTPUT_DIR} --stats_path=${STATS_PATH}
+  --input_path=${OUTPUT_DIR} --stats_path=${STATS_PATH}assets/
 EOM
