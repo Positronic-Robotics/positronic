@@ -123,11 +123,19 @@ class PolicyClient:
 class Gr00tSubprocess:
     """Manages the gr00t ZMQ server subprocess."""
 
-    def __init__(self, checkpoint_dir: str, modality_config_path: str, groot_venv_path: str, zmq_port: int = 5555):
+    def __init__(
+        self,
+        checkpoint_dir: str,
+        modality_config_path: str,
+        groot_venv_path: str,
+        zmq_port: int = 5555,
+        ready_timeout: float = 120.0,
+    ):
         self.checkpoint_dir = checkpoint_dir
         self.modality_config_path = modality_config_path
         self.groot_venv_path = groot_venv_path
         self.zmq_port = zmq_port
+        self.ready_timeout = ready_timeout
         self.process: subprocess.Popen | None = None
         self._client: PolicyClient | None = None
 
@@ -155,7 +163,9 @@ class Gr00tSubprocess:
         exit_code = self.process.poll()
         return exit_code is not None, exit_code
 
-    def _wait_for_ready(self, timeout: float = 120.0, poll_interval: float = 1.0):
+    def _wait_for_ready(self, timeout: float | None = None, poll_interval: float = 1.0):
+        if timeout is None:
+            timeout = self.ready_timeout
         """Wait for the gr00t server to be ready by polling with ping."""
         client = PolicyClient(host='127.0.0.1', port=self.zmq_port, timeout_ms=2000)
         start_time = time.time()
@@ -202,7 +212,7 @@ class Gr00tSubprocess:
                 check_crashed=self._check_crashed,
                 description='GR00T subprocess',
                 on_progress=on_progress,
-                max_wait=120.0,
+                max_wait=self.ready_timeout,
             )
         finally:
             client.close()
@@ -267,6 +277,7 @@ class InferenceServer(VendorServer):
         port: int = 8000,
         zmq_port: int = 5555,
         recording_dir: str | None = None,
+        ready_timeout: float = 120.0,
     ):
         super().__init__(codec=codec, host=host, port=port, recording_dir=recording_dir)
         self.checkpoints_dir = checkpoints_dir.rstrip('/')
@@ -275,6 +286,7 @@ class InferenceServer(VendorServer):
         self.modality_config_path = MODALITY_CONFIGS.get(modality_config, modality_config)
         self.groot_venv_path = groot_venv_path
         self.zmq_port = zmq_port
+        self.ready_timeout = ready_timeout
 
         self.subprocess: Gr00tSubprocess | None = None
         self.current_checkpoint_id: str | None = None
@@ -332,6 +344,7 @@ class InferenceServer(VendorServer):
             modality_config_path=self.modality_config_path,
             groot_venv_path=self.groot_venv_path,
             zmq_port=self.zmq_port,
+            ready_timeout=self.ready_timeout,
         )
         await subprocess_obj.start_async(on_progress=send_progress)
 
@@ -362,6 +375,7 @@ class InferenceServer(VendorServer):
     groot_venv_path='/.venv/',
     modality_config='ee',
     recording_dir=None,
+    ready_timeout=120.0,
 )
 def server(
     codec: Codec,
@@ -371,6 +385,7 @@ def server(
     groot_venv_path: str,
     modality_config: str,
     recording_dir: str | None,
+    ready_timeout: float,
 ):
     """Starts the GR00T inference server with encoding/decoding."""
 
@@ -383,6 +398,7 @@ def server(
             groot_venv_path=groot_venv_path,
             port=port,
             recording_dir=recording_dir,
+            ready_timeout=ready_timeout,
         ).serve()
 
 
