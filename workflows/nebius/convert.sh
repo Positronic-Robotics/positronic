@@ -15,18 +15,28 @@ if [ $# -lt 1 ]; then
   cat >&2 <<'EOF'
 Usage: bash workflows/nebius/convert.sh <vendor> [convert args...]
 
-Vendors: lerobot_0_3_3 | lerobot
+Vendors: lerobot_0_3_3 | lerobot | openpi | gr00t
 
-Forwards remaining arguments to positronic.vendors.<vendor>.to_lerobot convert.
-Example:
+Forwards remaining arguments to the converter recommended by each vendor's
+README (lerobot 0.3.3 for ACT/OpenPI/GR00T; lerobot 0.4.x for SmolVLA). The
+caller picks a vendor-specific codec via `--dataset.codec=...`.
+
+Examples:
 
   bash workflows/nebius/convert.sh lerobot_0_3_3 \
     --dataset.dataset=@positronic.cfg.ds.phail.sim_stack_cubes \
     --dataset.codec=@positronic.vendors.lerobot_0_3_3.codecs.ee \
     --output_dir=s3://<your-bucket>/sim_stack_cubes_lerobot/
 
-OpenPI and GR00T do not have a converter — they consume LeRobot 0.3.3 datasets
-produced by `lerobot_0_3_3`.
+  bash workflows/nebius/convert.sh openpi \
+    --dataset.dataset=@positronic.cfg.ds.phail.sim_stack_cubes \
+    --dataset.codec=@positronic.vendors.openpi.codecs.ee \
+    --output_dir=s3://<your-bucket>/sim_stack_cubes_openpi/
+
+  bash workflows/nebius/convert.sh gr00t \
+    --dataset.dataset=@positronic.cfg.ds.phail.sim_stack_cubes \
+    --dataset.codec=@positronic.vendors.gr00t.codecs.ee_rot6d_joints \
+    --output_dir=s3://<your-bucket>/sim_stack_cubes_gr00t/
 EOF
   exit 1
 fi
@@ -34,17 +44,19 @@ fi
 VENDOR="$1"
 shift
 
+# OpenPI and GR00T don't ship their own converter — they re-use the lerobot_0_3_3
+# converter with their own codec namespaces (per each vendor's README).
 case "$VENDOR" in
-  lerobot_0_3_3) EXTRA="--extra lerobot_0_3_3 " ;;
-  lerobot)       EXTRA="--extra lerobot " ;;
+  lerobot_0_3_3|openpi|gr00t) CONVERTER_MODULE="positronic.vendors.lerobot_0_3_3.to_lerobot"; EXTRA="--extra lerobot_0_3_3 " ;;
+  lerobot)                    CONVERTER_MODULE="positronic.vendors.lerobot.to_lerobot";       EXTRA="--extra lerobot " ;;
   *)
-    echo "Unknown vendor: '$VENDOR'. Supported: lerobot_0_3_3 | lerobot" >&2
+    echo "Unknown vendor: '$VENDOR'. Supported: lerobot_0_3_3 | lerobot | openpi | gr00t" >&2
     exit 1
     ;;
 esac
 
 JOB_NAME="${VENDOR//_/-}-convert-$(date +%Y%m%d-%H%M%S)"
-CONVERT_ARGS="run --python 3.11 ${EXTRA}python -m positronic.vendors.${VENDOR}.to_lerobot convert $*"
+CONVERT_ARGS="run --python 3.11 ${EXTRA}python -m ${CONVERTER_MODULE} convert $*"
 
 nebius ai job create \
   --parent-id "$PARENT_ID" \

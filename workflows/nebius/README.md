@@ -65,24 +65,45 @@ nebius mysterybox secret create \
 The names matter — `convert.sh`, `train.sh`, and `serve.sh` reference the secrets by name. If a
 secret with one of these names already exists, the create call fails; skip it.
 
-## Convert a Positronic dataset to LeRobot 0.3.3 format
+## Convert a Positronic dataset to a LeRobot dataset
 
-ACT (and SmolVLA, GR00T, OpenPI) trains on the LeRobot 0.3.3 dataset format. `convert.sh` runs
-`python -m positronic.vendors.<vendor>.to_lerobot convert` inside a Nebius Job on CPU
-(`cpu-e2`, `8vcpu-32gb`). Conversion is video-encoding heavy — CPU is the right resource; a GPU
-would be wasted. Supported vendors: `lerobot_0_3_3` (used by ACT) and `lerobot` (used by SmolVLA
-and other lerobot 0.4.x policies). OpenPI and GR00T have no converter of their own — they read
-the `lerobot_0_3_3` output directly.
+ACT, SmolVLA, OpenPI, and GR00T all train on a LeRobot dataset, but each vendor recommends a
+specific converter + codec pair (see the vendor's `positronic/vendors/<vendor>/README.md`).
+`convert.sh` accepts the vendor as a positional and dispatches to the recommended converter:
+
+| Vendor | Converter | Codec namespace |
+|---|---|---|
+| `lerobot_0_3_3` (ACT) | `positronic.vendors.lerobot_0_3_3.to_lerobot` | `@positronic.vendors.lerobot_0_3_3.codecs.*` |
+| `lerobot` (SmolVLA) | `positronic.vendors.lerobot.to_lerobot` | `@positronic.vendors.lerobot.codecs.*` |
+| `openpi` | `positronic.vendors.lerobot_0_3_3.to_lerobot` (re-used) | `@positronic.vendors.openpi.codecs.*` |
+| `gr00t` | `positronic.vendors.lerobot_0_3_3.to_lerobot` (re-used) | `@positronic.vendors.gr00t.codecs.*` |
+
+The job runs on CPU (`cpu-e2`, `8vcpu-32gb`) — conversion is video-encoding heavy; a GPU would
+be wasted.
 
 Example: convert the public [`sim_stack_cubes`](../../positronic/cfg/ds/phail.py) dataset (317
-cube-stacking episodes, hosted on Positronic's public S3 bucket) into a LeRobot dataset on your
-own bucket:
+cube-stacking episodes, hosted on Positronic's public S3 bucket) into an ACT-ready LeRobot
+dataset on your own bucket:
 
 ```bash
 bash workflows/nebius/convert.sh lerobot_0_3_3 \
   --dataset.dataset=@positronic.cfg.ds.phail.sim_stack_cubes \
   --dataset.codec=@positronic.vendors.lerobot_0_3_3.codecs.ee \
   --output_dir=s3://<your-bucket>/sim_stack_cubes_lerobot/
+```
+
+Same shape for the other vendors — swap the vendor token and the codec:
+
+```bash
+bash workflows/nebius/convert.sh openpi \
+  --dataset.dataset=@positronic.cfg.ds.phail.sim_stack_cubes \
+  --dataset.codec=@positronic.vendors.openpi.codecs.ee \
+  --output_dir=s3://<your-bucket>/sim_stack_cubes_openpi/
+
+bash workflows/nebius/convert.sh gr00t \
+  --dataset.dataset=@positronic.cfg.ds.phail.sim_stack_cubes \
+  --dataset.codec=@positronic.vendors.gr00t.codecs.ee_rot6d_joints \
+  --output_dir=s3://<your-bucket>/sim_stack_cubes_gr00t/
 ```
 
 The job reads from `s3://positronic-public/...` anonymously — the dataset's `PUBLIC` profile in
