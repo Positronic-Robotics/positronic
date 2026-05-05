@@ -13,16 +13,21 @@ This page mirrors all three cloud-side steps of
 ## Prerequisites
 
 - Nebius CLI v0.12.209 or newer, authenticated to your project
-- Read access to your input dataset bucket and write access to your checkpoint output bucket
-- AWS access key, AWS secret key, and a Weights & Biases API key
+- Write access to an S3 bucket where converted datasets and checkpoints will land
+  (Public datasets like `sim_stack_cubes` are read anonymously — no credentials needed for
+  the read side)
+- AWS access key + secret for that bucket
+- _Optional:_ a Weights & Biases API key for live training metrics. To skip wandb, omit the
+  wandb secret below and run training jobs with `WANDB_SECRET= bash workflows/nebius/train.sh ...`.
 
 ## One-time setup
 
-Create four MysteryBox secrets that the jobs will reference by name. AWS keys are read from
-your local `~/.aws/credentials`; the WandB key from `docker/.env.wandb`. The first three are
-single-key payloads consumed via `--env-secret`. The fourth is a two-key payload consumed by
-`--volume` for Mountpoint-S3 authentication (Nebius requires the keys to be named
-`S3_ACCESS_KEY_ID` / `S3_SECRET_ACCESS_KEY`).
+Create up to four MysteryBox secrets that the jobs will reference by name. AWS keys are read
+from your local `~/.aws/credentials`; the WandB key from `docker/.env.wandb`. The first three
+are single-key payloads consumed via `--env-secret`. The fourth is a two-key payload consumed
+by `--volume` for Mountpoint-S3 authentication (Nebius requires the keys to be named
+`S3_ACCESS_KEY_ID` / `S3_SECRET_ACCESS_KEY`). The wandb secret is optional — skip it if you
+don't use Weights & Biases.
 
 ```bash
 PARENT_ID=project-e00f38wexevrr52b8j  # adjust to your own project
@@ -65,18 +70,18 @@ nebius mysterybox secret create \
 The names matter — `convert.sh`, `train.sh`, and `serve.sh` reference the secrets by name. If a
 secret with one of these names already exists, the create call fails; skip it.
 
-## Convert a Positronic dataset to a LeRobot dataset
+## Convert a Positronic dataset
 
-ACT, SmolVLA, OpenPI, and GR00T all train on a LeRobot dataset, but each vendor recommends a
-specific converter + codec pair (see the vendor's `positronic/vendors/<vendor>/README.md`).
-`convert.sh` accepts the vendor as a positional and dispatches to the recommended converter:
+Each model family expects a specific dataset format. `convert.sh` runs the right converter
+with the right [codec](../../docs/codecs.md) for the model you choose, dispatched by the
+vendor positional:
 
-| Vendor | Converter | Codec namespace |
-|---|---|---|
-| `lerobot_0_3_3` (ACT) | `positronic.vendors.lerobot_0_3_3.to_lerobot` | `@positronic.vendors.lerobot_0_3_3.codecs.*` |
-| `lerobot` (SmolVLA) | `positronic.vendors.lerobot.to_lerobot` | `@positronic.vendors.lerobot.codecs.*` |
-| `openpi` | `positronic.vendors.lerobot_0_3_3.to_lerobot` (re-used) | `@positronic.vendors.openpi.codecs.*` |
-| `gr00t` | `positronic.vendors.lerobot_0_3_3.to_lerobot` (re-used) | `@positronic.vendors.gr00t.codecs.*` |
+| Model | `<vendor>` arg | Converter | Codec namespace |
+|---|---|---|---|
+| ACT | `lerobot_0_3_3` | `positronic.vendors.lerobot_0_3_3.to_lerobot` | `@positronic.vendors.lerobot_0_3_3.codecs.*` |
+| SmolVLA | `lerobot` | `positronic.vendors.lerobot.to_lerobot` | `@positronic.vendors.lerobot.codecs.*` |
+| OpenPI | `openpi` | `positronic.vendors.lerobot_0_3_3.to_lerobot` (re-used) | `@positronic.vendors.openpi.codecs.*` |
+| GR00T | `gr00t` | `positronic.vendors.lerobot_0_3_3.to_lerobot` (re-used) | `@positronic.vendors.gr00t.codecs.*` |
 
 The job runs on CPU (`cpu-e2`, `8vcpu-32gb`) — conversion is video-encoding heavy; a GPU would
 be wasted.
@@ -106,15 +111,8 @@ bash workflows/nebius/convert.sh gr00t \
   --output_dir=s3://<your-bucket>/sim_stack_cubes_gr00t/
 ```
 
-The job reads from `s3://positronic-public/...` anonymously — the dataset's `PUBLIC` profile in
-[`positronic/cfg/ds/__init__.py`](../../positronic/cfg/ds/__init__.py) opts into unauthenticated
-S3 access, so no extra credentials are needed for the read side. The write side uses the AWS
-keys you stored in MysteryBox. Wall-clock for `sim_stack_cubes` is ~25 min (~7 min cold start,
-~13 min processing + video encoding, seconds for upload).
-
-The output is a standard LeRobot 0.3.3 layout — `data/`, `videos/`, `meta/{info,episodes,
-episodes_stats,tasks}.jsonl`, plus a `run_metadata_*.yaml` capturing the conversion code state.
-The output path is what you pass to `train.sh --input_path=...` next.
+`sim_stack_cubes` is publicly hosted on Nebius and read anonymously. The output path is what
+you pass to `train.sh --input_path=...` next.
 
 ## Train
 
@@ -126,8 +124,8 @@ of the job spec (preset, secrets, S3 endpoint, mount) is identical.
 The bucket from `--input_path=s3://...` is mounted with
 [Mountpoint-S3](https://docs.nebius.com/object-storage/interfaces/mountpoint-s3) at `/mnt/input`
 (read-only) so the dataset is streamed on demand instead of being downloaded into local cache.
-`--output_dir` stays an `s3://` URL handled by `pos3` — vendor checkpoint savers tend to use
-symlinks, which Mountpoint-S3 does not support.
+`--output_dir` stays an `s3://` URL handled by [`pos3`](https://github.com/Positronic-Robotics/pos3)
+— vendor checkpoint savers tend to use symlinks, which Mountpoint-S3 does not support.
 
 Example: train ACT on the converted `sim_stack_cubes` dataset from the previous step:
 
@@ -204,7 +202,7 @@ matching checkpoint:
 bash workflows/nebius/serve.sh lerobot smolvla-server serve \
   --checkpoints_dir=s3://<your-bucket>/checkpoints/smolvla/<exp_name>/
 
-bash workflows/nebius/serve.sh openpi pi-server serve \
+bash workflows/nebius/serve.sh openpi my-openpi serve \
   --checkpoints_dir=s3://<your-bucket>/checkpoints/openpi/<exp_name>/
 
 bash workflows/nebius/serve.sh gr00t groot-server ee_rot6d_rel \
@@ -243,25 +241,20 @@ later), use `nebius ai endpoint stop <id>` directly — `start` resumes it.
 
 ## What changed vs. running on a VM
 
-| Concern | VM flow | Serverless Job |
-|---|---|---|
-| First-run setup | provision VM, install drivers, configure SSH/network, mount AWS credentials | three `nebius mysterybox secret create` calls |
-| Per-run lifecycle | boot VM → SSH → `docker compose run` → stop VM | `bash train.sh ...` |
-| Idle cost | accrues until the VM is stopped | none — job releases compute on completion |
-| Credentials | live on operator's laptop, mounted into the container | stay in MysteryBox; never leave the cloud |
-| Cold-start | seconds (VM kept warm) | ~10 min per job (image pull + venv resolve) |
-
-Trade fast cold-starts for zero idle cost and zero VM administration.
+No VM to provision, SSH into, or remember to shut down. Credentials stay in MysteryBox instead
+of on operator laptops. Compute is released the moment a job finishes — idle cost goes to zero.
+The trade-off is a ~10-min cold start per job (image pull + venv resolve) instead of a warm VM.
 
 ## Configuration
 
-All scripts read two environment variables, both with defaults pointing at the Positronic
-project:
+The script defaults point at Positronic Robotics' own Nebius project — **external users must
+override them** with their own project + subnet IDs:
 
-| Variable | Default | Purpose |
+| Variable | Default (Positronic-internal) | Purpose |
 |---|---|---|
 | `NEBIUS_PARENT_ID` | `project-e00f38wexevrr52b8j` | Nebius project to create the job/endpoint in |
 | `NEBIUS_SUBNET_ID` | `vpcsubnet-e00pk1j1x6hjmr4m92` | VPC subnet for the compute instance |
+| `WANDB_SECRET` | `positronic-serverless-wandb-api-key` | MysteryBox secret name for the WandB key. Set empty (`WANDB_SECRET=`) to skip wandb entirely. |
 
 Other operational settings (platform/preset, MysteryBox secret names, S3 endpoint URL, region)
 are hardcoded — change them by editing the script directly. The vendor positional arg selects

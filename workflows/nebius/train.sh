@@ -16,6 +16,7 @@ set -euo pipefail
 
 PARENT_ID="${NEBIUS_PARENT_ID:-project-e00f38wexevrr52b8j}"
 SUBNET_ID="${NEBIUS_SUBNET_ID:-vpcsubnet-e00pk1j1x6hjmr4m92}"
+WANDB_SECRET="${WANDB_SECRET-positronic-serverless-wandb-api-key}"
 
 if [ $# -lt 1 ]; then
   cat >&2 <<'EOF'
@@ -75,6 +76,11 @@ fi
 JOB_NAME="${VENDOR//_/-}-train-$(date +%Y%m%d-%H%M%S)"
 TRAIN_ARGS="run --python 3.11 ${EXTRA}python -m positronic.vendors.${VENDOR}.train ${NEW_ARGS[*]}"
 
+WANDB_FLAGS=()
+if [ -n "$WANDB_SECRET" ]; then
+  WANDB_FLAGS+=(--env-secret "WANDB_API_KEY=$WANDB_SECRET")
+fi
+
 nebius ai job create \
   --parent-id "$PARENT_ID" \
   --subnet-id "$SUBNET_ID" \
@@ -89,6 +95,6 @@ nebius ai job create \
   ${VOLUME_FLAGS[@]+"${VOLUME_FLAGS[@]}"} \
   --env-secret AWS_ACCESS_KEY_ID=positronic-serverless-aws-access-key-id \
   --env-secret AWS_SECRET_ACCESS_KEY=positronic-serverless-aws-secret-access-key \
-  --env-secret WANDB_API_KEY=positronic-serverless-wandb-api-key \
+  ${WANDB_FLAGS[@]+"${WANDB_FLAGS[@]}"} \
   --env AWS_ENDPOINT_URL=https://storage.eu-north1.nebius.cloud:443 \
   --env AWS_DEFAULT_REGION=eu-north1
