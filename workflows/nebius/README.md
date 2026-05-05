@@ -68,16 +68,18 @@ secret with one of these names already exists, the create call fails; skip it.
 ## Convert a Positronic dataset to LeRobot 0.3.3 format
 
 ACT (and SmolVLA, GR00T, OpenPI) trains on the LeRobot 0.3.3 dataset format. `convert.sh` runs
-`python -m positronic.vendors.lerobot_0_3_3.to_lerobot convert` inside a Nebius Job on CPU
+`python -m positronic.vendors.<vendor>.to_lerobot convert` inside a Nebius Job on CPU
 (`cpu-e2`, `8vcpu-32gb`). Conversion is video-encoding heavy — CPU is the right resource; a GPU
-would be wasted.
+would be wasted. Supported vendors: `lerobot_0_3_3` (used by ACT) and `lerobot` (used by SmolVLA
+and other lerobot 0.4.x policies). OpenPI and GR00T have no converter of their own — they read
+the `lerobot_0_3_3` output directly.
 
 Example: convert the public [`sim_stack_cubes`](../../positronic/cfg/ds/phail.py) dataset (317
 cube-stacking episodes, hosted on Positronic's public S3 bucket) into a LeRobot dataset on your
 own bucket:
 
 ```bash
-bash workflows/nebius/convert.sh \
+bash workflows/nebius/convert.sh lerobot_0_3_3 \
   --dataset.dataset=@positronic.cfg.ds.phail.sim_stack_cubes \
   --dataset.codec=@positronic.vendors.lerobot_0_3_3.codecs.ee \
   --output_dir=s3://<your-bucket>/sim_stack_cubes_lerobot/
@@ -93,25 +95,32 @@ The output is a standard LeRobot 0.3.3 layout — `data/`, `videos/`, `meta/{inf
 episodes_stats,tasks}.jsonl`, plus a `run_metadata_*.yaml` capturing the conversion code state.
 The output path is what you pass to `train.sh --input_path=...` next.
 
-## Train ACT
+## Train
 
-`train.sh` runs `python -m positronic.vendors.lerobot_0_3_3.train` inside a Nebius Job on H100
-(`gpu-h100-sxm`, `1gpu-16vcpu-200gb`). The bucket from `--input_path=s3://...` is mounted with
+`train.sh` runs `python -m positronic.vendors.<vendor>.train` inside a Nebius Job on H100
+(`gpu-h100-sxm`, `1gpu-16vcpu-200gb`). Supported vendors: `lerobot_0_3_3` (ACT), `lerobot`
+(SmolVLA), `openpi`, `gr00t`. The vendor selects the container image and `uv` extras — the rest
+of the job spec (preset, secrets, S3 endpoint, mount) is identical.
+
+The bucket from `--input_path=s3://...` is mounted with
 [Mountpoint-S3](https://docs.nebius.com/object-storage/interfaces/mountpoint-s3) at `/mnt/input`
 (read-only) so the dataset is streamed on demand instead of being downloaded into local cache.
-`--output_dir` stays an `s3://` URL handled by `pos3` — LeRobot's checkpoint saver uses
+`--output_dir` stays an `s3://` URL handled by `pos3` — vendor checkpoint savers tend to use
 symlinks, which Mountpoint-S3 does not support.
 
 Example: train ACT on the converted `sim_stack_cubes` dataset from the previous step:
 
 ```bash
-bash workflows/nebius/train.sh \
+bash workflows/nebius/train.sh lerobot_0_3_3 \
   --input_path=s3://<your-bucket>/sim_stack_cubes_lerobot/ \
   --exp_name=act_sim_stack_v1 \
   --output_dir=s3://<your-bucket>/checkpoints/lerobot/ \
   --num_train_steps=50000 \
   --save_freq=10000
 ```
+
+Swap `lerobot_0_3_3` for `lerobot`, `openpi`, or `gr00t` to train other policies on the same
+dataset; remaining flags forward to that vendor's `train` CLI.
 
 The CLI prints the new job ID and useful follow-up commands:
 
@@ -137,30 +146,48 @@ When the job state reaches `COMPLETED`, the checkpoint structure mirrors a local
 aws s3 ls s3://<your-bucket>/checkpoints/lerobot/<exp_name>/ --recursive
 ```
 
-Expected layout: `checkpoints/<step>/pretrained_model/{config.json,model.safetensors,...}`,
+Expected ACT layout: `checkpoints/<step>/pretrained_model/{config.json,model.safetensors,...}`,
 `checkpoints/<step>/training_state/...`, a `run_metadata_*.yaml` capturing the code state, and
-an empty `wandb/` placeholder. Live WandB metrics flow to your account directly via the API
-key — they aren't synced to S3.
+an empty `wandb/` placeholder. SmolVLA matches the same layout; OpenPI and GR00T use their own
+checkpoint shapes (see each vendor's README under `positronic/vendors/`). Live WandB metrics
+flow to your account directly via the API key — they aren't synced to S3.
 
 ## Serve a checkpoint as an HTTP endpoint
 
 `serve.sh` creates a [Nebius Serverless Endpoint](https://docs.nebius.com/serverless/endpoints/manage)
-running `python -m positronic.vendors.lerobot_0_3_3.server` on H100, with a public static IP on
+running `python -m positronic.vendors.<vendor>.server` on H100, with a public static IP on
 port 8000. Endpoints don't have managed DNS yet, so the IP is the contact address — it's stable
-across endpoint stop/start, but new endpoints get new IPs.
+across endpoint stop/start, but new endpoints get new IPs. Supported vendors:
+`lerobot_0_3_3`, `lerobot`, `openpi`, `gr00t`.
 
-Take a unique endpoint name as the first argument; remaining arguments forward to the server CLI.
-Example using the public ACT demo checkpoint at `s3://positronic-public/checkpoints/sim_stack_cubes/act/`:
+Take a vendor and a unique endpoint name as the first two arguments; remaining arguments forward
+to the server CLI. Example using the public ACT demo checkpoint at
+`s3://positronic-public/checkpoints/sim_stack_cubes/act/` (no S3 credentials needed inside the
+container — the `demo` subcommand is `lerobot_0_3_3`-only and reads anonymously):
 
 ```bash
-bash workflows/nebius/serve.sh my-act-demo demo
+bash workflows/nebius/serve.sh lerobot_0_3_3 my-act-demo demo
 ```
 
 Or against your own trained checkpoint:
 
 ```bash
-bash workflows/nebius/serve.sh act-server serve \
+bash workflows/nebius/serve.sh lerobot_0_3_3 act-server serve \
   --checkpoints_dir=s3://<your-bucket>/checkpoints/lerobot/<exp_name>/
+```
+
+Same shape for the other vendors — replace the vendor token and point `--checkpoints_dir` at the
+matching checkpoint:
+
+```bash
+bash workflows/nebius/serve.sh lerobot smolvla-server serve \
+  --checkpoints_dir=s3://<your-bucket>/checkpoints/smolvla/<exp_name>/
+
+bash workflows/nebius/serve.sh openpi pi-server serve \
+  --checkpoints_dir=s3://<your-bucket>/checkpoints/openpi/<exp_name>/
+
+bash workflows/nebius/serve.sh gr00t groot-server ee_rot6d_rel \
+  --checkpoints_dir=s3://<your-bucket>/checkpoints/groot/<exp_name>/
 ```
 
 `serve.sh` blocks until the public IP is allocated (typically <1 min), then prints a banner with
@@ -215,5 +242,13 @@ project:
 | `NEBIUS_PARENT_ID` | `project-e00f38wexevrr52b8j` | Nebius project to create the job/endpoint in |
 | `NEBIUS_SUBNET_ID` | `vpcsubnet-e00pk1j1x6hjmr4m92` | VPC subnet for the compute instance |
 
-Other operational settings (image, platform/preset, MysteryBox secret names, S3 endpoint URL,
-region) are hardcoded — change them by editing the script directly.
+Other operational settings (platform/preset, MysteryBox secret names, S3 endpoint URL, region)
+are hardcoded — change them by editing the script directly. The vendor positional arg selects
+the container image and `uv` extras:
+
+| Vendor | Image | `uv` extra |
+|---|---|---|
+| `lerobot_0_3_3` (ACT) | `positro/positronic` | `--extra lerobot_0_3_3` |
+| `lerobot` (SmolVLA) | `positro/positronic` | `--extra lerobot` |
+| `openpi` | `positro/openpi` | _(none — `/openpi` is co-installed)_ |
+| `gr00t` | `positro/gr00t` | _(none — `/gr00t` is co-installed)_ |

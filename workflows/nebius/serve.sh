@@ -1,12 +1,13 @@
 #!/usr/bin/env bash
-# Submit a Nebius Serverless Endpoint running positronic.vendors.lerobot_0_3_3.server.
+# Submit a Nebius Serverless Endpoint running a vendor inference server.
 #
 # After creation, polls until a public IP is allocated and prints connection
 # details. The container itself takes ~10-15 min more to finish uv sync and
 # load the model into GPU memory after the IP appears.
 #
-# Hardcoded: image, GPU platform/preset, MysteryBox secret names, S3 endpoint URL,
-# container port. Override-able via env: NEBIUS_PARENT_ID, NEBIUS_SUBNET_ID.
+# Hardcoded: GPU platform/preset, MysteryBox secret names, S3 endpoint URL,
+# container port. Vendor selects image + uv extra. Override-able via env:
+# NEBIUS_PARENT_ID, NEBIUS_SUBNET_ID.
 
 set -euo pipefail
 
@@ -15,34 +16,60 @@ SUBNET_ID="${NEBIUS_SUBNET_ID:-vpcsubnet-e00pk1j1x6hjmr4m92}"
 
 if [ $# -lt 2 ]; then
   cat >&2 <<'EOF'
-Usage: bash workflows/nebius/serve.sh <endpoint-name> [server args...]
+Usage: bash workflows/nebius/serve.sh <vendor> <endpoint-name> [server args...]
 
-The first argument is a unique endpoint name (lowercase alphanumeric + dashes).
-Remaining arguments forward to positronic.vendors.lerobot_0_3_3.server.
+Vendors: lerobot_0_3_3 | lerobot | openpi | gr00t
+
+The endpoint name must be unique in the project (lowercase alphanumeric + dashes).
+Remaining arguments forward to positronic.vendors.<vendor>.server.
 
 Examples:
 
-  # Public ACT demo checkpoint (no S3 credentials needed inside the container)
-  bash workflows/nebius/serve.sh my-act-demo demo
+  # ACT public demo checkpoint (no S3 credentials needed inside the container)
+  bash workflows/nebius/serve.sh lerobot_0_3_3 my-act-demo demo
 
-  # Your own checkpoint
-  bash workflows/nebius/serve.sh act-server serve \
+  # Your own ACT checkpoint
+  bash workflows/nebius/serve.sh lerobot_0_3_3 act-server serve \
     --checkpoints_dir=s3://<your-bucket>/checkpoints/lerobot/<exp_name>/
+
+  # SmolVLA / lerobot 0.4.x checkpoint
+  bash workflows/nebius/serve.sh lerobot smolvla-server serve \
+    --checkpoints_dir=s3://<your-bucket>/checkpoints/smolvla/<exp_name>/
+
+  # OpenPI
+  bash workflows/nebius/serve.sh openpi pi-server serve \
+    --checkpoints_dir=s3://<your-bucket>/checkpoints/openpi/<exp_name>/
+
+  # GR00T
+  bash workflows/nebius/serve.sh gr00t groot-server ee_rot6d_rel \
+    --checkpoints_dir=s3://<your-bucket>/checkpoints/groot/<exp_name>/
 EOF
   exit 1
 fi
 
-NAME="$1"
-shift
+VENDOR="$1"
+NAME="$2"
+shift 2
 
-SERVER_ARGS="run --python 3.11 --extra lerobot_0_3_3 python -m positronic.vendors.lerobot_0_3_3.server $*"
+case "$VENDOR" in
+  lerobot_0_3_3) IMAGE="positro/positronic:latest"; EXTRA="--extra lerobot_0_3_3 " ;;
+  lerobot)       IMAGE="positro/positronic:latest"; EXTRA="--extra lerobot " ;;
+  openpi)        IMAGE="positro/openpi:latest";     EXTRA="" ;;
+  gr00t)         IMAGE="positro/gr00t:latest";      EXTRA="" ;;
+  *)
+    echo "Unknown vendor: '$VENDOR'. Supported: lerobot_0_3_3 | lerobot | openpi | gr00t" >&2
+    exit 1
+    ;;
+esac
 
-echo "Creating endpoint '$NAME'..."
+SERVER_ARGS="run --python 3.11 ${EXTRA}python -m positronic.vendors.${VENDOR}.server $*"
+
+echo "Creating $VENDOR endpoint '$NAME'..."
 nebius ai endpoint create \
   --parent-id "$PARENT_ID" \
   --subnet-id "$SUBNET_ID" \
   --name "$NAME" \
-  --image positro/positronic:latest \
+  --image "$IMAGE" \
   --container-command uv \
   --args "$SERVER_ARGS" \
   --container-port 8000 \
@@ -85,6 +112,7 @@ cat <<BANNER
   Endpoint URL:  http://$IP
   Endpoint ID:   $ID
   Endpoint name: $NAME
+  Vendor:        $VENDOR
 ==============================================================
 
 The container is still warming up (image pull + uv sync + checkpoint load,
