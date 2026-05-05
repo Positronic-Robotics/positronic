@@ -264,5 +264,5 @@ the container image and `uv` extras:
 |---|---|---|
 | `lerobot_0_3_3` (ACT) | `positro/positronic` | `--extra lerobot_0_3_3` |
 | `lerobot` (SmolVLA) | `positro/positronic` | `--extra lerobot` |
-| `openpi` | `positro/openpi` | _(none — `/openpi` is co-installed)_ |
+| `openpi` | `positro/openpi` | `--extra openpi` (serve); none for train/stats |
 | `gr00t` | `positro/gr00t` | _(none — `/gr00t` is co-installed)_ |

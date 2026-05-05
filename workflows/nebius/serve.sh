@@ -54,7 +54,8 @@ shift 2
 case "$VENDOR" in
   lerobot_0_3_3) IMAGE="positro/positronic:latest"; EXTRA="--extra lerobot_0_3_3 " ;;
   lerobot)       IMAGE="positro/positronic:latest"; EXTRA="--extra lerobot " ;;
-  openpi)        IMAGE="positro/openpi:latest";     EXTRA="" ;;
+  # openpi.server imports `openpi_client` at module top → needs --extra openpi
+  openpi)        IMAGE="positro/openpi:latest";     EXTRA="--extra openpi " ;;
   gr00t)         IMAGE="positro/gr00t:latest";      EXTRA="" ;;
   *)
     echo "Unknown vendor: '$VENDOR'. Supported: lerobot_0_3_3 | lerobot | openpi | gr00t" >&2
