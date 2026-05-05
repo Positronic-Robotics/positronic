@@ -129,7 +129,10 @@ while true; do
   sleep 30
 done
 
-STATS_PATH="${OUTPUT_DIR%/}/stats/"
+# Stats must be a SIBLING of the dataset, not a child — pos3 refuses when an
+# upload destination is inside the dataset it's also downloading.
+DATASET_TRIM="${OUTPUT_DIR%/}"
+STATS_PATH="${DATASET_TRIM%/*}/stats/"
 STATS_JOB_NAME="openpi-stats-$(date +%Y%m%d-%H%M%S)"
 STATS_ARGS="run --python 3.11 python -m positronic.vendors.openpi.stats --input_path=${OUTPUT_DIR} --output_path=${STATS_PATH}"
 

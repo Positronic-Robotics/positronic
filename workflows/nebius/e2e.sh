@@ -92,7 +92,9 @@ if [ "$VENDOR" = "openpi" ]; then
   [ -z "$STATS_ID" ] && { note "FAIL: stats job not found"; exit 1; }
   note "stats job: $STATS_ID"
   wait_job "$STATS_ID" "stats" || exit 1
-  STATS_PATH="${DATASET_DIR%/}/stats/"
+  # Sibling of the dataset (see convert.sh — pos3 forbids upload-inside-download).
+  STATS_PATH="${DATASET_DIR%/}"
+  STATS_PATH="${STATS_PATH%/*}/stats/"
 fi
 
 # ---- 2. Train (200 short steps; goal is wiring, not loss) ----
