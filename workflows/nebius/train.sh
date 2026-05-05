@@ -50,23 +50,31 @@ case "$VENDOR" in
 esac
 
 # Rewrite --input_path=s3://bucket/key/ → /mnt/input/key/, plan an S3 mount.
+# Only lerobot_0_3_3 is validated to work with the read-only mount; other
+# vendors (notably gr00t) write back into the dataset dir during training,
+# which the RO mount blocks. For those, leave --input_path as s3:// and let
+# pos3.download fetch into the local writable cache.
 INPUT_BUCKET=""
 NEW_ARGS=()
-for arg in "$@"; do
-  case "$arg" in
-    --input_path=s3://*)
-      val="${arg#--input_path=}"
-      INPUT_BUCKET="${val#s3://}"
-      INPUT_BUCKET="${INPUT_BUCKET%%/*}"
-      key="${val#s3://${INPUT_BUCKET}}"
-      key="${key#/}"
-      NEW_ARGS+=("--input_path=/mnt/input/${key}")
-      ;;
-    *)
-      NEW_ARGS+=("$arg")
-      ;;
-  esac
-done
+if [ "$VENDOR" = "lerobot_0_3_3" ]; then
+  for arg in "$@"; do
+    case "$arg" in
+      --input_path=s3://*)
+        val="${arg#--input_path=}"
+        INPUT_BUCKET="${val#s3://}"
+        INPUT_BUCKET="${INPUT_BUCKET%%/*}"
+        key="${val#s3://${INPUT_BUCKET}}"
+        key="${key#/}"
+        NEW_ARGS+=("--input_path=/mnt/input/${key}")
+        ;;
+      *)
+        NEW_ARGS+=("$arg")
+        ;;
+    esac
+  done
+else
+  NEW_ARGS=("$@")
+fi
 
 VOLUME_FLAGS=()
 if [ -n "$INPUT_BUCKET" ]; then
