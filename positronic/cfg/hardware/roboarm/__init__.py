@@ -43,3 +43,10 @@ def so101(motor_bus):
     from positronic.drivers.roboarm.so101.driver import Robot
 
     return Robot(motor_bus=motor_bus)
+
+
+@cfn.config(motor_bus=positronic.cfg.hardware.motors.so101_leader)
+def so101_passive(motor_bus):
+    from positronic.drivers.roboarm.so101.driver import Robot
+
+    return Robot(motor_bus=motor_bus, passive=True)

@@ -49,85 +49,95 @@ _SO101_JOINT_NAMES = ['shoulder_pan', 'shoulder_lift', 'elbow_flex', 'wrist_flex
 
 
 class Robot(pimm.ControlSystem):
-    def __init__(self, motor_bus: MotorBus, home_joints: list[float] | None = None):
+    def __init__(self, motor_bus: MotorBus, home_joints: list[float] | None = None, passive: bool = False):
         self.motor_bus = motor_bus
+        self.passive = passive
         self.mujoco_model_path = 'positronic/drivers/roboarm/so101/so101.xml'
-        self.kinematic = Kinematics(_SO101_URDF_PATH, 'gripper_frame_joint')
-        self.joint_limits = self.kinematic.joint_limits
         self.home_joints = home_joints if home_joints is not None else [0.0, 0.0, 0.0, 0.0, 0.0]
-        self.commands: pimm.SignalReceiver[roboarm_command.CommandType] = pimm.ControlSystemReceiver(self, default=None)
-        self.target_grip: pimm.SignalReceiver[float] = pimm.ControlSystemReceiver(self, default=0.0)
+
+        if not passive:
+            self.commands: pimm.SignalReceiver[roboarm_command.CommandType] = pimm.ControlSystemReceiver(
+                self, default=None
+            )
+            self.target_grip: pimm.SignalReceiver[float] = pimm.ControlSystemReceiver(self, default=0.0)
 
         self.grip: pimm.SignalEmitter[float] = pimm.ControlSystemEmitter(self)
         self.state: pimm.SignalEmitter[SO101State] = pimm.ControlSystemEmitter(self)
         self.robot_meta = pimm.ControlSystemEmitter(self)
 
-        print('================================================================')
-        print('Warning: Proper dq units is not implemented for SO101!')
-        print('================================================================')
+        if not passive:
+            print('================================================================')
+            print('Warning: Proper dq units is not implemented for SO101!')
+            print('================================================================')
 
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Sleep]:
         self.motor_bus.connect()
+        if self.passive:
+            self.motor_bus.set_torque_mode(False)
+
+        # Initialize kinematics in the subprocess (placo.RobotWrapper is not picklable)
+        kinematics = Kinematics(_SO101_URDF_PATH, 'gripper_frame_joint')
+        joint_limits = kinematics.joint_limits
+
         self.robot_meta.emit({
             'urdf': Path(_SO101_URDF_PATH).read_text(),
             'joint_names': _SO101_JOINT_NAMES,
             'control_frame': 'gripper_frame_link',
         })
 
-        rate_limit = pimm.RateLimiter(hz=1000, clock=clock)
+        rate_limit = pimm.RateLimiter(hz=100 if self.passive else 1000, clock=clock)
         state = SO101State()
 
         while not should_stop.value:
-            # command, is_updated = command_receiver.value
-            cmd_msg = self.commands.read()
-            if cmd_msg.updated:
-                match cmd_msg.data:
-                    case roboarm_command.Reset():
-                        raise NotImplementedError('Reset not implemented')
-                    case roboarm_command.CartesianPosition(pose):
-                        qpos = self._solve_ik(state, pose)
-                        q_with_gripper = np.concatenate([qpos, [self.target_grip.value]])
-                        self.motor_bus.set_target_position(q_with_gripper)
-                    case roboarm_command.JointPosition(qpos):
-                        q_norm = self.rad_to_norm(qpos)
-                        q_with_gripper = np.concatenate([q_norm, [self.target_grip.value]])
-                        self.motor_bus.set_target_position(q_with_gripper)
-                    case _:
-                        raise ValueError(f'Unknown command: {cmd_msg.data}')
+            if not self.passive:
+                cmd_msg = self.commands.read()
+                if cmd_msg.updated:
+                    match cmd_msg.data:
+                        case roboarm_command.Reset():
+                            raise NotImplementedError('Reset not implemented')
+                        case roboarm_command.CartesianPosition(pose):
+                            qpos = _solve_ik(kinematics, joint_limits, state, pose)
+                            q_with_gripper = np.concatenate([qpos, [self.target_grip.value]])
+                            self.motor_bus.set_target_position(q_with_gripper)
+                        case roboarm_command.JointPosition(qpos):
+                            q_norm = _rad_to_norm(joint_limits[: len(qpos)], qpos)
+                            q_with_gripper = np.concatenate([q_norm, [self.target_grip.value]])
+                            self.motor_bus.set_target_position(q_with_gripper)
+                        case _:
+                            raise ValueError(f'Unknown command: {cmd_msg.data}')
 
             q = self.motor_bus.position
             dq = self.motor_bus.velocity[:-1]
-            ee_pose, gripper = self._forward_kinematics(q)
-            position_rad = self.norm_to_rad(q)[:-1]
+            ee_pose, gripper = _forward_kinematics(kinematics, joint_limits, q)
+            position_rad = _norm_to_rad(joint_limits, q)[:-1]
             state.encode(position_rad, dq, ee_pose)
 
             self.state.emit(state)
             self.grip.emit(gripper)
             yield pimm.Sleep(rate_limit.wait_time())
 
-    def _solve_ik(self, state, command: roboarm_command.CartesianPosition) -> np.ndarray:
-        q = np.array(state.q).tolist()
-        q.append(0.0)  # ignore gripper in ik
-        q_rad_new = self.kinematic.inverse(q, command.pose, n_iter=10)
-        return self.rad_to_norm(q_rad_new)[:-1]
 
-    def _forward_kinematics(self, motor_position) -> geom.Transform3D:
-        q_rad = self.norm_to_rad(motor_position)
-        ee_pose = self.kinematic.forward(q_rad)
-        gripper = motor_position[-1]
-        return ee_pose, gripper
+def _solve_ik(kinematics: Kinematics, joint_limits: np.ndarray, state, pose: geom.Transform3D) -> np.ndarray:
+    q = np.array(state.q).tolist()
+    q.append(0.0)  # ignore gripper in ik
+    q_rad_new = kinematics.inverse(q, pose, n_iter=10)
+    return _rad_to_norm(joint_limits, q_rad_new)[:-1]
 
-    def norm_to_rad(self, qpos: np.ndarray) -> np.ndarray:
-        """Convert normalized position [0, 1] to radians.
 
-        Args:
-            qpos: Normalized position.
+def _forward_kinematics(
+    kinematics: Kinematics, joint_limits: np.ndarray, motor_position: np.ndarray
+) -> tuple[geom.Transform3D, float]:
+    q_rad = _norm_to_rad(joint_limits, motor_position)
+    ee_pose = kinematics.forward(q_rad)
+    gripper = motor_position[-1]
+    return ee_pose, gripper
 
-        Returns:
-            Radians.
-        """
-        return qpos * (self.joint_limits[:, 1] - self.joint_limits[:, 0]) + self.joint_limits[:, 0]
 
-    def rad_to_norm(self, qpos: np.ndarray) -> np.ndarray:
-        """Convert radians to normalized position [0, 1]."""
-        return (qpos - self.joint_limits[:, 0]) / (self.joint_limits[:, 1] - self.joint_limits[:, 0])
+def _norm_to_rad(joint_limits: np.ndarray, qpos: np.ndarray) -> np.ndarray:
+    """Convert normalized position [0, 1] to radians."""
+    return qpos * (joint_limits[:, 1] - joint_limits[:, 0]) + joint_limits[:, 0]
+
+
+def _rad_to_norm(joint_limits: np.ndarray, qpos: np.ndarray) -> np.ndarray:
+    """Convert radians to normalized position [0, 1]."""
+    return (qpos - joint_limits[:, 0]) / (joint_limits[:, 1] - joint_limits[:, 0])
