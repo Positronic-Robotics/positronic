@@ -1,5 +1,14 @@
 """Convert Positronic datasets to Lance format.
 
+One row per episode. Numeric signals become `list<list<...>>` cells sampled at
+the codec's FPS. Image signals are written as mp4 sidecars under
+`<output_dir>/videos/<row_id>/<key>.mp4` (path stored relative in the table).
+
+Columns added by the converter (in addition to whatever the codec produces):
+- `trajectory_length: int64` — number of timesteps per row at the chosen FPS.
+- per image signal `<name>`: `<name>_uri`, `<name>_duration`, `<name>_num_frames`,
+  `<name>_width`, `<name>_height`.
+
 Example:
     docker compose run --rm lance-convert convert \\
       --dataset.dataset=@positronic.cfg.ds.phail.sim_stack_cubes \\
@@ -76,6 +85,7 @@ def _episode_row(episode: Episode, fps: int, output_dir: Path, row_idx: int) -> 
     ts_grid = slice(episode.start_ts, episode.last_ts + 1, step_ns)
 
     row: dict[str, Any] = {_column(k): v for k, v in episode.static.items()}
+    row['trajectory_length'] = int((episode.last_ts - episode.start_ts) * fps // int(1e9)) + 1
     # `uuid` is opt-in (codec param). Fall back to row index for video sidecar paths.
     video_dirname = row.get('uuid') or f'{row_idx:06d}'
 

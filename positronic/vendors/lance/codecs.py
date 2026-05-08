@@ -18,13 +18,6 @@ def _random_uuid(_episode: Episode) -> str:
     return str(_uuid.uuid4())
 
 
-def _trajectory_length_for(fps: float):
-    def _fn(episode: Episode) -> int:
-        return int((episode.last_ts - episode.start_ts) * fps // int(1e9)) + 1
-
-    return _fn
-
-
 class _StaticScalars(Codec):
     """Adds arbitrary static scalars derived from the raw episode."""
 
@@ -38,11 +31,7 @@ class _StaticScalars(Codec):
 
 @cfn.config(fps=15.0, horizon=1.0, binarize_grip=None, uuid=False)
 def _compose(obs, action, fps: float, horizon: float | None, binarize_grip, uuid: bool):
-    derivations = {
-        'trajectory_length': _trajectory_length_for(fps),
-        'current_task': Get('task', ''),
-        'language_instruction1': Get('task', ''),
-    }
+    derivations = {'current_task': Get('task', ''), 'language_instruction1': Get('task', '')}
     if uuid:
         derivations['uuid'] = _random_uuid
     inner = base.compose(obs=obs, action=action, fps=fps, horizon=horizon, binarize_grip=binarize_grip)
