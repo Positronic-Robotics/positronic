@@ -63,28 +63,27 @@ def _column(name: str) -> str:
 def _video_columns(name: str, uri: str, meta: dict) -> dict:
     base = _column(name)
     return {
-        f'{base}_mp4_uri': uri,
-        f'{base}_video_uri_duration': float(meta['duration']),
-        f'{base}_number_of_frames': int(meta['num_frames']),
+        f'{base}_uri': uri,
+        f'{base}_duration': float(meta['duration']),
+        f'{base}_num_frames': int(meta['num_frames']),
         f'{base}_width': int(meta['width']),
         f'{base}_height': int(meta['height']),
     }
 
 
-def _episode_row(episode: Episode, fps: int, output_dir: Path) -> dict:
+def _episode_row(episode: Episode, fps: int, output_dir: Path, row_idx: int) -> dict:
     step_ns = int(round(1e9 / fps))
     ts_grid = slice(episode.start_ts, episode.last_ts + 1, step_ns)
 
     row: dict[str, Any] = {_column(k): v for k, v in episode.static.items()}
-    ep_uuid = row.get('uuid')
-    if not ep_uuid:
-        raise ValueError("Episode is missing 'uuid' — codec must derive it as a static scalar")
+    # `uuid` is opt-in (codec param). Fall back to row index for video sidecar paths.
+    video_dirname = row.get('uuid') or f'{row_idx:06d}'
 
     for key, sig in episode.signals.items():
         view = sig.time[ts_grid]
         values = view._values_at(slice(None))
         if sig.kind is Kind.IMAGE:
-            rel = Path('videos') / ep_uuid / f'{_column(key)}.mp4'
+            rel = Path('videos') / video_dirname / f'{_column(key)}.mp4'
             video_path = output_dir / rel
             row.update(_video_columns(key, str(rel), _write_mp4(video_path, values, fps)))
         else:
@@ -111,8 +110,8 @@ def convert(output_dir: str, fps: int | None, dataset: Dataset):
     utils.save_run_metadata(output_dir, patterns=['*.py', '*.toml'])
 
     rows = []
-    for episode in tqdm.tqdm(dataset, desc='Converting episodes'):
-        rows.append(_episode_row(episode, fps=fps, output_dir=out_path))
+    for i, episode in enumerate(tqdm.tqdm(dataset, desc='Converting episodes')):
+        rows.append(_episode_row(episode, fps=fps, output_dir=out_path, row_idx=i))
 
     table = _table_from_rows(rows)
     lance.write_dataset(table, str(out_path / 'data.lance'), mode='overwrite')
