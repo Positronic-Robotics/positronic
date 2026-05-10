@@ -76,6 +76,9 @@ lerobot = [
     "lerobot[smolvla]==0.4.3",
     "torch",
 ]
+lance = [
+    "pylance",
+]
 dev = [
     "ruff",
     "pre-commit",

@@ -99,6 +99,12 @@ services:
     entrypoint: ["uv", "run", "--python", "3.11", "--extra", "lerobot", "python", "-m",
                  "positronic.vendors.lerobot.to_lerobot"]
 
+  lance-convert:
+    <<: *positronic-common
+    container_name: lance-convert
+    entrypoint: ["uv", "run", "--python", "3.11", "--extra", "lance", "python", "-m",
+                 "positronic.vendors.lance.convert"]
+
   lerobot-train:
     <<: *positronic-common
     container_name: lerobot-train
