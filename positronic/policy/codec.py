@@ -21,7 +21,8 @@ import rerun.blueprint as rrb
 
 from positronic.dataset.transforms import Elementwise
 from positronic.dataset.transforms.episode import Derive, EpisodeTransform, Group, Identity
-from positronic.policy.base import Policy
+from positronic.drivers.roboarm import command as roboarm_command
+from positronic.policy.base import DelegatingSession, PolicyWrapper, Session, _Pipeline
 from positronic.utils import merge_dicts
 from positronic.utils.rerun_compat import log_numeric_series, set_timeline_sequence, set_timeline_time
 
@@ -44,7 +45,7 @@ def lerobot_action(dim: int) -> dict[str, Any]:
     return {'shape': (dim,), 'names': ['actions'], 'dtype': 'float32'}
 
 
-class Codec:
+class Codec(PolicyWrapper):
     """Base class for observation/action codecs.
 
     Subclasses override ``encode`` (observation encoding) and/or ``_decode_single``
@@ -89,16 +90,42 @@ class Codec:
         """
         return data or {}
 
-    def wrap(self, policy: Policy) -> Policy:
-        return _WrappedPolicy(policy, self)
+    def wrap_session(self, inner: Session, context):
+        return _CodecSession(inner, self)
 
     @final
-    def __or__(self, other: 'Codec') -> 'Codec':
-        return _ComposedCodec(self, other)
+    def __or__(self, other):
+        if isinstance(other, Codec):
+            return _ComposedCodec(self, other)
+        if isinstance(other, PolicyWrapper):
+            # Mixed Codec | non-Codec-wrapper → generic pipeline (no longer a Codec).
+            return _Pipeline((self, *other._pipeline_components()))
+        return NotImplemented
 
     @final
-    def __and__(self, other: 'Codec') -> 'Codec':
-        return _ParallelCodec(self, other)
+    def __and__(self, other):
+        if isinstance(other, Codec):
+            return _ParallelCodec(self, other)
+        return NotImplemented
+
+
+class _CodecSession(DelegatingSession):
+    """Session wrapped with a codec: encodes observations, decodes actions."""
+
+    def __init__(self, inner: Session, codec: 'Codec'):
+        super().__init__(inner)
+        self._codec = codec
+
+    def __call__(self, obs):
+        encoded = self._codec.encode(obs)
+        action = self._inner(encoded)
+        if action is None:
+            return None
+        return self._codec.decode(action, context=obs)
+
+    @property
+    def meta(self):
+        return self._inner.meta | self._codec.meta
 
 
 class _ComposedCodec(Codec):
@@ -161,35 +188,29 @@ class _ParallelCodec(Codec):
         return {**self._left.dummy_encoded(data), **self._right.dummy_encoded(data)}
 
 
-class ActionTiming(Codec):
-    """Attaches timings to decoded actions and truncates action sequences to a specified horizon.
+class ActionTimestamp(Codec):
+    """Stamps each decoded action with a relative ``timestamp`` (seconds from trajectory start).
 
-    # TODO: Split into two codecs: ActionTimestamp (stamps actions using fps) and
-    # ActionHorizon (truncates by timestamp < horizon_sec). This lets horizon be
-    # composed independently — e.g. wrapping a RemotePolicy with just ActionHorizon
-    # instead of duplicating truncation logic in RemotePolicy.select_action.
+    Assigns ``timestamp = i * (1/fps)`` starting at 0. The harness converts these
+    relative timestamps to absolute wall time at emission, anchoring execution to
+    inference-finish rather than inference-start.
 
-    At inference time, truncates action chunks to ``horizon`` seconds and stamps each action
-    with a ``timestamp`` field. At training time, surfaces ``action_fps`` (and optionally
-    ``action_horizon_sec``) as transform metadata so the training pipeline can read it.
+    At training time, surfaces ``action_fps`` as transform metadata.
     """
 
-    def __init__(self, *, fps: float, horizon_sec: float | None = None):
+    def __init__(self, *, fps: float):
         self._fps = fps
-        self._horizon_sec = horizon_sec
+        self._dt = 1.0 / fps
 
     def encode(self, data):
         return data
 
     def decode(self, data, *, context=None):
         if isinstance(data, list):
-            dt = 1.0 / self._fps
             for i, d in enumerate(data):
-                d['timestamp'] = i * dt
-            if self._horizon_sec is not None:
-                data = [d for d in data if d['timestamp'] < self._horizon_sec]
+                d['timestamp'] = i * self._dt
             return data
-        data['timestamp'] = 0.0
+        data['timestamp'] = 0
         return data
 
     @property
@@ -198,10 +219,47 @@ class ActionTiming(Codec):
 
     @property
     def meta(self):
-        result = {'action_fps': self._fps}
-        if self._horizon_sec is not None:
-            result['action_horizon_sec'] = self._horizon_sec
-        return result
+        return {'action_fps': self._fps}
+
+
+class ActionHorizon(Codec):
+    """Truncates action chunks to a time horizon.
+
+    Keeps only actions whose (relative) ``timestamp`` is within ``horizon_sec``
+    of trajectory start. Single actions pass through.
+    At training time, surfaces ``action_horizon_sec`` as transform metadata.
+    """
+
+    def __init__(self, horizon_sec: float):
+        self._horizon_sec = horizon_sec
+
+    def encode(self, data):
+        return data
+
+    def decode(self, data, *, context=None):
+        if isinstance(data, list):
+            return [d for d in data if d['timestamp'] < self._horizon_sec]
+        return data
+
+    @property
+    def training_encoder(self) -> EpisodeTransform:
+        return Identity(meta=self.meta)
+
+    @property
+    def meta(self):
+        return {'action_horizon_sec': self._horizon_sec}
+
+
+def ActionTiming(*, fps: float, horizon_sec: float | None = None) -> Codec:
+    """Convenience factory composing ``ActionTimestamp`` and ``ActionHorizon``.
+
+    Equivalent to ``ActionTimestamp(fps=fps) | ActionHorizon(horizon_sec)`` when
+    horizon_sec is set, or just ``ActionTimestamp(fps=fps)`` otherwise.
+    """
+    codec = ActionTimestamp(fps=fps)
+    if horizon_sec is not None:
+        codec = ActionHorizon(horizon_sec) | codec
+    return codec
 
 
 class BinarizeGripTraining(Codec):
@@ -248,8 +306,9 @@ class BinarizeGripInference(Codec):
         timing | BinarizeGripInference() | obs & action
     """
 
-    def __init__(self, threshold: float = 0.5):
+    def __init__(self, threshold: float = 0.5, key: str = 'target_grip'):
         self._threshold = threshold
+        self._key = key
 
     def encode(self, data):
         return data
@@ -259,32 +318,9 @@ class BinarizeGripInference(Codec):
         return Identity()
 
     def _decode_single(self, data: dict, context: dict | None) -> dict:
-        if 'target_grip' in data:
-            data['target_grip'] = 1.0 if data['target_grip'] > self._threshold else 0.0
+        if self._key in data:
+            data[self._key] = 1.0 if data[self._key] > self._threshold else 0.0
         return data
-
-
-class _WrappedPolicy(Policy):
-    """Policy wrapped with a codec: encodes observations, decodes actions."""
-
-    def __init__(self, policy: Policy, codec: Codec):
-        self._policy = policy
-        self._codec = codec
-
-    def select_action(self, obs):
-        encoded = self._codec.encode(obs)
-        action = self._policy.select_action(encoded)
-        return self._codec.decode(action, context=obs)
-
-    def reset(self, context=None):
-        self._policy.reset(context)
-
-    @property
-    def meta(self):
-        return self._policy.meta | self._codec.meta
-
-    def close(self):
-        self._policy.close()
 
 
 def _squeeze_batch(arr: np.ndarray) -> np.ndarray:
@@ -328,21 +364,16 @@ def _build_blueprint(image_paths: list[str], numeric_paths: list[str]) -> rrb.Bl
     return rrb.Blueprint(rrb.Grid(*grid_items))
 
 
-class _RecordingSession(Codec):
-    """Per-session codec that logs the encode/decode cycle to a single ``.rrd`` file.
+class _RecordingSession(DelegatingSession):
+    """Per-session Session wrapper that logs obs + actions to a single ``.rrd`` file.
 
-    Created by ``RecordingCodec._new_session()`` — one per episode, with independent state.
+    Created by ``RecordingWrapper.wrap_session()`` — one per episode, with independent state.
     """
 
-    def __init__(self, inner: Codec | None, rec: Any, *, action_fps: float):
-        self._inner = inner
+    def __init__(self, inner: Session, rec: Any):
+        super().__init__(inner)
         self._rec = rec
-        self._action_fps = action_fps
         self._step = 0
-        # Stashed between encode() and decode() — _WrappedPolicy calls them sequentially
-        self._time_ns: int = 0
-        self._inference_time_ns: int | None = None
-        # Accumulated across encode+decode; used once at step 0 to build the blueprint
         self._image_paths: list[str] = []
         self._numeric_paths: list[str] = []
 
@@ -355,7 +386,7 @@ class _RecordingSession(Codec):
     def _log(self, prefix: str, data: dict):
         """Recursively log *data* under *prefix*, accumulating entity paths."""
         for key, value in data.items():
-            if (key.startswith('__') and key.endswith('__')) or isinstance(value, str):
+            if key.endswith('_time_ns') or isinstance(value, str):
                 continue
             path = f'{prefix}/{key}'
             if isinstance(value, dict):
@@ -374,113 +405,51 @@ class _RecordingSession(Codec):
         if bp is not None:
             rr.send_blueprint(bp)
 
-    def encode(self, data: dict) -> dict:
-        # __wall_time_ns__ / __inference_time_ns__ injected by Inference.run(); ignored by inner codecs
-        self._time_ns = data.get('__wall_time_ns__', time.time_ns())
-        self._inference_time_ns = data.get('__inference_time_ns__')
-        encoded = self._inner.encode(data) if self._inner else data
-        with self._rec:
-            self._set_timelines(self._time_ns, self._inference_time_ns)
-            self._log('input', data)
-            if self._inner:
-                self._log('encoded', encoded)
-        return encoded
+    def __call__(self, obs):
+        time_ns = obs.get('wall_time_ns', time.time_ns())
+        inference_time_ns = obs.get('inference_time_ns')
 
-    def decode(self, data, *, context=None):
-        decoded = self._inner.decode(data, context=context) if self._inner else data
-        actions = data if isinstance(data, list) else [data]
-        dt_ns = int(1e9 / self._action_fps)
-        decoded_list = (decoded if isinstance(decoded, list) else [decoded]) if self._inner else []
         with self._rec:
-            for i, action in enumerate(actions):
-                inf_t = self._inference_time_ns + i * dt_ns if self._inference_time_ns is not None else None
-                self._set_timelines(self._time_ns + i * dt_ns, inf_t)
-                self._log('model', action)
-                if i < len(decoded_list):
-                    self._log('decoded', decoded_list[i])
-            if self._step == 0:
-                self._send_blueprint()
+            self._set_timelines(time_ns, inference_time_ns)
+            self._log('input', obs)
+
+        actions = self._inner(obs)
+
+        if actions is not None:
+            with self._rec:
+                for action in actions:
+                    loggable = {
+                        k: roboarm_command.to_wire(v) if isinstance(v, roboarm_command.CommandType) else v
+                        for k, v in action.items()
+                    }
+                    rel_sec = action.get('timestamp', 0.0)
+                    dt_ns = int(rel_sec * 1e9)
+                    inf_t = inference_time_ns + dt_ns if inference_time_ns is not None else None
+                    self._set_timelines(time_ns + dt_ns, inf_t)
+                    self._log('action', loggable)
+                if self._step == 0:
+                    self._send_blueprint()
+
         self._step += 1
-        return decoded
-
-    @property
-    def training_encoder(self):
-        return self._inner.training_encoder if self._inner else Derive()
-
-    @property
-    def meta(self):
-        return self._inner.meta if self._inner else {}
-
-    def dummy_encoded(self, data=None):
-        return self._inner.dummy_encoded(data) if self._inner else (data or {})
+        return actions
 
 
-class RecordingCodec(Codec):
-    """Transparent ``Codec`` wrapper that logs the encode/decode cycle to per-episode ``.rrd`` files.
+class RecordingWrapper(PolicyWrapper):
+    """PolicyWrapper that logs each session's obs + actions to per-episode ``.rrd`` files.
 
-    Each ``reset()`` on the wrapped policy creates a ``_RecordingSession`` with independent
-    state, so concurrent sessions don't interfere with each other.
+    Each ``new_session()`` creates a fresh ``_RecordingSession`` with independent state,
+    so concurrent sessions don't interfere. Place in a pipeline wherever you want the
+    capture point — outermost (raw obs + decoded actions) or inside a codec chain.
     """
 
-    def __init__(self, inner: Codec | None, recording_dir: str | Path):
-        self._inner = inner
+    def __init__(self, recording_dir: str | Path):
         self._dir = Path(recording_dir)
         self._dir.mkdir(parents=True, exist_ok=True)
-        self._action_fps: float = inner.meta.get('action_fps', 15.0) if inner else 15.0
         self._counter = itertools.count(1)
 
-    def _new_session(self) -> _RecordingSession:
+    def wrap_session(self, inner: Session, context) -> Session:
         episode_num = next(self._counter)
         ts = datetime.now().strftime('%y%m%d_%H%M%S')
         rec = rr.RecordingStream(application_id='positronic_inference')
         rec.save(str(self._dir / f'{ts}_{episode_num:04d}.rrd'))
-        return _RecordingSession(self._inner, rec, action_fps=self._action_fps)
-
-    def encode(self, data: dict) -> dict:
-        return self._inner.encode(data) if self._inner else data
-
-    def decode(self, data, *, context=None):
-        return self._inner.decode(data, context=context) if self._inner else data
-
-    @property
-    def training_encoder(self):
-        return self._inner.training_encoder if self._inner else Derive()
-
-    @property
-    def meta(self):
-        return self._inner.meta if self._inner else {}
-
-    def wrap(self, policy: Policy) -> Policy:
-        return _RecordingPolicy(policy, self)
-
-    def dummy_encoded(self, data=None):
-        return self._inner.dummy_encoded(data) if self._inner else (data or {})
-
-
-class _RecordingPolicy(Policy):
-    """Policy wrapper that creates a fresh ``_RecordingSession`` on each ``reset()``."""
-
-    def __init__(self, policy: Policy, codec: RecordingCodec):
-        self._policy = policy
-        self._codec = codec
-        self._active: Policy | None = None
-
-    def select_action(self, obs):
-        if self._active is None:
-            raise RuntimeError('reset() must be called before select_action()')
-        return self._active.select_action(obs)
-
-    def reset(self, context=None):
-        session = self._codec._new_session()
-        self._active = _WrappedPolicy(self._policy, session)
-        self._active.reset(context)
-
-    @property
-    def meta(self):
-        if self._active is not None:
-            return self._active.meta
-        return self._codec.meta
-
-    def close(self):
-        if self._active is not None:
-            self._active.close()
+        return _RecordingSession(inner, rec)
