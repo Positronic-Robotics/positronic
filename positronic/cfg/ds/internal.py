@@ -177,6 +177,12 @@ def droid_clean(dataset):
 
 droid_clean = droid_clean.override(dataset=droid)
 
+
+@cfn.config(dataset=droid_clean)
+def droid_spoons(dataset):
+    return FilterDataset(dataset, lambda ep: ep.static.get('task') == SPOONS_TASK)
+
+
 droid_recovery = droid_clean.override(
     dataset=droid.override(recovery_all=True, recovery_towels=True, duplicate_recovery=False)
 )

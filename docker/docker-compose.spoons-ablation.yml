@@ -1,0 +1,42 @@
+# GR00T spoons data ablation servers (~4.6GB each, 2 fit on desktop, 1 on notebook)
+#
+# Desktop (2 servers):
+#   IMAGE_TAG=latest CACHE_ROOT=/home/vertix docker --context desktop compose -f docker-compose.spoons-ablation.yml up spoons-100 spoons-50
+# Notebook (1 server):
+#   IMAGE_TAG=latest docker --context notebook compose -f docker-compose.spoons-ablation.yml up spoons-25
+services:
+  spoons-100:
+    extends:
+      file: docker-compose.yml
+      service: groot-server
+    container_name: spoons-100
+    pull_policy: always
+    command:
+      - "ee_rot6d_rel"
+      - "--checkpoints_dir=s3://checkpoints/droid_spoons/groot/ee_rot6d_rel_100/"
+    ports: !override
+      - "8000:8000"
+
+  spoons-50:
+    extends:
+      file: docker-compose.yml
+      service: groot-server
+    container_name: spoons-50
+    pull_policy: always
+    command:
+      - "ee_rot6d_rel"
+      - "--checkpoints_dir=s3://checkpoints/droid_spoons/groot/ee_rot6d_rel_50_v2/"
+    ports: !override
+      - "8001:8000"
+
+  spoons-25:
+    extends:
+      file: docker-compose.yml
+      service: groot-server
+    container_name: spoons-25
+    pull_policy: always
+    command:
+      - "ee_rot6d_rel"
+      - "--checkpoints_dir=s3://checkpoints/droid_spoons/groot/ee_rot6d_rel_25/"
+    ports: !override
+      - "8002:8000"
