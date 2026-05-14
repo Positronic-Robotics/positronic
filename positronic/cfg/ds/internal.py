@@ -177,6 +177,14 @@ def droid_clean(dataset):
 
 droid_clean = droid_clean.override(dataset=droid)
 
+
+# Spoons-only subset of droid_clean. Used as the base for data-size ablation experiments
+# (combined with --share/--seed in the LeRobot conversion to produce 100% / 50% / 25% variants).
+@cfn.config(dataset=droid_clean)
+def droid_spoons(dataset):
+    return FilterDataset(dataset, lambda ep: ep.static.get('task') == SPOONS_TASK)
+
+
 droid_recovery = droid_clean.override(
     dataset=droid.override(recovery_all=True, recovery_towels=True, duplicate_recovery=False)
 )

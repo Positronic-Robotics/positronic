@@ -78,13 +78,21 @@ def _collate_fn(x):
     return x[0]
 
 
-def append_data_to_dataset(lr_dataset: LeRobotDataset, p_dataset: Dataset, fps, task=None, num_workers=16):
+def append_data_to_dataset(
+    lr_dataset: LeRobotDataset, p_dataset: Dataset, fps, task=None, num_workers=16, share=1.0, seed=42
+):
     _raise_fd_limit()
     lr_dataset.start_image_writer(num_processes=num_workers)
     # Process each episode file
     total_length_sec = 0
 
     episode_dataset = EpisodeDictDataset(p_dataset, fps=fps)
+    if share < 1.0:
+        n = len(episode_dataset)
+        k = max(1, round(n * share))
+        indices = sorted(np.random.default_rng(seed).choice(n, size=k, replace=False))
+        episode_dataset = torch.utils.data.Subset(episode_dataset, indices)
+        logging.info(f'Sampling {k}/{n} episodes (share={share}, seed={seed})')
     dataloader = torch.utils.data.DataLoader(
         episode_dataset, batch_size=1, shuffle=False, num_workers=num_workers, collate_fn=_collate_fn
     )
@@ -112,8 +120,10 @@ def append_data_to_dataset(lr_dataset: LeRobotDataset, p_dataset: Dataset, fps, 
     logging.info(f'Total length of the dataset: {seconds_to_str(total_length_sec)}')
 
 
-@cfn.config(video=True, dataset=apply_codec, fps=None)
-def convert_to_lerobot_dataset(output_dir: str, fps: int | None, video: bool, dataset: Dataset, task=None):
+@cfn.config(video=True, dataset=apply_codec, fps=None, share=1.0, seed=42)
+def convert_to_lerobot_dataset(
+    output_dir: str, fps: int | None, video: bool, dataset: Dataset, task=None, share=1.0, seed=42
+):
     if fps is None:
         assert 'action_fps' in dataset.meta, "--fps not provided and dataset has no 'action_fps' metadata"
         fps = int(dataset.meta['action_fps'])
@@ -139,12 +149,12 @@ def convert_to_lerobot_dataset(output_dir: str, fps: int | None, video: bool, da
             with modality_path.open('w', encoding='utf-8') as f:
                 json.dump(modality, f, indent=2)
 
-    append_data_to_dataset(lr_dataset=lr_dataset, p_dataset=dataset, task=task, fps=fps)
+    append_data_to_dataset(lr_dataset=lr_dataset, p_dataset=dataset, task=task, fps=fps, share=share, seed=seed)
     logging.info(f'Dataset converted and saved to {output_dir}')
 
 
-@cfn.config(dataset=apply_codec, fps=None)
-def append_data_to_lerobot_dataset(output_dir: str, dataset: Dataset, fps: int | None, task=None):
+@cfn.config(dataset=apply_codec, fps=None, share=1.0, seed=42)
+def append_data_to_lerobot_dataset(output_dir: str, dataset: Dataset, fps: int | None, task=None, share=1.0, seed=42):
     if fps is None:
         assert 'action_fps' in dataset.meta, "--fps not provided and dataset has no 'action_fps' metadata"
         fps = int(dataset.meta['action_fps'])
@@ -169,7 +179,7 @@ def append_data_to_lerobot_dataset(output_dir: str, dataset: Dataset, fps: int |
         # If dataset has modality but lerobot dataset doesn't, this is an error
         raise ValueError("'gr00t_modality' exists in dataset.meta but not in the destination LeRobot dataset.")
 
-    append_data_to_dataset(lr_dataset=lr_dataset, p_dataset=dataset, task=task, fps=fps)
+    append_data_to_dataset(lr_dataset=lr_dataset, p_dataset=dataset, task=task, fps=fps, share=share, seed=seed)
     logging.info(f'Dataset extended and saved to {output_dir}')
 
 
