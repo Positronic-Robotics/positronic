@@ -17,7 +17,7 @@ import pimm
 from pimm.tests.testing import MockClock
 from positronic.dataset.ds_writer_agent import DsWriterCommandType
 from positronic.drivers import roboarm
-from positronic.drivers.roboarm.command import CartesianPosition, to_wire
+from positronic.drivers.roboarm.command import CartesianPosition
 from positronic.geom import Rotation, Transform3D
 from positronic.policy.base import Policy, SampledPolicy, Session
 from positronic.policy.codec import ActionTiming
@@ -39,7 +39,7 @@ class _TargetSession(Session):
             t = (i + 1) / 5.0
             step_pos = current_pos + delta * 0.1 * t
             pose = Transform3D(translation=step_pos, rotation=Rotation.identity)
-            actions.append({'robot_command': to_wire(CartesianPosition(pose=pose)), 'target_grip': 0.5})
+            actions.append({'robot_command': CartesianPosition(pose=pose), 'target_grip': 0.5})
         return actions
 
     @property

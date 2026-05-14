@@ -1,5 +1,5 @@
 import time
-from collections.abc import Generator, Iterator
+from collections.abc import Callable, Generator, Iterator
 from dataclasses import dataclass
 from enum import Enum
 from typing import Any
@@ -7,7 +7,7 @@ from typing import Any
 import pimm
 from positronic.dataset.ds_writer_agent import DsWriterCommand, Serializers
 from positronic.drivers import roboarm
-from positronic.policy.base import DelegatingPolicy, DelegatingSession, Policy, PolicyWrapper, Session
+from positronic.policy.base import DelegatingSession, Policy, PolicyWrapper, Session
 from positronic.utils import flatten_dict, frozen_view
 
 
@@ -53,62 +53,49 @@ class Directive:
 # ---------------------------------------------------------------------------
 
 
-class _ChunkedSession(DelegatingSession):
-    """Calls inner session only when the previous trajectory has been consumed."""
-
-    def __init__(self, inner: Session):
-        super().__init__(inner)
-        self._trajectory_end: float | None = None
-
-    def __call__(self, obs):
-        now = obs['inference_time_ns'] / 1e9
-        if self._trajectory_end is not None and now < self._trajectory_end:
-            return None
-        result = self._inner(obs)
-        if result is not None and result:
-            self._trajectory_end = result[-1]['timestamp']
-        return result
-
-
 class ChunkedSchedule(PolicyWrapper):
     """Wait for current trajectory to finish before calling inner policy again.
+
+    Owns relative→absolute time conversion: inner layers (codecs, models) emit
+    relative timestamps; this wrapper anchors them to ``clock.now()`` *after*
+    inner inference returns, so execution aligns to inference-finish (not
+    inference-start). Other scheduling strategies (RTC, temporal ensembling)
+    will plug in here with their own timing policies.
 
     Returns ``None`` (meaning "keep executing current trajectory") until the
     last action's timestamp has been reached, then calls the inner policy.
 
     Composable via ``|``::
 
-        pipeline = ErrorRecovery() | ChunkedSchedule() | codec
+        pipeline = ErrorRecovery() | ChunkedSchedule(clock) | codec
         wrapped = pipeline.wrap(model)
     """
 
-    def wrap(self, policy: Policy) -> Policy:
-        return _ChunkedSchedulePolicy(policy)
+    class _Session(DelegatingSession):
+        """Skips inner calls while the current trajectory plays; stamps absolute on emit."""
 
+        def __init__(self, inner: Session, clock: pimm.Clock):
+            super().__init__(inner)
+            self._clock = clock
+            self._trajectory_end: float | None = None
 
-class _ChunkedSchedulePolicy(DelegatingPolicy):
-    def new_session(self, context=None):
-        return _ChunkedSession(self._inner.new_session(context))
+        def __call__(self, obs):
+            if self._trajectory_end is not None and self._clock.now() < self._trajectory_end:
+                return None
+            result = self._inner(obs)
+            if result is not None:
+                # Anchor to post-inference time so execution starts when inference *finished*.
+                # Copy dicts so we don't mutate caller-owned data (sessions may reuse templates).
+                now = self._clock.now()
+                result = [{**r, 'timestamp': now + r['timestamp']} for r in result]
+                self._trajectory_end = result[-1]['timestamp'] if result else None
+            return result
 
+    def __init__(self, clock: pimm.Clock):
+        self._clock = clock
 
-class _ErrorRecoverySession(DelegatingSession):
-    """Emits Recover trajectory on robot error, delegates otherwise."""
-
-    def __init__(self, inner: Session):
-        super().__init__(inner)
-        self._in_error = False
-
-    def __call__(self, obs):
-        was_ok = not self._in_error
-        self._in_error = obs['robot_state.status'] == roboarm.RobotStatus.ERROR
-
-        if self._in_error:
-            if was_ok:
-                now = obs['inference_time_ns'] / 1e9
-                return [{'robot_command': roboarm.command.to_wire(roboarm.command.Recover()), 'timestamp': now}]
-            return None
-
-        return self._inner(obs)
+    def wrap_session(self, inner: Session, context):
+        return ChunkedSchedule._Session(inner, self._clock)
 
 
 class ErrorRecovery(PolicyWrapper):
@@ -119,73 +106,70 @@ class ErrorRecovery(PolicyWrapper):
 
     Composable via ``|``::
 
-        pipeline = ErrorRecovery() | ChunkedSchedule() | codec
+        pipeline = ErrorRecovery(clock) | ChunkedSchedule(clock) | codec
         wrapped = pipeline.wrap(model)
     """
 
-    def wrap(self, policy: Policy) -> Policy:
-        return _ErrorRecoveryPolicy(policy)
+    class _Session(DelegatingSession):
+        """Emits Recover trajectory on robot error, delegates otherwise."""
+
+        def __init__(self, inner: Session, clock: pimm.Clock):
+            super().__init__(inner)
+            self._clock = clock
+            self._in_error = False
+
+        def __call__(self, obs):
+            was_ok = not self._in_error
+            self._in_error = obs['robot_state.status'] == roboarm.RobotStatus.ERROR
+
+            if self._in_error:
+                if was_ok:
+                    return [{'robot_command': roboarm.command.Recover(), 'timestamp': self._clock.now()}]
+                return None
+
+            return self._inner(obs)
+
+    def __init__(self, clock: pimm.Clock):
+        self._clock = clock
+
+    def wrap_session(self, inner: Session, context):
+        return ErrorRecovery._Session(inner, self._clock)
 
 
-class _ErrorRecoveryPolicy(DelegatingPolicy):
-    def new_session(self, context=None):
-        return _ErrorRecoverySession(self._inner.new_session(context))
-
-
-class _PackSession(DelegatingSession):
-    """Converts action dicts → (robot_commands, grip) tuple trajectories."""
-
-    def __call__(self, obs):
-        result = self._inner(obs)
-        if result is None:
-            return None
-        actions = result if isinstance(result, list) else [result]
-        robot_traj = [(cmd['timestamp'], roboarm.command.from_wire(cmd['robot_command'])) for cmd in actions]
-        grip_traj = [(cmd['timestamp'], cmd['target_grip']) for cmd in actions if 'target_grip' in cmd]
-        return robot_traj, grip_traj
-
-
-class PackTrajectory(PolicyWrapper):
-    """Converts session output (action dicts) into driver-ready tuple trajectories.
-
-    Output is ``(robot_commands, grip)`` where each is ``list[tuple[float, T]]``.
-    Actions without ``target_grip`` (e.g. Recover) contribute nothing to the grip
-    trajectory — an empty grip trajectory means "stop commanding grip".
-    """
-
-    def wrap(self, policy: Policy) -> Policy:
-        return _PackTrajectoryPolicy(policy)
-
-
-class _PackTrajectoryPolicy(DelegatingPolicy):
-    def new_session(self, context=None):
-        return _PackSession(self._inner.new_session(context))
-
-
-# ---------------------------------------------------------------------------
-# Harness — truly stupid: directives + session call + emit
-# ---------------------------------------------------------------------------
-
-DEFAULT_WRAPPERS = PackTrajectory() | ErrorRecovery() | ChunkedSchedule()
+def default_wrappers(clock: pimm.Clock) -> PolicyWrapper:
+    """Default wrapper pipeline: error recovery + chunked scheduling bound to the harness clock."""
+    return ErrorRecovery(clock) | ChunkedSchedule(clock)
 
 
 class Harness(pimm.ControlSystem):
     """Control system that manages episode lifecycle and forwards trajectories to drivers.
 
     The harness handles directives (RUN/STOP/FINISH/HOME) and dataset recording.
-    All inference intelligence (scheduling, error recovery, blending) lives in
-    the policy/session layer — the harness just calls the session and emits
-    whatever comes back.
+    All inference intelligence (scheduling, error recovery, blending, absolute
+    time stamping) lives in the policy/session layer — the harness just calls
+    the session, demuxes the action dicts into per-channel trajectories, and
+    emits.
 
-    By default, wraps the given policy with ``PackTrajectory | ErrorRecovery |
-    ChunkedSchedule``. Pass ``wrap=None`` to skip auto-wrapping (if you've
-    already composed your own pipeline).
+    The outermost wrapper (typically ``ChunkedSchedule`` or a swap-in alternative
+    like RTC) is responsible for producing absolute timestamps.
+
+    By default, wraps the given policy with ``ErrorRecovery | ChunkedSchedule``.
+    Pass ``wrap=None`` to skip auto-wrapping (if you've already composed your
+    own pipeline).
     """
 
     def __init__(
-        self, policy, *, static_meta: dict[str, Any] | None = None, wrap: PolicyWrapper | None = DEFAULT_WRAPPERS
+        self,
+        policy: Policy,
+        *,
+        static_meta: dict[str, Any] | None = None,
+        wrap: PolicyWrapper | Callable[[pimm.Clock], PolicyWrapper] | None = default_wrappers,
     ):
-        self.policy = wrap.wrap(policy) if wrap is not None else policy
+        self._raw_policy = policy
+        self._wrap = wrap
+        # Wrapping happens in ``run()`` once we have the clock — some wrappers (e.g.
+        # ``ChunkedSchedule``) need it. Until then ``self.policy`` mirrors the raw policy.
+        self.policy: Policy = policy
         self.context: dict[str, Any] = {}
         self._static_meta = static_meta or {}
         self._session: Session | None = None
@@ -276,18 +260,34 @@ class Harness(pimm.ControlSystem):
         return inputs
 
     def _step(self, clock: pimm.Clock) -> None:
-        """Build obs, call session, emit trajectories."""
+        """Build obs, call session, demux trajectories into per-channel emissions.
+
+        The session output already carries absolute timestamps (stamped by the
+        outermost scheduling wrapper). The harness only demuxes by channel.
+        """
         obs = self._build_obs(clock)
         if obs is None:
             return
-        result = self._session(frozen_view(obs))
-        if result is None:
+
+        actions = self._session(frozen_view(obs))
+        if actions is None:
             return
-        robot_traj, grip_traj = result
+
+        robot_traj = [(cmd['timestamp'], cmd['robot_command']) for cmd in actions]
+        grip_traj = [(cmd['timestamp'], cmd['target_grip']) for cmd in actions if 'target_grip' in cmd]
+
         self.robot_commands.emit(robot_traj)
         self.target_grip.emit(grip_traj)
 
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Sleep]:
+        # Resolve wrap now that we have the clock — some wrappers (e.g. ChunkedSchedule) need it.
+        if self._wrap is None:
+            self.policy = self._raw_policy
+        elif isinstance(self._wrap, PolicyWrapper):
+            self.policy = self._wrap.wrap(self._raw_policy)
+        else:  # factory: Callable[[Clock], PolicyWrapper]
+            self.policy = self._wrap(clock).wrap(self._raw_policy)
+
         running = False
         recording = False
 

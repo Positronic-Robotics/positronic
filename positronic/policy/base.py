@@ -1,12 +1,9 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 from positronic.policy.sampler import Sampler, UniformSampler
-
-if TYPE_CHECKING:
-    from positronic.policy.codec import Codec
 
 
 class Session(ABC):
@@ -21,15 +18,17 @@ class Session(ABC):
 
     **Plain-data contract**: sessions accept and return only plain data
     (dicts, lists, numpy arrays, scalars). No tensors or custom objects.
+
+    **Return contract**: ``list[dict] | None``. ``None`` means "no new
+    trajectory, keep executing the current one" (used by scheduling wrappers).
+    An empty list means "stop whatever is executing now". A non-empty list is
+    a new trajectory. Single-action returns must be wrapped into a 1-element
+    list by the producer.
     """
 
     @abstractmethod
-    def __call__(self, obs: dict[str, Any]) -> dict[str, Any] | list[dict[str, Any]] | None:
-        """Predict actions for the given observation.
-
-        Returns a single action dict, a trajectory (list of dicts), or None
-        to signal "keep executing the current trajectory" (used by scheduling wrappers).
-        """
+    def __call__(self, obs: dict[str, Any]) -> list[dict[str, Any]] | None:
+        """Predict actions for the given observation."""
 
     @property
     def meta(self) -> dict[str, Any]:
@@ -37,7 +36,12 @@ class Session(ABC):
         return {}
 
     def on_episode_complete(self):
-        """Called when the episode using this session is finalized."""
+        """Called when the episode using this session is finalized (successful stop).
+
+        Distinct from ``close()``: fires only on successful episode completion
+        (e.g. used by samplers to count completed runs), whereas ``close()``
+        releases resources for any session end, successful or aborted.
+        """
         return None
 
     def close(self):
@@ -107,7 +111,7 @@ class DelegatingPolicy(Policy):
         self._inner.close()
 
 
-class PolicyWrapper(ABC):
+class PolicyWrapper:
     """Composable wrapper recipe — created without an inner policy, applied via ``wrap()``.
 
     PolicyWrappers may be stateful, may control flow (skip the inner call),
@@ -120,31 +124,51 @@ class PolicyWrapper(ABC):
 
         pipeline = ErrorRecovery() | ChunkedSchedule() | codec
         wrapped = pipeline.wrap(RemotePolicy(...))
+
+    **Extension points**: subclasses override *one* of ``wrap_session`` (the
+    common case — transform one session's ``__call__``) or ``wrap`` (for
+    policy-level state across sessions, like composition).
     """
 
-    @abstractmethod
     def wrap(self, policy: Policy) -> Policy:
-        """Apply this wrapper to a concrete policy, returning a wrapped Policy."""
+        """Apply this wrapper to a policy. Default: wrap every session it creates via ``wrap_session``."""
+        return _WrapperPolicy(policy, self)
 
-    def __or__(self, other: PolicyWrapper | Codec) -> PolicyWrapper:
-        from positronic.policy.codec import Codec  # noqa — circular dep
+    def wrap_session(self, inner: Session, context: dict[str, Any] | None) -> Session:
+        """Wrap a single session. Subclasses override this for per-session wrapping."""
+        raise NotImplementedError('Override wrap_session or wrap')
 
-        mine = self._pipeline_components()
+    @property
+    def meta(self) -> dict[str, Any]:
+        """Metadata contributed by this wrapper (merged into the wrapped policy's meta)."""
+        return {}
+
+    def __or__(self, other: PolicyWrapper) -> PolicyWrapper:
         if isinstance(other, PolicyWrapper):
-            return _Pipeline((*mine, *other._pipeline_components()))
-        if isinstance(other, Codec):
-            return _Pipeline((*mine, other))
+            return _Pipeline((*self._pipeline_components(), *other._pipeline_components()))
         return NotImplemented
 
-    def __ror__(self, other: Codec) -> PolicyWrapper:
-        from positronic.policy.codec import Codec  # noqa — circular dep
-
-        if isinstance(other, Codec):
-            return _Pipeline((other, *self._pipeline_components()))
-        return NotImplemented
-
+    # Used for flattening nested | compositions into a single _Pipeline
     def _pipeline_components(self) -> tuple:
         return (self,)
+
+
+class _WrapperPolicy(DelegatingPolicy):
+    """Generic policy wrapper produced by ``PolicyWrapper.wrap()``.
+
+    Delegates session creation to the wrapper's ``wrap_session`` and merges meta.
+    """
+
+    def __init__(self, inner: Policy, wrapper: PolicyWrapper):
+        super().__init__(inner)
+        self._wrapper = wrapper
+
+    def new_session(self, context=None):
+        return self._wrapper.wrap_session(self._inner.new_session(context), context)
+
+    @property
+    def meta(self):
+        return self._inner.meta | self._wrapper.meta
 
 
 class _Pipeline(PolicyWrapper):
@@ -160,20 +184,6 @@ class _Pipeline(PolicyWrapper):
 
     def _pipeline_components(self) -> tuple:
         return self._components
-
-
-class _SampledSession(DelegatingSession):
-    """Session created by SampledPolicy — wraps an inner session + tracks sampling."""
-
-    def __init__(self, inner: Session, key: str, sampler: Sampler, context: dict):
-        super().__init__(inner)
-        self._key = key
-        self._sampler = sampler
-        self._context = context
-
-    def on_episode_complete(self):
-        self._sampler.count(self._key, self._context)
-        super().on_episode_complete()
 
 
 class SampledPolicy(Policy):
@@ -192,6 +202,19 @@ class SampledPolicy(Policy):
         self._key_field = key_field
         self._keys: tuple[str, ...] | None = None
 
+    class _SampledSession(DelegatingSession):
+        """Session created by SampledPolicy — wraps an inner session + tracks sampling."""
+
+        def __init__(self, inner: Session, key: str, sampler: Sampler, context: dict):
+            super().__init__(inner)
+            self._key = key
+            self._sampler = sampler
+            self._context = context
+
+        def on_episode_complete(self):
+            self._sampler.count(self._key, self._context)
+            super().on_episode_complete()
+
     @property
     def sampler(self) -> Sampler | None:
         if self._sampler is None and self._keys is not None:
@@ -209,7 +232,7 @@ class SampledPolicy(Policy):
         ctx = context or {}
         key = self.sampler.sample(keys, ctx)
         sub_policy = self._policies[keys.index(key)]
-        return _SampledSession(sub_policy.new_session(context), key, self.sampler, ctx)
+        return SampledPolicy._SampledSession(sub_policy.new_session(context), key, self.sampler, ctx)
 
     @property
     def meta(self):

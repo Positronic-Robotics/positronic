@@ -6,7 +6,7 @@ from positronic.policy.sampler import BalancedSampler, UniformSampler
 
 class _StubSession(Session):
     def __init__(self, action=None, meta=None):
-        self._action = action or {}
+        self._action = action or []
         self._meta = meta or {}
 
     def __call__(self, obs):

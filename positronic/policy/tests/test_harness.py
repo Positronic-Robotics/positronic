@@ -21,10 +21,7 @@ class _SpySession(Session):
 
     def __call__(self, obs):
         self._policy.last_obs = obs
-        now = obs['inference_time_ns'] / 1e9
-        return [
-            {'robot_command': to_wire(self._policy.command), 'target_grip': self._policy.target_grip, 'timestamp': now}
-        ]
+        return [{'robot_command': self._policy.command, 'target_grip': self._policy.target_grip, 'timestamp': 0.0}]
 
 
 class SpyPolicy(Policy):
@@ -52,10 +49,7 @@ class _StubSession(Session):
     def __call__(self, obs):
         self._policy.last_obs = obs
         self._policy.observations.append(obs)
-        now = obs['inference_time_ns'] / 1e9
-        return [
-            {'robot_command': to_wire(self._policy.command), 'target_grip': self._policy.target_grip, 'timestamp': now}
-        ]
+        return [{'robot_command': self._policy.command, 'target_grip': self._policy.target_grip, 'timestamp': 0.0}]
 
     @property
     def meta(self):
@@ -98,13 +92,12 @@ class _ChunkSession(Session):
 
     def __call__(self, obs):
         self._policy.counter += 1
-        now = obs['inference_time_ns'] / 1e9
         dt = 0.005
         return [
             {
-                'robot_command': to_wire(self._policy.command),
+                'robot_command': self._policy.command,
                 'target_grip': self._policy.counter * 100.0 + i,
-                'timestamp': now + i * dt,
+                'timestamp': i * dt,
             }
             for i in range(10)
         ]

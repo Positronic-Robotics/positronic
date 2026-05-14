@@ -45,8 +45,11 @@ class RemoteSession(Session):
             result[key] = value
         return result
 
-    def __call__(self, obs: dict[str, Any]) -> dict[str, Any] | list[dict[str, Any]]:
-        """Forwards the observation to the remote server and returns the action."""
+    def __call__(self, obs: dict[str, Any]) -> list[dict[str, Any]] | None:
+        """Forwards the observation to the remote server and returns the action trajectory.
+
+        Command reconstruction is handled transparently by the deserialization layer.
+        """
         return self._session.infer(self._prepare_obs(obs))
 
     @property

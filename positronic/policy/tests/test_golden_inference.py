@@ -20,7 +20,7 @@ import pytest
 import pimm
 from pimm.tests.testing import MockClock
 from positronic.drivers import roboarm
-from positronic.drivers.roboarm.command import CartesianPosition, to_wire
+from positronic.drivers.roboarm.command import CartesianPosition
 from positronic.geom import Rotation, Transform3D
 from positronic.policy.base import Policy, Session
 from positronic.policy.codec import ActionTiming
@@ -43,10 +43,7 @@ class _ReactiveSession(Session):
             t = (i + 1) / 10.0
             step_pos = current_pos + delta * 0.05 * t
             pose = Transform3D(translation=step_pos, rotation=Rotation.identity)
-            actions.append({
-                'robot_command': to_wire(CartesianPosition(pose=pose)),
-                'target_grip': round(0.5 + i * 0.01, 4),
-            })
+            actions.append({'robot_command': CartesianPosition(pose=pose), 'target_grip': round(0.5 + i * 0.01, 4)})
         return actions
 
 

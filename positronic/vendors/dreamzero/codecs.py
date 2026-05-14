@@ -176,7 +176,7 @@ class DreamZeroActionCodec(Codec):
         action = data['action']
         joints = action[: self._num_joints]
         grip = action[self._num_joints].item()
-        return {'robot_command': command.to_wire(command.JointPosition(positions=joints)), 'target_grip': grip}
+        return {'robot_command': command.JointPosition(positions=joints), 'target_grip': grip}
 
     @property
     def training_encoder(self):

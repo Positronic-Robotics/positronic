@@ -10,7 +10,7 @@ import pos3
 import uvicorn
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 
-from positronic.policy import Codec, Policy, RecordingCodec
+from positronic.policy import Codec, Policy, RecordingWrapper
 from positronic.utils.checkpoints import get_latest_checkpoint, list_checkpoints
 from positronic.utils.serialization import deserialise, serialise
 
@@ -117,8 +117,7 @@ class VendorServer(ABC):
         self.codec = codec
         self.host = host
         self.port = port
-        if recording_dir:
-            self.codec = RecordingCodec(self.codec, pos3.sync(recording_dir))
+        self._recording = RecordingWrapper(pos3.sync(recording_dir)) if recording_dir else None
 
         self.metadata: dict[str, Any] = {}
 
@@ -176,6 +175,8 @@ class VendorServer(ABC):
             model_handle, extra_meta = await self.resolve_model(model_id, websocket)
             base_policy = self.create_policy(model_handle)
             policy = self.codec.wrap(base_policy) if self.codec else base_policy
+            if self._recording is not None:
+                policy = self._recording.wrap(policy)
             session = policy.new_session()
             meta = {**self.metadata, **extra_meta, **session.meta}
             await websocket.send_bytes(serialise({'status': 'ready', 'meta': meta}))
