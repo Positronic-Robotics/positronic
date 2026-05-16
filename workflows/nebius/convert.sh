@@ -15,6 +15,9 @@ set -euo pipefail
 
 PARENT_ID="${NEBIUS_PARENT_ID:-project-e00f38wexevrr52b8j}"
 SUBNET_ID="${NEBIUS_SUBNET_ID:-vpcsubnet-e00pk1j1x6hjmr4m92}"
+# Shared filesystem (RWX) holding the uv / HF / openpi caches across cold starts.
+# pos3's cache stays on local disk (~/.cache/positronic/s3) — never redirected here.
+CACHE_FS="${NEBIUS_CACHE_FS:-computefilesystem-e00f6jyfr5wkawyrab}"
 
 if [ $# -lt 1 ]; then
   cat >&2 <<'EOF'
@@ -87,6 +90,10 @@ CREATE_OUT=$(nebius ai job create \
   --preset 8vcpu-32gb \
   --timeout 4h \
   --working-dir /positronic \
+  --volume "${CACHE_FS}:/cache:rw" \
+  --env UV_CACHE_DIR=/cache/uv \
+  --env HF_HOME=/cache/hf \
+  --env OPENPI_DATA_HOME=/cache/openpi \
   --env-secret AWS_ACCESS_KEY_ID=positronic-serverless-aws-access-key-id \
   --env-secret AWS_SECRET_ACCESS_KEY=positronic-serverless-aws-secret-access-key \
   --env AWS_ENDPOINT_URL=https://storage.eu-north1.nebius.cloud:443 \
@@ -149,6 +156,10 @@ nebius ai job create \
   --preset 8vcpu-32gb \
   --timeout 4h \
   --working-dir /positronic \
+  --volume "${CACHE_FS}:/cache:rw" \
+  --env UV_CACHE_DIR=/cache/uv \
+  --env HF_HOME=/cache/hf \
+  --env OPENPI_DATA_HOME=/cache/openpi \
   --env-secret AWS_ACCESS_KEY_ID=positronic-serverless-aws-access-key-id \
   --env-secret AWS_SECRET_ACCESS_KEY=positronic-serverless-aws-secret-access-key \
   --env AWS_ENDPOINT_URL=https://storage.eu-north1.nebius.cloud:443 \

@@ -32,6 +32,12 @@ Optional env:
 
 To run all four in parallel:
   for v in lerobot_0_3_3 lerobot openpi gr00t; do bash workflows/nebius/e2e.sh "$v" & done; wait
+
+The shared cache FS (NEBIUS_CACHE_FS) is RWX, but a cold (empty) cache plus a
+4-way parallel fan-out means several jobs racing to populate the same entries.
+On a fresh cache, seed it first with one vendor, then fan out the rest warm:
+  bash workflows/nebius/e2e.sh lerobot_0_3_3
+  for v in lerobot openpi gr00t; do bash workflows/nebius/e2e.sh "$v" & done; wait
 EOF
   exit 1
 fi

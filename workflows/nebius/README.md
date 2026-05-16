@@ -70,6 +70,60 @@ nebius mysterybox secret create \
 The names matter — `convert.sh`, `train.sh`, and `serve.sh` reference the secrets by name. If a
 secret with one of these names already exists, the create call fails; skip it.
 
+Also create one shared filesystem for the dependency caches. Every job and endpoint mounts it
+read-write at `/cache`; `uv`, HuggingFace, and openpi asset downloads land there and persist
+across cold starts, so only the first run after a dependency change pays the download cost:
+
+```bash
+nebius compute filesystem create \
+  --parent-id "$PARENT_ID" \
+  --name positronic-serverless-cache \
+  --type network_ssd \
+  --size-gibibytes 512
+
+# --volume needs the filesystem ID, not its name. Grab it and export it:
+nebius compute filesystem list --parent-id "$PARENT_ID" --format json \
+  | jq -r '.items[] | select(.metadata.name=="positronic-serverless-cache") | .metadata.id'
+# → computefilesystem-...   (pass via NEBIUS_CACHE_FS, or rely on the script default)
+```
+
+The filesystem is RWX — many jobs/endpoints attach it concurrently. pos3's own cache
+(`~/.cache/positronic/s3/`) is deliberately *not* redirected here; it stays on each container's
+local disk and re-fetches from S3 by design.
+
+### Cleaning the shared cache
+
+There is no file browser for the filesystem — to inspect or wipe it you mount it in a
+throwaway job. Make sure no jobs/endpoints are using the cache first (a wipe while a
+warm job reads it will break that job).
+
+Inspect usage:
+
+```bash
+nebius ai job create --parent-id "$PARENT_ID" --subnet-id "$SUBNET_ID" \
+  --name cache-du --image busybox:latest \
+  --container-command du --args '-sh /cache /cache/uv /cache/hf /cache/openpi' \
+  --platform cpu-e2 --preset 4vcpu-16gb --timeout 1h \
+  --volume "$NEBIUS_CACHE_FS:/cache:rw"
+# then: nebius ai job logs <aijob-id>
+```
+
+Wipe everything (full reset — the next run repays the cold download):
+
+```bash
+nebius ai job create --parent-id "$PARENT_ID" --subnet-id "$SUBNET_ID" \
+  --name cache-wipe --image busybox:latest \
+  --container-command find --args '/cache -mindepth 1 -delete' \
+  --platform cpu-e2 --preset 4vcpu-16gb --timeout 1h \
+  --volume "$NEBIUS_CACHE_FS:/cache:rw"
+```
+
+To clear only one tool's cache, target its subdir, e.g. `--args '/cache/uv -mindepth 1
+-delete'`. Two gotchas: `--volume` needs the filesystem **ID** (not name), and Nebius
+space-splits `--args`, so use a no-shell command (`find`/`du`) — a quoted `sh -c "..."`
+gets torn apart. Deleting and recreating the filesystem also works but loses the warm
+cache for every workflow.
+
 ## Convert a Positronic dataset
 
 Each model family expects a specific dataset format. `convert.sh` runs the right converter
@@ -153,9 +207,11 @@ Useful Commands
   ...
 ```
 
-The job stays in `PROVISIONING`/`STARTING` for ~10 min while the image pulls and the Python
-environment resolves inside the container, then runs the actual training. Cost scales with
-total wall clock — the cold-start fraction shrinks for longer runs.
+The job stays in `PROVISIONING`/`STARTING` while the image pulls and the Python environment
+resolves inside the container, then runs the actual training. The first job after a dependency
+change pays the full `uv`/HF download cost (~10 min); subsequent jobs reuse the shared `/cache`
+filesystem and start substantially faster. Cost scales with total wall clock — the cold-start
+fraction shrinks for longer runs.
 
 ## Verifying the run
 
@@ -243,7 +299,6 @@ later), use `nebius ai endpoint stop <id>` directly — `start` resumes it.
 
 No VM to provision, SSH into, or remember to shut down. Credentials stay in MysteryBox instead
 of on operator laptops. Compute is released the moment a job finishes — idle cost goes to zero.
-The trade-off is a ~10-min cold start per job (image pull + venv resolve) instead of a warm VM.
 
 ## Configuration
 
@@ -255,6 +310,7 @@ override them** with their own project + subnet IDs:
 | `NEBIUS_PARENT_ID` | `project-e00f38wexevrr52b8j` | Nebius project to create the job/endpoint in |
 | `NEBIUS_SUBNET_ID` | `vpcsubnet-e00pk1j1x6hjmr4m92` | VPC subnet for the compute instance |
 | `WANDB_SECRET` | `positronic-serverless-wandb-api-key` | MysteryBox secret name for the WandB key. Set empty (`WANDB_SECRET=`) to skip wandb entirely. |
+| `NEBIUS_CACHE_FS` | `computefilesystem-e00f6jyfr5wkawyrab` | Shared filesystem **ID** (not name — `--volume` rejects names) mounted RW at `/cache` for the `uv`/HF/openpi caches (`UV_CACHE_DIR`, `HF_HOME`, `OPENPI_DATA_HOME`). Not used by pos3. The default is Positronic-internal; external users must override with their own filesystem ID. |
 
 Other operational settings (platform/preset, MysteryBox secret names, S3 endpoint URL, region)
 are hardcoded — change them by editing the script directly. The vendor positional arg selects
