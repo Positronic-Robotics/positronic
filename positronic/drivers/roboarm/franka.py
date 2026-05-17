@@ -228,7 +228,7 @@ class Robot(pimm.ControlSystem):
             cmd_msg = self.commands.read()
             if cmd_msg.updated:
                 player.set(cmd_msg.data)
-            for cmd in player.advance(clock.now()):
+            for cmd in player.advance(clock.now_ns()):
                 match cmd:
                     case command.Reset():
                         _recover_if_needed(robot, in_error)

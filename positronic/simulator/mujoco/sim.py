@@ -261,7 +261,7 @@ class MujocoFranka(pimm.ControlSystem):
             cmd_msg = self.commands.read()
             if cmd_msg.updated:
                 player.set(cmd_msg.data)
-            for cmd in player.advance(clock.now()):
+            for cmd in player.advance(clock.now_ns()):
                 self._apply_command(cmd, state)
 
             self.state.emit(state)
@@ -324,7 +324,7 @@ class MujocoGripper(pimm.ControlSystem):
             msg = self.target_grip.read()
             if msg.updated:
                 player.set(msg.data)
-            for grip in player.advance(clock.now()):
+            for grip in player.advance(clock.now_ns()):
                 last_grip = grip
             self.set_target_grip(last_grip)
 

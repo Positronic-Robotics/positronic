@@ -88,9 +88,9 @@ class Robot(pimm.ControlSystem):
             grip_msg = self.target_grip.read()
             if grip_msg.updated:
                 grip_player.set(grip_msg.data)
-            for grip in grip_player.advance(clock.now()):
+            for grip in grip_player.advance(clock.now_ns()):
                 self._last_grip = grip
-            for cmd in player.advance(clock.now()):
+            for cmd in player.advance(clock.now_ns()):
                 match cmd:
                     case roboarm_command.Reset():
                         raise NotImplementedError('Reset not implemented')

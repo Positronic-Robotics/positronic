@@ -1,6 +1,6 @@
 import pimm
 from positronic.dataset import DatasetWriter
-from positronic.dataset.ds_writer_agent import DsWriterAgent, Serializers, TimeMode
+from positronic.dataset.ds_writer_agent import DsWriterAgent, Serializers, TimeMode, TrajectoryOverrideSerializer
 
 ROBOT_STATIC_META = {'joint_signal': 'robot_state.q', 'pose_signals': ['robot_state.ee_pose', 'robot_commands.pose']}
 
@@ -33,10 +33,13 @@ def wire(
         for signal_name in cameras.keys():
             ds_agent.add_signal(signal_name, Serializers.camera_images)
         if robot_arm is not None:
-            ds_agent.add_signal('robot_commands', Serializers.robot_command)
+            # Policies emit whole trajectories; flatten with last-writer-wins so the
+            # recording is a dense per-command stream (teleop emits bare commands,
+            # which pass straight through). See TrajectoryOverrideSerializer.
+            ds_agent.add_signal('robot_commands', TrajectoryOverrideSerializer(Serializers.robot_command))
             ds_agent.add_signal('robot_state', Serializers.robot_state)
         if gripper is not None:
-            ds_agent.add_signal('target_grip')
+            ds_agent.add_signal('target_grip', TrajectoryOverrideSerializer(None))
             ds_agent.add_signal('grip')
 
         for signal_name, emitter in cameras.items():

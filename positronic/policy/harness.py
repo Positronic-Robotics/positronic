@@ -85,7 +85,7 @@ class Harness(pimm.ControlSystem):
         return meta
 
     def _home(self, clock):
-        now = clock.now()
+        now = clock.now_ns()
         self.robot_commands.emit([(now, roboarm.command.Reset())])
         self.target_grip.emit([(now, 0.0)])
 
@@ -150,25 +150,29 @@ class Harness(pimm.ControlSystem):
         was_ok = not in_error
         in_error = self.robot_state.value.status == roboarm.RobotStatus.ERROR
         if in_error and was_ok:
-            now = clock.now()
-            self.robot_commands.emit([(now, roboarm.command.Recover())])
+            self.robot_commands.emit([(clock.now_ns(), roboarm.command.Recover())])
             self._trajectory_end = None
         if in_error:
             return True
 
-        if self._trajectory_end is not None and clock.now() < self._trajectory_end:
+        if self._trajectory_end is not None and clock.now_ns() < self._trajectory_end:
             return in_error
 
         commands = self._infer(clock)
         if commands is None:
             return in_error
 
+        # Codec stamps absolute float seconds; drivers' TrajectoryPlayer and the
+        # dataset writer consume ns. This is the single explicit seconds->ns seam.
         prediction_time = clock.now()
         robot_traj = [
-            (cmd.get('timestamp', prediction_time), roboarm.command.from_wire(cmd['robot_command'])) for cmd in commands
+            (int(cmd.get('timestamp', prediction_time) * 1e9), roboarm.command.from_wire(cmd['robot_command']))
+            for cmd in commands
         ]
         grip_traj = [
-            (cmd.get('timestamp', prediction_time), cmd['target_grip']) for cmd in commands if 'target_grip' in cmd
+            (int(cmd.get('timestamp', prediction_time) * 1e9), cmd['target_grip'])
+            for cmd in commands
+            if 'target_grip' in cmd
         ]
         self.robot_commands.emit(robot_traj)
         if grip_traj:

@@ -73,7 +73,20 @@ class DsWriterCommand:
 #         - use "" (empty string) to keep the base name as-is
 #         - any dict entry with value None is skipped (not recorded)
 #     * None -> the sample is dropped (not recorded)
+#     * a list[Timestamped] -> a self-timestamped stream: each item is recorded at
+#       its own ``ts_ns`` (not the agent loop/message timestamp). An empty list
+#       defers (records nothing now); a StatefulSerializer may emit the remainder
+#       later from ``flush()``. The per-item ``value`` follows the same
+#       value/dict/None rules above.
 Serializer = Callable[[Any], Any | dict[str, Any]]
+
+
+@dataclass
+class Timestamped:
+    """A sample paired with its own absolute timestamp (ns)."""
+
+    ts: int
+    value: Any
 
 
 class StatefulSerializer:
@@ -87,8 +100,16 @@ class StatefulSerializer:
     def reset(self) -> None:
         pass
 
-    def __call__(self, value: Any) -> Any | dict[str, Any]:
+    def __call__(self, value: Any) -> Any | dict[str, Any] | list['Timestamped']:
         raise NotImplementedError
+
+    def flush(self) -> list['Timestamped']:
+        """Drain any buffered samples at episode end (mirror of ``reset``).
+
+        Called once on ``STOP_EPISODE`` before the episode is finalized. The
+        default keeps stateless serializers a no-op.
+        """
+        return []
 
 
 class _PureSerializer(StatefulSerializer):
@@ -165,6 +186,69 @@ class Serializers:
     def camera_images(data: pimm.shared_memory.NumpySMAdapter) -> np.ndarray:
         """Extract array from NumpySMAdapter for storage."""
         return data.array
+
+
+class TrajectoryOverrideSerializer(StatefulSerializer):
+    """Flatten policy trajectories into a single monotonic per-point stream.
+
+    A policy emits whole trajectories ``[(abs_ts_ns, value), ...]``. A newer
+    trajectory overrides the overlapping tail of the previous one
+    (last-writer-wins on the timeline): given ``1:[1..10]`` then ``2:[5..15]``
+    the recorded stream is ``1@1..4`` then ``2@5..15``. A point is committed
+    only once a newer trajectory starting after it proves it final; the
+    remainder is drained by :meth:`flush` at episode end.
+
+    Bare (non-trajectory) inputs — teleop single commands / scalar grip — pass
+    straight through ``inner`` at the agent timestamp (legacy behaviour), so the
+    shared ``wire.wire`` path keeps working for data collection and replay.
+
+    HACK: lossy. Drops the notion of a *predicted* trajectory and cannot
+    represent overlapping schedulers (RTC/temporal ensembling) that replan into
+    the already-committed past — such points are dropped to keep timestamps
+    strictly increasing. Faithful full-command recording needs an
+    object-valued Signal (``Kind.OBJECT``); tracked in TODO(positronic#NNN).
+    """
+
+    def __init__(self, inner: Serializer | None):
+        self._inner = inner
+        self._buffer: list[tuple[int, Any]] = []  # latest trajectory, (abs_ts_ns, value), ts-sorted
+        self._last_ts: int | None = None
+
+    def reset(self) -> None:
+        self._buffer = []
+        self._last_ts = None
+
+    def _encode(self, value: Any) -> Any:
+        return self._inner(value) if self._inner is not None else value
+
+    def _committable(self, points: list[tuple[int, Any]]) -> list[Timestamped]:
+        # Guard only bites in the overlap-degrade case (RTC replanning into the
+        # past); under ChunkedSchedule the prefix is always already ahead.
+        if self._last_ts is not None:
+            points = [(ts, v) for ts, v in points if ts > self._last_ts]
+        if points:
+            self._last_ts = points[-1][0]
+        return [Timestamped(ts, self._encode(v)) for ts, v in points]
+
+    def __call__(self, message: Any) -> Any | list[Timestamped]:
+        if not isinstance(message, list):
+            # Bare value (teleop Reset/Cartesian, scalar grip): one-shot, agent-timestamped.
+            return self._encode(message)
+        if not message:
+            return []  # empty trajectory: nothing to commit, buffer untouched
+
+        start = message[0][0]
+        # Buffer is ts-sorted: everything before the new trajectory's start is
+        # final; the rest is overridden and dropped by the reassignment below.
+        cut = next((i for i, (ts, _) in enumerate(self._buffer) if ts >= start), len(self._buffer))
+        committed = self._committable(self._buffer[:cut])
+        self._buffer = list(message)
+        return committed
+
+    def flush(self) -> list[Timestamped]:
+        out = self._committable(self._buffer)
+        self._buffer = []
+        return out
 
 
 def _append(ep_writer: EpisodeWriter, name: str, value: Any, ts_ns: int, extra_ts: dict[str, int] | None = None):
@@ -258,7 +342,12 @@ class DsWriterAgent(pimm.ControlSystem):
                             value = msg.data
                             if serializer is not None:
                                 value = serializer(value)
-                            _append(ep_writer, name, value, primary_ts, extra_ts)
+                            if isinstance(value, list):
+                                # Self-timestamped stream: each sample owns its ts; no extra timelines.
+                                for sample in value:
+                                    _append(ep_writer, name, sample.value, sample.ts, None)
+                            else:
+                                _append(ep_writer, name, value, primary_ts, extra_ts)
 
                 yield pimm.Sleep(limiter.wait_time())
         finally:
@@ -289,6 +378,9 @@ class DsWriterAgent(pimm.ControlSystem):
                     logger.warning('Episode already started, ignoring start command')
             case DsWriterCommandType.STOP_EPISODE:
                 if ep_writer is not None:
+                    for name, ser in self._serializers.items():
+                        for sample in ser.flush():
+                            _append(ep_writer, name, sample.value, sample.ts, None)
                     for k, v in cmd.static_data.items():
                         ep_writer.set_static(k, v)
                     ep_writer.__exit__(None, None, None)

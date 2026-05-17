@@ -93,7 +93,7 @@ class Robot(pimm.ControlSystem):
                 cmd_msg = self.commands.read()
                 if cmd_msg.updated:
                     player.set(cmd_msg.data)
-                for cmd in player.advance(clock.now()):
+                for cmd in player.advance(clock.now_ns()):
                     match cmd:
                         case command.Reset():
                             joint_controller.set_target_qpos(self.home_joints)

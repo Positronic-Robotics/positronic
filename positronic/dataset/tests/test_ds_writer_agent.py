@@ -14,6 +14,7 @@ from positronic.dataset.ds_writer_agent import (
     DsWriterCommandType,
     Serializers,
     TimeMode,
+    TrajectoryOverrideSerializer,
 )
 from positronic.dataset.local_dataset import LocalDataset, LocalDatasetWriter
 from positronic.drivers.roboarm import RobotStatus, State
@@ -468,3 +469,21 @@ def test_suspend_resume(world, clock):
     w = ds.created[-1]
     assert [(s, v) for (s, v, _, _) in w.appends] == [('a', 1)]
     assert w.exited is True
+
+
+def test_trajectory_override_serializer():
+    s = TrajectoryOverrideSerializer(None)
+    s.reset()
+
+    # First trajectory: nothing is final yet (could be overridden).
+    assert s([(1, 'a'), (2, 'b'), (3, 'c')]) == []
+
+    # Next trajectory starts at ts=2 -> only ts<2 ('a') is final; 'b','c' overridden.
+    out = s([(2, 'B'), (3, 'C'), (4, 'D')])
+    assert [(t.ts, t.value) for t in out] == [(1, 'a')]
+
+    # Episode end drains the still-live buffer.
+    assert [(t.ts, t.value) for t in s.flush()] == [(2, 'B'), (3, 'C'), (4, 'D')]
+
+    # Bare (teleop) values bypass buffering entirely.
+    assert s('reset') == 'reset'

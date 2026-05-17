@@ -41,7 +41,7 @@ class Robotiq2F(pimm.ControlSystem):
                 pos_msg = self.target_grip.read()
                 if pos_msg.updated:
                     player.set(pos_msg.data)
-                for grip in player.advance(clock.now()):
+                for grip in player.advance(clock.now_ns()):
                     pos = int(max(0, min(1, grip)) * 255)
                     spd = int(max(0, min(255, self.speed.value)))
                     frc = int(max(0, min(255, self.force.value)))
