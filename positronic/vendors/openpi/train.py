@@ -41,7 +41,8 @@ def main(
             local_input_dir = input_dir
 
         command = [uv_path, 'run', '--frozen', '--project', str(openpi_root), '--']
-        command.extend(['python', 'scripts/train.py'])
+        launcher = Path(__file__).parent / '_launch.py'
+        command.extend(['python', str(launcher), '--openpi-root', openpi_root.as_posix()])
         command.extend([config_name, '--exp-name', exp_name])
         command.append('--resume' if resume else '--overwrite')
         if num_train_steps is not None:
