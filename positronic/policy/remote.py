@@ -18,8 +18,17 @@ class RemotePolicy(Policy):
     sizes. Server-reported sizes always take precedence.
     """
 
-    def __init__(self, host: str, port: int, resize: int | None = None, model_id: str | None = None):
-        self._client = InferenceClient(host, port)
+    def __init__(
+        self,
+        host: str,
+        port: int,
+        resize: int | None = None,
+        model_id: str | None = None,
+        *,
+        headers: dict[str, str] | None = None,
+        secure: bool = False,
+    ):
+        self._client = InferenceClient(host, port, headers=headers, secure=secure)
         self.__session: InferenceSession | None = None
         self._resize = resize
         self._model_id = model_id
