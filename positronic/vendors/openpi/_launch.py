@@ -3,8 +3,8 @@ import importlib.util
 import sys
 
 import openpi.training.config as _config
-import wandb
 from openpi.training.optimizer import CosineDecaySchedule
+from wandb.sdk.wandb_run import Run
 
 
 def _extract_openpi_root() -> str:
@@ -35,14 +35,19 @@ def main():
         )
 
     lr_fn = cfg.lr_schedule.create()
-    _orig_log = wandb.log
 
-    def _log(data, *args, step=None, **kwargs):
+    # openpi calls `wandb.init()` inside its train main, which rebinds the
+    # module-level `wandb.log`. Patch the `Run.log` chokepoint instead so the
+    # injected learning_rate survives init regardless of patch timing.
+    _orig_log = Run.log
+
+    def _log(self, data, *args, **kwargs):
+        step = kwargs.get('step', args[0] if args else None)
         if step is not None and isinstance(data, dict) and 'loss' in data:
             data = {**data, 'learning_rate': float(lr_fn(step))}
-        return _orig_log(data, *args, step=step, **kwargs)
+        return _orig_log(self, data, *args, **kwargs)
 
-    wandb.log = _log
+    Run.log = _log
     openpi_train.main(cfg)
 
 
