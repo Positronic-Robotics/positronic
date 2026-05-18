@@ -145,7 +145,7 @@ class Harness(pimm.ControlSystem):
         commands = self.policy.select_action(frozen_view(inputs))
         return commands if isinstance(commands, list) else [commands]
 
-    def _step(self, clock: pimm.Clock, in_error: bool) -> bool:
+    def _step(self, clock: pimm.Clock, in_error: bool) -> Generator[pimm.Sleep, None, bool]:
         """Run one inference cycle if the current trajectory is consumed. Returns in_error."""
         was_ok = not in_error
         in_error = self.robot_state.value.status == roboarm.RobotStatus.ERROR
@@ -158,9 +158,14 @@ class Harness(pimm.ControlSystem):
         if self._trajectory_end is not None and clock.now_ns() < self._trajectory_end:
             return in_error
 
+        wall_start = time.monotonic()
         commands = self._infer(clock)
         if commands is None:
             return in_error
+        if self.simulate_timeout:
+            # Advance the (sim) clock by the wall-clock inference latency so
+            # rollouts feel the model's real cost. No-op once trajectory is set.
+            yield pimm.Sleep(time.monotonic() - wall_start)
 
         # Codec stamps absolute float seconds; drivers' TrajectoryPlayer and the
         # dataset writer consume ns. This is the single explicit seconds->ns seam.
@@ -195,7 +200,7 @@ class Harness(pimm.ControlSystem):
 
             try:
                 if running:
-                    in_error = self._step(clock, in_error)
+                    in_error = yield from self._step(clock, in_error)
             except pimm.NoValueException:
                 pass
             finally:
