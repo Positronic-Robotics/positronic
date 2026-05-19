@@ -1,3 +1,4 @@
+import time
 from functools import partial
 
 import numpy as np
@@ -11,6 +12,7 @@ from positronic.drivers.roboarm import RobotStatus
 from positronic.drivers.roboarm.command import CartesianPosition, Recover, Reset, from_wire, to_wire
 from positronic.geom import Rotation, Transform3D
 from positronic.policy.base import Policy
+from positronic.policy.codec import ActionTimestamp
 from positronic.policy.harness import Directive, DirectiveType, Harness
 from positronic.tests.testing_coutils import ManualDriver, RecordingEmitter, drive_scheduler
 
@@ -493,3 +495,75 @@ def test_robot_state_serializer_records_error(status, expected_error):
 def test_robot_state_serializer_drops_resetting():
     state = make_robot_state([0.1, 0.2, 0.3], [0.4, 0.5, 0.6], status=RobotStatus.RESETTING)
     assert Serializers.robot_state(state) is None
+
+
+class _SlowChunkPolicy(Policy):
+    """Returns an N-action chunk after sleeping ``latency_s`` wall-seconds in inference."""
+
+    def __init__(self, latency_s: float, n: int = 5) -> None:
+        self._latency_s = latency_s
+        self._n = n
+        pose = Transform3D(translation=np.array([0.4, 0.5, 0.6], dtype=np.float32), rotation=Rotation.identity)
+        self._cmd = CartesianPosition(pose=pose)
+
+    def select_action(self, obs):
+        time.sleep(self._latency_s)
+        return [{'robot_command': to_wire(self._cmd), 'target_grip': 0.0} for _ in range(self._n)]
+
+    def reset(self, context=None) -> None:
+        pass
+
+
+class _ClockStampedEmitter(pimm.SignalEmitter):
+    """Records the clock time at the moment of each emission."""
+
+    def __init__(self, clock) -> None:
+        self._clock = clock
+        self.emitted: list[tuple[int, object]] = []
+
+    def emit(self, data, ts: int = -1):
+        self.emitted.append((self._clock.now_ns(), data))
+
+
+def test_simulate_timeout_chunk_not_scheduled_in_the_past(world, clock):
+    """A freshly inferred chunk's first waypoint must be scheduled at ~now, not in the past.
+
+    With ``simulate_timeout`` the sim clock advances by the wall-clock inference
+    latency L during the blocking call. If the chunk is anchored to the
+    pre-inference clock time (``inference_time_ns`` captured before the call),
+    its first waypoint lands L seconds behind ``clock.now()`` by the time it is
+    emitted — the driver would then flush the first L*fps points in one tick and
+    the robot runs faster than real time. The contract: lag ≈ 0.
+    """
+    latency_s = 0.2
+    policy = _SlowChunkPolicy(latency_s=latency_s, n=5)
+    wrapped = ActionTimestamp(fps=10.0).wrap(policy)
+    harness = Harness(wrapped, simulate_timeout=True)
+
+    cmd_em = _ClockStampedEmitter(clock)
+    harness.robot_commands._bind(cmd_em)
+    harness.target_grip._bind(RecordingEmitter())
+    harness.ds_command._bind(RecordingEmitter())
+
+    frame_em = world.pair(harness.frames['image.cam'])
+    robot_em = world.pair(harness.robot_state)
+    grip_em = world.pair(harness.gripper_state)
+    directive_em = world.pair(harness.directive)
+
+    robot_state = make_robot_state([0.1, 0.2, 0.3], [0.4, 0.5, 0.6])
+    script = [
+        (partial(directive_em.emit, Directive.RUN(task='t')), 0.0),
+        (partial(emit_ready_payload, frame_em, robot_em, grip_em, robot_state), 0.01),
+        (None, 0.5),
+    ]
+    scheduler = world.start([harness, ManualDriver(script)])
+    drive_scheduler(scheduler, clock=clock, steps=200)
+
+    assert cmd_em.emitted, 'harness emitted no trajectory'
+    emit_clock_ns, traj = cmd_em.emitted[0]
+    first_ts_ns = traj[0][0]
+    lag_s = (emit_clock_ns - first_ts_ns) / 1e9
+    assert lag_s == pytest.approx(0.0, abs=latency_s / 2), (
+        f'first waypoint scheduled {lag_s:.3f}s in the past (inference latency {latency_s}s) — '
+        'chunk anchored to the pre-inference clock instead of inference-finish'
+    )
