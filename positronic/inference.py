@@ -42,7 +42,7 @@ class KeyboardHandler:
             case 's':
                 return Directive.RUN(task=self.task)
             case 'p':
-                return Directive.STOP()
+                return Directive.FINISH()
             case 'r':
                 return Directive.HOME()
         return None
