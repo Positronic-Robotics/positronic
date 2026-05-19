@@ -22,6 +22,7 @@ Regenerate the golden after an intentional behavior change:
         -p no:cacheprovider -o "addopts="
 """
 
+import gzip
 import json
 import os
 from functools import partial
@@ -43,7 +44,7 @@ from positronic.policy.codec import ActionTiming
 from positronic.policy.harness import Directive, Harness
 from positronic.tests.testing_coutils import ManualDriver, drive_scheduler
 
-GOLDEN_FILE = Path(__file__).parent / 'golden_pipeline.json'
+GOLDEN_FILE = Path(__file__).parent / 'golden_pipeline.json.gz'
 
 INITIAL_POS = np.array([0.30, 0.00, 0.40], dtype=np.float32)
 INITIAL_Q = np.array([0.10, -0.20, 0.30, -0.40, 0.50, -0.60, 0.70], dtype=np.float32)
@@ -213,11 +214,13 @@ def test_golden_pipeline(tmp_path):
     assert all(recorded[s]['ts_ns'] for s in CAPTURED_SIGNALS), 'Pipeline recorded no state'
 
     if os.environ.get('GOLDEN'):
-        GOLDEN_FILE.write_text(json.dumps(recorded, indent=1) + '\n')
+        with gzip.open(GOLDEN_FILE, 'wt') as f:
+            json.dump(recorded, f, separators=(',', ':'))
         pytest.skip(f'Golden written to {GOLDEN_FILE}')
 
     assert GOLDEN_FILE.exists(), f'{GOLDEN_FILE} missing; regenerate with GOLDEN=1'
-    golden = json.loads(GOLDEN_FILE.read_text())
+    with gzip.open(GOLDEN_FILE, 'rt') as f:
+        golden = json.load(f)
 
     assert set(recorded) == set(golden), f'Signal set mismatch: {set(recorded)} vs {set(golden)}'
     for name in CAPTURED_SIGNALS:
