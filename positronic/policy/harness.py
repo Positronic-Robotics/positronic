@@ -161,13 +161,9 @@ class Harness(pimm.ControlSystem):
             if commands is None:
                 return False
             if self.simulate_inference is True:  # bool is an int subclass — check identity first
-                delay_s = time.monotonic() - wall_start
+                yield pimm.Sleep(time.monotonic() - wall_start)
             elif self.simulate_inference:
-                delay_s = float(self.simulate_inference)
-            else:
-                delay_s = None
-            if delay_s is not None:
-                yield pimm.Sleep(delay_s)
+                yield pimm.Sleep(float(self.simulate_inference))
             prediction_time = clock.now()
             for cmd in commands:
                 commands_queue.append((

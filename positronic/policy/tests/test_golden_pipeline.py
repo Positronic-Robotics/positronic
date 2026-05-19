@@ -57,6 +57,9 @@ ACTION_FPS = 15.0
 ACTION_HORIZON_S = 0.5  # 8 of every 10-action chunk survives truncation
 CONTROL_PERIOD_S = 0.005  # fake robot/gripper sampling cadence (200 Hz)
 
+# State signals captured at the DsWriterAgent output and locked by the golden.
+CAPTURED_SIGNALS = ('robot_state.ee_pose', 'robot_state.q', 'grip')
+
 
 class ScriptedProportionalPolicy(Policy):
     """Pure proportional controller toward ``TARGET_POS``.
@@ -164,9 +167,6 @@ class FakeGripper(pimm.ControlSystem):
             self._grip = float(self.target_grip.value)
             self.grip.emit(self._grip)
             yield pimm.Sleep(CONTROL_PERIOD_S)
-
-
-CAPTURED_SIGNALS = ('robot_state.ee_pose', 'robot_state.q', 'grip')
 
 
 def _run_pipeline(tmp_path: Path) -> dict:
