@@ -1,6 +1,6 @@
 ---
 name: remote-training
-description: Manages remote training infrastructure on Nebius Serverless (Jobs for convert/train, Endpoints for inference). Use for dataset conversion, training jobs, serving checkpoints, and end-to-end pipeline validation.
+description: Manages the convert/train/serve pipeline on Nebius Serverless (Jobs + Endpoints) for H100 work, and local inference serving on desktop/notebook GPUs via Docker contexts. Use for dataset conversion, training jobs, serving checkpoints (remote or local), and end-to-end pipeline validation.
 ---
 
 # Remote Training Infrastructure (Nebius Serverless)
@@ -232,6 +232,50 @@ uv run python -m positronic.cfg.eval sim \
   --dataset.base.path=s3://inference/sim_stack_validation/<run_name> --reset_cache --https
 # http://localhost:5001
 ```
+
+## Serving locally (desktop / notebook)
+
+Nebius Serverless is for H100-class work. For local inference on a consumer GPU
+(LeRobot/ACT/SmolVLA, or GR00T inference), serve via Docker contexts instead —
+no Nebius, no per-hour compute cost. The contexts and services still live in the
+repo; **`docker/CONTEXTS.md` + `docker/docker-compose.yml` are the source of
+truth** for which machine/GPU/service to use (`desktop` = RTX 3060 12GB,
+`notebook` = RTX 4060 8GB). OpenPI/DreamZero and GR00T *training* still need
+H100 (use the Nebius pipeline above).
+
+Run from `docker/`. Set `CACHE_ROOT=/home/vertix` when targeting a remote
+context from a Mac (the `${HOME}` volume path differs). `--service-ports`
+exposes the WebSocket API on port 8000. Servers take a subcommand: `serve` for
+a custom `--checkpoints_dir`, or a named preset (`phail`, `sim_stack`, …) —
+check the vendor's `server.py` for available presets.
+
+```bash
+# Named preset (desktop)
+CACHE_ROOT=/home/vertix docker --context desktop compose run --rm --pull always \
+  --service-ports lerobot-0_3_3-server sim_stack
+
+# Custom checkpoint
+CACHE_ROOT=/home/vertix docker --context desktop compose run --rm --pull always \
+  --service-ports lerobot-server serve --checkpoints_dir=<ckpt-dir>
+
+# GR00T inference — codec subcommand required
+CACHE_ROOT=/home/vertix docker --context notebook compose run --rm --pull always \
+  --service-ports groot-server ee_rot6d --checkpoints_dir=<ckpt-dir>
+```
+
+Run detached with `-d` for a background server; `docker --context <ctx> ps` /
+`logs <id>` / `stop <id>` to manage it. Point the client at the context's
+hostname:
+
+```bash
+uv run positronic-inference sim \
+  --policy=.remote --policy.host=desktop --policy.port=8000 \
+  --output_dir=<...>
+```
+
+Gotchas: each GR00T server uses ~6GB, so only one at a time on a 12GB GPU;
+on a port conflict, `docker --context <ctx> ps -a | grep -E "server"` then
+`stop` the stale container.
 
 ## End-to-End Validation
 
