@@ -162,11 +162,12 @@ class _ParallelCodec(Codec):
 
 
 class ActionTimestamp(Codec):
-    """Stamps each decoded action with a ``timestamp`` field derived from fps.
+    """Stamps each decoded action with a chunk-relative ``timestamp`` (seconds).
 
-    When the observation context contains ``inference_time_ns`` (pimm clock
-    nanoseconds), stamps absolute time: ``now + i * (1/fps)``.  Otherwise
-    falls back to relative timestamps: ``i * (1/fps)``.
+    Action ``i`` is stamped ``i * (1/fps)``, starting at 0; a single action gets
+    ``0.0``. Timestamps are relative to chunk start by design — the codec is
+    clock-agnostic so it is shared by training and inference. The scheduling
+    layer (the harness) anchors these offsets to the current clock.
     At training time, surfaces ``action_fps`` as transform metadata.
     """
 
@@ -177,13 +178,12 @@ class ActionTimestamp(Codec):
         return data
 
     def decode(self, data, *, context=None):
-        now = (context.get('inference_time_ns', 0) / 1e9) if context else 0.0
         if isinstance(data, list):
             dt = 1.0 / self._fps
             for i, d in enumerate(data):
-                d['timestamp'] = now + i * dt
+                d['timestamp'] = i * dt
             return data
-        data['timestamp'] = now
+        data['timestamp'] = 0.0
         return data
 
     @property
@@ -211,8 +211,7 @@ class ActionHorizon(Codec):
 
     def decode(self, data, *, context=None):
         if isinstance(data, list):
-            now = (context.get('inference_time_ns', 0) / 1e9) if context else 0.0
-            return [d for d in data if d.get('timestamp', 0.0) - now < self._horizon_sec]
+            return [d for d in data if d.get('timestamp', 0.0) < self._horizon_sec]
         return data
 
     @property

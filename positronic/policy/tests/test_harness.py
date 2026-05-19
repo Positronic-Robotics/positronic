@@ -81,7 +81,10 @@ class ChunkPolicy(StubPolicy):
 
     def select_action(self, obs):
         self.counter += 1
-        return [{'robot_command': to_wire(self.command), 'target_grip': self.counter * 100.0 + i} for i in range(10)]
+        return [
+            {'robot_command': to_wire(self.command), 'target_grip': self.counter * 100.0 + i, 'timestamp': 0.0}
+            for i in range(10)
+        ]
 
 
 class FakeRobotState:

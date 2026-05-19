@@ -126,7 +126,12 @@ class Harness(pimm.ControlSystem):
                 raise ValueError(f'Unknown directive type: {directive.type}')
 
     def _infer(self, clock: pimm.Clock) -> list[dict[str, Any]] | None:
-        """Read sensors and run policy inference. Returns commands or None if not ready."""
+        """Read sensors and run policy inference. Returns a command list or None if not ready.
+
+        A single action (not a list) means "execute immediately" — it is stamped
+        ``timestamp=0.0`` so the harness anchors it to the current clock. A list
+        is a trajectory and every action must already carry a ``timestamp``.
+        """
         robot_state = self.robot_state.value
         inputs = {
             'robot_state.q': robot_state.q,
@@ -143,7 +148,9 @@ class Harness(pimm.ControlSystem):
         inputs['inference_time_ns'] = clock.now_ns()
         inputs.update(self.context)
         commands = self.policy.select_action(frozen_view(inputs))
-        return commands if isinstance(commands, list) else [commands]
+        if isinstance(commands, list):
+            return commands
+        return [{**commands, 'timestamp': 0.0}]
 
     def _step(self, clock: pimm.Clock, in_error: bool) -> Generator[pimm.Sleep, None, bool]:
         """Run one inference cycle if the current trajectory is consumed. Returns in_error."""
@@ -167,17 +174,16 @@ class Harness(pimm.ControlSystem):
             # rollouts feel the model's real cost. No-op once trajectory is set.
             yield pimm.Sleep(time.monotonic() - wall_start)
 
-        # Codec stamps absolute float seconds; drivers' TrajectoryPlayer and the
-        # dataset writer consume ns. This is the single explicit seconds->ns seam.
-        prediction_time = clock.now()
+        # The codec emits chunk-relative offsets (seconds); anchor them to the
+        # current (post-inference) clock so the chunk starts at ~now. Single
+        # explicit seconds->ns seam for drivers' TrajectoryPlayer and the
+        # dataset writer.
+        now_ns = clock.now_ns()
         robot_traj = [
-            (int(cmd.get('timestamp', prediction_time) * 1e9), roboarm.command.from_wire(cmd['robot_command']))
-            for cmd in commands
+            (now_ns + int(cmd['timestamp'] * 1e9), roboarm.command.from_wire(cmd['robot_command'])) for cmd in commands
         ]
         grip_traj = [
-            (int(cmd.get('timestamp', prediction_time) * 1e9), cmd['target_grip'])
-            for cmd in commands
-            if 'target_grip' in cmd
+            (now_ns + int(cmd['timestamp'] * 1e9), cmd['target_grip']) for cmd in commands if 'target_grip' in cmd
         ]
         self.robot_commands.emit(robot_traj)
         if grip_traj:
