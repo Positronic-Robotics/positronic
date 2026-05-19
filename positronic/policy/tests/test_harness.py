@@ -528,10 +528,10 @@ class _ClockStampedEmitter(pimm.SignalEmitter):
         self.emitted.append((self._clock.now_ns(), data))
 
 
-def test_simulate_timeout_chunk_not_scheduled_in_the_past(world, clock):
+def test_simulate_inference_chunk_not_scheduled_in_the_past(world, clock):
     """A freshly inferred chunk's first waypoint must be scheduled at ~now, not in the past.
 
-    With ``simulate_timeout`` the sim clock advances by the wall-clock inference
+    With ``simulate_inference`` the sim clock advances by the wall-clock inference
     latency L during the blocking call. If the chunk is anchored to the
     pre-inference clock time (``inference_time_ns`` captured before the call),
     its first waypoint lands L seconds behind ``clock.now()`` by the time it is
@@ -541,7 +541,7 @@ def test_simulate_timeout_chunk_not_scheduled_in_the_past(world, clock):
     latency_s = 0.2
     policy = _SlowChunkPolicy(latency_s=latency_s, n=5)
     wrapped = ActionTimestamp(fps=10.0).wrap(policy)
-    harness = Harness(wrapped, simulate_timeout=True)
+    harness = Harness(wrapped, simulate_inference=True)
 
     cmd_em = _ClockStampedEmitter(clock)
     harness.robot_commands._bind(cmd_em)

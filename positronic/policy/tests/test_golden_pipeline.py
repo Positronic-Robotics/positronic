@@ -37,7 +37,7 @@ from positronic import wire
 from positronic.dataset.ds_writer_agent import TimeMode
 from positronic.dataset.local_dataset import LocalDataset, LocalDatasetWriter
 from positronic.drivers.roboarm import RobotStatus
-from positronic.drivers.roboarm.command import CartesianPosition, Recover, Reset, to_wire
+from positronic.drivers.roboarm.command import CartesianPosition, Recover, Reset, TrajectoryPlayer, to_wire
 from positronic.geom import Rotation, Transform3D
 from positronic.policy.base import Policy
 from positronic.policy.codec import ActionTiming
@@ -143,10 +143,13 @@ class FakeRobot(pimm.ControlSystem):
 
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock):
         self.robot_meta.emit({})
+        player = TrajectoryPlayer()
         while not should_stop.value:
             cmd_msg = self.commands.read()
             if cmd_msg.updated and cmd_msg.data is not None:
-                self._apply(cmd_msg.data)
+                player.set(cmd_msg.data)
+            for cmd in player.advance(clock.now_ns()):
+                self._apply(cmd)
             if self._error_pending:
                 self._status = RobotStatus.ERROR
                 self._error_pending = False
@@ -163,8 +166,13 @@ class FakeGripper(pimm.ControlSystem):
         self.grip = pimm.ControlSystemEmitter(self)
 
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock):
+        player = TrajectoryPlayer()
         while not should_stop.value:
-            self._grip = float(self.target_grip.value)
+            msg = self.target_grip.read()
+            if msg.updated and msg.data is not None:
+                player.set(msg.data)
+            for grip in player.advance(clock.now_ns()):
+                self._grip = float(grip)
             self.grip.emit(self._grip)
             yield pimm.Sleep(CONTROL_PERIOD_S)
 

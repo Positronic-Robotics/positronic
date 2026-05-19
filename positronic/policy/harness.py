@@ -169,10 +169,13 @@ class Harness(pimm.ControlSystem):
         commands = self._infer(clock)
         if commands is None:
             return in_error
-        if self.simulate_timeout:
-            # Advance the (sim) clock by the wall-clock inference latency so
-            # rollouts feel the model's real cost. No-op once trajectory is set.
+        # Advance the (sim) clock by the inference cost so rollouts feel the
+        # model's latency. `True` measures real wall time; a float is a fixed
+        # deterministic delay (used by the reproducible golden).
+        if self.simulate_inference is True:  # bool is an int subclass — check identity first
             yield pimm.Sleep(time.monotonic() - wall_start)
+        elif self.simulate_inference:
+            yield pimm.Sleep(float(self.simulate_inference))
 
         # The codec emits chunk-relative offsets (seconds); anchor them to the
         # current (post-inference) clock so the chunk starts at ~now. Single
