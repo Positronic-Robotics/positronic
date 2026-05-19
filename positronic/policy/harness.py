@@ -61,10 +61,10 @@ class Harness(pimm.ControlSystem):
     Supposed to be run in foreground of a World.
     """
 
-    def __init__(self, policy, *, static_meta: dict[str, Any] | None = None, simulate_timeout: bool = False):
+    def __init__(self, policy, *, static_meta: dict[str, Any] | None = None, simulate_inference: bool | float = False):
         self.policy = policy
         self.context: dict[str, Any] = {}
-        self.simulate_timeout = simulate_timeout
+        self.simulate_inference = simulate_inference
         self._static_meta = static_meta or {}
 
         self.frames = pimm.ReceiverDict(self)
@@ -80,7 +80,7 @@ class Harness(pimm.ControlSystem):
     def _build_episode_meta(self, context: dict[str, Any]) -> dict[str, Any]:
         meta = dict(self._static_meta)
         meta.update(self.robot_meta_in.value)
-        meta['inference.simulate_timeout'] = self.simulate_timeout
+        meta['inference.simulate_inference'] = self.simulate_inference
         for k, v in flatten_dict(self.policy.meta).items():
             meta[f'inference.policy.{k}'] = v
         meta.update(context)
@@ -160,8 +160,14 @@ class Harness(pimm.ControlSystem):
             commands = self._infer(clock)
             if commands is None:
                 return False
-            if self.simulate_timeout:
-                yield pimm.Sleep(time.monotonic() - wall_start)
+            if self.simulate_inference is True:  # bool is an int subclass — check identity first
+                delay_s = time.monotonic() - wall_start
+            elif self.simulate_inference:
+                delay_s = float(self.simulate_inference)
+            else:
+                delay_s = None
+            if delay_s is not None:
+                yield pimm.Sleep(delay_s)
             prediction_time = clock.now()
             for cmd in commands:
                 commands_queue.append((
