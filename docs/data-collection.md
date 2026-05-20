@@ -67,9 +67,20 @@ uv run positronic-data-collection real \
 
 Requires Franka Panda with FCI, gripper, cameras. Install extras: `uv sync --frozen --extra hardware` (Linux only). Configure network connection and udev rules (see [Drivers](../positronic/drivers/)).
 
+### SO101 with Leader Arm
+
+```bash
+uv run positronic-data-collection so101_leader \
+    --output_dir=~/datasets/so101_task
+```
+
+Uses physical leader-follower teleoperation: move the leader arm by hand, follower mirrors in real-time. No VR headset required.
+
+**Controls:** Press **ENTER** to toggle recording, **Ctrl+C** to stop. Sound feedback confirms recording start/stop.
+
 ### Other Platforms
 - **Kinova Gen3**: Add `--robot_arm=@positronic.cfg.hardware.roboarm.kinova`
-- **SO101**: Use `positronic-data-collection so101` (bimanual setup)
+- **SO101 (WebXR)**: Use `positronic-data-collection so101` (single arm with VR teleoperation)
 - **DROID**: Use `positronic-data-collection droid` (joint-space control)
 
 ## Configuration
