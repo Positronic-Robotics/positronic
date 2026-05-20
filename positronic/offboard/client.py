@@ -80,8 +80,7 @@ class InferenceClient:
     def __init__(self, host: str, port: int, *, headers: dict[str, str] | None = None, secure: bool = False):
         self.host = host
         self.port = port
-        self.secure = secure
-        self.headers = dict(headers) if headers else {}
+        self.headers = dict(headers) if headers else None
         ws_scheme = 'wss' if secure else 'ws'
         http_scheme = 'https' if secure else 'http'
         default_port = 443 if secure else 80
@@ -111,6 +110,6 @@ class InferenceClient:
 
     def list_models(self) -> list[str]:
         """List available models from the server."""
-        response = httpx.get(f'{self.api_url}/models', headers=self.headers or None)
+        response = httpx.get(f'{self.api_url}/models', headers=self.headers)
         response.raise_for_status()
         return response.json()['models']
