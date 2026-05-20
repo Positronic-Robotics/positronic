@@ -89,6 +89,19 @@ class Harness(pimm.ControlSystem):
         self.robot_commands.emit([(now, roboarm.command.Reset())])
         self.target_grip.emit([(now, 0.0)])
 
+    def _cancel_trajectories(self) -> None:
+        """Drop any in-flight chunk from drivers and from the recording's tail.
+
+        Emits ``[]`` on ``robot_commands``/``target_grip`` so each driver's
+        ``TrajectoryPlayer`` clears its buffer (devices hold position) and
+        ``TrajectoryOverrideSerializer`` drops its uncommitted tail. Must
+        precede ``STOP_EPISODE``, which ``flush()``​es the recording's
+        serializers and would otherwise commit canceled waypoints.
+        """
+        self.robot_commands.emit([])
+        self.target_grip.emit([])
+        self._trajectory_end = None
+
     def _handle_directive(
         self, directive: Directive, clock: pimm.Clock, recording: bool
     ) -> Generator[pimm.Sleep, None, tuple[bool, bool]]:
@@ -96,6 +109,7 @@ class Harness(pimm.ControlSystem):
         match directive.type:
             case DirectiveType.RUN:
                 if recording:
+                    self._cancel_trajectories()
                     self.ds_command.emit(DsWriterCommand.STOP())
                     self._home(clock)
                     yield pimm.Pass()
@@ -107,15 +121,11 @@ class Harness(pimm.ControlSystem):
             case DirectiveType.STOP:
                 if recording:
                     self.ds_command.emit(DsWriterCommand.SUSPEND())
-                # Cancel any chunk already buffered in the drivers'
-                # `TrajectoryPlayer`s so devices actually hold position
-                # (without `_home`'s implicit Reset that HOME/FINISH apply).
-                self.robot_commands.emit([])
-                self.target_grip.emit([])
-                self._trajectory_end = None
+                self._cancel_trajectories()
                 return False, recording
             case DirectiveType.FINISH:
                 if recording:
+                    self._cancel_trajectories()
                     self.ds_command.emit(DsWriterCommand.STOP(directive.payload or {}))
                     recording = False
                 self._home(clock)

@@ -611,3 +611,57 @@ def test_stop_cancels_in_flight_trajectory(world, clock):
     assert any(isinstance(d, list) and d for d in cmd_emits), 'expected a buffered chunk before STOP'
     assert cmd_emits[-1] == [], f'STOP did not cancel robot_commands buffer: last={cmd_emits[-1]!r}'
     assert grip_emits[-1] == [], f'STOP did not cancel target_grip buffer: last={grip_emits[-1]!r}'
+
+
+def test_finish_cancels_buffered_trajectory_before_stop_episode(world, clock):
+    """FINISH must cancel the recording's trajectory tail *before* `STOP_EPISODE`.
+
+    `STOP_EPISODE` calls `flush()` on `TrajectoryOverrideSerializer`, which
+    commits whatever is still buffered. The harness must emit `[]` on
+    `robot_commands`/`target_grip` first, so the serializer drops its tail and
+    canceled waypoints are not recorded.
+    """
+
+    class _LabeledRecorder(pimm.SignalEmitter):
+        def __init__(self, label, events):
+            self._label = label
+            self._events = events
+
+        def emit(self, data, ts: int = -1):
+            self._events.append((self._label, data))
+
+    events: list[tuple[str, object]] = []
+    policy = ChunkPolicy()
+    wrapped = ActionTimestamp(fps=5.0).wrap(policy)  # 1.8 s chunk — won't drain before FINISH
+    harness = Harness(wrapped)
+    harness.robot_commands._bind(_LabeledRecorder('robot_commands', events))
+    harness.target_grip._bind(_LabeledRecorder('target_grip', events))
+    harness.ds_command._bind(_LabeledRecorder('ds_command', events))
+
+    frame_em = world.pair(harness.frames['image.cam'])
+    robot_em = world.pair(harness.robot_state)
+    grip_em = world.pair(harness.gripper_state)
+    directive_em = world.pair(harness.directive)
+
+    robot_state = make_robot_state([0.1, 0.2, 0.3], [0.4, 0.5, 0.6])
+    script = [
+        (partial(directive_em.emit, Directive.RUN(task='t')), 0.0),
+        (partial(emit_ready_payload, frame_em, robot_em, grip_em, robot_state), 0.01),
+        (None, 0.1),
+        (partial(directive_em.emit, Directive.FINISH()), 0.0),
+        (None, 0.1),
+    ]
+    scheduler = world.start([harness, ManualDriver(script)])
+    drive_scheduler(scheduler, clock=clock, steps=200)
+
+    cancels = [i for i, (lbl, data) in enumerate(events) if lbl == 'robot_commands' and data == []]
+    stops = [
+        i
+        for i, (lbl, data) in enumerate(events)
+        if lbl == 'ds_command' and getattr(data, 'type', None) is DsWriterCommandType.STOP_EPISODE
+    ]
+    assert cancels, 'FINISH did not emit a cancel on robot_commands'
+    assert stops, 'FINISH did not emit STOP_EPISODE'
+    assert cancels[0] < stops[0], (
+        f'cancel ({cancels[0]}) must precede STOP_EPISODE ({stops[0]}); otherwise flush() commits canceled waypoints'
+    )
