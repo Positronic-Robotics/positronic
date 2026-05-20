@@ -570,3 +570,44 @@ def test_simulate_inference_chunk_not_scheduled_in_the_past(world, clock):
         f'first waypoint scheduled {lag_s:.3f}s in the past (inference latency {latency_s}s) — '
         'chunk anchored to the pre-inference clock instead of inference-finish'
     )
+
+
+def test_stop_cancels_in_flight_trajectory(world, clock):
+    """STOP must override buffered driver trajectories so devices hold position.
+
+    With trajectory-as-command the harness preloads each driver's
+    ``TrajectoryPlayer`` with the whole chunk. STOP only used to suspend the
+    dataset writer, so already-buffered waypoints would keep executing until
+    the chunk ended — a safety regression vs the queue-in-harness design.
+    """
+    policy = ChunkPolicy()
+    wrapped = ActionTimestamp(fps=5.0).wrap(policy)  # chunk spans 1.8 s — won't drain before STOP
+    harness = Harness(wrapped)
+
+    cmd_recorder = RecordingEmitter()
+    grip_recorder = RecordingEmitter()
+    harness.robot_commands._bind(cmd_recorder)
+    harness.target_grip._bind(grip_recorder)
+    harness.ds_command._bind(RecordingEmitter())
+
+    frame_em = world.pair(harness.frames['image.cam'])
+    robot_em = world.pair(harness.robot_state)
+    grip_em = world.pair(harness.gripper_state)
+    directive_em = world.pair(harness.directive)
+
+    robot_state = make_robot_state([0.1, 0.2, 0.3], [0.4, 0.5, 0.6])
+    script = [
+        (partial(directive_em.emit, Directive.RUN(task='t')), 0.0),
+        (partial(emit_ready_payload, frame_em, robot_em, grip_em, robot_state), 0.01),
+        (None, 0.1),  # let one chunk be inferred + buffered, well short of 1.8 s
+        (partial(directive_em.emit, Directive.STOP()), 0.0),
+        (None, 0.1),
+    ]
+    scheduler = world.start([harness, ManualDriver(script)])
+    drive_scheduler(scheduler, clock=clock, steps=200)
+
+    cmd_emits = [data for _ts, data in cmd_recorder.emitted]
+    grip_emits = [data for _ts, data in grip_recorder.emitted]
+    assert any(isinstance(d, list) and d for d in cmd_emits), 'expected a buffered chunk before STOP'
+    assert cmd_emits[-1] == [], f'STOP did not cancel robot_commands buffer: last={cmd_emits[-1]!r}'
+    assert grip_emits[-1] == [], f'STOP did not cancel target_grip buffer: last={grip_emits[-1]!r}'

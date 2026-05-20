@@ -107,6 +107,12 @@ class Harness(pimm.ControlSystem):
             case DirectiveType.STOP:
                 if recording:
                     self.ds_command.emit(DsWriterCommand.SUSPEND())
+                # Cancel any chunk already buffered in the drivers'
+                # `TrajectoryPlayer`s so devices actually hold position
+                # (without `_home`'s implicit Reset that HOME/FINISH apply).
+                self.robot_commands.emit([])
+                self.target_grip.emit([])
+                self._trajectory_end = None
                 return False, recording
             case DirectiveType.FINISH:
                 if recording:
