@@ -74,8 +74,7 @@ def remote(
     from positronic.policy.remote import RemotePolicy
 
     effective_resize = None if codec and codec.meta.get('image_sizes') else resize
-    policy = RemotePolicy(
-        host, port, effective_resize, model_id=model_id, headers=headers, secure=secure)
+    policy = RemotePolicy(host, port, effective_resize, model_id=model_id, headers=headers, secure=secure)
     if horizon_sec is not None:
         codec = ActionHorizon(horizon_sec) | codec if codec else ActionHorizon(horizon_sec)
     return codec.wrap(policy) if codec else policy
@@ -100,9 +99,7 @@ def weighted_remote(
     from positronic.policy.remote import RemotePolicy
 
     effective_resize = None if codec and codec.meta.get('image_sizes') else resize
-    policy = RemotePolicy(
-        host, port, effective_resize, model_id=model_id, headers=headers, secure=secure
-    )
+    policy = RemotePolicy(host, port, effective_resize, model_id=model_id, headers=headers, secure=secure)
     if horizon_sec is not None:
         codec = ActionHorizon(horizon_sec) | codec if codec else ActionHorizon(horizon_sec)
     return (codec.wrap(policy) if codec else policy), weight
