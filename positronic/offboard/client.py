@@ -1,4 +1,5 @@
 import logging
+import time
 from typing import Any
 
 import httpx
@@ -88,7 +89,9 @@ class InferenceClient:
         self.base_uri = f'{ws_scheme}://{netloc}/api/v1/session'
         self.api_url = f'{http_scheme}://{netloc}/api/v1'
 
-    def new_session(self, model_id: str | None = None, open_timeout: float = 10.0) -> InferenceSession:
+    def new_session(
+        self, model_id: str | None = None, open_timeout: float = 10.0, connect_deadline: float = 180.0
+    ) -> InferenceSession:
         """
         Creates a new inference session.
 
@@ -102,10 +105,21 @@ class InferenceClient:
         connect_kwargs: dict[str, object] = {'open_timeout': open_timeout}
         if self.headers:
             connect_kwargs['additional_headers'] = self.headers
-        try:
-            ws = connect(uri, **connect_kwargs)
-        except OSError as e:
-            raise type(e)(f'{e} (connecting to {self.host}:{self.port})') from e
+
+        deadline = time.monotonic() + connect_deadline
+        backoff = 1.0
+        while True:
+            try:
+                ws = connect(uri, **connect_kwargs)
+                break
+            except TimeoutError as e:
+                if time.monotonic() >= deadline:
+                    raise TimeoutError(f'{e} (connecting to {self.host}:{self.port})') from e
+                logger.info('Server not ready (cold start?); retrying in %.0fs', backoff)
+                time.sleep(backoff)
+                backoff = min(backoff * 2, 30.0)
+            except OSError as e:
+                raise type(e)(f'{e} (connecting to {self.host}:{self.port})') from e
         return InferenceSession(ws)
 
     def list_models(self) -> list[str]:
