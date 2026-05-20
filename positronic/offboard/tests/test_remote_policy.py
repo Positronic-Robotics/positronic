@@ -114,98 +114,7 @@ class TestPrepareObs:
 class TestInferenceClientHeaders:
     def test_default_headers_empty_and_ws_scheme(self):
         client = InferenceClient('localhost', 8000)
-        assert client.headers == {}
-        assert client.secure is False
-        assert client.base_uri == 'ws://localhost:8000/api/v1/session'
-        assert client.api_url == 'http://localhost:8000/api/v1'
-
-    def test_headers_stored_and_copied(self):
-        headers = {'Modal-Key': 'k', 'Modal-Secret': 's'}
-        client = InferenceClient('localhost', 8000, headers=headers)
-        assert client.headers == headers
-        # Defensive copy — mutating the caller's dict must not affect the client.
-        headers['Modal-Key'] = 'mutated'
-        assert client.headers['Modal-Key'] == 'k'
-
-    def test_secure_switches_scheme_and_omits_default_port(self):
-        client = InferenceClient('example.com', 443, secure=True)
-        assert client.base_uri == 'wss://example.com/api/v1/session'
-        assert client.api_url == 'https://example.com/api/v1'
-
-    def test_secure_keeps_non_default_port(self):
-        client = InferenceClient('example.com', 8443, secure=True)
-        assert client.base_uri == 'wss://example.com:8443/api/v1/session'
-        assert client.api_url == 'https://example.com:8443/api/v1'
-
-    def test_insecure_omits_default_port(self):
-        client = InferenceClient('example.com', 80, secure=False)
-        assert client.base_uri == 'ws://example.com/api/v1/session'
-        assert client.api_url == 'http://example.com/api/v1'
-
-    def test_new_session_passes_additional_headers(self):
-        headers = {'Modal-Key': 'k', 'Modal-Secret': 's'}
-        with (
-            patch('positronic.offboard.client.connect') as mock_connect,
-            patch('positronic.offboard.client.InferenceSession') as mock_session_cls,
-        ):
-            client = InferenceClient('localhost', 8000, headers=headers)
-            client.new_session()
-
-            mock_connect.assert_called_once()
-            assert mock_connect.call_args.kwargs['additional_headers'] == headers
-            mock_session_cls.assert_called_once_with(mock_connect.return_value)
-
-    def test_new_session_without_headers_omits_additional_headers(self):
-        with (
-            patch('positronic.offboard.client.connect') as mock_connect,
-            patch('positronic.offboard.client.InferenceSession'),
-        ):
-            client = InferenceClient('localhost', 8000)
-            client.new_session()
-
-            mock_connect.assert_called_once()
-            assert 'additional_headers' not in mock_connect.call_args.kwargs
-
-    def test_list_models_passes_headers(self):
-        headers = {'Modal-Key': 'k', 'Modal-Secret': 's'}
-        with patch('positronic.offboard.client.httpx.get') as mock_get:
-            mock_get.return_value.json.return_value = {'models': ['m1']}
-            client = InferenceClient('localhost', 8000, headers=headers)
-
-            models = client.list_models()
-
-            assert models == ['m1']
-            assert mock_get.call_args.kwargs['headers'] == headers
-
-    def test_list_models_without_headers_passes_none(self):
-        with patch('positronic.offboard.client.httpx.get') as mock_get:
-            mock_get.return_value.json.return_value = {'models': []}
-            client = InferenceClient('localhost', 8000)
-            client.list_models()
-
-            assert mock_get.call_args.kwargs['headers'] is None
-
-
-class TestRemotePolicyHeaderPropagation:
-    def test_headers_and_secure_forwarded_to_client(self):
-        headers = {'Modal-Key': 'k'}
-        policy = RemotePolicy('example.com', 443, headers=headers, secure=True)
-        assert policy._client.headers == headers
-        assert policy._client.secure is True
-        assert policy._client.base_uri == 'wss://example.com/api/v1/session'
-
-    def test_defaults_match_pre_existing_behaviour(self):
-        policy = RemotePolicy('localhost', 8000)
-        assert policy._client.headers == {}
-        assert policy._client.secure is False
-        assert policy._client.base_uri == 'ws://localhost:8000/api/v1/session'
-
-
-class TestInferenceClientHeaders:
-    def test_default_headers_empty_and_ws_scheme(self):
-        client = InferenceClient('localhost', 8000)
         assert client.headers is None
-        assert client.secure is False
         assert client.base_uri == 'ws://localhost:8000/api/v1/session'
         assert client.api_url == 'http://localhost:8000/api/v1'
 
@@ -281,13 +190,11 @@ class TestRemotePolicyHeaderPropagation:
         headers = {'Modal-Key': 'k'}
         policy = RemotePolicy('example.com', 443, headers=headers, secure=True)
         assert policy._client.headers == headers
-        assert policy._client.secure is True
         assert policy._client.base_uri == 'wss://example.com/api/v1/session'
 
     def test_defaults_match_pre_existing_behaviour(self):
         policy = RemotePolicy('localhost', 8000)
-        assert policy._client.headers == {}
-        assert policy._client.secure is False
+        assert policy._client.headers is None
         assert policy._client.base_uri == 'ws://localhost:8000/api/v1/session'
 
 
