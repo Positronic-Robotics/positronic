@@ -489,6 +489,28 @@ def test_trajectory_override_serializer():
     assert s('reset') == 'reset'
 
 
+def test_serializer_plain_list_value(world, clock):
+    """A serializer returning a plain list (non-`Timestamped`) is appended as one sample.
+
+    The trajectory-stream dispatch must not hijack legitimate list-valued samples.
+    """
+    ds = FakeDatasetWriter()
+
+    def to_list(_):
+        return [1, 2, 3]
+
+    agent, cmd_em, emitters = build_agent_with_pipes({'v': to_list}, ds, world)
+    script = [
+        (partial(cmd_em.emit, DsWriterCommand(DsWriterCommandType.START_EPISODE)), 0.001),
+        (partial(emitters['v'].emit, 0), 0.001),
+        (partial(cmd_em.emit, DsWriterCommand(DsWriterCommandType.STOP_EPISODE)), 0.001),
+    ]
+    run_scripted_agent(agent, script, world=world, clock=clock)
+
+    w = ds.created[-1]
+    assert [(s, v) for (s, v, _, _) in w.appends] == [('v', [1, 2, 3])]
+
+
 def test_trajectory_override_serializer_empty_cancels_buffer():
     """Empty trajectory is the Harness STOP cancel signal: drop the buffered tail."""
     s = TrajectoryOverrideSerializer(None)
