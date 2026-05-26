@@ -93,6 +93,8 @@ tag-training: build-training
 	docker tag $(LOCAL_TAG_TRAINING) $(IMAGE_NAME_TRAINING):$(GIT_SHA)
 ifdef CI
 	docker tag $(LOCAL_TAG_TRAINING) $(IMAGE_NAME_TRAINING):latest
+endif
+ifdef PUBLISH_RELEASE
 	docker tag $(LOCAL_TAG_TRAINING) $(IMAGE_NAME_TRAINING):v$(VERSION)
 endif
 	@echo "Tagged: $(IMAGE_TAG), $(GIT_SHA)"
@@ -104,6 +106,9 @@ tag-openpi: build-openpi
 ifdef CI
 	docker tag $(IMAGE_NAME_OPENPI):local $(IMAGE_NAME_OPENPI):latest
 endif
+ifdef PUBLISH_RELEASE
+	docker tag $(IMAGE_NAME_OPENPI):local $(IMAGE_NAME_OPENPI):v$(VERSION)
+endif
 	@echo "Tagged: $(IMAGE_TAG), $(GIT_SHA)"
 
 tag-groot: build-groot
@@ -113,6 +118,9 @@ tag-groot: build-groot
 ifdef CI
 	docker tag $(IMAGE_NAME_GROOT):local $(IMAGE_NAME_GROOT):latest
 endif
+ifdef PUBLISH_RELEASE
+	docker tag $(IMAGE_NAME_GROOT):local $(IMAGE_NAME_GROOT):v$(VERSION)
+endif
 	@echo "Tagged: $(IMAGE_TAG), $(GIT_SHA)"
 
 tag-dreamzero: build-dreamzero
@@ -121,6 +129,9 @@ tag-dreamzero: build-dreamzero
 	docker tag $(IMAGE_NAME_DREAMZERO):local $(IMAGE_NAME_DREAMZERO):$(GIT_SHA)
 ifdef CI
 	docker tag $(IMAGE_NAME_DREAMZERO):local $(IMAGE_NAME_DREAMZERO):latest
+endif
+ifdef PUBLISH_RELEASE
+	docker tag $(IMAGE_NAME_DREAMZERO):local $(IMAGE_NAME_DREAMZERO):v$(VERSION)
 endif
 	@echo "Tagged: $(IMAGE_TAG), $(GIT_SHA)"
 
@@ -132,6 +143,8 @@ push-training: tag-training
 	docker push $(IMAGE_NAME_TRAINING):$(GIT_SHA)
 ifdef CI
 	docker push $(IMAGE_NAME_TRAINING):latest
+endif
+ifdef PUBLISH_RELEASE
 	docker push $(IMAGE_NAME_TRAINING):v$(VERSION)
 endif
 	@echo "IMAGE_TAG=$(IMAGE_TAG)" > .env
@@ -145,6 +158,9 @@ push-openpi: tag-openpi
 ifdef CI
 	docker push $(IMAGE_NAME_OPENPI):latest
 endif
+ifdef PUBLISH_RELEASE
+	docker push $(IMAGE_NAME_OPENPI):v$(VERSION)
+endif
 	@echo "IMAGE_TAG=$(IMAGE_TAG)" > .env
 
 push-groot: tag-groot
@@ -154,6 +170,9 @@ push-groot: tag-groot
 ifdef CI
 	docker push $(IMAGE_NAME_GROOT):latest
 endif
+ifdef PUBLISH_RELEASE
+	docker push $(IMAGE_NAME_GROOT):v$(VERSION)
+endif
 	@echo "IMAGE_TAG=$(IMAGE_TAG)" > .env
 
 push-dreamzero: tag-dreamzero
@@ -162,6 +181,9 @@ push-dreamzero: tag-dreamzero
 	docker push $(IMAGE_NAME_DREAMZERO):$(GIT_SHA)
 ifdef CI
 	docker push $(IMAGE_NAME_DREAMZERO):latest
+endif
+ifdef PUBLISH_RELEASE
+	docker push $(IMAGE_NAME_DREAMZERO):v$(VERSION)
 endif
 	@echo "IMAGE_TAG=$(IMAGE_TAG)" > .env
 
