@@ -335,7 +335,7 @@ Key ideas
 
 Built‑in serializers (`positronic.dataset.ds_writer_agent.Serializers`)
 - `transform_3d(pose: Transform3D) -> np.ndarray`
-  - Returns `[tx, ty, tz, qx, qy, qz, qw]` (shape `(7,)`).
+  - Returns `[tx, ty, tz, qw, qx, qy, qz]` (shape `(7,)`).
 - `robot_state(state: roboarm.State) -> dict | None`
   - Drops samples when `status == RobotStatus.RESETTING`.
   - Otherwise expands to `{'.q': q, '.dq': dq, '.ee_pose': transform_3d(ee)}`.

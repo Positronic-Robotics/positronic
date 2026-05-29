@@ -136,7 +136,7 @@ class Serializers:
 
     @staticmethod
     def transform_3d(x: geom.Transform3D) -> np.ndarray:
-        """Serialize a Transform3D into a 7D vector [tx, ty, tz, qx, qy, qz, qw]."""
+        """Serialize a Transform3D into a 7D vector [tx, ty, tz, qw, qx, qy, qz]."""
         return x.as_vector(geom.Rotation.Representation.QUAT)
 
     class ContinuousTransform3D(StatefulSerializer):

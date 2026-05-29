@@ -53,31 +53,42 @@ Every timestep, the inference client sends the current robot state to the server
 
 ### Observations (client to server)
 
-The client sends the full raw robot state as a dict:
+The client sends the full raw robot state as a dict. Keys are flat strings (the dots are literal, not nesting):
 
-| Field | Type | Shape | Description |
-|-------|------|-------|-------------|
-| `ee_pose` | float32 | (7,) | End-effector pose: x, y, z, qx, qy, qz, qw |
-| `joints` | float32 | (7,) | Joint positions (radians) |
-| `grip` | float32 | (1,) | Gripper opening |
-| `wrist_image` | uint8 | (H, W, 3) | Wrist camera RGB |
-| `exterior_image` | uint8 | (H, W, 3) | External camera RGB |
+| Key | Type | Shape | Description |
+|-----|------|-------|-------------|
+| `robot_state.ee_pose` | float32 | (7,) | End-effector pose: `x, y, z, qw, qx, qy, qz` (quaternion is **wxyz**, scalar first) |
+| `robot_state.q` | float32 | (7,) | Joint positions (radians) |
+| `robot_state.dq` | float32 | (7,) | Joint velocities (radians/s) |
+| `grip` | float32 | scalar | Gripper opening |
+| `image.<name>` | uint8 | (H, W, 3) | Camera RGB. Stream names come from the run config — sim and PhAIL send `image.exterior` and `image.wrist` (sim also adds `image.agent_view`) |
+| `inference_time_ns` | int | scalar | Inference-clock timestamp of this observation (ns) |
+| `wall_time_ns` | int | scalar | Wall-clock timestamp (ns) |
+| `task` | str | — | Language instruction for the episode |
 
-Your server receives all fields. Use what your model needs, ignore the rest.
+Your server receives all keys every step. Use what your model needs, ignore the rest. Image stream names are configuration-driven, so key off the names your deployment uses (`image.exterior`, `image.wrist`) rather than assuming fixed names.
 
 ### Actions (server to client)
 
-The server returns a list of action dicts (an action chunk). The client executes them sequentially at the configured action frequency:
+The server returns a list of action dicts (an action chunk):
 
 ```python
-{"result": [{"robot_command": {...}, "target_grip": 0.04}, ...]}
+{"result": [{"robot_command": {...}, "target_grip": 0.04, "timestamp": 0.0}, ...]}
 ```
+
+Each action carries:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `robot_command` | dict | Control command (see table below) |
+| `target_grip` | float | Target gripper opening |
+| `timestamp` | float | *Optional.* Chunk-relative execution time in seconds. The client schedules each action at `prediction_time + timestamp`; if omitted it defaults to `0.0` |
 
 The `robot_command` field specifies the control mode:
 
 | Command type | Fields | Description |
 |--------------|--------|-------------|
-| `cartesian_pos` | `pose`: float32 (12,) | Target EE pose (position + rotation matrix) |
+| `cartesian_pos` | `pose`: float32 (12,) | Target EE pose: 3 translation + 9 flattened rotation matrix (row-major) |
 | `joint_pos` | `positions`: float32 (7,) | Target joint angles (radians) |
 | `joint_delta` | `velocities`: float32 (7,) | Joint velocity command |
 
@@ -155,7 +166,7 @@ Your server must expose:
 
 ### Using Positronic's Server Base Class
 
-The simplest way is to subclass `InferenceServer` and provide a policy:
+For a fast-loading, in-process model, subclass `InferenceServer` and provide a `Policy`. `select_action` receives the raw observation dict and returns wire-format actions directly:
 
 ```python
 from positronic.offboard.basic_server import InferenceServer
@@ -166,15 +177,16 @@ class MyPolicy(Policy):
         self._model = model
 
     def select_action(self, obs):
-        # obs contains: ee_pose, joints, grip, wrist_image, exterior_image
+        # obs keys: robot_state.ee_pose, robot_state.q, robot_state.dq, grip,
+        #           image.exterior, image.wrist, inference_time_ns, wall_time_ns, task
         # Pick what your model needs:
-        images = obs['exterior_image']
-        ee = obs['ee_pose']
+        images = obs['image.exterior']
+        ee = obs['robot_state.ee_pose']
 
         # Run your model, get a list of predicted poses
         predicted_poses = self._model.predict(images, ee)
 
-        # Return action chunk: list of commands
+        # Return action chunk: list of wire-format commands
         return [
             {'robot_command': {'type': 'cartesian_pos', 'pose': pose}, 'target_grip': 0.04}
             for pose in predicted_poses
@@ -202,6 +214,18 @@ Test it:
 uv run positronic-inference sim \
   --policy=.remote --policy.host=localhost --policy.port=8000
 ```
+
+`InferenceServer` loads the policy synchronously in-process, so it assumes fast (<20 s) loading — otherwise the WebSocket handshake times out before the `ready` message.
+
+### For Slow-Loading or Subprocess Models
+
+The built-in OpenPI and GR00T servers don't use `InferenceServer` — they subclass `VendorServer` (`positronic/offboard/vendor_server.py`), which is the pattern to follow for checkpoints that take minutes to download or run as a separate process. `VendorServer` adds, on top of the same Protocol v1:
+
+- **Progress during loading** — it streams `{"status": "loading", ...}` messages while a checkpoint downloads or a subprocess boots, so the client keepalive doesn't expire.
+- **A built-in codec boundary** — you construct it with a `Codec`, and the base wraps your policy via `codec.wrap(policy)`. Your `Policy` then works entirely in *model space* (it receives codec-encoded observations and returns model-native actions); the codec translates to and from the wire format described above. This is why `OpenpiPolicy.select_action` simply returns `[{'action': a} for a in actions]` rather than building `robot_command` dicts itself.
+- **Lifecycle hooks** — subclasses implement `resolve_model()`, `create_policy()`, and `get_models()`; the base handles the WebSocket loop, warmup, multi-model switching, optional `recording_dir`, and idle shutdown.
+
+See `positronic/vendors/openpi/server.py` and `positronic/vendors/gr00t/server.py` for complete working references.
 
 ### Standalone Implementation
 
