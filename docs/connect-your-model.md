@@ -73,7 +73,11 @@ Your server receives all keys every step. Use what your model needs, ignore the 
 The server returns a list of action dicts (an action chunk):
 
 ```python
-{"result": [{"robot_command": {...}, "target_grip": 0.04, "timestamp": 0.0}, ...]}
+{"result": [
+    {"robot_command": {...}, "target_grip": 0.04, "timestamp": 0.0},
+    {"robot_command": {...}, "target_grip": 0.04, "timestamp": 0.066},
+    ...
+]}
 ```
 
 Each action carries:
@@ -82,7 +86,7 @@ Each action carries:
 |-------|------|-------------|
 | `robot_command` | dict | Control command (see table below) |
 | `target_grip` | float | Target gripper opening |
-| `timestamp` | float | *Optional.* Chunk-relative execution time in seconds. The client schedules each action at `prediction_time + timestamp`; if omitted it defaults to `0.0` |
+| `timestamp` | float | **Required for every action in a chunk.** Chunk-relative execution time in seconds; the client schedules each action at `now + timestamp` (e.g. `i / action_fps` for the i-th action). Only a single action dict returned *outside* a list is auto-stamped `0.0` — every item in a returned list must carry its own `timestamp`, or inference fails. |
 
 The `robot_command` field specifies the control mode:
 
