@@ -14,7 +14,7 @@ from openpi_client.websocket_client_policy import WebsocketClientPolicy
 
 from positronic.offboard.server_utils import monitor_async_task, wait_for_subprocess_ready
 from positronic.offboard.vendor_server import VendorServer
-from positronic.policy import Codec, Policy
+from positronic.policy import Codec, Policy, Session
 from positronic.utils.checkpoints import get_latest_checkpoint, list_checkpoints
 from positronic.utils.logging import init_logging
 from positronic.vendors.openpi import codecs, ensure_paligemma_tokenizer
@@ -156,19 +156,25 @@ class OpenpiSubprocess:
 ###########################################################################################
 
 
+class _OpenpiSession(Session):
+    def __init__(self, client: WebsocketClientPolicy):
+        self._client = client
+
+    def __call__(self, obs):
+        response = self._client.infer(obs)
+        actions = response['actions']
+        return [{'action': a} for a in actions]
+
+
 class OpenpiPolicy(Policy):
     """Wraps an OpenPI WebsocketClientPolicy as a Policy."""
 
     def __init__(self, client: WebsocketClientPolicy):
         self._client = client
 
-    def select_action(self, obs):
-        response = self._client.infer(obs)
-        actions = response['actions']
-        return [{'action': a} for a in actions]
-
-    def reset(self, context=None):
+    def new_session(self, context=None):
         self._client.reset()
+        return _OpenpiSession(self._client)
 
 
 ###########################################################################################

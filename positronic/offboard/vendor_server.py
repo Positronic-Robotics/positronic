@@ -11,7 +11,7 @@ import pos3
 import uvicorn
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 
-from positronic.policy import Codec, Policy, RecordingCodec
+from positronic.policy import Codec, Policy, Recorder
 from positronic.utils.checkpoints import get_latest_checkpoint, list_checkpoints
 from positronic.utils.serialization import deserialise, serialise
 
@@ -125,8 +125,9 @@ class VendorServer(ABC):
         self.codec = codec
         self.host = host
         self.port = port
-        if recording_dir:
-            self.codec = RecordingCodec(self.codec, pos3.sync(recording_dir))
+        # Synced once; a fresh ``Recorder`` is created per websocket session so
+        # concurrent sessions never share a stream or recorder state.
+        self._recording_dir = pos3.sync(recording_dir) if recording_dir else None
 
         self.idle_timeout_min = idle_timeout_min
         self._active_sessions = 0
@@ -155,12 +156,17 @@ class VendorServer(ABC):
         """Run one warmup inference. Default uses codec.dummy_encoded(). Non-fatal on failure."""
         if not self.codec:
             return
+        session = None
         try:
             logger.info('Running warmup inference...')
-            await asyncio.to_thread(policy.select_action, self.codec.dummy_encoded())
+            session = policy.new_session()
+            await asyncio.to_thread(session, self.codec.dummy_encoded())
             logger.info('Warmup inference complete')
         except Exception:
             logger.warning('Warmup inference failed (non-fatal)', exc_info=True)
+        finally:
+            if session is not None:
+                session.close()
 
     def shutdown_model(self):  # noqa: B027
         """Called on server shutdown. Default: no-op."""
@@ -183,12 +189,24 @@ class VendorServer(ABC):
         self._active_sessions += 1
         self._last_activity = time.monotonic()
         model_handle = None
+        session = None
         try:
             model_handle, extra_meta = await self.resolve_model(model_id, websocket)
             base_policy = self.create_policy(model_handle)
-            policy = self.codec.wrap(base_policy) if self.codec else base_policy
-            policy.reset()
-            meta = {**self.metadata, **extra_meta, **policy.meta}
+            if self._recording_dir is not None:
+                # Tap both sides of the codec so one recording holds the obs/action at the
+                # wire boundary ('raw') and the encoded obs / raw model output ('inference').
+                rec = Recorder(self._recording_dir)
+                if self.codec:
+                    policy = (rec.tap('raw') | self.codec | rec.tap('inference')).wrap(base_policy)
+                else:
+                    policy = rec.tap('inference').wrap(base_policy)
+            else:
+                policy = self.codec.wrap(base_policy) if self.codec else base_policy
+            session = policy.new_session()
+            # ``policy.meta`` is the static baseline; ``session.meta`` overlays
+            # per-episode specifics and wins on conflict.
+            meta = {**self.metadata, **extra_meta, **policy.meta, **session.meta}
             await websocket.send_bytes(serialise({'status': 'ready', 'meta': meta}))
 
             try:
@@ -197,7 +215,7 @@ class VendorServer(ABC):
                     self._last_activity = time.monotonic()
                     try:
                         raw_obs = deserialise(message)
-                        actions = policy.select_action(raw_obs)
+                        actions = session(raw_obs)
                         await websocket.send_bytes(serialise({'result': actions}))
                     except Exception as e:
                         logger.error(f'Error processing message: {e}', exc_info=True)
@@ -215,13 +233,14 @@ class VendorServer(ABC):
         finally:
             self._active_sessions = max(0, self._active_sessions - 1)
             self._last_activity = time.monotonic()
+            if session is not None:
+                session.close()
             if model_handle is not None:
                 await self.release_policy(model_handle)
 
     async def _startup(self):
         model_handle, _meta = await self.resolve_model(None, websocket=None)
         policy = self.create_policy(model_handle)
-        policy.reset()
         await self.warmup(policy)
 
     async def _idle_watchdog(self, server: uvicorn.Server):

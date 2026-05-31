@@ -6,56 +6,23 @@ from PIL import Image as PilImage
 from positronic.offboard.client import InferenceClient, InferenceSession
 from positronic.utils import flatten_dict
 
-from .base import Policy
+from .base import Policy, Session
 
 
-class RemotePolicy(Policy):
-    """Policy that forwards observations to a remote inference server.
+class RemoteSession(Session):
+    """Per-episode session that forwards observations to a remote inference server."""
 
-    Images are resized before sending to reduce bandwidth. The server reports
-    expected sizes via ``image_sizes`` in its metadata (see ``Codec.meta``).
-    The ``resize`` parameter acts as a fallback when the server does not report
-    sizes. Server-reported sizes always take precedence.
-    """
-
-    def __init__(
-        self,
-        host: str,
-        port: int,
-        resize: int | None = None,
-        model_id: str | None = None,
-        *,
-        headers: dict[str, str] | None = None,
-        secure: bool = False,
-    ):
-        self._client = InferenceClient(host, port, headers=headers, secure=secure)
-        self.__session: InferenceSession | None = None
+    def __init__(self, ws_session: InferenceSession, resize: int | None):
+        self._session = ws_session
         self._resize = resize
-        self._model_id = model_id
         self._image_sizes: dict[str, tuple[int, int]] = {}
         self._default_image_size: tuple[int, int] | None = None
 
-    def reset(self, context=None):
-        """Resets the policy by starting a new session with the server."""
-        self.close()
-        self.__session = self._client.new_session(model_id=self._model_id)
-        sizes = self.__session.metadata.get('image_sizes')
+        sizes = ws_session.metadata.get('image_sizes')
         if isinstance(sizes, dict):
             self._image_sizes = {k: tuple(v) for k, v in sizes.items()}
-            self._default_image_size = None
         elif isinstance(sizes, tuple | list):
             self._default_image_size = tuple(sizes)
-            self._image_sizes = {}
-        else:
-            self._default_image_size = None
-            self._image_sizes = {}
-
-    @property
-    def _session(self) -> InferenceSession:
-        if self.__session is None:
-            self.reset()
-        assert self.__session is not None
-        return self.__session
 
     @staticmethod
     def _resize_to(image: np.ndarray, width: int, height: int) -> np.ndarray:
@@ -78,18 +45,74 @@ class RemotePolicy(Policy):
             result[key] = value
         return result
 
-    def select_action(self, obs: dict[str, Any]) -> dict[str, Any] | list[dict[str, Any]]:
-        """Forwards the observation to the remote server and returns the action."""
-        return self._session.infer(self._prepare_obs(obs))
+    def __call__(self, obs: dict[str, Any]) -> list[dict[str, Any]] | None:
+        """Forwards the observation to the remote server and returns the action trajectory.
+
+        Command reconstruction is handled transparently by the deserialization layer.
+        Single-action server responses are wrapped into a 1-element list to honor
+        the ``Session.__call__`` contract (``list[dict] | None``).
+        """
+        result = self._session.infer(self._prepare_obs(obs))
+        if isinstance(result, dict):
+            return [result]
+        return result
 
     @property
     def meta(self) -> dict[str, Any]:
         return flatten_dict({'type': 'remote', 'server': self._session.metadata})
 
     def close(self):
-        if self.__session:
-            self.__session.close()
-            self.__session = None
+        self._session.close()
 
-    def __del__(self):
-        self.close()
+
+class RemotePolicy(Policy):
+    """Policy that creates sessions forwarding observations to a remote inference server.
+
+    Images are resized before sending to reduce bandwidth. The server reports
+    expected sizes via ``image_sizes`` in its metadata (see ``Codec.meta``).
+    The ``resize`` parameter acts as a fallback when the server does not report
+    sizes. Server-reported sizes always take precedence.
+
+    ``headers`` / ``secure`` are forwarded to the underlying ``InferenceClient``
+    for authenticated / TLS-fronted endpoints (e.g. Modal, behind a reverse proxy).
+    """
+
+    def __init__(
+        self,
+        host: str,
+        port: int,
+        resize: int | None = None,
+        model_id: str | None = None,
+        *,
+        headers: dict[str, str] | None = None,
+        secure: bool = False,
+    ):
+        self._client = InferenceClient(host, port, headers=headers, secure=secure)
+        self._resize = resize
+        self._model_id = model_id
+        # Server metadata cached after the first session is created or `meta`
+        # is read. Needed so consumers like ``SampledPolicy._get_keys`` see
+        # ``server.checkpoint_path`` etc. before any session exists.
+        self._server_meta: dict[str, Any] | None = None
+
+    def _ensure_server_meta(self) -> dict[str, Any]:
+        if self._server_meta is None:
+            ws_session = self._client.new_session(model_id=self._model_id)
+            try:
+                self._server_meta = dict(ws_session.metadata)
+            finally:
+                ws_session.close()
+        return self._server_meta
+
+    def new_session(self, context=None) -> RemoteSession:
+        ws_session = self._client.new_session(model_id=self._model_id)
+        if self._server_meta is None:
+            self._server_meta = dict(ws_session.metadata)
+        return RemoteSession(ws_session, self._resize)
+
+    @property
+    def meta(self) -> dict[str, Any]:
+        return flatten_dict({'type': 'remote', 'server': self._ensure_server_meta()})
+
+    def close(self):
+        self._client = None

@@ -48,6 +48,10 @@ uv run positronic-inference real \
 
 **Remote policy parameters:** `--policy.host` (server hostname/IP), `--policy.port` (default 8000), `--policy.model_id` (specific checkpoint, default latest), `--policy.resize` (client-side image resize for bandwidth optimization).
 
+> **Recording inference I/O:** Pass `--policy.recording_dir=s3://bucket/path` to `.remote` or `.weighted_remote` to write a rerun `.rrd` file per episode capturing the raw and server-side observation/action boundaries. Useful for debugging codec behavior and visualizing what the policy actually received.
+
+**Multi-checkpoint sampling:** To evaluate several models at once, sampling configs route each episode to a different policy. Use `--policy=@positronic.cfg.policy.production` to combine per-vendor `.weighted_remote` endpoints, optionally with a balanced sampler and grouping fields. The `phail` subcommand wires this up end-to-end, defaulting to the `phail_multiple` policy (a `production` preset) and the `eval_ui` driver.
+
 ## Local Inference
 
 Load model directly on robot/simulator machine. Only ACT is supported locally (GR00T and OpenPI use remote inference).
@@ -71,7 +75,7 @@ Positronic provides three drivers for managing inference episodes (see [`positro
 
 **Eval UI driver:** Dedicated evaluation interface for policy assessment. Specify `--driver=.eval_ui` for graphical controls and metrics visualization. Useful for systematic policy evaluation with visual feedback.
 
-Default driver is `timed` with 15 seconds simulation time. Override with `--driver=.keyboard` or `--driver=.eval_ui` as needed.
+The default driver depends on the subcommand: `sim` and `sim_pnp` default to `timed` (15 seconds simulation time), `real` defaults to `keyboard`, and `phail` defaults to `eval_ui`. Override with `--driver=.timed`, `--driver=.keyboard`, or `--driver=.eval_ui` as needed.
 
 ## Recording and Replay
 

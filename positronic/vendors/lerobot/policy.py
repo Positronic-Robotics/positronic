@@ -5,7 +5,7 @@ import torch
 from lerobot.configs.policies import PreTrainedConfig
 from lerobot.policies.factory import get_policy_class, make_pre_post_processors
 
-from positronic.policy import Policy
+from positronic.policy import Policy, Session
 
 
 def _detect_device() -> str:
@@ -27,16 +27,15 @@ def _detect_device() -> str:
     return 'cpu'
 
 
-class LerobotPolicy(Policy):
-    def __init__(self, checkpoint_path: str, device: str | None = None, extra_meta: dict[str, Any] | None = None):
-        self._device = device or _detect_device()
-        config = PreTrainedConfig.from_pretrained(checkpoint_path)
-        policy_cls = get_policy_class(config.type)
-        self._policy = policy_cls.from_pretrained(checkpoint_path).to(self._device)
-        self._preprocessor, self._postprocessor = make_pre_post_processors(config, pretrained_path=checkpoint_path)
-        self.extra_meta = {**(extra_meta or {}), 'type': config.type}
+class _LerobotSession(Session):
+    def __init__(self, policy, preprocessor, postprocessor, device: str, meta: dict[str, Any]):
+        self._policy = policy
+        self._preprocessor = preprocessor
+        self._postprocessor = postprocessor
+        self._device = device
+        self._meta = meta
 
-    def select_action(self, obs: dict[str, Any]) -> dict[str, Any] | list[dict[str, Any]]:
+    def __call__(self, obs: dict[str, Any]) -> list[dict[str, Any]]:
         obs_int = {}
         for key, val in obs.items():
             if key == 'task':
@@ -63,12 +62,27 @@ class LerobotPolicy(Policy):
             return [{'action': action}]
         return [{'action': a} for a in action]
 
-    def reset(self, context=None):
+    @property
+    def meta(self) -> dict[str, Any]:
+        return self._meta
+
+
+class LerobotPolicy(Policy):
+    def __init__(self, checkpoint_path: str, device: str | None = None, extra_meta: dict[str, Any] | None = None):
+        self._device = device or _detect_device()
+        config = PreTrainedConfig.from_pretrained(checkpoint_path)
+        policy_cls = get_policy_class(config.type)
+        self._policy = policy_cls.from_pretrained(checkpoint_path).to(self._device)
+        self._preprocessor, self._postprocessor = make_pre_post_processors(config, pretrained_path=checkpoint_path)
+        self._meta = {**(extra_meta or {}), 'type': config.type}
+
+    def new_session(self, context=None):
         self._policy.reset()
+        return _LerobotSession(self._policy, self._preprocessor, self._postprocessor, self._device, self._meta)
 
     @property
     def meta(self) -> dict[str, Any]:
-        return self.extra_meta.copy()
+        return self._meta.copy()
 
     def close(self):
         if self._policy is not None:

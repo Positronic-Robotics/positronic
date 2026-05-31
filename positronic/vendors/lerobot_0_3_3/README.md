@@ -34,7 +34,7 @@ cd docker && docker compose run --rm lerobot-0_3_3-train \
   --save_freq=10000
 
 # 3. Serve
-cd docker && docker compose run --rm --service-ports lerobot-0_3_3-server \
+cd docker && docker compose run --rm --service-ports lerobot-0_3_3-server serve \
   --checkpoints_dir=~/checkpoints/lerobot/my_task_v1/ \
   --codec=@positronic.vendors.lerobot_0_3_3.codecs.ee
 
@@ -91,7 +91,7 @@ See [Codecs Guide](../../docs/codecs.md) for comprehensive codec documentation.
 ### Inference Server Configuration
 
 ```bash
-cd docker && docker compose run --rm --service-ports lerobot-0_3_3-server \
+cd docker && docker compose run --rm --service-ports lerobot-0_3_3-server serve \
   --checkpoints_dir=~/checkpoints/lerobot/my_task_v1/ \
   --codec=@positronic.vendors.lerobot_0_3_3.codecs.ee \
   --port=8000 \
@@ -107,6 +107,10 @@ cd docker && docker compose run --rm --service-ports lerobot-0_3_3-server \
 | `--codec` | Codec (must match training) | `ee` | `joints` |
 | `--port` | Server port | `8000` | `8001` |
 | `--host` | Server host | `0.0.0.0` | Binds to all interfaces |
+| `--recording_dir` | Directory for server-side inference recordings | `None` | `s3://inference/...` |
+| `--idle_timeout_min` | Shut down after this many idle minutes | `None` | `30` |
+
+**Presets:** Besides `serve`, the server exposes `phail`, `sim_stack`, and `demo` presets with pre-configured `checkpoints_dir`/`recording_dir` (e.g. `lerobot-0_3_3-server phail`).
 
 ## Troubleshooting
 
@@ -122,7 +126,7 @@ See vendor-specific guides and [Model Selection Guide](../../docs/model-selectio
 
 **Other Models:**
 - [OpenPI (π₀.₅)](../openpi/README.md) — Recommended for most tasks, most capable foundation model
-- [GR00T](../groot/README.md) — NVIDIA's generalist robot policy
+- [GR00T](../gr00t/README.md) — NVIDIA's generalist robot policy
 
 **External:**
 - [HuggingFace LeRobot](https://github.com/huggingface/lerobot) — Official LeRobot repository

@@ -522,3 +522,40 @@ def test_trajectory_override_serializer_empty_cancels_buffer():
     assert s([]) == []
     # Subsequent flush must not emit the canceled waypoints.
     assert s.flush() == []
+
+
+def test_trajectory_override_serializer_flush_cutoff():
+    """flush(now_ns) commits only points already due; the future tail is dropped."""
+    s = TrajectoryOverrideSerializer(None)
+    s.reset()
+
+    # Buffer a chunk scheduled at ts 1..4 (nothing committed yet).
+    assert s([(1, 'a'), (2, 'b'), (3, 'c'), (4, 'd')]) == []
+
+    # Episode ends at ts=2: only the due points (ts <= 2) are committed; 'c','d' dropped.
+    assert [(t.ts, t.value) for t in s.flush(now_ns=2)] == [(1, 'a'), (2, 'b')]
+
+    # No cutoff keeps the legacy "commit everything" behavior.
+    s.reset()
+    assert s([(1, 'a'), (2, 'b')]) == []
+    assert [(t.ts, t.value) for t in s.flush()] == [(1, 'a'), (2, 'b')]
+
+
+def test_suspend_commits_due_drops_future_trajectory(world, clock):
+    """A mid-trajectory SUSPEND commits already-due samples and drops the un-executed tail."""
+    ds = FakeDatasetWriter()
+    agent, cmd_em, emitters = build_agent_with_pipes({'traj': TrajectoryOverrideSerializer(None)}, ds, world)
+
+    future = 10**18  # far beyond the test clock, so it stays an un-executed tail
+    script = [
+        (partial(cmd_em.emit, DsWriterCommand(DsWriterCommandType.START_EPISODE)), 0.001),
+        (partial(emitters['traj'].emit, [(0, 'due'), (future, 'tail')]), 0.001),
+        (partial(cmd_em.emit, DsWriterCommand(DsWriterCommandType.SUSPEND_EPISODE)), 0.001),
+        (partial(cmd_em.emit, DsWriterCommand(DsWriterCommandType.STOP_EPISODE)), 0.001),
+    ]
+    run_scripted_agent(agent, script, world=world, clock=clock)
+
+    w = ds.created[-1]
+    # 'due' (ts <= suspend time) is committed; the future 'tail' is dropped.
+    assert [(s, v) for (s, v, _, _) in w.appends] == [('traj', 'due')]
+    assert w.exited is True

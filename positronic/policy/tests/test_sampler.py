@@ -1,139 +1,172 @@
 from typing import Any
 
-from positronic.policy.base import Policy, SampledPolicy
-from positronic.policy.sampler import BalancedSampler, UniformSampler
+from positronic.policy.base import Policy, SampledPolicy, Session
+from positronic.policy.sampler import BalancedSampler, EpisodeCounter, UniformSampler
 
 
-class StubPolicy(Policy):
-    def __init__(self, meta: dict[str, Any] | None = None):
+class _StubSession(Session):
+    def __init__(self, action=None, meta=None):
+        self._action = action or []
         self._meta = meta or {}
-        self.reset_count = 0
 
-    def select_action(self, obs):
-        return {}
-
-    def reset(self, context=None):
-        self.reset_count += 1
+    def __call__(self, obs):
+        return self._action
 
     @property
     def meta(self):
         return self._meta
 
 
+class StubPolicy(Policy):
+    def __init__(self, meta: dict[str, Any] | None = None, action=None):
+        self._meta = meta or {}
+        self._action = action
+        self.session_count = 0
+
+    def new_session(self, context=None):
+        self.session_count += 1
+        return _StubSession(self._action, self._meta)
+
+    @property
+    def meta(self):
+        return self._meta
+
+
+def _session(key, key_field='ckpt'):
+    return _StubSession(meta={key_field: key})
+
+
+# --- EpisodeCounter ---
+
+
+def test_counter_records_and_reads_by_key():
+    counter = EpisodeCounter('ckpt')
+    for _ in range(10):
+        counter.record(_session('a'), {})
+    assert counter.counts(['a', 'b'], {}) == {'a': 10, 'b': 0}
+
+
+def test_counter_ignores_session_without_key():
+    counter = EpisodeCounter('ckpt')
+    counter.record(_StubSession(meta={}), {})
+    assert counter.counts(['a'], {}) == {'a': 0}
+
+
+def test_counter_groups_by_context_fields():
+    counter = EpisodeCounter('ckpt', group_fields=('task',))
+    for _ in range(5):
+        counter.record(_session('a'), {'task': 'task1'})
+
+    # task1 has 5 for 'a'; task2 is a separate, empty group
+    assert counter.counts(['a', 'b'], {'task': 'task1'}) == {'a': 5, 'b': 0}
+    assert counter.counts(['a', 'b'], {'task': 'task2'}) == {'a': 0, 'b': 0}
+
+
+def test_counter_no_group_fields_uses_single_global_group():
+    counter = EpisodeCounter('ckpt', group_fields=None)
+    counter.record(_session('a'), {'task': 'task1'})
+    counter.record(_session('a'), {'task': 'task2'})
+    counter.record(_session('a'), {'task': 'task3'})
+    # All contexts collapse to one global group
+    assert counter.counts(['a', 'b'], {'task': 'whatever'}) == {'a': 3, 'b': 0}
+
+
+def test_counter_counts_only_requested_keys():
+    counter = EpisodeCounter('ckpt')
+    counter.record(_session('old_checkpoint'), {})
+    counter.record(_session('old_checkpoint'), {})
+    # Keys not present in the tally read as zero; unknown recorded keys are not surfaced
+    assert counter.counts(['new_a', 'new_b'], {}) == {'new_a': 0, 'new_b': 0}
+
+
+# --- Samplers ---
+
+
 def test_uniform_sampler_returns_valid_key():
     sampler = UniformSampler()
     keys = ['a', 'b', 'c']
     for _ in range(20):
-        assert sampler.sample(keys, {}) in keys
+        assert sampler.sample(keys, {}, {}) in keys
 
 
 def test_uniform_sampler_with_weights():
     sampler = UniformSampler(weights={'a': 0.0, 'b': 0.0, 'c': 1.0})
     keys = ['a', 'b', 'c']
     for _ in range(20):
-        assert sampler.sample(keys, {}) == 'c'
+        assert sampler.sample(keys, {}, {}) == 'c'
 
 
 def test_balanced_sampler_favors_underrepresented():
     sampler = BalancedSampler(balance=1)
     keys = ['a', 'b']
-    # Record 10 episodes for 'a', none for 'b'
-    for _ in range(10):
-        sampler.count('a', {})
-
-    # With balance=1, weights are: a=max(10)+1-10=1, b=max(10)+1-0=11
-    # 'b' should be sampled much more often
-    counts = {'a': 0, 'b': 0}
+    # 10 episodes for 'a', none for 'b'. With balance=1: a=max(10)+1-10=1, b=max(10)+1-0=11
+    counts = {'a': 10, 'b': 0}
+    picks = {'a': 0, 'b': 0}
     for _ in range(100):
-        counts[sampler.sample(keys, {})] += 1
-    assert counts['b'] > counts['a']
-
-
-def test_balanced_sampler_groups_by_context():
-    sampler = BalancedSampler(balance=1, group_fields=('task',))
-    keys = ['a', 'b']
-
-    # Record 5 for 'a' in task1, none for 'b' in task1
-    for _ in range(5):
-        sampler.count('a', {'task': 'task1'})
-
-    # In task1: a should be disfavored
-    counts = {'a': 0, 'b': 0}
-    for _ in range(100):
-        counts[sampler.sample(keys, {'task': 'task1'})] += 1
-    assert counts['b'] > counts['a']
-
-    # In task2: both untouched, should be roughly equal
-    counts = {'a': 0, 'b': 0}
-    for _ in range(100):
-        counts[sampler.sample(keys, {'task': 'task2'})] += 1
-    assert abs(counts['a'] - counts['b']) < 40
+        picks[sampler.sample(keys, {}, counts)] += 1
+    assert picks['b'] > picks['a']
 
 
 def test_balanced_sampler_equal_counts_gives_uniform():
     sampler = BalancedSampler(balance=5)
     keys = ['a', 'b', 'c']
-    # Equal counts: all weights are max(3)+5-3=5
-    for _ in range(3):
-        for k in keys:
-            sampler.count(k, {})
-
-    counts = dict.fromkeys(keys, 0)
+    counts = {'a': 3, 'b': 3, 'c': 3}
+    picks = dict.fromkeys(keys, 0)
     for _ in range(300):
-        counts[sampler.sample(keys, {})] += 1
-    # Each should get ~100, allow wide margin
+        picks[sampler.sample(keys, {}, counts)] += 1
     for k in keys:
-        assert 50 < counts[k] < 150
+        assert 50 < picks[k] < 150
 
 
-def test_balanced_sampler_ignores_unknown_keys_from_dataset():
+def test_balanced_sampler_all_zero_counts_is_uniform():
     sampler = BalancedSampler(balance=5)
-    # Count episodes for keys not in the available policies
-    sampler.count('old_checkpoint', {})
-    sampler.count('old_checkpoint', {})
-
-    # Available keys are different — should sample uniformly (all zero counts)
     keys = ['new_a', 'new_b']
-    counts = dict.fromkeys(keys, 0)
+    picks = dict.fromkeys(keys, 0)
     for _ in range(100):
-        counts[sampler.sample(keys, {})] += 1
-    assert abs(counts['new_a'] - counts['new_b']) < 40
+        picks[sampler.sample(keys, {}, {'new_a': 0, 'new_b': 0})] += 1
+    assert abs(picks['new_a'] - picks['new_b']) < 40
 
 
-def test_balanced_sampler_no_group_fields_uses_global():
-    sampler = BalancedSampler(balance=1, group_fields=None)
+def test_balanced_sampler_reads_counts_through_counter():
+    counter = EpisodeCounter('ckpt', group_fields=('task',))
+    sampler = BalancedSampler(balance=1)
     keys = ['a', 'b']
+    for _ in range(5):
+        counter.record(_session('a'), {'task': 'task1'})
 
-    # Count with different contexts — all go to same global group
-    sampler.count('a', {'task': 'task1'})
-    sampler.count('a', {'task': 'task2'})
-    sampler.count('a', {'task': 'task3'})
-
-    # 'b' should be favored regardless of context
-    counts = {'a': 0, 'b': 0}
+    # task1: 'a' is over-represented, so 'b' favored
+    picks = {'a': 0, 'b': 0}
     for _ in range(100):
-        counts[sampler.sample(keys, {'task': 'whatever'})] += 1
-    assert counts['b'] > counts['a']
+        picks[sampler.sample(keys, {'task': 'task1'}, counter.counts(keys, {'task': 'task1'}))] += 1
+    assert picks['b'] > picks['a']
+
+    # task2: untouched group, roughly uniform
+    picks = {'a': 0, 'b': 0}
+    for _ in range(100):
+        picks[sampler.sample(keys, {'task': 'task2'}, counter.counts(keys, {'task': 'task2'}))] += 1
+    assert abs(picks['a'] - picks['b']) < 40
+
+
+# --- SampledPolicy ---
 
 
 def test_sampled_policy_discovers_keys_from_meta():
     p1 = StubPolicy(meta={'ckpt': '/path/a'})
     p2 = StubPolicy(meta={'ckpt': '/path/b'})
     sampled = SampledPolicy(p1, p2, key_field='ckpt')
-    sampled.reset({})
+    sampled.new_session({})
     assert sampled._keys == ('/path/a', '/path/b')
 
 
 def test_sampled_policy_delegates_to_sampler():
     p1 = StubPolicy(meta={'ckpt': '/path/a'})
     p2 = StubPolicy(meta={'ckpt': '/path/b'})
-    # Weight=0 for p1, weight=1 for p2 → always picks p2
     sampler = UniformSampler(weights={'/path/a': 0.0, '/path/b': 1.0})
     sampled = SampledPolicy(p1, p2, sampler=sampler, key_field='ckpt')
     for _ in range(10):
-        sampled.reset({})
-    assert p1.reset_count == 0
-    assert p2.reset_count == 10
+        sampled.new_session({})
+    assert p1.session_count == 0
+    assert p2.session_count == 10
 
 
 def test_sampled_policy_backward_compat_weights_only():
@@ -141,70 +174,45 @@ def test_sampled_policy_backward_compat_weights_only():
     p2 = StubPolicy(meta={'ckpt': 'b'})
     sampled = SampledPolicy(p1, p2, weights=[0.0, 1.0], key_field='ckpt')
     for _ in range(10):
-        sampled.reset({})
-    assert p1.reset_count == 0
-    assert p2.reset_count == 10
+        sampled.new_session({})
+    assert p1.session_count == 0
+    assert p2.session_count == 10
 
 
-def test_sampled_policy_meta_returns_active_sub_policy():
+def test_sampled_policy_session_is_active_sub_policy_session():
     p1 = StubPolicy(meta={'ckpt': 'a', 'type': 'act'})
     p2 = StubPolicy(meta={'ckpt': 'b', 'type': 'groot'})
     sampled = SampledPolicy(p1, p2, sampler=UniformSampler(weights={'a': 0.0, 'b': 1.0}), key_field='ckpt')
-    sampled.reset({})
-    assert sampled.meta == {'ckpt': 'b', 'type': 'groot'}
+    session = sampled.new_session({})
+    assert session.meta == {'ckpt': 'b', 'type': 'groot'}
 
 
 def test_sampled_policy_fallback_key_when_meta_missing():
     p1 = StubPolicy(meta={})
     p2 = StubPolicy(meta={'ckpt': 'b'})
     sampled = SampledPolicy(p1, p2, key_field='ckpt')
-    sampled.reset({})
-    # p1 has no 'ckpt' in meta → falls back to str(index) = '0'
+    sampled.new_session({})
     assert sampled._keys[0] == '0'
     assert sampled._keys[1] == 'b'
 
 
-def test_sampled_policy_with_balanced_sampler():
+def test_sampled_policy_with_balanced_sampler_uses_its_counter():
     p1 = StubPolicy(meta={'ckpt': 'a'})
     p2 = StubPolicy(meta={'ckpt': 'b'})
-    sampler = BalancedSampler(balance=1)
-    sampled = SampledPolicy(p1, p2, sampler=sampler, key_field='ckpt')
+    sampled = SampledPolicy(p1, p2, sampler=BalancedSampler(balance=1), key_field='ckpt')
 
-    # Record 10 completions for 'a', none for 'b'
+    # 10 completions for 'a', none for 'b' — recorded via the policy's own counter
     for _ in range(10):
-        sampler.count('a', {})
+        sampled.counter.record(_session('a'), {})
 
-    # Now sample many times — 'b' should be strongly favored
-    p1.reset_count = 0
-    p2.reset_count = 0
     for _ in range(50):
-        sampled.reset({})
-    assert p2.reset_count > p1.reset_count
+        sampled.new_session({})
+    assert p2.session_count > p1.session_count
 
 
-def test_sampled_policy_current_key_tracks_selection():
-    p1 = StubPolicy(meta={'ckpt': 'a'})
-    p2 = StubPolicy(meta={'ckpt': 'b'})
+def test_sampled_policy_call_delegates():
+    p1 = StubPolicy(meta={'ckpt': 'a'}, action={'id': 'a', 'value': 1})
+    p2 = StubPolicy(meta={'ckpt': 'b'}, action={'id': 'b', 'value': 2})
     sampled = SampledPolicy(p1, p2, sampler=UniformSampler(weights={'a': 0.0, 'b': 1.0}), key_field='ckpt')
-    assert sampled._current_key is None
-    sampled.reset({})
-    assert sampled._current_key == 'b'
-
-
-def test_sampled_policy_select_action_delegates():
-    class ActionPolicy(Policy):
-        def __init__(self, action):
-            self._action = action
-
-        def select_action(self, obs):
-            return self._action
-
-        @property
-        def meta(self):
-            return {'ckpt': self._action['id']}
-
-    p1 = ActionPolicy({'id': 'a', 'value': 1})
-    p2 = ActionPolicy({'id': 'b', 'value': 2})
-    sampled = SampledPolicy(p1, p2, sampler=UniformSampler(weights={'a': 0.0, 'b': 1.0}), key_field='ckpt')
-    sampled.reset({})
-    assert sampled.select_action({}) == {'id': 'b', 'value': 2}
+    session = sampled.new_session({})
+    assert session({}) == {'id': 'b', 'value': 2}

@@ -1,66 +1,64 @@
 import numpy as np
-import pytest
-import rerun as rr
 
-from positronic.dataset.transforms.episode import Derive
-from positronic.policy.base import Policy
-from positronic.policy.codec import (
-    Codec,
-    RecordingCodec,
-    _build_blueprint,
-    _RecordingPolicy,
-    _RecordingSession,
-    _squeeze_batch,
-)
+from positronic.drivers.roboarm.command import CartesianPosition
+from positronic.geom import Rotation, Transform3D
+from positronic.policy.base import Policy, Session
+from positronic.policy.recording import Recorder, _build_blueprint, _squeeze_batch, _stack_numeric, action_chunk_arrays
 
 
-class _TrackingCodec(Codec):
-    """Codec that transforms data for verifying delegation."""
+class _TrackingSession(Session):
+    def __init__(self, actions, meta):
+        self._actions = actions
+        self._meta = meta
 
-    def __init__(self, *, meta: dict | None = None):
-        self._meta = meta or {'action_fps': 10.0}
-
-    def encode(self, data):
-        return {**data, 'encoded': True}
-
-    def _decode_single(self, data, context):
-        return {**data, 'decoded': True}
+    def __call__(self, obs):
+        return list(self._actions)
 
     @property
     def meta(self):
-        return dict(self._meta)
-
-    def dummy_encoded(self, data=None):
-        return {'dummy': True}
+        return self._meta
 
 
 class _TrackingPolicy(Policy):
-    """Policy that returns a fixed action chunk and tracks reset calls."""
+    """Policy that returns a fixed action chunk and tracks session creation."""
 
     def __init__(self, actions: list[dict] | None = None):
-        self._actions = actions or [{'action': np.array([1.0, 2.0], dtype=np.float32)}]
-        self.reset_count = 0
+        self._actions = actions or [{'action': np.array([1.0, 2.0], dtype=np.float32), 'timestamp': 0.0}]
+        self.session_count = 0
 
-    def select_action(self, obs):
-        return list(self._actions)
-
-    def reset(self, context=None):
-        self.reset_count += 1
+    def new_session(self, context=None):
+        self.session_count += 1
+        return _TrackingSession(self._actions, {'policy_key': 'policy_value'})
 
     @property
     def meta(self):
         return {'policy_key': 'policy_value'}
 
 
-def _make_codec(tmp_path, **kw):
-    return RecordingCodec(_TrackingCodec(**kw), tmp_path)
+class _CapturingSession(Session):
+    """Innermost session that snapshots the Recorder's carried timeline state when called."""
+
+    def __init__(self, rec, actions):
+        self._rec = rec
+        self._actions = actions
+        self.seen_timeline_values = None
+        self.seen_depth = None
+
+    def __call__(self, obs):
+        self.seen_timeline_values = dict(self._rec._timeline_values)
+        self.seen_depth = self._rec._depth
+        return list(self._actions)
 
 
-def _make_session(tmp_path, *, action_fps=10.0, meta=None):
-    inner = _TrackingCodec(meta=meta)
-    rec = rr.RecordingStream(application_id='test')
-    rec.save(str(tmp_path / 'test.rrd'))
-    return _RecordingSession(inner, rec, action_fps=action_fps)
+class _CapturingPolicy(Policy):
+    def __init__(self, rec, actions):
+        self._rec = rec
+        self._actions = actions
+        self.last_session = None
+
+    def new_session(self, context=None):
+        self.last_session = _CapturingSession(self._rec, self._actions)
+        return self.last_session
 
 
 def test_squeeze_batch():
@@ -71,116 +69,45 @@ def test_squeeze_batch():
 
 def test_build_blueprint():
     assert _build_blueprint([], []) is None
-    assert _build_blueprint(['input/image/left', 'input/image/right'], []) is not None
-    assert _build_blueprint(['input/image/left'], ['encoded/state']) is not None
+    assert _build_blueprint(['raw/left', 'raw/right'], []) is not None
+    assert _build_blueprint(['raw/left'], ['server/state']) is not None
 
 
-def test_recording_codec_delegates(tmp_path):
-    codec = _make_codec(tmp_path, meta={'action_fps': 30.0, 'custom': 'val'})
-
-    assert codec.encode({'x': 1}) == {'x': 1, 'encoded': True}
-    assert codec.decode({'y': 2}) == {'y': 2, 'decoded': True}
-    assert codec.decode([{'a': 1}, {'b': 2}]) == [{'a': 1, 'decoded': True}, {'b': 2, 'decoded': True}]
-    assert codec.meta == {'action_fps': 30.0, 'custom': 'val'}
-    assert codec.dummy_encoded() == {'dummy': True}
+def test_stack_numeric():
+    assert _stack_numeric([0.1, 0.2, 0.3]).shape == (3,)
+    assert _stack_numeric([np.zeros(7), np.ones(7)]).shape == (2, 7)
+    assert _stack_numeric(['a', 'b']) is None
+    # Ragged fields can't form a homogeneous tensor.
+    assert _stack_numeric([np.zeros(7), np.ones(3)]) is None
 
 
-def test_recording_policy_select_action_before_reset(tmp_path):
-    policy = _make_codec(tmp_path).wrap(_TrackingPolicy())
-    with pytest.raises(RuntimeError, match='reset'):
-        policy.select_action({'x': 1.0})
-
-
-def test_recording_policy_reset_creates_rrd_files(tmp_path):
-    policy = _make_codec(tmp_path).wrap(_TrackingPolicy())
-    assert isinstance(policy, _RecordingPolicy)
-
-    for _i in range(1, 4):
-        policy.reset()
+def test_single_tap_file_per_episode(tmp_path):
+    rec = Recorder(tmp_path)
+    policy = rec.tap('raw').wrap(_TrackingPolicy())
+    for _ in range(3):
+        session = policy.new_session()
+        session.close()
     assert len(list(tmp_path.glob('*.rrd'))) == 3
 
 
-def test_recording_policy_reset_calls_inner_reset(tmp_path):
-    tracking = _TrackingPolicy()
-    policy = _make_codec(tmp_path).wrap(tracking)
-
-    policy.reset()
-    assert tracking.reset_count == 1
-    policy.reset()
-    assert tracking.reset_count == 2
+def test_tap_delegates_inner_call(tmp_path):
+    actions = [{'v': 1, 'timestamp': 0.0}, {'v': 2, 'timestamp': 0.1}]
+    policy = Recorder(tmp_path).tap('t').wrap(_TrackingPolicy(actions))
+    session = policy.new_session()
+    result = session({'x': 1.0, 'wall_time_ns': 1_000_000})
+    assert result == actions
 
 
-def test_recording_policy_select_action_pipeline(tmp_path):
-    policy = _make_codec(tmp_path).wrap(_TrackingPolicy([{'v': 1}, {'v': 2}]))
-    policy.reset()
-
-    result = policy.select_action({'x': 1.0})
-    assert len(result) == 2
-    assert all('decoded' in r for r in result)
+def test_tap_meta_passthrough(tmp_path):
+    """A tap contributes no meta; inner meta passes through."""
+    policy = Recorder(tmp_path).tap('t').wrap(_TrackingPolicy())
+    assert policy.meta == {'policy_key': 'policy_value'}
 
 
-def test_recording_policy_meta(tmp_path):
-    policy = _make_codec(tmp_path, meta={'action_fps': 10.0}).wrap(_TrackingPolicy())
-    assert 'action_fps' in policy.meta
-
-    policy.reset()
-    meta = policy.meta
-    assert meta['policy_key'] == 'policy_value'
-    assert meta['action_fps'] == 10.0
-
-
-def test_session_encode_extracts_wall_time(tmp_path):
-    session = _make_session(tmp_path)
-    wall_time, inf_time = 1_000_000_000, 500_000_000
-
-    encoded = session.encode({'wall_time_ns': wall_time, 'inference_time_ns': inf_time, 'x': 1.0})
-
-    assert encoded == {'wall_time_ns': wall_time, 'inference_time_ns': inf_time, 'x': 1.0, 'encoded': True}
-    assert session._time_ns == wall_time
-    assert session._inference_time_ns == inf_time
-
-
-def test_session_encode_falls_back_to_wall_clock(tmp_path):
-    session = _make_session(tmp_path)
-    session.encode({'x': 1.0})
-    assert session._time_ns > 0
-    assert session._inference_time_ns is None
-
-
-def test_session_step_increments(tmp_path):
-    session = _make_session(tmp_path)
-    assert session._step == 0
-
-    session.encode({'x': 1.0})
-    session.decode([{'v': 1}])
-    assert session._step == 1
-
-    session.encode({'x': 2.0})
-    session.decode([{'v': 2}])
-    assert session._step == 2
-
-
-def test_session_decode(tmp_path):
-    session = _make_session(tmp_path)
-    session.encode({'x': 1.0})
-
-    assert session.decode({'v': 42}) == {'v': 42, 'decoded': True}
-
-    session.encode({'x': 2.0})
-    chunk = session.decode([{'v': i} for i in range(5)])
-    assert len(chunk) == 5
-    assert all(r['decoded'] for r in chunk)
-
-
-def test_session_delegates(tmp_path):
-    session = _make_session(tmp_path, meta={'action_fps': 30.0})
-    assert session.meta == {'action_fps': 30.0}
-    assert session.dummy_encoded() == {'dummy': True}
-
-
-def test_session_log_filtering(tmp_path):
-    session = _make_session(tmp_path)
-    session.encode({
+def test_obs_log_filtering_uses_pure_tap_names(tmp_path):
+    rec = Recorder(tmp_path)
+    session = rec.tap('cam').wrap(_TrackingPolicy([{'v': 1.0, 'timestamp': 0.0}])).new_session()
+    session({
         'wall_time_ns': 1_000_000,
         'task': 'pick up the cube',
         'camera': np.zeros((4, 4, 3), dtype=np.uint8),
@@ -189,103 +116,136 @@ def test_session_log_filtering(tmp_path):
         'grip': 0.5,
     })
 
-    assert any('image' in p for p in session._image_paths)
-    assert any('joint_pos' in p or 'grip' in p for p in session._numeric_paths)
-    assert any('joints_list' in p for p in session._numeric_paths)
+    assert 'cam/camera' in rec._image_paths
+    assert 'cam/joint_pos' in rec._numeric_paths
+    assert 'cam/grip' in rec._numeric_paths
+    assert 'cam/joints_list' in rec._numeric_paths
 
-    all_paths = session._image_paths + session._numeric_paths
-    assert not any('wall_time_ns' in p for p in all_paths)
+    all_paths = rec._image_paths + rec._numeric_paths
+    assert not any('time_ns' in p for p in all_paths)
     assert not any('task' in p for p in all_paths)
+    # Pure tap-name prefix: no built-in '/image/' segment.
+    assert not any('/image/' in p for p in all_paths)
 
 
-def test_concurrent_sessions_independent_state(tmp_path):
-    codec = _make_codec(tmp_path)
-    session_a = codec._new_session()
-    session_b = codec._new_session()
-
-    session_a.encode({'x': 1.0})
-    session_a.decode([{'v': 1}])
-    session_a.encode({'x': 2.0})
-    session_a.decode([{'v': 2}])
-
-    assert session_a._step == 2
-    assert session_b._step == 0
-
-    session_b.encode({'y': 1.0})
-    session_b.decode([{'v': 3}])
-    assert session_b._step == 1
-    assert session_a._step == 2
+def test_logs_command_chunk_without_mutating(tmp_path):
+    pose = Transform3D(translation=np.array([0.1, 0.2, 0.3], dtype=np.float32), rotation=Rotation.identity)
+    actions = [
+        {'robot_command': CartesianPosition(pose=pose), 'target_grip': 0.5, 'timestamp': 0.0},
+        {'robot_command': CartesianPosition(pose=pose), 'target_grip': 0.6, 'timestamp': 0.1},
+    ]
+    session = Recorder(tmp_path).tap('t').wrap(_TrackingPolicy(actions)).new_session()
+    result = session({'x': 1.0, 'wall_time_ns': 1})
+    assert result[0]['robot_command'] is actions[0]['robot_command']  # unchanged on return
 
 
-def test_full_pipeline(tmp_path):
-    policy = _make_codec(tmp_path, meta={'action_fps': 10.0}).wrap(_TrackingPolicy([{'v': i} for i in range(3)]))
-    policy.reset()
+def test_handles_none_actions(tmp_path):
+    class _NoneSession(Session):
+        def __call__(self, obs):
+            return None
 
-    result = policy.select_action({'camera': np.zeros((4, 4, 3), dtype=np.uint8), 'grip': 0.5})
-    assert len(result) == 3
-    assert all('decoded' in r for r in result)
+    class _NonePolicy(Policy):
+        def new_session(self, context=None):
+            return _NoneSession()
+
+    session = Recorder(tmp_path).tap('t').wrap(_NonePolicy()).new_session()
+    assert session({'x': 1.0}) is None
+    assert session._step == 1
+
+
+def test_two_taps_share_one_file_per_episode(tmp_path):
+    rec = Recorder(tmp_path)
+    policy = (rec.tap('raw') | rec.tap('server')).wrap(_TrackingPolicy())
+
+    session = policy.new_session()
+    assert len(list(tmp_path.glob('*.rrd'))) == 1
+    assert rec._live == 2
+
+    session.close()
+    assert rec._live == 0
+
+    policy.new_session()
+    assert len(list(tmp_path.glob('*.rrd'))) == 2
+
+
+def test_two_taps_log_both_seams(tmp_path):
+    rec = Recorder(tmp_path)
+    actions = [{'v': 1.0, 'timestamp': 0.0}]
+    policy = (rec.tap('raw') | rec.tap('server')).wrap(_TrackingPolicy(actions))
+    session = policy.new_session()
+    session({'camera': np.zeros((4, 4, 3), dtype=np.uint8), 'wall_time_ns': 1})
+
+    assert 'raw/camera' in rec._image_paths
+    assert 'server/camera' in rec._image_paths
     assert len(list(tmp_path.glob('*.rrd'))) == 1
 
 
-def test_recording_codec_none_inner_identity(tmp_path):
-    codec = RecordingCodec(None, tmp_path)
+def test_timeline_values_captured_once_and_carried(tmp_path):
+    rec = Recorder(tmp_path)
+    inner = _CapturingPolicy(rec, [{'v': 1.0, 'timestamp': 0.0}])
+    policy = (rec.tap('raw') | rec.tap('server')).wrap(inner)
+    session = policy.new_session()
 
-    assert codec.encode({'x': 1}) == {'x': 1}
-    assert codec.decode({'y': 2}) == {'y': 2}
-    assert codec.decode([{'a': 1}, {'b': 2}]) == [{'a': 1}, {'b': 2}]
-    assert codec.meta == {}
-    assert codec.dummy_encoded() == {}
-    assert codec.dummy_encoded({'z': 3}) == {'z': 3}
-    assert isinstance(codec.training_encoder, Derive)
+    session({'wall_time_ns': 111, 'inference_time_ns': 222, 'x': 1.0})
 
-
-def test_recording_codec_none_inner_wrap(tmp_path):
-    codec = RecordingCodec(None, tmp_path)
-    actions = [{'v': 1}, {'v': 2}]
-    policy = codec.wrap(_TrackingPolicy(actions))
-    assert isinstance(policy, _RecordingPolicy)
-
-    policy.reset()
-    result = policy.select_action({'x': 1.0})
-    assert result == actions
-    assert len(list(tmp_path.glob('*.rrd'))) == 1
+    # Both taps entered before the inner session ran, and both share the values
+    # captured once from the raw obs at the outermost tap.
+    assert inner.last_session.seen_depth == 2
+    assert inner.last_session.seen_timeline_values == {'wall_time': 111, 'inference_time': 222}
+    # Per-inference context is cleared once the outermost tap returns.
+    assert rec._timeline_values == {}
+    assert rec._depth == 0
 
 
-def test_session_none_inner_identity(tmp_path):
-    rec = rr.RecordingStream(application_id='test')
-    rec.save(str(tmp_path / 'test.rrd'))
-    session = _RecordingSession(None, rec, action_fps=10.0)
+def test_partial_timelines_only_set_present_keys(tmp_path):
+    rec = Recorder(tmp_path)
+    inner = _CapturingPolicy(rec, [{'v': 1.0, 'timestamp': 0.0}])
+    session = rec.tap('raw').wrap(inner).new_session()
 
-    encoded = session.encode({'x': 1.0, 'img': np.zeros((4, 4, 3), dtype=np.uint8)})
-    assert encoded == {'x': 1.0, 'img': encoded['img']}
-
-    single = session.decode({'v': 0})
-    assert single == {'v': 0}
-
-    decoded = session.decode([{'v': 1}, {'v': 2}])
-    assert decoded == [{'v': 1}, {'v': 2}]
-
-    assert session.meta == {}
-    assert session.dummy_encoded() == {}
-    assert session.dummy_encoded({'z': 1}) == {'z': 1}
-    assert isinstance(session.training_encoder, Derive)
+    session({'wall_time_ns': 555, 'x': 1.0})  # no inference_time_ns
+    assert inner.last_session.seen_timeline_values == {'wall_time': 555}
 
 
-def test_session_none_inner_logs_input_and_model_only(tmp_path):
-    rec = rr.RecordingStream(application_id='test')
-    rec.save(str(tmp_path / 'test.rrd'))
-    session = _RecordingSession(None, rec, action_fps=10.0)
+def test_action_chunk_arrays_stacks_fields():
+    actions = [
+        {'joint_position': np.zeros(7, dtype=np.float32), 'target_grip': 0.5, 'timestamp': 0.0},
+        {'joint_position': np.ones(7, dtype=np.float32), 'target_grip': 0.6, 'timestamp': 0.1},
+        {'joint_position': np.full(7, 2.0, dtype=np.float32), 'target_grip': 0.7, 'timestamp': 0.2},
+    ]
+    arrays = dict(action_chunk_arrays(actions))
+    assert arrays['joint_position'].shape == (3, 7)
+    assert arrays['target_grip'].shape == (3,)
+    # timestamp is stored as int64 nanoseconds (relative seconds at the tap).
+    assert arrays['timestamp'].dtype == np.int64
+    np.testing.assert_array_equal(arrays['timestamp'], [0, 100_000_000, 200_000_000])
 
-    session.encode({'grip': 0.5, 'camera': np.zeros((4, 4, 3), dtype=np.uint8)})
-    # input paths should be logged
-    assert len(session._image_paths) > 0 or len(session._numeric_paths) > 0
 
-    input_paths = session._image_paths + session._numeric_paths
-    assert all('input' in p for p in input_paths)
-    # no 'encoded' paths since inner is None
-    assert not any('encoded' in p for p in input_paths)
+def test_action_chunk_arrays_groups_commands_by_type():
+    pose = Transform3D(translation=np.array([0.1, 0.2, 0.3], dtype=np.float32), rotation=Rotation.identity)
+    actions = [
+        {'robot_command': CartesianPosition(pose=pose), 'timestamp': 0.0},
+        {'robot_command': CartesianPosition(pose=pose), 'timestamp': 0.1},
+    ]
+    arrays = dict(action_chunk_arrays(actions))
+    # Heterogeneous commands land under {key}/{type}/{wire_field}, one homogeneous array each.
+    assert 'robot_command/cartesian_pos/pose' in arrays
+    assert arrays['robot_command/cartesian_pos/pose'].shape[0] == 2
+    assert arrays['timestamp'].shape == (2,)
 
-    session.decode([{'action': np.array([1.0])}])
-    all_paths = session._image_paths + session._numeric_paths
-    assert any('model' in p for p in all_paths)
-    assert not any('decoded' in p for p in all_paths)
+
+def test_action_chunk_arrays_skips_non_numeric():
+    arrays = dict(action_chunk_arrays([{'note': 'hello', 'timestamp': 0.0}]))
+    assert 'note' not in arrays
+    assert 'timestamp' in arrays
+
+
+def test_concurrent_recorders_write_separate_files(tmp_path):
+    """Two overlapping recorders (e.g. one per websocket session) must not share a
+    stream or collide on filenames."""
+    rec_a = Recorder(tmp_path)
+    rec_b = Recorder(tmp_path)
+    rec_a.tap('inference').wrap(_TrackingPolicy()).new_session()
+    rec_b.tap('inference').wrap(_TrackingPolicy()).new_session()
+
+    assert rec_a._stream is not rec_b._stream
+    assert len(list(tmp_path.glob('*.rrd'))) == 2

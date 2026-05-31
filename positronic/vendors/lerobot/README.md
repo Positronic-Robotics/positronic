@@ -39,7 +39,7 @@ cd docker && docker compose run --rm lerobot-train full_finetune \
   --num_train_steps=50000
 
 # 3. Serve
-cd docker && docker compose run --rm --service-ports lerobot-server \
+cd docker && docker compose run --rm --service-ports lerobot-server serve \
   --checkpoints_dir=~/checkpoints/lerobot/my_task_v1/ \
   --codec=@positronic.vendors.lerobot.codecs.ee
 
@@ -93,7 +93,7 @@ Two training modes are available:
 ### Inference Server Configuration
 
 ```bash
-cd docker && docker compose run --rm --service-ports lerobot-server \
+cd docker && docker compose run --rm --service-ports lerobot-server serve \
   --checkpoints_dir=~/checkpoints/lerobot/my_task_v1/ \
   --codec=@positronic.vendors.lerobot.codecs.ee \
   --port=8000
@@ -106,6 +106,10 @@ cd docker && docker compose run --rm --service-ports lerobot-server \
 | `--codec` | Codec (must match training) | `ee` | `joints` |
 | `--port` | Server port | `8000` | `8001` |
 | `--host` | Server host | `0.0.0.0` | Binds to all interfaces |
+| `--recording_dir` | Directory for server-side inference recordings | `None` | `s3://inference/...` |
+| `--idle_timeout_min` | Shut down after this many idle minutes | `None` | `30` |
+
+**Presets:** Besides `serve`, the server exposes a `phail` preset with pre-configured `checkpoints_dir`/`recording_dir` (e.g. `lerobot-server phail`).
 
 ## See Also
 

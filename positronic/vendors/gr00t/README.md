@@ -2,7 +2,7 @@
 
 ## What is GR00T?
 
-cGR00T is [NVIDIA's](https://developer.nvidia.com/isaac/groot) generalist robot foundation model for versatile robot control.
+GR00T is [NVIDIA's](https://developer.nvidia.com/isaac/groot) generalist robot foundation model for versatile robot control.
 
 Positronic provides first-class support for GR00T including:
 - Training on single capable server GPU (~50GB)

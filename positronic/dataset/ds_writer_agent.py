@@ -103,11 +103,13 @@ class StatefulSerializer:
     def __call__(self, value: Any) -> Any | dict[str, Any] | list['Timestamped']:
         raise NotImplementedError
 
-    def flush(self) -> list['Timestamped']:
+    def flush(self, now_ns: int | None = None) -> list['Timestamped']:
         """Drain any buffered samples at episode end (mirror of ``reset``).
 
-        Called once on ``STOP_EPISODE`` before the episode is finalized. The
-        default keeps stateless serializers a no-op.
+        Called once on ``STOP_EPISODE`` before the episode is finalized. ``now_ns``
+        is the episode-end time; serializers that buffer future-scheduled samples
+        use it to drop the un-executed tail. The default keeps stateless
+        serializers a no-op.
         """
         return []
 
@@ -248,8 +250,12 @@ class TrajectoryOverrideSerializer(StatefulSerializer):
         self._buffer = list(message)
         return committed
 
-    def flush(self) -> list[Timestamped]:
-        out = self._committable(self._buffer)
+    def flush(self, now_ns: int | None = None) -> list[Timestamped]:
+        # At episode end, commit only points already due (ts <= now_ns); the
+        # remaining future-scheduled tail never executed, so drop it. ``now_ns``
+        # is None only for callers wanting the legacy "commit everything".
+        points = self._buffer if now_ns is None else [(ts, v) for ts, v in self._buffer if ts <= now_ns]
+        out = self._committable(points)
         self._buffer = []
         return out
 
@@ -326,7 +332,7 @@ class DsWriterAgent(pimm.ControlSystem):
                 cmd_msg = self.command.read()
                 if cmd_msg.updated:
                     ep_writer, ep_counter, suspended = self._handle_command(
-                        cmd_msg.data, ep_writer, ep_counter, suspended
+                        cmd_msg.data, ep_writer, ep_counter, suspended, cmd_msg.ts
                     )
 
                 if ep_writer is not None and not suspended:
@@ -358,7 +364,9 @@ class DsWriterAgent(pimm.ControlSystem):
         finally:
             cmd_msg = self.command.read()
             if cmd_msg.updated:
-                ep_writer, ep_counter, suspended = self._handle_command(cmd_msg.data, ep_writer, ep_counter, suspended)
+                ep_writer, ep_counter, suspended = self._handle_command(
+                    cmd_msg.data, ep_writer, ep_counter, suspended, cmd_msg.ts
+                )
 
             if ep_writer is not None:
                 try:
@@ -367,7 +375,14 @@ class DsWriterAgent(pimm.ControlSystem):
                     ep_writer.__exit__(None, None, None)
                     logger.info(f'DsWriterAgent: [ABORT] Episode {ep_counter}')
 
-    def _handle_command(self, cmd: DsWriterCommand, ep_writer: EpisodeWriter | None, ep_counter: int, suspended: bool):
+    def _handle_command(
+        self,
+        cmd: DsWriterCommand,
+        ep_writer: EpisodeWriter | None,
+        ep_counter: int,
+        suspended: bool,
+        now_ns: int | None = None,
+    ):
         match cmd.type:
             case DsWriterCommandType.START_EPISODE:
                 if ep_writer is None:
@@ -384,7 +399,7 @@ class DsWriterAgent(pimm.ControlSystem):
             case DsWriterCommandType.STOP_EPISODE:
                 if ep_writer is not None:
                     for name, ser in self._serializers.items():
-                        for sample in ser.flush():
+                        for sample in ser.flush(now_ns):
                             _append(ep_writer, name, sample.value, sample.ts, None)
                     for k, v in cmd.static_data.items():
                         ep_writer.set_static(k, v)
@@ -407,6 +422,13 @@ class DsWriterAgent(pimm.ControlSystem):
                 if ep_writer is not None:
                     logger.info(f'DsWriterAgent: [SUSPEND] Episode {ep_counter}')
                     suspended = True
+                    # While suspended the loop skips inputs, so the harness's `[]` cancel
+                    # never reaches the serializers. Flush at the suspend time now: commit
+                    # samples already due and drop the un-executed future tail, so a later
+                    # STOP_EPISODE doesn't commit waypoints the robot never executed.
+                    for name, ser in self._serializers.items():
+                        for sample in ser.flush(now_ns):
+                            _append(ep_writer, name, sample.value, sample.ts, None)
                 else:
                     logger.warning('Episode not started, ignoring suspend command')
         return ep_writer, ep_counter, suspended

@@ -37,9 +37,9 @@ from positronic import wire
 from positronic.dataset.ds_writer_agent import TimeMode
 from positronic.dataset.local_dataset import LocalDataset, LocalDatasetWriter
 from positronic.drivers.roboarm import RobotStatus
-from positronic.drivers.roboarm.command import CartesianPosition, Recover, Reset, TrajectoryPlayer, to_wire
+from positronic.drivers.roboarm.command import CartesianPosition, Recover, Reset, TrajectoryPlayer
 from positronic.geom import Rotation, Transform3D
-from positronic.policy.base import Policy
+from positronic.policy.base import Policy, Session
 from positronic.policy.codec import ActionTiming
 from positronic.policy.harness import Directive, Harness
 from positronic.tests.testing_coutils import ManualDriver, drive_scheduler
@@ -61,6 +61,18 @@ CONTROL_PERIOD_S = 0.005  # fake robot/gripper sampling cadence (200 Hz)
 CAPTURED_SIGNALS = ('robot_state.ee_pose', 'robot_state.q', 'grip')
 
 
+class _ScriptedSession(Session):
+    def __call__(self, obs):
+        current = np.asarray(obs['robot_state.ee_pose'][:3], dtype=np.float32)
+        delta = TARGET_POS - current
+        chunk = []
+        for i in range(10):
+            step = current + delta * 0.5 * ((i + 1) / 10.0)
+            pose = Transform3D(translation=step.astype(np.float32), rotation=Rotation.identity)
+            chunk.append({'robot_command': CartesianPosition(pose=pose), 'target_grip': round(0.50 + 0.01 * i, 4)})
+        return chunk
+
+
 class ScriptedProportionalPolicy(Policy):
     """Pure proportional controller toward ``TARGET_POS``.
 
@@ -68,21 +80,8 @@ class ScriptedProportionalPolicy(Policy):
     clock, no images. Codec stamps/truncates; the harness anchors/schedules.
     """
 
-    def select_action(self, obs):
-        current = np.asarray(obs['robot_state.ee_pose'][:3], dtype=np.float32)
-        delta = TARGET_POS - current
-        chunk = []
-        for i in range(10):
-            step = current + delta * 0.5 * ((i + 1) / 10.0)
-            pose = Transform3D(translation=step.astype(np.float32), rotation=Rotation.identity)
-            chunk.append({
-                'robot_command': to_wire(CartesianPosition(pose=pose)),
-                'target_grip': round(0.50 + 0.01 * i, 4),
-            })
-        return chunk
-
-    def reset(self, context=None):
-        pass
+    def new_session(self, context=None):
+        return _ScriptedSession()
 
 
 class _FakeRobotState:

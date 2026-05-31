@@ -100,16 +100,16 @@ The OpenPI inference server wraps the OpenPI policy in a FastAPI server that pro
 
 ```bash
 # Default codec (ee)
-docker compose run --rm --service-ports -v ~/checkpoints:/checkpoints openpi-server \
+docker compose run --rm --service-ports -v ~/checkpoints:/checkpoints openpi-server serve \
   --checkpoints_dir=/checkpoints/openpi/pi05_positronic_lowmem/experiment_v1/
 
 # With joint feedback
-docker compose run --rm --service-ports -v ~/checkpoints:/checkpoints openpi-server \
+docker compose run --rm --service-ports -v ~/checkpoints:/checkpoints openpi-server serve \
   --codec=@positronic.vendors.openpi.codecs.ee_joints \
   --checkpoints_dir=/checkpoints/openpi/pi05_positronic_lowmem/experiment_v1/
 
 # DROID codec (for pretrained DROID models)
-docker compose run --rm --service-ports -v ~/checkpoints:/checkpoints openpi-server \
+docker compose run --rm --service-ports -v ~/checkpoints:/checkpoints openpi-server serve \
   --codec=@positronic.vendors.openpi.codecs.droid \
   --config_name=pi05_droid \
   --checkpoints_dir=/checkpoints/openpi/pi05_droid/experiment_v1/
@@ -143,10 +143,10 @@ The server exposes the following endpoints:
 
 **Message Protocol:**
 1. Client connects to WebSocket
-2. Server sends: `{'meta': {...}}` (checkpoint info, codec metadata)
+2. Server may stream `{'status': 'loading', ...}` updates while it downloads and starts the subprocess, then sends `{'status': 'ready', 'meta': {...}}` (checkpoint info, codec metadata)
 3. For each inference step:
    - Client sends: serialized observation dict
-   - Server responds: `{'result': action_dict}` or `{'error': error_message}`
+   - Server responds: `{'result': [<action_dict>, ...]}` (a **list** of action dicts) or `{'error': error_message}`
 
 ### Example Client Connection
 
@@ -157,11 +157,21 @@ from positronic.utils.serialization import serialise, deserialise
 # Connect to server
 ws = connect('ws://localhost:8000/api/v1/session')
 
-# Receive metadata
-metadata = deserialise(ws.recv())
-print(f"Connected to checkpoint: {metadata['meta']['checkpoint_id']}")
+# Status handshake: the server streams 'loading' updates while it downloads the
+# checkpoint and starts the OpenPI subprocess. Read messages until it is ready.
+while True:
+    message = deserialise(ws.recv())
+    if message.get('status') == 'ready':
+        meta = message['meta']
+        break
+    if message.get('status') in ('loading', 'waiting'):
+        print(f"Server status: {message.get('message', message['status'])}")
+        continue
+    raise RuntimeError(f"Unexpected server response: {message}")
 
-# Send observation and receive action
+print(f"Connected to checkpoint: {meta['checkpoint_id']}")
+
+# Send observation and receive actions
 observation = {
     'robot_state.ee_pose': [0.1, 0.2, 0.3, 0, 0, 0, 1],
     'grip': [0.5],
@@ -170,7 +180,7 @@ observation = {
 }
 ws.send(serialise(observation))
 response = deserialise(ws.recv())
-action = response['result']
+actions = response['result']  # list of action dicts (one per action in the chunk)
 ```
 
 ## 5. Run Inference
@@ -237,7 +247,7 @@ uv run --locked positronic-inference sim \
 
 ### Subprocess startup timeout
 
-**Problem:** "OpenPI subprocess did not become ready within 120s"
+**Problem:** "OpenPI subprocess did not become ready within 300s"
 
 **Solutions:**
 1. First startup may be slow (model download, loading weights)

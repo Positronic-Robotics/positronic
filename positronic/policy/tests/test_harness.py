@@ -1,4 +1,3 @@
-import time
 from functools import partial
 
 import numpy as np
@@ -11,10 +10,19 @@ from positronic.drivers import roboarm
 from positronic.drivers.roboarm import RobotStatus
 from positronic.drivers.roboarm.command import CartesianPosition, Recover, Reset, from_wire, to_wire
 from positronic.geom import Rotation, Transform3D
-from positronic.policy.base import Policy
+from positronic.policy.base import Policy, Session
 from positronic.policy.codec import ActionTimestamp
 from positronic.policy.harness import Directive, DirectiveType, Harness
 from positronic.tests.testing_coutils import ManualDriver, RecordingEmitter, drive_scheduler
+
+
+class _SpySession(Session):
+    def __init__(self, policy):
+        self._policy = policy
+
+    def __call__(self, obs):
+        self._policy.last_obs = obs
+        return [{'robot_command': self._policy.command, 'target_grip': self._policy.target_grip, 'timestamp': 0.0}]
 
 
 class SpyPolicy(Policy):
@@ -25,21 +33,32 @@ class SpyPolicy(Policy):
         self.command = command
         self.target_grip = float(target_grip)
         self.last_obs: dict[str, object] | None = None
+        self.reset_calls: int = 0
+        self.last_reset_context = None
 
-    def select_action(self, obs: dict[str, object]) -> dict[str, object]:
-        self.last_obs = obs
-        return {'robot_command': to_wire(self.command), 'target_grip': self.target_grip}
-
-    def reset(self, context=None) -> None:
-        self.reset_calls = getattr(self, 'reset_calls', 0) + 1
+    def new_session(self, context=None):
+        self.reset_calls += 1
         self.last_reset_context = context
+        return _SpySession(self)
+
+
+class _StubSession(Session):
+    def __init__(self, policy):
+        self._policy = policy
+        self._meta = dict(policy._meta)
+
+    def __call__(self, obs):
+        self._policy.last_obs = obs
+        self._policy.observations.append(obs)
+        return [{'robot_command': self._policy.command, 'target_grip': self._policy.target_grip, 'timestamp': 0.0}]
+
+    @property
+    def meta(self):
+        return self._meta
 
 
 class StubPolicy(Policy):
-    """Reusable policy stub for tests.
-
-    Compatible with `positronic.policy.harness.Harness`: returns wire-format robot commands + target grip.
-    """
+    """Reusable policy stub for tests."""
 
     def __init__(
         self,
@@ -62,14 +81,27 @@ class StubPolicy(Policy):
     def meta(self) -> dict[str, object]:
         return self._meta
 
-    def select_action(self, obs: dict[str, object]) -> dict[str, object]:
-        self.last_obs = obs
-        self.observations.append(obs)
-        return {'robot_command': to_wire(self.command), 'target_grip': self.target_grip}
-
-    def reset(self, context=None) -> None:
+    def new_session(self, context=None):
         self.reset_calls += 1
         self.last_reset_context = context
+        return _StubSession(self)
+
+
+class _ChunkSession(Session):
+    def __init__(self, policy):
+        self._policy = policy
+
+    def __call__(self, obs):
+        self._policy.counter += 1
+        dt = 0.005
+        return [
+            {
+                'robot_command': self._policy.command,
+                'target_grip': self._policy.counter * 100.0 + i,
+                'timestamp': i * dt,
+            }
+            for i in range(10)
+        ]
 
 
 class ChunkPolicy(StubPolicy):
@@ -79,12 +111,10 @@ class ChunkPolicy(StubPolicy):
         super().__init__(*args, **kwargs)
         self.counter = 0
 
-    def select_action(self, obs):
-        self.counter += 1
-        return [
-            {'robot_command': to_wire(self.command), 'target_grip': self.counter * 100.0 + i, 'timestamp': 0.0}
-            for i in range(10)
-        ]
+    def new_session(self, context=None):
+        self.reset_calls += 1
+        self.last_reset_context = context
+        return _ChunkSession(self)
 
 
 class FakeRobotState:
@@ -170,18 +200,37 @@ def _all_grips(p):
     return [g for _, g in msg.data]
 
 
+def _emitted_commands(recorder):
+    """All robot commands across a recorder's non-empty emitted trajectories."""
+    return [cmd for _ts, traj in recorder.emitted if traj for _t, cmd in traj]
+
+
+def _emitted_grips(recorder):
+    """All grip targets across a recorder's non-empty emitted trajectories."""
+    return [g for _ts, traj in recorder.emitted if traj for _t, g in traj]
+
+
 @pytest.mark.timeout(3.0)
 def test_harness_emits_cartesian_move(world, clock):
     pose = Transform3D(translation=np.array([0.4, 0.5, 0.6], dtype=np.float32), rotation=Rotation.identity)
     policy = SpyPolicy(command=CartesianPosition(pose=pose), target_grip=0.33)
     harness = Harness(policy)
-    p = _pair_all(world, harness)
+    cmd_recorder = RecordingEmitter()
+    grip_recorder = RecordingEmitter()
+    harness.robot_commands._bind(cmd_recorder)
+    harness.target_grip._bind(grip_recorder)
+    harness.ds_command._bind(RecordingEmitter())
+
+    frame_em = world.pair(harness.frames['image.cam'])
+    robot_em = world.pair(harness.robot_state)
+    grip_em = world.pair(harness.gripper_state)
+    directive_em = world.pair(harness.directive)
 
     robot_state = make_robot_state([0.1, 0.2, 0.3], [0.4, 0.5, 0.6])
 
     driver = ManualDriver([
-        (partial(p['directive_em'].emit, Directive.RUN(task='stack-blocks')), 0.0),
-        (partial(emit_ready_payload, p['frame_em'], p['robot_em'], p['grip_em'], robot_state), 0.01),
+        (partial(directive_em.emit, Directive.RUN(task='stack-blocks')), 0.0),
+        (partial(emit_ready_payload, frame_em, robot_em, grip_em, robot_state), 0.01),
         (None, 0.05),
     ])
 
@@ -198,12 +247,16 @@ def test_harness_emits_cartesian_move(world, clock):
     assert obs['grip'] == pytest.approx(0.25)
     assert obs['task'] == 'stack-blocks'
 
-    cmd = _last_command(p)
+    # Last non-empty command (a trailing ``[]`` cancel is emitted on shutdown).
+    cmds = _emitted_commands(cmd_recorder)
+    assert cmds, 'no robot command emitted'
+    cmd = cmds[-1]
     assert isinstance(cmd, roboarm.command.CartesianPosition)
     np.testing.assert_allclose(cmd.pose.translation, pose.translation)
     np.testing.assert_allclose(cmd.pose.rotation.as_quat, pose.rotation.as_quat)
 
-    assert _last_grip(p) == pytest.approx(0.33)
+    grips = _emitted_grips(grip_recorder)
+    assert grips and grips[-1] == pytest.approx(0.33)
 
 
 @pytest.mark.timeout(3.0)
@@ -211,23 +264,32 @@ def test_harness_waits_for_complete_inputs(world, clock):
     pose = Transform3D(translation=np.array([0.4, 0.5, 0.6], dtype=np.float32), rotation=Rotation.identity)
     policy = SpyPolicy(command=CartesianPosition(pose=pose), target_grip=0.33)
     harness = Harness(policy)
-    p = _pair_all(world, harness)
+    cmd_recorder = RecordingEmitter()
+    grip_recorder = RecordingEmitter()
+    harness.robot_commands._bind(cmd_recorder)
+    harness.target_grip._bind(grip_recorder)
+    harness.ds_command._bind(RecordingEmitter())
+
+    frame_em = world.pair(harness.frames['image.cam'])
+    robot_em = world.pair(harness.robot_state)
+    grip_em = world.pair(harness.gripper_state)
+    directive_em = world.pair(harness.directive)
 
     assert len(harness.frames) == 1
 
     robot_state = make_robot_state([0.2, 0.0, -0.1], [0.7, 0.1, -0.2])
 
     def assert_no_outputs():
-        assert p['command_rx'].read() is None
-        assert p['grip_rx'].read() is None
+        assert not cmd_recorder.emitted
+        assert not grip_recorder.emitted
         assert policy.last_obs is None
 
     driver = ManualDriver([
-        (partial(p['directive_em'].emit, Directive.RUN(task='dummy-task')), 0.01),
-        (partial(p['robot_em'].emit, robot_state), 0.01),
-        (partial(p['grip_em'].emit, 0.25), 0.01),
+        (partial(directive_em.emit, Directive.RUN(task='dummy-task')), 0.01),
+        (partial(robot_em.emit, robot_state), 0.01),
+        (partial(grip_em.emit, 0.25), 0.01),
         (assert_no_outputs, 0.01),  # still missing a frame
-        (partial(emit_ready_payload, p['frame_em'], p['robot_em'], p['grip_em'], robot_state), 0.01),
+        (partial(emit_ready_payload, frame_em, robot_em, grip_em, robot_state), 0.01),
         (None, 0.01),
     ])
 
@@ -236,11 +298,14 @@ def test_harness_waits_for_complete_inputs(world, clock):
 
     assert policy.last_obs is not None
 
-    cmd = _last_command(p)
+    cmds = _emitted_commands(cmd_recorder)
+    assert cmds, 'no robot command emitted'
+    cmd = cmds[-1]
     assert isinstance(cmd, roboarm.command.CartesianPosition)
     np.testing.assert_allclose(cmd.pose.translation, pose.translation)
 
-    assert _last_grip(p) == pytest.approx(0.33)
+    grips = _emitted_grips(grip_recorder)
+    assert grips and grips[-1] == pytest.approx(0.33)
 
 
 @pytest.mark.timeout(3.0)
@@ -267,6 +332,48 @@ def test_run_emits_ds_start_with_meta(world, clock):
     assert meta['inference.policy.type'] == 'stub'
     assert meta['inference.policy.checkpoint'] == 'v1'
     assert meta['task'] == 'test'
+
+
+@pytest.mark.timeout(3.0)
+def test_episode_meta_includes_policy_static_meta(world, clock):
+    """Static fields exposed only via ``Policy.meta`` (empty ``Session.meta``) must
+    still reach episode metadata once the policy is wrapped."""
+
+    class _StaticMetaSession(Session):
+        def __init__(self, command):
+            self._command = command
+
+        def __call__(self, obs):
+            return [{'robot_command': self._command, 'target_grip': 0.0, 'timestamp': 0.0}]
+
+    class _StaticMetaPolicy(Policy):
+        def __init__(self):
+            pose = Transform3D(translation=np.array([0.4, 0.5, 0.6], dtype=np.float32), rotation=Rotation.identity)
+            self._command = CartesianPosition(pose=pose)
+
+        def new_session(self, context=None):
+            return _StaticMetaSession(self._command)  # Session.meta defaults to {}
+
+        @property
+        def meta(self):
+            return {'checkpoint': 'v1', 'type': 'static'}
+
+    harness = Harness(_StaticMetaPolicy())
+    p = _pair_all(world, harness)
+    robot_state = make_robot_state([0.1, 0.2, 0.3], [0.4, 0.5, 0.6])
+    driver = ManualDriver([
+        (partial(p['directive_em'].emit, Directive.RUN(task='t')), 0.0),
+        (partial(emit_ready_payload, p['frame_em'], p['robot_em'], p['grip_em'], robot_state), 0.01),
+        (None, 0.02),
+    ])
+    scheduler = world.start([harness, driver])
+    drive_scheduler(scheduler, clock=clock, steps=15)
+
+    starts = [c for c in _ds_commands(p) if c.type == DsWriterCommandType.START_EPISODE]
+    assert len(starts) == 1
+    meta = starts[0].static_data
+    assert meta['inference.policy.checkpoint'] == 'v1'
+    assert meta['inference.policy.type'] == 'static'
 
 
 @pytest.mark.timeout(3.0)
@@ -373,6 +480,148 @@ def test_run_calls_policy_reset_with_context(world, clock):
 
     assert policy.reset_calls == 1
     assert policy.last_reset_context == {'task': 'test-task'}
+
+
+@pytest.mark.timeout(3.0)
+def test_stop_cancels_in_flight_trajectory(world, clock):
+    """STOP must override buffered driver trajectories so devices hold position.
+
+    With trajectory-as-command the harness preloads each driver's
+    ``TrajectoryPlayer`` with the whole chunk. STOP only used to suspend the
+    dataset writer, so already-buffered waypoints would keep executing until
+    the chunk ended — a safety regression vs the queue-in-harness design.
+    """
+    policy = ChunkPolicy()
+    wrapped = ActionTimestamp(fps=5.0).wrap(policy)  # chunk spans 1.8 s — won't drain before STOP
+    harness = Harness(wrapped)
+
+    cmd_recorder = RecordingEmitter()
+    grip_recorder = RecordingEmitter()
+    harness.robot_commands._bind(cmd_recorder)
+    harness.target_grip._bind(grip_recorder)
+    harness.ds_command._bind(RecordingEmitter())
+
+    frame_em = world.pair(harness.frames['image.cam'])
+    robot_em = world.pair(harness.robot_state)
+    grip_em = world.pair(harness.gripper_state)
+    directive_em = world.pair(harness.directive)
+
+    robot_state = make_robot_state([0.1, 0.2, 0.3], [0.4, 0.5, 0.6])
+    script = [
+        (partial(directive_em.emit, Directive.RUN(task='t')), 0.0),
+        (partial(emit_ready_payload, frame_em, robot_em, grip_em, robot_state), 0.01),
+        (None, 0.1),  # let one chunk be inferred + buffered, well short of 1.8 s
+        (partial(directive_em.emit, Directive.STOP()), 0.0),
+        (None, 0.1),
+    ]
+    scheduler = world.start([harness, ManualDriver(script)])
+    drive_scheduler(scheduler, clock=clock, steps=200)
+
+    cmd_emits = [data for _ts, data in cmd_recorder.emitted]
+    grip_emits = [data for _ts, data in grip_recorder.emitted]
+    assert any(isinstance(d, list) and d for d in cmd_emits), 'expected a buffered chunk before STOP'
+    assert cmd_emits[-1] == [], f'STOP did not cancel robot_commands buffer: last={cmd_emits[-1]!r}'
+    assert grip_emits[-1] == [], f'STOP did not cancel target_grip buffer: last={grip_emits[-1]!r}'
+
+
+@pytest.mark.timeout(3.0)
+def test_finish_cancels_buffered_trajectory_before_stop_episode(world, clock):
+    """FINISH must cancel the recording's trajectory tail *before* `STOP_EPISODE`.
+
+    `STOP_EPISODE` calls `flush()` on `TrajectoryOverrideSerializer`, which
+    commits whatever is still buffered. The harness must emit `[]` on
+    `robot_commands`/`target_grip` first, so the serializer drops its tail and
+    canceled waypoints are not recorded.
+    """
+
+    class _LabeledRecorder(pimm.SignalEmitter):
+        def __init__(self, label, events):
+            self._label = label
+            self._events = events
+
+        def emit(self, data, ts: int = -1):
+            self._events.append((self._label, data))
+
+    events: list[tuple[str, object]] = []
+    policy = ChunkPolicy()
+    wrapped = ActionTimestamp(fps=5.0).wrap(policy)  # 1.8 s chunk — won't drain before FINISH
+    harness = Harness(wrapped)
+    harness.robot_commands._bind(_LabeledRecorder('robot_commands', events))
+    harness.target_grip._bind(_LabeledRecorder('target_grip', events))
+    harness.ds_command._bind(_LabeledRecorder('ds_command', events))
+
+    frame_em = world.pair(harness.frames['image.cam'])
+    robot_em = world.pair(harness.robot_state)
+    grip_em = world.pair(harness.gripper_state)
+    directive_em = world.pair(harness.directive)
+
+    robot_state = make_robot_state([0.1, 0.2, 0.3], [0.4, 0.5, 0.6])
+    script = [
+        (partial(directive_em.emit, Directive.RUN(task='t')), 0.0),
+        (partial(emit_ready_payload, frame_em, robot_em, grip_em, robot_state), 0.01),
+        (None, 0.1),
+        (partial(directive_em.emit, Directive.FINISH()), 0.0),
+        (None, 0.1),
+    ]
+    scheduler = world.start([harness, ManualDriver(script)])
+    drive_scheduler(scheduler, clock=clock, steps=200)
+
+    cancels = [i for i, (lbl, data) in enumerate(events) if lbl == 'robot_commands' and data == []]
+    stops = [
+        i
+        for i, (lbl, data) in enumerate(events)
+        if lbl == 'ds_command' and getattr(data, 'type', None) is DsWriterCommandType.STOP_EPISODE
+    ]
+    assert cancels, 'FINISH did not emit a cancel on robot_commands'
+    assert stops, 'FINISH did not emit STOP_EPISODE'
+    assert cancels[0] < stops[0], (
+        f'cancel ({cancels[0]}) must precede STOP_EPISODE ({stops[0]}); otherwise flush() commits canceled waypoints'
+    )
+
+
+@pytest.mark.timeout(3.0)
+def test_empty_chunk_cancels_both_robot_and_grip(world, clock):
+    """A session returning ``[]`` must cancel *both* driver buffers.
+
+    Empty action chunk is the session-level cancel signal (per the
+    ``Session.__call__`` contract). If only ``robot_commands`` gets ``[]`` while
+    ``target_grip`` is skipped, the gripper ``TrajectoryPlayer`` keeps draining
+    stale waypoints — a partial cancel that's worse than no cancel.
+    """
+
+    class _EmptyChunkSession(Session):
+        def __call__(self, obs):
+            return []
+
+    class EmptyChunkPolicy(Policy):
+        def new_session(self, context=None):
+            return _EmptyChunkSession()
+
+    harness = Harness(EmptyChunkPolicy())
+    cmd_recorder = RecordingEmitter()
+    grip_recorder = RecordingEmitter()
+    harness.robot_commands._bind(cmd_recorder)
+    harness.target_grip._bind(grip_recorder)
+    harness.ds_command._bind(RecordingEmitter())
+
+    frame_em = world.pair(harness.frames['image.cam'])
+    robot_em = world.pair(harness.robot_state)
+    grip_em = world.pair(harness.gripper_state)
+    directive_em = world.pair(harness.directive)
+
+    robot_state = make_robot_state([0.1, 0.2, 0.3], [0.4, 0.5, 0.6])
+    script = [
+        (partial(directive_em.emit, Directive.RUN(task='t')), 0.0),
+        (partial(emit_ready_payload, frame_em, robot_em, grip_em, robot_state), 0.01),
+        (None, 0.1),
+    ]
+    scheduler = world.start([harness, ManualDriver(script)])
+    drive_scheduler(scheduler, clock=clock, steps=200)
+
+    cmd_emits = [data for _ts, data in cmd_recorder.emitted]
+    grip_emits = [data for _ts, data in grip_recorder.emitted]
+    assert [] in cmd_emits, 'empty chunk did not cancel robot_commands buffer'
+    assert [] in grip_emits, 'empty chunk did not cancel target_grip buffer'
 
 
 @pytest.mark.timeout(3.0)
@@ -500,90 +749,15 @@ def test_robot_state_serializer_drops_resetting():
     assert Serializers.robot_state(state) is None
 
 
-class _SlowChunkPolicy(Policy):
-    """Returns an N-action chunk after sleeping ``latency_s`` wall-seconds in inference."""
+@pytest.mark.timeout(3.0)
+def test_recovery_cancels_gripper_buffer(world, clock):
+    """Entering recovery must cancel the gripper buffer, not just the arm.
 
-    def __init__(self, latency_s: float, n: int = 5) -> None:
-        self._latency_s = latency_s
-        self._n = n
-        pose = Transform3D(translation=np.array([0.4, 0.5, 0.6], dtype=np.float32), rotation=Rotation.identity)
-        self._cmd = CartesianPosition(pose=pose)
-
-    def select_action(self, obs):
-        time.sleep(self._latency_s)
-        return [{'robot_command': to_wire(self._cmd), 'target_grip': 0.0} for _ in range(self._n)]
-
-    def reset(self, context=None) -> None:
-        pass
-
-
-class _ClockStampedEmitter(pimm.SignalEmitter):
-    """Records the clock time at the moment of each emission."""
-
-    def __init__(self, clock) -> None:
-        self._clock = clock
-        self.emitted: list[tuple[int, object]] = []
-
-    def emit(self, data, ts: int = -1):
-        self.emitted.append((self._clock.now_ns(), data))
-
-
-def test_simulate_inference_chunk_not_scheduled_in_the_past(world, clock):
-    """A freshly inferred chunk's first waypoint must be scheduled at ~now, not in the past.
-
-    With ``simulate_inference`` the sim clock advances by the wall-clock inference
-    latency L during the blocking call. If the chunk is anchored to the
-    pre-inference clock time (``inference_time_ns`` captured before the call),
-    its first waypoint lands L seconds behind ``clock.now()`` by the time it is
-    emitted — the driver would then flush the first L*fps points in one tick and
-    the robot runs faster than real time. The contract: lag ≈ 0.
+    The Recover-only chunk carries no ``target_grip``; without an explicit cancel
+    the gripper ``TrajectoryPlayer`` keeps draining the interrupted chunk's grip
+    waypoints while the robot recovers.
     """
-    latency_s = 0.2
-    policy = _SlowChunkPolicy(latency_s=latency_s, n=5)
-    wrapped = ActionTimestamp(fps=10.0).wrap(policy)
-    harness = Harness(wrapped, simulate_inference=True)
-
-    cmd_em = _ClockStampedEmitter(clock)
-    harness.robot_commands._bind(cmd_em)
-    harness.target_grip._bind(RecordingEmitter())
-    harness.ds_command._bind(RecordingEmitter())
-
-    frame_em = world.pair(harness.frames['image.cam'])
-    robot_em = world.pair(harness.robot_state)
-    grip_em = world.pair(harness.gripper_state)
-    directive_em = world.pair(harness.directive)
-
-    robot_state = make_robot_state([0.1, 0.2, 0.3], [0.4, 0.5, 0.6])
-    script = [
-        (partial(directive_em.emit, Directive.RUN(task='t')), 0.0),
-        (partial(emit_ready_payload, frame_em, robot_em, grip_em, robot_state), 0.01),
-        (None, 0.5),
-    ]
-    scheduler = world.start([harness, ManualDriver(script)])
-    drive_scheduler(scheduler, clock=clock, steps=200)
-
-    assert cmd_em.emitted, 'harness emitted no trajectory'
-    emit_clock_ns, traj = cmd_em.emitted[0]
-    first_ts_ns = traj[0][0]
-    lag_s = (emit_clock_ns - first_ts_ns) / 1e9
-    assert lag_s == pytest.approx(0.0, abs=latency_s / 2), (
-        f'first waypoint scheduled {lag_s:.3f}s in the past (inference latency {latency_s}s) — '
-        'chunk anchored to the pre-inference clock instead of inference-finish'
-    )
-
-
-def test_stop_cancels_in_flight_trajectory(world, clock):
-    """STOP must override buffered driver trajectories so devices hold position.
-
-    With trajectory-as-command the harness preloads each driver's
-    ``TrajectoryPlayer`` with the whole chunk. STOP only used to suspend the
-    dataset writer, so already-buffered waypoints would keep executing until
-    the chunk ended — a safety regression vs the queue-in-harness design.
-    """
-    policy = ChunkPolicy()
-    wrapped = ActionTimestamp(fps=5.0).wrap(policy)  # chunk spans 1.8 s — won't drain before STOP
-    harness = Harness(wrapped)
-
+    harness = Harness(ChunkPolicy())
     cmd_recorder = RecordingEmitter()
     grip_recorder = RecordingEmitter()
     harness.robot_commands._bind(cmd_recorder)
@@ -595,48 +769,50 @@ def test_stop_cancels_in_flight_trajectory(world, clock):
     grip_em = world.pair(harness.gripper_state)
     directive_em = world.pair(harness.directive)
 
-    robot_state = make_robot_state([0.1, 0.2, 0.3], [0.4, 0.5, 0.6])
-    script = [
-        (partial(directive_em.emit, Directive.RUN(task='t')), 0.0),
-        (partial(emit_ready_payload, frame_em, robot_em, grip_em, robot_state), 0.01),
-        (None, 0.1),  # let one chunk be inferred + buffered, well short of 1.8 s
-        (partial(directive_em.emit, Directive.STOP()), 0.0),
-        (None, 0.1),
-    ]
-    scheduler = world.start([harness, ManualDriver(script)])
-    drive_scheduler(scheduler, clock=clock, steps=200)
+    state_ok = make_robot_state([0.1, 0.2, 0.3], [0.4, 0.5, 0.6], status=RobotStatus.AVAILABLE)
+    state_err = make_robot_state([0.1, 0.2, 0.3], [0.4, 0.5, 0.6], status=RobotStatus.ERROR)
 
-    cmd_emits = [data for _ts, data in cmd_recorder.emitted]
-    grip_emits = [data for _ts, data in grip_recorder.emitted]
-    assert any(isinstance(d, list) and d for d in cmd_emits), 'expected a buffered chunk before STOP'
-    assert cmd_emits[-1] == [], f'STOP did not cancel robot_commands buffer: last={cmd_emits[-1]!r}'
-    assert grip_emits[-1] == [], f'STOP did not cancel target_grip buffer: last={grip_emits[-1]!r}'
+    scheduler = world.start([harness])
+    directive_em.emit(Directive.RUN(task='t'))
+    drive_scheduler(scheduler, clock=clock, steps=1)
+    emit_ready_payload(frame_em, robot_em, grip_em, state_ok)
+    drive_scheduler(scheduler, clock=clock, steps=3)
+
+    cmd_before = len(cmd_recorder.emitted)
+    grip_before = len(grip_recorder.emitted)
+    robot_em.emit(state_err)
+    drive_scheduler(scheduler, clock=clock, steps=2)
+
+    new_cmds = [data for _ts, data in cmd_recorder.emitted[cmd_before:]]
+    new_grips = [data for _ts, data in grip_recorder.emitted[grip_before:]]
+    assert any(isinstance(t, list) and t and isinstance(t[-1][1], Recover) for t in new_cmds), (
+        'recovery did not emit a Recover on robot_commands'
+    )
+    assert [] in new_grips, 'recovery did not cancel the gripper buffer'
 
 
-def test_finish_cancels_buffered_trajectory_before_stop_episode(world, clock):
-    """FINISH must cancel the recording's trajectory tail *before* `STOP_EPISODE`.
+@pytest.mark.timeout(3.0)
+def test_shutdown_cancels_trajectory_before_stop(world, clock):
+    """Shutdown while recording must cancel buffered trajectories before STOP_EPISODE.
 
-    `STOP_EPISODE` calls `flush()` on `TrajectoryOverrideSerializer`, which
-    commits whatever is still buffered. The harness must emit `[]` on
-    `robot_commands`/`target_grip` first, so the serializer drops its tail and
-    canceled waypoints are not recorded.
+    ``STOP_EPISODE`` flushes ``TrajectoryOverrideSerializer``; without a prior
+    cancel it would commit the unexecuted tail of an in-flight chunk (the
+    FINISH/RUN paths already cancel first).
     """
+    events: list[tuple[str, object]] = []
 
     class _LabeledRecorder(pimm.SignalEmitter):
-        def __init__(self, label, events):
+        def __init__(self, label):
             self._label = label
-            self._events = events
 
         def emit(self, data, ts: int = -1):
-            self._events.append((self._label, data))
+            events.append((self._label, data))
 
-    events: list[tuple[str, object]] = []
-    policy = ChunkPolicy()
-    wrapped = ActionTimestamp(fps=5.0).wrap(policy)  # 1.8 s chunk — won't drain before FINISH
+    wrapped = ActionTimestamp(fps=5.0).wrap(ChunkPolicy())  # 1.8 s chunk — won't drain before shutdown
     harness = Harness(wrapped)
-    harness.robot_commands._bind(_LabeledRecorder('robot_commands', events))
-    harness.target_grip._bind(_LabeledRecorder('target_grip', events))
-    harness.ds_command._bind(_LabeledRecorder('ds_command', events))
+    harness.robot_commands._bind(_LabeledRecorder('robot_commands'))
+    harness.target_grip._bind(_LabeledRecorder('target_grip'))
+    harness.ds_command._bind(_LabeledRecorder('ds_command'))
 
     frame_em = world.pair(harness.frames['image.cam'])
     robot_em = world.pair(harness.robot_state)
@@ -644,14 +820,14 @@ def test_finish_cancels_buffered_trajectory_before_stop_episode(world, clock):
     directive_em = world.pair(harness.directive)
 
     robot_state = make_robot_state([0.1, 0.2, 0.3], [0.4, 0.5, 0.6])
-    script = [
+    # RUN + a complete obs buffers a chunk; the driver then ends, which makes the
+    # world signal shutdown while still recording — exercising the run() finalizer.
+    driver = ManualDriver([
         (partial(directive_em.emit, Directive.RUN(task='t')), 0.0),
         (partial(emit_ready_payload, frame_em, robot_em, grip_em, robot_state), 0.01),
         (None, 0.1),
-        (partial(directive_em.emit, Directive.FINISH()), 0.0),
-        (None, 0.1),
-    ]
-    scheduler = world.start([harness, ManualDriver(script)])
+    ])
+    scheduler = world.start([harness, driver])
     drive_scheduler(scheduler, clock=clock, steps=200)
 
     cancels = [i for i, (lbl, data) in enumerate(events) if lbl == 'robot_commands' and data == []]
@@ -660,8 +836,6 @@ def test_finish_cancels_buffered_trajectory_before_stop_episode(world, clock):
         for i, (lbl, data) in enumerate(events)
         if lbl == 'ds_command' and getattr(data, 'type', None) is DsWriterCommandType.STOP_EPISODE
     ]
-    assert cancels, 'FINISH did not emit a cancel on robot_commands'
-    assert stops, 'FINISH did not emit STOP_EPISODE'
-    assert cancels[0] < stops[0], (
-        f'cancel ({cancels[0]}) must precede STOP_EPISODE ({stops[0]}); otherwise flush() commits canceled waypoints'
-    )
+    assert cancels, 'shutdown did not cancel robot_commands'
+    assert stops, 'shutdown did not emit STOP_EPISODE'
+    assert cancels[0] < stops[0], 'cancel must precede STOP_EPISODE on shutdown'

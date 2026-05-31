@@ -39,14 +39,15 @@ Establishes an inference session with a **specific** model.
 ### WebSocket Flow
 
 #### 1. Handshake
-Upon connection, the server sends a metadata packet:
+Upon connection, the server sends a ready packet with metadata:
 
 ```json
 {
+  "status": "ready",
   "meta": {
     "type": "lerobot",
     "host": "localhost",
-    "port": "8000",
+    "port": 8000,
     "checkpoint_path": "~/checkpoints/lerobot/experiment_v1",
     "checkpoint_id": "10000",
     "image_sizes": [224, 224],
@@ -55,6 +56,8 @@ Upon connection, the server sends a metadata packet:
   }
 }
 ```
+
+The client ignores all messages until it sees `status == "ready"` (status updates like `loading`/`waiting` may arrive first).
 
 This metadata tells the client:
 - Which checkpoint is loaded
@@ -72,7 +75,7 @@ Some models may take a long time to load (e.g., OpenPI and GR00T can take 120-30
 }
 ```
 
-The client should display these status updates to the user. Once loading completes, the server sends the metadata packet.
+The client should display these status updates to the user. Once loading completes, the server sends the `status: "ready"` packet shown above.
 
 #### 3. Inference Loop
 
@@ -88,7 +91,10 @@ After handshake, the client streams observations and receives actions:
 }
 ```
 
-**Server → Client (Action):**
+**Server → Client (Actions):**
+
+`result` is a **list** of action dicts — one per action in the predicted chunk (or `null` if the model produced no actions):
+
 ```json
 {
   "result": [{
@@ -133,6 +139,8 @@ uv run positronic-inference sim \
 **Model Switching:** Compare multiple models without restarting the server by using specific session endpoints.
 
 **Status Streaming:** Long model loads are handled gracefully with progress updates.
+
+**Server-side recording:** Servers accept an optional `recording_dir`. When set, each WebSocket session writes a rerun `.rrd` file that taps both sides of the codec: `raw` captures the obs/action at the wire boundary, and `inference` captures the encoded observation and raw model output.
 
 **Python Client:** We provide a Python client (`positronic.offboard.client.InferenceClient`) that handles the WebSocket protocol automatically. While the API is currently in alpha and may change, we'll do our best to maintain backward compatibility for the inference client.
 

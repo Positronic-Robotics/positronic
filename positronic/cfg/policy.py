@@ -2,7 +2,7 @@ import configuronic as cfn
 import pos3
 
 from positronic.cfg import codecs
-from positronic.policy import Codec, Policy
+from positronic.policy import ActionHorizon, Codec, Policy, Recorder, RemotePolicy
 from positronic.utils import get_latest_checkpoint
 
 
@@ -80,15 +80,16 @@ def remote(
     secure: bool = False,
     recording_dir: str | None = None,
 ):
-    from positronic.policy.codec import ActionHorizon, RecordingCodec
-    from positronic.policy.remote import RemotePolicy
-
     effective_resize = None if codec and codec.meta.get('image_sizes') else resize
     policy = RemotePolicy(host, port, effective_resize, model_id=model_id, headers=headers, secure=secure)
     if horizon_sec is not None:
         codec = ActionHorizon(horizon_sec) | codec if codec else ActionHorizon(horizon_sec)
     if recording_dir is not None:
-        codec = RecordingCodec(codec, pos3.sync(recording_dir))
+        rec = Recorder(pos3.sync(recording_dir))
+        if codec is None:
+            # No codec: the raw and server boundaries coincide, so a single tap.
+            return rec.tap('raw').wrap(policy)
+        return (rec.tap('raw') | codec | rec.tap('server')).wrap(policy)
     return codec.wrap(policy) if codec else policy
 
 
@@ -118,34 +119,36 @@ def weighted_remote(
     if not host:
         return None
 
-    from positronic.policy.codec import ActionHorizon, RecordingCodec
-    from positronic.policy.remote import RemotePolicy
-
     effective_resize = None if codec and codec.meta.get('image_sizes') else resize
     policy = RemotePolicy(host, port, effective_resize, model_id=model_id, headers=headers, secure=secure)
     if horizon_sec is not None:
         codec = ActionHorizon(horizon_sec) | codec if codec else ActionHorizon(horizon_sec)
     if recording_dir is not None:
-        codec = RecordingCodec(codec, pos3.sync(recording_dir))
+        rec = Recorder(pos3.sync(recording_dir))
+        if codec is None:
+            # No codec: the raw and server boundaries coincide, so a single tap.
+            return rec.tap('raw').wrap(policy), weight
+        return (rec.tap('raw') | codec | rec.tap('server')).wrap(policy), weight
     return (codec.wrap(policy) if codec else policy), weight
 
 
-@cfn.config(balance=2, group_fields=None)
-def balanced(balance: int, group_fields: list[str] | None):
+@cfn.config(balance=2)
+def balanced(balance: int):
     from positronic.policy.sampler import BalancedSampler
 
-    return BalancedSampler(balance=balance, group_fields=group_fields)
+    return BalancedSampler(balance=balance)
 
 
 @cfn.config(
-    groot=weighted_remote,
-    openpi=weighted_remote,
-    act=weighted_remote,
-    smolvla=weighted_remote,
+    groot=weighted_remote.copy(),
+    openpi=weighted_remote.copy(),
+    act=weighted_remote.copy(),
+    smolvla=weighted_remote.copy(),
     extra=None,
     sampler=None,
+    group_fields=None,
 )
-def production(groot, openpi, act, smolvla, extra, sampler):
+def production(groot, openpi, act, smolvla, extra, sampler, group_fields):
     from positronic.policy import SampledPolicy
 
     entries = [e for e in [groot, openpi, act, smolvla] if e is not None]
@@ -154,12 +157,12 @@ def production(groot, openpi, act, smolvla, extra, sampler):
     if not entries:
         raise ValueError('At least one vendor policy must be enabled')
     policies, weights = zip(*entries, strict=False)
-    return SampledPolicy(*policies, weights=weights, sampler=sampler)
+    return SampledPolicy(*policies, weights=weights, sampler=sampler, group_fields=group_fields)
 
 
 @cfn.config()
 def phail_single(hostname, w_openpi=1.0, w_groot=1.0, w_act=1.0):
-    from positronic.policy import RemotePolicy, SampledPolicy
+    from positronic.policy import SampledPolicy
 
     openpi = RemotePolicy(hostname, 8000, resize=640)
     groot = RemotePolicy(hostname, 8001, resize=640)
@@ -178,7 +181,7 @@ phail_multiple = production.override(**{
     'openpi.host': 'vm-openpi',
     'openpi.port': 8000,
     'sampler': balanced,
-    'sampler.group_fields': ['task', 'eval.object', 'eval.tote_placement', 'eval.external_camera'],
+    'group_fields': ['task', 'eval.object', 'eval.tote_placement', 'eval.external_camera'],
 })
 
 
@@ -190,5 +193,5 @@ spoons_ablation = production.override(**{
     'act.host': 'vm-openpi',
     'act.port': 8002,
     'sampler': balanced,
-    'sampler.group_fields': ['task', 'eval.object', 'eval.tote_placement', 'eval.external_camera'],
+    'group_fields': ['task', 'eval.object', 'eval.tote_placement', 'eval.external_camera'],
 })

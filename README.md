@@ -82,7 +82,7 @@ Positronic supports state-of-the-art foundation models with first-class workflow
 | **[LeRobot SmolVLA](positronic/vendors/lerobot/README.md)** | VLM-based, multi-task | Consumer GPU | Consumer GPU | Multi-task manipulation with language |
 | **[LeRobot ACT](positronic/vendors/lerobot_0_3_3/README.md)** | Single-task, efficient | Consumer GPU | Consumer GPU | Specific manipulation tasks |
 
-**Recommendation**: Start with SmolVLA or ACT if you want something quick and low-cost. Progress to GR00T or OpenPI if you need more capable models. Positronic makes switching easy.
+**Recommendation**: Start with ACT if you want something quick and low-cost. Progress to GR00T or OpenPI if you need more capable models. Positronic makes switching easy.
 
 ### Two LeRobot Versions
 
@@ -248,11 +248,11 @@ Run trained policies through the [inference script](positronic/inference.py):
 
 ```bash
 uv run --locked positronic-inference sim \
-    --policy=@positronic.cfg.policy.openpi_absolute \
-    --policy.base.checkpoints_dir=~/checkpoints/openpi/<run_id> \
+    --policy=@positronic.cfg.policy.act_absolute \
+    --policy.base.checkpoints_dir=~/checkpoints/lerobot/<run_id> \
     --driver.simulation_time=60 \
     --driver.show_gui=True \
-    --output_dir=~/datasets/inference_logs/stack_cubes_pi0
+    --output_dir=~/datasets/inference_logs/stack_cubes_act
 ```
 
 **Remote inference** (run policy on a different machine):

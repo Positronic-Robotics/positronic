@@ -16,7 +16,7 @@ from fastapi import WebSocket
 
 from positronic.offboard.server_utils import monitor_async_task, wait_for_subprocess_ready
 from positronic.offboard.vendor_server import VendorServer
-from positronic.policy import Codec, Policy
+from positronic.policy import Codec, Policy, Session
 from positronic.utils.checkpoints import get_latest_checkpoint, list_checkpoints
 from positronic.utils.logging import init_logging
 from positronic.vendors.gr00t import MODALITY_CONFIGS, codecs
@@ -242,13 +242,11 @@ class Gr00tSubprocess:
 ###########################################################################################
 
 
-class Gr00tPolicy(Policy):
-    """Wraps a GR00T ZMQ PolicyClient as a Policy."""
-
+class _Gr00tSession(Session):
     def __init__(self, client: PolicyClient):
         self._client = client
 
-    def select_action(self, obs):
+    def __call__(self, obs):
         action_response, _info = self._client.get_action(obs)
         action = {k: v[0] for k, v in action_response.items()}
         lengths = {len(v) for v in action.values()}
@@ -256,8 +254,16 @@ class Gr00tPolicy(Policy):
         time_horizon = lengths.pop()
         return [{k: v[i] for k, v in action.items()} for i in range(time_horizon)]
 
-    def reset(self, context=None):
+
+class Gr00tPolicy(Policy):
+    """Wraps a GR00T ZMQ PolicyClient as a Policy."""
+
+    def __init__(self, client: PolicyClient):
+        self._client = client
+
+    def new_session(self, context=None):
         self._client.reset()
+        return _Gr00tSession(self._client)
 
 
 ###########################################################################################
