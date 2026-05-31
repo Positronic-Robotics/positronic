@@ -2,11 +2,12 @@
 
 Run your policy against Positronic's simulation environment, or connect it for real-robot evaluation on [PhAIL](https://phail.ai).
 
-This guide covers:
+Positronic's inference API connects any model to any robot over a single WebSocket protocol. This guide covers both how it works and the reasoning behind it:
 
 1. Running a reference model to see the system end-to-end
-2. Understanding observations, actions, and codecs
-3. Implementing your own inference server
+2. The execution model — how the model and a real-time client split the work
+3. Observations, actions, and codecs — the wire contract
+4. Implementing your own inference server
 
 ## Prerequisites
 
@@ -47,9 +48,50 @@ uv run positronic-server --dataset.path=~/datasets/demo_run --port=5001
 # Open http://localhost:5001
 ```
 
+## The Execution Model: Predictor and Real-Time Client
+
+Before the wire format, the idea behind it. Physical AI inference splits naturally into two halves:
+
+- A **predictor** — your model, behind the WebSocket. Given the current observation, it returns a *chunk* of future actions. It holds no clock and, ideally, no per-session state, so it can run serverless and scale to zero.
+- A **real-time client** — the inference loop running next to the robot (or simulator). It owns the clock. It decides *when* each predicted action executes and *how* one chunk hands off to the next.
+
+This split is the point of the API. The hard real-time work — meeting control deadlines, recovering from errors, blending overlapping predictions — stays on the client, close to the hardware. The model only predicts. Everything below follows from that division of labor.
+
+### A command is a trajectory, and a new one overwrites the old
+
+The client doesn't ask for one action at a time. The model returns a *chunk* — a short trajectory of upcoming actions — and the client plays it out while requesting the next one. When the next chunk arrives, it replaces whatever is still in flight: the driver's `TrajectoryPlayer` swaps its whole buffer (`set()`), it does not append or merge. Override means replace. That keeps the wire contract trivial and leaves the policy for *how* to overwrite — wait, blend, ensemble — entirely on the client.
+
+### Timestamps are relative; the client makes them absolute
+
+Each action in a chunk carries a `timestamp`: seconds from the start of the chunk, **not** wall-clock time. The model can't know when its prediction will actually reach the robot — that depends on network and inference latency it can't observe. So it emits *relative* offsets from zero, and the client anchors them to its own clock the instant inference returns:
+
+```
+execute action i at:  now + timestamp[i]
+```
+
+Because `now` is read *after* the model responds, execution begins at inference-*finish*, and the round-trip latency is absorbed instead of leaving behind a stale, mistimed trajectory. The relative→absolute conversion happens in exactly one place (the client's scheduling wrapper), so the model and codecs stay clock-free.
+
+### Why per-action timestamps, not "fps + count"
+
+Most models today emit chunks at a fixed rate, and the built-in codecs do exactly that — `ActionTimestamp(fps=…)` stamps `0, 1/fps, 2/fps, …`. But the API does not assume it. Every action carries its own offset, so a non-uniform chunk, a resampled one, or one rewritten by a scheduling strategy is equally valid. We deliberately keep "equally-spaced chunk" out of the wire format.
+
+### Scheduling strategies live on the client
+
+How successive chunks combine is a client-side, swappable concern. The same wire contract supports a spectrum of strategies:
+
+- **Predict → execute → predict** (the default, `ChunkedSchedule`): play the current chunk to its end, then request the next. Simple, and the right default.
+- **Temporal ensembling** (ACT, [Zhao et al. 2023](https://arxiv.org/abs/2304.13705)): keep several overlapping chunks and average their overlapping actions for smoother motion.
+- **Real-time chunking** (RTC, [Black et al. 2025](https://arxiv.org/abs/2506.07339)): predict the next chunk *while* the current one executes, freezing the actions already committed and inpainting the rest — robust to inference latency on dynamic tasks.
+
+All three consume the *same* chunk-of-timestamped-actions described above; they differ only in how the client combines the clock, the incoming chunk, and the trajectory still in flight. Keeping that state on the client is what lets the server stay stateless — even RTC, which needs the previous trajectory, fits by having the client send that trajectory back inside the next observation rather than the server remembering it.
+
+### One loop for real and simulation
+
+The client reaches the world through a clock and a driver, both swappable. Wire in a Franka and the loop runs on hardware; wire in MuJoCo and the identical loop runs in simulation — only the `pimm.Clock` and the driver change. That is why the same `positronic-inference` command and the same server work for both.
+
 ## Observations and Actions
 
-Every timestep, the inference client sends the current robot state to the server and receives a chunk of actions back. All messages use [msgpack](https://msgpack.org/) with numpy array support (see [Serialization](#serialization) below).
+This is the concrete wire form of the execution model above. Every timestep, the inference client sends the current robot state to the server and receives a chunk of actions back. All messages use [msgpack](https://msgpack.org/) with numpy array support (see [Serialization](#serialization) below).
 
 ### Observations (client to server)
 
@@ -86,7 +128,7 @@ Each action carries:
 |-------|------|-------------|
 | `robot_command` | dict | Control command (see table below) |
 | `target_grip` | float | Target gripper opening |
-| `timestamp` | float | **Required for every action in a chunk.** Chunk-relative execution time in seconds; the client schedules each action at `now + timestamp` (e.g. `i / action_fps` for the i-th action). Only a single action dict returned *outside* a list is auto-stamped `0.0` — every item in a returned list must carry its own `timestamp`, or inference fails. |
+| `timestamp` | float | Chunk-relative execution time in seconds — see [The Execution Model](#the-execution-model-predictor-and-real-time-client). The client schedules each action at `now + timestamp` (e.g. `i / action_fps` for the i-th action). A single action dict returned *outside* a list is auto-stamped `0.0`; give every action in a list its own `timestamp`, or the whole chunk collapses onto the same instant and fires at once. |
 
 The `robot_command` field specifies the control mode:
 
