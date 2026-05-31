@@ -4,7 +4,7 @@ Positronic supports three foundation models with different capabilities and reso
 
 ## Quick Recommendation
 
-**Start with [SmolVLA](../positronic/vendors/lerobot/README.md) or [LeRobot ACT](../positronic/vendors/lerobot_0_3_3/README.md)** if you want something quick and low-cost. Progress to [OpenPI (π₀.₅)](../positronic/vendors/openpi/README.md) or [GR00T](../positronic/vendors/gr00t/README.md) when you need more capable models. Positronic makes switching easy.
+**Start with [LeRobot ACT](../positronic/vendors/lerobot_0_3_3/README.md)** if you want something quick and low-cost. Progress to [OpenPI (π₀.₅)](../positronic/vendors/openpi/README.md) or [GR00T](../positronic/vendors/gr00t/README.md) when you need more capable models. Positronic makes switching easy.
 
 ## Detailed Comparison
 
@@ -123,11 +123,11 @@ All from the same raw dataset using different codecs.
 
 ### What if I'm not sure which model to use?
 
-Start with **SmolVLA** or **LeRobot ACT**:
+Start with **LeRobot ACT**:
 - Fastest to train and iterate
 - Lowest resource requirements
 - Validates your dataset and task setup
-- SmolVLA adds language conditioning, ACT is simplest
+- Simplest model to get working end-to-end
 
 Then progress to **GR00T** or **OpenPI** if you need:
 - Multi-task generalization

@@ -82,7 +82,7 @@ Positronic supports state-of-the-art foundation models with first-class workflow
 | **[LeRobot SmolVLA](positronic/vendors/lerobot/README.md)** | VLM-based, multi-task | Consumer GPU | Consumer GPU | Multi-task manipulation with language |
 | **[LeRobot ACT](positronic/vendors/lerobot_0_3_3/README.md)** | Single-task, efficient | Consumer GPU | Consumer GPU | Specific manipulation tasks |
 
-**Recommendation**: Start with SmolVLA or ACT if you want something quick and low-cost. Progress to GR00T or OpenPI if you need more capable models. Positronic makes switching easy.
+**Recommendation**: Start with ACT if you want something quick and low-cost. Progress to GR00T or OpenPI if you need more capable models. Positronic makes switching easy.
 
 ### Two LeRobot Versions
 
