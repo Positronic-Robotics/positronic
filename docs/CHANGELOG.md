@@ -1,5 +1,47 @@
 # Changelog
 
+## [0.3.0] - 2026-05-31
+
+Inference API rearchitecture. The monolithic `Policy` is split into a stateless `Policy` (the model) and a per-episode `Session`, so one model can serve several robots at once. All scheduling and timing move out of the harness into composable client-side `PolicyWrapper`s, and a command is now a timestamped trajectory the newest prediction overwrites — making latency strategies a client-side choice without any server change. See the new [Connect Your Model](connect-your-model.md) guide.
+
+### Inference API
+- **`Policy` → `Policy` + `Session` split**: `Policy.new_session()` returns a callable per-episode `Session`; per-episode state lives in the session so one model serves multiple robots ([#381](https://github.com/Positronic-Robotics/positronic/pull/381))
+- **`PolicyWrapper` composition with `|`**: scheduling, error recovery, recording, and codecs compose into one pipeline applied via `.wrap(policy)`; the inference server stays stateless ([#381](https://github.com/Positronic-Robotics/positronic/pull/381))
+- **Trajectory-as-command with absolute timestamps**: policies emit timestamped action chunks; the client anchors offsets to its own clock at inference-finish, and a new prediction overwrites the unplayed tail — enabling temporal ensembling and real-time chunking client-side ([#393](https://github.com/Positronic-Robotics/positronic/pull/393))
+- **Multi-checkpoint sampling**: `SampledPolicy` + `EpisodeCounter` route each episode to a sub-policy (uniform or balanced) ([#381](https://github.com/Positronic-Robotics/positronic/pull/381))
+- **Server-side recording**: composable `Recorder` taps capture both codec boundaries (`raw` wire + `inference`) into one rerun file per episode; `recording_dir` wired through remote policies ([#381](https://github.com/Positronic-Robotics/positronic/pull/381), [#408](https://github.com/Positronic-Robotics/positronic/pull/408))
+- **Remote-server authentication** for inference connections ([#394](https://github.com/Positronic-Robotics/positronic/pull/394))
+- **Reproducible behavioral golden** for the full inference pipeline ([#400](https://github.com/Positronic-Robotics/positronic/pull/400))
+- Old-server compatibility: `RobotStatus` serialized as a str-keyed envelope, decoded from str or bytes ([#381](https://github.com/Positronic-Robotics/positronic/pull/381))
+
+### Docs
+- New [Connect Your Model](connect-your-model.md) guide documenting the WebSocket protocol, execution model, and how to plug in a custom server ([#383](https://github.com/Positronic-Robotics/positronic/pull/383), [#385](https://github.com/Positronic-Robotics/positronic/pull/385))
+- Rewrote the [Codecs](codecs.md) guide around the training/inference dual path and composability ([#381](https://github.com/Positronic-Robotics/positronic/pull/381))
+- Fixed the observation schema and `ee_pose` quaternion order (wxyz) in the inference docs ([#409](https://github.com/Positronic-Robotics/positronic/pull/409))
+- Added a demo GIF and decluttered the repo root ([#379](https://github.com/Positronic-Robotics/positronic/pull/379))
+
+### Vendors & Training
+- `openpi-server` entrypoint now installs the `openpi` extra ([#380](https://github.com/Positronic-Robotics/positronic/pull/380))
+- OpenPI LR schedule spans the full run via `--lr-schedule.decay-steps` ([#391](https://github.com/Positronic-Robotics/positronic/pull/391))
+- Dataset sampling for LeRobot conversion and a `droid_spoons` ablation setup ([#389](https://github.com/Positronic-Robotics/positronic/pull/389))
+
+### Dataset
+- Lance dataset converter ([#386](https://github.com/Positronic-Robotics/positronic/pull/386))
+
+### PhAIL
+- Reorganized PhAIL configs by release version ([#406](https://github.com/Positronic-Robotics/positronic/pull/406))
+- Spoons ablation config and USB-C eval objects ([#382](https://github.com/Positronic-Robotics/positronic/pull/382))
+
+### Teleop
+- Keyboard `p` finishes and writes the current episode ([#397](https://github.com/Positronic-Robotics/positronic/pull/397))
+
+### Infrastructure
+- Nebius serverless workflow for vendor training, dataset conversion, and serving ([#388](https://github.com/Positronic-Robotics/positronic/pull/388))
+- Serverless endpoint auto-shutdown and a shared Nebius filesystem caching `uv`/HF/openpi across cold starts ([#390](https://github.com/Positronic-Robotics/positronic/pull/390), [#392](https://github.com/Positronic-Robotics/positronic/pull/392))
+- Publish versioned Docker tags only on release ([#407](https://github.com/Positronic-Robotics/positronic/pull/407))
+- Docker Compose `pull_policy: always` so the latest image is always pulled ([#384](https://github.com/Positronic-Robotics/positronic/pull/384))
+- Bump `pos3` to 0.3.1 ([#411](https://github.com/Positronic-Robotics/positronic/pull/411))
+
 ## [0.2.1] - 2026-04-01
 
 ### Fixes
