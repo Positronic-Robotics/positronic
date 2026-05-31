@@ -3134,15 +3134,15 @@ wheels = [
 
 [[package]]
 name = "pos3"
-version = "0.3.0"
+version = "0.3.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "boto3" },
     { name = "tqdm" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/4e/1d/a7fd26bb950344b48e56eddf6062ec6693c5f7a3729ee24360bbbd0cf88a/pos3-0.3.0.tar.gz", hash = "sha256:4673cac8217c6ae5b8baa0a232db383cc08cd8bf15ae0a98f6940e1feac46751", size = 33644, upload-time = "2026-05-20T09:57:57.687Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/3e/18/dbea5adb4fabaf9cea0b647f5881d47ec7297829954c6246b94c2b551016/pos3-0.3.1.tar.gz", hash = "sha256:502273448d5041df2faabeb8327405553bdebaa509117abef5f2cfd3abe0b574", size = 47279, upload-time = "2026-05-30T21:56:43.346Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/cf/fc/ec91c3b4a6aaff8b317345009b501ba6c8c89ed4009e94c08735649c9414/pos3-0.3.0-py3-none-any.whl", hash = "sha256:d144632856fddf8afac78002acd7c3cc5f69f33f4215a80388c3fb644fc4b673", size = 21542, upload-time = "2026-05-20T09:57:56.618Z" },
+    { url = "https://files.pythonhosted.org/packages/31/03/fb4cc9fe613932a7dedf8c526ebcce740846ba9309a41ee5e99a6c921ede/pos3-0.3.1-py3-none-any.whl", hash = "sha256:b2539aec688b708ae179ebe8f91fca10fe83bd062dbb6d87235e277aa45b602d", size = 28845, upload-time = "2026-05-30T21:56:42.253Z" },
 ]
 
 [[package]]
