@@ -303,6 +303,9 @@ class Harness(pimm.ControlSystem):
                 if recording:
                     self.ds_command.emit(DsWriterCommand.ABORT())
                     recording = False
+                if self._session:  # HOME aborts the episode; release the session like FINISH
+                    self._session.close()
+                    self._session = None
                 self._home(clock)
                 yield pimm.Pass()
                 return False, recording
