@@ -290,6 +290,12 @@ class Harness(pimm.ControlSystem):
                     self._cancel_trajectories()
                     self.ds_command.emit(DsWriterCommand.STOP(directive.payload or {}))
                     recording = False
+                # End the per-episode session here (not just at RUN/shutdown) so a
+                # ``RemoteSession``'s websocket closes promptly and the offboard server's
+                # per-session cleanup (active-session decrement, idle watchdog) runs now.
+                if self._session:
+                    self._session.close()
+                    self._session = None
                 self._home(clock)
                 yield pimm.Pass()
                 return False, recording
