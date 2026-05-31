@@ -6,7 +6,7 @@ Positronic lets any robot run any policy over one WebSocket protocol. A trained 
 
 ## Run the demo
 
-The quickest way to see the whole system is a public ACT checkpoint trained on a simulated cube-stacking task. No credentials are required — the checkpoint is on a public bucket.
+The quickest way to see the whole system is a public ACT checkpoint trained on a simulated cube-stacking task.
 
 Start the server (downloads a ~480 MB checkpoint, then serves on port 8000):
 
@@ -21,7 +21,7 @@ curl http://localhost:8000/api/v1/models
 # {"models": ["050000"]}
 ```
 
-In a separate terminal, run it in MuJoCo (the client runs on Mac or Linux):
+In a separate terminal, run inference inside the simulation:
 
 ```bash
 uv run positronic-inference sim \
@@ -30,7 +30,7 @@ uv run positronic-inference sim \
   --output_dir=~/datasets/demo_run
 ```
 
-A MuJoCo window shows the Franka arm executing the policy. `--output_dir` records every episode (robot state, camera feeds, actions); browse them with:
+A UI window shows the robot arm executing the policy. `--output_dir` records every episode (robot state, camera feeds, actions); browse them with:
 
 ```bash
 uv run positronic-server --dataset.path=~/datasets/demo_run --port=5001
@@ -48,22 +48,22 @@ To control a robot well, the control loop must run on a machine right next to it
 flowchart LR
     subgraph near["Next to the robot — low latency"]
         sensors[Sensors] --> client[Control client]
-        client --> motors[Motors]
+        client --> robot[Robot]
     end
     subgraph far["Powerful machine / cloud"]
         server["Inference server<br/>codec → model"]
     end
     client -- "observation" --> server
-    server -- "action chunk" --> client
+    server -- "actions" --> client
 ```
 
 The split introduces a delay: the model takes time to think, and the network adds more. **Something has to decide what the robot does during that delay, and how each new batch of predictions blends with the motion already underway.** That decision is yours, and it has to live on the client — the only part fast enough to be in the loop with the robot. That is why there is client-side code at all, and not just a model endpoint.
 
 Two consequences shape the API:
 
-**The model returns a short trajectory, not a single action.** Instead of one command it predicts a *chunk* — the next fraction of a second of motion. The client plays the chunk while it requests the next one, so the robot keeps moving instead of stalling between predictions. When the next chunk arrives, it replaces the part of the old one not yet executed.
+**The server usually returns a whole trajectory, not one target.** A server *can* return a single destination for the robot, but in practice a model returns a short stretch of upcoming motion at once. The client executes that trajectory while it requests the next prediction, so the robot keeps moving instead of stalling between requests. When new actions arrive, they replace the part of the trajectory not yet executed.
 
-**Each action says when to run.** A chunk is a list of actions, each tagged with a time offset in seconds from the start of the chunk. The client drops the chunk onto its own timeline the moment the prediction arrives and runs each action at its offset. Because the client times everything from when the answer came back, the model never has to know about network or compute delay.
+**Each action says when to run.** The actions come tagged with a time offset in seconds, measured from the start of the returned trajectory. The client lays them on its own timeline the moment the prediction arrives and runs each one at its offset. Because the client times everything from when the answer came back, the model never has to know about network or compute delay.
 
 ```mermaid
 sequenceDiagram
@@ -71,23 +71,23 @@ sequenceDiagram
     participant S as Inference server
     C->>S: observation
     Note over S: model thinks (latency)
-    S-->>C: chunk: actions at +0, +dt, +2dt…
-    Note over C: play chunk from "now"…<br/>and request the next one before it ends
+    S-->>C: actions at +0, +dt, +2dt…
+    Note over C: run them from "now"…<br/>and request the next set before they end
     C->>S: next observation
-    S-->>C: next chunk (replaces the unplayed tail)
+    S-->>C: next actions (replace the unplayed tail)
 ```
 
-How the client fills the delay and merges chunks is a swappable choice. The default plays each chunk to its end, then asks for the next. More advanced strategies — temporal ensembling ([Zhao et al. 2023](https://arxiv.org/abs/2304.13705)) and real-time chunking ([Black et al. 2025](https://arxiv.org/abs/2506.07339)) — overlap and blend chunks to stay smooth under latency. They all talk to the same server; only the client logic changes.
+How the client fills the delay and merges successive predictions is a swappable choice. The default runs each trajectory to its end, then asks for the next. More advanced strategies — temporal ensembling ([Zhao et al. 2023](https://arxiv.org/abs/2304.13705)) and real-time chunking ([Black et al. 2025](https://arxiv.org/abs/2506.07339)) — overlap and blend predictions to stay smooth under latency. They all talk to the same server; only the client logic changes.
 
 ## The pieces
 
 Four small concepts make up the API. You meet them whether you use a built-in server or write your own.
 
-**Policy and Session.** A `Policy` is your loaded model: it holds the weights and knows how to start an episode. `policy.new_session()` begins one episode and returns a `Session`. You call the session once per timestep with the latest observation, and it returns the next chunk of actions. Per-episode state (history, the trajectory in flight) lives in the session — so one `Policy` can serve several robots at once, each with its own `Session`.
+**Policy and Session.** A `Policy` is your loaded model: it holds the weights and knows how to start an episode. `policy.new_session()` begins one episode and returns a `Session`. You call the session once per timestep with the latest observation, and it returns the next actions to run. Per-episode state (history, the trajectory in flight) lives in the session — so one `Policy` can serve several robots at once, each with its own `Session`.
 
 **Codec.** Different models want different inputs: end-effector pose vs joint angles, absolute targets vs deltas, 224×224 vs 512×512 images. A `Codec` translates between the robot's raw data (what is on the wire) and your model's format — `encode` on the way in, `decode` on the way out. The same codec prepares the training data, so a model is served exactly the way it was trained. The full catalog is in the [Codecs Guide](codecs.md).
 
-**Wrapper.** A `PolicyWrapper` is the swappable client-side logic from the previous section — scheduling (chunked, RTC), error recovery, recording. Wrappers compose with `|` and wrap a policy, so you can change *how* latency is handled without touching the model.
+**Wrapper.** A `PolicyWrapper` is the swappable client-side logic from the previous section — scheduling, error recovery, recording. Wrappers compose with `|` and wrap a policy, so you can change *how* latency is handled without touching the model.
 
 ## The wire format
 
@@ -110,9 +110,9 @@ The client sends the full raw robot state as a dict. Keys are flat strings (the 
 
 Your server receives every key each step. Use what your model needs and ignore the rest. Image stream names are configuration-driven, so key off the names your deployment uses rather than assuming fixed ones.
 
-### Action chunk (server → client)
+### Actions (server → client)
 
-The server returns a list of action dicts — the chunk:
+The normal response is a list of action dicts — a short trajectory. (A single action dict is also valid; what matters is that the client-side wrappers and the server, taken together, produce actions carrying the fields below.)
 
 ```python
 {"result": [
@@ -126,7 +126,7 @@ The server returns a list of action dicts — the chunk:
 |-------|------|-------------|
 | `robot_command` | dict | Control command (see below) |
 | `target_grip` | float | Target gripper opening |
-| `timestamp` | float | Execution time in seconds from the start of the chunk (e.g. `i / action_fps` for the i-th action). The client runs each action at `now + timestamp`, where `now` is when the prediction arrived. A single action dict returned *outside* a list is auto-stamped `0.0`; give every action in a list its own `timestamp`, or the whole chunk collapses onto one instant and fires at once. |
+| `timestamp` | float | Execution time in seconds from the start of the returned trajectory (e.g. `i / action_fps` for the i-th action). The client runs each action at `now + timestamp`, where `now` is when the prediction arrived. A single action dict returned *outside* a list is auto-stamped `0.0`; give every action in a list its own `timestamp`, or they all collapse onto one instant and fire at once. |
 
 The `robot_command` field selects the control mode:
 
@@ -140,14 +140,14 @@ Which command type your model produces is decided by its codec.
 
 ## Debugging with recordings
 
-When motion looks wrong — jerky, or the model seems to ignore an input — record what actually crossed the boundary. Pass `--recording_dir` to any built-in server (or `recording_dir=` to your own), and it writes one [rerun](https://rerun.io) file per episode, `<timestamp>_<episode>.rrd`, with two layers:
+When a run doesn't produce the result you expected, it helps to record exactly what crossed the boundaries between the robot, the codec, and the model. Recording is itself a policy wrapper — `Recorder` in [`positronic/policy/recording.py`](../positronic/policy/recording.py) — that taps into any client pipeline; the built-in servers expose it via `--recording_dir`. It writes one [rerun](https://rerun.io) file per episode with two layers:
 
-- **`raw`** — the observation and action exactly as they appear on the wire.
-- **`inference`** — the same episode *after* the codec: the encoded observation your model received and the raw actions it produced.
+- **`raw`** — the observation and action as they appear on the wire.
+- **`inference`** — the same episode *after* the codec: the encoded observation the model received and the raw actions it produced.
 
-Comparing the two localizes the fault: if `raw` looks right but `inference` looks wrong, the codec is the problem; if the `inference` input looks right but the output is bad, it is the model. Open a file with `rerun path/to/episode.rrd` (S3 `recording_dir` paths are mirrored to the local cache under `~/.cache/positronic/s3/...`).
+Comparing the two localizes the fault: if `raw` looks right but `inference` looks wrong, the codec is at fault; if the `inference` input looks right but the output is bad, it is the model.
 
-For the client's view of the same run, `--output_dir` records the full episode as a Positronic dataset, browsable with `positronic-server`.
+The client side can record too: `--output_dir` saves the full episode as a Positronic dataset, browsable with `positronic-server`.
 
 ## Implement your own server
 
@@ -171,7 +171,7 @@ class MySession(Session):
         images = obs['image.exterior']
         ee = obs['robot_state.ee_pose']
         predicted_poses = self._model.predict(images, ee)
-        # Return a chunk: a list of wire-format actions.
+        # Return the actions to run: a list of wire-format dicts.
         return [
             {'robot_command': {'type': 'cartesian_pos', 'pose': pose}, 'target_grip': 0.04}
             for pose in predicted_poses
