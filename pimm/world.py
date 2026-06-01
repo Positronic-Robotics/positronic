@@ -440,7 +440,7 @@ def _bg_wrapper(run_func: ControlLoop, stop_event: EventClass, clock: Clock, nam
                 case Sleep(seconds):
                     time.sleep(seconds)
                 case Yield():
-                    pass
+                    time.sleep(0)  # hand the OS scheduler a turn, like a zero-length sleep
                 case _:
                     raise ValueError(f'Unknown command: {command}')
     except KeyboardInterrupt:
@@ -744,11 +744,13 @@ class World:
         On a wall-clock world, honour each yielded ``Sleep`` so loops keep their real
         rate. On a virtual-time world the clock is advanced inside ``interleave``, so
         there is nothing to wait for — just pump as fast as the machine allows.
+
+        Runs until the scheduler is exhausted: when one loop finishes and sets
+        ``should_stop``, the others still run once more to observe it and finalize
+        (flush the episode, close the policy) before the iterator ends.
         """
         real_time = not isinstance(self._clock, VirtualClock)
         for command in self.start(main_process, background):
-            if self.should_stop:
-                break
             if real_time and isinstance(command, Sleep):
                 time.sleep(command.seconds)
 
