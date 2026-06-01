@@ -4,7 +4,6 @@ import numpy as np
 import pytest
 
 import pimm
-from pimm.tests.testing import MockClock
 from positronic.dataset.ds_writer_agent import DsWriterCommand, DsWriterCommandType, Serializers
 from positronic.drivers import roboarm
 from positronic.drivers.roboarm import RobotStatus
@@ -126,13 +125,8 @@ class FakeRobotState:
 
 
 @pytest.fixture
-def clock():
-    return MockClock()
-
-
-@pytest.fixture
-def world(clock):
-    with pimm.World(clock=clock) as w:
+def world():
+    with pimm.World(virtual_time=True) as w:
         yield w
 
 
@@ -211,7 +205,7 @@ def _emitted_grips(recorder):
 
 
 @pytest.mark.timeout(3.0)
-def test_harness_emits_cartesian_move(world, clock):
+def test_harness_emits_cartesian_move(world):
     pose = Transform3D(translation=np.array([0.4, 0.5, 0.6], dtype=np.float32), rotation=Rotation.identity)
     policy = SpyPolicy(command=CartesianPosition(pose=pose), target_grip=0.33)
     harness = Harness(policy)
@@ -235,7 +229,7 @@ def test_harness_emits_cartesian_move(world, clock):
     ])
 
     scheduler = world.start([harness, driver])
-    drive_scheduler(scheduler, clock=clock, steps=20)
+    drive_scheduler(scheduler, steps=20)
 
     assert policy.last_obs is not None
     obs = policy.last_obs
@@ -260,7 +254,7 @@ def test_harness_emits_cartesian_move(world, clock):
 
 
 @pytest.mark.timeout(3.0)
-def test_harness_waits_for_complete_inputs(world, clock):
+def test_harness_waits_for_complete_inputs(world):
     pose = Transform3D(translation=np.array([0.4, 0.5, 0.6], dtype=np.float32), rotation=Rotation.identity)
     policy = SpyPolicy(command=CartesianPosition(pose=pose), target_grip=0.33)
     harness = Harness(policy)
@@ -294,7 +288,7 @@ def test_harness_waits_for_complete_inputs(world, clock):
     ])
 
     scheduler = world.start([harness, driver])
-    drive_scheduler(scheduler, clock=clock, steps=30)
+    drive_scheduler(scheduler, steps=30)
 
     assert policy.last_obs is not None
 
@@ -309,7 +303,7 @@ def test_harness_waits_for_complete_inputs(world, clock):
 
 
 @pytest.mark.timeout(3.0)
-def test_run_emits_ds_start_with_meta(world, clock):
+def test_run_emits_ds_start_with_meta(world):
     policy = StubPolicy(meta={'type': 'stub', 'checkpoint': 'v1'})
     harness = Harness(policy, static_meta={'joint_signal': 'robot_state.q'})
     p = _pair_all(world, harness)
@@ -321,7 +315,7 @@ def test_run_emits_ds_start_with_meta(world, clock):
     ])
 
     scheduler = world.start([harness, driver])
-    drive_scheduler(scheduler, clock=clock, steps=15)
+    drive_scheduler(scheduler, steps=15)
 
     starts = [c for c in _ds_commands(p) if c.type == DsWriterCommandType.START_EPISODE]
     assert len(starts) == 1
@@ -335,7 +329,7 @@ def test_run_emits_ds_start_with_meta(world, clock):
 
 
 @pytest.mark.timeout(3.0)
-def test_episode_meta_includes_policy_static_meta(world, clock):
+def test_episode_meta_includes_policy_static_meta(world):
     """Static fields exposed only via ``Policy.meta`` (empty ``Session.meta``) must
     still reach episode metadata once the policy is wrapped."""
 
@@ -367,7 +361,7 @@ def test_episode_meta_includes_policy_static_meta(world, clock):
         (None, 0.02),
     ])
     scheduler = world.start([harness, driver])
-    drive_scheduler(scheduler, clock=clock, steps=15)
+    drive_scheduler(scheduler, steps=15)
 
     starts = [c for c in _ds_commands(p) if c.type == DsWriterCommandType.START_EPISODE]
     assert len(starts) == 1
@@ -377,7 +371,7 @@ def test_episode_meta_includes_policy_static_meta(world, clock):
 
 
 @pytest.mark.timeout(3.0)
-def test_stop_emits_ds_suspend(world, clock):
+def test_stop_emits_ds_suspend(world):
     policy = StubPolicy()
     harness = Harness(policy)
     p = _pair_all(world, harness)
@@ -389,13 +383,13 @@ def test_stop_emits_ds_suspend(world, clock):
     ])
 
     scheduler = world.start([harness, driver])
-    drive_scheduler(scheduler, clock=clock, steps=15)
+    drive_scheduler(scheduler, steps=15)
 
     assert DsWriterCommandType.SUSPEND_EPISODE in _ds_types(p)
 
 
 @pytest.mark.timeout(3.0)
-def test_finish_emits_ds_stop_with_data_and_homes(world, clock):
+def test_finish_emits_ds_stop_with_data_and_homes(world):
     policy = StubPolicy()
     harness = Harness(policy)
     p = _pair_all(world, harness)
@@ -408,7 +402,7 @@ def test_finish_emits_ds_stop_with_data_and_homes(world, clock):
     ])
 
     scheduler = world.start([harness, driver])
-    drive_scheduler(scheduler, clock=clock, steps=20)
+    drive_scheduler(scheduler, steps=20)
 
     stops = [c for c in _ds_commands(p) if c.type == DsWriterCommandType.STOP_EPISODE]
     assert len(stops) == 1
@@ -419,7 +413,7 @@ def test_finish_emits_ds_stop_with_data_and_homes(world, clock):
 
 
 @pytest.mark.timeout(3.0)
-def test_home_aborts_recording_and_homes(world, clock):
+def test_home_aborts_recording_and_homes(world):
     policy = StubPolicy()
     harness = Harness(policy)
     p = _pair_all(world, harness)
@@ -434,7 +428,7 @@ def test_home_aborts_recording_and_homes(world, clock):
     ])
 
     scheduler = world.start([harness, driver])
-    drive_scheduler(scheduler, clock=clock, steps=20)
+    drive_scheduler(scheduler, steps=20)
 
     assert DsWriterCommandType.ABORT_EPISODE in _ds_types(p)
 
@@ -444,7 +438,7 @@ def test_home_aborts_recording_and_homes(world, clock):
 
 
 @pytest.mark.timeout(3.0)
-def test_run_from_paused_auto_finalizes(world, clock):
+def test_run_from_paused_auto_finalizes(world):
     policy = StubPolicy()
     harness = Harness(policy)
     p = _pair_all(world, harness)
@@ -457,7 +451,7 @@ def test_run_from_paused_auto_finalizes(world, clock):
     ])
 
     scheduler = world.start([harness, driver])
-    drive_scheduler(scheduler, clock=clock, steps=20)
+    drive_scheduler(scheduler, steps=20)
 
     types = _ds_types(p)
     # START(ep1), SUSPEND, STOP (auto-finalize), START(ep2), STOP (cleanup)
@@ -468,7 +462,7 @@ def test_run_from_paused_auto_finalizes(world, clock):
 
 
 @pytest.mark.timeout(3.0)
-def test_run_calls_policy_reset_with_context(world, clock):
+def test_run_calls_policy_reset_with_context(world):
     policy = StubPolicy()
     harness = Harness(policy)
     p = _pair_all(world, harness)
@@ -476,14 +470,14 @@ def test_run_calls_policy_reset_with_context(world, clock):
     driver = ManualDriver([(partial(p['directive_em'].emit, Directive.RUN(task='test-task')), 0.0), (None, 0.01)])
 
     scheduler = world.start([harness, driver])
-    drive_scheduler(scheduler, clock=clock, steps=5)
+    drive_scheduler(scheduler, steps=5)
 
     assert policy.reset_calls == 1
     assert policy.last_reset_context == {'task': 'test-task'}
 
 
 @pytest.mark.timeout(3.0)
-def test_stop_cancels_in_flight_trajectory(world, clock):
+def test_stop_cancels_in_flight_trajectory(world):
     """STOP must override buffered driver trajectories so devices hold position.
 
     With trajectory-as-command the harness preloads each driver's
@@ -515,7 +509,7 @@ def test_stop_cancels_in_flight_trajectory(world, clock):
         (None, 0.1),
     ]
     scheduler = world.start([harness, ManualDriver(script)])
-    drive_scheduler(scheduler, clock=clock, steps=200)
+    drive_scheduler(scheduler, steps=200)
 
     cmd_emits = [data for _ts, data in cmd_recorder.emitted]
     grip_emits = [data for _ts, data in grip_recorder.emitted]
@@ -525,7 +519,7 @@ def test_stop_cancels_in_flight_trajectory(world, clock):
 
 
 @pytest.mark.timeout(3.0)
-def test_finish_cancels_buffered_trajectory_before_stop_episode(world, clock):
+def test_finish_cancels_buffered_trajectory_before_stop_episode(world):
     """FINISH must cancel the recording's trajectory tail *before* `STOP_EPISODE`.
 
     `STOP_EPISODE` calls `flush()` on `TrajectoryOverrideSerializer`, which
@@ -564,7 +558,7 @@ def test_finish_cancels_buffered_trajectory_before_stop_episode(world, clock):
         (None, 0.1),
     ]
     scheduler = world.start([harness, ManualDriver(script)])
-    drive_scheduler(scheduler, clock=clock, steps=200)
+    drive_scheduler(scheduler, steps=200)
 
     cancels = [i for i, (lbl, data) in enumerate(events) if lbl == 'robot_commands' and data == []]
     stops = [
@@ -580,7 +574,7 @@ def test_finish_cancels_buffered_trajectory_before_stop_episode(world, clock):
 
 
 @pytest.mark.timeout(3.0)
-def test_empty_chunk_cancels_both_robot_and_grip(world, clock):
+def test_empty_chunk_cancels_both_robot_and_grip(world):
     """A session returning ``[]`` must cancel *both* driver buffers.
 
     Empty action chunk is the session-level cancel signal (per the
@@ -616,7 +610,7 @@ def test_empty_chunk_cancels_both_robot_and_grip(world, clock):
         (None, 0.1),
     ]
     scheduler = world.start([harness, ManualDriver(script)])
-    drive_scheduler(scheduler, clock=clock, steps=200)
+    drive_scheduler(scheduler, steps=200)
 
     cmd_emits = [data for _ts, data in cmd_recorder.emitted]
     grip_emits = [data for _ts, data in grip_recorder.emitted]
@@ -625,7 +619,7 @@ def test_empty_chunk_cancels_both_robot_and_grip(world, clock):
 
 
 @pytest.mark.timeout(3.0)
-def test_harness_clears_trajectory_on_home(world, clock):
+def test_harness_clears_trajectory_on_home(world):
     """Verify that HOME resets trajectory state so next RUN gets a fresh chunk."""
     policy = ChunkPolicy()
     harness = Harness(policy)
@@ -635,29 +629,29 @@ def test_harness_clears_trajectory_on_home(world, clock):
     scheduler = world.start([harness])
 
     p['directive_em'].emit(Directive.RUN(task='test'))
-    drive_scheduler(scheduler, clock=clock, steps=1)
+    drive_scheduler(scheduler, steps=1)
 
     emit_ready_payload(p['frame_em'], p['robot_em'], p['grip_em'], robot_state)
-    drive_scheduler(scheduler, clock=clock, steps=5)
+    drive_scheduler(scheduler, steps=5)
 
     grips = _all_grips(p)
     assert grips[0] >= 100.0, f'Expected chunk 1, got {grips}'
 
     p['directive_em'].emit(Directive.HOME())
-    drive_scheduler(scheduler, clock=clock, steps=2)
+    drive_scheduler(scheduler, steps=2)
 
     assert _last_grip(p) == 0.0, 'Expected 0.0 (Home)'
 
     p['directive_em'].emit(Directive.RUN(task='test'))
     emit_ready_payload(p['frame_em'], p['robot_em'], p['grip_em'], robot_state)
-    drive_scheduler(scheduler, clock=clock, steps=4)
+    drive_scheduler(scheduler, steps=4)
 
     grips = _all_grips(p)
     assert grips[0] >= 200.0, f'Expected chunk 2 (>= 200.0), got {grips}. Trajectory clearing failed!'
 
 
 @pytest.mark.timeout(3.0)
-def test_harness_clears_trajectory_on_run(world, clock):
+def test_harness_clears_trajectory_on_run(world):
     """Verify that RUN resets trajectory state so a fresh chunk is emitted."""
     policy = ChunkPolicy()
     harness = Harness(policy)
@@ -667,26 +661,26 @@ def test_harness_clears_trajectory_on_run(world, clock):
     scheduler = world.start([harness])
 
     p['directive_em'].emit(Directive.RUN(task='test'))
-    drive_scheduler(scheduler, clock=clock, steps=1)
+    drive_scheduler(scheduler, steps=1)
 
     emit_ready_payload(p['frame_em'], p['robot_em'], p['grip_em'], robot_state)
-    drive_scheduler(scheduler, clock=clock, steps=5)
+    drive_scheduler(scheduler, steps=5)
 
     grips = _all_grips(p)
     assert grips[0] >= 100.0
 
     p['directive_em'].emit(Directive.RUN(task='test-restart'))
-    drive_scheduler(scheduler, clock=clock, steps=1)
+    drive_scheduler(scheduler, steps=1)
 
     emit_ready_payload(p['frame_em'], p['robot_em'], p['grip_em'], robot_state)
-    drive_scheduler(scheduler, clock=clock, steps=4)
+    drive_scheduler(scheduler, steps=4)
 
     grips = _all_grips(p)
     assert grips[0] >= 200.0, f'Expected chunk 2 (>= 200.0), got {grips}. Trajectory clearing on RUN failed!'
 
 
 @pytest.mark.timeout(3.0)
-def test_harness_recovers_from_error(world, clock):
+def test_harness_recovers_from_error(world):
     """ERROR emits Recover trajectory, skips policy; AVAILABLE resumes with fresh chunk."""
     policy = ChunkPolicy()
     harness = Harness(policy)
@@ -698,20 +692,20 @@ def test_harness_recovers_from_error(world, clock):
     scheduler = world.start([harness])
 
     p['directive_em'].emit(Directive.RUN(task='test'))
-    drive_scheduler(scheduler, clock=clock, steps=1)
+    drive_scheduler(scheduler, steps=1)
     emit_ready_payload(p['frame_em'], p['robot_em'], p['grip_em'], state_ok)
-    drive_scheduler(scheduler, clock=clock, steps=3)
+    drive_scheduler(scheduler, steps=3)
     grips = _all_grips(p)
     assert grips[0] >= 100.0
 
     obs_before = len(policy.observations)
     p['robot_em'].emit(state_err)
-    drive_scheduler(scheduler, clock=clock, steps=2)
+    drive_scheduler(scheduler, steps=2)
     assert isinstance(_last_command(p), Recover)
     assert len(policy.observations) == obs_before
 
     emit_ready_payload(p['frame_em'], p['robot_em'], p['grip_em'], state_ok)
-    drive_scheduler(scheduler, clock=clock, steps=3)
+    drive_scheduler(scheduler, steps=3)
     grips = _all_grips(p)
     assert grips[0] >= 200.0
 
@@ -750,7 +744,7 @@ def test_robot_state_serializer_drops_resetting():
 
 
 @pytest.mark.timeout(3.0)
-def test_recovery_cancels_gripper_buffer(world, clock):
+def test_recovery_cancels_gripper_buffer(world):
     """Entering recovery must cancel the gripper buffer, not just the arm.
 
     The Recover-only chunk carries no ``target_grip``; without an explicit cancel
@@ -774,14 +768,14 @@ def test_recovery_cancels_gripper_buffer(world, clock):
 
     scheduler = world.start([harness])
     directive_em.emit(Directive.RUN(task='t'))
-    drive_scheduler(scheduler, clock=clock, steps=1)
+    drive_scheduler(scheduler, steps=1)
     emit_ready_payload(frame_em, robot_em, grip_em, state_ok)
-    drive_scheduler(scheduler, clock=clock, steps=3)
+    drive_scheduler(scheduler, steps=3)
 
     cmd_before = len(cmd_recorder.emitted)
     grip_before = len(grip_recorder.emitted)
     robot_em.emit(state_err)
-    drive_scheduler(scheduler, clock=clock, steps=2)
+    drive_scheduler(scheduler, steps=2)
 
     new_cmds = [data for _ts, data in cmd_recorder.emitted[cmd_before:]]
     new_grips = [data for _ts, data in grip_recorder.emitted[grip_before:]]
@@ -792,7 +786,7 @@ def test_recovery_cancels_gripper_buffer(world, clock):
 
 
 @pytest.mark.timeout(3.0)
-def test_shutdown_cancels_trajectory_before_stop(world, clock):
+def test_shutdown_cancels_trajectory_before_stop(world):
     """Shutdown while recording must cancel buffered trajectories before STOP_EPISODE.
 
     ``STOP_EPISODE`` flushes ``TrajectoryOverrideSerializer``; without a prior
@@ -828,7 +822,7 @@ def test_shutdown_cancels_trajectory_before_stop(world, clock):
         (None, 0.1),
     ])
     scheduler = world.start([harness, driver])
-    drive_scheduler(scheduler, clock=clock, steps=200)
+    drive_scheduler(scheduler, steps=200)
 
     cancels = [i for i, (lbl, data) in enumerate(events) if lbl == 'robot_commands' and data == []]
     stops = [

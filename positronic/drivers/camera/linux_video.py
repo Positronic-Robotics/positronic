@@ -75,6 +75,6 @@ class LinuxVideo(pimm.ControlSystem):
                 self.frame.emit(result)
                 self.fps_counter.tick()
 
-            yield pimm.Pass()  # Give control back to the world
+            yield pimm.Yield()  # Give control back to the world
 
         device.close()

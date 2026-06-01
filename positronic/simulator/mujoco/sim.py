@@ -71,9 +71,6 @@ class MujocoSim(pimm.ControlSystem):
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Sleep]:
         while not should_stop.value:
             self.step()
-            # The sim paces virtual time: advance the world clock by one physics step. World time is a
-            # separate clock from data.time, so a reset re-randomizes physics without rewinding world time.
-            clock.advance(self.model.opt.timestep)
             self.fps_counter.tick()
 
             for name, observer in self.observers.items():
@@ -81,7 +78,8 @@ class MujocoSim(pimm.ControlSystem):
                 if value is not None:
                     self.observations[name].emit(value)
 
-            yield pimm.Pass()
+            # One physics step is one tick of simulated time; sleeping a timestep paces the world clock.
+            yield pimm.Sleep(self.model.opt.timestep)
 
     def reset(self, reinitialize_model: bool = True):
         mj.mj_resetData(self.model, self.data)
@@ -260,7 +258,7 @@ class MujocoFranka(pimm.ControlSystem):
                 self._apply_command(cmd, state)
 
             self.state.emit(state)
-            yield pimm.Pass()
+            yield pimm.Yield()
 
     def _recalculate_ik(self, target_robot_position: geom.Transform3D) -> np.ndarray | None:
         result = ik.qpos_from_site_pose(
@@ -325,7 +323,7 @@ class MujocoGripper(pimm.ControlSystem):
 
             current_grip = self.sim.data.joint(self.joint_name).qpos.item()
             self.grip.emit(self._normalize_current_grip(current_grip))
-            yield pimm.Pass()
+            yield pimm.Yield()
 
     def set_target_grip(self, target_grip: float):
         self.sim.data.actuator(self.actuator_name).ctrl = self._denormalize_target_grip(target_grip)

@@ -115,4 +115,5 @@ class Robot(pimm.ControlSystem):
                 robot_state.encode(q, dq, ee_pose, status)
                 self.state.emit(robot_state)
 
-                yield pimm.Sleep(rate_limiter.wait_time())
+                wait = rate_limiter.wait_time()
+                yield pimm.Sleep(wait) if wait > 0 else pimm.Yield()

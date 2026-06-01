@@ -20,6 +20,7 @@ from typing import TypeVar
 
 from .core import (
     Clock,
+    Command,
     ControlLoop,
     ControlSystem,
     ControlSystemEmitter,
@@ -30,6 +31,7 @@ from .core import (
     SignalEmitter,
     SignalReceiver,
     Sleep,
+    Yield,
 )
 from .shared_memory import SMCompliant
 from .utils import identity
@@ -408,23 +410,22 @@ class SystemClock(Clock):
 
 
 class VirtualClock(Clock):
-    """Monotonic clock the World owns for virtual-time (simulated) runs.
+    """Simulated-time clock owned and advanced by the World.
 
-    Time does not pass on its own: the control system that owns the simulated
-    universe (the physics sim) advances it via ``advance()`` as it steps. Being
-    a standalone clock — decoupled from any engine's internal time — a scene
-    reset is a pure state discontinuity that never rewinds world time.
+    Time does not pass on its own. As the scheduler works through its timeline it
+    moves this clock forward to the next scheduled event, so simulated time runs as
+    fast as the machine allows and is decoupled from any engine's internal time.
+    Only the World advances it; control systems just read ``now()``.
     """
 
-    def __init__(self, start_time: float = 0.0):
-        self._time = float(start_time)
+    def __init__(self):
+        self._time = 0.0
 
     def now(self) -> float:
         return self._time
 
-    def advance(self, dt: float) -> float:
-        self._time += float(dt)
-        return self._time
+    def advance_to(self, target: float) -> None:
+        self._time = max(self._time, target)
 
 
 def _bg_wrapper(run_func: ControlLoop, stop_event: EventClass, clock: Clock, name: str):
@@ -433,6 +434,8 @@ def _bg_wrapper(run_func: ControlLoop, stop_event: EventClass, clock: Clock, nam
             match command:
                 case Sleep(seconds):
                     time.sleep(seconds)
+                case Yield():
+                    pass
                 case _:
                     raise ValueError(f'Unknown command: {command}')
     except KeyboardInterrupt:
@@ -453,7 +456,7 @@ def _bg_wrapper(run_func: ControlLoop, stop_event: EventClass, clock: Clock, nam
 class World:
     """Utility class to bind and run control loops."""
 
-    def __init__(self, clock: Clock | None = None, *, virtual_time: bool = False):
+    def __init__(self, *, virtual_time: bool = False):
         # Enforce "spawn" multiprocessing context. This makes process boundaries explicit:
         # background control systems must be picklable, and fork-only implicit state sharing
         # is disallowed (catching many cross-process foot-guns early).
@@ -461,11 +464,9 @@ class World:
 
         # TODO: stop_signal should be a shared variable, since we should be able to track if background
         # processes are still running
-        # virtual_time picks a VirtualClock (sim: a control system advances it) vs SystemClock (wall: real
-        # hardware). An explicit clock (e.g. a test clock) overrides the flag.
-        if clock is None:
-            clock = VirtualClock() if virtual_time else SystemClock()
-        self._clock = clock
+        # virtual_time runs a VirtualClock the world advances itself (simulation); otherwise a SystemClock
+        # follows wall time (real hardware). This single flag is the only sim-vs-real switch.
+        self._clock: Clock = VirtualClock() if virtual_time else SystemClock()
 
         self._stop_event = self._mp_ctx.Event()
         self.background_processes = []
@@ -518,52 +519,77 @@ class World:
     def should_stop_reader(self) -> SignalReceiver[bool]:
         return EventReceiver(self._stop_event, self._clock)
 
-    def interleave(self, *loops: ControlLoop) -> Iterator[Sleep]:
-        """Interleave multiple control loops, scheduling them based on their timing requirements.
-
-        This method runs multiple control loops concurrently by executing the next scheduled
-        loop and then yielding the wait time until the next execution should occur.
-
-        Args:
-            *loops: Variable number of control loops to interleave
-
-        Yields:
-            float: Wait times until the next scheduled execution should occur
-
-        Behavior:
-            - All loops start at the same time
-            - At each step: execute the next scheduled loop, then yield wait time
-            - Loops are scheduled for future execution based on their yielded sleep times
-            - When any loop completes (StopIteration), the stop event is set
-            - Other loops can check the stop event and exit early if desired
-            - The method continues until all loops have completed
-            - Number of yields equals number of loop executions
+    def _advance_to(self, target: float) -> None:
+        """Move simulated time forward to ``target``. Wall time advances on its own,
+        so this does nothing for a SystemClock world.
         """
-        start = self._clock.now()
-        counter = 0
-        priority_queue = []
+        if isinstance(self._clock, VirtualClock):
+            self._clock.advance_to(target)
 
-        # Initialize all loops with the same start time and unique counters
-        for loop in loops:
-            priority_queue.append((start, counter, iter(loop(self.should_stop_reader(), self._clock))))
-            counter += 1
+    def interleave(self, *loops: ControlLoop) -> Iterator[Command]:
+        """Run control loops cooperatively along one shared timeline.
 
-        heapq.heapify(priority_queue)
+        Every loop due at the current instant runs once, in a stable order, and yields:
+          - ``Sleep(s)`` — wake me ``s`` seconds from now.
+          - ``Yield()`` — run me again at the next instant, without advancing time.
 
-        while priority_queue:
-            _, _, loop = heapq.heappop(priority_queue)
+        The clock then moves to the nearest scheduled ``Sleep`` wake; loops that
+        yielded ``Yield`` ride along to that wake, so they run once per tick instead
+        of spinning. In a virtual-time world the world owns the clock and advances it
+        here. In a wall-clock world time passes by itself; the yielded ``Sleep`` is
+        the wait the caller should honour so each loop keeps its real rate (a
+        ``Yield`` means "no wait, run again now").
 
-            try:
-                sleep_time = next(loop).seconds
-                heapq.heappush(priority_queue, (self._clock.now() + sleep_time, counter, loop))
-                counter += 1
+        Recorded timestamps have nanosecond resolution, so a loop is not run twice
+        within one nanosecond once time has advanced into it — that would re-fire the
+        same timestamp (e.g. two control loops whose float wakes land sub-nanosecond
+        apart). Loops legitimately cycling within a single instant (time has not moved
+        at all) keep the same ``now`` and are not held back.
 
-                if priority_queue:  # Yield the wait time until the next execution should occur
-                    yield Sleep(max(0, priority_queue[0][0] - self._clock.now()))
+        When a loop finishes (``StopIteration``) the stop event is set so the others
+        can observe ``should_stop`` and exit. The iterator ends once no loop is left.
+        """
+        iters = [iter(loop(self.should_stop_reader(), self._clock)) for loop in loops]
+        ready = list(range(len(iters)))  # loop indices due at the current instant
+        pq: list[tuple[float, int]] = []  # (wake_time, loop_index) heap, ordered by time then index
+        last_run = [-1.0] * len(iters)  # the ``now`` at which each loop last ran
 
-            except StopIteration:
-                # Don't add the loop back and don't yield after a loop completes - it is done
-                self.request_stop()
+        while ready:
+            now = self._clock.now()
+            now_ns = int(now * 1e9)
+            carried = []  # loops that yield; they run at the next instant
+            for i in sorted(ready):
+                # Time advanced into a nanosecond this loop already ran in: defer it so it
+                # does not re-fire that timestamp. (A same-instant cycle keeps `now` equal.)
+                if last_run[i] != now and int(last_run[i] * 1e9) == now_ns:
+                    carried.append(i)
+                    continue
+                try:
+                    command = next(iters[i])
+                except StopIteration:
+                    self.request_stop()
+                    continue
+                last_run[i] = now
+                if isinstance(command, Yield):
+                    carried.append(i)
+                else:
+                    heapq.heappush(pq, (now + command.seconds, i))
+
+            # Next instant is the nearest future wake. With no wake left, the carried loops
+            # re-run at the current instant (they advance no time on their own).
+            if pq and (not carried or pq[0][0] > now):
+                target = pq[0][0]
+            else:
+                target = now
+            ready = carried
+            while pq and pq[0][0] <= target:
+                ready.append(heapq.heappop(pq)[1])
+            if not ready:
+                break
+
+            wait = max(0.0, target - self._clock.now())
+            self._advance_to(target)
+            yield Sleep(wait) if wait > 0 else Yield()
 
     def connect(
         self,
@@ -642,7 +668,7 @@ class World:
         self,
         main_process: ControlSystem | list[ControlSystem | None],
         background: ControlSystem | list[ControlSystem | None] | None = None,
-    ) -> Iterator[Sleep]:
+    ) -> Iterator[Command]:
         """Bind declared connections and launch control systems.
 
         ``main_process`` control systems are scheduled cooperatively in the

@@ -268,7 +268,7 @@ class Harness(pimm.ControlSystem):
                     self._cancel_trajectories()
                     self.ds_command.emit(DsWriterCommand.STOP())
                     self._home(clock)
-                    yield pimm.Pass()
+                    yield pimm.Yield()
                 self.context = directive.payload or {}
                 if self._session:
                     self._session.close()
@@ -297,7 +297,7 @@ class Harness(pimm.ControlSystem):
                     self._session.close()
                     self._session = None
                 self._home(clock)
-                yield pimm.Pass()
+                yield pimm.Yield()
                 return False, recording
             case DirectiveType.HOME:
                 if recording:
@@ -307,7 +307,7 @@ class Harness(pimm.ControlSystem):
                     self._session.close()
                     self._session = None
                 self._home(clock)
-                yield pimm.Pass()
+                yield pimm.Yield()
                 return False, recording
             case _:
                 raise ValueError(f'Unknown directive type: {directive.type}')

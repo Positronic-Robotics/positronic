@@ -261,9 +261,11 @@ def main(
         dc_steps = iter(world.start(data_collection, bg_cs))
         while not world.should_stop:
             try:
-                time.sleep(next(dc_steps).seconds)
+                cmd = next(dc_steps)
             except StopIteration:
                 break
+            if isinstance(cmd, pimm.Sleep):
+                time.sleep(cmd.seconds)
 
 
 @cfn.config(

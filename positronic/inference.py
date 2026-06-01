@@ -152,7 +152,8 @@ def main(
         bg_cs = [*camera_instances.values(), robot_arm, gripper, ds_agent, gui]
         main_cs = [harness, *foreground_cs]
         for cmd in world.start(main_cs, bg_cs):
-            time.sleep(cmd.seconds)
+            if isinstance(cmd, pimm.Sleep):
+                time.sleep(cmd.seconds)
 
 
 def main_sim(

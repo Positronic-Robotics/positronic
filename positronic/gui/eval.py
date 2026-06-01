@@ -618,7 +618,7 @@ class EvalUI(pimm.ControlSystem):
                     texture[:, :, 3] = 1.0
 
             dpg.render_dearpygui_frame()
-            yield pimm.Pass()
+            yield pimm.Yield()
 
         dpg.destroy_context()
 

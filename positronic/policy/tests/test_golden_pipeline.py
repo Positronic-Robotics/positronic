@@ -12,7 +12,7 @@ robot changes state only when a command is *applied*, so
   * timing/anchoring regression -> same state at a different ``ts_ns``
   * horizon/gating regression   -> the state trajectory diverges
 
-Everything runs on CPU with a ``MockClock`` only: no GL/GPU/MuJoCo, no wall
+Everything runs on CPU in a virtual-time world only: no GL/GPU/MuJoCo, no wall
 clock in the asserted path (a fixed-float ``simulate_inference`` is used so
 inference latency is deterministic).
 
@@ -32,7 +32,6 @@ import numpy as np
 import pytest
 
 import pimm
-from pimm.tests.testing import MockClock
 from positronic import wire
 from positronic.dataset.ds_writer_agent import TimeMode
 from positronic.dataset.local_dataset import LocalDataset, LocalDatasetWriter
@@ -178,12 +177,11 @@ class FakeGripper(pimm.ControlSystem):
 
 def _run_pipeline(tmp_path: Path) -> dict:
     """Run the full pipeline once; return per-signal recorded state."""
-    clock = MockClock()
     policy = ActionTiming(fps=ACTION_FPS, horizon_sec=ACTION_HORIZON_S).wrap(ScriptedProportionalPolicy())
     robot = FakeRobot()
     gripper = FakeGripper()
 
-    with LocalDatasetWriter(tmp_path) as ds_writer, pimm.World(clock=clock) as world:
+    with LocalDatasetWriter(tmp_path) as ds_writer, pimm.World(virtual_time=True) as world:
         harness = Harness(policy, simulate_inference=SIMULATE_INFERENCE_S)
         ds_agent = wire.wire(world, harness, ds_writer, {}, robot, gripper, None, TimeMode.MESSAGE)
         world.connect(harness.ds_command, ds_agent.command)
@@ -201,7 +199,7 @@ def _run_pipeline(tmp_path: Path) -> dict:
             (None, 0.5),  # let DsWriterAgent commit before world exit
         ]
         scheduler = world.start([harness, ManualDriver(script), robot, gripper, ds_agent])
-        drive_scheduler(scheduler, clock=clock, steps=8000)
+        drive_scheduler(scheduler, steps=8000)
 
     episode = LocalDataset(tmp_path)[0]
     out: dict[str, dict] = {}

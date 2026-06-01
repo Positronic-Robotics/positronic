@@ -5,7 +5,6 @@ import numpy as np
 import pytest
 
 import pimm
-from pimm.tests.testing import MockClock
 from positronic import wire
 from positronic.data_collection import DataCollectionController, controller_positions_serializer
 from positronic.dataset.ds_writer_agent import DsWriterAgent, DsWriterCommand, DsWriterCommandType, Serializers
@@ -16,13 +15,8 @@ from positronic.tests.testing_coutils import ManualDriver, drive_scheduler
 
 # TODO: Move these fixtures into a common module so that others can reuse them.
 @pytest.fixture
-def clock():
-    return MockClock()
-
-
-@pytest.fixture
-def world(clock):
-    with pimm.World(clock=clock) as w:
+def world():
+    with pimm.World(virtual_time=True) as w:
         yield w
 
 
@@ -68,7 +62,7 @@ def build_collection(world, out_dir: Path, *, metadata_getter: Callable[[], dict
     return dc, ds_agent, ctrl_em_dc, ctrl_em_agent, buttons_em, writer_cm, robot
 
 
-def test_data_collection_records_task_metadata(tmp_path, world, clock):
+def test_data_collection_records_task_metadata(tmp_path, world):
     call_count = 0
 
     def metadata_getter():
@@ -101,7 +95,7 @@ def test_data_collection_records_task_metadata(tmp_path, world, clock):
 
     with writer_cm:
         scheduler = world.start([dc, agent, robot, driver])
-        drive_scheduler(scheduler, clock=clock, steps=400)
+        drive_scheduler(scheduler, steps=400)
 
     assert call_count == 1
 
@@ -111,7 +105,7 @@ def test_data_collection_records_task_metadata(tmp_path, world, clock):
     assert episode['task'] == 'stack-blocks'
 
 
-def test_data_collection_basic_recording(tmp_path, world, clock):
+def test_data_collection_basic_recording(tmp_path, world):
     dc, agent, ctrl_em_dc, ctrl_em_agent, buttons_em, writer_cm, robot = build_collection(world, tmp_path)
 
     # A simple right-hand pose and button frames
@@ -134,7 +128,7 @@ def test_data_collection_basic_recording(tmp_path, world, clock):
 
     with writer_cm:
         scheduler = world.start([dc, agent, robot, driver])
-        drive_scheduler(scheduler, clock=clock)
+        drive_scheduler(scheduler)
 
     ds = LocalDataset(tmp_path)
     assert len(ds) == 1

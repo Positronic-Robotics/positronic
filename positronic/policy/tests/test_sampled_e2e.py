@@ -15,7 +15,6 @@ import numpy as np
 import pytest
 
 import pimm
-from pimm.tests.testing import MockClock
 from positronic.dataset.ds_writer_agent import DsWriterCommandType
 from positronic.drivers import roboarm
 from positronic.drivers.roboarm.command import CartesianPosition
@@ -111,7 +110,6 @@ def _episode_metas(p):
 def test_sampled_policy_e2e():
     """Full harness e2e with SampledPolicy: 4 episodes, 2 policies, balanced sampling."""
     random.seed(0)
-    clock = MockClock()
     robot_state = FakeRobotState()
 
     # Two policies targeting different positions
@@ -130,7 +128,7 @@ def test_sampled_policy_e2e():
     # The harness records each completed episode into the policy's counter on FINISH.
     harness = Harness(sampled, on_episode_complete=sampled.counter.record)
 
-    with pimm.World(clock=clock) as world:
+    with pimm.World(virtual_time=True) as world:
         p = _pair_all(world, harness)
 
         # Run 4 episodes: RUN → sensors → wait → FINISH, repeat
@@ -145,7 +143,7 @@ def test_sampled_policy_e2e():
 
         driver = ManualDriver(script)
         scheduler = world.start([harness, driver])
-        drive_scheduler(scheduler, clock=clock, steps=500)
+        drive_scheduler(scheduler, steps=500)
 
     # --- Assertions ---
 

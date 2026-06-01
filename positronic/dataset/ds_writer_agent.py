@@ -360,7 +360,8 @@ class DsWriterAgent(pimm.ControlSystem):
                             else:
                                 _append(ep_writer, name, value, primary_ts, extra_ts)
 
-                yield pimm.Sleep(limiter.wait_time())
+                wait = limiter.wait_time()
+                yield pimm.Sleep(wait) if wait > 0 else pimm.Yield()
         finally:
             cmd_msg = self.command.read()
             if cmd_msg.updated:

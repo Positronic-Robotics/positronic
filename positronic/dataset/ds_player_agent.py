@@ -40,13 +40,14 @@ class DsPlayerAgent(pimm.ControlSystem):
                 playback = self._apply_command(cmd_msg.data, clock)
 
             if playback is None:
-                yield pimm.Sleep(limiter.wait_time())
+                wait = limiter.wait_time()
+                yield pimm.Sleep(wait) if wait > 0 else pimm.Yield()
                 continue
 
             if playback.empty:
                 self.finished.emit(playback.command)
                 playback = None
-                yield pimm.Pass()
+                yield pimm.Yield()
                 continue
 
             wait_ns = playback.wait_ns(clock.now_ns())
@@ -57,7 +58,7 @@ class DsPlayerAgent(pimm.ControlSystem):
             scheduled_ts, name, value = playback.pop()
             self.outputs[name].emit(value, scheduled_ts)
 
-            yield pimm.Pass()
+            yield pimm.Yield()
 
     def _apply_command(self, cmd: DsPlayerCommand, clock: pimm.Clock) -> _Playback | None:
         match cmd:
