@@ -206,6 +206,9 @@ class MujocoFrankaState(State, pimm.shared_memory.NumpySMAdapter):
         self.array[14 + 7] = self.status.value
 
 
+# TODO: Merge MujocoFranka and MujocoGripper into a single sim control system when the
+# simulator is refactored into one API. They share a sim and tick together, so a single
+# loop could pace state emission to the physics step without desyncing two same-rate loops.
 class MujocoFranka(pimm.ControlSystem):
     def __init__(self, sim: MujocoSim, suffix: str = ''):
         self.sim = sim
@@ -258,7 +261,7 @@ class MujocoFranka(pimm.ControlSystem):
                 self._apply_command(cmd, state)
 
             self.state.emit(state)
-            yield pimm.Sleep(self.sim.model.opt.timestep)
+            yield pimm.Yield()
 
     def _recalculate_ik(self, target_robot_position: geom.Transform3D) -> np.ndarray | None:
         result = ik.qpos_from_site_pose(
@@ -323,7 +326,7 @@ class MujocoGripper(pimm.ControlSystem):
 
             current_grip = self.sim.data.joint(self.joint_name).qpos.item()
             self.grip.emit(self._normalize_current_grip(current_grip))
-            yield pimm.Sleep(self.sim.model.opt.timestep)
+            yield pimm.Yield()
 
     def set_target_grip(self, target_grip: float):
         self.sim.data.actuator(self.actuator_name).ctrl = self._denormalize_target_grip(target_grip)
