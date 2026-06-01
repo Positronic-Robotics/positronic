@@ -733,6 +733,24 @@ class World:
         self.start_in_subprocess(*[cs.run for cs in background])
         return self.interleave(*[cs.run for cs in main_process])
 
+    def run(
+        self,
+        main_process: ControlSystem | list[ControlSystem | None],
+        background: ControlSystem | list[ControlSystem | None] | None = None,
+    ) -> None:
+        """Drive the cooperative scheduler to completion.
+
+        On a wall-clock world, honour each yielded ``Sleep`` so loops keep their real
+        rate. On a virtual-time world the clock is advanced inside ``interleave``, so
+        there is nothing to wait for — just pump as fast as the machine allows.
+        """
+        real_time = not isinstance(self._clock, VirtualClock)
+        for command in self.start(main_process, background):
+            if self.should_stop:
+                break
+            if real_time and isinstance(command, Sleep):
+                time.sleep(command.seconds)
+
     def start_in_subprocess(self, *background_loops: ControlLoop):
         """Starts background control loops. Can be called multiple times for different control loops.
 

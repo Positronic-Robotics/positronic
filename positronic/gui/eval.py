@@ -1,5 +1,4 @@
 import json
-import time
 from collections.abc import Iterator
 from enum import Enum, auto
 
@@ -644,8 +643,7 @@ def main():
         fake_camera = FakeCamera()
         world.connect(fake_camera.frame, ui.cameras['main'])
 
-        for cmd in world.start([ui, fake_camera]):
-            time.sleep(cmd.seconds)
+        world.run([ui, fake_camera])
 
 
 if __name__ == '__main__':

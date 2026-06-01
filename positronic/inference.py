@@ -1,5 +1,4 @@
 import logging
-import time
 from collections import Counter
 from collections.abc import Mapping, Sequence
 from contextlib import nullcontext
@@ -151,9 +150,7 @@ def main(
 
         bg_cs = [*camera_instances.values(), robot_arm, gripper, ds_agent, gui]
         main_cs = [harness, *foreground_cs]
-        for cmd in world.start(main_cs, bg_cs):
-            if isinstance(cmd, pimm.Sleep):
-                time.sleep(cmd.seconds)
+        world.run(main_cs, bg_cs)
 
 
 def main_sim(
@@ -200,8 +197,7 @@ def main_sim(
         _connect_ds_command(world, harness, ds_agent, policy)
         world.connect(harness_emitter[0], harness.directive, emitter_wrapper=harness_emitter[1])
 
-        for _ in world.start([*foreground_cs, *control_systems, ds_agent], gui):
-            pass
+        world.run([*foreground_cs, *control_systems, ds_agent], gui)
 
 
 main_sim_cfg = cfn.Config(

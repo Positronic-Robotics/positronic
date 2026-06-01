@@ -258,14 +258,7 @@ def main(
                 receiver_wrapper=pimm.map(lambda adapter: adapter.array),
             )
 
-        dc_steps = iter(world.start(data_collection, bg_cs))
-        while not world.should_stop:
-            try:
-                cmd = next(dc_steps)
-            except StopIteration:
-                break
-            if isinstance(cmd, pimm.Sleep):
-                time.sleep(cmd.seconds)
+        world.run(data_collection, bg_cs)
 
 
 @cfn.config(
