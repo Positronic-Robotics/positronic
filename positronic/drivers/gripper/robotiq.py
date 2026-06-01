@@ -51,8 +51,7 @@ class Robotiq2F(pimm.ControlSystem):
                 reg = client.read_input_registers(_REG_IN_POS, count=1, device_id=_SLAVE).registers[0]
                 self.grip.emit(min(1.0, max(0.0, (reg >> 8) / 255.0)))
 
-                wait = limiter.wait_time()
-                yield pimm.Sleep(wait) if wait > 0 else pimm.Yield()
+                yield limiter.wait()
         finally:
             client.close()
 

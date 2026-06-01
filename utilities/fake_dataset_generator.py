@@ -195,8 +195,7 @@ class FakeGenerator(pimm.ControlSystem):
                     adapter = pimm.shared_memory.NumpySMAdapter.lazy_init(img, None)
                     emitter.emit(adapter)
 
-                wait = rate_limiter.wait_time()
-                yield pimm.Sleep(wait) if wait > 0 else pimm.Yield()
+                yield rate_limiter.wait()
 
             # --- Stop Episode ---
             self.command.emit(DsWriterCommand.STOP())

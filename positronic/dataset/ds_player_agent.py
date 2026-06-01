@@ -40,8 +40,7 @@ class DsPlayerAgent(pimm.ControlSystem):
                 playback = self._apply_command(cmd_msg.data, clock)
 
             if playback is None:
-                wait = limiter.wait_time()
-                yield pimm.Sleep(wait) if wait > 0 else pimm.Yield()
+                yield limiter.wait()
                 continue
 
             if playback.empty:
