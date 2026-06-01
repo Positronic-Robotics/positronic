@@ -258,7 +258,7 @@ class MujocoFranka(pimm.ControlSystem):
                 self._apply_command(cmd, state)
 
             self.state.emit(state)
-            yield pimm.Yield()
+            yield pimm.Sleep(self.sim.model.opt.timestep)
 
     def _recalculate_ik(self, target_robot_position: geom.Transform3D) -> np.ndarray | None:
         result = ik.qpos_from_site_pose(
@@ -323,7 +323,7 @@ class MujocoGripper(pimm.ControlSystem):
 
             current_grip = self.sim.data.joint(self.joint_name).qpos.item()
             self.grip.emit(self._normalize_current_grip(current_grip))
-            yield pimm.Yield()
+            yield pimm.Sleep(self.sim.model.opt.timestep)
 
     def set_target_grip(self, target_grip: float):
         self.sim.data.actuator(self.actuator_name).ctrl = self._denormalize_target_grip(target_grip)
