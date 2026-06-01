@@ -185,11 +185,11 @@ class TestVirtualClock:
         clock = VirtualClock()
         assert clock.now() == 0.0
         assert clock.now_ns() == 0
-        clock.advance_to(0.5)
+        clock.advance_to_ns(500_000_000)
         assert clock.now() == pytest.approx(0.5)
-        clock.advance_to(0.25)  # an earlier target never moves the clock backward
+        clock.advance_to_ns(250_000_000)  # an earlier target never moves the clock backward
         assert clock.now() == pytest.approx(0.5)
-        clock.advance_to(0.75)
+        clock.advance_to_ns(750_000_000)
         assert clock.now_ns() == 750_000_000
 
     def test_world_virtual_time_creates_virtual_clock(self):

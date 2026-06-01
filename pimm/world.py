@@ -415,17 +415,22 @@ class VirtualClock(Clock):
     Time does not pass on its own. As the scheduler works through its timeline it
     moves this clock forward to the next scheduled event, so simulated time runs as
     fast as the machine allows and is decoupled from any engine's internal time.
-    Only the World advances it; control systems just read ``now()``.
+    The clock is kept in integer nanoseconds — the resolution recorded timestamps use —
+    so the scheduler reasons on one exact grid. Only the World advances it; control
+    systems just read ``now()``/``now_ns()``.
     """
 
     def __init__(self):
-        self._time = 0.0
+        self._time_ns = 0
 
     def now(self) -> float:
-        return self._time
+        return self._time_ns / 1e9
 
-    def advance_to(self, target: float) -> None:
-        self._time = max(self._time, target)
+    def now_ns(self) -> int:
+        return self._time_ns
+
+    def advance_to_ns(self, target_ns: int) -> None:
+        self._time_ns = max(self._time_ns, target_ns)
 
 
 def _bg_wrapper(run_func: ControlLoop, stop_event: EventClass, clock: Clock, name: str):
@@ -519,12 +524,12 @@ class World:
     def should_stop_reader(self) -> SignalReceiver[bool]:
         return EventReceiver(self._stop_event, self._clock)
 
-    def _advance_to(self, target: float) -> None:
-        """Move simulated time forward to ``target``. Wall time advances on its own,
+    def _advance_to(self, target_ns: int) -> None:
+        """Move simulated time forward to ``target_ns``. Wall time advances on its own,
         so this does nothing for a SystemClock world.
         """
         if isinstance(self._clock, VirtualClock):
-            self._clock.advance_to(target)
+            self._clock.advance_to_ns(target_ns)
 
     def interleave(self, *loops: ControlLoop) -> Iterator[Command]:
         """Run control loops cooperatively along one shared timeline.
@@ -534,6 +539,11 @@ class World:
         again at the next instant, without advancing time). The clock then moves to the
         nearest scheduled ``Sleep`` wake; loops that yielded ``Yield`` ride along to it,
         so they run once per tick instead of spinning.
+
+        The timeline is integer nanoseconds (the resolution recorded timestamps use), so
+        a ``Sleep`` advances at least one nanosecond and distinct instants never round to
+        the same recorded timestamp — loops sleeping the same duration land on the exact
+        same instant instead of drifting sub-nanosecond apart.
 
         In a virtual-time world the world owns the clock and advances it here, so
         simulated time runs as fast as the machine allows. In a wall-clock world time
@@ -545,42 +555,33 @@ class World:
         """
         iters = [iter(loop(self.should_stop_reader(), self._clock)) for loop in loops]
         ready = list(range(len(iters)))  # loop indices due at the current instant
-        pq: list[tuple[float, int]] = []  # min-heap of (wake_time, loop_index)
-        last_run = [-1.0] * len(iters)  # the float ``now`` at which each loop last ran
+        pq: list[tuple[int, int]] = []  # min-heap of (wake_ns, loop_index)
 
         while ready:
-            now = self._clock.now()
-            now_ns = int(now * 1e9)
+            now_ns = self._clock.now_ns()
             carried = []  # loops that yield; they run again at the next instant
             for i in sorted(ready):
-                # Timestamps have nanosecond resolution. If time crept into a nanosecond this
-                # loop already ran in (a sub-nanosecond float advance, not a same-instant delta
-                # cycle where ``now`` is unchanged), defer it so it cannot re-fire that timestamp.
-                if last_run[i] != now and int(last_run[i] * 1e9) == now_ns:
-                    carried.append(i)
-                    continue
                 try:
                     command = next(iters[i])
                 except StopIteration:
                     self.request_stop()
                     continue
-                last_run[i] = now
                 if isinstance(command, Yield):
                     carried.append(i)
                 else:
-                    heapq.heappush(pq, (now + command.seconds, i))
+                    heapq.heappush(pq, (now_ns + max(1, round(command.seconds * 1e9)), i))
 
             # The next instant is the nearest future wake, or now if only carried loops remain.
-            target = pq[0][0] if pq else now
+            target_ns = pq[0][0] if pq else now_ns
             ready = carried
-            while pq and pq[0][0] <= target:
+            while pq and pq[0][0] <= target_ns:
                 ready.append(heapq.heappop(pq)[1])
             if not ready:
                 break
 
-            wait = max(0.0, target - self._clock.now())
-            self._advance_to(target)
-            yield Sleep(wait) if wait > 0 else Yield()
+            wait_ns = max(0, target_ns - self._clock.now_ns())
+            self._advance_to(target_ns)
+            yield Sleep(wait_ns / 1e9) if wait_ns else Yield()
 
     def connect(
         self,
