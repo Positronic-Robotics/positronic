@@ -751,8 +751,9 @@ class World:
         """
         real_time = not isinstance(self._clock, VirtualClock)
         for command in self.start(main_process, background):
-            if real_time and isinstance(command, Sleep):
-                time.sleep(command.seconds)
+            if real_time:
+                # Sleep its duration; a Yield() becomes sleep(0) — an OS yield, not a busy-spin.
+                time.sleep(command.seconds if isinstance(command, Sleep) else 0)
 
     def start_in_subprocess(self, *background_loops: ControlLoop):
         """Starts background control loops. Can be called multiple times for different control loops.
