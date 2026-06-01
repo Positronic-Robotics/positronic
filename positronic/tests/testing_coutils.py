@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Iterable, Iterator, Sequence
 from dataclasses import dataclass
-from typing import Any, TypeVar
+from typing import TypeVar
 
 import pimm
 
@@ -13,21 +13,21 @@ ScriptStep = tuple[Callable[[], None] | None, float]
 T = TypeVar('T')
 
 
-def drive_scheduler(iterator: Iterable[pimm.Sleep], *, clock=None, steps: int = 200) -> None:
-    """Advance a scheduler iterator while optionally syncing a test clock.
+def drive_scheduler(iterator: Iterable[pimm.Command], *, steps: int = 200) -> None:
+    """Pump a world scheduler up to ``steps`` times.
+
+    A virtual-time world advances its own clock as it runs, so there is nothing to
+    drive here but the iterator itself.
 
     Args:
         iterator: Iterator returned by ``World.start`` or ``World.interleave``.
-        clock: Optional mock clock exposing ``advance``; used to keep deterministic time.
         steps: Maximum number of iterations to execute before stopping.
     """
     for _ in range(steps):
         try:
-            sleep = next(iterator)
+            next(iterator)
         except StopIteration:
             break
-        if clock is not None:
-            clock.advance(sleep.seconds)
 
 
 @dataclass(eq=False)
@@ -45,7 +45,7 @@ class ManualDriver(pimm.ControlSystem):
                 return
             if action is not None:
                 action()
-            yield pimm.Sleep(sleep_time)
+            yield pimm.Sleep(sleep_time) if sleep_time > 0 else pimm.Yield()
 
 
 def scripted_driver(*steps: ScriptStep) -> ManualDriver:
@@ -98,18 +98,18 @@ class MutableShouldStop:
         self._value = value
 
 
-def drive_until(loop: Iterator[pimm.Sleep], clock, condition, max_steps: int = 100) -> None:
+def drive_until(loop: Iterator[pimm.Command], condition, max_steps: int = 100) -> None:
     for _ in range(max_steps):
-        clock.advance(next(loop).seconds)
+        next(loop)
         if condition():
             return
     raise AssertionError('Condition not reached within step limit')
 
 
 def run_scripted_agent(
-    agent: pimm.ControlSystem, script: Sequence[ScriptStep], *, world: pimm.World, clock: Any, steps: int = 200
+    agent: pimm.ControlSystem, script: Sequence[ScriptStep], *, world: pimm.World, steps: int = 200
 ) -> None:
     """Run ``agent`` alongside a scripted driver within ``world``."""
     driver = ManualDriver(script=script)
     scheduler = world.start([agent, driver])
-    drive_scheduler(scheduler, clock=clock, steps=steps)
+    drive_scheduler(scheduler, steps=steps)

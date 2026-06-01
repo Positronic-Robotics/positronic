@@ -50,7 +50,7 @@ def save_state(model, data) -> dict[str, np.ndarray]:
     return state_data
 
 
-class MujocoSim(pimm.Clock, pimm.ControlSystem):
+class MujocoSim(pimm.ControlSystem):
     def __init__(
         self,
         mujoco_model_path: str,
@@ -78,14 +78,10 @@ class MujocoSim(pimm.Clock, pimm.ControlSystem):
                 if value is not None:
                     self.observations[name].emit(value)
 
-            yield pimm.Pass()
-
-    def now(self) -> float:
-        return self.data.time
+            # One physics step is one tick of simulated time; sleeping a timestep paces the world clock.
+            yield pimm.Sleep(self.model.opt.timestep)
 
     def reset(self, reinitialize_model: bool = True):
-        time_before_reset = self.now()
-
         mj.mj_resetData(self.model, self.data)
 
         if reinitialize_model:
@@ -97,9 +93,6 @@ class MujocoSim(pimm.Clock, pimm.ControlSystem):
         if self.initial_ctrl is not None:
             self.data.ctrl = self.initial_ctrl
         mj.mj_step(self.model, self.data, self.warmup_steps)
-
-        # We need to preserve time during the reset, because otherwise interleave will break
-        self.data.time = time_before_reset
 
         # Reset observers for new episode
         for observer in self.observers.values():
@@ -213,6 +206,9 @@ class MujocoFrankaState(State, pimm.shared_memory.NumpySMAdapter):
         self.array[14 + 7] = self.status.value
 
 
+# TODO: Merge MujocoFranka and MujocoGripper into a single sim control system when the
+# simulator is refactored into one API. They share a sim and tick together, so a single
+# loop could pace state emission to the physics step without desyncing two same-rate loops.
 class MujocoFranka(pimm.ControlSystem):
     def __init__(self, sim: MujocoSim, suffix: str = ''):
         self.sim = sim
@@ -265,7 +261,7 @@ class MujocoFranka(pimm.ControlSystem):
                 self._apply_command(cmd, state)
 
             self.state.emit(state)
-            yield pimm.Pass()
+            yield pimm.Yield()
 
     def _recalculate_ik(self, target_robot_position: geom.Transform3D) -> np.ndarray | None:
         result = ik.qpos_from_site_pose(
@@ -330,7 +326,7 @@ class MujocoGripper(pimm.ControlSystem):
 
             current_grip = self.sim.data.joint(self.joint_name).qpos.item()
             self.grip.emit(self._normalize_current_grip(current_grip))
-            yield pimm.Pass()
+            yield pimm.Yield()
 
     def set_target_grip(self, target_grip: float):
         self.sim.data.actuator(self.actuator_name).ctrl = self._denormalize_target_grip(target_grip)

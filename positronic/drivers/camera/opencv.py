@@ -37,7 +37,7 @@ class OpenCVCamera(pimm.ControlSystem):
             # Use system time for timestamp since OpenCV doesn't provide frame timestamps
             self._frame_adapter = pimm.shared_memory.NumpySMAdapter.lazy_init(frame, self._frame_adapter)
             self.frame.emit(self._frame_adapter)
-            yield pimm.Pass()  # Give control back to the world
+            yield pimm.Yield()  # Give control back to the world
 
 
 if __name__ == '__main__':

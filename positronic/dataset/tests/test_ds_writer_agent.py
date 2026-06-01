@@ -5,7 +5,6 @@ import numpy as np
 import pytest
 
 import pimm
-from pimm.tests.testing import MockClock
 from positronic import geom
 from positronic.dataset import DatasetWriter, EpisodeWriter
 from positronic.dataset.ds_writer_agent import (
@@ -23,13 +22,8 @@ from positronic.tests.testing_coutils import run_scripted_agent
 
 
 @pytest.fixture
-def clock():
-    return MockClock()
-
-
-@pytest.fixture
-def world(clock):
-    with pimm.World(clock=clock) as w:
+def world():
+    with pimm.World(virtual_time=True) as w:
         yield w
 
 
@@ -88,7 +82,7 @@ def build_agent_with_pipes(
     return agent, cmd_em, emitters
 
 
-def test_start_stop_happy_path(world, clock):
+def test_start_stop_happy_path(world):
     ds = FakeDatasetWriter()
     agent, cmd_em, emitters = build_agent_with_pipes({'a': None, 'b': None}, ds, world)
 
@@ -99,7 +93,7 @@ def test_start_stop_happy_path(world, clock):
         (partial(cmd_em.emit, DsWriterCommand(DsWriterCommandType.STOP_EPISODE, {'done': True})), 0.001),
     ]
 
-    run_scripted_agent(agent, script, world=world, clock=clock)
+    run_scripted_agent(agent, script, world=world)
 
     assert len(ds.created) == 1
     w = ds.created[-1]
@@ -109,7 +103,7 @@ def test_start_stop_happy_path(world, clock):
     assert w.statics.get('done') is True
 
 
-def test_episode_finalizes_when_run_stops(world, clock):
+def test_episode_finalizes_when_run_stops(world):
     ds = FakeDatasetWriter()
     agent, cmd_em, emitters = build_agent_with_pipes({'a': None}, ds, world)
 
@@ -118,7 +112,7 @@ def test_episode_finalizes_when_run_stops(world, clock):
         (partial(emitters['a'].emit, 42), 0.001),
     ]
 
-    run_scripted_agent(agent, script, world=world, clock=clock)
+    run_scripted_agent(agent, script, world=world)
 
     assert len(ds.created) == 1
     w = ds.created[-1]
@@ -126,7 +120,7 @@ def test_episode_finalizes_when_run_stops(world, clock):
     assert w.exited is True
 
 
-def test_ignore_duplicate_commands_and_empty_stop(world, clock):
+def test_ignore_duplicate_commands_and_empty_stop(world):
     ds = FakeDatasetWriter()
     agent, cmd_em, emitters = build_agent_with_pipes({'x': None}, ds, world)
 
@@ -137,14 +131,14 @@ def test_ignore_duplicate_commands_and_empty_stop(world, clock):
         (partial(cmd_em.emit, DsWriterCommand(DsWriterCommandType.STOP_EPISODE)), 0.001),
     ]
 
-    run_scripted_agent(agent, script, world=world, clock=clock)
+    run_scripted_agent(agent, script, world=world)
 
     assert len(ds.created) == 1
     w = ds.created[-1]
     assert w.exited is True
 
 
-def test_abort_flow_then_restart(world, clock):
+def test_abort_flow_then_restart(world):
     ds = FakeDatasetWriter()
     agent, cmd_em, emitters = build_agent_with_pipes({'s': None}, ds, world)
 
@@ -156,7 +150,7 @@ def test_abort_flow_then_restart(world, clock):
         (partial(emitters['s'].emit, 11), 0.001),
     ]
 
-    run_scripted_agent(agent, script, world=world, clock=clock)
+    run_scripted_agent(agent, script, world=world)
 
     assert len(ds.created) == 2
     w1, w2 = ds.created[0], ds.created[1]
@@ -164,7 +158,7 @@ def test_abort_flow_then_restart(world, clock):
     assert [(s, v) for (s, v, _, _) in w2.appends] == [('s', 11)]
 
 
-def test_appends_only_on_updates_and_timestamps_from_clock(world, clock):
+def test_appends_only_on_updates_and_timestamps_from_clock(world):
     ds = FakeDatasetWriter()
     agent, cmd_em, emitters = build_agent_with_pipes({'a': None}, ds, world)
 
@@ -175,14 +169,14 @@ def test_appends_only_on_updates_and_timestamps_from_clock(world, clock):
         (partial(emitters['a'].emit, 2), 0.001),
     ]
 
-    run_scripted_agent(agent, script, world=world, clock=clock)
+    run_scripted_agent(agent, script, world=world)
 
     w = ds.created[-1]
     assert len(w.appends) == 2
     assert w.appends[1][2] > w.appends[0][2]
 
 
-def test_time_mode_message_uses_signal_timestamp(world, clock):
+def test_time_mode_message_uses_signal_timestamp(world):
     ds = FakeDatasetWriter()
     agent, cmd_em, emitters = build_agent_with_pipes({'a': None}, ds, world, time_mode=TimeMode.MESSAGE)
 
@@ -196,14 +190,14 @@ def test_time_mode_message_uses_signal_timestamp(world, clock):
         (partial(cmd_em.emit, DsWriterCommand(DsWriterCommandType.STOP_EPISODE)), 0.001),
     ]
 
-    run_scripted_agent(agent, script, world=world, clock=clock)
+    run_scripted_agent(agent, script, world=world)
 
     w = ds.created[-1]
     assert [(s, v) for (s, v, _, _) in w.appends] == [('a', 1), ('a', 2)]
     assert [ts for (_, _, ts, _) in w.appends] == [ts_first, ts_second]
 
 
-def test_integration_with_local_dataset_writer(tmp_path, world, clock):
+def test_integration_with_local_dataset_writer(tmp_path, world):
     import pyarrow.parquet as pq
 
     with LocalDatasetWriter(tmp_path) as writer:
@@ -216,7 +210,7 @@ def test_integration_with_local_dataset_writer(tmp_path, world, clock):
             (partial(cmd_em.emit, DsWriterCommand(DsWriterCommandType.STOP_EPISODE, {'ok': True})), 0.001),
         ]
 
-        run_scripted_agent(agent, script, world=world, clock=clock)
+        run_scripted_agent(agent, script, world=world)
 
     ds = LocalDataset(tmp_path)
     assert len(ds) == 1
@@ -234,7 +228,7 @@ def test_integration_with_local_dataset_writer(tmp_path, world, clock):
     assert 'ts_ns.world' in table_a.column_names
 
 
-def test_inputs_mapping_is_immutable(world, clock):
+def test_inputs_mapping_is_immutable(world):
     ds = FakeDatasetWriter()
     agent, cmd_em, emitters = build_agent_with_pipes({'a': None}, ds, world)
 
@@ -250,7 +244,7 @@ def test_inputs_mapping_is_immutable(world, clock):
         del agent.inputs['a']
 
 
-def test_serializer_scalar_transform(world, clock):
+def test_serializer_scalar_transform(world):
     ds = FakeDatasetWriter()
 
     # Serializer doubles the value
@@ -265,13 +259,13 @@ def test_serializer_scalar_transform(world, clock):
         (partial(cmd_em.emit, DsWriterCommand(DsWriterCommandType.STOP_EPISODE)), 0.001),
     ]
 
-    run_scripted_agent(agent, script, world=world, clock=clock)
+    run_scripted_agent(agent, script, world=world)
 
     w = ds.created[-1]
     assert [(s, v) for (s, v, _, _) in w.appends] == [('x', 6)]
 
 
-def test_serializer_dict_expansion(world, clock):
+def test_serializer_dict_expansion(world):
     ds = FakeDatasetWriter()
 
     # Serializer splits into two signals:
@@ -288,7 +282,7 @@ def test_serializer_dict_expansion(world, clock):
         (lambda: cmd_em.emit(DsWriterCommand(DsWriterCommandType.STOP_EPISODE)), 0.001),
     ]
 
-    run_scripted_agent(agent, script, world=world, clock=clock)
+    run_scripted_agent(agent, script, world=world)
 
     w = ds.created[-1]
     names_and_vals = [(s, v) for (s, v, _, _) in w.appends]
@@ -296,7 +290,7 @@ def test_serializer_dict_expansion(world, clock):
     assert ('img.extra', 11) in names_and_vals
 
 
-def test_serializer_none_drops_sample(world, clock):
+def test_serializer_none_drops_sample(world):
     ds = FakeDatasetWriter()
 
     # Serializer drops negative values by returning None (sample is not recorded)
@@ -312,14 +306,14 @@ def test_serializer_none_drops_sample(world, clock):
         (lambda: cmd_em.emit(DsWriterCommand(DsWriterCommandType.STOP_EPISODE)), 0.001),
     ]
 
-    run_scripted_agent(agent, script, world=world, clock=clock)
+    run_scripted_agent(agent, script, world=world)
 
     w = ds.created[-1]
     # Only the positive value should be recorded
     assert [(s, v) for (s, v, _, _) in w.appends] == [('x', 3)]
 
 
-def test_transform_3d_serializer(world, clock):
+def test_transform_3d_serializer(world):
     ds = FakeDatasetWriter()
     agent, cmd_em, emitters = build_agent_with_pipes({'pose': Serializers.transform_3d}, ds, world)
 
@@ -333,7 +327,7 @@ def test_transform_3d_serializer(world, clock):
         (lambda: cmd_em.emit(DsWriterCommand(DsWriterCommandType.STOP_EPISODE)), 0.001),
     ]
 
-    run_scripted_agent(agent, script, world=world, clock=clock)
+    run_scripted_agent(agent, script, world=world)
 
     w = ds.created[-1]
     names_vals = [(s, v) for (s, v, _, _) in w.appends]
@@ -366,7 +360,7 @@ class _FakeState(State):
         return self._status
 
 
-def test_robot_state_serializer_drops_reset_and_emits_components(world, clock):
+def test_robot_state_serializer_drops_reset_and_emits_components(world):
     ds = FakeDatasetWriter()
     agent, cmd_em, emitters = build_agent_with_pipes({'robot_state': Serializers.robot_state}, ds, world)
 
@@ -382,7 +376,7 @@ def test_robot_state_serializer_drops_reset_and_emits_components(world, clock):
         (lambda: cmd_em.emit(DsWriterCommand(DsWriterCommandType.STOP_EPISODE)), 0.001),
     ]
 
-    run_scripted_agent(agent, script, world=world, clock=clock)
+    run_scripted_agent(agent, script, world=world)
 
     w = ds.created[-1]
     items = {name: val for (name, val, _, _) in w.appends}
@@ -393,7 +387,7 @@ def test_robot_state_serializer_drops_reset_and_emits_components(world, clock):
     np.testing.assert_allclose(items['robot_state.ee_pose'], np.concatenate([t, geom.Rotation.identity.as_quat]))
 
 
-def test_robot_command_serializer_variants(world, clock):
+def test_robot_command_serializer_variants(world):
     ds = FakeDatasetWriter()
     agent, cmd_em, emitters = build_agent_with_pipes({'cmd': Serializers.robot_command}, ds, world)
 
@@ -408,7 +402,7 @@ def test_robot_command_serializer_variants(world, clock):
         (lambda: cmd_em.emit(DsWriterCommand(DsWriterCommandType.STOP_EPISODE)), 0.001),
     ]
 
-    run_scripted_agent(agent, script, world=world, clock=clock)
+    run_scripted_agent(agent, script, world=world)
 
     w = ds.created[-1]
     items = {name: val for (name, val, _, _) in w.appends}
@@ -417,7 +411,7 @@ def test_robot_command_serializer_variants(world, clock):
     assert items['cmd.reset'] == 1
 
 
-def test_multiple_timelines_recorded(world, clock):
+def test_multiple_timelines_recorded(world):
     """Test that DsWriterAgent records message, system, and world timelines."""
     ds = FakeDatasetWriter()
     agent, cmd_em, emitters = build_agent_with_pipes({'a': None}, ds, world)
@@ -428,7 +422,7 @@ def test_multiple_timelines_recorded(world, clock):
         (partial(cmd_em.emit, DsWriterCommand(DsWriterCommandType.STOP_EPISODE)), 0.001),
     ]
 
-    run_scripted_agent(agent, script, world=world, clock=clock)
+    run_scripted_agent(agent, script, world=world)
 
     w = ds.created[-1]
     assert len(w.appends) == 1
@@ -442,7 +436,7 @@ def test_multiple_timelines_recorded(world, clock):
     assert 'message' in extra_ts
     assert 'system' in extra_ts
 
-    # Since world uses MockClock (not SystemClock), should also have 'world'
+    # The virtual-time world drives a simulated clock, so 'world' is present too
     assert 'world' in extra_ts
 
     # All timestamps should be positive integers
@@ -451,7 +445,7 @@ def test_multiple_timelines_recorded(world, clock):
     assert isinstance(extra_ts['world'], int) and extra_ts['world'] > 0
 
 
-def test_suspend_resume(world, clock):
+def test_suspend_resume(world):
     ds = FakeDatasetWriter()
     agent, cmd_em, emitters = build_agent_with_pipes({'a': None}, ds, world)
 
@@ -463,7 +457,7 @@ def test_suspend_resume(world, clock):
         (partial(cmd_em.emit, DsWriterCommand(DsWriterCommandType.STOP_EPISODE)), 0.001),
     ]
 
-    run_scripted_agent(agent, script, world=world, clock=clock)
+    run_scripted_agent(agent, script, world=world)
 
     assert len(ds.created) == 1
     w = ds.created[-1]
@@ -489,7 +483,7 @@ def test_trajectory_override_serializer():
     assert s('reset') == 'reset'
 
 
-def test_serializer_plain_list_value(world, clock):
+def test_serializer_plain_list_value(world):
     """A serializer returning a plain list (non-`Timestamped`) is appended as one sample.
 
     The trajectory-stream dispatch must not hijack legitimate list-valued samples.
@@ -505,7 +499,7 @@ def test_serializer_plain_list_value(world, clock):
         (partial(emitters['v'].emit, 0), 0.001),
         (partial(cmd_em.emit, DsWriterCommand(DsWriterCommandType.STOP_EPISODE)), 0.001),
     ]
-    run_scripted_agent(agent, script, world=world, clock=clock)
+    run_scripted_agent(agent, script, world=world)
 
     w = ds.created[-1]
     assert [(s, v) for (s, v, _, _) in w.appends] == [('v', [1, 2, 3])]
@@ -541,7 +535,7 @@ def test_trajectory_override_serializer_flush_cutoff():
     assert [(t.ts, t.value) for t in s.flush()] == [(1, 'a'), (2, 'b')]
 
 
-def test_suspend_commits_due_drops_future_trajectory(world, clock):
+def test_suspend_commits_due_drops_future_trajectory(world):
     """A mid-trajectory SUSPEND commits already-due samples and drops the un-executed tail."""
     ds = FakeDatasetWriter()
     agent, cmd_em, emitters = build_agent_with_pipes({'traj': TrajectoryOverrideSerializer(None)}, ds, world)
@@ -553,7 +547,7 @@ def test_suspend_commits_due_drops_future_trajectory(world, clock):
         (partial(cmd_em.emit, DsWriterCommand(DsWriterCommandType.SUSPEND_EPISODE)), 0.001),
         (partial(cmd_em.emit, DsWriterCommand(DsWriterCommandType.STOP_EPISODE)), 0.001),
     ]
-    run_scripted_agent(agent, script, world=world, clock=clock)
+    run_scripted_agent(agent, script, world=world)
 
     w = ds.created[-1]
     # 'due' (ts <= suspend time) is committed; the future 'tail' is dropped.

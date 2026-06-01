@@ -84,17 +84,39 @@ class Clock(ABC):
 
 @dataclass
 class Sleep:
+    """Ask the scheduler to wake this control loop after ``seconds`` of (virtual or wall) time.
+
+    Duration must be positive: a control loop that wants to run again without
+    advancing time yields ``Yield()`` instead. This keeps "wait" and "yield"
+    distinct so the virtual-time scheduler can tell a real wake from a busy re-run.
+    """
+
     seconds: float
 
+    def __post_init__(self):
+        if self.seconds <= 0:
+            raise ValueError(f'Sleep requires a positive duration; yield Yield() for zero. Got {self.seconds!r}')
 
-def Pass() -> Sleep:
-    return Sleep(0.0)
+
+@dataclass
+class Yield:
+    """Yield to the scheduler without advancing time: run again at the next instant.
+
+    The scheduler runs every due control loop once per instant, then advances the
+    clock to the nearest ``Sleep`` wake. A ``Yield``ing loop rides along to that
+    wake, so it runs once per tick (e.g. every physics step) without spinning or
+    starving time.
+    """
+
+
+# A control loop yields these to cooperate with the scheduler.
+Command = Sleep | Yield
 
 
 # In pimm a control loop is a main abstraction. This is a code that manages a particular piece of robotic system.
 # It can be camera, sensor, gripper, robotic arm, inference loop, etc. A robotic system then is a collection of
 # control loops that communicate with each other.
-ControlLoop = Callable[[SignalReceiver, Clock], Iterator[Sleep]]
+ControlLoop = Callable[[SignalReceiver, Clock], Iterator[Command]]
 
 
 class ControlSystem(ABC):

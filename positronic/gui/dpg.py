@@ -104,7 +104,7 @@ class DearpyguiUi(pimm.ControlSystem):
                 dpg.set_value('info', info_text)
                 dpg.render_dearpygui_frame()
 
-            yield pimm.Pass()
+            yield pimm.Yield()
 
     def _configure_image_grid(self, n_images: int):
         if n_images == 0:

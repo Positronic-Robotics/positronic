@@ -18,10 +18,11 @@ from pimm.core import (
     SignalEmitter,
     SignalReceiver,
     Sleep,
+    Yield,
 )
 from pimm.shared_memory import SMCompliant
 from pimm.tests.testing import MockClock
-from pimm.world import EventReceiver, LocalQueueEmitter, QueueEmitter, SystemClock, World
+from pimm.world import EventReceiver, LocalQueueEmitter, QueueEmitter, SystemClock, VirtualClock, World
 
 
 def dummy_process(stop_reader, clock):
@@ -43,7 +44,7 @@ class DummyControlSystem(ControlSystem):
     def run(self, should_stop, clock):  # pragma: no cover - exercised via tests
         self.invocations.append((should_stop, clock))
         for _ in range(self.steps):
-            yield Sleep(0.0)
+            yield Yield()
 
     def __repr__(self):
         return f'DummyControlSystem(name={self.name!r})'
@@ -175,6 +176,29 @@ class TestEventReceiver:
         event.set()
         third = reader.read()
         assert third.updated is True
+
+
+class TestVirtualClock:
+    """Under virtual_time the World owns a VirtualClock and advances it itself."""
+
+    def test_advance_to_moves_forward_monotonically(self):
+        clock = VirtualClock()
+        assert clock.now() == 0.0
+        assert clock.now_ns() == 0
+        clock.advance_to_ns(500_000_000)
+        assert clock.now() == pytest.approx(0.5)
+        clock.advance_to_ns(250_000_000)  # an earlier target never moves the clock backward
+        assert clock.now() == pytest.approx(0.5)
+        clock.advance_to_ns(750_000_000)
+        assert clock.now_ns() == 750_000_000
+
+    def test_world_virtual_time_creates_virtual_clock(self):
+        with World(virtual_time=True) as world:
+            assert isinstance(world.clock, VirtualClock)
+
+    def test_world_defaults_to_system_clock(self):
+        with World() as world:
+            assert isinstance(world.clock, SystemClock)
 
 
 class TestWorld:
@@ -359,7 +383,6 @@ class TestWorldControlSystems:
                 world.connect(producer.emitter, consumer.receiver)
 
     def test_mirror_from_emitter_creates_receiver_and_applies_wrapper(self):
-        clock = MockClock(123.456)
         system = DummyControlSystem('loop')
         captured: dict[str, SignalEmitter] = {}
 
@@ -378,7 +401,7 @@ class TestWorldControlSystems:
             captured['wrapper'] = recording
             return recording
 
-        with World(clock) as world:
+        with World(virtual_time=True) as world:
             mirrored = world.pair(system.emitter, emitter_wrapper=wrapper)
 
             assert isinstance(mirrored, ControlSystemReceiver)
@@ -397,11 +420,10 @@ class TestWorldControlSystems:
             assert captured['wrapper'].payloads == [('payload', sent_ts)]
 
     def test_mirror_from_receiver_creates_emitter_and_applies_wrapper(self):
-        clock = MockClock(321.987)
         system = DummyControlSystem('loop')
         wrapper = Mock(side_effect=lambda receiver: receiver)
 
-        with World(clock) as world:
+        with World(virtual_time=True) as world:
             mirrored = world.pair(system.receiver, emitter_wrapper=wrapper)
 
             assert isinstance(mirrored, ControlSystemEmitter)
@@ -427,10 +449,9 @@ class TestWorldControlSystems:
                 world.pair(object())
 
     def test_start_sets_up_local_connections(self):
-        clock = MockClock(0.0)
         producer = DummyControlSystem('producer')
         consumer = DummyControlSystem('consumer')
-        with World(clock) as world:
+        with World(virtual_time=True) as world:
             world.connect(producer.emitter, consumer.receiver)
 
             scheduler = world.start([producer, consumer])
@@ -442,7 +463,7 @@ class TestWorldControlSystems:
             assert result.ts == 0
 
             sleeps = list(scheduler)
-            assert [cmd.seconds for cmd in sleeps] == [0.0, 0.0]
+            assert sleeps == [Yield()]
             assert world.should_stop
 
             assert len(producer.invocations) == 1
@@ -451,11 +472,10 @@ class TestWorldControlSystems:
             consumer_stop_reader, consumer_clock = consumer.invocations[0]
             assert isinstance(producer_stop_reader, EventReceiver)
             assert isinstance(consumer_stop_reader, EventReceiver)
-            assert producer_clock is clock
-            assert consumer_clock is clock
+            assert producer_clock is world.clock
+            assert consumer_clock is world.clock
 
     def test_start_uses_mp_pipes_for_cross_process_connections(self, monkeypatch):
-        clock = MockClock(0.0)
         main_cs = DummyControlSystem('main')
         background_cs = DummyControlSystem('background')
 
@@ -474,7 +494,7 @@ class TestWorldControlSystems:
 
         monkeypatch.setattr(World, 'start_in_subprocess', fake_start_in_subprocess)
 
-        with World(clock) as world:
+        with World(virtual_time=True) as world:
             world.connect(background_cs.emitter, main_cs.receiver)
 
             scheduler = world.start(main_process=main_cs, background=background_cs)
@@ -489,14 +509,13 @@ class TestWorldControlSystems:
             assert background_cs.invocations == []
 
             sleeps = list(scheduler)
-            assert [cmd.seconds for cmd in sleeps] == [0.0]
+            assert sleeps == [Yield()]
             assert len(main_cs.invocations) == 1
             stop_reader, used_clock = main_cs.invocations[0]
             assert isinstance(stop_reader, EventReceiver)
-            assert used_clock is clock
+            assert used_clock is world.clock
 
     def test_start_cross_process_local_emitter_uses_world_clock(self, monkeypatch):
-        clock = MockClock(1.0)
         main_cs = DummyControlSystem('main')
         background_cs = DummyControlSystem('background')
 
@@ -515,7 +534,7 @@ class TestWorldControlSystems:
 
         monkeypatch.setattr(World, 'start_in_subprocess', fake_start_in_subprocess)
 
-        with World(clock) as world:
+        with World(virtual_time=True) as world:
             world.connect(main_cs.emitter, background_cs.receiver)
 
             scheduler = world.start(main_process=main_cs, background=background_cs)
@@ -530,14 +549,13 @@ class TestWorldControlSystems:
             assert started_background == [(background_cs.run,)]
 
             sleeps = list(scheduler)
-            assert [cmd.seconds for cmd in sleeps] == [0.0]
+            assert sleeps == [Yield()]
             assert len(main_cs.invocations) == 1
             stop_reader, used_clock = main_cs.invocations[0]
             assert isinstance(stop_reader, EventReceiver)
-            assert used_clock is clock
+            assert used_clock is world.clock
 
     def test_start_handles_empty_main_process(self, monkeypatch):
-        clock = MockClock(0.0)
         background_cs = DummyControlSystem('background')
 
         started_background = []
@@ -547,7 +565,7 @@ class TestWorldControlSystems:
 
         monkeypatch.setattr(World, 'start_in_subprocess', fake_start_in_subprocess)
 
-        with World(clock) as world:
+        with World(virtual_time=True) as world:
             scheduler = world.start([], background=background_cs)
 
             assert started_background == [(background_cs.run,)]
@@ -620,9 +638,8 @@ class TestWorldInterleave:
 
     def test_single_loop(self):
         """Test interleaving with multiple scenarios: single loop, multiple loops, timing, and scheduling."""
-        clock = MockClock(0.0)
 
-        with World(clock) as world:
+        with World(virtual_time=True) as world:
             execution_order = []
 
             # Test single loop
@@ -642,10 +659,9 @@ class TestWorldInterleave:
             assert world.should_stop
 
     def test_two_loops(self):
-        clock = MockClock(0.0)
         execution_order = []
 
-        with World(clock) as world:
+        with World(virtual_time=True) as world:
 
             def loop_a(stop_reader, clock):
                 for i in range(2):
@@ -659,7 +675,8 @@ class TestWorldInterleave:
 
             sleep_times = list(world.interleave(loop_a, loop_b))
 
-            assert len(sleep_times) == 4
+            # Each instant runs both loops once, so two rounds of Sleep(0.1) yield two commands.
+            assert len(sleep_times) == 2
 
             # Both loops should have executed all their steps
             assert len([item for item in execution_order if item.startswith('a_')]) == 2
@@ -669,9 +686,7 @@ class TestWorldInterleave:
             assert world.should_stop
 
     def test_no_loops(self):
-        clock = MockClock(100.0)
-
-        with World(clock) as world:
+        with World(virtual_time=True) as world:
             sleep_times = list(world.interleave())
             assert len(sleep_times) == 0
             assert not world.should_stop
@@ -679,8 +694,7 @@ class TestWorldInterleave:
         # Test exception handling
 
     def test_failing_loop(self):
-        clock = MockClock(100.0)
-        with World(clock) as world:
+        with World(virtual_time=True) as world:
             execution_order = []
 
             def failing_loop(stop_reader, clock):
@@ -697,9 +711,8 @@ class TestWorldInterleave:
 
     def test_interleave_stop_behavior(self):
         """Test stop event behavior: early stopping and completion detection."""
-        clock = MockClock(0.0)
 
-        with World(clock) as world:
+        with World(virtual_time=True) as world:
             execution_order = []
 
             def stop_checking_loop(stop_reader, clock):
@@ -721,7 +734,7 @@ class TestWorldInterleave:
             sleep_times = list(world.interleave(stop_checking_loop, short_loop))
 
             # Both loops should run some steps
-            assert len(sleep_times) >= 4
+            assert len(sleep_times) >= 3
             assert world.should_stop
 
             # Should have some execution from both loops
@@ -733,9 +746,8 @@ class TestWorldInterleave:
 
     def test_interleave_scheduling_order(self):
         """Test that loops are scheduled in the correct order based on their sleep times."""
-        clock = MockClock(0.0)
 
-        with World(clock) as world:
+        with World(virtual_time=True) as world:
             execution_order = []
 
             def loop_a(stop_reader, clock):
@@ -764,7 +776,6 @@ class TestWorldInterleave:
             assert execution_order == ['a_0', 'b_0', 'b_1', 'a_1']
 
     def test_interleave_introducing_new_loop_not_affect_order_of_existing_loops(self):
-        clock = MockClock(0.0)
         execution_order = []
 
         def loop_a(stop_reader, clock):
@@ -782,34 +793,33 @@ class TestWorldInterleave:
                 execution_order.append(f'c_{i}')
                 yield Sleep(0.3)
 
-        with World(clock) as world:
-            for time_to_sleep in world.interleave(loop_a, loop_b):
-                clock.advance(time_to_sleep.seconds)
+        with World(virtual_time=True) as world:
+            for _ in world.interleave(loop_a, loop_b):
+                pass
             original_order = execution_order.copy()
             execution_order.clear()
-            for time_to_sleep in world.interleave(loop_c, loop_a, loop_c, loop_b, loop_c):
-                clock.advance(time_to_sleep.seconds)
+            for _ in world.interleave(loop_c, loop_a, loop_c, loop_b, loop_c):
+                pass
 
         execution_order = [item for item in execution_order if not item.startswith('c_')]
         assert execution_order == original_order
 
     def test_iterleave_loops_with_sleep_0_execute_interchangeably(self):
-        clock = MockClock(0.0)
         execution_order = []
 
         def loop_a(stop_reader, clock):
             for i in range(4):
                 execution_order.append(f'a_{i}')
-                yield Sleep(0.0)
+                yield Yield()
 
         def loop_b(stop_reader, clock):
             for i in range(4):
                 execution_order.append(f'b_{i}')
-                yield Sleep(0.0)
+                yield Yield()
 
-        with World(clock) as world:
-            for time_to_sleep in world.interleave(loop_a, loop_b):
-                clock.advance(time_to_sleep.seconds)
+        with World(virtual_time=True) as world:
+            for _ in world.interleave(loop_a, loop_b):
+                pass
             original_order = execution_order.copy()
 
             assert original_order == ['a_0', 'b_0', 'a_1', 'b_1', 'a_2', 'b_2', 'a_3', 'b_3']

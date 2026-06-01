@@ -248,7 +248,7 @@ class Robot(pimm.ControlSystem):
                     case _:
                         raise NotImplementedError(f'Unsupported command {cmd}')
 
-            yield pimm.Sleep(rate_limiter.wait_time())
+            yield rate_limiter.wait()
 
 
 if __name__ == '__main__':

@@ -92,7 +92,7 @@ class SoundSystem(pimm.ControlSystem):
 
             chunk_size = stream.get_write_available()
             if chunk_size == 0:
-                yield pimm.Pass()
+                yield pimm.Yield()
                 continue
 
             master_volume, frequency = self._level_to_frequency(self.level.value)
@@ -107,7 +107,7 @@ class SoundSystem(pimm.ControlSystem):
                 if wave_chunk is None:
                     wave_file.close()
                     finished_files.append(name)
-                    yield pimm.Pass()
+                    yield pimm.Yield()
                     continue
                 wave_chunk = np.frombuffer(wave_chunk, dtype=np.int16)
 
@@ -121,7 +121,7 @@ class SoundSystem(pimm.ControlSystem):
                 del audio_files[name]
 
             stream.write(next_chunk.tobytes())
-            yield pimm.Pass()
+            yield pimm.Yield()
 
     def sound_fn(self, size: int, master_volume: float, frequency: float) -> np.ndarray:
         """

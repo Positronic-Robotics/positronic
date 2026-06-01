@@ -1,6 +1,7 @@
 from . import shared_memory
 from .core import (
     Clock,
+    Command,
     ControlLoop,
     ControlSystem,
     ControlSystemEmitter,
@@ -12,17 +13,18 @@ from .core import (
     NoOpEmitter,
     NoOpReceiver,
     NoValueException,
-    Pass,
     ReceiverDict,
     SignalEmitter,
     SignalReceiver,
     Sleep,
+    Yield,
 )
 from .utils import RateLimiter, map
 from .world import World
 
 __all__ = [
     'Clock',
+    'Command',
     'ControlLoop',
     'ControlSystem',
     'ControlSystemEmitter',
@@ -35,7 +37,6 @@ __all__ = [
     'NoOpEmitter',
     'NoOpReceiver',
     'NoValueException',
-    'Pass',
     'RateLimiter',
     'ReceiverDict',
     'shared_memory',
@@ -43,6 +44,7 @@ __all__ = [
     'SignalReceiver',
     'Sleep',
     'World',
+    'Yield',
 ]
 
 from importlib.metadata import version as _version

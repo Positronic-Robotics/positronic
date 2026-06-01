@@ -4,7 +4,7 @@ from collections.abc import Callable
 from typing import TypeVar, overload
 
 from pimm import Message, SignalEmitter, SignalReceiver
-from pimm.core import Clock
+from pimm.core import Clock, Command, Sleep, Yield
 
 T = TypeVar('T', covariant=True)
 K = TypeVar('K', covariant=True)
@@ -133,6 +133,16 @@ class RateLimiter:
         if self._next_time < now:
             self._next_time = now + self._interval
         return wait
+
+    def wait(self) -> Command:
+        """Return the scheduler command that paces the next tick.
+
+        ``Sleep`` for the time left until the next slot, or ``Yield`` when the loop is
+        already due and there is nothing to wait for. Yield it straight from a control
+        loop: ``yield rate_limiter.wait()``.
+        """
+        wait = self.wait_time()
+        return Sleep(wait) if wait > 0 else Yield()
 
 
 class RateCounter:

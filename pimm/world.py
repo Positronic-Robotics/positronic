@@ -20,6 +20,7 @@ from typing import TypeVar
 
 from .core import (
     Clock,
+    Command,
     ControlLoop,
     ControlSystem,
     ControlSystemEmitter,
@@ -30,6 +31,7 @@ from .core import (
     SignalEmitter,
     SignalReceiver,
     Sleep,
+    Yield,
 )
 from .shared_memory import SMCompliant
 from .utils import identity
@@ -407,12 +409,38 @@ class SystemClock(Clock):
         return time.monotonic_ns()
 
 
+class VirtualClock(Clock):
+    """Simulated-time clock owned and advanced by the World.
+
+    Time does not pass on its own. As the scheduler works through its timeline it
+    moves this clock forward to the next scheduled event, so simulated time runs as
+    fast as the machine allows and is decoupled from any engine's internal time.
+    The clock is kept in integer nanoseconds — the resolution recorded timestamps use —
+    so the scheduler reasons on one exact grid. Only the World advances it; control
+    systems just read ``now()``/``now_ns()``.
+    """
+
+    def __init__(self):
+        self._time_ns = 0
+
+    def now(self) -> float:
+        return self._time_ns / 1e9
+
+    def now_ns(self) -> int:
+        return self._time_ns
+
+    def advance_to_ns(self, target_ns: int) -> None:
+        self._time_ns = max(self._time_ns, target_ns)
+
+
 def _bg_wrapper(run_func: ControlLoop, stop_event: EventClass, clock: Clock, name: str):
     try:
         for command in run_func(EventReceiver(stop_event, clock), clock):
             match command:
                 case Sleep(seconds):
                     time.sleep(seconds)
+                case Yield():
+                    time.sleep(0)  # hand the OS scheduler a turn, like a zero-length sleep
                 case _:
                     raise ValueError(f'Unknown command: {command}')
     except KeyboardInterrupt:
@@ -433,7 +461,7 @@ def _bg_wrapper(run_func: ControlLoop, stop_event: EventClass, clock: Clock, nam
 class World:
     """Utility class to bind and run control loops."""
 
-    def __init__(self, clock: Clock | None = None):
+    def __init__(self, *, virtual_time: bool = False):
         # Enforce "spawn" multiprocessing context. This makes process boundaries explicit:
         # background control systems must be picklable, and fork-only implicit state sharing
         # is disallowed (catching many cross-process foot-guns early).
@@ -441,7 +469,9 @@ class World:
 
         # TODO: stop_signal should be a shared variable, since we should be able to track if background
         # processes are still running
-        self._clock = clock or SystemClock()
+        # virtual_time runs a VirtualClock the world advances itself (simulation); otherwise a SystemClock
+        # follows wall time (real hardware). This single flag is the only sim-vs-real switch.
+        self._clock: Clock = VirtualClock() if virtual_time else SystemClock()
 
         self._stop_event = self._mp_ctx.Event()
         self.background_processes = []
@@ -483,58 +513,75 @@ class World:
         self._stop_event.set()
 
     @property
+    def clock(self) -> Clock:
+        """The clock this world schedules against (wall or virtual)."""
+        return self._clock
+
+    @property
     def should_stop(self) -> bool:
         return self._stop_event.is_set()
 
     def should_stop_reader(self) -> SignalReceiver[bool]:
         return EventReceiver(self._stop_event, self._clock)
 
-    def interleave(self, *loops: ControlLoop) -> Iterator[Sleep]:
-        """Interleave multiple control loops, scheduling them based on their timing requirements.
-
-        This method runs multiple control loops concurrently by executing the next scheduled
-        loop and then yielding the wait time until the next execution should occur.
-
-        Args:
-            *loops: Variable number of control loops to interleave
-
-        Yields:
-            float: Wait times until the next scheduled execution should occur
-
-        Behavior:
-            - All loops start at the same time
-            - At each step: execute the next scheduled loop, then yield wait time
-            - Loops are scheduled for future execution based on their yielded sleep times
-            - When any loop completes (StopIteration), the stop event is set
-            - Other loops can check the stop event and exit early if desired
-            - The method continues until all loops have completed
-            - Number of yields equals number of loop executions
+    def _advance_to(self, target_ns: int) -> None:
+        """Move simulated time forward to ``target_ns``. Wall time advances on its own,
+        so this does nothing for a SystemClock world.
         """
-        start = self._clock.now()
-        counter = 0
-        priority_queue = []
+        if isinstance(self._clock, VirtualClock):
+            self._clock.advance_to_ns(target_ns)
 
-        # Initialize all loops with the same start time and unique counters
-        for loop in loops:
-            priority_queue.append((start, counter, iter(loop(self.should_stop_reader(), self._clock))))
-            counter += 1
+    def interleave(self, *loops: ControlLoop) -> Iterator[Command]:
+        """Run control loops cooperatively along one shared timeline.
 
-        heapq.heapify(priority_queue)
+        Every loop due at the current instant runs once, in index order, and yields
+        either ``Sleep(s)`` (wake me ``s`` seconds from now) or ``Yield()`` (run me
+        again at the next instant, without advancing time). The clock then moves to the
+        nearest scheduled ``Sleep`` wake; loops that yielded ``Yield`` ride along to it,
+        so they run once per tick instead of spinning.
 
-        while priority_queue:
-            _, _, loop = heapq.heappop(priority_queue)
+        The timeline is integer nanoseconds (the resolution recorded timestamps use), so
+        a ``Sleep`` advances at least one nanosecond and distinct instants never round to
+        the same recorded timestamp — loops sleeping the same duration land on the exact
+        same instant instead of drifting sub-nanosecond apart.
 
-            try:
-                sleep_time = next(loop).seconds
-                heapq.heappush(priority_queue, (self._clock.now() + sleep_time, counter, loop))
-                counter += 1
+        In a virtual-time world the world owns the clock and advances it here, so
+        simulated time runs as fast as the machine allows. In a wall-clock world time
+        passes on its own; the yielded ``Sleep`` is the wait the caller honours so each
+        loop keeps its real rate (a ``Yield`` means "no wait, run again now").
 
-                if priority_queue:  # Yield the wait time until the next execution should occur
-                    yield Sleep(max(0, priority_queue[0][0] - self._clock.now()))
+        When a loop finishes (``StopIteration``) the stop event is set so the others can
+        observe ``should_stop`` and exit. The iterator ends once no loop is left.
+        """
+        iters = [iter(loop(self.should_stop_reader(), self._clock)) for loop in loops]
+        ready = list(range(len(iters)))  # loop indices due at the current instant
+        pq: list[tuple[int, int]] = []  # min-heap of (wake_ns, loop_index)
 
-            except StopIteration:
-                # Don't add the loop back and don't yield after a loop completes - it is done
-                self.request_stop()
+        while ready:
+            now_ns = self._clock.now_ns()
+            carried = []  # loops that yield; they run again at the next instant
+            for i in sorted(ready):
+                try:
+                    command = next(iters[i])
+                except StopIteration:
+                    self.request_stop()
+                    continue
+                if isinstance(command, Yield):
+                    carried.append(i)
+                else:
+                    heapq.heappush(pq, (now_ns + max(1, round(command.seconds * 1e9)), i))
+
+            # The next instant is the nearest future wake, or now if only carried loops remain.
+            target_ns = pq[0][0] if pq else now_ns
+            ready = carried
+            while pq and pq[0][0] <= target_ns:
+                ready.append(heapq.heappop(pq)[1])
+            if not ready:
+                break
+
+            wait_ns = max(0, target_ns - self._clock.now_ns())
+            self._advance_to(target_ns)
+            yield Sleep(wait_ns / 1e9) if wait_ns else Yield()
 
     def connect(
         self,
@@ -613,7 +660,7 @@ class World:
         self,
         main_process: ControlSystem | list[ControlSystem | None],
         background: ControlSystem | list[ControlSystem | None] | None = None,
-    ) -> Iterator[Sleep]:
+    ) -> Iterator[Command]:
         """Bind declared connections and launch control systems.
 
         ``main_process`` control systems are scheduled cooperatively in the
@@ -686,6 +733,27 @@ class World:
 
         self.start_in_subprocess(*[cs.run for cs in background])
         return self.interleave(*[cs.run for cs in main_process])
+
+    def run(
+        self,
+        main_process: ControlSystem | list[ControlSystem | None],
+        background: ControlSystem | list[ControlSystem | None] | None = None,
+    ) -> None:
+        """Drive the cooperative scheduler to completion.
+
+        On a wall-clock world, honour each yielded ``Sleep`` so loops keep their real
+        rate. On a virtual-time world the clock is advanced inside ``interleave``, so
+        there is nothing to wait for — just pump as fast as the machine allows.
+
+        Runs until the scheduler is exhausted: when one loop finishes and sets
+        ``should_stop``, the others still run once more to observe it and finalize
+        (flush the episode, close the policy) before the iterator ends.
+        """
+        real_time = not isinstance(self._clock, VirtualClock)
+        for command in self.start(main_process, background):
+            if real_time:
+                # Sleep its duration; a Yield() becomes sleep(0) — an OS yield, not a busy-spin.
+                time.sleep(command.seconds if isinstance(command, Sleep) else 0)
 
     def start_in_subprocess(self, *background_loops: ControlLoop):
         """Starts background control loops. Can be called multiple times for different control loops.

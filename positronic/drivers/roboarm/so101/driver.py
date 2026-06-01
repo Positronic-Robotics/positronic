@@ -113,7 +113,7 @@ class Robot(pimm.ControlSystem):
 
             self.state.emit(state)
             self.grip.emit(gripper)
-            yield pimm.Sleep(rate_limit.wait_time())
+            yield rate_limit.wait()
 
     def _solve_ik(self, state, command: roboarm_command.CartesianPosition) -> np.ndarray:
         q = np.array(state.q).tolist()

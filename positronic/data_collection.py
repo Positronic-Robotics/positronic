@@ -258,12 +258,7 @@ def main(
                 receiver_wrapper=pimm.map(lambda adapter: adapter.array),
             )
 
-        dc_steps = iter(world.start(data_collection, bg_cs))
-        while not world.should_stop:
-            try:
-                time.sleep(next(dc_steps).seconds)
-            except StopIteration:
-                break
+        world.run(data_collection, bg_cs)
 
 
 @cfn.config(
@@ -313,7 +308,7 @@ def main_sim(
     writer_cm = (
         LocalDatasetWriter(pos3.sync(output_dir, sync_on_error=True)) if output_dir is not None else nullcontext()
     )
-    with writer_cm as dataset_writer, pimm.World(clock=sim) as world:
+    with writer_cm as dataset_writer, pimm.World(virtual_time=True) as world:
         ds_agent = wire.wire(world, data_collection, dataset_writer, cameras, robot_arm, gripper, gui, TimeMode.MESSAGE)
         _wire(world, ds_agent, data_collection, webxr, robot_arm, sound)
 
@@ -322,13 +317,14 @@ def main_sim(
         )
         sim_iter = iter(sim_iter)
 
+        # VR teleop is live, so pace virtual time to wall time: only step the sim when it has fallen behind.
         start_time = pimm.world.SystemClock().now_ns()
-        sim_start_time = sim.now_ns()
+        sim_start_time = world.clock.now_ns()
 
         while not world.should_stop:
             try:
                 time_since_start = pimm.world.SystemClock().now_ns() - start_time
-                if sim.now_ns() < sim_start_time + time_since_start:
+                if world.clock.now_ns() < sim_start_time + time_since_start:
                     next(sim_iter)
                 else:
                     time.sleep(0.001)
