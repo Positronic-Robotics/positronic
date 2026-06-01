@@ -529,38 +529,33 @@ class World:
     def interleave(self, *loops: ControlLoop) -> Iterator[Command]:
         """Run control loops cooperatively along one shared timeline.
 
-        Every loop due at the current instant runs once, in a stable order, and yields:
-          - ``Sleep(s)`` — wake me ``s`` seconds from now.
-          - ``Yield()`` — run me again at the next instant, without advancing time.
+        Every loop due at the current instant runs once, in index order, and yields
+        either ``Sleep(s)`` (wake me ``s`` seconds from now) or ``Yield()`` (run me
+        again at the next instant, without advancing time). The clock then moves to the
+        nearest scheduled ``Sleep`` wake; loops that yielded ``Yield`` ride along to it,
+        so they run once per tick instead of spinning.
 
-        The clock then moves to the nearest scheduled ``Sleep`` wake; loops that
-        yielded ``Yield`` ride along to that wake, so they run once per tick instead
-        of spinning. In a virtual-time world the world owns the clock and advances it
-        here. In a wall-clock world time passes by itself; the yielded ``Sleep`` is
-        the wait the caller should honour so each loop keeps its real rate (a
-        ``Yield`` means "no wait, run again now").
+        In a virtual-time world the world owns the clock and advances it here, so
+        simulated time runs as fast as the machine allows. In a wall-clock world time
+        passes on its own; the yielded ``Sleep`` is the wait the caller honours so each
+        loop keeps its real rate (a ``Yield`` means "no wait, run again now").
 
-        Recorded timestamps have nanosecond resolution, so a loop is not run twice
-        within one nanosecond once time has advanced into it — that would re-fire the
-        same timestamp (e.g. two control loops whose float wakes land sub-nanosecond
-        apart). Loops legitimately cycling within a single instant (time has not moved
-        at all) keep the same ``now`` and are not held back.
-
-        When a loop finishes (``StopIteration``) the stop event is set so the others
-        can observe ``should_stop`` and exit. The iterator ends once no loop is left.
+        When a loop finishes (``StopIteration``) the stop event is set so the others can
+        observe ``should_stop`` and exit. The iterator ends once no loop is left.
         """
         iters = [iter(loop(self.should_stop_reader(), self._clock)) for loop in loops]
         ready = list(range(len(iters)))  # loop indices due at the current instant
-        pq: list[tuple[float, int]] = []  # (wake_time, loop_index) heap, ordered by time then index
-        last_run = [-1.0] * len(iters)  # the ``now`` at which each loop last ran
+        pq: list[tuple[float, int]] = []  # min-heap of (wake_time, loop_index)
+        last_run = [-1.0] * len(iters)  # the float ``now`` at which each loop last ran
 
         while ready:
             now = self._clock.now()
             now_ns = int(now * 1e9)
-            carried = []  # loops that yield; they run at the next instant
+            carried = []  # loops that yield; they run again at the next instant
             for i in sorted(ready):
-                # Time advanced into a nanosecond this loop already ran in: defer it so it
-                # does not re-fire that timestamp. (A same-instant cycle keeps `now` equal.)
+                # Timestamps have nanosecond resolution. If time crept into a nanosecond this
+                # loop already ran in (a sub-nanosecond float advance, not a same-instant delta
+                # cycle where ``now`` is unchanged), defer it so it cannot re-fire that timestamp.
                 if last_run[i] != now and int(last_run[i] * 1e9) == now_ns:
                     carried.append(i)
                     continue
@@ -575,12 +570,8 @@ class World:
                 else:
                     heapq.heappush(pq, (now + command.seconds, i))
 
-            # Next instant is the nearest future wake. With no wake left, the carried loops
-            # re-run at the current instant (they advance no time on their own).
-            if pq and (not carried or pq[0][0] > now):
-                target = pq[0][0]
-            else:
-                target = now
+            # The next instant is the nearest future wake, or now if only carried loops remain.
+            target = pq[0][0] if pq else now
             ready = carried
             while pq and pq[0][0] <= target:
                 ready.append(heapq.heappop(pq)[1])
