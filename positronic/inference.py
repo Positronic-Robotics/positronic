@@ -190,7 +190,7 @@ def main_sim(
         _seed_counter(policy, output_dir)
 
     writer_cm = LocalDatasetWriter(output_dir) if output_dir is not None else nullcontext(None)
-    with writer_cm as dataset_writer, pimm.World(clock=sim) as world:
+    with writer_cm as dataset_writer, pimm.World(virtual_time=True) as world:
         ds_agent = wire.wire(world, harness, dataset_writer, cameras, robot_arm, gripper, gui, TimeMode.MESSAGE)
         if ds_agent is not None:
             for observer_name in observers.keys():

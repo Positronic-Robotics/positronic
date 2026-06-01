@@ -159,8 +159,8 @@ def test_data_collection_with_mujoco_robot_gripper(tmp_path):
     robot = MujocoFranka(sim, suffix='_ph')
     gripper = MujocoGripper(sim, actuator_name='actuator8_ph', joint_name='finger_joint1_ph')
 
-    # Use sim as the world clock to advance time with physics
-    with pimm.World(clock=sim) as world:
+    # Virtual time: the sim advances the world clock as physics steps
+    with pimm.World(virtual_time=True) as world:
         dc = DataCollectionController(operator_position=OperatorPosition.FRONT.value)
 
         writer_cm = LocalDatasetWriter(tmp_path)

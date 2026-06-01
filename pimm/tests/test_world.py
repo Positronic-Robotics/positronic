@@ -21,7 +21,7 @@ from pimm.core import (
 )
 from pimm.shared_memory import SMCompliant
 from pimm.tests.testing import MockClock
-from pimm.world import EventReceiver, LocalQueueEmitter, QueueEmitter, SystemClock, World
+from pimm.world import EventReceiver, LocalQueueEmitter, QueueEmitter, SystemClock, VirtualClock, World
 
 
 def dummy_process(stop_reader, clock):
@@ -175,6 +175,36 @@ class TestEventReceiver:
         event.set()
         third = reader.read()
         assert third.updated is True
+
+
+class TestVirtualClock:
+    """Test the VirtualClock and World virtual-time selection."""
+
+    def test_advance_accumulates_monotonically(self):
+        clock = VirtualClock()
+        assert clock.now() == 0.0
+        assert clock.now_ns() == 0
+        assert clock.advance(0.5) == pytest.approx(0.5)
+        clock.advance(0.25)
+        assert clock.now() == pytest.approx(0.75)
+        assert clock.now_ns() == 750_000_000
+
+    def test_world_virtual_time_creates_virtual_clock(self):
+        with World(virtual_time=True) as world:
+            assert isinstance(world.clock, VirtualClock)
+
+    def test_world_defaults_to_system_clock(self):
+        with World() as world:
+            assert isinstance(world.clock, SystemClock)
+
+    def test_explicit_clock_overrides_virtual_time_flag(self):
+        clock = MockClock(7.0)
+        with World(clock, virtual_time=True) as world:
+            assert world.clock is clock
+
+    def test_system_clock_cannot_be_advanced(self):
+        with pytest.raises(NotImplementedError):
+            SystemClock().advance(1.0)
 
 
 class TestWorld:

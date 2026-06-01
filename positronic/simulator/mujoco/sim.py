@@ -50,7 +50,7 @@ def save_state(model, data) -> dict[str, np.ndarray]:
     return state_data
 
 
-class MujocoSim(pimm.Clock, pimm.ControlSystem):
+class MujocoSim(pimm.ControlSystem):
     def __init__(
         self,
         mujoco_model_path: str,
@@ -71,6 +71,9 @@ class MujocoSim(pimm.Clock, pimm.ControlSystem):
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Sleep]:
         while not should_stop.value:
             self.step()
+            # The sim paces virtual time: advance the world clock by one physics step. World time is a
+            # separate clock from data.time, so a reset re-randomizes physics without rewinding world time.
+            clock.advance(self.model.opt.timestep)
             self.fps_counter.tick()
 
             for name, observer in self.observers.items():
@@ -80,12 +83,7 @@ class MujocoSim(pimm.Clock, pimm.ControlSystem):
 
             yield pimm.Pass()
 
-    def now(self) -> float:
-        return self.data.time
-
     def reset(self, reinitialize_model: bool = True):
-        time_before_reset = self.now()
-
         mj.mj_resetData(self.model, self.data)
 
         if reinitialize_model:
@@ -97,9 +95,6 @@ class MujocoSim(pimm.Clock, pimm.ControlSystem):
         if self.initial_ctrl is not None:
             self.data.ctrl = self.initial_ctrl
         mj.mj_step(self.model, self.data, self.warmup_steps)
-
-        # We need to preserve time during the reset, because otherwise interleave will break
-        self.data.time = time_before_reset
 
         # Reset observers for new episode
         for observer in self.observers.values():

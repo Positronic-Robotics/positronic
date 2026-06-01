@@ -132,7 +132,7 @@ def main(
 
             replay = Replay()
 
-            with pimm.World(clock=sim) as world:
+            with pimm.World(virtual_time=True) as world:
                 ds_agent = wire.wire(
                     world, replay, dataset_writer, cameras_mapped, robot_arm, gripper, gui, TimeMode.MESSAGE
                 )
@@ -158,7 +158,7 @@ def main(
                 p_bar = tqdm.tqdm(total=round(episode.duration_ns / 1e9, 1), unit='s')
 
                 for _ in sim_iter:
-                    p_bar.n = round(sim.now(), 1)
+                    p_bar.n = round(world.clock.now(), 1)
                     p_bar.refresh()
 
 

@@ -81,6 +81,14 @@ class Clock(ABC):
         """Get current timestamp in nanoseconds."""
         return int(self.now() * 1e9)
 
+    def advance(self, dt: float) -> float:
+        """Move the clock forward by ``dt`` seconds, returning the new time.
+
+        Only controllable clocks (virtual/test) support this; a wall clock
+        cannot be set, so it raises.
+        """
+        raise NotImplementedError(f'{type(self).__name__} cannot be advanced')
+
 
 @dataclass
 class Sleep:

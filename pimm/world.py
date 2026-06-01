@@ -407,6 +407,26 @@ class SystemClock(Clock):
         return time.monotonic_ns()
 
 
+class VirtualClock(Clock):
+    """Monotonic clock the World owns for virtual-time (simulated) runs.
+
+    Time does not pass on its own: the control system that owns the simulated
+    universe (the physics sim) advances it via ``advance()`` as it steps. Being
+    a standalone clock — decoupled from any engine's internal time — a scene
+    reset is a pure state discontinuity that never rewinds world time.
+    """
+
+    def __init__(self, start_time: float = 0.0):
+        self._time = float(start_time)
+
+    def now(self) -> float:
+        return self._time
+
+    def advance(self, dt: float) -> float:
+        self._time += float(dt)
+        return self._time
+
+
 def _bg_wrapper(run_func: ControlLoop, stop_event: EventClass, clock: Clock, name: str):
     try:
         for command in run_func(EventReceiver(stop_event, clock), clock):
@@ -433,7 +453,7 @@ def _bg_wrapper(run_func: ControlLoop, stop_event: EventClass, clock: Clock, nam
 class World:
     """Utility class to bind and run control loops."""
 
-    def __init__(self, clock: Clock | None = None):
+    def __init__(self, clock: Clock | None = None, *, virtual_time: bool = False):
         # Enforce "spawn" multiprocessing context. This makes process boundaries explicit:
         # background control systems must be picklable, and fork-only implicit state sharing
         # is disallowed (catching many cross-process foot-guns early).
@@ -441,7 +461,11 @@ class World:
 
         # TODO: stop_signal should be a shared variable, since we should be able to track if background
         # processes are still running
-        self._clock = clock or SystemClock()
+        # virtual_time picks a VirtualClock (sim: a control system advances it) vs SystemClock (wall: real
+        # hardware). An explicit clock (e.g. a test clock) overrides the flag.
+        if clock is None:
+            clock = VirtualClock() if virtual_time else SystemClock()
+        self._clock = clock
 
         self._stop_event = self._mp_ctx.Event()
         self.background_processes = []
@@ -481,6 +505,11 @@ class World:
 
     def request_stop(self):
         self._stop_event.set()
+
+    @property
+    def clock(self) -> Clock:
+        """The clock this world schedules against (wall or virtual)."""
+        return self._clock
 
     @property
     def should_stop(self) -> bool:
