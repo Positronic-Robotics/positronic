@@ -22,8 +22,7 @@ from positronic.gui.eval import EvalUI
 from positronic.gui.keyboard import KeyboardControl
 from positronic.policy.base import SampledPolicy
 from positronic.policy.harness import Directive, Harness
-from positronic.simulator.mujoco.observers import BodyDistance, StackingSuccess
-from positronic.simulator.mujoco.sim import MujocoCameras, MujocoFranka, MujocoGripper, MujocoSim
+from positronic.simulator.mujoco.sim import FullSimState, MujocoCameras, MujocoFranka, MujocoGripper, MujocoSim
 from positronic.simulator.mujoco.transforms import MujocoSceneTransform
 from positronic.utils import package_assets_path
 from positronic.utils.logging import init_logging
@@ -175,6 +174,7 @@ def main_sim(
     harness = Harness(
         policy,
         static_meta=static_meta,
+        descriptor='mujoco.franka',
         simulate_inference=simulate_inference,
         on_episode_complete=_completion_sink(policy),
     )
@@ -210,10 +210,9 @@ main_sim_cfg = cfn.Config(
     # We use 3 cameras not because we need it, but because Mujoco does not render
     # the second image when using only 2 cameras
     camera_dict={'image.wrist': 'handcam_left_ph', 'image.exterior': 'back_view_ph', 'image.agent_view': 'agentview'},
-    observers={
-        'box_distance': BodyDistance('box_0_body', 'box_1_body'),
-        'stacking_success': StackingSuccess('box_0_body', 'box_1_body', 'hand_ph', full_report=True),
-    },
+    # Record the full sim state as the privileged ground truth; success/distance
+    # criteria are computed downstream in analysis, not live.
+    observers={'sim_state': FullSimState()},
 )
 
 

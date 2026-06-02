@@ -153,6 +153,25 @@ def default_wrappers(clock: pimm.Clock) -> PolicyWrapper:
     return ErrorRecovery(clock) | ChunkedSchedule(clock)
 
 
+def _robot_state_obs(state: Any) -> dict[str, Any]:
+    """Canonical observation entries for a robot-state bundle.
+
+    Keeps ``robot_state.status`` as the raw ``RobotStatus`` enum — ``ErrorRecovery``
+    matches on it — so this is deliberately distinct from the recording serializer
+    ``Serializers.robot_state`` (which emits ``.error`` and drops RESETTING).
+    """
+    return {
+        'robot_state.q': state.q,
+        'robot_state.dq': state.dq,
+        'robot_state.ee_pose': Serializers.transform_3d(state.ee_pose),
+        'robot_state.status': state.status,
+    }
+
+
+def _grip_obs(grip: Any) -> dict[str, Any]:
+    return {'grip': grip}
+
+
 class Harness(pimm.ControlSystem):
     """Control system that manages episode lifecycle and forwards trajectories to drivers.
 
@@ -175,6 +194,7 @@ class Harness(pimm.ControlSystem):
         policy: Policy,
         *,
         static_meta: dict[str, Any] | None = None,
+        descriptor: str = '',
         wrap: PolicyWrapper | Callable[[pimm.Clock], PolicyWrapper] | None = default_wrappers,
         simulate_inference: bool | float = False,
         on_episode_complete: Callable[[Session, dict[str, Any]], None] | None = None,
@@ -206,6 +226,20 @@ class Harness(pimm.ControlSystem):
         self.directive = pimm.ControlSystemReceiver[Directive](self, default=None, maxsize=3)
         self.ds_command = pimm.ControlSystemEmitter[DsWriterCommand](self)
         self.robot_meta_in = pimm.ControlSystemReceiver(self, default={})
+
+        # Embodiment descriptor — a bare string (``mujoco.franka``) handed to the policy on
+        # every call so a multi-embodiment policy can condition on which robot it drives.
+        # Empty until an embodiment declares one.
+        self._descriptor = descriptor
+        # Observation channels: canonical name -> (receiver, serializer producing the
+        # canonical obs-dict entries). Camera frames are handled separately in
+        # ``_build_obs`` (the all-frames-present guard). Adding an arm/gripper channel is a
+        # new entry here, not new code in the assembly loop; the embodiment factory owns
+        # this mapping once it lands (PR 2b).
+        self._observations: dict[str, tuple[pimm.SignalReceiver, Callable[[Any], dict[str, Any]]]] = {
+            'robot_state': (self.robot_state, _robot_state_obs),
+            'grip': (self.gripper_state, _grip_obs),
+        }
 
     def _build_episode_meta(self, context: dict[str, Any]) -> dict[str, Any]:
         meta = dict(self._static_meta)
@@ -314,14 +348,9 @@ class Harness(pimm.ControlSystem):
 
     def _build_obs(self, clock: pimm.Clock) -> dict[str, Any] | None:
         """Read sensors and build observation dict. Returns None if not ready."""
-        robot_state = self.robot_state.value
-        inputs = {
-            'robot_state.q': robot_state.q,
-            'robot_state.dq': robot_state.dq,
-            'robot_state.ee_pose': Serializers.transform_3d(robot_state.ee_pose),
-            'robot_state.status': robot_state.status,
-            'grip': self.gripper_state.value,
-        }
+        inputs: dict[str, Any] = {}
+        for receiver, serializer in self._observations.values():
+            inputs.update(serializer(receiver.value))
         frame_messages = {k: v.value for k, v in self.frames.items()}
         images = {k: v.array for k, v in frame_messages.items()}
         if len(images) != len(self.frames):
@@ -330,6 +359,9 @@ class Harness(pimm.ControlSystem):
         inputs['wall_time_ns'] = time.time_ns()
         inputs['inference_time_ns'] = clock.now_ns()
         inputs.update(self.context)
+        # The embodiment descriptor is harness-owned identity — set it last so a stray
+        # RUN-context key can't shadow it.
+        inputs['descriptor'] = self._descriptor
         return inputs
 
     def _step(self, clock: pimm.Clock) -> Generator[pimm.Sleep, None, None]:

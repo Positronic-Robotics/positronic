@@ -5,8 +5,9 @@ import tqdm
 
 import positronic.cfg.simulator
 from positronic.dataset.local_dataset import LocalDataset
-from positronic.inference import main_sim, timed
+from positronic.inference import main_sim, main_sim_cfg, timed
 from positronic.policy.tests.test_harness import StubPolicy
+from positronic.simulator.mujoco.sim import FullSimState
 
 
 # This integration test intentionally exercises the current `main_sim` wiring end-to-end.
@@ -63,6 +64,7 @@ def test_main_sim_emits_commands_and_records_dataset(tmp_path, monkeypatch):
             camera_fps=10,
             driver=timed.override(simulation_time=0.4, task='integration-test', show_gui=False, num_iterations=1)(),
             camera_dict=camera_dict,
+            observers={'sim_state': FullSimState()},
             output_dir=str(tmp_path),
         )
 
@@ -74,6 +76,8 @@ def test_main_sim_emits_commands_and_records_dataset(tmp_path, monkeypatch):
     assert 'robot_commands.pose' in signals
     assert 'target_grip' in signals
     assert 'image.wrist' in signals
+    # Privileged ground truth: the full sim state is recorded as a time-series signal.
+    assert 'sim_state.mjSTATE_FULLPHYSICS' in signals
 
     camera_samples = list(signals['image.wrist'])
     assert camera_samples, 'Camera signal for handcam_left is empty'
@@ -100,3 +104,15 @@ def test_main_sim_emits_commands_and_records_dataset(tmp_path, monkeypatch):
     assert isinstance(last_obs['image.wrist'], np.ndarray)
     assert 'robot_state.ee_pose' in last_obs
     assert 'task' in last_obs
+    assert last_obs['descriptor'] == 'mujoco.franka'
+
+
+def test_main_sim_cfg_records_full_sim_state():
+    """The stack_cubes eval records the privileged full sim state, not live success observers.
+
+    Guards the production observer swap directly (the heavyweight e2e test above wires its own
+    observers, so it cannot catch a regression of ``main_sim_cfg``).
+    """
+    observers = main_sim_cfg.kwargs['observers']
+    assert set(observers) == {'sim_state'}
+    assert isinstance(observers['sim_state'], FullSimState)
