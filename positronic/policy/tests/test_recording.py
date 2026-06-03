@@ -3,7 +3,7 @@ import numpy as np
 from positronic.drivers.roboarm.command import CartesianPosition
 from positronic.geom import Rotation, Transform3D
 from positronic.policy.base import Policy, Session
-from positronic.policy.recording import Recorder, _build_blueprint, _squeeze_batch, _stack_numeric, action_chunk_arrays
+from positronic.policy.recording import Recorder, _build_blueprint, _squeeze_batch, _stack_numeric
 
 
 class _TrackingSession(Session):
@@ -204,39 +204,6 @@ def test_partial_timelines_only_set_present_keys(tmp_path):
 
     session({'wall_time_ns': 555, 'x': 1.0})  # no inference_time_ns
     assert inner.last_session.seen_timeline_values == {'wall_time': 555}
-
-
-def test_action_chunk_arrays_stacks_fields():
-    actions = [
-        {'joint_position': np.zeros(7, dtype=np.float32), 'target_grip': 0.5, 'timestamp': 0.0},
-        {'joint_position': np.ones(7, dtype=np.float32), 'target_grip': 0.6, 'timestamp': 0.1},
-        {'joint_position': np.full(7, 2.0, dtype=np.float32), 'target_grip': 0.7, 'timestamp': 0.2},
-    ]
-    arrays = dict(action_chunk_arrays(actions))
-    assert arrays['joint_position'].shape == (3, 7)
-    assert arrays['target_grip'].shape == (3,)
-    # timestamp is stored as int64 nanoseconds (relative seconds at the tap).
-    assert arrays['timestamp'].dtype == np.int64
-    np.testing.assert_array_equal(arrays['timestamp'], [0, 100_000_000, 200_000_000])
-
-
-def test_action_chunk_arrays_groups_commands_by_type():
-    pose = Transform3D(translation=np.array([0.1, 0.2, 0.3], dtype=np.float32), rotation=Rotation.identity)
-    actions = [
-        {'robot_command': CartesianPosition(pose=pose), 'timestamp': 0.0},
-        {'robot_command': CartesianPosition(pose=pose), 'timestamp': 0.1},
-    ]
-    arrays = dict(action_chunk_arrays(actions))
-    # Heterogeneous commands land under {key}/{type}/{wire_field}, one homogeneous array each.
-    assert 'robot_command/cartesian_pos/pose' in arrays
-    assert arrays['robot_command/cartesian_pos/pose'].shape[0] == 2
-    assert arrays['timestamp'].shape == (2,)
-
-
-def test_action_chunk_arrays_skips_non_numeric():
-    arrays = dict(action_chunk_arrays([{'note': 'hello', 'timestamp': 0.0}]))
-    assert 'note' not in arrays
-    assert 'timestamp' in arrays
 
 
 def test_concurrent_recorders_write_separate_files(tmp_path):
