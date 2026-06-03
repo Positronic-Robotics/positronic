@@ -139,18 +139,19 @@ def _build_blueprint(
     return rrb.Blueprint(rrb.Grid(*grids)) if grids else None
 
 
-def _command_field_arrays(key: str, commands: list) -> list[tuple[str, np.ndarray]]:
-    """Stack robot commands grouped by type, each group's fields as homogeneous arrays."""
+def _command_field_arrays(key: str, commands: list, horizons: np.ndarray) -> list[tuple[str, np.ndarray, np.ndarray]]:
+    """Stack robot commands grouped by type, each group's fields and horizons as arrays."""
     groups: dict[str, list] = {}
-    for cmd in commands:
-        groups.setdefault(cmd.TYPE, []).append(cmd)
-    out: list[tuple[str, np.ndarray]] = []
+    for cmd, h in zip(commands, horizons, strict=True):
+        groups.setdefault(cmd.TYPE, []).append((cmd, h))
+    out: list[tuple[str, np.ndarray, np.ndarray]] = []
     for type_name, group in groups.items():
-        wires = [roboarm_command.to_wire(c) for c in group]
+        wires = [roboarm_command.to_wire(c) for c, _ in group]
+        group_horizon = np.array([h for _, h in group], dtype=np.float64)
         for field in (k for k in wires[0] if k != 'type'):
             arr = _stack_numeric([w[field] for w in wires])
             if arr is not None:
-                out.append((f'{key}/{type_name}/{field}', arr))
+                out.append((f'{key}/{type_name}/{field}', arr, group_horizon))
     return out
 
 
@@ -177,7 +178,7 @@ def _jaw_half(grip: np.ndarray | None, n: int) -> np.ndarray:
     """Per-waypoint half jaw-width from grip on a fixed absolute scale (0 -> open, 1 -> closed)."""
     if grip is None:
         return np.full(n, 0.5 * (_GRIP_OPEN_HALF + _GRIP_CLOSED_HALF))
-    g = np.clip(np.asarray(grip, dtype=np.float64), 0.0, 1.0)
+    g = np.clip(np.asarray(grip, dtype=np.float64).reshape(-1), 0.0, 1.0)
     return _GRIP_OPEN_HALF - g * (_GRIP_OPEN_HALF - _GRIP_CLOSED_HALF)
 
 
@@ -224,6 +225,8 @@ def _log_action_series(path: str, arr: np.ndarray, horizon: np.ndarray, base_ns:
     for i in range(arr.shape[0]):
         set_timeline_time('action_time', base_ns + int(round(float(horizon[i]) * 1e9)))
         rr.log(path, rr.Scalars(arr[i]))
+    # ``action_time`` is owned by this series; clear it so other entities aren't stamped on it.
+    rr.disable_timeline('action_time')
 
 
 def _log_ee_pose_chunk(
@@ -363,27 +366,30 @@ class _RecordingTapSession(DelegatingSession):
         grip = _stack_numeric([a['target_grip'] for a in actions]) if all('target_grip' in a for a in actions) else None
         actual_pos = obs.get('robot_state.ee_pose') if isinstance(obs, Mapping) else None
         actual_grip = obs.get('grip') if isinstance(obs, Mapping) else None
+        actual_g = float(np.asarray(actual_grip).reshape(-1)[0]) if actual_grip is not None else None
         keys: list[str] = []
         for action in actions:
             for key in action:
                 if key not in keys and key != 'timestamp':
                     keys.append(key)
         for key in keys:
-            values = [a[key] for a in actions if key in a]
+            idx = [i for i, a in enumerate(actions) if key in a]
+            values = [actions[i][key] for i in idx]
+            h = horizon[idx]
             path = f'{prefix}/{key}'
             series_path = f'{prefix}/series/{key}'
-            if values and all(isinstance(v, roboarm_command.CartesianPosition) for v in values):
-                actual_g = float(np.asarray(actual_grip).reshape(-1)[0]) if actual_grip is not None else None
-                pose = _log_ee_pose_chunk(path, values, horizon, grip, actual_pos, actual_g)
-                _log_action_series(series_path, pose, horizon, base_ns, names=_POSE_LABELS)
+            if all(isinstance(v, roboarm_command.CartesianPosition) for v in values):
+                grip_sub = grip[idx] if grip is not None else None
+                pose = _log_ee_pose_chunk(path, values, h, grip_sub, actual_pos, actual_g)
+                _log_action_series(series_path, pose, h, base_ns, names=_POSE_LABELS)
                 self._rec._path3d_paths.append(f'{path}/trajectory')
                 self._rec._series_paths.append(series_path)
-            elif values and all(isinstance(v, roboarm_command.CommandType) for v in values):
-                for suffix, arr in _command_field_arrays(key, values):
-                    _log_action_series(f'{prefix}/series/{suffix}', arr, horizon, base_ns, names=None)
+            elif all(isinstance(v, roboarm_command.CommandType) for v in values):
+                for suffix, arr, group_h in _command_field_arrays(key, values, h):
+                    _log_action_series(f'{prefix}/series/{suffix}', arr, group_h, base_ns, names=None)
                     self._rec._series_paths.append(f'{prefix}/series/{suffix}')
             elif (arr := _stack_numeric(values)) is not None:
-                _log_action_series(series_path, arr, horizon, base_ns, names=[key])
+                _log_action_series(series_path, arr, h, base_ns, names=[key])
                 self._rec._series_paths.append(series_path)
 
     def _send_blueprint(self) -> None:
