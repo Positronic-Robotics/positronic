@@ -115,8 +115,7 @@ _GRIP_CLOSED_HALF = 0.003
 _FINGER_HALF_DEPTH = 0.004
 _FINGER_RADIUS = 0.0004
 _SPAN_RADIUS = 0.00025
-_ACTUAL_FINGER_RADIUS = 0.0006
-_ACTUAL_SPAN_RADIUS = 0.0004
+_ACTUAL_SCALE = 1.5  # the actual-EE marker reuses the glyph, drawn bolder
 _SPAN_RGB = (205, 205, 210)
 _POSE_LABELS = ['tx', 'ty', 'tz', 'qw', 'qx', 'qy', 'qz']
 
@@ -124,18 +123,18 @@ _POSE_LABELS = ['tx', 'ty', 'tz', 'qw', 'qx', 'qy', 'qz']
 def _build_blueprint(
     image_paths: list[str], numeric_paths: list[str], path3d_paths: list[str] = (), series_paths: list[str] = ()
 ) -> rrb.Blueprint | None:
-    if not (image_paths or numeric_paths or path3d_paths or series_paths):
-        return None
-    grid_items: list[Any] = []
-    if image_paths:
-        grid_items.append(rrb.Grid(*[rrb.Spatial2DView(name=p.rsplit('/', 1)[-1], origin=p) for p in image_paths]))
-    if numeric_paths:
-        grid_items.append(rrb.Grid(*[rrb.TimeSeriesView(name=p.rsplit('/', 1)[-1], origin=p) for p in numeric_paths]))
-    if path3d_paths:
-        grid_items.append(rrb.Grid(*[rrb.Spatial3DView(name=p.rsplit('/', 1)[-1], origin=p) for p in path3d_paths]))
-    if series_paths:
-        grid_items.append(rrb.Grid(*[rrb.TimeSeriesView(name=p.rsplit('/', 1)[-1], origin=p) for p in series_paths]))
-    return rrb.Blueprint(rrb.Grid(*grid_items))
+    categories = [
+        (rrb.Spatial2DView, image_paths),
+        (rrb.TimeSeriesView, numeric_paths),
+        (rrb.Spatial3DView, path3d_paths),
+        (rrb.TimeSeriesView, series_paths),
+    ]
+    grids = [
+        rrb.Grid(*[view(name=p.rsplit('/', 1)[-1], origin=p) for p in dict.fromkeys(paths)])
+        for view, paths in categories
+        if paths
+    ]
+    return rrb.Blueprint(rrb.Grid(*grids)) if grids else None
 
 
 def _command_field_arrays(key: str, commands: list) -> list[tuple[str, np.ndarray]]:
@@ -174,7 +173,7 @@ def _horizon_colors(horizon: np.ndarray) -> np.ndarray:
 
 def _jaw_half(grip: np.ndarray | None, n: int) -> np.ndarray:
     """Per-waypoint half jaw-width from grip on a fixed absolute scale (0 -> open, 1 -> closed)."""
-    if grip is None or len(grip) != n:
+    if grip is None:
         return np.full(n, 0.5 * (_GRIP_OPEN_HALF + _GRIP_CLOSED_HALF))
     g = np.clip(np.asarray(grip, dtype=np.float64), 0.0, 1.0)
     return _GRIP_OPEN_HALF - g * (_GRIP_OPEN_HALF - _GRIP_CLOSED_HALF)
@@ -218,8 +217,7 @@ def _log_action_series(path: str, arr: np.ndarray, horizon: np.ndarray, base_ns:
     if names:
         rr.log(path, rr.SeriesLines(names=names), static=True)
     for i in range(arr.shape[0]):
-        offset = horizon[i] if i < len(horizon) else i
-        set_timeline_time('action_time', base_ns + int(round(float(offset) * 1e9)))
+        set_timeline_time('action_time', base_ns + int(round(float(horizon[i]) * 1e9)))
         rr.log(path, rr.Scalars(arr[i]))
 
 
@@ -233,9 +231,9 @@ def _log_ee_pose_chunk(
 ) -> np.ndarray:
     """Log a Cartesian end-effector chunk as one 3D object.
 
-    The predicted path is a thin line; each waypoint is a flat rectangle outline oriented
-    by its pose (jaw width = grip, edge color = horizon). The robot's actual gripper
-    (pose + grip from the obs) is overlaid as a white rectangle.
+    The predicted path is a thin line; each waypoint draws the gripper's two finger bars
+    oriented by its pose (finger separation = grip, color = horizon), faintly closed into a
+    rectangle. The robot's actual gripper (pose + grip from the obs) is overlaid in white.
     """
     translations = np.array([c.pose.translation for c in commands], dtype=np.float64)
     rotations = np.array([c.pose.rotation.as_rotation_matrix for c in commands], dtype=np.float64)
@@ -259,7 +257,7 @@ def _log_ee_pose_chunk(
             grip_a = np.array([actual_grip]) if actual_grip is not None else None
             fingers_a, spans_a = _gripper_rects(ee[:3][None, :], rot[None, :, :], grip_a)
             colors_a = [[245, 245, 245]] * len(fingers_a) + [list(_SPAN_RGB)] * len(spans_a)
-            radii_a = [_ACTUAL_FINGER_RADIUS] * len(fingers_a) + [_ACTUAL_SPAN_RADIUS] * len(spans_a)
+            radii_a = [_FINGER_RADIUS * _ACTUAL_SCALE] * len(fingers_a) + [_SPAN_RADIUS * _ACTUAL_SCALE] * len(spans_a)
             rr.log(f'{path}/trajectory/actual', rr.LineStrips3D(fingers_a + spans_a, colors=colors_a, radii=radii_a))
 
     return np.concatenate([translations, quats_wxyz], axis=1)
@@ -384,12 +382,8 @@ class _RecordingTapSession(DelegatingSession):
                 self._rec._series_paths.append(series_path)
 
     def _send_blueprint(self) -> None:
-        bp = _build_blueprint(
-            list(dict.fromkeys(self._rec._image_paths)),
-            list(dict.fromkeys(self._rec._numeric_paths)),
-            list(dict.fromkeys(self._rec._path3d_paths)),
-            list(dict.fromkeys(self._rec._series_paths)),
-        )
+        rec = self._rec
+        bp = _build_blueprint(rec._image_paths, rec._numeric_paths, rec._path3d_paths, rec._series_paths)
         if bp is not None:
             rr.send_blueprint(bp)
 
