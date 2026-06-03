@@ -209,16 +209,11 @@ class Harness(pimm.ControlSystem):
         self.ds_command = pimm.ControlSystemEmitter[DsWriterCommand](self)
         self.robot_meta_in = pimm.ControlSystemReceiver(self, default={})
 
-        # Embodiment descriptor — a bare string (``mujoco.franka``) handed to the policy on
-        # every call so a multi-embodiment policy can condition on which robot it drives.
-        # Empty until an embodiment declares one.
+        # Embodiment descriptor (e.g. ``mujoco.franka``) passed to the policy every call.
         self._descriptor = descriptor
-        # Observation channels: name -> (receiver, serializer-or-None), the same contract as
-        # ``DsWriterAgent.add_signal``. The serializer splits a device value into canonical
-        # ``name + suffix`` entries (or ``None`` passes a scalar through). The harness treats
-        # every channel identically — no robot-vs-grip knowledge. The embodiment factory owns
-        # this mapping once it lands (PR 2b); camera frames keep their own all-present guard.
-        self._observations: dict[str, tuple[pimm.SignalReceiver, Callable[[Any], Any] | None]] = {
+        # Observation channels: name -> (receiver, serializer-or-None), like ``add_signal``.
+        # The serializer owns the device value's split into ``name + suffix`` entries.
+        self._observations = {
             'robot_state': (self.robot_state, Serializers.robot_state_obs),
             'grip': (self.gripper_state, None),
         }
@@ -346,9 +341,7 @@ class Harness(pimm.ControlSystem):
         inputs['wall_time_ns'] = time.time_ns()
         inputs['inference_time_ns'] = clock.now_ns()
         inputs.update(self.context)
-        # The embodiment descriptor is harness-owned identity — set it last so a stray
-        # RUN-context key can't shadow it.
-        inputs['descriptor'] = self._descriptor
+        inputs['descriptor'] = self._descriptor  # last, so a context key can't shadow it
         return inputs
 
     def _step(self, clock: pimm.Clock) -> Generator[pimm.Sleep, None, None]:

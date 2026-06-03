@@ -51,14 +51,10 @@ def save_state(model, data) -> dict[str, np.ndarray]:
 
 
 class FullSimState(MujocoSimObserver):
-    """Privileged observer recording the full simulator state each step.
+    """Privileged observer recording the full ``save_state`` each step.
 
-    Returns ``save_state``'s raw arrays keyed for nested recording
-    (``sim_state.mjSTATE_FULLPHYSICS`` etc.), so success/distance criteria are computed
-    downstream from the recording instead of live. The leading ``.`` makes the writer
-    expand each spec into its own ``sim_state.<spec>`` signal; empty specs are skipped.
-    Lives here, not in observers.py, so it can reuse ``save_state`` without a circular
-    import (sim.py already imports ``MujocoSimObserver`` from observers.py).
+    Keys each spec with a leading ``.`` so the writer expands it into a
+    ``sim_state.<spec>`` signal; scoring is computed downstream, not live.
     """
 
     def __call__(self, model: mj.MjModel, data: mj.MjData) -> dict[str, np.ndarray]:

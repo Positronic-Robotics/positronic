@@ -210,8 +210,7 @@ main_sim_cfg = cfn.Config(
     # We use 3 cameras not because we need it, but because Mujoco does not render
     # the second image when using only 2 cameras
     camera_dict={'image.wrist': 'handcam_left_ph', 'image.exterior': 'back_view_ph', 'image.agent_view': 'agentview'},
-    # Record the full sim state as the privileged ground truth; success/distance
-    # criteria are computed downstream in analysis, not live.
+    # Full sim state is the privileged ground truth; scoring is computed downstream.
     observers={'sim_state': FullSimState()},
 )
 

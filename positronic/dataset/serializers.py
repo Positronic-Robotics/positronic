@@ -114,13 +114,8 @@ class Serializers:
 
     @staticmethod
     def robot_state_obs(state: State) -> dict[str, Any]:
-        """Observation-side robot-state split, keyed for ``name + suffix`` expansion.
-
-        Mirrors :meth:`robot_state` but keeps ``.status`` as the raw ``RobotStatus``
-        enum (``ErrorRecovery`` matches on it) and never drops RESETTING — the policy
-        must always see the current state. Step 7 unifies the obs and recording
-        serializers onto one declared serializer.
-        """
+        """Observation-side ``State`` split; keeps the raw ``RobotStatus`` that
+        ``ErrorRecovery`` matches on, unlike :meth:`robot_state`. Step 7 unifies the two."""
         return {
             '.q': state.q,
             '.dq': state.dq,
@@ -147,13 +142,8 @@ class Serializers:
 
 
 def expand_suffixed(name: str, value: Any) -> Iterator[tuple[str, Any]]:
-    """Unfold a serialized value into ``(full_name, value)`` pairs.
-
-    A dict result expands into ``name + suffix`` entries (use ``""`` to keep the base
-    name); any other value yields the single ``(name, value)`` pair. Shared by the
-    dataset writer (``DsWriterAgent._append``) and the Harness obs assembly so both
-    follow one naming convention. Callers decide whether to skip ``None`` values.
-    """
+    """Unfold a value into ``(full_name, value)`` pairs: a dict expands into ``name + suffix``
+    entries (``""`` keeps the base name), anything else yields ``(name, value)``."""
     if isinstance(value, dict):
         for suffix, v in value.items():
             yield name + suffix, v
