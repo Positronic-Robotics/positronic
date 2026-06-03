@@ -26,9 +26,15 @@ inference at the outermost tap and reused by every inner tap, so all taps stamp 
 same inference at the same time and their streams line up. A per-tap ``step``
 sequence timeline is always added for ordering within a single tap.
 
-An action chunk is logged structure-of-arrays at the single inference timestamp:
-each field is stacked across the chunk into one ``rr.Tensor``. Robot commands are
-encoded to plain arrays and grouped by command type so each tensor is homogeneous.
+An action chunk is shown two ways. A Cartesian end-effector command becomes one 3D
+object (latest-at, so a new chunk replaces the last): a thin ``rr.LineStrips3D`` path,
+and at each waypoint the gripper's two fingers as fixed-length bars (``rr.LineStrips3D``)
+oriented by its pose, closed into a thin rectangle by two faint span edges. The finger
+separation along the jaw axis encodes grip on a fixed scale and the color encodes horizon.
+The robot's actual gripper is overlaid the same way in white for predicted-vs-realized.
+Every field is *also* logged as ``rr.Scalars`` on a dedicated ``action_time`` timeline
+(each action stamped at its absolute execution time), so a ``TimeSeriesView`` reads
+exact commanded values with real axes. Select ``action_time`` in the viewer to see them.
 
 Entity paths are ``{tap_name}/{data_key}``. A tap's incoming observation keys and
 outgoing action keys share that namespace; in the rare case the same key appears on
@@ -36,6 +42,7 @@ both sides, the later write overwrites at that timestamp.
 """
 
 import itertools
+from collections.abc import Mapping
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -44,6 +51,7 @@ import numpy as np
 import rerun as rr
 import rerun.blueprint as rrb
 
+from positronic import geom
 from positronic.drivers.roboarm import command as roboarm_command
 from positronic.policy.base import DelegatingSession, PolicyWrapper, Session
 from positronic.utils.rerun_compat import log_numeric_series, set_timeline_sequence, set_timeline_time
@@ -94,16 +102,39 @@ def _stack_numeric(values: list) -> np.ndarray | None:
     return arr
 
 
-def _build_blueprint(image_paths: list[str], numeric_paths: list[str]) -> rrb.Blueprint | None:
-    if not image_paths and not numeric_paths:
+# Each waypoint shows the gripper's two fingers as fixed-length bars lying in the gripper's
+# local X-Y plane (perpendicular to the finger/approach axis, local Z; on a top-down grasp
+# local Z points down so the bars lie parallel to the world XY plane, a footprint seen from
+# above). Each bar runs along the local X (finger-depth) axis with fixed length; their
+# separation along the local Y jaw axis encodes grip on a fixed absolute scale (grip 0 ->
+# wide/open, grip 1 -> narrow/closed). Two span edges (along Y) close the bars into a
+# rectangle; bars carry the horizon color. The viewer doesn't honor line alpha (low-alpha
+# lines render black), so spans use a faint near-background gray to read as "almost there".
+_GRIP_OPEN_HALF = 0.011
+_GRIP_CLOSED_HALF = 0.003
+_FINGER_HALF_DEPTH = 0.004
+_FINGER_RADIUS = 0.0004
+_SPAN_RADIUS = 0.00025
+_ACTUAL_FINGER_RADIUS = 0.0006
+_ACTUAL_SPAN_RADIUS = 0.0004
+_SPAN_RGB = (205, 205, 210)
+_POSE_LABELS = ['tx', 'ty', 'tz', 'qw', 'qx', 'qy', 'qz']
+
+
+def _build_blueprint(
+    image_paths: list[str], numeric_paths: list[str], path3d_paths: list[str] = (), series_paths: list[str] = ()
+) -> rrb.Blueprint | None:
+    if not (image_paths or numeric_paths or path3d_paths or series_paths):
         return None
-    image_views = [rrb.Spatial2DView(name=p.rsplit('/', 1)[-1], origin=p) for p in image_paths]
-    numeric_views = [rrb.TimeSeriesView(name=p.rsplit('/', 1)[-1], origin=p) for p in numeric_paths]
     grid_items: list[Any] = []
-    if image_views:
-        grid_items.append(rrb.Grid(*image_views))
-    if numeric_views:
-        grid_items.append(rrb.Grid(*numeric_views))
+    if image_paths:
+        grid_items.append(rrb.Grid(*[rrb.Spatial2DView(name=p.rsplit('/', 1)[-1], origin=p) for p in image_paths]))
+    if numeric_paths:
+        grid_items.append(rrb.Grid(*[rrb.TimeSeriesView(name=p.rsplit('/', 1)[-1], origin=p) for p in numeric_paths]))
+    if path3d_paths:
+        grid_items.append(rrb.Grid(*[rrb.Spatial3DView(name=p.rsplit('/', 1)[-1], origin=p) for p in path3d_paths]))
+    if series_paths:
+        grid_items.append(rrb.Grid(*[rrb.TimeSeriesView(name=p.rsplit('/', 1)[-1], origin=p) for p in series_paths]))
     return rrb.Blueprint(rrb.Grid(*grid_items))
 
 
@@ -122,38 +153,116 @@ def _command_field_arrays(key: str, commands: list) -> list[tuple[str, np.ndarra
     return out
 
 
-def action_chunk_arrays(actions: list[dict]) -> list[tuple[str, np.ndarray]]:
-    """Turn an action chunk into structure-of-arrays: one ``(path_suffix, array)`` per field.
+def _horizon(actions: list[dict]) -> np.ndarray:
+    """Relative chunk time (seconds) used as the curve x-axis, falling back to action index."""
+    if actions and all('timestamp' in a for a in actions):
+        ts = _stack_numeric([a['timestamp'] for a in actions])
+        if ts is not None and ts.ndim == 1:
+            return ts.astype(np.float64)
+    return np.arange(len(actions), dtype=np.float64)
 
-    Each field is stacked across the chunk into a single array. Robot commands are
-    encoded to plain arrays and grouped by command type so each array is homogeneous.
-    The per-action ``timestamp`` (relative seconds at this point) is stored as one
-    int64 array in nanoseconds, matching the canonical time unit used elsewhere.
+
+def _horizon_colors(horizon: np.ndarray) -> np.ndarray:
+    """Per-waypoint color along a near->far gradient (warm = soon, cool = late)."""
+    h = np.asarray(horizon, dtype=np.float64)
+    rng = float(h.max() - h.min()) if h.size else 0.0
+    t = (h - h.min()) / rng if rng > 0 else np.zeros(h.shape)
+    near = np.array([255, 224, 64], dtype=np.float64)
+    far = np.array([128, 48, 200], dtype=np.float64)
+    return (near[None, :] * (1 - t)[:, None] + far[None, :] * t[:, None]).astype(np.uint8)
+
+
+def _jaw_half(grip: np.ndarray | None, n: int) -> np.ndarray:
+    """Per-waypoint half jaw-width from grip on a fixed absolute scale (0 -> open, 1 -> closed)."""
+    if grip is None or len(grip) != n:
+        return np.full(n, 0.5 * (_GRIP_OPEN_HALF + _GRIP_CLOSED_HALF))
+    g = np.clip(np.asarray(grip, dtype=np.float64), 0.0, 1.0)
+    return _GRIP_OPEN_HALF - g * (_GRIP_OPEN_HALF - _GRIP_CLOSED_HALF)
+
+
+def _gripper_rects(
+    centers: np.ndarray, rotations: np.ndarray, grip: np.ndarray | None
+) -> tuple[list[np.ndarray], list[np.ndarray]]:
+    """Per waypoint, the gripper rectangle split into finger bars and span edges.
+
+    Returns ``(finger_strips, span_strips)``: two-point world-frame segments. Finger bars run
+    along the local X (finger-depth) axis with fixed length; span edges run along the local Y
+    jaw axis and close the rectangle, so their length (the finger separation) encodes grip on
+    a fixed absolute scale (grip 0 -> wide/open, grip 1 -> narrow/closed). Two of each per
+    waypoint.
     """
-    keys: list[str] = []
-    for action in actions:
-        for key in action:
-            if key not in keys:
-                keys.append(key)
-    out: list[tuple[str, np.ndarray]] = []
-    for key in keys:
-        values = [a[key] for a in actions if key in a]
-        if values and all(isinstance(v, roboarm_command.CommandType) for v in values):
-            out.extend(_command_field_arrays(key, values))
-            continue
-        arr = _stack_numeric(values)
-        if arr is None:
-            continue
-        if key == 'timestamp':
-            arr = np.rint(arr * 1e9).astype(np.int64)
-        out.append((key, arr))
-    return out
+    n = len(centers)
+    jaw = _jaw_half(grip, n)
+    finger_strips: list[np.ndarray] = []
+    span_strips: list[np.ndarray] = []
+    for i in range(n):
+        w, d = jaw[i], _FINGER_HALF_DEPTH
+        corners = np.array([[-d, -w, 0.0], [d, -w, 0.0], [d, w, 0.0], [-d, w, 0.0]])
+        a, b, c, e = centers[i] + corners @ rotations[i].T
+        finger_strips.append(np.array([a, b]))  # -Y finger, runs along X
+        finger_strips.append(np.array([e, c]))  # +Y finger, runs along X
+        span_strips.append(np.array([b, c]))  # +X span, runs along Y
+        span_strips.append(np.array([a, e]))  # -X span, runs along Y
+    return finger_strips, span_strips
 
 
-def _log_action_chunk(prefix: str, actions: list[dict]) -> None:
-    """Log an action chunk as structure-of-arrays at the current timestamp."""
-    for suffix, arr in action_chunk_arrays(actions):
-        rr.log(f'{prefix}/{suffix}', rr.Tensor(arr))
+def _log_action_series(path: str, arr: np.ndarray, horizon: np.ndarray, base_ns: int, names: list[str] | None) -> None:
+    """Overlay a chunk on the ``action_time`` timeline as a named multi-line time series.
+
+    Each action is stamped at ``base_ns + horizon_i`` (the absolute execution time), so
+    successive chunks lay out along one clock — a ``TimeSeriesView`` then has real axes.
+    """
+    arr = np.asarray(arr, dtype=np.float64)
+    if arr.ndim == 1:
+        arr = arr[:, None]
+    if names:
+        rr.log(path, rr.SeriesLines(names=names), static=True)
+    for i in range(arr.shape[0]):
+        offset = horizon[i] if i < len(horizon) else i
+        set_timeline_time('action_time', base_ns + int(round(float(offset) * 1e9)))
+        rr.log(path, rr.Scalars(arr[i]))
+
+
+def _log_ee_pose_chunk(
+    path: str,
+    commands: list,
+    horizon: np.ndarray,
+    grip: np.ndarray | None,
+    actual_pos: np.ndarray | None,
+    actual_grip: float | None,
+) -> np.ndarray:
+    """Log a Cartesian end-effector chunk as one 3D object.
+
+    The predicted path is a thin line; each waypoint is a flat rectangle outline oriented
+    by its pose (jaw width = grip, edge color = horizon). The robot's actual gripper
+    (pose + grip from the obs) is overlaid as a white rectangle.
+    """
+    translations = np.array([c.pose.translation for c in commands], dtype=np.float64)
+    rotations = np.array([c.pose.rotation.as_rotation_matrix for c in commands], dtype=np.float64)
+    quats_wxyz = np.array([c.pose.rotation.as_quat for c in commands], dtype=np.float64)
+
+    rr.log(f'{path}/trajectory/path', rr.LineStrips3D([translations], radii=0.0012, colors=[120, 120, 120]))
+
+    finger_strips, span_strips = _gripper_rects(translations, rotations, grip)
+    finger_colors = np.repeat(_horizon_colors(horizon), 2, axis=0)  # (2n, 3); two fingers per waypoint
+    span_colors = np.tile(np.array(_SPAN_RGB, np.uint8), (len(span_strips), 1))
+    radii = np.array([_FINGER_RADIUS] * len(finger_strips) + [_SPAN_RADIUS] * len(span_strips))
+    rr.log(
+        f'{path}/trajectory/grippers',
+        rr.LineStrips3D(finger_strips + span_strips, colors=np.concatenate([finger_colors, span_colors]), radii=radii),
+    )
+
+    if actual_pos is not None:
+        ee = np.asarray(actual_pos, dtype=np.float64)
+        if ee.size >= 7:
+            rot = geom.Rotation.from_quat(ee[3:7]).as_rotation_matrix
+            grip_a = np.array([actual_grip]) if actual_grip is not None else None
+            fingers_a, spans_a = _gripper_rects(ee[:3][None, :], rot[None, :, :], grip_a)
+            colors_a = [[245, 245, 245]] * len(fingers_a) + [list(_SPAN_RGB)] * len(spans_a)
+            radii_a = [_ACTUAL_FINGER_RADIUS] * len(fingers_a) + [_ACTUAL_SPAN_RADIUS] * len(spans_a)
+            rr.log(f'{path}/trajectory/actual', rr.LineStrips3D(fingers_a + spans_a, colors=colors_a, radii=radii_a))
+
+    return np.concatenate([translations, quats_wxyz], axis=1)
 
 
 class Recorder:
@@ -182,6 +291,8 @@ class Recorder:
         self._timeline_values: dict[str, Any] = {}
         self._image_paths: list[str] = []
         self._numeric_paths: list[str] = []
+        self._path3d_paths: list[str] = []
+        self._series_paths: list[str] = []
 
     def tap(self, name: str) -> '_RecordingTap':
         return _RecordingTap(self, name)
@@ -241,9 +352,43 @@ class _RecordingTapSession(DelegatingSession):
                 log_numeric_series(path, num)
                 self._rec._numeric_paths.append(path)
 
+    def _log_action_chunk(self, prefix: str, actions: list[dict], obs: dict) -> None:
+        """Log the action chunk as an enriched 3D trajectory + ``action_time`` time series."""
+        horizon = _horizon(actions)
+        tv = self._rec._timeline_values
+        base_ns = int(tv.get('inference_time') or tv.get('wall_time') or 0)
+        grip = _stack_numeric([a['target_grip'] for a in actions]) if all('target_grip' in a for a in actions) else None
+        actual_pos = obs.get('robot_state.ee_pose') if isinstance(obs, Mapping) else None
+        actual_grip = obs.get('grip') if isinstance(obs, Mapping) else None
+        keys: list[str] = []
+        for action in actions:
+            for key in action:
+                if key not in keys and key != 'timestamp':
+                    keys.append(key)
+        for key in keys:
+            values = [a[key] for a in actions if key in a]
+            path = f'{prefix}/{key}'
+            series_path = f'{prefix}/series/{key}'
+            if values and all(isinstance(v, roboarm_command.CartesianPosition) for v in values):
+                actual_g = float(np.asarray(actual_grip).reshape(-1)[0]) if actual_grip is not None else None
+                pose = _log_ee_pose_chunk(path, values, horizon, grip, actual_pos, actual_g)
+                _log_action_series(series_path, pose, horizon, base_ns, names=_POSE_LABELS)
+                self._rec._path3d_paths.append(f'{path}/trajectory')
+                self._rec._series_paths.append(series_path)
+            elif values and all(isinstance(v, roboarm_command.CommandType) for v in values):
+                for suffix, arr in _command_field_arrays(key, values):
+                    _log_action_series(f'{prefix}/series/{suffix}', arr, horizon, base_ns, names=None)
+                    self._rec._series_paths.append(f'{prefix}/series/{suffix}')
+            elif (arr := _stack_numeric(values)) is not None:
+                _log_action_series(series_path, arr, horizon, base_ns, names=[key])
+                self._rec._series_paths.append(series_path)
+
     def _send_blueprint(self) -> None:
         bp = _build_blueprint(
-            list(dict.fromkeys(self._rec._image_paths)), list(dict.fromkeys(self._rec._numeric_paths))
+            list(dict.fromkeys(self._rec._image_paths)),
+            list(dict.fromkeys(self._rec._numeric_paths)),
+            list(dict.fromkeys(self._rec._path3d_paths)),
+            list(dict.fromkeys(self._rec._series_paths)),
         )
         if bp is not None:
             rr.send_blueprint(bp)
@@ -264,7 +409,7 @@ class _RecordingTapSession(DelegatingSession):
             if actions is not None:
                 with self._stream:
                     self._set_timelines()
-                    _log_action_chunk(self._name, actions)
+                    self._log_action_chunk(self._name, actions, obs)
             # Send a combined blueprint (all taps' paths) once, from the outermost
             # tap, after inner taps have logged their first obs.
             if outermost and self._step == 0:
