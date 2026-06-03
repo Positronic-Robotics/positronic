@@ -33,8 +33,10 @@ oriented by its pose, closed into a thin rectangle by two faint span edges. The 
 separation along the jaw axis encodes grip on a fixed scale and the color encodes horizon.
 The robot's actual gripper is overlaid the same way in white for predicted-vs-realized.
 Every field is *also* logged as ``rr.Scalars`` on a dedicated ``action_time`` timeline
-(each action stamped at its absolute execution time), so a ``TimeSeriesView`` reads
-exact commanded values with real axes. Select ``action_time`` in the viewer to see them.
+(each action stamped at the inference-request time plus its horizon offset), so a
+``TimeSeriesView`` reads commanded values with real axes. That anchor is the pre-inference
+``inference_time_ns``, so it precedes the harness's true execution time (stamped after
+inference by ``ChunkedSchedule``) by the inference latency. Select ``action_time`` to see them.
 
 Entity paths are ``{tap_name}/{data_key}``. A tap's incoming observation keys and
 outgoing action keys share that namespace; in the rare case the same key appears on
@@ -208,8 +210,11 @@ def _gripper_rects(
 def _log_action_series(path: str, arr: np.ndarray, horizon: np.ndarray, base_ns: int, names: list[str] | None) -> None:
     """Overlay a chunk on the ``action_time`` timeline as a named multi-line time series.
 
-    Each action is stamped at ``base_ns + horizon_i`` (the absolute execution time), so
-    successive chunks lay out along one clock — a ``TimeSeriesView`` then has real axes.
+    Each action is stamped at ``base_ns + horizon_i``, where ``base_ns`` is the
+    inference-request time; successive chunks lay out along one clock so a ``TimeSeriesView``
+    has real axes. This precedes true execution by the inference latency: the harness's
+    ``ChunkedSchedule`` anchors commands at ``clock.now()`` *after* inference, which a recorder
+    tap sitting inside it cannot observe.
     """
     arr = np.asarray(arr, dtype=np.float64)
     if arr.ndim == 1:
