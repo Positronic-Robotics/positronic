@@ -362,7 +362,7 @@ class _RecordingTapSession(DelegatingSession):
         """Log the action chunk as an enriched 3D trajectory + ``action_time`` time series."""
         horizon = _horizon(actions)
         tv = self._rec._timeline_values
-        base_ns = int(tv.get('inference_time', tv.get('wall_time', 0)))
+        base_ns = int(tv.get('inference_time', tv.get('wall_time', next(iter(tv.values()), 0))))
         grip = _stack_numeric([a['target_grip'] for a in actions]) if all('target_grip' in a for a in actions) else None
         actual_pos = obs.get('robot_state.ee_pose') if isinstance(obs, Mapping) else None
         actual_grip = obs.get('grip') if isinstance(obs, Mapping) else None
