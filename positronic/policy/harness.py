@@ -5,7 +5,8 @@ from enum import Enum
 from typing import Any
 
 import pimm
-from positronic.dataset.ds_writer_agent import DsWriterCommand, Serializers
+from positronic.dataset.ds_writer_agent import DsWriterCommand
+from positronic.dataset.serializers import Serializers, expand_suffixed
 from positronic.drivers import roboarm
 from positronic.policy.base import DelegatingSession, Policy, PolicyWrapper, Session
 from positronic.utils import flatten_dict, frozen_view
@@ -153,25 +154,6 @@ def default_wrappers(clock: pimm.Clock) -> PolicyWrapper:
     return ErrorRecovery(clock) | ChunkedSchedule(clock)
 
 
-def _robot_state_obs(state: Any) -> dict[str, Any]:
-    """Canonical observation entries for a robot-state bundle.
-
-    Keeps ``robot_state.status`` as the raw ``RobotStatus`` enum — ``ErrorRecovery``
-    matches on it — so this is deliberately distinct from the recording serializer
-    ``Serializers.robot_state`` (which emits ``.error`` and drops RESETTING).
-    """
-    return {
-        'robot_state.q': state.q,
-        'robot_state.dq': state.dq,
-        'robot_state.ee_pose': Serializers.transform_3d(state.ee_pose),
-        'robot_state.status': state.status,
-    }
-
-
-def _grip_obs(grip: Any) -> dict[str, Any]:
-    return {'grip': grip}
-
-
 class Harness(pimm.ControlSystem):
     """Control system that manages episode lifecycle and forwards trajectories to drivers.
 
@@ -231,14 +213,14 @@ class Harness(pimm.ControlSystem):
         # every call so a multi-embodiment policy can condition on which robot it drives.
         # Empty until an embodiment declares one.
         self._descriptor = descriptor
-        # Observation channels: canonical name -> (receiver, serializer producing the
-        # canonical obs-dict entries). Camera frames are handled separately in
-        # ``_build_obs`` (the all-frames-present guard). Adding an arm/gripper channel is a
-        # new entry here, not new code in the assembly loop; the embodiment factory owns
-        # this mapping once it lands (PR 2b).
-        self._observations: dict[str, tuple[pimm.SignalReceiver, Callable[[Any], dict[str, Any]]]] = {
-            'robot_state': (self.robot_state, _robot_state_obs),
-            'grip': (self.gripper_state, _grip_obs),
+        # Observation channels: name -> (receiver, serializer-or-None), the same contract as
+        # ``DsWriterAgent.add_signal``. The serializer splits a device value into canonical
+        # ``name + suffix`` entries (or ``None`` passes a scalar through). The harness treats
+        # every channel identically — no robot-vs-grip knowledge. The embodiment factory owns
+        # this mapping once it lands (PR 2b); camera frames keep their own all-present guard.
+        self._observations: dict[str, tuple[pimm.SignalReceiver, Callable[[Any], Any] | None]] = {
+            'robot_state': (self.robot_state, Serializers.robot_state_obs),
+            'grip': (self.gripper_state, None),
         }
 
     def _build_episode_meta(self, context: dict[str, Any]) -> dict[str, Any]:
@@ -349,8 +331,13 @@ class Harness(pimm.ControlSystem):
     def _build_obs(self, clock: pimm.Clock) -> dict[str, Any] | None:
         """Read sensors and build observation dict. Returns None if not ready."""
         inputs: dict[str, Any] = {}
-        for receiver, serializer in self._observations.values():
-            inputs.update(serializer(receiver.value))
+        for name, (receiver, serializer) in self._observations.items():
+            value = receiver.value
+            if serializer is not None:
+                value = serializer(value)
+            for full_name, v in expand_suffixed(name, value):
+                if v is not None:
+                    inputs[full_name] = v
         frame_messages = {k: v.value for k, v in self.frames.items()}
         images = {k: v.array for k, v in frame_messages.items()}
         if len(images) != len(self.frames):

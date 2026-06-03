@@ -1,6 +1,7 @@
 import pimm
 from positronic.dataset import DatasetWriter
-from positronic.dataset.ds_writer_agent import DsWriterAgent, Serializers, TimeMode, TrajectoryOverrideSerializer
+from positronic.dataset.ds_writer_agent import DsWriterAgent, TimeMode, TrajectoryOverrideSerializer
+from positronic.dataset.serializers import Serializers
 
 ROBOT_STATIC_META = {'joint_signal': 'robot_state.q', 'pose_signals': ['robot_state.ee_pose', 'robot_commands.pose']}
 

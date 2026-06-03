@@ -4,7 +4,8 @@ import numpy as np
 import pytest
 
 import pimm
-from positronic.dataset.ds_writer_agent import DsWriterCommand, DsWriterCommandType, Serializers
+from positronic.dataset.ds_writer_agent import DsWriterCommand, DsWriterCommandType
+from positronic.dataset.serializers import Serializers
 from positronic.drivers import roboarm
 from positronic.drivers.roboarm import RobotStatus
 from positronic.drivers.roboarm.command import CartesianPosition, Recover, Reset, from_wire, to_wire

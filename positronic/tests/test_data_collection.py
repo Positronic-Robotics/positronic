@@ -7,8 +7,9 @@ import pytest
 import pimm
 from positronic import wire
 from positronic.data_collection import DataCollectionController, controller_positions_serializer
-from positronic.dataset.ds_writer_agent import DsWriterAgent, DsWriterCommand, DsWriterCommandType, Serializers
+from positronic.dataset.ds_writer_agent import DsWriterAgent, DsWriterCommand, DsWriterCommandType
 from positronic.dataset.local_dataset import LocalDataset, LocalDatasetWriter
+from positronic.dataset.serializers import Serializers
 from positronic.geom import Rotation, Transform3D
 from positronic.tests.testing_coutils import ManualDriver, drive_scheduler
 

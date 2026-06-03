@@ -11,11 +11,11 @@ from positronic.dataset.ds_writer_agent import (
     DsWriterAgent,
     DsWriterCommand,
     DsWriterCommandType,
-    Serializers,
     TimeMode,
     TrajectoryOverrideSerializer,
 )
 from positronic.dataset.local_dataset import LocalDataset, LocalDatasetWriter
+from positronic.dataset.serializers import Serializers
 from positronic.drivers.roboarm import RobotStatus, State
 from positronic.drivers.roboarm import command as rcmd
 from positronic.tests.testing_coutils import run_scripted_agent
