@@ -114,6 +114,48 @@ def test_checkpoint_id_in_route(stub_server):
         session.close()
 
 
+class _LatestTrackingServer(VendorServer):
+    """Stub whose 'latest' checkpoint can change after startup; resolve_model(None)
+    returns the current latest, mirroring real vendor servers."""
+
+    def __init__(self, **kwargs):
+        super().__init__(codec=None, **kwargs)
+        self.latest = '100'
+        self.mock_policy = MagicMock(spec=Policy)
+        self.mock_policy.meta = {}
+        self.mock_policy.reset.return_value = None
+
+    async def resolve_model(self, model_id, websocket):
+        resolved = model_id if model_id is not None else self.latest
+        return 'handle', {'checkpoint_id': resolved}
+
+    def create_policy(self, model_handle):
+        return self.mock_policy
+
+    async def get_models(self):
+        return {'models': [self.latest]}
+
+
+def test_latest_checkpoint_pinned_once_at_startup():
+    server = _LatestTrackingServer(host='localhost', port=find_free_port())
+    host, port, _ = _start_server(server)
+    # A newer checkpoint lands after startup (e.g. a training job writes it)...
+    server.latest = '200'
+    client = InferenceClient(host, port)
+    # ...but a default session still serves the checkpoint pinned at startup.
+    session = client.new_session()
+    try:
+        assert session.metadata['checkpoint_id'] == '100'
+    finally:
+        session.close()
+    # Explicit requests still load the named checkpoint.
+    session = client.new_session('200')
+    try:
+        assert session.metadata['checkpoint_id'] == '200'
+    finally:
+        session.close()
+
+
 class _IdentityCodec(Codec):
     def encode(self, data):
         return data
