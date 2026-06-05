@@ -50,6 +50,17 @@ def save_state(model, data) -> dict[str, np.ndarray]:
     return state_data
 
 
+class FullSimState(MujocoSimObserver):
+    """Privileged observer recording the full ``save_state`` each step.
+
+    Keys each spec with a leading ``.`` so the writer expands it into a
+    ``sim_state.<spec>`` signal; scoring is computed downstream, not live.
+    """
+
+    def __call__(self, model: mj.MjModel, data: mj.MjData) -> dict[str, np.ndarray]:
+        return {f'.{name}': array for name, array in save_state(model, data).items() if array.size}
+
+
 class MujocoSim(pimm.ControlSystem):
     def __init__(
         self,

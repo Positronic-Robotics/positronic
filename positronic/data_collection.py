@@ -16,8 +16,9 @@ import positronic.cfg.simulator
 import positronic.cfg.sound
 import positronic.cfg.webxr
 from positronic import geom, wire
-from positronic.dataset.ds_writer_agent import DsWriterAgent, DsWriterCommand, Serializers, TimeMode
+from positronic.dataset.ds_writer_agent import DsWriterAgent, DsWriterCommand, TimeMode
 from positronic.dataset.local_dataset import LocalDatasetWriter
+from positronic.dataset.serializers import Serializers
 from positronic.drivers import roboarm
 from positronic.drivers.roboarm import State as RoboarmState
 from positronic.drivers.webxr import WebXR

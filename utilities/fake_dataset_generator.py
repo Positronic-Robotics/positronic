@@ -6,8 +6,9 @@ import pos3
 
 import pimm
 from positronic import geom
-from positronic.dataset.ds_writer_agent import DsWriterAgent, DsWriterCommand, Serializers, TimeMode
+from positronic.dataset.ds_writer_agent import DsWriterAgent, DsWriterCommand, TimeMode
 from positronic.dataset.local_dataset import LocalDatasetWriter
+from positronic.dataset.serializers import Serializers
 
 # --- Metadata Templates ---
 

@@ -4,7 +4,8 @@ import numpy as np
 import pytest
 
 import pimm
-from positronic.dataset.ds_writer_agent import DsWriterCommand, DsWriterCommandType, Serializers
+from positronic.dataset.ds_writer_agent import DsWriterCommand, DsWriterCommandType
+from positronic.dataset.serializers import Serializers
 from positronic.drivers import roboarm
 from positronic.drivers.roboarm import RobotStatus
 from positronic.drivers.roboarm.command import CartesianPosition, Recover, Reset, from_wire, to_wire
@@ -240,6 +241,19 @@ def test_harness_emits_cartesian_move(world):
     np.testing.assert_allclose(obs['robot_state.dq'], np.zeros_like(robot_state.q))
     assert obs['grip'] == pytest.approx(0.25)
     assert obs['task'] == 'stack-blocks'
+    assert obs['descriptor'] == ''  # no descriptor passed -> empty string reaches the policy
+    # Parity: the channel-dict refactor preserves exactly the prior obs keys (plus descriptor);
+    # wall/inference timestamps carry volatile values, so lock the stable key set.
+    assert set(obs) - {'wall_time_ns', 'inference_time_ns'} == {
+        'image.cam',
+        'robot_state.q',
+        'robot_state.dq',
+        'robot_state.ee_pose',
+        'robot_state.status',
+        'grip',
+        'task',
+        'descriptor',
+    }
 
     # Last non-empty command (a trailing ``[]`` cancel is emitted on shutdown).
     cmds = _emitted_commands(cmd_recorder)
@@ -251,6 +265,34 @@ def test_harness_emits_cartesian_move(world):
 
     grips = _emitted_grips(grip_recorder)
     assert grips and grips[-1] == pytest.approx(0.33)
+
+
+@pytest.mark.timeout(3.0)
+def test_harness_passes_descriptor_to_policy(world):
+    """The embodiment descriptor reaches the policy on every call (stateless policy)."""
+    policy = SpyPolicy()
+    harness = Harness(policy, descriptor='mujoco.franka')
+    harness.robot_commands._bind(RecordingEmitter())
+    harness.target_grip._bind(RecordingEmitter())
+    harness.ds_command._bind(RecordingEmitter())
+
+    frame_em = world.pair(harness.frames['image.cam'])
+    robot_em = world.pair(harness.robot_state)
+    grip_em = world.pair(harness.gripper_state)
+    directive_em = world.pair(harness.directive)
+
+    robot_state = make_robot_state([0.1, 0.2, 0.3], [0.4, 0.5, 0.6])
+    driver = ManualDriver([
+        (partial(directive_em.emit, Directive.RUN(task='t')), 0.0),
+        (partial(emit_ready_payload, frame_em, robot_em, grip_em, robot_state), 0.01),
+        (None, 0.05),
+    ])
+
+    scheduler = world.start([harness, driver])
+    drive_scheduler(scheduler, steps=20)
+
+    assert policy.last_obs is not None
+    assert policy.last_obs['descriptor'] == 'mujoco.franka'
 
 
 @pytest.mark.timeout(3.0)

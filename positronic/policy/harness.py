@@ -5,7 +5,8 @@ from enum import Enum
 from typing import Any
 
 import pimm
-from positronic.dataset.ds_writer_agent import DsWriterCommand, Serializers
+from positronic.dataset.ds_writer_agent import DsWriterCommand
+from positronic.dataset.serializers import Serializers, expand_suffixed
 from positronic.drivers import roboarm
 from positronic.policy.base import DelegatingSession, Policy, PolicyWrapper, Session
 from positronic.utils import flatten_dict, frozen_view
@@ -175,6 +176,7 @@ class Harness(pimm.ControlSystem):
         policy: Policy,
         *,
         static_meta: dict[str, Any] | None = None,
+        descriptor: str = '',
         wrap: PolicyWrapper | Callable[[pimm.Clock], PolicyWrapper] | None = default_wrappers,
         simulate_inference: bool | float = False,
         on_episode_complete: Callable[[Session, dict[str, Any]], None] | None = None,
@@ -206,6 +208,15 @@ class Harness(pimm.ControlSystem):
         self.directive = pimm.ControlSystemReceiver[Directive](self, default=None, maxsize=3)
         self.ds_command = pimm.ControlSystemEmitter[DsWriterCommand](self)
         self.robot_meta_in = pimm.ControlSystemReceiver(self, default={})
+
+        # Embodiment descriptor (e.g. ``mujoco.franka``) passed to the policy every call.
+        self._descriptor = descriptor
+        # Observation channels: name -> (receiver, serializer-or-None), like ``add_signal``.
+        # The serializer owns the device value's split into ``name + suffix`` entries.
+        self._observations = {
+            'robot_state': (self.robot_state, Serializers.robot_state_obs),
+            'grip': (self.gripper_state, None),
+        }
 
     def _build_episode_meta(self, context: dict[str, Any]) -> dict[str, Any]:
         meta = dict(self._static_meta)
@@ -314,14 +325,14 @@ class Harness(pimm.ControlSystem):
 
     def _build_obs(self, clock: pimm.Clock) -> dict[str, Any] | None:
         """Read sensors and build observation dict. Returns None if not ready."""
-        robot_state = self.robot_state.value
-        inputs = {
-            'robot_state.q': robot_state.q,
-            'robot_state.dq': robot_state.dq,
-            'robot_state.ee_pose': Serializers.transform_3d(robot_state.ee_pose),
-            'robot_state.status': robot_state.status,
-            'grip': self.gripper_state.value,
-        }
+        inputs: dict[str, Any] = {}
+        for name, (receiver, serializer) in self._observations.items():
+            value = receiver.value
+            if serializer is not None:
+                value = serializer(value)
+            for full_name, v in expand_suffixed(name, value):
+                if v is not None:
+                    inputs[full_name] = v
         frame_messages = {k: v.value for k, v in self.frames.items()}
         images = {k: v.array for k, v in frame_messages.items()}
         if len(images) != len(self.frames):
@@ -330,6 +341,7 @@ class Harness(pimm.ControlSystem):
         inputs['wall_time_ns'] = time.time_ns()
         inputs['inference_time_ns'] = clock.now_ns()
         inputs.update(self.context)
+        inputs['descriptor'] = self._descriptor  # last, so a context key can't shadow it
         return inputs
 
     def _step(self, clock: pimm.Clock) -> Generator[pimm.Sleep, None, None]:
