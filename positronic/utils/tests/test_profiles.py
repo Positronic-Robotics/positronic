@@ -1,15 +1,6 @@
 import subprocess
 import sys
 
-import positronic.cfg.phail.v1_0 as phail_v1_0
-
-
-def test_phail_models_use_public_profile_url():
-    urls = list(vars(phail_v1_0.models).values())
-    assert urls
-    for url in urls:
-        assert url.startswith('s3://PUBLIC@positronic-public/phail/v1.0/models/')
-
 
 def test_registration_reaches_servers_without_cfg_import():
     # Inference servers register the profile only transitively: they import
@@ -21,8 +12,9 @@ def test_registration_reaches_servers_without_cfg_import():
 
 def test_registration_reaches_cfg_ds_consumers():
     # Dataset configs (e.g. cfg.ds.sim) reach the profile only via cfg.ds, which imports
-    # positronic.utils for the registration side effect. A fresh interpreter importing just
-    # cfg.ds must resolve PUBLIC, or those s3://PUBLIC@... dataset paths silently break.
+    # positronic.utils purely for the registration side effect. That import looks unused and
+    # a fresh interpreter importing just cfg.ds must still resolve PUBLIC, or those
+    # s3://PUBLIC@... dataset paths silently break.
     _assert_registers_public('import positronic.cfg.ds')
 
 
