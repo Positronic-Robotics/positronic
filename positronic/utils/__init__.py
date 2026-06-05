@@ -17,15 +17,12 @@ from positronic.utils.checkpoints import get_latest_checkpoint, list_checkpoints
 from positronic.utils.frozen_dict import frozen_keys_dict, frozen_view
 from positronic.utils.git import get_git_diff, get_git_state
 
-# Positronic's public S3 bucket. Defined here (a low-level module every S3 entrypoint
-# imports) and registered under the name 'PUBLIC' so the `s3://PUBLIC@positronic-public/...`
-# URL form resolves to anonymous access everywhere — including inference servers that take a
-# bare `--checkpoints_dir` string and never see the PUBLIC object.
-PUBLIC = pos3.Profile(
-    local_name='positronic-public', endpoint='https://storage.eu-north1.nebius.cloud', public=True, region='eu-north1'
-)
+# Register Positronic's public S3 bucket as the 'PUBLIC' profile, here in a low-level module
+# every S3 entrypoint imports, so the `s3://PUBLIC@positronic-public/...` URL form resolves to
+# anonymous (unsigned) access everywhere — including inference servers that take a bare
+# `--checkpoints_dir` string and never import cfg.
 pos3.register_profile(
-    'PUBLIC', PUBLIC.endpoint, public=PUBLIC.public, region=PUBLIC.region, local_name=PUBLIC.local_name
+    'PUBLIC', 'https://storage.eu-north1.nebius.cloud', public=True, region='eu-north1', local_name='positronic-public'
 )
 
 

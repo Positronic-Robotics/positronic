@@ -139,16 +139,14 @@ sim_stack = main.override(
     checkpoints_dir='s3://checkpoints/sim_stack/lerobot/230226-ee/',
     recording_dir='s3://inference/sim_stack/server_recordings/lerobot/230226-ee/',
 )
-_DEMO_CHECKPOINT = 's3://positronic-public/checkpoints/sim_stack_cubes/act/'
+_DEMO_CHECKPOINT = 's3://PUBLIC@positronic-public/checkpoints/sim_stack_cubes/act/'
 
 
 @cfn.config(
     policy_factory=act, codec=lerobot_codecs.ee, checkpoint=None, port=8000, host='0.0.0.0', idle_timeout_min=None
 )
 def demo(policy_factory, checkpoint, codec, port, host, idle_timeout_min):
-    from positronic.cfg.ds import PUBLIC
-
-    checkpoints_dir = str(pos3.download(_DEMO_CHECKPOINT, profile=PUBLIC))
+    checkpoints_dir = str(pos3.download(_DEMO_CHECKPOINT))
     InferenceServer(
         policy_factory, codec, checkpoints_dir, checkpoint, host=host, port=port, idle_timeout_min=idle_timeout_min
     ).serve()

@@ -32,7 +32,7 @@ dependencies = [
     "opencv-python-headless",
     # openpi-client: optional, see [project.optional-dependencies] openpi
     "plotly>=6.5.0",
-    "pos3>=0.3.1",  # s3://<profile>@bucket URL selectors (anonymous public access) need 0.3.x
+    "pos3>=0.3.1",
     "pyarrow",
     "pydantic",
     "pyturbojpeg<2",

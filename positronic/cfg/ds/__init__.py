@@ -8,11 +8,11 @@ import configuronic as cfn
 import pos3
 from pos3 import Profile
 
+import positronic.utils  # noqa: F401  -- registers the 'PUBLIC' S3 profile that these loaders' s3://PUBLIC@ URLs use
 from positronic.dataset.dataset import ConcatDataset, Dataset, FilterDataset
 from positronic.dataset.local_dataset import LocalDataset, load_all_datasets
 from positronic.dataset.transforms import TransformedDataset
 from positronic.dataset.transforms.episode import EpisodeTransform, Group
-from positronic.utils import PUBLIC
 
 
 @cfn.config()
