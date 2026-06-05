@@ -13,7 +13,7 @@ from datetime import datetime
 import configuronic as cfn
 import pos3
 
-from positronic.cfg.ds import PUBLIC, group, local_all, transform
+from positronic.cfg.ds import group, local_all, transform
 from positronic.dataset import Episode
 from positronic.dataset.transforms.episode import Derive, FromValue, Identity
 from positronic.server.positronic_server import ColumnConfig as C
@@ -21,12 +21,15 @@ from positronic.server.positronic_server import GroupTableConfig
 from positronic.server.positronic_server import main as server_main
 from positronic.utils.logging import init_logging
 
-_ROOT = 's3://positronic-public/phail/v1.0'
+# The PUBLIC@ profile selector resolves to anonymous (unsigned) access, so these URLs work
+# with no AWS credentials — a reader can pass a model URL straight to an inference server's
+# `--checkpoints_dir`.
+_ROOT = 's3://PUBLIC@positronic-public/phail/v1.0'
 
 ds = types.SimpleNamespace(
-    teleop=local_all.override(path=f'{_ROOT}/dataset/teleoperation/', profile=PUBLIC),
-    rollouts=local_all.override(path=f'{_ROOT}/dataset/rollouts/', profile=PUBLIC),
-    human=local_all.override(path=f'{_ROOT}/dataset/human/', profile=PUBLIC),
+    teleop=local_all.override(path=f'{_ROOT}/dataset/teleoperation/'),
+    rollouts=local_all.override(path=f'{_ROOT}/dataset/rollouts/'),
+    human=local_all.override(path=f'{_ROOT}/dataset/human/'),
 )
 
 models = types.SimpleNamespace(
