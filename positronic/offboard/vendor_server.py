@@ -112,6 +112,13 @@ class VendorServer(ABC):
 
     On startup (before accepting connections):
         resolve_model(None) → create_policy → reset → warmup
+
+    The default checkpoint is resolved exactly once, at startup: whatever
+    resolve_model(None) picks (the latest checkpoint, or the configured one) is
+    pinned and reused for every request that does not name an explicit checkpoint.
+    A running server therefore never auto-switches to a newer checkpoint that lands
+    in checkpoints_dir after startup. Clients can still load a specific checkpoint on
+    demand via /api/v1/session/{model_id}.
     """
 
     def __init__(
@@ -132,6 +139,10 @@ class VendorServer(ABC):
         self.idle_timeout_min = idle_timeout_min
         self._active_sessions = 0
         self._last_activity = time.monotonic()
+
+        # The default checkpoint, resolved once at startup (see class docstring). Pinned
+        # here so a request without an explicit checkpoint never re-resolves the latest.
+        self._pinned_default_model: str | None = None
 
         self.metadata: dict[str, Any] = {}
 
@@ -191,7 +202,10 @@ class VendorServer(ABC):
         model_handle = None
         session = None
         try:
-            model_handle, extra_meta = await self.resolve_model(model_id, websocket)
+            # No explicit checkpoint requested -> serve the one pinned at startup
+            # (resolved once) rather than re-resolving the latest on every request.
+            requested_model = model_id if model_id is not None else self._pinned_default_model
+            model_handle, extra_meta = await self.resolve_model(requested_model, websocket)
             base_policy = self.create_policy(model_handle)
             if self._recording_dir is not None:
                 # Tap both sides of the codec so one recording holds the obs/action at the
@@ -239,7 +253,12 @@ class VendorServer(ABC):
                 await self.release_policy(model_handle)
 
     async def _startup(self):
-        model_handle, _meta = await self.resolve_model(None, websocket=None)
+        model_handle, meta = await self.resolve_model(None, websocket=None)
+        # Pin whatever was resolved now (latest, or the configured checkpoint) as the
+        # default for subsequent requests, so the latest is resolved exactly once.
+        self._pinned_default_model = meta.get('checkpoint_id')
+        if self._pinned_default_model is not None:
+            logger.info(f'Pinned default checkpoint at startup: {self._pinned_default_model}')
         policy = self.create_policy(model_handle)
         await self.warmup(policy)
 
