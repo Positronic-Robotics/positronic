@@ -121,9 +121,13 @@ class _LatestTrackingServer(VendorServer):
     def __init__(self, **kwargs):
         super().__init__(codec=None, **kwargs)
         self.latest = '100'
-        self.mock_policy = MagicMock(spec=Policy)
+        self.mock_session = MagicMock()
+        self.mock_session.return_value = [{'action': [1, 2, 3]}]
+        self.mock_session.meta = {}
+        self.mock_session.close = MagicMock()
+        self.mock_policy = MagicMock()
+        self.mock_policy.new_session.return_value = self.mock_session
         self.mock_policy.meta = {}
-        self.mock_policy.reset.return_value = None
 
     async def resolve_model(self, model_id, websocket):
         resolved = model_id if model_id is not None else self.latest
