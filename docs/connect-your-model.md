@@ -107,6 +107,7 @@ The client sends the full raw robot state as a dict. Keys are flat strings (the 
 | `inference_time_ns` | int | scalar | Inference-clock timestamp of this observation (ns) |
 | `wall_time_ns` | int | scalar | Wall-clock timestamp (ns) |
 | `task` | str | — | Language instruction for the episode |
+| `descriptor` | str | — | Embodiment the observation came from (e.g. `mujoco.franka`); empty string when unset. Lets a multi-embodiment policy adapt to the current robot |
 
 Your server receives every key each step. Use what your model needs and ignore the rest. Image stream names are configuration-driven, so key off the names your deployment uses rather than assuming fixed ones.
 
