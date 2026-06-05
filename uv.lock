@@ -3249,7 +3249,7 @@ requires-dist = [
     { name = "openpi-client", marker = "extra == 'openpi'", git = "https://github.com/Positronic-Robotics/openpi.git?subdirectory=packages%2Fopenpi-client&rev=main-positronic" },
     { name = "placo", marker = "extra == 'hardware'" },
     { name = "plotly", specifier = ">=6.5.0" },
-    { name = "pos3", specifier = ">=0.2.0" },
+    { name = "pos3", specifier = ">=0.3.1" },
     { name = "positronic-franka", marker = "sys_platform == 'linux' and extra == 'hardware'", specifier = ">=0.3.0" },
     { name = "pre-commit", marker = "extra == 'dev'" },
     { name = "pyarrow" },
