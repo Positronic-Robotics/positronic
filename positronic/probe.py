@@ -106,15 +106,7 @@ def _blueprint(image_keys: list[str]) -> rrb.Blueprint:
     return rrb.Blueprint(rrb.Vertical(top, bottom))
 
 
-@cfn.config(
-    dataset=positronic.cfg.ds.local,
-    policy=policy_cfg.remote,
-    episode=0,
-    at=0.0,
-    task=None,
-    label=None,
-    output_dir='./probe_recordings',
-)
+@cfn.config(dataset=positronic.cfg.ds.local, policy=policy_cfg.remote, episode=0, at=0.0, task=None, label=None)
 def main(
     dataset: Dataset, policy: Policy, episode: int, at: float, task: str | None, label: str | None, output_dir: str
 ):
