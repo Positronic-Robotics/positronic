@@ -284,13 +284,17 @@ class Recorder:
 
     ``timelines`` maps rerun timeline names to observation keys. The values are read
     once per inference at the outermost tap and reused by inner taps so every tap
-    stamps the inference identically.
+    stamps the inference identically. ``blueprint``, if given, is sent as the recording's
+    layout instead of the auto-built one.
     """
 
-    def __init__(self, recording_dir: str | Path, timelines: dict[str, str] | None = None):
+    def __init__(
+        self, recording_dir: str | Path, timelines: dict[str, str] | None = None, blueprint: rrb.Blueprint | None = None
+    ):
         self._dir = Path(recording_dir)
         self._dir.mkdir(parents=True, exist_ok=True)
         self._timelines = dict(timelines) if timelines is not None else dict(DEFAULT_TIMELINES)
+        self._blueprint = blueprint
         self._stream: rr.RecordingStream | None = None
         self._live = 0
         self._depth = 0
@@ -302,6 +306,11 @@ class Recorder:
 
     def tap(self, name: str) -> '_RecordingTap':
         return _RecordingTap(self, name)
+
+    @property
+    def stream(self) -> rr.RecordingStream | None:
+        """The active recording stream, for logging supplementary panels into the current ``.rrd``."""
+        return self._stream
 
     def _open_stream(self) -> rr.RecordingStream:
         if self._live == 0:
@@ -394,7 +403,9 @@ class _RecordingTapSession(DelegatingSession):
 
     def _send_blueprint(self) -> None:
         rec = self._rec
-        bp = _build_blueprint(rec._image_paths, rec._numeric_paths, rec._path3d_paths, rec._series_paths)
+        bp = rec._blueprint or _build_blueprint(
+            rec._image_paths, rec._numeric_paths, rec._path3d_paths, rec._series_paths
+        )
         if bp is not None:
             rr.send_blueprint(bp)
 
