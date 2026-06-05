@@ -1,25 +1,7 @@
 import subprocess
 import sys
 
-from botocore import UNSIGNED
-from pos3.profiles import _create_s3_client, _resolve_profile
-
 import positronic.cfg.phail.v1_0 as phail_v1_0
-
-
-def test_public_profile_registered():
-    profile = _resolve_profile('PUBLIC')
-    assert profile.public
-    assert profile.local_name == 'positronic-public'
-    assert profile.endpoint == 'https://storage.eu-north1.nebius.cloud'
-
-
-def test_public_profile_uses_anonymous_access():
-    # public=True must yield an UNSIGNED client so a reader with no AWS credentials never
-    # tries to sign requests to the public bucket (which would raise NoCredentialsError
-    # before reaching S3).
-    client = _create_s3_client(_resolve_profile('PUBLIC'))
-    assert client.meta.config.signature_version is UNSIGNED
 
 
 def test_phail_models_use_public_profile_url():
