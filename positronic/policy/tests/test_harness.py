@@ -9,11 +9,32 @@ from positronic.dataset.serializers import Serializers
 from positronic.drivers import roboarm
 from positronic.drivers.roboarm import RobotStatus
 from positronic.drivers.roboarm.command import CartesianPosition, Recover, Reset, from_wire, to_wire
+from positronic.embodiment import Command, Embodiment, Observation
 from positronic.geom import Rotation, Transform3D
 from positronic.policy.base import Policy, Session
 from positronic.policy.codec import ActionTimestamp
 from positronic.policy.harness import Directive, DirectiveType, Harness
 from positronic.tests.testing_coutils import ManualDriver, RecordingEmitter, drive_scheduler
+
+
+def make_embodiment(descriptor: str = '', cameras=('image.cam',)) -> Embodiment:
+    """Minimal Franka-shaped embodiment for harness unit tests.
+
+    The sources/dests are no-ops: these tests pair the harness ports directly
+    (never via ``wire_embodiment``), so only the spec — names, serializers,
+    home values, descriptor — is read by the Harness.
+    """
+    observations = {
+        'robot_state': Observation(pimm.NoOpEmitter(), Serializers.robot_state_obs, Serializers.robot_state),
+        'grip': Observation(pimm.NoOpEmitter(), None, None),
+    }
+    for cam in cameras:
+        observations[cam] = Observation(pimm.NoOpEmitter(), Serializers.camera_images, Serializers.camera_images)
+    commands = {
+        'robot_command': Command(pimm.NoOpReceiver(), Reset(), 'robot_commands', Serializers.robot_command),
+        'target_grip': Command(pimm.NoOpReceiver(), 0.0, 'target_grip', None),
+    }
+    return Embodiment(descriptor, observations, commands, {}, {}, pimm.NoOpEmitter())
 
 
 class _SpySession(Session):
@@ -150,12 +171,12 @@ def _pair_all(world, harness):
     ds_recorder = RecordingEmitter()
     harness.ds_command._bind(ds_recorder)
     return {
-        'frame_em': world.pair(harness.frames['image.cam']),
-        'robot_em': world.pair(harness.robot_state),
-        'grip_em': world.pair(harness.gripper_state),
+        'frame_em': world.pair(harness.observations['image.cam']),
+        'robot_em': world.pair(harness.observations['robot_state']),
+        'grip_em': world.pair(harness.observations['grip']),
         'directive_em': world.pair(harness.directive),
-        'command_rx': world.pair(harness.robot_commands),
-        'grip_rx': world.pair(harness.target_grip),
+        'command_rx': world.pair(harness.commands['robot_command']),
+        'grip_rx': world.pair(harness.commands['target_grip']),
         'meta_em': world.pair(harness.robot_meta_in),
         'ds_recorder': ds_recorder,
     }
@@ -209,16 +230,16 @@ def _emitted_grips(recorder):
 def test_harness_emits_cartesian_move(world):
     pose = Transform3D(translation=np.array([0.4, 0.5, 0.6], dtype=np.float32), rotation=Rotation.identity)
     policy = SpyPolicy(command=CartesianPosition(pose=pose), target_grip=0.33)
-    harness = Harness(policy)
+    harness = Harness(policy, make_embodiment())
     cmd_recorder = RecordingEmitter()
     grip_recorder = RecordingEmitter()
-    harness.robot_commands._bind(cmd_recorder)
-    harness.target_grip._bind(grip_recorder)
+    harness.commands['robot_command']._bind(cmd_recorder)
+    harness.commands['target_grip']._bind(grip_recorder)
     harness.ds_command._bind(RecordingEmitter())
 
-    frame_em = world.pair(harness.frames['image.cam'])
-    robot_em = world.pair(harness.robot_state)
-    grip_em = world.pair(harness.gripper_state)
+    frame_em = world.pair(harness.observations['image.cam'])
+    robot_em = world.pair(harness.observations['robot_state'])
+    grip_em = world.pair(harness.observations['grip'])
     directive_em = world.pair(harness.directive)
 
     robot_state = make_robot_state([0.1, 0.2, 0.3], [0.4, 0.5, 0.6])
@@ -271,14 +292,14 @@ def test_harness_emits_cartesian_move(world):
 def test_harness_passes_descriptor_to_policy(world):
     """The embodiment descriptor reaches the policy on every call (stateless policy)."""
     policy = SpyPolicy()
-    harness = Harness(policy, descriptor='mujoco.franka')
-    harness.robot_commands._bind(RecordingEmitter())
-    harness.target_grip._bind(RecordingEmitter())
+    harness = Harness(policy, make_embodiment(descriptor='mujoco.franka'))
+    harness.commands['robot_command']._bind(RecordingEmitter())
+    harness.commands['target_grip']._bind(RecordingEmitter())
     harness.ds_command._bind(RecordingEmitter())
 
-    frame_em = world.pair(harness.frames['image.cam'])
-    robot_em = world.pair(harness.robot_state)
-    grip_em = world.pair(harness.gripper_state)
+    frame_em = world.pair(harness.observations['image.cam'])
+    robot_em = world.pair(harness.observations['robot_state'])
+    grip_em = world.pair(harness.observations['grip'])
     directive_em = world.pair(harness.directive)
 
     robot_state = make_robot_state([0.1, 0.2, 0.3], [0.4, 0.5, 0.6])
@@ -299,19 +320,19 @@ def test_harness_passes_descriptor_to_policy(world):
 def test_harness_waits_for_complete_inputs(world):
     pose = Transform3D(translation=np.array([0.4, 0.5, 0.6], dtype=np.float32), rotation=Rotation.identity)
     policy = SpyPolicy(command=CartesianPosition(pose=pose), target_grip=0.33)
-    harness = Harness(policy)
+    harness = Harness(policy, make_embodiment())
     cmd_recorder = RecordingEmitter()
     grip_recorder = RecordingEmitter()
-    harness.robot_commands._bind(cmd_recorder)
-    harness.target_grip._bind(grip_recorder)
+    harness.commands['robot_command']._bind(cmd_recorder)
+    harness.commands['target_grip']._bind(grip_recorder)
     harness.ds_command._bind(RecordingEmitter())
 
-    frame_em = world.pair(harness.frames['image.cam'])
-    robot_em = world.pair(harness.robot_state)
-    grip_em = world.pair(harness.gripper_state)
+    frame_em = world.pair(harness.observations['image.cam'])
+    robot_em = world.pair(harness.observations['robot_state'])
+    grip_em = world.pair(harness.observations['grip'])
     directive_em = world.pair(harness.directive)
 
-    assert len(harness.frames) == 1
+    assert 'image.cam' in harness.observations
 
     robot_state = make_robot_state([0.2, 0.0, -0.1], [0.7, 0.1, -0.2])
 
@@ -347,7 +368,7 @@ def test_harness_waits_for_complete_inputs(world):
 @pytest.mark.timeout(3.0)
 def test_run_emits_ds_start_with_meta(world):
     policy = StubPolicy(meta={'type': 'stub', 'checkpoint': 'v1'})
-    harness = Harness(policy, static_meta={'joint_signal': 'robot_state.q'})
+    harness = Harness(policy, make_embodiment(), static_meta={'joint_signal': 'robot_state.q'})
     p = _pair_all(world, harness)
 
     driver = ManualDriver([
@@ -394,7 +415,7 @@ def test_episode_meta_includes_policy_static_meta(world):
         def meta(self):
             return {'checkpoint': 'v1', 'type': 'static'}
 
-    harness = Harness(_StaticMetaPolicy())
+    harness = Harness(_StaticMetaPolicy(), make_embodiment())
     p = _pair_all(world, harness)
     robot_state = make_robot_state([0.1, 0.2, 0.3], [0.4, 0.5, 0.6])
     driver = ManualDriver([
@@ -415,7 +436,7 @@ def test_episode_meta_includes_policy_static_meta(world):
 @pytest.mark.timeout(3.0)
 def test_stop_emits_ds_suspend(world):
     policy = StubPolicy()
-    harness = Harness(policy)
+    harness = Harness(policy, make_embodiment())
     p = _pair_all(world, harness)
 
     driver = ManualDriver([
@@ -433,7 +454,7 @@ def test_stop_emits_ds_suspend(world):
 @pytest.mark.timeout(3.0)
 def test_finish_emits_ds_stop_with_data_and_homes(world):
     policy = StubPolicy()
-    harness = Harness(policy)
+    harness = Harness(policy, make_embodiment())
     p = _pair_all(world, harness)
 
     driver = ManualDriver([
@@ -457,7 +478,7 @@ def test_finish_emits_ds_stop_with_data_and_homes(world):
 @pytest.mark.timeout(3.0)
 def test_home_aborts_recording_and_homes(world):
     policy = StubPolicy()
-    harness = Harness(policy)
+    harness = Harness(policy, make_embodiment())
     p = _pair_all(world, harness)
 
     robot_state = make_robot_state([0.1, 0.2, 0.3], [0.4, 0.5, 0.6])
@@ -482,7 +503,7 @@ def test_home_aborts_recording_and_homes(world):
 @pytest.mark.timeout(3.0)
 def test_run_from_paused_auto_finalizes(world):
     policy = StubPolicy()
-    harness = Harness(policy)
+    harness = Harness(policy, make_embodiment())
     p = _pair_all(world, harness)
 
     driver = ManualDriver([
@@ -506,7 +527,7 @@ def test_run_from_paused_auto_finalizes(world):
 @pytest.mark.timeout(3.0)
 def test_run_calls_policy_reset_with_context(world):
     policy = StubPolicy()
-    harness = Harness(policy)
+    harness = Harness(policy, make_embodiment())
     p = _pair_all(world, harness)
 
     driver = ManualDriver([(partial(p['directive_em'].emit, Directive.RUN(task='test-task')), 0.0), (None, 0.01)])
@@ -529,17 +550,17 @@ def test_stop_cancels_in_flight_trajectory(world):
     """
     policy = ChunkPolicy()
     wrapped = ActionTimestamp(fps=5.0).wrap(policy)  # chunk spans 1.8 s — won't drain before STOP
-    harness = Harness(wrapped)
+    harness = Harness(wrapped, make_embodiment())
 
     cmd_recorder = RecordingEmitter()
     grip_recorder = RecordingEmitter()
-    harness.robot_commands._bind(cmd_recorder)
-    harness.target_grip._bind(grip_recorder)
+    harness.commands['robot_command']._bind(cmd_recorder)
+    harness.commands['target_grip']._bind(grip_recorder)
     harness.ds_command._bind(RecordingEmitter())
 
-    frame_em = world.pair(harness.frames['image.cam'])
-    robot_em = world.pair(harness.robot_state)
-    grip_em = world.pair(harness.gripper_state)
+    frame_em = world.pair(harness.observations['image.cam'])
+    robot_em = world.pair(harness.observations['robot_state'])
+    grip_em = world.pair(harness.observations['grip'])
     directive_em = world.pair(harness.directive)
 
     robot_state = make_robot_state([0.1, 0.2, 0.3], [0.4, 0.5, 0.6])
@@ -581,14 +602,14 @@ def test_finish_cancels_buffered_trajectory_before_stop_episode(world):
     events: list[tuple[str, object]] = []
     policy = ChunkPolicy()
     wrapped = ActionTimestamp(fps=5.0).wrap(policy)  # 1.8 s chunk — won't drain before FINISH
-    harness = Harness(wrapped)
-    harness.robot_commands._bind(_LabeledRecorder('robot_commands', events))
-    harness.target_grip._bind(_LabeledRecorder('target_grip', events))
+    harness = Harness(wrapped, make_embodiment())
+    harness.commands['robot_command']._bind(_LabeledRecorder('robot_commands', events))
+    harness.commands['target_grip']._bind(_LabeledRecorder('target_grip', events))
     harness.ds_command._bind(_LabeledRecorder('ds_command', events))
 
-    frame_em = world.pair(harness.frames['image.cam'])
-    robot_em = world.pair(harness.robot_state)
-    grip_em = world.pair(harness.gripper_state)
+    frame_em = world.pair(harness.observations['image.cam'])
+    robot_em = world.pair(harness.observations['robot_state'])
+    grip_em = world.pair(harness.observations['grip'])
     directive_em = world.pair(harness.directive)
 
     robot_state = make_robot_state([0.1, 0.2, 0.3], [0.4, 0.5, 0.6])
@@ -633,16 +654,16 @@ def test_empty_chunk_cancels_both_robot_and_grip(world):
         def new_session(self, context=None):
             return _EmptyChunkSession()
 
-    harness = Harness(EmptyChunkPolicy())
+    harness = Harness(EmptyChunkPolicy(), make_embodiment())
     cmd_recorder = RecordingEmitter()
     grip_recorder = RecordingEmitter()
-    harness.robot_commands._bind(cmd_recorder)
-    harness.target_grip._bind(grip_recorder)
+    harness.commands['robot_command']._bind(cmd_recorder)
+    harness.commands['target_grip']._bind(grip_recorder)
     harness.ds_command._bind(RecordingEmitter())
 
-    frame_em = world.pair(harness.frames['image.cam'])
-    robot_em = world.pair(harness.robot_state)
-    grip_em = world.pair(harness.gripper_state)
+    frame_em = world.pair(harness.observations['image.cam'])
+    robot_em = world.pair(harness.observations['robot_state'])
+    grip_em = world.pair(harness.observations['grip'])
     directive_em = world.pair(harness.directive)
 
     robot_state = make_robot_state([0.1, 0.2, 0.3], [0.4, 0.5, 0.6])
@@ -664,7 +685,7 @@ def test_empty_chunk_cancels_both_robot_and_grip(world):
 def test_harness_clears_trajectory_on_home(world):
     """Verify that HOME resets trajectory state so next RUN gets a fresh chunk."""
     policy = ChunkPolicy()
-    harness = Harness(policy)
+    harness = Harness(policy, make_embodiment())
     p = _pair_all(world, harness)
 
     robot_state = make_robot_state([0.1, 0.2, 0.3], [0.4, 0.5, 0.6])
@@ -696,7 +717,7 @@ def test_harness_clears_trajectory_on_home(world):
 def test_harness_clears_trajectory_on_run(world):
     """Verify that RUN resets trajectory state so a fresh chunk is emitted."""
     policy = ChunkPolicy()
-    harness = Harness(policy)
+    harness = Harness(policy, make_embodiment())
     p = _pair_all(world, harness)
 
     robot_state = make_robot_state([0.1, 0.2, 0.3], [0.4, 0.5, 0.6])
@@ -725,7 +746,7 @@ def test_harness_clears_trajectory_on_run(world):
 def test_harness_recovers_from_error(world):
     """ERROR emits Recover trajectory, skips policy; AVAILABLE resumes with fresh chunk."""
     policy = ChunkPolicy()
-    harness = Harness(policy)
+    harness = Harness(policy, make_embodiment())
     p = _pair_all(world, harness)
 
     state_ok = make_robot_state([0.1, 0.2, 0.3], [0.4, 0.5, 0.6], status=RobotStatus.AVAILABLE)
@@ -793,16 +814,16 @@ def test_recovery_cancels_gripper_buffer(world):
     the gripper ``TrajectoryPlayer`` keeps draining the interrupted chunk's grip
     waypoints while the robot recovers.
     """
-    harness = Harness(ChunkPolicy())
+    harness = Harness(ChunkPolicy(), make_embodiment())
     cmd_recorder = RecordingEmitter()
     grip_recorder = RecordingEmitter()
-    harness.robot_commands._bind(cmd_recorder)
-    harness.target_grip._bind(grip_recorder)
+    harness.commands['robot_command']._bind(cmd_recorder)
+    harness.commands['target_grip']._bind(grip_recorder)
     harness.ds_command._bind(RecordingEmitter())
 
-    frame_em = world.pair(harness.frames['image.cam'])
-    robot_em = world.pair(harness.robot_state)
-    grip_em = world.pair(harness.gripper_state)
+    frame_em = world.pair(harness.observations['image.cam'])
+    robot_em = world.pair(harness.observations['robot_state'])
+    grip_em = world.pair(harness.observations['grip'])
     directive_em = world.pair(harness.directive)
 
     state_ok = make_robot_state([0.1, 0.2, 0.3], [0.4, 0.5, 0.6], status=RobotStatus.AVAILABLE)
@@ -845,14 +866,14 @@ def test_shutdown_cancels_trajectory_before_stop(world):
             events.append((self._label, data))
 
     wrapped = ActionTimestamp(fps=5.0).wrap(ChunkPolicy())  # 1.8 s chunk — won't drain before shutdown
-    harness = Harness(wrapped)
-    harness.robot_commands._bind(_LabeledRecorder('robot_commands'))
-    harness.target_grip._bind(_LabeledRecorder('target_grip'))
+    harness = Harness(wrapped, make_embodiment())
+    harness.commands['robot_command']._bind(_LabeledRecorder('robot_commands'))
+    harness.commands['target_grip']._bind(_LabeledRecorder('target_grip'))
     harness.ds_command._bind(_LabeledRecorder('ds_command'))
 
-    frame_em = world.pair(harness.frames['image.cam'])
-    robot_em = world.pair(harness.robot_state)
-    grip_em = world.pair(harness.gripper_state)
+    frame_em = world.pair(harness.observations['image.cam'])
+    robot_em = world.pair(harness.observations['robot_state'])
+    grip_em = world.pair(harness.observations['grip'])
     directive_em = world.pair(harness.directive)
 
     robot_state = make_robot_state([0.1, 0.2, 0.3], [0.4, 0.5, 0.6])

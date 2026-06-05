@@ -37,6 +37,7 @@ from positronic.dataset.ds_writer_agent import TimeMode
 from positronic.dataset.local_dataset import LocalDataset, LocalDatasetWriter
 from positronic.drivers.roboarm import RobotStatus
 from positronic.drivers.roboarm.command import CartesianPosition, Recover, Reset, TrajectoryPlayer
+from positronic.embodiment import franka
 from positronic.geom import Rotation, Transform3D
 from positronic.policy.base import Policy, Session
 from positronic.policy.codec import ActionTiming
@@ -182,8 +183,9 @@ def _run_pipeline(tmp_path: Path) -> dict:
     gripper = FakeGripper()
 
     with LocalDatasetWriter(tmp_path) as ds_writer, pimm.World(virtual_time=True) as world:
-        harness = Harness(policy, simulate_inference=SIMULATE_INFERENCE_S)
-        ds_agent = wire.wire(world, harness, ds_writer, {}, robot, gripper, None, TimeMode.MESSAGE)
+        embodiment = franka(robot, gripper, descriptor='')
+        harness = Harness(policy, embodiment, simulate_inference=SIMULATE_INFERENCE_S)
+        ds_agent = wire.wire_embodiment(world, harness, embodiment, ds_writer, TimeMode.MESSAGE)
         world.connect(harness.ds_command, ds_agent.command)
         directive_em = world.pair(harness.directive)
 

@@ -17,6 +17,7 @@ import positronic.cfg.simulator
 from positronic import utils, wire
 from positronic.dataset.ds_writer_agent import TimeMode
 from positronic.dataset.local_dataset import LocalDatasetWriter, load_all_datasets
+from positronic.embodiment import franka
 from positronic.gui.dpg import DearpyguiUi
 from positronic.gui.eval import EvalUI
 from positronic.gui.keyboard import KeyboardControl
@@ -130,10 +131,10 @@ def main(
     output_dir: str | Path | None = None,
 ):
     """Runs inference on real hardware."""
-    harness = Harness(policy, static_meta=wire.ROBOT_STATIC_META, on_episode_complete=_completion_sink(policy))
-
     camera_instances = cameras
     camera_emitters = {name: cam.frame for name, cam in camera_instances.items()}
+    embodiment = franka(robot_arm, gripper, descriptor='', cameras=camera_emitters)
+    harness = Harness(policy, embodiment, on_episode_complete=_completion_sink(policy))
 
     gui, harness_emitter, foreground_cs = driver
     if output_dir is not None:
@@ -143,7 +144,10 @@ def main(
 
     writer_cm = LocalDatasetWriter(output_dir) if output_dir is not None else nullcontext(None)
     with writer_cm as dataset_writer, pimm.World() as world:
-        ds_agent = wire.wire(world, harness, dataset_writer, camera_emitters, robot_arm, gripper, gui, TimeMode.CLOCK)
+        ds_agent = wire.wire_embodiment(world, harness, embodiment, dataset_writer, TimeMode.CLOCK)
+        if gui is not None:
+            for name, emitter in camera_emitters.items():
+                world.connect(emitter, gui.cameras[name])
         world.connect(harness_emitter[0], harness.directive, emitter_wrapper=harness_emitter[1])
         _connect_ds_command(world, harness, ds_agent, policy)
 
@@ -170,13 +174,16 @@ def main_sim(
     mujoco_cameras = MujocoCameras(sim.model, sim.data, resolution=(320, 240), fps=camera_fps)
     cameras = {name: mujoco_cameras.cameras[orig_name] for name, orig_name in camera_dict.items()}
 
-    static_meta = {'simulation.mujoco_model_path': mujoco_model_path, **wire.ROBOT_STATIC_META}
-    harness = Harness(
-        policy,
-        static_meta=static_meta,
+    embodiment = franka(
+        robot_arm,
+        gripper,
         descriptor='mujoco.franka',
-        simulate_inference=simulate_inference,
-        on_episode_complete=_completion_sink(policy),
+        cameras=cameras,
+        privileged={name: sim.observations[name] for name in observers},
+        static_meta={'simulation.mujoco_model_path': mujoco_model_path},
+    )
+    harness = Harness(
+        policy, embodiment, simulate_inference=simulate_inference, on_episode_complete=_completion_sink(policy)
     )
     control_systems = [mujoco_cameras, sim, robot_arm, gripper, harness]
 
@@ -189,11 +196,10 @@ def main_sim(
 
     writer_cm = LocalDatasetWriter(output_dir) if output_dir is not None else nullcontext(None)
     with writer_cm as dataset_writer, pimm.World(virtual_time=True) as world:
-        ds_agent = wire.wire(world, harness, dataset_writer, cameras, robot_arm, gripper, gui, TimeMode.MESSAGE)
-        if ds_agent is not None:
-            for observer_name in observers.keys():
-                ds_agent.add_signal(observer_name)
-                world.connect(sim.observations[observer_name], ds_agent.inputs[observer_name])
+        ds_agent = wire.wire_embodiment(world, harness, embodiment, dataset_writer, TimeMode.MESSAGE)
+        if gui is not None:
+            for name, emitter in cameras.items():
+                world.connect(emitter, gui.cameras[name])
         _connect_ds_command(world, harness, ds_agent, policy)
         world.connect(harness_emitter[0], harness.directive, emitter_wrapper=harness_emitter[1])
 
