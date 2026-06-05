@@ -131,7 +131,7 @@ class ErrorRecovery(PolicyWrapper):
 
         def __call__(self, obs):
             was_ok = not self._in_error
-            self._in_error = obs['robot_state.status'] == roboarm.RobotStatus.ERROR
+            self._in_error = obs['robot_state.error'] == 1
 
             if self._in_error:
                 if was_ok:
@@ -326,17 +326,21 @@ class Harness(pimm.ControlSystem):
             case _:
                 raise ValueError(f'Unknown directive type: {directive.type}')
 
-    def _build_obs(self, clock: pimm.Clock) -> dict[str, Any]:
+    def _build_obs(self, clock: pimm.Clock) -> dict[str, Any] | None:
         """Read every observation channel and assemble the policy input dict.
 
         Raises ``NoValueException`` (caught by ``run``) if any channel has no value
-        yet — so inference waits for a complete set of inputs.
+        yet — so inference waits for a complete set of inputs. Returns ``None`` if a
+        serializer reports a sample is not ready (e.g. ``robot_state`` while the arm is
+        ``RESETTING``), so the harness skips inference rather than feeding a partial obs.
         """
         inputs: dict[str, Any] = {}
         for name, obs in self._embodiment.observations.items():
             value = self.observations[name].value
-            if obs.to_policy is not None:
-                value = obs.to_policy(value)
+            if obs.serializer is not None:
+                value = obs.serializer(value)
+                if value is None:
+                    return None
             for full_name, v in expand_suffixed(name, value):
                 if v is not None:
                     inputs[full_name] = v
@@ -368,6 +372,8 @@ class Harness(pimm.ControlSystem):
         outermost scheduling wrapper). The harness only demuxes by channel.
         """
         obs = self._build_obs(clock)
+        if obs is None:
+            return
 
         # Advance the (sim) clock by the inference cost so rollouts feel the
         # model's latency. ``True`` measures real wall time around the session

@@ -86,7 +86,7 @@ def wire_embodiment(
     if dataset_writer is not None:
         ds_agent = DsWriterAgent(dataset_writer, time_mode=time_mode)
         for name, obs in embodiment.observations.items():
-            ds_agent.add_signal(name, obs.to_record)
+            ds_agent.add_signal(name, obs.serializer)
             world.connect(obs.source, ds_agent.inputs[name])
         for name, cmd in embodiment.commands.items():
             # Policies emit whole trajectories; flatten with last-writer-wins so the

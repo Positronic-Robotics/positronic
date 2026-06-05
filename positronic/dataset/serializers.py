@@ -113,17 +113,6 @@ class Serializers:
         }
 
     @staticmethod
-    def robot_state_obs(state: State) -> dict[str, Any]:
-        """Observation-side ``State`` split; keeps the raw ``RobotStatus`` that
-        ``ErrorRecovery`` matches on, unlike :meth:`robot_state`. Step 7 unifies the two."""
-        return {
-            '.q': state.q,
-            '.dq': state.dq,
-            '.ee_pose': Serializers.transform_3d(state.ee_pose),
-            '.status': state.status,
-        }
-
-    @staticmethod
     def robot_command(command: CommandType) -> dict[str, np.ndarray | int] | None:
         match command:
             case CartesianPosition(pose):

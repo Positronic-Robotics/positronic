@@ -25,11 +25,11 @@ def make_embodiment(descriptor: str = '', cameras=('image.cam',)) -> Embodiment:
     home values, descriptor — is read by the Harness.
     """
     observations = {
-        'robot_state': Observation(pimm.NoOpEmitter(), Serializers.robot_state_obs, Serializers.robot_state),
-        'grip': Observation(pimm.NoOpEmitter(), None, None),
+        'robot_state': Observation(pimm.NoOpEmitter(), Serializers.robot_state),
+        'grip': Observation(pimm.NoOpEmitter(), None),
     }
     for cam in cameras:
-        observations[cam] = Observation(pimm.NoOpEmitter(), Serializers.camera_images, Serializers.camera_images)
+        observations[cam] = Observation(pimm.NoOpEmitter(), Serializers.camera_images)
     commands = {
         'robot_command': Command(pimm.NoOpReceiver(), Reset(), 'robot_commands', Serializers.robot_command),
         'target_grip': Command(pimm.NoOpReceiver(), 0.0, 'target_grip', None),
@@ -263,14 +263,15 @@ def test_harness_emits_cartesian_move(world):
     assert obs['grip'] == pytest.approx(0.25)
     assert obs['task'] == 'stack-blocks'
     assert obs['descriptor'] == ''  # no descriptor passed -> empty string reaches the policy
-    # Parity: the channel-dict refactor preserves exactly the prior obs keys (plus descriptor);
-    # wall/inference timestamps carry volatile values, so lock the stable key set.
+    # Recording == canonical policy I/O: the policy sees the same ``robot_state`` serializer
+    # the dataset records (``.error`` int, not the raw ``RobotStatus``). wall/inference
+    # timestamps carry volatile values, so lock the stable key set.
     assert set(obs) - {'wall_time_ns', 'inference_time_ns'} == {
         'image.cam',
         'robot_state.q',
         'robot_state.dq',
         'robot_state.ee_pose',
-        'robot_state.status',
+        'robot_state.error',
         'grip',
         'task',
         'descriptor',

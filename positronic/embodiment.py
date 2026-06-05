@@ -8,35 +8,24 @@ from positronic.drivers.roboarm import command as roboarm_command
 # Embodiment-level static meta: how recorded signals map to the canonical robot fields.
 ROBOT_STATIC_META = {'joint_signal': 'robot_state.q', 'pose_signals': ['robot_state.ee_pose', 'robot_commands.pose']}
 
-# Sentinel for ``Observation.to_record``: "record with the same serializer as the policy sees".
-_SAME_AS_POLICY = object()
-
 
 @dataclass
 class Observation:
-    """A policy-facing signal source and how it serializes to the policy and to disk.
+    """A policy-facing signal source and the serializer for its canonical entries.
 
-    Two serializers because the policy and the dataset sometimes need *different*
-    encodings of the same device value: ``to_policy`` builds the observation entries
-    fed to the policy, ``to_record`` the entries written to the dataset. Today only
-    ``robot_state`` actually differs — the obs side keeps the raw ``RobotStatus`` that
-    ``ErrorRecovery`` matches on, while the record side drops ``RESETTING`` and emits
-    ``.error``. Everywhere else the two coincide, so ``to_record`` defaults to
-    ``to_policy`` and is passed explicitly only for that one split. ``None`` on either
-    side passes the device value through unchanged.
+    The same serializer feeds the policy *and* records the signal — recording is
+    canonical policy I/O. ``None`` passes the device value through unchanged. A
+    serializer that returns ``None`` for a sample (e.g. ``robot_state`` while the arm
+    is ``RESETTING``) means "not ready": that frame is neither fed to the policy nor
+    recorded.
 
-    TODO: both serializers (and most of this class's reason to exist) collapse once
-    serialization is type-owned (steps 7-9): the value's domain type will own its
-    policy- and dataset-side encoding, so the channel won't carry serializers at all.
+    TODO: the serializer (and most of this class's reason to exist) goes away once
+    serialization is type-owned (steps 8-9): the value's domain type will own its
+    policy- and dataset-side encoding, so the channel won't carry a serializer at all.
     """
 
     source: pimm.SignalEmitter
-    to_policy: Serializer | None
-    to_record: Serializer | None = _SAME_AS_POLICY
-
-    def __post_init__(self):
-        if self.to_record is _SAME_AS_POLICY:
-            self.to_record = self.to_policy
+    serializer: Serializer | None
 
 
 @dataclass
@@ -99,8 +88,7 @@ def franka(
     signal interface (``state``/``commands``/``robot_meta`` and ``grip``/``target_grip``).
     """
     observations = {
-        # robot_state is the one channel whose policy/record encodings differ (status vs .error).
-        'robot_state': Observation(robot_arm.state, Serializers.robot_state_obs, Serializers.robot_state),
+        'robot_state': Observation(robot_arm.state, Serializers.robot_state),
         'grip': Observation(gripper.grip, None),
     }
     for name, emitter in (cameras or {}).items():
