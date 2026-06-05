@@ -29,9 +29,9 @@ import numpy as np
 import pos3
 
 from positronic.cfg import eval as eval_cfg
-from positronic.cfg.ds import PUBLIC
 from positronic.dataset.dataset import Dataset
 from positronic.dataset.utilities.migrate_remote import migrate_dataset
+from positronic.utils import PUBLIC
 from positronic.utils.checkpoints import get_latest_checkpoint
 from positronic.utils.logging import init_logging
 
