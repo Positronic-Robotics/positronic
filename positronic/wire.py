@@ -1,7 +1,7 @@
 import pimm
 from positronic.dataset import DatasetWriter
 from positronic.dataset.ds_writer_agent import DsWriterAgent, TimeMode, TrajectoryOverrideSerializer
-from positronic.dataset.serializers import Serializers
+from positronic.dataset.serializers import Serializers, StatefulSerializer
 from positronic.embodiment import ROBOT_STATIC_META, Embodiment
 
 __all__ = ['ROBOT_STATIC_META', 'wire', 'wire_embodiment']
@@ -70,10 +70,9 @@ def wire_embodiment(
     """Wire an embodiment to the Harness for the inference path.
 
     Connects device observation sources -> ``harness.observations`` and
-    ``harness.commands`` -> device receivers generically (no per-channel
-    knowledge), and records observations, command chunks, and privileged
-    ground-truth into the dataset. GUI camera wiring stays with the caller —
-    it is a presentation concern, not part of the embodiment contract.
+    ``harness.commands`` -> device receivers, and records observations, command
+    chunks, and privileged ground-truth into the dataset. GUI camera wiring stays
+    with the caller — it is a presentation concern, not part of the embodiment contract.
     """
     for name, obs in embodiment.observations.items():
         world.connect(obs.source, harness.observations[name])
@@ -86,6 +85,8 @@ def wire_embodiment(
     if dataset_writer is not None:
         ds_agent = DsWriterAgent(dataset_writer, time_mode=time_mode)
         for name, obs in embodiment.observations.items():
+            if isinstance(obs.serializer, StatefulSerializer):
+                raise TypeError(f"observation '{name}': stateful serializer can't be shared by policy and record paths")
             ds_agent.add_signal(name, obs.serializer)
             world.connect(obs.source, ds_agent.inputs[name])
         for name, cmd in embodiment.commands.items():
