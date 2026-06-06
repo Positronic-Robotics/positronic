@@ -164,10 +164,9 @@ class Harness(pimm.ControlSystem):
     the session, demuxes the action dicts into per-channel trajectories, and
     emits.
 
-    The harness is **name-free**: the ``Embodiment`` provides the observation
-    serializers (which own the canonical key names), the command channels, and
-    the home action. The harness applies them and demuxes uniformly — no
-    arm-vs-gripper knowledge, no per-command special-casing.
+    The ``Embodiment`` provides the observation serializers (which own the
+    canonical key names), the command channels, and the home action; the harness
+    reads them to assemble inputs and demux actions, treating every channel alike.
 
     The outermost wrapper (typically ``ChunkedSchedule`` or a swap-in alternative
     like RTC) is responsible for producing absolute timestamps.
@@ -206,16 +205,13 @@ class Harness(pimm.ControlSystem):
         # so the trajectory is anchored to inference-finish, not inference-start.
         self.simulate_inference = simulate_inference
 
-        # Embodiment descriptor (e.g. ``mujoco.franka``) passed to the policy every call.
         self._descriptor = embodiment.descriptor
-        # Generic channel ports: the embodiment owns which names exist. ``wire_embodiment``
-        # connects device sources -> observations and commands -> device receivers.
         self.observations = pimm.ReceiverDict(self)
         self.commands = pimm.EmitterDict(self)
         for name in embodiment.observations:
-            self.observations[name]  # allocate the receiver port
+            self.observations[name]  # touch to allocate the port
         for name in embodiment.commands:
-            self.commands[name]  # allocate the emitter port
+            self.commands[name]
 
         self.directive = pimm.ControlSystemReceiver[Directive](self, default=None, maxsize=3)
         self.ds_command = pimm.ControlSystemEmitter[DsWriterCommand](self)
@@ -356,7 +352,7 @@ class Harness(pimm.ControlSystem):
         Each channel emits the ``(ts_ns, value)`` waypoints the chunk carries for
         it; a channel an action omits gets ``[]`` — overwriting its last-value-wins
         signal, so the driver holds. An empty ``actions`` therefore cancels every
-        channel. No channel is special-cased: arm and gripper are treated alike.
+        channel.
         """
         for name, emitter in self.commands.items():
             # Wrappers do action-timing math in float seconds (codecs are fps-based);

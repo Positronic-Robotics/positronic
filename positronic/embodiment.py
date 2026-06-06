@@ -55,9 +55,9 @@ class Privileged:
 class Embodiment:
     """The signal-dict contract the Harness drives, produced by a factory.
 
-    Backed by 1 or N device control systems (not fused) — what satisfies the
-    contract is an implementation detail. The Harness is name-free: it reads the
-    serializers and command spec from here and never hardcodes a canonical key.
+    Backed by 1 or N device control systems (not fused). Holds the observation
+    serializers (which own the canonical key names), command channels, and home
+    action; the Harness reads these to assemble policy inputs and demux actions.
     """
 
     descriptor: str
