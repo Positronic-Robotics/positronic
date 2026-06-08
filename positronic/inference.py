@@ -138,9 +138,9 @@ def main(
     with writer_cm as dataset_writer, pimm.World(virtual_time=embodiment.simulated) as world:
         ds_agent = wire.wire_embodiment(world, harness, embodiment, dataset_writer, time_mode)
         if gui is not None:
-            # HACK: GUI cameras are matched to observations by the `image.` name prefix. This
-            # hard-binds GUI wiring to the observation naming convention; TODO: resolve via an
-            # explicit camera declaration on the embodiment rather than a string prefix.
+            # HACK: GUI cameras are matched to observations by the `image.` name prefix, which
+            # hard-binds GUI wiring to the observation naming convention. TODO: resolve this
+            # coupling (the right binding is still open).
             for name, obs in embodiment.observations.items():
                 if name.startswith('image.'):
                     world.connect(obs.source, gui.cameras[name])
