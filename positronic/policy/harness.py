@@ -119,6 +119,11 @@ class ErrorRecovery(PolicyWrapper):
 
         pipeline = ErrorRecovery(clock) | ChunkedSchedule(clock) | codec
         wrapped = pipeline.wrap(model)
+
+    TODO: this wrapper is not name-free. It hard-codes the ``robot_state.error``
+    observation and the ``robot_command`` channel (with a Franka ``Recover``), so it
+    only fits Franka-named embodiments; others must disable ``default_wrappers``. How
+    an embodiment should declare its error signal and recovery action is still open.
     """
 
     class _Session(DelegatingSession):
