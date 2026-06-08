@@ -31,8 +31,8 @@ def make_embodiment(descriptor: str = '', cameras=('image.cam',)) -> Embodiment:
     for cam in cameras:
         observations[cam] = Observation(pimm.NoOpEmitter(), Serializers.camera_images)
     commands = {
-        'robot_command': Command(pimm.NoOpReceiver(), Reset(), 'robot_commands', Serializers.robot_command),
-        'target_grip': Command(pimm.NoOpReceiver(), 0.0, 'target_grip', None),
+        'robot_command': Command(pimm.NoOpReceiver(), Reset(), Serializers.robot_command),
+        'target_grip': Command(pimm.NoOpReceiver(), 0.0, None),
     }
     return Embodiment(descriptor, observations, commands, {}, {}, pimm.NoOpEmitter())
 
@@ -578,7 +578,7 @@ def test_stop_cancels_in_flight_trajectory(world):
     cmd_emits = [data for _ts, data in cmd_recorder.emitted]
     grip_emits = [data for _ts, data in grip_recorder.emitted]
     assert any(isinstance(d, list) and d for d in cmd_emits), 'expected a buffered chunk before STOP'
-    assert cmd_emits[-1] == [], f'STOP did not cancel robot_commands buffer: last={cmd_emits[-1]!r}'
+    assert cmd_emits[-1] == [], f'STOP did not cancel robot_command buffer: last={cmd_emits[-1]!r}'
     assert grip_emits[-1] == [], f'STOP did not cancel target_grip buffer: last={grip_emits[-1]!r}'
 
 
@@ -588,7 +588,7 @@ def test_finish_cancels_buffered_trajectory_before_stop_episode(world):
 
     `STOP_EPISODE` calls `flush()` on `TrajectoryOverrideSerializer`, which
     commits whatever is still buffered. The harness must emit `[]` on
-    `robot_commands`/`target_grip` first, so the serializer drops its tail and
+    `robot_command`/`target_grip` first, so the serializer drops its tail and
     canceled waypoints are not recorded.
     """
 
@@ -604,7 +604,7 @@ def test_finish_cancels_buffered_trajectory_before_stop_episode(world):
     policy = ChunkPolicy()
     wrapped = ActionTimestamp(fps=5.0).wrap(policy)  # 1.8 s chunk — won't drain before FINISH
     harness = Harness(wrapped, make_embodiment())
-    harness.commands['robot_command']._bind(_LabeledRecorder('robot_commands', events))
+    harness.commands['robot_command']._bind(_LabeledRecorder('robot_command', events))
     harness.commands['target_grip']._bind(_LabeledRecorder('target_grip', events))
     harness.ds_command._bind(_LabeledRecorder('ds_command', events))
 
@@ -624,13 +624,13 @@ def test_finish_cancels_buffered_trajectory_before_stop_episode(world):
     scheduler = world.start([harness, ManualDriver(script)])
     drive_scheduler(scheduler, steps=200)
 
-    cancels = [i for i, (lbl, data) in enumerate(events) if lbl == 'robot_commands' and data == []]
+    cancels = [i for i, (lbl, data) in enumerate(events) if lbl == 'robot_command' and data == []]
     stops = [
         i
         for i, (lbl, data) in enumerate(events)
         if lbl == 'ds_command' and getattr(data, 'type', None) is DsWriterCommandType.STOP_EPISODE
     ]
-    assert cancels, 'FINISH did not emit a cancel on robot_commands'
+    assert cancels, 'FINISH did not emit a cancel on robot_command'
     assert stops, 'FINISH did not emit STOP_EPISODE'
     assert cancels[0] < stops[0], (
         f'cancel ({cancels[0]}) must precede STOP_EPISODE ({stops[0]}); otherwise flush() commits canceled waypoints'
@@ -642,7 +642,7 @@ def test_empty_chunk_cancels_both_robot_and_grip(world):
     """A session returning ``[]`` must cancel *both* driver buffers.
 
     Empty action chunk is the session-level cancel signal (per the
-    ``Session.__call__`` contract). If only ``robot_commands`` gets ``[]`` while
+    ``Session.__call__`` contract). If only ``robot_command`` gets ``[]`` while
     ``target_grip`` is skipped, the gripper ``TrajectoryPlayer`` keeps draining
     stale waypoints — a partial cancel that's worse than no cancel.
     """
@@ -678,7 +678,7 @@ def test_empty_chunk_cancels_both_robot_and_grip(world):
 
     cmd_emits = [data for _ts, data in cmd_recorder.emitted]
     grip_emits = [data for _ts, data in grip_recorder.emitted]
-    assert [] in cmd_emits, 'empty chunk did not cancel robot_commands buffer'
+    assert [] in cmd_emits, 'empty chunk did not cancel robot_command buffer'
     assert [] in grip_emits, 'empty chunk did not cancel target_grip buffer'
 
 
@@ -844,7 +844,7 @@ def test_recovery_cancels_gripper_buffer(world):
     new_cmds = [data for _ts, data in cmd_recorder.emitted[cmd_before:]]
     new_grips = [data for _ts, data in grip_recorder.emitted[grip_before:]]
     assert any(isinstance(t, list) and t and isinstance(t[-1][1], Recover) for t in new_cmds), (
-        'recovery did not emit a Recover on robot_commands'
+        'recovery did not emit a Recover on robot_command'
     )
     assert [] in new_grips, 'recovery did not cancel the gripper buffer'
 
@@ -868,7 +868,7 @@ def test_shutdown_cancels_trajectory_before_stop(world):
 
     wrapped = ActionTimestamp(fps=5.0).wrap(ChunkPolicy())  # 1.8 s chunk — won't drain before shutdown
     harness = Harness(wrapped, make_embodiment())
-    harness.commands['robot_command']._bind(_LabeledRecorder('robot_commands'))
+    harness.commands['robot_command']._bind(_LabeledRecorder('robot_command'))
     harness.commands['target_grip']._bind(_LabeledRecorder('target_grip'))
     harness.ds_command._bind(_LabeledRecorder('ds_command'))
 
@@ -888,12 +888,12 @@ def test_shutdown_cancels_trajectory_before_stop(world):
     scheduler = world.start([harness, driver])
     drive_scheduler(scheduler, steps=200)
 
-    cancels = [i for i, (lbl, data) in enumerate(events) if lbl == 'robot_commands' and data == []]
+    cancels = [i for i, (lbl, data) in enumerate(events) if lbl == 'robot_command' and data == []]
     stops = [
         i
         for i, (lbl, data) in enumerate(events)
         if lbl == 'ds_command' and getattr(data, 'type', None) is DsWriterCommandType.STOP_EPISODE
     ]
-    assert cancels, 'shutdown did not cancel robot_commands'
+    assert cancels, 'shutdown did not cancel robot_command'
     assert stops, 'shutdown did not emit STOP_EPISODE'
     assert cancels[0] < stops[0], 'cancel must precede STOP_EPISODE on shutdown'

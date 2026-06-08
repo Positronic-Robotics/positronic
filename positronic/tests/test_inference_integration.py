@@ -58,17 +58,17 @@ def test_sim_emits_commands_and_records_dataset(tmp_path, monkeypatch):
             loader.seed = idx
 
     with pos3.mirror():
-        embodiment = positronic.cfg.embodiment.mujoco_franka.override(
+        embodiment = positronic.cfg.embodiment.mujoco_franka(
             mujoco_model_path='positronic/assets/mujoco/franka_table.xml',
             loaders=loaders,
             camera_fps=10,
             camera_dict=camera_dict,
             observers={'sim_state': FullSimState()},
-        )()
+        )
         main(
             embodiment=embodiment,
             policy=policy,
-            driver=timed.override(simulation_time=0.4, task='integration-test', show_gui=False, num_iterations=1)(),
+            driver=timed(simulation_time=0.4, task='integration-test', show_gui=False, num_iterations=1),
             output_dir=str(tmp_path),
         )
 
@@ -77,7 +77,7 @@ def test_sim_emits_commands_and_records_dataset(tmp_path, monkeypatch):
 
     episode = ds[0]
     signals = episode.signals
-    assert 'robot_commands.pose' in signals
+    assert 'robot_command.pose' in signals
     assert 'target_grip' in signals
     assert 'image.wrist' in signals
     # Privileged ground truth: the full sim state is recorded as a time-series signal.
@@ -88,9 +88,9 @@ def test_sim_emits_commands_and_records_dataset(tmp_path, monkeypatch):
     first_image, _ = camera_samples[0]
     assert isinstance(first_image, np.ndarray)
 
-    pose_signal = signals['robot_commands.pose']
+    pose_signal = signals['robot_command.pose']
     pose_samples = list(pose_signal)
-    assert pose_samples, 'robot_commands.pose signal is empty'
+    assert pose_samples, 'robot_command.pose signal is empty'
     first_pose, _first_pose_ts = pose_samples[0]
     np.testing.assert_allclose(first_pose[:3], np.array([0.4, 0.5, 0.6], dtype=np.float32))
     np.testing.assert_allclose(first_pose[3:], np.array([1.0, 0.0, 0.0, 0.0], dtype=np.float32))

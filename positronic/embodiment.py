@@ -5,7 +5,7 @@ import pimm
 from positronic.dataset.serializers import Serializer
 
 # Embodiment-level static meta: how recorded signals map to the canonical robot fields.
-ROBOT_STATIC_META = {'joint_signal': 'robot_state.q', 'pose_signals': ['robot_state.ee_pose', 'robot_commands.pose']}
+ROBOT_STATIC_META = {'joint_signal': 'robot_state.q', 'pose_signals': ['robot_state.ee_pose', 'robot_command.pose']}
 
 
 @dataclass
@@ -31,15 +31,13 @@ class Observation:
 class Command:
     """A policy action channel: where its waypoints go and how it homes/records.
 
-    ``home`` is the value emitted to send this channel to its safe state. ``record_name``
-    is the dataset signal name (it may differ from the action key, e.g. the ``robot_command``
-    action records under ``robot_commands``). ``to_record`` serializes the channel's values.
+    ``home`` is the value emitted to send this channel to its safe state; ``serializer``
+    serializes the channel's values, recorded under the channel's own key.
     """
 
     dest: pimm.SignalReceiver
     home: Any
-    record_name: str
-    to_record: Serializer | None
+    serializer: Serializer | None
 
 
 @dataclass
@@ -47,7 +45,7 @@ class Privileged:
     """A ground-truth signal source, recorded but never fed to the policy."""
 
     source: pimm.SignalEmitter
-    to_record: Serializer | None
+    serializer: Serializer | None
 
 
 @dataclass

@@ -191,8 +191,8 @@ def _run_pipeline(tmp_path: Path) -> dict:
                 'grip': Observation(gripper.grip, None),
             },
             commands={
-                'robot_command': Command(robot.commands, Reset(), 'robot_commands', Serializers.robot_command),
-                'target_grip': Command(gripper.target_grip, 0.0, 'target_grip', None),
+                'robot_command': Command(robot.commands, Reset(), Serializers.robot_command),
+                'target_grip': Command(gripper.target_grip, 0.0, None),
             },
             privileged={},
             static_meta=dict(ROBOT_STATIC_META),

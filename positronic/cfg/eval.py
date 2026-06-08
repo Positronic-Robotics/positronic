@@ -634,6 +634,7 @@ phail_inference = base_cfg.transform.override(
             Identity(
                 remove=[
                     'robot_commands.reset',
+                    'robot_command.reset',
                     'eval.object',
                     'inference.policy.port',
                     'inference.policy.host',
@@ -739,6 +740,7 @@ phail_inference_release = base_cfg.transform.override(
             Identity(
                 remove=[
                     'robot_commands.reset',
+                    'robot_command.reset',
                     'inference.policy.port',
                     'inference.policy.host',
                     'inference.policy.type',

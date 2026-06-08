@@ -31,10 +31,8 @@ def droid(robot_arm, gripper, cameras):
         **{name: Observation(cam.frame, Serializers.camera_images) for name, cam in cameras.items()},
     }
     commands = {
-        'robot_command': Command(
-            robot_arm.commands, roboarm_command.Reset(), 'robot_commands', Serializers.robot_command
-        ),
-        'target_grip': Command(gripper.target_grip, 0.0, 'target_grip', None),
+        'robot_command': Command(robot_arm.commands, roboarm_command.Reset(), Serializers.robot_command),
+        'target_grip': Command(gripper.target_grip, 0.0, None),
     }
     return Embodiment(
         descriptor='',
@@ -69,10 +67,8 @@ def mujoco_franka(mujoco_model_path, loaders, camera_fps, camera_dict, observers
         **{name: Observation(cameras.cameras[orig], Serializers.camera_images) for name, orig in camera_dict.items()},
     }
     commands = {
-        'robot_command': Command(
-            robot_arm.commands, roboarm_command.Reset(), 'robot_commands', Serializers.robot_command
-        ),
-        'target_grip': Command(gripper.target_grip, 0.0, 'target_grip', None),
+        'robot_command': Command(robot_arm.commands, roboarm_command.Reset(), Serializers.robot_command),
+        'target_grip': Command(gripper.target_grip, 0.0, None),
     }
     privileged = {name: Privileged(sim.observations[name], None) for name in observers}
     return Embodiment(

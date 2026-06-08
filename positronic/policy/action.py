@@ -93,9 +93,9 @@ class IKJointsAction(Codec):
         self,
         solver_cls,
         *,
-        tgt_ee_pose_key='robot_commands.pose',
+        tgt_ee_pose_key='robot_command.pose',
         current_q_key='robot_state.q',
-        tgt_joints_key='robot_commands.joints',
+        tgt_joints_key='robot_command.joints',
     ):
         self.solver_cls = solver_cls
         self.tgt_ee_pose_key = tgt_ee_pose_key
@@ -121,7 +121,7 @@ class RelativePositionAction(Codec):
         self,
         rotation_rep: RotRep | str = RotRep.QUAT,
         robot_pose_key: str = 'robot_state.ee_pose',
-        target_pose_key: str = 'robot_commands.pose',
+        target_pose_key: str = 'robot_command.pose',
         target_grip_key: str = 'target_grip',
     ):
         self.rot_rep = RotRep(rotation_rep)

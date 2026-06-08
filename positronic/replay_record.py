@@ -51,7 +51,7 @@ class RestoreCommand(Derive):
 
     @staticmethod
     def _commands_from_episode(episode: Episode) -> Any:
-        pose = episode['robot_commands.pose']
+        pose = episode['robot_command.pose']
         return transforms.Elementwise(pose, RestoreCommand.command_from_pose)
 
     @staticmethod
