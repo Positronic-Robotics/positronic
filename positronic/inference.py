@@ -9,7 +9,6 @@ import pos3
 import pimm
 import positronic.cfg.embodiment
 import positronic.cfg.policy as policy_cfg
-import positronic.cfg.simulator
 from positronic import utils, wire
 from positronic.dataset.ds_writer_agent import TimeMode
 from positronic.dataset.local_dataset import LocalDatasetWriter, load_all_datasets
@@ -160,7 +159,7 @@ run_cfg = cfn.Config(main, embodiment=positronic.cfg.embodiment.droid, policy=po
 
 
 sim_cfg = run_cfg.override(
-    embodiment=positronic.cfg.embodiment.sim,
+    embodiment=positronic.cfg.embodiment.mujoco_franka,
     driver=timed.override(simulation_time=15, task='Pick up the green cube and place it on the red cube.'),
 )
 
@@ -178,11 +177,10 @@ def _internal_main():
             driver=eval_ui,
             **{'driver.ui_scale': 3, 'embodiment.robot_arm.collision_coeff': 2.0},
         ),
-        'sim_pnp': sim_cfg.override(**{
-            'embodiment.loaders': positronic.cfg.simulator.multi_tote_loaders,
-            'embodiment.observers': {},
-            'driver.task': 'Pick up objects from the red tote and place them in the green tote.',
-        }),
+        'sim_pnp': sim_cfg.override(
+            embodiment=positronic.cfg.embodiment.mujoco_franka_pnp,
+            **{'driver.task': 'Pick up objects from the red tote and place them in the green tote.'},
+        ),
         'stats': stats,
     })
 

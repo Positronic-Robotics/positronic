@@ -58,7 +58,7 @@ def test_sim_emits_commands_and_records_dataset(tmp_path, monkeypatch):
             loader.seed = idx
 
     with pos3.mirror():
-        embodiment = positronic.cfg.embodiment.sim.override(
+        embodiment = positronic.cfg.embodiment.mujoco_franka.override(
             mujoco_model_path='positronic/assets/mujoco/franka_table.xml',
             loaders=loaders,
             camera_fps=10,
@@ -117,6 +117,6 @@ def test_sim_embodiment_records_full_sim_state():
     Guards the production observer default directly (the heavyweight e2e test above wires its own
     observers, so it cannot catch a regression of the ``sim`` embodiment config).
     """
-    observers = positronic.cfg.embodiment.sim.kwargs['observers']
+    observers = positronic.cfg.embodiment.mujoco_franka.kwargs['observers']
     assert set(observers) == {'sim_state'}
     assert isinstance(observers['sim_state'], FullSimState)
