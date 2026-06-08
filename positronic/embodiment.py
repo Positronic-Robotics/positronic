@@ -2,8 +2,7 @@ from dataclasses import dataclass
 from typing import Any
 
 import pimm
-from positronic.dataset.serializers import Serializer, Serializers
-from positronic.drivers.roboarm import command as roboarm_command
+from positronic.dataset.serializers import Serializer
 
 # Embodiment-level static meta: how recorded signals map to the canonical robot fields.
 ROBOT_STATIC_META = {'joint_signal': 'robot_state.q', 'pose_signals': ['robot_state.ee_pose', 'robot_commands.pose']}
@@ -58,6 +57,8 @@ class Embodiment:
     Backed by 1 or N device control systems (not fused). Holds the observation
     serializers (which own the canonical key names), command channels, and home
     action; the Harness reads these to assemble policy inputs and demux actions.
+    ``control_systems`` lists those devices for the runner to schedule, and
+    ``simulated`` marks a sim embodiment (virtual clock, in-process scheduling).
     """
 
     descriptor: str
@@ -66,48 +67,10 @@ class Embodiment:
     privileged: dict[str, Privileged]
     static_meta: dict[str, Any]
     meta_source: pimm.SignalEmitter | None
+    control_systems: tuple[pimm.ControlSystem, ...] = ()
+    simulated: bool = False
 
     @property
     def home(self) -> dict[str, Any]:
         """The home action: ``{command_name: home_value}`` for every channel."""
         return {name: cmd.home for name, cmd in self.commands.items()}
-
-
-def franka(
-    robot_arm: pimm.ControlSystem,
-    gripper: pimm.ControlSystem,
-    *,
-    descriptor: str,
-    cameras: dict[str, pimm.SignalEmitter] | None = None,
-    privileged: dict[str, pimm.SignalEmitter] | None = None,
-    static_meta: dict[str, Any] | None = None,
-) -> Embodiment:
-    """Build a single-arm Franka + gripper embodiment from separate device CSs.
-
-    Shared by the sim, real, and golden inference paths — they share the arm/gripper
-    signal interface (``state``/``commands``/``robot_meta`` and ``grip``/``target_grip``).
-    """
-    observations = {
-        'robot_state': Observation(robot_arm.state, Serializers.robot_state),
-        'grip': Observation(gripper.grip, None),
-    }
-    for name, emitter in (cameras or {}).items():
-        observations[name] = Observation(emitter, Serializers.camera_images)
-
-    commands = {
-        'robot_command': Command(
-            robot_arm.commands, roboarm_command.Reset(), 'robot_commands', Serializers.robot_command
-        ),
-        'target_grip': Command(gripper.target_grip, 0.0, 'target_grip', None),
-    }
-
-    privileged_specs = {name: Privileged(source, None) for name, source in (privileged or {}).items()}
-
-    return Embodiment(
-        descriptor=descriptor,
-        observations=observations,
-        commands=commands,
-        privileged=privileged_specs,
-        static_meta={**ROBOT_STATIC_META, **(static_meta or {})},
-        meta_source=robot_arm.robot_meta,
-    )

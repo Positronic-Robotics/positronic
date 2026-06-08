@@ -33,11 +33,11 @@ import pytest
 
 import pimm
 from positronic import wire
+from positronic.cfg.embodiment import franka
 from positronic.dataset.ds_writer_agent import TimeMode
 from positronic.dataset.local_dataset import LocalDataset, LocalDatasetWriter
 from positronic.drivers.roboarm import RobotStatus
 from positronic.drivers.roboarm.command import CartesianPosition, Recover, Reset, TrajectoryPlayer
-from positronic.embodiment import franka
 from positronic.geom import Rotation, Transform3D
 from positronic.policy.base import Policy, Session
 from positronic.policy.codec import ActionTiming

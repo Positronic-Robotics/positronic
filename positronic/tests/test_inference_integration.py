@@ -3,16 +3,17 @@ import pos3
 import pytest
 import tqdm
 
+import positronic.cfg.embodiment
 import positronic.cfg.simulator
 from positronic.dataset.local_dataset import LocalDataset
-from positronic.inference import main_sim, main_sim_cfg, timed
+from positronic.inference import main, timed
 from positronic.policy.tests.test_harness import StubPolicy
 from positronic.simulator.mujoco.sim import FullSimState
 
 
-# This integration test intentionally exercises the current `main_sim` wiring end-to-end.
+# This integration test exercises the unified `main` end-to-end on the sim embodiment.
 @pytest.mark.timeout(30.0)
-def test_main_sim_emits_commands_and_records_dataset(tmp_path, monkeypatch):
+def test_sim_emits_commands_and_records_dataset(tmp_path, monkeypatch):
     class DummyTqdm:
         def __init__(self, *args, **kwargs):
             self.n = 0.0
@@ -57,14 +58,17 @@ def test_main_sim_emits_commands_and_records_dataset(tmp_path, monkeypatch):
             loader.seed = idx
 
     with pos3.mirror():
-        main_sim(
+        embodiment = positronic.cfg.embodiment.sim.override(
             mujoco_model_path='positronic/assets/mujoco/franka_table.xml',
-            policy=policy,
             loaders=loaders,
             camera_fps=10,
-            driver=timed.override(simulation_time=0.4, task='integration-test', show_gui=False, num_iterations=1)(),
             camera_dict=camera_dict,
             observers={'sim_state': FullSimState()},
+        )()
+        main(
+            embodiment=embodiment,
+            policy=policy,
+            driver=timed.override(simulation_time=0.4, task='integration-test', show_gui=False, num_iterations=1)(),
             output_dir=str(tmp_path),
         )
 
@@ -107,12 +111,12 @@ def test_main_sim_emits_commands_and_records_dataset(tmp_path, monkeypatch):
     assert last_obs['descriptor'] == 'mujoco.franka'
 
 
-def test_main_sim_cfg_records_full_sim_state():
+def test_sim_embodiment_records_full_sim_state():
     """The stack_cubes eval records the privileged full sim state, not live success observers.
 
-    Guards the production observer swap directly (the heavyweight e2e test above wires its own
-    observers, so it cannot catch a regression of ``main_sim_cfg``).
+    Guards the production observer default directly (the heavyweight e2e test above wires its own
+    observers, so it cannot catch a regression of the ``sim`` embodiment config).
     """
-    observers = main_sim_cfg.kwargs['observers']
+    observers = positronic.cfg.embodiment.sim.kwargs['observers']
     assert set(observers) == {'sim_state'}
     assert isinstance(observers['sim_state'], FullSimState)
