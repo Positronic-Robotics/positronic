@@ -41,14 +41,6 @@ class Command:
 
 
 @dataclass
-class Privileged:
-    """A ground-truth signal source, recorded but never fed to the policy."""
-
-    source: pimm.SignalEmitter
-    serializer: Serializer | None
-
-
-@dataclass
 class Embodiment:
     """The signal-dict contract the Harness drives, produced by a factory.
 
@@ -62,7 +54,8 @@ class Embodiment:
     descriptor: str
     observations: dict[str, Observation]
     commands: dict[str, Command]
-    privileged: dict[str, Privileged]
+    # Ground-truth signals, recorded but never fed to the policy (kept out of ``observations``).
+    privileged: dict[str, Observation]
     static_meta: dict[str, Any]
     meta_source: pimm.SignalEmitter | None
     control_systems: tuple[pimm.ControlSystem, ...] = ()

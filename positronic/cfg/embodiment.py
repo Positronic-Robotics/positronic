@@ -6,7 +6,7 @@ import positronic.cfg.hardware.roboarm
 import positronic.cfg.simulator
 from positronic.dataset.serializers import Serializers
 from positronic.drivers.roboarm import command as roboarm_command
-from positronic.embodiment import ROBOT_STATIC_META, Command, Embodiment, Observation, Privileged
+from positronic.embodiment import ROBOT_STATIC_META, Command, Embodiment, Observation
 from positronic.simulator.mujoco.sim import FullSimState, MujocoCameras, MujocoFranka, MujocoGripper, MujocoSim
 from positronic.utils import package_assets_path
 
@@ -70,7 +70,7 @@ def mujoco_franka(mujoco_model_path, loaders, camera_fps, camera_dict, observers
         'robot_command': Command(robot_arm.commands, roboarm_command.Reset(), Serializers.robot_command),
         'target_grip': Command(gripper.target_grip, 0.0, None),
     }
-    privileged = {name: Privileged(sim.observations[name], None) for name in observers}
+    privileged = {name: Observation(sim.observations[name], None) for name in observers}
     return Embodiment(
         descriptor='mujoco.franka',
         observations=observations,
