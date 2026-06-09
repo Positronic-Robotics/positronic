@@ -35,8 +35,10 @@ import pimm
 from positronic import wire
 from positronic.dataset.ds_writer_agent import TimeMode
 from positronic.dataset.local_dataset import LocalDataset, LocalDatasetWriter
+from positronic.dataset.serializers import Serializers
 from positronic.drivers.roboarm import RobotStatus
 from positronic.drivers.roboarm.command import CartesianPosition, Recover, Reset, TrajectoryPlayer
+from positronic.embodiment import ROBOT_STATIC_META, Command, Embodiment, Observation
 from positronic.geom import Rotation, Transform3D
 from positronic.policy.base import Policy, Session
 from positronic.policy.codec import ActionTiming
@@ -182,8 +184,22 @@ def _run_pipeline(tmp_path: Path) -> dict:
     gripper = FakeGripper()
 
     with LocalDatasetWriter(tmp_path) as ds_writer, pimm.World(virtual_time=True) as world:
-        harness = Harness(policy, simulate_inference=SIMULATE_INFERENCE_S)
-        ds_agent = wire.wire(world, harness, ds_writer, {}, robot, gripper, None, TimeMode.MESSAGE)
+        embodiment = Embodiment(
+            descriptor='',
+            observations={
+                'robot_state': Observation(robot.state, Serializers.robot_state),
+                'grip': Observation(gripper.grip, None),
+            },
+            commands={
+                'robot_command': Command(robot.commands, Reset(), Serializers.robot_command),
+                'target_grip': Command(gripper.target_grip, 0.0, None),
+            },
+            privileged={},
+            static_meta=dict(ROBOT_STATIC_META),
+            meta_source=robot.robot_meta,
+        )
+        harness = Harness(policy, embodiment, simulate_inference=SIMULATE_INFERENCE_S)
+        ds_agent = wire.wire_embodiment(world, harness, embodiment, ds_writer, TimeMode.MESSAGE)
         world.connect(harness.ds_command, ds_agent.command)
         directive_em = world.pair(harness.directive)
 

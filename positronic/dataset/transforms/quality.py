@@ -27,7 +27,7 @@ def jerk(episode, signal='robot_state.q', dt_sec=_DT_SEC):
     return norm(diff(episode.signals[signal], dt_sec, order=2))
 
 
-def cmd_lag(episode, cmd_signal='robot_commands.pose', state_signal='robot_state.ee_pose', components=_TRANSLATION):
+def cmd_lag(episode, cmd_signal='robot_command.pose', state_signal='robot_state.ee_pose', components=_TRANSLATION):
     """Per-frame distance between commanded and actual pose (meters)."""
     cmd = episode.signals[cmd_signal]
     ee = episode.signals[state_signal]
@@ -39,6 +39,6 @@ def cmd_lag(episode, cmd_signal='robot_commands.pose', state_signal='robot_state
     return Elementwise(Join(cmd, ee), fn)
 
 
-def cmd_velocity(episode, signal='robot_commands.pose', components=_TRANSLATION, dt_sec=_DT_SEC):
+def cmd_velocity(episode, signal='robot_command.pose', components=_TRANSLATION, dt_sec=_DT_SEC):
     """Per-frame command translation velocity (m/s). Spikes = tracking glitches."""
     return norm(diff(view(episode.signals[signal], components), dt_sec))

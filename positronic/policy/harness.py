@@ -6,8 +6,9 @@ from typing import Any
 
 import pimm
 from positronic.dataset.ds_writer_agent import DsWriterCommand
-from positronic.dataset.serializers import Serializers, expand_suffixed
+from positronic.dataset.serializers import expand_suffixed
 from positronic.drivers import roboarm
+from positronic.embodiment import Embodiment
 from positronic.policy.base import DelegatingSession, Policy, PolicyWrapper, Session
 from positronic.utils import flatten_dict, frozen_view
 
@@ -118,6 +119,11 @@ class ErrorRecovery(PolicyWrapper):
 
         pipeline = ErrorRecovery(clock) | ChunkedSchedule(clock) | codec
         wrapped = pipeline.wrap(model)
+
+    TODO: this wrapper is not name-free. It hard-codes the ``robot_state.error``
+    observation and the ``robot_command`` channel (with a Franka ``Recover``), so it
+    only fits Franka-named embodiments; others must disable ``default_wrappers``. How
+    an embodiment should declare its error signal and recovery action is still open.
     """
 
     class _Session(DelegatingSession):
@@ -130,7 +136,7 @@ class ErrorRecovery(PolicyWrapper):
 
         def __call__(self, obs):
             was_ok = not self._in_error
-            self._in_error = obs['robot_state.status'] == roboarm.RobotStatus.ERROR
+            self._in_error = obs['robot_state.error'] == 1
 
             if self._in_error:
                 if was_ok:
@@ -163,6 +169,10 @@ class Harness(pimm.ControlSystem):
     the session, demuxes the action dicts into per-channel trajectories, and
     emits.
 
+    The ``Embodiment`` provides the observation serializers (which own the
+    canonical key names), the command channels, and the home action; the harness
+    reads them to assemble inputs and demux actions, treating every channel alike.
+
     The outermost wrapper (typically ``ChunkedSchedule`` or a swap-in alternative
     like RTC) is responsible for producing absolute timestamps.
 
@@ -174,14 +184,15 @@ class Harness(pimm.ControlSystem):
     def __init__(
         self,
         policy: Policy,
+        embodiment: Embodiment,
         *,
         static_meta: dict[str, Any] | None = None,
-        descriptor: str = '',
         wrap: PolicyWrapper | Callable[[pimm.Clock], PolicyWrapper] | None = default_wrappers,
         simulate_inference: bool | float = False,
         on_episode_complete: Callable[[Session, dict[str, Any]], None] | None = None,
     ):
         self._raw_policy = policy
+        self._embodiment = embodiment
         self._wrap = wrap
         # Called with (session, context) when an episode completes successfully (clean
         # STOP/FINISH), never on abort. Used to feed completion bookkeeping like a
@@ -199,27 +210,21 @@ class Harness(pimm.ControlSystem):
         # so the trajectory is anchored to inference-finish, not inference-start.
         self.simulate_inference = simulate_inference
 
-        self.frames = pimm.ReceiverDict(self)
-        self.robot_state = pimm.ControlSystemReceiver(self)
-        self.gripper_state = pimm.ControlSystemReceiver(self)
-        self.robot_commands = pimm.ControlSystemEmitter(self)
-        self.target_grip = pimm.ControlSystemEmitter(self)
+        self._descriptor = embodiment.descriptor
+        self.observations = pimm.ReceiverDict(self)
+        self.commands = pimm.EmitterDict(self)
+        for name in embodiment.observations:
+            self.observations[name]  # touch to allocate the port
+        for name in embodiment.commands:
+            self.commands[name]
 
         self.directive = pimm.ControlSystemReceiver[Directive](self, default=None, maxsize=3)
         self.ds_command = pimm.ControlSystemEmitter[DsWriterCommand](self)
         self.robot_meta_in = pimm.ControlSystemReceiver(self, default={})
 
-        # Embodiment descriptor (e.g. ``mujoco.franka``) passed to the policy every call.
-        self._descriptor = descriptor
-        # Observation channels: name -> (receiver, serializer-or-None), like ``add_signal``.
-        # The serializer owns the device value's split into ``name + suffix`` entries.
-        self._observations = {
-            'robot_state': (self.robot_state, Serializers.robot_state_obs),
-            'grip': (self.gripper_state, None),
-        }
-
     def _build_episode_meta(self, context: dict[str, Any]) -> dict[str, Any]:
-        meta = dict(self._static_meta)
+        meta = dict(self._embodiment.static_meta)
+        meta.update(self._static_meta)
         meta.update(self.robot_meta_in.value)
         meta['inference.simulate_inference'] = self.simulate_inference
         # ``policy.meta`` is the static baseline (the wrapped policy aggregates model +
@@ -233,8 +238,8 @@ class Harness(pimm.ControlSystem):
 
     def _home(self, clock):
         now = clock.now_ns()
-        self.robot_commands.emit([(now, roboarm.command.Reset())])
-        self.target_grip.emit([(now, 0.0)])
+        for name, value in self._embodiment.home.items():
+            self.commands[name].emit([(now, value)])
 
     def _bump_schedule_end(self, delta_sec: float) -> None:
         """Shift the active ``ChunkedSchedule._Session`` ``_trajectory_end`` by ``delta_sec``.
@@ -254,7 +259,7 @@ class Harness(pimm.ControlSystem):
     def _cancel_trajectories(self) -> None:
         """Drop any in-flight chunk from drivers and from the recording's tail.
 
-        Emits ``[]`` on ``robot_commands``/``target_grip`` so each driver's
+        Emits ``[]`` on every command channel so each driver's
         ``TrajectoryPlayer`` clears its buffer (devices hold position) and
         ``TrajectoryOverrideSerializer`` drops its uncommitted tail. Must
         precede ``STOP_EPISODE``, which ``flush()``​es the recording's
@@ -262,8 +267,7 @@ class Harness(pimm.ControlSystem):
         cancels the active session's scheduling state so the next inference
         is not held back by stale trajectory_end.
         """
-        self.robot_commands.emit([])
-        self.target_grip.emit([])
+        self._emit_commands([])
         if self._session is not None:
             self._session.cancel()
 
@@ -324,25 +328,43 @@ class Harness(pimm.ControlSystem):
                 raise ValueError(f'Unknown directive type: {directive.type}')
 
     def _build_obs(self, clock: pimm.Clock) -> dict[str, Any] | None:
-        """Read sensors and build observation dict. Returns None if not ready."""
+        """Read every observation channel and assemble the policy input dict.
+
+        Raises ``NoValueException`` (caught by ``run``) if any channel has no value
+        yet — so inference waits for a complete set of inputs. Returns ``None`` if a
+        serializer reports a sample is not ready (e.g. ``robot_state`` while the arm is
+        ``RESETTING``), so the harness skips inference rather than feeding a partial obs.
+        """
         inputs: dict[str, Any] = {}
-        for name, (receiver, serializer) in self._observations.items():
-            value = receiver.value
-            if serializer is not None:
-                value = serializer(value)
+        for name, obs in self._embodiment.observations.items():
+            value = self.observations[name].value
+            if obs.serializer is not None:
+                value = obs.serializer(value)
+                if value is None:
+                    return None
             for full_name, v in expand_suffixed(name, value):
                 if v is not None:
                     inputs[full_name] = v
-        frame_messages = {k: v.value for k, v in self.frames.items()}
-        images = {k: v.array for k, v in frame_messages.items()}
-        if len(images) != len(self.frames):
-            return None
-        inputs.update(images)
         inputs['wall_time_ns'] = time.time_ns()
         inputs['inference_time_ns'] = clock.now_ns()
         inputs.update(self.context)
         inputs['descriptor'] = self._descriptor  # last, so a context key can't shadow it
         return inputs
+
+    def _emit_commands(self, actions: list[dict[str, Any]]) -> None:
+        """Republish-all demux: emit every command channel from this action chunk.
+
+        Each channel emits the ``(ts_ns, value)`` waypoints the chunk carries for
+        it; a channel an action omits gets ``[]`` — overwriting its last-value-wins
+        signal, so the driver holds. An empty ``actions`` therefore cancels every
+        channel.
+        """
+        for name, emitter in self.commands.items():
+            # Wrappers do action-timing math in float seconds (codecs are fps-based);
+            # clients on every pimm channel (driver TrajectoryPlayer, dataset writer)
+            # expect ns. This is the single explicit seconds->ns seam.
+            traj = [(int(a['timestamp'] * 1e9), a[name]) for a in actions if name in a]
+            emitter.emit(traj)
 
     def _step(self, clock: pimm.Clock) -> Generator[pimm.Sleep, None, None]:
         """Build obs, call session, demux trajectories into per-channel emissions.
@@ -366,12 +388,7 @@ class Harness(pimm.ControlSystem):
         actions = self._session(frozen_view(obs))
         if actions is None:
             return
-        # Recover-only output (from ``ErrorRecovery``) bypasses inference latency
-        # simulation — it's an emergency emit, not a model-driven chunk.
-        is_recover_only = len(actions) == 1 and isinstance(actions[0].get('robot_command'), roboarm.command.Recover)
-        if is_recover_only:
-            delay = 0.0
-        elif self.simulate_inference is True:  # bool is an int subclass — check identity first
+        if self.simulate_inference is True:  # bool is an int subclass — check identity first
             delay = time.monotonic() - wall_start
         elif self.simulate_inference:
             delay = float(self.simulate_inference)
@@ -382,22 +399,7 @@ class Harness(pimm.ControlSystem):
             actions = [{**a, 'timestamp': a['timestamp'] + delay} for a in actions]
             self._bump_schedule_end(delay)
 
-        # Wrappers do action-timing math in float seconds (codecs are fps-based);
-        # clients on every pimm channel (driver TrajectoryPlayer, dataset writer)
-        # expect ns. This is the single explicit seconds->ns seam.
-        robot_traj = [(int(cmd['timestamp'] * 1e9), cmd['robot_command']) for cmd in actions]
-        grip_traj = [(int(cmd['timestamp'] * 1e9), cmd['target_grip']) for cmd in actions if 'target_grip' in cmd]
-
-        self.robot_commands.emit(robot_traj)
-        # Empty ``actions`` is the session's explicit cancel signal — propagate
-        # ``[]`` to *both* drivers so neither buffer keeps executing stale
-        # waypoints. Entering recovery (a Recover-only chunk carries no
-        # ``target_grip``) likewise cancels the gripper, so recovery stops all
-        # in-flight motion, not just the arm. For ordinary chunks without grip
-        # targets, skip the grip emit so we don't spuriously cancel an in-flight
-        # gripper trajectory.
-        if grip_traj or not actions or is_recover_only:
-            self.target_grip.emit(grip_traj)
+        self._emit_commands(actions)
 
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Sleep]:
         # Resolve wrap now that we have the clock — some wrappers (e.g. ChunkedSchedule) need it.

@@ -74,9 +74,9 @@ def test_absolute_position_action_encode_decode_quat():
 
     pose = [np.concatenate([t[i], q[i].as_quat]).astype(np.float32) for i in range(len(ts))]
 
-    ep = EpisodeContainer({'robot_commands.pose': DummySignal(ts, pose), 'target_grip': DummySignal(ts, g)})
+    ep = EpisodeContainer({'robot_command.pose': DummySignal(ts, pose), 'target_grip': DummySignal(ts, g)})
 
-    act = AbsolutePositionAction('robot_commands.pose', 'target_grip', Rotation.Representation.QUAT)
+    act = AbsolutePositionAction('robot_command.pose', 'target_grip', Rotation.Representation.QUAT)
     sig = act._encode_episode(ep)
     vec = list(sig)[0][0]
     assert vec.shape == (8,)  # 4 quat + 3 trans + 1 grip
@@ -105,7 +105,7 @@ def test_relative_target_position_action_encode_decode_quat():
 
     ep = EpisodeContainer({
         'robot_state.ee_pose': DummySignal(ts, cur_pose),
-        'robot_commands.pose': DummySignal(ts, tgt_pose),
+        'robot_command.pose': DummySignal(ts, tgt_pose),
         'target_grip': DummySignal(ts, g_tgt),
     })
 
@@ -134,9 +134,9 @@ def test_absolute_joints_action_encode_decode():
     joints = [np.array([0.1, -0.2, 0.3, 0.4, -0.5, 0.6, 0.7], dtype=np.float32) for _ in ts]
     g = [0.5, 0.6]
 
-    ep = EpisodeContainer({'robot_commands.joints': DummySignal(ts, joints), 'target_grip': DummySignal(ts, g)})
+    ep = EpisodeContainer({'robot_command.joints': DummySignal(ts, joints), 'target_grip': DummySignal(ts, g)})
 
-    act = AbsoluteJointsAction('robot_commands.joints', 'target_grip', num_joints=7)
+    act = AbsoluteJointsAction('robot_command.joints', 'target_grip', num_joints=7)
     sig = act._encode_episode(ep)
     vec = list(sig)[0][0]
     assert vec.shape == (8,)  # 7 joints + 1 grip
@@ -320,7 +320,7 @@ def test_codec_wrap_meta_merges():
 
 def test_timestamps_survive_action_decoder_composition():
     """Timestamps from ActionTiming must survive through composed action decoders."""
-    action_codec = AbsolutePositionAction('robot_commands.pose', 'target_grip', Rotation.Representation.QUAT)
+    action_codec = AbsolutePositionAction('robot_command.pose', 'target_grip', Rotation.Representation.QUAT)
     timing = ActionTiming(fps=15.0, horizon_sec=1.0)
     composed = timing | action_codec
 
@@ -351,7 +351,7 @@ def test_composed_training_encoder_uses_parallel():
     ep = EpisodeContainer({
         'robot_state.q': DummySignal(ts, joints),
         'grip': DummySignal(ts, grip),
-        'robot_commands.joints': DummySignal(ts, joints),
+        'robot_command.joints': DummySignal(ts, joints),
         'target_grip': DummySignal(ts, grip),
         'image.wrist': DummySignal(ts, img),
         'image.exterior': DummySignal(ts, img),
@@ -362,7 +362,7 @@ def test_composed_training_encoder_uses_parallel():
         state={'observation.state': {'robot_state.q': 7, 'grip': 1}},
         images={'observation.images.left': ('image.wrist', (4, 4))},
     )
-    action = AbsoluteJointsAction('robot_commands.joints', 'target_grip', num_joints=7)
+    action = AbsoluteJointsAction('robot_command.joints', 'target_grip', num_joints=7)
     timing = ActionTiming(fps=15.0)
     composed = timing | (obs & action)
 
@@ -382,7 +382,7 @@ def test_composed_training_encoder_uses_parallel():
 
     # Original episode keys should NOT appear (no Identity pass-through)
     assert 'target_grip' not in result
-    assert 'robot_commands.joints' not in result
+    assert 'robot_command.joints' not in result
 
     # Meta should merge from all codecs
     assert encoder.meta.get('action_fps') == 15.0
@@ -429,10 +429,10 @@ def test_binarize_grip_training_composed_with_action_codec():
     ts = [1000]
     joints = [np.array([0.1, -0.2, 0.3, 0.4, -0.5, 0.6, 0.7], dtype=np.float32)]
 
-    ep = EpisodeContainer({'robot_commands.joints': DummySignal(ts, joints), 'target_grip': DummySignal(ts, [0.7])})
+    ep = EpisodeContainer({'robot_command.joints': DummySignal(ts, joints), 'target_grip': DummySignal(ts, [0.7])})
 
     binarize = BinarizeGripTraining(('grip', 'target_grip'))
-    action = AbsoluteJointsAction('robot_commands.joints', 'target_grip', num_joints=7)
+    action = AbsoluteJointsAction('robot_command.joints', 'target_grip', num_joints=7)
     composed = binarize | action
 
     result = composed.training_encoder(ep)
@@ -476,7 +476,7 @@ def test_sequential_into_parallel_training():
     ep = EpisodeContainer({
         'robot_state.q': DummySignal(ts, joints),
         'grip': DummySignal(ts, [0.7]),
-        'robot_commands.joints': DummySignal(ts, joints),
+        'robot_command.joints': DummySignal(ts, joints),
         'target_grip': DummySignal(ts, [0.3]),
         'image.wrist': DummySignal(ts, [np.zeros((4, 4, 3), dtype=np.uint8)]),
         'image.exterior': DummySignal(ts, [np.zeros((4, 4, 3), dtype=np.uint8)]),
@@ -486,7 +486,7 @@ def test_sequential_into_parallel_training():
         state={'observation.state': {'robot_state.q': 7, 'grip': 1}},
         images={'observation.images.left': ('image.wrist', (4, 4))},
     )
-    action = AbsoluteJointsAction('robot_commands.joints', 'target_grip', num_joints=7)
+    action = AbsoluteJointsAction('robot_command.joints', 'target_grip', num_joints=7)
     binarize = BinarizeGripTraining(('grip', 'target_grip'))
     composed = binarize | (obs & action)
 
@@ -512,7 +512,7 @@ def test_compose_training_encoder_produces_only_derived_keys():
     ep = EpisodeContainer({
         'robot_state.q': DummySignal(ts, joints),
         'grip': DummySignal(ts, grip),
-        'robot_commands.joints': DummySignal(ts, joints),
+        'robot_command.joints': DummySignal(ts, joints),
         'target_grip': DummySignal(ts, grip),
         'image.wrist': DummySignal(ts, img),
         'image.exterior': DummySignal(ts, img),
@@ -524,7 +524,7 @@ def test_compose_training_encoder_produces_only_derived_keys():
             state={'observation.state': {'robot_state.q': 7, 'grip': 1}},
             images={'observation.images.left': ('image.wrist', (4, 4))},
         ),
-        action=AbsoluteJointsAction('robot_commands.joints', 'target_grip', num_joints=7),
+        action=AbsoluteJointsAction('robot_command.joints', 'target_grip', num_joints=7),
     )
 
     result = codec.training_encoder(ep)
@@ -535,7 +535,7 @@ def test_compose_training_encoder_produces_only_derived_keys():
 
     # Original episode keys must NOT leak through — this fails if compose uses | instead of &
     assert 'target_grip' not in result
-    assert 'robot_commands.joints' not in result
+    assert 'robot_command.joints' not in result
     assert 'robot_state.q' not in result
     assert 'grip' not in result
 

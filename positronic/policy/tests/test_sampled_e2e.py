@@ -23,6 +23,7 @@ from positronic.policy.base import Policy, SampledPolicy, Session
 from positronic.policy.codec import ActionTiming
 from positronic.policy.harness import Directive, Harness
 from positronic.policy.sampler import BalancedSampler
+from positronic.policy.tests.test_harness import make_embodiment
 from positronic.tests.testing_coutils import ManualDriver, RecordingEmitter, drive_scheduler
 
 
@@ -82,13 +83,13 @@ def _pair_all(world, harness):
     ds_recorder = RecordingEmitter()
     harness.ds_command._bind(ds_recorder)
     cmd_recorder = RecordingEmitter()
-    harness.robot_commands._bind(cmd_recorder)
+    harness.commands['robot_command']._bind(cmd_recorder)
     grip_recorder = RecordingEmitter()
-    harness.target_grip._bind(grip_recorder)
+    harness.commands['target_grip']._bind(grip_recorder)
     return {
-        'frame_em': world.pair(harness.frames['image.cam']),
-        'robot_em': world.pair(harness.robot_state),
-        'grip_em': world.pair(harness.gripper_state),
+        'frame_em': world.pair(harness.observations['image.cam']),
+        'robot_em': world.pair(harness.observations['robot_state']),
+        'grip_em': world.pair(harness.observations['grip']),
         'directive_em': world.pair(harness.directive),
         'meta_em': world.pair(harness.robot_meta_in),
         'ds_recorder': ds_recorder,
@@ -126,7 +127,7 @@ def test_sampled_policy_e2e():
     sampled = SampledPolicy(wrapped_a, wrapped_b, sampler=sampler)
 
     # The harness records each completed episode into the policy's counter on FINISH.
-    harness = Harness(sampled, on_episode_complete=sampled.counter.record)
+    harness = Harness(sampled, make_embodiment(), on_episode_complete=sampled.counter.record)
 
     with pimm.World(virtual_time=True) as world:
         p = _pair_all(world, harness)

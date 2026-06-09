@@ -17,7 +17,7 @@ import pos3
 from positronic.dataset.dataset import ConcatDataset, FilterDataset
 from positronic.dataset.local_dataset import load_all_datasets
 from positronic.dataset.transforms import TransformedDataset, agg_fraction_true, agg_max, agg_percentile
-from positronic.dataset.transforms.episode import Concat, Derive, FromValue, Group, Identity, Rename
+from positronic.dataset.transforms.episode import Concat, Derive, FromValue, Get, Group, Identity, Rename
 from positronic.dataset.transforms.quality import cmd_lag, cmd_velocity, idle_mask, jerk
 from positronic.server.positronic_server import ColumnConfig as C
 from positronic.server.positronic_server import main as server_main
@@ -41,18 +41,24 @@ _REAL_ROBOT_DERIVES = {
     'meshes': FromValue({f.name: f.read_bytes() for f in _MESH_DIR.iterdir() if f.suffix == '.stl'}),
     'control_frame': FromValue('end_effector'),
     'joint_signal': FromValue('robot_state.q'),
-    'pose_signals': FromValue(['robot_state.ee_pose', 'robot_commands.pose']),
+    'pose_signals': FromValue(['robot_state.ee_pose', 'robot_command.pose']),
 }
 _SIM_ROBOT_DERIVES = {
     'urdf': FromValue(SIM_URDF),
     'joint_names': FromValue(_JOINT_NAMES),
     'control_frame': FromValue('end_effector'),
     'joint_signal': FromValue('robot_state.q'),
-    'pose_signals': FromValue(['robot_state.ee_pose', 'robot_commands.pose']),
+    'pose_signals': FromValue(['robot_state.ee_pose', 'robot_command.pose']),
 }
 
-REAL_ROBOT_TRANSFORM = Group(Derive(**_REAL_ROBOT_DERIVES), Identity(remove=_REMOVE_SIGNALS))
-SIM_ROBOT_TRANSFORM = Group(Derive(**_SIM_ROBOT_DERIVES), Identity(remove=_REMOVE_SIGNALS))
+# Expose the arm command under its new canonical name. Datasets on S3 recorded it as the
+# plural `robot_commands.pose`; this surfaces the same signal as `robot_command.pose` for free
+# (lazy, zero-copy). `Get` reads from the old data; on data already using the new name the
+# passthrough Identity wins (it precedes this alias in the Group).
+_RENAME_ROBOT_COMMAND = Derive(**{'robot_command.pose': Get('robot_commands.pose', None)})
+
+REAL_ROBOT_TRANSFORM = Group(Derive(**_REAL_ROBOT_DERIVES), Identity(remove=_REMOVE_SIGNALS), _RENAME_ROBOT_COMMAND)
+SIM_ROBOT_TRANSFORM = Group(Derive(**_SIM_ROBOT_DERIVES), Identity(remove=_REMOVE_SIGNALS), _RENAME_ROBOT_COMMAND)
 
 # Task constants
 TOWELS_TASK = 'Pick all the towels one by one from transparent tote and place them into the large grey tote.'
@@ -112,7 +118,7 @@ def droid(path, recovery_all, recovery_towels, duplicate_recovery):
 # Signal transformations for sim datasets
 old_to_new = Group(
     Derive(**{
-        'robot_commands.pose': Concat('target_robot_position_translation', 'target_robot_position_quaternion'),
+        'robot_command.pose': Concat('target_robot_position_translation', 'target_robot_position_quaternion'),
         'robot_state.ee_pose': Concat('robot_position_translation', 'robot_position_quaternion'),
         'task': FromValue('Pick up the green cube and place it on the red cube.'),
     }),

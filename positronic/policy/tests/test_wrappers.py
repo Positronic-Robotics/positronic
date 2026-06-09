@@ -41,7 +41,7 @@ class _ConstPolicy(Policy):
 
 
 def _obs(now_sec=0.0, status=RobotStatus.AVAILABLE):
-    return {'inference_time_ns': int(now_sec * 1e9), 'robot_state.status': status}
+    return {'inference_time_ns': int(now_sec * 1e9), 'robot_state.error': int(status == RobotStatus.ERROR)}
 
 
 class TestChunkedSchedule:

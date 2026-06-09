@@ -1,30 +1,23 @@
 import logging
 from collections import Counter
-from collections.abc import Mapping, Sequence
 from contextlib import nullcontext
 from pathlib import Path
-from typing import Any
 
 import configuronic as cfn
 import pos3
 
 import pimm
-import positronic.cfg.hardware.camera
-import positronic.cfg.hardware.gripper
-import positronic.cfg.hardware.roboarm
+import positronic.cfg.embodiment
 import positronic.cfg.policy as policy_cfg
-import positronic.cfg.simulator
 from positronic import utils, wire
 from positronic.dataset.ds_writer_agent import TimeMode
 from positronic.dataset.local_dataset import LocalDatasetWriter, load_all_datasets
+from positronic.embodiment import Embodiment
 from positronic.gui.dpg import DearpyguiUi
 from positronic.gui.eval import EvalUI
 from positronic.gui.keyboard import KeyboardControl
 from positronic.policy.base import SampledPolicy
 from positronic.policy.harness import Directive, Harness
-from positronic.simulator.mujoco.sim import FullSimState, MujocoCameras, MujocoFranka, MujocoGripper, MujocoSim
-from positronic.simulator.mujoco.transforms import MujocoSceneTransform
-from positronic.utils import package_assets_path
 from positronic.utils.logging import init_logging
 
 logger = logging.getLogger(__name__)
@@ -122,64 +115,16 @@ def _connect_ds_command(world, harness, ds_agent, policy):
 
 
 def main(
-    robot_arm: pimm.ControlSystem,
-    gripper: pimm.ControlSystem,
-    cameras: dict[str, pimm.ControlSystem],
+    embodiment: Embodiment,
     policy,
     driver: tuple,
-    output_dir: str | Path | None = None,
-):
-    """Runs inference on real hardware."""
-    harness = Harness(policy, static_meta=wire.ROBOT_STATIC_META, on_episode_complete=_completion_sink(policy))
-
-    camera_instances = cameras
-    camera_emitters = {name: cam.frame for name, cam in camera_instances.items()}
-
-    gui, harness_emitter, foreground_cs = driver
-    if output_dir is not None:
-        output_dir = pos3.sync(output_dir, sync_on_error=True)
-        utils.save_run_metadata(output_dir, patterns=['*.py', '*.toml'])
-        _seed_counter(policy, output_dir)
-
-    writer_cm = LocalDatasetWriter(output_dir) if output_dir is not None else nullcontext(None)
-    with writer_cm as dataset_writer, pimm.World() as world:
-        ds_agent = wire.wire(world, harness, dataset_writer, camera_emitters, robot_arm, gripper, gui, TimeMode.CLOCK)
-        world.connect(harness_emitter[0], harness.directive, emitter_wrapper=harness_emitter[1])
-        _connect_ds_command(world, harness, ds_agent, policy)
-
-        bg_cs = [*camera_instances.values(), robot_arm, gripper, ds_agent, gui]
-        main_cs = [harness, *foreground_cs]
-        world.run(main_cs, bg_cs)
-
-
-def main_sim(
-    mujoco_model_path: str,
-    policy,
-    loaders: Sequence[MujocoSceneTransform],
-    camera_fps: int,
-    driver: tuple,
-    camera_dict: Mapping[str, str],
     output_dir: str | Path | None = None,
     simulate_inference: bool | float = False,
-    observers: Mapping[str, Any] | None = None,
 ):
-    observers = observers or {}
-    sim = MujocoSim(mujoco_model_path, loaders, observers=observers)
-    robot_arm = MujocoFranka(sim, suffix='_ph')
-    gripper = MujocoGripper(sim, actuator_name='actuator8_ph', joint_name='finger_joint1_ph')
-    mujoco_cameras = MujocoCameras(sim.model, sim.data, resolution=(320, 240), fps=camera_fps)
-    cameras = {name: mujoco_cameras.cameras[orig_name] for name, orig_name in camera_dict.items()}
-
-    static_meta = {'simulation.mujoco_model_path': mujoco_model_path, **wire.ROBOT_STATIC_META}
+    """Run inference for an embodiment, real or simulated."""
     harness = Harness(
-        policy,
-        static_meta=static_meta,
-        descriptor='mujoco.franka',
-        simulate_inference=simulate_inference,
-        on_episode_complete=_completion_sink(policy),
+        policy, embodiment, simulate_inference=simulate_inference, on_episode_complete=_completion_sink(policy)
     )
-    control_systems = [mujoco_cameras, sim, robot_arm, gripper, harness]
-
     gui, harness_emitter, foreground_cs = driver
 
     if output_dir is not None:
@@ -187,48 +132,35 @@ def main_sim(
         utils.save_run_metadata(output_dir, patterns=['*.py', '*.toml'])
         _seed_counter(policy, output_dir)
 
+    time_mode = TimeMode.MESSAGE if embodiment.simulated else TimeMode.CLOCK
     writer_cm = LocalDatasetWriter(output_dir) if output_dir is not None else nullcontext(None)
-    with writer_cm as dataset_writer, pimm.World(virtual_time=True) as world:
-        ds_agent = wire.wire(world, harness, dataset_writer, cameras, robot_arm, gripper, gui, TimeMode.MESSAGE)
-        if ds_agent is not None:
-            for observer_name in observers.keys():
-                ds_agent.add_signal(observer_name)
-                world.connect(sim.observations[observer_name], ds_agent.inputs[observer_name])
-        _connect_ds_command(world, harness, ds_agent, policy)
+    with writer_cm as dataset_writer, pimm.World(virtual_time=embodiment.simulated) as world:
+        ds_agent = wire.wire_embodiment(world, harness, embodiment, dataset_writer, time_mode)
+        if gui is not None:
+            # HACK: GUI cameras are matched to observations by the `image.` name prefix, which
+            # hard-binds GUI wiring to the observation naming convention. TODO: resolve this
+            # coupling (the right binding is still open).
+            for name, obs in embodiment.observations.items():
+                if name.startswith('image.'):
+                    world.connect(obs.source, gui.cameras[name])
         world.connect(harness_emitter[0], harness.directive, emitter_wrapper=harness_emitter[1])
+        _connect_ds_command(world, harness, ds_agent, policy)
 
-        world.run([*foreground_cs, *control_systems, ds_agent], gui)
+        # Sim runs devices + recorder in-process under the virtual clock; real runs them as
+        # background subprocesses. The harness, driver, and GUI placement is identical.
+        devices = [cs for cs in [*embodiment.control_systems, ds_agent] if cs is not None]
+        if embodiment.simulated:
+            world.run([harness, *foreground_cs, *devices], gui)
+        else:
+            world.run([harness, *foreground_cs], [*devices, gui])
 
 
-main_sim_cfg = cfn.Config(
-    main_sim,
-    mujoco_model_path=package_assets_path('assets/mujoco/franka_table.xml'),
-    policy=policy_cfg.placeholder,
-    loaders=positronic.cfg.simulator.stack_cubes_loaders,
-    camera_fps=15,
+run_cfg = cfn.Config(main, embodiment=positronic.cfg.embodiment.droid, policy=policy_cfg.placeholder, driver=keyboard)
+
+
+sim_cfg = run_cfg.override(
+    embodiment=positronic.cfg.embodiment.mujoco_franka,
     driver=timed.override(simulation_time=15, task='Pick up the green cube and place it on the red cube.'),
-    # We use 3 cameras not because we need it, but because Mujoco does not render
-    # the second image when using only 2 cameras
-    camera_dict={'image.wrist': 'handcam_left_ph', 'image.exterior': 'back_view_ph', 'image.agent_view': 'agentview'},
-    # Full sim state is the privileged ground truth; scoring is computed downstream.
-    observers={'sim_state': FullSimState()},
-)
-
-
-droid_setup = cfn.Config(
-    main,
-    robot_arm=positronic.cfg.hardware.roboarm.franka_droid,
-    gripper=positronic.cfg.hardware.gripper.robotiq,
-    cameras={
-        'image.wrist': positronic.cfg.hardware.camera.zed_m.override(
-            view='left', resolution='hd720', fps=30, image_enhancement=True
-        ),
-        'image.exterior': positronic.cfg.hardware.camera.zed_2i.override(
-            view='left', resolution='hd720', fps=30, image_enhancement=True
-        ),
-    },
-    driver=keyboard,
-    policy=policy_cfg.placeholder,
 )
 
 
@@ -237,14 +169,16 @@ droid_setup = cfn.Config(
 def _internal_main():
     init_logging()
     cfn.cli({
-        'sim': main_sim_cfg,
-        'real': droid_setup,
-        'phail': droid_setup.override(
-            policy=policy_cfg.phail_multiple, driver=eval_ui, **{'driver.ui_scale': 3, 'robot_arm.collision_coeff': 2.0}
+        'run': run_cfg,
+        'real': run_cfg,  # back-compat alias for the hardware path (documented as `real`)
+        'sim': sim_cfg,
+        'phail': run_cfg.override(
+            policy=policy_cfg.phail_multiple,
+            driver=eval_ui,
+            **{'driver.ui_scale': 3, 'embodiment.robot_arm.collision_coeff': 2.0},
         ),
-        'sim_pnp': main_sim_cfg.override(
-            loaders=positronic.cfg.simulator.multi_tote_loaders,
-            observers={},
+        'sim_pnp': sim_cfg.override(
+            embodiment=positronic.cfg.embodiment.mujoco_franka_pnp,
             **{'driver.task': 'Pick up objects from the red tote and place them in the green tote.'},
         ),
         'stats': stats,

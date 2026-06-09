@@ -62,7 +62,7 @@ def compose(obs, action, fps: float, horizon: float | None, binarize_grip: tuple
     return result
 
 
-@cfn.config(rotation_rep=None, tgt_ee_pose_key='robot_commands.pose', tgt_grip_key='target_grip')
+@cfn.config(rotation_rep=None, tgt_ee_pose_key='robot_command.pose', tgt_grip_key='target_grip')
 def absolute_pos_action(rotation_rep: str | None, tgt_ee_pose_key: str, tgt_grip_key: str):
     """Absolute position action codec for ACT/OpenPI."""
     from positronic.policy.action import AbsolutePositionAction
@@ -91,7 +91,7 @@ traj_ee_action = absolute_pos_action.override(tgt_ee_pose_key='robot_state.ee_po
 
 @cfn.config(
     solver='dls_limits',
-    tgt_ee_pose_key='robot_commands.pose',
+    tgt_ee_pose_key='robot_command.pose',
     tgt_grip_key='target_grip',
     current_q_key='robot_state.q',
     num_joints=7,
@@ -101,7 +101,7 @@ def ik_joints_action(solver, tgt_ee_pose_key, tgt_grip_key, current_q_key, num_j
     from positronic.drivers.roboarm.ik import DLSIKSolver, DLSIKSolverWithLimits, DmControlIKSolver
     from positronic.policy.action import AbsoluteJointsAction, IKJointsAction
 
-    tgt_joints_key = 'robot_commands.joints'
+    tgt_joints_key = 'robot_command.joints'
     solver_map = {'dm_control': DmControlIKSolver, 'dls': DLSIKSolver, 'dls_limits': DLSIKSolverWithLimits}
     ik = IKJointsAction(
         solver_cls=solver_map[solver],
