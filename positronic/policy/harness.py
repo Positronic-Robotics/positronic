@@ -8,7 +8,7 @@ import pimm
 from positronic.dataset.ds_writer_agent import DsWriterCommand
 from positronic.dataset.serializers import expand_suffixed
 from positronic.drivers import roboarm
-from positronic.embodiment import Embodiment
+from positronic.eval import Embodiment
 from positronic.policy.base import DelegatingSession, Policy, PolicyWrapper, Session
 from positronic.utils import flatten_dict, frozen_view
 
@@ -287,7 +287,6 @@ class Harness(pimm.ControlSystem):
                     self._home(clock)
                     yield pimm.Yield()
                 self.context = directive.payload or {}
-                # The task's instruction is authoritative for the run; drivers no longer carry it.
                 if self._instruction is not None:
                     self.context = {**self.context, 'task': self._instruction}
                 if self._session:

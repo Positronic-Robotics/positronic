@@ -28,7 +28,7 @@ uv run positronic eval run --eval=.sim.positronic.stack_cubes \
   --policy=.remote \
   --policy.host=vm-dreamzero \
   --policy.port=8000 \
-  --simulation_time=20 \
+  --eval.timeout=20 \
   --show_gui=True
 ```
 

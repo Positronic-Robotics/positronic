@@ -4,8 +4,8 @@ import pytest
 import tqdm
 
 import positronic.cfg.simulator
+from positronic.cfg.eval.sim.positronic import stack_cubes
 from positronic.dataset.local_dataset import LocalDataset
-from positronic.eval.sim.positronic import stack_cubes
 from positronic.inference import main, timed
 from positronic.policy.tests.test_harness import StubPolicy
 from positronic.simulator.mujoco.sim import FullSimState

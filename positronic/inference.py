@@ -12,13 +12,12 @@ import positronic.cfg.policy as policy_cfg
 from positronic import utils, wire
 from positronic.dataset.ds_writer_agent import TimeMode
 from positronic.dataset.local_dataset import LocalDatasetWriter, load_all_datasets
-from positronic.embodiment import Embodiment
+from positronic.eval import Embodiment, Task
 from positronic.gui.dpg import DearpyguiUi
 from positronic.gui.eval import EvalUI
 from positronic.gui.keyboard import KeyboardControl
 from positronic.policy.base import SampledPolicy
 from positronic.policy.harness import Directive, Harness, default_wrappers
-from positronic.task import Task
 from positronic.utils.logging import init_logging
 
 logger = logging.getLogger(__name__)
@@ -168,14 +167,13 @@ def main(
 run_cfg = cfn.Config(main, embodiment=positronic.cfg.embodiment.droid, policy=policy_cfg.placeholder, driver=keyboard)
 
 
-# Separate function for [projects.scripts]. The sim rollouts moved to `positronic eval run`
-# (the embodiment + task split); this CLI keeps the real-hardware paths.
+# Console entry point for [project.scripts]: the real-hardware inference paths.
 @pos3.with_mirror()
 def _internal_main():
     init_logging()
     cfn.cli({
         'run': run_cfg,
-        'real': run_cfg,  # back-compat alias for the hardware path (documented as `real`)
+        'real': run_cfg,  # `real` is the documented name for the hardware path
         'phail': run_cfg.override(
             policy=policy_cfg.phail_multiple,
             driver=eval_ui,

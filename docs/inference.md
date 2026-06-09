@@ -67,7 +67,7 @@ Use local when latency is critical (<50ms), robot has built-in GPU, or offline o
 
 ## Inference Drivers
 
-Sim evals (`positronic eval run`) drive episodes with a **timed driver (automatic):** inference runs for a fixed duration per episode. Specify `--simulation_time=60` (seconds per episode), `--trial_count=10` (number of episodes), and optionally `--show_gui=True` for DearPyGui visualization. Useful for batch evaluation without manual intervention.
+Sim evals (`positronic eval run`) drive episodes with a **timed driver (automatic):** inference runs for a fixed duration per episode. The per-trial time budget is the task's `timeout` (override with `--eval.timeout=60`, seconds per episode); also set `--trial_count=10` (number of episodes), and optionally `--show_gui=True` for DearPyGui visualization. Useful for batch evaluation without manual intervention.
 
 The hardware paths (`positronic-inference`) provide two manual drivers (see [`positronic/inference.py`](../positronic/inference.py)):
 

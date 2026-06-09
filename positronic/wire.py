@@ -2,7 +2,7 @@ import pimm
 from positronic.dataset import DatasetWriter
 from positronic.dataset.ds_writer_agent import DsWriterAgent, TimeMode, TrajectoryOverrideSerializer
 from positronic.dataset.serializers import Serializers, StatefulSerializer
-from positronic.embodiment import ROBOT_STATIC_META, Embodiment, Observation
+from positronic.eval import ROBOT_STATIC_META, Embodiment, Observation
 
 __all__ = ['ROBOT_STATIC_META', 'wire', 'wire_embodiment']
 

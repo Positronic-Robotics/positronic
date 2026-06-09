@@ -5,7 +5,7 @@ import positronic.cfg.hardware.gripper
 import positronic.cfg.hardware.roboarm
 from positronic.dataset.serializers import Serializers
 from positronic.drivers.roboarm import command as roboarm_command
-from positronic.embodiment import ROBOT_STATIC_META, Command, Embodiment, Observation
+from positronic.eval import ROBOT_STATIC_META, Command, Embodiment, Observation
 from positronic.simulator.mujoco.sim import MujocoCameras, MujocoFranka, MujocoGripper
 
 

@@ -1,6 +1,6 @@
 """Release PhAIL datasets to public S3.
 
-TODO: this script (and the phail-specific configs in `positronic.cfg.eval`
+TODO: this script (and the phail-specific configs in `positronic.cfg.analysis`
 it depends on — `phail_inference_release`, `phail_inference_prod_v1_0`,
 `phail_teleop_release`, `phail_human_release`, `PROD_VARIANTS`,
 `TRAINED_OBJECTS`, audit-corrected episode comments) belongs in phail-website.
@@ -28,7 +28,7 @@ import configuronic as cfn
 import numpy as np
 import pos3
 
-from positronic.cfg import eval as eval_cfg
+from positronic.cfg import analysis as analysis_cfg
 from positronic.dataset.dataset import Dataset
 from positronic.dataset.utilities.migrate_remote import migrate_dataset
 from positronic.utils import PUBLIC
@@ -93,7 +93,7 @@ def _check_dest_empty(dest: str, profile=None):
         )
 
 
-@cfn.config(dataset=eval_cfg.phail_inference_prod_v1_0, force=False)
+@cfn.config(dataset=analysis_cfg.phail_inference_prod_v1_0, force=False)
 def verify_inference(dataset: Dataset, force: bool):
     """Verify inference episodes for consistency. Raises SystemExit on failure unless force=False."""
     issues = []
@@ -143,14 +143,14 @@ def verify_inference(dataset: Dataset, force: bool):
             raise SystemExit('Verification failed. Run without --force to proceed with warnings only.')
 
 
-@cfn.config(dataset=eval_cfg.phail_teleop_release, dest=f'{DEST_ROOT}/v1.0/dataset/teleoperation/')
+@cfn.config(dataset=analysis_cfg.phail_teleop_release, dest=f'{DEST_ROOT}/v1.0/dataset/teleoperation/')
 def training(dataset: Dataset, dest: str):
     """Export fine-tuning dataset (DROID teleoperation with baked eval fields)."""
     _check_dest_empty(dest, profile=PUBLIC_WRITE)
     migrate_dataset(dataset, dest, profile=PUBLIC_WRITE)
 
 
-@cfn.config(dataset=eval_cfg.phail_inference_prod_v1_0, dest=f'{DEST_ROOT}/v1.0/dataset/rollouts/')
+@cfn.config(dataset=analysis_cfg.phail_inference_prod_v1_0, dest=f'{DEST_ROOT}/v1.0/dataset/rollouts/')
 def inference(dataset: Dataset, dest: str):
     """Export prod-filtered inference runs."""
     _check_dest_empty(dest, profile=PUBLIC_WRITE)
@@ -158,7 +158,7 @@ def inference(dataset: Dataset, dest: str):
     migrate_dataset(dataset, dest, profile=PUBLIC_WRITE)
 
 
-@cfn.config(dataset=eval_cfg.phail_human_release, dest=f'{DEST_ROOT}/v1.0/dataset/human/')
+@cfn.config(dataset=analysis_cfg.phail_human_release, dest=f'{DEST_ROOT}/v1.0/dataset/human/')
 def human(dataset: Dataset, dest: str):
     """Export human baseline episodes."""
     _check_dest_empty(dest, profile=PUBLIC_WRITE)
@@ -180,9 +180,9 @@ def models(dest_root: str, version: str):
 
 
 @cfn.config(
-    training_ds=eval_cfg.phail_teleop_release,
-    inference_ds=eval_cfg.phail_inference_prod_v1_0,
-    human_ds=eval_cfg.phail_human_release,
+    training_ds=analysis_cfg.phail_teleop_release,
+    inference_ds=analysis_cfg.phail_inference_prod_v1_0,
+    human_ds=analysis_cfg.phail_human_release,
     dest_root=DEST_ROOT,
     version='v1.0',
     force=False,

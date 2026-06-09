@@ -9,7 +9,7 @@ from positronic.dataset.serializers import Serializers
 from positronic.drivers import roboarm
 from positronic.drivers.roboarm import RobotStatus
 from positronic.drivers.roboarm.command import CartesianPosition, Recover, Reset, from_wire, to_wire
-from positronic.embodiment import Command, Embodiment, Observation
+from positronic.eval import Command, Embodiment, Observation
 from positronic.geom import Rotation, Transform3D
 from positronic.policy.base import Policy, Session
 from positronic.policy.codec import ActionTimestamp

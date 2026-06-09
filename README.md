@@ -250,7 +250,7 @@ Run trained policies through the [inference script](positronic/inference.py):
 uv run --locked positronic eval run --eval=.sim.positronic.stack_cubes \
     --policy=@positronic.cfg.policy.act_absolute \
     --policy.base.checkpoints_dir=~/checkpoints/lerobot/<run_id> \
-    --simulation_time=60 \
+    --eval.timeout=60 \
     --show_gui=True \
     --output_dir=~/datasets/inference_logs/stack_cubes_act
 ```

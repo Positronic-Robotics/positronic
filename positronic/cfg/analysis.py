@@ -901,13 +901,13 @@ def phail_leaderboard():
 # ========================================================================================
 #
 # Sim evaluation:
-#   uv run --locked python -m positronic.cfg.eval sim --dataset.base.path=s3://inference/sim_stack_validation/090226/
+#   uv run --locked python -m positronic.cfg.analysis sim --dataset.base.path=s3://inference/sim_stack_validation/090226/
 #
 # Real (unified) evaluation:
-#   uv run --locked python -m positronic.cfg.eval real --dataset.base.path=s3://inference/real/191225/
+#   uv run --locked python -m positronic.cfg.analysis real --dataset.base.path=s3://inference/real/191225/
 #
 # PhAIL benchmark:
-#   uv run --locked python -m positronic.cfg.eval phail --dataset.datasets.0.base.path=s3://inference/phail_final/
+#   uv run --locked python -m positronic.cfg.analysis phail --dataset.datasets.0.base.path=s3://inference/phail_final/
 # ========================================================================================
 
 server = server_main.override(

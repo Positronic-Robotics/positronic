@@ -1,4 +1,4 @@
-from positronic.cfg.eval import ckpt
+from positronic.cfg.analysis import ckpt
 from positronic.dataset.episode import EpisodeContainer
 
 

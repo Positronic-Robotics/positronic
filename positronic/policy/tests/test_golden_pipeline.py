@@ -38,7 +38,7 @@ from positronic.dataset.local_dataset import LocalDataset, LocalDatasetWriter
 from positronic.dataset.serializers import Serializers
 from positronic.drivers.roboarm import RobotStatus
 from positronic.drivers.roboarm.command import CartesianPosition, Recover, Reset, TrajectoryPlayer
-from positronic.embodiment import ROBOT_STATIC_META, Command, Embodiment, Observation
+from positronic.eval import ROBOT_STATIC_META, Command, Embodiment, Observation
 from positronic.geom import Rotation, Transform3D
 from positronic.policy.base import Policy, Session
 from positronic.policy.codec import ActionTiming
