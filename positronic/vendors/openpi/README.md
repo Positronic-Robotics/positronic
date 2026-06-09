@@ -189,12 +189,12 @@ To evaluate the policy, run the inference client locally using the unified `.rem
 
 **Command:**
 ```bash
-uv run --locked positronic-inference sim \
+uv run --locked positronic eval run --eval=.sim.positronic.stack_cubes \
   --policy=.remote \
   --policy.host=vm-h100 \
   --policy.port=8000 \
-  --driver.simulation_time=20 \
-  --driver.show_gui=True \
+  --simulation_time=20 \
+  --show_gui=True \
   --output_dir=~/datasets/inference_logs
 ```
 

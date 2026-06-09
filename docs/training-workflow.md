@@ -269,7 +269,7 @@ cd docker && docker compose run --rm --service-ports lerobot-0_3_3-server \
   --checkpoints_dir=~/checkpoints/lerobot/baseline_v1/ \
   --codec=@positronic.vendors.lerobot.codecs.ee &
 
-uv run positronic-inference sim \
+uv run positronic eval run --eval=.sim.positronic.stack_cubes \
   --policy=.remote \
   --output_dir=~/datasets/inference_logs/baseline_v1
 ```

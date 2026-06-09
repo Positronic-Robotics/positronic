@@ -47,6 +47,7 @@ dependencies = [
 ]
 
 [project.scripts]
+positronic="positronic.cli:_internal_main"
 positronic-server="positronic.server.positronic_server:_internal_main"
 positronic-inference="positronic.inference:_internal_main"
 positronic-probe="positronic.probe:_internal_main"

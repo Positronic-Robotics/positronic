@@ -24,12 +24,12 @@ cd docker
 CACHE_ROOT=/home/vertix docker --context vm-dreamzero compose run --rm --service-ports dreamzero-server
 
 # 3. Run sim inference locally
-uv run positronic-inference sim \
+uv run positronic eval run --eval=.sim.positronic.stack_cubes \
   --policy=.remote \
   --policy.host=vm-dreamzero \
   --policy.port=8000 \
-  --driver.simulation_time=20 \
-  --driver.show_gui=True
+  --simulation_time=20 \
+  --show_gui=True
 ```
 
 First start downloads the 14B checkpoint via HuggingFace (~10-20 min). Subsequent starts use cache.

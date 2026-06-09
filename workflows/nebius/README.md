@@ -247,11 +247,11 @@ curl http://<endpoint-ip>:8000/api/v1/models
 # → {"models": ["050000"]}
 ```
 
-Run inference from your laptop or robot host using the existing `positronic-inference` CLI
+Run inference from your laptop or robot host using `positronic eval run`
 ([docs/inference.md](../../docs/inference.md)):
 
 ```bash
-uv run positronic-inference sim \
+uv run positronic eval run --eval=.sim.positronic.stack_cubes \
   --policy=.remote \
   --policy.host=<endpoint-ip> \
   --policy.port=8000 \

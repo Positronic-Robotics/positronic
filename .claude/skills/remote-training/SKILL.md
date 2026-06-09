@@ -217,10 +217,10 @@ nebius ai endpoint list --parent-id "$NEBIUS_PARENT_ID" --format json \
 # → the public IP; the endpoint serves on port 8000
 ```
 
-Point the `positronic-inference` CLI at the endpoint IP:
+Point `positronic eval run` at the endpoint IP:
 
 ```bash
-uv run --locked positronic-inference sim \
+uv run --locked positronic eval run --eval=.sim.positronic.stack_cubes \
   --policy=.remote --policy.host=<endpoint-ip> --policy.port=8000 \
   --output_dir=s3://inference/sim_stack_validation/<run_name>/<vendor>/
 ```
@@ -268,7 +268,7 @@ Run detached with `-d` for a background server; `docker --context <ctx> ps` /
 hostname:
 
 ```bash
-uv run --locked positronic-inference sim \
+uv run --locked positronic eval run --eval=.sim.positronic.stack_cubes \
   --policy=.remote --policy.host=desktop --policy.port=8000 \
   --output_dir=<...>
 ```

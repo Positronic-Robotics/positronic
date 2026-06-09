@@ -24,9 +24,9 @@ curl http://localhost:8000/api/v1/models
 In a separate terminal, run inference inside the simulation:
 
 ```bash
-uv run positronic-inference sim \
+uv run positronic eval run --eval=.sim.positronic.stack_cubes \
   --policy=.remote --policy.host=localhost --policy.port=8000 \
-  --driver.show_gui=True \
+  --show_gui=True \
   --output_dir=~/datasets/demo_run
 ```
 
@@ -201,7 +201,7 @@ InferenceServer(
 If you give your `Policy` a `Codec` (via `codec.wrap(policy)`), your session works entirely in *model space* — it receives encoded observations and returns model-native actions, and the codec handles the wire format. Test the server with the same client as the demo:
 
 ```bash
-uv run positronic-inference sim --policy=.remote --policy.host=localhost --policy.port=8000
+uv run positronic eval run --eval=.sim.positronic.stack_cubes --policy=.remote --policy.host=localhost --policy.port=8000
 ```
 
 ### Slow-loading or subprocess models

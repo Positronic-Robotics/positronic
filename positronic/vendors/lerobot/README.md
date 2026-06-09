@@ -44,10 +44,10 @@ cd docker && docker compose run --rm --service-ports lerobot-server serve \
   --codec=@positronic.vendors.lerobot.codecs.ee
 
 # 4. Run inference
-uv run --locked positronic-inference sim \
+uv run --locked positronic eval run --eval=.sim.positronic.stack_cubes \
   --policy=.remote \
   --policy.host=localhost \
-  --driver.show_gui=True
+  --show_gui=True
 ```
 
 See [Training Workflow](../../docs/training-workflow.md) for detailed step-by-step instructions.

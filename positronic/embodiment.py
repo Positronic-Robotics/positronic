@@ -54,8 +54,6 @@ class Embodiment:
     descriptor: str
     observations: dict[str, Observation]
     commands: dict[str, Command]
-    # Ground-truth signals, recorded but never fed to the policy (kept out of ``observations``).
-    privileged: dict[str, Observation]
     static_meta: dict[str, Any]
     meta_source: pimm.SignalEmitter | None
     control_systems: tuple[pimm.ControlSystem, ...] = ()

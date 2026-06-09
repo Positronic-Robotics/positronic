@@ -194,7 +194,6 @@ def _run_pipeline(tmp_path: Path) -> dict:
                 'robot_command': Command(robot.commands, Reset(), Serializers.robot_command),
                 'target_grip': Command(gripper.target_grip, 0.0, None),
             },
-            privileged={},
             static_meta=dict(ROBOT_STATIC_META),
             meta_source=robot.robot_meta,
         )

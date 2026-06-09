@@ -17,7 +17,8 @@ from positronic.gui.dpg import DearpyguiUi
 from positronic.gui.eval import EvalUI
 from positronic.gui.keyboard import KeyboardControl
 from positronic.policy.base import SampledPolicy
-from positronic.policy.harness import Directive, Harness
+from positronic.policy.harness import Directive, Harness, default_wrappers
+from positronic.task import Task
 from positronic.utils.logging import init_logging
 
 logger = logging.getLogger(__name__)
@@ -41,17 +42,14 @@ class KeyboardHandler:
 class TimedDriver(pimm.ControlSystem):
     """Control system that orchestrates inference episodes by sending directives."""
 
-    def __init__(self, num_iterations: int, simulation_time: float, task: str | None = None):
+    def __init__(self, num_iterations: int, simulation_time: float):
         self.num_iterations = num_iterations
         self.simulation_time = simulation_time
         self.directives = pimm.ControlSystemEmitter(self)
-        self.task = task
 
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock):
         for i in range(self.num_iterations):
             meta = {'simulation.iteration': str(i), 'simulation.total_iterations': str(self.num_iterations)}
-            if self.task:
-                meta['task'] = self.task
             self.directives.emit(Directive.RUN(**meta))
             yield pimm.Sleep(self.simulation_time)
             self.directives.emit(Directive.FINISH())
@@ -77,9 +75,9 @@ def keyboard(show_gui, task):
 
 
 @cfn.config(num_iterations=1, simulation_time=15, show_gui=False)
-def timed(num_iterations, simulation_time, show_gui, task):
+def timed(num_iterations, simulation_time, show_gui):
     gui = None if not show_gui else DearpyguiUi()
-    driver = TimedDriver(num_iterations, simulation_time, task=task)
+    driver = TimedDriver(num_iterations, simulation_time)
     return gui, (driver.directives, pimm.utils.identity), [driver]
 
 
@@ -120,10 +118,21 @@ def main(
     driver: tuple,
     output_dir: str | Path | None = None,
     simulate_inference: bool | float = False,
+    task: Task | None = None,
+    wrap=default_wrappers,
 ):
-    """Run inference for an embodiment, real or simulated."""
+    """Run inference for an embodiment, real or simulated.
+
+    ``task`` (when given) supplies the policy-facing instruction and the privileged
+    ground-truth signals to record; without it the instruction rides the driver.
+    """
     harness = Harness(
-        policy, embodiment, simulate_inference=simulate_inference, on_episode_complete=_completion_sink(policy)
+        policy,
+        embodiment,
+        instruction=task.instruction if task is not None else None,
+        wrap=wrap,
+        simulate_inference=simulate_inference,
+        on_episode_complete=_completion_sink(policy),
     )
     gui, harness_emitter, foreground_cs = driver
 
@@ -135,7 +144,8 @@ def main(
     time_mode = TimeMode.MESSAGE if embodiment.simulated else TimeMode.CLOCK
     writer_cm = LocalDatasetWriter(output_dir) if output_dir is not None else nullcontext(None)
     with writer_cm as dataset_writer, pimm.World(virtual_time=embodiment.simulated) as world:
-        ds_agent = wire.wire_embodiment(world, harness, embodiment, dataset_writer, time_mode)
+        privileged = task.privileged if task is not None else {}
+        ds_agent = wire.wire_embodiment(world, harness, embodiment, dataset_writer, time_mode, privileged=privileged)
         if gui is not None:
             # HACK: GUI cameras are matched to observations by the `image.` name prefix, which
             # hard-binds GUI wiring to the observation naming convention. TODO: resolve this
@@ -158,28 +168,18 @@ def main(
 run_cfg = cfn.Config(main, embodiment=positronic.cfg.embodiment.droid, policy=policy_cfg.placeholder, driver=keyboard)
 
 
-sim_cfg = run_cfg.override(
-    embodiment=positronic.cfg.embodiment.mujoco_franka,
-    driver=timed.override(simulation_time=15, task='Pick up the green cube and place it on the red cube.'),
-)
-
-
-# Separate function for [projects.scripts]
+# Separate function for [projects.scripts]. The sim rollouts moved to `positronic eval run`
+# (the embodiment + task split); this CLI keeps the real-hardware paths.
 @pos3.with_mirror()
 def _internal_main():
     init_logging()
     cfn.cli({
         'run': run_cfg,
         'real': run_cfg,  # back-compat alias for the hardware path (documented as `real`)
-        'sim': sim_cfg,
         'phail': run_cfg.override(
             policy=policy_cfg.phail_multiple,
             driver=eval_ui,
             **{'driver.ui_scale': 3, 'embodiment.robot_arm.collision_coeff': 2.0},
-        ),
-        'sim_pnp': sim_cfg.override(
-            embodiment=positronic.cfg.embodiment.mujoco_franka_pnp,
-            **{'driver.task': 'Pick up objects from the red tote and place them in the green tote.'},
         ),
         'stats': stats,
     })

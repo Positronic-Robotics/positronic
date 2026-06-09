@@ -3,9 +3,9 @@ import pos3
 import pytest
 import tqdm
 
-import positronic.cfg.embodiment
 import positronic.cfg.simulator
 from positronic.dataset.local_dataset import LocalDataset
+from positronic.eval.sim.positronic import stack_cubes
 from positronic.inference import main, timed
 from positronic.policy.tests.test_harness import StubPolicy
 from positronic.simulator.mujoco.sim import FullSimState
@@ -58,17 +58,18 @@ def test_sim_emits_commands_and_records_dataset(tmp_path, monkeypatch):
             loader.seed = idx
 
     with pos3.mirror():
-        embodiment = positronic.cfg.embodiment.mujoco_franka(
+        ev = stack_cubes(
             mujoco_model_path='positronic/assets/mujoco/franka_table.xml',
             loaders=loaders,
             camera_fps=10,
             camera_dict=camera_dict,
-            observers={'sim_state': FullSimState()},
+            instruction='integration-test',
         )
         main(
-            embodiment=embodiment,
+            embodiment=ev.embodiment,
+            task=ev.task,
             policy=policy,
-            driver=timed(simulation_time=0.4, task='integration-test', show_gui=False, num_iterations=1),
+            driver=timed(simulation_time=0.4, show_gui=False, num_iterations=1),
             output_dir=str(tmp_path),
         )
 
@@ -107,7 +108,8 @@ def test_sim_emits_commands_and_records_dataset(tmp_path, monkeypatch):
     last_obs = policy.observations[-1]
     assert isinstance(last_obs['image.wrist'], np.ndarray)
     assert 'robot_state.ee_pose' in last_obs
-    assert 'task' in last_obs
+    # The task's instruction is injected by the harness (no longer carried by the driver).
+    assert last_obs['task'] == 'integration-test'
     assert last_obs['descriptor'] == 'mujoco.franka'
 
 
@@ -115,8 +117,8 @@ def test_sim_embodiment_records_full_sim_state():
     """The stack_cubes eval records the privileged full sim state, not live success observers.
 
     Guards the production observer default directly (the heavyweight e2e test above wires its own
-    observers, so it cannot catch a regression of the ``sim`` embodiment config).
+    observers, so it cannot catch a regression of the ``stack_cubes`` eval config).
     """
-    observers = positronic.cfg.embodiment.mujoco_franka.kwargs['observers']
+    observers = stack_cubes.kwargs['observers']
     assert set(observers) == {'sim_state'}
     assert isinstance(observers['sim_state'], FullSimState)

@@ -247,11 +247,11 @@ Progress to OpenPI or GR00T when you need more capable models. See:
 Run trained policies through the [inference script](positronic/inference.py):
 
 ```bash
-uv run --locked positronic-inference sim \
+uv run --locked positronic eval run --eval=.sim.positronic.stack_cubes \
     --policy=@positronic.cfg.policy.act_absolute \
     --policy.base.checkpoints_dir=~/checkpoints/lerobot/<run_id> \
-    --driver.simulation_time=60 \
-    --driver.show_gui=True \
+    --simulation_time=60 \
+    --show_gui=True \
     --output_dir=~/datasets/inference_logs/stack_cubes_act
 ```
 
@@ -264,7 +264,7 @@ cd docker && docker compose run --rm --service-ports lerobot-0_3_3-server \
     --codec=@positronic.vendors.lerobot_0_3_3.codecs.ee
 
 # On robot:
-uv run --locked positronic-inference sim \
+uv run --locked positronic eval run --eval=.sim.positronic.stack_cubes \
     --policy=.remote \
     --policy.host=<server-ip>
 ```

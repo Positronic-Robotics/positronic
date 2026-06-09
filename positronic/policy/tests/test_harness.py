@@ -34,7 +34,7 @@ def make_embodiment(descriptor: str = '', cameras=('image.cam',)) -> Embodiment:
         'robot_command': Command(pimm.NoOpReceiver(), Reset(), Serializers.robot_command),
         'target_grip': Command(pimm.NoOpReceiver(), 0.0, None),
     }
-    return Embodiment(descriptor, observations, commands, {}, {}, pimm.NoOpEmitter())
+    return Embodiment(descriptor, observations, commands, {}, pimm.NoOpEmitter())
 
 
 class _SpySession(Session):
