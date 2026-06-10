@@ -4,7 +4,6 @@ from collections.abc import Callable
 from contextlib import nullcontext
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
 
 import configuronic as cfn
 import pos3
@@ -43,35 +42,12 @@ class KeyboardHandler:
 
 @dataclass
 class Driver:
-    """What a driver config supplies: the directive source ``main`` wires into the Harness."""
+    """An attended operator surface: the directive source ``main`` wires into the Harness."""
 
     gui: DearpyguiUi | None
     directives: pimm.SignalEmitter
     directive_wrapper: Callable
     control_systems: list[pimm.ControlSystem]
-    episode_ended: pimm.ControlSystemReceiver | None = None
-
-
-class TrialSequencer(pimm.ControlSystem):
-    """Pure trial sequencer: emits RUN per trial, then waits for the harness to end the episode.
-
-    The harness owns trial termination (timeout, later the task's stop-signal); the
-    sequencer just paces the trials and carries the per-trial RUN context.
-    """
-
-    def __init__(self, trial_count: int, run_context: dict[str, Any]):
-        self.trial_count = trial_count
-        self.run_context = run_context
-        self.directives = pimm.ControlSystemEmitter(self)
-        self.episode_ended = pimm.ControlSystemReceiver(self, default=None)
-
-    def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock):
-        for i in range(self.trial_count):
-            context = {**self.run_context, 'eval.trial_index': i, 'eval.trial_count': self.trial_count}
-            self.directives.emit(Directive.RUN(**context))
-            while not should_stop.value and not self.episode_ended.read().updated:
-                yield pimm.Sleep(0.01)
-        yield pimm.Sleep(0.5)  # let the DsWriterAgent commit the last episode before world exit
 
 
 @cfn.config(ui_scale=1)
@@ -91,13 +67,6 @@ def keyboard(show_gui, task):
         pimm.map(keyboard_handler.harness_directive),
         [keyboard],
     )
-
-
-@cfn.config(trial_count=1, timeout=15, inference_latency=False, show_gui=False)
-def sequencer(trial_count, timeout, inference_latency, show_gui):
-    gui = None if not show_gui else DearpyguiUi()
-    driver = TrialSequencer(trial_count, {'timeout': timeout, 'inference_latency': inference_latency})
-    return Driver(gui, driver.directives, pimm.utils.identity, [driver], driver.episode_ended)
 
 
 def _seed_counter(policy, output_dir: Path):
@@ -134,24 +103,31 @@ def _connect_ds_command(world, harness, ds_agent, policy):
 def main(
     embodiment: Embodiment,
     policy,
-    driver: Driver,
+    driver: Driver | None = None,
     output_dir: str | Path | None = None,
     task: Task | None = None,
+    trials: list[dict] | None = None,
+    show_gui: bool = False,
     wrap=default_wrappers,
 ):
     """Run inference for an embodiment, real or simulated.
 
     ``task`` (when given) supplies the policy-facing instruction and the privileged
     ground-truth signals to record; without it the instruction rides the driver.
+    Exactly one of ``driver`` (attended: an operator surface emits the directives)
+    or ``trials`` (unattended: the harness runs the plan itself) must be given;
+    ``show_gui`` applies to the unattended path (attended surfaces bring their own).
     """
+    assert (driver is None) != (trials is None), 'Provide exactly one of driver or trials'
     harness = Harness(
         policy,
         embodiment,
         instruction=task.instruction if task is not None else None,
+        trials=trials,
         wrap=wrap,
         on_episode_complete=_completion_sink(policy),
     )
-    gui = driver.gui
+    gui = driver.gui if driver is not None else (DearpyguiUi() if show_gui else None)
 
     if output_dir is not None:
         output_dir = pos3.sync(output_dir, sync_on_error=True)
@@ -170,18 +146,18 @@ def main(
             for name, obs in embodiment.observations.items():
                 if name.startswith('image.'):
                     world.connect(obs.source, gui.cameras[name])
-        world.connect(driver.directives, harness.directive, emitter_wrapper=driver.directive_wrapper)
-        if driver.episode_ended is not None:
-            world.connect(harness.episode_ended, driver.episode_ended)
+        if driver is not None:
+            world.connect(driver.directives, harness.directive, emitter_wrapper=driver.directive_wrapper)
         _connect_ds_command(world, harness, ds_agent, policy)
 
         # Sim runs devices + recorder in-process under the virtual clock; real runs them as
         # background subprocesses. The harness, driver, and GUI placement is identical.
+        foreground = driver.control_systems if driver is not None else []
         devices = [cs for cs in [*embodiment.control_systems, ds_agent] if cs is not None]
         if embodiment.simulated:
-            world.run([harness, *driver.control_systems, *devices], gui)
+            world.run([harness, *foreground, *devices], gui)
         else:
-            world.run([harness, *driver.control_systems], [*devices, gui])
+            world.run([harness, *foreground], [*devices, gui])
 
 
 run_cfg = cfn.Config(main, embodiment=positronic.cfg.embodiment.droid, policy=policy_cfg.placeholder, driver=keyboard)

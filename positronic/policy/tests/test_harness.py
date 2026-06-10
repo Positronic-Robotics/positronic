@@ -481,8 +481,6 @@ def test_run_timeout_self_terminates(world):
     policy = StubPolicy()
     harness = Harness(policy, make_embodiment())
     p = _pair_all(world, harness)
-    ended = RecordingEmitter()
-    harness.episode_ended._bind(ended)
 
     driver = ManualDriver([
         (partial(p['directive_em'].emit, Directive.RUN(task='test', timeout=0.05)), 0.0),
@@ -496,7 +494,25 @@ def test_run_timeout_self_terminates(world):
     assert len(stops) == 1
     assert stops[0].static_data['eval.terminated'] is False
     assert isinstance(_last_command(p), Reset)
-    assert ended.emitted, 'episode_ended not fired on self-termination'
+
+
+@pytest.mark.timeout(3.0)
+def test_trial_plan_self_drives(world):
+    """With a trial plan the harness runs unattended: no driver, one episode per entry."""
+    policy = StubPolicy()
+    trials = [{'task': f'trial-{i}', 'timeout': 0.05, 'eval.trial_index': i} for i in range(2)]
+    harness = Harness(policy, make_embodiment(), trials=trials)
+    p = _pair_all(world, harness)
+
+    scheduler = world.start([harness])
+    drive_scheduler(scheduler, steps=400)
+
+    starts = [c for c in _ds_commands(p) if c.type == DsWriterCommandType.START_EPISODE]
+    stops = [c for c in _ds_commands(p) if c.type == DsWriterCommandType.STOP_EPISODE]
+    assert [s.static_data['eval.trial_index'] for s in starts] == [0, 1]
+    assert len(stops) == 2
+    assert all(s.static_data['eval.terminated'] is False for s in stops)
+    assert policy.reset_calls == 2
 
 
 @pytest.mark.timeout(3.0)

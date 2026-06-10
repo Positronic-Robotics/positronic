@@ -67,9 +67,9 @@ Use local when latency is critical (<50ms), robot has built-in GPU, or offline o
 
 ## Inference Drivers
 
-Positronic provides three drivers for managing inference episodes (see [`positronic/inference.py`](../positronic/inference.py)):
+Positronic provides two interactive drivers for managing inference episodes (see [`positronic/inference.py`](../positronic/inference.py)), plus an unattended mode:
 
-**Timed driver (automatic):** Runs inference automatically for a fixed duration per episode — the task's `timeout` (override with `--eval.timeout=60`, seconds per episode); also set `--trial_count=10` (number of episodes), and optionally `--show_gui=True` for DearPyGui visualization. The default for `sim`. Useful for batch evaluation without manual intervention.
+**Unattended (automatic):** The default for `sim` — runs `--trial_count=10` episodes back-to-back, each ending when the task's `timeout` expires (override with `--eval.timeout=60`, seconds per episode); optionally `--show_gui=True` for DearPyGui visualization. Useful for batch evaluation without manual intervention.
 
 **Keyboard driver (manual):** Control inference with keyboard. Press `s` to start episode, `p` to stop and save, `r` to home the robot, `q` to quit. The default for `real`; optionally pass `--driver.show_gui=True` for DearPyGui visualization. Useful for manual evaluation and debugging.
 

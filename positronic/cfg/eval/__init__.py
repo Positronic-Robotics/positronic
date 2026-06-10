@@ -15,9 +15,23 @@ def placeholder():
 @cfn.config(eval=placeholder, policy=policy_cfg.placeholder, trial_count=1, show_gui=False, wrap=default_wrappers)
 def run(eval: Eval, policy, trial_count, show_gui, output_dir=None, inference_latency=False, wrap=default_wrappers):
     """Run a selected eval (embodiment + task) through the shared inference harness."""
-    driver = inference.sequencer(
-        trial_count=trial_count, timeout=eval.task.timeout, inference_latency=inference_latency, show_gui=show_gui
-    )
+    # The trial plan: one RUN context per trial, consumed by the self-driving Harness.
+    # (Step 5 adds the per-trial seed `base + i` here.)
+    trials = [
+        {
+            'timeout': eval.task.timeout,
+            'inference_latency': inference_latency,
+            'eval.trial_index': i,
+            'eval.trial_count': trial_count,
+        }
+        for i in range(trial_count)
+    ]
     inference.main(
-        embodiment=eval.embodiment, task=eval.task, policy=policy, driver=driver, output_dir=output_dir, wrap=wrap
+        embodiment=eval.embodiment,
+        task=eval.task,
+        policy=policy,
+        trials=trials,
+        show_gui=show_gui,
+        output_dir=output_dir,
+        wrap=wrap,
     )

@@ -6,7 +6,7 @@ import tqdm
 import positronic.cfg.simulator
 from positronic.cfg.eval.sim.positronic import stack_cubes
 from positronic.dataset.local_dataset import LocalDataset
-from positronic.inference import main, sequencer
+from positronic.inference import main
 from positronic.policy.tests.test_harness import StubPolicy
 from positronic.simulator.mujoco.sim import FullSimState
 
@@ -69,13 +69,13 @@ def test_sim_emits_commands_and_records_dataset(tmp_path, monkeypatch):
             embodiment=ev.embodiment,
             task=ev.task,
             policy=policy,
-            driver=sequencer(timeout=0.4, show_gui=False, trial_count=2),
+            trials=[{'timeout': 0.4, 'eval.trial_index': i} for i in range(2)],
             output_dir=str(tmp_path),
         )
 
     ds = LocalDataset(tmp_path)
-    # Two trials: the sequencer paces on the harness's episode_ended, the harness
-    # self-terminates each trial at the RUN-borne timeout.
+    # Two trials: the harness runs the plan itself, self-terminating each trial
+    # at the RUN-borne timeout.
     assert len(ds) == 2
 
     episode = ds[0]

@@ -1,5 +1,5 @@
 import time
-from collections.abc import Callable, Generator, Iterator
+from collections.abc import Callable, Generator, Iterable, Iterator
 from dataclasses import dataclass
 from enum import Enum
 from typing import Any
@@ -171,8 +171,10 @@ class Harness(pimm.ControlSystem):
 
     ``RUN`` may carry per-trial lifecycle knobs in its context: ``timeout``
     (seconds; the harness self-terminates the trial when it expires) and
-    ``inference_latency`` (sim-only inference-cost simulation). ``episode_ended``
-    fires whenever an episode is finalized, so a trial sequencer can pace on it.
+    ``inference_latency`` (sim-only inference-cost simulation). A ``trials`` plan
+    (a sequence of RUN contexts) makes the harness self-driving: whenever it is
+    idle it starts the next trial itself and exits once the plan is exhausted —
+    the unattended path needs no driver at all.
 
     The ``Embodiment`` provides the observation serializers (which own the
     canonical key names), the command channels, and the home action; the harness
@@ -192,6 +194,7 @@ class Harness(pimm.ControlSystem):
         embodiment: Embodiment,
         *,
         instruction: str | None = None,
+        trials: Iterable[dict[str, Any]] | None = None,
         static_meta: dict[str, Any] | None = None,
         wrap: PolicyWrapper | Callable[[pimm.Clock], PolicyWrapper] | None = default_wrappers,
         on_episode_complete: Callable[[Session, dict[str, Any]], None] | None = None,
@@ -199,6 +202,10 @@ class Harness(pimm.ControlSystem):
         self._raw_policy = policy
         self._embodiment = embodiment
         self._instruction = instruction
+        # The unattended trial plan: each entry is a RUN context. When set, the run
+        # loop starts the next trial whenever it is idle and returns once the plan
+        # is exhausted; when None, directives are the only lifecycle source.
+        self._trials = iter(trials) if trials is not None else None
         self._wrap = wrap
         # Called with (session, context) when an episode completes successfully (clean
         # STOP/FINISH), never on abort. Used to feed completion bookkeeping like a
@@ -229,8 +236,6 @@ class Harness(pimm.ControlSystem):
 
         self.directive = pimm.ControlSystemReceiver[Directive](self, default=None, maxsize=3)
         self.ds_command = pimm.ControlSystemEmitter[DsWriterCommand](self)
-        # Fired when an episode is finalized (FINISH, including timeout self-termination).
-        self.episode_ended = pimm.ControlSystemEmitter(self)
         self.robot_meta_in = pimm.ControlSystemReceiver(self, default={})
 
     def _build_episode_meta(self, context: dict[str, Any]) -> dict[str, Any]:
@@ -329,7 +334,6 @@ class Harness(pimm.ControlSystem):
                     self._session = None
                 self._home(clock)
                 yield pimm.Yield()
-                self.episode_ended.emit(True)
                 return False, recording
             case DirectiveType.HOME:
                 if recording:
@@ -441,6 +445,12 @@ class Harness(pimm.ControlSystem):
             directive_msg = self.directive.read()
             if directive_msg.updated:
                 running, recording = yield from self._handle_directive(directive_msg.data, clock, recording)
+            elif not running and self._trials is not None:
+                trial = next(self._trials, None)
+                if trial is None:  # plan exhausted — wind the run down
+                    yield pimm.Sleep(0.5)  # let the recorder commit the final episode before the world exits
+                    break
+                running, recording = yield from self._handle_directive(Directive.RUN(**trial), clock, recording)
 
             if running and self._deadline is not None and clock.now() >= self._deadline:
                 # Trial time budget exhausted: self-terminate. ``eval.terminated`` is False —
