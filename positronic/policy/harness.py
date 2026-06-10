@@ -169,6 +169,11 @@ class Harness(pimm.ControlSystem):
     the session, demuxes the action dicts into per-channel trajectories, and
     emits.
 
+    ``RUN`` may carry per-trial lifecycle knobs in its context: ``timeout``
+    (seconds; the harness self-terminates the trial when it expires) and
+    ``inference_latency`` (sim-only inference-cost simulation). ``episode_ended``
+    fires whenever an episode is finalized, so a trial sequencer can pace on it.
+
     The ``Embodiment`` provides the observation serializers (which own the
     canonical key names), the command channels, and the home action; the harness
     reads them to assemble inputs and demux actions, treating every channel alike.
@@ -189,7 +194,6 @@ class Harness(pimm.ControlSystem):
         instruction: str | None = None,
         static_meta: dict[str, Any] | None = None,
         wrap: PolicyWrapper | Callable[[pimm.Clock], PolicyWrapper] | None = default_wrappers,
-        simulate_inference: bool | float = False,
         on_episode_complete: Callable[[Session, dict[str, Any]], None] | None = None,
     ):
         self._raw_policy = policy
@@ -206,11 +210,14 @@ class Harness(pimm.ControlSystem):
         self.context: dict[str, Any] = {}
         self._static_meta = static_meta or {}
         self._session: Session | None = None
-        # ``True`` advances the (sim) clock by the wall-clock cost of the inference
-        # call; a float is a fixed deterministic delay (used by the reproducible
-        # golden). Sleep is yielded BEFORE ``ChunkedSchedule`` reads ``clock.now()``
-        # so the trajectory is anchored to inference-finish, not inference-start.
-        self.simulate_inference = simulate_inference
+        # Per-trial lifecycle knobs, delivered on the RUN context. ``inference_latency``
+        # (sim-only): ``True`` advances the (sim) clock by the wall-clock cost of the
+        # inference call; a float is a fixed deterministic delay (used by the
+        # reproducible golden). Sleep is yielded BEFORE ``ChunkedSchedule`` reads
+        # ``clock.now()`` so the trajectory is anchored to inference-finish, not
+        # inference-start. ``timeout`` sets the deadline for self-termination.
+        self._inference_latency: bool | float = False
+        self._deadline: float | None = None
 
         self._descriptor = embodiment.descriptor
         self.observations = pimm.ReceiverDict(self)
@@ -222,13 +229,14 @@ class Harness(pimm.ControlSystem):
 
         self.directive = pimm.ControlSystemReceiver[Directive](self, default=None, maxsize=3)
         self.ds_command = pimm.ControlSystemEmitter[DsWriterCommand](self)
+        # Fired when an episode is finalized (FINISH, including timeout self-termination).
+        self.episode_ended = pimm.ControlSystemEmitter(self)
         self.robot_meta_in = pimm.ControlSystemReceiver(self, default={})
 
     def _build_episode_meta(self, context: dict[str, Any]) -> dict[str, Any]:
         meta = dict(self._embodiment.static_meta)
         meta.update(self._static_meta)
         meta.update(self.robot_meta_in.value)
-        meta['inference.simulate_inference'] = self.simulate_inference
         # ``policy.meta`` is the static baseline (the wrapped policy aggregates model +
         # codec meta); the session overlays per-episode specifics (e.g. the sampled
         # sub-policy) and wins on conflict.
@@ -246,7 +254,7 @@ class Harness(pimm.ControlSystem):
     def _bump_schedule_end(self, delta_sec: float) -> None:
         """Shift the active ``ChunkedSchedule._Session`` ``_trajectory_end`` by ``delta_sec``.
 
-        Used by ``simulate_inference``: the session anchored the chunk pre-sleep,
+        Used by ``inference_latency``: the session anchored the chunk pre-sleep,
         then we slept and post-shifted the emitted timestamps. The scheduling
         wrapper's internal end-of-chunk gate must move forward too, or it will
         re-infer before the driver has actually played the (shifted) trajectory.
@@ -289,6 +297,10 @@ class Harness(pimm.ControlSystem):
                 self.context = directive.payload or {}
                 if self._instruction is not None:
                     self.context = {**self.context, 'task': self._instruction}
+                # Lifecycle knobs ride the RUN context (and land in episode meta with it).
+                self._inference_latency = self.context.get('inference_latency', False)
+                timeout = self.context.get('timeout')
+                self._deadline = clock.now() + timeout if timeout is not None else None
                 if self._session:
                     self._session.close()
                 self._session = self.policy.new_session(self.context)
@@ -317,6 +329,7 @@ class Harness(pimm.ControlSystem):
                     self._session = None
                 self._home(clock)
                 yield pimm.Yield()
+                self.episode_ended.emit(True)
                 return False, recording
             case DirectiveType.HOME:
                 if recording:
@@ -392,10 +405,10 @@ class Harness(pimm.ControlSystem):
         actions = self._session(frozen_view(obs))
         if actions is None:
             return
-        if self.simulate_inference is True:  # bool is an int subclass — check identity first
+        if self._inference_latency is True:  # bool is an int subclass — check identity first
             delay = time.monotonic() - wall_start
-        elif self.simulate_inference:
-            delay = float(self.simulate_inference)
+        elif self._inference_latency:
+            delay = float(self._inference_latency)
         else:
             delay = 0.0
         if delay > 0.0:
@@ -421,6 +434,12 @@ class Harness(pimm.ControlSystem):
             directive_msg = self.directive.read()
             if directive_msg.updated:
                 running, recording = yield from self._handle_directive(directive_msg.data, clock, recording)
+
+            if running and self._deadline is not None and clock.now() >= self._deadline:
+                # Trial time budget exhausted: self-terminate. ``eval.terminated`` is False —
+                # the trial ran out of time rather than being terminated by a stop-signal.
+                finish = Directive.FINISH(**{'eval.terminated': False})
+                running, recording = yield from self._handle_directive(finish, clock, recording)
 
             try:
                 if running:

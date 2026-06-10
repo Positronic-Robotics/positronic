@@ -477,6 +477,29 @@ def test_finish_emits_ds_stop_with_data_and_homes(world):
 
 
 @pytest.mark.timeout(3.0)
+def test_run_timeout_self_terminates(world):
+    policy = StubPolicy()
+    harness = Harness(policy, make_embodiment())
+    p = _pair_all(world, harness)
+    ended = RecordingEmitter()
+    harness.episode_ended._bind(ended)
+
+    driver = ManualDriver([
+        (partial(p['directive_em'].emit, Directive.RUN(task='test', timeout=0.05)), 0.0),
+        (None, 0.2),
+    ])
+
+    scheduler = world.start([harness, driver])
+    drive_scheduler(scheduler, steps=200)
+
+    stops = [c for c in _ds_commands(p) if c.type == DsWriterCommandType.STOP_EPISODE]
+    assert len(stops) == 1
+    assert stops[0].static_data['eval.terminated'] is False
+    assert isinstance(_last_command(p), Reset)
+    assert ended.emitted, 'episode_ended not fired on self-termination'
+
+
+@pytest.mark.timeout(3.0)
 def test_home_aborts_recording_and_homes(world):
     policy = StubPolicy()
     harness = Harness(policy, make_embodiment())

@@ -6,7 +6,7 @@ import tqdm
 import positronic.cfg.simulator
 from positronic.cfg.eval.sim.positronic import stack_cubes
 from positronic.dataset.local_dataset import LocalDataset
-from positronic.inference import main, timed
+from positronic.inference import main, sequencer
 from positronic.policy.tests.test_harness import StubPolicy
 from positronic.simulator.mujoco.sim import FullSimState
 
@@ -69,14 +69,18 @@ def test_sim_emits_commands_and_records_dataset(tmp_path, monkeypatch):
             embodiment=ev.embodiment,
             task=ev.task,
             policy=policy,
-            driver=timed(simulation_time=0.4, show_gui=False, num_iterations=1),
+            driver=sequencer(timeout=0.4, show_gui=False, trial_count=2),
             output_dir=str(tmp_path),
         )
 
     ds = LocalDataset(tmp_path)
-    assert len(ds) == 1
+    # Two trials: the sequencer paces on the harness's episode_ended, the harness
+    # self-terminates each trial at the RUN-borne timeout.
+    assert len(ds) == 2
 
     episode = ds[0]
+    assert episode.static['eval.terminated'] is False
+    assert episode.static['eval.trial_index'] == 0
     signals = episode.signals
     assert 'robot_command.pose' in signals
     assert 'target_grip' in signals
