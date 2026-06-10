@@ -24,7 +24,7 @@ cd docker
 CACHE_ROOT=/home/vertix docker --context vm-dreamzero compose run --rm --service-ports dreamzero-server
 
 # 3. Run sim inference locally
-uv run positronic eval run --eval=.sim.positronic.stack_cubes \
+uv run positronic-inference sim \
   --policy=.remote \
   --policy.host=vm-dreamzero \
   --policy.port=8000 \

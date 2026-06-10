@@ -39,7 +39,7 @@ cd docker && docker compose run --rm --service-ports lerobot-0_3_3-server serve 
   --codec=@positronic.vendors.lerobot_0_3_3.codecs.ee
 
 # 4. Run inference
-uv run positronic eval run --eval=.sim.positronic.stack_cubes \
+uv run positronic-inference sim \
   --policy=.remote \
   --policy.host=localhost \
   --show_gui=True

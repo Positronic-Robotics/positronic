@@ -43,7 +43,7 @@ cd docker && docker compose run --rm --service-ports groot-server \
   --checkpoints_dir=~/checkpoints/groot/my_task_v1/
 
 # 4. Run inference
-uv run --locked positronic eval run --eval=.sim.positronic.stack_cubes \
+uv run --locked positronic-inference sim \
   --policy=.remote \
   --policy.host=localhost \
   --show_gui=True

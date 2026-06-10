@@ -131,7 +131,7 @@ cd docker && docker compose run --rm --service-ports groot-server \
   --checkpoints_dir=~/checkpoints/groot/exp_v1
 
 # Client connects the same way
-uv run positronic eval run --eval=.sim.positronic.stack_cubes \
+uv run positronic-inference sim \
   --policy=.remote \
   --policy.host=localhost
 ```

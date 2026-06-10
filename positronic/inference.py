@@ -167,13 +167,18 @@ def main(
 run_cfg = cfn.Config(main, embodiment=positronic.cfg.embodiment.droid, policy=policy_cfg.placeholder, driver=keyboard)
 
 
-# Console entry point for [project.scripts]: the real-hardware inference paths.
+# Console entry point for [project.scripts].
 @pos3.with_mirror()
 def _internal_main():
+    # Imported here to break the circular import: positronic.cfg.eval imports this module.
+    from positronic.cfg.eval import run as eval_run  # noqa
+    from positronic.cfg.eval.sim.positronic import stack_cubes  # noqa
+
     init_logging()
     cfn.cli({
         'run': run_cfg,
         'real': run_cfg,  # `real` is the documented name for the hardware path
+        'sim': eval_run.override(eval=stack_cubes),
         'phail': run_cfg.override(
             policy=policy_cfg.phail_multiple,
             driver=eval_ui,
