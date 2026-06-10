@@ -18,14 +18,16 @@ def _infer_repo_root() -> Path:
 
 
 def _build_inference_command(
-    *, uv_path: str, mode: str, host: str, port: int, model_id: str, output_dir: str, extra_args: list[str]
+    *, uv_path: str, eval_ref: str, host: str, port: int, model_id: str, output_dir: str, extra_args: list[str]
 ) -> list[str]:
     cmd = [
         uv_path,
         'run',
         '--locked',
-        'positronic-inference',
-        mode,
+        'positronic',
+        'eval',
+        'run',
+        f'--eval={eval_ref}',
         '--policy=.remote',
         f'--policy.host={host}',
         f'--policy.port={port}',
@@ -37,10 +39,22 @@ def _build_inference_command(
 
 
 @cfn.config(
-    mode='sim', output_dir='', extra_args=[], dry_run=False, continue_on_error=False, host='localhost', port=8000
+    eval='.sim.positronic.stack_cubes',
+    output_dir='',
+    extra_args=[],
+    dry_run=False,
+    continue_on_error=False,
+    host='localhost',
+    port=8000,
 )
 def main(
-    mode: str, output_dir: str, extra_args: list[str], dry_run: bool, continue_on_error: bool, host: str, port: int
+    eval: str,  # noqa: A002 — the CLI flag is `--eval`, mirroring `positronic eval run --eval=...`
+    output_dir: str,
+    extra_args: list[str],
+    dry_run: bool,
+    continue_on_error: bool,
+    host: str,
+    port: int,
 ):
     """Validate an inference server by iterating all available models and running inference for each.
 
@@ -52,7 +66,7 @@ def main(
 
     This will execute commands like:
 
-        uv run --locked positronic-inference sim --policy=.remote \\
+        uv run --locked positronic eval run --eval=.sim.positronic.stack_cubes --policy=.remote \\
             --policy.host=notebook --policy.port=8000 \\
             --policy.model_id=checkpoint-123 \\
             --output_dir=s3://runs/server_validation/021225/checkpoint-123/
@@ -80,7 +94,7 @@ def main(
     for idx, model_id in enumerate(models):
         cmd = _build_inference_command(
             uv_path=uv_path,
-            mode=mode,
+            eval_ref=eval,
             host=host,
             port=port,
             model_id=model_id,

@@ -8,7 +8,7 @@ import pimm
 from positronic.dataset.ds_writer_agent import DsWriterCommand
 from positronic.dataset.serializers import expand_suffixed
 from positronic.drivers import roboarm
-from positronic.embodiment import Embodiment
+from positronic.eval import Embodiment
 from positronic.policy.base import DelegatingSession, Policy, PolicyWrapper, Session
 from positronic.utils import flatten_dict, frozen_view
 
@@ -186,6 +186,7 @@ class Harness(pimm.ControlSystem):
         policy: Policy,
         embodiment: Embodiment,
         *,
+        instruction: str | None = None,
         static_meta: dict[str, Any] | None = None,
         wrap: PolicyWrapper | Callable[[pimm.Clock], PolicyWrapper] | None = default_wrappers,
         simulate_inference: bool | float = False,
@@ -193,6 +194,7 @@ class Harness(pimm.ControlSystem):
     ):
         self._raw_policy = policy
         self._embodiment = embodiment
+        self._instruction = instruction
         self._wrap = wrap
         # Called with (session, context) when an episode completes successfully (clean
         # STOP/FINISH), never on abort. Used to feed completion bookkeeping like a
@@ -285,6 +287,8 @@ class Harness(pimm.ControlSystem):
                     self._home(clock)
                     yield pimm.Yield()
                 self.context = directive.payload or {}
+                if self._instruction is not None:
+                    self.context = {**self.context, 'task': self._instruction}
                 if self._session:
                     self._session.close()
                 self._session = self.policy.new_session(self.context)

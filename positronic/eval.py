@@ -1,4 +1,4 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 import pimm
@@ -54,8 +54,6 @@ class Embodiment:
     descriptor: str
     observations: dict[str, Observation]
     commands: dict[str, Command]
-    # Ground-truth signals, recorded but never fed to the policy (kept out of ``observations``).
-    privileged: dict[str, Observation]
     static_meta: dict[str, Any]
     meta_source: pimm.SignalEmitter | None
     control_systems: tuple[pimm.ControlSystem, ...] = ()
@@ -65,3 +63,32 @@ class Embodiment:
     def home(self) -> dict[str, Any]:
         """The home action: ``{command_name: home_value}`` for every channel."""
         return {name: cmd.home for name, cmd in self.commands.items()}
+
+
+@dataclass
+class Task:
+    """The scenario layered on an embodiment: the policy-facing instruction plus
+    the privileged ground-truth signals to record.
+
+    ``instruction`` is the language goal sent to the policy on every call. ``timeout``
+    is the per-trial time budget in seconds (sim-time for simulated embodiments,
+    wall-clock for real). ``privileged`` maps a record key to the ground-truth source
+    to capture (the sim's full ``save_state``, a real scale) — recorded but never fed
+    to the policy.
+    """
+
+    instruction: str
+    timeout: float
+    privileged: dict[str, Observation] = field(default_factory=dict)
+
+
+@dataclass
+class Eval:
+    """An eval = embodiment + task, produced by a single config.
+
+    For a sim eval that config holds the shared ``MujocoSim`` both are built from, so the
+    embodiment stays pure robot while the task carries the scene's privileged signals.
+    """
+
+    embodiment: Embodiment
+    task: Task

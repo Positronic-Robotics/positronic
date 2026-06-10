@@ -193,8 +193,8 @@ uv run --locked positronic-inference sim \
   --policy=.remote \
   --policy.host=vm-h100 \
   --policy.port=8000 \
-  --driver.simulation_time=20 \
-  --driver.show_gui=True \
+  --eval.timeout=20 \
+  --show_gui=True \
   --output_dir=~/datasets/inference_logs
 ```
 

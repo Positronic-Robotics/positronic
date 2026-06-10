@@ -9,7 +9,7 @@ from positronic.dataset.serializers import Serializers
 from positronic.drivers import roboarm
 from positronic.drivers.roboarm import RobotStatus
 from positronic.drivers.roboarm.command import CartesianPosition, Recover, Reset, from_wire, to_wire
-from positronic.embodiment import Command, Embodiment, Observation
+from positronic.eval import Command, Embodiment, Observation
 from positronic.geom import Rotation, Transform3D
 from positronic.policy.base import Policy, Session
 from positronic.policy.codec import ActionTimestamp
@@ -34,7 +34,7 @@ def make_embodiment(descriptor: str = '', cameras=('image.cam',)) -> Embodiment:
         'robot_command': Command(pimm.NoOpReceiver(), Reset(), Serializers.robot_command),
         'target_grip': Command(pimm.NoOpReceiver(), 0.0, None),
     }
-    return Embodiment(descriptor, observations, commands, {}, {}, pimm.NoOpEmitter())
+    return Embodiment(descriptor, observations, commands, {}, pimm.NoOpEmitter())
 
 
 class _SpySession(Session):

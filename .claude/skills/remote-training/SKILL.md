@@ -228,7 +228,7 @@ uv run --locked positronic-inference sim \
 View results locally (top-level dir compares multiple runs):
 
 ```bash
-uv run --locked python -m positronic.cfg.eval sim \
+uv run --locked python -m positronic.cfg.analysis sim \
   --dataset.base.path=s3://inference/sim_stack_validation/<run_name> --reset_cache --https
 # http://localhost:5001
 ```
@@ -317,7 +317,7 @@ resubmit it via the matching `workflows/nebius/*.sh` wrapper (set
 
 For inference runs, each episode also has a `static.json` alongside the recorded
 data; the eval viewer in [4. Run Inference Client](#4-run-inference-client)
-(`positronic.cfg.eval sim --dataset.base.path=…`) renders these for inspection
+(`positronic.cfg.analysis sim --dataset.base.path=…`) renders these for inspection
 and side-by-side comparison of multiple runs.
 
 ## Monitoring Jobs & Endpoints

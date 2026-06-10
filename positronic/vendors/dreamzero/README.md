@@ -28,8 +28,8 @@ uv run positronic-inference sim \
   --policy=.remote \
   --policy.host=vm-dreamzero \
   --policy.port=8000 \
-  --driver.simulation_time=20 \
-  --driver.show_gui=True
+  --eval.timeout=20 \
+  --show_gui=True
 ```
 
 First start downloads the 14B checkpoint via HuggingFace (~10-20 min). Subsequent starts use cache.

@@ -69,13 +69,11 @@ Use local when latency is critical (<50ms), robot has built-in GPU, or offline o
 
 Positronic provides three drivers for managing inference episodes (see [`positronic/inference.py`](../positronic/inference.py)):
 
-**Timed driver (automatic):** Runs inference automatically for a fixed duration per episode. Specify `--driver.simulation_time=60` (seconds per episode) and `--driver.num_iterations=10` (number of episodes). Useful for batch evaluation without manual intervention.
+**Timed driver (automatic):** Runs inference automatically for a fixed duration per episode — the task's `timeout` (override with `--eval.timeout=60`, seconds per episode); also set `--trial_count=10` (number of episodes), and optionally `--show_gui=True` for DearPyGui visualization. The default for `sim`. Useful for batch evaluation without manual intervention.
 
-**Keyboard driver (manual):** Control inference with keyboard. Press `s` to start episode, `p` to stop and save, `r` to home the robot, `q` to quit. Specify `--driver=.keyboard` and optionally `--driver.show_gui=True` for DearPyGui visualization. Useful for manual evaluation and debugging.
+**Keyboard driver (manual):** Control inference with keyboard. Press `s` to start episode, `p` to stop and save, `r` to home the robot, `q` to quit. The default for `real`; optionally pass `--driver.show_gui=True` for DearPyGui visualization. Useful for manual evaluation and debugging.
 
-**Eval UI driver:** Dedicated evaluation interface for policy assessment. Specify `--driver=.eval_ui` for graphical controls and metrics visualization. Useful for systematic policy evaluation with visual feedback.
-
-The default driver depends on the subcommand: `sim` and `sim_pnp` default to `timed` (15 seconds simulation time), `real` defaults to `keyboard`, and `phail` defaults to `eval_ui`. Override with `--driver=.timed`, `--driver=.keyboard`, or `--driver=.eval_ui` as needed.
+**Eval UI driver:** Dedicated evaluation interface for policy assessment. The default for `phail` — graphical controls and metrics visualization. Useful for systematic policy evaluation with visual feedback.
 
 ## Recording and Replay
 

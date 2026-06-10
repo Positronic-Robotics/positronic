@@ -2,7 +2,7 @@
 Script to generate evaluation plots from a dataset.
 
 Usage:
-    uv run --locked utilities/plot_eval.py --dataset=@positronic.cfg.eval.sim_episodes --output=eval_plots.html
+    uv run --locked utilities/plot_eval.py --dataset=@positronic.cfg.analysis.sim_episodes --output=eval_plots.html
 """
 
 from collections import defaultdict
@@ -14,11 +14,11 @@ import plotly.graph_objects as go
 import pos3
 from plotly.subplots import make_subplots
 
-import positronic.cfg.eval
+import positronic.cfg.analysis
 from positronic.dataset import Dataset
 
 
-@cfn.config(dataset=positronic.cfg.eval.sim_episodes, output='eval_plots.html')
+@cfn.config(dataset=positronic.cfg.analysis.sim_episodes, output='eval_plots.html')
 def main(dataset: Dataset, output: str):
     """
     Generate evaluation plots for a given dataset.
@@ -32,7 +32,7 @@ def main(dataset: Dataset, output: str):
     data_by_ckpt = defaultdict(list)
 
     # Metrics to collect
-    # Based on positronic/cfg/eval.py
+    # Based on positronic/cfg/analysis.py
     metrics = ['max_stacking_success', 'success_time', 'box_distance_progress', 'movement']
 
     print('Processing episodes...')

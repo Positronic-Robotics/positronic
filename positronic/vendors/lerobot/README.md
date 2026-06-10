@@ -47,7 +47,7 @@ cd docker && docker compose run --rm --service-ports lerobot-server serve \
 uv run --locked positronic-inference sim \
   --policy=.remote \
   --policy.host=localhost \
-  --driver.show_gui=True
+  --show_gui=True
 ```
 
 See [Training Workflow](../../docs/training-workflow.md) for detailed step-by-step instructions.

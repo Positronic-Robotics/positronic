@@ -12,10 +12,10 @@ from positronic.server.positronic_server import GroupTableConfig
 from positronic.server.positronic_server import main as server_main
 from positronic.utils.logging import init_logging
 
+from . import analysis as analysis_cfg
 from . import ds
-from . import eval as eval_cfg
+from .analysis import calculate_units
 from .ds import internal
-from .eval import calculate_units
 
 
 def uph(ep: Episode) -> float | None:
@@ -53,13 +53,13 @@ ft_eval_ds = ds.transform.override(
             transforms=[
                 Identity(),
                 Derive(
-                    task_code=eval_cfg.task_code,
+                    task_code=analysis_cfg.task_code,
                     model=FromValue('Teleoperated by Human'),
-                    units=eval_cfg.units,
-                    uph=eval_cfg.uph,
+                    units=analysis_cfg.units,
+                    uph=analysis_cfg.uph,
                     checkpoint=FromValue(''),
                     success=FromValue(100),
-                    started=eval_cfg.started,
+                    started=analysis_cfg.started,
                 ),
             ]
         )

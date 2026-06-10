@@ -2,7 +2,7 @@ import pimm
 from positronic.dataset import DatasetWriter
 from positronic.dataset.ds_writer_agent import DsWriterAgent, TimeMode, TrajectoryOverrideSerializer
 from positronic.dataset.serializers import Serializers, StatefulSerializer
-from positronic.embodiment import ROBOT_STATIC_META, Embodiment
+from positronic.eval import ROBOT_STATIC_META, Embodiment, Observation
 
 __all__ = ['ROBOT_STATIC_META', 'wire', 'wire_embodiment']
 
@@ -66,14 +66,16 @@ def wire_embodiment(
     embodiment: Embodiment,
     dataset_writer: DatasetWriter | None,
     time_mode: TimeMode = TimeMode.CLOCK,
+    privileged: dict[str, Observation] | None = None,
 ):
     """Wire an embodiment to the Harness for the inference path.
 
     Connects device observation sources -> ``harness.observations`` and
     ``harness.commands`` -> device receivers, and records observations, command
-    chunks, and privileged ground-truth into the dataset. GUI camera wiring stays
-    with the caller — it is a presentation concern, not part of the embodiment contract.
+    chunks, and the task's privileged ground-truth into the dataset. GUI camera wiring
+    stays with the caller — it is a presentation concern, not part of the embodiment contract.
     """
+    privileged = privileged or {}
     for name, obs in embodiment.observations.items():
         world.connect(obs.source, harness.observations[name])
     for name, cmd in embodiment.commands.items():
@@ -94,7 +96,7 @@ def wire_embodiment(
             # recording is a dense per-command stream. See TrajectoryOverrideSerializer.
             ds_agent.add_signal(name, TrajectoryOverrideSerializer(cmd.serializer))
             world.connect(harness.commands[name], ds_agent.inputs[name])
-        for name, priv in embodiment.privileged.items():
+        for name, priv in privileged.items():
             ds_agent.add_signal(name, priv.serializer)
             world.connect(priv.source, ds_agent.inputs[name])
 

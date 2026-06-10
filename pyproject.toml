@@ -17,7 +17,7 @@ classifiers = [
 dependencies = [
     "av",
     "coloredlogs>=15.0.1",
-    "configuronic>=0.3.1",
+    "configuronic>=0.5.0",
     "cvxopt",
     "dearpygui",
     "dm_control",
@@ -47,6 +47,7 @@ dependencies = [
 ]
 
 [project.scripts]
+positronic="positronic.cli:_internal_main"
 positronic-server="positronic.server.positronic_server:_internal_main"
 positronic-inference="positronic.inference:_internal_main"
 positronic-probe="positronic.probe:_internal_main"

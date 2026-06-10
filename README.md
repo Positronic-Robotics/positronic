@@ -250,8 +250,8 @@ Run trained policies through the [inference script](positronic/inference.py):
 uv run --locked positronic-inference sim \
     --policy=@positronic.cfg.policy.act_absolute \
     --policy.base.checkpoints_dir=~/checkpoints/lerobot/<run_id> \
-    --driver.simulation_time=60 \
-    --driver.show_gui=True \
+    --eval.timeout=60 \
+    --show_gui=True \
     --output_dir=~/datasets/inference_logs/stack_cubes_act
 ```
 
@@ -263,7 +263,7 @@ cd docker && docker compose run --rm --service-ports lerobot-0_3_3-server \
     --checkpoints_dir=~/checkpoints/lerobot/<run_id> \
     --codec=@positronic.vendors.lerobot_0_3_3.codecs.ee
 
-# On robot:
+# On the simulator machine:
 uv run --locked positronic-inference sim \
     --policy=.remote \
     --policy.host=<server-ip>
