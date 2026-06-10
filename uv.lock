@@ -3147,7 +3147,7 @@ wheels = [
 
 [[package]]
 name = "positronic"
-version = "0.2.1"
+version = "0.3.0"
 source = { editable = "." }
 dependencies = [
     { name = "av", version = "15.1.0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-10-positronic-lerobot'" },
