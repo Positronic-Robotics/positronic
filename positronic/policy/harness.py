@@ -416,6 +416,13 @@ class Harness(pimm.ControlSystem):
             actions = [{**a, 'timestamp': a['timestamp'] + delay} for a in actions]
             self._bump_schedule_end(delay)
 
+        # Recheck the deadline: the latency sleep (or a slow inference call on a
+        # real clock) may have crossed it. Drop the chunk rather than emit past
+        # the advertised self-termination point — the run loop fires the timeout
+        # FINISH on its next cycle.
+        if self._deadline is not None and clock.now() >= self._deadline:
+            return
+
         self._emit_commands(actions)
 
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Sleep]:

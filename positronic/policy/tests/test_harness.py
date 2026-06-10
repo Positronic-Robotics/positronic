@@ -500,6 +500,44 @@ def test_run_timeout_self_terminates(world):
 
 
 @pytest.mark.timeout(3.0)
+def test_timeout_crossed_during_latency_sleep_drops_chunk(world):
+    """A chunk whose latency sleep crosses the deadline is dropped, never emitted."""
+    policy = StubPolicy()
+    harness = Harness(policy, make_embodiment())
+    cmd_recorder = RecordingEmitter()
+    grip_recorder = RecordingEmitter()
+    ds_recorder = RecordingEmitter()
+    harness.commands['robot_command']._bind(cmd_recorder)
+    harness.commands['target_grip']._bind(grip_recorder)
+    harness.ds_command._bind(ds_recorder)
+
+    frame_em = world.pair(harness.observations['image.cam'])
+    robot_em = world.pair(harness.observations['robot_state'])
+    grip_em = world.pair(harness.observations['grip'])
+    directive_em = world.pair(harness.directive)
+
+    robot_state = make_robot_state([0.1, 0.2, 0.3], [0.4, 0.5, 0.6])
+
+    driver = ManualDriver([
+        # The 0.2s latency sleep crosses the 0.05s deadline before the chunk is emitted.
+        (partial(directive_em.emit, Directive.RUN(task='test', timeout=0.05, inference_latency=0.2)), 0.0),
+        (partial(emit_ready_payload, frame_em, robot_em, grip_em, robot_state), 0.01),
+        (None, 0.3),
+    ])
+
+    scheduler = world.start([harness, driver])
+    drive_scheduler(scheduler, steps=200)
+
+    stops = [data for _, data in ds_recorder.emitted if data.type == DsWriterCommandType.STOP_EPISODE]
+    assert len(stops) == 1
+    assert stops[0].static_data['eval.terminated'] is False
+    # The post-deadline chunk must not reach the drivers: the only non-empty
+    # emissions are the homing Reset / home grip from the timeout FINISH.
+    assert all(isinstance(c, Reset) for c in _emitted_commands(cmd_recorder))
+    assert _emitted_grips(grip_recorder) == [0.0]
+
+
+@pytest.mark.timeout(3.0)
 def test_home_aborts_recording_and_homes(world):
     policy = StubPolicy()
     harness = Harness(policy, make_embodiment())
