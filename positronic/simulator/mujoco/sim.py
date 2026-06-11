@@ -250,6 +250,14 @@ class MujocoSim(pimm.ControlSystem):
         mj.mj_step(self.model, self.data, self.warmup_steps)
 
     def load_state(self, state: dict, reset_time: bool = True):
+        """Restore a scene captured by ``save_state``.
+
+        TODO: the capture is MuJoCo *state* only, so model-level loader randomization (e.g.
+        fixed-body poses) is not restored — a replayed episode runs on this sim's own model
+        draw, not the recorded one. Only ``qpos``-borne (freejointed) randomization replays
+        faithfully; on the eval path the recorded ``eval.seed`` reproduces the full scene
+        via ``reset``.
+        """
         mj.mj_resetData(self.model, self.data)
         for spec in STATE_SPECS:
             mj.mj_setState(self.model, self.data, np.array(state[spec.name]), spec)
