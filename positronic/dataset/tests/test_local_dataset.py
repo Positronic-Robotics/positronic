@@ -486,23 +486,29 @@ def test_set_static_edit_rejects_invalid_values(tmp_path):
 
 
 def test_corrupt_edit_record_raises(tmp_path):
-    (tmp_path / EDITS_FILE).write_text('{"op": "set_static", "v": 1, "ep": "x", "data": {', encoding='utf-8')
+    root = tmp_path / 'ds'
+    build_dataset_with_signal(root, [0])
+    (root / EDITS_FILE).write_text('{"op": "set_static", "v": 1, "ep": "x", "data": {', encoding='utf-8')
     with pytest.raises(ValueError, match='Corrupt edit record'):
-        LocalDataset(tmp_path)
+        LocalDataset(root)
 
 
 def test_unsupported_edit_record_raises(tmp_path):
-    (tmp_path / EDITS_FILE).write_text('{"op": "trim", "v": 1, "ep": "x", "start": 0}\n', encoding='utf-8')
+    root = tmp_path / 'ds'
+    build_dataset_with_signal(root, [0])
+    (root / EDITS_FILE).write_text('{"op": "trim", "v": 1, "ep": "x", "start": 0}\n', encoding='utf-8')
     with pytest.raises(ValueError, match='Unsupported edit record'):
-        LocalDataset(tmp_path)
+        LocalDataset(root)
 
 
 def test_edit_record_with_invalid_static_values_raises(tmp_path):
-    (tmp_path / EDITS_FILE).write_text(
+    root = tmp_path / 'ds'
+    build_dataset_with_signal(root, [0])
+    (root / EDITS_FILE).write_text(
         '{"op": "set_static", "v": 1, "ep": "x", "data": {"maybe": null}}\n', encoding='utf-8'
     )
     with pytest.raises(ValueError, match='Invalid static values'):
-        LocalDataset(tmp_path)
+        LocalDataset(root)
 
 
 def test_load_all_datasets_propagates_corrupt_edit_log(tmp_path):
@@ -511,3 +517,10 @@ def test_load_all_datasets_propagates_corrupt_edit_log(tmp_path):
     (tmp_path / 'ds2' / EDITS_FILE).write_text('garbage', encoding='utf-8')
     with pytest.raises(ValueError, match='Corrupt edit record'):
         load_all_datasets(tmp_path)
+
+
+def test_load_all_datasets_ignores_edit_log_outside_datasets(tmp_path):
+    build_dataset_with_signal(tmp_path / 'ds1', [0, 1])
+    (tmp_path / EDITS_FILE).write_text('garbage', encoding='utf-8')
+    result = load_all_datasets(tmp_path)
+    assert episode_ids(result[:]) == [0, 1]

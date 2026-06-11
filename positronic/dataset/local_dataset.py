@@ -521,7 +521,9 @@ class LocalDataset(Dataset):
             )
         self._episodes: list[tuple[int, Path]] = []
         self._build_episode_list()
-        self._static_overrides = _load_edits(self.root)
+        # An edit log binds to a dataset: a directory without episodes is not one, and discovery
+        # (load_all_datasets) probes arbitrary directories that may hold an unrelated edits.jsonl
+        self._static_overrides = _load_edits(self.root) if self._episodes else {}
 
     def _build_episode_list(self) -> None:
         self._episodes.clear()
