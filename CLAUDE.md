@@ -1,6 +1,4 @@
-# Contributor guide
-
-## Contributor behavior
+# Contributor behavior
 - Don't restore code that you wrote and I deleted
 - Don't make commits or git changes unprompted; an invoked PR workflow skill (e.g. `/polish`, `/push-pr`)
   authorizes its commits and pushes
@@ -10,7 +8,7 @@
 - Don't add comments, docstrings, or type annotations to code you didn't change
 - Ask clarifying questions only when requirements are genuinely ambiguous and investigation can't resolve them
 
-## Commands
+# Commands
 - Every Python execution goes through `uv run --locked` — bare `python`/`pytest` bypasses the locked venv
 - Run tests: `uv run --locked pytest --no-cov`
 - Run single test file: `uv run --locked pytest path/to/test_file.py --no-cov`
@@ -19,11 +17,11 @@
 - Run any Python: `uv run --locked python script.py`
 - Syntax check: `uv run --locked python -m py_compile file.py`
 
-## Dependency management
+# Dependency management
 - `uv.lock` is committed; CI and Docker run `uv sync --locked` to install exactly what's locked
 - To change deps: edit `pyproject.toml`, then run `uv lock`, then commit `pyproject.toml` and `uv.lock` together in one reviewed change — never let `uv.lock` drift implicitly
 
-## Design discipline
+# Design discipline
 - When a change has a design thesis ("World owns time", "Harness is name-free"), enumerate its consequences for
   every touched interface before coding, and implement the end state — old pathways (constructor args, public
   mutators, parallel flags) must not survive the refactor
@@ -40,7 +38,7 @@
 - After every fix or refactor, re-read the resulting code as a whole, not the diff: fixes create new smells (e.g.
   two classes become structurally identical only after their serializers are unified — merge them)
 
-## Code style
+# Code style
 - No imports inside functions/methods; always place imports at the top of the file
 - Exception: circular dependencies or truly unavoidable cases
 - No `hasattr`/`getattr` hacks for type dispatch; use `isinstance` with proper base classes or protocols
@@ -52,7 +50,7 @@
 - No suppressions or guards for problems never observed: a `noqa` must suppress an error that actually fires; no
   defensive idioms with explanatory comments
 
-## Comments & docstrings
+# Comments & docstrings
 - Write for a fresh reader: no references to past or future state ("no longer", "previously", "step N", "today").
   Future work is a TODO, nothing else
 - Never write a comment justifying awkward code — the urge to justify is the signal to fix the design or mark it
@@ -61,10 +59,10 @@
   what the thing is
 - Comments wrap at 120 columns, same as code
 
-## Testing
+# Testing
 - Don't add new test files unless explicitly asked
 
-## Commit messages
+# Commit messages
 - Short, imperative sentences (e.g., "Fix wrong type", not "Fixed wrong type")
 - Use backticks for code references (e.g., "Fix `RemoteDataset` connection leak")
 - No trailing period for short messages
@@ -72,7 +70,7 @@
 - Never amend commits; always create new commits
 - Never use `--no-gpg-sign` or `--no-verify` — commits must be signed
 
-## Infrastructure
+# Infrastructure
 - Machines, Docker contexts and images: `docker/CONTEXTS.md`
 - Model-specific workflows: `positronic/vendors/{lerobot,gr00t,openpi}/README.md`
 - Reconstructing previous runs: read `run_metadata_*.yaml` and episode `static.json` from output directory
