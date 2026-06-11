@@ -1,13 +1,5 @@
 # Contributor guide
 
-## Project context
-Positronic is a Python-native toolkit for ML-driven robotics covering the full lifecycle: hardware bring-up, dataset capture, policy training (LeRobot, π₀.₅, GR00T), and inference deployment. Key modules:
-- `pimm/` — immediate-mode runtime for control loops and multiprocess orchestration
-- `positronic/dataset/` — multi-rate episode recording, lazy transforms, streaming
-- `positronic/drivers/` — cameras, grippers, robot arms, WebXR teleoperation
-- `positronic/policy/` — policy loading and inference wrappers
-- `positronic/training/` — LeRobot conversion and training pipelines
-
 ## Contributor behavior
 - Don't restore code that you wrote and I deleted
 - Don't make commits or git changes unless explicitly asked
