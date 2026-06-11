@@ -10,8 +10,7 @@
 - Ask clarifying questions when requirements are ambiguous instead of guessing
 
 ## Commands
-**IMPORTANT: every Python execution goes through `uv run --locked`** — never bare `python`/`python3`/`pytest`,
-which bypass the locked venv and fail or pick wrong package versions.
+- Every Python execution goes through `uv run --locked` — bare `python`/`pytest` bypasses the locked venv
 - Run tests: `uv run --locked pytest --no-cov`
 - Run single test file: `uv run --locked pytest path/to/test_file.py --no-cov`
 - Lint: `uv run --locked ruff check --fix .`

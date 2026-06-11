@@ -1,6 +1,6 @@
 ---
 name: polish
-description: Autonomous design + style pass over recently changed code. Reviews touched files as a whole (not diff hunks), fixes everything it finds including refactors, iterates until clean, and reports — design changes first. Asks nothing except for irreversible actions or genuine two-way design forks.
+description: Autonomous design + style pass over recently changed code — rewrites files and commits the result. Invoke only on an explicit polish request (/polish) or from the push-pr flow; NOT for read-only review or analysis asks, which must not modify the worktree. Reviews touched files as a whole (not diff hunks), fixes everything it finds including refactors, iterates until clean, and reports — design changes first.
 ---
 
 # Polish: Autonomous Design Review + Style Rewriter
@@ -131,8 +131,10 @@ For **every** comment and docstring in the touched files (not just new ones in t
 3. **Restatement** — says what the code already says. Delete. If there is nothing to say
    beyond the code, silence is the correct comment.
 4. **Width** — re-wrap anything beyond 120 columns.
-5. **Dead suppressions** — for each `noqa`/`type: ignore` in touched code, remove it and
-   check whether the error actually fires (`ruff check`); keep only the ones that do.
+5. **Dead suppressions** — for each `noqa` in touched code, remove it and check whether
+   `ruff check` flags the line; keep only the ones that fire. Apply the same test to
+   `# type: ignore` only if the project runs a type checker (mypy/pyright configured) —
+   ruff cannot prove a type suppression dead, so without one, leave them alone.
 
 ## Step 5: Iterate to a fixed point
 
