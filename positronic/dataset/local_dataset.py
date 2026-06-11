@@ -105,6 +105,7 @@ class DiskEpisodeWriter(EpisodeWriter):
         *,
         on_close: Callable[[DiskEpisodeWriter], None] | None = None,
         created_ts_ns: int | None = None,
+        uid: str | None = None,
     ) -> None:
         """Initialize episode writer.
 
@@ -113,6 +114,8 @@ class DiskEpisodeWriter(EpisodeWriter):
             on_close: Optional callback invoked after successful episode close
             created_ts_ns: Optional creation timestamp (defaults to current time).
                 Use this to preserve original creation time during migration.
+            uid: Optional episode identity (defaults to a fresh uuid4 hex).
+                Use this to preserve identity when copying an existing recording.
         """
         self._path = directory
         assert not self._path.exists(), f'Writing to existing directory {self._path}'
@@ -131,7 +134,7 @@ class DiskEpisodeWriter(EpisodeWriter):
         # NB: falsy created_ts_ns (including 0) defaults to current time — epoch 0 is not a valid episode timestamp
         self._meta = {
             'schema_version': EPISODE_SCHEMA_VERSION,
-            'uid': uuid.uuid4().hex,
+            'uid': uid or uuid.uuid4().hex,
             'created_ts_ns': created_ts_ns or time.time_ns(),
         }
         self._meta['writer'] = _cached_env_writer_info()
@@ -568,12 +571,14 @@ class LocalDatasetWriter(DatasetWriter):
                     max_id = eid
         return max_id + 1
 
-    def new_episode(self, *, created_ts_ns: int | None = None) -> DiskEpisodeWriter:
+    def new_episode(self, *, created_ts_ns: int | None = None, uid: str | None = None) -> DiskEpisodeWriter:
         """Create a new episode writer.
 
         Args:
             created_ts_ns: Optional creation timestamp (defaults to current time).
                 Use this to preserve original creation time during migration.
+            uid: Optional episode identity (defaults to a fresh uuid4 hex).
+                Use this to preserve identity when copying an existing recording.
         """
         eid = self._next_episode_id
         self._next_episode_id += 1  # Reserve id immediately
@@ -583,7 +588,7 @@ class LocalDatasetWriter(DatasetWriter):
         # responsible for creating it and expects it to not exist yet.
         ep_dir = block_dir / f'{eid:012d}'
 
-        writer = DiskEpisodeWriter(ep_dir, created_ts_ns=created_ts_ns)
+        writer = DiskEpisodeWriter(ep_dir, created_ts_ns=created_ts_ns, uid=uid)
         return writer
 
     def set_static(self, uid: str, data: dict[str, Any]) -> None:
@@ -640,12 +645,12 @@ def load_all_datasets(root: Path) -> Dataset:
     while to_explore:
         current_path = to_explore.popleft()
 
-        # Try to load this directory as a dataset
+        # Try to load this directory as a dataset; corrupt content (e.g. a bad edit log) propagates
         try:
             dataset = LocalDataset(current_path)
             if len(dataset) > 0:
                 datasets.append(dataset)
-        except (FileNotFoundError, ValueError):
+        except FileNotFoundError:
             pass
 
         # Always explore non-numeric subdirs (numeric ones are dataset block internals)

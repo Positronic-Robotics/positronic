@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import socket
 import threading
 import time
 
@@ -137,8 +138,6 @@ def test_episode_sample_endpoint(test_client):
 
 
 def find_free_port():
-    import socket
-
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
         s.bind(('', 0))
         return s.getsockname()[1]
@@ -274,6 +273,7 @@ def test_migrate_remote_dataset_numeric_only(tmp_path):
     dest_ds = LocalDataset(dest_root)
     assert len(dest_ds) == 2
     assert dest_ds[0]['id'] == 0
+    assert dest_ds[0].meta['uid'] == source_ds[0].meta['uid']
     signal = dest_ds[0]['signal']
     assert len(signal) == 3
     np.testing.assert_allclose(signal[0][0], [0])

@@ -419,6 +419,13 @@ def test_episode_meta_has_unique_uid(tmp_path):
     assert uids[0] != uids[1]
 
 
+def test_new_episode_carries_provided_uid(tmp_path):
+    with LocalDatasetWriter(tmp_path / 'ds') as w:
+        with w.new_episode(uid='source-uid') as ew:
+            ew.set_static('id', 0)
+    assert LocalDataset(tmp_path / 'ds')[0].meta['uid'] == 'source-uid'
+
+
 def test_set_static_edit_applies_on_read(tmp_path):
     root = tmp_path / 'ds'
     ds = build_dataset_with_signal(root, [0, 1])
@@ -483,3 +490,11 @@ def test_unsupported_edit_record_raises(tmp_path):
     (tmp_path / EDITS_FILE).write_text('{"op": "trim", "v": 1, "ep": "x", "start": 0}\n', encoding='utf-8')
     with pytest.raises(ValueError, match='Unsupported edit record'):
         LocalDataset(tmp_path)
+
+
+def test_load_all_datasets_propagates_corrupt_edit_log(tmp_path):
+    build_dataset_with_signal(tmp_path / 'ds1', [0, 1])
+    build_dataset_with_signal(tmp_path / 'ds2', [2])
+    (tmp_path / 'ds2' / EDITS_FILE).write_text('garbage', encoding='utf-8')
+    with pytest.raises(ValueError, match='Corrupt edit record'):
+        load_all_datasets(tmp_path)
