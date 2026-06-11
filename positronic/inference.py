@@ -112,12 +112,11 @@ def main(
 ):
     """Run inference for an embodiment, real or simulated.
 
-    ``task`` (when given) supplies the policy-facing instruction, the per-trial
-    ``timeout`` bounding self-driven trials, and the privileged ground-truth signals
-    to record; without it the instruction rides the driver. Exactly one of ``driver``
-    (attended: an operator surface emits the directives) or ``trials`` (unattended:
-    the harness runs the plan itself) must be given; ``show_gui`` applies to the
-    unattended path (attended surfaces bring their own).
+    ``task`` (when given) supplies the policy-facing instruction, the per-trial ``timeout``
+    bounding self-driven trials, and the privileged ground-truth signals to record; without it
+    the instruction rides the driver. Exactly one of ``driver`` (attended: an operator surface
+    emits the directives) or ``trials`` (unattended: the harness runs the plan itself) must be
+    given; ``show_gui`` applies to the unattended path (attended surfaces bring their own).
     """
     assert (driver is None) != (trials is None), 'Provide exactly one of driver or trials'
     harness = Harness(

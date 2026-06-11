@@ -75,8 +75,7 @@ def test_sim_emits_commands_and_records_dataset(tmp_path, monkeypatch):
         )
 
     ds = LocalDataset(tmp_path)
-    # Two trials: the harness runs the plan itself, self-terminating each trial
-    # at the task's timeout.
+    # Two trials: the harness runs the plan itself, self-terminating each trial at the task's timeout.
     assert len(ds) == 2
 
     episode = ds[0]

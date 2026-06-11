@@ -541,8 +541,8 @@ def test_timeout_crossed_during_latency_sleep_drops_chunk(world):
     stops = [data for _, data in ds_recorder.emitted if data.type == DsWriterCommandType.STOP_EPISODE]
     assert len(stops) == 1
     assert stops[0].static_data['eval.terminated'] is False
-    # The post-deadline chunk must not reach the drivers: the only non-empty
-    # emissions are the homing Reset / home grip from the timeout FINISH.
+    # The post-deadline chunk must not reach the drivers: the only non-empty emissions are the homing
+    # Reset / home grip from the timeout FINISH.
     assert all(isinstance(c, Reset) for c in _emitted_commands(cmd_recorder))
     assert _emitted_grips(grip_recorder) == [0.0]
 
