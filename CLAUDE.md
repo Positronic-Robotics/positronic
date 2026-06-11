@@ -2,29 +2,16 @@
 
 ## Contributor behavior
 - Don't restore code that you wrote and I deleted
-- Don't make commits or git changes unless explicitly asked
+- Don't make commits or git changes unprompted; an invoked PR workflow skill (e.g. `/polish`, `/push-pr`)
+  authorizes its commits and pushes
 - Don't hide errors with try-catch blocks; let failures surface until asked otherwise
 - Don't over-engineer: no extra abstractions, features, or "improvements" beyond what's requested
 - Don't add comments, docstrings, or type annotations to code you didn't change
 - Ask clarifying questions when requirements are ambiguous instead of guessing
 
-## ⚠️ CRITICAL: Always use `uv run --locked` for Python commands
-
-**NEVER run Python directly** (`python`, `python3`, `python -m`). **ALWAYS use `uv run --locked python`** instead.
-
-❌ **WRONG:** `python script.py`, `python3 -m pytest`, `python -c "import foo"`
-✅ **CORRECT:** `uv run --locked python script.py`, `uv run --locked pytest`, `uv run --locked python -c "import foo"`
-
-This applies to:
-- Running Python scripts
-- Running tests with pytest
-- Syntax checks with `python -m py_compile`
-- Importing modules
-- Any Python execution whatsoever
-
-**Why:** This project uses uv for dependency management. Running Python directly bypasses the virtual environment and will cause import errors or use wrong package versions.
-
 ## Commands
+**IMPORTANT: every Python execution goes through `uv run --locked`** — never bare `python`/`python3`/`pytest`,
+which bypass the locked venv and fail or pick wrong package versions.
 - Run tests: `uv run --locked pytest --no-cov`
 - Run single test file: `uv run --locked pytest path/to/test_file.py --no-cov`
 - Lint: `uv run --locked ruff check --fix .`
@@ -89,11 +76,6 @@ This applies to:
 - Machines, Docker contexts and images: `docker/CONTEXTS.md`
 - Model-specific workflows: `positronic/vendors/{lerobot,gr00t,openpi}/README.md`
 - Reconstructing previous runs: read `run_metadata_*.yaml` and episode `static.json` from output directory
-
-## Available skills
-- `/remote-training` — Manage Nebius VMs, Docker images, training jobs, inference servers
-- `/push-pr` — Push branch to origin and create PR to upstream with proper workflow
-- `/polish` — Autonomous design + style pass over the branch changes; also runs from `/push-pr` before pushing
 
 ## Related repositories
 - `../gr00t` — GR00T model configs and training (Positronic-Robotics/gr00t)
