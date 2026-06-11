@@ -22,6 +22,11 @@ CACHE_FS="${NEBIUS_CACHE_FS:-computefilesystem-e00f6jyfr5wkawyrab}"
 # CI; locally it pushes `:<branch>`/`:<sha>`. To convert with a branch build:
 # `make push-training IMAGE_TAG=<branch>` then run with `NEBIUS_IMAGE_TAG=<branch>`.
 IMAGE_TAG="${NEBIUS_IMAGE_TAG:-latest}"
+# CPU preset + job timeout for the convert job. Bump both for large datasets whose
+# sequential per-episode video encode would otherwise exceed the default timeout
+# (e.g. NEBIUS_CPU_PRESET=16vcpu-64gb NEBIUS_JOB_TIMEOUT=8h).
+CPU_PRESET="${NEBIUS_CPU_PRESET:-8vcpu-32gb}"
+JOB_TIMEOUT="${NEBIUS_JOB_TIMEOUT:-4h}"
 
 if [ $# -lt 1 ]; then
   cat >&2 <<'EOF'
@@ -91,8 +96,8 @@ CREATE_OUT=$(nebius ai job create \
   --container-command uv \
   --args "$CONVERT_ARGS" \
   --platform cpu-e2 \
-  --preset 8vcpu-32gb \
-  --timeout 4h \
+  --preset "$CPU_PRESET" \
+  --timeout "$JOB_TIMEOUT" \
   --working-dir /positronic \
   --volume "${CACHE_FS}:/cache:rw" \
   --env UV_CACHE_DIR=/cache/uv \

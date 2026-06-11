@@ -24,6 +24,10 @@ CACHE_FS="${NEBIUS_CACHE_FS:-computefilesystem-e00f6jyfr5wkawyrab}"
 # CI; locally it pushes `:<branch>`/`:<sha>`. To test a branch build remotely:
 # `make push-<x> IMAGE_TAG=<branch>` then run with `NEBIUS_IMAGE_TAG=<branch>`.
 IMAGE_TAG="${NEBIUS_IMAGE_TAG:-latest}"
+# Local job disk. GR00T checkpoints are ~23GB each and the trainer keeps all of
+# them (--save_total_limit 9999), so the 250Gi default fills mid-run for long runs.
+# Default 750Gi holds a full keep-all gr00t run; override for small jobs.
+DISK_SIZE="${NEBIUS_DISK_SIZE:-750Gi}"
 
 if [ $# -lt 1 ]; then
   cat >&2 <<'EOF'
@@ -105,6 +109,7 @@ nebius ai job create \
   --args "$TRAIN_ARGS" \
   --platform gpu-h100-sxm \
   --preset 1gpu-16vcpu-200gb \
+  --disk-size "$DISK_SIZE" \
   --timeout 24h \
   --working-dir /positronic \
   ${VOLUME_FLAGS[@]+"${VOLUME_FLAGS[@]}"} \
