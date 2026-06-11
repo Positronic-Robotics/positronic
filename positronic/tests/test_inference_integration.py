@@ -64,18 +64,19 @@ def test_sim_emits_commands_and_records_dataset(tmp_path, monkeypatch):
             camera_fps=10,
             camera_dict=camera_dict,
             instruction='integration-test',
+            timeout=0.4,
         )
         main(
             embodiment=ev.embodiment,
             task=ev.task,
             policy=policy,
-            trials=[{'timeout': 0.4, 'eval.trial_index': i} for i in range(2)],
+            trials=[{'eval.trial_index': i} for i in range(2)],
             output_dir=str(tmp_path),
         )
 
     ds = LocalDataset(tmp_path)
     # Two trials: the harness runs the plan itself, self-terminating each trial
-    # at the RUN-borne timeout.
+    # at the task's timeout.
     assert len(ds) == 2
 
     episode = ds[0]

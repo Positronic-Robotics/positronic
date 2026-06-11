@@ -8,7 +8,7 @@ import pimm
 from positronic.dataset.ds_writer_agent import DsWriterCommand
 from positronic.dataset.serializers import expand_suffixed
 from positronic.drivers import roboarm
-from positronic.eval import Embodiment
+from positronic.eval import Embodiment, Task
 from positronic.policy.base import DelegatingSession, Policy, PolicyWrapper, Session
 from positronic.utils import flatten_dict, frozen_view
 
@@ -169,12 +169,12 @@ class Harness(pimm.ControlSystem):
     the session, demuxes the action dicts into per-channel trajectories, and
     emits.
 
-    ``RUN`` may carry per-trial lifecycle knobs in its context: ``timeout``
-    (seconds; the harness self-terminates the trial when it expires) and
-    ``inference_latency`` (sim-only inference-cost simulation). A ``trials`` plan
-    (a sequence of RUN contexts) makes the harness self-driving: whenever it is
-    idle it starts the next trial itself and exits once the plan is exhausted —
-    the unattended path needs no driver at all.
+    ``RUN`` may carry ``inference_latency`` (sim-only inference-cost simulation)
+    in its context. A ``trials`` plan (a sequence of RUN contexts) makes the
+    harness self-driving: whenever it is idle it starts the next trial itself —
+    bounded by the task's ``timeout`` — and exits once the plan is exhausted, so
+    the unattended path needs no driver at all. Attended drivers own episode
+    termination themselves; directive-driven trials get no deadline.
 
     The ``Embodiment`` provides the observation serializers (which own the
     canonical key names), the command channels, and the home action; the harness
@@ -193,15 +193,16 @@ class Harness(pimm.ControlSystem):
         policy: Policy,
         embodiment: Embodiment,
         *,
-        instruction: str | None = None,
+        task: Task | None = None,
         trials: Iterable[dict[str, Any]] | None = None,
         static_meta: dict[str, Any] | None = None,
         wrap: PolicyWrapper | Callable[[pimm.Clock], PolicyWrapper] | None = default_wrappers,
         on_episode_complete: Callable[[Session, dict[str, Any]], None] | None = None,
     ):
+        assert trials is None or task is not None, 'A trial plan needs a task: its timeout bounds each trial'
         self._raw_policy = policy
         self._embodiment = embodiment
-        self._instruction = instruction
+        self._task = task
         # The unattended trial plan: each entry is a RUN context. When set, the run
         # loop starts the next trial whenever it is idle and returns once the plan
         # is exhausted; when None, directives are the only lifecycle source.
@@ -217,13 +218,14 @@ class Harness(pimm.ControlSystem):
         self.context: dict[str, Any] = {}
         self._static_meta = static_meta or {}
         self._session: Session | None = None
-        # Per-trial lifecycle knobs, delivered on the RUN context. ``inference_latency``
-        # (sim-only): ``True`` advances the (sim) clock by the wall-clock cost of the
-        # inference call; a float is a fixed deterministic delay (used by the
-        # reproducible golden). Sleep is yielded BEFORE ``ChunkedSchedule`` reads
-        # ``clock.now()`` so the trajectory is anchored to inference-finish, not
-        # inference-start. ``timeout`` sets the deadline for self-termination.
+        # ``inference_latency`` is delivered on the RUN context (sim-only): ``True``
+        # advances the (sim) clock by the wall-clock cost of the inference call; a
+        # float is a fixed deterministic delay (used by the reproducible golden).
+        # Sleep is yielded BEFORE ``ChunkedSchedule`` reads ``clock.now()`` so the
+        # trajectory is anchored to inference-finish, not inference-start.
         self._inference_latency: bool | float = False
+        # Self-driven trials are bounded by ``task.timeout``; attended drivers own
+        # termination themselves, so directive-driven trials get no deadline.
         self._deadline: float | None = None
 
         self._descriptor = embodiment.descriptor
@@ -300,12 +302,11 @@ class Harness(pimm.ControlSystem):
                     self._home(clock)
                     yield pimm.Yield()
                 self.context = directive.payload or {}
-                if self._instruction is not None:
-                    self.context = {**self.context, 'task': self._instruction}
-                # Lifecycle knobs ride the RUN context (and land in episode meta with it).
+                if self._task is not None:
+                    self.context = {**self.context, 'task': self._task.instruction}
+                # ``inference_latency`` rides the RUN context (and lands in episode meta with it).
                 self._inference_latency = self.context.get('inference_latency', False)
-                timeout = self.context.get('timeout')
-                self._deadline = clock.now() + timeout if timeout is not None else None
+                self._deadline = None  # set by the run loop for self-driven trials only
                 if self._session:
                     self._session.close()
                 self._session = self.policy.new_session(self.context)
@@ -387,6 +388,12 @@ class Harness(pimm.ControlSystem):
             traj = [(int(a['timestamp'] * 1e9), a[name]) for a in actions if name in a]
             emitter.emit(traj)
 
+    def _inference_delay(self, wall_start: float) -> float:
+        """The inference cost to simulate: measured wall time (``True``), a fixed float, or 0 (``False``)."""
+        if self._inference_latency is True:  # bool is an int subclass — check identity first
+            return time.monotonic() - wall_start
+        return float(self._inference_latency)
+
     def _step(self, clock: pimm.Clock) -> Generator[pimm.Sleep, None, None]:
         """Build obs, call session, demux trajectories into per-channel emissions.
 
@@ -398,10 +405,8 @@ class Harness(pimm.ControlSystem):
             return
 
         # Advance the (sim) clock by the inference cost so rollouts feel the
-        # model's latency. ``True`` measures real wall time around the session
-        # call; a float is a fixed deterministic delay (used by the golden).
-        # We only sleep on cycles where inference actually ran (session
-        # returned a chunk) — otherwise blocked cycles would slow the
+        # model's latency. We only sleep on cycles where inference actually ran
+        # (session returned a chunk) — otherwise blocked cycles would slow the
         # harness's directive-handling loop. The trajectory was anchored
         # pre-sleep, so we post-shift it and also bump the scheduling
         # wrapper's internal ``_trajectory_end`` to stay consistent.
@@ -409,12 +414,7 @@ class Harness(pimm.ControlSystem):
         actions = self._session(frozen_view(obs))
         if actions is None:
             return
-        if self._inference_latency is True:  # bool is an int subclass — check identity first
-            delay = time.monotonic() - wall_start
-        elif self._inference_latency:
-            delay = float(self._inference_latency)
-        else:
-            delay = 0.0
+        delay = self._inference_delay(wall_start)
         if delay > 0.0:
             yield pimm.Sleep(delay)
             actions = [{**a, 'timestamp': a['timestamp'] + delay} for a in actions]
@@ -451,6 +451,7 @@ class Harness(pimm.ControlSystem):
                     yield pimm.Sleep(0.5)  # let the recorder commit the final episode before the world exits
                     break
                 running, recording = yield from self._handle_directive(Directive.RUN(**trial), clock, recording)
+                self._deadline = clock.now() + self._task.timeout
 
             if running and self._deadline is not None and clock.now() >= self._deadline:
                 # Trial time budget exhausted: self-terminate. ``eval.terminated`` is False —

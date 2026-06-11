@@ -9,7 +9,7 @@ from positronic.dataset.serializers import Serializers
 from positronic.drivers import roboarm
 from positronic.drivers.roboarm import RobotStatus
 from positronic.drivers.roboarm.command import CartesianPosition, Recover, Reset, from_wire, to_wire
-from positronic.eval import Command, Embodiment, Observation
+from positronic.eval import Command, Embodiment, Observation, Task
 from positronic.geom import Rotation, Transform3D
 from positronic.policy.base import Policy, Session
 from positronic.policy.codec import ActionTimestamp
@@ -477,17 +477,13 @@ def test_finish_emits_ds_stop_with_data_and_homes(world):
 
 
 @pytest.mark.timeout(3.0)
-def test_run_timeout_self_terminates(world):
+def test_trial_timeout_self_terminates(world):
+    """A self-driven trial ends at ``task.timeout``: terminated=False, robot homed."""
     policy = StubPolicy()
-    harness = Harness(policy, make_embodiment())
+    harness = Harness(policy, make_embodiment(), task=Task(instruction='test', timeout=0.05), trials=[{}])
     p = _pair_all(world, harness)
 
-    driver = ManualDriver([
-        (partial(p['directive_em'].emit, Directive.RUN(task='test', timeout=0.05)), 0.0),
-        (None, 0.2),
-    ])
-
-    scheduler = world.start([harness, driver])
+    scheduler = world.start([harness])
     drive_scheduler(scheduler, steps=200)
 
     stops = [c for c in _ds_commands(p) if c.type == DsWriterCommandType.STOP_EPISODE]
@@ -500,8 +496,8 @@ def test_run_timeout_self_terminates(world):
 def test_trial_plan_self_drives(world):
     """With a trial plan the harness runs unattended: no driver, one episode per entry."""
     policy = StubPolicy()
-    trials = [{'task': f'trial-{i}', 'timeout': 0.05, 'eval.trial_index': i} for i in range(2)]
-    harness = Harness(policy, make_embodiment(), trials=trials)
+    trials = [{'eval.trial_index': i} for i in range(2)]
+    harness = Harness(policy, make_embodiment(), task=Task(instruction='stack', timeout=0.05), trials=trials)
     p = _pair_all(world, harness)
 
     scheduler = world.start([harness])
@@ -510,6 +506,7 @@ def test_trial_plan_self_drives(world):
     starts = [c for c in _ds_commands(p) if c.type == DsWriterCommandType.START_EPISODE]
     stops = [c for c in _ds_commands(p) if c.type == DsWriterCommandType.STOP_EPISODE]
     assert [s.static_data['eval.trial_index'] for s in starts] == [0, 1]
+    assert all(s.static_data['task'] == 'stack' for s in starts)
     assert len(stops) == 2
     assert all(s.static_data['eval.terminated'] is False for s in stops)
     assert policy.reset_calls == 2
@@ -519,7 +516,10 @@ def test_trial_plan_self_drives(world):
 def test_timeout_crossed_during_latency_sleep_drops_chunk(world):
     """A chunk whose latency sleep crosses the deadline is dropped, never emitted."""
     policy = StubPolicy()
-    harness = Harness(policy, make_embodiment())
+    # The 0.2s latency sleep crosses the 0.05s deadline before the chunk is emitted.
+    harness = Harness(
+        policy, make_embodiment(), task=Task(instruction='test', timeout=0.05), trials=[{'inference_latency': 0.2}]
+    )
     cmd_recorder = RecordingEmitter()
     grip_recorder = RecordingEmitter()
     ds_recorder = RecordingEmitter()
@@ -530,16 +530,10 @@ def test_timeout_crossed_during_latency_sleep_drops_chunk(world):
     frame_em = world.pair(harness.observations['image.cam'])
     robot_em = world.pair(harness.observations['robot_state'])
     grip_em = world.pair(harness.observations['grip'])
-    directive_em = world.pair(harness.directive)
 
     robot_state = make_robot_state([0.1, 0.2, 0.3], [0.4, 0.5, 0.6])
 
-    driver = ManualDriver([
-        # The 0.2s latency sleep crosses the 0.05s deadline before the chunk is emitted.
-        (partial(directive_em.emit, Directive.RUN(task='test', timeout=0.05, inference_latency=0.2)), 0.0),
-        (partial(emit_ready_payload, frame_em, robot_em, grip_em, robot_state), 0.01),
-        (None, 0.3),
-    ])
+    driver = ManualDriver([(partial(emit_ready_payload, frame_em, robot_em, grip_em, robot_state), 0.01), (None, 0.3)])
 
     scheduler = world.start([harness, driver])
     drive_scheduler(scheduler, steps=200)
