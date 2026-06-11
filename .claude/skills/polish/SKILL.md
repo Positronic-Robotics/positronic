@@ -34,12 +34,13 @@ questions.
 ## Step 1: Scope
 
 ```bash
-git diff HEAD --stat            # uncommitted changes (staged + unstaged)
+BASE=HEAD                       # uncommitted changes (staged + unstaged)
+git diff $BASE --stat
 ```
 
-If empty, use the branch diff against the merge base with the default branch
-(`git diff $(git merge-base HEAD main)... --stat`), or `git diff HEAD~1 --stat` outside a
-feature branch. If the user named files, restrict to those.
+If empty, set `BASE=$(git merge-base HEAD main)` (the branch diff), or `BASE=HEAD~1` outside
+a feature branch. If the user named files, restrict to those. `$BASE` is the scope for the
+whole run — detection here and the lint in Step 6 must use the same one.
 
 The output is a list of **touched files**. From here on, work with whole files: read each
 touched file fully, plus the modules it tightly interacts with (callers/callees of changed
@@ -148,8 +149,9 @@ stale comments describing the pre-fix code).
 ## Step 6: Verify
 
 ```bash
-# --diff-filter=d drops deleted paths, which ruff fails on (E902); adjust the base to the Step 1 scope
-PY=$(git diff HEAD --name-only --diff-filter=d -- '*.py')
+# $BASE from Step 1, so branch-touched files polish didn't edit are still linted;
+# --diff-filter=d drops deleted paths, which ruff fails on (E902)
+PY=$(git diff $BASE --name-only --diff-filter=d -- '*.py')
 [ -n "$PY" ] && uv run --locked ruff check --fix $PY && uv run --locked ruff format $PY
 uv run --locked pytest --no-cov -q
 ```
