@@ -93,7 +93,13 @@ class MujocoSim(pimm.ControlSystem):
             yield pimm.Sleep(self.model.opt.timestep)
 
     def reset(self, seed: int | None = None, *, reinitialize_model: bool = True):
-        """Re-randomize the scene by re-applying the loaders; ``seed`` makes the draw deterministic."""
+        """Re-randomize the scene by re-applying the loaders; ``seed`` makes the draw deterministic.
+
+        The fresh scene carries over as MuJoCo *state*, so randomized bodies must be freejointed
+        (their pose rides ``qpos``). Model-level loader effects (fixed-body poses, colors, cameras)
+        are discarded. TODO: make model-level randomization survive reset — the renderer and the IK
+        ``Physics`` pin the live model object, so the reloaded model cannot be swapped in today.
+        """
         mj.mj_resetData(self.model, self.data)
 
         if reinitialize_model:
