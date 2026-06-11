@@ -8,7 +8,7 @@ from positronic.cfg.eval.sim.positronic import stack_cubes
 from positronic.dataset.local_dataset import LocalDataset
 from positronic.inference import main
 from positronic.policy.tests.test_harness import StubPolicy
-from positronic.simulator.mujoco.sim import FullSimState, MujocoSim
+from positronic.simulator.mujoco.sim import MujocoSim
 from positronic.simulator.mujoco.transforms import AddBox, SetBodyPosition
 
 
@@ -160,14 +160,3 @@ def test_sim_reset_seed_reproduces_scene():
     np.testing.assert_allclose(replayed.model.body('marker_body').pos, first_marker, rtol=1e-6)
     for name, array in replayed.save_state().items():
         np.testing.assert_array_equal(array, third[name])
-
-
-def test_sim_embodiment_records_full_sim_state():
-    """The stack_cubes eval records the privileged full sim state, not live success observers.
-
-    Guards the production observer default directly (the heavyweight e2e test above wires its own
-    observers, so it cannot catch a regression of the ``stack_cubes`` eval config).
-    """
-    observers = stack_cubes.kwargs['observers']
-    assert set(observers) == {'sim_state'}
-    assert isinstance(observers['sim_state'], FullSimState)

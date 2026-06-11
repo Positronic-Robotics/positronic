@@ -1,5 +1,5 @@
 import logging
-from collections.abc import Iterator, Mapping, Sequence
+from collections.abc import Iterator, Sequence
 from pathlib import Path
 from typing import Any
 
@@ -12,7 +12,6 @@ import pimm
 from positronic import geom
 from positronic.drivers.roboarm import RobotStatus, State
 from positronic.drivers.roboarm import command as roboarm_command
-from positronic.simulator.mujoco.observers import MujocoSimObserver
 from positronic.simulator.mujoco.transforms import MujocoSceneTransform, load_spec, load_spec_from_file, np_seed
 from positronic.utils import package_assets_path
 
@@ -41,19 +40,6 @@ def save_state(model, data) -> dict[str, np.ndarray]:
         mj.mj_getState(model, data, state_data[spec.name], spec)
 
     return state_data
-
-
-class FullSimState(MujocoSimObserver):
-    """Privileged observer recording the full ``save_state`` each step.
-
-    Keys each spec with a leading ``.`` so the writer expands it into a
-    ``sim_state.<spec>`` signal; scoring is computed downstream, not live: it rebuilds the
-    episode's model from the ``scene_xml`` in its static meta and replays these states
-    through it (``mj_setState`` + ``mj_forward``).
-    """
-
-    def __call__(self, model: mj.MjModel, data: mj.MjData) -> dict[str, np.ndarray]:
-        return {f'.{name}': array for name, array in save_state(model, data).items() if array.size}
 
 
 class MujocoFrankaState(State, pimm.shared_memory.NumpySMAdapter):
@@ -125,7 +111,6 @@ class MujocoSim(pimm.ControlSystem):
         self,
         mujoco_model_path: str,
         loaders: Sequence[MujocoSceneTransform] = (),
-        observers: Mapping[str, MujocoSimObserver] | None = None,
         *,
         suffix: str = '_ph',
         gripper_actuator: str = 'actuator8_ph',
@@ -134,11 +119,10 @@ class MujocoSim(pimm.ControlSystem):
         camera_fps: float | None = 30,
         state_fps: float | None = None,
         grip_fps: float | None = None,
-        observer_fps: float | None = None,
+        sim_state_fps: float | None = None,
     ):
         self.mujoco_model_path = mujoco_model_path
         self.loaders = loaders
-        self.observers = observers or {}
         self.warmup_steps = 1000
         self.fps_counter = pimm.utils.RateCounter('MujocoSim')
 
@@ -151,7 +135,7 @@ class MujocoSim(pimm.ControlSystem):
         self._camera_fps = camera_fps
         self._state_fps = state_fps
         self._grip_fps = grip_fps
-        self._observer_fps = observer_fps
+        self._sim_state_fps = sim_state_fps
         self._renderer: mj.Renderer | None = None
         self._ik_physics: dm_mujoco.Physics | None = None
 
@@ -164,7 +148,11 @@ class MujocoSim(pimm.ControlSystem):
         self.target_grip: pimm.SignalReceiver[float] = pimm.ControlSystemReceiver(self, default=0.0)
         self.grip: pimm.SignalEmitter = pimm.ControlSystemEmitter(self)
         self.cameras: pimm.EmitterDict = pimm.EmitterDict(self)
-        self.observations = pimm.EmitterDict(self)
+        # Privileged ground truth: the full ``save_state`` dict, spec keys prefixed with '.' so the
+        # writer expands them into ``<signal>.<spec>`` signals. Scoring is computed downstream, not
+        # live: it rebuilds the episode's model from the ``scene_xml`` in its static meta and
+        # replays these states through it (``mj_setState`` + ``mj_forward``).
+        self.sim_state: pimm.SignalEmitter[dict[str, np.ndarray]] = pimm.ControlSystemEmitter(self)
 
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Sleep]:
         self._emit_robot_meta()
@@ -175,7 +163,7 @@ class MujocoSim(pimm.ControlSystem):
         last_grip = 0.0
         state_due = _Cadence(self._state_fps)
         grip_due = _Cadence(self._grip_fps)
-        observers_due = _Cadence(self._observer_fps)
+        sim_state_due = _Cadence(self._sim_state_fps)
         cameras_due = _Cadence(self._camera_fps)
 
         while not should_stop.value:
@@ -200,11 +188,8 @@ class MujocoSim(pimm.ControlSystem):
                 self.state.emit(state)
             if grip_due(now):
                 self.grip.emit(self._current_grip())
-            if observers_due(now):
-                for name, observer in self.observers.items():
-                    value = observer(self.model, self.data)
-                    if value is not None:
-                        self.observations[name].emit(value)
+            if self.sim_state.num_bound and sim_state_due(now):
+                self.sim_state.emit({f'.{name}': arr for name, arr in self.save_state().items() if arr.size})
             if adapters and cameras_due(now):
                 self._render(adapters, clock.now_ns())
 
@@ -224,9 +209,6 @@ class MujocoSim(pimm.ControlSystem):
         """
         self._load_scene(seed)
         self._warmup()
-
-        for observer in self.observers.values():
-            observer.reset()
         self._emit_robot_meta()
 
     def _load_scene(self, seed: int | None = None):
