@@ -1,10 +1,18 @@
+import tempfile
 from pathlib import Path
 
 import numpy as np
 import pytest
 
 from positronic.dataset import Episode
-from positronic.dataset.local_dataset import UNFINISHED_MARKER, LocalDataset, LocalDatasetWriter, load_all_datasets
+from positronic.dataset.local_dataset import (
+    EDITS_FILE,
+    UNFINISHED_MARKER,
+    DiskEpisode,
+    LocalDataset,
+    LocalDatasetWriter,
+    load_all_datasets,
+)
 
 from .test_dataset import build_dataset_with_signal, episode_ids
 
@@ -153,8 +161,6 @@ def test_array_indexing_errors(tmp_path):
 
 def test_homedir_resolution(tmp_path):
     # Create a test dataset under home directory
-    import tempfile
-
     home = Path.home()
     with tempfile.TemporaryDirectory(dir=home) as tmpdir:
         actual_root = Path(tmpdir) / 'ds'
@@ -384,8 +390,6 @@ def test_load_all_datasets_no_valid_datasets(tmp_path):
 
 def test_load_all_datasets_with_tilde_path(tmp_path):
     """Test that tilde paths are expanded correctly."""
-    import tempfile
-
     home = Path.home()
     with tempfile.TemporaryDirectory(dir=home) as tmpdir:
         actual_root = Path(tmpdir) / 'datasets'
@@ -403,3 +407,79 @@ def test_load_all_datasets_with_tilde_path(tmp_path):
 
         assert len(result) == 4
         assert episode_ids(result[:]) == [0, 1, 2, 3]
+
+
+# --- Edit log tests ---
+
+
+def test_episode_meta_has_unique_uid(tmp_path):
+    ds = build_dataset_with_signal(tmp_path / 'ds', [0, 1])
+    uids = [ds[i].meta['uid'] for i in range(2)]
+    assert all(isinstance(uid, str) and uid for uid in uids)
+    assert uids[0] != uids[1]
+
+
+def test_set_static_edit_applies_on_read(tmp_path):
+    root = tmp_path / 'ds'
+    ds = build_dataset_with_signal(root, [0, 1])
+    uid = ds[0].meta['uid']
+
+    LocalDatasetWriter(root).set_static(uid, {'id': 100, 'verdict': 'success', 'blob': b'\x00\x01'})
+
+    ds = LocalDataset(root)
+    assert ds[0]['id'] == 100
+    assert ds[0]['verdict'] == 'success'
+    assert ds[0]['blob'] == b'\x00\x01'
+    assert ds[1].static == {'id': 1}
+    # The recording itself stays untouched: the edit lives only in the log
+    assert DiskEpisode(root / '000000000000' / '000000000000').static == {'id': 0}
+
+
+def test_set_static_edit_last_write_wins(tmp_path):
+    root = tmp_path / 'ds'
+    ds = build_dataset_with_signal(root, [0])
+    uid = ds[0].meta['uid']
+
+    w = LocalDatasetWriter(root)
+    w.set_static(uid, {'verdict': 'fail', 'notes': 'first'})
+    w.set_static(uid, {'verdict': 'success'})
+
+    ds = LocalDataset(root)
+    assert ds[0]['verdict'] == 'success'
+    assert ds[0]['notes'] == 'first'
+
+
+def test_set_static_edit_colliding_with_signal_raises(tmp_path):
+    root = tmp_path / 'ds'
+    ds = build_dataset_with_signal(root, [0])
+    LocalDatasetWriter(root).set_static(ds[0].meta['uid'], {'signal': 1})
+
+    ds = LocalDataset(root)
+    with pytest.raises(ValueError, match='collide with signals'):
+        _ = ds[0].static
+
+
+def test_set_static_edit_for_unknown_uid_is_inert(tmp_path):
+    root = tmp_path / 'ds'
+    build_dataset_with_signal(root, [0])
+    LocalDatasetWriter(root).set_static('no-such-uid', {'verdict': 'success'})
+
+    ds = LocalDataset(root)
+    assert ds[0].static == {'id': 0}
+
+
+def test_set_static_edit_rejects_invalid_values(tmp_path):
+    with pytest.raises(ValueError, match='JSON-serializable'):
+        LocalDatasetWriter(tmp_path / 'ds').set_static('uid', {'bad': object()})
+
+
+def test_corrupt_edit_record_raises(tmp_path):
+    (tmp_path / EDITS_FILE).write_text('{"op": "set_static", "v": 1, "ep": "x", "data": {', encoding='utf-8')
+    with pytest.raises(ValueError, match='Corrupt edit record'):
+        LocalDataset(tmp_path)
+
+
+def test_unsupported_edit_record_raises(tmp_path):
+    (tmp_path / EDITS_FILE).write_text('{"op": "trim", "v": 1, "ep": "x", "start": 0}\n', encoding='utf-8')
+    with pytest.raises(ValueError, match='Unsupported edit record'):
+        LocalDataset(tmp_path)

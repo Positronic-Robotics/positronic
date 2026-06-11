@@ -21,6 +21,7 @@ This is a library for recording, storing, sharing and using robotic datasets. We
 - [Datasets](#datasets)
   - [Local dataset](#local-dataset)
   - [Writing datasets](#writing-datasets)
+  - [Editing datasets](#editing-datasets)
 - [`DsWriterAgent` (streaming recorder)](#dswriteragent-streaming-recorder)
 - [`DsPlayerAgent` (dataset player)](#dsplayeragent-dataset-player)
 - [Transforms](#transforms)
@@ -266,6 +267,7 @@ Aborting: `abort()` stops recording, asks each underlying `Signal` writer to abo
 - Written: immediately on `EpisodeWriter` creation (side-effect of constructing the writer).
 - Contents (concise schema):
   - `schema_version: int` – manifest version (starts at 1).
+  - `uid: str` – episode identity (uuid4 hex), stamped at recording time. Stable across views, copies, and exports; position in a dataset is access, the uid is reference.
   - `created_ts_ns: int` – `Episode` creation time in nanoseconds.
   - `writer: object` – environment and provenance:
     - `name: str` – fully-qualified writer class (e.g., `positronic.dataset.local_dataset.DiskEpisodeWriter`).
@@ -314,6 +316,21 @@ with dataset_writer.new_episode() as ew:
     ew.set_static("id", 123)
     ew.append("state", np.array([...]), ts_ns)
 ```
+
+### Editing datasets
+
+Recorded episodes are immutable. Post-hoc facts — an operator's verdict, analysis scores — are *edits*: declarative records appended to `edits.jsonl` in the dataset directory and applied as a view when the dataset is opened.
+
+```python
+writer = LocalDatasetWriter(root)
+writer.set_static(episode.meta['uid'], {'eval.outcome': 'success', 'notes': 'clean run'})
+
+ds = LocalDataset(root)  # every consumer sees the edited statics
+```
+
+Each line of `edits.jsonl` is one JSON record: `{"op": "set_static", "v": 1, "ep": "<uid>", "data": {...}}`. Records target episodes by `meta['uid']` and apply in log order with last-write-wins per key. Values follow the same restrictions as `EpisodeWriter.set_static`. A key colliding with a signal name raises when the episode's items are accessed; corrupt or unrecognized records fail loudly when the dataset is opened.
+
+The log is plain appendable JSON so external tools can write it; the dataset directory assumes a single writer.
 
 ## `DsWriterAgent` (streaming recorder)
 

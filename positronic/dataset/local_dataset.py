@@ -6,6 +6,7 @@ import platform
 import shutil
 import sys
 import time
+import uuid
 import weakref
 from collections import deque
 from collections.abc import Callable, Iterator
@@ -28,6 +29,7 @@ from .vector import SimpleSignal, SimpleSignalWriter
 from .video import VideoSignal, VideoSignalWriter
 
 UNFINISHED_MARKER = '.unfinished'
+EDITS_FILE = 'edits.jsonl'
 
 _BYTES_TAG = '__bytes_b64__'
 
@@ -127,7 +129,11 @@ class DiskEpisodeWriter(EpisodeWriter):
 
         # Write system metadata immediately
         # NB: falsy created_ts_ns (including 0) defaults to current time — epoch 0 is not a valid episode timestamp
-        self._meta = {'schema_version': EPISODE_SCHEMA_VERSION, 'created_ts_ns': created_ts_ns or time.time_ns()}
+        self._meta = {
+            'schema_version': EPISODE_SCHEMA_VERSION,
+            'uid': uuid.uuid4().hex,
+            'created_ts_ns': created_ts_ns or time.time_ns(),
+        }
         self._meta['writer'] = _cached_env_writer_info()
         self._meta['writer']['name'] = f'{self.__class__.__module__}.{self.__class__.__qualname__}'
         self._meta['path'] = str(self._path.resolve(strict=True))
@@ -291,15 +297,20 @@ class DiskEpisode(Episode):
     All signals in an episode share a common timeline.
     """
 
-    def __init__(self, directory: Path) -> None:
+    def __init__(self, directory: Path, *, static_overrides: dict[str, Any] | None = None) -> None:
         """Initialize episode reader from a directory (lazy).
 
         - Defers loading of signal data, static items, and meta until accessed.
         - Prepares lightweight factories for signals discovered on disk.
+
+        Args:
+            directory: Episode directory to read from
+            static_overrides: Edited static items merged over the recorded ones on access
         """
         if (directory / UNFINISHED_MARKER).exists():
             raise ValueError(f'Cannot read unfinished episode at {directory}')
         self._dir = directory
+        self._static_overrides = static_overrides or {}
         # WeakValueDictionary: signals are recreated from factories on demand, so caching
         # them strongly would leak resources (e.g. VideoSignal holds an open av.Container).
         # With weak refs, signals stay alive while callers hold them and get GC'd otherwise.
@@ -358,6 +369,10 @@ class DiskEpisode(Episode):
                     self._static.update(data)
                 else:
                     raise ValueError('static.json must contain a JSON object (mapping)')
+            collisions = self._static_overrides.keys() & self._signal_factories.keys()
+            if collisions:
+                raise ValueError(f'Edited static items {sorted(collisions)} collide with signals in {self._dir}')
+            self._static.update(self._static_overrides)
         return self._static
 
     def __iter__(self) -> Iterator[str]:
@@ -444,6 +459,37 @@ class DiskEpisode(Episode):
         return dict(self._static_data)
 
 
+def _episode_uid(ep_dir: Path) -> str | None:
+    meta_json = ep_dir / 'meta.json'
+    if not meta_json.exists():
+        return None
+    with meta_json.open('r', encoding='utf-8') as f:
+        return json.load(f).get('uid')
+
+
+def _load_edits(root: Path) -> dict[str, dict[str, Any]]:
+    """Read the edit log and return merged static overrides per episode uid.
+
+    Records apply in log order; the last write per key wins.
+    """
+    edits_path = root / EDITS_FILE
+    overrides: dict[str, dict[str, Any]] = {}
+    if not edits_path.exists():
+        return overrides
+    with edits_path.open('r', encoding='utf-8') as f:
+        for line_no, line in enumerate(f, start=1):
+            try:
+                record = json.loads(line, object_hook=_static_decode_hook)
+            except json.JSONDecodeError as e:
+                raise ValueError(f'Corrupt edit record at {edits_path}:{line_no}') from e
+            match record:
+                case {'op': 'set_static', 'v': 1, 'ep': str(ep_uid), 'data': dict(data)}:
+                    overrides.setdefault(ep_uid, {}).update(data)
+                case _:
+                    raise ValueError(f'Unsupported edit record at {edits_path}:{line_no}: {line.strip()}')
+    return overrides
+
+
 class LocalDataset(Dataset):
     """Filesystem-backed dataset of Episodes.
 
@@ -467,6 +513,7 @@ class LocalDataset(Dataset):
             )
         self._episodes: list[tuple[int, Path]] = []
         self._build_episode_list()
+        self._static_overrides = _load_edits(self.root)
 
     def _build_episode_list(self) -> None:
         self._episodes.clear()
@@ -488,7 +535,10 @@ class LocalDataset(Dataset):
     def _get_episode(self, index: int) -> DiskEpisode:
         if not (0 <= index < len(self)):
             raise IndexError(f'Index {index} out of range for {self.root} dataset with {len(self)} episodes')
-        return DiskEpisode(self._episodes[index][1])
+        ep_dir = self._episodes[index][1]
+        if not self._static_overrides:
+            return DiskEpisode(ep_dir)
+        return DiskEpisode(ep_dir, static_overrides=self._static_overrides.get(_episode_uid(ep_dir)))
 
 
 class LocalDatasetWriter(DatasetWriter):
@@ -535,6 +585,22 @@ class LocalDatasetWriter(DatasetWriter):
 
         writer = DiskEpisodeWriter(ep_dir, created_ts_ns=created_ts_ns)
         return writer
+
+    def set_static(self, uid: str, data: dict[str, Any]) -> None:
+        """Append a `set_static` edit for the episode with the given uid.
+
+        The edit is applied when the dataset is opened: the given items are merged over the episode's recorded
+        static items. The episode recording itself is never modified.
+
+        Args:
+            uid: The target episode's `meta['uid']`
+            data: Static items to set; values follow the same restrictions as `EpisodeWriter.set_static`
+        """
+        if not _is_valid_static_value(data):
+            raise ValueError(f'Static items must be JSON-serializable: dict/list over numbers and strings\n{data=!r}')
+        record = {'op': 'set_static', 'v': 1, 'ep': uid, 'data': data}
+        with (self.root / EDITS_FILE).open('a', encoding='utf-8') as f:
+            f.write(json.dumps(record, cls=_StaticEncoder) + '\n')
 
     def __exit__(self, exc_type, exc, tb) -> None:
         pass
