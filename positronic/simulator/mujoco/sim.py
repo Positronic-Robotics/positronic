@@ -13,7 +13,7 @@ from positronic import geom
 from positronic.drivers.roboarm import RobotStatus, State
 from positronic.drivers.roboarm import command as roboarm_command
 from positronic.simulator.mujoco.observers import MujocoSimObserver
-from positronic.simulator.mujoco.transforms import MujocoSceneTransform, load_model_from_spec_file
+from positronic.simulator.mujoco.transforms import MujocoSceneTransform, load_model_from_spec_file, np_seed
 from positronic.utils import package_assets_path
 
 logger = logging.getLogger(__name__)
@@ -92,11 +92,19 @@ class MujocoSim(pimm.ControlSystem):
             # One physics step is one tick of simulated time; sleeping a timestep paces the world clock.
             yield pimm.Sleep(self.model.opt.timestep)
 
-    def reset(self, reinitialize_model: bool = True):
+    def reset(self, seed: int | None = None, *, reinitialize_model: bool = True):
+        """Re-randomize the scene by re-applying the loaders; ``seed`` makes the draw deterministic.
+
+        The fresh scene carries over as MuJoCo *state*, so randomized bodies must be freejointed
+        (their pose rides ``qpos``). Model-level loader effects (fixed-body poses, colors, cameras)
+        are discarded. TODO: make model-level randomization survive reset — the renderer and the IK
+        ``Physics`` pin the live model object, so the reloaded model cannot be swapped in today.
+        """
         mj.mj_resetData(self.model, self.data)
 
         if reinitialize_model:
-            model, _ = load_from_xml_path(self.mujoco_model_path, self.loaders)
+            with np_seed(seed):
+                model, _ = load_from_xml_path(self.mujoco_model_path, self.loaders)
             data = mj.MjData(model)
             state = save_state(model, data)
             self.load_state(state, reset_time=False)

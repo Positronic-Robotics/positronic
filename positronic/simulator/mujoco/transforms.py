@@ -108,10 +108,8 @@ class SetBodyPosition(MujocoSceneTransform):
         quaternion: tuple[float, float, float, float] | None = None,
         random_position: tuple[tuple[float, float, float], tuple[float, float, float]] | None = None,
         random_euler: tuple[tuple[float, float, float], tuple[float, float, float]] | None = None,
-        seed: int | None = None,
     ):
         self.body_name = body_name
-        self.seed = seed
         assert (position is None) ^ (random_position is None), 'One of position or random_position must be provided'
         assert (quaternion is None) or (random_euler is None), (
             'At most one of quaternion or random_euler must be provided'
@@ -135,14 +133,13 @@ class SetBodyPosition(MujocoSceneTransform):
             self.quaternion_fn = quaternion_fn
 
     def apply(self, spec: mujoco.MjSpec) -> mujoco.MjSpec:
-        with np_seed(self.seed):
-            bodies = [g for g in spec.bodies if g.name == self.body_name]
-            assert len(bodies) == 1, f'Expected 1 body with name {self.body_name}, found {len(bodies)}'
-            bodies[0].pos = self.position_fn()
-            quaternion = self.quaternion_fn()
-            if quaternion is not None:
-                bodies[0].quat = quaternion
-            return spec
+        bodies = [g for g in spec.bodies if g.name == self.body_name]
+        assert len(bodies) == 1, f'Expected 1 body with name {self.body_name}, found {len(bodies)}'
+        bodies[0].pos = self.position_fn()
+        quaternion = self.quaternion_fn()
+        if quaternion is not None:
+            bodies[0].quat = quaternion
+        return spec
 
 
 class AddTote(MujocoSceneTransform):
@@ -227,7 +224,6 @@ class AddObjectsInTote(MujocoSceneTransform):
         object_size: tuple[float, float, float],
         tote_size: tuple[float, float, float],
         rgba: tuple[float, float, float, float],
-        seed: int | None = None,
     ):
         self.tote_name = tote_name
         self.object_name_prefix = object_name_prefix
@@ -235,7 +231,6 @@ class AddObjectsInTote(MujocoSceneTransform):
         self.object_size = object_size
         self.tote_size = tote_size
         self.rgba = rgba
-        self.seed = seed
 
     def apply(self, spec: mujoco.MjSpec) -> mujoco.MjSpec:
         tote_body = next(b for b in spec.bodies if b.name == f'{self.tote_name}_body')
@@ -250,27 +245,24 @@ class AddObjectsInTote(MujocoSceneTransform):
         min_y = tote_pos[1] - length + margin
         max_y = tote_pos[1] + length - margin
 
-        with np_seed(self.seed):
-            for i in range(self.num_objects):
-                x = np.random.uniform(min_x, max_x)
-                y = np.random.uniform(min_y, max_y)
-                # tote_pos[2] is the bottom of the tote body.
-                # The bottom geom has thickness 0.005 (default) and is at pos=[0, 0, t].
-                # So the floor of the tote is at tote_pos[2] + 2*t.
-                # We add a small margin + stacking.
-                # Assuming default thickness of 0.005 for now as it is not passed in.
-                tote_thickness = 0.005
-                z = tote_pos[2] + 2 * tote_thickness + self.object_size[2] + i * 2 * self.object_size[2]
+        for i in range(self.num_objects):
+            x = np.random.uniform(min_x, max_x)
+            y = np.random.uniform(min_y, max_y)
+            # The tote floor is at tote_pos[2] + 2 * thickness (the bottom geom has half-height
+            # ``thickness`` and sits at pos=[0, 0, thickness]); objects are stacked above it.
+            # Thickness is assumed at the AddTote default of 0.005 — it is not passed in.
+            tote_thickness = 0.005
+            z = tote_pos[2] + 2 * tote_thickness + self.object_size[2] + i * 2 * self.object_size[2]
 
-                body = spec.worldbody.add_body(name=f'{self.object_name_prefix}_{i}_body', pos=[x, y, z])
-                body.add_geom(
-                    name=f'{self.object_name_prefix}_{i}_geom',
-                    type=mujoco.mjtGeom.mjGEOM_BOX,
-                    size=self.object_size,
-                    rgba=self.rgba,
-                    density=1000,
-                )
-                body.add_freejoint()
+            body = spec.worldbody.add_body(name=f'{self.object_name_prefix}_{i}_body', pos=[x, y, z])
+            body.add_geom(
+                name=f'{self.object_name_prefix}_{i}_geom',
+                type=mujoco.mjtGeom.mjGEOM_BOX,
+                size=self.object_size,
+                rgba=self.rgba,
+                density=1000,
+            )
+            body.add_freejoint()
 
         return spec
 
@@ -283,44 +275,38 @@ class SetTwoObjectsPositions(MujocoSceneTransform):
         table_bounds: tuple[tuple[float, float], tuple[float, float]],
         min_distance: float,
         object_sizes: tuple[tuple[float, float, float], tuple[float, float, float]] | None = None,
-        seed: int | None = None,
     ):
         self.object1_name = object1_name
         self.object2_name = object2_name
         self.table_bounds = table_bounds  # ((min_x, max_x), (min_y, max_y))
         self.min_distance = min_distance
         self.object_sizes = object_sizes
-        self.seed = seed
 
     def apply(self, spec: mujoco.MjSpec) -> mujoco.MjSpec:
-        with np_seed(self.seed):
-            body1 = next(b for b in spec.bodies if b.name == f'{self.object1_name}_body')
-            body2 = next(b for b in spec.bodies if b.name == f'{self.object2_name}_body')
+        body1 = next(b for b in spec.bodies if b.name == f'{self.object1_name}_body')
+        body2 = next(b for b in spec.bodies if b.name == f'{self.object2_name}_body')
 
-            (min_x, max_x), (min_y, max_y) = self.table_bounds
+        (min_x, max_x), (min_y, max_y) = self.table_bounds
 
-            for _ in range(100):  # Max attempts
-                pos1 = [np.random.uniform(min_x, max_x), np.random.uniform(min_y, max_y), body1.pos[2]]
-                pos2 = [np.random.uniform(min_x, max_x), np.random.uniform(min_y, max_y), body2.pos[2]]
+        for _ in range(100):  # Max attempts
+            pos1 = [np.random.uniform(min_x, max_x), np.random.uniform(min_y, max_y), body1.pos[2]]
+            pos2 = [np.random.uniform(min_x, max_x), np.random.uniform(min_y, max_y), body2.pos[2]]
 
-                dist = np.linalg.norm(np.array(pos1[:2]) - np.array(pos2[:2]))
+            dist = np.linalg.norm(np.array(pos1[:2]) - np.array(pos2[:2]))
 
-                overlap = False
-                if self.object_sizes is not None:
-                    s1, s2 = self.object_sizes
-                    # Check AABB overlap
-                    # sizes are half-sizes (w, l, h)
-                    # Overlap if |x1 - x2| < w1 + w2 AND |y1 - y2| < l1 + l2
-                    # We add a small margin to min_distance effectively
-                    if abs(pos1[0] - pos2[0]) < (s1[0] + s2[0]) and abs(pos1[1] - pos2[1]) < (s1[1] + s2[1]):
-                        overlap = True
+            overlap = False
+            if self.object_sizes is not None:
+                s1, s2 = self.object_sizes
+                # AABB overlap on half-sizes (w, l, h): |x1 - x2| < w1 + w2 and |y1 - y2| < l1 + l2.
+                if abs(pos1[0] - pos2[0]) < (s1[0] + s2[0]) and abs(pos1[1] - pos2[1]) < (s1[1] + s2[1]):
+                    overlap = True
 
-                if dist >= self.min_distance and not overlap:
-                    body1.pos = pos1
-                    body2.pos = pos2
-                    return spec
+            if dist >= self.min_distance and not overlap:
+                body1.pos = pos1
+                body2.pos = pos2
+                return spec
 
-            raise RuntimeError('Could not place objects without overlap after 100 attempts')
+        raise RuntimeError('Could not place objects without overlap after 100 attempts')
 
 
 def load_model_from_spec_file(

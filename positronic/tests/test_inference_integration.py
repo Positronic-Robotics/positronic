@@ -8,7 +8,7 @@ from positronic.cfg.eval.sim.positronic import stack_cubes
 from positronic.dataset.local_dataset import LocalDataset
 from positronic.inference import main
 from positronic.policy.tests.test_harness import StubPolicy
-from positronic.simulator.mujoco.sim import FullSimState
+from positronic.simulator.mujoco.sim import FullSimState, MujocoSim
 
 
 # This integration test exercises the unified `main` end-to-end on the sim embodiment.
@@ -52,15 +52,11 @@ def test_sim_emits_commands_and_records_dataset(tmp_path, monkeypatch):
     policy = StubPolicy()
 
     camera_dict = {'image.wrist': 'handcam_left_ph'}
-    loaders = positronic.cfg.simulator.stack_cubes_loaders()
-    for idx, loader in enumerate(loaders):
-        if idx in (2, 4):
-            loader.seed = idx
 
     with pos3.mirror():
         ev = stack_cubes(
             mujoco_model_path='positronic/assets/mujoco/franka_table.xml',
-            loaders=loaders,
+            loaders=positronic.cfg.simulator.stack_cubes_loaders(),
             camera_fps=10,
             camera_dict=camera_dict,
             instruction='integration-test',
@@ -70,7 +66,7 @@ def test_sim_emits_commands_and_records_dataset(tmp_path, monkeypatch):
             embodiment=ev.embodiment,
             task=ev.task,
             policy=policy,
-            trials=[{'eval.trial_index': i} for i in range(2)],
+            trials=[{'eval.trial_index': i, 'eval.seed': 100 + i} for i in range(2)],
             output_dir=str(tmp_path),
         )
 
@@ -81,6 +77,10 @@ def test_sim_emits_commands_and_records_dataset(tmp_path, monkeypatch):
     episode = ds[0]
     assert episode.static['eval.terminated'] is False
     assert episode.static['eval.trial_index'] == 0
+    assert episode.static['eval.seed'] == 100
+    assert episode.static['eval.universe'] == 'sim'
+    assert episode.static['eval.embodiment'] == 'mujoco.franka'
+    assert episode.static['eval.timeout'] == 0.4
     signals = episode.signals
     assert 'robot_command.pose' in signals
     assert 'target_grip' in signals
@@ -115,6 +115,22 @@ def test_sim_emits_commands_and_records_dataset(tmp_path, monkeypatch):
     # The task's instruction is injected by the harness (no longer carried by the driver).
     assert last_obs['task'] == 'integration-test'
     assert last_obs['descriptor'] == 'mujoco.franka'
+
+
+@pytest.mark.timeout(30.0)
+def test_sim_reset_seed_reproduces_scene():
+    """Same seed → identical post-reset sim state; different seed → a different scene."""
+    sim = MujocoSim('positronic/assets/mujoco/franka_table.xml', positronic.cfg.simulator.stack_cubes_loaders())
+    sim.reset(seed=123)
+    first = sim.save_state()
+    sim.reset(seed=99)
+    second = sim.save_state()
+    sim.reset(seed=123)
+    third = sim.save_state()
+
+    for name, array in first.items():
+        np.testing.assert_array_equal(third[name], array)
+    assert any(not np.array_equal(second[name], array) for name, array in first.items())
 
 
 def test_sim_embodiment_records_full_sim_state():

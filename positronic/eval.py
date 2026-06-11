@@ -1,3 +1,4 @@
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -75,11 +76,18 @@ class Task:
     wall-clock for real). ``privileged`` maps a record key to the ground-truth source
     to capture (the sim's full ``save_state``, a real scale) — recorded but never fed
     to the policy.
+
+    ``seed`` is the base seed for reproducible runs (``None`` → fully random); the
+    runner derives per-trial seeds from it into the trial plan. ``reset`` re-randomizes
+    the scene for a new trial from a per-trial seed; ``None`` on real embodiments,
+    where reset is physical/human.
     """
 
     instruction: str
     timeout: float
     privileged: dict[str, Observation] = field(default_factory=dict)
+    seed: int | None = None
+    reset: Callable[[int | None], None] | None = None
 
 
 @dataclass
