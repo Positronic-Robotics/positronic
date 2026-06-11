@@ -5,9 +5,10 @@
 - Don't make commits or git changes unprompted; an invoked PR workflow skill (e.g. `/polish`, `/push-pr`)
   authorizes its commits and pushes
 - Don't hide errors with try-catch blocks; let failures surface until asked otherwise
-- Don't over-engineer: no extra abstractions, features, or "improvements" beyond what's requested
+- Stay scoped: no features beyond the request. Structure of the code you touch is governed by Design
+  discipline below — bringing it to the end state is in scope, refactoring unrelated code is not
 - Don't add comments, docstrings, or type annotations to code you didn't change
-- Ask clarifying questions when requirements are ambiguous instead of guessing
+- Ask clarifying questions only when requirements are genuinely ambiguous and investigation can't resolve them
 
 ## Commands
 - Every Python execution goes through `uv run --locked` — bare `python`/`pytest` bypasses the locked venv
