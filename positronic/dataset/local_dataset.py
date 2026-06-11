@@ -487,6 +487,10 @@ def _load_edits(root: Path) -> dict[str, dict[str, Any]]:
                 raise ValueError(f'Corrupt edit record at {edits_path}:{line_no}') from e
             match record:
                 case {'op': 'set_static', 'v': 1, 'ep': str(ep_uid), 'data': dict(data)}:
+                    if not _is_valid_static_value(data):
+                        raise ValueError(
+                            f'Invalid static values in edit record at {edits_path}:{line_no}: {line.strip()}'
+                        )
                     overrides.setdefault(ep_uid, {}).update(data)
                 case _:
                     raise ValueError(f'Unsupported edit record at {edits_path}:{line_no}: {line.strip()}')

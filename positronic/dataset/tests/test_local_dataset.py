@@ -497,6 +497,14 @@ def test_unsupported_edit_record_raises(tmp_path):
         LocalDataset(tmp_path)
 
 
+def test_edit_record_with_invalid_static_values_raises(tmp_path):
+    (tmp_path / EDITS_FILE).write_text(
+        '{"op": "set_static", "v": 1, "ep": "x", "data": {"maybe": null}}\n', encoding='utf-8'
+    )
+    with pytest.raises(ValueError, match='Invalid static values'):
+        LocalDataset(tmp_path)
+
+
 def test_load_all_datasets_propagates_corrupt_edit_log(tmp_path):
     build_dataset_with_signal(tmp_path / 'ds1', [0, 1])
     build_dataset_with_signal(tmp_path / 'ds2', [2])
