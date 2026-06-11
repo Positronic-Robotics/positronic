@@ -6,7 +6,7 @@ description: Autonomous design + style pass over recently changed code. Reviews 
 # Polish: Autonomous Design Review + Style Rewriter
 
 Make the changed code PR-ready without consuming the user's attention. You detect, you fix,
-you re-check, you report. The user reviews the resulting working-tree diff — not a list of
+you re-check, you commit, you report. The user reviews the resulting diff — not a list of
 questions.
 
 **Operating rules:**
@@ -27,8 +27,9 @@ questions.
   resulting state of the touched code. Stop only when a round produces no findings.
 - **Sweep for siblings.** Every time you fix an instance of a smell, search the rest of the
   changed code (and its neighborhood) for the same pattern before moving on.
-- **Nothing gets committed.** Leave all changes in the working tree; the user manages git
-  state.
+- **Commit the result.** When the pass finishes clean, commit its changes following the
+  repo's commit conventions (no AI attribution). The user reviews the result on GitHub and
+  comments on anything they dislike.
 
 ## Step 1: Scope
 
@@ -301,7 +302,10 @@ comment, rewrite the code instead.
   Derive(started=lambda ep: ..., uph=uph)
   ```
 
-- **Use `assert` for invariants**, not multi-line `if/raise`:
+- **Use `assert` for internal invariants** — contracts between our own modules where a
+  failure is a programmer error — not multi-line `if/raise`. Validation of external input
+  (user CLI args, network payloads, on-disk data) keeps explicit raises: `python -O` strips
+  asserts, so they must never carry production validation:
   ```python
   # BAD
   if a is None and b is None:
