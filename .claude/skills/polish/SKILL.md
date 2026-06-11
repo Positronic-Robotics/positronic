@@ -110,8 +110,10 @@ The expensive smells. Judge the *resulting state* of each touched module against
 
 ## Step 3: Style rules
 
-Apply the rulebook below (R1–R9) to the changed code. Mechanical style fixes stay within
-diff-touched lines; design fixes from Step 2 go wherever the design requires.
+Apply the rulebook below (R1–R8) to the changed code. Mechanical style fixes stay within
+diff-touched lines; design fixes from Step 2 go wherever the design requires. Don't hand-fix
+what ruff owns under the repo config (quotes, collapsing literals that fit the line,
+`dict()`→`{}`, import order, `Optional`→`|`, f-strings) — the edit hook and Step 6 run it.
 
 ## Step 4: Comments & docstrings sweep
 
@@ -146,7 +148,9 @@ stale comments describing the pre-fix code).
 ## Step 6: Verify
 
 ```bash
-uv run --locked ruff check --fix <files> && uv run --locked ruff format <files>
+# --diff-filter=d drops deleted paths, which ruff fails on (E902); adjust the base to the Step 1 scope
+PY=$(git diff HEAD --name-only --diff-filter=d -- '*.py')
+[ -n "$PY" ] && uv run --locked ruff check --fix $PY && uv run --locked ruff format $PY
 uv run --locked pytest --no-cov -q
 ```
 
@@ -321,6 +325,8 @@ comment, rewrite the code instead.
 - **Remove dead code**: unused imports, unreachable branches, empty files. Don't leave
   commented-out code.
 
+- **No unnecessary blank lines** inside short methods or between tightly related statements.
+
 - **Delete abstractions that add no value**: if a class just wraps a dict, emits two
   commands, or delegates everything to one field — remove it and use the underlying thing
   directly. Two classes that are always instantiated together and always composed — merge
@@ -341,9 +347,10 @@ comment, rewrite the code instead.
 
 ### R3. Modern Python — Use the latest idioms
 
-- **`T | None`** not `Optional[T]`. **`dict[str, Any]`** not `Dict[str, Any]`.
 - **`is`/`is not`** for enum and sentinel comparisons, **`isinstance`** for type checks —
   never `hasattr`/`getattr` hacks.
+- **Iterate directly** over collections — never `for i in range(len(...))`; `enumerate`
+  when the index is needed.
 - **`functools.partial`** for callbacks — not lambdas:
   ```python
   # BAD
@@ -359,7 +366,6 @@ comment, rewrite the code instead.
   ```python
   def __init__(self, base_url: str, *, timeout: float = 30.0):
   ```
-- **f-strings** everywhere — no `.format()`, no `%`-style.
 - **`tuple()` wrapping** for storing config/init sequences (defensive immutability):
   ```python
   self._transforms = tuple(transforms)
@@ -413,7 +419,6 @@ comment, rewrite the code instead.
 ### R6. Code Organization
 
 - **Top-level imports only** — no imports inside functions (except circular deps).
-- **Imports ordered**: stdlib > third-party > local, separated by blank lines.
 - **Module-level private functions** over nested functions/closures:
   ```python
   # BAD
@@ -462,26 +467,7 @@ comment, rewrite the code instead.
   (a stateful serializer shared between two consumers), raise there instead of guarding at
   every use site.
 
-### R8. Formatting — Dense but readable
-
-- **No unnecessary blank lines** inside short methods or between tightly related statements.
-- **Single-line dicts/lists** when they fit within line length:
-  ```python
-  # BAD
-  camera_dict={
-      'left': 'left_ph',
-      'right': 'right_ph',
-  },
-  # GOOD
-  camera_dict={'left': 'left_ph', 'right': 'right_ph'},
-  ```
-- **Single-quote strings** as the norm. Double quotes only when the string contains single
-  quotes.
-- **Dict literals** (`{}`), never `dict()` constructor.
-- **Iterate directly** over collections — never `for i in range(len(...))`. Use `enumerate`
-  when index is needed.
-
-### R9. What NOT to change
+### R8. What NOT to change
 
 - **Don't add** docstrings, comments, or type annotations to code that wasn't part of the
   diff (the comments *sweep* edits existing comments in touched files; it never adds new ones).
