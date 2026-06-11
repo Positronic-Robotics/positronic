@@ -26,8 +26,8 @@ def _mujoco_franka_eval(mujoco_model_path, loaders, camera_fps, camera_dict, obs
     not a generic Task field; the loaders carry no seeds of their own — the per-trial seed
     handed to ``sim.reset`` drives the whole scene draw.
     """
-    sim = MujocoSim(mujoco_model_path, loaders, observers=observers)
-    embodiment = mujoco_franka(sim, camera_fps, camera_dict)
+    sim = MujocoSim(mujoco_model_path, loaders, observers=observers, camera_fps=camera_fps)
+    embodiment = mujoco_franka(sim, camera_dict)
     privileged = {name: Observation(sim.observations[name], None) for name in observers}
     task = Task(instruction=instruction, timeout=timeout, privileged=privileged, seed=seed, reset=sim.reset)
     return Eval(embodiment, task)
