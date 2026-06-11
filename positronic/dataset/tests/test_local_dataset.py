@@ -479,6 +479,8 @@ def test_set_static_edit_rejects_invalid_values(tmp_path):
     w = LocalDatasetWriter(tmp_path / 'ds')
     with pytest.raises(ValueError, match='JSON-serializable'):
         w.set_static('uid', {'bad': object()})
+    with pytest.raises(ValueError, match='must be a mapping'):
+        w.set_static('uid', ['not', 'a', 'mapping'])
     with pytest.raises(ValueError, match='non-empty string'):
         w.set_static(None, {'verdict': 'ok'})
 

@@ -603,8 +603,8 @@ class LocalDatasetWriter(DatasetWriter):
         """
         if not (isinstance(uid, str) and uid):
             raise ValueError(f'Episode uid must be a non-empty string, got {uid!r}')
-        if not _is_valid_static_value(data):
-            raise ValueError(f'Static items must be JSON-serializable: dict/list over numbers and strings\n{data=!r}')
+        if not (isinstance(data, dict) and _is_valid_static_value(data)):
+            raise ValueError(f'Edit data must be a mapping of static items to JSON-serializable values\n{data=!r}')
         record = {'op': 'set_static', 'v': 1, 'ep': uid, 'data': data}
         with (self.root / EDITS_FILE).open('a', encoding='utf-8') as f:
             f.write(json.dumps(record, cls=_StaticEncoder) + '\n')
