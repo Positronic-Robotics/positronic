@@ -168,7 +168,8 @@ class Harness(pimm.ControlSystem):
     policy/session layer — the harness just calls the session, demuxes the action dicts into
     per-channel trajectories, and emits.
 
-    ``RUN`` may carry ``inference_latency`` (sim-only inference-cost simulation) in its context.
+    ``RUN`` may carry ``inference_latency`` (sim-only inference-cost simulation) and ``eval.seed``
+    (handed to the task's scene reset) in its context.
     A ``trials`` plan (a sequence of RUN contexts) makes the harness self-driving: whenever it is
     idle it starts the next trial itself — bounded by the task's ``timeout`` — and exits once the
     plan is exhausted, so the unattended path needs no driver at all. Attended drivers own episode
@@ -244,6 +245,13 @@ class Harness(pimm.ControlSystem):
         meta = dict(self._embodiment.static_meta)
         meta.update(self._static_meta)
         meta.update(self.robot_meta_in.value)
+        if self._task is not None:
+            # The eval-identity block: which eval produced this episode.
+            # TODO: also stamp the eval's catalog name and its resolved config — both need
+            # configuronic introspection that does not exist yet.
+            meta['eval.universe'] = 'sim' if self._embodiment.simulated else 'real'
+            meta['eval.embodiment'] = self._embodiment.descriptor
+            meta['eval.timeout'] = self._task.timeout
         # ``policy.meta`` is the static baseline (the wrapped policy aggregates model +
         # codec meta); the session overlays per-episode specifics (e.g. the sampled
         # sub-policy) and wins on conflict.
@@ -302,6 +310,11 @@ class Harness(pimm.ControlSystem):
                 self.context = directive.payload or {}
                 if self._task is not None:
                     self.context = {**self.context, 'task': self._task.instruction}
+                    if self._task.reset is not None:
+                        # Re-randomize the scene from the trial's seed, then give the device control
+                        # systems a slice so the first inference sees post-reset state.
+                        self._task.reset(self.context.get('eval.seed'))
+                        yield pimm.Yield()
                 # ``inference_latency`` rides the RUN context (and lands in episode meta with it).
                 self._inference_latency = self.context.get('inference_latency', False)
                 self._deadline = None  # set by the run loop for self-driven trials only

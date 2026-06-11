@@ -493,6 +493,28 @@ def test_trial_timeout_self_terminates(world):
 
 
 @pytest.mark.timeout(3.0)
+def test_trial_seed_reaches_task_reset_and_meta(world):
+    """Each RUN hands its ``eval.seed`` to the task's scene reset; the seed and the
+    eval-identity block land in episode meta."""
+    policy = StubPolicy()
+    seeds = []
+    trials = [{'eval.seed': 7 + i} for i in range(2)]
+    task = Task(instruction='stack', timeout=0.05, reset=seeds.append)
+    harness = Harness(policy, make_embodiment(), task=task, trials=trials)
+    p = _pair_all(world, harness)
+
+    scheduler = world.start([harness])
+    drive_scheduler(scheduler, steps=400)
+
+    assert seeds == [7, 8]
+    starts = [c for c in _ds_commands(p) if c.type == DsWriterCommandType.START_EPISODE]
+    assert [s.static_data['eval.seed'] for s in starts] == [7, 8]
+    assert all(s.static_data['eval.universe'] == 'real' for s in starts)
+    assert all(s.static_data['eval.embodiment'] == '' for s in starts)
+    assert all(s.static_data['eval.timeout'] == 0.05 for s in starts)
+
+
+@pytest.mark.timeout(3.0)
 def test_trial_plan_self_drives(world):
     """With a trial plan the harness runs unattended: no driver, one episode per entry."""
     policy = StubPolicy()

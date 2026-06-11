@@ -15,18 +15,22 @@ from positronic.utils import package_assets_path
     # Full sim state is the privileged ground truth; scoring is computed downstream.
     observers={'sim_state': FullSimState()},
     timeout=15,
+    seed=None,
 )
-def _mujoco_franka_eval(mujoco_model_path, loaders, camera_fps, camera_dict, observers, instruction, timeout):
+def _mujoco_franka_eval(mujoco_model_path, loaders, camera_fps, camera_dict, observers, instruction, timeout, seed):
     """A Mujoco Franka sim eval: the eval holds the sim, the embodiment is pure robot.
 
-    The task carries the instruction, the per-trial ``timeout``, and the privileged sim-state
-    ground truth (built from the eval's sim, recorded but never fed to the policy). The scene
-    (``loaders``) is embodiment-specific and wired here, not a generic Task field.
+    The task carries the instruction, the per-trial ``timeout``, the privileged sim-state
+    ground truth (built from the eval's sim, recorded but never fed to the policy), and the
+    sim's seeded scene reset. The scene (``loaders``) is embodiment-specific and wired here,
+    not a generic Task field; the loaders carry no seeds of their own — the per-trial seed
+    handed to ``sim.reset`` drives the whole scene draw.
     """
     sim = MujocoSim(mujoco_model_path, loaders, observers=observers)
     embodiment = mujoco_franka(sim, camera_fps, camera_dict)
     privileged = {name: Observation(sim.observations[name], None) for name in observers}
-    return Eval(embodiment, Task(instruction=instruction, timeout=timeout, privileged=privileged))
+    task = Task(instruction=instruction, timeout=timeout, privileged=privileged, seed=seed, reset=sim.reset)
+    return Eval(embodiment, task)
 
 
 stack_cubes = _mujoco_franka_eval.override(instruction='Pick up the green cube and place it on the red cube.')
