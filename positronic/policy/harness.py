@@ -296,7 +296,7 @@ class Harness(pimm.ControlSystem):
         if self._session is not None:
             self._session.cancel()
 
-    def _handle_directive(self, directive: Directive, clock: pimm.Clock) -> Generator[pimm.Sleep, None, None]:
+    def _handle_directive(self, directive: Directive, clock: pimm.Clock) -> Generator[pimm.Command, None, None]:
         """Handle a directive, yielding any necessary pauses; updates ``_running``/``_recording``."""
         match directive.type:
             case DirectiveType.RUN:
@@ -439,7 +439,7 @@ class Harness(pimm.ControlSystem):
 
         self._emit_commands(actions)
 
-    def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Sleep]:
+    def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Command]:
         # Resolve wrap now that we have the clock — some wrappers (e.g. ChunkedSchedule) need it.
         if self._wrap is None:
             self.policy = self._raw_policy
