@@ -601,6 +601,8 @@ class LocalDatasetWriter(DatasetWriter):
             uid: The target episode's `meta['uid']`
             data: Static items to set; values follow the same restrictions as `EpisodeWriter.set_static`
         """
+        if not (isinstance(uid, str) and uid):
+            raise ValueError(f'Episode uid must be a non-empty string, got {uid!r}')
         if not _is_valid_static_value(data):
             raise ValueError(f'Static items must be JSON-serializable: dict/list over numbers and strings\n{data=!r}')
         record = {'op': 'set_static', 'v': 1, 'ep': uid, 'data': data}

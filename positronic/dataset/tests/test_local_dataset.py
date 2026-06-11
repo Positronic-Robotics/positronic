@@ -476,8 +476,11 @@ def test_set_static_edit_for_unknown_uid_is_inert(tmp_path):
 
 
 def test_set_static_edit_rejects_invalid_values(tmp_path):
+    w = LocalDatasetWriter(tmp_path / 'ds')
     with pytest.raises(ValueError, match='JSON-serializable'):
-        LocalDatasetWriter(tmp_path / 'ds').set_static('uid', {'bad': object()})
+        w.set_static('uid', {'bad': object()})
+    with pytest.raises(ValueError, match='non-empty string'):
+        w.set_static(None, {'verdict': 'ok'})
 
 
 def test_corrupt_edit_record_raises(tmp_path):
