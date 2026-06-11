@@ -109,7 +109,7 @@ class _FakeRobotState:
 class FakeRobot(pimm.ControlSystem):
     """Deterministic closed-loop arm: applies the latest command immediately.
 
-    Mirrors ``MujocoFranka``'s structure (read latest command, apply, emit
+    Mirrors ``MujocoSim``'s arm loop (read latest command, apply, emit
     state). ``ee_pose`` becomes the applied ``CartesianPosition`` target and the
     first three joints track it, so recorded state is a lossless re-expression
     of applied commands. Closed loop: the policy's next chunk evolves with this

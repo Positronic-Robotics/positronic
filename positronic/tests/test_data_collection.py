@@ -6,11 +6,12 @@ import pytest
 
 import pimm
 from positronic import wire
-from positronic.data_collection import DataCollectionController, controller_positions_serializer
+from positronic.data_collection import DataCollectionController, OperatorPosition, controller_positions_serializer
 from positronic.dataset.ds_writer_agent import DsWriterAgent, DsWriterCommand, DsWriterCommandType
 from positronic.dataset.local_dataset import LocalDataset, LocalDatasetWriter
 from positronic.dataset.serializers import Serializers
 from positronic.geom import Rotation, Transform3D
+from positronic.simulator.mujoco.sim import MujocoSim
 from positronic.tests.testing_coutils import ManualDriver, drive_scheduler
 
 
@@ -146,13 +147,7 @@ def test_data_collection_basic_recording(tmp_path, world):
 
 
 def test_data_collection_with_mujoco_robot_gripper(tmp_path):
-    # Build Mujoco simulation and components
-    from positronic.data_collection import OperatorPosition
-    from positronic.simulator.mujoco.sim import MujocoFranka, MujocoGripper, MujocoSim
-
     sim = MujocoSim('positronic/assets/mujoco/franka_table.xml', loaders=())
-    robot = MujocoFranka(sim, suffix='_ph')
-    gripper = MujocoGripper(sim, actuator_name='actuator8_ph', joint_name='finger_joint1_ph')
 
     # Virtual time: the sim advances the world clock as physics steps
     with pimm.World(virtual_time=True) as world:
@@ -166,13 +161,13 @@ def test_data_collection_with_mujoco_robot_gripper(tmp_path):
         agent.add_signal('robot_state', Serializers.robot_state)
         agent.add_signal('grip')
 
-        world.connect(robot.state, dc.robot_state)
-        world.connect(robot.state, agent.inputs['robot_state'])
-        world.connect(dc.robot_commands, robot.commands)
+        world.connect(sim.state, dc.robot_state)
+        world.connect(sim.state, agent.inputs['robot_state'])
+        world.connect(dc.robot_commands, sim.commands)
         world.connect(dc.robot_commands, agent.inputs['robot_command'])
-        world.connect(dc.target_grip, gripper.target_grip)
+        world.connect(dc.target_grip, sim.target_grip)
         world.connect(dc.target_grip, agent.inputs['target_grip'])
-        world.connect(gripper.grip, agent.inputs['grip'])
+        world.connect(sim.grip, agent.inputs['grip'])
         world.connect(dc.ds_agent_commands, agent.command)
 
         ctrl_em_dc = world.pair(dc.controller_positions)
@@ -202,7 +197,7 @@ def test_data_collection_with_mujoco_robot_gripper(tmp_path):
         ])
 
         with writer_cm:
-            scheduler = world.start([sim, robot, gripper, dc, agent, driver])
+            scheduler = world.start([sim, dc, agent, driver])
             drive_scheduler(scheduler, steps=400)
 
     # Validate dataset contents

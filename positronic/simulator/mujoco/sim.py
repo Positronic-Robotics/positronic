@@ -1,5 +1,5 @@
 import logging
-from collections.abc import Iterator, Mapping, Sequence
+from collections.abc import Iterator, Sequence
 from pathlib import Path
 from typing import Any
 
@@ -12,18 +12,10 @@ import pimm
 from positronic import geom
 from positronic.drivers.roboarm import RobotStatus, State
 from positronic.drivers.roboarm import command as roboarm_command
-from positronic.simulator.mujoco.observers import MujocoSimObserver
-from positronic.simulator.mujoco.transforms import MujocoSceneTransform, load_model_from_spec_file, np_seed
+from positronic.simulator.mujoco.transforms import MujocoSceneTransform, load_spec, load_spec_from_file, np_seed
 from positronic.utils import package_assets_path
 
 logger = logging.getLogger(__name__)
-
-
-def load_from_xml_path(model_path: str, loaders: Sequence[MujocoSceneTransform] = ()) -> mj.MjModel:
-    model, metadata = load_model_from_spec_file(model_path, loaders)
-
-    return model, metadata
-
 
 STATE_SPECS = [
     mj.mjtState.mjSTATE_FULLPHYSICS,
@@ -48,140 +40,6 @@ def save_state(model, data) -> dict[str, np.ndarray]:
         mj.mj_getState(model, data, state_data[spec.name], spec)
 
     return state_data
-
-
-class FullSimState(MujocoSimObserver):
-    """Privileged observer recording the full ``save_state`` each step.
-
-    Keys each spec with a leading ``.`` so the writer expands it into a
-    ``sim_state.<spec>`` signal; scoring is computed downstream, not live.
-    """
-
-    def __call__(self, model: mj.MjModel, data: mj.MjData) -> dict[str, np.ndarray]:
-        return {f'.{name}': array for name, array in save_state(model, data).items() if array.size}
-
-
-class MujocoSim(pimm.ControlSystem):
-    def __init__(
-        self,
-        mujoco_model_path: str,
-        loaders: Sequence[MujocoSceneTransform] = (),
-        observers: Mapping[str, MujocoSimObserver] | None = None,
-    ):
-        self.mujoco_model_path = mujoco_model_path
-        self.loaders = loaders
-        self.observers = observers or {}
-        self.model, self.metadata = load_from_xml_path(self.mujoco_model_path, self.loaders)
-        self.data = mj.MjData(self.model)
-        self.fps_counter = pimm.utils.RateCounter('MujocoSim')
-        self.initial_ctrl = [float(x) for x in self.metadata.get('initial_ctrl').split(',')]
-        self.warmup_steps = 1000
-        self.reset(reinitialize_model=False)
-        self.observations = pimm.EmitterDict(self)
-
-    def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Sleep]:
-        while not should_stop.value:
-            self.step()
-            self.fps_counter.tick()
-
-            for name, observer in self.observers.items():
-                value = observer(self.model, self.data)
-                if value is not None:
-                    self.observations[name].emit(value)
-
-            # One physics step is one tick of simulated time; sleeping a timestep paces the world clock.
-            yield pimm.Sleep(self.model.opt.timestep)
-
-    def reset(self, seed: int | None = None, *, reinitialize_model: bool = True):
-        """Re-randomize the scene by re-applying the loaders; ``seed`` makes the draw deterministic.
-
-        The fresh scene carries over as MuJoCo *state*, so randomized bodies must be freejointed
-        (their pose rides ``qpos``). Model-level loader effects (fixed-body poses, colors, cameras)
-        are discarded. TODO: make model-level randomization survive reset — the renderer and the IK
-        ``Physics`` pin the live model object, so the reloaded model cannot be swapped in today.
-        """
-        mj.mj_resetData(self.model, self.data)
-
-        if reinitialize_model:
-            with np_seed(seed):
-                model, _ = load_from_xml_path(self.mujoco_model_path, self.loaders)
-            data = mj.MjData(model)
-            state = save_state(model, data)
-            self.load_state(state, reset_time=False)
-
-        if self.initial_ctrl is not None:
-            self.data.ctrl = self.initial_ctrl
-        mj.mj_step(self.model, self.data, self.warmup_steps)
-
-        # Reset observers for new episode
-        for observer in self.observers.values():
-            observer.reset()
-
-    def load_state(self, state: dict, reset_time: bool = True):
-        mj.mj_resetData(self.model, self.data)
-        for spec in STATE_SPECS:
-            mj.mj_setState(self.model, self.data, np.array(state[spec.name]), spec)
-
-        if reset_time:
-            self.data.time = 0
-
-    def save_state(self) -> dict[str, np.ndarray]:
-        """
-        Saves full state of the simulator.
-
-        This state could be used to restore the exact state of the simulator.
-
-        Returns:
-            data: A dictionary containing the full state of the simulator.
-        """
-        return save_state(self.model, self.data)
-
-    def step(self, duration: float | None = None) -> None:
-        duration = duration or self.model.opt.timestep
-        target_time = self.data.time + duration
-        while self.data.time < target_time:
-            mj.mj_step(self.model, self.data)
-
-
-class MujocoCameras(pimm.ControlSystem):
-    """Manages multiple mujoco cameras with a shared renderer.
-
-    Cameras are accessed via self.cameras[mujoco_camera_name].
-    Only cameras that are bound (connected) are rendered each frame.
-    """
-
-    def __init__(self, model, data, resolution: tuple[int, int], fps: int = 30):
-        super().__init__()
-        self.model = model
-        self.data = data
-        self.resolution = resolution
-        self.fps = fps
-        self.cameras: pimm.EmitterDict = pimm.EmitterDict(self)
-        self._adapters: dict[str, pimm.shared_memory.NumpySMAdapter] = {}
-
-    def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock):
-        renderer = mj.Renderer(self.model, height=self.resolution[1], width=self.resolution[0])
-
-        existing_cameras = {self.model.camera(i).name for i in range(self.model.ncam)}
-        for camera_name in self.cameras.keys():
-            if camera_name not in existing_cameras:
-                raise RuntimeError(
-                    f"Camera '{camera_name}' is bound but does not exist in the mujoco model. "
-                    f'Available cameras: {existing_cameras}'
-                )
-            self._adapters[camera_name] = pimm.shared_memory.NumpySMAdapter(
-                shape=(self.resolution[1], self.resolution[0], 3), dtype=np.uint8
-            )
-
-        while not should_stop.value:
-            for camera_name in self.cameras.keys():
-                renderer.update_scene(self.data, camera=camera_name)
-                renderer.render(out=self._adapters[camera_name].array)
-                self.cameras[camera_name].emit(self._adapters[camera_name], ts=clock.now_ns())
-
-            yield pimm.Sleep(1 / self.fps)
-
-        renderer.close()
 
 
 class MujocoFrankaState(State, pimm.shared_memory.NumpySMAdapter):
@@ -225,143 +83,284 @@ class MujocoFrankaState(State, pimm.shared_memory.NumpySMAdapter):
         self.array[14 + 7] = self.status.value
 
 
-# TODO: Merge MujocoFranka and MujocoGripper into a single sim control system when the
-# simulator is refactored into one API. They share a sim and tick together, so a single
-# loop could pace state emission to the physics step without desyncing two same-rate loops.
-class MujocoFranka(pimm.ControlSystem):
-    def __init__(self, sim: MujocoSim, suffix: str = ''):
-        self.sim = sim
-        self.physics = dm_mujoco.Physics.from_model(sim.data)
-        self.ee_name = f'end_effector{suffix}'
-        self.joint_names = [f'joint{i}{suffix}' for i in range(1, 8)]
-        self.actuator_names = [f'actuator{i}{suffix}' for i in range(1, 8)]
-        self.joint_qpos_ids = [self.sim.model.joint(joint).qposadr.item() for joint in self.joint_names]
+class _Cadence:
+    """Per-stream emission gate: ``fps=None`` fires on every physics tick."""
+
+    def __init__(self, fps: float | None):
+        self._period = None if fps is None else 1.0 / fps
+        self._next_due = 0.0
+
+    def __call__(self, now: float) -> bool:
+        if self._period is None:
+            return True
+        if now < self._next_due:
+            return False
+        self._next_due = now + self._period
+        return True
+
+
+class MujocoSim(pimm.ControlSystem):
+    """The MuJoCo embodiment in one control system: scene, Franka arm, gripper, and cameras.
+
+    Every tick applies the due command waypoints, steps physics once, then emits the due
+    streams — so all signals carry the post-step state of the same physics instant. Each
+    stream has an independent rate (``*_fps``, ``None`` = every physics tick).
+    """
+
+    def __init__(
+        self,
+        mujoco_model_path: str,
+        loaders: Sequence[MujocoSceneTransform] = (),
+        *,
+        suffix: str = '_ph',
+        gripper_actuator: str = 'actuator8_ph',
+        gripper_joint: str = 'finger_joint1_ph',
+        camera_resolution: tuple[int, int] = (320, 240),
+        camera_fps: float | None = 30,
+        state_fps: float | None = None,
+        grip_fps: float | None = None,
+        sim_state_fps: float | None = None,
+    ):
+        self.mujoco_model_path = mujoco_model_path
+        self.loaders = loaders
+        self.warmup_steps = 1000
+        self.fps_counter = pimm.utils.RateCounter('MujocoSim')
+
+        self._ee_name = f'end_effector{suffix}'
+        self._joint_names = [f'joint{i}{suffix}' for i in range(1, 8)]
+        self._actuator_names = [f'actuator{i}{suffix}' for i in range(1, 8)]
+        self._gripper_actuator = gripper_actuator
+        self._gripper_joint = gripper_joint
+        self._camera_resolution = camera_resolution
+        self._camera_fps = camera_fps
+        self._state_fps = state_fps
+        self._grip_fps = grip_fps
+        self._sim_state_fps = sim_state_fps
+        self._renderer: mj.Renderer | None = None
+        self._ik_physics: dm_mujoco.Physics | None = None
+
+        self._load_scene()
+        self._warmup()
 
         self.commands: pimm.SignalReceiver[roboarm_command.CommandType] = pimm.ControlSystemReceiver(self, default=None)
         self.state: pimm.SignalEmitter[MujocoFrankaState] = pimm.ControlSystemEmitter(self)
         self.robot_meta = pimm.ControlSystemEmitter(self)
+        self.target_grip: pimm.SignalReceiver[float] = pimm.ControlSystemReceiver(self, default=0.0)
+        self.grip: pimm.SignalEmitter = pimm.ControlSystemEmitter(self)
+        self.cameras: pimm.EmitterDict = pimm.EmitterDict(self)
+        # Privileged ground truth: the full ``save_state`` dict, spec keys prefixed with '.' so the
+        # writer expands them into ``<signal>.<spec>`` signals. Scoring is computed downstream, not
+        # live: it rebuilds the episode's model from the ``scene_xml`` in its static meta and
+        # replays these states through it (``mj_setState`` + ``mj_forward``).
+        self.sim_state: pimm.SignalEmitter[dict[str, np.ndarray]] = pimm.ControlSystemEmitter(self)
+
+    def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Sleep]:
+        self._emit_robot_meta()
+        adapters = self._camera_adapters()
+        state = MujocoFrankaState()
+        arm_player = roboarm_command.TrajectoryPlayer()
+        grip_player = roboarm_command.TrajectoryPlayer()
+        last_grip = 0.0
+        state_due = _Cadence(self._state_fps)
+        grip_due = _Cadence(self._grip_fps)
+        sim_state_due = _Cadence(self._sim_state_fps)
+        cameras_due = _Cadence(self._camera_fps)
+
+        while not should_stop.value:
+            cmd_msg = self.commands.read()
+            if cmd_msg.updated:
+                arm_player.set(cmd_msg.data)
+            for cmd in arm_player.advance(clock.now_ns()):
+                self._apply_command(cmd, state)
+            grip_msg = self.target_grip.read()
+            if grip_msg.updated:
+                grip_player.set(grip_msg.data)
+            for grip in grip_player.advance(clock.now_ns()):
+                last_grip = grip
+            self._apply_grip(last_grip)
+
+            self.step()
+            self.fps_counter.tick()
+
+            now = clock.now()
+            if state_due(now):
+                state.encode(self._q, self._dq, self._ee_pose)
+                self.state.emit(state)
+            if grip_due(now):
+                self.grip.emit(self._current_grip())
+            if self.sim_state.num_bound and sim_state_due(now):
+                self.sim_state.emit({f'.{name}': arr for name, arr in self.save_state().items() if arr.size})
+            if adapters and cameras_due(now):
+                self._render(adapters, clock.now_ns())
+
+            # One physics step is one tick of simulated time; sleeping a timestep paces the world clock.
+            yield pimm.Sleep(self.model.opt.timestep)
+
+        if self._renderer is not None:
+            self._renderer.close()
+
+    def reset(self, seed: int | None = None):
+        """Re-randomize the scene by re-applying the loaders; ``seed`` makes the draw deterministic.
+
+        The model and data are rebuilt wholesale, so model-level loader effects (fixed-body
+        poses, colors, cameras) re-randomize too; the renderer and the IK physics rebind to
+        the new model lazily. Re-emits ``robot_meta``, so episodes record the fresh scene's
+        ``scene_xml``.
+        """
+        self._load_scene(seed)
+        self._warmup()
+        self._emit_robot_meta()
+
+    def _load_scene(self, seed: int | None = None):
+        """Apply the loaders to the model file and bind the result; ``scene_xml`` captures the draw."""
+        with np_seed(seed):
+            spec, self.metadata = load_spec_from_file(self.mujoco_model_path, self.loaders)
+        self.model = spec.compile()
+        self.scene_xml = spec.to_xml()
+        self._bind_model()
+
+    def _emit_robot_meta(self):
+        self.robot_meta.emit({
+            'urdf': Path(package_assets_path('assets/mujoco/panda_ik.xml')).read_text(),
+            'joint_names': [f'joint{i}' for i in range(1, 8)],
+            'control_frame': 'end_effector',
+            'scene_xml': self.scene_xml,
+        })
+
+    def _bind_model(self):
+        """Derive everything that hangs off ``self.model``; runs at construction and on every rebuild."""
+        self.data = mj.MjData(self.model)
+        self.initial_ctrl = [float(x) for x in self.metadata.get('initial_ctrl').split(',')]
+        self._joint_qpos_ids = [self.model.joint(name).qposadr.item() for name in self._joint_names]
+        min_grip, max_grip = self.model.actuator(self._gripper_actuator).ctrlrange
+        self._grip_range = (float(min_grip), float(max_grip))
+        if self._renderer is not None:
+            self._renderer.close()
+            self._renderer = None
+        self._ik_physics = None
+
+    def _warmup(self):
+        """Settle the freshly built scene: apply the initial controls and step through the transient."""
+        self.data.ctrl = self.initial_ctrl
+        mj.mj_step(self.model, self.data, self.warmup_steps)
+
+    def load_state(self, state: dict, reset_time: bool = True):
+        """Restore a recorded scene: the model from ``scene_xml`` (when present), then the MuJoCo state.
+
+        Episodes recorded before scene capture carry no ``scene_xml``; their state restores onto
+        this sim's own model draw, so only ``qpos``-borne (freejointed) randomization replays
+        faithfully for them.
+        """
+        if 'scene_xml' in state:
+            self.scene_xml = state['scene_xml']
+            scene, self.metadata = load_spec(self.scene_xml, Path(self.mujoco_model_path).parent)
+            self.model = scene.compile()
+            self._bind_model()
+        mj.mj_resetData(self.model, self.data)
+        for spec in STATE_SPECS:
+            mj.mj_setState(self.model, self.data, np.array(state[spec.name]), spec)
+
+        if reset_time:
+            self.data.time = 0
+
+    def save_state(self) -> dict[str, np.ndarray]:
+        """
+        Saves full state of the simulator.
+
+        This state could be used to restore the exact state of the simulator.
+
+        Returns:
+            data: A dictionary containing the full state of the simulator.
+        """
+        return save_state(self.model, self.data)
+
+    def step(self, duration: float | None = None) -> None:
+        duration = duration or self.model.opt.timestep
+        target_time = self.data.time + duration
+        while self.data.time < target_time:
+            mj.mj_step(self.model, self.data)
 
     def _apply_command(self, cmd, state: MujocoFrankaState):
         match cmd:
             case roboarm_command.CartesianPosition(pose=pose):
                 q = self._recalculate_ik(pose)
                 if q is not None:
-                    self.set_actuator_values(q)
+                    self._set_actuator_values(q)
                 else:
                     logger.warning(f'IK failed for ee_pose: {pose}')
                     state.set_error()
             case roboarm_command.JointPosition(positions=positions):
-                self.set_actuator_values(positions)
+                self._set_actuator_values(positions)
             case roboarm_command.JointDelta(velocities=delta):
-                self.set_actuator_values(self.q + delta)
+                self._set_actuator_values(self._q + delta)
             case roboarm_command.Reset():
-                self.sim.reset()
+                self.reset()
                 state.clear_error()
             case roboarm_command.Recover():
                 state.clear_error()
             case _:
                 raise ValueError(f'Unknown command type: {type(cmd)}')
 
-    def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock):
-        self.robot_meta.emit({
-            'urdf': Path(package_assets_path('assets/mujoco/panda_ik.xml')).read_text(),
-            'joint_names': [f'joint{i}' for i in range(1, 8)],
-            'control_frame': 'end_effector',
-        })
-        state = MujocoFrankaState()
-        player = roboarm_command.TrajectoryPlayer()
-
-        while not should_stop.value:
-            state.encode(self.q, self.dq, self.ee_pose)
-            cmd_msg = self.commands.read()
-            if cmd_msg.updated:
-                player.set(cmd_msg.data)
-            for cmd in player.advance(clock.now_ns()):
-                self._apply_command(cmd, state)
-
-            self.state.emit(state)
-            yield pimm.Yield()
-
-    def _recalculate_ik(self, target_robot_position: geom.Transform3D) -> np.ndarray | None:
+    def _recalculate_ik(self, target: geom.Transform3D) -> np.ndarray | None:
+        if self._ik_physics is None:
+            # Wraps the live ``data``, so IK warm-starts from the robot's current pose.
+            self._ik_physics = dm_mujoco.Physics.from_model(self.data)
         result = ik.qpos_from_site_pose(
-            physics=self.physics,
-            site_name=self.ee_name,
-            target_pos=target_robot_position.translation,
-            target_quat=target_robot_position.rotation.as_quat,
-            joint_names=self.joint_names,
+            physics=self._ik_physics,
+            site_name=self._ee_name,
+            target_pos=target.translation,
+            target_quat=target.rotation.as_quat,
+            joint_names=self._joint_names,
             rot_weight=0.5,
         )
+        return result.qpos[self._joint_qpos_ids] if result.success else None
 
-        if result.success:
-            return result.qpos[self.joint_qpos_ids]
+    def _set_actuator_values(self, values: np.ndarray):
+        for name, value in zip(self._actuator_names, values, strict=True):
+            self.data.actuator(name).ctrl = value
 
-        return None
+    def _apply_grip(self, target: float):
+        """Convert [0, 1] target grip to the actuator control range."""
+        min_grip, max_grip = self._grip_range
+        self.data.actuator(self._gripper_actuator).ctrl = min_grip + target * (max_grip - min_grip)
+
+    def _current_grip(self) -> float:
+        """Convert the current grip joint position to the range of [0, 1]."""
+        min_grip, max_grip = self._grip_range
+        return (self.data.joint(self._gripper_joint).qpos.item() - min_grip) / (max_grip - min_grip)
 
     @property
-    def q(self) -> np.ndarray:
-        return np.array([self.sim.data.qpos[i] for i in self.joint_qpos_ids])
+    def _q(self) -> np.ndarray:
+        return np.array([self.data.qpos[i] for i in self._joint_qpos_ids])
 
     @property
-    def dq(self) -> np.ndarray:
-        return np.array([self.sim.data.qvel[i] for i in self.joint_qpos_ids])
+    def _dq(self) -> np.ndarray:
+        return np.array([self.data.qvel[i] for i in self._joint_qpos_ids])
 
     @property
-    def ee_pose(self) -> geom.Transform3D:
-        translation = self.sim.data.site(self.ee_name).xpos.copy()
-        rotmat: np.ndarray = self.sim.data.site(self.ee_name).xmat.copy()
-        quat = self._xmat_to_quat(rotmat)
-        return geom.Transform3D(translation=translation, rotation=geom.Rotation.from_quat(quat))
+    def _ee_pose(self) -> geom.Transform3D:
+        site = self.data.site(self._ee_name)
+        quat = np.empty(4)
+        mj.mju_mat2Quat(quat, site.xmat.copy())
+        return geom.Transform3D(translation=site.xpos.copy(), rotation=geom.Rotation.from_quat(quat))
 
-    def set_actuator_values(self, actuator_values: np.ndarray):
-        for i in range(7):
-            self.sim.data.actuator(self.actuator_names[i]).ctrl = actuator_values[i]
+    def _camera_adapters(self) -> dict[str, pimm.shared_memory.NumpySMAdapter]:
+        existing = {self.model.camera(i).name for i in range(self.model.ncam)}
+        width, height = self._camera_resolution
+        adapters = {}
+        for name in self.cameras.keys():
+            if name not in existing:
+                raise RuntimeError(
+                    f"Camera '{name}' is bound but does not exist in the mujoco model. Available cameras: {existing}"
+                )
+            adapters[name] = pimm.shared_memory.NumpySMAdapter(shape=(height, width, 3), dtype=np.uint8)
+        return adapters
 
-    def _xmat_to_quat(self, xmat: np.ndarray) -> np.ndarray:
-        site_quat = np.empty(4)
-        mj.mju_mat2Quat(site_quat, xmat)
-        return site_quat
-
-
-class MujocoGripper(pimm.ControlSystem):
-    def __init__(self, sim: MujocoSim, actuator_name: str, joint_name: str):
-        self.sim = sim
-        self.actuator_name = actuator_name
-        self.actuator_control_range = self.sim.model.actuator(actuator_name).ctrlrange
-        self.joint_name = joint_name
-        self.target_grip: pimm.SignalReceiver[float] = pimm.ControlSystemReceiver(self, default=0.0)
-        self.grip: pimm.SignalEmitter = pimm.ControlSystemEmitter(self)
-
-    def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock):
-        player = roboarm_command.TrajectoryPlayer()
-        last_grip = 0.0
-
-        while not should_stop.value:
-            msg = self.target_grip.read()
-            if msg.updated:
-                player.set(msg.data)
-            for grip in player.advance(clock.now_ns()):
-                last_grip = grip
-            self.set_target_grip(last_grip)
-
-            current_grip = self.sim.data.joint(self.joint_name).qpos.item()
-            self.grip.emit(self._normalize_current_grip(current_grip))
-            yield pimm.Yield()
-
-    def set_target_grip(self, target_grip: float):
-        self.sim.data.actuator(self.actuator_name).ctrl = self._denormalize_target_grip(target_grip)
-
-    def _denormalize_target_grip(self, target_grip: float) -> float:
-        """
-        Convert [0, 1] target grip to the range of the actuator control range
-        """
-        min_grip, max_grip = self.actuator_control_range
-        control_range = max_grip - min_grip
-        return min_grip + target_grip * control_range
-
-    def _normalize_current_grip(self, current_grip: float) -> float:
-        """
-        Convert the current grip to the range of [0, 1]
-        """
-        min_grip, max_grip = self.actuator_control_range
-        control_range = max_grip - min_grip
-        return (current_grip - min_grip) / control_range
+    def _render(self, adapters: dict[str, pimm.shared_memory.NumpySMAdapter], ts_ns: int):
+        if self._renderer is None:
+            width, height = self._camera_resolution
+            self._renderer = mj.Renderer(self.model, height=height, width=width)
+        for name, adapter in adapters.items():
+            self._renderer.update_scene(self.data, camera=name)
+            self._renderer.render(out=adapter.array)
+            self.cameras[name].emit(adapter, ts=ts_ns)

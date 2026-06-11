@@ -19,7 +19,7 @@ from positronic.dataset.local_dataset import LocalDatasetWriter
 from positronic.dataset.transforms.episode import Derive, Group, Identity
 from positronic.drivers import roboarm
 from positronic.gui.dpg import DearpyguiUi
-from positronic.simulator.mujoco.sim import MujocoCameras, MujocoFranka, MujocoGripper, MujocoSim
+from positronic.simulator.mujoco.sim import MujocoSim
 from positronic.simulator.mujoco.transforms import MujocoSceneTransform
 from positronic.utils import package_assets_path
 from positronic.utils.logging import init_logging
@@ -124,20 +124,16 @@ def main(
         for ep_index in indices:
             episode = dataset[ep_index]
 
-            sim = MujocoSim(mujoco_model_path, loaders)
+            sim = MujocoSim(mujoco_model_path, loaders, camera_fps=fps)
             sim.load_state(episode.static)
-            robot_arm = MujocoFranka(sim, suffix='_ph')
-            mujoco_cameras = MujocoCameras(sim.model, sim.data, resolution=(320, 240), fps=fps)
-            cameras_mapped = {name: mujoco_cameras.cameras[orig_name] for name, orig_name in cameras.items()}
-            gripper = MujocoGripper(sim, actuator_name='actuator8_ph', joint_name='finger_joint1_ph')
+            cameras_mapped = {name: sim.cameras[orig_name] for name, orig_name in cameras.items()}
             gui = DearpyguiUi() if show_gui else None
 
             replay = Replay()
 
             with pimm.World(virtual_time=True) as world:
-                ds_agent = wire.wire(
-                    world, replay, dataset_writer, cameras_mapped, robot_arm, gripper, gui, TimeMode.MESSAGE
-                )
+                # The sim carries both the arm and the gripper ports, so it fills both slots.
+                ds_agent = wire.wire(world, replay, dataset_writer, cameras_mapped, sim, sim, gui, TimeMode.MESSAGE)
                 player_cmd = world.pair(replay.command)
 
                 ds_cmd = pimm.NoOpEmitter()
@@ -153,7 +149,7 @@ def main(
 
                 _ = world.pair(replay.finished, emitter_wrapper=pimm.map(call_stop))
 
-                sim_iter = world.start([sim, mujoco_cameras, robot_arm, gripper, replay, ds_agent], gui)
+                sim_iter = world.start([sim, replay, ds_agent], gui)
                 ds_cmd.emit(DsWriterCommand.START(episode.static))
                 player_cmd.emit(DsPlayerStartCommand(episode))
 

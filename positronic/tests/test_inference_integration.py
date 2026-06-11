@@ -8,7 +8,8 @@ from positronic.cfg.eval.sim.positronic import stack_cubes
 from positronic.dataset.local_dataset import LocalDataset
 from positronic.inference import main
 from positronic.policy.tests.test_harness import StubPolicy
-from positronic.simulator.mujoco.sim import FullSimState, MujocoSim
+from positronic.simulator.mujoco.sim import MujocoSim
+from positronic.simulator.mujoco.transforms import AddBox, SetBodyPosition
 
 
 # This integration test exercises the unified `main` end-to-end on the sim embodiment.
@@ -81,6 +82,9 @@ def test_sim_emits_commands_and_records_dataset(tmp_path, monkeypatch):
     assert episode.static['eval.universe'] == 'sim'
     assert episode.static['eval.embodiment'] == 'mujoco.franka'
     assert episode.static['eval.timeout'] == 0.4
+    # The post-loader scene description rides robot_meta into static: with eval.seed it makes
+    # the episode self-contained for downstream scoring and faithful replay.
+    assert episode.static['scene_xml'].startswith('<mujoco')
     signals = episode.signals
     assert 'robot_command.pose' in signals
     assert 'target_grip' in signals
@@ -119,26 +123,40 @@ def test_sim_emits_commands_and_records_dataset(tmp_path, monkeypatch):
 
 @pytest.mark.timeout(30.0)
 def test_sim_reset_seed_reproduces_scene():
-    """Same seed → identical post-reset sim state; different seed → a different scene."""
-    sim = MujocoSim('positronic/assets/mujoco/franka_table.xml', positronic.cfg.simulator.stack_cubes_loaders())
+    """Same seed → identical post-reset scene, state- and model-level; different seed → a different scene.
+
+    The fixed (non-freejointed) marker box randomizes at the model level, so it only
+    re-randomizes because reset rebuilds the model wholesale.
+    """
+    loaders = [
+        *positronic.cfg.simulator.stack_cubes_loaders(),
+        AddBox(name='marker', size=[0.01, 0.01, 0.01], pos=[0.0, 0.0, 0.05]),
+        SetBodyPosition(body_name='marker_body', random_position=[[0.9, 0.5, 0.05], [1.0, 0.6, 0.05]]),
+    ]
+    sim = MujocoSim('positronic/assets/mujoco/franka_table.xml', loaders)
     sim.reset(seed=123)
     first = sim.save_state()
+    first_xml = sim.scene_xml
+    first_marker = sim.model.body('marker_body').pos.copy()
     sim.reset(seed=99)
     second = sim.save_state()
+    second_marker = sim.model.body('marker_body').pos.copy()
     sim.reset(seed=123)
     third = sim.save_state()
 
     for name, array in first.items():
         np.testing.assert_array_equal(third[name], array)
+    assert sim.scene_xml == first_xml
+    np.testing.assert_array_equal(sim.model.body('marker_body').pos, first_marker)
     assert any(not np.array_equal(second[name], array) for name, array in first.items())
+    assert not np.array_equal(second_marker, first_marker)
 
-
-def test_sim_embodiment_records_full_sim_state():
-    """The stack_cubes eval records the privileged full sim state, not live success observers.
-
-    Guards the production observer default directly (the heavyweight e2e test above wires its own
-    observers, so it cannot catch a regression of the ``stack_cubes`` eval config).
-    """
-    observers = stack_cubes.kwargs['observers']
-    assert set(observers) == {'sim_state'}
-    assert isinstance(observers['sim_state'], FullSimState)
+    # A fresh sim (its own random draw) restores the recorded scene wholesale: load_state
+    # rebuilds the model from scene_xml, so model-level randomization replays faithfully.
+    # Model fields pass through XML text, so they round-trip to float-printing precision;
+    # the state arrays are set verbatim and stay exact.
+    replayed = MujocoSim('positronic/assets/mujoco/franka_table.xml', loaders)
+    replayed.load_state({**third, 'scene_xml': first_xml}, reset_time=False)
+    np.testing.assert_allclose(replayed.model.body('marker_body').pos, first_marker, rtol=1e-6)
+    for name, array in replayed.save_state().items():
+        np.testing.assert_array_equal(array, third[name])

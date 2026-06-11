@@ -23,7 +23,7 @@ from positronic.drivers import roboarm
 from positronic.drivers.roboarm import State as RoboarmState
 from positronic.drivers.webxr import WebXR
 from positronic.gui.dpg import DearpyguiUi
-from positronic.simulator.mujoco.sim import MujocoCameras, MujocoFranka, MujocoGripper, MujocoSim
+from positronic.simulator.mujoco.sim import MujocoSim
 from positronic.simulator.mujoco.transforms import MujocoSceneTransform
 from positronic.utils import package_assets_path
 from positronic.utils.buttons import ButtonHandler
@@ -288,13 +288,9 @@ def main_sim(
 ):
     """Runs data collection in simulator."""
 
-    sim = MujocoSim(mujoco_model_path, loaders)
-    robot_arm = MujocoFranka(sim, suffix='_ph')
-
-    mujoco_cameras = MujocoCameras(sim.model, sim.data, resolution=(320, 240), fps=fps)
-    cameras = {name: mujoco_cameras.cameras[orig_name] for name, orig_name in cameras.items()}
+    sim = MujocoSim(mujoco_model_path, loaders, camera_fps=fps)
+    cameras = {name: sim.cameras[orig_name] for name, orig_name in cameras.items()}
     gui = DearpyguiUi()
-    gripper = MujocoGripper(sim, actuator_name='actuator8_ph', joint_name='finger_joint1_ph')
 
     static_meta = dict(wire.ROBOT_STATIC_META)
     if task is not None:
@@ -310,12 +306,11 @@ def main_sim(
         LocalDatasetWriter(pos3.sync(output_dir, sync_on_error=True)) if output_dir is not None else nullcontext()
     )
     with writer_cm as dataset_writer, pimm.World(virtual_time=True) as world:
-        ds_agent = wire.wire(world, data_collection, dataset_writer, cameras, robot_arm, gripper, gui, TimeMode.MESSAGE)
-        _wire(world, ds_agent, data_collection, webxr, robot_arm, sound)
+        # The sim carries both the arm and the gripper ports, so it fills both slots.
+        ds_agent = wire.wire(world, data_collection, dataset_writer, cameras, sim, sim, gui, TimeMode.MESSAGE)
+        _wire(world, ds_agent, data_collection, webxr, sim, sound)
 
-        sim_iter = world.start(
-            [sim, mujoco_cameras, robot_arm, gripper, data_collection], [webxr, gui, ds_agent, sound]
-        )
+        sim_iter = world.start([sim, data_collection], [webxr, gui, ds_agent, sound])
         sim_iter = iter(sim_iter)
 
         # VR teleop is live, so pace virtual time to wall time: only step the sim when it has fallen behind.

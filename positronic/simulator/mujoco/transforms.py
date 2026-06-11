@@ -309,21 +309,9 @@ class SetTwoObjectsPositions(MujocoSceneTransform):
         raise RuntimeError('Could not place objects without overlap after 100 attempts')
 
 
-def load_model_from_spec_file(
-    xml_path: str, loaders: Sequence[MujocoSceneTransform] = ()
-) -> tuple[mujoco.MjModel, dict[str, str]]:
-    spec, metadata = load_spec_from_file(xml_path, loaders)
-    model = spec.compile()
-
-    return model, metadata
-
-
-def load_spec_from_file(
-    xml_path: str, loaders: Sequence[MujocoSceneTransform] = ()
+def load_spec(
+    xml_string: str, assets_dir: Path, loaders: Sequence[MujocoSceneTransform] = ()
 ) -> tuple[mujoco.MjSpec, dict[str, str]]:
-    with open(xml_path) as f:
-        xml_string = f.read()
-
     spec = mujoco.MjSpec.from_string(xml_string)
 
     metadata = {s.name: s.data for s in spec.texts}
@@ -334,9 +322,14 @@ def load_spec_from_file(
     assets = metadata.get('relative_assets_path')
 
     if assets is not None:
-        assets_path = Path(xml_path).parent / assets
-        with open(assets_path, 'rb') as f:
-            assets = pickle.load(f)
-        spec.assets = assets
+        with open(assets_dir / assets, 'rb') as f:
+            spec.assets = pickle.load(f)
 
     return spec, metadata
+
+
+def load_spec_from_file(
+    xml_path: str, loaders: Sequence[MujocoSceneTransform] = ()
+) -> tuple[mujoco.MjSpec, dict[str, str]]:
+    with open(xml_path) as f:
+        return load_spec(f.read(), Path(xml_path).parent, loaders)

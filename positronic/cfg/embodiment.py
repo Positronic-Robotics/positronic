@@ -6,7 +6,6 @@ import positronic.cfg.hardware.roboarm
 from positronic.dataset.serializers import Serializers
 from positronic.drivers.roboarm import command as roboarm_command
 from positronic.eval import ROBOT_STATIC_META, Command, Embodiment, Observation
-from positronic.simulator.mujoco.sim import MujocoCameras, MujocoFranka, MujocoGripper
 
 
 @cfn.config(
@@ -43,31 +42,28 @@ def droid(robot_arm, gripper, cameras):
     )
 
 
-def mujoco_franka(sim, camera_fps, camera_dict):
+def mujoco_franka(sim, camera_dict):
     """Mujoco single-arm Franka + gripper over a given sim — pure robot, no scene.
 
-    The scene (loaders) and privileged ground-truth are the eval's concern; this builds
-    only the robot from the sim the eval holds. 3 cameras because Mujoco does not render
-    the second image when using only 2 cameras.
+    The scene (loaders) and privileged ground-truth are the eval's concern; this maps
+    the sim's arm, gripper, and camera ports into an embodiment. 3 cameras because
+    Mujoco does not render the second image when using only 2 cameras.
     """
-    robot_arm = MujocoFranka(sim, suffix='_ph')
-    gripper = MujocoGripper(sim, actuator_name='actuator8_ph', joint_name='finger_joint1_ph')
-    cameras = MujocoCameras(sim.model, sim.data, resolution=(320, 240), fps=camera_fps)
     observations = {
-        'robot_state': Observation(robot_arm.state, Serializers.robot_state),
-        'grip': Observation(gripper.grip, None),
-        **{name: Observation(cameras.cameras[orig], Serializers.camera_images) for name, orig in camera_dict.items()},
+        'robot_state': Observation(sim.state, Serializers.robot_state),
+        'grip': Observation(sim.grip, None),
+        **{name: Observation(sim.cameras[orig], Serializers.camera_images) for name, orig in camera_dict.items()},
     }
     commands = {
-        'robot_command': Command(robot_arm.commands, roboarm_command.Reset(), Serializers.robot_command),
-        'target_grip': Command(gripper.target_grip, 0.0, None),
+        'robot_command': Command(sim.commands, roboarm_command.Reset(), Serializers.robot_command),
+        'target_grip': Command(sim.target_grip, 0.0, None),
     }
     return Embodiment(
         descriptor='mujoco.franka',
         observations=observations,
         commands=commands,
         static_meta={**ROBOT_STATIC_META, 'simulation.mujoco_model_path': sim.mujoco_model_path},
-        meta_source=robot_arm.robot_meta,
-        control_systems=(cameras, sim, robot_arm, gripper),
+        meta_source=sim.robot_meta,
+        control_systems=(sim,),
         simulated=True,
     )
