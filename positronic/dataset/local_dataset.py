@@ -342,6 +342,10 @@ class DiskEpisode(Episode):
                 continue
             self._signal_factories[key] = partial(SimpleSignal, file)
 
+        collisions = self._static_overrides.keys() & self._signal_factories.keys()
+        if collisions:
+            raise ValueError(f'Edited static items {sorted(collisions)} collide with signals in {self._dir}')
+
     def __repr__(self) -> str:
         return f'{self.__class__.__name__}(path={str(self._dir)!r})'
 
@@ -372,9 +376,6 @@ class DiskEpisode(Episode):
                     self._static.update(data)
                 else:
                     raise ValueError('static.json must contain a JSON object (mapping)')
-            collisions = self._static_overrides.keys() & self._signal_factories.keys()
-            if collisions:
-                raise ValueError(f'Edited static items {sorted(collisions)} collide with signals in {self._dir}')
             self._static.update(self._static_overrides)
         return self._static
 

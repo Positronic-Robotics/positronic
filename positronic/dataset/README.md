@@ -328,7 +328,7 @@ writer.set_static(episode.meta['uid'], {'eval.outcome': 'success', 'notes': 'cle
 ds = LocalDataset(root)  # every consumer sees the edited statics
 ```
 
-Each line of `edits.jsonl` is one JSON record: `{"op": "set_static", "v": 1, "ep": "<uid>", "data": {...}}`. Records target episodes by `meta['uid']` and apply in log order with last-write-wins per key. Values follow the same restrictions as `EpisodeWriter.set_static`. A key colliding with a signal name raises when the episode's items are accessed; corrupt or unrecognized records fail loudly when the dataset is opened.
+Each line of `edits.jsonl` is one JSON record: `{"op": "set_static", "v": 1, "ep": "<uid>", "data": {...}}`. Records target episodes by `meta['uid']` and apply in log order with last-write-wins per key. Values follow the same restrictions as `EpisodeWriter.set_static`. A key colliding with a signal name raises when the episode is loaded; corrupt or unrecognized records fail loudly when the dataset is opened.
 
 The log is plain appendable JSON so external tools can write it; the dataset directory assumes a single writer.
 

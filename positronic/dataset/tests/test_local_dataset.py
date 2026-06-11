@@ -463,7 +463,7 @@ def test_set_static_edit_colliding_with_signal_raises(tmp_path):
 
     ds = LocalDataset(root)
     with pytest.raises(ValueError, match='collide with signals'):
-        _ = ds[0].static
+        _ = ds[0]
 
 
 def test_set_static_edit_for_unknown_uid_is_inert(tmp_path):
