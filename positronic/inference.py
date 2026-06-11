@@ -1,6 +1,8 @@
 import logging
 from collections import Counter
+from collections.abc import Callable
 from contextlib import nullcontext
+from dataclasses import dataclass
 from pathlib import Path
 
 import configuronic as cfn
@@ -38,27 +40,20 @@ class KeyboardHandler:
         return None
 
 
-class TimedDriver(pimm.ControlSystem):
-    """Control system that orchestrates inference episodes by sending directives."""
+@dataclass
+class Driver:
+    """An attended operator surface: the directive source ``main`` wires into the Harness."""
 
-    def __init__(self, num_iterations: int, simulation_time: float):
-        self.num_iterations = num_iterations
-        self.simulation_time = simulation_time
-        self.directives = pimm.ControlSystemEmitter(self)
-
-    def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock):
-        for i in range(self.num_iterations):
-            meta = {'simulation.iteration': str(i), 'simulation.total_iterations': str(self.num_iterations)}
-            self.directives.emit(Directive.RUN(**meta))
-            yield pimm.Sleep(self.simulation_time)
-            self.directives.emit(Directive.FINISH())
-            yield pimm.Sleep(0.5)
+    gui: DearpyguiUi | None
+    directives: pimm.SignalEmitter
+    directive_wrapper: Callable
+    control_systems: list[pimm.ControlSystem]
 
 
 @cfn.config(ui_scale=1)
 def eval_ui(ui_scale):
     gui = EvalUI(ui_scale=ui_scale)
-    return gui, (gui.directive, pimm.utils.identity), []
+    return Driver(gui, gui.directive, pimm.utils.identity, [])
 
 
 @cfn.config(show_gui=False)
@@ -66,18 +61,12 @@ def keyboard(show_gui, task):
     keyboard = KeyboardControl(quit_key='q')
     keyboard_handler = KeyboardHandler(task=task)
     print('Keyboard controls: [s]tart, sto[p], [r] home, [q]uit')
-    return (
+    return Driver(
         None if not show_gui else DearpyguiUi(),
-        (keyboard.keyboard_inputs, pimm.map(keyboard_handler.harness_directive)),
+        keyboard.keyboard_inputs,
+        pimm.map(keyboard_handler.harness_directive),
         [keyboard],
     )
-
-
-@cfn.config(num_iterations=1, simulation_time=15, show_gui=False)
-def timed(num_iterations, simulation_time, show_gui):
-    gui = None if not show_gui else DearpyguiUi()
-    driver = TimedDriver(num_iterations, simulation_time)
-    return gui, (driver.directives, pimm.utils.identity), [driver]
 
 
 def _seed_counter(policy, output_dir: Path):
@@ -114,26 +103,26 @@ def _connect_ds_command(world, harness, ds_agent, policy):
 def main(
     embodiment: Embodiment,
     policy,
-    driver: tuple,
+    driver: Driver | None = None,
     output_dir: str | Path | None = None,
-    simulate_inference: bool | float = False,
     task: Task | None = None,
+    trials: list[dict] | None = None,
+    show_gui: bool = False,
     wrap=default_wrappers,
 ):
     """Run inference for an embodiment, real or simulated.
 
-    ``task`` (when given) supplies the policy-facing instruction and the privileged
-    ground-truth signals to record; without it the instruction rides the driver.
+    ``task`` (when given) supplies the policy-facing instruction, the per-trial ``timeout``
+    bounding self-driven trials, and the privileged ground-truth signals to record; without it
+    the instruction rides the driver. Exactly one of ``driver`` (attended: an operator surface
+    emits the directives) or ``trials`` (unattended: the harness runs the plan itself) must be
+    given; ``show_gui`` applies to the unattended path (attended surfaces bring their own).
     """
+    assert (driver is None) != (trials is None), 'Provide exactly one of driver or trials'
     harness = Harness(
-        policy,
-        embodiment,
-        instruction=task.instruction if task is not None else None,
-        wrap=wrap,
-        simulate_inference=simulate_inference,
-        on_episode_complete=_completion_sink(policy),
+        policy, embodiment, task=task, trials=trials, wrap=wrap, on_episode_complete=_completion_sink(policy)
     )
-    gui, harness_emitter, foreground_cs = driver
+    gui = driver.gui if driver is not None else (DearpyguiUi() if show_gui else None)
 
     if output_dir is not None:
         output_dir = pos3.sync(output_dir, sync_on_error=True)
@@ -152,16 +141,18 @@ def main(
             for name, obs in embodiment.observations.items():
                 if name.startswith('image.'):
                     world.connect(obs.source, gui.cameras[name])
-        world.connect(harness_emitter[0], harness.directive, emitter_wrapper=harness_emitter[1])
+        if driver is not None:
+            world.connect(driver.directives, harness.directive, emitter_wrapper=driver.directive_wrapper)
         _connect_ds_command(world, harness, ds_agent, policy)
 
         # Sim runs devices + recorder in-process under the virtual clock; real runs them as
         # background subprocesses. The harness, driver, and GUI placement is identical.
+        foreground = driver.control_systems if driver is not None else []
         devices = [cs for cs in [*embodiment.control_systems, ds_agent] if cs is not None]
         if embodiment.simulated:
-            world.run([harness, *foreground_cs, *devices], gui)
+            world.run([harness, *foreground, *devices], gui)
         else:
-            world.run([harness, *foreground_cs], [*devices, gui])
+            world.run([harness, *foreground], [*devices, gui])
 
 
 run_cfg = cfn.Config(main, embodiment=positronic.cfg.embodiment.droid, policy=policy_cfg.placeholder, driver=keyboard)

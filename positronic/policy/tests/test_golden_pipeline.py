@@ -13,7 +13,7 @@ robot changes state only when a command is *applied*, so
   * horizon/gating regression   -> the state trajectory diverges
 
 Everything runs on CPU in a virtual-time world only: no GL/GPU/MuJoCo, no wall
-clock in the asserted path (a fixed-float ``simulate_inference`` is used so
+clock in the asserted path (a fixed-float ``inference_latency`` is used so
 inference latency is deterministic).
 
 Regenerate the golden after an intentional behavior change:
@@ -53,7 +53,7 @@ TARGET_POS = np.array([0.50, 0.00, 0.45], dtype=np.float32)
 
 # Fixed deterministic inference latency. Spans >1 control tick (harness loop is
 # 0.01 s) so the post-inference anchoring effect is observable in recorded ts.
-SIMULATE_INFERENCE_S = 0.05
+INFERENCE_LATENCY_S = 0.05
 ACTION_FPS = 15.0
 ACTION_HORIZON_S = 0.5  # 8 of every 10-action chunk survives truncation
 CONTROL_PERIOD_S = 0.005  # fake robot/gripper sampling cadence (200 Hz)
@@ -197,7 +197,7 @@ def _run_pipeline(tmp_path: Path) -> dict:
             static_meta=dict(ROBOT_STATIC_META),
             meta_source=robot.robot_meta,
         )
-        harness = Harness(policy, embodiment, simulate_inference=SIMULATE_INFERENCE_S)
+        harness = Harness(policy, embodiment)
         ds_agent = wire.wire_embodiment(world, harness, embodiment, ds_writer, TimeMode.MESSAGE)
         world.connect(harness.ds_command, ds_agent.command)
         directive_em = world.pair(harness.directive)
@@ -205,7 +205,7 @@ def _run_pipeline(tmp_path: Path) -> dict:
         # Robot/gripper emit state every tick, so the script only drives the
         # episode lifecycle and the one-shot error injection.
         script = [
-            (partial(directive_em.emit, Directive.RUN(task='golden')), 0.0),
+            (partial(directive_em.emit, Directive.RUN(task='golden', inference_latency=INFERENCE_LATENCY_S)), 0.0),
             (None, 1.5),  # several reactive inference + chunk/horizon cycles
             (robot.inject_error, 0.0),  # -> ERROR -> harness Recover -> resume
             (None, 0.5),

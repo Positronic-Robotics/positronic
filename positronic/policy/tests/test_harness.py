@@ -9,7 +9,7 @@ from positronic.dataset.serializers import Serializers
 from positronic.drivers import roboarm
 from positronic.drivers.roboarm import RobotStatus
 from positronic.drivers.roboarm.command import CartesianPosition, Recover, Reset, from_wire, to_wire
-from positronic.eval import Command, Embodiment, Observation
+from positronic.eval import Command, Embodiment, Observation, Task
 from positronic.geom import Rotation, Transform3D
 from positronic.policy.base import Policy, Session
 from positronic.policy.codec import ActionTimestamp
@@ -474,6 +474,77 @@ def test_finish_emits_ds_stop_with_data_and_homes(world):
     assert stops[0].static_data['notes'] == 'good'
 
     assert isinstance(_last_command(p), Reset)
+
+
+@pytest.mark.timeout(3.0)
+def test_trial_timeout_self_terminates(world):
+    """A self-driven trial ends at ``task.timeout``: terminated=False, robot homed."""
+    policy = StubPolicy()
+    harness = Harness(policy, make_embodiment(), task=Task(instruction='test', timeout=0.05), trials=[{}])
+    p = _pair_all(world, harness)
+
+    scheduler = world.start([harness])
+    drive_scheduler(scheduler, steps=200)
+
+    stops = [c for c in _ds_commands(p) if c.type == DsWriterCommandType.STOP_EPISODE]
+    assert len(stops) == 1
+    assert stops[0].static_data['eval.terminated'] is False
+    assert isinstance(_last_command(p), Reset)
+
+
+@pytest.mark.timeout(3.0)
+def test_trial_plan_self_drives(world):
+    """With a trial plan the harness runs unattended: no driver, one episode per entry."""
+    policy = StubPolicy()
+    trials = [{'eval.trial_index': i} for i in range(2)]
+    harness = Harness(policy, make_embodiment(), task=Task(instruction='stack', timeout=0.05), trials=trials)
+    p = _pair_all(world, harness)
+
+    scheduler = world.start([harness])
+    drive_scheduler(scheduler, steps=400)
+
+    starts = [c for c in _ds_commands(p) if c.type == DsWriterCommandType.START_EPISODE]
+    stops = [c for c in _ds_commands(p) if c.type == DsWriterCommandType.STOP_EPISODE]
+    assert [s.static_data['eval.trial_index'] for s in starts] == [0, 1]
+    assert all(s.static_data['task'] == 'stack' for s in starts)
+    assert len(stops) == 2
+    assert all(s.static_data['eval.terminated'] is False for s in stops)
+    assert policy.reset_calls == 2
+
+
+@pytest.mark.timeout(3.0)
+def test_timeout_crossed_during_latency_sleep_drops_chunk(world):
+    """A chunk whose latency sleep crosses the deadline is dropped, never emitted."""
+    policy = StubPolicy()
+    # The 0.2s latency sleep crosses the 0.05s deadline before the chunk is emitted.
+    harness = Harness(
+        policy, make_embodiment(), task=Task(instruction='test', timeout=0.05), trials=[{'inference_latency': 0.2}]
+    )
+    cmd_recorder = RecordingEmitter()
+    grip_recorder = RecordingEmitter()
+    ds_recorder = RecordingEmitter()
+    harness.commands['robot_command']._bind(cmd_recorder)
+    harness.commands['target_grip']._bind(grip_recorder)
+    harness.ds_command._bind(ds_recorder)
+
+    frame_em = world.pair(harness.observations['image.cam'])
+    robot_em = world.pair(harness.observations['robot_state'])
+    grip_em = world.pair(harness.observations['grip'])
+
+    robot_state = make_robot_state([0.1, 0.2, 0.3], [0.4, 0.5, 0.6])
+
+    driver = ManualDriver([(partial(emit_ready_payload, frame_em, robot_em, grip_em, robot_state), 0.01), (None, 0.3)])
+
+    scheduler = world.start([harness, driver])
+    drive_scheduler(scheduler, steps=200)
+
+    stops = [data for _, data in ds_recorder.emitted if data.type == DsWriterCommandType.STOP_EPISODE]
+    assert len(stops) == 1
+    assert stops[0].static_data['eval.terminated'] is False
+    # The post-deadline chunk must not reach the drivers: the only non-empty emissions are the homing
+    # Reset / home grip from the timeout FINISH.
+    assert all(isinstance(c, Reset) for c in _emitted_commands(cmd_recorder))
+    assert _emitted_grips(grip_recorder) == [0.0]
 
 
 @pytest.mark.timeout(3.0)

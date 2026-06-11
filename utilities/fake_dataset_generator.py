@@ -143,7 +143,7 @@ class FakeGenerator(pimm.ControlSystem):
                 'eval.tote_placement': random.choice(['left', 'right']),
                 'eval.external_camera': random.choices(['left', 'right', 'NA'], [5, 5, 1])[0],
                 'inference.policy_fps': self.fps,
-                'inference.simulate_inference': False,
+                'inference_latency': False,
                 **self.policy_meta,
             }
 
