@@ -82,6 +82,9 @@ def test_sim_emits_commands_and_records_dataset(tmp_path, monkeypatch):
     assert episode.static['eval.universe'] == 'sim'
     assert episode.static['eval.embodiment'] == 'mujoco.franka'
     assert episode.static['eval.timeout'] == 0.4
+    # The post-loader scene description rides robot_meta into static: with eval.seed it makes
+    # the episode self-contained for downstream scoring and faithful replay.
+    assert episode.static['scene_xml'].startswith('<mujoco')
     signals = episode.signals
     assert 'robot_command.pose' in signals
     assert 'target_grip' in signals
@@ -133,6 +136,7 @@ def test_sim_reset_seed_reproduces_scene():
     sim = MujocoSim('positronic/assets/mujoco/franka_table.xml', loaders)
     sim.reset(seed=123)
     first = sim.save_state()
+    first_xml = sim.scene_xml
     first_marker = sim.model.body('marker_body').pos.copy()
     sim.reset(seed=99)
     second = sim.save_state()
@@ -142,9 +146,20 @@ def test_sim_reset_seed_reproduces_scene():
 
     for name, array in first.items():
         np.testing.assert_array_equal(third[name], array)
+    assert sim.scene_xml == first_xml
     np.testing.assert_array_equal(sim.model.body('marker_body').pos, first_marker)
     assert any(not np.array_equal(second[name], array) for name, array in first.items())
     assert not np.array_equal(second_marker, first_marker)
+
+    # A fresh sim (its own random draw) restores the recorded scene wholesale: load_state
+    # rebuilds the model from scene_xml, so model-level randomization replays faithfully.
+    # Model fields pass through XML text, so they round-trip to float-printing precision;
+    # the state arrays are set verbatim and stay exact.
+    replayed = MujocoSim('positronic/assets/mujoco/franka_table.xml', loaders)
+    replayed.load_state({**third, 'scene_xml': first_xml}, reset_time=False)
+    np.testing.assert_allclose(replayed.model.body('marker_body').pos, first_marker, rtol=1e-6)
+    for name, array in replayed.save_state().items():
+        np.testing.assert_array_equal(array, third[name])
 
 
 def test_sim_embodiment_records_full_sim_state():

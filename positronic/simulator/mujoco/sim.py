@@ -13,7 +13,7 @@ from positronic import geom
 from positronic.drivers.roboarm import RobotStatus, State
 from positronic.drivers.roboarm import command as roboarm_command
 from positronic.simulator.mujoco.observers import MujocoSimObserver
-from positronic.simulator.mujoco.transforms import MujocoSceneTransform, load_model_from_spec_file, np_seed
+from positronic.simulator.mujoco.transforms import MujocoSceneTransform, load_spec, load_spec_from_file, np_seed
 from positronic.utils import package_assets_path
 
 logger = logging.getLogger(__name__)
@@ -47,7 +47,9 @@ class FullSimState(MujocoSimObserver):
     """Privileged observer recording the full ``save_state`` each step.
 
     Keys each spec with a leading ``.`` so the writer expands it into a
-    ``sim_state.<spec>`` signal; scoring is computed downstream, not live.
+    ``sim_state.<spec>`` signal; scoring is computed downstream, not live: it rebuilds the
+    episode's model from the ``scene_xml`` in its static meta and replays these states
+    through it (``mj_setState`` + ``mj_forward``).
     """
 
     def __call__(self, model: mj.MjModel, data: mj.MjData) -> dict[str, np.ndarray]:
@@ -153,8 +155,7 @@ class MujocoSim(pimm.ControlSystem):
         self._renderer: mj.Renderer | None = None
         self._ik_physics: dm_mujoco.Physics | None = None
 
-        self.model, self.metadata = load_model_from_spec_file(mujoco_model_path, loaders)
-        self._bind_model()
+        self._load_scene()
         self._warmup()
 
         self.commands: pimm.SignalReceiver[roboarm_command.CommandType] = pimm.ControlSystemReceiver(self, default=None)
@@ -166,11 +167,7 @@ class MujocoSim(pimm.ControlSystem):
         self.observations = pimm.EmitterDict(self)
 
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Sleep]:
-        self.robot_meta.emit({
-            'urdf': Path(package_assets_path('assets/mujoco/panda_ik.xml')).read_text(),
-            'joint_names': [f'joint{i}' for i in range(1, 8)],
-            'control_frame': 'end_effector',
-        })
+        self._emit_robot_meta()
         adapters = self._camera_adapters()
         state = MujocoFrankaState()
         arm_player = roboarm_command.TrajectoryPlayer()
@@ -222,15 +219,31 @@ class MujocoSim(pimm.ControlSystem):
 
         The model and data are rebuilt wholesale, so model-level loader effects (fixed-body
         poses, colors, cameras) re-randomize too; the renderer and the IK physics rebind to
-        the new model lazily.
+        the new model lazily. Re-emits ``robot_meta``, so episodes record the fresh scene's
+        ``scene_xml``.
         """
-        with np_seed(seed):
-            self.model, self.metadata = load_model_from_spec_file(self.mujoco_model_path, self.loaders)
-        self._bind_model()
+        self._load_scene(seed)
         self._warmup()
 
         for observer in self.observers.values():
             observer.reset()
+        self._emit_robot_meta()
+
+    def _load_scene(self, seed: int | None = None):
+        """Apply the loaders to the model file and bind the result; ``scene_xml`` captures the draw."""
+        with np_seed(seed):
+            spec, self.metadata = load_spec_from_file(self.mujoco_model_path, self.loaders)
+        self.model = spec.compile()
+        self.scene_xml = spec.to_xml()
+        self._bind_model()
+
+    def _emit_robot_meta(self):
+        self.robot_meta.emit({
+            'urdf': Path(package_assets_path('assets/mujoco/panda_ik.xml')).read_text(),
+            'joint_names': [f'joint{i}' for i in range(1, 8)],
+            'control_frame': 'end_effector',
+            'scene_xml': self.scene_xml,
+        })
 
     def _bind_model(self):
         """Derive everything that hangs off ``self.model``; runs at construction and on every rebuild."""
@@ -250,14 +263,17 @@ class MujocoSim(pimm.ControlSystem):
         mj.mj_step(self.model, self.data, self.warmup_steps)
 
     def load_state(self, state: dict, reset_time: bool = True):
-        """Restore a scene captured by ``save_state``.
+        """Restore a recorded scene: the model from ``scene_xml`` (when present), then the MuJoCo state.
 
-        TODO: the capture is MuJoCo *state* only, so model-level loader randomization (e.g.
-        fixed-body poses) is not restored — a replayed episode runs on this sim's own model
-        draw, not the recorded one. Only ``qpos``-borne (freejointed) randomization replays
-        faithfully; on the eval path the recorded ``eval.seed`` reproduces the full scene
-        via ``reset``.
+        Episodes recorded before scene capture carry no ``scene_xml``; their state restores onto
+        this sim's own model draw, so only ``qpos``-borne (freejointed) randomization replays
+        faithfully for them.
         """
+        if 'scene_xml' in state:
+            self.scene_xml = state['scene_xml']
+            scene, self.metadata = load_spec(self.scene_xml, Path(self.mujoco_model_path).parent)
+            self.model = scene.compile()
+            self._bind_model()
         mj.mj_resetData(self.model, self.data)
         for spec in STATE_SPECS:
             mj.mj_setState(self.model, self.data, np.array(state[spec.name]), spec)
