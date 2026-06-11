@@ -76,8 +76,3 @@
 - Machines, Docker contexts and images: `docker/CONTEXTS.md`
 - Model-specific workflows: `positronic/vendors/{lerobot,gr00t,openpi}/README.md`
 - Reconstructing previous runs: read `run_metadata_*.yaml` and episode `static.json` from output directory
-
-## Related repositories
-- `../gr00t` — GR00T model configs and training (Positronic-Robotics/gr00t)
-- `../openpi` — OpenPI model integration
-- `../internal` — Internal scripts and infrastructure
