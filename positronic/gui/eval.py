@@ -265,10 +265,6 @@ class EvalUI(pimm.ControlSystem):
                 [State.WAITING],
             )
 
-        dpg.add_spacer(height=self.size(10))
-        with dpg.drawlist(width=self.size(300), height=self.size(46)):
-            dpg.draw_text((0, 0), '0:00', size=self.size(40), tag='time_text')
-
         dpg.add_spacer(height=self.size(20))
         with dpg.group(horizontal=True):
             dpg.add_text('Tote Placement')
@@ -458,9 +454,10 @@ class EvalUI(pimm.ControlSystem):
         self._refresh_view()
         self._select(self._count - 1)
         if self._pending_review is not None:
-            # The episode the operator just stopped: seed the form from the stop press.
+            # The episode the operator just stopped: seed the form from the stop press and surface it.
             dpg.set_value('ed_outcome', self._pending_review['outcome'])
             dpg.set_value('ed_success', self._pending_review['successful'])
+            dpg.set_value('mode_tabs', 'tab_episodes')
             self._pending_review = None
 
     def save_episode(self, sender=None, app_data=None):
@@ -601,17 +598,18 @@ class EvalUI(pimm.ControlSystem):
                     dpg.add_spacer(height=self.size(5))
                     self._build_controls()
 
-                    dpg.add_spacer(height=self.size(45))
-                    dpg.add_separator()
                     dpg.add_spacer(height=self.size(10))
+                    with dpg.drawlist(width=self.size(300), height=self.size(46)):
+                        dpg.draw_text((0, 0), '0:00', size=self.size(40), tag='time_text')
 
-                    self._build_configuration()
-
-                    dpg.add_spacer(height=self.size(45))
-                    dpg.add_separator()
                     dpg.add_spacer(height=self.size(10))
-
-                    self._build_editor()
+                    with dpg.tab_bar(tag='mode_tabs'):
+                        with dpg.tab(label='Trial', tag='tab_trial'):
+                            dpg.add_spacer(height=self.size(10))
+                            self._build_configuration()
+                        with dpg.tab(label='Episodes', tag='tab_episodes'):
+                            dpg.add_spacer(height=self.size(10))
+                            self._build_editor()
 
         self._setup_key_handlers()
 
