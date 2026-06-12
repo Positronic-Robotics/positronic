@@ -520,6 +520,16 @@ def test_drop_edit_composes_with_set_static(tmp_path):
     assert ds[0]['verdict'] == 'success'
 
 
+def test_drop_edit_hides_episode_with_invalid_static_edit(tmp_path):
+    root = tmp_path / 'ds'
+    ds = build_dataset_with_signal(root, [0, 1])
+    # 'signal' collides with the recorded signal, which raises on episode access — unless the episode is dropped
+    edits.set_static(root, ds[1].meta['uid'], {'signal': 'collides'})
+    edits.drop(root, ds[1].meta['uid'])
+
+    assert episode_ids(load_dataset(root)[:]) == [0]
+
+
 def test_drop_edit_for_unknown_uid_is_inert(tmp_path):
     root = tmp_path / 'ds'
     build_dataset_with_signal(root, [0])

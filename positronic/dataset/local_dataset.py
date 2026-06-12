@@ -540,14 +540,15 @@ class LocalDatasetWriter(DatasetWriter):
 def load_dataset(root: Path) -> Dataset:
     """Open a local dataset with its edit log applied.
 
-    `LocalDataset` reads the raw recordings; a discovered `edits.jsonl` composes on top — static edits as an
-    `EditedDataset` view, dropped episodes filtered out. The log is loaded only when the directory actually
-    holds episodes — an edit log binds to a dataset.
+    `LocalDataset` reads the raw recordings; a discovered `edits.jsonl` composes on top — dropped episodes are
+    filtered out first, then static edits overlay as an `EditedDataset` view, so a drop hides an episode even
+    when its static edits are invalid. The log is loaded only when the directory actually holds episodes — an
+    edit log binds to a dataset.
     """
     ds = LocalDataset(root)
     statics, dropped = load_edits(ds.root) if len(ds) else ({}, set())
-    edited = EditedDataset(ds, statics) if statics else ds
-    return FilterDataset(edited, lambda ep: ep.meta['uid'] not in dropped) if dropped else edited
+    kept = FilterDataset(ds, lambda ep: ep.meta['uid'] not in dropped) if dropped else ds
+    return EditedDataset(kept, statics) if statics else kept
 
 
 def load_all_datasets(root: Path) -> Dataset:
