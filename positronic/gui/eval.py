@@ -37,6 +37,8 @@ TASK_TO_OBJECT = {TASKS[1]: 'Towels', TASKS[2]: 'Wooden spoons', TASKS[3]: 'Scis
 
 OUTCOMES = ['Success', 'Fail', 'Stalled', 'Ran out of time', 'Safety', 'System']
 
+SIDES = ['left', 'right', 'NA']
+
 EDITOR_POLL_SEC = 0.5
 
 
@@ -95,52 +97,42 @@ class EvalUI(pimm.ControlSystem):
         return tag
 
     def _create_theme(self):
+        text_cols = (dpg.mvThemeCol_Text, dpg.mvThemeCol_TextDisabled, dpg.mvThemeCol_CheckMark)
+        frame_cols = (
+            dpg.mvThemeCol_Button,
+            dpg.mvThemeCol_ButtonHovered,
+            dpg.mvThemeCol_ButtonActive,
+            dpg.mvThemeCol_FrameBg,
+            dpg.mvThemeCol_FrameBgHovered,
+            dpg.mvThemeCol_FrameBgActive,
+        )
         with dpg.theme(tag='disabled_theme'):
-            with dpg.theme_component(dpg.mvAll):
-                dpg.add_theme_color(dpg.mvThemeCol_Text, (100, 100, 100))
-                dpg.add_theme_color(dpg.mvThemeCol_TextDisabled, (100, 100, 100))
-                dpg.add_theme_color(dpg.mvThemeCol_Button, (20, 20, 20))
-                dpg.add_theme_color(dpg.mvThemeCol_ButtonHovered, (20, 20, 20))
-                dpg.add_theme_color(dpg.mvThemeCol_ButtonActive, (20, 20, 20))
-                dpg.add_theme_color(dpg.mvThemeCol_FrameBg, (20, 20, 20))
-                dpg.add_theme_color(dpg.mvThemeCol_CheckMark, (100, 100, 100))
-                dpg.add_theme_color(dpg.mvThemeCol_FrameBgHovered, (20, 20, 20))
-                dpg.add_theme_color(dpg.mvThemeCol_FrameBgActive, (20, 20, 20))
+            for enabled_state in (True, False):
+                with dpg.theme_component(dpg.mvAll, enabled_state=enabled_state):
+                    for col in text_cols:
+                        dpg.add_theme_color(col, (100, 100, 100))
+                    for col in frame_cols:
+                        dpg.add_theme_color(col, (20, 20, 20))
 
-            with dpg.theme_component(dpg.mvAll, enabled_state=False):
-                dpg.add_theme_color(dpg.mvThemeCol_Text, (100, 100, 100))
-                dpg.add_theme_color(dpg.mvThemeCol_TextDisabled, (100, 100, 100))
-                dpg.add_theme_color(dpg.mvThemeCol_Button, (20, 20, 20))
-                dpg.add_theme_color(dpg.mvThemeCol_ButtonHovered, (20, 20, 20))
-                dpg.add_theme_color(dpg.mvThemeCol_ButtonActive, (20, 20, 20))
-                dpg.add_theme_color(dpg.mvThemeCol_FrameBg, (20, 20, 20))
-                dpg.add_theme_color(dpg.mvThemeCol_CheckMark, (100, 100, 100))
-                dpg.add_theme_color(dpg.mvThemeCol_FrameBgHovered, (20, 20, 20))
-                dpg.add_theme_color(dpg.mvThemeCol_FrameBgActive, (20, 20, 20))
+        button_themes = {
+            'finished_theme': ((0, 100, 0), (0, 120, 0), (0, 80, 0)),
+            'fail_theme': ((170, 60, 0), (190, 70, 0), (150, 55, 0)),
+            'safety_theme': ((150, 0, 0), (170, 0, 0), (130, 0, 0)),
+            'system_theme': ((80, 80, 80), (100, 100, 100), (60, 60, 60)),
+        }
+        for tag, (button, hovered, active) in button_themes.items():
+            with dpg.theme(tag=tag), dpg.theme_component(dpg.mvButton):
+                dpg.add_theme_color(dpg.mvThemeCol_Button, button)
+                dpg.add_theme_color(dpg.mvThemeCol_ButtonHovered, hovered)
+                dpg.add_theme_color(dpg.mvThemeCol_ButtonActive, active)
 
-        with dpg.theme(tag='finished_theme'):
-            with dpg.theme_component(dpg.mvButton):
-                dpg.add_theme_color(dpg.mvThemeCol_Button, (0, 100, 0))
-                dpg.add_theme_color(dpg.mvThemeCol_ButtonHovered, (0, 120, 0))
-                dpg.add_theme_color(dpg.mvThemeCol_ButtonActive, (0, 80, 0))
-
-        with dpg.theme(tag='safety_theme'):
-            with dpg.theme_component(dpg.mvButton):
-                dpg.add_theme_color(dpg.mvThemeCol_Button, (150, 0, 0))
-                dpg.add_theme_color(dpg.mvThemeCol_ButtonHovered, (170, 0, 0))
-                dpg.add_theme_color(dpg.mvThemeCol_ButtonActive, (130, 0, 0))
-
-        with dpg.theme(tag='fail_theme'):
-            with dpg.theme_component(dpg.mvButton):
-                dpg.add_theme_color(dpg.mvThemeCol_Button, (170, 60, 0))
-                dpg.add_theme_color(dpg.mvThemeCol_ButtonHovered, (190, 70, 0))
-                dpg.add_theme_color(dpg.mvThemeCol_ButtonActive, (150, 55, 0))
-
-        with dpg.theme(tag='system_theme'):
-            with dpg.theme_component(dpg.mvButton):
-                dpg.add_theme_color(dpg.mvThemeCol_Button, (80, 80, 80))
-                dpg.add_theme_color(dpg.mvThemeCol_ButtonHovered, (100, 100, 100))
-                dpg.add_theme_color(dpg.mvThemeCol_ButtonActive, (60, 60, 60))
+    # Stop buttons: each ends the trial with its outcome as the initial annotation.
+    STOP_BUTTONS = [
+        ('Finished', 'Success', 'finished_theme'),
+        ('Fail', 'Fail', 'fail_theme'),
+        ('Safety', 'Safety', 'safety_theme'),
+        ('System', 'System', 'system_theme'),
+    ]
 
     def _build_controls(self):
         with dpg.group(horizontal=True):
@@ -148,37 +140,15 @@ class EvalUI(pimm.ControlSystem):
                 dpg.add_button(label='Start', callback=self.start, width=self.size(80), height=self.size(32)),
                 [State.WAITING],
             )
-            dpg.add_spacer(width=self.size(10))
-            dpg.add_spacer(width=self.size(10))
-
-            # Stop buttons
-            btn_finished = dpg.add_button(
-                label='Finished', callback=lambda: self.stop_run('Success'), width=self.size(80), height=self.size(32)
-            )
-            dpg.bind_item_theme(btn_finished, 'finished_theme')
-            self._register(btn_finished, [State.RUNNING])
-
+            dpg.add_spacer(width=self.size(15))
+            for label, reason, theme in self.STOP_BUTTONS:
+                btn = dpg.add_button(
+                    label=label, callback=partial(self.stop_run, reason), width=self.size(80), height=self.size(32)
+                )
+                dpg.bind_item_theme(btn, theme)
+                self._register(btn, [State.RUNNING])
+                dpg.add_spacer(width=self.size(5))
             dpg.add_spacer(width=self.size(5))
-            btn_fail = dpg.add_button(
-                label='Fail', callback=lambda: self.stop_run('Fail'), width=self.size(80), height=self.size(32)
-            )
-            dpg.bind_item_theme(btn_fail, 'fail_theme')
-            self._register(btn_fail, [State.RUNNING])
-
-            dpg.add_spacer(width=self.size(5))
-            btn_safety = dpg.add_button(
-                label='Safety', callback=lambda: self.stop_run('Safety'), width=self.size(80), height=self.size(32)
-            )
-            dpg.bind_item_theme(btn_safety, 'safety_theme')
-            self._register(btn_safety, [State.RUNNING])
-
-            dpg.add_spacer(width=self.size(5))
-            btn_system = dpg.add_button(
-                label='System', callback=lambda: self.stop_run('System'), width=self.size(80), height=self.size(32)
-            )
-            dpg.bind_item_theme(btn_system, 'system_theme')
-            self._register(btn_system, [State.RUNNING])
-            dpg.add_spacer(width=self.size(10))
             self._register(
                 dpg.add_button(label='Reset', callback=self.reset, width=self.size(80), height=self.size(32)),
                 [State.WAITING, State.RUNNING],
@@ -265,17 +235,13 @@ class EvalUI(pimm.ControlSystem):
         with dpg.group(horizontal=True):
             dpg.add_text('Tote Placement')
             self._register(
-                dpg.add_radio_button(
-                    items=['left', 'right', 'NA'], default_value='NA', horizontal=True, tag='tote_radio'
-                ),
+                dpg.add_radio_button(items=SIDES, default_value='NA', horizontal=True, tag='tote_radio'),
                 [State.WAITING],
             )
             dpg.add_spacer(width=self.size(20))
             dpg.add_text('External Camera')
             self._register(
-                dpg.add_radio_button(
-                    items=['left', 'right', 'NA'], default_value='NA', horizontal=True, tag='camera_radio'
-                ),
+                dpg.add_radio_button(items=SIDES, default_value='NA', horizontal=True, tag='camera_radio'),
                 [State.WAITING],
             )
 
@@ -325,7 +291,7 @@ class EvalUI(pimm.ControlSystem):
         with dpg.group(horizontal=True):
             dpg.add_text('Tote')
             dpg.add_radio_button(
-                items=['left', 'right', 'NA'],
+                items=SIDES,
                 default_value='NA',
                 horizontal=True,
                 tag='ed_tote',
@@ -334,7 +300,7 @@ class EvalUI(pimm.ControlSystem):
             dpg.add_spacer(width=self.size(20))
             dpg.add_text('Camera')
             dpg.add_radio_button(
-                items=['left', 'right', 'NA'],
+                items=SIDES,
                 default_value='NA',
                 horizontal=True,
                 tag='ed_camera',
@@ -381,9 +347,7 @@ class EvalUI(pimm.ControlSystem):
                     'total_items_input',
                     'successful_items_input',
                     'cap_per_item_input',
-                    'ed_notes',
-                    'ed_total',
-                    'ed_success',
+                    *self.TEXT_FIELDS,
                 ]
                 for tag in text_inputs:
                     if dpg.is_item_focused(tag):
@@ -446,7 +410,7 @@ class EvalUI(pimm.ControlSystem):
         self.run_start_time = self.clock.now()
         self.directive.emit(Directive.RUN(**context))
 
-    def stop_run(self, reason):
+    def stop_run(self, reason, sender=None, app_data=None):
         if self.state != State.RUNNING:
             return
         print(f'State: WAITING ({reason})')

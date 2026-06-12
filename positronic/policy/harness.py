@@ -288,15 +288,19 @@ class Harness(pimm.ControlSystem):
         if self._session is not None:
             self._session.cancel()
 
+    def _finalize_recording(self, payload: dict[str, Any] | None = None) -> None:
+        """Commit the live episode: tally its completion, cancel the in-flight chunk, stop the recorder."""
+        if self._session:
+            self._on_complete(self._session, self.context)
+        self._cancel_trajectories()
+        self.ds_command.emit(DsWriterCommand.STOP(payload))
+
     def _handle_directive(self, directive: Directive, clock: pimm.Clock) -> Generator[pimm.Command, None, None]:
         """Handle a directive, yielding any necessary pauses; updates ``_running``."""
         match directive.type:
             case DirectiveType.RUN:
                 if self._running:
-                    if self._session:
-                        self._on_complete(self._session, self.context)
-                    self._cancel_trajectories()
-                    self.ds_command.emit(DsWriterCommand.STOP())
+                    self._finalize_recording()
                     self._home(clock)
                     yield pimm.Yield()
                 self.context = directive.payload or {}
@@ -317,10 +321,7 @@ class Harness(pimm.ControlSystem):
                 self._running = True
             case DirectiveType.FINISH:
                 if self._running:
-                    if self._session:
-                        self._on_complete(self._session, self.context)
-                    self._cancel_trajectories()
-                    self.ds_command.emit(DsWriterCommand.STOP(directive.payload or {}))
+                    self._finalize_recording(directive.payload)
                 # End the per-episode session here (not just at RUN/shutdown) so a
                 # ``RemoteSession``'s websocket closes promptly and the offboard server's
                 # per-session cleanup (active-session decrement, idle watchdog) runs now.
@@ -454,13 +455,7 @@ class Harness(pimm.ControlSystem):
                 yield pimm.Sleep(0.01)
 
         if self._running:
-            if self._session:
-                self._on_complete(self._session, self.context)
-            # Stop the live drivers before finalizing (matches FINISH/RUN). The
-            # recording's unexecuted chunk tail is dropped by the serializer flush
-            # cutoff at STOP, not by this cancel.
-            self._cancel_trajectories()
-            self.ds_command.emit(DsWriterCommand.STOP())
+            self._finalize_recording()
         if self._session:
             self._session.close()
         self.policy.close()
