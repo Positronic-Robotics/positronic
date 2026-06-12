@@ -1,6 +1,7 @@
 from collections.abc import Iterator
 from datetime import datetime
 from enum import Enum, auto
+from functools import partial
 from pathlib import Path
 
 import cv2
@@ -43,9 +44,11 @@ class EvalUI(pimm.ControlSystem):
     """Operator console for attended evals: trial control plus an episode editor.
 
     Trial control drives the lifecycle (RUN/FINISH/HOME directives) and shows the remaining time budget.
-    The editor is a non-modal view over the recorded dataset: the operator navigates episodes, writes or
-    corrects the review (outcome, notes, item counts) via the edit log, and drops/undrops episodes. New
-    episodes are discovered by polling the dataset directory, so reviewing never blocks the next trial.
+    The editor is a non-modal view over the recorded dataset: the operator navigates episodes and corrects
+    everything except the task itself (outcome, notes, item counts, object, tote/camera placement), with
+    each change committed to the edit log as it is made — the stop press itself persists the initial
+    annotation. Episodes can be dropped and undropped. New episodes are discovered by polling the dataset
+    directory, so reviewing never blocks the next trial.
     """
 
     def __init__(
@@ -283,9 +286,16 @@ class EvalUI(pimm.ControlSystem):
                 [State.WAITING],
             )
 
+    # Editor fields that commit when the operator leaves the widget after editing; radios commit on click.
+    TEXT_FIELDS = {
+        'ed_total': 'eval.total_items',
+        'ed_success': 'eval.successful_items',
+        'ed_notes': 'eval.notes',
+        'ed_object': 'eval.object',
+    }
+    RADIO_FIELDS = {'ed_outcome': 'eval.outcome', 'ed_tote': 'eval.tote_placement', 'ed_camera': 'eval.external_camera'}
+
     def _build_editor(self):
-        dpg.add_text('Episode review')
-        dpg.add_spacer(height=self.size(5))
         with dpg.group(horizontal=True):
             dpg.add_button(label='<', tag='ed_prev', callback=lambda: self._select(self._sel - 1), width=self.size(28))
             dpg.add_text('-/-', tag='ed_pos')
@@ -295,10 +305,18 @@ class EvalUI(pimm.ControlSystem):
             dpg.add_spacer(width=self.size(15))
             dpg.add_text('', tag='ed_status', color=(220, 60, 60))
         dpg.add_spacer(height=self.size(5))
+        dpg.add_text('', tag='ed_task', wrap=self.size(560))
+        dpg.add_spacer(height=self.size(5))
         with dpg.group(horizontal=True):
             dpg.add_text('Outcome')
             dpg.add_spacer(width=self.size(5))
-            dpg.add_radio_button(items=OUTCOMES, default_value=OUTCOMES[0], horizontal=True, tag='ed_outcome')
+            dpg.add_radio_button(
+                items=OUTCOMES,
+                default_value=OUTCOMES[0],
+                horizontal=True,
+                tag='ed_outcome',
+                callback=partial(self._commit_field, 'ed_outcome'),
+            )
         dpg.add_spacer(height=self.size(5))
         with dpg.group(horizontal=True):
             dpg.add_input_int(
@@ -308,15 +326,32 @@ class EvalUI(pimm.ControlSystem):
             dpg.add_input_int(
                 label='Successful', step=1, min_value=0, min_clamped=True, width=self.size(80), tag='ed_success'
             )
+            dpg.add_spacer(width=self.size(20))
+            dpg.add_input_text(label='Object', width=self.size(160), tag='ed_object')
+        dpg.add_spacer(height=self.size(5))
+        with dpg.group(horizontal=True):
+            dpg.add_text('Tote')
+            dpg.add_radio_button(
+                items=['left', 'right', 'NA'],
+                default_value='NA',
+                horizontal=True,
+                tag='ed_tote',
+                callback=partial(self._commit_field, 'ed_tote'),
+            )
+            dpg.add_spacer(width=self.size(20))
+            dpg.add_text('Camera')
+            dpg.add_radio_button(
+                items=['left', 'right', 'NA'],
+                default_value='NA',
+                horizontal=True,
+                tag='ed_camera',
+                callback=partial(self._commit_field, 'ed_camera'),
+            )
         dpg.add_spacer(height=self.size(5))
         with dpg.group(horizontal=True):
             dpg.add_input_text(multiline=True, height=self.size(60), width=self.size(380), tag='ed_notes')
             dpg.add_spacer(width=self.size(10))
             with dpg.group(horizontal=False):
-                dpg.add_button(
-                    label='Save', tag='ed_save', width=self.size(100), height=self.size(28), callback=self.save_episode
-                )
-                dpg.add_spacer(height=self.size(5))
                 dpg.add_button(
                     label='Drop', tag='ed_drop', width=self.size(100), height=self.size(28), callback=self.drop_episode
                 )
@@ -328,6 +363,10 @@ class EvalUI(pimm.ControlSystem):
                     callback=self.undrop_episode,
                     show=False,
                 )
+        for tag in self.TEXT_FIELDS:
+            with dpg.item_handler_registry() as reg:
+                dpg.add_item_deactivated_after_edit_handler(callback=partial(self._commit_field, tag))
+            dpg.bind_item_handler_registry(tag, reg)
 
     def _setup_key_handlers(self):
         with dpg.handler_registry():
@@ -439,10 +478,14 @@ class EvalUI(pimm.ControlSystem):
             self._sel = max(0, min(idx, self._count - 1))
             ep = self._view[self._sel]
             static = ep.static
+            dpg.set_value('ed_task', static.get('task', ''))
             dpg.set_value('ed_outcome', static.get('eval.outcome', OUTCOMES[0]))
             dpg.set_value('ed_total', static.get('eval.total_items', 1))
             dpg.set_value('ed_success', static.get('eval.successful_items', 0))
             dpg.set_value('ed_notes', static.get('eval.notes', ''))
+            dpg.set_value('ed_object', static.get('eval.object', ''))
+            dpg.set_value('ed_tote', static.get('eval.tote_placement', 'NA'))
+            dpg.set_value('ed_camera', static.get('eval.external_camera', 'NA'))
             recorded_at = datetime.fromtimestamp(ep.meta['created_ts_ns'] / 1e9)
             dpg.set_value('ed_time', recorded_at.strftime('%Y-%m-%d %H:%M:%S'))
         self._update_editor_ui()
@@ -452,29 +495,27 @@ class EvalUI(pimm.ControlSystem):
         if self.output_dir is None or len(LocalDataset(self.output_dir)) == self._count:
             return
         self._refresh_view()
-        self._select(self._count - 1)
         if self._pending_review is not None:
-            # The episode the operator just stopped: seed the form from the stop press and surface it.
-            dpg.set_value('ed_outcome', self._pending_review['outcome'])
-            dpg.set_value('ed_success', self._pending_review['successful'])
+            # The episode the operator just stopped: the stop press is the initial annotation — persist it
+            # right away, then surface the episode for corrections.
+            uid = self._view[self._count - 1].meta['uid']
+            edits.set_static(
+                self.output_dir,
+                uid,
+                {
+                    'eval.outcome': self._pending_review['outcome'],
+                    'eval.successful_items': self._pending_review['successful'],
+                },
+            )
+            self._refresh_view()
             dpg.set_value('mode_tabs', 'tab_episodes')
             self._pending_review = None
+        self._select(self._count - 1)
 
-    def save_episode(self, sender=None, app_data=None):
-        uid = self._view[self._sel].meta['uid']
-        edits.set_static(
-            self.output_dir,
-            uid,
-            {
-                'eval.outcome': dpg.get_value('ed_outcome'),
-                'eval.notes': dpg.get_value('ed_notes'),
-                'eval.total_items': dpg.get_value('ed_total'),
-                'eval.successful_items': dpg.get_value('ed_success'),
-            },
-        )
-        print(f'Saved review for episode {uid}')
+    def _commit_field(self, tag, sender=None, app_data=None):
+        key = (self.TEXT_FIELDS | self.RADIO_FIELDS)[tag]
+        edits.set_static(self.output_dir, self._view[self._sel].meta['uid'], {key: dpg.get_value(tag)})
         self._refresh_view()
-        self._select(self._sel)
 
     def drop_episode(self, sender=None, app_data=None):
         edits.drop(self.output_dir, self._view[self._sel].meta['uid'])
@@ -501,7 +542,7 @@ class EvalUI(pimm.ControlSystem):
             dpg.set_value('ed_pos', f'{self._sel + 1}/{self._count}')
             dpg.set_value('ed_status', 'DROPPED' if dropped else '')
         editable = self._sel is not None and not dropped
-        for tag in ('ed_outcome', 'ed_total', 'ed_success', 'ed_notes', 'ed_save'):
+        for tag in (*self.TEXT_FIELDS, *self.RADIO_FIELDS):
             self._set_enabled(tag, editable)
         self._set_enabled('ed_prev', self._sel is not None and self._sel > 0)
         self._set_enabled('ed_next', self._sel is not None and self._sel < self._count - 1)
