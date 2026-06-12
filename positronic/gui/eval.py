@@ -83,8 +83,7 @@ class EvalUI(pimm.ControlSystem):
         self._pending_review: dict | None = None
         # The selected episode's video signal under the review scrubber.
         self._rv_signal = None
-        self._rv_ep = None
-        self.rv_texture = np.zeros((480, 640, 4), dtype=np.float32)
+        self.rv_texture = np.zeros((240, 320, 4), dtype=np.float32)
 
     def size(self, v: int) -> int:
         """Scale a value by ui_scale."""
@@ -357,6 +356,16 @@ class EvalUI(pimm.ControlSystem):
                     callback=self.undrop_episode,
                     show=False,
                 )
+        dpg.add_spacer(height=self.size(10))
+        with dpg.group(horizontal=True):
+            dpg.add_text('Recorded video')
+            dpg.add_spacer(width=self.size(15))
+            dpg.add_combo(items=[], tag='rv_camera', width=self.size(200), callback=self._on_review_camera)
+        dpg.add_image('rv_tex', width=self.size(320), height=self.size(240))
+        with dpg.group(horizontal=True):
+            dpg.add_slider_int(tag='rv_slider', width=self.size(250), callback=lambda s, a: self._show_frame(a))
+            dpg.add_spacer(width=self.size(10))
+            dpg.add_text('', tag='rv_time')
         for tag in self.TEXT_FIELDS:
             with dpg.item_handler_registry() as reg:
                 dpg.add_item_deactivated_after_edit_handler(callback=partial(self._commit_field, tag))
@@ -504,7 +513,6 @@ class EvalUI(pimm.ControlSystem):
             )
             self._refresh_view()
             dpg.set_value('mode_tabs', 'tab_episodes')
-            self._set_review_visible(True)
             self._pending_review = None
         self._select(self._count - 1)
 
@@ -512,14 +520,6 @@ class EvalUI(pimm.ControlSystem):
         key = (self.TEXT_FIELDS | self.RADIO_FIELDS)[tag]
         edits.set_static(self.output_dir, self._view[self._sel].meta['uid'], {key: dpg.get_value(tag)})
         self._refresh_view()
-
-    def _on_tab(self, sender=None, app_data=None):
-        alias = app_data if isinstance(app_data, str) else dpg.get_item_alias(app_data)
-        self._set_review_visible(alias == 'tab_episodes')
-
-    def _set_review_visible(self, reviewing: bool):
-        dpg.configure_item('image_grid_group', show=not reviewing)
-        dpg.configure_item('review_panel', show=reviewing)
 
     def _bind_review_video(self):
         # GUI video binding follows the `image.` observation naming convention, like the live feeds.
@@ -555,11 +555,12 @@ class EvalUI(pimm.ControlSystem):
         idx = max(0, min(int(idx), len(self._rv_signal) - 1))
         frame, ts = self._rv_signal[idx]
         h, w = frame.shape[:2]
-        scale = min(640 / w, 480 / h)
+        th, tw = self.rv_texture.shape[:2]
+        scale = min(tw / w, th / h)
         dw, dh = int(w * scale), int(h * scale)
         resized = cv2.resize(frame, (dw, dh), interpolation=cv2.INTER_AREA)
         self.rv_texture[:] = 0.0
-        y0, x0 = (480 - dh) // 2, (640 - dw) // 2
+        y0, x0 = (th - dh) // 2, (tw - dw) // 2
         self.rv_texture[y0 : y0 + dh, x0 : x0 + dw, :3] = resized / 255.0
         self.rv_texture[y0 : y0 + dh, x0 : x0 + dw, 3] = 1.0
         t0 = self._rv_signal.start_ts
@@ -672,32 +673,14 @@ class EvalUI(pimm.ControlSystem):
         self._create_theme()
 
         with dpg.texture_registry(show=False):
-            dpg.add_raw_texture(640, 480, default_value=self.rv_texture, format=dpg.mvFormat_Float_rgba, tag='rv_tex')
+            dpg.add_raw_texture(320, 240, default_value=self.rv_texture, format=dpg.mvFormat_Float_rgba, tag='rv_tex')
 
         # Window
         with dpg.window(label='Evaluation Control', width=self.size(1200), height=self.size(800), tag='main_window'):
             with dpg.group(horizontal=True):
-                # Left side: live camera feeds (Trial tab) or the recorded-video review player (Episodes tab).
-                # The review player keeps a row of small live thumbnails so a running trial stays visible;
-                # they render the same textures the live loop updates.
+                # Left side: live camera feeds, fixed in place across tabs so the operator's view never jumps.
                 with dpg.group(horizontal=False, tag='image_grid_group'):
                     dpg.add_text('Camera Feed')
-                with dpg.group(horizontal=False, tag='review_panel', show=False):
-                    dpg.add_text('Live')
-                    with dpg.group(horizontal=True, tag='rv_live_row'):
-                        pass
-                    dpg.add_spacer(height=self.size(10))
-                    with dpg.group(horizontal=True):
-                        dpg.add_text('Recorded video')
-                        dpg.add_spacer(width=self.size(15))
-                        dpg.add_combo(items=[], tag='rv_camera', width=self.size(200), callback=self._on_review_camera)
-                    dpg.add_image('rv_tex', width=self.size(640), height=self.size(480))
-                    with dpg.group(horizontal=True):
-                        dpg.add_slider_int(
-                            tag='rv_slider', width=self.size(520), callback=lambda s, a: self._show_frame(a)
-                        )
-                        dpg.add_spacer(width=self.size(10))
-                        dpg.add_text('', tag='rv_time')
 
                 # Spacer between images and controls
                 dpg.add_spacer(width=self.size(20))
@@ -709,7 +692,7 @@ class EvalUI(pimm.ControlSystem):
                     self._build_controls()
 
                     dpg.add_spacer(height=self.size(10))
-                    with dpg.tab_bar(tag='mode_tabs', callback=self._on_tab):
+                    with dpg.tab_bar(tag='mode_tabs'):
                         with dpg.tab(label='Trial', tag='tab_trial'):
                             dpg.add_spacer(height=self.size(10))
                             self._build_configuration()
@@ -778,12 +761,6 @@ class EvalUI(pimm.ControlSystem):
 
                         dpg.add_image(
                             f'tex_{cam_name}', parent='image_grid_group', width=display_width, height=display_height
-                        )
-                        dpg.add_image(
-                            f'tex_{cam_name}',
-                            parent='rv_live_row',
-                            width=display_width // 3,
-                            height=display_height // 3,
                         )
 
                     # Downsample image if needed to match display size
