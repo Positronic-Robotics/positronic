@@ -29,12 +29,11 @@ def world():
 
 
 class FakeEpisodeWriter(EpisodeWriter[Any]):
-    def __init__(self, uid: str = 'fake-uid') -> None:
+    def __init__(self) -> None:
         self.statics: dict[str, Any] = {}
         self.appends: list[tuple[str, Any, int, dict[str, int] | None]] = []
         self.exited = False
         self.aborted = False
-        self._uid = uid
 
     def append(self, signal_name: str, data: Any, ts_ns: int, extra_ts: dict[str, int] | None = None) -> None:
         self.appends.append((signal_name, data, int(ts_ns), extra_ts))
@@ -48,17 +47,13 @@ class FakeEpisodeWriter(EpisodeWriter[Any]):
     def abort(self) -> None:
         self.aborted = True
 
-    @property
-    def meta(self) -> dict:
-        return {'uid': self._uid}
-
 
 class FakeDatasetWriter(DatasetWriter):
     def __init__(self) -> None:
         self.created: list[FakeEpisodeWriter] = []
 
     def new_episode(self) -> FakeEpisodeWriter:
-        w = FakeEpisodeWriter(uid=f'ep{len(self.created)}')
+        w = FakeEpisodeWriter()
         self.created.append(w)
         return w
 
@@ -447,23 +442,6 @@ def test_multiple_timelines_recorded(world):
     assert isinstance(extra_ts['message'], int) and extra_ts['message'] > 0
     assert isinstance(extra_ts['system'], int) and extra_ts['system'] > 0
     assert isinstance(extra_ts['world'], int) and extra_ts['world'] > 0
-
-
-def test_stop_emits_last_episode_uid(world):
-    ds = FakeDatasetWriter()
-    agent, cmd_em, emitters = build_agent_with_pipes({'a': None}, ds, world)
-    uid_rx = world.pair(agent.last_episode)
-
-    script = [
-        (partial(cmd_em.emit, DsWriterCommand(DsWriterCommandType.START_EPISODE)), 0.001),
-        (partial(emitters['a'].emit, 1), 0.001),
-        (partial(cmd_em.emit, DsWriterCommand(DsWriterCommandType.STOP_EPISODE)), 0.001),
-    ]
-
-    run_scripted_agent(agent, script, world=world)
-
-    msg = uid_rx.read()
-    assert msg is not None and msg.data == ds.created[-1].meta['uid']
 
 
 def test_trajectory_override_serializer():

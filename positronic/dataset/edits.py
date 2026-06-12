@@ -4,7 +4,8 @@ Episodes are never modified after recording. Post-hoc facts — operator verdict
 declarative records appended to an `edits.jsonl` file in the dataset directory and applied as a view on read.
 Each line is one JSON record carrying its op: `{"op": "set_static", "v": 1, "ep": "<uid>", "data": {...}}` merges
 static items over the episode's recorded ones (log order, last write per key wins);
-`{"op": "drop", "v": 1, "ep": "<uid>"}` removes the episode from the loaded view. Records target episodes by
+`{"op": "drop", "v": 1, "ep": "<uid>"}` removes the episode from the loaded view and
+`{"op": "undrop", "v": 1, "ep": "<uid>"}` restores it (the last drop/undrop wins). Records target episodes by
 `meta['uid']`. The format is plain appendable JSON so external tools can write it; the dataset directory assumes
 a single writer.
 """
@@ -32,8 +33,7 @@ def set_static(root: Path, uid: str, data: dict[str, Any]) -> None:
         uid: The target episode's `meta['uid']`
         data: Static items to set; values follow the same restrictions as `EpisodeWriter.set_static`
     """
-    if not (isinstance(uid, str) and uid):
-        raise ValueError(f'Episode uid must be a non-empty string, got {uid!r}')
+    _validate_uid(uid)
     if not (isinstance(data, dict) and _is_valid_static_value(data)):
         raise ValueError(f'Edit data must be a mapping of static items to JSON-serializable values\n{data=!r}')
     _append_record(root, {'op': 'set_static', 'v': 1, 'ep': uid, 'data': data})
@@ -48,9 +48,24 @@ def drop(root: Path, uid: str) -> None:
         root: The dataset directory holding the edit log
         uid: The target episode's `meta['uid']`
     """
+    _validate_uid(uid)
+    _append_record(root, {'op': 'drop', 'v': 1, 'ep': uid})
+
+
+def undrop(root: Path, uid: str) -> None:
+    """Append an `undrop` edit restoring a previously dropped episode to the loaded view.
+
+    Args:
+        root: The dataset directory holding the edit log
+        uid: The target episode's `meta['uid']`
+    """
+    _validate_uid(uid)
+    _append_record(root, {'op': 'undrop', 'v': 1, 'ep': uid})
+
+
+def _validate_uid(uid: str) -> None:
     if not (isinstance(uid, str) and uid):
         raise ValueError(f'Episode uid must be a non-empty string, got {uid!r}')
-    _append_record(root, {'op': 'drop', 'v': 1, 'ep': uid})
 
 
 def _append_record(root: Path, record: dict[str, Any]) -> None:
@@ -61,7 +76,7 @@ def _append_record(root: Path, record: dict[str, Any]) -> None:
 def load_edits(root: Path) -> tuple[dict[str, dict[str, Any]], set[str]]:
     """Read the edit log and return merged static edits per episode uid plus the set of dropped uids.
 
-    Records apply in log order; the last write per key wins.
+    Records apply in log order: the last write per static key wins, and the last drop/undrop per episode wins.
     """
     edits_path = root / EDITS_FILE
     statics: dict[str, dict[str, Any]] = {}
@@ -83,6 +98,8 @@ def load_edits(root: Path) -> tuple[dict[str, dict[str, Any]], set[str]]:
                     statics.setdefault(ep_uid, {}).update(data)
                 case {'op': 'drop', 'v': 1, 'ep': str(ep_uid)}:
                     dropped.add(ep_uid)
+                case {'op': 'undrop', 'v': 1, 'ep': str(ep_uid)}:
+                    dropped.discard(ep_uid)
                 case _:
                     raise ValueError(f'Unsupported edit record at {edits_path}:{line_no}: {line.strip()}')
     return statics, dropped

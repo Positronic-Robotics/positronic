@@ -52,15 +52,13 @@ class Driver:
     directives: pimm.SignalEmitter
     directive_wrapper: Callable
     control_systems: list[pimm.ControlSystem]
-    # Receives the finished episode's uid from the recorder; None for surfaces that don't annotate.
-    last_episode: pimm.ControlSystemReceiver | None = None
 
 
 @cfn.config(ui_scale=1)
 def eval_ui(ui_scale):
     def make(output_dir: Path | None) -> Driver:
         gui = EvalUI(output_dir, ui_scale=ui_scale)
-        return Driver(gui, gui.directive, pimm.utils.identity, [], last_episode=gui.last_episode)
+        return Driver(gui, gui.directive, pimm.utils.identity, [])
 
     return make
 
@@ -153,8 +151,6 @@ def main(
             world.connect(driver.directives, harness.directive, emitter_wrapper=driver.directive_wrapper)
         if ds_agent is not None:
             world.connect(harness.ds_command, ds_agent.command)
-            if driver is not None and driver.last_episode is not None:
-                world.connect(ds_agent.last_episode, driver.last_episode)
 
         # Sim runs devices + recorder in-process under the virtual clock; real runs them as
         # background subprocesses. The harness, driver, and GUI placement is identical.

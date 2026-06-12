@@ -148,9 +148,8 @@ class DsWriterAgent(pimm.ControlSystem):
     `DatasetWriter` and applies `static_data`. While an episode is open, any
     updated input signal (from `inputs`) is appended with the current timestamp
     from `clock`. `STOP_EPISODE` finalizes the writer after applying
-    `static_data` and emits the finished episode's uid on `last_episode`;
-    `ABORT_EPISODE` aborts and discards it. Invalid or out-of-order commands
-    are ignored with a log message.
+    `static_data`; `ABORT_EPISODE` aborts and discards it. Invalid or
+    out-of-order commands are ignored with a log message.
 
     `TimeMode` selects whether timestamps come from the control loop clock
     (`CLOCK`) or from the producing message (`MESSAGE`).
@@ -161,7 +160,6 @@ class DsWriterAgent(pimm.ControlSystem):
         self._poll_hz = float(poll_hz)
         self._time_mode = time_mode
         self.command = pimm.ControlSystemReceiver[DsWriterCommand](self, default=None)
-        self.last_episode = pimm.ControlSystemEmitter[str](self)
 
         self._inputs: dict[str, pimm.ControlSystemReceiver[Any]] = {}
         self._serializers: dict[str, StatefulSerializer] = {}
@@ -251,7 +249,6 @@ class DsWriterAgent(pimm.ControlSystem):
                         ep_writer.set_static(k, v)
                     ep_writer.__exit__(None, None, None)
                     logger.info(f'DsWriterAgent: [STOP] Episode {ep_counter} {ep_writer.meta.get("path", "unknown")}')
-                    self.last_episode.emit(ep_writer.meta['uid'])
                     ep_writer = None
                 else:
                     logger.warning('Episode not started, ignoring stop command')

@@ -537,6 +537,22 @@ def test_drop_edit_for_unknown_uid_is_inert(tmp_path):
     assert episode_ids(load_dataset(root)[:]) == [0]
 
 
+def test_undrop_edit_restores_episode(tmp_path):
+    root = tmp_path / 'ds'
+    ds = build_dataset_with_signal(root, [0, 1])
+    uid = ds[0].meta['uid']
+
+    edits.drop(root, uid)
+    assert episode_ids(load_dataset(root)[:]) == [1]
+
+    edits.undrop(root, uid)
+    assert episode_ids(load_dataset(root)[:]) == [0, 1]
+
+    # The last drop/undrop in log order wins
+    edits.drop(root, uid)
+    assert episode_ids(load_dataset(root)[:]) == [1]
+
+
 def test_drop_edit_rejects_invalid_uid(tmp_path):
     with pytest.raises(ValueError, match='non-empty string'):
         edits.drop(tmp_path, '')
