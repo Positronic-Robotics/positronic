@@ -418,7 +418,7 @@ class EvalUI(pimm.ControlSystem):
         self.directive.emit(Directive.HOME())
 
     def submit(self, sender=None, app_data=None):
-        if self.state != State.REVIEWING:
+        if self.state != State.REVIEWING or self._episode_pending():
             return
         print('State: WAITING (Submitted)')
         if self.episode_uid is not None:
@@ -432,12 +432,23 @@ class EvalUI(pimm.ControlSystem):
         self._leave_review()
 
     def cancel(self, sender=None, app_data=None):
-        if self.state != State.REVIEWING:
+        if self.state != State.REVIEWING or self._episode_pending():
             return
         print('State: WAITING (Cancelled)')
         if self.episode_uid is not None:
             edits.drop(self.output_dir, self.episode_uid)
         self._leave_review()
+
+    def _episode_pending(self) -> bool:
+        """True while the recorder is still finalizing the episode under review.
+
+        The uid arrives on `last_episode` once the recorder closes the episode, which can take longer
+        than a UI frame; acting before that would silently lose the operator's review.
+        """
+        if self.output_dir is not None and self.episode_uid is None:
+            print('Episode is still finalizing, retry in a moment')
+            return True
+        return False
 
     def _leave_review(self):
         self.episode_uid = None
