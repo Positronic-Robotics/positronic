@@ -5,6 +5,7 @@ This is a library for recording, storing, sharing and using robotic datasets. We
 ## Table of Contents
 - [Core concepts](#core-concepts)
   - [We optimize for](#we-optimize-for)
+  - [Layers](#layers)
 - [Public API](#public-api)
   - [Signal metadata](#signal-metadata)
   - [Signal implementations](#signal-implementations)
@@ -21,6 +22,7 @@ This is a library for recording, storing, sharing and using robotic datasets. We
 - [Datasets](#datasets)
   - [Local dataset](#local-dataset)
   - [Writing datasets](#writing-datasets)
+  - [Editing datasets](#editing-datasets)
 - [`DsWriterAgent` (streaming recorder)](#dswriteragent-streaming-recorder)
 - [`DsPlayerAgent` (dataset player)](#dsplayeragent-dataset-player)
 - [Transforms](#transforms)
@@ -47,6 +49,17 @@ __Dataset__ – ordered collection of Episodes with sequence-style access (index
 * Fast append during recording (low latency).
 * Random access at query time by the timestamp.
 * Window slices like "5 seconds before time X".
+
+### Layers
+
+A dataset read composes up to four layers, all behind the same `Dataset`/`Episode` interface:
+
+1. **Storage backends** read immutable recordings — `LocalDataset` (the native on-disk format), `RemoteDataset` (HTTP). The API is deliberately format-agnostic so further formats can plug in as read adapters.
+2. **Edits** persist post-hoc facts (operator verdicts, analysis scores) as a declarative log applied as a view — see [Editing datasets](#editing-datasets).
+3. **Transforms** are lazy compute views (derived signals, renames, model codecs) — see [Transforms](#transforms).
+4. **Consumers** — training pipelines, viewers, converters — work against the interface and don't know which layers sit underneath.
+
+Recordings are never modified: edits persist but never compute, transforms compute but never persist.
 
 ## Public API
 Signal implements `Sequence[(T, int)]` (iterable, indexable). We support three kinds of `Signal`s: scalar, vector, and image (video). Timestamps are int nanoseconds. The headline feature is the shared `time` accessor: all helpers such as `_search_ts` exist to make sure that asking for a value at, before, or across specific timestamps is fast, predictable, and consistent across storage backends.
@@ -266,6 +279,7 @@ Aborting: `abort()` stops recording, asks each underlying `Signal` writer to abo
 - Written: immediately on `EpisodeWriter` creation (side-effect of constructing the writer).
 - Contents (concise schema):
   - `schema_version: int` – manifest version (starts at 1).
+  - `uid: str` – episode identity (uuid4 hex), stamped at recording time; episodes lacking one derive a stable `ts-<created_ts_ns>` uid from their recording timestamp. Stable across views, copies, and exports; position in a dataset is access, the uid is reference.
   - `created_ts_ns: int` – `Episode` creation time in nanoseconds.
   - `writer: object` – environment and provenance:
     - `name: str` – fully-qualified writer class (e.g., `positronic.dataset.local_dataset.DiskEpisodeWriter`).
@@ -314,6 +328,23 @@ with dataset_writer.new_episode() as ew:
     ew.set_static("id", 123)
     ew.append("state", np.array([...]), ts_ns)
 ```
+
+### Editing datasets
+
+Recorded episodes are immutable. Post-hoc facts — an operator's verdict, analysis scores — are *edits*: declarative records appended to `edits.jsonl` in the dataset directory and applied as a view on load. The edit layer lives in `positronic.dataset.edits`.
+
+```python
+from positronic.dataset import edits
+from positronic.dataset.local_dataset import load_dataset
+
+edits.set_static(root, episode.meta['uid'], {'eval.outcome': 'success', 'notes': 'clean run'})
+
+ds = load_dataset(root)  # LocalDataset(root) with the edit log applied as an EditedDataset view
+```
+
+Each line of `edits.jsonl` is one JSON record: `{"op": "set_static", "v": 1, "ep": "<uid>", "data": {...}}`. Records target episodes by `meta['uid']` and apply in log order with last-write-wins per key. Values follow the same restrictions as `EpisodeWriter.set_static`. A key colliding with a signal name raises when the episode is loaded; corrupt or unrecognized records fail loudly when the log is loaded.
+
+Application is composition: `EditedDataset(base, edits)` wraps any `Dataset` — local, remote, concatenated — merging each episode's edits over its recorded statics. The `load_dataset` and `load_all_datasets` loaders compose it automatically; `LocalDataset` itself always reads the raw recordings. The log is plain appendable JSON so external tools can write it; the dataset directory assumes a single writer.
 
 ## `DsWriterAgent` (streaming recorder)
 

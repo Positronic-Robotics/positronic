@@ -38,8 +38,8 @@ def migrate_dataset(source: Dataset, dest_path: str, profile=None) -> int:
 
     with LocalDatasetWriter(resolved_path) as writer:
         for episode in tqdm.tqdm(source, total=len(source), desc=f'Migrating → {dest_path}'):
-            created_ts_ns = episode.meta.get('created_ts_ns')
-            with writer.new_episode(created_ts_ns=created_ts_ns) as ew:
+            meta = episode.meta
+            with writer.new_episode(created_ts_ns=meta.get('created_ts_ns'), uid=meta.get('uid')) as ew:
                 for key, value in episode.static.items():
                     ew.set_static(key, value)
 

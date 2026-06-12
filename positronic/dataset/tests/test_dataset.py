@@ -3,6 +3,7 @@ from pathlib import Path
 import numpy as np
 
 from positronic.dataset.dataset import ConcatDataset, FilterDataset
+from positronic.dataset.edits import EditedDataset
 from positronic.dataset.local_dataset import LocalDataset, LocalDatasetWriter
 
 
@@ -17,6 +18,20 @@ def build_dataset_with_signal(root: Path, values: list[int]) -> LocalDataset:
                 ew.set_static('id', value)
                 ew.append('signal', np.array([value], dtype=np.float32), ts_ns=10_000 + i)
     return LocalDataset(root)
+
+
+# --- EditedDataset tests ---
+
+
+def test_edited_dataset_applies_edits_by_uid(tmp_path):
+    ds = build_dataset_with_signal(tmp_path / 'ds', [0, 1])
+    edited = EditedDataset(ds, {ds[0].meta['uid']: {'id': 100, 'verdict': 'success'}})
+
+    assert len(edited) == 2
+    assert edited[0]['id'] == 100
+    assert edited[0]['verdict'] == 'success'
+    assert edited[1]['id'] == 1
+    assert 'verdict' not in edited[1]
 
 
 # --- ConcatDataset tests ---

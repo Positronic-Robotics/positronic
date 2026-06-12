@@ -1,11 +1,11 @@
 from __future__ import annotations
 
-import base64
 import json
 import platform
 import shutil
 import sys
 import time
+import uuid
 import weakref
 from collections import deque
 from collections.abc import Callable, Iterator
@@ -22,39 +22,22 @@ from positronic.utils.git import get_git_state
 from positronic.utils.lazy import LazyDict
 
 from .dataset import ConcatDataset, Dataset, DatasetWriter
-from .episode import EPISODE_SCHEMA_VERSION, SIGNAL_FACTORY_T, Episode, EpisodeWriter, T
+from .edits import EditedDataset, load_edits
+from .episode import (
+    EPISODE_SCHEMA_VERSION,
+    SIGNAL_FACTORY_T,
+    Episode,
+    EpisodeWriter,
+    T,
+    _is_valid_static_value,
+    _static_decode_hook,
+    _StaticEncoder,
+)
 from .signal import Signal
 from .vector import SimpleSignal, SimpleSignalWriter
 from .video import VideoSignal, VideoSignalWriter
 
 UNFINISHED_MARKER = '.unfinished'
-
-_BYTES_TAG = '__bytes_b64__'
-
-
-class _StaticEncoder(json.JSONEncoder):
-    """JSON encoder that handles ``bytes`` values via base64."""
-
-    def default(self, o):
-        if isinstance(o, bytes):
-            return {_BYTES_TAG: base64.b64encode(o).decode('ascii')}
-        return super().default(o)
-
-
-def _static_decode_hook(obj: dict) -> Any:
-    if _BYTES_TAG in obj and len(obj) == 1:
-        return base64.b64decode(obj[_BYTES_TAG])
-    return obj
-
-
-def _is_valid_static_value(value: Any) -> bool:
-    if isinstance(value, str | int | float | bool | bytes):
-        return True
-    if isinstance(value, list | tuple):
-        return all(_is_valid_static_value(v) for v in value)
-    if isinstance(value, dict):
-        return all(isinstance(k, str) and _is_valid_static_value(v) for k, v in value.items())
-    return False
 
 
 def _is_numeric_dir(p: Path) -> bool:
@@ -103,6 +86,7 @@ class DiskEpisodeWriter(EpisodeWriter):
         *,
         on_close: Callable[[DiskEpisodeWriter], None] | None = None,
         created_ts_ns: int | None = None,
+        uid: str | None = None,
     ) -> None:
         """Initialize episode writer.
 
@@ -111,6 +95,8 @@ class DiskEpisodeWriter(EpisodeWriter):
             on_close: Optional callback invoked after successful episode close
             created_ts_ns: Optional creation timestamp (defaults to current time).
                 Use this to preserve original creation time during migration.
+            uid: Optional episode identity (defaults to a fresh uuid4 hex).
+                Use this to preserve identity when copying an existing recording.
         """
         self._path = directory
         assert not self._path.exists(), f'Writing to existing directory {self._path}'
@@ -127,7 +113,11 @@ class DiskEpisodeWriter(EpisodeWriter):
 
         # Write system metadata immediately
         # NB: falsy created_ts_ns (including 0) defaults to current time — epoch 0 is not a valid episode timestamp
-        self._meta = {'schema_version': EPISODE_SCHEMA_VERSION, 'created_ts_ns': created_ts_ns or time.time_ns()}
+        self._meta = {
+            'schema_version': EPISODE_SCHEMA_VERSION,
+            'uid': uid or uuid.uuid4().hex,
+            'created_ts_ns': created_ts_ns or time.time_ns(),
+        }
         self._meta['writer'] = _cached_env_writer_info()
         self._meta['writer']['name'] = f'{self.__class__.__module__}.{self.__class__.__qualname__}'
         self._meta['path'] = str(self._path.resolve(strict=True))
@@ -414,6 +404,11 @@ class DiskEpisode(Episode):
             # Extract it as a private cache for DiskEpisode.duration_ns.
             self._cached_duration_ns = meta.pop('duration_ns', None)
 
+            # Episodes without a stamped uid derive a stable identity from the recording timestamp,
+            # which is immutable and travels with the episode across copies
+            if 'uid' not in meta and 'created_ts_ns' in meta:
+                meta['uid'] = f'ts-{meta["created_ts_ns"]}'
+
             meta['path'] = str(self._dir.expanduser().resolve(strict=False))
 
             lazy_getters: dict[str, Any] = {}
@@ -518,12 +513,14 @@ class LocalDatasetWriter(DatasetWriter):
                     max_id = eid
         return max_id + 1
 
-    def new_episode(self, *, created_ts_ns: int | None = None) -> DiskEpisodeWriter:
+    def new_episode(self, *, created_ts_ns: int | None = None, uid: str | None = None) -> DiskEpisodeWriter:
         """Create a new episode writer.
 
         Args:
             created_ts_ns: Optional creation timestamp (defaults to current time).
                 Use this to preserve original creation time during migration.
+            uid: Optional episode identity (defaults to a fresh uuid4 hex).
+                Use this to preserve identity when copying an existing recording.
         """
         eid = self._next_episode_id
         self._next_episode_id += 1  # Reserve id immediately
@@ -533,11 +530,22 @@ class LocalDatasetWriter(DatasetWriter):
         # responsible for creating it and expects it to not exist yet.
         ep_dir = block_dir / f'{eid:012d}'
 
-        writer = DiskEpisodeWriter(ep_dir, created_ts_ns=created_ts_ns)
+        writer = DiskEpisodeWriter(ep_dir, created_ts_ns=created_ts_ns, uid=uid)
         return writer
 
     def __exit__(self, exc_type, exc, tb) -> None:
         pass
+
+
+def load_dataset(root: Path) -> Dataset:
+    """Open a local dataset with its edit log applied.
+
+    `LocalDataset` reads the raw recordings; a discovered `edits.jsonl` composes on top as an `EditedDataset`
+    view. The log is loaded only when the directory actually holds episodes — an edit log binds to a dataset.
+    """
+    ds = LocalDataset(root)
+    edits = load_edits(ds.root) if len(ds) else {}
+    return EditedDataset(ds, edits) if edits else ds
 
 
 def load_all_datasets(root: Path) -> Dataset:
@@ -574,12 +582,12 @@ def load_all_datasets(root: Path) -> Dataset:
     while to_explore:
         current_path = to_explore.popleft()
 
-        # Try to load this directory as a dataset
+        # Try to load this directory as a dataset; corrupt content (e.g. a bad edit log) propagates
         try:
-            dataset = LocalDataset(current_path)
+            dataset = load_dataset(current_path)
             if len(dataset) > 0:
                 datasets.append(dataset)
-        except (FileNotFoundError, ValueError):
+        except FileNotFoundError:
             pass
 
         # Always explore non-numeric subdirs (numeric ones are dataset block internals)

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import socket
 import threading
 import time
 
@@ -11,6 +12,7 @@ import pytest
 import uvicorn
 from fastapi.testclient import TestClient
 
+from positronic.dataset.edits import EditedDataset
 from positronic.dataset.local_dataset import LocalDataset, LocalDatasetWriter
 from positronic.dataset.remote import RemoteDataset
 from positronic.dataset.remote_server import server as remote_server
@@ -137,8 +139,6 @@ def test_episode_sample_endpoint(test_client):
 
 
 def find_free_port():
-    import socket
-
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
         s.bind(('', 0))
         return s.getsockname()[1]
@@ -183,6 +183,14 @@ def test_remote_dataset_episode_static(running_server):
         ep = ds[0]
         assert ep['task'] == 'task_0'
         assert ep['episode_id'] == 0
+
+
+def test_edited_dataset_over_remote_base(running_server):
+    with RemoteDataset(running_server) as ds:
+        edited = EditedDataset(ds, {ds[0].meta['uid']: {'verdict': 'success'}})
+        assert edited[0]['verdict'] == 'success'
+        assert edited[0]['task'] == 'task_0'
+        assert 'verdict' not in edited[1]
 
 
 def test_remote_dataset_signal_access(running_server):
@@ -274,6 +282,7 @@ def test_migrate_remote_dataset_numeric_only(tmp_path):
     dest_ds = LocalDataset(dest_root)
     assert len(dest_ds) == 2
     assert dest_ds[0]['id'] == 0
+    assert dest_ds[0].meta['uid'] == source_ds[0].meta['uid']
     signal = dest_ds[0]['signal']
     assert len(signal) == 3
     np.testing.assert_allclose(signal[0][0], [0])
