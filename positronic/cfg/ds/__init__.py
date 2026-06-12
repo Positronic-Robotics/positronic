@@ -10,14 +10,14 @@ from pos3 import Profile
 
 import positronic.utils  # noqa: F401  -- registers the 'PUBLIC' S3 profile that these loaders' s3://PUBLIC@ URLs use
 from positronic.dataset.dataset import ConcatDataset, Dataset, FilterDataset
-from positronic.dataset.local_dataset import LocalDataset, load_all_datasets
+from positronic.dataset.local_dataset import load_all_datasets, load_dataset
 from positronic.dataset.transforms import TransformedDataset
 from positronic.dataset.transforms.episode import EpisodeTransform, Group
 
 
 @cfn.config()
 def local(path: str, profile: Profile | None = None):
-    return LocalDataset(pos3.download(path, profile=profile))
+    return load_dataset(pos3.download(path, profile=profile))
 
 
 @cfn.config()

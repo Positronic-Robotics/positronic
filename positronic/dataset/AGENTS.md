@@ -1,5 +1,20 @@
 # Dataset Library — Design Principles
 
+## One API, many backends
+
+The library covers the data path of the robot-learning loop — record → curate/annotate → convert → train → eval → re-score — through a single interface: `Signal`/`Episode`/`Dataset` and the layers composed over them. Storage formats are backends behind that interface (`LocalDataset` is the native one, `RemoteDataset` serves it over HTTP, and foreign formats plug in as read adapters). Never push a capability into a storage format when it can live in a layer above it.
+
+## Layering: backend → edits → transforms → consumer
+
+Every dataset read composes in this order:
+
+- **Backend** reads immutable recordings (`LocalDataset`, `RemoteDataset`).
+- **Edits** (`edits.py`) persist post-hoc facts as a declarative log applied as a view. Edits bind to recorded keys and never compute.
+- **Transforms** compute lazy views over the curated episode. Transforms never persist.
+- **Consumers** (codecs, viewers, converters) see one `Dataset` interface and don't know which layers are present.
+
+The shape mirrors the systems that got this right — Lightroom catalogs over raw photos, video EDLs, git, Delta Lake logs over parquet: identity-keyed (uid, never path or position), time-addressed (absolute ns timestamps, never indices), append-only, dumb plain data with versioned records so a log replays forever.
+
 ## Episode data model
 
 An Episode has three kinds of data with distinct roles:
@@ -14,10 +29,9 @@ Every episode is stamped with `meta['uid']` (a uuid4 hex) at recording time — 
 
 ## Edits
 
-Recordings are immutable. All post-hoc modification goes through one mechanism: an append-only edit log (`edits.jsonl` in the dataset directory) of uid-keyed declarative records, applied as a view on read. `LocalDataset` applies a discovered log automatically, so every consumer sees the edited view.
+Recordings are immutable. All post-hoc modification goes through one mechanism: an append-only edit log (`edits.jsonl` in the dataset directory) of uid-keyed declarative records, applied as a view on read. The edit layer (`edits.py`) is generic — `EditedDataset(base, edits)` composes over any backend (local, remote); the `load_dataset`/`load_all_datasets` one-liners discover and apply a dataset's log, while `LocalDataset` itself reads raw recordings.
 
 - One JSON record per line: `{"op": "set_static", "v": 1, "ep": "<uid>", "data": {...}}`. Records apply in log order; the last write per key wins. Each record carries its op and version, so a log stays replayable forever.
-- The layering order is **backend → edits → transforms → consumer**: edits bind to recorded keys and persist; transforms compute on the edited episode and never persist.
 - The format stays dumb plain data — smarts live in the library — so external editors can write it. The dataset directory assumes a single writer; readers fail loudly on corrupt or unrecognized records.
 
 ## Episode properties

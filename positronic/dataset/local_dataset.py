@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import base64
 import json
 import platform
 import shutil
@@ -23,40 +22,22 @@ from positronic.utils.git import get_git_state
 from positronic.utils.lazy import LazyDict
 
 from .dataset import ConcatDataset, Dataset, DatasetWriter
-from .episode import EPISODE_SCHEMA_VERSION, SIGNAL_FACTORY_T, Episode, EpisodeWriter, T
+from .edits import EditedDataset, load_edits
+from .episode import (
+    EPISODE_SCHEMA_VERSION,
+    SIGNAL_FACTORY_T,
+    Episode,
+    EpisodeWriter,
+    T,
+    _is_valid_static_value,
+    _static_decode_hook,
+    _StaticEncoder,
+)
 from .signal import Signal
 from .vector import SimpleSignal, SimpleSignalWriter
 from .video import VideoSignal, VideoSignalWriter
 
 UNFINISHED_MARKER = '.unfinished'
-EDITS_FILE = 'edits.jsonl'
-
-_BYTES_TAG = '__bytes_b64__'
-
-
-class _StaticEncoder(json.JSONEncoder):
-    """JSON encoder that handles ``bytes`` values via base64."""
-
-    def default(self, o):
-        if isinstance(o, bytes):
-            return {_BYTES_TAG: base64.b64encode(o).decode('ascii')}
-        return super().default(o)
-
-
-def _static_decode_hook(obj: dict) -> Any:
-    if _BYTES_TAG in obj and len(obj) == 1:
-        return base64.b64decode(obj[_BYTES_TAG])
-    return obj
-
-
-def _is_valid_static_value(value: Any) -> bool:
-    if isinstance(value, str | int | float | bool | bytes):
-        return True
-    if isinstance(value, list | tuple):
-        return all(_is_valid_static_value(v) for v in value)
-    if isinstance(value, dict):
-        return all(isinstance(k, str) and _is_valid_static_value(v) for k, v in value.items())
-    return False
 
 
 def _is_numeric_dir(p: Path) -> bool:
@@ -300,20 +281,15 @@ class DiskEpisode(Episode):
     All signals in an episode share a common timeline.
     """
 
-    def __init__(self, directory: Path, *, static_overrides: dict[str, Any] | None = None) -> None:
+    def __init__(self, directory: Path) -> None:
         """Initialize episode reader from a directory (lazy).
 
         - Defers loading of signal data, static items, and meta until accessed.
         - Prepares lightweight factories for signals discovered on disk.
-
-        Args:
-            directory: Episode directory to read from
-            static_overrides: Edited static items merged over the recorded ones on access
         """
         if (directory / UNFINISHED_MARKER).exists():
             raise ValueError(f'Cannot read unfinished episode at {directory}')
         self._dir = directory
-        self._static_overrides = static_overrides or {}
         # WeakValueDictionary: signals are recreated from factories on demand, so caching
         # them strongly would leak resources (e.g. VideoSignal holds an open av.Container).
         # With weak refs, signals stay alive while callers hold them and get GC'd otherwise.
@@ -341,10 +317,6 @@ class DiskEpisode(Episode):
             if key in used_names:
                 continue
             self._signal_factories[key] = partial(SimpleSignal, file)
-
-        collisions = self._static_overrides.keys() & self._signal_factories.keys()
-        if collisions:
-            raise ValueError(f'Edited static items {sorted(collisions)} collide with signals in {self._dir}')
 
     def __repr__(self) -> str:
         return f'{self.__class__.__name__}(path={str(self._dir)!r})'
@@ -376,7 +348,6 @@ class DiskEpisode(Episode):
                     self._static.update(data)
                 else:
                     raise ValueError('static.json must contain a JSON object (mapping)')
-            self._static.update(self._static_overrides)
         return self._static
 
     def __iter__(self) -> Iterator[str]:
@@ -463,41 +434,6 @@ class DiskEpisode(Episode):
         return dict(self._static_data)
 
 
-def _episode_uid(ep_dir: Path) -> str | None:
-    meta_json = ep_dir / 'meta.json'
-    if not meta_json.exists():
-        return None
-    with meta_json.open('r', encoding='utf-8') as f:
-        return json.load(f).get('uid')
-
-
-def _load_edits(root: Path) -> dict[str, dict[str, Any]]:
-    """Read the edit log and return merged static overrides per episode uid.
-
-    Records apply in log order; the last write per key wins.
-    """
-    edits_path = root / EDITS_FILE
-    overrides: dict[str, dict[str, Any]] = {}
-    if not edits_path.exists():
-        return overrides
-    with edits_path.open('r', encoding='utf-8') as f:
-        for line_no, line in enumerate(f, start=1):
-            try:
-                record = json.loads(line, object_hook=_static_decode_hook)
-            except json.JSONDecodeError as e:
-                raise ValueError(f'Corrupt edit record at {edits_path}:{line_no}') from e
-            match record:
-                case {'op': 'set_static', 'v': 1, 'ep': str(ep_uid), 'data': dict(data)}:
-                    if not _is_valid_static_value(data):
-                        raise ValueError(
-                            f'Invalid static values in edit record at {edits_path}:{line_no}: {line.strip()}'
-                        )
-                    overrides.setdefault(ep_uid, {}).update(data)
-                case _:
-                    raise ValueError(f'Unsupported edit record at {edits_path}:{line_no}: {line.strip()}')
-    return overrides
-
-
 class LocalDataset(Dataset):
     """Filesystem-backed dataset of Episodes.
 
@@ -521,9 +457,6 @@ class LocalDataset(Dataset):
             )
         self._episodes: list[tuple[int, Path]] = []
         self._build_episode_list()
-        # An edit log binds to a dataset: a directory without episodes is not one, and discovery
-        # (load_all_datasets) probes arbitrary directories that may hold an unrelated edits.jsonl
-        self._static_overrides = _load_edits(self.root) if self._episodes else {}
 
     def _build_episode_list(self) -> None:
         self._episodes.clear()
@@ -545,10 +478,7 @@ class LocalDataset(Dataset):
     def _get_episode(self, index: int) -> DiskEpisode:
         if not (0 <= index < len(self)):
             raise IndexError(f'Index {index} out of range for {self.root} dataset with {len(self)} episodes')
-        ep_dir = self._episodes[index][1]
-        if not self._static_overrides:
-            return DiskEpisode(ep_dir)
-        return DiskEpisode(ep_dir, static_overrides=self._static_overrides.get(_episode_uid(ep_dir)))
+        return DiskEpisode(self._episodes[index][1])
 
 
 class LocalDatasetWriter(DatasetWriter):
@@ -598,26 +528,19 @@ class LocalDatasetWriter(DatasetWriter):
         writer = DiskEpisodeWriter(ep_dir, created_ts_ns=created_ts_ns, uid=uid)
         return writer
 
-    def set_static(self, uid: str, data: dict[str, Any]) -> None:
-        """Append a `set_static` edit for the episode with the given uid.
-
-        The edit is applied when the dataset is opened: the given items are merged over the episode's recorded
-        static items. The episode recording itself is never modified.
-
-        Args:
-            uid: The target episode's `meta['uid']`
-            data: Static items to set; values follow the same restrictions as `EpisodeWriter.set_static`
-        """
-        if not (isinstance(uid, str) and uid):
-            raise ValueError(f'Episode uid must be a non-empty string, got {uid!r}')
-        if not (isinstance(data, dict) and _is_valid_static_value(data)):
-            raise ValueError(f'Edit data must be a mapping of static items to JSON-serializable values\n{data=!r}')
-        record = {'op': 'set_static', 'v': 1, 'ep': uid, 'data': data}
-        with (self.root / EDITS_FILE).open('a', encoding='utf-8') as f:
-            f.write(json.dumps(record, cls=_StaticEncoder) + '\n')
-
     def __exit__(self, exc_type, exc, tb) -> None:
         pass
+
+
+def load_dataset(root: Path) -> Dataset:
+    """Open a local dataset with its edit log applied.
+
+    `LocalDataset` reads the raw recordings; a discovered `edits.jsonl` composes on top as an `EditedDataset`
+    view. The log is loaded only when the directory actually holds episodes — an edit log binds to a dataset.
+    """
+    ds = LocalDataset(root)
+    edits = load_edits(ds.root) if len(ds) else {}
+    return EditedDataset(ds, edits) if edits else ds
 
 
 def load_all_datasets(root: Path) -> Dataset:
@@ -656,7 +579,7 @@ def load_all_datasets(root: Path) -> Dataset:
 
         # Try to load this directory as a dataset; corrupt content (e.g. a bad edit log) propagates
         try:
-            dataset = LocalDataset(current_path)
+            dataset = load_dataset(current_path)
             if len(dataset) > 0:
                 datasets.append(dataset)
         except FileNotFoundError:

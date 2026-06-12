@@ -1,3 +1,5 @@
+import base64
+import json
 from abc import ABC, abstractmethod
 from collections.abc import Callable, Iterator, Mapping
 from contextlib import AbstractContextManager
@@ -10,6 +12,33 @@ from .signal import Signal
 EPISODE_SCHEMA_VERSION = 1
 T = TypeVar('T')
 SIGNAL_FACTORY_T = Callable[[], Signal[Any]]
+
+_BYTES_TAG = '__bytes_b64__'
+
+
+class _StaticEncoder(json.JSONEncoder):
+    """JSON encoder that handles ``bytes`` values via base64."""
+
+    def default(self, o):
+        if isinstance(o, bytes):
+            return {_BYTES_TAG: base64.b64encode(o).decode('ascii')}
+        return super().default(o)
+
+
+def _static_decode_hook(obj: dict) -> Any:
+    if _BYTES_TAG in obj and len(obj) == 1:
+        return base64.b64decode(obj[_BYTES_TAG])
+    return obj
+
+
+def _is_valid_static_value(value: Any) -> bool:
+    if isinstance(value, str | int | float | bool | bytes):
+        return True
+    if isinstance(value, list | tuple):
+        return all(_is_valid_static_value(v) for v in value)
+    if isinstance(value, dict):
+        return all(isinstance(k, str) and _is_valid_static_value(v) for k, v in value.items())
+    return False
 
 
 class _EpisodeTimeIndexer:
