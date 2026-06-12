@@ -61,6 +61,7 @@ def _dreamzero_root():
     dataloader_num_workers=1,
     deepspeed=None,
     resume=False,
+    save_total_limit=10,
     extra_args=[],
 )
 def main(
@@ -81,6 +82,7 @@ def main(
     dataloader_num_workers: int,
     deepspeed: str | None,
     resume: bool,
+    save_total_limit: int,
     extra_args: list[str],
 ):
     if backbone not in _BACKBONE_PARAMS:
@@ -143,7 +145,7 @@ def main(
         f'save_steps={save_steps}',
         f'output_dir={output_dir}',
         f'save_lora_only={arch["save_lora_only"]}',
-        'save_total_limit=10',
+        f'save_total_limit={save_total_limit}',
     ]
     if bb['frame_seqlen'] is not None:
         command.append(f'frame_seqlen={bb["frame_seqlen"]}')
@@ -170,8 +172,10 @@ def main(
 # supported with h100x1 — DeepSpeed's load_checkpoint fails because there's no DeepSpeed
 # state to load. To train longer, start a fresh run (the LoRA adapters train from zero anyway).
 #
-# h100x8: ZeRO-2 shards across 8 GPUs (~12GB per shard), no ZIP64 issue. Full DeepSpeed
-# checkpoints are saved, so resume restores optimizer state exactly.
+# h100x8: ZeRO-2 shards across 8 GPUs. LoRA checkpoints are small enough for full
+# DeepSpeed saves (resume restores optimizer state). Full finetune checkpoints are ~200GB
+# each (all params trainable + optimizer state), so save_only_model=true is used to avoid
+# filling the disk. Resume won't restore optimizer state for full finetune h100x8.
 
 # --- wan2.1 (14B) presets ---
 wan21_lora_h100x1 = main.override(
@@ -194,7 +198,12 @@ wan21_full_h100x1 = main.override(
     extra_args=['+training_args.save_only_model=true'],
 )
 wan21_full_h100x8 = main.override(
-    backbone='wan2.1', train_architecture='full', num_gpus=8, batch_size=1, gradient_accumulation_steps=1
+    backbone='wan2.1',
+    train_architecture='full',
+    num_gpus=8,
+    batch_size=1,
+    gradient_accumulation_steps=1,
+    extra_args=['+training_args.save_only_model=true'],
 )
 
 # --- wan2.2 (5B) presets ---
@@ -218,7 +227,12 @@ wan22_full_h100x1 = main.override(
     extra_args=['+training_args.save_only_model=true'],
 )
 wan22_full_h100x8 = main.override(
-    backbone='wan2.2', train_architecture='full', num_gpus=8, batch_size=1, gradient_accumulation_steps=1
+    backbone='wan2.2',
+    train_architecture='full',
+    num_gpus=8,
+    batch_size=1,
+    gradient_accumulation_steps=1,
+    extra_args=['+training_args.save_only_model=true'],
 )
 
 # Legacy aliases
