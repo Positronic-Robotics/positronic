@@ -597,3 +597,11 @@ def test_load_all_datasets_ignores_edit_log_outside_datasets(tmp_path):
     (tmp_path / edits.EDITS_FILE).write_text('garbage', encoding='utf-8')
     result = load_all_datasets(tmp_path)
     assert episode_ids(result[:]) == [0, 1]
+
+
+def test_load_all_datasets_keeps_all_dropped_dataset(tmp_path):
+    ds = build_dataset_with_signal(tmp_path / 'ds1', [0, 1])
+    for i in range(2):
+        edits.drop(tmp_path / 'ds1', ds[i].meta['uid'])
+    # All episodes are curated out, but the directory is still a dataset: an empty view, not an error
+    assert len(load_all_datasets(tmp_path)) == 0

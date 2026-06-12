@@ -80,7 +80,8 @@ class EvalUI(pimm.ControlSystem):
         self._dropped: set[str] = set()
         self._sel: int | None = None
         self._last_scan = float('-inf')
-        # The operator's stop press, seeded into the editor form when the finished episode appears.
+        # The operator's stop press, persisted when the finished episode appears in the dataset directory.
+        # Held until then no matter what runs in between — Start/Reset must not destroy the verdict.
         self._pending_review: dict | None = None
         # The selected episode's video signal under the review scrubber.
         self._rv_signal = None
@@ -412,7 +413,6 @@ class EvalUI(pimm.ControlSystem):
         context['eval.total_items'] = dpg.get_value('total_items_input')
         context['eval.cap_per_item'] = self.cap_per_item
 
-        self._pending_review = None
         self.run_start_time = self.clock.now()
         self.directive.emit(Directive.RUN(**context))
 
@@ -436,7 +436,6 @@ class EvalUI(pimm.ControlSystem):
 
     def reset(self, sender=None, app_data=None):
         print('State: WAITING (Reset)')
-        self._pending_review = None
         self.state = State.WAITING
         self.update_ui()
         self.directive.emit(Directive.HOME())
@@ -493,8 +492,16 @@ class EvalUI(pimm.ControlSystem):
         self._select(self._count - 1)
 
     def _commit_field(self, sender, app_data, user_data):
-        key = (self.TEXT_FIELDS | self.RADIO_FIELDS)[user_data]
-        edits.set_static(self.output_dir, self._view[self._sel].meta['uid'], {key: dpg.get_value(user_data)})
+        if user_data in ('ed_total', 'ed_success'):
+            # Same invariant the live controls enforce: successful never exceeds total.
+            total = dpg.get_value('ed_total')
+            successful = min(dpg.get_value('ed_success'), total)
+            dpg.set_value('ed_success', successful)
+            data = {'eval.total_items': total, 'eval.successful_items': successful}
+        else:
+            key = (self.TEXT_FIELDS | self.RADIO_FIELDS)[user_data]
+            data = {key: dpg.get_value(user_data)}
+        edits.set_static(self.output_dir, self._view[self._sel].meta['uid'], data)
         self._refresh_view()
 
     def _bind_review_video(self):

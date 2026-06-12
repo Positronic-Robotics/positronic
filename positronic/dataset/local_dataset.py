@@ -585,11 +585,12 @@ def load_all_datasets(root: Path) -> Dataset:
     while to_explore:
         current_path = to_explore.popleft()
 
-        # Try to load this directory as a dataset; corrupt content (e.g. a bad edit log) propagates
+        # Try to load this directory as a dataset; corrupt content (e.g. a bad edit log) propagates.
+        # Validity is judged on the raw recordings: a dataset whose episodes are all dropped by edits
+        # is still a dataset — it loads as an empty curated view.
         try:
-            dataset = load_dataset(current_path)
-            if len(dataset) > 0:
-                datasets.append(dataset)
+            if len(LocalDataset(current_path)) > 0:
+                datasets.append(load_dataset(current_path))
         except FileNotFoundError:
             pass
 
