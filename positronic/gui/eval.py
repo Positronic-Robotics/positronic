@@ -1,7 +1,6 @@
 from collections.abc import Iterator
 from datetime import datetime
 from enum import Enum, auto
-from functools import partial
 from pathlib import Path
 
 import cv2
@@ -143,7 +142,11 @@ class EvalUI(pimm.ControlSystem):
             dpg.add_spacer(width=self.size(15))
             for label, reason, theme in self.STOP_BUTTONS:
                 btn = dpg.add_button(
-                    label=label, callback=partial(self.stop_run, reason), width=self.size(80), height=self.size(32)
+                    label=label,
+                    callback=self._on_stop_button,
+                    user_data=reason,
+                    width=self.size(80),
+                    height=self.size(32),
                 )
                 dpg.bind_item_theme(btn, theme)
                 self._register(btn, [State.RUNNING])
@@ -274,7 +277,8 @@ class EvalUI(pimm.ControlSystem):
                 default_value=OUTCOMES[0],
                 horizontal=True,
                 tag='ed_outcome',
-                callback=partial(self._commit_field, 'ed_outcome'),
+                callback=self._commit_field,
+                user_data='ed_outcome',
             )
         dpg.add_spacer(height=self.size(5))
         with dpg.group(horizontal=True):
@@ -295,7 +299,8 @@ class EvalUI(pimm.ControlSystem):
                 default_value='NA',
                 horizontal=True,
                 tag='ed_tote',
-                callback=partial(self._commit_field, 'ed_tote'),
+                callback=self._commit_field,
+                user_data='ed_tote',
             )
             dpg.add_spacer(width=self.size(20))
             dpg.add_text('Camera')
@@ -304,7 +309,8 @@ class EvalUI(pimm.ControlSystem):
                 default_value='NA',
                 horizontal=True,
                 tag='ed_camera',
-                callback=partial(self._commit_field, 'ed_camera'),
+                callback=self._commit_field,
+                user_data='ed_camera',
             )
         dpg.add_spacer(height=self.size(5))
         with dpg.group(horizontal=True):
@@ -334,7 +340,7 @@ class EvalUI(pimm.ControlSystem):
             dpg.add_text('', tag='rv_time')
         for tag in self.TEXT_FIELDS:
             with dpg.item_handler_registry() as reg:
-                dpg.add_item_deactivated_after_edit_handler(callback=partial(self._commit_field, tag))
+                dpg.add_item_deactivated_after_edit_handler(callback=self._commit_field, user_data=tag)
             dpg.bind_item_handler_registry(tag, reg)
 
     def _setup_key_handlers(self):
@@ -410,7 +416,13 @@ class EvalUI(pimm.ControlSystem):
         self.run_start_time = self.clock.now()
         self.directive.emit(Directive.RUN(**context))
 
-    def stop_run(self, reason, sender=None, app_data=None):
+    # Parametrized dpg callbacks take the (sender, app_data, user_data) form with the parameter riding
+    # ``user_data``: dpg builds the argument list from the callback's arity and cannot introspect
+    # ``functools.partial`` objects, so a partial-bound callback never fires.
+    def _on_stop_button(self, sender, app_data, user_data):
+        self.stop_run(user_data)
+
+    def stop_run(self, reason):
         if self.state != State.RUNNING:
             return
         print(f'State: WAITING ({reason})')
@@ -480,9 +492,9 @@ class EvalUI(pimm.ControlSystem):
             self._pending_review = None
         self._select(self._count - 1)
 
-    def _commit_field(self, tag, sender=None, app_data=None):
-        key = (self.TEXT_FIELDS | self.RADIO_FIELDS)[tag]
-        edits.set_static(self.output_dir, self._view[self._sel].meta['uid'], {key: dpg.get_value(tag)})
+    def _commit_field(self, sender, app_data, user_data):
+        key = (self.TEXT_FIELDS | self.RADIO_FIELDS)[user_data]
+        edits.set_static(self.output_dir, self._view[self._sel].meta['uid'], {key: dpg.get_value(user_data)})
         self._refresh_view()
 
     def _bind_review_video(self):
