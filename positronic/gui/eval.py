@@ -81,6 +81,10 @@ class EvalUI(pimm.ControlSystem):
         self._last_scan = float('-inf')
         # The operator's stop press, seeded into the editor form when the finished episode appears.
         self._pending_review: dict | None = None
+        # The selected episode's video signal under the review scrubber.
+        self._rv_signal = None
+        self._rv_ep = None
+        self.rv_texture = np.zeros((480, 640, 4), dtype=np.float32)
 
     def size(self, v: int) -> int:
         """Scale a value by ui_scale."""
@@ -120,12 +124,6 @@ class EvalUI(pimm.ControlSystem):
                 dpg.add_theme_color(dpg.mvThemeCol_Button, (0, 100, 0))
                 dpg.add_theme_color(dpg.mvThemeCol_ButtonHovered, (0, 120, 0))
                 dpg.add_theme_color(dpg.mvThemeCol_ButtonActive, (0, 80, 0))
-
-        with dpg.theme(tag='stall_theme'):
-            with dpg.theme_component(dpg.mvButton):
-                dpg.add_theme_color(dpg.mvThemeCol_Button, (150, 150, 0))
-                dpg.add_theme_color(dpg.mvThemeCol_ButtonHovered, (170, 170, 0))
-                dpg.add_theme_color(dpg.mvThemeCol_ButtonActive, (130, 130, 0))
 
         with dpg.theme(tag='safety_theme'):
             with dpg.theme_component(dpg.mvButton):
@@ -169,13 +167,6 @@ class EvalUI(pimm.ControlSystem):
             self._register(btn_fail, [State.RUNNING])
 
             dpg.add_spacer(width=self.size(5))
-            btn_stall = dpg.add_button(
-                label='Stall', callback=lambda: self.stop_run('Stalled'), width=self.size(80), height=self.size(32)
-            )
-            dpg.bind_item_theme(btn_stall, 'stall_theme')
-            self._register(btn_stall, [State.RUNNING])
-
-            dpg.add_spacer(width=self.size(5))
             btn_safety = dpg.add_button(
                 label='Safety', callback=lambda: self.stop_run('Safety'), width=self.size(80), height=self.size(32)
             )
@@ -193,6 +184,9 @@ class EvalUI(pimm.ControlSystem):
                 dpg.add_button(label='Reset', callback=self.reset, width=self.size(80), height=self.size(32)),
                 [State.WAITING, State.RUNNING],
             )
+            dpg.add_spacer(width=self.size(25))
+            with dpg.drawlist(width=self.size(160), height=self.size(46)):
+                dpg.draw_text((0, 0), '0:00', size=self.size(40), tag='time_text')
 
     def _build_configuration(self):
         dpg.add_text('Configuration')
@@ -488,6 +482,7 @@ class EvalUI(pimm.ControlSystem):
             dpg.set_value('ed_camera', static.get('eval.external_camera', 'NA'))
             recorded_at = datetime.fromtimestamp(ep.meta['created_ts_ns'] / 1e9)
             dpg.set_value('ed_time', recorded_at.strftime('%Y-%m-%d %H:%M:%S'))
+        self._bind_review_video()
         self._update_editor_ui()
 
     def _poll_episodes(self):
@@ -509,6 +504,7 @@ class EvalUI(pimm.ControlSystem):
             )
             self._refresh_view()
             dpg.set_value('mode_tabs', 'tab_episodes')
+            self._set_review_visible(True)
             self._pending_review = None
         self._select(self._count - 1)
 
@@ -516,6 +512,58 @@ class EvalUI(pimm.ControlSystem):
         key = (self.TEXT_FIELDS | self.RADIO_FIELDS)[tag]
         edits.set_static(self.output_dir, self._view[self._sel].meta['uid'], {key: dpg.get_value(tag)})
         self._refresh_view()
+
+    def _on_tab(self, sender=None, app_data=None):
+        alias = app_data if isinstance(app_data, str) else dpg.get_item_alias(app_data)
+        self._set_review_visible(alias == 'tab_episodes')
+
+    def _set_review_visible(self, reviewing: bool):
+        dpg.configure_item('image_grid_group', show=not reviewing)
+        dpg.configure_item('review_panel', show=reviewing)
+
+    def _bind_review_video(self):
+        # GUI video binding follows the `image.` observation naming convention, like the live feeds.
+        ep = self._view[self._sel] if self._sel is not None else None
+        cams = sorted(k for k in ep if k.startswith('image.')) if ep is not None else []
+        dpg.configure_item('rv_camera', items=cams)
+        if not cams:
+            self._rv_signal = None
+            dpg.set_value('rv_time', '')
+            self.rv_texture[:] = 0.0
+            return
+        cam = dpg.get_value('rv_camera')
+        if cam not in cams:
+            cam = cams[0]
+            dpg.set_value('rv_camera', cam)
+        self._rv_signal = ep[cam]
+        last = len(self._rv_signal) - 1
+        dpg.configure_item('rv_slider', max_value=last)
+        dpg.set_value('rv_slider', last)
+        self._show_frame(last)
+
+    def _on_review_camera(self, sender=None, app_data=None):
+        self._rv_signal = self._view[self._sel][app_data]
+        last = len(self._rv_signal) - 1
+        dpg.configure_item('rv_slider', max_value=last)
+        idx = min(dpg.get_value('rv_slider'), last)
+        dpg.set_value('rv_slider', idx)
+        self._show_frame(idx)
+
+    def _show_frame(self, idx: int):
+        if self._rv_signal is None:
+            return
+        idx = max(0, min(int(idx), len(self._rv_signal) - 1))
+        frame, ts = self._rv_signal[idx]
+        h, w = frame.shape[:2]
+        scale = min(640 / w, 480 / h)
+        dw, dh = int(w * scale), int(h * scale)
+        resized = cv2.resize(frame, (dw, dh), interpolation=cv2.INTER_AREA)
+        self.rv_texture[:] = 0.0
+        y0, x0 = (480 - dh) // 2, (640 - dw) // 2
+        self.rv_texture[y0 : y0 + dh, x0 : x0 + dw, :3] = resized / 255.0
+        self.rv_texture[y0 : y0 + dh, x0 : x0 + dw, 3] = 1.0
+        t0 = self._rv_signal.start_ts
+        dpg.set_value('rv_time', f'{(ts - t0) / 1e9:.1f} / {(self._rv_signal.last_ts - t0) / 1e9:.1f}s')
 
     def drop_episode(self, sender=None, app_data=None):
         edits.drop(self.output_dir, self._view[self._sel].meta['uid'])
@@ -623,12 +671,33 @@ class EvalUI(pimm.ControlSystem):
         dpg.create_context()
         self._create_theme()
 
+        with dpg.texture_registry(show=False):
+            dpg.add_raw_texture(640, 480, default_value=self.rv_texture, format=dpg.mvFormat_Float_rgba, tag='rv_tex')
+
         # Window
         with dpg.window(label='Evaluation Control', width=self.size(1200), height=self.size(800), tag='main_window'):
             with dpg.group(horizontal=True):
-                # Left side: Camera feeds in vertical column
+                # Left side: live camera feeds (Trial tab) or the recorded-video review player (Episodes tab).
+                # The review player keeps a row of small live thumbnails so a running trial stays visible;
+                # they render the same textures the live loop updates.
                 with dpg.group(horizontal=False, tag='image_grid_group'):
                     dpg.add_text('Camera Feed')
+                with dpg.group(horizontal=False, tag='review_panel', show=False):
+                    dpg.add_text('Live')
+                    with dpg.group(horizontal=True, tag='rv_live_row'):
+                        pass
+                    dpg.add_spacer(height=self.size(10))
+                    with dpg.group(horizontal=True):
+                        dpg.add_text('Recorded video')
+                        dpg.add_spacer(width=self.size(15))
+                        dpg.add_combo(items=[], tag='rv_camera', width=self.size(200), callback=self._on_review_camera)
+                    dpg.add_image('rv_tex', width=self.size(640), height=self.size(480))
+                    with dpg.group(horizontal=True):
+                        dpg.add_slider_int(
+                            tag='rv_slider', width=self.size(520), callback=lambda s, a: self._show_frame(a)
+                        )
+                        dpg.add_spacer(width=self.size(10))
+                        dpg.add_text('', tag='rv_time')
 
                 # Spacer between images and controls
                 dpg.add_spacer(width=self.size(20))
@@ -640,11 +709,7 @@ class EvalUI(pimm.ControlSystem):
                     self._build_controls()
 
                     dpg.add_spacer(height=self.size(10))
-                    with dpg.drawlist(width=self.size(300), height=self.size(46)):
-                        dpg.draw_text((0, 0), '0:00', size=self.size(40), tag='time_text')
-
-                    dpg.add_spacer(height=self.size(10))
-                    with dpg.tab_bar(tag='mode_tabs'):
+                    with dpg.tab_bar(tag='mode_tabs', callback=self._on_tab):
                         with dpg.tab(label='Trial', tag='tab_trial'):
                             dpg.add_spacer(height=self.size(10))
                             self._build_configuration()
@@ -713,6 +778,12 @@ class EvalUI(pimm.ControlSystem):
 
                         dpg.add_image(
                             f'tex_{cam_name}', parent='image_grid_group', width=display_width, height=display_height
+                        )
+                        dpg.add_image(
+                            f'tex_{cam_name}',
+                            parent='rv_live_row',
+                            width=display_width // 3,
+                            height=display_height // 3,
                         )
 
                     # Downsample image if needed to match display size
