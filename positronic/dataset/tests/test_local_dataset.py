@@ -1,3 +1,4 @@
+import json
 import tempfile
 from pathlib import Path
 
@@ -424,6 +425,21 @@ def test_new_episode_carries_provided_uid(tmp_path):
         with w.new_episode(uid='source-uid') as ew:
             ew.set_static('id', 0)
     assert LocalDataset(tmp_path / 'ds')[0].meta['uid'] == 'source-uid'
+
+
+def test_episode_without_stamped_uid_derives_one_from_created_ts(tmp_path):
+    root = tmp_path / 'ds'
+    build_dataset_with_signal(root, [0])
+    meta_path = root / '000000000000' / '000000000000' / 'meta.json'
+    meta = json.loads(meta_path.read_text(encoding='utf-8'))
+    del meta['uid']
+    meta_path.write_text(json.dumps(meta), encoding='utf-8')
+
+    uid = LocalDataset(root)[0].meta['uid']
+    assert uid == f'ts-{meta["created_ts_ns"]}'
+
+    edits.set_static(root, uid, {'verdict': 'success'})
+    assert load_dataset(root)[0]['verdict'] == 'success'
 
 
 def test_set_static_edit_applies_on_read(tmp_path):

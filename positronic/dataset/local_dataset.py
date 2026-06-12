@@ -404,6 +404,11 @@ class DiskEpisode(Episode):
             # Extract it as a private cache for DiskEpisode.duration_ns.
             self._cached_duration_ns = meta.pop('duration_ns', None)
 
+            # Episodes without a stamped uid derive a stable identity from the recording timestamp,
+            # which is immutable and travels with the episode across copies
+            if 'uid' not in meta and 'created_ts_ns' in meta:
+                meta['uid'] = f'ts-{meta["created_ts_ns"]}'
+
             meta['path'] = str(self._dir.expanduser().resolve(strict=False))
 
             lazy_getters: dict[str, Any] = {}

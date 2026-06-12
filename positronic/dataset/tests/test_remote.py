@@ -12,6 +12,7 @@ import pytest
 import uvicorn
 from fastapi.testclient import TestClient
 
+from positronic.dataset.edits import EditedDataset
 from positronic.dataset.local_dataset import LocalDataset, LocalDatasetWriter
 from positronic.dataset.remote import RemoteDataset
 from positronic.dataset.remote_server import server as remote_server
@@ -182,6 +183,14 @@ def test_remote_dataset_episode_static(running_server):
         ep = ds[0]
         assert ep['task'] == 'task_0'
         assert ep['episode_id'] == 0
+
+
+def test_edited_dataset_over_remote_base(running_server):
+    with RemoteDataset(running_server) as ds:
+        edited = EditedDataset(ds, {ds[0].meta['uid']: {'verdict': 'success'}})
+        assert edited[0]['verdict'] == 'success'
+        assert edited[0]['task'] == 'task_0'
+        assert 'verdict' not in edited[1]
 
 
 def test_remote_dataset_signal_access(running_server):

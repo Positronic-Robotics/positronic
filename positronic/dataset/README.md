@@ -279,7 +279,7 @@ Aborting: `abort()` stops recording, asks each underlying `Signal` writer to abo
 - Written: immediately on `EpisodeWriter` creation (side-effect of constructing the writer).
 - Contents (concise schema):
   - `schema_version: int` – manifest version (starts at 1).
-  - `uid: str` – episode identity (uuid4 hex), stamped at recording time. Stable across views, copies, and exports; position in a dataset is access, the uid is reference.
+  - `uid: str` – episode identity (uuid4 hex), stamped at recording time; episodes lacking one derive a stable `ts-<created_ts_ns>` uid from their recording timestamp. Stable across views, copies, and exports; position in a dataset is access, the uid is reference.
   - `created_ts_ns: int` – `Episode` creation time in nanoseconds.
   - `writer: object` – environment and provenance:
     - `name: str` – fully-qualified writer class (e.g., `positronic.dataset.local_dataset.DiskEpisodeWriter`).
