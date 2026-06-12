@@ -39,3 +39,11 @@ def run(eval: Eval, policy, trial_count, show_gui, output_dir=None, inference_la
         output_dir=output_dir,
         wrap=wrap,
     )
+
+
+@cfn.config(eval=placeholder, policy=policy_cfg.placeholder, driver=inference.eval_ui, wrap=default_wrappers)
+def attended(eval: Eval, policy, driver, output_dir=None, wrap=default_wrappers):
+    """Drive a selected eval interactively: the operator surface owns the lifecycle instead of a trial plan."""
+    inference.main(
+        embodiment=eval.embodiment, task=eval.task, policy=policy, driver=driver, output_dir=output_dir, wrap=wrap
+    )

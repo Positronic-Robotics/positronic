@@ -169,7 +169,7 @@ run_cfg = cfn.Config(main, embodiment=positronic.cfg.embodiment.droid, policy=po
 @pos3.with_mirror()
 def _internal_main():
     # Imported here to break the circular import: positronic.cfg.eval imports this module.
-    from positronic.cfg.eval import run as eval_run  # noqa
+    from positronic.cfg.eval import attended, run as eval_run  # noqa
     from positronic.cfg.eval.sim.positronic import stack_cubes  # noqa
 
     init_logging()
@@ -177,6 +177,7 @@ def _internal_main():
         'run': run_cfg,
         'real': run_cfg,  # `real` is the documented name for the hardware path
         'sim': eval_run.override(eval=stack_cubes),
+        'sim_ui': attended.override(eval=stack_cubes),
         'phail': run_cfg.override(
             policy=policy_cfg.phail_multiple,
             driver=eval_ui,
