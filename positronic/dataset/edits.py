@@ -2,9 +2,11 @@
 
 Episodes are never modified after recording. Post-hoc facts — operator verdicts, analysis scores — are *edits*:
 declarative records appended to an `edits.jsonl` file in the dataset directory and applied as a view on read.
-Each line is one JSON record: `{"op": "set_static", "v": 1, "ep": "<uid>", "data": {...}}`. Records target
-episodes by `meta['uid']` and apply in log order, last write per key wins. The format is plain appendable JSON
-so external tools can write it; the dataset directory assumes a single writer.
+Each line is one JSON record carrying its op: `{"op": "set_static", "v": 1, "ep": "<uid>", "data": {...}}` merges
+static items over the episode's recorded ones (log order, last write per key wins);
+`{"op": "drop", "v": 1, "ep": "<uid>"}` removes the episode from the loaded view. Records target episodes by
+`meta['uid']`. The format is plain appendable JSON so external tools can write it; the dataset directory assumes
+a single writer.
 """
 
 import json
@@ -34,20 +36,38 @@ def set_static(root: Path, uid: str, data: dict[str, Any]) -> None:
         raise ValueError(f'Episode uid must be a non-empty string, got {uid!r}')
     if not (isinstance(data, dict) and _is_valid_static_value(data)):
         raise ValueError(f'Edit data must be a mapping of static items to JSON-serializable values\n{data=!r}')
-    record = {'op': 'set_static', 'v': 1, 'ep': uid, 'data': data}
+    _append_record(root, {'op': 'set_static', 'v': 1, 'ep': uid, 'data': data})
+
+
+def drop(root: Path, uid: str) -> None:
+    """Append a `drop` edit removing the episode with the given uid from the loaded view.
+
+    The episode recording stays on disk; it just stops appearing in datasets opened through `load_dataset`.
+
+    Args:
+        root: The dataset directory holding the edit log
+        uid: The target episode's `meta['uid']`
+    """
+    if not (isinstance(uid, str) and uid):
+        raise ValueError(f'Episode uid must be a non-empty string, got {uid!r}')
+    _append_record(root, {'op': 'drop', 'v': 1, 'ep': uid})
+
+
+def _append_record(root: Path, record: dict[str, Any]) -> None:
     with (root / EDITS_FILE).open('a', encoding='utf-8') as f:
         f.write(json.dumps(record, cls=_StaticEncoder) + '\n')
 
 
-def load_edits(root: Path) -> dict[str, dict[str, Any]]:
-    """Read the edit log and return merged static edits per episode uid.
+def load_edits(root: Path) -> tuple[dict[str, dict[str, Any]], set[str]]:
+    """Read the edit log and return merged static edits per episode uid plus the set of dropped uids.
 
     Records apply in log order; the last write per key wins.
     """
     edits_path = root / EDITS_FILE
-    edits: dict[str, dict[str, Any]] = {}
+    statics: dict[str, dict[str, Any]] = {}
+    dropped: set[str] = set()
     if not edits_path.exists():
-        return edits
+        return statics, dropped
     with edits_path.open('r', encoding='utf-8') as f:
         for line_no, line in enumerate(f, start=1):
             try:
@@ -60,10 +80,12 @@ def load_edits(root: Path) -> dict[str, dict[str, Any]]:
                         raise ValueError(
                             f'Invalid static values in edit record at {edits_path}:{line_no}: {line.strip()}'
                         )
-                    edits.setdefault(ep_uid, {}).update(data)
+                    statics.setdefault(ep_uid, {}).update(data)
+                case {'op': 'drop', 'v': 1, 'ep': str(ep_uid)}:
+                    dropped.add(ep_uid)
                 case _:
                     raise ValueError(f'Unsupported edit record at {edits_path}:{line_no}: {line.strip()}')
-    return edits
+    return statics, dropped
 
 
 class EditedEpisode(Episode):

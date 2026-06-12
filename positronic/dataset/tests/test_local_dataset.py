@@ -499,6 +499,39 @@ def test_set_static_edit_rejects_invalid_values(tmp_path):
         edits.set_static(tmp_path, None, {'verdict': 'ok'})
 
 
+def test_drop_edit_hides_episode(tmp_path):
+    root = tmp_path / 'ds'
+    ds = build_dataset_with_signal(root, [0, 1, 2])
+    edits.drop(root, ds[1].meta['uid'])
+
+    assert episode_ids(load_dataset(root)[:]) == [0, 2]
+    # The recording stays on disk; only the loaded view filters it
+    assert len(LocalDataset(root)) == 3
+
+
+def test_drop_edit_composes_with_set_static(tmp_path):
+    root = tmp_path / 'ds'
+    ds = build_dataset_with_signal(root, [0, 1])
+    edits.set_static(root, ds[0].meta['uid'], {'verdict': 'success'})
+    edits.drop(root, ds[1].meta['uid'])
+
+    ds = load_dataset(root)
+    assert len(ds) == 1
+    assert ds[0]['verdict'] == 'success'
+
+
+def test_drop_edit_for_unknown_uid_is_inert(tmp_path):
+    root = tmp_path / 'ds'
+    build_dataset_with_signal(root, [0])
+    edits.drop(root, 'no-such-uid')
+    assert episode_ids(load_dataset(root)[:]) == [0]
+
+
+def test_drop_edit_rejects_invalid_uid(tmp_path):
+    with pytest.raises(ValueError, match='non-empty string'):
+        edits.drop(tmp_path, '')
+
+
 def test_corrupt_edit_record_raises(tmp_path):
     root = tmp_path / 'ds'
     build_dataset_with_signal(root, [0])

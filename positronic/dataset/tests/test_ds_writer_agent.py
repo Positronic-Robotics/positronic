@@ -2,6 +2,7 @@ from functools import partial
 from typing import Any
 
 import numpy as np
+import pyarrow.parquet as pq
 import pytest
 
 import pimm
@@ -28,11 +29,12 @@ def world():
 
 
 class FakeEpisodeWriter(EpisodeWriter[Any]):
-    def __init__(self) -> None:
+    def __init__(self, uid: str = 'fake-uid') -> None:
         self.statics: dict[str, Any] = {}
         self.appends: list[tuple[str, Any, int, dict[str, int] | None]] = []
         self.exited = False
         self.aborted = False
+        self._uid = uid
 
     def append(self, signal_name: str, data: Any, ts_ns: int, extra_ts: dict[str, int] | None = None) -> None:
         self.appends.append((signal_name, data, int(ts_ns), extra_ts))
@@ -46,13 +48,17 @@ class FakeEpisodeWriter(EpisodeWriter[Any]):
     def abort(self) -> None:
         self.aborted = True
 
+    @property
+    def meta(self) -> dict:
+        return {'uid': self._uid}
+
 
 class FakeDatasetWriter(DatasetWriter):
     def __init__(self) -> None:
         self.created: list[FakeEpisodeWriter] = []
 
     def new_episode(self) -> FakeEpisodeWriter:
-        w = FakeEpisodeWriter()
+        w = FakeEpisodeWriter(uid=f'ep{len(self.created)}')
         self.created.append(w)
         return w
 
@@ -198,8 +204,6 @@ def test_time_mode_message_uses_signal_timestamp(world):
 
 
 def test_integration_with_local_dataset_writer(tmp_path, world):
-    import pyarrow.parquet as pq
-
     with LocalDatasetWriter(tmp_path) as writer:
         agent, cmd_em, emitters = build_agent_with_pipes({'a': None, 'b': None}, writer, world)
 
@@ -445,24 +449,21 @@ def test_multiple_timelines_recorded(world):
     assert isinstance(extra_ts['world'], int) and extra_ts['world'] > 0
 
 
-def test_suspend_resume(world):
+def test_stop_emits_last_episode_uid(world):
     ds = FakeDatasetWriter()
     agent, cmd_em, emitters = build_agent_with_pipes({'a': None}, ds, world)
+    uid_rx = world.pair(agent.last_episode)
 
     script = [
         (partial(cmd_em.emit, DsWriterCommand(DsWriterCommandType.START_EPISODE)), 0.001),
         (partial(emitters['a'].emit, 1), 0.001),
-        (partial(cmd_em.emit, DsWriterCommand(DsWriterCommandType.SUSPEND_EPISODE)), 0.001),
-        (partial(emitters['a'].emit, 2), 0.001),  # Should be ignored
         (partial(cmd_em.emit, DsWriterCommand(DsWriterCommandType.STOP_EPISODE)), 0.001),
     ]
 
     run_scripted_agent(agent, script, world=world)
 
-    assert len(ds.created) == 1
-    w = ds.created[-1]
-    assert [(s, v) for (s, v, _, _) in w.appends] == [('a', 1)]
-    assert w.exited is True
+    msg = uid_rx.read()
+    assert msg is not None and msg.data == ds.created[-1].meta['uid']
 
 
 def test_trajectory_override_serializer():
@@ -535,8 +536,8 @@ def test_trajectory_override_serializer_flush_cutoff():
     assert [(t.ts, t.value) for t in s.flush()] == [(1, 'a'), (2, 'b')]
 
 
-def test_suspend_commits_due_drops_future_trajectory(world):
-    """A mid-trajectory SUSPEND commits already-due samples and drops the un-executed tail."""
+def test_stop_commits_due_drops_future_trajectory(world):
+    """A mid-trajectory STOP commits already-due samples and drops the un-executed tail."""
     ds = FakeDatasetWriter()
     agent, cmd_em, emitters = build_agent_with_pipes({'traj': TrajectoryOverrideSerializer(None)}, ds, world)
 
@@ -544,12 +545,11 @@ def test_suspend_commits_due_drops_future_trajectory(world):
     script = [
         (partial(cmd_em.emit, DsWriterCommand(DsWriterCommandType.START_EPISODE)), 0.001),
         (partial(emitters['traj'].emit, [(0, 'due'), (future, 'tail')]), 0.001),
-        (partial(cmd_em.emit, DsWriterCommand(DsWriterCommandType.SUSPEND_EPISODE)), 0.001),
         (partial(cmd_em.emit, DsWriterCommand(DsWriterCommandType.STOP_EPISODE)), 0.001),
     ]
     run_scripted_agent(agent, script, world=world)
 
     w = ds.created[-1]
-    # 'due' (ts <= suspend time) is committed; the future 'tail' is dropped.
+    # 'due' (ts <= stop time) is committed; the future 'tail' is dropped.
     assert [(s, v) for (s, v, _, _) in w.appends] == [('traj', 'due')]
     assert w.exited is True

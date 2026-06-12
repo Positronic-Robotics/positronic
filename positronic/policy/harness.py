@@ -17,7 +17,6 @@ class DirectiveType(Enum):
     """Directive types for the harness."""
 
     RUN = 'run'
-    STOP = 'stop'
     FINISH = 'finish'
     HOME = 'home'
 
@@ -33,11 +32,6 @@ class Directive:
     def RUN(cls, **kwargs) -> 'Directive':
         """Begin running the policy with the given context."""
         return cls(DirectiveType.RUN, kwargs)
-
-    @classmethod
-    def STOP(cls) -> 'Directive':
-        """Stop running the policy; devices hold position, recording suspended."""
-        return cls(DirectiveType.STOP, None)
 
     @classmethod
     def FINISH(cls, **kwargs) -> 'Directive':
@@ -163,7 +157,7 @@ def default_wrappers(clock: pimm.Clock) -> PolicyWrapper:
 class Harness(pimm.ControlSystem):
     """Control system that manages episode lifecycle and forwards trajectories to drivers.
 
-    The harness handles directives (RUN/STOP/FINISH/HOME) and dataset recording. All inference
+    The harness handles directives (RUN/FINISH/HOME) and dataset recording. All inference
     intelligence (scheduling, error recovery, blending, absolute time stamping) lives in the
     policy/session layer — the harness just calls the session, demuxes the action dicts into
     per-channel trajectories, and emits.
@@ -207,8 +201,8 @@ class Harness(pimm.ControlSystem):
         self._trials = iter(trials) if trials is not None else None
         self._wrap = wrap
         # Called with (session, context) when an episode completes successfully (clean
-        # STOP/FINISH), never on abort. Used to feed completion bookkeeping like a
-        # ``SampledPolicy``'s episode counter, with no sampling knowledge in the harness.
+        # FINISH or auto-finalize), never on abort. Used to feed completion bookkeeping
+        # like a ``SampledPolicy``'s episode counter, with no sampling knowledge in the harness.
         self._on_complete = on_episode_complete or (lambda session, context: None)
         # Wrapping happens in ``run()`` once we have the clock — some wrappers (e.g.
         # ``ChunkedSchedule``) need it. Until then ``self.policy`` mirrors the raw policy.
@@ -216,10 +210,8 @@ class Harness(pimm.ControlSystem):
         self.context: dict[str, Any] = {}
         self._static_meta = static_meta or {}
         self._session: Session | None = None
-        # Directive-driven lifecycle flags: ``_running`` gates stepping; ``_recording`` survives STOP
-        # (the suspended episode is in review until FINISH/HOME).
+        # True between RUN and FINISH/HOME: the trial is live — stepping and recording happen together.
         self._running = False
-        self._recording = False
         # ``inference_latency`` is delivered on the RUN context (sim-only): ``True`` advances the
         # (sim) clock by the wall-clock cost of the inference call; a float is a fixed deterministic
         # delay (used by the reproducible golden). Sleep is yielded BEFORE ``ChunkedSchedule`` reads
@@ -297,10 +289,10 @@ class Harness(pimm.ControlSystem):
             self._session.cancel()
 
     def _handle_directive(self, directive: Directive, clock: pimm.Clock) -> Generator[pimm.Command, None, None]:
-        """Handle a directive, yielding any necessary pauses; updates ``_running``/``_recording``."""
+        """Handle a directive, yielding any necessary pauses; updates ``_running``."""
         match directive.type:
             case DirectiveType.RUN:
-                if self._recording:
+                if self._running:
                     if self._session:
                         self._on_complete(self._session, self.context)
                     self._cancel_trajectories()
@@ -323,22 +315,12 @@ class Harness(pimm.ControlSystem):
                 self._session = self.policy.new_session(self.context)
                 self.ds_command.emit(DsWriterCommand.START(self._build_episode_meta(self.context)))
                 self._running = True
-                self._recording = True
-            case DirectiveType.STOP:
-                # SUSPEND before the cancel: the writer flushes the due trajectory
-                # prefix (dropping the future tail) when it handles SUSPEND, then skips
-                # inputs — so the `[]` cancel that follows is only acted on by the robot.
-                if self._recording:
-                    self.ds_command.emit(DsWriterCommand.SUSPEND())
-                self._cancel_trajectories()
-                self._running = False
             case DirectiveType.FINISH:
-                if self._recording:
+                if self._running:
                     if self._session:
                         self._on_complete(self._session, self.context)
                     self._cancel_trajectories()
                     self.ds_command.emit(DsWriterCommand.STOP(directive.payload or {}))
-                    self._recording = False
                 # End the per-episode session here (not just at RUN/shutdown) so a
                 # ``RemoteSession``'s websocket closes promptly and the offboard server's
                 # per-session cleanup (active-session decrement, idle watchdog) runs now.
@@ -349,9 +331,8 @@ class Harness(pimm.ControlSystem):
                 yield pimm.Yield()
                 self._running = False
             case DirectiveType.HOME:
-                if self._recording:
+                if self._running:
                     self.ds_command.emit(DsWriterCommand.ABORT())
-                    self._recording = False
                 if self._session:  # HOME aborts the episode; release the session like FINISH
                     self._session.close()
                     self._session = None
@@ -472,7 +453,7 @@ class Harness(pimm.ControlSystem):
             finally:
                 yield pimm.Sleep(0.01)
 
-        if self._recording:
+        if self._running:
             if self._session:
                 self._on_complete(self._session, self.context)
             # Stop the live drivers before finalizing (matches FINISH/RUN). The

@@ -338,13 +338,14 @@ from positronic.dataset import edits
 from positronic.dataset.local_dataset import load_dataset
 
 edits.set_static(root, episode.meta['uid'], {'eval.outcome': 'success', 'notes': 'clean run'})
+edits.drop(root, bad_episode.meta['uid'])  # remove from the loaded view; the recording stays on disk
 
-ds = load_dataset(root)  # LocalDataset(root) with the edit log applied as an EditedDataset view
+ds = load_dataset(root)  # LocalDataset(root) with the edit log applied
 ```
 
-Each line of `edits.jsonl` is one JSON record: `{"op": "set_static", "v": 1, "ep": "<uid>", "data": {...}}`. Records target episodes by `meta['uid']` and apply in log order with last-write-wins per key. Values follow the same restrictions as `EpisodeWriter.set_static`. A key colliding with a signal name raises when the episode is loaded; corrupt or unrecognized records fail loudly when the log is loaded.
+Each line of `edits.jsonl` is one JSON record carrying its op. `{"op": "set_static", "v": 1, "ep": "<uid>", "data": {...}}` merges static items over the episode's recorded ones, in log order with last-write-wins per key; values follow the same restrictions as `EpisodeWriter.set_static`, and a key colliding with a signal name raises when the episode is loaded. `{"op": "drop", "v": 1, "ep": "<uid>"}` removes the episode from the loaded view. Records target episodes by `meta['uid']`; corrupt or unrecognized records fail loudly when the log is loaded.
 
-Application is composition: `EditedDataset(base, edits)` wraps any `Dataset` — local, remote, concatenated — merging each episode's edits over its recorded statics. The `load_dataset` and `load_all_datasets` loaders compose it automatically; `LocalDataset` itself always reads the raw recordings. The log is plain appendable JSON so external tools can write it; the dataset directory assumes a single writer.
+Application is composition: `EditedDataset(base, edits)` wraps any `Dataset` — local, remote, concatenated — merging each episode's edits over its recorded statics, and dropped episodes are filtered out of the view. The `load_dataset` and `load_all_datasets` loaders compose it automatically; `LocalDataset` itself always reads the raw recordings. The log is plain appendable JSON so external tools can write it; the dataset directory assumes a single writer.
 
 ## `DsWriterAgent` (streaming recorder)
 

@@ -21,7 +21,7 @@ import pyarrow.parquet as pq
 from positronic.utils.git import get_git_state
 from positronic.utils.lazy import LazyDict
 
-from .dataset import ConcatDataset, Dataset, DatasetWriter
+from .dataset import ConcatDataset, Dataset, DatasetWriter, FilterDataset
 from .edits import EditedDataset, load_edits
 from .episode import (
     EPISODE_SCHEMA_VERSION,
@@ -540,12 +540,14 @@ class LocalDatasetWriter(DatasetWriter):
 def load_dataset(root: Path) -> Dataset:
     """Open a local dataset with its edit log applied.
 
-    `LocalDataset` reads the raw recordings; a discovered `edits.jsonl` composes on top as an `EditedDataset`
-    view. The log is loaded only when the directory actually holds episodes — an edit log binds to a dataset.
+    `LocalDataset` reads the raw recordings; a discovered `edits.jsonl` composes on top — static edits as an
+    `EditedDataset` view, dropped episodes filtered out. The log is loaded only when the directory actually
+    holds episodes — an edit log binds to a dataset.
     """
     ds = LocalDataset(root)
-    edits = load_edits(ds.root) if len(ds) else {}
-    return EditedDataset(ds, edits) if edits else ds
+    statics, dropped = load_edits(ds.root) if len(ds) else ({}, set())
+    edited = EditedDataset(ds, statics) if statics else ds
+    return FilterDataset(edited, lambda ep: ep.meta['uid'] not in dropped) if dropped else edited
 
 
 def load_all_datasets(root: Path) -> Dataset:

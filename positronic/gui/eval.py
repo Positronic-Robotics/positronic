@@ -1,12 +1,13 @@
-import json
 from collections.abc import Iterator
 from enum import Enum, auto
+from pathlib import Path
 
 import cv2
 import dearpygui.dearpygui as dpg
 import numpy as np
 
 import pimm
+from positronic.dataset import edits
 from positronic.policy.harness import Directive
 
 
@@ -33,14 +34,24 @@ TASK_TO_OBJECT = {TASKS[1]: 'Towels', TASKS[2]: 'Wooden spoons', TASKS[3]: 'Scis
 
 
 class EvalUI(pimm.ControlSystem):
-    def __init__(self, max_im_size: tuple[int, int] = (320, 240), ui_scale: float = 1.0):
+    """Operator console for attended evals.
+
+    Drives the trial lifecycle (RUN/FINISH/HOME directives) and writes the operator's review
+    onto the finished episode as edits in the dataset's edit log.
+    """
+
+    def __init__(
+        self, output_dir: Path | None = None, max_im_size: tuple[int, int] = (320, 240), ui_scale: float = 1.0
+    ):
         self.state = State.WAITING
+        self.output_dir = output_dir
         self.ui_scale = ui_scale
         self.max_im_size = (self.size(max_im_size[0]), self.size(max_im_size[1]))
 
         # --- Inputs/Outputs ---
         self.cameras = pimm.ReceiverDict(self, default=None)
         self.directive = pimm.ControlSystemEmitter(self)
+        self.last_episode = pimm.ControlSystemReceiver[str](self, default=None)
 
         # UI State
         self.element_states: dict[str | int, list[State]] = {}
@@ -49,10 +60,12 @@ class EvalUI(pimm.ControlSystem):
         self.im_sizes = {}
         self.raw_textures = {}
 
-        # New state
         self.cap_per_item = 30
         self.run_start_time = None
-        self.run_duration = None
+        # The edit target for Submit/Cancel, delivered by the recorder when an episode finalizes.
+        # Start is disabled while REVIEWING, so it still names the episode under review when the operator acts;
+        # it stays None when nothing is recorded (no output_dir).
+        self.episode_uid = None
 
     def size(self, v: int) -> int:
         """Scale a value by ui_scale."""
@@ -370,7 +383,9 @@ class EvalUI(pimm.ControlSystem):
         camera_val = dpg.get_value('camera_radio')
         if camera_val != 'NA':
             context['eval.external_camera'] = camera_val
+        context['eval.cap_per_item'] = self.cap_per_item
 
+        self.episode_uid = None
         self.run_start_time = self.clock.now()
         self.directive.emit(Directive.RUN(**context))
 
@@ -379,7 +394,6 @@ class EvalUI(pimm.ControlSystem):
             return
         print(f'State: REVIEWING ({reason})')
         self.state = State.REVIEWING
-        self.run_duration = self.clock.now() - self.run_start_time
 
         dpg.set_value('outcome_radio', reason)
         if reason == 'Success':
@@ -387,10 +401,7 @@ class EvalUI(pimm.ControlSystem):
             dpg.set_value('successful_items_input', total)
 
         self.update_ui()
-        self.directive.emit(Directive.STOP())
-
-    def stop(self, sender=None, app_data=None):
-        self.stop_run('System')
+        self.directive.emit(Directive.FINISH())
 
     def reset(self, sender=None, app_data=None):
         if self.state == State.REVIEWING:
@@ -409,33 +420,31 @@ class EvalUI(pimm.ControlSystem):
     def submit(self, sender=None, app_data=None):
         if self.state != State.REVIEWING:
             return
-
-        data = {
-            'eval.total_items': dpg.get_value('total_items_input'),
-            'eval.successful_items': dpg.get_value('successful_items_input'),
-            'eval.outcome': dpg.get_value('outcome_radio'),
-            'eval.notes': dpg.get_value('notes_input'),
-            'eval.duration': self.run_duration,
-            'eval.cap_per_item': self.cap_per_item,
-        }
-
-        print(json.dumps(data, indent=2))
-
-        dpg.set_value('notes_input', '')
-        dpg.set_value('successful_items_input', 0)
-        self.state = State.WAITING
-        self.update_ui()
-        self.directive.emit(Directive.FINISH(**data))
+        print('State: WAITING (Submitted)')
+        if self.episode_uid is not None:
+            data = {
+                'eval.total_items': dpg.get_value('total_items_input'),
+                'eval.successful_items': dpg.get_value('successful_items_input'),
+                'eval.outcome': dpg.get_value('outcome_radio'),
+                'eval.notes': dpg.get_value('notes_input'),
+            }
+            edits.set_static(self.output_dir, self.episode_uid, data)
+        self._leave_review()
 
     def cancel(self, sender=None, app_data=None):
         if self.state != State.REVIEWING:
             return
         print('State: WAITING (Cancelled)')
+        if self.episode_uid is not None:
+            edits.drop(self.output_dir, self.episode_uid)
+        self._leave_review()
+
+    def _leave_review(self):
+        self.episode_uid = None
         dpg.set_value('notes_input', '')
         dpg.set_value('successful_items_input', 0)
         self.state = State.WAITING
         self.update_ui()
-        self.directive.emit(Directive.HOME())
 
     # --- Callbacks ---
 
@@ -450,10 +459,6 @@ class EvalUI(pimm.ControlSystem):
     def cap_callback(self, sender, app_data):
         self.cap_per_item = app_data
         self.update_ui()
-
-    def aborted_callback(self, sender, app_data):
-        # Deprecated but kept if needed for other logic, though unused now
-        pass
 
     def validate_items_callback(self, sender, app_data):
         total = dpg.get_value('total_items_input')
@@ -565,6 +570,10 @@ class EvalUI(pimm.ControlSystem):
         self.update_ui()
 
         while not should_stop.value and dpg.is_dearpygui_running():
+            uid_msg = self.last_episode.read()
+            if uid_msg.updated:
+                self.episode_uid = uid_msg.data
+
             # Check for time limit and update elapsed display
             if self.state == State.RUNNING and self.run_start_time:
                 elapsed = self.clock.now() - self.run_start_time
@@ -623,8 +632,6 @@ class EvalUI(pimm.ControlSystem):
 
 
 def main():
-    import numpy as np
-
     class FakeCamera(pimm.ControlSystem):
         def __init__(self):
             super().__init__()
