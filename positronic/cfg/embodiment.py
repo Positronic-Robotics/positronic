@@ -1,4 +1,5 @@
 import configuronic as cfn
+import numpy as np
 
 import positronic.cfg.hardware.camera
 import positronic.cfg.hardware.gripper
@@ -55,7 +56,11 @@ def mujoco_franka(sim, camera_dict):
         **{name: Observation(sim.cameras[orig], Serializers.camera_images) for name, orig in camera_dict.items()},
     }
     commands = {
-        'robot_command': Command(sim.commands, roboarm_command.Reset(), Serializers.robot_command),
+        # Homing drives the arm to the scene's initial pose instead of `Reset()`: in MujocoSim, `Reset()`
+        # rebuilds the whole scene, which would wipe the trial's end state right when the operator reviews it.
+        'robot_command': Command(
+            sim.commands, roboarm_command.JointPosition(np.array(sim.initial_ctrl[:7])), Serializers.robot_command
+        ),
         'target_grip': Command(sim.target_grip, 0.0, None),
     }
     return Embodiment(

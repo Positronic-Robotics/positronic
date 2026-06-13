@@ -22,7 +22,7 @@ from positronic.utils.git import get_git_state
 from positronic.utils.lazy import LazyDict
 
 from .dataset import ConcatDataset, Dataset, DatasetWriter
-from .edits import EditedDataset, load_edits
+from .edits import EditedDataset
 from .episode import (
     EPISODE_SCHEMA_VERSION,
     SIGNAL_FACTORY_T,
@@ -537,15 +537,14 @@ class LocalDatasetWriter(DatasetWriter):
         pass
 
 
-def load_dataset(root: Path) -> Dataset:
+def load_dataset(root: Path) -> EditedDataset:
     """Open a local dataset with its edit log applied.
 
-    `LocalDataset` reads the raw recordings; a discovered `edits.jsonl` composes on top as an `EditedDataset`
-    view. The log is loaded only when the directory actually holds episodes — an edit log binds to a dataset.
+    `LocalDataset` reads the raw recordings; `EditedDataset` reads the `edits.jsonl` beside them and applies it —
+    dropped episodes hidden, static edits overlaid. The returned view also amends the log via
+    `set_static`/`drop`/`undrop`, each returning a fresh view over the same recordings.
     """
-    ds = LocalDataset(root)
-    edits = load_edits(ds.root) if len(ds) else {}
-    return EditedDataset(ds, edits) if edits else ds
+    return EditedDataset(LocalDataset(root), root)
 
 
 def load_all_datasets(root: Path) -> Dataset:
@@ -582,11 +581,13 @@ def load_all_datasets(root: Path) -> Dataset:
     while to_explore:
         current_path = to_explore.popleft()
 
-        # Try to load this directory as a dataset; corrupt content (e.g. a bad edit log) propagates
+        # Try to load this directory as a dataset; corrupt content (e.g. a bad edit log) propagates.
+        # Validity is judged on the raw recordings: a dataset whose episodes are all dropped by edits
+        # is still a dataset — it loads as an empty curated view.
         try:
-            dataset = load_dataset(current_path)
-            if len(dataset) > 0:
-                datasets.append(dataset)
+            base = LocalDataset(current_path)
+            if len(base) > 0:
+                datasets.append(EditedDataset(base, current_path))
         except FileNotFoundError:
             pass
 

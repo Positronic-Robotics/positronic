@@ -1,19 +1,21 @@
-import json
 from collections.abc import Iterator
+from datetime import datetime
 from enum import Enum, auto
+from pathlib import Path
 
 import cv2
 import dearpygui.dearpygui as dpg
 import numpy as np
 
 import pimm
+from positronic.dataset.edits import EditedDataset
+from positronic.dataset.local_dataset import LocalDataset
 from positronic.policy.harness import Directive
 
 
 class State(Enum):
     WAITING = auto()
     RUNNING = auto()
-    REVIEWING = auto()
 
 
 UNIFIED_TASK = 'Pick all the items one by one from transparent tote and place them into the large grey tote.'
@@ -31,10 +33,29 @@ TASKS = [
 
 TASK_TO_OBJECT = {TASKS[1]: 'Towels', TASKS[2]: 'Wooden spoons', TASKS[3]: 'Scissors'}
 
+OUTCOMES = ['Success', 'Fail', 'Stalled', 'Ran out of time', 'Safety', 'System']
+
+SIDES = ['left', 'right', 'NA']
+
+EDITOR_POLL_SEC = 0.5
+
 
 class EvalUI(pimm.ControlSystem):
-    def __init__(self, max_im_size: tuple[int, int] = (320, 240), ui_scale: float = 1.0):
+    """Operator console for attended evals: trial control plus an episode editor.
+
+    Trial control drives the lifecycle (RUN/FINISH/HOME directives) and shows the remaining time budget.
+    The editor is a non-modal view over the recorded dataset: the operator navigates episodes and corrects
+    everything except the task itself (outcome, notes, item counts, object, tote/camera placement), with
+    each change committed to the edit log as it is made — the stop press itself persists the initial
+    annotation. Episodes can be dropped and undropped. New episodes are discovered by polling the dataset
+    directory, so reviewing never blocks the next trial.
+    """
+
+    def __init__(
+        self, output_dir: Path | None = None, max_im_size: tuple[int, int] = (320, 240), ui_scale: float = 1.0
+    ):
         self.state = State.WAITING
+        self.output_dir = output_dir
         self.ui_scale = ui_scale
         self.max_im_size = (self.size(max_im_size[0]), self.size(max_im_size[1]))
 
@@ -49,10 +70,23 @@ class EvalUI(pimm.ControlSystem):
         self.im_sizes = {}
         self.raw_textures = {}
 
-        # New state
         self.cap_per_item = 30
         self.run_start_time = None
-        self.run_duration = None
+
+        # Editor state. The editor navigates ALL recorded episodes by raw position (`_base`), showing dropped ones
+        # greyed-out rather than filtered away, while `_edited` is the curated/edit handle whose methods amend the log.
+        self._base = None
+        self._edited: EditedDataset | None = None
+        self._count = 0
+        self._dropped: frozenset[str] = frozenset()
+        self._sel: int | None = None
+        self._last_scan = float('-inf')
+        # The operator's stop press, persisted when the finished episode appears in the dataset directory.
+        # Held until then no matter what runs in between — Start/Reset must not destroy the verdict.
+        self._pending_review: dict | None = None
+        # The selected episode's video signal under the review scrubber.
+        self._rv_signal = None
+        self.rv_texture = np.zeros((240, 320, 4), dtype=np.float32)
 
     def size(self, v: int) -> int:
         """Scale a value by ui_scale."""
@@ -64,58 +98,42 @@ class EvalUI(pimm.ControlSystem):
         return tag
 
     def _create_theme(self):
+        text_cols = (dpg.mvThemeCol_Text, dpg.mvThemeCol_TextDisabled, dpg.mvThemeCol_CheckMark)
+        frame_cols = (
+            dpg.mvThemeCol_Button,
+            dpg.mvThemeCol_ButtonHovered,
+            dpg.mvThemeCol_ButtonActive,
+            dpg.mvThemeCol_FrameBg,
+            dpg.mvThemeCol_FrameBgHovered,
+            dpg.mvThemeCol_FrameBgActive,
+        )
         with dpg.theme(tag='disabled_theme'):
-            with dpg.theme_component(dpg.mvAll):
-                dpg.add_theme_color(dpg.mvThemeCol_Text, (100, 100, 100))
-                dpg.add_theme_color(dpg.mvThemeCol_TextDisabled, (100, 100, 100))
-                dpg.add_theme_color(dpg.mvThemeCol_Button, (20, 20, 20))
-                dpg.add_theme_color(dpg.mvThemeCol_ButtonHovered, (20, 20, 20))
-                dpg.add_theme_color(dpg.mvThemeCol_ButtonActive, (20, 20, 20))
-                dpg.add_theme_color(dpg.mvThemeCol_FrameBg, (20, 20, 20))
-                dpg.add_theme_color(dpg.mvThemeCol_CheckMark, (100, 100, 100))
-                dpg.add_theme_color(dpg.mvThemeCol_FrameBgHovered, (20, 20, 20))
-                dpg.add_theme_color(dpg.mvThemeCol_FrameBgActive, (20, 20, 20))
+            for enabled_state in (True, False):
+                with dpg.theme_component(dpg.mvAll, enabled_state=enabled_state):
+                    for col in text_cols:
+                        dpg.add_theme_color(col, (100, 100, 100))
+                    for col in frame_cols:
+                        dpg.add_theme_color(col, (20, 20, 20))
 
-            with dpg.theme_component(dpg.mvAll, enabled_state=False):
-                dpg.add_theme_color(dpg.mvThemeCol_Text, (100, 100, 100))
-                dpg.add_theme_color(dpg.mvThemeCol_TextDisabled, (100, 100, 100))
-                dpg.add_theme_color(dpg.mvThemeCol_Button, (20, 20, 20))
-                dpg.add_theme_color(dpg.mvThemeCol_ButtonHovered, (20, 20, 20))
-                dpg.add_theme_color(dpg.mvThemeCol_ButtonActive, (20, 20, 20))
-                dpg.add_theme_color(dpg.mvThemeCol_FrameBg, (20, 20, 20))
-                dpg.add_theme_color(dpg.mvThemeCol_CheckMark, (100, 100, 100))
-                dpg.add_theme_color(dpg.mvThemeCol_FrameBgHovered, (20, 20, 20))
-                dpg.add_theme_color(dpg.mvThemeCol_FrameBgActive, (20, 20, 20))
+        button_themes = {
+            'finished_theme': ((0, 100, 0), (0, 120, 0), (0, 80, 0)),
+            'fail_theme': ((170, 60, 0), (190, 70, 0), (150, 55, 0)),
+            'safety_theme': ((150, 0, 0), (170, 0, 0), (130, 0, 0)),
+            'system_theme': ((80, 80, 80), (100, 100, 100), (60, 60, 60)),
+        }
+        for tag, (button, hovered, active) in button_themes.items():
+            with dpg.theme(tag=tag), dpg.theme_component(dpg.mvButton):
+                dpg.add_theme_color(dpg.mvThemeCol_Button, button)
+                dpg.add_theme_color(dpg.mvThemeCol_ButtonHovered, hovered)
+                dpg.add_theme_color(dpg.mvThemeCol_ButtonActive, active)
 
-        with dpg.theme(tag='finished_theme'):
-            with dpg.theme_component(dpg.mvButton):
-                dpg.add_theme_color(dpg.mvThemeCol_Button, (0, 100, 0))
-                dpg.add_theme_color(dpg.mvThemeCol_ButtonHovered, (0, 120, 0))
-                dpg.add_theme_color(dpg.mvThemeCol_ButtonActive, (0, 80, 0))
-
-        with dpg.theme(tag='stall_theme'):
-            with dpg.theme_component(dpg.mvButton):
-                dpg.add_theme_color(dpg.mvThemeCol_Button, (150, 150, 0))
-                dpg.add_theme_color(dpg.mvThemeCol_ButtonHovered, (170, 170, 0))
-                dpg.add_theme_color(dpg.mvThemeCol_ButtonActive, (130, 130, 0))
-
-        with dpg.theme(tag='safety_theme'):
-            with dpg.theme_component(dpg.mvButton):
-                dpg.add_theme_color(dpg.mvThemeCol_Button, (150, 0, 0))
-                dpg.add_theme_color(dpg.mvThemeCol_ButtonHovered, (170, 0, 0))
-                dpg.add_theme_color(dpg.mvThemeCol_ButtonActive, (130, 0, 0))
-
-        with dpg.theme(tag='fail_theme'):
-            with dpg.theme_component(dpg.mvButton):
-                dpg.add_theme_color(dpg.mvThemeCol_Button, (170, 60, 0))
-                dpg.add_theme_color(dpg.mvThemeCol_ButtonHovered, (190, 70, 0))
-                dpg.add_theme_color(dpg.mvThemeCol_ButtonActive, (150, 55, 0))
-
-        with dpg.theme(tag='system_theme'):
-            with dpg.theme_component(dpg.mvButton):
-                dpg.add_theme_color(dpg.mvThemeCol_Button, (80, 80, 80))
-                dpg.add_theme_color(dpg.mvThemeCol_ButtonHovered, (100, 100, 100))
-                dpg.add_theme_color(dpg.mvThemeCol_ButtonActive, (60, 60, 60))
+    # Stop buttons: each ends the trial with its outcome as the initial annotation.
+    STOP_BUTTONS = [
+        ('Finished', 'Success', 'finished_theme'),
+        ('Fail', 'Fail', 'fail_theme'),
+        ('Safety', 'Safety', 'safety_theme'),
+        ('System', 'System', 'system_theme'),
+    ]
 
     def _build_controls(self):
         with dpg.group(horizontal=True):
@@ -123,48 +141,26 @@ class EvalUI(pimm.ControlSystem):
                 dpg.add_button(label='Start', callback=self.start, width=self.size(80), height=self.size(32)),
                 [State.WAITING],
             )
-            dpg.add_spacer(width=self.size(10))
-            dpg.add_spacer(width=self.size(10))
-
-            # Stop buttons
-            btn_finished = dpg.add_button(
-                label='Finished', callback=lambda: self.stop_run('Success'), width=self.size(80), height=self.size(32)
-            )
-            dpg.bind_item_theme(btn_finished, 'finished_theme')
-            self._register(btn_finished, [State.RUNNING])
-
+            dpg.add_spacer(width=self.size(15))
+            for label, reason, theme in self.STOP_BUTTONS:
+                btn = dpg.add_button(
+                    label=label,
+                    callback=self._on_stop_button,
+                    user_data=reason,
+                    width=self.size(80),
+                    height=self.size(32),
+                )
+                dpg.bind_item_theme(btn, theme)
+                self._register(btn, [State.RUNNING])
+                dpg.add_spacer(width=self.size(5))
             dpg.add_spacer(width=self.size(5))
-            btn_fail = dpg.add_button(
-                label='Fail', callback=lambda: self.stop_run('Fail'), width=self.size(80), height=self.size(32)
-            )
-            dpg.bind_item_theme(btn_fail, 'fail_theme')
-            self._register(btn_fail, [State.RUNNING])
-
-            dpg.add_spacer(width=self.size(5))
-            btn_stall = dpg.add_button(
-                label='Stall', callback=lambda: self.stop_run('Stalled'), width=self.size(80), height=self.size(32)
-            )
-            dpg.bind_item_theme(btn_stall, 'stall_theme')
-            self._register(btn_stall, [State.RUNNING])
-
-            dpg.add_spacer(width=self.size(5))
-            btn_safety = dpg.add_button(
-                label='Safety', callback=lambda: self.stop_run('Safety'), width=self.size(80), height=self.size(32)
-            )
-            dpg.bind_item_theme(btn_safety, 'safety_theme')
-            self._register(btn_safety, [State.RUNNING])
-
-            dpg.add_spacer(width=self.size(5))
-            btn_system = dpg.add_button(
-                label='System', callback=lambda: self.stop_run('System'), width=self.size(80), height=self.size(32)
-            )
-            dpg.bind_item_theme(btn_system, 'system_theme')
-            self._register(btn_system, [State.RUNNING])
-            dpg.add_spacer(width=self.size(10))
             self._register(
                 dpg.add_button(label='Reset', callback=self.reset, width=self.size(80), height=self.size(32)),
                 [State.WAITING, State.RUNNING],
             )
+            dpg.add_spacer(width=self.size(25))
+            with dpg.drawlist(width=self.size(160), height=self.size(46)):
+                dpg.draw_text((0, 0), '0:00', size=self.size(40), tag='time_text')
 
     def _build_configuration(self):
         dpg.add_text('Configuration')
@@ -211,7 +207,7 @@ class EvalUI(pimm.ControlSystem):
                     tag='total_items_input',
                     callback=self.validate_items_callback,
                 ),
-                [State.WAITING, State.REVIEWING],
+                [State.WAITING],
             )
             dpg.add_spacer(width=self.size(20))
             self._register(
@@ -225,7 +221,7 @@ class EvalUI(pimm.ControlSystem):
                     tag='successful_items_input',
                     callback=self.validate_items_callback,
                 ),
-                [State.RUNNING, State.REVIEWING],
+                [State.RUNNING],
             )
             dpg.add_spacer(width=self.size(30))
             self._register(
@@ -239,71 +235,127 @@ class EvalUI(pimm.ControlSystem):
                 ),
                 [State.WAITING],
             )
-            dpg.add_spacer(width=self.size(10))
-            dpg.add_text('Total run cap: 0 sec', tag='total_run_cap_text')
 
-        dpg.add_spacer(height=self.size(30))
+        dpg.add_spacer(height=self.size(20))
         with dpg.group(horizontal=True):
             dpg.add_text('Tote Placement')
             self._register(
-                dpg.add_radio_button(
-                    items=['left', 'right', 'NA'], default_value='NA', horizontal=True, tag='tote_radio'
-                ),
+                dpg.add_radio_button(items=SIDES, default_value='NA', horizontal=True, tag='tote_radio'),
                 [State.WAITING],
             )
             dpg.add_spacer(width=self.size(20))
             dpg.add_text('External Camera')
             self._register(
-                dpg.add_radio_button(
-                    items=['left', 'right', 'NA'], default_value='NA', horizontal=True, tag='camera_radio'
-                ),
+                dpg.add_radio_button(items=SIDES, default_value='NA', horizontal=True, tag='camera_radio'),
                 [State.WAITING],
             )
 
-        dpg.add_spacer(height=self.size(30))
+    # Editor fields that commit when the operator leaves the widget after editing; radios commit on click.
+    TEXT_FIELDS = {
+        'ed_total': 'eval.total_items',
+        'ed_success': 'eval.successful_items',
+        'ed_notes': 'eval.notes',
+        'ed_object': 'eval.object',
+    }
+    RADIO_FIELDS = {'ed_outcome': 'eval.outcome', 'ed_tote': 'eval.tote_placement', 'ed_camera': 'eval.external_camera'}
+
+    def _build_editor(self):
+        with dpg.group(horizontal=True):
+            dpg.add_button(label='<', tag='ed_prev', callback=lambda: self._select(self._sel - 1), width=self.size(28))
+            dpg.add_text('-/-', tag='ed_pos')
+            dpg.add_button(label='>', tag='ed_next', callback=lambda: self._select(self._sel + 1), width=self.size(28))
+            dpg.add_spacer(width=self.size(15))
+            dpg.add_text('', tag='ed_time')
+            dpg.add_spacer(width=self.size(15))
+            dpg.add_text('', tag='ed_status', color=(220, 60, 60))
+        dpg.add_spacer(height=self.size(5))
+        dpg.add_text('', tag='ed_task', wrap=self.size(560))
+        dpg.add_spacer(height=self.size(5))
         with dpg.group(horizontal=True):
             dpg.add_text('Outcome')
             dpg.add_spacer(width=self.size(5))
-            self._register(
-                dpg.add_radio_button(
-                    items=['Success', 'Fail', 'Stalled', 'Ran out of time', 'Safety', 'System'],
-                    default_value='Success',
-                    horizontal=True,
-                    tag='outcome_radio',
-                ),
-                [State.REVIEWING],
+            dpg.add_radio_button(
+                items=OUTCOMES,
+                default_value=OUTCOMES[0],
+                horizontal=True,
+                tag='ed_outcome',
+                callback=self._commit_field,
+                user_data='ed_outcome',
             )
-
-    def _build_notes(self):
-        dpg.add_text('Notes')
         dpg.add_spacer(height=self.size(5))
         with dpg.group(horizontal=True):
-            self._register(
-                dpg.add_input_text(multiline=True, height=self.size(60), width=self.size(380), tag='notes_input'),
-                [State.REVIEWING],
+            dpg.add_input_int(
+                label='Total items', step=1, min_value=1, min_clamped=True, width=self.size(80), tag='ed_total'
             )
+            dpg.add_spacer(width=self.size(20))
+            dpg.add_input_int(
+                label='Successful', step=1, min_value=0, min_clamped=True, width=self.size(80), tag='ed_success'
+            )
+            dpg.add_spacer(width=self.size(20))
+            dpg.add_input_text(label='Object', width=self.size(160), tag='ed_object')
+        dpg.add_spacer(height=self.size(5))
+        with dpg.group(horizontal=True):
+            dpg.add_text('Tote')
+            dpg.add_radio_button(
+                items=SIDES,
+                default_value='NA',
+                horizontal=True,
+                tag='ed_tote',
+                callback=self._commit_field,
+                user_data='ed_tote',
+            )
+            dpg.add_spacer(width=self.size(20))
+            dpg.add_text('Camera')
+            dpg.add_radio_button(
+                items=SIDES,
+                default_value='NA',
+                horizontal=True,
+                tag='ed_camera',
+                callback=self._commit_field,
+                user_data='ed_camera',
+            )
+        dpg.add_spacer(height=self.size(5))
+        with dpg.group(horizontal=True):
+            dpg.add_input_text(multiline=True, height=self.size(60), width=self.size(380), tag='ed_notes')
             dpg.add_spacer(width=self.size(10))
             with dpg.group(horizontal=False):
-                self._register(
-                    dpg.add_button(label='Submit', width=self.size(100), height=self.size(28), callback=self.submit),
-                    [State.REVIEWING],
+                dpg.add_button(
+                    label='Drop', tag='ed_drop', width=self.size(100), height=self.size(28), callback=self.drop_episode
                 )
-                dpg.add_spacer(height=self.size(5))
-                self._register(
-                    dpg.add_button(label='Cancel', width=self.size(100), height=self.size(28), callback=self.cancel),
-                    [State.REVIEWING],
+                dpg.add_button(
+                    label='Undrop',
+                    tag='ed_undrop',
+                    width=self.size(100),
+                    height=self.size(28),
+                    callback=self.undrop_episode,
+                    show=False,
                 )
+        dpg.add_spacer(height=self.size(10))
+        with dpg.group(horizontal=True):
+            dpg.add_text('Recorded video')
+            dpg.add_spacer(width=self.size(15))
+            dpg.add_combo(items=[], tag='rv_camera', width=self.size(200), callback=self._on_review_camera)
+        dpg.add_image('rv_tex', width=self.size(320), height=self.size(240))
+        with dpg.group(horizontal=True):
+            dpg.add_slider_int(tag='rv_slider', width=self.size(250), callback=lambda s, a: self._show_frame(a))
+            dpg.add_spacer(width=self.size(10))
+            dpg.add_text('', tag='rv_time')
+        for tag in self.TEXT_FIELDS:
+            with dpg.item_handler_registry() as reg:
+                dpg.add_item_deactivated_after_edit_handler(callback=self._commit_field, user_data=tag)
+            dpg.bind_item_handler_registry(tag, reg)
 
     def _setup_key_handlers(self):
         with dpg.handler_registry():
 
             def safe_trigger(callback):
                 text_inputs = [
-                    'notes_input',
                     'custom_input',
                     'object_custom_input',
                     'total_items_input',
                     'successful_items_input',
+                    'cap_per_item_input',
+                    *self.TEXT_FIELDS,
                 ]
                 for tag in text_inputs:
                     if dpg.is_item_focused(tag):
@@ -334,17 +386,6 @@ class EvalUI(pimm.ControlSystem):
             dpg.add_key_press_handler(dpg.mvKey_Up, callback=change_radio_selection)
             dpg.add_key_press_handler(dpg.mvKey_Down, callback=change_radio_selection)
 
-            def submit_on_enter():
-                if self.state == State.REVIEWING:
-                    self.submit()
-
-            def cancel_on_escape():
-                if self.state == State.REVIEWING:
-                    self.cancel()
-
-            dpg.add_key_press_handler(dpg.mvKey_Return, callback=lambda s, a: safe_trigger(submit_on_enter))
-            dpg.add_key_press_handler(dpg.mvKey_Escape, callback=lambda s, a: safe_trigger(cancel_on_escape))
-
     # --- State Transitions ---
 
     def start(self, sender=None, app_data=None):
@@ -370,72 +411,175 @@ class EvalUI(pimm.ControlSystem):
         camera_val = dpg.get_value('camera_radio')
         if camera_val != 'NA':
             context['eval.external_camera'] = camera_val
+        context['eval.total_items'] = dpg.get_value('total_items_input')
+        context['eval.cap_per_item'] = self.cap_per_item
 
         self.run_start_time = self.clock.now()
         self.directive.emit(Directive.RUN(**context))
 
+    # Parametrized dpg callbacks take the (sender, app_data, user_data) form with the parameter riding
+    # ``user_data``: dpg builds the argument list from the callback's arity and cannot introspect
+    # ``functools.partial`` objects, so a partial-bound callback never fires.
+    def _on_stop_button(self, sender, app_data, user_data):
+        self.stop_run(user_data)
+
     def stop_run(self, reason):
         if self.state != State.RUNNING:
             return
-        print(f'State: REVIEWING ({reason})')
-        self.state = State.REVIEWING
-        self.run_duration = self.clock.now() - self.run_start_time
-
-        dpg.set_value('outcome_radio', reason)
-        if reason == 'Success':
-            total = dpg.get_value('total_items_input')
-            dpg.set_value('successful_items_input', total)
+        print(f'State: WAITING ({reason})')
+        self.state = State.WAITING
+        total = dpg.get_value('total_items_input')
+        successful = total if reason == 'Success' else dpg.get_value('successful_items_input')
+        self._pending_review = {'outcome': reason, 'successful': successful}
 
         self.update_ui()
-        self.directive.emit(Directive.STOP())
-
-    def stop(self, sender=None, app_data=None):
-        self.stop_run('System')
+        self.directive.emit(Directive.FINISH())
 
     def reset(self, sender=None, app_data=None):
-        if self.state == State.REVIEWING:
-            return  # Reset disabled in REVIEWING
-
         print('State: WAITING (Reset)')
-        # Reset data
-        dpg.set_value('successful_items_input', 0)
-        # Reset to WAITING
-        self.state = State.WAITING
-        self.update_ui()
-
-        # Emit commands
-        self.directive.emit(Directive.HOME())
-
-    def submit(self, sender=None, app_data=None):
-        if self.state != State.REVIEWING:
-            return
-
-        data = {
-            'eval.total_items': dpg.get_value('total_items_input'),
-            'eval.successful_items': dpg.get_value('successful_items_input'),
-            'eval.outcome': dpg.get_value('outcome_radio'),
-            'eval.notes': dpg.get_value('notes_input'),
-            'eval.duration': self.run_duration,
-            'eval.cap_per_item': self.cap_per_item,
-        }
-
-        print(json.dumps(data, indent=2))
-
-        dpg.set_value('notes_input', '')
-        dpg.set_value('successful_items_input', 0)
-        self.state = State.WAITING
-        self.update_ui()
-        self.directive.emit(Directive.FINISH(**data))
-
-    def cancel(self, sender=None, app_data=None):
-        if self.state != State.REVIEWING:
-            return
-        print('State: WAITING (Cancelled)')
-        dpg.set_value('notes_input', '')
-        dpg.set_value('successful_items_input', 0)
         self.state = State.WAITING
         self.update_ui()
         self.directive.emit(Directive.HOME())
+
+    # --- Episode editor ---
+
+    def _refresh_view(self):
+        """Rebuild the editor over the dataset directory; call after new episodes land on disk."""
+        self._base = LocalDataset(self.output_dir)
+        self._edited = EditedDataset(self._base, self.output_dir)
+        self._dropped = self._edited.dropped
+        self._count = len(self._base)
+
+    def _select(self, idx: int):
+        """Select an episode and populate the review form from its current (edits-applied) state."""
+        if self._count == 0:
+            self._sel = None
+        else:
+            self._sel = max(0, min(idx, self._count - 1))
+            ep = self._edited.overlay(self._base[self._sel])
+            static = ep.static
+            dpg.set_value('ed_task', static.get('task', ''))
+            dpg.set_value('ed_outcome', static.get('eval.outcome', OUTCOMES[0]))
+            dpg.set_value('ed_total', static.get('eval.total_items', 1))
+            dpg.set_value('ed_success', static.get('eval.successful_items', 0))
+            dpg.set_value('ed_notes', static.get('eval.notes', ''))
+            dpg.set_value('ed_object', static.get('eval.object', ''))
+            dpg.set_value('ed_tote', static.get('eval.tote_placement', 'NA'))
+            dpg.set_value('ed_camera', static.get('eval.external_camera', 'NA'))
+            recorded_at = datetime.fromtimestamp(ep.meta['created_ts_ns'] / 1e9)
+            dpg.set_value('ed_time', recorded_at.strftime('%Y-%m-%d %H:%M:%S'))
+        self._bind_review_video()
+        self._update_editor_ui()
+
+    def _poll_episodes(self):
+        """Pick up newly finished episodes; the recorder's `.unfinished` marker hides in-progress ones."""
+        if self.output_dir is None or len(LocalDataset(self.output_dir)) == self._count:
+            return
+        self._refresh_view()
+        if self._pending_review is not None:
+            # The episode the operator just stopped: the stop press is the initial annotation — persist it
+            # right away, then surface the episode for corrections.
+            uid = self._base[self._count - 1].meta['uid']
+            self._edited = self._edited.set_static(
+                uid,
+                {
+                    'eval.outcome': self._pending_review['outcome'],
+                    'eval.successful_items': self._pending_review['successful'],
+                },
+            )
+            dpg.set_value('mode_tabs', 'tab_episodes')
+            self._pending_review = None
+        self._select(self._count - 1)
+
+    def _commit_field(self, sender, app_data, user_data):
+        if user_data in ('ed_total', 'ed_success'):
+            # Same invariant the live controls enforce: successful never exceeds total.
+            total = dpg.get_value('ed_total')
+            successful = min(dpg.get_value('ed_success'), total)
+            dpg.set_value('ed_success', successful)
+            data = {'eval.total_items': total, 'eval.successful_items': successful}
+        else:
+            key = (self.TEXT_FIELDS | self.RADIO_FIELDS)[user_data]
+            data = {key: dpg.get_value(user_data)}
+        self._edited = self._edited.set_static(self._base[self._sel].meta['uid'], data)
+
+    def _bind_review_video(self):
+        # GUI video binding follows the `image.` observation naming convention, like the live feeds.
+        ep = self._base[self._sel] if self._sel is not None else None
+        cams = sorted(k for k in ep if k.startswith('image.')) if ep is not None else []
+        dpg.configure_item('rv_camera', items=cams)
+        if not cams:
+            self._rv_signal = None
+            dpg.set_value('rv_time', '')
+            self.rv_texture[:] = 0.0
+            return
+        cam = dpg.get_value('rv_camera')
+        if cam not in cams:
+            cam = cams[0]
+            dpg.set_value('rv_camera', cam)
+        self._rv_signal = ep[cam]
+        last = len(self._rv_signal) - 1
+        dpg.configure_item('rv_slider', max_value=last)
+        dpg.set_value('rv_slider', last)
+        self._show_frame(last)
+
+    def _on_review_camera(self, sender=None, app_data=None):
+        self._rv_signal = self._base[self._sel][app_data]
+        last = len(self._rv_signal) - 1
+        dpg.configure_item('rv_slider', max_value=last)
+        idx = min(dpg.get_value('rv_slider'), last)
+        dpg.set_value('rv_slider', idx)
+        self._show_frame(idx)
+
+    def _show_frame(self, idx: int):
+        if self._rv_signal is None:
+            return
+        idx = max(0, min(int(idx), len(self._rv_signal) - 1))
+        frame, ts = self._rv_signal[idx]
+        h, w = frame.shape[:2]
+        th, tw = self.rv_texture.shape[:2]
+        scale = min(tw / w, th / h)
+        dw, dh = int(w * scale), int(h * scale)
+        resized = cv2.resize(frame, (dw, dh), interpolation=cv2.INTER_AREA)
+        self.rv_texture[:] = 0.0
+        y0, x0 = (th - dh) // 2, (tw - dw) // 2
+        self.rv_texture[y0 : y0 + dh, x0 : x0 + dw, :3] = resized / 255.0
+        self.rv_texture[y0 : y0 + dh, x0 : x0 + dw, 3] = 1.0
+        t0 = self._rv_signal.start_ts
+        dpg.set_value('rv_time', f'{(ts - t0) / 1e9:.1f} / {(self._rv_signal.last_ts - t0) / 1e9:.1f}s')
+
+    def drop_episode(self, sender=None, app_data=None):
+        self._edited = self._edited.drop(self._base[self._sel].meta['uid'])
+        self._dropped = self._edited.dropped
+        self._select(self._sel)
+
+    def undrop_episode(self, sender=None, app_data=None):
+        self._edited = self._edited.undrop(self._base[self._sel].meta['uid'])
+        self._dropped = self._edited.dropped
+        self._select(self._sel)
+
+    def _set_enabled(self, tag, enabled: bool):
+        dpg.bind_item_theme(tag, 0 if enabled else 'disabled_theme')
+        dpg.configure_item(tag, enabled=enabled)
+
+    def _update_editor_ui(self):
+        if self._sel is None:
+            dpg.set_value('ed_pos', '-/-')
+            dpg.set_value('ed_time', '')
+            dpg.set_value('ed_status', '')
+            dropped = False
+        else:
+            dropped = self._base[self._sel].meta['uid'] in self._dropped
+            dpg.set_value('ed_pos', f'{self._sel + 1}/{self._count}')
+            dpg.set_value('ed_status', 'DROPPED' if dropped else '')
+        editable = self._sel is not None and not dropped
+        for tag in (*self.TEXT_FIELDS, *self.RADIO_FIELDS):
+            self._set_enabled(tag, editable)
+        self._set_enabled('ed_prev', self._sel is not None and self._sel > 0)
+        self._set_enabled('ed_next', self._sel is not None and self._sel < self._count - 1)
+        dpg.configure_item('ed_drop', show=not dropped)
+        self._set_enabled('ed_drop', self._sel is not None and not dropped)
+        dpg.configure_item('ed_undrop', show=dropped)
 
     # --- Callbacks ---
 
@@ -450,10 +594,6 @@ class EvalUI(pimm.ControlSystem):
     def cap_callback(self, sender, app_data):
         self.cap_per_item = app_data
         self.update_ui()
-
-    def aborted_callback(self, sender, app_data):
-        # Deprecated but kept if needed for other logic, though unused now
-        pass
 
     def validate_items_callback(self, sender, app_data):
         total = dpg.get_value('total_items_input')
@@ -474,15 +614,13 @@ class EvalUI(pimm.ControlSystem):
 
     # --- UI Update ---
 
+    def _set_timer(self, seconds: float):
+        m, s = divmod(max(0, int(seconds)), 60)
+        dpg.configure_item('time_text', text=f'{m}:{s:02d}')
+
     def update_ui(self, task_value=None):
         for tag, enabled_states in self.element_states.items():
-            should_be_enabled = self.state in enabled_states
-            if not should_be_enabled:
-                dpg.bind_item_theme(tag, 'disabled_theme')
-                dpg.configure_item(tag, enabled=False)
-            else:
-                dpg.bind_item_theme(tag, 0)
-                dpg.configure_item(tag, enabled=True)
+            self._set_enabled(tag, self.state in enabled_states)
 
         # Special logic for dependent widgets
         if task_value is None:
@@ -506,13 +644,7 @@ class EvalUI(pimm.ControlSystem):
 
         if self.state == State.WAITING:
             dpg.set_value('successful_items_input', 0)
-            dpg.set_value('notes_input', '')
-
-        # Update time text
-        total_items = dpg.get_value('total_items_input')
-        total_seconds = total_items * self.cap_per_item
-        cap_text = f'{total_seconds // 60}:{total_seconds % 60:02d}'
-        dpg.set_value('total_run_cap_text', f'Cap: {cap_text}')
+            self._set_timer(dpg.get_value('total_items_input') * self.cap_per_item)
 
     # --- Control System Run Loop ---
 
@@ -522,10 +654,13 @@ class EvalUI(pimm.ControlSystem):
         dpg.create_context()
         self._create_theme()
 
+        with dpg.texture_registry(show=False):
+            dpg.add_raw_texture(320, 240, default_value=self.rv_texture, format=dpg.mvFormat_Float_rgba, tag='rv_tex')
+
         # Window
         with dpg.window(label='Evaluation Control', width=self.size(1200), height=self.size(800), tag='main_window'):
             with dpg.group(horizontal=True):
-                # Left side: Camera feeds in vertical column
+                # Left side: live camera feeds, fixed in place across tabs so the operator's view never jumps.
                 with dpg.group(horizontal=False, tag='image_grid_group'):
                     dpg.add_text('Camera Feed')
 
@@ -538,17 +673,14 @@ class EvalUI(pimm.ControlSystem):
                     dpg.add_spacer(height=self.size(5))
                     self._build_controls()
 
-                    dpg.add_spacer(height=self.size(45))
-                    dpg.add_separator()
                     dpg.add_spacer(height=self.size(10))
-
-                    self._build_configuration()
-
-                    dpg.add_spacer(height=self.size(45))
-                    dpg.add_separator()
-                    dpg.add_spacer(height=self.size(10))
-
-                    self._build_notes()
+                    with dpg.tab_bar(tag='mode_tabs'):
+                        with dpg.tab(label='Trial', tag='tab_trial'):
+                            dpg.add_spacer(height=self.size(10))
+                            self._build_configuration()
+                        with dpg.tab(label='Episodes', tag='tab_episodes'):
+                            dpg.add_spacer(height=self.size(10))
+                            self._build_editor()
 
         self._setup_key_handlers()
 
@@ -561,17 +693,23 @@ class EvalUI(pimm.ControlSystem):
         dpg.show_viewport()
         dpg.maximize_viewport()
 
-        # Initialize UI state
+        # Initialize UI state; open the editor on the newest episode of an existing dataset
         self.update_ui()
+        if self.output_dir is not None:
+            self._refresh_view()
+        self._select(self._count - 1)
 
         while not should_stop.value and dpg.is_dearpygui_running():
-            # Check for time limit and update elapsed display
+            now = self.clock.now()
+            if now - self._last_scan >= EDITOR_POLL_SEC:
+                self._last_scan = now
+                self._poll_episodes()
+
+            # Count down the remaining time budget; the run stops when it is exhausted
             if self.state == State.RUNNING and self.run_start_time:
-                elapsed = self.clock.now() - self.run_start_time
+                elapsed = now - self.run_start_time
                 total_cap = dpg.get_value('total_items_input') * self.cap_per_item
-                elapsed_int = int(elapsed)
-                cap_text = f'{total_cap // 60}:{total_cap % 60:02d}'
-                dpg.set_value('total_run_cap_text', f'{elapsed_int // 60}:{elapsed_int % 60:02d} / {cap_text}')
+                self._set_timer(total_cap - elapsed)
                 if elapsed > total_cap:
                     self.stop_run('Ran out of time')
 
@@ -623,8 +761,6 @@ class EvalUI(pimm.ControlSystem):
 
 
 def main():
-    import numpy as np
-
     class FakeCamera(pimm.ControlSystem):
         def __init__(self):
             super().__init__()

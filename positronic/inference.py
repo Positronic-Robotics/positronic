@@ -42,7 +42,11 @@ class KeyboardHandler:
 
 @dataclass
 class Driver:
-    """An attended operator surface: the directive source ``main`` wires into the Harness."""
+    """An attended operator surface: the directive source ``main`` wires into the Harness.
+
+    Driver configs produce a factory called with the resolved local output directory, since
+    the directory exists only after ``pos3.sync`` inside ``main``.
+    """
 
     gui: DearpyguiUi | None
     directives: pimm.SignalEmitter
@@ -52,21 +56,27 @@ class Driver:
 
 @cfn.config(ui_scale=1)
 def eval_ui(ui_scale):
-    gui = EvalUI(ui_scale=ui_scale)
-    return Driver(gui, gui.directive, pimm.utils.identity, [])
+    def make(output_dir: Path | None) -> Driver:
+        gui = EvalUI(output_dir, ui_scale=ui_scale)
+        return Driver(gui, gui.directive, pimm.utils.identity, [])
+
+    return make
 
 
 @cfn.config(show_gui=False)
 def keyboard(show_gui, task):
-    keyboard = KeyboardControl(quit_key='q')
-    keyboard_handler = KeyboardHandler(task=task)
-    print('Keyboard controls: [s]tart, sto[p], [r] home, [q]uit')
-    return Driver(
-        None if not show_gui else DearpyguiUi(),
-        keyboard.keyboard_inputs,
-        pimm.map(keyboard_handler.harness_directive),
-        [keyboard],
-    )
+    def make(output_dir: Path | None) -> Driver:
+        keyboard = KeyboardControl(quit_key='q')
+        keyboard_handler = KeyboardHandler(task=task)
+        print('Keyboard controls: [s]tart, sto[p], [r] home, [q]uit')
+        return Driver(
+            None if not show_gui else DearpyguiUi(),
+            keyboard.keyboard_inputs,
+            pimm.map(keyboard_handler.harness_directive),
+            [keyboard],
+        )
+
+    return make
 
 
 def _seed_counter(policy, output_dir: Path):
@@ -93,17 +103,10 @@ def _completion_sink(policy):
     return policy.counter.record if isinstance(policy, SampledPolicy) else None
 
 
-def _connect_ds_command(world, harness, ds_agent, policy):
-    """Connect harness.ds_command to ds_agent."""
-    if ds_agent is None:
-        return
-    world.connect(harness.ds_command, ds_agent.command)
-
-
 def main(
     embodiment: Embodiment,
     policy,
-    driver: Driver | None = None,
+    driver: Callable[[Path | None], Driver] | None = None,
     output_dir: str | Path | None = None,
     task: Task | None = None,
     trials: list[dict] | None = None,
@@ -115,20 +118,22 @@ def main(
     ``task`` (when given) supplies the policy-facing instruction, the per-trial ``timeout``
     bounding self-driven trials, the privileged ground-truth signals to record, and the seeded
     scene reset run at each trial start; without it the instruction rides the driver. Exactly
-    one of ``driver`` (attended: an operator surface emits the directives) or ``trials``
-    (unattended: the harness runs the plan itself) must be given; ``show_gui`` applies to the
-    unattended path (attended surfaces bring their own).
+    one of ``driver`` (attended: a factory producing the operator surface that emits the
+    directives) or ``trials`` (unattended: the harness runs the plan itself) must be given;
+    ``show_gui`` applies to the unattended path (attended surfaces bring their own).
     """
     assert (driver is None) != (trials is None), 'Provide exactly one of driver or trials'
     harness = Harness(
         policy, embodiment, task=task, trials=trials, wrap=wrap, on_episode_complete=_completion_sink(policy)
     )
-    gui = driver.gui if driver is not None else (DearpyguiUi() if show_gui else None)
 
     if output_dir is not None:
         output_dir = pos3.sync(output_dir, sync_on_error=True)
         utils.save_run_metadata(output_dir, patterns=['*.py', '*.toml'])
         _seed_counter(policy, output_dir)
+
+    driver = driver(output_dir) if driver is not None else None
+    gui = driver.gui if driver is not None else (DearpyguiUi() if show_gui else None)
 
     time_mode = TimeMode.MESSAGE if embodiment.simulated else TimeMode.CLOCK
     writer_cm = LocalDatasetWriter(output_dir) if output_dir is not None else nullcontext(None)
@@ -144,7 +149,8 @@ def main(
                     world.connect(obs.source, gui.cameras[name])
         if driver is not None:
             world.connect(driver.directives, harness.directive, emitter_wrapper=driver.directive_wrapper)
-        _connect_ds_command(world, harness, ds_agent, policy)
+        if ds_agent is not None:
+            world.connect(harness.ds_command, ds_agent.command)
 
         # Sim runs devices + recorder in-process under the virtual clock; real runs them as
         # background subprocesses. The harness, driver, and GUI placement is identical.
@@ -163,7 +169,7 @@ run_cfg = cfn.Config(main, embodiment=positronic.cfg.embodiment.droid, policy=po
 @pos3.with_mirror()
 def _internal_main():
     # Imported here to break the circular import: positronic.cfg.eval imports this module.
-    from positronic.cfg.eval import run as eval_run  # noqa
+    from positronic.cfg.eval import attended, run as eval_run  # noqa
     from positronic.cfg.eval.sim.positronic import stack_cubes  # noqa
 
     init_logging()
@@ -171,6 +177,7 @@ def _internal_main():
         'run': run_cfg,
         'real': run_cfg,  # `real` is the documented name for the hardware path
         'sim': eval_run.override(eval=stack_cubes),
+        'sim_ui': attended.override(eval=stack_cubes),
         'phail': run_cfg.override(
             policy=policy_cfg.phail_multiple,
             driver=eval_ui,

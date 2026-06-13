@@ -29,9 +29,9 @@ Every episode is stamped with `meta['uid']` (a uuid4 hex) at recording time — 
 
 ## Edits
 
-Recordings are immutable. All post-hoc modification goes through one mechanism: an append-only edit log (`edits.jsonl` in the dataset directory) of uid-keyed declarative records, applied as a view on read. The edit layer (`edits.py`) is generic — `EditedDataset(base, edits)` composes over any backend (local, remote); the `load_dataset`/`load_all_datasets` one-liners discover and apply a dataset's log, while `LocalDataset` itself reads raw recordings.
+Recordings are immutable. All post-hoc modification goes through one mechanism: an append-only edit log (`edits.jsonl` in the dataset directory) of uid-keyed declarative records, applied as a view on read. `EditedDataset(base, edits_dir)` is both that view and the handle that amends it: curated reads (drops hidden, static edits overlaid) plus `set_static`/`drop`/`undrop` methods that append a record and return a fresh view over the same recordings — so a held reference never changes shape underneath a consumer. `load_dataset`/`load_all_datasets` compose it over a `LocalDataset`, while `LocalDataset` itself reads raw recordings. The static overlay primitive (`EditedEpisode`) is backend-agnostic; the edit layer reads a local `edits_dir` for now — when a second edit-storage format appears, `edits_dir` is where the seam reopens.
 
-- One JSON record per line: `{"op": "set_static", "v": 1, "ep": "<uid>", "data": {...}}`. Records apply in log order; the last write per key wins. Each record carries its op and version, so a log stays replayable forever.
+- One JSON record per line, each carrying its op and version so a log stays replayable forever. `{"op": "set_static", "v": 1, "ep": "<uid>", "data": {...}}` merges static items over the recorded ones (log order, last write per key wins); `{"op": "drop", "v": 1, "ep": "<uid>"}` removes the episode from the loaded view while the recording stays on disk, and `{"op": "undrop", ...}` restores it — the last drop/undrop per episode wins.
 - The format stays dumb plain data — smarts live in the library — so external editors can write it. The dataset directory assumes a single writer; readers fail loudly on corrupt or unrecognized records.
 
 ## Episode properties
