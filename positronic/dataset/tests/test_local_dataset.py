@@ -438,7 +438,7 @@ def test_episode_without_stamped_uid_derives_one_from_created_ts(tmp_path):
     uid = LocalDataset(root)[0].meta['uid']
     assert uid == f'ts-{meta["created_ts_ns"]}'
 
-    edits.set_static(root, uid, {'verdict': 'success'})
+    load_dataset(root).set_static(uid, {'verdict': 'success'})
     assert load_dataset(root)[0]['verdict'] == 'success'
 
 
@@ -447,7 +447,7 @@ def test_set_static_edit_applies_on_read(tmp_path):
     ds = build_dataset_with_signal(root, [0, 1])
     uid = ds[0].meta['uid']
 
-    edits.set_static(root, uid, {'id': 100, 'verdict': 'success', 'blob': b'\x00\x01'})
+    load_dataset(root).set_static(uid, {'id': 100, 'verdict': 'success', 'blob': b'\x00\x01'})
 
     ds = load_dataset(root)
     assert ds[0]['id'] == 100
@@ -463,8 +463,8 @@ def test_set_static_edit_last_write_wins(tmp_path):
     ds = build_dataset_with_signal(root, [0])
     uid = ds[0].meta['uid']
 
-    edits.set_static(root, uid, {'verdict': 'fail', 'notes': 'first'})
-    edits.set_static(root, uid, {'verdict': 'success'})
+    load_dataset(root).set_static(uid, {'verdict': 'fail', 'notes': 'first'})
+    load_dataset(root).set_static(uid, {'verdict': 'success'})
 
     ds = load_dataset(root)
     assert ds[0]['verdict'] == 'success'
@@ -474,7 +474,7 @@ def test_set_static_edit_last_write_wins(tmp_path):
 def test_set_static_edit_colliding_with_signal_raises(tmp_path):
     root = tmp_path / 'ds'
     ds = build_dataset_with_signal(root, [0])
-    edits.set_static(root, ds[0].meta['uid'], {'signal': 1})
+    load_dataset(root).set_static(ds[0].meta['uid'], {'signal': 1})
 
     ds = load_dataset(root)
     with pytest.raises(ValueError, match='collide with signals'):
@@ -484,25 +484,28 @@ def test_set_static_edit_colliding_with_signal_raises(tmp_path):
 def test_set_static_edit_for_unknown_uid_is_inert(tmp_path):
     root = tmp_path / 'ds'
     build_dataset_with_signal(root, [0])
-    edits.set_static(root, 'no-such-uid', {'verdict': 'success'})
+    load_dataset(root).set_static('no-such-uid', {'verdict': 'success'})
 
     ds = load_dataset(root)
     assert ds[0].static == {'id': 0}
 
 
 def test_set_static_edit_rejects_invalid_values(tmp_path):
+    root = tmp_path / 'ds'
+    build_dataset_with_signal(root, [0])
+    ds = load_dataset(root)
     with pytest.raises(ValueError, match='JSON-serializable'):
-        edits.set_static(tmp_path, 'uid', {'bad': object()})
+        ds.set_static('uid', {'bad': object()})
     with pytest.raises(ValueError, match='must be a mapping'):
-        edits.set_static(tmp_path, 'uid', ['not', 'a', 'mapping'])
+        ds.set_static('uid', ['not', 'a', 'mapping'])
     with pytest.raises(ValueError, match='non-empty string'):
-        edits.set_static(tmp_path, None, {'verdict': 'ok'})
+        ds.set_static(None, {'verdict': 'ok'})
 
 
 def test_drop_edit_hides_episode(tmp_path):
     root = tmp_path / 'ds'
     ds = build_dataset_with_signal(root, [0, 1, 2])
-    edits.drop(root, ds[1].meta['uid'])
+    load_dataset(root).drop(ds[1].meta['uid'])
 
     assert episode_ids(load_dataset(root)[:]) == [0, 2]
     # The recording stays on disk; only the loaded view filters it
@@ -512,8 +515,8 @@ def test_drop_edit_hides_episode(tmp_path):
 def test_drop_edit_composes_with_set_static(tmp_path):
     root = tmp_path / 'ds'
     ds = build_dataset_with_signal(root, [0, 1])
-    edits.set_static(root, ds[0].meta['uid'], {'verdict': 'success'})
-    edits.drop(root, ds[1].meta['uid'])
+    load_dataset(root).set_static(ds[0].meta['uid'], {'verdict': 'success'})
+    load_dataset(root).drop(ds[1].meta['uid'])
 
     ds = load_dataset(root)
     assert len(ds) == 1
@@ -524,8 +527,8 @@ def test_drop_edit_hides_episode_with_invalid_static_edit(tmp_path):
     root = tmp_path / 'ds'
     ds = build_dataset_with_signal(root, [0, 1])
     # 'signal' collides with the recorded signal, which raises on episode access — unless the episode is dropped
-    edits.set_static(root, ds[1].meta['uid'], {'signal': 'collides'})
-    edits.drop(root, ds[1].meta['uid'])
+    load_dataset(root).set_static(ds[1].meta['uid'], {'signal': 'collides'})
+    load_dataset(root).drop(ds[1].meta['uid'])
 
     assert episode_ids(load_dataset(root)[:]) == [0]
 
@@ -533,7 +536,7 @@ def test_drop_edit_hides_episode_with_invalid_static_edit(tmp_path):
 def test_drop_edit_for_unknown_uid_is_inert(tmp_path):
     root = tmp_path / 'ds'
     build_dataset_with_signal(root, [0])
-    edits.drop(root, 'no-such-uid')
+    load_dataset(root).drop('no-such-uid')
     assert episode_ids(load_dataset(root)[:]) == [0]
 
 
@@ -542,20 +545,22 @@ def test_undrop_edit_restores_episode(tmp_path):
     ds = build_dataset_with_signal(root, [0, 1])
     uid = ds[0].meta['uid']
 
-    edits.drop(root, uid)
+    load_dataset(root).drop(uid)
     assert episode_ids(load_dataset(root)[:]) == [1]
 
-    edits.undrop(root, uid)
+    load_dataset(root).undrop(uid)
     assert episode_ids(load_dataset(root)[:]) == [0, 1]
 
     # The last drop/undrop in log order wins
-    edits.drop(root, uid)
+    load_dataset(root).drop(uid)
     assert episode_ids(load_dataset(root)[:]) == [1]
 
 
 def test_drop_edit_rejects_invalid_uid(tmp_path):
+    root = tmp_path / 'ds'
+    build_dataset_with_signal(root, [0])
     with pytest.raises(ValueError, match='non-empty string'):
-        edits.drop(tmp_path, '')
+        load_dataset(root).drop('')
 
 
 def test_corrupt_edit_record_raises(tmp_path):
@@ -602,6 +607,6 @@ def test_load_all_datasets_ignores_edit_log_outside_datasets(tmp_path):
 def test_load_all_datasets_keeps_all_dropped_dataset(tmp_path):
     ds = build_dataset_with_signal(tmp_path / 'ds1', [0, 1])
     for i in range(2):
-        edits.drop(tmp_path / 'ds1', ds[i].meta['uid'])
+        load_dataset(tmp_path / 'ds1').drop(ds[i].meta['uid'])
     # All episodes are curated out, but the directory is still a dataset: an empty view, not an error
     assert len(load_all_datasets(tmp_path)) == 0

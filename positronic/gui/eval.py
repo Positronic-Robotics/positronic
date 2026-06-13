@@ -8,7 +8,6 @@ import dearpygui.dearpygui as dpg
 import numpy as np
 
 import pimm
-from positronic.dataset import edits
 from positronic.dataset.edits import EditedDataset
 from positronic.dataset.local_dataset import LocalDataset
 from positronic.policy.harness import Directive
@@ -74,10 +73,12 @@ class EvalUI(pimm.ControlSystem):
         self.cap_per_item = 30
         self.run_start_time = None
 
-        # Editor state: a view over ALL recorded episodes (dropped ones shown greyed-out, not filtered away).
-        self._view = None
+        # Editor state. The editor navigates ALL recorded episodes by raw position (`_base`), showing dropped ones
+        # greyed-out rather than filtered away, while `_edited` is the curated/edit handle whose methods amend the log.
+        self._base = None
+        self._edited: EditedDataset | None = None
         self._count = 0
-        self._dropped: set[str] = set()
+        self._dropped: frozenset[str] = frozenset()
         self._sel: int | None = None
         self._last_scan = float('-inf')
         # The operator's stop press, persisted when the finished episode appears in the dataset directory.
@@ -443,10 +444,11 @@ class EvalUI(pimm.ControlSystem):
     # --- Episode editor ---
 
     def _refresh_view(self):
-        base = LocalDataset(self.output_dir)
-        statics, self._dropped = edits.load_edits(self.output_dir)
-        self._view = EditedDataset(base, statics) if statics else base
-        self._count = len(base)
+        """Rebuild the editor over the dataset directory; call after new episodes land on disk."""
+        self._base = LocalDataset(self.output_dir)
+        self._edited = EditedDataset(self._base, self.output_dir)
+        self._dropped = self._edited.dropped
+        self._count = len(self._base)
 
     def _select(self, idx: int):
         """Select an episode and populate the review form from its current (edits-applied) state."""
@@ -454,7 +456,7 @@ class EvalUI(pimm.ControlSystem):
             self._sel = None
         else:
             self._sel = max(0, min(idx, self._count - 1))
-            ep = self._view[self._sel]
+            ep = self._edited.overlay(self._base[self._sel])
             static = ep.static
             dpg.set_value('ed_task', static.get('task', ''))
             dpg.set_value('ed_outcome', static.get('eval.outcome', OUTCOMES[0]))
@@ -477,16 +479,14 @@ class EvalUI(pimm.ControlSystem):
         if self._pending_review is not None:
             # The episode the operator just stopped: the stop press is the initial annotation — persist it
             # right away, then surface the episode for corrections.
-            uid = self._view[self._count - 1].meta['uid']
-            edits.set_static(
-                self.output_dir,
+            uid = self._base[self._count - 1].meta['uid']
+            self._edited = self._edited.set_static(
                 uid,
                 {
                     'eval.outcome': self._pending_review['outcome'],
                     'eval.successful_items': self._pending_review['successful'],
                 },
             )
-            self._refresh_view()
             dpg.set_value('mode_tabs', 'tab_episodes')
             self._pending_review = None
         self._select(self._count - 1)
@@ -501,12 +501,11 @@ class EvalUI(pimm.ControlSystem):
         else:
             key = (self.TEXT_FIELDS | self.RADIO_FIELDS)[user_data]
             data = {key: dpg.get_value(user_data)}
-        edits.set_static(self.output_dir, self._view[self._sel].meta['uid'], data)
-        self._refresh_view()
+        self._edited = self._edited.set_static(self._base[self._sel].meta['uid'], data)
 
     def _bind_review_video(self):
         # GUI video binding follows the `image.` observation naming convention, like the live feeds.
-        ep = self._view[self._sel] if self._sel is not None else None
+        ep = self._base[self._sel] if self._sel is not None else None
         cams = sorted(k for k in ep if k.startswith('image.')) if ep is not None else []
         dpg.configure_item('rv_camera', items=cams)
         if not cams:
@@ -525,7 +524,7 @@ class EvalUI(pimm.ControlSystem):
         self._show_frame(last)
 
     def _on_review_camera(self, sender=None, app_data=None):
-        self._rv_signal = self._view[self._sel][app_data]
+        self._rv_signal = self._base[self._sel][app_data]
         last = len(self._rv_signal) - 1
         dpg.configure_item('rv_slider', max_value=last)
         idx = min(dpg.get_value('rv_slider'), last)
@@ -550,13 +549,13 @@ class EvalUI(pimm.ControlSystem):
         dpg.set_value('rv_time', f'{(ts - t0) / 1e9:.1f} / {(self._rv_signal.last_ts - t0) / 1e9:.1f}s')
 
     def drop_episode(self, sender=None, app_data=None):
-        edits.drop(self.output_dir, self._view[self._sel].meta['uid'])
-        self._refresh_view()
+        self._edited = self._edited.drop(self._base[self._sel].meta['uid'])
+        self._dropped = self._edited.dropped
         self._select(self._sel)
 
     def undrop_episode(self, sender=None, app_data=None):
-        edits.undrop(self.output_dir, self._view[self._sel].meta['uid'])
-        self._refresh_view()
+        self._edited = self._edited.undrop(self._base[self._sel].meta['uid'])
+        self._dropped = self._edited.dropped
         self._select(self._sel)
 
     def _set_enabled(self, tag, enabled: bool):
@@ -570,7 +569,7 @@ class EvalUI(pimm.ControlSystem):
             dpg.set_value('ed_status', '')
             dropped = False
         else:
-            dropped = self._view[self._sel].meta['uid'] in self._dropped
+            dropped = self._base[self._sel].meta['uid'] in self._dropped
             dpg.set_value('ed_pos', f'{self._sel + 1}/{self._count}')
             dpg.set_value('ed_status', 'DROPPED' if dropped else '')
         editable = self._sel is not None and not dropped

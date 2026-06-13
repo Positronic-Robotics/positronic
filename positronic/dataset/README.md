@@ -334,18 +334,18 @@ with dataset_writer.new_episode() as ew:
 Recorded episodes are immutable. Post-hoc facts — an operator's verdict, analysis scores — are *edits*: declarative records appended to `edits.jsonl` in the dataset directory and applied as a view on load. The edit layer lives in `positronic.dataset.edits`.
 
 ```python
-from positronic.dataset import edits
 from positronic.dataset.local_dataset import load_dataset
 
-edits.set_static(root, episode.meta['uid'], {'eval.outcome': 'success', 'notes': 'clean run'})
-edits.drop(root, bad_episode.meta['uid'])  # remove from the loaded view; the recording stays on disk
-
-ds = load_dataset(root)  # LocalDataset(root) with the edit log applied
+ds = load_dataset(root)  # an EditedDataset: LocalDataset(root) with the edit log applied
+ds = ds.set_static(episode.meta['uid'], {'eval.outcome': 'success', 'notes': 'clean run'})
+ds = ds.drop(bad_episode.meta['uid'])  # remove from the view; the recording stays on disk
 ```
+
+`set_static`/`drop`/`undrop` append a record and return a *new* `EditedDataset` over the same recordings, so a held reference keeps its shape while the returned one reflects the edit.
 
 Each line of `edits.jsonl` is one JSON record carrying its op. `{"op": "set_static", "v": 1, "ep": "<uid>", "data": {...}}` merges static items over the episode's recorded ones, in log order with last-write-wins per key; values follow the same restrictions as `EpisodeWriter.set_static`, and a key colliding with a signal name raises when the episode is loaded. `{"op": "drop", "v": 1, "ep": "<uid>"}` removes the episode from the loaded view; `{"op": "undrop", "v": 1, "ep": "<uid>"}` restores it (the last drop/undrop wins). Records target episodes by `meta['uid']`; corrupt or unrecognized records fail loudly when the log is loaded.
 
-Application is composition: `EditedDataset(base, edits)` wraps any `Dataset` — local, remote, concatenated — merging each episode's edits over its recorded statics, and dropped episodes are filtered out of the view. The `load_dataset` and `load_all_datasets` loaders compose it automatically; `LocalDataset` itself always reads the raw recordings. The log is plain appendable JSON so external tools can write it; the dataset directory assumes a single writer.
+`EditedDataset(base, edits_dir)` reads the log at `edits_dir`, hides dropped episodes, and overlays each remaining episode's static edits; `load_dataset`/`load_all_datasets` compose it over a `LocalDataset`, while `LocalDataset` itself always reads the raw recordings. The log is plain appendable JSON so external tools can write it; the dataset directory has a single writer.
 
 ## `DsWriterAgent` (streaming recorder)
 
