@@ -4,6 +4,8 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Any
 
+import numpy as np
+
 import pimm
 from positronic.dataset.ds_writer_agent import DsWriterCommand
 from positronic.dataset.serializers import expand_suffixed
@@ -147,6 +149,63 @@ class ErrorRecovery(PolicyWrapper):
 
     def wrap_session(self, inner: Session, context):
         return ErrorRecovery._Session(inner, self._clock)
+
+
+class TemporalFrameStack(PolicyWrapper):
+    """Replaces each named image in the observation with a temporal stack of recent frames.
+
+    Servers whose model conditions on a short video (e.g. DreamZero) need several frames spanning the
+    just-executed chunk at the cadence seen in training, but the harness only forwards an observation
+    to the policy at re-query boundaries. This wrapper sits outside the scheduling wrapper so it sees
+    every control tick: it records frames into a per-camera buffer (subsampled to ``min_dt``) and, on
+    every call, substitutes a ``(len(offsets_sec), H, W, 3)`` stack sampled at ``offsets_sec`` (negative
+    seconds relative to now). Early in an episode the buffer repeats its oldest frame.
+    """
+
+    class _Session(DelegatingSession):
+        def __init__(
+            self,
+            inner: Session,
+            clock: pimm.Clock,
+            image_keys: tuple[str, ...],
+            offsets_sec: tuple[float, ...],
+            min_dt_sec: float,
+        ):
+            super().__init__(inner)
+            self._clock = clock
+            self._image_keys = image_keys
+            self._offsets_sec = offsets_sec
+            self._min_dt_sec = min_dt_sec
+            self._buffers: dict[str, list[tuple[float, np.ndarray]]] = {k: [] for k in image_keys}
+
+        def __call__(self, obs):
+            now = self._clock.now()
+            stacked = dict(obs)
+            for key in self._image_keys:
+                frame = obs.get(key)
+                if isinstance(frame, np.ndarray) and frame.ndim == 3:
+                    buf = self._buffers[key]
+                    if not buf or now - buf[-1][0] >= self._min_dt_sec:
+                        buf.append((now, np.asarray(frame)))
+                    times = np.array([t for t, _ in buf])
+                    idxs = [int(np.argmin(np.abs(times - (now + off)))) for off in self._offsets_sec]
+                    stacked[key] = np.stack([buf[i][1] for i in idxs])
+            return self._inner(stacked)
+
+        def cancel(self):
+            self._buffers = {k: [] for k in self._buffers}
+            super().cancel()
+
+    def __init__(
+        self, clock: pimm.Clock, image_keys: tuple[str, ...], offsets_sec: tuple[float, ...], min_dt_sec: float = 0.18
+    ):
+        self._clock = clock
+        self._image_keys = tuple(image_keys)
+        self._offsets_sec = tuple(offsets_sec)
+        self._min_dt_sec = min_dt_sec
+
+    def wrap_session(self, inner: Session, context):
+        return TemporalFrameStack._Session(inner, self._clock, self._image_keys, self._offsets_sec, self._min_dt_sec)
 
 
 def default_wrappers(clock: pimm.Clock) -> PolicyWrapper:

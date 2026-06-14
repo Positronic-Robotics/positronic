@@ -7,16 +7,22 @@ import configuronic as cfn
 import numpy as np
 from PIL import Image as PilImage
 
+import pimm
 from positronic.cfg import codecs
 from positronic.dataset import Signal, transforms
 from positronic.dataset.episode import Episode
 from positronic.dataset.transforms import image
 from positronic.dataset.transforms.episode import Derive, Get
 from positronic.drivers.roboarm import command
+from positronic.policy.base import PolicyWrapper
 from positronic.policy.codec import Codec, lerobot_action, lerobot_image, lerobot_state
+from positronic.policy.harness import ChunkedSchedule, ErrorRecovery, TemporalFrameStack
 
 IMAGE_WIDTH = 320
 IMAGE_HEIGHT = 176
+# Frame offsets (relative seconds) for the AR video context: 4 frames spanning the just-executed
+# 24-step chunk at 15 fps, matching DreamZero's reference eval client schedule [-23, -16, -8, 0].
+FRAME_STACK_OFFSETS_SEC = tuple(o / 15.0 for o in (-23, -16, -8, 0))
 
 
 def _reshape_grip(values):
@@ -95,7 +101,10 @@ class DreamZeroObservationCodec(Codec):
         frame = inputs.get(input_key)
         if frame is None:
             return np.zeros((h, w, 3), dtype=np.uint8)
-        return image.resize_with_pad_per_frame(w, h, PilImage.Resampling.BILINEAR, np.asarray(frame))
+        frame = np.asarray(frame)
+        if frame.ndim == 4:
+            return np.stack([image.resize_with_pad_per_frame(w, h, PilImage.Resampling.BILINEAR, f) for f in frame])
+        return image.resize_with_pad_per_frame(w, h, PilImage.Resampling.BILINEAR, frame)
 
     def encode(self, inputs: dict[str, Any]) -> dict[str, Any]:
         joint_pos = np.asarray(inputs['robot_state.q'], dtype=np.float32).reshape(-1)
@@ -238,3 +247,15 @@ def _ik_dreamzero_action(solver: str):
 
 joints_ik = codecs.compose.override(obs=dreamzero_obs, action=_ik_dreamzero_action, fps=15.0)
 joints_ik_sim = joints_ik.override(**{'action.solver': 'dm_control'})
+
+
+def dreamzero_wrappers(clock: pimm.Clock) -> PolicyWrapper:
+    """Eval wrapper pipeline for DreamZero: buffer frames and feed the server the AR video context.
+
+    Drop-in for the eval ``wrap`` param. Stacks the wrist/exterior cameras at
+    ``FRAME_STACK_OFFSETS_SEC`` outside the scheduling wrappers, so the server receives multi-frame
+    context at the trained cadence. Pair with full-chunk execution (codec ``horizon`` covering the
+    whole 24-step chunk) so the executed window matches the frame offsets.
+    """
+    frame_stack = TemporalFrameStack(clock, ('image.wrist', 'image.exterior'), FRAME_STACK_OFFSETS_SEC)
+    return frame_stack | ErrorRecovery(clock) | ChunkedSchedule(clock)
