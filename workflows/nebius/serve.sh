@@ -25,7 +25,7 @@ if [ $# -lt 2 ]; then
   cat >&2 <<'EOF'
 Usage: bash workflows/nebius/serve.sh <vendor> <endpoint-name> [server args...]
 
-Vendors: lerobot_0_3_3 | lerobot | openpi | gr00t
+Vendors: lerobot_0_3_3 | lerobot | openpi | gr00t | dreamzero
 
 The endpoint name must be unique in the project (lowercase alphanumeric + dashes).
 Remaining arguments forward to positronic.vendors.<vendor>.server.
@@ -64,8 +64,9 @@ case "$VENDOR" in
   # openpi.server imports `openpi_client` at module top → needs --extra openpi
   openpi)        IMAGE="positro/openpi:${IMAGE_TAG}";     EXTRA="--extra openpi " ;;
   gr00t)         IMAGE="positro/gr00t:${IMAGE_TAG}";      EXTRA="" ;;
+  dreamzero)     IMAGE="positro/dreamzero:${IMAGE_TAG}";  EXTRA="" ;;
   *)
-    echo "Unknown vendor: '$VENDOR'. Supported: lerobot_0_3_3 | lerobot | openpi | gr00t" >&2
+    echo "Unknown vendor: '$VENDOR'. Supported: lerobot_0_3_3 | lerobot | openpi | gr00t | dreamzero" >&2
     exit 1
     ;;
 esac
