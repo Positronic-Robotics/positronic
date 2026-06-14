@@ -62,6 +62,10 @@ def _dreamzero_root():
     deepspeed=None,
     resume=False,
     save_total_limit=10,
+    init_from_checkpoint=None,
+    lora_rank=None,
+    lora_alpha=None,
+    lora_adapt_vision=False,
     extra_args=[],
 )
 def main(
@@ -83,6 +87,10 @@ def main(
     deepspeed: str | None,
     resume: bool,
     save_total_limit: int,
+    init_from_checkpoint: str | None,
+    lora_rank: int | None,
+    lora_alpha: int | None,
+    lora_adapt_vision: bool,
     extra_args: list[str],
 ):
     if backbone not in _BACKBONE_PARAMS:
@@ -104,6 +112,7 @@ def main(
 
     exp_name = str(exp_name)
     dataset_local_path = pos3.download(input_path)
+    init_ckpt_local = pos3.download(init_from_checkpoint) if init_from_checkpoint is not None else None
     output_path = output_path.rstrip('/')
     output_dir = pos3.sync(output_path + '/' + exp_name, delete_remote=not resume)
     utils.save_run_metadata(output_dir, patterns=['*.py', '*.toml'])
@@ -149,6 +158,18 @@ def main(
     ]
     if bb['frame_seqlen'] is not None:
         command.append(f'frame_seqlen={bb["frame_seqlen"]}')
+    if lora_rank is not None:
+        command.append(f'action_head_cfg.config.lora_rank={lora_rank}')
+    if lora_alpha is not None:
+        command.append(f'action_head_cfg.config.lora_alpha={lora_alpha}')
+    if lora_adapt_vision:
+        # `+` appends the key: it lives on the patched dataclass, not in the action-head YAML struct.
+        command.append('+action_head_cfg.config.lora_adapt_vision=true')
+    # Warm-start: load a prior run's weights into the freshly-built model (fresh optimizer + schedule).
+    # Distinct from resume, which restores the DeepSpeed optimizer state — unavailable under
+    # save_only_model=true.
+    if init_ckpt_local is not None:
+        command.append(f'pretrained_model_path={init_ckpt_local}')
     command.extend(extra_args)
 
     env = os.environ.copy()
@@ -169,8 +190,9 @@ def main(
 #
 # Workaround: training_args.save_only_model=true skips DeepSpeed's checkpoint entirely. The
 # LoRA adapter (217MB model.safetensors) is still saved by save_lora_only. Resume is NOT
-# supported with h100x1 — DeepSpeed's load_checkpoint fails because there's no DeepSpeed
-# state to load. To train longer, start a fresh run (the LoRA adapters train from zero anyway).
+# supported with h100x1 — DeepSpeed's load_checkpoint fails because there's no DeepSpeed state
+# to load. To train a full finetune longer, warm-start its weights via init_from_checkpoint
+# (optimizer state is not restored); LoRA adapters train from zero, so a fresh run suffices.
 #
 # h100x8: ZeRO-2 shards across 8 GPUs. LoRA checkpoints are small enough for full
 # DeepSpeed saves (resume restores optimizer state). Full finetune checkpoints are ~200GB

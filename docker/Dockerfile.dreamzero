@@ -59,6 +59,62 @@ open(target, 'w').write(code)
 print('Patched BaseTrainer with encoder/decoder weight + grad norm monitoring')
 PATCH_EOF
 
+# Optional LoRA adaptation of the CLIP visual tower, gated by action_head_cfg.config.lora_adapt_vision.
+# The stock LoRA path adapts only the DiT and freezes the encoders; this additionally injects LoRA
+# into image_encoder.model.visual (the ViT used by encode_image), targeting its attention Linears
+# (to_qkv, proj) so the global visual semantics adapt to the target domain. The encoder stays frozen
+# and the adapters ride on top (mirroring the DiT). The unused XLM-Roberta text tower and the VAE
+# latent path (no_grad) are untouched. The flag rides in the checkpoint config, so the serve path
+# reconstructs the same structure; absent (old checkpoints) it defaults False.
+RUN <<'PATCH_VISION_EOF' python3
+target = '/dreamzero/groot/vla/model/dreamzero/action_head/wan_flow_matching_action_tf.py'
+code = open(target).read()
+
+
+def sub(code, old, new):
+    assert old in code, f'anchor not found: {old[:70]!r}'
+    return code.replace(old, new, 1)
+
+
+code = sub(
+    code,
+    '    lora_target_modules: str = field(default="q,k,v,o,ffn.0,ffn.2")',
+    '    lora_target_modules: str = field(default="q,k,v,o,ffn.0,ffn.2")\n'
+    '    lora_adapt_vision: bool = field(default=False, metadata={"help": "Also LoRA-adapt the CLIP visual tower."})',
+)
+code = sub(
+    code,
+    '        self.lora_target_modules = config.lora_target_modules',
+    '        self.lora_target_modules = config.lora_target_modules\n'
+    '        self.lora_adapt_vision = config.lora_adapt_vision',
+)
+# Freeze-then-adapt: the encoder is already frozen above; inject LoRA into the ViT on top.
+code = sub(
+    code,
+    '        self.text_encoder.requires_grad_(False)\n        self.image_encoder.requires_grad_(False)\n        self.vae.requires_grad_(False)\n        if not self.defer_lora_injection:',
+    '        self.text_encoder.requires_grad_(False)\n        self.image_encoder.requires_grad_(False)\n        self.vae.requires_grad_(False)\n'
+    '        if self.lora_adapt_vision:\n'
+    '            self.image_encoder.model.visual = self.add_lora_to_model(\n'
+    '                self.image_encoder.model.visual, lora_rank=self.lora_rank, lora_alpha=self.lora_alpha,\n'
+    '                lora_target_modules="to_qkv,proj", init_lora_weights=self.init_lora_weights,\n'
+    '            )\n'
+    '        if not self.defer_lora_injection:',
+)
+code = sub(
+    code,
+    '            self.text_encoder.requires_grad_(False)\n            self.image_encoder.requires_grad_(False)\n            self.vae.requires_grad_(False)\n            self.print_trainable_params()',
+    '            self.text_encoder.requires_grad_(False)\n            self.image_encoder.requires_grad_(False)\n            self.vae.requires_grad_(False)\n'
+    '            if self.lora_adapt_vision:\n'
+    '                self.image_encoder.model.visual = self.add_lora_to_model(\n'
+    '                    self.image_encoder.model.visual, lora_rank=self.lora_rank, lora_alpha=self.lora_alpha,\n'
+    '                    lora_target_modules="to_qkv,proj", init_lora_weights=self.init_lora_weights,\n'
+    '                )\n'
+    '            self.print_trainable_params()',
+)
+open(target, 'w').write(code)
+print('Patched wan_flow_matching_action_tf.py: optional CLIP visual-tower LoRA (lora_adapt_vision)')
+PATCH_VISION_EOF
+
 # Set Python path to include source root and dreamzero
 ENV PYTHONPATH=/positronic:/dreamzero
 
