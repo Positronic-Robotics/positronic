@@ -1,13 +1,8 @@
 import configuronic as cfn
 
 from positronic.cfg.embodiment import droid
+from positronic.cfg.tasks import BATTERIES_TASK, SCISSORS_TASK, SPOONS_TASK, TOWELS_TASK, UNIFIED_TASK
 from positronic.eval import Eval, Task
-
-UNIFIED_TASK = 'Pick all the items one by one from transparent tote and place them into the large grey tote.'
-TOWELS_TASK = 'Pick all the towels one by one from transparent tote and place them into the large grey tote.'
-SPOONS_TASK = 'Pick all the wooden spoons one by one from transparent tote and place them into the large grey tote.'
-SCISSORS_TASK = 'Pick all the scissors one by one from transparent tote and place them into the large grey tote.'
-BATTERIES_TASK = 'Pick all the batteries one by one from transparent tote and place them into the large grey tote.'
 
 
 @cfn.config(embodiment=droid, timeout=180)

@@ -9,6 +9,7 @@ import dearpygui.dearpygui as dpg
 import numpy as np
 
 import pimm
+from positronic.cfg.tasks import SCISSORS_TASK, SPOONS_TASK, TOWELS_TASK, UNIFIED_TASK
 from positronic.dataset.edits import EditedDataset
 from positronic.dataset.local_dataset import LocalDataset
 from positronic.policy.harness import Directive
@@ -19,15 +20,13 @@ class State(Enum):
     RUNNING = auto()
 
 
-UNIFIED_TASK = 'Pick all the items one by one from transparent tote and place them into the large grey tote.'
-
 OBJECTS = ['Towels', 'Wooden spoons', 'Scissors', 'Batteries', 'USB-C Boxes', 'USB-C Cables']
 
 TASKS = [
     UNIFIED_TASK,
-    'Pick all the towels one by one from transparent tote and place them into the large grey tote.',
-    'Pick all the wooden spoons one by one from transparent tote and place them into the large grey tote.',
-    'Pick all the scissors one by one from transparent tote and place them into the large grey tote.',
+    TOWELS_TASK,
+    SPOONS_TASK,
+    SCISSORS_TASK,
     'Pick up the green cube and place it on the red cube.',
     'Pick up objects from the red tote and place them in the green tote.',
 ]

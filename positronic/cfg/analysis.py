@@ -7,6 +7,7 @@ import numpy as np
 import pos3
 
 import positronic.cfg.ds as base_cfg
+from positronic.cfg import tasks
 from positronic.cfg.ds import internal
 from positronic.dataset.episode import Episode
 from positronic.dataset.transforms.episode import Derive, FromValue, Group, Identity
@@ -20,13 +21,13 @@ def task_code(ep: Episode) -> str:
     if 'eval.object' in ep:
         return ep['eval.object']
     match ep['task']:
-        case 'Pick all the towels one by one from transparent tote and place them into the large grey tote.':
+        case tasks.TOWELS_TASK:
             return 'Towels'
-        case 'Pick all the wooden spoons one by one from transparent tote and place them into the large grey tote.':
+        case tasks.SPOONS_TASK:
             return 'Wooden spoons'
-        case 'Pick all the scissors one by one from transparent tote and place them into the large grey tote.':
+        case tasks.SCISSORS_TASK:
             return 'Scissors'
-        case 'Pick all the batteries one by one from transparent tote and place them into the large grey tote.':
+        case tasks.BATTERIES_TASK:
             return 'Batteries'
         case _:
             return ''
@@ -480,7 +481,7 @@ def sim_checkpoint_table():
 # Pick-and-place item counting
 # ========================================================================================
 
-FIXED_ITEM_COUNTS = {internal.SCISSORS_TASK: 10, internal.BATTERIES_TASK: 8}
+FIXED_ITEM_COUNTS = {tasks.SCISSORS_TASK: 10, tasks.BATTERIES_TASK: 8}
 
 
 def calculate_units(episode: Episode) -> int:
