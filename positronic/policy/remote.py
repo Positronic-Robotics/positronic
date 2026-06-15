@@ -31,17 +31,26 @@ class RemoteSession(Session):
             return image
         return np.array(PilImage.fromarray(image).resize((width, height), resample=PilImage.Resampling.BILINEAR))
 
+    @staticmethod
+    def _fit(image: np.ndarray, tw: int, th: int) -> np.ndarray:
+        h, w = image.shape[:2]
+        scale = min(1.0, tw / w, th / h)
+        return RemoteSession._resize_to(image, int(w * scale), int(h * scale))
+
     def _prepare_obs(self, obs: dict[str, Any]) -> dict[str, Any]:
         result = {}
         for key, value in obs.items():
-            if isinstance(value, np.ndarray) and value.ndim == 3 and value.shape[2] == 3:
+            # Resize single RGB frames and temporal stacks of them alike (TemporalFrameStack emits a
+            # (T, H, W, 3) stack), so a stack of hd720 frames isn't shipped full-resolution.
+            if isinstance(value, np.ndarray) and value.shape[-1] == 3 and value.ndim in (3, 4):
                 target = self._image_sizes.get(key, self._default_image_size)
                 r = self._resize or 0
                 tw, th = target or (r, r)
                 if tw > 0 and th > 0:
-                    h, w = value.shape[:2]
-                    scale = min(1.0, tw / w, th / h)
-                    value = self._resize_to(value, int(w * scale), int(h * scale))
+                    if value.ndim == 4:
+                        value = np.stack([self._fit(f, tw, th) for f in value])
+                    else:
+                        value = self._fit(value, tw, th)
             result[key] = value
         return result
 
