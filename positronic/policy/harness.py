@@ -186,7 +186,10 @@ class TemporalFrameStack(PolicyWrapper):
                 if isinstance(frame, np.ndarray) and frame.ndim == 3:
                     buf = self._buffers[key]
                     if not buf or now - buf[-1][0] >= self._min_dt_sec:
-                        buf.append((now, np.asarray(frame)))
+                        # Copy: camera frames are views into a shared-memory buffer the producer reuses
+                        # each tick, so storing the view would alias every slot to the latest frame and
+                        # the stack would be N copies of "now" instead of the offset history.
+                        buf.append((now, np.array(frame)))
                     times = np.array([t for t, _ in buf])
                     idxs = [int(np.argmin(np.abs(times - (now + off)))) for off in self._offsets_sec]
                     stacked[key] = np.stack([buf[i][1] for i in idxs])
