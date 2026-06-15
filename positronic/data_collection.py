@@ -15,7 +15,7 @@ import positronic.cfg.hardware.roboarm
 import positronic.cfg.simulator
 import positronic.cfg.sound
 import positronic.cfg.webxr
-from positronic import geom, wire
+from positronic import geom, utils, wire
 from positronic.dataset.ds_writer_agent import DsWriterAgent, DsWriterCommand, TimeMode
 from positronic.dataset.local_dataset import LocalDatasetWriter
 from positronic.dataset.serializers import Serializers
@@ -243,9 +243,10 @@ def main(
         static_meta.update(wire.ROBOT_STATIC_META)
     data_collection = DataCollectionController(operator_position.value, static_meta=static_meta)
 
-    writer_cm = (
-        LocalDatasetWriter(pos3.sync(output_dir, sync_on_error=True)) if output_dir is not None else nullcontext()
-    )
+    if output_dir is not None:
+        output_dir = pos3.sync(output_dir, sync_on_error=True)
+        utils.save_run_metadata(output_dir, patterns=['*.py', '*.toml'])
+    writer_cm = LocalDatasetWriter(output_dir) if output_dir is not None else nullcontext()
     with writer_cm as dataset_writer, pimm.World() as world:
         ds_agent = wire.wire(world, data_collection, dataset_writer, camera_emitters, robot_arm, gripper, None)
         _wire(world, ds_agent, data_collection, webxr, robot_arm, sound)
@@ -302,9 +303,10 @@ def main_sim(
         metadata_getter=lambda: {k: v.tolist() for k, v in sim.save_state().items()},
     )
 
-    writer_cm = (
-        LocalDatasetWriter(pos3.sync(output_dir, sync_on_error=True)) if output_dir is not None else nullcontext()
-    )
+    if output_dir is not None:
+        output_dir = pos3.sync(output_dir, sync_on_error=True)
+        utils.save_run_metadata(output_dir, patterns=['*.py', '*.toml'])
+    writer_cm = LocalDatasetWriter(output_dir) if output_dir is not None else nullcontext()
     with writer_cm as dataset_writer, pimm.World(virtual_time=True) as world:
         # The sim carries both the arm and the gripper ports, so it fills both slots.
         ds_agent = wire.wire(world, data_collection, dataset_writer, cameras, sim, sim, gui, TimeMode.MESSAGE)
