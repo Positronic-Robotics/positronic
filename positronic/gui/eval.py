@@ -1,3 +1,4 @@
+from collections import deque
 from collections.abc import Iterator
 from datetime import datetime
 from enum import Enum, auto
@@ -85,9 +86,10 @@ class EvalUI(pimm.ControlSystem):
         self._dropped: frozenset[str] = frozenset()
         self._sel: int | None = None
         self._last_scan = float('-inf')
-        # The operator's stop press, persisted when the finished episode appears in the dataset directory.
-        # Held until then no matter what runs in between — Start/Reset must not destroy the verdict.
-        self._pending_review: dict | None = None
+        # Stop verdicts awaiting their episode: each stop queues one, persisted when its finished episode appears
+        # in the dataset directory (FIFO — episodes finalize in stop order). Held no matter what runs in between, so
+        # rapid stops, Start, and Reset can't drop a verdict before its recording lands.
+        self._pending_reviews: deque[dict] = deque()
         # The selected episode's video signal under the review scrubber.
         self._rv_signal = None
         self.rv_texture = np.zeros((240, 320, 4), dtype=np.float32)
@@ -434,7 +436,7 @@ class EvalUI(pimm.ControlSystem):
         self.state = State.WAITING
         total = dpg.get_value('total_items_input')
         successful = total if reason == 'Success' else dpg.get_value('successful_items_input')
-        self._pending_review = {'outcome': reason, 'successful': successful}
+        self._pending_reviews.append({'outcome': reason, 'successful': successful})
 
         self.update_ui()
         self.directive.emit(Directive.FINISH())
@@ -479,20 +481,22 @@ class EvalUI(pimm.ControlSystem):
         """Pick up newly finished episodes; the recorder's `.unfinished` marker hides in-progress ones."""
         if self.output_dir is None or len(LocalDataset(self.output_dir)) == self._count:
             return
+        prev_count = self._count
         self._refresh_view()
-        if self._pending_review is not None:
-            # The episode the operator just stopped: the stop press is the initial annotation — persist it
-            # right away, then surface the episode for corrections.
-            uid = self._base[self._count - 1].meta['uid']
+        # Each newly landed episode claims the next queued stop verdict (its initial annotation) and is persisted
+        # right away, so corrections start from the operator's call.
+        seeded = False
+        for idx in range(prev_count, self._count):
+            if not self._pending_reviews:
+                break
+            review = self._pending_reviews.popleft()
+            uid = self._base[idx].meta['uid']
             self._edited = self._edited.set_static(
-                uid,
-                {
-                    'eval.outcome': self._pending_review['outcome'],
-                    'eval.successful_items': self._pending_review['successful'],
-                },
+                uid, {'eval.outcome': review['outcome'], 'eval.successful_items': review['successful']}
             )
+            seeded = True
+        if seeded:
             dpg.set_value('mode_tabs', 'tab_episodes')
-            self._pending_review = None
         self._select(self._count - 1)
 
     def _commit_field(self, sender, app_data, user_data):

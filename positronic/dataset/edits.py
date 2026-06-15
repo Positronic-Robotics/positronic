@@ -65,12 +65,13 @@ def _validate_uid(uid: str) -> None:
 
 
 class EditedEpisode(Episode):
-    """View of an episode with edited static items merged over the recorded ones."""
+    """View of an episode with edited static items merged over the recorded ones.
+
+    A static edit that shadows a recorded signal is ambiguous; it raises when that key is *read*, not at
+    construction — so identity (`meta`/`uid`) stays readable for filtering and dropping even when an edit collides.
+    """
 
     def __init__(self, episode: Episode, edits: dict[str, Any]) -> None:
-        collisions = [k for k in edits if k in episode and isinstance(episode[k], Signal)]
-        if collisions:
-            raise ValueError(f'Edited static items {sorted(collisions)} collide with signals in {episode!r}')
         self._episode = episode
         self._edits = edits
 
@@ -83,6 +84,8 @@ class EditedEpisode(Episode):
 
     def __getitem__(self, name: str) -> Signal[Any] | Any:
         if name in self._edits:
+            if name in self._episode and isinstance(self._episode[name], Signal):
+                raise ValueError(f'Edited static item {name!r} collides with a signal in {self._episode!r}')
             return self._edits[name]
         return self._episode[name]
 

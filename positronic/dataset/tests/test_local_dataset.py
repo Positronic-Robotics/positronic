@@ -477,8 +477,10 @@ def test_set_static_edit_colliding_with_signal_raises(tmp_path):
     load_dataset(root).set_static(ds[0].meta['uid'], {'signal': 1})
 
     ds = load_dataset(root)
-    with pytest.raises(ValueError, match='collide with signals'):
-        _ = ds[0]
+    # Identity stays readable; the collision only raises when the shadowed key is read
+    assert ds[0].meta['uid'] == ds[0].meta['uid']
+    with pytest.raises(ValueError, match='collides with a signal'):
+        _ = ds[0]['signal']
 
 
 def test_set_static_edit_for_unknown_uid_is_inert(tmp_path):
@@ -619,6 +621,17 @@ def test_load_all_datasets_propagates_corrupt_top_level_edit_log(tmp_path):
     (tmp_path / edits.EDITS_FILE).write_text('garbage', encoding='utf-8')
     with pytest.raises(ValueError, match='Corrupt edit record'):
         load_all_datasets(tmp_path)
+
+
+def test_load_all_datasets_top_level_drop_hides_colliding_child_edit(tmp_path):
+    ds1 = build_dataset_with_signal(tmp_path / 'ds1', [0, 1])
+    build_dataset_with_signal(tmp_path / 'ds2', [2])
+    uid = ds1[1].meta['uid']
+    # A child holds a colliding (broken) static edit; a top-level drop must hide the episode without the child
+    # overlay raising while the root view filters it by uid.
+    load_dataset(tmp_path / 'ds1').set_static(uid, {'signal': 'collides'})
+    load_all_datasets(tmp_path).drop(uid)
+    assert episode_ids(load_all_datasets(tmp_path)[:]) == [0, 2]
 
 
 def test_load_all_datasets_keeps_all_dropped_dataset(tmp_path):
