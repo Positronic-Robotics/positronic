@@ -1,7 +1,7 @@
 import configuronic as cfn
 import pos3
 
-from positronic.cfg.eval import run
+from positronic.cfg.eval.run import run
 from positronic.utils.logging import init_logging
 
 

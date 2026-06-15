@@ -168,8 +168,8 @@ run_cfg = cfn.Config(main, embodiment=positronic.cfg.embodiment.droid, policy=po
 # Console entry point for [project.scripts].
 @pos3.with_mirror()
 def _internal_main():
-    # Imported here to break the circular import: positronic.cfg.eval imports this module.
-    from positronic.cfg.eval import run as eval_run  # noqa
+    # Imported here to break the circular import: positronic.cfg.eval.run imports this module.
+    from positronic.cfg.eval.run import run as eval_run  # noqa
     from positronic.cfg.eval.sim.positronic import stack_cubes  # noqa
 
     init_logging()
