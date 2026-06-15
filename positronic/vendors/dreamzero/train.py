@@ -63,9 +63,6 @@ def _dreamzero_root():
     resume=False,
     save_total_limit=10,
     init_from_checkpoint=None,
-    lora_rank=None,
-    lora_alpha=None,
-    lora_adapt_vision=False,
     extra_args=[],
 )
 def main(
@@ -88,9 +85,6 @@ def main(
     resume: bool,
     save_total_limit: int,
     init_from_checkpoint: str | None,
-    lora_rank: int | None,
-    lora_alpha: int | None,
-    lora_adapt_vision: bool,
     extra_args: list[str],
 ):
     if backbone not in _BACKBONE_PARAMS:
@@ -158,13 +152,6 @@ def main(
     ]
     if bb['frame_seqlen'] is not None:
         command.append(f'frame_seqlen={bb["frame_seqlen"]}')
-    if lora_rank is not None:
-        command.append(f'action_head_cfg.config.lora_rank={lora_rank}')
-    if lora_alpha is not None:
-        command.append(f'action_head_cfg.config.lora_alpha={lora_alpha}')
-    if lora_adapt_vision:
-        # `+` appends the key: it lives on the patched dataclass, not in the action-head YAML struct.
-        command.append('+action_head_cfg.config.lora_adapt_vision=true')
     # Warm-start: load a prior run's weights into the freshly-built model (fresh optimizer + schedule).
     # Distinct from resume, which restores the DeepSpeed optimizer state — unavailable under
     # save_only_model=true.
