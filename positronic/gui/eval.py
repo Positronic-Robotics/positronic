@@ -495,6 +495,10 @@ class EvalUI(pimm.ControlSystem):
                 uid, {'eval.outcome': review['outcome'], 'eval.successful_items': review['successful']}
             )
             seeded = True
+        # Don't yank the editor to the new episode while the operator is mid-edit on another one: a focused text
+        # field commits only on deactivation, so re-selecting now would overwrite the uncommitted value.
+        if any(dpg.is_item_focused(tag) for tag in self.TEXT_FIELDS):
+            return
         if seeded:
             dpg.set_value('mode_tabs', 'tab_episodes')
         self._select(self._count - 1)
