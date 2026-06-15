@@ -559,9 +559,9 @@ def load_all_datasets(root: Path) -> Dataset:
         root: Path to directory that may be a dataset and/or contain dataset subdirectories
 
     Returns:
-        EditedDataset: the found datasets, each with its own edit log applied, combined. When `root` is a pure
-            container (not itself a dataset), the combination is additionally wrapped in a top-level edit log read
-            from `root`, so curation written at `root` spans the whole loaded view.
+        EditedDataset: every found dataset combined and wrapped in a top-level edit log at `root`, so curation
+            written at `root` spans the whole loaded view (root and child episodes alike). Each child dataset
+            carries its own edit log; `root`'s own log is applied once, by the top-level wrap.
 
     Raises:
         FileNotFoundError: If root does not exist
@@ -576,7 +576,6 @@ def load_all_datasets(root: Path) -> Dataset:
         raise ValueError(f'{root} is not a directory')
 
     datasets: list[Dataset] = []
-    root_is_dataset = False
     # Queue of directories to explore
     to_explore: deque[Path] = deque([root])
 
@@ -589,9 +588,9 @@ def load_all_datasets(root: Path) -> Dataset:
         try:
             base = LocalDataset(current_path)
             if len(base) > 0:
-                datasets.append(EditedDataset(base, current_path))
-                if current_path == root:
-                    root_is_dataset = True
+                # `root`'s own log is the top-level log applied once by the outer wrap below, so root's dataset
+                # goes in raw to avoid a double application; each child dataset carries its own log here.
+                datasets.append(base if current_path == root else EditedDataset(base, current_path))
         except FileNotFoundError:
             pass
 
@@ -603,10 +602,6 @@ def load_all_datasets(root: Path) -> Dataset:
         raise ValueError(f'No valid datasets found in {root}')
 
     combined = datasets[0] if len(datasets) == 1 else ConcatDataset(*datasets)
-    if root_is_dataset:
-        # `root`'s own log is already applied by its dataset; re-wrapping would double-apply it — and because the
-        # inner view is a snapshot, an undrop through the returned handle could not restore the episode.
-        return combined
-    # A top-level edit log at a container `root` overlays the whole combined view — curation can span sub-datasets,
-    # keyed by uid so it composes with each dataset's own log.
+    # The top-level edit log at `root` overlays the whole combined view — uid-keyed, so it composes with each
+    # child's own log and reaches child episodes too, and it is the single application of `root`'s own log.
     return EditedDataset(combined, root)

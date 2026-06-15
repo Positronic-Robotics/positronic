@@ -633,6 +633,16 @@ def test_load_all_datasets_undrop_when_root_is_dataset(tmp_path):
     assert episode_ids(restored[:]) == [0, 1]
 
 
+def test_load_all_datasets_root_dataset_with_child_keeps_edit_handle(tmp_path):
+    # `root` is itself a dataset AND contains a child dataset: the combined view must still expose the edit API,
+    # and a root-level drop must reach both root and child episodes (root's own log applied once, not twice).
+    root_ds = build_dataset_with_signal(tmp_path, [0, 1])
+    child_ds = build_dataset_with_signal(tmp_path / 'child', [2, 3])
+    load_all_datasets(tmp_path).drop(root_ds[0].meta['uid'])
+    load_all_datasets(tmp_path).drop(child_ds[0].meta['uid'])
+    assert episode_ids(load_all_datasets(tmp_path)[:]) == [1, 3]
+
+
 def test_load_all_datasets_top_level_drop_hides_colliding_child_edit(tmp_path):
     ds1 = build_dataset_with_signal(tmp_path / 'ds1', [0, 1])
     build_dataset_with_signal(tmp_path / 'ds2', [2])
