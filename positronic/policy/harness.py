@@ -190,6 +190,11 @@ class TemporalFrameStack(PolicyWrapper):
                         # each tick, so storing the view would alias every slot to the latest frame and
                         # the stack would be N copies of "now" instead of the offset history.
                         buf.append((now, np.array(frame)))
+                        # Drop frames older than the oldest sampled offset (keep one just beyond it so
+                        # nearest-neighbor sampling still brackets it): the sampler never looks further
+                        # back, so without this the buffer grows for the whole episode.
+                        cut = next(i for i, (t, _) in enumerate(buf) if t >= now + min(self._offsets_sec))
+                        del buf[: max(cut - 1, 0)]
                     times = np.array([t for t, _ in buf])
                     idxs = [int(np.argmin(np.abs(times - (now + off)))) for off in self._offsets_sec]
                     stacked[key] = np.stack([buf[i][1] for i in idxs])
