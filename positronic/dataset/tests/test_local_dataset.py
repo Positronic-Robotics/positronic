@@ -623,6 +623,16 @@ def test_load_all_datasets_propagates_corrupt_top_level_edit_log(tmp_path):
         load_all_datasets(tmp_path)
 
 
+def test_load_all_datasets_undrop_when_root_is_dataset(tmp_path):
+    ds = build_dataset_with_signal(tmp_path, [0, 1])
+    uid = ds[0].meta['uid']
+    load_all_datasets(tmp_path).drop(uid)
+    # Undrop through the returned handle must restore the episode. Regression: when `root` is itself a dataset,
+    # double-wrapping its log left the inner snapshot still filtering the drop, so the undrop couldn't reach it.
+    restored = load_all_datasets(tmp_path).undrop(uid)
+    assert episode_ids(restored[:]) == [0, 1]
+
+
 def test_load_all_datasets_top_level_drop_hides_colliding_child_edit(tmp_path):
     ds1 = build_dataset_with_signal(tmp_path / 'ds1', [0, 1])
     build_dataset_with_signal(tmp_path / 'ds2', [2])
