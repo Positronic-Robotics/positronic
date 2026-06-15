@@ -123,6 +123,10 @@ class Robot(pimm.ControlSystem):
         self._collision_coeff = collision_coeff
         self._robot: pf.Robot | None = None
 
+    @property
+    def ip(self) -> str:
+        return self._ip
+
     @staticmethod
     def _build_robot_meta(robot) -> dict:
         urdf_xml = robot.get_robot_model()

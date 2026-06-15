@@ -32,11 +32,16 @@ def droid(robot_arm, gripper, cameras):
         'robot_command': Command(robot_arm.commands, roboarm_command.Reset(), Serializers.robot_command),
         'target_grip': Command(gripper.target_grip, 0.0, None),
     }
+    static_meta = {
+        **ROBOT_STATIC_META,
+        'hardware.robot_ip': robot_arm.ip,
+        **{f'hardware.{name}.serial_number': cam.serial_number for name, cam in cameras.items()},
+    }
     return Embodiment(
         descriptor='',
         observations=observations,
         commands=commands,
-        static_meta=dict(ROBOT_STATIC_META),
+        static_meta=static_meta,
         meta_source=robot_arm.robot_meta,
         control_systems=(*cameras.values(), robot_arm, gripper),
         simulated=False,
