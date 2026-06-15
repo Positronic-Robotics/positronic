@@ -4,7 +4,7 @@ from positronic.drivers.roboarm import RobotStatus
 from positronic.drivers.roboarm.command import Recover
 from positronic.policy.base import Policy, PolicyWrapper, Session
 from positronic.policy.codec import ActionTimestamp, Codec
-from positronic.policy.harness import ChunkedSchedule, ErrorRecovery
+from positronic.policy.wrappers import ChunkedSchedule, ErrorRecovery
 
 
 class _FakeClock:
@@ -48,7 +48,7 @@ class TestChunkedSchedule:
     def test_first_call_runs_inference(self):
         # Relative timestamps: trajectory of duration 0.5s
         clock = _FakeClock(t=1.0)
-        policy = ChunkedSchedule(clock).wrap(_ConstPolicy([{'v': 1, 'timestamp': 0.0}, {'v': 2, 'timestamp': 0.5}]))
+        policy = ChunkedSchedule(clock.now).wrap(_ConstPolicy([{'v': 1, 'timestamp': 0.0}, {'v': 2, 'timestamp': 0.5}]))
         session = policy.new_session()
         result = session(_obs())
         assert result is not None
@@ -60,7 +60,7 @@ class TestChunkedSchedule:
     def test_returns_none_while_trajectory_active(self):
         # Trajectory starts at clock=1.0, ends at 1.0+0.5=1.5.
         clock = _FakeClock(t=1.0)
-        policy = ChunkedSchedule(clock).wrap(_ConstPolicy([{'v': 1, 'timestamp': 0.0}, {'v': 2, 'timestamp': 0.5}]))
+        policy = ChunkedSchedule(clock.now).wrap(_ConstPolicy([{'v': 1, 'timestamp': 0.0}, {'v': 2, 'timestamp': 0.5}]))
         session = policy.new_session()
         session(_obs())
         clock.t = 1.2
@@ -71,7 +71,7 @@ class TestChunkedSchedule:
     def test_re_infers_after_trajectory_consumed(self):
         clock = _FakeClock(t=1.0)
         inner = _ConstPolicy([{'v': 1, 'timestamp': 0.0}, {'v': 2, 'timestamp': 0.5}])
-        session = ChunkedSchedule(clock).wrap(inner).new_session()
+        session = ChunkedSchedule(clock.now).wrap(inner).new_session()
         session(_obs())  # trajectory ends at clock=1.5
         clock.t = 1.3
         assert session(_obs()) is None
@@ -83,7 +83,7 @@ class TestChunkedSchedule:
     def test_single_action_refires_immediately_after(self):
         """Single action at ts=0 → trajectory_end = now → next tick re-infers."""
         clock = _FakeClock(t=1.0)
-        policy = ChunkedSchedule(clock).wrap(_ConstPolicy([{'v': 1, 'timestamp': 0.0}]))
+        policy = ChunkedSchedule(clock.now).wrap(_ConstPolicy([{'v': 1, 'timestamp': 0.0}]))
         session = policy.new_session()
         session(_obs())
         clock.t = 1.01
@@ -94,13 +94,13 @@ class TestChunkedSchedule:
 class TestErrorRecovery:
     def test_delegates_when_no_error(self):
         inner = _ConstPolicy([{'v': 1}])
-        session = ErrorRecovery(_FakeClock()).wrap(inner).new_session()
+        session = ErrorRecovery(_FakeClock().now).wrap(inner).new_session()
         result = session(_obs(status=RobotStatus.AVAILABLE))
         assert result == [{'v': 1}]
 
     def test_emits_recover_on_first_error(self):
         clock = _FakeClock(t=2.5)
-        session = ErrorRecovery(clock).wrap(_ConstPolicy([{'v': 1}])).new_session()
+        session = ErrorRecovery(clock.now).wrap(_ConstPolicy([{'v': 1}])).new_session()
         result = session(_obs(status=RobotStatus.ERROR))
         assert len(result) == 1
         # Wrappers produce Command objects directly; wire format lives at network boundary.
@@ -109,14 +109,14 @@ class TestErrorRecovery:
         assert 'target_grip' not in result[0]
 
     def test_returns_none_on_subsequent_errors(self):
-        session = ErrorRecovery(_FakeClock()).wrap(_ConstPolicy([{'v': 1}])).new_session()
+        session = ErrorRecovery(_FakeClock().now).wrap(_ConstPolicy([{'v': 1}])).new_session()
         session(_obs(status=RobotStatus.ERROR))
         assert session(_obs(status=RobotStatus.ERROR)) is None
         assert session(_obs(status=RobotStatus.ERROR)) is None
 
     def test_resumes_after_recovery(self):
         inner = _ConstPolicy([{'v': 1}])
-        session = ErrorRecovery(_FakeClock()).wrap(inner).new_session()
+        session = ErrorRecovery(_FakeClock().now).wrap(inner).new_session()
         session(_obs(status=RobotStatus.ERROR))
         session(_obs(status=RobotStatus.ERROR))
         result = session(_obs(status=RobotStatus.AVAILABLE))
@@ -125,7 +125,7 @@ class TestErrorRecovery:
 
     def test_skips_inner_during_error(self):
         inner = _ConstPolicy([{'v': 1}])
-        session = ErrorRecovery(_FakeClock()).wrap(inner).new_session()
+        session = ErrorRecovery(_FakeClock().now).wrap(inner).new_session()
         session(_obs(status=RobotStatus.AVAILABLE))
         count_before = inner._session.call_count
         session(_obs(status=RobotStatus.ERROR))
@@ -149,7 +149,7 @@ class TestErrorRecovery:
             def meta(self):
                 return {'model': 'test'}
 
-        session = ErrorRecovery(_FakeClock()).wrap(_MetaPolicy()).new_session()
+        session = ErrorRecovery(_FakeClock().now).wrap(_MetaPolicy()).new_session()
         assert session.meta == {'model': 'test'}
 
 
@@ -158,7 +158,7 @@ class TestPipelineComposition:
 
     def test_wrapper_pipe_wrapper(self):
         clock = _FakeClock(t=1.0)
-        pipeline = ErrorRecovery(clock) | ChunkedSchedule(clock)
+        pipeline = ErrorRecovery(clock.now) | ChunkedSchedule(clock.now)
         assert isinstance(pipeline, PolicyWrapper)
         policy = pipeline.wrap(_ConstPolicy([{'v': 1, 'timestamp': 0.0}]))
         session = policy.new_session()
@@ -169,7 +169,7 @@ class TestPipelineComposition:
     def test_wrapper_pipe_codec(self):
         clock = _FakeClock(t=1.0)
         codec = ActionTimestamp(fps=10.0)
-        pipeline = ChunkedSchedule(clock) | codec
+        pipeline = ChunkedSchedule(clock.now) | codec
         assert isinstance(pipeline, PolicyWrapper)
         policy = pipeline.wrap(_ConstPolicy([{'action': 'test'}]))
         session = policy.new_session()
@@ -180,7 +180,7 @@ class TestPipelineComposition:
     def test_codec_pipe_wrapper(self):
         clock = _FakeClock(t=1.0)
         codec = ActionTimestamp(fps=10.0)
-        pipeline = codec | ChunkedSchedule(clock)
+        pipeline = codec | ChunkedSchedule(clock.now)
         assert isinstance(pipeline, PolicyWrapper)
         policy = pipeline.wrap(_ConstPolicy([{'action': 'test', 'timestamp': 0.0}]))
         session = policy.new_session()
@@ -190,7 +190,7 @@ class TestPipelineComposition:
     def test_full_pipeline(self):
         clock = _FakeClock(t=1.0)
         codec = ActionTimestamp(fps=10.0)
-        pipeline = ErrorRecovery(clock) | ChunkedSchedule(clock) | codec
+        pipeline = ErrorRecovery(clock.now) | ChunkedSchedule(clock.now) | codec
         assert isinstance(pipeline, PolicyWrapper)
         # 5 raw actions → codec stamps relative 0.0, 0.1, 0.2, 0.3, 0.4
         # → ChunkedSchedule shifts to 1.0, 1.1, 1.2, 1.3, 1.4 (clock=1.0).
@@ -219,7 +219,7 @@ class TestPipelineComposition:
         clock = _FakeClock(t=1.0)
         # Long trajectory: ends at clock=1.0 + 5.0 = 6.0
         inner = _ConstPolicy([{'v': 1, 'timestamp': 0.0}, {'v': 2, 'timestamp': 5.0}])
-        pipeline = ErrorRecovery(clock) | ChunkedSchedule(clock)
+        pipeline = ErrorRecovery(clock.now) | ChunkedSchedule(clock.now)
         session = pipeline.wrap(inner).new_session()
 
         # Normal call sets trajectory_end = 6.0.

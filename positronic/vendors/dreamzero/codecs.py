@@ -7,16 +7,14 @@ import configuronic as cfn
 import numpy as np
 from PIL import Image as PilImage
 
-import pimm
 from positronic.cfg import codecs
 from positronic.dataset import Signal, transforms
 from positronic.dataset.episode import Episode
 from positronic.dataset.transforms import image
 from positronic.dataset.transforms.episode import Derive, Get
 from positronic.drivers.roboarm import command
-from positronic.policy.base import PolicyWrapper
+from positronic.policy import wrappers
 from positronic.policy.codec import Codec, lerobot_action, lerobot_image, lerobot_state
-from positronic.policy.harness import ChunkedSchedule, ErrorRecovery, TemporalFrameStack
 
 IMAGE_WIDTH = 320
 IMAGE_HEIGHT = 176
@@ -223,9 +221,11 @@ def dreamzero_action(tgt_joints_key: str, tgt_grip_key: str, num_joints: int):
     return DreamZeroActionCodec(tgt_joints_key=tgt_joints_key, tgt_grip_key=tgt_grip_key, num_joints=num_joints)
 
 
-# Composed codec: DreamZero observation + action + timing
+# Composed codec: DreamZero observation + action + timing.
+# horizon=None executes the full 24-action chunk DreamZero returns, aligning the re-query with the
+# frame-stack window; a finite horizon (the compose default is 1.0s) would truncate the chunk.
 _action = dreamzero_action.override(tgt_joints_key='robot_command.joints', tgt_grip_key='target_grip')
-joints = codecs.compose.override(obs=dreamzero_obs, action=_action, fps=15.0)
+joints = codecs.compose.override(obs=dreamzero_obs, action=_action, fps=15.0, horizon=None)
 
 _traj_action = dreamzero_action.override(tgt_joints_key='robot_state.q', tgt_grip_key='grip')
 joints_traj = codecs.compose.override(obs=dreamzero_obs, action=_traj_action, fps=15.0)
@@ -245,17 +245,23 @@ def _ik_dreamzero_action(solver: str):
     return ik | DreamZeroActionCodec(tgt_joints_key='robot_command.joints', tgt_grip_key='target_grip')
 
 
-joints_ik = codecs.compose.override(obs=dreamzero_obs, action=_ik_dreamzero_action, fps=15.0)
+joints_ik = codecs.compose.override(obs=dreamzero_obs, action=_ik_dreamzero_action, fps=15.0, horizon=None)
 joints_ik_sim = joints_ik.override(**{'action.solver': 'dm_control'})
 
 
-def dreamzero_wrappers(clock: pimm.Clock) -> PolicyWrapper:
-    """Eval wrapper pipeline for DreamZero: buffer frames and feed the server the AR video context.
+_frame_stack = wrappers.temporal_frame_stack.override(
+    image_keys=('image.wrist', 'image.exterior'), offsets_sec=FRAME_STACK_OFFSETS_SEC
+)
 
-    Drop-in for the eval ``wrap`` param. Stacks the wrist/exterior cameras at
+
+@cfn.config(
+    frame_stack=_frame_stack, error_recovery=wrappers.error_recovery, chunked_schedule=wrappers.chunked_schedule
+)
+def dreamzero_wrappers(frame_stack, error_recovery, chunked_schedule):
+    """Eval ``wrap`` for DreamZero: AR video context + error recovery + chunked scheduling.
+
+    Returns a ``now -> PolicyWrapper`` factory. The frame stack samples the wrist/exterior cameras at
     ``FRAME_STACK_OFFSETS_SEC`` outside the scheduling wrappers, so the server receives multi-frame
-    context at the trained cadence. Pair with full-chunk execution (codec ``horizon`` covering the
-    whole 24-step chunk) so the executed window matches the frame offsets.
+    context at the trained cadence; pair with the DreamZero codec's full-chunk ``horizon``.
     """
-    frame_stack = TemporalFrameStack(clock, ('image.wrist', 'image.exterior'), FRAME_STACK_OFFSETS_SEC)
-    return frame_stack | ErrorRecovery(clock) | ChunkedSchedule(clock)
+    return wrappers.compose(frame_stack, error_recovery, chunked_schedule)

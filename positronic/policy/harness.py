@@ -4,14 +4,12 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Any
 
-import numpy as np
-
 import pimm
 from positronic.dataset.ds_writer_agent import DsWriterCommand
 from positronic.dataset.serializers import expand_suffixed
-from positronic.drivers import roboarm
 from positronic.eval import Embodiment, Task
-from positronic.policy.base import DelegatingSession, Policy, PolicyWrapper, Session
+from positronic.policy.base import Policy, PolicyWrapper, Session
+from positronic.policy.wrappers import ChunkedSchedule, default_wrappers
 from positronic.utils import flatten_dict, frozen_view
 
 
@@ -44,181 +42,6 @@ class Directive:
     def HOME(cls, preset: str = 'home') -> 'Directive':
         """Abort recording and send devices to a named safe state."""
         return cls(DirectiveType.HOME, preset)
-
-
-# ---------------------------------------------------------------------------
-# Policy wrappers — composable concerns extracted from the harness
-# ---------------------------------------------------------------------------
-
-
-class ChunkedSchedule(PolicyWrapper):
-    """Wait for current trajectory to finish before calling inner policy again.
-
-    Owns relative→absolute time conversion: inner layers (codecs, models) emit
-    relative timestamps; this wrapper anchors them to ``clock.now()`` *after*
-    inner inference returns, so execution aligns to inference-finish (not
-    inference-start). Other scheduling strategies (RTC, temporal ensembling)
-    will plug in here with their own timing policies.
-
-    Returns ``None`` (meaning "keep executing current trajectory") until the
-    last action's timestamp has been reached, then calls the inner policy.
-
-    Composable via ``|``::
-
-        pipeline = ErrorRecovery() | ChunkedSchedule(clock) | codec
-        wrapped = pipeline.wrap(model)
-    """
-
-    class _Session(DelegatingSession):
-        """Skips inner calls while the current trajectory plays; stamps absolute on emit."""
-
-        def __init__(self, inner: Session, clock: pimm.Clock):
-            super().__init__(inner)
-            self._clock = clock
-            self._trajectory_end: float | None = None
-
-        def __call__(self, obs):
-            if self._trajectory_end is not None and self._clock.now() < self._trajectory_end:
-                return None
-            result = self._inner(obs)
-            if result is not None:
-                # A single-action session may return a bare dict, and a no-codec path may
-                # omit ``timestamp`` (servers can stamp/truncate themselves); normalize both
-                # so an immediate action executes instead of raising.
-                if isinstance(result, dict):
-                    result = [result]
-                # Anchor to post-inference time so execution starts when inference *finished*.
-                # Copy dicts so we don't mutate caller-owned data (sessions may reuse templates).
-                now = self._clock.now()
-                result = [{**r, 'timestamp': now + r.get('timestamp', 0.0)} for r in result]
-                self._trajectory_end = result[-1]['timestamp'] if result else None
-            return result
-
-        def cancel(self):
-            self._trajectory_end = None
-            super().cancel()
-
-    def __init__(self, clock: pimm.Clock):
-        self._clock = clock
-
-    def wrap_session(self, inner: Session, context):
-        return ChunkedSchedule._Session(inner, self._clock)
-
-
-class ErrorRecovery(PolicyWrapper):
-    """Wraps a policy to handle robot errors by emitting Recover commands.
-
-    On error: emits a single Recover trajectory, then returns None until
-    the robot recovers. On recovery: resumes normal inference.
-
-    Composable via ``|``::
-
-        pipeline = ErrorRecovery(clock) | ChunkedSchedule(clock) | codec
-        wrapped = pipeline.wrap(model)
-
-    TODO: this wrapper is not name-free. It hard-codes the ``robot_state.error``
-    observation and the ``robot_command`` channel (with a Franka ``Recover``), so it
-    only fits Franka-named embodiments; others must disable ``default_wrappers``. How
-    an embodiment should declare its error signal and recovery action is still open.
-    """
-
-    class _Session(DelegatingSession):
-        """Emits Recover trajectory on robot error, delegates otherwise."""
-
-        def __init__(self, inner: Session, clock: pimm.Clock):
-            super().__init__(inner)
-            self._clock = clock
-            self._in_error = False
-
-        def __call__(self, obs):
-            was_ok = not self._in_error
-            self._in_error = obs['robot_state.error'] == 1
-
-            if self._in_error:
-                if was_ok:
-                    # Reset any inner scheduling state so post-recovery doesn't stall
-                    # on a stale trajectory_end from the pre-error chunk.
-                    self._inner.cancel()
-                    return [{'robot_command': roboarm.command.Recover(), 'timestamp': self._clock.now()}]
-                return None
-
-            return self._inner(obs)
-
-    def __init__(self, clock: pimm.Clock):
-        self._clock = clock
-
-    def wrap_session(self, inner: Session, context):
-        return ErrorRecovery._Session(inner, self._clock)
-
-
-class TemporalFrameStack(PolicyWrapper):
-    """Replaces each named image in the observation with a temporal stack of recent frames.
-
-    Servers whose model conditions on a short video (e.g. DreamZero) need several frames spanning the
-    just-executed chunk at the cadence seen in training, but the harness only forwards an observation
-    to the policy at re-query boundaries. This wrapper sits outside the scheduling wrapper so it sees
-    every control tick: it records frames into a per-camera buffer (subsampled to ``min_dt``) and, on
-    every call, substitutes a ``(len(offsets_sec), H, W, 3)`` stack sampled at ``offsets_sec`` (negative
-    seconds relative to now). Early in an episode the buffer repeats its oldest frame.
-    """
-
-    class _Session(DelegatingSession):
-        def __init__(
-            self,
-            inner: Session,
-            clock: pimm.Clock,
-            image_keys: tuple[str, ...],
-            offsets_sec: tuple[float, ...],
-            min_dt_sec: float,
-        ):
-            super().__init__(inner)
-            self._clock = clock
-            self._image_keys = image_keys
-            self._offsets_sec = offsets_sec
-            self._min_dt_sec = min_dt_sec
-            self._buffers: dict[str, list[tuple[float, np.ndarray]]] = {k: [] for k in image_keys}
-
-        def __call__(self, obs):
-            now = self._clock.now()
-            stacked = dict(obs)
-            for key in self._image_keys:
-                frame = obs.get(key)
-                if isinstance(frame, np.ndarray) and frame.ndim == 3:
-                    buf = self._buffers[key]
-                    if not buf or now - buf[-1][0] >= self._min_dt_sec:
-                        # Copy: camera frames are views into a shared-memory buffer the producer reuses
-                        # each tick, so storing the view would alias every slot to the latest frame and
-                        # the stack would be N copies of "now" instead of the offset history.
-                        buf.append((now, np.array(frame)))
-                        # Drop frames older than the oldest sampled offset (keep one just beyond it so
-                        # nearest-neighbor sampling still brackets it): the sampler never looks further
-                        # back, so without this the buffer grows for the whole episode.
-                        cut = next(i for i, (t, _) in enumerate(buf) if t >= now + min(self._offsets_sec))
-                        del buf[: max(cut - 1, 0)]
-                    times = np.array([t for t, _ in buf])
-                    idxs = [int(np.argmin(np.abs(times - (now + off)))) for off in self._offsets_sec]
-                    stacked[key] = np.stack([buf[i][1] for i in idxs])
-            return self._inner(stacked)
-
-        def cancel(self):
-            self._buffers = {k: [] for k in self._buffers}
-            super().cancel()
-
-    def __init__(
-        self, clock: pimm.Clock, image_keys: tuple[str, ...], offsets_sec: tuple[float, ...], min_dt_sec: float = 0.18
-    ):
-        self._clock = clock
-        self._image_keys = tuple(image_keys)
-        self._offsets_sec = tuple(offsets_sec)
-        self._min_dt_sec = min_dt_sec
-
-    def wrap_session(self, inner: Session, context):
-        return TemporalFrameStack._Session(inner, self._clock, self._image_keys, self._offsets_sec, self._min_dt_sec)
-
-
-def default_wrappers(clock: pimm.Clock) -> PolicyWrapper:
-    """Default wrapper pipeline: error recovery + chunked scheduling bound to the harness clock."""
-    return ErrorRecovery(clock) | ChunkedSchedule(clock)
 
 
 class Harness(pimm.ControlSystem):
@@ -255,7 +78,7 @@ class Harness(pimm.ControlSystem):
         task: Task | None = None,
         trials: Iterable[dict[str, Any]] | None = None,
         static_meta: dict[str, Any] | None = None,
-        wrap: PolicyWrapper | Callable[[pimm.Clock], PolicyWrapper] | None = default_wrappers,
+        wrap: PolicyWrapper | Callable[[Callable[[], float]], PolicyWrapper] | None = default_wrappers,
         on_episode_complete: Callable[[Session, dict[str, Any]], None] | None = None,
     ):
         assert trials is None or task is not None, 'A trial plan needs a task: its timeout bounds each trial'
@@ -494,8 +317,8 @@ class Harness(pimm.ControlSystem):
             self.policy = self._raw_policy
         elif isinstance(self._wrap, PolicyWrapper):
             self.policy = self._wrap.wrap(self._raw_policy)
-        else:  # factory: Callable[[Clock], PolicyWrapper]
-            self.policy = self._wrap(clock).wrap(self._raw_policy)
+        else:  # factory: Callable[[now], PolicyWrapper]
+            self.policy = self._wrap(clock.now).wrap(self._raw_policy)
 
         while not should_stop.value:
             directive_msg = self.directive.read()
