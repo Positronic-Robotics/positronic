@@ -42,7 +42,7 @@ class RemoteSession(Session):
         for key, value in obs.items():
             # Resize single RGB frames and temporal stacks of them alike (TemporalFrameStack emits a
             # (T, H, W, 3) stack), so a stack of hd720 frames isn't shipped full-resolution.
-            if isinstance(value, np.ndarray) and value.shape[-1] == 3 and value.ndim in (3, 4):
+            if isinstance(value, np.ndarray) and value.ndim in (3, 4) and value.shape[-1] == 3:
                 target = self._image_sizes.get(key, self._default_image_size)
                 r = self._resize or 0
                 tw, th = target or (r, r)
