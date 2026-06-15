@@ -6,6 +6,7 @@ import pos3
 
 import pimm
 from positronic import geom
+from positronic.cfg.eval.real.tasks import SCISSORS_TASK, SPOONS_TASK, TOWELS_TASK
 from positronic.dataset.ds_writer_agent import DsWriterAgent, DsWriterCommand, TimeMode
 from positronic.dataset.local_dataset import LocalDatasetWriter
 from positronic.dataset.serializers import Serializers
@@ -54,11 +55,7 @@ OPENPI_META = {
     'inference.action.name': 'absolute_position',
 }
 
-TASKS = [
-    'Pick all the towels one by one from transparent tote and place them into the large grey tote.',
-    'Pick all the wooden spoons one by one from transparent tote and place them into the large grey tote.',
-    'Pick all the scissors one by one from transparent tote and place them into the large grey tote.',
-]
+TASKS = [TOWELS_TASK, SPOONS_TASK, SCISSORS_TASK]
 
 META_MAP = {'act': ACT_META, 'openpi': OPENPI_META, 'groot': GROOT_META}
 

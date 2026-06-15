@@ -14,6 +14,7 @@ import configuronic as cfn
 import pos3
 
 from positronic.cfg.ds import group, local_all, transform
+from positronic.cfg.eval.real.tasks import UNIFIED_TASK
 from positronic.dataset import Episode
 from positronic.dataset.transforms.episode import Derive, FromValue, Identity
 from positronic.server.positronic_server import ColumnConfig as C
@@ -39,7 +40,6 @@ models = types.SimpleNamespace(
     act=f'{_ROOT}/models/act/',
 )
 
-UNIFIED_TASK = 'Pick all the items one by one from transparent tote and place them into the large grey tote.'
 teleop_unified = transform.override(
     base=ds.teleop, transforms=[group.override(transforms=[Derive(task=FromValue(UNIFIED_TASK)), Identity()])]
 )
