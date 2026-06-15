@@ -41,10 +41,10 @@ SIDES = ['left', 'right', 'NA']
 EDITOR_POLL_SEC = 0.5
 
 
-# TODO: split this into a reusable review surface (episode navigation + per-field edits over the dataset's edit log)
-# and the lifecycle driver (RUN/FINISH/HOME + time budget). The review half is the sharable one — ideally the
-# positronic server grows into it — but the editable static fields differ per eval, so the form must become
-# data-driven (declared by the Task/Eval) instead of phail-specific. Design pass needed before factoring.
+# TODO(#433): split this into a reusable review surface (episode navigation + per-field edits over the dataset's
+# edit log) and the lifecycle driver (RUN/FINISH/HOME + time budget). The review half is the sharable one — ideally
+# the positronic server grows into it — and owning `output_dir` there frees the driver from the factory closure.
+# The editable static fields differ per eval, so the form must become data-driven (declared by the Task/Eval).
 class EvalUI(pimm.ControlSystem):
     """Operator console for attended evals: trial control plus an episode editor.
 
