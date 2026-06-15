@@ -628,6 +628,13 @@ def test_load_all_datasets_applies_top_level_edits(tmp_path):
     assert episode_ids(load_all_datasets(tmp_path)[:]) == [1, 2]
 
 
+def test_load_all_datasets_applies_intermediate_edits(tmp_path):
+    ds = build_dataset_with_signal(tmp_path / 'group' / 'ds1', [0, 1])
+    # Curation written at an intermediate collection directory must still apply when loading from an ancestor.
+    load_all_datasets(tmp_path / 'group').drop(ds[0].meta['uid'])
+    assert episode_ids(load_all_datasets(tmp_path)[:]) == [1]
+
+
 def test_load_all_datasets_propagates_corrupt_top_level_edit_log(tmp_path):
     build_dataset_with_signal(tmp_path / 'ds1', [0, 1])
     (tmp_path / edits.EDITS_FILE).write_text('garbage', encoding='utf-8')
