@@ -481,6 +481,11 @@ class EvalUI(pimm.ControlSystem):
         """Pick up newly finished episodes; the recorder's `.unfinished` marker hides in-progress ones."""
         if self.output_dir is None or len(LocalDataset(self.output_dir)) == self._count:
             return
+        # Defer the whole pick-up while the operator is mid-edit: a focused text field commits only on
+        # deactivation, so advancing the count or re-selecting now would strand its uncommitted value. The stop
+        # verdicts stay queued and the count is untouched, so a later poll still picks the new episode up.
+        if any(dpg.is_item_focused(tag) for tag in self.TEXT_FIELDS):
+            return
         prev_count = self._count
         self._refresh_view()
         # Each newly landed episode claims the next queued stop verdict (its initial annotation) and is persisted
@@ -495,10 +500,6 @@ class EvalUI(pimm.ControlSystem):
                 uid, {'eval.outcome': review['outcome'], 'eval.successful_items': review['successful']}
             )
             seeded = True
-        # Don't yank the editor to the new episode while the operator is mid-edit on another one: a focused text
-        # field commits only on deactivation, so re-selecting now would overwrite the uncommitted value.
-        if any(dpg.is_item_focused(tag) for tag in self.TEXT_FIELDS):
-            return
         if seeded:
             dpg.set_value('mode_tabs', 'tab_episodes')
         self._select(self._count - 1)
