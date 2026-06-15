@@ -410,6 +410,18 @@ def test_load_all_datasets_with_tilde_path(tmp_path):
         assert episode_ids(result[:]) == [0, 1, 2, 3]
 
 
+def test_load_dataset_edits_with_tilde_path(tmp_path):
+    home = Path.home()
+    with tempfile.TemporaryDirectory(dir=home) as tmpdir:
+        actual_root = Path(tmpdir) / 'ds'
+        ds = build_dataset_with_signal(actual_root, [0, 1])
+        uid = ds[0].meta['uid']
+        tilde_path = Path('~') / actual_root.relative_to(home)
+        # Edits resolve against the expanded dataset root, not the literal `~` path
+        load_dataset(tilde_path).drop(uid)
+        assert episode_ids(load_dataset(tilde_path)[:]) == [1]
+
+
 # --- Edit log tests ---
 
 
@@ -438,7 +450,7 @@ def test_episode_without_stamped_uid_derives_one_from_created_ts(tmp_path):
     uid = LocalDataset(root)[0].meta['uid']
     assert uid == f'ts-{meta["created_ts_ns"]}'
 
-    edits.set_static(root, uid, {'verdict': 'success'})
+    load_dataset(root).set_static(uid, {'verdict': 'success'})
     assert load_dataset(root)[0]['verdict'] == 'success'
 
 
@@ -447,7 +459,7 @@ def test_set_static_edit_applies_on_read(tmp_path):
     ds = build_dataset_with_signal(root, [0, 1])
     uid = ds[0].meta['uid']
 
-    edits.set_static(root, uid, {'id': 100, 'verdict': 'success', 'blob': b'\x00\x01'})
+    load_dataset(root).set_static(uid, {'id': 100, 'verdict': 'success', 'blob': b'\x00\x01'})
 
     ds = load_dataset(root)
     assert ds[0]['id'] == 100
@@ -463,8 +475,8 @@ def test_set_static_edit_last_write_wins(tmp_path):
     ds = build_dataset_with_signal(root, [0])
     uid = ds[0].meta['uid']
 
-    edits.set_static(root, uid, {'verdict': 'fail', 'notes': 'first'})
-    edits.set_static(root, uid, {'verdict': 'success'})
+    load_dataset(root).set_static(uid, {'verdict': 'fail', 'notes': 'first'})
+    load_dataset(root).set_static(uid, {'verdict': 'success'})
 
     ds = load_dataset(root)
     assert ds[0]['verdict'] == 'success'
@@ -474,29 +486,104 @@ def test_set_static_edit_last_write_wins(tmp_path):
 def test_set_static_edit_colliding_with_signal_raises(tmp_path):
     root = tmp_path / 'ds'
     ds = build_dataset_with_signal(root, [0])
-    edits.set_static(root, ds[0].meta['uid'], {'signal': 1})
+    load_dataset(root).set_static(ds[0].meta['uid'], {'signal': 1})
 
     ds = load_dataset(root)
-    with pytest.raises(ValueError, match='collide with signals'):
-        _ = ds[0]
+    # Identity stays readable; the collision only raises when the shadowed key is read
+    assert ds[0].meta['uid'] == ds[0].meta['uid']
+    with pytest.raises(ValueError, match='collides with a signal'):
+        _ = ds[0]['signal']
 
 
 def test_set_static_edit_for_unknown_uid_is_inert(tmp_path):
     root = tmp_path / 'ds'
     build_dataset_with_signal(root, [0])
-    edits.set_static(root, 'no-such-uid', {'verdict': 'success'})
+    load_dataset(root).set_static('no-such-uid', {'verdict': 'success'})
 
     ds = load_dataset(root)
     assert ds[0].static == {'id': 0}
 
 
 def test_set_static_edit_rejects_invalid_values(tmp_path):
+    root = tmp_path / 'ds'
+    build_dataset_with_signal(root, [0])
+    ds = load_dataset(root)
     with pytest.raises(ValueError, match='JSON-serializable'):
-        edits.set_static(tmp_path, 'uid', {'bad': object()})
+        ds.set_static('uid', {'bad': object()})
     with pytest.raises(ValueError, match='must be a mapping'):
-        edits.set_static(tmp_path, 'uid', ['not', 'a', 'mapping'])
+        ds.set_static('uid', ['not', 'a', 'mapping'])
     with pytest.raises(ValueError, match='non-empty string'):
-        edits.set_static(tmp_path, None, {'verdict': 'ok'})
+        ds.set_static(None, {'verdict': 'ok'})
+
+
+def test_drop_edit_hides_episode(tmp_path):
+    root = tmp_path / 'ds'
+    ds = build_dataset_with_signal(root, [0, 1, 2])
+    load_dataset(root).drop(ds[1].meta['uid'])
+
+    assert episode_ids(load_dataset(root)[:]) == [0, 2]
+    # The recording stays on disk; only the loaded view filters it
+    assert len(LocalDataset(root)) == 3
+
+
+def test_drop_edit_composes_with_set_static(tmp_path):
+    root = tmp_path / 'ds'
+    ds = build_dataset_with_signal(root, [0, 1])
+    load_dataset(root).set_static(ds[0].meta['uid'], {'verdict': 'success'})
+    load_dataset(root).drop(ds[1].meta['uid'])
+
+    ds = load_dataset(root)
+    assert len(ds) == 1
+    assert ds[0]['verdict'] == 'success'
+
+
+def test_drop_edit_hides_episode_with_invalid_static_edit(tmp_path):
+    root = tmp_path / 'ds'
+    ds = build_dataset_with_signal(root, [0, 1])
+    # 'signal' collides with the recorded signal, which raises on episode access — unless the episode is dropped
+    load_dataset(root).set_static(ds[1].meta['uid'], {'signal': 'collides'})
+    load_dataset(root).drop(ds[1].meta['uid'])
+
+    assert episode_ids(load_dataset(root)[:]) == [0]
+
+
+def test_drop_edit_for_unknown_uid_is_inert(tmp_path):
+    root = tmp_path / 'ds'
+    build_dataset_with_signal(root, [0])
+    load_dataset(root).drop('no-such-uid')
+    assert episode_ids(load_dataset(root)[:]) == [0]
+
+
+def test_overlay_skips_dropped_episode_with_colliding_edit(tmp_path):
+    root = tmp_path / 'ds'
+    ds = build_dataset_with_signal(root, [0, 1])
+    uid = ds[1].meta['uid']
+    edited = load_dataset(root).set_static(uid, {'signal': 'collides'}).drop(uid)
+    # Navigating to the dropped row (e.g. to undrop it) must not raise on the colliding edit
+    assert edited.overlay(edited.base[1]).static == {'id': 1}
+
+
+def test_undrop_edit_restores_episode(tmp_path):
+    root = tmp_path / 'ds'
+    ds = build_dataset_with_signal(root, [0, 1])
+    uid = ds[0].meta['uid']
+
+    load_dataset(root).drop(uid)
+    assert episode_ids(load_dataset(root)[:]) == [1]
+
+    load_dataset(root).undrop(uid)
+    assert episode_ids(load_dataset(root)[:]) == [0, 1]
+
+    # The last drop/undrop in log order wins
+    load_dataset(root).drop(uid)
+    assert episode_ids(load_dataset(root)[:]) == [1]
+
+
+def test_drop_edit_rejects_invalid_uid(tmp_path):
+    root = tmp_path / 'ds'
+    build_dataset_with_signal(root, [0])
+    with pytest.raises(ValueError, match='non-empty string'):
+        load_dataset(root).drop('')
 
 
 def test_corrupt_edit_record_raises(tmp_path):
@@ -533,8 +620,62 @@ def test_load_all_datasets_propagates_corrupt_edit_log(tmp_path):
         load_all_datasets(tmp_path)
 
 
-def test_load_all_datasets_ignores_edit_log_outside_datasets(tmp_path):
+def test_load_all_datasets_applies_top_level_edits(tmp_path):
+    ds1 = build_dataset_with_signal(tmp_path / 'ds1', [0, 1])
+    build_dataset_with_signal(tmp_path / 'ds2', [2])
+    # The search root is not itself a dataset; a top-level edit log there overlays the whole combined view.
+    load_all_datasets(tmp_path).drop(ds1[0].meta['uid'])
+    assert episode_ids(load_all_datasets(tmp_path)[:]) == [1, 2]
+
+
+def test_load_all_datasets_applies_intermediate_edits(tmp_path):
+    ds = build_dataset_with_signal(tmp_path / 'group' / 'ds1', [0, 1])
+    # Curation written at an intermediate collection directory must still apply when loading from an ancestor.
+    load_all_datasets(tmp_path / 'group').drop(ds[0].meta['uid'])
+    assert episode_ids(load_all_datasets(tmp_path)[:]) == [1]
+
+
+def test_load_all_datasets_propagates_corrupt_top_level_edit_log(tmp_path):
     build_dataset_with_signal(tmp_path / 'ds1', [0, 1])
     (tmp_path / edits.EDITS_FILE).write_text('garbage', encoding='utf-8')
-    result = load_all_datasets(tmp_path)
-    assert episode_ids(result[:]) == [0, 1]
+    with pytest.raises(ValueError, match='Corrupt edit record'):
+        load_all_datasets(tmp_path)
+
+
+def test_load_all_datasets_undrop_when_root_is_dataset(tmp_path):
+    ds = build_dataset_with_signal(tmp_path, [0, 1])
+    uid = ds[0].meta['uid']
+    load_all_datasets(tmp_path).drop(uid)
+    # Undrop through the returned handle must restore the episode. Regression: when `root` is itself a dataset,
+    # double-wrapping its log left the inner snapshot still filtering the drop, so the undrop couldn't reach it.
+    restored = load_all_datasets(tmp_path).undrop(uid)
+    assert episode_ids(restored[:]) == [0, 1]
+
+
+def test_load_all_datasets_root_dataset_with_child_keeps_edit_handle(tmp_path):
+    # `root` is itself a dataset AND contains a child dataset: the combined view must still expose the edit API,
+    # and a root-level drop must reach both root and child episodes (root's own log applied once, not twice).
+    root_ds = build_dataset_with_signal(tmp_path, [0, 1])
+    child_ds = build_dataset_with_signal(tmp_path / 'child', [2, 3])
+    load_all_datasets(tmp_path).drop(root_ds[0].meta['uid'])
+    load_all_datasets(tmp_path).drop(child_ds[0].meta['uid'])
+    assert episode_ids(load_all_datasets(tmp_path)[:]) == [1, 3]
+
+
+def test_load_all_datasets_top_level_drop_hides_colliding_child_edit(tmp_path):
+    ds1 = build_dataset_with_signal(tmp_path / 'ds1', [0, 1])
+    build_dataset_with_signal(tmp_path / 'ds2', [2])
+    uid = ds1[1].meta['uid']
+    # A child holds a colliding (broken) static edit; a top-level drop must hide the episode without the child
+    # overlay raising while the root view filters it by uid.
+    load_dataset(tmp_path / 'ds1').set_static(uid, {'signal': 'collides'})
+    load_all_datasets(tmp_path).drop(uid)
+    assert episode_ids(load_all_datasets(tmp_path)[:]) == [0, 2]
+
+
+def test_load_all_datasets_keeps_all_dropped_dataset(tmp_path):
+    ds = build_dataset_with_signal(tmp_path / 'ds1', [0, 1])
+    for i in range(2):
+        load_dataset(tmp_path / 'ds1').drop(ds[i].meta['uid'])
+    # All episodes are curated out, but the directory is still a dataset: an empty view, not an error
+    assert len(load_all_datasets(tmp_path)) == 0

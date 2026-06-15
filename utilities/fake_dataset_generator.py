@@ -63,9 +63,9 @@ TASKS = [
 META_MAP = {'act': ACT_META, 'openpi': OPENPI_META, 'groot': GROOT_META}
 
 # Fake eval outcomes (kept in sync with UI options in `positronic/gui/eval.py`)
-FAILURE_OUTCOMES = ('Fail', 'Stalled', 'Ran out of time', 'Safety', 'System')
+FAILURE_OUTCOMES = ('Fail', 'Ran out of time', 'Safety', 'System')
 # Weights are relative probabilities when an episode is not a success.
-FAILURE_OUTCOME_WEIGHTS = (0.25, 0.35, 0.20, 0.10, 0.10)
+FAILURE_OUTCOME_WEIGHTS = (0.25, 0.20, 0.10, 0.10)
 
 
 class FakeGenerator(pimm.ControlSystem):
@@ -120,8 +120,6 @@ class FakeGenerator(pimm.ControlSystem):
                 successful_items = random.randint(0, total_items - 1)
                 if outcome == 'Fail':
                     notes = 'Task failed'
-                elif outcome == 'Stalled':
-                    notes = 'Robot stalled'
                 elif outcome == 'Safety':
                     notes = 'Safety violation'
                 else:

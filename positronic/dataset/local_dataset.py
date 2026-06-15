@@ -7,7 +7,6 @@ import sys
 import time
 import uuid
 import weakref
-from collections import deque
 from collections.abc import Callable, Iterator
 from contextlib import suppress
 from functools import lru_cache, partial
@@ -22,7 +21,7 @@ from positronic.utils.git import get_git_state
 from positronic.utils.lazy import LazyDict
 
 from .dataset import ConcatDataset, Dataset, DatasetWriter
-from .edits import EditedDataset, load_edits
+from .edits import EditedDataset
 from .episode import (
     EPISODE_SCHEMA_VERSION,
     SIGNAL_FACTORY_T,
@@ -537,67 +536,70 @@ class LocalDatasetWriter(DatasetWriter):
         pass
 
 
-def load_dataset(root: Path) -> Dataset:
+def load_dataset(root: Path) -> EditedDataset:
     """Open a local dataset with its edit log applied.
 
-    `LocalDataset` reads the raw recordings; a discovered `edits.jsonl` composes on top as an `EditedDataset`
-    view. The log is loaded only when the directory actually holds episodes — an edit log binds to a dataset.
+    `LocalDataset` reads the raw recordings; `EditedDataset` reads the `edits.jsonl` beside them and applies it —
+    dropped episodes hidden, static edits overlaid. The returned view also amends the log via
+    `set_static`/`drop`/`undrop`, each returning a fresh view over the same recordings.
     """
     ds = LocalDataset(root)
-    edits = load_edits(ds.root) if len(ds) else {}
-    return EditedDataset(ds, edits) if edits else ds
+    # Read and write edits at the dataset's resolved root, not the caller's literal path (which may be `~`-relative).
+    return EditedDataset(ds, ds.root)
 
 
-def load_all_datasets(root: Path) -> Dataset:
-    """Load and concatenate all LocalDatasets found in root directory tree.
+def load_all_datasets(root: Path) -> EditedDataset:
+    """Load every LocalDataset under a directory tree, edit logs composed level by level.
 
-    Uses breadth-first search to find datasets. For each directory, tries to load it
-    as a LocalDataset. If successful, that branch is complete. If not, expands into
-    subdirectories and tries them. Continues until all branches either resolve to
-    datasets or have no more subdirectories to explore.
+    Each directory's `edits.jsonl` overlays its whole subtree: the directory's own recordings (when it is a
+    dataset) and its child datasets are concatenated, then wrapped in that directory's edit log. Edits are
+    uid-keyed, so a log at any level reaches the episodes it names wherever they live, and each log is applied
+    exactly once — by the wrap at its own directory.
 
     Args:
         root: Path to directory that may be a dataset and/or contain dataset subdirectories
 
     Returns:
-        Dataset: A ConcatDataset combining all found datasets, or a single LocalDataset
-                 if only one is found
+        EditedDataset: the combined, edit-curated view, amendable at `root` via `set_static`/`drop`/`undrop`.
 
     Raises:
         FileNotFoundError: If root does not exist
         ValueError: If no valid datasets are found in root or if root is not a directory
     """
-
     root = Path(root).expanduser()
     if not root.exists():
         raise FileNotFoundError(f'Directory {root} does not exist')
-
     if not root.is_dir():
         raise ValueError(f'{root} is not a directory')
-
-    datasets: list[Dataset] = []
-    # Queue of directories to explore
-    to_explore: deque[Path] = deque([root])
-
-    while to_explore:
-        current_path = to_explore.popleft()
-
-        # Try to load this directory as a dataset; corrupt content (e.g. a bad edit log) propagates
-        try:
-            dataset = load_dataset(current_path)
-            if len(dataset) > 0:
-                datasets.append(dataset)
-        except FileNotFoundError:
-            pass
-
-        # Always explore non-numeric subdirs (numeric ones are dataset block internals)
-        subdirs = sorted(p for p in current_path.iterdir() if p.is_dir() and not _is_numeric_dir(p))
-        to_explore.extend(subdirs)
-
-    if len(datasets) == 0:
+    combined = _load_subtree(root)
+    if combined is None:
         raise ValueError(f'No valid datasets found in {root}')
+    return combined
 
-    if len(datasets) == 1:
-        return datasets[0]
 
-    return ConcatDataset(*datasets)
+def _load_subtree(directory: Path) -> EditedDataset | None:
+    """Edit-curated view of one directory's subtree, or None when it holds no datasets.
+
+    The directory's own recordings (if it is a dataset) lead, followed by each child subtree's already-curated
+    view; the directory's own `edits.jsonl` is applied once by the wrap here.
+    """
+    members: list[Dataset] = []
+    # Corrupt content (e.g. a bad edit log) propagates. Validity is judged on the raw recordings: a dataset
+    # whose episodes are all dropped by edits is still a dataset — it loads as an empty curated view.
+    try:
+        base = LocalDataset(directory)
+        if len(base) > 0:
+            members.append(base)
+    except FileNotFoundError:
+        pass
+
+    # Numeric subdirs are dataset block internals, not nested datasets.
+    for sub in sorted(p for p in directory.iterdir() if p.is_dir() and not _is_numeric_dir(p)):
+        child = _load_subtree(sub)
+        if child is not None:
+            members.append(child)
+
+    if not members:
+        return None
+    combined = members[0] if len(members) == 1 else ConcatDataset(*members)
+    return EditedDataset(combined, directory)
