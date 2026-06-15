@@ -540,6 +540,15 @@ def test_drop_edit_for_unknown_uid_is_inert(tmp_path):
     assert episode_ids(load_dataset(root)[:]) == [0]
 
 
+def test_overlay_skips_dropped_episode_with_colliding_edit(tmp_path):
+    root = tmp_path / 'ds'
+    ds = build_dataset_with_signal(root, [0, 1])
+    uid = ds[1].meta['uid']
+    edited = load_dataset(root).set_static(uid, {'signal': 'collides'}).drop(uid)
+    # Navigating to the dropped row (e.g. to undrop it) must not raise on the colliding edit
+    assert edited.overlay(edited.base[1]).static == {'id': 1}
+
+
 def test_undrop_edit_restores_episode(tmp_path):
     root = tmp_path / 'ds'
     ds = build_dataset_with_signal(root, [0, 1])
@@ -597,11 +606,19 @@ def test_load_all_datasets_propagates_corrupt_edit_log(tmp_path):
         load_all_datasets(tmp_path)
 
 
-def test_load_all_datasets_ignores_edit_log_outside_datasets(tmp_path):
+def test_load_all_datasets_applies_top_level_edits(tmp_path):
+    ds1 = build_dataset_with_signal(tmp_path / 'ds1', [0, 1])
+    build_dataset_with_signal(tmp_path / 'ds2', [2])
+    # The search root is not itself a dataset; a top-level edit log there overlays the whole combined view.
+    load_all_datasets(tmp_path).drop(ds1[0].meta['uid'])
+    assert episode_ids(load_all_datasets(tmp_path)[:]) == [1, 2]
+
+
+def test_load_all_datasets_propagates_corrupt_top_level_edit_log(tmp_path):
     build_dataset_with_signal(tmp_path / 'ds1', [0, 1])
     (tmp_path / edits.EDITS_FILE).write_text('garbage', encoding='utf-8')
-    result = load_all_datasets(tmp_path)
-    assert episode_ids(result[:]) == [0, 1]
+    with pytest.raises(ValueError, match='Corrupt edit record'):
+        load_all_datasets(tmp_path)
 
 
 def test_load_all_datasets_keeps_all_dropped_dataset(tmp_path):

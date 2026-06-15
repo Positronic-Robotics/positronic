@@ -55,12 +55,11 @@ def mujoco_franka(sim, camera_dict):
         'grip': Observation(sim.grip, None),
         **{name: Observation(sim.cameras[orig], Serializers.camera_images) for name, orig in camera_dict.items()},
     }
+    # Home to the scene's initial pose, not `Reset()`: in MujocoSim `Reset()` rebuilds the whole scene, wiping the
+    # trial's end state right when the operator reviews it.
+    home = roboarm_command.JointPosition(np.array(sim.initial_ctrl[:7]))
     commands = {
-        # Homing drives the arm to the scene's initial pose instead of `Reset()`: in MujocoSim, `Reset()`
-        # rebuilds the whole scene, which would wipe the trial's end state right when the operator reviews it.
-        'robot_command': Command(
-            sim.commands, roboarm_command.JointPosition(np.array(sim.initial_ctrl[:7])), Serializers.robot_command
-        ),
+        'robot_command': Command(sim.commands, home, Serializers.robot_command),
         'target_grip': Command(sim.target_grip, 0.0, None),
     }
     return Embodiment(

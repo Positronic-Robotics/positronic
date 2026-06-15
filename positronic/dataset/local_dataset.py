@@ -559,8 +559,8 @@ def load_all_datasets(root: Path) -> Dataset:
         root: Path to directory that may be a dataset and/or contain dataset subdirectories
 
     Returns:
-        Dataset: A ConcatDataset combining all found datasets, or a single LocalDataset
-                 if only one is found
+        EditedDataset: the found datasets (each with its own edit log applied) combined and wrapped in a
+            top-level edit log read from `root`, so curation written at `root` spans the whole loaded view.
 
     Raises:
         FileNotFoundError: If root does not exist
@@ -598,7 +598,7 @@ def load_all_datasets(root: Path) -> Dataset:
     if len(datasets) == 0:
         raise ValueError(f'No valid datasets found in {root}')
 
-    if len(datasets) == 1:
-        return datasets[0]
-
-    return ConcatDataset(*datasets)
+    combined = datasets[0] if len(datasets) == 1 else ConcatDataset(*datasets)
+    # A top-level edit log at `root` overlays the whole combined view — curation can span sub-datasets, keyed by
+    # uid so it composes with each dataset's own log.
+    return EditedDataset(combined, root)

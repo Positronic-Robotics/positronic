@@ -2,12 +2,17 @@
 
 Episodes are never modified after recording. Post-hoc facts — operator verdicts, analysis scores — are *edits*:
 declarative records appended to an `edits.jsonl` file beside a dataset and applied as a view on read. `EditedDataset`
-is that view and the handle that amends it: it reads the log, hides dropped episodes, overlays static edits, and its
-`set_static`/`drop`/`undrop` methods append new records. Each line is one JSON record carrying its op:
-`{"op": "set_static", "v": 1, "ep": "<uid>", "data": {...}}` merges static items over the episode's recorded ones
-(log order, last write per key wins); `{"op": "drop", "v": 1, "ep": "<uid>"}` removes the episode from the loaded view
-and `{"op": "undrop", "v": 1, "ep": "<uid>"}` restores it (the last drop/undrop wins). Records target episodes by
-`meta['uid']`. The format is plain appendable JSON so external tools can write it; the directory has a single writer.
+is that view and the handle that amends it: it reads the log and applies the edits, and its methods append new ones.
+
+Each line is one JSON record carrying its op and version, so a log replays forever. The ops, targeting episodes by
+`meta['uid']`:
+
+- `{"op": "set_static", "v": 1, "ep": "<uid>", "data": {...}}` — merge static items over the episode's recorded ones
+  (log order, last write per key wins).
+- `{"op": "drop", "v": 1, "ep": "<uid>"}` — remove the episode from the view; the recording stays on disk.
+- `{"op": "undrop", "v": 1, "ep": "<uid>"}` — restore a dropped episode (the last drop/undrop per episode wins).
+
+The format is plain appendable JSON so external tools can write it; the directory has a single writer.
 """
 
 import json
@@ -22,7 +27,7 @@ from .signal import Signal
 EDITS_FILE = 'edits.jsonl'
 
 
-def load_edits(edits_dir: Path) -> tuple[dict[str, dict[str, Any]], set[str]]:
+def _load_edits(edits_dir: Path) -> tuple[dict[str, dict[str, Any]], set[str]]:
     """Read the edit log and return merged static edits per episode uid plus the set of dropped uids.
 
     Records apply in log order: the last write per static key wins, and the last drop/undrop per episode wins.
@@ -89,16 +94,16 @@ class EditedEpisode(Episode):
 class EditedDataset(Dataset):
     """A dataset with its edit log applied as a view, and the handle that amends the log.
 
-    Reads are curated: `len()`/indexing skip dropped episodes and overlay static edits, so consumers see the
-    corrected dataset. The same object edits the log — `set_static`/`drop`/`undrop` append a record to `edits_dir`
-    and return a *new* `EditedDataset` over the same recordings, so a held reference keeps its shape while the
-    returned one reflects the edit. `edits_dir` is where the log lives; it can equal the recordings directory.
+    Reads are curated: `len()`/indexing apply the edit log, so consumers see the corrected dataset. The same object
+    amends the log — its edit methods (`set_static`/`drop`/`undrop`) append a record to `edits_dir` and return a *new*
+    `EditedDataset` over the same recordings, so a held reference keeps its shape while the returned one reflects the
+    edit. `edits_dir` is where the log lives; it can equal the recordings directory.
     """
 
     def __init__(self, base: Dataset, edits_dir: Path):
         self._base = base
         self._edits_dir = Path(edits_dir)
-        self._statics, self._dropped = load_edits(self._edits_dir)
+        self._statics, self._dropped = _load_edits(self._edits_dir)
         self._kept = FilterDataset(base, lambda ep: ep.meta['uid'] not in self._dropped)
 
     def __len__(self) -> int:
@@ -108,13 +113,20 @@ class EditedDataset(Dataset):
         return self.overlay(self._kept[index])
 
     def overlay(self, episode: Episode) -> Episode:
-        """Merge this log's static edits onto an episode of the underlying recordings, by its uid."""
-        edits = self._statics.get(episode.meta.get('uid'))
+        """Apply this log's edits to an episode of the underlying recordings, addressed by uid.
+
+        A dropped episode is returned untouched — its edits are irrelevant to the curated view, and skipping the
+        overlay lets the editor navigate to a dropped row (to undrop it) even when an edit collides with a signal.
+        """
+        uid = episode.meta.get('uid')
+        if uid in self._dropped:
+            return episode
+        edits = self._statics.get(uid)
         return EditedEpisode(episode, edits) if edits else episode
 
     @property
     def base(self) -> Dataset:
-        """The underlying recordings, before drops and static edits are applied."""
+        """The underlying recordings, before edits are applied."""
         return self._base
 
     @property
