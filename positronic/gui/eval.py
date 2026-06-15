@@ -34,7 +34,7 @@ TASKS = [
 
 TASK_TO_OBJECT = {TASKS[1]: 'Towels', TASKS[2]: 'Wooden spoons', TASKS[3]: 'Scissors'}
 
-OUTCOMES = ['Success', 'Fail', 'Stalled', 'Ran out of time', 'Safety', 'System']
+OUTCOMES = ['Success', 'Fail', 'Ran out of time', 'Safety', 'System']
 
 SIDES = ['left', 'right', 'NA']
 
