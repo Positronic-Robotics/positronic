@@ -132,6 +132,9 @@ class EditedDataset(Dataset):
         """The underlying recordings, before edits are applied."""
         return self._base
 
+    # TODO(#433): `dropped` (and `overlay` above) are public only for the EvalUI editor's raw-indexed navigation
+    # over all episodes, dropped ones included. The review-surface split in #433 should own that view and drop
+    # these from the public edit API.
     @property
     def dropped(self) -> frozenset[str]:
         """Uids the log currently drops from the view."""
