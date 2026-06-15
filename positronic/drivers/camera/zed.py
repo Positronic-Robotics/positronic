@@ -64,10 +64,6 @@ class SLCamera(pimm.ControlSystem):
         self.depth_mask: pimm.SignalEmitter = pimm.ControlSystemEmitter(self)
         self._depth_mask_adapter = None  # Lazy init
 
-    @property
-    def serial_number(self) -> int | None:
-        return self._serial_number
-
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Sleep]:
         SUCCESS = sl.ERROR_CODE.SUCCESS
         TIME_REF_IMAGE = sl.TIME_REFERENCE.IMAGE
