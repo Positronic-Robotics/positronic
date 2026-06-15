@@ -63,8 +63,8 @@ class Harness(pimm.ControlSystem):
     the command channels, and the home action; the harness reads them to assemble inputs and demux
     actions, treating every channel alike.
 
-    The outermost wrapper (typically ``ChunkedSchedule`` or a swap-in alternative like RTC) is
-    responsible for producing absolute timestamps.
+    The scheduling wrapper (``ChunkedSchedule``, or a swap-in like RTC) anchors the chunk's
+    relative timestamps to absolute time, reading the clock the harness binds in at ``wrap``.
 
     By default, wraps the given policy with ``ErrorRecovery | ChunkedSchedule``. Pass ``wrap=None``
     to skip auto-wrapping (if you've already composed your own pipeline).
@@ -78,7 +78,7 @@ class Harness(pimm.ControlSystem):
         task: Task | None = None,
         trials: Iterable[dict[str, Any]] | None = None,
         static_meta: dict[str, Any] | None = None,
-        wrap: PolicyWrapper | Callable[[Callable[[], float]], PolicyWrapper] | None = default_wrappers,
+        wrap: PolicyWrapper | None = default_wrappers,
         on_episode_complete: Callable[[Session, dict[str, Any]], None] | None = None,
     ):
         assert trials is None or task is not None, 'A trial plan needs a task: its timeout bounds each trial'
@@ -94,8 +94,8 @@ class Harness(pimm.ControlSystem):
         # FINISH or auto-finalize), never on abort. Used to feed completion bookkeeping
         # like a ``SampledPolicy``'s episode counter, with no sampling knowledge in the harness.
         self._on_complete = on_episode_complete or (lambda session, context: None)
-        # Wrapping happens in ``run()`` once we have the clock — some wrappers (e.g.
-        # ``ChunkedSchedule``) need it. Until then ``self.policy`` mirrors the raw policy.
+        # Wrapping happens in ``run()`` once we have the clock — ``wrap`` binds it into the sessions
+        # it builds (e.g. ``ChunkedSchedule``). Until then ``self.policy`` mirrors the raw policy.
         self.policy: Policy = policy
         self.context: dict[str, Any] = {}
         self._static_meta = static_meta or {}
@@ -252,7 +252,7 @@ class Harness(pimm.ControlSystem):
                 if v is not None:
                     inputs[full_name] = v
         inputs['wall_time_ns'] = time.time_ns()
-        inputs['inference_time_ns'] = clock.now_ns()
+        inputs['obs_time_ns'] = clock.now_ns()
         inputs.update(self.context)
         inputs['descriptor'] = self._descriptor  # last, so a context key can't shadow it
         return inputs
@@ -312,13 +312,11 @@ class Harness(pimm.ControlSystem):
         self._emit_commands(actions)
 
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Command]:
-        # Resolve wrap now that we have the clock — some wrappers (e.g. ChunkedSchedule) need it.
+        # Resolve wrap now that we have the clock — ``wrap`` binds it into the sessions it builds.
         if self._wrap is None:
             self.policy = self._raw_policy
-        elif isinstance(self._wrap, PolicyWrapper):
-            self.policy = self._wrap.wrap(self._raw_policy)
-        else:  # factory: Callable[[now], PolicyWrapper]
-            self.policy = self._wrap(clock.now).wrap(self._raw_policy)
+        else:
+            self.policy = self._wrap.wrap(self._raw_policy, clock.now)
 
         while not should_stop.value:
             directive_msg = self.directive.read()

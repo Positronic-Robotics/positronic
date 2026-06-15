@@ -46,7 +46,7 @@ def _build_wire_obs(sample: dict, task: str | None, now_ns: int, recorded_ts: in
     if task:
         obs['task'] = task
     obs['wall_time_ns'] = now_ns  # rerun wall_time timeline
-    obs['inference_time_ns'] = recorded_ts  # rerun inference_time + action_time anchor
+    obs['obs_time_ns'] = recorded_ts  # rerun obs_time + action_time anchor
     return obs
 
 
@@ -71,7 +71,7 @@ def _log_commands(actions: list[dict], wall_ns: int, inf_ns: int) -> None:
 
     The tap already logs this on ``action_time``, but a rerun time-series view plots only the
     active timeline, and the images live on ``wall_time`` — so to read the chunk on the same
-    timeline as the scene we re-stamp each waypoint on ``wall_time`` / ``inference_time``
+    timeline as the scene we re-stamp each waypoint on ``wall_time`` / ``obs_time``
     (offset by its horizon), with a relative ``chunk_time`` axis alongside.
     """
     commands = [a['robot_command'] for a in actions]
@@ -90,7 +90,7 @@ def _log_commands(actions: list[dict], wall_ns: int, inf_ns: int) -> None:
     for i, h in enumerate(horizon):
         h_ns = int(round(h * 1e9))
         rr.set_time('wall_time', timestamp=np.datetime64(wall_ns + h_ns, 'ns'))
-        rr.set_time('inference_time', timestamp=np.datetime64(inf_ns + h_ns, 'ns'))
+        rr.set_time('obs_time', timestamp=np.datetime64(inf_ns + h_ns, 'ns'))
         rr.set_time('chunk_time', duration=float(h))
         rr.log('commands', rr.Scalars(data[i]))
 

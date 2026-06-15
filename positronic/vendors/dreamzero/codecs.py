@@ -260,8 +260,9 @@ _frame_stack = wrappers.temporal_frame_stack.override(
 def dreamzero_wrappers(frame_stack, error_recovery, chunked_schedule):
     """Eval ``wrap`` for DreamZero: AR video context + error recovery + chunked scheduling.
 
-    Returns a ``now -> PolicyWrapper`` factory. The frame stack samples the wrist/exterior cameras at
-    ``FRAME_STACK_OFFSETS_SEC`` outside the scheduling wrappers, so the server receives multi-frame
-    context at the trained cadence; pair with the DreamZero codec's full-chunk ``horizon``.
+    The frame stack samples the wrist/exterior cameras at ``FRAME_STACK_OFFSETS_SEC`` outside the
+    scheduling wrappers, so the server receives multi-frame context at the trained cadence; pair with
+    the DreamZero codec's full-chunk ``horizon``. Override ``--wrap.chunked_schedule`` to swap the
+    serving schedule (e.g. RTC) while keeping the frame stack.
     """
-    return wrappers.compose(frame_stack, error_recovery, chunked_schedule)
+    return frame_stack | error_recovery | chunked_schedule

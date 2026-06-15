@@ -20,7 +20,7 @@ correlated recording::
   sent to the server and the chunk as received back.
 
 Each entity is stamped on the timelines given by ``timelines`` (a mapping of rerun
-timeline name to observation key; by default ``wall_time`` and ``inference_time``
+timeline name to observation key; by default ``wall_time`` and ``obs_time``
 read from the matching ``*_ns`` observation fields). Those values are read once per
 inference at the outermost tap and reused by every inner tap, so all taps stamp the
 same inference at the same time and their streams line up. A per-tap ``step``
@@ -35,7 +35,7 @@ The robot's actual gripper is overlaid the same way in white for predicted-vs-re
 Every field is *also* logged as ``rr.Scalars`` on a dedicated ``action_time`` timeline
 (each action stamped at the inference-request time plus its horizon offset), so a
 ``TimeSeriesView`` reads commanded values with real axes. That anchor is the pre-inference
-``inference_time_ns``, so it precedes the harness's true execution time (stamped after
+``obs_time_ns``, so it precedes the harness's true execution time (stamped after
 inference by ``ChunkedSchedule``) by the inference latency. Select ``action_time`` to see them.
 
 Entity paths are ``{tap_name}/{data_key}``. A tap's incoming observation keys and
@@ -58,7 +58,7 @@ from positronic.drivers.roboarm import command as roboarm_command
 from positronic.policy.base import DelegatingSession, PolicyWrapper, Session
 from positronic.utils.rerun_compat import log_numeric_series, set_timeline_sequence, set_timeline_time
 
-DEFAULT_TIMELINES = {'wall_time': 'wall_time_ns', 'inference_time': 'inference_time_ns'}
+DEFAULT_TIMELINES = {'wall_time': 'wall_time_ns', 'obs_time': 'obs_time_ns'}
 
 # Process-wide episode counter so files stay unique even across concurrent
 # ``Recorder`` instances (e.g. one per websocket session on a server).
@@ -332,7 +332,7 @@ class _RecordingTap(PolicyWrapper):
         self._rec = rec
         self._name = name
 
-    def wrap_session(self, inner: Session, context) -> Session:
+    def wrap_session(self, inner: Session, context, now) -> Session:
         stream = self._rec._open_stream()
         return _RecordingTapSession(inner, self._rec, self._name, stream)
 
@@ -371,7 +371,7 @@ class _RecordingTapSession(DelegatingSession):
         """Log the action chunk as an enriched 3D trajectory + ``action_time`` time series."""
         horizon = _horizon(actions)
         tv = self._rec._timeline_values
-        base_ns = int(tv.get('inference_time', tv.get('wall_time', next(iter(tv.values()), 0))))
+        base_ns = int(tv.get('obs_time', tv.get('wall_time', next(iter(tv.values()), 0))))
         grip = _stack_numeric([a['target_grip'] for a in actions]) if all('target_grip' in a for a in actions) else None
         actual_pos = obs.get('robot_state.ee_pose') if isinstance(obs, Mapping) else None
         actual_grip = obs.get('grip') if isinstance(obs, Mapping) else None

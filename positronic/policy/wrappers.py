@@ -1,30 +1,17 @@
 """Composable policy wrappers — scheduling, error recovery, and temporal frame stacking.
 
-Wrappers are clock-aware concerns layered around a policy at serving time. They take ``now`` — a
-``Callable[[], float]`` returning the current time in seconds — rather than a ``pimm.Clock``, so the
-policy layer stays free of the control-system runtime. Each wrapper exposes a ``@cfn.config`` that
-captures its static arguments and returns a ``now -> PolicyWrapper`` factory; ``compose`` chains those
-factories, and ``default_wrappers`` is the standard pipeline.
+Wrappers are clock-aware concerns layered around a policy at serving time. They are clock-free
+recipes composed with ``|`` (left is outermost), exactly like codecs; the harness supplies the
+runtime clock when it applies the pipeline (``wrap(policy, now)``), and only the per-session
+``_Session`` holds ``now`` — a ``Callable[[], float]`` returning the current time in seconds.
+Each wrapper exposes a ``@cfn.config`` so pipelines can be selected and overridden from the CLI.
 """
-
-import functools
-import operator
-from collections.abc import Callable
-from functools import partial
 
 import configuronic as cfn
 import numpy as np
 
 from positronic.drivers import roboarm
-from positronic.policy.base import DelegatingSession, PolicyWrapper, Session
-
-Now = Callable[[], float]
-WrapperFactory = Callable[[Now], PolicyWrapper]
-
-
-def compose(*factories: WrapperFactory) -> WrapperFactory:
-    """Chain wrapper factories into one ``now -> PolicyWrapper`` pipeline (left is outermost)."""
-    return lambda now: functools.reduce(operator.or_, (factory(now) for factory in factories))
+from positronic.policy.base import DelegatingSession, Now, PolicyWrapper, Session
 
 
 class ChunkedSchedule(PolicyWrapper):
@@ -39,13 +26,13 @@ class ChunkedSchedule(PolicyWrapper):
     class _Session(DelegatingSession):
         """Skips inner calls while the current trajectory plays; stamps absolute on emit."""
 
-        def __init__(self, inner: Session, wrapper: 'ChunkedSchedule'):
+        def __init__(self, inner: Session, now: Now):
             super().__init__(inner)
-            self._wrapper = wrapper
+            self._now = now
             self._trajectory_end: float | None = None
 
         def __call__(self, obs):
-            if self._trajectory_end is not None and self._wrapper._now() < self._trajectory_end:
+            if self._trajectory_end is not None and self._now() < self._trajectory_end:
                 return None
             result = self._inner(obs)
             if result is not None:
@@ -56,7 +43,7 @@ class ChunkedSchedule(PolicyWrapper):
                     result = [result]
                 # Anchor to post-inference time so execution starts when inference *finished*.
                 # Copy dicts so we don't mutate caller-owned data (sessions may reuse templates).
-                now = self._wrapper._now()
+                now = self._now()
                 result = [{**r, 'timestamp': now + r.get('timestamp', 0.0)} for r in result]
                 self._trajectory_end = result[-1]['timestamp'] if result else None
             return result
@@ -65,11 +52,8 @@ class ChunkedSchedule(PolicyWrapper):
             self._trajectory_end = None
             super().cancel()
 
-    def __init__(self, now: Now):
-        self._now = now
-
-    def wrap_session(self, inner: Session, context):
-        return ChunkedSchedule._Session(inner, self)
+    def wrap_session(self, inner: Session, context, now: Now):
+        return ChunkedSchedule._Session(inner, now)
 
 
 class ErrorRecovery(PolicyWrapper):
@@ -87,9 +71,9 @@ class ErrorRecovery(PolicyWrapper):
     class _Session(DelegatingSession):
         """Emits Recover trajectory on robot error, delegates otherwise."""
 
-        def __init__(self, inner: Session, wrapper: 'ErrorRecovery'):
+        def __init__(self, inner: Session, now: Now):
             super().__init__(inner)
-            self._wrapper = wrapper
+            self._now = now
             self._in_error = False
 
         def __call__(self, obs):
@@ -101,16 +85,13 @@ class ErrorRecovery(PolicyWrapper):
                     # Reset any inner scheduling state so post-recovery doesn't stall on a stale
                     # trajectory_end from the pre-error chunk.
                     self._inner.cancel()
-                    return [{'robot_command': roboarm.command.Recover(), 'timestamp': self._wrapper._now()}]
+                    return [{'robot_command': roboarm.command.Recover(), 'timestamp': self._now()}]
                 return None
 
             return self._inner(obs)
 
-    def __init__(self, now: Now):
-        self._now = now
-
-    def wrap_session(self, inner: Session, context):
-        return ErrorRecovery._Session(inner, self)
+    def wrap_session(self, inner: Session, context, now: Now):
+        return ErrorRecovery._Session(inner, now)
 
 
 class _FrameBuffer:
@@ -158,13 +139,14 @@ class TemporalFrameStack(PolicyWrapper):
     """
 
     class _Session(DelegatingSession):
-        def __init__(self, inner: Session, wrapper: 'TemporalFrameStack'):
+        def __init__(self, inner: Session, wrapper: 'TemporalFrameStack', now: Now):
             super().__init__(inner)
             self._wrapper = wrapper
+            self._now = now
             self._buffer = _FrameBuffer(wrapper._image_keys, wrapper._offsets_sec, wrapper._min_dt_sec)
 
         def __call__(self, obs):
-            now = self._wrapper._now()
+            now = self._now()
             stacked = dict(obs)
             for key in self._wrapper._image_keys:
                 self._buffer.append(key, now, obs[key])
@@ -175,36 +157,31 @@ class TemporalFrameStack(PolicyWrapper):
             self._buffer.reset()
             super().cancel()
 
-    def __init__(self, now: Now, image_keys: tuple[str, ...], offsets_sec: tuple[float, ...], min_dt_sec: float = 0.18):
-        self._now = now
+    def __init__(self, image_keys: tuple[str, ...], offsets_sec: tuple[float, ...], min_dt_sec: float = 0.18):
         self._image_keys = tuple(image_keys)
         self._offsets_sec = tuple(offsets_sec)
         self._min_dt_sec = min_dt_sec
 
-    def wrap_session(self, inner: Session, context):
-        return TemporalFrameStack._Session(inner, self)
+    def wrap_session(self, inner: Session, context, now: Now):
+        return TemporalFrameStack._Session(inner, self, now)
 
 
 @cfn.config()
 def chunked_schedule():
     """Factory config for ``ChunkedSchedule``."""
-    return ChunkedSchedule
+    return ChunkedSchedule()
 
 
 @cfn.config()
 def error_recovery():
     """Factory config for ``ErrorRecovery``."""
-    return ErrorRecovery
+    return ErrorRecovery()
 
 
 @cfn.config(min_dt_sec=0.18)
 def temporal_frame_stack(image_keys: tuple[str, ...], offsets_sec: tuple[float, ...], min_dt_sec: float):
-    """Factory config for ``TemporalFrameStack`` — binds the static args, leaving ``now`` open."""
-    return partial(
-        TemporalFrameStack, image_keys=tuple(image_keys), offsets_sec=tuple(offsets_sec), min_dt_sec=min_dt_sec
-    )
+    """Factory config for ``TemporalFrameStack``."""
+    return TemporalFrameStack(image_keys=tuple(image_keys), offsets_sec=tuple(offsets_sec), min_dt_sec=min_dt_sec)
 
 
-def default_wrappers(now: Now) -> PolicyWrapper:
-    """Default wrapper pipeline: error recovery + chunked scheduling bound to the harness clock."""
-    return ErrorRecovery(now) | ChunkedSchedule(now)
+default_wrappers = ErrorRecovery() | ChunkedSchedule()
