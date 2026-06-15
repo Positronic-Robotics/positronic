@@ -1,7 +1,7 @@
 import configuronic as cfn
 
 from positronic.cfg.embodiment import droid
-from positronic.cfg.tasks import BATTERIES_TASK, SCISSORS_TASK, SPOONS_TASK, TOWELS_TASK, UNIFIED_TASK
+from positronic.cfg.eval.real.tasks import BATTERIES_TASK, SCISSORS_TASK, SPOONS_TASK, TOWELS_TASK, UNIFIED_TASK
 from positronic.eval import Eval, Task
 
 

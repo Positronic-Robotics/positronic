@@ -14,7 +14,7 @@ import configuronic as cfn
 import pos3
 
 from positronic.cfg.ds import group, local_all, transform
-from positronic.cfg.tasks import UNIFIED_TASK
+from positronic.cfg.eval.real.tasks import UNIFIED_TASK
 from positronic.dataset import Episode
 from positronic.dataset.transforms.episode import Derive, FromValue, Identity
 from positronic.server.positronic_server import ColumnConfig as C

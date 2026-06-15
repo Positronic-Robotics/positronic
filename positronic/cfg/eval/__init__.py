@@ -3,7 +3,6 @@ import random
 import configuronic as cfn
 
 import positronic.cfg.policy as policy_cfg
-from positronic import inference
 from positronic.eval import Eval
 from positronic.policy.harness import default_wrappers
 
@@ -17,6 +16,10 @@ def placeholder():
 @cfn.config(eval=placeholder, policy=policy_cfg.placeholder, trial_count=1, show_gui=False, wrap=default_wrappers)
 def run(eval: Eval, policy, trial_count, show_gui, output_dir=None, inference_latency=False, wrap=default_wrappers):
     """Run a selected eval (embodiment + task) through the shared inference harness."""
+    # Lazy: `inference` imports `gui.eval`, which reads this package's task constants — importing it at module
+    # level would cycle through a half-initialized `cfg.eval`.
+    from positronic import inference
+
     # The trial plan: one RUN context per trial, consumed by the self-driving Harness. Per-trial seeds
     # are known upfront — ``--eval.seed`` + trial index, or an independent random draw per trial when
     # unset — and ride the RUN context, so the seed used always lands in episode meta.

@@ -14,7 +14,7 @@ from pathlib import Path
 import configuronic as cfn
 import pos3
 
-from positronic.cfg.tasks import BATTERIES_TASK, SCISSORS_TASK, SPOONS_TASK, TOWELS_TASK
+from positronic.cfg.eval.real.tasks import BATTERIES_TASK, SCISSORS_TASK, SPOONS_TASK, TOWELS_TASK
 from positronic.dataset.dataset import ConcatDataset, FilterDataset
 from positronic.dataset.local_dataset import load_all_datasets
 from positronic.dataset.transforms import TransformedDataset, agg_fraction_true, agg_max, agg_percentile

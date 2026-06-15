@@ -6,7 +6,7 @@ import pos3
 
 import pimm
 from positronic import geom
-from positronic.cfg.tasks import SCISSORS_TASK, SPOONS_TASK, TOWELS_TASK
+from positronic.cfg.eval.real.tasks import SCISSORS_TASK, SPOONS_TASK, TOWELS_TASK
 from positronic.dataset.ds_writer_agent import DsWriterAgent, DsWriterCommand, TimeMode
 from positronic.dataset.local_dataset import LocalDatasetWriter
 from positronic.dataset.serializers import Serializers

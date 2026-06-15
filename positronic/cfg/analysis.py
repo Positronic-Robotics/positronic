@@ -7,8 +7,8 @@ import numpy as np
 import pos3
 
 import positronic.cfg.ds as base_cfg
-from positronic.cfg import tasks
 from positronic.cfg.ds import internal
+from positronic.cfg.eval.real import tasks
 from positronic.dataset.episode import Episode
 from positronic.dataset.transforms.episode import Derive, FromValue, Group, Identity
 from positronic.server.positronic_server import ColumnConfig as C
