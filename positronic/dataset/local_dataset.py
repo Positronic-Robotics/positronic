@@ -544,7 +544,9 @@ def load_dataset(root: Path) -> EditedDataset:
     dropped episodes hidden, static edits overlaid. The returned view also amends the log via
     `set_static`/`drop`/`undrop`, each returning a fresh view over the same recordings.
     """
-    return EditedDataset(LocalDataset(root), root)
+    ds = LocalDataset(root)
+    # Read and write edits at the dataset's resolved root, not the caller's literal path (which may be `~`-relative).
+    return EditedDataset(ds, ds.root)
 
 
 def load_all_datasets(root: Path) -> Dataset:

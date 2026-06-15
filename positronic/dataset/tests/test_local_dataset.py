@@ -410,6 +410,18 @@ def test_load_all_datasets_with_tilde_path(tmp_path):
         assert episode_ids(result[:]) == [0, 1, 2, 3]
 
 
+def test_load_dataset_edits_with_tilde_path(tmp_path):
+    home = Path.home()
+    with tempfile.TemporaryDirectory(dir=home) as tmpdir:
+        actual_root = Path(tmpdir) / 'ds'
+        ds = build_dataset_with_signal(actual_root, [0, 1])
+        uid = ds[0].meta['uid']
+        tilde_path = Path('~') / actual_root.relative_to(home)
+        # Edits resolve against the expanded dataset root, not the literal `~` path
+        load_dataset(tilde_path).drop(uid)
+        assert episode_ids(load_dataset(tilde_path)[:]) == [1]
+
+
 # --- Edit log tests ---
 
 
