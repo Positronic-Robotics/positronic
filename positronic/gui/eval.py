@@ -501,9 +501,10 @@ class EvalUI(pimm.ControlSystem):
 
     def _commit_field(self, sender, app_data, user_data):
         if user_data in ('ed_total', 'ed_success'):
-            # Same invariant the live controls enforce: successful never exceeds total.
-            total = dpg.get_value('ed_total')
-            successful = min(dpg.get_value('ed_success'), total)
+            # Same invariant the live controls enforce: total >= 1, successful in [0, total].
+            total = max(1, dpg.get_value('ed_total'))
+            successful = min(max(0, dpg.get_value('ed_success')), total)
+            dpg.set_value('ed_total', total)
             dpg.set_value('ed_success', successful)
             data = {'eval.total_items': total, 'eval.successful_items': successful}
         else:
