@@ -339,14 +339,15 @@ class Harness(pimm.ControlSystem):
 
             if self._running:
                 # A live trial ends when ``done`` is delivered or on its time budget (self-driven only;
-                # attended trials carry no deadline). A delivered ``done`` records ``eval.terminated`` True
-                # plus its payload; a timeout records False.
+                # attended trials carry no deadline). A fresh delivery records ``eval.terminated`` True plus
+                # its payload; a timeout records only False — never the receiver's last value, which may be
+                # a stale payload from a prior trial.
                 done_msg = self.done.read()
-                timed_out = self._deadline is not None and clock.now() >= self._deadline
-                if done_msg.updated or timed_out:
-                    payload = dict(done_msg.data) if done_msg.updated else {}
-                    payload['eval.terminated'] = done_msg.updated
+                if done_msg.updated:
+                    payload = {**done_msg.data, 'eval.terminated': True}
                     yield from self._handle_directive(Directive.FINISH(**payload), clock)
+                elif self._deadline is not None and clock.now() >= self._deadline:
+                    yield from self._handle_directive(Directive.FINISH(**{'eval.terminated': False}), clock)
 
             try:
                 if self._running:
