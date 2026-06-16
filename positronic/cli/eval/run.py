@@ -96,7 +96,10 @@ def main(
     writer_cm = LocalDatasetWriter(output_dir) if output_dir is not None else nullcontext(None)
     with writer_cm as dataset_writer, pimm.World(virtual_time=embodiment.simulated) as world:
         privileged = task.privileged if task is not None else {}
-        ds_agent = wire.wire_embodiment(world, harness, embodiment, dataset_writer, time_mode, privileged=privileged)
+        done = task.done if task is not None else None
+        ds_agent = wire.wire_embodiment(
+            world, harness, embodiment, dataset_writer, time_mode, privileged=privileged, done=done
+        )
         if gui is not None:
             # HACK: GUI cameras are matched to observations by the `image.` name prefix, which
             # hard-binds GUI wiring to the observation naming convention. TODO: resolve this

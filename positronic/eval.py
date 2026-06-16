@@ -81,6 +81,11 @@ class Task:
     runner derives per-trial seeds from it into the trial plan. ``reset`` re-randomizes
     the scene for a new trial from a per-trial seed; ``None`` on real embodiments,
     where reset is physical/human.
+
+    ``done`` is the optional terminating signal: a source that delivers a dict payload when the
+    trial ends. The Harness reads it to stop the trial early and records the payload into the
+    episode's static data; ``None`` for tasks with no programmatic terminator (real evals, where
+    the operator stops).
     """
 
     instruction: str
@@ -88,6 +93,7 @@ class Task:
     privileged: dict[str, Observation] = field(default_factory=dict)
     seed: int | None = None
     reset: Callable[[int | None], None] | None = None
+    done: pimm.SignalEmitter | None = None
 
 
 @dataclass

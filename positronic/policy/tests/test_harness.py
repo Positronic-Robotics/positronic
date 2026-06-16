@@ -4,6 +4,7 @@ import numpy as np
 import pytest
 
 import pimm
+from positronic import wire
 from positronic.dataset.ds_writer_agent import DsWriterCommand, DsWriterCommandType
 from positronic.dataset.serializers import Serializers
 from positronic.drivers import roboarm
@@ -525,6 +526,51 @@ def test_stop_signal_does_not_latch_across_trials(world):
     stops = [c for c in _ds_commands(p) if c.type == DsWriterCommandType.STOP_EPISODE]
     assert len(stops) == 2
     assert all(s.static_data['eval.terminated'] is True for s in stops)
+
+
+@pytest.mark.timeout(3.0)
+def test_task_done_terminates_through_wire_embodiment(world):
+    """A Task's ``done`` source reaches ``harness.done`` through ``wire_embodiment`` and ends the
+    trial, recording its payload — the production wiring path, not a direct port pairing."""
+
+    class _Device(pimm.ControlSystem):
+        def __init__(self):
+            self.state = pimm.ControlSystemEmitter(self)
+            self.cmd = pimm.ControlSystemReceiver(self)
+            self.done = pimm.ControlSystemEmitter(self)
+
+        def run(self, should_stop, clock):
+            n = 0
+            while not should_stop.value:
+                self.state.emit(0.0)
+                n += 1
+                if n == 5:
+                    self.done.emit({'eval.success': True})
+                yield pimm.Sleep(0.01)
+
+    device = _Device()
+    embodiment = Embodiment(
+        descriptor='',
+        observations={'x': Observation(device.state, None)},
+        commands={'x': Command(device.cmd, 0.0, None)},
+        static_meta={},
+        meta_source=None,
+    )
+    task = Task(instruction='t', timeout=100.0, done=device.done)
+    # Termination is independent of the policy wrappers; the minimal embodiment has no
+    # ``robot_state``, so skip the default ErrorRecovery/ChunkedSchedule pipeline.
+    harness = Harness(StubPolicy(), embodiment, task=task, trials=[{}], wrap=None)
+    ds_recorder = RecordingEmitter()
+    harness.ds_command._bind(ds_recorder)
+    wire.wire_embodiment(world, harness, embodiment, None, done=task.done)
+
+    scheduler = world.start([harness, device])
+    drive_scheduler(scheduler, steps=60)
+
+    stops = [d for _, d in ds_recorder.emitted if d.type == DsWriterCommandType.STOP_EPISODE]
+    assert len(stops) == 1
+    assert stops[0].static_data['eval.terminated'] is True
+    assert stops[0].static_data['eval.success'] is True
 
 
 @pytest.mark.timeout(3.0)
