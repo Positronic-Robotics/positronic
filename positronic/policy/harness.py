@@ -59,6 +59,9 @@ class Harness(pimm.ControlSystem):
     plan is exhausted, so the unattended path needs no driver at all. Attended drivers own episode
     termination themselves; directive-driven trials get no deadline.
 
+    Either path ends early when the privileged ``done`` stop-signal goes truthy: a trial that ends
+    on it records ``eval.terminated`` True, a timed-out one False.
+
     The ``Embodiment`` provides the observation serializers (which own the canonical key names),
     the command channels, and the home action; the harness reads them to assemble inputs and demux
     actions, treating every channel alike.
@@ -122,6 +125,9 @@ class Harness(pimm.ControlSystem):
         self.directive = pimm.ControlSystemReceiver[Directive](self, default=None, maxsize=3)
         self.ds_command = pimm.ControlSystemEmitter[DsWriterCommand](self)
         self.robot_meta_in = pimm.ControlSystemReceiver(self, default={})
+        # Privileged stop-signal: a truthy value ends the live trial with ``eval.terminated`` True
+        # (the timeout path sets it False). Defaults False, so an unconnected port never terminates.
+        self.done = pimm.ControlSystemReceiver[bool](self, default=False)
 
     def _build_episode_meta(self, context: dict[str, Any]) -> dict[str, Any]:
         meta = dict(self._embodiment.static_meta)
@@ -330,9 +336,13 @@ class Harness(pimm.ControlSystem):
                 yield from self._handle_directive(Directive.RUN(**trial), clock)
                 self._deadline = clock.now() + self._task.timeout
 
-            if self._running and self._deadline is not None and clock.now() >= self._deadline:
-                # Time budget exhausted: ``eval.terminated`` is False — timed out rather than stop-signal terminated.
-                yield from self._handle_directive(Directive.FINISH(**{'eval.terminated': False}), clock)
+            if self._running:
+                # A live trial ends on the privileged stop-signal or on its time budget (self-driven
+                # only; attended trials carry no deadline). ``eval.terminated`` records which.
+                stop = bool(self.done.value)
+                timed_out = self._deadline is not None and clock.now() >= self._deadline
+                if stop or timed_out:
+                    yield from self._handle_directive(Directive.FINISH(**{'eval.terminated': stop}), clock)
 
             try:
                 if self._running:

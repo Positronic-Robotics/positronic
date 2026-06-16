@@ -474,6 +474,29 @@ def test_trial_timeout_self_terminates(world):
 
 
 @pytest.mark.timeout(3.0)
+def test_trial_stop_signal_terminates(world):
+    """The privileged ``done`` signal ends a self-driven trial early: terminated=True, robot homed."""
+    policy = StubPolicy()
+    # Timeout far in the future so the stop-signal, not the clock, ends the trial.
+    harness = Harness(policy, make_embodiment(), task=Task(instruction='test', timeout=100.0), trials=[{}])
+    p = _pair_all(world, harness)
+    done_em = world.pair(harness.done)
+
+    scheduler = world.start([harness])
+    drive_scheduler(scheduler, steps=5)
+    # Trial is live and unbounded by the clock: nothing committed yet.
+    assert not [c for c in _ds_commands(p) if c.type == DsWriterCommandType.STOP_EPISODE]
+
+    done_em.emit(True)
+    drive_scheduler(scheduler, steps=10)
+
+    stops = [c for c in _ds_commands(p) if c.type == DsWriterCommandType.STOP_EPISODE]
+    assert len(stops) == 1
+    assert stops[0].static_data['eval.terminated'] is True
+    assert isinstance(_last_command(p), Reset)
+
+
+@pytest.mark.timeout(3.0)
 def test_trial_seed_reaches_task_reset_and_meta(world):
     """Each RUN hands its ``eval.seed`` to the task's scene reset; the seed and the
     eval-identity block land in episode meta."""
