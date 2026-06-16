@@ -67,12 +67,14 @@ def wire_embodiment(
     dataset_writer: DatasetWriter | None,
     time_mode: TimeMode = TimeMode.CLOCK,
     privileged: dict[str, Observation] | None = None,
+    done: pimm.SignalEmitter | None = None,
 ):
     """Wire an embodiment to the Harness for the inference path.
 
     Connects device observation sources -> ``harness.observations`` and
     ``harness.commands`` -> device receivers, and records observations, command
-    chunks, and the task's privileged ground-truth into the dataset. GUI camera wiring
+    chunks, and the task's privileged ground-truth into the dataset. The task's ``done``
+    terminating signal, when present, is connected to ``harness.done``. GUI camera wiring
     stays with the caller — it is a presentation concern, not part of the embodiment contract.
     """
     privileged = privileged or {}
@@ -82,6 +84,8 @@ def wire_embodiment(
         world.connect(harness.commands[name], cmd.dest)
     if embodiment.meta_source is not None:
         world.connect(embodiment.meta_source, harness.robot_meta_in)
+    if done is not None:
+        world.connect(done, harness.done)
 
     ds_agent = None
     if dataset_writer is not None:

@@ -4,6 +4,7 @@ import numpy as np
 import pytest
 
 import pimm
+from positronic import wire
 from positronic.dataset.ds_writer_agent import DsWriterCommand, DsWriterCommandType
 from positronic.dataset.serializers import Serializers
 from positronic.drivers import roboarm
@@ -471,6 +472,133 @@ def test_trial_timeout_self_terminates(world):
     assert len(stops) == 1
     assert stops[0].static_data['eval.terminated'] is False
     assert isinstance(_last_command(p), Reset)
+
+
+@pytest.mark.timeout(3.0)
+def test_trial_stop_signal_terminates(world):
+    """Delivering the privileged ``done`` ends a trial early: terminated=True, payload recorded, homed."""
+    policy = StubPolicy()
+    # Timeout far in the future so the stop-signal, not the clock, ends the trial.
+    harness = Harness(policy, make_embodiment(), task=Task(instruction='test', timeout=100.0), trials=[{}])
+    p = _pair_all(world, harness)
+    done_em = world.pair(harness.done)
+
+    scheduler = world.start([harness])
+    drive_scheduler(scheduler, steps=5)
+    # Trial is live and unbounded by the clock: nothing committed yet.
+    assert not [c for c in _ds_commands(p) if c.type == DsWriterCommandType.STOP_EPISODE]
+
+    done_em.emit({'eval.success': True})
+    drive_scheduler(scheduler, steps=10)
+
+    stops = [c for c in _ds_commands(p) if c.type == DsWriterCommandType.STOP_EPISODE]
+    assert len(stops) == 1
+    assert stops[0].static_data['eval.terminated'] is True
+    assert stops[0].static_data['eval.success'] is True  # the delivered payload lands in static data
+    assert isinstance(_last_command(p), Reset)
+
+
+@pytest.mark.timeout(3.0)
+def test_stop_signal_does_not_latch_across_trials(world):
+    """A ``done`` that ended one trial must not instantly finalize the next: termination is the
+    delivery edge, so the message latched in the receiver from trial 0 cannot re-fire on trial 1.
+    An empty payload still terminates — delivery, not truthiness, is the signal."""
+    policy = StubPolicy()
+    harness = Harness(policy, make_embodiment(), task=Task(instruction='t', timeout=100.0), trials=[{}, {}])
+    p = _pair_all(world, harness)
+    done_em = world.pair(harness.done)
+
+    def stop_count():
+        return len([c for c in _ds_commands(p) if c.type == DsWriterCommandType.STOP_EPISODE])
+
+    scheduler = world.start([harness])
+    drive_scheduler(scheduler, steps=5)
+    done_em.emit({})  # end trial 0
+    drive_scheduler(scheduler, steps=10)
+    assert stop_count() == 1
+
+    # Trial 1 has auto-started with trial 0's message still latched in the receiver; it must keep running.
+    drive_scheduler(scheduler, steps=10)
+    assert stop_count() == 1
+
+    done_em.emit({})  # end trial 1
+    drive_scheduler(scheduler, steps=10)
+    stops = [c for c in _ds_commands(p) if c.type == DsWriterCommandType.STOP_EPISODE]
+    assert len(stops) == 2
+    assert all(s.static_data['eval.terminated'] is True for s in stops)
+
+
+@pytest.mark.timeout(3.0)
+def test_task_done_terminates_through_wire_embodiment(world):
+    """A Task's ``done`` source reaches ``harness.done`` through ``wire_embodiment`` and ends the
+    trial, recording its payload — the production wiring path, not a direct port pairing."""
+
+    class _Device(pimm.ControlSystem):
+        def __init__(self):
+            self.state = pimm.ControlSystemEmitter(self)
+            self.cmd = pimm.ControlSystemReceiver(self)
+            self.done = pimm.ControlSystemEmitter(self)
+
+        def run(self, should_stop, clock):
+            n = 0
+            while not should_stop.value:
+                self.state.emit(0.0)
+                n += 1
+                if n == 5:
+                    self.done.emit({'eval.success': True})
+                yield pimm.Sleep(0.01)
+
+    device = _Device()
+    embodiment = Embodiment(
+        descriptor='',
+        observations={'x': Observation(device.state, None)},
+        commands={'x': Command(device.cmd, 0.0, None)},
+        static_meta={},
+        meta_source=None,
+    )
+    task = Task(instruction='t', timeout=100.0, done=device.done)
+    # Termination is independent of the policy wrappers; the minimal embodiment has no
+    # ``robot_state``, so skip the default ErrorRecovery/ChunkedSchedule pipeline.
+    harness = Harness(StubPolicy(), embodiment, task=task, trials=[{}], wrap=None)
+    ds_recorder = RecordingEmitter()
+    harness.ds_command._bind(ds_recorder)
+    wire.wire_embodiment(world, harness, embodiment, None, done=task.done)
+
+    scheduler = world.start([harness, device])
+    drive_scheduler(scheduler, steps=60)
+
+    stops = [d for _, d in ds_recorder.emitted if d.type == DsWriterCommandType.STOP_EPISODE]
+    assert len(stops) == 1
+    assert stops[0].static_data['eval.terminated'] is True
+    assert stops[0].static_data['eval.success'] is True
+
+
+@pytest.mark.timeout(3.0)
+def test_done_after_deadline_is_a_timeout(world):
+    """The deadline is hard: a ``done`` delivered past it (here during the latency sleep) records as a
+    timeout — ``eval.terminated`` False, payload dropped — not a late stop-signal success."""
+    policy = StubPolicy()
+    harness = Harness(
+        policy, make_embodiment(), task=Task(instruction='t', timeout=0.05), trials=[{'inference_latency': 0.2}]
+    )
+    p = _pair_all(world, harness)
+    done_em = world.pair(harness.done)
+
+    robot_state = make_robot_state([0.1, 0.2, 0.3], [0.4, 0.5, 0.6])
+    # Obs starts inference + the 0.2s latency sleep; the 0.05s deadline lapses during it, and done is
+    # delivered at ~0.1s — past the deadline but before the harness next polls. The timeout must win.
+    driver = ManualDriver([
+        (partial(emit_ready_payload, p['frame_em'], p['robot_em'], p['grip_em'], robot_state), 0.1),
+        (partial(done_em.emit, {'eval.success': True}), 0.3),
+        (None, 0.0),
+    ])
+    scheduler = world.start([harness, driver])
+    drive_scheduler(scheduler, steps=200)
+
+    stops = [c for c in _ds_commands(p) if c.type == DsWriterCommandType.STOP_EPISODE]
+    assert len(stops) == 1
+    assert stops[0].static_data['eval.terminated'] is False
+    assert 'eval.success' not in stops[0].static_data
 
 
 @pytest.mark.timeout(3.0)

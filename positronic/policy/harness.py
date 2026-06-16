@@ -59,6 +59,10 @@ class Harness(pimm.ControlSystem):
     plan is exhausted, so the unattended path needs no driver at all. Attended drivers own episode
     termination themselves; directive-driven trials get no deadline.
 
+    A self-driven trial also ends early when the privileged ``done`` signal is delivered within its
+    budget: it records ``eval.terminated`` True and the delivered payload in its static data, a
+    timed-out one False. Attended episodes ignore ``done`` — the operator's directives end them.
+
     The ``Embodiment`` provides the observation serializers (which own the canonical key names),
     the command channels, and the home action; the harness reads them to assemble inputs and demux
     actions, treating every channel alike.
@@ -122,6 +126,9 @@ class Harness(pimm.ControlSystem):
         self.directive = pimm.ControlSystemReceiver[Directive](self, default=None, maxsize=3)
         self.ds_command = pimm.ControlSystemEmitter[DsWriterCommand](self)
         self.robot_meta_in = pimm.ControlSystemReceiver(self, default={})
+        # Privileged stop-signal: any delivery within a trial's time budget ends it,
+        # recording ``eval.terminated`` True plus the delivered dict in the episode's static data.
+        self.done = pimm.ControlSystemReceiver[dict](self, default={})
 
     def _build_episode_meta(self, context: dict[str, Any]) -> dict[str, Any]:
         meta = dict(self._embodiment.static_meta)
@@ -330,9 +337,18 @@ class Harness(pimm.ControlSystem):
                 yield from self._handle_directive(Directive.RUN(**trial), clock)
                 self._deadline = clock.now() + self._task.timeout
 
-            if self._running and self._deadline is not None and clock.now() >= self._deadline:
-                # Time budget exhausted: ``eval.terminated`` is False — timed out rather than stop-signal terminated.
-                yield from self._handle_directive(Directive.FINISH(**{'eval.terminated': False}), clock)
+            # Trial termination is the self-driven mechanism: a live trial ends on a ``done`` delivered
+            # within its budget, or on the budget itself. The deadline is hard, so a ``done`` past it is a
+            # timeout, not a late success — an in-budget delivery records ``eval.terminated`` True plus its
+            # payload, a timeout records only False. Attended episodes carry no deadline and are ended by
+            # the operator's directives, so ``done`` never terminates (or leaks across) them.
+            if self._running and self._deadline is not None:
+                done_msg = self.done.read()
+                if done_msg.updated and done_msg.ts <= self._deadline * 1e9:
+                    payload = {**done_msg.data, 'eval.terminated': True}
+                    yield from self._handle_directive(Directive.FINISH(**payload), clock)
+                elif clock.now() >= self._deadline:
+                    yield from self._handle_directive(Directive.FINISH(**{'eval.terminated': False}), clock)
 
             try:
                 if self._running:
