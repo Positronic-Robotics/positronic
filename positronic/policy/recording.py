@@ -73,10 +73,16 @@ def _squeeze_batch(arr: np.ndarray) -> np.ndarray:
 
 
 def _as_image(value: Any) -> np.ndarray | None:
-    """Return squeezed RGB array if *value* looks like an image, else None."""
+    """Return a single RGB frame if *value* looks like an image, else None.
+
+    A temporal stack ``(T, H, W, 3)`` (e.g. from ``TemporalFrameStack``) records its most recent
+    frame — the current observation — so the stack does not flood the recording as numeric series.
+    """
     if not isinstance(value, np.ndarray):
         return None
     squeezed = _squeeze_batch(value)
+    if squeezed.ndim == 4 and squeezed.shape[-1] == 3:
+        squeezed = squeezed[-1]
     if squeezed.ndim == 3 and squeezed.shape[-1] == 3:
         return squeezed
     return None
