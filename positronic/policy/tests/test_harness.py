@@ -528,6 +528,66 @@ def test_stop_signal_does_not_latch_across_trials(world):
 
 
 @pytest.mark.timeout(3.0)
+def test_idle_done_does_not_terminate_next_trial(world):
+    """A ``done`` delivered while the harness is idle is drained on RUN, not carried into the trial
+    that starts after it; the fresh episode keeps running until its own stop-signal or timeout."""
+    policy = StubPolicy()
+    harness = Harness(policy, make_embodiment(), task=Task(instruction='t', timeout=100.0), trials=[{}])
+    p = _pair_all(world, harness)
+    done_em = world.pair(harness.done)
+
+    scheduler = world.start([harness])
+    done_em.emit({})  # delivered before the trial starts — must not finalize it
+    drive_scheduler(scheduler, steps=15)
+
+    starts = [c for c in _ds_commands(p) if c.type == DsWriterCommandType.START_EPISODE]
+    stops = [c for c in _ds_commands(p) if c.type == DsWriterCommandType.STOP_EPISODE]
+    assert len(starts) == 1
+    assert len(stops) == 0
+
+
+@pytest.mark.timeout(3.0)
+def test_done_during_latency_sleep_drops_chunk(world):
+    """A ``done`` delivered during the inference-latency sleep drops the in-flight chunk: the recheck
+    after the sleep must observe the stop, so no post-termination action reaches the drivers."""
+    policy = StubPolicy()
+    harness = Harness(
+        policy, make_embodiment(), task=Task(instruction='t', timeout=100.0), trials=[{'inference_latency': 0.2}]
+    )
+    cmd_recorder = RecordingEmitter()
+    grip_recorder = RecordingEmitter()
+    ds_recorder = RecordingEmitter()
+    harness.commands['robot_command']._bind(cmd_recorder)
+    harness.commands['target_grip']._bind(grip_recorder)
+    harness.ds_command._bind(ds_recorder)
+
+    frame_em = world.pair(harness.observations['image.cam'])
+    robot_em = world.pair(harness.observations['robot_state'])
+    grip_em = world.pair(harness.observations['grip'])
+    done_em = world.pair(harness.done)
+
+    robot_state = make_robot_state([0.1, 0.2, 0.3], [0.4, 0.5, 0.6])
+
+    # Complete obs starts inference and the 0.2s latency sleep; done is delivered at 0.1s — during the
+    # sleep, after the pre-step poll. The just-computed chunk must be dropped, never emitted.
+    driver = ManualDriver([
+        (partial(emit_ready_payload, frame_em, robot_em, grip_em, robot_state), 0.01),
+        (partial(done_em.emit, {}), 0.1),
+        (None, 0.3),
+    ])
+    scheduler = world.start([harness, driver])
+    drive_scheduler(scheduler, steps=200)
+
+    stops = [data for _, data in ds_recorder.emitted if data.type == DsWriterCommandType.STOP_EPISODE]
+    assert len(stops) == 1
+    assert stops[0].static_data['eval.terminated'] is True
+    # The post-termination chunk must not reach the drivers: the only non-empty emissions are the
+    # homing Reset / 0.0 grip from the FINISH.
+    assert all(isinstance(c, Reset) for c in _emitted_commands(cmd_recorder))
+    assert _emitted_grips(grip_recorder) == [0.0]
+
+
+@pytest.mark.timeout(3.0)
 def test_trial_seed_reaches_task_reset_and_meta(world):
     """Each RUN hands its ``eval.seed`` to the task's scene reset; the seed and the
     eval-identity block land in episode meta."""
