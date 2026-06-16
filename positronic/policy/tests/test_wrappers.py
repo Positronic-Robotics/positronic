@@ -101,9 +101,9 @@ class TestErrorRecovery:
         assert result == [{'v': 1}]
 
     def test_emits_recover_on_first_error(self):
-        clock = _FakeClock(t=2.5)
-        session = ErrorRecovery().wrap(_ConstPolicy([{'v': 1}]), clock.now).new_session()
-        result = session(_obs(status=RobotStatus.ERROR))
+        session = ErrorRecovery().wrap(_ConstPolicy([{'v': 1}]), _FakeClock().now).new_session()
+        # ErrorRecovery stamps the Recover at observation time, not the live clock.
+        result = session(_obs(now_sec=2.5, status=RobotStatus.ERROR))
         assert len(result) == 1
         # Wrappers produce Command objects directly; wire format lives at network boundary.
         assert isinstance(result[0]['robot_command'], Recover)

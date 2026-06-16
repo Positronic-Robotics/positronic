@@ -1,17 +1,23 @@
 """Composable policy wrappers — scheduling, error recovery, and temporal frame stacking.
 
-Wrappers are clock-aware concerns layered around a policy at serving time. They are clock-free
-recipes composed with ``|`` (left is outermost), exactly like codecs; the harness supplies the
-runtime clock when it applies the pipeline (``wrap(policy, now)``), and only the per-session
-``_Session`` holds ``now`` — a ``Callable[[], float]`` returning the current time in seconds.
-Each wrapper exposes a ``@cfn.config`` so pipelines can be selected and overridden from the CLI.
+Wrappers are composable serving-time concerns layered around a policy with ``|`` (left is
+outermost), exactly like codecs. Most read time from the observation (``obs_time_ns``); only
+``ChunkedSchedule`` needs the live clock — it anchors a chunk to inference *completion*, which the
+pre-inference observation stamp cannot give — so the harness passes ``now`` (a ``Callable[[], float]``
+in seconds) to ``wrap`` and it reaches that one session.
 """
 
-import configuronic as cfn
+from collections import deque
+
 import numpy as np
 
 from positronic.drivers import roboarm
 from positronic.policy.base import DelegatingSession, Now, PolicyWrapper, Session
+
+
+def _obs_time(obs) -> float:
+    """Observation timestamp in seconds, from the harness's nanosecond stamp."""
+    return obs['obs_time_ns'] / 1e9
 
 
 class ChunkedSchedule(PolicyWrapper):
@@ -71,9 +77,8 @@ class ErrorRecovery(PolicyWrapper):
     class _Session(DelegatingSession):
         """Emits Recover trajectory on robot error, delegates otherwise."""
 
-        def __init__(self, inner: Session, now: Now):
+        def __init__(self, inner: Session):
             super().__init__(inner)
-            self._now = now
             self._in_error = False
 
         def __call__(self, obs):
@@ -85,47 +90,51 @@ class ErrorRecovery(PolicyWrapper):
                     # Reset any inner scheduling state so post-recovery doesn't stall on a stale
                     # trajectory_end from the pre-error chunk.
                     self._inner.cancel()
-                    return [{'robot_command': roboarm.command.Recover(), 'timestamp': self._now()}]
+                    return [{'robot_command': roboarm.command.Recover(), 'timestamp': _obs_time(obs)}]
                 return None
 
             return self._inner(obs)
 
     def wrap_session(self, inner: Session, context, now: Now):
-        return ErrorRecovery._Session(inner, now)
+        return ErrorRecovery._Session(inner)
 
 
 class _FrameBuffer:
-    """Per-camera history of ``(timestamp, frame)`` capped to the sampled window.
+    """Time-ordered history of ``(timestamp, frames)`` entries, capped to the sampled window.
 
-    ``append`` subsamples to ``min_dt_sec`` and drops frames older than the oldest sampled offset
-    (keeping one just beyond it so nearest-neighbor sampling still brackets it), so the buffer stays
-    bounded over an episode. ``sample`` returns a ``(len(offsets_sec), H, W, 3)`` stack picked nearest
-    to each offset; early on it repeats the oldest frame.
+    ``frames`` is a dict of camera-key → image; every entry holds the same keys. ``append`` stores a
+    copy (camera frames are views into a producer-reused buffer) and drops entries older than the
+    oldest sampled offset, keeping one just beyond it so nearest-neighbor sampling still brackets it.
+    ``sample`` returns, per key, a ``(len(offsets_sec), H, W, 3)`` stack picked nearest to each offset;
+    early on it repeats the oldest frame.
     """
 
-    def __init__(self, image_keys: tuple[str, ...], offsets_sec: tuple[float, ...], min_dt_sec: float):
-        self._image_keys = image_keys
+    def __init__(self, offsets_sec: tuple[float, ...]):
         self._offsets_sec = offsets_sec
-        self._min_dt_sec = min_dt_sec
-        self._buffers: dict[str, list[tuple[float, np.ndarray]]] = {k: [] for k in image_keys}
+        self._entries: deque[tuple[float, dict[str, np.ndarray]]] = deque()
 
     def reset(self):
-        self._buffers = {k: [] for k in self._buffers}
+        self._entries.clear()
 
-    def append(self, key: str, now: float, frame: np.ndarray):
-        buf = self._buffers[key]
-        if not buf or now - buf[-1][0] >= self._min_dt_sec:
-            # Copy: camera frames are views into a shared-memory buffer the producer reuses each tick,
-            # so storing the view would alias every slot to the latest frame.
-            buf.append((now, np.array(frame)))
-            cut = next(i for i, (t, _) in enumerate(buf) if t >= now + min(self._offsets_sec))
-            del buf[: max(cut - 1, 0)]
+    def append(self, now: float, frames: dict[str, np.ndarray]):
+        self._entries.append((now, {k: np.array(v) for k, v in frames.items()}))
+        cutoff = now + min(self._offsets_sec)
+        while len(self._entries) >= 2 and self._entries[1][0] <= cutoff:
+            self._entries.popleft()
 
-    def sample(self, key: str, now: float) -> np.ndarray:
-        buf = self._buffers[key]
-        times = np.array([t for t, _ in buf])
-        idxs = [int(np.argmin(np.abs(times - (now + off)))) for off in self._offsets_sec]
-        return np.stack([buf[i][1] for i in idxs])
+    def sample(self, now: float) -> dict[str, np.ndarray]:
+        times = np.array([t for t, _ in self._entries])
+        picked = [self._entries[self._nearest(times, now + off)][1] for off in self._offsets_sec]
+        return {k: np.stack([frames[k] for frames in picked]) for k in picked[0]}
+
+    @staticmethod
+    def _nearest(times: np.ndarray, target: float) -> int:
+        idx = int(np.searchsorted(times, target))
+        if idx == 0:
+            return 0
+        if idx >= len(times):
+            return len(times) - 1
+        return idx if times[idx] - target < target - times[idx - 1] else idx - 1
 
 
 class TemporalFrameStack(PolicyWrapper):
@@ -135,53 +144,30 @@ class TemporalFrameStack(PolicyWrapper):
     just-executed chunk at the cadence seen in training, but the harness only forwards an observation
     to the policy at re-query boundaries. This wrapper sits outside the scheduling wrapper so it sees
     every control tick: it records each camera frame and substitutes a ``(len(offsets_sec), H, W, 3)``
-    stack sampled at ``offsets_sec`` (negative seconds relative to now).
+    stack sampled at ``offsets_sec`` (ascending negative seconds relative to now).
     """
 
     class _Session(DelegatingSession):
-        def __init__(self, inner: Session, wrapper: 'TemporalFrameStack', now: Now):
+        def __init__(self, inner: Session, image_keys: tuple[str, ...], buffer: _FrameBuffer):
             super().__init__(inner)
-            self._wrapper = wrapper
-            self._now = now
-            self._buffer = _FrameBuffer(wrapper._image_keys, wrapper._offsets_sec, wrapper._min_dt_sec)
+            self._image_keys = image_keys
+            self._buffer = buffer
 
         def __call__(self, obs):
-            now = self._now()
-            stacked = dict(obs)
-            for key in self._wrapper._image_keys:
-                self._buffer.append(key, now, obs[key])
-                stacked[key] = self._buffer.sample(key, now)
-            return self._inner(stacked)
+            now = _obs_time(obs)
+            self._buffer.append(now, {k: obs[k] for k in self._image_keys})
+            return self._inner({**obs, **self._buffer.sample(now)})
 
         def cancel(self):
             self._buffer.reset()
             super().cancel()
 
-    def __init__(self, image_keys: tuple[str, ...], offsets_sec: tuple[float, ...], min_dt_sec: float = 0.18):
+    def __init__(self, image_keys: tuple[str, ...], offsets_sec: tuple[float, ...]):
         self._image_keys = tuple(image_keys)
         self._offsets_sec = tuple(offsets_sec)
-        self._min_dt_sec = min_dt_sec
 
     def wrap_session(self, inner: Session, context, now: Now):
-        return TemporalFrameStack._Session(inner, self, now)
-
-
-@cfn.config()
-def chunked_schedule():
-    """Factory config for ``ChunkedSchedule``."""
-    return ChunkedSchedule()
-
-
-@cfn.config()
-def error_recovery():
-    """Factory config for ``ErrorRecovery``."""
-    return ErrorRecovery()
-
-
-@cfn.config(min_dt_sec=0.18)
-def temporal_frame_stack(image_keys: tuple[str, ...], offsets_sec: tuple[float, ...], min_dt_sec: float):
-    """Factory config for ``TemporalFrameStack``."""
-    return TemporalFrameStack(image_keys=tuple(image_keys), offsets_sec=tuple(offsets_sec), min_dt_sec=min_dt_sec)
+        return TemporalFrameStack._Session(inner, self._image_keys, _FrameBuffer(self._offsets_sec))
 
 
 default_wrappers = ErrorRecovery() | ChunkedSchedule()

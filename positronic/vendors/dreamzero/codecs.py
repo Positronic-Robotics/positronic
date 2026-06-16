@@ -7,13 +7,12 @@ import configuronic as cfn
 import numpy as np
 from PIL import Image as PilImage
 
-from positronic.cfg import codecs
+from positronic.cfg import codecs, wrappers
 from positronic.dataset import Signal, transforms
 from positronic.dataset.episode import Episode
 from positronic.dataset.transforms import image
 from positronic.dataset.transforms.episode import Derive, Get
 from positronic.drivers.roboarm import command
-from positronic.policy import wrappers
 from positronic.policy.codec import Codec, lerobot_action, lerobot_image, lerobot_state
 
 IMAGE_WIDTH = 320
@@ -228,7 +227,7 @@ _action = dreamzero_action.override(tgt_joints_key='robot_command.joints', tgt_g
 joints = codecs.compose.override(obs=dreamzero_obs, action=_action, fps=15.0, horizon=None)
 
 _traj_action = dreamzero_action.override(tgt_joints_key='robot_state.q', tgt_grip_key='grip')
-joints_traj = codecs.compose.override(obs=dreamzero_obs, action=_traj_action, fps=15.0)
+joints_traj = codecs.compose.override(obs=dreamzero_obs, action=_traj_action, fps=15.0, horizon=None)
 
 # IK variants: reconstruct joint targets from recorded EE targets via IK
 _ik_action = codecs.ik_joints_action.override(tgt_joints_key='robot_command.joints', tgt_grip_key='target_grip')
