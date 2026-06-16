@@ -218,14 +218,14 @@ def dreamzero_action(tgt_joints_key: str, tgt_grip_key: str, num_joints: int):
     return DreamZeroActionCodec(tgt_joints_key=tgt_joints_key, tgt_grip_key=tgt_grip_key, num_joints=num_joints)
 
 
-# Composed codec: DreamZero observation + action + timing.
-# horizon=None executes the full 24-action chunk DreamZero returns, aligning the re-query with the
-# frame-stack window; a finite horizon (the compose default is 1.0s) would truncate the chunk.
+# Composed codec: DreamZero observation + action + timing. compose defaults to the full chunk
+# (horizon=None), so all 24 actions DreamZero returns execute and the re-query aligns with the
+# frame-stack window.
 _action = dreamzero_action.override(tgt_joints_key='robot_command.joints', tgt_grip_key='target_grip')
-joints = codecs.compose.override(obs=dreamzero_obs, action=_action, fps=15.0, horizon=None)
+joints = codecs.compose.override(obs=dreamzero_obs, action=_action, fps=15.0)
 
 _traj_action = dreamzero_action.override(tgt_joints_key='robot_state.q', tgt_grip_key='grip')
-joints_traj = codecs.compose.override(obs=dreamzero_obs, action=_traj_action, fps=15.0, horizon=None)
+joints_traj = codecs.compose.override(obs=dreamzero_obs, action=_traj_action, fps=15.0)
 
 # IK variants: reconstruct joint targets from recorded EE targets via IK
 _ik_action = codecs.ik_joints_action.override(tgt_joints_key='robot_command.joints', tgt_grip_key='target_grip')
@@ -242,7 +242,7 @@ def _ik_dreamzero_action(solver: str):
     return ik | DreamZeroActionCodec(tgt_joints_key='robot_command.joints', tgt_grip_key='target_grip')
 
 
-joints_ik = codecs.compose.override(obs=dreamzero_obs, action=_ik_dreamzero_action, fps=15.0, horizon=None)
+joints_ik = codecs.compose.override(obs=dreamzero_obs, action=_ik_dreamzero_action, fps=15.0)
 joints_ik_sim = joints_ik.override(**{'action.solver': 'dm_control'})
 
 
