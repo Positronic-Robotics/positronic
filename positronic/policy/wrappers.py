@@ -102,11 +102,13 @@ class ErrorRecovery(PolicyWrapper):
 class _FrameBuffer:
     """Time-ordered history of ``(timestamp, frames)`` entries, capped to the sampled window.
 
-    ``frames`` is a dict of camera-key → image; every entry holds the same keys. ``append`` stores a
-    copy (camera frames are views into a producer-reused buffer) and drops entries before the oldest
-    sampled offset, keeping the one at or before it. ``sample`` returns, per key, a
-    ``(len(offsets_sec), H, W, 3)`` stack holding, for each offset, the latest frame at or before that
-    time — carry-over, never the future; before enough history accumulates it repeats the oldest frame.
+    ``frames`` is a dict of camera-key → image; every entry holds the same keys. ``append`` copies each
+    new frame (cameras are views into a producer-reused buffer) but skips one byte-identical to the
+    previous entry — cameras tick slower than the control loop, and carry-over sampling reuses the
+    stored frame — then drops entries before the oldest sampled offset, keeping the one at or before it.
+    ``sample`` returns, per key, a ``(len(offsets_sec), H, W, 3)`` stack holding, for each offset, the
+    latest frame at or before that time — carry-over, never the future; before enough history
+    accumulates it repeats the oldest frame.
     """
 
     def __init__(self, offsets_sec: tuple[float, ...]):
@@ -117,6 +119,8 @@ class _FrameBuffer:
         self._entries.clear()
 
     def append(self, now: float, frames: dict[str, np.ndarray]):
+        if self._entries and all(np.array_equal(self._entries[-1][1][k], v) for k, v in frames.items()):
+            return
         self._entries.append((now, {k: np.array(v) for k, v in frames.items()}))
         cutoff = now + min(self._offsets_sec)
         while len(self._entries) >= 2 and self._entries[1][0] <= cutoff:
