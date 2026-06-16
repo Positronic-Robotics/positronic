@@ -38,6 +38,4 @@ def _compose(obs, action, fps: float, horizon: float | None, binarize_grip, uuid
     return inner & _StaticScalars(**derivations)
 
 
-ee = _compose.override(
-    obs=base.eepose_obs.override(image_size=(512, 512)), action=base.absolute_pos_action, horizon=1.0
-)
+ee = _compose.override(obs=base.eepose_obs.override(image_size=(512, 512)), action=base.absolute_pos_action)
