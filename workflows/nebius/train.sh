@@ -8,7 +8,7 @@
 # --output_dir stays as an s3:// URL handled by pos3 — vendor checkpoint savers
 # tend to use symlinks, which Mountpoint-S3 does not support.
 #
-# Hardcoded: GPU platform/preset, MysteryBox secret names, S3 endpoint URL.
+# Hardcoded: GPU platform, MysteryBox secret names, S3 endpoint URL.
 # Vendor selects image + uv extra. Override-able via env: NEBIUS_PARENT_ID,
 # NEBIUS_SUBNET_ID.
 
@@ -28,12 +28,17 @@ IMAGE_TAG="${NEBIUS_IMAGE_TAG:-latest}"
 # them (--save_total_limit 9999), so the 250Gi default fills mid-run for long runs.
 # Default 750Gi holds a full keep-all gr00t run; override for small jobs.
 DISK_SIZE="${NEBIUS_DISK_SIZE:-750Gi}"
+# Job timeout. Bump for long runs (e.g. NEBIUS_JOB_TIMEOUT=48h for a full finetune).
+JOB_TIMEOUT="${NEBIUS_JOB_TIMEOUT:-24h}"
+# Nebius GPU preset. Default is one H100; multi-GPU presets must match the training preset's
+# GPU count (a *_h100x8 preset runs torchrun --nproc_per_node=8, so it needs an 8-GPU preset).
+PRESET="${NEBIUS_PRESET:-1gpu-16vcpu-200gb}"
 
 if [ $# -lt 1 ]; then
   cat >&2 <<'EOF'
 Usage: bash workflows/nebius/train.sh <vendor> [train args...]
 
-Vendors: lerobot_0_3_3 | lerobot | openpi | gr00t
+Vendors: lerobot_0_3_3 | lerobot | openpi | gr00t | dreamzero
 
 Forwards remaining arguments to positronic.vendors.<vendor>.train. Example:
 
@@ -54,8 +59,9 @@ case "$VENDOR" in
   lerobot)       IMAGE="positro/positronic:${IMAGE_TAG}"; EXTRA="--extra lerobot " ;;
   openpi)        IMAGE="positro/openpi:${IMAGE_TAG}";     EXTRA="" ;;
   gr00t)         IMAGE="positro/gr00t:${IMAGE_TAG}";      EXTRA="" ;;
+  dreamzero)     IMAGE="positro/dreamzero:${IMAGE_TAG}";  EXTRA="" ;;
   *)
-    echo "Unknown vendor: '$VENDOR'. Supported: lerobot_0_3_3 | lerobot | openpi | gr00t" >&2
+    echo "Unknown vendor: '$VENDOR'. Supported: lerobot_0_3_3 | lerobot | openpi | gr00t | dreamzero" >&2
     exit 1
     ;;
 esac
@@ -108,9 +114,9 @@ nebius ai job create \
   --container-command uv \
   --args "$TRAIN_ARGS" \
   --platform gpu-h100-sxm \
-  --preset 1gpu-16vcpu-200gb \
+  --preset "$PRESET" \
   --disk-size "$DISK_SIZE" \
-  --timeout 24h \
+  --timeout "$JOB_TIMEOUT" \
   --working-dir /positronic \
   ${VOLUME_FLAGS[@]+"${VOLUME_FLAGS[@]}"} \
   --volume "${CACHE_FS}:/cache:rw" \

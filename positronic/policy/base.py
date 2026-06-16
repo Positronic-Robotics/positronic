@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from collections.abc import Callable
 from typing import Any
 
 from positronic.policy.sampler import EpisodeCounter, Sampler, UniformSampler
+
+Now = Callable[[], float]
 
 
 class Session(ABC):
@@ -128,11 +131,16 @@ class PolicyWrapper:
     policy-level state across sessions, like composition).
     """
 
-    def wrap(self, policy: Policy) -> Policy:
-        """Apply this wrapper to a policy. Default: wrap every session it creates via ``wrap_session``."""
-        return _WrapperPolicy(policy, self)
+    def wrap(self, policy: Policy, now: Now | None = None) -> Policy:
+        """Apply this wrapper to a policy. Default: wrap every session it creates via ``wrap_session``.
 
-    def wrap_session(self, inner: Session, context: dict[str, Any] | None) -> Session:
+        ``now`` is the runtime clock (current time in seconds), supplied by the harness when it
+        applies the pipeline. Wrappers whose sessions need wall time read it; codecs and recording
+        taps, applied at config time, leave it ``None``.
+        """
+        return _WrapperPolicy(policy, self, now)
+
+    def wrap_session(self, inner: Session, context: dict[str, Any] | None, now: Now | None) -> Session:
         """Wrap a single session. Subclasses override this for per-session wrapping."""
         raise NotImplementedError('Override wrap_session or wrap')
 
@@ -157,12 +165,13 @@ class _WrapperPolicy(DelegatingPolicy):
     Delegates session creation to the wrapper's ``wrap_session`` and merges meta.
     """
 
-    def __init__(self, inner: Policy, wrapper: PolicyWrapper):
+    def __init__(self, inner: Policy, wrapper: PolicyWrapper, now: Now | None):
         super().__init__(inner)
         self._wrapper = wrapper
+        self._now = now
 
     def new_session(self, context=None):
-        return self._wrapper.wrap_session(self._inner.new_session(context), context)
+        return self._wrapper.wrap_session(self._inner.new_session(context), context, self._now)
 
     @property
     def meta(self):
@@ -175,9 +184,9 @@ class _Pipeline(PolicyWrapper):
     def __init__(self, components: tuple):
         self._components = components
 
-    def wrap(self, policy: Policy) -> Policy:
+    def wrap(self, policy: Policy, now: Now | None = None) -> Policy:
         for component in reversed(self._components):
-            policy = component.wrap(policy)
+            policy = component.wrap(policy, now)
         return policy
 
     def _pipeline_components(self) -> tuple:

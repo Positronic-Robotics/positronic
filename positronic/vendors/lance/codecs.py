@@ -29,7 +29,7 @@ class _StaticScalars(Codec):
         return Derive(**self._derivations)
 
 
-@cfn.config(fps=15.0, horizon=1.0, binarize_grip=None, uuid=False)
+@cfn.config(fps=15.0, horizon=None, binarize_grip=None, uuid=False)
 def _compose(obs, action, fps: float, horizon: float | None, binarize_grip, uuid: bool):
     derivations = {'current_task': Get('task', ''), 'language_instruction1': Get('task', '')}
     if uuid:

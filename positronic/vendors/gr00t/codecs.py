@@ -216,18 +216,16 @@ _ee_action = groot_action.override(base=codecs.absolute_pos_action)
 _rot6d_obs = groot_obs.override(rotation_rep='rot6d')
 _rot6d_action = _ee_action.override(**{'base.rotation_rep': 'rot6d', 'action_dim': 9})
 
-ee_quat = codecs.compose.override(obs=groot_obs, action=_ee_action, horizon=None)
+ee_quat = codecs.compose.override(obs=groot_obs, action=_ee_action)
 ee_quat_joints = ee_quat.override(**{'obs.include_joints': True})
-ee_rot6d = codecs.compose.override(obs=_rot6d_obs, action=_rot6d_action, horizon=None)
+ee_rot6d = codecs.compose.override(obs=_rot6d_obs, action=_rot6d_action)
 ee_rot6d_joints = ee_rot6d.override(**{'obs.include_joints': True})
 
 _traj_action = _ee_action.override(base=codecs.traj_ee_action)
 _rot6d_traj_action = _rot6d_action.override(base=codecs.traj_ee_action.override(rotation_rep='rot6d'))
 
-ee_quat_traj = codecs.compose.override(obs=groot_obs, action=_traj_action, binarize_grip=('grip',), horizon=None)
-ee_rot6d_traj = codecs.compose.override(
-    obs=_rot6d_obs, action=_rot6d_traj_action, binarize_grip=('grip',), horizon=None
-)
+ee_quat_traj = codecs.compose.override(obs=groot_obs, action=_traj_action, binarize_grip=('grip',))
+ee_rot6d_traj = codecs.compose.override(obs=_rot6d_obs, action=_rot6d_traj_action, binarize_grip=('grip',))
 ee_quat_joints_traj = ee_quat_traj.override(**{'obs.include_joints': True})
 ee_rot6d_joints_traj = ee_rot6d_traj.override(**{'obs.include_joints': True})
 
@@ -238,13 +236,11 @@ joints_traj = codecs.compose.override(
         action_key='joint_position',
     ),
     binarize_grip=('grip',),
-    horizon=None,
 )
 
 # IK variants: GR00T obs (with joints) + IK joint-space action via groot_action wrapper
 ee_joints_ik = codecs.compose.override(
     obs=groot_obs.override(include_joints=True),
     action=groot_action.override(base=codecs.ik_joints_action, action_key='joint_position'),
-    horizon=None,
 )
 ee_joints_ik_sim = ee_joints_ik.override(**{'action.base.solver': 'dm_control'})

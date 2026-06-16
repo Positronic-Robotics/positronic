@@ -5,7 +5,7 @@
 # details. The container itself takes ~10-15 min more to finish uv sync and
 # load the model into GPU memory after the IP appears.
 #
-# Hardcoded: GPU platform/preset, MysteryBox secret names, S3 endpoint URL,
+# Hardcoded: GPU platform, MysteryBox secret names, S3 endpoint URL,
 # container port. Vendor selects image + uv extra. Override-able via env:
 # NEBIUS_PARENT_ID, NEBIUS_SUBNET_ID.
 
@@ -20,12 +20,15 @@ CACHE_FS="${NEBIUS_CACHE_FS:-computefilesystem-e00f6jyfr5wkawyrab}"
 # under CI; locally it pushes `:<branch>`/`:<sha>`. To serve a branch build:
 # `make push-<x> IMAGE_TAG=<branch>` then run with `NEBIUS_IMAGE_TAG=<branch>`.
 IMAGE_TAG="${NEBIUS_IMAGE_TAG:-latest}"
+# Nebius GPU preset. Default is one H100; multi-GPU presets must match the server's GPU count
+# (DreamZero's --num_gpus runs torchrun --nproc_per_node, so an 8-GPU server needs an 8-GPU preset).
+PRESET="${NEBIUS_PRESET:-1gpu-16vcpu-200gb}"
 
 if [ $# -lt 2 ]; then
   cat >&2 <<'EOF'
 Usage: bash workflows/nebius/serve.sh <vendor> <endpoint-name> [server args...]
 
-Vendors: lerobot_0_3_3 | lerobot | openpi | gr00t
+Vendors: lerobot_0_3_3 | lerobot | openpi | gr00t | dreamzero
 
 The endpoint name must be unique in the project (lowercase alphanumeric + dashes).
 Remaining arguments forward to positronic.vendors.<vendor>.server.
@@ -64,8 +67,9 @@ case "$VENDOR" in
   # openpi.server imports `openpi_client` at module top → needs --extra openpi
   openpi)        IMAGE="positro/openpi:${IMAGE_TAG}";     EXTRA="--extra openpi " ;;
   gr00t)         IMAGE="positro/gr00t:${IMAGE_TAG}";      EXTRA="" ;;
+  dreamzero)     IMAGE="positro/dreamzero:${IMAGE_TAG}";  EXTRA="" ;;
   *)
-    echo "Unknown vendor: '$VENDOR'. Supported: lerobot_0_3_3 | lerobot | openpi | gr00t" >&2
+    echo "Unknown vendor: '$VENDOR'. Supported: lerobot_0_3_3 | lerobot | openpi | gr00t | dreamzero" >&2
     exit 1
     ;;
 esac
@@ -90,7 +94,7 @@ nebius ai endpoint create \
   --args "$SERVER_ARGS" \
   --container-port 8000 \
   --platform gpu-h100-sxm \
-  --preset 1gpu-16vcpu-200gb \
+  --preset "$PRESET" \
   --working-dir /positronic \
   --volume "${CACHE_FS}:/cache:rw" \
   --env UV_CACHE_DIR=/cache/uv \

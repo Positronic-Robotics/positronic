@@ -264,9 +264,9 @@ def test_harness_emits_cartesian_move(world):
     assert obs['task'] == 'stack-blocks'
     assert obs['descriptor'] == ''  # no descriptor passed -> empty string reaches the policy
     # Recording == canonical policy I/O: the policy sees the same ``robot_state`` serializer
-    # the dataset records (``.error`` int, not the raw ``RobotStatus``). wall/inference
+    # the dataset records (``.error`` int, not the raw ``RobotStatus``). wall/obs
     # timestamps carry volatile values, so lock the stable key set.
-    assert set(obs) - {'wall_time_ns', 'inference_time_ns'} == {
+    assert set(obs) - {'wall_time_ns', 'obs_time_ns'} == {
         'image.cam',
         'robot_state.q',
         'robot_state.dq',

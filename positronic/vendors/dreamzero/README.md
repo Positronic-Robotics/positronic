@@ -28,9 +28,16 @@ uv run positronic-inference sim \
   --policy=.remote \
   --policy.host=vm-dreamzero \
   --policy.port=8000 \
+  --wrap=@positronic.vendors.dreamzero.codecs.dreamzero_wrappers \
   --eval.timeout=20 \
   --show_gui=True
 ```
+
+The server owns the codec (`server` defaults to `codec=joints`), so the client sends raw
+observations and receives decoded joint commands — don't pass `--policy.codec` here or it
+double-encodes and the first request fails. `--wrap` is client-side: it supplies the AR video
+context (`TemporalFrameStack`), which must run every control tick to record frames, so without it
+the model loses the multi-frame history it conditions on.
 
 First start downloads the 14B checkpoint via HuggingFace (~10-20 min). Subsequent starts use cache.
 

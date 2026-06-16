@@ -186,12 +186,12 @@ def test_timeline_values_captured_once_and_carried(tmp_path):
     policy = (rec.tap('raw') | rec.tap('server')).wrap(inner)
     session = policy.new_session()
 
-    session({'wall_time_ns': 111, 'inference_time_ns': 222, 'x': 1.0})
+    session({'wall_time_ns': 111, 'obs_time_ns': 222, 'x': 1.0})
 
     # Both taps entered before the inner session ran, and both share the values
     # captured once from the raw obs at the outermost tap.
     assert inner.last_session.seen_depth == 2
-    assert inner.last_session.seen_timeline_values == {'wall_time': 111, 'inference_time': 222}
+    assert inner.last_session.seen_timeline_values == {'wall_time': 111, 'obs_time': 222}
     # Per-inference context is cleared once the outermost tap returns.
     assert rec._timeline_values == {}
     assert rec._depth == 0
@@ -202,7 +202,7 @@ def test_partial_timelines_only_set_present_keys(tmp_path):
     inner = _CapturingPolicy(rec, [{'v': 1.0, 'timestamp': 0.0}])
     session = rec.tap('raw').wrap(inner).new_session()
 
-    session({'wall_time_ns': 555, 'x': 1.0})  # no inference_time_ns
+    session({'wall_time_ns': 555, 'x': 1.0})  # no obs_time_ns
     assert inner.last_session.seen_timeline_values == {'wall_time': 555}
 
 

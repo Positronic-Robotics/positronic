@@ -189,7 +189,7 @@ class _MetaPolicy(Policy):
         return {'base_key': 'base_value'}
 
 
-_T0_OBS = {'inference_time_ns': 0}
+_T0_OBS = {'obs_time_ns': 0}
 
 
 def test_action_horizon_sec_truncates_chunk():

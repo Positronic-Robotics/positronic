@@ -82,7 +82,7 @@ class Codec(PolicyWrapper):
         """
         return data or {}
 
-    def wrap_session(self, inner: Session, context):
+    def wrap_session(self, inner: Session, context, now):
         return _CodecSession(inner, self)
 
     @final

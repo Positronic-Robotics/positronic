@@ -45,7 +45,7 @@ def act(checkpoints_dir: str, checkpoint: str | None, n_action_steps: int | None
 
 
 act_absolute = wrapped.override(
-    base=act, codec=codecs.compose.override(obs=codecs.eepose_obs, action=codecs.absolute_pos_action)
+    base=act, codec=codecs.compose.override(obs=codecs.eepose_obs, action=codecs.absolute_pos_action, horizon=1.0)
 )
 
 

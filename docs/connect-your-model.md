@@ -104,7 +104,7 @@ The client sends the full raw robot state as a dict. Keys are flat strings (the 
 | `robot_state.dq` | float32 | (7,) | Joint velocities (radians/s) |
 | `grip` | float32 | scalar | Gripper opening |
 | `image.<name>` | uint8 | (H, W, 3) | Camera RGB. Stream names come from the run config — sim and PhAIL send `image.exterior` and `image.wrist` (sim also adds `image.agent_view`) |
-| `inference_time_ns` | int | scalar | Inference-clock timestamp of this observation (ns) |
+| `obs_time_ns` | int | scalar | Harness-clock timestamp of this observation (ns) |
 | `wall_time_ns` | int | scalar | Wall-clock timestamp (ns) |
 | `task` | str | — | Language instruction for the episode |
 | `descriptor` | str | — | Embodiment the observation came from (e.g. `mujoco.franka`); empty string when unset. Lets a multi-embodiment policy adapt to the current robot |

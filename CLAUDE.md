@@ -46,7 +46,9 @@
   (`mujoco_franka`, not `sim` — more sims will exist)
 - Before inventing a name or pattern, mirror adjacent code (config placeholders are named `placeholder`; new
   constants join the existing constants block)
-- Configuronic: always the `@cfn.config` decorator, never `NAME = cfn.Config(func)`; define variants with `.override`
+- Configuronic: never define a function whose only purpose is to build a config — decorate it with `@cfn.config`
+  directly. When wrapping a class or function usable as-is (without configuronic), assign `NAME = cfn.Config(Thing)`
+  rather than writing a wrapper. Define variants with `.override`
 - No suppressions or guards for problems never observed: a `noqa` must suppress an error that actually fires; no
   defensive idioms with explanatory comments
 

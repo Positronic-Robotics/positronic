@@ -144,7 +144,7 @@ droid_obs = codecs.general_obs.override(
     task_field='prompt',
 )
 
-ee = codecs.compose.override(obs=ee_obs, action=codecs.absolute_pos_action, horizon=None)
+ee = codecs.compose.override(obs=ee_obs, action=codecs.absolute_pos_action)
 ee_joints = ee.override(obs=ee_joints_obs)
 
 ee_traj = ee.override(action=codecs.traj_ee_action, binarize_grip=('grip',))
@@ -156,11 +156,10 @@ joints_traj = codecs.compose.override(
     obs=joints_obs,
     action=codecs.absolute_joints_action.override(tgt_joints_key='robot_state.q', tgt_grip_key='grip'),
     binarize_grip=('grip',),
-    horizon=None,
 )
 
 # IK variants: reconstruct joint targets from recorded EE targets via IK
-joints_ik = codecs.compose.override(obs=joints_obs, action=codecs.ik_joints_action, horizon=None)
+joints_ik = codecs.compose.override(obs=joints_obs, action=codecs.ik_joints_action)
 joints_ik_sim = joints_ik.override(**{'action.solver': 'dm_control'})
 
-droid = codecs.compose.override(obs=droid_obs, action=codecs.joint_delta_action, horizon=None)
+droid = codecs.compose.override(obs=droid_obs, action=codecs.joint_delta_action)
