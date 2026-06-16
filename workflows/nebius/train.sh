@@ -8,7 +8,7 @@
 # --output_dir stays as an s3:// URL handled by pos3 — vendor checkpoint savers
 # tend to use symlinks, which Mountpoint-S3 does not support.
 #
-# Hardcoded: GPU platform/preset, MysteryBox secret names, S3 endpoint URL.
+# Hardcoded: GPU platform, MysteryBox secret names, S3 endpoint URL.
 # Vendor selects image + uv extra. Override-able via env: NEBIUS_PARENT_ID,
 # NEBIUS_SUBNET_ID.
 
@@ -30,6 +30,9 @@ IMAGE_TAG="${NEBIUS_IMAGE_TAG:-latest}"
 DISK_SIZE="${NEBIUS_DISK_SIZE:-750Gi}"
 # Job timeout. Bump for long runs (e.g. NEBIUS_JOB_TIMEOUT=48h for a full finetune).
 JOB_TIMEOUT="${NEBIUS_JOB_TIMEOUT:-24h}"
+# Nebius GPU preset. Default is one H100; multi-GPU presets must match the training preset's
+# GPU count (a *_h100x8 preset runs torchrun --nproc_per_node=8, so it needs an 8-GPU preset).
+PRESET="${NEBIUS_PRESET:-1gpu-16vcpu-200gb}"
 
 if [ $# -lt 1 ]; then
   cat >&2 <<'EOF'
@@ -111,7 +114,7 @@ nebius ai job create \
   --container-command uv \
   --args "$TRAIN_ARGS" \
   --platform gpu-h100-sxm \
-  --preset 1gpu-16vcpu-200gb \
+  --preset "$PRESET" \
   --disk-size "$DISK_SIZE" \
   --timeout "$JOB_TIMEOUT" \
   --working-dir /positronic \
