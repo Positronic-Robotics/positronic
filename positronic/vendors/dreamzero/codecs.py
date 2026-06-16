@@ -18,9 +18,6 @@ from positronic.policy.wrappers import ChunkedSchedule, ErrorRecovery
 
 IMAGE_WIDTH = 320
 IMAGE_HEIGHT = 176
-# Frame offsets (relative seconds) for the AR video context: 4 frames spanning the just-executed
-# 24-step chunk at 15 fps, matching DreamZero's reference eval client schedule [-23, -16, -8, 0].
-FRAME_STACK_OFFSETS_SEC = tuple(o / 15.0 for o in (-23, -16, -8, 0))
 
 
 def _reshape_grip(values):
@@ -249,8 +246,10 @@ joints_ik = codecs.compose.override(obs=dreamzero_obs, action=_ik_dreamzero_acti
 joints_ik_sim = joints_ik.override(**{'action.solver': 'dm_control'})
 
 
+# offsets_sec: 4 frames spanning the just-executed 24-step chunk at 15 fps, matching DreamZero's
+# reference eval client schedule (frame indices -23, -16, -8, 0).
 _frame_stack = wrappers.temporal_frame_stack.override(
-    image_keys=('image.wrist', 'image.exterior'), offsets_sec=FRAME_STACK_OFFSETS_SEC
+    image_keys=('image.wrist', 'image.exterior'), offsets_sec=(-23 / 15, -16 / 15, -8 / 15, 0.0)
 )
 
 
@@ -259,7 +258,7 @@ def dreamzero_wrappers(frame_stack):
     """Eval ``wrap`` for DreamZero: error recovery, AR video context, chunked scheduling.
 
     The frame stack sits outside the scheduler so it records the wrist/exterior cameras every control
-    tick and substitutes a stack sampled at ``FRAME_STACK_OFFSETS_SEC`` at the trained cadence; pair it
-    with the DreamZero codec's full-chunk ``horizon``.
+    tick and substitutes a stack sampled at the trained cadence; pair it with the DreamZero codec's
+    full-chunk ``horizon``.
     """
     return ErrorRecovery() | frame_stack | ChunkedSchedule()
