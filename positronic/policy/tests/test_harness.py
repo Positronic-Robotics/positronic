@@ -497,6 +497,35 @@ def test_trial_stop_signal_terminates(world):
 
 
 @pytest.mark.timeout(3.0)
+def test_stop_signal_does_not_latch_across_trials(world):
+    """A ``done`` that ended one trial must not instantly finalize the next: the stop-signal is
+    edge-triggered, so the value latched in the receiver from trial 0 cannot re-fire on trial 1."""
+    policy = StubPolicy()
+    harness = Harness(policy, make_embodiment(), task=Task(instruction='t', timeout=100.0), trials=[{}, {}])
+    p = _pair_all(world, harness)
+    done_em = world.pair(harness.done)
+
+    def stop_count():
+        return len([c for c in _ds_commands(p) if c.type == DsWriterCommandType.STOP_EPISODE])
+
+    scheduler = world.start([harness])
+    drive_scheduler(scheduler, steps=5)
+    done_em.emit(True)  # end trial 0
+    drive_scheduler(scheduler, steps=10)
+    assert stop_count() == 1
+
+    # Trial 1 has auto-started with trial 0's True still latched in the receiver; it must keep running.
+    drive_scheduler(scheduler, steps=10)
+    assert stop_count() == 1
+
+    done_em.emit(True)  # end trial 1
+    drive_scheduler(scheduler, steps=10)
+    stops = [c for c in _ds_commands(p) if c.type == DsWriterCommandType.STOP_EPISODE]
+    assert len(stops) == 2
+    assert all(s.static_data['eval.terminated'] is True for s in stops)
+
+
+@pytest.mark.timeout(3.0)
 def test_trial_seed_reaches_task_reset_and_meta(world):
     """Each RUN hands its ``eval.seed`` to the task's scene reset; the seed and the
     eval-identity block land in episode meta."""

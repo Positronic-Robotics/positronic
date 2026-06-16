@@ -125,8 +125,9 @@ class Harness(pimm.ControlSystem):
         self.directive = pimm.ControlSystemReceiver[Directive](self, default=None, maxsize=3)
         self.ds_command = pimm.ControlSystemEmitter[DsWriterCommand](self)
         self.robot_meta_in = pimm.ControlSystemReceiver(self, default={})
-        # Privileged stop-signal: a truthy value ends the live trial with ``eval.terminated`` True
-        # (the timeout path sets it False). Defaults False, so an unconnected port never terminates.
+        # Privileged stop-signal, edge-triggered: a freshly emitted truthy value ends the live trial
+        # with ``eval.terminated`` True (the timeout path sets it False). A value latched from a prior
+        # trial reads as not-updated and cannot re-fire. Defaults False, so an unconnected port is inert.
         self.done = pimm.ControlSystemReceiver[bool](self, default=False)
 
     def _build_episode_meta(self, context: dict[str, Any]) -> dict[str, Any]:
@@ -337,9 +338,10 @@ class Harness(pimm.ControlSystem):
                 self._deadline = clock.now() + self._task.timeout
 
             if self._running:
-                # A live trial ends on the privileged stop-signal or on its time budget (self-driven
+                # A live trial ends on a freshly emitted stop-signal or on its time budget (self-driven
                 # only; attended trials carry no deadline). ``eval.terminated`` records which.
-                stop = bool(self.done.value)
+                stop_msg = self.done.read()
+                stop = stop_msg.updated and bool(stop_msg.data)
                 timed_out = self._deadline is not None and clock.now() >= self._deadline
                 if stop or timed_out:
                     yield from self._handle_directive(Directive.FINISH(**{'eval.terminated': stop}), clock)
