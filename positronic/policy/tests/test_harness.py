@@ -574,6 +574,34 @@ def test_task_done_terminates_through_wire_embodiment(world):
 
 
 @pytest.mark.timeout(3.0)
+def test_done_after_deadline_is_a_timeout(world):
+    """The deadline is hard: a ``done`` delivered past it (here during the latency sleep) records as a
+    timeout — ``eval.terminated`` False, payload dropped — not a late stop-signal success."""
+    policy = StubPolicy()
+    harness = Harness(
+        policy, make_embodiment(), task=Task(instruction='t', timeout=0.05), trials=[{'inference_latency': 0.2}]
+    )
+    p = _pair_all(world, harness)
+    done_em = world.pair(harness.done)
+
+    robot_state = make_robot_state([0.1, 0.2, 0.3], [0.4, 0.5, 0.6])
+    # Obs starts inference + the 0.2s latency sleep; the 0.05s deadline lapses during it, and done is
+    # delivered at ~0.1s — past the deadline but before the harness next polls. The timeout must win.
+    driver = ManualDriver([
+        (partial(emit_ready_payload, p['frame_em'], p['robot_em'], p['grip_em'], robot_state), 0.1),
+        (partial(done_em.emit, {'eval.success': True}), 0.3),
+        (None, 0.0),
+    ])
+    scheduler = world.start([harness, driver])
+    drive_scheduler(scheduler, steps=200)
+
+    stops = [c for c in _ds_commands(p) if c.type == DsWriterCommandType.STOP_EPISODE]
+    assert len(stops) == 1
+    assert stops[0].static_data['eval.terminated'] is False
+    assert 'eval.success' not in stops[0].static_data
+
+
+@pytest.mark.timeout(3.0)
 def test_trial_seed_reaches_task_reset_and_meta(world):
     """Each RUN hands its ``eval.seed`` to the task's scene reset; the seed and the
     eval-identity block land in episode meta."""
