@@ -14,6 +14,7 @@ from positronic.dataset.transforms import image
 from positronic.dataset.transforms.episode import Derive, Get
 from positronic.drivers.roboarm import command
 from positronic.policy.codec import Codec, lerobot_action, lerobot_image, lerobot_state
+from positronic.policy.wrappers import ChunkedSchedule, ErrorRecovery
 
 IMAGE_WIDTH = 320
 IMAGE_HEIGHT = 176
@@ -253,15 +254,12 @@ _frame_stack = wrappers.temporal_frame_stack.override(
 )
 
 
-@cfn.config(
-    frame_stack=_frame_stack, error_recovery=wrappers.error_recovery, chunked_schedule=wrappers.chunked_schedule
-)
-def dreamzero_wrappers(frame_stack, error_recovery, chunked_schedule):
-    """Eval ``wrap`` for DreamZero: AR video context + error recovery + chunked scheduling.
+@cfn.config(frame_stack=_frame_stack)
+def dreamzero_wrappers(frame_stack):
+    """Eval ``wrap`` for DreamZero: error recovery, AR video context, chunked scheduling.
 
-    The frame stack samples the wrist/exterior cameras at ``FRAME_STACK_OFFSETS_SEC`` outside the
-    scheduling wrappers, so the server receives multi-frame context at the trained cadence; pair with
-    the DreamZero codec's full-chunk ``horizon``. Override ``--wrap.chunked_schedule`` to swap the
-    serving schedule (e.g. RTC) while keeping the frame stack.
+    The frame stack sits outside the scheduler so it records the wrist/exterior cameras every control
+    tick and substitutes a stack sampled at ``FRAME_STACK_OFFSETS_SEC`` at the trained cadence; pair it
+    with the DreamZero codec's full-chunk ``horizon``.
     """
-    return frame_stack | error_recovery | chunked_schedule
+    return ErrorRecovery() | frame_stack | ChunkedSchedule()

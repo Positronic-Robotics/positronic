@@ -103,10 +103,10 @@ class _FrameBuffer:
     """Time-ordered history of ``(timestamp, frames)`` entries, capped to the sampled window.
 
     ``frames`` is a dict of camera-key → image; every entry holds the same keys. ``append`` stores a
-    copy (camera frames are views into a producer-reused buffer) and drops entries older than the
-    oldest sampled offset, keeping one just beyond it so nearest-neighbor sampling still brackets it.
-    ``sample`` returns, per key, a ``(len(offsets_sec), H, W, 3)`` stack picked nearest to each offset;
-    early on it repeats the oldest frame.
+    copy (camera frames are views into a producer-reused buffer) and drops entries before the oldest
+    sampled offset, keeping the one at or before it. ``sample`` returns, per key, a
+    ``(len(offsets_sec), H, W, 3)`` stack holding, for each offset, the latest frame at or before that
+    time — carry-over, never the future; before enough history accumulates it repeats the oldest frame.
     """
 
     def __init__(self, offsets_sec: tuple[float, ...]):
@@ -124,17 +124,13 @@ class _FrameBuffer:
 
     def sample(self, now: float) -> dict[str, np.ndarray]:
         times = np.array([t for t, _ in self._entries])
-        picked = [self._entries[self._nearest(times, now + off)][1] for off in self._offsets_sec]
+        picked = [self._entries[self._at_or_before(times, now + off)][1] for off in self._offsets_sec]
         return {k: np.stack([frames[k] for frames in picked]) for k in picked[0]}
 
     @staticmethod
-    def _nearest(times: np.ndarray, target: float) -> int:
-        idx = int(np.searchsorted(times, target))
-        if idx == 0:
-            return 0
-        if idx >= len(times):
-            return len(times) - 1
-        return idx if times[idx] - target < target - times[idx - 1] else idx - 1
+    def _at_or_before(times: np.ndarray, target: float) -> int:
+        """Index of the latest frame at or before ``target``; clamps to the oldest when none precedes it."""
+        return max(int(np.searchsorted(times, target, side='right')) - 1, 0)
 
 
 class TemporalFrameStack(PolicyWrapper):
@@ -148,10 +144,10 @@ class TemporalFrameStack(PolicyWrapper):
     """
 
     class _Session(DelegatingSession):
-        def __init__(self, inner: Session, image_keys: tuple[str, ...], buffer: _FrameBuffer):
+        def __init__(self, inner: Session, image_keys: tuple[str, ...], offsets_sec: tuple[float, ...]):
             super().__init__(inner)
             self._image_keys = image_keys
-            self._buffer = buffer
+            self._buffer = _FrameBuffer(offsets_sec)
 
         def __call__(self, obs):
             now = _obs_time(obs)
@@ -167,7 +163,7 @@ class TemporalFrameStack(PolicyWrapper):
         self._offsets_sec = tuple(offsets_sec)
 
     def wrap_session(self, inner: Session, context, now: Now):
-        return TemporalFrameStack._Session(inner, self._image_keys, _FrameBuffer(self._offsets_sec))
+        return TemporalFrameStack._Session(inner, self._image_keys, self._offsets_sec)
 
 
 default_wrappers = ErrorRecovery() | ChunkedSchedule()

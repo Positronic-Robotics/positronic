@@ -2,15 +2,8 @@ import configuronic as cfn
 
 from positronic.policy.wrappers import ChunkedSchedule, ErrorRecovery, TemporalFrameStack
 
-
-@cfn.config()
-def chunked_schedule():
-    return ChunkedSchedule()
-
-
-@cfn.config()
-def error_recovery():
-    return ErrorRecovery()
+chunked_schedule = cfn.Config(ChunkedSchedule)
+error_recovery = cfn.Config(ErrorRecovery)
 
 
 @cfn.config()
