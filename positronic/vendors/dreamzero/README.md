@@ -25,10 +25,15 @@ Pick the backbone with `--backbone` at both train and serve time; **it must matc
 
 ## Zero-shot inference (wan2.1 DROID checkpoint)
 
-To try the pretrained DROID model with no training:
+To try the pretrained DROID model with no training. `vm-dreamzero` is a Positronic-internal Docker
+context for an H100 box; external users provision their own H100 and add a context (see
+[`docker/CONTEXTS.md`](../../../docker/CONTEXTS.md)), or use the [Nebius serve path](#3-serve-a-checkpoint)
+below. `CACHE_ROOT` must be the **remote** box's home directory. `positronic-inference` comes from
+`uv sync` (see [Installation](../../../README.md#installation)).
 
 ```bash
-# 1. Start an H100 box (see ../internal/scripts/start.sh) or use the Nebius serve path below.
+# 1. Start an H100 box (Positronic-internal: ../internal/scripts/start.sh dreamzero; otherwise
+#    provision your own H100 and add a docker context).
 # 2. Serve the default checkpoint (auto-downloaded on first start, ~10-20 min via HuggingFace).
 cd docker
 CACHE_ROOT=/home/vertix docker --context vm-dreamzero compose run --rm --service-ports dreamzero-server
@@ -44,14 +49,24 @@ The server owns the codec (`server` defaults to `codec=joints`), so the client s
 and receives decoded joint commands — **don't** pass `--policy.codec` here or it double-encodes and the
 first request fails. `--wrap` is client-side: it supplies the AR video context (`TemporalFrameStack`),
 which must run every control tick to record frames, so without it the model loses the multi-frame
-history it conditions on.
+history it conditions on. (`codec`/`backbone` defaults live in [`server.py`](./server.py);
+`dreamzero_wrappers` / `TemporalFrameStack` in [`codecs.py`](./codecs.py).) The
+[Inference Guide](../../../docs/inference.md) explains how `--policy=.remote` reaches a WebSocket server.
 
 ## Full pipeline (fine-tune your own checkpoint)
 
-The end-to-end loop is **convert → train → serve → infer → view**. Convert runs on CPU; train and
-serve run on H100. The cloud wrappers live in `workflows/nebius/` (see the `remote-training` skill and
-`workflows/nebius/README.md`); pass `NEBIUS_IMAGE_TAG=<tag>` to pin the image (CI pushes `:latest` and
-the commit SHA from `main` — pin to a SHA, e.g. `dc5e837`, for a reproducible long run).
+This is Positronic's standard [convert → train → serve → infer](../../../docs/training-workflow.md) loop.
+Convert runs on CPU; train and serve run on H100. The cloud wrappers live in `workflows/nebius/` — see
+[`workflows/nebius/README.md`](../../../workflows/nebius/README.md) for the one-time setup it assumes
+(Nebius CLI auth, S3 / MysteryBox credentials, the shared cache filesystem) and the `NEBIUS_*` overrides.
+The `s3://interim/…` and `s3://checkpoints/…` paths below are Positronic-internal buckets — substitute
+your own.
+
+**Image:** the wrappers pull `positro/dreamzero:${NEBIUS_IMAGE_TAG:-latest}`, which does not mount local
+source, so a code change needs a rebuild + push first — `make push-dreamzero-base` then
+`make push-dreamzero IMAGE_TAG=<tag>` (see [`docker/README.md`](../../../docker/README.md) /
+[`docker/Makefile`](../../../docker/Makefile)). CI pushes `:latest` and the `main` commit SHA
+(e.g. `dc5e837`); pin a SHA via `NEBIUS_IMAGE_TAG` for a reproducible long run.
 
 ### 1. Convert the dataset
 
@@ -69,8 +84,8 @@ bash workflows/nebius/convert.sh lerobot_0_3_3 \
 ### 2. Train
 
 `train.sh dreamzero <preset> [args]` runs `python -m positronic.vendors.dreamzero.train` as an H100
-job, streaming the dataset from `--input_path` via `pos3`. Presets fix backbone + architecture + GPU
-count:
+job, streaming the dataset from `--input_path`. Presets (defined in [`train.py`](./train.py)) fix
+backbone + architecture + GPU count:
 
 | Preset | Backbone | Arch | GPUs | Resumable |
 |--------|----------|------|------|-----------|
@@ -110,8 +125,9 @@ steps on one H100 at the observed throughput).
 
 ### 3. Serve a checkpoint
 
-The server downloads `--model_path` (an `s3://` checkpoint or HF repo) via `pos3` and **needs
-`--backbone` to match training**. Two paths:
+The server downloads `--model_path` (an `s3://` checkpoint or HF repo) and **needs `--backbone` to
+match training** (`server` config + defaults: [`server.py`](./server.py); the `dreamzero-server`
+compose service: [`docker/docker-compose.yml`](../../../docker/docker-compose.yml)). Two paths:
 
 ```bash
 # A. Nebius serverless endpoint (public IP, auto-released on stop)
@@ -141,7 +157,8 @@ uv run --locked positronic-inference sim \
 ```
 
 `<host>` is the Nebius endpoint IP or the docker context hostname (`vm-dreamzero`). Each episode records
-3 camera views + joint/EE/grip signals under `<output_dir>`.
+3 camera views + joint/EE/grip signals under `<output_dir>`. See the
+[Inference Guide](../../../docs/inference.md) for the remote-policy protocol and options.
 
 ### 5. View results
 
@@ -155,9 +172,10 @@ Point `--dataset.base.path` at a parent directory to compare several runs side b
 
 ## Codecs
 
-All four share the same observation encoder (3 cameras + joint state) and the same inference decode —
-the model emits a flat `(joints+grip)` vector that decodes to a `JointPosition` command. They differ
-only in how **training labels** are built:
+A [codec](../../../docs/codecs.md) maps raw recordings into the state/action space a model expects.
+DreamZero's codecs (source: [`codecs.py`](./codecs.py)) all share the same observation encoder
+(3 cameras + joint state) and the same inference decode — the model emits a flat `(joints+grip)` vector
+that decodes to a `JointPosition` command. They differ only in how **training labels** are built:
 
 | Codec | Training label | Use case |
 |-------|----------------|----------|
@@ -175,4 +193,5 @@ only in how **training labels** are built:
   chunk schedule with the AR frame-stack window
 - **Wire protocol**: roboarena WebSocket + msgpack-numpy
 - **DiT caching**: wan2.1 only (skipped for wan2.2)
-- **No fork needed**: Hydra YAML configs, injectable from outside
+- **No Positronic fork**: upstream DreamZero is used unmodified (pinned SHA in [`Dockerfile`](./Dockerfile));
+  configs are injected via Hydra YAML. No sibling `../dreamzero` checkout is needed — the image bakes it in.
