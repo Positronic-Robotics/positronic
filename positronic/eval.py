@@ -84,8 +84,7 @@ class Task:
 
     ``done`` is the optional terminating signal: a source that delivers a dict payload when the
     trial ends. The Harness reads it to stop the trial early and records the payload into the
-    episode's static data; ``None`` for tasks with no programmatic terminator (real evals, where
-    the operator stops).
+    episode's static data.
     """
 
     instruction: str

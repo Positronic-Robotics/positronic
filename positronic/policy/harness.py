@@ -126,11 +126,8 @@ class Harness(pimm.ControlSystem):
         self.directive = pimm.ControlSystemReceiver[Directive](self, default=None, maxsize=3)
         self.ds_command = pimm.ControlSystemEmitter[DsWriterCommand](self)
         self.robot_meta_in = pimm.ControlSystemReceiver(self, default={})
-        # Privileged stop-signal for self-driven trials: a fresh delivery within a trial's budget ends it,
+        # Privileged stop-signal: any delivery within a trial's time budget ends it,
         # recording ``eval.terminated`` True plus the delivered dict in the episode's static data.
-        # Edge-triggered on the message's ``updated`` flag, so a consumed value can't re-fire; the run loop
-        # reads it only while a deadline is live, so it never terminates (or leaks into) an attended episode.
-        # Unconnected, it never fires.
         self.done = pimm.ControlSystemReceiver[dict](self, default={})
 
     def _build_episode_meta(self, context: dict[str, Any]) -> dict[str, Any]:
