@@ -45,13 +45,12 @@ uv run --locked positronic-inference sim \
   --trial_count=2 --show_gui=True
 ```
 
-The server owns the codec (`server` defaults to `codec=joints`), so the client sends raw observations
-and receives decoded joint commands — **don't** pass `--policy.codec` here or it double-encodes and the
-first request fails. `--wrap` is client-side: it supplies the AR video context (`TemporalFrameStack`),
-which must run every control tick to record frames, so without it the model loses the multi-frame
-history it conditions on. (`codec`/`backbone` defaults live in [`server.py`](./server.py);
-`dreamzero_wrappers` / `TemporalFrameStack` in [`codecs.py`](./codecs.py).) The
-[Inference Guide](../../../docs/inference.md) explains how `--policy=.remote` reaches a WebSocket server.
+The server owns the codec, so you don't pass one client-side — it takes raw observations and returns
+decoded joint commands. The client-side piece that matters is `--wrap`: it supplies the model's
+autoregressive video context (`TemporalFrameStack`) and must run every control tick to record frames,
+so omitting it strips the multi-frame history the model conditions on. (Server config and defaults:
+[`server.py`](./server.py); wrappers: [`codecs.py`](./codecs.py); remote-policy protocol:
+[Inference Guide](../../../docs/inference.md).)
 
 ## Full pipeline (fine-tune your own checkpoint)
 
