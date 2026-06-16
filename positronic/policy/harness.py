@@ -113,9 +113,6 @@ class Harness(pimm.ControlSystem):
         # Self-driven trials are bounded by ``task.timeout``; attended drivers own termination
         # themselves, so directive-driven trials get no deadline.
         self._deadline: float | None = None
-        # A ``done`` delivered during the live trial, latched here with its recorded payload so the run
-        # loop and a mid-step recheck observe the same stop. None means no stop pending for this trial.
-        self._pending_stop: dict[str, Any] | None = None
 
         self._descriptor = embodiment.descriptor
         self.observations = pimm.ReceiverDict(self)
@@ -128,9 +125,9 @@ class Harness(pimm.ControlSystem):
         self.directive = pimm.ControlSystemReceiver[Directive](self, default=None, maxsize=3)
         self.ds_command = pimm.ControlSystemEmitter[DsWriterCommand](self)
         self.robot_meta_in = pimm.ControlSystemReceiver(self, default={})
-        # Privileged stop-signal: delivered (a fresh message) during a live trial, it ends the trial and
-        # records ``eval.terminated`` True plus the delivered dict in the episode's static data.
-        # Unconnected, it never fires.
+        # Privileged stop-signal: a fresh delivery during a live trial ends it, recording ``eval.terminated``
+        # True plus the delivered dict in the episode's static data. Edge-triggered on the message's
+        # ``updated`` flag, so a value consumed by a prior trial can't re-fire. Unconnected, it never fires.
         self.done = pimm.ControlSystemReceiver[dict](self, default={})
 
     def _build_episode_meta(self, context: dict[str, Any]) -> dict[str, Any]:
@@ -195,20 +192,6 @@ class Harness(pimm.ControlSystem):
         self._cancel_trajectories()
         self.ds_command.emit(DsWriterCommand.STOP(payload))
 
-    def _poll_done(self) -> None:
-        """Latch a freshly delivered ``done`` into ``_pending_stop`` so the run loop and a mid-step recheck
-        observe the same stop. A non-fresh read (nothing delivered, or a value latched earlier) is ignored."""
-        msg = self.done.read()
-        if msg.updated:
-            self._pending_stop = dict(msg.data)
-
-    def _reset_stop_signal(self) -> None:
-        """Begin a trial with no pending stop: forget the prior payload and discard any ``done`` queued
-        while idle, so only a delivery during the live trial terminates it."""
-        self._pending_stop = None
-        while self.done.read().updated:
-            pass
-
     def _handle_directive(self, directive: Directive, clock: pimm.Clock) -> Generator[pimm.Command, None, None]:
         """Handle a directive, yielding any necessary pauses; updates ``_running``."""
         match directive.type:
@@ -228,7 +211,6 @@ class Harness(pimm.ControlSystem):
                 # ``inference_latency`` rides the RUN context (and lands in episode meta with it).
                 self._inference_latency = self.context.get('inference_latency', False)
                 self._deadline = None  # set by the run loop for self-driven trials only
-                self._reset_stop_signal()
                 if self._session:
                     self._session.close()
                 self._session = self.policy.new_session(self.context)
@@ -327,12 +309,11 @@ class Harness(pimm.ControlSystem):
             yield pimm.Sleep(delay)
             actions = [{**a, 'timestamp': a['timestamp'] + delay} for a in actions]
             self._bump_schedule_end(delay)
-            self._poll_done()  # a ``done`` delivered during the latency sleep must drop this chunk
 
-        # Recheck termination: the latency sleep (or a slow inference call on a real clock) may have
-        # crossed the deadline or seen a ``done`` delivery. Drop the chunk rather than emit past the
-        # trial's end — the run loop fires the FINISH on its next cycle.
-        if self._pending_stop is not None or (self._deadline is not None and clock.now() >= self._deadline):
+        # Recheck the deadline: the latency sleep (or a slow inference call on a real clock) may have
+        # crossed it. Drop the chunk rather than emit past the advertised self-termination point —
+        # the run loop fires the timeout FINISH on its next cycle.
+        if self._deadline is not None and clock.now() >= self._deadline:
             return
 
         self._emit_commands(actions)
@@ -360,11 +341,11 @@ class Harness(pimm.ControlSystem):
                 # A live trial ends when ``done`` is delivered or on its time budget (self-driven only;
                 # attended trials carry no deadline). A delivered ``done`` records ``eval.terminated`` True
                 # plus its payload; a timeout records False.
-                self._poll_done()
+                done_msg = self.done.read()
                 timed_out = self._deadline is not None and clock.now() >= self._deadline
-                stopped = self._pending_stop is not None
-                if stopped or timed_out:
-                    payload = {**(self._pending_stop or {}), 'eval.terminated': stopped}
+                if done_msg.updated or timed_out:
+                    payload = dict(done_msg.data) if done_msg.updated else {}
+                    payload['eval.terminated'] = done_msg.updated
                     yield from self._handle_directive(Directive.FINISH(**payload), clock)
 
             try:
