@@ -59,8 +59,8 @@ class Harness(pimm.ControlSystem):
     plan is exhausted, so the unattended path needs no driver at all. Attended drivers own episode
     termination themselves; directive-driven trials get no deadline.
 
-    Either path ends early when the privileged ``done`` stop-signal goes truthy: a trial that ends
-    on it records ``eval.terminated`` True, a timed-out one False.
+    Either path ends early when the privileged ``done`` signal is delivered: the trial records
+    ``eval.terminated`` True and the delivered payload in its static data, a timed-out one False.
 
     The ``Embodiment`` provides the observation serializers (which own the canonical key names),
     the command channels, and the home action; the harness reads them to assemble inputs and demux
@@ -125,10 +125,10 @@ class Harness(pimm.ControlSystem):
         self.directive = pimm.ControlSystemReceiver[Directive](self, default=None, maxsize=3)
         self.ds_command = pimm.ControlSystemEmitter[DsWriterCommand](self)
         self.robot_meta_in = pimm.ControlSystemReceiver(self, default={})
-        # Privileged stop-signal, edge-triggered: a freshly emitted truthy value ends the live trial
-        # with ``eval.terminated`` True (the timeout path sets it False). A value latched from a prior
-        # trial reads as not-updated and cannot re-fire. Defaults False, so an unconnected port is inert.
-        self.done = pimm.ControlSystemReceiver[bool](self, default=False)
+        # Privileged stop-signal, edge-triggered: delivering it (a fresh ``updated`` message) ends the
+        # live trial and records ``eval.terminated`` True plus the delivered dict in the episode's static
+        # data. A latch from a prior trial reads as not-updated and cannot re-fire; unconnected, it never fires.
+        self.done = pimm.ControlSystemReceiver[dict](self, default={})
 
     def _build_episode_meta(self, context: dict[str, Any]) -> dict[str, Any]:
         meta = dict(self._embodiment.static_meta)
@@ -338,13 +338,15 @@ class Harness(pimm.ControlSystem):
                 self._deadline = clock.now() + self._task.timeout
 
             if self._running:
-                # A live trial ends on a freshly emitted stop-signal or on its time budget (self-driven
-                # only; attended trials carry no deadline). ``eval.terminated`` records which.
-                stop_msg = self.done.read()
-                stop = stop_msg.updated and bool(stop_msg.data)
+                # A live trial ends when ``done`` is delivered (a fresh message) or on its time budget
+                # (self-driven only; attended trials carry no deadline). A delivered ``done`` records
+                # ``eval.terminated`` True plus its payload; a timeout records False.
+                done_msg = self.done.read()
                 timed_out = self._deadline is not None and clock.now() >= self._deadline
-                if stop or timed_out:
-                    yield from self._handle_directive(Directive.FINISH(**{'eval.terminated': stop}), clock)
+                if done_msg.updated or timed_out:
+                    payload = dict(done_msg.data) if done_msg.updated else {}
+                    payload['eval.terminated'] = done_msg.updated
+                    yield from self._handle_directive(Directive.FINISH(**payload), clock)
 
             try:
                 if self._running:

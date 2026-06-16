@@ -475,7 +475,7 @@ def test_trial_timeout_self_terminates(world):
 
 @pytest.mark.timeout(3.0)
 def test_trial_stop_signal_terminates(world):
-    """The privileged ``done`` signal ends a self-driven trial early: terminated=True, robot homed."""
+    """Delivering the privileged ``done`` ends a trial early: terminated=True, payload recorded, homed."""
     policy = StubPolicy()
     # Timeout far in the future so the stop-signal, not the clock, ends the trial.
     harness = Harness(policy, make_embodiment(), task=Task(instruction='test', timeout=100.0), trials=[{}])
@@ -487,19 +487,21 @@ def test_trial_stop_signal_terminates(world):
     # Trial is live and unbounded by the clock: nothing committed yet.
     assert not [c for c in _ds_commands(p) if c.type == DsWriterCommandType.STOP_EPISODE]
 
-    done_em.emit(True)
+    done_em.emit({'eval.success': True})
     drive_scheduler(scheduler, steps=10)
 
     stops = [c for c in _ds_commands(p) if c.type == DsWriterCommandType.STOP_EPISODE]
     assert len(stops) == 1
     assert stops[0].static_data['eval.terminated'] is True
+    assert stops[0].static_data['eval.success'] is True  # the delivered payload lands in static data
     assert isinstance(_last_command(p), Reset)
 
 
 @pytest.mark.timeout(3.0)
 def test_stop_signal_does_not_latch_across_trials(world):
-    """A ``done`` that ended one trial must not instantly finalize the next: the stop-signal is
-    edge-triggered, so the value latched in the receiver from trial 0 cannot re-fire on trial 1."""
+    """A ``done`` that ended one trial must not instantly finalize the next: termination is the
+    delivery edge, so the message latched in the receiver from trial 0 cannot re-fire on trial 1.
+    An empty payload still terminates — delivery, not truthiness, is the signal."""
     policy = StubPolicy()
     harness = Harness(policy, make_embodiment(), task=Task(instruction='t', timeout=100.0), trials=[{}, {}])
     p = _pair_all(world, harness)
@@ -510,15 +512,15 @@ def test_stop_signal_does_not_latch_across_trials(world):
 
     scheduler = world.start([harness])
     drive_scheduler(scheduler, steps=5)
-    done_em.emit(True)  # end trial 0
+    done_em.emit({})  # end trial 0
     drive_scheduler(scheduler, steps=10)
     assert stop_count() == 1
 
-    # Trial 1 has auto-started with trial 0's True still latched in the receiver; it must keep running.
+    # Trial 1 has auto-started with trial 0's message still latched in the receiver; it must keep running.
     drive_scheduler(scheduler, steps=10)
     assert stop_count() == 1
 
-    done_em.emit(True)  # end trial 1
+    done_em.emit({})  # end trial 1
     drive_scheduler(scheduler, steps=10)
     stops = [c for c in _ds_commands(p) if c.type == DsWriterCommandType.STOP_EPISODE]
     assert len(stops) == 2
