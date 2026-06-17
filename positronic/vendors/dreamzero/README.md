@@ -112,9 +112,9 @@ CACHE_ROOT=/home/vertix docker --context <h100> compose run --rm dreamzero-train
 
 Checkpoints land at `s3://checkpoints/sim_stack/dreamzero/<exp_name>/checkpoint-<step>`.
 
-**Warm-start** from a prior run's weights (fresh optimizer + schedule) — the only way to extend an
-`h100x1` full fine-tune, which uses `save_only_model=true` and can't restore DeepSpeed state, so a run must
-reach `--max_steps` in one shot:
+**Warm-start** from a prior run's weights to continue training. The DreamZero trainer does not persist
+optimizer state, so resuming restarts Adam from scratch (the optimizer state is lost) — warm-starting just
+loads the weights and accepts a fresh optimizer + schedule, so aim to reach `--max_steps` in one run:
 
 ```bash
   ... dreamzero-train wan22_full_h100x1 ... \
@@ -183,8 +183,7 @@ that decodes to a `JointPosition` command. They differ only in how **training la
   codec's intermediate `(320, 176)` does not need a per-backbone override.
 - **Action horizon**: 24 timesteps per inference; the `dreamzero_wrappers` re-query aligns the
   chunk schedule with the AR frame-stack window
-- **Wire protocol**: roboarena WebSocket + msgpack-numpy
-- **DiT caching**: wan2.1 only (skipped for wan2.2)
+- **Wire protocol**: Positronic's standard WebSocket protocol — see [Connect Your Model](../../../docs/connect-your-model.md)
 - **No Positronic fork**: upstream DreamZero is used unmodified (pinned SHA in [`Dockerfile`](./Dockerfile));
   configs are injected via Hydra YAML. No sibling `../dreamzero` checkout is needed — the image bakes it in.
 
