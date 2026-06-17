@@ -23,9 +23,9 @@ Pick the backbone with `--backbone` at both train and serve time; **it must matc
 | **Inference** | 1× H100 (80GB) | wan2.2 (5B) ≈ half the VRAM of wan2.1 (14B, ~52GB bf16) |
 | **Training** | 1× or 8× H100 | Full fine-tune or LoRA, DeepSpeed ZeRO-2. Single-H100 full fine-tune works (see presets) |
 
-Train and serve run on an H100 box you reach through a Docker context (see
-[`docker/CONTEXTS.md`](../../../docker/CONTEXTS.md)). The examples below call it `--context <h100>` —
-substitute your own context name. (The Nebius serverless alternative is in the [Appendix](#appendix-nebius-serverless).)
+Train and serve run on an H100 box you reach through a Docker context. The examples below call it
+`--context <h100>` — substitute your own context name. (The Nebius serverless alternative is in the
+[Appendix](#appendix-nebius-serverless).)
 
 ## Zero-shot inference (wan2.1 DROID checkpoint)
 
@@ -58,14 +58,13 @@ the Docker Compose services in [`docker/docker-compose.yml`](../../../docker/doc
 H100 box. Run the `docker compose` commands from the `docker/` directory.
 
 **Prerequisites:**
-- An H100 box reachable via a Docker context ([`docker/CONTEXTS.md`](../../../docker/CONTEXTS.md)); set
-  `CACHE_ROOT` to that box's home so the `~/.cache` and `~/.aws` mounts resolve (S3 credentials come from
-  the mounted `~/.aws`).
-- **Images** are pulled pre-built and do **not** mount local source, so a code change needs a rebuild +
-  push first: convert runs on `positro/positronic` (rebuild with `make push-training`); train and serve run
-  on `positro/dreamzero` (rebuild with `make push-dreamzero-base` then `make push-dreamzero`). A change to
-  `codecs.py` touches both. CI pushes `:latest` and the `main` commit SHA; pin a SHA via `IMAGE_TAG`
-  (e.g. `IMAGE_TAG=dc5e837`) for a reproducible run. See [`docker/Makefile`](../../../docker/Makefile).
+- An H100 box reachable via a Docker context; set `CACHE_ROOT` to that box's home so the `~/.cache` and
+  `~/.aws` mounts resolve (S3 credentials come from the mounted `~/.aws`).
+- **Images**: the commands pull the public prebuilt images by default — `positro/positronic` (convert) and
+  `positro/dreamzero` (train/serve) at the production `:latest` tag — so there is nothing to build. Only if
+  you have **local repo changes** to test do you build and push your own image and pass `IMAGE_TAG=<your-tag>`;
+  otherwise omit it. A `codecs.py` change affects both images. (Maintainer build targets:
+  [`docker/Makefile`](../../../docker/Makefile).)
 - The `s3://interim/…` / `s3://checkpoints/…` paths below are Positronic-internal buckets — substitute your own.
 
 ### 1. Convert the dataset
@@ -87,6 +86,10 @@ CACHE_ROOT=/home/vertix docker --context <h100> compose run --rm lerobot-0_3_3-c
 `dreamzero-train` runs `python -m positronic.vendors.dreamzero.train`, streaming the dataset from
 `--input_path`. Presets (defined in [`train.py`](./train.py)) fix backbone + architecture + GPU count:
 
+> **Only `wan22_full` (wan2.2 full fine-tune) is validated** — that is the configuration these docs were
+> built from. We did **not** get LoRA working, and the `wan2.1` presets are untested here. The other presets
+> exist in code but should be treated as unverified.
+
 | Preset | Backbone | Arch | GPUs | Resumable |
 |--------|----------|------|------|-----------|
 | `wan22_full_h100x1` | wan2.2 (5B) | full | 1 | No — warm-start to continue |
@@ -99,7 +102,7 @@ CACHE_ROOT=/home/vertix docker --context <h100> compose run --rm lerobot-0_3_3-c
 
 ```bash
 cd docker
-CACHE_ROOT=/home/vertix IMAGE_TAG=dc5e837 docker --context <h100> compose run --rm dreamzero-train \
+CACHE_ROOT=/home/vertix docker --context <h100> compose run --rm dreamzero-train \
   wan22_full_h100x1 \
   --input_path=s3://interim/sim_stack/dreamzero/joints_ik \
   --output_path=s3://checkpoints/sim_stack/dreamzero/ \
@@ -128,7 +131,7 @@ API on `8000`:
 
 ```bash
 cd docker
-CACHE_ROOT=/home/vertix IMAGE_TAG=dc5e837 docker --context <h100> compose run --rm --service-ports dreamzero-server \
+CACHE_ROOT=/home/vertix docker --context <h100> compose run --rm --service-ports dreamzero-server \
   --model_path=s3://checkpoints/sim_stack/dreamzero/<exp_name>/checkpoint-<step> \
   --backbone=wan2.2
 ```
@@ -190,8 +193,8 @@ that decodes to a `JointPosition` command. They differ only in how **training la
 If you run on Nebius serverless instead of your own H100 box, the **same recipe** (same presets, codec, and
 args) goes through the `workflows/nebius/*.sh` wrappers — Jobs for convert/train, an Endpoint for serving.
 See [`workflows/nebius/README.md`](../../../workflows/nebius/README.md) for the one-time setup (Nebius CLI
-auth, S3 / MysteryBox credentials, the shared cache filesystem) and `NEBIUS_*` overrides; pin the image with
-`NEBIUS_IMAGE_TAG=<sha>`.
+auth, S3 / MysteryBox credentials, the shared cache filesystem) and `NEBIUS_*` overrides. It uses the
+production image by default; set `NEBIUS_IMAGE_TAG=<tag>` only to test a specific build.
 
 ```bash
 # Convert (CPU job)
@@ -201,7 +204,7 @@ bash workflows/nebius/convert.sh lerobot_0_3_3 \
   --output_dir=s3://interim/sim_stack/dreamzero/joints_ik/
 
 # Train (H100 job; ~3 days for 30k steps on one H100 — size the timeout accordingly)
-NEBIUS_IMAGE_TAG=dc5e837 NEBIUS_JOB_TIMEOUT=96h \
+NEBIUS_JOB_TIMEOUT=96h \
 bash workflows/nebius/train.sh dreamzero wan22_full_h100x1 \
   --input_path=s3://interim/sim_stack/dreamzero/joints_ik \
   --output_path=s3://checkpoints/sim_stack/dreamzero/ \
@@ -209,7 +212,7 @@ bash workflows/nebius/train.sh dreamzero wan22_full_h100x1 \
   --max_steps=30000 --save_steps=2500 --gradient_accumulation_steps=4 --save_total_limit=9999
 
 # Serve (H100 endpoint; the public endpoint is exposed on :8000)
-NEBIUS_IMAGE_TAG=dc5e837 bash workflows/nebius/serve.sh dreamzero <endpoint-name> \
+bash workflows/nebius/serve.sh dreamzero <endpoint-name> \
   --model_path=s3://checkpoints/sim_stack/dreamzero/<exp_name>/checkpoint-<step> \
   --backbone=wan2.2
 # ... infer against the printed endpoint IP with --policy.port=8000, then tear down:
