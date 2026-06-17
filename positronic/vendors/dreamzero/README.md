@@ -23,24 +23,23 @@ Pick the backbone with `--backbone` at both train and serve time; **it must matc
 | **Inference** | 1× H100 (80GB) | wan2.2 (5B) ≈ half the VRAM of wan2.1 (14B, ~52GB bf16) |
 | **Training** | 1× or 8× H100 | Full fine-tune or LoRA, DeepSpeed ZeRO-2. Single-H100 full fine-tune works (see presets) |
 
+Train and serve run on an H100 box you reach through a Docker context (see
+[`docker/CONTEXTS.md`](../../../docker/CONTEXTS.md)). The examples below call it `--context <h100>` —
+substitute your own context name. (The Nebius serverless alternative is in the [Appendix](#appendix-nebius-serverless).)
+
 ## Zero-shot inference (wan2.1 DROID checkpoint)
 
-To try the pretrained DROID model with no training. `vm-dreamzero` is a Positronic-internal Docker
-context for an H100 box; external users provision their own H100 and add a context (see
-[`docker/CONTEXTS.md`](../../../docker/CONTEXTS.md)), or use the [Nebius serve path](#3-serve-a-checkpoint)
-below. `CACHE_ROOT` must be the **remote** box's home directory. `positronic-inference` comes from
-`uv sync` (see [Installation](../../../README.md#installation)).
+To try the pretrained DROID model with no training. `positronic-inference` comes from `uv sync` (see
+[Installation](../../../README.md#installation)); `CACHE_ROOT` must be the **remote** box's home directory.
 
 ```bash
-# 1. Start an H100 box (Positronic-internal: ../internal/scripts/start.sh dreamzero; otherwise
-#    provision your own H100 and add a docker context).
-# 2. Serve the default checkpoint (auto-downloaded on first start, ~10-20 min via HuggingFace).
+# Serve the default checkpoint on your H100 box (auto-downloaded on first start, ~10-20 min via HuggingFace).
 cd docker
-CACHE_ROOT=/home/vertix docker --context vm-dreamzero compose run --rm --service-ports dreamzero-server
+CACHE_ROOT=/home/vertix docker --context <h100> compose run --rm --service-ports dreamzero-server
 
-# 3. Run sim inference locally (only inference is remote; MuJoCo runs on your machine).
+# Run sim inference locally (only inference is remote; MuJoCo runs on your machine).
 uv run --locked positronic-inference sim \
-  --policy=.remote --policy.host=vm-dreamzero --policy.port=8000 \
+  --policy=.remote --policy.host=<h100> --policy.port=8000 \
   --wrap=@positronic.vendors.dreamzero.codecs.dreamzero_wrappers \
   --trial_count=2 --show_gui=True
 ```
@@ -54,27 +53,30 @@ so omitting it strips the multi-frame history the model conditions on. (Server c
 
 ## Full pipeline (fine-tune your own checkpoint)
 
-This is Positronic's standard [convert → train → serve → infer](../../../docs/training-workflow.md) loop.
-Convert runs on CPU; train and serve run on H100. The cloud wrappers live in `workflows/nebius/` — see
-[`workflows/nebius/README.md`](../../../workflows/nebius/README.md) for the one-time setup it assumes
-(Nebius CLI auth, S3 / MysteryBox credentials, the shared cache filesystem) and the `NEBIUS_*` overrides.
-The `s3://interim/…` and `s3://checkpoints/…` paths below are Positronic-internal buckets — substitute
-your own.
+The end-to-end loop — [convert → train → serve → infer](../../../docs/training-workflow.md) — runs through
+the Docker Compose services in [`docker/docker-compose.yml`](../../../docker/docker-compose.yml) on your
+H100 box. Run the `docker compose` commands from the `docker/` directory.
 
-**Image:** the wrappers pull `positro/dreamzero:${NEBIUS_IMAGE_TAG:-latest}`, which does not mount local
-source, so a code change needs a rebuild + push first — `make push-dreamzero-base` then
-`make push-dreamzero IMAGE_TAG=<tag>` (see [`docker/README.md`](../../../docker/README.md) /
-[`docker/Makefile`](../../../docker/Makefile)). CI pushes `:latest` and the `main` commit SHA
-(e.g. `dc5e837`); pin a SHA via `NEBIUS_IMAGE_TAG` for a reproducible long run.
+**Prerequisites:**
+- An H100 box reachable via a Docker context ([`docker/CONTEXTS.md`](../../../docker/CONTEXTS.md)); set
+  `CACHE_ROOT` to that box's home so the `~/.cache` and `~/.aws` mounts resolve (S3 credentials come from
+  the mounted `~/.aws`).
+- **Images** are pulled pre-built and do **not** mount local source, so a code change needs a rebuild +
+  push first: convert runs on `positro/positronic` (rebuild with `make push-training`); train and serve run
+  on `positro/dreamzero` (rebuild with `make push-dreamzero-base` then `make push-dreamzero`). A change to
+  `codecs.py` touches both. CI pushes `:latest` and the `main` commit SHA; pin a SHA via `IMAGE_TAG`
+  (e.g. `IMAGE_TAG=dc5e837`) for a reproducible run. See [`docker/Makefile`](../../../docker/Makefile).
+- The `s3://interim/…` / `s3://checkpoints/…` paths below are Positronic-internal buckets — substitute your own.
 
 ### 1. Convert the dataset
 
-The DreamZero codecs reuse the shared `lerobot_0_3_3` converter. The sim stack-cubes dataset is
-converted with the `joints_ik_sim` codec (joint targets reconstructed from recorded EE-pose targets
-via the `dm_control` IK solver):
+The DreamZero codecs reuse the shared `lerobot_0_3_3` converter (a CPU step — run it on any box, or locally
+with `uv run`). The sim stack-cubes dataset is converted with the `joints_ik_sim` codec (joint targets
+reconstructed from recorded EE-pose targets via the `dm_control` IK solver):
 
 ```bash
-bash workflows/nebius/convert.sh lerobot_0_3_3 \
+cd docker
+CACHE_ROOT=/home/vertix docker --context <h100> compose run --rm lerobot-0_3_3-convert convert \
   --dataset.dataset=@positronic.cfg.ds.sim.sim_stack_cubes \
   --dataset.codec=@positronic.vendors.dreamzero.codecs.joints_ik_sim \
   --output_dir=s3://interim/sim_stack/dreamzero/joints_ik/
@@ -82,9 +84,8 @@ bash workflows/nebius/convert.sh lerobot_0_3_3 \
 
 ### 2. Train
 
-`train.sh dreamzero <preset> [args]` runs `python -m positronic.vendors.dreamzero.train` as an H100
-job, streaming the dataset from `--input_path`. Presets (defined in [`train.py`](./train.py)) fix
-backbone + architecture + GPU count:
+`dreamzero-train` runs `python -m positronic.vendors.dreamzero.train`, streaming the dataset from
+`--input_path`. Presets (defined in [`train.py`](./train.py)) fix backbone + architecture + GPU count:
 
 | Preset | Backbone | Arch | GPUs | Resumable |
 |--------|----------|------|------|-----------|
@@ -94,14 +95,12 @@ backbone + architecture + GPU count:
 | `wan22_lora_h100x8` | wan2.2 (5B) | LoRA | 8 | Yes (optimizer restored) |
 | `wan21_*` | wan2.1 (14B) | full / LoRA | 1 / 8 | As above |
 
-Multi-GPU presets need a matching Nebius preset (`*_h100x8` runs `torchrun --nproc_per_node=8`, so set
-`NEBIUS_PRESET=8gpu-128vcpu-1600gb`).
-
 **Fresh run** (from the base backbone):
 
 ```bash
-NEBIUS_IMAGE_TAG=dc5e837 NEBIUS_JOB_TIMEOUT=96h \
-bash workflows/nebius/train.sh dreamzero wan22_full_h100x1 \
+cd docker
+CACHE_ROOT=/home/vertix IMAGE_TAG=dc5e837 docker --context <h100> compose run --rm dreamzero-train \
+  wan22_full_h100x1 \
   --input_path=s3://interim/sim_stack/dreamzero/joints_ik \
   --output_path=s3://checkpoints/sim_stack/dreamzero/ \
   --exp_name=<exp_name> \
@@ -111,53 +110,43 @@ bash workflows/nebius/train.sh dreamzero wan22_full_h100x1 \
 Checkpoints land at `s3://checkpoints/sim_stack/dreamzero/<exp_name>/checkpoint-<step>`.
 
 **Warm-start** from a prior run's weights (fresh optimizer + schedule) — the only way to extend an
-`h100x1` full fine-tune, since it can't restore DeepSpeed state:
+`h100x1` full fine-tune, which uses `save_only_model=true` and can't restore DeepSpeed state, so a run must
+reach `--max_steps` in one shot:
 
 ```bash
-  ... wan22_full_h100x1 ... \
+  ... dreamzero-train wan22_full_h100x1 ... \
   --init_from_checkpoint=s3://checkpoints/sim_stack/dreamzero/<prior_exp>/checkpoint-<step>
 ```
 
-`h100x1` full fine-tune uses `save_only_model=true` (skips DeepSpeed's ~91GB native checkpoint), so a
-run must reach `--max_steps` in one shot — size `NEBIUS_JOB_TIMEOUT` accordingly (~3 days for 30k
-steps on one H100 at the observed throughput).
+Multi-GPU presets (`*_h100x8`) run `torchrun --nproc_per_node=8`, so use them on an 8-GPU box.
 
 ### 3. Serve a checkpoint
 
-The server downloads `--model_path` (an `s3://` checkpoint or HF repo) and **needs `--backbone` to
-match training** (`server` config + defaults: [`server.py`](./server.py); the `dreamzero-server`
-compose service: [`docker/docker-compose.yml`](../../../docker/docker-compose.yml)). Two paths:
+`dreamzero-server` downloads `--model_path` (an `s3://` checkpoint or HF repo) and **needs `--backbone` to
+match training** (config + defaults: [`server.py`](./server.py)). `--service-ports` publishes the WebSocket
+API on `8000`:
 
 ```bash
-# A. Nebius serverless endpoint (public IP, auto-released on stop)
-NEBIUS_IMAGE_TAG=dc5e837 bash workflows/nebius/serve.sh dreamzero <endpoint-name> \
-  --model_path=s3://checkpoints/sim_stack/dreamzero/<exp_name>/checkpoint-<step> \
-  --backbone=wan2.2
-# ... run inference against the printed IP, then:
-bash workflows/nebius/stop.sh <endpoint-name>
-
-# B. Docker compose on a GPU box (no per-hour serverless cost)
 cd docker
-CACHE_ROOT=/home/vertix IMAGE_TAG=dc5e837 \
-docker --context vm-dreamzero compose run --rm --service-ports dreamzero-server \
+CACHE_ROOT=/home/vertix IMAGE_TAG=dc5e837 docker --context <h100> compose run --rm --service-ports dreamzero-server \
   --model_path=s3://checkpoints/sim_stack/dreamzero/<exp_name>/checkpoint-<step> \
   --backbone=wan2.2
 ```
 
-Sanity-check once warm: `curl http://<host>:8000/api/v1/models` → `{"models": ["<model_path>"]}`.
+Sanity-check once warm: `curl http://<h100>:8000/api/v1/models` → `{"models": ["<model_path>"]}`.
 
 ### 4. Run sim inference
 
 ```bash
 uv run --locked positronic-inference sim \
-  --policy=.remote --policy.host=<host> --policy.port=8000 \
+  --policy=.remote --policy.host=<h100> --policy.port=8000 \
   --wrap=@positronic.vendors.dreamzero.codecs.dreamzero_wrappers \
   --trial_count=<N> --output_dir=<dir-or-s3-path>
 ```
 
-`<host>` is the Nebius endpoint IP or the docker context hostname (`vm-dreamzero`). Each episode records
-3 camera views + joint/EE/grip signals under `<output_dir>`. See the
-[Inference Guide](../../../docs/inference.md) for the remote-policy protocol and options.
+Sim runs locally on your machine; only inference is remote. Each episode records 3 camera views +
+joint/EE/grip signals under `<output_dir>`. See the [Inference Guide](../../../docs/inference.md) for the
+remote-policy protocol and options.
 
 ### 5. View results
 
@@ -187,10 +176,42 @@ that decodes to a `JointPosition` command. They differ only in how **training la
 
 - **Action space**: absolute joint positions (7 DoF) + gripper (1)
 - **Observation**: 3 cameras (2 exterior + 1 wrist) + joint state + language prompt; 320×160 (wan2.2),
-  320×176 (wan2.1)
+  320×176 (wan2.1). The wan2.2 trainer sets `image_resolution_height=160` and resizes at load, so the
+  codec's intermediate `(320, 176)` does not need a per-backbone override.
 - **Action horizon**: 24 timesteps per inference; the `dreamzero_wrappers` re-query aligns the
   chunk schedule with the AR frame-stack window
 - **Wire protocol**: roboarena WebSocket + msgpack-numpy
 - **DiT caching**: wan2.1 only (skipped for wan2.2)
 - **No Positronic fork**: upstream DreamZero is used unmodified (pinned SHA in [`Dockerfile`](./Dockerfile));
   configs are injected via Hydra YAML. No sibling `../dreamzero` checkout is needed — the image bakes it in.
+
+## Appendix: Nebius serverless
+
+If you run on Nebius serverless instead of your own H100 box, the **same recipe** (same presets, codec, and
+args) goes through the `workflows/nebius/*.sh` wrappers — Jobs for convert/train, an Endpoint for serving.
+See [`workflows/nebius/README.md`](../../../workflows/nebius/README.md) for the one-time setup (Nebius CLI
+auth, S3 / MysteryBox credentials, the shared cache filesystem) and `NEBIUS_*` overrides; pin the image with
+`NEBIUS_IMAGE_TAG=<sha>`.
+
+```bash
+# Convert (CPU job)
+bash workflows/nebius/convert.sh lerobot_0_3_3 \
+  --dataset.dataset=@positronic.cfg.ds.sim.sim_stack_cubes \
+  --dataset.codec=@positronic.vendors.dreamzero.codecs.joints_ik_sim \
+  --output_dir=s3://interim/sim_stack/dreamzero/joints_ik/
+
+# Train (H100 job; ~3 days for 30k steps on one H100 — size the timeout accordingly)
+NEBIUS_IMAGE_TAG=dc5e837 NEBIUS_JOB_TIMEOUT=96h \
+bash workflows/nebius/train.sh dreamzero wan22_full_h100x1 \
+  --input_path=s3://interim/sim_stack/dreamzero/joints_ik \
+  --output_path=s3://checkpoints/sim_stack/dreamzero/ \
+  --exp_name=<exp_name> \
+  --max_steps=30000 --save_steps=2500 --gradient_accumulation_steps=4 --save_total_limit=9999
+
+# Serve (H100 endpoint; the public endpoint is exposed on :8000)
+NEBIUS_IMAGE_TAG=dc5e837 bash workflows/nebius/serve.sh dreamzero <endpoint-name> \
+  --model_path=s3://checkpoints/sim_stack/dreamzero/<exp_name>/checkpoint-<step> \
+  --backbone=wan2.2
+# ... infer against the printed endpoint IP with --policy.port=8000, then tear down:
+bash workflows/nebius/stop.sh <endpoint-name>
+```
