@@ -30,12 +30,14 @@ Train and serve run on an H100 box you reach through a Docker context. The examp
 ## Zero-shot inference (wan2.1 DROID checkpoint)
 
 To try the pretrained DROID model with no training. `positronic-inference` comes from `uv sync` (see
-[Installation](../../../README.md#installation)); `CACHE_ROOT` must be the **remote** box's home directory.
+[Installation](../../../README.md#installation)). Replace `<user>` with your username on the H100 box —
+`CACHE_ROOT` is that box's home, where the mounted `~/.cache` and `~/.aws` live (more in
+[Prerequisites](#full-pipeline-fine-tune-your-own-checkpoint) below).
 
 ```bash
 # Serve the default checkpoint on your H100 box (auto-downloaded on first start, ~10-20 min via HuggingFace).
 cd docker
-CACHE_ROOT=/home/vertix docker --context <h100> compose run --rm --service-ports dreamzero-server
+CACHE_ROOT=/home/<user> docker --context <h100> compose run --rm --service-ports dreamzero-server
 
 # Run sim inference locally (only inference is remote; MuJoCo runs on your machine).
 uv run --locked positronic-inference sim \
@@ -58,8 +60,10 @@ the Docker Compose services in [`docker/docker-compose.yml`](../../../docker/doc
 H100 box. Run the `docker compose` commands from the `docker/` directory.
 
 **Prerequisites:**
-- An H100 box reachable via a Docker context; set `CACHE_ROOT` to that box's home so the `~/.cache` and
-  `~/.aws` mounts resolve (S3 credentials come from the mounted `~/.aws`).
+- An H100 box reachable via a Docker context. The compose services mount `~/.cache` and `~/.aws` from
+  `CACHE_ROOT` (defaults to `$HOME`). With a **remote** context `$HOME` expands to *your* machine, so set
+  `CACHE_ROOT` to the box's home — `/home/<user>` for your account on the box (e.g. `/home/ubuntu`). Run the
+  commands on the box itself and you can omit it. S3 credentials come from the mounted `~/.aws`.
 - **Images**: the commands pull the public prebuilt images by default — `positro/positronic` (convert) and
   `positro/dreamzero` (train/serve) at the production `:latest` tag — so there is nothing to build. Only if
   you have **local repo changes** to test do you build and push your own image and pass `IMAGE_TAG=<your-tag>`;
@@ -75,7 +79,7 @@ reconstructed from recorded EE-pose targets via the `dm_control` IK solver):
 
 ```bash
 cd docker
-CACHE_ROOT=/home/vertix docker --context <h100> compose run --rm lerobot-0_3_3-convert convert \
+CACHE_ROOT=/home/<user> docker --context <h100> compose run --rm lerobot-0_3_3-convert convert \
   --dataset.dataset=@positronic.cfg.ds.sim.sim_stack_cubes \
   --dataset.codec=@positronic.vendors.dreamzero.codecs.joints_ik_sim \
   --output_dir=s3://interim/sim_stack/dreamzero/joints_ik/
@@ -102,7 +106,7 @@ CACHE_ROOT=/home/vertix docker --context <h100> compose run --rm lerobot-0_3_3-c
 
 ```bash
 cd docker
-CACHE_ROOT=/home/vertix docker --context <h100> compose run --rm dreamzero-train \
+CACHE_ROOT=/home/<user> docker --context <h100> compose run --rm dreamzero-train \
   wan22_full_h100x1 \
   --input_path=s3://interim/sim_stack/dreamzero/joints_ik \
   --output_path=s3://checkpoints/sim_stack/dreamzero/ \
@@ -131,7 +135,7 @@ API on `8000`:
 
 ```bash
 cd docker
-CACHE_ROOT=/home/vertix docker --context <h100> compose run --rm --service-ports dreamzero-server \
+CACHE_ROOT=/home/<user> docker --context <h100> compose run --rm --service-ports dreamzero-server \
   --model_path=s3://checkpoints/sim_stack/dreamzero/<exp_name>/checkpoint-<step> \
   --backbone=wan2.2
 ```
