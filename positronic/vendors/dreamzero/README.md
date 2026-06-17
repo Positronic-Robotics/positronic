@@ -23,9 +23,10 @@ Pick the backbone with `--backbone` at both train and serve time; **it must matc
 | **Inference** | 1× H100 (80GB) | wan2.2 (5B) ≈ half the VRAM of wan2.1 (14B, ~52GB bf16) |
 | **Training** | 1× or 8× H100 | Full fine-tune or LoRA, DeepSpeed ZeRO-2. Single-H100 full fine-tune works (see presets) |
 
-Train and serve run on an H100 box you reach through a Docker context. The examples below call it
-`--context <h100>` — substitute your own context name. (The Nebius serverless alternative is in the
-[Appendix](#appendix-nebius-serverless).)
+Train and serve run on an H100 box you reach through a Docker context. Examples use `<h100>` for the Docker
+**context** name and `<h100-host>` for the box's **hostname/IP** (what the inference client connects to on
+`:8000`) — the same machine, often the same string if your context targets the host by name. (The Nebius
+serverless alternative is in the [Appendix](#appendix-nebius-serverless).)
 
 ## Zero-shot inference (wan2.1 DROID checkpoint)
 
@@ -41,7 +42,7 @@ CACHE_ROOT=/home/<user> docker --context <h100> compose run --rm --service-ports
 
 # Run sim inference locally (only inference is remote; MuJoCo runs on your machine).
 uv run --locked positronic-inference sim \
-  --policy=.remote --policy.host=<h100> --policy.port=8000 \
+  --policy=.remote --policy.host=<h100-host> --policy.port=8000 \
   --wrap=@positronic.vendors.dreamzero.codecs.dreamzero_wrappers \
   --trial_count=2 --show_gui=True
 ```
@@ -140,13 +141,13 @@ CACHE_ROOT=/home/<user> docker --context <h100> compose run --rm --service-ports
   --backbone=wan2.2
 ```
 
-Sanity-check once warm: `curl http://<h100>:8000/api/v1/models` → `{"models": ["<model_path>"]}`.
+Sanity-check once warm: `curl http://<h100-host>:8000/api/v1/models` → `{"models": ["<model_path>"]}`.
 
 ### 4. Run sim inference
 
 ```bash
 uv run --locked positronic-inference sim \
-  --policy=.remote --policy.host=<h100> --policy.port=8000 \
+  --policy=.remote --policy.host=<h100-host> --policy.port=8000 \
   --wrap=@positronic.vendors.dreamzero.codecs.dreamzero_wrappers \
   --trial_count=<N> --output_dir=<dir-or-s3-path>
 ```
