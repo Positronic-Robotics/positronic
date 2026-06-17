@@ -177,7 +177,9 @@ that decodes to a `JointPosition` command. They differ only in how **training la
 
 ## Technical Details
 
-- **Action space**: absolute joint positions (7 DoF) + gripper (1)
+- **Action space**: 7-DoF joint targets + gripper. DreamZero predicts the joints **relative to the current
+  state** (`relative_action: true` on `joint_position` in the `droid_relative_wan22` data config); the
+  absolute joint target is reconstructed from the current state at serve time and decoded to a `JointPosition`.
 - **Observation**: 3 cameras (2 exterior + 1 wrist) + joint state + language prompt; 320×160 (wan2.2),
   320×176 (wan2.1). The wan2.2 trainer sets `image_resolution_height=160` and resizes at load, so the
   codec's intermediate `(320, 176)` does not need a per-backbone override.
