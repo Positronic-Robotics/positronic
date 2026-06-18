@@ -52,14 +52,19 @@ _SIM_ROBOT_DERIVES = {
     'pose_signals': FromValue(['robot_state.ee_pose', 'robot_command.pose']),
 }
 
-# Expose the arm command under its new canonical name. Datasets on S3 recorded it as the
-# plural `robot_commands.pose`; this surfaces the same signal as `robot_command.pose` for free
-# (lazy, zero-copy). `Get` reads from the old data; on data already using the new name the
-# passthrough Identity wins (it precedes this alias in the Group).
+# Canonical arm-command name is `robot_command.pose`. Recordings already using it pass straight
+# through the Identity (Group prefers the earlier transform on a key clash); this alias backfills
+# the canonical name from the plural `robot_commands.pose` that older recordings stored on disk.
+# The plural is dropped from the output via the Identity `remove` so it never reaches consumers.
 _RENAME_ROBOT_COMMAND = Derive(**{'robot_command.pose': Get('robot_commands.pose', None)})
+_REMOVE_SIGNALS_WITH_LEGACY = [*_REMOVE_SIGNALS, 'robot_commands.pose']
 
-REAL_ROBOT_TRANSFORM = Group(Derive(**_REAL_ROBOT_DERIVES), Identity(remove=_REMOVE_SIGNALS), _RENAME_ROBOT_COMMAND)
-SIM_ROBOT_TRANSFORM = Group(Derive(**_SIM_ROBOT_DERIVES), Identity(remove=_REMOVE_SIGNALS), _RENAME_ROBOT_COMMAND)
+REAL_ROBOT_TRANSFORM = Group(
+    Derive(**_REAL_ROBOT_DERIVES), Identity(remove=_REMOVE_SIGNALS_WITH_LEGACY), _RENAME_ROBOT_COMMAND
+)
+SIM_ROBOT_TRANSFORM = Group(
+    Derive(**_SIM_ROBOT_DERIVES), Identity(remove=_REMOVE_SIGNALS_WITH_LEGACY), _RENAME_ROBOT_COMMAND
+)
 
 RECOVERY_TASK = 'Recovery cases.'
 
