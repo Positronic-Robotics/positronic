@@ -5,6 +5,8 @@ This package provides drivers for various robot arms including Franka, Kinova, a
 
 from abc import ABC, abstractmethod
 from enum import Enum
+from functools import lru_cache
+from pathlib import Path
 
 import numpy as np
 
@@ -12,6 +14,25 @@ from positronic import geom
 
 # Import command submodule to make it accessible as roboarm.command
 from . import command
+
+
+@lru_cache(maxsize=1)
+def bundled_franka_model() -> dict:
+    """The bundled Franka arm model for the 3D viewer: the FR3 URDF, its collision meshes, and the
+    canonical joint names and control frame.
+
+    Used where no live robot reports its own model — the MuJoCo sim and offline dataset transforms.
+    The FR3 arm shares the simulator panda's 7-DOF kinematics exactly, so the rendered robot matches
+    the simulated one (verified by the URDF/MJCF kinematics test).
+    """
+    here = Path(__file__).resolve()
+    meshes = (here.parents[2] / 'assets' / 'fr3_collision').iterdir()
+    return {
+        'urdf': (here.parent / 'fr3.urdf').read_text(),
+        'meshes': {f.name: f.read_bytes() for f in sorted(meshes) if f.suffix == '.stl'},
+        'joint_names': [f'joint{i}' for i in range(1, 8)],
+        'control_frame': 'end_effector',
+    }
 
 
 class RobotStatus(Enum):
@@ -66,4 +87,4 @@ class State(ABC):
         return None
 
 
-__all__ = ['RobotStatus', 'State', 'command']
+__all__ = ['RobotStatus', 'State', 'bundled_franka_model', 'command']
