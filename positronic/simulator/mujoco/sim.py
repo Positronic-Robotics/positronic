@@ -23,10 +23,11 @@ logger = logging.getLogger(__name__)
 @lru_cache(maxsize=1)
 def bundled_panda_model() -> dict:
     """The simulated Franka panda (arm + hand) for the 3D viewer and offline IK reconstruction: the
-    panda URDF, its collision meshes, the joint names, and the ``end_effector`` control frame — the
-    grasp site where the sim measures ``robot_state.ee_pose``. The viewer renders this and
-    ``ik_joints_from_episode`` inverts against it, so both share one frame-consistent model. The real
-    arm uses ``drivers/roboarm/fr3.urdf``, whose end_effector sits at the physical flange instead.
+    panda URDF, its collision meshes, the joint names, the ``end_effector`` control frame — the grasp
+    site where the sim measures ``robot_state.ee_pose`` — and the ``gripper`` spec that animates the
+    fingers from the recorded ``grip`` signal. The viewer renders this and ``ik_joints_from_episode``
+    inverts against it, so both share one frame-consistent model. The real arm uses
+    ``drivers/roboarm/fr3.urdf``, whose end_effector sits at the physical flange instead.
     """
     urdf_path = Path(package_assets_path('assets/mujoco/panda.urdf'))
     urdf = urdf_path.read_text()
@@ -37,6 +38,8 @@ def bundled_panda_model() -> dict:
         'meshes': {name: (mesh_dir / name).read_bytes() for name in sorted(mesh_files)},
         'joint_names': [f'joint{i}' for i in range(1, 8)],
         'control_frame': 'end_effector',
+        # ``grip`` is recorded in [0, 1] (closed→open); each finger slides 0..0.04 m along its axis.
+        'gripper': {'signal': 'grip', 'joints': ['finger_joint1', 'finger_joint2'], 'travel': 0.04},
     }
 
 

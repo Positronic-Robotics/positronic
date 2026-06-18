@@ -139,21 +139,35 @@
   </joint>
 
   <link name="left_finger">
+    <inertial>
+      <origin rpy="0 0 0" xyz="0 0 0" />
+      <mass value="0.015" />
+      <inertia ixx="2.375e-6" ixy="0" ixz="0" iyy="2.375e-6" iyz="0" izz="7.5e-7" />
+    </inertial>
     <visual><geometry><mesh filename="finger_0.obj" /></geometry></visual>
   </link>
-  <joint name="left_finger_joint" type="fixed">
+  <joint name="finger_joint1" type="prismatic">
     <origin rpy="0 0 0" xyz="0 0 0.0584" />
     <parent link="hand" />
     <child link="left_finger" />
+    <axis xyz="0 1 0" />
+    <limit effort="20" lower="0" upper="0.04" velocity="0.2" />
   </joint>
 
   <link name="right_finger">
+    <inertial>
+      <origin rpy="0 0 0" xyz="0 0 0" />
+      <mass value="0.015" />
+      <inertia ixx="2.375e-6" ixy="0" ixz="0" iyy="2.375e-6" iyz="0" izz="7.5e-7" />
+    </inertial>
     <visual><geometry><mesh filename="finger_0.obj" /></geometry></visual>
   </link>
-  <joint name="right_finger_joint" type="fixed">
+  <joint name="finger_joint2" type="prismatic">
     <origin rpy="0 0 3.141592653589793" xyz="0 0 0.0584" />
     <parent link="hand" />
     <child link="right_finger" />
+    <axis xyz="0 1 0" />
+    <limit effort="20" lower="0" upper="0.04" velocity="0.2" />
   </joint>
 
   <link name="end_effector" />
