@@ -9,9 +9,10 @@ import tqdm
 import positronic.cfg.simulator
 from positronic.cfg.eval.sim.positronic import stack_cubes
 from positronic.dataset.local_dataset import LocalDataset
+from positronic.drivers.roboarm import bundled_panda_model
 from positronic.inference import main
 from positronic.policy.tests.test_harness import StubPolicy
-from positronic.simulator.mujoco.sim import MujocoSim, bundled_panda_model
+from positronic.simulator.mujoco.sim import MujocoSim
 from positronic.simulator.mujoco.transforms import AddBox, SetBodyPosition
 from positronic.utils import package_assets_path
 
