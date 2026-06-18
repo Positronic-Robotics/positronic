@@ -162,11 +162,14 @@
     </inertial>
     <visual><geometry><mesh filename="finger_0.obj" /></geometry></visual>
   </link>
+  <!-- HACK: the slide axis is given in the parent frame (0 -1 0), not the joint frame (0 1 0),
+       because rerun's prismatic compute_transform adds axis*q without rotating it by the joint
+       origin. The 180-deg origin still mirrors the mesh. Mirrors franka_table.xml's right finger. -->
   <joint name="finger_joint2" type="prismatic">
     <origin rpy="0 0 3.141592653589793" xyz="0 0 0.0584" />
     <parent link="hand" />
     <child link="right_finger" />
-    <axis xyz="0 1 0" />
+    <axis xyz="0 -1 0" />
     <limit effort="20" lower="0" upper="0.04" velocity="0.2" />
   </joint>
 
