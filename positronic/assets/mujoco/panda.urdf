@@ -28,7 +28,7 @@
     <parent link="link0" />
     <child link="link1" />
     <axis xyz="0 0 1" />
-    <limit effort="87.0" lower="-2.7437" upper="2.7437" velocity="2.62" />
+    <limit effort="87.0" lower="-2.8973" upper="2.8973" velocity="2.62" />
   </joint>
 
   <link name="link2">
@@ -44,7 +44,7 @@
     <parent link="link1" />
     <child link="link2" />
     <axis xyz="0 0 1" />
-    <limit effort="87.0" lower="-1.7837" upper="1.7837" velocity="2.62" />
+    <limit effort="87.0" lower="-1.7628" upper="1.7628" velocity="2.62" />
   </joint>
 
   <link name="link3">
@@ -60,7 +60,7 @@
     <parent link="link2" />
     <child link="link3" />
     <axis xyz="0 0 1" />
-    <limit effort="87.0" lower="-2.9007" upper="2.9007" velocity="2.62" />
+    <limit effort="87.0" lower="-2.8973" upper="2.8973" velocity="2.62" />
   </joint>
 
   <link name="link4">
@@ -76,7 +76,7 @@
     <parent link="link3" />
     <child link="link4" />
     <axis xyz="0 0 1" />
-    <limit effort="87.0" lower="-3.0421" upper="-0.1518" velocity="2.62" />
+    <limit effort="87.0" lower="-3.0718" upper="-0.0698" velocity="2.62" />
   </joint>
 
   <link name="link5">
@@ -94,7 +94,7 @@
     <parent link="link4" />
     <child link="link5" />
     <axis xyz="0 0 1" />
-    <limit effort="12.0" lower="-2.8065" upper="2.8065" velocity="5.26" />
+    <limit effort="12.0" lower="-2.8973" upper="2.8973" velocity="5.26" />
   </joint>
 
   <link name="link6">
@@ -110,7 +110,7 @@
     <parent link="link5" />
     <child link="link6" />
     <axis xyz="0 0 1" />
-    <limit effort="12.0" lower="0.5445" upper="4.5169" velocity="4.18" />
+    <limit effort="12.0" lower="-0.0175" upper="3.7525" velocity="4.18" />
   </joint>
 
   <link name="link7">
@@ -126,7 +126,7 @@
     <parent link="link6" />
     <child link="link7" />
     <axis xyz="0 0 1" />
-    <limit effort="12.0" lower="-3.0159" upper="3.0159" velocity="5.26" />
+    <limit effort="12.0" lower="-2.8973" upper="2.8973" velocity="5.26" />
   </joint>
 
   <link name="hand">

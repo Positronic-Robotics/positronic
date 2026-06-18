@@ -199,9 +199,10 @@ def test_sim_state_reconstructs_dynamics():
 
 def test_recorded_urdf_matches_sim_kinematics():
     """The model the sim records for the viewer and IK reproduces the MuJoCo model the sim runs:
-    across joint configurations the arm link frames and the ``end_effector`` control frame agree with
-    ``panda.xml``. The control-frame check is the contract that keeps ``ik_joints_from_episode``
-    inverting ``robot_state.ee_pose`` against the grasp site the sim actually measured.
+    the arm link frames and the ``end_effector`` control frame agree with ``panda.xml`` across joint
+    configurations, and the joint limits match. The control frame is the contract that keeps
+    ``ik_joints_from_episode`` inverting ``robot_state.ee_pose`` against the grasp site the sim
+    measured; the limits are what ``DLSIKSolverWithLimits`` constrains each solve to.
     """
     joints = [f'joint{i}' for i in range(1, 8)]
 
@@ -223,6 +224,8 @@ def test_recorded_urdf_matches_sim_kinematics():
     qadr_mjcf = [m_mjcf.joint(n).qposadr.item() for n in joints]
     ee_urdf = mj.mj_name2id(m_urdf, mj.mjtObj.mjOBJ_SITE, 'end_effector')
     ee_mjcf = mj.mj_name2id(m_mjcf, mj.mjtObj.mjOBJ_SITE, 'end_effector')
+    for n in joints:
+        np.testing.assert_allclose(m_urdf.joint(n).range, m_mjcf.joint(n).range, atol=1e-6)
     rng = np.random.default_rng(0)
     for _ in range(50):
         q = rng.uniform(-1.5, 1.5, len(joints))

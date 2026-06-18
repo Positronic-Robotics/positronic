@@ -38,12 +38,8 @@ _JOINT_NAMES = [f'joint{i}' for i in range(1, 8)]
 # recordings used for the arm command; `_RENAME_ROBOT_COMMAND` re-surfaces it as the canonical
 # `robot_command.pose`, so the plural itself should not reach consumers.
 _REMOVE_SIGNALS = ['controller_positions.right', 'robot_commands.pose']
-_FRANKA_MODEL = bundled_franka_model()
 _REAL_ROBOT_DERIVES = {
-    'urdf': FromValue(_FRANKA_MODEL['urdf']),
-    'joint_names': FromValue(_FRANKA_MODEL['joint_names']),
-    'meshes': FromValue(_FRANKA_MODEL['meshes']),
-    'control_frame': FromValue(_FRANKA_MODEL['control_frame']),
+    **{key: FromValue(value) for key, value in bundled_franka_model().items()},
     'joint_signal': FromValue('robot_state.q'),
     'pose_signals': FromValue(['robot_state.ee_pose', 'robot_command.pose']),
 }
