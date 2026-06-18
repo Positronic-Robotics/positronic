@@ -14,6 +14,7 @@ import configuronic as cfn
 import pos3
 
 from positronic.cfg.ds import group, local_all, transform
+from positronic.cfg.ds.internal import REAL_ROBOT_TRANSFORM
 from positronic.cfg.eval.real.tasks import UNIFIED_TASK
 from positronic.dataset import Episode
 from positronic.dataset.transforms.episode import Derive, FromValue, Identity
@@ -41,7 +42,8 @@ models = types.SimpleNamespace(
 )
 
 teleop_unified = transform.override(
-    base=ds.teleop, transforms=[group.override(transforms=[Derive(task=FromValue(UNIFIED_TASK)), Identity()])]
+    base=ds.teleop,
+    transforms=[group.override(transforms=[Derive(task=FromValue(UNIFIED_TASK)), Identity()]), REAL_ROBOT_TRANSFORM],
 )
 
 

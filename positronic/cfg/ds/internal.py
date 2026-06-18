@@ -35,7 +35,10 @@ REAL_URDF = (Path(__file__).resolve().parents[2] / 'drivers' / 'roboarm' / 'fr3.
 _JOINT_NAMES = [f'joint{i}' for i in range(1, 8)]
 _MESH_DIR = Path(package_assets_path('assets/fr3_collision'))
 
-_REMOVE_SIGNALS = ['controller_positions.right']
+# Dropped from the transform output. `robot_commands.pose` is the legacy plural name older
+# recordings used for the arm command; `_RENAME_ROBOT_COMMAND` re-surfaces it as the canonical
+# `robot_command.pose`, so the plural itself should not reach consumers.
+_REMOVE_SIGNALS = ['controller_positions.right', 'robot_commands.pose']
 _REAL_ROBOT_DERIVES = {
     'urdf': FromValue(REAL_URDF),
     'joint_names': FromValue(_JOINT_NAMES),
@@ -52,10 +55,9 @@ _SIM_ROBOT_DERIVES = {
     'pose_signals': FromValue(['robot_state.ee_pose', 'robot_command.pose']),
 }
 
-# Expose the arm command under its new canonical name. Datasets on S3 recorded it as the
-# plural `robot_commands.pose`; this surfaces the same signal as `robot_command.pose` for free
-# (lazy, zero-copy). `Get` reads from the old data; on data already using the new name the
-# passthrough Identity wins (it precedes this alias in the Group).
+# Backfill the canonical `robot_command.pose` from the plural name older recordings stored on
+# disk. Recordings already using the canonical name pass through the Identity, which wins on the
+# key clash (Group prefers the earlier transform), so this alias is a no-op for them.
 _RENAME_ROBOT_COMMAND = Derive(**{'robot_command.pose': Get('robot_commands.pose', None)})
 
 REAL_ROBOT_TRANSFORM = Group(Derive(**_REAL_ROBOT_DERIVES), Identity(remove=_REMOVE_SIGNALS), _RENAME_ROBOT_COMMAND)
