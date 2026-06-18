@@ -18,12 +18,12 @@ from . import command
 
 @lru_cache(maxsize=1)
 def bundled_franka_model() -> dict:
-    """The bundled Franka arm model for the 3D viewer: the FR3 URDF, its collision meshes, and the
-    canonical joint names and control frame.
+    """The bundled real Franka arm model for the 3D viewer: the FR3 URDF, its collision meshes, and
+    the canonical joint names and control frame.
 
-    Used where no live robot reports its own model — the MuJoCo sim and offline dataset transforms.
-    The FR3 arm shares the simulator panda's 7-DOF kinematics exactly, so the rendered robot matches
-    the simulated one (verified by the URDF/MJCF kinematics test).
+    Backfills real-robot datasets recorded before they stored their own model. Its ``end_effector``
+    is the physical flange frame the driver measures against; the MuJoCo sim measures at a different
+    grasp site and supplies its own model via ``bundled_panda_model``.
     """
     here = Path(__file__).resolve()
     meshes = (here.parents[2] / 'assets' / 'fr3_collision').iterdir()

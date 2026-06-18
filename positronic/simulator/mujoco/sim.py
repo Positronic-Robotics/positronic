@@ -1,5 +1,7 @@
 import logging
+import xml.etree.ElementTree as ET
 from collections.abc import Iterator, Sequence
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
@@ -10,11 +12,33 @@ from dm_control.utils import inverse_kinematics as ik
 
 import pimm
 from positronic import geom
-from positronic.drivers.roboarm import RobotStatus, State, bundled_franka_model
+from positronic.drivers.roboarm import RobotStatus, State
 from positronic.drivers.roboarm import command as roboarm_command
 from positronic.simulator.mujoco.transforms import MujocoSceneTransform, load_spec, load_spec_from_file, np_seed
+from positronic.utils import package_assets_path
 
 logger = logging.getLogger(__name__)
+
+
+@lru_cache(maxsize=1)
+def bundled_panda_model() -> dict:
+    """The simulated Franka panda (arm + hand) for the 3D viewer and offline IK reconstruction: the
+    panda URDF, its collision meshes, the joint names, and the ``end_effector`` control frame — the
+    grasp site where the sim measures ``robot_state.ee_pose``. The viewer renders this and
+    ``ik_joints_from_episode`` inverts against it, so both share one frame-consistent model. The real
+    arm uses ``drivers/roboarm/fr3.urdf``, whose end_effector sits at the physical flange instead.
+    """
+    urdf_path = Path(package_assets_path('assets/mujoco/panda.urdf'))
+    urdf = urdf_path.read_text()
+    mesh_dir = urdf_path.parent / 'assets'
+    mesh_files = {mesh.get('filename') for mesh in ET.fromstring(urdf).iter('mesh')}
+    return {
+        'urdf': urdf,
+        'meshes': {name: (mesh_dir / name).read_bytes() for name in sorted(mesh_files)},
+        'joint_names': [f'joint{i}' for i in range(1, 8)],
+        'control_frame': 'end_effector',
+    }
+
 
 # mjSTATE_INTEGRATION is MuJoCo's complete integrable state (qpos, qvel, act, ctrl, warm-start, ...):
 # the minimal subset that restores the sim and reproduces its forward trajectory exactly. The other
@@ -217,7 +241,7 @@ class MujocoSim(pimm.ControlSystem):
         self._bind_model()
 
     def _emit_robot_meta(self):
-        self.robot_meta.emit({**bundled_franka_model(), 'scene_xml': self.scene_xml})
+        self.robot_meta.emit({**bundled_panda_model(), 'scene_xml': self.scene_xml})
 
     def _bind_model(self):
         """Derive everything that hangs off ``self.model``; runs at construction and on every rebuild."""

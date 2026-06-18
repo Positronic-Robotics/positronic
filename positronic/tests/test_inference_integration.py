@@ -1,5 +1,4 @@
 import xml.etree.ElementTree as ET
-from pathlib import Path
 
 import mujoco as mj
 import numpy as np
@@ -10,10 +9,9 @@ import tqdm
 import positronic.cfg.simulator
 from positronic.cfg.eval.sim.positronic import stack_cubes
 from positronic.dataset.local_dataset import LocalDataset
-from positronic.drivers.roboarm import bundled_franka_model
 from positronic.inference import main
 from positronic.policy.tests.test_harness import StubPolicy
-from positronic.simulator.mujoco.sim import MujocoSim
+from positronic.simulator.mujoco.sim import MujocoSim, bundled_panda_model
 from positronic.simulator.mujoco.transforms import AddBox, SetBodyPosition
 from positronic.utils import package_assets_path
 
@@ -200,27 +198,31 @@ def test_sim_state_reconstructs_dynamics():
 
 
 def test_recorded_urdf_matches_sim_kinematics():
-    """The URDF the sim records for the 3D viewer reproduces the arm kinematics of the MuJoCo model
-    the sim runs: for any joint configuration the link frames agree. This is what lets the viewer
-    reuse the bundled FR3 URDF — a divergence between it and the panda model would render a robot
-    that does not match the simulated one.
+    """The model the sim records for the viewer and IK reproduces the MuJoCo model the sim runs:
+    across joint configurations the arm link frames and the ``end_effector`` control frame agree with
+    ``panda.xml``. The control-frame check is the contract that keeps ``ik_joints_from_episode``
+    inverting ``robot_state.ee_pose`` against the grasp site the sim actually measured.
     """
+    joints = [f'joint{i}' for i in range(1, 8)]
 
-    def kinematics(xml: str):
-        root = ET.fromstring(xml)
-        if root.tag == 'robot':  # URDF: drop meshes so MuJoCo compiles without the asset files
-            for link in root.findall('.//link'):
-                for el in link.findall('visual') + link.findall('collision'):
-                    link.remove(el)
-            xml = ET.tostring(root, encoding='unicode')
-        model = mj.MjSpec.from_string(xml).compile()
+    def compiled(spec):
+        # A URDF carries ``end_effector`` as a frame-only body; resolve it to a readable site.
+        if 'end_effector' not in {site.name for body in spec.bodies for site in body.sites}:
+            spec.body('end_effector').add_site().name = 'end_effector'
+        model = spec.compile()
         return model, mj.MjData(model)
 
-    m_urdf, d_urdf = kinematics(bundled_franka_model()['urdf'])
-    m_mjcf, d_mjcf = kinematics(Path(package_assets_path('assets/mujoco/panda_ik.xml')).read_text())
-    joints = [f'joint{i}' for i in range(1, 8)]
+    root = ET.fromstring(bundled_panda_model()['urdf'])  # drop meshes so the URDF compiles file-free
+    for link in root.findall('.//link'):
+        for el in link.findall('visual') + link.findall('collision'):
+            link.remove(el)
+    m_urdf, d_urdf = compiled(mj.MjSpec.from_string(ET.tostring(root, encoding='unicode')))
+    m_mjcf, d_mjcf = compiled(mj.MjSpec.from_file(str(package_assets_path('assets/mujoco/panda.xml'))))
+
     qadr_urdf = [m_urdf.joint(n).qposadr.item() for n in joints]
     qadr_mjcf = [m_mjcf.joint(n).qposadr.item() for n in joints]
+    ee_urdf = mj.mj_name2id(m_urdf, mj.mjtObj.mjOBJ_SITE, 'end_effector')
+    ee_mjcf = mj.mj_name2id(m_mjcf, mj.mjtObj.mjOBJ_SITE, 'end_effector')
     rng = np.random.default_rng(0)
     for _ in range(50):
         q = rng.uniform(-1.5, 1.5, len(joints))
@@ -233,3 +235,5 @@ def test_recorded_urdf_matches_sim_kinematics():
             bm = mj.mj_name2id(m_mjcf, mj.mjtObj.mjOBJ_BODY, link)
             np.testing.assert_allclose(d_urdf.xpos[bu], d_mjcf.xpos[bm], atol=1e-6)
             assert abs(float(np.dot(d_urdf.xquat[bu], d_mjcf.xquat[bm]))) > 1 - 1e-6
+        np.testing.assert_allclose(d_urdf.site_xpos[ee_urdf], d_mjcf.site_xpos[ee_mjcf], atol=1e-6)
+        np.testing.assert_allclose(d_urdf.site_xmat[ee_urdf], d_mjcf.site_xmat[ee_mjcf], atol=1e-6)
