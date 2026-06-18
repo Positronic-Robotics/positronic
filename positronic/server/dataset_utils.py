@@ -136,19 +136,19 @@ def _compute_eye_controls(signals: EpisodeSignals, ep: Episode) -> rrb.EyeContro
     return rrb.EyeControls3D(position=camera_pos.tolist(), look_target=centroid.tolist())
 
 
-# ``sim_state`` is the privileged full physics state: a single wide vector recorded for
-# replay/scoring, not a set of readable channels. Plotting it as one scalar series per channel
-# stalls the viewer, so it is left out of the visualization entirely.
-# TODO: a high-dimensional signal like this has no useful scalar-series view and needs one of its
-# own; the choice of what to hide should not be a hardcoded signal name.
-_HIDDEN_SIGNALS = {'sim_state'}
+# MuJoCo's privileged full-physics state is a single wide vector recorded for replay/scoring —
+# ``sim_state.mjSTATE_*`` in current recordings, bare ``mjSTATE_*`` in older datasets — not a set of
+# readable channels. Plotting it as one scalar series per channel stalls the viewer, so any signal
+# carrying it is left out of the visualization.
+# TODO: a high-dimensional signal like this has no useful scalar-series view and needs one of its own.
+_HIDDEN_SIGNAL_MARKER = 'mjSTATE'
 
 
 def _collect_signal_groups(ep: Episode) -> EpisodeSignals:
     pose_set = set(ep.static.get('pose_signals', []))
     signals = EpisodeSignals(videos=[], numerics=[], dims={}, poses=[])
     for name, sig in ep.signals.items():
-        if name.split('.')[0] in _HIDDEN_SIGNALS:
+        if _HIDDEN_SIGNAL_MARKER in name:
             continue
         if sig.kind == Kind.IMAGE:
             try:
