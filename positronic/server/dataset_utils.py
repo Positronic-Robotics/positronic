@@ -331,7 +331,10 @@ def _log_numeric_signals(
     """Log numeric time-series via send_columns. Returns pose/joint data for 3D logging."""
     pose_set = set(signals.poses)
     joint_signal = ep.static.get('joint_signal')
+    gripper = ep.static.get('gripper')
     stash_keys = pose_set | ({joint_signal} if joint_signal else set())
+    if gripper:
+        stash_keys.add(gripper['signal'])
     pose_data = {}
 
     for key in signals.numerics:
