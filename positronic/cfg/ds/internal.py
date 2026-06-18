@@ -35,7 +35,10 @@ REAL_URDF = (Path(__file__).resolve().parents[2] / 'drivers' / 'roboarm' / 'fr3.
 _JOINT_NAMES = [f'joint{i}' for i in range(1, 8)]
 _MESH_DIR = Path(package_assets_path('assets/fr3_collision'))
 
-_REMOVE_SIGNALS = ['controller_positions.right']
+# Dropped from the transform output. `robot_commands.pose` is the legacy plural name older
+# recordings used for the arm command; `_RENAME_ROBOT_COMMAND` re-surfaces it as the canonical
+# `robot_command.pose`, so the plural itself should not reach consumers.
+_REMOVE_SIGNALS = ['controller_positions.right', 'robot_commands.pose']
 _REAL_ROBOT_DERIVES = {
     'urdf': FromValue(REAL_URDF),
     'joint_names': FromValue(_JOINT_NAMES),
@@ -52,19 +55,13 @@ _SIM_ROBOT_DERIVES = {
     'pose_signals': FromValue(['robot_state.ee_pose', 'robot_command.pose']),
 }
 
-# Canonical arm-command name is `robot_command.pose`. Recordings already using it pass straight
-# through the Identity (Group prefers the earlier transform on a key clash); this alias backfills
-# the canonical name from the plural `robot_commands.pose` that older recordings stored on disk.
-# The plural is dropped from the output via the Identity `remove` so it never reaches consumers.
+# Backfill the canonical `robot_command.pose` from the plural name older recordings stored on
+# disk. Recordings already using the canonical name pass through the Identity, which wins on the
+# key clash (Group prefers the earlier transform), so this alias is a no-op for them.
 _RENAME_ROBOT_COMMAND = Derive(**{'robot_command.pose': Get('robot_commands.pose', None)})
-_REMOVE_SIGNALS_WITH_LEGACY = [*_REMOVE_SIGNALS, 'robot_commands.pose']
 
-REAL_ROBOT_TRANSFORM = Group(
-    Derive(**_REAL_ROBOT_DERIVES), Identity(remove=_REMOVE_SIGNALS_WITH_LEGACY), _RENAME_ROBOT_COMMAND
-)
-SIM_ROBOT_TRANSFORM = Group(
-    Derive(**_SIM_ROBOT_DERIVES), Identity(remove=_REMOVE_SIGNALS_WITH_LEGACY), _RENAME_ROBOT_COMMAND
-)
+REAL_ROBOT_TRANSFORM = Group(Derive(**_REAL_ROBOT_DERIVES), Identity(remove=_REMOVE_SIGNALS), _RENAME_ROBOT_COMMAND)
+SIM_ROBOT_TRANSFORM = Group(Derive(**_SIM_ROBOT_DERIVES), Identity(remove=_REMOVE_SIGNALS), _RENAME_ROBOT_COMMAND)
 
 RECOVERY_TASK = 'Recovery cases.'
 
