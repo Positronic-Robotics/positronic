@@ -50,7 +50,7 @@ def episode_info(index: int):
             'shape': list(sig.shape) if sig.shape else [],
             'encoding_format': sig.encoding_format if supports_encoded else None,
         }
-    return {'meta': ep.meta, 'static': ep.static, 'signals': signals_meta}
+    return {'meta': ep.meta, 'static': serialize(ep.static).hex(), 'signals': signals_meta}
 
 
 @_app.post('/api/v1/episodes/{ep}/signals/{sig}/timestamps')
@@ -98,7 +98,7 @@ def episode_sample(ep: int, req: TimestampsRequest):
             result_signals[key] = {'timestamps': timestamps.tolist(), 'values': serialize(list(value)).hex()}
         else:
             result_static[key] = value
-    return {'static': result_static, 'signals': result_signals}
+    return {'static': serialize(result_static).hex(), 'signals': result_signals}
 
 
 def _get_dataset() -> Dataset:

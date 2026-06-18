@@ -44,7 +44,9 @@ class DatasetClient:
     def get_episode_info(self, index: int) -> dict:
         r = self.session.get(f'/api/v1/episodes/{index}/info')
         r.raise_for_status()
-        return r.json()
+        info = r.json()
+        info['static'] = deserialize(bytes.fromhex(info['static']))
+        return info
 
     def get_signal_timestamps(self, ep: int, sig: str, indices: IndicesLike) -> np.ndarray:
         r = self.session.post(f'/api/v1/episodes/{ep}/signals/{sig}/timestamps', json=_encode_indices(indices))
@@ -72,7 +74,7 @@ class DatasetClient:
         r = self.session.post(f'/api/v1/episodes/{ep}/sample', json={'timestamps': timestamps.tolist()})
         r.raise_for_status()
         data = r.json()
-        result = dict(data['static'])
+        result = deserialize(bytes.fromhex(data['static']))
         for sig_name, sig_data in data['signals'].items():
             result[sig_name] = deserialize(bytes.fromhex(sig_data['values']))
         return result
