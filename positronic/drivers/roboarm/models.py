@@ -79,6 +79,12 @@ def _build_2f85_elements() -> list[ET.Element]:
     elements = []
     for link, parent, joint, xyz, rpy, axis, mesh, visual_xyz in _ROBOTIQ_2F85:
         link_el = ET.Element('link', name=link)
+        # A nominal inertial keeps each link a valid MuJoCo moving body: ik._prepare_spec strips the
+        # visuals and compiles the URDF, which rejects zero-inertia bodies. IK is kinematic and the
+        # viewer ignores inertials, so the magnitude is arbitrary.
+        inertial = ET.SubElement(link_el, 'inertial')
+        ET.SubElement(inertial, 'mass', value='0.01')
+        ET.SubElement(inertial, 'inertia', ixx='1e-5', iyy='1e-5', izz='1e-5', ixy='0', ixz='0', iyz='0')
         visual = ET.SubElement(link_el, 'visual')
         if visual_xyz is not None:
             ET.SubElement(visual, 'origin', xyz=visual_xyz, rpy='0 0 0')
