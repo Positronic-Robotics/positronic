@@ -148,6 +148,8 @@ class Robot(pimm.ControlSystem):
             stl = link.get('name', '') + '.stl'
             if stl in meshes and link.find('visual') is None:
                 ET.SubElement(ET.SubElement(link, 'visual'), 'geometry').append(ET.Element('mesh', filename=stl))
+        # TODO: The arm driver should not own the gripper. Move the 2F-85 model to the gripper driver
+        # (drivers/gripper) and compose the arm and gripper together at the embodiment level.
         gripper = attach_robotiq_2f85(root, meshes)
         return {
             'urdf': ET.tostring(root, encoding='unicode'),
