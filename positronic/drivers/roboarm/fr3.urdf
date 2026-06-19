@@ -7,8 +7,9 @@
      <visual> elements for links that lack them. The end_effector link encodes F_T_EE from
      franka::RobotState so the URDF matches the full kinematic chain used by the driver's IK.
 
-     This file must match Robot._build_robot_meta() output exactly (modulo this header).
-     Used by cfg.ds.internal as REAL_URDF for backfilling old datasets without robot_meta. -->
+     This is the bare arm; the Robotiq 2F-85 gripper is grafted onto the flange at load time by
+     roboarm.models.attach_robotiq_2f85, the same graft Robot._build_robot_meta applies to the live
+     arm. roboarm.models.bundled_franka_model reads this file to backfill real-robot datasets. -->
 <robot name="fr3">
 
 
