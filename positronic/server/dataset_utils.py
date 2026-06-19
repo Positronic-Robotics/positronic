@@ -441,13 +441,13 @@ def _log_urdf_robot(
                 _animate_joint(joint, q_ds[:, j_idx], ts_ds, prefix)
                 yield from drainer.drain()
 
-        # The gripper rides a single ``grip`` signal that opens both fingers symmetrically; it is
-        # nominally [0, 1] but recordings overshoot slightly, so clip before scaling to finger travel.
+        # The ``grip`` signal is [0, 1] with 1 fully closed; the finger joints are 0 when closed and
+        # ``travel`` when open, so invert. Recordings overshoot slightly, so clip before inverting.
         gripper = ep.static.get('gripper')
         if gripper and gripper['signal'] in numeric_data:
             grip_ts, grip_vals = numeric_data[gripper['signal']]
             grip_step = max(1, len(grip_ts) // target_samples)
-            finger_pos = np.clip(grip_vals[::grip_step, 0], 0.0, 1.0) * gripper['travel']
+            finger_pos = (1.0 - np.clip(grip_vals[::grip_step, 0], 0.0, 1.0)) * gripper['travel']
             for name in gripper['joints']:
                 joint = tree.get_joint_by_name(name)
                 if joint is not None:
