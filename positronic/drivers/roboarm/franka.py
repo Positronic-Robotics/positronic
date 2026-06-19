@@ -20,7 +20,8 @@ except ImportError as e:
 import pimm
 from positronic import geom
 
-from . import RobotStatus, State, attach_robotiq_2f85, command
+from . import RobotStatus, State, command
+from .models import attach_robotiq_2f85
 
 
 def _recover_if_needed(robot, in_error):

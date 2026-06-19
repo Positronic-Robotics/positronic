@@ -18,7 +18,7 @@ from positronic.dataset.local_dataset import load_all_datasets
 from positronic.dataset.transforms import TransformedDataset, agg_fraction_true, agg_max, agg_percentile
 from positronic.dataset.transforms.episode import Concat, Derive, FromValue, Get, Group, Identity, Rename
 from positronic.dataset.transforms.quality import cmd_lag, cmd_velocity, idle_mask, jerk
-from positronic.drivers.roboarm import bundled_franka_model, bundled_panda_model
+from positronic.drivers.roboarm.models import bundled_franka_model, bundled_panda_model
 from positronic.server.positronic_server import ColumnConfig as C
 from positronic.server.positronic_server import main as server_main
 from positronic.utils.logging import init_logging

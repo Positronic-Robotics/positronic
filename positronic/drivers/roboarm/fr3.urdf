@@ -8,8 +8,8 @@
      franka::RobotState so the URDF matches the full kinematic chain used by the driver's IK.
 
      This is the bare arm; the Robotiq 2F-85 gripper is grafted onto the flange at load time by
-     roboarm.attach_robotiq_2f85, the same graft Robot._build_robot_meta applies to the live arm.
-     bundled_franka_model reads this file to backfill real-robot datasets without their own model. -->
+     roboarm.models.attach_robotiq_2f85, the same graft Robot._build_robot_meta applies to the live
+     arm. roboarm.models.bundled_franka_model reads this file to backfill real-robot datasets. -->
 <robot name="fr3">
 
 

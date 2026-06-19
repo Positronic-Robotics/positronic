@@ -10,8 +10,9 @@ from dm_control.utils import inverse_kinematics as ik
 
 import pimm
 from positronic import geom
-from positronic.drivers.roboarm import RobotStatus, State, bundled_panda_model
+from positronic.drivers.roboarm import RobotStatus, State
 from positronic.drivers.roboarm import command as roboarm_command
+from positronic.drivers.roboarm.models import bundled_panda_model
 from positronic.simulator.mujoco.transforms import MujocoSceneTransform, load_spec, load_spec_from_file, np_seed
 
 logger = logging.getLogger(__name__)
