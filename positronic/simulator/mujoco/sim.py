@@ -10,7 +10,7 @@ from dm_control.utils import inverse_kinematics as ik
 
 import pimm
 from positronic import geom
-from positronic.drivers.roboarm import RobotStatus, State
+from positronic.drivers.roboarm import RobotStatus, State, bundled_panda_model
 from positronic.drivers.roboarm import command as roboarm_command
 from positronic.simulator.mujoco.transforms import MujocoSceneTransform, load_spec, load_spec_from_file, np_seed
 
@@ -218,9 +218,9 @@ class MujocoSim(pimm.ControlSystem):
         self._bind_model()
 
     def _emit_robot_meta(self):
-        # The robot model (URDF + meshes + frames) is supplied at read time by SIM_ROBOT_TRANSFORM,
-        # mirroring the real arm; only the per-episode scene travels with the recording.
-        self.robot_meta.emit({'scene_xml': self.scene_xml})
+        # Emit the full robot model (URDF + meshes + frames + gripper) at record time, like franka.py,
+        # plus the per-episode scene_xml that restores the MuJoCo scene.
+        self.robot_meta.emit({**bundled_panda_model(), 'scene_xml': self.scene_xml})
 
     def _bind_model(self):
         """Derive everything that hangs off ``self.model``; runs at construction and on every rebuild."""
