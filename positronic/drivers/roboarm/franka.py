@@ -20,7 +20,7 @@ except ImportError as e:
 import pimm
 from positronic import geom
 
-from . import RobotStatus, State, command
+from . import RobotStatus, State, attach_robotiq_2f85, command
 
 
 def _recover_if_needed(robot, in_error):
@@ -147,11 +147,13 @@ class Robot(pimm.ControlSystem):
             stl = link.get('name', '') + '.stl'
             if stl in meshes and link.find('visual') is None:
                 ET.SubElement(ET.SubElement(link, 'visual'), 'geometry').append(ET.Element('mesh', filename=stl))
+        gripper = attach_robotiq_2f85(root, meshes)
         return {
             'urdf': ET.tostring(root, encoding='unicode'),
             'joint_names': _revolute_joint_names(urdf_xml),
             'meshes': meshes,
             'control_frame': 'end_effector',
+            'gripper': gripper,
         }
 
     def _ensure_robot(self) -> pf.Robot:

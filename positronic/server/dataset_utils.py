@@ -36,7 +36,7 @@ from positronic.utils.rerun_compat import flatten_numeric, log_series_styles, se
 # See: positronic/dataset/signal.py — SignalMeta, Kind
 
 _POSE_COLORS = {
-    'commands': [255, 100, 50],  # orange — commanded trajectory
+    'command': [255, 100, 50],  # orange — commanded trajectory
     'state': [50, 200, 255],  # cyan — actual/state trajectory
     'default': [180, 180, 180],  # gray fallback
 }
@@ -365,13 +365,22 @@ def _log_numeric_signals(
     return pose_data
 
 
+# Robot visuals render translucent white so the pose-direction markers stay visible through the
+# arm and gripper. The URDF loader turns a visual's material color into its mesh ``albedo_factor``.
+_ROBOT_VISUAL_RGBA = '1 1 1 0.5'
+
+
 def _write_urdf_to_dir(urdf_str: str, meshes: dict[str, bytes], dest: Path) -> Path:
-    """Write URDF and mesh files to a directory, rewriting mesh filenames to absolute paths."""
+    """Write URDF and mesh files to a directory, rewriting mesh filenames to absolute paths and
+    tinting every visual translucent white."""
     root = ET.fromstring(urdf_str)
     for mesh_el in root.iter('mesh'):
         filename = mesh_el.get('filename', '')
         if filename in meshes:
             mesh_el.set('filename', str(dest / filename))
+    for visual_el in root.iter('visual'):
+        material_el = ET.SubElement(visual_el, 'material', name='viewer_translucent')
+        ET.SubElement(material_el, 'color', rgba=_ROBOT_VISUAL_RGBA)
     urdf_path = dest / 'robot.urdf'
     urdf_path.write_text(ET.tostring(root, encoding='unicode'))
     for name, data in meshes.items():
@@ -441,8 +450,8 @@ def _log_urdf_robot(
                 _animate_joint(joint, q_ds[:, j_idx], ts_ds, prefix)
                 yield from drainer.drain()
 
-        # The gripper rides a single ``grip`` signal that opens both fingers symmetrically; it is
-        # nominally [0, 1] but recordings overshoot slightly, so clip before scaling to finger travel.
+        # A single ``grip`` signal in [0, 1] drives the gripper joints, each joint's axis sign setting
+        # its direction; recordings can overshoot slightly, so clip before scaling by ``travel``.
         gripper = ep.static.get('gripper')
         if gripper and gripper['signal'] in numeric_data:
             grip_ts, grip_vals = numeric_data[gripper['signal']]

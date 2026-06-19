@@ -30,8 +30,8 @@ from . import concat_ds, local, transform
 # `robot_command.pose`, so the plural itself should not reach consumers.
 _REMOVE_SIGNALS = ['controller_positions.right', 'robot_commands.pose']
 
-# Backfill the robot model for datasets that don't store their own: the real arm and the MuJoCo sim
-# each supply their bundled model (URDF + collision meshes + frames) as static via these derives.
+# The bundled model (URDF + collision meshes + control frame) for the real arm and the MuJoCo sim,
+# plus the joint/pose signal names the viewer reads, supplied as static via these derives.
 _REAL_ROBOT_DERIVES = {
     **{key: FromValue(value) for key, value in bundled_franka_model().items()},
     'joint_signal': FromValue('robot_state.q'),
@@ -48,7 +48,11 @@ _SIM_ROBOT_DERIVES = {
 # key clash (Group prefers the earlier transform), so this alias is a no-op for them.
 _RENAME_ROBOT_COMMAND = Derive(**{'robot_command.pose': Get('robot_commands.pose', None)})
 
-REAL_ROBOT_TRANSFORM = Group(Derive(**_REAL_ROBOT_DERIVES), Identity(remove=_REMOVE_SIGNALS), _RENAME_ROBOT_COMMAND)
+# Real recordings carry the arm's own driver-emitted model, so the bundled one only backfills when
+# absent (Identity first wins on a clash). The sim delivers its model through the transform, not the
+# recording (older sim recordings store raw MuJoCo XML under `urdf`), so the bundled panda overwrites
+# (Derive first wins).
+REAL_ROBOT_TRANSFORM = Group(Identity(remove=_REMOVE_SIGNALS), Derive(**_REAL_ROBOT_DERIVES), _RENAME_ROBOT_COMMAND)
 SIM_ROBOT_TRANSFORM = Group(Derive(**_SIM_ROBOT_DERIVES), Identity(remove=_REMOVE_SIGNALS), _RENAME_ROBOT_COMMAND)
 
 RECOVERY_TASK = 'Recovery cases.'
