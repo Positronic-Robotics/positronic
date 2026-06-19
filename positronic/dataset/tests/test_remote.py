@@ -69,8 +69,9 @@ def test_episode_info_endpoint(test_client):
     r = test_client.get('/api/v1/episodes/0/info')
     assert r.status_code == 200
     data = r.json()
-    assert data['static']['task'] == 'task_0'
-    assert data['static']['episode_id'] == 0
+    static = deserialize(bytes.fromhex(data['static']))
+    assert static['task'] == 'task_0'
+    assert static['episode_id'] == 0
     assert 'action' in data['signals']
     assert 'cam' in data['signals']
     assert data['signals']['action']['length'] == 5
@@ -129,7 +130,7 @@ def test_episode_sample_endpoint(test_client):
     r = test_client.post('/api/v1/episodes/0/sample', json={'timestamps': [1000, 1100]})
     assert r.status_code == 200
     data = r.json()
-    assert data['static']['task'] == 'task_0'
+    assert deserialize(bytes.fromhex(data['static']))['task'] == 'task_0'
     assert 'action' in data['signals']
     action_values = deserialize(bytes.fromhex(data['signals']['action']['values']))
     assert len(action_values) == 2

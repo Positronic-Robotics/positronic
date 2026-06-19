@@ -10,19 +10,17 @@ from dm_control.utils import inverse_kinematics as ik
 
 import pimm
 from positronic import geom
-from positronic.drivers.roboarm import RobotStatus, State
+from positronic.drivers.roboarm import RobotStatus, State, bundled_panda_model
 from positronic.drivers.roboarm import command as roboarm_command
 from positronic.simulator.mujoco.transforms import MujocoSceneTransform, load_spec, load_spec_from_file, np_seed
-from positronic.utils import package_assets_path
 
 logger = logging.getLogger(__name__)
 
-STATE_SPECS = [
-    mj.mjtState.mjSTATE_FULLPHYSICS,
-    mj.mjtState.mjSTATE_USER,
-    mj.mjtState.mjSTATE_INTEGRATION,
-    mj.mjtState.mjSTATE_WARMSTART,
-]
+
+# mjSTATE_INTEGRATION is MuJoCo's complete integrable state (qpos, qvel, act, ctrl, warm-start, ...):
+# the minimal subset that restores the sim and reproduces its forward trajectory exactly. The other
+# specs are subsets of it, so recording them too only duplicates these values.
+STATE_SPECS = [mj.mjtState.mjSTATE_INTEGRATION]
 
 
 def save_state(model, data) -> dict[str, np.ndarray]:
@@ -220,12 +218,9 @@ class MujocoSim(pimm.ControlSystem):
         self._bind_model()
 
     def _emit_robot_meta(self):
-        self.robot_meta.emit({
-            'urdf': Path(package_assets_path('assets/mujoco/panda_ik.xml')).read_text(),
-            'joint_names': [f'joint{i}' for i in range(1, 8)],
-            'control_frame': 'end_effector',
-            'scene_xml': self.scene_xml,
-        })
+        # Emit the full robot model (URDF + meshes + frames + gripper) at record time, like franka.py,
+        # plus the per-episode scene_xml that restores the MuJoCo scene.
+        self.robot_meta.emit({**bundled_panda_model(), 'scene_xml': self.scene_xml})
 
     def _bind_model(self):
         """Derive everything that hangs off ``self.model``; runs at construction and on every rebuild."""

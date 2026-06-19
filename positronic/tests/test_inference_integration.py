@@ -1,3 +1,6 @@
+import xml.etree.ElementTree as ET
+
+import mujoco as mj
 import numpy as np
 import pos3
 import pytest
@@ -6,10 +9,12 @@ import tqdm
 import positronic.cfg.simulator
 from positronic.cfg.eval.sim.positronic import stack_cubes
 from positronic.dataset.local_dataset import LocalDataset
+from positronic.drivers.roboarm import bundled_panda_model
 from positronic.inference import main
 from positronic.policy.tests.test_harness import StubPolicy
 from positronic.simulator.mujoco.sim import MujocoSim
 from positronic.simulator.mujoco.transforms import AddBox, SetBodyPosition
+from positronic.utils import package_assets_path
 
 
 # This integration test exercises the unified `main` end-to-end on the sim embodiment.
@@ -90,7 +95,7 @@ def test_sim_emits_commands_and_records_dataset(tmp_path, monkeypatch):
     assert 'target_grip' in signals
     assert 'image.wrist' in signals
     # Privileged ground truth: the full sim state is recorded as a time-series signal.
-    assert 'sim_state.mjSTATE_FULLPHYSICS' in signals
+    assert 'sim_state.mjSTATE_INTEGRATION' in signals
 
     camera_samples = list(signals['image.wrist'])
     assert camera_samples, 'Camera signal for handcam_left is empty'
@@ -160,3 +165,79 @@ def test_sim_reset_seed_reproduces_scene():
     np.testing.assert_allclose(replayed.model.body('marker_body').pos, first_marker, rtol=1e-6)
     for name, array in replayed.save_state().items():
         np.testing.assert_array_equal(array, third[name])
+
+
+def test_sim_state_reconstructs_dynamics():
+    """A recorded sim state reconstructs the simulation, not just the instant: restore it and the
+    continued trajectory matches the original step-for-step.
+
+    This is the contract that lets ``STATE_SPECS`` be a minimal subset — it must carry everything a
+    forward step reads (the solver warm-start, the actuator ``ctrl``), or contact-rich motion
+    diverges and the assertions below break.
+    """
+    sim = MujocoSim('positronic/assets/mujoco/franka_table.xml', positronic.cfg.simulator.stack_cubes_loaders())
+    sim.reset(seed=123)
+    # Drive the arm off equilibrium so the saved state carries live velocity and warm-started contact
+    # forces; a settled scene would not exercise the parts a thinned subset drops.
+    sim.data.ctrl[:7] += 0.3
+    for _ in range(200):
+        sim.step()
+
+    saved = sim.save_state()
+    trajectory = []
+    for _ in range(300):
+        sim.step()
+        trajectory.append((sim.data.qpos.copy(), sim.data.qvel.copy()))
+
+    # Restore onto the same model (no ``scene_xml`` → no recompile) so the comparison isolates state
+    # sufficiency from the model's float-printed XML round-trip.
+    sim.load_state(saved, reset_time=False)
+    for qpos, qvel in trajectory:
+        sim.step()
+        np.testing.assert_array_equal(sim.data.qpos, qpos)
+        np.testing.assert_array_equal(sim.data.qvel, qvel)
+
+
+def test_recorded_urdf_matches_sim_kinematics():
+    """The model the sim records for the viewer and IK reproduces the MuJoCo model the sim runs:
+    the arm link frames and the ``end_effector`` control frame agree with ``panda.xml`` across joint
+    configurations, and the joint limits match. The control frame is the contract that keeps
+    ``ik_joints_from_episode`` inverting ``robot_state.ee_pose`` against the grasp site the sim
+    measured; the limits are what ``DLSIKSolverWithLimits`` constrains each solve to.
+    """
+    joints = [f'joint{i}' for i in range(1, 8)]
+
+    def compiled(spec):
+        # A URDF carries ``end_effector`` as a frame-only body; resolve it to a readable site.
+        if 'end_effector' not in {site.name for body in spec.bodies for site in body.sites}:
+            spec.body('end_effector').add_site().name = 'end_effector'
+        model = spec.compile()
+        return model, mj.MjData(model)
+
+    root = ET.fromstring(bundled_panda_model()['urdf'])  # drop meshes so the URDF compiles file-free
+    for link in root.findall('.//link'):
+        for el in link.findall('visual') + link.findall('collision'):
+            link.remove(el)
+    m_urdf, d_urdf = compiled(mj.MjSpec.from_string(ET.tostring(root, encoding='unicode')))
+    m_mjcf, d_mjcf = compiled(mj.MjSpec.from_file(str(package_assets_path('assets/mujoco/panda.xml'))))
+
+    qadr_urdf = [m_urdf.joint(n).qposadr.item() for n in joints]
+    qadr_mjcf = [m_mjcf.joint(n).qposadr.item() for n in joints]
+    ee_urdf = mj.mj_name2id(m_urdf, mj.mjtObj.mjOBJ_SITE, 'end_effector')
+    ee_mjcf = mj.mj_name2id(m_mjcf, mj.mjtObj.mjOBJ_SITE, 'end_effector')
+    for n in joints:
+        np.testing.assert_allclose(m_urdf.joint(n).range, m_mjcf.joint(n).range, atol=1e-6)
+    rng = np.random.default_rng(0)
+    for _ in range(50):
+        q = rng.uniform(-1.5, 1.5, len(joints))
+        d_urdf.qpos[qadr_urdf] = q
+        d_mjcf.qpos[qadr_mjcf] = q
+        mj.mj_forward(m_urdf, d_urdf)
+        mj.mj_forward(m_mjcf, d_mjcf)
+        for link in (f'link{i}' for i in range(1, 8)):
+            bu = mj.mj_name2id(m_urdf, mj.mjtObj.mjOBJ_BODY, link)
+            bm = mj.mj_name2id(m_mjcf, mj.mjtObj.mjOBJ_BODY, link)
+            np.testing.assert_allclose(d_urdf.xpos[bu], d_mjcf.xpos[bm], atol=1e-6)
+            assert abs(float(np.dot(d_urdf.xquat[bu], d_mjcf.xquat[bm]))) > 1 - 1e-6
+        np.testing.assert_allclose(d_urdf.site_xpos[ee_urdf], d_mjcf.site_xpos[ee_mjcf], atol=1e-6)
+        np.testing.assert_allclose(d_urdf.site_xmat[ee_urdf], d_mjcf.site_xmat[ee_mjcf], atol=1e-6)

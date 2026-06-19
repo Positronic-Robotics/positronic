@@ -136,10 +136,20 @@ def _compute_eye_controls(signals: EpisodeSignals, ep: Episode) -> rrb.EyeContro
     return rrb.EyeControls3D(position=camera_pos.tolist(), look_target=centroid.tolist())
 
 
+# MuJoCo's privileged full-physics state is a single wide vector recorded for replay/scoring —
+# ``sim_state.mjSTATE_*`` in current recordings, bare ``mjSTATE_*`` in older datasets — not a set of
+# readable channels. Plotting it as one scalar series per channel stalls the viewer, so any signal
+# carrying it is left out of the visualization.
+# TODO: a high-dimensional signal like this has no useful scalar-series view and needs one of its own.
+_HIDDEN_SIGNAL_MARKER = 'mjSTATE'
+
+
 def _collect_signal_groups(ep: Episode) -> EpisodeSignals:
     pose_set = set(ep.static.get('pose_signals', []))
     signals = EpisodeSignals(videos=[], numerics=[], dims={}, poses=[])
     for name, sig in ep.signals.items():
+        if _HIDDEN_SIGNAL_MARKER in name:
+            continue
         if sig.kind == Kind.IMAGE:
             try:
                 sig[0]
@@ -321,7 +331,10 @@ def _log_numeric_signals(
     """Log numeric time-series via send_columns. Returns pose/joint data for 3D logging."""
     pose_set = set(signals.poses)
     joint_signal = ep.static.get('joint_signal')
+    gripper = ep.static.get('gripper')
     stash_keys = pose_set | ({joint_signal} if joint_signal else set())
+    if gripper:
+        stash_keys.add(gripper['signal'])
     pose_data = {}
 
     for key in signals.numerics:
@@ -427,6 +440,19 @@ def _log_urdf_robot(
             if joint is not None:
                 _animate_joint(joint, q_ds[:, j_idx], ts_ds, prefix)
                 yield from drainer.drain()
+
+        # The gripper rides a single ``grip`` signal that opens both fingers symmetrically; it is
+        # nominally [0, 1] but recordings overshoot slightly, so clip before scaling to finger travel.
+        gripper = ep.static.get('gripper')
+        if gripper and gripper['signal'] in numeric_data:
+            grip_ts, grip_vals = numeric_data[gripper['signal']]
+            grip_step = max(1, len(grip_ts) // target_samples)
+            finger_pos = np.clip(grip_vals[::grip_step, 0], 0.0, 1.0) * gripper['travel']
+            for name in gripper['joints']:
+                joint = tree.get_joint_by_name(name)
+                if joint is not None:
+                    _animate_joint(joint, finger_pos, grip_ts[::grip_step], prefix)
+                    yield from drainer.drain()
 
     return root_frame
 

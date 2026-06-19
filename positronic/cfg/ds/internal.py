@@ -9,8 +9,6 @@ These datasets remain on the private s3://raw/ bucket and include:
 - Full combined datasets for multi-task training
 """
 
-from pathlib import Path
-
 import configuronic as cfn
 import pos3
 
@@ -20,37 +18,27 @@ from positronic.dataset.local_dataset import load_all_datasets
 from positronic.dataset.transforms import TransformedDataset, agg_fraction_true, agg_max, agg_percentile
 from positronic.dataset.transforms.episode import Concat, Derive, FromValue, Get, Group, Identity, Rename
 from positronic.dataset.transforms.quality import cmd_lag, cmd_velocity, idle_mask, jerk
+from positronic.drivers.roboarm import bundled_franka_model, bundled_panda_model
 from positronic.server.positronic_server import ColumnConfig as C
 from positronic.server.positronic_server import main as server_main
-from positronic.utils import package_assets_path
 from positronic.utils.logging import init_logging
 
 from . import concat_ds, local, transform
-
-# Robot meta for existing datasets that don't have it stored natively.
-# Future datasets will have per-unit calibrated URDF from Robot.robot_meta.
-SIM_URDF = Path(package_assets_path('assets/mujoco/panda_ik.xml')).read_text()
-REAL_URDF = (Path(__file__).resolve().parents[2] / 'drivers' / 'roboarm' / 'fr3.urdf').read_text()
-
-_JOINT_NAMES = [f'joint{i}' for i in range(1, 8)]
-_MESH_DIR = Path(package_assets_path('assets/fr3_collision'))
 
 # Dropped from the transform output. `robot_commands.pose` is the legacy plural name older
 # recordings used for the arm command; `_RENAME_ROBOT_COMMAND` re-surfaces it as the canonical
 # `robot_command.pose`, so the plural itself should not reach consumers.
 _REMOVE_SIGNALS = ['controller_positions.right', 'robot_commands.pose']
+
+# Backfill the robot model for datasets that don't store their own: the real arm and the MuJoCo sim
+# each supply their bundled model (URDF + collision meshes + frames) as static via these derives.
 _REAL_ROBOT_DERIVES = {
-    'urdf': FromValue(REAL_URDF),
-    'joint_names': FromValue(_JOINT_NAMES),
-    'meshes': FromValue({f.name: f.read_bytes() for f in _MESH_DIR.iterdir() if f.suffix == '.stl'}),
-    'control_frame': FromValue('end_effector'),
+    **{key: FromValue(value) for key, value in bundled_franka_model().items()},
     'joint_signal': FromValue('robot_state.q'),
     'pose_signals': FromValue(['robot_state.ee_pose', 'robot_command.pose']),
 }
 _SIM_ROBOT_DERIVES = {
-    'urdf': FromValue(SIM_URDF),
-    'joint_names': FromValue(_JOINT_NAMES),
-    'control_frame': FromValue('end_effector'),
+    **{key: FromValue(value) for key, value in bundled_panda_model().items()},
     'joint_signal': FromValue('robot_state.q'),
     'pose_signals': FromValue(['robot_state.ee_pose', 'robot_command.pose']),
 }
