@@ -98,11 +98,11 @@ traj_ee_action = absolute_pos_action.override(tgt_ee_pose_key='robot_state.ee_po
 )
 def ik_joints_action(solver, tgt_ee_pose_key, tgt_grip_key, current_q_key, num_joints):
     """Joint-space action codec that reconstructs target joints from EE targets via IK."""
-    from positronic.drivers.roboarm.ik import DLSIKSolver, DLSIKSolverWithLimits, DmControlIKSolver
+    from positronic.drivers.roboarm.ik import DLSIKSolver, DLSIKSolverWithLimits, LMIKSolver
     from positronic.policy.action import AbsoluteJointsAction, IKJointsAction
 
     tgt_joints_key = 'robot_command.joints'
-    solver_map = {'dm_control': DmControlIKSolver, 'dls': DLSIKSolver, 'dls_limits': DLSIKSolverWithLimits}
+    solver_map = {'lm': LMIKSolver, 'dls': DLSIKSolver, 'dls_limits': DLSIKSolverWithLimits}
     ik = IKJointsAction(
         solver_cls=solver_map[solver],
         tgt_ee_pose_key=tgt_ee_pose_key,

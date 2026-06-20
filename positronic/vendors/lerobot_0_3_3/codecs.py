@@ -18,4 +18,4 @@ joints_traj = codecs.compose.override(
 
 # IK variants: reconstruct joint targets from recorded EE targets via IK
 joints_ik = ee.override(obs=codecs.joints_obs, action=codecs.ik_joints_action)
-joints_ik_sim = joints_ik.override(**{'action.solver': 'dm_control'})
+joints_ik_sim = joints_ik.override(**{'action.solver': 'lm'})

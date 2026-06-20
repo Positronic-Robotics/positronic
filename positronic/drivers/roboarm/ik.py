@@ -1,7 +1,7 @@
 """IK solvers using MuJoCo for FK/Jacobian computation.
 
 Three solvers for reconstructing joint-space targets from recorded EE targets:
-- DmControlIKSolver: wraps dm_control qpos_from_site_pose (for sim data)
+- LMIKSolver: Levenberg-Marquardt on the site pose with nullspace damping (for sim data)
 - DLSIKSolver: DLS with nullspace bias and line search (ports inverse_kinematics_q0)
 - DLSIKSolverWithLimits: DLS with joint limits via bounded least squares
   (ports inverse_kinematics_with_limits, using scipy instead of OSQP)
@@ -15,13 +15,6 @@ from scipy.optimize import lsq_linear
 from scipy.spatial.transform import Rotation as ScipyRotation
 
 from positronic.dataset import transforms
-
-try:
-    from dm_control import mujoco as dm_mujoco
-    from dm_control.utils import inverse_kinematics as dm_ik
-except ImportError:
-    dm_mujoco = None
-    dm_ik = None
 
 
 def _prepare_spec(urdf_xml, control_frame):
@@ -63,6 +56,84 @@ def _cartesian_error(pos_cur, R_cur, t_tgt, R_tgt):
     e_pos = pos_cur - t_tgt
     e_rot = -R_cur @ ScipyRotation.from_matrix(R_cur.T @ R_tgt).as_rotvec()
     return np.concatenate([e_pos, e_rot])
+
+
+def _nullspace_method(jac_joints, delta, regularization_strength):
+    """Joint velocities for an end-effector delta via damped least squares."""
+    hess_approx = jac_joints.T @ jac_joints
+    joint_delta = jac_joints.T @ delta
+    if regularization_strength > 0:
+        hess_approx += np.eye(hess_approx.shape[0]) * regularization_strength
+        return np.linalg.solve(hess_approx, joint_delta)
+    return np.linalg.lstsq(hess_approx, joint_delta, rcond=-1)[0]
+
+
+def qpos_from_site_pose(
+    model,
+    data,
+    site_id,
+    dof_indices,
+    target_pos,
+    target_quat,
+    *,
+    tol=1e-14,
+    rot_weight=0.5,
+    regularization_threshold=0.1,
+    regularization_strength=3e-2,
+    max_update_norm=2.0,
+    progress_thresh=20.0,
+    max_steps=100,
+):
+    """Levenberg-Marquardt IK for a site's 6-DoF pose, searched in place on ``data``.
+
+    Warm-starts from ``data.qpos`` and perturbs only ``dof_indices`` until site ``site_id``
+    reaches ``target_pos``/``target_quat``. Returns ``(qpos, err_norm, success)`` where ``qpos``
+    is the (mutated) ``data.qpos`` view.
+    """
+    dof_indices = np.asarray(dof_indices)
+    jac = np.empty((6, model.nv))
+    jac_pos, jac_rot = jac[:3], jac[3:]
+    err = np.empty(6)
+    err_pos, err_rot = err[:3], err[3:]
+    update_nv = np.zeros(model.nv)
+    site_xquat = np.empty(4)
+    neg_site_xquat = np.empty(4)
+    err_rot_quat = np.empty(4)
+
+    mj.mj_fwdPosition(model, data)
+    site_xpos = data.site_xpos[site_id]
+    site_xmat = data.site_xmat[site_id]
+
+    err_norm = 0.0
+    success = False
+    for _ in range(max_steps):
+        err_pos[:] = target_pos - site_xpos
+        err_norm = np.linalg.norm(err_pos)
+        mj.mju_mat2Quat(site_xquat, site_xmat)
+        mj.mju_negQuat(neg_site_xquat, site_xquat)
+        mj.mju_mulQuat(err_rot_quat, target_quat, neg_site_xquat)
+        mj.mju_quat2Vel(err_rot, err_rot_quat, 1.0)
+        err_norm += np.linalg.norm(err_rot) * rot_weight
+
+        if err_norm < tol:
+            success = True
+            break
+
+        mj.mj_jacSite(model, data, jac_pos, jac_rot, site_id)
+        reg = regularization_strength if err_norm > regularization_threshold else 0.0
+        update_joints = _nullspace_method(jac[:, dof_indices], err, reg)
+
+        update_norm = np.linalg.norm(update_joints)
+        if err_norm / update_norm > progress_thresh:
+            break
+        if update_norm > max_update_norm:
+            update_joints *= max_update_norm / update_norm
+
+        update_nv[dof_indices] = update_joints
+        mj.mj_integratePos(model, data.qpos, update_nv, 1.0)
+        mj.mj_fwdPosition(model, data)
+
+    return data.qpos, err_norm, success
 
 
 class _SolverBase:
@@ -136,33 +207,25 @@ class _SolverBase:
         self._mj = None
 
 
-class DmControlIKSolver(_SolverBase):
-    """IK via dm_control qpos_from_site_pose. For sim data."""
+class LMIKSolver(_SolverBase):
+    """IK via Levenberg-Marquardt on the site pose. For sim data.
 
-    def __init__(self, urdf_xml, joint_names, control_frame):
-        if dm_mujoco is None:
-            raise ImportError('dm_control is required for DmControlIKSolver')
-        super().__init__(urdf_xml, joint_names, control_frame)
-
-    def _init_extra(self, spec):
-        self._phys = dm_mujoco.Physics.from_xml_string(spec.to_xml())
-
-    @property
-    def _physics(self):
-        _ = self._model
-        return self._phys
+    Ports qpos_from_site_pose from dm_control.
+    """
 
     def solve(self, current_q, target_ee_pose_vec):
-        self._physics.data.qpos[self._joint_qpos_ids] = current_q
-        result = dm_ik.qpos_from_site_pose(
-            physics=self._physics,
-            site_name=self.control_frame,
-            target_pos=target_ee_pose_vec[:3],
-            target_quat=target_ee_pose_vec[3:7],
-            joint_names=list(self.joint_names),
+        model = self._model
+        self._data.qpos[self._joint_qpos_ids] = current_q
+        qpos, _, _ = qpos_from_site_pose(
+            model,
+            self._data,
+            self._site_id,
+            self._joint_dof_ids,
+            target_ee_pose_vec[:3],
+            target_ee_pose_vec[3:7],
             rot_weight=0.5,
         )
-        return result.qpos[self._joint_qpos_ids]
+        return qpos[self._joint_qpos_ids]
 
 
 class DLSIKSolver(_SolverBase):
