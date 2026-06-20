@@ -15,9 +15,9 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest]
-        python: ['3.11', '3.12']
+        python: ['3.11', '3.12', '3.13']
         include:
-          - {os: macos-latest, python: '3.12'}
+          - {os: macos-latest, python: '3.13'}
     steps:
       - uses: actions/checkout@v4
       - name: Enable caching
@@ -54,7 +54,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python: ['3.11', '3.12']
+        python: ['3.11', '3.12', '3.13']
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
@@ -110,7 +110,7 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest]
-        python: ['3.11', '3.12']
+        python: ['3.11', '3.12', '3.13']
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4

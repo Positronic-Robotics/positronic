@@ -5,13 +5,12 @@ from typing import Any
 
 import mujoco as mj
 import numpy as np
-from dm_control import mujoco as dm_mujoco
-from dm_control.utils import inverse_kinematics as ik
 
 import pimm
 from positronic import geom
 from positronic.drivers.roboarm import RobotStatus, State
 from positronic.drivers.roboarm import command as roboarm_command
+from positronic.drivers.roboarm.ik import qpos_from_site_pose
 from positronic.drivers.roboarm.models import bundled_panda_model
 from positronic.simulator.mujoco.transforms import MujocoSceneTransform, load_spec, load_spec_from_file, np_seed
 
@@ -136,7 +135,7 @@ class MujocoSim(pimm.ControlSystem):
         self._grip_fps = grip_fps
         self._sim_state_fps = sim_state_fps
         self._renderer: mj.Renderer | None = None
-        self._ik_physics: dm_mujoco.Physics | None = None
+        self._ik_data: mj.MjData | None = None
 
         self._load_scene()
         self._warmup()
@@ -233,7 +232,7 @@ class MujocoSim(pimm.ControlSystem):
         if self._renderer is not None:
             self._renderer.close()
             self._renderer = None
-        self._ik_physics = None
+        self._ik_data = None
 
     def _warmup(self):
         """Settle the freshly built scene: apply the initial controls and step through the transient."""
@@ -298,18 +297,22 @@ class MujocoSim(pimm.ControlSystem):
                 raise ValueError(f'Unknown command type: {type(cmd)}')
 
     def _recalculate_ik(self, target: geom.Transform3D) -> np.ndarray | None:
-        if self._ik_physics is None:
-            # Wraps the live ``data``, so IK warm-starts from the robot's current pose.
-            self._ik_physics = dm_mujoco.Physics.from_model(self.data)
-        result = ik.qpos_from_site_pose(
-            physics=self._ik_physics,
-            site_name=self._ee_name,
-            target_pos=target.translation,
-            target_quat=target.rotation.as_quat,
-            joint_names=self._joint_names,
+        if self._ik_data is None:
+            self._ik_data = mj.MjData(self.model)
+            self._ik_site_id = mj.mj_name2id(self.model, mj.mjtObj.mjOBJ_SITE, self._ee_name)
+            self._ik_dof_ids = np.array([self.model.joint(n).dofadr.item() for n in self._joint_names])
+        # Search on a scratch copy warm-started from the robot's current pose, leaving the live sim intact.
+        self._ik_data.qpos[:] = self.data.qpos
+        qpos, _, success = qpos_from_site_pose(
+            self.model,
+            self._ik_data,
+            self._ik_site_id,
+            self._ik_dof_ids,
+            target.translation,
+            target.rotation.as_quat,
             rot_weight=0.5,
         )
-        return result.qpos[self._joint_qpos_ids] if result.success else None
+        return qpos[self._joint_qpos_ids] if success else None
 
     def _set_actuator_values(self, values: np.ndarray):
         for name, value in zip(self._actuator_names, values, strict=True):

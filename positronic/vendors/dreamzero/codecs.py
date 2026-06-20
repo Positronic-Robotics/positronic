@@ -234,16 +234,16 @@ _ik_action = codecs.ik_joints_action.override(tgt_joints_key='robot_command.join
 @cfn.config(solver='dls_limits')
 def _ik_dreamzero_action(solver: str):
     """IK signal derivation composed with DreamZero action codec."""
-    from positronic.drivers.roboarm.ik import DLSIKSolver, DLSIKSolverWithLimits, DmControlIKSolver
+    from positronic.drivers.roboarm.ik import DLSIKSolver, DLSIKSolverWithLimits, LMIKSolver
     from positronic.policy.action import IKJointsAction
 
-    solver_map = {'dm_control': DmControlIKSolver, 'dls': DLSIKSolver, 'dls_limits': DLSIKSolverWithLimits}
+    solver_map = {'lm': LMIKSolver, 'dls': DLSIKSolver, 'dls_limits': DLSIKSolverWithLimits}
     ik = IKJointsAction(solver_cls=solver_map[solver])
     return ik | DreamZeroActionCodec(tgt_joints_key='robot_command.joints', tgt_grip_key='target_grip')
 
 
 joints_ik = codecs.compose.override(obs=dreamzero_obs, action=_ik_dreamzero_action, fps=15.0)
-joints_ik_sim = joints_ik.override(**{'action.solver': 'dm_control'})
+joints_ik_sim = joints_ik.override(**{'action.solver': 'lm'})
 
 
 # offsets_sec: 4 frames spanning the just-executed 24-step chunk at 15 fps, matching DreamZero's

@@ -7,7 +7,7 @@ import pytest
 
 from positronic.dataset.episode import EpisodeContainer
 from positronic.dataset.tests.utils import DummySignal
-from positronic.drivers.roboarm.ik import DLSIKSolver, DLSIKSolverWithLimits, DmControlIKSolver, ik_joints_from_episode
+from positronic.drivers.roboarm.ik import DLSIKSolver, DLSIKSolverWithLimits, LMIKSolver, ik_joints_from_episode
 from positronic.utils import package_assets_path
 
 URDF = Path(package_assets_path('assets/mujoco/panda_ik.xml')).read_text()
@@ -75,10 +75,10 @@ def test_dls_solver_with_limits():
 
 
 @pytest.mark.parametrize('q_target', TEST_CONFIGS)
-def test_dm_control_solver(q_target):
+def test_lm_solver(q_target):
     target_pose = _fk(URDF, q_target)
     q_start = np.zeros(7)
-    solver = DmControlIKSolver(URDF, JOINT_NAMES, CONTROL_FRAME)
+    solver = LMIKSolver(URDF, JOINT_NAMES, CONTROL_FRAME)
     _assert_fk_matches(solver, q_start, target_pose)
 
 

@@ -243,4 +243,4 @@ ee_joints_ik = codecs.compose.override(
     obs=groot_obs.override(include_joints=True),
     action=groot_action.override(base=codecs.ik_joints_action, action_key='joint_position'),
 )
-ee_joints_ik_sim = ee_joints_ik.override(**{'action.base.solver': 'dm_control'})
+ee_joints_ik_sim = ee_joints_ik.override(**{'action.base.solver': 'lm'})
