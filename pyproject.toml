@@ -6,7 +6,7 @@ build-backend = "setuptools.build_meta"
 name = "positronic"
 version = "0.2.1"
 description = "Positronic robotics project"
-requires-python = ">=3.11, <3.14"
+requires-python = ">=3.11, <3.13"
 readme = { file = "README.md", content-type = "text/markdown" }
 license = { file = "LICENSE" }
 classifiers = [
@@ -125,8 +125,7 @@ positronic-franka = false
 # ZED SDK ships one ABI-specific wheel per CPython version; pick by interpreter.
 pyzed = [
     { url = "https://download.stereolabs.com/zedsdk/5.0/whl/linux_x86_64/pyzed-5.0-cp311-cp311-linux_x86_64.whl", marker = "python_full_version < '3.12'" },
-    { url = "https://download.stereolabs.com/zedsdk/5.0/whl/linux_x86_64/pyzed-5.0-cp312-cp312-linux_x86_64.whl", marker = "python_full_version >= '3.12' and python_full_version < '3.13'" },
-    { url = "https://download.stereolabs.com/zedsdk/5.0/whl/linux_x86_64/pyzed-5.0-cp313-cp313-linux_x86_64.whl", marker = "python_full_version >= '3.13'" },
+    { url = "https://download.stereolabs.com/zedsdk/5.0/whl/linux_x86_64/pyzed-5.0-cp312-cp312-linux_x86_64.whl", marker = "python_full_version >= '3.12'" },
 ]
 openpi-client = { git = "https://github.com/Positronic-Robotics/openpi.git", rev = "main-positronic", subdirectory = "packages/openpi-client" }
 
