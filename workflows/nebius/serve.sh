@@ -62,12 +62,12 @@ NAME="$2"
 shift 2
 
 case "$VENDOR" in
-  lerobot_0_3_3) IMAGE="positro/positronic:${IMAGE_TAG}"; EXTRA="--extra lerobot_0_3_3 " ;;
-  lerobot)       IMAGE="positro/positronic:${IMAGE_TAG}"; EXTRA="--extra lerobot " ;;
+  lerobot_0_3_3) IMAGE="positro/positronic:${IMAGE_TAG}"; EXTRA="--extra lerobot_0_3_3 "; PYVER=3.13 ;;
+  lerobot)       IMAGE="positro/positronic:${IMAGE_TAG}"; EXTRA="--extra lerobot "; PYVER=3.13 ;;
   # openpi.server imports `openpi_client` at module top → needs --extra openpi
-  openpi)        IMAGE="positro/openpi:${IMAGE_TAG}";     EXTRA="--extra openpi " ;;
-  gr00t)         IMAGE="positro/gr00t:${IMAGE_TAG}";      EXTRA="" ;;
-  dreamzero)     IMAGE="positro/dreamzero:${IMAGE_TAG}";  EXTRA="" ;;
+  openpi)        IMAGE="positro/openpi:${IMAGE_TAG}";     EXTRA="--extra openpi "; PYVER=3.11 ;;
+  gr00t)         IMAGE="positro/gr00t:${IMAGE_TAG}";      EXTRA=""; PYVER=3.11 ;;
+  dreamzero)     IMAGE="positro/dreamzero:${IMAGE_TAG}";  EXTRA=""; PYVER=3.11 ;;
   *)
     echo "Unknown vendor: '$VENDOR'. Supported: lerobot_0_3_3 | lerobot | openpi | gr00t | dreamzero" >&2
     exit 1
@@ -82,7 +82,7 @@ case " $* " in
   *) set -- "$@" "--idle_timeout_min=${NEBIUS_IDLE_TIMEOUT_MIN:-20}" ;;
 esac
 
-SERVER_ARGS="run --python 3.11 ${EXTRA}python -m positronic.vendors.${VENDOR}.server $*"
+SERVER_ARGS="run --python ${PYVER} ${EXTRA}python -m positronic.vendors.${VENDOR}.server $*"
 
 echo "Creating $VENDOR endpoint '$NAME'..."
 nebius ai endpoint create \

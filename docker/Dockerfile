@@ -39,7 +39,7 @@ ENV LD_LIBRARY_PATH=${ROBOTPKG_PREFIX}/lib:$LD_LIBRARY_PATH
 ENV PKG_CONFIG_PATH=${ROBOTPKG_PREFIX}/lib/pkgconfig
 
 ENV UV_LINK_MODE=copy
-RUN uv venv --python 3.11
+RUN uv venv --python 3.13
 
 # activate venv to be used in docker run
 ENV VIRTUAL_ENV=/.venv/

@@ -86,7 +86,7 @@ if [ "$VENDOR" = "openpi" ] && [ -z "$OUTPUT_DIR" ]; then
 fi
 
 JOB_NAME="${VENDOR//_/-}-convert-$(date +%Y%m%d-%H%M%S)"
-CONVERT_ARGS="run --python 3.11 ${EXTRA}python -m ${CONVERTER_MODULE} convert $*"
+CONVERT_ARGS="run --python 3.13 ${EXTRA}python -m ${CONVERTER_MODULE} convert $*"
 
 CREATE_OUT=$(nebius ai job create \
   --parent-id "$PARENT_ID" \

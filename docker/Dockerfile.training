@@ -14,7 +14,7 @@ RUN apt-get update && apt-get install -y \
 ENV UV_LINK_MODE=copy
 ENV PIP_DEFAULT_TIMEOUT=600
 ENV UV_HTTP_TIMEOUT=600
-RUN uv venv --python 3.11
+RUN uv venv --python 3.13
 ENV VIRTUAL_ENV=/.venv
 ENV PATH=/$VIRTUAL_ENV/bin:$PATH
 COPY pyproject.toml uv.lock ./
