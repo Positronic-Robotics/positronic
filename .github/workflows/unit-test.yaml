@@ -10,7 +10,14 @@ on:
 
 jobs:
   core:
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest]
+        python: ['3.11', '3.12']
+        include:
+          - {os: macos-latest, python: '3.12'}
     steps:
       - uses: actions/checkout@v4
       - name: Enable caching
@@ -19,7 +26,7 @@ jobs:
           enable-cache: true
 
       - name: Set up Python
-        run: uv venv --python 3.11
+        run: uv venv --python ${{ matrix.python }}
 
       - name: Install dependencies
         run: uv sync --locked --extra dev
@@ -39,18 +46,22 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: coverage-html-core
+          name: coverage-html-core-${{ matrix.os }}-${{ matrix.python }}
           path: htmlcov
 
   packaging:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ['3.11', '3.12']
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
 
       - name: Install as package and verify imports
         run: |
-          uv venv --python 3.11 /tmp/pkg-test
+          uv venv --python ${{ matrix.python }} /tmp/pkg-test
           uv pip install --python /tmp/pkg-test . jinja2
           /tmp/pkg-test/bin/python utilities/check_packaging.py
 
@@ -99,6 +110,7 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest]
+        python: ['3.11', '3.12']
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -106,6 +118,6 @@ jobs:
         with:
           enable-cache: true
       - name: Set up Python
-        run: uv venv --python 3.11
-      - name: uv sync --locked succeeds on ${{ matrix.os }}
+        run: uv venv --python ${{ matrix.python }}
+      - name: uv sync --locked succeeds on ${{ matrix.os }} (py${{ matrix.python }})
         run: uv sync --locked --extra dev
