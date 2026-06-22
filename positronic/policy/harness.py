@@ -55,13 +55,14 @@ class Harness(pimm.ControlSystem):
     ``RUN`` may carry ``inference_latency`` (sim-only inference-cost simulation) and ``eval.seed``
     (handed to the task's scene reset) in its context.
     A ``trials`` plan (a sequence of RUN contexts) makes the harness self-driving: whenever it is
-    idle it starts the next trial itself — bounded by the task's ``timeout`` — and exits once the
-    plan is exhausted, so the unattended path needs no driver at all. Attended drivers own episode
-    termination themselves; directive-driven trials get no deadline.
+    idle it starts the next trial itself and exits once the plan is exhausted, so the unattended
+    path needs no driver at all. A task's ``timeout`` bounds every trial it is given to — self-driven
+    or operator-driven alike — so an attended episode still terminates at the deadline even if the
+    operator never sends FINISH; a task-less attended session has no deadline and ends only on directives.
 
-    A self-driven trial also ends early when the privileged ``done`` signal is delivered within its
-    budget: it records ``eval.terminated`` True and the delivered payload in its static data, a
-    timed-out one False. Attended episodes ignore ``done`` — the operator's directives end them.
+    A deadline-bounded trial also ends early when the privileged ``done`` signal is delivered within
+    its budget: it records ``eval.terminated`` True and the delivered payload in its static data, a
+    timed-out one False. A task-less session has no budget, so ``done`` does not terminate it.
 
     The ``Embodiment`` provides the observation serializers (which own the canonical key names),
     the command channels, and the home action; the harness reads them to assemble inputs and demux

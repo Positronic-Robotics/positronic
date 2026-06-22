@@ -477,6 +477,48 @@ def test_trial_timeout_self_terminates(world):
 
 
 @pytest.mark.timeout(3.0)
+def test_attended_task_run_respects_timeout(world):
+    """A task's ``timeout`` bounds an attended (directive-driven) run too: RUN arrives but no FINISH, yet
+    the trial still self-terminates at the deadline. The deadline is armed whenever a task is supplied, not
+    only on the self-driven ``trials`` path."""
+    policy = StubPolicy()
+    harness = Harness(policy, make_embodiment(), task=Task(instruction='test', timeout=0.05))
+    p = _pair_all(world, harness)
+
+    scheduler = world.start([harness])
+    p['directive_em'].emit(Directive.RUN(task='test'))
+    drive_scheduler(scheduler, steps=200)
+
+    stops = [c for c in _ds_commands(p) if c.type == DsWriterCommandType.STOP_EPISODE]
+    assert len(stops) == 1
+    assert stops[0].static_data['eval.terminated'] is False
+    assert isinstance(_last_command(p), Reset)
+
+
+@pytest.mark.timeout(3.0)
+def test_attended_task_run_respects_done(world):
+    """The privileged ``done`` ends an attended run too: a fresh terminal within budget terminates the
+    episode even though no FINISH arrives. ``done`` is honored whenever a task supplies it, attended or
+    self-driven."""
+    policy = StubPolicy()
+    harness = Harness(policy, make_embodiment(), task=Task(instruction='test', timeout=100.0))
+    p = _pair_all(world, harness)
+    done_em = world.pair(harness.done)
+
+    scheduler = world.start([harness])
+    p['directive_em'].emit(Directive.RUN(task='test'))
+    drive_scheduler(scheduler, steps=5)
+    assert not [c for c in _ds_commands(p) if c.type == DsWriterCommandType.STOP_EPISODE]
+
+    done_em.emit({'eval.success': True})
+    drive_scheduler(scheduler, steps=10)
+    stops = [c for c in _ds_commands(p) if c.type == DsWriterCommandType.STOP_EPISODE]
+    assert len(stops) == 1
+    assert stops[0].static_data['eval.terminated'] is True
+    assert stops[0].static_data['eval.success'] is True
+
+
+@pytest.mark.timeout(3.0)
 def test_trial_stop_signal_terminates(world):
     """Delivering the privileged ``done`` ends a trial early: terminated=True, payload recorded, homed."""
     policy = StubPolicy()
