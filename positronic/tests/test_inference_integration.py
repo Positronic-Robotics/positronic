@@ -255,6 +255,9 @@ def test_countdown_terminates_on_done_records_payload(tmp_path):
     assert episode.static['eval.terminated'] is True
     assert episode.static['eval.success'] is True  # the delivered ``done`` payload lands in static data
     assert episode.static['eval.embodiment'] == 'test.countdown'
+    # The terminal frame (the step where ``done`` fired) is recorded, not dropped by STOP closing the writer.
+    values = [v for v, _ in episode.signals['value']]
+    assert values[-1][0] == 4.0
 
 
 @pytest.mark.timeout(30.0)

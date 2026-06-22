@@ -145,14 +145,15 @@ class DsWriterAgent(pimm.ControlSystem):
     episode lifecycle.
 
     On `START_EPISODE`, opens a new `EpisodeWriter` from the provided
-    `DatasetWriter` and applies `static_data`. The opening turn drains the input
-    channels without recording — the inter-episode home command and any pre-reset
-    frame linger there from before START — so recording starts the next turn and
-    the producer's post-reset frame-0 is the first sample. While open, each
-    updated input signal (from `inputs`) is appended with the current timestamp
-    from `clock`. `STOP_EPISODE` finalizes the writer after applying
-    `static_data`; `ABORT_EPISODE` aborts and discards it. Invalid or
-    out-of-order commands are ignored with a log message.
+    `DatasetWriter` and applies `static_data`. On the opening turn, samples that
+    predate START — the inter-episode home command and any pre-reset frame — are
+    dropped, while a genuine post-START value is kept; the producer's post-reset
+    frame-0 arrives the next turn and is the first recorded sample. While open,
+    each updated input signal (from `inputs`) is appended with the current
+    timestamp from `clock`. `STOP_EPISODE` and `ABORT_EPISODE` are handled after
+    that turn's inputs, so the trial's last frame is recorded before STOP
+    finalizes the writer; ABORT discards the episode. Invalid or out-of-order
+    commands are ignored with a log message.
 
     `TimeMode` selects whether timestamps come from the control loop clock
     (`CLOCK`) or from the producing message (`MESSAGE`).
@@ -198,8 +199,12 @@ class DsWriterAgent(pimm.ControlSystem):
         try:
             while not should_stop.value:
                 cmd_msg = self.command.read()
+                # Open before draining this turn's inputs, but finalize/abort after them: the trial's last
+                # frame, queued by the producer a control period earlier, is recorded before STOP closes the
+                # writer.
+                start = cmd_msg.updated and cmd_msg.data.type == DsWriterCommandType.START_EPISODE
                 opened = False
-                if cmd_msg.updated:
+                if start:
                     was_open = ep_writer is not None
                     ep_writer, ep_counter = self._handle_command(cmd_msg.data, ep_writer, ep_counter, cmd_msg.ts)
                     opened = ep_writer is not None and not was_open
@@ -207,11 +212,12 @@ class DsWriterAgent(pimm.ControlSystem):
                 if ep_writer is not None:
                     for name, reader in self._inputs.items():
                         msg = reader.read()
-                        # On the turn the episode opens, drain the channels without recording: the
-                        # inter-episode home command and any pre-reset frame linger there from before START,
-                        # so consuming them and recording from the next turn makes the producer's post-reset
-                        # frame-0 (published after the recorder, in the same round) the first sample.
-                        if msg.updated and not opened:
+                        # On the opening turn, drop samples that predate START — the inter-episode home
+                        # command and any pre-reset frame linger there from before it — while keeping a
+                        # genuine in-episode value, so async jitter on the real path does not lose the first
+                        # sample. The post-reset frame-0 is published after the recorder (next turn), so it is
+                        # never on this turn and records normally.
+                        if msg.updated and (not opened or msg.ts > cmd_msg.ts):
                             world_time_ns, message_time_ns = clock.now_ns(), msg.ts
                             primary_ts = world_time_ns if self._time_mode == TimeMode.CLOCK else message_time_ns
 
@@ -232,6 +238,9 @@ class DsWriterAgent(pimm.ControlSystem):
                                     _append(ep_writer, name, sample.value, sample.ts, None)
                             else:
                                 _append(ep_writer, name, value, primary_ts, extra_ts)
+
+                if cmd_msg.updated and not start:
+                    ep_writer, ep_counter = self._handle_command(cmd_msg.data, ep_writer, ep_counter, cmd_msg.ts)
 
                 yield pace()
         finally:
