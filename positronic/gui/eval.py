@@ -444,7 +444,7 @@ class EvalUI(pimm.ControlSystem):
         print('State: WAITING (Reset)')
         self.state = State.WAITING
         self.update_ui()
-        self.directive.emit(Directive.HOME())
+        self.directive.emit(Directive.ABORT())
 
     # --- Episode editor ---
 

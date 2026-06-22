@@ -103,8 +103,8 @@ def _ds_commands(p):
 
 
 def _episode_metas(p):
-    """Extract metadata dicts from all START commands."""
-    return [cmd.static_data for cmd in _ds_commands(p) if cmd.type == DsWriterCommandType.START_EPISODE]
+    """Extract metadata dicts from all STOP commands (episode meta is stamped at finalize)."""
+    return [cmd.static_data for cmd in _ds_commands(p) if cmd.type == DsWriterCommandType.STOP_EPISODE]
 
 
 @pytest.mark.timeout(5.0)
@@ -173,6 +173,11 @@ def test_sampled_policy_e2e():
     # Group commands by episode based on the metas
     first_commands_by_policy = {}
     cmd_idx = 0
+    while cmd_idx < len(all_cmds):  # skip the startup home (a leading Reset emitted before episode 0)
+        _, data = all_cmds[cmd_idx]
+        cmd_idx += 1
+        if isinstance(data, list) and data and isinstance(data[0][1], roboarm.command.Reset):
+            break
     for name in policy_names:
         if name not in first_commands_by_policy and cmd_idx < len(all_cmds):
             _, traj = all_cmds[cmd_idx]

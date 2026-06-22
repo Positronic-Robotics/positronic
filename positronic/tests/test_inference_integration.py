@@ -6,10 +6,14 @@ import pos3
 import pytest
 import tqdm
 
+import pimm
 import positronic.cfg.simulator
 from positronic.cfg.eval.sim.positronic import stack_cubes
 from positronic.dataset.local_dataset import LocalDataset
+from positronic.dataset.serializers import Serializers
+from positronic.drivers.roboarm import command as roboarm_command
 from positronic.drivers.roboarm.models import bundled_panda_model
+from positronic.eval import ROBOT_STATIC_META, Command, Embodiment, Eval, Observation, Task
 from positronic.inference import main
 from positronic.policy.tests.test_harness import StubPolicy
 from positronic.simulator.mujoco.sim import MujocoSim
@@ -102,6 +106,18 @@ def test_sim_emits_commands_and_records_dataset(tmp_path, monkeypatch):
     first_image, _ = camera_samples[0]
     assert isinstance(first_image, np.ndarray)
 
+    # Frame-0 is recorded for every trial, not just the first: each episode's first sim-state sample is its
+    # own post-reset scene (seeds 100 and 101), bit-reproducible from a fresh reset on the same seed. A
+    # dropped frame-0 — or a stale step from the prior trial's run loop bleeding in — would record a
+    # post-step state instead.
+    for i, seed in enumerate((100, 101)):
+        reference = MujocoSim(
+            'positronic/assets/mujoco/franka_table.xml', positronic.cfg.simulator.stack_cubes_loaders()
+        )
+        reference.reset(seed=seed)
+        first_state, _ = list(ds[i].signals['sim_state.mjSTATE_INTEGRATION'])[0]
+        np.testing.assert_allclose(first_state, reference.save_state()['mjSTATE_INTEGRATION'], rtol=1e-6)
+
     pose_signal = signals['robot_command.pose']
     pose_samples = list(pose_signal)
     assert pose_samples, 'robot_command.pose signal is empty'
@@ -114,6 +130,8 @@ def test_sim_emits_commands_and_records_dataset(tmp_path, monkeypatch):
     grip_samples = list(grip_signal)
     assert grip_samples, 'target_grip signal is empty'
     grip_values = [value for value, _ts in grip_samples]
+    # The inter-episode home grip is drained by ``reset``, so the command stream starts with the policy's
+    # first commanded grip (0.33) — consistent with ``robot_command.pose`` above.
     assert grip_values[0] == pytest.approx(0.33, rel=1e-2, abs=1e-2)
     assert np.all(np.diff([ts for _, ts in grip_samples]) > 0) or len(grip_samples) == 1
 
@@ -121,9 +139,125 @@ def test_sim_emits_commands_and_records_dataset(tmp_path, monkeypatch):
     last_obs = policy.observations[-1]
     assert isinstance(last_obs['image.wrist'], np.ndarray)
     assert 'robot_state.ee_pose' in last_obs
-    # The task's instruction is injected by the harness (no longer carried by the driver).
+    # The task's instruction is injected by the harness.
     assert last_obs['task'] == 'integration-test'
     assert last_obs['descriptor'] == 'mujoco.franka'
+
+
+class _CountdownProducer(pimm.ControlSystem):
+    """A local deterministic producer standing in for the simulator, so the harness+recorder control loop
+    is exercised end to end without MuJoCo. Obs encodes the env step count — ``reset`` is step 0, each step
+    adds 1 — so a recorded episode's first ``value`` sample is all-zeros iff the recorder logged the
+    post-reset frame-0. ``done`` fires after ``done_after`` steps (``None`` → never). The producer is the
+    eval's sole time-master: it sleeps one ``control_dt`` every turn, publishing frame-0 in its own turn
+    (in sequence, after the recorder's open-turn drain) and free-running — it advances each tick regardless
+    of the commands the policy emits.
+    """
+
+    def __init__(self, done_after: int | None = None, control_dt: float = 0.01):
+        self._done_after = done_after
+        self._control_dt = control_dt
+        self._steps = 0
+        self._active = False
+        self._reset_pending = False
+        self.observations = pimm.EmitterDict(self)
+        self.commands = pimm.ReceiverDict(self, default=None)
+        self.robot_meta = pimm.ControlSystemEmitter(self)
+        self.done = pimm.ControlSystemEmitter(self)
+
+    def reset(self, seed: int | None = None) -> None:
+        self._steps = 0
+        self._reset_pending = True
+        self._active = True
+
+    def _emit_obs(self) -> None:
+        self.observations['value'].emit(np.full(7, self._steps, dtype=np.float64))
+
+    def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock):
+        while not should_stop.value:
+            yield pimm.Sleep(self._control_dt)
+            if self._reset_pending:
+                self._reset_pending = False
+                self.robot_meta.emit({})
+                self._emit_obs()  # frame-0 (step 0), before any step advances the env
+                self.done.emit({})
+            elif self._active:
+                self._steps += 1
+                self._emit_obs()
+                if self._done_after is not None and self._steps >= self._done_after:
+                    self.done.emit({'eval.success': True})
+                    self._active = False
+
+
+def _countdown_eval(producer: _CountdownProducer, timeout: float) -> Eval:
+    embodiment = Embodiment(
+        descriptor='test.countdown',
+        observations={'value': Observation(producer.observations['value'], None)},
+        commands={
+            'robot_command': Command(
+                producer.commands['robot_command'], roboarm_command.Reset(), Serializers.robot_command
+            )
+        },
+        static_meta=dict(ROBOT_STATIC_META),
+        meta_source=producer.robot_meta,
+        control_systems=(producer,),
+        simulated=True,
+    )
+    task = Task(
+        instruction='count', timeout=timeout, privileged={}, seed=None, reset=producer.reset, done=producer.done
+    )
+    return Eval(embodiment, task)
+
+
+@pytest.mark.timeout(30.0)
+def test_countdown_records_frame0_every_trial(tmp_path):
+    """[harness + recorder + sim] with no MuJoCo: every recorded episode's first ``value`` sample is the
+    post-reset frame-0 (all-zeros), trials after the first included. Proves the recorder's open-turn drain
+    drops the pre-reset frame and the producer publishes frame-0 in sequence. The small ``control_dt`` wakes
+    the producer quickly between trials, so a stray step would overwrite frame-0 if it weren't published in
+    the producer's own turn."""
+    ev = _countdown_eval(_CountdownProducer(control_dt=0.01), timeout=0.35)
+    with pos3.mirror():
+        main(
+            embodiment=ev.embodiment,
+            task=ev.task,
+            policy=StubPolicy(command=ev.embodiment.commands['robot_command'].home, target_grip=0.0),
+            trials=[{'eval.trial_index': i, 'eval.seed': i} for i in range(2)],
+            output_dir=str(tmp_path),
+            wrap=None,  # the degenerate obs is not Franka-shaped; ErrorRecovery hard-codes robot_state.error
+        )
+
+    ds = LocalDataset(tmp_path)
+    assert len(ds) == 2
+    for i in range(2):
+        first_value, _ts = ds[i].signals['value'][0]
+        np.testing.assert_array_equal(first_value, np.zeros(7))
+
+
+@pytest.mark.timeout(30.0)
+def test_countdown_terminates_on_done_records_payload(tmp_path):
+    """[harness + recorder + sim] with no MuJoCo: a self-driven trial ends early when the producer's ``done``
+    fires, recording ``eval.terminated`` True and the delivered payload into the episode's static data."""
+    ev = _countdown_eval(_CountdownProducer(done_after=4), timeout=15.0)
+    with pos3.mirror():
+        main(
+            embodiment=ev.embodiment,
+            task=ev.task,
+            policy=StubPolicy(command=ev.embodiment.commands['robot_command'].home, target_grip=0.0),
+            trials=[{'eval.trial_index': 0, 'eval.seed': 100}],
+            output_dir=str(tmp_path),
+            wrap=None,
+        )
+
+    ds = LocalDataset(tmp_path)
+    assert len(ds) == 1
+    episode = ds[0]
+    assert episode.static['eval.terminated'] is True
+    assert episode.static['eval.success'] is True  # the delivered ``done`` payload lands in static data
+    assert episode.static['eval.embodiment'] == 'test.countdown'
+    # The terminal frame (the step where ``done`` fired) is recorded, not dropped by STOP closing the writer.
+    values = [v for v, _ in episode.signals['value']]
+    assert values[-1][0] == 4.0
 
 
 @pytest.mark.timeout(30.0)
