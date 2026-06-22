@@ -174,16 +174,16 @@ class RelativePositionAction(Codec):
 
 
 class JointDeltaAction(Codec):
-    """DROID-style joint velocity action decoder (inference only)."""
+    """DROID-style joint-delta action decoder (inference only).
 
-    RELATIVE_MAX_JOIN_DELTA = np.array([0.2, 0.2, 0.2, 0.2, 0.2, 0.2, 0.2])
-    MAX_JOINT_DELTA = RELATIVE_MAX_JOIN_DELTA.max()
-    MAX_JONIT_VEL = RELATIVE_MAX_JOIN_DELTA / MAX_JOINT_DELTA
+    Scales the model's per-step joint velocities (clipped to ``[-1, 1]``) by ``MAX_JOINT_DELTA``
+    into a ``JointDelta`` command; the driver integrates each delta onto the live measured joints.
+    """
+
+    MAX_JOINT_DELTA = 0.2
 
     def __init__(self, num_joints: int = 7):
         self.num_joints = num_joints
-
-        self._training_meta = {'lerobot_features': {'action': lerobot_action(num_joints + 1)}}
 
     def encode(self, data):
         return {}
@@ -194,11 +194,6 @@ class JointDeltaAction(Codec):
             raise ValueError(f'Expected action vector of size {self.num_joints + 1}, got {action_vector.shape[-1]}')
 
         action_vector = action_vector.clip(-1.0, 1.0)
-        velocities = action_vector[: self.num_joints]
+        velocities = action_vector[: self.num_joints] * self.MAX_JOINT_DELTA
         grip = 1.0 if action_vector[self.num_joints].item() > 0.5 else 0.0
-
-        max_vel_norm = (np.abs(velocities) / self.MAX_JONIT_VEL).max()
-        if max_vel_norm > 1.0:
-            velocities = velocities / max_vel_norm
-
-        return {'robot_command': command.JointDelta(velocities=velocities * self.MAX_JOINT_DELTA), 'target_grip': grip}
+        return {'robot_command': command.JointDelta(velocities=velocities), 'target_grip': grip}
