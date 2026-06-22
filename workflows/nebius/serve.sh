@@ -82,7 +82,7 @@ case " $* " in
   *) set -- "$@" "--idle_timeout_min=${NEBIUS_IDLE_TIMEOUT_MIN:-20}" ;;
 esac
 
-SERVER_ARGS="run --python 3.11 ${EXTRA}python -m positronic.vendors.${VENDOR}.server $*"
+SERVER_ARGS="run --python 3.13 ${EXTRA}python -m positronic.vendors.${VENDOR}.server $*"
 
 echo "Creating $VENDOR endpoint '$NAME'..."
 nebius ai endpoint create \

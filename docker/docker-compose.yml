@@ -69,40 +69,40 @@ services:
   openpi-train:
     <<: *openpi-common
     container_name: openpi-train
-    entrypoint: ["uv", "run", "--python", "3.11", "python", "-m", "positronic.vendors.openpi.train"]
+    entrypoint: ["uv", "run", "--python", "3.13", "python", "-m", "positronic.vendors.openpi.train"]
 
   openpi-stats:
     <<: *openpi-common
     container_name: openpi-stats
-    entrypoint: ["uv", "run", "--python", "3.11", "python", "-m", "positronic.vendors.openpi.stats"]
+    entrypoint: ["uv", "run", "--python", "3.13", "python", "-m", "positronic.vendors.openpi.stats"]
 
   lerobot-0_3_3-convert:
     <<: *positronic-common
     container_name: lerobot-0_3_3-convert
-    entrypoint: ["uv", "run", "--python", "3.11", "--extra", "lerobot_0_3_3", "python", "-m", "positronic.vendors.lerobot_0_3_3.to_lerobot"]
+    entrypoint: ["uv", "run", "--python", "3.13", "--extra", "lerobot_0_3_3", "python", "-m", "positronic.vendors.lerobot_0_3_3.to_lerobot"]
 
   lerobot-0_3_3-train:
     <<: *positronic-common
     container_name: lerobot-0_3_3-train
-    entrypoint: ["uv", "run", "--python", "3.11", "--extra", "lerobot_0_3_3", "python", "-m", "positronic.vendors.lerobot_0_3_3.train"]
+    entrypoint: ["uv", "run", "--python", "3.13", "--extra", "lerobot_0_3_3", "python", "-m", "positronic.vendors.lerobot_0_3_3.train"]
 
   lerobot-0_3_3-server:
     <<: *positronic-common
     container_name: lerobot-0_3_3-server
-    entrypoint: ["uv", "run", "--python", "3.11", "--extra", "lerobot_0_3_3", "python", "-m", "positronic.vendors.lerobot_0_3_3.server"]
+    entrypoint: ["uv", "run", "--python", "3.13", "--extra", "lerobot_0_3_3", "python", "-m", "positronic.vendors.lerobot_0_3_3.server"]
     ports:
       - "8000:8000"
 
   lerobot-convert:
     <<: *positronic-common
     container_name: lerobot-convert
-    entrypoint: ["uv", "run", "--python", "3.11", "--extra", "lerobot", "python", "-m",
+    entrypoint: ["uv", "run", "--python", "3.13", "--extra", "lerobot", "python", "-m",
                  "positronic.vendors.lerobot.to_lerobot"]
 
   lance-convert:
     <<: *positronic-common
     container_name: lance-convert
-    entrypoint: ["uv", "run", "--python", "3.11", "--extra", "lance", "python", "-m",
+    entrypoint: ["uv", "run", "--python", "3.13", "--extra", "lance", "python", "-m",
                  "positronic.vendors.lance.convert"]
 
   lerobot-train:
@@ -110,13 +110,13 @@ services:
     container_name: lerobot-train
     shm_size: 8g
     ipc: host
-    entrypoint: ["uv", "run", "--python", "3.11", "--extra", "lerobot", "python", "-m",
+    entrypoint: ["uv", "run", "--python", "3.13", "--extra", "lerobot", "python", "-m",
                  "positronic.vendors.lerobot.train"]
 
   lerobot-server:
     <<: *positronic-common
     container_name: lerobot-server
-    entrypoint: ["uv", "run", "--python", "3.11", "--extra", "lerobot", "python", "-m",
+    entrypoint: ["uv", "run", "--python", "3.13", "--extra", "lerobot", "python", "-m",
                  "positronic.vendors.lerobot.server"]
     ports:
       - "8000:8000"
@@ -124,7 +124,7 @@ services:
   positronic-inference:
     <<: *positronic-common
     container_name: positronic-inference
-    entrypoint: ["uv", "run", "--python", "3.11", "positronic-inference"]
+    entrypoint: ["uv", "run", "--python", "3.13", "positronic-inference"]
 
     devices:
       - /dev/dri:/dev/dri
@@ -136,14 +136,14 @@ services:
   positronic-server:
     <<: *positronic-common  # We need internal package for datasets
     container_name: positronic-server
-    entrypoint: ["uv", "run", "--python", "3.11", "positronic-server"]
+    entrypoint: ["uv", "run", "--python", "3.13", "positronic-server"]
     ports:
       - "8400:8400"
 
   openpi-server: &openpi-server-common
     <<: *openpi-common
     container_name: openpi-server
-    entrypoint: ["uv", "run", "--python", "3.11", "--extra", "openpi", "python", "-m", "positronic.vendors.openpi.server"]
+    entrypoint: ["uv", "run", "--python", "3.13", "--extra", "openpi", "python", "-m", "positronic.vendors.openpi.server"]
     ports:
       - "8000:8000"
 
@@ -193,12 +193,12 @@ services:
     container_name: groot-train
     shm_size: 8g
     ipc: host  # Enable shared memory access for training
-    entrypoint: ["uv", "run", "--python", "3.11", "python", "-m", "positronic.vendors.gr00t.train"]
+    entrypoint: ["uv", "run", "--python", "3.13", "python", "-m", "positronic.vendors.gr00t.train"]
 
   groot-server: &groot-server-common
     <<: *groot-common
     container_name: groot-server
-    entrypoint: ["uv", "run", "--python", "3.11", "python", "-m", "positronic.vendors.gr00t.server"]
+    entrypoint: ["uv", "run", "--python", "3.13", "python", "-m", "positronic.vendors.gr00t.server"]
     ports:
       - "8000:8000"
 
@@ -236,7 +236,7 @@ services:
   dreamzero-server:
     <<: *dreamzero-common
     container_name: dreamzero-server
-    entrypoint: ["uv", "run", "--python", "3.11", "python", "-m", "positronic.vendors.dreamzero.server"]
+    entrypoint: ["uv", "run", "--python", "3.13", "python", "-m", "positronic.vendors.dreamzero.server"]
     ports:
       - "8000:8000"
     shm_size: 16g
@@ -247,4 +247,4 @@ services:
     container_name: dreamzero-train
     shm_size: 16g
     ipc: host
-    entrypoint: ["uv", "run", "--python", "3.11", "python", "-m", "positronic.vendors.dreamzero.train"]
+    entrypoint: ["uv", "run", "--python", "3.13", "python", "-m", "positronic.vendors.dreamzero.train"]

@@ -99,7 +99,7 @@ if [ -n "$INPUT_BUCKET" ]; then
 fi
 
 JOB_NAME="${VENDOR//_/-}-train-$(date +%Y%m%d-%H%M%S)"
-TRAIN_ARGS="run --python 3.11 ${EXTRA}python -m positronic.vendors.${VENDOR}.train ${NEW_ARGS[*]}"
+TRAIN_ARGS="run --python 3.13 ${EXTRA}python -m positronic.vendors.${VENDOR}.train ${NEW_ARGS[*]}"
 
 WANDB_FLAGS=()
 if [ -n "$WANDB_SECRET" ]; then
