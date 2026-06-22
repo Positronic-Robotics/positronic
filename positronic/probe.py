@@ -30,7 +30,7 @@ import rerun.blueprint as rrb
 import positronic.cfg.ds
 import positronic.cfg.policy as policy_cfg
 from positronic.dataset.dataset import Dataset
-from positronic.drivers.roboarm.command import CartesianPosition
+from positronic.drivers.roboarm.command import CartesianPosition, JointDelta
 from positronic.policy import Policy, Recorder
 from positronic.utils.logging import init_logging
 
@@ -66,21 +66,32 @@ def _meta_doc(name: str, meta: dict) -> str:
     return f'## {name}\n\n{rows}'
 
 
-def _log_commands(actions: list[dict], wall_ns: int, inf_ns: int) -> None:
-    """Log the Cartesian chunk's fields as one named time-series on the obs's live timelines.
+def _is_cartesian_chunk(actions: list[dict] | None) -> bool:
+    """Whether every action carries a Cartesian end-effector command (so a 3D trajectory exists)."""
+    return bool(actions) and all(isinstance(a.get('robot_command'), CartesianPosition) for a in actions)
 
-    The tap already logs this on ``action_time``, but a rerun time-series view plots only the
-    active timeline, and the images live on ``wall_time`` — so to read the chunk on the same
-    timeline as the scene we re-stamp each waypoint on ``wall_time`` / ``obs_time``
-    (offset by its horizon), with a relative ``chunk_time`` axis alongside.
+
+def _log_commands(actions: list[dict], wall_ns: int, inf_ns: int) -> None:
+    """Log the chunk's per-step fields as one named time-series on the obs's live timelines.
+
+    Plots EE pose fields for a Cartesian chunk or joint velocities for a DROID chunk. The tap
+    already logs this on ``action_time``, but a rerun time-series view plots only the active
+    timeline, and the images live on ``wall_time`` — so to read the chunk on the same timeline as
+    the scene we re-stamp each waypoint on ``wall_time`` / ``obs_time`` (offset by its horizon),
+    with a relative ``chunk_time`` axis alongside.
     """
-    commands = [a['robot_command'] for a in actions]
-    if not all(isinstance(c, CartesianPosition) for c in commands):
+    if _is_cartesian_chunk(actions):
+        commands = [a['robot_command'] for a in actions]
+        labels = ['tx', 'ty', 'tz', 'qw', 'qx', 'qy', 'qz']
+        rows = [[*c.pose.translation, *c.pose.rotation.as_quat] for c in commands]
+    elif all(isinstance(a.get('robot_command'), JointDelta) for a in actions):
+        deltas = [a['robot_command'].velocities for a in actions]
+        labels = [f'dq{i}' for i in range(len(deltas[0]))]
+        rows = [list(d) for d in deltas]
+    else:
         return
     horizon = np.array([float(a.get('timestamp', i)) for i, a in enumerate(actions)])
     horizon -= horizon[0]
-    labels = ['tx', 'ty', 'tz', 'qw', 'qx', 'qy', 'qz']
-    rows = [[*c.pose.translation, *c.pose.rotation.as_quat] for c in commands]
     if all('target_grip' in a for a in actions):
         labels.append('target_grip')
         rows = [row + [a['target_grip']] for row, a in zip(rows, actions, strict=True)]
@@ -95,14 +106,14 @@ def _log_commands(actions: list[dict], wall_ns: int, inf_ns: int) -> None:
         rr.log('commands', rr.Scalars(data[i]))
 
 
-def _blueprint(image_keys: list[str]) -> rrb.Blueprint:
-    """Images + server meta on top; 3D trajectory + commands time-series below."""
+def _blueprint(image_keys: list[str], has_trajectory: bool) -> rrb.Blueprint:
+    """Images + server meta on top; the commands time-series below, with the 3D trajectory beside it
+    only for a Cartesian chunk (a velocity chunk has none, so the view is omitted)."""
     images = [rrb.Spatial2DView(origin=f'{_TAP}/{key}', name=key) for key in image_keys]
     top = rrb.Horizontal(*images, rrb.TextDocumentView(origin='meta', name='server'))
-    bottom = rrb.Horizontal(
-        rrb.Spatial3DView(origin=f'{_TAP}/robot_command/trajectory', name='trajectory'),
-        rrb.TimeSeriesView(origin='commands', name='commands'),
-    )
+    commands = rrb.TimeSeriesView(origin='commands', name='commands')
+    trajectory = rrb.Spatial3DView(origin=f'{_TAP}/robot_command/trajectory', name='trajectory')
+    bottom = rrb.Horizontal(trajectory, commands) if has_trajectory else commands
     return rrb.Blueprint(rrb.Vertical(top, bottom))
 
 
@@ -121,7 +132,7 @@ def main(
     obs = _build_wire_obs(sample, task, now_ns, ts)
     image_keys = [k for k in obs if k.startswith('image.')]
 
-    rec = Recorder(pos3.sync(output_dir), blueprint=_blueprint(image_keys))
+    rec = Recorder(pos3.sync(output_dir))
     session = rec.tap(_TAP).wrap(policy).new_session({'task': task} if task else None)
     meta = dict(session.meta)
     name = label or _recording_name(meta)
@@ -134,6 +145,9 @@ def main(
             rr.log('meta', rr.TextDocument(_meta_doc(name, meta), media_type=rr.MediaType.MARKDOWN), static=True)
             if actions:
                 _log_commands(actions, now_ns, ts)
+            # Sent here, not at Recorder construction: the layout depends on the chunk type, which is
+            # only known after inference — a velocity chunk drops the 3D trajectory view.
+            rr.send_blueprint(_blueprint(image_keys, _is_cartesian_chunk(actions)))
     finally:
         session.close()
 
