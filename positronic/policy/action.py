@@ -180,6 +180,13 @@ class JointDeltaAction(Codec):
     into a ``JointDelta`` command; the driver integrates each delta onto the live measured joints.
     """
 
+    # General DROID form scales each normalized velocity by its own per-joint delta limit and
+    # renorms the velocity vector against those limits:
+    #     RELATIVE_MAX_JOIN_DELTA = np.array([0.2, 0.2, 0.2, 0.2, 0.2, 0.2, 0.2])
+    #     MAX_JOINT_DELTA = RELATIVE_MAX_JOIN_DELTA.max()
+    #     MAX_JOINT_VEL = RELATIVE_MAX_JOIN_DELTA / MAX_JOINT_DELTA
+    # All seven limits are equal, so MAX_JOINT_VEL is all ones (the renorm is the identity on the
+    # [-1, 1]-clipped velocities) and the scaling collapses to one multiply by the scalar below.
     MAX_JOINT_DELTA = 0.2
 
     def __init__(self, num_joints: int = 7):
