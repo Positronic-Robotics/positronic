@@ -89,7 +89,7 @@ def wire_embodiment(
 
     ds_agent = None
     if dataset_writer is not None:
-        ds_agent = DsWriterAgent(dataset_writer, time_mode=time_mode)
+        ds_agent = DsWriterAgent(dataset_writer, time_mode=time_mode, virtual_time=embodiment.simulated)
         for name, obs in embodiment.observations.items():
             if isinstance(obs.serializer, StatefulSerializer):
                 raise TypeError(f"observation '{name}': stateful serializer can't be shared by policy and record paths")

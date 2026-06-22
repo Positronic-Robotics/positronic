@@ -338,16 +338,16 @@ def test_harness_waits_for_complete_inputs(world):
 
     robot_state = make_robot_state([0.2, 0.0, -0.1], [0.7, 0.1, -0.2])
 
-    def assert_no_outputs():
-        assert not cmd_recorder.emitted
-        assert not grip_recorder.emitted
+    def assert_no_inference():
+        # The startup home may have emitted (Reset / grip 0.0); the policy must not have run on partial inputs.
         assert policy.last_obs is None
+        assert all(isinstance(c, Reset) for c in _emitted_commands(cmd_recorder))
 
     driver = ManualDriver([
         (partial(directive_em.emit, Directive.RUN(task='dummy-task')), 0.01),
         (partial(robot_em.emit, robot_state), 0.01),
         (partial(grip_em.emit, 0.25), 0.01),
-        (assert_no_outputs, 0.01),  # still missing a frame
+        (assert_no_inference, 0.01),  # still missing a frame
         (partial(emit_ready_payload, frame_em, robot_em, grip_em, robot_state), 0.01),
         (None, 0.01),
     ])
@@ -368,7 +368,7 @@ def test_harness_waits_for_complete_inputs(world):
 
 
 @pytest.mark.timeout(3.0)
-def test_run_emits_ds_start_with_meta(world):
+def test_episode_meta_stamped_at_finalize(world):
     policy = StubPolicy(meta={'type': 'stub', 'checkpoint': 'v1'})
     harness = Harness(policy, make_embodiment(), static_meta={'joint_signal': 'robot_state.q'})
     p = _pair_all(world, harness)
@@ -376,15 +376,16 @@ def test_run_emits_ds_start_with_meta(world):
     driver = ManualDriver([
         (partial(p['meta_em'].emit, {'urdf': '<robot/>', 'joint_names': ['j1']}), 0.0),
         (partial(p['directive_em'].emit, Directive.RUN(task='test')), 0.01),
+        (partial(p['directive_em'].emit, Directive.FINISH()), 0.02),
         (None, 0.02),
     ])
 
     scheduler = world.start([harness, driver])
-    drive_scheduler(scheduler, steps=15)
+    drive_scheduler(scheduler, steps=25)
 
-    starts = [c for c in _ds_commands(p) if c.type == DsWriterCommandType.START_EPISODE]
-    assert len(starts) == 1
-    meta = starts[0].static_data
+    stops = [c for c in _ds_commands(p) if c.type == DsWriterCommandType.STOP_EPISODE]
+    assert len(stops) == 1
+    meta = stops[0].static_data
     assert meta['joint_signal'] == 'robot_state.q'
     assert meta['urdf'] == '<robot/>'
     assert meta['joint_names'] == ['j1']
@@ -423,14 +424,15 @@ def test_episode_meta_includes_policy_static_meta(world):
     driver = ManualDriver([
         (partial(p['directive_em'].emit, Directive.RUN(task='t')), 0.0),
         (partial(emit_ready_payload, p['frame_em'], p['robot_em'], p['grip_em'], robot_state), 0.01),
+        (partial(p['directive_em'].emit, Directive.FINISH()), 0.02),
         (None, 0.02),
     ])
     scheduler = world.start([harness, driver])
-    drive_scheduler(scheduler, steps=15)
+    drive_scheduler(scheduler, steps=25)
 
-    starts = [c for c in _ds_commands(p) if c.type == DsWriterCommandType.START_EPISODE]
-    assert len(starts) == 1
-    meta = starts[0].static_data
+    stops = [c for c in _ds_commands(p) if c.type == DsWriterCommandType.STOP_EPISODE]
+    assert len(stops) == 1
+    meta = stops[0].static_data
     assert meta['inference.policy.checkpoint'] == 'v1'
     assert meta['inference.policy.type'] == 'static'
 
@@ -499,12 +501,20 @@ def test_trial_stop_signal_terminates(world):
 
 
 @pytest.mark.timeout(3.0)
-def test_stop_signal_does_not_latch_across_trials(world):
-    """A ``done`` that ended one trial must not instantly finalize the next: termination is the
-    delivery edge, so the message latched in the receiver from trial 0 cannot re-fire on trial 1.
-    An empty payload still terminates — delivery, not truthiness, is the signal."""
+def test_reset_clears_done_across_trials(world):
+    """``done`` is truthy-valued and latches (last-value-wins), so trial 0's terminal would re-fire on
+    trial 1 — the producer's ``reset`` republishes a non-terminal ``done`` to clear it. A truthy payload
+    ends trial 0; trial 1's ``reset`` clears the latched value, so it keeps running until its own terminal.
+    An empty payload is falsy and never terminates: truthiness, not delivery, is the signal."""
     policy = StubPolicy()
-    harness = Harness(policy, make_embodiment(), task=Task(instruction='t', timeout=100.0), trials=[{}, {}])
+
+    def reset(seed):
+        done_em.emit({})  # the producer clears the stale terminal at episode start
+        p['meta_em'].emit({})  # ... and publishes fresh scene meta, recorded into the episode at finalize
+
+    harness = Harness(
+        policy, make_embodiment(), task=Task(instruction='t', timeout=100.0, reset=reset), trials=[{}, {}]
+    )
     p = _pair_all(world, harness)
     done_em = world.pair(harness.done)
 
@@ -513,19 +523,80 @@ def test_stop_signal_does_not_latch_across_trials(world):
 
     scheduler = world.start([harness])
     drive_scheduler(scheduler, steps=5)
-    done_em.emit({})  # end trial 0
+    done_em.emit({})  # falsy: does not terminate
+    drive_scheduler(scheduler, steps=10)
+    assert stop_count() == 0
+
+    done_em.emit({'eval.success': True})  # truthy: ends trial 0
     drive_scheduler(scheduler, steps=10)
     assert stop_count() == 1
 
-    # Trial 1 has auto-started with trial 0's message still latched in the receiver; it must keep running.
+    # Trial 1 auto-started; its ``reset`` cleared trial 0's latched terminal, so it must keep running.
     drive_scheduler(scheduler, steps=10)
     assert stop_count() == 1
 
-    done_em.emit({})  # end trial 1
+    done_em.emit({'eval.success': True})  # end trial 1
     drive_scheduler(scheduler, steps=10)
     stops = [c for c in _ds_commands(p) if c.type == DsWriterCommandType.STOP_EPISODE]
     assert len(stops) == 2
     assert all(s.static_data['eval.terminated'] is True for s in stops)
+
+
+class _FrameIndexDevice(pimm.ControlSystem):
+    """Publishes a rising frame index on ``state``. ``reset`` arms frame-0; the run loop publishes it (with
+    fresh ``meta``) on its next turn — in sequence, before any step — then steps and publishes the next each
+    tick. A reader whose first frame is >= 1 saw the device step before it read."""
+
+    def __init__(self):
+        self.state = pimm.ControlSystemEmitter(self)
+        self.meta = pimm.ControlSystemEmitter(self)
+        self.cmd = pimm.ControlSystemReceiver(self)
+        self._frame = 0
+        self._reset_pending = False
+
+    def reset(self, seed):
+        self._frame = 0
+        self._reset_pending = True
+
+    def run(self, should_stop, clock):
+        while not should_stop.value:
+            yield pimm.Sleep(0.01)
+            if self._reset_pending:
+                self._reset_pending = False
+                self.meta.emit({})  # fresh scene meta, recorded into the episode at finalize
+                self.state.emit(float(self._frame))  # frame-0
+            else:
+                self._frame += 1
+                self.state.emit(float(self._frame))
+
+
+@pytest.mark.timeout(3.0)
+def test_policy_first_obs_is_frame0(world):
+    """The first inference reads the post-reset frame-0, never a stepped frame. The harness arms the device's
+    reset and steps last; running after the harness, the device publishes frame-0 that round and the harness
+    reads it the next round — so the policy's first observation is frame 0, before the device steps. Guards
+    the [harness, device] ordering and the in-sequence reset."""
+    device = _FrameIndexDevice()
+    embodiment = Embodiment(
+        descriptor='',
+        observations={'frame': Observation(device.state, None)},
+        commands={'robot_command': Command(device.cmd, Reset(), None)},
+        static_meta={},
+        meta_source=device.meta,
+        control_systems=(device,),
+        simulated=True,
+    )
+    task = Task(instruction='t', timeout=100.0, reset=device.reset)
+    policy = StubPolicy()
+    harness = Harness(policy, embodiment, task=task, trials=[{}], wrap=None)
+    wire.wire_embodiment(world, harness, embodiment, None)
+
+    scheduler = world.start([harness, device])
+    drive_scheduler(scheduler, steps=20)
+
+    assert policy.observations, 'policy was never called'
+    assert policy.observations[0]['frame'] == 0.0  # frame-0, not a stepped frame
+    assert any(o['frame'] >= 1.0 for o in policy.observations)  # the device did step (so the guard can fail)
 
 
 @pytest.mark.timeout(3.0)
@@ -608,7 +679,12 @@ def test_trial_seed_reaches_task_reset_and_meta(world):
     policy = StubPolicy()
     seeds = []
     trials = [{'eval.seed': 7 + i} for i in range(2)]
-    task = Task(instruction='stack', timeout=0.05, reset=seeds.append)
+
+    def reset(seed):
+        seeds.append(seed)
+        p['meta_em'].emit({})  # the producer publishes fresh scene meta, recorded into the episode at finalize
+
+    task = Task(instruction='stack', timeout=0.05, reset=reset)
     harness = Harness(policy, make_embodiment(), task=task, trials=trials)
     p = _pair_all(world, harness)
 
@@ -616,11 +692,11 @@ def test_trial_seed_reaches_task_reset_and_meta(world):
     drive_scheduler(scheduler, steps=400)
 
     assert seeds == [7, 8]
-    starts = [c for c in _ds_commands(p) if c.type == DsWriterCommandType.START_EPISODE]
-    assert [s.static_data['eval.seed'] for s in starts] == [7, 8]
-    assert all(s.static_data['eval.universe'] == 'real' for s in starts)
-    assert all(s.static_data['eval.embodiment'] == '' for s in starts)
-    assert all(s.static_data['eval.timeout'] == 0.05 for s in starts)
+    stops = [c for c in _ds_commands(p) if c.type == DsWriterCommandType.STOP_EPISODE]
+    assert [s.static_data['eval.seed'] for s in stops] == [7, 8]
+    assert all(s.static_data['eval.universe'] == 'real' for s in stops)
+    assert all(s.static_data['eval.embodiment'] == '' for s in stops)
+    assert all(s.static_data['eval.timeout'] == 0.05 for s in stops)
 
 
 @pytest.mark.timeout(3.0)
@@ -634,10 +710,9 @@ def test_trial_plan_self_drives(world):
     scheduler = world.start([harness])
     drive_scheduler(scheduler, steps=400)
 
-    starts = [c for c in _ds_commands(p) if c.type == DsWriterCommandType.START_EPISODE]
     stops = [c for c in _ds_commands(p) if c.type == DsWriterCommandType.STOP_EPISODE]
-    assert [s.static_data['eval.trial_index'] for s in starts] == [0, 1]
-    assert all(s.static_data['task'] == 'stack' for s in starts)
+    assert [s.static_data['eval.trial_index'] for s in stops] == [0, 1]
+    assert all(s.static_data['task'] == 'stack' for s in stops)
     assert len(stops) == 2
     assert all(s.static_data['eval.terminated'] is False for s in stops)
     assert policy.reset_calls == 2
@@ -673,13 +748,13 @@ def test_timeout_crossed_during_latency_sleep_drops_chunk(world):
     assert len(stops) == 1
     assert stops[0].static_data['eval.terminated'] is False
     # The post-deadline chunk must not reach the drivers: the only non-empty emissions are the homing
-    # Reset / home grip from the timeout FINISH.
+    # Reset / home grip from the startup home and the timeout FINISH.
     assert all(isinstance(c, Reset) for c in _emitted_commands(cmd_recorder))
-    assert _emitted_grips(grip_recorder) == [0.0]
+    assert _emitted_grips(grip_recorder) == [0.0, 0.0]
 
 
 @pytest.mark.timeout(3.0)
-def test_home_aborts_recording_and_homes(world):
+def test_abort_discards_recording_and_homes(world):
     policy = StubPolicy()
     harness = Harness(policy, make_embodiment())
     p = _pair_all(world, harness)
@@ -689,7 +764,7 @@ def test_home_aborts_recording_and_homes(world):
     driver = ManualDriver([
         (partial(p['directive_em'].emit, Directive.RUN(task='test')), 0.0),
         (partial(emit_ready_payload, p['frame_em'], p['robot_em'], p['grip_em'], robot_state), 0.01),
-        (partial(p['directive_em'].emit, Directive.HOME()), 0.02),
+        (partial(p['directive_em'].emit, Directive.ABORT()), 0.02),
         (None, 0.02),
     ])
 
@@ -704,7 +779,8 @@ def test_home_aborts_recording_and_homes(world):
 
 
 @pytest.mark.timeout(3.0)
-def test_run_while_running_auto_finalizes(world):
+def test_run_while_running_is_ignored(world):
+    """A RUN mid-trial is ignored — the operator must finish the live trial before starting a new one."""
     policy = StubPolicy()
     harness = Harness(policy, make_embodiment())
     p = _pair_all(world, harness)
@@ -719,10 +795,10 @@ def test_run_while_running_auto_finalizes(world):
     drive_scheduler(scheduler, steps=20)
 
     types = _ds_types(p)
-    # START(ep1), STOP (auto-finalize), START(ep2), STOP (shutdown cleanup)
-    assert types.count(DsWriterCommandType.START_EPISODE) == 2
-    assert types.count(DsWriterCommandType.STOP_EPISODE) == 2
-    assert policy.reset_calls == 2
+    # ep2's RUN is ignored; ep1 stays live and is finalized once at shutdown.
+    assert types.count(DsWriterCommandType.START_EPISODE) == 1
+    assert types.count(DsWriterCommandType.STOP_EPISODE) == 1
+    assert policy.reset_calls == 1
 
 
 @pytest.mark.timeout(3.0)
@@ -859,10 +935,10 @@ def test_harness_clears_trajectory_on_home(world):
     grips = _all_grips(p)
     assert grips[0] >= 100.0, f'Expected chunk 1, got {grips}'
 
-    p['directive_em'].emit(Directive.HOME())
+    p['directive_em'].emit(Directive.ABORT())
     drive_scheduler(scheduler, steps=2)
 
-    assert _last_grip(p) == 0.0, 'Expected 0.0 (Home)'
+    assert _last_grip(p) == 0.0, 'Expected 0.0 (Abort homes)'
 
     p['directive_em'].emit(Directive.RUN(task='test'))
     emit_ready_payload(p['frame_em'], p['robot_em'], p['grip_em'], robot_state)
@@ -936,14 +1012,13 @@ def test_directive_preserves_payload():
     assert Directive.RUN(task='test').payload == {'task': 'test'}
     assert Directive.FINISH(outcome='Success').payload == {'outcome': 'Success'}
     assert Directive.FINISH().payload == {}
-    assert Directive.HOME().payload == 'home'
-    assert Directive.HOME('zeros').payload == 'zeros'
+    assert Directive.ABORT().payload is None
 
 
 def test_directive_types():
     assert DirectiveType.RUN.value == 'run'
     assert DirectiveType.FINISH.value == 'finish'
-    assert DirectiveType.HOME.value == 'home'
+    assert DirectiveType.ABORT.value == 'abort'
 
 
 def test_recover_command_wire_roundtrip():

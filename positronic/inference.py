@@ -30,7 +30,7 @@ class KeyboardHandler:
             case 'p':
                 return Directive.FINISH()
             case 'r':
-                return Directive.HOME()
+                return Directive.ABORT()
         return None
 
 
@@ -48,7 +48,7 @@ def keyboard(show_gui, task):
     def make(output_dir: Path | None) -> Driver:
         keyboard = KeyboardControl(quit_key='q')
         keyboard_handler = KeyboardHandler(task=task)
-        print('Keyboard controls: [s]tart, sto[p], [r] home, [q]uit')
+        print('Keyboard controls: [s]tart, sto[p], [r] abort, [q]uit')
         return Driver(
             None if not show_gui else DearpyguiUi(),
             keyboard.keyboard_inputs,

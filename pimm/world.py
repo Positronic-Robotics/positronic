@@ -38,6 +38,11 @@ from .utils import identity
 
 T = TypeVar('T')
 
+# Consecutive single-instant rounds with no clock-mover after which ``interleave`` warns of a stall.
+# Far above any real cooperative burst, reached near-instantly by a true hang (loops yielding forever
+# with no sleeper).
+_STALL_WARNING_ROUNDS = 100_000
+
 
 class TransportMode(IntEnum):
     UNDECIDED = 0
@@ -552,24 +557,46 @@ class World:
 
         When a loop finishes (``StopIteration``) the stop event is set so the others can
         observe ``should_stop`` and exit. The iterator ends once no loop is left.
+
+        A ``Yield`` is only legitimate when another loop in the same instant sleeps to pace it.
+        A round where every due loop yields and none sleeps cannot move the clock; finite yield-only
+        work resolves in a few such rounds (someone soon sleeps or finishes), but if rounds keep
+        resolving at one instant with no loop ever sleeping or finishing, the clock cannot advance —
+        a stall (a hang in virtual time, a busy-spin on a wall clock) that ``interleave`` warns about.
         """
         iters = [iter(loop(self.should_stop_reader(), self._clock)) for loop in loops]
         ready = list(range(len(iters)))  # loop indices due at the current instant
         pq: list[tuple[int, int]] = []  # min-heap of (wake_ns, loop_index)
+        stalled_rounds = 0  # consecutive rounds with no clock-mover (no sleeper, no loop finished)
 
         while ready:
             now_ns = self._clock.now_ns()
             carried = []  # loops that yield; they run again at the next instant
+            finished = False
             for i in sorted(ready):
                 try:
                     command = next(iters[i])
                 except StopIteration:
                     self.request_stop()
+                    finished = True
                     continue
                 if isinstance(command, Yield):
                     carried.append(i)
                 else:
                     heapq.heappush(pq, (now_ns + max(1, round(command.seconds * 1e9)), i))
+
+            # A pending sleep (this round or earlier) or a finishing loop is progress toward the clock
+            # advancing; an all-yield round with neither stalls it. Persistent stalling means no loop is
+            # pacing — a hang in virtual time, a busy-spin on a wall clock — so warn once it crosses the bound.
+            stalled_rounds = 0 if pq or finished else stalled_rounds + 1
+            if stalled_rounds == _STALL_WARNING_ROUNDS:
+                logging.warning(
+                    'Scheduler stalled: %d rounds resolved at one instant with every due control loop '
+                    'yielding and none sleeping or finishing, so the clock is not advancing. A Yield() is '
+                    'only valid when another loop in the same instant sleeps to pace it — ensure a '
+                    'time-master (e.g. the simulator) sleeps each turn.',
+                    stalled_rounds,
+                )
 
             # The next instant is the nearest future wake, or now if only carried loops remain.
             target_ns = pq[0][0] if pq else now_ns

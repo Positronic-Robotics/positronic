@@ -102,6 +102,18 @@ def test_sim_emits_commands_and_records_dataset(tmp_path, monkeypatch):
     first_image, _ = camera_samples[0]
     assert isinstance(first_image, np.ndarray)
 
+    # Frame-0 is recorded for every trial, not just the first: each episode's first sim-state sample is its
+    # own post-reset scene (seeds 100 and 101), bit-reproducible from a fresh reset on the same seed. A
+    # dropped frame-0 — or a stale step from the prior trial's run loop bleeding in — would record a
+    # post-step state instead.
+    for i, seed in enumerate((100, 101)):
+        reference = MujocoSim(
+            'positronic/assets/mujoco/franka_table.xml', positronic.cfg.simulator.stack_cubes_loaders()
+        )
+        reference.reset(seed=seed)
+        first_state, _ = list(ds[i].signals['sim_state.mjSTATE_INTEGRATION'])[0]
+        np.testing.assert_allclose(first_state, reference.save_state()['mjSTATE_INTEGRATION'], rtol=1e-6)
+
     pose_signal = signals['robot_command.pose']
     pose_samples = list(pose_signal)
     assert pose_samples, 'robot_command.pose signal is empty'
@@ -114,6 +126,8 @@ def test_sim_emits_commands_and_records_dataset(tmp_path, monkeypatch):
     grip_samples = list(grip_signal)
     assert grip_samples, 'target_grip signal is empty'
     grip_values = [value for value, _ts in grip_samples]
+    # The inter-episode home grip is drained by ``reset``, so the command stream starts with the policy's
+    # first commanded grip (0.33) — consistent with ``robot_command.pose`` above.
     assert grip_values[0] == pytest.approx(0.33, rel=1e-2, abs=1e-2)
     assert np.all(np.diff([ts for _, ts in grip_samples]) > 0) or len(grip_samples) == 1
 
@@ -121,7 +135,7 @@ def test_sim_emits_commands_and_records_dataset(tmp_path, monkeypatch):
     last_obs = policy.observations[-1]
     assert isinstance(last_obs['image.wrist'], np.ndarray)
     assert 'robot_state.ee_pose' in last_obs
-    # The task's instruction is injected by the harness (no longer carried by the driver).
+    # The task's instruction is injected by the harness.
     assert last_obs['task'] == 'integration-test'
     assert last_obs['descriptor'] == 'mujoco.franka'
 
