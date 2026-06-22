@@ -137,6 +137,7 @@ testpaths = [
     "positronic/geom/tests",
     "positronic/offboard/tests",
     "positronic/policy/tests",
+    "positronic/simulator/env_server/tests",
     "positronic/tests",
     "positronic/utils/tests",
     "positronic/vendors/gr00t/tests",

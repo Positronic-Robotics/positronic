@@ -1,0 +1,187 @@
+import numpy as np
+import pos3
+import pytest
+
+import pimm
+from positronic.dataset.local_dataset import LocalDataset
+from positronic.drivers.roboarm import command as roboarm_command
+from positronic.inference import main
+from positronic.policy.tests.test_harness import StubPolicy
+from positronic.simulator.env_server.adapter import EnvAdapter
+from positronic.simulator.env_server.client import EnvConnection
+from positronic.simulator.env_server.proxy import RemoteEnvControlSystem
+from positronic.simulator.env_server.server import EnvProtocol
+from positronic.simulator.env_server.tests.conftest import serve_env
+from positronic.simulator.env_server.tests.mujoco_env import CAMERAS, make_mujoco_env, remote_stack_cubes_eval
+from positronic.tests.testing_coutils import drive_scheduler
+
+
+class FakeRenderer:
+    """Stand-in for ``mj.Renderer`` so the server (in a thread here) never touches a GL context."""
+
+    def __init__(self, _model, *, height, width, max_geom=10000, font_scale=None):
+        self.height = height
+        self.width = width
+
+    def update_scene(self, _data, camera=None):
+        pass
+
+    def render(self, out=None):
+        if out is not None:
+            out[:] = np.zeros((self.height, self.width, 3), dtype=np.uint8)
+            return None
+        return np.zeros((self.height, self.width, 3), dtype=np.uint8)
+
+    def close(self):
+        pass
+
+
+@pytest.fixture(autouse=True)
+def _fake_renderer(monkeypatch):
+    monkeypatch.setenv('MUJOCO_GL', 'egl')
+    monkeypatch.setattr('positronic.simulator.mujoco.sim.mj.Renderer', FakeRenderer)
+
+
+def _assert_obs_equal(a: dict, b: dict) -> None:
+    for key in ('q', 'dq', 'ee_pos', 'ee_quat'):
+        np.testing.assert_array_equal(a[key], b[key])
+    assert a['status'] == b['status']
+    assert a['grip'] == b['grip']
+    assert a['cameras'].keys() == b['cameras'].keys()
+    for name in a['cameras']:
+        np.testing.assert_array_equal(a['cameras'][name], b['cameras'][name])
+    assert a['sim_state'].keys() == b['sim_state'].keys()
+    for key in a['sim_state']:
+        np.testing.assert_array_equal(a['sim_state'][key], b['sim_state'][key])
+
+
+@pytest.mark.timeout(60.0)
+def test_transport_is_transparent(env_server):
+    """The wire round-trips faithfully: the same seed + action sequence through the env in-process and
+    behind the socket produce identical raw observations. This is the parity oracle for the protocol."""
+    host, port = env_server
+    seed = 7
+
+    direct = make_mujoco_env(list(CAMERAS.values()))
+    direct_reset = direct.reset(seed)
+    base = np.asarray(direct_reset['obs']['q'])
+    actions = [{'joints': base + 0.03 * i, 'grip': 0.2 * (i % 2)} for i in range(1, 6)]
+    direct_steps = [direct.step(action) for action in actions]
+    direct.close()
+
+    conn = EnvConnection(host, port)
+    socket_reset = conn.reset(seed)
+    socket_steps = [conn.step(action) for action in actions]
+    conn.close()
+
+    assert direct_reset['control_dt'] == socket_reset['control_dt']
+    _assert_obs_equal(direct_reset['obs'], socket_reset['obs'])
+    for direct_step, socket_step in zip(direct_steps, socket_steps, strict=True):
+        _assert_obs_equal(direct_step['obs'], socket_step['obs'])
+        assert direct_step['done'] == socket_step['done']
+        assert direct_step['control_dt'] == socket_step['control_dt']
+
+
+class _CountdownEnv(EnvProtocol):
+    """A degenerate env exercising the proxy's terminal and free-run paths without the real ``stack_cubes``
+    wrapper. Obs encodes the step count (``reset`` is step 0, each ``step`` increments) so a reader can
+    tell whether the proxy stepped; ``done`` fires after ``done_after`` steps (``None`` → never)."""
+
+    def __init__(self, done_after: int | None = None, control_dt: float = 0.1):
+        self._done_after = done_after
+        self._control_dt = control_dt
+        self._steps = 0
+
+    def reset(self, token):
+        self._steps = 0
+        return {'obs': {'q': np.full(7, self._steps, dtype=np.float64)}, 'meta': {}, 'control_dt': self._control_dt}
+
+    def step(self, action):
+        self._steps += 1
+        done = self._done_after is not None and self._steps >= self._done_after
+        return {'obs': {'q': np.full(7, self._steps, dtype=np.float64)}, 'done': done, 'control_dt': self._control_dt}
+
+    def close(self):
+        pass
+
+
+class _CountdownAdapter(EnvAdapter):
+    def reset_token(self, seed):
+        return seed
+
+    def action(self, commands, now_ns):
+        return {}
+
+    def observations(self, raw_obs):
+        return {'value': raw_obs['q']}
+
+    def privileged(self, raw_obs):
+        return {}
+
+    def terminal(self, result):
+        return {'eval.success': True} if result['done'] else None
+
+
+@pytest.mark.timeout(60.0)
+def test_proxy_publishes_frame0_then_free_runs():
+    """``reset`` arms frame-0 (step 0); the proxy publishes it on its next turn and clears ``done``, then
+    free-runs — it steps the env every active tick (physics progresses through the inference window). The
+    step-count obs makes it observable: frame-0 is step 0, then it advances each tick with no command needed."""
+    with serve_env(_CountdownEnv()) as (host, port), pimm.World(virtual_time=True) as world:
+        proxy = RemoteEnvControlSystem(_CountdownAdapter(), host, port)
+        obs_rx = world.pair(proxy.observations['value'])
+        done_rx = world.pair(proxy.done)
+
+        scheduler = world.start([proxy])
+        drive_scheduler(scheduler, steps=2)  # inactive: the proxy paces time without an env
+
+        proxy.reset(0)  # arm frame-0; the run loop publishes it on its next turn
+        drive_scheduler(scheduler, steps=1)
+        np.testing.assert_array_equal(obs_rx.read().data, np.zeros(7))
+        assert done_rx.read().data == {}
+
+        drive_scheduler(scheduler, steps=3)  # free-run: the env steps even with no command delivered
+        assert obs_rx.read().data[0] >= 1
+
+
+@pytest.mark.timeout(60.0)
+def test_remote_eval_runs_to_timeout_without_done(env_server, tmp_path):
+    """The real ``stack_cubes`` wrapper, end to end: no terminal, so the trial runs to the task timeout
+    (``eval.terminated`` False) and records the canonical signals."""
+    host, port = env_server
+    with pos3.mirror():
+        ev = remote_stack_cubes_eval(host, port, camera_dict=CAMERAS)
+        ev.task.timeout = 0.1
+        policy = StubPolicy(command=roboarm_command.JointPosition(np.zeros(7)), target_grip=0.0)
+        main(
+            embodiment=ev.embodiment,
+            task=ev.task,
+            policy=policy,
+            trials=[{'eval.trial_index': 0, 'eval.seed': 100}],
+            output_dir=str(tmp_path),
+        )
+
+    ds = LocalDataset(tmp_path)
+    assert len(ds) == 1
+    episode = ds[0]
+    assert episode.static['eval.terminated'] is False
+    assert episode.static['eval.universe'] == 'sim'
+    assert episode.static['eval.embodiment'] == 'remote.mujoco.franka'
+    assert episode.static['scene_xml'].startswith('<mujoco')
+    signals = episode.signals
+    assert 'image.agentview' in signals
+    assert 'robot_command.joints' in signals
+    assert 'sim_state.mjSTATE_INTEGRATION' in signals
+
+
+@pytest.mark.timeout(60.0)
+def test_server_failure_crosses_as_error_frame(env_server):
+    """A command the env rejects comes back as an error the client re-raises — the connection survives
+    rather than dying on the server-side exception, and the next command still works."""
+    host, port = env_server
+    conn = EnvConnection(host, port)
+    conn.reset(7)
+    with pytest.raises(RuntimeError, match='bogus'):
+        conn.step({'bogus': True})
+    assert 'obs' in conn.step({'joints': np.zeros(7)})  # the socket is still usable after a delivered failure
+    conn.close()
