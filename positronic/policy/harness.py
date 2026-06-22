@@ -345,9 +345,14 @@ class Harness(pimm.ControlSystem):
         ``eval.terminated`` True plus that payload; the budget passing records only False; a terminal past
         the deadline is a timeout, not a late success. Reached only for a task with a deadline — a task-less
         attended episode ends solely on directives, so ``done`` never terminates (or leaks across) it.
+
+        Only a freshly delivered ``done`` terminates: the receiver latches its last value, so a prior
+        trial's terminal — whose timestamp precedes this trial's later deadline — would otherwise re-fire.
+        Gating on delivery clears it without relying on the producer to republish, so a task with no scene
+        ``reset`` (a real embodiment) is handled too.
         """
         done_msg = self.done.read()
-        if done_msg.data and done_msg.ts <= self._deadline * 1e9:
+        if done_msg.updated and done_msg.data and done_msg.ts <= self._deadline * 1e9:
             return {**done_msg.data, 'eval.terminated': True}
         if clock.now() >= self._deadline:
             return {'eval.terminated': False}

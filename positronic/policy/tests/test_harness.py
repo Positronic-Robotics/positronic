@@ -501,20 +501,13 @@ def test_trial_stop_signal_terminates(world):
 
 
 @pytest.mark.timeout(3.0)
-def test_reset_clears_done_across_trials(world):
-    """``done`` is truthy-valued and latches (last-value-wins), so trial 0's terminal would re-fire on
-    trial 1 — the producer's ``reset`` republishes a non-terminal ``done`` to clear it. A truthy payload
-    ends trial 0; trial 1's ``reset`` clears the latched value, so it keeps running until its own terminal.
-    An empty payload is falsy and never terminates: truthiness, not delivery, is the signal."""
+def test_stale_done_does_not_terminate_next_trial(world):
+    """``done`` latches (last-writer-wins): trial 0's terminal would re-fire on trial 1, whose later
+    deadline still sits after the stale timestamp. Only a freshly delivered ``done`` terminates, so the
+    latched value is ignored — no producer ``reset`` clears it here (``reset`` is ``None``, as on a real
+    embodiment). A falsy payload never terminates; trial 1 runs until its own fresh terminal lands."""
     policy = StubPolicy()
-
-    def reset(seed):
-        done_em.emit({})  # the producer clears the stale terminal at episode start
-        p['meta_em'].emit({})  # ... and publishes fresh scene meta, recorded into the episode at finalize
-
-    harness = Harness(
-        policy, make_embodiment(), task=Task(instruction='t', timeout=100.0, reset=reset), trials=[{}, {}]
-    )
+    harness = Harness(policy, make_embodiment(), task=Task(instruction='t', timeout=100.0), trials=[{}, {}])
     p = _pair_all(world, harness)
     done_em = world.pair(harness.done)
 
@@ -527,15 +520,15 @@ def test_reset_clears_done_across_trials(world):
     drive_scheduler(scheduler, steps=10)
     assert stop_count() == 0
 
-    done_em.emit({'eval.success': True})  # truthy: ends trial 0
+    done_em.emit({'eval.success': True})  # fresh truthy: ends trial 0
     drive_scheduler(scheduler, steps=10)
     assert stop_count() == 1
 
-    # Trial 1 auto-started; its ``reset`` cleared trial 0's latched terminal, so it must keep running.
+    # Trial 1 auto-started. The terminal is still latched but no longer fresh, so it must NOT re-fire.
     drive_scheduler(scheduler, steps=10)
     assert stop_count() == 1
 
-    done_em.emit({'eval.success': True})  # end trial 1
+    done_em.emit({'eval.success': True})  # a fresh delivery ends trial 1
     drive_scheduler(scheduler, steps=10)
     stops = [c for c in _ds_commands(p) if c.type == DsWriterCommandType.STOP_EPISODE]
     assert len(stops) == 2

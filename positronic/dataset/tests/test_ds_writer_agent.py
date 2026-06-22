@@ -177,6 +177,26 @@ def test_appends_only_on_updates_and_timestamps_from_clock(world):
     assert w.appends[1][2] > w.appends[0][2]
 
 
+def test_drains_inputs_latched_before_start(world):
+    """The opening turn drains the input channels without recording: a value latched before START — an
+    inter-episode home command or a pre-reset frame — is consumed, not appended, so the first recorded
+    sample is the next value to arrive (the post-reset scene), never a pre-episode leftover."""
+    ds = FakeDatasetWriter()
+    agent, cmd_em, emitters = build_agent_with_pipes({'a': None}, ds, world)
+
+    script = [
+        (partial(emitters['a'].emit, 99), 0.001),  # latched on the channel before the episode opens
+        (partial(cmd_em.emit, DsWriterCommand(DsWriterCommandType.START_EPISODE)), 0.001),
+        (partial(emitters['a'].emit, 7), 0.001),  # the first value that arrives in-episode
+        (partial(cmd_em.emit, DsWriterCommand(DsWriterCommandType.STOP_EPISODE)), 0.001),
+    ]
+
+    run_scripted_agent(agent, script, world=world)
+
+    w = ds.created[-1]
+    assert [(s, v) for (s, v, _, _) in w.appends] == [('a', 7)]  # 99 was drained on the open turn, not recorded
+
+
 def test_time_mode_message_uses_signal_timestamp(world):
     ds = FakeDatasetWriter()
     agent, cmd_em, emitters = build_agent_with_pipes({'a': None}, ds, world, time_mode=TimeMode.MESSAGE)

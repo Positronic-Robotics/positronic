@@ -1,3 +1,4 @@
+import logging
 import multiprocessing as mp
 import struct
 import time
@@ -823,6 +824,23 @@ class TestWorldInterleave:
             original_order = execution_order.copy()
 
             assert original_order == ['a_0', 'b_0', 'a_1', 'b_1', 'a_2', 'b_2', 'a_3', 'b_3']
+
+    def test_interleave_warns_when_every_loop_yields_with_no_sleeper(self, monkeypatch, caplog):
+        """A round where every due loop yields and none sleeps or finishes cannot advance the clock. After
+        ``_STALL_WARNING_ROUNDS`` such rounds with no time-master pacing, ``interleave`` warns."""
+        monkeypatch.setattr('pimm.world._STALL_WARNING_ROUNDS', 3)
+
+        def yield_forever(stop_reader, clock):
+            while True:
+                yield Yield()
+
+        with World(virtual_time=True) as world:
+            rounds = world.interleave(yield_forever)
+            with caplog.at_level(logging.WARNING):
+                for _ in range(5):
+                    next(rounds)
+
+        assert any('stalled' in r.getMessage().lower() for r in caplog.records)
 
 
 class TestFakeConnectors:
