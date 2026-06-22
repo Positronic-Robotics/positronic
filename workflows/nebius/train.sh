@@ -55,11 +55,11 @@ VENDOR="$1"
 shift
 
 case "$VENDOR" in
-  lerobot_0_3_3) IMAGE="positro/positronic:${IMAGE_TAG}"; EXTRA="--extra lerobot_0_3_3 "; PYVER=3.13 ;;
-  lerobot)       IMAGE="positro/positronic:${IMAGE_TAG}"; EXTRA="--extra lerobot "; PYVER=3.13 ;;
-  openpi)        IMAGE="positro/openpi:${IMAGE_TAG}";     EXTRA=""; PYVER=3.11 ;;
-  gr00t)         IMAGE="positro/gr00t:${IMAGE_TAG}";      EXTRA=""; PYVER=3.11 ;;
-  dreamzero)     IMAGE="positro/dreamzero:${IMAGE_TAG}";  EXTRA=""; PYVER=3.11 ;;
+  lerobot_0_3_3) IMAGE="positro/positronic:${IMAGE_TAG}"; EXTRA="--extra lerobot_0_3_3 " ;;
+  lerobot)       IMAGE="positro/positronic:${IMAGE_TAG}"; EXTRA="--extra lerobot " ;;
+  openpi)        IMAGE="positro/openpi:${IMAGE_TAG}";     EXTRA="" ;;
+  gr00t)         IMAGE="positro/gr00t:${IMAGE_TAG}";      EXTRA="" ;;
+  dreamzero)     IMAGE="positro/dreamzero:${IMAGE_TAG}";  EXTRA="" ;;
   *)
     echo "Unknown vendor: '$VENDOR'. Supported: lerobot_0_3_3 | lerobot | openpi | gr00t | dreamzero" >&2
     exit 1
@@ -99,7 +99,7 @@ if [ -n "$INPUT_BUCKET" ]; then
 fi
 
 JOB_NAME="${VENDOR//_/-}-train-$(date +%Y%m%d-%H%M%S)"
-TRAIN_ARGS="run --python ${PYVER} ${EXTRA}python -m positronic.vendors.${VENDOR}.train ${NEW_ARGS[*]}"
+TRAIN_ARGS="run --python 3.13 ${EXTRA}python -m positronic.vendors.${VENDOR}.train ${NEW_ARGS[*]}"
 
 WANDB_FLAGS=()
 if [ -n "$WANDB_SECRET" ]; then

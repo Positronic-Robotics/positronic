@@ -69,12 +69,12 @@ services:
   openpi-train:
     <<: *openpi-common
     container_name: openpi-train
-    entrypoint: ["uv", "run", "--python", "3.11", "python", "-m", "positronic.vendors.openpi.train"]
+    entrypoint: ["uv", "run", "--python", "3.13", "python", "-m", "positronic.vendors.openpi.train"]
 
   openpi-stats:
     <<: *openpi-common
     container_name: openpi-stats
-    entrypoint: ["uv", "run", "--python", "3.11", "python", "-m", "positronic.vendors.openpi.stats"]
+    entrypoint: ["uv", "run", "--python", "3.13", "python", "-m", "positronic.vendors.openpi.stats"]
 
   lerobot-0_3_3-convert:
     <<: *positronic-common
@@ -143,7 +143,7 @@ services:
   openpi-server: &openpi-server-common
     <<: *openpi-common
     container_name: openpi-server
-    entrypoint: ["uv", "run", "--python", "3.11", "--extra", "openpi", "python", "-m", "positronic.vendors.openpi.server"]
+    entrypoint: ["uv", "run", "--python", "3.13", "--extra", "openpi", "python", "-m", "positronic.vendors.openpi.server"]
     ports:
       - "8000:8000"
 
@@ -193,12 +193,12 @@ services:
     container_name: groot-train
     shm_size: 8g
     ipc: host  # Enable shared memory access for training
-    entrypoint: ["uv", "run", "--python", "3.11", "python", "-m", "positronic.vendors.gr00t.train"]
+    entrypoint: ["uv", "run", "--python", "3.13", "python", "-m", "positronic.vendors.gr00t.train"]
 
   groot-server: &groot-server-common
     <<: *groot-common
     container_name: groot-server
-    entrypoint: ["uv", "run", "--python", "3.11", "python", "-m", "positronic.vendors.gr00t.server"]
+    entrypoint: ["uv", "run", "--python", "3.13", "python", "-m", "positronic.vendors.gr00t.server"]
     ports:
       - "8000:8000"
 
@@ -236,7 +236,7 @@ services:
   dreamzero-server:
     <<: *dreamzero-common
     container_name: dreamzero-server
-    entrypoint: ["uv", "run", "--python", "3.11", "python", "-m", "positronic.vendors.dreamzero.server"]
+    entrypoint: ["uv", "run", "--python", "3.13", "python", "-m", "positronic.vendors.dreamzero.server"]
     ports:
       - "8000:8000"
     shm_size: 16g
@@ -247,4 +247,4 @@ services:
     container_name: dreamzero-train
     shm_size: 16g
     ipc: host
-    entrypoint: ["uv", "run", "--python", "3.11", "python", "-m", "positronic.vendors.dreamzero.train"]
+    entrypoint: ["uv", "run", "--python", "3.13", "python", "-m", "positronic.vendors.dreamzero.train"]

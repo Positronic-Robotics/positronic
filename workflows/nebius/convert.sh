@@ -150,7 +150,7 @@ done
 DATASET_TRIM="${OUTPUT_DIR%/}"
 STATS_PATH="${DATASET_TRIM%/*}/stats/"
 STATS_JOB_NAME="openpi-stats-$(date +%Y%m%d-%H%M%S)"
-STATS_ARGS="run --python 3.11 python -m positronic.vendors.openpi.stats --input_path=${OUTPUT_DIR} --output_path=${STATS_PATH}"
+STATS_ARGS="run --python 3.13 python -m positronic.vendors.openpi.stats --input_path=${OUTPUT_DIR} --output_path=${STATS_PATH}"
 
 echo
 echo "Submitting openpi stats job (image positro/openpi)..."
