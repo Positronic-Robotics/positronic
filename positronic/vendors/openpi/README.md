@@ -15,13 +15,13 @@ OpenPI supports multiple codecs for different use cases:
 | `ee_traj` | EE pose + grip | Absolute EE trajectory (binarized grip) | Training on actual robot trajectory |
 | `ee_joints_traj` | EE pose + grip + joints | Absolute EE trajectory (binarized grip) | Trajectory training with joint feedback |
 | `joints_traj` | Joints + grip (no EE pose) | Absolute joint trajectory (binarized grip) | Pure joint-space trajectory training |
-| `droid` | Joint positions + grip | Joint delta (velocity) | Inference with pretrained DROID models |
+| `droid` | Joint positions + grip | Per-step `JointDelta` | Inference with pretrained DROID models |
 
 **Key notes:**
 - **`ee`**: The primary codec. Handles both training data generation (LeRobot format) and inference (OpenPI format) automatically.
 - **`ee_joints`**: Same as `ee` but includes joint positions in the observation for richer state feedback.
 - **`_traj` variants**: Train on actual robot trajectory instead of commanded targets, with binarized grip signals.
-- **`droid`**: Inference-only codec for using pretrained DROID checkpoints. Uses joint delta actions instead of absolute position.
+- **`droid`**: Inference-only codec for pretrained DROID checkpoints. The model predicts per-step joint velocities; the codec scales each into a `JointDelta` command (grip binarized) and truncates each chunk to DROID's 8-step open-loop horizon. The driver applies each delta to the live measured joints (`set_target_joints(st.q + delta)`), reproducing the DROID controller with no special client wrap. Serve with `droid` and run inference normally.
 
 ## 1. Prepare Data
 
@@ -108,12 +108,14 @@ docker compose run --rm --service-ports -v ~/checkpoints:/checkpoints openpi-ser
   --codec=@positronic.vendors.openpi.codecs.ee_joints \
   --checkpoints_dir=/checkpoints/openpi/pi05_positronic_lowmem/experiment_v1/
 
-# DROID codec (for pretrained DROID models)
-docker compose run --rm --service-ports -v ~/checkpoints:/checkpoints openpi-server serve \
-  --codec=@positronic.vendors.openpi.codecs.droid \
-  --config_name=pi05_droid \
-  --checkpoints_dir=/checkpoints/openpi/pi05_droid/experiment_v1/
+# Pretrained DROID model (pi05_droid) — preset codec, config, and public checkpoint
+docker compose run --rm --service-ports openpi-server droid
 ```
+
+The `droid` config serves the public `pi05_droid` checkpoint from
+`s3://positronic-public/checkpoints/openpi/pi05_droid/` (downloaded on first request);
+no local checkpoint mount is needed. The server emits per-step `JointDelta` commands (grip
+binarized); the driver applies each delta to the live joints, so no special client wrap is needed.
 
 **Parameters:**
 - `--codec`: Codec for observation/action encoding (default: `@positronic.vendors.openpi.codecs.ee`).
@@ -201,6 +203,9 @@ uv run --locked positronic-inference sim \
 - `--policy.host`: The machine that runs the inference server.
 - `--policy.port`: The port that the inference server exposes.
 
+A `droid` server emits `JointDelta` commands; the driver applies each to the live joints, so no
+special client wrap is needed.
+
 ## Troubleshooting
 
 ### Server fails to start
@@ -240,7 +245,7 @@ uv run --locked positronic-inference sim \
 **Solutions:**
 1. Verify codec matches the model training config:
    - Positronic models need `ee` codec (default)
-   - DROID models need `droid` codec (joint delta actions)
+   - DROID models need the `droid` codec
 2. Check observation format matches codec requirements
 3. Verify image shapes are correct (will be resized to 224x224)
 4. Check action space dimensions match expected values

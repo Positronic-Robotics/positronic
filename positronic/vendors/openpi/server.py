@@ -339,10 +339,15 @@ sim_stack = server.override(
     checkpoints_dir='s3://checkpoints/sim_stack/openpi/ee/pi05_positronic_lowmem/230226/',
     recording_dir='s3://inference/sim_stack/server_recordings/openpi/230226/',
 )
+droid = server.override(
+    codec=codecs.droid,
+    config_name='pi05_droid',
+    checkpoints_dir='s3://PUBLIC@positronic-public/checkpoints/openpi/pi05_droid/',
+)
 
 
 if __name__ == '__main__':
     init_logging()
     ensure_paligemma_tokenizer()
     with pos3.mirror():
-        cfn.cli({'serve': server, 'phail': phail, 'sim_stack': sim_stack})
+        cfn.cli({'serve': server, 'phail': phail, 'sim_stack': sim_stack, 'droid': droid})

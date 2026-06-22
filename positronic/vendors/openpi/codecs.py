@@ -28,6 +28,7 @@ from positronic.dataset.episode import Episode
 from positronic.dataset.transforms import image
 from positronic.dataset.transforms.episode import Derive, Get
 from positronic.policy.codec import Codec, lerobot_image, lerobot_state
+from positronic.policy.observation import ObservationCodec
 
 
 class OpenpiObservationCodec(Codec):
@@ -133,14 +134,16 @@ def observation(state_features: dict[str, int], exterior_camera: str, wrist_came
 ee_obs = observation
 ee_joints_obs = observation.override(state_features={'robot_state.ee_pose': 7, 'grip': 1, 'robot_state.q': 7})
 
-droid_obs = codecs.general_obs.override(
-    state_name='observation/joint_position',
-    state_features={'robot_state.q': 7, 'grip': 1},
-    image_mappings={
-        'observation/wrist_image_left': 'image.wrist',
-        'observation/exterior_image_1_left': 'image.exterior',
+
+# Pretrained DROID models read joints and gripper as separate observation keys and the language
+# prompt under `prompt` (see openpi `droid_policy.DroidInputs`).
+droid_obs = cfn.Config(
+    ObservationCodec,
+    state={'observation/joint_position': {'robot_state.q': 7}, 'observation/gripper_position': {'grip': 1}},
+    images={
+        'observation/wrist_image_left': ('image.wrist', (224, 224)),
+        'observation/exterior_image_1_left': ('image.exterior', (224, 224)),
     },
-    image_size=(224, 224),
     task_field='prompt',
 )
 
@@ -162,4 +165,6 @@ joints_traj = codecs.compose.override(
 joints_ik = codecs.compose.override(obs=joints_obs, action=codecs.ik_joints_action)
 joints_ik_sim = joints_ik.override(**{'action.solver': 'lm'})
 
-droid = codecs.compose.override(obs=droid_obs, action=codecs.joint_delta_action)
+# DROID re-queries after its 8-step open-loop horizon; truncate the served chunk to match (8/15 s
+# at 15 fps) so the client re-queries every 8 steps instead of playing the full chunk open-loop.
+droid = codecs.compose.override(obs=droid_obs, action=codecs.joint_delta_action, horizon=8 / 15)
