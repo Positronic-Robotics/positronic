@@ -152,8 +152,9 @@ class DsWriterAgent(pimm.ControlSystem):
     each updated input signal (from `inputs`) is appended with the current
     timestamp from `clock`. `STOP_EPISODE` and `ABORT_EPISODE` are handled after
     that turn's inputs, so the trial's last frame is recorded before STOP
-    finalizes the writer; ABORT discards the episode. Invalid or out-of-order
-    commands are ignored with a log message.
+    finalizes the writer; samples timestamped after STOP — post-episode home or
+    sensor data the async real path may queue — are dropped, and ABORT discards
+    the episode. Invalid or out-of-order commands are ignored with a log message.
 
     `TimeMode` selects whether timestamps come from the control loop clock
     (`CLOCK`) or from the producing message (`MESSAGE`).
@@ -203,6 +204,7 @@ class DsWriterAgent(pimm.ControlSystem):
                 # frame, queued by the producer a control period earlier, is recorded before STOP closes the
                 # writer.
                 start = cmd_msg.updated and cmd_msg.data.type == DsWriterCommandType.START_EPISODE
+                closing = cmd_msg.updated and not start
                 opened = False
                 if start:
                     was_open = ep_writer is not None
@@ -212,12 +214,15 @@ class DsWriterAgent(pimm.ControlSystem):
                 if ep_writer is not None:
                     for name, reader in self._inputs.items():
                         msg = reader.read()
-                        # On the opening turn, drop samples that predate START — the inter-episode home
-                        # command and any pre-reset frame linger there from before it — while keeping a
-                        # genuine in-episode value, so async jitter on the real path does not lose the first
-                        # sample. The post-reset frame-0 is published after the recorder (next turn), so it is
-                        # never on this turn and records normally.
-                        if msg.updated and (not opened or msg.ts > cmd_msg.ts):
+                        # Scope a command turn's drain to the episode window: the open turn keeps only
+                        # samples after START (dropping the inter-episode home command and any pre-reset
+                        # frame), the closing turn keeps only samples at or before STOP (dropping post-STOP
+                        # home/sensor data the async real path queues). The post-reset frame-0 is published
+                        # after the recorder (next turn), so it never lands on the open turn and records
+                        # normally.
+                        after_start = not opened or msg.ts > cmd_msg.ts
+                        before_stop = not closing or msg.ts <= cmd_msg.ts
+                        if msg.updated and after_start and before_stop:
                             world_time_ns, message_time_ns = clock.now_ns(), msg.ts
                             primary_ts = world_time_ns if self._time_mode == TimeMode.CLOCK else message_time_ns
 
@@ -239,7 +244,7 @@ class DsWriterAgent(pimm.ControlSystem):
                             else:
                                 _append(ep_writer, name, value, primary_ts, extra_ts)
 
-                if cmd_msg.updated and not start:
+                if closing:
                     ep_writer, ep_counter = self._handle_command(cmd_msg.data, ep_writer, ep_counter, cmd_msg.ts)
 
                 yield pace()
