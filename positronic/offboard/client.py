@@ -90,7 +90,7 @@ class InferenceClient:
         self.api_url = f'{http_scheme}://{netloc}/api/v1'
 
     def new_session(
-        self, model_id: str | None = None, open_timeout: float = 10.0, connect_deadline: float = 180.0
+        self, model_id: str | None = None, open_timeout: float = 10.0, connect_deadline: float = 900.0
     ) -> InferenceSession:
         """
         Creates a new inference session.
