@@ -1,0 +1,272 @@
+# /// script
+# requires-python = "==3.10.*"
+# dependencies = [
+#     "libero @ git+https://github.com/Lifelong-Robot-Learning/LIBERO.git",
+#     "robosuite==1.4.1",
+#     "numpy<2",
+#     "msgpack",
+#     "websockets",
+# ]
+# ///
+"""LIBERO behind the env-server protocol: a standalone server for one LIBERO task in its own interpreter.
+
+positronic is pinned ``>=3.11`` and LIBERO needs ``<=3.10``, so this never shares positronic's venv:
+``uv run env.py`` reads the inline metadata above to build a 3.10 environment with LIBERO, and positronic
+launches it as a subprocess that ``EnvConnection`` connects to over the socket. It imports only ``libero`` +
+robosuite + the positronic-free ``server``/``protocol`` modules (placed on ``PYTHONPATH`` by the launcher),
+never ``positronic`` itself.
+
+The client-side ``LiberoAdapter`` forwards the held command (an absolute Cartesian pose, joint positions, or
+joint velocities); this server maps it into the active controller's action and speaks only LIBERO's raw gym
+payloads. The control mode picked at construction selects the controller LIBERO uses — ``OSC_POSE`` for
+Cartesian, ``JOINT_POSITION``/``JOINT_VELOCITY`` for joints — and any command is bridged into it: a Cartesian
+goal is solved to joints with damped-least-squares IK and a joint goal is turned into an OSC pose delta with
+forward kinematics, both on the MuJoCo site Jacobian OSC itself computes. Construction is fixed to one
+``(suite, task_id)`` — the eval is one task — and the per-trial seed selects a saved init-state and
+re-randomizes object positions.
+"""
+
+import argparse
+import pathlib
+from typing import Any
+
+import mujoco
+import numpy as np
+from robosuite.utils.transform_utils import get_pose_error, make_pose, mat2quat, quat2axisangle
+from server import EnvProtocol, EnvServer
+
+from libero.libero import benchmark, get_libero_path
+from libero.libero.envs import OffScreenRenderEnv
+
+_IK_ITERS = 100
+_IK_DAMPING = 0.05
+_IK_TOL = 1e-4
+
+
+def _unpack_pose(vec: Any) -> tuple[np.ndarray, np.ndarray]:
+    """Split the adapter's flat ``[translation(3), rotation_matrix(9)]`` wire pose into ``(pos, 3x3 rot)``."""
+    vec = np.asarray(vec)
+    return vec[:3], vec[3:].reshape(3, 3)
+
+
+class LiberoEnv(EnvProtocol):
+    """One LIBERO task behind the gym-style ``reset``/``step``/``close`` the env server serves.
+
+    Built once for a ``(suite, task_id)`` and cached; ``reset`` re-seeds and selects a saved init-state, or
+    restores an exact recorded full state when given one (demo replay).
+    ``step`` maps the forwarded command into the active controller's action (FK/IK bridging pose<->joint) and
+    returns LIBERO's raw obs plus the full physics state — the privileged ground truth, so success is
+    recomputable downstream — and ``done``.
+    """
+
+    def __init__(self, suite_name: str, task_id: int, camera_resolution: int, control_mode: str):
+        self._suite_name = suite_name
+        self._task_id = task_id
+        self._resolution = camera_resolution
+        self._control_mode = control_mode
+        self._env = None
+        self._init_states = None
+        self._meta = None
+        self._control_dt = None
+        # Cached once at build: model-structure indices, invariant across resets (same task XML).
+        self._qpos_idx = None
+        self._qvel_idx = None
+        self._eef_site_id = None
+        self._jnt_low = None
+        self._jnt_high = None
+
+    # LIBERO runs with ``hard_reset=True``, so each reset destroys and recreates the sim, model, and controller
+    # objects; these read the live ones from the env rather than caching a copy that would go stale after a reset.
+    @property
+    def _sim(self):
+        return self._env.env.sim
+
+    @property
+    def _model(self):
+        return self._env.env.sim.model._model
+
+    @property
+    def _controller(self):
+        return self._env.env.robots[0].controller
+
+    def _build(self) -> None:
+        task_suite = benchmark.get_benchmark_dict()[self._suite_name]()
+        task = task_suite.get_task(self._task_id)
+        self._init_states = task_suite.get_task_init_states(self._task_id)
+        bddl = pathlib.Path(get_libero_path('bddl_files')) / task.problem_folder / task.bddl_file
+        # OSC_POSE is the controller LIBERO configures for its own policies (its ``env_wrapper`` hands the
+        # controller *name* to ``load_controller_config``); operational-space control maps a per-step
+        # end-effector pose delta to joint motion — LIBERO ships no IK of its own. The joint modes select
+        # robosuite's joint controllers. Pass the name, not a config dict, so the wrapper loads it as LIBERO does.
+        controller_names = {'ee': 'OSC_POSE', 'joint': 'JOINT_POSITION', 'joint_delta': 'JOINT_VELOCITY'}
+        # TODO: verify against a live LIBERO install — ``env.control_freq`` and ``sim.get_state().flatten()``
+        # are env internals unverifiable in 3.11.
+        self._env = OffScreenRenderEnv(
+            bddl_file_name=str(bddl),
+            controller=controller_names[self._control_mode],
+            camera_heights=self._resolution,
+            camera_widths=self._resolution,
+        )
+        self._meta = {'suite': self._suite_name, 'task_id': self._task_id, 'task': task.language}
+        self._control_dt = 1.0 / self._env.env.control_freq
+        robot = self._env.env.robots[0]
+        self._qpos_idx = np.asarray(robot._ref_joint_pos_indexes)
+        self._qvel_idx = np.asarray(robot._ref_joint_vel_indexes)
+        self._eef_site_id = self._sim.model.site_name2id(robot.controller.eef_name)
+        self._jnt_low, self._jnt_high = self._sim.model.jnt_range[robot._ref_joint_indexes].T
+
+    def reset(self, token: Any) -> dict[str, Any]:
+        if self._env is None:
+            self._build()
+        if isinstance(token, np.ndarray):
+            # Exact-state replay: restore a recorded full physics state (a demo's own scene). The
+            # re-randomization is moot — ``set_init_state`` overwrites the whole state.
+            self._env.reset()
+            raw = self._env.set_init_state(token)
+        else:
+            seed = int(token)
+            self._env.seed(seed)
+            self._env.reset()
+            raw = self._env.set_init_state(self._init_states[seed % len(self._init_states)])
+        return {'obs': self._observe(raw), 'meta': self._meta, 'control_dt': self._control_dt}
+
+    def step(self, action: dict[str, Any]) -> dict[str, Any]:
+        arm = self._arm_action(action['command'])
+        # positronic grip in [0, 1] maps to robosuite's [-1, 1]; robosuite's PandaGripper opens at -1 and closes
+        # at +1, so grip=1 closes.
+        grip = action['grip'] * 2.0 - 1.0
+        raw, _reward, done, _info = self._env.step(np.concatenate([arm, [grip]]).tolist())
+        return {'obs': self._observe(raw), 'done': bool(done), 'control_dt': self._control_dt}
+
+    def _arm_action(self, command: dict[str, Any]) -> np.ndarray:
+        # All-to-all: each command becomes the physical pre-scale quantity the active controller's set_goal adds to
+        # the current setpoint, then ``_normalize`` inverts the controller's scaling. The pose<->joint cells use
+        # FK/IK on the site Jacobian; the within-joint cells use the control period.
+        match (self._control_mode, command['type']):
+            case ('ee', 'cartesian'):  # OSC_POSE: world-frame pose error
+                physical = self._pose_error(*_unpack_pose(command['pose']))
+            case ('ee', 'joint_pos'):
+                physical = self._pose_error(*self._fk(command['q']))
+            case ('ee', 'joint_vel'):
+                physical = self._pose_error(*self._fk(self._cur_q() + command['dq'] * self._control_dt))
+            case ('ee', 'hold'):
+                physical = np.zeros(6)
+            case ('joint', 'joint_pos'):  # JOINT_POSITION: joint delta from current
+                physical = command['q'] - self._cur_q()
+            case ('joint', 'joint_vel'):
+                physical = command['dq'] * self._control_dt
+            case ('joint', 'cartesian'):
+                physical = self._ik(*_unpack_pose(command['pose'])) - self._cur_q()
+            case ('joint', 'hold'):
+                physical = np.zeros(len(self._qpos_idx))
+            case ('joint_delta', 'joint_vel'):  # JOINT_VELOCITY: joint velocity (rad/s)
+                physical = command['dq']
+            case ('joint_delta', 'joint_pos'):
+                physical = (command['q'] - self._cur_q()) / self._control_dt
+            case ('joint_delta', 'cartesian'):
+                physical = (self._ik(*_unpack_pose(command['pose'])) - self._cur_q()) / self._control_dt
+            case ('joint_delta', 'hold'):
+                physical = np.zeros(len(self._qpos_idx))
+            case (mode, ctype):
+                raise ValueError(f'control mode {mode!r} cannot map command {ctype!r}')
+        return self._normalize(physical)
+
+    def _normalize(self, physical: np.ndarray) -> np.ndarray:
+        # The exact inverse of robosuite ``Controller.scale_action``: every controller — OSC_POSE, JOINT_POSITION,
+        # JOINT_VELOCITY — maps a normalized [input_min, input_max] action to its output range, so each cell builds
+        # the physical pre-scale quantity and this inverts the scaling. A target beyond one step's output range
+        # saturates at the clip, exactly as for LIBERO's own policies.
+        c = self._controller
+        scale = np.abs(c.output_max - c.output_min) / np.abs(c.input_max - c.input_min)
+        out_mid = (c.output_max + c.output_min) / 2
+        in_mid = (c.input_max + c.input_min) / 2
+        return np.clip((physical - out_mid) / scale + in_mid, c.input_min, c.input_max)
+
+    def _pose_error(self, target_pos: np.ndarray, target_rot: np.ndarray) -> np.ndarray:
+        # The physical pre-scale OSC delta the controller's set_goal expects: world-frame translation plus the
+        # world-frame axis-angle rotation error (``goal_pos = ee_pos + Δpos``; ``goal_ori = R(Δrot) @ ee_ori``).
+        cur_pos, cur_rot = self._cur_pose()
+        return np.concatenate([target_pos - cur_pos, quat2axisangle(mat2quat(target_rot @ cur_rot.T))])
+
+    def _cur_pose(self) -> tuple[np.ndarray, np.ndarray]:
+        pos = np.array(self._sim.data.site_xpos[self._eef_site_id])
+        rot = np.array(self._sim.data.site_xmat[self._eef_site_id]).reshape(3, 3)
+        return pos, rot
+
+    def _cur_q(self) -> np.ndarray:
+        return np.array(self._sim.data.qpos[self._qpos_idx])
+
+    def _fk(self, q: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+        # Forward kinematics on a scratch ``MjData`` seeded from the live scene (objects intact), so the live sim
+        # is never perturbed: set the arm joints, propagate, read the eef site.
+        data = mujoco.MjData(self._model)
+        data.qpos[:] = self._sim.data.qpos
+        data.qpos[self._qpos_idx] = q
+        mujoco.mj_forward(self._model, data)
+        pos = np.array(data.site_xpos[self._eef_site_id])
+        rot = np.array(data.site_xmat[self._eef_site_id]).reshape(3, 3)
+        return pos, rot
+
+    def _ik(self, target_pos: np.ndarray, target_rot: np.ndarray) -> np.ndarray:
+        # Damped-least-squares differential IK on the same MuJoCo site Jacobian OSC uses (no pybullet), iterated
+        # on a scratch ``MjData`` from the current joints.
+        # TODO (verify on a LIBERO box): the iteration count / damping and the ``get_pose_error`` orientation frame.
+        data = mujoco.MjData(self._model)
+        data.qpos[:] = self._sim.data.qpos
+        target_pose = make_pose(target_pos, target_rot)
+        q = self._cur_q()
+        for _ in range(_IK_ITERS):
+            data.qpos[self._qpos_idx] = q
+            mujoco.mj_forward(self._model, data)
+            cur_pose = make_pose(
+                np.array(data.site_xpos[self._eef_site_id]), np.array(data.site_xmat[self._eef_site_id]).reshape(3, 3)
+            )
+            err = get_pose_error(target_pose, cur_pose)
+            if np.linalg.norm(err) < _IK_TOL:
+                break
+            jacp = np.zeros((3, self._model.nv))
+            jacr = np.zeros((3, self._model.nv))
+            mujoco.mj_jacSite(self._model, data, jacp, jacr, self._eef_site_id)
+            jac = np.vstack([jacp, jacr])[:, self._qvel_idx]
+            dq = jac.T @ np.linalg.solve(jac @ jac.T + _IK_DAMPING**2 * np.eye(6), err)
+            q = np.clip(q + dq, self._jnt_low, self._jnt_high)
+        return q
+
+    def _observe(self, raw: dict[str, Any]) -> dict[str, Any]:
+        # Report the eef pose in the grip-site frame OSC controls — the frame ``_arm_action`` recovers
+        # commands against — so the observed pose and the commanded pose share a frame. robosuite's raw
+        # ``robot0_eef_quat`` is the hand *body* orientation, a fixed offset from the grip site, which would
+        # desync observation and command and break absolute-pose control.
+        eef_pos, eef_rot = self._cur_pose()
+        return {
+            'agentview_image': raw['agentview_image'],
+            'eye_in_hand_image': raw['robot0_eye_in_hand_image'],
+            'joint_pos': raw['robot0_joint_pos'],
+            'joint_vel': raw['robot0_joint_vel'],
+            'eef_pos': eef_pos,
+            'eef_quat': mat2quat(eef_rot),
+            'gripper_qpos': raw['robot0_gripper_qpos'],
+            'sim_state': self._env.env.sim.get_state().flatten(),
+        }
+
+    def close(self) -> None:
+        if self._env is not None:
+            self._env.close()
+            self._env = None
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description='Serve one LIBERO task over the env-server protocol.')
+    parser.add_argument('--host', default='localhost')
+    parser.add_argument('--port', type=int, required=True)
+    parser.add_argument('--suite', required=True, help='LIBERO task suite, e.g. libero_spatial')
+    parser.add_argument('--task-id', type=int, default=0)
+    parser.add_argument('--camera-resolution', type=int, default=224)
+    parser.add_argument('--control-mode', default='ee', choices=['ee', 'joint', 'joint_delta'])
+    args = parser.parse_args()
+    env = LiberoEnv(args.suite, args.task_id, args.camera_resolution, args.control_mode)
+    EnvServer(env, args.host, args.port).serve_forever()
+
+
+if __name__ == '__main__':
+    main()
