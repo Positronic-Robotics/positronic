@@ -40,5 +40,4 @@ jobs:
       - name: Replay a LIBERO demo through the env server (software rendering)
         env:
           MUJOCO_GL: osmesa
-          PYTHONPATH: ${{ env.PYTHONPATH }}:$PWD
         run: uv run pytest positronic/simulator/libero/tests --no-cov -rs
