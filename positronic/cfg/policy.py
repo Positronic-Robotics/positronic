@@ -1,3 +1,5 @@
+import os
+
 import configuronic as cfn
 import pos3
 
@@ -91,6 +93,32 @@ def remote(
             return rec.tap('raw').wrap(policy)
         return (rec.tap('raw') | codec | rec.tap('server')).wrap(policy)
     return codec.wrap(policy) if codec else policy
+
+
+@cfn.config(env_var='POSITRONIC_INFERENCE_TOKEN')
+def bearer_headers(env_var: str):
+    token = os.environ.get(env_var)
+    if not token:
+        raise ValueError(f'{env_var} is not set; export the endpoint auth token before running inference.')
+    return {'Authorization': f'Bearer {token}'}
+
+
+@cfn.config(id_env='MODAL_PROXY_TOKEN_ID', secret_env='MODAL_PROXY_TOKEN_SECRET')
+def modal_headers(id_env: str, secret_env: str):
+    key, secret = os.environ.get(id_env), os.environ.get(secret_env)
+    missing = [name for name, value in [(id_env, key), (secret_env, secret)] if not value]
+    if missing:
+        raise ValueError(f'Modal proxy credentials not set; export {" and ".join(missing)} before running inference.')
+    return {'Modal-Key': key, 'Modal-Secret': secret}
+
+
+# Our own Nebius endpoints answer plain HTTP on :8000; for an endpoint served with Nebius
+# `--auth token`, the bearer token is the access control. Front it with TLS instead by adding
+# --policy.secure=True --policy.port=443.
+secure_remote = remote.override(headers=bearer_headers)
+
+# Modal fronts every endpoint with TLS on :443, gated on its proxy key/secret pair.
+modal_remote = remote.override(port=443, secure=True, headers=modal_headers)
 
 
 @cfn.config(

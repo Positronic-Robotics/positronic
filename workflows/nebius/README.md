@@ -267,6 +267,92 @@ bash workflows/nebius/stop.sh my-act-demo
 To pause an endpoint without releasing its static IP (useful if you want to reuse the same IP
 later), use `nebius ai endpoint stop <id>` directly — `start` resumes it.
 
+## Authenticated inference
+
+A bare endpoint answers anyone who learns its address. Two policy configs attach an auth header
+so a served policy only responds to callers holding the right credential, and each reads that
+credential from the environment — so the only argument you pass at the CLI is the host:
+
+| Policy config | Target endpoint | Header sent | Environment variable |
+|---|---|---|---|
+| `.secure_remote` | Our own Nebius endpoint served with `--auth token` | `Authorization: Bearer <token>` | `POSITRONIC_INFERENCE_TOKEN` |
+| `.modal_remote` | A Modal endpoint (e.g. the Gyros policy servers under Runway) | `Modal-Key` / `Modal-Secret` | `MODAL_PROXY_TOKEN_ID`, `MODAL_PROXY_TOKEN_SECRET` |
+
+`.secure_remote` keeps the plain-HTTP `:8000` contact address of a Nebius endpoint — the bearer
+token, enforced by the Nebius ingress before the request reaches the container, is the access
+control. `.modal_remote` defaults to TLS on `:443`, where Modal terminates and checks the proxy
+pair. Both raise immediately if their environment variable is unset, rather than sending an
+unauthenticated request.
+
+A bare value retrieved from MysteryBox comes wrapped in a small JSON envelope — extract the raw
+token with `--format json | jq -r '.data.string_value'` (not `--format text`, which returns the
+whole envelope).
+
+### Our own Nebius endpoint
+
+**One-time:** create a MysteryBox secret holding the bearer token. The payload key must be
+`AUTH_TOKEN` — Nebius's `--token-secret` looks for exactly that name:
+
+```bash
+nebius mysterybox secret create \
+  --parent-id "$PARENT_ID" \
+  --name positronic-serverless-inference-token \
+  --description "Bearer token gating authenticated inference endpoints" \
+  --secret-version-payload "$(jq -nc \
+    --arg v "$(openssl rand -hex 32)" '[{key:"AUTH_TOKEN",string_value:$v}]')"
+```
+
+Rotate it later by adding a new primary version (clients re-read it on their next run):
+
+```bash
+SECRET_ID=$(nebius mysterybox secret list --parent-id "$PARENT_ID" --format json \
+  | jq -r '.items[] | select(.metadata.name=="positronic-serverless-inference-token") | .metadata.id')
+nebius mysterybox secret-version create --parent-id "$SECRET_ID" --set-primary \
+  --payload "$(jq -nc --arg v "$(openssl rand -hex 32)" '[{key:"AUTH_TOKEN",string_value:$v}]')"
+```
+
+**Serve** with `NEBIUS_AUTH_TOKEN_SECRET` set, so `serve.sh` adds `--auth token` and the platform
+rejects tokenless requests at the ingress, before they reach the container:
+
+```bash
+NEBIUS_AUTH_TOKEN_SECRET=positronic-serverless-inference-token \
+  bash workflows/nebius/serve.sh lerobot_0_3_3 act-server serve \
+  --checkpoints_dir=s3://<your-bucket>/checkpoints/lerobot/<exp_name>/
+```
+
+**Run inference** by loading that same token into the environment, then pointing `.secure_remote`
+at the endpoint IP — the host is the only argument:
+
+```bash
+SECRET_ID=$(nebius mysterybox secret list --parent-id "$PARENT_ID" --format json \
+  | jq -r '.items[] | select(.metadata.name=="positronic-serverless-inference-token") | .metadata.id')
+export POSITRONIC_INFERENCE_TOKEN=$(nebius mysterybox payload get-by-key \
+  --secret-id "$SECRET_ID" --key AUTH_TOKEN --format json | jq -r '.data.string_value')
+
+uv run positronic-inference sim \
+  --policy=.secure_remote \
+  --policy.host=<endpoint-ip> \
+  --output_dir=.data/inference/<run-name>/
+```
+
+### A Modal endpoint
+
+Modal fronts every endpoint with proxy auth on `:443`. Load the proxy token pair from the Runway
+MysteryBox secret (`runway-modal-proxy`), then point `.modal_remote` at the `*.modal.run` host —
+no `--policy.port` or `--policy.secure` needed, those are baked in:
+
+```bash
+export MODAL_PROXY_TOKEN_ID=$(nebius mysterybox payload get-by-key \
+  --secret-id mbsec-e00zw9csj016v0t01h --key token-id --format json | jq -r '.data.string_value')
+export MODAL_PROXY_TOKEN_SECRET=$(nebius mysterybox payload get-by-key \
+  --secret-id mbsec-e00zw9csj016v0t01h --key token-secret --format json | jq -r '.data.string_value')
+
+uv run positronic-inference phail \
+  --policy=.modal_remote \
+  --policy.host=runway-pythagoras-dev--gyros-positronic-serve-2-gyrosserver-web.modal.run \
+  --output_dir=s3://runway/inference/phail/<DDMMYY>/rollouts/
+```
+
 ## What changed vs. running on a VM
 
 No VM to provision, SSH into, or remember to shut down. Credentials stay in MysteryBox instead
@@ -282,6 +368,7 @@ override them** with their own project + subnet IDs:
 | `NEBIUS_PARENT_ID` | `project-e00f38wexevrr52b8j` | Nebius project to create the job/endpoint in |
 | `NEBIUS_SUBNET_ID` | `vpcsubnet-e00pk1j1x6hjmr4m92` | VPC subnet for the compute instance |
 | `WANDB_SECRET` | `positronic-serverless-wandb-api-key` | MysteryBox secret name for the WandB key. Set empty (`WANDB_SECRET=`) to skip wandb entirely. |
+| `NEBIUS_AUTH_TOKEN_SECRET` | _(empty — open endpoint)_ | `serve.sh` only. MysteryBox secret name (payload key `AUTH_TOKEN`) for `--auth token`; when set, the endpoint rejects requests without `Authorization: Bearer <token>`. See [Authenticated inference](#authenticated-inference). |
 | `NEBIUS_CACHE_FS` | `computefilesystem-e00f6jyfr5wkawyrab` | Shared filesystem **ID** (not name — `--volume` rejects names) mounted RW at `/cache` for the `uv`/HF/openpi caches (`UV_CACHE_DIR`, `HF_HOME`, `OPENPI_DATA_HOME`). Not used by pos3. The default is Positronic-internal; external users must override with their own filesystem ID. |
 | `NEBIUS_IMAGE_TAG` | `latest` | Docker image tag the job/endpoint pulls (`positro/<image>:<tag>`). `cd docker && make push-* IMAGE_TAG=<branch>` pushes that tag unconditionally; set `NEBIUS_IMAGE_TAG=<branch>` to run a branch build remotely without clobbering `:latest`. `make push-*` only updates `:latest` when run with `CI` set. Note `convert.sh openpi` chains a stats job on the `positro/openpi` image, so with `NEBIUS_IMAGE_TAG=<branch>` you must also have pushed `positro/openpi:<branch>` (not just `positro/positronic:<branch>`); otherwise leave `NEBIUS_IMAGE_TAG` unset so stats uses `:latest`. |
 
