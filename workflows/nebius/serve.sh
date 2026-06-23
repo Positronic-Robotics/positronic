@@ -23,10 +23,10 @@ IMAGE_TAG="${NEBIUS_IMAGE_TAG:-latest}"
 # Nebius GPU preset. Default is one H100; multi-GPU presets must match the server's GPU count
 # (DreamZero's --num_gpus runs torchrun --nproc_per_node, so an 8-GPU server needs an 8-GPU preset).
 PRESET="${NEBIUS_PRESET:-1gpu-16vcpu-200gb}"
-# Authenticated endpoint (opt-in). Point NEBIUS_AUTH_TOKEN_SECRET at a MysteryBox secret whose
+# Authenticated endpoint (default). NEBIUS_AUTH_TOKEN_SECRET names a MysteryBox secret whose
 # payload key is AUTH_TOKEN; Nebius then rejects any request lacking `Authorization: Bearer <token>`
-# at the ingress, before it reaches the container. Empty (the default) leaves the endpoint open.
-AUTH_TOKEN_SECRET="${NEBIUS_AUTH_TOKEN_SECRET:-}"
+# at the ingress, before it reaches the container. Set it empty to create an open endpoint.
+AUTH_TOKEN_SECRET="${NEBIUS_AUTH_TOKEN_SECRET-positronic-serverless-inference-token}"
 AUTH_FLAGS=""  # word-splits into the create call below; MysteryBox selectors carry no spaces
 [ -n "$AUTH_TOKEN_SECRET" ] && AUTH_FLAGS="--auth token --token-secret $AUTH_TOKEN_SECRET"
 
