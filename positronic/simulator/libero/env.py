@@ -135,6 +135,8 @@ class LiberoEnv(EnvProtocol):
         # positronic grip in [0, 1] maps to robosuite's [-1, 1]; robosuite's PandaGripper opens at -1 and closes
         # at +1, so grip=1 closes.
         grip = action['grip'] * 2.0 - 1.0
+        # LIBERO's ``BDDLBaseDomain.step`` overrides robosuite's horizon-based ``done`` with ``_check_success()``,
+        # so ``done`` is the task-success flag (the adapter's ``eval.success``), not a step-limit timeout.
         raw, _reward, done, _info = self._env.step(np.concatenate([arm, [grip]]).tolist())
         return {'obs': self._observe(raw), 'done': bool(done), 'control_dt': self._control_dt}
 
