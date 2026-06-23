@@ -43,10 +43,14 @@ class LiberoAdapter(EnvAdapter):
         self._camera_dict = camera_dict  # logical observation name -> the LIBERO obs image key
         self._players: dict[str, roboarm_command.TrajectoryPlayer] = {}
         self._held: dict[str, Any] = {}  # last sampled waypoint per channel — re-sent until it changes
+        # Last commanded gripper closure, held across a cancelled grip trajectory: grip is an absolute [0, 1]
+        # value with no 'hold' command to fall back on (unlike the arm), so cancelling must freeze it, not reopen.
+        self._grip = 0.0
 
     def reset_token(self, seed: int | None) -> Any:
         self._players = {}
         self._held = {}
+        self._grip = 0.0
         return seed if seed is not None else 0  # LIBERO selects a concrete init-state index
 
     def action(self, commands: dict[str, pimm.Message], now_ns: int) -> dict[str, Any]:
@@ -64,7 +68,9 @@ class LiberoAdapter(EnvAdapter):
         if isinstance(cmd, roboarm_command.Reset | roboarm_command.Recover):
             self._held.pop('robot_command')
             cmd = None
-        return {'command': _wire_command(cmd), 'grip': float(self._held.get('target_grip', 0.0))}
+        if 'target_grip' in self._held:
+            self._grip = float(self._held['target_grip'])
+        return {'command': _wire_command(cmd), 'grip': self._grip}
 
     def observations(self, raw_obs: dict[str, Any]) -> dict[str, Any]:
         # The env reports the eef pose in the grip-site frame it controls; ``eef_quat`` is scalar-last (xyzw,
