@@ -58,6 +58,10 @@ class RemoteEnvControlSystem(pimm.ControlSystem):
         self._frame = self._conn.reset(self._adapter.reset_token(seed))
         self._reset_pending = True
         self._active = True
+        # Clear any terminal the previous trial left on the wire: the env can reach ``done`` while the proxy
+        # free-runs between trials, and the reset-publish turn re-clears it only later — the harness, which runs
+        # before producers, would otherwise sample that stale success as this trial's terminal.
+        self.done.emit({})
 
     def _emit_payload(self, raw_obs: dict[str, Any]) -> None:
         for name, value in self._adapter.observations(raw_obs).items():
