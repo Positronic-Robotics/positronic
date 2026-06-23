@@ -1,11 +1,24 @@
 # /// script
 # requires-python = "==3.10.*"
 # dependencies = [
-#     "libero @ git+https://github.com/Lifelong-Robot-Learning/LIBERO.git",
-#     "robosuite==1.4.1",
-#     "numpy<2",
 #     "msgpack",
 #     "websockets",
+#     "robosuite==1.4.1",
+#     "mujoco",
+#     "numpy<2",
+#     # LIBERO is not listed here: it declares ``install_requires=[]`` and ships ``libero`` as a PEP 420 namespace
+#     # package, so no wheel carries it — the launcher puts a source checkout on ``PYTHONPATH``. These are the
+#     # packages LIBERO's benchmark/env path imports but never declares.
+#     "torch<2.6",  # torch 2.6 flipped ``torch.load`` to weights_only=True; LIBERO's init-states are plain pickles
+#     "bddl==1.0.1",
+#     "gym==0.25.2",
+#     "hydra-core",
+#     "easydict",
+#     "einops",
+#     "cloudpickle",
+#     "future",
+#     "matplotlib",
+#     "pyyaml",
 # ]
 # ///
 """LIBERO behind the env-server protocol: a standalone server for one LIBERO task in its own interpreter.

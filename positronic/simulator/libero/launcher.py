@@ -2,9 +2,9 @@
 
 positronic starts the server: the env runs in its own 3.10 interpreter via ``uv run --no-project env.py``,
 which reads the script's PEP 723 deps and builds an isolated environment. The positronic-free ``env_server``
-package is placed on ``PYTHONPATH`` so ``env.py`` imports the dumb ``server``/``protocol`` without dragging in
-positronic. A free localhost port is picked here and handed to ``RemoteEnvControlSystem``; the subprocess is
-terminated when the run ends.
+package and a LIBERO source checkout are placed on ``PYTHONPATH`` so ``env.py`` imports the dumb
+``server``/``protocol`` and ``libero`` without dragging in positronic. A free localhost port is picked here and
+handed to ``RemoteEnvControlSystem``; the subprocess is terminated when the run ends.
 """
 
 import os
@@ -19,11 +19,31 @@ import pimm
 _ENV_SCRIPT = Path(__file__).parent / 'env.py'
 _ENV_SERVER_DIR = Path(__file__).parents[1] / 'env_server'
 
+_LIBERO_REPO = 'https://github.com/Lifelong-Robot-Learning/LIBERO.git'
+_LIBERO_COMMIT = '8f1084e3132a39270c3a13ebe37270a43ece2a01'
+_LIBERO_CACHE = Path.home() / '.cache' / 'positronic' / 'libero'
+_LIBERO_SRC = _LIBERO_CACHE / 'src'
+_LIBERO_CONFIG = _LIBERO_CACHE / 'config'
+
 
 def _free_port() -> int:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
         sock.bind(('', 0))
         return sock.getsockname()[1]
+
+
+def _ensure_libero_src() -> Path:
+    """Clone LIBERO once into the cache and return its repo root for ``PYTHONPATH``.
+
+    LIBERO declares ``install_requires=[]`` and ships ``libero`` as a PEP 420 namespace package (no top-level
+    ``__init__.py``), so ``find_packages`` builds an empty wheel — it is importable only with the repo root on
+    ``sys.path``, and the bddl/init-state/asset files the env reads live in the repo tree, not a wheel.
+    """
+    if not (_LIBERO_SRC / 'libero' / 'libero' / '__init__.py').exists():
+        _LIBERO_SRC.parent.mkdir(parents=True, exist_ok=True)
+        subprocess.run(['git', 'clone', _LIBERO_REPO, str(_LIBERO_SRC)], check=True)
+        subprocess.run(['git', '-C', str(_LIBERO_SRC), 'checkout', _LIBERO_COMMIT], check=True)
+    return _LIBERO_SRC
 
 
 def _spawn(
@@ -47,7 +67,14 @@ def _spawn(
         '--control-mode',
         control_mode,
     ]
-    return subprocess.Popen(command, env={**os.environ, 'PYTHONPATH': str(_ENV_SERVER_DIR)})
+    # LIBERO writes a config of repo-relative asset paths into ``LIBERO_CONFIG_PATH`` on first import; pin it beside
+    # the checkout so it can never go stale against a ``~/.libero`` from an earlier, differently-located clone.
+    env = {
+        **os.environ,
+        'PYTHONPATH': os.pathsep.join([str(_ENV_SERVER_DIR), str(_ensure_libero_src())]),
+        'LIBERO_CONFIG_PATH': str(_LIBERO_CONFIG),
+    }
+    return subprocess.Popen(command, env=env)
 
 
 def _terminate(proc: subprocess.Popen) -> None:
