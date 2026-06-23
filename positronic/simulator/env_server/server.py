@@ -18,6 +18,8 @@ Any command whose handling raises returns ``{'error': str}`` instead, which the 
 """
 
 import logging
+import queue
+import threading
 from abc import ABC, abstractmethod
 from typing import Any
 
@@ -68,6 +70,11 @@ class EnvServer:
 
     The env persists across client connections — its per-task construction cache survives a reconnect;
     ``shutdown`` releases it.
+
+    ``reset``/``step`` execute on the thread that calls ``serve_forever`` (the process main thread for the
+    subprocess server), never on the per-connection websocket threads: a render backend can be thread-affine —
+    macOS GLFW must initialize on the main thread — and a sim is single-threaded anyway. Each websocket thread
+    only marshals frames; it hands the env-touching commands to this executor and waits for the result.
     """
 
     def __init__(self, env: EnvProtocol, host: str, port: int):
@@ -75,35 +82,51 @@ class EnvServer:
         self._host = host
         self._port = port
         self._server = None
+        self._requests: queue.Queue = queue.Queue()
 
     def _handle(self, connection: ServerConnection) -> None:
         for raw in connection:
             msg = decode(raw)
-            # The wire boundary: a failure handling the command (an env that rejects an action, a sim
-            # blow-up, an unknown command) crosses back as an error frame the client re-raises, rather
-            # than killing the connection.
-            try:
-                match msg['cmd']:
-                    case 'reset':
-                        result = self._env.reset(msg['token'])
-                    case 'step':
-                        result = self._env.step(msg['action'])
-                    case 'close':
-                        connection.send(encode({'ok': True}))
-                        return
-                    case other:
-                        raise ValueError(f'Unknown command: {other!r}')
-            except Exception as e:
-                result = {'error': f'{type(e).__name__}: {e}'}
-            connection.send(encode(result))
+            # ``close`` ends the connection and touches no env, so the websocket thread answers it directly —
+            # it must still work after ``shutdown`` has stopped the executor (a client may close late, e.g. a
+            # proxy whose run loop is torn down after the server).
+            if msg['cmd'] == 'close':
+                connection.send(encode({'ok': True}))
+                return
+            reply: queue.Queue = queue.Queue(maxsize=1)
+            self._requests.put((msg, reply))
+            connection.send(encode(reply.get()))
+
+    def _execute(self, msg: dict[str, Any]) -> dict[str, Any]:
+        # The wire boundary: a failure handling the command (an env that rejects an action, a sim blow-up, an
+        # unknown command) crosses back as an error frame the client re-raises, rather than killing the connection.
+        try:
+            match msg['cmd']:
+                case 'reset':
+                    return self._env.reset(msg['token'])
+                case 'step':
+                    return self._env.step(msg['action'])
+                case other:
+                    raise ValueError(f'Unknown command: {other!r}')
+        except Exception as e:
+            return {'error': f'{type(e).__name__}: {e}'}
 
     def serve_forever(self) -> None:
-        # A reset token can be a large opaque blob (e.g. an exact-replay scene), so don't cap frame size.
+        # A reset token can be a large opaque blob (e.g. an exact-replay scene), so don't cap frame size. The
+        # websocket accept loop runs on a background thread; this thread drains the commands those connections
+        # enqueue and runs the env on itself, so every env touch is on the one thread that called here (the
+        # subprocess main thread — macOS GLFW must init there).
         with serve(self._handle, self._host, self._port, max_size=None) as server:
             self._server = server
-            server.serve_forever()
+            threading.Thread(target=server.serve_forever, daemon=True).start()
+            while (item := self._requests.get()) is not None:
+                msg, reply = item
+                reply.put(self._execute(msg))
 
     def shutdown(self) -> None:
+        # Stop accepting and release the env; the executor stops on the sentinel. ``close`` is answered inline
+        # by the websocket threads, so a connection that closes after this still gets its ack.
         if self._server is not None:
             self._server.shutdown()
+        self._requests.put(None)
         self._env.close()
