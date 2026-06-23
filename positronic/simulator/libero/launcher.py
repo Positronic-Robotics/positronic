@@ -33,15 +33,22 @@ def _free_port() -> int:
 
 
 def _ensure_libero_src() -> Path:
-    """Clone LIBERO once into the cache and return its repo root for ``PYTHONPATH``.
+    """Clone LIBERO at the pinned commit into the cache and return its repo root for ``PYTHONPATH``.
 
     LIBERO declares ``install_requires=[]`` and ships ``libero`` as a PEP 420 namespace package (no top-level
     ``__init__.py``), so ``find_packages`` builds an empty wheel — it is importable only with the repo root on
     ``sys.path``, and the bddl/init-state/asset files the env reads live in the repo tree, not a wheel.
     """
-    if not (_LIBERO_SRC / 'libero' / 'libero' / '__init__.py').exists():
+    if not (_LIBERO_SRC / '.git').exists():
         _LIBERO_SRC.parent.mkdir(parents=True, exist_ok=True)
         subprocess.run(['git', 'clone', _LIBERO_REPO, str(_LIBERO_SRC)], check=True)
+    head = subprocess.run(
+        ['git', '-C', str(_LIBERO_SRC), 'rev-parse', 'HEAD'], check=True, capture_output=True, text=True
+    ).stdout.strip()
+    # Enforce the pin on every run, not just the first: a cache cloned earlier (or by hand) at another revision
+    # would otherwise be imported as-is, mismatching the committed fixture and the controller assumptions.
+    if head != _LIBERO_COMMIT:
+        subprocess.run(['git', '-C', str(_LIBERO_SRC), 'fetch', 'origin', _LIBERO_COMMIT], check=True)
         subprocess.run(['git', '-C', str(_LIBERO_SRC), 'checkout', _LIBERO_COMMIT], check=True)
     return _LIBERO_SRC
 
