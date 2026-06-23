@@ -19,7 +19,7 @@ class EnvConnection:
     ``{'obs', 'meta', 'control_dt'}``.
     """
 
-    def __init__(self, host: str, port: int, *, open_timeout: float = 10.0, connect_deadline: float = 60.0):
+    def __init__(self, host: str, port: int, *, open_timeout: float = 10.0, connect_deadline: float = 600.0):
         uri = f'ws://{host}:{port}/'
         deadline = time.monotonic() + connect_deadline
         backoff = 0.5

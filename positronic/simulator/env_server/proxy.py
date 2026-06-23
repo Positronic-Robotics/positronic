@@ -24,7 +24,9 @@ _IDLE_DT = 0.1
 class RemoteEnvControlSystem(pimm.ControlSystem):
     def __init__(self, adapter: EnvAdapter, host: str, port: int):
         self._adapter = adapter
-        self._conn = EnvConnection(host, port)
+        self._host = host
+        self._port = port
+        self._conn: EnvConnection | None = None
 
         self.commands: pimm.ReceiverDict = pimm.ReceiverDict(self, default=None)
         self.observations: pimm.EmitterDict = pimm.EmitterDict(self)
@@ -48,6 +50,9 @@ class RemoteEnvControlSystem(pimm.ControlSystem):
         next turn — in sequence, so the recorder samples frame-0 before any step. Stale commands queued
         while inactive (e.g. the inter-episode home) are dropped so the first step doesn't apply them.
         """
+        if self._conn is None:
+            # Connect on the first reset, not at construction, so positronic can launch the server first.
+            self._conn = EnvConnection(self._host, self._port)
         for _, receiver in self.commands.items():
             receiver.read()
         self._frame = self._conn.reset(self._adapter.reset_token(seed))
@@ -78,7 +83,8 @@ class RemoteEnvControlSystem(pimm.ControlSystem):
                     self._frame = self._step_env(clock)
                     self._emit_payload(self._frame['obs'])
         finally:
-            self._conn.close()
+            if self._conn is not None:
+                self._conn.close()
 
     def _step_env(self, clock: pimm.Clock) -> dict[str, Any]:
         commands = {name: receiver.read() for name, receiver in self.commands.items()}
