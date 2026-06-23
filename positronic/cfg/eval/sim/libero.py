@@ -2,6 +2,7 @@ import configuronic as cfn
 
 from positronic.dataset.serializers import Serializers
 from positronic.drivers.roboarm import command as roboarm_command
+from positronic.drivers.roboarm.models import bundled_panda_model
 from positronic.eval import ROBOT_STATIC_META, Command, Embodiment, Eval, Observation, Task
 from positronic.simulator.env_server.proxy import RemoteEnvControlSystem
 from positronic.simulator.libero.adapter import LiberoAdapter
@@ -18,6 +19,12 @@ from positronic.simulator.libero.launcher import LiberoServer
 )
 def _libero_eval(suite, task_id, instruction, timeout, camera_dict, camera_resolution, control_mode, seed):
     """A LIBERO eval: the embodiment proxies a remote LIBERO env, the task carries the scenario.
+
+    A LIBERO suite (``libero_spatial``, ``libero_object``, ``libero_goal``, ``libero_10``, ...) is a set of
+    related manipulation tasks; ``task_id`` selects one task within it — a fixed scene and language goal (see
+    https://github.com/Lifelong-Robot-Learning/LIBERO). ``_libero_eval`` leaves ``suite`` and ``instruction``
+    unbound, so each concrete task is a named ``.override`` (e.g. ``spatial`` below); ``instruction`` must match
+    that task's own language.
 
     positronic launches the env server in its own 3.10 interpreter for ``(suite, task_id)``; the proxy
     drives it over the socket. The per-trial seed selects a saved init-state and re-randomizes the scene.
@@ -39,7 +46,10 @@ def _libero_eval(suite, task_id, instruction, timeout, camera_dict, camera_resol
         descriptor='remote.libero.franka',
         observations=observations,
         commands=commands,
-        static_meta=dict(ROBOT_STATIC_META),
+        # LIBERO drives the same Franka Panda as the native sim, so recordings carry the same model (URDF +
+        # meshes + joint names + control frame) for the 3D viewer and offline IK, supplied here since the 3.10
+        # server can't import positronic to emit it via ``robot_meta``.
+        static_meta={**ROBOT_STATIC_META, **bundled_panda_model()},
         meta_source=proxy.robot_meta,
         control_systems=(server, proxy),
         simulated=True,

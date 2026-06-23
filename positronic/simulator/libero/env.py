@@ -99,8 +99,6 @@ class LiberoEnv(EnvProtocol):
         # end-effector pose delta to joint motion — LIBERO ships no IK of its own. The joint modes select
         # robosuite's joint controllers. Pass the name, not a config dict, so the wrapper loads it as LIBERO does.
         controller_names = {'ee': 'OSC_POSE', 'joint': 'JOINT_POSITION', 'joint_delta': 'JOINT_VELOCITY'}
-        # TODO: verify against a live LIBERO install — ``env.control_freq`` and ``sim.get_state().flatten()``
-        # are env internals unverifiable in 3.11.
         self._env = OffScreenRenderEnv(
             bddl_file_name=str(bddl),
             controller=controller_names[self._control_mode],
@@ -211,8 +209,8 @@ class LiberoEnv(EnvProtocol):
 
     def _ik(self, target_pos: np.ndarray, target_rot: np.ndarray) -> np.ndarray:
         # Damped-least-squares differential IK on the same MuJoCo site Jacobian OSC uses (no pybullet), iterated
-        # on a scratch ``MjData`` from the current joints.
-        # TODO (verify on a LIBERO box): the iteration count / damping and the ``get_pose_error`` orientation frame.
+        # on a scratch ``MjData`` from the current joints. ``get_pose_error`` returns the world-frame error that
+        # matches the world-frame site Jacobian; ``validate.py`` checks the ``_fk(_ik(pose))`` round-trip.
         data = mujoco.MjData(self._model)
         data.qpos[:] = self._sim.data.qpos
         target_pose = make_pose(target_pos, target_rot)

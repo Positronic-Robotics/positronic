@@ -29,4 +29,4 @@ _FIXTURE = os.path.join(os.path.dirname(__file__), 'libero_spatial_task0.npz')
 @pytest.mark.timeout(900)  # the env server bootstraps its 3.10 deps on first run, which can take minutes
 def test_demo_replay_reaches_success():
     rate = run_replay(_FIXTURE, suite='libero_spatial', task_id=0)
-    assert rate >= 0.66, f'demo replay success rate {rate:.2f} — env server likely broken'
+    assert rate == 1.0, f'demo replay success rate {rate:.2f} — every prerecorded demo must replay to success'
