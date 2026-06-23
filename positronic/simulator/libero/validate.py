@@ -1,11 +1,24 @@
 # /// script
 # requires-python = "==3.10.*"
 # dependencies = [
-#     "libero @ git+https://github.com/Lifelong-Robot-Learning/LIBERO.git",
-#     "robosuite==1.4.1",
-#     "numpy<2",
 #     "msgpack",
 #     "websockets",
+#     "robosuite==1.4.1",
+#     "mujoco",
+#     "numpy<2",
+#     # LIBERO is not listed here: it ships ``libero`` as a namespace package with no installable wheel, so the
+#     # caller puts a source checkout on ``PYTHONPATH`` (see ``launcher._ensure_libero_src``). These are the
+#     # packages LIBERO's benchmark/env path imports but never declares.
+#     "torch<2.6",  # torch 2.6 flipped ``torch.load`` to weights_only=True; LIBERO's init-states are plain pickles
+#     "bddl==1.0.1",
+#     "gym==0.25.2",
+#     "hydra-core",
+#     "easydict",
+#     "einops",
+#     "cloudpickle",
+#     "future",
+#     "matplotlib",
+#     "pyyaml",
 # ]
 # ///
 """On-box validation for ``LiberoEnv``'s command transform — runs inside LIBERO's own 3.10 interpreter.
@@ -21,9 +34,11 @@ against robosuite's *own* control path:
 - forward kinematics: ``_fk`` of the live joints reproduces the controller's eef-site read to the bit.
 - inverse kinematics: ``_fk(_ik(pose))`` recovers the target pose (round-trip; LIBERO has no IK to match).
 
-Run on a LIBERO-capable box, with the positronic-free ``server`` module on the path the launcher uses::
+Run on a LIBERO-capable box with the positronic-free ``server`` module and a LIBERO source checkout on the
+path (the same two entries ``launcher._spawn`` sets; the checkout lands at ``~/.cache/positronic/libero/src``
+once the env server has run once)::
 
-    PYTHONPATH=positronic/simulator/env_server \
+    PYTHONPATH=positronic/simulator/env_server:~/.cache/positronic/libero/src \
         uv run --no-project positronic/simulator/libero/validate.py
 """
 
@@ -47,10 +62,6 @@ def _goal_qpos(c) -> np.ndarray:
     return np.asarray(c.goal_qpos)
 
 
-def _goal_vel(c) -> np.ndarray:
-    return np.asarray(c.goal_vel)
-
-
 def _check_serve(env: LiberoEnv) -> None:
     env.reset(0)
     out = None
@@ -66,6 +77,9 @@ def _check_action_inverse(env: LiberoEnv, ctype: str, key: str, goal_payload, at
     setpoint into the wire command field ``key``."""
     env.reset(0)
     c = env._controller
+    # Sync the controller's cached ee_pos/joint state to the live sim (a real ``step`` does this every turn), so
+    # ``set_goal`` builds its goal from the same pose ``_arm_action`` reads back via ``_cur_pose``/``_cur_q``.
+    c.update(force=True)
     dim = len(c.input_max)
     for _ in range(_OSC_SAMPLES):
         action = np.random.uniform(-1.0, 1.0, dim)
@@ -119,7 +133,9 @@ def main() -> None:
 
     print('joint_delta / JOINT_VELOCITY')
     jv = LiberoEnv(args.suite, args.task_id, args.camera_resolution, 'joint_delta')
-    _check_action_inverse(jv, 'joint_vel', 'dq', _goal_vel)
+    # The wire ``dq`` is a per-step joint delta, so feed the controller's goal velocity as the delta it covers
+    # over one control period; ``_arm_action`` divides by that period to recover the rate.
+    _check_action_inverse(jv, 'joint_vel', 'dq', lambda c: np.asarray(c.goal_vel) * jv._control_dt)
     jv.close()
 
     print('ALL CHECKS PASSED')

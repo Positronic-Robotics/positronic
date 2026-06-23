@@ -160,26 +160,28 @@ class LiberoEnv(EnvProtocol):
     def _arm_action(self, command: dict[str, Any]) -> np.ndarray:
         # All-to-all: each command becomes the physical pre-scale quantity the active controller's set_goal adds to
         # the current setpoint, then ``_normalize`` inverts the controller's scaling. The pose<->joint cells use
-        # FK/IK on the site Jacobian; the within-joint cells use the control period.
+        # FK/IK on the site Jacobian. ``dq`` is a per-step joint delta (positronic applies ``JointDelta`` as
+        # ``q + dq``, never as a rate), so it bridges as a delta everywhere except the JOINT_VELOCITY controller,
+        # which wants rad/s — there it is divided by the control period.
         match (self._control_mode, command['type']):
             case ('ee', 'cartesian'):  # OSC_POSE: world-frame pose error
                 physical = self._pose_error(*_unpack_pose(command['pose']))
             case ('ee', 'joint_pos'):
                 physical = self._pose_error(*self._fk(command['q']))
             case ('ee', 'joint_vel'):
-                physical = self._pose_error(*self._fk(self._cur_q() + command['dq'] * self._control_dt))
+                physical = self._pose_error(*self._fk(self._cur_q() + command['dq']))
             case ('ee', 'hold'):
                 physical = np.zeros(6)
             case ('joint', 'joint_pos'):  # JOINT_POSITION: joint delta from current
                 physical = command['q'] - self._cur_q()
             case ('joint', 'joint_vel'):
-                physical = command['dq'] * self._control_dt
+                physical = command['dq']
             case ('joint', 'cartesian'):
                 physical = self._ik(*_unpack_pose(command['pose'])) - self._cur_q()
             case ('joint', 'hold'):
                 physical = np.zeros(len(self._qpos_idx))
-            case ('joint_delta', 'joint_vel'):  # JOINT_VELOCITY: joint velocity (rad/s)
-                physical = command['dq']
+            case ('joint_delta', 'joint_vel'):  # JOINT_VELOCITY: the per-step delta as a rate over the control period
+                physical = command['dq'] / self._control_dt
             case ('joint_delta', 'joint_pos'):
                 physical = (command['q'] - self._cur_q()) / self._control_dt
             case ('joint_delta', 'cartesian'):
