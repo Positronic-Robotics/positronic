@@ -27,6 +27,7 @@ re-randomizes object positions.
 """
 
 import argparse
+import builtins
 import pathlib
 from typing import Any
 
@@ -35,8 +36,13 @@ import numpy as np
 from robosuite.utils.transform_utils import get_pose_error, make_pose, mat2quat, quat2axisangle
 from server import EnvProtocol, EnvServer
 
-from libero.libero import benchmark, get_libero_path
-from libero.libero.envs import OffScreenRenderEnv
+# LIBERO's package __init__ prompts on stdin for a dataset path when ``~/.libero/config.yaml`` is absent, which
+# would hang this unattended server on a clean machine. Answer its first-run prompt with the default ('n') so it
+# writes the config from LIBERO's own package-relative paths, non-interactively.
+builtins.input = lambda *_args, **_kwargs: 'n'
+
+from libero.libero import benchmark, get_libero_path  # noqa: E402 -- must follow the stdin shim above
+from libero.libero.envs import OffScreenRenderEnv  # noqa: E402
 
 _IK_ITERS = 100
 _IK_DAMPING = 0.05
