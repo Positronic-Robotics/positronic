@@ -6,12 +6,9 @@ channel's trajectory down to the clock, holds the last waypoint between waypoint
 (an absolute Cartesian pose, joint positions, or joint velocities) plus the gripper opening to the server. All
 action encoding — the OSC pose delta and its normalization, and the FK/IK that bridge pose<->joint commands —
 lives server-side in ``LiberoEnv`` where the MuJoCo model is; the adapter holds no model and stays geometry-only.
-
-Several LIBERO/robosuite obs conventions can't be verified in positronic's interpreter and are marked TODO: the
-gripper observation normalization and the camera image orientation. They need a confirmation pass on a
-LIBERO-capable box.
 """
 
+from collections import defaultdict
 from typing import Any
 
 import numpy as np
@@ -41,21 +38,23 @@ def _wire_command(cmd: Any) -> dict[str, Any]:
 class LiberoAdapter(EnvAdapter):
     def __init__(self, camera_dict: dict[str, str]):
         self._camera_dict = camera_dict  # logical observation name -> the LIBERO obs image key
-        self._players: dict[str, roboarm_command.TrajectoryPlayer] = {}
+        self._players: defaultdict[str, roboarm_command.TrajectoryPlayer] = defaultdict(
+            roboarm_command.TrajectoryPlayer
+        )
         self._held: dict[str, Any] = {}  # last sampled waypoint per channel — re-sent until it changes
         # Last commanded gripper closure, held across a cancelled grip trajectory: grip is an absolute [0, 1]
         # value with no 'hold' command to fall back on (unlike the arm), so cancelling must freeze it, not reopen.
         self._grip = 0.0
 
     def reset_token(self, seed: int | None) -> Any:
-        self._players = {}
+        self._players = defaultdict(roboarm_command.TrajectoryPlayer)
         self._held = {}
         self._grip = 0.0
         return seed if seed is not None else 0  # LIBERO selects a concrete init-state index
 
     def action(self, commands: dict[str, pimm.Message], now_ns: int) -> dict[str, Any]:
         for name, msg in commands.items():
-            player = self._players.setdefault(name, roboarm_command.TrajectoryPlayer())
+            player = self._players[name]
             if msg.updated and msg.data is not None:
                 player.set(msg.data)
                 if not msg.data:  # an empty trajectory cancels: stop replaying the held waypoint
@@ -78,10 +77,10 @@ class LiberoAdapter(EnvAdapter):
         ee_pose = geom.Transform3D(raw_obs['eef_pos'], geom.Rotation.from_quat_xyzw(raw_obs['eef_quat']))
         state = MujocoFrankaState()
         state.encode(raw_obs['joint_pos'], raw_obs['joint_vel'], ee_pose)
-        # TODO (verify on a LIBERO box): map the two Panda finger qpos to a single [0, 1] openness.
-        obs: dict[str, Any] = {'robot_state': state, 'grip': float(np.sum(raw_obs['gripper_qpos']))}
+        obs: dict[str, Any] = {'robot_state': state, 'grip': float(raw_obs['grip'])}
         for logical, env_key in self._camera_dict.items():
-            # TODO (verify on a LIBERO box): robosuite renders bottom-up; flip to image orientation.
+            # robosuite renders bottom-up; flip to standard top-down orientation (LIBERO's own video path
+            # flips the same way).
             frame = np.ascontiguousarray(raw_obs[env_key][::-1])
             adapter = pimm.shared_memory.NumpySMAdapter(shape=frame.shape, dtype=frame.dtype)
             adapter.array[:] = frame

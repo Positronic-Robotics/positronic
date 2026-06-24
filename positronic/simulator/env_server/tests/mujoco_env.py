@@ -8,7 +8,8 @@ serves. ``make_mujoco_env`` builds it; ``StackCubesAdapter`` + ``remote_stack_cu
 the client-side mapping + embodiment.
 """
 
-from collections import deque
+from collections import defaultdict, deque
+from contextlib import nullcontext
 from typing import Any
 
 import numpy as np
@@ -152,17 +153,19 @@ class StackCubesAdapter(EnvAdapter):
 
     def __init__(self, camera_dict: dict[str, str]):
         self._camera_dict = camera_dict  # logical observation name -> the env's model camera name
-        self._players: dict[str, roboarm_command.TrajectoryPlayer] = {}
+        self._players: defaultdict[str, roboarm_command.TrajectoryPlayer] = defaultdict(
+            roboarm_command.TrajectoryPlayer
+        )
         self._held: dict[str, Any] = {}  # last sampled waypoint per channel — re-sent until it changes
 
     def reset_token(self, seed: int | None) -> Any:
-        self._players = {}
+        self._players = defaultdict(roboarm_command.TrajectoryPlayer)
         self._held = {}
         return seed
 
     def action(self, commands: dict[str, pimm.Message], now_ns: int) -> dict[str, Any]:
         for name, msg in commands.items():
-            player = self._players.setdefault(name, roboarm_command.TrajectoryPlayer())
+            player = self._players[name]
             if msg.updated and msg.data is not None:
                 player.set(msg.data)
                 if not msg.data:  # an empty trajectory cancels: stop replaying the held waypoint
@@ -237,7 +240,8 @@ def remote_stack_cubes_embodiment(proxy: RemoteEnvControlSystem, camera_dict: di
 
 def remote_stack_cubes_eval(host: str, port: int, *, camera_dict: dict[str, str]) -> Eval:
     """Build the remote ``stack_cubes`` eval (embodiment + task) wired to a running env server."""
-    proxy = RemoteEnvControlSystem(StackCubesAdapter(camera_dict), host, port)
+    # The server is already up (the test fixture owns it), so the proxy just receives its address.
+    proxy = RemoteEnvControlSystem(StackCubesAdapter(camera_dict), nullcontext((host, port)))
     embodiment = remote_stack_cubes_embodiment(proxy, camera_dict)
     privileged = {'sim_state': Observation(proxy.privileged['sim_state'], None)}
     task = Task(

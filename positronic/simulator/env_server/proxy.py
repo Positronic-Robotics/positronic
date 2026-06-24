@@ -1,15 +1,16 @@
 """``RemoteEnvControlSystem``: a remote env server driven as one pimm control system.
 
 A dumb translator: it owns the pimm ports (command receivers, observation + privileged emitters,
-``robot_meta``, the Task's ``done``) and the trial lifecycle, but no command logic. Each control period
-it hands the latest command messages to the ``EnvAdapter``, round-trips the raw action it returns over
-the wire, and re-emits the canonical signals the adapter maps back — so only raw arrays cross the
-boundary and the World's virtual clock advances by the env's ``control_dt`` per step. The adapter owns
-trajectory playing, holding, and the canonical<->raw mappings; ``control_dt`` is whatever the latest
-observation reports (``reset`` and every ``step``).
+``robot_meta``, the Task's ``done``), the trial lifecycle, and the lifetime of the ``serve`` server it talks
+to, but no command logic. Each control period it hands the latest command messages to the ``EnvAdapter``,
+round-trips the raw action it returns over the wire, and re-emits the canonical signals the adapter maps
+back — so only raw arrays cross the boundary and the World's virtual clock advances by the env's
+``control_dt`` per step. The adapter owns trajectory playing, holding, and the canonical<->raw mappings;
+``control_dt`` is whatever the latest observation reports (``reset`` and every ``step``).
 """
 
 from collections.abc import Iterator
+from contextlib import AbstractContextManager, ExitStack
 from typing import Any
 
 import pimm
@@ -22,10 +23,13 @@ _IDLE_DT = 0.1
 
 
 class RemoteEnvControlSystem(pimm.ControlSystem):
-    def __init__(self, adapter: EnvAdapter, host: str, port: int):
+    def __init__(self, adapter: EnvAdapter, serve: AbstractContextManager[tuple[str, int]]):
         self._adapter = adapter
-        self._host = host
-        self._port = port
+        # The server this proxy talks to: a context manager yielding its ``(host, port)`` and owning its lifetime
+        # (a launched subprocess, or an already-running server whose address it just hands back). Entered when the
+        # proxy connects, exited after the socket closes — so the server outlives every request and dies last.
+        self._serve = serve
+        self._cleanup = ExitStack()
         self._conn: EnvConnection | None = None
 
         self.commands: pimm.ReceiverDict = pimm.ReceiverDict(self, default=None)
@@ -51,8 +55,12 @@ class RemoteEnvControlSystem(pimm.ControlSystem):
         while inactive (e.g. the inter-episode home) are dropped so the first step doesn't apply them.
         """
         if self._conn is None:
-            # Connect on the first reset, not at construction, so positronic can launch the server first.
-            self._conn = EnvConnection(self._host, self._port)
+            # Start the server and connect on the first reset, not at construction, so positronic can wire the
+            # World before the subprocess spawns. The connection closes before the server (registered last), so a
+            # rollout never races the server's teardown.
+            host, port = self._cleanup.enter_context(self._serve)
+            self._conn = EnvConnection(host, port)
+            self._cleanup.callback(self._conn.close)
         for _, receiver in self.commands.items():
             receiver.read()
         self._frame = self._conn.reset(self._adapter.reset_token(seed))
@@ -87,8 +95,9 @@ class RemoteEnvControlSystem(pimm.ControlSystem):
                     self._frame = self._step_env(clock)
                     self._emit_payload(self._frame['obs'])
         finally:
-            if self._conn is not None:
-                self._conn.close()
+            # Closes the connection then the server, in that order (reverse of acquisition); a no-op if no reset
+            # ever connected.
+            self._cleanup.close()
 
     def _step_env(self, clock: pimm.Clock) -> dict[str, Any]:
         commands = {name: receiver.read() for name, receiver in self.commands.items()}

@@ -93,6 +93,7 @@ class LiberoEnv(EnvProtocol):
         self._eef_site_id = None
         self._jnt_low = None
         self._jnt_high = None
+        self._grip_open_aperture = None
 
     # LIBERO runs with ``hard_reset=True``, so each reset destroys and recreates the sim, model, and controller
     # objects; these read the live ones from the env rather than caching a copy that would go stale after a reset.
@@ -131,6 +132,10 @@ class LiberoEnv(EnvProtocol):
         self._qvel_idx = np.asarray(robot._ref_joint_vel_indexes)
         self._eef_site_id = self._sim.model.site_name2id(robot.controller.eef_name)
         self._jnt_low, self._jnt_high = self._sim.model.jnt_range[robot._ref_joint_indexes].T
+        # The Panda's two finger joints open in opposite directions from a shared closed pose at 0, so the
+        # aperture between them is their full travel when open; normalize ``grip`` against it (see ``_observe``).
+        gripper_jids = [self._sim.model.joint_name2id(j) for j in robot.gripper.joints]
+        self._grip_open_aperture = float(np.sum(np.diff(self._sim.model.jnt_range[gripper_jids], axis=1)))
 
     def reset(self, token: Any) -> dict[str, Any]:
         if self._env is None:
@@ -259,6 +264,11 @@ class LiberoEnv(EnvProtocol):
         # ``robot0_eef_quat`` is the hand *body* orientation, a fixed offset from the grip site, which would
         # desync observation and command and break absolute-pose control.
         eef_pos, eef_rot = self._cur_pose()
+        # Closure in [0, 1] (0 open, 1 closed) — the same convention the grip *command* uses (``grip=1`` closes)
+        # and the native sim reports. Summing the two finger qpos cancels (they mirror); the aperture between
+        # them is the openness signal.
+        fingers = np.asarray(raw['robot0_gripper_qpos'])
+        grip = 1.0 - abs(fingers[0] - fingers[1]) / self._grip_open_aperture
         return {
             'agentview_image': raw['agentview_image'],
             'eye_in_hand_image': raw['robot0_eye_in_hand_image'],
@@ -266,7 +276,7 @@ class LiberoEnv(EnvProtocol):
             'joint_vel': raw['robot0_joint_vel'],
             'eef_pos': eef_pos,
             'eef_quat': mat2quat(eef_rot),
-            'gripper_qpos': raw['robot0_gripper_qpos'],
+            'grip': float(np.clip(grip, 0.0, 1.0)),
             'sim_state': self._env.env.sim.get_state().flatten(),
         }
 

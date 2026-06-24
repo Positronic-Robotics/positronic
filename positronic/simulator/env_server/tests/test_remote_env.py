@@ -1,3 +1,5 @@
+from contextlib import nullcontext
+
 import numpy as np
 import pos3
 import pytest
@@ -128,7 +130,7 @@ def test_proxy_publishes_frame0_then_free_runs():
     free-runs — it steps the env every active tick (physics progresses through the inference window). The
     step-count obs makes it observable: frame-0 is step 0, then it advances each tick with no command needed."""
     with serve_env(_CountdownEnv()) as (host, port), pimm.World(virtual_time=True) as world:
-        proxy = RemoteEnvControlSystem(_CountdownAdapter(), host, port)
+        proxy = RemoteEnvControlSystem(_CountdownAdapter(), nullcontext((host, port)))
         obs_rx = world.pair(proxy.observations['value'])
         done_rx = world.pair(proxy.done)
 

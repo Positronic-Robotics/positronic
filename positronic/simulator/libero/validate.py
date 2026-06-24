@@ -67,8 +67,22 @@ def _check_serve(env: LiberoEnv) -> None:
     out = None
     for _ in range(5):
         out = env.step({'command': {'type': 'hold'}, 'grip': 0.0})
-    assert {'agentview_image', 'joint_pos', 'eef_pos', 'eef_quat', 'sim_state'} <= out['obs'].keys()
+    assert {'agentview_image', 'joint_pos', 'eef_pos', 'eef_quat', 'grip', 'sim_state'} <= out['obs'].keys()
     print('  serve smoke: OK (5 hold steps, obs keys present)')
+
+
+def _check_grip(env: LiberoEnv) -> None:
+    """Drive the gripper to both stops and assert the observed ``grip`` reaches the [0, 1] closure extremes —
+    the open command (0) settles near 0, the closed command (1) near 1."""
+    env.reset(0)
+    out = None
+    for _ in range(40):
+        out = env.step({'command': {'type': 'hold'}, 'grip': 0.0})
+    assert out['obs']['grip'] < 0.05, f'open grip {out["obs"]["grip"]}'
+    for _ in range(40):
+        out = env.step({'command': {'type': 'hold'}, 'grip': 1.0})
+    assert out['obs']['grip'] > 0.95, f'closed grip {out["obs"]["grip"]}'
+    print('  grip normalization: OK (open < 0.05, closed > 0.95)')
 
 
 def _check_action_inverse(env: LiberoEnv, ctype: str, key: str, goal_payload, atol: float = _ATOL) -> None:
@@ -121,6 +135,7 @@ def main() -> None:
     print('ee / OSC_POSE')
     ee = LiberoEnv(args.suite, args.task_id, args.camera_resolution, 'ee')
     _check_serve(ee)
+    _check_grip(ee)
     _check_action_inverse(ee, 'cartesian', 'pose', _osc_goal, atol=_OSC_ATOL)
     _check_fk_identity(ee)
     _check_ik_roundtrip(ee)

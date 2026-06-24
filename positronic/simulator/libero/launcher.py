@@ -14,8 +14,6 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
 
-import pimm
-
 _ENV_SCRIPT = Path(__file__).parent / 'env.py'
 _ENV_SERVER_DIR = Path(__file__).parents[1] / 'env_server'
 
@@ -98,8 +96,8 @@ def serve_libero(
 ) -> Iterator[tuple[str, int]]:
     """Run the LIBERO env-server subprocess for the body's lifetime, yielding its ``(host, port)``.
 
-    The synchronous counterpart of ``LiberoServer`` (which ties the subprocess to a pimm run loop): for a
-    plain client that talks to the server over the socket without a World, e.g. the e2e demo replay.
+    The single owner of the subprocess: ``RemoteEnvControlSystem`` enters it to tie the subprocess to the World
+    run, and a plain client (e.g. the e2e demo replay) enters it directly to talk over the socket without a World.
     """
     port = _free_port()
     proc = _spawn(suite, task_id, camera_resolution, control_mode, host, port)
@@ -107,23 +105,3 @@ def serve_libero(
         yield host, port
     finally:
         _terminate(proc)
-
-
-class LiberoServer(pimm.ControlSystem):
-    """The LIBERO env-server subprocess: started on construction, killed when the run ends.
-
-    It is a control system only so the World tears it down — it owns no ports and does no work each turn;
-    ``RemoteEnvControlSystem`` does the talking over the socket at ``host``/``port``.
-    """
-
-    def __init__(self, suite: str, task_id: int, camera_resolution: int, control_mode: str, host: str = 'localhost'):
-        self.host = host
-        self.port = _free_port()
-        self._proc = _spawn(suite, task_id, camera_resolution, control_mode, host, self.port)
-
-    def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Command]:
-        try:
-            while not should_stop.value:
-                yield pimm.Sleep(1.0)
-        finally:
-            _terminate(self._proc)

@@ -1,8 +1,9 @@
 name: LIBERO env-server e2e
 
-# Heavy, GPU-free lane: the env server builds LIBERO's own 3.10 interpreter (via `uv run --no-project`) and a
-# recorded demo is replayed over the socket with software rendering (`MUJOCO_GL=osmesa`, no GPU/display).
-# Path-filtered to simulator changes so it never slows unrelated PRs. The test self-skips until its `.npz`
+# Heavy, GPU-free lane: the env server builds LIBERO's own 3.10 interpreter (via `uv run --no-project`) and runs
+# two on-box checks with software rendering (`MUJOCO_GL=osmesa`, no GPU/display) — a recorded demo replayed over
+# the socket, then `validate.py`'s command-transform + gripper checks against robosuite's own control path.
+# Path-filtered to simulator changes so it never slows unrelated PRs. The replay self-skips until its `.npz`
 # fixture is committed (generate once on a LIBERO box with `make_fixture.py`).
 
 on:
@@ -41,3 +42,14 @@ jobs:
         env:
           MUJOCO_GL: osmesa
         run: uv run pytest positronic/simulator/libero/tests --no-cov -rs
+
+      # Reuses the LIBERO checkout the replay above cloned (``~/.cache/positronic/libero/src``). Validates the
+      # command transform (FK/IK + each controller's set_goal inverse) and the gripper normalization against
+      # robosuite's own control path — checks the demo replay can't reach (it only drives OSC pose).
+      - name: Validate the command transform against robosuite (software rendering)
+        env:
+          MUJOCO_GL: osmesa
+        run: |
+          PYTHONPATH="positronic/simulator/env_server:$HOME/.cache/positronic/libero/src" \
+          LIBERO_CONFIG_PATH="$HOME/.cache/positronic/libero/config" \
+            uv run --no-project positronic/simulator/libero/validate.py

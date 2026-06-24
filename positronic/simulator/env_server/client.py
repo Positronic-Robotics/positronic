@@ -49,8 +49,8 @@ class EnvConnection:
         return result
 
     def close(self) -> None:
-        # Best-effort: ask the server to release, but the peer may already be gone — at eval teardown the
-        # subprocess that hosts the server can be killed before this runs — so a closed connection is success.
+        # Best-effort: ask the server to release, but a peer that is already gone (a crashed or killed server) is
+        # success too — the socket is closed regardless.
         try:
             self._ws.send(encode({'cmd': 'close'}))
             self._ws.recv()
