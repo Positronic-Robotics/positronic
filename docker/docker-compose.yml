@@ -121,6 +121,14 @@ services:
     ports:
       - "8000:8000"
 
+  molmoact2-server:
+    <<: *positronic-common
+    container_name: molmoact2-server
+    entrypoint: ["uv", "run", "--python", "3.13", "--extra", "molmoact2", "python", "-m",
+                 "positronic.vendors.molmoact2.server"]
+    ports:
+      - "8000:8000"
+
   positronic-inference:
     <<: *positronic-common
     container_name: positronic-inference
