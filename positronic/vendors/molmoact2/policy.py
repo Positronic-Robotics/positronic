@@ -16,9 +16,9 @@ class _MolmoAct2Session(Session):
         self._meta = meta
 
     def __call__(self, obs: dict[str, Any]) -> list[dict[str, Any]]:
-        # predict_action is decorated @torch.no_grad(), so the forward builds no autograd graph and the
-        # returned actions carry no grad — wrapping this in torch.inference_mode() or adding detach()
-        # would be redundant.
+        # predict_action is decorated @torch.no_grad() and manages its own precision: the model loads
+        # in bfloat16 and runs bf16 throughout (its autocast path only guards fp32 inputs), so an
+        # external torch.inference_mode() / torch.autocast wrap or a detach() would all be redundant.
         out = self._model.predict_action(
             processor=self._processor,
             images=obs['images'],
