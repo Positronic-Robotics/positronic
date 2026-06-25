@@ -77,6 +77,17 @@ lerobot = [
     "lerobot[smolvla]==0.4.3",
     "torch",
 ]
+molmoact2 = [
+    "transformers>=5.3,<6",
+    "torch",
+    "torchvision",
+    "accelerate",
+    "pillow",
+    "einops",
+    "requests",
+    "protobuf",
+    "sentencepiece",
+]
 lance = [
     "pylance",
 ]
@@ -98,19 +109,24 @@ dev = [
 # lerobot_0_3_3 extra pulls in lerobot==0.3.3 which declares rerun-sdk<0.23,
 # but our usage of lerobot doesn't need rerun — override to unblock resolution.
 override-dependencies = ["rerun-sdk==0.30.0"]
-# cmake 4.3.1 is missing x86_64 Linux wheels on PyPI
-constraint-dependencies = ["cmake<4.3"]
+# cmake 4.3.1 is missing x86_64 Linux wheels on PyPI.
+# evdev>=1.9 regenerates its C bindings from whatever input-event-codes.h is reachable on the
+# include path, so a newer header leaking in (stale build cache / CPATH) bakes in macros the
+# ubuntu22.04 (kernel-5.15) compile headers lack and the build fails. 1.8.x reads the canonical
+# /usr/include and is structurally immune; pynput only needs evdev>=1.3.
+constraint-dependencies = ["cmake<4.3", "evdev<1.9"]
 # Pin third-party resolution to a fixed point in time so `uv sync --locked` is
 # reproducible across machines and CI regardless of contributors' personal uv
 # config. `uv lock` reads this date, so the lockfile can never drift ahead of
 # it; bump the date and re-run `uv lock` in the same commit to refresh deps.
 # Our own packages (exclude-newer-package below) are exempt so they always
 # resolve to the latest release.
-exclude-newer = "2026-05-21T00:00:00Z"
+exclude-newer = "2026-06-12T00:00:00Z"
 conflicts = [
     [
         {extra = "lerobot"},
         {extra = "lerobot-0-3-3"},
+        {extra = "molmoact2"},
     ],
 ]
 
