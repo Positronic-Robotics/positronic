@@ -11,9 +11,9 @@ re-randomizes it; ``control_dt`` rides every observation (``reset`` and each ``s
 may even vary its control period per step. Heavy construction is the env's own concern (cache it).
 
 Protocol (msgpack frames, see ``protocol``):
-  client -> ``{'cmd': 'reset', 'token': ...}``    server -> ``{'obs': {...}, 'meta': {...}, 'control_dt': float}``
-  client -> ``{'cmd': 'step', 'action': {...}}``   server -> ``{'obs': {...}, 'done': bool, 'control_dt': float}``
-  client -> ``{'cmd': 'close'}``                    server -> ``{'ok': True}``
+  client ``{'cmd': 'reset', 'token': ...}``   -> server ``{'obs', 'meta', 'robot_meta', 'control_dt'}``
+  client ``{'cmd': 'step', 'action': {...}}`` -> server ``{'obs', 'done', 'control_dt'}``
+  client ``{'cmd': 'close'}``                 -> server ``{'ok': True}``
 Any command whose handling raises returns ``{'error': str}`` instead, which the client re-raises.
 """
 
@@ -44,11 +44,13 @@ class EnvProtocol(ABC):
 
     @abstractmethod
     def reset(self, token: Any) -> dict[str, Any]:
-        """Construct (cached) + re-randomize from an opaque token; returns ``{'obs', 'meta', 'control_dt'}``.
+        """Construct (cached) + re-randomize from a token; returns ``obs``, ``meta``, ``robot_meta``, ``control_dt``.
 
-        ``control_dt`` is the env's control period: the client paces one ``step`` per ``control_dt`` and
-        advances the World's virtual clock by it each step. ``meta`` is whatever the embodiment needs
-        that isn't an observation (e.g. the robot's URDF / joint names).
+        ``control_dt`` is the env's control period: the client paces one ``step`` per ``control_dt`` and advances
+        the World's virtual clock by it each step. ``meta`` is the scene identity the policy reads its instruction
+        from (the language goal, scene ids); ``robot_meta`` is the robot model identity (URDF / joint names /
+        control frame) recorded into the episode. Either is ``{}`` when the client owns that side — a static
+        instruction, or an embodiment that ships its own model.
         """
 
     @abstractmethod

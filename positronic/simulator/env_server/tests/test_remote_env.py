@@ -98,7 +98,12 @@ class _CountdownEnv(EnvProtocol):
     def reset(self, token):
         self._steps = 0
         meta = {'task': 'countdown'}  # scene meta the env reports only at reset; ``step`` omits it
-        return {'obs': {'q': np.full(7, self._steps, dtype=np.float64)}, 'meta': meta, 'control_dt': self._control_dt}
+        return {
+            'obs': {'q': np.full(7, self._steps, dtype=np.float64)},
+            'meta': meta,
+            'robot_meta': {},
+            'control_dt': self._control_dt,
+        }
 
     def step(self, action):
         self._steps += 1

@@ -56,7 +56,7 @@ class MujocoEnv(EnvProtocol):
         self._grip_emit = self._bind_input(sim.target_grip)
         self._state_recv = self._bind_output(sim.state)
         self._grip_recv = self._bind_output(sim.grip)
-        self._meta_recv = self._bind_output(sim.robot_meta)
+        self._robot_meta_recv = self._bind_output(sim.robot_meta)
         self._sim_state_recv = self._bind_output(sim.sim_state)
         self._camera_recvs = {name: self._bind_output(sim.cameras[name]) for name in camera_names}
 
@@ -109,7 +109,14 @@ class MujocoEnv(EnvProtocol):
         self._gen = self._sim.run(_NeverStop(), self._clock)
         next(self._gen)  # loop setup + first control-period sleep
         next(self._gen)  # the reset turn: publishes frame-0 (no step)
-        return {'obs': self._read_obs(), 'meta': dict(self._meta_recv.read().data), 'control_dt': self._timestep}
+        # Native ``stack_cubes`` has no language scene meta (its instruction is a static client string), so ``meta``
+        # is empty; the sim's robot identity (URDF / joints) is the ``robot_meta``.
+        return {
+            'obs': self._read_obs(),
+            'meta': {},
+            'robot_meta': dict(self._robot_meta_recv.read().data),
+            'control_dt': self._timestep,
+        }
 
     def step(self, action: dict[str, Any]) -> dict[str, Any]:
         assert self._gen is not None, 'step() called before reset()'  # real Gym envs reject step-before-reset

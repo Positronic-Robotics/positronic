@@ -150,7 +150,9 @@ class LiberoEnv(EnvProtocol):
             self._env.seed(seed)
             self._env.reset()
             raw = self._env.set_init_state(self._init_states[seed % len(self._init_states)])
-        return {'obs': self._observe(raw), 'meta': self._meta, 'control_dt': self._control_dt}
+        # ``robot_meta`` is empty: the 3.10 server can't import positronic to emit the Panda model, so the eval
+        # supplies it via ``static_meta`` (``bundled_panda_model``). ``meta`` carries the scene/task identity.
+        return {'obs': self._observe(raw), 'meta': self._meta, 'robot_meta': {}, 'control_dt': self._control_dt}
 
     def step(self, action: dict[str, Any]) -> dict[str, Any]:
         arm = self._arm_action(action['command'])
