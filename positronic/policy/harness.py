@@ -9,7 +9,7 @@ from positronic.dataset.ds_writer_agent import DsWriterCommand
 from positronic.dataset.serializers import expand_suffixed
 from positronic.eval import Embodiment, Task
 from positronic.policy.base import Policy, PolicyWrapper, Session
-from positronic.policy.wrappers import ChunkedSchedule, default_wrappers
+from positronic.policy.wrappers import ChunkedSchedule
 from positronic.utils import flatten_dict, frozen_view
 
 
@@ -71,8 +71,8 @@ class Harness(pimm.ControlSystem):
     The scheduling wrapper (``ChunkedSchedule``, or a swap-in like RTC) anchors the chunk's
     relative timestamps to absolute time, reading the clock the harness binds in at ``wrap``.
 
-    By default, wraps the given policy with ``ErrorRecovery | ChunkedSchedule``. Pass ``wrap=None``
-    to skip auto-wrapping (if you've already composed your own pipeline).
+    Applies the given ``wrap`` pipeline to the policy; with ``wrap=None`` (the default) it runs the raw
+    policy unwrapped. The eval entry points supply the standard ``ErrorRecovery | ChunkedSchedule`` wrap.
     """
 
     def __init__(
@@ -83,7 +83,7 @@ class Harness(pimm.ControlSystem):
         task: Task | None = None,
         trials: Iterable[dict[str, Any]] | None = None,
         static_meta: dict[str, Any] | None = None,
-        wrap: PolicyWrapper | None = default_wrappers,
+        wrap: PolicyWrapper | None = None,
         on_episode_complete: Callable[[Session, dict[str, Any]], None] | None = None,
     ):
         assert trials is None or task is not None, 'A trial plan needs a task: its timeout bounds each trial'

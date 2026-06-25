@@ -16,6 +16,7 @@ from positronic.drivers.roboarm.models import bundled_panda_model
 from positronic.eval import ROBOT_STATIC_META, Command, Embodiment, Eval, Observation, Task
 from positronic.inference import main
 from positronic.policy.tests.test_harness import StubPolicy
+from positronic.policy.wrappers import ChunkedSchedule, ErrorRecovery
 from positronic.simulator.mujoco.sim import MujocoSim
 from positronic.simulator.mujoco.transforms import AddBox, SetBodyPosition
 from positronic.utils import package_assets_path
@@ -78,6 +79,7 @@ def test_sim_emits_commands_and_records_dataset(tmp_path, monkeypatch):
             policy=policy,
             trials=[{'eval.trial_index': i, 'eval.seed': 100 + i} for i in range(2)],
             output_dir=str(tmp_path),
+            wrap=ErrorRecovery() | ChunkedSchedule(),
         )
 
     ds = LocalDataset(tmp_path)
