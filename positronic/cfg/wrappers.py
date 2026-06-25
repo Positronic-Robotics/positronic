@@ -37,8 +37,3 @@ def video_context_wrappers(history_frames: int, stride: int, image_keys: tuple[s
         image_keys=tuple(image_keys), offsets_sec=_frame_offsets_sec(history_frames, stride, fps)
     )
     return ErrorRecovery() | frame_stack | ChunkedSchedule()
-
-
-# gyros chunk-causal bridge: 25 frames (24 history + current) at 15 fps spanning the just-executed K=6
-# chunk, dense (stride 1) so the bridge encodes them as 6 contiguous subsequent-latents (its context window).
-gyros_wrappers = video_context_wrappers.override(history_frames=24, stride=1)
