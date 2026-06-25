@@ -1,0 +1,55 @@
+name: LIBERO env-server e2e
+
+# Heavy, GPU-free lane: the env server builds LIBERO's own 3.10 interpreter (via `uv run --no-project`) and runs
+# two on-box checks with software rendering (`MUJOCO_GL=osmesa`, no GPU/display) — a recorded demo replayed over
+# the socket, then `validate.py`'s command-transform + gripper checks against robosuite's own control path.
+# Path-filtered to simulator changes so it never slows unrelated PRs. The replay self-skips until its `.npz`
+# fixture is committed (generate once on a LIBERO box with `make_fixture.py`).
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'positronic/simulator/**'
+      - '.github/workflows/libero-e2e.yaml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'positronic/simulator/**'
+      - '.github/workflows/libero-e2e.yaml'
+
+jobs:
+  libero-e2e:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install software OpenGL (osmesa) for headless mujoco rendering
+        run: sudo apt-get update && sudo apt-get install -y libgl1 libosmesa6
+
+      - name: Enable caching
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Set up Python
+        run: uv venv --python 3.11
+
+      - name: Install dependencies
+        run: uv sync --locked --extra dev
+
+      - name: Replay a LIBERO demo through the env server (software rendering)
+        env:
+          MUJOCO_GL: osmesa
+        run: uv run pytest positronic/simulator/libero/tests --no-cov -rs
+
+      # Reuses the LIBERO checkout the replay above cloned (``~/.cache/positronic/libero/src``). Validates the
+      # command transform (FK/IK + each controller's set_goal inverse) and the gripper normalization against
+      # robosuite's own control path — checks the demo replay can't reach (it only drives OSC pose).
+      - name: Validate the command transform against robosuite (software rendering)
+        env:
+          MUJOCO_GL: osmesa
+        run: |
+          PYTHONPATH="positronic/simulator/env_server:$HOME/.cache/positronic/libero/src" \
+          LIBERO_CONFIG_PATH="$HOME/.cache/positronic/libero/config" \
+            uv run --no-project positronic/simulator/libero/validate.py

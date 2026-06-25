@@ -11,9 +11,9 @@ re-randomizes it; ``control_dt`` rides every observation (``reset`` and each ``s
 may even vary its control period per step. Heavy construction is the env's own concern (cache it).
 
 Protocol (msgpack frames, see ``protocol``):
-  client -> ``{'cmd': 'reset', 'token': ...}``    server -> ``{'obs': {...}, 'meta': {...}, 'control_dt': float}``
-  client -> ``{'cmd': 'step', 'action': {...}}``   server -> ``{'obs': {...}, 'done': bool, 'control_dt': float}``
-  client -> ``{'cmd': 'close'}``                    server -> ``{'ok': True}``
+  client ``{'cmd': 'reset', 'token': ...}``   -> server ``{'obs', 'meta', 'robot_meta', 'control_dt'}``
+  client ``{'cmd': 'step', 'action': {...}}`` -> server ``{'obs', 'done', 'control_dt'}``
+  client ``{'cmd': 'close'}``                 -> server ``{'ok': True}``
 Any command whose handling raises returns ``{'error': str}`` instead, which the client re-raises.
 """
 
@@ -44,11 +44,13 @@ class EnvProtocol(ABC):
 
     @abstractmethod
     def reset(self, token: Any) -> dict[str, Any]:
-        """Construct (cached) + re-randomize from an opaque token; returns ``{'obs', 'meta', 'control_dt'}``.
+        """Construct (cached) + re-randomize from a token; returns ``obs``, ``meta``, ``robot_meta``, ``control_dt``.
 
-        ``control_dt`` is the env's control period: the client paces one ``step`` per ``control_dt`` and
-        advances the World's virtual clock by it each step. ``meta`` is whatever the embodiment needs
-        that isn't an observation (e.g. the robot's URDF / joint names).
+        ``control_dt`` is the env's control period: the client paces one ``step`` per ``control_dt`` and advances
+        the World's virtual clock by it each step. ``meta`` is the scene identity the policy reads its instruction
+        from (the language goal, scene ids); ``robot_meta`` is the robot model identity (URDF / joint names /
+        control frame) recorded into the episode. Either is ``{}`` when the client owns that side — a static
+        instruction, or an embodiment that ships its own model.
         """
 
     @abstractmethod
@@ -64,10 +66,12 @@ class EnvProtocol(ABC):
 
 
 class EnvServer:
-    """Serves one ``EnvProtocol`` over a synchronous websocket, lockstep one request at a time.
+    """Serves one ``EnvProtocol`` over a synchronous websocket — one client per server, lockstep.
 
-    The env persists across client connections — its per-task construction cache survives a reconnect;
-    ``shutdown`` releases it.
+    The single client is accepted and served on the thread that calls ``serve_forever`` (the subprocess main
+    thread), not a per-connection websocket thread: a render backend can be thread-affine — macOS GLFW must
+    initialize on the main thread — and a sim is single-threaded anyway. The env lives for the server's
+    lifetime; ``shutdown`` releases it.
     """
 
     def __init__(self, env: EnvProtocol, host: str, port: int):
@@ -75,22 +79,26 @@ class EnvServer:
         self._host = host
         self._port = port
         self._server = None
+        self._served = False
+        self._shutdown = False
 
     def _handle(self, connection: ServerConnection) -> None:
+        # Reaching here means a client completed the websocket handshake: it is the one client this server
+        # serves, so ``serve_forever`` exits once this returns. A failure handling a command (a rejected action,
+        # a sim blow-up, an unknown command) crosses back as an error frame the client re-raises, rather than
+        # killing the connection.
+        self._served = True
         for raw in connection:
             msg = decode(raw)
-            # The wire boundary: a failure handling the command (an env that rejects an action, a sim
-            # blow-up, an unknown command) crosses back as an error frame the client re-raises, rather
-            # than killing the connection.
             try:
                 match msg['cmd']:
+                    case 'close':
+                        connection.send(encode({'ok': True}))
+                        return
                     case 'reset':
                         result = self._env.reset(msg['token'])
                     case 'step':
                         result = self._env.step(msg['action'])
-                    case 'close':
-                        connection.send(encode({'ok': True}))
-                        return
                     case other:
                         raise ValueError(f'Unknown command: {other!r}')
             except Exception as e:
@@ -99,11 +107,28 @@ class EnvServer:
 
     def serve_forever(self) -> None:
         # A reset token can be a large opaque blob (e.g. an exact-replay scene), so don't cap frame size.
+        # ``serve`` would spawn a thread per connection; instead the accept loop runs here and calls the
+        # handshake + ``_handle`` inline, so the env runs on this thread (the subprocess main thread — macOS GLFW
+        # must init there). The loop skips bare TCP probes (which never handshake) and exits once the one client
+        # has been served.
         with serve(self._handle, self._host, self._port, max_size=None) as server:
             self._server = server
-            server.serve_forever()
+            # Time out ``accept`` so the loop periodically observes ``shutdown`` even with no client connecting —
+            # closing the listening socket from another thread does not reliably wake a blocking ``accept``.
+            server.socket.settimeout(0.5)
+            while not self._served and not self._shutdown:
+                try:
+                    sock, addr = server.socket.accept()
+                except TimeoutError:
+                    continue
+                except OSError:
+                    return  # ``shutdown`` closed the listening socket
+                sock.settimeout(None)  # the accepted socket runs the long-lived session in blocking mode
+                server.handler(sock, addr)
 
     def shutdown(self) -> None:
+        # Stop accepting (the flag breaks the timed accept loop) and release the env.
+        self._shutdown = True
         if self._server is not None:
             self._server.shutdown()
         self._env.close()

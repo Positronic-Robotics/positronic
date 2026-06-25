@@ -8,7 +8,8 @@ serves. ``make_mujoco_env`` builds it; ``StackCubesAdapter`` + ``remote_stack_cu
 the client-side mapping + embodiment.
 """
 
-from collections import deque
+from collections import defaultdict, deque
+from contextlib import nullcontext
 from typing import Any
 
 import numpy as np
@@ -55,7 +56,7 @@ class MujocoEnv(EnvProtocol):
         self._grip_emit = self._bind_input(sim.target_grip)
         self._state_recv = self._bind_output(sim.state)
         self._grip_recv = self._bind_output(sim.grip)
-        self._meta_recv = self._bind_output(sim.robot_meta)
+        self._robot_meta_recv = self._bind_output(sim.robot_meta)
         self._sim_state_recv = self._bind_output(sim.sim_state)
         self._camera_recvs = {name: self._bind_output(sim.cameras[name]) for name in camera_names}
 
@@ -108,7 +109,14 @@ class MujocoEnv(EnvProtocol):
         self._gen = self._sim.run(_NeverStop(), self._clock)
         next(self._gen)  # loop setup + first control-period sleep
         next(self._gen)  # the reset turn: publishes frame-0 (no step)
-        return {'obs': self._read_obs(), 'meta': dict(self._meta_recv.read().data), 'control_dt': self._timestep}
+        # Native ``stack_cubes`` has no language scene meta (its instruction is a static client string), so ``meta``
+        # is empty; the sim's robot identity (URDF / joints) is the ``robot_meta``.
+        return {
+            'obs': self._read_obs(),
+            'meta': {},
+            'robot_meta': dict(self._robot_meta_recv.read().data),
+            'control_dt': self._timestep,
+        }
 
     def step(self, action: dict[str, Any]) -> dict[str, Any]:
         assert self._gen is not None, 'step() called before reset()'  # real Gym envs reject step-before-reset
@@ -152,17 +160,19 @@ class StackCubesAdapter(EnvAdapter):
 
     def __init__(self, camera_dict: dict[str, str]):
         self._camera_dict = camera_dict  # logical observation name -> the env's model camera name
-        self._players: dict[str, roboarm_command.TrajectoryPlayer] = {}
+        self._players: defaultdict[str, roboarm_command.TrajectoryPlayer] = defaultdict(
+            roboarm_command.TrajectoryPlayer
+        )
         self._held: dict[str, Any] = {}  # last sampled waypoint per channel — re-sent until it changes
 
     def reset_token(self, seed: int | None) -> Any:
-        self._players = {}
+        self._players = defaultdict(roboarm_command.TrajectoryPlayer)
         self._held = {}
         return seed
 
     def action(self, commands: dict[str, pimm.Message], now_ns: int) -> dict[str, Any]:
         for name, msg in commands.items():
-            player = self._players.setdefault(name, roboarm_command.TrajectoryPlayer())
+            player = self._players[name]
             if msg.updated and msg.data is not None:
                 player.set(msg.data)
                 if not msg.data:  # an empty trajectory cancels: stop replaying the held waypoint
@@ -237,7 +247,8 @@ def remote_stack_cubes_embodiment(proxy: RemoteEnvControlSystem, camera_dict: di
 
 def remote_stack_cubes_eval(host: str, port: int, *, camera_dict: dict[str, str]) -> Eval:
     """Build the remote ``stack_cubes`` eval (embodiment + task) wired to a running env server."""
-    proxy = RemoteEnvControlSystem(StackCubesAdapter(camera_dict), host, port)
+    # The server is already up (the test fixture owns it), so the proxy just receives its address.
+    proxy = RemoteEnvControlSystem(StackCubesAdapter(camera_dict), nullcontext((host, port)))
     embodiment = remote_stack_cubes_embodiment(proxy, camera_dict)
     privileged = {'sim_state': Observation(proxy.privileged['sim_state'], None)}
     task = Task(

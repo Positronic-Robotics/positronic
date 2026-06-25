@@ -853,6 +853,26 @@ def test_run_calls_policy_reset_with_context(world):
 
 
 @pytest.mark.timeout(3.0)
+def test_task_instruction_reaches_session_context_after_reset(world):
+    """A task eval resets the scene before opening the session, so an instruction resolvable only on reset
+    (as a remote env reports its task) still reaches ``new_session`` — task-grouped sampling/counting needs it."""
+    policy = StubPolicy()
+    scene = {}
+
+    def reset(_seed):
+        scene['task'] = 'resolved-on-reset'  # the env reports its task only here
+
+    task = Task(instruction=lambda: scene['task'], timeout=0.05, reset=reset)
+    harness = Harness(policy, make_embodiment(), task=task, trials=[{}])
+    _pair_all(world, harness)
+
+    scheduler = world.start([harness])
+    drive_scheduler(scheduler, steps=200)
+
+    assert policy.last_reset_context['task'] == 'resolved-on-reset'
+
+
+@pytest.mark.timeout(3.0)
 def test_finish_cancels_buffered_trajectory_before_stop_episode(world):
     """FINISH must cancel the recording's trajectory tail *before* `STOP_EPISODE`.
 

@@ -1,3 +1,5 @@
+from contextlib import nullcontext
+
 import numpy as np
 import pos3
 import pytest
@@ -5,6 +7,7 @@ import pytest
 import pimm
 from positronic.dataset.local_dataset import LocalDataset
 from positronic.drivers.roboarm import command as roboarm_command
+from positronic.eval import Task
 from positronic.inference import main
 from positronic.policy.tests.test_harness import StubPolicy
 from positronic.policy.wrappers import ChunkedSchedule, ErrorRecovery
@@ -95,7 +98,13 @@ class _CountdownEnv(EnvProtocol):
 
     def reset(self, token):
         self._steps = 0
-        return {'obs': {'q': np.full(7, self._steps, dtype=np.float64)}, 'meta': {}, 'control_dt': self._control_dt}
+        meta = {'task': 'countdown'}  # scene meta the env reports only at reset; ``step`` omits it
+        return {
+            'obs': {'q': np.full(7, self._steps, dtype=np.float64)},
+            'meta': meta,
+            'robot_meta': {},
+            'control_dt': self._control_dt,
+        }
 
     def step(self, action):
         self._steps += 1
@@ -129,7 +138,7 @@ def test_proxy_publishes_frame0_then_free_runs():
     free-runs — it steps the env every active tick (physics progresses through the inference window). The
     step-count obs makes it observable: frame-0 is step 0, then it advances each tick with no command needed."""
     with serve_env(_CountdownEnv()) as (host, port), pimm.World(virtual_time=True) as world:
-        proxy = RemoteEnvControlSystem(_CountdownAdapter(), host, port)
+        proxy = RemoteEnvControlSystem(_CountdownAdapter(), nullcontext((host, port)))
         obs_rx = world.pair(proxy.observations['value'])
         done_rx = world.pair(proxy.done)
 
@@ -143,6 +152,22 @@ def test_proxy_publishes_frame0_then_free_runs():
 
         drive_scheduler(scheduler, steps=3)  # free-run: the env steps even with no command delivered
         assert obs_rx.read().data[0] >= 1
+
+
+@pytest.mark.timeout(60.0)
+def test_proxy_caches_reset_meta_as_live_instruction_source():
+    """The env reports scene meta only at ``reset`` (``step`` omits it); the proxy caches it so a ``Task``
+    reads its language live off ``proxy.meta`` — the callable-instruction path LIBERO relies on — and the
+    cached value holds across the steps that follow."""
+    with serve_env(_CountdownEnv()) as (host, port), pimm.World(virtual_time=True) as world:
+        proxy = RemoteEnvControlSystem(_CountdownAdapter(), nullcontext((host, port)))
+        task = Task(instruction=lambda: proxy.meta['task'], timeout=1.0, reset=proxy.reset)
+        scheduler = world.start([proxy])
+
+        proxy.reset(0)
+        assert task.instruction == 'countdown'  # resolved live off the cached reset meta
+        drive_scheduler(scheduler, steps=4)  # the env steps, each ``step`` omitting meta ...
+        assert task.instruction == 'countdown'  # ... yet the reset-scoped cache holds
 
 
 @pytest.mark.timeout(60.0)

@@ -7,6 +7,7 @@ control system; tests use it directly to compare a socket rollout against an in-
 import time
 from typing import Any
 
+from websockets.exceptions import ConnectionClosed
 from websockets.sync.client import connect
 
 from .protocol import decode, encode
@@ -19,7 +20,7 @@ class EnvConnection:
     ``{'obs', 'meta', 'control_dt'}``.
     """
 
-    def __init__(self, host: str, port: int, *, open_timeout: float = 10.0, connect_deadline: float = 60.0):
+    def __init__(self, host: str, port: int, *, open_timeout: float = 10.0, connect_deadline: float = 600.0):
         uri = f'ws://{host}:{port}/'
         deadline = time.monotonic() + connect_deadline
         backoff = 0.5
@@ -48,8 +49,12 @@ class EnvConnection:
         return result
 
     def close(self) -> None:
+        # Best-effort: ask the server to release, but a peer that is already gone (a crashed or killed server) is
+        # success too — the socket is closed regardless.
         try:
             self._ws.send(encode({'cmd': 'close'}))
             self._ws.recv()
+        except ConnectionClosed:
+            pass
         finally:
             self._ws.close()

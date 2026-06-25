@@ -1,0 +1,95 @@
+import configuronic as cfn
+
+from positronic.dataset.serializers import Serializers
+from positronic.drivers.roboarm import command as roboarm_command
+from positronic.drivers.roboarm.models import bundled_panda_model
+from positronic.eval import ROBOT_STATIC_META, Command, Embodiment, Eval, Observation, Task
+from positronic.simulator.env_server.proxy import RemoteEnvControlSystem
+from positronic.simulator.libero.adapter import LiberoAdapter
+from positronic.simulator.libero.launcher import serve_libero
+
+
+@cfn.config(
+    camera_dict={'image.agentview': 'agentview_image', 'image.wrist': 'eye_in_hand_image'},
+    camera_resolution=224,
+    control_mode='ee',
+    timeout=20.0,
+    seed=None,
+)
+def _libero_eval(suite, task_id, timeout, camera_dict, camera_resolution, control_mode, seed):
+    """A LIBERO eval: the embodiment proxies a remote LIBERO env, the task carries the scenario.
+
+    A LIBERO *suite* is a set of related manipulation tasks; ``task_id`` selects one within it — a fixed scene and
+    language goal (see https://github.com/Lifelong-Robot-Learning/LIBERO). The suites bound below:
+
+      - ``spatial`` (libero_spatial, 10 tasks) — same object and goal, varied placement (spatial generalization)
+      - ``object`` (libero_object, 10 tasks) — different objects, same pick-and-place (object generalization)
+      - ``goal`` (libero_goal, 10 tasks) — same objects, different goals (goal/procedure generalization)
+      - ``libero_10`` (libero_10 / LIBERO-LONG, 10 tasks) — long-horizon, entangled tasks across diverse scenes
+      - ``libero_90`` (libero_90, 90 tasks) — the large short-horizon pool; with libero_10 it forms LIBERO-100
+
+    ``_libero_eval`` leaves ``suite`` and ``task_id`` unbound; each suite below is a named ``.override`` binding
+    only ``suite``, so a trial is picked with ``--task_id`` on the CLI. The instruction is never pinned: the task
+    reads its language live from the env, which reports it (with ``suite`` and ``task_id``) in every reset's meta.
+
+    positronic launches the env server in its own 3.10 interpreter for ``(suite, task_id)``; the proxy
+    drives it over the socket. The per-trial seed selects a saved init-state and re-randomizes the scene.
+    LIBERO's full physics state is the privileged ground truth (recorded, never fed to the policy), so
+    success is recomputable downstream; the live ``done`` flag also rides the trial's terminal.
+    """
+    proxy = RemoteEnvControlSystem(
+        LiberoAdapter(
+            camera_dict, suite=suite, task_id=task_id, camera_resolution=camera_resolution, control_mode=control_mode
+        ),
+        serve_libero(),
+    )
+    observations = {
+        'robot_state': Observation(proxy.observations['robot_state'], Serializers.robot_state),
+        'grip': Observation(proxy.observations['grip'], None),
+        **{logical: Observation(proxy.observations[logical], Serializers.camera_images) for logical in camera_dict},
+    }
+    commands = {
+        'robot_command': Command(proxy.commands['robot_command'], roboarm_command.Reset(), Serializers.robot_command),
+        'target_grip': Command(proxy.commands['target_grip'], 0.0, None),
+    }
+    embodiment = Embodiment(
+        descriptor='remote.libero.franka',
+        observations=observations,
+        commands=commands,
+        # LIBERO drives the same Franka Panda as the native sim, so recordings carry the same model (URDF +
+        # meshes + joint names + control frame) for the 3D viewer and offline IK, supplied here since the 3.10
+        # server can't import positronic to emit it via ``robot_meta``.
+        static_meta={**ROBOT_STATIC_META, **bundled_panda_model()},
+        meta_source=proxy.robot_meta,
+        control_systems=(proxy,),
+        simulated=True,
+    )
+    privileged = {'sim_state': Observation(proxy.privileged['sim_state'], None)}
+    task = Task(
+        instruction=lambda: proxy.meta['task'],
+        timeout=timeout,
+        privileged=privileged,
+        seed=seed,
+        reset=proxy.reset,
+        done=proxy.done,
+    )
+    return Eval(embodiment, task)
+
+
+# Each suite binds only its LIBERO ``suite``; ``--task_id`` selects the trial. The instruction is not pinned —
+# the task reads it live from the env's reset meta. The task count per suite is in ``_libero_eval``'s docstring.
+
+# libero_spatial — 10 tasks
+spatial = _libero_eval.override(suite='libero_spatial')
+
+# libero_object — 10 tasks
+object = _libero_eval.override(suite='libero_object')
+
+# libero_goal — 10 tasks
+goal = _libero_eval.override(suite='libero_goal')
+
+# libero_10 (LIBERO-LONG) — 10 tasks
+libero_10 = _libero_eval.override(suite='libero_10')
+
+# libero_90 — 90 tasks
+libero_90 = _libero_eval.override(suite='libero_90')

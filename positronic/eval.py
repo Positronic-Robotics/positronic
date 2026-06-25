@@ -1,5 +1,5 @@
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any
 
 import pimm
@@ -66,16 +66,16 @@ class Embodiment:
         return {name: cmd.home for name, cmd in self.commands.items()}
 
 
-@dataclass
 class Task:
     """The scenario layered on an embodiment: the policy-facing instruction plus
     the privileged ground-truth signals to record.
 
-    ``instruction`` is the language goal sent to the policy on every call. ``timeout``
-    is the per-trial time budget in seconds (sim-time for simulated embodiments,
-    wall-clock for real). ``privileged`` maps a record key to the ground-truth source
-    to capture (the sim's full ``save_state``, a real scale) — recorded but never fed
-    to the policy.
+    ``instruction`` is the language goal the policy conditions on, resolved live on every read: an embodiment
+    that only learns its task on reset (a remote env reporting it in meta) passes a source callable, while a
+    fixed scenario passes a plain string (wrapped as a constant). ``timeout`` is the per-trial time budget in
+    seconds (sim-time for simulated embodiments, wall-clock for real). ``privileged`` maps a record key to the
+    ground-truth source to capture (the sim's full ``save_state``, a real scale) — recorded but never fed to
+    the policy.
 
     ``seed`` is the base seed for reproducible runs (``None`` → fully random); the
     runner derives per-trial seeds from it into the trial plan. ``reset`` re-randomizes
@@ -87,12 +87,25 @@ class Task:
     episode's static data.
     """
 
-    instruction: str
-    timeout: float
-    privileged: dict[str, Observation] = field(default_factory=dict)
-    seed: int | None = None
-    reset: Callable[[int | None], None] | None = None
-    done: pimm.SignalEmitter | None = None
+    def __init__(
+        self,
+        instruction: str | Callable[[], str],
+        timeout: float,
+        privileged: dict[str, Observation] | None = None,
+        seed: int | None = None,
+        reset: Callable[[int | None], None] | None = None,
+        done: pimm.SignalEmitter | None = None,
+    ):
+        self._instruction = (lambda: instruction) if isinstance(instruction, str) else instruction
+        self.timeout = timeout
+        self.privileged = privileged or {}
+        self.seed = seed
+        self.reset = reset
+        self.done = done
+
+    @property
+    def instruction(self) -> str:
+        return self._instruction()
 
 
 @dataclass
