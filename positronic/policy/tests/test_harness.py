@@ -15,6 +15,7 @@ from positronic.geom import Rotation, Transform3D
 from positronic.policy.base import Policy, Session
 from positronic.policy.codec import ActionTimestamp
 from positronic.policy.harness import Directive, DirectiveType, Harness
+from positronic.policy.wrappers import ChunkedSchedule, ErrorRecovery
 from positronic.tests.testing_coutils import ManualDriver, RecordingEmitter, drive_scheduler
 
 
@@ -1016,7 +1017,7 @@ def test_harness_clears_trajectory_on_run(world):
 def test_harness_recovers_from_error(world):
     """ERROR emits Recover trajectory, skips policy; AVAILABLE resumes with fresh chunk."""
     policy = ChunkPolicy()
-    harness = Harness(policy, make_embodiment())
+    harness = Harness(policy, make_embodiment(), wrap=ErrorRecovery() | ChunkedSchedule())
     p = _pair_all(world, harness)
 
     state_ok = make_robot_state([0.1, 0.2, 0.3], [0.4, 0.5, 0.6], status=RobotStatus.AVAILABLE)
@@ -1081,7 +1082,7 @@ def test_recovery_cancels_gripper_buffer(world):
     the gripper ``TrajectoryPlayer`` keeps draining the interrupted chunk's grip
     waypoints while the robot recovers.
     """
-    harness = Harness(ChunkPolicy(), make_embodiment())
+    harness = Harness(ChunkPolicy(), make_embodiment(), wrap=ErrorRecovery() | ChunkedSchedule())
     cmd_recorder = RecordingEmitter()
     grip_recorder = RecordingEmitter()
     harness.commands['robot_command']._bind(cmd_recorder)

@@ -70,7 +70,7 @@ class ErrorRecovery(PolicyWrapper):
 
     TODO: this wrapper is not name-free. It hard-codes the ``robot_state.error`` observation and the
     ``robot_command`` channel (with a Franka ``Recover``), so it only fits Franka-named embodiments;
-    others must disable ``default_wrappers``. How an embodiment should declare its error signal and
+    others must omit it from their ``wrap``. How an embodiment should declare its error signal and
     recovery action is still open.
     """
 
@@ -168,6 +168,3 @@ class TemporalFrameStack(PolicyWrapper):
 
     def wrap_session(self, inner: Session, context, now: Now):
         return TemporalFrameStack._Session(inner, self._image_keys, self._offsets_sec)
-
-
-default_wrappers = ErrorRecovery() | ChunkedSchedule()

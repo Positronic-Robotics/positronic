@@ -18,7 +18,7 @@ from positronic.dataset.local_dataset import LocalDatasetWriter, load_all_datase
 from positronic.eval import Embodiment, Eval, Task
 from positronic.gui.dpg import DearpyguiUi
 from positronic.policy.base import SampledPolicy
-from positronic.policy.harness import Harness, default_wrappers
+from positronic.policy.harness import Harness
 
 logger = logging.getLogger(__name__)
 
@@ -69,7 +69,8 @@ def main(
     task: Task | None = None,
     trials: list[dict] | None = None,
     show_gui: bool = False,
-    wrap=default_wrappers,
+    *,
+    wrap,
 ):
     """Run inference for an embodiment, real or simulated.
 
