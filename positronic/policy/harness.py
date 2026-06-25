@@ -135,6 +135,13 @@ class Harness(pimm.ControlSystem):
         meta = dict(self._embodiment.static_meta)
         meta.update(self._static_meta)
         meta.update(self.robot_meta_in.value)
+        if self._task is not None:
+            # The eval-identity block: which eval produced this episode.
+            # TODO: also stamp the eval's catalog name and its resolved config — both need
+            # configuronic introspection that does not exist yet.
+            meta['eval.universe'] = 'sim' if self._embodiment.simulated else 'real'
+            meta['eval.embodiment'] = self._embodiment.descriptor
+            meta['eval.timeout'] = self._task.timeout
         # ``policy.meta`` is the static baseline (the wrapped policy aggregates model +
         # codec meta); the session overlays per-episode specifics (e.g. the sampled
         # sub-policy) and wins on conflict.
@@ -142,15 +149,6 @@ class Harness(pimm.ControlSystem):
         for k, v in flatten_dict(session_meta).items():
             meta[f'inference.policy.{k}'] = v
         meta.update(context)
-        if self._task is not None:
-            # The eval-identity block: which eval produced this episode. Stamped after ``context`` so the
-            # eval's own values win — the instruction in particular is the task's, not an operator annotation.
-            # TODO: also stamp the eval's catalog name and its resolved config — both need configuronic
-            # introspection that does not exist yet.
-            meta['task'] = self._task.instruction
-            meta['eval.universe'] = 'sim' if self._embodiment.simulated else 'real'
-            meta['eval.embodiment'] = self._embodiment.descriptor
-            meta['eval.timeout'] = self._task.timeout
         return meta
 
     def _home(self, clock):
@@ -203,7 +201,7 @@ class Harness(pimm.ControlSystem):
         self.ds_command.emit(DsWriterCommand.STOP({**self._build_episode_meta(self.context), **(payload or {})}))
 
     def _begin_episode(self, context: dict[str, Any], clock: pimm.Clock) -> None:
-        """Open a fresh episode: set context and session, arm the scene reset, and open the recording.
+        """Open a fresh episode: reset the scene, fix the task context and session, and open the recording.
 
         A resettable task's ``reset`` only arms the producer, which publishes frame-0 after the harness
         (last in the round). The recorder drains its channels the turn it opens, so the pre-reset frame and
@@ -215,10 +213,15 @@ class Harness(pimm.ControlSystem):
         self.context = context
         # ``inference_latency`` rides the RUN context (and lands in episode meta with it).
         self._inference_latency = self.context.get('inference_latency', False)
-        self._session = self.policy.new_session(self.context)
-        self._running = True
+        # Reset the scene before opening the session: a resettable task only learns its instruction on reset
+        # (a remote env reports it then), so the session context — and the task-grouped sampling/counting it
+        # drives — must read the instruction here, once it is known.
         if self._task is not None and self._task.reset is not None:
             self._task.reset(self.context.get('eval.seed'))
+        if self._task is not None:
+            self.context = {**self.context, 'task': self._task.instruction}
+        self._session = self.policy.new_session(self.context)
+        self._running = True
         self._deadline = clock.now() + self._task.timeout if self._task is not None else None
         self.ds_command.emit(DsWriterCommand.START())
 
@@ -282,8 +285,6 @@ class Harness(pimm.ControlSystem):
         inputs['wall_time_ns'] = time.time_ns()
         inputs['obs_time_ns'] = clock.now_ns()
         inputs.update(self.context)
-        if self._task is not None:
-            inputs['task'] = self._task.instruction  # the eval owns the instruction; it overrides any context key
         inputs['descriptor'] = self._descriptor  # last, so a context key can't shadow it
         return inputs
 
