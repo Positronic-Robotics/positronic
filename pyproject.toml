@@ -77,6 +77,9 @@ lerobot = [
     "lerobot[smolvla]==0.4.3",
     "torch",
 ]
+dreamzero = [
+    "huggingface-hub",
+]
 lance = [
     "pylance",
 ]
