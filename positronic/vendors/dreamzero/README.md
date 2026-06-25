@@ -11,7 +11,7 @@ autoregressive video context). Two backbones are wired up here:
 
 | Backbone | Params | Image (W×H) | Notes |
 |----------|--------|-------------|-------|
-| `wan2.1` | 14B | 320×176 | Default server checkpoint `GEAR-Dreams/DreamZero-DROID` (trained on DROID); DiT caching supported |
+| `wan2.1` | 14B | 320×180 | Public pretrained `GEAR-Dreams/DreamZero-DROID` checkpoint (the `droid` server preset); DiT caching supported |
 | `wan2.2` | 5B | 320×160 | Causal chunked inference; what the Positronic fine-tunes below use |
 
 Pick the backbone with `--backbone` at both train and serve time; **it must match between the two**.
@@ -36,9 +36,10 @@ To try the pretrained DROID model with no training. `positronic-inference` comes
 [Prerequisites](#full-pipeline-fine-tune-your-own-checkpoint) below).
 
 ```bash
-# Serve the default checkpoint on your H100 box (auto-downloaded on first start, ~10-20 min via HuggingFace).
+# Serve the public pretrained DROID checkpoint on your H100 box (auto-downloaded on first start,
+# ~10-20 min via HuggingFace). The `droid` preset pins the checkpoint, wan2.1 backbone, and codec.
 cd docker
-CACHE_ROOT=/home/<user> docker --context <h100> compose run --rm --service-ports dreamzero-server
+CACHE_ROOT=/home/<user> docker --context <h100> compose run --rm --service-ports dreamzero-server droid
 
 # Run sim inference locally (only inference is remote; MuJoCo runs on your machine).
 uv run --locked positronic-inference sim \
@@ -130,13 +131,13 @@ Multi-GPU presets (`*_h100x8`) run `torchrun --nproc_per_node=8`, so use them on
 
 ### 3. Serve a checkpoint
 
-`dreamzero-server` downloads `--model_path` (an `s3://` checkpoint or HF repo) and **needs `--backbone` to
-match training** (config + defaults: [`server.py`](./server.py)). `--service-ports` publishes the WebSocket
-API on `8000`:
+`dreamzero-server serve` downloads `--model_path` (an `s3://` checkpoint or HF repo) and **needs `--backbone`
+to match training** (config + defaults: [`server.py`](./server.py)). `--service-ports` publishes the
+WebSocket API on `8000`:
 
 ```bash
 cd docker
-CACHE_ROOT=/home/<user> docker --context <h100> compose run --rm --service-ports dreamzero-server \
+CACHE_ROOT=/home/<user> docker --context <h100> compose run --rm --service-ports dreamzero-server serve \
   --model_path=s3://checkpoints/sim_stack/dreamzero/<exp_name>/checkpoint-<step> \
   --backbone=wan2.2
 ```
@@ -185,9 +186,9 @@ that decodes to a `JointPosition` command. They differ only in how **training la
 - **Action space**: 7-DoF joint targets + gripper. DreamZero predicts the joints **relative to the current
   state** (`relative_action: true` on `joint_position` in the `droid_relative_wan22` data config); the
   absolute joint target is reconstructed from the current state at serve time and decoded to a `JointPosition`.
-- **Observation**: 3 cameras (2 exterior + 1 wrist) + joint state + language prompt; 320×160 (wan2.2),
-  320×176 (wan2.1). The wan2.2 trainer sets `image_resolution_height=160` and resizes at load, so the
-  codec's intermediate `(320, 176)` does not need a per-backbone override.
+- **Observation**: 3 cameras (2 exterior + 1 wrist) + joint state + language prompt. The wan2.2 fine-tunes
+  use the `(320, 176)` codec and the trainer resizes to 160 at load; the pretrained DROID model (wan2.1)
+  asserts exactly `(320, 180)`, so the `droid` codec (`codecs.droid`) feeds that resolution.
 - **Action horizon**: 24 timesteps per inference; the `dreamzero_wrappers` re-query aligns the
   chunk schedule with the AR frame-stack window
 - **Wire protocol**: Positronic's standard WebSocket protocol — see [Connect Your Model](../../../docs/connect-your-model.md)
@@ -218,7 +219,7 @@ bash workflows/nebius/train.sh dreamzero wan22_full_h100x1 \
   --max_steps=30000 --save_steps=2500 --gradient_accumulation_steps=4 --save_total_limit=9999
 
 # Serve (H100 endpoint; the public endpoint is exposed on :8000)
-bash workflows/nebius/serve.sh dreamzero <endpoint-name> \
+bash workflows/nebius/serve.sh dreamzero <endpoint-name> serve \
   --model_path=s3://checkpoints/sim_stack/dreamzero/<exp_name>/checkpoint-<step> \
   --backbone=wan2.2
 # ... infer against the printed endpoint IP with --policy.port=8000, then tear down:

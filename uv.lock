@@ -98,13 +98,13 @@ name = "aiohttp"
 version = "3.13.3"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "aiohappyeyeballs", marker = "extra == 'extra-10-positronic-lerobot' or extra == 'extra-10-positronic-lerobot-0-3-3'" },
-    { name = "aiosignal", marker = "extra == 'extra-10-positronic-lerobot' or extra == 'extra-10-positronic-lerobot-0-3-3'" },
-    { name = "attrs", marker = "extra == 'extra-10-positronic-lerobot' or extra == 'extra-10-positronic-lerobot-0-3-3'" },
-    { name = "frozenlist", marker = "extra == 'extra-10-positronic-lerobot' or extra == 'extra-10-positronic-lerobot-0-3-3'" },
-    { name = "multidict", marker = "extra == 'extra-10-positronic-lerobot' or extra == 'extra-10-positronic-lerobot-0-3-3'" },
-    { name = "propcache", marker = "extra == 'extra-10-positronic-lerobot' or extra == 'extra-10-positronic-lerobot-0-3-3'" },
-    { name = "yarl", marker = "extra == 'extra-10-positronic-lerobot' or extra == 'extra-10-positronic-lerobot-0-3-3'" },
+    { name = "aiohappyeyeballs" },
+    { name = "aiosignal" },
+    { name = "attrs" },
+    { name = "frozenlist" },
+    { name = "multidict" },
+    { name = "propcache" },
+    { name = "yarl" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/50/42/32cf8e7704ceb4481406eb87161349abb46a57fee3f008ba9cb610968646/aiohttp-3.13.3.tar.gz", hash = "sha256:a949eee43d3782f2daae4f4a2819b2cb9b0c5d3b7f7a927067cc84dafdbb9f88", size = 7844556, upload-time = "2026-01-03T17:33:05.204Z" }
 wheels = [
@@ -166,8 +166,8 @@ name = "aiosignal"
 version = "1.4.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "frozenlist", marker = "extra == 'extra-10-positronic-lerobot' or extra == 'extra-10-positronic-lerobot-0-3-3'" },
-    { name = "typing-extensions", marker = "(python_full_version < '3.13' and extra == 'extra-10-positronic-lerobot') or (python_full_version < '3.13' and extra == 'extra-10-positronic-lerobot-0-3-3') or (extra == 'extra-10-positronic-lerobot' and extra == 'extra-10-positronic-lerobot-0-3-3')" },
+    { name = "frozenlist" },
+    { name = "typing-extensions", marker = "python_full_version < '3.13'" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/61/62/06741b579156360248d1ec624842ad0edf697050bbaf7c3e46394e106ad1/aiosignal-1.4.0.tar.gz", hash = "sha256:f47eecd9468083c2029cc99945502cb7708b082c232f9aca65da147157b251c7", size = 25007, upload-time = "2025-07-03T22:54:43.528Z" }
 wheels = [
@@ -1254,7 +1254,7 @@ name = "deepdiff"
 version = "8.6.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "orderly-set", marker = "extra == 'extra-10-positronic-lerobot' or extra == 'extra-10-positronic-lerobot-0-3-3'" },
+    { name = "orderly-set" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/19/76/36c9aab3d5c19a94091f7c6c6e784efca50d87b124bf026c36e94719f33c/deepdiff-8.6.1.tar.gz", hash = "sha256:ec56d7a769ca80891b5200ec7bd41eec300ced91ebcc7797b41eb2b3f3ff643a", size = 634054, upload-time = "2025-09-03T19:40:41.461Z" }
 wheels = [
@@ -1401,11 +1401,11 @@ name = "draccus"
 version = "0.10.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "mergedeep", marker = "extra == 'extra-10-positronic-lerobot' or extra == 'extra-10-positronic-lerobot-0-3-3'" },
-    { name = "pyyaml", marker = "extra == 'extra-10-positronic-lerobot' or extra == 'extra-10-positronic-lerobot-0-3-3'" },
-    { name = "pyyaml-include", marker = "extra == 'extra-10-positronic-lerobot' or extra == 'extra-10-positronic-lerobot-0-3-3'" },
-    { name = "toml", marker = "extra == 'extra-10-positronic-lerobot' or extra == 'extra-10-positronic-lerobot-0-3-3'" },
-    { name = "typing-inspect", marker = "extra == 'extra-10-positronic-lerobot' or extra == 'extra-10-positronic-lerobot-0-3-3'" },
+    { name = "mergedeep" },
+    { name = "pyyaml" },
+    { name = "pyyaml-include" },
+    { name = "toml" },
+    { name = "typing-inspect" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/4e/e2/f5012fda17ee5d1eaf3481b6ca3e11dffa5348e5e08ab745538fdc8041bb/draccus-0.10.0.tar.gz", hash = "sha256:8dd08304219becdcd66cd16058ba98e9c3e6b7bfe48ccb9579dae39f8d37ae19", size = 62243, upload-time = "2025-02-05T07:27:48.182Z" }
 wheels = [
@@ -1681,7 +1681,7 @@ wheels = [
 
 [package.optional-dependencies]
 http = [
-    { name = "aiohttp", marker = "extra == 'extra-10-positronic-lerobot' or extra == 'extra-10-positronic-lerobot-0-3-3'" },
+    { name = "aiohttp" },
 ]
 
 [[package]]
@@ -1689,7 +1689,7 @@ name = "gitdb"
 version = "4.0.12"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "smmap", marker = "extra == 'extra-10-positronic-lerobot' or extra == 'extra-10-positronic-lerobot-0-3-3'" },
+    { name = "smmap" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/72/94/63b0fc47eb32792c7ba1fe1b694daec9a63620db1e313033d18140c2320a/gitdb-4.0.12.tar.gz", hash = "sha256:5ef71f855d191a3326fcfbc0d5da835f26b13fbcba60c32c21091c349ffdb571", size = 394684, upload-time = "2025-01-02T07:20:46.413Z" }
 wheels = [
@@ -1701,7 +1701,7 @@ name = "gitpython"
 version = "3.1.46"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "gitdb", marker = "extra == 'extra-10-positronic-lerobot' or extra == 'extra-10-positronic-lerobot-0-3-3'" },
+    { name = "gitdb" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/df/b5/59d16470a1f0dfe8c793f9ef56fd3826093fc52b3bd96d6b9d6c26c7e27b/gitpython-3.1.46.tar.gz", hash = "sha256:400124c7d0ef4ea03f7310ac2fbf7151e09ff97f2a3288d64a440c584a29c37f", size = 215371, upload-time = "2026-01-01T15:37:32.073Z" }
 wheels = [
@@ -1949,14 +1949,14 @@ resolution-markers = [
     "python_full_version < '3.12' and sys_platform != 'darwin' and sys_platform != 'emscripten' and sys_platform != 'linux' and sys_platform != 'win32'",
 ]
 dependencies = [
-    { name = "filelock" },
-    { name = "fsspec" },
-    { name = "hf-xet", marker = "platform_machine == 'aarch64' or platform_machine == 'amd64' or platform_machine == 'arm64' or platform_machine == 'x86_64'" },
-    { name = "packaging", version = "25.0", source = { registry = "https://pypi.org/simple" } },
-    { name = "pyyaml" },
-    { name = "requests" },
-    { name = "tqdm" },
-    { name = "typing-extensions" },
+    { name = "filelock", marker = "extra == 'extra-10-positronic-lerobot'" },
+    { name = "fsspec", marker = "extra == 'extra-10-positronic-lerobot'" },
+    { name = "hf-xet", marker = "(platform_machine == 'aarch64' and extra == 'extra-10-positronic-lerobot') or (platform_machine == 'amd64' and extra == 'extra-10-positronic-lerobot') or (platform_machine == 'arm64' and extra == 'extra-10-positronic-lerobot') or (platform_machine == 'x86_64' and extra == 'extra-10-positronic-lerobot') or (extra == 'extra-10-positronic-lerobot' and extra == 'extra-10-positronic-lerobot-0-3-3')" },
+    { name = "packaging", version = "25.0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-10-positronic-lerobot'" },
+    { name = "pyyaml", marker = "extra == 'extra-10-positronic-lerobot'" },
+    { name = "requests", marker = "extra == 'extra-10-positronic-lerobot'" },
+    { name = "tqdm", marker = "extra == 'extra-10-positronic-lerobot'" },
+    { name = "typing-extensions", marker = "extra == 'extra-10-positronic-lerobot'" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/10/7e/a0a97de7c73671863ca6b3f61fa12518caf35db37825e43d63a70956738c/huggingface_hub-0.35.3.tar.gz", hash = "sha256:350932eaa5cc6a4747efae85126ee220e4ef1b54e29d31c3b45c5612ddf0b32a", size = 461798, upload-time = "2025-09-29T14:29:58.625Z" }
 wheels = [
@@ -1976,30 +1976,36 @@ name = "huggingface-hub"
 version = "1.4.1"
 source = { registry = "https://pypi.org/simple" }
 resolution-markers = [
-    "python_full_version >= '3.13' and sys_platform == 'linux'",
-    "python_full_version == '3.12.*' and sys_platform == 'linux'",
-    "python_full_version < '3.12' and sys_platform == 'linux'",
-    "python_full_version >= '3.13' and sys_platform == 'win32'",
-    "python_full_version >= '3.13' and sys_platform == 'emscripten'",
-    "python_full_version >= '3.13' and sys_platform != 'emscripten' and sys_platform != 'linux' and sys_platform != 'win32'",
-    "python_full_version == '3.12.*' and sys_platform == 'win32'",
-    "python_full_version == '3.12.*' and sys_platform == 'emscripten'",
-    "python_full_version == '3.12.*' and sys_platform != 'emscripten' and sys_platform != 'linux' and sys_platform != 'win32'",
-    "python_full_version < '3.12' and sys_platform == 'win32'",
-    "python_full_version < '3.12' and sys_platform == 'emscripten'",
-    "python_full_version < '3.12' and sys_platform != 'emscripten' and sys_platform != 'linux' and sys_platform != 'win32'",
+    "python_full_version >= '3.13' and sys_platform == 'linux' and extra != 'extra-10-positronic-lerobot' and extra == 'extra-10-positronic-lerobot-0-3-3'",
+    "python_full_version == '3.12.*' and sys_platform == 'linux' and extra != 'extra-10-positronic-lerobot' and extra == 'extra-10-positronic-lerobot-0-3-3'",
+    "python_full_version < '3.12' and sys_platform == 'linux' and extra != 'extra-10-positronic-lerobot' and extra == 'extra-10-positronic-lerobot-0-3-3'",
+    "python_full_version >= '3.13' and sys_platform == 'win32' and extra != 'extra-10-positronic-lerobot' and extra == 'extra-10-positronic-lerobot-0-3-3'",
+    "python_full_version >= '3.13' and sys_platform == 'emscripten' and extra != 'extra-10-positronic-lerobot' and extra == 'extra-10-positronic-lerobot-0-3-3'",
+    "python_full_version >= '3.13' and sys_platform != 'emscripten' and sys_platform != 'linux' and sys_platform != 'win32' and extra != 'extra-10-positronic-lerobot' and extra == 'extra-10-positronic-lerobot-0-3-3'",
+    "python_full_version == '3.12.*' and sys_platform == 'win32' and extra != 'extra-10-positronic-lerobot' and extra == 'extra-10-positronic-lerobot-0-3-3'",
+    "python_full_version == '3.12.*' and sys_platform == 'emscripten' and extra != 'extra-10-positronic-lerobot' and extra == 'extra-10-positronic-lerobot-0-3-3'",
+    "python_full_version == '3.12.*' and sys_platform != 'emscripten' and sys_platform != 'linux' and sys_platform != 'win32' and extra != 'extra-10-positronic-lerobot' and extra == 'extra-10-positronic-lerobot-0-3-3'",
+    "python_full_version < '3.12' and sys_platform == 'win32' and extra != 'extra-10-positronic-lerobot' and extra == 'extra-10-positronic-lerobot-0-3-3'",
+    "python_full_version < '3.12' and sys_platform == 'emscripten' and extra != 'extra-10-positronic-lerobot' and extra == 'extra-10-positronic-lerobot-0-3-3'",
+    "python_full_version < '3.12' and sys_platform != 'emscripten' and sys_platform != 'linux' and sys_platform != 'win32' and extra != 'extra-10-positronic-lerobot' and extra == 'extra-10-positronic-lerobot-0-3-3'",
+    "python_full_version >= '3.13' and sys_platform == 'linux' and extra != 'extra-10-positronic-lerobot' and extra != 'extra-10-positronic-lerobot-0-3-3'",
+    "python_full_version == '3.12.*' and sys_platform == 'linux' and extra != 'extra-10-positronic-lerobot' and extra != 'extra-10-positronic-lerobot-0-3-3'",
+    "python_full_version < '3.12' and sys_platform == 'linux' and extra != 'extra-10-positronic-lerobot' and extra != 'extra-10-positronic-lerobot-0-3-3'",
+    "python_full_version >= '3.13' and sys_platform != 'linux' and extra != 'extra-10-positronic-lerobot' and extra != 'extra-10-positronic-lerobot-0-3-3'",
+    "python_full_version == '3.12.*' and sys_platform != 'linux' and extra != 'extra-10-positronic-lerobot' and extra != 'extra-10-positronic-lerobot-0-3-3'",
+    "python_full_version < '3.12' and sys_platform != 'linux' and extra != 'extra-10-positronic-lerobot' and extra != 'extra-10-positronic-lerobot-0-3-3'",
 ]
 dependencies = [
-    { name = "filelock" },
-    { name = "fsspec" },
-    { name = "hf-xet", marker = "platform_machine == 'AMD64' or platform_machine == 'aarch64' or platform_machine == 'amd64' or platform_machine == 'arm64' or platform_machine == 'x86_64'" },
-    { name = "httpx" },
-    { name = "packaging", version = "26.0", source = { registry = "https://pypi.org/simple" } },
-    { name = "pyyaml" },
-    { name = "shellingham" },
-    { name = "tqdm" },
-    { name = "typer-slim" },
-    { name = "typing-extensions" },
+    { name = "filelock", marker = "extra == 'extra-10-positronic-lerobot-0-3-3' or extra != 'extra-10-positronic-lerobot'" },
+    { name = "fsspec", marker = "extra == 'extra-10-positronic-lerobot-0-3-3' or extra != 'extra-10-positronic-lerobot'" },
+    { name = "hf-xet", marker = "(platform_machine == 'AMD64' and extra != 'extra-10-positronic-lerobot') or (platform_machine == 'aarch64' and extra != 'extra-10-positronic-lerobot') or (platform_machine == 'amd64' and extra != 'extra-10-positronic-lerobot') or (platform_machine == 'arm64' and extra != 'extra-10-positronic-lerobot') or (platform_machine == 'x86_64' and extra != 'extra-10-positronic-lerobot') or (extra == 'extra-10-positronic-lerobot' and extra == 'extra-10-positronic-lerobot-0-3-3')" },
+    { name = "httpx", marker = "extra == 'extra-10-positronic-lerobot-0-3-3' or extra != 'extra-10-positronic-lerobot'" },
+    { name = "packaging", version = "26.0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-10-positronic-lerobot-0-3-3' or extra != 'extra-10-positronic-lerobot'" },
+    { name = "pyyaml", marker = "extra == 'extra-10-positronic-lerobot-0-3-3' or extra != 'extra-10-positronic-lerobot'" },
+    { name = "shellingham", marker = "extra == 'extra-10-positronic-lerobot-0-3-3' or extra != 'extra-10-positronic-lerobot'" },
+    { name = "tqdm", marker = "extra == 'extra-10-positronic-lerobot-0-3-3' or extra != 'extra-10-positronic-lerobot'" },
+    { name = "typer-slim", marker = "extra == 'extra-10-positronic-lerobot-0-3-3' or extra != 'extra-10-positronic-lerobot'" },
+    { name = "typing-extensions", marker = "extra == 'extra-10-positronic-lerobot-0-3-3' or extra != 'extra-10-positronic-lerobot'" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/c4/fc/eb9bc06130e8bbda6a616e1b80a7aa127681c448d6b49806f61db2670b61/huggingface_hub-1.4.1.tar.gz", hash = "sha256:b41131ec35e631e7383ab26d6146b8d8972abc8b6309b963b306fbcca87f5ed5", size = 642156, upload-time = "2026-02-06T09:20:03.013Z" }
 wheels = [
@@ -2041,8 +2047,8 @@ name = "imageio"
 version = "2.37.2"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "numpy", marker = "extra == 'extra-10-positronic-lerobot' or extra == 'extra-10-positronic-lerobot-0-3-3'" },
-    { name = "pillow", marker = "extra == 'extra-10-positronic-lerobot' or extra == 'extra-10-positronic-lerobot-0-3-3'" },
+    { name = "numpy" },
+    { name = "pillow" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/a3/6f/606be632e37bf8d05b253e8626c2291d74c691ddc7bcdf7d6aaf33b32f6a/imageio-2.37.2.tar.gz", hash = "sha256:0212ef2727ac9caa5ca4b2c75ae89454312f440a756fcfc8ef1993e718f50f8a", size = 389600, upload-time = "2025-11-04T14:29:39.898Z" }
 wheels = [
@@ -2051,8 +2057,8 @@ wheels = [
 
 [package.optional-dependencies]
 ffmpeg = [
-    { name = "imageio-ffmpeg", marker = "extra == 'extra-10-positronic-lerobot' or extra == 'extra-10-positronic-lerobot-0-3-3'" },
-    { name = "psutil", marker = "extra == 'extra-10-positronic-lerobot' or extra == 'extra-10-positronic-lerobot-0-3-3'" },
+    { name = "imageio-ffmpeg" },
+    { name = "psutil" },
 ]
 
 [[package]]
@@ -2074,7 +2080,7 @@ name = "importlib-metadata"
 version = "8.7.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "zipp", marker = "extra == 'extra-10-positronic-lerobot' or extra == 'extra-10-positronic-lerobot-0-3-3'" },
+    { name = "zipp" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/f3/49/3b30cad09e7771a4982d9975a8cbf64f00d4a1ececb53297f1d9a7be1b10/importlib_metadata-8.7.1.tar.gz", hash = "sha256:49fef1ae6440c182052f407c8d34a68f72efc36db9ca90dc0113398f2fdde8bb", size = 57107, upload-time = "2025-12-21T10:00:19.278Z" }
 wheels = [
@@ -2264,7 +2270,7 @@ name = "jsonlines"
 version = "4.0.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "attrs", marker = "extra == 'extra-10-positronic-lerobot' or extra == 'extra-10-positronic-lerobot-0-3-3'" },
+    { name = "attrs" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/35/87/bcda8e46c88d0e34cad2f09ee2d0c7f5957bccdb9791b0b934ec84d84be4/jsonlines-4.0.0.tar.gz", hash = "sha256:0c6d2c09117550c089995247f605ae4cf77dd1533041d366351f6f298822ea74", size = 11359, upload-time = "2023-09-01T12:34:44.187Z" }
 wheels = [
@@ -2743,7 +2749,7 @@ name = "markdown-it-py"
 version = "4.0.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "mdurl" },
+    { name = "mdurl", marker = "extra == 'extra-10-positronic-lerobot-0-3-3' or extra != 'extra-10-positronic-lerobot'" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/5b/f5/4ec618ed16cc4f8fb3b701563655a69816155e79e24a17b651541804721d/markdown_it_py-4.0.0.tar.gz", hash = "sha256:cb0a2b4aa34f932c007117b194e945bd74e0ec24133ceb5bac59009cda1cb9f3", size = 73070, upload-time = "2025-08-11T12:57:52.854Z" }
 wheels = [
@@ -3057,7 +3063,7 @@ name = "multiprocess"
 version = "0.70.16"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "dill", marker = "extra == 'extra-10-positronic-lerobot' or extra == 'extra-10-positronic-lerobot-0-3-3'" },
+    { name = "dill" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/b5/ae/04f39c5d0d0def03247c2893d6f2b83c136bf3320a2154d7b8858f2ba72d/multiprocess-0.70.16.tar.gz", hash = "sha256:161af703d4652a0e1410be6abccecde4a7ddffd19341be0a7011b94aeb171ac1", size = 1772603, upload-time = "2024-01-28T18:52:34.85Z" }
 wheels = [
@@ -3645,9 +3651,9 @@ name = "pandas"
 version = "3.0.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "numpy", marker = "extra == 'extra-10-positronic-lerobot' or extra == 'extra-10-positronic-lerobot-0-3-3'" },
-    { name = "python-dateutil", marker = "extra == 'extra-10-positronic-lerobot' or extra == 'extra-10-positronic-lerobot-0-3-3'" },
-    { name = "tzdata", marker = "(sys_platform == 'emscripten' and extra == 'extra-10-positronic-lerobot') or (sys_platform == 'emscripten' and extra == 'extra-10-positronic-lerobot-0-3-3') or (sys_platform == 'win32' and extra == 'extra-10-positronic-lerobot') or (sys_platform == 'win32' and extra == 'extra-10-positronic-lerobot-0-3-3') or (extra == 'extra-10-positronic-lerobot' and extra == 'extra-10-positronic-lerobot-0-3-3')" },
+    { name = "numpy" },
+    { name = "python-dateutil" },
+    { name = "tzdata", marker = "sys_platform == 'emscripten' or sys_platform == 'win32'" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/2e/0c/b28ed414f080ee0ad153f848586d61d1878f91689950f037f976ce15f6c8/pandas-3.0.1.tar.gz", hash = "sha256:4186a699674af418f655dbd420ed87f50d56b4cd6603784279d9eef6627823c8", size = 4641901, upload-time = "2026-02-17T22:20:16.434Z" }
 wheels = [
@@ -3707,7 +3713,7 @@ name = "pexpect"
 version = "4.9.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "ptyprocess" },
+    { name = "ptyprocess", marker = "(sys_platform != 'emscripten' and sys_platform != 'win32') or (sys_platform == 'emscripten' and extra == 'extra-10-positronic-lerobot' and extra == 'extra-10-positronic-lerobot-0-3-3') or (sys_platform == 'emscripten' and extra != 'extra-10-positronic-lerobot' and extra != 'extra-10-positronic-lerobot-0-3-3') or (sys_platform == 'win32' and extra == 'extra-10-positronic-lerobot' and extra == 'extra-10-positronic-lerobot-0-3-3') or (sys_platform == 'win32' and extra != 'extra-10-positronic-lerobot' and extra != 'extra-10-positronic-lerobot-0-3-3')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/42/92/cc564bf6381ff43ce1f4d06852fc19a2f11d180f23dc32d9588bee2f149d/pexpect-4.9.0.tar.gz", hash = "sha256:ee7d41123f3c9911050ea2c2dac107568dc43b2d3b0c7557a33212c398ead30f", size = 166450, upload-time = "2023-11-25T09:07:26.339Z" }
 wheels = [
@@ -3899,6 +3905,8 @@ dependencies = [
     { name = "fastapi" },
     { name = "fire" },
     { name = "httpx" },
+    { name = "huggingface-hub", version = "0.35.3", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-10-positronic-lerobot'" },
+    { name = "huggingface-hub", version = "1.4.1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-10-positronic-lerobot-0-3-3' or extra != 'extra-10-positronic-lerobot'" },
     { name = "jinja2" },
     { name = "msgpack" },
     { name = "mujoco" },
@@ -3975,6 +3983,7 @@ requires-dist = [
     { name = "feetech-servo-sdk", marker = "extra == 'hardware'" },
     { name = "fire" },
     { name = "httpx" },
+    { name = "huggingface-hub" },
     { name = "ipython", marker = "extra == 'dev'" },
     { name = "jinja2" },
     { name = "jupyter", marker = "extra == 'dev'" },
@@ -4411,10 +4420,10 @@ name = "pyobjc-framework-applicationservices"
 version = "12.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "pyobjc-core", marker = "sys_platform == 'darwin' or (sys_platform != 'linux' and extra != 'extra-10-positronic-lerobot') or (extra == 'extra-10-positronic-lerobot' and extra == 'extra-10-positronic-lerobot-0-3-3')" },
-    { name = "pyobjc-framework-cocoa", marker = "sys_platform == 'darwin' or (sys_platform != 'linux' and extra != 'extra-10-positronic-lerobot') or (extra == 'extra-10-positronic-lerobot' and extra == 'extra-10-positronic-lerobot-0-3-3')" },
-    { name = "pyobjc-framework-coretext", marker = "sys_platform == 'darwin' or (sys_platform != 'linux' and extra != 'extra-10-positronic-lerobot') or (extra == 'extra-10-positronic-lerobot' and extra == 'extra-10-positronic-lerobot-0-3-3')" },
-    { name = "pyobjc-framework-quartz", marker = "sys_platform == 'darwin' or (sys_platform != 'linux' and extra != 'extra-10-positronic-lerobot') or (extra == 'extra-10-positronic-lerobot' and extra == 'extra-10-positronic-lerobot-0-3-3')" },
+    { name = "pyobjc-core", marker = "sys_platform == 'darwin' or (sys_platform != 'emscripten' and sys_platform != 'linux' and sys_platform != 'win32' and extra != 'extra-10-positronic-lerobot') or (sys_platform == 'emscripten' and extra != 'extra-10-positronic-lerobot' and extra != 'extra-10-positronic-lerobot-0-3-3') or (sys_platform == 'win32' and extra != 'extra-10-positronic-lerobot' and extra != 'extra-10-positronic-lerobot-0-3-3') or (extra == 'extra-10-positronic-lerobot' and extra == 'extra-10-positronic-lerobot-0-3-3')" },
+    { name = "pyobjc-framework-cocoa", marker = "sys_platform == 'darwin' or (sys_platform != 'emscripten' and sys_platform != 'linux' and sys_platform != 'win32' and extra != 'extra-10-positronic-lerobot') or (sys_platform == 'emscripten' and extra != 'extra-10-positronic-lerobot' and extra != 'extra-10-positronic-lerobot-0-3-3') or (sys_platform == 'win32' and extra != 'extra-10-positronic-lerobot' and extra != 'extra-10-positronic-lerobot-0-3-3') or (extra == 'extra-10-positronic-lerobot' and extra == 'extra-10-positronic-lerobot-0-3-3')" },
+    { name = "pyobjc-framework-coretext", marker = "sys_platform == 'darwin' or (sys_platform != 'emscripten' and sys_platform != 'linux' and sys_platform != 'win32' and extra != 'extra-10-positronic-lerobot') or (sys_platform == 'emscripten' and extra != 'extra-10-positronic-lerobot' and extra != 'extra-10-positronic-lerobot-0-3-3') or (sys_platform == 'win32' and extra != 'extra-10-positronic-lerobot' and extra != 'extra-10-positronic-lerobot-0-3-3') or (extra == 'extra-10-positronic-lerobot' and extra == 'extra-10-positronic-lerobot-0-3-3')" },
+    { name = "pyobjc-framework-quartz", marker = "sys_platform == 'darwin' or (sys_platform != 'emscripten' and sys_platform != 'linux' and sys_platform != 'win32' and extra != 'extra-10-positronic-lerobot') or (sys_platform == 'emscripten' and extra != 'extra-10-positronic-lerobot' and extra != 'extra-10-positronic-lerobot-0-3-3') or (sys_platform == 'win32' and extra != 'extra-10-positronic-lerobot' and extra != 'extra-10-positronic-lerobot-0-3-3') or (extra == 'extra-10-positronic-lerobot' and extra == 'extra-10-positronic-lerobot-0-3-3')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/be/6a/d4e613c8e926a5744fc47a9e9fea08384a510dc4f27d844f7ad7a2d793bd/pyobjc_framework_applicationservices-12.1.tar.gz", hash = "sha256:c06abb74f119bc27aeb41bf1aef8102c0ae1288aec1ac8665ea186a067a8945b", size = 103247, upload-time = "2025-11-14T10:08:52.18Z" }
 wheels = [
@@ -4429,7 +4438,7 @@ name = "pyobjc-framework-cocoa"
 version = "12.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "pyobjc-core", marker = "sys_platform == 'darwin' or (sys_platform != 'linux' and extra != 'extra-10-positronic-lerobot') or (extra == 'extra-10-positronic-lerobot' and extra == 'extra-10-positronic-lerobot-0-3-3')" },
+    { name = "pyobjc-core", marker = "sys_platform == 'darwin' or (sys_platform != 'emscripten' and sys_platform != 'linux' and sys_platform != 'win32' and extra != 'extra-10-positronic-lerobot') or (sys_platform == 'emscripten' and extra != 'extra-10-positronic-lerobot' and extra != 'extra-10-positronic-lerobot-0-3-3') or (sys_platform == 'win32' and extra != 'extra-10-positronic-lerobot' and extra != 'extra-10-positronic-lerobot-0-3-3') or (extra == 'extra-10-positronic-lerobot' and extra == 'extra-10-positronic-lerobot-0-3-3')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/02/a3/16ca9a15e77c061a9250afbae2eae26f2e1579eb8ca9462ae2d2c71e1169/pyobjc_framework_cocoa-12.1.tar.gz", hash = "sha256:5556c87db95711b985d5efdaaf01c917ddd41d148b1e52a0c66b1a2e2c5c1640", size = 2772191, upload-time = "2025-11-14T10:13:02.069Z" }
 wheels = [
@@ -4444,9 +4453,9 @@ name = "pyobjc-framework-coretext"
 version = "12.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "pyobjc-core", marker = "sys_platform == 'darwin' or (sys_platform != 'linux' and extra != 'extra-10-positronic-lerobot') or (extra == 'extra-10-positronic-lerobot' and extra == 'extra-10-positronic-lerobot-0-3-3')" },
-    { name = "pyobjc-framework-cocoa", marker = "sys_platform == 'darwin' or (sys_platform != 'linux' and extra != 'extra-10-positronic-lerobot') or (extra == 'extra-10-positronic-lerobot' and extra == 'extra-10-positronic-lerobot-0-3-3')" },
-    { name = "pyobjc-framework-quartz", marker = "sys_platform == 'darwin' or (sys_platform != 'linux' and extra != 'extra-10-positronic-lerobot') or (extra == 'extra-10-positronic-lerobot' and extra == 'extra-10-positronic-lerobot-0-3-3')" },
+    { name = "pyobjc-core", marker = "sys_platform == 'darwin' or (sys_platform != 'emscripten' and sys_platform != 'linux' and sys_platform != 'win32' and extra != 'extra-10-positronic-lerobot') or (sys_platform == 'emscripten' and extra != 'extra-10-positronic-lerobot' and extra != 'extra-10-positronic-lerobot-0-3-3') or (sys_platform == 'win32' and extra != 'extra-10-positronic-lerobot' and extra != 'extra-10-positronic-lerobot-0-3-3') or (extra == 'extra-10-positronic-lerobot' and extra == 'extra-10-positronic-lerobot-0-3-3')" },
+    { name = "pyobjc-framework-cocoa", marker = "sys_platform == 'darwin' or (sys_platform != 'emscripten' and sys_platform != 'linux' and sys_platform != 'win32' and extra != 'extra-10-positronic-lerobot') or (sys_platform == 'emscripten' and extra != 'extra-10-positronic-lerobot' and extra != 'extra-10-positronic-lerobot-0-3-3') or (sys_platform == 'win32' and extra != 'extra-10-positronic-lerobot' and extra != 'extra-10-positronic-lerobot-0-3-3') or (extra == 'extra-10-positronic-lerobot' and extra == 'extra-10-positronic-lerobot-0-3-3')" },
+    { name = "pyobjc-framework-quartz", marker = "sys_platform == 'darwin' or (sys_platform != 'emscripten' and sys_platform != 'linux' and sys_platform != 'win32' and extra != 'extra-10-positronic-lerobot') or (sys_platform == 'emscripten' and extra != 'extra-10-positronic-lerobot' and extra != 'extra-10-positronic-lerobot-0-3-3') or (sys_platform == 'win32' and extra != 'extra-10-positronic-lerobot' and extra != 'extra-10-positronic-lerobot-0-3-3') or (extra == 'extra-10-positronic-lerobot' and extra == 'extra-10-positronic-lerobot-0-3-3')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/29/da/682c9c92a39f713bd3c56e7375fa8f1b10ad558ecb075258ab6f1cdd4a6d/pyobjc_framework_coretext-12.1.tar.gz", hash = "sha256:e0adb717738fae395dc645c9e8a10bb5f6a4277e73cba8fa2a57f3b518e71da5", size = 90124, upload-time = "2025-11-14T10:14:38.596Z" }
 wheels = [
@@ -4461,8 +4470,8 @@ name = "pyobjc-framework-quartz"
 version = "12.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "pyobjc-core", marker = "sys_platform == 'darwin' or (sys_platform != 'linux' and extra != 'extra-10-positronic-lerobot') or (extra == 'extra-10-positronic-lerobot' and extra == 'extra-10-positronic-lerobot-0-3-3')" },
-    { name = "pyobjc-framework-cocoa", marker = "sys_platform == 'darwin' or (sys_platform != 'linux' and extra != 'extra-10-positronic-lerobot') or (extra == 'extra-10-positronic-lerobot' and extra == 'extra-10-positronic-lerobot-0-3-3')" },
+    { name = "pyobjc-core", marker = "sys_platform == 'darwin' or (sys_platform != 'emscripten' and sys_platform != 'linux' and sys_platform != 'win32' and extra != 'extra-10-positronic-lerobot') or (sys_platform == 'emscripten' and extra != 'extra-10-positronic-lerobot' and extra != 'extra-10-positronic-lerobot-0-3-3') or (sys_platform == 'win32' and extra != 'extra-10-positronic-lerobot' and extra != 'extra-10-positronic-lerobot-0-3-3') or (extra == 'extra-10-positronic-lerobot' and extra == 'extra-10-positronic-lerobot-0-3-3')" },
+    { name = "pyobjc-framework-cocoa", marker = "sys_platform == 'darwin' or (sys_platform != 'emscripten' and sys_platform != 'linux' and sys_platform != 'win32' and extra != 'extra-10-positronic-lerobot') or (sys_platform == 'emscripten' and extra != 'extra-10-positronic-lerobot' and extra != 'extra-10-positronic-lerobot-0-3-3') or (sys_platform == 'win32' and extra != 'extra-10-positronic-lerobot' and extra != 'extra-10-positronic-lerobot-0-3-3') or (extra == 'extra-10-positronic-lerobot' and extra == 'extra-10-positronic-lerobot-0-3-3')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/94/18/cc59f3d4355c9456fc945eae7fe8797003c4da99212dd531ad1b0de8a0c6/pyobjc_framework_quartz-12.1.tar.gz", hash = "sha256:27f782f3513ac88ec9b6c82d9767eef95a5cf4175ce88a1e5a65875fee799608", size = 3159099, upload-time = "2025-11-14T10:21:24.31Z" }
 wheels = [
@@ -4664,7 +4673,7 @@ name = "pyyaml-include"
 version = "1.4.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "pyyaml", marker = "extra == 'extra-10-positronic-lerobot' or extra == 'extra-10-positronic-lerobot-0-3-3'" },
+    { name = "pyyaml" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/7f/be/2d07ad85e3d593d69640876a8686eae2c533db8cb7bf298d25c421b4d2d5/pyyaml-include-1.4.1.tar.gz", hash = "sha256:1a96e33a99a3e56235f5221273832464025f02ff3d8539309a3bf00dec624471", size = 20592, upload-time = "2024-03-25T14:56:43.748Z" }
 wheels = [
@@ -5010,8 +5019,8 @@ name = "rich"
 version = "14.3.3"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "markdown-it-py" },
-    { name = "pygments" },
+    { name = "markdown-it-py", marker = "extra == 'extra-10-positronic-lerobot-0-3-3' or extra != 'extra-10-positronic-lerobot'" },
+    { name = "pygments", marker = "extra == 'extra-10-positronic-lerobot-0-3-3' or extra != 'extra-10-positronic-lerobot'" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/b3/c6/f3b320c27991c46f43ee9d856302c70dc2d0fb2dba4842ff739d5f46b393/rich-14.3.3.tar.gz", hash = "sha256:b8daa0b9e4eef54dd8cf7c86c03713f53241884e814f4e2f5fb342fe520f639b", size = 230582, upload-time = "2026-02-19T17:23:12.474Z" }
 wheels = [
@@ -5249,8 +5258,8 @@ name = "sentry-sdk"
 version = "2.53.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "certifi", marker = "extra == 'extra-10-positronic-lerobot' or extra == 'extra-10-positronic-lerobot-0-3-3'" },
-    { name = "urllib3", marker = "extra == 'extra-10-positronic-lerobot' or extra == 'extra-10-positronic-lerobot-0-3-3'" },
+    { name = "certifi" },
+    { name = "urllib3" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/d3/06/66c8b705179bc54087845f28fd1b72f83751b6e9a195628e2e9af9926505/sentry_sdk-2.53.0.tar.gz", hash = "sha256:6520ef2c4acd823f28efc55e43eb6ce2e6d9f954a95a3aa96b6fd14871e92b77", size = 412369, upload-time = "2026-02-16T11:11:14.743Z" }
 wheels = [
@@ -5392,7 +5401,7 @@ name = "sympy"
 version = "1.14.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "mpmath", marker = "extra == 'extra-10-positronic-lerobot' or extra == 'extra-10-positronic-lerobot-0-3-3'" },
+    { name = "mpmath" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/83/d3/803453b36afefb7c2bb238361cd4ae6125a569b4db67cd9e79846ba2d68c/sympy-1.14.0.tar.gz", hash = "sha256:d3d3fe8df1e5a0b42f0e7bdf50541697dbe7d23746e894990c030e2b05e72517", size = 7793921, upload-time = "2025-04-27T18:05:01.611Z" }
 wheels = [
@@ -5526,29 +5535,29 @@ name = "torch"
 version = "2.7.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "filelock", marker = "extra == 'extra-10-positronic-lerobot' or extra == 'extra-10-positronic-lerobot-0-3-3'" },
-    { name = "fsspec", marker = "extra == 'extra-10-positronic-lerobot' or extra == 'extra-10-positronic-lerobot-0-3-3'" },
-    { name = "jinja2", marker = "extra == 'extra-10-positronic-lerobot' or extra == 'extra-10-positronic-lerobot-0-3-3'" },
-    { name = "networkx", marker = "extra == 'extra-10-positronic-lerobot' or extra == 'extra-10-positronic-lerobot-0-3-3'" },
-    { name = "nvidia-cublas-cu12", marker = "(platform_machine == 'x86_64' and sys_platform == 'linux' and extra == 'extra-10-positronic-lerobot') or (platform_machine == 'x86_64' and sys_platform == 'linux' and extra == 'extra-10-positronic-lerobot-0-3-3') or (platform_machine != 'x86_64' and extra == 'extra-10-positronic-lerobot' and extra == 'extra-10-positronic-lerobot-0-3-3') or (sys_platform != 'linux' and extra == 'extra-10-positronic-lerobot' and extra == 'extra-10-positronic-lerobot-0-3-3')" },
-    { name = "nvidia-cuda-cupti-cu12", marker = "(platform_machine == 'x86_64' and sys_platform == 'linux' and extra == 'extra-10-positronic-lerobot') or (platform_machine == 'x86_64' and sys_platform == 'linux' and extra == 'extra-10-positronic-lerobot-0-3-3') or (platform_machine != 'x86_64' and extra == 'extra-10-positronic-lerobot' and extra == 'extra-10-positronic-lerobot-0-3-3') or (sys_platform != 'linux' and extra == 'extra-10-positronic-lerobot' and extra == 'extra-10-positronic-lerobot-0-3-3')" },
-    { name = "nvidia-cuda-nvrtc-cu12", marker = "(platform_machine == 'x86_64' and sys_platform == 'linux' and extra == 'extra-10-positronic-lerobot') or (platform_machine == 'x86_64' and sys_platform == 'linux' and extra == 'extra-10-positronic-lerobot-0-3-3') or (platform_machine != 'x86_64' and extra == 'extra-10-positronic-lerobot' and extra == 'extra-10-positronic-lerobot-0-3-3') or (sys_platform != 'linux' and extra == 'extra-10-positronic-lerobot' and extra == 'extra-10-positronic-lerobot-0-3-3')" },
-    { name = "nvidia-cuda-runtime-cu12", marker = "(platform_machine == 'x86_64' and sys_platform == 'linux' and extra == 'extra-10-positronic-lerobot') or (platform_machine == 'x86_64' and sys_platform == 'linux' and extra == 'extra-10-positronic-lerobot-0-3-3') or (platform_machine != 'x86_64' and extra == 'extra-10-positronic-lerobot' and extra == 'extra-10-positronic-lerobot-0-3-3') or (sys_platform != 'linux' and extra == 'extra-10-positronic-lerobot' and extra == 'extra-10-positronic-lerobot-0-3-3')" },
-    { name = "nvidia-cudnn-cu12", marker = "(platform_machine == 'x86_64' and sys_platform == 'linux' and extra == 'extra-10-positronic-lerobot') or (platform_machine == 'x86_64' and sys_platform == 'linux' and extra == 'extra-10-positronic-lerobot-0-3-3') or (platform_machine != 'x86_64' and extra == 'extra-10-positronic-lerobot' and extra == 'extra-10-positronic-lerobot-0-3-3') or (sys_platform != 'linux' and extra == 'extra-10-positronic-lerobot' and extra == 'extra-10-positronic-lerobot-0-3-3')" },
-    { name = "nvidia-cufft-cu12", marker = "(platform_machine == 'x86_64' and sys_platform == 'linux' and extra == 'extra-10-positronic-lerobot') or (platform_machine == 'x86_64' and sys_platform == 'linux' and extra == 'extra-10-positronic-lerobot-0-3-3') or (platform_machine != 'x86_64' and extra == 'extra-10-positronic-lerobot' and extra == 'extra-10-positronic-lerobot-0-3-3') or (sys_platform != 'linux' and extra == 'extra-10-positronic-lerobot' and extra == 'extra-10-positronic-lerobot-0-3-3')" },
-    { name = "nvidia-cufile-cu12", marker = "(platform_machine == 'x86_64' and sys_platform == 'linux' and extra == 'extra-10-positronic-lerobot') or (platform_machine == 'x86_64' and sys_platform == 'linux' and extra == 'extra-10-positronic-lerobot-0-3-3') or (platform_machine != 'x86_64' and extra == 'extra-10-positronic-lerobot' and extra == 'extra-10-positronic-lerobot-0-3-3') or (sys_platform != 'linux' and extra == 'extra-10-positronic-lerobot' and extra == 'extra-10-positronic-lerobot-0-3-3')" },
-    { name = "nvidia-curand-cu12", marker = "(platform_machine == 'x86_64' and sys_platform == 'linux' and extra == 'extra-10-positronic-lerobot') or (platform_machine == 'x86_64' and sys_platform == 'linux' and extra == 'extra-10-positronic-lerobot-0-3-3') or (platform_machine != 'x86_64' and extra == 'extra-10-positronic-lerobot' and extra == 'extra-10-positronic-lerobot-0-3-3') or (sys_platform != 'linux' and extra == 'extra-10-positronic-lerobot' and extra == 'extra-10-positronic-lerobot-0-3-3')" },
-    { name = "nvidia-cusolver-cu12", marker = "(platform_machine == 'x86_64' and sys_platform == 'linux' and extra == 'extra-10-positronic-lerobot') or (platform_machine == 'x86_64' and sys_platform == 'linux' and extra == 'extra-10-positronic-lerobot-0-3-3') or (platform_machine != 'x86_64' and extra == 'extra-10-positronic-lerobot' and extra == 'extra-10-positronic-lerobot-0-3-3') or (sys_platform != 'linux' and extra == 'extra-10-positronic-lerobot' and extra == 'extra-10-positronic-lerobot-0-3-3')" },
-    { name = "nvidia-cusparse-cu12", marker = "(platform_machine == 'x86_64' and sys_platform == 'linux' and extra == 'extra-10-positronic-lerobot') or (platform_machine == 'x86_64' and sys_platform == 'linux' and extra == 'extra-10-positronic-lerobot-0-3-3') or (platform_machine != 'x86_64' and extra == 'extra-10-positronic-lerobot' and extra == 'extra-10-positronic-lerobot-0-3-3') or (sys_platform != 'linux' and extra == 'extra-10-positronic-lerobot' and extra == 'extra-10-positronic-lerobot-0-3-3')" },
-    { name = "nvidia-cusparselt-cu12", marker = "(platform_machine == 'x86_64' and sys_platform == 'linux' and extra == 'extra-10-positronic-lerobot') or (platform_machine == 'x86_64' and sys_platform == 'linux' and extra == 'extra-10-positronic-lerobot-0-3-3') or (platform_machine != 'x86_64' and extra == 'extra-10-positronic-lerobot' and extra == 'extra-10-positronic-lerobot-0-3-3') or (sys_platform != 'linux' and extra == 'extra-10-positronic-lerobot' and extra == 'extra-10-positronic-lerobot-0-3-3')" },
-    { name = "nvidia-nccl-cu12", marker = "(platform_machine == 'x86_64' and sys_platform == 'linux' and extra == 'extra-10-positronic-lerobot') or (platform_machine == 'x86_64' and sys_platform == 'linux' and extra == 'extra-10-positronic-lerobot-0-3-3') or (platform_machine != 'x86_64' and extra == 'extra-10-positronic-lerobot' and extra == 'extra-10-positronic-lerobot-0-3-3') or (sys_platform != 'linux' and extra == 'extra-10-positronic-lerobot' and extra == 'extra-10-positronic-lerobot-0-3-3')" },
-    { name = "nvidia-nvjitlink-cu12", marker = "(platform_machine == 'x86_64' and sys_platform == 'linux' and extra == 'extra-10-positronic-lerobot') or (platform_machine == 'x86_64' and sys_platform == 'linux' and extra == 'extra-10-positronic-lerobot-0-3-3') or (platform_machine != 'x86_64' and extra == 'extra-10-positronic-lerobot' and extra == 'extra-10-positronic-lerobot-0-3-3') or (sys_platform != 'linux' and extra == 'extra-10-positronic-lerobot' and extra == 'extra-10-positronic-lerobot-0-3-3')" },
-    { name = "nvidia-nvtx-cu12", marker = "(platform_machine == 'x86_64' and sys_platform == 'linux' and extra == 'extra-10-positronic-lerobot') or (platform_machine == 'x86_64' and sys_platform == 'linux' and extra == 'extra-10-positronic-lerobot-0-3-3') or (platform_machine != 'x86_64' and extra == 'extra-10-positronic-lerobot' and extra == 'extra-10-positronic-lerobot-0-3-3') or (sys_platform != 'linux' and extra == 'extra-10-positronic-lerobot' and extra == 'extra-10-positronic-lerobot-0-3-3')" },
+    { name = "filelock" },
+    { name = "fsspec" },
+    { name = "jinja2" },
+    { name = "networkx" },
+    { name = "nvidia-cublas-cu12", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
+    { name = "nvidia-cuda-cupti-cu12", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
+    { name = "nvidia-cuda-nvrtc-cu12", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
+    { name = "nvidia-cuda-runtime-cu12", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
+    { name = "nvidia-cudnn-cu12", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
+    { name = "nvidia-cufft-cu12", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
+    { name = "nvidia-cufile-cu12", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
+    { name = "nvidia-curand-cu12", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
+    { name = "nvidia-cusolver-cu12", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
+    { name = "nvidia-cusparse-cu12", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
+    { name = "nvidia-cusparselt-cu12", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
+    { name = "nvidia-nccl-cu12", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
+    { name = "nvidia-nvjitlink-cu12", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
+    { name = "nvidia-nvtx-cu12", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
     { name = "setuptools", version = "80.10.2", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version >= '3.12' and extra == 'extra-10-positronic-lerobot') or (extra == 'extra-10-positronic-lerobot' and extra == 'extra-10-positronic-lerobot-0-3-3')" },
     { name = "setuptools", version = "82.0.0", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version >= '3.12' and extra == 'extra-10-positronic-lerobot-0-3-3') or (extra == 'extra-10-positronic-lerobot' and extra == 'extra-10-positronic-lerobot-0-3-3')" },
-    { name = "sympy", marker = "extra == 'extra-10-positronic-lerobot' or extra == 'extra-10-positronic-lerobot-0-3-3'" },
-    { name = "triton", marker = "(platform_machine == 'x86_64' and sys_platform == 'linux' and extra == 'extra-10-positronic-lerobot') or (platform_machine == 'x86_64' and sys_platform == 'linux' and extra == 'extra-10-positronic-lerobot-0-3-3') or (platform_machine != 'x86_64' and extra == 'extra-10-positronic-lerobot' and extra == 'extra-10-positronic-lerobot-0-3-3') or (sys_platform != 'linux' and extra == 'extra-10-positronic-lerobot' and extra == 'extra-10-positronic-lerobot-0-3-3')" },
-    { name = "typing-extensions", marker = "extra == 'extra-10-positronic-lerobot' or extra == 'extra-10-positronic-lerobot-0-3-3'" },
+    { name = "sympy" },
+    { name = "triton", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
+    { name = "typing-extensions" },
 ]
 wheels = [
     { url = "https://files.pythonhosted.org/packages/11/56/2eae3494e3d375533034a8e8cf0ba163363e996d85f0629441fa9d9843fe/torch-2.7.1-cp311-cp311-manylinux_2_28_aarch64.whl", hash = "sha256:236f501f2e383f1cb861337bdf057712182f910f10aeaf509065d54d339e49b2", size = 99093039, upload-time = "2025-06-04T17:39:06.963Z" },
@@ -5587,9 +5596,9 @@ name = "torchvision"
 version = "0.22.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "numpy", marker = "extra == 'extra-10-positronic-lerobot' or extra == 'extra-10-positronic-lerobot-0-3-3'" },
-    { name = "pillow", marker = "extra == 'extra-10-positronic-lerobot' or extra == 'extra-10-positronic-lerobot-0-3-3'" },
-    { name = "torch", marker = "extra == 'extra-10-positronic-lerobot' or extra == 'extra-10-positronic-lerobot-0-3-3'" },
+    { name = "numpy" },
+    { name = "pillow" },
+    { name = "torch" },
 ]
 wheels = [
     { url = "https://files.pythonhosted.org/packages/f6/00/bdab236ef19da050290abc2b5203ff9945c84a1f2c7aab73e8e9c8c85669/torchvision-0.22.1-cp311-cp311-macosx_11_0_arm64.whl", hash = "sha256:4addf626e2b57fc22fd6d329cf1346d474497672e6af8383b7b5b636fba94a53", size = 1947827, upload-time = "2025-06-04T17:43:10.84Z" },
@@ -5704,10 +5713,10 @@ name = "typer"
 version = "0.24.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "annotated-doc" },
-    { name = "click" },
-    { name = "rich" },
-    { name = "shellingham" },
+    { name = "annotated-doc", marker = "extra == 'extra-10-positronic-lerobot-0-3-3' or extra != 'extra-10-positronic-lerobot'" },
+    { name = "click", marker = "extra == 'extra-10-positronic-lerobot-0-3-3' or extra != 'extra-10-positronic-lerobot'" },
+    { name = "rich", marker = "extra == 'extra-10-positronic-lerobot-0-3-3' or extra != 'extra-10-positronic-lerobot'" },
+    { name = "shellingham", marker = "extra == 'extra-10-positronic-lerobot-0-3-3' or extra != 'extra-10-positronic-lerobot'" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/f5/24/cb09efec5cc954f7f9b930bf8279447d24618bb6758d4f6adf2574c41780/typer-0.24.1.tar.gz", hash = "sha256:e39b4732d65fbdcde189ae76cf7cd48aeae72919dea1fdfc16593be016256b45", size = 118613, upload-time = "2026-02-21T16:54:40.609Z" }
 wheels = [
@@ -5719,7 +5728,7 @@ name = "typer-slim"
 version = "0.24.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "typer" },
+    { name = "typer", marker = "extra == 'extra-10-positronic-lerobot-0-3-3' or extra != 'extra-10-positronic-lerobot'" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/a7/a7/e6aecc4b4eb59598829a3b5076a93aff291b4fdaa2ded25efc4e1f4d219c/typer_slim-0.24.0.tar.gz", hash = "sha256:f0ed36127183f52ae6ced2ecb2521789995992c521a46083bfcdbb652d22ad34", size = 4776, upload-time = "2026-02-16T22:08:51.2Z" }
 wheels = [
@@ -5740,8 +5749,8 @@ name = "typing-inspect"
 version = "0.9.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "mypy-extensions", marker = "extra == 'extra-10-positronic-lerobot' or extra == 'extra-10-positronic-lerobot-0-3-3'" },
-    { name = "typing-extensions", marker = "extra == 'extra-10-positronic-lerobot' or extra == 'extra-10-positronic-lerobot-0-3-3'" },
+    { name = "mypy-extensions" },
+    { name = "typing-extensions" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/dc/74/1789779d91f1961fa9438e9a8710cdae6bd138c80d7303996933d117264a/typing_inspect-0.9.0.tar.gz", hash = "sha256:b23fc42ff6f6ef6954e4852c1fb512cdd18dbea03134f91f856a95ccc9461f78", size = 13825, upload-time = "2023-05-24T20:25:47.612Z" }
 wheels = [
@@ -6231,9 +6240,9 @@ name = "yarl"
 version = "1.22.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "idna", marker = "extra == 'extra-10-positronic-lerobot' or extra == 'extra-10-positronic-lerobot-0-3-3'" },
-    { name = "multidict", marker = "extra == 'extra-10-positronic-lerobot' or extra == 'extra-10-positronic-lerobot-0-3-3'" },
-    { name = "propcache", marker = "extra == 'extra-10-positronic-lerobot' or extra == 'extra-10-positronic-lerobot-0-3-3'" },
+    { name = "idna" },
+    { name = "multidict" },
+    { name = "propcache" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/57/63/0c6ebca57330cd313f6102b16dd57ffaf3ec4c83403dcb45dbd15c6f3ea1/yarl-1.22.0.tar.gz", hash = "sha256:bebf8557577d4401ba8bd9ff33906f1376c877aa78d1fe216ad01b4d6745af71", size = 187169, upload-time = "2025-10-06T14:12:55.963Z" }
 wheels = [

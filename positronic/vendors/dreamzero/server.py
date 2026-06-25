@@ -13,21 +13,37 @@ import configuronic as cfn
 import numpy as np
 import pos3
 from fastapi import WebSocket
+from huggingface_hub import snapshot_download
 
 from positronic.offboard.server_utils import monitor_async_task, wait_for_subprocess_ready
 from positronic.offboard.vendor_server import VendorServer
 from positronic.policy import Codec, Policy, Session
+from positronic.utils.checkpoints import get_latest_checkpoint
 from positronic.utils.logging import init_logging
 from positronic.utils.serialization import deserialize, serialize
 from positronic.vendors.dreamzero import codecs
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_HF_REPO = 'GEAR-Dreams/DreamZero-DROID'
-
 
 def _dreamzero_root():
     return Path(__file__).parents[4] / 'dreamzero'
+
+
+def _download_checkpoint(model_path: str) -> Path:
+    """Local checkpoint dir for ``model_path``: an ``s3://`` URL or local path via pos3, else a HuggingFace repo."""
+    if model_path.startswith('s3://') or os.path.exists(model_path):
+        return pos3.download(model_path)
+    return Path(snapshot_download(model_path))
+
+
+def _resolve_checkpoint_path(model_path: str) -> str:
+    """Latest ``checkpoint-N`` under an ``s3://`` run directory; a pinned checkpoint dir, a HuggingFace repo,
+    or a local path is returned unchanged."""
+    last = model_path.rstrip('/').split('/')[-1]
+    if not model_path.startswith('s3://') or last.startswith('checkpoint-'):
+        return model_path
+    return f'{model_path.rstrip("/")}/{get_latest_checkpoint(model_path, "checkpoint-")}'
 
 
 # TODO: Extract RoboarenaClient to positronic/offboard/ — roboarena is a cross-vendor
@@ -217,7 +233,7 @@ class InferenceServer(VendorServer):
         super().__init__(
             codec=codec, host=host, port=port, recording_dir=recording_dir, idle_timeout_min=idle_timeout_min
         )
-        self.model_path = model_path
+        self.model_path = _resolve_checkpoint_path(model_path)
         self.dreamzero_venv = Path(dreamzero_venv)
         self.backbone = backbone
         self.num_gpus = num_gpus
@@ -231,7 +247,7 @@ class InferenceServer(VendorServer):
             'port': port,
             'type': 'dreamzero',
             'backbone': backbone,
-            'model_path': model_path,
+            'model_path': self.model_path,
             'num_gpus': num_gpus,
         }
 
@@ -245,7 +261,7 @@ class InferenceServer(VendorServer):
             if self.subprocess is not None:
                 return self.subprocess, {}
 
-            download_task = asyncio.create_task(asyncio.to_thread(pos3.download, self.model_path))
+            download_task = asyncio.create_task(asyncio.to_thread(_download_checkpoint, self.model_path))
             await monitor_async_task(
                 download_task, description='Downloading DreamZero checkpoint', on_progress=send_progress
             )
@@ -278,7 +294,6 @@ class InferenceServer(VendorServer):
 
 @cfn.config(
     codec=codecs.joints,
-    model_path=DEFAULT_HF_REPO,
     dreamzero_venv='/.venv/',
     backbone='wan2.1',
     num_gpus=1,
@@ -313,6 +328,11 @@ def server(
         ).serve()
 
 
+# Public pretrained DROID checkpoint: wan2.1 backbone (the base server default) paired with the DROID
+# codec that feeds its required 320x180 frames.
+droid = server.override(model_path='GEAR-Dreams/DreamZero-DROID', codec=codecs.droid)
+
+
 if __name__ == '__main__':
     init_logging()
-    cfn.cli(server)
+    cfn.cli({'serve': server, 'droid': droid})
