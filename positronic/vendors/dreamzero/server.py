@@ -32,8 +32,9 @@ def _dreamzero_root():
 
 def _download_checkpoint(model_path: str) -> Path:
     """Local checkpoint dir for ``model_path``: an ``s3://`` URL or local path via pos3, else a HuggingFace repo."""
-    if model_path.startswith('s3://') or os.path.exists(model_path):
-        return pos3.download(model_path)
+    local = os.path.expanduser(model_path)
+    if model_path.startswith('s3://') or os.path.exists(local):
+        return pos3.download(local)
     return Path(snapshot_download(model_path))
 
 
