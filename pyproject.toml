@@ -25,7 +25,6 @@ dependencies = [
     "jinja2",
     "fire",
     "httpx",
-    "huggingface-hub",
     "msgpack",
     "mujoco",
     "numpy",
@@ -88,6 +87,9 @@ molmoact2 = [
     "requests",
     "protobuf",
     "sentencepiece",
+]
+dreamzero = [
+    "huggingface-hub",
 ]
 lance = [
     "pylance",

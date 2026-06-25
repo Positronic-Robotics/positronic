@@ -67,7 +67,8 @@ case "$VENDOR" in
   # openpi.server imports `openpi_client` at module top → needs --extra openpi
   openpi)        IMAGE="positro/openpi:${IMAGE_TAG}";     EXTRA="--extra openpi " ;;
   gr00t)         IMAGE="positro/gr00t:${IMAGE_TAG}";      EXTRA="" ;;
-  dreamzero)     IMAGE="positro/dreamzero:${IMAGE_TAG}";  EXTRA="" ;;
+  # dreamzero.server imports `huggingface_hub` at module top → needs --extra dreamzero
+  dreamzero)     IMAGE="positro/dreamzero:${IMAGE_TAG}";  EXTRA="--extra dreamzero " ;;
   molmoact2)     IMAGE="positro/positronic:${IMAGE_TAG}"; EXTRA="--extra molmoact2 " ;;
   *)
     echo "Unknown vendor: '$VENDOR'. Supported: lerobot_0_3_3 | lerobot | openpi | gr00t | dreamzero | molmoact2" >&2

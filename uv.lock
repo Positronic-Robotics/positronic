@@ -4219,6 +4219,10 @@ dev = [
     { name = "rerun-sdk" },
     { name = "ruff" },
 ]
+dreamzero = [
+    { name = "huggingface-hub", version = "0.35.3", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-10-positronic-lerobot' or (extra == 'extra-10-positronic-lerobot-0-3-3' and extra == 'extra-10-positronic-molmoact2')" },
+    { name = "huggingface-hub", version = "1.19.0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-10-positronic-lerobot-0-3-3' or extra == 'extra-10-positronic-molmoact2' or extra != 'extra-10-positronic-lerobot'" },
+]
 hardware = [
     { name = "feetech-servo-sdk" },
     { name = "linuxpy" },
@@ -4272,6 +4276,7 @@ requires-dist = [
     { name = "feetech-servo-sdk", marker = "extra == 'hardware'" },
     { name = "fire" },
     { name = "httpx" },
+    { name = "huggingface-hub", marker = "extra == 'dreamzero'" },
     { name = "ipython", marker = "extra == 'dev'" },
     { name = "jinja2" },
     { name = "jupyter", marker = "extra == 'dev'" },
@@ -4325,7 +4330,7 @@ requires-dist = [
     { name = "websockets", specifier = ">=15.0.1" },
     { name = "zmq" },
 ]
-provides-extras = ["openpi", "hardware", "lerobot-0-3-3", "lerobot", "molmoact2", "lance", "dev"]
+provides-extras = ["openpi", "hardware", "lerobot-0-3-3", "lerobot", "molmoact2", "dreamzero", "lance", "dev"]
 
 [[package]]
 name = "positronic-franka"
