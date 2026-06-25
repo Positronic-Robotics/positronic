@@ -43,8 +43,16 @@ class RemoteEnvControlSystem(pimm.ControlSystem):
         self._active = False
         # The latest env frame (``obs`` + ``control_dt``), refreshed by ``reset`` and each ``step``.
         self._frame: dict[str, Any] | None = None
+        # The scene meta the env reports at ``reset`` (suite, task, …) — constant for the trial; ``step`` omits it.
+        self._meta: dict[str, Any] | None = None
         # Set by ``reset``; the run loop publishes frame-0 (instead of stepping) on its next turn and clears it.
         self._reset_pending = False
+
+    @property
+    def meta(self) -> dict[str, Any]:
+        """The env's scene meta from the latest ``reset`` (suite, task, …); a client reads its task from here."""
+        assert self._meta is not None, 'meta read before the first reset'
+        return self._meta
 
     def reset(self, seed: int | None = None) -> None:
         """Re-randomize the env from ``seed`` and arm frame-0 publication for the next turn (the ``RUN`` hook).
@@ -64,6 +72,7 @@ class RemoteEnvControlSystem(pimm.ControlSystem):
         for _, receiver in self.commands.items():
             receiver.read()
         self._frame = self._conn.reset(self._adapter.reset_token(seed))
+        self._meta = self._frame['meta']
         self._reset_pending = True
         self._active = True
         # Clear any terminal the previous trial left on the wire: the env can reach ``done`` while the proxy
@@ -88,7 +97,7 @@ class RemoteEnvControlSystem(pimm.ControlSystem):
                     # The reset is this turn's step: publish the env's frame-0 (no step) and clear the prior
                     # terminal, so the recorder samples it before any step advances the env.
                     self._reset_pending = False
-                    self.robot_meta.emit(self._frame['meta'])
+                    self.robot_meta.emit(self._meta)
                     self._emit_payload(self._frame['obs'])
                     self.done.emit({})
                 elif self._active:

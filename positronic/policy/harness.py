@@ -135,13 +135,6 @@ class Harness(pimm.ControlSystem):
         meta = dict(self._embodiment.static_meta)
         meta.update(self._static_meta)
         meta.update(self.robot_meta_in.value)
-        if self._task is not None:
-            # The eval-identity block: which eval produced this episode.
-            # TODO: also stamp the eval's catalog name and its resolved config — both need
-            # configuronic introspection that does not exist yet.
-            meta['eval.universe'] = 'sim' if self._embodiment.simulated else 'real'
-            meta['eval.embodiment'] = self._embodiment.descriptor
-            meta['eval.timeout'] = self._task.timeout
         # ``policy.meta`` is the static baseline (the wrapped policy aggregates model +
         # codec meta); the session overlays per-episode specifics (e.g. the sampled
         # sub-policy) and wins on conflict.
@@ -149,6 +142,15 @@ class Harness(pimm.ControlSystem):
         for k, v in flatten_dict(session_meta).items():
             meta[f'inference.policy.{k}'] = v
         meta.update(context)
+        if self._task is not None:
+            # The eval-identity block: which eval produced this episode. Stamped after ``context`` so the
+            # eval's own values win — the instruction in particular is the task's, not an operator annotation.
+            # TODO: also stamp the eval's catalog name and its resolved config — both need configuronic
+            # introspection that does not exist yet.
+            meta['task'] = self._task.instruction
+            meta['eval.universe'] = 'sim' if self._embodiment.simulated else 'real'
+            meta['eval.embodiment'] = self._embodiment.descriptor
+            meta['eval.timeout'] = self._task.timeout
         return meta
 
     def _home(self, clock):
@@ -211,8 +213,6 @@ class Harness(pimm.ControlSystem):
         session has no deadline and ends only on a directive.
         """
         self.context = context
-        if self._task is not None:
-            self.context = {**self.context, 'task': self._task.instruction}
         # ``inference_latency`` rides the RUN context (and lands in episode meta with it).
         self._inference_latency = self.context.get('inference_latency', False)
         self._session = self.policy.new_session(self.context)
@@ -282,6 +282,8 @@ class Harness(pimm.ControlSystem):
         inputs['wall_time_ns'] = time.time_ns()
         inputs['obs_time_ns'] = clock.now_ns()
         inputs.update(self.context)
+        if self._task is not None:
+            inputs['task'] = self._task.instruction  # the eval owns the instruction; it overrides any context key
         inputs['descriptor'] = self._descriptor  # last, so a context key can't shadow it
         return inputs
 
