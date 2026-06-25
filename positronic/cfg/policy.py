@@ -112,8 +112,9 @@ def modal_headers(id_env: str, secret_env: str):
     return {'Modal-Key': key, 'Modal-Secret': secret}
 
 
-# Our own Nebius endpoints answer plain HTTP on :8000 and validate the bearer token in-process.
-# Front them with TLS instead by adding --policy.secure=True --policy.port=443.
+# Our own Nebius endpoints are bare-IP plain HTTP on :8000 (Nebius serves no TLS), so the bearer token
+# rides the client-to-endpoint path in cleartext and is capturable there. Harden by fronting the endpoint
+# with a TLS terminator and adding --policy.secure=True --policy.port=443.
 secure_remote = remote.override(headers=bearer_headers)
 
 # Modal fronts every endpoint with TLS on :443, gated on its proxy key/secret pair.
