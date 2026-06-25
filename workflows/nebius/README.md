@@ -302,12 +302,16 @@ uv run positronic-inference sim \
   --output_dir=.data/inference/<run-name>/
 ```
 
-Rotate the token by adding a new primary version (clients re-read it on their next run):
+Rotate the token by adding a new primary version:
 
 ```bash
 nebius mysterybox secret-version create --parent-id "$SECRET_ID" --set-primary \
   --payload "$(jq -nc --arg v "$(openssl rand -hex 32)" '[{key:"AUTH_TOKEN",string_value:$v}]')"
 ```
+
+Clients re-read the secret on their next run, but a running endpoint keeps validating the token it read
+at container start. Re-run `serve.sh` for each live endpoint after rotating, or the new clients hit
+401/1008 against the old token.
 
 ## What changed vs. running on a VM
 
