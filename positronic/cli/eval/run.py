@@ -10,6 +10,7 @@ import pos3
 
 import pimm
 import positronic.cfg.policy as policy_cfg
+import positronic.cfg.wrappers as wrappers_cfg
 from positronic import utils, wire
 from positronic.cfg.eval import placeholder
 from positronic.dataset.ds_writer_agent import TimeMode
@@ -138,8 +139,18 @@ def main(
             world.run([harness, *foreground], [*producers, ds_agent, gui])
 
 
-@cfn.config(eval=placeholder, policy=policy_cfg.placeholder, trial_count=1, show_gui=False, wrap=default_wrappers)
-def run(eval: Eval, policy, trial_count, show_gui, output_dir=None, inference_latency=False, wrap=default_wrappers):
+@cfn.config(
+    eval=placeholder, policy=policy_cfg.placeholder, trial_count=1, show_gui=False, wrap=wrappers_cfg.default_wrappers
+)
+def run(
+    eval: Eval,
+    policy,
+    trial_count,
+    show_gui,
+    output_dir=None,
+    inference_latency=False,
+    wrap=wrappers_cfg.default_wrappers,
+):
     """Run a selected eval (embodiment + task) through the shared inference harness."""
     # The trial plan: one RUN context per trial, consumed by the self-driving Harness. Per-trial seeds
     # are known upfront — ``--eval.seed`` + trial index, or an independent random draw per trial when

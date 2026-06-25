@@ -1,10 +1,17 @@
 import configuronic as cfn
 
 from positronic.policy.wrappers import ChunkedSchedule, ErrorRecovery, TemporalFrameStack
+from positronic.policy.wrappers import default_wrappers as _default_wrappers
 
 chunked_schedule = cfn.Config(ChunkedSchedule)
 error_recovery = cfn.Config(ErrorRecovery)
 temporal_frame_stack = cfn.Config(TemporalFrameStack)
+
+
+@cfn.config()
+def default_wrappers():
+    """Eval ``wrap`` default: error recovery + chunked scheduling, no video frame stack."""
+    return _default_wrappers
 
 
 def _frame_offsets_sec(history_frames: int, stride: int, fps: float) -> tuple[float, ...]:
