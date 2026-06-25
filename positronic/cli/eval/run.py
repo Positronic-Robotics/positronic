@@ -10,6 +10,7 @@ import pos3
 
 import pimm
 import positronic.cfg.policy as policy_cfg
+import positronic.cfg.wrappers as wrappers_cfg
 from positronic import utils, wire
 from positronic.cfg.eval import placeholder
 from positronic.dataset.ds_writer_agent import TimeMode
@@ -17,7 +18,7 @@ from positronic.dataset.local_dataset import LocalDatasetWriter, load_all_datase
 from positronic.eval import Embodiment, Eval, Task
 from positronic.gui.dpg import DearpyguiUi
 from positronic.policy.base import SampledPolicy
-from positronic.policy.harness import Harness, default_wrappers
+from positronic.policy.harness import Harness
 
 logger = logging.getLogger(__name__)
 
@@ -68,7 +69,8 @@ def main(
     task: Task | None = None,
     trials: list[dict] | None = None,
     show_gui: bool = False,
-    wrap=default_wrappers,
+    *,
+    wrap,
 ):
     """Run inference for an embodiment, real or simulated.
 
@@ -138,8 +140,10 @@ def main(
             world.run([harness, *foreground], [*producers, ds_agent, gui])
 
 
-@cfn.config(eval=placeholder, policy=policy_cfg.placeholder, trial_count=1, show_gui=False, wrap=default_wrappers)
-def run(eval: Eval, policy, trial_count, show_gui, output_dir=None, inference_latency=False, wrap=default_wrappers):
+@cfn.config(
+    eval=placeholder, policy=policy_cfg.placeholder, trial_count=1, show_gui=False, wrap=wrappers_cfg.default_wrappers
+)
+def run(eval: Eval, policy, trial_count, show_gui, output_dir=None, inference_latency=False, *, wrap):
     """Run a selected eval (embodiment + task) through the shared inference harness."""
     # The trial plan: one RUN context per trial, consumed by the self-driving Harness. Per-trial seeds
     # are known upfront — ``--eval.seed`` + trial index, or an independent random draw per trial when

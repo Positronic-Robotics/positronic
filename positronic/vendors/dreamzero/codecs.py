@@ -14,7 +14,6 @@ from positronic.dataset.transforms import image
 from positronic.dataset.transforms.episode import Derive, Get
 from positronic.drivers.roboarm import command
 from positronic.policy.codec import Codec, lerobot_action, lerobot_image, lerobot_state
-from positronic.policy.wrappers import ChunkedSchedule, ErrorRecovery
 
 IMAGE_WIDTH = 320
 IMAGE_HEIGHT = 176
@@ -246,19 +245,7 @@ joints_ik = codecs.compose.override(obs=dreamzero_obs, action=_ik_dreamzero_acti
 joints_ik_sim = joints_ik.override(**{'action.solver': 'lm'})
 
 
-# offsets_sec: 4 frames spanning the just-executed 24-step chunk at 15 fps, matching DreamZero's
-# reference eval client schedule (frame indices -23, -16, -8, 0).
-_frame_stack = wrappers.temporal_frame_stack.override(
-    image_keys=('image.wrist', 'image.exterior'), offsets_sec=(-23 / 15, -16 / 15, -8 / 15, 0.0)
-)
-
-
-@cfn.config(frame_stack=_frame_stack)
-def dreamzero_wrappers(frame_stack):
-    """Eval ``wrap`` for DreamZero: error recovery, AR video context, chunked scheduling.
-
-    The frame stack sits outside the scheduler so it records the wrist/exterior cameras every control
-    tick and substitutes a stack sampled at the trained cadence; pair it with the DreamZero codec's
-    full-chunk ``horizon``.
-    """
-    return ErrorRecovery() | frame_stack | ChunkedSchedule()
+# DreamZero AR eval schedule: 24-step action horizon → 23-frame look-back (ACTION_HORIZON - 1), sampled
+# at stride 8 from the current frame with the oldest pinned to the window start → trained offsets
+# -23, -16, -8, 0 (test_client_AR.py RELATIVE_OFFSETS; -23 not -24 keeps the oldest inside the window).
+dreamzero_wrappers = wrappers.video_context_wrappers.override(history_frames=23, stride=8)

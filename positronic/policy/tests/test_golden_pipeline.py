@@ -43,6 +43,7 @@ from positronic.geom import Rotation, Transform3D
 from positronic.policy.base import Policy, Session
 from positronic.policy.codec import ActionTiming
 from positronic.policy.harness import Directive, Harness
+from positronic.policy.wrappers import ChunkedSchedule, ErrorRecovery
 from positronic.tests.testing_coutils import ManualDriver, drive_scheduler
 
 GOLDEN_FILE = Path(__file__).parent / 'golden_pipeline.json.gz'
@@ -197,7 +198,7 @@ def _run_pipeline(tmp_path: Path) -> dict:
             static_meta=dict(ROBOT_STATIC_META),
             meta_source=robot.robot_meta,
         )
-        harness = Harness(policy, embodiment)
+        harness = Harness(policy, embodiment, wrap=ErrorRecovery() | ChunkedSchedule())
         ds_agent = wire.wire_embodiment(world, harness, embodiment, ds_writer, TimeMode.MESSAGE)
         world.connect(harness.ds_command, ds_agent.command)
         directive_em = world.pair(harness.directive)
