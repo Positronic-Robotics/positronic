@@ -25,7 +25,6 @@ dependencies = [
     "jinja2",
     "fire",
     "httpx",
-    "huggingface-hub",
     "msgpack",
     "mujoco",
     "numpy",
@@ -77,6 +76,9 @@ lerobot_0_3_3 = [
 lerobot = [
     "lerobot[smolvla]==0.4.3",
     "torch",
+]
+dreamzero = [
+    "huggingface-hub",
 ]
 lance = [
     "pylance",
