@@ -12,8 +12,7 @@ no convert or train step.
 
 ## Hardware
 
-A ~5B-parameter model loaded in `bfloat16` (~10 GB of weights), so plan for a **16 GB+ GPU** — the 12 GB
-desktop context is too small. First start downloads the checkpoint from HuggingFace.
+A ~5B-parameter model loaded in `bfloat16` (~10 GB of weights), so plan for a **16 GB+ GPU**. First start downloads the checkpoint from HuggingFace.
 
 ## Serve
 
