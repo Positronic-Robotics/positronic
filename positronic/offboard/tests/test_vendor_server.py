@@ -231,3 +231,9 @@ def test_auth_accepts_valid_token(authed_server):
         assert session.metadata['type'] == 'stub'
     finally:
         session.close()
+
+
+def test_empty_auth_token_fails_closed(monkeypatch):
+    monkeypatch.setenv('AUTH_TOKEN', '')
+    with pytest.raises(ValueError, match='AUTH_TOKEN is set but empty'):
+        _StubVendorServer(host='localhost', port=find_free_port())

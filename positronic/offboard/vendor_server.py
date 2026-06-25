@@ -149,9 +149,12 @@ class VendorServer(ABC):
         self.metadata: dict[str, Any] = {}
 
         # Bearer token gating every endpoint, injected as the container's AUTH_TOKEN env var by
-        # serve.sh. Absent -> the server is open. Validated in-process because Nebius `--auth token`
+        # serve.sh. Unset -> the server is open; set-but-empty means a misconfigured secret, so fail
+        # closed rather than silently serve open. Validated in-process because Nebius `--auth token`
         # gates HTTP but does not proxy the inference WebSocket.
-        self._auth_token = os.environ.get('AUTH_TOKEN') or None
+        self._auth_token = os.environ.get('AUTH_TOKEN')
+        if self._auth_token == '':
+            raise ValueError('AUTH_TOKEN is set but empty; unset it for an open endpoint or inject a real token')
 
         self.app = FastAPI()
         http_auth = [Depends(self._require_http_auth)]
