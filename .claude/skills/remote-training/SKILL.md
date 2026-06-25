@@ -171,8 +171,9 @@ The first job after a dependency change pays the full `uv`/HF cold-download
 Endpoint on H100 port 8000, blocks until a public IP is allocated, and prints a
 banner containing `Endpoint URL:  http://<IP>` (the endpoint IP), the endpoint
 ID/name, and the teardown command. The container then takes ~10–15 min more
-to `uv sync` and load the model. Endpoints are authenticated by default
-(`NEBIUS_AUTH_TOKEN_SECRET`); callers send `Authorization: Bearer <token>`, and
+to `uv sync` and load the model. Endpoints are authenticated by default — the
+server validates a bearer token (`NEBIUS_AUTH_TOKEN_SECRET`, injected as the
+container's `AUTH_TOKEN`); callers send `Authorization: Bearer <token>`, and
 `NEBIUS_AUTH_TOKEN_SECRET=` creates an open endpoint.
 
 ```bash

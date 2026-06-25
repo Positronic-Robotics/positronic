@@ -27,8 +27,9 @@ read from your local `~/.aws/credentials`; the WandB key from `docker/.env.wandb
 three are single-key payloads consumed via `--env-secret`. The fourth is a two-key payload
 consumed by `--volume` for Mountpoint-S3 authentication (Nebius requires the keys to be named
 `S3_ACCESS_KEY_ID` / `S3_SECRET_ACCESS_KEY`). The fifth holds the bearer token gating served
-endpoints — `serve.sh` authenticates by default and reads it via `--token-secret`, so its
-payload key must be `AUTH_TOKEN`. The wandb secret is optional — skip it if you don't use
+endpoints — `serve.sh` authenticates by default and injects it as the container's `AUTH_TOKEN`
+env var (via `--env-secret`), where the server validates it, so its payload key must be
+`AUTH_TOKEN`. The wandb secret is optional — skip it if you don't use
 Weights & Biases.
 
 ```bash
@@ -216,7 +217,7 @@ port 8000. Endpoints don't have managed DNS yet, so the IP is the contact addres
 across endpoint stop/start, but new endpoints get new IPs. Supported vendors:
 `lerobot_0_3_3`, `lerobot`, `openpi`, `gr00t`.
 
-Endpoints are **authenticated by default** — Nebius gates them behind a bearer token, so the
+Endpoints are **authenticated by default** — the server validates a bearer token, so the
 sanity check and inference below send `Authorization: Bearer <token>` (loaded under
 [Authenticated inference](#authenticated-inference)). Pass `NEBIUS_AUTH_TOKEN_SECRET=` to
 `serve.sh` for an open endpoint.
@@ -290,12 +291,12 @@ the host:
 
 | Policy config | Target endpoint | Header sent | Environment variable |
 |---|---|---|---|
-| `.secure_remote` | Our own Nebius endpoint served with `--auth token` | `Authorization: Bearer <token>` | `POSITRONIC_INFERENCE_TOKEN` |
+| `.secure_remote` | Our own Nebius endpoint (the server validates the token) | `Authorization: Bearer <token>` | `POSITRONIC_INFERENCE_TOKEN` |
 | `.modal_remote` | A Modal endpoint (e.g. the Gyros policy servers under Runway) | `Modal-Key` / `Modal-Secret` | `MODAL_PROXY_TOKEN_ID`, `MODAL_PROXY_TOKEN_SECRET` |
 
 `.secure_remote` keeps the plain-HTTP `:8000` contact address of a Nebius endpoint — the bearer
-token, enforced by the Nebius ingress before the request reaches the container, is the access
-control. `.modal_remote` defaults to TLS on `:443`, where Modal terminates and checks the proxy
+token, validated by the server in-process, is the access control. `.modal_remote` defaults to TLS
+on `:443`, where Modal terminates and checks the proxy
 pair. Both raise immediately if their environment variable is unset, rather than sending an
 unauthenticated request.
 
@@ -364,7 +365,7 @@ override them** with their own project + subnet IDs:
 | `NEBIUS_PARENT_ID` | `project-e00f38wexevrr52b8j` | Nebius project to create the job/endpoint in |
 | `NEBIUS_SUBNET_ID` | `vpcsubnet-e00pk1j1x6hjmr4m92` | VPC subnet for the compute instance |
 | `WANDB_SECRET` | `positronic-serverless-wandb-api-key` | MysteryBox secret name for the WandB key. Set empty (`WANDB_SECRET=`) to skip wandb entirely. |
-| `NEBIUS_AUTH_TOKEN_SECRET` | `positronic-serverless-inference-token` | `serve.sh` only. MysteryBox secret name (payload key `AUTH_TOKEN`) for `--auth token`; the endpoint rejects requests without `Authorization: Bearer <token>`. Set empty (`NEBIUS_AUTH_TOKEN_SECRET=`) for an open endpoint. See [Authenticated inference](#authenticated-inference). |
+| `NEBIUS_AUTH_TOKEN_SECRET` | `positronic-serverless-inference-token` | `serve.sh` only. MysteryBox secret name (payload key `AUTH_TOKEN`) injected as the container's `AUTH_TOKEN` env var; the server rejects requests without `Authorization: Bearer <token>`. Set empty (`NEBIUS_AUTH_TOKEN_SECRET=`) for an open endpoint. See [Authenticated inference](#authenticated-inference). |
 | `NEBIUS_CACHE_FS` | `computefilesystem-e00f6jyfr5wkawyrab` | Shared filesystem **ID** (not name — `--volume` rejects names) mounted RW at `/cache` for the `uv`/HF/openpi caches (`UV_CACHE_DIR`, `HF_HOME`, `OPENPI_DATA_HOME`). Not used by pos3. The default is Positronic-internal; external users must override with their own filesystem ID. |
 | `NEBIUS_IMAGE_TAG` | `latest` | Docker image tag the job/endpoint pulls (`positro/<image>:<tag>`). `cd docker && make push-* IMAGE_TAG=<branch>` pushes that tag unconditionally; set `NEBIUS_IMAGE_TAG=<branch>` to run a branch build remotely without clobbering `:latest`. `make push-*` only updates `:latest` when run with `CI` set. Note `convert.sh openpi` chains a stats job on the `positro/openpi` image, so with `NEBIUS_IMAGE_TAG=<branch>` you must also have pushed `positro/openpi:<branch>` (not just `positro/positronic:<branch>`); otherwise leave `NEBIUS_IMAGE_TAG` unset so stats uses `:latest`. |
 
