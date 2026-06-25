@@ -1,7 +1,5 @@
 # Contributor behavior
 - Don't restore code that you wrote and I deleted
-- Don't make commits or git changes unprompted; an invoked PR workflow skill (e.g. `/polish`, `/push-pr`)
-  authorizes its commits and pushes
 - Don't hide errors with try-catch blocks; let failures surface until asked otherwise
 - Stay scoped: no features beyond the request. Structure of the code you touch is governed by Design
   discipline below — bringing it to the end state is in scope, refactoring unrelated code is not
@@ -62,7 +60,8 @@
 - Comments wrap at 120 columns, same as code
 
 # Testing
-- Don't add new test files unless explicitly asked
+- Prefer few test files: add cases to the existing test file for the functionality under test; create a new
+  test file only when none fits — don't grow the file count by default
 
 # Commit messages
 - Short, imperative sentences (e.g., "Fix wrong type", not "Fixed wrong type")
