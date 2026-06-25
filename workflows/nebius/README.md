@@ -285,31 +285,10 @@ later), use `nebius ai endpoint stop <id>` directly — `start` resumes it.
 
 ## Authenticated inference
 
-`serve.sh` authenticates endpoints by default. Two policy configs send the matching auth header,
-each reading the credential from the environment — so the only argument you pass at the CLI is
-the host:
-
-| Policy config | Target endpoint | Header sent | Environment variable |
-|---|---|---|---|
-| `.secure_remote` | Our own Nebius endpoint (the server validates the token) | `Authorization: Bearer <token>` | `POSITRONIC_INFERENCE_TOKEN` |
-| `.modal_remote` | A Modal endpoint (e.g. the Gyros policy servers under Runway) | `Modal-Key` / `Modal-Secret` | `MODAL_PROXY_TOKEN_ID`, `MODAL_PROXY_TOKEN_SECRET` |
-
-`.secure_remote` keeps the plain-HTTP `:8000` contact address of a Nebius endpoint — the bearer
-token, validated by the server in-process, is the access control. `.modal_remote` defaults to TLS
-on `:443`, where Modal terminates and checks the proxy
-pair. Both raise immediately if their environment variable is unset, rather than sending an
-unauthenticated request.
-
-A bare value retrieved from MysteryBox comes wrapped in a small JSON envelope — extract the raw
-token with `--format json | jq -r '.data.string_value'` (not `--format text`, which returns the
-whole envelope).
-
-### Our own Nebius endpoint
-
-The token secret (`positronic-serverless-inference-token`) is created in
-[One-time setup](#one-time-setup) and `serve.sh` reads it by default, so serving needs no extra
-flags. Load the token into the environment, then point `.secure_remote` at the endpoint IP — the
-host is the only argument:
+`serve.sh` authenticates endpoints by default; the server validates `Authorization: Bearer <token>` on
+every request. `.secure_remote` attaches that header from `POSITRONIC_INFERENCE_TOKEN` (the only CLI
+argument is then the host) and raises immediately if the variable is unset. The token secret
+(`positronic-serverless-inference-token`) is created in [One-time setup](#one-time-setup); load it and run:
 
 ```bash
 SECRET_ID=$(nebius mysterybox secret list --parent-id "$PARENT_ID" --format json \
@@ -326,28 +305,8 @@ uv run positronic-inference sim \
 Rotate the token by adding a new primary version (clients re-read it on their next run):
 
 ```bash
-SECRET_ID=$(nebius mysterybox secret list --parent-id "$PARENT_ID" --format json \
-  | jq -r '.items[] | select(.metadata.name=="positronic-serverless-inference-token") | .metadata.id')
 nebius mysterybox secret-version create --parent-id "$SECRET_ID" --set-primary \
   --payload "$(jq -nc --arg v "$(openssl rand -hex 32)" '[{key:"AUTH_TOKEN",string_value:$v}]')"
-```
-
-### A Modal endpoint
-
-Modal fronts every endpoint with proxy auth on `:443`. Load the proxy token pair from the Runway
-MysteryBox secret (`runway-modal-proxy`), then point `.modal_remote` at the `*.modal.run` host —
-no `--policy.port` or `--policy.secure` needed, those are baked in:
-
-```bash
-export MODAL_PROXY_TOKEN_ID=$(nebius mysterybox payload get-by-key \
-  --secret-id mbsec-e00zw9csj016v0t01h --key token-id --format json | jq -r '.data.string_value')
-export MODAL_PROXY_TOKEN_SECRET=$(nebius mysterybox payload get-by-key \
-  --secret-id mbsec-e00zw9csj016v0t01h --key token-secret --format json | jq -r '.data.string_value')
-
-uv run positronic-inference phail \
-  --policy=.modal_remote \
-  --policy.host=runway-pythagoras-dev--gyros-positronic-serve-2-gyrosserver-web.modal.run \
-  --output_dir=s3://runway/inference/phail/<DDMMYY>/rollouts/
 ```
 
 ## What changed vs. running on a VM
