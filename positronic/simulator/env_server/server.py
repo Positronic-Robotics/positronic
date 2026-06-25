@@ -80,6 +80,7 @@ class EnvServer:
         self._port = port
         self._server = None
         self._served = False
+        self._shutdown = False
 
     def _handle(self, connection: ServerConnection) -> None:
         # Reaching here means a client completed the websocket handshake: it is the one client this server
@@ -112,15 +113,22 @@ class EnvServer:
         # has been served.
         with serve(self._handle, self._host, self._port, max_size=None) as server:
             self._server = server
-            while not self._served:
+            # Time out ``accept`` so the loop periodically observes ``shutdown`` even with no client connecting —
+            # closing the listening socket from another thread does not reliably wake a blocking ``accept``.
+            server.socket.settimeout(0.5)
+            while not self._served and not self._shutdown:
                 try:
                     sock, addr = server.socket.accept()
+                except TimeoutError:
+                    continue
                 except OSError:
                     return  # ``shutdown`` closed the listening socket
+                sock.settimeout(None)  # the accepted socket runs the long-lived session in blocking mode
                 server.handler(sock, addr)
 
     def shutdown(self) -> None:
-        # Stop accepting (unblocking a pending ``accept``) and release the env.
+        # Stop accepting (the flag breaks the timed accept loop) and release the env.
+        self._shutdown = True
         if self._server is not None:
             self._server.shutdown()
         self._env.close()
