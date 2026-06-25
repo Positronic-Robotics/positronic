@@ -25,6 +25,7 @@ dependencies = [
     "jinja2",
     "fire",
     "httpx",
+    "huggingface-hub",
     "msgpack",
     "mujoco",
     "numpy",
