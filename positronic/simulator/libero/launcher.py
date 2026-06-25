@@ -51,27 +51,8 @@ def _ensure_libero_src() -> Path:
     return _LIBERO_SRC
 
 
-def _spawn(
-    suite: str, task_id: int, camera_resolution: int, control_mode: str, host: str, port: int
-) -> subprocess.Popen:
-    command = [
-        'uv',
-        'run',
-        '--no-project',
-        str(_ENV_SCRIPT),
-        '--host',
-        host,
-        '--port',
-        str(port),
-        '--suite',
-        suite,
-        '--task-id',
-        str(task_id),
-        '--camera-resolution',
-        str(camera_resolution),
-        '--control-mode',
-        control_mode,
-    ]
+def _spawn(host: str, port: int) -> subprocess.Popen:
+    command = ['uv', 'run', '--no-project', str(_ENV_SCRIPT), '--host', host, '--port', str(port)]
     # LIBERO writes a config of repo-relative asset paths into ``LIBERO_CONFIG_PATH`` on first import; pin it beside
     # the checkout so it can never go stale against a ``~/.libero`` from an earlier, differently-located clone.
     env = {
@@ -91,16 +72,16 @@ def _terminate(proc: subprocess.Popen) -> None:
 
 
 @contextmanager
-def serve_libero(
-    suite: str, task_id: int, camera_resolution: int, control_mode: str, host: str = 'localhost'
-) -> Iterator[tuple[str, int]]:
+def serve_libero(host: str = 'localhost') -> Iterator[tuple[str, int]]:
     """Run the LIBERO env-server subprocess for the body's lifetime, yielding its ``(host, port)``.
 
     The single owner of the subprocess: ``RemoteEnvControlSystem`` enters it to tie the subprocess to the World
     run, and a plain client (e.g. the e2e demo replay) enters it directly to talk over the socket without a World.
+    The task spec rides the reset token, so the subprocess needs only its address — it serves whatever task the
+    first reset asks for.
     """
     port = _free_port()
-    proc = _spawn(suite, task_id, camera_resolution, control_mode, host, port)
+    proc = _spawn(host, port)
     try:
         yield host, port
     finally:

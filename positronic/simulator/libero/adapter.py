@@ -36,8 +36,17 @@ def _wire_command(cmd: Any) -> dict[str, Any]:
 
 
 class LiberoAdapter(EnvAdapter):
-    def __init__(self, camera_dict: dict[str, str]):
+    def __init__(
+        self, camera_dict: dict[str, str], *, suite: str, task_id: int, camera_resolution: int, control_mode: str
+    ):
         self._camera_dict = camera_dict  # logical observation name -> the LIBERO obs image key
+        # The task spec the server builds its env from — shipped in every reset token (the server caches by it).
+        self._scene = {
+            'suite': suite,
+            'task_id': task_id,
+            'camera_resolution': camera_resolution,
+            'control_mode': control_mode,
+        }
         self._players: defaultdict[str, roboarm_command.TrajectoryPlayer] = defaultdict(
             roboarm_command.TrajectoryPlayer
         )
@@ -50,7 +59,8 @@ class LiberoAdapter(EnvAdapter):
         self._players = defaultdict(roboarm_command.TrajectoryPlayer)
         self._held = {}
         self._grip = 0.0
-        return seed if seed is not None else 0  # LIBERO selects a concrete init-state index
+        # The task spec the server builds from + the seed it selects an init-state with (``None`` -> index 0).
+        return {**self._scene, 'seed': seed if seed is not None else 0}
 
     def action(self, commands: dict[str, pimm.Message], now_ns: int) -> dict[str, Any]:
         for name, msg in commands.items():

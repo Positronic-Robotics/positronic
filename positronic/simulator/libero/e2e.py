@@ -48,8 +48,9 @@ def _compose_pose(obs: dict, delta: np.ndarray) -> np.ndarray:
     return np.concatenate([target_pos, (delta_rot @ cur_rot).reshape(9)])
 
 
-def _replay_episode(conn: EnvConnection, actions: np.ndarray, init_state: np.ndarray) -> bool:
-    obs = conn.reset(init_state)['obs']  # exact-state reset: start from the demo's own recorded scene
+def _replay_episode(conn: EnvConnection, actions: np.ndarray, init_state: np.ndarray, scene: dict) -> bool:
+    # Exact-state reset: the token carries the task spec plus the demo's own recorded full state to restore.
+    obs = conn.reset({**scene, 'state': init_state})['obs']
     for _ in range(_SETTLE_STEPS):
         obs = conn.step({'command': {'type': 'hold'}, 'grip': 0.0})['obs']
     success = False
@@ -74,12 +75,14 @@ def run_replay(
 ) -> float:
     """Replay every episode in ``fixture_path`` through the env server; return the success rate."""
     episodes = _load_fixture(fixture_path)
+    # The task spec rides every reset token now; the demo replay drives the ``ee``/OSC_POSE controller.
+    scene = {'suite': suite, 'task_id': task_id, 'camera_resolution': camera_resolution, 'control_mode': 'ee'}
     successes = 0
-    with serve_libero(suite, task_id, camera_resolution, 'ee') as (host, port):
+    with serve_libero() as (host, port):
         conn = EnvConnection(host, port)
         try:
             for i, (actions, init_state) in enumerate(episodes):
-                ok = _replay_episode(conn, actions, init_state)
+                ok = _replay_episode(conn, actions, init_state, scene)
                 successes += int(ok)
                 print(f'  episode {i}: {"success" if ok else "FAIL"} ({len(actions)} steps)')
         finally:

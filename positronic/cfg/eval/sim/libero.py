@@ -38,7 +38,10 @@ def _libero_eval(suite, task_id, timeout, camera_dict, camera_resolution, contro
     success is recomputable downstream; the live ``done`` flag also rides the trial's terminal.
     """
     proxy = RemoteEnvControlSystem(
-        LiberoAdapter(camera_dict), serve_libero(suite, task_id, camera_resolution, control_mode)
+        LiberoAdapter(
+            camera_dict, suite=suite, task_id=task_id, camera_resolution=camera_resolution, control_mode=control_mode
+        ),
+        serve_libero(),
     )
     observations = {
         'robot_state': Observation(proxy.observations['robot_state'], Serializers.robot_state),

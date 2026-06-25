@@ -54,6 +54,17 @@ _ATOL = 1e-9  # joint cells and FK are float64-exact, so the algebra inverts to 
 _OSC_ATOL = 1e-5  # robosuite mat2quat casts to float32, so the OSC orientation channel carries ~1e-6 error
 
 
+def _token(args, control_mode: str) -> dict:
+    """The reset token for ``control_mode`` on the CLI's task (seed 0); the env builds + caches from its spec."""
+    return {
+        'suite': args.suite,
+        'task_id': args.task_id,
+        'camera_resolution': args.camera_resolution,
+        'control_mode': control_mode,
+        'seed': 0,
+    }
+
+
 def _osc_goal(c) -> np.ndarray:  # the OSC goal pose packed into the [pos(3), R(9)] wire vector
     return np.concatenate([c.goal_pos, np.asarray(c.goal_ori).reshape(9)])
 
@@ -62,8 +73,8 @@ def _goal_qpos(c) -> np.ndarray:
     return np.asarray(c.goal_qpos)
 
 
-def _check_serve(env: LiberoEnv) -> None:
-    env.reset(0)
+def _check_serve(env: LiberoEnv, token: dict) -> None:
+    env.reset(token)
     out = None
     for _ in range(5):
         out = env.step({'command': {'type': 'hold'}, 'grip': 0.0})
@@ -71,10 +82,10 @@ def _check_serve(env: LiberoEnv) -> None:
     print('  serve smoke: OK (5 hold steps, obs keys present)')
 
 
-def _check_grip(env: LiberoEnv) -> None:
+def _check_grip(env: LiberoEnv, token: dict) -> None:
     """Drive the gripper to both stops and assert the observed ``grip`` reaches the [0, 1] closure extremes —
     the open command (0) settles near 0, the closed command (1) near 1."""
-    env.reset(0)
+    env.reset(token)
     out = None
     for _ in range(40):
         out = env.step({'command': {'type': 'hold'}, 'grip': 0.0})
@@ -85,11 +96,11 @@ def _check_grip(env: LiberoEnv) -> None:
     print('  grip normalization: OK (open < 0.05, closed > 0.95)')
 
 
-def _check_action_inverse(env: LiberoEnv, ctype: str, key: str, goal_payload, atol: float = _ATOL) -> None:
+def _check_action_inverse(env: LiberoEnv, token: dict, ctype: str, key: str, goal_payload, atol: float = _ATOL) -> None:
     """For ``_OSC_SAMPLES`` random actions: forward through the active controller's ``set_goal``, invert via
     ``_arm_action``, assert the recovered action matches. ``goal_payload`` reads the controller's resulting goal
     setpoint into the wire command field ``key``."""
-    env.reset(0)
+    env.reset(token)
     c = env._controller
     # Sync the controller's cached ee_pos/joint state to the live sim (a real ``step`` does this every turn), so
     # ``set_goal`` builds its goal from the same pose ``_arm_action`` reads back via ``_cur_pose``/``_cur_q``.
@@ -103,8 +114,8 @@ def _check_action_inverse(env: LiberoEnv, ctype: str, key: str, goal_payload, at
     print(f'  {ctype} inverse: OK ({_OSC_SAMPLES} random actions, atol {atol})')
 
 
-def _check_fk_identity(env: LiberoEnv) -> None:
-    env.reset(0)
+def _check_fk_identity(env: LiberoEnv, token: dict) -> None:
+    env.reset(token)
     pos_fk, rot_fk = env._fk(env._cur_q())
     pos_live, rot_live = env._cur_pose()
     assert np.allclose(pos_fk, pos_live, atol=_ATOL), f'fk pos {pos_fk} vs live {pos_live}'
@@ -112,8 +123,8 @@ def _check_fk_identity(env: LiberoEnv) -> None:
     print(f'  fk identity: OK (matches eef-site read, atol {_ATOL})')
 
 
-def _check_ik_roundtrip(env: LiberoEnv) -> None:
-    env.reset(0)
+def _check_ik_roundtrip(env: LiberoEnv, token: dict) -> None:
+    env.reset(token)
     n = len(env._qpos_idx)
     for _ in range(_IK_SAMPLES):
         target_pos, target_rot = env._fk(env._cur_q() + np.random.uniform(-0.1, 0.1, n))
@@ -133,24 +144,27 @@ def main() -> None:
     np.random.seed(0)
 
     print('ee / OSC_POSE')
-    ee = LiberoEnv(args.suite, args.task_id, args.camera_resolution, 'ee')
-    _check_serve(ee)
-    _check_grip(ee)
-    _check_action_inverse(ee, 'cartesian', 'pose', _osc_goal, atol=_OSC_ATOL)
-    _check_fk_identity(ee)
-    _check_ik_roundtrip(ee)
+    ee = LiberoEnv()
+    ee_token = _token(args, 'ee')
+    _check_serve(ee, ee_token)
+    _check_grip(ee, ee_token)
+    _check_action_inverse(ee, ee_token, 'cartesian', 'pose', _osc_goal, atol=_OSC_ATOL)
+    _check_fk_identity(ee, ee_token)
+    _check_ik_roundtrip(ee, ee_token)
     ee.close()
 
     print('joint / JOINT_POSITION')
-    jp = LiberoEnv(args.suite, args.task_id, args.camera_resolution, 'joint')
-    _check_action_inverse(jp, 'joint_pos', 'q', _goal_qpos)
+    jp = LiberoEnv()
+    _check_action_inverse(jp, _token(args, 'joint'), 'joint_pos', 'q', _goal_qpos)
     jp.close()
 
     print('joint_delta / JOINT_VELOCITY')
-    jv = LiberoEnv(args.suite, args.task_id, args.camera_resolution, 'joint_delta')
+    jv = LiberoEnv()
     # The wire ``dq`` is a per-step joint delta, so feed the controller's goal velocity as the delta it covers
     # over one control period; ``_arm_action`` divides by that period to recover the rate.
-    _check_action_inverse(jv, 'joint_vel', 'dq', lambda c: np.asarray(c.goal_vel) * jv._control_dt)
+    _check_action_inverse(
+        jv, _token(args, 'joint_delta'), 'joint_vel', 'dq', lambda c: np.asarray(c.goal_vel) * jv._control_dt
+    )
     jv.close()
 
     print('ALL CHECKS PASSED')

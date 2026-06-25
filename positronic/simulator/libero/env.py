@@ -21,7 +21,7 @@
 #     "pyyaml",
 # ]
 # ///
-"""LIBERO behind the env-server protocol: a standalone server for one LIBERO task in its own interpreter.
+"""LIBERO behind the env-server protocol: a standalone server for LIBERO tasks in its own interpreter.
 
 positronic is pinned ``>=3.11`` and LIBERO needs ``<=3.10``, so this never shares positronic's venv:
 ``uv run env.py`` reads the inline metadata above to build a 3.10 environment with LIBERO, and positronic
@@ -31,12 +31,13 @@ never ``positronic`` itself.
 
 The client-side ``LiberoAdapter`` forwards the held command (an absolute Cartesian pose, joint positions, or
 joint velocities); this server maps it into the active controller's action and speaks only LIBERO's raw gym
-payloads. The control mode picked at construction selects the controller LIBERO uses — ``OSC_POSE`` for
+payloads. The control mode in the reset token selects the controller LIBERO uses — ``OSC_POSE`` for
 Cartesian, ``JOINT_POSITION``/``JOINT_VELOCITY`` for joints — and any command is bridged into it: a Cartesian
 goal is solved to joints with damped-least-squares IK and a joint goal is turned into an OSC pose delta with
-forward kinematics, both on the MuJoCo site Jacobian OSC itself computes. Construction is fixed to one
-``(suite, task_id)`` — the eval is one task — and the per-trial seed selects a saved init-state and
-re-randomizes object positions.
+forward kinematics, both on the MuJoCo site Jacobian OSC itself computes. The reset token carries the task spec
+(suite, task_id, camera resolution, control mode) plus the per-trial seed; the env builds that task on the first
+reset and caches it, rebuilding only when the spec changes. The seed selects a saved init-state and re-randomizes
+object positions.
 """
 
 import argparse
@@ -69,25 +70,26 @@ def _unpack_pose(vec: Any) -> tuple[np.ndarray, np.ndarray]:
 
 
 class LiberoEnv(EnvProtocol):
-    """One LIBERO task behind the gym-style ``reset``/``step``/``close`` the env server serves.
+    """A LIBERO task behind the gym-style ``reset``/``step``/``close`` the env server serves.
 
-    Built once for a ``(suite, task_id)`` and cached; ``reset`` re-seeds and selects a saved init-state, or
-    restores an exact recorded full state when given one (demo replay).
+    Built from the reset token's task spec (suite, task_id, resolution, control mode) and cached; ``reset``
+    rebuilds when the spec changes, then re-seeds and selects a saved init-state, or restores an exact recorded
+    full state when the token carries one (demo replay).
     ``step`` maps the forwarded command into the active controller's action (FK/IK bridging pose<->joint) and
     returns LIBERO's raw obs plus the full physics state — the privileged ground truth, so success is
     recomputable downstream — and ``done``.
     """
 
-    def __init__(self, suite_name: str, task_id: int, camera_resolution: int, control_mode: str):
-        self._suite_name = suite_name
-        self._task_id = task_id
-        self._resolution = camera_resolution
-        self._control_mode = control_mode
+    def __init__(self):
+        # The task spec (suite, task_id, resolution, control mode) the current env was built for; ``reset``
+        # rebuilds when the token's spec differs, so one server can serve any task without a restart.
+        self._key = None
+        self._control_mode = None
         self._env = None
         self._init_states = None
         self._meta = None
         self._control_dt = None
-        # Cached once at build: model-structure indices, invariant across resets (same task XML).
+        # Cached at build: model-structure indices, invariant across resets of the same task XML.
         self._qpos_idx = None
         self._qvel_idx = None
         self._eef_site_id = None
@@ -109,10 +111,13 @@ class LiberoEnv(EnvProtocol):
     def _controller(self):
         return self._env.env.robots[0].controller
 
-    def _build(self) -> None:
-        task_suite = benchmark.get_benchmark_dict()[self._suite_name]()
-        task = task_suite.get_task(self._task_id)
-        self._init_states = task_suite.get_task_init_states(self._task_id)
+    def _build(self, suite_name: str, task_id: int, camera_resolution: int, control_mode: str) -> None:
+        if self._env is not None:
+            self._env.close()  # release the prior task's sim/renderer before building a different one
+        self._control_mode = control_mode
+        task_suite = benchmark.get_benchmark_dict()[suite_name]()
+        task = task_suite.get_task(task_id)
+        self._init_states = task_suite.get_task_init_states(task_id)
         bddl = pathlib.Path(get_libero_path('bddl_files')) / task.problem_folder / task.bddl_file
         # OSC_POSE is the controller LIBERO configures for its own policies (its ``env_wrapper`` hands the
         # controller *name* to ``load_controller_config``); operational-space control maps a per-step
@@ -121,11 +126,11 @@ class LiberoEnv(EnvProtocol):
         controller_names = {'ee': 'OSC_POSE', 'joint': 'JOINT_POSITION', 'joint_delta': 'JOINT_VELOCITY'}
         self._env = OffScreenRenderEnv(
             bddl_file_name=str(bddl),
-            controller=controller_names[self._control_mode],
-            camera_heights=self._resolution,
-            camera_widths=self._resolution,
+            controller=controller_names[control_mode],
+            camera_heights=camera_resolution,
+            camera_widths=camera_resolution,
         )
-        self._meta = {'suite': self._suite_name, 'task_id': self._task_id, 'task': task.language}
+        self._meta = {'suite': suite_name, 'task_id': task_id, 'task': task.language}
         self._control_dt = 1.0 / self._env.env.control_freq
         robot = self._env.env.robots[0]
         self._qpos_idx = np.asarray(robot._ref_joint_pos_indexes)
@@ -137,16 +142,19 @@ class LiberoEnv(EnvProtocol):
         gripper_jids = [self._sim.model.joint_name2id(j) for j in robot.gripper.joints]
         self._grip_open_aperture = float(np.sum(np.diff(self._sim.model.jnt_range[gripper_jids], axis=1)))
 
-    def reset(self, token: Any) -> dict[str, Any]:
-        if self._env is None:
-            self._build()
-        if isinstance(token, np.ndarray):
-            # Exact-state replay: restore a recorded full physics state (a demo's own scene). The
-            # re-randomization is moot — ``set_init_state`` overwrites the whole state.
+    def reset(self, token: dict[str, Any]) -> dict[str, Any]:
+        key = (token['suite'], token['task_id'], token['camera_resolution'], token['control_mode'])
+        if key != self._key:
+            self._build(*key)
+            self._key = key
+        state = token.get('state')
+        if state is not None:
+            # Exact-state replay: restore a recorded full physics state (a demo's own scene). The seed/init-state
+            # selection is moot — ``set_init_state`` overwrites the whole state.
             self._env.reset()
-            raw = self._env.set_init_state(token)
+            raw = self._env.set_init_state(np.asarray(state))
         else:
-            seed = int(token)
+            seed = int(token['seed'])
             self._env.seed(seed)
             self._env.reset()
             raw = self._env.set_init_state(self._init_states[seed % len(self._init_states)])
@@ -289,16 +297,11 @@ class LiberoEnv(EnvProtocol):
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description='Serve one LIBERO task over the env-server protocol.')
+    parser = argparse.ArgumentParser(description='Serve LIBERO over the env-server protocol.')
     parser.add_argument('--host', default='localhost')
     parser.add_argument('--port', type=int, required=True)
-    parser.add_argument('--suite', required=True, help='LIBERO task suite, e.g. libero_spatial')
-    parser.add_argument('--task-id', type=int, default=0)
-    parser.add_argument('--camera-resolution', type=int, default=224)
-    parser.add_argument('--control-mode', default='ee', choices=['ee', 'joint', 'joint_delta'])
     args = parser.parse_args()
-    env = LiberoEnv(args.suite, args.task_id, args.camera_resolution, args.control_mode)
-    EnvServer(env, args.host, args.port).serve_forever()
+    EnvServer(LiberoEnv(), args.host, args.port).serve_forever()
 
 
 if __name__ == '__main__':
