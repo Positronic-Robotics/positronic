@@ -139,9 +139,9 @@ class VendorServer(ABC):
         self.idle_timeout_min = idle_timeout_min
         self._active_sessions = 0
         self._last_activity = time.monotonic()
-        # Inference runs in a worker thread (so the event loop keeps servicing other connections and
-        # keepalives) but is serialized: vendor sessions may share one backend client/connection, which
-        # concurrent calls would corrupt.
+        # Backend-client calls — inference and the per-session reset in ``new_session`` — run in a worker thread
+        # (so the event loop keeps servicing other connections and keepalives) but are serialized under this lock:
+        # vendor sessions may share one backend client/connection, which concurrent calls would corrupt.
         self._infer_lock = asyncio.Lock()
 
         # The default checkpoint, resolved once at startup (see class docstring). Pinned
@@ -221,7 +221,10 @@ class VendorServer(ABC):
                     policy = rec.tap('inference').wrap(base_policy)
             else:
                 policy = self.codec.wrap(base_policy) if self.codec else base_policy
-            session = policy.new_session()
+            # ``new_session`` resets the backend client, which vendor sessions may share; hold the inference lock
+            # so the reset can't interleave with an in-flight ``session(raw_obs)`` running in another worker thread.
+            async with self._infer_lock:
+                session = await asyncio.to_thread(policy.new_session)
             # ``policy.meta`` is the static baseline; ``session.meta`` overlays
             # per-episode specifics and wins on conflict.
             meta = {**self.metadata, **extra_meta, **policy.meta, **session.meta}
