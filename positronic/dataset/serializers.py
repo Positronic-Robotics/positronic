@@ -7,7 +7,14 @@ import numpy as np
 import pimm
 from positronic import geom
 from positronic.drivers.roboarm import RobotStatus, State
-from positronic.drivers.roboarm.command import CartesianPosition, CommandType, JointDelta, JointPosition, Reset
+from positronic.drivers.roboarm.command import (
+    CartesianDelta,
+    CartesianPosition,
+    CommandType,
+    JointDelta,
+    JointPosition,
+    Reset,
+)
 
 # Serializer contract for values:
 # - Used by `DsWriterAgent.add_signal(name, serializer=None)` (recording) and the
@@ -117,6 +124,8 @@ class Serializers:
         match command:
             case CartesianPosition(pose):
                 return {'.pose': Serializers.transform_3d(pose)}
+            case CartesianDelta(delta):
+                return {'.pose_delta': Serializers.transform_3d(delta)}
             case JointPosition(positions):
                 return {'.joints': positions}
             case JointDelta(delta):

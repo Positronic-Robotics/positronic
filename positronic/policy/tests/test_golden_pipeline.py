@@ -149,7 +149,8 @@ class FakeRobot(pimm.ControlSystem):
             cmd_msg = self.commands.read()
             if cmd_msg.updated and cmd_msg.data is not None:
                 player.set(cmd_msg.data)
-            for cmd in player.advance(clock.now_ns()):
+            cmd = player.advance(clock.now_ns())
+            if cmd is not None:
                 self._apply(cmd)
             if self._error_pending:
                 self._status = RobotStatus.ERROR
@@ -172,7 +173,8 @@ class FakeGripper(pimm.ControlSystem):
             msg = self.target_grip.read()
             if msg.updated and msg.data is not None:
                 player.set(msg.data)
-            for grip in player.advance(clock.now_ns()):
+            grip = player.advance(clock.now_ns())
+            if grip is not None:
                 self._grip = float(grip)
             self.grip.emit(self._grip)
             yield pimm.Sleep(CONTROL_PERIOD_S)

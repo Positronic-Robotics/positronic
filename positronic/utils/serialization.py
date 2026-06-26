@@ -55,6 +55,7 @@ _LEGACY_COMMAND_TYPES = frozenset({
     _roboarm_command.CartesianPosition.TYPE,
     _roboarm_command.JointPosition.TYPE,
     _roboarm_command.JointDelta.TYPE,
+    _roboarm_command.CartesianDelta.TYPE,
 })
 
 

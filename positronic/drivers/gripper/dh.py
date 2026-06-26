@@ -40,7 +40,8 @@ class DHGripper(pimm.ControlSystem):
                 grip_msg = self.target_grip.read()
                 if grip_msg.updated:
                     player.set(grip_msg.data)
-                for grip in player.advance(clock.now_ns()):
+                grip = player.advance(clock.now_ns())
+                if grip is not None:
                     last_grip = grip
                 width = round((1 - max(0, min(last_grip, 1))) * 1000)
                 client.write_register(0x103, c_uint16(width).value, slave=1)

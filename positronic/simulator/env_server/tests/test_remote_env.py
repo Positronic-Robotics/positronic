@@ -5,6 +5,7 @@ import pos3
 import pytest
 
 import pimm
+from positronic import geom
 from positronic.dataset.local_dataset import LocalDataset
 from positronic.drivers.roboarm import command as roboarm_command
 from positronic.eval import Task
@@ -84,6 +85,43 @@ def test_transport_is_transparent(env_server):
         _assert_obs_equal(direct_step['obs'], socket_step['obs'])
         assert direct_step['done'] == socket_step['done']
         assert direct_step['control_dt'] == socket_step['control_dt']
+
+
+def _settle(env, action: dict, steps: int) -> np.ndarray:
+    """Apply ``action`` once, then idle ``steps`` ticks while the position actuators settle; return the final eef."""
+    env.step(action)
+    out = {'obs': None}
+    for _ in range(steps):
+        out = env.step({})
+    return np.asarray(out['obs']['ee_pos'])
+
+
+@pytest.mark.timeout(60.0)
+def test_cartesian_delta_matches_absolute_target():
+    """A CartesianDelta settles to the same eef as the absolute CartesianPosition for the composed target: it
+    confirms the world-frame compose and that the delta fires once — a delta re-applied every tick would overshoot.
+    Comparing the two paths cancels the actuators' shared steady-state offset, so the match is exact."""
+    rotmat = geom.Rotation.Representation.ROTATION_MATRIX
+    seed, settle = 11, 300
+    lift = np.array([0.0, 0.0, 0.04])
+
+    abs_env = make_mujoco_env(list(CAMERAS.values()))
+    reset = abs_env.reset(seed)
+    ee0 = np.asarray(reset['obs']['ee_pos'])
+    target = geom.Transform3D(ee0 + lift, geom.Rotation.from_quat(reset['obs']['ee_quat']))
+    ee_abs = _settle(abs_env, {'pose': target.as_vector(rotmat)}, settle)
+    abs_env.close()
+
+    delta_env = make_mujoco_env(list(CAMERAS.values()))
+    delta_env.reset(seed)
+    delta = geom.Transform3D(lift, geom.Rotation.identity)
+    ee_delta = _settle(delta_env, {'pose_delta': delta.as_vector(rotmat)}, settle)
+    ee_idle = _settle(delta_env, {}, 50)  # the delta already fired; idling must not re-compose it
+    delta_env.close()
+
+    assert ee_delta[2] > ee0[2] + 0.01, 'the delta did not lift the arm'
+    np.testing.assert_allclose(ee_delta, ee_abs, atol=1e-4)  # same composed target -> same settled eef
+    np.testing.assert_allclose(ee_idle, ee_delta, atol=1e-3)  # one-shot: idle ticks add no motion
 
 
 class _CountdownEnv(EnvProtocol):

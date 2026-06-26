@@ -29,6 +29,7 @@ _FIXTURE = os.path.join(os.path.dirname(__file__), 'libero_spatial_task0.npz')
     not os.path.exists(_FIXTURE), reason='e2e fixture missing — generate it on a LIBERO box with make_fixture.py'
 )
 @pytest.mark.timeout(900)  # the env server bootstraps its 3.10 deps on first run, which can take minutes
-def test_demo_replay_reaches_success():
-    rate = run_replay(_FIXTURE, suite='libero_spatial', task_id=0)
-    assert rate == 1.0, f'demo replay success rate {rate:.2f} — every prerecorded demo must replay to success'
+@pytest.mark.parametrize('command_mode', ['cartesian', 'cartesian_delta'])
+def test_demo_replay_reaches_success(command_mode):
+    rate = run_replay(_FIXTURE, suite='libero_spatial', task_id=0, command_mode=command_mode)
+    assert rate == 1.0, f'demo replay ({command_mode}) rate {rate:.2f} — every prerecorded demo must replay to success'

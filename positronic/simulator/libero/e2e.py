@@ -36,28 +36,47 @@ _SETTLE_STEPS = 10  # let objects fall and settle after the scene loads, matchin
 _OUTPUT_MAX = np.array([0.05, 0.05, 0.05, 0.5, 0.5, 0.5])
 
 
+def _physical_delta(delta: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """Un-normalize an OSC ``delta`` ([-1, 1]) into the world-frame per-step pose delta ``(Δpos, Δrot matrix)``."""
+    physical = np.asarray(delta, dtype=float) * _OUTPUT_MAX
+    delta_rot = np.asarray(geom.Rotation.from_rotvec(physical[3:]).to(_ROTMAT)).reshape(3, 3)
+    return physical[:3], delta_rot
+
+
 def _compose_pose(obs: dict, delta: np.ndarray) -> np.ndarray:
     """The absolute pose the normalized OSC ``delta`` targets, anchored on the observed eef pose.
 
     Mirrors robosuite ``set_goal``: world-frame translation ``ee_pos + Δpos`` and orientation ``R(Δrot) @ ee_ori``
     (left-multiply), but reads ``ee_pos``/``ee_ori`` from the wire observation rather than the controller."""
-    physical = np.asarray(delta, dtype=float) * _OUTPUT_MAX
+    delta_pos, delta_rot = _physical_delta(delta)
     cur_rot = np.asarray(geom.Rotation.from_quat_xyzw(obs['eef_quat']).to(_ROTMAT)).reshape(3, 3)
-    delta_rot = np.asarray(geom.Rotation.from_rotvec(physical[3:]).to(_ROTMAT)).reshape(3, 3)
-    target_pos = np.asarray(obs['eef_pos']) + physical[:3]
-    return np.concatenate([target_pos, (delta_rot @ cur_rot).reshape(9)])
+    return np.concatenate([np.asarray(obs['eef_pos']) + delta_pos, (delta_rot @ cur_rot).reshape(9)])
 
 
-def _replay_episode(conn: EnvConnection, actions: np.ndarray, init_state: np.ndarray, scene: dict) -> bool:
+def _step_command(obs: dict, delta: np.ndarray, command_mode: str) -> dict:
+    """The per-step wire command for the active replay path: ``cartesian`` ships an absolute pose the env
+    re-derives a delta from; ``cartesian_delta`` ships the world-frame delta straight to the OSC controller."""
+    match command_mode:
+        case 'cartesian':
+            return {'type': 'cartesian', 'pose': _compose_pose(obs, delta)}
+        case 'cartesian_delta':
+            delta_pos, delta_rot = _physical_delta(delta)
+            return {'type': 'cartesian_delta', 'delta': np.concatenate([delta_pos, delta_rot.reshape(9)])}
+        case _:
+            raise ValueError(f'unknown command mode {command_mode!r}')
+
+
+def _replay_episode(
+    conn: EnvConnection, actions: np.ndarray, init_state: np.ndarray, scene: dict, *, command_mode: str
+) -> bool:
     # Exact-state reset: the token carries the task spec plus the demo's own recorded full state to restore.
     obs = conn.reset({**scene, 'state': init_state})['obs']
     for _ in range(_SETTLE_STEPS):
         obs = conn.step({'command': {'type': 'hold'}, 'grip': 0.0})['obs']
     success = False
     for action in actions:
-        pose = _compose_pose(obs, action[:6])
         grip = (float(action[6]) + 1.0) / 2.0  # robosuite gripper [-1, 1] -> positronic [0, 1]
-        out = conn.step({'command': {'type': 'cartesian', 'pose': pose}, 'grip': grip})
+        out = conn.step({'command': _step_command(obs, action[:6], command_mode), 'grip': grip})
         obs = out['obs']
         success = success or out['done']
     return success
@@ -71,7 +90,12 @@ def _load_fixture(path: str) -> list[tuple[np.ndarray, np.ndarray]]:
 
 
 def run_replay(
-    fixture_path: str, *, suite: str = 'libero_spatial', task_id: int = 0, camera_resolution: int = 128
+    fixture_path: str,
+    *,
+    suite: str = 'libero_spatial',
+    task_id: int = 0,
+    camera_resolution: int = 128,
+    command_mode: str = 'cartesian',
 ) -> float:
     """Replay every episode in ``fixture_path`` through the env server; return the success rate."""
     episodes = _load_fixture(fixture_path)
@@ -82,7 +106,7 @@ def run_replay(
         conn = EnvConnection(host, port)
         try:
             for i, (actions, init_state) in enumerate(episodes):
-                ok = _replay_episode(conn, actions, init_state, scene)
+                ok = _replay_episode(conn, actions, init_state, scene, command_mode=command_mode)
                 successes += int(ok)
                 print(f'  episode {i}: {"success" if ok else "FAIL"} ({len(actions)} steps)')
         finally:
@@ -96,10 +120,17 @@ def main() -> None:
     parser.add_argument('--suite', default='libero_spatial', help='LIBERO task suite the fixture was extracted from')
     parser.add_argument('--task-id', type=int, default=0)
     parser.add_argument('--camera-resolution', type=int, default=128)
+    parser.add_argument('--command-mode', choices=['cartesian', 'cartesian_delta'], default='cartesian')
     parser.add_argument('--min-success', type=float, default=0.8, help='replay success rate below this fails the run')
     args = parser.parse_args()
 
-    rate = run_replay(args.fixture, suite=args.suite, task_id=args.task_id, camera_resolution=args.camera_resolution)
+    rate = run_replay(
+        args.fixture,
+        suite=args.suite,
+        task_id=args.task_id,
+        camera_resolution=args.camera_resolution,
+        command_mode=args.command_mode,
+    )
     print(f'replay success rate: {rate:.2f}')
     assert rate >= args.min_success, f'success rate {rate:.2f} below {args.min_success} — env server likely broken'
     print('E2E REPLAY PASSED')

@@ -143,7 +143,7 @@ class MujocoSim(pimm.ControlSystem):
         self._home()
         self._error = False
         self._adapters: dict[str, pimm.shared_memory.NumpySMAdapter] | None = None
-        self._arm_player = roboarm_command.TrajectoryPlayer()
+        self._arm_player = roboarm_command.TrajectoryPlayer(reduce=roboarm_command.reduce)
         self._grip_player = roboarm_command.TrajectoryPlayer()
         self._last_grip = 0.0
         # Set by ``reset``; the run loop publishes frame-0 (instead of stepping) on its next turn and clears it.
@@ -181,12 +181,14 @@ class MujocoSim(pimm.ControlSystem):
             cmd_msg = self.commands.read()
             if cmd_msg.updated:
                 self._arm_player.set(cmd_msg.data)
-            for cmd in self._arm_player.advance(clock.now_ns()):
+            cmd = self._arm_player.advance(clock.now_ns())
+            if cmd is not None:
                 self._apply_command(cmd)
             grip_msg = self.target_grip.read()
             if grip_msg.updated:
                 self._grip_player.set(grip_msg.data)
-            for grip in self._grip_player.advance(clock.now_ns()):
+            grip = self._grip_player.advance(clock.now_ns())
+            if grip is not None:
                 self._last_grip = grip
             self._apply_grip(self._last_grip)
 
@@ -328,6 +330,14 @@ class MujocoSim(pimm.ControlSystem):
                     self._set_actuator_values(q)
                 else:
                     logger.warning(f'IK failed for ee_pose: {pose}')
+                    self._error = True
+            case roboarm_command.CartesianDelta(delta=delta):
+                target = roboarm_command.apply_cartesian_delta(self._ee_pose, delta)
+                q = self._recalculate_ik(target)
+                if q is not None:
+                    self._set_actuator_values(q)
+                else:
+                    logger.warning(f'IK failed for delta target: {target}')
                     self._error = True
             case roboarm_command.JointPosition(positions=positions):
                 self._set_actuator_values(positions)

@@ -219,7 +219,7 @@ class Robot(pimm.ControlSystem):
         self._reset(robot, robot_state)
 
         in_error = False
-        player = command.TrajectoryPlayer()
+        player = command.TrajectoryPlayer(reduce=command.reduce)
 
         while not should_stop.value:
             st = robot.state()
@@ -233,7 +233,8 @@ class Robot(pimm.ControlSystem):
             cmd_msg = self.commands.read()
             if cmd_msg.updated:
                 player.set(cmd_msg.data)
-            for cmd in player.advance(clock.now_ns()):
+            cmd = player.advance(clock.now_ns())
+            if cmd is not None:
                 match cmd:
                     case command.Reset():
                         _recover_if_needed(robot, in_error)
@@ -244,6 +245,11 @@ class Robot(pimm.ControlSystem):
                         pass
                     case command.CartesianPosition(pose):
                         target_pose_wxyz = np.asarray([*pose.translation, *pose.rotation.as_quat])
+                        ik_solution = robot.inverse_kinematics_with_limits(target_pose_wxyz)
+                        robot.set_target_joints(ik_solution)
+                    case command.CartesianDelta(delta):
+                        target = command.apply_cartesian_delta(robot_state.ee_pose, delta)
+                        target_pose_wxyz = np.asarray([*target.translation, *target.rotation.as_quat])
                         ik_solution = robot.inverse_kinematics_with_limits(target_pose_wxyz)
                         robot.set_target_joints(ik_solution)
                     case command.JointPosition(positions):
