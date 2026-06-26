@@ -120,7 +120,7 @@ class MujocoEnv(EnvProtocol):
 
     def step(self, action: dict[str, Any]) -> dict[str, Any]:
         assert self._gen is not None, 'step() called before reset()'  # real Gym envs reject step-before-reset
-        unknown = action.keys() - {'reset', 'recover', 'joints', 'pose', 'grip'}
+        unknown = action.keys() - {'reset', 'recover', 'joints', 'pose', 'pose_delta', 'grip'}
         if unknown:
             raise ValueError(f'MujocoEnv got unsupported action keys: {sorted(unknown)}')
         if 'reset' in action:
@@ -132,6 +132,10 @@ class MujocoEnv(EnvProtocol):
         elif 'pose' in action:
             self._cmd_emit.emit(
                 roboarm_command.CartesianPosition(geom.Transform3D.from_vector(action['pose'], _ROTMAT))
+            )
+        elif 'pose_delta' in action:
+            self._cmd_emit.emit(
+                roboarm_command.CartesianDelta(geom.Transform3D.from_vector(action['pose_delta'], _ROTMAT))
             )
         if 'grip' in action:
             self._grip_emit.emit(float(action['grip']))
@@ -179,9 +183,9 @@ class StackCubesAdapter(EnvAdapter):
                     self._held.pop(name, None)
             for value in player.advance(now_ns):
                 self._held[name] = value
-        # Position setpoints are held and re-sent every control tick — absolute-mode by design, so a
-        # relative delta would integrate repeatedly. Reset/Recover are one-shot events: emitted once,
-        # then dropped so they neither re-fire nor leave a stale setpoint holding behind them.
+        # Position setpoints are held and re-sent every control tick — absolute-mode by design. A CartesianDelta
+        # is a one-shot relative motion, like Reset/Recover: emitted once, then dropped so it neither re-composes
+        # against the moving eef nor leaves a stale setpoint holding behind it.
         action: dict[str, Any] = {}
         match self._held.get('robot_command'):
             case None:
@@ -190,6 +194,9 @@ class StackCubesAdapter(EnvAdapter):
                 action['joints'] = np.asarray(positions, dtype=np.float64)
             case roboarm_command.CartesianPosition(pose):
                 action['pose'] = pose.as_vector(_ROTMAT)
+            case roboarm_command.CartesianDelta(delta):
+                action['pose_delta'] = delta.as_vector(_ROTMAT)
+                self._held.pop('robot_command')
             case roboarm_command.Reset():
                 action['reset'] = True
                 self._held.pop('robot_command')

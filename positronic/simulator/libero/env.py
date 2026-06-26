@@ -181,6 +181,9 @@ class LiberoEnv(EnvProtocol):
         match (self._control_mode, command['type']):
             case ('ee', 'cartesian'):  # OSC_POSE: world-frame pose error
                 physical = self._pose_error(*_unpack_pose(command['pose']))
+            case ('ee', 'cartesian_delta'):  # the world-frame delta is the per-step OSC error directly
+                delta_pos, delta_rot = _unpack_pose(command['delta'])
+                physical = np.concatenate([delta_pos, quat2axisangle(mat2quat(delta_rot))])
             case ('ee', 'joint_pos'):
                 physical = self._pose_error(*self._fk(command['q']))
             case ('ee', 'joint_vel'):

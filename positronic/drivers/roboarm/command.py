@@ -48,7 +48,30 @@ class JointDelta:
     velocities: np.ndarray
 
 
-CommandType = Reset | Recover | CartesianPosition | JointPosition | JointDelta
+@dataclass
+class CartesianDelta:
+    """Move the end-effector by a world-frame pose delta from its current measured pose.
+
+    A one-shot relative motion: the driver composes ``delta`` onto the pose it measures the moment the
+    command is consumed, never re-applying it. Unlike ``JointDelta`` this is end-effector space, not joint
+    space.
+    """
+
+    TYPE = 'cartesian_delta'
+    delta: geom.Transform3D
+
+
+CommandType = Reset | Recover | CartesianPosition | JointPosition | JointDelta | CartesianDelta
+
+
+def apply_cartesian_delta(current: geom.Transform3D, delta: geom.Transform3D) -> geom.Transform3D:
+    """Compose a world-frame ``delta`` onto a measured ``current`` pose for the absolute target a driver drives to.
+
+    Translation adds in the world frame and rotation left-multiplies (``goal_ori = R(Δrot) @ ee_ori``), the
+    robosuite OSC convention. This is not ``Transform3D.__mul__``, which composes in the body frame and would
+    rotate the translation.
+    """
+    return geom.Transform3D(current.translation + delta.translation, delta.rotation * current.rotation)
 
 
 def to_wire(command: CommandType) -> dict[str, Any]:
@@ -61,6 +84,8 @@ def to_wire(command: CommandType) -> dict[str, Any]:
             return {'type': command.TYPE, 'positions': positions}
         case JointDelta(velocities):
             return {'type': command.TYPE, 'velocities': velocities}
+        case CartesianDelta(delta):
+            return {'type': command.TYPE, 'delta': delta.as_vector(geom.Rotation.Representation.ROTATION_MATRIX)}
 
 
 class TrajectoryPlayer:
@@ -105,5 +130,9 @@ def from_wire(wire: dict[str, Any]) -> CommandType:
             return JointPosition(positions=wire['positions'])
         case 'joint_delta':
             return JointDelta(velocities=wire['velocities'])
+        case 'cartesian_delta':
+            return CartesianDelta(
+                delta=geom.Transform3D.from_vector(wire['delta'], geom.Rotation.Representation.ROTATION_MATRIX)
+            )
         case _:
             raise ValueError(f'Unknown command type: {wire["type"]}')

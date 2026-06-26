@@ -9,7 +9,15 @@ from positronic.dataset.ds_writer_agent import DsWriterCommand, DsWriterCommandT
 from positronic.dataset.serializers import Serializers
 from positronic.drivers import roboarm
 from positronic.drivers.roboarm import RobotStatus
-from positronic.drivers.roboarm.command import CartesianPosition, Recover, Reset, from_wire, to_wire
+from positronic.drivers.roboarm.command import (
+    CartesianDelta,
+    CartesianPosition,
+    Recover,
+    Reset,
+    apply_cartesian_delta,
+    from_wire,
+    to_wire,
+)
 from positronic.eval import Command, Embodiment, Observation, Task
 from positronic.geom import Rotation, Transform3D
 from positronic.policy.base import Policy, Session
@@ -1081,6 +1089,27 @@ def test_recover_command_wire_roundtrip():
     wire = to_wire(Recover())
     assert wire == {'type': 'recover'}
     assert isinstance(from_wire(wire), Recover)
+
+
+def test_cartesian_delta_wire_roundtrip():
+    delta = Transform3D(np.array([0.01, -0.02, 0.03]), Rotation.from_rotvec(np.array([0.0, 0.1, 0.0])))
+    wire = to_wire(CartesianDelta(delta=delta))
+    assert wire['type'] == 'cartesian_delta'
+    out = from_wire(wire)
+    assert isinstance(out, CartesianDelta)
+    np.testing.assert_allclose(out.delta.translation, delta.translation)
+    np.testing.assert_allclose(out.delta.rotation.as_quat, delta.rotation.as_quat, atol=1e-9)
+
+
+def test_apply_cartesian_delta_composes_in_world_frame():
+    current = Transform3D(np.array([0.5, 0.1, 0.3]), Rotation.from_rotvec(np.array([0.2, 0.1, 0.4])))
+    delta = Transform3D(np.array([0.02, -0.01, 0.05]), Rotation.from_rotvec(np.array([0.1, 0.0, 0.0])))
+    target = apply_cartesian_delta(current, delta)
+    # World frame: translation adds directly (not rotated by current, as Transform3D.__mul__ would) and the
+    # rotation left-multiplies.
+    np.testing.assert_allclose(target.translation, current.translation + delta.translation)
+    np.testing.assert_allclose(target.rotation.as_quat, (delta.rotation * current.rotation).as_quat, atol=1e-12)
+    assert not np.allclose(target.translation, (current * delta).translation)  # guards against body-frame compose
 
 
 @pytest.mark.parametrize('status, expected_error', [(RobotStatus.AVAILABLE, 0), (RobotStatus.ERROR, 1)])

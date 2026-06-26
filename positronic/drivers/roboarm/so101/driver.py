@@ -98,6 +98,11 @@ class Robot(pimm.ControlSystem):
                         qpos = self._solve_ik(state, pose)
                         q_with_gripper = np.concatenate([qpos, [self._last_grip]])
                         self.motor_bus.set_target_position(q_with_gripper)
+                    case roboarm_command.CartesianDelta(delta):
+                        target = roboarm_command.apply_cartesian_delta(state.ee_pose, delta)
+                        qpos = self._solve_ik(state, target)
+                        q_with_gripper = np.concatenate([qpos, [self._last_grip]])
+                        self.motor_bus.set_target_position(q_with_gripper)
                     case roboarm_command.JointPosition(qpos):
                         q_norm = self.rad_to_norm(qpos)
                         q_with_gripper = np.concatenate([q_norm, [self._last_grip]])
@@ -115,10 +120,10 @@ class Robot(pimm.ControlSystem):
             self.grip.emit(gripper)
             yield rate_limit.wait()
 
-    def _solve_ik(self, state, command: roboarm_command.CartesianPosition) -> np.ndarray:
+    def _solve_ik(self, state, pose: geom.Transform3D) -> np.ndarray:
         q = np.array(state.q).tolist()
         q.append(0.0)  # ignore gripper in ik
-        q_rad_new = self.kinematic.inverse(q, command.pose, n_iter=10)
+        q_rad_new = self.kinematic.inverse(q, pose, n_iter=10)
         return self.rad_to_norm(q_rad_new)[:-1]
 
     def _forward_kinematics(self, motor_position) -> geom.Transform3D:

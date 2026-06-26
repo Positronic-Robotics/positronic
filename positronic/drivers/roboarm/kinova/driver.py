@@ -100,6 +100,10 @@ class Robot(pimm.ControlSystem):
                         case command.CartesianPosition(pose):
                             qpos = self.solver.inverse(pose, robot_state.q)
                             joint_controller.set_target_qpos(qpos)
+                        case command.CartesianDelta(delta):
+                            target = command.apply_cartesian_delta(robot_state.ee_pose, delta)
+                            qpos = self.solver.inverse(target, robot_state.q)
+                            joint_controller.set_target_qpos(qpos)
                         case command.JointPosition(positions):
                             qpos = np.array(positions, dtype=np.float32)
                             joint_controller.set_target_qpos(qpos)

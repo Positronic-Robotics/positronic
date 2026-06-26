@@ -29,6 +29,8 @@ def _wire_command(cmd: Any) -> dict[str, Any]:
             return {'type': 'joint_pos', 'q': positions}
         case roboarm_command.JointDelta(velocities):
             return {'type': 'joint_vel', 'dq': velocities}
+        case roboarm_command.CartesianDelta(delta):
+            return {'type': 'cartesian_delta', 'delta': delta.as_vector(geom.Rotation.Representation.ROTATION_MATRIX)}
         case None:
             return {'type': 'hold'}
         case other:
@@ -72,11 +74,15 @@ class LiberoAdapter(EnvAdapter):
             for value in player.advance(now_ns):
                 self._held[name] = value
         # The server maps the held command into the active controller's action. Reset/Recover have no robosuite
-        # action, so they forward as a hold.
+        # action, so they forward as a hold; a CartesianDelta is a one-shot relative motion, forwarded once then
+        # dropped so the held command never re-composes it against the moving eef.
         cmd = self._held.get('robot_command')
-        if isinstance(cmd, roboarm_command.Reset | roboarm_command.Recover):
-            self._held.pop('robot_command')
-            cmd = None
+        match cmd:
+            case roboarm_command.Reset() | roboarm_command.Recover():
+                self._held.pop('robot_command')
+                cmd = None
+            case roboarm_command.CartesianDelta():
+                self._held.pop('robot_command')
         if 'target_grip' in self._held:
             self._grip = float(self._held['target_grip'])
         return {'command': _wire_command(cmd), 'grip': self._grip}
