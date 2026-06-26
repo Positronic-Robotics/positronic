@@ -46,7 +46,7 @@ import argparse
 
 import numpy as np
 from env import LiberoEnv
-from robosuite.utils.transform_utils import mat2quat, quat2axisangle
+from robosuite.utils.transform_utils import euler2mat, mat2quat, quat2axisangle, quat2mat
 
 _OSC_SAMPLES = 64
 _IK_SAMPLES = 16
@@ -114,6 +114,96 @@ def _check_action_inverse(env: LiberoEnv, token: dict, ctype: str, key: str, goa
     print(f'  {ctype} inverse: OK ({_OSC_SAMPLES} random actions, atol {atol})')
 
 
+def _robosuite_obs(env: LiberoEnv) -> dict:
+    """robosuite's own observation dict — the source openpi's LIBERO eval reads its state from."""
+    return env._env.env._get_observations(force_update=True)
+
+
+def _nudge_pose(env: LiberoEnv) -> np.ndarray:
+    """A small random Cartesian goal (pos + orientation) off the current pose, in the adapter's wire format."""
+    pos, rot = env._cur_pose()
+    target_pos = pos + np.random.uniform(-0.02, 0.02, 3)
+    target_rot = euler2mat(np.random.uniform(-0.1, 0.1, 3)) @ rot
+    return np.concatenate([target_pos, target_rot.reshape(9)])
+
+
+def _check_obs_encoding(env: LiberoEnv, token: dict) -> None:
+    """Measure and verify the constants ``OpenpiLiberoObservationCodec`` needs for the 8-dim state.
+
+    openpi's LIBERO state is ``[robot0_eef_pos(3), quat2axisangle(robot0_eef_quat)(3), robot0_gripper_qpos(2)]``
+    (openpi ``examples/libero/main.py``). The env reports the eef pose in the grip-site frame and the gripper as a
+    single closure scalar, so the codec must (a) rotate the grip-site orientation into robosuite's hand-body frame
+    by a fixed offset and (b) reconstruct the two finger qpos from the closure scalar. This drives the arm and
+    gripper across their range, proves both are pose-invariant, and prints the values to bake into the codec.
+    """
+    wire = env.reset(token)['obs']
+    samples = []
+    for _ in range(8):
+        samples.append((wire, _robosuite_obs(env)))
+        wire = env.step({'command': {'type': 'cartesian', 'pose': _nudge_pose(env)}, 'grip': 0.0})['obs']
+
+    # Orientation: a fixed grip-site -> hand-body rotation. Measure on the first sample (xyzw, w>=0 from mat2quat).
+    r_off = quat2mat(samples[0][0]['eef_quat']).T @ quat2mat(samples[0][1]['robot0_eef_quat'])
+    q = mat2quat(r_off)
+
+    # Gripper: drive to both stops to read the finger qpos endpoints, then the codec's linear reconstruction
+    # CLOSED + (1 - grip) * (OPEN - CLOSED) recovers the true qpos from the closure scalar (q_open/q_closed are
+    # the load-bearing, non-circular measurement; the sweep checks the linear model holds).
+    env.reset(token)
+    for _ in range(40):
+        wire = env.step({'command': {'type': 'hold'}, 'grip': 0.0})['obs']
+    q_open = np.asarray(_robosuite_obs(env)['robot0_gripper_qpos'])
+    for _ in range(40):
+        wire = env.step({'command': {'type': 'hold'}, 'grip': 1.0})['obs']
+    q_closed = np.asarray(_robosuite_obs(env)['robot0_gripper_qpos'])
+    recon_err = 0.0
+    env.reset(token)
+    for g in np.linspace(0.0, 1.0, 6):
+        for _ in range(20):
+            wire = env.step({'command': {'type': 'hold'}, 'grip': float(g)})['obs']
+        true_qpos = np.asarray(_robosuite_obs(env)['robot0_gripper_qpos'])
+        recon = q_closed + (1.0 - wire['grip']) * (q_open - q_closed)
+        recon_err = max(recon_err, float(np.max(np.abs(recon - true_qpos))))
+
+    # Print the bake values first so they surface even if a check below fails.
+    print('  obs encoding:')
+    print(f'    bake _GRIP_SITE_TO_HAND = geom.Rotation.from_quat([{q[3]:.9f}, {q[0]:.9f}, {q[1]:.9f}, {q[2]:.9f}])')
+    print(f'    bake _GRIPPER_QPOS_OPEN = np.array({np.round(q_open, 6).tolist()})')
+    print(f'    bake _GRIPPER_QPOS_CLOSED = np.array({np.round(q_closed, 6).tolist()})')
+    print(f'    gripper reconstruction max err over sweep: {recon_err:.5f}')
+
+    # Position matches robosuite's grip-site pos directly; the grip->hand offset is a fixed rotation.
+    for w, robo in samples:
+        assert np.allclose(w['eef_pos'], robo['robot0_eef_pos'], atol=_OSC_ATOL), 'eef_pos != robot0_eef_pos'
+        assert np.allclose(quat2mat(w['eef_quat']) @ r_off, quat2mat(robo['robot0_eef_quat']), atol=_OSC_ATOL), (
+            'grip->hand offset varies across poses'
+        )
+
+    # The policy consumes the axis-angle 3-vector, not the matrix: assert the exact value the codec emits matches
+    # robosuite's quat2axisangle(robot0_eef_quat). robosuite's quat is MuJoCo's body_xquat, FK-continuous from the
+    # tool-down home pose and thus in the w<=0 hemisphere (angle >= pi); the codec canonicalizes to w<=0 to match,
+    # so the exact branch coincides — `mat2quat` gives the w>=0 form, negate it to replicate the codec.
+    for w, robo in samples:
+        aa_codec = quat2axisangle(-mat2quat(quat2mat(w['eef_quat']) @ r_off))  # negate w>=0 form to the codec's w<=0
+        aa_ref = quat2axisangle(robo['robot0_eef_quat'])
+        assert np.allclose(aa_codec, aa_ref, atol=_OSC_ATOL), f'axis-angle branch mismatch: {aa_codec} vs {aa_ref}'
+    print(f'    grip->hand offset + axis-angle branch match robosuite across {len(samples)} poses')
+
+
+def _check_osc_delta_scale(env: LiberoEnv, token: dict) -> None:
+    """Pin the OSC scaling and control rate the libero codec bakes: ``CumulativePoseDeltaAction.OUTPUT_MAX``
+    must equal the controller's per-step output range, and the codec stamps the chunk at the env's control rate."""
+    env.reset(token)
+    c = env._controller
+    output_max = np.array([0.05, 0.05, 0.05, 0.5, 0.5, 0.5])  # mirrors CumulativePoseDeltaAction.OUTPUT_MAX
+    assert np.allclose(c.output_max, output_max) and np.allclose(c.output_min, -output_max), (
+        f'OSC output range [{c.output_min}, {c.output_max}] != +/-{output_max.tolist()}'
+    )
+    freq = env._env.env.control_freq
+    assert freq == 20, f'control_freq {freq} Hz != 20 (the libero codec stamps the chunk at fps=20)'
+    print(f'  osc delta scale: output_max == {output_max.tolist()} OK; control_freq {freq} Hz == libero codec fps')
+
+
 def _check_fk_identity(env: LiberoEnv, token: dict) -> None:
     env.reset(token)
     pos_fk, rot_fk = env._fk(env._cur_q())
@@ -149,6 +239,8 @@ def main() -> None:
     _check_serve(ee, ee_token)
     _check_grip(ee, ee_token)
     _check_action_inverse(ee, ee_token, 'cartesian', 'pose', _osc_goal, atol=_OSC_ATOL)
+    _check_obs_encoding(ee, ee_token)
+    _check_osc_delta_scale(ee, ee_token)
     _check_fk_identity(ee, ee_token)
     _check_ik_roundtrip(ee, ee_token)
     ee.close()
