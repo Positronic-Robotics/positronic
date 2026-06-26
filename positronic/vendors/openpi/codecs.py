@@ -172,40 +172,26 @@ joints_ik_sim = joints_ik.override(**{'action.solver': 'lm'})
 droid = codecs.compose.override(obs=droid_obs, action=codecs.joint_delta_action, horizon=8 / 15)
 
 
-class CumulativePoseDeltaAction(Codec):
-    """Decodes pi05_libero's OSC pose-delta action chunk into absolute Cartesian waypoints (inference only).
+class PoseDeltaAction(Codec):
+    """Decodes pi05_libero's OSC pose-delta chunk into per-step end-effector ``CartesianDelta`` (inference only).
 
-    The policy emits a chunk of per-step actions ``[Δpos(3), Δrotvec(3), grip(1)]`` normalized to ``[-1, 1]``
-    in robosuite OSC_POSE space. Each step's pose delta is scaled by the controller's per-step output range
-    (``OUTPUT_MAX``) and integrated cumulatively onto the previous waypoint, anchored once on the observed
-    end-effector pose, so the chunk plays open-loop as a trajectory of absolute poses — the LIBERO env
-    recovers each per-step OSC delta from its own controller pose. The rotation delta left-multiplies the
-    running orientation and the position delta adds in the world frame, matching robosuite ``set_goal``. The
-    open-loop chunk assumes OSC tracking error stays within one step's output range; the short replan horizon
-    bounds the accumulated divergence from the per-step control law.
+    The policy emits a chunk of per-step actions ``[Δpos(3), Δrotvec(3), grip(1)]`` normalized to ``[-1, 1]`` in
+    robosuite OSC_POSE space. Each step's pose delta is scaled by the controller's per-step output range
+    (``OUTPUT_MAX``) and forwarded as a world-frame ``CartesianDelta`` the driver composes onto its live measured
+    pose, reproducing robosuite's feed-forward OSC control (``goal = live_eef ∘ Δ`` every step). Integrating the
+    chunk into absolute waypoints instead chases the open-loop trajectory and folds the OSC tracking residual back
+    into each command — dynamics the policy was never trained against. The grip channel maps to the absolute
+    ``[0, 1]`` closure the gripper command uses.
     """
 
     OUTPUT_MAX = np.array([0.05, 0.05, 0.05, 0.5, 0.5, 0.5])
 
-    def __init__(self, robot_pose_key: str = 'robot_state.ee_pose'):
-        self.robot_pose_key = robot_pose_key
-
-    def decode(self, data, *, context=None):
-        if not isinstance(data, list):
-            raise ValueError('CumulativePoseDeltaAction decodes whole action chunks, not single actions')
-        anchor = np.asarray(context[self.robot_pose_key], dtype=float)
-        pos = anchor[:3].copy()
-        rot = geom.Rotation.from_quat(anchor[3:7])
-        decoded = []
-        for step in data:
-            action = np.asarray(step['action']).clip(-1.0, 1.0)  # robosuite clips both pose and gripper to [-1, 1]
-            physical = action[:6] * self.OUTPUT_MAX
-            pos = pos + physical[:3]
-            rot = geom.Rotation.from_rotvec(physical[3:6]) * rot
-            grip = (float(action[6]) + 1.0) / 2.0
-            pose = geom.Transform3D(translation=pos, rotation=rot)
-            decoded.append({'robot_command': command.CartesianPosition(pose=pose), 'target_grip': grip})
-        return decoded
+    def _decode_single(self, data, context=None):
+        action = np.asarray(data['action']).clip(-1.0, 1.0)  # robosuite clips both pose and gripper to [-1, 1]
+        physical = action[:6] * self.OUTPUT_MAX
+        delta = geom.Transform3D(translation=physical[:3], rotation=geom.Rotation.from_rotvec(physical[3:6]))
+        grip = (float(action[6]) + 1.0) / 2.0
+        return {'robot_command': command.CartesianDelta(delta=delta), 'target_grip': grip}
 
 
 # Constants pi05_libero's training distribution requires that the env's wire observation does not carry
@@ -284,7 +270,7 @@ class OpenpiLiberoObservationCodec(Codec):
 
 
 libero_obs = cfn.Config(OpenpiLiberoObservationCodec)
-libero_action = cfn.Config(CumulativePoseDeltaAction)
+libero_action = cfn.Config(PoseDeltaAction)
 
 # pi05_libero emits a 10-step chunk, but openpi's official LIBERO eval (`replan_steps=5`) executes only the
 # first 5 before re-querying; truncate to match. LIBERO's OSC runs at 20 Hz, so the chunk is stamped at

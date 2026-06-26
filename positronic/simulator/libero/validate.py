@@ -4,7 +4,7 @@
 #     "msgpack",
 #     "websockets",
 #     "robosuite==1.4.1",
-#     "mujoco",
+#     "mujoco==3.2.3",  # pin to openpi's LIBERO eval engine version, so our physics matches the policy's training/eval
 #     "numpy<2",
 #     # LIBERO is not listed here: it ships ``libero`` as a namespace package with no installable wheel, so the
 #     # caller puts a source checkout on ``PYTHONPATH`` (see ``launcher._ensure_libero_src``). These are the
@@ -191,11 +191,11 @@ def _check_obs_encoding(env: LiberoEnv, token: dict) -> None:
 
 
 def _check_osc_delta_scale(env: LiberoEnv, token: dict) -> None:
-    """Pin the OSC scaling and control rate the libero codec bakes: ``CumulativePoseDeltaAction.OUTPUT_MAX``
+    """Pin the OSC scaling and control rate the libero codec bakes: ``PoseDeltaAction.OUTPUT_MAX``
     must equal the controller's per-step output range, and the codec stamps the chunk at the env's control rate."""
     env.reset(token)
     c = env._controller
-    output_max = np.array([0.05, 0.05, 0.05, 0.5, 0.5, 0.5])  # mirrors CumulativePoseDeltaAction.OUTPUT_MAX
+    output_max = np.array([0.05, 0.05, 0.05, 0.5, 0.5, 0.5])  # mirrors PoseDeltaAction.OUTPUT_MAX
     assert np.allclose(c.output_max, output_max) and np.allclose(c.output_min, -output_max), (
         f'OSC output range [{c.output_min}, {c.output_max}] != +/-{output_max.tolist()}'
     )
