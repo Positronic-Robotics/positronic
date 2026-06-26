@@ -181,9 +181,8 @@ class LiberoEnv(EnvProtocol):
         match (self._control_mode, command['type']):
             case ('ee', 'cartesian'):  # OSC_POSE: world-frame pose error
                 physical = self._pose_error(*_unpack_pose(command['pose']))
-            case ('ee', 'cartesian_delta'):  # the world-frame delta is the per-step OSC error directly
-                delta_pos, delta_rot = _unpack_pose(command['delta'])
-                physical = np.concatenate([delta_pos, quat2axisangle(mat2quat(delta_rot))])
+            case ('ee', 'cartesian_delta'):  # OSC_POSE: the world-frame delta composed onto the live eef pose
+                physical = self._pose_error(*self._delta_target(command))
             case ('ee', 'joint_pos'):
                 physical = self._pose_error(*self._fk(command['q']))
             case ('ee', 'joint_vel'):
@@ -196,6 +195,8 @@ class LiberoEnv(EnvProtocol):
                 physical = command['dq']
             case ('joint', 'cartesian'):
                 physical = self._ik(*_unpack_pose(command['pose'])) - self._cur_q()
+            case ('joint', 'cartesian_delta'):
+                physical = self._ik(*self._delta_target(command)) - self._cur_q()
             case ('joint', 'hold'):
                 physical = np.zeros(len(self._qpos_idx))
             case ('joint_delta', 'joint_vel'):  # JOINT_VELOCITY: the per-step delta as a rate over the control period
@@ -204,6 +205,8 @@ class LiberoEnv(EnvProtocol):
                 physical = (command['q'] - self._cur_q()) / self._control_dt
             case ('joint_delta', 'cartesian'):
                 physical = (self._ik(*_unpack_pose(command['pose'])) - self._cur_q()) / self._control_dt
+            case ('joint_delta', 'cartesian_delta'):
+                physical = (self._ik(*self._delta_target(command)) - self._cur_q()) / self._control_dt
             case ('joint_delta', 'hold'):
                 physical = np.zeros(len(self._qpos_idx))
             case (mode, ctype):
@@ -226,6 +229,14 @@ class LiberoEnv(EnvProtocol):
         # world-frame axis-angle rotation error (``goal_pos = ee_pos + Δpos``; ``goal_ori = R(Δrot) @ ee_ori``).
         cur_pos, cur_rot = self._cur_pose()
         return np.concatenate([target_pos - cur_pos, quat2axisangle(mat2quat(target_rot @ cur_rot.T))])
+
+    def _delta_target(self, command: dict[str, Any]) -> tuple[np.ndarray, np.ndarray]:
+        # The absolute pose a world-frame ``cartesian_delta`` targets: translation adds and rotation left-multiplies
+        # onto the live eef pose (``goal_pos = ee_pos + Δpos``; ``goal_ori = R(Δrot) @ ee_ori``) — the same compose
+        # each control mode then bridges, as an OSC pose error or via IK to joints.
+        cur_pos, cur_rot = self._cur_pose()
+        delta_pos, delta_rot = _unpack_pose(command['delta'])
+        return cur_pos + delta_pos, delta_rot @ cur_rot
 
     def _cur_pose(self) -> tuple[np.ndarray, np.ndarray]:
         pos = np.array(self._sim.data.site_xpos[self._eef_site_id])
