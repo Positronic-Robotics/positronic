@@ -227,7 +227,12 @@ class InferenceServer(VendorServer):
 
     def _resolve_checkpoint_id(self, checkpoint_id: str | None) -> str:
         if self._passthrough:
-            return self.checkpoints_dir.rsplit('/', 1)[-1]
+            served = self.checkpoints_dir.rsplit('/', 1)[-1]
+            if checkpoint_id and checkpoint_id != served:
+                raise ValueError(
+                    f'Checkpoint not found or invalid ID: {checkpoint_id}. This server serves only {served}.'
+                )
+            return served
         if checkpoint_id:
             available = list_checkpoints(self.checkpoints_dir)
             if checkpoint_id.isdigit():
