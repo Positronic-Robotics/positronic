@@ -12,8 +12,9 @@ logger = logging.getLogger(__name__)
 
 
 class InferenceSession:
-    def __init__(self, websocket: Connection):
+    def __init__(self, websocket: Connection, infer_timeout: float = 60.0):
         self._websocket = websocket
+        self._infer_timeout = infer_timeout
         self._metadata = self._handshake()
 
     def _handshake(self, timeout_per_message: float = 30.0) -> dict[str, Any]:
@@ -65,7 +66,12 @@ class InferenceSession:
         logger.debug('Size of serialised obs: %1.f KiB', len(serialised) / 1024)
 
         self._websocket.send(serialised)
-        response = deserialise(self._websocket.recv())
+        try:
+            response = deserialise(self._websocket.recv(timeout=self._infer_timeout))
+        except TimeoutError:
+            raise TimeoutError(
+                f'No inference response within {self._infer_timeout}s — server stalled or connection half-open'
+            ) from None
         logger.debug('Size of deserialised response: %1.f KiB', len(response) / 1024)
 
         if isinstance(response, dict) and 'error' in response:
@@ -90,7 +96,11 @@ class InferenceClient:
         self.api_url = f'{http_scheme}://{netloc}/api/v1'
 
     def new_session(
-        self, model_id: str | None = None, open_timeout: float = 10.0, connect_deadline: float = 900.0
+        self,
+        model_id: str | None = None,
+        open_timeout: float = 10.0,
+        connect_deadline: float = 900.0,
+        infer_timeout: float = 60.0,
     ) -> InferenceSession:
         """
         Creates a new inference session.
@@ -120,7 +130,7 @@ class InferenceClient:
                 backoff = min(backoff * 2, 30.0)
             except OSError as e:
                 raise type(e)(f'{e} (connecting to {self.host}:{self.port})') from e
-        return InferenceSession(ws)
+        return InferenceSession(ws, infer_timeout=infer_timeout)
 
     def list_models(self) -> list[str]:
         """List available models from the server."""

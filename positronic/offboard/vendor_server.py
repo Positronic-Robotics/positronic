@@ -139,6 +139,10 @@ class VendorServer(ABC):
         self.idle_timeout_min = idle_timeout_min
         self._active_sessions = 0
         self._last_activity = time.monotonic()
+        # Inference runs in a worker thread (so the event loop keeps servicing other connections and
+        # keepalives) but is serialized: vendor sessions may share one backend client/connection, which
+        # concurrent calls would corrupt.
+        self._infer_lock = asyncio.Lock()
 
         # The default checkpoint, resolved once at startup (see class docstring). Pinned
         # here so a request without an explicit checkpoint never re-resolves the latest.
@@ -229,7 +233,8 @@ class VendorServer(ABC):
                     self._last_activity = time.monotonic()
                     try:
                         raw_obs = deserialise(message)
-                        actions = session(raw_obs)
+                        async with self._infer_lock:
+                            actions = await asyncio.to_thread(session, raw_obs)
                         await websocket.send_bytes(serialise({'result': actions}))
                     except Exception as e:
                         logger.error(f'Error processing message: {e}', exc_info=True)
