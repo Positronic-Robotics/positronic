@@ -99,7 +99,8 @@ class Robot(pimm.ControlSystem):
                         q_with_gripper = np.concatenate([qpos, [self._last_grip]])
                         self.motor_bus.set_target_position(q_with_gripper)
                     case roboarm_command.CartesianDelta(delta):
-                        target = roboarm_command.apply_cartesian_delta(state.ee_pose, delta)
+                        ee_pose, _ = self._forward_kinematics(self.motor_bus.position)
+                        target = roboarm_command.apply_cartesian_delta(ee_pose, delta)
                         qpos = self._solve_ik(state, target)
                         q_with_gripper = np.concatenate([qpos, [self._last_grip]])
                         self.motor_bus.set_target_position(q_with_gripper)
