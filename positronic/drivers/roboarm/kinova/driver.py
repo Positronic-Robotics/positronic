@@ -87,13 +87,14 @@ class Robot(pimm.ControlSystem):
             joint_controller.compute_torque(q, dq, tau)
             current_command = np.zeros(api.actuator_count, dtype=np.float32)
 
-            player = command.TrajectoryPlayer()
+            player = command.TrajectoryPlayer(reduce=command.reduce)
 
             while not should_stop.value:
                 cmd_msg = self.commands.read()
                 if cmd_msg.updated:
                     player.set(cmd_msg.data)
-                for cmd in player.advance(clock.now_ns()):
+                cmd = player.advance(clock.now_ns())
+                if cmd is not None:
                     match cmd:
                         case command.Reset():
                             joint_controller.set_target_qpos(self.home_joints)

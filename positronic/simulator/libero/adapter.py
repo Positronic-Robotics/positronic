@@ -8,7 +8,6 @@ action encoding — the OSC pose delta and its normalization, and the FK/IK that
 lives server-side in ``LiberoEnv`` where the MuJoCo model is; the adapter holds no model and stays geometry-only.
 """
 
-from collections import defaultdict
 from typing import Any
 
 import numpy as np
@@ -16,7 +15,7 @@ import numpy as np
 import pimm
 from positronic import geom
 from positronic.drivers.roboarm import command as roboarm_command
-from positronic.simulator.env_server.adapter import EnvAdapter
+from positronic.simulator.env_server.adapter import EnvAdapter, fresh_command_players
 from positronic.simulator.mujoco.sim import MujocoFrankaState
 
 
@@ -49,16 +48,14 @@ class LiberoAdapter(EnvAdapter):
             'camera_resolution': camera_resolution,
             'control_mode': control_mode,
         }
-        self._players: defaultdict[str, roboarm_command.TrajectoryPlayer] = defaultdict(
-            roboarm_command.TrajectoryPlayer
-        )
+        self._players = fresh_command_players()
         self._held: dict[str, Any] = {}  # last sampled waypoint per channel — re-sent until it changes
         # Last commanded gripper closure, held across a cancelled grip trajectory: grip is an absolute [0, 1]
         # value with no 'hold' command to fall back on (unlike the arm), so cancelling must freeze it, not reopen.
         self._grip = 0.0
 
     def reset_token(self, seed: int | None) -> Any:
-        self._players = defaultdict(roboarm_command.TrajectoryPlayer)
+        self._players = fresh_command_players()
         self._held = {}
         self._grip = 0.0
         # The task spec the server builds from + the seed it selects an init-state with (``None`` -> index 0).
@@ -71,7 +68,8 @@ class LiberoAdapter(EnvAdapter):
                 player.set(msg.data)
                 if not msg.data:  # an empty trajectory cancels: stop replaying the held waypoint
                     self._held.pop(name, None)
-            for value in player.advance(now_ns):
+            value = player.advance(now_ns)
+            if value is not None:
                 self._held[name] = value
         # The server maps the held command into the active controller's action. Reset/Recover have no robosuite
         # action, so they forward as a hold; a CartesianDelta is a one-shot relative motion, forwarded once then

@@ -8,9 +8,19 @@ benchmark ships one adapter (``vendors/``-style); the native ``MujocoSim`` fixtu
 """
 
 from abc import ABC, abstractmethod
+from collections import defaultdict
 from typing import Any
 
 import pimm
+from positronic.drivers.roboarm import command as roboarm_command
+
+
+def fresh_command_players() -> defaultdict[str, roboarm_command.TrajectoryPlayer]:
+    """A trajectory player per command channel: ``robot_command`` accumulates the deltas due in one tick (a
+    missed tick catches up instead of dropping motion), every other channel keeps the last value due."""
+    players = defaultdict(roboarm_command.TrajectoryPlayer)
+    players['robot_command'] = roboarm_command.TrajectoryPlayer(reduce=roboarm_command.reduce)
+    return players
 
 
 class EnvAdapter(ABC):

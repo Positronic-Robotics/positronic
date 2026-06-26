@@ -143,7 +143,7 @@ class MujocoSim(pimm.ControlSystem):
         self._home()
         self._error = False
         self._adapters: dict[str, pimm.shared_memory.NumpySMAdapter] | None = None
-        self._arm_player = roboarm_command.TrajectoryPlayer()
+        self._arm_player = roboarm_command.TrajectoryPlayer(reduce=roboarm_command.reduce)
         self._grip_player = roboarm_command.TrajectoryPlayer()
         self._last_grip = 0.0
         # Set by ``reset``; the run loop publishes frame-0 (instead of stepping) on its next turn and clears it.
@@ -181,12 +181,14 @@ class MujocoSim(pimm.ControlSystem):
             cmd_msg = self.commands.read()
             if cmd_msg.updated:
                 self._arm_player.set(cmd_msg.data)
-            for cmd in self._arm_player.advance(clock.now_ns()):
+            cmd = self._arm_player.advance(clock.now_ns())
+            if cmd is not None:
                 self._apply_command(cmd)
             grip_msg = self.target_grip.read()
             if grip_msg.updated:
                 self._grip_player.set(grip_msg.data)
-            for grip in self._grip_player.advance(clock.now_ns()):
+            grip = self._grip_player.advance(clock.now_ns())
+            if grip is not None:
                 self._last_grip = grip
             self._apply_grip(self._last_grip)
 

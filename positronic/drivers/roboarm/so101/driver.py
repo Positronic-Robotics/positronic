@@ -78,7 +78,7 @@ class Robot(pimm.ControlSystem):
         rate_limit = pimm.RateLimiter(hz=1000, clock=clock)
         state = SO101State()
 
-        player = roboarm_command.TrajectoryPlayer()
+        player = roboarm_command.TrajectoryPlayer(reduce=roboarm_command.reduce)
         grip_player = roboarm_command.TrajectoryPlayer()
 
         while not should_stop.value:
@@ -88,9 +88,11 @@ class Robot(pimm.ControlSystem):
             grip_msg = self.target_grip.read()
             if grip_msg.updated:
                 grip_player.set(grip_msg.data)
-            for grip in grip_player.advance(clock.now_ns()):
+            grip = grip_player.advance(clock.now_ns())
+            if grip is not None:
                 self._last_grip = grip
-            for cmd in player.advance(clock.now_ns()):
+            cmd = player.advance(clock.now_ns())
+            if cmd is not None:
                 match cmd:
                     case roboarm_command.Reset():
                         raise NotImplementedError('Reset not implemented')

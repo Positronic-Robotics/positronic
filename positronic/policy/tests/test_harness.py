@@ -12,10 +12,14 @@ from positronic.drivers.roboarm import RobotStatus
 from positronic.drivers.roboarm.command import (
     CartesianDelta,
     CartesianPosition,
+    JointDelta,
+    JointPosition,
     Recover,
     Reset,
+    TrajectoryPlayer,
     apply_cartesian_delta,
     from_wire,
+    reduce,
     to_wire,
 )
 from positronic.eval import Command, Embodiment, Observation, Task
@@ -1110,6 +1114,64 @@ def test_apply_cartesian_delta_composes_in_world_frame():
     np.testing.assert_allclose(target.translation, current.translation + delta.translation)
     np.testing.assert_allclose(target.rotation.as_quat, (delta.rotation * current.rotation).as_quat, atol=1e-12)
     assert not np.allclose(target.translation, (current * delta).translation)  # guards against body-frame compose
+
+
+def test_reduce_accumulates_due_cartesian_deltas():
+    # Rotations about different axes so the world-frame compose is non-commutative -- this pins the fold order
+    # (apply d0 then d1), not just that a fold happened.
+    d0 = Transform3D(np.array([0.01, 0.0, 0.0]), Rotation.from_rotvec(np.array([0.3, 0.0, 0.0])))
+    d1 = Transform3D(np.array([0.02, 0.01, 0.0]), Rotation.from_rotvec(np.array([0.0, 0.0, 0.2])))
+    out = reduce([(10, CartesianDelta(d0)), (20, CartesianDelta(d1))])
+    assert isinstance(out, CartesianDelta)
+    expected = apply_cartesian_delta(d0, d1)  # two due deltas catch up as their world-frame compose, not last-wins
+    np.testing.assert_allclose(out.delta.translation, expected.translation)
+    np.testing.assert_allclose(out.delta.rotation.as_quat, expected.rotation.as_quat, atol=1e-12)
+    assert not np.allclose(out.delta.rotation.as_quat, apply_cartesian_delta(d1, d0).rotation.as_quat)
+
+
+def test_reduce_sums_due_joint_deltas():
+    out = reduce([(10, JointDelta(np.array([0.1, -0.2, 0.3]))), (20, JointDelta(np.array([0.0, 0.2, -0.1])))])
+    assert isinstance(out, JointDelta)
+    np.testing.assert_allclose(out.velocities, [0.1, 0.0, 0.2])
+
+
+def test_reduce_absolute_run_keeps_last():
+    p0 = CartesianPosition(Transform3D(np.array([0.1, 0.0, 0.0]), Rotation.from_rotvec(np.zeros(3))))
+    p1 = JointPosition(np.array([0.2, 0.0, 0.0]))
+    assert reduce([(10, p0), (20, p1)]) is p1
+
+
+def test_reduce_raises_on_absolute_delta_mix():
+    cart_pos = CartesianPosition(Transform3D(np.zeros(3), Rotation.from_rotvec(np.zeros(3))))
+    cart_delta = CartesianDelta(Transform3D(np.array([0.01, 0.0, 0.0]), Rotation.from_rotvec(np.zeros(3))))
+    joint_pos = JointPosition(np.zeros(3))
+    joint_delta = JointDelta(np.array([0.1, 0.0, 0.0]))
+    with pytest.raises(ValueError):
+        reduce([(10, cart_pos), (20, cart_delta)])
+    with pytest.raises(ValueError):
+        reduce([(10, cart_delta), (20, cart_pos)])
+    with pytest.raises(ValueError):  # JointPosition then JointDelta: the delta has no faithful anchor to fold onto
+        reduce([(10, joint_pos), (20, joint_delta)])
+
+
+def test_reduce_raises_on_mixed_delta_spaces():
+    cart_delta = CartesianDelta(Transform3D(np.array([0.01, 0.0, 0.0]), Rotation.from_rotvec(np.zeros(3))))
+    joint_delta = JointDelta(np.array([0.1, 0.0, 0.0]))
+    with pytest.raises(ValueError):
+        reduce([(10, cart_delta), (20, joint_delta)])
+    with pytest.raises(ValueError):
+        reduce([(10, joint_delta), (20, cart_delta)])
+
+
+def test_trajectory_player_accumulates_missed_deltas():
+    d0 = Transform3D(np.array([0.01, 0.0, 0.0]), Rotation.from_rotvec(np.zeros(3)))
+    d1 = Transform3D(np.array([0.02, 0.0, 0.0]), Rotation.from_rotvec(np.zeros(3)))
+    player = TrajectoryPlayer(reduce=reduce)
+    player.set([(10, CartesianDelta(d0)), (20, CartesianDelta(d1))])
+    out = player.advance(20)  # both waypoints due in one tick -> summed, not dropped to the last
+    assert isinstance(out, CartesianDelta)
+    np.testing.assert_allclose(out.delta.translation, [0.03, 0.0, 0.0])
+    assert player.advance(30) is None
 
 
 @pytest.mark.parametrize('status, expected_error', [(RobotStatus.AVAILABLE, 0), (RobotStatus.ERROR, 1)])

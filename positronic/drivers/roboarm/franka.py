@@ -219,7 +219,7 @@ class Robot(pimm.ControlSystem):
         self._reset(robot, robot_state)
 
         in_error = False
-        player = command.TrajectoryPlayer()
+        player = command.TrajectoryPlayer(reduce=command.reduce)
 
         while not should_stop.value:
             st = robot.state()
@@ -233,7 +233,8 @@ class Robot(pimm.ControlSystem):
             cmd_msg = self.commands.read()
             if cmd_msg.updated:
                 player.set(cmd_msg.data)
-            for cmd in player.advance(clock.now_ns()):
+            cmd = player.advance(clock.now_ns())
+            if cmd is not None:
                 match cmd:
                     case command.Reset():
                         _recover_if_needed(robot, in_error)
