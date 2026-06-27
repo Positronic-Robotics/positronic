@@ -74,6 +74,10 @@ class InferenceSession:
         try:
             response = deserialise(self._websocket.recv(timeout=self._infer_timeout))
         except TimeoutError:
+            # The observation is in flight but unanswered; the server's late response would sit in the socket and
+            # the next ``recv`` would pair it with a future observation. Close so the desynced session can't be
+            # reused — a subsequent ``infer`` fails loudly on the closed socket instead.
+            self._websocket.close()
             raise TimeoutError(
                 f'No inference response within {self._infer_timeout}s — server stalled or connection half-open'
             ) from None
