@@ -197,6 +197,19 @@ class VendorServer(ABC):
 
         return send_progress
 
+    async def _acquire_infer_lock(self, websocket: WebSocket):
+        """Acquire the inference lock, emitting ``waiting`` keepalives while queued behind another session.
+
+        A peer may hold the lock for a slow first-call compile or inference; a silent wait here would trip the
+        client handshake's 30s per-message timeout before ``ready`` is sent.
+        """
+        while True:
+            try:
+                await asyncio.wait_for(self._infer_lock.acquire(), timeout=10.0)
+                return
+            except TimeoutError:
+                await websocket.send_bytes(serialise({'status': 'waiting', 'message': 'Waiting for inference slot'}))
+
     async def websocket_endpoint(self, websocket: WebSocket, model_id: str | None = None):
         await websocket.accept()
         logger.info(f'Connected to {websocket.client} requesting {model_id or "default"}')
@@ -223,8 +236,12 @@ class VendorServer(ABC):
                 policy = self.codec.wrap(base_policy) if self.codec else base_policy
             # ``new_session`` resets the backend client, which vendor sessions may share; hold the inference lock
             # so the reset can't interleave with an in-flight ``session(raw_obs)`` running in another worker thread.
-            async with self._infer_lock:
+            # Acquire it with keepalives so queuing behind a peer's slow inference doesn't trip the handshake timeout.
+            await self._acquire_infer_lock(websocket)
+            try:
                 session = await asyncio.to_thread(policy.new_session)
+            finally:
+                self._infer_lock.release()
             # ``policy.meta`` is the static baseline; ``session.meta`` overlays
             # per-episode specifics and wins on conflict.
             meta = {**self.metadata, **extra_meta, **policy.meta, **session.meta}
@@ -236,6 +253,9 @@ class VendorServer(ABC):
                     self._last_activity = time.monotonic()
                     try:
                         raw_obs = deserialise(message)
+                        # Plain acquire, not ``_acquire_infer_lock``: past the handshake the client awaits a
+                        # ``result`` and would mis-parse a ``waiting`` keepalive; the wait is bounded client-side
+                        # by ``infer_timeout``.
                         async with self._infer_lock:
                             actions = await asyncio.to_thread(session, raw_obs)
                         await websocket.send_bytes(serialise({'result': actions}))
