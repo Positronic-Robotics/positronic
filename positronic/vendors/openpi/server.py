@@ -219,7 +219,20 @@ class InferenceServer(VendorServer):
         self._subprocesses: dict[str, OpenpiSubprocess] = {}
         self._subprocess_lock = asyncio.Lock()
 
+    @property
+    def _passthrough(self) -> bool:
+        # gs:// is a published openpi checkpoint that openpi fetches itself via fsspec[gcs]: pos3 handles only
+        # s3://, and there are no numeric-step subdirs to resolve — the dir is the single checkpoint.
+        return self.checkpoints_dir.startswith('gs://')
+
     def _resolve_checkpoint_id(self, checkpoint_id: str | None) -> str:
+        if self._passthrough:
+            served = self.checkpoints_dir.rsplit('/', 1)[-1]
+            if checkpoint_id and checkpoint_id != served:
+                raise ValueError(
+                    f'Checkpoint not found or invalid ID: {checkpoint_id}. This server serves only {served}.'
+                )
+            return served
         if checkpoint_id:
             available = list_checkpoints(self.checkpoints_dir)
             if checkpoint_id.isdigit():
@@ -240,12 +253,15 @@ class InferenceServer(VendorServer):
 
         async with self._subprocess_lock:
             if resolved_id not in self._subprocesses:
-                checkpoint_path = f'{self.checkpoints_dir}/{resolved_id}'
-                download_task = asyncio.create_task(asyncio.to_thread(pos3.download, checkpoint_path))
-                await monitor_async_task(
-                    download_task, description=f'Downloading checkpoint {resolved_id}', on_progress=send_progress
-                )
-                checkpoint_dir = download_task.result()
+                if self._passthrough:
+                    checkpoint_dir = self.checkpoints_dir  # openpi's subprocess downloads it via fsspec
+                else:
+                    checkpoint_path = f'{self.checkpoints_dir}/{resolved_id}'
+                    download_task = asyncio.create_task(asyncio.to_thread(pos3.download, checkpoint_path))
+                    await monitor_async_task(
+                        download_task, description=f'Downloading checkpoint {resolved_id}', on_progress=send_progress
+                    )
+                    checkpoint_dir = download_task.result()
 
                 logger.info(f'Starting OpenPI subprocess for checkpoint {resolved_id}')
                 subprocess_obj = OpenpiSubprocess(
@@ -260,6 +276,8 @@ class InferenceServer(VendorServer):
         return OpenpiPolicy(model_handle.client)
 
     async def get_models(self) -> dict:
+        if self._passthrough:
+            return {'models': [self._resolve_checkpoint_id(None)]}
         try:
             checkpoints = list_checkpoints(self.checkpoints_dir)
             normalized = [int(cp) for cp in checkpoints if cp.isdigit()]
@@ -344,10 +362,13 @@ droid = server.override(
     config_name='pi05_droid',
     checkpoints_dir='s3://PUBLIC@positronic-public/checkpoints/openpi/pi05_droid/',
 )
+libero = server.override(
+    codec=codecs.libero, config_name='pi05_libero', checkpoints_dir='gs://openpi-assets/checkpoints/pi05_libero'
+)
 
 
 if __name__ == '__main__':
     init_logging()
     ensure_paligemma_tokenizer()
     with pos3.mirror():
-        cfn.cli({'serve': server, 'phail': phail, 'sim_stack': sim_stack, 'droid': droid})
+        cfn.cli({'serve': server, 'phail': phail, 'sim_stack': sim_stack, 'droid': droid, 'libero': libero})

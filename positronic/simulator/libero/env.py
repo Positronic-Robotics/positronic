@@ -4,7 +4,7 @@
 #     "msgpack",
 #     "websockets",
 #     "robosuite==1.4.1",
-#     "mujoco",
+#     "mujoco==3.2.3",  # pin to openpi's LIBERO eval engine version, so our physics matches the policy's training/eval
 #     "numpy<2",
 #     # LIBERO is not listed here: it declares ``install_requires=[]`` and ships ``libero`` as a PEP 420 namespace
 #     # package, so no wheel carries it — the launcher puts a source checkout on ``PYTHONPATH``. These are the
@@ -158,6 +158,11 @@ class LiberoEnv(EnvProtocol):
             self._env.seed(seed)
             self._env.reset()
             raw = self._env.set_init_state(self._init_states[seed % len(self._init_states)])
+            # ``set_init_state`` only places objects kinematically (``sim.forward``, no dynamics), so they start
+            # mid-fall. Step a held arm with the gripper open so they settle before the first observation, the
+            # zero-pose-delta/open-gripper action openpi waits out as ``LIBERO_DUMMY_ACTION``.
+            for _ in range(token.get('settle_steps', 10)):
+                raw, _reward, _done, _info = self._env.step(np.zeros(len(self._controller.input_max)).tolist() + [-1.0])
         # ``robot_meta`` is empty: the 3.10 server can't import positronic to emit the Panda model, so the eval
         # supplies it via ``static_meta`` (``bundled_panda_model``). ``meta`` carries the scene/task identity.
         return {'obs': self._observe(raw), 'meta': self._meta, 'robot_meta': {}, 'control_dt': self._control_dt}

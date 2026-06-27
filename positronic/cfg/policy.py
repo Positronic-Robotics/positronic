@@ -2,6 +2,7 @@ import configuronic as cfn
 import pos3
 
 from positronic.cfg import codecs
+from positronic.offboard.client import DEFAULT_INFER_TIMEOUT
 from positronic.policy import ActionHorizon, Codec, Policy, Recorder, RemotePolicy
 from positronic.utils import get_latest_checkpoint
 
@@ -68,6 +69,7 @@ def sample(origins: list[cfn.Config], weights: list[float] | None):
     codec=None,
     secure=False,
     recording_dir=None,
+    infer_timeout=DEFAULT_INFER_TIMEOUT,
 )
 def remote(
     host: str,
@@ -79,9 +81,12 @@ def remote(
     headers: dict[str, str] | None = None,
     secure: bool = False,
     recording_dir: str | None = None,
+    infer_timeout: float = DEFAULT_INFER_TIMEOUT,
 ):
     effective_resize = None if codec and codec.meta.get('image_sizes') else resize
-    policy = RemotePolicy(host, port, effective_resize, model_id=model_id, headers=headers, secure=secure)
+    policy = RemotePolicy(
+        host, port, effective_resize, model_id=model_id, headers=headers, secure=secure, infer_timeout=infer_timeout
+    )
     if horizon_sec is not None:
         codec = ActionHorizon(horizon_sec) | codec if codec else ActionHorizon(horizon_sec)
     if recording_dir is not None:
@@ -103,6 +108,7 @@ def remote(
     codec=None,
     secure=False,
     recording_dir=None,
+    infer_timeout=DEFAULT_INFER_TIMEOUT,
 )
 def weighted_remote(
     host: str | None,
@@ -115,12 +121,15 @@ def weighted_remote(
     headers: dict[str, str] | None = None,
     secure: bool = False,
     recording_dir: str | None = None,
+    infer_timeout: float = DEFAULT_INFER_TIMEOUT,
 ):
     if not host:
         return None
 
     effective_resize = None if codec and codec.meta.get('image_sizes') else resize
-    policy = RemotePolicy(host, port, effective_resize, model_id=model_id, headers=headers, secure=secure)
+    policy = RemotePolicy(
+        host, port, effective_resize, model_id=model_id, headers=headers, secure=secure, infer_timeout=infer_timeout
+    )
     if horizon_sec is not None:
         codec = ActionHorizon(horizon_sec) | codec if codec else ActionHorizon(horizon_sec)
     if recording_dir is not None:

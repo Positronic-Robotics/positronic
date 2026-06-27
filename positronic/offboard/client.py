@@ -10,10 +10,16 @@ from positronic.utils.serialization import deserialise, serialise
 
 logger = logging.getLogger(__name__)
 
+# Only the checkpoint pinned at server startup is pre-warmed; a session that requests any other model loads it
+# cold, so its first ``infer`` can include the backend's JAX compilation. Bound each ``recv`` generously enough to
+# outlast that compile (still surfacing a truly stalled/half-open connection), and let callers override per use.
+DEFAULT_INFER_TIMEOUT = 180.0
+
 
 class InferenceSession:
-    def __init__(self, websocket: Connection):
+    def __init__(self, websocket: Connection, infer_timeout: float = DEFAULT_INFER_TIMEOUT):
         self._websocket = websocket
+        self._infer_timeout = infer_timeout
         self._metadata = self._handshake()
 
     def _handshake(self, timeout_per_message: float = 30.0) -> dict[str, Any]:
@@ -65,7 +71,16 @@ class InferenceSession:
         logger.debug('Size of serialised obs: %1.f KiB', len(serialised) / 1024)
 
         self._websocket.send(serialised)
-        response = deserialise(self._websocket.recv())
+        try:
+            response = deserialise(self._websocket.recv(timeout=self._infer_timeout))
+        except TimeoutError:
+            # The observation is in flight but unanswered; the server's late response would sit in the socket and
+            # the next ``recv`` would pair it with a future observation. Close so the desynced session can't be
+            # reused — a subsequent ``infer`` fails loudly on the closed socket instead.
+            self._websocket.close()
+            raise TimeoutError(
+                f'No inference response within {self._infer_timeout}s — server stalled or connection half-open'
+            ) from None
         logger.debug('Size of deserialised response: %1.f KiB', len(response) / 1024)
 
         if isinstance(response, dict) and 'error' in response:
@@ -90,7 +105,11 @@ class InferenceClient:
         self.api_url = f'{http_scheme}://{netloc}/api/v1'
 
     def new_session(
-        self, model_id: str | None = None, open_timeout: float = 10.0, connect_deadline: float = 900.0
+        self,
+        model_id: str | None = None,
+        open_timeout: float = 10.0,
+        connect_deadline: float = 900.0,
+        infer_timeout: float = DEFAULT_INFER_TIMEOUT,
     ) -> InferenceSession:
         """
         Creates a new inference session.
@@ -120,7 +139,7 @@ class InferenceClient:
                 backoff = min(backoff * 2, 30.0)
             except OSError as e:
                 raise type(e)(f'{e} (connecting to {self.host}:{self.port})') from e
-        return InferenceSession(ws)
+        return InferenceSession(ws, infer_timeout=infer_timeout)
 
     def list_models(self) -> list[str]:
         """List available models from the server."""
