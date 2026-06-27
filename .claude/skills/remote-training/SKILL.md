@@ -171,7 +171,10 @@ The first job after a dependency change pays the full `uv`/HF cold-download
 Endpoint on H100 port 8000, blocks until a public IP is allocated, and prints a
 banner containing `Endpoint URL:  http://<IP>` (the endpoint IP), the endpoint
 ID/name, and the teardown command. The container then takes ~10–15 min more
-to `uv sync` and load the model.
+to `uv sync` and load the model. Endpoints are authenticated by default — the
+server validates a bearer token (`NEBIUS_AUTH_TOKEN_SECRET`, injected as the
+container's `AUTH_TOKEN`); callers send `Authorization: Bearer <token>`, and
+`NEBIUS_AUTH_TOKEN_SECRET=` creates an open endpoint.
 
 ```bash
 # Named preset — checkpoint path comes from the vendor's server.py config
@@ -190,10 +193,12 @@ bash workflows/nebius/serve.sh gr00t groot-server ee_rot6d \
   --checkpoints_dir=<ckpt-dir>
 ```
 
-Sanity-check once warm:
+Sanity-check once warm (load `POSITRONIC_INFERENCE_TOKEN` first — see
+`workflows/nebius/README.md`, "Authenticated inference"):
 
 ```bash
-curl http://<endpoint-ip>:8000/api/v1/models   # → {"models": ["<step>"]}
+curl -H "Authorization: Bearer $POSITRONIC_INFERENCE_TOKEN" \
+  http://<endpoint-ip>:8000/api/v1/models   # → {"models": ["<step>"]}
 ```
 
 Tear down (releases compute + public IP):
@@ -217,11 +222,12 @@ nebius ai endpoint list --parent-id "$NEBIUS_PARENT_ID" --format json \
 # → the public IP; the endpoint serves on port 8000
 ```
 
-Point the `positronic-inference` CLI at the endpoint IP:
+Point the `positronic-inference` CLI at the endpoint IP (`.secure_remote` reads the bearer token
+from `POSITRONIC_INFERENCE_TOKEN`):
 
 ```bash
 uv run --locked positronic-inference sim \
-  --policy=.remote --policy.host=<endpoint-ip> --policy.port=8000 \
+  --policy=.secure_remote --policy.host=<endpoint-ip> \
   --output_dir=s3://inference/sim_stack_validation/<run_name>/<vendor>/
 ```
 

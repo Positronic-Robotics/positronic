@@ -23,6 +23,14 @@ IMAGE_TAG="${NEBIUS_IMAGE_TAG:-latest}"
 # Nebius GPU preset. Default is one H100; multi-GPU presets must match the server's GPU count
 # (DreamZero's --num_gpus runs torchrun --nproc_per_node, so an 8-GPU server needs an 8-GPU preset).
 PRESET="${NEBIUS_PRESET:-1gpu-16vcpu-200gb}"
+# Authenticated endpoint (default). The server validates `Authorization: Bearer <token>` in-process
+# on both the HTTP and WebSocket routes — Nebius `--auth token` gates HTTP but drops the inference
+# WebSocket upgrade, so auth lives in the server. NEBIUS_AUTH_TOKEN_SECRET names a MysteryBox secret
+# whose AUTH_TOKEN payload is injected as the container's AUTH_TOKEN env var. Set it empty to create
+# an open endpoint.
+AUTH_TOKEN_SECRET="${NEBIUS_AUTH_TOKEN_SECRET-positronic-serverless-inference-token}"
+AUTH_FLAGS=""  # word-splits into the create call below; MysteryBox selectors carry no spaces
+[ -n "$AUTH_TOKEN_SECRET" ] && AUTH_FLAGS="--env-secret AUTH_TOKEN=$AUTH_TOKEN_SECRET"
 
 if [ $# -lt 2 ]; then
   cat >&2 <<'EOF'
@@ -105,6 +113,7 @@ nebius ai endpoint create \
   --env-secret AWS_SECRET_ACCESS_KEY=positronic-serverless-aws-secret-access-key \
   --env AWS_ENDPOINT_URL=https://storage.eu-north1.nebius.cloud:443 \
   --env AWS_DEFAULT_REGION=eu-north1 \
+  $AUTH_FLAGS \
   --public >/dev/null
 
 ID=$(nebius ai endpoint list --parent-id "$PARENT_ID" --format json \
@@ -131,6 +140,9 @@ if [ -z "$IP" ]; then
   exit 1
 fi
 
+SANITY="curl http://$IP/api/v1/models"
+[ -n "$AUTH_TOKEN_SECRET" ] && SANITY="$SANITY -H \"Authorization: Bearer \$POSITRONIC_INFERENCE_TOKEN\""
+
 cat <<BANNER
 
 ==============================================================
@@ -147,10 +159,20 @@ The container is still warming up (image pull + uv sync + checkpoint load,
 
 Once the model is loaded, sanity-check with:
 
-  curl http://$IP/api/v1/models
+  $SANITY
 
 To release the endpoint and its public IP:
 
   bash workflows/nebius/stop.sh $NAME
 
 BANNER
+
+if [ -n "$AUTH_TOKEN_SECRET" ]; then
+  cat <<AUTHNOTE
+Auth: enabled (server validates the bearer token from secret '$AUTH_TOKEN_SECRET', injected as
+AUTH_TOKEN). Callers must send 'Authorization: Bearer <token>' — run inference with
+--policy=.secure_remote after loading the token into POSITRONIC_INFERENCE_TOKEN (see
+workflows/nebius/README.md, "Authenticated inference").
+
+AUTHNOTE
+fi

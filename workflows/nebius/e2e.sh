@@ -152,7 +152,8 @@ wait_job "$TRAIN_ID" "train" || exit 1
 
 # ---- 3. Serve ----
 note "serve -> $ENDPOINT_NAME"
-SERVE_OUT=$(bash "$SCRIPT_DIR/serve.sh" "$VENDOR" "$ENDPOINT_NAME" "${SERVE_SUBCMD[@]}" 2>&1)
+# Open endpoint: the pipeline test's smoke curl below is unauthenticated.
+SERVE_OUT=$(NEBIUS_AUTH_TOKEN_SECRET= bash "$SCRIPT_DIR/serve.sh" "$VENDOR" "$ENDPOINT_NAME" "${SERVE_SUBCMD[@]}" 2>&1)
 echo "$SERVE_OUT" >> "$LOG"
 SERVE_URL=$(echo "$SERVE_OUT" | awk '/Endpoint URL:/ {print $3; exit}')
 [ -z "$SERVE_URL" ] && { note "FAIL: no serve URL"; exit 1; }

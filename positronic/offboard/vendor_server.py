@@ -1,7 +1,9 @@
 """Base class for vendor inference servers (GR00T, OpenPI, DreamZero, LeRobot)."""
 
 import asyncio
+import hmac
 import logging
+import os
 import time
 from abc import ABC, abstractmethod
 from collections.abc import Callable
@@ -9,7 +11,7 @@ from typing import Any
 
 import pos3
 import uvicorn
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import Depends, FastAPI, Header, HTTPException, WebSocket, WebSocketDisconnect, WebSocketException, status
 
 from positronic.policy import Codec, Policy, Recorder
 from positronic.utils.checkpoints import get_latest_checkpoint, list_checkpoints
@@ -146,10 +148,20 @@ class VendorServer(ABC):
 
         self.metadata: dict[str, Any] = {}
 
+        # Bearer token gating every endpoint, injected as the container's AUTH_TOKEN env var by
+        # serve.sh. Unset -> the server is open; set-but-empty means a misconfigured secret, so fail
+        # closed rather than silently serve open. Validated in-process because Nebius `--auth token`
+        # gates HTTP but does not proxy the inference WebSocket.
+        self._auth_token = os.environ.get('AUTH_TOKEN')
+        if self._auth_token == '':
+            raise ValueError('AUTH_TOKEN is set but empty; unset it for an open endpoint or inject a real token')
+
         self.app = FastAPI()
-        self.app.get('/api/v1/models')(self.get_models)
-        self.app.websocket('/api/v1/session')(self.websocket_endpoint)
-        self.app.websocket('/api/v1/session/{model_id}')(self.websocket_endpoint)
+        http_auth = [Depends(self._require_http_auth)]
+        ws_auth = [Depends(self._require_ws_auth)]
+        self.app.get('/api/v1/models', dependencies=http_auth)(self.get_models)
+        self.app.websocket('/api/v1/session', dependencies=ws_auth)(self.websocket_endpoint)
+        self.app.websocket('/api/v1/session/{model_id}', dependencies=ws_auth)(self.websocket_endpoint)
 
     @abstractmethod
     async def resolve_model(self, model_id: str | None, websocket: WebSocket | None) -> tuple[Any, dict]:
@@ -192,6 +204,19 @@ class VendorServer(ABC):
                 await websocket.send_bytes(serialise({'status': 'loading', 'message': msg}))
 
         return send_progress
+
+    def _authorized(self, authorization: str | None) -> bool:
+        if self._auth_token is None:
+            return True
+        return authorization is not None and hmac.compare_digest(authorization, f'Bearer {self._auth_token}')
+
+    def _require_http_auth(self, authorization: str | None = Header(default=None)):
+        if not self._authorized(authorization):
+            raise HTTPException(status_code=401, detail='Invalid or missing bearer token')
+
+    async def _require_ws_auth(self, websocket: WebSocket):
+        if not self._authorized(websocket.headers.get('authorization')):
+            raise WebSocketException(code=status.WS_1008_POLICY_VIOLATION)
 
     async def websocket_endpoint(self, websocket: WebSocket, model_id: str | None = None):
         await websocket.accept()

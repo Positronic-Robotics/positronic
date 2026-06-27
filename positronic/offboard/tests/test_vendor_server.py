@@ -5,8 +5,10 @@ import time
 from collections.abc import Generator
 from unittest.mock import MagicMock
 
+import httpx
 import pytest
 import uvicorn
+from websockets.exceptions import InvalidStatus
 
 from positronic.offboard.client import InferenceClient
 from positronic.offboard.vendor_server import VendorServer
@@ -190,3 +192,48 @@ def test_codec_wrapping(codec_server):
         assert result == [{'action': [1, 2, 3]}]
     finally:
         session.close()
+
+
+_TEST_TOKEN = 'test-secret-token'
+
+
+@pytest.fixture
+def authed_server(monkeypatch) -> Generator[tuple[str, int], None, None]:
+    monkeypatch.setenv('AUTH_TOKEN', _TEST_TOKEN)
+    host, port, _ = _start_server(_StubVendorServer(host='localhost', port=find_free_port()))
+    yield host, port
+
+
+def test_auth_rejects_missing_token(authed_server):
+    host, port = authed_server
+    client = InferenceClient(host, port)
+    with pytest.raises(InvalidStatus):
+        client.new_session()
+    with pytest.raises(httpx.HTTPStatusError):
+        client.list_models()
+
+
+def test_auth_rejects_wrong_token(authed_server):
+    host, port = authed_server
+    client = InferenceClient(host, port, headers={'Authorization': 'Bearer wrong'})
+    with pytest.raises(InvalidStatus):
+        client.new_session()
+    with pytest.raises(httpx.HTTPStatusError):
+        client.list_models()
+
+
+def test_auth_accepts_valid_token(authed_server):
+    host, port = authed_server
+    client = InferenceClient(host, port, headers={'Authorization': f'Bearer {_TEST_TOKEN}'})
+    assert client.list_models() == ['stub']
+    session = client.new_session()
+    try:
+        assert session.metadata['type'] == 'stub'
+    finally:
+        session.close()
+
+
+def test_empty_auth_token_fails_closed(monkeypatch):
+    monkeypatch.setenv('AUTH_TOKEN', '')
+    with pytest.raises(ValueError, match='AUTH_TOKEN is set but empty'):
+        _StubVendorServer(host='localhost', port=find_free_port())
