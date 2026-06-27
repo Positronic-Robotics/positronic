@@ -11,7 +11,7 @@ from positronic.simulator.libero.launcher import serve_libero
 
 @cfn.config(
     camera_dict={'image.agentview': 'agentview_image', 'image.wrist': 'eye_in_hand_image'},
-    camera_resolution=256,  # openpi renders LIBERO at 256 then resizes to 224; render at 256 so the policy sees that
+    camera_resolution=256,
     control_mode='ee',
     timeout=20.0,
     seed=None,
