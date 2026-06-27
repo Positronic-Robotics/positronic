@@ -130,7 +130,7 @@ def _nudge_pose(env: LiberoEnv) -> np.ndarray:
 
 
 def _check_obs_encoding(env: LiberoEnv, token: dict) -> None:
-    """Measure and verify the constants ``OpenpiLiberoObservationCodec`` needs for the 8-dim state.
+    """Measure and verify the constants ``LiberoObservationCodec`` needs for the 8-dim state.
 
     openpi's LIBERO state is ``[robot0_eef_pos(3), quat2axisangle(robot0_eef_quat)(3), robot0_gripper_qpos(2)]``
     (openpi ``examples/libero/main.py``). The env reports the eef pose in the grip-site frame and the gripper as a

@@ -8,7 +8,7 @@ OpenPI has different key format expectations for training vs inference:
 - **Inference (OpenPI format)**: Slash-separated keys like `observation/state`, `observation/image`.
   This is what OpenPI's policy classes (e.g., `positronic_policy.py`) expect at inference time.
 
-The `OpenpiObservationCodec` class handles both cases:
+The `ObservationCodec` class handles both cases:
 - `encode()` (inference): Produces OpenPI-compatible format with slash-separated keys
 - `training_encoder` (training): Produces LeRobot-compatible format with dot-separated keys
 
@@ -30,10 +30,10 @@ from positronic.dataset.transforms import image
 from positronic.dataset.transforms.episode import Derive, Get
 from positronic.drivers.roboarm import command
 from positronic.policy.codec import Codec, lerobot_image, lerobot_state
-from positronic.policy.observation import ObservationCodec
+from positronic.policy.observation import ObservationCodec as GenericObservationCodec
 
 
-class OpenpiObservationCodec(Codec):
+class ObservationCodec(Codec):
     """Observation encoder that outputs LeRobot keys for training, OpenPI keys for inference."""
 
     def __init__(
@@ -128,7 +128,7 @@ class OpenpiObservationCodec(Codec):
 )
 def observation(state_features: dict[str, int], exterior_camera: str, wrist_camera: str, image_size: tuple[int, int]):
     """General OpenPI observation encoder with configurable state features."""
-    return OpenpiObservationCodec(
+    return ObservationCodec(
         state_features=state_features, exterior_camera=exterior_camera, wrist_camera=wrist_camera, image_size=image_size
     )
 
@@ -140,7 +140,7 @@ ee_joints_obs = observation.override(state_features={'robot_state.ee_pose': 7, '
 # Pretrained DROID models read joints and gripper as separate observation keys and the language
 # prompt under `prompt` (see openpi `droid_policy.DroidInputs`).
 droid_obs = cfn.Config(
-    ObservationCodec,
+    GenericObservationCodec,
     state={'observation/joint_position': {'robot_state.q': 7}, 'observation/gripper_position': {'grip': 1}},
     images={
         'observation/wrist_image_left': ('image.wrist', (224, 224)),
@@ -205,7 +205,7 @@ _GRIPPER_QPOS_OPEN = np.array([0.039683, -0.039682])
 _GRIPPER_QPOS_CLOSED = np.array([0.0005, -0.0005])
 
 
-class OpenpiLiberoObservationCodec(Codec):
+class LiberoObservationCodec(Codec):
     """pi05_libero observation: 8-dim ``[eef_pos(3), eef_axisangle(3), gripper_qpos(2)]`` + 180°-rotated images.
 
     Reproduces openpi's LIBERO training preprocessing (openpi ``examples/libero/main.py``): the state packs the
@@ -269,7 +269,7 @@ class OpenpiLiberoObservationCodec(Codec):
         return {'image_sizes': self._image_size}
 
 
-libero_obs = cfn.Config(OpenpiLiberoObservationCodec)
+libero_obs = cfn.Config(LiberoObservationCodec)
 libero_action = cfn.Config(PoseDeltaAction)
 
 # pi05_libero emits a 10-step chunk, but openpi's official LIBERO eval (`replan_steps=5`) executes only the
