@@ -61,8 +61,6 @@ from libero.libero.envs import OffScreenRenderEnv  # noqa: E402
 _IK_ITERS = 100
 _IK_DAMPING = 0.05
 _IK_TOL = 1e-4
-_SETTLE_STEPS = 10  # hold-arm/open-gripper steps after a seeded reset to let dropped objects fall before the first
-# observation, matching openpi's num_steps_wait dummy-action wait (examples/libero/main.py)
 
 
 def _unpack_pose(vec: Any) -> tuple[np.ndarray, np.ndarray]:
@@ -163,7 +161,7 @@ class LiberoEnv(EnvProtocol):
             # ``set_init_state`` only places objects kinematically (``sim.forward``, no dynamics), so they start
             # mid-fall. Step a held arm with the gripper open so they settle before the first observation, the
             # zero-pose-delta/open-gripper action openpi waits out as ``LIBERO_DUMMY_ACTION``.
-            for _ in range(_SETTLE_STEPS):
+            for _ in range(token.get('settle_steps', 10)):
                 raw, _reward, _done, _info = self._env.step(np.zeros(len(self._controller.input_max)).tolist() + [-1.0])
         # ``robot_meta`` is empty: the 3.10 server can't import positronic to emit the Panda model, so the eval
         # supplies it via ``static_meta`` (``bundled_panda_model``). ``meta`` carries the scene/task identity.
