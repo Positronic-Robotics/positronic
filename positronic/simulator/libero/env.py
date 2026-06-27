@@ -4,7 +4,7 @@
 #     "msgpack",
 #     "websockets",
 #     "robosuite==1.4.1",
-#     "mujoco",
+#     "mujoco==3.2.3",  # pin to openpi's LIBERO eval engine version, so our physics matches the policy's training/eval
 #     "numpy<2",
 #     # LIBERO is not listed here: it declares ``install_requires=[]`` and ships ``libero`` as a PEP 420 namespace
 #     # package, so no wheel carries it — the launcher puts a source checkout on ``PYTHONPATH``. These are the
