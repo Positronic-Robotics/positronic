@@ -2,7 +2,7 @@ from unittest.mock import MagicMock, patch
 
 import numpy as np
 
-from positronic.offboard.client import InferenceClient
+from positronic.offboard.client import DEFAULT_INFER_TIMEOUT, InferenceClient
 from positronic.policy import RemotePolicy
 from positronic.policy.codec import ActionHorizon
 from positronic.policy.remote import RemoteSession
@@ -117,7 +117,7 @@ class TestInferenceClientHeaders:
 
             mock_connect.assert_called_once()
             assert mock_connect.call_args.kwargs['additional_headers'] == headers
-            mock_session_cls.assert_called_once_with(mock_connect.return_value, infer_timeout=60.0)
+            mock_session_cls.assert_called_once_with(mock_connect.return_value, infer_timeout=DEFAULT_INFER_TIMEOUT)
 
     def test_new_session_without_headers_omits_additional_headers(self):
         with (

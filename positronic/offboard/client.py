@@ -10,9 +10,14 @@ from positronic.utils.serialization import deserialise, serialise
 
 logger = logging.getLogger(__name__)
 
+# Only the checkpoint pinned at server startup is pre-warmed; a session that requests any other model loads it
+# cold, so its first ``infer`` can include the backend's JAX compilation. Bound each ``recv`` generously enough to
+# outlast that compile (still surfacing a truly stalled/half-open connection), and let callers override per use.
+DEFAULT_INFER_TIMEOUT = 180.0
+
 
 class InferenceSession:
-    def __init__(self, websocket: Connection, infer_timeout: float = 60.0):
+    def __init__(self, websocket: Connection, infer_timeout: float = DEFAULT_INFER_TIMEOUT):
         self._websocket = websocket
         self._infer_timeout = infer_timeout
         self._metadata = self._handshake()
@@ -100,7 +105,7 @@ class InferenceClient:
         model_id: str | None = None,
         open_timeout: float = 10.0,
         connect_deadline: float = 900.0,
-        infer_timeout: float = 60.0,
+        infer_timeout: float = DEFAULT_INFER_TIMEOUT,
     ) -> InferenceSession:
         """
         Creates a new inference session.

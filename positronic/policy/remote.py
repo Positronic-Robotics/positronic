@@ -3,7 +3,7 @@ from typing import Any
 import numpy as np
 from PIL import Image as PilImage
 
-from positronic.offboard.client import InferenceClient, InferenceSession
+from positronic.offboard.client import DEFAULT_INFER_TIMEOUT, InferenceClient, InferenceSession
 from positronic.utils import flatten_dict
 
 from .base import Policy, Session
@@ -95,10 +95,12 @@ class RemotePolicy(Policy):
         *,
         headers: dict[str, str] | None = None,
         secure: bool = False,
+        infer_timeout: float = DEFAULT_INFER_TIMEOUT,
     ):
         self._client = InferenceClient(host, port, headers=headers, secure=secure)
         self._resize = resize
         self._model_id = model_id
+        self._infer_timeout = infer_timeout
         # Server metadata cached after the first session is created or `meta`
         # is read. Needed so consumers like ``SampledPolicy._get_keys`` see
         # ``server.checkpoint_path`` etc. before any session exists.
@@ -106,7 +108,7 @@ class RemotePolicy(Policy):
 
     def _ensure_server_meta(self) -> dict[str, Any]:
         if self._server_meta is None:
-            ws_session = self._client.new_session(model_id=self._model_id)
+            ws_session = self._client.new_session(model_id=self._model_id, infer_timeout=self._infer_timeout)
             try:
                 self._server_meta = dict(ws_session.metadata)
             finally:
@@ -114,7 +116,7 @@ class RemotePolicy(Policy):
         return self._server_meta
 
     def new_session(self, context=None) -> RemoteSession:
-        ws_session = self._client.new_session(model_id=self._model_id)
+        ws_session = self._client.new_session(model_id=self._model_id, infer_timeout=self._infer_timeout)
         if self._server_meta is None:
             self._server_meta = dict(ws_session.metadata)
         return RemoteSession(ws_session, self._resize)
