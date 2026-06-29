@@ -102,6 +102,12 @@ changes into the same commit and mention them in the relevant replies.
 
 ## Step 4: Verify, commit, push
 
+Re-run the Step 1 fetch right before committing and triage anything new. A comment that lands
+while you were fixing — after your first fetch but before this commit — is in a blind spot:
+the Step 7 watcher only counts activity created after the commit it anchors on, so without this
+re-fetch that feedback is in neither the triage list nor the watcher and gets silently skipped.
+Fold late arrivals into this same pass.
+
 Run the repo's checks before committing so pre-commit / CI find nothing new:
 
 ```bash
