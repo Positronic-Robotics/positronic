@@ -180,12 +180,12 @@ class WebEvalUI(pimm.ControlSystem):
         self.bitrate = bitrate
         self.cameras = pimm.ReceiverDict(self, default=None)
         self.directive = pimm.ControlSystemEmitter(self)
-        self._stream = _CameraStream(fps, keyframe_interval, bitrate)
-        self._latest: dict[str, np.ndarray] = {}
 
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Sleep]:
         templates = Jinja2Templates(directory=_pkg_path('templates'))
         names = list(self.cameras)
+        stream = _CameraStream(self.fps, self.keyframe_interval, self.bitrate)
+        latest: dict[str, np.ndarray] = {}
 
         app = FastAPI()
         app.mount('/static', StaticFiles(directory=_shared_static()), name='static')
@@ -198,12 +198,12 @@ class WebEvalUI(pimm.ControlSystem):
         @app.websocket('/video')
         async def video(websocket: WebSocket):
             await websocket.accept()
-            subscriber = self._stream.subscribe()
+            subscriber = stream.subscribe()
             loop = asyncio.get_running_loop()
             try:
-                while not self._stream.init_segment and not should_stop.value:
+                while not stream.init_segment and not should_stop.value:
                     await asyncio.sleep(0.05)
-                init = self._stream.init_segment
+                init = stream.init_segment
                 if not init:
                     return
                 await websocket.send_text(_codec_string(init))
@@ -215,7 +215,7 @@ class WebEvalUI(pimm.ControlSystem):
             except WebSocketDisconnect:
                 pass
             finally:
-                self._stream.unsubscribe(subscriber)
+                stream.unsubscribe(subscriber)
 
         @app.post('/directive/{action}')
         async def directive(action: str):
@@ -246,14 +246,14 @@ class WebEvalUI(pimm.ControlSystem):
                 for name in names:
                     cam_msg = self.cameras[name].read()
                     if cam_msg.data is not None and cam_msg.updated:
-                        self._latest[name] = cam_msg.data.array
+                        latest[name] = cam_msg.data.array
                         changed = True
-                if changed and len(self._latest) == len(names):
-                    self._stream.push(_tile([self._latest[name] for name in names]))
+                if changed and len(latest) == len(names):
+                    stream.push(_tile([latest[name] for name in names]))
                 if not server_thread.is_alive():
                     raise RuntimeError('Web eval server thread died')
                 yield pimm.Sleep(1 / self.fps)
         finally:
-            self._stream.close()
+            stream.close()
             server.should_exit = True
             server_thread.join()
