@@ -126,8 +126,11 @@ reasoning for a decline/defer. Write the body to a file to dodge shell-quoting p
 (apostrophes, backticks). The endpoint depends on which surface the comment came from:
 
 ```bash
-# Inline (line-level) review comment — reply into its thread:
-gh api -X POST repos/$REPO/pulls/$PR/comments/<comment_id>/replies -F body=@reply.txt
+# Inline (line-level) review comment — reply into its thread. The id must be the thread's
+# TOP-LEVEL comment; GitHub rejects a reply addressed to a reply. If the comment you're
+# answering is itself a follow-up, Step 1 shows its `in_reply_to` (the thread root) — use that
+# id here instead of the follow-up's own id.
+gh api -X POST repos/$REPO/pulls/$PR/comments/<root_comment_id>/replies -F body=@reply.txt
 
 # Review summary (top-level review body) or issue-level conversation comment — these have no
 # inline thread, so post a normal PR comment that quotes/links what you are answering:
