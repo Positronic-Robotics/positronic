@@ -2,12 +2,6 @@ body {
   overflow: auto;
 }
 
-.camera-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(360px, 1fr));
-  gap: 1.25rem;
-}
-
 .camera {
   margin: 0;
   border-radius: var(--radius-lg);
@@ -20,9 +14,8 @@ body {
 .camera video {
   display: block;
   width: 100%;
-  aspect-ratio: 16 / 9;
+  height: auto;
   background: #000;
-  object-fit: contain;
 }
 
 .camera figcaption {

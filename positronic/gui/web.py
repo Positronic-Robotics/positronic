@@ -5,6 +5,7 @@ from collections.abc import Iterator
 from pathlib import Path
 
 import av
+import numpy as np
 import uvicorn
 from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse
@@ -12,6 +13,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 import pimm
+from positronic import utils
 from positronic.policy.harness import Directive
 
 
@@ -34,6 +36,26 @@ def _codec_string(init: bytes) -> str:
     """Build the MSE codec string (``avc1.PPCCLL``) from the avcC box of a fragmented-MP4 init segment."""
     record = init[init.find(b'avcC') + 4 :]
     return f'avc1.{record[1]:02X}{record[2]:02X}{record[3]:02X}'
+
+
+def _even(value: int) -> int:
+    return max(2, value - value % 2)
+
+
+def _resize_to_height(rgb: np.ndarray, height: int) -> np.ndarray:
+    h, w = rgb.shape[:2]
+    width = _even(round(w * height / h))
+    if (h, w) == (height, width):
+        return rgb
+    return (
+        av.VideoFrame.from_ndarray(rgb, format='rgb24').reformat(width=width, height=height).to_ndarray(format='rgb24')
+    )
+
+
+def _tile(frames: list[np.ndarray]) -> np.ndarray:
+    """Lay frames out side by side at a common (even) height, so the row encodes as one H.264 stream."""
+    height = _even(min(frame.shape[0] for frame in frames))
+    return np.concatenate([_resize_to_height(frame, height) for frame in frames], axis=1)
 
 
 class _ChunkBuffer:
@@ -92,7 +114,7 @@ class _CameraStream:
         stream.bit_rate = self._bitrate
         self._stream = stream
 
-    def push(self, rgb) -> None:
+    def push(self, rgb: np.ndarray) -> None:
         if self._container is None:
             self._open(rgb.shape[0], rgb.shape[1])
         frame = av.VideoFrame.from_ndarray(rgb, format='rgb24')
@@ -146,24 +168,24 @@ class _CameraStream:
 class WebEvalUI(pimm.ControlSystem):
     """Headless web operator surface for attended evals.
 
-    Streams the live eval cameras as H.264 video to a browser and turns Start/Finish/Abort presses into
-    harness directives. A drop-in directive source replacing the dearpygui/keyboard drivers, served over
-    an SSH tunnel.
+    Tiles the live eval cameras into a single H.264 stream served to a browser and turns Start/Finish/Abort
+    presses into harness directives. A drop-in directive source replacing the dearpygui/keyboard drivers,
+    reachable over an SSH tunnel or directly on the host IP.
     """
 
-    def __init__(self, task=None, port=8080, fps=30, keyframe_interval=15, bitrate=4_000_000):
-        self.task = task
+    def __init__(self, port=8080, fps=30, keyframe_interval=15, bitrate=8_000_000):
         self.port = port
         self.fps = fps
         self.keyframe_interval = keyframe_interval
         self.bitrate = bitrate
         self.cameras = pimm.ReceiverDict(self, default=None)
         self.directive = pimm.ControlSystemEmitter(self)
-        self._streams: dict[str, _CameraStream] = {}
+        self._stream = _CameraStream(fps, keyframe_interval, bitrate)
+        self._latest: dict[str, np.ndarray] = {}
 
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Sleep]:
         templates = Jinja2Templates(directory=_pkg_path('templates'))
-        self._streams = {name: _CameraStream(self.fps, self.keyframe_interval, self.bitrate) for name in self.cameras}
+        names = list(self.cameras)
 
         app = FastAPI()
         app.mount('/static', StaticFiles(directory=_shared_static()), name='static')
@@ -171,21 +193,17 @@ class WebEvalUI(pimm.ControlSystem):
 
         @app.get('/', response_class=HTMLResponse)
         async def index(request: Request):
-            return templates.TemplateResponse(request, 'eval_console.html', {'cameras': list(self._streams)})
+            return templates.TemplateResponse(request, 'eval_console.html', {'cameras': names})
 
-        @app.websocket('/video/{name}')
-        async def video(websocket: WebSocket, name: str):
-            stream = self._streams.get(name)
-            if stream is None:
-                await websocket.close(code=1003)
-                return
+        @app.websocket('/video')
+        async def video(websocket: WebSocket):
             await websocket.accept()
-            subscriber = stream.subscribe()
+            subscriber = self._stream.subscribe()
             loop = asyncio.get_running_loop()
             try:
-                while not stream.init_segment and not should_stop.value:
+                while not self._stream.init_segment and not should_stop.value:
                     await asyncio.sleep(0.05)
-                init = stream.init_segment
+                init = self._stream.init_segment
                 if not init:
                     return
                 await websocket.send_text(_codec_string(init))
@@ -197,13 +215,13 @@ class WebEvalUI(pimm.ControlSystem):
             except WebSocketDisconnect:
                 pass
             finally:
-                stream.unsubscribe(subscriber)
+                self._stream.unsubscribe(subscriber)
 
         @app.post('/directive/{action}')
         async def directive(action: str):
             match action:
                 case 'start':
-                    self.directive.emit(Directive.RUN(task=self.task), clock.now_ns())
+                    self.directive.emit(Directive.RUN(), clock.now_ns())
                 case 'finish':
                     self.directive.emit(Directive.FINISH(), clock.now_ns())
                 case 'abort':
@@ -211,30 +229,31 @@ class WebEvalUI(pimm.ControlSystem):
                 case _:
                     raise HTTPException(status_code=404)
 
-        config = uvicorn.Config(app, host='127.0.0.1', port=self.port)
+        config = uvicorn.Config(app, host='0.0.0.0', port=self.port)
         server = uvicorn.Server(config)
         server_thread = threading.Thread(target=server.run, daemon=True)
         server_thread.start()
 
+        host = utils.resolve_host_ip()
         banner = '=' * 80
         print(banner)
-        print(
-            f' >>> WEB eval console: http://127.0.0.1:{self.port}/  '
-            f'(tunnel with: ssh -L {self.port}:localhost:{self.port} <robot-host>) <<<'
-        )
+        print(f' >>> WEB eval console available at: http://{host}:{self.port}/ <<<')
         print(banner)
 
         try:
             while not should_stop.value:
-                for name, camera in self.cameras.items():
-                    cam_msg = camera.read()
+                changed = False
+                for name in names:
+                    cam_msg = self.cameras[name].read()
                     if cam_msg.data is not None and cam_msg.updated:
-                        self._streams[name].push(cam_msg.data.array)
+                        self._latest[name] = cam_msg.data.array
+                        changed = True
+                if changed and len(self._latest) == len(names):
+                    self._stream.push(_tile([self._latest[name] for name in names]))
                 if not server_thread.is_alive():
                     raise RuntimeError('Web eval server thread died')
                 yield pimm.Sleep(1 / self.fps)
         finally:
-            for stream in self._streams.values():
-                stream.close()
+            self._stream.close()
             server.should_exit = True
             server_thread.join()

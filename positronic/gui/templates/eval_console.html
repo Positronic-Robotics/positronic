@@ -22,14 +22,10 @@
           <button class="btn btn-danger" data-action="abort">Abort</button>
         </div>
 
-        <div class="camera-grid">
-          {% for name in cameras %}
-          <figure class="camera">
-            <video data-camera="{{ name }}" autoplay muted playsinline></video>
-            <figcaption>{{ name }}</figcaption>
-          </figure>
-          {% endfor %}
-        </div>
+        <figure class="camera">
+          <video id="feed" autoplay muted playsinline></video>
+          <figcaption>{{ cameras | join(' · ') }}</figcaption>
+        </figure>
       </main>
     </div>
 
@@ -38,17 +34,15 @@
         button.addEventListener('click', () => fetch('/directive/' + button.dataset.action, { method: 'POST' }));
       }
 
-      for (const video of document.querySelectorAll('video[data-camera]')) {
-        startStream(video, video.dataset.camera);
-      }
+      startStream(document.getElementById('feed'));
 
-      function startStream(video, name) {
+      function startStream(video) {
         if (!('MediaSource' in window)) {
           console.error('MediaSource Extensions not supported in this browser');
           return;
         }
         const scheme = location.protocol === 'https:' ? 'wss' : 'ws';
-        const socket = new WebSocket(`${scheme}://${location.host}/video/${name}`);
+        const socket = new WebSocket(`${scheme}://${location.host}/video`);
         socket.binaryType = 'arraybuffer';
 
         let sourceBuffer = null;
