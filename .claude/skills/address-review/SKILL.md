@@ -176,20 +176,21 @@ through another pass automatically until the reviewer converges.
 ## Step 7: Watch for convergence in the background (so the user doesn't have to)
 
 Two signals decide whether a push actually lands the PR, and **both are asynchronous**: CI
-(GitHub Actions, minutes) and Codex's re-review (a few minutes later). The user should poll
-neither. After Step 5, launch one background watcher that blocks until something actionable
-happens, then loop on how it exits:
+(GitHub Actions, minutes) and the reviewer's re-review (Codex within minutes, a human whenever
+they get to it). The user should poll neither. After Step 5, launch one background watcher that
+blocks until something actionable happens, then loop on how it exits:
 
-- exit **10** → a new round of Codex comments landed → run another full pass (Steps 1–6),
-  which ends right back here and relaunches the watcher;
-- exit **20** → truly converged: **CI green on the pushed commit AND** Codex 👍 newer than
-  the push → give the final report, **notify the user**, and **stop**;
+- exit **10** → a new round of reviewer comments landed (Codex or a human) → run another full
+  pass (Steps 1–6), which ends right back here and relaunches the watcher;
+- exit **20** → truly converged: **CI green on the pushed commit AND** a reviewer sign-off
+  (Codex 👍 newer than the push, or a human approval) → give the final report, **notify the
+  user**, and **stop**;
 - exit **30** → nothing came back within the cap → tell the user it went quiet;
 - exit **40** → **CI failed on the pushed commit** → run a CI-fix pass (below), which ends
   back here and relaunches the watcher.
 
 CI failure is the **highest-priority** exit — a red build is never "converged" regardless of
-what Codex says, so the watcher checks it first and gates exit 20 on CI being green. It judges
+what the reviewer says, so the watcher checks it first and gates exit 20 on CI being green. It judges
 CI **only for the commit you pushed** (`HEAD` sha), so stale runs from earlier commits can't
 confuse it, and acts only once a check has *completed* with a failing conclusion.
 
@@ -207,16 +208,18 @@ PR=$(gh pr view --json number -q .number)
 REPO=$(gh repo view --json nameWithOwner -q .nameWithOwner)
 SHA=$(git rev-parse HEAD)                              # judge CI only for the commit we pushed
 PUSH_ISO=$(date -u +%Y-%m-%dT%H:%M:%SZ)               # ISO-8601 UTC sorts lexically
-# Tracked reviewers are Codex and humans; the repo's Claude review workflow is intentionally
-# not gated on, so the predicate matches only the Codex bot.
-codex='select(.user.login|test("codex"))'
-# Baseline counts captured right after your push; a NEW round increments one of them. All
-# three surfaces are polled — Codex may post the next round as inline comments, a review body,
-# OR a combined issue-level comment (the surface Step 1/Step 5 handle), so missing any one
-# would strand actionable feedback and time out as "quiet".
-base_reviews=$(gh api repos/$REPO/pulls/$PR/reviews  --paginate -q "[.[] | $codex] | length")
-base_comments=$(gh api repos/$REPO/pulls/$PR/comments --paginate -q "[.[] | $codex] | length")
-base_issue=$(gh api repos/$REPO/issues/$PR/comments  --paginate -q "[.[] | $codex] | length")
+ME=$(gh api user -q .login)                            # the PR author — exclude your own replies
+# A tracked reviewer is the Codex bot OR any human; other bots (e.g. the repo's Claude review
+# workflow) are intentionally NOT gated on. So: login matches "codex", or is a non-bot that
+# isn't you.
+reviewer="select((.user.login|test(\"codex\")) or ((.user.login|endswith(\"[bot]\")|not) and (.user.login!=\"$ME\")))"
+# Baseline counts captured right after your push; a NEW round from any tracked reviewer
+# increments one of them. All three surfaces are polled — the next round can arrive as inline
+# comments, a review body, OR a combined issue-level comment (the surface Step 1/Step 5 handle),
+# so missing any one would strand actionable feedback and time out as "quiet".
+base_reviews=$(gh api repos/$REPO/pulls/$PR/reviews  --paginate -q "[.[] | $reviewer] | length")
+base_comments=$(gh api repos/$REPO/pulls/$PR/comments --paginate -q "[.[] | $reviewer] | length")
+base_issue=$(gh api repos/$REPO/issues/$PR/comments  --paginate -q "[.[] | $reviewer] | length")
 deadline=$(( $(date +%s) + 1500 ))                    # 25-minute cap
 while [ "$(date +%s)" -lt "$deadline" ]; do
   sleep 90
@@ -231,22 +234,24 @@ while [ "$(date +%s)" -lt "$deadline" ]; do
   if [ "$fail" -gt 0 ]; then
     echo "WATCH 40: CI failed on $SHA ($fail failing check(s)) — run a CI-fix pass"; exit 40
   fi
-  # --- new Codex round (any of the three surfaces) ---
-  reviews=$(gh api repos/$REPO/pulls/$PR/reviews  --paginate -q "[.[] | $codex] | length")
-  comments=$(gh api repos/$REPO/pulls/$PR/comments --paginate -q "[.[] | $codex] | length")
-  issuec=$(gh api repos/$REPO/issues/$PR/comments  --paginate -q "[.[] | $codex] | length")
+  # --- new reviewer round, any of the three surfaces (Codex or a human) ---
+  reviews=$(gh api repos/$REPO/pulls/$PR/reviews  --paginate -q "[.[] | $reviewer] | length")
+  comments=$(gh api repos/$REPO/pulls/$PR/comments --paginate -q "[.[] | $reviewer] | length")
+  issuec=$(gh api repos/$REPO/issues/$PR/comments  --paginate -q "[.[] | $reviewer] | length")
   if [ "$reviews" -gt "$base_reviews" ] || [ "$comments" -gt "$base_comments" ] || [ "$issuec" -gt "$base_issue" ]; then
-    echo "WATCH 10: new Codex round — run another address-review pass (Steps 1-6)"; exit 10
+    echo "WATCH 10: new reviewer round — run another address-review pass (Steps 1-6)"; exit 10
   fi
-  # --- convergence: CI green (all checks done, none failing) AND Codex 👍 newer than push ---
-  # 👍 (+1) created AFTER the push = signed off. 👀 (eyes) means "reviewing now" — ignore it.
+  # --- convergence: CI green (all checks done, none failing) AND a reviewer sign-off ---
+  # Codex signs off with a 👍 (+1) reaction created AFTER the push; a human signs off by
+  # approving the PR (reviewDecision APPROVED). 👀 (eyes) means "reviewing now" — ignore it.
   ci_green=false
   [ "$total" -gt 0 ] && [ "$pending" -eq 0 ] && [ "$fail" -eq 0 ] && ci_green=true
   plus1=$(gh api repos/$REPO/issues/$PR/reactions \
     -H "Accept: application/vnd.github.squirrel-girl-preview+json" \
-    -q "[.[] | $codex | select(.content==\"+1\") | select(.created_at > \"$PUSH_ISO\")] | length")
-  if [ "$plus1" -gt 0 ] && [ "$ci_green" = true ]; then
-    echo "WATCH 20: converged (CI green + Codex 👍 newer than push) — done"; exit 20
+    -q "[.[] | select(.user.login|test(\"codex\")) | select(.content==\"+1\") | select(.created_at > \"$PUSH_ISO\")] | length")
+  approved=$(gh pr view $PR --repo $REPO --json reviewDecision -q .reviewDecision 2>/dev/null || echo "")
+  if [ "$ci_green" = true ] && { [ "$plus1" -gt 0 ] || [ "$approved" = "APPROVED" ]; }; then
+    echo "WATCH 20: converged (CI green + reviewer sign-off) — done"; exit 20
   fi
 done
 echo "WATCH 30: no verdict after 25m — tell the user"; exit 30
@@ -259,10 +264,11 @@ When the watcher exits and you are re-invoked:
   declined items as fresh threads), that is **not** convergence — reply once more pointing at
   your prior reasoning, then **stop and surface it for the user**; never loop into forcing a
   fix you disagree with.
-- **exit 20** — converged: CI is green on the pushed commit, the 👍 is newer than your push,
-  and every comment carries your reply (open declines / defers / discussions are fine).
-  Give the final report and **notify the user** (a push notification if available) that the
-  review loop is done — they walked away expecting to be pinged.
+- **exit 20** — converged: CI is green on the pushed commit, a reviewer signed off (Codex 👍
+  newer than your push, or a human approval), and every comment carries your reply (open
+  declines / defers / discussions are fine). Give the final report and **notify the user** (a
+  push notification if available) that the review loop is done — they walked away expecting to
+  be pinged.
 - **exit 30** — went quiet. Don't loop blindly: tell the user, and relaunch the watcher only
   if they want to keep waiting.
 - **exit 40** — CI failed on the pushed commit. Re-enter the cycle treating the failing jobs
@@ -281,7 +287,3 @@ When the watcher exits and you are re-invoked:
        scope, pin/exclude, accept the gap); don't silently commit-thrash to force it green.
   3. **Stop-guard:** never retry the same fix more than once or twice. If a CI failure
      persists after your fix, stop and surface it rather than churning the PR with commits.
-
-For **human** reviewers the equivalent convergence signal is an approval —
-`gh pr view --json reviewDecision -q .reviewDecision` returning `APPROVED` (still gated on CI
-green: don't call a PR done with a red build).
