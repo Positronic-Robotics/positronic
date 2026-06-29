@@ -25,12 +25,16 @@ needs their call. A red build is never "done", no matter what the reviewer says.
   intentional.
 - **Fix → push → reply → resolve, in that order.** Reply text references the commit that
   fixed it, so the fix must land first.
-- **Resolve only the threads you actually fixed.** A concrete code change that addresses
-  the comment → reply (referencing the commit), then resolve. **Declines, defers, and
-  discussion / question comments stay OPEN** — they get a reasoned reply, but resolving
-  them closes a conversation that is the human's to close (especially a reviewer's "why…?"
-  or "should we…?", which is an invitation to discuss, not a change request). Never resolve
-  a thread just to clear the queue. When in doubt, leave it open.
+- **Every thread you fixed MUST be resolved — and only those.** Once a bot comment's fix is
+  pushed and you have replied referencing the commit, resolve its thread: a fixed Codex
+  thread left open reads as still-broken to anyone scanning the PR and leaves the conversation
+  cluttered with items already handled. The two directions are symmetric and both mandatory:
+  **fixed → resolve**, and **declines,
+  defers, and discussion / question comments stay OPEN** — those get a reasoned reply, but
+  resolving them closes a conversation that is the human's to close (especially a reviewer's
+  "why…?" or "should we…?", which is an invitation to discuss, not a change request). Never
+  resolve a thread just to clear the queue, and never leave a thread you fixed unresolved.
+  When a comment is genuinely on the fence, leave it open.
 - **Stay scoped** to the feedback. Don't sprawl into unrelated refactors.
 - **Follow the repo's commit conventions** (see the `push-pr` skill). CRITICAL: never add
   `Co-Authored-By` or any AI / Claude / assistant attribution to commits, replies, or PRs.
@@ -102,7 +106,7 @@ Run the repo's checks before committing so pre-commit / CI find nothing new:
 
 ```bash
 # only existing files — ruff fails on deleted paths (E902)
-uv run ruff check <existing files> && uv run ruff format <existing files>   # or the repo's own lint / test / format
+uv run --locked ruff check <existing files> && uv run --locked ruff format <existing files>   # or the repo's own lint / test / format
 ```
 
 Commit (concise, imperative, no AI attribution — see `push-pr` commit style) and push to the
@@ -134,9 +138,10 @@ A combined review (e.g. one Codex body carrying several findings) arrives as a s
 conversation comment, not per-finding threads — answer it with one issue-level reply that
 addresses each finding; there is nothing to resolve in Step 5 for that surface.
 
-**Resolve** only the threads you *fixed* (a concrete change landed). Resolution requires
-GraphQL (the REST API can't do it). Map each comment's `databaseId` to its thread node id,
-then resolve:
+**Resolve** every thread you *fixed* (a concrete change landed) — this is mandatory, not
+optional: a fixed Codex thread you leave open keeps the PR looking unaddressed to human
+reviewers. Resolution requires GraphQL (the REST API can't do it). Map each comment's
+`databaseId` to its thread node id, then resolve:
 
 ```bash
 # Thread node id + isResolved + the comment databaseIds it contains
@@ -205,9 +210,13 @@ PUSH_ISO=$(date -u +%Y-%m-%dT%H:%M:%SZ)               # ISO-8601 UTC sorts lexic
 # Tracked reviewers are Codex and humans; the repo's Claude review workflow is intentionally
 # not gated on, so the predicate matches only the Codex bot.
 codex='select(.user.login|test("codex"))'
-# Baseline counts captured right after your push; a NEW round increments one of them.
+# Baseline counts captured right after your push; a NEW round increments one of them. All
+# three surfaces are polled — Codex may post the next round as inline comments, a review body,
+# OR a combined issue-level comment (the surface Step 1/Step 5 handle), so missing any one
+# would strand actionable feedback and time out as "quiet".
 base_reviews=$(gh api repos/$REPO/pulls/$PR/reviews  --paginate -q "[.[] | $codex] | length")
 base_comments=$(gh api repos/$REPO/pulls/$PR/comments --paginate -q "[.[] | $codex] | length")
+base_issue=$(gh api repos/$REPO/issues/$PR/comments  --paginate -q "[.[] | $codex] | length")
 deadline=$(( $(date +%s) + 1500 ))                    # 25-minute cap
 while [ "$(date +%s)" -lt "$deadline" ]; do
   sleep 90
@@ -222,10 +231,11 @@ while [ "$(date +%s)" -lt "$deadline" ]; do
   if [ "$fail" -gt 0 ]; then
     echo "WATCH 40: CI failed on $SHA ($fail failing check(s)) — run a CI-fix pass"; exit 40
   fi
-  # --- new Codex round ---
+  # --- new Codex round (any of the three surfaces) ---
   reviews=$(gh api repos/$REPO/pulls/$PR/reviews  --paginate -q "[.[] | $codex] | length")
   comments=$(gh api repos/$REPO/pulls/$PR/comments --paginate -q "[.[] | $codex] | length")
-  if [ "$reviews" -gt "$base_reviews" ] || [ "$comments" -gt "$base_comments" ]; then
+  issuec=$(gh api repos/$REPO/issues/$PR/comments  --paginate -q "[.[] | $codex] | length")
+  if [ "$reviews" -gt "$base_reviews" ] || [ "$comments" -gt "$base_comments" ] || [ "$issuec" -gt "$base_issue" ]; then
     echo "WATCH 10: new Codex round — run another address-review pass (Steps 1-6)"; exit 10
   fi
   # --- convergence: CI green (all checks done, none failing) AND Codex 👍 newer than push ---
