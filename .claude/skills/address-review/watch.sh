@@ -41,8 +41,18 @@ while [ "$(date +%s)" -lt "$deadline" ]; do
   # --- CI on the pushed commit (highest priority; a failing check is actionable at once) ---
   # --paginate --slurp so a commit with >100 check runs isn't judged on its first page alone —
   # a failing or pending job on a later page must not be missed. Slurp yields an array of page
-  # objects, so the runs are at `.[].check_runs[]`.
-  cr=$(gh api "repos/$REPO/commits/$SHA/check-runs?per_page=100" --paginate --slurp 2>/dev/null || echo '[]')
+  # objects, so the runs are at `.[].check_runs[]`. Do NOT fabricate an empty list on API failure:
+  # that would hide a token/permission or outage problem behind a fake "no checks" reading
+  # (total=0 blocks both exit 40 and ci_green, so the persisting loop would spin forever). Retry a
+  # few times for a transient blip; if it stays unreadable, surface it and stop (exit 50).
+  cr=""
+  for try in 1 2 3; do
+    cr=$(gh api "repos/$REPO/commits/$SHA/check-runs?per_page=100" --paginate --slurp 2>/dev/null) && break
+    cr=""; sleep 5
+  done
+  if [ -z "$cr" ]; then
+    echo "WATCH 50: cannot read check runs for $SHA after 3 tries — token checks-read scope or a GitHub outage; surface to the user"; exit 50
+  fi
   # Any completed check whose conclusion is outside the passing set counts as failed — this
   # covers failure/timed_out plus cancelled/action_required/stale/startup_failure, so a
   # non-passing-but-not-"failure" check can never be mistaken for green.
@@ -94,4 +104,4 @@ while [ "$(date +%s)" -lt "$deadline" ]; do
     echo "WATCH 20: converged (CI green + reviewer sign-off) — done"; exit 20
   fi
 done
-echo "WATCH 30: no verdict after 25m — tell the user"; exit 30
+echo "WATCH 30: quiet interval elapsed — relaunch and keep waiting (ping the user only after several quiet cycles)"; exit 30

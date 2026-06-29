@@ -208,7 +208,9 @@ blocks until something actionable happens, then loop on how it exits:
 - exit **30** → a quiet interval elapsed → **relaunch the watcher and keep waiting** (don't
   stop); only after several consecutive quiet cycles ping the user that it's still watching;
 - exit **40** → **CI failed on the pushed commit** → run a CI-fix pass (below), which ends
-  back here and relaunches the watcher.
+  back here and relaunches the watcher;
+- exit **50** → **CI couldn't be read** (the check-runs API kept failing) → stop and tell the
+  user; it's a token/permission or outage problem, not something to loop on.
 
 CI failure is the **highest-priority** exit — a red build is never "converged" regardless of
 what the reviewer says, so the watcher checks it first and gates exit 20 on CI being green. It judges
@@ -274,3 +276,7 @@ When the watcher exits and you are re-invoked:
        scope, pin/exclude, accept the gap); don't silently commit-thrash to force it green.
   3. **Stop-guard:** never retry the same fix more than once or twice. If a CI failure
      persists after your fix, stop and surface it rather than churning the PR with commits.
+- **exit 50** — the watcher couldn't read check runs for the pushed commit even after retries.
+  This is an environment problem (most often the token lacks the checks-read scope, or a GitHub
+  outage), not reviewer feedback. **Stop and tell the user** the SHA and the likely cause —
+  don't relaunch, which would just hit the same wall.
