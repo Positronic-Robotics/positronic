@@ -205,7 +205,8 @@ blocks until something actionable happens, then loop on how it exits:
 - exit **20** → truly converged: **CI green on the pushed commit AND** a reviewer sign-off
   (Codex 👍 newer than the push, or a human approval) → give the final report, **notify the
   user**, and **stop**;
-- exit **30** → nothing came back within the cap → tell the user it went quiet;
+- exit **30** → a quiet interval elapsed → **relaunch the watcher and keep waiting** (don't
+  stop); only after several consecutive quiet cycles ping the user that it's still watching;
 - exit **40** → **CI failed on the pushed commit** → run a CI-fix pass (below), which ends
   back here and relaunches the watcher.
 
@@ -215,10 +216,14 @@ CI **only for the commit you pushed** (`HEAD` sha), so stale runs from earlier c
 confuse it, and acts only once a check has *completed* with a failing conclusion.
 
 The watcher just polls `gh`, so it costs no tokens while it waits. It is **harness-tracked**:
-when it exits you are re-invoked automatically with its output — so launch it with
-`run_in_background` and **don't** also schedule a wakeup to poll for it. Its echoed
-`WATCH <code>` line names the next action, so the loop survives even if this skill text has
-fallen out of context (re-read this file if unsure).
+when it exits you are re-invoked automatically with its output — that notification is the
+primary wake signal, so launch it with `run_in_background` and **don't** add a short poll on top
+of it. Do, however, set one **long fallback heartbeat** when you launch the watcher
+(`ScheduleWakeup`, ~20–30 min) so a missed or dropped exit-notification can't strand the loop
+with feedback sitting unanswered — a safety net, not a poll; when it fires, re-check for
+unhandled comments and, if none, reschedule it. Its echoed `WATCH <code>` line names the next
+action, so the loop survives even if this skill text has fallen out of context (re-read this
+file if unsure).
 
 Launch the watcher (shipped alongside this skill) right after Step 5, in the background:
 
@@ -247,8 +252,11 @@ When the watcher exits and you are re-invoked:
   declines / defers / discussions are fine). Give the final report and **notify the user** (a
   push notification if available) that the review loop is done — they walked away expecting to
   be pinged.
-- **exit 30** — went quiet. Don't loop blindly: tell the user, and relaunch the watcher only
-  if they want to keep waiting.
+- **exit 30** — a quiet interval elapsed with no CI failure, new round, or sign-off. The PR
+  isn't done, so **don't stop**: relaunch the watcher to keep waiting (reviewers and slow CI can
+  take far longer than one interval). Only after several consecutive quiet cycles — i.e. a long
+  genuine silence — ping the user that it's still watching, then keep watching unless they say to
+  stop. The point is to survive idle periods, not to hand the wait back at the first timeout.
 - **exit 40** — CI failed on the pushed commit. Re-enter the cycle treating the failing jobs
   as feedback, exactly like a review comment:
   1. **Identify** what failed: `gh pr checks $PR` for the overview, then read the failing

@@ -29,9 +29,12 @@ reviewer="select((.user.login|test(\"codex\")) or ((.user.login|endswith(\"[bot]
 # therefore detected structurally below — an unresolved thread whose last comment is a
 # reviewer's, no timestamps. The review-summary and issue-comment surfaces have no per-item
 # resolved state, so they fall back to a timestamp: SINCE_DONE = the later of the commit and
-# your latest issue-level reply, which clears anything you have already answered there.
+# your latest reply on ANY surface. Include inline replies, not just issue-level ones — when you
+# answer a Codex round inline (e.g. a decline, no commit), its COMMENTED review row is still
+# `> SINCE` and would re-trigger forever unless your inline reply also advances the floor.
 me_issue=$(gh api repos/$REPO/issues/$PR/comments --paginate --slurp | jq -r "[.[][] | select(.user.login==\"$ME\") | .created_at] | max // \"\"")
-SINCE_DONE=$(printf '%s\n%s\n' "$SINCE" "$me_issue" | sort | tail -1)
+me_inline=$(gh api repos/$REPO/pulls/$PR/comments --paginate --slurp | jq -r "[.[][] | select(.user.login==\"$ME\") | .created_at] | max // \"\"")
+SINCE_DONE=$(printf '%s\n%s\n%s\n' "$SINCE" "$me_issue" "$me_inline" | sort | tail -1)
 deadline=$(( $(date +%s) + 1500 ))                    # 25-minute cap
 while [ "$(date +%s)" -lt "$deadline" ]; do
   sleep 90
