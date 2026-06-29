@@ -83,9 +83,7 @@ class _CameraStream:
             self._buffer, mode='w', format='mp4', options={'movflags': 'frag_keyframe+empty_moov+default_base_moof'}
         )
         stream = self._container.add_stream(
-            'libx264',
-            rate=self._fps,
-            options={'preset': 'ultrafast', 'tune': 'zerolatency', 'profile': 'baseline', 'level': '3.1'},
+            'libx264', rate=self._fps, options={'preset': 'ultrafast', 'tune': 'zerolatency', 'profile': 'baseline'}
         )
         stream.width = width
         stream.height = height
