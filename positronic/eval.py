@@ -1,5 +1,5 @@
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 import pimm
@@ -77,9 +77,8 @@ class Task:
     ground-truth source to capture (the sim's full ``save_state``, a real scale) — recorded but never fed to
     the policy.
 
-    ``seed`` is the base seed for reproducible runs (``None`` → fully random); the
-    runner derives per-trial seeds from it into the trial plan. ``reset`` re-randomizes
-    the scene for a new trial from a per-trial seed; ``None`` on real embodiments,
+    ``reset`` re-randomizes the scene for a new trial from the per-trial run context, reading the keys it
+    needs (e.g. ``eval.seed``, and ``eval.task_id`` for a multi-task suite); ``None`` on real embodiments,
     where reset is physical/human.
 
     ``done`` is the optional terminating signal: a source that delivers a dict payload when the
@@ -92,14 +91,12 @@ class Task:
         instruction: str | Callable[[], str],
         timeout: float,
         privileged: dict[str, Observation] | None = None,
-        seed: int | None = None,
-        reset: Callable[[int | None], None] | None = None,
+        reset: Callable[[dict[str, Any]], None] | None = None,
         done: pimm.SignalEmitter | None = None,
     ):
         self._instruction = (lambda: instruction) if isinstance(instruction, str) else instruction
         self.timeout = timeout
         self.privileged = privileged or {}
-        self.seed = seed
         self.reset = reset
         self.done = done
 
@@ -110,11 +107,14 @@ class Task:
 
 @dataclass
 class Eval:
-    """An eval = embodiment + task, produced by a single config.
+    """An eval = embodiment + task + the trial sweep, produced by a single config.
 
     For a sim eval that config holds the shared ``MujocoSim`` both are built from, so the
-    embodiment stays pure robot while the task carries the scene's privileged signals.
+    embodiment stays pure robot while the task carries the scene's privileged signals. ``trials`` is the
+    sequence of RUN contexts the self-driving Harness runs — one per (task variant, seed) the config sweeps;
+    empty for an attended/real eval, driven by an operator rather than a trial plan.
     """
 
     embodiment: Embodiment
     task: Task
+    trials: list[dict[str, Any]] = field(default_factory=list)

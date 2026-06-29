@@ -1,8 +1,7 @@
 import logging
-import random
 from collections.abc import Callable
 from contextlib import nullcontext
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 import configuronic as cfn
@@ -61,47 +60,24 @@ def _completion_sink(policy):
     return policy.counter.record if isinstance(policy, SampledPolicy) else None
 
 
-def main(
-    embodiment: Embodiment,
+def _run_world(
     policy,
-    driver: Callable[[Path | None], Driver] | None = None,
-    output_dir: str | Path | None = None,
-    task: Task | None = None,
-    trials: list[dict] | None = None,
-    show_gui: bool = False,
+    embodiment: Embodiment,
+    task: Task | None,
+    trials: list[dict] | None,
+    driver: Driver | None,
+    output_dir: Path | None,
+    show_gui: bool,
+    on_complete,
     *,
     wrap,
 ):
-    """Run inference for an embodiment, real or simulated.
+    """Wire one embodiment under a fresh Harness + World and run it to completion.
 
-    ``task`` (when given) supplies the policy-facing instruction, the per-trial ``timeout``
-    bounding self-driven trials, the privileged ground-truth signals to record, and the seeded
-    scene reset run at each trial start; without it the instruction rides the driver. Exactly
-    one of ``driver`` (attended: a factory producing the operator surface that emits the
-    directives) or ``trials`` (unattended: the harness runs the plan itself) must be given;
-    ``show_gui`` applies to the unattended path (attended surfaces bring their own).
+    ``driver`` (attended) and ``trials`` (unattended self-driving) are the two lifecycle sources, mutually
+    exclusive per the caller. The shared ``policy`` is wrapped here per run, but its lifetime stays with ``main``.
     """
-    assert (driver is None) != (trials is None), 'Provide exactly one of driver or trials'
-
-    # Drive the policy's remote endpoints through their cold start before hardware and the operator
-    # surface come up: opening a session blocks on the server handshake, which returns only once the
-    # model is loaded, and a SampledPolicy reaches every sub-policy. The first episode then begins
-    # warm instead of stalling on an on-request endpoint's model load while the robot waits.
-    # TODO: a policy with recording taps (recording_dir set) records this throwaway warmup session —
-    # an empty .rrd plus a bump to the recorder's episode counter — but warmup is not a real episode.
-    logger.info('Warming up policy endpoints')
-    policy.new_session().close()
-
-    harness = Harness(
-        policy, embodiment, task=task, trials=trials, wrap=wrap, on_episode_complete=_completion_sink(policy)
-    )
-
-    if output_dir is not None:
-        output_dir = pos3.sync(output_dir, sync_on_error=True)
-        utils.save_run_metadata(output_dir, patterns=['*.py', '*.toml'])
-        _seed_counter(policy, output_dir)
-
-    driver = driver(output_dir) if driver is not None else None
+    harness = Harness(policy, embodiment, task=task, trials=trials, wrap=wrap, on_episode_complete=on_complete)
     gui = driver.gui if driver is not None else (DearpyguiUi() if show_gui else None)
 
     time_mode = TimeMode.MESSAGE if embodiment.simulated else TimeMode.CLOCK
@@ -140,30 +116,59 @@ def main(
             world.run([harness, *foreground], [*producers, ds_agent, gui])
 
 
-@cfn.config(
-    eval=placeholder, policy=policy_cfg.placeholder, trial_count=1, show_gui=False, wrap=wrappers_cfg.default_wrappers
-)
-def run(eval: Eval, policy, trial_count, show_gui, output_dir=None, inference_latency=False, *, wrap):
-    """Run a selected eval (embodiment + task) through the shared inference harness."""
-    # The trial plan: one RUN context per trial, consumed by the self-driving Harness. Per-trial seeds
-    # are known upfront — ``--eval.seed`` + trial index, or an independent random draw per trial when
-    # unset — and ride the RUN context, so the seed used always lands in episode meta.
-    base = eval.task.seed
-    trials = [
-        {
-            'inference_latency': inference_latency,
-            'eval.seed': base + i if base is not None else random.randrange(2**31),
-            'eval.trial_index': i,
-            'eval.trial_count': trial_count,
-        }
-        for i in range(trial_count)
-    ]
-    main(
-        embodiment=eval.embodiment,
-        task=eval.task,
-        policy=policy,
-        trials=trials,
-        show_gui=show_gui,
-        output_dir=output_dir,
-        wrap=wrap,
-    )
+def main(
+    policy,
+    *,
+    wrap,
+    evals: list[Eval] | None = None,
+    embodiment: Embodiment | None = None,
+    driver: Callable[[Path | None], Driver] | None = None,
+    output_dir: str | Path | None = None,
+    show_gui: bool = False,
+):
+    """Run inference for an embodiment, real or simulated.
+
+    Exactly one of ``driver`` (attended: a factory producing the operator surface that emits the directives
+    over a single ``embodiment``) or ``evals`` (unattended: the harness self-drives each eval's trial plan,
+    rebuilding the World per eval) must be given; ``show_gui`` applies to the unattended path (attended surfaces
+    bring their own). ``main`` owns the policy lifetime: it warms the policy once up front and closes it once
+    after the last World, so a multi-eval sweep reuses one live policy across the rebuilds.
+    """
+    assert (driver is None) != (evals is None), 'Provide exactly one of driver or evals'
+
+    # Drive the policy's remote endpoints through their cold start before hardware and the operator
+    # surface come up: opening a session blocks on the server handshake, which returns only once the
+    # model is loaded, and a SampledPolicy reaches every sub-policy. The first episode then begins
+    # warm instead of stalling on an on-request endpoint's model load while the robot waits.
+    # TODO: a policy with recording taps (recording_dir set) records this throwaway warmup session —
+    # an empty .rrd plus a bump to the recorder's episode counter — but warmup is not a real episode.
+    logger.info('Warming up policy endpoints')
+    policy.new_session().close()
+
+    if output_dir is not None:
+        output_dir = pos3.sync(output_dir, sync_on_error=True)
+        utils.save_run_metadata(output_dir, patterns=['*.py', '*.toml'])
+        _seed_counter(policy, output_dir)
+
+    # One completion sink — so one ``SampledPolicy`` counter — across every eval, keeping sampling balanced
+    # over the whole sweep.
+    on_complete = _completion_sink(policy)
+    try:
+        if driver is not None:
+            _run_world(policy, embodiment, None, None, driver(output_dir), output_dir, show_gui, on_complete, wrap=wrap)
+        else:
+            for ev in evals:
+                _run_world(
+                    policy, ev.embodiment, ev.task, ev.trials, None, output_dir, show_gui, on_complete, wrap=wrap
+                )
+    finally:
+        policy.close()
+
+
+@cfn.config(eval=placeholder, policy=policy_cfg.placeholder, show_gui=False, wrap=wrappers_cfg.default_wrappers)
+def run(eval: Eval, policy, show_gui, output_dir=None, inference_latency=False, *, wrap):
+    """Run a selected eval (embodiment + task + its trial sweep) through the shared inference harness."""
+    # The eval config owns the trial sweep (seed, task range); ``inference_latency`` is the CLI's per-run knob
+    # (sim inference-cost simulation). Overlay it onto every trial context, then self-drive the eval.
+    eval = replace(eval, trials=[{**trial, 'inference_latency': inference_latency} for trial in eval.trials])
+    main(policy=policy, evals=[eval], show_gui=show_gui, output_dir=output_dir, wrap=wrap)

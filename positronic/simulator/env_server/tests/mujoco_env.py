@@ -167,10 +167,10 @@ class StackCubesAdapter(EnvAdapter):
         self._players = fresh_command_players()
         self._held: dict[str, Any] = {}  # last sampled waypoint per channel — re-sent until it changes
 
-    def reset_token(self, seed: int | None) -> Any:
+    def reset_token(self, context: dict[str, Any]) -> Any:
         self._players = fresh_command_players()
         self._held = {}
-        return seed
+        return context.get('eval.seed')
 
     def action(self, commands: dict[str, pimm.Message], now_ns: int) -> dict[str, Any]:
         for name, msg in commands.items():
@@ -261,7 +261,6 @@ def remote_stack_cubes_eval(host: str, port: int, *, camera_dict: dict[str, str]
         instruction='Pick up the green cube and place it on the red cube.',
         timeout=15.0,
         privileged=privileged,
-        seed=None,
         reset=proxy.reset,
         done=proxy.done,
     )

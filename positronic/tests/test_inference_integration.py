@@ -1,4 +1,5 @@
 import xml.etree.ElementTree as ET
+from dataclasses import replace
 
 import mujoco as mj
 import numpy as np
@@ -74,10 +75,8 @@ def test_sim_emits_commands_and_records_dataset(tmp_path, monkeypatch):
             timeout=0.4,
         )
         main(
-            embodiment=ev.embodiment,
-            task=ev.task,
             policy=policy,
-            trials=[{'eval.trial_index': i, 'eval.seed': 100 + i} for i in range(2)],
+            evals=[replace(ev, trials=[{'eval.trial_index': i, 'eval.seed': 100 + i} for i in range(2)])],
             output_dir=str(tmp_path),
             wrap=ErrorRecovery() | ChunkedSchedule(),
         )
@@ -167,7 +166,7 @@ class _CountdownProducer(pimm.ControlSystem):
         self.robot_meta = pimm.ControlSystemEmitter(self)
         self.done = pimm.ControlSystemEmitter(self)
 
-    def reset(self, seed: int | None = None) -> None:
+    def reset(self, _context: dict | None = None) -> None:
         self._steps = 0
         self._reset_pending = True
         self._active = True
@@ -205,9 +204,7 @@ def _countdown_eval(producer: _CountdownProducer, timeout: float) -> Eval:
         control_systems=(producer,),
         simulated=True,
     )
-    task = Task(
-        instruction='count', timeout=timeout, privileged={}, seed=None, reset=producer.reset, done=producer.done
-    )
+    task = Task(instruction='count', timeout=timeout, privileged={}, reset=producer.reset, done=producer.done)
     return Eval(embodiment, task)
 
 
@@ -221,10 +218,8 @@ def test_countdown_records_frame0_every_trial(tmp_path):
     ev = _countdown_eval(_CountdownProducer(control_dt=0.01), timeout=0.35)
     with pos3.mirror():
         main(
-            embodiment=ev.embodiment,
-            task=ev.task,
             policy=StubPolicy(command=ev.embodiment.commands['robot_command'].home, target_grip=0.0),
-            trials=[{'eval.trial_index': i, 'eval.seed': i} for i in range(2)],
+            evals=[replace(ev, trials=[{'eval.trial_index': i, 'eval.seed': i} for i in range(2)])],
             output_dir=str(tmp_path),
             wrap=None,  # the degenerate obs is not Franka-shaped; ErrorRecovery hard-codes robot_state.error
         )
@@ -243,10 +238,8 @@ def test_countdown_terminates_on_done_records_payload(tmp_path):
     ev = _countdown_eval(_CountdownProducer(done_after=4), timeout=15.0)
     with pos3.mirror():
         main(
-            embodiment=ev.embodiment,
-            task=ev.task,
             policy=StubPolicy(command=ev.embodiment.commands['robot_command'].home, target_grip=0.0),
-            trials=[{'eval.trial_index': 0, 'eval.seed': 100}],
+            evals=[replace(ev, trials=[{'eval.trial_index': 0, 'eval.seed': 100}])],
             output_dir=str(tmp_path),
             wrap=None,
         )

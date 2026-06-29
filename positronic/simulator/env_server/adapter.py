@@ -27,10 +27,11 @@ class EnvAdapter(ABC):
     """The mappings between the canonical embodiment contract and an env's raw wire payloads."""
 
     @abstractmethod
-    def reset_token(self, seed: int | None) -> Any:
-        """A per-trial seed -> the env's opaque reset token (an int for most, a blob for exact replay).
+    def reset_token(self, context: dict[str, Any]) -> Any:
+        """The per-trial RUN context -> the env's opaque reset token (an int for most, a blob for exact replay).
 
-        Called at each trial start, so it is also where the adapter clears any per-trial command state.
+        Reads the context keys it needs (e.g. ``eval.seed``, ``eval.task_id``). Called at each trial start, so
+        it is also where the adapter clears any per-trial command state.
         """
 
     @abstractmethod

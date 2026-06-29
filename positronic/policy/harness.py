@@ -52,8 +52,8 @@ class Harness(pimm.ControlSystem):
     policy/session layer — the harness just calls the session, demuxes the action dicts into
     per-channel trajectories, and emits.
 
-    ``RUN`` may carry ``inference_latency`` (sim-only inference-cost simulation) and ``eval.seed``
-    (handed to the task's scene reset) in its context.
+    ``RUN`` may carry ``inference_latency`` (sim-only inference-cost simulation) in its context; the whole
+    context is handed to the task's scene reset, which reads the per-trial keys it needs (e.g. ``eval.seed``).
     A ``trials`` plan (a sequence of RUN contexts) makes the harness self-driving: whenever it is
     idle it starts the next trial itself and exits once the plan is exhausted, so the unattended
     path needs no driver at all. A task's ``timeout`` bounds every trial it is given to — self-driven
@@ -217,7 +217,7 @@ class Harness(pimm.ControlSystem):
         # (a remote env reports it then), so the session context — and the task-grouped sampling/counting it
         # drives — must read the instruction here, once it is known.
         if self._task is not None and self._task.reset is not None:
-            self._task.reset(self.context.get('eval.seed'))
+            self._task.reset(self.context)
         if self._task is not None:
             self.context = {**self.context, 'task': self._task.instruction}
         self._session = self.policy.new_session(self.context)
@@ -402,4 +402,5 @@ class Harness(pimm.ControlSystem):
             self._finalize_recording()
         if self._session:
             self._session.close()
-        self.policy.close()
+        # The harness wraps the policy per run but does not own its lifetime: the caller may run several
+        # harnesses over one policy (a multi-eval sweep), so it closes the policy once, after the last run.
