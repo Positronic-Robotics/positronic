@@ -144,11 +144,14 @@ reviewers. Resolution requires GraphQL (the REST API can't do it). Map each comm
 `databaseId` to its thread node id, then resolve:
 
 ```bash
-# Thread node id + isResolved + the comment databaseIds it contains
+# Thread node id + isResolved + the comment databaseIds it contains. `first:100` covers all
+# but the largest PRs; if `hasNextPage` is true, page with `after: <endCursor>` rather than
+# silently dropping the overflow threads (a fixed thread that isn't returned stays unresolved).
+# `comments(first:10)` is enough to match the original review comment, which is always first.
 gh api graphql -f query='
 query($owner:String!,$repo:String!,$num:Int!){
   repository(owner:$owner,name:$repo){ pullRequest(number:$num){
-    reviewThreads(first:50){ nodes { id isResolved comments(first:10){ nodes { databaseId } } } } } }
+    reviewThreads(first:100){ pageInfo { hasNextPage endCursor } nodes { id isResolved comments(first:10){ nodes { databaseId } } } } } }
 }' -F owner=$OWNER -F repo=$NAME -F num=$PR \
   -q '.data.repository.pullRequest.reviewThreads.nodes[] | [.id, (.isResolved|tostring), ([.comments.nodes[].databaseId]|map(tostring)|join(","))] | @tsv'
 
@@ -207,19 +210,18 @@ set -e
 PR=$(gh pr view --json number -q .number)
 REPO=$(gh repo view --json nameWithOwner -q .nameWithOwner)
 SHA=$(git rev-parse HEAD)                              # judge CI only for the commit we pushed
-PUSH_ISO=$(date -u +%Y-%m-%dT%H:%M:%SZ)               # ISO-8601 UTC sorts lexically
+# Anchor to the pushed commit's own timestamp, NOT to when this watcher launches: the
+# reply/resolve work in Step 5 takes a while and a reviewer can respond in that window, so a
+# launch-time anchor would fold those responses into the baseline and miss them. Counting
+# reviewer activity created after the commit time catches them no matter when the loop starts.
+# In UTC with a Z suffix so it sorts lexically against GitHub's UTC timestamps (a local-offset
+# %cI like +03:00 would mis-compare against their Z form).
+SINCE=$(TZ=UTC0 git show -s --date=format-local:'%Y-%m-%dT%H:%M:%SZ' --format=%cd HEAD)
 ME=$(gh api user -q .login)                            # the PR author — exclude your own replies
 # A tracked reviewer is the Codex bot OR any human; other bots (e.g. the repo's Claude review
 # workflow) are intentionally NOT gated on. So: login matches "codex", or is a non-bot that
 # isn't you.
 reviewer="select((.user.login|test(\"codex\")) or ((.user.login|endswith(\"[bot]\")|not) and (.user.login!=\"$ME\")))"
-# Baseline counts captured right after your push; a NEW round from any tracked reviewer
-# increments one of them. All three surfaces are polled — the next round can arrive as inline
-# comments, a review body, OR a combined issue-level comment (the surface Step 1/Step 5 handle),
-# so missing any one would strand actionable feedback and time out as "quiet".
-base_reviews=$(gh api repos/$REPO/pulls/$PR/reviews  --paginate -q "[.[] | $reviewer] | length")
-base_comments=$(gh api repos/$REPO/pulls/$PR/comments --paginate -q "[.[] | $reviewer] | length")
-base_issue=$(gh api repos/$REPO/issues/$PR/comments  --paginate -q "[.[] | $reviewer] | length")
 deadline=$(( $(date +%s) + 1500 ))                    # 25-minute cap
 while [ "$(date +%s)" -lt "$deadline" ]; do
   sleep 90
@@ -234,11 +236,11 @@ while [ "$(date +%s)" -lt "$deadline" ]; do
   if [ "$fail" -gt 0 ]; then
     echo "WATCH 40: CI failed on $SHA ($fail failing check(s)) — run a CI-fix pass"; exit 40
   fi
-  # --- new reviewer round, any of the three surfaces (Codex or a human) ---
-  reviews=$(gh api repos/$REPO/pulls/$PR/reviews  --paginate -q "[.[] | $reviewer] | length")
-  comments=$(gh api repos/$REPO/pulls/$PR/comments --paginate -q "[.[] | $reviewer] | length")
-  issuec=$(gh api repos/$REPO/issues/$PR/comments  --paginate -q "[.[] | $reviewer] | length")
-  if [ "$reviews" -gt "$base_reviews" ] || [ "$comments" -gt "$base_comments" ] || [ "$issuec" -gt "$base_issue" ]; then
+  # --- new reviewer activity since the push, any of the three surfaces (Codex or a human) ---
+  new=$(gh api repos/$REPO/pulls/$PR/reviews   --paginate -q "[.[] | $reviewer | select(.submitted_at > \"$SINCE\")] | length")
+  new=$(( new + $(gh api repos/$REPO/pulls/$PR/comments --paginate -q "[.[] | $reviewer | select(.created_at > \"$SINCE\")] | length") ))
+  new=$(( new + $(gh api repos/$REPO/issues/$PR/comments --paginate -q "[.[] | $reviewer | select(.created_at > \"$SINCE\")] | length") ))
+  if [ "$new" -gt 0 ]; then
     echo "WATCH 10: new reviewer round — run another address-review pass (Steps 1-6)"; exit 10
   fi
   # --- convergence: CI green (all checks done, none failing) AND a reviewer sign-off ---
@@ -248,7 +250,7 @@ while [ "$(date +%s)" -lt "$deadline" ]; do
   [ "$total" -gt 0 ] && [ "$pending" -eq 0 ] && [ "$fail" -eq 0 ] && ci_green=true
   plus1=$(gh api repos/$REPO/issues/$PR/reactions \
     -H "Accept: application/vnd.github.squirrel-girl-preview+json" \
-    -q "[.[] | select(.user.login|test(\"codex\")) | select(.content==\"+1\") | select(.created_at > \"$PUSH_ISO\")] | length")
+    -q "[.[] | select(.user.login|test(\"codex\")) | select(.content==\"+1\") | select(.created_at > \"$SINCE\")] | length")
   approved=$(gh pr view $PR --repo $REPO --json reviewDecision -q .reviewDecision 2>/dev/null || echo "")
   if [ "$ci_green" = true ] && { [ "$plus1" -gt 0 ] || [ "$approved" = "APPROVED" ]; }; then
     echo "WATCH 20: converged (CI green + reviewer sign-off) — done"; exit 20
