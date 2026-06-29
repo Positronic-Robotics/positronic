@@ -45,10 +45,20 @@
         const socket = new WebSocket(`${scheme}://${location.host}/video`);
         socket.binaryType = 'arraybuffer';
 
+        const MAX_BUFFER_SECONDS = 10;
         let sourceBuffer = null;
         const pending = [];
         const pump = () => {
-          if (sourceBuffer && !sourceBuffer.updating && pending.length > 0) {
+          if (!sourceBuffer || sourceBuffer.updating) return;
+          const buffered = sourceBuffer.buffered;
+          if (buffered.length > 0) {
+            const dropTo = video.currentTime - MAX_BUFFER_SECONDS;
+            if (dropTo > buffered.start(0) + 1) {
+              sourceBuffer.remove(buffered.start(0), dropTo);
+              return;
+            }
+          }
+          if (pending.length > 0) {
             sourceBuffer.appendBuffer(pending.shift());
           }
         };
