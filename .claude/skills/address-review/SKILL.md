@@ -237,25 +237,29 @@ while [ "$(date +%s)" -lt "$deadline" ]; do
     echo "WATCH 40: CI failed on $SHA ($fail failing check(s)) — run a CI-fix pass"; exit 40
   fi
   # --- new reviewer activity since the push, any of the three surfaces (Codex or a human) ---
-  # Only COMMENTED / CHANGES_REQUESTED reviews are actionable feedback; an APPROVED (or
-  # DISMISSED) review is a sign-off, left to the convergence block — counting it here would
-  # exit 10 instead of 20 and, with no new commit, re-count the same approval forever.
-  new=$(gh api repos/$REPO/pulls/$PR/reviews   --paginate -q "[.[] | $reviewer | select(.submitted_at > \"$SINCE\") | select(.state==\"COMMENTED\" or .state==\"CHANGES_REQUESTED\")] | length")
-  new=$(( new + $(gh api repos/$REPO/pulls/$PR/comments --paginate -q "[.[] | $reviewer | select(.created_at > \"$SINCE\")] | length") ))
-  new=$(( new + $(gh api repos/$REPO/issues/$PR/comments --paginate -q "[.[] | $reviewer | select(.created_at > \"$SINCE\")] | length") ))
+  # Count with `--paginate --slurp | jq`, NOT `--paginate -q`: with -q, gh runs the filter once
+  # per page and prints one count per page, so the arithmetic below breaks on a multi-page PR.
+  # --slurp wraps all pages into a single array (`.[][]` flattens it). Only COMMENTED /
+  # CHANGES_REQUESTED reviews are actionable; an APPROVED (or DISMISSED) review is a sign-off,
+  # left to the convergence block — counting it here would exit 10 instead of 20 and, with no
+  # new commit, re-count the same approval forever.
+  new=$(gh api repos/$REPO/pulls/$PR/reviews   --paginate --slurp | jq "[.[][] | $reviewer | select(.submitted_at > \"$SINCE\") | select(.state==\"COMMENTED\" or .state==\"CHANGES_REQUESTED\")] | length")
+  new=$(( new + $(gh api repos/$REPO/pulls/$PR/comments --paginate --slurp | jq "[.[][] | $reviewer | select(.created_at > \"$SINCE\")] | length") ))
+  new=$(( new + $(gh api repos/$REPO/issues/$PR/comments --paginate --slurp | jq "[.[][] | $reviewer | select(.created_at > \"$SINCE\")] | length") ))
   if [ "$new" -gt 0 ]; then
     echo "WATCH 10: new reviewer round — run another address-review pass (Steps 1-6)"; exit 10
   fi
-  # --- convergence: CI green (all checks done, none failing) AND a reviewer sign-off ---
-  # Codex signs off with a 👍 (+1) reaction created AFTER the push; a human signs off by
-  # approving the PR (reviewDecision APPROVED). 👀 (eyes) means "reviewing now" — ignore it.
+  # --- convergence: CI green (all checks done, none failing) AND a reviewer sign-off that is
+  # newer than the push. Codex signs off with a 👍 (+1) reaction; a human signs off with an
+  # APPROVED review. Both are gated on `> $SINCE` — a stale approval predating the push does not
+  # certify the pushed changes. 👀 (eyes) means "reviewing now" — ignore it.
   ci_green=false
   [ "$total" -gt 0 ] && [ "$pending" -eq 0 ] && [ "$fail" -eq 0 ] && ci_green=true
   plus1=$(gh api repos/$REPO/issues/$PR/reactions \
-    -H "Accept: application/vnd.github.squirrel-girl-preview+json" \
-    -q "[.[] | select(.user.login|test(\"codex\")) | select(.content==\"+1\") | select(.created_at > \"$SINCE\")] | length")
-  approved=$(gh pr view $PR --repo $REPO --json reviewDecision -q .reviewDecision 2>/dev/null || echo "")
-  if [ "$ci_green" = true ] && { [ "$plus1" -gt 0 ] || [ "$approved" = "APPROVED" ]; }; then
+    -H "Accept: application/vnd.github.squirrel-girl-preview+json" --paginate --slurp \
+    | jq "[.[][] | select(.user.login|test(\"codex\")) | select(.content==\"+1\") | select(.created_at > \"$SINCE\")] | length")
+  approved=$(gh api repos/$REPO/pulls/$PR/reviews --paginate --slurp | jq "[.[][] | $reviewer | select(.state==\"APPROVED\") | select(.submitted_at > \"$SINCE\")] | length")
+  if [ "$ci_green" = true ] && { [ "$plus1" -gt 0 ] || [ "$approved" -gt 0 ]; }; then
     echo "WATCH 20: converged (CI green + reviewer sign-off) — done"; exit 20
   fi
 done
