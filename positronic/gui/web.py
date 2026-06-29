@@ -42,9 +42,9 @@ def _even(value: int) -> int:
     return max(2, value - value % 2)
 
 
-def _resize_to_height(rgb: np.ndarray, height: int) -> np.ndarray:
+def _resize_to_width(rgb: np.ndarray, width: int) -> np.ndarray:
     h, w = rgb.shape[:2]
-    width = _even(round(w * height / h))
+    height = _even(round(h * width / w))
     if (h, w) == (height, width):
         return rgb
     return (
@@ -53,9 +53,9 @@ def _resize_to_height(rgb: np.ndarray, height: int) -> np.ndarray:
 
 
 def _tile(frames: list[np.ndarray]) -> np.ndarray:
-    """Lay frames out side by side at a common (even) height, so the row encodes as one H.264 stream."""
-    height = _even(min(frame.shape[0] for frame in frames))
-    return np.concatenate([_resize_to_height(frame, height) for frame in frames], axis=1)
+    """Stack frames vertically at a common (even) width, so the column encodes as one H.264 stream."""
+    width = _even(min(frame.shape[1] for frame in frames))
+    return np.concatenate([_resize_to_width(frame, width) for frame in frames], axis=0)
 
 
 class _ChunkBuffer:
