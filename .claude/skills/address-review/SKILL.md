@@ -218,6 +218,7 @@ Launch this right after Step 5, in the background:
 set -e
 PR=$(gh pr view --json number -q .number)
 REPO=$(gh repo view --json nameWithOwner -q .nameWithOwner)
+OWNER=${REPO%/*}; NAME=${REPO#*/}                      # for the GraphQL thread query below
 SHA=$(git rev-parse HEAD)                              # judge CI only for the commit we pushed
 # Anchor to the pushed commit's own timestamp, NOT to when this watcher launches: the
 # reply/resolve work in Step 5 takes a while and a reviewer can respond in that window, so a
@@ -231,14 +232,15 @@ ME=$(gh api user -q .login)                            # the PR author — exclu
 # workflow) are intentionally NOT gated on. So: login matches "codex", or is a non-bot that
 # isn't you.
 reviewer="select((.user.login|test(\"codex\")) or ((.user.login|endswith(\"[bot]\")|not) and (.user.login!=\"$ME\")))"
-# Re-entry needs a second anchor. SINCE (commit time) is right for sign-off — a 👍/approval any
-# time after the push counts — but wrong for new feedback: a decline-only pass makes no commit,
-# so SINCE wouldn't advance and the just-handled comment would re-trigger exit 10 forever. You
-# reply to every comment you handle, so your own latest reply post-dates anything already
-# processed; anchor re-entry at the later of SINCE and that reply (lexical max — all UTC Z).
-me_inline=$(gh api repos/$REPO/pulls/$PR/comments --paginate --slurp | jq -r "[.[][] | select(.user.login==\"$ME\") | .created_at] | max // \"\"")
+# Re-entry can't key off SINCE alone: a decline-only pass makes no commit (SINCE wouldn't
+# advance, so the handled comment would re-trigger forever), and your own reply can post-date a
+# reviewer comment that arrived mid-pass (burying it under a later anchor). Inline feedback is
+# therefore detected structurally below — an unresolved thread whose last comment is a
+# reviewer's, no timestamps. The review-summary and issue-comment surfaces have no per-item
+# resolved state, so they fall back to a timestamp: SINCE_DONE = the later of the commit and
+# your latest issue-level reply, which clears anything you have already answered there.
 me_issue=$(gh api repos/$REPO/issues/$PR/comments --paginate --slurp | jq -r "[.[][] | select(.user.login==\"$ME\") | .created_at] | max // \"\"")
-SINCE_DONE=$(printf '%s\n%s\n%s\n' "$SINCE" "$me_inline" "$me_issue" | sort | tail -1)
+SINCE_DONE=$(printf '%s\n%s\n' "$SINCE" "$me_issue" | sort | tail -1)
 deadline=$(( $(date +%s) + 1500 ))                    # 25-minute cap
 while [ "$(date +%s)" -lt "$deadline" ]; do
   sleep 90
@@ -256,14 +258,21 @@ while [ "$(date +%s)" -lt "$deadline" ]; do
   if [ "$fail" -gt 0 ]; then
     echo "WATCH 40: CI failed on $SHA ($fail failing check(s)) — run a CI-fix pass"; exit 40
   fi
-  # --- new reviewer activity since you finished (SINCE_DONE), any of the three surfaces ---
-  # Count with `--paginate --slurp | jq`, NOT `--paginate -q`: with -q, gh runs the filter once
-  # per page and prints one count per page, so the arithmetic below breaks on a multi-page PR.
-  # --slurp wraps all pages into a single array (`.[][]` flattens it). Only COMMENTED /
-  # CHANGES_REQUESTED reviews are actionable; an APPROVED (or DISMISSED) review is a sign-off,
-  # left to the convergence block.
-  new=$(gh api repos/$REPO/pulls/$PR/reviews   --paginate --slurp | jq "[.[][] | $reviewer | select(.submitted_at > \"$SINCE_DONE\") | select(.state==\"COMMENTED\" or .state==\"CHANGES_REQUESTED\")] | length")
-  new=$(( new + $(gh api repos/$REPO/pulls/$PR/comments --paginate --slurp | jq "[.[][] | $reviewer | select(.created_at > \"$SINCE_DONE\")] | length") ))
+  # --- new reviewer feedback to re-enter on ---
+  # Inline (the surface Codex/humans use most): race-free and timestamp-free — count UNRESOLVED
+  # threads whose latest comment is a reviewer's (not you). A thread you handled has your reply
+  # as its last comment (fixed ones are also resolved), so neither handled nor declined threads
+  # re-trigger; only an unanswered reviewer comment does.
+  new=$(gh api graphql -f query='query($o:String!,$r:String!,$n:Int!){repository(owner:$o,name:$r){pullRequest(number:$n){reviewThreads(first:100){nodes{isResolved comments(last:1){nodes{author{login}}}}}}}}' \
+    -F o=$OWNER -F r=$NAME -F n=$PR \
+    --jq "[.data.repository.pullRequest.reviewThreads.nodes[] | select(.isResolved==false) | (.comments.nodes[-1].author.login // \"\") | select(test(\"codex\") or ((endswith(\"[bot]\")|not) and (. != \"$ME\")))] | length")
+  # Review summaries + issue comments have no per-item state, so they're time-anchored on
+  # SINCE_DONE with `--paginate --slurp | jq` (NOT `--paginate -q`, which prints one count per
+  # page and breaks the arithmetic). COMMENTED/CHANGES_REQUESTED only — an APPROVED/DISMISSED
+  # review is a sign-off for the convergence block. This timestamp path is best-effort, but a
+  # round that also carries inline comments is caught race-free above, so the gap is only a
+  # body-only review/comment landing in your reply window — rare, and it surfaces on next trigger.
+  new=$(( new + $(gh api repos/$REPO/pulls/$PR/reviews --paginate --slurp | jq "[.[][] | $reviewer | select(.submitted_at > \"$SINCE_DONE\") | select(.state==\"COMMENTED\" or .state==\"CHANGES_REQUESTED\")] | length") ))
   new=$(( new + $(gh api repos/$REPO/issues/$PR/comments --paginate --slurp | jq "[.[][] | $reviewer | select(.created_at > \"$SINCE_DONE\")] | length") ))
   if [ "$new" -gt 0 ]; then
     echo "WATCH 10: new reviewer round — run another address-review pass (Steps 1-6)"; exit 10
