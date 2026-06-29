@@ -48,6 +48,7 @@ gh pr view --json number,url,headRefName,baseRefName \
 PR=$(gh pr view --json number -q .number)
 REPO=$(gh repo view --json nameWithOwner -q .nameWithOwner)
 OWNER=${REPO%/*}; NAME=${REPO#*/}
+HEAD_REF=$(gh pr view --json headRefName -q .headRefName)   # the PR's head branch — push to this
 ```
 
 Fetch all three comment surfaces — any can carry feedback:
@@ -128,7 +129,7 @@ if git diff --cached --quiet; then
   SHA=$(git rev-parse --short HEAD)        # nothing staged — keep HEAD, go reply
 else
   git commit -m "<imperative summary of the review fixes>"
-  git push origin HEAD
+  git push origin HEAD:"$HEAD_REF"   # explicit refspec — local branch may not match the PR head
   SHA=$(git rev-parse --short HEAD)
 fi
 ```
