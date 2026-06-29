@@ -262,10 +262,16 @@ while [ "$(date +%s)" -lt "$deadline" ]; do
   # Inline (the surface Codex/humans use most): race-free and timestamp-free — count UNRESOLVED
   # threads whose latest comment is a reviewer's (not you). A thread you handled has your reply
   # as its last comment (fixed ones are also resolved), so neither handled nor declined threads
-  # re-trigger; only an unanswered reviewer comment does.
-  new=$(gh api graphql -f query='query($o:String!,$r:String!,$n:Int!){repository(owner:$o,name:$r){pullRequest(number:$n){reviewThreads(first:100){nodes{isResolved comments(last:1){nodes{author{login}}}}}}}}' \
-    -F o=$OWNER -F r=$NAME -F n=$PR \
-    --jq "[.data.repository.pullRequest.reviewThreads.nodes[] | select(.isResolved==false) | (.comments.nodes[-1].author.login // \"\") | select(test(\"codex\") or ((endswith(\"[bot]\")|not) and (. != \"$ME\")))] | length")
+  # re-trigger; only an unanswered reviewer comment does. Paginate by cursor: threads come back
+  # oldest-first, so on a PR with >100 threads a fresh unanswered round sits on the LAST page.
+  new=0; after=""; more=true
+  while [ "$more" = "true" ]; do
+    targs=(-F o=$OWNER -F r=$NAME -F n=$PR); [ -n "$after" ] && targs+=(-F after="$after")
+    page=$(gh api graphql -f query='query($o:String!,$r:String!,$n:Int!,$after:String){repository(owner:$o,name:$r){pullRequest(number:$n){reviewThreads(first:100,after:$after){pageInfo{hasNextPage endCursor} nodes{isResolved comments(last:1){nodes{author{login}}}}}}}}' "${targs[@]}")
+    new=$(( new + $(echo "$page" | jq "[.data.repository.pullRequest.reviewThreads.nodes[] | select(.isResolved==false) | (.comments.nodes[-1].author.login // \"\") | select(test(\"codex\") or ((endswith(\"[bot]\")|not) and (. != \"$ME\")))] | length") ))
+    more=$(echo "$page" | jq -r '.data.repository.pullRequest.reviewThreads.pageInfo.hasNextPage')
+    after=$(echo "$page" | jq -r '.data.repository.pullRequest.reviewThreads.pageInfo.endCursor')
+  done
   # Review summaries + issue comments have no per-item state, so they're time-anchored on
   # SINCE_DONE with `--paginate --slurp | jq` (NOT `--paginate -q`, which prints one count per
   # page and breaks the arithmetic). COMMENTED/CHANGES_REQUESTED only — an APPROVED/DISMISSED
