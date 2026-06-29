@@ -52,9 +52,9 @@ def _resize_to_width(rgb: np.ndarray, width: int) -> np.ndarray:
     )
 
 
-def _tile(frames: list[np.ndarray]) -> np.ndarray:
+def _tile(frames: list[np.ndarray], width: int) -> np.ndarray:
     """Stack frames vertically at a common (even) width, so the column encodes as one H.264 stream."""
-    width = _even(min(frame.shape[1] for frame in frames))
+    width = _even(width)
     return np.concatenate([_resize_to_width(frame, width) for frame in frames], axis=0)
 
 
@@ -173,9 +173,10 @@ class WebEvalUI(pimm.ControlSystem):
     reachable over an SSH tunnel or directly on the host IP.
     """
 
-    def __init__(self, port=8080, fps=30, keyframe_interval=15, bitrate=8_000_000):
+    def __init__(self, port=8080, fps=20, width=640, keyframe_interval=15, bitrate=2_000_000):
         self.port = port
         self.fps = fps
+        self.width = width
         self.keyframe_interval = keyframe_interval
         self.bitrate = bitrate
         self.cameras = pimm.ReceiverDict(self, default=None)
@@ -249,7 +250,7 @@ class WebEvalUI(pimm.ControlSystem):
                         latest[name] = cam_msg.data.array
                         changed = True
                 if changed and len(latest) == len(names):
-                    stream.push(_tile([latest[name] for name in names]))
+                    stream.push(_tile([latest[name] for name in names], self.width))
                 if not server_thread.is_alive():
                     raise RuntimeError('Web eval server thread died')
                 yield pimm.Sleep(1 / self.fps)
