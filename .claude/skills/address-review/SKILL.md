@@ -237,7 +237,10 @@ while [ "$(date +%s)" -lt "$deadline" ]; do
     echo "WATCH 40: CI failed on $SHA ($fail failing check(s)) — run a CI-fix pass"; exit 40
   fi
   # --- new reviewer activity since the push, any of the three surfaces (Codex or a human) ---
-  new=$(gh api repos/$REPO/pulls/$PR/reviews   --paginate -q "[.[] | $reviewer | select(.submitted_at > \"$SINCE\")] | length")
+  # Only COMMENTED / CHANGES_REQUESTED reviews are actionable feedback; an APPROVED (or
+  # DISMISSED) review is a sign-off, left to the convergence block — counting it here would
+  # exit 10 instead of 20 and, with no new commit, re-count the same approval forever.
+  new=$(gh api repos/$REPO/pulls/$PR/reviews   --paginate -q "[.[] | $reviewer | select(.submitted_at > \"$SINCE\") | select(.state==\"COMMENTED\" or .state==\"CHANGES_REQUESTED\")] | length")
   new=$(( new + $(gh api repos/$REPO/pulls/$PR/comments --paginate -q "[.[] | $reviewer | select(.created_at > \"$SINCE\")] | length") ))
   new=$(( new + $(gh api repos/$REPO/issues/$PR/comments --paginate -q "[.[] | $reviewer | select(.created_at > \"$SINCE\")] | length") ))
   if [ "$new" -gt 0 ]; then
