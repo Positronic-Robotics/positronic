@@ -119,11 +119,20 @@ SHA=$(git rev-parse --short HEAD)
 
 **Reply** to each comment: state what changed and the commit (`Fixed in $SHA: ...`), or the
 reasoning for a decline/defer. Write the body to a file to dodge shell-quoting pitfalls
-(apostrophes, backticks):
+(apostrophes, backticks). The endpoint depends on which surface the comment came from:
 
 ```bash
+# Inline (line-level) review comment — reply into its thread:
 gh api -X POST repos/$REPO/pulls/$PR/comments/<comment_id>/replies -F body=@reply.txt
+
+# Review summary (top-level review body) or issue-level conversation comment — these have no
+# inline thread, so post a normal PR comment that quotes/links what you are answering:
+gh api -X POST repos/$REPO/issues/$PR/comments -F body=@reply.txt
 ```
+
+A combined review (e.g. one Codex body carrying several findings) arrives as a single
+conversation comment, not per-finding threads — answer it with one issue-level reply that
+addresses each finding; there is nothing to resolve in Step 5 for that surface.
 
 **Resolve** only the threads you *fixed* (a concrete change landed). Resolution requires
 GraphQL (the REST API can't do it). Map each comment's `databaseId` to its thread node id,
@@ -193,6 +202,8 @@ PR=$(gh pr view --json number -q .number)
 REPO=$(gh repo view --json nameWithOwner -q .nameWithOwner)
 SHA=$(git rev-parse HEAD)                              # judge CI only for the commit we pushed
 PUSH_ISO=$(date -u +%Y-%m-%dT%H:%M:%SZ)               # ISO-8601 UTC sorts lexically
+# Tracked reviewers are Codex and humans; the repo's Claude review workflow is intentionally
+# not gated on, so the predicate matches only the Codex bot.
 codex='select(.user.login|test("codex"))'
 # Baseline counts captured right after your push; a NEW round increments one of them.
 base_reviews=$(gh api repos/$REPO/pulls/$PR/reviews  --paginate -q "[.[] | $codex] | length")
@@ -202,7 +213,10 @@ while [ "$(date +%s)" -lt "$deadline" ]; do
   sleep 90
   # --- CI on the pushed commit (highest priority; a failing check is actionable at once) ---
   cr=$(gh api "repos/$REPO/commits/$SHA/check-runs?per_page=100" 2>/dev/null || echo '{}')
-  fail=$(echo "$cr"    | jq '[.check_runs[]? | select(.conclusion=="failure" or .conclusion=="timed_out")] | length')
+  # Any completed check whose conclusion is outside the passing set counts as failed — this
+  # covers failure/timed_out plus cancelled/action_required/stale/startup_failure, so a
+  # non-passing-but-not-"failure" check can never be mistaken for green.
+  fail=$(echo "$cr"    | jq '[.check_runs[]? | select(.status=="completed") | select((.conclusion // "") as $c | (["success","neutral","skipped"] | index($c)) == null)] | length')
   pending=$(echo "$cr" | jq '[.check_runs[]? | select(.status!="completed")] | length')
   total=$(echo "$cr"   | jq '[.check_runs[]?] | length')
   if [ "$fail" -gt 0 ]; then
