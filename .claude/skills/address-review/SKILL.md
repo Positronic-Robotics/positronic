@@ -231,30 +231,40 @@ ME=$(gh api user -q .login)                            # the PR author — exclu
 # workflow) are intentionally NOT gated on. So: login matches "codex", or is a non-bot that
 # isn't you.
 reviewer="select((.user.login|test(\"codex\")) or ((.user.login|endswith(\"[bot]\")|not) and (.user.login!=\"$ME\")))"
+# Re-entry needs a second anchor. SINCE (commit time) is right for sign-off — a 👍/approval any
+# time after the push counts — but wrong for new feedback: a decline-only pass makes no commit,
+# so SINCE wouldn't advance and the just-handled comment would re-trigger exit 10 forever. You
+# reply to every comment you handle, so your own latest reply post-dates anything already
+# processed; anchor re-entry at the later of SINCE and that reply (lexical max — all UTC Z).
+me_inline=$(gh api repos/$REPO/pulls/$PR/comments --paginate --slurp | jq -r "[.[][] | select(.user.login==\"$ME\") | .created_at] | max // \"\"")
+me_issue=$(gh api repos/$REPO/issues/$PR/comments --paginate --slurp | jq -r "[.[][] | select(.user.login==\"$ME\") | .created_at] | max // \"\"")
+SINCE_DONE=$(printf '%s\n%s\n%s\n' "$SINCE" "$me_inline" "$me_issue" | sort | tail -1)
 deadline=$(( $(date +%s) + 1500 ))                    # 25-minute cap
 while [ "$(date +%s)" -lt "$deadline" ]; do
   sleep 90
   # --- CI on the pushed commit (highest priority; a failing check is actionable at once) ---
-  cr=$(gh api "repos/$REPO/commits/$SHA/check-runs?per_page=100" 2>/dev/null || echo '{}')
+  # --paginate --slurp so a commit with >100 check runs isn't judged on its first page alone —
+  # a failing or pending job on a later page must not be missed. Slurp yields an array of page
+  # objects, so the runs are at `.[].check_runs[]`.
+  cr=$(gh api "repos/$REPO/commits/$SHA/check-runs?per_page=100" --paginate --slurp 2>/dev/null || echo '[]')
   # Any completed check whose conclusion is outside the passing set counts as failed — this
   # covers failure/timed_out plus cancelled/action_required/stale/startup_failure, so a
   # non-passing-but-not-"failure" check can never be mistaken for green.
-  fail=$(echo "$cr"    | jq '[.check_runs[]? | select(.status=="completed") | select((.conclusion // "") as $c | (["success","neutral","skipped"] | index($c)) == null)] | length')
-  pending=$(echo "$cr" | jq '[.check_runs[]? | select(.status!="completed")] | length')
-  total=$(echo "$cr"   | jq '[.check_runs[]?] | length')
+  fail=$(echo "$cr"    | jq '[.[].check_runs[]? | select(.status=="completed") | select((.conclusion // "") as $c | (["success","neutral","skipped"] | index($c)) == null)] | length')
+  pending=$(echo "$cr" | jq '[.[].check_runs[]? | select(.status!="completed")] | length')
+  total=$(echo "$cr"   | jq '[.[].check_runs[]?] | length')
   if [ "$fail" -gt 0 ]; then
     echo "WATCH 40: CI failed on $SHA ($fail failing check(s)) — run a CI-fix pass"; exit 40
   fi
-  # --- new reviewer activity since the push, any of the three surfaces (Codex or a human) ---
+  # --- new reviewer activity since you finished (SINCE_DONE), any of the three surfaces ---
   # Count with `--paginate --slurp | jq`, NOT `--paginate -q`: with -q, gh runs the filter once
   # per page and prints one count per page, so the arithmetic below breaks on a multi-page PR.
   # --slurp wraps all pages into a single array (`.[][]` flattens it). Only COMMENTED /
   # CHANGES_REQUESTED reviews are actionable; an APPROVED (or DISMISSED) review is a sign-off,
-  # left to the convergence block — counting it here would exit 10 instead of 20 and, with no
-  # new commit, re-count the same approval forever.
-  new=$(gh api repos/$REPO/pulls/$PR/reviews   --paginate --slurp | jq "[.[][] | $reviewer | select(.submitted_at > \"$SINCE\") | select(.state==\"COMMENTED\" or .state==\"CHANGES_REQUESTED\")] | length")
-  new=$(( new + $(gh api repos/$REPO/pulls/$PR/comments --paginate --slurp | jq "[.[][] | $reviewer | select(.created_at > \"$SINCE\")] | length") ))
-  new=$(( new + $(gh api repos/$REPO/issues/$PR/comments --paginate --slurp | jq "[.[][] | $reviewer | select(.created_at > \"$SINCE\")] | length") ))
+  # left to the convergence block.
+  new=$(gh api repos/$REPO/pulls/$PR/reviews   --paginate --slurp | jq "[.[][] | $reviewer | select(.submitted_at > \"$SINCE_DONE\") | select(.state==\"COMMENTED\" or .state==\"CHANGES_REQUESTED\")] | length")
+  new=$(( new + $(gh api repos/$REPO/pulls/$PR/comments --paginate --slurp | jq "[.[][] | $reviewer | select(.created_at > \"$SINCE_DONE\")] | length") ))
+  new=$(( new + $(gh api repos/$REPO/issues/$PR/comments --paginate --slurp | jq "[.[][] | $reviewer | select(.created_at > \"$SINCE_DONE\")] | length") ))
   if [ "$new" -gt 0 ]; then
     echo "WATCH 10: new reviewer round — run another address-review pass (Steps 1-6)"; exit 10
   fi
