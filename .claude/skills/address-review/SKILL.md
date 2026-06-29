@@ -218,10 +218,11 @@ confuse it, and acts only once a check has *completed* with a failing conclusion
 The watcher just polls `gh`, so it costs no tokens while it waits. It is **harness-tracked**:
 when it exits you are re-invoked automatically with its output — that notification is the
 primary wake signal, so launch it with `run_in_background` and **don't** add a short poll on top
-of it. Do, however, set one **long fallback heartbeat** when you launch the watcher
-(`ScheduleWakeup`, ~20–30 min) so a missed or dropped exit-notification can't strand the loop
-with feedback sitting unanswered — a safety net, not a poll; when it fires, re-check for
-unhandled comments and, if none, reschedule it. Its echoed `WATCH <code>` line names the next
+of it. If your runtime exposes a scheduled-wake primitive (e.g. `ScheduleWakeup` under `/loop`),
+also set one **long fallback heartbeat** (~20–30 min) as a safety net against a missed or dropped
+exit-notification — not a poll; when it fires, re-check for unhandled comments and, if none,
+reschedule it. Otherwise the primary notification plus the watcher relaunching on every exit
+(see exit 30) are the wake mechanism. Its echoed `WATCH <code>` line names the next
 action, so the loop survives even if this skill text has fallen out of context (re-read this
 file if unsure).
 
