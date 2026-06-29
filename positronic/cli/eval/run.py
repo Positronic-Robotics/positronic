@@ -31,7 +31,7 @@ class Driver:
     the directory exists only after ``pos3.sync`` inside ``main``.
     """
 
-    gui: DearpyguiUi | None
+    gui: pimm.ControlSystem | None
     directives: pimm.SignalEmitter
     directive_wrapper: Callable
     control_systems: list[pimm.ControlSystem]
