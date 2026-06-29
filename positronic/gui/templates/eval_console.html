@@ -65,6 +65,7 @@
             video.src = URL.createObjectURL(mediaSource);
             mediaSource.addEventListener('sourceopen', () => {
               sourceBuffer = mediaSource.addSourceBuffer(codec);
+              sourceBuffer.mode = 'sequence';
               sourceBuffer.addEventListener('updateend', pump);
               pump();
             });

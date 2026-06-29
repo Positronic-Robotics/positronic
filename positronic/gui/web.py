@@ -173,7 +173,8 @@ class WebEvalUI(pimm.ControlSystem):
     reachable over an SSH tunnel or directly on the host IP.
     """
 
-    def __init__(self, port=8080, fps=20, width=640, keyframe_interval=15, bitrate=2_000_000):
+    def __init__(self, task: str | None = None, port=8080, fps=20, width=640, keyframe_interval=15, bitrate=2_000_000):
+        self.task = task
         self.port = port
         self.fps = fps
         self.width = width
@@ -222,7 +223,7 @@ class WebEvalUI(pimm.ControlSystem):
         async def directive(action: str):
             match action:
                 case 'start':
-                    self.directive.emit(Directive.RUN(), clock.now_ns())
+                    self.directive.emit(Directive.RUN(task=self.task), clock.now_ns())
                 case 'finish':
                     self.directive.emit(Directive.FINISH(), clock.now_ns())
                 case 'abort':
