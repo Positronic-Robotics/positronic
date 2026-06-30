@@ -1,0 +1,129 @@
+#!/usr/bin/env bash
+# Background convergence watcher for the address-review skill. Launched in the background after a
+# pass; blocks until something actionable happens, then echoes a `WATCH <code>` line and exits with
+# that code (10 new round, 20 converged, 30 quiet, 40 CI failed, 50 API unreadable). Self-contained
+# — it reads the PR/repo from the current checkout. Lives in its own file so a single allow rule
+# (`Bash(bash .claude/skills/address-review/watch.sh:*)`) pre-approves the whole loop: Claude Code
+# does not re-parse a script file's internal commands for permission, whereas an inline compound
+# command would have every subcommand (jq, date, sleep, `[`, …) checked independently.
+set -e
+
+# Every GitHub read goes through ghr: 3 tries, then a non-zero RETURN — never `exit`, because ghr
+# runs inside `$(...)` where exit would only kill the subshell and be silently swallowed. A plain
+# `gh | jq` pipeline hides a failed read: jq sees empty input, emits an empty/zero count, and the
+# pipeline still exits 0 on jq's success — so a rate-limited or unreadable API reads as "no new
+# feedback" and the loop quietly stalls instead of surfacing the problem. Keeping the gh read and
+# the jq parse in separate steps lets a real failure be caught: `data=$(ghr ...) || fail50 ...`,
+# then `echo "$data" | jq ...`. fail50 runs at top level (not in `$(...)`), so it can exit.
+ghr() {
+  local out
+  for t in 1 2 3; do out=$(gh "$@" 2>/dev/null) && { printf '%s' "$out"; return 0; }; sleep 5; done
+  return 1
+}
+fail50() { echo "WATCH 50: $1 — token scope or a GitHub outage; surface to the user"; exit 50; }
+
+PR=$(gh pr view --json number -q .number)
+# The repo that hosts the PR — its comments, reviews, reactions — is the PR's BASE repo, taken from
+# the PR URL, NOT from `gh repo view`: that returns the checkout's default repo, which in a fork
+# checkout can be the head (fork) repo, sending every read below to a repo where this PR number
+# doesn't exist. The URL path is always <host>/<owner>/<repo>/pull/<n>, so fields 4 and 5 are it.
+REPO=$(gh pr view --json url -q .url | awk -F/ '{print $4"/"$5}')
+OWNER=${REPO%/*}; NAME=${REPO#*/}                      # for the GraphQL thread query below
+SHA=$(git rev-parse HEAD)                              # judge CI only for the commit we pushed
+# Anchor to the pushed commit's own timestamp, NOT to when this watcher launches: the
+# reply/resolve work in Step 5 takes a while and a reviewer can respond in that window, so a
+# launch-time anchor would fold those responses into the baseline and miss them. Counting
+# reviewer activity created after the commit time catches them no matter when the loop starts.
+# In UTC with a Z suffix so it sorts lexically against GitHub's UTC timestamps (a local-offset
+# %cI like +03:00 would mis-compare against their Z form).
+SINCE=$(TZ=UTC0 git show -s --date=format-local:'%Y-%m-%dT%H:%M:%SZ' --format=%cd HEAD)
+ME=$(gh api user -q .login)                            # the PR author — exclude your own replies
+# A tracked reviewer is the Codex bot OR any human; other bots (e.g. the repo's Claude review
+# workflow) are intentionally NOT gated on. So: login matches "codex", or is a non-bot that
+# isn't you.
+reviewer="select((.user.login|test(\"codex\")) or ((.user.login|endswith(\"[bot]\")|not) and (.user.login!=\"$ME\")))"
+# Re-entry can't key off SINCE alone: a decline-only pass makes no commit (SINCE wouldn't
+# advance, so the handled comment would re-trigger forever), and your own reply can post-date a
+# reviewer comment that arrived mid-pass (burying it under a later anchor). Inline feedback is
+# therefore detected structurally below — an unresolved thread whose last comment is a
+# reviewer's, no timestamps. The review-summary and issue-comment surfaces have no per-item
+# resolved state, so they fall back to a timestamp: SINCE_DONE = the later of the commit and
+# your latest reply on ANY surface. Include inline replies, not just issue-level ones — when you
+# answer a Codex round inline (e.g. a decline, no commit), its COMMENTED review row is still
+# `> SINCE` and would re-trigger forever unless your inline reply also advances the floor.
+mi=$(ghr api repos/$REPO/issues/$PR/comments --paginate --slurp) || fail50 "cannot read issue comments for PR $PR"
+me_issue=$(echo "$mi" | jq -r "[.[][] | select(.user.login==\"$ME\") | .created_at] | max // \"\"")
+ml=$(ghr api repos/$REPO/pulls/$PR/comments --paginate --slurp) || fail50 "cannot read inline comments for PR $PR"
+me_inline=$(echo "$ml" | jq -r "[.[][] | select(.user.login==\"$ME\") | .created_at] | max // \"\"")
+SINCE_DONE=$(printf '%s\n%s\n%s\n' "$SINCE" "$me_issue" "$me_inline" | sort | tail -1)
+deadline=$(( $(date +%s) + 1500 ))                    # 25-minute cap
+while [ "$(date +%s)" -lt "$deadline" ]; do
+  sleep 90
+  # --- CI on the pushed commit (highest priority; a failing check is actionable at once) ---
+  # --paginate --slurp so a commit with >100 check runs isn't judged on its first page alone — a
+  # failing or pending job on a later page must not be missed. Slurp yields an array of page
+  # objects, so the runs are at `.[].check_runs[]`. ghr surfaces an unreadable API as exit 50
+  # rather than a fake "no checks" reading (total=0 would block both exit 40 and ci_green, so the
+  # persisting loop would spin forever); a readable-but-empty response is still valid JSON, so a
+  # commit with genuinely no checks yet stays in the loop.
+  cr=$(ghr api "repos/$REPO/commits/$SHA/check-runs?per_page=100" --paginate --slurp) || fail50 "cannot read check runs for $SHA"
+  # Any completed check whose conclusion is outside the passing set counts as failed — this
+  # covers failure/timed_out plus cancelled/action_required/stale/startup_failure, so a
+  # non-passing-but-not-"failure" check can never be mistaken for green.
+  fail=$(echo "$cr"    | jq '[.[].check_runs[]? | select(.status=="completed") | select((.conclusion // "") as $c | (["success","neutral","skipped"] | index($c)) == null)] | length')
+  pending=$(echo "$cr" | jq '[.[].check_runs[]? | select(.status!="completed")] | length')
+  total=$(echo "$cr"   | jq '[.[].check_runs[]?] | length')
+  if [ "$fail" -gt 0 ]; then
+    echo "WATCH 40: CI failed on $SHA ($fail failing check(s)) — run a CI-fix pass"; exit 40
+  fi
+  # --- new reviewer feedback to re-enter on ---
+  # Inline (the surface Codex/humans use most): race-free and timestamp-free — count UNRESOLVED
+  # threads whose latest comment is a reviewer's (not you). A thread you handled has your reply
+  # as its last comment (fixed ones are also resolved), so neither handled nor declined threads
+  # re-trigger; only an unanswered reviewer comment does. Paginate by cursor: threads come back
+  # oldest-first, so on a PR with >100 threads a fresh unanswered round sits on the LAST page.
+  new=0; after=""; more=true
+  while [ "$more" = "true" ]; do
+    targs=(-F o=$OWNER -F r=$NAME -F n=$PR); [ -n "$after" ] && targs+=(-F after="$after")
+    page=$(ghr api graphql -f query='query($o:String!,$r:String!,$n:Int!,$after:String){repository(owner:$o,name:$r){pullRequest(number:$n){reviewThreads(first:100,after:$after){pageInfo{hasNextPage endCursor} nodes{isResolved comments(last:1){nodes{author{login}}}}}}}}' "${targs[@]}") || fail50 "cannot read review threads for PR $PR"
+    new=$(( new + $(echo "$page" | jq "[.data.repository.pullRequest.reviewThreads.nodes[] | select(.isResolved==false) | (.comments.nodes[-1].author.login // \"\") | select(test(\"codex\") or ((endswith(\"[bot]\")|not) and (. != \"$ME\")))] | length") ))
+    more=$(echo "$page" | jq -r '.data.repository.pullRequest.reviewThreads.pageInfo.hasNextPage')
+    after=$(echo "$page" | jq -r '.data.repository.pullRequest.reviewThreads.pageInfo.endCursor')
+  done
+  # Review summaries + issue comments have no per-item state, so they're time-anchored on
+  # SINCE_DONE with `--paginate --slurp` then jq (NOT `--paginate -q`, which prints one count per
+  # page and breaks the arithmetic). COMMENTED/CHANGES_REQUESTED only — an APPROVED/DISMISSED
+  # review is a sign-off for the convergence block. This timestamp path is best-effort, but a
+  # round that also carries inline comments is caught race-free above, so the gap is only a
+  # body-only review/comment landing in your reply window — rare, and it surfaces on next trigger.
+  # The reviews list is fetched once here and reused for the APPROVED sign-off check below.
+  rv=$(ghr api repos/$REPO/pulls/$PR/reviews --paginate --slurp) || fail50 "cannot read reviews for PR $PR"
+  new=$(( new + $(echo "$rv" | jq "[.[][] | $reviewer | select(.submitted_at > \"$SINCE_DONE\") | select(.state==\"COMMENTED\" or .state==\"CHANGES_REQUESTED\")] | length") ))
+  ic=$(ghr api repos/$REPO/issues/$PR/comments --paginate --slurp) || fail50 "cannot read issue comments for PR $PR"
+  new=$(( new + $(echo "$ic" | jq "[.[][] | $reviewer | select(.created_at > \"$SINCE_DONE\")] | length") ))
+  if [ "$new" -gt 0 ]; then
+    echo "WATCH 10: new reviewer round — run another address-review pass (Steps 1-6)"; exit 10
+  fi
+  # --- convergence: CI green (all checks done, none failing) AND a reviewer sign-off. A human
+  # signs off via an APPROVED review pinned to the exact SHA (commit_id == $SHA). Codex signs off
+  # with a 👍 (+1) reaction, which carries no commit id and so can't be SHA-pinned like a review.
+  # Anchor it on the PUSH: pushed_at = the earliest check-SUITE created_at on this SHA. GitHub
+  # creates the suite the moment it receives the push, before any runner queues — so this tracks
+  # push time, unlike a check-RUN's started_at, which trails the push by the runner-queue delay and
+  # would wrongly drop a 👍 that lands after the push but before the first run starts. A genuine
+  # post-push 👍 counts even if it precedes your Step 5 reply; a 👍 left before the push is dropped.
+  # Residual: a reaction still isn't tied to a SHA, so a delayed 👍 for an earlier state landing
+  # after this push would count — unfixable without a SHA-stamped sign-off. 👀 (eyes) = "reviewing
+  # now" — ignore. (At convergence pending==0, so the suite exists and pushed_at is set.)
+  ci_green=false
+  [ "$total" -gt 0 ] && [ "$pending" -eq 0 ] && [ "$fail" -eq 0 ] && ci_green=true
+  cs=$(ghr api "repos/$REPO/commits/$SHA/check-suites?per_page=100" --paginate --slurp) || fail50 "cannot read check suites for $SHA"
+  pushed_at=$(echo "$cs" | jq -r '[.[].check_suites[]? | .created_at | select(. != null)] | min // ""')
+  rx=$(ghr api repos/$REPO/issues/$PR/reactions -H "Accept: application/vnd.github.squirrel-girl-preview+json" --paginate --slurp) || fail50 "cannot read reactions for PR $PR"
+  plus1=$(echo "$rx" | jq "[.[][] | select(.user.login|test(\"codex\")) | select(.content==\"+1\") | select(.created_at > \"$pushed_at\")] | length")
+  approved=$(echo "$rv" | jq "[.[][] | $reviewer | select(.state==\"APPROVED\") | select(.commit_id == \"$SHA\")] | length")
+  if [ "$ci_green" = true ] && { [ "$plus1" -gt 0 ] || [ "$approved" -gt 0 ]; }; then
+    echo "WATCH 20: converged (CI green + reviewer sign-off) — done"; exit 20
+  fi
+done
+echo "WATCH 30: quiet interval elapsed — relaunch and keep waiting (ping the user only after several quiet cycles)"; exit 30
