@@ -107,15 +107,18 @@ while [ "$(date +%s)" -lt "$deadline" ]; do
   # --- convergence: CI green (all checks done, none failing) AND a reviewer sign-off. A human
   # signs off via an APPROVED review pinned to the exact SHA (commit_id == $SHA). Codex signs off
   # with a 👍 (+1) reaction, which carries no commit id and so can't be SHA-pinned like a review.
-  # Anchor it on the PUSH, not the commit or your reply: pushed_at = the earliest check-run
-  # started_at on this SHA (CI fires when GitHub receives the push). That counts a genuine post-push
-  # 👍 even if it lands before your Step 5 reply (a reply anchor would miss it) and drops a 👍 left
-  # before the push. Residual: a reaction still isn't tied to a SHA, so a delayed 👍 for an earlier
-  # state landing after this push would count — unfixable without a SHA-stamped sign-off. 👀 (eyes)
-  # = "reviewing now" — ignore. (At convergence pending==0, so every run has a started_at.)
+  # Anchor it on the PUSH: pushed_at = the earliest check-SUITE created_at on this SHA. GitHub
+  # creates the suite the moment it receives the push, before any runner queues — so this tracks
+  # push time, unlike a check-RUN's started_at, which trails the push by the runner-queue delay and
+  # would wrongly drop a 👍 that lands after the push but before the first run starts. A genuine
+  # post-push 👍 counts even if it precedes your Step 5 reply; a 👍 left before the push is dropped.
+  # Residual: a reaction still isn't tied to a SHA, so a delayed 👍 for an earlier state landing
+  # after this push would count — unfixable without a SHA-stamped sign-off. 👀 (eyes) = "reviewing
+  # now" — ignore. (At convergence pending==0, so the suite exists and pushed_at is set.)
   ci_green=false
   [ "$total" -gt 0 ] && [ "$pending" -eq 0 ] && [ "$fail" -eq 0 ] && ci_green=true
-  pushed_at=$(echo "$cr" | jq -r '[.[].check_runs[]? | .started_at | select(. != null)] | min // ""')
+  cs=$(ghr api "repos/$REPO/commits/$SHA/check-suites?per_page=100" --paginate --slurp) || fail50 "cannot read check suites for $SHA"
+  pushed_at=$(echo "$cs" | jq -r '[.[].check_suites[]? | .created_at | select(. != null)] | min // ""')
   rx=$(ghr api repos/$REPO/issues/$PR/reactions -H "Accept: application/vnd.github.squirrel-girl-preview+json" --paginate --slurp) || fail50 "cannot read reactions for PR $PR"
   plus1=$(echo "$rx" | jq "[.[][] | select(.user.login|test(\"codex\")) | select(.content==\"+1\") | select(.created_at > \"$pushed_at\")] | length")
   approved=$(echo "$rv" | jq "[.[][] | $reviewer | select(.state==\"APPROVED\") | select(.commit_id == \"$SHA\")] | length")
