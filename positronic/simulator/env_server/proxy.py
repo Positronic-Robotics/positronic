@@ -58,8 +58,8 @@ class RemoteEnvControlSystem(pimm.ControlSystem):
         assert self._meta is not None, 'meta read before the first reset'
         return self._meta
 
-    def reset(self, seed: int | None = None) -> None:
-        """Re-randomize the env from ``seed`` and arm frame-0 publication for the next turn (the ``RUN`` hook).
+    def reset(self, context: dict[str, Any]) -> None:
+        """Re-randomize the env from the trial context and arm frame-0 publication for the next turn (the ``RUN`` hook).
 
         Resets the remote env (acquiring the fresh frame and its ``control_dt``), then flags the run loop
         to publish the scene meta, a full observation payload (frame-0) and a non-terminal ``done`` on its
@@ -75,7 +75,7 @@ class RemoteEnvControlSystem(pimm.ControlSystem):
             self._cleanup.callback(self._conn.close)
         for _, receiver in self.commands.items():
             receiver.read()
-        self._frame = self._conn.reset(self._adapter.reset_token(seed))
+        self._frame = self._conn.reset(self._adapter.reset_token(context))
         self._meta = self._frame['meta']
         self._robot_meta = self._frame['robot_meta']
         self._reset_pending = True

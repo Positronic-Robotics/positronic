@@ -44,7 +44,7 @@ CACHE_ROOT=/home/<user> docker --context <h100> compose run --rm --service-ports
 uv run --locked positronic-inference sim \
   --policy=.remote --policy.host=<h100-host> --policy.port=8000 \
   --wrap=@positronic.vendors.dreamzero.codecs.dreamzero_wrappers \
-  --trial_count=2 --show_gui=True
+  --eval.trial_count=2 --show_gui=True
 ```
 
 The server owns the codec, so you don't pass one client-side — it takes raw observations and returns
@@ -149,7 +149,7 @@ Sanity-check once warm: `curl http://<h100-host>:8000/api/v1/models` → `{"mode
 uv run --locked positronic-inference sim \
   --policy=.remote --policy.host=<h100-host> --policy.port=8000 \
   --wrap=@positronic.vendors.dreamzero.codecs.dreamzero_wrappers \
-  --trial_count=<N> --output_dir=<dir-or-s3-path>
+  --eval.trial_count=<N> --output_dir=<dir-or-s3-path>
 ```
 
 Sim runs locally on your machine; only inference is remote. Each episode records 3 camera views +
