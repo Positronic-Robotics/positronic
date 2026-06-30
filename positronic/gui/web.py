@@ -195,7 +195,7 @@ class WebEvalUI(pimm.ControlSystem):
 
         @app.get('/', response_class=HTMLResponse)
         async def index(request: Request):
-            return templates.TemplateResponse(request, 'eval_console.html', {'cameras': names})
+            return templates.TemplateResponse(request, 'eval_console.html')
 
         @app.websocket('/video')
         async def video(websocket: WebSocket):
@@ -231,7 +231,10 @@ class WebEvalUI(pimm.ControlSystem):
                 case _:
                     raise HTTPException(status_code=404)
 
-        config = uvicorn.Config(app, host='0.0.0.0', port=self.port)
+        # The continuous fragment push is the connection's liveness signal. Uvicorn's keepalive ping
+        # runs in its own coroutine and would await a transport drain concurrently with the send loop,
+        # tripping an assertion in websockets and killing the feed; disable it.
+        config = uvicorn.Config(app, host='0.0.0.0', port=self.port, ws_ping_interval=None, ws_ping_timeout=None)
         server = uvicorn.Server(config)
         server_thread = threading.Thread(target=server.run, daemon=True)
         server_thread.start()

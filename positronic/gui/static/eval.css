@@ -1,37 +1,69 @@
 body {
-  overflow: auto;
+  margin: 0;
+  overflow: hidden;
+}
+
+.console {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  height: 100vh;
+  padding: 0.5rem;
+  box-sizing: border-box;
+}
+
+.controls-bar {
+  flex: 0 0 auto;
+  display: flex;
+  gap: 0.5rem;
 }
 
 .camera {
+  flex: 1 1 auto;
+  min-height: 0;
   margin: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   border-radius: var(--radius-lg);
   border: 1px solid var(--border-subtle);
-  background: var(--panel-bg);
-  box-shadow: var(--shadow-soft);
+  background: #000;
   overflow: hidden;
 }
 
 .camera video {
   display: block;
-  width: 100%;
+  max-width: 100%;
+  max-height: 100%;
+  width: auto;
   height: auto;
-  background: #000;
 }
 
-.camera figcaption {
-  padding: 0.6rem 0.9rem;
-  font-size: 0.82rem;
-  letter-spacing: 0.04em;
-  color: var(--text-secondary);
+.btn-primary {
+  box-shadow: 0 0 14px rgba(177, 231, 79, 0.45);
+}
+
+.btn-primary:hover {
+  box-shadow: 0 0 20px rgba(177, 231, 79, 0.6);
+}
+
+.btn-ghost {
+  box-shadow: 0 0 14px rgba(148, 163, 184, 0.35);
+}
+
+.btn-ghost:hover {
+  box-shadow: 0 0 20px rgba(148, 163, 184, 0.5);
 }
 
 .btn-danger {
   background: var(--danger-soft);
   color: var(--danger);
   border-color: rgba(248, 113, 113, 0.4);
+  box-shadow: 0 0 14px rgba(248, 113, 113, 0.4);
 }
 
 .btn-danger:hover {
   background: var(--danger);
   color: var(--text-invert);
+  box-shadow: 0 0 20px rgba(248, 113, 113, 0.55);
 }
