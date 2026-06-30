@@ -14,14 +14,109 @@
         <button class="btn btn-ghost" data-action="finish">Finish</button>
         <button class="btn btn-danger" data-action="abort">Abort</button>
       </div>
-      <figure class="camera">
-        <video id="feed" autoplay muted playsinline></video>
-      </figure>
+      <div class="stage">
+        <figure class="camera">
+          <video id="feed" autoplay muted playsinline></video>
+        </figure>
+        <aside class="jog" id="jog">
+          <section class="jog-section">
+            <h2 class="jog-title">Translation</h2>
+            <div class="jog-cross">
+              <button class="btn btn-ghost jog-btn jog-up" data-jog data-axis="x" data-sign="1">+X</button>
+              <button class="btn btn-ghost jog-btn jog-left" data-jog data-axis="y" data-sign="1">+Y</button>
+              <button class="btn btn-ghost jog-btn jog-right" data-jog data-axis="y" data-sign="-1">-Y</button>
+              <button class="btn btn-ghost jog-btn jog-down" data-jog data-axis="x" data-sign="-1">-X</button>
+            </div>
+            <div class="jog-z">
+              <button class="btn btn-ghost jog-btn" data-jog data-axis="z" data-sign="1">+Z</button>
+              <button class="btn btn-ghost jog-btn" data-jog data-axis="z" data-sign="-1">-Z</button>
+            </div>
+          </section>
+          <section class="jog-section">
+            <h2 class="jog-title">Rotation</h2>
+            <div class="jog-rot-row">
+              <span class="jog-label">Roll</span>
+              <button class="btn btn-ghost jog-btn" data-jog data-axis="rx" data-sign="-1">-</button>
+              <button class="btn btn-ghost jog-btn" data-jog data-axis="rx" data-sign="1">+</button>
+            </div>
+            <div class="jog-rot-row">
+              <span class="jog-label">Pitch</span>
+              <button class="btn btn-ghost jog-btn" data-jog data-axis="ry" data-sign="-1">-</button>
+              <button class="btn btn-ghost jog-btn" data-jog data-axis="ry" data-sign="1">+</button>
+            </div>
+            <div class="jog-rot-row">
+              <span class="jog-label">Yaw</span>
+              <button class="btn btn-ghost jog-btn" data-jog data-axis="rz" data-sign="-1">-</button>
+              <button class="btn btn-ghost jog-btn" data-jog data-axis="rz" data-sign="1">+</button>
+            </div>
+          </section>
+          <section class="jog-section">
+            <h2 class="jog-title">Scale</h2>
+            <div class="jog-toggle" id="scale">
+              <button class="btn btn-ghost jog-btn is-active" data-scale="fine">Fine</button>
+              <button class="btn btn-ghost jog-btn" data-scale="coarse">Coarse</button>
+            </div>
+          </section>
+          <section class="jog-section">
+            <h2 class="jog-title">Gripper</h2>
+            <div class="jog-toggle" id="grip">
+              <button class="btn btn-ghost jog-btn" data-grip="0">Open</button>
+              <button class="btn btn-ghost jog-btn" data-grip="1">Close</button>
+            </div>
+          </section>
+        </aside>
+      </div>
     </div>
 
     <script>
+      const jog = document.getElementById('jog');
+      let scale = 'fine';
+      let running = false;
+
+      const setRunning = (value) => {
+        running = value;
+        jog.classList.toggle('is-running', running);
+        for (const button of jog.querySelectorAll('button')) button.disabled = running;
+      };
+
       for (const button of document.querySelectorAll('button[data-action]')) {
-        button.addEventListener('click', () => fetch('/directive/' + button.dataset.action, { method: 'POST' }));
+        button.addEventListener('click', () => {
+          fetch('/directive/' + button.dataset.action, { method: 'POST' });
+          if (button.dataset.action === 'start') setRunning(true);
+          else setRunning(false);
+        });
+      }
+
+      for (const button of document.querySelectorAll('[data-scale]')) {
+        button.addEventListener('click', () => {
+          scale = button.dataset.scale;
+          for (const other of document.querySelectorAll('[data-scale]')) {
+            other.classList.toggle('is-active', other === button);
+          }
+        });
+      }
+
+      for (const button of document.querySelectorAll('[data-jog]')) {
+        button.addEventListener('click', () => {
+          fetch('/jog', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ axis: button.dataset.axis, sign: Number(button.dataset.sign), scale }),
+          });
+        });
+      }
+
+      for (const button of document.querySelectorAll('[data-grip]')) {
+        button.addEventListener('click', () => {
+          fetch('/grip', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ value: Number(button.dataset.grip) }),
+          });
+          for (const other of document.querySelectorAll('[data-grip]')) {
+            other.classList.toggle('is-active', other === button);
+          }
+        });
       }
 
       startStream(document.getElementById('feed'));

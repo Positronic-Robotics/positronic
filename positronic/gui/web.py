@@ -11,10 +11,26 @@ from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconn
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
+from pydantic import BaseModel
 
 import pimm
-from positronic import utils
+from positronic import geom, utils
+from positronic.drivers.roboarm import command
 from positronic.policy.harness import Directive
+
+
+class _JogBody(BaseModel):
+    axis: str
+    sign: int
+    scale: str
+
+
+class _GripBody(BaseModel):
+    value: int
+
+
+_TRANSLATION_AXES = {'x': 0, 'y': 1, 'z': 2}
+_ROTATION_AXES = {'rx': 0, 'ry': 1, 'rz': 2}
 
 
 def _pkg_path(*parts: str) -> str:
@@ -173,15 +189,32 @@ class WebEvalUI(pimm.ControlSystem):
     reachable over an SSH tunnel or directly on the host IP.
     """
 
-    def __init__(self, task: str | None = None, port=8080, fps=20, width=640, keyframe_interval=15, bitrate=2_000_000):
+    def __init__(
+        self,
+        task: str | None = None,
+        port=8080,
+        fps=20,
+        width=640,
+        keyframe_interval=15,
+        bitrate=2_000_000,
+        translation_fine=0.01,
+        translation_coarse=0.05,
+        rotation_fine=2.0,
+        rotation_coarse=10.0,
+    ):
         self.task = task
         self.port = port
         self.fps = fps
         self.width = width
         self.keyframe_interval = keyframe_interval
         self.bitrate = bitrate
+        self.translation_fine = translation_fine
+        self.translation_coarse = translation_coarse
+        self.rotation_fine = rotation_fine
+        self.rotation_coarse = rotation_coarse
         self.cameras = pimm.ReceiverDict(self, default=None)
         self.directive = pimm.ControlSystemEmitter(self)
+        self.manual_command = pimm.ControlSystemEmitter(self)
 
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Sleep]:
         templates = Jinja2Templates(directory=_pkg_path('templates'))
@@ -230,6 +263,26 @@ class WebEvalUI(pimm.ControlSystem):
                     self.directive.emit(Directive.ABORT(), clock.now_ns())
                 case _:
                     raise HTTPException(status_code=404)
+
+        @app.post('/jog')
+        async def jog(body: _JogBody):
+            if body.axis in _TRANSLATION_AXES:
+                step = self.translation_fine if body.scale == 'fine' else self.translation_coarse
+                translation = np.zeros(3)
+                translation[_TRANSLATION_AXES[body.axis]] = body.sign * step
+                delta = geom.Transform3D(translation=translation)
+            elif body.axis in _ROTATION_AXES:
+                angle = self.rotation_fine if body.scale == 'fine' else self.rotation_coarse
+                rotvec = np.zeros(3)
+                rotvec[_ROTATION_AXES[body.axis]] = np.deg2rad(body.sign * angle)
+                delta = geom.Transform3D(rotation=geom.Rotation.from_rotvec(rotvec))
+            else:
+                raise HTTPException(status_code=404)
+            self.manual_command.emit({'robot_command': command.CartesianDelta(delta)}, clock.now_ns())
+
+        @app.post('/grip')
+        async def grip(body: _GripBody):
+            self.manual_command.emit({'target_grip': float(body.value)}, clock.now_ns())
 
         # The continuous fragment push is the connection's liveness signal. Uvicorn's keepalive ping
         # runs in its own coroutine and would await a transport drain concurrently with the send loop,
