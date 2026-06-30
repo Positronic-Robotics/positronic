@@ -1,7 +1,7 @@
 ---
 name: address-review
 description: Respond to GitHub PR review comments in one pass — fetch, triage (agree or disagree), fix the valid ones, commit, push, reply to all, and resolve only the threads you fixed (declines, defers, and discussion questions stay open for the human). Use when a PR has reviewer or bot (e.g. Codex) comments to address.
-allowed-tools: Bash(git add:*), Bash(git commit:*), Bash(git push:*), Bash(git diff:*), Bash(git rev-parse:*), Bash(git remote:*), Bash(gh api:*), Bash(gh pr:*), Bash(gh repo:*), Bash(gh run:*), Bash(uv run:*), Bash(bash .claude/skills/address-review/watch.sh:*)
+allowed-tools: Bash(git add:*), Bash(git commit:*), Bash(git push:*), Bash(git diff:*), Bash(git rev-parse:*), Bash(git remote:*), Bash(awk:*), Bash(gh api:*), Bash(gh pr:*), Bash(gh repo:*), Bash(gh run:*), Bash(uv run:*), Bash(bash .claude/skills/address-review/watch.sh:*)
 ---
 
 # Address Review Comments
@@ -53,7 +53,9 @@ OWNER=${REPO%/*}; NAME=${REPO#*/}
 # the PR — never hard-code a remote.
 HEAD_REF=$(gh pr view --json headRefName -q .headRefName)
 HEAD_REPO=$(gh pr view --json headRepositoryOwner,headRepository -q '.headRepositoryOwner.login + "/" + .headRepository.name')
-git remote -v     # HEAD_REMOTE = the entry whose URL is $HEAD_REPO (origin = your fork in the standard setup)
+# the local remote whose URL hosts $HEAD_REPO — origin in the standard fork setup; empty only if
+# no remote points at the head repo, in which case the Step 4 push fails loudly (add the remote)
+HEAD_REMOTE=$(git remote -v | awk -v r="$HEAD_REPO" '$2 ~ "[:/]" r "(\\.git)?$" {print $1; exit}')
 ```
 
 `REPO` (base) is where every `gh api repos/$REPO/...` read below goes; `HEAD_REMOTE` + `HEAD_REF`
