@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Eval console</title>
+    <link rel="stylesheet" href="/static/styles.css" />
+    <link rel="stylesheet" href="/assets/eval.css" />
+</head>
+<body>
+    <div class="console">
+      <div class="controls-bar">
+        <button class="btn btn-primary" data-action="start">Start</button>
+        <button class="btn btn-ghost" data-action="finish">Finish</button>
+        <button class="btn btn-danger" data-action="abort">Abort</button>
+      </div>
+      <figure class="camera">
+        <video id="feed" autoplay muted playsinline></video>
+      </figure>
+    </div>
+
+    <script>
+      for (const button of document.querySelectorAll('button[data-action]')) {
+        button.addEventListener('click', () => fetch('/directive/' + button.dataset.action, { method: 'POST' }));
+      }
+
+      startStream(document.getElementById('feed'));
+
+      function startStream(video) {
+        if (!('MediaSource' in window)) {
+          console.error('MediaSource Extensions not supported in this browser');
+          return;
+        }
+        const scheme = location.protocol === 'https:' ? 'wss' : 'ws';
+        const socket = new WebSocket(`${scheme}://${location.host}/video`);
+        socket.binaryType = 'arraybuffer';
+
+        const MAX_BUFFER_SECONDS = 10;
+        let sourceBuffer = null;
+        const pending = [];
+        const ensurePlaying = () => {
+          if (video.paused) video.play().catch(() => {});
+        };
+        const pump = () => {
+          if (!sourceBuffer || sourceBuffer.updating) return;
+          const buffered = sourceBuffer.buffered;
+          if (buffered.length > 0) {
+            // MSE does not autostart and playback drifts behind after a stall; keep it pinned near the live edge.
+            const liveEdge = buffered.end(buffered.length - 1);
+            if (liveEdge - video.currentTime > 1.5) {
+              video.currentTime = Math.max(buffered.start(0), liveEdge - 0.3);
+            }
+            const dropTo = video.currentTime - MAX_BUFFER_SECONDS;
+            if (dropTo > buffered.start(0) + 1) {
+              sourceBuffer.remove(buffered.start(0), dropTo);
+              return;
+            }
+          }
+          if (pending.length > 0) {
+            sourceBuffer.appendBuffer(pending.shift());
+            ensurePlaying();
+          }
+        };
+        video.addEventListener('canplay', ensurePlaying);
+
+        socket.addEventListener('message', (event) => {
+          if (typeof event.data === 'string') {
+            const codec = `video/mp4; codecs="${event.data}"`;
+            if (!MediaSource.isTypeSupported(codec)) {
+              console.error('Unsupported codec', codec);
+              socket.close();
+              return;
+            }
+            const mediaSource = new MediaSource();
+            video.src = URL.createObjectURL(mediaSource);
+            mediaSource.addEventListener('sourceopen', () => {
+              sourceBuffer = mediaSource.addSourceBuffer(codec);
+              sourceBuffer.mode = 'sequence';
+              sourceBuffer.addEventListener('updateend', pump);
+              pump();
+            });
+          } else {
+            pending.push(new Uint8Array(event.data));
+            pump();
+          }
+        });
+      }
+    </script>
+</body>
+</html>

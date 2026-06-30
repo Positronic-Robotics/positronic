@@ -16,6 +16,7 @@ from positronic.dataset.local_dataset import load_all_datasets
 from positronic.gui.dpg import DearpyguiUi
 from positronic.gui.eval import EvalUI
 from positronic.gui.keyboard import KeyboardControl
+from positronic.gui.web import WebEvalUI
 from positronic.policy.harness import Directive
 from positronic.utils.logging import init_logging
 
@@ -60,6 +61,15 @@ def keyboard(show_gui, task):
     return make
 
 
+@cfn.config(port=8080, fps=20, width=640, bitrate=2_000_000)
+def web(port, fps, width, bitrate, task):
+    def make(output_dir: Path | None) -> Driver:
+        ui = WebEvalUI(task=task, port=port, fps=fps, width=width, bitrate=bitrate)
+        return Driver(ui, ui.directive, pimm.utils.identity, [])
+
+    return make
+
+
 run_cfg = cfn.Config(
     main,
     embodiment=positronic.cfg.embodiment.droid,
@@ -77,6 +87,7 @@ def _internal_main():
         'run': run_cfg,
         'real': run_cfg,  # `real` is the documented name for the hardware path
         'sim': run.override(eval=stack_cubes),
+        'web': run_cfg.override(driver=web),
         'phail': run_cfg.override(
             policy=policy_cfg.phail_multiple,
             driver=eval_ui,
