@@ -169,20 +169,24 @@ addresses each finding; there is nothing to resolve in Step 5 for that surface.
 
 **Resolve** every thread you *fixed* (a concrete change landed) — this is mandatory, not
 optional: a fixed Codex thread you leave open keeps the PR looking unaddressed to human
-reviewers. Resolution requires GraphQL (the REST API can't do it). Map each comment's
-`databaseId` to its thread node id, then resolve:
+reviewers. Resolution requires GraphQL (the REST API can't do it). Identify each fixed thread by
+its **root** comment id — the thread's first comment; for a reply you answered that's its
+`in_reply_to` (Step 1 shows it), otherwise the comment's own id. Match that root id to the thread,
+then resolve:
 
 ```bash
-# Thread node id + isResolved + the comment databaseIds it contains. `first:100` covers all
-# but the largest PRs; if `hasNextPage` is true, page with `after: <endCursor>` rather than
-# silently dropping the overflow threads (a fixed thread that isn't returned stays unresolved).
-# `comments(first:10)` is enough to match the original review comment, which is always first.
+# Thread node id + isResolved + its ROOT comment's databaseId. Match a fixed comment to its
+# thread by that root id (a review-thread reply carries in_reply_to = the root), so thread length
+# never hides the match: `comments(first:1)` is the root regardless of how many replies follow.
+# `first:100` threads covers all but the largest PRs; if `hasNextPage` is true, page with
+# `after: <endCursor>` rather than silently dropping the overflow (a fixed thread not returned
+# stays unresolved).
 gh api graphql -f query='
 query($owner:String!,$repo:String!,$num:Int!){
   repository(owner:$owner,name:$repo){ pullRequest(number:$num){
-    reviewThreads(first:100){ pageInfo { hasNextPage endCursor } nodes { id isResolved comments(first:10){ nodes { databaseId } } } } } }
+    reviewThreads(first:100){ pageInfo { hasNextPage endCursor } nodes { id isResolved comments(first:1){ nodes { databaseId } } } } } }
 }' -F owner=$OWNER -F repo=$NAME -F num=$PR \
-  -q '.data.repository.pullRequest.reviewThreads.nodes[] | [.id, (.isResolved|tostring), ([.comments.nodes[].databaseId]|map(tostring)|join(","))] | @tsv'
+  -q '.data.repository.pullRequest.reviewThreads.nodes[] | [.id, (.isResolved|tostring), (.comments.nodes[0].databaseId|tostring)] | @tsv'
 
 # Resolve a fixed thread by its node id
 gh api graphql -f query='mutation($id:ID!){ resolveReviewThread(input:{threadId:$id}){ thread { isResolved } } }' -f id=<thread_node_id>
