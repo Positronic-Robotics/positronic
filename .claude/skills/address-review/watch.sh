@@ -88,18 +88,20 @@ while [ "$(date +%s)" -lt "$deadline" ]; do
     echo "WATCH 10: new reviewer round — run another address-review pass (Steps 1-6)"; exit 10
   fi
   # --- convergence: CI green (all checks done, none failing) AND a reviewer sign-off. A human
-  # signs off via an APPROVED review pinned to the exact SHA (commit_id == $SHA), so an approval of
-  # an earlier state can't certify this one. Codex signs off with a 👍 (+1) reaction, which carries
-  # no commit id and so can't be SHA-pinned the way a review can. Anchor it as tightly as the API
-  # allows: created_at > $SINCE_DONE (the later of the pushed commit and your latest reply ≈ push
-  # time), which drops a 👍 left before this round's reply. A residual race is unavoidable — a
-  # delayed Codex 👍 for an earlier clean state landing after this reply would still count, since a
-  # reaction is not tied to a SHA. 👀 (eyes) = "reviewing now" — ignore.
+  # signs off via an APPROVED review pinned to the exact SHA (commit_id == $SHA). Codex signs off
+  # with a 👍 (+1) reaction, which carries no commit id and so can't be SHA-pinned like a review.
+  # Anchor it on the PUSH, not the commit or your reply: pushed_at = the earliest check-run
+  # started_at on this SHA (CI fires when GitHub receives the push). That counts a genuine post-push
+  # 👍 even if it lands before your Step 5 reply (a reply anchor would miss it) and drops a 👍 left
+  # before the push. Residual: a reaction still isn't tied to a SHA, so a delayed 👍 for an earlier
+  # state landing after this push would count — unfixable without a SHA-stamped sign-off. 👀 (eyes)
+  # = "reviewing now" — ignore. (At convergence pending==0, so every run has a started_at.)
   ci_green=false
   [ "$total" -gt 0 ] && [ "$pending" -eq 0 ] && [ "$fail" -eq 0 ] && ci_green=true
+  pushed_at=$(echo "$cr" | jq -r '[.[].check_runs[]? | .started_at | select(. != null)] | min // ""')
   plus1=$(gh api repos/$REPO/issues/$PR/reactions \
     -H "Accept: application/vnd.github.squirrel-girl-preview+json" --paginate --slurp \
-    | jq "[.[][] | select(.user.login|test(\"codex\")) | select(.content==\"+1\") | select(.created_at > \"$SINCE_DONE\")] | length")
+    | jq "[.[][] | select(.user.login|test(\"codex\")) | select(.content==\"+1\") | select(.created_at > \"$pushed_at\")] | length")
   approved=$(gh api repos/$REPO/pulls/$PR/reviews --paginate --slurp | jq "[.[][] | $reviewer | select(.state==\"APPROVED\") | select(.commit_id == \"$SHA\")] | length")
   if [ "$ci_green" = true ] && { [ "$plus1" -gt 0 ] || [ "$approved" -gt 0 ]; }; then
     echo "WATCH 20: converged (CI green + reviewer sign-off) — done"; exit 20

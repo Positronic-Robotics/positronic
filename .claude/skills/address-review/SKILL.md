@@ -175,18 +175,19 @@ its **root** comment id — the thread's first comment; for a reply you answered
 then resolve:
 
 ```bash
-# Thread node id + isResolved + its ROOT comment's databaseId. Match a fixed comment to its
+# Each thread's node id + isResolved + its ROOT comment databaseId. Match a fixed comment to its
 # thread by that root id (a review-thread reply carries in_reply_to = the root), so thread length
 # never hides the match: `comments(first:1)` is the root regardless of how many replies follow.
-# `first:100` threads covers all but the largest PRs; if `hasNextPage` is true, page with
-# `after: <endCursor>` rather than silently dropping the overflow (a fixed thread not returned
-# stays unresolved).
+# The first output line is the page cursor: if it shows hasNextPage=true, re-run with
+# `-F after=<endCursor>` and resolve the later pages too, or a fixed thread there stays unresolved.
 gh api graphql -f query='
-query($owner:String!,$repo:String!,$num:Int!){
+query($owner:String!,$repo:String!,$num:Int!,$after:String){
   repository(owner:$owner,name:$repo){ pullRequest(number:$num){
-    reviewThreads(first:100){ pageInfo { hasNextPage endCursor } nodes { id isResolved comments(first:1){ nodes { databaseId } } } } } }
+    reviewThreads(first:100,after:$after){ pageInfo { hasNextPage endCursor } nodes { id isResolved comments(first:1){ nodes { databaseId } } } } } }
 }' -F owner=$OWNER -F repo=$NAME -F num=$PR \
-  -q '.data.repository.pullRequest.reviewThreads.nodes[] | [.id, (.isResolved|tostring), (.comments.nodes[0].databaseId|tostring)] | @tsv'
+  -q '.data.repository.pullRequest.reviewThreads as $t
+        | "hasNextPage=\($t.pageInfo.hasNextPage) endCursor=\($t.pageInfo.endCursor)",
+          ($t.nodes[] | [.id, (.isResolved|tostring), (.comments.nodes[0].databaseId|tostring)] | @tsv)'
 
 # Resolve a fixed thread by its node id
 gh api graphql -f query='mutation($id:ID!){ resolveReviewThread(input:{threadId:$id}){ thread { isResolved } } }' -f id=<thread_node_id>
