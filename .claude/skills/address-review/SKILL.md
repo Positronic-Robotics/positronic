@@ -55,8 +55,10 @@ OWNER=${REPO%/*}; NAME=${REPO#*/}                                  # its comment
 HEAD_REF=$(gh pr view --json headRefName -q .headRefName)
 HEAD_REPO=$(gh pr view --json headRepositoryOwner,headRepository -q '.headRepositoryOwner.login + "/" + .headRepository.name')
 # the local remote whose URL hosts $HEAD_REPO — origin in the standard fork setup; empty only if
-# no remote points at the head repo, in which case the Step 4 push fails loudly (add the remote)
-HEAD_REMOTE=$(git remote -v | awk -v r="$HEAD_REPO" '$2 ~ "[:/]" r "(\\.git)?$" {print $1; exit}')
+# no remote points at the head repo, in which case the Step 4 push fails loudly (add the remote).
+# Compare owner/repo literally — normalize `:`→`/`, drop `.git`, take the last two path segments —
+# rather than regex-matching $HEAD_REPO, whose `.` would otherwise match the wrong remote.
+HEAD_REMOTE=$(git remote -v | awk -v r="$HEAD_REPO" '{u=$2; sub(/\.git$/,"",u); gsub(/:/,"/",u); n=split(u,p,"/"); if (n>=2 && p[n-1]"/"p[n]==r){print $1; exit}}')
 ```
 
 `REPO` (base) is where every `gh api repos/$REPO/...` read below goes; `HEAD_REMOTE` + `HEAD_REF`
