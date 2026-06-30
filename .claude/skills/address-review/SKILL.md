@@ -1,7 +1,7 @@
 ---
 name: address-review
 description: Respond to GitHub PR review comments in one pass — fetch, triage (agree or disagree), fix the valid ones, commit, push, reply to all, and resolve only the threads you fixed (declines, defers, and discussion questions stay open for the human). Use when a PR has reviewer or bot (e.g. Codex) comments to address.
-allowed-tools: Bash(git add:*), Bash(git commit:*), Bash(git push:*), Bash(git diff:*), Bash(git rev-parse:*), Bash(git remote:*), Bash(awk:*), Bash(gh api:*), Bash(gh pr:*), Bash(gh repo:*), Bash(gh run:*), Bash(uv run:*), Bash(bash .claude/skills/address-review/watch.sh:*)
+allowed-tools: Bash(git add:*), Bash(git commit:*), Bash(git push:*), Bash(git diff:*), Bash(git rev-parse:*), Bash(git remote:*), Bash(awk:*), Bash(gh api:*), Bash(gh pr:*), Bash(gh repo:*), Bash(gh run:*), Bash(uv run:*), Bash(bash .claude/skills/address-review/watch.sh:*), Edit, Write
 ---
 
 # Address Review Comments
