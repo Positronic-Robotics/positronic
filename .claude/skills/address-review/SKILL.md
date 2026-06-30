@@ -46,8 +46,9 @@ needs their call. A red build is never "done", no matter what the reviewer says.
 gh pr view --json number,url,headRefName,baseRefName \
   -q '"PR #\(.number)  \(.url)  (\(.headRefName) -> \(.baseRefName))"' || { echo "No PR for this branch"; exit 1; }
 PR=$(gh pr view --json number -q .number)
-REPO=$(gh repo view --json nameWithOwner -q .nameWithOwner)        # BASE repo — the PR and its comments live here
-OWNER=${REPO%/*}; NAME=${REPO#*/}
+REPO=$(gh pr view --json url -q .url | awk -F/ '{print $4"/"$5}')  # BASE repo from the PR URL — the PR and
+OWNER=${REPO%/*}; NAME=${REPO#*/}                                  # its comments live here; gh repo view can
+                                                                  # return the fork in a fork checkout
 # The PR's head branch + the repo that hosts it. In a cross-repo (fork) PR the head repo is NOT
 # $REPO: the PR lives on the base, its commits belong on the fork. Derive the push target from
 # the PR — never hard-code a remote.
