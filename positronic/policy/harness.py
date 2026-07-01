@@ -125,6 +125,8 @@ class Harness(pimm.ControlSystem):
             self.commands[name]
 
         self.directive = pimm.ControlSystemReceiver[Directive](self, default=None, maxsize=3)
+        # Operator jog commands honored only between episodes; last-value-wins, may be left unconnected.
+        self.manual_command = pimm.ControlSystemReceiver(self, default=None)
         self.ds_command = pimm.ControlSystemEmitter[DsWriterCommand](self)
         self.robot_meta_in = pimm.ControlSystemReceiver(self, default={})
         # Privileged stop-signal: a truthy value within a trial's time budget ends it,
@@ -154,6 +156,11 @@ class Harness(pimm.ControlSystem):
     def _home(self, clock):
         now = clock.now_ns()
         for name, value in self._embodiment.home.items():
+            self.commands[name].emit([(now, value)])
+
+    def _apply_manual(self, action: dict[str, Any], clock: pimm.Clock) -> None:
+        now = clock.now_ns()
+        for name, value in action.items():
             self.commands[name].emit([(now, value)])
 
     def _pace(self) -> pimm.Command:
@@ -380,10 +387,15 @@ class Harness(pimm.ControlSystem):
             # waits for the producer's post-reset frame-0, which the recorder logs once its open-turn drain
             # has cleared the channels of the pre-reset frame.
             directive_msg = self.directive.read()
+            # Read every round so the updated flag clears even mid-episode; a press arriving during a
+            # trial is consumed here and never replayed once idle.
+            manual_msg = self.manual_command.read()
             if directive_msg.updated:
                 yield from self._handle_directive(directive_msg.data, clock)
             elif not self._running:
-                if self._trials is not None:
+                if manual_msg.updated and manual_msg.data is not None:
+                    self._apply_manual(manual_msg.data, clock)
+                elif self._trials is not None:
                     trial = next(self._trials, None)
                     if trial is None:  # plan exhausted — let the recorder commit the final episode, then exit
                         yield pimm.Sleep(0.5)

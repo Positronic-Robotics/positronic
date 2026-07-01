@@ -14,15 +14,133 @@
         <button class="btn btn-ghost" data-action="finish">Finish</button>
         <button class="btn btn-danger" data-action="abort">Abort</button>
       </div>
-      <figure class="camera">
-        <video id="feed" autoplay muted playsinline></video>
-      </figure>
+      <div class="stage">
+        <figure class="camera">
+          <video id="feed" autoplay muted playsinline></video>
+          <div id="stream-status" class="stream-status"></div>
+        </figure>
+        <aside class="jog" id="jog">
+          <section class="jog-section">
+            <h2 class="jog-title">Translation</h2>
+            <div class="jog-cross">
+              <button class="btn btn-ghost jog-btn jog-up" data-jog data-axis="x" data-sign="1">+X</button>
+              <button class="btn btn-ghost jog-btn jog-left" data-jog data-axis="y" data-sign="1">+Y</button>
+              <button class="btn btn-ghost jog-btn jog-right" data-jog data-axis="y" data-sign="-1">-Y</button>
+              <button class="btn btn-ghost jog-btn jog-down" data-jog data-axis="x" data-sign="-1">-X</button>
+            </div>
+            <div class="jog-z">
+              <button class="btn btn-ghost jog-btn" data-jog data-axis="z" data-sign="1">+Z</button>
+              <button class="btn btn-ghost jog-btn" data-jog data-axis="z" data-sign="-1">-Z</button>
+            </div>
+          </section>
+          <section class="jog-section">
+            <h2 class="jog-title">Rotation</h2>
+            <div class="jog-rot-row">
+              <span class="jog-label">Roll</span>
+              <button class="btn btn-ghost jog-btn" data-jog data-axis="rx" data-sign="-1">-</button>
+              <button class="btn btn-ghost jog-btn" data-jog data-axis="rx" data-sign="1">+</button>
+            </div>
+            <div class="jog-rot-row">
+              <span class="jog-label">Pitch</span>
+              <button class="btn btn-ghost jog-btn" data-jog data-axis="ry" data-sign="-1">-</button>
+              <button class="btn btn-ghost jog-btn" data-jog data-axis="ry" data-sign="1">+</button>
+            </div>
+            <div class="jog-rot-row">
+              <span class="jog-label">Yaw</span>
+              <button class="btn btn-ghost jog-btn" data-jog data-axis="rz" data-sign="-1">-</button>
+              <button class="btn btn-ghost jog-btn" data-jog data-axis="rz" data-sign="1">+</button>
+            </div>
+          </section>
+          <section class="jog-section">
+            <h2 class="jog-title">Scale</h2>
+            <div class="jog-toggle" id="scale">
+              <button class="btn btn-ghost jog-btn is-active" data-scale="fine">Fine</button>
+              <button class="btn btn-ghost jog-btn" data-scale="coarse">Coarse</button>
+            </div>
+          </section>
+          <section class="jog-section">
+            <h2 class="jog-title">Gripper</h2>
+            <div class="jog-toggle" id="grip">
+              <button class="btn btn-ghost jog-btn" data-grip="0">Open</button>
+              <button class="btn btn-ghost jog-btn" data-grip="1">Close</button>
+            </div>
+            <input class="jog-slider" id="grip-slider" type="range" min="0" max="1" step="0.01" value="0" />
+          </section>
+        </aside>
+      </div>
     </div>
 
     <script>
+      const jog = document.getElementById('jog');
+      let scale = 'fine';
+      let running = false;
+
+      const setRunning = (value) => {
+        running = value;
+        jog.classList.toggle('is-running', running);
+        for (const control of jog.querySelectorAll('button, input')) control.disabled = running;
+      };
+
       for (const button of document.querySelectorAll('button[data-action]')) {
-        button.addEventListener('click', () => fetch('/directive/' + button.dataset.action, { method: 'POST' }));
+        button.addEventListener('click', () => {
+          fetch('/directive/' + button.dataset.action, { method: 'POST' });
+          // TODO: this re-enables the jog controls on the Finish/Abort click, but the harness stays busy until
+          // it finalizes the episode and the arm finishes homing. Gate the controls on a real idle signal
+          // pushed from the harness instead of the button press.
+          if (button.dataset.action === 'start') setRunning(true);
+          else setRunning(false);
+        });
       }
+
+      for (const button of document.querySelectorAll('[data-scale]')) {
+        button.addEventListener('click', () => {
+          scale = button.dataset.scale;
+          for (const other of document.querySelectorAll('[data-scale]')) {
+            other.classList.toggle('is-active', other === button);
+          }
+        });
+      }
+
+      for (const button of document.querySelectorAll('[data-jog]')) {
+        button.addEventListener('click', () => {
+          fetch('/jog', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ axis: button.dataset.axis, sign: Number(button.dataset.sign), scale }),
+          });
+        });
+      }
+
+      const gripSlider = document.getElementById('grip-slider');
+      const gripButtons = document.querySelectorAll('[data-grip]');
+
+      const sendGrip = (value) => {
+        fetch('/grip', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ value }),
+        });
+      };
+
+      const reflectGrip = (value) => {
+        for (const button of gripButtons) {
+          button.classList.toggle('is-active', Number(button.dataset.grip) === value);
+        }
+      };
+
+      for (const button of gripButtons) {
+        button.addEventListener('click', () => {
+          const value = Number(button.dataset.grip);
+          gripSlider.value = value;
+          reflectGrip(value);
+          sendGrip(value);
+        });
+      }
+
+      gripSlider.addEventListener('input', () => reflectGrip(Number(gripSlider.value)));
+      gripSlider.addEventListener('change', () => sendGrip(Number(gripSlider.value)));
+
+      reflectGrip(Number(gripSlider.value));
 
       startStream(document.getElementById('feed'));
 
@@ -31,16 +149,31 @@
           console.error('MediaSource Extensions not supported in this browser');
           return;
         }
-        const scheme = location.protocol === 'https:' ? 'wss' : 'ws';
-        const socket = new WebSocket(`${scheme}://${location.host}/video`);
-        socket.binaryType = 'arraybuffer';
-
+        const status = document.getElementById('stream-status');
         const MAX_BUFFER_SECONDS = 10;
+        const STALL_MS = 5000;
+
+        let socket = null;
+        let mediaSource = null;
         let sourceBuffer = null;
-        const pending = [];
+        let pending = [];
+        let objectUrl = null;
+        let watchdog = null;
+        let reconnectTimer = null;
+        let backoff = 500;
+        let lastActivity = 0;
+
+        const setStatus = (text) => {
+          if (!status) return;
+          status.textContent = text;
+          status.classList.toggle('is-visible', Boolean(text));
+        };
+
         const ensurePlaying = () => {
           if (video.paused) video.play().catch(() => {});
         };
+        video.addEventListener('canplay', ensurePlaying);
+
         const pump = () => {
           if (!sourceBuffer || sourceBuffer.updating) return;
           const buffered = sourceBuffer.buffered;
@@ -61,29 +194,67 @@
             ensurePlaying();
           }
         };
-        video.addEventListener('canplay', ensurePlaying);
 
-        socket.addEventListener('message', (event) => {
-          if (typeof event.data === 'string') {
-            const codec = `video/mp4; codecs="${event.data}"`;
-            if (!MediaSource.isTypeSupported(codec)) {
-              console.error('Unsupported codec', codec);
-              socket.close();
-              return;
-            }
-            const mediaSource = new MediaSource();
-            video.src = URL.createObjectURL(mediaSource);
-            mediaSource.addEventListener('sourceopen', () => {
-              sourceBuffer = mediaSource.addSourceBuffer(codec);
-              sourceBuffer.mode = 'sequence';
-              sourceBuffer.addEventListener('updateend', pump);
-              pump();
-            });
-          } else {
-            pending.push(new Uint8Array(event.data));
-            pump();
+        // The socket dies on a server restart, tunnel blip, or silently on a half-open connection. Reconnect on
+        // close and, since a half-open socket fires no close, force one when no fragment has arrived for STALL_MS.
+        const scheduleReconnect = () => {
+          if (reconnectTimer) return;
+          if (watchdog) {
+            clearInterval(watchdog);
+            watchdog = null;
           }
-        });
+          setStatus('Reconnecting…');
+          reconnectTimer = setTimeout(() => {
+            reconnectTimer = null;
+            connect();
+          }, backoff);
+          backoff = Math.min(backoff * 2, 4000);
+        };
+
+        const connect = () => {
+          sourceBuffer = null;
+          pending = [];
+          lastActivity = Date.now();
+          const scheme = location.protocol === 'https:' ? 'wss' : 'ws';
+          socket = new WebSocket(`${scheme}://${location.host}/video`);
+          socket.binaryType = 'arraybuffer';
+
+          socket.addEventListener('message', (event) => {
+            lastActivity = Date.now();
+            if (typeof event.data === 'string') {
+              const codec = `video/mp4; codecs="${event.data}"`;
+              if (!MediaSource.isTypeSupported(codec)) {
+                console.error('Unsupported codec', codec);
+                socket.close();
+                return;
+              }
+              backoff = 500;
+              setStatus('');
+              mediaSource = new MediaSource();
+              if (objectUrl) URL.revokeObjectURL(objectUrl);
+              objectUrl = URL.createObjectURL(mediaSource);
+              video.src = objectUrl;
+              mediaSource.addEventListener('sourceopen', () => {
+                sourceBuffer = mediaSource.addSourceBuffer(codec);
+                sourceBuffer.mode = 'sequence';
+                sourceBuffer.addEventListener('updateend', pump);
+                pump();
+              });
+            } else {
+              pending.push(new Uint8Array(event.data));
+              pump();
+            }
+          });
+
+          socket.addEventListener('close', scheduleReconnect);
+          socket.addEventListener('error', () => socket.close());
+
+          watchdog = setInterval(() => {
+            if (Date.now() - lastActivity > STALL_MS) socket.close();
+          }, 1000);
+        };
+
+        connect();
       }
     </script>
 </body>
