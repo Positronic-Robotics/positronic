@@ -29,6 +29,7 @@ body {
   flex: 1 1 auto;
   min-height: 0;
   margin: 0;
+  position: relative;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -44,6 +45,24 @@ body {
   max-height: 100%;
   width: auto;
   height: auto;
+}
+
+.stream-status {
+  position: absolute;
+  top: 0.6rem;
+  left: 0.6rem;
+  display: none;
+  padding: 0.3rem 0.7rem;
+  border-radius: var(--radius-pill);
+  background: rgba(15, 23, 42, 0.85);
+  color: var(--danger);
+  border: 1px solid rgba(248, 113, 113, 0.4);
+  font-size: 0.78rem;
+  letter-spacing: 0.04em;
+}
+
+.stream-status.is-visible {
+  display: block;
 }
 
 .btn-primary {

@@ -17,6 +17,7 @@
       <div class="stage">
         <figure class="camera">
           <video id="feed" autoplay muted playsinline></video>
+          <div id="stream-status" class="stream-status"></div>
         </figure>
         <aside class="jog" id="jog">
           <section class="jog-section">
@@ -126,16 +127,31 @@
           console.error('MediaSource Extensions not supported in this browser');
           return;
         }
-        const scheme = location.protocol === 'https:' ? 'wss' : 'ws';
-        const socket = new WebSocket(`${scheme}://${location.host}/video`);
-        socket.binaryType = 'arraybuffer';
-
+        const status = document.getElementById('stream-status');
         const MAX_BUFFER_SECONDS = 10;
+        const STALL_MS = 5000;
+
+        let socket = null;
+        let mediaSource = null;
         let sourceBuffer = null;
-        const pending = [];
+        let pending = [];
+        let objectUrl = null;
+        let watchdog = null;
+        let reconnectTimer = null;
+        let backoff = 500;
+        let lastActivity = 0;
+
+        const setStatus = (text) => {
+          if (!status) return;
+          status.textContent = text;
+          status.classList.toggle('is-visible', Boolean(text));
+        };
+
         const ensurePlaying = () => {
           if (video.paused) video.play().catch(() => {});
         };
+        video.addEventListener('canplay', ensurePlaying);
+
         const pump = () => {
           if (!sourceBuffer || sourceBuffer.updating) return;
           const buffered = sourceBuffer.buffered;
@@ -156,29 +172,67 @@
             ensurePlaying();
           }
         };
-        video.addEventListener('canplay', ensurePlaying);
 
-        socket.addEventListener('message', (event) => {
-          if (typeof event.data === 'string') {
-            const codec = `video/mp4; codecs="${event.data}"`;
-            if (!MediaSource.isTypeSupported(codec)) {
-              console.error('Unsupported codec', codec);
-              socket.close();
-              return;
-            }
-            const mediaSource = new MediaSource();
-            video.src = URL.createObjectURL(mediaSource);
-            mediaSource.addEventListener('sourceopen', () => {
-              sourceBuffer = mediaSource.addSourceBuffer(codec);
-              sourceBuffer.mode = 'sequence';
-              sourceBuffer.addEventListener('updateend', pump);
-              pump();
-            });
-          } else {
-            pending.push(new Uint8Array(event.data));
-            pump();
+        // The socket dies on a server restart, tunnel blip, or silently on a half-open connection. Reconnect on
+        // close and, since a half-open socket fires no close, force one when no fragment has arrived for STALL_MS.
+        const scheduleReconnect = () => {
+          if (reconnectTimer) return;
+          if (watchdog) {
+            clearInterval(watchdog);
+            watchdog = null;
           }
-        });
+          setStatus('Reconnecting…');
+          reconnectTimer = setTimeout(() => {
+            reconnectTimer = null;
+            connect();
+          }, backoff);
+          backoff = Math.min(backoff * 2, 4000);
+        };
+
+        const connect = () => {
+          sourceBuffer = null;
+          pending = [];
+          lastActivity = Date.now();
+          const scheme = location.protocol === 'https:' ? 'wss' : 'ws';
+          socket = new WebSocket(`${scheme}://${location.host}/video`);
+          socket.binaryType = 'arraybuffer';
+
+          socket.addEventListener('message', (event) => {
+            lastActivity = Date.now();
+            if (typeof event.data === 'string') {
+              const codec = `video/mp4; codecs="${event.data}"`;
+              if (!MediaSource.isTypeSupported(codec)) {
+                console.error('Unsupported codec', codec);
+                socket.close();
+                return;
+              }
+              backoff = 500;
+              setStatus('');
+              mediaSource = new MediaSource();
+              if (objectUrl) URL.revokeObjectURL(objectUrl);
+              objectUrl = URL.createObjectURL(mediaSource);
+              video.src = objectUrl;
+              mediaSource.addEventListener('sourceopen', () => {
+                sourceBuffer = mediaSource.addSourceBuffer(codec);
+                sourceBuffer.mode = 'sequence';
+                sourceBuffer.addEventListener('updateend', pump);
+                pump();
+              });
+            } else {
+              pending.push(new Uint8Array(event.data));
+              pump();
+            }
+          });
+
+          socket.addEventListener('close', scheduleReconnect);
+          socket.addEventListener('error', () => socket.close());
+
+          watchdog = setInterval(() => {
+            if (Date.now() - lastActivity > STALL_MS) socket.close();
+          }, 1000);
+        };
+
+        connect();
       }
     </script>
 </body>
