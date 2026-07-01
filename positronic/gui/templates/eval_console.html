@@ -84,6 +84,9 @@
       for (const button of document.querySelectorAll('button[data-action]')) {
         button.addEventListener('click', () => {
           fetch('/directive/' + button.dataset.action, { method: 'POST' });
+          // TODO: this re-enables the jog controls on the Finish/Abort click, but the harness stays busy until
+          // it finalizes the episode and the arm finishes homing. Gate the controls on a real idle signal
+          // pushed from the harness instead of the button press.
           if (button.dataset.action === 'start') setRunning(true);
           else setRunning(false);
         });
