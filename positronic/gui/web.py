@@ -284,10 +284,10 @@ class WebEvalUI(pimm.ControlSystem):
         async def grip(body: _GripBody):
             self.manual_command.emit({'target_grip': body.value}, clock.now_ns())
 
-        # The continuous fragment push is the connection's liveness signal. Uvicorn's keepalive ping
-        # runs in its own coroutine and would await a transport drain concurrently with the send loop,
-        # tripping an assertion in websockets and killing the feed; disable it.
-        config = uvicorn.Config(app, host='0.0.0.0', port=self.port, ws_ping_interval=None, ws_ping_timeout=None)
+        # The legacy asyncio `websockets` backend drains the transport from its reader and keepalive
+        # coroutines concurrently with our send loop, tripping an assertion that kills the feed. The
+        # sans-io backend serializes every write through the event-loop transport instead.
+        config = uvicorn.Config(app, host='0.0.0.0', port=self.port, ws='websockets-sansio')
         server = uvicorn.Server(config)
         server_thread = threading.Thread(target=server.run, daemon=True)
         server_thread.start()
