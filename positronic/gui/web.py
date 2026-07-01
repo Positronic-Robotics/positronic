@@ -3,6 +3,7 @@ import queue
 import threading
 from collections.abc import Iterator
 from pathlib import Path
+from typing import Literal
 
 import av
 import numpy as np
@@ -11,7 +12,7 @@ from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconn
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 import pimm
 from positronic import geom, utils
@@ -20,13 +21,13 @@ from positronic.policy.harness import Directive
 
 
 class _JogBody(BaseModel):
-    axis: str
-    sign: int
-    scale: str
+    axis: Literal['x', 'y', 'z', 'rx', 'ry', 'rz']
+    sign: Literal[-1, 1]
+    scale: Literal['fine', 'coarse']
 
 
 class _GripBody(BaseModel):
-    value: float
+    value: float = Field(ge=0.0, le=1.0)
 
 
 _TRANSLATION_AXES = {'x': 0, 'y': 1, 'z': 2}
@@ -276,8 +277,6 @@ class WebEvalUI(pimm.ControlSystem):
                 rotvec = np.zeros(3)
                 rotvec[_ROTATION_AXES[body.axis]] = np.deg2rad(body.sign * angle)
                 delta = geom.Transform3D(rotation=geom.Rotation.from_rotvec(rotvec))
-            else:
-                raise HTTPException(status_code=404)
             self.manual_command.emit({'robot_command': command.CartesianDelta(delta)}, clock.now_ns())
 
         @app.post('/grip')
