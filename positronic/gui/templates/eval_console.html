@@ -64,6 +64,7 @@
               <button class="btn btn-ghost jog-btn" data-grip="0">Open</button>
               <button class="btn btn-ghost jog-btn" data-grip="1">Close</button>
             </div>
+            <input class="jog-slider" id="grip-slider" type="range" min="0" max="1" step="0.01" value="0" />
           </section>
         </aside>
       </div>
@@ -77,7 +78,7 @@
       const setRunning = (value) => {
         running = value;
         jog.classList.toggle('is-running', running);
-        for (const button of jog.querySelectorAll('button')) button.disabled = running;
+        for (const control of jog.querySelectorAll('button, input')) control.disabled = running;
       };
 
       for (const button of document.querySelectorAll('button[data-action]')) {
@@ -107,18 +108,36 @@
         });
       }
 
-      for (const button of document.querySelectorAll('[data-grip]')) {
+      const gripSlider = document.getElementById('grip-slider');
+      const gripButtons = document.querySelectorAll('[data-grip]');
+
+      const sendGrip = (value) => {
+        fetch('/grip', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ value }),
+        });
+      };
+
+      const reflectGrip = (value) => {
+        for (const button of gripButtons) {
+          button.classList.toggle('is-active', Number(button.dataset.grip) === value);
+        }
+      };
+
+      for (const button of gripButtons) {
         button.addEventListener('click', () => {
-          fetch('/grip', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ value: Number(button.dataset.grip) }),
-          });
-          for (const other of document.querySelectorAll('[data-grip]')) {
-            other.classList.toggle('is-active', other === button);
-          }
+          const value = Number(button.dataset.grip);
+          gripSlider.value = value;
+          reflectGrip(value);
+          sendGrip(value);
         });
       }
+
+      gripSlider.addEventListener('input', () => reflectGrip(Number(gripSlider.value)));
+      gripSlider.addEventListener('change', () => sendGrip(Number(gripSlider.value)));
+
+      reflectGrip(Number(gripSlider.value));
 
       startStream(document.getElementById('feed'));
 

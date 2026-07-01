@@ -168,6 +168,12 @@ body {
   border-color: transparent;
 }
 
+.jog-slider {
+  width: 100%;
+  margin: 0;
+  accent-color: var(--accent);
+}
+
 .jog.is-running {
   opacity: 0.5;
 }

@@ -26,7 +26,7 @@ class _JogBody(BaseModel):
 
 
 class _GripBody(BaseModel):
-    value: int
+    value: float
 
 
 _TRANSLATION_AXES = {'x': 0, 'y': 1, 'z': 2}
@@ -282,7 +282,7 @@ class WebEvalUI(pimm.ControlSystem):
 
         @app.post('/grip')
         async def grip(body: _GripBody):
-            self.manual_command.emit({'target_grip': float(body.value)}, clock.now_ns())
+            self.manual_command.emit({'target_grip': body.value}, clock.now_ns())
 
         # The continuous fragment push is the connection's liveness signal. Uvicorn's keepalive ping
         # runs in its own coroutine and would await a transport drain concurrently with the send loop,
