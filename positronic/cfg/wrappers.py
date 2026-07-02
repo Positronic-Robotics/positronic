@@ -31,15 +31,23 @@ def _frame_offsets_sec(history_frames: int, stride: int, fps: float) -> tuple[fl
     return tuple(-f / fps for f in reversed(frames))
 
 
-@cfn.config(image_keys=('image.wrist', 'image.exterior'), fps=15.0)
-def video_context_wrappers(history_frames: int, stride: int, image_keys: tuple[str, ...], fps: float):
+@cfn.config(image_keys=('image.wrist', 'image.exterior'), proprio_keys=(), fps=15.0)
+def video_context_wrappers(
+    history_frames: int, stride: int, image_keys: tuple[str, ...], proprio_keys: tuple[str, ...], fps: float
+):
     """Eval ``wrap`` for video-conditioned policies: error recovery, strided frame-stack context, scheduling.
 
-    The frame stack sits outside the scheduler so it records the named cameras every control tick and
+    The frame stack sits outside the scheduler so it records the named entries every control tick and
     substitutes a temporal stack sampled per ``history_frames``/``stride``; pair it with a codec whose
     ``horizon`` plays the full returned chunk so the re-query aligns with the frame-stack window.
+
+    ``proprio_keys`` additionally stacks per-frame proprio (e.g. ``('robot_state.ee_pose', 'grip')``) so
+    each history frame carries its own pose — the trajectory a model trained on real per-frame proprio
+    expects. Leave it empty (default) for models whose codec consumes only the current proprio.
     """
     frame_stack = TemporalFrameStack(
-        image_keys=tuple(image_keys), offsets_sec=_frame_offsets_sec(history_frames, stride, fps)
+        image_keys=tuple(image_keys),
+        offsets_sec=_frame_offsets_sec(history_frames, stride, fps),
+        proprio_keys=tuple(proprio_keys),
     )
     return ErrorRecovery() | frame_stack | ChunkedSchedule()

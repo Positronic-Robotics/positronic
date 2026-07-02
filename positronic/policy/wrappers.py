@@ -100,15 +100,15 @@ class ErrorRecovery(PolicyWrapper):
 
 
 class _FrameBuffer:
-    """Time-ordered history of ``(timestamp, frames)`` entries, capped to the sampled window.
+    """Time-ordered history of ``(timestamp, values)`` entries, capped to the sampled window.
 
-    ``frames`` is a dict of camera-key → image; every entry holds the same keys. ``append`` copies each
-    new frame (cameras are views into a producer-reused buffer) but skips one byte-identical to the
-    previous entry — cameras tick slower than the control loop, and carry-over sampling reuses the
-    stored frame — then drops entries before the oldest sampled offset, keeping the one at or before it.
-    ``sample`` returns, per key, a ``(len(offsets_sec), H, W, 3)`` stack holding, for each offset, the
-    latest frame at or before that time — carry-over, never the future; before enough history
-    accumulates it repeats the oldest frame.
+    ``values`` is a dict of key → array (cameras, and optionally per-frame proprio); every entry holds
+    the same keys. ``append`` copies each new entry (cameras are views into a producer-reused buffer)
+    but skips one byte-identical to the previous entry — cameras tick slower than the control loop, and
+    carry-over sampling reuses the stored value — then drops entries before the oldest sampled offset,
+    keeping the one at or before it. ``sample`` returns, per key, a ``(len(offsets_sec), ...)`` stack
+    holding, for each offset, the latest value at or before that time — carry-over, never the future;
+    before enough history accumulates it repeats the oldest entry.
     """
 
     def __init__(self, offsets_sec: tuple[float, ...]):
@@ -138,33 +138,39 @@ class _FrameBuffer:
 
 
 class TemporalFrameStack(PolicyWrapper):
-    """Replaces each named image in the observation with a temporal stack of recent frames.
+    """Replaces each named observation entry with a temporal stack of recent samples.
 
     Servers whose model conditions on a short video (e.g. DreamZero) need several frames spanning the
     just-executed chunk at the cadence seen in training, but the harness only forwards an observation
     to the policy at re-query boundaries. This wrapper sits outside the scheduling wrapper so it sees
-    every control tick: it records each camera frame and substitutes a ``(len(offsets_sec), H, W, 3)``
-    stack sampled at ``offsets_sec`` (ascending negative seconds relative to now).
+    every control tick: it records the named entries and substitutes a ``(len(offsets_sec), ...)`` stack
+    sampled at ``offsets_sec`` (ascending negative seconds relative to now).
+
+    ``image_keys`` are the cameras (``(T, H, W, 3)``). ``proprio_keys`` are optional per-frame
+    proprioceptive signals (e.g. ``robot_state.ee_pose`` → ``(T, 7)``, ``grip`` → ``(T,)``) recorded
+    on the SAME buffer, so each stacked frame carries its own proprio — the trajectory a model trained
+    on real per-frame proprio expects, rather than the current pose repeated across history. Leave it
+    empty for models whose codec consumes only the current proprio (stacking would reshape it wrong).
     """
 
     class _Session(DelegatingSession):
-        def __init__(self, inner: Session, image_keys: tuple[str, ...], offsets_sec: tuple[float, ...]):
+        def __init__(self, inner: Session, stack_keys: tuple[str, ...], offsets_sec: tuple[float, ...]):
             super().__init__(inner)
-            self._image_keys = image_keys
+            self._stack_keys = stack_keys
             self._buffer = _FrameBuffer(offsets_sec)
 
         def __call__(self, obs):
             now = _obs_time(obs)
-            self._buffer.append(now, {k: obs[k] for k in self._image_keys})
+            self._buffer.append(now, {k: obs[k] for k in self._stack_keys})
             return self._inner({**obs, **self._buffer.sample(now)})
 
         def cancel(self):
             self._buffer.reset()
             super().cancel()
 
-    def __init__(self, image_keys: tuple[str, ...], offsets_sec: tuple[float, ...]):
-        self._image_keys = tuple(image_keys)
+    def __init__(self, image_keys: tuple[str, ...], offsets_sec: tuple[float, ...], proprio_keys: tuple[str, ...] = ()):
+        self._stack_keys = (*image_keys, *proprio_keys)
         self._offsets_sec = tuple(offsets_sec)
 
     def wrap_session(self, inner: Session, context, now: Now):
-        return TemporalFrameStack._Session(inner, self._image_keys, self._offsets_sec)
+        return TemporalFrameStack._Session(inner, self._stack_keys, self._offsets_sec)
