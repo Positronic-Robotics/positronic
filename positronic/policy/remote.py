@@ -1,3 +1,4 @@
+import io
 from typing import Any
 
 import numpy as np
@@ -7,6 +8,11 @@ from positronic.offboard.client import DEFAULT_INFER_TIMEOUT, InferenceClient, I
 from positronic.utils import flatten_dict
 
 from .base import Policy, Session
+
+# JPEG quality for temporal image stacks on the wire. A (T, H, W, 3) stack of HD frames is tens of MB
+# raw — over the ~2 MB websocket message cap of a Modal-fronted endpoint. Per-frame JPEG keeps a
+# 25-frame two-camera stack around 1-2 MB and cuts upload latency; q=90 is visually lossless here.
+_JPEG_STACK_QUALITY = 90
 
 
 class RemoteSession(Session):
@@ -37,6 +43,22 @@ class RemoteSession(Session):
         scale = min(1.0, tw / w, th / h)
         return RemoteSession._resize_to(image, int(w * scale), int(h * scale))
 
+    @staticmethod
+    def _encode_jpeg_stack(stack: np.ndarray) -> dict[bytes, Any]:
+        """JPEG-encode a ``(T, H, W, 3)`` stack to a compact wire marker the server decodes back.
+
+        Sends one JPEG per frame plus the original ``ndim`` so the server restores the exact shape.
+        """
+        frames = stack if stack.ndim == 4 else stack[None]
+        bufs = []
+        for frame in frames:
+            buf = io.BytesIO()
+            PilImage.fromarray(np.ascontiguousarray(frame, dtype=np.uint8)).save(
+                buf, format='JPEG', quality=_JPEG_STACK_QUALITY
+            )
+            bufs.append(buf.getvalue())
+        return {b'__jpeg_stack__': True, b'frames': bufs, b'ndim': int(stack.ndim)}
+
     def _prepare_obs(self, obs: dict[str, Any]) -> dict[str, Any]:
         result = {}
         for key, value in obs.items():
@@ -51,6 +73,10 @@ class RemoteSession(Session):
                         value = np.stack([self._fit(f, tw, th) for f in value])
                     else:
                         value = self._fit(value, tw, th)
+                # Compress temporal stacks: a raw HD stack is tens of MB and exceeds the ~2 MB
+                # websocket message cap of a Modal-fronted endpoint. Single frames stay raw (small).
+                if value.ndim == 4:
+                    value = self._encode_jpeg_stack(value)
             result[key] = value
         return result
 
