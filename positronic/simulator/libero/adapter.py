@@ -49,18 +49,17 @@ class LiberoAdapter(EnvAdapter):
         self._players = fresh_command_players()
         self._held = {}
         self._grip = 0.0
-        seed = context.get('eval.seed')
         # The whole scene spec rides the trial context: the server caches its env by ``(suite, task_id,
         # camera_resolution, control_mode)``, so one adapter + one server serve any mix of suites and tasks.
-        # ``seed`` selects a saved init-state (``None`` -> index 0); ``settle_steps`` is the hold-arm/open-gripper
-        # wait the server runs after a seeded reset so dropped objects settle before the first observation
-        # (openpi's num_steps_wait dummy-action wait).
+        # ``seed`` selects a saved init-state (``None`` -> the server draws one at random); ``settle_steps`` is
+        # the hold-arm/open-gripper wait the server runs after a seeded reset so dropped objects settle before
+        # the first observation (openpi's num_steps_wait dummy-action wait).
         return {
             'suite': context['eval.suite'],
             'task_id': context['eval.task_id'],
             'camera_resolution': context['eval.camera_resolution'],
             'control_mode': context['eval.control_mode'],
-            'seed': seed if seed is not None else 0,
+            'seed': context.get('eval.seed'),
             'settle_steps': context['eval.settle_steps'],
         }
 

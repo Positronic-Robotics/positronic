@@ -37,12 +37,13 @@ goal is solved to joints with damped-least-squares IK and a joint goal is turned
 forward kinematics, both on the MuJoCo site Jacobian OSC itself computes. The reset token carries the task spec
 (suite, task_id, camera resolution, control mode) plus the per-trial seed; the env builds that task on the first
 reset and caches it, rebuilding only when the spec changes. The seed selects a saved init-state and re-randomizes
-object positions.
+object positions; a ``None`` seed draws one at random.
 """
 
 import argparse
 import builtins
 import pathlib
+import random
 from typing import Any
 
 import mujoco
@@ -73,8 +74,8 @@ class LiberoEnv(EnvProtocol):
     """A LIBERO task behind the gym-style ``reset``/``step``/``close`` the env server serves.
 
     Built from the reset token's task spec (suite, task_id, resolution, control mode) and cached; ``reset``
-    rebuilds when the spec changes, then re-seeds and selects a saved init-state, or restores an exact recorded
-    full state when the token carries one (demo replay).
+    rebuilds when the spec changes, then re-seeds and selects a saved init-state (drawing the seed when the token
+    carries ``None``), or restores an exact recorded full state when the token carries one (demo replay).
     ``step`` maps the forwarded command into the active controller's action (FK/IK bridging pose<->joint) and
     returns LIBERO's raw obs plus the full physics state — the privileged ground truth, so success is
     recomputable downstream — and ``done``.
@@ -154,7 +155,8 @@ class LiberoEnv(EnvProtocol):
             self._env.reset()
             raw = self._env.set_init_state(np.asarray(state))
         else:
-            seed = int(token['seed'])
+            # An absent seed draws a fresh scene, matching ``MujocoSim.reset(seed=None)``.
+            seed = int(token['seed']) if token['seed'] is not None else random.randrange(2**31)
             self._env.seed(seed)
             self._env.reset()
             raw = self._env.set_init_state(self._init_states[seed % len(self._init_states)])
