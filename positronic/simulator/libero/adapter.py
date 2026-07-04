@@ -37,39 +37,31 @@ def _wire_command(cmd: Any) -> dict[str, Any]:
 
 
 class LiberoAdapter(EnvAdapter):
-    def __init__(
-        self,
-        camera_dict: dict[str, str],
-        *,
-        suite: str,
-        task_id: int,
-        camera_resolution: int,
-        control_mode: str,
-        settle_steps: int = 10,
-    ):
+    def __init__(self, camera_dict: dict[str, str]):
         self._camera_dict = camera_dict  # logical observation name -> the LIBERO obs image key
-        # The task spec the server builds its env from — shipped in every reset token (the server caches by it).
-        self._scene = {
-            'suite': suite,
-            'task_id': task_id,
-            'camera_resolution': camera_resolution,
-            'control_mode': control_mode,
-        }
-        # Hold-arm/open-gripper steps the server runs after a seeded reset to let dropped objects settle before the
-        # first observation (openpi's num_steps_wait dummy-action wait); a per-reset behavior, not a build param.
-        self._settle_steps = settle_steps
         self._players = fresh_command_players()
         self._held: dict[str, Any] = {}  # last sampled waypoint per channel — re-sent until it changes
         # Last commanded gripper closure, held across a cancelled grip trajectory: grip is an absolute [0, 1]
         # value with no 'hold' command to fall back on (unlike the arm), so cancelling must freeze it, not reopen.
         self._grip = 0.0
 
-    def reset_token(self, seed: int | None) -> Any:
+    def reset_token(self, context: dict[str, Any]) -> Any:
         self._players = fresh_command_players()
         self._held = {}
         self._grip = 0.0
-        # The task spec the server builds from + the seed it selects an init-state with (``None`` -> index 0).
-        return {**self._scene, 'seed': seed if seed is not None else 0, 'settle_steps': self._settle_steps}
+        # The whole scene spec rides the trial context: the server caches its env by ``(suite, task_id,
+        # camera_resolution, control_mode)``, so one adapter + one server serve any mix of suites and tasks.
+        # ``seed`` selects a saved init-state (``None`` -> the server draws one at random); ``settle_steps`` is
+        # the hold-arm/open-gripper wait the server runs after a seeded reset so dropped objects settle before
+        # the first observation (openpi's num_steps_wait dummy-action wait).
+        return {
+            'suite': context['eval.suite'],
+            'task_id': context['eval.task_id'],
+            'camera_resolution': context['eval.camera_resolution'],
+            'control_mode': context['eval.control_mode'],
+            'seed': context.get('eval.seed'),
+            'settle_steps': context['eval.settle_steps'],
+        }
 
     def action(self, commands: dict[str, pimm.Message], now_ns: int) -> dict[str, Any]:
         for name, msg in commands.items():

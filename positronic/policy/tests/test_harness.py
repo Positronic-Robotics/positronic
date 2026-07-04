@@ -602,7 +602,7 @@ class _FrameIndexDevice(pimm.ControlSystem):
         self._frame = 0
         self._reset_pending = False
 
-    def reset(self, seed):
+    def reset(self, _context):
         self._frame = 0
         self._reset_pending = True
 
@@ -728,8 +728,8 @@ def test_trial_seed_reaches_task_reset_and_meta(world):
     seeds = []
     trials = [{'eval.seed': 7 + i} for i in range(2)]
 
-    def reset(seed):
-        seeds.append(seed)
+    def reset(context):
+        seeds.append(context.get('eval.seed'))
         p['meta_em'].emit({})  # the producer publishes fresh scene meta, recorded into the episode at finalize
 
     task = Task(instruction='stack', timeout=0.05, reset=reset)
@@ -871,7 +871,7 @@ def test_task_instruction_reaches_session_context_after_reset(world):
     policy = StubPolicy()
     scene = {}
 
-    def reset(_seed):
+    def reset(_context):
         scene['task'] = 'resolved-on-reset'  # the env reports its task only here
 
     task = Task(instruction=lambda: scene['task'], timeout=0.05, reset=reset)
