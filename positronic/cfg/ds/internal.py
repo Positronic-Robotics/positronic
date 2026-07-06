@@ -10,12 +10,13 @@ These datasets remain on the private s3://raw/ bucket and include:
 """
 
 import configuronic as cfn
+import numpy as np
 import pos3
 
 from positronic.cfg.eval.real.tasks import BATTERIES_TASK, SCISSORS_TASK, SPOONS_TASK, TOWELS_TASK
 from positronic.dataset.dataset import ConcatDataset, FilterDataset
 from positronic.dataset.local_dataset import load_all_datasets
-from positronic.dataset.transforms import TransformedDataset, agg_fraction_true, agg_max, agg_percentile
+from positronic.dataset.transforms import Elementwise, TransformedDataset, agg_fraction_true, agg_max, agg_percentile
 from positronic.dataset.transforms.episode import Concat, Derive, FromValue, Get, Group, Identity, Rename
 from positronic.dataset.transforms.quality import cmd_lag, cmd_velocity, idle_mask, jerk
 from positronic.drivers.roboarm.models import bundled_franka_model, bundled_panda_model
@@ -106,12 +107,19 @@ def droid(path, recovery_all, recovery_towels, duplicate_recovery):
     return TransformedDataset(ConcatDataset(*datasets), REAL_ROBOT_TRANSFORM)
 
 
+def _flip_grip(key: str):
+    """Legacy sim recordings store grip as 1 = open; flip to the canonical 1 = closed."""
+    return lambda episode: Elementwise(episode[key], lambda v: 1.0 - np.asarray(v))
+
+
 # Signal transformations for sim datasets
 old_to_new = Group(
     Derive(**{
         'robot_command.pose': Concat('target_robot_position_translation', 'target_robot_position_quaternion'),
         'robot_state.ee_pose': Concat('robot_position_translation', 'robot_position_quaternion'),
         'task': FromValue('Pick up the green cube and place it on the red cube.'),
+        'grip': _flip_grip('grip'),
+        'target_grip': _flip_grip('target_grip'),
     }),
     Rename(**{
         'robot_state.q': 'robot_joints',
@@ -119,7 +127,7 @@ old_to_new = Group(
         'image.wrist': 'image.handcam_left',
         'image.exterior': 'image.back_view',
     }),
-    Identity(select=['grip', 'target_grip', 'mjSTATE_FULLPHYSICS', 'mjSTATE_INTEGRATION', 'mjSTATE_WARMSTART']),
+    Identity(select=['mjSTATE_FULLPHYSICS', 'mjSTATE_INTEGRATION', 'mjSTATE_WARMSTART']),
 )
 
 sim_stack = transform.override(
@@ -130,7 +138,11 @@ sim_pnp = transform.override(
     base=local.override(path='s3://raw/sim_pnp/'),
     transforms=[
         Group(
-            Derive(task=FromValue('Pick up objects from the red tote and place them in the green tote.')),
+            Derive(
+                task=FromValue('Pick up objects from the red tote and place them in the green tote.'),
+                grip=_flip_grip('grip'),
+                target_grip=_flip_grip('target_grip'),
+            ),
             Rename(**{'image.exterior': 'image.back_view'}),
             Identity(),
         ),

@@ -135,15 +135,22 @@ phail = main.override(
     checkpoints_dir='s3://checkpoints/phail_unified/lerobot/270226-ee/',
     recording_dir='s3://inference/phail_unified/server_recordings/lerobot/270226-ee/',
 )
+# The sim_stack and demo checkpoints were trained on inverted-grip (1 = open) sim data, hence flip_grip.
 sim_stack = main.override(
     checkpoints_dir='s3://checkpoints/sim_stack/lerobot/230226-ee/',
     recording_dir='s3://inference/sim_stack/server_recordings/lerobot/230226-ee/',
+    codec=lerobot_codecs.ee.override(flip_grip=True),
 )
 _DEMO_CHECKPOINT = 's3://PUBLIC@positronic-public/checkpoints/sim_stack_cubes/act/'
 
 
 @cfn.config(
-    policy_factory=act, codec=lerobot_codecs.ee, checkpoint=None, port=8000, host='0.0.0.0', idle_timeout_min=None
+    policy_factory=act,
+    codec=lerobot_codecs.ee.override(flip_grip=True),
+    checkpoint=None,
+    port=8000,
+    host='0.0.0.0',
+    idle_timeout_min=None,
 )
 def demo(policy_factory, checkpoint, codec, port, host, idle_timeout_min):
     checkpoints_dir = str(pos3.download(_DEMO_CHECKPOINT))

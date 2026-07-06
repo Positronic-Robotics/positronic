@@ -239,3 +239,34 @@ def test_data_collection_with_mujoco_robot_gripper(tmp_path):
 
     for name in ['robot_state.q', 'robot_state.dq', 'grip']:
         assert_strictly_increasing(ep[name])
+
+
+def test_mujoco_grip_one_is_closed():
+    sim = MujocoSim('positronic/assets/mujoco/franka_table.xml', loaders=())
+
+    def finger_qpos() -> float:
+        """Physical finger travel: 0 = fingers together (closed), 0.04 m = fully apart (open)."""
+        return sim.data.joint('finger_joint1_ph').qpos.item()
+
+    # The home pose leaves the gripper open.
+    assert finger_qpos() > 0.03
+
+    snapshots = {}
+    with pimm.World(virtual_time=True) as world:
+        target_grip = world.pair(sim.target_grip)
+        grip = world.pair(sim.grip)
+
+        driver = ManualDriver([
+            (lambda: target_grip.emit(1.0), 0.5),
+            (lambda: snapshots.update(closed=finger_qpos(), closed_grip=grip.read().data), 0.0),
+            (lambda: target_grip.emit(0.0), 0.5),
+            (lambda: snapshots.update(opened=finger_qpos(), opened_grip=grip.read().data), 0.0),
+        ])
+
+        scheduler = world.start([sim, driver])
+        drive_scheduler(scheduler, steps=2000)
+
+    assert snapshots['closed'] < 0.005
+    assert snapshots['closed_grip'] > 0.9
+    assert snapshots['opened'] > 0.035
+    assert snapshots['opened_grip'] < 0.1
