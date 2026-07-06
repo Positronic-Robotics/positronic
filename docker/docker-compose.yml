@@ -244,7 +244,7 @@ services:
   dreamzero-server:
     <<: *dreamzero-common
     container_name: dreamzero-server
-    entrypoint: ["uv", "run", "--python", "3.13", "python", "-m", "positronic.vendors.dreamzero.server"]
+    entrypoint: ["uv", "run", "--python", "3.13", "--extra", "dreamzero", "python", "-m", "positronic.vendors.dreamzero.server"]
     ports:
       - "8000:8000"
     shm_size: 16g

@@ -88,6 +88,9 @@ molmoact2 = [
     "protobuf",
     "sentencepiece",
 ]
+dreamzero = [
+    "huggingface-hub",
+]
 lance = [
     "pylance",
 ]
