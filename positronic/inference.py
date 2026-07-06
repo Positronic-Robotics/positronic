@@ -61,11 +61,30 @@ def keyboard(show_gui, task):
     return make
 
 
-@cfn.config(port=8080, fps=20, width=640, bitrate=2_000_000)
-def web(port, fps, width, bitrate, task):
+@cfn.config(
+    port=8080,
+    fps=20,
+    width=640,
+    bitrate=2_000_000,
+    translation_fine=0.01,
+    translation_coarse=0.05,
+    rotation_fine=2.0,
+    rotation_coarse=10.0,
+)
+def web(port, fps, width, bitrate, translation_fine, translation_coarse, rotation_fine, rotation_coarse, task):
     def make(output_dir: Path | None) -> Driver:
-        ui = WebEvalUI(task=task, port=port, fps=fps, width=width, bitrate=bitrate)
-        return Driver(ui, ui.directive, pimm.utils.identity, [])
+        ui = WebEvalUI(
+            task=task,
+            port=port,
+            fps=fps,
+            width=width,
+            bitrate=bitrate,
+            translation_fine=translation_fine,
+            translation_coarse=translation_coarse,
+            rotation_fine=rotation_fine,
+            rotation_coarse=rotation_coarse,
+        )
+        return Driver(ui, ui.directive, pimm.utils.identity, [], manual_commands=ui.manual_command)
 
     return make
 

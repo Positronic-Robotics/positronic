@@ -18,10 +18,18 @@ body {
   gap: 0.5rem;
 }
 
+.stage {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  gap: 0.5rem;
+}
+
 .camera {
   flex: 1 1 auto;
   min-height: 0;
   margin: 0;
+  position: relative;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -37,6 +45,24 @@ body {
   max-height: 100%;
   width: auto;
   height: auto;
+}
+
+.stream-status {
+  position: absolute;
+  top: 0.6rem;
+  left: 0.6rem;
+  display: none;
+  padding: 0.3rem 0.7rem;
+  border-radius: var(--radius-pill);
+  background: rgba(15, 23, 42, 0.85);
+  color: var(--danger);
+  border: 1px solid rgba(248, 113, 113, 0.4);
+  font-size: 0.78rem;
+  letter-spacing: 0.04em;
+}
+
+.stream-status.is-visible {
+  display: block;
 }
 
 .btn-primary {
@@ -66,4 +92,92 @@ body {
   background: var(--danger);
   color: var(--text-invert);
   box-shadow: 0 0 20px rgba(248, 113, 113, 0.55);
+}
+
+.jog {
+  flex: 0 0 auto;
+  width: 220px;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  padding: 0.75rem;
+  box-sizing: border-box;
+  overflow-y: auto;
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--border-subtle);
+}
+
+.jog-section {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.jog-title {
+  margin: 0;
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-secondary);
+}
+
+.jog-btn {
+  padding: 0.4rem 0.6rem;
+  font-size: 0.82rem;
+}
+
+.jog-cross {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  grid-template-rows: repeat(3, 1fr);
+  gap: 0.3rem;
+}
+
+.jog-up { grid-column: 2; grid-row: 1; }
+.jog-left { grid-column: 1; grid-row: 2; }
+.jog-right { grid-column: 3; grid-row: 2; }
+.jog-down { grid-column: 2; grid-row: 3; }
+
+.jog-z {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.3rem;
+}
+
+.jog-rot-row {
+  display: grid;
+  grid-template-columns: 1fr auto auto;
+  align-items: center;
+  gap: 0.3rem;
+}
+
+.jog-label {
+  font-size: 0.82rem;
+  color: var(--text-secondary);
+}
+
+.jog-toggle {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.3rem;
+}
+
+.jog-btn.is-active {
+  background: var(--accent);
+  color: var(--text-invert);
+  border-color: transparent;
+}
+
+.jog-slider {
+  width: 100%;
+  margin: 0;
+  accent-color: var(--accent);
+}
+
+.jog.is-running {
+  opacity: 0.5;
+}
+
+.jog.is-running .jog-btn {
+  cursor: not-allowed;
 }
