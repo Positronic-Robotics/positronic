@@ -125,7 +125,6 @@ class Harness(pimm.ControlSystem):
             self.commands[name]
 
         self.directive = pimm.ControlSystemReceiver[Directive](self, default=None, maxsize=3)
-        # Operator jog commands honored only between episodes; last-value-wins, may be left unconnected.
         self.manual_command = pimm.ControlSystemReceiver(self, default=None)
         self.ds_command = pimm.ControlSystemEmitter[DsWriterCommand](self)
         self.robot_meta_in = pimm.ControlSystemReceiver(self, default={})
