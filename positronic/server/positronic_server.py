@@ -75,7 +75,9 @@ def _get_rrd_cache_path(episode_id: int) -> str:
     ds_id = str(Path(str(app_state['root'])).resolve()).replace(os.sep, '_').replace(':', '')
     episode_cache_dir = os.path.join(cache_root, ds_id)
     os.makedirs(episode_cache_dir, exist_ok=True)
-    return os.path.join(episode_cache_dir, f'episode_{episode_id}.rrd')
+    # Key the cache by episode uid, not position: position is view-dependent, and datasets without a
+    # resolvable root (e.g. concatenated ones) all share the 'unknown_dataset' namespace.
+    return os.path.join(episode_cache_dir, f'{ds[episode_id].meta["uid"]}.rrd')
 
 
 @asynccontextmanager
