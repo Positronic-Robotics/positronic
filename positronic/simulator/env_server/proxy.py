@@ -14,6 +14,9 @@ from contextlib import AbstractContextManager, ExitStack
 from typing import Any
 
 import pimm
+from positronic.dataset.serializers import Serializers
+from positronic.drivers.roboarm import command as roboarm_command
+from positronic.eval import ROBOT_STATIC_META, Command, Embodiment, Observation
 from positronic.simulator.env_server.adapter import EnvAdapter
 from positronic.simulator.env_server.client import EnvConnection
 
@@ -121,3 +124,37 @@ class RemoteEnvControlSystem(pimm.ControlSystem):
             self.done.emit(payload)
             self._active = False
         return result
+
+
+def remote_franka_embodiment(
+    proxy: RemoteEnvControlSystem,
+    camera_dict: dict[str, str],
+    *,
+    descriptor: str,
+    static_meta: dict[str, Any] | None = None,
+) -> Embodiment:
+    """The canonical Franka embodiment over a remote env proxy.
+
+    Every remote benchmark exposes the same channels — ``robot_state``/``grip``/one image per ``camera_dict``
+    entry, ``robot_command``/``target_grip`` — so their wiring lives here; ``static_meta`` adds the
+    embodiment's robot-model payload on top of the canonical signal map (supplied client-side when the env
+    server cannot import positronic to emit it via ``robot_meta``).
+    """
+    observations = {
+        'robot_state': Observation(proxy.observations['robot_state'], Serializers.robot_state),
+        'grip': Observation(proxy.observations['grip'], None),
+        **{logical: Observation(proxy.observations[logical], Serializers.camera_images) for logical in camera_dict},
+    }
+    commands = {
+        'robot_command': Command(proxy.commands['robot_command'], roboarm_command.Reset(), Serializers.robot_command),
+        'target_grip': Command(proxy.commands['target_grip'], 0.0, None),
+    }
+    return Embodiment(
+        descriptor=descriptor,
+        observations=observations,
+        commands=commands,
+        static_meta={**ROBOT_STATIC_META, **(static_meta or {})},
+        meta_source=proxy.robot_meta,
+        control_systems=(proxy,),
+        simulated=True,
+    )

@@ -3,16 +3,15 @@
 positronic starts the server: the env runs in its own 3.10 interpreter via ``uv run --no-project env.py``,
 which reads the script's PEP 723 deps and builds an isolated environment. The positronic-free ``env_server``
 package and a LIBERO source checkout are placed on ``PYTHONPATH`` so ``env.py`` imports the dumb
-``server``/``protocol`` and ``libero`` without dragging in positronic. A free localhost port is picked here and
-handed to ``RemoteEnvControlSystem``; the subprocess is terminated when the run ends.
+``server``/``protocol`` and ``libero`` without dragging in positronic.
 """
 
 import os
-import socket
 import subprocess
-from collections.abc import Iterator
-from contextlib import contextmanager
+from contextlib import AbstractContextManager
 from pathlib import Path
+
+from positronic.simulator.env_server.launcher import ensure_pinned_checkout, serve_subprocess
 
 _ENV_SCRIPT = Path(__file__).parent / 'env.py'
 _ENV_SERVER_DIR = Path(__file__).parents[1] / 'env_server'
@@ -20,35 +19,15 @@ _ENV_SERVER_DIR = Path(__file__).parents[1] / 'env_server'
 _LIBERO_REPO = 'https://github.com/Lifelong-Robot-Learning/LIBERO.git'
 _LIBERO_COMMIT = '8f1084e3132a39270c3a13ebe37270a43ece2a01'
 _LIBERO_CACHE = Path.home() / '.cache' / 'positronic' / 'libero'
-_LIBERO_SRC = _LIBERO_CACHE / 'src'
 _LIBERO_CONFIG = _LIBERO_CACHE / 'config'
 
 
-def _free_port() -> int:
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
-        sock.bind(('', 0))
-        return sock.getsockname()[1]
-
-
 def _ensure_libero_src() -> Path:
-    """Clone LIBERO at the pinned commit into the cache and return its repo root for ``PYTHONPATH``.
-
-    LIBERO declares ``install_requires=[]`` and ships ``libero`` as a PEP 420 namespace package (no top-level
-    ``__init__.py``), so ``find_packages`` builds an empty wheel — it is importable only with the repo root on
-    ``sys.path``, and the bddl/init-state/asset files the env reads live in the repo tree, not a wheel.
+    """The pinned LIBERO checkout, importable only from its repo root: LIBERO declares ``install_requires=[]``
+    and ships ``libero`` as a PEP 420 namespace package (no top-level ``__init__.py``), so ``find_packages``
+    builds an empty wheel — and the bddl/init-state/asset files the env reads live in the repo tree, not a wheel.
     """
-    if not (_LIBERO_SRC / '.git').exists():
-        _LIBERO_SRC.parent.mkdir(parents=True, exist_ok=True)
-        subprocess.run(['git', 'clone', _LIBERO_REPO, str(_LIBERO_SRC)], check=True)
-    head = subprocess.run(
-        ['git', '-C', str(_LIBERO_SRC), 'rev-parse', 'HEAD'], check=True, capture_output=True, text=True
-    ).stdout.strip()
-    # Enforce the pin on every run, not just the first: a cache cloned earlier (or by hand) at another revision
-    # would otherwise be imported as-is, mismatching the committed fixture and the controller assumptions.
-    if head != _LIBERO_COMMIT:
-        subprocess.run(['git', '-C', str(_LIBERO_SRC), 'fetch', 'origin', _LIBERO_COMMIT], check=True)
-        subprocess.run(['git', '-C', str(_LIBERO_SRC), 'checkout', _LIBERO_COMMIT], check=True)
-    return _LIBERO_SRC
+    return ensure_pinned_checkout(_LIBERO_REPO, _LIBERO_COMMIT, _LIBERO_CACHE / 'src')
 
 
 def _spawn(host: str, port: int) -> subprocess.Popen:
@@ -63,26 +42,6 @@ def _spawn(host: str, port: int) -> subprocess.Popen:
     return subprocess.Popen(command, env=env)
 
 
-def _terminate(proc: subprocess.Popen) -> None:
-    proc.terminate()
-    try:
-        proc.wait(timeout=10)
-    except subprocess.TimeoutExpired:
-        proc.kill()
-
-
-@contextmanager
-def serve_libero(host: str = 'localhost') -> Iterator[tuple[str, int]]:
-    """Run the LIBERO env-server subprocess for the body's lifetime, yielding its ``(host, port)``.
-
-    The single owner of the subprocess: ``RemoteEnvControlSystem`` enters it to tie the subprocess to the World
-    run, and a plain client (e.g. the e2e demo replay) enters it directly to talk over the socket without a World.
-    The task spec rides the reset token, so the subprocess needs only its address — it serves whatever task the
-    first reset asks for.
-    """
-    port = _free_port()
-    proc = _spawn(host, port)
-    try:
-        yield host, port
-    finally:
-        _terminate(proc)
+def serve_libero(host: str = 'localhost') -> AbstractContextManager[tuple[str, int]]:
+    """The LIBERO env server as a ``serve`` context manager (the ``serve_subprocess`` contract)."""
+    return serve_subprocess(_spawn, host)
