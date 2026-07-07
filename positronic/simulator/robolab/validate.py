@@ -243,11 +243,12 @@ def main() -> None:
     failures = _run_cartesian_cases(env)
     _check_cartesian_delta(env)
     env.close()
-    simulation_app.close()
+    # ``simulation_app.close()`` can end the process outright, so the verdict prints before it.
     if failures:
         print(f'{failures} cartesian case(s) FAILED')
         sys.exit(1)
     print('ALL CHECKS PASSED')
+    simulation_app.close()
 
 
 if __name__ == '__main__':

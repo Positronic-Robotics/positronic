@@ -47,7 +47,9 @@ def _ensure_robolab_src() -> Path:
 def _spawn(host: str, port: int) -> subprocess.Popen:
     src = _ensure_robolab_src()
     command = ['uv', 'run', '--project', str(src), str(_ENV_SCRIPT), '--host', host, '--port', str(port), '--headless']
-    return subprocess.Popen(command, env={**os.environ, 'PYTHONPATH': str(_ENV_SERVER_DIR)})
+    # Isaac Sim prompts for its EULA on stdin at first launch; the server is headless, so accept it here.
+    env = {**os.environ, 'PYTHONPATH': str(_ENV_SERVER_DIR), 'OMNI_KIT_ACCEPT_EULA': 'Y'}
+    return subprocess.Popen(command, env=env)
 
 
 def serve_robolab(host: str = 'localhost') -> AbstractContextManager[tuple[str, int]]:

@@ -139,8 +139,12 @@ class RobolabEnv(EnvProtocol):
         state = token.get('state')
         if state is not None:
             # Exact-state replay (a demo's own scene). RoboLab records states env-origin relative
-            # (``scene.get_state(is_relative=True)``), so restore them the same way.
-            obs, _extras = self._env.reset_to(self._state_tensors(state), None, is_relative=True)
+            # (``scene.get_state(is_relative=True)``), so restore them the same way. The recorded entries
+            # overlay the scene's own post-reset state: ``reset_to`` wants every scene entity, and a recording
+            # may predate entities that never move (e.g. the table joined the scene's rigid objects for
+            # contact sensing after the shipped demos were recorded).
+            merged = self._merged_state(self._env.scene.get_state(is_relative=True), state)
+            obs, _extras = self._env.reset_to(merged, None, is_relative=True)
         # ``robot_meta`` is empty: this server can't import positronic to emit the robot model, so the eval
         # supplies it via ``static_meta``. ``meta`` carries the task identity and the resolved instruction.
         # The reset frame's subtask progress is zeros: the recorder's infos refresh only after a step, so
@@ -234,10 +238,13 @@ class RobolabEnv(EnvProtocol):
         vec = torch.as_tensor(vec, dtype=torch.float32, device=self._env.device)
         return vec[:3].unsqueeze(0), quat_from_matrix(vec[3:].reshape(1, 3, 3))
 
-    def _state_tensors(self, node: Any) -> Any:
-        if isinstance(node, dict):
-            return {key: self._state_tensors(value) for key, value in node.items()}
-        return torch.as_tensor(node, device=self._env.device)
+    def _merged_state(self, base: Any, overlay: Any) -> Any:
+        """The scene's live state tree with the recording's entries written over it, as device tensors."""
+        if not isinstance(base, dict):
+            return torch.as_tensor(overlay, dtype=base.dtype, device=self._env.device)
+        return {
+            key: self._merged_state(value, overlay[key]) if key in overlay else value for key, value in base.items()
+        }
 
     def _subtask_progress(self) -> np.ndarray:
         """The env's live subtask progress as the wire ``[status, completed, total, score]`` vector."""
