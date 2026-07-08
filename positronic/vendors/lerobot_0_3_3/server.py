@@ -139,7 +139,7 @@ phail = main.override(
 sim_stack = main.override(
     checkpoints_dir='s3://checkpoints/sim_stack/lerobot/230226-ee/',
     recording_dir='s3://inference/sim_stack/server_recordings/lerobot/230226-ee/',
-    codec=lerobot_codecs.ee.override(flip_grip=True),
+    **{'codec.flip_grip': True},
 )
 _DEMO_CHECKPOINT = 's3://PUBLIC@positronic-public/checkpoints/sim_stack_cubes/act/'
 

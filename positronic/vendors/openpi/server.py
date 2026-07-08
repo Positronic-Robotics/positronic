@@ -357,7 +357,7 @@ phail = server.override(
 sim_stack = server.override(
     checkpoints_dir='s3://checkpoints/sim_stack/openpi/ee/pi05_positronic_lowmem/230226/',
     recording_dir='s3://inference/sim_stack/server_recordings/openpi/230226/',
-    codec=codecs.ee.override(flip_grip=True),
+    **{'codec.flip_grip': True},
 )
 droid = server.override(
     codec=codecs.droid,

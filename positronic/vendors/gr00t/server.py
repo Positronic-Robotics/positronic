@@ -431,7 +431,7 @@ phail = ee_rot6d_rel.override(
 sim_stack = ee_rot6d.override(
     checkpoints_dir='s3://checkpoints/sim_stack/groot/ee_rot6d/230226/',
     recording_dir='s3://inference/sim_stack/server_recordings/groot/230226/',
-    codec=codecs.ee_rot6d.override(flip_grip=True),
+    **{'codec.flip_grip': True},
 )
 
 
