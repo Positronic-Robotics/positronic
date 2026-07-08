@@ -427,9 +427,11 @@ phail = ee_rot6d_rel.override(
     checkpoints_dir='s3://checkpoints/phail_unified/groot/270226-ee_rot6d_rel/',
     recording_dir='s3://inference/phail_unified/server_recordings/groot/270226-ee_rot6d_rel/',
 )
+# The sim_stack checkpoint was trained on inverted-grip (1 = open) sim data, hence flip_grip.
 sim_stack = ee_rot6d.override(
     checkpoints_dir='s3://checkpoints/sim_stack/groot/ee_rot6d/230226/',
     recording_dir='s3://inference/sim_stack/server_recordings/groot/230226/',
+    **{'codec.flip_grip': True},
 )
 
 

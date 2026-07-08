@@ -353,9 +353,11 @@ phail = server.override(
     checkpoints_dir='s3://checkpoints/phail_unified/openpi/pi05_positronic_lowmem/270226-ee/',
     recording_dir='s3://inference/phail_unified/server_recordings/openpi/270226-ee/',
 )
+# The sim_stack checkpoint was trained on inverted-grip (1 = open) sim data, hence flip_grip.
 sim_stack = server.override(
     checkpoints_dir='s3://checkpoints/sim_stack/openpi/ee/pi05_positronic_lowmem/230226/',
     recording_dir='s3://inference/sim_stack/server_recordings/openpi/230226/',
+    **{'codec.flip_grip': True},
 )
 droid = server.override(
     codec=codecs.droid,

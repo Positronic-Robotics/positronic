@@ -315,3 +315,31 @@ class BinarizeGripInference(Codec):
         if self._key in data:
             data[self._key] = 1.0 if data[self._key] > self._threshold else 0.0
         return data
+
+
+class FlipGrip(Codec):
+    """Serve a checkpoint that speaks the inverted grip convention (1 = open) on the canonical
+    1 = closed wire: flips ``grip`` entering the model and ``target_grip`` leaving it.
+
+    HACK: exists only to keep checkpoints trained on inverted-grip sim data alive.
+    TODO: Drop it (and its ``flip_grip`` compose hook) when no served checkpoint needs it.
+
+    Compose to the left of obs/action codecs::
+
+        timing | FlipGrip() | obs & action
+    """
+
+    def encode(self, data):
+        # Copy: the original dict is also the decode ``context`` and the raw recording tap's input.
+        if 'grip' in data:
+            data = {**data, 'grip': 1.0 - data['grip']}
+        return data
+
+    @property
+    def training_encoder(self) -> EpisodeTransform:
+        return Identity()
+
+    def _decode_single(self, data: dict, context: dict | None) -> dict:
+        if 'target_grip' in data:
+            data['target_grip'] = 1.0 - data['target_grip']
+        return data

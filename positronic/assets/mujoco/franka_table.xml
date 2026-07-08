@@ -46,7 +46,7 @@
 
   <custom>
     <text name="model_suffix" data="_ph"/>
-    <text name="initial_ctrl" data="0.3314,-0.4919,-0.5844,-2.0910,-0.2424,1.7946,0.6114,0.0000"/>
+    <text name="initial_ctrl" data="0.3314,-0.4919,-0.5844,-2.0910,-0.2424,1.7946,0.6114,0.0400"/>
     <text name="relative_assets_path" data="franka_table.assets.pkl"/>
   </custom>
 

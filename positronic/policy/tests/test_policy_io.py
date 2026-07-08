@@ -15,6 +15,7 @@ from positronic.policy.codec import (
     BinarizeGripInference,
     BinarizeGripTraining,
     Codec,
+    FlipGrip,
 )
 from positronic.policy.observation import ObservationCodec
 
@@ -438,6 +439,35 @@ def test_binarize_grip_training_composed_with_action_codec():
     result = composed.training_encoder(ep)
     vec = list(result['action'])[0][0]
     assert vec[-1] == pytest.approx(1.0)
+
+
+def test_flip_grip():
+    flip = FlipGrip()
+
+    obs = {'grip': 0.2, 'other': 1.0}
+    assert flip.encode(obs) == {'grip': pytest.approx(0.8), 'other': 1.0}
+    assert obs['grip'] == 0.2  # the original obs dict doubles as decode context and must stay intact
+    assert flip.encode({'other': 1.0}) == {'other': 1.0}
+
+    assert flip._decode_single({'target_grip': 0.9}, None) == {'target_grip': pytest.approx(0.1)}
+    assert flip._decode_single({'pose': 1.0}, None) == {'pose': 1.0}
+    assert flip.decode([{'target_grip': 1.0}, {'target_grip': 0.25}]) == [
+        {'target_grip': pytest.approx(0.0)},
+        {'target_grip': pytest.approx(0.75)},
+    ]
+
+
+def test_flip_grip_composed_with_obs_and_action():
+    obs = ObservationCodec(state={'observation.state': ['grip']}, images={})
+    action = AbsolutePositionAction('robot_command.pose', 'target_grip', Rotation.Representation.QUAT)
+    composed = FlipGrip() | (obs & action)
+
+    encoded = composed.encode({'grip': 0.2})
+    np.testing.assert_allclose(encoded['observation.state'], [0.8])
+
+    vec = np.concatenate([[0.1, -0.2, 0.3], Rotation.identity.as_quat, [0.9]]).astype(np.float32)
+    decoded = composed.decode({'action': vec}, context={})
+    assert decoded['target_grip'] == pytest.approx(0.1)
 
 
 def test_parallel_codec_encode_merges_outputs():

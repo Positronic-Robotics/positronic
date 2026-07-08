@@ -164,6 +164,6 @@ def bundled_panda_model() -> dict:
         'meshes': {name: (mesh_dir / name).read_bytes() for name in sorted(mesh_files)},
         'joint_names': [f'joint{i}' for i in range(1, 8)],
         'control_frame': 'end_effector',
-        # ``grip`` is recorded in [0, 1] (closed→open); each finger slides 0..0.04 m along its axis.
+        # ``grip`` is recorded in [0, 1] (open→closed); each finger slides 0..0.04 m along its axis.
         'gripper': {'signal': 'grip', 'joints': ['finger_joint1', 'finger_joint2'], 'travel': 0.04},
     }

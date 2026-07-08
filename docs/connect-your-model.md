@@ -102,7 +102,7 @@ The client sends the full raw robot state as a dict. Keys are flat strings (the 
 | `robot_state.ee_pose` | float32 | (7,) | End-effector pose: `x, y, z, qw, qx, qy, qz` (quaternion is **wxyz**, scalar first) |
 | `robot_state.q` | float32 | (7,) | Joint positions (radians) |
 | `robot_state.dq` | float32 | (7,) | Joint velocities (radians/s) |
-| `grip` | float32 | scalar | Gripper opening |
+| `grip` | float32 | scalar | Gripper closure in `[0, 1]`: 0 = open, 1 = closed |
 | `image.<name>` | uint8 | (H, W, 3) | Camera RGB. Stream names come from the run config — sim and PhAIL send `image.exterior` and `image.wrist` (sim also adds `image.agent_view`) |
 | `obs_time_ns` | int | scalar | Harness-clock timestamp of this observation (ns) |
 | `wall_time_ns` | int | scalar | Wall-clock timestamp (ns) |
@@ -117,8 +117,8 @@ The normal response is a list of action dicts — a short trajectory. (A single 
 
 ```python
 {"result": [
-    {"robot_command": {...}, "target_grip": 0.04, "timestamp": 0.0},
-    {"robot_command": {...}, "target_grip": 0.04, "timestamp": 0.066},
+    {"robot_command": {...}, "target_grip": 1.0, "timestamp": 0.0},
+    {"robot_command": {...}, "target_grip": 1.0, "timestamp": 0.066},
     ...
 ]}
 ```
@@ -126,7 +126,7 @@ The normal response is a list of action dicts — a short trajectory. (A single 
 | Field | Type | Description |
 |-------|------|-------------|
 | `robot_command` | dict | Control command (see below) |
-| `target_grip` | float | Target gripper opening |
+| `target_grip` | float | Target gripper closure in `[0, 1]`: 0 = open, 1 = closed |
 | `timestamp` | float | Execution time in seconds from the start of the returned trajectory (e.g. `i / action_fps` for the i-th action). The client runs each action at `now + timestamp`, where `now` is when the prediction arrived. A single action dict returned *outside* a list is auto-stamped `0.0`; give every action in a list its own `timestamp`, or they all collapse onto one instant and fire at once. |
 
 The `robot_command` field selects the control mode:
@@ -174,7 +174,7 @@ class MySession(Session):
         predicted_poses = self._model.predict(images, ee)
         # Return the actions to run: a list of wire-format dicts.
         return [
-            {'robot_command': {'type': 'cartesian_pos', 'pose': pose}, 'target_grip': 0.04}
+            {'robot_command': {'type': 'cartesian_pos', 'pose': pose}, 'target_grip': 0.0}
             for pose in predicted_poses
         ]
 

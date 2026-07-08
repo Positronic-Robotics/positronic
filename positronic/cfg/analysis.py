@@ -512,7 +512,7 @@ def calculate_units(episode: Episode) -> int:
 
     threshold = (grip_vals.max() + grip_vals.min()) / 2
     units = 0
-    state = 'CLOSED' if grip_vals[0] < threshold else 'OPEN'
+    state = 'CLOSED' if grip_vals[0] > threshold else 'OPEN'
     min_z_holding = np.inf
     max_z_holding = -np.inf
     pick_x, pick_y = 0.0, 0.0
@@ -520,7 +520,7 @@ def calculate_units(episode: Episode) -> int:
     for i in range(1, len(grip_vals)):
         val = grip_vals[i]
         x, y, z = x_vals[i], y_vals[i], z_vals[i]
-        is_closed = val < threshold
+        is_closed = val > threshold
 
         if state == 'OPEN':
             if is_closed:

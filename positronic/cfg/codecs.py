@@ -43,17 +43,27 @@ eepose_joints_obs = eepose_grip_joints_obs.override(
 )
 
 
-@cfn.config(fps=15.0, horizon=None, binarize_grip=None)
-def compose(obs, action, fps: float, horizon: float | None, binarize_grip: tuple[str, ...] | None):
+@cfn.config(fps=15.0, horizon=None, binarize_grip=None, flip_grip=False)
+def compose(obs, action, fps: float, horizon: float | None, binarize_grip: tuple[str, ...] | None, flip_grip: bool):
     """Compose observation and action codecs with timing and optional grip binarization.
+
+    ``flip_grip`` serves checkpoints that speak the inverted grip convention (see ``FlipGrip``).
 
     Layout::
 
-        [ActionHorizon] | ActionTimestamp | [BinarizeGripTraining | BinarizeGripInference] | obs & action
+        [ActionHorizon] | ActionTimestamp | [BinarizeGripTraining | BinarizeGripInference] | [FlipGrip] | obs & action
     """
-    from positronic.policy.codec import ActionHorizon, ActionTimestamp, BinarizeGripInference, BinarizeGripTraining
+    from positronic.policy.codec import (
+        ActionHorizon,
+        ActionTimestamp,
+        BinarizeGripInference,
+        BinarizeGripTraining,
+        FlipGrip,
+    )
 
     result = obs & action
+    if flip_grip:
+        result = FlipGrip() | result
     if binarize_grip:
         result = BinarizeGripTraining(binarize_grip) | BinarizeGripInference() | result
     result = ActionTimestamp(fps=fps) | result

@@ -374,14 +374,14 @@ class MujocoSim(pimm.ControlSystem):
             self.data.actuator(name).ctrl = value
 
     def _apply_grip(self, target: float):
-        """Convert [0, 1] target grip to the actuator control range."""
+        """Convert [0, 1] target grip (0 = open, 1 = closed) to the actuator control range."""
         min_grip, max_grip = self._grip_range
-        self.data.actuator(self._gripper_actuator).ctrl = min_grip + target * (max_grip - min_grip)
+        self.data.actuator(self._gripper_actuator).ctrl = max_grip - target * (max_grip - min_grip)
 
     def _current_grip(self) -> float:
-        """Convert the current grip joint position to the range of [0, 1]."""
+        """Convert the current grip joint position to [0, 1] (0 = open, 1 = closed)."""
         min_grip, max_grip = self._grip_range
-        return (self.data.joint(self._gripper_joint).qpos.item() - min_grip) / (max_grip - min_grip)
+        return 1.0 - (self.data.joint(self._gripper_joint).qpos.item() - min_grip) / (max_grip - min_grip)
 
     @property
     def _q(self) -> np.ndarray:
