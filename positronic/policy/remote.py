@@ -1,3 +1,4 @@
+import collections.abc as cabc
 from typing import Any
 
 import numpy as np
@@ -40,26 +41,32 @@ class RemoteSession(Session):
         return RemoteSession._resize_to(image, int(w * scale), int(h * scale))
 
     def _prepare_obs(self, obs: dict[str, Any]) -> dict[str, Any]:
-        result = {}
-        for key, value in obs.items():
-            # Resize single RGB frames and temporal stacks of them alike (TemporalStack emits a
-            # (T, H, W, 3) stack), so a stack of hd720 frames isn't shipped full-resolution.
-            if isinstance(value, np.ndarray) and value.ndim in (3, 4) and value.shape[-1] == 3:
-                target = self._image_sizes.get(key, self._default_image_size)
-                r = self._resize or 0
-                tw, th = target or (r, r)
-                if tw > 0 and th > 0:
-                    if value.ndim == 4:
-                        value = np.stack([self._fit(f, tw, th) for f in value])
-                    else:
-                        value = self._fit(value, tw, th)
-                # Optionally JPEG-compress images before sending: a raw HD frame — and especially a
-                # (T, H, W, 3) stack — can exceed the ~2 MB websocket message cap of a Modal-fronted
-                # endpoint. Off by default.
-                if self._compress_images:
-                    value = encode_jpeg(value)
-            result[key] = value
-        return result
+        return {key: self._prepare_value(key, value) for key, value in obs.items()}
+
+    def _prepare_value(self, key: str, value: Any) -> Any:
+        # Client-side codecs (e.g. GR00T) nest images inside dicts/lists, so recurse to reach every
+        # image array rather than scanning the top level alone.
+        if isinstance(value, np.ndarray) and value.ndim in (3, 4) and value.shape[-1] == 3:
+            return self._prepare_image(key, value)
+        if isinstance(value, cabc.Mapping):
+            return {k: self._prepare_value(k, v) for k, v in value.items()}
+        if isinstance(value, list | tuple):
+            return type(value)(self._prepare_value(key, v) for v in value)
+        return value
+
+    def _prepare_image(self, key: str, image: np.ndarray) -> np.ndarray | dict[bytes, Any]:
+        # Resize single RGB frames and temporal stacks of them alike (TemporalStack emits a
+        # (T, H, W, 3) stack), so a stack of hd720 frames isn't shipped full-resolution.
+        target = self._image_sizes.get(key, self._default_image_size)
+        r = self._resize or 0
+        tw, th = target or (r, r)
+        if tw > 0 and th > 0:
+            image = np.stack([self._fit(f, tw, th) for f in image]) if image.ndim == 4 else self._fit(image, tw, th)
+        # Optionally JPEG-compress before sending: a raw HD frame — and especially a (T, H, W, 3)
+        # stack — can exceed the ~2 MB websocket message cap of a Modal-fronted endpoint. Off by default.
+        if self._compress_images:
+            image = encode_jpeg(image)
+        return image
 
     def __call__(self, obs: dict[str, Any]) -> list[dict[str, Any]] | None:
         """Forwards the observation to the remote server and returns the action trajectory.
