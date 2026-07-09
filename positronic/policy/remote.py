@@ -62,7 +62,7 @@ class RemoteSession(Session):
     def _prepare_obs(self, obs: dict[str, Any]) -> dict[str, Any]:
         result = {}
         for key, value in obs.items():
-            # Resize single RGB frames and temporal stacks of them alike (TemporalFrameStack emits a
+            # Resize single RGB frames and temporal stacks of them alike (TemporalStack emits a
             # (T, H, W, 3) stack), so a stack of hd720 frames isn't shipped full-resolution.
             if isinstance(value, np.ndarray) and value.ndim in (3, 4) and value.shape[-1] == 3:
                 target = self._image_sizes.get(key, self._default_image_size)

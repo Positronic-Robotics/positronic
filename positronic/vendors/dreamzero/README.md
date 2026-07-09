@@ -49,7 +49,7 @@ uv run --locked positronic-inference sim \
 
 The server owns the codec, so you don't pass one client-side — it takes raw observations and returns
 decoded joint commands. The client-side piece that matters is `--wrap`: it supplies the model's
-autoregressive video context (`TemporalFrameStack`) and must run every control tick to record frames,
+autoregressive video context (`TemporalStack`) and must run every control tick to record frames,
 so omitting it strips the multi-frame history the model conditions on. (Server config and defaults:
 [`server.py`](./server.py); wrappers: [`codecs.py`](./codecs.py); remote-policy protocol:
 [Inference Guide](../../../docs/inference.md).)

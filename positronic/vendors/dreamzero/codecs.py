@@ -248,4 +248,6 @@ joints_ik_sim = joints_ik.override(**{'action.solver': 'lm'})
 # DreamZero AR eval schedule: 24-step action horizon → 23-frame look-back (ACTION_HORIZON - 1), sampled
 # at stride 8 from the current frame with the oldest pinned to the window start → trained offsets
 # -23, -16, -8, 0 (test_client_AR.py RELATIVE_OFFSETS; -23 not -24 keeps the oldest inside the window).
-dreamzero_wrappers = wrappers.video_context_wrappers.override(history_frames=23, stride=8)
+dreamzero_wrappers = wrappers.video_context_wrappers.override(
+    history_frames=23, stride=8, keys=('image.wrist', 'image.exterior')
+)
