@@ -70,6 +70,7 @@ def sample(origins: list[cfn.Config], weights: list[float] | None):
     secure=False,
     recording_dir=None,
     infer_timeout=DEFAULT_INFER_TIMEOUT,
+    compress_image_stacks=False,
 )
 def remote(
     host: str,
@@ -82,10 +83,18 @@ def remote(
     secure: bool = False,
     recording_dir: str | None = None,
     infer_timeout: float = DEFAULT_INFER_TIMEOUT,
+    compress_image_stacks: bool = False,
 ):
     effective_resize = None if codec and codec.meta.get('image_sizes') else resize
     policy = RemotePolicy(
-        host, port, effective_resize, model_id=model_id, headers=headers, secure=secure, infer_timeout=infer_timeout
+        host,
+        port,
+        effective_resize,
+        model_id=model_id,
+        headers=headers,
+        secure=secure,
+        infer_timeout=infer_timeout,
+        compress_image_stacks=compress_image_stacks,
     )
     if horizon_sec is not None:
         codec = ActionHorizon(horizon_sec) | codec if codec else ActionHorizon(horizon_sec)

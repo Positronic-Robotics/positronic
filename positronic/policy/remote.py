@@ -1,4 +1,3 @@
-import io
 from typing import Any
 
 import numpy as np
@@ -6,21 +5,18 @@ from PIL import Image as PilImage
 
 from positronic.offboard.client import DEFAULT_INFER_TIMEOUT, InferenceClient, InferenceSession
 from positronic.utils import flatten_dict
+from positronic.utils.serialization import encode_jpeg_stack
 
 from .base import Policy, Session
-
-# JPEG quality for temporal image stacks on the wire. A (T, H, W, 3) stack of HD frames is tens of MB
-# raw — over the ~2 MB websocket message cap of a Modal-fronted endpoint. Per-frame JPEG keeps a
-# 25-frame two-camera stack around 1-2 MB and cuts upload latency; q=90 is visually lossless here.
-_JPEG_STACK_QUALITY = 90
 
 
 class RemoteSession(Session):
     """Per-episode session that forwards observations to a remote inference server."""
 
-    def __init__(self, ws_session: InferenceSession, resize: int | None):
+    def __init__(self, ws_session: InferenceSession, resize: int | None, compress_image_stacks: bool = False):
         self._session = ws_session
         self._resize = resize
+        self._compress_image_stacks = compress_image_stacks
         self._image_sizes: dict[str, tuple[int, int]] = {}
         self._default_image_size: tuple[int, int] | None = None
 
@@ -43,22 +39,6 @@ class RemoteSession(Session):
         scale = min(1.0, tw / w, th / h)
         return RemoteSession._resize_to(image, int(w * scale), int(h * scale))
 
-    @staticmethod
-    def _encode_jpeg_stack(stack: np.ndarray) -> dict[bytes, Any]:
-        """JPEG-encode a ``(T, H, W, 3)`` stack to a compact wire marker the server decodes back.
-
-        Sends one JPEG per frame plus the original ``ndim`` so the server restores the exact shape.
-        """
-        frames = stack if stack.ndim == 4 else stack[None]
-        bufs = []
-        for frame in frames:
-            buf = io.BytesIO()
-            PilImage.fromarray(np.ascontiguousarray(frame, dtype=np.uint8)).save(
-                buf, format='JPEG', quality=_JPEG_STACK_QUALITY
-            )
-            bufs.append(buf.getvalue())
-        return {b'__jpeg_stack__': True, b'frames': bufs, b'ndim': int(stack.ndim)}
-
     def _prepare_obs(self, obs: dict[str, Any]) -> dict[str, Any]:
         result = {}
         for key, value in obs.items():
@@ -73,10 +53,11 @@ class RemoteSession(Session):
                         value = np.stack([self._fit(f, tw, th) for f in value])
                     else:
                         value = self._fit(value, tw, th)
-                # Compress temporal stacks: a raw HD stack is tens of MB and exceeds the ~2 MB
-                # websocket message cap of a Modal-fronted endpoint. Single frames stay raw (small).
-                if value.ndim == 4:
-                    value = self._encode_jpeg_stack(value)
+                # Optionally compress temporal stacks: a raw HD stack is tens of MB and can exceed the
+                # ~2 MB websocket message cap of a Modal-fronted endpoint. Off by default; single frames
+                # stay raw regardless (they're small).
+                if value.ndim == 4 and self._compress_image_stacks:
+                    value = encode_jpeg_stack(value)
             result[key] = value
         return result
 
@@ -122,11 +103,13 @@ class RemotePolicy(Policy):
         headers: dict[str, str] | None = None,
         secure: bool = False,
         infer_timeout: float = DEFAULT_INFER_TIMEOUT,
+        compress_image_stacks: bool = False,
     ):
         self._client = InferenceClient(host, port, headers=headers, secure=secure)
         self._resize = resize
         self._model_id = model_id
         self._infer_timeout = infer_timeout
+        self._compress_image_stacks = compress_image_stacks
         # Server metadata cached after the first session is created or `meta`
         # is read. Needed so consumers like ``SampledPolicy._get_keys`` see
         # ``server.checkpoint_path`` etc. before any session exists.
@@ -145,7 +128,7 @@ class RemotePolicy(Policy):
         ws_session = self._client.new_session(model_id=self._model_id, infer_timeout=self._infer_timeout)
         if self._server_meta is None:
             self._server_meta = dict(ws_session.metadata)
-        return RemoteSession(ws_session, self._resize)
+        return RemoteSession(ws_session, self._resize, compress_image_stacks=self._compress_image_stacks)
 
     @property
     def meta(self) -> dict[str, Any]:

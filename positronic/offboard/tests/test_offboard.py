@@ -5,7 +5,7 @@ import numpy as np
 from positronic.drivers.roboarm.command import CartesianPosition, JointDelta, JointPosition, Recover, Reset
 from positronic.geom import Rotation, Transform3D
 from positronic.offboard.client import InferenceClient
-from positronic.utils.serialization import deserialise, serialise
+from positronic.utils.serialization import deserialise, encode_jpeg_stack, serialise
 
 
 def test_inference_client_connect_and_infer(inference_server, mock_policy):
@@ -86,6 +86,17 @@ def test_wire_serialisation_accepts_mappingproxy():
 
     # mappingproxy is normalized to a plain dict for the wire.
     assert round_trip == {'obs': {'a': 1, 'b': {'c': 2}}}
+
+
+def test_jpeg_stack_round_trips_to_array():
+    """An ``encode_jpeg_stack`` marker survives the wire and decodes back to the original shape and order."""
+    stack = np.stack([np.full((16, 24, 3), (t + 1) * 60, dtype=np.uint8) for t in range(3)])
+    restored = deserialise(serialise({'image.wrist': encode_jpeg_stack(stack)}))['image.wrist']
+    assert isinstance(restored, np.ndarray)
+    assert restored.shape == (3, 16, 24, 3)
+    assert restored.dtype == np.uint8
+    # q90 JPEG on solid colors is near-lossless; this also verifies per-frame order is preserved.
+    np.testing.assert_allclose(restored, stack, atol=4)
 
 
 class TestCommandRoundtrip:
