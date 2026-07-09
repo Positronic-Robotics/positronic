@@ -1,8 +1,10 @@
 import logging
+import ssl
 import time
 from typing import Any
 
 import httpx
+from websockets.exceptions import ConnectionClosed
 from websockets.sync.client import connect
 from websockets.sync.connection import Connection
 
@@ -131,7 +133,10 @@ class InferenceClient:
             try:
                 ws = connect(uri, **connect_kwargs)
                 break
-            except TimeoutError as e:
+            # A cold backend fails before a session exists in any of three ways: the connect times out, the edge
+            # resets TLS (``SSLError``), or it closes the handshake (``ConnectionClosed``). All three mean "not
+            # ready yet", so retry them within the deadline instead of letting one kill the run.
+            except (TimeoutError, ssl.SSLError, ConnectionClosed) as e:
                 if time.monotonic() >= deadline:
                     raise TimeoutError(f'{e} (connecting to {self.host}:{self.port})') from e
                 logger.info('Server not ready (cold start?); retrying in %.0fs', backoff)
