@@ -42,9 +42,7 @@ def encode_jpeg(image: np.ndarray) -> dict[bytes, Any]:
         buf = io.BytesIO()
         PilImage.fromarray(np.ascontiguousarray(frame, dtype=np.uint8)).save(buf, format='JPEG', quality=_JPEG_QUALITY)
         bufs.append(buf.getvalue())
-    # TODO(rename-jpeg-marker): use `b'__jpeg__'` once Runway's deployed server decodes it. The marker
-    # says "stack" but also carries single frames; it stays this name only to match their live decoder.
-    return {b'__jpeg_stack__': True, b'frames': bufs, b'ndim': int(image.ndim)}
+    return {b'__jpeg__': True, b'frames': bufs, b'ndim': int(image.ndim)}
 
 
 def _decode_jpeg(marker: dict) -> np.ndarray:
@@ -94,7 +92,7 @@ def _unpack(obj):
         return np.ndarray(buffer=obj[b'data'], dtype=np.dtype(obj[b'dtype']), shape=obj[b'shape'])
     if b'__npgeneric__' in obj:
         return np.dtype(obj[b'dtype']).type(obj[b'data'])
-    if b'__jpeg_stack__' in obj:
+    if b'__jpeg__' in obj:
         return _decode_jpeg(obj)
     if b'__cmd__' in obj:
         inner = obj[b'__cmd__']
