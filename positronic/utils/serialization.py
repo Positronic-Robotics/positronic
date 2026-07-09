@@ -15,12 +15,40 @@ Supports:
 
 import collections.abc as cabc
 import functools
+import io
+from typing import Any
 
 import msgpack
 import numpy as np
+from PIL import Image as PilImage
 
 from positronic.drivers import roboarm as _roboarm
 from positronic.drivers.roboarm import command as _roboarm_command
+
+# JPEG quality for images on the wire. A single HD frame — and especially a (T, H, W, 3) stack — is many
+# MB raw, over the ~2 MB websocket message cap of a Modal-fronted endpoint. Per-frame JPEG keeps a
+# 25-frame two-camera stack around 1-2 MB and cuts upload latency; q=90 is visually lossless here.
+_JPEG_QUALITY = 90
+
+
+def encode_jpeg(image: np.ndarray) -> dict[bytes, Any]:
+    """JPEG-encode a single ``(H, W, 3)`` image or a ``(T, H, W, 3)`` stack to a compact wire marker.
+
+    Sends one JPEG per frame plus the original ``ndim`` so ``_unpack`` restores the exact shape.
+    """
+    frames = image if image.ndim == 4 else image[None]
+    bufs = []
+    for frame in frames:
+        buf = io.BytesIO()
+        PilImage.fromarray(np.ascontiguousarray(frame, dtype=np.uint8)).save(buf, format='JPEG', quality=_JPEG_QUALITY)
+        bufs.append(buf.getvalue())
+    return {b'__jpeg__': True, b'frames': bufs, b'ndim': int(image.ndim)}
+
+
+def _decode_jpeg(marker: dict) -> np.ndarray:
+    """Inverse of ``encode_jpeg``: decode per-frame JPEGs and restore the original shape."""
+    frames = np.stack([np.asarray(PilImage.open(io.BytesIO(buf))) for buf in marker[b'frames']])
+    return frames if marker[b'ndim'] == 4 else frames[0]
 
 
 def _pack(obj):
@@ -64,6 +92,8 @@ def _unpack(obj):
         return np.ndarray(buffer=obj[b'data'], dtype=np.dtype(obj[b'dtype']), shape=obj[b'shape'])
     if b'__npgeneric__' in obj:
         return np.dtype(obj[b'dtype']).type(obj[b'data'])
+    if b'__jpeg__' in obj:
+        return _decode_jpeg(obj)
     if b'__cmd__' in obj:
         inner = obj[b'__cmd__']
         # The legacy shim below decodes the inner ``to_wire`` dict to a Command

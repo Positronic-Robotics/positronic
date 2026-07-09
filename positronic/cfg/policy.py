@@ -70,6 +70,7 @@ def sample(origins: list[cfn.Config], weights: list[float] | None):
     secure=False,
     recording_dir=None,
     infer_timeout=DEFAULT_INFER_TIMEOUT,
+    compress_images=False,
 )
 def remote(
     host: str,
@@ -82,10 +83,18 @@ def remote(
     secure: bool = False,
     recording_dir: str | None = None,
     infer_timeout: float = DEFAULT_INFER_TIMEOUT,
+    compress_images: bool = False,
 ):
     effective_resize = None if codec and codec.meta.get('image_sizes') else resize
     policy = RemotePolicy(
-        host, port, effective_resize, model_id=model_id, headers=headers, secure=secure, infer_timeout=infer_timeout
+        host,
+        port,
+        effective_resize,
+        model_id=model_id,
+        headers=headers,
+        secure=secure,
+        infer_timeout=infer_timeout,
+        compress_images=compress_images,
     )
     if horizon_sec is not None:
         codec = ActionHorizon(horizon_sec) | codec if codec else ActionHorizon(horizon_sec)
@@ -109,6 +118,7 @@ def remote(
     secure=False,
     recording_dir=None,
     infer_timeout=DEFAULT_INFER_TIMEOUT,
+    compress_images=False,
 )
 def weighted_remote(
     host: str | None,
@@ -122,13 +132,21 @@ def weighted_remote(
     secure: bool = False,
     recording_dir: str | None = None,
     infer_timeout: float = DEFAULT_INFER_TIMEOUT,
+    compress_images: bool = False,
 ):
     if not host:
         return None
 
     effective_resize = None if codec and codec.meta.get('image_sizes') else resize
     policy = RemotePolicy(
-        host, port, effective_resize, model_id=model_id, headers=headers, secure=secure, infer_timeout=infer_timeout
+        host,
+        port,
+        effective_resize,
+        model_id=model_id,
+        headers=headers,
+        secure=secure,
+        infer_timeout=infer_timeout,
+        compress_images=compress_images,
     )
     if horizon_sec is not None:
         codec = ActionHorizon(horizon_sec) | codec if codec else ActionHorizon(horizon_sec)

@@ -75,7 +75,7 @@ def _squeeze_batch(arr: np.ndarray) -> np.ndarray:
 def _as_image(value: Any) -> np.ndarray | None:
     """Return a single RGB frame if *value* looks like an image, else None.
 
-    A temporal stack ``(T, H, W, 3)`` (e.g. from ``TemporalFrameStack``) records its most recent
+    A temporal stack ``(T, H, W, 3)`` (e.g. from ``TemporalStack``) records its most recent
     frame — the current observation — so the stack does not flood the recording as numeric series.
     """
     if not isinstance(value, np.ndarray):
@@ -381,7 +381,13 @@ class _RecordingTapSession(DelegatingSession):
         grip = _stack_numeric([a['target_grip'] for a in actions]) if all('target_grip' in a for a in actions) else None
         actual_pos = obs.get('robot_state.ee_pose') if isinstance(obs, Mapping) else None
         actual_grip = obs.get('grip') if isinstance(obs, Mapping) else None
-        actual_g = float(np.asarray(actual_grip).reshape(-1)[0]) if actual_grip is not None else None
+        # Under TemporalStack these arrive as (T, 7) / (T,) stacks; the overlay draws the current pose,
+        # which is the last frame (offsets end at 0 = now), mirroring the image collapse in `_as_image`.
+        if actual_pos is not None:
+            actual_pos = np.asarray(actual_pos)
+            if actual_pos.ndim == 2:
+                actual_pos = actual_pos[-1]
+        actual_g = float(np.asarray(actual_grip).reshape(-1)[-1]) if actual_grip is not None else None
         keys: list[str] = []
         for action in actions:
             for key in action:
