@@ -130,17 +130,22 @@ class InferenceClient:
         deadline = time.monotonic() + connect_deadline
         backoff = 1.0
         while True:
+            ws = None
             try:
                 ws = connect(uri, **connect_kwargs)
-                break
+                return InferenceSession(ws, infer_timeout=infer_timeout)
             # ``SSLCertVerificationError`` is an ``ssl.SSLError``, but a bad certificate is permanent
             # misconfiguration, not a cold start — surface it immediately instead of retrying to the deadline.
             except ssl.SSLCertVerificationError as e:
                 raise type(e)(f'{e} (connecting to {self.host}:{self.port})') from e
-            # A cold backend fails before a session exists in any of three ways: the connect times out, the edge
-            # resets TLS (``SSLError``), or it closes the handshake (``ConnectionClosed``). All three mean "not
-            # ready yet", so retry them within the deadline instead of letting one kill the run.
+            # A cold backend fails before the session is ready in several ways: the connect times out, the edge
+            # resets TLS (``SSLError``), it closes the WebSocket handshake, or it accepts the socket and then
+            # drops or stalls the status handshake inside ``InferenceSession`` (``ConnectionClosed``/
+            # ``TimeoutError``). All mean "not ready yet", so retry within the deadline instead of letting one
+            # kill the run.
             except (TimeoutError, ssl.SSLError, ConnectionClosed) as e:
+                if ws is not None:
+                    ws.close()
                 if time.monotonic() >= deadline:
                     raise TimeoutError(f'{e} (connecting to {self.host}:{self.port})') from e
                 logger.info('Server not ready (cold start?): %s; retrying in %.0fs', e, backoff)
@@ -148,7 +153,6 @@ class InferenceClient:
                 backoff = min(backoff * 2, 30.0)
             except OSError as e:
                 raise type(e)(f'{e} (connecting to {self.host}:{self.port})') from e
-        return InferenceSession(ws, infer_timeout=infer_timeout)
 
     def list_models(self) -> list[str]:
         """List available models from the server."""
