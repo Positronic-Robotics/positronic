@@ -4,7 +4,7 @@ import time
 from typing import Any
 
 import httpx
-from websockets.exceptions import ConnectionClosed, InvalidHandshake
+from websockets.exceptions import ConnectionClosed, InvalidHandshake, InvalidStatus
 from websockets.sync.client import connect
 from websockets.sync.connection import Connection
 
@@ -143,6 +143,12 @@ class InferenceClient:
             except (TimeoutError, ssl.SSLError, ConnectionClosed, InvalidHandshake) as e:
                 if ws is not None:
                     ws.close()
+                # A non-101 upgrade response only means "not ready" when it's a 5xx or 429; any other status
+                # (401/403/404, …) is permanent misconfiguration and surfaces immediately.
+                if isinstance(e, InvalidStatus) and not (
+                    e.response.status_code >= 500 or e.response.status_code == 429
+                ):
+                    raise
                 if time.monotonic() >= deadline:
                     raise TimeoutError(f'{e} (connecting to {self.host}:{self.port})') from e
                 logger.info('Server not ready (cold start?): %s; retrying in %.0fs', e, backoff)
