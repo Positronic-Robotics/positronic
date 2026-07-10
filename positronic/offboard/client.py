@@ -4,7 +4,7 @@ import time
 from typing import Any
 
 import httpx
-from websockets.exceptions import ConnectionClosed
+from websockets.exceptions import ConnectionClosed, InvalidHandshake
 from websockets.sync.client import connect
 from websockets.sync.connection import Connection
 
@@ -136,11 +136,11 @@ class InferenceClient:
             except ssl.SSLCertVerificationError as e:
                 raise type(e)(f'{e} (connecting to {self.host}:{self.port})') from e
             # A cold backend fails before the session is ready in several ways: the connect times out, the edge
-            # resets TLS (``SSLError``), it closes the WebSocket handshake, or it accepts the socket and then
-            # drops or stalls the status handshake inside ``InferenceSession`` (``ConnectionClosed``/
-            # ``TimeoutError``). All mean "not ready yet", so retry within the deadline instead of letting one
-            # kill the run.
-            except (TimeoutError, ssl.SSLError, ConnectionClosed) as e:
+            # resets TLS (``SSLError``), it rejects or drops the HTTP upgrade (``InvalidHandshake`` — e.g. a
+            # 502/503 while the backend boots), or it accepts the socket and then drops or stalls the status
+            # handshake inside ``InferenceSession`` (``ConnectionClosed``/``TimeoutError``). All mean "not ready
+            # yet", so retry within the deadline instead of letting one kill the run.
+            except (TimeoutError, ssl.SSLError, ConnectionClosed, InvalidHandshake) as e:
                 if ws is not None:
                     ws.close()
                 if time.monotonic() >= deadline:
