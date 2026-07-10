@@ -33,8 +33,7 @@ class InferenceSession:
         """
         try:
             while True:
-                self._websocket.socket.settimeout(timeout_per_message)
-                response = deserialise(self._websocket.recv())
+                response = deserialise(self._websocket.recv(timeout=timeout_per_message))
                 status = response.get('status')
 
                 if status == 'ready':
@@ -55,8 +54,6 @@ class InferenceSession:
                 f'Server did not send status update within {timeout_per_message}s. '
                 f'Server may have crashed or model loading is taking too long without progress updates.'
             ) from None
-        finally:
-            self._websocket.socket.settimeout(None)
 
     @property
     def metadata(self) -> dict[str, Any]:
