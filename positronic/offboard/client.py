@@ -133,6 +133,10 @@ class InferenceClient:
             try:
                 ws = connect(uri, **connect_kwargs)
                 break
+            # ``SSLCertVerificationError`` is an ``ssl.SSLError``, but a bad certificate is permanent
+            # misconfiguration, not a cold start — surface it immediately instead of retrying to the deadline.
+            except ssl.SSLCertVerificationError as e:
+                raise type(e)(f'{e} (connecting to {self.host}:{self.port})') from e
             # A cold backend fails before a session exists in any of three ways: the connect times out, the edge
             # resets TLS (``SSLError``), or it closes the handshake (``ConnectionClosed``). All three mean "not
             # ready yet", so retry them within the deadline instead of letting one kill the run.
