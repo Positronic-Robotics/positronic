@@ -147,6 +147,8 @@ pyzed = [
     { url = "https://download.stereolabs.com/zedsdk/5.0/whl/linux_x86_64/pyzed-5.0-cp313-cp313-linux_x86_64.whl", marker = "python_full_version >= '3.13'" },
 ]
 openpi-client = { git = "https://github.com/Positronic-Robotics/openpi.git", rev = "main-positronic", subdirectory = "packages/openpi-client" }
+# Local checkout of the Franka driver so its in-progress `positronic_franka.desk` module is importable here.
+positronic-franka = { path = "../positronic-franka", editable = true }
 
 [tool.pytest.ini_options]
 testpaths = [

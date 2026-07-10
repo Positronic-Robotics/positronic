@@ -4293,7 +4293,7 @@ requires-dist = [
     { name = "placo", marker = "extra == 'hardware'" },
     { name = "plotly", specifier = ">=6.5.0" },
     { name = "pos3", specifier = ">=0.3.1" },
-    { name = "positronic-franka", marker = "sys_platform == 'linux' and extra == 'hardware'", specifier = ">=0.3.0" },
+    { name = "positronic-franka", marker = "sys_platform == 'linux' and extra == 'hardware'", editable = "../positronic-franka" },
     { name = "pre-commit", marker = "extra == 'dev'" },
     { name = "protobuf", marker = "extra == 'molmoact2'" },
     { name = "pyarrow" },
@@ -4334,12 +4334,18 @@ provides-extras = ["openpi", "hardware", "lerobot-0-3-3", "lerobot", "molmoact2"
 
 [[package]]
 name = "positronic-franka"
-version = "0.4.0"
-source = { registry = "https://pypi.org/simple" }
+version = "0.5.0"
+source = { editable = "../positronic-franka" }
 dependencies = [
     { name = "numpy", marker = "sys_platform == 'linux' or (extra == 'extra-10-positronic-lerobot' and extra == 'extra-10-positronic-lerobot-0-3-3') or (extra == 'extra-10-positronic-lerobot' and extra == 'extra-10-positronic-molmoact2') or (extra == 'extra-10-positronic-lerobot-0-3-3' and extra == 'extra-10-positronic-molmoact2')" },
+    { name = "requests", marker = "sys_platform == 'linux' or (extra == 'extra-10-positronic-lerobot' and extra == 'extra-10-positronic-lerobot-0-3-3') or (extra == 'extra-10-positronic-lerobot' and extra == 'extra-10-positronic-molmoact2') or (extra == 'extra-10-positronic-lerobot-0-3-3' and extra == 'extra-10-positronic-molmoact2')" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/f6/b6/ce86bfa8526c4ca9ca848333499ebe71ad3548677c21e62ae8a719515e8e/positronic_franka-0.4.0.tar.gz", hash = "sha256:276a6c42b054f3b9dcfade2d47387d7bca70dc1b3ef6ed05db8d734e76b5d56f", size = 1792844, upload-time = "2026-03-17T19:05:18.249Z" }
+
+[package.metadata]
+requires-dist = [
+    { name = "numpy", specifier = ">=1.22" },
+    { name = "requests", specifier = ">=2.28" },
+]
 
 [[package]]
 name = "pre-commit"
