@@ -143,7 +143,7 @@ class InferenceClient:
             except (TimeoutError, ssl.SSLError, ConnectionClosed) as e:
                 if time.monotonic() >= deadline:
                     raise TimeoutError(f'{e} (connecting to {self.host}:{self.port})') from e
-                logger.info('Server not ready (cold start?); retrying in %.0fs', backoff)
+                logger.info('Server not ready (cold start?): %s; retrying in %.0fs', e, backoff)
                 time.sleep(backoff)
                 backoff = min(backoff * 2, 30.0)
             except OSError as e:
