@@ -231,57 +231,62 @@ class Robot(pimm.ControlSystem):
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Sleep]:
         with self._desk_session():
             robot = self._ensure_robot()
-            self._init_robot(robot)
-            self.robot_meta.emit(Robot._build_robot_meta(robot))
-            robot.recover_from_errors()
+            try:
+                self._init_robot(robot)
+                self.robot_meta.emit(Robot._build_robot_meta(robot))
+                robot.recover_from_errors()
 
-            robot_state = FrankaState()
-            rate_limiter = pimm.RateLimiter(clock, hz=2000)
+                robot_state = FrankaState()
+                rate_limiter = pimm.RateLimiter(clock, hz=2000)
 
-            self._reset(robot, robot_state)
+                self._reset(robot, robot_state)
 
-            in_error = False
-            player = command.TrajectoryPlayer(reduce=command.reduce)
+                in_error = False
+                player = command.TrajectoryPlayer(reduce=command.reduce)
 
-            while not should_stop.value:
-                st = robot.state()
-                robot_state.encode(st)
-                self.state.emit(robot_state)
+                while not should_stop.value:
+                    st = robot.state()
+                    robot_state.encode(st)
+                    self.state.emit(robot_state)
 
-                in_error, entered_error = _check_error(st.error != 0, in_error)
-                if entered_error:
-                    logging.warning(f'Robot error: {st.error_message}')
+                    in_error, entered_error = _check_error(st.error != 0, in_error)
+                    if entered_error:
+                        logging.warning(f'Robot error: {st.error_message}')
 
-                cmd_msg = self.commands.read()
-                if cmd_msg.updated:
-                    player.set(cmd_msg.data)
-                cmd = player.advance(clock.now_ns())
-                if cmd is not None:
-                    match cmd:
-                        case command.Reset():
-                            _recover_if_needed(robot, in_error)
-                            self._reset(robot, robot_state)
-                        case command.Recover():
-                            _recover_if_needed(robot, in_error)
-                        case _ if in_error:
-                            pass
-                        case command.CartesianPosition(pose):
-                            target_pose_wxyz = np.asarray([*pose.translation, *pose.rotation.as_quat])
-                            ik_solution = robot.inverse_kinematics_with_limits(target_pose_wxyz)
-                            robot.set_target_joints(ik_solution)
-                        case command.CartesianDelta(delta):
-                            target = command.apply_cartesian_delta(robot_state.ee_pose, delta)
-                            target_pose_wxyz = np.asarray([*target.translation, *target.rotation.as_quat])
-                            ik_solution = robot.inverse_kinematics_with_limits(target_pose_wxyz)
-                            robot.set_target_joints(ik_solution)
-                        case command.JointPosition(positions):
-                            robot.set_target_joints(positions)
-                        case command.JointDelta(velocities=joint_delta):
-                            robot.set_target_joints(st.q + joint_delta)
-                        case _:
-                            raise NotImplementedError(f'Unsupported command {cmd}')
+                    cmd_msg = self.commands.read()
+                    if cmd_msg.updated:
+                        player.set(cmd_msg.data)
+                    cmd = player.advance(clock.now_ns())
+                    if cmd is not None:
+                        match cmd:
+                            case command.Reset():
+                                _recover_if_needed(robot, in_error)
+                                self._reset(robot, robot_state)
+                            case command.Recover():
+                                _recover_if_needed(robot, in_error)
+                            case _ if in_error:
+                                pass
+                            case command.CartesianPosition(pose):
+                                target_pose_wxyz = np.asarray([*pose.translation, *pose.rotation.as_quat])
+                                ik_solution = robot.inverse_kinematics_with_limits(target_pose_wxyz)
+                                robot.set_target_joints(ik_solution)
+                            case command.CartesianDelta(delta):
+                                target = command.apply_cartesian_delta(robot_state.ee_pose, delta)
+                                target_pose_wxyz = np.asarray([*target.translation, *target.rotation.as_quat])
+                                ik_solution = robot.inverse_kinematics_with_limits(target_pose_wxyz)
+                                robot.set_target_joints(ik_solution)
+                            case command.JointPosition(positions):
+                                robot.set_target_joints(positions)
+                            case command.JointDelta(velocities=joint_delta):
+                                robot.set_target_joints(st.q + joint_delta)
+                            case _:
+                                raise NotImplementedError(f'Unsupported command {cmd}')
 
-                yield rate_limiter.wait()
+                    yield rate_limiter.wait()
+            finally:
+                # Halt the driver's control thread before _desk_session deactivates FCI, or it dies mid-control
+                # with "TCP connection got interrupted".
+                robot.stop()
 
 
 if __name__ == '__main__':
