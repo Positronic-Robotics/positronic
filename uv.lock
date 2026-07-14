@@ -4293,7 +4293,7 @@ requires-dist = [
     { name = "placo", marker = "extra == 'hardware'" },
     { name = "plotly", specifier = ">=6.5.0" },
     { name = "pos3", specifier = ">=0.3.1" },
-    { name = "positronic-franka", marker = "sys_platform == 'linux' and extra == 'hardware'", editable = "../positronic-franka" },
+    { name = "positronic-franka", marker = "sys_platform == 'linux' and extra == 'hardware'", specifier = ">=0.5.0" },
     { name = "pre-commit", marker = "extra == 'dev'" },
     { name = "protobuf", marker = "extra == 'molmoact2'" },
     { name = "pyarrow" },
@@ -4335,17 +4335,12 @@ provides-extras = ["openpi", "hardware", "lerobot-0-3-3", "lerobot", "molmoact2"
 [[package]]
 name = "positronic-franka"
 version = "0.5.0"
-source = { editable = "../positronic-franka" }
+source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "numpy", marker = "sys_platform == 'linux' or (extra == 'extra-10-positronic-lerobot' and extra == 'extra-10-positronic-lerobot-0-3-3') or (extra == 'extra-10-positronic-lerobot' and extra == 'extra-10-positronic-molmoact2') or (extra == 'extra-10-positronic-lerobot-0-3-3' and extra == 'extra-10-positronic-molmoact2')" },
     { name = "requests", marker = "sys_platform == 'linux' or (extra == 'extra-10-positronic-lerobot' and extra == 'extra-10-positronic-lerobot-0-3-3') or (extra == 'extra-10-positronic-lerobot' and extra == 'extra-10-positronic-molmoact2') or (extra == 'extra-10-positronic-lerobot-0-3-3' and extra == 'extra-10-positronic-molmoact2')" },
 ]
-
-[package.metadata]
-requires-dist = [
-    { name = "numpy", specifier = ">=1.22" },
-    { name = "requests", specifier = ">=2.28" },
-]
+sdist = { url = "https://files.pythonhosted.org/packages/97/c7/ea8132fd80a7e064b462df39b87ec6b750874b54885bfe45162cc32af3b8/positronic_franka-0.5.0.tar.gz", hash = "sha256:0937c3654b6d026d6a87a2892094c20459980683d14ce19604f8a8b41d1d5e40", size = 1796271, upload-time = "2026-07-14T21:32:24.866Z" }
 
 [[package]]
 name = "pre-commit"
