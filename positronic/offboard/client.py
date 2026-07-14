@@ -1,8 +1,10 @@
 import logging
+import ssl
 import time
 from typing import Any
 
 import httpx
+from websockets.exceptions import ConnectionClosed, InvalidHandshake, InvalidStatus
 from websockets.sync.client import connect
 from websockets.sync.connection import Connection
 
@@ -31,8 +33,7 @@ class InferenceSession:
         """
         try:
             while True:
-                self._websocket.socket.settimeout(timeout_per_message)
-                response = deserialise(self._websocket.recv())
+                response = deserialise(self._websocket.recv(timeout=timeout_per_message))
                 status = response.get('status')
 
                 if status == 'ready':
@@ -53,8 +54,6 @@ class InferenceSession:
                 f'Server did not send status update within {timeout_per_message}s. '
                 f'Server may have crashed or model loading is taking too long without progress updates.'
             ) from None
-        finally:
-            self._websocket.socket.settimeout(None)
 
     @property
     def metadata(self) -> dict[str, Any]:
@@ -128,18 +127,35 @@ class InferenceClient:
         deadline = time.monotonic() + connect_deadline
         backoff = 1.0
         while True:
+            ws = None
             try:
                 ws = connect(uri, **connect_kwargs)
-                break
-            except TimeoutError as e:
+                return InferenceSession(ws, infer_timeout=infer_timeout)
+            # ``SSLCertVerificationError`` is an ``ssl.SSLError``, but a bad certificate is permanent
+            # misconfiguration, not a cold start — surface it immediately instead of retrying to the deadline.
+            except ssl.SSLCertVerificationError as e:
+                raise type(e)(f'{e} (connecting to {self.host}:{self.port})') from e
+            # A cold backend fails before the session is ready in several ways: the connect times out, the edge
+            # resets TLS (``SSLError``), it rejects or drops the HTTP upgrade (``InvalidHandshake`` — e.g. a
+            # 502/503 while the backend boots), or it accepts the socket and then drops or stalls the status
+            # handshake inside ``InferenceSession`` (``ConnectionClosed``/``TimeoutError``). All mean "not ready
+            # yet", so retry within the deadline instead of letting one kill the run.
+            except (TimeoutError, ssl.SSLError, ConnectionClosed, InvalidHandshake) as e:
+                if ws is not None:
+                    ws.close()
+                # A non-101 upgrade response only means "not ready" when it's a 5xx or 429; any other status
+                # (401/403/404, …) is permanent misconfiguration and surfaces immediately.
+                if isinstance(e, InvalidStatus) and not (
+                    e.response.status_code >= 500 or e.response.status_code == 429
+                ):
+                    raise
                 if time.monotonic() >= deadline:
                     raise TimeoutError(f'{e} (connecting to {self.host}:{self.port})') from e
-                logger.info('Server not ready (cold start?); retrying in %.0fs', backoff)
+                logger.info('Server not ready (cold start?): %s; retrying in %.0fs', e, backoff)
                 time.sleep(backoff)
                 backoff = min(backoff * 2, 30.0)
             except OSError as e:
                 raise type(e)(f'{e} (connecting to {self.host}:{self.port})') from e
-        return InferenceSession(ws, infer_timeout=infer_timeout)
 
     def list_models(self) -> list[str]:
         """List available models from the server."""
