@@ -59,7 +59,7 @@ openpi = [
 ]
 hardware = [
     "feetech-servo-sdk", # for feetech motors
-    "positronic-franka>=0.3.0; sys_platform == 'linux'",
+    "positronic-franka>=0.5.0; sys_platform == 'linux'",
     # "kortex_api; sys_platform == 'linux'",  # Kinova: disabled, artifactory.kinovaapps.com is unreliable
     "linuxpy",  # For Linux video capture
     "placo",

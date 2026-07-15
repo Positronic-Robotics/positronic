@@ -1,4 +1,6 @@
+import contextlib
 import logging
+import os
 import time
 import xml.etree.ElementTree as ET
 from collections.abc import Iterator
@@ -9,6 +11,7 @@ import numpy as np
 
 try:
     import positronic_franka._franka as pf
+    from positronic_franka.desk import Desk
 except ImportError as e:
     raise ImportError(
         'Franka support is not installed. Install the hardware extra:\n'
@@ -102,6 +105,8 @@ class Robot(pimm.ControlSystem):
         home_joints_variation: list[float] | None = None,
         load: tuple | None = None,
         collision_coeff: float = 2.0,
+        desk_login: str | None = None,
+        desk_password: str | None = None,
     ) -> None:
         """
         :param ip: IP address of the robot.
@@ -110,6 +115,9 @@ class Robot(pimm.ControlSystem):
         :param home_joints_variation: Max random deviation per joint in radians. Set to [0]*7 to disable.
         :param collision_coeff: Multiplier for collision thresholds. Higher = more tolerant.
             Default 2.0 (data collection). Use 6.0 for inference.
+        :param desk_login: Franka Desk login; defaults to the ``FRANKA_DESK_USER`` env var. When set with
+            ``desk_password``, the driver opens brakes and activates FCI via Desk on start and closes them on stop.
+        :param desk_password: Franka Desk password; defaults to the ``FRANKA_DESK_PASSWORD`` env var.
         """
         self._ip = ip
         self._relative_dynamics_factor = relative_dynamics_factor
@@ -123,6 +131,8 @@ class Robot(pimm.ControlSystem):
         self._load = load
         self._collision_coeff = collision_coeff
         self._robot: pf.Robot | None = None
+        self._desk_login = desk_login if desk_login is not None else os.environ.get('FRANKA_DESK_USER')
+        self._desk_password = desk_password if desk_password is not None else os.environ.get('FRANKA_DESK_PASSWORD')
 
     @staticmethod
     def _build_robot_meta(robot) -> dict:
@@ -207,59 +217,76 @@ class Robot(pimm.ControlSystem):
         robot_state._finish_reset()
         self.state.emit(robot_state)
 
+    @contextlib.contextmanager
+    def _desk_session(self):
+        """Bracket the run with a Franka Desk session that opens brakes and activates FCI, and always releases
+        control on exit. A no-op when Desk credentials are not configured (manual brake control, or simulation)."""
+        if not (self._desk_login and self._desk_password):
+            yield
+            return
+        with Desk(self._ip, self._desk_login, self._desk_password) as desk:
+            desk.prepare()
+            yield
+
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Sleep]:
-        robot = self._ensure_robot()
-        self._init_robot(robot)
-        self.robot_meta.emit(Robot._build_robot_meta(robot))
-        robot.recover_from_errors()
+        with self._desk_session():
+            robot = self._ensure_robot()
+            try:
+                self._init_robot(robot)
+                self.robot_meta.emit(Robot._build_robot_meta(robot))
+                robot.recover_from_errors()
 
-        robot_state = FrankaState()
-        rate_limiter = pimm.RateLimiter(clock, hz=2000)
+                robot_state = FrankaState()
+                rate_limiter = pimm.RateLimiter(clock, hz=2000)
 
-        self._reset(robot, robot_state)
+                self._reset(robot, robot_state)
 
-        in_error = False
-        player = command.TrajectoryPlayer(reduce=command.reduce)
+                in_error = False
+                player = command.TrajectoryPlayer(reduce=command.reduce)
 
-        while not should_stop.value:
-            st = robot.state()
-            robot_state.encode(st)
-            self.state.emit(robot_state)
+                while not should_stop.value:
+                    st = robot.state()
+                    robot_state.encode(st)
+                    self.state.emit(robot_state)
 
-            in_error, entered_error = _check_error(st.error != 0, in_error)
-            if entered_error:
-                logging.warning(f'Robot error: {st.error_message}')
+                    in_error, entered_error = _check_error(st.error != 0, in_error)
+                    if entered_error:
+                        logging.warning(f'Robot error: {st.error_message}')
 
-            cmd_msg = self.commands.read()
-            if cmd_msg.updated:
-                player.set(cmd_msg.data)
-            cmd = player.advance(clock.now_ns())
-            if cmd is not None:
-                match cmd:
-                    case command.Reset():
-                        _recover_if_needed(robot, in_error)
-                        self._reset(robot, robot_state)
-                    case command.Recover():
-                        _recover_if_needed(robot, in_error)
-                    case _ if in_error:
-                        pass
-                    case command.CartesianPosition(pose):
-                        target_pose_wxyz = np.asarray([*pose.translation, *pose.rotation.as_quat])
-                        ik_solution = robot.inverse_kinematics_with_limits(target_pose_wxyz)
-                        robot.set_target_joints(ik_solution)
-                    case command.CartesianDelta(delta):
-                        target = command.apply_cartesian_delta(robot_state.ee_pose, delta)
-                        target_pose_wxyz = np.asarray([*target.translation, *target.rotation.as_quat])
-                        ik_solution = robot.inverse_kinematics_with_limits(target_pose_wxyz)
-                        robot.set_target_joints(ik_solution)
-                    case command.JointPosition(positions):
-                        robot.set_target_joints(positions)
-                    case command.JointDelta(velocities=joint_delta):
-                        robot.set_target_joints(st.q + joint_delta)
-                    case _:
-                        raise NotImplementedError(f'Unsupported command {cmd}')
+                    cmd_msg = self.commands.read()
+                    if cmd_msg.updated:
+                        player.set(cmd_msg.data)
+                    cmd = player.advance(clock.now_ns())
+                    if cmd is not None:
+                        match cmd:
+                            case command.Reset():
+                                _recover_if_needed(robot, in_error)
+                                self._reset(robot, robot_state)
+                            case command.Recover():
+                                _recover_if_needed(robot, in_error)
+                            case _ if in_error:
+                                pass
+                            case command.CartesianPosition(pose):
+                                target_pose_wxyz = np.asarray([*pose.translation, *pose.rotation.as_quat])
+                                ik_solution = robot.inverse_kinematics_with_limits(target_pose_wxyz)
+                                robot.set_target_joints(ik_solution)
+                            case command.CartesianDelta(delta):
+                                target = command.apply_cartesian_delta(robot_state.ee_pose, delta)
+                                target_pose_wxyz = np.asarray([*target.translation, *target.rotation.as_quat])
+                                ik_solution = robot.inverse_kinematics_with_limits(target_pose_wxyz)
+                                robot.set_target_joints(ik_solution)
+                            case command.JointPosition(positions):
+                                robot.set_target_joints(positions)
+                            case command.JointDelta(velocities=joint_delta):
+                                robot.set_target_joints(st.q + joint_delta)
+                            case _:
+                                raise NotImplementedError(f'Unsupported command {cmd}')
 
-            yield rate_limiter.wait()
+                    yield rate_limiter.wait()
+            finally:
+                # Halt the driver's control thread before _desk_session deactivates FCI, or it dies mid-control
+                # with "TCP connection got interrupted".
+                robot.stop()
 
 
 if __name__ == '__main__':
