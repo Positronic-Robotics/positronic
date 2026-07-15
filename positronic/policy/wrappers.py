@@ -105,13 +105,16 @@ class _StackBuffer:
     ``values`` is a dict of key → array; every entry holds the same keys. ``append`` copies each new
     entry but skips one byte-identical to the previous — a source slower than the control loop repeats
     its value, and carry-over sampling reuses the stored one — then drops entries before the oldest
-    sampled offset, keeping the one at or before it. ``sample`` returns, per key, a
-    ``(len(offsets_sec), ...)`` stack holding, for each offset, the latest value at or before that time
-    — carry-over, never the future; before enough history accumulates it repeats the oldest entry.
+    sampled offset, keeping the one at or before it. ``sample`` returns, per key, a stack holding, for
+    each offset, the latest value at or before that time — carry-over, never the future. Offsets that
+    precede the first entry either repeat the oldest entry (``pad_start=True``, a fixed
+    ``len(offsets_sec)``-long stack) or are dropped (``pad_start=False``, the stack grows from 1 to
+    ``len(offsets_sec)`` as history accumulates).
     """
 
-    def __init__(self, offsets_sec: tuple[float, ...]):
+    def __init__(self, offsets_sec: tuple[float, ...], pad_start: bool = True):
         self._offsets_sec = offsets_sec
+        self._pad_start = pad_start
         self._entries: deque[tuple[float, dict[str, np.ndarray]]] = deque()
 
     def reset(self):
@@ -127,7 +130,10 @@ class _StackBuffer:
 
     def sample(self, now: float) -> dict[str, np.ndarray]:
         times = np.array([t for t, _ in self._entries])
-        picked = [self._entries[self._at_or_before(times, now + off)][1] for off in self._offsets_sec]
+        targets = [now + off for off in self._offsets_sec]
+        if not self._pad_start:
+            targets = [t for t in targets if t >= times[0]]
+        picked = [self._entries[self._at_or_before(times, t)][1] for t in targets]
         return {k: np.stack([entry[k] for entry in picked]) for k in picked[0]}
 
     @staticmethod
@@ -146,13 +152,21 @@ class TemporalStack(PolicyWrapper):
     each, a ``(len(offsets_sec), ...)`` stack sampled at ``offsets_sec`` (ascending negative seconds
     relative to now), so every stacked step carries its own value at that time rather than the current
     one repeated across history.
+
+    ``pad_start`` controls the stack before a full window of history exists (the first
+    ``-min(offsets_sec)`` seconds of a session). ``True`` repeats the oldest sample so the stack always
+    has ``len(offsets_sec)`` steps — for servers that require the trained window length. ``False``
+    sends only observed samples (the stack grows from 1 to ``len(offsets_sec)``), so the server sees a
+    genuine episode start instead of a fabricated static history — a model conditioned on "nothing has
+    moved for the whole window" predicts near-zero motion, and servers with a cold-start path (e.g. a
+    chunk-0 empty prefix) never engage it on a padded full-length stack.
     """
 
     class _Session(DelegatingSession):
-        def __init__(self, inner: Session, keys: tuple[str, ...], offsets_sec: tuple[float, ...]):
+        def __init__(self, inner: Session, keys: tuple[str, ...], offsets_sec: tuple[float, ...], pad_start: bool):
             super().__init__(inner)
             self._keys = keys
-            self._buffer = _StackBuffer(offsets_sec)
+            self._buffer = _StackBuffer(offsets_sec, pad_start=pad_start)
 
         def __call__(self, obs):
             now = _obs_time(obs)
@@ -163,9 +177,10 @@ class TemporalStack(PolicyWrapper):
             self._buffer.reset()
             super().cancel()
 
-    def __init__(self, keys: tuple[str, ...], offsets_sec: tuple[float, ...]):
+    def __init__(self, keys: tuple[str, ...], offsets_sec: tuple[float, ...], pad_start: bool = True):
         self._keys = tuple(keys)
         self._offsets_sec = tuple(offsets_sec)
+        self._pad_start = pad_start
 
     def wrap_session(self, inner: Session, context, now: Now):
-        return TemporalStack._Session(inner, self._keys, self._offsets_sec)
+        return TemporalStack._Session(inner, self._keys, self._offsets_sec, self._pad_start)

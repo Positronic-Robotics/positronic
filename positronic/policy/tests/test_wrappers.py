@@ -1,10 +1,12 @@
 """Unit tests for PolicyWrapper composition, ChunkedSchedule, and ErrorRecovery."""
 
+import numpy as np
+
 from positronic.drivers.roboarm import RobotStatus
 from positronic.drivers.roboarm.command import Recover
 from positronic.policy.base import Policy, PolicyWrapper, Session
 from positronic.policy.codec import ActionTimestamp, Codec
-from positronic.policy.wrappers import ChunkedSchedule, ErrorRecovery
+from positronic.policy.wrappers import ChunkedSchedule, ErrorRecovery, TemporalStack
 
 
 class _FakeClock:
@@ -239,3 +241,68 @@ class TestPipelineComposition:
         result = session(_obs(now_sec=2.5, status=RobotStatus.AVAILABLE))
         assert result is not None
         assert inner._session.call_count == 2  # initial call + post-recovery call
+
+
+class _CaptureSession(Session):
+    def __init__(self):
+        self.seen = []
+
+    def __call__(self, obs):
+        self.seen.append(obs)
+        return []
+
+
+class _CapturePolicy(Policy):
+    def __init__(self):
+        self.session = _CaptureSession()
+
+    def new_session(self, context=None):
+        return self.session
+
+
+def _stack_obs(now_sec, value):
+    return {'obs_time_ns': int(now_sec * 1e9), 'v': np.array([value])}
+
+
+class TestTemporalStack:
+    OFFSETS = (-0.2, -0.1, 0.0)
+
+    def test_pad_start_repeats_oldest(self):
+        clock = _FakeClock(t=0.0)
+        inner = _CapturePolicy()
+        session = TemporalStack(keys=('v',), offsets_sec=self.OFFSETS).wrap(inner, clock.now).new_session()
+        session(_stack_obs(0.0, 1.0))
+        stack = inner.session.seen[0]['v']
+        assert stack.shape == (3, 1)
+        assert (stack == 1.0).all()
+
+    def test_no_pad_start_grows_from_one(self):
+        clock = _FakeClock(t=0.0)
+        inner = _CapturePolicy()
+        wrapper = TemporalStack(keys=('v',), offsets_sec=self.OFFSETS, pad_start=False)
+        session = wrapper.wrap(inner, clock.now).new_session()
+
+        session(_stack_obs(0.0, 1.0))
+        assert inner.session.seen[0]['v'].shape == (1, 1)
+
+        session(_stack_obs(0.1, 2.0))
+        assert inner.session.seen[1]['v'].shape == (2, 1)
+        assert inner.session.seen[1]['v'][:, 0].tolist() == [1.0, 2.0]
+
+        session(_stack_obs(0.2, 3.0))
+        assert inner.session.seen[2]['v'].shape == (3, 1)
+        assert inner.session.seen[2]['v'][:, 0].tolist() == [1.0, 2.0, 3.0]
+
+    def test_no_pad_start_full_window_matches_padded(self):
+        offsets = self.OFFSETS
+        stacks = {}
+        for pad_start in (True, False):
+            clock = _FakeClock(t=0.0)
+            inner = _CapturePolicy()
+            wrapper = TemporalStack(keys=('v',), offsets_sec=offsets, pad_start=pad_start)
+            session = wrapper.wrap(inner, clock.now).new_session()
+            for i in range(4):
+                session(_stack_obs(0.1 * i, float(i)))
+            stacks[pad_start] = inner.session.seen[-1]['v']
+        assert stacks[True].shape == stacks[False].shape == (3, 1)
+        assert (stacks[True] == stacks[False]).all()
