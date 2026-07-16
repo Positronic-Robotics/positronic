@@ -181,6 +181,10 @@ class TemporalStack(PolicyWrapper):
         self._keys = tuple(keys)
         self._offsets_sec = tuple(offsets_sec)
         self._pad_start = pad_start
+        assert pad_start or 0.0 in self._offsets_sec, (
+            'pad_start=False requires 0.0 in offsets_sec: with only past offsets the first observation has no '
+            'in-range targets and the stack would be empty'
+        )
 
     def wrap_session(self, inner: Session, context, now: Now):
         return TemporalStack._Session(inner, self._keys, self._offsets_sec, self._pad_start)
