@@ -12,7 +12,9 @@ import subprocess
 from contextlib import AbstractContextManager
 from pathlib import Path
 
+from positronic.drivers.roboarm.models import bundled_franka_model
 from positronic.simulator.env_server.launcher import ensure_pinned_checkout, serve_subprocess
+from positronic.simulator.env_server.protocol import encode
 
 _ENV_SCRIPT = Path(__file__).parent / 'env.py'
 _ENV_SERVER_DIR = Path(__file__).parents[1] / 'env_server'
@@ -20,6 +22,10 @@ _ENV_SERVER_DIR = Path(__file__).parents[1] / 'env_server'
 _ROBOLAB_REPO = 'https://github.com/NVLabs/RoboLab.git'
 _ROBOLAB_COMMIT = '7d45d74904eade3b578a8eb1f2f9f89bc3d40326'
 _ROBOLAB_SRC = Path.home() / '.cache' / 'positronic' / 'robolab' / 'src'
+
+# The DROID rig's model (URDF + meshes + gripper) for the viewer and offline IK. env.py runs in RoboLab's
+# interpreter and cannot build it, so it is serialized here (wire codec) and env.py emits it as ``robot_meta``.
+_ROBOT_META_FILE = _ROBOLAB_SRC.parent / 'robot_meta.bin'
 
 # RoboLab declares only ``requires-python = ">=3.11"``, so uv otherwise inherits the interpreter from the
 # calling environment (positronic runs 3.13) — and NVIDIA's index ships no cp313 ``isaaclab`` wheels.
@@ -67,8 +73,14 @@ def _spawn(host: str, port: int) -> subprocess.Popen:
         str(port),
         '--headless',
     ]
+    _ROBOT_META_FILE.write_bytes(encode(bundled_franka_model()))
     # Isaac Sim prompts for its EULA on stdin at first launch; the server is headless, so accept it here.
-    env = {**os.environ, 'PYTHONPATH': str(_ENV_SERVER_DIR), 'OMNI_KIT_ACCEPT_EULA': 'Y'}
+    env = {
+        **os.environ,
+        'PYTHONPATH': str(_ENV_SERVER_DIR),
+        'OMNI_KIT_ACCEPT_EULA': 'Y',
+        'ROBOLAB_ROBOT_META': str(_ROBOT_META_FILE),
+    }
     return subprocess.Popen(command, env=env)
 
 

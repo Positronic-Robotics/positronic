@@ -1,6 +1,5 @@
 import configuronic as cfn
 
-from positronic.drivers.roboarm.models import bundled_franka_model
 from positronic.eval import Eval, Observation, Task
 from positronic.simulator.env_server.proxy import RemoteEnvControlSystem, remote_franka_embodiment
 from positronic.simulator.robolab.adapter import RobolabAdapter
@@ -178,12 +177,9 @@ def _robolab_eval(task, instruction_type, trial_count, timeout, camera_dict):
         # the longest selected task.
         timeout = max(_TASKS[name][1] for name in names) + 10.0
     proxy = RemoteEnvControlSystem(RobolabAdapter(camera_dict), serve_robolab())
-    # RoboLab drives the DROID rig — a Franka arm with the Robotiq 2F-85 — so recordings carry the bundled
-    # franka model (URDF + meshes + joint names + control frame) for the 3D viewer and offline IK, supplied
-    # here since the Isaac Lab server can't import positronic to emit it via ``robot_meta``.
-    embodiment = remote_franka_embodiment(
-        proxy, camera_dict, descriptor='remote.robolab.droid', static_meta=bundled_franka_model()
-    )
+    # The DROID rig's model (Franka arm + Robotiq 2F-85) rides the env's ``robot_meta`` — the launcher
+    # serializes it for the Isaac Lab server, which cannot build it — so nothing model-specific lives here.
+    embodiment = remote_franka_embodiment(proxy, camera_dict, descriptor='remote.robolab.droid')
     # RoboLab exposes no seed hook, so trial contexts carry no ``eval.seed``.
     trials = [
         {'eval.task': name, 'eval.instruction_type': instruction_type} for name in names for _ in range(trial_count)

@@ -20,6 +20,7 @@ path has no seed hook, so a recorded seed would only mislead.
 """
 
 import argparse
+import os
 import tempfile
 from typing import Any
 
@@ -27,6 +28,7 @@ import cv2  # noqa: F401 -- robolab requires cv2 imported before isaaclab
 import numpy as np
 import torch
 from isaaclab.app import AppLauncher
+from protocol import decode
 from server import EnvProtocol, EnvServer
 
 # Isaac's rigid bring-up order: parse CLI args, launch the app, and only then import anything that touches the
@@ -67,6 +69,16 @@ robolab.constants.RECORD_IMAGE_DATA = False
 robolab.constants.set_output_dir(tempfile.mkdtemp(prefix='robolab-env-'))
 
 
+def _load_robot_meta() -> dict[str, Any]:
+    """The DROID rig's model the launcher serialized, emitted as ``robot_meta``. Empty when a caller
+    (e.g. ``validate.py``) imports the env without the launcher's environment."""
+    path = os.environ.get('ROBOLAB_ROBOT_META')
+    if path is None:
+        return {}
+    with open(path, 'rb') as f:
+        return decode(f.read())
+
+
 class RobolabEnv(EnvProtocol):
     """A RoboLab task behind the gym-style ``reset``/``step``/``close`` the env server serves.
 
@@ -82,6 +94,7 @@ class RobolabEnv(EnvProtocol):
         self._env = None
         self._env_cfg = None
         self._meta = None
+        self._robot_meta = _load_robot_meta()
         self._control_dt = None
         # Tasks registered with gymnasium in this process; re-registering rebuilds the cfg class and churns
         # the registry, so each registers once.
@@ -145,14 +158,14 @@ class RobolabEnv(EnvProtocol):
             # contact sensing after the shipped demos were recorded).
             merged = self._merged_state(self._env.scene.get_state(is_relative=True), state)
             obs, _extras = self._env.reset_to(merged, None, is_relative=True)
-        # ``robot_meta`` is empty: this server can't import positronic to emit the robot model, so the eval
-        # supplies it via ``static_meta``. ``meta`` carries the task identity and the resolved instruction.
-        # The reset frame's subtask progress is zeros: the recorder's infos refresh only after a step, so
-        # reading them here would replay the prior trial's final values.
+        # ``robot_meta`` carries the DROID rig's model (the launcher serialized it, since this server can't
+        # build it); ``meta`` carries the task identity and the resolved instruction. The reset frame's subtask
+        # progress is zeros: the recorder's infos refresh only after a step, so reading them here would replay
+        # the prior trial's final values.
         return {
             'obs': self._observe(obs, np.zeros(4, dtype=np.float32)),
             'meta': self._meta,
-            'robot_meta': {},
+            'robot_meta': self._robot_meta,
             'control_dt': self._control_dt,
         }
 
