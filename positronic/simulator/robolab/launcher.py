@@ -21,6 +21,10 @@ _ROBOLAB_REPO = 'https://github.com/NVLabs/RoboLab.git'
 _ROBOLAB_COMMIT = '7d45d74904eade3b578a8eb1f2f9f89bc3d40326'
 _ROBOLAB_SRC = Path.home() / '.cache' / 'positronic' / 'robolab' / 'src'
 
+# RoboLab declares only ``requires-python = ">=3.11"``, so uv otherwise inherits the interpreter from the
+# calling environment (positronic runs 3.13) — and NVIDIA's index ships no cp313 ``isaaclab`` wheels.
+_ROBOLAB_PYTHON = '3.11'
+
 # RoboLab ships no uv.lock, so ``uv run --project`` re-resolves its dependencies on every fresh box and a
 # day-fresh release can break the install (cffi 2.1.0 published a macOS-only wheel and took down Linux
 # resolves). Known-broken releases are appended to the checkout's own ``constraint-dependencies``.
@@ -46,7 +50,23 @@ def _ensure_robolab_src() -> Path:
 
 def _spawn(host: str, port: int) -> subprocess.Popen:
     src = _ensure_robolab_src()
-    command = ['uv', 'run', '--project', str(src), str(_ENV_SCRIPT), '--host', host, '--port', str(port), '--headless']
+    # Install the dependency stack before spawning: a cold first install (~15 GB of Isaac wheels) far exceeds
+    # the client's connect deadline, which should only ever cover Isaac boot. Idempotent and fast when warm.
+    subprocess.run(['uv', 'sync', '--project', str(src), '--python', _ROBOLAB_PYTHON], check=True)
+    command = [
+        'uv',
+        'run',
+        '--project',
+        str(src),
+        '--python',
+        _ROBOLAB_PYTHON,
+        str(_ENV_SCRIPT),
+        '--host',
+        host,
+        '--port',
+        str(port),
+        '--headless',
+    ]
     # Isaac Sim prompts for its EULA on stdin at first launch; the server is headless, so accept it here.
     env = {**os.environ, 'PYTHONPATH': str(_ENV_SERVER_DIR), 'OMNI_KIT_ACCEPT_EULA': 'Y'}
     return subprocess.Popen(command, env=env)
