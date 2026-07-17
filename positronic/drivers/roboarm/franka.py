@@ -27,11 +27,6 @@ from . import RobotStatus, State, command
 from .models import attach_robotiq_2f85
 
 
-def _recover_if_needed(robot, in_error):
-    if in_error:
-        robot.recover_from_errors()
-
-
 def _check_error(is_error, was_error):
     return is_error, is_error and not was_error
 
@@ -256,16 +251,23 @@ class Robot(pimm.ControlSystem):
                     cmd_msg = self.commands.read()
                     if cmd_msg.updated:
                         player.set(cmd_msg.data)
+
+                    if in_error:
+                        # The driver always clears a recoverable error itself; making it optional (hold in
+                        # ERROR for out-of-band recovery instead) is a config knob to add when an embodiment
+                        # needs it.
+                        robot.recover_from_errors()
+                        # Drop the in-flight trajectory so the arm holds position rather than resuming a stale
+                        # waypoint once the error clears.
+                        player.set([])
+                        yield rate_limiter.wait()
+                        continue
+
                     cmd = player.advance(clock.now_ns())
                     if cmd is not None:
                         match cmd:
                             case command.Reset():
-                                _recover_if_needed(robot, in_error)
                                 self._reset(robot, robot_state)
-                            case command.Recover():
-                                _recover_if_needed(robot, in_error)
-                            case _ if in_error:
-                                pass
                             case command.CartesianPosition(pose):
                                 target_pose_wxyz = np.asarray([*pose.translation, *pose.rotation.as_quat])
                                 ik_solution = robot.inverse_kinematics_with_limits(target_pose_wxyz)

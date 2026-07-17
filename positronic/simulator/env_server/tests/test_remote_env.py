@@ -12,7 +12,7 @@ from positronic.drivers.roboarm import command as roboarm_command
 from positronic.eval import Task
 from positronic.inference import main
 from positronic.policy.tests.test_harness import StubPolicy
-from positronic.policy.wrappers import ChunkedSchedule, ErrorRecovery
+from positronic.policy.wrappers import ChunkedSchedule
 from positronic.simulator.env_server.adapter import EnvAdapter
 from positronic.simulator.env_server.client import EnvConnection
 from positronic.simulator.env_server.proxy import RemoteEnvControlSystem
@@ -222,7 +222,7 @@ def test_remote_eval_runs_to_timeout_without_done(env_server, tmp_path):
             policy=policy,
             evals=[replace(ev, trials=[{'eval.trial_index': 0, 'eval.seed': 100}])],
             output_dir=str(tmp_path),
-            wrap=ErrorRecovery() | ChunkedSchedule(),
+            wrap=ChunkedSchedule(),
         )
 
     ds = LocalDataset(tmp_path)

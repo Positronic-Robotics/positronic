@@ -37,7 +37,7 @@ from positronic.utils.logging import init_logging
 # Tap name; the recorder logs each obs/action entity under ``{_TAP}/{key}`` (see recording.py).
 _TAP = 'raw'
 # Observation keys the endpoint expects, mirroring the inference harness, plus every image.*.
-_STATE_KEYS = ('robot_state.q', 'robot_state.dq', 'robot_state.ee_pose', 'robot_state.error', 'grip')
+_STATE_KEYS = ('robot_state.q', 'robot_state.dq', 'robot_state.ee_pose', 'grip')
 
 
 def _build_wire_obs(sample: dict, task: str | None, now_ns: int, recorded_ts: int) -> dict:

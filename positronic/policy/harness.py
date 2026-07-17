@@ -72,7 +72,7 @@ class Harness(pimm.ControlSystem):
     relative timestamps to absolute time, reading the clock the harness binds in at ``wrap``.
 
     Applies the given ``wrap`` pipeline to the policy; with ``wrap=None`` (the default) it runs the raw
-    policy unwrapped. The eval entry points supply the standard ``ErrorRecovery | ChunkedSchedule`` wrap.
+    policy unwrapped. The eval entry points supply the standard ``ChunkedSchedule`` wrap.
     """
 
     def __init__(

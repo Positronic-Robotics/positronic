@@ -1,12 +1,10 @@
-"""Unit tests for PolicyWrapper composition, ChunkedSchedule, and ErrorRecovery."""
+"""Unit tests for PolicyWrapper composition, ChunkedSchedule, and TemporalStack."""
 
 import numpy as np
 
-from positronic.drivers.roboarm import RobotStatus
-from positronic.drivers.roboarm.command import Recover
 from positronic.policy.base import Policy, PolicyWrapper, Session
 from positronic.policy.codec import ActionTimestamp, Codec
-from positronic.policy.wrappers import ChunkedSchedule, ErrorRecovery, TemporalStack
+from positronic.policy.wrappers import ChunkedSchedule, TemporalStack
 
 
 class _FakeClock:
@@ -42,8 +40,8 @@ class _ConstPolicy(Policy):
         return self._session
 
 
-def _obs(now_sec=0.0, status=RobotStatus.AVAILABLE):
-    return {'obs_time_ns': int(now_sec * 1e9), 'robot_state.error': int(status == RobotStatus.ERROR)}
+def _obs(now_sec=0.0):
+    return {'obs_time_ns': int(now_sec * 1e9)}
 
 
 class TestChunkedSchedule:
@@ -95,78 +93,16 @@ class TestChunkedSchedule:
         assert result is not None
 
 
-class TestErrorRecovery:
-    def test_delegates_when_no_error(self):
-        inner = _ConstPolicy([{'v': 1}])
-        session = ErrorRecovery().wrap(inner, _FakeClock().now).new_session()
-        result = session(_obs(status=RobotStatus.AVAILABLE))
-        assert result == [{'v': 1}]
-
-    def test_emits_recover_on_first_error(self):
-        session = ErrorRecovery().wrap(_ConstPolicy([{'v': 1}]), _FakeClock().now).new_session()
-        # ErrorRecovery stamps the Recover at observation time, not the live clock.
-        result = session(_obs(now_sec=2.5, status=RobotStatus.ERROR))
-        assert len(result) == 1
-        # Wrappers produce Command objects directly; wire format lives at network boundary.
-        assert isinstance(result[0]['robot_command'], Recover)
-        assert result[0]['timestamp'] == 2.5
-        assert 'target_grip' not in result[0]
-
-    def test_returns_none_on_subsequent_errors(self):
-        session = ErrorRecovery().wrap(_ConstPolicy([{'v': 1}]), _FakeClock().now).new_session()
-        session(_obs(status=RobotStatus.ERROR))
-        assert session(_obs(status=RobotStatus.ERROR)) is None
-        assert session(_obs(status=RobotStatus.ERROR)) is None
-
-    def test_resumes_after_recovery(self):
-        inner = _ConstPolicy([{'v': 1}])
-        session = ErrorRecovery().wrap(inner, _FakeClock().now).new_session()
-        session(_obs(status=RobotStatus.ERROR))
-        session(_obs(status=RobotStatus.ERROR))
-        result = session(_obs(status=RobotStatus.AVAILABLE))
-        assert result == [{'v': 1}]
-        assert inner._session.call_count == 1
-
-    def test_skips_inner_during_error(self):
-        inner = _ConstPolicy([{'v': 1}])
-        session = ErrorRecovery().wrap(inner, _FakeClock().now).new_session()
-        session(_obs(status=RobotStatus.AVAILABLE))
-        count_before = inner._session.call_count
-        session(_obs(status=RobotStatus.ERROR))
-        session(_obs(status=RobotStatus.ERROR))
-        assert inner._session.call_count == count_before
-
-    def test_delegates_meta(self):
-        class _MetaSession(Session):
-            def __call__(self, obs):
-                return []
-
-            @property
-            def meta(self):
-                return {'model': 'test'}
-
-        class _MetaPolicy(Policy):
-            def new_session(self, context=None):
-                return _MetaSession()
-
-            @property
-            def meta(self):
-                return {'model': 'test'}
-
-        session = ErrorRecovery().wrap(_MetaPolicy(), _FakeClock().now).new_session()
-        assert session.meta == {'model': 'test'}
-
-
 class TestPipelineComposition:
     """Test | operator across PolicyWrapper and Codec types."""
 
     def test_wrapper_pipe_wrapper(self):
         clock = _FakeClock(t=1.0)
-        pipeline = ErrorRecovery() | ChunkedSchedule()
+        pipeline = TemporalStack(keys=('v',), offsets_sec=(0.0,)) | ChunkedSchedule()
         assert isinstance(pipeline, PolicyWrapper)
         policy = pipeline.wrap(_ConstPolicy([{'v': 1, 'timestamp': 0.0}]), clock.now)
         session = policy.new_session()
-        result = session(_obs(status=RobotStatus.AVAILABLE))
+        result = session({'obs_time_ns': int(1e9), 'v': np.array([5.0])})
         assert result is not None
         assert result[0]['v'] == 1
 
@@ -194,7 +130,7 @@ class TestPipelineComposition:
     def test_full_pipeline(self):
         clock = _FakeClock(t=1.0)
         codec = ActionTimestamp(fps=10.0)
-        pipeline = ErrorRecovery() | ChunkedSchedule() | codec
+        pipeline = ChunkedSchedule() | codec
         assert isinstance(pipeline, PolicyWrapper)
         # 5 raw actions → codec stamps relative 0.0, 0.1, 0.2, 0.3, 0.4
         # → ChunkedSchedule shifts to 1.0, 1.1, 1.2, 1.3, 1.4 (clock=1.0).
@@ -213,34 +149,6 @@ class TestPipelineComposition:
         c2 = ActionTimestamp(fps=5.0)
         composed = c1 & c2
         assert isinstance(composed, Codec)
-
-    def test_error_recovery_cancels_schedule(self):
-        """ErrorRecovery | ChunkedSchedule: post-recovery should not stall on stale trajectory_end.
-
-        Without the cancel, ChunkedSchedule would keep its pre-error trajectory_end and
-        return None after recovery until that timestamp elapses.
-        """
-        clock = _FakeClock(t=1.0)
-        # Long trajectory: ends at clock=1.0 + 5.0 = 6.0
-        inner = _ConstPolicy([{'v': 1, 'timestamp': 0.0}, {'v': 2, 'timestamp': 5.0}])
-        pipeline = ErrorRecovery() | ChunkedSchedule()
-        session = pipeline.wrap(inner, clock.now).new_session()
-
-        # Normal call sets trajectory_end = 6.0.
-        result = session(_obs(now_sec=1.0, status=RobotStatus.AVAILABLE))
-        assert result is not None
-
-        # Robot enters error mid-trajectory; ErrorRecovery emits Recover and cancels schedule.
-        clock.t = 2.0
-        result = session(_obs(now_sec=2.0, status=RobotStatus.ERROR))
-        assert result is not None and isinstance(result[0]['robot_command'], Recover)
-
-        # Robot recovers. ChunkedSchedule must not block on the stale 6.0 end —
-        # cancel cleared trajectory_end so this call hits inner immediately.
-        clock.t = 2.5
-        result = session(_obs(now_sec=2.5, status=RobotStatus.AVAILABLE))
-        assert result is not None
-        assert inner._session.call_count == 2  # initial call + post-recovery call
 
 
 class _CaptureSession(Session):

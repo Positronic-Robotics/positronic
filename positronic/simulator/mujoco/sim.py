@@ -70,9 +70,6 @@ class MujocoFrankaState(State, pimm.shared_memory.NumpySMAdapter):
     def set_error(self):
         self.array[14 + 7] = RobotStatus.ERROR.value
 
-    def clear_error(self):
-        self.array[14 + 7] = RobotStatus.AVAILABLE.value
-
     def encode(self, q, dq, ee_pose):
         self.array[:7] = q
         self.array[7:14] = dq
@@ -181,9 +178,15 @@ class MujocoSim(pimm.ControlSystem):
             cmd_msg = self.commands.read()
             if cmd_msg.updated:
                 self._arm_player.set(cmd_msg.data)
-            cmd = self._arm_player.advance(clock.now_ns())
-            if cmd is not None:
-                self._apply_command(cmd)
+            if self._error:
+                self._error = False
+                # Drop the in-flight trajectory so the arm holds position rather than resuming a stale
+                # waypoint once the error clears.
+                self._arm_player.set([])
+            else:
+                cmd = self._arm_player.advance(clock.now_ns())
+                if cmd is not None:
+                    self._apply_command(cmd)
             grip_msg = self.target_grip.read()
             if grip_msg.updated:
                 self._grip_player.set(grip_msg.data)
@@ -345,9 +348,6 @@ class MujocoSim(pimm.ControlSystem):
                 self._set_actuator_values(self._q + delta)
             case roboarm_command.Reset():
                 self._home()  # the Reset command homes the arm; re-randomizing the scene is ``reset``'s job
-                self._error = False
-            case roboarm_command.Recover():
-                self._error = False
             case _:
                 raise ValueError(f'Unknown command type: {type(cmd)}')
 

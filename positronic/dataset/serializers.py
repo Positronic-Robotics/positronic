@@ -109,15 +109,12 @@ class Serializers:
             return geom.Transform3D(x.translation, rotation).as_vector(geom.Rotation.Representation.QUAT)
 
     @staticmethod
-    def robot_state(state: State) -> dict[str, np.ndarray | int] | None:
-        if state.status == RobotStatus.RESETTING:
+    def robot_state(state: State) -> dict[str, np.ndarray] | None:
+        # ERROR, like RESETTING, is a not-ready state: drop the frame rather than record or infer on a
+        # mid-error pose.
+        if state.status in (RobotStatus.RESETTING, RobotStatus.ERROR):
             return None
-        return {
-            '.q': state.q,
-            '.dq': state.dq,
-            '.ee_pose': Serializers.transform_3d(state.ee_pose),
-            '.error': int(state.status == RobotStatus.ERROR),
-        }
+        return {'.q': state.q, '.dq': state.dq, '.ee_pose': Serializers.transform_3d(state.ee_pose)}
 
     @staticmethod
     def robot_command(command: CommandType) -> dict[str, np.ndarray | int] | None:
