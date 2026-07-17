@@ -1,0 +1,50 @@
+# 24.04 floor: RoboLab's `evdev` sdist needs ≥6.x-era kernel input headers, which 22.04 (5.15) lacks
+FROM ubuntu:24.04
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
+
+# System dependencies: git + git-lfs for the pinned RoboLab checkout, build tools for sdist deps, and the
+# GL/Vulkan/X11 userspace Isaac Sim needs for headless RTX rendering. The NVIDIA driver itself arrives at
+# runtime from the container toolkit, which also needs the driver's *graphics* userspace present on the host
+# (`libnvidia-gl-<major>` — Nebius CUDA images ship compute-only and need it added).
+RUN apt-get update && apt-get install -y \
+    build-essential \
+    git \
+    git-lfs \
+    libatomic1 \
+    libegl1 \
+    libfontconfig1 \
+    libgl1 \
+    libglib2.0-0t64 \
+    libglu1-mesa \
+    libsm6 \
+    libvulkan1 \
+    libx11-6 \
+    libxcursor1 \
+    libxext6 \
+    libxi6 \
+    libxinerama1 \
+    libxrandr2 \
+    libxt6 \
+    && rm -rf /var/lib/apt/lists/*
+
+# Create NVIDIA EGL vendor configuration file
+# This is required for libglvnd to find NVIDIA's EGL implementation
+RUN mkdir -p /usr/share/glvnd/egl_vendor.d/ && \
+echo '{\n    "file_format_version" : "1.0.0",\n    "ICD" : {\n        "library_path" : "libEGL_nvidia.so.0"\n    }\n}' \
+> /usr/share/glvnd/egl_vendor.d/10_nvidia.json
+
+# Without this the container toolkit injects only `compute,utility` — no Vulkan ICD, no libGLX_nvidia — and
+# Isaac's RTX renderer finds no GPU device. Compose `capabilities: [graphics]` does NOT set it.
+ENV NVIDIA_DRIVER_CAPABILITIES=all
+
+ENV UV_LINK_MODE=copy
+ENV PIP_DEFAULT_TIMEOUT=600
+ENV UV_HTTP_TIMEOUT=600
+
+WORKDIR /positronic
+COPY . /positronic
+
+ENV PYTHONPATH=/positronic
+
+# Default command
+CMD ["bash"]

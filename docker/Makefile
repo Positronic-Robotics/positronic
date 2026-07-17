@@ -1,4 +1,4 @@
-.PHONY: all build tag push clean prune help build-training tag-training push-training build-openpi tag-openpi push-openpi build-groot tag-groot push-groot build-dreamzero-base push-dreamzero-base build-dreamzero tag-dreamzero push-dreamzero
+.PHONY: all build tag push clean prune help build-training tag-training push-training build-openpi tag-openpi push-openpi build-groot tag-groot push-groot build-dreamzero-base push-dreamzero-base build-dreamzero tag-dreamzero push-dreamzero build-robolab tag-robolab push-robolab
 
 # Image configuration
 IMAGE_NAME_TRAINING := positro/positronic
@@ -7,6 +7,7 @@ IMAGE_NAME_GROOT := positro/gr00t
 IMAGE_NAME_DREAMZERO := positro/dreamzero
 IMAGE_NAME_DREAMZERO_BASE := positro/dreamzero-base
 IMAGE_NAME_OPENPI_BASE := positro/openpi-base
+IMAGE_NAME_ROBOLAB := positro/robolab
 
 # Extract version from pyproject.toml (first literal version entry)
 VERSION := $(shell sed -n 's/^version = "\([^"]*\)"/\1/p' ../pyproject.toml | head -n 1)
@@ -85,7 +86,11 @@ build-dreamzero:
 	@echo "Building $(IMAGE_NAME_DREAMZERO)..."
 	docker build --platform linux/amd64 --build-arg BASE_IMAGE=$(TAG_DREAMZERO_BASE_LATEST) -f Dockerfile.dreamzero -t $(IMAGE_NAME_DREAMZERO):local ..
 
-build: build-training build-openpi build-groot build-dreamzero
+build-robolab:
+	@echo "Building $(IMAGE_NAME_ROBOLAB)..."
+	docker build --platform linux/amd64 -f Dockerfile.robolab -t $(IMAGE_NAME_ROBOLAB):local ..
+
+build: build-training build-openpi build-groot build-dreamzero build-robolab
 
 tag-training: build-training
 	@echo "Tagging training image..."
@@ -135,7 +140,19 @@ ifdef PUBLISH_RELEASE
 endif
 	@echo "Tagged: $(IMAGE_TAG), $(GIT_SHA)"
 
-tag: tag-training tag-openpi tag-groot tag-dreamzero
+tag-robolab: build-robolab
+	@echo "Tagging robolab image..."
+	docker tag $(IMAGE_NAME_ROBOLAB):local $(IMAGE_NAME_ROBOLAB):$(IMAGE_TAG)
+	docker tag $(IMAGE_NAME_ROBOLAB):local $(IMAGE_NAME_ROBOLAB):$(GIT_SHA)
+ifdef CI
+	docker tag $(IMAGE_NAME_ROBOLAB):local $(IMAGE_NAME_ROBOLAB):latest
+endif
+ifdef PUBLISH_RELEASE
+	docker tag $(IMAGE_NAME_ROBOLAB):local $(IMAGE_NAME_ROBOLAB):v$(VERSION)
+endif
+	@echo "Tagged: $(IMAGE_TAG), $(GIT_SHA)"
+
+tag: tag-training tag-openpi tag-groot tag-dreamzero tag-robolab
 
 push-training: tag-training
 	@echo "Pushing training images to Docker Hub..."
@@ -187,7 +204,19 @@ ifdef PUBLISH_RELEASE
 endif
 	@echo "IMAGE_TAG=$(IMAGE_TAG)" > .env
 
-push: push-training push-openpi push-groot push-dreamzero
+push-robolab: tag-robolab
+	@echo "Pushing $(IMAGE_NAME_ROBOLAB) to Docker Hub..."
+	docker push $(IMAGE_NAME_ROBOLAB):$(IMAGE_TAG)
+	docker push $(IMAGE_NAME_ROBOLAB):$(GIT_SHA)
+ifdef CI
+	docker push $(IMAGE_NAME_ROBOLAB):latest
+endif
+ifdef PUBLISH_RELEASE
+	docker push $(IMAGE_NAME_ROBOLAB):v$(VERSION)
+endif
+	@echo "IMAGE_TAG=$(IMAGE_TAG)" > .env
+
+push: push-training push-openpi push-groot push-dreamzero push-robolab
 
 all: push
 
@@ -206,6 +235,9 @@ clean:
 	-docker rmi $(IMAGE_NAME_DREAMZERO):$(IMAGE_TAG)
 	-docker rmi $(IMAGE_NAME_DREAMZERO):$(GIT_SHA)
 	-docker rmi $(TAG_DREAMZERO_BASE_LATEST)
+	-docker rmi $(IMAGE_NAME_ROBOLAB):local
+	-docker rmi $(IMAGE_NAME_ROBOLAB):$(IMAGE_TAG)
+	-docker rmi $(IMAGE_NAME_ROBOLAB):$(GIT_SHA)
 	@echo "All local images removed."
 
 prune:

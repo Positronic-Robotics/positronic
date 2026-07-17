@@ -267,6 +267,54 @@ bash workflows/nebius/stop.sh my-act-demo
 To pause an endpoint without releasing its static IP (useful if you want to reuse the same IP
 later), use `nebius ai endpoint stop <id>` directly — `start` resumes it.
 
+## Run a simulator eval (RoboLab)
+
+> **Blocked on the platform today**: Nebius serverless jobs inject the compute driver stack only —
+> no `libGLX_nvidia`/Vulkan userspace and no ICD manifest (verified empirically 2026-07-17 on
+> `gpu-l40s-d`) — and Isaac's RTX renderer cannot create a GPU device without them
+> (`omni.gpu_foundation_factory: Failed to create any GPU devices`). Everything below works up to
+> that point (image pull, L40S scheduling, cache reuse) and is expected to work as-is once Nebius
+> enables graphics injection for jobs; until then run the same eval on a VM via the
+> `robolab-eval` compose service.
+>
+> Nebius **VM** images have the same gap on the host side: the preinstalled NVIDIA driver is
+> compute-only. Provision the graphics userspace once per VM before the first run — extract
+> `libnvidia-gl-<major>` (exact same version as the installed driver, deb from the CUDA apt repo)
+> into `/usr/lib/x86_64-linux-gnu` + `/usr/share`, run `ldconfig`, then regenerate the CDI spec
+> (`sudo nvidia-ctk cdi generate --output=/var/run/cdi/nvidia.yaml`) so the container toolkit
+> mounts it. The image's `NVIDIA_DRIVER_CAPABILITIES=all` handles the container side.
+
+`eval.sh` submits `positronic eval run` as a Job on the `positro/robolab` image. The job boots
+the benchmark's env server (Isaac Sim) inside the container and drives the policy over the
+network — so it runs on an **L40S** platform (Isaac's RTX renderer needs RT cores; H100 has
+none). `NEBIUS_PLATFORM=gpu-l40s-a` switches to the AMD-host L40S variant when the Intel one
+is out of capacity.
+
+Serve the policy first and point the eval at the endpoint IP:
+
+```bash
+bash workflows/nebius/serve.sh openpi pi05-jointpos droid_jointpos
+
+bash workflows/nebius/eval.sh \
+  --eval=@positronic.cfg.eval.sim.robolab.banana_in_bowl \
+  --eval.trial_count=10 \
+  --policy=@positronic.cfg.policy.remote \
+  --policy.host=<endpoint-ip> \
+  --policy.resize=None \
+  --output_dir=s3://<your-bucket>/evals/robolab_banana/
+```
+
+`--output_dir=s3://...` uploads the recorded eval dataset via `pos3.sync`; follow progress
+with `nebius ai job logs <aijob-id> --follow`.
+
+Unlike the other scripts, the shared cache filesystem mounts at `/root/.cache` (not `/cache`):
+the env-server launcher keeps its pinned RoboLab checkout and venv at `$HOME`-relative paths,
+and they dominate cold start (~25 GB of LFS assets plus the Isaac wheel stack). One mount
+persists checkout, venv, and uv cache together — uv's default cache dir lands on the same
+`<fs>/uv` subdir the `UV_CACHE_DIR=/cache/uv` jobs share. First run pays the full download;
+warm runs skip straight to Isaac boot. Don't fan out eval jobs on a cold cache — seed it with
+one run first (same rule as the shared uv cache).
+
 ## What changed vs. running on a VM
 
 No VM to provision, SSH into, or remember to shut down. Credentials stay in MysteryBox instead
