@@ -171,7 +171,7 @@ class DataCollectionController(pimm.ControlSystem):
                         self.robot_state.value.status == roboarm.RobotStatus.ERROR, in_error
                     )
                     if entered_error:
-                        self.sound.emit(error_wav_path)  # the driver auto-recovers; alert the operator
+                        self.sound.emit(error_wav_path)
                     if not in_error and cp_msg.updated:
                         self.robot_commands.emit(roboarm.command.CartesianPosition(target_robot_pos))
 

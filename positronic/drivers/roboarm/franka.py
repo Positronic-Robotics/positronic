@@ -102,7 +102,6 @@ class Robot(pimm.ControlSystem):
         collision_coeff: float = 2.0,
         desk_login: str | None = None,
         desk_password: str | None = None,
-        auto_recover: bool = True,
     ) -> None:
         """
         :param ip: IP address of the robot.
@@ -114,9 +113,6 @@ class Robot(pimm.ControlSystem):
         :param desk_login: Franka Desk login; defaults to the ``FRANKA_DESK_USER`` env var. When set with
             ``desk_password``, the driver opens brakes and activates FCI via Desk on start and closes them on stop.
         :param desk_password: Franka Desk password; defaults to the ``FRANKA_DESK_PASSWORD`` env var.
-        :param auto_recover: When True (default), the driver clears a recoverable error on its own and holds
-            position. Set False to leave a recoverable error standing (the arm reports ``ERROR`` until manually
-            recovered).
         """
         self._ip = ip
         self._relative_dynamics_factor = relative_dynamics_factor
@@ -132,7 +128,6 @@ class Robot(pimm.ControlSystem):
         self._robot: pf.Robot | None = None
         self._desk_login = desk_login if desk_login is not None else os.environ.get('FRANKA_DESK_USER')
         self._desk_password = desk_password if desk_password is not None else os.environ.get('FRANKA_DESK_PASSWORD')
-        self._auto_recover = auto_recover
 
     @staticmethod
     def _build_robot_meta(robot) -> dict:
@@ -258,10 +253,12 @@ class Robot(pimm.ControlSystem):
                         player.set(cmd_msg.data)
 
                     if in_error:
-                        # The driver owns error recovery: clear the reflex and drop the in-flight trajectory so
-                        # the arm holds position instead of lurching into a stale waypoint when control resumes.
-                        if self._auto_recover:
-                            robot.recover_from_errors()
+                        # The driver always clears a recoverable error itself; making it optional (hold in
+                        # ERROR for out-of-band recovery instead) is a config knob to add when an embodiment
+                        # needs it.
+                        robot.recover_from_errors()
+                        # Drop the in-flight trajectory so the arm holds position rather than resuming a stale
+                        # waypoint once the error clears.
                         player.set([])
                         yield rate_limiter.wait()
                         continue

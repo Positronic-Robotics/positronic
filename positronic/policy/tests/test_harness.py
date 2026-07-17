@@ -1044,8 +1044,8 @@ def test_harness_clears_trajectory_on_run(world):
 
 @pytest.mark.timeout(3.0)
 def test_harness_skips_inference_on_error(world):
-    """An errored arm serializes to None (a not-ready state the driver clears itself), so the harness feeds
-    nothing to the policy until it recovers, then resumes with a fresh chunk."""
+    """An errored arm serializes to None, so the harness feeds nothing to the policy until the arm reports
+    AVAILABLE again, then resumes with a fresh chunk."""
     policy = ChunkPolicy()
     harness = Harness(policy, make_embodiment(), wrap=ChunkedSchedule())
     p = _pair_all(world, harness)

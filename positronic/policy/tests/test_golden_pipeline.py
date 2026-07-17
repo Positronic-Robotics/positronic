@@ -148,8 +148,8 @@ class FakeRobot(pimm.ControlSystem):
             if cmd_msg.updated and cmd_msg.data is not None:
                 player.set(cmd_msg.data)
             if self._status == RobotStatus.ERROR:
-                # Driver owns recovery: clear the error and drop the in-flight trajectory, holding position.
                 self._status = RobotStatus.AVAILABLE
+                # Drop the in-flight trajectory so the arm holds position rather than resuming a stale waypoint.
                 player.set([])
             else:
                 cmd = player.advance(clock.now_ns())
@@ -213,7 +213,7 @@ def _run_pipeline(tmp_path: Path) -> dict:
         script = [
             (partial(directive_em.emit, Directive.RUN(task='golden', inference_latency=INFERENCE_LATENCY_S)), 0.0),
             (None, 1.5),  # several reactive inference + chunk/horizon cycles
-            (robot.inject_error, 0.0),  # -> ERROR (one dropped frame) -> driver auto-recovers -> resume
+            (robot.inject_error, 0.0),  # one-shot error: that frame is dropped, then inference resumes
             (None, 0.5),
             (None, 1.5),  # more cycles after recovery
             (partial(directive_em.emit, Directive.FINISH()), 0.0),

@@ -110,8 +110,8 @@ class Serializers:
 
     @staticmethod
     def robot_state(state: State) -> dict[str, np.ndarray] | None:
-        # ERROR, like RESETTING, is a not-ready state the driver clears itself; drop the frame rather than
-        # feed a mid-recovery pose to the policy or the recording.
+        # ERROR, like RESETTING, is a not-ready state: drop the frame rather than record or infer on a
+        # mid-error pose.
         if state.status in (RobotStatus.RESETTING, RobotStatus.ERROR):
             return None
         return {'.q': state.q, '.dq': state.dq, '.ee_pose': Serializers.transform_3d(state.ee_pose)}

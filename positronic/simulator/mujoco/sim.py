@@ -179,9 +179,9 @@ class MujocoSim(pimm.ControlSystem):
             if cmd_msg.updated:
                 self._arm_player.set(cmd_msg.data)
             if self._error:
-                # The driver owns error recovery: clear the error and drop the in-flight trajectory so the
-                # arm holds position instead of replaying a stale waypoint when control resumes.
                 self._error = False
+                # Drop the in-flight trajectory so the arm holds position rather than resuming a stale
+                # waypoint once the error clears.
                 self._arm_player.set([])
             else:
                 cmd = self._arm_player.advance(clock.now_ns())
