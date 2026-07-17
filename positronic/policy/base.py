@@ -123,7 +123,7 @@ class PolicyWrapper:
     and ``codec | wrapper`` all produce a PolicyWrapper pipeline that
     ``wrap(policy)`` applies right-to-left::
 
-        pipeline = ErrorRecovery() | ChunkedSchedule() | codec
+        pipeline = TemporalStack(...) | ChunkedSchedule() | codec
         wrapped = pipeline.wrap(RemotePolicy(...))
 
     **Extension points**: subclasses override *one* of ``wrap_session`` (the

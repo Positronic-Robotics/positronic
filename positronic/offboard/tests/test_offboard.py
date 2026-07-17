@@ -2,7 +2,7 @@ from types import MappingProxyType
 
 import numpy as np
 
-from positronic.drivers.roboarm.command import CartesianPosition, JointDelta, JointPosition, Recover, Reset
+from positronic.drivers.roboarm.command import CartesianPosition, JointDelta, JointPosition, Reset
 from positronic.geom import Rotation, Transform3D
 from positronic.offboard.client import InferenceClient
 from positronic.utils.serialization import deserialise, encode_jpeg, serialise
@@ -109,9 +109,6 @@ class TestCommandRoundtrip:
 
     def test_reset(self):
         assert isinstance(deserialise(serialise(Reset())), Reset)
-
-    def test_recover(self):
-        assert isinstance(deserialise(serialise(Recover())), Recover)
 
     def test_cartesian_position(self):
         pose = Transform3D(translation=np.array([0.1, 0.2, 0.3], dtype=np.float32), rotation=Rotation.identity)

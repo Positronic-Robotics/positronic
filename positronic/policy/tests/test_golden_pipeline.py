@@ -37,13 +37,13 @@ from positronic.dataset.ds_writer_agent import TimeMode
 from positronic.dataset.local_dataset import LocalDataset, LocalDatasetWriter
 from positronic.dataset.serializers import Serializers
 from positronic.drivers.roboarm import RobotStatus
-from positronic.drivers.roboarm.command import CartesianPosition, Recover, Reset, TrajectoryPlayer
+from positronic.drivers.roboarm.command import CartesianPosition, Reset, TrajectoryPlayer
 from positronic.eval import ROBOT_STATIC_META, Command, Embodiment, Observation
 from positronic.geom import Rotation, Transform3D
 from positronic.policy.base import Policy, Session
 from positronic.policy.codec import ActionTiming
 from positronic.policy.harness import Directive, Harness
-from positronic.policy.wrappers import ChunkedSchedule, ErrorRecovery
+from positronic.policy.wrappers import ChunkedSchedule
 from positronic.tests.testing_coutils import ManualDriver, drive_scheduler
 
 GOLDEN_FILE = Path(__file__).parent / 'golden_pipeline.json.gz'
@@ -139,8 +139,6 @@ class FakeRobot(pimm.ControlSystem):
                 self._pos = INITIAL_POS.copy()
                 self._q = INITIAL_Q.copy()
                 self._status = RobotStatus.AVAILABLE
-            case Recover():
-                self._status = RobotStatus.AVAILABLE
 
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock):
         self.robot_meta.emit({})
@@ -149,9 +147,14 @@ class FakeRobot(pimm.ControlSystem):
             cmd_msg = self.commands.read()
             if cmd_msg.updated and cmd_msg.data is not None:
                 player.set(cmd_msg.data)
-            cmd = player.advance(clock.now_ns())
-            if cmd is not None:
-                self._apply(cmd)
+            if self._status == RobotStatus.ERROR:
+                # Driver owns recovery: clear the error and drop the in-flight trajectory, holding position.
+                self._status = RobotStatus.AVAILABLE
+                player.set([])
+            else:
+                cmd = player.advance(clock.now_ns())
+                if cmd is not None:
+                    self._apply(cmd)
             if self._error_pending:
                 self._status = RobotStatus.ERROR
                 self._error_pending = False
@@ -200,7 +203,7 @@ def _run_pipeline(tmp_path: Path) -> dict:
             static_meta=dict(ROBOT_STATIC_META),
             meta_source=robot.robot_meta,
         )
-        harness = Harness(policy, embodiment, wrap=ErrorRecovery() | ChunkedSchedule())
+        harness = Harness(policy, embodiment, wrap=ChunkedSchedule())
         ds_agent = wire.wire_embodiment(world, harness, embodiment, ds_writer, TimeMode.MESSAGE)
         world.connect(harness.ds_command, ds_agent.command)
         directive_em = world.pair(harness.directive)
@@ -210,7 +213,7 @@ def _run_pipeline(tmp_path: Path) -> dict:
         script = [
             (partial(directive_em.emit, Directive.RUN(task='golden', inference_latency=INFERENCE_LATENCY_S)), 0.0),
             (None, 1.5),  # several reactive inference + chunk/horizon cycles
-            (robot.inject_error, 0.0),  # -> ERROR -> harness Recover -> resume
+            (robot.inject_error, 0.0),  # -> ERROR (one dropped frame) -> driver auto-recovers -> resume
             (None, 0.5),
             (None, 1.5),  # more cycles after recovery
             (partial(directive_em.emit, Directive.FINISH()), 0.0),

@@ -14,7 +14,6 @@ from positronic.drivers.roboarm.command import (
     CartesianPosition,
     JointDelta,
     JointPosition,
-    Recover,
     Reset,
     TrajectoryPlayer,
     apply_cartesian_delta,
@@ -27,7 +26,7 @@ from positronic.geom import Rotation, Transform3D
 from positronic.policy.base import Policy, Session
 from positronic.policy.codec import ActionTimestamp
 from positronic.policy.harness import Directive, DirectiveType, Harness
-from positronic.policy.wrappers import ChunkedSchedule, ErrorRecovery
+from positronic.policy.wrappers import ChunkedSchedule
 from positronic.tests.testing_coutils import ManualDriver, RecordingEmitter, drive_scheduler
 
 
@@ -278,14 +277,12 @@ def test_harness_emits_cartesian_move(world):
     assert obs['task'] == 'stack-blocks'
     assert obs['descriptor'] == ''  # no descriptor passed -> empty string reaches the policy
     # Recording == canonical policy I/O: the policy sees the same ``robot_state`` serializer
-    # the dataset records (``.error`` int, not the raw ``RobotStatus``). wall/obs
-    # timestamps carry volatile values, so lock the stable key set.
+    # the dataset records. wall/obs timestamps carry volatile values, so lock the stable key set.
     assert set(obs) - {'wall_time_ns', 'obs_time_ns'} == {
         'image.cam',
         'robot_state.q',
         'robot_state.dq',
         'robot_state.ee_pose',
-        'robot_state.error',
         'grip',
         'task',
         'descriptor',
@@ -677,7 +674,7 @@ def test_task_done_terminates_through_wire_embodiment(world):
     )
     task = Task(instruction='t', timeout=100.0, done=device.done)
     # Termination is independent of the policy wrappers; the minimal embodiment has no
-    # ``robot_state``, so skip the default ErrorRecovery/ChunkedSchedule pipeline.
+    # ``robot_state``, so skip the default ChunkedSchedule pipeline.
     harness = Harness(StubPolicy(), embodiment, task=task, trials=[{}], wrap=None)
     ds_recorder = RecordingEmitter()
     harness.ds_command._bind(ds_recorder)
@@ -1046,10 +1043,11 @@ def test_harness_clears_trajectory_on_run(world):
 
 
 @pytest.mark.timeout(3.0)
-def test_harness_recovers_from_error(world):
-    """ERROR emits Recover trajectory, skips policy; AVAILABLE resumes with fresh chunk."""
+def test_harness_skips_inference_on_error(world):
+    """An errored arm serializes to None (a not-ready state the driver clears itself), so the harness feeds
+    nothing to the policy until it recovers, then resumes with a fresh chunk."""
     policy = ChunkPolicy()
-    harness = Harness(policy, make_embodiment(), wrap=ErrorRecovery() | ChunkedSchedule())
+    harness = Harness(policy, make_embodiment(), wrap=ChunkedSchedule())
     p = _pair_all(world, harness)
 
     state_ok = make_robot_state([0.1, 0.2, 0.3], [0.4, 0.5, 0.6], status=RobotStatus.AVAILABLE)
@@ -1067,8 +1065,7 @@ def test_harness_recovers_from_error(world):
     obs_before = len(policy.observations)
     p['robot_em'].emit(state_err)
     drive_scheduler(scheduler, steps=2)
-    assert isinstance(_last_command(p), Recover)
-    assert len(policy.observations) == obs_before
+    assert len(policy.observations) == obs_before  # the errored state is never fed to the policy
 
     emit_ready_payload(p['frame_em'], p['robot_em'], p['grip_em'], state_ok)
     drive_scheduler(scheduler, steps=3)
@@ -1087,12 +1084,6 @@ def test_directive_types():
     assert DirectiveType.RUN.value == 'run'
     assert DirectiveType.FINISH.value == 'finish'
     assert DirectiveType.ABORT.value == 'abort'
-
-
-def test_recover_command_wire_roundtrip():
-    wire = to_wire(Recover())
-    assert wire == {'type': 'recover'}
-    assert isinstance(from_wire(wire), Recover)
 
 
 def test_cartesian_delta_wire_roundtrip():
@@ -1174,57 +1165,15 @@ def test_trajectory_player_accumulates_missed_deltas():
     assert player.advance(30) is None
 
 
-@pytest.mark.parametrize('status, expected_error', [(RobotStatus.AVAILABLE, 0), (RobotStatus.ERROR, 1)])
-def test_robot_state_serializer_records_error(status, expected_error):
+@pytest.mark.parametrize('status', [RobotStatus.RESETTING, RobotStatus.ERROR])
+def test_robot_state_serializer_drops_not_ready(status):
     state = make_robot_state([0.1, 0.2, 0.3], [0.4, 0.5, 0.6], status=status)
-    assert Serializers.robot_state(state)['.error'] == expected_error
-
-
-def test_robot_state_serializer_drops_resetting():
-    state = make_robot_state([0.1, 0.2, 0.3], [0.4, 0.5, 0.6], status=RobotStatus.RESETTING)
     assert Serializers.robot_state(state) is None
 
 
-@pytest.mark.timeout(3.0)
-def test_recovery_cancels_gripper_buffer(world):
-    """Entering recovery must cancel the gripper buffer, not just the arm.
-
-    The Recover-only chunk carries no ``target_grip``; without an explicit cancel
-    the gripper ``TrajectoryPlayer`` keeps draining the interrupted chunk's grip
-    waypoints while the robot recovers.
-    """
-    harness = Harness(ChunkPolicy(), make_embodiment(), wrap=ErrorRecovery() | ChunkedSchedule())
-    cmd_recorder = RecordingEmitter()
-    grip_recorder = RecordingEmitter()
-    harness.commands['robot_command']._bind(cmd_recorder)
-    harness.commands['target_grip']._bind(grip_recorder)
-    harness.ds_command._bind(RecordingEmitter())
-
-    frame_em = world.pair(harness.observations['image.cam'])
-    robot_em = world.pair(harness.observations['robot_state'])
-    grip_em = world.pair(harness.observations['grip'])
-    directive_em = world.pair(harness.directive)
-
-    state_ok = make_robot_state([0.1, 0.2, 0.3], [0.4, 0.5, 0.6], status=RobotStatus.AVAILABLE)
-    state_err = make_robot_state([0.1, 0.2, 0.3], [0.4, 0.5, 0.6], status=RobotStatus.ERROR)
-
-    scheduler = world.start([harness])
-    directive_em.emit(Directive.RUN(task='t'))
-    drive_scheduler(scheduler, steps=1)
-    emit_ready_payload(frame_em, robot_em, grip_em, state_ok)
-    drive_scheduler(scheduler, steps=3)
-
-    cmd_before = len(cmd_recorder.emitted)
-    grip_before = len(grip_recorder.emitted)
-    robot_em.emit(state_err)
-    drive_scheduler(scheduler, steps=2)
-
-    new_cmds = [data for _ts, data in cmd_recorder.emitted[cmd_before:]]
-    new_grips = [data for _ts, data in grip_recorder.emitted[grip_before:]]
-    assert any(isinstance(t, list) and t and isinstance(t[-1][1], Recover) for t in new_cmds), (
-        'recovery did not emit a Recover on robot_command'
-    )
-    assert [] in new_grips, 'recovery did not cancel the gripper buffer'
+def test_robot_state_serializer_available_has_no_error_key():
+    state = make_robot_state([0.1, 0.2, 0.3], [0.4, 0.5, 0.6], status=RobotStatus.AVAILABLE)
+    assert set(Serializers.robot_state(state)) == {'.q', '.dq', '.ee_pose'}
 
 
 @pytest.mark.timeout(3.0)

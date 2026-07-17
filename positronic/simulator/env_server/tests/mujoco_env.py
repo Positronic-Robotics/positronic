@@ -120,13 +120,11 @@ class MujocoEnv(EnvProtocol):
 
     def step(self, action: dict[str, Any]) -> dict[str, Any]:
         assert self._gen is not None, 'step() called before reset()'  # real Gym envs reject step-before-reset
-        unknown = action.keys() - {'reset', 'recover', 'joints', 'pose', 'pose_delta', 'grip'}
+        unknown = action.keys() - {'reset', 'joints', 'pose', 'pose_delta', 'grip'}
         if unknown:
             raise ValueError(f'MujocoEnv got unsupported action keys: {sorted(unknown)}')
         if 'reset' in action:
             self._cmd_emit.emit(roboarm_command.Reset())  # home the arm
-        elif 'recover' in action:
-            self._cmd_emit.emit(roboarm_command.Recover())  # clear the error in place
         elif 'joints' in action:
             self._cmd_emit.emit(roboarm_command.JointPosition(np.asarray(action['joints'], dtype=np.float64)))
         elif 'pose' in action:
@@ -183,7 +181,7 @@ class StackCubesAdapter(EnvAdapter):
             if value is not None:
                 self._held[name] = value
         # Position setpoints are held and re-sent every control tick — absolute-mode by design. A CartesianDelta
-        # is a one-shot relative motion, like Reset/Recover: emitted once, then dropped so it neither re-composes
+        # is a one-shot relative motion, like Reset: emitted once, then dropped so it neither re-composes
         # against the moving eef nor leaves a stale setpoint holding behind it.
         action: dict[str, Any] = {}
         match self._held.get('robot_command'):
@@ -198,9 +196,6 @@ class StackCubesAdapter(EnvAdapter):
                 self._held.pop('robot_command')
             case roboarm_command.Reset():
                 action['reset'] = True
-                self._held.pop('robot_command')
-            case roboarm_command.Recover():
-                action['recover'] = True
                 self._held.pop('robot_command')
             case other:
                 raise ValueError(f'StackCubesAdapter cannot map robot_command {type(other).__name__}')

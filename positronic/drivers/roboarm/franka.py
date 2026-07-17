@@ -27,11 +27,6 @@ from . import RobotStatus, State, command
 from .models import attach_robotiq_2f85
 
 
-def _recover_if_needed(robot, in_error):
-    if in_error:
-        robot.recover_from_errors()
-
-
 def _check_error(is_error, was_error):
     return is_error, is_error and not was_error
 
@@ -107,6 +102,7 @@ class Robot(pimm.ControlSystem):
         collision_coeff: float = 2.0,
         desk_login: str | None = None,
         desk_password: str | None = None,
+        auto_recover: bool = True,
     ) -> None:
         """
         :param ip: IP address of the robot.
@@ -118,6 +114,9 @@ class Robot(pimm.ControlSystem):
         :param desk_login: Franka Desk login; defaults to the ``FRANKA_DESK_USER`` env var. When set with
             ``desk_password``, the driver opens brakes and activates FCI via Desk on start and closes them on stop.
         :param desk_password: Franka Desk password; defaults to the ``FRANKA_DESK_PASSWORD`` env var.
+        :param auto_recover: When True (default), the driver clears a recoverable error on its own and holds
+            position. Set False to leave a recoverable error standing (the arm reports ``ERROR`` until manually
+            recovered).
         """
         self._ip = ip
         self._relative_dynamics_factor = relative_dynamics_factor
@@ -133,6 +132,7 @@ class Robot(pimm.ControlSystem):
         self._robot: pf.Robot | None = None
         self._desk_login = desk_login if desk_login is not None else os.environ.get('FRANKA_DESK_USER')
         self._desk_password = desk_password if desk_password is not None else os.environ.get('FRANKA_DESK_PASSWORD')
+        self._auto_recover = auto_recover
 
     @staticmethod
     def _build_robot_meta(robot) -> dict:
@@ -256,16 +256,21 @@ class Robot(pimm.ControlSystem):
                     cmd_msg = self.commands.read()
                     if cmd_msg.updated:
                         player.set(cmd_msg.data)
+
+                    if in_error:
+                        # The driver owns error recovery: clear the reflex and drop the in-flight trajectory so
+                        # the arm holds position instead of lurching into a stale waypoint when control resumes.
+                        if self._auto_recover:
+                            robot.recover_from_errors()
+                        player.set([])
+                        yield rate_limiter.wait()
+                        continue
+
                     cmd = player.advance(clock.now_ns())
                     if cmd is not None:
                         match cmd:
                             case command.Reset():
-                                _recover_if_needed(robot, in_error)
                                 self._reset(robot, robot_state)
-                            case command.Recover():
-                                _recover_if_needed(robot, in_error)
-                            case _ if in_error:
-                                pass
                             case command.CartesianPosition(pose):
                                 target_pose_wxyz = np.asarray([*pose.translation, *pose.rotation.as_quat])
                                 ik_solution = robot.inverse_kinematics_with_limits(target_pose_wxyz)

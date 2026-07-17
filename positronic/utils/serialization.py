@@ -79,7 +79,6 @@ def _pack(obj):
 # with arbitrary payloads is unlikely in practice.
 _LEGACY_COMMAND_TYPES = frozenset({
     _roboarm_command.Reset.TYPE,
-    _roboarm_command.Recover.TYPE,
     _roboarm_command.CartesianPosition.TYPE,
     _roboarm_command.JointPosition.TYPE,
     _roboarm_command.JointDelta.TYPE,

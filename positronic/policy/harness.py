@@ -7,7 +7,6 @@ from typing import Any
 import pimm
 from positronic.dataset.ds_writer_agent import DsWriterCommand
 from positronic.dataset.serializers import expand_suffixed
-from positronic.drivers import roboarm
 from positronic.eval import Embodiment, Task
 from positronic.policy.base import Policy, PolicyWrapper, Session
 from positronic.policy.wrappers import ChunkedSchedule
@@ -73,7 +72,7 @@ class Harness(pimm.ControlSystem):
     relative timestamps to absolute time, reading the clock the harness binds in at ``wrap``.
 
     Applies the given ``wrap`` pipeline to the policy; with ``wrap=None`` (the default) it runs the raw
-    policy unwrapped. The eval entry points supply the standard ``ErrorRecovery | ChunkedSchedule`` wrap.
+    policy unwrapped. The eval entry points supply the standard ``ChunkedSchedule`` wrap.
     """
 
     def __init__(
@@ -116,9 +115,6 @@ class Harness(pimm.ControlSystem):
         # A trial with a task is bounded by ``task.timeout``, set per episode; a task-less attended
         # session has no deadline and is ended by directives.
         self._deadline: float | None = None
-        # Idle-time robot-error latch: ``_recover_if_error`` emits a single Recover on the transition
-        # into error, mirroring ``ErrorRecovery`` (which covers the in-episode path).
-        self._in_error = False
 
         self._descriptor = embodiment.descriptor
         self.observations = pimm.ReceiverDict(self)
@@ -165,25 +161,6 @@ class Harness(pimm.ControlSystem):
         now = clock.now_ns()
         for name, value in action.items():
             self.commands[name].emit([(now, value)])
-
-    def _recover_if_error(self, clock: pimm.Clock) -> bool:
-        """Reset a robot error while idle: emit a single Recover on the transition into error, then
-        report True until the arm is back, so manual commands are held off during recovery. The idle-time
-        counterpart of ``ErrorRecovery``, sharing its naming debt (hard-codes ``robot_state`` and
-        ``robot_command``; see the TODO there). False when the embodiment has no arm or no state yet.
-        """
-        obs = self._embodiment.observations.get('robot_state')
-        if obs is None:
-            return False
-        try:
-            state = obs.serializer(self.observations['robot_state'].value)
-        except pimm.NoValueException:
-            return False
-        was_ok = not self._in_error
-        self._in_error = state is not None and state['.error'] == 1
-        if self._in_error and was_ok:
-            self.commands['robot_command'].emit([(clock.now_ns(), roboarm.command.Recover())])
-        return self._in_error
 
     def _pace(self) -> pimm.Command:
         """Sim mode: yield so the simulator's control-period sleep is the sole time-master — the policy
@@ -415,9 +392,7 @@ class Harness(pimm.ControlSystem):
             if directive_msg.updated:
                 yield from self._handle_directive(directive_msg.data, clock)
             elif not self._running:
-                if self._trials is None and self._recover_if_error(clock):
-                    pass  # the arm is in error / recovering — manual commands resume once it is back
-                elif manual_msg.updated and manual_msg.data is not None:
+                if manual_msg.updated and manual_msg.data is not None:
                     self._apply_manual(manual_msg.data, clock)
                 elif self._trials is not None:
                     trial = next(self._trials, None)

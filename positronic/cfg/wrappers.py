@@ -1,16 +1,15 @@
 import configuronic as cfn
 
-from positronic.policy.wrappers import ChunkedSchedule, ErrorRecovery, TemporalStack
+from positronic.policy.wrappers import ChunkedSchedule, TemporalStack
 
 chunked_schedule = cfn.Config(ChunkedSchedule)
-error_recovery = cfn.Config(ErrorRecovery)
 temporal_stack = cfn.Config(TemporalStack)
 
 
 @cfn.config()
 def default_wrappers():
-    """Eval ``wrap`` default: error recovery + chunked scheduling, no temporal stack."""
-    return ErrorRecovery() | ChunkedSchedule()
+    """Eval ``wrap`` default: chunked scheduling, no temporal stack."""
+    return ChunkedSchedule()
 
 
 def _frame_offsets_sec(history_frames: int, stride: int, fps: float) -> tuple[float, ...]:
@@ -33,7 +32,7 @@ def _frame_offsets_sec(history_frames: int, stride: int, fps: float) -> tuple[fl
 
 @cfn.config(keys=('image.wrist', 'image.exterior', 'robot_state.ee_pose', 'grip'), fps=15.0, pad_start=True)
 def video_context_wrappers(history_frames: int, stride: int, keys: tuple[str, ...], fps: float, pad_start: bool):
-    """Eval ``wrap`` for video-conditioned policies: error recovery, strided temporal context, scheduling.
+    """Eval ``wrap`` for video-conditioned policies: strided temporal context, scheduling.
 
     The temporal stack sits outside the scheduler so it records the named ``keys`` every control tick and
     substitutes a stack sampled per ``history_frames``/``stride``; pair it with a codec whose ``horizon``
@@ -51,4 +50,4 @@ def video_context_wrappers(history_frames: int, stride: int, keys: tuple[str, ..
     stack = TemporalStack(
         keys=tuple(keys), offsets_sec=_frame_offsets_sec(history_frames, stride, fps), pad_start=pad_start
     )
-    return ErrorRecovery() | stack | ChunkedSchedule()
+    return stack | ChunkedSchedule()

@@ -1,4 +1,4 @@
-"""Composable policy wrappers — scheduling, error recovery, and temporal frame stacking.
+"""Composable policy wrappers — scheduling and temporal frame stacking.
 
 Wrappers are composable serving-time concerns layered around a policy with ``|`` (left is
 outermost), exactly like codecs. Most read time from the observation (``obs_time_ns``); only
@@ -11,7 +11,6 @@ from collections import deque
 
 import numpy as np
 
-from positronic.drivers import roboarm
 from positronic.policy.base import DelegatingSession, Now, PolicyWrapper, Session
 
 
@@ -60,43 +59,6 @@ class ChunkedSchedule(PolicyWrapper):
 
     def wrap_session(self, inner: Session, context, now: Now):
         return ChunkedSchedule._Session(inner, now)
-
-
-class ErrorRecovery(PolicyWrapper):
-    """Wraps a policy to handle robot errors by emitting Recover commands.
-
-    On error: emits a single Recover trajectory, then returns None until the robot recovers. On
-    recovery: resumes normal inference.
-
-    TODO: this wrapper is not name-free. It hard-codes the ``robot_state.error`` observation and the
-    ``robot_command`` channel (with a Franka ``Recover``), so it only fits Franka-named embodiments;
-    others must omit it from their ``wrap``. How an embodiment should declare its error signal and
-    recovery action is still open.
-    """
-
-    class _Session(DelegatingSession):
-        """Emits Recover trajectory on robot error, delegates otherwise."""
-
-        def __init__(self, inner: Session):
-            super().__init__(inner)
-            self._in_error = False
-
-        def __call__(self, obs):
-            was_ok = not self._in_error
-            self._in_error = obs['robot_state.error'] == 1
-
-            if self._in_error:
-                if was_ok:
-                    # Reset any inner scheduling state so post-recovery doesn't stall on a stale
-                    # trajectory_end from the pre-error chunk.
-                    self._inner.cancel()
-                    return [{'robot_command': roboarm.command.Recover(), 'timestamp': _obs_time(obs)}]
-                return None
-
-            return self._inner(obs)
-
-    def wrap_session(self, inner: Session, context, now: Now):
-        return ErrorRecovery._Session(inner)
 
 
 class _StackBuffer:

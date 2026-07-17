@@ -17,7 +17,7 @@ from positronic.drivers.roboarm.models import bundled_panda_model
 from positronic.eval import ROBOT_STATIC_META, Command, Embodiment, Eval, Observation, Task
 from positronic.inference import main
 from positronic.policy.tests.test_harness import StubPolicy
-from positronic.policy.wrappers import ChunkedSchedule, ErrorRecovery
+from positronic.policy.wrappers import ChunkedSchedule
 from positronic.simulator.mujoco.sim import MujocoSim
 from positronic.simulator.mujoco.transforms import AddBox, SetBodyPosition
 from positronic.utils import package_assets_path
@@ -78,7 +78,7 @@ def test_sim_emits_commands_and_records_dataset(tmp_path, monkeypatch):
             policy=policy,
             evals=[replace(ev, trials=[{'eval.trial_index': i, 'eval.seed': 100 + i} for i in range(2)])],
             output_dir=str(tmp_path),
-            wrap=ErrorRecovery() | ChunkedSchedule(),
+            wrap=ChunkedSchedule(),
         )
 
     ds = LocalDataset(tmp_path)
@@ -221,7 +221,7 @@ def test_countdown_records_frame0_every_trial(tmp_path):
             policy=StubPolicy(command=ev.embodiment.commands['robot_command'].home, target_grip=0.0),
             evals=[replace(ev, trials=[{'eval.trial_index': i, 'eval.seed': i} for i in range(2)])],
             output_dir=str(tmp_path),
-            wrap=None,  # the degenerate obs is not Franka-shaped; ErrorRecovery hard-codes robot_state.error
+            wrap=None,  # the degenerate obs is not Franka-shaped, so run the policy unwrapped
         )
 
     ds = LocalDataset(tmp_path)

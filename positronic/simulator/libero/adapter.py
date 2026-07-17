@@ -73,12 +73,12 @@ class LiberoAdapter(EnvAdapter):
             value = player.advance(now_ns)
             if value is not None:
                 self._held[name] = value
-        # The server maps the held command into the active controller's action. Reset/Recover have no robosuite
-        # action, so they forward as a hold; a CartesianDelta is a one-shot relative motion, forwarded once then
+        # The server maps the held command into the active controller's action. Reset has no robosuite
+        # action, so it forwards as a hold; a CartesianDelta is a one-shot relative motion, forwarded once then
         # dropped so the held command never re-composes it against the moving eef.
         cmd = self._held.get('robot_command')
         match cmd:
-            case roboarm_command.Reset() | roboarm_command.Recover():
+            case roboarm_command.Reset():
                 self._held.pop('robot_command')
                 cmd = None
             case roboarm_command.CartesianDelta():
