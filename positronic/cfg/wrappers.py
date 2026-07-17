@@ -31,8 +31,8 @@ def _frame_offsets_sec(history_frames: int, stride: int, fps: float) -> tuple[fl
     return tuple(-f / fps for f in reversed(frames))
 
 
-@cfn.config(keys=('image.wrist', 'image.exterior', 'robot_state.ee_pose', 'grip'), fps=15.0)
-def video_context_wrappers(history_frames: int, stride: int, keys: tuple[str, ...], fps: float):
+@cfn.config(keys=('image.wrist', 'image.exterior', 'robot_state.ee_pose', 'grip'), fps=15.0, pad_start=True)
+def video_context_wrappers(history_frames: int, stride: int, keys: tuple[str, ...], fps: float, pad_start: bool):
     """Eval ``wrap`` for video-conditioned policies: error recovery, strided temporal context, scheduling.
 
     The temporal stack sits outside the scheduler so it records the named ``keys`` every control tick and
@@ -43,6 +43,12 @@ def video_context_wrappers(history_frames: int, stride: int, keys: tuple[str, ..
     ``('robot_state.ee_pose', 'grip')``) so each history step carries its own pose — the trajectory a
     model trained on real per-frame proprio expects. Drop the proprio keys for models whose codec
     consumes only the current proprio.
+
+    ``pad_start=False`` sends only observed history at episode start (a growing stack) instead of the
+    current frame repeated across the window; use it with servers that handle short history via a
+    cold-start path. Keep ``True`` for servers that require the trained fixed window length.
     """
-    stack = TemporalStack(keys=tuple(keys), offsets_sec=_frame_offsets_sec(history_frames, stride, fps))
+    stack = TemporalStack(
+        keys=tuple(keys), offsets_sec=_frame_offsets_sec(history_frames, stride, fps), pad_start=pad_start
+    )
     return ErrorRecovery() | stack | ChunkedSchedule()
