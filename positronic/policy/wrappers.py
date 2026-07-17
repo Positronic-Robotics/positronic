@@ -136,6 +136,40 @@ class _StackBuffer:
         return max(int(np.searchsorted(times, target, side='right')) - 1, 0)
 
 
+class _MotionStackBuffer:
+    """Motion-gated history: keeps a frame only when its ``motion_key`` value moved more than
+    ``motion_eps`` (L2) since the last kept frame, then samples the most recent ``n_samples`` kept
+    frames every ``stride``, repeating the oldest before enough motion accumulates. The window is a
+    fixed span of motion rather than wall-clock, so idle stalls between control steps never fill it
+    with frozen frames — the client-side mirror of training's idle-frame filtering.
+    """
+
+    def __init__(self, motion_key: str, motion_eps: float, stride: int, n_samples: int):
+        self._motion_key = motion_key
+        self._motion_eps = motion_eps
+        self._stride = stride
+        self._n_samples = n_samples
+        self._entries: deque[dict[str, np.ndarray]] = deque(maxlen=(n_samples - 1) * stride + 1)
+        self._last_motion: np.ndarray | None = None
+
+    def reset(self):
+        self._entries.clear()
+        self._last_motion = None
+
+    def append(self, now: float, values: dict[str, np.ndarray]):
+        motion = np.asarray(values[self._motion_key]).ravel()
+        if self._last_motion is not None and np.linalg.norm(motion - self._last_motion) <= self._motion_eps:
+            return
+        self._last_motion = motion
+        self._entries.append({k: np.array(v) for k, v in values.items()})
+
+    def sample(self, now: float) -> dict[str, np.ndarray]:
+        newest = len(self._entries) - 1
+        picked = [self._entries[max(newest - i * self._stride, 0)] for i in range(self._n_samples)]
+        picked.reverse()
+        return {k: np.stack([entry[k] for entry in picked]) for k in picked[0]}
+
+
 class TemporalStack(PolicyWrapper):
     """Replaces each named observation entry with a temporal stack of recent samples.
 
@@ -149,10 +183,23 @@ class TemporalStack(PolicyWrapper):
     """
 
     class _Session(DelegatingSession):
-        def __init__(self, inner: Session, keys: tuple[str, ...], offsets_sec: tuple[float, ...]):
+        def __init__(
+            self,
+            inner: Session,
+            keys: tuple[str, ...],
+            offsets_sec: tuple[float, ...],
+            motion_key: str | None,
+            motion_eps: float,
+            stride: int,
+            n_samples: int,
+        ):
             super().__init__(inner)
             self._keys = keys
-            self._buffer = _StackBuffer(offsets_sec)
+            self._buffer = (
+                _StackBuffer(offsets_sec)
+                if motion_key is None
+                else _MotionStackBuffer(motion_key, motion_eps, stride, n_samples)
+            )
 
         def __call__(self, obs):
             now = _obs_time(obs)
@@ -163,9 +210,23 @@ class TemporalStack(PolicyWrapper):
             self._buffer.reset()
             super().cancel()
 
-    def __init__(self, keys: tuple[str, ...], offsets_sec: tuple[float, ...]):
+    def __init__(
+        self,
+        keys: tuple[str, ...],
+        offsets_sec: tuple[float, ...],
+        motion_key: str | None = None,
+        motion_eps: float = 0.0,
+        stride: int = 1,
+        n_samples: int = 0,
+    ):
         self._keys = tuple(keys)
         self._offsets_sec = tuple(offsets_sec)
+        self._motion_key = motion_key
+        self._motion_eps = motion_eps
+        self._stride = stride
+        self._n_samples = n_samples
 
     def wrap_session(self, inner: Session, context, now: Now):
-        return TemporalStack._Session(inner, self._keys, self._offsets_sec)
+        return TemporalStack._Session(
+            inner, self._keys, self._offsets_sec, self._motion_key, self._motion_eps, self._stride, self._n_samples
+        )
