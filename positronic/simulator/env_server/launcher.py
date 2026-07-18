@@ -21,10 +21,10 @@ def free_port() -> int:
 def ensure_pinned_checkout(repo_url: str, commit: str, dest: Path, *, lfs: bool = False) -> Path:
     """Clone ``repo_url`` into ``dest``, force it onto ``commit``, and return ``dest``.
 
-    The pin is enforced on every run, not just the first: a cache cloned earlier (or by hand) at another
-    revision, or with locally modified tracked files, would otherwise be imported as-is, mismatching
-    committed fixtures and the assumptions pinned against the commit. With ``lfs``, ``git lfs pull`` also
-    runs every time — a clone made without git-lfs installed left pointer stubs behind.
+    The pin is enforced on every call: a cache sitting at another revision, or at the pinned commit but with
+    locally modified tracked files, would otherwise be imported as-is, mismatching committed fixtures and the
+    assumptions pinned against the commit. With ``lfs``, ``git lfs pull`` runs each time too, since a clone made
+    without git-lfs installed carries only pointer stubs.
     """
     if lfs and shutil.which('git-lfs') is None:
         raise RuntimeError("git-lfs is required to fetch the checkout's LFS assets; install it and re-run")
@@ -36,8 +36,8 @@ def ensure_pinned_checkout(repo_url: str, commit: str, dest: Path, *, lfs: bool 
     ).stdout.strip()
     if head != commit:
         subprocess.run(['git', '-C', str(dest), 'fetch', 'origin', commit], check=True)
-    # Force onto the pin on every run, not only when HEAD differs: a same-commit cache with locally modified
-    # tracked files would otherwise import altered benchmark code or assets despite the pin.
+    # Force onto the pin unconditionally: a cache already at the pinned commit but with locally modified tracked
+    # files would otherwise import altered benchmark code or assets despite the pin.
     subprocess.run(['git', '-C', str(dest), 'checkout', '-f', commit], check=True)
     if lfs:
         subprocess.run(['git', '-C', str(dest), 'lfs', 'pull'], check=True)

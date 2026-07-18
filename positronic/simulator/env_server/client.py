@@ -19,8 +19,8 @@ class EnvConnection:
     There is no handshake: the first ``reset`` constructs the env server-side and returns
     ``{'obs', 'meta', 'control_dt'}``.
 
-    The connect deadline must cover a first boot on a fresh machine: Isaac compiles its RTX shaders before the
-    server binds the port, which alone runs well past 10 minutes.
+    The connect deadline must cover a first boot on a fresh machine: a heavy simulator can spend many minutes
+    bringing its runtime up — compiling shaders, loading assets — before it binds the port.
     """
 
     def __init__(self, host: str, port: int, *, open_timeout: float = 10.0, connect_deadline: float = 1800.0):
