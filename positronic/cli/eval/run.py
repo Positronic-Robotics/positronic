@@ -114,7 +114,8 @@ def _run_world(
         producers = [cs for cs in embodiment.control_systems if cs is not None]
         foreground = driver.control_systems if driver is not None else []
         if embodiment.simulated:
-            world.run([*foreground, harness, ds_agent, *producers], gui)
+            # An attended sim serves a live operator, so it runs at wall pace; unattended evals free-run.
+            world.run([*foreground, harness, ds_agent, *producers], gui, pace_to_wall=driver is not None)
         else:
             world.run([harness, *foreground], [*producers, ds_agent, gui])
 

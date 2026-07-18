@@ -1,5 +1,4 @@
 import logging
-import time
 from collections.abc import Callable, Iterator, Sequence
 from contextlib import nullcontext
 from enum import Enum
@@ -311,22 +310,8 @@ def main_sim(
         ds_agent = wire.wire(world, data_collection, dataset_writer, cameras, sim, sim, gui, TimeMode.MESSAGE)
         _wire(world, ds_agent, data_collection, webxr, sim, sound)
 
-        sim_iter = world.start([sim, data_collection], [webxr, gui, ds_agent, sound])
-        sim_iter = iter(sim_iter)
-
-        # VR teleop is live, so pace virtual time to wall time: only step the sim when it has fallen behind.
-        start_time = pimm.world.SystemClock().now_ns()
-        sim_start_time = world.clock.now_ns()
-
-        while not world.should_stop:
-            try:
-                time_since_start = pimm.world.SystemClock().now_ns() - start_time
-                if world.clock.now_ns() < sim_start_time + time_since_start:
-                    next(sim_iter)
-                else:
-                    time.sleep(0.001)
-            except StopIteration:
-                break
+        # VR teleop is live, so pace virtual time to wall time.
+        world.run([sim, data_collection], [webxr, gui, ds_agent, sound], pace_to_wall=True)
 
 
 main_cfg = cfn.Config(
