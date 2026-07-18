@@ -70,8 +70,10 @@ robolab.constants.set_output_dir(tempfile.mkdtemp(prefix='robolab-env-'))
 
 
 def _load_robot_meta() -> dict[str, Any]:
-    """The DROID rig's model the launcher serialized, emitted as ``robot_meta``. Empty when a caller
-    (e.g. ``validate.py``) imports the env without the launcher's environment."""
+    """The DROID rig's model (the viewer's URDF + Robotiq meshes) decoded from the wire codec and emitted as
+    ``robot_meta``. This env runs in RoboLab's Isaac interpreter and cannot import positronic to build the model
+    itself, so the launcher builds ``bundled_franka_model()`` on the positronic side, serializes it, and passes
+    the path in ``ROBOLAB_ROBOT_META``. Empty when a caller (e.g. ``validate.py``) imports the env without it."""
     path = os.environ.get('ROBOLAB_ROBOT_META')
     if path is None:
         return {}
