@@ -1,31 +1,33 @@
-/* Positronic launch console — a robotics flight-deck at dusk. */
+/* Positronic launch console — navy deck lit by a single lime accent. */
 
 :root {
-  --bg: #12161d;
-  --panel: #1a2029;
-  --panel-hi: #1e2530;
-  --line: #2a3240;
-  --line-soft: #222a36;
-  --text: #d7dde6;
-  --muted: #8b95a4;
-  --muted-dim: #6b7686;
+  --bg: #0a0f1e;
+  --panel: #0f172a;
+  --panel-hi: #16213a;
+  --line: rgba(148, 163, 184, 0.18);
+  --line-soft: rgba(148, 163, 184, 0.10);
+  --text: #e8ebf5;
+  --muted: #9ca3af;
+  --muted-dim: #6b7280;
 
-  --amber: #ffb454;
-  --amber-soft: #ffd9a0;
-  --green: #4fd08c;
-  --danger: #ff5d5d;
+  --accent: #b1e74f;
+  --accent-soft: #cdf08a;
+  --accent-ink: #0a0f1e;
+  --green: #4ade80;
+  --warn: #fbbf24;
+  --danger: #f97373;
 
   /* command-strip provenance */
   --seg-runner: #7b8698;
-  --seg-session: #6f8aa6;
-  --seg-preset: var(--amber);
+  --seg-session: #7e97b5;
+  --seg-preset: var(--accent);
   --seg-task: var(--green);
-  --seg-extra: var(--amber-soft);
+  --seg-extra: var(--accent-soft);
 
-  --mono: ui-monospace, 'JetBrains Mono', 'Cascadia Code', Menlo, Consolas, monospace;
-  --sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+  --mono: ui-monospace, 'SF Mono', 'JetBrains Mono', 'Cascadia Code', Menlo, Consolas, monospace;
+  --sans: system-ui, -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
 
-  --radius: 10px;
+  --radius: 12px;
   --maxw: 1200px;
 }
 
@@ -44,7 +46,8 @@ body {
   line-height: 1.5;
   -webkit-font-smoothing: antialiased;
   background:
-    radial-gradient(130% 62% at 50% -12%, rgba(64, 84, 116, 0.38), rgba(18, 22, 29, 0) 62%),
+    radial-gradient(circle at 100% 0%, rgba(177, 231, 79, 0.06), rgba(0, 0, 0, 0) 55%),
+    radial-gradient(circle at 0% 100%, rgb(15, 20, 31), rgb(10, 15, 26) 65%),
     var(--bg);
   background-attachment: fixed;
 }
@@ -65,7 +68,7 @@ code, textarea, input, .mono { font-family: var(--mono); }
 .eyebrow-sub {
   margin-left: 0.5em;
   letter-spacing: 0.04em;
-  color: var(--amber);
+  color: var(--accent);
   text-transform: none;
 }
 
@@ -81,8 +84,8 @@ code, textarea, input, .mono { font-family: var(--mono); }
   font-size: 13.5px;
   font-weight: 600;
   border: 1px solid transparent;
-  border-radius: 8px;
-  padding: 9px 16px;
+  border-radius: 999px;
+  padding: 9px 18px;
   cursor: pointer;
   color: var(--text);
   background: transparent;
@@ -92,54 +95,58 @@ code, textarea, input, .mono { font-family: var(--mono); }
 .btn:disabled { opacity: 0.45; cursor: not-allowed; }
 
 .btn-launch {
-  background: var(--amber);
-  color: #14181f;
+  background: var(--accent);
+  color: var(--accent-ink);
   font-weight: 700;
   letter-spacing: 0.01em;
-  padding: 11px 30px;
-  box-shadow: 0 0 0 1px rgba(255, 180, 84, 0.35), 0 8px 28px -12px rgba(255, 180, 84, 0.7);
+  padding: 11px 32px;
+  box-shadow: 0 0 0 1px rgba(17, 24, 39, 0.9), 0 10px 24px rgba(177, 231, 79, 0.35);
 }
 .btn-launch:not(:disabled):hover {
-  background: #ffc270;
-  box-shadow: 0 0 0 1px rgba(255, 180, 84, 0.5), 0 10px 32px -10px rgba(255, 180, 84, 0.85);
+  background: #bdec66;
+  transform: translateY(-1px);
+  box-shadow: 0 0 0 1px rgba(17, 24, 39, 0.9), 0 14px 34px rgba(177, 231, 79, 0.5);
 }
+.btn-launch:not(:disabled):active { transform: translateY(0); }
 
 .btn-stop {
-  border-color: var(--line);
-  background: var(--panel-hi);
+  border-color: rgba(148, 163, 184, 0.45);
+  background: rgba(15, 23, 42, 0.95);
+  color: var(--muted);
 }
-.btn-stop:not(:disabled):hover { border-color: var(--amber); color: var(--amber); }
+.btn-stop:not(:disabled):hover { border-color: var(--accent); color: var(--accent); }
 
 .btn-force {
-  background: rgba(255, 93, 93, 0.12);
-  border-color: var(--danger);
-  color: #ff8b8b;
+  background: rgba(248, 113, 113, 0.14);
+  border-color: rgba(248, 113, 113, 0.5);
+  color: #fca5a5;
 }
-.btn-force:hover { background: rgba(255, 93, 93, 0.22); color: #ffb0b0; }
+.btn-force:hover { background: rgba(248, 113, 113, 0.24); color: #fecaca; }
 
 .btn-ghost {
-  padding: 6px 12px;
+  padding: 6px 14px;
   font-size: 12px;
   color: var(--muted);
-  border-color: var(--line);
+  border-color: rgba(148, 163, 184, 0.45);
+  background: rgba(15, 23, 42, 0.95);
 }
-.btn-ghost:hover { color: var(--text); border-color: var(--muted); }
+.btn-ghost:hover { color: var(--accent); border-color: var(--accent); }
 
 :focus-visible {
-  outline: 2px solid var(--amber);
+  outline: 2px solid var(--accent);
   outline-offset: 2px;
   border-radius: 4px;
 }
 
 .notice {
   font-size: 13px;
-  border-radius: 8px;
+  border-radius: 10px;
   padding: 10px 12px;
-  border: 1px solid rgba(255, 93, 93, 0.4);
-  background: rgba(255, 93, 93, 0.08);
-  color: #ffb0b0;
+  border: 1px solid rgba(248, 113, 113, 0.4);
+  background: rgba(248, 113, 113, 0.1);
+  color: #fca5a5;
 }
-.notice code { color: #ffd0d0; }
+.notice code { color: #fecdd3; }
 .notice-empty {
   border-color: var(--line);
   background: transparent;
@@ -162,18 +169,18 @@ code, textarea, input, .mono { font-family: var(--mono); }
   justify-content: space-between;
   gap: 16px;
   padding: 16px 24px;
-  border-bottom: 1px solid var(--line-soft);
-  background: linear-gradient(180deg, rgba(30, 40, 56, 0.5), rgba(18, 22, 29, 0));
+  border-bottom: 1px solid var(--line);
+  background: linear-gradient(180deg, rgba(15, 23, 42, 0.65), rgba(10, 15, 30, 0));
 }
 
 .brand { display: flex; align-items: center; gap: 12px; min-width: 0; }
 .brand .mark { width: 26px; height: 26px; flex: none; }
 .brand .mark circle, .brand .mark path {
   fill: none;
-  stroke: var(--amber);
+  stroke: var(--accent);
   stroke-width: 1.4;
 }
-.brand .mark .mark-core { fill: var(--amber); stroke: none; }
+.brand .mark .mark-core { fill: var(--accent); stroke: none; }
 
 .brand-name {
   font-family: var(--mono);
@@ -190,7 +197,7 @@ code, textarea, input, .mono { font-family: var(--mono); }
 .run-preset {
   font-family: var(--mono);
   font-size: 14px;
-  color: var(--amber);
+  color: var(--accent);
   letter-spacing: 0.02em;
 }
 .run-elapsed {
@@ -204,7 +211,7 @@ code, textarea, input, .mono { font-family: var(--mono); }
   width: 10px; height: 10px;
   border-radius: 50%;
   background: var(--muted-dim);
-  box-shadow: 0 0 0 3px rgba(139, 149, 164, 0.12);
+  box-shadow: 0 0 0 3px rgba(148, 163, 184, 0.12);
   flex: none;
 }
 .lamp-label {
@@ -217,21 +224,21 @@ code, textarea, input, .mono { font-family: var(--mono); }
 
 [data-status="booting"] .lamp,
 [data-status="stopping"] .lamp {
-  background: var(--amber);
-  box-shadow: 0 0 0 3px rgba(255, 180, 84, 0.16), 0 0 10px 1px rgba(255, 180, 84, 0.6);
+  background: var(--warn);
+  box-shadow: 0 0 0 3px rgba(251, 191, 36, 0.16), 0 0 10px 1px rgba(251, 191, 36, 0.6);
 }
 [data-status="booting"] .lamp-label,
-[data-status="stopping"] .lamp-label { color: var(--amber); }
+[data-status="stopping"] .lamp-label { color: var(--warn); }
 
 [data-status="running"] .lamp {
   background: var(--green);
-  box-shadow: 0 0 0 3px rgba(79, 208, 140, 0.16), 0 0 10px 1px rgba(79, 208, 140, 0.55);
+  box-shadow: 0 0 0 3px rgba(74, 222, 128, 0.16), 0 0 10px 1px rgba(74, 222, 128, 0.55);
 }
 [data-status="running"] .lamp-label { color: var(--green); }
 
 [data-status="failed"] .lamp {
   background: var(--danger);
-  box-shadow: 0 0 0 3px rgba(255, 93, 93, 0.16), 0 0 10px 1px rgba(255, 93, 93, 0.55);
+  box-shadow: 0 0 0 3px rgba(248, 113, 113, 0.16), 0 0 10px 1px rgba(248, 113, 113, 0.55);
 }
 [data-status="failed"] .lamp-label { color: var(--danger); }
 
@@ -321,10 +328,10 @@ code, textarea, input, .mono { font-family: var(--mono); }
 }
 .preset-item:hover { background: var(--panel-hi); }
 .preset-item[aria-selected="true"] {
-  color: var(--amber);
-  background: linear-gradient(90deg, rgba(255, 180, 84, 0.14), rgba(255, 180, 84, 0.02));
-  border-left-color: var(--amber);
-  box-shadow: inset 0 0 22px -14px rgba(255, 180, 84, 0.8);
+  color: var(--accent);
+  background: linear-gradient(90deg, rgba(177, 231, 79, 0.14), rgba(177, 231, 79, 0.02));
+  border-left-color: var(--accent);
+  box-shadow: inset 0 0 22px -14px rgba(177, 231, 79, 0.8);
 }
 
 /* Args panels */
@@ -345,9 +352,9 @@ code, textarea, input, .mono { font-family: var(--mono); }
 .arg.boilerplate { opacity: 0.42; }
 .arg.key .arg-name { color: var(--text); }
 .arg.key .arg-val {
-  color: var(--amber);
+  color: var(--accent);
   font-weight: 600;
-  text-shadow: 0 0 12px rgba(255, 180, 84, 0.35);
+  text-shadow: 0 0 12px rgba(177, 231, 79, 0.35);
 }
 .args-session .arg-name { color: var(--muted-dim); }
 .args-session .arg-val { color: var(--seg-session); }
@@ -360,7 +367,7 @@ code, textarea, input, .mono { font-family: var(--mono); }
 .field textarea, .field input {
   background: var(--panel);
   border: 1px solid var(--line);
-  border-radius: 8px;
+  border-radius: 10px;
   color: var(--text);
   font-size: 13.5px;
   padding: 10px 12px;
@@ -370,8 +377,8 @@ code, textarea, input, .mono { font-family: var(--mono); }
 .field textarea::placeholder, .field input::placeholder { color: var(--muted-dim); }
 .field textarea:focus, .field input:focus {
   outline: none;
-  border-color: var(--amber);
-  box-shadow: 0 0 0 3px rgba(255, 180, 84, 0.12);
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgba(177, 231, 79, 0.12);
 }
 
 /* ── Command strip — the signature element ─────────────────────── */
@@ -380,12 +387,12 @@ code, textarea, input, .mono { font-family: var(--mono); }
   border: 1px solid var(--line);
   border-radius: var(--radius);
   background:
-    linear-gradient(180deg, rgba(255, 180, 84, 0.05), rgba(255, 180, 84, 0) 40%),
-    #161d27;
+    linear-gradient(180deg, rgba(177, 231, 79, 0.05), rgba(177, 231, 79, 0) 40%),
+    #0b1120;
   padding: 14px 18px 18px;
   box-shadow:
-    inset 0 0 0 1px rgba(255, 180, 84, 0.06),
-    0 0 46px -14px rgba(255, 180, 84, 0.3);
+    inset 0 0 0 1px rgba(177, 231, 79, 0.06),
+    0 0 46px -14px rgba(177, 231, 79, 0.3);
 }
 .command-head {
   display: flex;
@@ -422,7 +429,7 @@ code, textarea, input, .mono { font-family: var(--mono); }
   font-size: 13.5px;
   line-height: 1.75;
 }
-.command-line .prompt { color: var(--amber); flex: none; user-select: none; }
+.command-line .prompt { color: var(--accent); flex: none; user-select: none; }
 .command-line code {
   white-space: pre-wrap;
   word-break: break-word;
@@ -432,13 +439,13 @@ code, textarea, input, .mono { font-family: var(--mono); }
 .command-line .session { color: var(--seg-session); }
 .command-line .preset {
   color: var(--seg-preset);
-  text-shadow: 0 0 14px rgba(255, 180, 84, 0.45);
+  text-shadow: 0 0 14px rgba(177, 231, 79, 0.45);
 }
 .command-line .mach { color: var(--muted-dim); }
 .command-line .task { color: var(--seg-task); }
 .command-line .extra {
   color: var(--seg-extra);
-  text-decoration: underline dotted rgba(255, 217, 160, 0.5);
+  text-decoration: underline dotted rgba(205, 240, 138, 0.5);
   text-underline-offset: 3px;
 }
 
@@ -465,8 +472,8 @@ code, textarea, input, .mono { font-family: var(--mono); }
 .boot-spinner {
   width: 34px; height: 34px;
   border-radius: 50%;
-  border: 3px solid rgba(255, 180, 84, 0.18);
-  border-top-color: var(--amber);
+  border: 3px solid rgba(177, 231, 79, 0.18);
+  border-top-color: var(--accent);
   flex: none;
 }
 @media (prefers-reduced-motion: no-preference) {
@@ -476,7 +483,7 @@ code, textarea, input, .mono { font-family: var(--mono); }
 .boot-title {
   font-family: var(--mono);
   font-size: 15px;
-  color: var(--amber);
+  color: var(--accent);
   letter-spacing: 0.02em;
   margin-bottom: 4px;
 }
@@ -490,7 +497,7 @@ code, textarea, input, .mono { font-family: var(--mono); }
 .console-bar { display: flex; align-items: center; justify-content: space-between; }
 .new-tab {
   font-size: 13px;
-  color: var(--amber);
+  color: var(--accent);
   text-decoration: none;
   font-weight: 600;
 }
@@ -501,7 +508,7 @@ code, textarea, input, .mono { font-family: var(--mono); }
   min-height: 420px;
   border: 1px solid var(--line);
   border-radius: var(--radius);
-  background: #0d1116;
+  background: #0b1120;
 }
 
 /* ── Log panel ─────────────────────────────────────────────────── */
@@ -537,8 +544,8 @@ code, textarea, input, .mono { font-family: var(--mono); }
   font-family: var(--sans);
   font-size: 12px;
   font-weight: 600;
-  color: #14181f;
-  background: var(--amber);
+  color: var(--accent-ink);
+  background: var(--accent);
   border: none;
   border-radius: 999px;
   padding: 6px 14px;
