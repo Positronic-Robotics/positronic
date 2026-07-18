@@ -86,8 +86,9 @@ class WireCommandAdapter(EnvAdapter):
     """An adapter whose action is the shared wire payload ``{'command': <tagged dict>, 'grip': float}``.
 
     The command side of every remote benchmark adapter: it plays each command channel's trajectory down to
-    the clock, holds the last waypoint between waypoints, and flattens the held arm command (a pose as
-    ``[t(3), R(9)]``, joint positions, or per-step joint deltas) plus the gripper closure into one payload.
+    the clock — holding an absolute setpoint between waypoints, firing a relative delta once — and flattens
+    the held arm command (a pose as ``[t(3), R(9)]``, joint positions, or per-step joint deltas) plus the
+    gripper closure into one payload.
     All action *encoding* — how the tagged command becomes the env's native action — stays server-side with
     the env's own model. Subclasses implement ``_reset_token`` (the base clears the per-trial command state
     around it) and keep the observation and terminal mappings to themselves.
@@ -122,15 +123,17 @@ class WireCommandAdapter(EnvAdapter):
             value = player.advance(now_ns)
             if value is not None:
                 self._held[name] = value
-        # The server maps the held command into its controller's action. Reset has no env-side
-        # action, so it forwards as a hold; a CartesianDelta is a one-shot relative motion, forwarded once
-        # then dropped so the held command never re-composes it against the moving eef.
+        # The server maps the held command into its controller's action. Reset has no env-side action, so it
+        # forwards as a hold; a delta — Cartesian or joint — is a one-shot relative motion, forwarded once then
+        # dropped. Re-sending a stale delta would re-compose it against the moving arm every tick (the eef
+        # drifts, or the joints walk toward their limits), so once a delta's trajectory is exhausted the arm
+        # holds its measured pose.
         cmd = self._held.get('robot_command')
         match cmd:
             case roboarm_command.Reset():
                 self._held.pop('robot_command')
                 cmd = None
-            case roboarm_command.CartesianDelta():
+            case roboarm_command.CartesianDelta() | roboarm_command.JointDelta():
                 self._held.pop('robot_command')
         if 'target_grip' in self._held:
             self._grip = float(self._held['target_grip'])
