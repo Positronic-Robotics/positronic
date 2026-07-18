@@ -7,9 +7,11 @@ the dumb ``server``/``protocol`` without dragging in positronic; ``robolab`` its
 project.
 """
 
+import fcntl
 import os
 import subprocess
-from contextlib import AbstractContextManager
+from collections.abc import Iterator
+from contextlib import AbstractContextManager, contextmanager
 from pathlib import Path
 
 from positronic.drivers.roboarm.models import bundled_franka_model
@@ -54,11 +56,26 @@ def _ensure_robolab_src() -> Path:
     return src
 
 
+@contextmanager
+def _checkout_lock() -> Iterator[None]:
+    """Serialize checkout + patch + ``uv sync`` across processes sharing the cache. A warm-cache fan-out of
+    eval jobs mounts one ``~/.cache/positronic/robolab`` filesystem, so without this two concurrent setups
+    race: one's ``git checkout`` resets ``pyproject.toml`` from under the other's ``uv sync``, which then
+    installs from a pristine or half-written project. The per-eval ``env.py`` runs outside the lock, so
+    evals still fan out — only the setup is one-at-a-time."""
+    _ROBOLAB_SRC.parent.mkdir(parents=True, exist_ok=True)
+    with open(_ROBOLAB_SRC.parent / 'setup.lock', 'w') as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        yield
+
+
 def _spawn(host: str, port: int) -> subprocess.Popen:
-    src = _ensure_robolab_src()
-    # Install the dependency stack before spawning: a cold first install (~15 GB of Isaac wheels) far exceeds
-    # the client's connect deadline, which should only ever cover Isaac boot. Idempotent and fast when warm.
-    subprocess.run(['uv', 'sync', '--project', str(src), '--python', _ROBOLAB_PYTHON], check=True)
+    with _checkout_lock():
+        src = _ensure_robolab_src()
+        # Install the dependency stack before spawning: a cold first install (~15 GB of Isaac wheels) far
+        # exceeds the client's connect deadline, which should only ever cover Isaac boot. Idempotent and fast
+        # when warm.
+        subprocess.run(['uv', 'sync', '--project', str(src), '--python', _ROBOLAB_PYTHON], check=True)
     command = [
         'uv',
         'run',
