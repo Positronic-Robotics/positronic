@@ -260,10 +260,6 @@ services:
   robolab-eval:
     image: positro/robolab:${IMAGE_TAG:-latest}
 
-    # Enable interactive terminal
-    stdin_open: true
-    tty: true
-
     # Isaac's carbonite keeps shared-memory segments in /dev/shm; docker's 64 MB default crashes the RTX
     # renderer at startup
     shm_size: 8g
@@ -289,10 +285,6 @@ services:
     # Set HOME inside container to match the mount expectations
     environment:
       HOME: /root
-
-    # For a policy server running on the docker host, pass `--policy.host=host.docker.internal`
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
 
     working_dir: /positronic
     entrypoint: ["uv", "run", "--python", "3.13", "positronic", "eval", "run"]
