@@ -8,6 +8,8 @@ adapter holds no model and stays geometry-only.
 
 from typing import Any
 
+import numpy as np
+
 import pimm
 from positronic import geom
 from positronic.simulator.env_server.adapter import WireCommandAdapter
@@ -30,7 +32,19 @@ class RobolabAdapter(WireCommandAdapter):
         state = MujocoFrankaState()
         state.encode(raw_obs['joint_pos'], raw_obs['joint_vel'], ee_pose)
         obs: dict[str, Any] = {'robot_state': state, 'grip': float(raw_obs['grip'])}
+        # TODO: honour a camera_dict naming any other RoboLab camera. env.py renders only the WRIST_LEFT
+        # preset (over_shoulder_left + wrist) and hard-codes emitting those two, so a request for e.g.
+        # over_shoulder_right_camera raises below. The full fix threads the requested set end-to-end: carry
+        # it in the reset token, have env.py register the matching preset via
+        # ``auto_register_droid_envs(cameras=WRIST_LEFT_RIGHT_HEAD)`` so the extra cameras spawn into
+        # ``image_obs``, and emit ``image_obs`` dynamically instead of the two fixed keys.
         for logical, env_key in self._camera_dict.items():
+            if env_key not in raw_obs:
+                rendered = sorted(k for k, v in raw_obs.items() if isinstance(v, np.ndarray) and v.ndim == 3)
+                raise ValueError(
+                    f'camera_dict maps {logical!r} to {env_key!r}, which the RoboLab env server does not '
+                    f'render; it emits {rendered}'
+                )
             frame = raw_obs[env_key]  # Isaac tiled cameras render top-down already — no flip
             adapter = pimm.shared_memory.NumpySMAdapter(shape=frame.shape, dtype=frame.dtype)
             adapter.array[:] = frame
