@@ -14,6 +14,7 @@ from contextlib import AbstractContextManager, ExitStack
 from typing import Any
 
 import pimm
+from positronic import eval_timing
 from positronic.dataset.serializers import Serializers
 from positronic.drivers.roboarm import command as roboarm_command
 from positronic.eval import ROBOT_STATIC_META, Command, Embodiment, Observation
@@ -118,7 +119,9 @@ class RemoteEnvControlSystem(pimm.ControlSystem):
 
     def _step_env(self, clock: pimm.Clock) -> dict[str, Any]:
         commands = {name: receiver.read() for name, receiver in self.commands.items()}
-        result = self._conn.step(self._adapter.action(commands, clock.now_ns()))
+        timer = eval_timing.active()
+        with eval_timing.timed(timer.add_env_step if timer is not None else None):
+            result = self._conn.step(self._adapter.action(commands, clock.now_ns()))
         payload = self._adapter.terminal(result)
         if payload:  # truthy-valued done: a non-empty payload ends the trial, an empty/``None`` one continues
             self.done.emit(payload)
