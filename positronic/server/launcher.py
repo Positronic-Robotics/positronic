@@ -124,6 +124,11 @@ class Launcher:
         with self._lock:
             if self._proc is not None:
                 return 409, {'error': 'A run is already in progress'}
+            if self._tcp_probe():
+                return 409, {
+                    'error': f'Port {self.console_port} is already in use — '
+                    'stop whatever serves it before launching, or the console cannot come up'
+                }
             command = self._build_command(parsed, preset, task, extra_args)
             proc = subprocess.Popen(
                 ['bash', '-c', command],

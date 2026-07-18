@@ -271,7 +271,12 @@ function assembledSegments() {
   if (runner) segs.push(['runner', runner], ['plain', ' ']);
   if (preset) segs.push(['preset', preset.raw], ['plain', ' ']);
   if (commonRaw) segs.push(['session', commonRaw], ['plain', ' ']);
-  segs.push(['mach', "--driver.task='"], ['task', task], ['mach', "'"]);
+  if (task) {
+    // Mirror the backend's shlex.quote so the copied command stays a valid shell line
+    // even when the task contains apostrophes; an empty task omits the flag, as the backend does.
+    const quoted = "'" + task.replace(/'/g, "'\\''") + "'";
+    segs.push(['mach', '--driver.task='], ['task', quoted]);
+  }
   if (extra) segs.push(['plain', ' '], ['extra', extra]);
   return segs;
 }
