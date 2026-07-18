@@ -164,3 +164,6 @@ cython_debug/
 
 # Environment variables
 .env*
+
+# Operator-local launcher presets (endpoints are customer-specific)
+/presets*.toml

@@ -1,0 +1,127 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Positronic launch console</title>
+  <meta name="description" content="Operator console for launching robot-policy inference sessions." />
+  <link rel="stylesheet" href="/static/launcher.css" />
+</head>
+<body>
+  <div class="app" data-view="idle" data-status="idle">
+    <header class="topbar">
+      <div class="brand">
+        <svg class="mark" viewBox="0 0 32 32" aria-hidden="true">
+          <circle cx="16" cy="16" r="11" />
+          <circle cx="16" cy="16" r="3.2" class="mark-core" />
+          <path d="M16 1.5V6M16 26v4.5M1.5 16H6M26 16h4.5" />
+        </svg>
+        <span class="brand-name">Positronic <b>launch&nbsp;console</b></span>
+      </div>
+
+      <div class="status" id="status">
+        <span class="run-preset" id="runPreset"></span>
+        <span class="run-elapsed" id="runElapsed"></span>
+        <span class="lamp" id="lamp"></span>
+        <span class="lamp-label" id="lampLabel">idle</span>
+        <button class="btn btn-stop" id="stopBtn" hidden>Stop</button>
+        <button class="btn btn-force" id="forceBtn" hidden>Force kill</button>
+      </div>
+    </header>
+
+    <main class="content">
+      <!-- ───────────────────────── IDLE VIEW ───────────────────────── -->
+      <section class="idle-view" id="idleView">
+
+        <div class="notice notice-banner" id="presetError" hidden></div>
+        <div class="last-run" id="lastRun" hidden></div>
+
+        <div class="grid">
+          <aside class="rail panel">
+            <div class="eyebrow">Presets</div>
+            <ul class="preset-list" id="presetList"></ul>
+            <div class="notice notice-empty" id="presetEmpty" hidden>
+              No presets defined. Add entries to <code>presets.toml</code> and refresh.
+            </div>
+          </aside>
+
+          <div class="detail">
+            <section class="panel">
+              <div class="eyebrow">Policy <span class="eyebrow-sub" id="policyName"></span></div>
+              <div class="args" id="policyArgs"></div>
+            </section>
+            <section class="panel">
+              <div class="eyebrow">Session lands at</div>
+              <div class="args args-session" id="sessionArgs"></div>
+            </section>
+          </div>
+        </div>
+
+        <div class="inputs">
+          <label class="field field-task">
+            <span class="eyebrow">Task</span>
+            <textarea id="taskInput" rows="2" spellcheck="false"
+              placeholder="What the robot should do"></textarea>
+          </label>
+          <label class="field field-extra">
+            <span class="eyebrow">Extra args</span>
+            <input id="extraInput" type="text" spellcheck="false" autocomplete="off"
+              placeholder="one-off overrides, e.g. --policy.temperature=0.2" />
+          </label>
+        </div>
+
+        <section class="command-block" id="commandBlock" aria-label="Assembled command">
+          <div class="command-head">
+            <div class="eyebrow">Command</div>
+            <div class="legend" id="legend">
+              <span class="swatch seg-preset">preset</span>
+              <span class="swatch seg-task">task</span>
+              <span class="swatch seg-extra">extra</span>
+              <span class="swatch seg-session">session &amp; runner</span>
+            </div>
+            <button class="btn btn-ghost copy-btn" id="copyBtn" type="button">Copy</button>
+          </div>
+          <div class="command-line"><span class="prompt">$</span><code id="commandText"></code></div>
+        </section>
+
+        <div class="launch-row">
+          <div class="notice notice-inline" id="startError" hidden></div>
+          <button class="btn btn-launch" id="launchBtn" type="button">Launch</button>
+        </div>
+      </section>
+
+      <!-- ─────────────────────── RUNNING VIEW ──────────────────────── -->
+      <section class="running-view" id="runningView">
+        <div class="boot" id="bootPlaceholder">
+          <div class="boot-spinner" aria-hidden="true"></div>
+          <div class="boot-copy">
+            <div class="boot-title">Bringing the robot online</div>
+            <p>Unlocking brakes, activating FCI, warming up the model. This usually
+               takes 30&ndash;60 seconds. The console appears here once it answers.</p>
+          </div>
+        </div>
+
+        <div class="console-wrap" id="consoleWrap" hidden>
+          <div class="console-bar">
+            <span class="eyebrow">Robot console</span>
+            <a class="new-tab" id="newTabLink" target="_blank" rel="noopener">Open console in new tab ↗</a>
+          </div>
+          <iframe id="consoleFrame" title="Robot console" referrerpolicy="no-referrer"></iframe>
+        </div>
+      </section>
+
+      <!-- ─────────────────────── LOG PANEL ─────────────────────────── -->
+      <section class="log-panel panel" id="logPanel" hidden>
+        <div class="log-head">
+          <div class="eyebrow">Launcher log</div>
+          <span class="log-sub" id="logSub"></span>
+        </div>
+        <div class="log-body" id="logBody" tabindex="0"></div>
+        <button class="jump-latest" id="jumpLatest" type="button" hidden>Jump to latest ↓</button>
+      </section>
+    </main>
+  </div>
+
+  <script src="/static/launcher.js"></script>
+</body>
+</html>
