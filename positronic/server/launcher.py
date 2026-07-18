@@ -75,10 +75,14 @@ def _load_presets(path: str) -> dict:
     except tomllib.TOMLDecodeError as e:
         return {**defaults, 'error': f'Failed to parse {p}: {e}'}
 
+    presets_tbl = data.get('presets', {})
+    if not isinstance(presets_tbl, dict) or not all(isinstance(e, dict) for e in presets_tbl.values()):
+        return {**defaults, 'error': f'{p}: each preset must be a [presets.<name>] table with an `args` value'}
+
     common_raw = _collapse(str(data.get('common', '')))
     common_args = _split_args(common_raw)
     presets = {}
-    for name, entry in data.get('presets', {}).items():
+    for name, entry in presets_tbl.items():
         raw = _collapse(str(entry.get('args', '')))
         presets[name] = {'raw': raw, 'args': _split_args(raw)}
     return {
