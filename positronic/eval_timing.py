@@ -156,10 +156,14 @@ def _start_gpu_sampler(out_dir: Path) -> subprocess.Popen | None:
     an error. ``-s um`` samples SM/memory utilisation + framebuffer, ``-d 1`` once a second, ``-o DT``
     prefixes each row with date and time.
     """
+    # A prior pass in the same output_dir may have left a log; drop it first so a run that ends up without
+    # GPU samples (no nvidia-smi here) can't be summarised against a stale one — the reducer auto-reads
+    # this file whenever it exists.
+    log_path = out_dir / GPU_LOG_FILENAME
+    log_path.unlink(missing_ok=True)
     if shutil.which('nvidia-smi') is None:
         logger.info('EvalTimer: no nvidia-smi on PATH; skipping GPU sampling')
         return None
-    log_path = out_dir / GPU_LOG_FILENAME
     return subprocess.Popen(['nvidia-smi', 'dmon', '-s', 'um', '-d', '1', '-o', 'DT', '-f', str(log_path)])
 
 
