@@ -24,8 +24,9 @@
 # NEBIUS_IMAGE_REPO, NEBIUS_IMAGE_TAG, NEBIUS_CACHE_FS, NEBIUS_JOB_TIMEOUT.
 #
 # NEBIUS_IMAGE_REPO defaults to the Docker Hub `positro/robolab`; set it to an
-# in-region registry path (e.g. cr.eu-north1.nebius.cloud/<project-id>/robolab)
-# to pull the image from the Nebius Container Registry instead.
+# in-region registry path (e.g. cr.<region>.nebius.cloud/<registry-id>/robolab,
+# where <registry-id> is the Container Registry ID minus the `registry-` prefix —
+# not the project ID) to pull the image from the Nebius Container Registry instead.
 
 set -euo pipefail
 
