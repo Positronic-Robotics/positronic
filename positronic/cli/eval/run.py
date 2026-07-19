@@ -145,6 +145,8 @@ def main(
     after the last World, so a multi-eval sweep reuses one live policy across the rebuilds.
     """
     assert (driver is None) != (evals is None), 'Provide exactly one of driver or evals'
+    if timing and output_dir is None:
+        raise ValueError('--timing needs --output_dir: the per-rollout telemetry (timing.jsonl) has nowhere to go')
 
     # Drive the policy's remote endpoints through their cold start before hardware and the operator
     # surface come up: opening a session blocks on the server handshake, which returns only once the
