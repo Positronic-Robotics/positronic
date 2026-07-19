@@ -26,7 +26,8 @@ class _RecordedFacts:
 
     duration_s: float
     size_mb: float
-    success: bool | None  # None when the env recorded no success verdict (only counted when known)
+    success: bool | None  # the env's eval.success verdict; None when it recorded none
+    terminated: bool | None  # eval.terminated: the trial ended within budget vs timed out; None if unrecorded
 
 
 @dataclass
@@ -62,14 +63,16 @@ def _recorded_facts(dataset_dir: Path) -> dict[str, _RecordedFacts]:
         ep = dataset[i]
         uid = str(ep.meta.get('uid', f'ts-{ep.meta.get("created_ts_ns", i)}'))
         # ``eval.success`` is the env's task-success verdict; ``eval.terminated`` only means the episode
-        # ended within budget, so a failed-but-done rollout is terminated=True, success=False. Read the
-        # success verdict directly and leave it None when the env recorded none, rather than conflating
-        # the two.
+        # ended within budget, so a failed-but-done rollout is terminated=True, success=False and a
+        # timed-out one is terminated=False with no success verdict. Keep both so the roll-up can tell a
+        # scored failure from an unscored episode.
         verdict = ep.static.get('eval.success')
+        terminated = ep.static.get('eval.terminated')
         facts[uid] = _RecordedFacts(
             duration_s=ep.duration_ns / 1e9,
             size_mb=float(ep.meta.get('size_mb', 0.0)),
             success=None if verdict is None else bool(verdict),
+            terminated=None if terminated is None else bool(terminated),
         )
     return facts
 
@@ -109,6 +112,21 @@ def _parse_dmon(log_path: Path) -> GpuSummary:
     )
 
 
+def _success_outcome(facts: _RecordedFacts, has_oracle: bool) -> bool | None:
+    """Whether the episode is a success (True), a failure (False), or unscored (None).
+
+    A recorded ``eval.success`` is taken as-is. With none, an episode that reached a verdict or timed out
+    (``eval.terminated`` recorded) under an eval that *does* score success elsewhere is a failure — this is
+    the timed-out rollout an adapter only marks on live success. With no success oracle anywhere in the
+    run there is nothing to score.
+    """
+    if facts.success is not None:
+        return facts.success
+    if has_oracle and facts.terminated is not None:
+        return False
+    return None
+
+
 def _build_report(records: list[dict], facts: dict[str, _RecordedFacts], gpu: dict[str, GpuSummary]) -> PassReport:
     wall = np.array([r['wall_s'] for r in records], dtype=float)
     wall_pass = float(wall.sum())
@@ -119,7 +137,8 @@ def _build_report(records: list[dict], facts: dict[str, _RecordedFacts], gpu: di
 
     matched = [facts[r['episode_uid']] for r in records if r['episode_uid'] in facts]
     sim_seconds = sum(f.duration_s for f in matched)
-    judged = [f for f in matched if f.success is not None]
+    has_oracle = any(f.success is not None for f in matched)
+    judged = [o for o in (_success_outcome(f, has_oracle) for f in matched) if o is not None]
     return PassReport(
         episodes=len(records),
         wall_pass_s=wall_pass,
@@ -130,7 +149,7 @@ def _build_report(records: list[dict], facts: dict[str, _RecordedFacts], gpu: di
         infer_p95_ms=float(np.percentile(all_infer_ms, 95)) if all_infer_ms.size else 0.0,
         mean_split_fractions=split_fractions,
         mean_bytes_per_rollout=(sum(f.size_mb for f in matched) / len(matched) * 1e6) if matched else 0.0,
-        success_rate=(sum(f.success for f in judged) / len(judged)) if judged else 0.0,
+        success_rate=(sum(judged) / len(judged)) if judged else 0.0,
         gpu=gpu,
     )
 
