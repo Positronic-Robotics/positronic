@@ -1,7 +1,7 @@
 import logging
 import time
 from collections.abc import Callable
-from typing import Generic, TypeVar
+from typing import Generic, TypeVar, overload
 
 from pimm import Message, SignalEmitter, SignalReceiver
 from pimm.core import Clock, Command, Sleep, Yield
@@ -65,9 +65,32 @@ class MapSignalEmitter(SignalEmitter[T], Generic[T, U]):
             self.emitter.emit(transformed_data, ts)
 
 
-def map(
-    func: Callable[[T], U | None],
-) -> Callable[[SignalReceiver[T] | SignalEmitter[U]], SignalReceiver[U] | SignalEmitter[T]]:
+class SignalMapWrapper(Generic[T, U]):
+    """The wrapper ``map`` returns: it preserves the signal kind while mapping T->U.
+
+    A ``SignalReceiver[T]`` in yields a ``SignalReceiver[U]``; a ``SignalEmitter[U]``
+    in yields a ``SignalEmitter[T]``. The overloads keep the two kinds from mixing.
+    """
+
+    def __init__(self, func: Callable[[T], U | None]):
+        self.func = func
+
+    @overload
+    def __call__(self, signal: SignalReceiver[T]) -> SignalReceiver[U]: ...
+
+    @overload
+    def __call__(self, signal: SignalEmitter[U]) -> SignalEmitter[T]: ...
+
+    def __call__(self, signal: SignalReceiver[T] | SignalEmitter[U]) -> SignalReceiver[U] | SignalEmitter[T]:
+        if isinstance(signal, SignalReceiver):
+            return MapSignalReceiver(signal, self.func)
+        elif isinstance(signal, SignalEmitter):
+            return MapSignalEmitter(signal, self.func)
+        else:
+            raise ValueError(f'Invalid signal type: {type(signal)}')
+
+
+def map(func: Callable[[T], U | None]) -> SignalMapWrapper[T, U]:
     """Transform or filter values passing through a signal.
 
     Returns a wrapper that applies func to all values. If func returns None,
@@ -78,21 +101,13 @@ def map(
         func: Callable that maps a value of type T to U, or returns None to filter.
 
     Returns:
-        A function that wraps a SignalReceiver or SignalEmitter with the transform.
+        A wrapper that maps a SignalReceiver[T] to a SignalReceiver[U], or a
+        SignalEmitter[U] to a SignalEmitter[T].
 
     Raises:
         ValueError: If the provided signal is not a SignalReceiver or SignalEmitter.
     """
-
-    def wrapper(signal: SignalReceiver[T] | SignalEmitter[U]) -> SignalReceiver[U] | SignalEmitter[T]:
-        if isinstance(signal, SignalReceiver):
-            return MapSignalReceiver(signal, func)
-        elif isinstance(signal, SignalEmitter):
-            return MapSignalEmitter(signal, func)
-        else:
-            raise ValueError(f'Invalid signal type: {type(signal)}')
-
-    return wrapper
+    return SignalMapWrapper(func)
 
 
 class RateLimiter:
