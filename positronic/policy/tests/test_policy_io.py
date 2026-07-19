@@ -199,7 +199,8 @@ def test_action_horizon_sec_truncates_chunk():
     codec = ActionTiming(fps=30.0, horizon_sec=0.1)
     policy = codec.wrap(_ChunkPolicy(actions))
     result = policy.new_session()(_T0_OBS)
-    assert [r['v'] for r in result] == [0, 1, 2]
+    assert [r['v'] for r in result if 'v' in r] == [0, 1, 2]
+    assert result[-1] == {'timestamp': pytest.approx(0.1)}  # horizon sentinel
 
 
 def test_action_horizon_sec_none_returns_full_chunk():
@@ -207,7 +208,7 @@ def test_action_horizon_sec_none_returns_full_chunk():
     codec = ActionTiming(fps=30.0)
     policy = codec.wrap(_ChunkPolicy(actions))
     result = policy.new_session()(_T0_OBS)
-    assert len(result) == 5
+    assert len(result) == 6  # 5 actions + timestamp sentinel
 
 
 def test_action_horizon_sec_larger_than_chunk():
@@ -216,7 +217,7 @@ def test_action_horizon_sec_larger_than_chunk():
     codec = ActionTiming(fps=10.0, horizon_sec=10.0)
     policy = codec.wrap(_ChunkPolicy(actions))
     result = policy.new_session()(_T0_OBS)
-    assert len(result) == 3
+    assert len(result) == 4  # 3 actions + timestamp sentinel (nothing truncated)
 
 
 def test_timestamps_embedded_in_actions():
@@ -224,7 +225,7 @@ def test_timestamps_embedded_in_actions():
     codec = ActionTiming(fps=10.0)
     policy = codec.wrap(_ChunkPolicy(actions))
     result = policy.new_session()(_T0_OBS)
-    assert len(result) == 4
+    assert len(result) == 5  # 4 actions + timestamp sentinel
     for i, action in enumerate(result):
         assert action['timestamp'] == pytest.approx(i * 0.1)
 
@@ -235,7 +236,7 @@ def test_action_horizon_sec_seconds_truncates():
     codec = ActionTiming(fps=30.0, horizon_sec=0.1)
     policy = codec.wrap(_ChunkPolicy(actions))
     result = policy.new_session()(_T0_OBS)
-    assert len(result) == 3
+    assert len(result) == 4  # 3 actions + horizon sentinel
     dt = 1.0 / 30.0
     for i, action in enumerate(result):
         assert action['timestamp'] == pytest.approx(i * dt)
@@ -245,7 +246,7 @@ def test_action_timestamp_stamps_chunk():
     actions = [{'v': i} for i in range(4)]
     codec = ActionTimestamp(fps=10.0)
     result = codec.decode(actions, context=_T0_OBS)
-    assert len(result) == 4
+    assert len(result) == 5  # 4 actions + timestamp sentinel
     for i, action in enumerate(result):
         assert action['timestamp'] == pytest.approx(i * 0.1)
 
@@ -265,7 +266,8 @@ def test_action_horizon_truncates():
     actions = [{'v': i, 'timestamp': i * 0.1} for i in range(10)]
     codec = ActionHorizon(0.3)
     result = codec.decode(actions, context=_T0_OBS)
-    assert [r['v'] for r in result] == [0, 1, 2]
+    assert [r['v'] for r in result if 'v' in r] == [0, 1, 2]
+    assert result[-1] == {'timestamp': pytest.approx(0.3)}  # horizon sentinel
 
 
 def test_action_horizon_passes_single_action():
@@ -285,8 +287,9 @@ def test_action_timestamp_and_horizon_compose():
     codec = ActionHorizon(0.3) | ActionTimestamp(fps=10.0)
     policy = codec.wrap(_ChunkPolicy(actions))
     result = policy.new_session()(_T0_OBS)
-    assert len(result) == 3
-    assert [r['v'] for r in result] == [0, 1, 2]
+    assert len(result) == 4  # 3 actions + horizon sentinel
+    assert [r['v'] for r in result if 'v' in r] == [0, 1, 2]
+    assert result[-1] == {'timestamp': pytest.approx(0.3)}  # horizon sentinel
 
 
 def test_single_action_has_zero_timestamp():
@@ -334,12 +337,13 @@ def test_timestamps_survive_action_decoder_composition():
     raw_chunk = [{'action': raw_action} for _ in range(5)]
     decoded = composed.decode(raw_chunk, context=_T0_OBS)
 
-    assert len(decoded) == 5
-    for i, action in enumerate(decoded):
+    assert len(decoded) == 6  # 5 actions + timestamp sentinel
+    for i, action in enumerate(decoded[:5]):
         assert 'robot_command' in action
         assert 'target_grip' in action
         assert 'timestamp' in action, f'Action {i} missing timestamp — stripped by action decoder'
         assert action['timestamp'] == pytest.approx(i / 15.0)
+    assert decoded[-1] == {'timestamp': pytest.approx(5 / 15.0)}  # timestamp sentinel
 
 
 def test_composed_training_encoder_uses_parallel():
@@ -599,11 +603,12 @@ def test_groot_ee_codec_decodes_modality_keyed_actions():
     model_output = [{'ee_pose': ee_pose, 'grip': np.float32(0.5)} for _ in range(3)]
 
     decoded = codec.decode(model_output, context=_T0_OBS)
-    assert len(decoded) == 3
-    for d in decoded:
+    assert len(decoded) == 4  # 3 actions + timestamp sentinel
+    for d in decoded[:-1]:
         assert 'robot_command' in d
         assert 'target_grip' in d
         assert 'timestamp' in d
+    assert decoded[-1] == {'timestamp': pytest.approx(3 / 15.0)}  # timestamp sentinel
 
 
 def test_groot_joints_codec_decodes_modality_keyed_actions():
@@ -616,7 +621,8 @@ def test_groot_joints_codec_decodes_modality_keyed_actions():
     model_output = [{'joint_position': joint_pos, 'grip': np.float32(0.8)} for _ in range(3)]
 
     decoded = codec.decode(model_output, context=_T0_OBS)
-    assert len(decoded) == 3
-    for d in decoded:
+    assert len(decoded) == 4  # 3 actions + timestamp sentinel
+    for d in decoded[:-1]:
         assert 'robot_command' in d
         assert 'target_grip' in d
+    assert decoded[-1] == {'timestamp': pytest.approx(3 / 15.0)}  # timestamp sentinel

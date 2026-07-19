@@ -273,9 +273,8 @@ libero_obs = cfn.Config(LiberoObservationCodec)
 libero_action = cfn.Config(PoseDeltaAction)
 
 # pi05_libero emits a 10-step chunk; openpi's official LIBERO eval (`replan_steps=5`) executes the first 5 before
-# re-querying. LIBERO's OSC runs at 20 Hz, so the chunk is stamped at 20 fps (one step per 0.05 s). The sim
-# schedules the harness before the producer, so the replan at the trajectory end pre-empts the producer's waypoint
-# at that same instant — keeping only timestamps < 0.25 s would drop the 5th step and execute four. Keep six
-# (timestamps < 0.30 s): the first five run and the 6th (0.25 s) is the guard whose drop pushes the replan past
-# step five.
-libero = codecs.compose.override(obs=libero_obs, action=libero_action, fps=20.0, horizon=0.30)
+# re-querying. LIBERO's OSC runs at 20 Hz, so the chunk is stamped at 20 fps (one step per 0.05 s). Truncating at
+# 0.25 s keeps the first five steps (timestamps < 0.25 s); the horizon sentinel marks 0.25 s as the chunk's
+# validity end, so the fifth step runs its full period and re-inference lands right after it — five steps per
+# query, matching replan_steps=5.
+libero = codecs.compose.override(obs=libero_obs, action=libero_action, fps=20.0, horizon=0.25)

@@ -375,6 +375,9 @@ class _RecordingTapSession(DelegatingSession):
 
     def _log_action_chunk(self, prefix: str, actions: list[dict], obs: dict) -> None:
         """Log the action chunk as an enriched 3D trajectory + ``action_time`` time series."""
+        # Drop keyless validity sentinels (timestamp-only entries a time codec appends): they carry
+        # no command to plot and would flip the ``all(... in a)`` command checks below.
+        actions = [a for a in actions if a.keys() - {'timestamp'}]
         horizon = _horizon(actions)
         tv = self._rec._timeline_values
         base_ns = int(tv.get('obs_time', tv.get('wall_time', next(iter(tv.values()), 0))))
