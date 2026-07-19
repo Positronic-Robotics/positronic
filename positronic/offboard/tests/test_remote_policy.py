@@ -46,6 +46,13 @@ class TestPrepareObs:
         obs = {'cam': _make_image(480, 640), 'state': np.array([1.0])}
         assert session._prepare_obs(obs) is obs
 
+    def test_drops_client_only_model_keys(self):
+        """The harness injects ``urdf``/``control_frame`` for client-side frame codecs; they must never wire out."""
+        session = RemoteSession(_mock_ws_session())
+        result = session._prepare_obs({'state': np.array([1.0]), 'urdf': '<robot/>', 'control_frame': 'end_effector'})
+        assert 'urdf' not in result and 'control_frame' not in result
+        np.testing.assert_array_equal(result['state'], np.array([1.0]))
+
     def test_compression_reaches_nested_images(self):
         session = RemoteSession(_mock_ws_session(), compress_images=True)
         result = session._prepare_obs({

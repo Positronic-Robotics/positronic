@@ -8,21 +8,36 @@ Three solvers for reconstructing joint-space targets from recorded EE targets:
 """
 
 import xml.etree.ElementTree as ET
+from functools import lru_cache
 
 import mujoco as mj
 import numpy as np
 from scipy.optimize import lsq_linear
 from scipy.spatial.transform import Rotation as ScipyRotation
 
+from positronic import geom
 from positronic.dataset import transforms
 
 
-def _prepare_spec(urdf_xml, control_frame):
-    """Parse URDF or MJCF into an MjSpec, stripping meshes and resolving the control frame site.
+def _ensure_site(spec, frame):
+    """Ensure ``frame`` is a site in ``spec``, adding one at the body origin when it names a body.
 
-    The control frame must exist in the model as a site or body. For bodies (e.g. real URDF
-    with ``end_effector`` link baked in by positronic-franka), a site is added at its origin.
+    Frames resolve against the model as a site or a body (e.g. the ``end_effector`` link the real URDF bakes in,
+    or the ``droid_eef`` frame graft) — the single registry every frame lookup uses.
     """
+    all_sites = {s.name for b in spec.bodies for s in b.sites}
+    if frame in all_sites:
+        return
+    body_names = {b.name for b in spec.bodies}
+    if frame in body_names:
+        site = spec.body(frame).add_site()
+        site.name = frame
+        return
+    raise ValueError(f'Frame {frame!r} not found as site or body in model')
+
+
+def _prepare_spec(urdf_xml, control_frame):
+    """Parse URDF or MJCF into an MjSpec, stripping meshes and resolving the control frame site."""
     root = ET.fromstring(urdf_xml)
     if root.tag == 'robot':
         for link in root.findall('.//link'):
@@ -30,18 +45,33 @@ def _prepare_spec(urdf_xml, control_frame):
                 link.remove(elem)
         urdf_xml = ET.tostring(root, encoding='unicode')
     spec = mj.MjSpec.from_string(urdf_xml)
+    _ensure_site(spec, control_frame)
+    return spec
 
-    all_sites = {s.name for b in spec.bodies for s in b.sites}
-    if control_frame in all_sites:
-        return spec
 
-    body_names = {b.name for b in spec.bodies}
-    if control_frame in body_names:
-        site = spec.body(control_frame).add_site()
-        site.name = control_frame
-        return spec
+def _site_transform(data, site_id):
+    """The world pose of a site as a ``Transform3D``."""
+    rotation = geom.Rotation.from_rotation_matrix(data.site_xmat[site_id].reshape(3, 3))
+    return geom.Transform3D(data.site_xpos[site_id].copy(), rotation)
 
-    raise ValueError(f'Control frame {control_frame!r} not found as site or body in model')
+
+@lru_cache(maxsize=8)
+def frame_transform(urdf_xml, from_frame, to_frame):
+    """The rigid transform expressing ``to_frame`` relative to ``from_frame`` in a robot model.
+
+    A pose measured in ``from_frame`` (e.g. the recorded ``ee_pose`` at ``control_frame``) composes to
+    ``to_frame`` via ``pose * frame_transform(...)``. Both frames must be rigidly connected (fixed joints) for the
+    result to be config-independent, so it is read from a single forward pass at the zero configuration; frames
+    resolve as sites or bodies, the same registry ``_prepare_spec`` uses for the control frame.
+    """
+    spec = _prepare_spec(urdf_xml, from_frame)
+    _ensure_site(spec, to_frame)
+    model = spec.compile()
+    data = mj.MjData(model)
+    mj.mj_forward(model, data)
+    from_pose = _site_transform(data, mj.mj_name2id(model, mj.mjtObj.mjOBJ_SITE, from_frame))
+    to_pose = _site_transform(data, mj.mj_name2id(model, mj.mjtObj.mjOBJ_SITE, to_frame))
+    return from_pose.inv * to_pose
 
 
 def _parse_target(target_ee_pose_vec):

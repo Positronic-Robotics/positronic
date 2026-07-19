@@ -53,6 +53,10 @@ def _legacy_bound(sizes: Any) -> RestrictImageSize | None:
         return None
     return RestrictImageSize(max(w for w, _ in pairs), max(h for _, h in pairs))
 
+# Client-only robot-model metadata the harness puts in the observation for client-side frame codecs
+# (``ChangeEEFrame``); it is never a model input, so it is dropped before an observation crosses the wire.
+_LOCAL_ONLY_KEYS = frozenset({'urdf', 'control_frame'})
+
 
 class RemoteSession(Session):
     """Per-episode session that forwards observations to a remote inference server."""
@@ -62,6 +66,8 @@ class RemoteSession(Session):
         self._compress_images = compress_images
 
     def _prepare_obs(self, obs: dict[str, Any]) -> dict[str, Any]:
+        if _LOCAL_ONLY_KEYS & obs.keys():
+            obs = {key: value for key, value in obs.items() if key not in _LOCAL_ONLY_KEYS}
         if not self._compress_images:
             return obs
         return {key: self._prepare_value(key, value) for key, value in obs.items()}
