@@ -24,6 +24,10 @@ repos:
         # type-check result, and a python-only filter would skip those.
         always_run: true
         pass_filenames: false
+        # Only pre-commit can block the commit; the repo also installs commit-msg
+        # and post-commit hooks, where always_run would re-run the whole-project
+        # check pointlessly (and too late to fail the commit).
+        stages: [pre-commit]
 
   # General pre-commit hooks
   - repo: https://github.com/pre-commit/pre-commit-hooks
