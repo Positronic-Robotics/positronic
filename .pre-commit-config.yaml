@@ -15,7 +15,9 @@ repos:
     hooks:
       - id: basedpyright
         name: basedpyright type check
-        entry: uv run --locked basedpyright
+        # --extra dev: basedpyright lives in the dev extra, so the hook must pull it
+        # even in a checkout whose env was synced without extras.
+        entry: uv run --locked --extra dev basedpyright
         language: system
         types: [python]
         pass_filenames: false
