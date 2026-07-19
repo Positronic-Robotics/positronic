@@ -10,7 +10,7 @@ from positronic.dataset.serializers import expand_suffixed
 from positronic.eval import Embodiment, Task
 from positronic.policy.base import Policy, PolicyWrapper, Session
 from positronic.policy.wrappers import ChunkedSchedule
-from positronic.utils import flatten_dict, frozen_view
+from positronic.utils import flatten_dict, frozen_view, timing_stats
 
 
 class DirectiveType(Enum):
@@ -115,6 +115,8 @@ class Harness(pimm.ControlSystem):
         # A trial with a task is bounded by ``task.timeout``, set per episode; a task-less attended
         # session has no deadline and is ended by directives.
         self._deadline: float | None = None
+        # HACK: scratch pi-timing instrumentation (internal#55) — stamped at ``_begin_episode``.
+        self._episode_wall_start = 0.0
 
         self._descriptor = embodiment.descriptor
         self.observations = pimm.ReceiverDict(self)
@@ -204,7 +206,13 @@ class Harness(pimm.ControlSystem):
         if self._session:
             self._on_complete(self._session, self.context)
         self._cancel_trajectories()
-        self.ds_command.emit(DsWriterCommand.STOP({**self._build_episode_meta(self.context), **(payload or {})}))
+        # HACK: scratch pi-timing instrumentation (internal#55) — drain the process-wide wall-time collectors
+        # into this episode's static meta so the stats ride the dataset sync.
+        timing = timing_stats.drain()
+        timing['timing.wall_episode_s'] = time.monotonic() - self._episode_wall_start
+        self.ds_command.emit(
+            DsWriterCommand.STOP({**self._build_episode_meta(self.context), **timing, **(payload or {})})
+        )
 
     def _begin_episode(self, context: dict[str, Any], clock: pimm.Clock) -> None:
         """Open a fresh episode: reset the scene, fix the task context and session, and open the recording.
@@ -219,11 +227,16 @@ class Harness(pimm.ControlSystem):
         self.context = context
         # ``inference_latency`` rides the RUN context (and lands in episode meta with it).
         self._inference_latency = self.context.get('inference_latency', False)
+        # HACK: scratch pi-timing instrumentation (internal#55) — episode wall clock plus the full scene-reset
+        # cost (task.reset covers env construction + randomization, beyond the socket reset the client times).
+        self._episode_wall_start = time.monotonic()
+        reset_start = time.monotonic()
         # Reset the scene before opening the session: a resettable task only learns its instruction on reset
         # (a remote env reports it then), so the session context — and the task-grouped sampling/counting it
         # drives — must read the instruction here, once it is known.
         if self._task is not None and self._task.reset is not None:
             self._task.reset(self.context)
+        timing_stats.record('task_reset', time.monotonic() - reset_start)
         if self._task is not None:
             self.context = {**self.context, 'task': self._task.instruction}
         self._session = self.policy.new_session(self.context)
@@ -334,6 +347,8 @@ class Harness(pimm.ControlSystem):
         actions = self._session(frozen_view(obs))
         if actions is None:
             return
+        # HACK: scratch pi-timing instrumentation (internal#55) — session cost incl. codec + network + model.
+        timing_stats.record('infer', time.monotonic() - wall_start)
         delay = self._inference_delay(wall_start)
         if delay > 0.0:
             yield pimm.Sleep(delay)

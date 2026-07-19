@@ -10,6 +10,9 @@ from typing import Any
 from websockets.exceptions import ConnectionClosed
 from websockets.sync.client import connect
 
+# HACK: scratch pi-timing instrumentation (internal#55) — breaks this module's positronic-free claim; never merge.
+from positronic.utils import timing_stats
+
 from .protocol import decode, encode
 
 
@@ -39,10 +42,16 @@ class EnvConnection:
                 backoff = min(backoff * 2, 5.0)
 
     def reset(self, token: Any) -> dict[str, Any]:
-        return self._request({'cmd': 'reset', 'token': token})
+        start = time.monotonic()
+        result = self._request({'cmd': 'reset', 'token': token})
+        timing_stats.record('env.reset', time.monotonic() - start)
+        return result
 
     def step(self, action: dict[str, Any]) -> dict[str, Any]:
-        return self._request({'cmd': 'step', 'action': action})
+        start = time.monotonic()
+        result = self._request({'cmd': 'step', 'action': action})
+        timing_stats.record('env.step', time.monotonic() - start)
+        return result
 
     def _request(self, msg: dict[str, Any]) -> dict[str, Any]:
         self._ws.send(encode(msg))
