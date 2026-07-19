@@ -9,6 +9,17 @@ repos:
       # Run the formatter
       - id: ruff-format
 
+  # basedpyright - type-check ratchet: fails only on NEW errors.
+  # Existing errors are grandfathered in .basedpyright/baseline.json.
+  - repo: local
+    hooks:
+      - id: basedpyright
+        name: basedpyright type check
+        entry: uv run --locked basedpyright
+        language: system
+        types: [python]
+        pass_filenames: false
+
   # General pre-commit hooks
   - repo: https://github.com/pre-commit/pre-commit-hooks
     rev: v5.0.0
