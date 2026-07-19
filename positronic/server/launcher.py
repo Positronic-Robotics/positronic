@@ -37,6 +37,7 @@ _ANSI_RE = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
 _LOG_BUFFER_LINES = 20000
 _CONSOLE_CACHE_SECONDS = 2.0
 _CONSOLE_PROBE_TIMEOUT = 0.3
+_SHUTDOWN_WAIT_SECONDS = 120.0
 
 
 def _pkg_path(*parts: str) -> str:
@@ -240,7 +241,15 @@ class Launcher:
         if proc is None:
             return
         os.killpg(os.getpgid(proc.pid), signal.SIGINT)
-        proc.wait()
+        try:
+            proc.wait(timeout=_SHUTDOWN_WAIT_SECONDS)
+        except subprocess.TimeoutExpired:
+            # No SIGKILL escalation: the child may be attached to a robot, and force-killing that is the
+            # operator's explicit call (the console's Force button), never an automatic side effect.
+            logging.warning(
+                f'Child process group {proc.pid} still running {_SHUTDOWN_WAIT_SECONDS:.0f}s after SIGINT; '
+                f'leaving it alive (kill -9 -- -{proc.pid} to force)'
+            )
 
 
 launcher: Launcher | None = None
