@@ -407,14 +407,24 @@ class ChangeEEFrame(Codec):
 
     @property
     def training_encoder(self) -> EpisodeTransform:
-        # Relabel ``control_frame`` alongside the poses: once both are in ``to``, a later codec that reads the
-        # frame from statics (``IKJointsAction`` solving the command pose) resolves it against the right site.
-        derived = {
-            'control_frame': FromValue(self._to),
-            self._ee_pose_key: self._derive_pose(self._ee_pose_key),
-            self._command_pose_key: self._derive_pose(self._command_pose_key),
-        }
-        return Group(Derive(**derived), Identity())
+        return _ChangeEEFrameTraining(self._to, (self._ee_pose_key, self._command_pose_key), self._derive_pose)
+
+
+class _ChangeEEFrameTraining(EpisodeTransform):
+    """Move the EE pose signals an episode has into ``to`` and relabel ``control_frame`` to match, so a later codec
+    that reads the frame from statics (``IKJointsAction`` solving the command pose) resolves it against the right
+    site. A pose key the episode lacks — ``robot_command.pose`` under a joint-only action — is skipped rather than
+    dereferenced, so joint-only training still converts its observation pose."""
+
+    def __init__(self, to: str, pose_keys: tuple[str, ...], derive_pose):
+        self._to = to
+        self._pose_keys = pose_keys
+        self._derive_pose = derive_pose
+
+    def __call__(self, episode):
+        derived = {'control_frame': FromValue(self._to)}
+        derived.update({key: self._derive_pose(key) for key in self._pose_keys if key in episode})
+        return Group(Derive(**derived), Identity())(episode)
 
     @property
     def meta(self):
