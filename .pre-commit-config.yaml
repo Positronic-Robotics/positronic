@@ -19,7 +19,10 @@ repos:
         # even in a checkout whose env was synced without extras.
         entry: uv run --locked --extra dev basedpyright
         language: system
-        types: [python]
+        # Whole-project checker (pass_filenames: false), so run on every commit —
+        # a pyproject/baseline-only change or a module deletion can still shift the
+        # type-check result, and a python-only filter would skip those.
+        always_run: true
         pass_filenames: false
 
   # General pre-commit hooks
