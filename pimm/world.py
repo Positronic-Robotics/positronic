@@ -789,8 +789,11 @@ class World:
                 time.sleep(command.seconds if isinstance(command, Sleep) else 0)
         elif pace_to_wall:
             wall = SystemClock()
+            # Baselines come after start(): binding and background spawns must not count as elapsed wall time,
+            # or the sim free-runs to "catch up" by that delay instead of pacing from the first tick.
+            commands = self.start(main_process, background)
             wall_start, virtual_start = wall.now_ns(), self._clock.now_ns()
-            for _ in self.start(main_process, background):
+            for _ in commands:
                 while self._clock.now_ns() - virtual_start > wall.now_ns() - wall_start:
                     time.sleep(0.001)
         else:
