@@ -291,6 +291,13 @@ class Harness(pimm.ControlSystem):
         inputs['wall_time_ns'] = time.time_ns()
         inputs['obs_time_ns'] = clock.now_ns()
         inputs.update(self.context)
+        model = self.robot_meta_in.value
+        if 'control_frame' in model:
+            # The robot model backs any codec that resolves an EE frame against it (``ChangeEEFrame``), mirroring
+            # how training reads ``urdf``/``control_frame`` from episode statics. It is client-local — ``RemoteSession``
+            # drops it before any observation crosses the wire, so it never reaches an inference server.
+            inputs['urdf'] = model['urdf']
+            inputs['control_frame'] = model['control_frame']
         inputs['descriptor'] = self._descriptor  # last, so a context key can't shadow it
         return inputs
 

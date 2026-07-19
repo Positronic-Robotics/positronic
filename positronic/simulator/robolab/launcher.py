@@ -93,13 +93,13 @@ def _spawn(host: str, port: int) -> subprocess.Popen:
     # interpreter and cannot build it, so it is serialized here (wire codec) and env.py emits it as
     # ``robot_meta``. A fresh temp file per spawn, in the container-local tmpdir — never the shared cache
     # filesystem, where a concurrent eval's rewrite could tear a reader mid-decode.
-    # HACK: the model declares ``control_frame='end_effector'`` (the flange), but the RoboLab env reports and
-    # accepts poses in DROID's eef frame (gripper base ∘ EEF_OFFSET_ROT), so episode statics mislabel the frame
-    # and offline IK over RoboLab episodes would solve the wrong target. Fixed by ``ChangeEEFrame`` + a
-    # ``droid_eef`` site: https://github.com/Positronic-Robotics/positronic/issues/483
+    # RoboLab reports and accepts poses in DROID's eef frame (``droid_eef`` = gripper base ∘ EEF_OFFSET_ROT), so
+    # the model's canonical ``control_frame`` is declared as that frame — its poses and offline IK over RoboLab
+    # episodes then live in the frame the env actually uses.
+    robot_meta = {**bundled_franka_model(), 'control_frame': 'droid_eef'}
     fd, meta_path = tempfile.mkstemp(prefix='robolab_robot_meta_', suffix='.bin')
     with os.fdopen(fd, 'wb') as meta_file:
-        meta_file.write(encode(bundled_franka_model()))
+        meta_file.write(encode(robot_meta))
     # Isaac Sim prompts for its EULA on stdin at first launch; the server is headless, so accept it here.
     env = {
         **os.environ,
