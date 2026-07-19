@@ -6,19 +6,16 @@ import xml.etree.ElementTree as ET
 from functools import lru_cache
 from pathlib import Path
 
-from positronic import geom
-
 _FLANGE_LINK = 'link8'
 # Seat the gripper on the flange, rotated about the approach axis to match the real 2F-85 coupler
 # (a +45deg Z, i.e. 90deg off the franka ``end_effector`` frame).
 _2F85_MOUNT_RPY = '0 0 0.7853981634'
 
-# The DROID/RoboLab end-effector frame ``droid_eef``: the gripper base rotated by a fixed offset. RoboLab reports
-# and accepts Cartesian poses in this frame (``eef_frame`` = its ``Robotiq_2F_85/base_link`` ∘ ``EEF_OFFSET_ROT``,
-# a pure rotation). ``EEF_OFFSET_ROT`` lives in RoboLab's ``robolab/robots/droid.py`` as a wxyz quaternion; its
-# euler form is the URDF ``rpy`` of the ``droid_eef`` frame graft below.
-_EEF_OFFSET_ROT = (0.5, -0.5, 0.5, -0.5)
-_DROID_EEF_RPY = ' '.join(f'{angle:.12g}' for angle in geom.Rotation.from_quat(_EEF_OFFSET_ROT).as_euler)
+# The DROID/RoboLab end-effector control frame ``droid_eef``, relative to the franka flange (``link8``). RoboLab
+# reports and accepts Cartesian poses in it (``eef_frame`` = its ``Robotiq_2F_85/base_link`` ∘ ``EEF_OFFSET_ROT``).
+# Measured off RoboLab's DROID USD (``franka_robotiq_2f_85_flattened.usd``): 18.17mm along the flange Z, +90deg Z.
+_DROID_EEF_XYZ = '0 0 0.01817402261'
+_DROID_EEF_RPY = '0 0 1.5707963268'
 
 
 def _2f85_finger(side: str, sign: int, base_rpy: str) -> list[tuple]:
@@ -75,13 +72,13 @@ def _2f85_finger(side: str, sign: int, base_rpy: str) -> list[tuple]:
 # A row with an axis is a revolute joint whose axis sign sets its closing direction, so one positive
 # ``grip`` drives the whole 4-bar: driver/spring_link swing the finger in (+X), coupler/follower
 # counter-rotate (-X) to keep the pad parallel. Rows without an axis are fixed. A row with ``mesh`` None
-# is a pure frame (no visual) — ``droid_eef`` is such a frame, the DROID control frame offset from the base.
+# is a pure frame (no visual) — ``droid_eef`` is such a frame, the DROID control frame on the flange.
 _ROBOTIQ_2F85 = [
     ('gripper_base_mount', _FLANGE_LINK, None, '0 0 0.007', _2F85_MOUNT_RPY, None, 'base_mount.stl', None),
     ('gripper_base', 'gripper_base_mount', None, '0 0 0.0038', '0 0 -1.5707963268', None, 'base.stl', None),
     *_2f85_finger('right', 1, '0 0 0'),
     *_2f85_finger('left', -1, '0 0 3.1415926536'),
-    ('droid_eef', 'gripper_base', None, '0 0 0', _DROID_EEF_RPY, None, None, None),
+    ('droid_eef', _FLANGE_LINK, None, _DROID_EEF_XYZ, _DROID_EEF_RPY, None, None, None),
 ]
 _ROBOTIQ_2F85_JOINTS = [row[2] for row in _ROBOTIQ_2F85 if row[2]]
 
