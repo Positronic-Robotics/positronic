@@ -15,9 +15,12 @@ repos:
     hooks:
       - id: basedpyright
         name: basedpyright type check
-        # --extra dev: basedpyright lives in the dev extra, so the hook must pull it
-        # even in a checkout whose env was synced without extras.
-        entry: uv run --locked --extra dev basedpyright
+        # Dedicated `.venv-typecheck` so the ratchet always sees the same deps
+        # (base + dev, --exact) regardless of which extras the contributor synced
+        # into their working .venv. Otherwise an extra like `hardware` resolves
+        # imports that dev-only CI cannot, basedpyright auto-prunes those baseline
+        # entries, and the shrunk baseline makes CI flag them as new errors.
+        entry: env UV_PROJECT_ENVIRONMENT=.venv-typecheck uv run --locked --exact --extra dev basedpyright
         language: system
         # Whole-project checker (pass_filenames: false), so run on every commit —
         # a pyproject/baseline-only change or a module deletion can still shift the
