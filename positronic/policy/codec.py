@@ -180,6 +180,16 @@ class _ParallelCodec(Codec):
         return {**self._left.dummy_encoded(data), **self._right.dummy_encoded(data)}
 
 
+def is_action(entry: dict) -> bool:
+    """True for a real command entry, False for a keyless validity sentinel.
+
+    Time codecs close a chunk with a timestamp-only sentinel marking where its validity ends
+    (see ``ActionTimestamp``). Consumers that classify or plot per-command fields skip the
+    sentinel through this predicate rather than hard-coding its shape.
+    """
+    return bool(entry.keys() - {'timestamp'})
+
+
 class ActionTimestamp(Codec):
     """Stamps each decoded action with a relative ``timestamp`` (seconds from trajectory start).
 
