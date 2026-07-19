@@ -4,6 +4,7 @@ A benchmark's launcher keeps only what identifies it — the shape of its ``_spa
 project, its ``PYTHONPATH`` entries) and its pinned source checkout — and composes these pieces.
 """
 
+import fcntl
 import shutil
 import socket
 import subprocess
@@ -24,23 +25,27 @@ def ensure_pinned_checkout(repo_url: str, commit: str, dest: Path, *, lfs: bool 
     The pin is enforced on every call: a cache sitting at another revision, or at the pinned commit but with
     locally modified tracked files, would otherwise be imported as-is, mismatching committed fixtures and the
     assumptions pinned against the commit. With ``lfs``, ``git lfs pull`` runs each time too, since a clone made
-    without git-lfs installed carries only pointer stubs.
+    without git-lfs installed carries only pointer stubs. Callers sharing ``dest`` (a fan-out of eval jobs
+    mounting one cache filesystem) serialize on a lock file beside it — concurrent forced checkouts of the same
+    worktree would otherwise collide on ``.git/index.lock`` or reset files from under a starting process.
     """
     if lfs and shutil.which('git-lfs') is None:
         raise RuntimeError("git-lfs is required to fetch the checkout's LFS assets; install it and re-run")
-    if not (dest / '.git').exists():
-        dest.parent.mkdir(parents=True, exist_ok=True)
-        subprocess.run(['git', 'clone', repo_url, str(dest)], check=True)
-    head = subprocess.run(
-        ['git', '-C', str(dest), 'rev-parse', 'HEAD'], check=True, capture_output=True, text=True
-    ).stdout.strip()
-    if head != commit:
-        subprocess.run(['git', '-C', str(dest), 'fetch', 'origin', commit], check=True)
-    # Force onto the pin unconditionally: a cache already at the pinned commit but with locally modified tracked
-    # files would otherwise import altered benchmark code or assets despite the pin.
-    subprocess.run(['git', '-C', str(dest), 'checkout', '-f', commit], check=True)
-    if lfs:
-        subprocess.run(['git', '-C', str(dest), 'lfs', 'pull'], check=True)
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    with open(dest.parent / f'{dest.name}.lock', 'w') as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        if not (dest / '.git').exists():
+            subprocess.run(['git', 'clone', repo_url, str(dest)], check=True)
+        head = subprocess.run(
+            ['git', '-C', str(dest), 'rev-parse', 'HEAD'], check=True, capture_output=True, text=True
+        ).stdout.strip()
+        if head != commit:
+            subprocess.run(['git', '-C', str(dest), 'fetch', 'origin', commit], check=True)
+        # Force onto the pin unconditionally: a cache already at the pinned commit but with locally modified
+        # tracked files would otherwise import altered benchmark code or assets despite the pin.
+        subprocess.run(['git', '-C', str(dest), 'checkout', '-f', commit], check=True)
+        if lfs:
+            subprocess.run(['git', '-C', str(dest), 'lfs', 'pull'], check=True)
     return dest
 
 
