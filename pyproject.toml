@@ -226,6 +226,9 @@ exclude = [
     "**/node_modules",
     "positronic/vendors",
 ]
+# `exclude` only drops vendors as analysis roots; a checked module that imports them
+# still pulls their diagnostics. `ignore` suppresses those transitive vendor errors too.
+ignore = ["positronic/vendors"]
 
 [tool.setuptools.packages.find]
 where = ["."]
