@@ -219,8 +219,6 @@ skip-magic-trailing-comma = true
 # .basedpyright/baseline.json; only NEW errors fail. Modules are strictened incrementally.
 typeCheckingMode = "standard"
 pythonVersion = "3.11"
-# mujoco / robosuite / ruckig and other ML deps ship no type stubs.
-reportMissingTypeStubs = false
 include = ["pimm", "positronic"]
 # vendors/* pull untyped ML libraries; they are typed per-vendor in a later pass.
 exclude = [
