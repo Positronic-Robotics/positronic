@@ -1,11 +1,11 @@
 """The native test fixture: ``MujocoSim``/``stack_cubes`` wrapped behind the env-server protocol.
 
 This is the duplicated, test-only remote copy of the production native path (in-process
-``stack_cubes`` stays the real one), and the reference ``EnvAdapter`` — the simplest one, no
-OSC/axis-angle quirks. ``MujocoEnv`` drives ``MujocoSim.run()`` directly, binding local pipes to its
-ports the way ``World.start`` does, and exposes it as the gym-style ``reset``/``step`` the server
-serves. ``make_mujoco_env`` builds it; ``StackCubesAdapter`` + ``remote_stack_cubes_embodiment`` are
-the client-side mapping + embodiment.
+``stack_cubes`` stays the real one), and the reference ``WireCommandAdapter`` env — it decodes the
+same tagged command dialect the real benchmarks speak, with no OSC/axis-angle quirks. ``MujocoEnv``
+drives ``MujocoSim.run()`` directly, binding local pipes to its ports the way ``World.start`` does,
+and exposes it as the gym-style ``reset``/``step`` the server serves. ``make_mujoco_env`` builds it;
+``StackCubesAdapter`` is the client-side mapping.
 """
 
 from collections import deque
@@ -18,11 +18,10 @@ import pimm
 import positronic.cfg.simulator
 from pimm.world import LocalQueueEmitter, LocalQueueReceiver, VirtualClock
 from positronic import geom
-from positronic.dataset.serializers import Serializers
 from positronic.drivers.roboarm import command as roboarm_command
-from positronic.eval import ROBOT_STATIC_META, Command, Embodiment, Eval, Observation, Task
-from positronic.simulator.env_server.adapter import EnvAdapter, fresh_command_players
-from positronic.simulator.env_server.proxy import RemoteEnvControlSystem
+from positronic.eval import Eval, Observation, Task
+from positronic.simulator.env_server.adapter import WireCommandAdapter
+from positronic.simulator.env_server.proxy import RemoteEnvControlSystem, remote_franka_embodiment
 from positronic.simulator.env_server.server import EnvProtocol
 from positronic.simulator.mujoco.sim import MujocoFrankaState, MujocoSim
 from positronic.utils import package_assets_path
@@ -120,23 +119,25 @@ class MujocoEnv(EnvProtocol):
 
     def step(self, action: dict[str, Any]) -> dict[str, Any]:
         assert self._gen is not None, 'step() called before reset()'  # real Gym envs reject step-before-reset
-        unknown = action.keys() - {'reset', 'joints', 'pose', 'pose_delta', 'grip'}
-        if unknown:
-            raise ValueError(f'MujocoEnv got unsupported action keys: {sorted(unknown)}')
-        if 'reset' in action:
-            self._cmd_emit.emit(roboarm_command.Reset())  # home the arm
-        elif 'joints' in action:
-            self._cmd_emit.emit(roboarm_command.JointPosition(np.asarray(action['joints'], dtype=np.float64)))
-        elif 'pose' in action:
-            self._cmd_emit.emit(
-                roboarm_command.CartesianPosition(geom.Transform3D.from_vector(action['pose'], _ROTMAT))
-            )
-        elif 'pose_delta' in action:
-            self._cmd_emit.emit(
-                roboarm_command.CartesianDelta(geom.Transform3D.from_vector(action['pose_delta'], _ROTMAT))
-            )
-        if 'grip' in action:
-            self._grip_emit.emit(float(action['grip']))
+        command = action['command']
+        match command['type']:
+            case 'hold':
+                pass
+            case 'joint_pos':
+                self._cmd_emit.emit(roboarm_command.JointPosition(np.asarray(command['q'], dtype=np.float64)))
+            case 'joint_vel':
+                self._cmd_emit.emit(roboarm_command.JointDelta(np.asarray(command['dq'], dtype=np.float64)))
+            case 'cartesian':
+                self._cmd_emit.emit(
+                    roboarm_command.CartesianPosition(geom.Transform3D.from_vector(command['pose'], _ROTMAT))
+                )
+            case 'cartesian_delta':
+                self._cmd_emit.emit(
+                    roboarm_command.CartesianDelta(geom.Transform3D.from_vector(command['delta'], _ROTMAT))
+                )
+            case other:
+                raise ValueError(f'MujocoEnv got unsupported command type {other!r}')
+        self._grip_emit.emit(float(action['grip']))
         self._advance(self._timestep)
         return {'obs': self._read_obs(), 'done': False, 'control_dt': self._timestep}
 
@@ -157,52 +158,15 @@ def make_mujoco_env(camera_names: list[str]) -> MujocoEnv:
     return MujocoEnv(sim, camera_names)
 
 
-class StackCubesAdapter(EnvAdapter):
+class StackCubesAdapter(WireCommandAdapter):
     """The reference adapter: canonical Franka commands/observations <-> the MujocoSim raw payloads."""
 
     def __init__(self, camera_dict: dict[str, str]):
+        super().__init__()
         self._camera_dict = camera_dict  # logical observation name -> the env's model camera name
-        self._players = fresh_command_players()
-        self._held: dict[str, Any] = {}  # last sampled waypoint per channel — re-sent until it changes
 
-    def reset_token(self, context: dict[str, Any]) -> Any:
-        self._players = fresh_command_players()
-        self._held = {}
+    def _reset_token(self, context: dict[str, Any]) -> Any:
         return context.get('eval.seed')
-
-    def action(self, commands: dict[str, pimm.Message], now_ns: int) -> dict[str, Any]:
-        for name, msg in commands.items():
-            player = self._players[name]
-            if msg.updated and msg.data is not None:
-                player.set(msg.data)
-                if not msg.data:  # an empty trajectory cancels: stop replaying the held waypoint
-                    self._held.pop(name, None)
-            value = player.advance(now_ns)
-            if value is not None:
-                self._held[name] = value
-        # Position setpoints are held and re-sent every control tick — absolute-mode by design. A CartesianDelta
-        # is a one-shot relative motion, like Reset: emitted once, then dropped so it neither re-composes
-        # against the moving eef nor leaves a stale setpoint holding behind it.
-        action: dict[str, Any] = {}
-        match self._held.get('robot_command'):
-            case None:
-                pass
-            case roboarm_command.JointPosition(positions):
-                action['joints'] = np.asarray(positions, dtype=np.float64)
-            case roboarm_command.CartesianPosition(pose):
-                action['pose'] = pose.as_vector(_ROTMAT)
-            case roboarm_command.CartesianDelta(delta):
-                action['pose_delta'] = delta.as_vector(_ROTMAT)
-                self._held.pop('robot_command')
-            case roboarm_command.Reset():
-                action['reset'] = True
-                self._held.pop('robot_command')
-            case other:
-                raise ValueError(f'StackCubesAdapter cannot map robot_command {type(other).__name__}')
-        grip = self._held.get('target_grip')
-        if grip is not None:
-            action['grip'] = float(grip)
-        return action
 
     def observations(self, raw_obs: dict[str, Any]) -> dict[str, Any]:
         state = MujocoFrankaState()
@@ -224,33 +188,11 @@ class StackCubesAdapter(EnvAdapter):
         return None  # native stack_cubes scores downstream — it reports no live terminal
 
 
-def remote_stack_cubes_embodiment(proxy: RemoteEnvControlSystem, camera_dict: dict[str, str]) -> Embodiment:
-    """The remote twin of ``mujoco_franka``: the same canonical contract over the proxy's ports."""
-    observations = {
-        'robot_state': Observation(proxy.observations['robot_state'], Serializers.robot_state),
-        'grip': Observation(proxy.observations['grip'], None),
-        **{logical: Observation(proxy.observations[logical], Serializers.camera_images) for logical in camera_dict},
-    }
-    commands = {
-        'robot_command': Command(proxy.commands['robot_command'], roboarm_command.Reset(), Serializers.robot_command),
-        'target_grip': Command(proxy.commands['target_grip'], 0.0, None),
-    }
-    return Embodiment(
-        descriptor='remote.mujoco.franka',
-        observations=observations,
-        commands=commands,
-        static_meta=dict(ROBOT_STATIC_META),
-        meta_source=proxy.robot_meta,
-        control_systems=(proxy,),
-        simulated=True,
-    )
-
-
 def remote_stack_cubes_eval(host: str, port: int, *, camera_dict: dict[str, str]) -> Eval:
     """Build the remote ``stack_cubes`` eval (embodiment + task) wired to a running env server."""
     # The server is already up (the test fixture owns it), so the proxy just receives its address.
     proxy = RemoteEnvControlSystem(StackCubesAdapter(camera_dict), nullcontext((host, port)))
-    embodiment = remote_stack_cubes_embodiment(proxy, camera_dict)
+    embodiment = remote_franka_embodiment(proxy, camera_dict, descriptor='remote.mujoco.franka')
     privileged = {'sim_state': Observation(proxy.privileged['sim_state'], None)}
     task = Task(
         instruction='Pick up the green cube and place it on the red cube.',

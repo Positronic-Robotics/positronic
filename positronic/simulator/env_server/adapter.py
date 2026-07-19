@@ -9,9 +9,10 @@ benchmark ships one adapter (``vendors/``-style); the native ``MujocoSim`` fixtu
 
 from abc import ABC, abstractmethod
 from collections import defaultdict
-from typing import Any
+from typing import Any, final
 
 import pimm
+from positronic import geom
 from positronic.drivers.roboarm import command as roboarm_command
 
 
@@ -62,3 +63,78 @@ class EnvAdapter(ABC):
         static data; ``None`` or an empty ``{}`` keeps it running. ``{}`` is reserved as the non-terminal
         value ``reset`` republishes to clear the prior trial's terminal.
         """
+
+
+def _wire_command(cmd: Any) -> dict[str, Any]:
+    """The held command as a positronic-free payload the server decodes (no ``geom``/``roboarm`` on its side)."""
+    match cmd:
+        case roboarm_command.CartesianPosition(pose):
+            return {'type': 'cartesian', 'pose': pose.as_vector(geom.Rotation.Representation.ROTATION_MATRIX)}
+        case roboarm_command.JointPosition(positions):
+            return {'type': 'joint_pos', 'q': positions}
+        case roboarm_command.JointDelta(velocities):
+            return {'type': 'joint_vel', 'dq': velocities}
+        case roboarm_command.CartesianDelta(delta):
+            return {'type': 'cartesian_delta', 'delta': delta.as_vector(geom.Rotation.Representation.ROTATION_MATRIX)}
+        case None:
+            return {'type': 'hold'}
+        case other:
+            raise ValueError(f'no wire encoding for robot_command {type(other).__name__}')
+
+
+class WireCommandAdapter(EnvAdapter):
+    """An adapter whose action is the shared wire payload ``{'command': <tagged dict>, 'grip': float}``.
+
+    The command side of every remote benchmark adapter: it plays each command channel's trajectory down to
+    the clock — holding an absolute setpoint between waypoints, firing a relative delta once — and flattens
+    the held arm command (a pose as ``[t(3), R(9)]``, joint positions, or per-step joint deltas) plus the
+    gripper closure into one payload.
+    All action *encoding* — how the tagged command becomes the env's native action — stays server-side with
+    the env's own model. Subclasses implement ``_reset_token`` (the base clears the per-trial command state
+    around it) and keep the observation and terminal mappings to themselves.
+    """
+
+    def __init__(self):
+        self._reset_command_state()
+
+    def _reset_command_state(self) -> None:
+        self._players = fresh_command_players()
+        self._held: dict[str, Any] = {}  # last sampled waypoint per channel — re-sent until it changes
+        # Last commanded gripper closure, held across a cancelled grip trajectory: grip is an absolute [0, 1]
+        # value with no 'hold' command to fall back on (unlike the arm), so cancelling must freeze it, not reopen.
+        self._grip = 0.0
+
+    @final
+    def reset_token(self, context: dict[str, Any]) -> Any:
+        self._reset_command_state()
+        return self._reset_token(context)
+
+    @abstractmethod
+    def _reset_token(self, context: dict[str, Any]) -> Any:
+        """The per-trial RUN context -> the env's opaque reset token; the command state is already cleared."""
+
+    def action(self, commands: dict[str, pimm.Message], now_ns: int) -> dict[str, Any]:
+        for name, msg in commands.items():
+            player = self._players[name]
+            if msg.updated and msg.data is not None:
+                player.set(msg.data)
+                if not msg.data:  # an empty trajectory cancels: stop replaying the held waypoint
+                    self._held.pop(name, None)
+            value = player.advance(now_ns)
+            if value is not None:
+                self._held[name] = value
+        # The server maps the held command into its controller's action. Reset has no env-side action, so it
+        # forwards as a hold; a delta — Cartesian or joint — is a one-shot relative motion, forwarded once then
+        # dropped. Re-sending a stale delta would re-compose it against the moving arm every tick (the eef
+        # drifts, or the joints walk toward their limits), so once a delta's trajectory is exhausted the arm
+        # holds its measured pose.
+        cmd = self._held.get('robot_command')
+        match cmd:
+            case roboarm_command.Reset():
+                self._held.pop('robot_command')
+                cmd = None
+            case roboarm_command.CartesianDelta() | roboarm_command.JointDelta():
+                self._held.pop('robot_command')
+        if 'target_grip' in self._held:
+            self._grip = float(self._held['target_grip'])
+        return {'command': _wire_command(cmd), 'grip': self._grip}

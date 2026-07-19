@@ -71,7 +71,7 @@ def test_transport_is_transparent(env_server):
     direct = make_mujoco_env(list(CAMERAS.values()))
     direct_reset = direct.reset(seed)
     base = np.asarray(direct_reset['obs']['q'])
-    actions = [{'joints': base + 0.03 * i, 'grip': 0.2 * (i % 2)} for i in range(1, 6)]
+    actions = [{'command': {'type': 'joint_pos', 'q': base + 0.03 * i}, 'grip': 0.2 * (i % 2)} for i in range(1, 6)]
     direct_steps = [direct.step(action) for action in actions]
     direct.close()
 
@@ -88,12 +88,15 @@ def test_transport_is_transparent(env_server):
         assert direct_step['control_dt'] == socket_step['control_dt']
 
 
+_HOLD = {'command': {'type': 'hold'}, 'grip': 0.0}
+
+
 def _settle(env, action: dict, steps: int) -> np.ndarray:
     """Apply ``action`` once, then idle ``steps`` ticks while the position actuators settle; return the final eef."""
     env.step(action)
     out = {'obs': None}
     for _ in range(steps):
-        out = env.step({})
+        out = env.step(_HOLD)
     return np.asarray(out['obs']['ee_pos'])
 
 
@@ -110,14 +113,15 @@ def test_cartesian_delta_matches_absolute_target():
     reset = abs_env.reset(seed)
     ee0 = np.asarray(reset['obs']['ee_pos'])
     target = geom.Transform3D(ee0 + lift, geom.Rotation.from_quat(reset['obs']['ee_quat']))
-    ee_abs = _settle(abs_env, {'pose': target.as_vector(rotmat)}, settle)
+    ee_abs = _settle(abs_env, {'command': {'type': 'cartesian', 'pose': target.as_vector(rotmat)}, 'grip': 0.0}, settle)
     abs_env.close()
 
     delta_env = make_mujoco_env(list(CAMERAS.values()))
     delta_env.reset(seed)
     delta = geom.Transform3D(lift, geom.Rotation.identity)
-    ee_delta = _settle(delta_env, {'pose_delta': delta.as_vector(rotmat)}, settle)
-    ee_idle = _settle(delta_env, {}, 50)  # the delta already fired; idling must not re-compose it
+    delta_action = {'command': {'type': 'cartesian_delta', 'delta': delta.as_vector(rotmat)}, 'grip': 0.0}
+    ee_delta = _settle(delta_env, delta_action, settle)
+    ee_idle = _settle(delta_env, _HOLD, 50)  # the delta already fired; idling must not re-compose it
     delta_env.close()
 
     assert ee_delta[2] > ee0[2] + 0.01, 'the delta did not lift the arm'
@@ -246,6 +250,7 @@ def test_server_failure_crosses_as_error_frame(env_server):
     conn = EnvConnection(host, port)
     conn.reset(7)
     with pytest.raises(RuntimeError, match='bogus'):
-        conn.step({'bogus': True})
-    assert 'obs' in conn.step({'joints': np.zeros(7)})  # the socket is still usable after a delivered failure
+        conn.step({'command': {'type': 'bogus'}, 'grip': 0.0})
+    # The socket is still usable after a delivered failure.
+    assert 'obs' in conn.step({'command': {'type': 'joint_pos', 'q': np.zeros(7)}, 'grip': 0.0})
     conn.close()
