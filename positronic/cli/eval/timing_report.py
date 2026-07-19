@@ -26,7 +26,7 @@ class _RecordedFacts:
 
     duration_s: float
     size_mb: float
-    success: bool
+    success: bool | None  # None when the env recorded no success verdict (only counted when known)
 
 
 @dataclass
@@ -61,30 +61,47 @@ def _recorded_facts(dataset_dir: Path) -> dict[str, _RecordedFacts]:
     for i in range(len(dataset)):
         ep = dataset[i]
         uid = str(ep.meta.get('uid', f'ts-{ep.meta.get("created_ts_ns", i)}'))
+        # ``eval.success`` is the env's task-success verdict; ``eval.terminated`` only means the episode
+        # ended within budget, so a failed-but-done rollout is terminated=True, success=False. Read the
+        # success verdict directly and leave it None when the env recorded none, rather than conflating
+        # the two.
+        verdict = ep.static.get('eval.success')
         facts[uid] = _RecordedFacts(
             duration_s=ep.duration_ns / 1e9,
             size_mb=float(ep.meta.get('size_mb', 0.0)),
-            success=bool(ep.static.get('eval.terminated', False)),
+            success=None if verdict is None else bool(verdict),
         )
     return facts
 
 
 def _parse_dmon(log_path: Path) -> GpuSummary:
-    """Mean SM utilisation and peak framebuffer (GB) from an ``nvidia-smi dmon -s um`` log.
+    """Mean SM utilisation and peak framebuffer (GB) from an ``nvidia-smi dmon`` log.
 
-    ``dmon`` prints two comment header lines then fixed columns ``gpu sm mem fb bar1``; ``sm`` is SM
-    utilisation (%) and ``fb`` the framebuffer use (MiB). Rows whose numeric fields are missing (a GPU
-    reset, a header repeat) are skipped rather than failing the whole report.
+    Column layout varies — ``-o DT`` prepends date/time, ``-s u`` adds encoder/decoder (and, on newer
+    drivers, JPEG/OFA) columns before the framebuffer — so the positions are read from the ``# ... sm ...
+    fb ...`` name header rather than hard-coded. ``sm`` is SM utilisation (%) and ``fb`` the framebuffer
+    use (MiB). Rows before the header, or with missing numeric fields, are skipped rather than failing.
     """
+    sm_idx: int | None = None
+    fb_idx: int | None = None
     utils: list[float] = []
     fb_mib: list[float] = []
     for line in log_path.read_text().splitlines():
-        if line.startswith('#') or not line.strip():
+        stripped = line.strip()
+        if not stripped:
+            continue
+        if stripped.startswith('#'):
+            # The name header carries both 'sm' and 'fb'; the units line ('%', 'MB') does not.
+            names = stripped.lstrip('#').split()
+            if 'sm' in names and 'fb' in names:
+                sm_idx, fb_idx = names.index('sm'), names.index('fb')
+            continue
+        if sm_idx is None or fb_idx is None:
             continue
         fields = line.split()
         try:
-            utils.append(float(fields[1]))
-            fb_mib.append(float(fields[3]))
+            utils.append(float(fields[sm_idx]))
+            fb_mib.append(float(fields[fb_idx]))
         except (IndexError, ValueError):
             continue
     return GpuSummary(
@@ -102,6 +119,7 @@ def _build_report(records: list[dict], facts: dict[str, _RecordedFacts], gpu: di
 
     matched = [facts[r['episode_uid']] for r in records if r['episode_uid'] in facts]
     sim_seconds = sum(f.duration_s for f in matched)
+    judged = [f for f in matched if f.success is not None]
     return PassReport(
         episodes=len(records),
         wall_pass_s=wall_pass,
@@ -112,7 +130,7 @@ def _build_report(records: list[dict], facts: dict[str, _RecordedFacts], gpu: di
         infer_p95_ms=float(np.percentile(all_infer_ms, 95)) if all_infer_ms.size else 0.0,
         mean_split_fractions=split_fractions,
         mean_bytes_per_rollout=(sum(f.size_mb for f in matched) / len(matched) * 1e6) if matched else 0.0,
-        success_rate=(sum(f.success for f in matched) / len(matched)) if matched else 0.0,
+        success_rate=(sum(f.success for f in judged) / len(judged)) if judged else 0.0,
         gpu=gpu,
     )
 
