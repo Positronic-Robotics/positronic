@@ -114,17 +114,15 @@ def _run_world(
         # driver, and GUI placement is otherwise identical.
         producers = [cs for cs in embodiment.control_systems if cs is not None]
         foreground = driver.control_systems if driver is not None else []
-        # Telemetry only sees a sim eval: it schedules every control system in this thread, so a
-        # context-bound timer reaches them all. A real eval runs recorder/producers in other processes.
+        # Telemetry (bound once around the whole sweep by ``main``) only sees a sim eval: it schedules
+        # every control system in this thread, so the context-bound timer reaches them all. A real eval
+        # runs recorder/producers in other processes that never inherit the context.
         if timing and not embodiment.simulated:
-            logger.warning('eval timing requested but embodiment is not simulated; telemetry disabled')
-        timing_on = timing and embodiment.simulated and output_dir is not None
-        timer_cm = eval_timing.bind(output_dir) if timing_on else nullcontext()
-        with timer_cm:
-            if embodiment.simulated:
-                world.run([*foreground, harness, ds_agent, *producers], gui)
-            else:
-                world.run([harness, *foreground], [*producers, ds_agent, gui])
+            logger.warning('eval timing requested but embodiment is not simulated; telemetry will be empty')
+        if embodiment.simulated:
+            world.run([*foreground, harness, ds_agent, *producers], gui)
+        else:
+            world.run([harness, *foreground], [*producers, ds_agent, gui])
 
 
 def main(
@@ -165,34 +163,38 @@ def main(
     # One completion sink — so one ``SampledPolicy`` counter — across every eval, keeping sampling balanced
     # over the whole sweep.
     on_complete = _completion_sink(policy)
+    # Bind one timer around the whole sweep, not per eval: a per-eval bind would reopen (and truncate)
+    # ``timing.jsonl`` each time, leaving only the last eval's rollouts.
+    timing_cm = eval_timing.bind(output_dir) if timing and output_dir is not None else nullcontext()
     try:
-        if driver is not None:
-            _run_world(
-                policy,
-                embodiment,
-                None,
-                None,
-                driver(output_dir),
-                output_dir,
-                show_gui,
-                on_complete,
-                wrap=wrap,
-                timing=timing,
-            )
-        else:
-            for ev in evals:
+        with timing_cm:
+            if driver is not None:
                 _run_world(
                     policy,
-                    ev.embodiment,
-                    ev.task,
-                    ev.trials,
+                    embodiment,
                     None,
+                    None,
+                    driver(output_dir),
                     output_dir,
                     show_gui,
                     on_complete,
                     wrap=wrap,
                     timing=timing,
                 )
+            else:
+                for ev in evals:
+                    _run_world(
+                        policy,
+                        ev.embodiment,
+                        ev.task,
+                        ev.trials,
+                        None,
+                        output_dir,
+                        show_gui,
+                        on_complete,
+                        wrap=wrap,
+                        timing=timing,
+                    )
     finally:
         policy.close()
 
