@@ -92,4 +92,5 @@ def test_training_encoder_maps_both_poses_forward():
 
     np.testing.assert_allclose(out['robot_state.ee_pose'][0][0], (obs_pose * transform).as_vector(QUAT), atol=1e-9)
     np.testing.assert_allclose(out['robot_command.pose'][0][0], (cmd_pose * transform).as_vector(QUAT), atol=1e-9)
-    assert out['control_frame'] == CONTROL_FRAME and 'grip' in out, 'statics and unrelated signals pass through'
+    # ``control_frame`` is relabeled to the policy frame so downstream IK reads the transformed poses correctly.
+    assert out['control_frame'] == 'droid_eef' and 'grip' in out, 'frame relabeled; unrelated signals pass through'

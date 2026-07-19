@@ -19,7 +19,7 @@ from PIL import Image as PilImage
 from positronic import geom
 from positronic import keys as obs_keys
 from positronic.dataset.transforms import Elementwise, lazy_sequence
-from positronic.dataset.transforms.episode import Derive, EpisodeTransform, Group, Identity
+from positronic.dataset.transforms.episode import Derive, EpisodeTransform, FromValue, Group, Identity
 from positronic.drivers.roboarm import command
 from positronic.drivers.roboarm.ik import frame_transform
 from positronic.policy.base import PAR, SEQ, DelegatingSession, PolicyWrapper, Session, _ComposedWrapper
@@ -478,6 +478,10 @@ class ChangeEEFrame(Codec):
     Runs client-side, reading the robot model the harness injects into the local obs. That model is client-only and
     never reaches a frame-agnostic server: ``RemoteSession`` drops it at the wire boundary.
 
+    Composes with absolute-pose action codecs (``AbsolutePositionAction``). A decoder that reconstructs its command
+    from the observation pose in the decode context (``RelativePositionAction``) would read the canonical pose, not
+    the policy-frame one — such context-reading decoders need frame handling that is not yet wired here.
+
     Compose to the left of the observation/action codecs::
 
         ChangeEEFrame(to='droid_eef') | ee
@@ -510,11 +514,14 @@ class ChangeEEFrame(Codec):
 
     @property
     def training_encoder(self) -> EpisodeTransform:
-        poses = {
+        # Relabel ``control_frame`` alongside the poses: once both are in ``to``, a later codec that reads the
+        # frame from statics (``IKJointsAction`` solving the command pose) resolves it against the right site.
+        derived = {
+            'control_frame': FromValue(self._to),
             self._ee_pose_key: self._derive_pose(self._ee_pose_key),
             self._command_pose_key: self._derive_pose(self._command_pose_key),
         }
-        return Group(Derive(**poses), Identity())
+        return Group(Derive(**derived), Identity())
 
     @property
     def meta(self):
