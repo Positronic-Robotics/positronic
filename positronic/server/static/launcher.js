@@ -355,8 +355,10 @@ function applyState() {
     renderRunning(s);
     ensureLogsFor(s.run.started_at);
   } else {
+    // The latest run's logs stay available while idle — including a run that died
+    // before polling ever saw it as running (bad command, boot crash).
+    if (s.last_run) ensureLogsFor(s.last_run.started_at);
     renderIdle(s);
-    // A run just ended: keep its logs visible; do one final flush.
     if (runStartedAt != null) pollLogs();
   }
 }
