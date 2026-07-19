@@ -13,6 +13,7 @@ from pathlib import Path
 
 import configuronic as cfn
 import numpy as np
+import pos3
 
 from positronic.dataset.local_dataset import load_all_datasets
 from positronic.eval_timing import GPU_LOG_FILENAME, TIMING_FILENAME
@@ -178,11 +179,14 @@ def _render(report: PassReport) -> str:
 def timing_report(dataset_dir: str, gpu_sim_log: str | None, gpu_policy_log: str | None):
     """Reduce ``<dataset_dir>/timing.jsonl`` against the recorded episodes into a pass report.
 
-    ``gpu_sim_log`` / ``gpu_policy_log`` are optional ``nvidia-smi dmon -s um`` logs (sim box / policy
-    endpoint) whose utilisation and peak VRAM are folded in. Writes ``timing_summary.json`` alongside the
-    input and prints the report.
+    ``dataset_dir`` may be an ``s3://`` URI — the documented Nebius eval path writes there — in which case
+    it is pulled local first, mirroring how the eval command syncs its output. ``gpu_sim_log`` /
+    ``gpu_policy_log`` are optional ``nvidia-smi dmon`` logs (sim box / policy endpoint) whose utilisation
+    and peak VRAM are folded in. Writes ``timing_summary.json`` alongside the input and prints the report.
     """
-    root = Path(dataset_dir)
+    # Pull a remote dataset local before reading; a plain local path is used as-is (never handed to pos3,
+    # whose download would prune it).
+    root = Path(pos3.download(dataset_dir)) if '://' in dataset_dir else Path(dataset_dir)
     timing_path = root / TIMING_FILENAME
     records = [json.loads(line) for line in timing_path.read_text().splitlines() if line.strip()]
     if not records:
