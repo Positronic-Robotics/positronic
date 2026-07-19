@@ -9,9 +9,9 @@ from positronic.geom import Rotation, Transform3D
 from positronic.policy.codec import ChangeEEFrame
 
 QUAT = Rotation.Representation.QUAT
-# RoboLab's DROID end-effector control frame: eef_frame = Robotiq_2F_85/base_link composed with a pure rotation
-# EEF_OFFSET_ROT (wxyz) and zero translation (robolab/robots/droid.py). ``droid_eef`` reproduces it.
-EEF_OFFSET_ROT = (0.5, -0.5, 0.5, -0.5)
+# RoboLab's DROID end-effector control frame ``eef_frame`` = Robotiq_2F_85/base_link ∘ EEF_OFFSET_ROT with zero
+# position (robolab/robots/droid.py). Measured off RoboLab's DROID USD, relative to the flange it is 18.17mm along
+# Z and a +90deg Z rotation; ``droid_eef`` reproduces it.
 URDF = bundled_franka_model()['urdf']
 CONTROL_FRAME = 'end_effector'
 
@@ -25,11 +25,12 @@ def _quat_close(a, b, atol=1e-9):
     return min(np.linalg.norm(a - b), np.linalg.norm(a + b)) < atol
 
 
-def test_droid_eef_realizes_the_eef_offset_rotation():
-    """The canonical->droid transform is the DROID ``EEF_OFFSET_ROT`` rotation plus the base offset, so our
-    ``droid_eef`` site reproduces RoboLab's ``eef_frame = base_link ∘ EEF_OFFSET_ROT``."""
-    transform = frame_transform(URDF, CONTROL_FRAME, 'droid_eef')
-    assert _quat_close(transform.rotation.as_quat, np.array(EEF_OFFSET_ROT))
+def test_droid_eef_matches_robolab_eef_frame():
+    """``droid_eef`` relative to the flange is RoboLab's ``eef_frame``, measured from its DROID USD: 18.17mm along
+    the flange Z and a +90deg Z rotation (``link8`` -> ``Robotiq_2F_85/base_link`` ∘ EEF_OFFSET_ROT)."""
+    transform = frame_transform(URDF, 'link8', 'droid_eef')
+    np.testing.assert_allclose(transform.translation, [0.0, 0.0, 0.01817402261], atol=1e-9)
+    assert _quat_close(transform.rotation.as_quat, Rotation.from_euler([0.0, 0.0, np.pi / 2]).as_quat)
 
 
 def test_encode_maps_obs_to_policy_frame():
