@@ -215,14 +215,14 @@ class ActionTimestamp(Codec):
         return data
 
     def decode(self, data, *, context=None):
+        # Build fresh entries rather than stamping in place: a session may hand back a cached template
+        # list, and appending the sentinel to it would regrow the chunk on every re-inference.
         if isinstance(data, list):
-            for i, d in enumerate(data):
-                d['timestamp'] = i * self._dt
-            if data:
-                data.append({'timestamp': len(data) * self._dt})
-            return data
-        data['timestamp'] = 0
-        return data
+            stamped = [{**d, 'timestamp': i * self._dt} for i, d in enumerate(data)]
+            if stamped:
+                stamped.append({'timestamp': len(stamped) * self._dt})
+            return stamped
+        return {**data, 'timestamp': 0}
 
     @property
     def training_encoder(self) -> EpisodeTransform:
