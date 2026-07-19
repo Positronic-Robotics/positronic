@@ -244,6 +244,10 @@ push-robolab-cr: tag-robolab nebius-login
 	docker tag $(IMAGE_NAME_ROBOLAB):$(GIT_SHA) $(NEBIUS_REGISTRY)/robolab:$(GIT_SHA)
 	docker push $(NEBIUS_REGISTRY)/robolab:$(IMAGE_TAG)
 	docker push $(NEBIUS_REGISTRY)/robolab:$(GIT_SHA)
+ifdef CI
+	docker tag $(IMAGE_NAME_ROBOLAB):latest $(NEBIUS_REGISTRY)/robolab:latest
+	docker push $(NEBIUS_REGISTRY)/robolab:latest
+endif
 	@echo "Pushed $(NEBIUS_REGISTRY)/robolab:{$(IMAGE_TAG),$(GIT_SHA)}"
 
 all: push
