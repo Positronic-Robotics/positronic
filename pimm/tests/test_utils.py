@@ -135,6 +135,28 @@ class TestMapSignalReceiver:
         assert result is not None
         assert result.updated is False
 
+    def test_filter_does_not_mutate_previously_returned_message(self):
+        """Regression: a filtered read returns a fresh stale copy, not the cached message.
+
+        Flipping ``updated`` on the cached object and handing it back aliases any
+        reference a caller still holds from an earlier read.
+        """
+        mock_reader = Mock(spec=SignalReceiver)
+        map_reader = MapSignalReceiver(mock_reader, lambda x: x if x < 20 else None)
+
+        mock_reader.read.return_value = Message(data=10, ts=100)
+        first = map_reader.read()
+        assert first is not None
+        assert first.updated is True
+
+        mock_reader.read.return_value = Message(data=30, ts=200)
+        stale = map_reader.read()
+        assert stale is not None
+        assert stale.data == 10
+        assert stale.updated is False
+        assert stale is not first
+        assert first.updated is True
+
 
 class TestMapSignalEmitter:
     """Test the MapSignalEmitter class."""
