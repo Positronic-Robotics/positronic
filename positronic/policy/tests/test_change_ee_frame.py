@@ -94,3 +94,25 @@ def test_training_encoder_maps_both_poses_forward():
     np.testing.assert_allclose(out['robot_command.pose'][0][0], (cmd_pose * transform).as_vector(QUAT), atol=1e-9)
     # ``control_frame`` is relabeled to the policy frame so downstream IK reads the transformed poses correctly.
     assert out['control_frame'] == 'droid_eef' and 'grip' in out, 'frame relabeled; unrelated signals pass through'
+
+
+def test_training_encoder_skips_absent_command_pose():
+    """A joint-only dataset has no ``robot_command.pose``; the training dual converts the observation pose and
+    relabels the frame without registering (and dereferencing) the missing command pose."""
+    obs_pose = _pose([0.3, 0.1, 0.4], [0.2, -0.3, 0.5])
+    ts = [1000, 2000]
+    episode = EpisodeContainer(
+        data={
+            'urdf': URDF,
+            'control_frame': CONTROL_FRAME,
+            'robot_state.ee_pose': DummySignal(ts, np.stack([obs_pose.as_vector(QUAT)] * 2)),
+            'robot_command.joints': DummySignal(ts, np.zeros((2, 7), dtype=np.float32)),
+        }
+    )
+
+    out = ChangeEEFrame(to='droid_eef').training_encoder(episode)
+
+    assert 'robot_command.pose' not in list(out), 'absent command pose must not be materialized'
+    transform = frame_transform(URDF, CONTROL_FRAME, 'droid_eef')
+    np.testing.assert_allclose(out['robot_state.ee_pose'][0][0], (obs_pose * transform).as_vector(QUAT), atol=1e-9)
+    assert out['control_frame'] == 'droid_eef' and 'robot_command.joints' in out
