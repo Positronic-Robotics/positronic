@@ -164,7 +164,7 @@ def _build_report(records: list[dict], facts: dict[str, _RecordedFacts], gpu: di
         infer_p50_ms=float(np.percentile(all_infer_ms, 50)) if all_infer_ms.size else 0.0,
         infer_p95_ms=float(np.percentile(all_infer_ms, 95)) if all_infer_ms.size else 0.0,
         mean_split_fractions=split_fractions,
-        mean_bytes_per_rollout=(sum(f.size_mb for f in matched) / len(matched) * 1e6) if matched else 0.0,
+        mean_bytes_per_rollout=(sum(f.size_mb for f in matched) / len(matched) * 1024 * 1024) if matched else 0.0,
         success_rate=(sum(judged) / len(judged)) if judged else None,
         gpu=gpu,
     )
