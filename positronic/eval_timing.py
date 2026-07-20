@@ -17,6 +17,7 @@ separate processes, which do not inherit the context — so this telemetry is si
 import contextlib
 import json
 import logging
+import os
 import shutil
 import subprocess
 import time
@@ -153,8 +154,8 @@ def _start_gpu_sampler(out_dir: Path) -> subprocess.Popen | None:
     """Background ``nvidia-smi dmon`` writing this box's util+memory to ``gpu_dmon.log``.
 
     ``None`` when no ``nvidia-smi`` is on PATH (a CPU dev box) — GPU telemetry is then simply absent, not
-    an error. ``-s um`` samples SM/memory utilisation + framebuffer, ``-d 1`` once a second, ``-o DT``
-    prefixes each row with date and time.
+    an error. ``-i`` pins the one GPU this eval uses (``-s um`` samples SM/memory utilisation + framebuffer,
+    ``-d 1`` once a second, ``-o DT`` prefixes each row with date and time).
     """
     # A prior pass in the same output_dir may have left a log; drop it first so a run that ends up without
     # GPU samples (no nvidia-smi here) can't be summarised against a stale one — the reducer auto-reads
@@ -164,7 +165,23 @@ def _start_gpu_sampler(out_dir: Path) -> subprocess.Popen | None:
     if shutil.which('nvidia-smi') is None:
         logger.info('EvalTimer: no nvidia-smi on PATH; skipping GPU sampling')
         return None
-    return subprocess.Popen(['nvidia-smi', 'dmon', '-s', 'um', '-d', '1', '-o', 'DT', '-f', str(log_path)])
+    # Sample only the GPU this eval runs on — the first CUDA-visible device, else device 0. Left unpinned,
+    # dmon logs every visible GPU and ``_parse_dmon`` would average idle/unrelated devices into the numbers.
+    device = (os.environ.get('CUDA_VISIBLE_DEVICES', '') or '0').split(',')[0]
+    return subprocess.Popen([
+        'nvidia-smi',
+        'dmon',
+        '-i',
+        device,
+        '-s',
+        'um',
+        '-d',
+        '1',
+        '-o',
+        'DT',
+        '-f',
+        str(log_path),
+    ])
 
 
 @contextlib.contextmanager
