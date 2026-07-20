@@ -8,6 +8,7 @@ dmon`` log per box folds GPU utilisation and peak VRAM into the same report.
 
 import json
 import logging
+from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -136,10 +137,22 @@ def _build_report(records: list[dict], facts: dict[str, _RecordedFacts], gpu: di
     # Aggregate fraction = summed phase over summed wall, so long episodes weigh proportionally.
     split_fractions = {phase: float(np.sum([r[phase] for r in records]) / wall_pass) for phase in phases}
 
-    matched = [facts[r['episode_uid']] for r in records if r['episode_uid'] in facts]
+    matched_pairs = [(r['task'], facts[r['episode_uid']]) for r in records if r['episode_uid'] in facts]
+    matched = [f for _, f in matched_pairs]
     sim_seconds = sum(f.duration_s for f in matched)
-    has_oracle = any(f.success is not None for f in matched)
-    judged = [o for o in (_success_outcome(f, has_oracle) for f in matched) if o is not None]
+    # The success oracle is per eval, not pass-wide: an eval that records no ``eval.success`` anywhere has no
+    # verdict to fail against, so its episodes stay unscored even when another eval in the same sweep does score
+    # successes. Group matched episodes by their eval (task) so an unscored eval can't drag a scored one's rate
+    # down through a shared oracle.
+    by_task: dict[str, list[_RecordedFacts]] = defaultdict(list)
+    for task, f in matched_pairs:
+        by_task[task].append(f)
+    judged = [
+        outcome
+        for group in by_task.values()
+        for outcome in (_success_outcome(f, any(g.success is not None for g in group)) for f in group)
+        if outcome is not None
+    ]
     return PassReport(
         episodes=len(records),
         wall_pass_s=wall_pass,

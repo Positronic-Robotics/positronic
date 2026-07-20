@@ -7,7 +7,7 @@ import mujoco as mj
 import numpy as np
 
 import pimm
-from positronic import geom
+from positronic import eval_timing, geom
 from positronic.drivers.roboarm import RobotStatus, State
 from positronic.drivers.roboarm import command as roboarm_command
 from positronic.drivers.roboarm.ik import qpos_from_site_pose
@@ -195,7 +195,9 @@ class MujocoSim(pimm.ControlSystem):
                 self._last_grip = grip
             self._apply_grip(self._last_grip)
 
-            self.step()
+            timer = eval_timing.active()
+            with eval_timing.timed(timer.add_env_step if timer is not None else None):
+                self.step()
             self.fps_counter.tick()
             if state_due(now):
                 self._emit_state()
