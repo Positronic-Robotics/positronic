@@ -180,9 +180,10 @@ class TestActionHorizonWrapping:
 
         session = wrapped.new_session()
         actions = session({'obs_time_ns': 0})
-        assert len(actions) == 2
+        assert len(actions) == 3  # 2 within-horizon actions + horizon sentinel
         assert actions[0]['timestamp'] == 0.0
         assert actions[1]['timestamp'] == 0.25
+        assert actions[2] == {'timestamp': 0.5}  # horizon sentinel (timestamp = horizon_sec)
 
     def test_no_truncation_without_horizon(self):
         mock_ws = _mock_ws_session()

@@ -180,12 +180,29 @@ class _ParallelCodec(Codec):
         return {**self._left.dummy_encoded(data), **self._right.dummy_encoded(data)}
 
 
+def is_action(entry: dict) -> bool:
+    """True for a real command entry, False for a keyless validity sentinel.
+
+    Time codecs close a chunk with a timestamp-only sentinel marking where its validity ends
+    (see ``ActionTimestamp``). Consumers that classify or plot per-command fields skip the
+    sentinel through this predicate rather than hard-coding its shape.
+    """
+    return bool(entry.keys() - {'timestamp'})
+
+
 class ActionTimestamp(Codec):
     """Stamps each decoded action with a relative ``timestamp`` (seconds from trajectory start).
 
     Assigns ``timestamp = i * (1/fps)`` starting at 0. The harness converts these
     relative timestamps to absolute wall time at emission, anchoring execution to
     inference-finish rather than inference-start.
+
+    A K-action chunk covers K periods, so the list is closed with a sentinel entry —
+    a dict carrying only ``timestamp = K * (1/fps)`` and no command keys — stating when
+    the chunk's validity ends. The scheduler reads that end from the last entry, so the
+    final action gets a full period before re-inference. The sentinel carries no command
+    key, so the key-filtered demux emits it on no channel: drivers and recordings never
+    see it.
 
     At training time, surfaces ``action_fps`` as transform metadata.
     """
@@ -198,12 +215,14 @@ class ActionTimestamp(Codec):
         return data
 
     def decode(self, data, *, context=None):
+        # Build fresh entries rather than stamping in place: a session may hand back a cached template
+        # list, and appending the sentinel to it would regrow the chunk on every re-inference.
         if isinstance(data, list):
-            for i, d in enumerate(data):
-                d['timestamp'] = i * self._dt
-            return data
-        data['timestamp'] = 0
-        return data
+            stamped = [{**d, 'timestamp': i * self._dt} for i, d in enumerate(data)]
+            if stamped:
+                stamped.append({'timestamp': len(stamped) * self._dt})
+            return stamped
+        return {**data, 'timestamp': 0}
 
     @property
     def training_encoder(self) -> EpisodeTransform:
@@ -219,6 +238,14 @@ class ActionHorizon(Codec):
 
     Keeps only actions whose (relative) ``timestamp`` is within ``horizon_sec``
     of trajectory start. Single actions pass through.
+
+    When truncation drops entries, the kept list is closed with a sentinel entry —
+    a dict carrying only ``timestamp = horizon_sec`` and no command keys — marking the
+    boundary the chunk was cut at as where its validity ends, so the last surviving
+    action still gets a full period before re-inference. When nothing is dropped the
+    inner timestamp codec's own end-of-chunk sentinel already closes the list, so none
+    is added.
+
     At training time, surfaces ``action_horizon_sec`` as transform metadata.
     """
 
@@ -232,7 +259,10 @@ class ActionHorizon(Codec):
         if isinstance(data, list):
             # Treat untimestamped actions as t=0 so they always pass the horizon
             # (servers may apply horizon truncation before stamping).
-            return [d for d in data if d.get('timestamp', 0.0) < self._horizon_sec]
+            kept = [d for d in data if d.get('timestamp', 0.0) < self._horizon_sec]
+            if len(kept) < len(data):
+                kept.append({'timestamp': self._horizon_sec})
+            return kept
         return data
 
     @property
