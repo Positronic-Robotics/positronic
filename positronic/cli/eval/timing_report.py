@@ -8,7 +8,6 @@ dmon`` log per box folds GPU utilisation and peak VRAM into the same report.
 
 import json
 import logging
-from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -30,7 +29,7 @@ class _RecordedFacts:
     size_mb: float
     success: bool | None  # the env's eval.success verdict; None when it recorded none
     terminated: bool | None  # eval.terminated: the trial ended within budget vs timed out; None if unrecorded
-    eval_key: str  # the eval's stable identity (embodiment descriptor) the success oracle is scoped to
+    scored: bool  # eval.scored: the eval has a live success oracle, so a no-success termination is a failure
 
 
 @dataclass
@@ -67,8 +66,8 @@ def _recorded_facts(dataset_dir: Path) -> dict[str, _RecordedFacts]:
         uid = str(ep.meta.get('uid', f'ts-{ep.meta.get("created_ts_ns", i)}'))
         # ``eval.success`` is the env's task-success verdict; ``eval.terminated`` only means the episode
         # ended within budget, so a failed-but-done rollout is terminated=True, success=False and a
-        # timed-out one is terminated=False with no success verdict. Keep both so the roll-up can tell a
-        # scored failure from an unscored episode.
+        # timed-out one is terminated=False with no success verdict. ``eval.scored`` says whether the eval
+        # scores success at all, which is what makes a no-success termination a failure rather than unscored.
         verdict = ep.static.get('eval.success')
         terminated = ep.static.get('eval.terminated')
         facts[uid] = _RecordedFacts(
@@ -76,7 +75,7 @@ def _recorded_facts(dataset_dir: Path) -> dict[str, _RecordedFacts]:
             size_mb=float(ep.meta.get('size_mb', 0.0)),
             success=None if verdict is None else bool(verdict),
             terminated=None if terminated is None else bool(terminated),
-            eval_key=str(ep.static.get('eval.embodiment', '')),
+            scored=bool(ep.static.get('eval.scored', False)),
         )
     return facts
 
@@ -116,17 +115,17 @@ def _parse_dmon(log_path: Path) -> GpuSummary:
     )
 
 
-def _success_outcome(facts: _RecordedFacts, has_oracle: bool) -> bool | None:
+def _success_outcome(facts: _RecordedFacts) -> bool | None:
     """Whether the episode is a success (True), a failure (False), or unscored (None).
 
-    A recorded ``eval.success`` is taken as-is. With none, an episode that reached a verdict or timed out
-    (``eval.terminated`` recorded) under an eval that *does* score success elsewhere is a failure — this is
-    the timed-out rollout an adapter only marks on live success. With no success oracle anywhere in the
-    run there is nothing to score.
+    A recorded ``eval.success`` is taken as-is. With none, an episode of a *scored* eval that reached a
+    verdict or timed out (``eval.terminated`` recorded) is a failure — this is the timed-out rollout an
+    adapter only marks on live success. An episode of an unscored eval (success computed downstream) is not
+    scored here at all.
     """
     if facts.success is not None:
         return facts.success
-    if has_oracle and facts.terminated is not None:
+    if facts.scored and facts.terminated is not None:
         return False
     return None
 
@@ -141,20 +140,10 @@ def _build_report(records: list[dict], facts: dict[str, _RecordedFacts], gpu: di
 
     matched = [facts[r['episode_uid']] for r in records if r['episode_uid'] in facts]
     sim_seconds = sum(f.duration_s for f in matched)
-    # The success oracle is per eval, not pass-wide: an eval that records no ``eval.success`` anywhere has no
-    # verdict to fail against, so its episodes stay unscored even when another eval in the same sweep does score
-    # successes. Group by the recorded eval identity (embodiment descriptor) — a scored and an unscored eval
-    # always differ there, unlike the optional ``eval.task`` label — so an unscored eval can't inherit a scored
-    # one's oracle and have its timeouts counted as failures.
-    by_eval: dict[str, list[_RecordedFacts]] = defaultdict(list)
-    for f in matched:
-        by_eval[f.eval_key].append(f)
-    judged = [
-        outcome
-        for group in by_eval.values()
-        for outcome in (_success_outcome(f, any(g.success is not None for g in group)) for f in group)
-        if outcome is not None
-    ]
+    # Each episode carries whether its eval scores success (``eval.scored``), so scoring needs no pass-wide
+    # oracle: a scored eval's timeouts count as failures (even an all-timeout eval reads 0%), while an
+    # unscored eval's episodes stay out of the rate entirely regardless of what else ran in the sweep.
+    judged = [outcome for outcome in (_success_outcome(f) for f in matched) if outcome is not None]
     return PassReport(
         episodes=len(records),
         wall_pass_s=wall_pass,
