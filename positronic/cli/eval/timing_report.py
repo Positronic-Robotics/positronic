@@ -30,6 +30,7 @@ class _RecordedFacts:
     size_mb: float
     success: bool | None  # the env's eval.success verdict; None when it recorded none
     terminated: bool | None  # eval.terminated: the trial ended within budget vs timed out; None if unrecorded
+    eval_key: str  # the eval's stable identity (embodiment descriptor) the success oracle is scoped to
 
 
 @dataclass
@@ -75,6 +76,7 @@ def _recorded_facts(dataset_dir: Path) -> dict[str, _RecordedFacts]:
             size_mb=float(ep.meta.get('size_mb', 0.0)),
             success=None if verdict is None else bool(verdict),
             terminated=None if terminated is None else bool(terminated),
+            eval_key=str(ep.static.get('eval.embodiment', '')),
         )
     return facts
 
@@ -137,19 +139,19 @@ def _build_report(records: list[dict], facts: dict[str, _RecordedFacts], gpu: di
     # Aggregate fraction = summed phase over summed wall, so long episodes weigh proportionally.
     split_fractions = {phase: float(np.sum([r[phase] for r in records]) / wall_pass) for phase in phases}
 
-    matched_pairs = [(r['task'], facts[r['episode_uid']]) for r in records if r['episode_uid'] in facts]
-    matched = [f for _, f in matched_pairs]
+    matched = [facts[r['episode_uid']] for r in records if r['episode_uid'] in facts]
     sim_seconds = sum(f.duration_s for f in matched)
     # The success oracle is per eval, not pass-wide: an eval that records no ``eval.success`` anywhere has no
     # verdict to fail against, so its episodes stay unscored even when another eval in the same sweep does score
-    # successes. Group matched episodes by their eval (task) so an unscored eval can't drag a scored one's rate
-    # down through a shared oracle.
-    by_task: dict[str, list[_RecordedFacts]] = defaultdict(list)
-    for task, f in matched_pairs:
-        by_task[task].append(f)
+    # successes. Group by the recorded eval identity (embodiment descriptor) — a scored and an unscored eval
+    # always differ there, unlike the optional ``eval.task`` label — so an unscored eval can't inherit a scored
+    # one's oracle and have its timeouts counted as failures.
+    by_eval: dict[str, list[_RecordedFacts]] = defaultdict(list)
+    for f in matched:
+        by_eval[f.eval_key].append(f)
     judged = [
         outcome
-        for group in by_task.values()
+        for group in by_eval.values()
         for outcome in (_success_outcome(f, any(g.success is not None for g in group)) for f in group)
         if outcome is not None
     ]

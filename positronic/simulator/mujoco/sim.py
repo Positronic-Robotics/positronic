@@ -196,17 +196,21 @@ class MujocoSim(pimm.ControlSystem):
             self._apply_grip(self._last_grip)
 
             timer = eval_timing.active()
+            # Charge the sim advance *and* the observation production it feeds (notably ``_emit_cameras`` ->
+            # ``_render``) to the env step: the remote env-server path times ``_conn.step()``, which returns
+            # rendered observations, so an image-heavy native sim must count rendering here too or its wall
+            # split reads rendering as ``overhead_s`` and is not comparable to the remote path.
             with eval_timing.timed(timer.add_env_step if timer is not None else None):
                 self.step()
-            self.fps_counter.tick()
-            if state_due(now):
-                self._emit_state()
-            if grip_due(now):
-                self._emit_grip()
-            if sim_state_due(now):
-                self._emit_sim_state()
-            if cameras_due(now):
-                self._emit_cameras()
+                self.fps_counter.tick()
+                if state_due(now):
+                    self._emit_state()
+                if grip_due(now):
+                    self._emit_grip()
+                if sim_state_due(now):
+                    self._emit_sim_state()
+                if cameras_due(now):
+                    self._emit_cameras()
 
         if self._renderer is not None:
             self._renderer.close()
