@@ -239,5 +239,10 @@ def timing_report(dataset_dir: str, gpu_sim_log: str | None, gpu_policy_log: str
     report = _build_report(records, _recorded_facts(root), gpu)
     summary_path = root / 'timing_summary.json'
     summary_path.write_text(json.dumps(asdict(report), indent=2))
+    if '://' in dataset_dir:
+        # A remote input was only downloaded, so the write above lands in the local cache; register the
+        # summary for upload back next to timing.jsonl in the bucket (the CLI's @pos3.with_mirror flushes
+        # registered uploads on exit). delete=False so this single-file upload never prunes the bucket.
+        pos3.upload(f'{dataset_dir.rstrip("/")}/timing_summary.json', summary_path, delete=False)
     logger.info(f'wrote {summary_path}')
     print(_render(report))
