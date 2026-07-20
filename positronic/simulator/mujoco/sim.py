@@ -172,7 +172,11 @@ class MujocoSim(pimm.ControlSystem):
                 # the recorder samples it before any step advances the sim. ``reset`` already loaded the scene.
                 self._reset_pending = False
                 self._emit_robot_meta()
-                self._publish_frame()
+                timer = eval_timing.active()
+                # Frame-0 rendering is part of the reset cost, not overhead: the remote path likewise charges
+                # its reset's rendered first observation to ``reset_s``, so time this publish there too.
+                with eval_timing.timed(timer.add_reset if timer is not None else None):
+                    self._publish_frame()
                 continue
             now = clock.now()
             cmd_msg = self.commands.read()
