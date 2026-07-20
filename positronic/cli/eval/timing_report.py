@@ -153,6 +153,17 @@ def _success_outcome(facts: _RecordedFacts) -> bool | None:
 
 
 def _build_report(records: list[EpisodeTiming], facts: dict[str, _RecordedFacts], gpu: GpuReport) -> PassReport:
+    # Every timing record must join to a recorded episode: the episode count and wall time come from
+    # ``records`` while RTF, bytes and success come from the joined facts, so a silent drop would compute
+    # them over different denominators. An unmatched uid means the dataset was edited (an ``edits.jsonl``
+    # drop) or does not match this ``timing.jsonl`` — fail rather than corrupt the summary.
+    unmatched = [r.episode_uid for r in records if r.episode_uid not in facts]
+    if unmatched:
+        raise ValueError(
+            f'{len(unmatched)} of {len(records)} timing records have no matching recorded episode '
+            f'(e.g. {unmatched[:3]}); the dataset was edited or does not match this timing.jsonl'
+        )
+
     wall_pass = float(sum(r.wall_s for r in records))
     all_infer_ms = np.array([ms for r in records for ms in r.infer_ms], dtype=float)
 
@@ -160,7 +171,7 @@ def _build_report(records: list[EpisodeTiming], facts: dict[str, _RecordedFacts]
     def phase_fraction(attr: str) -> float:
         return float(sum(getattr(r, attr) for r in records) / wall_pass) if wall_pass else 0.0
 
-    matched = [facts[r.episode_uid] for r in records if r.episode_uid in facts]
+    matched = [facts[r.episode_uid] for r in records]
     sim_seconds = sum(f.duration_s for f in matched)
     # Each episode carries whether its eval scores success (``eval.scored``), so scoring needs no pass-wide
     # oracle: a scored eval's timeouts count as failures (even an all-timeout eval reads 0%), while an
