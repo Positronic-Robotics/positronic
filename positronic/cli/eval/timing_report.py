@@ -54,7 +54,7 @@ class PassReport:
     infer_p95_ms: float
     mean_split_fractions: dict[str, float]
     mean_bytes_per_rollout: float
-    success_rate: float
+    success_rate: float | None  # None when no episode carried a success verdict (scored downstream)
     gpu: dict[str, GpuSummary]
 
 
@@ -165,7 +165,7 @@ def _build_report(records: list[dict], facts: dict[str, _RecordedFacts], gpu: di
         infer_p95_ms=float(np.percentile(all_infer_ms, 95)) if all_infer_ms.size else 0.0,
         mean_split_fractions=split_fractions,
         mean_bytes_per_rollout=(sum(f.size_mb for f in matched) / len(matched) * 1e6) if matched else 0.0,
-        success_rate=(sum(judged) / len(judged)) if judged else 0.0,
+        success_rate=(sum(judged) / len(judged)) if judged else None,
         gpu=gpu,
     )
 
@@ -181,7 +181,9 @@ def _render(report: PassReport) -> str:
         f'infer calls:         {report.infer_calls}',
         f'infer p50 / p95:     {report.infer_p50_ms:.1f} / {report.infer_p95_ms:.1f} ms',
         f'bytes / rollout:     {report.mean_bytes_per_rollout / 1e6:.1f} MB',
-        f'success rate:        {report.success_rate:.3f}',
+        f'success rate:        {report.success_rate:.3f}'
+        if report.success_rate is not None
+        else 'success rate:        n/a',
         'wall split (fraction of W_pass):',
     ]
     lines += [f'  {phase[:-2]:<12} {frac:.3f}' for phase, frac in report.mean_split_fractions.items()]
