@@ -107,11 +107,21 @@ class RemoteEnvControlSystem(pimm.ControlSystem):
                     # terminal, so the recorder samples it before any step advances the env.
                     self._reset_pending = False
                     self.robot_meta.emit(self._robot_meta)
-                    self._emit_payload(self._frame['obs'])
+                    timer = eval_timing.active()
+                    # Frame-0 materialisation (allocating shared-memory image buffers and copying each camera
+                    # frame) is part of the reset cost, like ``_conn.reset``'s server-side render already under
+                    # ``reset_s`` — time it there so it isn't billed to ``overhead_s``.
+                    with eval_timing.timed(timer.add_reset if timer is not None else None):
+                        self._emit_payload(self._frame['obs'])
                     self.done.emit({})
                 elif self._active:
                     self._frame = self._step_env(clock)
-                    self._emit_payload(self._frame['obs'])
+                    timer = eval_timing.active()
+                    # The step's observation is materialised client-side here (the adapter allocates
+                    # shared-memory image buffers and copies each camera frame); charge it to the env step too,
+                    # matching the native path, so image-heavy remote runs don't bill it to ``overhead_s``.
+                    with eval_timing.timed(timer.add_env_step if timer is not None else None):
+                        self._emit_payload(self._frame['obs'])
         finally:
             # Closes the connection then the server, in that order (reverse of acquisition); a no-op if no reset
             # ever connected.
