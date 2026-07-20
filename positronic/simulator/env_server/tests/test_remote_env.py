@@ -11,6 +11,8 @@ from positronic.dataset.local_dataset import LocalDataset
 from positronic.drivers.roboarm import command as roboarm_command
 from positronic.eval import Task
 from positronic.inference import main
+from positronic.policy import Policy, Session
+from positronic.policy.codec import ActionTimestamp
 from positronic.policy.tests.test_harness import StubPolicy
 from positronic.policy.wrappers import ChunkedSchedule
 from positronic.simulator.env_server.adapter import EnvAdapter
@@ -240,6 +242,69 @@ def test_remote_eval_runs_to_timeout_without_done(env_server, tmp_path):
     assert 'image.agentview' in signals
     assert 'robot_command.joints' in signals
     assert 'sim_state.mjSTATE_INTEGRATION' in signals
+
+
+class _JointposChunks(Policy):
+    """Chunks exactly as long as the intended open-loop cadence; ``target_grip`` encodes
+    ``chunk * 100 + step`` so the recorded wire signals show which actions executed, and when."""
+
+    def __init__(self, command: roboarm_command.CommandType, chunk_len: int):
+        self.command = command
+        self.chunk_len = chunk_len
+        self.chunks = 0
+
+    def new_session(self, context=None):
+        return _JointposChunkSession(self)
+
+
+class _JointposChunkSession(Session):
+    def __init__(self, policy: _JointposChunks):
+        self._policy = policy
+
+    def __call__(self, obs):
+        self._policy.chunks += 1
+        return [
+            {'robot_command': self._policy.command, 'target_grip': self._policy.chunks * 100.0 + i}
+            for i in range(self._policy.chunk_len)
+        ]
+
+
+@pytest.mark.timeout(60.0)
+def test_full_chunk_executes_between_replans(env_server, tmp_path):
+    """The recording proves the contract the DROID jointpos codec makes with RoboLab's client: every action
+    of every chunk lands on the wire — including the final one, which ``ActionTimestamp``'s validity
+    sentinel gives a full period before ``ChunkedSchedule`` re-infers — and replans arrive exactly
+    ``chunk_len`` control periods apart."""
+    host, port = env_server
+    probe = make_mujoco_env([])
+    control_dt = probe.reset(0)['control_dt']
+    probe.close()
+
+    chunk_len = 5
+    raw = _JointposChunks(roboarm_command.JointPosition(np.zeros(7)), chunk_len)
+    policy = ActionTimestamp(fps=1.0 / control_dt).wrap(raw)
+    with pos3.mirror():
+        ev = remote_stack_cubes_eval(host, port, camera_dict=CAMERAS)
+        ev.task.timeout = 20 * control_dt
+        main(
+            policy=policy,
+            evals=[replace(ev, trials=[{'eval.trial_index': 0, 'eval.seed': 100}])],
+            output_dir=str(tmp_path),
+            wrap=ChunkedSchedule(),
+        )
+
+    grip = LocalDataset(tmp_path)[0].signals['target_grip']
+    executed = [(float(v), int(ts)) for v, ts in (grip[i] for i in range(len(grip)))]
+    values = [v for v, _ in executed if v >= 100.0]  # the inter-episode home command emits 0.0
+    complete_chunks = raw.chunks - 1  # the deadline cuts the last chunk short
+    assert complete_chunks >= 2
+    expected = [c * 100.0 + i for c in range(1, complete_chunks + 1) for i in range(chunk_len)]
+    assert values[: len(expected)] == expected
+
+    starts = [ts for v, ts in executed if v >= 100.0 and v % 100 == 0]
+    period_ns = chunk_len * control_dt * 1e9
+    for earlier, later in zip(starts, starts[1:], strict=False):
+        assert later - earlier == pytest.approx(period_ns, abs=period_ns / (2 * chunk_len))
 
 
 @pytest.mark.timeout(60.0)

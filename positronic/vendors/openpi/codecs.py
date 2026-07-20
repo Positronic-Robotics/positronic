@@ -171,6 +171,18 @@ joints_ik_sim = joints_ik.override(**{'action.solver': 'lm'})
 # at 15 fps) so the client re-queries every 8 steps instead of playing the full chunk open-loop.
 droid = codecs.compose.override(obs=droid_obs, action=codecs.joint_delta_action, horizon=8 / 15)
 
+# The DROID jointpos models (openpi `*_droid_jointpos` configs — the RoboLab leaderboard policies): the
+# server returns absolute joint-position chunks ``(action_horizon, 8)`` and RoboLab's client
+# (``policies/pi0_family/client.py``) executes the whole chunk before re-querying, gripper binarized at
+# 0.5 — its ``open_loop_horizon`` defaults equal each variant's ``action_horizon`` (pi05 = 15, pi0 = 10).
+# No ``horizon`` here: the timestamp codec's validity sentinel closes the chunk, so re-inference lands
+# after the full chunk executes, whatever each variant's length.
+droid_jointpos = codecs.compose.override(
+    obs=droid_obs,
+    action=codecs.absolute_joints_action.override(tgt_joints_key='robot_state.q', tgt_grip_key='grip'),
+    binarize_grip=('grip',),
+)
+
 
 class PoseDeltaAction(Codec):
     """Decodes pi05_libero's OSC pose-delta chunk into per-step end-effector ``CartesianDelta`` (inference only).
