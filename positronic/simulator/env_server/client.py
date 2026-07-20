@@ -33,7 +33,10 @@ class EnvConnection:
         while True:
             try:
                 # Camera + full-state observations routinely exceed websockets' 1 MiB default frame size.
-                self._ws = connect(uri, open_timeout=open_timeout, max_size=None)
+                # HACK (internal#55): ping_interval=None — a multi-minute Isaac scene build starves the
+                # server's pong thread (native code holds the GIL), so the client's keepalive kills a healthy
+                # connection mid-reset (observed: 10-min CleanUpToys->next build, close 1011). Never merge as-is.
+                self._ws = connect(uri, open_timeout=open_timeout, max_size=None, ping_interval=None)
                 break
             except (TimeoutError, OSError) as e:
                 if time.monotonic() >= deadline:
