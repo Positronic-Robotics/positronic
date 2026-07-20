@@ -37,6 +37,7 @@ class MapSignalReceiver(SignalReceiver[U], Generic[T, U]):
         if transformed_data is None:
             if self.last_message is None:
                 return None
+            # Return a fresh stale copy, not the cached mutable Message, so earlier callers' references don't flip.
             return Message(self.last_message.data, self.last_message.ts, False)
 
         self.last_message = Message(transformed_data, orig_message.ts, orig_message.updated)
