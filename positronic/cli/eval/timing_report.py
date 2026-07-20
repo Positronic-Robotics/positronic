@@ -8,7 +8,7 @@ dmon`` log per box folds GPU utilisation and peak VRAM into the same report.
 
 import json
 import logging
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass, fields
 from pathlib import Path
 
 import configuronic as cfn
@@ -16,7 +16,7 @@ import numpy as np
 import pos3
 
 from positronic.dataset.local_dataset import load_all_datasets
-from positronic.eval_timing import GPU_LOG_FILENAME, TIMING_FILENAME
+from positronic.eval_timing import GPU_LOG_FILENAME, TIMING_FILENAME, EpisodeTiming
 
 logger = logging.getLogger(__name__)
 
@@ -41,8 +41,30 @@ class GpuSummary:
 
 
 @dataclass
+class GpuReport:
+    """GPU summaries per box: the sim box (sampled into the dataset dir) and the policy endpoint box.
+
+    Either is ``None`` when that box has no ``dmon`` log — a CPU sim box, or no policy log passed in.
+    """
+
+    sim: GpuSummary | None
+    policy: GpuSummary | None
+
+
+@dataclass
+class WallSplit:
+    """Each measured phase's share of pass wall time; the fractions plus the unmeasured remainder sum to 1."""
+
+    reset: float
+    env_step: float
+    policy_wait: float
+    record_io: float
+    overhead: float
+
+
+@dataclass
 class PassReport:
-    """The pass-level roll-up that replaces the estimated sizing inputs."""
+    """Pass-level wall-clock roll-up of one ``timing.jsonl`` pass, joined against its recorded episodes."""
 
     episodes: int
     wall_pass_s: float
@@ -51,10 +73,10 @@ class PassReport:
     infer_calls: int
     infer_p50_ms: float
     infer_p95_ms: float
-    mean_split_fractions: dict[str, float]
+    wall_split: WallSplit
     mean_bytes_per_rollout: float
     success_rate: float | None  # None when no episode carried a success verdict (scored downstream)
-    gpu: dict[str, GpuSummary]
+    gpu: GpuReport
 
 
 def _recorded_facts(dataset_dir: Path) -> dict[str, _RecordedFacts]:
@@ -130,15 +152,15 @@ def _success_outcome(facts: _RecordedFacts) -> bool | None:
     return None
 
 
-def _build_report(records: list[dict], facts: dict[str, _RecordedFacts], gpu: dict[str, GpuSummary]) -> PassReport:
-    wall = np.array([r['wall_s'] for r in records], dtype=float)
-    wall_pass = float(wall.sum())
-    all_infer_ms = np.array([ms for r in records for ms in r['infer_ms']], dtype=float)
-    phases = ('reset_s', 'env_step_s', 'policy_wait_s', 'record_io_s', 'overhead_s')
-    # Aggregate fraction = summed phase over summed wall, so long episodes weigh proportionally.
-    split_fractions = {phase: float(np.sum([r[phase] for r in records]) / wall_pass) for phase in phases}
+def _build_report(records: list[EpisodeTiming], facts: dict[str, _RecordedFacts], gpu: GpuReport) -> PassReport:
+    wall_pass = float(sum(r.wall_s for r in records))
+    all_infer_ms = np.array([ms for r in records for ms in r.infer_ms], dtype=float)
 
-    matched = [facts[r['episode_uid']] for r in records if r['episode_uid'] in facts]
+    # Aggregate fraction = summed phase over summed wall, so long episodes weigh proportionally.
+    def phase_fraction(attr: str) -> float:
+        return float(sum(getattr(r, attr) for r in records) / wall_pass) if wall_pass else 0.0
+
+    matched = [facts[r.episode_uid] for r in records if r.episode_uid in facts]
     sim_seconds = sum(f.duration_s for f in matched)
     # Each episode carries whether its eval scores success (``eval.scored``), so scoring needs no pass-wide
     # oracle: a scored eval's timeouts count as failures (even an all-timeout eval reads 0%), while an
@@ -148,11 +170,17 @@ def _build_report(records: list[dict], facts: dict[str, _RecordedFacts], gpu: di
         episodes=len(records),
         wall_pass_s=wall_pass,
         real_time_factor=(sim_seconds / wall_pass) if wall_pass else 0.0,
-        policy_busy_fraction=float(np.sum([r['policy_wait_s'] for r in records]) / wall_pass) if wall_pass else 0.0,
+        policy_busy_fraction=phase_fraction('policy_wait_s'),
         infer_calls=int(all_infer_ms.size),
         infer_p50_ms=float(np.percentile(all_infer_ms, 50)) if all_infer_ms.size else 0.0,
         infer_p95_ms=float(np.percentile(all_infer_ms, 95)) if all_infer_ms.size else 0.0,
-        mean_split_fractions=split_fractions,
+        wall_split=WallSplit(
+            reset=phase_fraction('reset_s'),
+            env_step=phase_fraction('env_step_s'),
+            policy_wait=phase_fraction('policy_wait_s'),
+            record_io=phase_fraction('record_io_s'),
+            overhead=phase_fraction('overhead_s'),
+        ),
         mean_bytes_per_rollout=(sum(f.size_mb for f in matched) / len(matched) * 1024 * 1024) if matched else 0.0,
         success_rate=(sum(judged) / len(judged)) if judged else None,
         gpu=gpu,
@@ -175,9 +203,11 @@ def _render(report: PassReport) -> str:
         else 'success rate:        n/a',
         'wall split (fraction of W_pass):',
     ]
-    lines += [f'  {phase[:-2]:<12} {frac:.3f}' for phase, frac in report.mean_split_fractions.items()]
-    for box, summary in report.gpu.items():
-        lines.append(f'gpu[{box}]: util {summary.mean_util_pct:.0f}%  peak VRAM {summary.peak_vram_gb:.1f} GB')
+    lines += [f'  {f.name:<12} {getattr(report.wall_split, f.name):.3f}' for f in fields(WallSplit)]
+    for f in fields(GpuReport):
+        summary = getattr(report.gpu, f.name)
+        if summary is not None:
+            lines.append(f'gpu[{f.name}]: util {summary.mean_util_pct:.0f}%  peak VRAM {summary.peak_vram_gb:.1f} GB')
     return '\n'.join(lines)
 
 
@@ -194,21 +224,20 @@ def timing_report(dataset_dir: str, gpu_sim_log: str | None, gpu_policy_log: str
     # whose download would prune it).
     root = Path(pos3.download(dataset_dir)) if '://' in dataset_dir else Path(dataset_dir)
     timing_path = root / TIMING_FILENAME
-    records = [json.loads(line) for line in timing_path.read_text().splitlines() if line.strip()]
+    records = [EpisodeTiming(**json.loads(line)) for line in timing_path.read_text().splitlines() if line.strip()]
     if not records:
         raise ValueError(f'no timing records in {timing_path}')
 
     # The sim box samples its own GPU into the dataset dir under ``--timing``; an explicit path overrides
     # it, and the policy endpoint's log (a different box) is only ever passed in.
-    gpu: dict[str, GpuSummary] = {}
     sim_log = Path(gpu_sim_log) if gpu_sim_log is not None else root / GPU_LOG_FILENAME
-    if sim_log.exists():
-        gpu['sim'] = _parse_dmon(sim_log)
-    if gpu_policy_log is not None:
-        gpu['policy'] = _parse_dmon(Path(gpu_policy_log))
+    gpu = GpuReport(
+        sim=_parse_dmon(sim_log) if sim_log.exists() else None,
+        policy=_parse_dmon(Path(gpu_policy_log)) if gpu_policy_log is not None else None,
+    )
 
     report = _build_report(records, _recorded_facts(root), gpu)
     summary_path = root / 'timing_summary.json'
-    summary_path.write_text(json.dumps({**report.__dict__, 'gpu': {k: v.__dict__ for k, v in gpu.items()}}, indent=2))
+    summary_path.write_text(json.dumps(asdict(report), indent=2))
     logger.info(f'wrote {summary_path}')
     print(_render(report))
