@@ -23,6 +23,8 @@ import argparse
 import os
 import tempfile
 import time
+from collections.abc import Callable
+from dataclasses import dataclass
 from typing import Any
 
 import cv2  # noqa: F401 -- robolab requires cv2 imported before isaaclab
@@ -110,6 +112,24 @@ def _load_robot_meta() -> dict[str, Any]:
         return decode(f.read())
 
 
+@dataclass
+class _PhaseTimes:
+    """Wall time (seconds) of the native phases inside one RoboLab ``env.step``, zeroed each step."""
+
+    physics: float = 0.0
+    render: float = 0.0
+
+    def add_physics(self, seconds: float) -> None:
+        self.physics += seconds
+
+    def add_render(self, seconds: float) -> None:
+        self.render += seconds
+
+    def reset(self) -> None:
+        self.physics = 0.0
+        self.render = 0.0
+
+
 class RobolabEnv(EnvProtocol):
     """A RoboLab task behind the gym-style ``reset``/``step``/``close`` the env server serves.
 
@@ -140,15 +160,15 @@ class RobolabEnv(EnvProtocol):
         self._timeline = omni.timeline.get_timeline_interface()
         self._kit_app = omni.kit.app.get_app()
 
-    def _timed_phase(self, phase: str, method):
-        """``method`` with its wall time accumulated into ``self._phase_s[phase]``."""
+    def _timed_phase(self, method, add: Callable[[float], None]):
+        """``method`` wrapped to accumulate its wall time via ``add`` (one of ``_phase_s``'s phase adders)."""
 
         def timed(*args, **kwargs):
             start = time.perf_counter()
             try:
                 return method(*args, **kwargs)
             finally:
-                self._phase_s[phase] += time.perf_counter() - start
+                add(time.perf_counter() - start)
 
         return timed
 
@@ -167,9 +187,9 @@ class RobolabEnv(EnvProtocol):
         # ``env.step``; both are re-wrapped per build (a new env brings a fresh SimulationContext). The sums
         # feed the step response's ``timing`` and are zeroed at each ``step`` call, so reset-time rendering
         # never leaks into a step's decomposition.
-        self._phase_s = {'physics': 0.0, 'render': 0.0}
-        self._env.sim.step = self._timed_phase('physics', self._env.sim.step)
-        self._env.sim.render = self._timed_phase('render', self._env.sim.render)
+        self._phase_s = _PhaseTimes()
+        self._env.sim.step = self._timed_phase(self._env.sim.step, self._phase_s.add_physics)
+        self._env.sim.render = self._timed_phase(self._env.sim.render, self._phase_s.add_render)
         # ``instruction`` is the resolved language goal (``create_env`` picks the variant); the rest is the
         # task identity the episode records.
         self._meta = {
@@ -221,7 +241,7 @@ class RobolabEnv(EnvProtocol):
 
     def step(self, action: dict[str, Any]) -> dict[str, Any]:
         start = time.perf_counter()
-        self._phase_s['physics'] = self._phase_s['render'] = 0.0
+        self._phase_s.reset()
         # Isaac pauses its timeline while assets stream in; stepping a paused sim stalls, so pump the kit
         # update loop until it plays again (robolab's episode loop does the same before every step).
         while not self._timeline.is_playing():
@@ -244,8 +264,8 @@ class RobolabEnv(EnvProtocol):
             # call's whole wall (observation materialisation included) — the client records it against its
             # socket-level step time.
             'timing': {
-                'physics_s': self._phase_s['physics'],
-                'render_s': self._phase_s['render'],
+                'physics_s': self._phase_s.physics,
+                'render_s': self._phase_s.render,
                 'wall_s': time.perf_counter() - start,
             },
         }
