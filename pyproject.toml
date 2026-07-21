@@ -96,6 +96,7 @@ lance = [
 ]
 dev = [
     "ruff",
+    "basedpyright",
     "pre-commit",
     "ipython",
     "jupyter",
@@ -212,6 +213,22 @@ indent-style = "space"
 docstring-code-format = true
 preview = true
 skip-magic-trailing-comma = true
+
+[tool.basedpyright]
+# Grandfathered ratchet: every error present when this landed is captured in
+# .basedpyright/baseline.json; only NEW errors fail. Modules are strictened incrementally.
+typeCheckingMode = "standard"
+pythonVersion = "3.11"
+include = ["pimm", "positronic"]
+# vendors/* pull untyped ML libraries; they are typed per-vendor in a later pass.
+exclude = [
+    "**/.venv",
+    "**/node_modules",
+    "positronic/vendors",
+]
+# `exclude` only drops vendors as analysis roots; a checked module that imports them
+# still pulls their diagnostics. `ignore` suppresses those transitive vendor errors too.
+ignore = ["positronic/vendors"]
 
 [tool.setuptools.packages.find]
 where = ["."]
