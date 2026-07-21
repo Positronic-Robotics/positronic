@@ -48,6 +48,7 @@ simulation_app = AppLauncher(args).app
 import omni.kit.app  # noqa: E402
 import omni.timeline  # noqa: E402
 from isaaclab.controllers import DifferentialIKController, DifferentialIKControllerCfg  # noqa: E402
+from isaaclab.sensors import TiledCameraCfg  # noqa: E402
 from isaaclab.utils.math import (  # noqa: E402
     matrix_from_quat,
     quat_from_matrix,
@@ -62,7 +63,8 @@ from robolab.core.environments.factory import get_envs  # noqa: E402
 from robolab.core.environments.runtime import create_env  # noqa: E402
 from robolab.core.logging.results import get_all_env_subtask_infos  # noqa: E402
 from robolab.registrations.droid.auto_env_registrations_jointpos import auto_register_droid_envs  # noqa: E402
-from robolab.robots.droid import EEF_OFFSET_ROT, WristCameraCfg  # noqa: E402
+from robolab.robots import droid  # noqa: E402
+from robolab.robots.droid import EEF_OFFSET_ROT  # noqa: E402
 from robolab.variations.camera import OverShoulderLeftCameraCfg  # noqa: E402
 
 # Both flags gate recorder construction in the env cfg's ``__post_init__``, so they are set before any
@@ -74,10 +76,20 @@ robolab.constants.RECORD_IMAGE_DATA = False
 robolab.constants.set_output_dir(tempfile.mkdtemp(prefix='robolab-env-'))
 
 # The policy cameras (RoboLab's WRIST_LEFT preset) render at a stock 1280x720 while pi05-class policies
-# consume ~224x224, so most of the tile render is discarded. Both camera cfgs are resized before any
-# registration — env cfgs deep-copy them at instantiation, so this is the only write site that reaches
-# every task's scene.
-for _camera in (WristCameraCfg.wrist_cam, OverShoulderLeftCameraCfg.over_shoulder_left_camera):
+# consume ~224x224, so most of the tile render is discarded. The resolution override mutates the ORIGINAL
+# ``TiledCameraCfg`` objects: isaaclab's ``configclass`` strips class-level mutables into dataclass fields
+# whose ``default_factory`` deepcopies the captured original on every cfg instantiation, so writing the
+# originals (before any registration) reaches every task's scene. The wrist original is the ``droid`` module
+# global (``DroidCfg`` and ``WristCameraCfg`` both capture it); the over-shoulder original exists only inside
+# its factory's closure.
+_over_shoulder = (
+    OverShoulderLeftCameraCfg
+    .__dataclass_fields__['over_shoulder_left_camera']
+    .default_factory.__closure__[0]
+    .cell_contents
+)
+assert isinstance(_over_shoulder, TiledCameraCfg), _over_shoulder
+for _camera in (droid._WRIST_CAM, _over_shoulder):
     _camera.width, _camera.height = args.camera_res
 
 if args.disable_viewport:
