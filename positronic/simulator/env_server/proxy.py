@@ -132,6 +132,11 @@ class RemoteEnvControlSystem(pimm.ControlSystem):
         timer = eval_timing.active()
         with eval_timing.timed(timer.add_env_step if timer is not None else None):
             result = self._conn.step(self._adapter.action(commands, clock.now_ns()))
+        # An env server that decomposes its own step cost reports it in the response; record it against the
+        # client-observed ``env_step_s`` so the reduce can split wire, physics, render and server plumbing.
+        timing = result.get('timing')
+        if timer is not None and timing is not None:
+            timer.add_env_phases(timing['physics_s'], timing['render_s'], timing['wall_s'])
         payload = self._adapter.terminal(result)
         if payload:  # truthy-valued done: a non-empty payload ends the trial, an empty/``None`` one continues
             self.done.emit(payload)

@@ -43,6 +43,11 @@ class EpisodeTiming:
     pre-summarised, so the reduce step derives exact pass-level percentiles rather than pooling
     per-episode ones (a whole pass is only ~10-20k calls, so the raw list stays small). ``episode_uid``
     is the key the reduce step joins on to pull duration, success and byte size from the recorded episode.
+
+    ``env_physics_s``/``env_render_s``/``env_server_s`` are the env server's own decomposition of the time
+    inside ``env_step_s`` — physics substeps, sensor rendering, and the server's whole in-step wall (so
+    ``env_step_s - env_server_s`` is the wire + codec cost, and ``env_server_s`` minus the first two is
+    in-server plumbing). All zero for envs that report no decomposition.
     """
 
     task: str
@@ -55,6 +60,9 @@ class EpisodeTiming:
     record_io_s: float
     overhead_s: float
     infer_ms: list[float]
+    env_physics_s: float = 0.0
+    env_render_s: float = 0.0
+    env_server_s: float = 0.0
 
 
 @dataclass
@@ -68,6 +76,9 @@ class _Accumulator:
     env_step_s: float = 0.0
     policy_wait_s: float = 0.0
     record_io_s: float = 0.0
+    env_physics_s: float = 0.0
+    env_render_s: float = 0.0
+    env_server_s: float = 0.0
     infer_ms: list[float] = field(default_factory=list)
 
 
@@ -106,6 +117,13 @@ class EvalTimer:
         if self._current is not None:
             self._current.record_io_s += seconds
 
+    def add_env_phases(self, physics_s: float, render_s: float, server_s: float) -> None:
+        """One env step's server-reported decomposition: physics substeps, rendering, whole in-step wall."""
+        if self._current is not None:
+            self._current.env_physics_s += physics_s
+            self._current.env_render_s += render_s
+            self._current.env_server_s += server_s
+
     def discard_episode(self) -> None:
         """Drop the in-flight episode without recording it (an abort)."""
         self._current = None
@@ -129,6 +147,9 @@ class EvalTimer:
                 record_io_s=acc.record_io_s,
                 overhead_s=max(wall_s - measured, 0.0),
                 infer_ms=[round(ms, 3) for ms in acc.infer_ms],
+                env_physics_s=acc.env_physics_s,
+                env_render_s=acc.env_render_s,
+                env_server_s=acc.env_server_s,
             )
         )
 

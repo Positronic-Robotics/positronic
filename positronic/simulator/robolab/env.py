@@ -22,6 +22,7 @@ path has no seed hook, so a recorded seed would only mislead.
 import argparse
 import os
 import tempfile
+import time
 from typing import Any
 
 import cv2  # noqa: F401 -- robolab requires cv2 imported before isaaclab
@@ -127,6 +128,18 @@ class RobolabEnv(EnvProtocol):
         self._timeline = omni.timeline.get_timeline_interface()
         self._kit_app = omni.kit.app.get_app()
 
+    def _timed_phase(self, phase: str, method):
+        """``method`` with its wall time accumulated into ``self._phase_s[phase]``."""
+
+        def timed(*args, **kwargs):
+            start = time.perf_counter()
+            try:
+                return method(*args, **kwargs)
+            finally:
+                self._phase_s[phase] += time.perf_counter() - start
+
+        return timed
+
     def _build(self, task: str, instruction_type: str) -> None:
         if self._env is not None:
             self._env.close()  # release the prior task's env before create_env opens a fresh USD stage
@@ -138,6 +151,13 @@ class RobolabEnv(EnvProtocol):
             env_name, device=args.device, num_envs=1, instruction_type=instruction_type
         )
         self._control_dt = self._env_cfg.sim.dt * self._env_cfg.decimation
+        # The sim context's ``step`` (physics substeps) and ``render`` are the two native phases inside
+        # ``env.step``; both are re-wrapped per build (a new env brings a fresh SimulationContext). The sums
+        # feed the step response's ``timing`` and are zeroed at each ``step`` call, so reset-time rendering
+        # never leaks into a step's decomposition.
+        self._phase_s = {'physics': 0.0, 'render': 0.0}
+        self._env.sim.step = self._timed_phase('physics', self._env.sim.step)
+        self._env.sim.render = self._timed_phase('render', self._env.sim.render)
         # ``instruction`` is the resolved language goal (``create_env`` picks the variant); the rest is the
         # task identity the episode records.
         self._meta = {
@@ -188,6 +208,8 @@ class RobolabEnv(EnvProtocol):
         }
 
     def step(self, action: dict[str, Any]) -> dict[str, Any]:
+        start = time.perf_counter()
+        self._phase_s['physics'] = self._phase_s['render'] = 0.0
         # Isaac pauses its timeline while assets stream in; stepping a paused sim stalls, so pump the kit
         # update loop until it plays again (robolab's episode loop does the same before every step).
         while not self._timeline.is_playing():
@@ -206,6 +228,14 @@ class RobolabEnv(EnvProtocol):
             'done': done,
             'success': done and bool(self._env.get_env_results()[0]['success']),
             'control_dt': self._control_dt,
+            # The server's own step decomposition: physics substeps, sensor/viewport rendering, and this
+            # call's whole wall (observation materialisation included) — the client records it against its
+            # socket-level step time.
+            'timing': {
+                'physics_s': self._phase_s['physics'],
+                'render_s': self._phase_s['render'],
+                'wall_s': time.perf_counter() - start,
+            },
         }
 
     def _joint_targets(self, command: dict[str, Any]) -> torch.Tensor:
