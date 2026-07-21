@@ -45,9 +45,14 @@ class EpisodeTiming:
     is the key the reduce step joins on to pull duration, success and byte size from the recorded episode.
 
     ``env_physics_s``/``env_render_s``/``env_server_s`` are the env server's own decomposition of the time
-    inside ``env_step_s`` — physics substeps, sensor rendering, and the server's whole in-step wall (so
-    ``env_step_s - env_server_s`` is the wire + codec cost, and ``env_server_s`` minus the first two is
-    in-server plumbing). All zero for envs that report no decomposition.
+    inside ``env_step_s`` — physics substeps, sensor rendering, and the server's whole in-step wall.
+    ``env_client_s`` is the client-side observation materialisation (shared-memory image allocation + camera
+    copies) that also runs inside ``env_step_s``, so ``env_step_s - env_server_s - env_client_s`` is the wire
+    + codec cost. All the env-decomposition fields are zero for envs that report none.
+
+    ``finished_at`` is the wall clock (epoch seconds) at which the episode was sealed; with ``wall_s`` it lets
+    the reduce recover the pass span — the first episode's start to the last's finish — so inter-episode
+    teardown wall counts in ``W_pass`` instead of being dropped by a per-episode sum.
     """
 
     task: str
@@ -60,9 +65,11 @@ class EpisodeTiming:
     record_io_s: float
     overhead_s: float
     infer_ms: list[float]
+    finished_at: float
     env_physics_s: float = 0.0
     env_render_s: float = 0.0
     env_server_s: float = 0.0
+    env_client_s: float = 0.0
 
 
 @dataclass
@@ -79,6 +86,7 @@ class _Accumulator:
     env_physics_s: float = 0.0
     env_render_s: float = 0.0
     env_server_s: float = 0.0
+    env_client_s: float = 0.0
     infer_ms: list[float] = field(default_factory=list)
 
 
@@ -106,6 +114,13 @@ class EvalTimer:
     def add_env_step(self, seconds: float) -> None:
         if self._current is not None:
             self._current.env_step_s += seconds
+
+    def add_env_materialize(self, seconds: float) -> None:
+        """Client-side observation materialisation: part of the env step, and tracked apart so the reduce
+        can split it out of the wire cost."""
+        if self._current is not None:
+            self._current.env_step_s += seconds
+            self._current.env_client_s += seconds
 
     def add_infer(self, seconds: float) -> None:
         """One policy round-trip: it is the whole policy wait, and one entry in the latency distribution."""
@@ -147,9 +162,11 @@ class EvalTimer:
                 record_io_s=acc.record_io_s,
                 overhead_s=max(wall_s - measured, 0.0),
                 infer_ms=[round(ms, 3) for ms in acc.infer_ms],
+                finished_at=time.time(),
                 env_physics_s=acc.env_physics_s,
                 env_render_s=acc.env_render_s,
                 env_server_s=acc.env_server_s,
+                env_client_s=acc.env_client_s,
             )
         )
 

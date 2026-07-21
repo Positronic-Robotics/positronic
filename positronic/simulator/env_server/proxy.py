@@ -118,9 +118,10 @@ class RemoteEnvControlSystem(pimm.ControlSystem):
                     self._frame = self._step_env(clock)
                     timer = eval_timing.active()
                     # The step's observation is materialised client-side here (the adapter allocates
-                    # shared-memory image buffers and copies each camera frame); charge it to the env step too,
-                    # matching the native path, so image-heavy remote runs don't bill it to ``overhead_s``.
-                    with eval_timing.timed(timer.add_env_step if timer is not None else None):
+                    # shared-memory image buffers and copies each camera frame). It is part of the env step —
+                    # matching the native path, so image-heavy remote runs don't bill it to ``overhead_s`` — but
+                    # tracked apart (``env_client_s``) so the reduce charges it to materialisation, not wire.
+                    with eval_timing.timed(timer.add_env_materialize if timer is not None else None):
                         self._emit_payload(self._frame['obs'])
         finally:
             # Closes the connection then the server, in that order (reverse of acquisition); a no-op if no reset

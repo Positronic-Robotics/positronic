@@ -53,28 +53,36 @@ class GpuReport:
 
 @dataclass
 class WallSplit:
-    """Each measured phase's share of pass wall time; the fractions plus the unmeasured remainder sum to 1."""
+    """Each phase's share of pass wall time; all fractions sum to 1.
+
+    ``overhead`` is the within-episode wall unattributed to a measured phase; ``between_episodes`` is the
+    inter-episode wall (session teardown, homing, world rebuild) between one episode's finish and the next's
+    start, which a per-episode sum drops.
+    """
 
     reset: float
     env_step: float
     policy_wait: float
     record_io: float
     overhead: float
+    between_episodes: float
 
 
 @dataclass
 class EnvStepSplit:
     """Fractions of the client-observed env-step wall, from the env server's own decomposition.
 
-    ``wire`` is the client-side step wall minus the server's in-step wall (socket + codec);
-    ``server_other`` is the server's wall outside physics and rendering (managers, IK, observation
-    materialisation). ``None`` when no episode carried a server decomposition.
+    ``wire`` is the client-side step wall minus the server's in-step wall and the client materialisation
+    (socket + codec); ``materialize`` is the client-side observation materialisation (shared-memory image
+    allocation + camera copies); ``server_other`` is the server's wall outside physics and rendering
+    (managers, IK). ``None`` when no episode carried a server decomposition.
     """
 
     physics: float
     render: float
     server_other: float
     wire: float
+    materialize: float
 
 
 @dataclass
@@ -180,10 +188,14 @@ def _build_report(records: list[EpisodeTiming], facts: dict[str, _RecordedFacts]
             f'(e.g. {unmatched[:3]}); the dataset was edited or does not match this timing.jsonl'
         )
 
-    wall_pass = float(sum(r.wall_s for r in records))
+    # W_pass is the true pass span — the first episode's start to the last's finish — so inter-episode
+    # teardown wall (session close, homing, world rebuild) counts in the denominator. A per-episode sum drops
+    # it, inflating the real-time factor and sizing numbers. ``finished_at - wall_s`` is each episode's start.
+    episode_wall_sum = float(sum(r.wall_s for r in records))
+    wall_pass = float(max(r.finished_at for r in records) - min(r.finished_at - r.wall_s for r in records))
     all_infer_ms = np.array([ms for r in records for ms in r.infer_ms], dtype=float)
 
-    # Aggregate fraction = summed phase over summed wall, so long episodes weigh proportionally.
+    # Aggregate fraction = summed phase over W_pass, so long episodes weigh proportionally.
     def phase_fraction(attr: str) -> float:
         return float(sum(getattr(r, attr) for r in records) / wall_pass) if wall_pass else 0.0
 
@@ -193,11 +205,13 @@ def _build_report(records: list[EpisodeTiming], facts: dict[str, _RecordedFacts]
     if server_sum and env_step_sum:
         physics_sum = float(sum(r.env_physics_s for r in records))
         render_sum = float(sum(r.env_render_s for r in records))
+        client_sum = float(sum(r.env_client_s for r in records))
         env_step_split = EnvStepSplit(
             physics=physics_sum / env_step_sum,
             render=render_sum / env_step_sum,
             server_other=(server_sum - physics_sum - render_sum) / env_step_sum,
-            wire=(env_step_sum - server_sum) / env_step_sum,
+            wire=(env_step_sum - server_sum - client_sum) / env_step_sum,
+            materialize=client_sum / env_step_sum,
         )
 
     matched = [facts[r.episode_uid] for r in records]
@@ -220,6 +234,7 @@ def _build_report(records: list[EpisodeTiming], facts: dict[str, _RecordedFacts]
             policy_wait=phase_fraction('policy_wait_s'),
             record_io=phase_fraction('record_io_s'),
             overhead=phase_fraction('overhead_s'),
+            between_episodes=float((wall_pass - episode_wall_sum) / wall_pass) if wall_pass else 0.0,
         ),
         env_step_split=env_step_split,
         mean_bytes_per_rollout=(sum(f.size_mb for f in matched) / len(matched) * 1024 * 1024) if matched else 0.0,

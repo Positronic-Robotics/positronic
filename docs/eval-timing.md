@@ -46,8 +46,10 @@ size, and the `eval.scored` success verdict from the dataset — and prints a pa
 - `real_time_factor` — recorded episode seconds per wall second.
 - `policy_busy_fraction`, `infer_p50_ms` / `infer_p95_ms` — how much of the pass the policy gated, and
   its per-call latency.
-- `wall_split` — reset / env_step / policy_wait / record_io / overhead seconds.
-- `env_step_split` — physics / render / wire / server_other inside the env step, when the env reports it.
+- `wall_split` — the fraction of W_pass in each phase: reset / env_step / policy_wait / record_io / overhead
+  / between_episodes (inter-episode teardown, homing, world rebuild); sums to 1.
+- `env_step_split` — physics / render / server_other / wire / materialize inside the env step, when the env
+  reports its decomposition.
 - `mean_bytes_per_rollout`, `success_rate`, and GPU mean-util / peak-VRAM for the sim box (and the
   policy endpoint, if you pass its `nvidia-smi dmon` log via `--gpu_policy_log`).
 
