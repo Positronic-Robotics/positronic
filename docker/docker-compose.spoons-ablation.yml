@@ -1,7 +1,7 @@
 # GR00T spoons data ablation servers (~4.6GB each, 2 fit on desktop, 1 on notebook)
 #
 # Desktop (2 servers):
-#   IMAGE_TAG=latest CACHE_ROOT=/home/vertix docker --context desktop compose -f docker-compose.spoons-ablation.yml up spoons-100 spoons-50
+#   IMAGE_TAG=latest CACHE_ROOT=/home/<user> docker --context desktop compose -f docker-compose.spoons-ablation.yml up spoons-100 spoons-50
 # Notebook (1 server):
 #   IMAGE_TAG=latest docker --context notebook compose -f docker-compose.spoons-ablation.yml up spoons-25
 services:
