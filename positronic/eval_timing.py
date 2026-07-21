@@ -21,15 +21,25 @@ import os
 import shutil
 import subprocess
 import time
-from collections.abc import Callable, Iterator
+from collections.abc import Iterator
 from contextvars import ContextVar
 from dataclasses import asdict, dataclass, field
+from enum import IntEnum, auto
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
 TIMING_FILENAME = 'timing.jsonl'
 GPU_LOG_FILENAME = 'gpu_dmon.log'
+
+
+class Phase(IntEnum):
+    """A rollout span timed via ``timed``; it accumulates into the matching ``EpisodeTiming`` field."""
+
+    RESET = auto()
+    ENV_STEP = auto()
+    MATERIALIZE = auto()  # client-side observation assembly — part of the env step, tracked apart from wire
+    RECORD_IO = auto()
 
 
 @dataclass
@@ -107,30 +117,27 @@ class EvalTimer:
             logger.warning('EvalTimer: new episode began before the previous one finished; dropping the previous')
         self._current = _Accumulator(task=task, trial=trial, wall_start=time.perf_counter())
 
-    def add_reset(self, seconds: float) -> None:
-        if self._current is not None:
-            self._current.reset_s += seconds
-
-    def add_env_step(self, seconds: float) -> None:
-        if self._current is not None:
-            self._current.env_step_s += seconds
-
-    def add_env_materialize(self, seconds: float) -> None:
-        """Client-side observation materialisation: part of the env step, and tracked apart so the reduce
-        can split it out of the wire cost."""
-        if self._current is not None:
-            self._current.env_step_s += seconds
-            self._current.env_client_s += seconds
+    def _record(self, phase: Phase, seconds: float) -> None:
+        """Accumulate a timed span into the in-flight episode. ``MATERIALIZE`` is part of the env step and
+        also tracked apart (``env_client_s``) so the reduce can split it out of the wire cost."""
+        if self._current is None:
+            return
+        match phase:
+            case Phase.RESET:
+                self._current.reset_s += seconds
+            case Phase.ENV_STEP:
+                self._current.env_step_s += seconds
+            case Phase.MATERIALIZE:
+                self._current.env_step_s += seconds
+                self._current.env_client_s += seconds
+            case Phase.RECORD_IO:
+                self._current.record_io_s += seconds
 
     def add_infer(self, seconds: float) -> None:
         """One policy round-trip: it is the whole policy wait, and one entry in the latency distribution."""
         if self._current is not None:
             self._current.policy_wait_s += seconds
             self._current.infer_ms.append(seconds * 1000.0)
-
-    def add_record_io(self, seconds: float) -> None:
-        if self._current is not None:
-            self._current.record_io_s += seconds
 
     def add_env_phases(self, physics_s: float, render_s: float, server_s: float) -> None:
         """One env step's server-reported decomposition: physics substeps, rendering, whole in-step wall."""
@@ -182,10 +189,38 @@ class EvalTimer:
 
 _ACTIVE: ContextVar[EvalTimer | None] = ContextVar('eval_timer', default=None)
 
+# Hook sites call these module functions, never the timer directly — each is a no-op when telemetry is off,
+# so a normal eval pays nothing and no site carries a ``None`` check.
 
-def active() -> EvalTimer | None:
-    """The timer bound for the current ``World`` run, or ``None`` when telemetry is off."""
-    return _ACTIVE.get()
+
+def begin_episode(task: str, trial: int) -> None:
+    """Open a new rollout's timing span."""
+    if (timer := _ACTIVE.get()) is not None:
+        timer.begin_episode(task, trial)
+
+
+def finish_episode(episode_uid: str) -> None:
+    """Seal the in-flight rollout under its recorded uid."""
+    if (timer := _ACTIVE.get()) is not None:
+        timer.finish_episode(episode_uid)
+
+
+def discard_episode() -> None:
+    """Drop the in-flight rollout without recording it — an abort."""
+    if (timer := _ACTIVE.get()) is not None:
+        timer.discard_episode()
+
+
+def record_infer(seconds: float) -> None:
+    """Record one policy round-trip's wall time (whole policy wait + one latency sample)."""
+    if (timer := _ACTIVE.get()) is not None:
+        timer.add_infer(seconds)
+
+
+def record_env_phases(physics_s: float, render_s: float, server_s: float) -> None:
+    """Record an env step's server-reported physics/render/whole-wall decomposition."""
+    if (timer := _ACTIVE.get()) is not None:
+        timer.add_env_phases(physics_s, render_s, server_s)
 
 
 def _start_gpu_sampler(out_dir: Path) -> subprocess.Popen | None:
@@ -242,13 +277,14 @@ def bind(out_dir: Path) -> Iterator[EvalTimer]:
 
 
 @contextlib.contextmanager
-def timed(sink: Callable[[float], None] | None) -> Iterator[None]:
-    """Feed the wall duration of the enclosed block to ``sink``; a no-op when ``sink`` is ``None``."""
-    if sink is None:
+def timed(phase: Phase) -> Iterator[None]:
+    """Time the enclosed block into ``phase``. A no-op when telemetry is off, so a normal eval pays nothing."""
+    timer = _ACTIVE.get()
+    if timer is None:
         yield
         return
     start = time.perf_counter()
     try:
         yield
     finally:
-        sink(time.perf_counter() - start)
+        timer._record(phase, time.perf_counter() - start)

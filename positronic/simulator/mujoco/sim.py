@@ -12,6 +12,7 @@ from positronic.drivers.roboarm import RobotStatus, State
 from positronic.drivers.roboarm import command as roboarm_command
 from positronic.drivers.roboarm.ik import qpos_from_site_pose
 from positronic.drivers.roboarm.models import bundled_panda_model
+from positronic.eval_timing import Phase
 from positronic.simulator.mujoco.transforms import MujocoSceneTransform, load_spec, load_spec_from_file, np_seed
 
 logger = logging.getLogger(__name__)
@@ -172,10 +173,9 @@ class MujocoSim(pimm.ControlSystem):
                 # the recorder samples it before any step advances the sim. ``reset`` already loaded the scene.
                 self._reset_pending = False
                 self._emit_robot_meta()
-                timer = eval_timing.active()
                 # Frame-0 rendering is part of the reset cost, not overhead: the remote path likewise charges
                 # its reset's rendered first observation to ``reset_s``, so time this publish there too.
-                with eval_timing.timed(timer.add_reset if timer is not None else None):
+                with eval_timing.timed(Phase.RESET):
                     self._publish_frame()
                 continue
             now = clock.now()
@@ -199,12 +199,11 @@ class MujocoSim(pimm.ControlSystem):
                 self._last_grip = grip
             self._apply_grip(self._last_grip)
 
-            timer = eval_timing.active()
             # Charge the sim advance *and* the observation production it feeds (notably ``_emit_cameras`` ->
             # ``_render``) to the env step: the remote env-server path times ``_conn.step()``, which returns
             # rendered observations, so an image-heavy native sim must count rendering here too or its wall
             # split reads rendering as ``overhead_s`` and is not comparable to the remote path.
-            with eval_timing.timed(timer.add_env_step if timer is not None else None):
+            with eval_timing.timed(Phase.ENV_STEP):
                 self.step()
                 self.fps_counter.tick()
                 if state_due(now):
