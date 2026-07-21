@@ -37,7 +37,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "jq -r '.tool_input.command' | grep -q -- '--amend' && echo 'BLOCKED: Never amend commits, create new ones instead' >&2 && exit 1; exit 0",
+            "command": "\"$CLAUDE_PROJECT_DIR/.claude/hooks/guard-main-merge.sh\"",
             "timeout": 5
           }
         ]
