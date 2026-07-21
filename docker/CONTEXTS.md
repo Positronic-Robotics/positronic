@@ -25,13 +25,13 @@ Build and push all: `make push`
 
 ## Remote docker compose
 
-When running `docker --context <remote> compose run ...`, volume paths in `docker-compose.yml` expand `${HOME}` locally (e.g. `/Users/vertix`), but the remote machine expects `/home/vertix`. Set `CACHE_ROOT` to the remote home:
+When running `docker --context <remote> compose run ...`, volume paths in `docker-compose.yml` expand `${HOME}` locally (e.g. `/Users/<user>`), but the remote machine expects `/home/<user>`. Set `CACHE_ROOT` to the remote home:
 
 ```bash
-CACHE_ROOT=/home/vertix docker --context vm-train compose run -d --service-ports openpi-server ...
+CACHE_ROOT=/home/<user> docker --context vm-train compose run -d --service-ports openpi-server ...
 ```
 
 ## VM management
 
 Start: `../internal/scripts/start.sh train`
-Check: `ssh -o ConnectTimeout=5 vertix@vm-train 'echo ok'`
+Check: `ssh -o ConnectTimeout=5 <user>@vm-train 'echo ok'`
