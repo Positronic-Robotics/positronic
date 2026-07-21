@@ -79,11 +79,15 @@ class Policy(ABC):
     """
 
     @abstractmethod
-    def new_session(self, context: dict[str, Any] | None = None) -> Session:
+    def new_session(self, context: dict[str, Any] | None = None, now: Now | None = None) -> Session:
         """Create a new inference session for an episode.
 
         Args:
             context: Episode context (task description, eval metadata, etc.).
+            now: The runtime clock (current time in seconds), supplied by the harness. It flows
+                through wrapper pipelines into ``wrap_session``, so sessions that schedule against
+                live time (e.g. ``ChunkedSchedule``) can read it. ``None`` where no runtime clock
+                exists (server-side sessions, warmup).
         """
 
     @property
@@ -101,8 +105,8 @@ class DelegatingPolicy(Policy):
     def __init__(self, inner: Policy):
         self._inner = inner
 
-    def new_session(self, context=None):
-        return self._inner.new_session(context)
+    def new_session(self, context=None, now=None):
+        return self._inner.new_session(context, now)
 
     @property
     def meta(self):
@@ -131,18 +135,27 @@ class PolicyWrapper:
     policy-level state across sessions, like composition).
     """
 
-    def wrap(self, policy: Policy, now: Now | None = None) -> Policy:
+    def wrap(self, policy: Policy) -> Policy:
         """Apply this wrapper to a policy. Default: wrap every session it creates via ``wrap_session``.
 
-        ``now`` is the runtime clock (current time in seconds), supplied by the harness when it
-        applies the pipeline. Wrappers whose sessions need wall time read it; codecs and recording
-        taps, applied at config time, leave it ``None``.
+        Composition happens at definition/config time; the runtime clock reaches the wrapped
+        sessions through ``new_session``.
         """
-        return _WrapperPolicy(policy, self, now)
+        return _WrapperPolicy(policy, self)
 
     def wrap_session(self, inner: Session, context: dict[str, Any] | None, now: Now | None) -> Session:
         """Wrap a single session. Subclasses override this for per-session wrapping."""
         raise NotImplementedError('Override wrap_session or wrap')
+
+    def to_spec(self) -> dict[str, Any]:
+        """Plain-data wire spec of this wrapper, for a server's local-stack declaration.
+
+        Only wrappers registered in ``positronic.policy.spec.WIRE_WRAPPERS`` are deliverable to a
+        rig; they return ``{'name': <wire name>}`` plus ``{'args': {...}}`` when they take arguments.
+        ``args`` must be the wrapper's constructor keywords — the rig rebuilds by calling the
+        constructor with them, so unknown args fail loudly (``TypeError``).
+        """
+        raise NotImplementedError(f'{type(self).__name__} is not deliverable to a rig (no wire spec)')
 
     @property
     def meta(self) -> dict[str, Any]:
@@ -165,13 +178,12 @@ class _WrapperPolicy(DelegatingPolicy):
     Delegates session creation to the wrapper's ``wrap_session`` and merges meta.
     """
 
-    def __init__(self, inner: Policy, wrapper: PolicyWrapper, now: Now | None):
+    def __init__(self, inner: Policy, wrapper: PolicyWrapper):
         super().__init__(inner)
         self._wrapper = wrapper
-        self._now = now
 
-    def new_session(self, context=None):
-        return self._wrapper.wrap_session(self._inner.new_session(context), context, self._now)
+    def new_session(self, context=None, now=None):
+        return self._wrapper.wrap_session(self._inner.new_session(context, now), context, now)
 
     @property
     def meta(self):
@@ -184,10 +196,13 @@ class _Pipeline(PolicyWrapper):
     def __init__(self, components: tuple):
         self._components = components
 
-    def wrap(self, policy: Policy, now: Now | None = None) -> Policy:
+    def wrap(self, policy: Policy) -> Policy:
         for component in reversed(self._components):
-            policy = component.wrap(policy, now)
+            policy = component.wrap(policy)
         return policy
+
+    def to_spec(self) -> dict[str, Any]:
+        return {'seq': [component.to_spec() for component in self._components]}
 
     def _pipeline_components(self) -> tuple:
         return self._components
@@ -244,12 +259,12 @@ class SampledPolicy(Policy):
             self._keys = tuple(p.meta.get(self._key_field, str(i)) for i, p in enumerate(self._policies))
         return self._keys
 
-    def new_session(self, context=None):
+    def new_session(self, context=None, now=None):
         keys = self._get_keys()
         ctx = context or {}
         key = self.sampler.sample(keys, ctx, self.counter.counts(keys, ctx))
         policy = self._policies[keys.index(key)]
-        session = policy.new_session(context)
+        session = policy.new_session(context, now)
         return _KeyedSession(session, policy.meta, self._key_field, key)
 
     @property

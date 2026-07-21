@@ -41,7 +41,7 @@ cd docker && docker compose run --rm lerobot-train full_finetune \
 # 3. Serve
 cd docker && docker compose run --rm --service-ports lerobot-server serve \
   --checkpoints_dir=~/checkpoints/lerobot/my_task_v1/ \
-  --codec=@positronic.vendors.lerobot.codecs.ee
+  --definition.codec=@positronic.vendors.lerobot.codecs.ee
 
 # 4. Run inference
 uv run --locked positronic-inference sim \
@@ -95,7 +95,7 @@ Two training modes are available:
 ```bash
 cd docker && docker compose run --rm --service-ports lerobot-server serve \
   --checkpoints_dir=~/checkpoints/lerobot/my_task_v1/ \
-  --codec=@positronic.vendors.lerobot.codecs.ee \
+  --definition.codec=@positronic.vendors.lerobot.codecs.ee \
   --port=8000
 ```
 
@@ -103,7 +103,7 @@ cd docker && docker compose run --rm --service-ports lerobot-server serve \
 |-----------|-------------|---------|---------|
 | `--checkpoints_dir` | Experiment directory (contains `checkpoints/` folder) | Required | `~/checkpoints/lerobot/my_task_v1/` |
 | `--checkpoint` | Specific checkpoint step | Latest | `10000`, `20000` |
-| `--codec` | Codec (must match training) | `ee` | `joints` |
+| `--definition.codec` | Server-side codec of the policy definition (must match training) | `ee` | `joints` |
 | `--port` | Server port | `8000` | `8001` |
 | `--host` | Server host | `0.0.0.0` | Binds to all interfaces |
 | `--recording_dir` | Directory for server-side inference recordings | `None` | `s3://inference/...` |

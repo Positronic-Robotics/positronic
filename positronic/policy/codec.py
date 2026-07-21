@@ -90,7 +90,7 @@ class Codec(PolicyWrapper):
         if isinstance(other, Codec):
             return _ComposedCodec(self, other)
         if isinstance(other, PolicyWrapper):
-            # Mixed Codec | non-Codec-wrapper → generic pipeline (no longer a Codec).
+            # Mixed Codec | non-Codec-wrapper → generic pipeline, not a Codec.
             return _Pipeline((self, *other._pipeline_components()))
         return NotImplemented
 
@@ -144,6 +144,9 @@ class _ComposedCodec(Codec):
         merge_dicts(result, self._right.meta)
         return result
 
+    def to_spec(self):
+        return {'seq': [self._left.to_spec(), self._right.to_spec()]}
+
     def dummy_encoded(self, data=None):
         return self._right.dummy_encoded(self._left.dummy_encoded(data))
 
@@ -175,6 +178,9 @@ class _ParallelCodec(Codec):
         merge_dicts(result, self._left.meta)
         merge_dicts(result, self._right.meta)
         return result
+
+    def to_spec(self):
+        return {'par': [self._left.to_spec(), self._right.to_spec()]}
 
     def dummy_encoded(self, data=None):
         return {**self._left.dummy_encoded(data), **self._right.dummy_encoded(data)}

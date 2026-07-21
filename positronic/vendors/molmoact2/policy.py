@@ -57,7 +57,7 @@ class MolmoAct2Policy(Policy):
         self._num_steps = num_steps
         self._meta = {**(extra_meta or {}), 'type': 'molmoact2', 'norm_tag': norm_tag}
 
-    def new_session(self, context=None) -> Session:
+    def new_session(self, context=None, now=None) -> Session:
         return _MolmoAct2Session(self._model, self._processor, self._norm_tag, self._num_steps, self._meta)
 
     @property

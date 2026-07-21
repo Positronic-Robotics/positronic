@@ -3,9 +3,21 @@
 import configuronic as cfn
 
 from positronic import geom
+from positronic.cfg import wrappers
+from positronic.policy import Codec, PolicyWrapper
 from positronic.policy.observation import ObservationCodec
+from positronic.policy.spec import remote
 
 RotRep = geom.Rotation.Representation
+
+
+@cfn.config(local=wrappers.chunked_schedule)
+def definition(local: PolicyWrapper | None, codec: Codec):
+    """One policy definition: the rig-side stack, the ``remote`` split marker, the server-side codec.
+
+    ``local=None`` declares that the policy needs no rig-side glue.
+    """
+    return (local | remote | codec) if local is not None else (remote | codec)
 
 
 @cfn.config()

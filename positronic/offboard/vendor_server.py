@@ -5,13 +5,15 @@ import logging
 import time
 from abc import ABC, abstractmethod
 from collections.abc import Callable
+from importlib.metadata import version as _pkg_version
 from typing import Any
 
 import pos3
 import uvicorn
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 
-from positronic.policy import Codec, Policy, Recorder
+from positronic.policy import Codec, Policy, PolicyWrapper, Recorder
+from positronic.policy.spec import split
 from positronic.utils.checkpoints import get_latest_checkpoint, list_checkpoints
 from positronic.utils.serialization import deserialise, serialise
 
@@ -97,7 +99,7 @@ def resolve_checkpoint(checkpoints_dir: str, configured: str | None, requested: 
 class VendorServer(ABC):
     """Base class for vendor inference servers.
 
-    Provides the FastAPI app, WebSocket inference loop, codec wrapping,
+    Provides the FastAPI app, WebSocket inference loop, the policy-definition split,
     startup/warmup lifecycle, and serve entrypoint. Subclasses implement
     three hooks:
 
@@ -107,8 +109,12 @@ class VendorServer(ABC):
 
     Optional overrides: warmup(), shutdown_model(), release_policy().
 
+    ``definition`` is the whole policy as one pipeline with a ``remote`` marker (see
+    ``positronic.policy.spec``): the half right of the marker wraps the model here; the half left
+    of it is published as the ``local_stack`` spec in the ``ready`` handshake for the rig to build.
+
     The WebSocket session flow is:
-        accept → resolve_model → create_policy → codec.wrap → reset → inference loop
+        accept → resolve_model → create_policy → remote-half wrap → reset → inference loop
 
     On startup (before accepting connections):
         resolve_model(None) → create_policy → reset → warmup
@@ -123,13 +129,16 @@ class VendorServer(ABC):
 
     def __init__(
         self,
-        codec: Codec | None,
+        definition: PolicyWrapper,
         host: str = '0.0.0.0',
         port: int = 8000,
         recording_dir: str | None = None,
         idle_timeout_min: float | None = None,
     ):
-        self.codec = codec
+        local, self._remote = split(definition)
+        # Resolved eagerly so a definition whose local half is not deliverable fails at startup,
+        # not at a client's connect. An empty half is an explicit "no glue needed" declaration.
+        self._local_spec = local.to_spec() if local is not None else {'seq': []}
         self.host = host
         self.port = port
         # Synced once; a fresh ``Recorder`` is created per websocket session so
@@ -168,14 +177,14 @@ class VendorServer(ABC):
         """Return available models."""
 
     async def warmup(self, policy: Policy):
-        """Run one warmup inference. Default uses codec.dummy_encoded(). Non-fatal on failure."""
-        if not self.codec:
+        """Run one warmup inference. Default uses the remote codec's dummy_encoded(). Non-fatal on failure."""
+        if not isinstance(self._remote, Codec):
             return
         session = None
         try:
             logger.info('Running warmup inference...')
             session = policy.new_session()
-            await asyncio.to_thread(session, self.codec.dummy_encoded())
+            await asyncio.to_thread(session, self._remote.dummy_encoded())
             logger.info('Warmup inference complete')
         except Exception:
             logger.warning('Warmup inference failed (non-fatal)', exc_info=True)
@@ -225,15 +234,15 @@ class VendorServer(ABC):
             model_handle, extra_meta = await self.resolve_model(requested_model, websocket)
             base_policy = self.create_policy(model_handle)
             if self._recording_dir is not None:
-                # Tap both sides of the codec so one recording holds the obs/action at the
+                # Tap both sides of the remote half so one recording holds the obs/action at the
                 # wire boundary ('raw') and the encoded obs / raw model output ('inference').
                 rec = Recorder(self._recording_dir)
-                if self.codec:
-                    policy = (rec.tap('raw') | self.codec | rec.tap('inference')).wrap(base_policy)
+                if self._remote is not None:
+                    policy = (rec.tap('raw') | self._remote | rec.tap('inference')).wrap(base_policy)
                 else:
                     policy = rec.tap('inference').wrap(base_policy)
             else:
-                policy = self.codec.wrap(base_policy) if self.codec else base_policy
+                policy = self._remote.wrap(base_policy) if self._remote is not None else base_policy
             # ``new_session`` resets the backend client, which vendor sessions may share; hold the inference lock
             # so the reset can't interleave with an in-flight ``session(raw_obs)`` running in another worker thread.
             # Acquire it with keepalives so queuing behind a peer's slow inference doesn't trip the handshake timeout.
@@ -242,9 +251,17 @@ class VendorServer(ABC):
                 session = await asyncio.to_thread(policy.new_session)
             finally:
                 self._infer_lock.release()
-            # ``policy.meta`` is the static baseline; ``session.meta`` overlays
-            # per-episode specifics and wins on conflict.
-            meta = {**self.metadata, **extra_meta, **policy.meta, **session.meta}
+            # ``policy.meta`` is the static baseline; ``session.meta`` overlays per-episode
+            # specifics and wins on conflict. The local-stack declaration and the server's
+            # positronic version are server-authoritative, so they merge last.
+            meta = {
+                **self.metadata,
+                **extra_meta,
+                **policy.meta,
+                **session.meta,
+                'local_stack': self._local_spec,
+                'positronic_version': _pkg_version('positronic'),
+            }
             await websocket.send_bytes(serialise({'status': 'ready', 'meta': meta}))
 
             try:

@@ -9,7 +9,6 @@ import pos3
 import pimm
 import positronic.cfg.embodiment
 import positronic.cfg.policy as policy_cfg
-import positronic.cfg.wrappers as wrappers_cfg
 from positronic.cfg.eval.sim.positronic import stack_cubes
 from positronic.cli.eval.run import Driver, main, run
 from positronic.dataset.local_dataset import load_all_datasets
@@ -89,13 +88,7 @@ def web(port, fps, width, bitrate, translation_fine, translation_coarse, rotatio
     return make
 
 
-run_cfg = cfn.Config(
-    main,
-    embodiment=positronic.cfg.embodiment.droid,
-    policy=policy_cfg.placeholder,
-    driver=keyboard,
-    wrap=wrappers_cfg.default_wrappers,
-)
+run_cfg = cfn.Config(main, embodiment=positronic.cfg.embodiment.droid, policy=policy_cfg.placeholder, driver=keyboard)
 
 
 # Console entry point for [project.scripts].

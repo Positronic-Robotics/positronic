@@ -70,7 +70,7 @@ class SpyPolicy(Policy):
         self.reset_calls: int = 0
         self.last_reset_context = None
 
-    def new_session(self, context=None):
+    def new_session(self, context=None, now=None):
         self.reset_calls += 1
         self.last_reset_context = context
         return _SpySession(self)
@@ -115,7 +115,7 @@ class StubPolicy(Policy):
     def meta(self) -> dict[str, object]:
         return self._meta
 
-    def new_session(self, context=None):
+    def new_session(self, context=None, now=None):
         self.reset_calls += 1
         self.last_reset_context = context
         return _StubSession(self)
@@ -145,7 +145,7 @@ class ChunkPolicy(StubPolicy):
         super().__init__(*args, **kwargs)
         self.counter = 0
 
-    def new_session(self, context=None):
+    def new_session(self, context=None, now=None):
         self.reset_calls += 1
         self.last_reset_context = context
         return _ChunkSession(self)
@@ -421,7 +421,7 @@ def test_episode_meta_includes_policy_static_meta(world):
             pose = Transform3D(translation=np.array([0.4, 0.5, 0.6], dtype=np.float32), rotation=Rotation.identity)
             self._command = CartesianPosition(pose=pose)
 
-        def new_session(self, context=None):
+        def new_session(self, context=None, now=None):
             return _StaticMetaSession(self._command)  # Session.meta defaults to {}
 
         @property
@@ -633,7 +633,7 @@ def test_policy_first_obs_is_frame0(world):
     )
     task = Task(instruction='t', timeout=100.0, reset=device.reset)
     policy = StubPolicy()
-    harness = Harness(policy, embodiment, task=task, trials=[{}], wrap=None)
+    harness = Harness(policy, embodiment, task=task, trials=[{}])
     wire.wire_embodiment(world, harness, embodiment, None)
 
     scheduler = world.start([harness, device])
@@ -674,8 +674,8 @@ def test_task_done_terminates_through_wire_embodiment(world):
     )
     task = Task(instruction='t', timeout=100.0, done=device.done)
     # Termination is independent of the policy wrappers; the minimal embodiment has no
-    # ``robot_state``, so skip the default ChunkedSchedule pipeline.
-    harness = Harness(StubPolicy(), embodiment, task=task, trials=[{}], wrap=None)
+    # ``robot_state``, so run the stub policy bare.
+    harness = Harness(StubPolicy(), embodiment, task=task, trials=[{}])
     ds_recorder = RecordingEmitter()
     harness.ds_command._bind(ds_recorder)
     wire.wire_embodiment(world, harness, embodiment, None, done=task.done)
@@ -951,7 +951,7 @@ def test_empty_chunk_cancels_both_robot_and_grip(world):
             return []
 
     class EmptyChunkPolicy(Policy):
-        def new_session(self, context=None):
+        def new_session(self, context=None, now=None):
             return _EmptyChunkSession()
 
     harness = Harness(EmptyChunkPolicy(), make_embodiment())
@@ -1047,7 +1047,7 @@ def test_harness_skips_inference_on_error(world):
     """An errored arm serializes to None, so the harness feeds nothing to the policy until the arm reports
     AVAILABLE again, then resumes with a fresh chunk."""
     policy = ChunkPolicy()
-    harness = Harness(policy, make_embodiment(), wrap=ChunkedSchedule())
+    harness = Harness(ChunkedSchedule().wrap(policy), make_embodiment())
     p = _pair_all(world, harness)
 
     state_ok = make_robot_state([0.1, 0.2, 0.3], [0.4, 0.5, 0.6], status=RobotStatus.AVAILABLE)
