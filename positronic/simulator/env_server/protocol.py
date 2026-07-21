@@ -10,37 +10,9 @@ numpy-1 client unchanged.
 """
 
 import functools
-from dataclasses import dataclass
 
 import msgpack
 import numpy as np
-
-
-@dataclass
-class StepTiming:
-    """The env server's wall-clock decomposition of one ``step``, shared by both ends of the wire.
-
-    ``physics_s`` and ``render_s`` accumulate the native sim-substep and sensor/viewport-render calls the
-    server wraps within a step; ``wall_s`` is the whole call, observation materialisation included. The
-    server fills one per step (``reset`` before, ``add_*`` during, ``wall_s`` after) and sends ``asdict`` of
-    it in the step response's ``timing``; the client rebuilds it with ``StepTiming(**timing)`` and records it
-    against its socket-level step time. All seconds.
-    """
-
-    physics_s: float = 0.0
-    render_s: float = 0.0
-    wall_s: float = 0.0
-
-    def add_physics(self, seconds: float) -> None:
-        self.physics_s += seconds
-
-    def add_render(self, seconds: float) -> None:
-        self.render_s += seconds
-
-    def reset(self) -> None:
-        self.physics_s = 0.0
-        self.render_s = 0.0
-        self.wall_s = 0.0
 
 
 def _pack(obj):
