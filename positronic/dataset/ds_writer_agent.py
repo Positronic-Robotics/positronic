@@ -5,6 +5,7 @@ from typing import Any
 
 import pimm
 from positronic import eval_timing
+from positronic.eval_timing import Phase
 from positronic.utils import frozen_keys_dict
 
 from .dataset import DatasetWriter
@@ -197,8 +198,6 @@ class DsWriterAgent(pimm.ControlSystem):
         pace = (lambda: pimm.Yield()) if self._virtual_time else limiter.wait
         ep_writer: EpisodeWriter | None = None
         ep_counter = 0
-        # Bound for the whole run (or ``None`` when telemetry is off); constant across turns.
-        timer = eval_timing.active()
 
         try:
             while not should_stop.value:
@@ -211,7 +210,7 @@ class DsWriterAgent(pimm.ControlSystem):
                 opened = False
                 if start:
                     was_open = ep_writer is not None
-                    ep_writer, ep_counter = self._handle_command(cmd_msg.data, ep_writer, ep_counter, cmd_msg.ts, timer)
+                    ep_writer, ep_counter = self._handle_command(cmd_msg.data, ep_writer, ep_counter, cmd_msg.ts)
                     opened = ep_writer is not None and not was_open
 
                 if ep_writer is not None:
@@ -234,7 +233,7 @@ class DsWriterAgent(pimm.ControlSystem):
                             if not isinstance(clock, pimm.world.SystemClock):
                                 extra_ts['world'] = world_time_ns
 
-                            with eval_timing.timed(timer.add_record_io if timer is not None else None):
+                            with eval_timing.timed(Phase.RECORD_IO):
                                 serializer = self._serializers.get(name)
                                 value = msg.data
                                 if serializer is not None:
@@ -249,13 +248,13 @@ class DsWriterAgent(pimm.ControlSystem):
                                     _append(ep_writer, name, value, primary_ts, extra_ts)
 
                 if closing:
-                    ep_writer, ep_counter = self._handle_command(cmd_msg.data, ep_writer, ep_counter, cmd_msg.ts, timer)
+                    ep_writer, ep_counter = self._handle_command(cmd_msg.data, ep_writer, ep_counter, cmd_msg.ts)
 
                 yield pace()
         finally:
             cmd_msg = self.command.read()
             if cmd_msg.updated:
-                ep_writer, ep_counter = self._handle_command(cmd_msg.data, ep_writer, ep_counter, cmd_msg.ts, timer)
+                ep_writer, ep_counter = self._handle_command(cmd_msg.data, ep_writer, ep_counter, cmd_msg.ts)
 
             if ep_writer is not None:
                 try:
@@ -263,16 +262,10 @@ class DsWriterAgent(pimm.ControlSystem):
                 finally:
                     ep_writer.__exit__(None, None, None)
                     logger.info(f'DsWriterAgent: [ABORT] Episode {ep_counter}')
-                    if timer is not None:
-                        timer.discard_episode()
+                    eval_timing.discard_episode()
 
     def _handle_command(
-        self,
-        cmd: DsWriterCommand,
-        ep_writer: EpisodeWriter | None,
-        ep_counter: int,
-        now_ns: int | None = None,
-        timer: eval_timing.EvalTimer | None = None,
+        self, cmd: DsWriterCommand, ep_writer: EpisodeWriter | None, ep_counter: int, now_ns: int | None = None
     ):
         match cmd.type:
             case DsWriterCommandType.START_EPISODE:
@@ -288,7 +281,7 @@ class DsWriterAgent(pimm.ControlSystem):
                     logger.warning('Episode already started, ignoring start command')
             case DsWriterCommandType.STOP_EPISODE:
                 if ep_writer is not None:
-                    with eval_timing.timed(timer.add_record_io if timer is not None else None):
+                    with eval_timing.timed(Phase.RECORD_IO):
                         for name, ser in self._serializers.items():
                             for sample in ser.flush(now_ns):
                                 _append(ep_writer, name, sample.value, sample.ts, None)
@@ -296,8 +289,7 @@ class DsWriterAgent(pimm.ControlSystem):
                             ep_writer.set_static(k, v)
                         ep_writer.__exit__(None, None, None)
                     logger.info(f'DsWriterAgent: [STOP] Episode {ep_counter} {ep_writer.meta.get("path", "unknown")}')
-                    if timer is not None:
-                        timer.finish_episode(str(ep_writer.meta.get('uid', '')))
+                    eval_timing.finish_episode(str(ep_writer.meta.get('uid', '')))
                     ep_writer = None
                 else:
                     logger.warning('Episode not started, ignoring stop command')
@@ -306,8 +298,7 @@ class DsWriterAgent(pimm.ControlSystem):
                     ep_writer.abort()
                     ep_writer.__exit__(None, None, None)
                     logger.info(f'DsWriterAgent: [ABORT] Episode {ep_counter}')
-                    if timer is not None:
-                        timer.discard_episode()
+                    eval_timing.discard_episode()
                     ep_writer = None
                 else:
                     logger.warning('Episode not started, ignoring abort command')
