@@ -8,6 +8,7 @@ project.
 """
 
 import fcntl
+import functools
 import os
 import subprocess
 import tempfile
@@ -66,7 +67,7 @@ def _checkout_lock() -> Iterator[None]:
         yield
 
 
-def _spawn(host: str, port: int) -> subprocess.Popen:
+def _spawn(host: str, port: int, camera_res: tuple[int, int], render_viewport: bool) -> subprocess.Popen:
     with _checkout_lock():
         src = _ensure_robolab_src()
         # Install the dependency stack before spawning: a cold first install (~15 GB of Isaac wheels) far
@@ -87,8 +88,13 @@ def _spawn(host: str, port: int) -> subprocess.Popen:
         host,
         '--port',
         str(port),
+        '--camera-res',
+        str(camera_res[0]),
+        str(camera_res[1]),
         '--headless',
     ]
+    if not render_viewport:
+        command.append('--disable-viewport')
     # The DROID rig's model (URDF + meshes + gripper) for the viewer and offline IK. env.py runs in RoboLab's
     # interpreter and cannot build it, so it is serialized here (wire codec) and env.py emits it as
     # ``robot_meta``. A fresh temp file per spawn, in the container-local tmpdir — never the shared cache
@@ -110,6 +116,12 @@ def _spawn(host: str, port: int) -> subprocess.Popen:
     return subprocess.Popen(command, env=env)
 
 
-def serve_robolab(host: str = 'localhost') -> AbstractContextManager[tuple[str, int]]:
-    """The RoboLab env server as a ``serve`` context manager (the ``serve_subprocess`` contract)."""
-    return serve_subprocess(_spawn, host)
+def serve_robolab(
+    host: str = 'localhost', camera_res: tuple[int, int] = (1280, 720), render_viewport: bool = True
+) -> AbstractContextManager[tuple[str, int]]:
+    """The RoboLab env server as a ``serve`` context manager (the ``serve_subprocess`` contract).
+
+    ``camera_res`` is the render size (width, height) of both policy cameras; ``render_viewport=False`` stops
+    the default viewport render product. Both only shift sim render cost — the wire contract is unchanged.
+    """
+    return serve_subprocess(functools.partial(_spawn, camera_res=camera_res, render_viewport=render_viewport), host)
