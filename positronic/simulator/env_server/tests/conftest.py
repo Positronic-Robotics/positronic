@@ -6,14 +6,9 @@ from contextlib import contextmanager
 
 import pytest
 
+from positronic.simulator.env_server.launcher import free_port
 from positronic.simulator.env_server.server import EnvProtocol, EnvServer
 from positronic.simulator.env_server.tests.mujoco_env import CAMERAS, make_mujoco_env
-
-
-def _free_port() -> int:
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        s.bind(('', 0))
-        return s.getsockname()[1]
 
 
 @contextmanager
@@ -23,7 +18,7 @@ def serve_env(env: EnvProtocol) -> Iterator[tuple[str, int]]:
     A thread (not a subprocess) shares this process, so a test's ``mj.Renderer`` monkeypatch reaches
     the server's render path.
     """
-    host, port = 'localhost', _free_port()
+    host, port = 'localhost', free_port()
     server = EnvServer(env, host, port)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()

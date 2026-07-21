@@ -171,6 +171,18 @@ joints_ik_sim = joints_ik.override(**{'action.solver': 'lm'})
 # at 15 fps) so the client re-queries every 8 steps instead of playing the full chunk open-loop.
 droid = codecs.compose.override(obs=droid_obs, action=codecs.joint_delta_action, horizon=8 / 15)
 
+# The DROID jointpos models (openpi `*_droid_jointpos` configs — the RoboLab leaderboard policies): the
+# server returns absolute joint-position chunks ``(action_horizon, 8)`` and RoboLab's client
+# (``policies/pi0_family/client.py``) executes the whole chunk before re-querying, gripper binarized at
+# 0.5 — its ``open_loop_horizon`` defaults equal each variant's ``action_horizon`` (pi05 = 15, pi0 = 10).
+# No ``horizon`` here: the timestamp codec's validity sentinel closes the chunk, so re-inference lands
+# after the full chunk executes, whatever each variant's length.
+droid_jointpos = codecs.compose.override(
+    obs=droid_obs,
+    action=codecs.absolute_joints_action.override(tgt_joints_key='robot_state.q', tgt_grip_key='grip'),
+    binarize_grip=('grip',),
+)
+
 
 class PoseDeltaAction(Codec):
     """Decodes pi05_libero's OSC pose-delta chunk into per-step end-effector ``CartesianDelta`` (inference only).
@@ -273,9 +285,8 @@ libero_obs = cfn.Config(LiberoObservationCodec)
 libero_action = cfn.Config(PoseDeltaAction)
 
 # pi05_libero emits a 10-step chunk; openpi's official LIBERO eval (`replan_steps=5`) executes the first 5 before
-# re-querying. LIBERO's OSC runs at 20 Hz, so the chunk is stamped at 20 fps (one step per 0.05 s). The sim
-# schedules the harness before the producer, so the replan at the trajectory end pre-empts the producer's waypoint
-# at that same instant — keeping only timestamps < 0.25 s would drop the 5th step and execute four. Keep six
-# (timestamps < 0.30 s): the first five run and the 6th (0.25 s) is the guard whose drop pushes the replan past
-# step five.
-libero = codecs.compose.override(obs=libero_obs, action=libero_action, fps=20.0, horizon=0.30)
+# re-querying. LIBERO's OSC runs at 20 Hz, so the chunk is stamped at 20 fps (one step per 0.05 s). Truncating at
+# 0.25 s keeps the first five steps (timestamps < 0.25 s); the horizon sentinel marks 0.25 s as the chunk's
+# validity end, so the fifth step runs its full period and re-inference lands right after it — five steps per
+# query, matching replan_steps=5.
+libero = codecs.compose.override(obs=libero_obs, action=libero_action, fps=20.0, horizon=0.25)

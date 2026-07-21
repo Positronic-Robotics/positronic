@@ -1,9 +1,7 @@
 """``LiberoAdapter``: the canonical embodiment contract <-> LIBERO's raw obs/command payloads, client-side.
 
 Runs in positronic's interpreter (the ``LiberoEnv`` server runs in LIBERO's). Mirrors the reference
-``StackCubesAdapter`` on the observation side; on the command side it is a forwarder: it plays each command
-channel's trajectory down to the clock, holds the last waypoint between waypoints, and ships the held command
-(an absolute Cartesian pose, joint positions, or joint velocities) plus the gripper opening to the server. All
+``StackCubesAdapter`` on the observation side; the command side is ``WireCommandAdapter``'s forwarding. All
 action encoding — the OSC pose delta and its normalization, and the FK/IK that bridge pose<->joint commands —
 lives server-side in ``LiberoEnv`` where the MuJoCo model is; the adapter holds no model and stays geometry-only.
 """
@@ -14,41 +12,16 @@ import numpy as np
 
 import pimm
 from positronic import geom
-from positronic.drivers.roboarm import command as roboarm_command
-from positronic.simulator.env_server.adapter import EnvAdapter, fresh_command_players
+from positronic.simulator.env_server.adapter import WireCommandAdapter
 from positronic.simulator.mujoco.sim import MujocoFrankaState
 
 
-def _wire_command(cmd: Any) -> dict[str, Any]:
-    """The held command as a positronic-free payload the server decodes (no ``geom``/``roboarm`` on its side)."""
-    match cmd:
-        case roboarm_command.CartesianPosition(pose):
-            return {'type': 'cartesian', 'pose': pose.as_vector(geom.Rotation.Representation.ROTATION_MATRIX)}
-        case roboarm_command.JointPosition(positions):
-            return {'type': 'joint_pos', 'q': positions}
-        case roboarm_command.JointDelta(velocities):
-            return {'type': 'joint_vel', 'dq': velocities}
-        case roboarm_command.CartesianDelta(delta):
-            return {'type': 'cartesian_delta', 'delta': delta.as_vector(geom.Rotation.Representation.ROTATION_MATRIX)}
-        case None:
-            return {'type': 'hold'}
-        case other:
-            raise ValueError(f'LiberoAdapter cannot forward robot_command {type(other).__name__}')
-
-
-class LiberoAdapter(EnvAdapter):
+class LiberoAdapter(WireCommandAdapter):
     def __init__(self, camera_dict: dict[str, str]):
+        super().__init__()
         self._camera_dict = camera_dict  # logical observation name -> the LIBERO obs image key
-        self._players = fresh_command_players()
-        self._held: dict[str, Any] = {}  # last sampled waypoint per channel — re-sent until it changes
-        # Last commanded gripper closure, held across a cancelled grip trajectory: grip is an absolute [0, 1]
-        # value with no 'hold' command to fall back on (unlike the arm), so cancelling must freeze it, not reopen.
-        self._grip = 0.0
 
-    def reset_token(self, context: dict[str, Any]) -> Any:
-        self._players = fresh_command_players()
-        self._held = {}
-        self._grip = 0.0
+    def _reset_token(self, context: dict[str, Any]) -> Any:
         # The whole scene spec rides the trial context: the server caches its env by ``(suite, task_id,
         # camera_resolution, control_mode)``, so one adapter + one server serve any mix of suites and tasks.
         # ``seed`` selects a saved init-state (``None`` -> the server draws one at random); ``settle_steps`` is
@@ -62,30 +35,6 @@ class LiberoAdapter(EnvAdapter):
             'seed': context.get('eval.seed'),
             'settle_steps': context['eval.settle_steps'],
         }
-
-    def action(self, commands: dict[str, pimm.Message], now_ns: int) -> dict[str, Any]:
-        for name, msg in commands.items():
-            player = self._players[name]
-            if msg.updated and msg.data is not None:
-                player.set(msg.data)
-                if not msg.data:  # an empty trajectory cancels: stop replaying the held waypoint
-                    self._held.pop(name, None)
-            value = player.advance(now_ns)
-            if value is not None:
-                self._held[name] = value
-        # The server maps the held command into the active controller's action. Reset has no robosuite
-        # action, so it forwards as a hold; a CartesianDelta is a one-shot relative motion, forwarded once then
-        # dropped so the held command never re-composes it against the moving eef.
-        cmd = self._held.get('robot_command')
-        match cmd:
-            case roboarm_command.Reset():
-                self._held.pop('robot_command')
-                cmd = None
-            case roboarm_command.CartesianDelta():
-                self._held.pop('robot_command')
-        if 'target_grip' in self._held:
-            self._grip = float(self._held['target_grip'])
-        return {'command': _wire_command(cmd), 'grip': self._grip}
 
     def observations(self, raw_obs: dict[str, Any]) -> dict[str, Any]:
         # The env reports the eef pose in the grip-site frame it controls; ``eef_quat`` is scalar-last (xyzw,

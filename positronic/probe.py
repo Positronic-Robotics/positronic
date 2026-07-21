@@ -31,7 +31,7 @@ import positronic.cfg.ds
 import positronic.cfg.policy as policy_cfg
 from positronic.dataset.dataset import Dataset
 from positronic.drivers.roboarm.command import CartesianPosition, JointDelta
-from positronic.policy import Policy, Recorder
+from positronic.policy import Policy, Recorder, is_action
 from positronic.utils.logging import init_logging
 
 # Tap name; the recorder logs each obs/action entity under ``{_TAP}/{key}`` (see recording.py).
@@ -138,6 +138,8 @@ def main(
     name = label or _recording_name(meta)
     try:
         actions = session(obs)
+        if actions is not None:
+            actions = [a for a in actions if is_action(a)]  # drop the codec's keyless validity sentinel
         n = 0 if actions is None else len(actions)
         print(f'episode {episode} @ {at:.3f}s (ts={ts}) [{name}]: {n} action(s); rrd -> {output_dir}')
         with rec.stream:

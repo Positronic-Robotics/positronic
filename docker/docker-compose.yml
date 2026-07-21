@@ -256,3 +256,35 @@ services:
     shm_size: 16g
     ipc: host
     entrypoint: ["uv", "run", "--python", "3.13", "python", "-m", "positronic.vendors.dreamzero.train"]
+
+  robolab-eval:
+    image: positro/robolab:${IMAGE_TAG:-latest}
+
+    # Isaac's carbonite keeps shared-memory segments in /dev/shm; docker's 64 MB default crashes the RTX
+    # renderer at startup
+    shm_size: 8g
+
+    # GPU support - requires nvidia-docker2 or Docker with NVIDIA Container Toolkit. Isaac Sim's headless RTX
+    # renderer runs on Vulkan; the image's NVIDIA_DRIVER_CAPABILITIES=all makes the toolkit inject the graphics
+    # driver userspace, which the host must have installed (`libnvidia-gl-<major>`)
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [compute, graphics, utility]
+
+    # Volume mounts: the pinned RoboLab checkout and its venv live under ~/.cache/positronic/robolab,
+    # so both persist across container runs
+    volumes:
+      - ${CACHE_ROOT:-${HOME}}/.cache:/root/.cache
+      - ${CACHE_ROOT:-${HOME}}/.aws:/root/.aws:ro
+      - ${CACHE_ROOT:-${HOME}}/.local/share/uv:/root/.local/share/uv
+
+    # Set HOME inside container to match the mount expectations
+    environment:
+      HOME: /root
+
+    working_dir: /positronic
+    entrypoint: ["uv", "run", "--python", "3.13", "positronic", "eval", "run"]

@@ -56,6 +56,7 @@ import rerun.blueprint as rrb
 from positronic import geom
 from positronic.drivers.roboarm import command as roboarm_command
 from positronic.policy.base import DelegatingSession, PolicyWrapper, Session
+from positronic.policy.codec import is_action
 from positronic.utils.rerun_compat import log_numeric_series, set_timeline_sequence, set_timeline_time
 
 DEFAULT_TIMELINES = {'wall_time': 'wall_time_ns', 'obs_time': 'obs_time_ns'}
@@ -375,6 +376,8 @@ class _RecordingTapSession(DelegatingSession):
 
     def _log_action_chunk(self, prefix: str, actions: list[dict], obs: dict) -> None:
         """Log the action chunk as an enriched 3D trajectory + ``action_time`` time series."""
+        # Skip validity sentinels: they carry no command to plot and would flip the ``all(... in a)`` checks below.
+        actions = [a for a in actions if is_action(a)]
         horizon = _horizon(actions)
         tv = self._rec._timeline_values
         base_ns = int(tv.get('obs_time', tv.get('wall_time', next(iter(tv.values()), 0))))

@@ -11,6 +11,8 @@ from positronic.dataset.local_dataset import LocalDataset
 from positronic.drivers.roboarm import command as roboarm_command
 from positronic.eval import Task
 from positronic.inference import main
+from positronic.policy import Policy, Session
+from positronic.policy.codec import ActionTimestamp
 from positronic.policy.tests.test_harness import StubPolicy
 from positronic.policy.wrappers import ChunkedSchedule
 from positronic.simulator.env_server.adapter import EnvAdapter
@@ -71,7 +73,7 @@ def test_transport_is_transparent(env_server):
     direct = make_mujoco_env(list(CAMERAS.values()))
     direct_reset = direct.reset(seed)
     base = np.asarray(direct_reset['obs']['q'])
-    actions = [{'joints': base + 0.03 * i, 'grip': 0.2 * (i % 2)} for i in range(1, 6)]
+    actions = [{'command': {'type': 'joint_pos', 'q': base + 0.03 * i}, 'grip': 0.2 * (i % 2)} for i in range(1, 6)]
     direct_steps = [direct.step(action) for action in actions]
     direct.close()
 
@@ -88,12 +90,15 @@ def test_transport_is_transparent(env_server):
         assert direct_step['control_dt'] == socket_step['control_dt']
 
 
+_HOLD = {'command': {'type': 'hold'}, 'grip': 0.0}
+
+
 def _settle(env, action: dict, steps: int) -> np.ndarray:
     """Apply ``action`` once, then idle ``steps`` ticks while the position actuators settle; return the final eef."""
     env.step(action)
     out = {'obs': None}
     for _ in range(steps):
-        out = env.step({})
+        out = env.step(_HOLD)
     return np.asarray(out['obs']['ee_pos'])
 
 
@@ -110,14 +115,15 @@ def test_cartesian_delta_matches_absolute_target():
     reset = abs_env.reset(seed)
     ee0 = np.asarray(reset['obs']['ee_pos'])
     target = geom.Transform3D(ee0 + lift, geom.Rotation.from_quat(reset['obs']['ee_quat']))
-    ee_abs = _settle(abs_env, {'pose': target.as_vector(rotmat)}, settle)
+    ee_abs = _settle(abs_env, {'command': {'type': 'cartesian', 'pose': target.as_vector(rotmat)}, 'grip': 0.0}, settle)
     abs_env.close()
 
     delta_env = make_mujoco_env(list(CAMERAS.values()))
     delta_env.reset(seed)
     delta = geom.Transform3D(lift, geom.Rotation.identity)
-    ee_delta = _settle(delta_env, {'pose_delta': delta.as_vector(rotmat)}, settle)
-    ee_idle = _settle(delta_env, {}, 50)  # the delta already fired; idling must not re-compose it
+    delta_action = {'command': {'type': 'cartesian_delta', 'delta': delta.as_vector(rotmat)}, 'grip': 0.0}
+    ee_delta = _settle(delta_env, delta_action, settle)
+    ee_idle = _settle(delta_env, _HOLD, 50)  # the delta already fired; idling must not re-compose it
     delta_env.close()
 
     assert ee_delta[2] > ee0[2] + 0.01, 'the delta did not lift the arm'
@@ -238,6 +244,69 @@ def test_remote_eval_runs_to_timeout_without_done(env_server, tmp_path):
     assert 'sim_state.mjSTATE_INTEGRATION' in signals
 
 
+class _JointposChunks(Policy):
+    """Chunks exactly as long as the intended open-loop cadence; ``target_grip`` encodes
+    ``chunk * 100 + step`` so the recorded wire signals show which actions executed, and when."""
+
+    def __init__(self, command: roboarm_command.CommandType, chunk_len: int):
+        self.command = command
+        self.chunk_len = chunk_len
+        self.chunks = 0
+
+    def new_session(self, context=None):
+        return _JointposChunkSession(self)
+
+
+class _JointposChunkSession(Session):
+    def __init__(self, policy: _JointposChunks):
+        self._policy = policy
+
+    def __call__(self, obs):
+        self._policy.chunks += 1
+        return [
+            {'robot_command': self._policy.command, 'target_grip': self._policy.chunks * 100.0 + i}
+            for i in range(self._policy.chunk_len)
+        ]
+
+
+@pytest.mark.timeout(60.0)
+def test_full_chunk_executes_between_replans(env_server, tmp_path):
+    """The recording proves the contract the DROID jointpos codec makes with RoboLab's client: every action
+    of every chunk lands on the wire — including the final one, which ``ActionTimestamp``'s validity
+    sentinel gives a full period before ``ChunkedSchedule`` re-infers — and replans arrive exactly
+    ``chunk_len`` control periods apart."""
+    host, port = env_server
+    probe = make_mujoco_env([])
+    control_dt = probe.reset(0)['control_dt']
+    probe.close()
+
+    chunk_len = 5
+    raw = _JointposChunks(roboarm_command.JointPosition(np.zeros(7)), chunk_len)
+    policy = ActionTimestamp(fps=1.0 / control_dt).wrap(raw)
+    with pos3.mirror():
+        ev = remote_stack_cubes_eval(host, port, camera_dict=CAMERAS)
+        ev.task.timeout = 20 * control_dt
+        main(
+            policy=policy,
+            evals=[replace(ev, trials=[{'eval.trial_index': 0, 'eval.seed': 100}])],
+            output_dir=str(tmp_path),
+            wrap=ChunkedSchedule(),
+        )
+
+    grip = LocalDataset(tmp_path)[0].signals['target_grip']
+    executed = [(float(v), int(ts)) for v, ts in (grip[i] for i in range(len(grip)))]
+    values = [v for v, _ in executed if v >= 100.0]  # the inter-episode home command emits 0.0
+    complete_chunks = raw.chunks - 1  # the deadline cuts the last chunk short
+    assert complete_chunks >= 2
+    expected = [c * 100.0 + i for c in range(1, complete_chunks + 1) for i in range(chunk_len)]
+    assert values[: len(expected)] == expected
+
+    starts = [ts for v, ts in executed if v >= 100.0 and v % 100 == 0]
+    period_ns = chunk_len * control_dt * 1e9
+    for earlier, later in zip(starts, starts[1:], strict=False):
+        assert later - earlier == pytest.approx(period_ns, abs=period_ns / (2 * chunk_len))
+
+
 @pytest.mark.timeout(60.0)
 def test_server_failure_crosses_as_error_frame(env_server):
     """A command the env rejects comes back as an error the client re-raises — the connection survives
@@ -246,6 +315,7 @@ def test_server_failure_crosses_as_error_frame(env_server):
     conn = EnvConnection(host, port)
     conn.reset(7)
     with pytest.raises(RuntimeError, match='bogus'):
-        conn.step({'bogus': True})
-    assert 'obs' in conn.step({'joints': np.zeros(7)})  # the socket is still usable after a delivered failure
+        conn.step({'command': {'type': 'bogus'}, 'grip': 0.0})
+    # The socket is still usable after a delivered failure.
+    assert 'obs' in conn.step({'command': {'type': 'joint_pos', 'q': np.zeros(7)}, 'grip': 0.0})
     conn.close()

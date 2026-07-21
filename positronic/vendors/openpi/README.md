@@ -16,12 +16,14 @@ OpenPI supports multiple codecs for different use cases:
 | `ee_joints_traj` | EE pose + grip + joints | Absolute EE trajectory (binarized grip) | Trajectory training with joint feedback |
 | `joints_traj` | Joints + grip (no EE pose) | Absolute joint trajectory (binarized grip) | Pure joint-space trajectory training |
 | `droid` | Joint positions + grip | Per-step `JointDelta` | Inference with pretrained DROID models |
+| `droid_jointpos` | Joint positions + grip | Absolute `JointPosition` (binarized grip) | Inference with DROID jointpos models (RoboLab leaderboard) |
 
 **Key notes:**
 - **`ee`**: The primary codec. Handles both training data generation (LeRobot format) and inference (OpenPI format) automatically.
 - **`ee_joints`**: Same as `ee` but includes joint positions in the observation for richer state feedback.
 - **`_traj` variants**: Train on actual robot trajectory instead of commanded targets, with binarized grip signals.
 - **`droid`**: Inference-only codec for pretrained DROID checkpoints. The model predicts per-step joint velocities; the codec scales each into a `JointDelta` command (grip binarized) and truncates each chunk to DROID's 8-step open-loop horizon. The driver applies each delta to the live measured joints (`set_target_joints(st.q + delta)`), reproducing the DROID controller with no special client wrap. Serve with `droid` and run inference normally.
+- **`droid_jointpos`**: Inference-only codec for openpi's `*_droid_jointpos` checkpoints — the policies RoboLab's leaderboard evaluates. The model emits absolute joint-position chunks; the codec decodes each step into a `JointPosition` command (grip binarized at 0.5) and executes the whole chunk before replanning, matching RoboLab's client cadence (`open_loop_horizon` = the model's `action_horizon`). Serve with `droid_jointpos`.
 
 ## 1. Prepare Data
 
@@ -110,6 +112,9 @@ docker compose run --rm --service-ports -v ~/checkpoints:/checkpoints openpi-ser
 
 # Pretrained DROID model (pi05_droid) — preset codec, config, and public checkpoint
 docker compose run --rm --service-ports openpi-server droid
+
+# DROID jointpos model (pi05_droid_jointpos) — the RoboLab leaderboard policy
+docker compose run --rm --service-ports openpi-server droid_jointpos
 ```
 
 The `droid` config serves the public `pi05_droid` checkpoint from
@@ -117,9 +122,13 @@ The `droid` config serves the public `pi05_droid` checkpoint from
 no local checkpoint mount is needed. The server emits per-step `JointDelta` commands (grip
 binarized); the driver applies each delta to the live joints, so no special client wrap is needed.
 
+The `droid_jointpos` config serves openpi's `pi05_droid_jointpos` checkpoint from
+`gs://openpi-assets-simeval/pi05_droid_jointpos` (openpi fetches it itself on first request). The server
+emits absolute `JointPosition` chunks executed at RoboLab's leaderboard cadence — see the codec note above.
+
 **Parameters:**
 - `--codec`: Codec for observation/action encoding (default: `@positronic.vendors.openpi.codecs.ee`).
-  Available: `ee`, `ee_joints`, `ee_traj`, `ee_joints_traj`, `joints_traj`, `droid`
+  Available: `ee`, `ee_joints`, `ee_traj`, `ee_joints_traj`, `joints_traj`, `droid`, `droid_jointpos`
 - `--checkpoints_dir`: Full path to the experiment directory containing checkpoints
 - `--checkpoint`: (Optional) Specific checkpoint step to load. If omitted, loads the latest checkpoint
 - `--config_name`: (Optional) OpenPI config name (default: `pi05_positronic_lowmem`)

@@ -243,7 +243,7 @@ truth** for which machine/GPU/service to use (`desktop` = RTX 3060 12GB,
 `notebook` = RTX 4060 8GB). OpenPI/DreamZero and GR00T *training* still need
 H100 (use the Nebius pipeline above).
 
-Run from `docker/`. Set `CACHE_ROOT=/home/vertix` when targeting a remote
+Run from `docker/`. Set `CACHE_ROOT=/home/<user>` when targeting a remote
 context from a Mac (the `${HOME}` volume path differs). `--service-ports`
 exposes the WebSocket API on port 8000. Servers take a subcommand: `serve` for
 a custom `--checkpoints_dir`, or a named preset (`phail`, `sim_stack`, …) —
@@ -251,15 +251,15 @@ check the vendor's `server.py` for available presets.
 
 ```bash
 # Named preset (desktop)
-CACHE_ROOT=/home/vertix docker --context desktop compose run --rm --pull always \
+CACHE_ROOT=/home/<user> docker --context desktop compose run --rm --pull always \
   --service-ports lerobot-0_3_3-server sim_stack
 
 # Custom checkpoint
-CACHE_ROOT=/home/vertix docker --context desktop compose run --rm --pull always \
+CACHE_ROOT=/home/<user> docker --context desktop compose run --rm --pull always \
   --service-ports lerobot-server serve --checkpoints_dir=<ckpt-dir>
 
 # GR00T inference — codec subcommand required
-CACHE_ROOT=/home/vertix docker --context notebook compose run --rm --pull always \
+CACHE_ROOT=/home/<user> docker --context notebook compose run --rm --pull always \
   --service-ports groot-server ee_rot6d --checkpoints_dir=<ckpt-dir>
 ```
 

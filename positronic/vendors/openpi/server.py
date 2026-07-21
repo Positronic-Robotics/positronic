@@ -364,6 +364,13 @@ droid = server.override(
     config_name='pi05_droid',
     checkpoints_dir='s3://PUBLIC@positronic-public/checkpoints/openpi/pi05_droid/',
 )
+# The RoboLab leaderboard policy: openpi's DROID jointpos model, served from the checkpoint their
+# ``policies/pi0_family/README.md`` recipe pins (pass-through mode — openpi fetches gs:// itself).
+droid_jointpos = server.override(
+    codec=codecs.droid_jointpos,
+    config_name='pi05_droid_jointpos',
+    checkpoints_dir='gs://openpi-assets-simeval/pi05_droid_jointpos',
+)
 libero = server.override(
     codec=codecs.libero, config_name='pi05_libero', checkpoints_dir='gs://openpi-assets/checkpoints/pi05_libero'
 )
@@ -373,4 +380,11 @@ if __name__ == '__main__':
     init_logging()
     ensure_paligemma_tokenizer()
     with pos3.mirror():
-        cfn.cli({'serve': server, 'phail': phail, 'sim_stack': sim_stack, 'droid': droid, 'libero': libero})
+        cfn.cli({
+            'serve': server,
+            'phail': phail,
+            'sim_stack': sim_stack,
+            'droid': droid,
+            'droid_jointpos': droid_jointpos,
+            'libero': libero,
+        })
