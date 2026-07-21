@@ -151,8 +151,10 @@ def _resolve_tasks(task) -> list[str]:
     instruction_type='default',
     trial_count=1,
     timeout=None,
+    camera_res=(1280, 720),
+    render_viewport=True,
 )
-def _robolab_eval(task, instruction_type, trial_count, timeout, camera_dict):
+def _robolab_eval(task, instruction_type, trial_count, timeout, camera_dict, camera_res, render_viewport):
     """A RoboLab eval: the embodiment proxies a remote RoboLab env, the task carries the scenario.
 
     RoboLab (https://github.com/NVLabs/RoboLab) is NVIDIA's Isaac Lab benchmark: 120 tabletop manipulation
@@ -172,13 +174,19 @@ def _robolab_eval(task, instruction_type, trial_count, timeout, camera_dict):
     per-trial seed: RoboLab's eval path exposes no seed hook, so trial contexts carry none. The env's live
     subtask progress ``[status, completed, total, score]`` is the privileged ground truth (recorded, never
     fed to the policy).
+
+    ``camera_res`` is the render size (width, height) of both policy cameras — RoboLab's stock is 1280x720
+    while pi05-class policies consume ~224x224 — and ``render_viewport=False`` stops the default viewport
+    render product. Both only shift sim render cost; the wire and policy contract is unchanged.
     """
     names = _resolve_tasks(task)
     if timeout is None:
         # The env truncates itself at each task's episode_length_s; the harness deadline is a backstop above
         # the longest selected task.
         timeout = max(_TASKS[name][1] for name in names) + 10.0
-    proxy = RemoteEnvControlSystem(RobolabAdapter(camera_dict), serve_robolab())
+    proxy = RemoteEnvControlSystem(
+        RobolabAdapter(camera_dict), serve_robolab(camera_res=camera_res, render_viewport=render_viewport)
+    )
     # The DROID rig's model (Franka arm + Robotiq 2F-85) rides the env's ``robot_meta`` — the launcher
     # serializes it for the Isaac Lab server, which cannot build it — so nothing model-specific lives here.
     embodiment = remote_franka_embodiment(proxy, camera_dict, descriptor='remote.robolab.droid')
