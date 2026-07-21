@@ -21,6 +21,7 @@ from positronic.eval import ROBOT_STATIC_META, Command, Embodiment, Observation
 from positronic.eval_timing import Phase
 from positronic.simulator.env_server.adapter import EnvAdapter
 from positronic.simulator.env_server.client import EnvConnection
+from positronic.simulator.env_server.protocol import StepTiming
 
 # Pacing before the first reset, when the env's ``control_dt`` is still unknown. Only sets the instant
 # frame-0 lands at, then the env's reported ``control_dt`` takes over.
@@ -135,7 +136,8 @@ class RemoteEnvControlSystem(pimm.ControlSystem):
         # client-observed ``env_step_s`` so the reduce can split wire, physics, render and server plumbing.
         timing = result.get('timing')
         if timing is not None:
-            eval_timing.record_env_phases(timing['physics_s'], timing['render_s'], timing['wall_s'])
+            step_timing = StepTiming(**timing)
+            eval_timing.record_env_phases(step_timing.physics_s, step_timing.render_s, step_timing.wall_s)
         payload = self._adapter.terminal(result)
         if payload:  # truthy-valued done: a non-empty payload ends the trial, an empty/``None`` one continues
             self.done.emit(payload)
