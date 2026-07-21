@@ -8,7 +8,7 @@ import pimm
 from positronic.dataset.ds_writer_agent import DsWriterCommand
 from positronic.dataset.serializers import expand_suffixed
 from positronic.eval import Embodiment, Task
-from positronic.policy.base import Policy, PolicyWrapper, Session
+from positronic.policy.base import Policy, Session
 from positronic.policy.wrappers import ChunkedSchedule
 from positronic.utils import flatten_dict, frozen_view
 
@@ -69,10 +69,9 @@ class Harness(pimm.ControlSystem):
     actions, treating every channel alike.
 
     The scheduling wrapper (``ChunkedSchedule``, or a swap-in like RTC) anchors the chunk's
-    relative timestamps to absolute time, reading the clock the harness binds in at ``wrap``.
-
-    Applies the given ``wrap`` pipeline to the policy; with ``wrap=None`` (the default) it runs the raw
-    policy unwrapped. The eval entry points supply the standard ``ChunkedSchedule`` wrap.
+    relative timestamps to absolute time, reading the clock the harness passes to ``new_session``.
+    The policy owns its wrapper stack (declared by the server or composed in its definition); the
+    harness runs the policy it is given.
     """
 
     def __init__(
@@ -83,24 +82,19 @@ class Harness(pimm.ControlSystem):
         task: Task | None = None,
         trials: Iterable[dict[str, Any]] | None = None,
         static_meta: dict[str, Any] | None = None,
-        wrap: PolicyWrapper | None = None,
         on_episode_complete: Callable[[Session, dict[str, Any]], None] | None = None,
     ):
         assert trials is None or task is not None, 'A trial plan needs a task: its timeout bounds each trial'
-        self._raw_policy = policy
         self._embodiment = embodiment
         self._task = task
         # The unattended trial plan: each entry is a RUN context. When set, the run loop starts the
         # next trial whenever it is idle and returns once the plan is exhausted; when None,
         # directives are the only lifecycle source.
         self._trials = iter(trials) if trials is not None else None
-        self._wrap = wrap
         # Called with (session, context) when an episode completes successfully (clean
         # FINISH or auto-finalize), never on abort. Used to feed completion bookkeeping
         # like a ``SampledPolicy``'s episode counter, with no sampling knowledge in the harness.
         self._on_complete = on_episode_complete or (lambda session, context: None)
-        # Wrapping happens in ``run()`` once we have the clock — ``wrap`` binds it into the sessions
-        # it builds (e.g. ``ChunkedSchedule``). Until then ``self.policy`` mirrors the raw policy.
         self.policy: Policy = policy
         self.context: dict[str, Any] = {}
         self._static_meta = static_meta or {}
@@ -226,7 +220,7 @@ class Harness(pimm.ControlSystem):
             self._task.reset(self.context)
         if self._task is not None:
             self.context = {**self.context, 'task': self._task.instruction}
-        self._session = self.policy.new_session(self.context)
+        self._session = self.policy.new_session(self.context, clock.now)
         self._running = True
         self._deadline = clock.now() + self._task.timeout if self._task is not None else None
         self.ds_command.emit(DsWriterCommand.START())
@@ -369,12 +363,6 @@ class Harness(pimm.ControlSystem):
         return None
 
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Command]:
-        # Resolve wrap now that we have the clock — ``wrap`` binds it into the sessions it builds.
-        if self._wrap is None:
-            self.policy = self._raw_policy
-        else:
-            self.policy = self._wrap.wrap(self._raw_policy, clock.now)
-
         # Home the embodiment before the first episode; each ``_end_episode`` re-homes for the next one, so
         # every episode begins from the home pose (a real arm gets the inter-episode gap to reach it).
         self._home(clock)
@@ -413,5 +401,5 @@ class Harness(pimm.ControlSystem):
             self._finalize_recording()
         if self._session:
             self._session.close()
-        # The harness wraps the policy per run but does not own its lifetime: the caller may run several
-        # harnesses over one policy (a multi-eval sweep), so it closes the policy once, after the last run.
+        # The harness does not own the policy's lifetime: the caller may run several harnesses over
+        # one policy (a multi-eval sweep), so it closes the policy once, after the last run.

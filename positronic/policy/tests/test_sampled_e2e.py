@@ -55,7 +55,7 @@ class TargetPolicy(Policy):
         self._target = np.array(target, dtype=np.float32)
         self._name = name
 
-    def new_session(self, context=None):
+    def new_session(self, context=None, now=None):
         return _TargetSession(self._target, self.meta)
 
     @property

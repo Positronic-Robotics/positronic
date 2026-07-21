@@ -4,7 +4,7 @@ Wrappers are composable serving-time concerns layered around a policy with ``|``
 outermost), exactly like codecs. Most read time from the observation (``obs_time_ns``); only
 ``ChunkedSchedule`` needs the live clock — it anchors a chunk to inference *completion*, which the
 pre-inference observation stamp cannot give — so the harness passes ``now`` (a ``Callable[[], float]``
-in seconds) to ``wrap`` and it reaches that one session.
+in seconds) to ``new_session`` and it reaches that one session.
 """
 
 from collections import deque
@@ -59,6 +59,9 @@ class ChunkedSchedule(PolicyWrapper):
 
     def wrap_session(self, inner: Session, context, now: Now):
         return ChunkedSchedule._Session(inner, now)
+
+    def to_spec(self):
+        return {'name': 'chunked_schedule'}
 
 
 class _StackBuffer:
@@ -150,3 +153,9 @@ class TemporalStack(PolicyWrapper):
 
     def wrap_session(self, inner: Session, context, now: Now):
         return TemporalStack._Session(inner, self._keys, self._offsets_sec, self._pad_start)
+
+    def to_spec(self):
+        return {
+            'name': 'temporal_stack',
+            'args': {'keys': list(self._keys), 'offsets_sec': list(self._offsets_sec), 'pad_start': self._pad_start},
+        }

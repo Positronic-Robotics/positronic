@@ -153,7 +153,7 @@ cd docker && docker compose run --rm lerobot-0_3_3-convert convert \
 
 # Inference must match
 cd docker && docker compose run --rm --service-ports lerobot-0_3_3-server \
-  --codec=@positronic.vendors.lerobot_0_3_3.codecs.ee
+  --definition.codec=@positronic.vendors.lerobot_0_3_3.codecs.ee
 ```
 
 ## See Also

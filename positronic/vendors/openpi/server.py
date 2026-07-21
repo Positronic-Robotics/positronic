@@ -12,9 +12,10 @@ import pos3
 from fastapi import WebSocket
 from openpi_client.websocket_client_policy import WebsocketClientPolicy
 
+from positronic.cfg import codecs as cfg_codecs
 from positronic.offboard.server_utils import monitor_async_task, wait_for_subprocess_ready
 from positronic.offboard.vendor_server import VendorServer
-from positronic.policy import Codec, Policy, Session
+from positronic.policy import Policy, PolicyWrapper, Session
 from positronic.utils.checkpoints import get_latest_checkpoint, list_checkpoints
 from positronic.utils.logging import init_logging
 from positronic.vendors.openpi import codecs, ensure_paligemma_tokenizer
@@ -84,7 +85,6 @@ class OpenpiSubprocess:
             return False
 
     def _check_crashed(self) -> tuple[bool, int | None]:
-        """Check if subprocess has crashed."""
         if self.process is None:
             return False, None
         exit_code = self.process.poll()
@@ -172,7 +172,7 @@ class OpenpiPolicy(Policy):
     def __init__(self, client: WebsocketClientPolicy):
         self._client = client
 
-    def new_session(self, context=None):
+    def new_session(self, context=None, now=None):
         self._client.reset()
         return _OpenpiSession(self._client)
 
@@ -187,7 +187,7 @@ class InferenceServer(VendorServer):
 
     def __init__(
         self,
-        codec: Codec | None,
+        definition: PolicyWrapper,
         checkpoints_dir: str | Path,
         config_name: str = 'pi05_positronic_lowmem',
         checkpoint: str | None = None,
@@ -199,7 +199,7 @@ class InferenceServer(VendorServer):
         idle_timeout_min: float | None = None,
     ):
         super().__init__(
-            codec=codec, host=host, port=port, recording_dir=recording_dir, idle_timeout_min=idle_timeout_min
+            definition=definition, host=host, port=port, recording_dir=recording_dir, idle_timeout_min=idle_timeout_min
         )
         self.checkpoints_dir = str(checkpoints_dir).rstrip('/')
         self.config_name = config_name
@@ -299,7 +299,7 @@ class InferenceServer(VendorServer):
 
 
 @cfn.config(
-    codec=codecs.ee,
+    definition=cfg_codecs.definition.override(codec=codecs.ee),
     checkpoints_dir='',
     config_name='pi05_positronic_lowmem',
     checkpoint=None,
@@ -310,7 +310,7 @@ class InferenceServer(VendorServer):
     idle_timeout_min=None,
 )
 def server(
-    codec,
+    definition: PolicyWrapper,
     checkpoints_dir: str,
     config_name: str,
     checkpoint: str | None,
@@ -323,8 +323,7 @@ def server(
     """OpenPI inference server.
 
     Args:
-        codec: Codec config for observation encoding and action decoding.
-            Available codecs:
+        definition: The policy definition (local | remote | codec). Its server-side codec:
             - @positronic.vendors.openpi.codecs.ee (default, EE pose + grip)
             - @positronic.vendors.openpi.codecs.ee_joints (EE pose + grip + joints)
             - @positronic.vendors.openpi.codecs.droid (for pretrained DROID models)
@@ -337,7 +336,7 @@ def server(
         recording_dir: Directory for recording .rrd files (optional, supports S3 paths).
     """
     InferenceServer(
-        codec=codec,
+        definition=definition,
         checkpoints_dir=checkpoints_dir,
         config_name=config_name,
         checkpoint=checkpoint,
@@ -357,22 +356,24 @@ phail = server.override(
 sim_stack = server.override(
     checkpoints_dir='s3://checkpoints/sim_stack/openpi/ee/pi05_positronic_lowmem/230226/',
     recording_dir='s3://inference/sim_stack/server_recordings/openpi/230226/',
-    **{'codec.flip_grip': True},
+    **{'definition.codec.flip_grip': True},
 )
 droid = server.override(
-    codec=codecs.droid,
     config_name='pi05_droid',
     checkpoints_dir='s3://PUBLIC@positronic-public/checkpoints/openpi/pi05_droid/',
+    **{'definition.codec': codecs.droid},
 )
 # The RoboLab leaderboard policy: openpi's DROID jointpos model, served from the checkpoint their
 # ``policies/pi0_family/README.md`` recipe pins (pass-through mode — openpi fetches gs:// itself).
 droid_jointpos = server.override(
-    codec=codecs.droid_jointpos,
     config_name='pi05_droid_jointpos',
     checkpoints_dir='gs://openpi-assets-simeval/pi05_droid_jointpos',
+    **{'definition.codec': codecs.droid_jointpos},
 )
 libero = server.override(
-    codec=codecs.libero, config_name='pi05_libero', checkpoints_dir='gs://openpi-assets/checkpoints/pi05_libero'
+    config_name='pi05_libero',
+    checkpoints_dir='gs://openpi-assets/checkpoints/pi05_libero',
+    **{'definition.codec': codecs.libero},
 )
 
 

@@ -52,7 +52,9 @@ Upon connection, the server sends a ready packet with metadata:
     "checkpoint_id": "10000",
     "image_sizes": [224, 224],
     "action_fps": 15.0,
-    "action_horizon_sec": 1.0
+    "action_horizon_sec": 1.0,
+    "local_stack": {"seq": [{"name": "chunked_schedule"}]},
+    "positronic_version": "0.2.1"
   }
 }
 ```
@@ -63,6 +65,13 @@ This metadata tells the client:
 - Which checkpoint is loaded
 - Server connection details
 - Codec metadata (`image_sizes` for client-side resize, `action_fps` and `action_horizon_sec` for timing)
+- `local_stack` — the declared local half of the policy definition: a spec tree of `{"name", "args"}`
+  leaves composed by `"seq"` (the `|` operator) and `"par"` (the `&` operator). `RemotePolicy` builds
+  this stack in front of the connection, resolving names only against the closed vocabulary in
+  `positronic.policy.spec.WIRE_WRAPPERS` — an unknown entry fails at connect, before the robot moves.
+  An empty declaration (`{"seq": []}`) means the policy needs no rig-side glue; when the key is
+  absent the server declares nothing and the client falls back to the standard `ChunkedSchedule`.
+- `positronic_version` — the server's positronic version, for diagnosing declaration mismatches
 
 #### 2. Status Updates (Long Model Loading)
 
@@ -123,7 +132,7 @@ The loop continues until the client closes the connection or the episode ends.
 # LeRobot server (SmolVLA — 0.4.x)
 cd docker && docker compose run --rm --service-ports lerobot-server \
   --checkpoints_dir=~/checkpoints/lerobot/exp_v1 \
-  --codec=@positronic.vendors.lerobot.codecs.ee
+  --definition.codec=@positronic.vendors.lerobot.codecs.ee
 
 # GR00T server (swap hardware code stays the same)
 cd docker && docker compose run --rm --service-ports groot-server \
