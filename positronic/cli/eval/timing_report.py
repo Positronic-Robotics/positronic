@@ -63,6 +63,21 @@ class WallSplit:
 
 
 @dataclass
+class EnvStepSplit:
+    """Fractions of the client-observed env-step wall, from the env server's own decomposition.
+
+    ``wire`` is the client-side step wall minus the server's in-step wall (socket + codec);
+    ``server_other`` is the server's wall outside physics and rendering (managers, IK, observation
+    materialisation). ``None`` when no episode carried a server decomposition.
+    """
+
+    physics: float
+    render: float
+    server_other: float
+    wire: float
+
+
+@dataclass
 class PassReport:
     """Pass-level wall-clock roll-up of one ``timing.jsonl`` pass, joined against its recorded episodes."""
 
@@ -74,6 +89,7 @@ class PassReport:
     infer_p50_ms: float
     infer_p95_ms: float
     wall_split: WallSplit
+    env_step_split: EnvStepSplit | None
     mean_bytes_per_rollout: float
     success_rate: float | None  # None when no episode carried a success verdict (scored downstream)
     gpu: GpuReport
@@ -171,6 +187,19 @@ def _build_report(records: list[EpisodeTiming], facts: dict[str, _RecordedFacts]
     def phase_fraction(attr: str) -> float:
         return float(sum(getattr(r, attr) for r in records) / wall_pass) if wall_pass else 0.0
 
+    env_step_sum = float(sum(r.env_step_s for r in records))
+    server_sum = float(sum(r.env_server_s for r in records))
+    env_step_split = None
+    if server_sum and env_step_sum:
+        physics_sum = float(sum(r.env_physics_s for r in records))
+        render_sum = float(sum(r.env_render_s for r in records))
+        env_step_split = EnvStepSplit(
+            physics=physics_sum / env_step_sum,
+            render=render_sum / env_step_sum,
+            server_other=(server_sum - physics_sum - render_sum) / env_step_sum,
+            wire=(env_step_sum - server_sum) / env_step_sum,
+        )
+
     matched = [facts[r.episode_uid] for r in records]
     sim_seconds = sum(f.duration_s for f in matched)
     # Each episode carries whether its eval scores success (``eval.scored``), so scoring needs no pass-wide
@@ -192,6 +221,7 @@ def _build_report(records: list[EpisodeTiming], facts: dict[str, _RecordedFacts]
             record_io=phase_fraction('record_io_s'),
             overhead=phase_fraction('overhead_s'),
         ),
+        env_step_split=env_step_split,
         mean_bytes_per_rollout=(sum(f.size_mb for f in matched) / len(matched) * 1024 * 1024) if matched else 0.0,
         success_rate=(sum(judged) / len(judged)) if judged else None,
         gpu=gpu,
@@ -215,6 +245,9 @@ def _render(report: PassReport) -> str:
         'wall split (fraction of W_pass):',
     ]
     lines += [f'  {f.name:<12} {getattr(report.wall_split, f.name):.3f}' for f in fields(WallSplit)]
+    if report.env_step_split is not None:
+        lines.append('env-step split (fraction of env_step):')
+        lines += [f'  {f.name:<12} {getattr(report.env_step_split, f.name):.3f}' for f in fields(EnvStepSplit)]
     for f in fields(GpuReport):
         summary = getattr(report.gpu, f.name)
         if summary is not None:
