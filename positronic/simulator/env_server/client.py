@@ -32,12 +32,14 @@ class EnvConnection:
         connect_deadline: float = 1800.0,
         step_timeout: float = 120.0,
         reset_timeout: float = 900.0,
+        close_timeout: float = 10.0,
     ):
         uri = f'ws://{host}:{port}/'
         # A single step is sub-second; a reset builds the scene (a RoboLab Isaac build runs into the minutes).
         # Each bound is generous over its legitimate case, so it fires only on a wedged server, not a slow one.
         self._step_timeout = step_timeout
         self._reset_timeout = reset_timeout
+        self._close_timeout = close_timeout
         deadline = time.monotonic() + connect_deadline
         backoff = 0.5
         while True:
@@ -74,12 +76,13 @@ class EnvConnection:
         return result
 
     def close(self) -> None:
-        # Best-effort: ask the server to release, but a peer that is already gone (a crashed or killed server) is
-        # success too — the socket is closed regardless.
+        # Best-effort: ask the server to release, but a peer that is already gone (crashed or killed) — or wedged
+        # and unresponsive — is success too; the socket closes regardless. Bound the ack wait so a wedged server
+        # (the case the request timeouts recover from) can't hang teardown here instead of at the request.
         try:
             self._ws.send(encode({'cmd': 'close'}))
-            self._ws.recv()
-        except ConnectionClosed:
+            self._ws.recv(timeout=self._close_timeout)
+        except (ConnectionClosed, TimeoutError):
             pass
         finally:
             self._ws.close()
