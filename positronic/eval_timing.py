@@ -101,15 +101,17 @@ class _Accumulator:
 
 
 class EvalTimer:
-    """Collects one ``EpisodeTiming`` per rollout and writes them as ``timing.jsonl`` on close.
+    """Collects one ``EpisodeTiming`` per rollout, appending each to ``timing.jsonl`` as it seals.
 
     The harness opens each episode (`begin_episode`) and the recorder closes it (`finish_episode`) — the
-    same single thread, in order — so at most one episode is ever in flight.
+    same single thread, in order — so at most one episode is ever in flight. Records are flushed per episode,
+    not buffered, so a preempted or killed pass keeps the timings of the episodes it completed.
     """
 
     def __init__(self, out_dir: Path):
-        self._out_dir = out_dir
-        self._records: list[EpisodeTiming] = []
+        self._path = out_dir / TIMING_FILENAME
+        self._path.write_text('')  # truncate any stale pass; episodes append as they finish
+        self._count = 0
         self._current: _Accumulator | None = None
 
     def begin_episode(self, task: str, trial: int) -> None:
@@ -157,34 +159,33 @@ class EvalTimer:
         self._current = None
         wall_s = time.perf_counter() - acc.wall_start
         measured = acc.reset_s + acc.env_step_s + acc.policy_wait_s + acc.record_io_s
-        self._records.append(
-            EpisodeTiming(
-                task=acc.task,
-                trial=acc.trial,
-                episode_uid=episode_uid,
-                wall_s=wall_s,
-                reset_s=acc.reset_s,
-                env_step_s=acc.env_step_s,
-                policy_wait_s=acc.policy_wait_s,
-                record_io_s=acc.record_io_s,
-                overhead_s=max(wall_s - measured, 0.0),
-                infer_ms=[round(ms, 3) for ms in acc.infer_ms],
-                finished_at=time.time(),
-                env_physics_s=acc.env_physics_s,
-                env_render_s=acc.env_render_s,
-                env_server_s=acc.env_server_s,
-                env_client_s=acc.env_client_s,
-            )
+        record = EpisodeTiming(
+            task=acc.task,
+            trial=acc.trial,
+            episode_uid=episode_uid,
+            wall_s=wall_s,
+            reset_s=acc.reset_s,
+            env_step_s=acc.env_step_s,
+            policy_wait_s=acc.policy_wait_s,
+            record_io_s=acc.record_io_s,
+            overhead_s=max(wall_s - measured, 0.0),
+            infer_ms=[round(ms, 3) for ms in acc.infer_ms],
+            finished_at=time.time(),
+            env_physics_s=acc.env_physics_s,
+            env_render_s=acc.env_render_s,
+            env_server_s=acc.env_server_s,
+            env_client_s=acc.env_client_s,
         )
+        # Append and flush as the episode seals, so a pass killed mid-run keeps every completed rollout's
+        # timing instead of losing an in-memory buffer.
+        with self._path.open('a') as f:
+            f.write(json.dumps(asdict(record)) + '\n')
+        self._count += 1
 
     def close(self) -> Path:
-        """Write every collected record as one JSON object per line; return the file path."""
-        path = self._out_dir / TIMING_FILENAME
-        with path.open('w') as f:
-            for record in self._records:
-                f.write(json.dumps(asdict(record)) + '\n')
-        logger.info(f'EvalTimer: wrote {len(self._records)} episode timings to {path}')
-        return path
+        """Return the ``timing.jsonl`` path; records were already flushed as each episode sealed."""
+        logger.info(f'EvalTimer: wrote {self._count} episode timings to {self._path}')
+        return self._path
 
 
 _ACTIVE: ContextVar[EvalTimer | None] = ContextVar('eval_timer', default=None)
