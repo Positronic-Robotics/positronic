@@ -24,14 +24,14 @@ import os
 import tempfile
 import time
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import asdict
 from typing import Any
 
 import cv2  # noqa: F401 -- robolab requires cv2 imported before isaaclab
 import numpy as np
 import torch
 from isaaclab.app import AppLauncher
-from protocol import decode
+from protocol import StepTiming, decode
 from server import EnvProtocol, EnvServer
 
 # Isaac's rigid bring-up order: parse CLI args, launch the app, and only then import anything that touches the
@@ -112,24 +112,6 @@ def _load_robot_meta() -> dict[str, Any]:
         return decode(f.read())
 
 
-@dataclass
-class _PhaseTimes:
-    """Wall time (seconds) of the native phases inside one RoboLab ``env.step``, zeroed each step."""
-
-    physics: float = 0.0
-    render: float = 0.0
-
-    def add_physics(self, seconds: float) -> None:
-        self.physics += seconds
-
-    def add_render(self, seconds: float) -> None:
-        self.render += seconds
-
-    def reset(self) -> None:
-        self.physics = 0.0
-        self.render = 0.0
-
-
 class RobolabEnv(EnvProtocol):
     """A RoboLab task behind the gym-style ``reset``/``step``/``close`` the env server serves.
 
@@ -187,9 +169,9 @@ class RobolabEnv(EnvProtocol):
         # ``env.step``; both are re-wrapped per build (a new env brings a fresh SimulationContext). The sums
         # feed the step response's ``timing`` and are zeroed at each ``step`` call, so reset-time rendering
         # never leaks into a step's decomposition.
-        self._phase_s = _PhaseTimes()
-        self._env.sim.step = self._timed_phase(self._env.sim.step, self._phase_s.add_physics)
-        self._env.sim.render = self._timed_phase(self._env.sim.render, self._phase_s.add_render)
+        self._timing = StepTiming()
+        self._env.sim.step = self._timed_phase(self._env.sim.step, self._timing.add_physics)
+        self._env.sim.render = self._timed_phase(self._env.sim.render, self._timing.add_render)
         # ``instruction`` is the resolved language goal (``create_env`` picks the variant); the rest is the
         # task identity the episode records.
         self._meta = {
@@ -241,7 +223,7 @@ class RobolabEnv(EnvProtocol):
 
     def step(self, action: dict[str, Any]) -> dict[str, Any]:
         start = time.perf_counter()
-        self._phase_s.reset()
+        self._timing.reset()
         # Isaac pauses its timeline while assets stream in; stepping a paused sim stalls, so pump the kit
         # update loop until it plays again (robolab's episode loop does the same before every step).
         while not self._timeline.is_playing():
@@ -255,19 +237,18 @@ class RobolabEnv(EnvProtocol):
         # termination within the first two steps is a physics artifact its env resets in place and keeps
         # running (never frozen, no verdict), while a real success/time-out freezes the env and records one.
         done = self._env.all_terminated
+        observation = self._observe(obs, self._subtask_progress())
+        success = done and bool(self._env.get_env_results()[0]['success'])
+        # ``wall_s`` is the whole call incl. observation materialisation, so stamp it after ``_observe``.
+        self._timing.wall_s = time.perf_counter() - start
         return {
-            'obs': self._observe(obs, self._subtask_progress()),
+            'obs': observation,
             'done': done,
-            'success': done and bool(self._env.get_env_results()[0]['success']),
+            'success': success,
             'control_dt': self._control_dt,
-            # The server's own step decomposition: physics substeps, sensor/viewport rendering, and this
-            # call's whole wall (observation materialisation included) — the client records it against its
+            # The server's own step decomposition (``StepTiming``); the client records it against its
             # socket-level step time.
-            'timing': {
-                'physics_s': self._phase_s.physics,
-                'render_s': self._phase_s.render,
-                'wall_s': time.perf_counter() - start,
-            },
+            'timing': asdict(self._timing),
         }
 
     def _joint_targets(self, command: dict[str, Any]) -> torch.Tensor:
