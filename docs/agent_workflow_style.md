@@ -8,9 +8,9 @@ which binds every contributor.
 
 This file is intentionally **not referenced from `CLAUDE.md`**, so nothing here is
 auto-loaded. Different operators drive their agents differently and instruct them through
-their own agent config. If you want these preferences, copy them into your own global
-agent config (e.g. `~/.claude`); if your global rules already say something different,
-those govern your agent. Keeping them here — out of the shared contract — is what lets two
+their own agent config. If you want these preferences, copy them into a file your agent
+actually loads (for Claude Code: `~/.claude/CLAUDE.md`, or a rules file it imports); if
+your global rules already say something different, those govern your agent. Keeping them here — out of the shared contract — is what lets two
 operators coexist in one repo without one operator's workflow silently overriding the
 other's.
 
