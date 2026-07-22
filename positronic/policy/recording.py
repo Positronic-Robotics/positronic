@@ -357,7 +357,7 @@ class _RecordingTapSession(DelegatingSession):
 
     @property
     def meta(self):
-        return {**self._inner.meta, 'recording.rrd': self._rec._rrd_path.name}
+        return {**self._inner.meta, 'recording.rrd': str(self._rec._rrd_path)}
 
     def _set_timelines(self) -> None:
         for timeline, value in self._rec._timeline_values.items():
