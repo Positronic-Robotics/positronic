@@ -224,7 +224,7 @@ def record_env_phases(physics_s: float, render_s: float, server_s: float) -> Non
         timer.add_env_phases(physics_s, render_s, server_s)
 
 
-def _start_gpu_sampler(out_dir: Path) -> subprocess.Popen | None:
+def start_gpu_sampler(out_dir: Path) -> subprocess.Popen | None:
     """Background ``nvidia-smi dmon`` writing this box's util+memory to ``gpu_dmon.log``.
 
     ``None`` when no ``nvidia-smi`` is on PATH (a CPU dev box) — GPU telemetry is then simply absent, not
@@ -237,7 +237,7 @@ def _start_gpu_sampler(out_dir: Path) -> subprocess.Popen | None:
     log_path = out_dir / GPU_LOG_FILENAME
     log_path.unlink(missing_ok=True)
     if shutil.which('nvidia-smi') is None:
-        logger.info('EvalTimer: no nvidia-smi on PATH; skipping GPU sampling')
+        logger.info('no nvidia-smi on PATH; skipping GPU sampling')
         return None
     # Sample only the GPU this eval runs on — the first CUDA-visible device, else device 0. Left unpinned,
     # dmon logs every visible GPU and ``_parse_dmon`` would average idle/unrelated devices into the numbers.
@@ -263,7 +263,7 @@ def bind(out_dir: Path) -> Iterator[EvalTimer]:
     """Bind a fresh timer (and a GPU sampler) for the enclosed run, then flush ``timing.jsonl`` on exit."""
     timer = EvalTimer(out_dir)
     token = _ACTIVE.set(timer)
-    sampler = _start_gpu_sampler(out_dir)
+    sampler = start_gpu_sampler(out_dir)
     try:
         yield timer
     finally:
