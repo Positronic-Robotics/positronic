@@ -31,6 +31,12 @@ repos:
         # and post-commit hooks, where always_run would re-run the whole-project
         # check pointlessly (and too late to fail the commit).
         stages: [pre-commit]
+      - id: check-tests-location
+        name: tests live in per-package tests/ dirs
+        entry: python3 utilities/check_tests_location.py
+        language: system
+        files: '(^|/)(test_[^/]+\.py|[^/]+_test\.py)$'
+        stages: [pre-commit]
 
   # General pre-commit hooks
   - repo: https://github.com/pre-commit/pre-commit-hooks
