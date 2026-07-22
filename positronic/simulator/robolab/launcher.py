@@ -117,7 +117,7 @@ def _spawn(host: str, port: int, camera_res: tuple[int, int], render_viewport: b
 
 
 def serve_robolab(
-    host: str = 'localhost', camera_res: tuple[int, int] = (1280, 720), render_viewport: bool = True
+    host: str = 'localhost', camera_res: tuple[int, int] = (320, 240), render_viewport: bool = True
 ) -> AbstractContextManager[tuple[str, int]]:
     """The RoboLab env server as a ``serve`` context manager (the ``serve_subprocess`` contract).
 
