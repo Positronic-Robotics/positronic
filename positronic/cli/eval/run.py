@@ -72,7 +72,6 @@ def _run_world(
     on_complete,
     *,
     wrap,
-    timing: bool = False,
 ):
     """Wire one embodiment under a fresh Harness + World and run it to completion.
 
@@ -114,15 +113,6 @@ def _run_world(
         # driver, and GUI placement is otherwise identical.
         producers = [cs for cs in embodiment.control_systems if cs is not None]
         foreground = driver.control_systems if driver is not None else []
-        # Telemetry (bound once around the whole sweep by ``main``) only sees a sim eval: it schedules
-        # every control system in this thread, so the context-bound timer reaches them all. A real eval
-        # runs recorder/producers in other processes that never inherit the context.
-        if timing and not embodiment.simulated:
-            raise ValueError(
-                'eval timing is sim-only: a real embodiment runs the recorder and producers as separate '
-                'processes that do not inherit the timer context, so timing.jsonl would be empty (record_io_s '
-                'silently reads 0). Drop --timing for a real run.'
-            )
         if embodiment.simulated:
             world.run([*foreground, harness, ds_agent, *producers], gui)
         else:
@@ -149,8 +139,18 @@ def main(
     after the last World, so a multi-eval sweep reuses one live policy across the rebuilds.
     """
     assert (driver is None) != (evals is None), 'Provide exactly one of driver or evals'
-    if timing and output_dir is None:
-        raise ValueError('--timing needs --output_dir: the per-rollout telemetry (timing.jsonl) has nowhere to go')
+    # Timing is validated before ``eval_timing.bind`` runs: binding truncates ``timing.jsonl``, and a
+    # rejected run must not erase a previous pass's telemetry on its way to the error.
+    if timing:
+        if output_dir is None:
+            raise ValueError('--timing needs --output_dir: the per-rollout telemetry (timing.jsonl) has nowhere to go')
+        embodiments = [ev.embodiment for ev in evals] if evals is not None else [embodiment]
+        if not all(e.simulated for e in embodiments):
+            raise ValueError(
+                'eval timing is sim-only: a real embodiment runs the recorder and producers as separate '
+                'processes that do not inherit the timer context, so timing.jsonl would be empty (record_io_s '
+                'silently reads 0). Drop --timing for a real run.'
+            )
 
     # Drive the policy's remote endpoints through their cold start before hardware and the operator
     # surface come up: opening a session blocks on the server handshake, which returns only once the
@@ -176,30 +176,12 @@ def main(
         with timing_cm:
             if driver is not None:
                 _run_world(
-                    policy,
-                    embodiment,
-                    None,
-                    None,
-                    driver(output_dir),
-                    output_dir,
-                    show_gui,
-                    on_complete,
-                    wrap=wrap,
-                    timing=timing,
+                    policy, embodiment, None, None, driver(output_dir), output_dir, show_gui, on_complete, wrap=wrap
                 )
             else:
                 for ev in evals:
                     _run_world(
-                        policy,
-                        ev.embodiment,
-                        ev.task,
-                        ev.trials,
-                        None,
-                        output_dir,
-                        show_gui,
-                        on_complete,
-                        wrap=wrap,
-                        timing=timing,
+                        policy, ev.embodiment, ev.task, ev.trials, None, output_dir, show_gui, on_complete, wrap=wrap
                     )
     finally:
         policy.close()
