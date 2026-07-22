@@ -87,6 +87,35 @@ def test_obs_mapping_does_not_swap_cameras():
     assert exterior_mean[1] > exterior_mean[0]  # exterior: green > red
 
 
+def test_obs_mapping_resolves_benchmark_variant_camera_keys():
+    # Zed-wrist / light-randomized variants replace the default camera keys; MolmoSpaces' own Pi policy
+    # prefers the variant key when present, so the adapter must too (regression: hard indexing raised
+    # KeyError on those benchmark observations).
+    env = _load_env_obs()
+    env['wrist_camera_zed_mini'] = env.pop('wrist_camera')
+    env['droid_shoulder_light_randomization'] = env.pop('exo_camera_1')
+    obs = molmo_obs_to_positronic(env, 't')
+    wrist_mean = obs[POS_WRIST_IMAGE].reshape(-1, 3).mean(axis=0)
+    exterior_mean = obs[POS_EXTERIOR_IMAGE].reshape(-1, 3).mean(axis=0)
+    assert wrist_mean[0] > wrist_mean[1]  # the reddish wrist view still lands on the wrist key
+    assert exterior_mean[1] > exterior_mean[0]
+
+    # A variant key coexisting with the default wins, matching the upstream policy's precedence.
+    both = _load_env_obs()
+    both['droid_shoulder_light_randomization'] = both['wrist_camera']  # reddish, unlike exo_camera_1
+    obs = molmo_obs_to_positronic(both, 't')
+    exterior_mean = obs[POS_EXTERIOR_IMAGE].reshape(-1, 3).mean(axis=0)
+    assert exterior_mean[0] > exterior_mean[1]
+
+    # An explicitly configured non-default key is read as-is, never shadowed by a variant.
+    custom = _load_env_obs()
+    custom['my_cam'] = custom['wrist_camera']
+    custom['wrist_camera_zed_mini'] = custom['exo_camera_1']  # greenish decoy
+    obs = molmo_obs_to_positronic(custom, 't', wrist_key='my_cam')
+    wrist_mean = obs[POS_WRIST_IMAGE].reshape(-1, 3).mean(axis=0)
+    assert wrist_mean[0] > wrist_mean[1]
+
+
 def test_gripper_proprio_normalization():
     closed = adapter.GRIPPER_QPOS_CLOSED
 

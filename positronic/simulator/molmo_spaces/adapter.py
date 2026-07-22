@@ -37,6 +37,10 @@ except ImportError:
 # MolmoSpaces DROID rig observation keys (FrankaDroidCameraSystem + RobotJointPositionSensor).
 MOLMO_WRIST_CAMERA = 'wrist_camera'
 MOLMO_EXTERIOR_CAMERA = 'exo_camera_1'
+# MolmoSpaces' Zed-wrist / light-randomized benchmark variants emit these instead of the defaults, and its own
+# Pi policy prefers them when present (molmo_spaces/policy/learned_policy/pi_policy.py) — mirrored here.
+MOLMO_WRIST_CAMERA_VARIANTS = ('wrist_camera_zed_mini',)
+MOLMO_EXTERIOR_CAMERA_VARIANTS = ('droid_shoulder_light_randomization',)
 MOLMO_ARM_GROUP = 'arm'
 MOLMO_GRIPPER_GROUP = 'gripper'
 
@@ -124,13 +128,26 @@ def molmo_obs_to_positronic(
     grip = float(np.clip(grip_qpos / gripper_qpos_closed, 0.0, 1.0))
 
     width, height = image_size
+    wrist = _camera_image(env, wrist_key, MOLMO_WRIST_CAMERA, MOLMO_WRIST_CAMERA_VARIANTS)
+    exterior = _camera_image(env, exterior_key, MOLMO_EXTERIOR_CAMERA, MOLMO_EXTERIOR_CAMERA_VARIANTS)
     return {
         POS_JOINTS: arm,
         POS_GRIP: np.array([grip], dtype=np.float32),
-        POS_WRIST_IMAGE: resize_with_pad(env[wrist_key], width, height),
-        POS_EXTERIOR_IMAGE: resize_with_pad(env[exterior_key], width, height),
+        POS_WRIST_IMAGE: resize_with_pad(wrist, width, height),
+        POS_EXTERIOR_IMAGE: resize_with_pad(exterior, width, height),
         POS_TASK: task,
     }
+
+
+def _camera_image(env: cabc.Mapping, key: str, default: str, variants: tuple[str, ...]) -> Any:
+    """Resolve a camera image the way MolmoSpaces' own policies do: a benchmark-variant key takes precedence
+    over the default when present; an explicitly configured non-default key is read as-is."""
+    if key != default:
+        return env[key]
+    for candidate in (*variants, key):
+        if candidate in env:
+            return env[candidate]
+    raise KeyError(f'observation has none of {(*variants, key)}; available keys: {sorted(env)}')
 
 
 def _wire_get(mapping: cabc.Mapping, name: str, default: Any = None) -> Any:
