@@ -10,7 +10,7 @@ import uvicorn
 
 from positronic.offboard.client import InferenceClient
 from positronic.offboard.vendor_server import VendorServer
-from positronic.policy import Codec, RemotePolicy
+from positronic.policy import Codec, Policy, RemotePolicy, Session
 from positronic.policy.codec import ActionTimestamp
 from positronic.policy.spec import inline, remote
 from positronic.policy.wrappers import ChunkedSchedule
@@ -23,16 +23,17 @@ def find_free_port() -> int:
 
 
 class _StubVendorServer(VendorServer):
-    def __init__(self, definition=remote, **kwargs):
+    def __init__(self, definition=remote, policy=None, **kwargs):
         super().__init__(definition=definition, **kwargs)
         self.mock_session = MagicMock()
         self.mock_session.return_value = [{'action': [1, 2, 3]}]
         self.mock_session.meta = {'model_name': 'stub'}
         self.mock_session.close = MagicMock()
 
-        self.mock_policy = MagicMock()
-        self.mock_policy.new_session.return_value = self.mock_session
-        self.mock_policy.meta = {}
+        mock_policy = MagicMock()
+        mock_policy.new_session.return_value = self.mock_session
+        mock_policy.meta = {}
+        self.policy = policy or mock_policy
         self.metadata = {'type': 'stub'}
         self.warmup_called = False
 
@@ -40,7 +41,7 @@ class _StubVendorServer(VendorServer):
         return 'dummy_handle', {'checkpoint_id': model_id or 'default'}
 
     def create_policy(self, model_handle):
-        return self.mock_policy
+        return self.policy
 
     async def get_models(self):
         return {'models': ['stub']}
@@ -214,20 +215,16 @@ def test_local_stack_declared_in_handshake(declaring_server):
         session.close()
 
 
-class _ScriptedPolicy:
+class _ScriptedSession(Session):
+    def __call__(self, obs):
+        return [{'a': 1.0}, {'a': 2.0}, {'a': 3.0}]
+
+
+class _ScriptedPolicy(Policy):
     """Deterministic base policy: every session returns the same untimestamped chunk."""
 
-    def __init__(self):
-        self.meta = {}
-
-    def new_session(self, context=None, now=None):
-        session = MagicMock()
-        session.return_value = [{'a': 1.0}, {'a': 2.0}, {'a': 3.0}]
-        session.meta = {}
-        return session
-
-    def close(self):
-        pass
+    def new_session(self, context=None, now=None) -> Session:
+        return _ScriptedSession()
 
 
 def test_in_process_equals_remote_for_same_definition():
@@ -238,17 +235,26 @@ def test_in_process_equals_remote_for_same_definition():
 
     clock = [100.0]
 
-    server = _StubVendorServer(definition=definition(), host='localhost', port=find_free_port())
-    server.create_policy = lambda handle: _ScriptedPolicy()
-    host, port, _ = _start_server(server)
+    served = _StubVendorServer(
+        definition=definition(), policy=_ScriptedPolicy(), host='localhost', port=find_free_port()
+    )
+    host, port, _ = _start_server(served)
     remote_session = RemotePolicy(host, port).new_session(now=lambda: clock[0])
 
-    local_session = inline(definition()).wrap(_ScriptedPolicy()).new_session(now=lambda: clock[0])
+    local = inline(definition())
+    assert local is not None
+    local_session = local.wrap(_ScriptedPolicy()).new_session(now=lambda: clock[0])
 
     remote_actions = remote_session({'obs_time_ns': 0})
     local_actions = local_session({'obs_time_ns': 0})
     assert remote_actions == local_actions
-    assert [a['timestamp'] for a in local_actions] == [100.0, 100.1, 100.2]
+    # Three scripted actions plus the chunk-closing validity sentinel ActionTimestamp appends.
+    assert local_actions == [
+        {'a': 1.0, 'timestamp': 100.0},
+        {'a': 2.0, 'timestamp': 100.1},
+        {'a': 3.0, 'timestamp': 100.2},
+        {'timestamp': 100.3},
+    ]
 
     # Both gate identically while the chunk plays out.
     clock[0] = 100.15

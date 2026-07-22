@@ -242,7 +242,7 @@ def test_no_declaration_falls_back_to_chunked_schedule():
     session = policy.new_session(now=lambda: clock[0])
     actions = session({'obs_time_ns': 0})
     # ChunkedSchedule anchored the chunk to now=0.0 and gates re-inference until it is consumed.
-    assert [a['timestamp'] for a in actions] == [0.0, 0.5]
+    assert actions == [{'a': 1, 'timestamp': 0.0}, {'a': 2, 'timestamp': 0.5}]
     clock[0] = 0.2
     assert session({'obs_time_ns': 0}) is None
 
@@ -254,7 +254,7 @@ def test_declared_stack_built_at_session_open():
     policy, mock_ws = _mock_remote_policy(declared, infer_return=[{'a': 1, 'timestamp': 0.0}])
     session = policy.new_session(now=lambda: clock[0])
     actions = session({'obs_time_ns': 0})
-    assert [a['timestamp'] for a in actions] == [1.0]
+    assert actions == [{'a': 1, 'timestamp': 1.0}]
 
 
 def test_unknown_declared_entry_fails_before_motion():
@@ -270,7 +270,7 @@ def test_operator_local_bypasses_declaration():
     session = policy.new_session(now=lambda: 5.0)
     actions = session({'obs_time_ns': 0})
     # The declared TemporalStack would have stacked 'v'; instead the operator's ChunkedSchedule ran.
-    assert [a['timestamp'] for a in actions] == [5.0]
+    assert actions == [{'a': 1, 'timestamp': 5.0}]
 
 
 def test_remote_policy_lifecycle(inference_server, mock_policy):

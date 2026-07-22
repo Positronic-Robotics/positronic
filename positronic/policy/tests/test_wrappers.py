@@ -215,7 +215,7 @@ class TestDefinitionSpec:
         sched = ChunkedSchedule()
         codec = ActionTimestamp(fps=10.0)
         local, rem = spec.split(stack | sched | spec.remote | codec)
-        assert local._pipeline_components() == (stack, sched)
+        assert local is not None and local._pipeline_components() == (stack, sched)
         assert rem is codec
 
     def test_split_empty_halves(self):
@@ -236,7 +236,7 @@ class TestDefinitionSpec:
     def test_inline_drops_marker(self):
         codec = ActionTimestamp(fps=10.0)
         pipeline = spec.inline(ChunkedSchedule() | spec.remote | codec)
-        assert pipeline._pipeline_components()[-1] is codec
+        assert pipeline is not None and pipeline._pipeline_components()[-1] is codec
         assert spec.inline(spec.remote) is None
 
     def test_marker_cannot_be_applied(self):
@@ -246,7 +246,7 @@ class TestDefinitionSpec:
     def test_spec_round_trip(self):
         stack = TemporalStack(keys=('a', 'b'), offsets_sec=(-0.5, 0.0), pad_start=False) | ChunkedSchedule()
         rebuilt = spec.from_spec(stack.to_spec())
-        assert rebuilt.to_spec() == stack.to_spec()
+        assert rebuilt is not None and rebuilt.to_spec() == stack.to_spec()
 
     def test_leaf_without_args_omits_args_key(self):
         assert ChunkedSchedule().to_spec() == {'name': 'chunked_schedule'}
@@ -262,7 +262,7 @@ class TestDefinitionSpec:
         monkeypatch.setitem(spec.WIRE_WRAPPERS, 'wire_codec', _WireCodec)
         composed = _WireCodec('t') | (_WireCodec('a') & _WireCodec('b'))
         rebuilt = spec.from_spec(composed.to_spec())
-        assert rebuilt.to_spec() == composed.to_spec()
+        assert rebuilt is not None and rebuilt.to_spec() == composed.to_spec()
         assert composed.to_spec() == {
             'seq': [
                 {'name': 'wire_codec', 'args': {'tag': 't'}},
