@@ -1,0 +1,285 @@
+"""Unit tests for the pi05_droid <-> MolmoSpaces adapter mapping logic.
+
+Runs with NEITHER molmo_spaces nor positronic installed: the adapter import-guards both, and every test here
+exercises the pure mapping functions, ``ChunkBuffer``, and ``FakePolicy`` — none of which touch either framework.
+
+Run:  uv run --locked pytest positronic/simulator/molmo_spaces/tests/test_adapter.py --no-cov
+"""
+
+from pathlib import Path
+
+import numpy as np
+import pytest
+
+from positronic.simulator.molmo_spaces import adapter
+from positronic.simulator.molmo_spaces.adapter import (
+    IMAGE_SIZE,
+    NUM_ARM_JOINTS,
+    POS_EXTERIOR_IMAGE,
+    POS_GRIP,
+    POS_JOINTS,
+    POS_TASK,
+    POS_WRIST_IMAGE,
+    ROBOTIQ_CLOSED,
+    ROBOTIQ_OPEN,
+    ChunkBuffer,
+    FakePolicy,
+    _FakeJointDelta,
+    molmo_obs_to_positronic,
+    positronic_action_to_molmo,
+    resize_with_pad,
+)
+
+FIXTURE = Path(__file__).parent / 'droid_obs.npz'
+
+
+def _load_env_obs() -> dict:
+    data = np.load(FIXTURE)
+    return {
+        'wrist_camera': data['wrist_camera'],
+        'exo_camera_1': data['exo_camera_1'],
+        'qpos': {'arm': data['qpos_arm'], 'gripper': data['qpos_gripper']},
+    }
+
+
+# --- import guard -----------------------------------------------------------------------------------------------
+
+
+def test_module_imports_without_frameworks():
+    # The pure logic must be usable even when molmo_spaces is absent (the common test/dev box).
+    assert isinstance(adapter.HAS_MOLMO_SPACES, bool)
+    assert callable(molmo_obs_to_positronic)
+    assert callable(positronic_action_to_molmo)
+
+
+# --- observation mapping ----------------------------------------------------------------------------------------
+
+
+def test_obs_mapping_key_set():
+    obs = molmo_obs_to_positronic(_load_env_obs(), 'pick up the cube')
+    assert set(obs) == {POS_JOINTS, POS_GRIP, POS_WRIST_IMAGE, POS_EXTERIOR_IMAGE, POS_TASK}
+
+
+def test_obs_mapping_shapes_and_dtypes():
+    obs = molmo_obs_to_positronic(_load_env_obs(), 'pick up the cube')
+    w, h = IMAGE_SIZE
+    assert obs[POS_JOINTS].shape == (NUM_ARM_JOINTS,) and obs[POS_JOINTS].dtype == np.float32
+    assert obs[POS_GRIP].shape == (1,) and obs[POS_GRIP].dtype == np.float32
+    for key in (POS_WRIST_IMAGE, POS_EXTERIOR_IMAGE):
+        assert obs[key].shape == (h, w, 3) and obs[key].dtype == np.uint8
+    assert obs[POS_TASK] == 'pick up the cube'
+
+
+def test_obs_mapping_accepts_batch_list_and_single_dict():
+    env = _load_env_obs()
+    from_dict = molmo_obs_to_positronic(env, 't')
+    from_list = molmo_obs_to_positronic([env], 't')  # MolmoSpaces yields a per-env list
+    assert np.array_equal(from_dict[POS_JOINTS], from_list[POS_JOINTS])
+    assert np.array_equal(from_dict[POS_WRIST_IMAGE], from_list[POS_WRIST_IMAGE])
+
+
+def test_obs_mapping_does_not_swap_cameras():
+    obs = molmo_obs_to_positronic(_load_env_obs(), 't')
+    # Fixture marks the wrist view reddish and the exterior view greenish; a swap would flip the dominant channel.
+    wrist_mean = obs[POS_WRIST_IMAGE].reshape(-1, 3).mean(axis=0)
+    exterior_mean = obs[POS_EXTERIOR_IMAGE].reshape(-1, 3).mean(axis=0)
+    assert wrist_mean[0] > wrist_mean[1]  # wrist: red > green
+    assert exterior_mean[1] > exterior_mean[0]  # exterior: green > red
+
+
+def test_gripper_proprio_normalization():
+    closed = adapter.GRIPPER_QPOS_CLOSED
+
+    def grip_for(qpos_val: float) -> float:
+        env = _load_env_obs()
+        env['qpos']['gripper'] = np.array([qpos_val, qpos_val], dtype=np.float32)
+        return float(molmo_obs_to_positronic(env, 't')[POS_GRIP][0])
+
+    assert grip_for(0.0) == 0.0
+    assert abs(grip_for(closed / 2) - 0.5) < 1e-4
+    assert abs(grip_for(closed) - 1.0) < 1e-6
+    assert grip_for(closed * 2) == 1.0  # saturates, never exceeds 1
+
+
+# --- resize behavior --------------------------------------------------------------------------------------------
+
+
+def test_resize_with_pad_shape_and_dtype():
+    rig = np.zeros((36, 64, 3), dtype=np.uint8)  # DROID 16:9 frame
+    out = resize_with_pad(rig, 224, 224)
+    assert out.shape == (224, 224, 3) and out.dtype == np.uint8
+
+
+def test_resize_with_pad_passthrough_when_already_sized():
+    already = (np.random.default_rng(0).integers(0, 255, (224, 224, 3))).astype(np.uint8)
+    out = resize_with_pad(already, 224, 224)
+    assert np.array_equal(out, already)  # exact passthrough, no resample
+
+
+def test_resize_with_pad_letterboxes_and_preserves_orientation():
+    # 20 (H) x 40 (W): left half red, right half blue, top 4 rows white. A wide frame padded into a square
+    # gets black top/bottom bars; content keeps its left/right and top/bottom layout (no flip).
+    src = np.zeros((20, 40, 3), dtype=np.uint8)
+    src[:, :20] = (255, 0, 0)
+    src[:, 20:] = (0, 0, 255)
+    src[:4, :] = (255, 255, 255)
+    out = resize_with_pad(src, 224, 224)
+
+    # 40:20 -> content is 224x112 centered vertically: rows [56, 168) hold content, the rest is zero pad.
+    assert out[:40].sum() == 0 and out[-40:].sum() == 0  # top/bottom padding bars
+    assert out[112, 40, 0] > out[112, 40, 2]  # left column stays red (R > B)
+    assert out[112, 200, 2] > out[112, 200, 0]  # right column stays blue (B > R)
+    top_band = out[60:80].mean()
+    bottom_band = out[150:165].mean()
+    assert top_band > bottom_band  # the white top stripe stays at the top after resize (no vertical flip)
+
+
+# --- action mapping ---------------------------------------------------------------------------------------------
+
+
+def test_action_integrates_delta_onto_live_joints():
+    current = np.arange(NUM_ARM_JOINTS, dtype=np.float32)
+    velocities = np.full(NUM_ARM_JOINTS, 0.1, dtype=np.float32)
+    action = {'robot_command': _FakeJointDelta(velocities), 'target_grip': 1.0}
+    out = positronic_action_to_molmo(action, current)
+    assert out['arm'].shape == (NUM_ARM_JOINTS,) and out['arm'].dtype == np.float32
+    assert np.allclose(out['arm'], current + velocities)
+    assert out['gripper'].shape == (1,)
+
+
+def test_action_gripper_convention():
+    current = np.zeros(NUM_ARM_JOINTS, dtype=np.float32)
+    vel = _FakeJointDelta(np.zeros(NUM_ARM_JOINTS, dtype=np.float32))
+
+    def gripper_for(target_grip: float) -> float:
+        out = positronic_action_to_molmo({'robot_command': vel, 'target_grip': target_grip}, current)
+        return float(out['gripper'][0])
+
+    assert gripper_for(1.0) == ROBOTIQ_CLOSED == 255.0
+    assert gripper_for(0.0) == ROBOTIQ_OPEN == 0.0
+    assert gripper_for(0.9) == ROBOTIQ_CLOSED  # binarized above 0.5
+    assert gripper_for(0.1) == ROBOTIQ_OPEN
+
+
+def test_action_reads_velocities_from_object_or_wire_dict():
+    current = np.zeros(NUM_ARM_JOINTS, dtype=np.float32)
+    vel = np.linspace(-0.2, 0.2, NUM_ARM_JOINTS, dtype=np.float32)
+    from_obj = positronic_action_to_molmo({'robot_command': _FakeJointDelta(vel), 'target_grip': 0.0}, current)
+    from_dict = positronic_action_to_molmo({'robot_command': {'velocities': vel}, 'target_grip': 0.0}, current)
+    assert np.allclose(from_obj['arm'], from_dict['arm'])
+    # Bytes-keyed wire form (msgpack deserialisation on some client versions keys with bytes).
+    from_bytes = positronic_action_to_molmo({b'robot_command': {b'velocities': vel}, b'target_grip': 1.0}, current)
+    assert np.allclose(from_obj['arm'], from_bytes['arm'])
+
+
+def test_action_joint_count_mismatch_raises():
+    current = np.zeros(NUM_ARM_JOINTS, dtype=np.float32)
+    bad = {'robot_command': _FakeJointDelta(np.zeros(6, dtype=np.float32)), 'target_grip': 0.0}
+    with pytest.raises(ValueError):
+        positronic_action_to_molmo(bad, current)
+
+
+# --- FakePolicy -------------------------------------------------------------------------------------------------
+
+
+def test_fake_policy_chunk_shape_and_range():
+    policy = FakePolicy(chunk_size=8, seed=3)
+    chunk = policy.new_session()({POS_TASK: 't'})
+    assert len(chunk) == 8
+    for step in chunk:
+        vel = step['robot_command'].velocities
+        assert vel.shape == (NUM_ARM_JOINTS,)
+        assert np.all(np.abs(vel) <= adapter.MAX_JOINT_DELTA + 1e-6)
+        assert step['target_grip'] in (0.0, 1.0)
+
+
+def test_fake_policy_is_deterministic_per_seed():
+    a = FakePolicy(seed=7).new_session()({POS_TASK: 't'})
+    b = FakePolicy(seed=7).new_session()({POS_TASK: 't'})
+    for sa, sb in zip(a, b, strict=True):
+        assert np.array_equal(sa['robot_command'].velocities, sb['robot_command'].velocities)
+        assert sa['target_grip'] == sb['target_grip']
+
+
+def test_fake_policy_zero_mode_holds():
+    chunk = FakePolicy(mode='zero').new_session()({POS_TASK: 't'})
+    for step in chunk:
+        assert np.array_equal(step['robot_command'].velocities, np.zeros(NUM_ARM_JOINTS))
+        assert step['target_grip'] == 0.0
+
+
+# --- ChunkBuffer ------------------------------------------------------------------------------------------------
+
+
+class _CountingSession:
+    def __init__(self, chunk_size: int):
+        self.calls = 0
+        self._chunk_size = chunk_size
+
+    def __call__(self, obs):
+        self.calls += 1
+        return [
+            {
+                'robot_command': _FakeJointDelta(np.full(NUM_ARM_JOINTS, self.calls, dtype=np.float32)),
+                'target_grip': 0.0,
+            }
+            for _ in range(self._chunk_size)
+        ]
+
+
+def test_chunk_buffer_replays_one_per_tick_then_requeries():
+    session = _CountingSession(chunk_size=3)
+    buf = ChunkBuffer(session)
+    first = [buf.next({}) for _ in range(3)]
+    assert session.calls == 1  # one chunk covered three ticks
+    fourth = buf.next({})
+    assert session.calls == 2  # drained -> re-queried
+    assert float(first[0]['robot_command'].velocities[0]) == 1.0
+    assert float(fourth['robot_command'].velocities[0]) == 2.0
+
+
+def test_chunk_buffer_empty_chunk_raises():
+    buf = ChunkBuffer(lambda obs: [])
+    with pytest.raises(RuntimeError):
+        buf.next({})
+
+
+def test_chunk_buffer_drops_trailing_horizon_marker():
+    # A real droid chunk is 8 actions + a window-end entry carrying only `timestamp`; consumed as an action the
+    # marker KeyErrors on `robot_command`, so the buffer must drop it and re-query rather than replay it.
+    vel = np.zeros(NUM_ARM_JOINTS, dtype=np.float32)
+    chunk = [{'robot_command': _FakeJointDelta(vel), 'target_grip': 0.0, 'timestamp': i / 15} for i in range(8)]
+    chunk.append({'timestamp': 8 / 15})
+    calls = {'n': 0}
+
+    def session(obs):
+        calls['n'] += 1
+        return list(chunk)
+
+    buf = ChunkBuffer(session)
+    for _ in range(8):
+        assert 'robot_command' in buf.next({})
+    assert calls['n'] == 1
+    buf.next({})  # 9th tick: marker dropped, buffer re-queries instead of replaying it
+    assert calls['n'] == 2
+
+
+# --- end to end (server-free) -----------------------------------------------------------------------------------
+
+
+def test_end_to_end_fake_pipeline():
+    env = _load_env_obs()
+    client = FakePolicy(mode='random', seed=1, chunk_size=8)
+    buffer = ChunkBuffer(client.new_session())
+
+    pos_obs = molmo_obs_to_positronic(env, 'pick up the cube')
+    current_arm = np.asarray(env['qpos']['arm'], dtype=np.float32)
+    action = buffer.next(pos_obs)
+    molmo_action = positronic_action_to_molmo(action, current_arm)
+
+    assert set(molmo_action) == {'arm', 'gripper'}
+    assert molmo_action['arm'].shape == (NUM_ARM_JOINTS,)
+    assert molmo_action['gripper'].shape == (1,)
+    assert molmo_action['gripper'][0] in (ROBOTIQ_OPEN, ROBOTIQ_CLOSED)
+    expected_arm = current_arm + action['robot_command'].velocities
+    assert np.allclose(molmo_action['arm'], expected_arm)
