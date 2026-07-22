@@ -11,6 +11,7 @@ from pathlib import Path
 
 import pytest
 
+from positronic.dataset.local_dataset import UNFINISHED_MARKER
 from positronic.eval_timing import GPU_LOG_FILENAME, TIMING_FILENAME, EpisodeTiming
 from positronic.eval_timing_shim import (
     HOST_LOG_FILENAME,
@@ -117,6 +118,34 @@ def test_dataset_dir_layout_joins_by_uid(tmp_path):
     # Every timing record's join key has a matching recorded episode (the reducer fails otherwise).
     assert {row['episode_uid'] for row in rows} == recorded_uids
     assert len(recorded_uids) == len(rows)
+
+
+def test_preempted_stub_write_leaves_unfinished_marker(tmp_path, monkeypatch):
+    # A run preempted after the episode dir becomes visible but before its files land must not present a
+    # finished episode (regression: a half-written static.json failed timing-report on the whole dataset).
+    # The stub carries LocalDataset's marker until the last file lands; a sealed write leaves no marker.
+    import positronic.eval_timing_shim as shim_mod
+
+    shim = TimingShim(tmp_path, task='pick_cube', sample_gpu=False, sample_host=False)
+    ep = shim.begin_episode(trial=0, sim_duration_s=1.0)
+    _drive_episode(ep, n_steps=1)
+    ep.set_outcome(success=True, terminated=True, scored=True)
+
+    def preempted(path, start_ts_ns, duration_ns):
+        raise RuntimeError('preempted mid-write')
+
+    monkeypatch.setattr(shim_mod, '_write_signal', preempted)
+    with pytest.raises(RuntimeError):
+        shim.finish_episode(ep)
+    markers = list(tmp_path.rglob(UNFINISHED_MARKER))
+    assert len(markers) == 1  # the half-written stub is identifiable as unfinished
+
+    monkeypatch.undo()
+    ep2 = shim.begin_episode(trial=1, sim_duration_s=1.0)
+    _drive_episode(ep2, n_steps=1)
+    ep2.set_outcome(success=True, terminated=True, scored=True)
+    shim.finish_episode(ep2)
+    assert list(tmp_path.rglob(UNFINISHED_MARKER)) == markers  # the sealed episode carries no marker
 
 
 def test_finished_episodes_flush_to_disk_before_close(tmp_path):

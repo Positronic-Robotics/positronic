@@ -63,6 +63,7 @@ from pathlib import Path
 import pyarrow as pa
 import pyarrow.parquet as pq
 
+from positronic.dataset.local_dataset import UNFINISHED_MARKER
 from positronic.eval_timing import GPU_LOG_FILENAME, TIMING_FILENAME, EpisodeTiming, start_gpu_sampler
 
 logger = logging.getLogger(__name__)
@@ -368,6 +369,10 @@ def _write_episode_dir(root: Path, episode_id: int, episode: Episode) -> Path:
     block_dir = root / f'{(episode_id // 1000) * 1000:012d}'
     ep_dir = block_dir / f'{episode_id:012d}'
     ep_dir.mkdir(parents=True, exist_ok=True)
+    # The dir is visible before its files land; the marker keeps a preemption mid-write from
+    # presenting a half-written stub as a finished episode (same contract as LocalDataset's writer).
+    unfinished = ep_dir / UNFINISHED_MARKER
+    unfinished.write_text('unfinished', encoding='utf-8')
 
     created_ts_ns = time.time_ns()
     duration_ns = int((episode.sim_duration_s or 0.0) * 1e9)
@@ -377,6 +382,7 @@ def _write_episode_dir(root: Path, episode_id: int, episode: Episode) -> Path:
     (ep_dir / 'meta.json').write_text(json.dumps(meta))
     (ep_dir / 'static.json').write_text(json.dumps(episode.eval_static()))
     _write_signal(ep_dir / SIGNAL_FILENAME, created_ts_ns, duration_ns)
+    unfinished.unlink()
     return ep_dir
 
 
