@@ -21,7 +21,10 @@ def violations(paths: list[Path]) -> list[Path]:
 def main() -> int:
     bad = violations([Path(a) for a in sys.argv[1:]])
     for p in bad:
-        print(f'{p}: test files live in a per-package tests/ directory, e.g. {p.parent / "tests" / p.name}')
+        # A root-level or root-tests/ file has no package to anchor the hint on.
+        rootish = len(p.parts) == 1 or p.parts[0] == 'tests'
+        hint = Path('<package>', 'tests', p.name) if rootish else p.parent / 'tests' / p.name
+        print(f'{p}: test files live in a per-package tests/ directory, e.g. {hint}')
     return 1 if bad else 0
 
 
