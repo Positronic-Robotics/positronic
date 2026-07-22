@@ -225,7 +225,7 @@ class Harness(pimm.ControlSystem):
         self.context = context
         # ``inference_latency`` rides the RUN context (and lands in episode meta with it).
         self._inference_latency = self.context.get('inference_latency', False)
-        eval_timing.begin_episode(str(self.context.get('eval.task', '')), int(self.context.get('eval.trial_index', -1)))
+        eval_timing.begin_episode()
         # Reset the scene before opening the session: a resettable task only learns its instruction on reset
         # (a remote env reports it then), so the session context — and the task-grouped sampling/counting it
         # drives — must read the instruction here, once it is known.

@@ -7,8 +7,9 @@ recorded dataset cannot recover on its own. Everything the dataset *can* recover
 success, on-disk size) is left to the reduce step (`positronic.cli.eval.timing_report`) to join back in,
 so nothing is stored twice.
 
-The collector is bound for the span of one ``World`` run via a ``ContextVar`` (`bind`) and read at the
-hook sites with `active`; unbound — the default — every hook is a no-op, so a normal eval pays nothing.
+The collector is bound around an eval sweep via a ``ContextVar`` (`bind`) and reached at the hook sites
+through this module's hook functions (`begin_episode`, `record_infer`, `timed`, ...), each a no-op while
+unbound — the default — so a normal eval pays nothing.
 Because a sim eval schedules the harness, recorder and env proxy as cooperative generators in one thread,
 a single bound collector sees all of their timings. A real eval runs the recorder and producers as
 separate processes, which do not inherit the context — so this telemetry is sim-only by construction.
@@ -65,8 +66,6 @@ class EpisodeTiming:
     teardown wall counts in ``W_pass`` instead of being dropped by a per-episode sum.
     """
 
-    task: str
-    trial: int
     episode_uid: str
     wall_s: float
     reset_s: float
@@ -86,8 +85,6 @@ class EpisodeTiming:
 class _Accumulator:
     """The running sums for the episode in flight; sealed into an ``EpisodeTiming`` at finish."""
 
-    task: str
-    trial: int
     wall_start: float
     reset_s: float = 0.0
     env_step_s: float = 0.0
@@ -114,10 +111,10 @@ class EvalTimer:
         self._count = 0
         self._current: _Accumulator | None = None
 
-    def begin_episode(self, task: str, trial: int) -> None:
+    def begin_episode(self) -> None:
         if self._current is not None:
             logger.warning('EvalTimer: new episode began before the previous one finished; dropping the previous')
-        self._current = _Accumulator(task=task, trial=trial, wall_start=time.perf_counter())
+        self._current = _Accumulator(wall_start=time.perf_counter())
 
     def _record(self, phase: Phase, seconds: float) -> None:
         """Accumulate a timed span into the in-flight episode. ``MATERIALIZE`` is part of the env step and
@@ -160,8 +157,6 @@ class EvalTimer:
         wall_s = time.perf_counter() - acc.wall_start
         measured = acc.reset_s + acc.env_step_s + acc.policy_wait_s + acc.record_io_s
         record = EpisodeTiming(
-            task=acc.task,
-            trial=acc.trial,
             episode_uid=episode_uid,
             wall_s=wall_s,
             reset_s=acc.reset_s,
@@ -194,10 +189,10 @@ _ACTIVE: ContextVar[EvalTimer | None] = ContextVar('eval_timer', default=None)
 # so a normal eval pays nothing and no site carries a ``None`` check.
 
 
-def begin_episode(task: str, trial: int) -> None:
+def begin_episode() -> None:
     """Open a new rollout's timing span."""
     if (timer := _ACTIVE.get()) is not None:
-        timer.begin_episode(task, trial)
+        timer.begin_episode()
 
 
 def finish_episode(episode_uid: str) -> None:
