@@ -14,7 +14,7 @@ def violations(paths: list[Path]) -> list[Path]:
         for p in paths
         if p.suffix == '.py'
         and (p.name.startswith('test_') or p.name.endswith('_test.py'))
-        and 'tests' not in p.parts[:-1]
+        and 'tests' not in p.parts[1:-1]
     ]
 
 
