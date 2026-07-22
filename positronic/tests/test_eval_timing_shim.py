@@ -139,6 +139,33 @@ def test_finished_episodes_flush_to_disk_before_close(tmp_path):
     assert [row['episode_uid'] for row in rows] == uids  # stale line gone, three fresh records in seal order
 
 
+def test_stub_write_stays_outside_reconstructed_episode_window(tmp_path, monkeypatch):
+    # The reducer reconstructs an episode's start as finished_at - wall_s. Both must be frozen on the same
+    # side of the stub write, else slow-filesystem stub I/O shifts the reconstructed start. Force a slow
+    # stub write and assert the reconstruction still lands on the real rollout start, not 0.2s later.
+    import positronic.eval_timing_shim as shim_mod
+
+    real_write = shim_mod._write_episode_dir
+
+    def slow_write(root, episode_id, episode):
+        time.sleep(0.2)
+        return real_write(root, episode_id, episode)
+
+    monkeypatch.setattr(shim_mod, '_write_episode_dir', slow_write)
+
+    shim = TimingShim(tmp_path, task='pick_cube', sample_gpu=False, sample_host=False)
+    t_begin = time.time()
+    ep = shim.begin_episode(trial=0, sim_duration_s=5.0)
+    _drive_episode(ep, n_steps=1)
+    ep.set_outcome(success=True, terminated=True, scored=True)
+    shim.finish_episode(ep)  # the 0.2s stub write happens after wall_s and finished_at are captured
+
+    row = _read_timing(tmp_path)[0]
+    reconstructed_start = row['finished_at'] - row['wall_s']
+    assert reconstructed_start == pytest.approx(t_begin, abs=0.1)  # unshifted by the 0.2s stub I/O
+    assert row['wall_s'] < 0.15  # the rollout wall excludes the stub write entirely
+
+
 def test_run_clears_stale_gpu_log_with_sampling_off(tmp_path):
     # The reducer auto-reads any gpu_dmon.log in the dataset dir, so a prior GPU pass's log must not
     # survive into a fresh sample_gpu=False pass.

@@ -148,7 +148,7 @@ class Episode:
         """Drop this rollout without recording it — an abort that should not weigh on the pass."""
         self._discarded = True
 
-    def to_timing(self, wall_s: float) -> EpisodeTiming:
+    def to_timing(self, wall_s: float, finished_at: float) -> EpisodeTiming:
         measured = self.reset_s + self.env_step_s + self.policy_wait_s + self.record_io_s
         return EpisodeTiming(
             task=self.task,
@@ -161,7 +161,7 @@ class Episode:
             record_io_s=self.record_io_s,
             overhead_s=max(wall_s - measured, 0.0),
             infer_ms=[round(ms, 3) for ms in self.infer_ms],
-            finished_at=time.time(),
+            finished_at=finished_at,
             env_physics_s=self.env_physics_s,
             env_render_s=self.env_render_s,
             env_server_s=self.env_server_s,
@@ -277,12 +277,16 @@ class TimingShim:
         """
         if episode._discarded:
             return
+        # Freeze the rollout wall and its seal timestamp on the same side of the stub write, so the reducer's
+        # start = finished_at - wall_s stays exact and the shim's own stub I/O falls outside the episode
+        # window (the rollout never ran it) instead of skewing wall_s and finished_at apart.
         wall_s = time.perf_counter() - episode._wall_start
+        finished_at = time.time()
         episode_id = self._next_episode_id
         self._next_episode_id += 1
         if self._write_episodes:
             _write_episode_dir(self._out_dir, episode_id, episode)
-        self._append_timing(episode.to_timing(wall_s))
+        self._append_timing(episode.to_timing(wall_s, finished_at))
 
     @contextlib.contextmanager
     def episode(
