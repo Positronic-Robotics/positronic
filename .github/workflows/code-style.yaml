@@ -21,18 +21,23 @@ jobs:
       run: uv venv --python 3.11
     - name: Install dev tools
       run: uv sync --locked --extra dev
+    - name: Determine diff base
+      run: |
+        if [ "${{ github.event_name }}" == "pull_request" ]; then
+          BASE_SHA=${{ github.event.pull_request.base.sha }}
+        else
+          # For pushes, diff the whole pushed range, not just the tip commit.
+          BASE_SHA="${{ github.event.before }}"
+          # A new branch (all-zero before) or a force-pushed-away SHA has no local
+          # object to diff against — fall back to the tip's parent.
+          if ! git cat-file -e "$BASE_SHA^{commit}" 2>/dev/null; then
+            BASE_SHA=$(git rev-parse HEAD^)
+          fi
+        fi
+        echo "BASE_SHA=$BASE_SHA" >> "$GITHUB_ENV"
     - name: Run Ruff linter
       run: |
         # Only check Python files that have changed
-        if [ "${{ github.event_name }}" == "pull_request" ]; then
-          # For PRs, get the base commit from the PR event
-          BASE_SHA=${{ github.event.pull_request.base.sha }}
-        else
-          # For pushes to main, use the parent commit
-          BASE_SHA=$(git rev-parse HEAD^)
-        fi
-
-        # Get changed Python files compared to the base commit
         CHANGED_FILES=$(git diff --name-only --diff-filter=d $BASE_SHA ${{ github.sha }})
         CHANGED_PY_FILES=$(echo "$CHANGED_FILES" | grep -E "\.py$" || true)
 
@@ -40,4 +45,10 @@ jobs:
           echo "$CHANGED_PY_FILES" | xargs uv run ruff check --output-format=github
         else
           echo "No Python files changed"
+        fi
+    - name: Check tests location
+      run: |
+        CHANGED_PY_FILES=$(git diff --name-only --diff-filter=d $BASE_SHA ${{ github.sha }} | grep -E "\.py$" || true)
+        if [ -n "$CHANGED_PY_FILES" ]; then
+          echo "$CHANGED_PY_FILES" | xargs python3 utilities/check_tests_location.py
         fi
