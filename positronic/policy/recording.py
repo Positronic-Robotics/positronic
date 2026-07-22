@@ -302,6 +302,7 @@ class Recorder:
         self._timelines = dict(timelines) if timelines is not None else dict(DEFAULT_TIMELINES)
         self._blueprint = blueprint
         self._stream: rr.RecordingStream | None = None
+        self._rrd_path: Path | None = None
         self._live = 0
         self._depth = 0
         self._timeline_values: dict[str, Any] = {}
@@ -322,8 +323,9 @@ class Recorder:
         if self._live == 0:
             episode_num = next(_EPISODE_COUNTER)
             ts = datetime.now().strftime('%y%m%d_%H%M%S')
+            self._rrd_path = self._dir / f'{ts}_{episode_num:04d}.rrd'
             self._stream = rr.RecordingStream(application_id='positronic_inference')
-            self._stream.save(str(self._dir / f'{ts}_{episode_num:04d}.rrd'))
+            self._stream.save(str(self._rrd_path))
         self._live += 1
         return self._stream
 
@@ -352,6 +354,10 @@ class _RecordingTapSession(DelegatingSession):
         self._name = name
         self._stream = stream
         self._step = 0
+
+    @property
+    def meta(self):
+        return {**self._inner.meta, 'recording.rrd': self._rec._rrd_path.name}
 
     def _set_timelines(self) -> None:
         for timeline, value in self._rec._timeline_values.items():
