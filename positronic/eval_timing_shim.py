@@ -180,10 +180,13 @@ class Episode:
 
 
 class TimingShim:
-    """Collects one ``EpisodeTiming`` per rollout and writes the dataset dir the reducer consumes.
+    """Collects one ``EpisodeTiming`` per rollout, appending each to ``timing.jsonl`` as it seals, and writes
+    the recorded dataset dir the reducer consumes.
 
     The harness records episodes strictly in sequence — one is in flight at a time — so episode ids are a
-    simple counter and the recorded-stub layout mirrors positronic's block/episode numbering.
+    simple counter and the recorded-stub layout mirrors positronic's block/episode numbering. Records are
+    flushed per episode, not buffered, so a preempted or killed pass keeps the timings of the episodes it
+    completed.
     """
 
     def __init__(
@@ -200,27 +203,29 @@ class TimingShim:
         self._sample_gpu = sample_gpu
         self._sample_host = sample_host
         self._write_episodes = write_episodes
-        self._records: list[EpisodeTiming] = []
+        self._count = 0
         self._next_episode_id = 0
+        self._timing_started = False
         self._sampler: subprocess.Popen | None = None
         self._host_sampler: _HostSampler | None = None
 
     @contextlib.contextmanager
     def run(self) -> Iterator['TimingShim']:
-        """Bind the pass: create the output dir, start GPU + host sampling, and flush ``timing.jsonl`` on exit.
+        """Bind the pass: create the output dir, clear stale sidecars, and start GPU + host sampling.
 
-        A retry reusing the same ``--out`` dir must not mix a prior attempt's episode dirs into this
-        pass — the reducer would join stale episodes as if they were fresh, and it auto-reads any
-        ``gpu_dmon.log`` in the dataset dir — so stale block dirs, ``timing.jsonl`` and the GPU log
-        are cleared up front (the GPU log even with sampling off, else a prior GPU pass's samples
-        would be summarised into a CPU pass).
+        A retry reusing the same ``--out`` dir must not mix a prior attempt's artifacts into this pass: the
+        reducer joins any episode dirs it finds and auto-reads ``gpu_dmon.log``, and a leftover
+        ``host_stats.log`` would be mistaken for current telemetry. So stale block dirs, ``timing.jsonl``, the
+        GPU log and the host log are cleared up front — the GPU and host logs even with their sampling off,
+        else a prior pass's samples would be folded into this one. Each episode appends its record to
+        ``timing.jsonl`` as it seals, so a pass killed mid-run keeps the timings it already completed.
         """
         self._out_dir.mkdir(parents=True, exist_ok=True)
         for stale in self._out_dir.glob('[0-9]' * 12):
             shutil.rmtree(stale)
-        (self._out_dir / TIMING_FILENAME).unlink(missing_ok=True)
+        self._prepare_timing_file()
         (self._out_dir / GPU_LOG_FILENAME).unlink(missing_ok=True)
-        self._records.clear()
+        (self._out_dir / HOST_LOG_FILENAME).unlink(missing_ok=True)
         self._next_episode_id = 0
         self.start_gpu()
         self.start_host()
@@ -265,7 +270,11 @@ class TimingShim:
         return episode
 
     def finish_episode(self, episode: Episode) -> None:
-        """Seal an in-flight rollout: write its recorded stub and append its timing record."""
+        """Seal an in-flight rollout: write its recorded stub and append its timing record to disk.
+
+        The record is appended and flushed as the episode seals, so a pass killed mid-run keeps every
+        completed rollout's timing instead of losing an in-memory buffer.
+        """
         if episode._discarded:
             return
         wall_s = time.perf_counter() - episode._wall_start
@@ -273,7 +282,7 @@ class TimingShim:
         self._next_episode_id += 1
         if self._write_episodes:
             _write_episode_dir(self._out_dir, episode_id, episode)
-        self._records.append(episode.to_timing(wall_s))
+        self._append_timing(episode.to_timing(wall_s))
 
     @contextlib.contextmanager
     def episode(
@@ -296,15 +305,32 @@ class TimingShim:
             self.finish_episode(episode)
 
     def close(self) -> Path:
-        """Stop GPU + host sampling and write every collected record as one JSON object per line; return the path."""
+        """Stop GPU + host sampling and return the ``timing.jsonl`` path; records flushed as each episode sealed.
+
+        A pass that sealed no episodes — or that ran without ``run()`` — still leaves an empty, valid file.
+        """
         self._stop_gpu()
         self._stop_host()
+        if not self._timing_started:
+            self._prepare_timing_file()
         path = self._out_dir / TIMING_FILENAME
-        with path.open('w') as f:
-            for record in self._records:
-                f.write(json.dumps(asdict(record)) + '\n')
-        logger.info(f'TimingShim: wrote {len(self._records)} episode timings to {path}')
+        logger.info(f'TimingShim: wrote {self._count} episode timings to {path}')
         return path
+
+    def _prepare_timing_file(self) -> None:
+        """Truncate ``timing.jsonl`` for a fresh pass; each finished episode then appends one line as it seals."""
+        self._out_dir.mkdir(parents=True, exist_ok=True)
+        (self._out_dir / TIMING_FILENAME).write_text('')
+        self._timing_started = True
+        self._count = 0
+
+    def _append_timing(self, record: EpisodeTiming) -> None:
+        """Append one sealed record to ``timing.jsonl``, truncating a stale file lazily on the first write."""
+        if not self._timing_started:
+            self._prepare_timing_file()
+        with (self._out_dir / TIMING_FILENAME).open('a') as f:
+            f.write(json.dumps(asdict(record)) + '\n')
+        self._count += 1
 
     def _stop_gpu(self) -> None:
         if self._sampler is None:

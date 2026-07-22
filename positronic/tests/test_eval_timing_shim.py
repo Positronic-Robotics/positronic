@@ -119,12 +119,42 @@ def test_dataset_dir_layout_joins_by_uid(tmp_path):
     assert len(recorded_uids) == len(rows)
 
 
+def test_finished_episodes_flush_to_disk_before_close(tmp_path):
+    # A pass killed mid-run (no close(), no run() wrapper) must still leave every finished rollout's timing
+    # on disk: records append as each episode seals rather than buffering until close(). A stale timing.jsonl
+    # from a prior pass is truncated lazily on the first flush.
+    (tmp_path / TIMING_FILENAME).write_text('stale line from a prior pass\n')
+    shim = TimingShim(tmp_path, task='pick_cube', sample_gpu=False, sample_host=False)
+    uids = []
+    for trial in range(3):
+        ep = shim.begin_episode(trial=trial, sim_duration_s=5.0)
+        _drive_episode(ep, n_steps=2)
+        ep.set_outcome(success=True, terminated=True, scored=True)
+        shim.finish_episode(ep)
+        uids.append(ep.uid)
+        # The record is durable the moment the episode seals — no close() has run yet.
+        assert len(_read_timing(tmp_path)) == trial + 1
+
+    rows = _read_timing(tmp_path)
+    assert [row['episode_uid'] for row in rows] == uids  # stale line gone, three fresh records in seal order
+
+
 def test_run_clears_stale_gpu_log_with_sampling_off(tmp_path):
     # The reducer auto-reads any gpu_dmon.log in the dataset dir, so a prior GPU pass's log must not
     # survive into a fresh sample_gpu=False pass.
     (tmp_path / GPU_LOG_FILENAME).write_text('stale dmon samples\n')
     _build_synthetic_run(tmp_path, sample_gpu=False)
     assert not (tmp_path / GPU_LOG_FILENAME).exists()
+
+
+def test_run_clears_stale_host_log_with_sampling_off(tmp_path):
+    # Symmetric with the GPU log: a prior pass's host_stats.log must not survive a sample_host=False pass,
+    # else stale CPU/RAM samples sit next to the fresh timing.jsonl and are mistaken for current telemetry.
+    (tmp_path / HOST_LOG_FILENAME).write_text('stale host samples\n')
+    shim = TimingShim(tmp_path, task='pick_cube', sample_gpu=False, sample_host=False)
+    with shim.run():
+        pass
+    assert not (tmp_path / HOST_LOG_FILENAME).exists()
 
 
 def test_gpu_sampling_degrades_gracefully(tmp_path):
