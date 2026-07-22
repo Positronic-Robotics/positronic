@@ -41,3 +41,14 @@ jobs:
         else
           echo "No Python files changed"
         fi
+    - name: Check tests location
+      run: |
+        if [ "${{ github.event_name }}" == "pull_request" ]; then
+          BASE_SHA=${{ github.event.pull_request.base.sha }}
+        else
+          BASE_SHA=$(git rev-parse HEAD^)
+        fi
+        CHANGED_PY_FILES=$(git diff --name-only --diff-filter=d $BASE_SHA ${{ github.sha }} | grep -E "\.py$" || true)
+        if [ -n "$CHANGED_PY_FILES" ]; then
+          echo "$CHANGED_PY_FILES" | xargs python3 utilities/check_tests_location.py
+        fi
