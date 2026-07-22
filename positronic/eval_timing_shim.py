@@ -63,7 +63,7 @@ from pathlib import Path
 import pyarrow as pa
 import pyarrow.parquet as pq
 
-from positronic.eval_timing import TIMING_FILENAME, EpisodeTiming, start_gpu_sampler
+from positronic.eval_timing import GPU_LOG_FILENAME, TIMING_FILENAME, EpisodeTiming, start_gpu_sampler
 
 logger = logging.getLogger(__name__)
 
@@ -210,13 +210,16 @@ class TimingShim:
         """Bind the pass: create the output dir, start GPU + host sampling, and flush ``timing.jsonl`` on exit.
 
         A retry reusing the same ``--out`` dir must not mix a prior attempt's episode dirs into this
-        pass — the reducer would join stale episodes as if they were fresh — so stale block dirs and
-        ``timing.jsonl`` are cleared up front.
+        pass — the reducer would join stale episodes as if they were fresh, and it auto-reads any
+        ``gpu_dmon.log`` in the dataset dir — so stale block dirs, ``timing.jsonl`` and the GPU log
+        are cleared up front (the GPU log even with sampling off, else a prior GPU pass's samples
+        would be summarised into a CPU pass).
         """
         self._out_dir.mkdir(parents=True, exist_ok=True)
         for stale in self._out_dir.glob('[0-9]' * 12):
             shutil.rmtree(stale)
         (self._out_dir / TIMING_FILENAME).unlink(missing_ok=True)
+        (self._out_dir / GPU_LOG_FILENAME).unlink(missing_ok=True)
         self._records.clear()
         self._next_episode_id = 0
         self.start_gpu()

@@ -119,6 +119,14 @@ def test_dataset_dir_layout_joins_by_uid(tmp_path):
     assert len(recorded_uids) == len(rows)
 
 
+def test_run_clears_stale_gpu_log_with_sampling_off(tmp_path):
+    # The reducer auto-reads any gpu_dmon.log in the dataset dir, so a prior GPU pass's log must not
+    # survive into a fresh sample_gpu=False pass.
+    (tmp_path / GPU_LOG_FILENAME).write_text('stale dmon samples\n')
+    _build_synthetic_run(tmp_path, sample_gpu=False)
+    assert not (tmp_path / GPU_LOG_FILENAME).exists()
+
+
 def test_gpu_sampling_degrades_gracefully(tmp_path):
     _build_synthetic_run(tmp_path, sample_gpu=True)
     gpu_log = tmp_path / GPU_LOG_FILENAME
