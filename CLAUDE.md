@@ -67,6 +67,7 @@
 - Use backticks for code references (e.g., "Fix `RemoteDataset` connection leak")
 - No trailing period for short messages
 - No Claude/AI attribution
+- Never amend commits; always create new commits
 - Never use `--no-gpg-sign` or `--no-verify` — commits must be signed
 
 # Infrastructure
