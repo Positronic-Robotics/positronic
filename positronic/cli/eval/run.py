@@ -118,7 +118,11 @@ def _run_world(
         # every control system in this thread, so the context-bound timer reaches them all. A real eval
         # runs recorder/producers in other processes that never inherit the context.
         if timing and not embodiment.simulated:
-            logger.warning('eval timing requested but embodiment is not simulated; telemetry will be empty')
+            raise ValueError(
+                'eval timing is sim-only: a real embodiment runs the recorder and producers as separate '
+                'processes that do not inherit the timer context, so timing.jsonl would be empty (record_io_s '
+                'silently reads 0). Drop --timing for a real run.'
+            )
         if embodiment.simulated:
             world.run([*foreground, harness, ds_agent, *producers], gui)
         else:
