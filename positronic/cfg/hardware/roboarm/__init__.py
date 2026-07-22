@@ -43,3 +43,10 @@ def so101(motor_bus):
     from positronic.drivers.roboarm.so101.driver import Robot
 
     return Robot(motor_bus=motor_bus)
+
+
+@cfn.config(channel='can0', home_joints=None, sim=False, base_pose=None)
+def yam(channel: str, home_joints: list[float] | None, sim: bool, base_pose):
+    from positronic.drivers.roboarm.yam import Robot
+
+    return Robot(channel, home_joints=home_joints, base_pose=base_pose, sim=sim)
