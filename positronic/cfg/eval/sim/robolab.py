@@ -151,7 +151,7 @@ def _resolve_tasks(task) -> list[str]:
     instruction_type='default',
     trial_count=1,
     timeout=None,
-    camera_res=(1280, 720),
+    camera_res=(320, 240),
     render_viewport=True,
 )
 def _robolab_eval(task, instruction_type, trial_count, timeout, camera_dict, camera_res, render_viewport):
