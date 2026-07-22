@@ -94,6 +94,9 @@ dreamzero = [
 lance = [
     "pylance",
 ]
+yam = [
+    "i2rt",  # i2rt YAM arm: joint-space position-PD + gravity-comp over CAN; not on PyPI, see [tool.uv.sources]
+]
 dev = [
     "ruff",
     "basedpyright",
@@ -112,7 +115,14 @@ dev = [
 [tool.uv]
 # lerobot_0_3_3 extra pulls in lerobot==0.3.3 which declares rerun-sdk<0.23,
 # but our usage of lerobot doesn't need rerun — override to unblock resolution.
-override-dependencies = ["rerun-sdk==0.30.0"]
+# i2rt (yam extra) exact-pins its environment (numpy==2.2.6, click<8.2.0, qpsolvers==4.7.1);
+# relax those to floors so an optional hardware extra doesn't downgrade the whole project.
+override-dependencies = [
+    "rerun-sdk==0.30.0",
+    "numpy>=2.2",
+    "click>=8.1",
+    "qpsolvers[daqp,quadprog]>=4.7",
+]
 # cmake 4.3.1 is missing x86_64 Linux wheels on PyPI.
 # evdev>=1.9 regenerates its C bindings from whatever input-event-codes.h is reachable on the
 # include path, so a newer header leaking in (stale build cache / CPATH) bakes in macros the
@@ -148,6 +158,7 @@ pyzed = [
     { url = "https://download.stereolabs.com/zedsdk/5.0/whl/linux_x86_64/pyzed-5.0-cp313-cp313-linux_x86_64.whl", marker = "python_full_version >= '3.13'" },
 ]
 openpi-client = { git = "https://github.com/Positronic-Robotics/openpi.git", rev = "main-positronic", subdirectory = "packages/openpi-client" }
+i2rt = { git = "https://github.com/i2rt-robotics/i2rt.git", rev = "5d47b358bafb30c65e397f2ece506550a0db4594" }
 
 [tool.pytest.ini_options]
 testpaths = [
