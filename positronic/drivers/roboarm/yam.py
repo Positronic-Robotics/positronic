@@ -24,8 +24,7 @@ try:
 except ImportError:
     # i2rt is an optional extra (`pip install "positronic[yam]"`); fake and kinematics-only paths must import
     # without it, so degrade to None here and raise from ``_connect`` only when a real arm is requested.
-    get_yam_robot = None
-    GripperType = None
+    get_yam_robot = GripperType = None
 
 import pimm
 from positronic import geom
@@ -60,7 +59,7 @@ def _reach_postures(x: float, y: float) -> list[np.ndarray]:
 
 def _connect(channel: str, sim: bool):
     """Open the i2rt chain in position-PD mode; ``sim=True`` runs i2rt's own MuJoCo sim instead of hardware."""
-    if get_yam_robot is None:
+    if get_yam_robot is None or GripperType is None:
         raise ImportError('YAM support is not installed. Install the yam extra:\n  pip install "positronic[yam]"\n')
     return get_yam_robot(channel, gripper_type=GripperType.LINEAR_4310, zero_gravity_mode=False, sim=sim)
 
@@ -73,7 +72,7 @@ class YamState(State, pimm.shared_memory.NumpySMAdapter):
     TOTAL = STATUS_OFFSET + 1
 
     def __init__(self):
-        super().__init__(shape=(YamState.TOTAL,), dtype=np.float32)
+        super().__init__(shape=(YamState.TOTAL,), dtype=np.dtype(np.float32))
 
     def instantiation_params(self) -> tuple[Any, ...]:
         return ()
@@ -347,7 +346,7 @@ if __name__ == '__main__':
 
         kin = _Kinematics()
 
-        if args.fake:
+        if fake is not None:
             # State round-trip: the homed chain comes back through the driver's FK.
             assert np.allclose(state.value.q, HOME_Q, atol=1e-3), state.value.q
             home_err = np.linalg.norm(state.value.ee_pose.translation - kin.fk(HOME_Q).translation)
@@ -356,6 +355,7 @@ if __name__ == '__main__':
             # Grip round-trip: polarity inverted on the way out (command) and on the way back (observation).
             target_grip.emit(0.8)
             pump(0.5)
+            assert fake.last_command is not None
             assert abs(fake.last_command[6] - 0.2) < 1e-6, fake.last_command  # positronic 0.8 closed -> chain 0.2
             assert abs(grip.value - 0.8) < 0.02, grip.value
             target_grip.emit(0.0)
@@ -368,7 +368,7 @@ if __name__ == '__main__':
         reach_q = np.array([0.0, 1.2, 1.2, 0.0, 0.6, 0.0])
         commands.emit(command.JointPosition(reach_q))
         pump(0.5)
-        if args.fake:
+        if fake is not None:
             assert np.allclose(state.value.q, reach_q, atol=0.02), state.value.q
 
         center = geom.Transform3D(np.array([0.30, 0.05, 0.20]), state.value.ee_pose.rotation)
@@ -384,7 +384,7 @@ if __name__ == '__main__':
             pump(0.7)
             reached = np.linalg.norm(state.value.ee_pose.translation - target.translation)
             print(f'Moved to {target.translation}, error {reached * 1000:.2f} mm')
-            if args.fake:
+            if fake is not None:
                 assert reached < 5e-3, reached
 
         print('YAM driver smoke passed')
