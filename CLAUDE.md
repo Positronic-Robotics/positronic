@@ -25,6 +25,12 @@
   mutators, parallel flags) must not survive the refactor
 - Every value has one owner. When a value gains a new home, re-route consumers to it; don't plumb the new source
   into the old parameter
+- Persist through the existing dataset (signals, static, meta) for anything that fits it — per-step telemetry is a
+  time-series signal, per-episode facts are static/meta, and aggregates are an offline reduce/transform over that
+  raw data, never a stored record. Do not add a side storage or IO channel (a parallel file, a `*.jsonl`, a
+  separate serializer) unless the need fundamentally cannot be served by the dataset. A side channel that
+  duplicates what a reducer could recompute from recorded raw data is a storage-model change to reject up front,
+  not merge and revert later
 - When current code conflicts with the target design, resolve it now (rename + migrate) or bridge loudly with a
   TODO/HACK comment. Never bridge silently with an extra field, class, or indirection
 - Internal code breaks cleanly — no speculative compat shims. Before a migrate-everywhere change, grep for
