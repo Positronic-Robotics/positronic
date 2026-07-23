@@ -1,8 +1,44 @@
 # Architecture invariants
 
 Every integration in Positronic — a simulator, a model stack, a scene catalog, a scoring method, a
-real rig — is shaped by two invariants. They are not conventions of individual modules; they define
-what an integration is allowed to look like.
+real rig — is shaped by the invariants below. They are not conventions of individual modules; they
+define what an integration is allowed to look like.
+
+## Principles
+
+The invariants follow from five principles. When a new case is not settled by the invariants, decide
+it from these.
+
+**Everything must be recoverable from the recording.** The only irreversible cost is the physical
+rollout and what was captured of it. Scores, action spaces, control frames, thresholds, metrics and
+vendor formats are projections — re-derivable offline from a complete recording. So capture raw and
+complete, and defer every choice a projection can express. Care belongs on the expensive layer
+(protocol, capture completeness, event ontology), not on the cheap one.
+
+**Bind late.** The party that owns a requirement declares it; the run does not fix it in advance. A
+policy trained in another end-effector frame declares that frame; a policy needing a different
+controller declares its control mode; a trial carries its own instruction and done predicate.
+Binding these per session collapses the comparison — two policies wanting different execution can no
+longer be interleaved in one A/B session, which is what evaluation exists to do.
+
+**Whatever varies travels as data, not as ambient state.** Time enters the pipeline as an
+observation field; control mode is a declared channel with a rig default; hardware identity is a
+`meta` port every driver emits. Nothing that varies is read from a global, a constructor argument,
+or a config the run captured once. This is what makes the two principles above mechanical rather
+than aspirational: a value that flows through a channel is recordable, substitutable and replayable
+by construction — a virtual clock, a different controller, a replayed episode all come for free.
+
+**One specification, both directions.** A transformation between our data and a model's world is
+defined once and drives both training and inference. Two implementations of one contract diverge,
+and the divergence stays invisible until the robot performs badly. A `Codec` owns `encode`/`decode`
+and its training encoder in one object for exactly this reason; the rule generalizes to any contract
+with both a training-time and a runtime side.
+
+**Guarantees are structural, not conventional.** What must not cross a boundary must be unable to
+cross it. The policy does not see the seed, the task id or the rig's frame convention because those
+keys are dropped at the wire — not because every codec is trusted to ignore them. A guarantee held
+up by agreement is not one, and for an evaluation "we do not look at it" is not a claim an outsider
+can check.
 
 ## Positronic owns the control loop
 
