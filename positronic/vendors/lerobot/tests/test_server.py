@@ -3,27 +3,12 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from fastapi import WebSocketDisconnect
 
+from positronic.policy.spec import remote
 from positronic.utils.serialization import deserialise
 
 pytest.importorskip('torch')
 
 from positronic.vendors.lerobot import server as lerobot_server  # noqa: E402
-
-
-class _PassthroughEncoder:
-    def encode(self, obs):
-        return obs
-
-
-class _PassthroughDecoder:
-    def decode(self, action, obs=None):
-        return action
-
-
-class _PassthroughCodec:
-    def __init__(self):
-        self.observation = _PassthroughEncoder()
-        self.action = _PassthroughDecoder()
 
 
 class _DummyWebSocket:
@@ -50,9 +35,7 @@ class _DummyWebSocket:
 async def test_lerobot_server_uses_configured_checkpoint(monkeypatch):
     monkeypatch.setattr('positronic.offboard.vendor_server.list_checkpoints', lambda _path: ['42'])
 
-    server = lerobot_server.InferenceServer(
-        codec=_PassthroughCodec(), checkpoints_dir='s3://bucket/exp', checkpoint='42'
-    )
+    server = lerobot_server.InferenceServer(pipeline=remote, checkpoints_dir='s3://bucket/exp', checkpoint='42')
 
     requested = {}
 
@@ -76,9 +59,7 @@ async def test_lerobot_server_uses_configured_checkpoint(monkeypatch):
 async def test_lerobot_server_reports_missing_checkpoint(monkeypatch):
     monkeypatch.setattr('positronic.offboard.vendor_server.list_checkpoints', lambda _path: ['41'])
 
-    server = lerobot_server.InferenceServer(
-        codec=_PassthroughCodec(), checkpoints_dir='s3://bucket/exp', checkpoint='42'
-    )
+    server = lerobot_server.InferenceServer(pipeline=remote, checkpoints_dir='s3://bucket/exp', checkpoint='42')
     server.policy_manager.get_policy = AsyncMock()
     server.policy_manager.release_session = AsyncMock()
 
@@ -99,9 +80,7 @@ async def test_lerobot_server_reports_missing_checkpoint(monkeypatch):
 async def test_lerobot_server_reports_unknown_checkpoint_id(monkeypatch):
     monkeypatch.setattr('positronic.offboard.vendor_server.list_checkpoints', lambda _path: ['41'])
 
-    server = lerobot_server.InferenceServer(
-        codec=_PassthroughCodec(), checkpoints_dir='s3://bucket/exp', checkpoint=None
-    )
+    server = lerobot_server.InferenceServer(pipeline=remote, checkpoints_dir='s3://bucket/exp', checkpoint=None)
     server.policy_manager.get_policy = AsyncMock()
     server.policy_manager.release_session = AsyncMock()
 
