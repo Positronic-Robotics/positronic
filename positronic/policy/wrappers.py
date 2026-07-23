@@ -31,12 +31,18 @@ class ChunkedSchedule(PolicyWrapper):
     class _Session(DelegatingSession):
         """Skips inner calls while the current trajectory plays; stamps absolute on emit."""
 
-        def __init__(self, inner: Session, now: Now):
+        def __init__(self, inner: Session, now: Now | None):
             super().__init__(inner)
             self._now = now
             self._trajectory_end: float | None = None
 
         def __call__(self, obs):
+            if self._now is None:
+                raise ValueError(
+                    'ChunkedSchedule needs a clock to run inference: pass now (a callable returning seconds) to '
+                    'new_session. The harness supplies it; a direct RemotePolicy.new_session() outside the harness '
+                    'must too.'
+                )
             if self._trajectory_end is not None and self._now() < self._trajectory_end:
                 return None
             result = self._inner(obs)
@@ -57,7 +63,7 @@ class ChunkedSchedule(PolicyWrapper):
             self._trajectory_end = None
             super().cancel()
 
-    def wrap_session(self, inner: Session, context, now: Now):
+    def wrap_session(self, inner: Session, context, now: Now | None):
         return ChunkedSchedule._Session(inner, now)
 
     def to_spec(self):

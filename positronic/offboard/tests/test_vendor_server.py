@@ -3,6 +3,7 @@ import socket
 import threading
 import time
 from collections.abc import Generator
+from typing import TypeVar
 from unittest.mock import MagicMock
 
 import pytest
@@ -50,7 +51,10 @@ class _StubVendorServer(VendorServer):
         self.warmup_called = True
 
 
-def _start_server(server: VendorServer) -> tuple[str, int, _StubVendorServer]:
+_S = TypeVar('_S', bound=VendorServer)
+
+
+def _start_server(server: _S) -> tuple[str, int, _S]:
     async def _run():
         await server._startup()
         config = uvicorn.Config(server.app, host=server.host, port=server.port, log_level='warning')

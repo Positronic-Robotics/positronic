@@ -64,6 +64,7 @@ class PolicyManager:
                 self.current_policy = await asyncio.to_thread(self.loader, checkpoint_id)
                 self.current_checkpoint_id = checkpoint_id
 
+            assert self.current_policy is not None
             if websocket:
                 self.active_sessions += 1
             return self.current_policy
@@ -251,6 +252,7 @@ class VendorServer(ABC):
                 session = await asyncio.to_thread(policy.new_session)
             finally:
                 self._infer_lock.release()
+            assert session is not None
             # ``policy.meta`` is the static baseline; ``session.meta`` overlays per-episode
             # specifics and wins on conflict. The local-stack declaration and the server's
             # positronic version are server-authoritative, so they merge last.
@@ -308,6 +310,7 @@ class VendorServer(ABC):
         await self.warmup(policy)
 
     async def _idle_watchdog(self, server: uvicorn.Server):
+        assert self.idle_timeout_min is not None
         timeout_s = self.idle_timeout_min * 60
         poll = min(timeout_s, 30)
         while not server.should_exit:
