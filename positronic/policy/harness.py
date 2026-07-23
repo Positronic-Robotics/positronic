@@ -70,7 +70,7 @@ class Harness(pimm.ControlSystem):
 
     The scheduling wrapper (``ChunkedSchedule``, or a swap-in like RTC) anchors the chunk's
     relative timestamps to absolute time, reading the clock the harness passes to ``new_session``.
-    The policy owns its wrapper stack (declared by the server or composed in its definition); the
+    The policy owns its wrapper stack (declared by the server or composed in its pipeline); the
     harness runs the policy it is given.
     """
 

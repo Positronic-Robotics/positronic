@@ -187,7 +187,7 @@ class InferenceServer(VendorServer):
 
     def __init__(
         self,
-        definition: PolicyWrapper,
+        pipeline: PolicyWrapper,
         checkpoints_dir: str | Path,
         config_name: str = 'pi05_positronic_lowmem',
         checkpoint: str | None = None,
@@ -199,7 +199,7 @@ class InferenceServer(VendorServer):
         idle_timeout_min: float | None = None,
     ):
         super().__init__(
-            definition=definition, host=host, port=port, recording_dir=recording_dir, idle_timeout_min=idle_timeout_min
+            pipeline=pipeline, host=host, port=port, recording_dir=recording_dir, idle_timeout_min=idle_timeout_min
         )
         self.checkpoints_dir = str(checkpoints_dir).rstrip('/')
         self.config_name = config_name
@@ -299,7 +299,7 @@ class InferenceServer(VendorServer):
 
 
 @cfn.config(
-    definition=cfg_codecs.definition.override(codec=codecs.ee),
+    pipeline=cfg_codecs.pipeline.override(codec=codecs.ee),
     checkpoints_dir='',
     config_name='pi05_positronic_lowmem',
     checkpoint=None,
@@ -310,7 +310,7 @@ class InferenceServer(VendorServer):
     idle_timeout_min=None,
 )
 def server(
-    definition: PolicyWrapper,
+    pipeline: PolicyWrapper,
     checkpoints_dir: str,
     config_name: str,
     checkpoint: str | None,
@@ -323,7 +323,7 @@ def server(
     """OpenPI inference server.
 
     Args:
-        definition: The policy definition (local | remote | codec). Its server-side codec:
+        pipeline: The policy pipeline (local | remote | codec). Its server-side codec:
             - @positronic.vendors.openpi.codecs.ee (default, EE pose + grip)
             - @positronic.vendors.openpi.codecs.ee_joints (EE pose + grip + joints)
             - @positronic.vendors.openpi.codecs.droid (for pretrained DROID models)
@@ -336,7 +336,7 @@ def server(
         recording_dir: Directory for recording .rrd files (optional, supports S3 paths).
     """
     InferenceServer(
-        definition=definition,
+        pipeline=pipeline,
         checkpoints_dir=checkpoints_dir,
         config_name=config_name,
         checkpoint=checkpoint,
@@ -356,24 +356,24 @@ phail = server.override(
 sim_stack = server.override(
     checkpoints_dir='s3://checkpoints/sim_stack/openpi/ee/pi05_positronic_lowmem/230226/',
     recording_dir='s3://inference/sim_stack/server_recordings/openpi/230226/',
-    **{'definition.codec.flip_grip': True},
+    **{'pipeline.codec.flip_grip': True},
 )
 droid = server.override(
     config_name='pi05_droid',
     checkpoints_dir='s3://PUBLIC@positronic-public/checkpoints/openpi/pi05_droid/',
-    **{'definition.codec': codecs.droid},
+    **{'pipeline.codec': codecs.droid},
 )
 # The RoboLab leaderboard policy: openpi's DROID jointpos model, served from the checkpoint their
 # ``policies/pi0_family/README.md`` recipe pins (pass-through mode — openpi fetches gs:// itself).
 droid_jointpos = server.override(
     config_name='pi05_droid_jointpos',
     checkpoints_dir='gs://openpi-assets-simeval/pi05_droid_jointpos',
-    **{'definition.codec': codecs.droid_jointpos},
+    **{'pipeline.codec': codecs.droid_jointpos},
 )
 libero = server.override(
     config_name='pi05_libero',
     checkpoints_dir='gs://openpi-assets/checkpoints/pi05_libero',
-    **{'definition.codec': codecs.libero},
+    **{'pipeline.codec': codecs.libero},
 )
 
 

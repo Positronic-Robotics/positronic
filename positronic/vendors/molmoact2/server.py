@@ -22,7 +22,7 @@ class InferenceServer(VendorServer):
 
     def __init__(
         self,
-        definition: PolicyWrapper,
+        pipeline: PolicyWrapper,
         hf_repo: str = DEFAULT_HF_REPO,
         *,
         device_map: str = 'auto',
@@ -34,7 +34,7 @@ class InferenceServer(VendorServer):
         idle_timeout_min: float | None = None,
     ):
         super().__init__(
-            definition=definition, host=host, port=port, recording_dir=recording_dir, idle_timeout_min=idle_timeout_min
+            pipeline=pipeline, host=host, port=port, recording_dir=recording_dir, idle_timeout_min=idle_timeout_min
         )
         self.hf_repo = hf_repo
         # Clients echo the advertised id onto the single-segment session route
@@ -76,7 +76,7 @@ class InferenceServer(VendorServer):
 
 
 @cfn.config(
-    definition=cfg_codecs.definition.override(codec=molmoact2_codecs.droid),
+    pipeline=cfg_codecs.pipeline.override(codec=molmoact2_codecs.droid),
     hf_repo=DEFAULT_HF_REPO,
     device_map='auto',
     norm_tag='franka_droid',
@@ -87,7 +87,7 @@ class InferenceServer(VendorServer):
     idle_timeout_min=None,
 )
 def server(
-    definition: PolicyWrapper,
+    pipeline: PolicyWrapper,
     hf_repo: str,
     device_map: str,
     norm_tag: str,
@@ -99,7 +99,7 @@ def server(
 ):
     """Starts the in-process MolmoAct2 inference server."""
     InferenceServer(
-        definition=definition,
+        pipeline=pipeline,
         hf_repo=hf_repo,
         device_map=device_map,
         norm_tag=norm_tag,

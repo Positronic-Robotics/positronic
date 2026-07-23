@@ -23,8 +23,8 @@ def find_free_port() -> int:
 
 
 class _StubVendorServer(VendorServer):
-    def __init__(self, definition=remote, policy=None, **kwargs):
-        super().__init__(definition=definition, **kwargs)
+    def __init__(self, pipeline=remote, policy=None, **kwargs):
+        super().__init__(pipeline=pipeline, **kwargs)
         self.mock_session = MagicMock()
         self.mock_session.return_value = [{'action': [1, 2, 3]}]
         self.mock_session.meta = {'model_name': 'stub'}
@@ -125,7 +125,7 @@ class _LatestTrackingServer(VendorServer):
     returns the current latest, mirroring real vendor servers."""
 
     def __init__(self, **kwargs):
-        super().__init__(definition=remote, **kwargs)
+        super().__init__(pipeline=remote, **kwargs)
         self.latest = '100'
         self.mock_session = MagicMock()
         self.mock_session.return_value = [{'action': [1, 2, 3]}]
@@ -183,8 +183,8 @@ class _IdentityCodec(Codec):
 
 @pytest.fixture
 def codec_server() -> Generator[tuple[str, int, _StubVendorServer], None, None]:
-    definition = remote | _IdentityCodec()
-    yield _start_server(_StubVendorServer(definition=definition, host='localhost', port=find_free_port()))
+    pipeline = remote | _IdentityCodec()
+    yield _start_server(_StubVendorServer(pipeline=pipeline, host='localhost', port=find_free_port()))
 
 
 def test_codec_wrapping(codec_server):
@@ -201,8 +201,8 @@ def test_codec_wrapping(codec_server):
 
 @pytest.fixture
 def declaring_server() -> Generator[tuple[str, int, _StubVendorServer], None, None]:
-    definition = ChunkedSchedule() | remote | _IdentityCodec()
-    yield _start_server(_StubVendorServer(definition=definition, host='localhost', port=find_free_port()))
+    pipeline = ChunkedSchedule() | remote | _IdentityCodec()
+    yield _start_server(_StubVendorServer(pipeline=pipeline, host='localhost', port=find_free_port()))
 
 
 def test_local_stack_declared_in_handshake(declaring_server):
@@ -227,21 +227,19 @@ class _ScriptedPolicy(Policy):
         return _ScriptedSession()
 
 
-def test_in_process_equals_remote_for_same_definition():
-    """The same definition must behave identically served in-process and over the wire."""
+def test_in_process_equals_remote_for_same_pipeline():
+    """The same pipeline must behave identically served in-process and over the wire."""
 
-    def definition():
+    def pipeline():
         return ChunkedSchedule() | remote | ActionTimestamp(fps=10.0)
 
     clock = [100.0]
 
-    served = _StubVendorServer(
-        definition=definition(), policy=_ScriptedPolicy(), host='localhost', port=find_free_port()
-    )
+    served = _StubVendorServer(pipeline=pipeline(), policy=_ScriptedPolicy(), host='localhost', port=find_free_port())
     host, port, _ = _start_server(served)
     remote_session = RemotePolicy(host, port).new_session(now=lambda: clock[0])
 
-    local = inline(definition())
+    local = inline(pipeline())
     assert local is not None
     local_session = local.wrap(_ScriptedPolicy()).new_session(now=lambda: clock[0])
 

@@ -26,7 +26,7 @@ def _frame_offsets_sec(history_frames: int, stride: int, fps: float) -> tuple[fl
 
 @cfn.config(keys=('image.wrist', 'image.exterior', 'robot_state.ee_pose', 'grip'), fps=15.0, pad_start=True)
 def video_context_wrappers(history_frames: int, stride: int, keys: tuple[str, ...], fps: float, pad_start: bool):
-    """The definition's local half for video-conditioned policies: strided temporal context, scheduling.
+    """The pipeline's local half for video-conditioned policies: strided temporal context, scheduling.
 
     The temporal stack sits outside the scheduler so it records the named ``keys`` every control tick and
     substitutes a stack sampled per ``history_frames``/``stride``; pair it with a codec whose ``horizon``

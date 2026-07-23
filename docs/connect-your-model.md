@@ -87,7 +87,7 @@ Four small concepts make up the API. You meet them whether you use a built-in se
 
 **Codec.** Different models want different inputs: end-effector pose vs joint angles, absolute targets vs deltas, 224×224 vs 512×512 images. A `Codec` translates between the robot's raw data (what is on the wire) and your model's format — `encode` on the way in, `decode` on the way out. The same codec prepares the training data, so a model is served exactly the way it was trained. The full catalog is in the [Codecs Guide](codecs.md).
 
-**Wrapper.** A `PolicyWrapper` is the swappable client-side logic from the previous section — scheduling, error recovery, recording. Wrappers compose with `|` and wrap a policy, so you can change *how* latency is handled without touching the model. A policy definition names its wrappers together with its codec as one pipeline split by the `remote` marker (`local | remote | codec`, see `positronic.policy.spec`); the server declares the local half in its handshake and the client builds it, so both halves ship as one definition.
+**Wrapper.** A `PolicyWrapper` is the swappable client-side logic from the previous section — scheduling, error recovery, recording. Wrappers compose with `|` and wrap a policy, so you can change *how* latency is handled without touching the model. A policy pipeline names the wrappers together with the codec as one chain split by the `remote` marker (`local | remote | codec`, see `positronic.policy.spec`); the server declares the local half in its handshake and the client builds it, so both halves ship as one pipeline.
 
 ## The wire format
 
@@ -183,7 +183,7 @@ class MyPolicy(Policy):
     def __init__(self, model):
         self._model = model
 
-    def new_session(self, context=None):
+    def new_session(self, context=None, now=None):
         return MySession(self._model)  # per-episode setup goes here
 
     @property
@@ -198,6 +198,8 @@ InferenceServer(
 ).serve()
 ```
 
+`new_session`'s `now` argument is the runtime clock that wrappers scheduling against live time read; a policy that does no scheduling of its own just accepts and ignores it (server-side it is `None`).
+
 If you give your `Policy` a `Codec` (via `codec.wrap(policy)`), your session works entirely in *model space* — it receives encoded observations and returns model-native actions, and the codec handles the wire format. Test the server with the same client as the demo:
 
 ```bash
@@ -206,7 +208,7 @@ uv run positronic-inference sim --policy=.remote --policy.host=localhost --polic
 
 ### Slow-loading or subprocess models
 
-The built-in OpenPI and GR00T servers don't use `InferenceServer` — checkpoints take minutes to download or run as a separate process. They subclass `VendorServer` (`positronic/offboard/vendor_server.py`), which streams `{"status": "loading", ...}` messages so the handshake doesn't time out, owns the policy definition (running its remote half and declaring its local half), and handles multi-model switching, the `recording_dir` taps above, and idle shutdown. Subclasses implement `resolve_model()`, `create_policy()`, and `get_models()`; see `positronic/vendors/openpi/server.py` and `positronic/vendors/gr00t/server.py`.
+The built-in OpenPI and GR00T servers don't use `InferenceServer` — checkpoints take minutes to download or run as a separate process. They subclass `VendorServer` (`positronic/offboard/vendor_server.py`), which streams `{"status": "loading", ...}` messages so the handshake doesn't time out, owns the policy pipeline (running its remote half and declaring its local half), and handles multi-model switching, the `recording_dir` taps above, and idle shutdown. Subclasses implement `resolve_model()`, `create_policy()`, and `get_models()`; see `positronic/vendors/openpi/server.py` and `positronic/vendors/gr00t/server.py`.
 
 ### Serialization
 
