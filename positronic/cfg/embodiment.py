@@ -72,9 +72,9 @@ def yam(robot_arm, cameras):
     left_channel='can0',
     right_channel='can1',
     cameras={
-        'image.exterior': positronic.cfg.hardware.camera.zed_x_top,
-        'image.wrist_left': positronic.cfg.hardware.camera.zed_x_one_left,
-        'image.wrist_right': positronic.cfg.hardware.camera.zed_x_one_right,
+        'image.exterior': positronic.cfg.hardware.camera.zed_x_top.override(resolution='svga', fps=30),
+        'image.wrist_left': positronic.cfg.hardware.camera.zed_x_one_left.override(resolution='svga', fps=30),
+        'image.wrist_right': positronic.cfg.hardware.camera.zed_x_one_right.override(resolution='svga', fps=30),
     },
 )
 def yam_bimanual(left_channel: str, right_channel: str, cameras):
