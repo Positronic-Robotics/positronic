@@ -174,6 +174,20 @@ def _episode_timing(ep: Episode, uid: str) -> _EpisodeTiming | None:
     )
 
 
+def _rollout_duration_s(ep: Episode) -> float:
+    """The episode's virtual duration over its rollout content alone.
+
+    ``Episode.duration_ns`` spans the window where every signal has data, and each ``timing.*`` telemetry
+    signal starts at its phase's first nonzero sample — one tick or more into the rollout — which would pull
+    the window's start later and shorten the duration the real-time factor divides by.
+    """
+    signals = ep.signals
+    content = [sig for name, sig in signals.items() if not name.startswith(f'{STEP_SIGNAL_PREFIX}.')]
+    if not content or len(content) == len(signals):
+        return ep.duration_ns / 1e9
+    return (max(sig.last_ts for sig in content) - max(sig.start_ts for sig in content)) / 1e9
+
+
 def _load_episodes(dataset_dir: Path) -> tuple[list[_EpisodeTiming], dict[str, _RecordedFacts]]:
     """One pass over the recorded episodes: the per-rollout timing records (only those carrying timing) and
     the recorded facts (duration/size/success) every episode contributes to the join, keyed by uid."""
@@ -190,7 +204,7 @@ def _load_episodes(dataset_dir: Path) -> tuple[list[_EpisodeTiming], dict[str, _
         verdict = ep.static.get('eval.success')
         terminated = ep.static.get('eval.terminated')
         facts[uid] = _RecordedFacts(
-            duration_s=ep.duration_ns / 1e9,
+            duration_s=_rollout_duration_s(ep),
             size_mb=float(ep.meta.get('size_mb', 0.0)),
             success=None if verdict is None else bool(verdict),
             terminated=None if terminated is None else bool(terminated),
