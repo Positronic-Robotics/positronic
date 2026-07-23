@@ -119,7 +119,10 @@ class MolmoSpacesEnv(EnvProtocol):
         self._task = self._sampler.sample_task(house_index=episode.house_index)
         self._robot_view = self._task.env.current_robot.robot_view
         self._control_dt = cfg.policy_dt_ms / 1000.0
-        self._meta = {'task': self._task.get_task_description(), 'house_index': episode.house_index}
+        # The authoritative benchmark prompt, straight from the episode spec — not
+        # ``task.get_task_description()``, which upstream reconstructs per task type (e.g. OpeningTask emits
+        # "Open the ..." even for a close episode), so a reconstruction could diverge from the benchmark goal.
+        self._meta = {'task': episode.language.task_description, 'house_index': episode.house_index}
 
     def reset(self, token: dict[str, Any]) -> dict[str, Any]:
         self._build(token['episode_index'], token.get('seed'))
