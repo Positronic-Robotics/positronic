@@ -1,6 +1,11 @@
 from collections.abc import Iterator
 
-import dearpygui.dearpygui as dpg
+try:
+    import dearpygui.dearpygui as dpg
+except ImportError:
+    # dearpygui ships no aarch64 wheels; importing this module must not fail on such hosts, where the
+    # headless drivers (web, keyboard) never construct the UI. Construction raises instead.
+    dpg = None
 import numpy as np
 
 import pimm
@@ -15,6 +20,8 @@ def _get_down_keys() -> list[int]:
 
 class DearpyguiUi(pimm.ControlSystem):
     def __init__(self):
+        if dpg is None:
+            raise ImportError('dearpygui is not installed')
         self.cameras = pimm.ReceiverDict(self, default=None)
         self.im_sizes = {}
         self.info = pimm.ControlSystemReceiver(self, default='')
