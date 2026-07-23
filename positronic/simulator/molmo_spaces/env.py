@@ -1,9 +1,9 @@
 """MolmoSpaces — AllenAI's MuJoCo manipulation benchmark — behind the env-server protocol.
 
-MolmoSpaces pins ``mujoco ~=3.5`` + its asset stack into its own uv project on Python 3.11, so this never shares
-positronic's venv: the launcher runs ``uv run --project <molmospaces clone> env.py --host ... --port ...`` with the
-positronic-free ``server``/``protocol`` and this package's ``mapping`` module on ``PYTHONPATH``. It imports only
-``molmo_spaces`` (+ mujoco/numpy) and those, never ``positronic``.
+MolmoSpaces pins ``mujoco ~=3.5`` + its asset stack on Python 3.11, so this never shares positronic's venv: the
+launcher runs it with the molmospaces ``.venv``'s python (``env.py --host ... --port ... --benchmark_dir ...``),
+with the positronic-free ``server``/``protocol`` and this package's ``mapping`` module on ``PYTHONPATH``. It
+imports only ``molmo_spaces`` (+ mujoco/numpy) and those, never ``positronic``.
 
 positronic owns the control loop: this server drives a single MolmoSpaces ``BaseMujocoTask`` per episode directly
 (``JsonEvalTaskSampler.sample_task`` builds the full sim/scene/renderer; ``reset``/``step``/``is_done``/
@@ -34,6 +34,7 @@ import mujoco  # noqa: E402
 import numpy as np  # noqa: E402
 from server import EnvProtocol, EnvServer  # noqa: E402
 
+import molmo_spaces.evaluation.json_eval_runner  # noqa: E402, F401 -- load first: breaks a circular import that importing json_eval_task_sampler directly hits
 from molmo_spaces.configs.policy_configs import DummyPolicyConfig  # noqa: E402
 from molmo_spaces.configs.robot_configs import ActionNoiseConfig, FrankaRobotConfig  # noqa: E402
 from molmo_spaces.evaluation.benchmark_schema import load_all_episodes  # noqa: E402
