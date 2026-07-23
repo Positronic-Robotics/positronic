@@ -68,6 +68,11 @@ def _molmo_eval(
     # MolmoSpaces drives a Franka DROID rig; recordings carry the same model (URDF + meshes + joint names +
     # control frame) for the 3D viewer and offline IK, supplied here since the molmo server can't import
     # positronic to emit it via ``robot_meta``.
+    # HACK: ``bundled_franka_model``'s control frame is the physical FR3 flange, but ``env.py`` reports
+    # ``robot_state.ee_pose`` at MolmoSpaces' gripper grasp site, so recorded episodes mislabel the pose frame
+    # by the flange↔grasp offset and offline IK over them would solve the wrong target — the same known issue as
+    # robolab (https://github.com/Positronic-Robotics/positronic/issues/483). It does not affect the eval: the
+    # pi05 DROID policy is driven by joint commands, not the eef pose. A grasp-site DROID model would fix both.
     embodiment = remote_franka_embodiment(
         proxy, camera_dict, descriptor='remote.molmo_spaces.droid', static_meta=bundled_franka_model()
     )
