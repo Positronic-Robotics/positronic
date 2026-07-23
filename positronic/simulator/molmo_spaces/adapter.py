@@ -23,7 +23,7 @@ _CAMERA_VARIANTS = {
 
 
 class MolmoAdapter(WireCommandAdapter):
-    def __init__(self, camera_dict: dict[str, str]):
+    def __init__(self, camera_dict: dict[str, str]) -> None:
         super().__init__()
         self._camera_dict = camera_dict  # logical observation name -> the MolmoSpaces obs camera key
 

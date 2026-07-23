@@ -91,7 +91,7 @@ class MolmoSpacesEnv(EnvProtocol):
     and reports MolmoSpaces' ``is_done``/``judge_success``.
     """
 
-    def __init__(self, benchmark_dir: str):
+    def __init__(self, benchmark_dir: str) -> None:
         self._episodes = load_all_episodes(Path(benchmark_dir))
         self._sampler = None
         self._task = None
