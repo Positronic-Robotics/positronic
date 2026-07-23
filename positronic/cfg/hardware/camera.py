@@ -32,6 +32,11 @@ def zed(**kwargs):
 zed_m = zed.override(serial_number=17521925)
 zed_2i = zed.override(serial_number=39567055)
 
+# YAM station (brunello): ZED X overhead + two ZED X One wrist cameras on the ZED Link Duo.
+zed_x_top = zed.override(serial_number=48953814)
+zed_x_one_left = zed.override(serial_number=309745677, mono=True)
+zed_x_one_right = zed.override(serial_number=303714482, mono=True)
+
 
 @cfn.config()
 def luxonis(**kwargs):
