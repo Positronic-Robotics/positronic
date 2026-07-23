@@ -20,7 +20,13 @@ class VideoSignalWriter(SignalWriter[np.ndarray]):
     """
 
     def __init__(
-        self, video_path: Path, frames_index_path: Path, codec: str = 'h264', gop_size: int = 30, fps: int = 100
+        self,
+        video_path: Path,
+        frames_index_path: Path,
+        codec: str = 'h264',
+        gop_size: int = 30,
+        fps: int = 100,
+        codec_options: dict[str, str] | None = None,
     ):
         """Initialize VideoSignalWriter.
 
@@ -30,12 +36,15 @@ class VideoSignalWriter(SignalWriter[np.ndarray]):
             codec: Video codec to use (default: 'h264')
             gop_size: Group of Pictures size - distance between keyframes (default: 30)
             fps: Frame rate for encoding (default: 30)
+            codec_options: Encoder options. The default trades ~2x bitrate for ~2.5x faster encoding
+                (x264's medium preset caps a live recorder well below camera rate on weak CPUs).
         """
         self.video_path = video_path
         self.frames_index_path = frames_index_path
         self.codec = codec
         self.gop_size = gop_size
         self.fps = fps
+        self.codec_options = {'preset': 'ultrafast', 'tune': 'zerolatency'} if codec_options is None else codec_options
 
         self._finished = False
         self._aborted = False
@@ -60,7 +69,7 @@ class VideoSignalWriter(SignalWriter[np.ndarray]):
         self._height, self._width = first_frame.shape[:2]
 
         self._container = av.open(str(self.video_path), mode='w')
-        self._stream = self._container.add_stream(self.codec, rate=self.fps)
+        self._stream = self._container.add_stream(self.codec, rate=self.fps, options=self.codec_options)
         self._stream.width = self._width
         self._stream.height = self._height
         self._stream.pix_fmt = 'yuv420p'
