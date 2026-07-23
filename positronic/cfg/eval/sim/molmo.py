@@ -32,7 +32,14 @@ def _episode_count(benchmark_dir: str) -> int:
     timeout=60.0,
     seed=None,
 )
-def _molmo_eval(benchmark_dir, episodes, trial_count, timeout, camera_dict, seed):
+def _molmo_eval(
+    benchmark_dir: str | None,
+    episodes: int | list[int] | None,
+    trial_count: int,
+    timeout: float,
+    camera_dict: dict[str, str],
+    seed: int | None,
+) -> Eval:
     """A MolmoSpaces eval: the embodiment proxies a remote MolmoSpaces env, the task carries the scenario.
 
     MolmoSpaces (https://github.com/allenai/molmospaces) is AllenAI's MuJoCo manipulation benchmark on the DROID
