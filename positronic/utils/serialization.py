@@ -113,7 +113,12 @@ def _unpack(obj):
     return obj
 
 
-serialise = functools.partial(msgpack.packb, default=_pack)
+def serialise(obj: Any) -> bytes:
+    packed = msgpack.packb(obj, default=_pack)
+    assert packed is not None
+    return packed
+
+
 deserialise = functools.partial(msgpack.unpackb, object_hook=_unpack)
 
 # Aliases for consistency

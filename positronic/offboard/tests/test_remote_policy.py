@@ -104,7 +104,7 @@ class TestInferenceClientHeaders:
         assert client.headers == headers
         # Defensive copy — mutating the caller's dict must not affect the client.
         headers['Modal-Key'] = 'mutated'
-        assert client.headers['Modal-Key'] == 'k'
+        assert client.headers is not None and client.headers['Modal-Key'] == 'k'
 
     def test_secure_switches_scheme_and_omits_default_port(self):
         client = InferenceClient('example.com', 443, secure=True)
@@ -169,13 +169,17 @@ class TestRemotePolicyHeaderPropagation:
     def test_headers_and_secure_forwarded_to_client(self):
         headers = {'Modal-Key': 'k'}
         policy = RemotePolicy('example.com', 443, headers=headers, secure=True)
-        assert policy._endpoint._client.headers == headers
-        assert policy._endpoint._client.base_uri == 'wss://example.com/api/v1/session'
+        client = policy._endpoint._client
+        assert client is not None
+        assert client.headers == headers
+        assert client.base_uri == 'wss://example.com/api/v1/session'
 
     def test_default_headers_and_ws_uri(self):
         policy = RemotePolicy('localhost', 8000)
-        assert policy._endpoint._client.headers is None
-        assert policy._endpoint._client.base_uri == 'ws://localhost:8000/api/v1/session'
+        client = policy._endpoint._client
+        assert client is not None
+        assert client.headers is None
+        assert client.base_uri == 'ws://localhost:8000/api/v1/session'
 
 
 class TestActionHorizonWrapping:
@@ -192,6 +196,7 @@ class TestActionHorizonWrapping:
 
         session = wrapped.new_session()
         actions = session({'obs_time_ns': 0})
+        assert actions is not None
         assert len(actions) == 3  # 2 within-horizon actions + horizon sentinel
         assert actions[0]['timestamp'] == 0.0
         assert actions[1]['timestamp'] == 0.25
@@ -204,6 +209,7 @@ class TestActionHorizonWrapping:
 
         session = policy.new_session()
         actions = session({})
+        assert actions is not None
         assert len(actions) == 2
 
 
