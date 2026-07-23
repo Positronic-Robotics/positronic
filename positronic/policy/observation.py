@@ -18,14 +18,21 @@ class ObservationCodec(Codec):
         state: mapping from output state key to an ordered dict of {episode_key: dim} to concatenate.
         images: mapping from output image name to tuple (input_key, (width, height)).
         task_field: output key carrying the language prompt at inference; LeRobot training always uses ``task``.
+        lowercase_task: lowercase the task text at inference, for checkpoints trained on lowercased language
+            (the pretrained DROID models; MolmoSpaces' Pi baseline applies the same normalization).
     """
 
     def __init__(
-        self, state: dict[str, dict[str, int]], images: dict[str, tuple[str, tuple[int, int]]], task_field: str = 'task'
+        self,
+        state: dict[str, dict[str, int]],
+        images: dict[str, tuple[str, tuple[int, int]]],
+        task_field: str = 'task',
+        lowercase_task: bool = False,
     ):
         self._state = state
         self._image_configs = images
         self._task_field = task_field
+        self._lowercase_task = lowercase_task
 
         self._derive_transforms = {k: partial(self._derive_state, k) for k in state.keys()}
         self._derive_transforms.update({k: partial(self._derive_image, k) for k in images.keys()})
@@ -54,7 +61,8 @@ class ObservationCodec(Codec):
         obs: dict[str, Any] = {}
 
         if 'task' in inputs:
-            obs[self._task_field] = inputs['task']
+            task = inputs['task']
+            obs[self._task_field] = task.lower() if self._lowercase_task else task
 
         for out_name, (input_key, (width, height)) in self._image_configs.items():
             if input_key not in inputs:
