@@ -8,6 +8,7 @@ import pimm
 from positronic import keys, wire
 from positronic.data_collection import DataCollectionController, OperatorPosition, controller_positions_serializer
 from positronic.dataset.ds_writer_agent import DsWriterAgent, DsWriterCommand, DsWriterCommandType
+from positronic.dataset.episode import Episode
 from positronic.dataset.local_dataset import LocalDataset, LocalDatasetWriter
 from positronic.dataset.serializers import Serializers
 from positronic.geom import Rotation, Transform3D
@@ -104,6 +105,7 @@ def test_data_collection_records_task_metadata(tmp_path, world):
     dataset = LocalDataset(tmp_path)
     assert len(dataset) == 1
     episode = dataset[0]
+    assert isinstance(episode, Episode)
     assert episode[keys.TASK] == 'stack-blocks'
 
 
@@ -204,6 +206,7 @@ def test_data_collection_with_mujoco_robot_gripper(tmp_path):
     ds = LocalDataset(tmp_path)
     assert len(ds) == 1
     ep = ds[0]
+    assert isinstance(ep, Episode)
 
     expected = {'target_grip', 'controller_positions.right', keys.JOINTS, keys.JOINT_VEL, keys.EE_POSE, keys.GRIP}
     assert expected.issubset(set(ep.keys()))

@@ -463,7 +463,7 @@ def test_flip_grip():
 
 
 def test_flip_grip_composed_with_obs_and_action():
-    obs = ObservationCodec(state={'observation.state': [obs_keys.GRIP]}, images={})
+    obs = ObservationCodec(state={'observation.state': {obs_keys.GRIP: 1}}, images={})
     action = AbsolutePositionAction('robot_command.pose', 'target_grip', Rotation.Representation.QUAT)
     composed = FlipGrip() | (obs & action)
 

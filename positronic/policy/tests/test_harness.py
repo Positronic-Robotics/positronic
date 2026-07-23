@@ -1,4 +1,5 @@
 from functools import partial
+from typing import Any
 
 import numpy as np
 import pytest
@@ -66,7 +67,7 @@ class SpyPolicy(Policy):
             command = CartesianPosition(pose=pose)
         self.command = command
         self.target_grip = float(target_grip)
-        self.last_obs: dict[str, object] | None = None
+        self.last_obs: dict[str, Any] | None = None
         self.reset_calls: int = 0
         self.last_reset_context = None
 
@@ -105,7 +106,7 @@ class StubPolicy(Policy):
             command = CartesianPosition(pose=pose)
         self.command = command
         self.target_grip = float(target_grip)
-        self.last_obs: dict[str, object] | None = None
+        self.last_obs: dict[str, Any] | None = None
         self.observations: list[dict[str, object]] = []
         self.reset_calls = 0
         self.last_reset_context = None
