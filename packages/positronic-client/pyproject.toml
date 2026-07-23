@@ -13,7 +13,7 @@ dependencies = [
     "msgpack",
     "numpy",
     "pillow",
-    "websockets",
+    "websockets>=15.0.1",
 ]
 
 [tool.setuptools.packages.find]

@@ -4387,7 +4387,7 @@ requires-dist = [
     { name = "msgpack" },
     { name = "numpy" },
     { name = "pillow" },
-    { name = "websockets" },
+    { name = "websockets", specifier = ">=15.0.1" },
 ]
 
 [[package]]
