@@ -65,7 +65,7 @@ This metadata tells the client:
 - Which checkpoint is loaded
 - Server connection details
 - Codec metadata (`image_sizes` for client-side resize, `action_fps` and `action_horizon_sec` for timing)
-- `local_stack` — the declared local half of the policy definition: a spec tree of `{"name", "args"}`
+- `local_stack` — the declared local half of the policy pipeline: a spec tree of `{"name", "args"}`
   leaves composed by `"seq"` (the `|` operator) and `"par"` (the `&` operator). `RemotePolicy` builds
   this stack in front of the connection, resolving names only against the closed vocabulary in
   `positronic.policy.spec.WIRE_WRAPPERS` — an unknown entry fails at connect, before the robot moves.
@@ -132,7 +132,7 @@ The loop continues until the client closes the connection or the episode ends.
 # LeRobot server (SmolVLA — 0.4.x)
 cd docker && docker compose run --rm --service-ports lerobot-server \
   --checkpoints_dir=~/checkpoints/lerobot/exp_v1 \
-  --definition.codec=@positronic.vendors.lerobot.codecs.ee
+  --pipeline.codec=@positronic.vendors.lerobot.codecs.ee
 
 # GR00T server (swap hardware code stays the same)
 cd docker && docker compose run --rm --service-ports groot-server \
