@@ -206,10 +206,20 @@ def _build_report(records: list[EpisodeTiming], facts: dict[str, _RecordedFacts]
         physics_sum = float(sum(r.env_physics_s for r in records))
         render_sum = float(sum(r.env_render_s for r in records))
         client_sum = float(sum(r.env_client_s for r in records))
+        server_other = (server_sum - physics_sum - render_sum) / env_step_sum
+        # Isaac Lab steps physics with `sim.step(render=False)` and renders once outside the decimation loop,
+        # so the physics and render spans are disjoint and this stays non-negative — but a task config that
+        # renders inside the physics loop would double-count that wall in both spans. Warn rather than clamp,
+        # so a double count surfaces instead of hiding in a normalized split.
+        if server_other < 0:
+            logger.warning(
+                f'server_other is negative ({server_other:.4f}): the env server double-counted wall between '
+                f'physics and render (a render inside the physics loop?); the env_step_split is not trustworthy'
+            )
         env_step_split = EnvStepSplit(
             physics=physics_sum / env_step_sum,
             render=render_sum / env_step_sum,
-            server_other=(server_sum - physics_sum - render_sum) / env_step_sum,
+            server_other=server_other,
             wire=(env_step_sum - server_sum - client_sum) / env_step_sum,
             materialize=client_sum / env_step_sum,
         )
