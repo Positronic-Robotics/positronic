@@ -16,18 +16,21 @@ Positronic; Positronic runs the loop and calls into it.
 
 The dataset is the invariant output. Any run — eval or collection, sim or real, whatever the
 scoring — records the complete episode as a Positronic dataset (signal files plus episode meta, in
-the native dataset layout) under its output directory. Scores, videos, and metrics are derived from
-data the loop recorded; they never replace the dataset, and an integration path that yields scores
-without the dataset is not acceptable.
+the native dataset layout) under its output directory. An operator may omit the output directory to
+throw a smoke run away; that is a per-run choice, not an integration shape — every integration
+records through the same writer path, and none may exist that can only produce scores without the
+dataset. Scores, videos, and metrics are derived from data the loop recorded; they never replace
+the dataset.
 
 ## Foreign components plug in through shims
 
 A third-party component joins by having its interface wrapped into Positronic's APIs — never by
-Positronic's components being wrapped into its:
+Positronic's components being wrapped into its. (Positronic's own MuJoCo sim is native: it runs
+in-process inside the world and needs no shim.)
 
 | Foreign component | Runs as | Shim into our API |
 |---|---|---|
-| Simulator (LIBERO, Isaac Lab / RoboLab, MuJoCo) | env server in its own interpreter, behind the `env_server` wire | client-side `EnvAdapter` mapping the canonical embodiment contract ↔ the sim's raw payloads |
+| Foreign simulator (LIBERO, Isaac Lab / RoboLab) | env server in its own interpreter, behind the `env_server` wire | client-side `EnvAdapter` mapping the canonical embodiment contract ↔ the sim's raw payloads |
 | Model stack (LeRobot, GR00T, OpenPI) | inference server behind the WebSocket wire | vendor `Codec` translating raw observations ↔ model I/O |
 | Scenes / task batteries | instantiated inside the env server | reset tokens (suite, task, seed) carried through the `EnvAdapter` |
 | Scoring / success criteria | computed where the ground truth lives (usually the env server) | reported alongside observations and recorded into the dataset; aggregation happens on the Positronic side |
