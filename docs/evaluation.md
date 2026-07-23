@@ -28,12 +28,17 @@ uv run positronic eval run --eval=.sim.libero.all \
   --eval.trial_count=10 --output_dir=~/evals/libero
 
 # RoboLab — NVIDIA Isaac Lab, 120 DROID tasks, in sim
+# Isaac Sim renders with RT cores, so RoboLab needs an RTX-class GPU host
+# (L40S / L4 / RTX 40xx) — datacenter A100/H100 won't run it. One L40S fits
+# the sim and a pi0.5-size policy on the same card.
 uv run positronic eval run --eval=.sim.robolab.benchmark \
   --policy=.remote --policy.host=<gpu-host> \
   --eval.trial_count=10 --output_dir=~/evals/robolab
 ```
 
-Narrow the scope to any target the catalog exposes — a single suite or category (`.sim.libero.spatial`, `.sim.robolab.visual`) or one task (`.sim.robolab.banana_in_bowl`). Add `--inference_latency=True` to charge the model's inference time in sim. Real-hardware evals run the same command against a DROID station (`.real.droid.*`) — nothing else changes. Every trial is recorded as a Positronic dataset under `--output_dir`.
+Narrow the scope to any sim target the catalog exposes — a single suite or category (`.sim.libero.spatial`, `.sim.robolab.visual`) or one task (`.sim.robolab.banana_in_bowl`). Add `--inference_latency=True` to charge the model's inference time in sim. Every trial is recorded as a Positronic dataset under `--output_dir`.
+
+Real-hardware DROID evals take the same model endpoint, but we run them for you — operated and operator-scored on our fleet, not self-driven in sim. That's the paid path under [Two ways to start](#two-ways-to-start).
 
 ## Two ways to start
 
