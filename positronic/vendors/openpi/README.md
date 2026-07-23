@@ -107,7 +107,7 @@ docker compose run --rm --service-ports -v ~/checkpoints:/checkpoints openpi-ser
 
 # With joint feedback
 docker compose run --rm --service-ports -v ~/checkpoints:/checkpoints openpi-server serve \
-  --definition.codec=@positronic.vendors.openpi.codecs.ee_joints \
+  --pipeline.codec=@positronic.vendors.openpi.codecs.ee_joints \
   --checkpoints_dir=/checkpoints/openpi/pi05_positronic_lowmem/experiment_v1/
 
 # Pretrained DROID model (pi05_droid) — preset codec, config, and public checkpoint
@@ -127,7 +127,7 @@ The `droid_jointpos` config serves openpi's `pi05_droid_jointpos` checkpoint fro
 emits absolute `JointPosition` chunks executed at RoboLab's leaderboard cadence — see the codec note above.
 
 **Parameters:**
-- `--definition.codec`: Server-side codec of the policy definition (default: `@positronic.vendors.openpi.codecs.ee`).
+- `--pipeline.codec`: Server-side codec of the policy pipeline (default: `@positronic.vendors.openpi.codecs.ee`).
   Available: `ee`, `ee_joints`, `ee_traj`, `ee_joints_traj`, `joints_traj`, `droid`, `droid_jointpos`
 - `--checkpoints_dir`: Full path to the experiment directory containing checkpoints
 - `--checkpoint`: (Optional) Specific checkpoint step to load. If omitted, loads the latest checkpoint
