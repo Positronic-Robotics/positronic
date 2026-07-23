@@ -349,6 +349,21 @@ class AdapterConfig:
     gripper_qpos_closed: float = GRIPPER_QPOS_CLOSED
 
 
+def adapter_config_from_exp_config(config: Any) -> AdapterConfig:
+    """An ``AdapterConfig`` honoring the eval's ``policy_config.camera_names``, when declared.
+
+    MolmoSpaces' documented custom-policy convention (evaluation/README.md) is that the policy config carries
+    ``camera_names`` and ``eval_main.py --camera_names`` overrides it; a policy reads its cameras from there.
+    The wrist role is the name containing ``'wrist'`` (true of every upstream wrist camera, incl. the Zed
+    variant), the exterior role the first name without it; a role with no match keeps its default key, so the
+    benchmark-variant fallback in ``_camera_image`` still applies.
+    """
+    names = getattr(getattr(config, 'policy_config', None), 'camera_names', None) or ()
+    wrist = next((n for n in names if 'wrist' in n), MOLMO_WRIST_CAMERA)
+    exterior = next((n for n in names if 'wrist' not in n), MOLMO_EXTERIOR_CAMERA)
+    return AdapterConfig(wrist_key=wrist, exterior_key=exterior)
+
+
 class MolmoSpacesPolicy(_InferencePolicyBase):
     """MolmoSpaces ``InferencePolicy`` serving pi05_droid through a positronic inference client.
 
@@ -371,7 +386,7 @@ class MolmoSpacesPolicy(_InferencePolicyBase):
             super().__init__(config, task)
         self._client = client if client is not None else make_policy_client(**(client_kwargs or {}))
         self._prompt = prompt
-        self._adapter = adapter_config or AdapterConfig()
+        self._adapter = adapter_config if adapter_config is not None else adapter_config_from_exp_config(config)
         self._buffer: ChunkBuffer | None = None
         self._task_text = prompt
         self._current_arm_qpos = np.zeros(NUM_ARM_JOINTS, dtype=np.float32)

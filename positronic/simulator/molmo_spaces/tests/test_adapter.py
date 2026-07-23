@@ -25,6 +25,7 @@ from positronic.simulator.molmo_spaces.adapter import (
     ChunkBuffer,
     FakePolicy,
     _FakeJointDelta,
+    adapter_config_from_exp_config,
     molmo_obs_to_positronic,
     positronic_action_to_molmo,
     resize_with_pad,
@@ -114,6 +115,37 @@ def test_obs_mapping_resolves_benchmark_variant_camera_keys():
     obs = molmo_obs_to_positronic(custom, 't', wrist_key='my_cam')
     wrist_mean = obs[POS_WRIST_IMAGE].reshape(-1, 3).mean(axis=0)
     assert wrist_mean[0] > wrist_mean[1]
+
+
+def test_adapter_config_honors_policy_config_camera_names():
+    # An eval configured with non-default camera names (policy_config.camera_names, per MolmoSpaces'
+    # custom-policy convention) must reach the adapter's camera keys (regression: a default AdapterConfig
+    # ignored them and KeyErrored on the renamed observations).
+    class _Ns:
+        def __init__(self, **kw):
+            self.__dict__.update(kw)
+
+    cfg = _Ns(policy_config=_Ns(camera_names=['randomized_zed2_analogue_1', 'wrist_camera_zed_mini']))
+    adapter_cfg = adapter_config_from_exp_config(cfg)
+    assert adapter_cfg.wrist_key == 'wrist_camera_zed_mini'
+    assert adapter_cfg.exterior_key == 'randomized_zed2_analogue_1'
+
+    # No camera_names declared (BasePolicyConfig doesn't define the field) -> the defaults, variant fallback intact.
+    for cfg in (None, _Ns(policy_config=_Ns()), _Ns(policy_config=_Ns(camera_names=[]))):
+        adapter_cfg = adapter_config_from_exp_config(cfg)
+        assert adapter_cfg.wrist_key == adapter.MOLMO_WRIST_CAMERA
+        assert adapter_cfg.exterior_key == adapter.MOLMO_EXTERIOR_CAMERA
+
+    # A single-role list keeps the missing role on its default.
+    adapter_cfg = adapter_config_from_exp_config(_Ns(policy_config=_Ns(camera_names=['exo_top_down'])))
+    assert adapter_cfg.wrist_key == adapter.MOLMO_WRIST_CAMERA
+    assert adapter_cfg.exterior_key == 'exo_top_down'
+
+    # The policy's default path derives from the config it was constructed with.
+    cfg = _Ns(policy_config=_Ns(camera_names=['randomized_zed2_analogue_1', 'wrist_camera_zed_mini']))
+    policy = adapter.MolmoSpacesPolicy(cfg, client=FakePolicy())
+    assert policy._adapter.wrist_key == 'wrist_camera_zed_mini'
+    assert policy._adapter.exterior_key == 'randomized_zed2_analogue_1'
 
 
 def test_gripper_proprio_normalization():
