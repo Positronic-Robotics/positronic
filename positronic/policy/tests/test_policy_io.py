@@ -59,11 +59,16 @@ def test_observation_encode_missing_state_inputs_raise():
 
 def test_observation_encode_task():
     enc = ObservationCodec(state={'observation.state': ['a']}, images={})
-    obs = enc.encode({'a': 1.0, 'task': 'test_task'})
-    assert obs['task'] == 'test_task'
+    obs = enc.encode({'a': 1.0, 'task': 'Test_Task'})
+    assert obs['task'] == 'Test_Task'  # untouched by default
 
     obs_no_task = enc.encode({'a': 1.0})
     assert 'task' not in obs_no_task
+
+    # DROID-style configs lowercase the prompt: those checkpoints were trained on lowercased language,
+    # so capitalized benchmark task text must not reach them mixed-case.
+    lower = ObservationCodec(state={'observation.state': ['a']}, images={}, lowercase_task=True)
+    assert lower.encode({'a': 1.0, 'task': 'Pick up the Cube'})['task'] == 'pick up the cube'
 
 
 def test_absolute_position_action_encode_decode_quat():

@@ -13,7 +13,6 @@ import pytest
 
 from positronic.simulator.molmo_spaces import adapter
 from positronic.simulator.molmo_spaces.adapter import (
-    IMAGE_SIZE,
     NUM_ARM_JOINTS,
     POS_EXTERIOR_IMAGE,
     POS_GRIP,
@@ -28,7 +27,6 @@ from positronic.simulator.molmo_spaces.adapter import (
     adapter_config_from_exp_config,
     molmo_obs_to_positronic,
     positronic_action_to_molmo,
-    resize_with_pad,
 )
 
 FIXTURE = Path(__file__).parent / 'droid_obs.npz'
@@ -62,14 +60,15 @@ def test_obs_mapping_key_set():
 
 
 def test_obs_mapping_shapes_and_dtypes():
-    # Capitalized benchmark task text is lowercased into the prompt, matching the Pi baseline's normalization.
-    obs = molmo_obs_to_positronic(_load_env_obs(), 'Pick up the cube')
-    w, h = IMAGE_SIZE
+    env = _load_env_obs()
+    obs = molmo_obs_to_positronic(env, 'Pick up the cube')
     assert obs[POS_JOINTS].shape == (NUM_ARM_JOINTS,) and obs[POS_JOINTS].dtype == np.float32
     assert obs[POS_GRIP].shape == (1,) and obs[POS_GRIP].dtype == np.float32
-    for key in (POS_WRIST_IMAGE, POS_EXTERIOR_IMAGE):
-        assert obs[key].shape == (h, w, 3) and obs[key].dtype == np.uint8
-    assert obs[POS_TASK] == 'pick up the cube'
+    # Frames and task text pass through untouched: model preprocessing (resize-with-pad, prompt lowercasing)
+    # belongs to the server codec, wire downsizing to the inference client.
+    assert np.array_equal(obs[POS_WRIST_IMAGE], env['wrist_camera'])
+    assert np.array_equal(obs[POS_EXTERIOR_IMAGE], env['exo_camera_1'])
+    assert obs[POS_TASK] == 'Pick up the cube'
 
 
 def test_obs_mapping_accepts_batch_list_and_single_dict():
@@ -164,39 +163,6 @@ def test_gripper_proprio_normalization():
     assert abs(grip_for(closed / 2) - 0.5) < 1e-4
     assert abs(grip_for(closed) - 1.0) < 1e-6
     assert grip_for(closed * 2) == 1.0  # saturates, never exceeds 1
-
-
-# --- resize behavior --------------------------------------------------------------------------------------------
-
-
-def test_resize_with_pad_shape_and_dtype():
-    rig = np.zeros((36, 64, 3), dtype=np.uint8)  # DROID 16:9 frame
-    out = resize_with_pad(rig, 224, 224)
-    assert out.shape == (224, 224, 3) and out.dtype == np.uint8
-
-
-def test_resize_with_pad_passthrough_when_already_sized():
-    already = (np.random.default_rng(0).integers(0, 255, (224, 224, 3))).astype(np.uint8)
-    out = resize_with_pad(already, 224, 224)
-    assert np.array_equal(out, already)  # exact passthrough, no resample
-
-
-def test_resize_with_pad_letterboxes_and_preserves_orientation():
-    # 20 (H) x 40 (W): left half red, right half blue, top 4 rows white. A wide frame padded into a square
-    # gets black top/bottom bars; content keeps its left/right and top/bottom layout (no flip).
-    src = np.zeros((20, 40, 3), dtype=np.uint8)
-    src[:, :20] = (255, 0, 0)
-    src[:, 20:] = (0, 0, 255)
-    src[:4, :] = (255, 255, 255)
-    out = resize_with_pad(src, 224, 224)
-
-    # 40:20 -> content is 224x112 centered vertically: rows [56, 168) hold content, the rest is zero pad.
-    assert out[:40].sum() == 0 and out[-40:].sum() == 0  # top/bottom padding bars
-    assert out[112, 40, 0] > out[112, 40, 2]  # left column stays red (R > B)
-    assert out[112, 200, 2] > out[112, 200, 0]  # right column stays blue (B > R)
-    top_band = out[60:80].mean()
-    bottom_band = out[150:165].mean()
-    assert top_band > bottom_band  # the white top stripe stays at the top after resize (no vertical flip)
 
 
 # --- action mapping ---------------------------------------------------------------------------------------------

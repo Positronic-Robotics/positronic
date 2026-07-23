@@ -75,4 +75,6 @@
 # Infrastructure
 - Machines, Docker contexts and images: `docker/CONTEXTS.md`
 - Model-specific workflows: `positronic/vendors/{lerobot,gr00t,openpi}/README.md`
+- Inference serving, and the adapter/codec/wire-client separation of responsibilities (read BEFORE
+  writing a sim/rig adapter): `positronic/offboard/README.md`
 - Reconstructing previous runs: read `run_metadata_*.yaml` and episode `static.json` from output directory

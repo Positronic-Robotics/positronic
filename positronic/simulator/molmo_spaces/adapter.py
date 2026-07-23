@@ -23,7 +23,6 @@ from dataclasses import dataclass
 from typing import Any
 
 import numpy as np
-from PIL import Image as PilImage
 
 try:
     from molmo_spaces.policy.base_policy import InferencePolicy as _InferencePolicyBase
@@ -51,9 +50,6 @@ POS_WRIST_IMAGE = 'image.wrist'
 POS_EXTERIOR_IMAGE = 'image.exterior'
 POS_TASK = 'task'
 
-# The model consumes 224x224 RGB (openpi DROID preprocessing); the DROID codec re-pads to this, so matching it
-# here makes the server-side resize a no-op and keeps the wire payload small.
-IMAGE_SIZE = (224, 224)
 NUM_ARM_JOINTS = 7
 
 # Robotiq closure at which the FR3 gripper qpos saturates; the pi baseline normalizes proprio grip by it
@@ -71,32 +67,6 @@ DROID_CHUNK_STEPS = 8
 MAX_JOINT_DELTA = 0.2
 
 
-def resize_with_pad(image: np.ndarray, width: int, height: int, resample=PilImage.Resampling.BILINEAR) -> np.ndarray:
-    """Aspect-preserving resize into a ``height x width`` frame, zero-padded — positronic's DROID preprocessing.
-
-    Reproduces ``positronic.dataset.transforms.image.resize_with_pad_per_frame``: scale the longer side to fit,
-    then center the result on a black canvas. An already-correctly-sized frame passes through untouched.
-    """
-    image = np.asarray(image)
-    if image.ndim != 3 or image.shape[2] != 3:
-        raise ValueError(f'Expected an HWC RGB frame, got shape {image.shape}')
-    if image.dtype != np.uint8:
-        image = image.astype(np.uint8)
-    if image.shape[0] == height and image.shape[1] == width:
-        return image
-
-    pil = PilImage.fromarray(image)
-    cur_width, cur_height = pil.size
-    ratio = max(cur_width / width, cur_height / height)
-    resized_width = int(cur_width / ratio)
-    resized_height = int(cur_height / ratio)
-    resized = pil.resize((resized_width, resized_height), resample=resample)
-
-    canvas = PilImage.new(resized.mode, (width, height), 0)
-    canvas.paste(resized, (max(0, (width - resized_width) // 2), max(0, (height - resized_height) // 2)))
-    return np.asarray(canvas)
-
-
 def _single_env(observation: Any) -> dict:
     """MolmoSpaces yields ``observation`` as a list (one dict per batch env); single-env eval uses index 0."""
     if isinstance(observation, cabc.Mapping):
@@ -112,16 +82,15 @@ def molmo_obs_to_positronic(
     *,
     wrist_key: str = MOLMO_WRIST_CAMERA,
     exterior_key: str = MOLMO_EXTERIOR_CAMERA,
-    image_size: tuple[int, int] = IMAGE_SIZE,
     gripper_qpos_closed: float = GRIPPER_QPOS_CLOSED,
 ) -> dict[str, Any]:
     """Map a MolmoSpaces DROID observation to the raw positronic keys the DROID codec consumes.
 
     ``observation`` may be the batch list or a single env dict. The arm joints pass through as 7 absolute radians;
-    the Robotiq finger qpos is normalized to the ``[0, 1]`` closure the model was trained on; both cameras are
-    resized-with-pad to ``image_size``; the task text is lowercased before it becomes the prompt, matching the
-    Pi baseline (pi_policy.py:144) so capitalized benchmark descriptions reach the checkpoint in its trained
-    language distribution.
+    the Robotiq finger qpos is normalized to the ``[0, 1]`` closure the model was trained on. Everything else is
+    the mapping only: camera frames and task text pass through untouched — model preprocessing (resize-with-pad,
+    prompt normalization) is the server codec's job, and wire downsizing is negotiated by the inference client
+    from the server's advertised ``image_sizes``.
     """
     env = _single_env(observation)
     qpos = env['qpos']
@@ -129,15 +98,12 @@ def molmo_obs_to_positronic(
     grip_qpos = float(np.asarray(qpos['gripper']).reshape(-1)[0])
     grip = float(np.clip(grip_qpos / gripper_qpos_closed, 0.0, 1.0))
 
-    width, height = image_size
-    wrist = _camera_image(env, wrist_key, MOLMO_WRIST_CAMERA, MOLMO_WRIST_CAMERA_VARIANTS)
-    exterior = _camera_image(env, exterior_key, MOLMO_EXTERIOR_CAMERA, MOLMO_EXTERIOR_CAMERA_VARIANTS)
     return {
         POS_JOINTS: arm,
         POS_GRIP: np.array([grip], dtype=np.float32),
-        POS_WRIST_IMAGE: resize_with_pad(wrist, width, height),
-        POS_EXTERIOR_IMAGE: resize_with_pad(exterior, width, height),
-        POS_TASK: task.lower(),
+        POS_WRIST_IMAGE: _camera_image(env, wrist_key, MOLMO_WRIST_CAMERA, MOLMO_WRIST_CAMERA_VARIANTS),
+        POS_EXTERIOR_IMAGE: _camera_image(env, exterior_key, MOLMO_EXTERIOR_CAMERA, MOLMO_EXTERIOR_CAMERA_VARIANTS),
+        POS_TASK: task,
     }
 
 
@@ -347,7 +313,6 @@ class AdapterConfig:
     exterior_key: str = MOLMO_EXTERIOR_CAMERA
     arm_group: str = MOLMO_ARM_GROUP
     gripper_group: str = MOLMO_GRIPPER_GROUP
-    image_size: tuple[int, int] = IMAGE_SIZE
     gripper_qpos_closed: float = GRIPPER_QPOS_CLOSED
 
 
@@ -422,7 +387,6 @@ class MolmoSpacesPolicy(_InferencePolicyBase):
             self._task_text,
             wrist_key=self._adapter.wrist_key,
             exterior_key=self._adapter.exterior_key,
-            image_size=self._adapter.image_size,
             gripper_qpos_closed=self._adapter.gripper_qpos_closed,
         )
 
