@@ -12,6 +12,10 @@
   <em>GR00T model evaluated on bin-to-bin order picking — <a href="https://phail.ai">PhAIL benchmark</a></em>
 </p>
 
+Positronic is the open stack behind **[PhAIL](https://phail.ai)** — independent evaluation of VLA models on real robots and in simulation, through one API. It's the full engine underneath: bring robots online, capture and curate data, run inference across model vendors, and **evaluate policies** in sim and on real hardware.
+
+**→ Evaluating a model? Start here: [docs/evaluation.md](docs/evaluation.md).**
+
 ## The Problem
 
 AI promises to transform robotics: teach robots through demonstrations instead of code. ML-driven approaches can unlock capabilities traditional analytical control can't reach.
