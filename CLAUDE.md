@@ -20,6 +20,9 @@
 - To change deps: edit `pyproject.toml`, then run `uv lock`, then commit `pyproject.toml` and `uv.lock` together in one reviewed change — never let `uv.lock` drift implicitly
 
 # Design discipline
+- Land the correct design in the first PR. A change carrying a design or storage-model decision gets that decision
+  right up front — reject a wrong shape at design/review time; never merge a known-wrong approach and fix-forward or
+  revert it later
 - When a change has a design thesis ("World owns time", "Harness is name-free"), enumerate its consequences for
   every touched interface before coding, and implement the end state — old pathways (constructor args, public
   mutators, parallel flags) must not survive the refactor
@@ -28,9 +31,7 @@
 - Persist through the existing dataset (signals, static, meta) for anything that fits it — per-step telemetry is a
   time-series signal, per-episode facts are static/meta, and aggregates are an offline reduce/transform over that
   raw data, never a stored record. Do not add a side storage or IO channel (a parallel file, a `*.jsonl`, a
-  separate serializer) unless the need fundamentally cannot be served by the dataset. A side channel that
-  duplicates what a reducer could recompute from recorded raw data is a storage-model change to reject up front,
-  not merge and revert later
+  separate serializer) unless the need fundamentally cannot be served by the dataset
 - When current code conflicts with the target design, resolve it now (rename + migrate) or bridge loudly with a
   TODO/HACK comment. Never bridge silently with an extra field, class, or indirection
 - Internal code breaks cleanly — no speculative compat shims. Before a migrate-everywhere change, grep for
