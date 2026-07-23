@@ -204,6 +204,7 @@ def _robolab_eval(task, instruction_type, trial_count, timeout, camera_dict, cam
             privileged={'subtask': Observation(proxy.privileged['subtask'], None)},
             reset=proxy.reset,
             done=proxy.done,
+            scored=True,  # the RoboLab adapter's terminal emits ``eval.success``
         ),
         trials,
     )

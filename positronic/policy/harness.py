@@ -145,10 +145,11 @@ class Harness(pimm.ControlSystem):
             meta['eval.universe'] = 'sim' if self._embodiment.simulated else 'real'
             meta['eval.embodiment'] = self._embodiment.descriptor
             meta['eval.timeout'] = self._task.timeout
-            # Whether the eval scores success live: a wired ``done`` oracle emits ``eval.success`` on a
-            # terminal, so its timeouts are real failures. Without one (native sim scored downstream) an
-            # episode with no ``eval.success`` is simply unscored, not a failure.
-            meta['eval.scored'] = self._task.done is not None
+            # Whether the eval scores success live: a scored task's ``done`` oracle emits ``eval.success``
+            # on a terminal, so its timeouts are real failures. An unscored eval (success judged downstream)
+            # leaves an episode with no ``eval.success`` simply unscored, not a failure — even when a
+            # ``done`` port is wired for trial lifecycle alone.
+            meta['eval.scored'] = self._task.scored
         # ``policy.meta`` is the static baseline (the wrapped policy aggregates model +
         # codec meta); the session overlays per-episode specifics (e.g. the sampled
         # sub-policy) and wins on conflict.

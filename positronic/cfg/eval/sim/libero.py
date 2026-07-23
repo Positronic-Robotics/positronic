@@ -62,6 +62,7 @@ def _libero_eval(
         privileged=privileged,
         reset=proxy.reset,
         done=proxy.done,
+        scored=True,  # the LIBERO adapter's terminal emits ``eval.success``
     )
     # One scene per (suite, task) pair: an unbound ``task_id`` sweeps each suite, a pinned one runs that task
     # in every bound suite. The scene spec rides each trial's reset token, so the single task-agnostic env
