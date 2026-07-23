@@ -127,7 +127,9 @@ class Episode(ABC, Mapping[str, Any]):
 
     @property
     def duration_ns(self):
-        if not self.signals:
+        # A rollout aborted before its first content sample can still carry telemetry (the STOP-turn drain),
+        # so a telemetry-only episode is the no-signal case here, not a bounds error.
+        if all(name.startswith(TELEMETRY_PREFIX) for name in self.signals):
             return 0
         return self.last_ts - self.start_ts
 

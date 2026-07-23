@@ -72,6 +72,19 @@ def test_episode_bounds_exclude_telemetry_signals(tmp_path):
     assert stored_meta['duration_ns'] == 1000  # the cached value skips telemetry too
 
 
+def test_telemetry_only_episode_has_zero_duration(tmp_path):
+    # A rollout stopped before any content sample still drains a `timing.*` sample on the STOP turn; such
+    # an episode behaves like the no-signal case instead of raising from the content-only bounds.
+    ep_dir = tmp_path / 'ep_telemetry_only'
+    with DiskEpisodeWriter(ep_dir) as w:
+        w.append('timing.record_io_s', 0.001, 1000)
+
+    ep = DiskEpisode(ep_dir)
+    assert ep.duration_ns == 0
+    with pytest.raises(ValueError, match='no content signals'):
+        _ = ep.start_ts
+
+
 def test_episode_getitem_returns_signal(tmp_path):
     ep_dir = tmp_path / 'ep3'
     with DiskEpisodeWriter(ep_dir) as w:
