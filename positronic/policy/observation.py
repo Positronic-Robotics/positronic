@@ -7,7 +7,7 @@ from PIL import Image as PilImage
 from positronic.dataset import Signal, transforms
 from positronic.dataset.episode import Episode
 from positronic.dataset.transforms import image
-from positronic.dataset.transforms.episode import Derive, Get
+from positronic.dataset.transforms.episode import Derive
 from positronic.policy.codec import Codec, lerobot_image, lerobot_state
 
 
@@ -36,7 +36,9 @@ class ObservationCodec(Codec):
 
         self._derive_transforms = {k: partial(self._derive_state, k) for k in state.keys()}
         self._derive_transforms.update({k: partial(self._derive_image, k) for k in images.keys()})
-        self._derive_transforms['task'] = Get('task', '')
+        # Lowercase the training task the same way ``encode`` lowercases the served prompt, so a codec with
+        # ``lowercase_task`` trains and infers on one text distribution (the ``Codec`` same-keys contract).
+        self._derive_transforms['task'] = self._derive_task
 
         lerobot_features: dict[str, Any] = {}
         for name, features in state.items():
@@ -53,6 +55,10 @@ class ObservationCodec(Codec):
     def _derive_image(self, out_name: str, episode: Episode) -> Signal[Any]:
         input_key, (width, height) = self._image_configs[out_name]
         return image.resize_with_pad(width, height, signal=episode[input_key])
+
+    def _derive_task(self, episode: Episode) -> Any:
+        task = episode['task'] if 'task' in episode else ''
+        return task.lower() if self._lowercase_task else task
 
     def _decode_single(self, data: dict, context: dict | None) -> dict:
         return {}

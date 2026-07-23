@@ -11,8 +11,17 @@ from positronic.simulator.molmo_spaces.launcher import serve_molmo_spaces
 
 
 def _episode_count(benchmark_dir: str) -> int:
-    """The number of episodes in a MolmoSpaces ``benchmark.json`` (a JSON list of episode specs)."""
-    return len(json.loads((Path(benchmark_dir) / 'benchmark.json').read_text()))
+    """The episode count of a MolmoSpaces benchmark dir, mirroring ``load_all_episodes``' two layouts.
+
+    positronic cannot import ``molmo_spaces`` here (it lives in the env server's own venv), so this counts the
+    benchmark files directly: a single ``benchmark.json`` (a JSON list of episode specs) when present, else the
+    legacy ``house_*/episode_*.json`` layout the loader also accepts.
+    """
+    base = Path(benchmark_dir)
+    manifest = base / 'benchmark.json'
+    if manifest.exists():
+        return len(json.loads(manifest.read_text()))
+    return sum(1 for _ in base.glob('house_*/episode_*.json'))
 
 
 @cfn.config(
