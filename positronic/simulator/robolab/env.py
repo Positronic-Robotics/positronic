@@ -77,8 +77,10 @@ robolab.constants.ENABLE_SUBTASK_PROGRESS_CHECKING = True
 robolab.constants.RECORD_IMAGE_DATA = False
 robolab.constants.set_output_dir(tempfile.mkdtemp(prefix='robolab-env-'))
 
-# The policy cameras (RoboLab's WRIST_LEFT preset) render at a stock 1280x720 while pi05-class policies
-# consume ~224x224, so most of the tile render is discarded. The resolution override mutates the ORIGINAL
+# The policy cameras (RoboLab's WRIST_LEFT preset) render at a stock 1280x720 (16:9) while pi05-class
+# policies consume ~224x224, so most of the tile render is discarded. Keep any ``--camera-res`` override at
+# 16:9: the policies letterbox-pad each frame to a square, so an off-aspect render shifts the scene's
+# scale/padding in the policy input. The resolution override mutates the ORIGINAL
 # ``TiledCameraCfg`` objects: isaaclab's ``configclass`` strips class-level mutables into dataclass fields
 # whose ``default_factory`` deepcopies the captured original on every cfg instantiation, so writing the
 # originals (before any registration) reaches every task's scene. The wrist original is the ``droid`` module

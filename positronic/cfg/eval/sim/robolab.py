@@ -151,7 +151,7 @@ def _resolve_tasks(task) -> list[str]:
     instruction_type='default',
     trial_count=1,
     timeout=None,
-    camera_res=(320, 240),
+    camera_res=(320, 180),
     render_viewport=True,
 )
 def _robolab_eval(task, instruction_type, trial_count, timeout, camera_dict, camera_res, render_viewport):
@@ -175,9 +175,13 @@ def _robolab_eval(task, instruction_type, trial_count, timeout, camera_dict, cam
     subtask progress ``[status, completed, total, score]`` is the privileged ground truth (recorded, never
     fed to the policy).
 
-    ``camera_res`` is the render size (width, height) of both policy cameras — RoboLab's stock is 1280x720
-    while pi05-class policies consume ~224x224 — and ``render_viewport=False`` stops the default viewport
-    render product. Both only shift sim render cost; the wire and policy contract is unchanged.
+    ``camera_res`` is the render size (width, height) of both policy cameras. RoboLab renders natively at
+    16:9 (stock 1280x720) while pi05-class policies consume ~224x224, so the default downsizes to a small
+    16:9 320x180 to cut render cost. Keep any override 16:9: the policies letterbox-pad each frame to a
+    square, so an off-aspect render (e.g. 4:3) shifts the scene's scale and padding in the policy input,
+    while a smaller 16:9 size only cuts render cost. ``render_viewport=False`` stops the default viewport
+    render product. At a fixed 16:9 aspect both only shift sim render cost, and the wire contract is
+    unchanged.
     """
     names = _resolve_tasks(task)
     if timeout is None:

@@ -117,11 +117,15 @@ def _spawn(host: str, port: int, camera_res: tuple[int, int], render_viewport: b
 
 
 def serve_robolab(
-    host: str = 'localhost', camera_res: tuple[int, int] = (320, 240), render_viewport: bool = True
+    host: str = 'localhost', camera_res: tuple[int, int] = (320, 180), render_viewport: bool = True
 ) -> AbstractContextManager[tuple[str, int]]:
     """The RoboLab env server as a ``serve`` context manager (the ``serve_subprocess`` contract).
 
-    ``camera_res`` is the render size (width, height) of both policy cameras; ``render_viewport=False`` stops
-    the default viewport render product. Both only shift sim render cost — the wire contract is unchanged.
+    ``camera_res`` is the render size (width, height) of both policy cameras. Prefer a 16:9 ratio: RoboLab
+    renders natively at 16:9 (stock 1280x720) and the pi05-class policies letterbox-pad every frame to a
+    square (224x224), so a non-16:9 ``camera_res`` changes the scene's scale and padding inside that square
+    and shifts the policy off its training distribution. A smaller 16:9 size only cuts render cost, not the
+    aspect the policy sees. ``render_viewport=False`` stops the default viewport render product; at a fixed
+    aspect both only shift sim render cost, the wire contract is unchanged.
     """
     return serve_subprocess(functools.partial(_spawn, camera_res=camera_res, render_viewport=render_viewport), host)
