@@ -52,6 +52,11 @@ def _molmo_eval(benchmark_dir, episodes, trial_count, timeout, camera_dict, seed
         indices = list(range(_episode_count(benchmark_dir)))
     else:
         indices = [episodes] if isinstance(episodes, int) else list(episodes)
+    if not indices:
+        raise ValueError(
+            f'no benchmark episodes found under {benchmark_dir!r}; expected a benchmark.json or a legacy '
+            'house_*/episode_*.json layout (or pass --eval.episodes explicitly)'
+        )
     proxy = RemoteEnvControlSystem(MolmoAdapter(camera_dict), serve_molmo_spaces(benchmark_dir))
     # MolmoSpaces drives a Franka DROID rig; recordings carry the same model (URDF + meshes + joint names +
     # control frame) for the 3D viewer and offline IK, supplied here since the molmo server can't import
