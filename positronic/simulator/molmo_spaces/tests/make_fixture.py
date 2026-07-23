@@ -16,6 +16,7 @@ Output: droid_obs.npz next to this script (well under 100 KB)
 """
 
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 
@@ -30,7 +31,7 @@ def _marked_frame(base_rgb: tuple[int, int, int]) -> np.ndarray:
     return frame
 
 
-def build_payload() -> dict[str, np.ndarray]:
+def build_payload() -> dict[str, Any]:  # grip is a float32 scalar, the rest are arrays
     return {
         'joint_pos': np.array([0.0, -0.785, 0.0, -2.356, 0.0, 1.571, 0.785], dtype=np.float32),
         'joint_vel': np.linspace(-0.2, 0.2, 7, dtype=np.float32),
@@ -45,7 +46,7 @@ def build_payload() -> dict[str, np.ndarray]:
 
 def main() -> None:
     out = Path(__file__).parent / 'droid_obs.npz'
-    np.savez_compressed(out, **build_payload())
+    np.savez_compressed(out, **build_payload())  # pyright: ignore[reportArgumentType] -- numpy's savez **kwds stub
     print(f'Wrote {out} ({out.stat().st_size} bytes)')
 
 
