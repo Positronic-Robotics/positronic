@@ -29,6 +29,12 @@ class InferenceSession:
     ``image_sizes`` in its metadata (see ``Codec.meta``), and every frame is fit into the reported size
     (aspect-preserving, never upscaled). The ``resize`` parameter acts as a fallback when the server does not
     report sizes; server-reported sizes always take precedence.
+
+    This downsizing is a property of the WIRE, applied to every session — including a localhost server, where it
+    still shrinks the msgpack payload on both ends while leaving the codec's output unchanged (the codec resizes
+    to the same advertised target regardless; the fit just moves that resample before serialization). In-process
+    inference never constructs a session, so nothing local-to-the-process is ever touched. A client-side codec
+    whose output is already model-sized passes through untouched (fit never upscales).
     """
 
     def __init__(
