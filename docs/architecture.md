@@ -15,10 +15,10 @@ Positronic; Positronic runs the loop and calls into it.
 ## Every run produces a Positronic dataset
 
 The dataset is the invariant output. Any run — eval or collection, sim or real, whatever the
-scoring — records the complete episode as a Positronic dataset (signals, episode meta, per-episode
-`.rrd`) under its output directory. Scores, videos, and metrics are derived from data the loop
-recorded; they never replace the dataset, and an integration path that yields scores without the
-dataset is not acceptable.
+scoring — records the complete episode as a Positronic dataset (signal files plus episode meta, in
+the native dataset layout) under its output directory. Scores, videos, and metrics are derived from
+data the loop recorded; they never replace the dataset, and an integration path that yields scores
+without the dataset is not acceptable.
 
 ## Foreign components plug in through shims
 
