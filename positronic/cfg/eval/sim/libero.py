@@ -1,5 +1,6 @@
 import configuronic as cfn
 
+from positronic import keys
 from positronic.cfg.eval import build_trials
 from positronic.drivers.roboarm.models import bundled_panda_model
 from positronic.eval import Eval, Observation, Task
@@ -13,7 +14,7 @@ _SUITE_NUM_TASKS = {'libero_spatial': 10, 'libero_object': 10, 'libero_goal': 10
 
 
 @cfn.config(
-    camera_dict={'image.agentview': 'agentview_image', 'image.wrist': 'eye_in_hand_image'},
+    camera_dict={'image.agentview': 'agentview_image', keys.WRIST_IMAGE: 'eye_in_hand_image'},
     camera_resolution=256,
     control_mode='ee',
     timeout=20.0,

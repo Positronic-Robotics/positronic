@@ -1,10 +1,11 @@
 from functools import partial
+from typing import Any
 
 import numpy as np
 import pytest
 
 import pimm
-from positronic import wire
+from positronic import keys, wire
 from positronic.dataset.ds_writer_agent import DsWriterCommand, DsWriterCommandType
 from positronic.dataset.serializers import Serializers
 from positronic.drivers import roboarm
@@ -39,7 +40,7 @@ def make_embodiment(descriptor: str = '', cameras=('image.cam',)) -> Embodiment:
     """
     observations = {
         'robot_state': Observation(pimm.NoOpEmitter(), Serializers.robot_state),
-        'grip': Observation(pimm.NoOpEmitter(), None),
+        keys.GRIP: Observation(pimm.NoOpEmitter(), None),
     }
     for cam in cameras:
         observations[cam] = Observation(pimm.NoOpEmitter(), Serializers.camera_images)
@@ -66,7 +67,7 @@ class SpyPolicy(Policy):
             command = CartesianPosition(pose=pose)
         self.command = command
         self.target_grip = float(target_grip)
-        self.last_obs: dict[str, object] | None = None
+        self.last_obs: dict[str, Any] | None = None
         self.reset_calls: int = 0
         self.last_reset_context = None
 
@@ -105,7 +106,7 @@ class StubPolicy(Policy):
             command = CartesianPosition(pose=pose)
         self.command = command
         self.target_grip = float(target_grip)
-        self.last_obs: dict[str, object] | None = None
+        self.last_obs: dict[str, Any] | None = None
         self.observations: list[dict[str, object]] = []
         self.reset_calls = 0
         self.last_reset_context = None
@@ -186,7 +187,7 @@ def _pair_all(world, harness):
     return {
         'frame_em': world.pair(harness.observations['image.cam']),
         'robot_em': world.pair(harness.observations['robot_state']),
-        'grip_em': world.pair(harness.observations['grip']),
+        'grip_em': world.pair(harness.observations[keys.GRIP]),
         'directive_em': world.pair(harness.directive),
         'command_rx': world.pair(harness.commands['robot_command']),
         'grip_rx': world.pair(harness.commands['target_grip']),
@@ -252,7 +253,7 @@ def test_harness_emits_cartesian_move(world):
 
     frame_em = world.pair(harness.observations['image.cam'])
     robot_em = world.pair(harness.observations['robot_state'])
-    grip_em = world.pair(harness.observations['grip'])
+    grip_em = world.pair(harness.observations[keys.GRIP])
     directive_em = world.pair(harness.directive)
 
     robot_state = make_robot_state([0.1, 0.2, 0.3], [0.4, 0.5, 0.6])
@@ -270,21 +271,21 @@ def test_harness_emits_cartesian_move(world):
     obs = policy.last_obs
     assert 'image.cam' in obs
     expected_pose = np.concatenate([robot_state.ee_pose.translation, robot_state.ee_pose.rotation.as_quat])
-    np.testing.assert_allclose(obs['robot_state.ee_pose'], expected_pose)
-    np.testing.assert_allclose(obs['robot_state.q'], robot_state.q)
-    np.testing.assert_allclose(obs['robot_state.dq'], np.zeros_like(robot_state.q))
-    assert obs['grip'] == pytest.approx(0.25)
-    assert obs['task'] == 'stack-blocks'
+    np.testing.assert_allclose(obs[keys.EE_POSE], expected_pose)
+    np.testing.assert_allclose(obs[keys.JOINTS], robot_state.q)
+    np.testing.assert_allclose(obs[keys.JOINT_VEL], np.zeros_like(robot_state.q))
+    assert obs[keys.GRIP] == pytest.approx(0.25)
+    assert obs[keys.TASK] == 'stack-blocks'
     assert obs['descriptor'] == ''  # no descriptor passed -> empty string reaches the policy
     # Recording == canonical policy I/O: the policy sees the same ``robot_state`` serializer
     # the dataset records. wall/obs timestamps carry volatile values, so lock the stable key set.
     assert set(obs) - {'wall_time_ns', 'obs_time_ns'} == {
         'image.cam',
-        'robot_state.q',
-        'robot_state.dq',
-        'robot_state.ee_pose',
-        'grip',
-        'task',
+        keys.JOINTS,
+        keys.JOINT_VEL,
+        keys.EE_POSE,
+        keys.GRIP,
+        keys.TASK,
         'descriptor',
     }
 
@@ -311,7 +312,7 @@ def test_harness_passes_descriptor_to_policy(world):
 
     frame_em = world.pair(harness.observations['image.cam'])
     robot_em = world.pair(harness.observations['robot_state'])
-    grip_em = world.pair(harness.observations['grip'])
+    grip_em = world.pair(harness.observations[keys.GRIP])
     directive_em = world.pair(harness.directive)
 
     robot_state = make_robot_state([0.1, 0.2, 0.3], [0.4, 0.5, 0.6])
@@ -341,7 +342,7 @@ def test_harness_waits_for_complete_inputs(world):
 
     frame_em = world.pair(harness.observations['image.cam'])
     robot_em = world.pair(harness.observations['robot_state'])
-    grip_em = world.pair(harness.observations['grip'])
+    grip_em = world.pair(harness.observations[keys.GRIP])
     directive_em = world.pair(harness.directive)
 
     assert 'image.cam' in harness.observations
@@ -380,7 +381,7 @@ def test_harness_waits_for_complete_inputs(world):
 @pytest.mark.timeout(3.0)
 def test_episode_meta_stamped_at_finalize(world):
     policy = StubPolicy(meta={'type': 'stub', 'checkpoint': 'v1'})
-    harness = Harness(policy, make_embodiment(), static_meta={'joint_signal': 'robot_state.q'})
+    harness = Harness(policy, make_embodiment(), static_meta={'joint_signal': keys.JOINTS})
     p = _pair_all(world, harness)
 
     driver = ManualDriver([
@@ -396,12 +397,12 @@ def test_episode_meta_stamped_at_finalize(world):
     stops = [c for c in _ds_commands(p) if c.type == DsWriterCommandType.STOP_EPISODE]
     assert len(stops) == 1
     meta = stops[0].static_data
-    assert meta['joint_signal'] == 'robot_state.q'
+    assert meta['joint_signal'] == keys.JOINTS
     assert meta['urdf'] == '<robot/>'
     assert meta['joint_names'] == ['j1']
     assert meta['inference.policy.type'] == 'stub'
     assert meta['inference.policy.checkpoint'] == 'v1'
-    assert meta['task'] == 'test'
+    assert meta[keys.TASK] == 'test'
 
 
 @pytest.mark.timeout(3.0)
@@ -757,7 +758,7 @@ def test_trial_plan_self_drives(world):
 
     stops = [c for c in _ds_commands(p) if c.type == DsWriterCommandType.STOP_EPISODE]
     assert [s.static_data['eval.trial_index'] for s in stops] == [0, 1]
-    assert all(s.static_data['task'] == 'stack' for s in stops)
+    assert all(s.static_data[keys.TASK] == 'stack' for s in stops)
     assert len(stops) == 2
     assert all(s.static_data['eval.terminated'] is False for s in stops)
     assert policy.reset_calls == 2
@@ -780,7 +781,7 @@ def test_timeout_crossed_during_latency_sleep_drops_chunk(world):
 
     frame_em = world.pair(harness.observations['image.cam'])
     robot_em = world.pair(harness.observations['robot_state'])
-    grip_em = world.pair(harness.observations['grip'])
+    grip_em = world.pair(harness.observations[keys.GRIP])
 
     robot_state = make_robot_state([0.1, 0.2, 0.3], [0.4, 0.5, 0.6])
 
@@ -858,7 +859,7 @@ def test_run_calls_policy_reset_with_context(world):
     drive_scheduler(scheduler, steps=5)
 
     assert policy.reset_calls == 1
-    assert policy.last_reset_context == {'task': 'test-task'}
+    assert policy.last_reset_context == {keys.TASK: 'test-task'}
 
 
 @pytest.mark.timeout(3.0)
@@ -878,7 +879,7 @@ def test_task_instruction_reaches_session_context_after_reset(world):
     scheduler = world.start([harness])
     drive_scheduler(scheduler, steps=200)
 
-    assert policy.last_reset_context['task'] == 'resolved-on-reset'
+    assert policy.last_reset_context[keys.TASK] == 'resolved-on-reset'
 
 
 @pytest.mark.timeout(3.0)
@@ -909,7 +910,7 @@ def test_finish_cancels_buffered_trajectory_before_stop_episode(world):
 
     frame_em = world.pair(harness.observations['image.cam'])
     robot_em = world.pair(harness.observations['robot_state'])
-    grip_em = world.pair(harness.observations['grip'])
+    grip_em = world.pair(harness.observations[keys.GRIP])
     directive_em = world.pair(harness.directive)
 
     robot_state = make_robot_state([0.1, 0.2, 0.3], [0.4, 0.5, 0.6])
@@ -963,7 +964,7 @@ def test_empty_chunk_cancels_both_robot_and_grip(world):
 
     frame_em = world.pair(harness.observations['image.cam'])
     robot_em = world.pair(harness.observations['robot_state'])
-    grip_em = world.pair(harness.observations['grip'])
+    grip_em = world.pair(harness.observations[keys.GRIP])
     directive_em = world.pair(harness.directive)
 
     robot_state = make_robot_state([0.1, 0.2, 0.3], [0.4, 0.5, 0.6])
@@ -1074,7 +1075,7 @@ def test_harness_skips_inference_on_error(world):
 
 
 def test_directive_preserves_payload():
-    assert Directive.RUN(task='test').payload == {'task': 'test'}
+    assert Directive.RUN(task='test').payload == {keys.TASK: 'test'}
     assert Directive.FINISH(outcome='Success').payload == {'outcome': 'Success'}
     assert Directive.FINISH().payload == {}
     assert Directive.ABORT().payload is None
@@ -1201,7 +1202,7 @@ def test_shutdown_cancels_trajectory_before_stop(world):
 
     frame_em = world.pair(harness.observations['image.cam'])
     robot_em = world.pair(harness.observations['robot_state'])
-    grip_em = world.pair(harness.observations['grip'])
+    grip_em = world.pair(harness.observations[keys.GRIP])
     directive_em = world.pair(harness.directive)
 
     robot_state = make_robot_state([0.1, 0.2, 0.3], [0.4, 0.5, 0.6])

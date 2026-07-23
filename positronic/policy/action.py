@@ -2,7 +2,7 @@ from functools import partial
 
 import numpy as np
 
-from positronic import geom
+from positronic import geom, keys
 from positronic.dataset import transforms
 from positronic.dataset.episode import Episode
 from positronic.dataset.signal import Signal
@@ -94,7 +94,7 @@ class IKJointsAction(Codec):
         solver_cls,
         *,
         tgt_ee_pose_key='robot_command.pose',
-        current_q_key='robot_state.q',
+        current_q_key=keys.JOINTS,
         tgt_joints_key='robot_command.joints',
     ):
         self.solver_cls = solver_cls
@@ -120,7 +120,7 @@ class RelativePositionAction(Codec):
     def __init__(
         self,
         rotation_rep: RotRep | str = RotRep.QUAT,
-        robot_pose_key: str = 'robot_state.ee_pose',
+        robot_pose_key: str = keys.EE_POSE,
         target_pose_key: str = 'robot_command.pose',
         target_grip_key: str = 'target_grip',
     ):
@@ -141,7 +141,7 @@ class RelativePositionAction(Codec):
         q_diff = geom.Rotation.create_from(rotation, self.rot_rep)
         tr_diff = action_vector[self.rot_rep.size : self.rot_rep.size + 3]
 
-        robot_pose = context['robot_state.ee_pose']
+        robot_pose = context[keys.EE_POSE]
 
         rot_mul = geom.Rotation.from_quat(robot_pose[3:7]) * q_diff
         tr_add = robot_pose[0:3] + tr_diff

@@ -22,7 +22,7 @@ import configuronic as cfn
 import numpy as np
 from PIL import Image as PilImage
 
-from positronic import geom
+from positronic import geom, keys
 from positronic.cfg import codecs
 from positronic.dataset import Signal, transforms
 from positronic.dataset.episode import Episode
@@ -39,8 +39,8 @@ class ObservationCodec(Codec):
     def __init__(
         self,
         state_features: dict[str, int],
-        exterior_camera: str = 'image.exterior',
-        wrist_camera: str = 'image.wrist',
+        exterior_camera: str = keys.EXTERIOR_IMAGE,
+        wrist_camera: str = keys.WRIST_IMAGE,
         image_size: tuple[int, int] = (224, 224),
     ):
         self._state_features = state_features
@@ -52,7 +52,7 @@ class ObservationCodec(Codec):
             'observation.state': self._derive_state,
             'observation.images.left': partial(self._derive_image, wrist_camera),
             'observation.images.side': partial(self._derive_image, exterior_camera),
-            'task': Get('task', ''),
+            'task': Get(keys.TASK, ''),
         }
 
         state_dim = sum(state_features.values())
@@ -87,8 +87,8 @@ class ObservationCodec(Codec):
             'observation/wrist_image': self._encode_image(self._wrist_camera, inputs),
             'observation/image': self._encode_image(self._exterior_camera, inputs),
         }
-        if 'task' in inputs:
-            obs['prompt'] = inputs['task']
+        if keys.TASK in inputs:
+            obs['prompt'] = inputs[keys.TASK]
         return obs
 
     def _encode_image(self, input_key: str, inputs: dict[str, Any]) -> np.ndarray:
@@ -121,9 +121,9 @@ class ObservationCodec(Codec):
 
 
 @cfn.config(
-    state_features={'robot_state.ee_pose': 7, 'grip': 1},
-    exterior_camera='image.exterior',
-    wrist_camera='image.wrist',
+    state_features={keys.EE_POSE: 7, keys.GRIP: 1},
+    exterior_camera=keys.EXTERIOR_IMAGE,
+    wrist_camera=keys.WRIST_IMAGE,
     image_size=(224, 224),
 )
 def observation(state_features: dict[str, int], exterior_camera: str, wrist_camera: str, image_size: tuple[int, int]):
@@ -134,17 +134,17 @@ def observation(state_features: dict[str, int], exterior_camera: str, wrist_came
 
 
 ee_obs = observation
-ee_joints_obs = observation.override(state_features={'robot_state.ee_pose': 7, 'grip': 1, 'robot_state.q': 7})
+ee_joints_obs = observation.override(state_features={keys.EE_POSE: 7, keys.GRIP: 1, keys.JOINTS: 7})
 
 
 # Pretrained DROID models read joints and gripper as separate observation keys and the language
 # prompt under `prompt` (see openpi `droid_policy.DroidInputs`).
 droid_obs = cfn.Config(
     GenericObservationCodec,
-    state={'observation/joint_position': {'robot_state.q': 7}, 'observation/gripper_position': {'grip': 1}},
+    state={'observation/joint_position': {keys.JOINTS: 7}, 'observation/gripper_position': {keys.GRIP: 1}},
     images={
-        'observation/wrist_image_left': ('image.wrist', (224, 224)),
-        'observation/exterior_image_1_left': ('image.exterior', (224, 224)),
+        'observation/wrist_image_left': (keys.WRIST_IMAGE, (224, 224)),
+        'observation/exterior_image_1_left': (keys.EXTERIOR_IMAGE, (224, 224)),
     },
     task_field='prompt',
 )
@@ -152,15 +152,15 @@ droid_obs = cfn.Config(
 ee = codecs.compose.override(obs=ee_obs, action=codecs.absolute_pos_action)
 ee_joints = ee.override(obs=ee_joints_obs)
 
-ee_traj = ee.override(action=codecs.traj_ee_action, binarize_grip=('grip',))
-ee_joints_traj = ee_joints.override(action=codecs.traj_ee_action, binarize_grip=('grip',))
+ee_traj = ee.override(action=codecs.traj_ee_action, binarize_grip=(keys.GRIP,))
+ee_joints_traj = ee_joints.override(action=codecs.traj_ee_action, binarize_grip=(keys.GRIP,))
 
 # Pure joint-based trajectory variant (no commanded joint targets in recordings)
-joints_obs = observation.override(state_features={'robot_state.q': 7, 'grip': 1})
+joints_obs = observation.override(state_features={keys.JOINTS: 7, keys.GRIP: 1})
 joints_traj = codecs.compose.override(
     obs=joints_obs,
-    action=codecs.absolute_joints_action.override(tgt_joints_key='robot_state.q', tgt_grip_key='grip'),
-    binarize_grip=('grip',),
+    action=codecs.absolute_joints_action.override(tgt_joints_key=keys.JOINTS, tgt_grip_key=keys.GRIP),
+    binarize_grip=(keys.GRIP,),
 )
 
 # IK variants: reconstruct joint targets from recorded EE targets via IK
@@ -179,8 +179,8 @@ droid = codecs.compose.override(obs=droid_obs, action=codecs.joint_delta_action,
 # after the full chunk executes, whatever each variant's length.
 droid_jointpos = codecs.compose.override(
     obs=droid_obs,
-    action=codecs.absolute_joints_action.override(tgt_joints_key='robot_state.q', tgt_grip_key='grip'),
-    binarize_grip=('grip',),
+    action=codecs.absolute_joints_action.override(tgt_joints_key=keys.JOINTS, tgt_grip_key=keys.GRIP),
+    binarize_grip=(keys.GRIP,),
 )
 
 
@@ -231,7 +231,7 @@ class LiberoObservationCodec(Codec):
     def __init__(
         self,
         exterior_camera: str = 'image.agentview',
-        wrist_camera: str = 'image.wrist',
+        wrist_camera: str = keys.WRIST_IMAGE,
         image_size: tuple[int, int] = (224, 224),
     ):
         self._exterior_camera = exterior_camera
@@ -244,12 +244,12 @@ class LiberoObservationCodec(Codec):
             'observation/wrist_image': self._encode_image(self._wrist_camera, inputs),
             'observation/image': self._encode_image(self._exterior_camera, inputs),
         }
-        if 'task' in inputs:
-            obs['prompt'] = inputs['task']
+        if keys.TASK in inputs:
+            obs['prompt'] = inputs[keys.TASK]
         return obs
 
     def _libero_state(self, inputs: dict[str, Any]) -> np.ndarray:
-        ee_pose = np.asarray(inputs['robot_state.ee_pose'], dtype=float)
+        ee_pose = np.asarray(inputs[keys.EE_POSE], dtype=float)
         hand_rot = geom.Rotation.from_quat(ee_pose[3:7]) * _GRIP_SITE_TO_HAND
         # Reproduce robosuite's axis-angle branch. Its `robot0_eef_quat` is MuJoCo's `body_xquat`, FK-continuous
         # from the tool-down home pose and thus consistently in the w<=0 hemisphere (angle >= pi) across the
@@ -258,7 +258,7 @@ class LiberoObservationCodec(Codec):
         quat = np.asarray(hand_rot.to(geom.Rotation.Representation.QUAT))
         canonical = geom.Rotation.from_quat(quat if quat[0] <= 0 else -quat)
         axisangle = np.asarray(canonical.to(geom.Rotation.Representation.ROTVEC)).reshape(3)
-        closure = 1.0 - float(inputs['grip'])
+        closure = 1.0 - float(inputs[keys.GRIP])
         gripper_qpos = _GRIPPER_QPOS_CLOSED + closure * (_GRIPPER_QPOS_OPEN - _GRIPPER_QPOS_CLOSED)
         return np.concatenate([ee_pose[:3], axisangle, gripper_qpos]).astype(np.float32)
 

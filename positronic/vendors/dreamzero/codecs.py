@@ -7,6 +7,7 @@ import configuronic as cfn
 import numpy as np
 from PIL import Image as PilImage
 
+from positronic import keys
 from positronic.cfg import codecs, wrappers
 from positronic.dataset import Signal, transforms
 from positronic.dataset.episode import Episode
@@ -34,8 +35,8 @@ class DreamZeroObservationCodec(Codec):
 
     def __init__(
         self,
-        wrist_camera: str = 'image.wrist',
-        exterior_camera_1: str = 'image.exterior',
+        wrist_camera: str = keys.WRIST_IMAGE,
+        exterior_camera_1: str = keys.EXTERIOR_IMAGE,
         exterior_camera_2: str | None = None,
         image_size: tuple[int, int] = (IMAGE_WIDTH, IMAGE_HEIGHT),
     ):
@@ -51,7 +52,7 @@ class DreamZeroObservationCodec(Codec):
             'video.wrist_image_left': partial(self._derive_image, wrist_camera),
             'video.exterior_image_1_left': partial(self._derive_image, exterior_camera_1),
             'video.exterior_image_2_left': partial(self._derive_image, self._exterior_camera_2),
-            'task': Get('task', ''),
+            'task': Get(keys.TASK, ''),
         }
 
         self._training_meta = {
@@ -81,10 +82,10 @@ class DreamZeroObservationCodec(Codec):
         }
 
     def _derive_joint_position(self, episode: Episode) -> Signal[Any]:
-        return transforms.astype(episode['robot_state.q'], np.float32)
+        return transforms.astype(episode[keys.JOINTS], np.float32)
 
     def _derive_gripper_position(self, episode: Episode) -> Signal[Any]:
-        return transforms.Elementwise(episode['grip'], _reshape_grip)
+        return transforms.Elementwise(episode[keys.GRIP], _reshape_grip)
 
     def _derive_image(self, input_key: str, episode: Episode) -> Signal[Any]:
         w, h = self._image_size
@@ -101,8 +102,8 @@ class DreamZeroObservationCodec(Codec):
         return image.resize_with_pad_per_frame(w, h, PilImage.Resampling.BILINEAR, frame)
 
     def encode(self, inputs: dict[str, Any]) -> dict[str, Any]:
-        joint_pos = np.asarray(inputs['robot_state.q'], dtype=np.float32).reshape(-1)
-        grip = np.asarray(inputs['grip'], dtype=np.float32).reshape(-1)
+        joint_pos = np.asarray(inputs[keys.JOINTS], dtype=np.float32).reshape(-1)
+        grip = np.asarray(inputs[keys.GRIP], dtype=np.float32).reshape(-1)
 
         obs = {
             'observation/joint_position': joint_pos,
@@ -112,8 +113,8 @@ class DreamZeroObservationCodec(Codec):
             'observation/exterior_image_1_left': self._encode_image(self._exterior_camera_2, inputs),
         }
 
-        if 'task' in inputs:
-            obs['prompt'] = inputs['task']
+        if keys.TASK in inputs:
+            obs['prompt'] = inputs[keys.TASK]
 
         return obs
 
@@ -194,8 +195,8 @@ class DreamZeroActionCodec(Codec):
 
 
 @cfn.config(
-    wrist_camera='image.wrist',
-    exterior_camera_1='image.exterior',
+    wrist_camera=keys.WRIST_IMAGE,
+    exterior_camera_1=keys.EXTERIOR_IMAGE,
     exterior_camera_2=None,
     image_size=(IMAGE_WIDTH, IMAGE_HEIGHT),
 )
@@ -227,7 +228,7 @@ joints = codecs.compose.override(obs=dreamzero_obs, action=_action, fps=15.0)
 # 176-tall codec output at load, so only the DROID-serving codec needs the taller image.
 droid = codecs.compose.override(obs=dreamzero_obs.override(image_size=(IMAGE_WIDTH, 180)), action=_action, fps=15.0)
 
-_traj_action = dreamzero_action.override(tgt_joints_key='robot_state.q', tgt_grip_key='grip')
+_traj_action = dreamzero_action.override(tgt_joints_key=keys.JOINTS, tgt_grip_key=keys.GRIP)
 joints_traj = codecs.compose.override(obs=dreamzero_obs, action=_traj_action, fps=15.0)
 
 # IK variants: reconstruct joint targets from recorded EE targets via IK
@@ -253,5 +254,5 @@ joints_ik_sim = joints_ik.override(**{'action.solver': 'lm'})
 # at stride 8 from the current frame with the oldest pinned to the window start → trained offsets
 # -23, -16, -8, 0 (test_client_AR.py RELATIVE_OFFSETS; -23 not -24 keeps the oldest inside the window).
 dreamzero_wrappers = wrappers.video_context_wrappers.override(
-    history_frames=23, stride=8, keys=('image.wrist', 'image.exterior')
+    history_frames=23, stride=8, keys=(keys.WRIST_IMAGE, keys.EXTERIOR_IMAGE)
 )

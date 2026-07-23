@@ -2,7 +2,7 @@
 
 import configuronic as cfn
 
-from positronic import geom
+from positronic import geom, keys
 from positronic.policy.observation import ObservationCodec
 
 RotRep = geom.Rotation.Representation
@@ -19,27 +19,27 @@ def general_obs(
 
 
 eepose_grip_obs = general_obs.override(
-    state_name='observation.state', state_features={'robot_state.ee_pose': 7, 'grip': 1}, image_size=(224, 224)
+    state_name='observation.state', state_features={keys.EE_POSE: 7, keys.GRIP: 1}, image_size=(224, 224)
 )
 
 joints_grip_obs = general_obs.override(
-    state_name='observation.state', state_features={'robot_state.q': 7, 'grip': 1}, image_size=(224, 224)
+    state_name='observation.state', state_features={keys.JOINTS: 7, keys.GRIP: 1}, image_size=(224, 224)
 )
 
 eepose_grip_joints_obs = general_obs.override(
     state_name='observation.state',
-    state_features={'robot_state.ee_pose': 7, 'grip': 1, 'robot_state.q': 7},
+    state_features={keys.EE_POSE: 7, keys.GRIP: 1, keys.JOINTS: 7},
     image_size=(224, 224),
 )
 
 eepose_obs = eepose_grip_obs.override(
-    image_mappings={'observation.images.left': 'image.wrist', 'observation.images.side': 'image.exterior'}
+    image_mappings={'observation.images.left': keys.WRIST_IMAGE, 'observation.images.side': keys.EXTERIOR_IMAGE}
 )
 joints_obs = joints_grip_obs.override(
-    image_mappings={'observation.images.left': 'image.wrist', 'observation.images.side': 'image.exterior'}
+    image_mappings={'observation.images.left': keys.WRIST_IMAGE, 'observation.images.side': keys.EXTERIOR_IMAGE}
 )
 eepose_joints_obs = eepose_grip_joints_obs.override(
-    image_mappings={'observation.images.left': 'image.wrist', 'observation.images.side': 'image.exterior'}
+    image_mappings={'observation.images.left': keys.WRIST_IMAGE, 'observation.images.side': keys.EXTERIOR_IMAGE}
 )
 
 
@@ -96,14 +96,14 @@ def joint_delta_action(num_joints: int):
     return JointDeltaAction(num_joints=num_joints)
 
 
-traj_ee_action = absolute_pos_action.override(tgt_ee_pose_key='robot_state.ee_pose', tgt_grip_key='grip')
+traj_ee_action = absolute_pos_action.override(tgt_ee_pose_key=keys.EE_POSE, tgt_grip_key=keys.GRIP)
 
 
 @cfn.config(
     solver='dls_limits',
     tgt_ee_pose_key='robot_command.pose',
     tgt_grip_key='target_grip',
-    current_q_key='robot_state.q',
+    current_q_key=keys.JOINTS,
     num_joints=7,
 )
 def ik_joints_action(solver, tgt_ee_pose_key, tgt_grip_key, current_q_key, num_joints):

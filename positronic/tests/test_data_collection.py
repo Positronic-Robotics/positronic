@@ -5,9 +5,10 @@ import numpy as np
 import pytest
 
 import pimm
-from positronic import wire
+from positronic import keys, wire
 from positronic.data_collection import DataCollectionController, OperatorPosition, controller_positions_serializer
 from positronic.dataset.ds_writer_agent import DsWriterAgent, DsWriterCommand, DsWriterCommandType
+from positronic.dataset.episode import Episode
 from positronic.dataset.local_dataset import LocalDataset, LocalDatasetWriter
 from positronic.dataset.serializers import Serializers
 from positronic.geom import Rotation, Transform3D
@@ -70,7 +71,7 @@ def test_data_collection_records_task_metadata(tmp_path, world):
     def metadata_getter():
         nonlocal call_count
         call_count += 1
-        return {'task': 'stack-blocks'}
+        return {keys.TASK: 'stack-blocks'}
 
     (dc, agent, ctrl_em_dc, ctrl_em_agent, buttons_em, writer_cm, robot) = build_collection(
         world, tmp_path, metadata_getter=metadata_getter
@@ -104,7 +105,8 @@ def test_data_collection_records_task_metadata(tmp_path, world):
     dataset = LocalDataset(tmp_path)
     assert len(dataset) == 1
     episode = dataset[0]
-    assert episode['task'] == 'stack-blocks'
+    assert isinstance(episode, Episode)
+    assert episode[keys.TASK] == 'stack-blocks'
 
 
 def test_data_collection_basic_recording(tmp_path, world):
@@ -159,7 +161,7 @@ def test_data_collection_with_mujoco_robot_gripper(tmp_path):
         agent.add_signal('robot_command', Serializers.robot_command)
         agent.add_signal('controller_positions', controller_positions_serializer)
         agent.add_signal('robot_state', Serializers.robot_state)
-        agent.add_signal('grip')
+        agent.add_signal(keys.GRIP)
 
         world.connect(sim.state, dc.robot_state)
         world.connect(sim.state, agent.inputs['robot_state'])
@@ -167,7 +169,7 @@ def test_data_collection_with_mujoco_robot_gripper(tmp_path):
         world.connect(dc.robot_commands, agent.inputs['robot_command'])
         world.connect(dc.target_grip, sim.target_grip)
         world.connect(dc.target_grip, agent.inputs['target_grip'])
-        world.connect(sim.grip, agent.inputs['grip'])
+        world.connect(sim.grip, agent.inputs[keys.GRIP])
         world.connect(dc.ds_agent_commands, agent.command)
 
         ctrl_em_dc = world.pair(dc.controller_positions)
@@ -204,20 +206,14 @@ def test_data_collection_with_mujoco_robot_gripper(tmp_path):
     ds = LocalDataset(tmp_path)
     assert len(ds) == 1
     ep = ds[0]
+    assert isinstance(ep, Episode)
 
-    expected = {
-        'target_grip',
-        'controller_positions.right',
-        'robot_state.q',
-        'robot_state.dq',
-        'robot_state.ee_pose',
-        'grip',
-    }
+    expected = {'target_grip', 'controller_positions.right', keys.JOINTS, keys.JOINT_VEL, keys.EE_POSE, keys.GRIP}
     assert expected.issubset(set(ep.keys()))
 
     # Robot/gripper signals should have at least one sample
-    robot_j = ep['robot_state.q']
-    grip_sig = ep['grip']
+    robot_j = ep[keys.JOINTS]
+    grip_sig = ep[keys.GRIP]
     assert len(robot_j) >= 1
     assert len(grip_sig) >= 1
 
@@ -237,7 +233,7 @@ def test_data_collection_with_mujoco_robot_gripper(tmp_path):
         for i in range(1, len(sig)):
             assert sig[i][1] > sig[i - 1][1]
 
-    for name in ['robot_state.q', 'robot_state.dq', 'grip']:
+    for name in [keys.JOINTS, keys.JOINT_VEL, keys.GRIP]:
         assert_strictly_increasing(ep[name])
 
 

@@ -29,6 +29,7 @@ import rerun.blueprint as rrb
 
 import positronic.cfg.ds
 import positronic.cfg.policy as policy_cfg
+from positronic import keys
 from positronic.dataset.dataset import Dataset
 from positronic.drivers.roboarm.command import CartesianPosition, JointDelta
 from positronic.policy import Policy, Recorder, is_action
@@ -37,14 +38,14 @@ from positronic.utils.logging import init_logging
 # Tap name; the recorder logs each obs/action entity under ``{_TAP}/{key}`` (see recording.py).
 _TAP = 'raw'
 # Observation keys the endpoint expects, mirroring the inference harness, plus every image.*.
-_STATE_KEYS = ('robot_state.q', 'robot_state.dq', 'robot_state.ee_pose', 'grip')
+_STATE_KEYS = (keys.JOINTS, keys.JOINT_VEL, keys.EE_POSE, keys.GRIP)
 
 
 def _build_wire_obs(sample: dict, task: str | None, now_ns: int, recorded_ts: int) -> dict:
     obs = {k: sample[k] for k in _STATE_KEYS if k in sample}
     obs.update({k: v for k, v in sample.items() if k.startswith('image.')})
     if task:
-        obs['task'] = task
+        obs[keys.TASK] = task
     obs['wall_time_ns'] = now_ns  # rerun wall_time timeline
     obs['obs_time_ns'] = recorded_ts  # rerun obs_time + action_time anchor
     return obs
@@ -124,16 +125,16 @@ def main(
     ep = dataset[episode]
     ts = int(np.clip(ep.start_ts + int(at * 1e9), ep.start_ts, ep.last_ts))
     sample = ep.time[ts]
-    if 'robot_state.ee_pose' not in sample:
+    if keys.EE_POSE not in sample:
         raise ValueError('episode has no robot_state.ee_pose; cannot overlay actual pose')
-    task = task or ep.static.get('task')
+    task = task or ep.static.get(keys.TASK)
 
     now_ns = time.time_ns()
     obs = _build_wire_obs(sample, task, now_ns, ts)
     image_keys = [k for k in obs if k.startswith('image.')]
 
     rec = Recorder(pos3.sync(output_dir))
-    session = rec.tap(_TAP).wrap(policy).new_session({'task': task} if task else None)
+    session = rec.tap(_TAP).wrap(policy).new_session({keys.TASK: task} if task else None)
     meta = dict(session.meta)
     name = label or _recording_name(meta)
     try:
