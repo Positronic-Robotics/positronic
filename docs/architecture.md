@@ -35,10 +35,13 @@ capabilities, so drivers plan through waypoints. Only a sensor knows its own cad
 run at their own rate instead of a rate the loop imposes. Only a policy knows what its model was
 trained on, so translation to model I/O ships with the policy.
 
-**Whatever varies travels as data, not as ambient state.** Time enters the pipeline as an
-observation field; hardware identity is a `meta` port every driver emits. Nothing that varies is
-read from a global, a constructor argument, or a config the run captured once. A value that flows
-through a channel is recordable, substitutable and replayable by construction.
+**Components are functions over flowing data.** A component sees nothing but its inputs and touches
+nothing but its outputs. Whatever varies enters as data — time is an observation field, hardware
+identity is a `meta` port every driver emits — never as a global, a constructor argument, or a
+config the run captured once. Separable stages stay separate, and processing is deterministic where
+possible. One property, many payoffs: a component moves across process and machine boundaries
+unchanged, either side of a boundary can be implemented in any language, and every boundary can be
+tapped for recording or replay.
 
 **Capture raw, project on demand.** Record the raw-most values the loop saw, completely; defer
 every choice a projection can express. Care belongs on the expensive layer (protocol, capture
@@ -122,3 +125,10 @@ model-facing view — action space, control frame, vendor format — is a codec'
 A codec owns `encode`/`decode` and its `training_encoder` in one object, so the projection that
 builds the training set and the transformation applied at inference are one specification and
 cannot diverge.
+
+**The rollout records, analysis scores.** The run computes no verdicts: it records the raw
+privileged state as-is (for a sim task, the entire simulator state), and success criteria are
+functions over those recordings, computed in a separate analysis pass — one expensive rollout, many
+cheap criteria experiments. The only live exception is an optional stop-signal that ends a trial
+without judging it; whether that end was a success is, like everything else, an analysis question.
+A criterion baked into the run is bound too early: changing it would mean re-running the robot.
