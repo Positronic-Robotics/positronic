@@ -47,7 +47,7 @@ uv run --locked positronic-inference sim \
   --eval.trial_count=2 --show_gui=True
 ```
 
-The server owns the whole policy definition: it runs the codec (raw observations in, decoded joint
+The server owns the whole policy pipeline: it runs the codec (raw observations in, decoded joint
 commands out) and declares the rig-side half — the model's autoregressive video context
 (`TemporalStack`, which must run every control tick to record frames) plus chunk scheduling — in its
 handshake. The client builds that declared stack automatically.
