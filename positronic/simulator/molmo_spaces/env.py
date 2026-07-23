@@ -134,10 +134,13 @@ class MolmoSpacesEnv(EnvProtocol):
         arm = mapping.wire_command_to_arm_action(action['command'], self._measured_arm_q())
         gripper = np.array([mapping.grip_command_to_actuator(action['grip'])], dtype=np.float32)
         obs, _reward, _term, _trunc, _infos = self._task.step({'arm': arm, 'gripper': gripper})
-        done = bool(self._task.is_done())
-        # ``judge_success`` is the task's scored success; only meaningful once the episode is done, so a timeout
-        # stays honest (a running episode is never a success).
-        success = bool(self._task.judge_success()) if done else False
+        # positronic owns the deadline (the harness timeout), so the episode ends here on the task's own scored
+        # success — end-on-success, the benchmark's scoring semantics — or any MolmoSpaces terminal (a done
+        # action). The internal step horizon is disabled (see ``_build``), so ``is_done`` reports only
+        # ``is_terminal``, never a timeout; without terminating on success here a successful rollout that keeps
+        # sending joint commands would run to the harness timeout and be scored as a non-success.
+        success = bool(self._task.judge_success())
+        done = success or bool(self._task.is_done())
         return {'obs': self._observe(obs[0]), 'done': done, 'success': success, 'control_dt': self._control_dt}
 
     def _measured_arm_q(self) -> np.ndarray:
