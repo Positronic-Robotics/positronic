@@ -87,8 +87,10 @@ class WallSplit:
     """Each phase's share of pass wall time; all fractions sum to 1.
 
     ``overhead`` is the within-episode wall unattributed to a measured phase; ``between_episodes`` is the
-    inter-episode wall (session teardown, homing, world rebuild) between one episode's finish and the next's
-    start, which a per-episode sum drops.
+    inter-episode wall (episode writer close — parquet/video flush — plus session teardown, homing, world
+    rebuild) between one episode's finish and the next's start, which a per-episode sum drops. An episode
+    seals its timing statics while its writer is open, so the writer-close flush lands here rather than in
+    that episode's ``record_io``; the final episode's close falls outside the pass span entirely.
     """
 
     reset: float

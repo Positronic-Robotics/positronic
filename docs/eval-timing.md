@@ -53,7 +53,8 @@ the `eval.scored` success verdict the episode already records — and prints a p
 - `policy_busy_fraction`, `infer_p50_ms` / `infer_p95_ms` — how much of the pass the policy gated, and
   its per-call latency.
 - `wall_split` — the fraction of W_pass in each phase: reset / env_step / policy_wait / record_io / overhead
-  / between_episodes (inter-episode teardown, homing, world rebuild); sums to 1.
+  / between_episodes (episode writer close — parquet/video flush — plus teardown, homing, world rebuild);
+  sums to 1.
 - `env_step_split` — physics / render / server_other / wire / materialize inside the env step, when the env
   reports its decomposition.
 - `mean_bytes_per_rollout`, `success_rate`, and GPU mean-util / peak-VRAM for the sim box (and the
