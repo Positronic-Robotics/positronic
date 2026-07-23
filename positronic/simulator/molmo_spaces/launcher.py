@@ -1,11 +1,10 @@
 """Launches the MolmoSpaces env server as a subprocess and owns its lifetime.
 
-positronic starts the server: the env runs in MolmoSpaces' own interpreter via ``uv run --project <checkout>``,
-which resolves the ``molmospaces[mujoco]`` stack (mujoco ~=3.5, the resource-manager asset layer, torch) from the
-pinned checkout — far too heavy, and Python-version-pinned (3.11), to share positronic's venv. The positronic-free
-``env_server`` package and this package's ``mapping`` module ride ``PYTHONPATH`` so ``env.py`` imports the dumb
-``server``/``protocol`` and the pure wire mappings without dragging in positronic; ``molmo_spaces`` itself resolves
-from the uv project.
+positronic starts the server: the env runs in MolmoSpaces' own interpreter — a per-checkout ``.venv`` with the
+``molmospaces[mujoco]`` stack (mujoco ~=3.5, the resource-manager asset layer, torch) installed into it, far too
+heavy and Python-version-pinned (3.11) to share positronic's venv. The positronic-free ``env_server`` package and
+this package's ``mapping`` module ride ``PYTHONPATH`` so ``env.py`` imports the dumb ``server``/``protocol`` and
+the pure wire mappings without dragging in positronic; ``molmo_spaces`` resolves from the venv.
 
 MolmoSpaces renders MuJoCo scenes, so the server needs a GL backend (``MUJOCO_GL``) and its asset packs
 (``MLSPACES_ASSETS_DIR``): ``MUJOCO_GL`` defaults to ``egl`` (GPU) here and both env vars pass through from the
@@ -47,25 +46,24 @@ def _checkout_lock() -> Iterator[None]:
 
 
 def _spawn(host: str, port: int, benchmark_dir: str) -> subprocess.Popen:
+    venv = _MOLMO_SRC / '.venv'
     with _checkout_lock():
         src = ensure_pinned_checkout(_MOLMO_REPO, _MOLMO_COMMIT, _MOLMO_SRC)
         # Install the stack before spawning: a cold first install far exceeds the client's connect deadline,
-        # which should only cover the sim's boot. Idempotent and fast when warm; the spawn passes ``--no-sync``
-        # so no resolve or install ever runs outside this lock. MolmoSpaces ships no uv.lock, so this re-resolves
-        # on every fresh box.
+        # which should only cover the sim's boot. Install the ``mujoco`` extra explicitly into a venv the way
+        # MolmoSpaces' own image does, rather than ``uv sync`` — which also resolves the ``curobo`` extra, a CUDA
+        # build that needs a GPU toolchain and is not on the eval task path. Both steps are idempotent and fast
+        # when warm. MolmoSpaces ships no uv.lock, so the install re-resolves on every fresh box.
+        if not venv.exists():
+            subprocess.run(['uv', 'venv', '--python', _MOLMO_PYTHON, str(venv)], check=True)
         subprocess.run(
-            ['uv', 'sync', '--project', str(src), '--python', _MOLMO_PYTHON, '--extra', _MOLMO_EXTRA], check=True
+            ['uv', 'pip', 'install', '-e', f'.[{_MOLMO_EXTRA}]'],
+            cwd=str(src),
+            env={**os.environ, 'VIRTUAL_ENV': str(venv)},
+            check=True,
         )
     command = [
-        'uv',
-        'run',
-        '--no-sync',
-        '--project',
-        str(src),
-        '--python',
-        _MOLMO_PYTHON,
-        '--extra',
-        _MOLMO_EXTRA,
+        str(venv / 'bin' / 'python'),
         str(_ENV_SCRIPT),
         '--host',
         host,
@@ -77,7 +75,8 @@ def _spawn(host: str, port: int, benchmark_dir: str) -> subprocess.Popen:
     env = {
         **os.environ,
         'PYTHONPATH': os.pathsep.join([str(_ENV_SERVER_DIR), str(_MAPPING_DIR)]),
-        # GPU OpenGL by default; a caller on a GPU-less box exports MUJOCO_GL=osmesa for CPU software rendering.
+        # GPU OpenGL by default; a GPU-less box exports MUJOCO_GL=osmesa, or relies on mesa's software EGL, for
+        # CPU rendering.
         'MUJOCO_GL': os.environ.get('MUJOCO_GL', 'egl'),
     }
     return subprocess.Popen(command, env=env)
