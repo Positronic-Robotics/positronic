@@ -5,6 +5,7 @@ import mujoco as mj
 import numpy as np
 import pytest
 
+from positronic import keys
 from positronic.dataset.episode import EpisodeContainer
 from positronic.dataset.tests.utils import DummySignal
 from positronic.drivers.roboarm.ik import DLSIKSolver, DLSIKSolverWithLimits, LMIKSolver, ik_joints_from_episode
@@ -92,14 +93,14 @@ def test_ik_joints_from_episode():
 
     episode = EpisodeContainer(
         data={
-            'robot_state.q': DummySignal(ts, q_traj),
+            keys.JOINTS: DummySignal(ts, q_traj),
             'robot_command.pose': DummySignal(ts, ee_poses),
             'urdf': URDF,
             'joint_names': JOINT_NAMES,
             'control_frame': CONTROL_FRAME,
         }
     )
-    result = ik_joints_from_episode(episode, DLSIKSolverWithLimits, 'robot_command.pose', 'robot_state.q')
+    result = ik_joints_from_episode(episode, DLSIKSolverWithLimits, 'robot_command.pose', keys.JOINTS)
 
     assert len(result) == n_steps
     for i in range(n_steps):

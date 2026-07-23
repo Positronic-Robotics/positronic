@@ -32,7 +32,7 @@ import numpy as np
 import pytest
 
 import pimm
-from positronic import wire
+from positronic import keys, wire
 from positronic.dataset.ds_writer_agent import TimeMode
 from positronic.dataset.local_dataset import LocalDataset, LocalDatasetWriter
 from positronic.dataset.serializers import Serializers
@@ -60,12 +60,12 @@ ACTION_HORIZON_S = 0.5  # 8 of every 10-action chunk survives truncation
 CONTROL_PERIOD_S = 0.005  # fake robot/gripper sampling cadence (200 Hz)
 
 # State signals captured at the DsWriterAgent output and locked by the golden.
-CAPTURED_SIGNALS = ('robot_state.ee_pose', 'robot_state.q', 'grip')
+CAPTURED_SIGNALS = (keys.EE_POSE, keys.JOINTS, keys.GRIP)
 
 
 class _ScriptedSession(Session):
     def __call__(self, obs):
-        current = np.asarray(obs['robot_state.ee_pose'][:3], dtype=np.float32)
+        current = np.asarray(obs[keys.EE_POSE][:3], dtype=np.float32)
         delta = TARGET_POS - current
         chunk = []
         for i in range(10):
@@ -194,7 +194,7 @@ def _run_pipeline(tmp_path: Path) -> dict:
             descriptor='',
             observations={
                 'robot_state': Observation(robot.state, Serializers.robot_state),
-                'grip': Observation(gripper.grip, None),
+                keys.GRIP: Observation(gripper.grip, None),
             },
             commands={
                 'robot_command': Command(robot.commands, Reset(), Serializers.robot_command),

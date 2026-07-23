@@ -54,6 +54,7 @@ import rerun as rr
 import rerun.blueprint as rrb
 
 from positronic import geom
+from positronic import keys as obs_keys
 from positronic.drivers.roboarm import command as roboarm_command
 from positronic.policy.base import DelegatingSession, PolicyWrapper, Session
 from positronic.policy.codec import is_action
@@ -388,8 +389,8 @@ class _RecordingTapSession(DelegatingSession):
         tv = self._rec._timeline_values
         base_ns = int(tv.get('obs_time', tv.get('wall_time', next(iter(tv.values()), 0))))
         grip = _stack_numeric([a['target_grip'] for a in actions]) if all('target_grip' in a for a in actions) else None
-        actual_pos = obs.get('robot_state.ee_pose') if isinstance(obs, Mapping) else None
-        actual_grip = obs.get('grip') if isinstance(obs, Mapping) else None
+        actual_pos = obs.get(obs_keys.EE_POSE) if isinstance(obs, Mapping) else None
+        actual_grip = obs.get(obs_keys.GRIP) if isinstance(obs, Mapping) else None
         # Under TemporalStack these arrive as (T, 7) / (T,) stacks; the overlay draws the current pose,
         # which is the last frame (offsets end at 0 = now), mirroring the image collapse in `_as_image`.
         if actual_pos is not None:

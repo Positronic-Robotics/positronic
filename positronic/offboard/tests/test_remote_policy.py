@@ -4,6 +4,7 @@ from unittest.mock import MagicMock, patch
 import numpy as np
 import pytest
 
+from positronic import keys
 from positronic.offboard.client import DEFAULT_INFER_TIMEOUT, InferenceClient
 from positronic.policy import RemotePolicy
 from positronic.policy.codec import ActionHorizon
@@ -50,12 +51,12 @@ class TestPrepareObs:
             'cam': _make_image(48, 64),
             'video': {'wrist': _make_image(48, 64)},
             'state': np.array([1.0, 2.0]),
-            'task': 'pick cube',
+            keys.TASK: 'pick cube',
         })
         assert isinstance(result['cam'], dict)
         assert isinstance(result['video']['wrist'], dict)
         np.testing.assert_array_equal(result['state'], np.array([1.0, 2.0]))
-        assert result['task'] == 'pick cube'
+        assert result[keys.TASK] == 'pick cube'
 
 
 class TestInferenceClientHeaders:

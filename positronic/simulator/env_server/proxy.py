@@ -14,6 +14,7 @@ from contextlib import AbstractContextManager, ExitStack
 from typing import Any
 
 import pimm
+from positronic import keys
 from positronic.dataset.serializers import Serializers
 from positronic.drivers.roboarm import command as roboarm_command
 from positronic.eval import ROBOT_STATIC_META, Command, Embodiment, Observation
@@ -142,7 +143,7 @@ def remote_franka_embodiment(
     """
     observations = {
         'robot_state': Observation(proxy.observations['robot_state'], Serializers.robot_state),
-        'grip': Observation(proxy.observations['grip'], None),
+        keys.GRIP: Observation(proxy.observations[keys.GRIP], None),
         **{logical: Observation(proxy.observations[logical], Serializers.camera_images) for logical in camera_dict},
     }
     commands = {

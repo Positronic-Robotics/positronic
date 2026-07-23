@@ -3,10 +3,11 @@ from dataclasses import dataclass, field
 from typing import Any
 
 import pimm
+from positronic import keys
 from positronic.dataset.serializers import Serializer
 
 # Embodiment-level static meta: how recorded signals map to the canonical robot fields.
-ROBOT_STATIC_META = {'joint_signal': 'robot_state.q', 'pose_signals': ['robot_state.ee_pose', 'robot_command.pose']}
+ROBOT_STATIC_META = {'joint_signal': keys.JOINTS, 'pose_signals': [keys.EE_POSE, 'robot_command.pose']}
 
 
 @dataclass

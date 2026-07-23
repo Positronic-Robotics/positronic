@@ -13,6 +13,7 @@ import configuronic as cfn
 import numpy as np
 import pos3
 
+from positronic import keys
 from positronic.cfg.eval.real.tasks import BATTERIES_TASK, SCISSORS_TASK, SPOONS_TASK, TOWELS_TASK
 from positronic.dataset.dataset import ConcatDataset, FilterDataset
 from positronic.dataset.local_dataset import load_all_datasets
@@ -35,7 +36,7 @@ _REMOVE_SIGNALS = ['controller_positions.right', 'robot_commands.pose']
 # transform, so the transform always supplies them — overriding any stale value a recording baked
 # into static (pre-rename recordings carry `robot_commands.pose` in their `pose_signals`).
 _ROBOT_SIGNAL_POINTERS = Derive(
-    joint_signal=FromValue('robot_state.q'), pose_signals=FromValue(['robot_state.ee_pose', 'robot_command.pose'])
+    joint_signal=FromValue(keys.JOINTS), pose_signals=FromValue([keys.EE_POSE, 'robot_command.pose'])
 )
 
 # The bundled model (URDF + collision meshes + joint names + control frame + gripper) for the real
@@ -116,16 +117,16 @@ def _flip_grip(key: str):
 old_to_new = Group(
     Derive(**{
         'robot_command.pose': Concat('target_robot_position_translation', 'target_robot_position_quaternion'),
-        'robot_state.ee_pose': Concat('robot_position_translation', 'robot_position_quaternion'),
-        'task': FromValue('Pick up the green cube and place it on the red cube.'),
-        'grip': _flip_grip('grip'),
+        keys.EE_POSE: Concat('robot_position_translation', 'robot_position_quaternion'),
+        keys.TASK: FromValue('Pick up the green cube and place it on the red cube.'),
+        keys.GRIP: _flip_grip(keys.GRIP),
         'target_grip': _flip_grip('target_grip'),
     }),
     Rename(**{
-        'robot_state.q': 'robot_joints',
-        'robot_state.dq': 'robot_joints_velocity',
-        'image.wrist': 'image.handcam_left',
-        'image.exterior': 'image.back_view',
+        keys.JOINTS: 'robot_joints',
+        keys.JOINT_VEL: 'robot_joints_velocity',
+        keys.WRIST_IMAGE: 'image.handcam_left',
+        keys.EXTERIOR_IMAGE: 'image.back_view',
     }),
     Identity(select=['mjSTATE_FULLPHYSICS', 'mjSTATE_INTEGRATION', 'mjSTATE_WARMSTART']),
 )
@@ -140,10 +141,10 @@ sim_pnp = transform.override(
         Group(
             Derive(
                 task=FromValue('Pick up objects from the red tote and place them in the green tote.'),
-                grip=_flip_grip('grip'),
+                grip=_flip_grip(keys.GRIP),
                 target_grip=_flip_grip('target_grip'),
             ),
-            Rename(**{'image.exterior': 'image.back_view'}),
+            Rename(**{keys.EXTERIOR_IMAGE: 'image.back_view'}),
             Identity(),
         ),
         SIM_ROBOT_TRANSFORM,

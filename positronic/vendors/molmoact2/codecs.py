@@ -5,6 +5,7 @@ from typing import Any
 import configuronic as cfn
 import numpy as np
 
+from positronic import keys
 from positronic.cfg import codecs
 from positronic.policy.codec import Codec
 
@@ -23,11 +24,11 @@ class MolmoAct2ObservationCodec(Codec):
 
     def __init__(
         self,
-        wrist_camera: str = 'image.wrist',
-        exterior_camera_1: str = 'image.exterior',
+        wrist_camera: str = keys.WRIST_IMAGE,
+        exterior_camera_1: str = keys.EXTERIOR_IMAGE,
         exterior_camera_2: str | None = None,
-        joint_key: str = 'robot_state.q',
-        grip_key: str = 'grip',
+        joint_key: str = keys.JOINTS,
+        grip_key: str = keys.GRIP,
     ):
         self._cameras = (exterior_camera_1, exterior_camera_2 or exterior_camera_1, wrist_camera)
         self._joint_key = joint_key
@@ -45,7 +46,7 @@ class MolmoAct2ObservationCodec(Codec):
         return {
             'images': [self._image(k, inputs) for k in self._cameras],
             'state': np.concatenate([joints, grip]).astype(np.float32),
-            'task': inputs.get('task', ''),
+            'task': inputs.get(keys.TASK, ''),
         }
 
     def dummy_encoded(self, data=None) -> dict[str, Any]:

@@ -7,7 +7,7 @@ import configuronic as cfn
 import numpy as np
 from PIL import Image as PilImage
 
-from positronic import geom
+from positronic import geom, keys
 from positronic.cfg import codecs
 from positronic.dataset import transforms
 from positronic.dataset import transforms as tf
@@ -33,8 +33,8 @@ class GrootObservationCodec(Codec):
         include_joints: bool = False,
         include_ee_pose: bool = True,
         image_size: tuple[int, int] = (224, 224),
-        exterior_camera: str = 'image.exterior',
-        wrist_camera: str = 'image.wrist',
+        exterior_camera: str = keys.EXTERIOR_IMAGE,
+        wrist_camera: str = keys.WRIST_IMAGE,
         num_joints: int = 7,
     ):
         self._rotation_rep = rotation_rep
@@ -49,7 +49,7 @@ class GrootObservationCodec(Codec):
             'grip': self._derive_grip,
             'wrist_image': partial(self._derive_image, wrist_camera),
             'exterior_image_1': partial(self._derive_image, exterior_camera),
-            'task': Get('task', ''),
+            'task': Get(keys.TASK, ''),
         }
 
         state_meta: dict[str, Any] = {'grip': {'start': 0, 'end': 1, 'original_key': 'grip'}}
@@ -82,7 +82,7 @@ class GrootObservationCodec(Codec):
         }
 
     def _derive_ee_pose(self, episode: Episode) -> Signal[Any]:
-        pose = episode['robot_state.ee_pose']
+        pose = episode[keys.EE_POSE]
         if self._rotation_rep is not None:
             pose = tf.recode_transform(RotRep.QUAT, self._rotation_rep, pose)
         return tf.astype(pose, np.float32)
@@ -92,17 +92,17 @@ class GrootObservationCodec(Codec):
             arr = np.asarray(values, dtype=np.float32)
             return arr.reshape(-1, 1)
 
-        return transforms.Elementwise(episode['grip'], _reshape_to_1d)
+        return transforms.Elementwise(episode[keys.GRIP], _reshape_to_1d)
 
     def _derive_joints(self, episode: Episode) -> Signal[Any]:
-        return tf.astype(episode['robot_state.q'], np.float32)
+        return tf.astype(episode[keys.JOINTS], np.float32)
 
     def _derive_image(self, input_key: str, episode: Episode) -> Signal[Any]:
         w, h = self._image_size
         return image.resize_with_pad(w, h, signal=episode[input_key])
 
     def _encode_ee_pose(self, inputs: dict[str, Any]) -> np.ndarray:
-        pose = np.asarray(inputs['robot_state.ee_pose'], dtype=np.float32).reshape(-1)
+        pose = np.asarray(inputs[keys.EE_POSE], dtype=np.float32).reshape(-1)
         if self._rotation_rep is not None:
             pose = geom.Transform3D.from_vector(pose, RotRep.QUAT).as_vector(self._rotation_rep).astype(np.float32)
         return pose
@@ -136,14 +136,14 @@ class GrootObservationCodec(Codec):
         return {}
 
     def encode(self, inputs: dict[str, Any]) -> dict[str, Any]:
-        grip = np.asarray(inputs['grip'], dtype=np.float32).reshape(-1)
+        grip = np.asarray(inputs[keys.GRIP], dtype=np.float32).reshape(-1)
         state_dict: dict[str, Any] = {'grip': grip[np.newaxis, np.newaxis, ...]}
 
         if self._include_ee_pose:
             ee_pose = self._encode_ee_pose(inputs)
             state_dict['ee_pose'] = ee_pose[np.newaxis, np.newaxis, ...]
         if self._include_joints:
-            joints = np.asarray(inputs['robot_state.q'], dtype=np.float32).reshape(-1)
+            joints = np.asarray(inputs[keys.JOINTS], dtype=np.float32).reshape(-1)
             state_dict['joint_position'] = joints[np.newaxis, np.newaxis, ...]
 
         return {
@@ -152,7 +152,7 @@ class GrootObservationCodec(Codec):
                 'exterior_image_1': self._encode_image(self._exterior_camera, inputs)[np.newaxis, np.newaxis, ...],
             },
             'state': state_dict,
-            'language': {'annotation.language.language_instruction': [[inputs.get('task', '')]]},
+            'language': {'annotation.language.language_instruction': [[inputs.get(keys.TASK, '')]]},
         }
 
     @property
@@ -224,18 +224,18 @@ ee_rot6d_joints = ee_rot6d.override(**{'obs.include_joints': True})
 _traj_action = _ee_action.override(base=codecs.traj_ee_action)
 _rot6d_traj_action = _rot6d_action.override(base=codecs.traj_ee_action.override(rotation_rep='rot6d'))
 
-ee_quat_traj = codecs.compose.override(obs=groot_obs, action=_traj_action, binarize_grip=('grip',))
-ee_rot6d_traj = codecs.compose.override(obs=_rot6d_obs, action=_rot6d_traj_action, binarize_grip=('grip',))
+ee_quat_traj = codecs.compose.override(obs=groot_obs, action=_traj_action, binarize_grip=(keys.GRIP,))
+ee_rot6d_traj = codecs.compose.override(obs=_rot6d_obs, action=_rot6d_traj_action, binarize_grip=(keys.GRIP,))
 ee_quat_joints_traj = ee_quat_traj.override(**{'obs.include_joints': True})
 ee_rot6d_joints_traj = ee_rot6d_traj.override(**{'obs.include_joints': True})
 
 joints_traj = codecs.compose.override(
     obs=groot_obs.override(include_joints=True, include_ee_pose=False),
     action=groot_action.override(
-        base=codecs.absolute_joints_action.override(tgt_joints_key='robot_state.q', tgt_grip_key='grip'),
+        base=codecs.absolute_joints_action.override(tgt_joints_key=keys.JOINTS, tgt_grip_key=keys.GRIP),
         action_key='joint_position',
     ),
-    binarize_grip=('grip',),
+    binarize_grip=(keys.GRIP,),
 )
 
 # IK variants: GR00T obs (with joints) + IK joint-space action via groot_action wrapper
