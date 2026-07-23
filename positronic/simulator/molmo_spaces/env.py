@@ -109,9 +109,12 @@ class MolmoSpacesEnv(EnvProtocol):
         cfg = _DroidPickEvalConfig()
         # Determinism enters at sampler construction (seed_task_sampling); the token's seed overrides the spec's.
         cfg.seed = int(seed) if seed is not None else (episode.seed if episode.seed is not None else 42)
-        horizon_sec = episode.task.get('task_horizon_sec')
-        if horizon_sec is not None:
-            cfg.task_horizon = round(float(horizon_sec) * 1000.0 / cfg.policy_dt_ms)
+        # positronic's harness owns the episode deadline (the eval's timeout), so disable MolmoSpaces' internal
+        # step horizon: JsonBenchmarkEvalConfig defaults it to 500 steps (~33s at the 66ms policy period), which
+        # would self-terminate the task before the harness timeout and truncate the score. ``None`` -> the task
+        # runs to an infinite horizon, so ``is_done`` reports only the task's own success/termination and the
+        # harness stops the trial at its timeout.
+        cfg.task_horizon = None
         self._sampler = JsonEvalTaskSampler(cfg, episode)
         self._task = self._sampler.sample_task(house_index=episode.house_index)
         self._robot_view = self._task.env.current_robot.robot_view
