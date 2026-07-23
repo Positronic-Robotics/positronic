@@ -20,11 +20,32 @@ the raw payload the adapter assembles into a ``MujocoFrankaState``.
 
 import argparse
 import os
+import sys
+import types
 
 # MolmoSpaces renders MuJoCo scenes, so the GL backend must be selected before any mujoco/molmo_spaces import.
 # The launcher sets MUJOCO_GL in the subprocess env (egl by default); default it here too so a direct invocation
 # (e.g. a validate/e2e run) still boots. Set before the imports below.
 os.environ.setdefault('MUJOCO_GL', 'egl')
+
+
+def _install_cgl_noop_stub() -> None:
+    # HACK: MolmoSpaces' renderer hardcodes a macOS CGL context on the CPU (device_id=None) render path
+    # (opengl_rendering.py does ``from mujoco.cgl import cgl``), which dlopens Apple's OpenGL.framework and
+    # crashes at renderer init on Linux — so a CPU-rendered server (MUJOCO_GL=osmesa or mesa software EGL)
+    # dies before the first observation. CGL locking is a no-op off macOS, so stub the module: the import
+    # resolves and the (un)lock does nothing. Untouched on a GPU box, where the EGL path never imports it.
+    if 'mujoco.cgl' in sys.modules:
+        return
+    cgl = types.ModuleType('mujoco.cgl.cgl')
+    cgl.CGLLockContext = cgl.CGLUnlockContext = lambda *args, **kwargs: None
+    package = types.ModuleType('mujoco.cgl')
+    package.cgl = cgl
+    sys.modules['mujoco.cgl'] = package
+    sys.modules['mujoco.cgl.cgl'] = cgl
+
+
+_install_cgl_noop_stub()
 
 from pathlib import Path  # noqa: E402
 from typing import Any  # noqa: E402
