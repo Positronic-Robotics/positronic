@@ -11,7 +11,7 @@ The e2e replay needs only each demo's raw joint-position action log and its init
 episode, not the multi-GB recording. Run once against a RoboLab recording (e.g. the repo's
 ``examples/recorded_data/RubiksCubeAndBananaTask/data.hdf5``), then commit the ``.npz`` next to the test::
 
-    uv run --no-project positronic/simulator/robolab/make_fixture.py \
+    uv run --no-project positronic/simulator/robolab/tests/make_fixture.py \
         --demo-path <robolab>/examples/recorded_data/RubiksCubeAndBananaTask/data.hdf5 \
         --out positronic/simulator/robolab/tests/rubiks_cube_and_banana.npz
 """

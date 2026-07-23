@@ -2,15 +2,15 @@
 # requires-python = ">=3.11"
 # dependencies = ["numpy"]
 # ///
-"""Regenerate the synthetic MolmoSpaces DROID observation fixture used by tests/test_adapter.py.
+"""Regenerate the synthetic MolmoSpaces DROID observation fixture used by test_adapter.py.
 
 MolmoSpaces renders real MuJoCo scenes that need the full asset stack and a GPU, so committing a real render is
 impractical; the adapter under test only touches observation *structure* (keys, shapes, dtypes, gripper qpos
 scaling, image resize), which a tiny synthetic frame exercises exactly. Images are kept small (36x64, the DROID
 16:9 aspect) and orientation-marked so a resize regression or a wrist/exterior swap is visible.
 
-Run: uv run --no-project positronic/simulator/molmo_spaces/make_fixture.py
-Output: tests/droid_obs.npz  (well under 100 KB)
+Run: uv run --no-project positronic/simulator/molmo_spaces/tests/make_fixture.py
+Output: droid_obs.npz next to this script  (well under 100 KB)
 """
 
 from pathlib import Path
@@ -41,7 +41,7 @@ def build_observation() -> dict[str, np.ndarray]:
 
 
 def main() -> None:
-    out = Path(__file__).parent / 'tests' / 'droid_obs.npz'
+    out = Path(__file__).parent / 'droid_obs.npz'
     obs = build_observation()
     np.savez_compressed(out, **obs)
     print(f'Wrote {out} ({out.stat().st_size} bytes)')

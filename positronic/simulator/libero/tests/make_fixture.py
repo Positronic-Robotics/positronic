@@ -10,7 +10,7 @@
 The e2e replay needs only each demo's action sequence and its initial full state — a few KB per episode, not the
 multi-GB benchmark. Run once on a box that has the demos, then commit the ``.npz`` next to the test::
 
-    uv run --no-project positronic/simulator/libero/make_fixture.py \
+    uv run --no-project positronic/simulator/libero/tests/make_fixture.py \
         --demo-path "$LIBERO_DATASETS/libero_spatial/<task>_demo.hdf5" \
         --out positronic/simulator/libero/tests/libero_spatial_task0.npz
 """
