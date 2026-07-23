@@ -267,13 +267,17 @@ def _build_report(records: list[_EpisodeTiming], facts: dict[str, _RecordedFacts
     def phase_fraction(attr: str) -> float:
         return float(sum(getattr(r, attr) for r in records) / wall_pass) if wall_pass else 0.0
 
-    env_step_sum = float(sum(r.env_step_s for r in records))
-    server_sum = float(sum(r.env_server_s for r in records))
+    # The split covers only the episodes whose env reports its own decomposition: in a sweep mixing a
+    # decomposing env server with a sim that reports none, the undecomposed episodes' env-step wall would
+    # otherwise all land in ``wire``.
+    decomposed = [r for r in records if r.env_server_s > 0]
+    env_step_sum = float(sum(r.env_step_s for r in decomposed))
     env_step_split = None
-    if server_sum and env_step_sum:
-        physics_sum = float(sum(r.env_physics_s for r in records))
-        render_sum = float(sum(r.env_render_s for r in records))
-        client_sum = float(sum(r.env_client_s for r in records))
+    if env_step_sum:
+        server_sum = float(sum(r.env_server_s for r in decomposed))
+        physics_sum = float(sum(r.env_physics_s for r in decomposed))
+        render_sum = float(sum(r.env_render_s for r in decomposed))
+        client_sum = float(sum(r.env_client_s for r in decomposed))
         server_other = (server_sum - physics_sum - render_sum) / env_step_sum
         # Isaac Lab steps physics with `sim.step(render=False)` and renders once outside the decimation loop,
         # so the physics and render spans are disjoint and this stays non-negative — but a task config that
