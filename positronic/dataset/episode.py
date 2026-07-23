@@ -58,14 +58,11 @@ class _EpisodeTimeIndexer:
     def __init__(self, episode: 'Episode') -> None:
         self.episode = episode
 
-    def _content_signals(self) -> Iterator[tuple[str, Signal[Any]]]:
-        return ((key, sig) for key, sig in self.episode.signals.items() if not key.startswith(TELEMETRY_PREFIX))
-
     def __getitem__(self, index_or_slice):
         match index_or_slice:
             case int() | np.integer() | float() | np.floating() as ts:
                 # For a single timestamp, return static items and only the values for signals
-                sampled = {key: sig.time[ts][0] for key, sig in self._content_signals()}
+                sampled = {key: sig.time[ts][0] for key, sig in self.episode.content_signals.items()}
                 return {**self.episode.static, **sampled}
             case slice() as sl if sl.step is None:
                 raise KeyError('Episode.time[start:stop] is not supported; use a step or explicit timestamps')
@@ -77,7 +74,7 @@ class _EpisodeTimeIndexer:
                 if isinstance(req, slice) and req.step is not None and req.stop is None:
                     req = slice(req.start, self.episode.last_ts + 1, req.step)
                 result: dict[str, Any] = self.episode.static.copy()
-                for key, sig in self._content_signals():
+                for key, sig in self.episode.content_signals.items():
                     view = sig.time[req]
                     # Extract the full sequence of values corresponding to the time selection
                     result[key] = view._values_at(slice(None))
@@ -110,6 +107,14 @@ class Episode(ABC, Mapping[str, Any]):
         return out
 
     @property
+    def content_signals(self) -> dict[str, Signal[Any]]:
+        """Signals that form the episode's time grid: every signal except the reserved telemetry namespace
+        (``TELEMETRY_PREFIX``). Bounds, ``time`` sampling and grid consumers (converters) iterate this, not
+        ``signals`` — a telemetry stream is sparse and starts after ``start_ts``, so sampling it over the
+        content grid raises. Telemetry stays reachable via ``signals`` and ``episode[name]``."""
+        return {name: sig for name, sig in self.signals.items() if not name.startswith(TELEMETRY_PREFIX)}
+
+    @property
     def static(self) -> dict[str, Any]:
         out: dict[str, Any] = {}
         for k in self:
@@ -120,14 +125,14 @@ class Episode(ABC, Mapping[str, Any]):
 
     @property
     def start_ts(self):
-        values = [sig.start_ts for name, sig in self.signals.items() if not name.startswith(TELEMETRY_PREFIX)]
+        values = [sig.start_ts for sig in self.content_signals.values()]
         if not values:
             raise ValueError('Episode has no content signals')
         return max(values)
 
     @property
     def last_ts(self):
-        values = [sig.last_ts for name, sig in self.signals.items() if not name.startswith(TELEMETRY_PREFIX)]
+        values = [sig.last_ts for sig in self.content_signals.values()]
         if not values:
             raise ValueError('Episode has no content signals')
         return max(values)
@@ -136,7 +141,7 @@ class Episode(ABC, Mapping[str, Any]):
     def duration_ns(self):
         # A rollout aborted before its first content sample can still carry telemetry (the STOP-turn drain),
         # so a telemetry-only episode is the no-signal case here, not a bounds error.
-        if all(name.startswith(TELEMETRY_PREFIX) for name in self.signals):
+        if not self.content_signals:
             return 0
         return self.last_ts - self.start_ts
 

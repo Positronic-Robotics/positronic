@@ -87,6 +87,20 @@ def test_episode_time_sampling_skips_telemetry_signals(tmp_path):
     assert 'timing.env_step_s' not in ep.time[[1000, 2000]]
 
 
+def test_content_signals_excludes_telemetry(tmp_path):
+    # A generic grid consumer (e.g. the Lance converter) samples every `content_signals` entry over the
+    # content bounds, so a sparse `timing.*` stream must stay out of that set while remaining in `signals`.
+    ep_dir = tmp_path / 'ep_content_signals'
+    with DiskEpisodeWriter(ep_dir) as w:
+        w.append('a', 1, 1000)
+        w.append('a', 2, 2000)
+        w.append('timing.env_step_s', 0.1, 1800)
+
+    ep = DiskEpisode(ep_dir)
+    assert set(ep.content_signals) == {'a'}
+    assert 'timing.env_step_s' in ep.signals  # telemetry stays reachable, just off the content grid
+
+
 def test_telemetry_only_episode_has_zero_duration(tmp_path):
     # A rollout stopped before any content sample still drains a `timing.*` sample on the STOP turn; such
     # an episode behaves like the no-signal case instead of raising from the content-only bounds.
