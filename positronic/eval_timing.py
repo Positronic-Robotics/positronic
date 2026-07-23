@@ -3,9 +3,10 @@
 A sim eval runs on a virtual clock, so the *virtual* time it advances (recorded in the episode's
 signal timestamps) says nothing about how much real compute a rollout cost. This module captures the
 wall-clock split a sizing/perf pass needs — policy inference, env reset, env step, record IO — that the
-recorded dataset cannot recover on its own. Everything the dataset *can* recover (episode duration,
-success, on-disk size) is left to the reduce step (`positronic.cli.eval.timing_report`) to join back in,
-so nothing is stored twice.
+virtual-clock timestamps cannot recover, and hands it to the recorder to store *in the episode itself*:
+the per-tick phase costs and per-call inference latencies as ``timing.*`` signals, and the once-per-episode
+wall/finish/reset scalars as statics. The pass-level roll-up is then an offline reduce over those recorded
+raw values (`positronic.cli.eval.timing_report`) — nothing is stored twice and no side channel is written.
 
 The collector is bound around an eval sweep via a ``ContextVar`` (`bind`) and reached at the hook sites
 through this module's hook functions (`begin_episode`, `record_infer`, `timed`, ...), each a no-op while
@@ -16,7 +17,6 @@ separate processes, which do not inherit the context — so this telemetry is si
 """
 
 import contextlib
-import json
 import logging
 import os
 import shutil
@@ -24,18 +24,26 @@ import subprocess
 import time
 from collections.abc import Iterator
 from contextvars import ContextVar
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, fields
 from enum import IntEnum, auto
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
-TIMING_FILENAME = 'timing.jsonl'
 GPU_LOG_FILENAME = 'gpu_dmon.log'
+
+# The episode signal + static keys the recorder writes and the reduce step reads back — one source of truth
+# so the writer and `timing_report` never drift on a name. The per-tick phase costs and the per-call
+# inference latencies are recorded as ``timing.*`` signals; the once-per-episode wall scalars as statics.
+STEP_SIGNAL_PREFIX = 'timing'
+INFER_MS_SIGNAL = 'timing.infer_ms'
+WALL_S_KEY = 'timing.wall_s'
+FINISHED_AT_KEY = 'timing.finished_at'
+RESET_S_KEY = 'timing.reset_s'
 
 
 class Phase(IntEnum):
-    """A rollout span timed via ``timed``; it accumulates into the matching ``EpisodeTiming`` field."""
+    """A rollout span timed via ``timed``; it accumulates into the matching timing field."""
 
     RESET = auto()
     ENV_STEP = auto()
@@ -44,143 +52,133 @@ class Phase(IntEnum):
 
 
 @dataclass
-class EpisodeTiming:
-    """The wall-clock costs of one rollout, in seconds unless the name says otherwise.
+class StepTiming:
+    """The per-tick wall-clock costs accumulated between two recorder drains, in seconds. Its field names are
+    the ``timing.*`` signal suffixes the recorder appends, so the reduce step sums each column back to an
+    episode total.
 
-    ``overhead_s`` is the wall time unattributed to the measured phases (pimm scheduling, observation
-    assembly, command demux). Under a virtual clock the phases sum close to ``wall_s`` because pimm's
-    pacing sleeps advance virtual time without consuming wall time, so a large overhead is itself a
-    signal worth reading. ``infer_ms`` is the raw per-call policy round-trip latency — kept raw, not
-    pre-summarised, so the reduce step derives exact pass-level percentiles rather than pooling
-    per-episode ones (a whole pass is only ~10-20k calls, so the raw list stays small). ``episode_uid``
-    is the key the reduce step joins on to pull duration, success and byte size from the recorded episode.
-
-    ``env_physics_s``/``env_render_s``/``env_server_s`` are the env server's own decomposition of the time
-    inside ``env_step_s`` — physics substeps, sensor rendering, and the server's whole in-step wall.
-    ``env_client_s`` is the client-side observation materialisation (shared-memory image allocation + camera
-    copies) that also runs inside ``env_step_s``, so ``env_step_s - env_server_s - env_client_s`` is the wire
-    + codec cost. All the env-decomposition fields are zero for envs that report none.
-
-    ``finished_at`` is the wall clock (epoch seconds) at which the episode was sealed; with ``wall_s`` it lets
-    the reduce recover the pass span — the first episode's start to the last's finish — so inter-episode
-    teardown wall counts in ``W_pass`` instead of being dropped by a per-episode sum.
+    ``env_step_s`` includes the client-side materialisation; ``env_client_s`` is that materialisation alone
+    (shared-memory image allocation + camera copies), so ``env_step_s - env_server_s - env_client_s`` is the
+    wire + codec cost. ``env_physics_s``/``env_render_s``/``env_server_s`` are the env server's own
+    decomposition — physics substeps, sensor rendering, and its whole in-step wall — and are zero for envs
+    that report none.
     """
 
-    episode_uid: str
-    wall_s: float
-    reset_s: float
-    env_step_s: float
-    policy_wait_s: float
-    record_io_s: float
-    overhead_s: float
-    infer_ms: list[float]
-    finished_at: float
-    env_physics_s: float = 0.0
-    env_render_s: float = 0.0
-    env_server_s: float = 0.0
-    env_client_s: float = 0.0
-
-
-@dataclass
-class _Accumulator:
-    """The running sums for the episode in flight; sealed into an ``EpisodeTiming`` at finish."""
-
-    wall_start: float
-    reset_s: float = 0.0
     env_step_s: float = 0.0
-    policy_wait_s: float = 0.0
     record_io_s: float = 0.0
     env_physics_s: float = 0.0
     env_render_s: float = 0.0
     env_server_s: float = 0.0
     env_client_s: float = 0.0
-    infer_ms: list[float] = field(default_factory=list)
+
+    def is_empty(self) -> bool:
+        return all(getattr(self, f.name) == 0.0 for f in fields(self))
+
+
+@dataclass
+class EpisodeTimingStatics:
+    """The per-episode wall scalars the recorder stores as statics alongside the ``timing.*`` signals.
+
+    ``reset_s`` is the once-per-episode env reset span, which is not part of the per-tick rollout loop.
+    ``wall_s`` is the whole rollout wall and ``finished_at`` the epoch at which it sealed; together they let
+    the reduce recover each episode's start and so the pass span (first start to last finish), counting
+    inter-episode teardown that a per-episode sum would drop.
+    """
+
+    wall_s: float
+    finished_at: float
+    reset_s: float
+
+
+@dataclass
+class _Episode:
+    """The in-flight rollout: its wall start, the reset span, the un-drained step, and the un-drained
+    per-call inference latencies (ms)."""
+
+    wall_start: float  # perf_counter at begin
+    step: StepTiming = field(default_factory=StepTiming)
+    reset_s: float = 0.0
+    pending_infer_ms: list[float] = field(default_factory=list)
 
 
 class EvalTimer:
-    """Collects one ``EpisodeTiming`` per rollout, appending each to ``timing.jsonl`` as it seals.
+    """Collects one rollout's wall-clock costs and hands them to the recorder to store in the episode.
 
-    The harness opens each episode (`begin_episode`) and the recorder closes it (`finish_episode`) — the
-    same single thread, in order — so at most one episode is ever in flight. Records are flushed per episode,
-    not buffered, so a preempted or killed pass keeps the timings of the episodes it completed.
+    The harness opens each episode (`begin_episode`); the recorder drains the accumulated per-tick costs and
+    inference latencies once per control tick (`drain_step`/`drain_infers`) and seals the episode at STOP
+    (`finish_episode`) — the same single thread, in order — so at most one episode is ever in flight.
     """
 
-    def __init__(self, out_dir: Path):
-        self._path = out_dir / TIMING_FILENAME
-        self._path.write_text('')  # truncate any stale pass; episodes append as they finish
-        self._count = 0
-        self._current: _Accumulator | None = None
+    def __init__(self) -> None:
+        self._current: _Episode | None = None
 
     def begin_episode(self) -> None:
         if self._current is not None:
             logger.warning('EvalTimer: new episode began before the previous one finished; dropping the previous')
-        self._current = _Accumulator(wall_start=time.perf_counter())
+        self._current = _Episode(wall_start=time.perf_counter())
 
     def _record(self, phase: Phase, seconds: float) -> None:
-        """Accumulate a timed span into the in-flight episode. ``MATERIALIZE`` is part of the env step and
-        also tracked apart (``env_client_s``) so the reduce can split it out of the wire cost."""
+        """Accumulate a timed span. ``RESET`` is the once-per-episode reset; the rest fold into the in-flight
+        step. ``MATERIALIZE`` is part of the env step and also tracked apart (``env_client_s``) so the reduce
+        can split it out of the wire cost."""
         if self._current is None:
             return
+        step = self._current.step
         match phase:
             case Phase.RESET:
                 self._current.reset_s += seconds
             case Phase.ENV_STEP:
-                self._current.env_step_s += seconds
+                step.env_step_s += seconds
             case Phase.MATERIALIZE:
-                self._current.env_step_s += seconds
-                self._current.env_client_s += seconds
+                step.env_step_s += seconds
+                step.env_client_s += seconds
             case Phase.RECORD_IO:
-                self._current.record_io_s += seconds
+                step.record_io_s += seconds
 
     def add_infer(self, seconds: float) -> None:
-        """One policy round-trip: it is the whole policy wait, and one entry in the latency distribution."""
+        """One policy round-trip: one pending sample of the per-call inference-latency signal (whole wait)."""
         if self._current is not None:
-            self._current.policy_wait_s += seconds
-            self._current.infer_ms.append(seconds * 1000.0)
+            self._current.pending_infer_ms.append(seconds * 1000.0)
 
     def add_env_phases(self, physics_s: float, render_s: float, server_s: float) -> None:
         """One env step's server-reported decomposition: physics substeps, rendering, whole in-step wall."""
         if self._current is not None:
-            self._current.env_physics_s += physics_s
-            self._current.env_render_s += render_s
-            self._current.env_server_s += server_s
+            step = self._current.step
+            step.env_physics_s += physics_s
+            step.env_render_s += render_s
+            step.env_server_s += server_s
+
+    def drain_step(self) -> StepTiming | None:
+        """Return the per-tick costs accumulated since the last drain and reset the step. ``None`` when no
+        episode is in flight — the recorder then appends no timing sample this tick."""
+        if self._current is None:
+            return None
+        step = self._current.step
+        self._current.step = StepTiming()
+        return step
+
+    def drain_infers(self) -> list[float]:
+        """Return the policy round-trip latencies (ms) recorded since the last drain and clear them — each is
+        one sample of the per-call ``timing.infer_ms`` signal. Empty when no episode is in flight."""
+        if self._current is None:
+            return []
+        infers = self._current.pending_infer_ms
+        self._current.pending_infer_ms = []
+        return infers
 
     def discard_episode(self) -> None:
-        """Drop the in-flight episode without recording it (an abort)."""
+        """Drop the in-flight episode without sealing it (an abort)."""
         self._current = None
 
-    def finish_episode(self, episode_uid: str) -> None:
+    def finish_episode(self) -> EpisodeTimingStatics | None:
+        """Seal the in-flight rollout and return its per-episode statics. ``None`` when none is in flight."""
         acc = self._current
         if acc is None:
-            return
+            return None
         self._current = None
-        wall_s = time.perf_counter() - acc.wall_start
-        measured = acc.reset_s + acc.env_step_s + acc.policy_wait_s + acc.record_io_s
-        record = EpisodeTiming(
-            episode_uid=episode_uid,
-            wall_s=wall_s,
-            reset_s=acc.reset_s,
-            env_step_s=acc.env_step_s,
-            policy_wait_s=acc.policy_wait_s,
-            record_io_s=acc.record_io_s,
-            overhead_s=max(wall_s - measured, 0.0),
-            infer_ms=[round(ms, 3) for ms in acc.infer_ms],
-            finished_at=time.time(),
-            env_physics_s=acc.env_physics_s,
-            env_render_s=acc.env_render_s,
-            env_server_s=acc.env_server_s,
-            env_client_s=acc.env_client_s,
+        return EpisodeTimingStatics(
+            wall_s=time.perf_counter() - acc.wall_start, finished_at=time.time(), reset_s=acc.reset_s
         )
-        # Append and flush as the episode seals, so a pass killed mid-run keeps every completed rollout's
-        # timing instead of losing an in-memory buffer.
-        with self._path.open('a') as f:
-            f.write(json.dumps(asdict(record)) + '\n')
-        self._count += 1
-
-    def close(self) -> Path:
-        """Return the ``timing.jsonl`` path; records were already flushed as each episode sealed."""
-        logger.info(f'EvalTimer: wrote {self._count} episode timings to {self._path}')
-        return self._path
 
 
 _ACTIVE: ContextVar[EvalTimer | None] = ContextVar('eval_timer', default=None)
@@ -195,20 +193,36 @@ def begin_episode() -> None:
         timer.begin_episode()
 
 
-def finish_episode(episode_uid: str) -> None:
-    """Seal the in-flight rollout under its recorded uid."""
+def drain_step() -> StepTiming | None:
+    """The recorder's per-tick pull of the costs accumulated since the last drain (``None`` when off)."""
     if (timer := _ACTIVE.get()) is not None:
-        timer.finish_episode(episode_uid)
+        return timer.drain_step()
+    return None
+
+
+def drain_infers() -> list[float]:
+    """The recorder's per-tick pull of the policy round-trip latencies (ms) recorded since the last drain,
+    each becoming one ``timing.infer_ms`` sample (empty when off or none occurred)."""
+    if (timer := _ACTIVE.get()) is not None:
+        return timer.drain_infers()
+    return []
+
+
+def finish_episode() -> EpisodeTimingStatics | None:
+    """Seal the in-flight rollout and return its per-episode statics (``None`` when off)."""
+    if (timer := _ACTIVE.get()) is not None:
+        return timer.finish_episode()
+    return None
 
 
 def discard_episode() -> None:
-    """Drop the in-flight rollout without recording it — an abort."""
+    """Drop the in-flight rollout without sealing it — an abort."""
     if (timer := _ACTIVE.get()) is not None:
         timer.discard_episode()
 
 
 def record_infer(seconds: float) -> None:
-    """Record one policy round-trip's wall time (whole policy wait + one latency sample)."""
+    """Record one policy round-trip's wall time (one latency sample)."""
     if (timer := _ACTIVE.get()) is not None:
         timer.add_infer(seconds)
 
@@ -217,6 +231,21 @@ def record_env_phases(physics_s: float, render_s: float, server_s: float) -> Non
     """Record an env step's server-reported physics/render/whole-wall decomposition."""
     if (timer := _ACTIVE.get()) is not None:
         timer.add_env_phases(physics_s, render_s, server_s)
+
+
+def step_signal_items(step: StepTiming) -> Iterator[tuple[str, float]]:
+    """The ``(signal_name, seconds)`` pairs to append for one drained step, skipping the zero columns so a
+    tick that saw no activity in a phase writes no sample for it."""
+    for name, seconds in asdict(step).items():
+        if seconds != 0.0:
+            yield f'{STEP_SIGNAL_PREFIX}.{name}', seconds
+
+
+def statics_items(statics: EpisodeTimingStatics) -> Iterator[tuple[str, object]]:
+    """The ``(static_key, value)`` pairs the recorder sets on the sealed episode."""
+    yield WALL_S_KEY, statics.wall_s
+    yield FINISHED_AT_KEY, statics.finished_at
+    yield RESET_S_KEY, statics.reset_s
 
 
 def _start_gpu_sampler(out_dir: Path) -> subprocess.Popen | None:
@@ -255,8 +284,13 @@ def _start_gpu_sampler(out_dir: Path) -> subprocess.Popen | None:
 
 @contextlib.contextmanager
 def bind(out_dir: Path) -> Iterator[EvalTimer]:
-    """Bind a fresh timer (and a GPU sampler) for the enclosed run, then flush ``timing.jsonl`` on exit."""
-    timer = EvalTimer(out_dir)
+    """Bind a fresh collector (and a GPU sampler) for the enclosed run.
+
+    The GPU sampler's ``gpu_dmon.log`` is the one telemetry stream the dataset cannot carry — a background
+    per-box time series that outlives any single episode — so it stays a side file the reduce reads; the
+    per-rollout timing rides the recorded episodes.
+    """
+    timer = EvalTimer()
     token = _ACTIVE.set(timer)
     sampler = _start_gpu_sampler(out_dir)
     try:
@@ -269,7 +303,6 @@ def bind(out_dir: Path) -> Iterator[EvalTimer]:
                 sampler.wait(timeout=5)
             except subprocess.TimeoutExpired:
                 sampler.kill()
-        timer.close()
 
 
 @contextlib.contextmanager

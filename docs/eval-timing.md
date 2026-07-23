@@ -5,10 +5,10 @@ episode timestamps say nothing about how much real compute a rollout cost. `--ti
 wall-clock split a sizing or perf pass needs — policy inference, env reset/step, record IO, GPU
 util/VRAM — that the recorded dataset cannot recover on its own.
 
-It is a **producer → reducer** pipeline: `eval run --timing` writes raw per-rollout timings *during*
-the eval; `eval timing-report` reduces them *offline* into a pass-level report. They are separate so
-the reducer stores nothing the dataset already holds, and can re-run any time against a finished
-dataset without re-running the eval.
+It is a **producer → reducer** pipeline: `eval run --timing` records raw per-rollout timings into the
+dataset itself *during* the eval; `eval timing-report` reduces them *offline* into a pass-level report.
+They are separate so the reducer stores nothing beyond the recorded raw data, and can re-run any time
+against a finished dataset without re-running the eval.
 
 ## Collect (producer)
 
@@ -23,11 +23,15 @@ uv run positronic eval run \
   --timing
 ```
 
-This writes two files beside the recorded dataset:
+This records the telemetry into each episode of the dataset:
 
-- `timing.jsonl` — one JSON line per rollout: the wall costs (reset, env step, policy wait, record IO,
-  overhead), the raw per-call inference latencies, and the env server's own physics/render/server split.
-- `gpu_dmon.log` — `nvidia-smi dmon` samples for the eval's GPU (skipped when no `nvidia-smi` is present).
+- `timing.*` signals — the per-tick wall costs (env step, record IO, and the env server's own
+  physics/render/server split) plus one `timing.infer_ms` sample per policy round-trip.
+- `timing.wall_s` / `timing.finished_at` / `timing.reset_s` statics — the once-per-episode wall scalars.
+
+One side file lands beside the dataset — `gpu_dmon.log`, `nvidia-smi dmon` samples for the eval's GPU
+(skipped when no `nvidia-smi` is present): a background per-box time series that outlives any single
+episode, so the dataset cannot carry it.
 
 `--timing` is sim-only and off by default — with the flag absent every hook is a no-op, so a normal
 eval is unaffected.
@@ -40,8 +44,8 @@ Point `timing-report` at the dataset dir (a local path, or the same `s3://` URI)
 uv run positronic eval timing-report --dataset_dir=s3://<bucket>/evals/robolab_banana/
 ```
 
-It joins each timing record to its recorded episode by `episode_uid` — recovering duration, on-disk
-size, and the `eval.scored` success verdict from the dataset — and prints a pass report:
+It reduces each episode's `timing.*` signals and statics — joined with the duration, on-disk size, and
+the `eval.scored` success verdict the episode already records — and prints a pass report:
 
 - `real_time_factor` — recorded episode seconds per wall second.
 - `policy_busy_fraction`, `infer_p50_ms` / `infer_p95_ms` — how much of the pass the policy gated, and

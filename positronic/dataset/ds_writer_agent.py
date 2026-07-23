@@ -133,6 +133,17 @@ def _append(ep_writer: EpisodeWriter, name: str, value: Any, ts_ns: int, extra_t
         ep_writer.append(full_name, v, ts_ns, extra_ts)
 
 
+def _append_timing(ep_writer: EpisodeWriter, ts_ns: int) -> None:
+    """Append one tick's drained wall-clock telemetry at ``ts_ns``: the per-phase step costs and each policy
+    round-trip as a ``timing.infer_ms`` sample (sim-only; a no-op when timing is off)."""
+    step = eval_timing.drain_step()
+    if step is not None and not step.is_empty():
+        for signal_name, seconds in eval_timing.step_signal_items(step):
+            _append(ep_writer, signal_name, seconds, ts_ns)
+    for infer_ms in eval_timing.drain_infers():
+        _append(ep_writer, eval_timing.INFER_MS_SIGNAL, infer_ms, ts_ns)
+
+
 class TimeMode(IntEnum):
     """Mode of timestamping for the dataset writer."""
 
@@ -247,6 +258,13 @@ class DsWriterAgent(pimm.ControlSystem):
                                 else:
                                     _append(ep_writer, name, value, primary_ts, extra_ts)
 
+                    # Drain the wall-clock telemetry accumulated since the last tick into the episode's
+                    # ``timing.*`` signals (sim-only; a no-op when timing is off). The closing turn is skipped
+                    # here — STOP does the final drain after its own record IO, at the command ts, so the last
+                    # sample stays monotonic against these per-tick ones.
+                    if not closing:
+                        _append_timing(ep_writer, clock.now_ns())
+
                 if closing:
                     ep_writer, ep_counter = self._handle_command(cmd_msg.data, ep_writer, ep_counter, cmd_msg.ts)
 
@@ -285,11 +303,20 @@ class DsWriterAgent(pimm.ControlSystem):
                         for name, ser in self._serializers.items():
                             for sample in ser.flush(now_ns):
                                 _append(ep_writer, name, sample.value, sample.ts, None)
-                        for k, v in cmd.static_data.items():
-                            ep_writer.set_static(k, v)
-                        ep_writer.__exit__(None, None, None)
+                    # Seal the wall-clock telemetry into the episode itself: the tail of per-tick costs and any
+                    # final inference sample as the last ``timing.*`` signal samples, the per-episode wall
+                    # scalars as statics. The reduce step recovers every aggregate from these, so nothing is
+                    # written to a side channel.
+                    if now_ns is not None:
+                        _append_timing(ep_writer, now_ns)
+                    statics = eval_timing.finish_episode()
+                    if statics is not None:
+                        for key, value in eval_timing.statics_items(statics):
+                            ep_writer.set_static(key, value)
+                    for k, v in cmd.static_data.items():
+                        ep_writer.set_static(k, v)
+                    ep_writer.__exit__(None, None, None)
                     logger.info(f'DsWriterAgent: [STOP] Episode {ep_counter} {ep_writer.meta.get("path", "unknown")}')
-                    eval_timing.finish_episode(str(ep_writer.meta.get('uid', '')))
                     ep_writer = None
                 else:
                     logger.warning('Episode not started, ignoring stop command')

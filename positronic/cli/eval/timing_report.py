@@ -1,9 +1,10 @@
-"""Reduce a ``timing.jsonl`` (written by ``positronic eval run --timing``) into a pass-level report.
+"""Reduce the per-rollout timing recorded by ``positronic eval run --timing`` into a pass-level report.
 
-The timer captures only the wall-clock costs a virtual-clock rollout cannot recover; everything else is
-read back from the recorded episodes and joined by ``episode_uid``: the virtual duration (for the
-real-time factor), the on-disk size (bytes per rollout) and the terminal flag. An optional ``nvidia-smi
-dmon`` log per box folds GPU utilisation and peak VRAM into the same report.
+Everything is read back from the recorded episodes: the wall-clock costs a virtual-clock rollout cannot
+recover from its own timestamps (the per-step ``timing.*`` signal + wall/finish/inference statics, summed
+here per rollout), joined with the virtual duration (for the real-time factor), the on-disk size (bytes
+per rollout) and the terminal flag. An optional ``nvidia-smi dmon`` log per box folds GPU utilisation and
+peak VRAM into the same report.
 """
 
 import json
@@ -15,8 +16,16 @@ import configuronic as cfn
 import numpy as np
 import pos3
 
+from positronic.dataset.episode import Episode
 from positronic.dataset.local_dataset import load_all_datasets
-from positronic.eval_timing import GPU_LOG_FILENAME, TIMING_FILENAME, EpisodeTiming
+from positronic.eval_timing import (
+    FINISHED_AT_KEY,
+    GPU_LOG_FILENAME,
+    INFER_MS_SIGNAL,
+    RESET_S_KEY,
+    STEP_SIGNAL_PREFIX,
+    WALL_S_KEY,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -30,6 +39,28 @@ class _RecordedFacts:
     success: bool | None  # the env's eval.success verdict; None when it recorded none
     terminated: bool | None  # eval.terminated: the trial ended within budget vs timed out; None if unrecorded
     scored: bool  # eval.scored: the eval has a live success oracle, so a no-success termination is a failure
+
+
+@dataclass
+class _EpisodeTiming:
+    """One rollout's wall-clock aggregate, recreated by summing its recorded ``timing.*`` signal and reading
+    its statics — the per-episode reduce the recorder never stores. Fields are seconds unless named otherwise;
+    ``env_step_s`` includes materialisation, ``env_client_s`` is materialisation alone. ``overhead_s`` is the
+    wall unattributed to a measured phase. ``infer_ms`` is the raw per-call latency list."""
+
+    episode_uid: str
+    wall_s: float
+    reset_s: float
+    env_step_s: float
+    policy_wait_s: float
+    record_io_s: float
+    overhead_s: float
+    infer_ms: list[float]
+    finished_at: float
+    env_physics_s: float
+    env_render_s: float
+    env_server_s: float
+    env_client_s: float
 
 
 @dataclass
@@ -87,7 +118,7 @@ class EnvStepSplit:
 
 @dataclass
 class PassReport:
-    """Pass-level wall-clock roll-up of one ``timing.jsonl`` pass, joined against its recorded episodes."""
+    """Pass-level wall-clock roll-up reduced from the recorded episodes' timing signals, statics and facts."""
 
     episodes: int
     wall_pass_s: float
@@ -103,9 +134,51 @@ class PassReport:
     gpu: GpuReport
 
 
-def _recorded_facts(dataset_dir: Path) -> dict[str, _RecordedFacts]:
-    """Join key -> recorded facts for every episode under ``dataset_dir``."""
+def _episode_timing(ep: Episode, uid: str) -> _EpisodeTiming | None:
+    """Recreate one rollout's wall-clock aggregate from its recorded ``timing.*`` signals and statics.
+
+    ``None`` when the episode carries no timing (recorded without ``--timing``). Each ``timing.<phase>_s``
+    signal is the per-tick cost stream, summed here to the episode total; ``policy_wait_s`` is the sum of the
+    per-call ``timing.infer_ms`` signal; ``reset_s`` and the wall scalars come from statics; ``overhead_s`` is
+    the wall left unattributed after the measured phases.
+    """
+    if WALL_S_KEY not in ep.static:
+        return None
+
+    def phase_total(name: str) -> float:
+        sig = ep.signals.get(f'{STEP_SIGNAL_PREFIX}.{name}')
+        return float(sum(np.asarray(value).sum() for value, _ in sig)) if sig is not None else 0.0
+
+    infer_sig = ep.signals.get(INFER_MS_SIGNAL)
+    infer_ms = [float(value) for value, _ in infer_sig] if infer_sig is not None else []
+    policy_wait_s = sum(infer_ms) / 1000.0
+    reset_s = float(ep.static[RESET_S_KEY])
+    env_step_s = phase_total('env_step_s')
+    record_io_s = phase_total('record_io_s')
+    wall_s = float(ep.static[WALL_S_KEY])
+    measured = reset_s + env_step_s + policy_wait_s + record_io_s
+    return _EpisodeTiming(
+        episode_uid=uid,
+        wall_s=wall_s,
+        reset_s=reset_s,
+        env_step_s=env_step_s,
+        policy_wait_s=policy_wait_s,
+        record_io_s=record_io_s,
+        overhead_s=max(wall_s - measured, 0.0),
+        infer_ms=infer_ms,
+        finished_at=float(ep.static[FINISHED_AT_KEY]),
+        env_physics_s=phase_total('env_physics_s'),
+        env_render_s=phase_total('env_render_s'),
+        env_server_s=phase_total('env_server_s'),
+        env_client_s=phase_total('env_client_s'),
+    )
+
+
+def _load_episodes(dataset_dir: Path) -> tuple[list[_EpisodeTiming], dict[str, _RecordedFacts]]:
+    """One pass over the recorded episodes: the per-rollout timing records (only those carrying timing) and
+    the recorded facts (duration/size/success) every episode contributes to the join, keyed by uid."""
     dataset = load_all_datasets(dataset_dir)
+    records: list[_EpisodeTiming] = []
     facts: dict[str, _RecordedFacts] = {}
     for i in range(len(dataset)):
         ep = dataset[i]
@@ -123,7 +196,10 @@ def _recorded_facts(dataset_dir: Path) -> dict[str, _RecordedFacts]:
             terminated=None if terminated is None else bool(terminated),
             scored=bool(ep.static.get('eval.scored', False)),
         )
-    return facts
+        timing = _episode_timing(ep, uid)
+        if timing is not None:
+            records.append(timing)
+    return records, facts
 
 
 def _parse_dmon(log_path: Path) -> GpuSummary:
@@ -176,17 +252,9 @@ def _success_outcome(facts: _RecordedFacts) -> bool | None:
     return None
 
 
-def _build_report(records: list[EpisodeTiming], facts: dict[str, _RecordedFacts], gpu: GpuReport) -> PassReport:
-    # Every timing record must join to a recorded episode: the episode count and wall time come from
-    # ``records`` while RTF, bytes and success come from the joined facts, so a silent drop would compute
-    # them over different denominators. An unmatched uid means the dataset was edited (an ``edits.jsonl``
-    # drop) or does not match this ``timing.jsonl`` — fail rather than corrupt the summary.
-    unmatched = [r.episode_uid for r in records if r.episode_uid not in facts]
-    if unmatched:
-        raise ValueError(
-            f'{len(unmatched)} of {len(records)} timing records have no matching recorded episode '
-            f'(e.g. {unmatched[:3]}); the dataset was edited or does not match this timing.jsonl'
-        )
+def _build_report(records: list[_EpisodeTiming], facts: dict[str, _RecordedFacts], gpu: GpuReport) -> PassReport:
+    # ``records`` and ``facts`` come from the same pass over the dataset, so every record's uid is a facts
+    # key by construction: the episode count and wall time come from ``records``, RTF/bytes/success from facts.
 
     # W_pass is the true pass span — the first episode's start to the last's finish — so inter-episode
     # teardown wall (session close, homing, world rebuild) counts in the denominator. A per-episode sum drops
@@ -282,7 +350,7 @@ def _render(report: PassReport) -> str:
 
 @cfn.config(gpu_sim_log=None, gpu_policy_log=None)
 def timing_report(dataset_dir: str, gpu_sim_log: str | None, gpu_policy_log: str | None):
-    """Reduce ``<dataset_dir>/timing.jsonl`` against the recorded episodes into a pass report.
+    """Reduce the recorded per-rollout timing (the ``timing.*`` signal + statics on each episode) into a pass report.
 
     ``dataset_dir`` may be an ``s3://`` URI — the documented Nebius eval path writes there — in which case
     it is pulled local first, mirroring how the eval command syncs its output. ``gpu_sim_log`` /
@@ -294,10 +362,9 @@ def timing_report(dataset_dir: str, gpu_sim_log: str | None, gpu_policy_log: str
     # Pull a remote dataset local before reading; a plain local path is used as-is (never handed to pos3,
     # whose download would prune it).
     root = Path(pos3.download(dataset_dir)) if '://' in dataset_dir else Path(dataset_dir)
-    timing_path = root / TIMING_FILENAME
-    records = [EpisodeTiming(**json.loads(line)) for line in timing_path.read_text().splitlines() if line.strip()]
+    records, facts = _load_episodes(root)
     if not records:
-        raise ValueError(f'no timing records in {timing_path}')
+        raise ValueError(f'no timed episodes under {root} (recorded without --timing?)')
 
     # The sim box samples its own GPU into the dataset dir under ``--timing``; an explicit path overrides
     # it, and the policy endpoint's log (a different box) is only ever passed in.
@@ -307,7 +374,7 @@ def timing_report(dataset_dir: str, gpu_sim_log: str | None, gpu_policy_log: str
         policy=_parse_dmon(Path(gpu_policy_log)) if gpu_policy_log is not None else None,
     )
 
-    report = _build_report(records, _recorded_facts(root), gpu)
+    report = _build_report(records, facts, gpu)
     summary_path = root / 'timing_summary.json'
     summary_path.write_text(json.dumps(asdict(report), indent=2))
     if '://' in dataset_dir:

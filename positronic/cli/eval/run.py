@@ -139,17 +139,17 @@ def main(
     after the last World, so a multi-eval sweep reuses one live policy across the rebuilds.
     """
     assert (driver is None) != (evals is None), 'Provide exactly one of driver or evals'
-    # Timing is validated before ``eval_timing.bind`` runs: binding truncates ``timing.jsonl``, and a
-    # rejected run must not erase a previous pass's telemetry on its way to the error.
+    # Timing is validated up front, before the policy warmup and the bind: a rejected sweep must fail
+    # before it spends anything.
     if timing:
         if output_dir is None:
-            raise ValueError('--timing needs --output_dir: the per-rollout telemetry (timing.jsonl) has nowhere to go')
+            raise ValueError('--timing needs --output_dir: the per-rollout telemetry is recorded into the dataset')
         embodiments = [ev.embodiment for ev in evals] if evals is not None else [embodiment]
         if not all(e.simulated for e in embodiments):
             raise ValueError(
                 'eval timing is sim-only: a real embodiment runs the recorder and producers as separate '
-                'processes that do not inherit the timer context, so timing.jsonl would be empty (record_io_s '
-                'silently reads 0). Drop --timing for a real run.'
+                'processes that do not inherit the timer context, so the episodes would carry no timing signal '
+                '(record_io_s silently reads 0). Drop --timing for a real run.'
             )
 
     # Drive the policy's remote endpoints through their cold start before hardware and the operator
@@ -169,8 +169,8 @@ def main(
     # One completion sink — so one ``SampledPolicy`` counter — across every eval, keeping sampling balanced
     # over the whole sweep.
     on_complete = _completion_sink(policy)
-    # Bind one timer around the whole sweep, not per eval: a per-eval bind would reopen (and truncate)
-    # ``timing.jsonl`` each time, leaving only the last eval's rollouts.
+    # Bind one collector (and GPU sampler) around the whole sweep, not per eval: a per-eval bind would
+    # restart the ``gpu_dmon.log`` sampler each time, dropping earlier evals' GPU samples.
     timing_cm = eval_timing.bind(output_dir) if timing and output_dir is not None else nullcontext()
     try:
         with timing_cm:
@@ -191,8 +191,9 @@ def main(
 def run(eval: Eval, policy, show_gui, output_dir=None, inference_latency=False, timing=False, *, wrap):
     """Run a selected eval (embodiment + task + its trial sweep) through the shared inference harness.
 
-    ``timing`` writes per-rollout wall-clock telemetry (``timing.jsonl`` under ``output_dir``); it needs an
-    ``output_dir`` and applies to sim evals only. Reduce it with ``positronic eval timing-report``.
+    ``timing`` records per-rollout wall-clock telemetry into the dataset under ``output_dir`` (a ``timing.*``
+    signal + statics per episode); it needs an ``output_dir`` and applies to sim evals only. Reduce it with
+    ``positronic eval timing-report``.
     """
     # The eval config owns the trial sweep (seed, task range); ``inference_latency`` is the CLI's per-run knob
     # (sim inference-cost simulation). Overlay it onto every trial context, then self-drive the eval.
