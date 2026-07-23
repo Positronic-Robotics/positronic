@@ -8,6 +8,11 @@ from positronic.policy.sampler import EpisodeCounter, Sampler, UniformSampler
 
 Now = Callable[[], float]
 
+# Structural keys of the wire spec (see ``positronic.policy.spec``): ``|`` composition serializes
+# as ``{SEQ: [...]}``, ``&`` composition as ``{PAR: [...]}``.
+SEQ = 'seq'
+PAR = 'par'
+
 
 class Session(ABC):
     """Per-episode inference session. Created by ``Policy.new_session()``.
@@ -138,7 +143,7 @@ class PolicyWrapper:
     def wrap(self, policy: Policy) -> Policy:
         """Apply this wrapper to a policy. Default: wrap every session it creates via ``wrap_session``.
 
-        Composition happens at definition/config time; the runtime clock reaches the wrapped
+        Composition happens at config time; the runtime clock reaches the wrapped
         sessions through ``new_session``.
         """
         return _WrapperPolicy(policy, self)
@@ -202,7 +207,7 @@ class _Pipeline(PolicyWrapper):
         return policy
 
     def to_spec(self) -> dict[str, Any]:
-        return {'seq': [component.to_spec() for component in self._components]}
+        return {SEQ: [component.to_spec() for component in self._components]}
 
     def _pipeline_components(self) -> tuple:
         return self._components

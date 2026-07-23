@@ -153,7 +153,7 @@ class _Endpoint(Policy):
 class RemotePolicy(Policy):
     """Policy running against a remote inference server, owning the stack in front of the connection.
 
-    The server's ``ready`` handshake may declare the local half of its policy definition (the
+    The server's ``ready`` handshake may declare the local half of its policy pipeline (the
     ``local_stack`` spec — see ``positronic.policy.spec``); the declared wrappers are built here,
     once, and every session runs through them. ``local`` is the operator's bypass: when set, the
     declaration is ignored (and logged) and the given stack is used instead. When the server

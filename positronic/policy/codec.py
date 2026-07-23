@@ -15,7 +15,7 @@ import numpy as np
 
 from positronic.dataset.transforms import Elementwise
 from positronic.dataset.transforms.episode import Derive, EpisodeTransform, Group, Identity
-from positronic.policy.base import DelegatingSession, PolicyWrapper, Session, _Pipeline
+from positronic.policy.base import PAR, SEQ, DelegatingSession, PolicyWrapper, Session, _Pipeline
 from positronic.utils import merge_dicts
 
 
@@ -145,7 +145,7 @@ class _ComposedCodec(Codec):
         return result
 
     def to_spec(self):
-        return {'seq': [self._left.to_spec(), self._right.to_spec()]}
+        return {SEQ: [self._left.to_spec(), self._right.to_spec()]}
 
     def dummy_encoded(self, data=None):
         return self._right.dummy_encoded(self._left.dummy_encoded(data))
@@ -180,7 +180,7 @@ class _ParallelCodec(Codec):
         return result
 
     def to_spec(self):
-        return {'par': [self._left.to_spec(), self._right.to_spec()]}
+        return {PAR: [self._left.to_spec(), self._right.to_spec()]}
 
     def dummy_encoded(self, data=None):
         return {**self._left.dummy_encoded(data), **self._right.dummy_encoded(data)}
@@ -238,6 +238,9 @@ class ActionTimestamp(Codec):
     def meta(self):
         return {'action_fps': self._fps}
 
+    def to_spec(self):
+        return {'name': 'action_timestamp', 'args': {'fps': self._fps}}
+
 
 class ActionHorizon(Codec):
     """Truncates action chunks to a time horizon.
@@ -278,6 +281,9 @@ class ActionHorizon(Codec):
     @property
     def meta(self):
         return {'action_horizon_sec': self._horizon_sec}
+
+    def to_spec(self):
+        return {'name': 'action_horizon', 'args': {'horizon_sec': self._horizon_sec}}
 
 
 def ActionTiming(*, fps: float, horizon_sec: float | None = None) -> Codec:
@@ -327,6 +333,9 @@ class BinarizeGripTraining(Codec):
         transforms = {k: _binarize_signal(k) for k in self._keys}
         return Group(Derive(**transforms), Identity())
 
+    def to_spec(self):
+        return {'name': 'binarize_grip_training', 'args': {'keys': list(self._keys), 'threshold': self._threshold}}
+
 
 class BinarizeGripInference(Codec):
     """Threshold grip in decoded actions at inference time.
@@ -351,6 +360,9 @@ class BinarizeGripInference(Codec):
         if self._key in data:
             data[self._key] = 1.0 if data[self._key] > self._threshold else 0.0
         return data
+
+    def to_spec(self):
+        return {'name': 'binarize_grip_inference', 'args': {'threshold': self._threshold, 'key': self._key}}
 
 
 class FlipGrip(Codec):
@@ -379,3 +391,6 @@ class FlipGrip(Codec):
         if 'target_grip' in data:
             data['target_grip'] = 1.0 - data['target_grip']
         return data
+
+    def to_spec(self):
+        return {'name': 'flip_grip'}

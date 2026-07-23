@@ -220,7 +220,7 @@ class DreamZeroPolicy(Policy):
 class InferenceServer(VendorServer):
     def __init__(
         self,
-        definition: PolicyWrapper,
+        pipeline: PolicyWrapper,
         model_path: str,
         dreamzero_venv: str = '/.venv/',
         backbone: str = 'wan2.1',
@@ -233,7 +233,7 @@ class InferenceServer(VendorServer):
         idle_timeout_min: float | None = None,
     ):
         super().__init__(
-            definition=definition, host=host, port=port, recording_dir=recording_dir, idle_timeout_min=idle_timeout_min
+            pipeline=pipeline, host=host, port=port, recording_dir=recording_dir, idle_timeout_min=idle_timeout_min
         )
         self.model_path = _resolve_checkpoint_path(model_path)
         self.dreamzero_venv = Path(dreamzero_venv)
@@ -295,7 +295,7 @@ class InferenceServer(VendorServer):
 
 
 @cfn.config(
-    definition=cfg_codecs.definition.override(local=codecs.dreamzero_wrappers, codec=codecs.joints),
+    pipeline=cfg_codecs.pipeline.override(local=codecs.dreamzero_wrappers, codec=codecs.joints),
     dreamzero_venv='/.venv/',
     backbone='wan2.1',
     num_gpus=1,
@@ -305,7 +305,7 @@ class InferenceServer(VendorServer):
     idle_timeout_min=None,
 )
 def server(
-    definition: PolicyWrapper,
+    pipeline: PolicyWrapper,
     model_path: str,
     dreamzero_venv: str,
     backbone: str,
@@ -318,7 +318,7 @@ def server(
     """Starts the DreamZero inference server."""
     with pos3.mirror():
         InferenceServer(
-            definition=definition,
+            pipeline=pipeline,
             model_path=model_path,
             dreamzero_venv=dreamzero_venv,
             backbone=backbone,
@@ -332,7 +332,7 @@ def server(
 
 # Public pretrained DROID checkpoint: wan2.1 backbone (the base server default) paired with the DROID
 # codec that feeds its required 320x180 frames.
-droid = server.override(model_path='GEAR-Dreams/DreamZero-DROID', **{'definition.codec': codecs.droid})
+droid = server.override(model_path='GEAR-Dreams/DreamZero-DROID', **{'pipeline.codec': codecs.droid})
 
 
 if __name__ == '__main__':

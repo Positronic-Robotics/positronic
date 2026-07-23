@@ -1,11 +1,26 @@
-"""Unit tests for PolicyWrapper composition, ChunkedSchedule, TemporalStack, and the definition spec."""
+"""Unit tests for PolicyWrapper composition, ChunkedSchedule, TemporalStack, and the pipeline spec."""
 
 import numpy as np
 import pytest
 
 from positronic.policy import spec
+from positronic.policy.action import (
+    AbsoluteJointsAction,
+    AbsolutePositionAction,
+    IKJointsAction,
+    JointDeltaAction,
+    RelativePositionAction,
+)
 from positronic.policy.base import Policy, PolicyWrapper, Session
-from positronic.policy.codec import ActionTimestamp, Codec
+from positronic.policy.codec import (
+    ActionHorizon,
+    ActionTimestamp,
+    BinarizeGripInference,
+    BinarizeGripTraining,
+    Codec,
+    FlipGrip,
+)
+from positronic.policy.observation import ObservationCodec
 from positronic.policy.wrappers import ChunkedSchedule, TemporalStack
 
 
@@ -207,8 +222,8 @@ class TestTemporalStack:
         assert (stacks[True] == stacks[False]).all()
 
 
-class TestDefinitionSpec:
-    """The (local, remote) definition split and the wire spec of the local half."""
+class TestPipelineSpec:
+    """The (local, remote) pipeline split and the wire spec of the local half."""
 
     def test_split_on_marker(self):
         stack = TemporalStack(keys=('v',), offsets_sec=(0.0,))
@@ -247,6 +262,12 @@ class TestDefinitionSpec:
         stack = TemporalStack(keys=('a', 'b'), offsets_sec=(-0.5, 0.0), pad_start=False) | ChunkedSchedule()
         rebuilt = spec.from_spec(stack.to_spec())
         assert rebuilt is not None and rebuilt.to_spec() == stack.to_spec()
+
+    def test_codec_spec_round_trip(self):
+        obs = ObservationCodec(state={'observation.state': {'grip': 1}}, images={'left': ('image.wrist', (224, 224))})
+        local = ChunkedSchedule() | ActionTimestamp(fps=10.0) | (obs & AbsolutePositionAction('pose', 'grip'))
+        rebuilt = spec.from_spec(local.to_spec())
+        assert rebuilt is not None and rebuilt.to_spec() == local.to_spec()
 
     def test_leaf_without_args_omits_args_key(self):
         assert ChunkedSchedule().to_spec() == {'name': 'chunked_schedule'}
@@ -287,10 +308,23 @@ class TestDefinitionSpec:
 
     def test_non_deliverable_wrapper_fails_loudly(self):
         with pytest.raises(NotImplementedError, match='not deliverable'):
-            ActionTimestamp(fps=10.0).to_spec()
+            IKJointsAction(solver_cls=None).to_spec()
 
     def test_wire_names_match_table(self):
-        instances = {'chunked_schedule': ChunkedSchedule(), 'temporal_stack': TemporalStack(('v',), (0.0,))}
+        instances = {
+            'chunked_schedule': ChunkedSchedule(),
+            'temporal_stack': TemporalStack(('v',), (0.0,)),
+            'action_timestamp': ActionTimestamp(fps=10.0),
+            'action_horizon': ActionHorizon(1.0),
+            'binarize_grip_training': BinarizeGripTraining(('grip',)),
+            'binarize_grip_inference': BinarizeGripInference(),
+            'flip_grip': FlipGrip(),
+            'observation_codec': ObservationCodec(state={}, images={}),
+            'absolute_position_action': AbsolutePositionAction('robot_command.pose', 'target_grip'),
+            'absolute_joints_action': AbsoluteJointsAction('robot_command.joints', 'target_grip'),
+            'relative_position_action': RelativePositionAction(),
+            'joint_delta_action': JointDeltaAction(),
+        }
         assert set(instances) == set(spec.WIRE_WRAPPERS)
         for name, instance in instances.items():
             assert instance.to_spec()['name'] == name

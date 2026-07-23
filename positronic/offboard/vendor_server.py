@@ -13,7 +13,7 @@ import uvicorn
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 
 from positronic.policy import Codec, Policy, PolicyWrapper, Recorder
-from positronic.policy.spec import split
+from positronic.policy.spec import SEQ, split
 from positronic.utils.checkpoints import get_latest_checkpoint, list_checkpoints
 from positronic.utils.serialization import deserialise, serialise
 
@@ -99,7 +99,7 @@ def resolve_checkpoint(checkpoints_dir: str, configured: str | None, requested: 
 class VendorServer(ABC):
     """Base class for vendor inference servers.
 
-    Provides the FastAPI app, WebSocket inference loop, the policy-definition split,
+    Provides the FastAPI app, WebSocket inference loop, the policy-pipeline split,
     startup/warmup lifecycle, and serve entrypoint. Subclasses implement
     three hooks:
 
@@ -109,7 +109,7 @@ class VendorServer(ABC):
 
     Optional overrides: warmup(), shutdown_model(), release_policy().
 
-    ``definition`` is the whole policy as one pipeline with a ``remote`` marker (see
+    ``pipeline`` is the whole policy as one wrapper chain with a ``remote`` marker (see
     ``positronic.policy.spec``): the half right of the marker wraps the model here; the half left
     of it is published as the ``local_stack`` spec in the ``ready`` handshake for the rig to build.
 
@@ -129,16 +129,16 @@ class VendorServer(ABC):
 
     def __init__(
         self,
-        definition: PolicyWrapper,
+        pipeline: PolicyWrapper,
         host: str = '0.0.0.0',
         port: int = 8000,
         recording_dir: str | None = None,
         idle_timeout_min: float | None = None,
     ):
-        local, self._remote = split(definition)
-        # Resolved eagerly so a definition whose local half is not deliverable fails at startup,
+        local, self._remote = split(pipeline)
+        # Resolved eagerly so a pipeline whose local half is not deliverable fails at startup,
         # not at a client's connect. An empty half is an explicit "no glue needed" declaration.
-        self._local_spec = local.to_spec() if local is not None else {'seq': []}
+        self._local_spec = local.to_spec() if local is not None else {SEQ: []}
         self.host = host
         self.port = port
         # Synced once; a fresh ``Recorder`` is created per websocket session so

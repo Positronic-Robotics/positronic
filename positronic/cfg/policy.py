@@ -16,11 +16,11 @@ def placeholder():
     )
 
 
-@cfn.config()
-def wrapped(base: Policy, definition: PolicyWrapper):
-    """Serve a whole policy definition in-process: both halves compose around ``base``."""
-    pipeline = inline(definition)
-    return pipeline.wrap(base) if pipeline is not None else base
+@cfn.config(pipeline=codecs.pipeline)
+def wrapped(base: Policy, pipeline: PolicyWrapper):
+    """Serve a whole policy pipeline in-process: both halves compose around ``base``."""
+    composed = inline(pipeline)
+    return composed.wrap(base) if composed is not None else base
 
 
 @cfn.config(checkpoint=None)
@@ -46,12 +46,12 @@ def act(checkpoints_dir: str, checkpoint: str | None, n_action_steps: int | None
     return LerobotPolicy(policy, device, extra_meta={'type': 'act', 'checkpoint_path': fully_specified_checkpoint_dir})
 
 
-act_absolute = wrapped.override(
-    base=act,
-    definition=codecs.definition.override(
-        codec=codecs.compose.override(obs=codecs.eepose_obs, action=codecs.absolute_pos_action, horizon=1.0)
-    ),
-)
+act_absolute = wrapped.override(**{
+    'base': act,
+    'pipeline.codec.obs': codecs.eepose_obs,
+    'pipeline.codec.action': codecs.absolute_pos_action,
+    'pipeline.codec.horizon': 1.0,
+})
 
 
 @cfn.config(weights=None)

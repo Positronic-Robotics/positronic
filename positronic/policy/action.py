@@ -52,6 +52,16 @@ class AbsolutePositionAction(Codec):
     def training_encoder(self):
         return Derive(meta=self._training_meta, action=self._encode_episode)
 
+    def to_spec(self):
+        return {
+            'name': 'absolute_position_action',
+            'args': {
+                'tgt_ee_pose_key': self.tgt_ee_pose_key,
+                'tgt_grip_key': self.tgt_grip_key,
+                'rotation_rep': self.rot_rep.value,
+            },
+        }
+
 
 class AbsoluteJointsAction(Codec):
     def __init__(self, tgt_joints_key: str, tgt_grip_key: str, num_joints: int = 7):
@@ -79,6 +89,16 @@ class AbsoluteJointsAction(Codec):
     @property
     def training_encoder(self):
         return Derive(meta=self._training_meta, action=self._encode_episode)
+
+    def to_spec(self):
+        return {
+            'name': 'absolute_joints_action',
+            'args': {
+                'tgt_joints_key': self.tgt_joints_key,
+                'tgt_grip_key': self.tgt_grip_key,
+                'num_joints': self.num_joints,
+            },
+        }
 
 
 class IKJointsAction(Codec):
@@ -172,6 +192,17 @@ class RelativePositionAction(Codec):
     def training_encoder(self):
         return Derive(meta=self._training_meta, action=self._encode_episode)
 
+    def to_spec(self):
+        return {
+            'name': 'relative_position_action',
+            'args': {
+                'rotation_rep': self.rot_rep.value,
+                'robot_pose_key': self.robot_pose_key,
+                'target_pose_key': self.target_pose_key,
+                'target_grip_key': self.target_grip_key,
+            },
+        }
+
 
 class JointDeltaAction(Codec):
     """DROID-style joint-delta action decoder (inference only).
@@ -208,3 +239,6 @@ class JointDeltaAction(Codec):
         velocities = action_vector[: self.num_joints] * self.MAX_JOINT_DELTA
         grip = 1.0 if action_vector[self.num_joints].item() > 0.5 else 0.0
         return {'robot_command': command.JointDelta(velocities=velocities), 'target_grip': grip}
+
+    def to_spec(self):
+        return {'name': 'joint_delta_action', 'args': {'num_joints': self.num_joints}}

@@ -6,19 +6,19 @@ Deploy trained policies for evaluation and production use. Positronic supports l
 
 Positronic's unified WebSocket protocol connects any hardware to any model (LeRobot, GR00T, OpenPI). The key benefit is running heavy models on powerful GPU hardware (OpenPI needs ~62GB, GR00T ~8GB) separate from the robot/simulator machine.
 
-Each server carries a full **policy definition** — one pipeline naming the rig-side stack, the `remote` split marker, and the server-side codec (see `positronic.policy.spec`). The server runs the half right of the marker and declares the half left of it in its handshake; the client builds the declared stack automatically.
+Each server carries a full **policy pipeline** — one pipeline naming the rig-side stack, the `remote` split marker, and the server-side codec (see `positronic.policy.spec`). The server runs the half right of the marker and declares the half left of it in its handshake; the client builds the declared stack automatically.
 
 **Start inference server:**
 ```bash
 # LeRobot (SmolVLA — 0.4.x)
 cd docker && docker compose run --rm --service-ports lerobot-server \
   --checkpoints_dir=~/checkpoints/lerobot/experiment_v1/ \
-  --definition.codec=@positronic.vendors.lerobot.codecs.ee
+  --pipeline.codec=@positronic.vendors.lerobot.codecs.ee
 
 # LeRobot (ACT — 0.3.3)
 cd docker && docker compose run --rm --service-ports lerobot-0_3_3-server \
   --checkpoints_dir=~/checkpoints/lerobot/experiment_v1/ \
-  --definition.codec=@positronic.vendors.lerobot_0_3_3.codecs.ee
+  --pipeline.codec=@positronic.vendors.lerobot_0_3_3.codecs.ee
 
 # GR00T (pre-configured variant)
 cd docker && docker compose run --rm --service-ports groot-server \
@@ -28,7 +28,7 @@ cd docker && docker compose run --rm --service-ports groot-server \
 # OpenPI
 cd docker && docker compose run --rm --service-ports openpi-server \
   --checkpoints_dir=~/checkpoints/openpi/experiment_v1/ \
-  --definition.codec=@positronic.vendors.openpi.codecs.ee
+  --pipeline.codec=@positronic.vendors.openpi.codecs.ee
 ```
 
 Check server: `curl http://localhost:8000/api/v1/models` returns available model IDs.
