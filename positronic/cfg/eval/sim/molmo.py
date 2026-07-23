@@ -3,7 +3,6 @@ from pathlib import Path
 
 import configuronic as cfn
 
-from positronic.cfg.eval import build_trials
 from positronic.drivers.roboarm.models import bundled_franka_model
 from positronic.eval import Eval, Task
 from positronic.simulator.env_server.proxy import RemoteEnvControlSystem, remote_franka_embodiment
@@ -52,8 +51,18 @@ def _molmo_eval(benchmark_dir, episodes, trial_count, timeout, camera_dict, seed
         proxy, camera_dict, descriptor='remote.molmo_spaces.droid', static_meta=bundled_franka_model()
     )
     task = Task(instruction=lambda: proxy.meta['task'], timeout=timeout, reset=proxy.reset, done=proxy.done)
-    scenes = [{'eval.episode_index': i} for i in indices]
-    return Eval(embodiment, task, build_trials(seed, trial_count, scenes))
+    # Benchmark episodes are exact-pose deterministic and carry their own seed. An unset ``seed`` leaves
+    # ``eval.seed`` off the trial, so the env falls back to the episode's spec seed (reproducing the benchmark);
+    # an explicit ``seed`` overrides it, sweeping ``seed .. seed + trial_count - 1``. (``build_trials`` injects a
+    # random seed when ``seed`` is None, which would clobber the spec seed and make the run non-reproducible.)
+    trials = [
+        {'eval.episode_index': i, **({'eval.seed': seed + t} if seed is not None else {})}
+        for i in indices
+        for t in range(trial_count)
+    ]
+    for j, ctx in enumerate(trials):
+        ctx.update({'eval.trial_index': j, 'eval.trial_count': len(trials)})
+    return Eval(embodiment, task, trials)
 
 
 # The whole benchmark in one run (every episode in ``--eval.benchmark_dir``'s benchmark.json).
