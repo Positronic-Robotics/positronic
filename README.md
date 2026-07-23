@@ -289,7 +289,7 @@ Monitor performance, collect edge cases, and iterate. See [Inference Guide](docs
 - [LeRobot ACT](positronic/vendors/lerobot_0_3_3/README.md) — Single-task transformer
 
 **Guides:**
-- [Architecture Invariants](docs/architecture.md) — who owns the control loop, and how foreign components plug in
+- [Architecture](docs/architecture.md) — the goals and principles behind the design, who owns the control loop, and how foreign components plug in
 - [Model Selection](docs/model-selection.md) | [Codecs](docs/codecs.md) | [Training](docs/training-workflow.md)
 - [Data Collection](docs/data-collection.md) | [Inference](docs/inference.md)
 

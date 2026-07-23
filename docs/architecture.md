@@ -1,44 +1,55 @@
-# Architecture invariants
+# Architecture
 
 Every integration in Positronic — a simulator, a model stack, a scene catalog, a scoring method, a
-real rig — is shaped by the invariants below. They are not conventions of individual modules; they
-define what an integration is allowed to look like.
+real rig — is shaped by this document. It is a derivation, not a rule list: the goals state what
+the system guarantees, the principles are the means, and the invariants and decisions that follow
+are consequences. When a new case is not settled here, decide it the same way — from the goals,
+through the principles.
+
+## Goals
+
+**Any policy runs on any embodiment — and cannot tell sim from real.** A policy sees observations
+and emits commands through one contract. Whether they come from the native MuJoCo world, a foreign
+simulator behind the env wire, or a physical rig is invisible to it, unless the embodiment itself
+chooses to leak the difference.
+
+**Sim runs are reproducible.** Whenever the environment itself is non-stochastic, the same policy
+over the same scene replays to the same rollout.
+
+**Only the physical rollout is irreplaceable.** The one cost that cannot be re-paid offline is the
+rollout and what was captured of it. Everything else — scores, action spaces, control frames,
+thresholds, metrics, vendor formats — must stay re-derivable from the recording.
 
 ## Principles
 
-The invariants follow from five principles. When a new case is not settled by the invariants, decide
-it from these.
-
-**Everything must be recoverable from the recording.** The only irreversible cost is the physical
-rollout and what was captured of it. Scores, action spaces, control frames, thresholds, metrics and
-vendor formats are projections — re-derivable offline from a complete recording. So capture raw and
-complete, and defer every choice a projection can express. Care belongs on the expensive layer
-(protocol, capture completeness, event ontology), not on the cheap one.
-
-**Bind late.** The party that owns a requirement declares it; the run does not fix it in advance. A
-policy trained in another end-effector frame declares that frame; a policy needing a different
+**Bind late.** The party that owns a requirement declares it; the run does not fix it in advance.
+A policy trained in another end-effector frame declares that frame; a policy needing a different
 controller declares its control mode; a trial carries its own instruction and done predicate.
-Binding these per session collapses the comparison — two policies wanting different execution can no
-longer be interleaved in one A/B session, which is what evaluation exists to do.
+Binding these per session collapses the comparison — two policies wanting different execution can
+no longer be interleaved in one A/B session, which is what evaluation exists to do. Corollary: the
+library must supply the tools that make late binding possible — codecs, per-trial context,
+projections over raw recordings.
+
+**Every decision lives with the party that has the information.** Only a driver knows its motion
+capabilities, so drivers plan through waypoints. Only a sensor knows its own cadence, so sensors
+run at their own rate instead of a rate the loop imposes. Only a policy knows what its model was
+trained on, so translation to model I/O ships with the policy.
 
 **Whatever varies travels as data, not as ambient state.** Time enters the pipeline as an
-observation field; control mode is a declared channel with a rig default; hardware identity is a
-`meta` port every driver emits. Nothing that varies is read from a global, a constructor argument,
-or a config the run captured once. This is what makes the two principles above mechanical rather
-than aspirational: a value that flows through a channel is recordable, substitutable and replayable
-by construction — a virtual clock, a different controller, a replayed episode all come for free.
+observation field; hardware identity is a `meta` port every driver emits. Nothing that varies is
+read from a global, a constructor argument, or a config the run captured once. A value that flows
+through a channel is recordable, substitutable and replayable by construction.
 
-**One specification, both directions.** A transformation between our data and a model's world is
-defined once and drives both training and inference. Two implementations of one contract diverge,
-and the divergence stays invisible until the robot performs badly. A `Codec` owns `encode`/`decode`
-and its training encoder in one object for exactly this reason; the rule generalizes to any contract
-with both a training-time and a runtime side.
+**Capture raw, project on demand.** Record the raw-most values the loop saw, completely; defer
+every choice a projection can express. Care belongs on the expensive layer (protocol, capture
+completeness, event ontology), not on the cheap one — a projection can be recomputed tonight, a
+missing capture is lost forever.
 
 **Guarantees are structural, not conventional.** What must not cross a boundary must be unable to
-cross it. The policy does not see the seed, the task id or the rig's frame convention because those
-keys are dropped at the wire — not because every codec is trusted to ignore them. A guarantee held
-up by agreement is not one, and for an evaluation "we do not look at it" is not a claim an outsider
-can check.
+cross it. The policy does not see the seed, the task id or the rig's frame convention because
+those keys are dropped at the wire — not because every codec is trusted to ignore them. A
+guarantee held up by agreement is not one, and for an evaluation "we do not look at it" is not a
+claim an outsider can check.
 
 ## Positronic owns the control loop
 
@@ -76,3 +87,38 @@ The corollary for frameworks that ship their own eval harness: when a third-part
 a policy object plugged into *its* loop, the integration still separates that framework's sim/task
 layer and serves it behind the env wire. Handing a Positronic policy to a foreign loop forfeits
 both invariants — the run produces no dataset, and execution is scheduled by code we don't control.
+
+## Derived decisions
+
+The load-bearing consequences of the goals and principles. Each is stated with what forces it —
+revisit a decision only by revisiting its premises.
+
+**Time is an observation.** A policy that cannot tell sim from real cannot be allowed to read the
+wall clock, and a reproducible sim needs a single owner of "now". A real rig is asynchronous
+besides: sensors and deciders each run at their own frequency, so there is no global tick to share.
+Hence "now" reaches the policy as a field of the observation (`obs_time_ns`), the world hands every
+control system its clock, and no component reads time at point of use. Trajectories are stamped in
+the same time frame the observations carry, so a virtual clock, a slowed sim, or a replayed episode
+changes nothing downstream.
+
+**Trajectory is the command.** Ownership puts execution with the driver: the policy emits a
+trajectory of waypoints with absolute timestamps, and the driver plays it at its own control rate,
+planning through the waypoints as well as it knows how. Signals are last-value-wins, so a new
+trajectory overwrites the current one — the previous command is merely context for the next.
+Continuous-update schemes (RTC, temporal ensembling) therefore need no special mechanism: they are
+wrappers that rewrite the command more often. An empty trajectory cancels the channel and the
+device holds.
+
+**The harness stays thin.** It is the one layer standing between any policy and any embodiment, so
+anything it encodes about either side breaks the any-to-any goal. It assembles the observation
+dict, calls the session, demuxes the returned waypoints per command channel, and runs episode
+lifecycle — nothing else. Scheduling, blending, history stacking and error recovery live in the
+wrapper stack around the policy; a session returning `None` means "keep executing the current
+trajectory".
+
+**Recordings are canonical; codecs bind the dialect late.** The dataset records every run in the
+canonical conventions (frames, key names, absolute time) — never in a model's dialect. Every
+model-facing view — action space, control frame, vendor format — is a codec's projection.
+A codec owns `encode`/`decode` and its `training_encoder` in one object, so the projection that
+builds the training set and the transformation applied at inference are one specification and
+cannot diverge.
