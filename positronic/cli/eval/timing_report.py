@@ -10,6 +10,7 @@ peak VRAM into the same report.
 import json
 import logging
 from dataclasses import asdict, dataclass, fields
+from datetime import datetime
 from pathlib import Path
 
 import configuronic as cfn
@@ -81,9 +82,10 @@ class WallSplit:
 
     ``overhead`` is the within-episode wall unattributed to a measured phase; ``between_episodes`` is the
     inter-episode wall (episode writer close — parquet/video flush — plus session teardown, homing, world
-    rebuild) between one episode's finish and the next's start, which a per-episode sum drops. An episode
-    seals its timing statics while its writer is open, so the writer-close flush lands here rather than in
-    that episode's ``record_io``; the final episode's close falls outside the pass span entirely.
+    rebuild) between one simulated episode's finish and the next's start within a timed run, which a
+    per-episode sum drops (a real eval that splits the runs is excluded, not counted here). An episode seals
+    its timing statics while its writer is open, so the writer-close flush lands here rather than in that
+    episode's ``record_io``; the final episode's close falls outside the pass span entirely.
     """
 
     reset: float
@@ -169,12 +171,18 @@ def _episode_timing(ep: Episode, uid: str) -> _EpisodeTiming | None:
     )
 
 
-def _load_episodes(dataset_dir: Path) -> tuple[list[_EpisodeTiming], dict[str, _RecordedFacts]]:
-    """One pass over the recorded episodes: the per-rollout timing records (only those carrying timing) and
-    the recorded facts (duration/size/success) every episode contributes to the join, keyed by uid."""
+def _load_episodes(dataset_dir: Path) -> tuple[list[list[_EpisodeTiming]], dict[str, _RecordedFacts]]:
+    """One pass over the recorded episodes: the per-rollout timing records grouped into contiguous runs, and
+    the recorded facts (duration/size/success) every episode contributes to the join, keyed by uid.
+
+    A run is a maximal sequence of timed episodes with no untimed one between them. An untimed (real) episode
+    carries no timing and splits the runs around it, so its wall stays out of the pass span and GPU windows —
+    only the simulated spans are reported, even in a mixed sim/real sweep.
+    """
     dataset = load_all_datasets(dataset_dir)
-    records: list[_EpisodeTiming] = []
+    runs: list[list[_EpisodeTiming]] = []
     facts: dict[str, _RecordedFacts] = {}
+    split = True  # the next timed episode opens a fresh run (first one, or one after an untimed episode)
     for i in range(len(dataset)):
         ep = dataset[i]
         uid = str(ep.meta.get('uid', f'ts-{ep.meta.get("created_ts_ns", i)}'))
@@ -192,18 +200,34 @@ def _load_episodes(dataset_dir: Path) -> tuple[list[_EpisodeTiming], dict[str, _
             scored=bool(ep.static.get('eval.scored', False)),
         )
         timing = _episode_timing(ep, uid)
-        if timing is not None:
-            records.append(timing)
-    return records, facts
+        if timing is None:
+            split = True
+            continue
+        if split:
+            runs.append([])
+            split = False
+        runs[-1].append(timing)
+    return runs, facts
 
 
-def _parse_dmon(log_path: Path) -> GpuSummary:
+def _timed_spans(runs: list[list[_EpisodeTiming]]) -> list[tuple[float, float]]:
+    """The wall-clock (epoch) span each contiguous run of timed episodes occupied, first episode's start to
+    last's finish — the spans the pass wall and GPU windows cover, excluding any real eval between runs."""
+    return [(run[0].finished_at - run[0].wall_s, run[-1].finished_at) for run in runs]
+
+
+def _parse_dmon(log_path: Path, windows: list[tuple[float, float]] | None = None) -> GpuSummary:
     """Mean SM utilisation and peak framebuffer (GB) from an ``nvidia-smi dmon`` log.
 
     Column layout varies — ``-o DT`` prepends date/time, ``-s u`` adds encoder/decoder (and, on newer
     drivers, JPEG/OFA) columns before the framebuffer — so the positions are read from the ``# ... sm ...
     fb ...`` name header rather than hard-coded. ``sm`` is SM utilisation (%) and ``fb`` the framebuffer
     use (MiB). Rows before the header, or with missing numeric fields, are skipped rather than failing.
+
+    ``windows`` restricts the average to rows whose ``-o DT`` timestamp (the leading date + time columns, a
+    local wall clock matching the episodes' ``finished_at``) falls in a timed span — so a mixed sweep's
+    real-eval samples, and the pre/post-sweep warmup, stay out. Rows without a parseable timestamp are
+    dropped when windows are given; passed only for a same-box log (the sim GPU), never a cross-box one.
     """
     sm_idx: int | None = None
     fb_idx: int | None = None
@@ -223,6 +247,10 @@ def _parse_dmon(log_path: Path) -> GpuSummary:
             continue
         fields = line.split()
         try:
+            if windows is not None:
+                ts = datetime.strptime(f'{fields[0]} {fields[1]}', '%Y%m%d %H:%M:%S').timestamp()
+                if not any(lo <= ts <= hi for lo, hi in windows):
+                    continue
             utils.append(float(fields[sm_idx]))
             fb_mib.append(float(fields[fb_idx]))
         except (IndexError, ValueError):
@@ -247,15 +275,17 @@ def _success_outcome(facts: _RecordedFacts) -> bool | None:
     return None
 
 
-def _build_report(records: list[_EpisodeTiming], facts: dict[str, _RecordedFacts], gpu: GpuReport) -> PassReport:
-    # ``records`` and ``facts`` come from the same pass over the dataset, so every record's uid is a facts
-    # key by construction: the episode count and wall time come from ``records``, RTF/bytes/success from facts.
+def _build_report(runs: list[list[_EpisodeTiming]], facts: dict[str, _RecordedFacts], gpu: GpuReport) -> PassReport:
+    # ``runs`` and ``facts`` come from the same pass over the dataset, so every record's uid is a facts key by
+    # construction: the episode count and wall come from the timed ``records``, RTF/bytes/success from facts.
+    records = [r for run in runs for r in run]
 
-    # W_pass is the true pass span — the first episode's start to the last's finish — so inter-episode
-    # teardown wall (session close, homing, world rebuild) counts in the denominator. A per-episode sum drops
-    # it, inflating the real-time factor and sizing numbers. ``finished_at - wall_s`` is each episode's start.
+    # W_pass is the timed span — each contiguous run's first-episode start to its last-episode finish, summed —
+    # so inter-episode teardown (session close, homing, world rebuild) between simulated episodes counts in the
+    # denominator, while a real eval that split the runs does not. A per-episode sum would drop the teardown,
+    # inflating the real-time factor and sizing numbers.
     episode_wall_sum = float(sum(r.wall_s for r in records))
-    wall_pass = float(max(r.finished_at for r in records) - min(r.finished_at - r.wall_s for r in records))
+    wall_pass = float(sum(hi - lo for lo, hi in _timed_spans(runs)))
     all_infer_ms = np.array([ms for r in records for ms in r.infer_ms], dtype=float)
 
     # Aggregate fraction = summed phase over W_pass, so long episodes weigh proportionally.
@@ -361,19 +391,22 @@ def timing_report(dataset_dir: str, gpu_sim_log: str | None, gpu_policy_log: str
     # Pull a remote dataset local before reading; a plain local path is used as-is (never handed to pos3,
     # whose download would prune it).
     root = Path(pos3.download(dataset_dir)) if '://' in dataset_dir else Path(dataset_dir)
-    records, facts = _load_episodes(root)
-    if not records:
+    runs, facts = _load_episodes(root)
+    if not runs:
         raise ValueError(f'no timed episodes under {root} (recorded without --timing?)')
 
-    # The sim box samples its own GPU into the dataset dir under ``--timing``; an explicit path overrides
-    # it, and the policy endpoint's log (a different box) is only ever passed in.
+    # The sim box samples its own GPU into the dataset dir under ``--timing``; an explicit path overrides it,
+    # and the policy endpoint's log (a different box) is only ever passed in. The sim log is windowed to the
+    # timed spans (same box, so its ``-o DT`` clock matches ``finished_at``) so a mixed sweep's real-eval
+    # samples and the pre/post-sweep warmup drop out; the policy log is a different box, averaged whole.
+    spans = _timed_spans(runs)
     sim_log = Path(gpu_sim_log) if gpu_sim_log is not None else root / GPU_LOG_FILENAME
     gpu = GpuReport(
-        sim=_parse_dmon(sim_log) if sim_log.exists() else None,
+        sim=_parse_dmon(sim_log, spans) if sim_log.exists() else None,
         policy=_parse_dmon(Path(gpu_policy_log)) if gpu_policy_log is not None else None,
     )
 
-    report = _build_report(records, facts, gpu)
+    report = _build_report(runs, facts, gpu)
     summary_path = root / 'timing_summary.json'
     summary_path.write_text(json.dumps(asdict(report), indent=2))
     if '://' in dataset_dir:
