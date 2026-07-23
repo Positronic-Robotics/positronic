@@ -84,3 +84,12 @@ def test_camera_key_explicit_nondefault_read_as_is():
 def test_camera_key_miss_raises():
     with pytest.raises(KeyError):
         mapping.resolve_camera_key({'other': 1}, mapping.MOLMO_WRIST_CAMERA, mapping.MOLMO_WRIST_CAMERA, ())
+
+
+def test_exterior_camera_variants_cover_light_randomization_and_randcam():
+    # The default exterior mapping must resolve both benchmark exterior names (regression: RandCam records
+    # randomized_zed2_analogue_1, not exo_camera_1, so hard indexing KeyErrored).
+    default = mapping.MOLMO_EXTERIOR_CAMERA
+    variants = mapping.MOLMO_EXTERIOR_CAMERA_VARIANTS
+    for name in ('droid_shoulder_light_randomization', 'randomized_zed2_analogue_1'):
+        assert mapping.resolve_camera_key({name: 1}, default, default, variants) == name

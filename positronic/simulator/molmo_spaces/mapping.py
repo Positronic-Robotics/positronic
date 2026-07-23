@@ -16,12 +16,15 @@ NUM_ARM_JOINTS = 7
 MOLMO_ARM_GROUP = 'arm'
 MOLMO_GRIPPER_GROUP = 'gripper'
 
-# MolmoSpaces DROID rig camera names (FrankaDroidCameraSystem); the Zed-wrist / light-randomized benchmark
-# variants replace the defaults and MolmoSpaces' own Pi policy prefers them when present, so the adapter must too.
+# MolmoSpaces DROID rig camera names (FrankaDroidCameraSystem); a benchmark's own variants replace the defaults
+# and the adapter resolves them so the default camera_dict works across the benchmarks: the light-randomization
+# suite records the exterior as ``droid_shoulder_light_randomization`` (MolmoSpaces' Pi policy prefers it), and
+# the RandCam suite records it as ``randomized_zed2_analogue_1`` (its ``--camera_names`` exterior); the Zed wrist
+# variant is ``wrist_camera_zed_mini``.
 MOLMO_WRIST_CAMERA = 'wrist_camera'
 MOLMO_EXTERIOR_CAMERA = 'exo_camera_1'
 MOLMO_WRIST_CAMERA_VARIANTS = ('wrist_camera_zed_mini',)
-MOLMO_EXTERIOR_CAMERA_VARIANTS = ('droid_shoulder_light_randomization',)
+MOLMO_EXTERIOR_CAMERA_VARIANTS = ('droid_shoulder_light_randomization', 'randomized_zed2_analogue_1')
 
 # The Robotiq 2F-85 finger qpos saturates at this closure; the DROID observation's grip is normalized against
 # it into the [0, 1] closure the policy was trained on (molmospaces pi_policy.py:126).
