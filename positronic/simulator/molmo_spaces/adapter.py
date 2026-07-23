@@ -331,6 +331,17 @@ def adapter_config_from_exp_config(config: Any) -> AdapterConfig:
     return AdapterConfig(wrist_key=wrist, exterior_key=exterior)
 
 
+def client_kwargs_from_exp_config(config: Any) -> dict[str, Any]:
+    """Client kwargs honoring the eval's ``policy_config.remote_config``, when declared.
+
+    MolmoSpaces' learned-policy configs carry ``remote_config: dict(host, port)`` for a policy served remotely
+    (policy_configs_baselines.py), so the normal ``policy_factory(exp_config, task)`` path must reach the
+    configured endpoint rather than ``make_policy_client``'s defaults.
+    """
+    remote = getattr(getattr(config, 'policy_config', None), 'remote_config', None) or {}
+    return {k: remote[k] for k in ('host', 'port', 'model_id', 'secure') if k in remote}
+
+
 class MolmoSpacesPolicy(_InferencePolicyBase):
     """MolmoSpaces ``InferencePolicy`` serving pi05_droid through a positronic inference client.
 
@@ -351,7 +362,10 @@ class MolmoSpacesPolicy(_InferencePolicyBase):
     ):
         if HAS_MOLMO_SPACES:
             super().__init__(config, task)
-        self._client = client if client is not None else make_policy_client(**(client_kwargs or {}))
+        if client is None:
+            kwargs = client_kwargs if client_kwargs is not None else client_kwargs_from_exp_config(config)
+            client = make_policy_client(**kwargs)
+        self._client = client
         self._prompt = prompt
         self._adapter = adapter_config if adapter_config is not None else adapter_config_from_exp_config(config)
         self._buffer: ChunkBuffer | None = None

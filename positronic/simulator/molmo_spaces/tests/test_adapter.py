@@ -117,14 +117,15 @@ def test_obs_mapping_resolves_benchmark_variant_camera_keys():
     assert wrist_mean[0] > wrist_mean[1]
 
 
+class _Ns:
+    def __init__(self, **kw):
+        self.__dict__.update(kw)
+
+
 def test_adapter_config_honors_policy_config_camera_names():
     # An eval configured with non-default camera names (policy_config.camera_names, per MolmoSpaces'
     # custom-policy convention) must reach the adapter's camera keys (regression: a default AdapterConfig
     # ignored them and KeyErrored on the renamed observations).
-    class _Ns:
-        def __init__(self, **kw):
-            self.__dict__.update(kw)
-
     cfg = _Ns(policy_config=_Ns(camera_names=['randomized_zed2_analogue_1', 'wrist_camera_zed_mini']))
     adapter_cfg = adapter_config_from_exp_config(cfg)
     assert adapter_cfg.wrist_key == 'wrist_camera_zed_mini'
@@ -149,6 +150,19 @@ def test_adapter_config_honors_policy_config_camera_names():
     policy = adapter.MolmoSpacesPolicy(cfg, client=FakePolicy())
     assert policy._adapter.wrist_key == 'wrist_camera_zed_mini'
     assert policy._adapter.exterior_key == 'randomized_zed2_analogue_1'
+
+
+def test_client_kwargs_honor_policy_config_remote_config():
+    # MolmoSpaces' learned-policy configs carry remote_config=dict(host, port) for remotely served policies;
+    # the default policy_factory(exp_config, task) path must reach that endpoint, not the localhost defaults.
+    cfg = _Ns(policy_config=_Ns(remote_config={'host': 'h100.example', 'port': 9000}))
+    assert adapter.client_kwargs_from_exp_config(cfg) == {'host': 'h100.example', 'port': 9000}
+    # Keys make_policy_client doesn't take are filtered out.
+    cfg = _Ns(policy_config=_Ns(remote_config={'host': 'h', 'checkpoint_path': '/x'}))
+    assert adapter.client_kwargs_from_exp_config(cfg) == {'host': 'h'}
+    # Absent or None remote_config (or no config at all) -> defaults.
+    assert adapter.client_kwargs_from_exp_config(None) == {}
+    assert adapter.client_kwargs_from_exp_config(_Ns(policy_config=_Ns(remote_config=None))) == {}
 
 
 def test_gripper_proprio_normalization():
