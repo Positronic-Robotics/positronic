@@ -170,7 +170,7 @@ uv run positronic-inference sim \
 
 **Server-side recording:** Servers accept an optional `recording_dir`. When set, each WebSocket session writes a rerun `.rrd` file that taps both sides of the codec: `raw` captures the obs/action at the wire boundary, and `inference` captures the encoded observation and raw model output.
 
-**Python Client:** We provide a Python client (`positronic.offboard.client.InferenceClient`) that handles the WebSocket protocol automatically. While the API is currently in alpha and may change, we'll do our best to maintain backward compatibility for the inference client.
+**Python Client:** We provide a Python client (`positronic_client.InferenceClient`, from the light `positronic-client` package under `packages/positronic-client/`) that handles the WebSocket protocol automatically. The package carries only the wire-facing pieces — canonical observation keys (`positronic_client.keys`), serialization, and the client with its negotiated image downsizing — with no dependency on positronic itself, so foreign-venv consumers (sim adapters, customer integrations) install it without positronic's stack. While the API is currently in alpha and may change, we'll do our best to maintain backward compatibility for the inference client.
 
 ## Classes
 
@@ -190,11 +190,11 @@ server = InferenceServer(registry, host='0.0.0.0', port=8000)
 server.serve()
 ```
 
-### `client.InferenceClient`
+### `positronic_client.InferenceClient`
 A Python client for connecting to an inference server.
 
 ```python
-from positronic.offboard.client import InferenceClient
+from positronic_client import InferenceClient
 
 client = InferenceClient('localhost', 8000)
 

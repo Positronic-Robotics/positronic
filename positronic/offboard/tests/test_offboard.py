@@ -1,11 +1,12 @@
 from types import MappingProxyType
 
 import numpy as np
+from positronic_client.client import InferenceClient
+from positronic_client.serialization import encode_jpeg
 
 from positronic.drivers.roboarm.command import CartesianPosition, JointDelta, JointPosition, Reset
 from positronic.geom import Rotation, Transform3D
-from positronic.offboard.client import InferenceClient
-from positronic.utils.serialization import deserialise, encode_jpeg, serialise
+from positronic.utils.serialization import deserialise, serialise
 
 
 def test_inference_client_connect_and_infer(inference_server, mock_policy):

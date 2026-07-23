@@ -1,7 +1,8 @@
 """Unit tests for the pi05_droid <-> MolmoSpaces adapter mapping logic.
 
-Runs with NEITHER molmo_spaces nor positronic installed: the adapter import-guards both, and every test here
-exercises the pure mapping functions, ``ChunkBuffer``, and ``FakePolicy`` — none of which touch either framework.
+Runs without molmo_spaces and without positronic's heavy stack: the adapter needs only the light
+``positronic-client`` package, and every test here exercises the pure mapping functions, ``ChunkBuffer``,
+and ``FakePolicy`` — none of which touch a framework or a server.
 
 Run:  uv run --locked pytest positronic/simulator/molmo_spaces/tests/test_adapter.py --no-cov
 """
@@ -10,15 +11,11 @@ from pathlib import Path
 
 import numpy as np
 import pytest
+from positronic_client import keys
 
 from positronic.simulator.molmo_spaces import adapter
 from positronic.simulator.molmo_spaces.adapter import (
     NUM_ARM_JOINTS,
-    POS_EXTERIOR_IMAGE,
-    POS_GRIP,
-    POS_JOINTS,
-    POS_TASK,
-    POS_WRIST_IMAGE,
     ROBOTIQ_CLOSED,
     ROBOTIQ_OPEN,
     ChunkBuffer,
@@ -56,34 +53,34 @@ def test_module_imports_without_frameworks():
 
 def test_obs_mapping_key_set():
     obs = molmo_obs_to_positronic(_load_env_obs(), 'pick up the cube')
-    assert set(obs) == {POS_JOINTS, POS_GRIP, POS_WRIST_IMAGE, POS_EXTERIOR_IMAGE, POS_TASK}
+    assert set(obs) == {keys.JOINTS, keys.GRIP, keys.WRIST_IMAGE, keys.EXTERIOR_IMAGE, keys.TASK}
 
 
 def test_obs_mapping_shapes_and_dtypes():
     env = _load_env_obs()
     obs = molmo_obs_to_positronic(env, 'Pick up the cube')
-    assert obs[POS_JOINTS].shape == (NUM_ARM_JOINTS,) and obs[POS_JOINTS].dtype == np.float32
-    assert obs[POS_GRIP].shape == (1,) and obs[POS_GRIP].dtype == np.float32
+    assert obs[keys.JOINTS].shape == (NUM_ARM_JOINTS,) and obs[keys.JOINTS].dtype == np.float32
+    assert obs[keys.GRIP].shape == (1,) and obs[keys.GRIP].dtype == np.float32
     # Frames and task text pass through untouched: model preprocessing (resize-with-pad, prompt lowercasing)
     # belongs to the server codec, wire downsizing to the inference client.
-    assert np.array_equal(obs[POS_WRIST_IMAGE], env['wrist_camera'])
-    assert np.array_equal(obs[POS_EXTERIOR_IMAGE], env['exo_camera_1'])
-    assert obs[POS_TASK] == 'Pick up the cube'
+    assert np.array_equal(obs[keys.WRIST_IMAGE], env['wrist_camera'])
+    assert np.array_equal(obs[keys.EXTERIOR_IMAGE], env['exo_camera_1'])
+    assert obs[keys.TASK] == 'Pick up the cube'
 
 
 def test_obs_mapping_accepts_batch_list_and_single_dict():
     env = _load_env_obs()
     from_dict = molmo_obs_to_positronic(env, 't')
     from_list = molmo_obs_to_positronic([env], 't')  # MolmoSpaces yields a per-env list
-    assert np.array_equal(from_dict[POS_JOINTS], from_list[POS_JOINTS])
-    assert np.array_equal(from_dict[POS_WRIST_IMAGE], from_list[POS_WRIST_IMAGE])
+    assert np.array_equal(from_dict[keys.JOINTS], from_list[keys.JOINTS])
+    assert np.array_equal(from_dict[keys.WRIST_IMAGE], from_list[keys.WRIST_IMAGE])
 
 
 def test_obs_mapping_does_not_swap_cameras():
     obs = molmo_obs_to_positronic(_load_env_obs(), 't')
     # Fixture marks the wrist view reddish and the exterior view greenish; a swap would flip the dominant channel.
-    wrist_mean = obs[POS_WRIST_IMAGE].reshape(-1, 3).mean(axis=0)
-    exterior_mean = obs[POS_EXTERIOR_IMAGE].reshape(-1, 3).mean(axis=0)
+    wrist_mean = obs[keys.WRIST_IMAGE].reshape(-1, 3).mean(axis=0)
+    exterior_mean = obs[keys.EXTERIOR_IMAGE].reshape(-1, 3).mean(axis=0)
     assert wrist_mean[0] > wrist_mean[1]  # wrist: red > green
     assert exterior_mean[1] > exterior_mean[0]  # exterior: green > red
 
@@ -96,8 +93,8 @@ def test_obs_mapping_resolves_benchmark_variant_camera_keys():
     env['wrist_camera_zed_mini'] = env.pop('wrist_camera')
     env['droid_shoulder_light_randomization'] = env.pop('exo_camera_1')
     obs = molmo_obs_to_positronic(env, 't')
-    wrist_mean = obs[POS_WRIST_IMAGE].reshape(-1, 3).mean(axis=0)
-    exterior_mean = obs[POS_EXTERIOR_IMAGE].reshape(-1, 3).mean(axis=0)
+    wrist_mean = obs[keys.WRIST_IMAGE].reshape(-1, 3).mean(axis=0)
+    exterior_mean = obs[keys.EXTERIOR_IMAGE].reshape(-1, 3).mean(axis=0)
     assert wrist_mean[0] > wrist_mean[1]  # the reddish wrist view still lands on the wrist key
     assert exterior_mean[1] > exterior_mean[0]
 
@@ -105,7 +102,7 @@ def test_obs_mapping_resolves_benchmark_variant_camera_keys():
     both = _load_env_obs()
     both['droid_shoulder_light_randomization'] = both['wrist_camera']  # reddish, unlike exo_camera_1
     obs = molmo_obs_to_positronic(both, 't')
-    exterior_mean = obs[POS_EXTERIOR_IMAGE].reshape(-1, 3).mean(axis=0)
+    exterior_mean = obs[keys.EXTERIOR_IMAGE].reshape(-1, 3).mean(axis=0)
     assert exterior_mean[0] > exterior_mean[1]
 
     # An explicitly configured non-default key is read as-is, never shadowed by a variant.
@@ -113,7 +110,7 @@ def test_obs_mapping_resolves_benchmark_variant_camera_keys():
     custom['my_cam'] = custom['wrist_camera']
     custom['wrist_camera_zed_mini'] = custom['exo_camera_1']  # greenish decoy
     obs = molmo_obs_to_positronic(custom, 't', wrist_key='my_cam')
-    wrist_mean = obs[POS_WRIST_IMAGE].reshape(-1, 3).mean(axis=0)
+    wrist_mean = obs[keys.WRIST_IMAGE].reshape(-1, 3).mean(axis=0)
     assert wrist_mean[0] > wrist_mean[1]
 
 
@@ -171,7 +168,7 @@ def test_gripper_proprio_normalization():
     def grip_for(qpos_val: float) -> float:
         env = _load_env_obs()
         env['qpos']['gripper'] = np.array([qpos_val, qpos_val], dtype=np.float32)
-        return float(molmo_obs_to_positronic(env, 't')[POS_GRIP][0])
+        return float(molmo_obs_to_positronic(env, 't')[keys.GRIP][0])
 
     assert grip_for(0.0) == 0.0
     assert abs(grip_for(closed / 2) - 0.5) < 1e-4
@@ -212,6 +209,10 @@ def test_action_reads_velocities_from_object_or_wire_dict():
     from_obj = positronic_action_to_molmo({'robot_command': _FakeJointDelta(vel), 'target_grip': 0.0}, current)
     from_dict = positronic_action_to_molmo({'robot_command': {'velocities': vel}, 'target_grip': 0.0}, current)
     assert np.allclose(from_obj['arm'], from_dict['arm'])
+    # The base wire delivers the command as its __cmd__ envelope around the to_wire dict.
+    wire_cmd = {b'__cmd__': {'type': 'joint_delta', 'velocities': vel}}
+    from_wire = positronic_action_to_molmo({'robot_command': wire_cmd, 'target_grip': 0.0}, current)
+    assert np.allclose(from_obj['arm'], from_wire['arm'])
     # Bytes-keyed wire form (msgpack deserialisation on some client versions keys with bytes).
     from_bytes = positronic_action_to_molmo({b'robot_command': {b'velocities': vel}, b'target_grip': 1.0}, current)
     assert np.allclose(from_obj['arm'], from_bytes['arm'])
@@ -229,7 +230,7 @@ def test_action_joint_count_mismatch_raises():
 
 def test_fake_policy_chunk_shape_and_range():
     policy = FakePolicy(chunk_size=8, seed=3)
-    chunk = policy.new_session()({POS_TASK: 't'})
+    chunk = policy.new_session().infer({keys.TASK: 't'})
     assert len(chunk) == 8
     for step in chunk:
         vel = step['robot_command'].velocities
@@ -239,15 +240,15 @@ def test_fake_policy_chunk_shape_and_range():
 
 
 def test_fake_policy_is_deterministic_per_seed():
-    a = FakePolicy(seed=7).new_session()({POS_TASK: 't'})
-    b = FakePolicy(seed=7).new_session()({POS_TASK: 't'})
+    a = FakePolicy(seed=7).new_session().infer({keys.TASK: 't'})
+    b = FakePolicy(seed=7).new_session().infer({keys.TASK: 't'})
     for sa, sb in zip(a, b, strict=True):
         assert np.array_equal(sa['robot_command'].velocities, sb['robot_command'].velocities)
         assert sa['target_grip'] == sb['target_grip']
 
 
 def test_fake_policy_zero_mode_holds():
-    chunk = FakePolicy(mode='zero').new_session()({POS_TASK: 't'})
+    chunk = FakePolicy(mode='zero').new_session().infer({keys.TASK: 't'})
     for step in chunk:
         assert np.array_equal(step['robot_command'].velocities, np.zeros(NUM_ARM_JOINTS))
         assert step['target_grip'] == 0.0
@@ -261,7 +262,7 @@ class _CountingSession:
         self.calls = 0
         self._chunk_size = chunk_size
 
-    def __call__(self, obs):
+    def infer(self, obs):
         self.calls += 1
         return [
             {
@@ -284,7 +285,11 @@ def test_chunk_buffer_replays_one_per_tick_then_requeries():
 
 
 def test_chunk_buffer_empty_chunk_raises():
-    buf = ChunkBuffer(lambda obs: [])
+    class _Empty:
+        def infer(self, obs):
+            return []
+
+    buf = ChunkBuffer(_Empty())
     with pytest.raises(RuntimeError):
         buf.next({})
 
@@ -297,11 +302,12 @@ def test_chunk_buffer_drops_trailing_horizon_marker():
     chunk.append({'timestamp': 8 / 15})
     calls = {'n': 0}
 
-    def session(obs):
-        calls['n'] += 1
-        return list(chunk)
+    class _Session:
+        def infer(self, obs):
+            calls['n'] += 1
+            return list(chunk)
 
-    buf = ChunkBuffer(session)
+    buf = ChunkBuffer(_Session())
     for _ in range(8):
         assert 'robot_command' in buf.next({})
     assert calls['n'] == 1

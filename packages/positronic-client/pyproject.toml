@@ -1,0 +1,21 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "positronic-client"
+version = "0.1.0"
+description = "Light client for the positronic inference wire: canonical observation keys, serialization, WebSocket client"
+requires-python = ">=3.11, <3.14"
+license = { text = "Apache-2.0" }
+dependencies = [
+    "httpx",
+    "msgpack",
+    "numpy",
+    "pillow",
+    "websockets",
+]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["positronic_client*"]

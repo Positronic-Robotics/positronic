@@ -49,12 +49,17 @@ conflicts = [[
 exclude-newer = "2026-06-12T00:00:00Z"
 
 [options.exclude-newer-package]
+positronic-client = false
 configuronic = false
 pos3 = false
 positronic = false
 positronic-franka = false
 
 [manifest]
+members = [
+    "positronic",
+    "positronic-client",
+]
 constraints = [
     { name = "cmake", specifier = "<4.3" },
     { name = "evdev", specifier = "<1.9" },
@@ -4219,6 +4224,7 @@ dependencies = [
     { name = "opencv-python-headless", version = "4.13.0.92", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-10-positronic-lerobot-0-3-3' or extra == 'extra-10-positronic-molmoact2' or extra != 'extra-10-positronic-lerobot'" },
     { name = "plotly" },
     { name = "pos3" },
+    { name = "positronic-client" },
     { name = "pyarrow" },
     { name = "pydantic" },
     { name = "pyturbojpeg" },
@@ -4323,6 +4329,7 @@ requires-dist = [
     { name = "placo", marker = "extra == 'hardware'" },
     { name = "plotly", specifier = ">=6.5.0" },
     { name = "pos3", specifier = ">=0.3.1" },
+    { name = "positronic-client", editable = "packages/positronic-client" },
     { name = "positronic-franka", marker = "sys_platform == 'linux' and extra == 'hardware'", specifier = ">=0.5.0" },
     { name = "pre-commit", marker = "extra == 'dev'" },
     { name = "protobuf", marker = "extra == 'molmoact2'" },
@@ -4361,6 +4368,27 @@ requires-dist = [
     { name = "zmq" },
 ]
 provides-extras = ["openpi", "hardware", "lerobot-0-3-3", "lerobot", "molmoact2", "dreamzero", "lance", "dev"]
+
+[[package]]
+name = "positronic-client"
+version = "0.1.0"
+source = { editable = "packages/positronic-client" }
+dependencies = [
+    { name = "httpx" },
+    { name = "msgpack" },
+    { name = "numpy" },
+    { name = "pillow" },
+    { name = "websockets" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "httpx" },
+    { name = "msgpack" },
+    { name = "numpy" },
+    { name = "pillow" },
+    { name = "websockets" },
+]
 
 [[package]]
 name = "positronic-franka"

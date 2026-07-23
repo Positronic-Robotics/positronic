@@ -7,8 +7,8 @@ from unittest.mock import MagicMock
 
 import pytest
 import uvicorn
+from positronic_client.client import InferenceClient
 
-from positronic.offboard.client import InferenceClient
 from positronic.offboard.vendor_server import VendorServer
 from positronic.policy import Codec
 

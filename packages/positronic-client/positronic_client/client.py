@@ -1,14 +1,18 @@
+import collections.abc as cabc
 import logging
 import ssl
 import time
+from collections.abc import Callable
 from typing import Any
 
 import httpx
+import numpy as np
+from PIL import Image as PilImage
 from websockets.exceptions import ConnectionClosed, InvalidHandshake, InvalidStatus
 from websockets.sync.client import connect
 from websockets.sync.connection import Connection
 
-from positronic.utils.serialization import deserialise, serialise
+from .serialization import deserialise, encode_jpeg, serialise
 
 logger = logging.getLogger(__name__)
 
@@ -19,10 +23,39 @@ DEFAULT_INFER_TIMEOUT = 180.0
 
 
 class InferenceSession:
-    def __init__(self, websocket: Connection, infer_timeout: float = DEFAULT_INFER_TIMEOUT):
+    """One inference session: streams observations, receives action chunks.
+
+    Images are downsized before sending to reduce bandwidth: the server reports the sizes its codec expects via
+    ``image_sizes`` in its metadata (see ``Codec.meta``), and every frame is fit into the reported size
+    (aspect-preserving, never upscaled). The ``resize`` parameter acts as a fallback when the server does not
+    report sizes; server-reported sizes always take precedence.
+    """
+
+    def __init__(
+        self,
+        websocket: Connection,
+        infer_timeout: float = DEFAULT_INFER_TIMEOUT,
+        *,
+        resize: int | None = None,
+        compress_images: bool = False,
+        serialise: Callable[[Any], bytes] = serialise,
+        deserialise: Callable[[bytes], Any] = deserialise,
+    ):
         self._websocket = websocket
         self._infer_timeout = infer_timeout
+        self._resize = resize
+        self._compress_images = compress_images
+        self._serialise = serialise
+        self._deserialise = deserialise
         self._metadata = self._handshake()
+
+        self._image_sizes: dict[str, tuple[int, int]] = {}
+        self._default_image_size: tuple[int, int] | None = None
+        sizes = self._metadata.get('image_sizes')
+        if isinstance(sizes, dict):
+            self._image_sizes = {k: tuple(v) for k, v in sizes.items()}
+        elif isinstance(sizes, tuple | list):
+            self._default_image_size = tuple(sizes)
 
     def _handshake(self, timeout_per_message: float = 30.0) -> dict[str, Any]:
         """Receive status updates until server is ready.
@@ -33,7 +66,7 @@ class InferenceSession:
         """
         try:
             while True:
-                response = deserialise(self._websocket.recv(timeout=timeout_per_message))
+                response = self._deserialise(self._websocket.recv(timeout=timeout_per_message))
                 status = response.get('status')
 
                 if status == 'ready':
@@ -59,19 +92,60 @@ class InferenceSession:
     def metadata(self) -> dict[str, Any]:
         return self._metadata
 
-    def infer(self, obs: dict[str, Any]) -> dict[str, Any]:
+    @staticmethod
+    def _resize_to(image: np.ndarray, width: int, height: int) -> np.ndarray:
+        h, w = image.shape[:2]
+        if w == width and h == height:
+            return image
+        return np.array(PilImage.fromarray(image).resize((width, height), resample=PilImage.Resampling.BILINEAR))
+
+    @staticmethod
+    def _fit(image: np.ndarray, tw: int, th: int) -> np.ndarray:
+        h, w = image.shape[:2]
+        scale = min(1.0, tw / w, th / h)
+        return InferenceSession._resize_to(image, int(w * scale), int(h * scale))
+
+    def _prepare_obs(self, obs: dict[str, Any]) -> dict[str, Any]:
+        return {key: self._prepare_value(key, value) for key, value in obs.items()}
+
+    def _prepare_value(self, key: str, value: Any) -> Any:
+        # Client-side codecs (e.g. GR00T) nest images inside dicts/lists, so recurse to reach every
+        # image array rather than scanning the top level alone.
+        if isinstance(value, np.ndarray) and value.ndim in (3, 4) and value.shape[-1] == 3:
+            return self._prepare_image(key, value)
+        if isinstance(value, cabc.Mapping):
+            return {k: self._prepare_value(k, v) for k, v in value.items()}
+        if isinstance(value, list | tuple):
+            return type(value)(self._prepare_value(key, v) for v in value)
+        return value
+
+    def _prepare_image(self, key: str, image: np.ndarray) -> np.ndarray | dict[bytes, Any]:
+        # Resize single RGB frames and temporal stacks of them alike (TemporalStack emits a
+        # (T, H, W, 3) stack), so a stack of hd720 frames isn't shipped full-resolution.
+        target = self._image_sizes.get(key, self._default_image_size)
+        r = self._resize or 0
+        tw, th = target or (r, r)
+        if tw > 0 and th > 0:
+            image = np.stack([self._fit(f, tw, th) for f in image]) if image.ndim == 4 else self._fit(image, tw, th)
+        # Optionally JPEG-compress before sending: a raw HD frame — and especially a (T, H, W, 3)
+        # stack — can exceed the ~2 MB websocket message cap of a Modal-fronted endpoint. Off by default.
+        if self._compress_images:
+            image = encode_jpeg(image)
+        return image
+
+    def infer(self, obs: dict[str, Any]) -> Any:
         """
         Send an observation and get an action.
 
         Both `obs` and the returned action must be wire-serializable: plain-data containers and
         scalars, plus numeric numpy arrays/scalars. Do not pass arbitrary Python objects.
         """
-        serialised = serialise(obs)
+        serialised = self._serialise(self._prepare_obs(obs))
         logger.debug('Size of serialised obs: %1.f KiB', len(serialised) / 1024)
 
         self._websocket.send(serialised)
         try:
-            response = deserialise(self._websocket.recv(timeout=self._infer_timeout))
+            response = self._deserialise(self._websocket.recv(timeout=self._infer_timeout))
         except TimeoutError:
             # The observation is in flight but unanswered; the server's late response would sit in the socket and
             # the next ``recv`` would pair it with a future observation. Close so the desynced session can't be
@@ -92,10 +166,27 @@ class InferenceSession:
 
 
 class InferenceClient:
-    def __init__(self, host: str, port: int, *, headers: dict[str, str] | None = None, secure: bool = False):
+    def __init__(
+        self,
+        host: str,
+        port: int,
+        *,
+        model_id: str | None = None,
+        headers: dict[str, str] | None = None,
+        secure: bool = False,
+        resize: int | None = None,
+        compress_images: bool = False,
+        serialise: Callable[[Any], bytes] = serialise,
+        deserialise: Callable[[bytes], Any] = deserialise,
+    ):
         self.host = host
         self.port = port
         self.headers = dict(headers) if headers else None
+        self._model_id = model_id
+        self._resize = resize
+        self._compress_images = compress_images
+        self._serialise = serialise
+        self._deserialise = deserialise
         ws_scheme = 'wss' if secure else 'ws'
         http_scheme = 'https' if secure else 'http'
         default_port = 443 if secure else 80
@@ -114,11 +205,12 @@ class InferenceClient:
         Creates a new inference session.
 
         Args:
-            model_id: Optional model ID to connect to
+            model_id: Optional model ID to connect to; falls back to the client's pinned ``model_id``.
             open_timeout: Timeout for initial WebSocket connection (default: 10s).
                         This only covers TCP/HTTP handshake, not model loading.
                         Model loading timeout is controlled by per-message timeout in handshake.
         """
+        model_id = model_id if model_id is not None else self._model_id
         uri = self.base_uri if model_id is None else f'{self.base_uri}/{model_id}'
         connect_kwargs: dict[str, object] = {'open_timeout': open_timeout}
         if self.headers:
@@ -130,7 +222,14 @@ class InferenceClient:
             ws = None
             try:
                 ws = connect(uri, **connect_kwargs)
-                return InferenceSession(ws, infer_timeout=infer_timeout)
+                return InferenceSession(
+                    ws,
+                    infer_timeout=infer_timeout,
+                    resize=self._resize,
+                    compress_images=self._compress_images,
+                    serialise=self._serialise,
+                    deserialise=self._deserialise,
+                )
             # ``SSLCertVerificationError`` is an ``ssl.SSLError``, but a bad certificate is permanent
             # misconfiguration, not a cold start — surface it immediately instead of retrying to the deadline.
             except ssl.SSLCertVerificationError as e:

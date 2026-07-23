@@ -2,20 +2,22 @@
 
 MolmoSpaces drives a DROID FR3 + Robotiq rig and expects a ``BasePolicy`` whose ``get_action`` maps its
 observation dict to a per-move-group action dict. positronic serves pi05_droid behind an ``InferenceServer``
-(FastAPI on port 8000) whose DROID codec consumes the raw positronic observation keys
-(``robot_state.q``, ``grip``, ``image.wrist``, ``image.exterior``, ``task``) and returns a chunk of decoded
-per-step ``JointDelta`` commands (7 joint velocities already scaled by ``MAX_JOINT_DELTA``) plus a binarized grip.
+(FastAPI on port 8000) whose DROID codec consumes the raw positronic observation keys (``positronic_client.keys``)
+and returns a chunk of per-step ``JointDelta`` commands (7 joint velocities already scaled by ``MAX_JOINT_DELTA``)
+plus a binarized grip.
 
 This module holds:
   - two pure mapping functions — ``molmo_obs_to_positronic`` and ``positronic_action_to_molmo`` — that carry the
-    whole translation and are import-free of both frameworks so they run under a bare pytest;
+    whole translation;
   - ``ChunkBuffer``, which plays one buffered chunk step per policy tick and re-queries when the chunk drains,
     matching DROID's open-loop horizon;
-  - ``FakePolicy``, a server-free stand-in honoring the positronic client contract, for smoke runs;
+  - ``FakePolicy``, a server-free stand-in honoring the inference-client contract, for smoke runs;
   - ``MolmoSpacesPolicy``, the ``InferencePolicy`` subclass wiring the above into MolmoSpaces (only usable where
     molmo_spaces is installed; the mapping logic above is not).
 
-MolmoSpaces and positronic are imported behind guards so the pure logic and its tests need neither installed.
+The only positronic dependency is the light ``positronic-client`` package (keys + wire client), installable into
+molmo's venv without positronic's stack; molmo_spaces itself is imported behind a guard so the mapping logic and
+its tests run without it. Actions arrive over the base wire, so command envelopes are read as their wire dicts.
 """
 
 import collections.abc as cabc
@@ -23,6 +25,8 @@ from dataclasses import dataclass
 from typing import Any
 
 import numpy as np
+from positronic_client import keys
+from positronic_client.client import InferenceClient
 
 try:
     from molmo_spaces.policy.base_policy import InferencePolicy as _InferencePolicyBase
@@ -42,13 +46,6 @@ MOLMO_WRIST_CAMERA_VARIANTS = ('wrist_camera_zed_mini',)
 MOLMO_EXTERIOR_CAMERA_VARIANTS = ('droid_shoulder_light_randomization',)
 MOLMO_ARM_GROUP = 'arm'
 MOLMO_GRIPPER_GROUP = 'gripper'
-
-# positronic raw observation keys the DROID codec (positronic/vendors/openpi/codecs.py:droid_obs) reads.
-POS_JOINTS = 'robot_state.q'
-POS_GRIP = 'grip'
-POS_WRIST_IMAGE = 'image.wrist'
-POS_EXTERIOR_IMAGE = 'image.exterior'
-POS_TASK = 'task'
 
 NUM_ARM_JOINTS = 7
 
@@ -99,11 +96,11 @@ def molmo_obs_to_positronic(
     grip = float(np.clip(grip_qpos / gripper_qpos_closed, 0.0, 1.0))
 
     return {
-        POS_JOINTS: arm,
-        POS_GRIP: np.array([grip], dtype=np.float32),
-        POS_WRIST_IMAGE: _camera_image(env, wrist_key, MOLMO_WRIST_CAMERA, MOLMO_WRIST_CAMERA_VARIANTS),
-        POS_EXTERIOR_IMAGE: _camera_image(env, exterior_key, MOLMO_EXTERIOR_CAMERA, MOLMO_EXTERIOR_CAMERA_VARIANTS),
-        POS_TASK: task,
+        keys.JOINTS: arm,
+        keys.GRIP: np.array([grip], dtype=np.float32),
+        keys.WRIST_IMAGE: _camera_image(env, wrist_key, MOLMO_WRIST_CAMERA, MOLMO_WRIST_CAMERA_VARIANTS),
+        keys.EXTERIOR_IMAGE: _camera_image(env, exterior_key, MOLMO_EXTERIOR_CAMERA, MOLMO_EXTERIOR_CAMERA_VARIANTS),
+        keys.TASK: task,
     }
 
 
@@ -128,7 +125,13 @@ def _wire_get(mapping: cabc.Mapping, name: str, default: Any = None) -> Any:
 
 
 def _joint_delta_velocities(robot_command: Any) -> np.ndarray:
-    """Read the 7 joint velocities from a decoded positronic ``JointDelta`` (object) or its wire dict."""
+    """Read the 7 joint velocities from a ``JointDelta``-shaped object or its wire form.
+
+    On the base wire a command arrives as its ``__cmd__`` envelope around the ``to_wire`` dict — unwrap it first;
+    a fake session hands a duck-typed object read via ``.velocities``.
+    """
+    if isinstance(robot_command, cabc.Mapping):
+        robot_command = _wire_get(robot_command, '__cmd__', robot_command)
     if hasattr(robot_command, 'velocities'):
         return np.asarray(robot_command.velocities, dtype=np.float32).reshape(-1)
     if isinstance(robot_command, cabc.Mapping):
@@ -177,7 +180,7 @@ class ChunkBuffer:
 
     def next(self, obs: dict[str, Any]) -> Any:
         if not self._pending:
-            chunk = self._session(obs)
+            chunk = self._session.infer(obs)
             # The serving layer ends each chunk with a horizon marker carrying only `timestamp`
             # (droid's action window is horizon=8/15: 8 actions + the window-end stamp). It is not
             # an action — playing it as one KeyErrors on `robot_command`, so keep only action-bearing entries.
@@ -204,7 +207,7 @@ class _FakeJointDelta:
 
 
 class FakeSession:
-    """Server-free session emitting action chunks in the shape a positronic ``RemoteSession`` returns."""
+    """Server-free session emitting action chunks in the shape an ``InferenceSession`` returns."""
 
     def __init__(
         self, *, chunk_size: int, num_joints: int, max_joint_delta: float, mode: str, rng: np.random.Generator
@@ -225,14 +228,14 @@ class FakeSession:
             return 0.0
         return 1.0 if self._rng.random() > 0.5 else 0.0
 
-    def __call__(self, obs: dict[str, Any]) -> list[dict[str, Any]]:
+    def infer(self, obs: dict[str, Any]) -> list[dict[str, Any]]:
         return [
             {'robot_command': _FakeJointDelta(self._velocities()), 'target_grip': self._grip()}
             for _ in range(self._chunk_size)
         ]
 
     @property
-    def meta(self) -> dict[str, Any]:
+    def metadata(self) -> dict[str, Any]:
         return {'type': 'fake'}
 
     def close(self) -> None:
@@ -240,7 +243,7 @@ class FakeSession:
 
 
 class FakePolicy:
-    """Drop-in for positronic ``RemotePolicy`` that needs no server — random or zero DROID action chunks.
+    """Drop-in for ``InferenceClient`` that needs no server — random or zero DROID action chunks.
 
     ``mode='random'`` draws velocities uniformly in ``[-max_joint_delta, max_joint_delta]`` and a random binary
     grip; ``mode='zero'`` holds the arm and keeps the gripper open. Sessions are deterministic given ``seed``.
@@ -264,7 +267,7 @@ class FakePolicy:
         self._seed = seed
         self._session_count = 0
 
-    def new_session(self, context: dict[str, Any] | None = None) -> FakeSession:
+    def new_session(self, model_id: str | None = None) -> FakeSession:
         rng = np.random.default_rng(self._seed + self._session_count)
         self._session_count += 1
         return FakeSession(
@@ -294,15 +297,14 @@ def make_policy_client(
     fake_seed: int = 0,
     fake_chunk_size: int = DROID_CHUNK_STEPS,
 ) -> Any:
-    """Return the inference client the policy talks to: a ``FakePolicy`` when ``fake`` else positronic ``RemotePolicy``.
+    """Return the inference client the policy talks to: a ``FakePolicy`` when ``fake`` else an ``InferenceClient``.
 
-    ``RemotePolicy`` is imported lazily so this module (and its tests) load without positronic installed.
+    The real client speaks the base wire — sessions downsize frames to the server-advertised ``image_sizes``, and
+    action commands arrive as their wire envelopes (see ``_joint_delta_velocities``).
     """
     if fake:
         return FakePolicy(mode=fake_mode, seed=fake_seed, chunk_size=fake_chunk_size)
-    from positronic.policy.remote import RemotePolicy
-
-    return RemotePolicy(host, port=port, model_id=model_id, secure=secure)
+    return InferenceClient(host, port, model_id=model_id, secure=secure)
 
 
 @dataclass

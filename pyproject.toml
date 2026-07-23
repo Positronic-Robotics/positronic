@@ -32,6 +32,7 @@ dependencies = [
     # openpi-client: optional, see [project.optional-dependencies] openpi
     "plotly>=6.5.0",
     "pos3>=0.3.1",
+    "positronic-client",
     "pyarrow",
     "pydantic",
     "pyturbojpeg<2",
@@ -110,6 +111,7 @@ dev = [
 ]
 
 [tool.uv]
+workspace = { members = ["packages/positronic-client"] }
 # lerobot_0_3_3 extra pulls in lerobot==0.3.3 which declares rerun-sdk<0.23,
 # but our usage of lerobot doesn't need rerun — override to unblock resolution.
 override-dependencies = ["rerun-sdk==0.30.0"]
@@ -139,6 +141,7 @@ positronic = false
 configuronic = false
 pos3 = false
 positronic-franka = false
+positronic-client = false
 
 [tool.uv.sources]
 # ZED SDK ships one ABI-specific wheel per CPython version; pick by interpreter.
@@ -147,10 +150,12 @@ pyzed = [
     { url = "https://download.stereolabs.com/zedsdk/5.0/whl/linux_x86_64/pyzed-5.0-cp312-cp312-linux_x86_64.whl", marker = "python_full_version >= '3.12' and python_full_version < '3.13'" },
     { url = "https://download.stereolabs.com/zedsdk/5.0/whl/linux_x86_64/pyzed-5.0-cp313-cp313-linux_x86_64.whl", marker = "python_full_version >= '3.13'" },
 ]
+positronic-client = { workspace = true }
 openpi-client = { git = "https://github.com/Positronic-Robotics/openpi.git", rev = "main-positronic", subdirectory = "packages/openpi-client" }
 
 [tool.pytest.ini_options]
 testpaths = [
+    "packages/positronic-client/positronic_client/tests",
     "pimm/tests",
     "positronic/cfg/tests",
     "positronic/dataset/tests",

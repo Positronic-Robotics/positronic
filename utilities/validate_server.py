@@ -4,8 +4,7 @@ import subprocess
 from pathlib import Path
 
 import configuronic as cfn
-
-from positronic.offboard.client import InferenceClient
+from positronic_client.client import InferenceClient
 
 
 def _shell_join(command: list[str]) -> str:

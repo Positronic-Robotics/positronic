@@ -1,8 +1,8 @@
 import configuronic as cfn
 import pos3
+from positronic_client.client import DEFAULT_INFER_TIMEOUT
 
 from positronic.cfg import codecs
-from positronic.offboard.client import DEFAULT_INFER_TIMEOUT
 from positronic.policy import ActionHorizon, Codec, Policy, Recorder, RemotePolicy
 from positronic.utils import get_latest_checkpoint
 
