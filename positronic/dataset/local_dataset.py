@@ -25,6 +25,7 @@ from .edits import EditedDataset
 from .episode import (
     EPISODE_SCHEMA_VERSION,
     SIGNAL_FACTORY_T,
+    TELEMETRY_PREFIX,
     Episode,
     EpisodeWriter,
     T,
@@ -184,11 +185,14 @@ class DiskEpisodeWriter(EpisodeWriter):
         self._static_items[name] = data
 
     def _scan_timestamps(self) -> tuple[int | None, int | None]:
-        """Scan parquet files for min/max timestamps."""
+        """Scan content-signal parquet files for min/max timestamps; telemetry signals are excluded from
+        episode bounds (see ``TELEMETRY_PREFIX``), so the cached ``duration_ns`` must skip them too."""
         first_ts: int | None = None
         last_ts: int | None = None
 
         for parquet_file in self._path.glob('*.parquet'):
+            if parquet_file.name.startswith(TELEMETRY_PREFIX):
+                continue
             try:
                 schema = pq.read_schema(parquet_file)
                 # Vector signals use 'timestamp', video frames use 'ts_ns'

@@ -52,6 +52,26 @@ def test_episode_start_last_ts(tmp_path):
     assert ep.last_ts == 2500
 
 
+def test_episode_bounds_exclude_telemetry_signals(tmp_path):
+    # Regression: `timing.*` signals are sparse and start at their phase's first activity, so deriving
+    # bounds over them shifted `start_ts` into the rollout and shortened `duration_ns` for every consumer.
+    ep_dir = tmp_path / 'ep_telemetry'
+    with DiskEpisodeWriter(ep_dir) as w:
+        w.append('a', 1, 1000)
+        w.append('a', 2, 2000)
+        w.append('timing.env_step_s', 0.1, 1800)  # starts late in the rollout
+        w.append('timing.env_step_s', 0.1, 2600)  # ends past the content streams
+
+    ep = DiskEpisode(ep_dir)
+    assert ep.start_ts == 1000
+    assert ep.last_ts == 2000
+    assert ep.duration_ns == 1000
+
+    with (ep_dir / 'meta.json').open('r') as f:
+        stored_meta = json.load(f)
+    assert stored_meta['duration_ns'] == 1000  # the cached value skips telemetry too
+
+
 def test_episode_getitem_returns_signal(tmp_path):
     ep_dir = tmp_path / 'ep3'
     with DiskEpisodeWriter(ep_dir) as w:

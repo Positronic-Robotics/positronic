@@ -10,6 +10,13 @@ import numpy as np
 from .signal import Signal
 
 EPISODE_SCHEMA_VERSION = 1
+
+# Reserved namespace for wall-clock telemetry signals — facts about the recording process (per-tick phase
+# costs, inference latencies) rather than episode content. Telemetry streams are sparse: each starts at its
+# phase's first activity, so they are excluded from episode bounds — otherwise a late-starting stream would
+# pull ``start_ts`` into the rollout and shorten ``duration_ns`` for every consumer.
+TELEMETRY_PREFIX = 'timing.'
+
 T = TypeVar('T')
 SIGNAL_FACTORY_T = Callable[[], Signal[Any]]
 
@@ -106,16 +113,16 @@ class Episode(ABC, Mapping[str, Any]):
 
     @property
     def start_ts(self):
-        values = [sig.start_ts for sig in self.signals.values()]
+        values = [sig.start_ts for name, sig in self.signals.items() if not name.startswith(TELEMETRY_PREFIX)]
         if not values:
-            raise ValueError('Episode has no signals')
+            raise ValueError('Episode has no content signals')
         return max(values)
 
     @property
     def last_ts(self):
-        values = [sig.last_ts for sig in self.signals.values()]
+        values = [sig.last_ts for name, sig in self.signals.items() if not name.startswith(TELEMETRY_PREFIX)]
         if not values:
-            raise ValueError('Episode has no signals')
+            raise ValueError('Episode has no content signals')
         return max(values)
 
     @property

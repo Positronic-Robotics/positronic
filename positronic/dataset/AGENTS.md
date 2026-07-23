@@ -38,6 +38,8 @@ Recordings are immutable. All post-hoc modification goes through one mechanism: 
 
 `duration_ns`, `start_ts`, `last_ts` are **first-class properties on Episode**, always derived from signals. They are never stored in meta. If a transform changes signals, these properties reflect the change.
 
+Bounds are derived from **content** signals only: the reserved telemetry namespace (`TELEMETRY_PREFIX`, `timing.*`) holds sparse wall-clock facts about the recording process, and each telemetry stream starts at its phase's first activity — including it would pull `start_ts` into the rollout and shorten `duration_ns` for every consumer.
+
 Implementations may cache these values internally (e.g. `DiskEpisode` reads a cached `duration_ns` from `meta.json`), but this is a private optimization — `episode.meta` must not expose `duration_ns`.
 
 ## Laziness

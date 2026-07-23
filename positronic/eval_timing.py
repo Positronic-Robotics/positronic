@@ -28,18 +28,20 @@ from dataclasses import asdict, dataclass, field, fields
 from enum import IntEnum, auto
 from pathlib import Path
 
+from positronic.dataset.episode import TELEMETRY_PREFIX
+
 logger = logging.getLogger(__name__)
 
 GPU_LOG_FILENAME = 'gpu_dmon.log'
 
 # The episode signal + static keys the recorder writes and the reduce step reads back — one source of truth
-# so the writer and `timing_report` never drift on a name. The per-tick phase costs and the per-call
-# inference latencies are recorded as ``timing.*`` signals; the once-per-episode wall scalars as statics.
-STEP_SIGNAL_PREFIX = 'timing'
-INFER_MS_SIGNAL = 'timing.infer_ms'
-WALL_S_KEY = 'timing.wall_s'
-FINISHED_AT_KEY = 'timing.finished_at'
-RESET_S_KEY = 'timing.reset_s'
+# so the writer and `timing_report` never drift on a name. All live under the dataset's reserved telemetry
+# namespace (``TELEMETRY_PREFIX``, excluded from episode bounds): the per-tick phase costs and the per-call
+# inference latencies as signals, the once-per-episode wall scalars as statics.
+INFER_MS_SIGNAL = f'{TELEMETRY_PREFIX}infer_ms'
+WALL_S_KEY = f'{TELEMETRY_PREFIX}wall_s'
+FINISHED_AT_KEY = f'{TELEMETRY_PREFIX}finished_at'
+RESET_S_KEY = f'{TELEMETRY_PREFIX}reset_s'
 
 
 class Phase(IntEnum):
@@ -238,7 +240,7 @@ def step_signal_items(step: StepTiming) -> Iterator[tuple[str, float]]:
     tick that saw no activity in a phase writes no sample for it."""
     for name, seconds in asdict(step).items():
         if seconds != 0.0:
-            yield f'{STEP_SIGNAL_PREFIX}.{name}', seconds
+            yield f'{TELEMETRY_PREFIX}{name}', seconds
 
 
 def statics_items(statics: EpisodeTimingStatics) -> Iterator[tuple[str, object]]:
