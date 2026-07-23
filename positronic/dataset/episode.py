@@ -49,16 +49,23 @@ def _is_valid_static_value(value: Any) -> bool:
 
 
 class _EpisodeTimeIndexer:
-    """Time-based indexer for Episode signals."""
+    """Time-based indexer for Episode content signals.
+
+    Telemetry signals (``TELEMETRY_PREFIX``) are excluded, matching the episode bounds: they are sparse and
+    start at their first activity, so sampling one at a content timestamp before its first sample would raise.
+    """
 
     def __init__(self, episode: 'Episode') -> None:
         self.episode = episode
+
+    def _content_signals(self) -> Iterator[tuple[str, Signal[Any]]]:
+        return ((key, sig) for key, sig in self.episode.signals.items() if not key.startswith(TELEMETRY_PREFIX))
 
     def __getitem__(self, index_or_slice):
         match index_or_slice:
             case int() | np.integer() | float() | np.floating() as ts:
                 # For a single timestamp, return static items and only the values for signals
-                sampled = {key: sig.time[ts][0] for key, sig in self.episode.signals.items()}
+                sampled = {key: sig.time[ts][0] for key, sig in self._content_signals()}
                 return {**self.episode.static, **sampled}
             case slice() as sl if sl.step is None:
                 raise KeyError('Episode.time[start:stop] is not supported; use a step or explicit timestamps')
@@ -70,7 +77,7 @@ class _EpisodeTimeIndexer:
                 if isinstance(req, slice) and req.step is not None and req.stop is None:
                     req = slice(req.start, self.episode.last_ts + 1, req.step)
                 result: dict[str, Any] = self.episode.static.copy()
-                for key, sig in self.episode.signals.items():
+                for key, sig in self._content_signals():
                     view = sig.time[req]
                     # Extract the full sequence of values corresponding to the time selection
                     result[key] = view._values_at(slice(None))

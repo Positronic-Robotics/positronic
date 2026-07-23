@@ -72,6 +72,21 @@ def test_episode_bounds_exclude_telemetry_signals(tmp_path):
     assert stored_meta['duration_ns'] == 1000  # the cached value skips telemetry too
 
 
+def test_episode_time_sampling_skips_telemetry_signals(tmp_path):
+    # A converter builds its sample grid from the content bounds, so sampling at `start_ts` must not hit a
+    # telemetry signal that has no sample yet — and telemetry values don't belong in sampled frames at all.
+    ep_dir = tmp_path / 'ep_time_telemetry'
+    with DiskEpisodeWriter(ep_dir) as w:
+        w.append('a', 1, 1000)
+        w.append('a', 2, 2000)
+        w.append('timing.env_step_s', 0.1, 1800)  # first telemetry sample after the content start
+
+    ep = DiskEpisode(ep_dir)
+    assert ep.time[ep.start_ts] == {'a': 1}
+    assert list(ep.time[[1000, 2000]]['a']) == [1, 2]
+    assert 'timing.env_step_s' not in ep.time[[1000, 2000]]
+
+
 def test_telemetry_only_episode_has_zero_duration(tmp_path):
     # A rollout stopped before any content sample still drains a `timing.*` sample on the STOP turn; such
     # an episode behaves like the no-signal case instead of raising from the content-only bounds.
