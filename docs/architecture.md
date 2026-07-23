@@ -128,7 +128,8 @@ cannot diverge.
 
 **The rollout records, analysis scores.** The run computes no verdicts: it records the raw
 privileged state as-is (for a sim task, the entire simulator state), and success criteria are
-functions over those recordings, computed in a separate analysis pass — one expensive rollout, many
-cheap criteria experiments. The only live exception is an optional stop-signal that ends a trial
-without judging it; whether that end was a success is, like everything else, an analysis question.
-A criterion baked into the run is bound too early: changing it would mean re-running the robot.
+functions over those recordings, computed in a separate analysis pass — one expensive rollout,
+many cheap criteria experiments. The only live exception is an optional stop-signal that ends a
+trial without judging it; whether that end was a success is, like everything else, an analysis
+question. A criterion baked into the run is bound too early: changing it would mean re-running
+the robot.
