@@ -161,12 +161,20 @@ def main(
     if timing:
         if output_dir is None:
             raise ValueError('--timing needs --output_dir: the per-rollout telemetry is recorded into the dataset')
-        embodiments = [ev.embodiment for ev in evals] if evals is not None else [embodiment]
-        if not all(e.simulated for e in embodiments):
+        # Sim-only by construction: a real embodiment runs the recorder and producers as separate processes
+        # that do not inherit the timer context, so its episodes carry no timing signal. A mixed sweep still
+        # times its simulated evals and leaves the real ones untimed; only a sweep with nothing to time fails.
+        simulated = [ev.embodiment.simulated for ev in evals] if evals is not None else [embodiment.simulated]
+        if not any(simulated):
             raise ValueError(
-                'eval timing is sim-only: a real embodiment runs the recorder and producers as separate '
-                'processes that do not inherit the timer context, so the episodes would carry no timing signal '
-                '(record_io_s silently reads 0). Drop --timing for a real run.'
+                'eval timing needs a simulated embodiment: a real embodiment carries no timing signal, and '
+                'this sweep has none to time. Drop --timing for a real run.'
+            )
+        if not all(simulated):
+            logger.warning(
+                'eval timing is sim-only: %d real embodiment(s) in this sweep run untimed; only the '
+                'simulated evals are timed.',
+                sum(not s for s in simulated),
             )
 
     # Drive the policy's remote endpoints through their cold start before hardware and the operator
