@@ -6,6 +6,8 @@ import xml.etree.ElementTree as ET
 from functools import lru_cache
 from pathlib import Path
 
+from positronic import keys
+
 _FLANGE_LINK = 'link8'
 # Seat the gripper on the flange, rotated about the approach axis to match the real 2F-85 coupler
 # (a +45deg Z, i.e. 90deg off the franka ``end_effector`` frame).
@@ -110,7 +112,7 @@ def _bundled_robotiq_2f85() -> dict:
     return {
         'subtree': subtree,
         'meshes': {f.name: f.read_bytes() for f in sorted(mesh_dir.glob('*.stl'))},
-        'gripper': {'signal': 'grip', 'joints': _ROBOTIQ_2F85_JOINTS, 'travel': 0.8},
+        'gripper': {'signal': keys.GRIP, 'joints': _ROBOTIQ_2F85_JOINTS, 'travel': 0.8},
     }
 
 
@@ -165,5 +167,5 @@ def bundled_panda_model() -> dict:
         'joint_names': [f'joint{i}' for i in range(1, 8)],
         'control_frame': 'end_effector',
         # ``grip`` is recorded in [0, 1] (open→closed); each finger slides 0..0.04 m along its axis.
-        'gripper': {'signal': 'grip', 'joints': ['finger_joint1', 'finger_joint2'], 'travel': 0.04},
+        'gripper': {'signal': keys.GRIP, 'joints': ['finger_joint1', 'finger_joint2'], 'travel': 0.04},
     }

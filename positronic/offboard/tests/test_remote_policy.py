@@ -2,6 +2,7 @@ from unittest.mock import MagicMock, patch
 
 import numpy as np
 
+from positronic import keys
 from positronic.offboard.client import DEFAULT_INFER_TIMEOUT, InferenceClient
 from positronic.policy import RemotePolicy
 from positronic.policy.codec import ActionHorizon
@@ -69,10 +70,10 @@ class TestPrepareObs:
 
     def test_non_image_values_pass_through(self):
         session = RemoteSession(_mock_ws_session({'image_sizes': (64, 48)}), resize=None)
-        obs = {'state': np.array([1.0, 2.0]), 'task': 'pick cube', 'flag': True}
+        obs = {'state': np.array([1.0, 2.0]), keys.TASK: 'pick cube', 'flag': True}
         result = session._prepare_obs(obs)
         np.testing.assert_array_equal(result['state'], obs['state'])
-        assert result['task'] == 'pick cube'
+        assert result[keys.TASK] == 'pick cube'
         assert result['flag'] is True
 
 

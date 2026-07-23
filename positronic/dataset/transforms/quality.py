@@ -6,13 +6,15 @@ view) — nothing expensive happens until values are accessed.
 
 import numpy as np
 
+from positronic import keys
+
 from .signals import Elementwise, Join, diff, norm, view
 
 _TRANSLATION = slice(0, 3)
 _DT_SEC = 1 / 15
 
 
-def idle_mask(episode, signal='robot_state.q', velocity_threshold=0.015, dt_sec=_DT_SEC):
+def idle_mask(episode, signal=keys.JOINTS, velocity_threshold=0.015, dt_sec=_DT_SEC):
     """Per-frame bool: True where joint speed < threshold (rad/s)."""
     speed = norm(diff(episode.signals[signal], dt_sec))
 
@@ -22,12 +24,12 @@ def idle_mask(episode, signal='robot_state.q', velocity_threshold=0.015, dt_sec=
     return Elementwise(speed, fn)
 
 
-def jerk(episode, signal='robot_state.q', dt_sec=_DT_SEC):
+def jerk(episode, signal=keys.JOINTS, dt_sec=_DT_SEC):
     """Per-frame joint acceleration magnitude (rad/s^2)."""
     return norm(diff(episode.signals[signal], dt_sec, order=2))
 
 
-def cmd_lag(episode, cmd_signal='robot_command.pose', state_signal='robot_state.ee_pose', components=_TRANSLATION):
+def cmd_lag(episode, cmd_signal='robot_command.pose', state_signal=keys.EE_POSE, components=_TRANSLATION):
     """Per-frame distance between commanded and actual pose (meters)."""
     cmd = episode.signals[cmd_signal]
     ee = episode.signals[state_signal]

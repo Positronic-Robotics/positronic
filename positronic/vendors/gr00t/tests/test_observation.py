@@ -3,7 +3,7 @@
 import numpy as np
 import pytest
 
-from positronic import geom
+from positronic import geom, keys
 from positronic.vendors.gr00t.codecs import GrootObservationCodec
 
 RotRep = geom.Rotation.Representation
@@ -16,12 +16,12 @@ class TestGrootObservationCodec:
     def sample_inputs(self):
         """Sample raw inputs for inference encoding."""
         return {
-            'robot_state.ee_pose': np.array([0.1, 0.2, 0.3, 0.0, 0.0, 0.0, 1.0]),  # xyz + quat (w,x,y,z)
-            'grip': np.array([0.5]),
-            'robot_state.q': np.array([0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7]),
-            'image.wrist': np.random.randint(0, 255, (480, 640, 3), dtype=np.uint8),
-            'image.exterior': np.random.randint(0, 255, (480, 640, 3), dtype=np.uint8),
-            'task': 'pick up the cube',
+            keys.EE_POSE: np.array([0.1, 0.2, 0.3, 0.0, 0.0, 0.0, 1.0]),  # xyz + quat (w,x,y,z)
+            keys.GRIP: np.array([0.5]),
+            keys.JOINTS: np.array([0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7]),
+            keys.WRIST_IMAGE: np.random.randint(0, 255, (480, 640, 3), dtype=np.uint8),
+            keys.EXTERIOR_IMAGE: np.random.randint(0, 255, (480, 640, 3), dtype=np.uint8),
+            keys.TASK: 'pick up the cube',
         }
 
     # --- Inference encoding tests ---
@@ -56,9 +56,9 @@ class TestGrootObservationCodec:
         assert result['state']['ee_pose'].shape == (1, 1, 9)
 
         ee_pose = result['state']['ee_pose'][0, 0]
-        assert np.allclose(ee_pose[:3], sample_inputs['robot_state.ee_pose'][:3])
+        assert np.allclose(ee_pose[:3], sample_inputs[keys.EE_POSE][:3])
 
-        expected_rot6d = geom.Rotation.from_quat(sample_inputs['robot_state.ee_pose'][3:7]).as_rot6d
+        expected_rot6d = geom.Rotation.from_quat(sample_inputs[keys.EE_POSE][3:7]).as_rot6d
         assert np.allclose(ee_pose[3:], expected_rot6d, atol=1e-6)
 
     def test_encode_with_joints(self, sample_inputs):
@@ -68,7 +68,7 @@ class TestGrootObservationCodec:
 
         assert 'joint_position' in result['state']
         assert result['state']['joint_position'].shape == (1, 1, 7)
-        assert np.allclose(result['state']['joint_position'][0, 0], sample_inputs['robot_state.q'])
+        assert np.allclose(result['state']['joint_position'][0, 0], sample_inputs[keys.JOINTS])
 
     def test_encode_with_rot6d_and_joints(self, sample_inputs):
         """Test inference encoding with both rot6d and joints."""
@@ -81,7 +81,7 @@ class TestGrootObservationCodec:
 
     def test_encode_missing_task(self, sample_inputs):
         """Test inference encoding handles missing task gracefully."""
-        del sample_inputs['task']
+        del sample_inputs[keys.TASK]
         codec = GrootObservationCodec()
         result = codec.encode(sample_inputs)
 
@@ -91,7 +91,7 @@ class TestGrootObservationCodec:
 
     def test_rot6d_identity_quaternion(self, sample_inputs):
         """Test rot6d conversion with identity quaternion."""
-        sample_inputs['robot_state.ee_pose'] = np.array([1.0, 2.0, 3.0, 1.0, 0.0, 0.0, 0.0])
+        sample_inputs[keys.EE_POSE] = np.array([1.0, 2.0, 3.0, 1.0, 0.0, 0.0, 0.0])
 
         codec = GrootObservationCodec(rotation_rep=RotRep.ROT6D)
         result = codec.encode(sample_inputs)
@@ -103,7 +103,7 @@ class TestGrootObservationCodec:
     def test_rot6d_90deg_rotation(self, sample_inputs):
         """Test rot6d conversion with 90 degree rotation around Z."""
         quat = np.array([0.0, 0.0, np.sin(np.pi / 4), np.cos(np.pi / 4)])
-        sample_inputs['robot_state.ee_pose'] = np.array([1.0, 2.0, 3.0, *quat])
+        sample_inputs[keys.EE_POSE] = np.array([1.0, 2.0, 3.0, *quat])
 
         codec = GrootObservationCodec(rotation_rep=RotRep.ROT6D)
         result = codec.encode(sample_inputs)
@@ -151,7 +151,7 @@ class TestGrootObservationCodec:
 
     def test_non_square_input_image(self, sample_inputs):
         """Test that non-square images are properly resized with padding."""
-        sample_inputs['image.wrist'] = np.random.randint(0, 255, (100, 200, 3), dtype=np.uint8)
+        sample_inputs[keys.WRIST_IMAGE] = np.random.randint(0, 255, (100, 200, 3), dtype=np.uint8)
 
         codec = GrootObservationCodec()
         result = codec.encode(sample_inputs)
@@ -179,8 +179,8 @@ class TestGrootObservationCodec:
 
     def test_custom_camera_keys(self, sample_inputs):
         """Test custom camera key mapping."""
-        sample_inputs['cam1'] = sample_inputs.pop('image.wrist')
-        sample_inputs['cam2'] = sample_inputs.pop('image.exterior')
+        sample_inputs['cam1'] = sample_inputs.pop(keys.WRIST_IMAGE)
+        sample_inputs['cam2'] = sample_inputs.pop(keys.EXTERIOR_IMAGE)
 
         codec = GrootObservationCodec(wrist_camera='cam1', exterior_camera='cam2')
         result = codec.encode(sample_inputs)

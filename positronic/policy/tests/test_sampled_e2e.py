@@ -15,6 +15,7 @@ import numpy as np
 import pytest
 
 import pimm
+from positronic import keys
 from positronic.dataset.ds_writer_agent import DsWriterCommandType
 from positronic.drivers import roboarm
 from positronic.drivers.roboarm.command import CartesianPosition
@@ -33,7 +34,7 @@ class _TargetSession(Session):
         self._meta = meta
 
     def __call__(self, obs):
-        current_pos = np.asarray(obs['robot_state.ee_pose'][:3], dtype=np.float32)
+        current_pos = np.asarray(obs[keys.EE_POSE][:3], dtype=np.float32)
         delta = self._target - current_pos
         actions = []
         for i in range(5):
@@ -89,7 +90,7 @@ def _pair_all(world, harness):
     return {
         'frame_em': world.pair(harness.observations['image.cam']),
         'robot_em': world.pair(harness.observations['robot_state']),
-        'grip_em': world.pair(harness.observations['grip']),
+        'grip_em': world.pair(harness.observations[keys.GRIP]),
         'directive_em': world.pair(harness.directive),
         'meta_em': world.pair(harness.robot_meta_in),
         'ds_recorder': ds_recorder,

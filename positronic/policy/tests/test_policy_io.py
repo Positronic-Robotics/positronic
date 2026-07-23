@@ -2,6 +2,7 @@ import numpy as np
 import pytest
 
 import positronic.drivers.roboarm.command as cmd_module
+from positronic import keys as obs_keys
 from positronic.cfg.codecs import compose
 from positronic.dataset.episode import EpisodeContainer
 from positronic.dataset.tests.utils import DummySignal
@@ -59,11 +60,11 @@ def test_observation_encode_missing_state_inputs_raise():
 
 def test_observation_encode_task():
     enc = ObservationCodec(state={'observation.state': ['a']}, images={})
-    obs = enc.encode({'a': 1.0, 'task': 'test_task'})
-    assert obs['task'] == 'test_task'
+    obs = enc.encode({'a': 1.0, obs_keys.TASK: 'test_task'})
+    assert obs[obs_keys.TASK] == 'test_task'
 
     obs_no_task = enc.encode({'a': 1.0})
-    assert 'task' not in obs_no_task
+    assert obs_keys.TASK not in obs_no_task
 
 
 def test_absolute_position_action_encode_decode_quat():
@@ -105,7 +106,7 @@ def test_relative_target_position_action_encode_decode_quat():
     tgt_pose = [np.concatenate([t_tgt[0], q_tgt[0].as_quat]).astype(np.float32)]
 
     ep = EpisodeContainer({
-        'robot_state.ee_pose': DummySignal(ts, cur_pose),
+        obs_keys.EE_POSE: DummySignal(ts, cur_pose),
         'robot_command.pose': DummySignal(ts, tgt_pose),
         'target_grip': DummySignal(ts, g_tgt),
     })
@@ -119,7 +120,7 @@ def test_relative_target_position_action_encode_decode_quat():
     assert np.isclose(vec[7], g_tgt[0])
 
     decoded = act._decode_single(
-        {'action': vec}, context={'robot_state.ee_pose': np.concatenate([t_cur[0], q_cur[0].as_quat])}
+        {'action': vec}, context={obs_keys.EE_POSE: np.concatenate([t_cur[0], q_cur[0].as_quat])}
     )
     command = decoded['robot_command']
     target_grip = decoded['target_grip']
@@ -354,18 +355,18 @@ def test_composed_training_encoder_uses_parallel():
     img = [np.zeros((4, 4, 3), dtype=np.uint8) for _ in ts]
 
     ep = EpisodeContainer({
-        'robot_state.q': DummySignal(ts, joints),
-        'grip': DummySignal(ts, grip),
+        obs_keys.JOINTS: DummySignal(ts, joints),
+        obs_keys.GRIP: DummySignal(ts, grip),
         'robot_command.joints': DummySignal(ts, joints),
         'target_grip': DummySignal(ts, grip),
-        'image.wrist': DummySignal(ts, img),
-        'image.exterior': DummySignal(ts, img),
-        'task': 'test',
+        obs_keys.WRIST_IMAGE: DummySignal(ts, img),
+        obs_keys.EXTERIOR_IMAGE: DummySignal(ts, img),
+        obs_keys.TASK: 'test',
     })
 
     obs = ObservationCodec(
-        state={'observation.state': {'robot_state.q': 7, 'grip': 1}},
-        images={'observation.images.left': ('image.wrist', (4, 4))},
+        state={'observation.state': {obs_keys.JOINTS: 7, obs_keys.GRIP: 1}},
+        images={'observation.images.left': (obs_keys.WRIST_IMAGE, (4, 4))},
     )
     action = AbsoluteJointsAction('robot_command.joints', 'target_grip', num_joints=7)
     timing = ActionTiming(fps=15.0)
@@ -406,11 +407,11 @@ def test_binarize_grip_inference():
 
 def test_binarize_grip_training():
     ts = [1000, 2000]
-    ep = EpisodeContainer({'grip': DummySignal(ts, [0.3, 0.8]), 'target_grip': DummySignal(ts, [0.7, 0.2])})
+    ep = EpisodeContainer({obs_keys.GRIP: DummySignal(ts, [0.3, 0.8]), 'target_grip': DummySignal(ts, [0.7, 0.2])})
 
-    binarize = BinarizeGripTraining(('grip', 'target_grip'))
+    binarize = BinarizeGripTraining((obs_keys.GRIP, 'target_grip'))
     result = binarize.training_encoder(ep)
-    grip_vals = [v for v, _ in result['grip']]
+    grip_vals = [v for v, _ in result[obs_keys.GRIP]]
     tgt_vals = [v for v, _ in result['target_grip']]
     np.testing.assert_array_equal(grip_vals, [0.0, 1.0])
     np.testing.assert_array_equal(tgt_vals, [1.0, 0.0])
@@ -418,16 +419,16 @@ def test_binarize_grip_training():
 
 def test_binarize_grip_training_respects_threshold():
     ts = [1000]
-    ep = EpisodeContainer({'grip': DummySignal(ts, [0.4]), 'target_grip': DummySignal(ts, [0.4])})
+    ep = EpisodeContainer({obs_keys.GRIP: DummySignal(ts, [0.4]), 'target_grip': DummySignal(ts, [0.4])})
 
-    keys = ('grip', 'target_grip')
+    keys = (obs_keys.GRIP, 'target_grip')
     default = BinarizeGripTraining(keys)
     result = default.training_encoder(ep)
-    assert list(result['grip'])[0][0] == pytest.approx(0.0)
+    assert list(result[obs_keys.GRIP])[0][0] == pytest.approx(0.0)
 
     low = BinarizeGripTraining(keys, threshold=0.3)
     result = low.training_encoder(ep)
-    assert list(result['grip'])[0][0] == pytest.approx(1.0)
+    assert list(result[obs_keys.GRIP])[0][0] == pytest.approx(1.0)
 
 
 def test_binarize_grip_training_composed_with_action_codec():
@@ -436,7 +437,7 @@ def test_binarize_grip_training_composed_with_action_codec():
 
     ep = EpisodeContainer({'robot_command.joints': DummySignal(ts, joints), 'target_grip': DummySignal(ts, [0.7])})
 
-    binarize = BinarizeGripTraining(('grip', 'target_grip'))
+    binarize = BinarizeGripTraining((obs_keys.GRIP, 'target_grip'))
     action = AbsoluteJointsAction('robot_command.joints', 'target_grip', num_joints=7)
     composed = binarize | action
 
@@ -448,9 +449,9 @@ def test_binarize_grip_training_composed_with_action_codec():
 def test_flip_grip():
     flip = FlipGrip()
 
-    obs = {'grip': 0.2, 'other': 1.0}
-    assert flip.encode(obs) == {'grip': pytest.approx(0.8), 'other': 1.0}
-    assert obs['grip'] == 0.2  # the original obs dict doubles as decode context and must stay intact
+    obs = {obs_keys.GRIP: 0.2, 'other': 1.0}
+    assert flip.encode(obs) == {obs_keys.GRIP: pytest.approx(0.8), 'other': 1.0}
+    assert obs[obs_keys.GRIP] == 0.2  # the original obs dict doubles as decode context and must stay intact
     assert flip.encode({'other': 1.0}) == {'other': 1.0}
 
     assert flip._decode_single({'target_grip': 0.9}, None) == {'target_grip': pytest.approx(0.1)}
@@ -462,11 +463,11 @@ def test_flip_grip():
 
 
 def test_flip_grip_composed_with_obs_and_action():
-    obs = ObservationCodec(state={'observation.state': ['grip']}, images={})
+    obs = ObservationCodec(state={'observation.state': [obs_keys.GRIP]}, images={})
     action = AbsolutePositionAction('robot_command.pose', 'target_grip', Rotation.Representation.QUAT)
     composed = FlipGrip() | (obs & action)
 
-    encoded = composed.encode({'grip': 0.2})
+    encoded = composed.encode({obs_keys.GRIP: 0.2})
     np.testing.assert_allclose(encoded['observation.state'], [0.8])
 
     vec = np.concatenate([[0.1, -0.2, 0.3], Rotation.identity.as_quat, [0.9]]).astype(np.float32)
@@ -508,20 +509,20 @@ def test_sequential_into_parallel_training():
     joints = [np.array([0.1, -0.2, 0.3, 0.4, -0.5, 0.6, 0.7], dtype=np.float32)]
 
     ep = EpisodeContainer({
-        'robot_state.q': DummySignal(ts, joints),
-        'grip': DummySignal(ts, [0.7]),
+        obs_keys.JOINTS: DummySignal(ts, joints),
+        obs_keys.GRIP: DummySignal(ts, [0.7]),
         'robot_command.joints': DummySignal(ts, joints),
         'target_grip': DummySignal(ts, [0.3]),
-        'image.wrist': DummySignal(ts, [np.zeros((4, 4, 3), dtype=np.uint8)]),
-        'image.exterior': DummySignal(ts, [np.zeros((4, 4, 3), dtype=np.uint8)]),
+        obs_keys.WRIST_IMAGE: DummySignal(ts, [np.zeros((4, 4, 3), dtype=np.uint8)]),
+        obs_keys.EXTERIOR_IMAGE: DummySignal(ts, [np.zeros((4, 4, 3), dtype=np.uint8)]),
     })
 
     obs = ObservationCodec(
-        state={'observation.state': {'robot_state.q': 7, 'grip': 1}},
-        images={'observation.images.left': ('image.wrist', (4, 4))},
+        state={'observation.state': {obs_keys.JOINTS: 7, obs_keys.GRIP: 1}},
+        images={'observation.images.left': (obs_keys.WRIST_IMAGE, (4, 4))},
     )
     action = AbsoluteJointsAction('robot_command.joints', 'target_grip', num_joints=7)
-    binarize = BinarizeGripTraining(('grip', 'target_grip'))
+    binarize = BinarizeGripTraining((obs_keys.GRIP, 'target_grip'))
     composed = binarize | (obs & action)
 
     result = composed.training_encoder(ep)
@@ -544,19 +545,19 @@ def test_compose_training_encoder_produces_only_derived_keys():
     img = [np.zeros((4, 4, 3), dtype=np.uint8) for _ in ts]
 
     ep = EpisodeContainer({
-        'robot_state.q': DummySignal(ts, joints),
-        'grip': DummySignal(ts, grip),
+        obs_keys.JOINTS: DummySignal(ts, joints),
+        obs_keys.GRIP: DummySignal(ts, grip),
         'robot_command.joints': DummySignal(ts, joints),
         'target_grip': DummySignal(ts, grip),
-        'image.wrist': DummySignal(ts, img),
-        'image.exterior': DummySignal(ts, img),
-        'task': 'test',
+        obs_keys.WRIST_IMAGE: DummySignal(ts, img),
+        obs_keys.EXTERIOR_IMAGE: DummySignal(ts, img),
+        obs_keys.TASK: 'test',
     })
 
     codec = compose(
         obs=ObservationCodec(
-            state={'observation.state': {'robot_state.q': 7, 'grip': 1}},
-            images={'observation.images.left': ('image.wrist', (4, 4))},
+            state={'observation.state': {obs_keys.JOINTS: 7, obs_keys.GRIP: 1}},
+            images={'observation.images.left': (obs_keys.WRIST_IMAGE, (4, 4))},
         ),
         action=AbsoluteJointsAction('robot_command.joints', 'target_grip', num_joints=7),
     )
@@ -570,8 +571,8 @@ def test_compose_training_encoder_produces_only_derived_keys():
     # Original episode keys must NOT leak through — this fails if compose uses | instead of &
     assert 'target_grip' not in result
     assert 'robot_command.joints' not in result
-    assert 'robot_state.q' not in result
-    assert 'grip' not in result
+    assert obs_keys.JOINTS not in result
+    assert obs_keys.GRIP not in result
 
 
 def test_operator_precedence():

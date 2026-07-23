@@ -1,4 +1,5 @@
 import pimm
+from positronic import keys
 from positronic.dataset import DatasetWriter
 from positronic.dataset.ds_writer_agent import DsWriterAgent, TimeMode, TrajectoryOverrideSerializer
 from positronic.dataset.serializers import Serializers, StatefulSerializer
@@ -42,7 +43,7 @@ def wire(
             ds_agent.add_signal('robot_state', Serializers.robot_state)
         if gripper is not None:
             ds_agent.add_signal('target_grip', TrajectoryOverrideSerializer(None))
-            ds_agent.add_signal('grip')
+            ds_agent.add_signal(keys.GRIP)
 
         for signal_name, emitter in cameras.items():
             world.connect(emitter, ds_agent.inputs[signal_name])
@@ -51,7 +52,7 @@ def wire(
             world.connect(robot_arm.state, ds_agent.inputs['robot_state'])
         if gripper is not None:
             world.connect(harness.target_grip, ds_agent.inputs['target_grip'])
-            world.connect(gripper.grip, ds_agent.inputs['grip'])
+            world.connect(gripper.grip, ds_agent.inputs[keys.GRIP])
 
     if gui is not None:
         for signal_name, emitter in cameras.items():

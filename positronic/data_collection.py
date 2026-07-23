@@ -15,7 +15,7 @@ import positronic.cfg.hardware.roboarm
 import positronic.cfg.simulator
 import positronic.cfg.sound
 import positronic.cfg.webxr
-from positronic import geom, utils, wire
+from positronic import geom, keys, utils, wire
 from positronic.dataset.ds_writer_agent import DsWriterAgent, DsWriterCommand, TimeMode
 from positronic.dataset.local_dataset import LocalDatasetWriter
 from positronic.dataset.serializers import Serializers
@@ -237,7 +237,7 @@ def main(
     camera_emitters = {name: cam.frame for name, cam in camera_instances.items()}
     static_meta = {}
     if task is not None:
-        static_meta['task'] = task
+        static_meta[keys.TASK] = task
     if robot_arm is not None:
         static_meta.update(wire.ROBOT_STATIC_META)
     data_collection = DataCollectionController(operator_position.value, static_meta=static_meta)
@@ -266,8 +266,8 @@ def main(
     mujoco_model_path=package_assets_path('assets/mujoco/franka_table.xml'),
     webxr=positronic.cfg.webxr.oculus,
     cameras={
-        'image.wrist': 'handcam_left_ph',
-        'image.exterior': 'back_view_ph',
+        keys.WRIST_IMAGE: 'handcam_left_ph',
+        keys.EXTERIOR_IMAGE: 'back_view_ph',
         'image.handcam_right': 'handcam_right_ph',
         'image.wrist_2': 'wrist_cam_ph',
     },
@@ -294,7 +294,7 @@ def main_sim(
 
     static_meta = dict(wire.ROBOT_STATIC_META)
     if task is not None:
-        static_meta['task'] = task
+        static_meta[keys.TASK] = task
 
     data_collection = DataCollectionController(
         operator_position.value,
@@ -362,8 +362,8 @@ droid = cfn.Config(
     webxr=positronic.cfg.webxr.oculus,
     sound=positronic.cfg.sound.sound,
     cameras={
-        'image.wrist': positronic.cfg.hardware.camera.zed_m.override(view='left', resolution='hd720', fps=30),
-        'image.exterior': positronic.cfg.hardware.camera.zed_2i.override(view='left', resolution='hd720', fps=30),
+        keys.WRIST_IMAGE: positronic.cfg.hardware.camera.zed_m.override(view='left', resolution='hd720', fps=30),
+        keys.EXTERIOR_IMAGE: positronic.cfg.hardware.camera.zed_2i.override(view='left', resolution='hd720', fps=30),
     },
     operator_position=OperatorPosition.BACK,
 )
@@ -375,7 +375,9 @@ human = cfn.Config(
     gripper=None,
     webxr=positronic.cfg.webxr.oculus,
     sound=positronic.cfg.sound.sound,
-    cameras={'image.exterior': positronic.cfg.hardware.camera.zed_2i.override(view='left', resolution='hd720', fps=30)},
+    cameras={
+        keys.EXTERIOR_IMAGE: positronic.cfg.hardware.camera.zed_2i.override(view='left', resolution='hd720', fps=30)
+    },
     operator_position=OperatorPosition.BACK,
 )
 

@@ -5,6 +5,7 @@ from enum import Enum
 from typing import Any
 
 import pimm
+from positronic import keys
 from positronic.dataset.ds_writer_agent import DsWriterCommand
 from positronic.dataset.serializers import expand_suffixed
 from positronic.eval import Embodiment, Task
@@ -225,7 +226,7 @@ class Harness(pimm.ControlSystem):
         if self._task is not None and self._task.reset is not None:
             self._task.reset(self.context)
         if self._task is not None:
-            self.context = {**self.context, 'task': self._task.instruction}
+            self.context = {**self.context, keys.TASK: self._task.instruction}
         self._session = self.policy.new_session(self.context)
         self._running = True
         self._deadline = clock.now() + self._task.timeout if self._task is not None else None

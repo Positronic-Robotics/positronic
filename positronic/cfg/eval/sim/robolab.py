@@ -1,5 +1,6 @@
 import configuronic as cfn
 
+from positronic import keys
 from positronic.eval import Eval, Observation, Task
 from positronic.simulator.env_server.proxy import RemoteEnvControlSystem, remote_franka_embodiment
 from positronic.simulator.robolab.adapter import RobolabAdapter
@@ -147,7 +148,7 @@ def _resolve_tasks(task) -> list[str]:
 
 
 @cfn.config(
-    camera_dict={'image.exterior': 'over_shoulder_left_camera', 'image.wrist': 'wrist_cam'},
+    camera_dict={keys.EXTERIOR_IMAGE: 'over_shoulder_left_camera', keys.WRIST_IMAGE: 'wrist_cam'},
     instruction_type='default',
     trial_count=1,
     timeout=None,
