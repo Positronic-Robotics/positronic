@@ -51,6 +51,23 @@ def _seed_counter(policy, output_dir: Path):
     logger.info(f'Seeded counter from {seeded} existing episodes')
 
 
+def _require_untimed_dir(output_dir: Path):
+    """A timed pass owns its dataset dir: the report spans the pass from the first episode's start to the
+    last's finish and the GPU sampler restarts its log each run, so a second timed run appended to the same
+    dir would fold the offline gap between runs into the pass wall and leave the GPU log covering only the
+    newest run."""
+    try:
+        dataset = load_all_datasets(output_dir)
+    except ValueError:
+        return
+    timed = sum(1 for i in range(len(dataset)) if eval_timing.WALL_S_KEY in dataset[i].static)
+    if timed:
+        raise ValueError(
+            f'{output_dir} already holds {timed} timed episode(s) and a timing report covers a single pass: '
+            f'rerun with a fresh --output_dir'
+        )
+
+
 def _completion_sink(policy):
     """Harness ``on_episode_complete`` callback that tallies completed episodes.
 
@@ -164,6 +181,9 @@ def main(
     if output_dir is not None:
         output_dir = pos3.sync(output_dir, sync_on_error=True)
         utils.save_run_metadata(output_dir, patterns=['*.py', '*.toml'])
+        if timing:
+            # Checked here rather than in the up-front validation: the dir's contents exist only after the sync.
+            _require_untimed_dir(output_dir)
         _seed_counter(policy, output_dir)
 
     # One completion sink — so one ``SampledPolicy`` counter — across every eval, keeping sampling balanced

@@ -12,7 +12,9 @@ against a finished dataset without re-running the eval.
 
 ## Collect (producer)
 
-Add `--timing` to any sim `eval run`; it needs an `--output_dir` to write into:
+Add `--timing` to any sim `eval run`; it needs a **fresh** `--output_dir` to write into — the report
+spans one pass and the GPU log is restarted per run, so a dir that already holds timed episodes is
+rejected up front:
 
 ```bash
 uv run positronic eval run \
