@@ -62,7 +62,8 @@ def test_obs_mapping_key_set():
 
 
 def test_obs_mapping_shapes_and_dtypes():
-    obs = molmo_obs_to_positronic(_load_env_obs(), 'pick up the cube')
+    # Capitalized benchmark task text is lowercased into the prompt, matching the Pi baseline's normalization.
+    obs = molmo_obs_to_positronic(_load_env_obs(), 'Pick up the cube')
     w, h = IMAGE_SIZE
     assert obs[POS_JOINTS].shape == (NUM_ARM_JOINTS,) and obs[POS_JOINTS].dtype == np.float32
     assert obs[POS_GRIP].shape == (1,) and obs[POS_GRIP].dtype == np.float32
@@ -141,8 +142,11 @@ def test_adapter_config_honors_policy_config_camera_names():
     assert adapter_cfg.wrist_key == adapter.MOLMO_WRIST_CAMERA
     assert adapter_cfg.exterior_key == 'exo_top_down'
 
-    # The policy's default path derives from the config it was constructed with.
-    cfg = _Ns(policy_config=_Ns(camera_names=['randomized_zed2_analogue_1', 'wrist_camera_zed_mini']))
+    # The policy's default path derives from the config it was constructed with. force_enable_depth is the one
+    # field MolmoSpaces' BasePolicy.__init__ reads, so the stub carries it and the test also passes on boxes
+    # where molmo_spaces IS installed and the real superclass path runs.
+    names = ['randomized_zed2_analogue_1', 'wrist_camera_zed_mini']
+    cfg = _Ns(policy_config=_Ns(camera_names=names, force_enable_depth=False))
     policy = adapter.MolmoSpacesPolicy(cfg, client=FakePolicy())
     assert policy._adapter.wrist_key == 'wrist_camera_zed_mini'
     assert policy._adapter.exterior_key == 'randomized_zed2_analogue_1'

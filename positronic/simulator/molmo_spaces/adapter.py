@@ -119,7 +119,9 @@ def molmo_obs_to_positronic(
 
     ``observation`` may be the batch list or a single env dict. The arm joints pass through as 7 absolute radians;
     the Robotiq finger qpos is normalized to the ``[0, 1]`` closure the model was trained on; both cameras are
-    resized-with-pad to ``image_size``.
+    resized-with-pad to ``image_size``; the task text is lowercased before it becomes the prompt, matching the
+    Pi baseline (pi_policy.py:144) so capitalized benchmark descriptions reach the checkpoint in its trained
+    language distribution.
     """
     env = _single_env(observation)
     qpos = env['qpos']
@@ -135,7 +137,7 @@ def molmo_obs_to_positronic(
         POS_GRIP: np.array([grip], dtype=np.float32),
         POS_WRIST_IMAGE: resize_with_pad(wrist, width, height),
         POS_EXTERIOR_IMAGE: resize_with_pad(exterior, width, height),
-        POS_TASK: task,
+        POS_TASK: task.lower(),
     }
 
 
