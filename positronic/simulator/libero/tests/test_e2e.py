@@ -7,7 +7,7 @@ explicit path (Linux software rendering, ``MUJOCO_GL=osmesa``); a plain ``uv run
 
 The fixture is generated once on a LIBERO box::
 
-    uv run --no-project positronic/simulator/libero/make_fixture.py \
+    uv run --no-project positronic/simulator/libero/tests/make_fixture.py \
         --demo-path "$LIBERO_DATASETS/libero_spatial/<task>_demo.hdf5" \
         --out positronic/simulator/libero/tests/libero_spatial_task0.npz
 
