@@ -11,6 +11,9 @@ license = { text = "Apache-2.0" }
 dependencies = [
     "httpx",
     "msgpack",
+    # Deliberately unconstrained: this package is pure Python (no compiled numpy ABI dependency; the APIs it
+    # uses are stable across 1.19-2.x), and its whole point is installing into foreign venvs whose ML stacks
+    # already pin their own numpy. Any constraint here only manufactures resolver conflicts — never add one.
     "numpy",
     "pillow",
     "websockets>=15.0.1",
