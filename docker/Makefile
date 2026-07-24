@@ -1,4 +1,4 @@
-.PHONY: all build tag push clean prune help build-training tag-training push-training build-openpi tag-openpi push-openpi build-groot tag-groot push-groot build-dreamzero-base push-dreamzero-base build-dreamzero tag-dreamzero push-dreamzero build-robolab tag-robolab push-robolab
+.PHONY: all build tag push clean prune help build-training tag-training push-training build-openpi tag-openpi push-openpi build-groot tag-groot push-groot build-dreamzero-base push-dreamzero-base build-dreamzero tag-dreamzero push-dreamzero build-robolab tag-robolab push-robolab nebius-login push-robolab-cr
 
 # Image configuration
 IMAGE_NAME_TRAINING := positro/positronic
@@ -22,6 +22,15 @@ BRANCH := $(shell git rev-parse --abbrev-ref HEAD 2>/dev/null | tr '/' '-')
 IMAGE_TAG ?= $(BRANCH)
 
 REGISTRY_URL ?= docker.io
+
+# Nebius Container Registry — opt-in path for an in-region pull from serverless
+# jobs (the `push-*` targets above stay on Docker Hub and are unchanged). Override
+# NEBIUS_REGISTRY for a different project/registry; set NEBIUS_PROFILE to use a
+# non-default `nebius` CLI profile (e.g. a service-account profile for headless
+# CI). Auth goes through the nebius credential helper — no registry secret here.
+NEBIUS_REGISTRY ?= cr.eu-north1.nebius.cloud/e00a0ahqzcp9x0xczz
+NEBIUS_REGISTRY_HOST := $(firstword $(subst /, ,$(NEBIUS_REGISTRY)))
+NEBIUS_PROFILE_FLAG := $(if $(NEBIUS_PROFILE),--profile $(NEBIUS_PROFILE),)
 
 # Local build tags
 LOCAL_TAG_TRAINING := $(IMAGE_NAME_TRAINING):local
@@ -217,6 +226,29 @@ endif
 	@echo "IMAGE_TAG=$(IMAGE_TAG)" > .env
 
 push: push-training push-openpi push-groot push-dreamzero push-robolab
+
+# Log docker/podman in to the Nebius registry using the nebius CLI credential
+# helper for the active (or NEBIUS_PROFILE-selected) profile. Requires `jq`.
+nebius-login:
+	@echo "Logging in to $(NEBIUS_REGISTRY_HOST) via nebius credential helper..."
+	@CRED="$$(echo $(NEBIUS_REGISTRY_HOST) | nebius $(NEBIUS_PROFILE_FLAG) registry docker-credential get)"; \
+	printf '%s' "$$CRED" | jq -r .Secret | docker login $(NEBIUS_REGISTRY_HOST) \
+	  --username "$$(printf '%s' "$$CRED" | jq -r .Username)" --password-stdin
+
+# Build + tag robolab, then push it to the Nebius Container Registry instead of
+# Docker Hub. Pair with `NEBIUS_IMAGE_REPO=$(NEBIUS_REGISTRY)/robolab` on
+# workflows/nebius/eval.sh so the job pulls in-region.
+push-robolab-cr: tag-robolab nebius-login
+	@echo "Pushing $(IMAGE_NAME_ROBOLAB) to $(NEBIUS_REGISTRY)..."
+	docker tag $(IMAGE_NAME_ROBOLAB):$(IMAGE_TAG) $(NEBIUS_REGISTRY)/robolab:$(IMAGE_TAG)
+	docker tag $(IMAGE_NAME_ROBOLAB):$(GIT_SHA) $(NEBIUS_REGISTRY)/robolab:$(GIT_SHA)
+	docker push $(NEBIUS_REGISTRY)/robolab:$(IMAGE_TAG)
+	docker push $(NEBIUS_REGISTRY)/robolab:$(GIT_SHA)
+ifdef CI
+	docker tag $(IMAGE_NAME_ROBOLAB):latest $(NEBIUS_REGISTRY)/robolab:latest
+	docker push $(NEBIUS_REGISTRY)/robolab:latest
+endif
+	@echo "Pushed $(NEBIUS_REGISTRY)/robolab:{$(IMAGE_TAG),$(GIT_SHA)}"
 
 all: push
 

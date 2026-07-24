@@ -21,13 +21,19 @@
 #
 # Hardcoded: MysteryBox secret names, S3 endpoint URL. Override-able via env:
 # NEBIUS_PARENT_ID, NEBIUS_SUBNET_ID, NEBIUS_PLATFORM, NEBIUS_PRESET,
-# NEBIUS_IMAGE_TAG, NEBIUS_CACHE_FS, NEBIUS_JOB_TIMEOUT.
+# NEBIUS_IMAGE_REPO, NEBIUS_IMAGE_TAG, NEBIUS_CACHE_FS, NEBIUS_JOB_TIMEOUT.
+#
+# NEBIUS_IMAGE_REPO defaults to the Docker Hub `positro/robolab`; set it to an
+# in-region registry path (e.g. cr.<region>.nebius.cloud/<registry-id>/robolab,
+# where <registry-id> is the Container Registry ID minus the `registry-` prefix —
+# not the project ID) to pull the image from the Nebius Container Registry instead.
 
 set -euo pipefail
 
 PARENT_ID="${NEBIUS_PARENT_ID:-project-e00f38wexevrr52b8j}"
 SUBNET_ID="${NEBIUS_SUBNET_ID:-vpcsubnet-e00pk1j1x6hjmr4m92}"
 CACHE_FS="${NEBIUS_CACHE_FS:-computefilesystem-e00f6jyfr5wkawyrab}"
+IMAGE_REPO="${NEBIUS_IMAGE_REPO:-positro/robolab}"
 IMAGE_TAG="${NEBIUS_IMAGE_TAG:-latest}"
 # RTX-class platform: Isaac Sim's RTX renderer needs RT cores. gpu-l40s-d is the
 # Intel-host L40S; gpu-l40s-a is the AMD-host variant with the same GPU.
@@ -64,7 +70,7 @@ nebius ai job create \
   --parent-id "$PARENT_ID" \
   --subnet-id "$SUBNET_ID" \
   --name "$JOB_NAME" \
-  --image "positro/robolab:${IMAGE_TAG}" \
+  --image "${IMAGE_REPO}:${IMAGE_TAG}" \
   --container-command uv \
   --args "$EVAL_ARGS" \
   --platform "$PLATFORM" \
