@@ -30,6 +30,11 @@ from positronic.eval_timing import (
 
 logger = logging.getLogger(__name__)
 
+# The namespace the env server's own step phases record under, and the two client-measured step signals that
+# share it but are not env phases (excluded when gathering the env decomposition).
+_ENV_PHASE_PREFIX = f'{TELEMETRY_PREFIX}env_'
+_CLIENT_ENV_SIGNALS = {f'{TELEMETRY_PREFIX}env_step_s', f'{TELEMETRY_PREFIX}env_client_s'}
+
 
 @dataclass
 class _RecordedFacts:
@@ -58,10 +63,8 @@ class _EpisodeTiming:
     overhead_s: float
     infer_ms: list[float]
     finished_at: float
-    env_physics_s: float
-    env_render_s: float
-    env_server_s: float
     env_client_s: float
+    env_phases: dict[str, float]  # env-reported phase name -> summed seconds; the env owns this key space
 
 
 @dataclass
@@ -107,15 +110,14 @@ class WallSplit:
 class EnvStepSplit:
     """Fractions of the client-observed env-step wall, from the env server's own decomposition.
 
-    ``wire`` is the client-side step wall minus the server's in-step wall and the client materialisation
-    (socket + codec); ``materialize`` is the client-side observation materialisation (shared-memory image
-    allocation + camera copies); ``server_other`` is the server's wall outside physics and rendering
-    (managers, IK). ``None`` when no episode carried a server decomposition.
+    ``phases`` maps each env-reported phase (its own decomposition — physics, rendering, its other in-step
+    wall) to that phase's share of the client step wall; the env owns the phase set, so it is a map, not
+    fixed fields. ``wire`` is the client step wall minus the server's whole in-step wall and the client
+    materialisation (socket + codec); ``materialize`` is the client-side observation materialisation
+    (shared-memory image allocation + camera copies). ``None`` when no episode carried a server decomposition.
     """
 
-    physics: float
-    render: float
-    server_other: float
+    phases: dict[str, float]
     wire: float
     materialize: float
 
@@ -153,6 +155,15 @@ def _episode_timing(ep: Episode, uid: str) -> _EpisodeTiming | None:
         sig = ep.signals.get(f'{TELEMETRY_PREFIX}{name}')
         return float(sum(np.asarray(value).sum() for value, _ in sig)) if sig is not None else 0.0
 
+    # The env server's own decomposition rides in as ``timing.env_<phase>`` signals with an env-owned key
+    # space; the report never enumerates them. The two client-measured step signals share the ``env_`` prefix
+    # but are not env phases, so they are excluded here.
+    env_phases = {
+        name[len(_ENV_PHASE_PREFIX) :]: phase_total(name[len(TELEMETRY_PREFIX) :])
+        for name in ep.signals
+        if name.startswith(_ENV_PHASE_PREFIX) and name not in _CLIENT_ENV_SIGNALS
+    }
+
     infer_sig = ep.signals.get(INFER_MS_SIGNAL)
     infer_ms = [float(value) for value, _ in infer_sig] if infer_sig is not None else []
     policy_wait_s = sum(infer_ms) / 1000.0
@@ -171,10 +182,8 @@ def _episode_timing(ep: Episode, uid: str) -> _EpisodeTiming | None:
         overhead_s=max(wall_s - measured, 0.0),
         infer_ms=infer_ms,
         finished_at=float(ep.static[FINISHED_AT_KEY]),
-        env_physics_s=phase_total('env_physics_s'),
-        env_render_s=phase_total('env_render_s'),
-        env_server_s=phase_total('env_server_s'),
         env_client_s=phase_total('env_client_s'),
+        env_phases=env_phases,
     )
 
 
@@ -309,29 +318,18 @@ def _build_report(runs: list[list[_EpisodeTiming]], facts: dict[str, _RecordedFa
 
     # The split covers only the episodes whose env reports its own decomposition: in a sweep mixing a
     # decomposing env server with a sim that reports none, the undecomposed episodes' env-step wall would
-    # otherwise all land in ``wire``.
-    decomposed = [r for r in records if r.env_server_s > 0]
+    # otherwise all land in ``wire``. The env server reports disjoint additive phases summing to its whole
+    # in-step wall, so their sum is that wall and each phase's share is its column over ``env_step``.
+    decomposed = [r for r in records if r.env_phases]
     env_step_sum = float(sum(r.env_step_s for r in decomposed))
     env_step_split = None
     if env_step_sum:
-        server_sum = float(sum(r.env_server_s for r in decomposed))
-        physics_sum = float(sum(r.env_physics_s for r in decomposed))
-        render_sum = float(sum(r.env_render_s for r in decomposed))
         client_sum = float(sum(r.env_client_s for r in decomposed))
-        server_other = (server_sum - physics_sum - render_sum) / env_step_sum
-        # Isaac Lab steps physics with `sim.step(render=False)` and renders once outside the decimation loop,
-        # so the physics and render spans are disjoint and this stays non-negative — but a task config that
-        # renders inside the physics loop would double-count that wall in both spans. Warn rather than clamp,
-        # so a double count surfaces instead of hiding in a normalized split.
-        if server_other < 0:
-            logger.warning(
-                f'server_other is negative ({server_other:.4f}): the env server double-counted wall between '
-                f'physics and render (a render inside the physics loop?); the env_step_split is not trustworthy'
-            )
+        phase_names = sorted({name for r in decomposed for name in r.env_phases})
+        phase_sums = {name: float(sum(r.env_phases.get(name, 0.0) for r in decomposed)) for name in phase_names}
+        server_sum = float(sum(phase_sums.values()))
         env_step_split = EnvStepSplit(
-            physics=physics_sum / env_step_sum,
-            render=render_sum / env_step_sum,
-            server_other=server_other,
+            phases={name: total / env_step_sum for name, total in phase_sums.items()},
             wire=(env_step_sum - server_sum - client_sum) / env_step_sum,
             materialize=client_sum / env_step_sum,
         )
@@ -383,8 +381,11 @@ def _render(report: PassReport) -> str:
     ]
     lines += [f'  {f.name:<12} {getattr(report.wall_split, f.name):.3f}' for f in fields(WallSplit)]
     if report.env_step_split is not None:
+        split = report.env_step_split
         lines.append('env-step split (fraction of env_step):')
-        lines += [f'  {f.name:<12} {getattr(report.env_step_split, f.name):.3f}' for f in fields(EnvStepSplit)]
+        lines += [f'  {name:<14} {frac:.3f}' for name, frac in split.phases.items()]
+        lines.append(f'  {"wire":<14} {split.wire:.3f}')
+        lines.append(f'  {"materialize":<14} {split.materialize:.3f}')
     for f in fields(GpuReport):
         summary = getattr(report.gpu, f.name)
         if summary is not None:

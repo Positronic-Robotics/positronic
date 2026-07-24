@@ -89,7 +89,7 @@ def _check_obs_contract(env: RobolabEnv) -> None:
     assert abs(out['control_dt'] - 1 / 15) < 1e-6, f'control_dt {out["control_dt"]} != 1/15'
     step = env.step(_HOLD)
     assert step.keys() == {'obs', 'done', 'success', 'control_dt', 'timing'}, f'step keys {sorted(step)}'
-    assert step['timing'].keys() == {'physics_s', 'render_s', 'wall_s'}, f'timing keys {sorted(step["timing"])}'
+    assert step['timing'].keys() == {'physics_s', 'render_s', 'server_other_s'}, f'timing keys {sorted(step["timing"])}'
     for obs in (out['obs'], step['obs']):
         for key, (shape, dtype) in _OBS_SPECS.items():
             arr = obs[key]

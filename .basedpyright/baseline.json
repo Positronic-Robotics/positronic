@@ -11362,22 +11362,6 @@
                 }
             },
             {
-                "code": "reportAttributeAccessIssue",
-                "range": {
-                    "startColumn": 19,
-                    "endColumn": 30,
-                    "lineCount": 1
-                }
-            },
-            {
-                "code": "reportAttributeAccessIssue",
-                "range": {
-                    "startColumn": 32,
-                    "endColumn": 41,
-                    "lineCount": 1
-                }
-            },
-            {
                 "code": "reportMissingImports",
                 "range": {
                     "startColumn": 7,

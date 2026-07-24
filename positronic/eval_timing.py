@@ -22,9 +22,9 @@ import os
 import shutil
 import subprocess
 import time
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
 from contextvars import ContextVar
-from dataclasses import asdict, dataclass, field, fields
+from dataclasses import dataclass, field, fields
 from enum import IntEnum, auto
 from pathlib import Path
 
@@ -57,26 +57,27 @@ class Phase(IntEnum):
 
 @dataclass
 class StepTiming:
-    """The per-tick wall-clock costs accumulated between two recorder drains, in seconds. Its field names are
-    the ``timing.*`` signal suffixes the recorder appends, so the reduce step sums each column back to an
-    episode total.
+    """The per-tick wall-clock costs accumulated between two recorder drains, in seconds. The scalar field
+    names are the ``timing.*`` signal suffixes the recorder appends, so the reduce step sums each column back
+    to an episode total.
 
     ``env_step_s`` includes the client-side materialisation; ``env_client_s`` is that materialisation alone
-    (shared-memory image allocation + camera copies), so ``env_step_s - env_server_s - env_client_s`` is the
-    wire + codec cost. ``env_physics_s``/``env_render_s``/``env_server_s`` are the env server's own
-    decomposition — physics substeps, sensor rendering, and its whole in-step wall — and are zero for envs
-    that report none.
+    (shared-memory image allocation + camera copies), so ``env_step_s`` minus the env server's whole in-step
+    wall and ``env_client_s`` is the wire + codec cost. ``env_phases`` is the env server's own decomposition
+    (physics substeps, sensor rendering, its other in-step wall) — an env-owned map of phase name to seconds
+    that this module never enumerates; each entry becomes a ``timing.env_<phase>`` signal.
     """
 
     env_step_s: float = 0.0
     record_io_s: float = 0.0
-    env_physics_s: float = 0.0
-    env_render_s: float = 0.0
-    env_server_s: float = 0.0
     env_client_s: float = 0.0
+    env_phases: dict[str, float] = field(default_factory=dict)
 
     def is_empty(self) -> bool:
-        return all(getattr(self, f.name) == 0.0 for f in fields(self))
+        return all(
+            (not value) if isinstance(value, dict) else (value == 0.0)
+            for value in (getattr(self, f.name) for f in fields(self))
+        )
 
 
 @dataclass
@@ -144,13 +145,13 @@ class EvalTimer:
         if self._current is not None:
             self._current.pending_infer_ms.append(seconds * 1000.0)
 
-    def add_env_phases(self, physics_s: float, render_s: float, server_s: float) -> None:
-        """One env step's server-reported decomposition: physics substeps, rendering, whole in-step wall."""
+    def add_env_phases(self, phases: Mapping[str, float]) -> None:
+        """One env step's server-reported decomposition, an env-owned map of phase name to seconds; the phase
+        set is the env's own and is never enumerated here."""
         if self._current is not None:
-            step = self._current.step
-            step.env_physics_s += physics_s
-            step.env_render_s += render_s
-            step.env_server_s += server_s
+            env_phases = self._current.step.env_phases
+            for name, seconds in phases.items():
+                env_phases[name] = env_phases.get(name, 0.0) + seconds
 
     def drain_step(self) -> StepTiming | None:
         """Return the per-tick costs accumulated since the last drain and reset the step. ``None`` when no
@@ -209,25 +210,32 @@ def record_infer(seconds: float) -> None:
         timer.add_infer(seconds)
 
 
-def record_env_phases(physics_s: float, render_s: float, server_s: float) -> None:
-    """Record an env step's server-reported physics/render/whole-wall decomposition."""
+def record_env_phases(phases: Mapping[str, float]) -> None:
+    """Record an env step's server-reported decomposition — a map of env-owned phase name to seconds. Each
+    phase ``<name>`` becomes a ``timing.env_<name>`` signal; this module never enumerates the phase set."""
     if (timer := _ACTIVE.get()) is not None:
-        timer.add_env_phases(physics_s, render_s, server_s)
+        timer.add_env_phases(phases)
 
 
 def drain_signal_items() -> Iterator[tuple[str, float]]:
-    """One tick's drained wall-clock telemetry as ``(signal_name, seconds)`` pairs: each non-zero phase cost
-    as its ``timing.<phase>`` signal, then each policy round-trip as one ``timing.infer_ms`` sample. Empty
-    when telemetry is off or the tick accumulated nothing — the recorder appends whatever it yields, without
-    knowing what the names mean."""
+    """One tick's drained wall-clock telemetry as ``(signal_name, seconds)`` pairs: each non-zero client-side
+    cost as its ``timing.<field>`` signal, each env-reported phase as its ``timing.env_<phase>`` signal, then
+    each policy round-trip as one ``timing.infer_ms`` sample. Empty when telemetry is off or the tick
+    accumulated nothing — the recorder appends whatever it yields, without knowing what the names mean."""
     timer = _ACTIVE.get()
     if timer is None:
         return
     step = timer.drain_step()
     if step is not None and not step.is_empty():
-        for name, seconds in asdict(step).items():
+        for f in fields(step):
+            if f.name == 'env_phases':
+                continue
+            seconds = getattr(step, f.name)
             if seconds != 0.0:
-                yield f'{TELEMETRY_PREFIX}{name}', seconds
+                yield f'{TELEMETRY_PREFIX}{f.name}', seconds
+        for phase, seconds in step.env_phases.items():
+            if seconds != 0.0:
+                yield f'{TELEMETRY_PREFIX}env_{phase}', seconds
     for infer_ms in timer.drain_infers():
         yield INFER_MS_SIGNAL, infer_ms
 

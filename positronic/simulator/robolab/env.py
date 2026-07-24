@@ -32,7 +32,7 @@ import numpy as np
 import torch
 from isaaclab.app import AppLauncher
 from protocol import decode
-from server import EnvProtocol, EnvServer
+from server import EnvProtocol, EnvServer, disjoint_step_phases  # pyright: ignore[reportAttributeAccessIssue]
 
 # Isaac's rigid bring-up order: parse CLI args, launch the app, and only then import anything that touches the
 # omni/isaaclab runtime — which forces the second import block below and the module-level parse. ``validate.py``
@@ -262,14 +262,12 @@ class RobolabEnv(EnvProtocol):
             'done': done,
             'success': done and bool(self._env.get_env_results()[0]['success']),
             'control_dt': self._control_dt,
-            # The server's own step decomposition: physics substeps, sensor/viewport rendering, and this
-            # call's whole wall (observation materialisation included) — the client records it against its
-            # socket-level step time.
-            'timing': {
-                'physics_s': self._phase_s.physics,
-                'render_s': self._phase_s.render,
-                'wall_s': time.perf_counter() - start,
-            },
+            # The server's own step decomposition as disjoint additive phases summing to this call's whole
+            # wall (observation materialisation included): physics substeps, sensor/viewport rendering, and
+            # everything else in the step. The client records it against its socket-level step time.
+            'timing': disjoint_step_phases(
+                time.perf_counter() - start, physics_s=self._phase_s.physics, render_s=self._phase_s.render
+            ),
         }
 
     def _joint_targets(self, command: dict[str, Any]) -> torch.Tensor:

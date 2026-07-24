@@ -131,11 +131,12 @@ class RemoteEnvControlSystem(pimm.ControlSystem):
         commands = {name: receiver.read() for name, receiver in self.commands.items()}
         with eval_timing.timed(Phase.ENV_STEP):
             result = self._conn.step(self._adapter.action(commands, clock.now_ns()))
-        # An env server that decomposes its own step cost reports it in the response; record it against the
-        # client-observed ``env_step_s`` so the reduce can split wire, physics, render and server plumbing.
+        # An env server that decomposes its own step cost reports a disjoint phase map in the response; forward
+        # it unchanged so the reduce can split it out of the client-observed ``env_step_s``. The proxy neither
+        # names nor sums the phases — the env owns its decomposition.
         timing = result.get('timing')
         if timing is not None:
-            eval_timing.record_env_phases(timing['physics_s'], timing['render_s'], timing['wall_s'])
+            eval_timing.record_env_phases(timing)
         payload = self._adapter.terminal(result)
         if payload:  # truthy-valued done: a non-empty payload ends the trial, an empty/``None`` one continues
             self.done.emit(payload)

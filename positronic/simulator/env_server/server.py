@@ -33,6 +33,28 @@ except ImportError:
 
 logger = logging.getLogger(__name__)
 
+# Float slack tolerated on the phase-sum invariant: the measured spans and the whole-step wall are separate
+# ``perf_counter`` reads, so their difference can dip a hair below zero without any real double-count.
+_PHASE_SLACK_S = 1e-6
+
+
+def disjoint_step_phases(wall_s: float, *, physics_s: float, render_s: float) -> dict[str, float]:
+    """An env server's disjoint step decomposition summing to ``wall_s``.
+
+    ``physics_s`` and ``render_s`` are the measured native phases; ``server_other_s`` is the residual — the
+    step wall outside them (managers, IK, plumbing). The three are additive by construction, so a client can
+    normalise each against the step wall. Raises when the measured phases exceed the whole-step wall (a phase
+    timed inside another — e.g. rendering inside the physics loop — double-counts that wall), which would make
+    the residual negative and the split untrustworthy; a sub-nanosecond float dip is clamped, not raised.
+    """
+    server_other_s = wall_s - physics_s - render_s
+    if server_other_s < -_PHASE_SLACK_S:
+        raise ValueError(
+            f'env step wall {wall_s:.6f}s is below physics {physics_s:.6f}s + render {render_s:.6f}s: a phase '
+            f'is double-counted (timed inside another), so the step decomposition is not disjoint'
+        )
+    return {'physics_s': physics_s, 'render_s': render_s, 'server_other_s': max(server_other_s, 0.0)}
+
 
 class EnvProtocol(ABC):
     """A benchmark env behind the three methods the server exposes; the wire contract, positronic-free.
