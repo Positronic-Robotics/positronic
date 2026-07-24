@@ -18,6 +18,12 @@ end-effector *world* pose is read from the robot view's grasp-site frame here, a
 the raw payload the adapter assembles into a ``MujocoFrankaState``.
 """
 
+# molmo_spaces (+ its transitive configs/tasks) resolves only inside MolmoSpaces' own venv, where the launcher
+# runs this module; pyright checks it against positronic's deps, which cannot see it. This module imports no
+# positronic packages, so missing-import errors here are exclusively those foreign imports — suppress just that
+# category file-wide; every other type check (wrong types, optional access, ...) stays active.
+# pyright: reportMissingImports=false
+
 import argparse
 import os
 import sys
@@ -38,9 +44,9 @@ def _install_cgl_noop_stub() -> None:
     if 'mujoco.cgl' in sys.modules:
         return
     cgl = types.ModuleType('mujoco.cgl.cgl')
-    cgl.CGLLockContext = cgl.CGLUnlockContext = lambda *args, **kwargs: None
+    cgl.CGLLockContext = cgl.CGLUnlockContext = lambda *args, **kwargs: None  # pyright: ignore[reportAttributeAccessIssue]
     package = types.ModuleType('mujoco.cgl')
-    package.cgl = cgl
+    package.cgl = cgl  # pyright: ignore[reportAttributeAccessIssue]
     sys.modules['mujoco.cgl'] = package
     sys.modules['mujoco.cgl.cgl'] = cgl
 
@@ -53,7 +59,10 @@ from typing import Any  # noqa: E402
 import mapping  # noqa: E402 -- positronic-free wire mappings, on PYTHONPATH
 import mujoco  # noqa: E402
 import numpy as np  # noqa: E402
-from server import EnvProtocol, EnvServer  # noqa: E402
+
+# server resolves to a module without these symbols under positronic's deps (the real one is on the molmo
+# venv's PYTHONPATH), so the symbols read as unknown here.
+from server import EnvProtocol, EnvServer  # noqa: E402  # pyright: ignore[reportAttributeAccessIssue]
 
 import molmo_spaces.evaluation.json_eval_runner  # noqa: E402, F401 -- load first: breaks a circular import that importing json_eval_task_sampler directly hits
 from molmo_spaces.configs.policy_configs import DummyPolicyConfig  # noqa: E402
@@ -93,11 +102,11 @@ class MolmoSpacesEnv(EnvProtocol):
 
     def __init__(self, benchmark_dir: str) -> None:
         self._episodes = load_all_episodes(Path(benchmark_dir))
-        self._sampler = None
-        self._task = None
-        self._robot_view = None
-        self._control_dt = None
-        self._meta = None
+        self._sampler: Any = None
+        self._task: Any = None
+        self._robot_view: Any = None
+        self._control_dt: float | None = None
+        self._meta: dict[str, Any] | None = None
         # The RGB camera keys the current episode renders — emitted every frame; the client's ``camera_dict``
         # selects which the policy sees.
         self._camera_names: list[str] = []
@@ -154,8 +163,10 @@ class MolmoSpacesEnv(EnvProtocol):
         # from the arm move group's grasp-site frame (obs only exposes a robot-relative tcp pose).
         arm = self._robot_view.get_move_group('arm')
         eef_world = np.asarray(arm.leaf_frame_to_world, dtype=np.float64)  # 4x4 grasp-site world transform
-        eef_quat = np.zeros(4)
-        mujoco.mju_mat2Quat(eef_quat, np.ascontiguousarray(eef_world[:3, :3].reshape(9)))  # -> wxyz
+        eef_quat = np.zeros(4)  # filled wxyz below
+        rot9 = np.ascontiguousarray(eef_world[:3, :3].reshape(9))
+        # mju_mat2Quat is a C binding absent from mujoco's type stubs, so pyright can't see the attribute.
+        mujoco.mju_mat2Quat(eef_quat, rot9)  # pyright: ignore[reportAttributeAccessIssue]
         payload = {
             'joint_pos': np.asarray(arm.joint_pos, dtype=np.float32),
             'joint_vel': np.asarray(arm.joint_vel, dtype=np.float32),
