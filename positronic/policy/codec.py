@@ -443,8 +443,9 @@ class ChangeEEFrame(Codec):
 class _ChangeEEFrameTraining(EpisodeTransform):
     """Move the EE pose signals an episode has into ``to`` and relabel ``control_frame`` to match, so a later codec
     that reads the frame from statics (``IKJointsAction`` solving the command pose) resolves it against the right
-    site. A pose key the episode lacks — ``robot_command.pose`` under a joint-only action — is skipped rather than
-    dereferenced, so joint-only training still converts its observation pose."""
+    site. A pose key the episode lacks — or carries only as a null rename alias (``robot_command.pose`` under a
+    joint-only action, aliased to ``None`` by ``_RENAME_ROBOT_COMMAND``'s ``Get(..., None)``) — is skipped rather
+    than dereferenced, so joint-only training still converts its observation pose."""
 
     def __init__(self, to: str, pose_keys: tuple[str, ...], derive_pose):
         self._to = to
@@ -453,7 +454,11 @@ class _ChangeEEFrameTraining(EpisodeTransform):
 
     def __call__(self, episode):
         derived = {'control_frame': FromValue(self._to)}
-        derived.update({key: self._derive_pose(key) for key in self._pose_keys if key in episode})
+        # ``key in episode`` alone is not enough: ``_RENAME_ROBOT_COMMAND`` aliases a joint-only dataset's absent
+        # legacy pose to a present key whose value is ``None``, so guard on the value being a real signal too.
+        derived.update({
+            key: self._derive_pose(key) for key in self._pose_keys if key in episode and episode[key] is not None
+        })
         # ``Derive(**derived)`` unpacks a ``FromValue`` under a keyword pyright reads as ``Derive``'s ``meta``
         # param. Inherited from #485's frame work, which predates this repo's type ratchet — resolved under #485.
         return Group(Derive(**derived), Identity())(episode)  # pyright: ignore[reportArgumentType]

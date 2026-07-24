@@ -3,6 +3,7 @@ import numpy as np
 import positronic.drivers.roboarm.command as cmd_module
 from positronic.dataset.episode import EpisodeContainer
 from positronic.dataset.tests.utils import DummySignal
+from positronic.dataset.transforms.episode import Derive, Get, Group, Identity
 from positronic.drivers.roboarm.ik import frame_transform
 from positronic.drivers.roboarm.models import bundled_franka_model
 from positronic.geom import Rotation, Transform3D
@@ -113,6 +114,37 @@ def test_training_encoder_skips_absent_command_pose():
     out = ChangeEEFrame(to='droid_eef').training_encoder(episode)
 
     assert 'robot_command.pose' not in list(out), 'absent command pose must not be materialized'
+    transform = frame_transform(URDF, CONTROL_FRAME, 'droid_eef')
+    np.testing.assert_allclose(out['robot_state.ee_pose'][0][0], (obs_pose * transform).as_vector(QUAT), atol=1e-9)
+    assert out['control_frame'] == 'droid_eef' and 'robot_command.joints' in out
+
+
+def test_training_encoder_skips_null_command_pose_alias():
+    """`_RENAME_ROBOT_COMMAND` aliases a joint-only dataset's absent legacy pose to a PRESENT
+    `robot_command.pose` key whose value is `None` (`Get('robot_commands.pose', None)`). The membership test
+    must skip that null alias, not wrap `None` in a derived pose signal — else joint-only training fails when the
+    pose columns are dereferenced. (`key in episode` alone was True for the alias.)"""
+    obs_pose = _pose([0.3, 0.1, 0.4], [0.2, -0.3, 0.5])
+    ts = [1000, 2000]
+    base = EpisodeContainer(
+        data={
+            'urdf': URDF,
+            'control_frame': CONTROL_FRAME,
+            'robot_state.ee_pose': DummySignal(ts, np.stack([obs_pose.as_vector(QUAT)] * 2)),
+            'robot_command.joints': DummySignal(ts, np.zeros((2, 7), dtype=np.float32)),
+        }
+    )
+    # Reproduce `_RENAME_ROBOT_COMMAND` in its production shape (a `Group` with passthrough): alias the (absent)
+    # legacy `robot_commands.pose` to a present `None`, keeping the episode's other signals. `Derive` takes
+    # keyword transforms, but pyright reads the unpacked kwarg as its positional `meta` param.
+    rename = Derive(**{'robot_command.pose': Get('robot_commands.pose', None)})  # pyright: ignore[reportArgumentType]
+    episode = Group(rename, Identity())(base)
+    assert 'robot_command.pose' in episode and episode['robot_command.pose'] is None, 'null-alias precondition'
+
+    out = ChangeEEFrame(to='droid_eef').training_encoder(episode)
+
+    # The alias passes through untouched (`None`), not wrapped into a derived pose signal that dereferences it.
+    assert out['robot_command.pose'] is None
     transform = frame_transform(URDF, CONTROL_FRAME, 'droid_eef')
     np.testing.assert_allclose(out['robot_state.ee_pose'][0][0], (obs_pose * transform).as_vector(QUAT), atol=1e-9)
     assert out['control_frame'] == 'droid_eef' and 'robot_command.joints' in out
