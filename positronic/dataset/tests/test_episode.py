@@ -52,68 +52,6 @@ def test_episode_start_last_ts(tmp_path):
     assert ep.last_ts == 2500
 
 
-def test_episode_bounds_exclude_telemetry_signals(tmp_path):
-    # Regression: `timing.*` signals are sparse and start at their phase's first activity, so deriving
-    # bounds over them shifted `start_ts` into the rollout and shortened `duration_ns` for every consumer.
-    ep_dir = tmp_path / 'ep_telemetry'
-    with DiskEpisodeWriter(ep_dir) as w:
-        w.append('a', 1, 1000)
-        w.append('a', 2, 2000)
-        w.append('timing.env_step_s', 0.1, 1800)  # starts late in the rollout
-        w.append('timing.env_step_s', 0.1, 2600)  # ends past the content streams
-
-    ep = DiskEpisode(ep_dir)
-    assert ep.start_ts == 1000
-    assert ep.last_ts == 2000
-    assert ep.duration_ns == 1000
-
-    with (ep_dir / 'meta.json').open('r') as f:
-        stored_meta = json.load(f)
-    assert stored_meta['duration_ns'] == 1000  # the cached value skips telemetry too
-
-
-def test_episode_time_sampling_skips_telemetry_signals(tmp_path):
-    # A converter builds its sample grid from the content bounds, so sampling at `start_ts` must not hit a
-    # telemetry signal that has no sample yet — and telemetry values don't belong in sampled frames at all.
-    ep_dir = tmp_path / 'ep_time_telemetry'
-    with DiskEpisodeWriter(ep_dir) as w:
-        w.append('a', 1, 1000)
-        w.append('a', 2, 2000)
-        w.append('timing.env_step_s', 0.1, 1800)  # first telemetry sample after the content start
-
-    ep = DiskEpisode(ep_dir)
-    assert ep.time[ep.start_ts] == {'a': 1}
-    assert list(ep.time[[1000, 2000]]['a']) == [1, 2]
-    assert 'timing.env_step_s' not in ep.time[[1000, 2000]]
-
-
-def test_content_signals_excludes_telemetry(tmp_path):
-    # A generic grid consumer (e.g. the Lance converter) samples every `content_signals` entry over the
-    # content bounds, so a sparse `timing.*` stream must stay out of that set while remaining in `signals`.
-    ep_dir = tmp_path / 'ep_content_signals'
-    with DiskEpisodeWriter(ep_dir) as w:
-        w.append('a', 1, 1000)
-        w.append('a', 2, 2000)
-        w.append('timing.env_step_s', 0.1, 1800)
-
-    ep = DiskEpisode(ep_dir)
-    assert set(ep.content_signals) == {'a'}
-    assert 'timing.env_step_s' in ep.signals  # telemetry stays reachable, just off the content grid
-
-
-def test_telemetry_only_episode_has_zero_duration(tmp_path):
-    # A rollout stopped before any content sample still drains a `timing.*` sample on the STOP turn; such
-    # an episode behaves like the no-signal case instead of raising from the content-only bounds.
-    ep_dir = tmp_path / 'ep_telemetry_only'
-    with DiskEpisodeWriter(ep_dir) as w:
-        w.append('timing.record_io_s', 0.001, 1000)
-
-    ep = DiskEpisode(ep_dir)
-    assert ep.duration_ns == 0
-    with pytest.raises(ValueError, match='no content signals'):
-        _ = ep.start_ts
-
-
 def test_episode_getitem_returns_signal(tmp_path):
     ep_dir = tmp_path / 'ep3'
     with DiskEpisodeWriter(ep_dir) as w:

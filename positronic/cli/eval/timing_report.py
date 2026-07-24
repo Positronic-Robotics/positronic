@@ -17,9 +17,16 @@ import configuronic as cfn
 import numpy as np
 import pos3
 
-from positronic.dataset.episode import TELEMETRY_PREFIX, Episode
+from positronic.dataset.episode import Episode
 from positronic.dataset.local_dataset import load_all_datasets
-from positronic.eval_timing import FINISHED_AT_KEY, GPU_LOG_FILENAME, INFER_MS_SIGNAL, RESET_S_KEY, WALL_S_KEY
+from positronic.eval_timing import (
+    FINISHED_AT_KEY,
+    GPU_LOG_FILENAME,
+    INFER_MS_SIGNAL,
+    RESET_S_KEY,
+    TELEMETRY_PREFIX,
+    WALL_S_KEY,
+)
 
 logger = logging.getLogger(__name__)
 

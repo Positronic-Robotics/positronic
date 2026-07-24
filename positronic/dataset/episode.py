@@ -10,13 +10,6 @@ import numpy as np
 from .signal import Signal
 
 EPISODE_SCHEMA_VERSION = 1
-
-# Reserved namespace for wall-clock telemetry signals — facts about the recording process (per-tick phase
-# costs, inference latencies) rather than episode content. Telemetry streams are sparse: each starts at its
-# phase's first activity, so they are excluded from episode bounds — otherwise a late-starting stream would
-# pull ``start_ts`` into the rollout and shorten ``duration_ns`` for every consumer.
-TELEMETRY_PREFIX = 'timing.'
-
 T = TypeVar('T')
 SIGNAL_FACTORY_T = Callable[[], Signal[Any]]
 
@@ -49,11 +42,7 @@ def _is_valid_static_value(value: Any) -> bool:
 
 
 class _EpisodeTimeIndexer:
-    """Time-based indexer for Episode content signals.
-
-    Telemetry signals (``TELEMETRY_PREFIX``) are excluded, matching the episode bounds: they are sparse and
-    start at their first activity, so sampling one at a content timestamp before its first sample would raise.
-    """
+    """Time-based indexer for Episode signals."""
 
     def __init__(self, episode: 'Episode') -> None:
         self.episode = episode
@@ -62,7 +51,7 @@ class _EpisodeTimeIndexer:
         match index_or_slice:
             case int() | np.integer() | float() | np.floating() as ts:
                 # For a single timestamp, return static items and only the values for signals
-                sampled = {key: sig.time[ts][0] for key, sig in self.episode.content_signals.items()}
+                sampled = {key: sig.time[ts][0] for key, sig in self.episode.signals.items()}
                 return {**self.episode.static, **sampled}
             case slice() as sl if sl.step is None:
                 raise KeyError('Episode.time[start:stop] is not supported; use a step or explicit timestamps')
@@ -74,7 +63,7 @@ class _EpisodeTimeIndexer:
                 if isinstance(req, slice) and req.step is not None and req.stop is None:
                     req = slice(req.start, self.episode.last_ts + 1, req.step)
                 result: dict[str, Any] = self.episode.static.copy()
-                for key, sig in self.episode.content_signals.items():
+                for key, sig in self.episode.signals.items():
                     view = sig.time[req]
                     # Extract the full sequence of values corresponding to the time selection
                     result[key] = view._values_at(slice(None))
@@ -107,14 +96,6 @@ class Episode(ABC, Mapping[str, Any]):
         return out
 
     @property
-    def content_signals(self) -> dict[str, Signal[Any]]:
-        """Signals that form the episode's time grid: every signal except the reserved telemetry namespace
-        (``TELEMETRY_PREFIX``). Bounds, ``time`` sampling and grid consumers (converters) iterate this, not
-        ``signals`` — a telemetry stream is sparse and starts after ``start_ts``, so sampling it over the
-        content grid raises. Telemetry stays reachable via ``signals`` and ``episode[name]``."""
-        return {name: sig for name, sig in self.signals.items() if not name.startswith(TELEMETRY_PREFIX)}
-
-    @property
     def static(self) -> dict[str, Any]:
         out: dict[str, Any] = {}
         for k in self:
@@ -125,23 +106,21 @@ class Episode(ABC, Mapping[str, Any]):
 
     @property
     def start_ts(self):
-        values = [sig.start_ts for sig in self.content_signals.values()]
+        values = [sig.start_ts for sig in self.signals.values()]
         if not values:
-            raise ValueError('Episode has no content signals')
+            raise ValueError('Episode has no signals')
         return max(values)
 
     @property
     def last_ts(self):
-        values = [sig.last_ts for sig in self.content_signals.values()]
+        values = [sig.last_ts for sig in self.signals.values()]
         if not values:
-            raise ValueError('Episode has no content signals')
+            raise ValueError('Episode has no signals')
         return max(values)
 
     @property
     def duration_ns(self):
-        # A rollout aborted before its first content sample can still carry telemetry (the STOP-turn drain),
-        # so a telemetry-only episode is the no-signal case here, not a bounds error.
-        if not self.content_signals:
+        if not self.signals:
             return 0
         return self.last_ts - self.start_ts
 

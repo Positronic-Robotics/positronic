@@ -89,7 +89,7 @@ def _episode_row(episode: Episode, fps: int, output_dir: Path, row_idx: int) -> 
     # `uuid` is opt-in (codec param). Fall back to row index for video sidecar paths.
     video_dirname = row.get('uuid') or f'{row_idx:06d}'
 
-    for key, sig in episode.content_signals.items():
+    for key, sig in episode.signals.items():
         view = sig.time[ts_grid]
         values = view._values_at(slice(None))
         if sig.kind is Kind.IMAGE:

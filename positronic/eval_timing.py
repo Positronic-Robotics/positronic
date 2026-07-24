@@ -28,16 +28,18 @@ from dataclasses import asdict, dataclass, field, fields
 from enum import IntEnum, auto
 from pathlib import Path
 
-from positronic.dataset.episode import TELEMETRY_PREFIX
-
 logger = logging.getLogger(__name__)
 
 GPU_LOG_FILENAME = 'gpu_dmon.log'
 
+# The name prefix under which this module's telemetry signals and statics live — a producer-side naming
+# convention this module owns, not something the dataset core interprets or dispatches on.
+TELEMETRY_PREFIX = 'timing.'
+
 # The episode signal + static keys the recorder writes and the reduce step reads back — one source of truth
-# so the writer and `timing_report` never drift on a name. All live under the dataset's reserved telemetry
-# namespace (``TELEMETRY_PREFIX``, excluded from episode bounds): the per-tick phase costs and the per-call
-# inference latencies as signals, the once-per-episode wall scalars as statics.
+# so the writer and `timing_report` never drift on a name. All share the ``TELEMETRY_PREFIX`` namespace: the
+# per-tick phase costs and the per-call inference latencies as signals, the once-per-episode wall scalars as
+# statics.
 INFER_MS_SIGNAL = f'{TELEMETRY_PREFIX}infer_ms'
 WALL_S_KEY = f'{TELEMETRY_PREFIX}wall_s'
 FINISHED_AT_KEY = f'{TELEMETRY_PREFIX}finished_at'
