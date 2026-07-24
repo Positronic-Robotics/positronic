@@ -1,5 +1,6 @@
 import collections.abc as cabc
 import logging
+import urllib.parse
 from typing import Any
 
 import numpy as np
@@ -103,8 +104,10 @@ class _Endpoint(Policy):
     The ``resize`` parameter acts as a fallback when the server does not report
     sizes. Server-reported sizes always take precedence.
 
-    ``headers`` / ``secure`` are forwarded to the underlying ``InferenceClient``
-    for authenticated / TLS-fronted endpoints (e.g. Modal, behind a reverse proxy).
+    ``headers`` / ``secure`` / ``params`` are forwarded to the underlying
+    ``InferenceClient`` — auth / TLS for fronted endpoints (e.g. Modal, behind a
+    reverse proxy) and session query parameters the server applies as overrides
+    to its pipe config.
     """
 
     def __init__(
@@ -116,10 +119,11 @@ class _Endpoint(Policy):
         *,
         headers: dict[str, str] | None,
         secure: bool,
+        params: dict[str, Any] | str | None,
         infer_timeout: float,
         compress_images: bool,
     ):
-        self._client = InferenceClient(host, port, headers=headers, secure=secure)
+        self._client = InferenceClient(host, port, headers=headers, secure=secure, params=params)
         self._resize = resize
         self._model_id = model_id
         self._infer_timeout = infer_timeout
@@ -161,6 +165,10 @@ class RemotePolicy(Policy):
 
     ``recording_dir`` places ``Recorder`` taps around the stack, recording the raw and wire
     boundaries.
+
+    ``params`` become query parameters on every session URL; the server applies them as
+    overrides to its pipe config, so the declared ``local_stack`` reflects them too. A dict is
+    JSON-encoded per value; a str is a ready query string forwarded verbatim.
     """
 
     def __init__(
@@ -174,6 +182,7 @@ class RemotePolicy(Policy):
         recording_dir: str | None = None,
         headers: dict[str, str] | None = None,
         secure: bool = False,
+        params: dict[str, Any] | str | None = None,
         infer_timeout: float = DEFAULT_INFER_TIMEOUT,
         compress_images: bool = False,
     ):
@@ -184,12 +193,60 @@ class RemotePolicy(Policy):
             model_id,
             headers=headers,
             secure=secure,
+            params=params,
             infer_timeout=infer_timeout,
             compress_images=compress_images,
         )
         self._local = local
         self._recording_dir = pos3.sync(recording_dir) if recording_dir else None
         self._stacked: Policy | None = None
+
+    @classmethod
+    def from_url(
+        cls,
+        url: str,
+        resize: int | None = None,
+        *,
+        local: PolicyWrapper | None = None,
+        recording_dir: str | None = None,
+        headers: dict[str, str] | None = None,
+        infer_timeout: float = DEFAULT_INFER_TIMEOUT,
+        compress_images: bool = False,
+    ) -> 'RemotePolicy':
+        """Build a RemotePolicy from one URL carrying host, port, model id, and session params.
+
+        Accepted forms: ``host``, ``host:port``, and ``scheme://host[:port][/api/v1/session[/<model_id>]]``,
+        each with an optional ``?query``. ``https``/``wss`` enable TLS (bare or ``http``/``ws`` forms don't);
+        the port defaults to 443 for TLS schemes and 8000 otherwise; the query string is forwarded verbatim
+        as session params, so the URL's literals reach the server exactly as written.
+        """
+        split = urllib.parse.urlsplit(url if '://' in url else f'//{url}')
+        if split.scheme not in ('', 'http', 'ws', 'https', 'wss'):
+            raise ValueError(f'Unsupported scheme {split.scheme!r} in {url!r}')
+        if not split.hostname:
+            raise ValueError(f'No host in {url!r}')
+        path = split.path.rstrip('/')
+        model_id = None
+        if path and path != '/api/v1/session':
+            prefix, _, model_id = path.rpartition('/')
+            if prefix != '/api/v1/session' or not model_id:
+                raise ValueError(f'Unexpected path {split.path!r} in {url!r}; expected /api/v1/session[/<model_id>]')
+        secure = split.scheme in ('https', 'wss')
+        # urlsplit strips the brackets an IPv6 host needs back in a netloc.
+        host = f'[{split.hostname}]' if ':' in split.hostname else split.hostname
+        return cls(
+            host,
+            split.port or (443 if secure else 8000),
+            resize,
+            model_id,
+            local=local,
+            recording_dir=recording_dir,
+            headers=headers,
+            secure=secure,
+            params=split.query or None,
+            infer_timeout=infer_timeout,
+            compress_images=compress_images,
+        )
 
     def _resolve_stack(self) -> PolicyWrapper | None:
         declared = self._endpoint.server_meta().get('local_stack')

@@ -1,13 +1,13 @@
-import asyncio
 import logging
+from collections.abc import Callable
 from typing import Any
 
 import configuronic as cfn
-from fastapi import WebSocket
 
-from positronic.cfg import codecs as cfg_codecs
-from positronic.offboard.vendor_server import VendorServer
-from positronic.policy import Policy, PolicyWrapper
+from positronic.offboard.server import PolicyServer
+from positronic.policy import Codec, Policy
+from positronic.policy.spec import ModelSource, remote
+from positronic.policy.wrappers import ChunkedSchedule
 from positronic.utils.logging import init_logging
 from positronic.vendors.molmoact2 import codecs as molmoact2_codecs
 from positronic.vendors.molmoact2.policy import MolmoAct2Policy
@@ -17,66 +17,53 @@ logger = logging.getLogger(__name__)
 DEFAULT_HF_REPO = 'allenai/MolmoAct2-DROID'
 
 
-class InferenceServer(VendorServer):
-    """In-process MolmoAct2 inference server for a single pretrained DROID checkpoint."""
+class MolmoAct2Source(ModelSource):
+    """Loads one pretrained MolmoAct2 checkpoint from HuggingFace into an in-process policy."""
 
     def __init__(
         self,
-        pipeline: PolicyWrapper,
         hf_repo: str = DEFAULT_HF_REPO,
         *,
         device_map: str = 'auto',
         norm_tag: str = 'franka_droid',
         num_steps: int = 10,
-        host: str = '0.0.0.0',
-        port: int = 8000,
-        recording_dir: str | None = None,
-        idle_timeout_min: float | None = None,
     ):
-        super().__init__(
-            pipeline=pipeline, host=host, port=port, recording_dir=recording_dir, idle_timeout_min=idle_timeout_min
-        )
-        self.hf_repo = hf_repo
+        self._hf_repo = hf_repo
+        self._device_map = device_map
+        self._norm_tag = norm_tag
+        self._num_steps = num_steps
+
+    def get_models(self) -> list[str]:
         # Clients echo the advertised id onto the single-segment session route
         # (/api/v1/session/{model_id}), so it must be slash-free — derive it from the repo name.
-        self.model_id = hf_repo.split('/')[-1]
-        self.device_map = device_map
-        self.norm_tag = norm_tag
-        self.num_steps = num_steps
-        self._policy: Policy | None = None
-        self.metadata = {'host': host, 'port': port, 'model_id': self.model_id, 'hf_repo': hf_repo}
+        return [self._hf_repo.split('/')[-1]]
 
-    def _load_policy(self) -> Policy:
-        logger.info(f'Loading MolmoAct2 model {self.hf_repo} (device_map={self.device_map})')
+    def load(self, model_id: str, on_progress: Callable[[str], None] | None = None) -> Policy:
+        message = f'Loading MolmoAct2 model {self._hf_repo} (device_map={self._device_map})'
+        logger.info(message)
+        if on_progress is not None:
+            on_progress(message)
         return MolmoAct2Policy(
-            self.hf_repo,
-            device_map=self.device_map,
-            norm_tag=self.norm_tag,
-            num_steps=self.num_steps,
-            extra_meta=self.metadata,
+            self._hf_repo, device_map=self._device_map, norm_tag=self._norm_tag, num_steps=self._num_steps
         )
 
-    async def resolve_model(self, model_id: str | None, websocket: WebSocket | None) -> tuple[Any, dict]:
-        if model_id is not None and model_id != self.model_id:
-            raise ValueError(f'Unknown model: {model_id}. Available: {self.model_id}')
-        if self._policy is None:
-            self._policy = await asyncio.to_thread(self._load_policy)
-        return self._policy, {'model_id': self.model_id}
+    def meta(self, model_id: str) -> dict[str, Any]:
+        return {'model_id': model_id, 'hf_repo': self._hf_repo}
 
-    def create_policy(self, model_handle: Any) -> Policy:
-        return model_handle
 
-    async def get_models(self) -> dict:
-        return {'models': [self.model_id]}
+molmoact2_source = cfn.Config(MolmoAct2Source)
 
-    def shutdown_model(self):
-        if self._policy is not None:
-            self._policy.close()
-            self._policy = None
+
+@cfn.config(codec=molmoact2_codecs.droid, source=molmoact2_source)
+def pipe(codec: Codec, source: ModelSource):
+    return ChunkedSchedule() | remote | codec | source
+
+
+PIPES = {'droid': pipe}
 
 
 @cfn.config(
-    pipeline=cfg_codecs.pipeline.override(codec=molmoact2_codecs.droid),
+    pipe='droid',
     hf_repo=DEFAULT_HF_REPO,
     device_map='auto',
     norm_tag='franka_droid',
@@ -86,8 +73,8 @@ class InferenceServer(VendorServer):
     recording_dir=None,
     idle_timeout_min=None,
 )
-def server(
-    pipeline: PolicyWrapper,
+def main(
+    pipe: str,
     hf_repo: str,
     device_map: str,
     norm_tag: str,
@@ -98,19 +85,15 @@ def server(
     idle_timeout_min: float | None,
 ):
     """Starts the in-process MolmoAct2 inference server."""
-    InferenceServer(
-        pipeline=pipeline,
-        hf_repo=hf_repo,
-        device_map=device_map,
-        norm_tag=norm_tag,
-        num_steps=num_steps,
-        host=host,
-        port=port,
-        recording_dir=recording_dir,
-        idle_timeout_min=idle_timeout_min,
-    ).serve()
+    cfg = PIPES[pipe].override(**{
+        'source.hf_repo': hf_repo,
+        'source.device_map': device_map,
+        'source.norm_tag': norm_tag,
+        'source.num_steps': num_steps,
+    })
+    PolicyServer(cfg, host=host, port=port, recording_dir=recording_dir, idle_timeout_min=idle_timeout_min).serve()
 
 
 if __name__ == '__main__':
     init_logging()
-    cfn.cli(server)
+    cfn.cli(main)

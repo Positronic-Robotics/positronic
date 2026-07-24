@@ -1,6 +1,8 @@
+import json
 import logging
 import ssl
 import time
+import urllib.parse
 from typing import Any
 
 import httpx
@@ -59,9 +61,10 @@ class InferenceSession:
     def metadata(self) -> dict[str, Any]:
         return self._metadata
 
-    def infer(self, obs: dict[str, Any]) -> dict[str, Any]:
+    def infer(self, obs: dict[str, Any]) -> Any:
         """
-        Send an observation and get an action.
+        Send an observation and get the served session's result — canonically a list of action
+        dicts, but whatever the server's session returned (a bare dict or ``None`` included).
 
         Both `obs` and the returned action must be wire-serializable: plain-data containers and
         scalars, plus numeric numpy arrays/scalars. Do not pass arbitrary Python objects.
@@ -92,10 +95,25 @@ class InferenceSession:
 
 
 class InferenceClient:
-    def __init__(self, host: str, port: int, *, headers: dict[str, str] | None = None, secure: bool = False):
+    def __init__(
+        self,
+        host: str,
+        port: int,
+        *,
+        headers: dict[str, str] | None = None,
+        secure: bool = False,
+        params: dict[str, Any] | str | None = None,
+    ):
         self.host = host
         self.port = port
         self.headers = dict(headers) if headers else None
+        # A dict is encoded once — json.dumps every value, strings included — so the server's json.loads
+        # round-trips types exactly ('true' stays a string, True arrives as a bool). A str is a ready query
+        # string forwarded verbatim, so a customer-supplied URL keeps its literals untouched.
+        if isinstance(params, str):
+            self._query = params or None
+        else:
+            self._query = urllib.parse.urlencode({k: json.dumps(v) for k, v in params.items()}) if params else None
         ws_scheme = 'wss' if secure else 'ws'
         http_scheme = 'https' if secure else 'http'
         default_port = 443 if secure else 80
@@ -120,6 +138,8 @@ class InferenceClient:
                         Model loading timeout is controlled by per-message timeout in handshake.
         """
         uri = self.base_uri if model_id is None else f'{self.base_uri}/{model_id}'
+        if self._query:
+            uri += '?' + self._query
         connect_kwargs: dict[str, object] = {'open_timeout': open_timeout}
         if self.headers:
             connect_kwargs['additional_headers'] = self.headers
