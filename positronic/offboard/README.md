@@ -49,8 +49,8 @@ Rules:
 - **Values are JSON literals.** Each value is parsed as JSON (`10` → int, `false` → bool, `"hello"` → str); a value that does not parse passes through as a plain string, so a hand-typed `?tag=hello` works. Programmatic clients should JSON-encode every value — the Python client does — so types round-trip exactly.
 - **Imports are rejected.** configuronic resolves strings starting with `@` or `.` as imports, so any such string anywhere inside a value is rejected. Params can tune the pipe's arguments, never swap its components.
 - **Duplicate keys are rejected.**
-- **`model_id` is reserved.** On the bare `/api/v1/session` route, `?model_id=...` selects the model, same as the path form above.
-- **The model source is fixed at launch.** Params that would change it (e.g. `?source.checkpoint=...`) are rejected; the only way to get a different model is `model_id`.
+- **Params never name a model.** The path does that, and only the path: `/api/v1/session/20000?codec.fps=10` serves model `20000` with that override. A `?model_id=...` param is an ordinary unknown key and is rejected.
+- **The model source is fixed at launch.** Params that would change it (e.g. `?source.checkpoint=...`) are rejected; the only way to get a different model is the path.
 - **Only config-launched servers accept params.** All vendor servers qualify; a `PolicyServer` built from an already-instantiated pipe rejects every param.
 
 Any violation — including an unknown key — fails at connect: the server sends `{"status": "error", "error": ...}` and closes the socket (code 1008) before anything moves, and the Python client raises `RuntimeError`. Overrides apply per session, and the `local_stack` declared in the ready handshake reflects them.

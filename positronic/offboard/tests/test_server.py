@@ -299,11 +299,15 @@ def test_session_param_retunes_the_served_remote_half(start_server):
         tuned_session.close()
 
 
-def test_model_id_query_param_selects_model_not_override(param_server):
+def test_model_id_is_named_by_path_not_query(param_server):
     host, port = param_server
-    session = _param_session(host, port, [('model_id', 'other')])
+    with pytest.raises(RuntimeError, match='model_id'):
+        _param_session(host, port, [('model_id', 'other')])
+
+    session = InferenceSession(connect(f'ws://{host}:{port}/api/v1/session/other?pad_start=false'))
     try:
         assert session.metadata['checkpoint_id'] == 'other'
+        assert session.metadata['local_stack']['seq'][0]['args']['pad_start'] is False
     finally:
         session.close()
 

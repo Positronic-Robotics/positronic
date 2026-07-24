@@ -147,17 +147,13 @@ def _literal_value(key: str, raw: str) -> Any:
 
 
 def _session_params(query_params: QueryParams) -> dict[str, Any]:
-    """Decode session query params into pipe-config override kwargs (dotted keys reach nested args).
-
-    ``model_id`` is the model selector, not an override — on the bare session route FastAPI binds
-    it from the query string.
-    """
+    """Decode session query params into pipe-config override kwargs (dotted keys reach nested args)."""
     items = query_params.multi_items()
     if len(items) != len(dict(query_params)):
         counts = Counter(key for key, _ in items)
         dupes = sorted(key for key, n in counts.items() if n > 1)
         raise ValueError(f'Duplicate session param keys: {dupes}')
-    return {key: _literal_value(key, raw) for key, raw in items if key != 'model_id'}
+    return {key: _literal_value(key, raw) for key, raw in items}
 
 
 class PolicyServer:
@@ -227,8 +223,8 @@ class PolicyServer:
 
         self.app = FastAPI()
         self.app.get('/api/v1/models')(self.get_models)
-        self.app.websocket('/api/v1/session')(self.websocket_endpoint)
-        self.app.websocket('/api/v1/session/{model_id}')(self.websocket_endpoint)
+        self.app.websocket('/api/v1/session')(self.default_session)
+        self.app.websocket('/api/v1/session/{model_id}')(self.model_session)
 
     async def get_models(self) -> dict:
         return {'models': self._source.get_models()}
@@ -246,7 +242,15 @@ class PolicyServer:
             raise ValueError('Session params must not change the model source; it is fixed at launch')
         return pipe
 
-    async def websocket_endpoint(self, websocket: WebSocket, model_id: str | None = None):
+    async def default_session(self, websocket: WebSocket):
+        """Serves the model pinned at startup. Naming a model is the path's job, so every query param here
+        is a pipe override."""
+        await self._serve_session(websocket, None)
+
+    async def model_session(self, websocket: WebSocket, model_id: str):
+        await self._serve_session(websocket, model_id)
+
+    async def _serve_session(self, websocket: WebSocket, model_id: str | None):
         await websocket.accept()
         logger.info(f'Connected to {websocket.client} requesting {model_id or "default"}')
 
