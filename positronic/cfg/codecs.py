@@ -3,9 +3,15 @@
 import configuronic as cfn
 
 from positronic import geom
+from positronic.policy.codec import ChangeEEFrame
 from positronic.policy.observation import ObservationCodec
 
 RotRep = geom.Rotation.Representation
+
+# The border codec that converts poses into a policy's own EE frame (e.g. DROID's ``droid_eef``). Applied
+# client-side at serving via ``remote(codec=change_ee_frame.override(to=...))``; the ``compose`` ``ee_frame``
+# param below folds it into the training pipeline so the recorded data is encoded in the same frame.
+change_ee_frame = cfn.Config(ChangeEEFrame)
 
 
 @cfn.config()
@@ -43,15 +49,26 @@ eepose_joints_obs = eepose_grip_joints_obs.override(
 )
 
 
-@cfn.config(fps=15.0, horizon=None, binarize_grip=None, flip_grip=False)
-def compose(obs, action, fps: float, horizon: float | None, binarize_grip: tuple[str, ...] | None, flip_grip: bool):
+@cfn.config(fps=15.0, horizon=None, binarize_grip=None, flip_grip=False, ee_frame=None)
+def compose(
+    obs,
+    action,
+    fps: float,
+    horizon: float | None,
+    binarize_grip: tuple[str, ...] | None,
+    flip_grip: bool,
+    ee_frame: str | None,
+):
     """Compose observation and action codecs with timing and optional grip binarization.
 
-    ``flip_grip`` serves checkpoints that speak the inverted grip convention (see ``FlipGrip``).
+    ``flip_grip`` serves checkpoints that speak the inverted grip convention (see ``FlipGrip``). ``ee_frame``
+    converts poses into the policy's own EE frame (see ``ChangeEEFrame``); folded in for training so the recorded
+    data is encoded in that frame. At serving the frame conversion runs client-side instead (``change_ee_frame``),
+    so leave ``ee_frame`` unset on the server's frame-agnostic codec.
 
     Layout::
 
-        [ActionHorizon] | ActionTimestamp | [BinarizeGripTraining | BinarizeGripInference] | [FlipGrip] | obs & action
+        [ActionHorizon] | ActionTimestamp | [BinarizeGrip*] | [FlipGrip] | [ChangeEEFrame] | obs & action
     """
     from positronic.policy.codec import (
         ActionHorizon,
@@ -62,6 +79,8 @@ def compose(obs, action, fps: float, horizon: float | None, binarize_grip: tuple
     )
 
     result = obs & action
+    if ee_frame is not None:
+        result = ChangeEEFrame(to=ee_frame) | result
     if flip_grip:
         result = FlipGrip() | result
     if binarize_grip:
