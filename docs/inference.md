@@ -83,7 +83,7 @@ uv run positronic-inference real \
   --policy.sampler=@positronic.cfg.policy.balanced
 ```
 
-Each endpoint can also be set on its own: `--policy.endpoints.groot=desktop:8000` adds or repoints one without restating the rest, and `--policy.weights.groot=2` biases the default uniform sampler toward it (the balanced sampler ignores weights and equalizes episode counts instead). The `phail` subcommand wires this up end-to-end, defaulting to the `phail_multiple` policy (a `production` preset) and the `eval_ui` driver.
+Each endpoint can also be set on its own: `--policy.endpoints.groot=desktop:8000` adds or repoints one without restating the rest, and `--policy.weights.groot=2` makes it twice as likely to be picked (endpoints left out weigh 1.0). Weights and `--policy.sampler` are mutually exclusive — a balanced sampler equalizes completed-episode counts and never consults weights, so asking for both fails loudly rather than silently dropping one. The `phail` subcommand wires this up end-to-end, defaulting to the `phail_multiple` policy (a `production` preset) and the `eval_ui` driver.
 
 ## Local Inference
 
