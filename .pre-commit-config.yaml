@@ -37,6 +37,15 @@ repos:
         language: system
         files: '(^|/)(test_[^/]+\.py|[^/]+_test\.py)$'
         stages: [pre-commit]
+      - id: basedpyright-baseline-ratchet
+        name: basedpyright baseline is a one-way ratchet
+        # Reads the baseline and git directly, so takes no filenames; scoped to fire only when
+        # the baseline changes (the only time a file's entry count can grow).
+        entry: python3 utilities/check_basedpyright_baseline_ratchet.py
+        language: system
+        files: '^\.basedpyright/baseline\.json$'
+        pass_filenames: false
+        stages: [pre-commit]
 
   # General pre-commit hooks
   - repo: https://github.com/pre-commit/pre-commit-hooks
