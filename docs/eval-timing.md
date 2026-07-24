@@ -58,7 +58,8 @@ the `eval.scored` success verdict the episode already records — and prints a p
 - `env_step_split` — physics / render / server_other / wire / materialize inside the env step, when the env
   reports its decomposition.
 - `mean_bytes_per_rollout`, `success_rate`, and GPU mean-util / peak-VRAM for the sim box (and the
-  policy endpoint, if you pass its `nvidia-smi dmon` log via `--gpu_policy_log`).
+  policy endpoint, if you pass its log via `--gpu_policy_log` — collect it with `nvidia-smi dmon -s um`,
+  which emits the `fb` framebuffer column the reducer needs; a plain `dmon` log, lacking `fb`, is rejected).
 
 The report also lands as `timing_summary.json` next to the input (a sibling `<dataset_dir>.timing_summary.json`
 for an `s3://` input).
