@@ -6,29 +6,29 @@ Deploy trained policies for evaluation and production use. Positronic supports l
 
 Positronic's unified WebSocket protocol connects any hardware to any model (LeRobot, GR00T, OpenPI). The key benefit is running heavy models on powerful GPU hardware (OpenPI needs ~62GB, GR00T ~8GB) separate from the robot/simulator machine.
 
-Each server carries a full **policy pipeline** — one pipeline naming the rig-side stack, the `remote` split marker, and the server-side codec (see `positronic.policy.spec`). The server runs the half right of the marker and declares the half left of it in its handshake; the client builds the declared stack automatically.
+Each server carries a full **policy pipe** — one chain naming the rig-side stack, the `remote` split marker, the server-side codec, and the model source that loads checkpoints (see `positronic.policy.spec`). The server runs the half right of the marker and declares the half left of it in its handshake; the client builds the declared stack automatically. Vendors ship their pipes by name: `--pipe=<name>` selects one (GR00T also exposes each pipe as a subcommand); the available names are listed in each vendor's README.
 
 **Start inference server:**
 ```bash
 # LeRobot (SmolVLA — 0.4.x)
-cd docker && docker compose run --rm --service-ports lerobot-server \
+cd docker && docker compose run --rm --service-ports lerobot-server serve \
   --checkpoints_dir=~/checkpoints/lerobot/experiment_v1/ \
-  --pipeline.codec=@positronic.vendors.lerobot.codecs.ee
+  --pipe=ee
 
 # LeRobot (ACT — 0.3.3)
-cd docker && docker compose run --rm --service-ports lerobot-0_3_3-server \
+cd docker && docker compose run --rm --service-ports lerobot-0_3_3-server serve \
   --checkpoints_dir=~/checkpoints/lerobot/experiment_v1/ \
-  --pipeline.codec=@positronic.vendors.lerobot_0_3_3.codecs.ee
+  --pipe=ee
 
-# GR00T (pre-configured variant)
+# GR00T (the subcommand names the pipe)
 cd docker && docker compose run --rm --service-ports groot-server \
   ee_rot6d_joints \
   --checkpoints_dir=~/checkpoints/groot/experiment_v1/
 
 # OpenPI
-cd docker && docker compose run --rm --service-ports openpi-server \
+cd docker && docker compose run --rm --service-ports openpi-server serve \
   --checkpoints_dir=~/checkpoints/openpi/experiment_v1/ \
-  --pipeline.codec=@positronic.vendors.openpi.codecs.ee
+  --pipe=ee
 ```
 
 Check server: `curl http://localhost:8000/api/v1/models` returns available model IDs.
@@ -48,9 +48,29 @@ uv run positronic-inference real \
   --output_dir=~/datasets/inference_logs/franka_eval
 ```
 
-**Remote policy parameters:** `--policy.host` (server hostname/IP), `--policy.port` (default 8000), `--policy.model_id` (specific checkpoint, default latest), `--policy.resize` (client-side image resize for bandwidth optimization; server-reported `image_sizes` take precedence).
+**Remote policy parameters:** `--policy.host` (server hostname/IP), `--policy.port` (default 8000), `--policy.model_id` (specific checkpoint; the default is the one the server pinned at startup), `--policy.resize` (client-side image resize for bandwidth optimization; server-reported `image_sizes` take precedence).
 
 The client builds the wrapper stack the server declares in its handshake (a server that declares nothing gets the standard `ChunkedSchedule`). `--policy.local=@...` is the operator's escape hatch: it bypasses the declaration entirely (the ignored declaration is logged) and runs the given stack instead.
+
+**Session parameters:** `--policy.params` attaches query params to every session; the server applies them as overrides to its pipe config, so you can tune the served pipe without restarting the server. Keys are dotted paths into the pipe config, values JSON literals. Because the keys contain dots, pass the whole dict at once (a dot-free key can also be set individually, e.g. `--policy.params.foo=1`):
+
+```bash
+uv run positronic-inference sim \
+  --policy=.remote --policy.host=gpu-server \
+  --policy.params='{"codec.fps": 10}'
+```
+
+The model source (`checkpoints_dir`, `checkpoint`, device...) is fixed at server launch — `source.*` params are rejected; use `--policy.model_id` to pick a checkpoint. Bad params fail at connect with a clear server error. The server CLI itself takes no deep overrides into the pipe: the launch choice is a named pipe, and everything inside it is tuned per session with params (or by adding a named pipe variant to the vendor's `PIPES`). Full rules in the [Offboard README](../positronic/offboard/README.md).
+
+**One-URL endpoints:** `.remote_url` packs host, port, TLS, model id, and session params into a single string — hand it out, paste it, done:
+
+```bash
+uv run positronic-inference sim \
+  --policy=.remote_url \
+  --policy.url='gpu-server:8000?codec.fps=10&local.pad_start=false'
+```
+
+Accepted forms: `host`, `host:port`, and `http(s)://host[:port][/api/v1/session[/<model_id>]]` (`ws`/`wss` work too), each with an optional query. `https`/`wss` enable TLS and default the port to 443; other forms default to 8000. The query string is forwarded to the server verbatim, so its JSON literals arrive exactly as written.
 
 > **Recording inference I/O:** Pass `--policy.recording_dir=s3://bucket/path` to `.remote` or `.weighted_remote` to write a rerun `.rrd` file per episode capturing the raw and server-side observation/action boundaries. Useful for debugging codec behavior and visualizing what the policy actually received.
 

@@ -38,10 +38,10 @@ cd docker && docker compose run --rm lerobot-train full_finetune \
   --output_dir=~/checkpoints/lerobot/ \
   --num_train_steps=50000
 
-# 3. Serve
+# 3. Serve (--pipe selects the codec pipe; must match training, default is ee)
 cd docker && docker compose run --rm --service-ports lerobot-server serve \
   --checkpoints_dir=~/checkpoints/lerobot/my_task_v1/ \
-  --pipeline.codec=@positronic.vendors.lerobot.codecs.ee
+  --pipe=ee
 
 # 4. Run inference
 uv run --locked positronic-inference sim \
@@ -54,10 +54,15 @@ See [Training Workflow](../../docs/training-workflow.md) for detailed step-by-st
 
 ## Available Codecs
 
+Each codec is served as the policy pipe of the same name (`--pipe=<name>`); conversion references it as
+`--dataset.codec=@positronic.vendors.lerobot.codecs.<name>`.
+
 | Codec | Observation | Action | Use Case |
 |-------|-------------|--------|----------|
 | `ee` | EE pose (7D quat) + grip (1D) + images (512x512) | Absolute EE position (7D quat) + grip | Default, end-effector control |
 | `joints` | Joint positions (7D) + grip (1D) + images (512x512) | Absolute EE position (7D quat) + grip | Joint-space observations |
+| `joints_ik` | Joint positions (7D) + grip (1D) + images (512x512) | Joint targets via IK from EE targets | Joint-space control on EE-recorded data |
+| `joints_ik_sim` | Joint positions (7D) + grip (1D) + images (512x512) | Joint targets via IK (LM solver) | Joint-space control in simulation |
 
 **Key features:**
 - Language-conditioned via `task` field (natural language instructions)
@@ -95,7 +100,7 @@ Two training modes are available:
 ```bash
 cd docker && docker compose run --rm --service-ports lerobot-server serve \
   --checkpoints_dir=~/checkpoints/lerobot/my_task_v1/ \
-  --pipeline.codec=@positronic.vendors.lerobot.codecs.ee \
+  --pipe=ee \
   --port=8000
 ```
 
@@ -103,13 +108,19 @@ cd docker && docker compose run --rm --service-ports lerobot-server serve \
 |-----------|-------------|---------|---------|
 | `--checkpoints_dir` | Experiment directory (contains `checkpoints/` folder) | Required | `~/checkpoints/lerobot/my_task_v1/` |
 | `--checkpoint` | Specific checkpoint step | Latest | `10000`, `20000` |
-| `--pipeline.codec` | Server-side codec of the policy pipeline (must match training) | `ee` | `joints` |
+| `--pipe` | Named policy pipe to serve — its codec must match training: `ee`, `joints`, `joints_ik`, `joints_ik_sim` | `ee` | `joints` |
+| `--device` | Torch device the policy runs on | Auto-detected | `cuda`, `mps`, `cpu` |
 | `--port` | Server port | `8000` | `8001` |
 | `--host` | Server host | `0.0.0.0` | Binds to all interfaces |
 | `--recording_dir` | Directory for server-side inference recordings | `None` | `s3://inference/...` |
 | `--idle_timeout_min` | Shut down after this many idle minutes | `None` | `30` |
 
 **Presets:** Besides `serve`, the server exposes a `phail` preset with pre-configured `checkpoints_dir`/`recording_dir` (e.g. `lerobot-server phail`).
+
+**Session parameters:** A client can tune the served pipe per session with query params on the session URL —
+dotted paths into the pipe config with JSON-literal values (e.g. `?codec.fps=10`). The model source
+(`checkpoints_dir`, `checkpoint`, `device`) is fixed at launch and cannot be changed per session. See the
+[offboard README](../../offboard/README.md) for the full syntax and error behavior.
 
 ## See Also
 

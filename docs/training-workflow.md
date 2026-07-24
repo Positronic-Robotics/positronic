@@ -181,22 +181,22 @@ Start an inference server that exposes a unified WebSocket API. All vendors impl
 **LeRobot Server (SmolVLA — lerobot 0.4.x):**
 
 ```bash
-cd docker && docker compose run --rm --service-ports lerobot-0_3_3-server \
+cd docker && docker compose run --rm --service-ports lerobot-server serve \
   --checkpoints_dir=~/checkpoints/lerobot/experiment_v1/ \
-  --pipeline.codec=@positronic.vendors.lerobot.codecs.ee \
+  --pipe=ee \
   --port=8000
 ```
 
 **LeRobot Server (ACT — lerobot 0.3.3):**
 
 ```bash
-cd docker && docker compose run --rm --service-ports lerobot-0_3_3-server \
+cd docker && docker compose run --rm --service-ports lerobot-0_3_3-server serve \
   --checkpoints_dir=~/checkpoints/lerobot/experiment_v1/ \
-  --pipeline.codec=@positronic.vendors.lerobot_0_3_3.codecs.ee \
+  --pipe=ee \
   --port=8000
 ```
 
-**GR00T Server:**
+**GR00T Server (the subcommand names the pipe):**
 
 ```bash
 cd docker && docker compose run --rm --service-ports groot-server \
@@ -207,9 +207,9 @@ cd docker && docker compose run --rm --service-ports groot-server \
 **OpenPI Server:**
 
 ```bash
-cd docker && docker compose run --rm --service-ports openpi-server \
+cd docker && docker compose run --rm --service-ports openpi-server serve \
   --checkpoints_dir=~/checkpoints/openpi/pi05_positronic_lowmem/experiment_v1/ \
-  --pipeline.codec=@positronic.vendors.openpi.codecs.ee
+  --pipe=ee
 ```
 
 ### Server Parameters
@@ -218,9 +218,11 @@ cd docker && docker compose run --rm --service-ports openpi-server \
 |-----------|-------------|---------|
 | `--checkpoints_dir` | Path to experiment directory (contains checkpoint folders) | `~/checkpoints/lerobot/experiment_v1/` |
 | `--checkpoint` | (Optional) Specific checkpoint ID to load | `10000`, `20000` |
-| `--pipeline.codec` | Server-side codec of the policy pipeline (must match training) | `@positronic.vendors.lerobot.codecs.ee` |
+| `--pipe` | Named policy pipe: the server-side codec (must match training). Each vendor lists its pipe names in its README | `ee` |
 | `--port` | Server port | `8000` (default) |
 | `--host` | Server host | `0.0.0.0` (default, binds to all interfaces) |
+
+The launch choice is the named pipe; its inner arguments are tuned per session via client query params (`--policy.params` on the inference CLI — see the [Inference Guide](inference.md)) or by a new named pipe entry in the vendor's `PIPES`.
 
 ### Checking Server Status
 
@@ -265,9 +267,9 @@ cd docker && docker compose run --rm lerobot-train expert_only \
   --num_train_steps=50000
 
 # 5. Evaluate
-cd docker && docker compose run --rm --service-ports lerobot-0_3_3-server \
+cd docker && docker compose run --rm --service-ports lerobot-server serve \
   --checkpoints_dir=~/checkpoints/lerobot/baseline_v1/ \
-  --pipeline.codec=@positronic.vendors.lerobot.codecs.ee &
+  --pipe=ee &
 
 uv run positronic-inference sim \
   --policy=.remote \

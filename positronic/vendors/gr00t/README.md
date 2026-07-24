@@ -102,7 +102,8 @@ See [Codecs Guide](../../docs/codecs.md) for comprehensive codec documentation.
 
 ### Inference Server Configuration
 
-GR00T server uses pre-configured variants that combine codec and modality configuration:
+Each GR00T server subcommand serves a named policy pipe that pairs the codec with the matching
+modality config:
 
 ```bash
 cd docker && docker compose run --rm --service-ports groot-server \
@@ -111,7 +112,7 @@ cd docker && docker compose run --rm --service-ports groot-server \
   --port=8000
 ```
 
-**Available variants:**
+**Available pipes** (the subcommand selects one):
 - `ee` - End-effector pose (quaternion)
 - `ee_joints` - End-effector pose + joint positions (quaternion)
 - `ee_rot6d` - End-effector pose (rot6d)
@@ -119,14 +120,23 @@ cd docker && docker compose run --rm --service-ports groot-server \
 - `ee_rot6d_rel` - End-effector pose (rot6d, relative actions)
 - `ee_rot6d_joints_rel` - End-effector pose + joint positions (rot6d, relative actions)
 
+`serve` is `ee` with every flag open; the `phail` and `sim_stack` presets add pre-configured
+`checkpoints_dir`/`recording_dir`.
+
 **Server parameters:**
 
 | Parameter | Description | Default | Example |
 |-----------|-------------|---------|---------|
-| `variant` | Pre-configured variant (positional arg) | Required | `ee_rot6d_joints` |
+| `pipe` | Named pipe (the subcommand) | `ee` | `ee_rot6d_joints` |
 | `--checkpoints_dir` | Experiment directory (contains `checkpoint-N` folders) | Required | `~/checkpoints/groot/my_task_v1/` |
 | `--checkpoint` | Specific checkpoint ID | Latest | `10000`, `50000` |
 | `--port` | Server port | `8000` | `8001` |
+| `--modality_config` | Override the pipe's paired modality config | Paired | `ee_rot6d_q` |
+
+**Session parameters:** a client can tune the served pipe per connection via query params on the
+session URL — e.g. `--policy.params='{"codec.fps": 10}'` on the eval CLI sends `?codec.fps=10`. Values
+must be JSON literals. The model source (`checkpoints_dir`, `--checkpoint`, modality config) is
+fixed at launch and cannot be changed per session.
 
 ## Troubleshooting
 
@@ -146,7 +156,7 @@ cd docker && docker compose run --rm groot-train \
   --modality_config=ee_rot6d_q \
   --input_path=~/datasets/groot/my_task  # (converted with ee_rot6d_joints codec)
 
-# Inference (use matching variant)
+# Inference (use the matching pipe)
 cd docker && docker compose run --rm --service-ports groot-server \
   ee_rot6d_joints \
   --checkpoints_dir=~/checkpoints/groot/my_task_v1/
