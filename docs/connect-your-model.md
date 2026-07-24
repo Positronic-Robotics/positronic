@@ -87,7 +87,7 @@ Four small concepts make up the API. You meet them whether you use a built-in se
 
 **Codec.** Different models want different inputs: end-effector pose vs joint angles, absolute targets vs deltas, 224×224 vs 512×512 images. A `Codec` translates between the robot's raw data (what is on the wire) and your model's format — `encode` on the way in, `decode` on the way out. The same codec prepares the training data, so a model is served exactly the way it was trained. The full catalog is in the [Codecs Guide](codecs.md).
 
-**Wrapper.** A `PolicyWrapper` is the swappable client-side logic from the previous section — scheduling, error recovery, recording. Wrappers compose with `|` and wrap a policy, so you can change *how* latency is handled without touching the model. A policy pipeline names the wrappers together with the codec as one chain split by the `remote` marker (`local | remote | codec`, see `positronic.policy.spec`); the server declares the local half in its handshake and the client builds it, so both halves ship as one pipeline.
+**Wrapper.** A `PolicyWrapper` is the swappable client-side logic from the previous section — scheduling, error recovery, recording. Wrappers compose with `|` and wrap a policy, so you can change *how* latency is handled without touching the model. A policy pipe names the wrappers together with the codec as one chain split by the `remote` marker and closed by a *model source* — the server-side terminal that loads the model (`local | remote | codec | source`, see `positronic.policy.spec`). The server declares the local half in its handshake and the client builds it, so both halves ship as one pipe.
 
 ## The wire format
 
@@ -154,13 +154,15 @@ The client side can record too: `--output_dir` saves the full episode as a Posit
 
 To connect a custom model you implement this WebSocket protocol. The full low-level spec — endpoints, handshake, status messages — is in the [Offboard README](../positronic/offboard/README.md); the rest of this section shows the shortcut for Positronic-based servers.
 
-### Fast-loading, in-process models
+### Ready, in-process models
 
-Provide a `Policy` to `InferenceServer`. The server downloads nothing and loads in-process, so it assumes loading is quick (under ~20 s) — otherwise the WebSocket handshake times out before the model is ready.
+Implement a `Policy`, close a pipe over it with `PolicySource`, and hand the pipe to `PolicyServer`:
 
 ```python
-from positronic.offboard.basic_server import InferenceServer
+from positronic.offboard import PolicyServer
 from positronic.policy import Policy, Session
+from positronic.policy.spec import PolicySource, remote
+from positronic.policy.wrappers import ChunkedSchedule
 
 
 class MySession(Session):
@@ -191,16 +193,15 @@ class MyPolicy(Policy):
         return {'type': 'my_model'}
 
 
-InferenceServer(
-    policy_registry={'default': lambda: MyPolicy(load_my_model())},
-    host='0.0.0.0',
-    port=8000,
-).serve()
+pipe = ChunkedSchedule() | remote | PolicySource(MyPolicy(load_my_model()))
+PolicyServer(pipe, host='0.0.0.0', port=8000).serve()
 ```
+
+The pipe reads left to right: everything left of the `remote` marker is the client-side stack the server declares in its handshake (here the standard `ChunkedSchedule`); everything right of it runs on the server. `PolicySource` is the pipe's terminal — a model source that serves one already-built policy.
 
 `new_session`'s `now` argument is the runtime clock that wrappers scheduling against live time read; a policy that does no scheduling of its own just accepts and ignores it (server-side it is `None`).
 
-If you give your `Policy` a `Codec` (via `codec.wrap(policy)`), your session works entirely in *model space* — it receives encoded observations and returns model-native actions, and the codec handles the wire format. Test the server with the same client as the demo:
+If you put a `Codec` right of the marker (`ChunkedSchedule() | remote | codec | PolicySource(...)`), your session works entirely in *model space* — it receives encoded observations and returns model-native actions, and the codec handles the wire format. Test the server with the same client as the demo:
 
 ```bash
 uv run positronic-inference sim --policy=.remote --policy.host=localhost --policy.port=8000
@@ -208,7 +209,7 @@ uv run positronic-inference sim --policy=.remote --policy.host=localhost --polic
 
 ### Slow-loading or subprocess models
 
-The built-in OpenPI and GR00T servers don't use `InferenceServer` — checkpoints take minutes to download or run as a separate process. They subclass `VendorServer` (`positronic/offboard/vendor_server.py`), which streams `{"status": "loading", ...}` messages so the handshake doesn't time out, owns the policy pipeline (running its remote half and declaring its local half), and handles multi-model switching, the `recording_dir` taps above, and idle shutdown. Subclasses implement `resolve_model()`, `create_policy()`, and `get_models()`; see `positronic/vendors/openpi/server.py` and `positronic/vendors/gr00t/server.py`.
+The built-in OpenPI and GR00T servers can't hand over a ready policy — checkpoints take minutes to download or run as a separate process. Instead of `PolicySource` they implement their own `ModelSource` (`positronic/policy/spec.py`), the terminal that turns checkpoint ids into policies: `get_models()` lists the ids, `resolve()` maps a request (or the default) to one of them, and `load(model_id, on_progress)` downloads and boots the model, calling `on_progress` along the way. `PolicyServer` runs `load` off the event loop and forwards every `on_progress` message to the connecting client as a `{"status": "loading", ...}` frame, so the handshake survives a multi-minute boot. The returned `Policy` owns whatever `load` started; its `close()` tears it down when the server switches checkpoints or shuts down. Model switching, the `recording_dir` taps above, and idle shutdown are all `PolicyServer`'s job — a vendor ships only its source and its named pipes; see `positronic/vendors/openpi/server.py` and `positronic/vendors/gr00t/server.py`.
 
 ### Serialization
 

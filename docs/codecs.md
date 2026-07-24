@@ -41,9 +41,9 @@ A returned trajectory also needs timing — *when* each action runs. That is han
 
 | Codec | Signature | Effect |
 |-------|-----------|--------|
-| `ActionTimestamp` | `ActionTimestamp(fps=...)` (keyword-only) | Stamps each decoded action with a relative `timestamp = i / fps` (seconds from the start of the trajectory, starting at 0). At training time surfaces `action_fps` as transform metadata. (`codec.py:183`) |
-| `ActionHorizon` | `ActionHorizon(horizon_sec)` (positional) | Drops decoded actions whose relative `timestamp` is `>= horizon_sec`. Single (untimestamped) actions pass through. At training time surfaces `action_horizon_sec`. (`codec.py:217`) |
-| `ActionTiming` | `ActionTiming(fps=..., horizon_sec=None)` | Factory: returns `ActionTimestamp(fps=fps) \| ActionHorizon(horizon_sec)` when `horizon_sec` is set, otherwise just `ActionTimestamp(fps=fps)`. (`codec.py:247`) |
+| `ActionTimestamp` | `ActionTimestamp(fps=...)` (keyword-only) | Stamps each decoded action with a relative `timestamp = i / fps` (seconds from the start of the trajectory, starting at 0). At training time surfaces `action_fps` as transform metadata. (`codec.py:199`) |
+| `ActionHorizon` | `ActionHorizon(horizon_sec)` (positional) | Drops decoded actions whose relative `timestamp` is `>= horizon_sec`. Single (untimestamped) actions pass through. At training time surfaces `action_horizon_sec`. (`codec.py:245`) |
+| `ActionTiming` | `ActionTiming(fps=..., horizon_sec=None)` | Factory: returns `ActionTimestamp(fps=fps) \| ActionHorizon(horizon_sec)` when `horizon_sec` is set, otherwise just `ActionTimestamp(fps=fps)`. (`codec.py:289`) |
 
 These timestamps are **relative** — seconds from the start of the trajectory. The model and codecs never see wall-clock time; the real-time client anchors each offset to its own clock the moment inference returns (`now + timestamp`), so execution starts at inference-finish and the round-trip latency is absorbed. Stamping a per-action timestamp rather than a fixed rate is deliberate: it lets non-uniform timings and client-side scheduling strategies share one wire format. See [How inference works](connect-your-model.md#how-inference-works) for the full reasoning.
 
@@ -54,6 +54,8 @@ Subclass `positronic.policy.codec.Codec` and implement `encode()` and/or `_decod
 ## Codec catalog by vendor
 
 These are the ready-made codecs each vendor ships. The standard composition is `[ActionHorizon] | ActionTimestamp | [BinarizeGrip…] | observation & action` (the bracketed stages are controlled by `compose`'s `horizon` and `binarize_grip=` arguments).
+
+At conversion time a codec is referenced by import path (`--dataset.codec=@positronic.vendors.<vendor>.codecs.<name>`). At serving time each vendor's server exposes its codecs as **named pipes** — `--pipe=<name>` (GR00T uses subcommands) — so the same name selects the same codec on both sides.
 
 ### LeRobot (ACT — 0.3.3)
 
@@ -151,9 +153,9 @@ A "Shape mismatch" or "Feature mismatch" at inference almost always means the in
 cd docker && docker compose run --rm lerobot-0_3_3-convert convert \
   --dataset.codec=@positronic.vendors.lerobot_0_3_3.codecs.ee
 
-# Inference must match
-cd docker && docker compose run --rm --service-ports lerobot-0_3_3-server \
-  --pipeline.codec=@positronic.vendors.lerobot_0_3_3.codecs.ee
+# Inference must match — serve the pipe of the same name
+cd docker && docker compose run --rm --service-ports lerobot-0_3_3-server serve \
+  --pipe=ee
 ```
 
 ## See Also

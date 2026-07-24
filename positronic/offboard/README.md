@@ -26,15 +26,39 @@ curl http://localhost:8000/api/v1/models
 Use this to discover which models are available before connecting.
 
 #### `WS /api/v1/session`
-Establishes an inference session with the **default** model (latest checkpoint for currently available vendors).
+Establishes an inference session with the **default** model — the checkpoint pinned at server startup (the configured one, or the latest available at that moment).
 
 #### `WS /api/v1/session/{model_id}`
 Establishes an inference session with a **specific** model.
 
 **Example:**
-- `ws://localhost:8000/api/v1/session` → Latest model
+- `ws://localhost:8000/api/v1/session` → Default model
 - `ws://localhost:8000/api/v1/session/10000` → Model 10000
 - `ws://localhost:8000/api/v1/session/20000` → Model 20000
+
+#### Session parameters
+
+Query params on the session URL tune the served policy pipe for that one session. Each key is a dotted path into the server's pipe config — any argument at any depth — applied as a config override before the session is built:
+
+```
+ws://localhost:8000/api/v1/session?codec.fps=10&local.pad_start=false
+```
+
+Rules:
+
+- **Values are JSON literals.** Each value is parsed as JSON (`10` → int, `false` → bool, `"hello"` → str); a value that does not parse passes through as a plain string, so a hand-typed `?tag=hello` works. Programmatic clients should JSON-encode every value — the Python client does — so types round-trip exactly.
+- **Imports are rejected.** configuronic resolves strings starting with `@` or `.` as imports, so any such string anywhere inside a value is rejected. Params can tune the pipe's arguments, never swap its components.
+- **Duplicate keys are rejected.**
+- **`model_id` is reserved.** On the bare `/api/v1/session` route, `?model_id=...` selects the model, same as the path form above.
+- **The model source is fixed at launch.** Params that would change it (e.g. `?source.checkpoint=...`) are rejected; the only way to get a different model is `model_id`.
+- **Only config-launched servers accept params.** All vendor servers qualify; a `PolicyServer` built from an already-instantiated pipe rejects every param.
+
+Any violation — including an unknown key — fails at connect: the server sends `{"status": "error", "error": ...}` and closes the socket (code 1008) before anything moves, and the Python client raises `RuntimeError`. Overrides apply per session, and the `local_stack` declared in the ready handshake reflects them.
+
+Because the whole session configuration fits in the URL, one string is a complete endpoint description:
+`RemotePolicy.from_url('gpu-host:8000?codec.fps=10')` (CLI: `--policy=.remote_url --policy.url='...'`) accepts
+`host`, `host:port`, and full `http(s)`/`ws(s)` URLs — optionally with `/api/v1/session/<model_id>` — and forwards
+the query string verbatim.
 
 ### WebSocket Flow
 
@@ -65,7 +89,7 @@ This metadata tells the client:
 - Which checkpoint is loaded
 - Server connection details
 - Codec metadata (`image_sizes` for client-side resize, `action_fps` and `action_horizon_sec` for timing)
-- `local_stack` — the declared local half of the policy pipeline: a spec tree of `{"name", "args"}`
+- `local_stack` — the declared local half of the policy pipe: a spec tree of `{"name", "args"}`
   leaves composed by `"seq"` (the `|` operator) and `"par"` (the `&` operator). `RemotePolicy` builds
   this stack in front of the connection, resolving names only against the closed vocabulary in
   `positronic.policy.spec.WIRE_WRAPPERS` — an unknown entry fails at connect, before the robot moves.
@@ -129,12 +153,12 @@ The loop continues until the client closes the connection or the episode ends.
 **Unified API:** All vendors implement the same protocol, so swapping models is as simple as changing the server:
 
 ```bash
-# LeRobot server (SmolVLA — 0.4.x)
-cd docker && docker compose run --rm --service-ports lerobot-server \
+# LeRobot server (SmolVLA — 0.4.x); --pipe selects the named codec pipe
+cd docker && docker compose run --rm --service-ports lerobot-server serve \
   --checkpoints_dir=~/checkpoints/lerobot/exp_v1 \
-  --pipeline.codec=@positronic.vendors.lerobot.codecs.ee
+  --pipe=ee
 
-# GR00T server (swap hardware code stays the same)
+# GR00T server (swap hardware code stays the same); the subcommand names the pipe
 cd docker && docker compose run --rm --service-ports groot-server \
   ee_rot6d_joints \
   --checkpoints_dir=~/checkpoints/groot/exp_v1
@@ -155,21 +179,19 @@ uv run positronic-inference sim \
 
 ## Classes
 
-### `basic_server.InferenceServer`
-A generic server that serves policies from a provided registry.
+### `server.PolicyServer`
+The one server implementation behind every vendor. It serves a **policy pipe** (see `positronic.policy.spec`): a wrapper chain with a `remote` marker, closed by a `ModelSource` terminal. The half right of the marker wraps the model on the server; the half left of it is declared as `local_stack` in the ready handshake for the client to build. The source is the only model loader: `get_models()` backs `/api/v1/models`, `resolve()` maps a requested id (or the default), and `load(model_id, on_progress)` produces the `Policy` — with `on_progress` messages streamed to the connecting client as `loading` status frames.
 
 ```python
-from positronic.offboard.basic_server import InferenceServer
+from positronic.offboard import PolicyServer
+from positronic.policy.spec import PolicySource, remote
+from positronic.policy.wrappers import ChunkedSchedule
 
-registry = {
-    'model_a': lambda: load_model_a(),
-    'model_b': lambda: load_model_b()
-}
-
-server = InferenceServer(registry, host='0.0.0.0', port=8000)
-# Default session (/api/v1/session) connects to the first model in registry
-server.serve()
+pipe = ChunkedSchedule() | remote | PolicySource(my_policy)
+PolicyServer(pipe, host='0.0.0.0', port=8000).serve()
 ```
+
+`PolicySource` serves one ready in-process policy; vendors instead define a `ModelSource` over a checkpoint directory. Passing a `cfn.Config` that builds the pipe — as the vendor servers do with their named `PIPES` — enables [session parameters](#session-parameters); an instantiated pipe serves exactly as launched. `recording_dir` enables the per-session recording taps described above, and `idle_timeout_min` shuts the server down after that many minutes without activity.
 
 ### `client.InferenceClient`
 A Python client for connecting to an inference server.
@@ -178,6 +200,8 @@ A Python client for connecting to an inference server.
 from positronic.offboard.client import InferenceClient
 
 client = InferenceClient('localhost', 8000)
+# Session params ride on every session URL, JSON-encoded:
+# client = InferenceClient('localhost', 8000, params={'codec.fps': 10})
 
 # Connect to default policy
 session = client.new_session()
@@ -190,14 +214,16 @@ action = session.infer(observation)
 
 ## Vendor Implementations
 
-All vendor servers implement Protocol v1:
+Every vendor ships a `ModelSource` plus named pipes and serves them through the one `PolicyServer`:
 
 - **LeRobot (0.4.x)**: `positronic.vendors.lerobot.server` - Serves SmolVLA/ACT/Diffusion checkpoints (auto-detects policy type)
 - **LeRobot (0.3.3)**: `positronic.vendors.lerobot_0_3_3.server` - Serves ACT checkpoints with dynamic loading
 - **GR00T**: `positronic.vendors.gr00t.server` - Serves GR00T checkpoints with modality config
 - **OpenPI**: `positronic.vendors.openpi.server` - Serves OpenPI checkpoints with config name
+- **DreamZero**: `positronic.vendors.dreamzero.server` - Serves DreamZero checkpoints through a torchrun subprocess
+- **MolmoAct2**: `positronic.vendors.molmoact2.server` - Serves the pretrained MolmoAct2 DROID model
 
-Each server enforces a **Singleton Policy** (only one checkpoint loaded at a time) to manage GPU resources efficiently.
+The server enforces a **Singleton Policy** (only one checkpoint loaded at a time) to manage GPU resources efficiently.
 
 ## See Also
 
