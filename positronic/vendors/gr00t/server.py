@@ -1,9 +1,8 @@
-import asyncio
 import io
 import logging
 import os
 import subprocess
-import time
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -12,13 +11,13 @@ import msgpack
 import numpy as np
 import pos3
 import zmq
-from fastapi import WebSocket
 
-from positronic.cfg import codecs as cfg_codecs
-from positronic.offboard.server_utils import monitor_async_task, wait_for_subprocess_ready
-from positronic.offboard.vendor_server import VendorServer
-from positronic.policy import Policy, PolicyWrapper, Session
-from positronic.utils.checkpoints import get_latest_checkpoint, list_checkpoints
+from positronic.offboard.server import PolicyServer
+from positronic.offboard.server_utils import run_with_progress, wait_for_subprocess_ready
+from positronic.policy import Policy, Session
+from positronic.policy.spec import ModelSource, remote
+from positronic.policy.wrappers import ChunkedSchedule
+from positronic.utils.checkpoints import list_checkpoints
 from positronic.utils.logging import init_logging
 from positronic.vendors.gr00t import MODALITY_CONFIGS, codecs
 
@@ -140,7 +139,7 @@ class Gr00tSubprocess:
         self.process: subprocess.Popen | None = None
         self._client: PolicyClient | None = None
 
-    def start(self):
+    def start(self, on_progress: Callable[[str], None] | None = None):
         groot_root = Path(__file__).parents[4] / 'gr00t'
         python_bin = str(Path(self.groot_venv_path) / 'bin' / 'python')
 
@@ -154,64 +153,16 @@ class Gr00tSubprocess:
         env = os.environ.copy()
         logger.info(f'Starting gr00t subprocess: {" ".join(command)}')
         self.process = subprocess.Popen(command, env=env, cwd=str(groot_root))
+        self._wait_for_ready(on_progress)
 
-        self._wait_for_ready()
-
-    def _check_crashed(self) -> tuple[bool, int | None]:
-        if self.process is None:
-            return False, None
-        exit_code = self.process.poll()
-        return exit_code is not None, exit_code
-
-    def _wait_for_ready(self, timeout: float | None = None, poll_interval: float = 1.0):
-        """Wait for the gr00t server to be ready by polling with ping."""
-        if timeout is None:
-            timeout = self.ready_timeout
-        client = PolicyClient(host='127.0.0.1', port=self.zmq_port, timeout_ms=2000)
-        start_time = time.time()
-
-        while time.time() - start_time < timeout:
-            if self.process.poll() is not None:
-                raise RuntimeError(f'gr00t subprocess exited with code {self.process.returncode}')
-
-            if client.ping():
-                logger.info('gr00t subprocess is ready')
-                client.close()
-                return
-
-            time.sleep(poll_interval)
-
-        client.close()
-        raise RuntimeError(f'gr00t subprocess did not become ready within {timeout}s')
-
-    async def start_async(self, on_progress=None):
-        """Start the gr00t subprocess asynchronously with optional progress reporting.
-
-        Args:
-            on_progress: Optional async callback for progress updates.
-        """
-        groot_root = Path(__file__).parents[4] / 'gr00t'
-        python_bin = str(Path(self.groot_venv_path) / 'bin' / 'python')
-
-        command = [python_bin, 'gr00t/eval/run_gr00t_server.py']
-        command.extend(['--model_path', str(self.checkpoint_dir)])
-        command.extend(['--embodiment_tag', 'NEW_EMBODIMENT'])
-        command.extend(['--modality_config_path', self.modality_config_path])
-        command.extend(['--host', '127.0.0.1'])
-        command.extend(['--port', str(self.zmq_port)])
-
-        env = os.environ.copy()
-        logger.info(f'Starting gr00t subprocess: {" ".join(command)}')
-        self.process = subprocess.Popen(command, env=env, cwd=str(groot_root))
-
-        # Use a temporary client for readiness check
+    def _wait_for_ready(self, on_progress: Callable[[str], None] | None):
         client = PolicyClient(host='127.0.0.1', port=self.zmq_port, timeout_ms=2000)
         try:
-            await wait_for_subprocess_ready(
-                check_ready=client.ping,
-                check_crashed=self._check_crashed,
-                description='GR00T subprocess',
-                on_progress=on_progress,
+            wait_for_subprocess_ready(
+                client.ping,
+                lambda: (self.process.poll() is not None, self.process.returncode),
+                'gr00t subprocess',
+                on_progress,
                 max_wait=self.ready_timeout,
             )
         finally:
@@ -238,7 +189,7 @@ class Gr00tSubprocess:
 
 
 ###########################################################################################
-# Policy wrapper
+# Policy and model source
 ###########################################################################################
 
 
@@ -256,195 +207,187 @@ class _Gr00tSession(Session):
 
 
 class Gr00tPolicy(Policy):
-    """Wraps a GR00T ZMQ PolicyClient as a Policy."""
+    """Talks to a GR00T ZMQ server subprocess, which it owns and stops on ``close()``."""
 
-    def __init__(self, client: PolicyClient):
-        self._client = client
+    def __init__(self, groot: Gr00tSubprocess, checkpoint_path: str):
+        self._groot = groot
+        self._checkpoint_path = checkpoint_path
 
     def new_session(self, context=None, now=None):
-        self._client.reset()
-        return _Gr00tSession(self._client)
+        self._groot.client.reset()
+        return _Gr00tSession(self._groot.client)
+
+    @property
+    def meta(self):
+        return {'checkpoint_path': self._checkpoint_path}
+
+    def close(self):
+        self._groot.stop()
 
 
-###########################################################################################
-# FastAPI Inference Server
-###########################################################################################
+class Gr00tSource(ModelSource):
+    """GR00T checkpoints under ``checkpoints_dir``, each served through a dedicated ZMQ subprocess.
 
+    Model ids are checkpoint step numbers (``'5000'`` for ``checkpoint-5000``). ``load`` downloads the
+    checkpoint and boots the gr00t subprocess; the returned policy owns the subprocess.
+    """
 
-class InferenceServer(VendorServer):
     def __init__(
         self,
-        pipeline: PolicyWrapper,
         checkpoints_dir: str,
-        checkpoint: str | None,
-        modality_config: str,
-        groot_venv_path: str,
-        host: str = '0.0.0.0',
-        port: int = 8000,
+        checkpoint: str | None = None,
+        modality_config: str = 'ee',
+        groot_venv_path: str = '/.venv/',
         zmq_port: int = 5555,
-        recording_dir: str | None = None,
         ready_timeout: float = 120.0,
-        idle_timeout_min: float | None = None,
     ):
-        super().__init__(
-            pipeline=pipeline, host=host, port=port, recording_dir=recording_dir, idle_timeout_min=idle_timeout_min
-        )
         self.checkpoints_dir = checkpoints_dir.rstrip('/')
         self.checkpoint = checkpoint
         self.modality_config = modality_config
-        self.modality_config_path = MODALITY_CONFIGS.get(modality_config, modality_config)
         self.groot_venv_path = groot_venv_path
         self.zmq_port = zmq_port
         self.ready_timeout = ready_timeout
 
-        self.subprocess: Gr00tSubprocess | None = None
-        self.current_checkpoint_id: str | None = None
-        self.current_checkpoint_dir: str | None = None
+    def _raw_ids(self) -> list[str]:
+        return [cp.removeprefix('checkpoint-') for cp in list_checkpoints(self.checkpoints_dir, prefix='checkpoint-')]
 
-        self.metadata = {
-            'host': host,
-            'port': port,
-            'type': 'groot',
-            'modality_config': modality_config,
-            'experiment_name': checkpoints_dir.rstrip('/').split('/')[-1] or '',
-        }
+    def get_models(self) -> list[str]:
+        return [str(int(r)) if r.isdigit() else r for r in self._raw_ids()]
 
-    def _resolve_checkpoint_id(self, checkpoint_id: str | None) -> str:
-        if checkpoint_id:
-            return f'checkpoint-{checkpoint_id}'
+    def resolve(self, model_id: str | None) -> str:
+        """Explicit id > the configured ``checkpoint`` > latest.
 
-        if self.checkpoint:
-            return 'checkpoint-' + str(self.checkpoint).strip('/')
+        Returns the raw ``checkpoint-<id>`` step suffix so ``load`` reconstructs an existing directory,
+        matching numeric requests against the directory's own (possibly zero-padded) names.
+        """
+        if model_id is None and self.checkpoint is not None:
+            model_id = str(self.checkpoint).strip('/')
+        raw = self._raw_ids()
+        if model_id is None:
+            return raw[-1]
+        for r in raw:
+            if r == model_id or (r.isdigit() and model_id.isdigit() and int(r) == int(model_id)):
+                return r
+        available = [str(int(r)) if r.isdigit() else r for r in raw]
+        raise ValueError(f'Checkpoint not found: {model_id}. Available: {available}')
 
-        return get_latest_checkpoint(self.checkpoints_dir, 'checkpoint-')
-
-    async def resolve_model(self, model_id: str | None, websocket: WebSocket | None) -> tuple[Any, dict]:
-        send_progress = self._progress_sender(websocket)
-
-        resolved_path_id = self._resolve_checkpoint_id(model_id)
-
-        available = list_checkpoints(self.checkpoints_dir, prefix='checkpoint-')
-        if resolved_path_id not in available:
-            raise ValueError(f'Checkpoint not found: {resolved_path_id}')
-
-        normalized_id = resolved_path_id.replace('checkpoint-', '')
-        if normalized_id.isdigit():
-            normalized_id = str(int(normalized_id))
-
-        if self.current_checkpoint_id == resolved_path_id and self.subprocess is not None:
-            return self.subprocess, {'checkpoint_id': normalized_id, 'checkpoint_path': self.current_checkpoint_dir}
-
-        if self.subprocess is not None:
-            logger.info(f'Stopping subprocess for checkpoint {self.current_checkpoint_id}')
-            self.subprocess.stop()
-
-        logger.info(f'Loading checkpoint {resolved_path_id}')
-        checkpoint_path = f'{self.checkpoints_dir}/{resolved_path_id}'
-
-        download_task = asyncio.create_task(asyncio.to_thread(pos3.download, checkpoint_path, exclude=['optimizer.pt']))
-        await monitor_async_task(
-            download_task, description=f'Downloading checkpoint {resolved_path_id}', on_progress=send_progress
+    def load(self, model_id: str, on_progress: Callable[[str], None] | None = None) -> Policy:
+        checkpoint_path = f'{self.checkpoints_dir}/checkpoint-{model_id}'
+        logger.info(f'Downloading checkpoint {checkpoint_path}')
+        checkpoint_dir = run_with_progress(
+            lambda: pos3.download(checkpoint_path, exclude=['optimizer.pt']),
+            f'Downloading checkpoint checkpoint-{model_id}',
+            on_progress,
         )
-        checkpoint_dir = download_task.result()
-
-        logger.info(f'Starting subprocess for checkpoint {resolved_path_id}')
-        subprocess_obj = Gr00tSubprocess(
+        groot = Gr00tSubprocess(
             checkpoint_dir=str(checkpoint_dir),
-            modality_config_path=self.modality_config_path,
+            modality_config_path=MODALITY_CONFIGS.get(self.modality_config, self.modality_config),
             groot_venv_path=self.groot_venv_path,
             zmq_port=self.zmq_port,
             ready_timeout=self.ready_timeout,
         )
-        await subprocess_obj.start_async(on_progress=send_progress)
+        try:
+            groot.start(on_progress)
+        except Exception:
+            groot.stop()
+            raise
+        return Gr00tPolicy(groot, str(checkpoint_dir))
 
-        self.subprocess = subprocess_obj
-        self.current_checkpoint_id = resolved_path_id
-        self.current_checkpoint_dir = str(checkpoint_dir)
-        return subprocess_obj, {'checkpoint_id': normalized_id, 'checkpoint_path': str(checkpoint_dir)}
+    def meta(self, model_id: str) -> dict[str, Any]:
+        return {
+            'type': 'groot',
+            'modality_config': self.modality_config,
+            'experiment_name': self.checkpoints_dir.split('/')[-1] or '',
+        }
 
-    def create_policy(self, model_handle: Any) -> Policy:
-        return Gr00tPolicy(model_handle.client)
 
-    async def get_models(self) -> dict:
-        checkpoints = list_checkpoints(self.checkpoints_dir, prefix='checkpoint-')
-        normalized = sorted(
-            int(cp.replace('checkpoint-', '')) for cp in checkpoints if cp.replace('checkpoint-', '').isdigit()
-        )
-        return {'models': [str(n) for n in normalized]}
+###########################################################################################
+# Serving configs
+###########################################################################################
 
-    def shutdown_model(self):
-        if self.subprocess is not None:
-            self.subprocess.stop()
+
+gr00t_source = cfn.Config(Gr00tSource)
+
+
+@cfn.config(codec=codecs.ee_quat, source=gr00t_source)
+def pipe(codec, source):
+    return ChunkedSchedule() | remote | codec | source
+
+
+# Each entry pairs the codec with the matching GR00T modality config; they must agree with training.
+PIPES = {
+    'ee': pipe,
+    'ee_joints': pipe.override(codec=codecs.ee_quat_joints, **{'source.modality_config': 'ee_q'}),
+    'ee_rot6d': pipe.override(codec=codecs.ee_rot6d, **{'source.modality_config': 'ee_rot6d'}),
+    'ee_rot6d_joints': pipe.override(codec=codecs.ee_rot6d_joints, **{'source.modality_config': 'ee_rot6d_q'}),
+    'ee_rot6d_rel': pipe.override(codec=codecs.ee_rot6d, **{'source.modality_config': 'ee_rot6d_rel'}),
+    'ee_rot6d_joints_rel': pipe.override(codec=codecs.ee_rot6d_joints, **{'source.modality_config': 'ee_rot6d_q_rel'}),
+    # The sim_stack checkpoint was trained on inverted-grip (1 = open) sim data, hence flip_grip.
+    'sim_stack': pipe.override(
+        codec=codecs.ee_rot6d.override(flip_grip=True), **{'source.modality_config': 'ee_rot6d'}
+    ),
+}
 
 
 @cfn.config(
-    pipeline=cfg_codecs.pipeline.override(codec=codecs.ee_quat),
+    pipe='ee',
     checkpoint=None,
+    host='0.0.0.0',
     port=8000,
     groot_venv_path='/.venv/',
-    modality_config='ee',
+    modality_config=None,
     recording_dir=None,
     ready_timeout=120.0,
     idle_timeout_min=None,
 )
-def server(
-    pipeline: PolicyWrapper,
+def main(
+    pipe: str,
     checkpoints_dir: str,
     checkpoint: str | None,
+    host: str,
     port: int,
     groot_venv_path: str,
-    modality_config: str,
+    modality_config: str | None,
     recording_dir: str | None,
     ready_timeout: float,
     idle_timeout_min: float | None,
 ):
-    """Starts the GR00T inference server with encoding/decoding."""
-
+    """Serves the named GR00T policy pipe; ``modality_config`` overrides the pipe's paired one."""
+    overrides = {
+        'source.checkpoints_dir': checkpoints_dir,
+        'source.checkpoint': checkpoint,
+        'source.groot_venv_path': groot_venv_path,
+        'source.ready_timeout': ready_timeout,
+    }
+    if modality_config is not None:
+        overrides['source.modality_config'] = modality_config
+    cfg = PIPES[pipe].override(**overrides)
     with pos3.mirror():
-        InferenceServer(
-            pipeline=pipeline,
-            checkpoints_dir=checkpoints_dir,
-            checkpoint=checkpoint,
-            modality_config=modality_config,
-            groot_venv_path=groot_venv_path,
-            port=port,
-            recording_dir=recording_dir,
-            ready_timeout=ready_timeout,
-            idle_timeout_min=idle_timeout_min,
-        ).serve()
+        PolicyServer(cfg, host=host, port=port, recording_dir=recording_dir, idle_timeout_min=idle_timeout_min).serve()
 
 
-# Pre-configured server variants matching GR00T modality configs
-ee = server.copy()  # Uses the default pipeline.codec=codecs.ee_quat, modality='ee'
-ee_joints = server.override(**{'pipeline.codec': codecs.ee_quat_joints, 'modality_config': 'ee_q'})
-ee_rot6d = server.override(**{'pipeline.codec': codecs.ee_rot6d, 'modality_config': 'ee_rot6d'})
-ee_rot6d_joints = server.override(**{'pipeline.codec': codecs.ee_rot6d_joints, 'modality_config': 'ee_rot6d_q'})
-ee_rot6d_rel = server.override(**{'pipeline.codec': codecs.ee_rot6d, 'modality_config': 'ee_rot6d_rel'})
-ee_rot6d_joints_rel = server.override(**{'pipeline.codec': codecs.ee_rot6d_joints, 'modality_config': 'ee_rot6d_q_rel'})
-
-
-phail = ee_rot6d_rel.override(
+phail = main.override(
+    pipe='ee_rot6d_rel',
     checkpoints_dir='s3://checkpoints/phail_unified/groot/270226-ee_rot6d_rel/',
     recording_dir='s3://inference/phail_unified/server_recordings/groot/270226-ee_rot6d_rel/',
 )
-# The sim_stack checkpoint was trained on inverted-grip (1 = open) sim data, hence flip_grip.
-sim_stack = ee_rot6d.override(
+sim_stack = main.override(
+    pipe='sim_stack',
     checkpoints_dir='s3://checkpoints/sim_stack/groot/ee_rot6d/230226/',
     recording_dir='s3://inference/sim_stack/server_recordings/groot/230226/',
-    **{'pipeline.codec.flip_grip': True},
 )
 
 
 if __name__ == '__main__':
     init_logging()
     cfn.cli({
-        'serve': server,
-        'ee': ee,
-        'ee_joints': ee_joints,
-        'ee_rot6d': ee_rot6d,
-        'ee_rot6d_joints': ee_rot6d_joints,
-        'ee_rot6d_rel': ee_rot6d_rel,
-        'ee_rot6d_joints_rel': ee_rot6d_joints_rel,
+        'serve': main,
+        'ee': main.override(pipe='ee'),
+        'ee_joints': main.override(pipe='ee_joints'),
+        'ee_rot6d': main.override(pipe='ee_rot6d'),
+        'ee_rot6d_joints': main.override(pipe='ee_rot6d_joints'),
+        'ee_rot6d_rel': main.override(pipe='ee_rot6d_rel'),
+        'ee_rot6d_joints_rel': main.override(pipe='ee_rot6d_joints_rel'),
         'phail': phail,
         'sim_stack': sim_stack,
     })

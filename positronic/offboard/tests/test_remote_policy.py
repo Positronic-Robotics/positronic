@@ -1,3 +1,4 @@
+import urllib.parse
 from unittest.mock import MagicMock, patch
 
 import numpy as np
@@ -165,6 +166,60 @@ class TestInferenceClientHeaders:
             assert mock_get.call_args.kwargs['headers'] is None
 
 
+class TestInferenceClientParams:
+    def test_params_encoded_at_construction(self):
+        params = {'codec.fps': 10, 'tag': 'hello'}
+        client = InferenceClient('localhost', 8000, params=params)
+        assert client._query is not None
+        # Encoded once at construction — mutating the caller's dict must not affect the client.
+        params['codec.fps'] = 99
+        assert urllib.parse.parse_qs(client._query) == {'codec.fps': ['10'], 'tag': ['"hello"']}
+
+    def test_str_params_forwarded_verbatim(self):
+        with (
+            patch('positronic.offboard.client.connect') as mock_connect,
+            patch('positronic.offboard.client.InferenceSession'),
+        ):
+            client = InferenceClient('localhost', 8000, params='codec.fps=10&pad=false')
+            client.new_session()
+
+            # A raw query string is not re-encoded: 'false' stays the JSON literal the caller wrote.
+            assert mock_connect.call_args.args[0] == 'ws://localhost:8000/api/v1/session?codec.fps=10&pad=false'
+
+    def test_new_session_encodes_params_as_json_query(self):
+        with (
+            patch('positronic.offboard.client.connect') as mock_connect,
+            patch('positronic.offboard.client.InferenceSession'),
+        ):
+            client = InferenceClient('localhost', 8000, params={'fps': 10, 'flag': False, 'tag': 'true'})
+            client.new_session()
+
+            base, query = mock_connect.call_args.args[0].split('?')
+            assert base == 'ws://localhost:8000/api/v1/session'
+            # Every value is JSON: numbers/bools arrive typed, while the string 'true' stays quoted.
+            assert urllib.parse.parse_qs(query) == {'fps': ['10'], 'flag': ['false'], 'tag': ['"true"']}
+
+    def test_new_session_without_params_leaves_uri_bare(self):
+        with (
+            patch('positronic.offboard.client.connect') as mock_connect,
+            patch('positronic.offboard.client.InferenceSession'),
+        ):
+            client = InferenceClient('localhost', 8000)
+            client.new_session()
+
+            assert '?' not in mock_connect.call_args.args[0]
+
+    def test_new_session_appends_params_after_model_id(self):
+        with (
+            patch('positronic.offboard.client.connect') as mock_connect,
+            patch('positronic.offboard.client.InferenceSession'),
+        ):
+            client = InferenceClient('localhost', 8000, params={'fps': 10})
+            client.new_session(model_id='m1')
+
+            assert mock_connect.call_args.args[0] == 'ws://localhost:8000/api/v1/session/m1?fps=10'
+
+
 class TestRemotePolicyHeaderPropagation:
     def test_headers_and_secure_forwarded_to_client(self):
         headers = {'Modal-Key': 'k'}
@@ -180,6 +235,59 @@ class TestRemotePolicyHeaderPropagation:
         assert client is not None
         assert client.headers is None
         assert client.base_uri == 'ws://localhost:8000/api/v1/session'
+
+
+class TestRemotePolicyParamsPropagation:
+    def test_params_forwarded_to_client(self):
+        policy = RemotePolicy('localhost', 8000, params={'codec.fps': 10})
+        client = policy._endpoint._client
+        assert client is not None
+        assert client._query == 'codec.fps=10'
+
+    def test_default_params_empty(self):
+        policy = RemotePolicy('localhost', 8000)
+        client = policy._endpoint._client
+        assert client is not None
+        assert client._query is None
+
+
+class TestRemotePolicyFromUrl:
+    def test_bare_host_defaults(self):
+        policy = RemotePolicy.from_url('gpu-host')
+        client = policy._endpoint._client
+        assert client is not None
+        assert client.base_uri == 'ws://gpu-host:8000/api/v1/session'
+        assert client._query is None
+
+    def test_host_port_and_query_verbatim(self):
+        policy = RemotePolicy.from_url('gpu-host:9000?codec.fps=10&pad=false')
+        client = policy._endpoint._client
+        assert client is not None
+        assert client.base_uri == 'ws://gpu-host:9000/api/v1/session'
+        assert client._query == 'codec.fps=10&pad=false'
+
+    def test_full_url_with_model_id(self):
+        policy = RemotePolicy.from_url('https://gpu-host:8443/api/v1/session/10000?fps=2.5')
+        client = policy._endpoint._client
+        assert client is not None
+        assert client.base_uri == 'wss://gpu-host:8443/api/v1/session'
+        assert policy._endpoint._model_id == '10000'
+        assert client._query == 'fps=2.5'
+
+    def test_session_path_without_model_id(self):
+        policy = RemotePolicy.from_url('http://gpu-host/api/v1/session')
+        client = policy._endpoint._client
+        assert client is not None
+        assert policy._endpoint._model_id is None
+        assert client.base_uri == 'ws://gpu-host:8000/api/v1/session'
+
+    def test_unexpected_path_rejected(self):
+        with pytest.raises(ValueError, match='/api/v1/session'):
+            RemotePolicy.from_url('gpu-host:8000/api/v2/other')
+
+    def test_unknown_scheme_rejected(self):
+        with pytest.raises(ValueError, match='scheme'):
+            RemotePolicy.from_url('ftp://gpu-host:8000')
 
 
 class TestActionHorizonWrapping:
@@ -280,7 +388,7 @@ def test_operator_local_bypasses_declaration():
 
 
 def test_remote_policy_lifecycle(inference_server, mock_policy):
-    """RemotePolicy against a live basic server (no declaration → standard ChunkedSchedule)."""
+    """RemotePolicy against a live server whose pipe declares a chunked_schedule local stack."""
     host, port = inference_server
 
     policy = RemotePolicy(host, port)
@@ -293,7 +401,7 @@ def test_remote_policy_lifecycle(inference_server, mock_policy):
     obs = {'dataset': 'test'}
     action = session(obs)
     # Single-dict server response is normalized to a 1-element list (Session contract) and
-    # anchored to absolute time by the fallback ChunkedSchedule.
+    # anchored to absolute time by the declared ChunkedSchedule.
     assert action == [{'action_data': [1, 2, 3], 'timestamp': 0.0}]
 
     session.close()

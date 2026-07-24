@@ -1,4 +1,6 @@
-"""Unit tests for PolicyWrapper composition, ChunkedSchedule, TemporalStack, and the pipeline spec."""
+"""Unit tests for PolicyWrapper composition, ChunkedSchedule, TemporalStack, and the policy-pipe algebra."""
+
+from typing import Any
 
 import numpy as np
 import pytest
@@ -248,12 +250,6 @@ class TestPipelineSpec:
         rem = spec.split(spec.remote | ActionTimestamp(fps=10.0) | ActionTimestamp(fps=5.0))[1]
         assert isinstance(rem, Codec)
 
-    def test_inline_drops_marker(self):
-        codec = ActionTimestamp(fps=10.0)
-        pipeline = spec.inline(ChunkedSchedule() | spec.remote | codec)
-        assert pipeline is not None and pipeline._pipeline_components()[-1] is codec
-        assert spec.inline(spec.remote) is None
-
     def test_marker_cannot_be_applied(self):
         with pytest.raises(TypeError, match='border'):
             spec.remote.wrap(_ConstPolicy([]))
@@ -329,3 +325,120 @@ class TestPipelineSpec:
         for name, instance in instances.items():
             assert instance.to_spec()['name'] == name
             assert type(instance) is spec.WIRE_WRAPPERS[name]
+
+
+class _ListSource(spec.ModelSource):
+    def __init__(self, models):
+        self._models = list(models)
+
+    def get_models(self):
+        return list(self._models)
+
+    def load(self, model_id, on_progress=None):
+        return _ConstPolicy([{'model': model_id}])
+
+
+class TestPipe:
+    """The source terminal: ``... | source`` closes a wrapper chain into a Pipe."""
+
+    def test_wrapper_chain_terminates_into_pipe(self):
+        stack = TemporalStack(keys=('v',), offsets_sec=(0.0,))
+        sched = ChunkedSchedule()
+        codec = ActionTimestamp(fps=10.0)
+        source = spec.PolicySource(_ConstPolicy([]))
+        pipe = stack | sched | spec.remote | codec | source
+        assert isinstance(pipe, spec.Pipe)
+        assert pipe.components == (stack, sched, spec.remote, codec)
+        assert pipe.source is source
+
+    def test_lone_codec_terminates_into_pipe(self):
+        codec = ActionTimestamp(fps=10.0)
+        pipe = codec | spec.PolicySource(_ConstPolicy([]))
+        assert isinstance(pipe, spec.Pipe)
+        assert pipe.components == (codec,)
+
+    def test_bare_marker_terminates_into_pipe(self):
+        pipe = spec.remote | spec.PolicySource(_ConstPolicy([]))
+        assert isinstance(pipe, spec.Pipe)
+        assert pipe.components == (spec.remote,)
+
+    def test_split_pipe(self):
+        sched = ChunkedSchedule()
+        codec = ActionTimestamp(fps=10.0)
+        local, rem = spec.split(sched | spec.remote | codec | spec.PolicySource(_ConstPolicy([])))
+        assert local is sched
+        assert rem is codec
+
+    def test_split_pipe_requires_exactly_one_marker(self):
+        with pytest.raises(ValueError, match='exactly one'):
+            spec.split(ChunkedSchedule() | spec.PolicySource(_ConstPolicy([])))
+
+    def test_pipe_composes_no_further(self):
+        pipe: Any = ChunkedSchedule() | spec.remote | spec.PolicySource(_ConstPolicy([]))
+        with pytest.raises(TypeError):
+            _ = pipe | ActionTimestamp(fps=10.0)
+        with pytest.raises(TypeError):
+            _ = ChunkedSchedule() | pipe
+        with pytest.raises(TypeError):
+            _ = pipe | spec.PolicySource(_ConstPolicy([]))
+
+    def test_inline_full_pipe(self):
+        clock = _FakeClock(t=1.0)
+        inner = _ConstPolicy([{'action': f'a{i}'} for i in range(5)])
+        policy = spec.inline(ChunkedSchedule() | spec.remote | ActionTimestamp(fps=10.0) | spec.PolicySource(inner))
+        assert isinstance(policy, Policy)
+        session = policy.new_session(now=clock.now)
+        result = session(_obs())
+        assert result is not None
+        assert result[0]['timestamp'] == 1.0
+        clock.t = 1.2
+        assert session(_obs()) is None
+
+    def test_inline_tolerates_marker_less_pipe(self):
+        clock = _FakeClock(t=1.0)
+        inner = _ConstPolicy([{'v': 1, 'timestamp': 0.0}])
+        policy = spec.inline(ChunkedSchedule() | spec.PolicySource(inner))
+        session = policy.new_session(now=clock.now)
+        result = session(_obs())
+        assert result is not None and result[0]['timestamp'] == 1.0
+
+    def test_inline_bare_source_pipe_is_the_loaded_policy(self):
+        inner = _ConstPolicy([])
+        assert spec.inline(spec.remote | spec.PolicySource(inner)) is inner
+
+    def test_inline_loads_the_latest_model(self):
+        policy = spec.inline(spec.remote | _ListSource(['a', 'b']))
+        assert isinstance(policy, _ConstPolicy)
+        assert policy._actions == [{'model': 'b'}]
+
+    def test_resolve_defaults_to_latest(self):
+        source = _ListSource(['a', 'b', 'c'])
+        assert source.resolve(None) == 'c'
+        assert source.resolve('a') == 'a'
+        with pytest.raises(ValueError, match='nope'):
+            source.resolve('nope')
+
+    def test_source_equality_is_structural(self):
+        policy = _ConstPolicy([])
+        assert spec.PolicySource(policy) == spec.PolicySource(policy)
+        assert spec.PolicySource(policy, name='x') != spec.PolicySource(policy)
+        assert spec.PolicySource(policy) != spec.PolicySource(_ConstPolicy([]))
+        assert _ListSource(['a']) == _ListSource(['a'])
+        assert _ListSource(['a']) != _ListSource(['b'])
+        assert spec.PolicySource(policy) != _ListSource(['a'])
+
+        class _SubSource(spec.PolicySource):
+            pass
+
+        assert _SubSource(policy) != spec.PolicySource(policy)
+
+    def test_policy_source(self):
+        policy = _ConstPolicy([])
+        source = spec.PolicySource(policy, name='const')
+        assert source.get_models() == ['const']
+        assert source.resolve(None) == 'const'
+        progress = []
+        assert source.load('const', on_progress=progress.append) is policy
+        assert progress == []
+        assert source.meta('const') == {}
+        assert spec.PolicySource(policy).get_models() == ['default']

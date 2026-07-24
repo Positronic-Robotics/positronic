@@ -1,10 +1,13 @@
+from typing import Any
+
 import configuronic as cfn
 import pos3
 
 from positronic.cfg import codecs
 from positronic.offboard.client import DEFAULT_INFER_TIMEOUT
-from positronic.policy import Policy, PolicyWrapper, RemotePolicy
-from positronic.policy.spec import inline
+from positronic.policy import Codec, Policy, PolicyWrapper, RemotePolicy
+from positronic.policy.spec import PolicySource, inline
+from positronic.policy.wrappers import ChunkedSchedule
 from positronic.utils import get_latest_checkpoint
 
 
@@ -14,13 +17,6 @@ def placeholder():
         'This config is not supposed to be instantiated, '
         'and is used only to simplify relative imports of other policy configs.'
     )
-
-
-@cfn.config(pipeline=codecs.pipeline)
-def wrapped(base: Policy, pipeline: PolicyWrapper):
-    """Serve a whole policy pipeline in-process: both halves compose around ``base``."""
-    composed = inline(pipeline)
-    return composed.wrap(base) if composed is not None else base
 
 
 @cfn.config(checkpoint=None)
@@ -46,12 +42,12 @@ def act(checkpoints_dir: str, checkpoint: str | None, n_action_steps: int | None
     return LerobotPolicy(policy, device, extra_meta={'type': 'act', 'checkpoint_path': fully_specified_checkpoint_dir})
 
 
-act_absolute = wrapped.override(**{
-    'base': act,
-    'pipeline.codec.obs': codecs.eepose_obs,
-    'pipeline.codec.action': codecs.absolute_pos_action,
-    'pipeline.codec.horizon': 1.0,
-})
+@cfn.config(
+    base=act, codec=codecs.compose.override(obs=codecs.eepose_obs, action=codecs.absolute_pos_action, horizon=1.0)
+)
+def act_absolute(base: Policy, codec: Codec):
+    """ACT with the absolute-position codec, composed in-process."""
+    return inline(ChunkedSchedule() | codec | PolicySource(base))
 
 
 @cfn.config(weights=None)
@@ -64,7 +60,9 @@ def sample(origins: list[cfn.Config], weights: list[float] | None):
     return SampledPolicy(*origins, weights=weights)
 
 
-remote = cfn.Config(RemotePolicy, host='localhost', port=8000, resize=640)
+remote = cfn.Config(RemotePolicy, host='localhost', port=8000, resize=640, params={})
+
+remote_url = cfn.Config(RemotePolicy.from_url, resize=640)
 
 
 @cfn.config(
@@ -75,6 +73,7 @@ remote = cfn.Config(RemotePolicy, host='localhost', port=8000, resize=640)
     resize=640,
     local=None,
     secure=False,
+    params={},
     recording_dir=None,
     infer_timeout=DEFAULT_INFER_TIMEOUT,
     compress_images=False,
@@ -88,6 +87,7 @@ def weighted_remote(
     local: PolicyWrapper | None = None,
     headers: dict[str, str] | None = None,
     secure: bool = False,
+    params: dict[str, Any] | None = None,
     recording_dir: str | None = None,
     infer_timeout: float = DEFAULT_INFER_TIMEOUT,
     compress_images: bool = False,
@@ -104,6 +104,7 @@ def weighted_remote(
         recording_dir=recording_dir,
         headers=headers,
         secure=secure,
+        params=params,
         infer_timeout=infer_timeout,
         compress_images=compress_images,
     )

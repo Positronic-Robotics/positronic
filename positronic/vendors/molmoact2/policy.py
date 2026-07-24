@@ -40,22 +40,14 @@ class _MolmoAct2Session(Session):
 
 
 class MolmoAct2Policy(Policy):
-    def __init__(
-        self,
-        model_id: str,
-        *,
-        device_map: str = 'auto',
-        norm_tag: str = 'franka_droid',
-        num_steps: int = 10,
-        extra_meta: dict[str, Any] | None = None,
-    ):
+    def __init__(self, model_id: str, *, device_map: str = 'auto', norm_tag: str = 'franka_droid', num_steps: int = 10):
         self._processor = AutoProcessor.from_pretrained(model_id, trust_remote_code=True)
         self._model = AutoModelForImageTextToText.from_pretrained(
             model_id, trust_remote_code=True, dtype=torch.bfloat16, device_map=device_map
         ).eval()
         self._norm_tag = norm_tag
         self._num_steps = num_steps
-        self._meta = {**(extra_meta or {}), 'type': 'molmoact2', 'norm_tag': norm_tag}
+        self._meta = {'type': 'molmoact2', 'norm_tag': norm_tag}
 
     def new_session(self, context=None, now=None) -> Session:
         return _MolmoAct2Session(self._model, self._processor, self._norm_tag, self._num_steps, self._meta)
