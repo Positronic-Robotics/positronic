@@ -67,10 +67,10 @@ def frame_transform(urdf_xml, from_frame, to_frame):
     spec = _prepare_spec(urdf_xml, from_frame)
     _ensure_site(spec, to_frame)
     model = spec.compile()
-    data = mj.MjData(model)
-    mj.mj_forward(model, data)
-    from_pose = _site_transform(data, mj.mj_name2id(model, mj.mjtObj.mjOBJ_SITE, from_frame))
-    to_pose = _site_transform(data, mj.mj_name2id(model, mj.mjtObj.mjOBJ_SITE, to_frame))
+    data = mj.MjData(model)  # pyright: ignore[reportAttributeAccessIssue]
+    mj.mj_forward(model, data)  # pyright: ignore[reportAttributeAccessIssue]
+    from_pose = _site_transform(data, mj.mj_name2id(model, mj.mjtObj.mjOBJ_SITE, from_frame))  # pyright: ignore[reportAttributeAccessIssue]
+    to_pose = _site_transform(data, mj.mj_name2id(model, mj.mjtObj.mjOBJ_SITE, to_frame))  # pyright: ignore[reportAttributeAccessIssue]
     return from_pose.inv * to_pose
 
 

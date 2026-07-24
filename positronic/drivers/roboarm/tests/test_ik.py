@@ -119,13 +119,13 @@ def test_ik_joints_from_episode():
 def _fk_site(urdf_xml, q, frame):
     """FK a named frame (site or body) to [tx,ty,tz,w,x,y,z] through the ik spec preparation."""
     model = _prepare_spec(urdf_xml, frame).compile()
-    data = mj.MjData(model)
+    data = mj.MjData(model)  # pyright: ignore[reportAttributeAccessIssue]
     qpos_ids = [model.joint(n).qposadr.item() for n in JOINT_NAMES]
     data.qpos[qpos_ids] = q
-    mj.mj_forward(model, data)
-    sid = mj.mj_name2id(model, mj.mjtObj.mjOBJ_SITE, frame)
+    mj.mj_forward(model, data)  # pyright: ignore[reportAttributeAccessIssue]
+    sid = mj.mj_name2id(model, mj.mjtObj.mjOBJ_SITE, frame)  # pyright: ignore[reportAttributeAccessIssue]
     quat = np.empty(4)
-    mj.mju_mat2Quat(quat, data.site_xmat[sid])
+    mj.mju_mat2Quat(quat, data.site_xmat[sid])  # pyright: ignore[reportAttributeAccessIssue]
     return np.concatenate([data.site_xpos[sid].copy(), quat])
 
 

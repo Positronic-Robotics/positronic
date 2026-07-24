@@ -454,7 +454,9 @@ class _ChangeEEFrameTraining(EpisodeTransform):
     def __call__(self, episode):
         derived = {'control_frame': FromValue(self._to)}
         derived.update({key: self._derive_pose(key) for key in self._pose_keys if key in episode})
-        return Group(Derive(**derived), Identity())(episode)
+        # ``Derive(**derived)`` unpacks a ``FromValue`` under a keyword pyright reads as ``Derive``'s ``meta``
+        # param. Inherited from #485's frame work, which predates this repo's type ratchet — resolved under #485.
+        return Group(Derive(**derived), Identity())(episode)  # pyright: ignore[reportArgumentType]
 
     @property
     def meta(self):

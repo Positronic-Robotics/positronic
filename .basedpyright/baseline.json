@@ -11690,16 +11690,6 @@
                 }
             }
         ],
-        "./positronic/simulator/robolab/launcher.py": [
-            {
-                "code": "reportArgumentType",
-                "range": {
-                    "startColumn": 24,
-                    "endColumn": 54,
-                    "lineCount": 1
-                }
-            }
-        ],
         "./positronic/simulator/robolab/make_fixture.py": [
             {
                 "code": "reportMissingImports",

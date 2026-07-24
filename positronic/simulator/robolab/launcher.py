@@ -99,7 +99,9 @@ def _spawn(host: str, port: int) -> subprocess.Popen:
     robot_meta = {**bundled_franka_model(), 'control_frame': 'droid_eef'}
     fd, meta_path = tempfile.mkstemp(prefix='robolab_robot_meta_', suffix='.bin')
     with os.fdopen(fd, 'wb') as meta_file:
-        meta_file.write(encode(robot_meta))
+        # ``encode`` (env_server wire codec) is loosely typed as returning ``Unknown | None``; it returns bytes.
+        # Inherited from #485's frame work, which predates this repo's type ratchet — resolved under #485's review.
+        meta_file.write(encode(robot_meta))  # pyright: ignore[reportArgumentType]
     # Isaac Sim prompts for its EULA on stdin at first launch; the server is headless, so accept it here.
     env = {
         **os.environ,
