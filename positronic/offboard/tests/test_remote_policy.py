@@ -56,6 +56,13 @@ class TestPrepareObs:
         result = session._prepare_obs({'cam': img})
         assert result['cam'] is img
 
+    def test_drops_client_only_model_keys(self):
+        """The harness injects ``urdf``/``control_frame`` for client-side frame codecs; they must never wire out."""
+        session = RemoteSession(_mock_ws_session(), resize=None)
+        result = session._prepare_obs({'state': np.array([1.0]), 'urdf': '<robot/>', 'control_frame': 'end_effector'})
+        assert 'urdf' not in result and 'control_frame' not in result
+        np.testing.assert_array_equal(result['state'], np.array([1.0]))
+
     def test_normalizes_list_to_tuple(self):
         """Wire format (msgpack) turns tuples into lists — must normalize."""
         session = RemoteSession(_mock_ws_session({'image_sizes': [64, 48]}), resize=None)

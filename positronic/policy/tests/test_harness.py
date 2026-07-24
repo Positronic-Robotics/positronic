@@ -30,7 +30,7 @@ from positronic.policy.wrappers import ChunkedSchedule
 from positronic.tests.testing_coutils import ManualDriver, RecordingEmitter, drive_scheduler
 
 
-def make_embodiment(descriptor: str = '', cameras=('image.cam',)) -> Embodiment:
+def make_embodiment(descriptor: str = '', cameras=('image.cam',), static_meta=None) -> Embodiment:
     """Minimal Franka-shaped embodiment for harness unit tests.
 
     The sources/dests are no-ops: these tests pair the harness ports directly
@@ -47,7 +47,7 @@ def make_embodiment(descriptor: str = '', cameras=('image.cam',)) -> Embodiment:
         'robot_command': Command(pimm.NoOpReceiver(), Reset(), Serializers.robot_command),
         'target_grip': Command(pimm.NoOpReceiver(), 0.0, None),
     }
-    return Embodiment(descriptor, observations, commands, {}, pimm.NoOpEmitter())
+    return Embodiment(descriptor, observations, commands, static_meta or {}, pimm.NoOpEmitter())
 
 
 class _SpySession(Session):
@@ -326,6 +326,69 @@ def test_harness_passes_descriptor_to_policy(world):
 
     assert policy.last_obs is not None
     assert policy.last_obs['descriptor'] == 'mujoco.franka'
+
+
+@pytest.mark.timeout(3.0)
+def test_static_meta_frame_reaches_obs_when_robot_meta_empty(world):
+    """A frame declared in ``static_meta`` (molmo: the env emits ``robot_meta {}``) still reaches the obs, so a
+    ``ChangeEEFrame`` codec can resolve it. Regression: ``_build_obs`` read only the live ``robot_meta`` channel,
+    so molmo's frame never reached the codec and it would KeyError on the first observation."""
+    policy = SpyPolicy()
+    embodiment = make_embodiment(static_meta={'urdf': '<robot/>', 'control_frame': 'molmo_grasp'})
+    harness = Harness(policy, embodiment)
+    harness.commands['robot_command']._bind(RecordingEmitter())
+    harness.commands['target_grip']._bind(RecordingEmitter())
+    harness.ds_command._bind(RecordingEmitter())
+
+    frame_em = world.pair(harness.observations['image.cam'])
+    robot_em = world.pair(harness.observations['robot_state'])
+    grip_em = world.pair(harness.observations['grip'])
+    directive_em = world.pair(harness.directive)
+
+    robot_state = make_robot_state([0.1, 0.2, 0.3], [0.4, 0.5, 0.6])
+    driver = ManualDriver([
+        (partial(directive_em.emit, Directive.RUN(task='t')), 0.0),
+        (partial(emit_ready_payload, frame_em, robot_em, grip_em, robot_state), 0.01),
+        (None, 0.05),
+    ])
+    scheduler = world.start([harness, driver])
+    drive_scheduler(scheduler, steps=20)
+
+    assert policy.last_obs is not None
+    assert policy.last_obs['control_frame'] == 'molmo_grasp'
+    assert policy.last_obs['urdf'] == '<robot/>'
+
+
+@pytest.mark.timeout(3.0)
+def test_live_robot_meta_overrides_static_meta_frame(world):
+    """The live ``robot_meta`` channel wins over ``static_meta`` for the frame, matching the episode-meta merge
+    order (``_build_episode_meta``) — an env that emits its own model overrides a client-side default."""
+    policy = SpyPolicy()
+    embodiment = make_embodiment(static_meta={'urdf': '<static/>', 'control_frame': 'end_effector'})
+    harness = Harness(policy, embodiment)
+    harness.commands['robot_command']._bind(RecordingEmitter())
+    harness.commands['target_grip']._bind(RecordingEmitter())
+    harness.ds_command._bind(RecordingEmitter())
+
+    frame_em = world.pair(harness.observations['image.cam'])
+    robot_em = world.pair(harness.observations['robot_state'])
+    grip_em = world.pair(harness.observations['grip'])
+    directive_em = world.pair(harness.directive)
+    meta_em = world.pair(harness.robot_meta_in)
+
+    robot_state = make_robot_state([0.1, 0.2, 0.3], [0.4, 0.5, 0.6])
+    driver = ManualDriver([
+        (partial(directive_em.emit, Directive.RUN(task='t')), 0.0),
+        (partial(meta_em.emit, {'urdf': '<live/>', 'control_frame': 'droid_eef'}), 0.005),
+        (partial(emit_ready_payload, frame_em, robot_em, grip_em, robot_state), 0.01),
+        (None, 0.05),
+    ])
+    scheduler = world.start([harness, driver])
+    drive_scheduler(scheduler, steps=20)
+
+    assert policy.last_obs is not None
+    assert policy.last_obs['control_frame'] == 'droid_eef'
+    assert policy.last_obs['urdf'] == '<live/>'
 
 
 @pytest.mark.timeout(3.0)

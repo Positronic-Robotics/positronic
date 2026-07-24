@@ -68,13 +68,18 @@ def _molmo_eval(
     # MolmoSpaces drives a Franka DROID rig; recordings carry the same model (URDF + meshes + joint names +
     # control frame) for the 3D viewer and offline IK, supplied here since the molmo server can't import
     # positronic to emit it via ``robot_meta``.
-    # HACK: ``bundled_franka_model``'s control frame is the physical FR3 flange, but ``env.py`` reports
-    # ``robot_state.ee_pose`` at MolmoSpaces' gripper grasp site, so recorded episodes mislabel the pose frame
-    # by the flange↔grasp offset and offline IK over them would solve the wrong target — the same known issue as
-    # robolab (https://github.com/Positronic-Robotics/positronic/issues/483). It does not affect the eval: the
-    # pi05 DROID policy is driven by joint commands, not the eef pose. A grasp-site DROID model would fix both.
+    # ``env.py`` reports ``robot_state.ee_pose`` at MolmoSpaces' arm move group grasp site
+    # (``arm.leaf_frame_to_world`` = ``gripper/grasp_site``, 155mm along the flange Z), so the model's canonical
+    # ``control_frame`` is declared as that frame (``molmo_grasp``) — recorded episodes and offline IK over them
+    # then live in the frame the env actually uses, not the flange. This mirrors the robolab ``droid_eef`` flip.
+    # TODO(#483): the frame is restated here in the serving config; the per-policy EE-frame design moves that
+    # ownership onto the checkpoint. Declared by https://github.com/Positronic-Robotics/positronic/pull/507;
+    # tracked in https://github.com/Positronic-Robotics/positronic/issues/483.
     embodiment = remote_franka_embodiment(
-        proxy, camera_dict, descriptor='remote.molmo_spaces.droid', static_meta=bundled_franka_model()
+        proxy,
+        camera_dict,
+        descriptor='remote.molmo_spaces.droid',
+        static_meta={**bundled_franka_model(), 'control_frame': 'molmo_grasp'},
     )
     task = Task(instruction=lambda: proxy.meta['task'], timeout=timeout, reset=proxy.reset, done=proxy.done)
     # Benchmark episodes are exact-pose deterministic and carry their own seed. An unset ``seed`` leaves

@@ -9,14 +9,26 @@ Two composition operators:
   (e.g. observation encoder & action decoder).
 """
 
+from functools import partial
 from typing import Any, final
 
 import numpy as np
 
-from positronic.dataset.transforms import Elementwise
-from positronic.dataset.transforms.episode import Derive, EpisodeTransform, Group, Identity
+from positronic import geom
+from positronic.dataset.transforms import Elementwise, lazy_sequence
+from positronic.dataset.transforms.episode import Derive, EpisodeTransform, FromValue, Group, Identity
+from positronic.drivers.roboarm import command
+from positronic.drivers.roboarm.ik import frame_transform
 from positronic.policy.base import DelegatingSession, PolicyWrapper, Session, _Pipeline
 from positronic.utils import merge_dicts
+
+_QUAT = geom.Rotation.Representation.QUAT
+
+
+def _to_policy_frame(pose_vec, transform: geom.Transform3D) -> np.ndarray:
+    """Recompose a canonical ``[tx,ty,tz,qw,qx,qy,qz]`` pose into the policy frame via ``pose * transform``."""
+    pose = geom.Transform3D.from_vector(np.asarray(pose_vec, dtype=np.float64), _QUAT)
+    return (pose * transform).as_vector(_QUAT)
 
 
 def lerobot_state(dim: int, names: list[str] | None = None) -> dict[str, Any]:
@@ -373,3 +385,84 @@ class FlipGrip(Codec):
         if 'target_grip' in data:
             data['target_grip'] = 1.0 - data['target_grip']
         return data
+
+
+class ChangeEEFrame(Codec):
+    """Cross the border between the robot's canonical EE frame and a policy's own EE frame.
+
+    A policy trained to speak a different end-effector frame (e.g. DROID's ``droid_eef``) is served on a rig whose
+    canonical frame is whatever its model declares via ``control_frame``. This codec converts the pose at that
+    boundary by pure composition with ``T`` = the fixed transform from ``control_frame`` to ``to`` in the episode's
+    model: observations go ``pose * T`` into the policy frame, actions come back ``pose * T⁻¹``. ``T`` is read from
+    the model the same way IK reads it — ``control_frame`` and ``urdf`` from episode statics at training, from the
+    obs at inference — so a dataset mixing embodiments just yields a different ``T`` per episode. A pipeline without
+    this codec is unchanged; ``to == control_frame`` makes ``T`` the identity.
+
+    Runs client-side, reading the robot model the harness injects into the local obs. That model is client-only and
+    never reaches a frame-agnostic server: ``RemoteSession`` drops it at the wire boundary.
+
+    Composes with absolute-pose action codecs (``AbsolutePositionAction``). A decoder that reconstructs its command
+    from the observation pose in the decode context (``RelativePositionAction``) would read the canonical pose, not
+    the policy-frame one — such context-reading decoders need frame handling that is not yet wired here.
+
+    Compose to the left of the observation/action codecs::
+
+        ChangeEEFrame(to='droid_eef') | ee
+    """
+
+    def __init__(self, to: str, ee_pose_key: str = 'robot_state.ee_pose', command_pose_key: str = 'robot_command.pose'):
+        self._to = to
+        self._ee_pose_key = ee_pose_key
+        self._command_pose_key = command_pose_key
+
+    def _transform(self, source) -> geom.Transform3D:
+        """``T`` from the ``urdf``/``control_frame`` carried by an obs dict (inference) or episode (training)."""
+        return frame_transform(source['urdf'], source['control_frame'], self._to)
+
+    def encode(self, data):
+        return {**data, self._ee_pose_key: _to_policy_frame(data[self._ee_pose_key], self._transform(data))}
+
+    def _decode_single(self, data: dict, context: dict | None) -> dict:
+        cmd = data.get('robot_command')
+        if not isinstance(cmd, command.CartesianPosition):
+            return data
+        return {**data, 'robot_command': command.CartesianPosition(pose=cmd.pose * self._transform(context).inv)}
+
+    def _derive_pose(self, key: str):
+        def derive(episode):
+            transform = self._transform(episode)
+            return Elementwise(episode[key], lazy_sequence(partial(_to_policy_frame, transform=transform)))
+
+        return derive
+
+    @property
+    def training_encoder(self) -> EpisodeTransform:
+        return _ChangeEEFrameTraining(self._to, (self._ee_pose_key, self._command_pose_key), self._derive_pose)
+
+
+class _ChangeEEFrameTraining(EpisodeTransform):
+    """Move the EE pose signals an episode has into ``to`` and relabel ``control_frame`` to match, so a later codec
+    that reads the frame from statics (``IKJointsAction`` solving the command pose) resolves it against the right
+    site. A pose key the episode lacks — or carries only as a null rename alias (``robot_command.pose`` under a
+    joint-only action, aliased to ``None`` by ``_RENAME_ROBOT_COMMAND``'s ``Get(..., None)``) — is skipped rather
+    than dereferenced, so joint-only training still converts its observation pose."""
+
+    def __init__(self, to: str, pose_keys: tuple[str, ...], derive_pose):
+        self._to = to
+        self._pose_keys = pose_keys
+        self._derive_pose = derive_pose
+
+    def __call__(self, episode):
+        derived = {'control_frame': FromValue(self._to)}
+        # ``key in episode`` alone is not enough: ``_RENAME_ROBOT_COMMAND`` aliases a joint-only dataset's absent
+        # legacy pose to a present key whose value is ``None``, so guard on the value being a real signal too.
+        derived.update({
+            key: self._derive_pose(key) for key in self._pose_keys if key in episode and episode[key] is not None
+        })
+        # ``Derive(**derived)`` unpacks a ``FromValue`` under a keyword pyright reads as ``Derive``'s ``meta``
+        # param. Inherited from #485's frame work, which predates this repo's type ratchet — resolved under #485.
+        return Group(Derive(**derived), Identity())(episode)  # pyright: ignore[reportArgumentType]
+
+    @property
+    def meta(self):
+        return {'ee_frame': self._to}

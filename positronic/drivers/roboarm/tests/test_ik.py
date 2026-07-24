@@ -5,9 +5,18 @@ import mujoco as mj
 import numpy as np
 import pytest
 
+from positronic import geom
 from positronic.dataset.episode import EpisodeContainer
 from positronic.dataset.tests.utils import DummySignal
-from positronic.drivers.roboarm.ik import DLSIKSolver, DLSIKSolverWithLimits, LMIKSolver, ik_joints_from_episode
+from positronic.drivers.roboarm.ik import (
+    DLSIKSolver,
+    DLSIKSolverWithLimits,
+    LMIKSolver,
+    _prepare_spec,
+    frame_transform,
+    ik_joints_from_episode,
+)
+from positronic.drivers.roboarm.models import bundled_franka_model
 from positronic.utils import package_assets_path
 
 URDF = Path(package_assets_path('assets/mujoco/panda_ik.xml')).read_text()
@@ -105,6 +114,50 @@ def test_ik_joints_from_episode():
     for i in range(n_steps):
         reconstructed_pose = _fk(URDF, result[i][0])
         np.testing.assert_allclose(reconstructed_pose[:3], ee_poses[i, :3], atol=1e-3)
+
+
+def _fk_site(urdf_xml, q, frame):
+    """FK a named frame (site or body) to [tx,ty,tz,w,x,y,z] through the ik spec preparation."""
+    model = _prepare_spec(urdf_xml, frame).compile()
+    data = mj.MjData(model)  # pyright: ignore[reportAttributeAccessIssue]
+    qpos_ids = [model.joint(n).qposadr.item() for n in JOINT_NAMES]
+    data.qpos[qpos_ids] = q
+    mj.mj_forward(model, data)  # pyright: ignore[reportAttributeAccessIssue]
+    sid = mj.mj_name2id(model, mj.mjtObj.mjOBJ_SITE, frame)  # pyright: ignore[reportAttributeAccessIssue]
+    quat = np.empty(4)
+    mj.mju_mat2Quat(quat, data.site_xmat[sid])  # pyright: ignore[reportAttributeAccessIssue]
+    return np.concatenate([data.site_xpos[sid].copy(), quat])
+
+
+def test_frame_transform_reproduces_droid_eef_across_configs():
+    """``frame_transform`` yields one config-independent transform such that the canonical ``end_effector`` pose
+    composed with it reproduces the ``droid_eef`` site pose at every joint configuration — the transform the
+    ``ChangeEEFrame`` codec applies to observations."""
+    urdf = bundled_franka_model()['urdf']
+    transform = frame_transform(urdf, 'end_effector', 'droid_eef')
+    for q in TEST_CONFIGS:
+        ee = geom.Transform3D.from_vector(_fk_site(urdf, q, 'end_effector'), geom.Rotation.Representation.QUAT)
+        want = _fk_site(urdf, q, 'droid_eef')
+        got = (ee * transform).as_vector(geom.Rotation.Representation.QUAT)
+        np.testing.assert_allclose(got[:3], want[:3], atol=1e-9)
+        q_diff = min(np.linalg.norm(got[3:] - want[3:]), np.linalg.norm(got[3:] + want[3:]))
+        assert q_diff < 1e-9, f'rotation mismatch: {q_diff}'
+
+
+def test_molmo_grasp_matches_molmospaces_grasp_site():
+    """``molmo_grasp`` relative to the flange is MolmoSpaces' arm-move-group grasp site (``gripper/grasp_site``),
+    measured off its own DROID model (``robots/franka_droid/model.xml`` @ allenai/molmospaces c2f1b58): 155mm
+    along the flange Z, no rotation. It is the frame ``env.py`` reports ``robot_state.ee_pose`` in, so the served
+    ``robot_meta`` declares it as the control frame — a deeper, unrotated frame than ``droid_eef``."""
+    transform = frame_transform(bundled_franka_model()['urdf'], 'link8', 'molmo_grasp')
+    np.testing.assert_allclose(transform.translation, [0.0, 0.0, 0.155], atol=1e-9)
+    np.testing.assert_allclose(transform.rotation.as_quat, geom.Rotation.identity.as_quat, atol=1e-9)
+
+
+def test_frame_transform_identity_when_frames_match():
+    transform = frame_transform(bundled_franka_model()['urdf'], 'end_effector', 'end_effector')
+    np.testing.assert_allclose(transform.translation, 0.0, atol=1e-12)
+    assert transform.rotation == geom.Rotation.identity
 
 
 @pytest.mark.parametrize('solver_cls', [DLSIKSolver, DLSIKSolverWithLimits])
