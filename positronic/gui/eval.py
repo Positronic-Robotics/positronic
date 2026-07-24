@@ -5,7 +5,13 @@ from enum import Enum, auto
 from pathlib import Path
 
 import cv2
-import dearpygui.dearpygui as dpg
+
+try:
+    import dearpygui.dearpygui as dpg
+except ImportError:
+    # dearpygui ships no aarch64 wheels; importing this module must not fail on such hosts, where the
+    # headless drivers (web, keyboard) never construct the UI. Construction raises instead.
+    dpg = None
 import numpy as np
 
 import pimm
@@ -58,6 +64,8 @@ class EvalUI(pimm.ControlSystem):
     def __init__(
         self, output_dir: Path | None = None, max_im_size: tuple[int, int] = (320, 240), ui_scale: float = 1.0
     ):
+        if dpg is None:
+            raise ImportError('dearpygui is not installed')
         self.state = State.WAITING
         self.output_dir = output_dir
         self.ui_scale = ui_scale

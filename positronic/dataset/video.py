@@ -1,4 +1,6 @@
+import queue
 import struct
+import threading
 from collections import defaultdict, deque
 from collections.abc import Iterator, Sequence
 from functools import lru_cache
@@ -20,7 +22,13 @@ class VideoSignalWriter(SignalWriter[np.ndarray]):
     """
 
     def __init__(
-        self, video_path: Path, frames_index_path: Path, codec: str = 'h264', gop_size: int = 30, fps: int = 100
+        self,
+        video_path: Path,
+        frames_index_path: Path,
+        codec: str = 'h264',
+        gop_size: int = 30,
+        fps: int = 100,
+        codec_options: dict[str, str] | None = None,
     ):
         """Initialize VideoSignalWriter.
 
@@ -30,12 +38,15 @@ class VideoSignalWriter(SignalWriter[np.ndarray]):
             codec: Video codec to use (default: 'h264')
             gop_size: Group of Pictures size - distance between keyframes (default: 30)
             fps: Frame rate for encoding (default: 30)
+            codec_options: Encoder options. The default trades ~2x bitrate for ~2.5x faster encoding
+                (x264's medium preset caps a live recorder well below camera rate on weak CPUs).
         """
         self.video_path = video_path
         self.frames_index_path = frames_index_path
         self.codec = codec
         self.gop_size = gop_size
         self.fps = fps
+        self.codec_options = {'preset': 'ultrafast', 'tune': 'zerolatency'} if codec_options is None else codec_options
 
         self._finished = False
         self._aborted = False
@@ -49,6 +60,13 @@ class VideoSignalWriter(SignalWriter[np.ndarray]):
         self._frame_timestamps: list[int] = []
         self._extra_timelines: dict[str, list[int]] = defaultdict(list)
 
+        # Encoding runs on a per-writer thread (libav releases the GIL), so several writers — e.g. one per
+        # camera — encode concurrently while ``append`` stays a validate-copy-enqueue. The queue bound gives
+        # backpressure instead of unbounded memory when the encoder can't keep up.
+        self._frames: queue.Queue[tuple[np.ndarray, int] | None] = queue.Queue(maxsize=8)
+        self._encoder_thread: threading.Thread | None = None
+        self._encoder_error: Exception | None = None
+
     def _init_video_encoder(self, first_frame: np.ndarray) -> None:
         """Initialize video encoder based on first frame dimensions."""
         if first_frame.ndim != 3 or first_frame.shape[2] != 3:
@@ -60,7 +78,7 @@ class VideoSignalWriter(SignalWriter[np.ndarray]):
         self._height, self._width = first_frame.shape[:2]
 
         self._container = av.open(str(self.video_path), mode='w')
-        self._stream = self._container.add_stream(self.codec, rate=self.fps)
+        self._stream = self._container.add_stream(self.codec, rate=self.fps, options=self.codec_options)
         self._stream.width = self._width
         self._stream.height = self._height
         self._stream.pix_fmt = 'yuv420p'
@@ -106,26 +124,59 @@ class VideoSignalWriter(SignalWriter[np.ndarray]):
                     f'Expected {sorted(expected_keys)}, got {sorted(current_keys)}'
                 )
 
+        if self._encoder_error is not None:
+            raise RuntimeError('Video encoding failed') from self._encoder_error
+
         self._frame_timestamps.append(ts_ns)
 
         # Handle extra timelines using defaultdict
         for timeline_name, timeline_ts in extra_ts.items():
             self._extra_timelines[timeline_name].append(timeline_ts)
 
-        frame = av.VideoFrame.from_ndarray(data, format='rgb24')
-        frame.pts = self._frame_count
-
-        for packet in self._stream.encode(frame):  # Every frame may produce 0, 1, or more packets
-            self._container.mux(packet)
+        if self._encoder_thread is None:
+            self._encoder_thread = threading.Thread(
+                target=self._encode_loop, name=f'encode:{self.video_path.name}', daemon=True
+            )
+            self._encoder_thread.start()
+        # Copy before enqueueing: callers routinely pass views into shared memory that the producer
+        # overwrites with the next frame.
+        self._frames.put((data.copy(), self._frame_count))
 
         self._frame_count += 1
         self._last_ts = ts_ns
+
+    def _encode_loop(self) -> None:
+        try:
+            while True:
+                item = self._frames.get()
+                if item is None:
+                    return
+                data, pts = item
+                frame = av.VideoFrame.from_ndarray(data, format='rgb24')
+                frame.pts = pts
+                for packet in self._stream.encode(frame):  # Every frame may produce 0, 1, or more packets
+                    self._container.mux(packet)
+        except Exception as e:
+            self._encoder_error = e
+            # Keep draining so a blocked ``append`` unblocks; the error surfaces on the caller thread.
+            while self._frames.get() is not None:
+                pass
+
+    def _stop_encoder(self) -> None:
+        if self._encoder_thread is not None:
+            self._frames.put(None)
+            self._encoder_thread.join()
+            self._encoder_thread = None
 
     def __exit__(self, exc_type, exc, tb) -> None:
         """Finalize the writing on context exit (even on exceptions)."""
         if self._finished or self._aborted:
             return
         self._finished = True
+
+        self._stop_encoder()
+        if self._encoder_error is not None:
+            raise RuntimeError('Video encoding failed') from self._encoder_error
 
         if self._container is not None:
             for packet in self._stream.encode():  # Flush remaining frames
@@ -157,6 +208,7 @@ class VideoSignalWriter(SignalWriter[np.ndarray]):
         if self._finished:
             raise RuntimeError('Cannot abort a finished writer')
 
+        self._stop_encoder()
         if self._container is not None:
             self._container.close()
         self._container = None

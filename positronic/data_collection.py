@@ -355,6 +355,18 @@ def so101cfg(robot_arm, **kwargs):
     main(robot_arm=robot_arm, gripper=robot_arm, **kwargs)
 
 
+@cfn.config(
+    robot_arm=positronic.cfg.hardware.roboarm.yam,
+    webxr=positronic.cfg.webxr.oculus,
+    sound=positronic.cfg.sound.sound,
+    operator_position=OperatorPosition.BACK,
+    cameras={},
+)
+def yamcfg(robot_arm, **kwargs):
+    """Runs data collection on a real i2rt YAM arm (the arm driver carries the gripper)."""
+    main(robot_arm=robot_arm, gripper=robot_arm, **kwargs)
+
+
 droid = cfn.Config(
     main,
     robot_arm=positronic.cfg.hardware.roboarm.franka_droid,
@@ -386,6 +398,7 @@ def _internal_main():
     cfn.cli({
         'real': main_cfg,
         'so101': so101cfg,
+        'yam': yamcfg,
         'sim': main_sim,
         'sim_pnp': main_sim.override(loaders=positronic.cfg.simulator.multi_tote_loaders),
         'droid': droid,

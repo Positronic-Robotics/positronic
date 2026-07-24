@@ -23,6 +23,7 @@ class SLCamera(pimm.ControlSystem):
         depth_mask: bool = False,
         max_recovery_time_sec: float = 10,
         image_enhancement: bool = False,
+        mono: bool = False,
     ):
         """
         StereoLabs camera driver.
@@ -37,6 +38,8 @@ class SLCamera(pimm.ControlSystem):
                         -Inf will be set to 0. All values above this will be set to max_depth.
             depth_mask: (bool) If True, will also generate image with 0 set to NaNs pixels, and 1 set to valid pixels
             max_recovery_time_sec: (float) Maximum time to wait for camera recovery. If exceeded, will stop the camera.
+            mono: (bool) Open a single-sensor camera (e.g. ZED X One) via ``sl.CameraOne``. Mono cameras
+                  support only ``view='left'``, ``depth_mode='none'`` and no image enhancement.
         """
         super().__init__()
         # IMPORTANT: This control system may be spawned under multiprocessing "spawn".
@@ -49,6 +52,7 @@ class SLCamera(pimm.ControlSystem):
         self._depth_mode_name = depth_mode
         self._image_enhancement = image_enhancement
         self._depth_mask_requested = depth_mask
+        self._mono = mono
 
         self.max_depth = max_depth
         self.max_recovery_time_sec = max_recovery_time_sec
@@ -69,22 +73,24 @@ class SLCamera(pimm.ControlSystem):
         TIME_REF_IMAGE = sl.TIME_REFERENCE.IMAGE
         fps_counter = pimm.utils.RateCounter('Camera')
 
-        init_params = sl.InitParameters()
+        if self._mono and (self._view_name != 'left' or self._depth_mode_name != 'none' or self._image_enhancement):
+            raise RuntimeError('mono cameras support only view="left", depth_mode="none" and no image enhancement')
+
+        init_params = sl.InitParametersOne() if self._mono else sl.InitParameters()
         init_params.camera_resolution = getattr(sl.RESOLUTION, self._resolution_name.upper())
         if self._fps is not None:
             init_params.camera_fps = self._fps
         if self._serial_number is not None:
-            inpt = sl.InputType()
-            inpt.set_from_serial_number(self._serial_number)
-            init_params.input = inpt
+            init_params.set_from_serial_number(self._serial_number)
 
         view = getattr(sl.VIEW, self._view_name.upper())
         depth_mode = getattr(sl.DEPTH_MODE, self._depth_mode_name.upper())
-        init_params.depth_mode = depth_mode
         init_params.coordinate_units = sl.UNIT.METER
         init_params.sdk_verbose = 1
-        init_params.enable_image_enhancement = self._image_enhancement
         init_params.async_grab_camera_recovery = True
+        if not self._mono:
+            init_params.depth_mode = depth_mode
+            init_params.enable_image_enhancement = self._image_enhancement
 
         depth_mask_enabled = depth_mode != sl.DEPTH_MODE.NONE and self._depth_mask_requested
 
@@ -101,7 +107,7 @@ class SLCamera(pimm.ControlSystem):
                 'Set depth_mask=True to enable depth mask output.'
             )
 
-        zed = sl.Camera()
+        zed = sl.CameraOne() if self._mono else sl.Camera()
         error_code = zed.open(init_params)
         if error_code != SUCCESS:
             logging.error(f'Failed to open camera: {error_code}')

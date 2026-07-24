@@ -193,7 +193,7 @@ def _build_blueprint(signals: EpisodeSignals, ep: Episode) -> rrb.Blueprint:
         if len(sigs) == 1:
             view = _ts_view(group_name, sigs[0])
         else:
-            view = rrb.Tabs(*[_ts_view(sig[len(group_name) + 1 :], sig) for sig in sigs], name=group_name)
+            view = rrb.Tabs(*[_ts_view(sig, sig) for sig in sigs], name=group_name)
         series_views.append(view)
 
     # Top row: images (big) + optional 3D (smaller)
@@ -231,15 +231,20 @@ def _build_blueprint(signals: EpisodeSignals, ep: Episode) -> rrb.Blueprint:
 
 
 def _setup_series_names(signals: EpisodeSignals, ep: Episode) -> None:
-    joint_signal = ep.static.get('joint_signal')
+    joint_set = set(ep.static.get('joint_signals', ()))
+    if ep.static.get('joint_signal'):
+        joint_set.add(ep.static['joint_signal'])
     joint_names = ep.static.get('joint_names')
-    pose_set = set(signals.poses)
+    # Commanded poses share the observed poses' 7D layout (``Serializers.transform_3d``).
+    pose_set = set(signals.poses) | set(ep.static.get('command_pose_signals', ()))
     for key in signals.numerics:
         dim = signals.dims.get(key, 1)
-        if key == joint_signal and joint_names:
+        is_joint_vel = key.endswith('.dq') and f'{key[: -len(".dq")]}.q' in joint_set
+        if (key in joint_set or is_joint_vel) and joint_names:
             names = joint_names
         elif key in pose_set and dim == 7:
-            names = ['tx', 'ty', 'tz', 'qx', 'qy', 'qz', 'qw']
+            # ``Serializers.transform_3d`` is scalar-first: [tx, ty, tz, qw, qx, qy, qz].
+            names = ['tx', 'ty', 'tz', 'qw', 'qx', 'qy', 'qz']
         else:
             names = None
         if dim == 1:
