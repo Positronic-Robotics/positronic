@@ -229,7 +229,8 @@ def _parse_dmon(log_path: Path, windows: list[tuple[float, float]] | None = None
     Column layout varies — ``-o DT`` prepends date/time, ``-s u`` adds encoder/decoder (and, on newer
     drivers, JPEG/OFA) columns before the framebuffer — so the positions are read from the ``# ... sm ...
     fb ...`` name header rather than hard-coded. ``sm`` is SM utilisation (%) and ``fb`` the framebuffer
-    use (MiB). Rows before the header, or with missing numeric fields, are skipped rather than failing.
+    use (MiB). Rows before the header, or with missing numeric fields, are skipped; a log whose header has
+    ``sm`` but no ``fb`` (plain ``dmon`` / ``-s u``) fails loudly rather than silently reporting 0.
 
     ``windows`` restricts the average to rows whose ``-o DT`` timestamp (the leading date + time columns, a
     local wall clock matching the episodes' ``finished_at``) falls in a timed span — so a mixed sweep's
@@ -245,9 +246,17 @@ def _parse_dmon(log_path: Path, windows: list[tuple[float, float]] | None = None
         if not stripped:
             continue
         if stripped.startswith('#'):
-            # The name header carries both 'sm' and 'fb'; the units line ('%', 'MB') does not.
+            # The name header carries the column names ('sm', 'fb', ...); the units line ('%', 'MB') has no 'sm'.
             names = stripped.lstrip('#').split()
-            if 'sm' in names and 'fb' in names:
+            if 'sm' in names:
+                if 'fb' not in names:
+                    # Plain ``nvidia-smi dmon`` (or ``-s u``) omits the framebuffer column, so every row would
+                    # be skipped and peak VRAM silently read as 0. Fail loudly instead of under-reporting.
+                    raise ValueError(
+                        f'{log_path}: nvidia-smi dmon log has an `sm` column but no `fb` (framebuffer) column, so '
+                        f'peak VRAM cannot be read and every sample would be dropped. Re-collect it with '
+                        f'`nvidia-smi dmon -s um` (u=utilisation, m=memory), which emits the `fb` column.'
+                    )
                 sm_idx, fb_idx = names.index('sm'), names.index('fb')
             continue
         if sm_idx is None or fb_idx is None:
