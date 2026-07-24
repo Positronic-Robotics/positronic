@@ -52,3 +52,10 @@ jobs:
         if [ -n "$CHANGED_PY_FILES" ]; then
           echo "$CHANGED_PY_FILES" | xargs python3 utilities/check_tests_location.py
         fi
+    - name: Check basedpyright baseline ratchet
+      # Runs unconditionally: cheap, and fast-passes when no baseline file grew. RATCHET_BASE is the
+      # PR base sha ($BASE_SHA); the script diffs against its merge-base with HEAD, since origin/main
+      # does not resolve in this detached-HEAD checkout.
+      env:
+        RATCHET_BASE: ${{ env.BASE_SHA }}
+      run: python3 utilities/check_basedpyright_baseline_ratchet.py

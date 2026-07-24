@@ -1,18 +1,24 @@
 """Enforce the basedpyright baseline as a one-way ratchet: a file's entry count may shrink, never grow.
 
-Compares the working-tree `.basedpyright/baseline.json` against the merge-base with `origin/main`
-(the merge-base, not the tip, so an unrelated main-side shrink cannot flag an untouched file here).
-Any file whose entry count exceeds its merge-base count has a new error grandfathered into the
-baseline; the fix is to resolve the error, not to widen the baseline.
+Compares the working-tree `.basedpyright/baseline.json` against the merge-base with a base ref (the
+merge-base, not the tip, so an unrelated base-side shrink cannot flag an untouched file here). Any
+file whose entry count exceeds its merge-base count has a new error grandfathered into the baseline;
+the fix is to resolve the error, not to widen the baseline.
+
+The base ref is `--base <ref>`, else the `RATCHET_BASE` env var, else `origin/main` (the local
+pre-commit default). CI runs a detached-HEAD checkout where `origin/main` may not resolve, so it
+passes the PR base sha explicitly.
 
 Counts, never raw lines: re-anchoring an existing entry shifts its line numbers legitimately, so only
 the number of entries per file is compared.
 
 Fails open (exit 0, note on stderr) when the base ref or either baseline cannot be resolved, so an
-offline commit is never blocked; CI always has origin/main, where the gate holds.
+offline commit is never blocked; CI always has the base sha, where the gate holds.
 """
 
+import argparse
 import json
+import os
 import subprocess
 import sys
 from typing import Any
@@ -38,6 +44,11 @@ def grown_files(base: Any, current: Any) -> list[tuple[str, int, int]]:
     return grown
 
 
+def resolve_base_ref(arg: str | None, env: str | None) -> str:
+    """Pick the base ref: an explicit `--base` arg wins, then `RATCHET_BASE` env, else `origin/main`."""
+    return arg or env or 'origin/main'
+
+
 def _run_git(*args: str) -> str | None:
     try:
         r = subprocess.run(['git', *args], capture_output=True, text=True, timeout=10)
@@ -46,11 +57,12 @@ def _run_git(*args: str) -> str | None:
     return r.stdout.strip() if r.returncode == 0 else None
 
 
-def _resolve_base() -> str | None:
-    merge_base = _run_git('merge-base', 'HEAD', 'origin/main')
+def _resolve_merge_base(ref: str) -> str | None:
+    merge_base = _run_git('merge-base', 'HEAD', ref)
     if merge_base:
         return merge_base
-    return _run_git('rev-parse', 'origin/main') or None
+    # merge-base unavailable (shallow history, unrelated ref): use the ref directly if it resolves.
+    return _run_git('rev-parse', ref) or None
 
 
 def _load_base_baseline(base: str) -> Any | None:
@@ -71,10 +83,15 @@ def _load_working_baseline() -> Any | None:
         return None
 
 
-def main() -> int:
-    base = _resolve_base()
+def main(argv: list[str]) -> int:
+    parser = argparse.ArgumentParser(description='Fail if any basedpyright baseline file grew vs the base ref.')
+    parser.add_argument('--base', default=None, help='base ref to diff against (else $RATCHET_BASE, else origin/main)')
+    args = parser.parse_args(argv)
+
+    ref = resolve_base_ref(args.base, os.environ.get('RATCHET_BASE') or None)
+    base = _resolve_merge_base(ref)
     if base is None:
-        print('baseline-ratchet: could not resolve merge-base with origin/main; skipping check', file=sys.stderr)
+        print(f'baseline-ratchet: could not resolve base {ref!r}; skipping check', file=sys.stderr)
         return 0
 
     base_baseline = _load_base_baseline(base)
@@ -100,4 +117,4 @@ def main() -> int:
 
 
 if __name__ == '__main__':
-    raise SystemExit(main())
+    raise SystemExit(main(sys.argv[1:]))

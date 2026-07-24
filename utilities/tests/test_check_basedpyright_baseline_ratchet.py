@@ -35,3 +35,10 @@ def test_passes_on_reanchor_same_count_different_lines():
     base = {'files': {'./a.py': [_entry(10), _entry(20)]}}
     current = {'files': {'./a.py': [_entry(99), _entry(120)]}}  # same count, shifted lines
     assert ratchet.grown_files(base, current) == []
+
+
+def test_base_ref_arg_wins_then_env_then_default():
+    assert ratchet.resolve_base_ref('abc123', 'def456') == 'abc123'  # --base wins over env
+    assert ratchet.resolve_base_ref(None, 'def456') == 'def456'  # RATCHET_BASE env used
+    assert ratchet.resolve_base_ref(None, None) == 'origin/main'  # local pre-commit default
+    assert ratchet.resolve_base_ref(None, '') == 'origin/main'  # empty env falls through
