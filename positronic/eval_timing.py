@@ -234,7 +234,7 @@ def drain_signal_items() -> Iterator[tuple[str, float]]:
         yield INFER_MS_SIGNAL, infer_ms
 
 
-def finish_static_items() -> Iterator[tuple[str, object]]:
+def finish_static_items() -> Iterator[tuple[str, float]]:
     """Seal the in-flight rollout and yield the ``(static_key, value)`` pairs the recorder sets on it — the
     per-episode wall scalars. Empty when telemetry is off or no rollout is in flight."""
     timer = _ACTIVE.get()
@@ -258,7 +258,7 @@ class WriterHooks:
     def drain(self) -> Iterator[tuple[str, float]]:
         return drain_signal_items()
 
-    def finish(self) -> Iterator[tuple[str, object]]:
+    def finish(self) -> Iterator[tuple[str, float]]:
         return finish_static_items()
 
     def discard(self) -> None:

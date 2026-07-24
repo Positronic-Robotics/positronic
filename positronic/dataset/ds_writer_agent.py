@@ -28,7 +28,7 @@ class TimingHooks(Protocol):
 
     def drain(self) -> Iterator[tuple[str, float]]: ...
 
-    def finish(self) -> Iterator[tuple[str, Any]]: ...
+    def finish(self) -> Iterator[tuple[str, float]]: ...
 
     def discard(self) -> None: ...
 
@@ -42,7 +42,7 @@ class _NoTiming:
     def drain(self) -> Iterator[tuple[str, float]]:
         return iter(())
 
-    def finish(self) -> Iterator[tuple[str, Any]]:
+    def finish(self) -> Iterator[tuple[str, float]]:
         return iter(())
 
     def discard(self) -> None:
