@@ -73,7 +73,8 @@ def _molmo_eval(
     # ``control_frame`` is declared as that frame (``molmo_grasp``) — recorded episodes and offline IK over them
     # then live in the frame the env actually uses, not the flange. This mirrors the robolab ``droid_eef`` flip.
     # TODO(#483): the frame is restated here in the serving config; the per-policy EE-frame design moves that
-    # ownership onto the checkpoint. See https://github.com/Positronic-Robotics/positronic/issues/483.
+    # ownership onto the checkpoint. Declared by https://github.com/Positronic-Robotics/positronic/pull/507;
+    # tracked in https://github.com/Positronic-Robotics/positronic/issues/483.
     embodiment = remote_franka_embodiment(
         proxy,
         camera_dict,
