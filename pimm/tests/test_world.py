@@ -592,6 +592,17 @@ class TestWorldControlSystems:
             with pytest.raises(ValueError, match='Receiver .* is not in any control system'):
                 world.start(main_process=producer)
 
+    def test_start_rejects_duplicate_control_systems(self):
+        main_cs = DummyControlSystem('main')
+        background_cs = DummyControlSystem('background')
+
+        with World() as world:
+            with pytest.raises(ValueError, match='listed more than once'):
+                world.start(main_process=main_cs, background=[background_cs, background_cs])
+
+            with pytest.raises(ValueError, match='listed more than once'):
+                world.start(main_process=main_cs, background=[background_cs, main_cs])
+
 
 # Integration tests
 class TestIntegration:

@@ -250,7 +250,9 @@ def main(
         ds_agent = wire.wire(world, data_collection, dataset_writer, camera_emitters, robot_arm, gripper, None)
         _wire(world, ds_agent, data_collection, webxr, robot_arm, sound)
 
-        bg_cs = [webxr, *camera_instances.values(), ds_agent, robot_arm, gripper, sound]
+        # SO-101 fills both the arm and gripper slots with one object; a control system runs in exactly one process.
+        gripper_cs = [] if gripper is robot_arm else [gripper]
+        bg_cs = [webxr, *camera_instances.values(), ds_agent, robot_arm, *gripper_cs, sound]
 
         if stream_video_to_webxr is not None:
             world.connect(
