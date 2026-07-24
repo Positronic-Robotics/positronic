@@ -158,6 +158,7 @@ testpaths = [
     "positronic/offboard/tests",
     "positronic/policy/tests",
     "positronic/simulator/env_server/tests",
+    "positronic/simulator/molmo_spaces/tests",
     "positronic/tests",
     "positronic/utils/tests",
     "positronic/vendors/gr00t/tests",
@@ -221,14 +222,17 @@ skip-magic-trailing-comma = true
 typeCheckingMode = "standard"
 pythonVersion = "3.11"
 include = ["pimm", "positronic"]
-# vendors/* pull untyped ML libraries; they are typed per-vendor in a later pass.
+# vendors/* pull untyped ML libraries; they are typed per-vendor in a later pass. molmo_spaces/env.py is
+# checked here (it runs in MolmoSpaces' own venv; its foreign imports are handled in-file by a scoped
+# `reportMissingImports` suppression + targeted per-line ignores), not excluded — a new module owes real
+# types, not a blanket exemption.
 exclude = [
     "**/.venv",
     "**/node_modules",
     "positronic/vendors",
 ]
-# `exclude` only drops vendors as analysis roots; a checked module that imports them
-# still pulls their diagnostics. `ignore` suppresses those transitive vendor errors too.
+# `exclude` only drops these as analysis roots; a checked module that imports them still pulls their
+# diagnostics. `ignore` suppresses those transitive errors too.
 ignore = ["positronic/vendors"]
 
 [tool.setuptools.packages.find]
