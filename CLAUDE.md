@@ -47,8 +47,8 @@
 - Configuronic: never define a function whose only purpose is to build a config — decorate it with `@cfn.config`
   directly. When wrapping a class or function usable as-is (without configuronic), assign `NAME = cfn.Config(Thing)`
   rather than writing a wrapper. Define variants with `.override`
-- No suppressions or guards for problems never observed: a `noqa` must suppress an error that actually fires; no
-  defensive idioms with explanatory comments
+- Linter suppressions (`noqa`, `type: ignore`, `pyright: ignore`) must be narrowly scoped to a specific rule and
+  suppress an error that actually fires — no blanket or speculative suppressions
 
 # Comments & docstrings
 - Write for a fresh reader: no references to past or future state ("no longer", "previously", "step N", "today").
