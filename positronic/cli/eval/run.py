@@ -125,10 +125,13 @@ def _run_world(
         # driver, and GUI placement is otherwise identical.
         producers = [cs for cs in embodiment.control_systems if cs is not None]
         foreground = driver.control_systems if driver is not None else []
-        if embodiment.simulated:
-            world.run([*foreground, harness, ds_agent, gpu_monitor, *producers], gui)
-        else:
-            world.run([harness, *foreground], [*producers, ds_agent, gui])
+        # Start the GPU sampling thread before the World runs so it is already sampling during the harness's
+        # first synchronous reset (server startup + scene reset), and stop it after the run.
+        with gpu_monitor or nullcontext():
+            if embodiment.simulated:
+                world.run([*foreground, harness, ds_agent, gpu_monitor, *producers], gui)
+            else:
+                world.run([harness, *foreground], [*producers, ds_agent, gui])
 
 
 def main(

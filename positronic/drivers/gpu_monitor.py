@@ -6,12 +6,18 @@ MiB) and ``timing.gpu_mem_proc`` (the memory attributed to this eval's process t
 *utilisation* is deliberately not attempted — it is unreliable under MPS / co-location — so only memory is
 attributed.
 
-A background daemon thread does the blocking ``nvidia-smi`` reads at true wall cadence into a shared latest
-sample; the cooperative ``run`` loop emits that latest sample each tick stamped by the world clock. A sim
-eval runs on a virtual clock, so an async sample has no wall->virtual mapping — sampling foreground and
+``start`` spins a background daemon thread that does the blocking ``nvidia-smi`` reads at true wall cadence
+into a shared latest sample; it is started before the World runs so the thread is already sampling during
+the harness's first synchronous reset. The cooperative ``run`` loop drains that latest sample every
+scheduler tick and emits it when the thread has published a new one, stamped by the world clock. A sim eval
+runs on a virtual clock, so an async sample has no wall->virtual mapping — sampling in the thread and
 stamping with the world clock is what keeps the sample inside the episode bounds (the recorder also records
 the real epoch in ``extra_ts['system']``). With no ``nvidia-smi`` on PATH the system is inert (a CPU box):
-it emits nothing and keeps yielding so it never stops the eval.
+no thread starts, it emits nothing, and it keeps yielding so it never stops the eval.
+
+A GPU sample taken while the scheduler is blocked in a synchronous span (a long reset or env step) is
+captured by the thread but only emitted — collapsed to the latest — once the loop next runs, so the load is
+recorded but not finely placed on the virtual timeline (inherent to the cooperative scheduler).
 """
 
 import logging
@@ -105,39 +111,55 @@ class GpuMonitor(pimm.ControlSystem):
         self._lock = threading.Lock()
         self._latest: _GpuSample | None = None
         self._seq = 0
+        self._stop = threading.Event()
+        self._thread: threading.Thread | None = None
         self.output = pimm.ControlSystemEmitter(self)
 
-    def _sample_loop(self, stop: threading.Event) -> None:
-        while not stop.is_set():
+    def _sample_loop(self) -> None:
+        while not self._stop.is_set():
             sample = _read_gpu_sample(self._device)
             if sample is not None:
                 with self._lock:
                     self._latest = sample
                     self._seq += 1
-            stop.wait(self._interval)
+            self._stop.wait(self._interval)
 
-    def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Sleep]:
+    def start(self) -> None:
+        """Spin the wall-cadence sampling thread. Started before the World runs so it is already sampling
+        during the harness's first synchronous reset. Inert (no thread) without ``nvidia-smi`` on PATH."""
+        if self._thread is not None:
+            return
         if shutil.which('nvidia-smi') is None:
             logger.info('GpuMonitor: no nvidia-smi on PATH; GPU telemetry disabled')
-            while not should_stop.value:
-                yield pimm.Sleep(self._interval)
             return
+        self._thread = threading.Thread(target=self._sample_loop, daemon=True)
+        self._thread.start()
 
-        stop = threading.Event()
-        thread = threading.Thread(target=self._sample_loop, args=(stop,), daemon=True)
-        thread.start()
+    def stop(self) -> None:
+        """Signal the sampling thread and join it. Safe to call when never started."""
+        self._stop.set()
+        if self._thread is not None:
+            self._thread.join(timeout=5)
+            self._thread = None
+
+    def __enter__(self) -> 'GpuMonitor':
+        self.start()
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        self.stop()
+
+    def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Command]:
+        # Yield every scheduler round (not a Sleep(interval)): the wall cadence lives in the sampling
+        # thread, so the loop only drains the latest sample and emits it once per new seq. The sim
+        # simulator sleeps each step and paces the clock, so this Yield is a non-pacing participant.
         emitted_seq = 0
-        try:
-            while not should_stop.value:
-                with self._lock:
-                    seq, sample = self._seq, self._latest
-                if sample is not None and seq != emitted_seq:
-                    emitted_seq = seq
-                    self.output.emit(
-                        {'_util': sample.util_pct, '_mem': sample.mem_mib, '_mem_proc': sample.proc_mem_mib},
-                        clock.now_ns(),
-                    )
-                yield pimm.Sleep(self._interval)
-        finally:
-            stop.set()
-            thread.join(timeout=5)
+        while not should_stop.value:
+            with self._lock:
+                seq, sample = self._seq, self._latest
+            if sample is not None and seq != emitted_seq:
+                emitted_seq = seq
+                self.output.emit(
+                    {'_util': sample.util_pct, '_mem': sample.mem_mib, '_mem_proc': sample.proc_mem_mib}, clock.now_ns()
+                )
+            yield pimm.Yield()

@@ -31,7 +31,10 @@ This records the telemetry into each episode of the dataset — no side files:
 - `timing.gpu_*` signals — the eval box's GPU, sampled ~1 Hz by a foreground control system: `timing.gpu_util`
   (whole-box utilisation %), `timing.gpu_mem` (whole-box memory used, MiB), and `timing.gpu_mem_proc` (the
   memory attributed to **this eval's process tree** — the harness and its env-server/Isaac children, MiB).
-  Absent on a box without `nvidia-smi`.
+  Absent on a box without `nvidia-smi`. A wall-cadence background thread does the sampling and the
+  cooperative loop emits the latest sample each tick, so GPU taken while the scheduler is blocked in a
+  synchronous span (a long reset or env step) is captured but only placed on the virtual timeline — collapsed
+  to the latest — once the loop next runs.
 - `timing.wall_s` / `timing.finished_at` / `timing.reset_s` statics — the once-per-episode wall scalars.
 
 **Concurrent-sim footgun:** `timing.gpu_util` and `timing.gpu_mem` are **whole-box** — they measure the whole
