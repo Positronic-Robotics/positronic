@@ -4,9 +4,12 @@ import numpy as np
 import positronic.cfg.hardware.camera
 import positronic.cfg.hardware.gripper
 import positronic.cfg.hardware.roboarm
+import positronic.cfg.simulator
 from positronic.dataset.serializers import Serializers
 from positronic.drivers.roboarm import command as roboarm_command
 from positronic.eval import ROBOT_STATIC_META, Command, Embodiment, Observation
+from positronic.simulator.mujoco.sim import MujocoSim
+from positronic.utils import package_assets_path
 
 
 @cfn.config(
@@ -71,3 +74,19 @@ def mujoco_franka(sim, camera_dict):
         control_systems=(sim,),
         simulated=True,
     )
+
+
+@cfn.config(
+    mujoco_model_path=package_assets_path('assets/mujoco/franka_table.xml'),
+    loaders=positronic.cfg.simulator.stack_cubes_loaders,
+    camera_fps=15,
+    camera_dict={'image.wrist': 'handcam_left_ph', 'image.exterior': 'back_view_ph', 'image.agent_view': 'agentview'},
+)
+def mujoco_franka_table(mujoco_model_path, loaders, camera_fps, camera_dict):
+    """Attended Mujoco Franka on the table scene: the sim without an eval/trials wrapper.
+
+    The scene draws once at construction and episodes inherit the world state, like the real
+    robot; seeded per-trial re-draws stay the eval configs' concern.
+    """
+    sim = MujocoSim(mujoco_model_path, loaders, camera_fps=camera_fps)
+    return mujoco_franka(sim, camera_dict)

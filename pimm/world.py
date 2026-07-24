@@ -767,22 +767,38 @@ class World:
         self,
         main_process: ControlSystem | list[ControlSystem | None],
         background: ControlSystem | list[ControlSystem | None] | None = None,
+        *,
+        pace_to_wall: bool = False,
     ) -> None:
         """Drive the cooperative scheduler to completion.
 
         On a wall-clock world, honour each yielded ``Sleep`` so loops keep their real
         rate. On a virtual-time world the clock is advanced inside ``interleave``, so
-        there is nothing to wait for — just pump as fast as the machine allows.
+        there is nothing to wait for — pump as fast as the machine allows, unless
+        ``pace_to_wall`` asks to keep virtual time in step with wall time (a live
+        operator interacting with a simulation): then only step while virtual time
+        trails the wall clock, sleeping off any surplus.
 
         Runs until the scheduler is exhausted: when one loop finishes and sets
         ``should_stop``, the others still run once more to observe it and finalize
         (flush the episode, close the policy) before the iterator ends.
         """
-        real_time = not isinstance(self._clock, VirtualClock)
-        for command in self.start(main_process, background):
-            if real_time:
+        if not isinstance(self._clock, VirtualClock):
+            for command in self.start(main_process, background):
                 # Sleep its duration; a Yield() becomes sleep(0) — an OS yield, not a busy-spin.
                 time.sleep(command.seconds if isinstance(command, Sleep) else 0)
+        elif pace_to_wall:
+            wall = SystemClock()
+            # Baselines come after start(): binding and background spawns must not count as elapsed wall time,
+            # or the sim free-runs to "catch up" by that delay instead of pacing from the first tick.
+            commands = self.start(main_process, background)
+            wall_start, virtual_start = wall.now_ns(), self._clock.now_ns()
+            for _ in commands:
+                while self._clock.now_ns() - virtual_start > wall.now_ns() - wall_start:
+                    time.sleep(0.001)
+        else:
+            for _ in self.start(main_process, background):
+                pass
 
     def start_in_subprocess(self, *background_loops: ControlLoop):
         """Starts background control loops. Can be called multiple times for different control loops.
